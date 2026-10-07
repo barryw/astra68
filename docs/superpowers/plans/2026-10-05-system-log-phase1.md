@@ -63,7 +63,8 @@ MC68040 cross toolchain (`m68k-astra-gcc` on `beast`), host tests with plain
   - text max 1,944 bytes (8 slots); longer text is truncated and flagged
 - Line format, one record per line:
   `YYYY-MM-DDTHH:MM:SS.mmm+HH:MM level ident[pid-hex] stream: text\n`.
-  - Non-printable bytes are written as `\xNN`.
+  - Control bytes (below 0x20, and 0x7f) are written as `\xNN` and backslash
+    as `\\`; bytes from 0x80 up pass through so UTF-8 text survives.
   - Levels are `debug info notice warning error`.
   - Streams are `log stdout stderr kernel`.
 - Rotation (phase 1, plain text): rotate at 1,048,576 bytes or at the first
@@ -530,7 +531,7 @@ Run: `sw/kernel/build/test_vm` (rebuilt). Expected: PASS.
 #include "process.h"
 #include "vm.h"
 
-#define KERNEL_TIME_PAGE_OWNER 0x54494d45u /* "TIME" */
+#define KERNEL_TIME_PAGE_OWNER 0x30000002u /* kernel shared-frame namespace; "TIME" collides with area owners */
 
 bool kernel_time_page_init(void);
 void kernel_time_page_update(void);
@@ -836,7 +837,8 @@ typedef struct AstraLogSetup {
 
 /* The doorbell: returns nonzero when the service is gone (PEER_DEAD). */
 typedef uint32_t (*AstraLogNotify)(void *context);
-#define ASTRA_LOG_DOORBELL_MAGIC   0x414c4442u /* "ALDB", 4-byte message */
+/* (Superseded in Task 4: the doorbell is a header-only AstraMessageHeader
+ * message with operation ASTRA_LOG_OPERATION_DOORBELL -- see log_ring.h.) */
 
 /** Process-local producer state. Every field is written only by CAS or by
  * the setup path before `ready` is published. */
@@ -2766,7 +2768,13 @@ In `sw/userspace/services/events/main.c` (no `event_emit.h`, no `astra_log*`):
                                    handles, 2u, &size, &count, &sender) !=
            ASTRA_SYSCALL_OK)
            break;
-       if (size == sizeof(uint32_t) && count == 0u)
+       /* Wire format as built in Task 4 (sw/include/astra/log_ring.h): every
+        * message begins with AstraMessageHeader. A doorbell is a header-only
+        * message with operation ASTRA_LOG_OPERATION_DOORBELL; a setup is
+        * AstraLogSetup with operation ASTRA_LOG_OPERATION_SETUP. Validate the
+        * header (protocol, version, operation) before using either. */
+       if (count == 0u && size == ASTRA_MESSAGE_HEADER_SIZE &&
+           setup.header.operation == ASTRA_LOG_OPERATION_DOORBELL)
            continue; /* a doorbell: the drain below reads every ring */
        if (count != 2u ||
            astra_rt_area_map(handles[1],

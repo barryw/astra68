@@ -3,6 +3,7 @@
 
 #include <pthread.h>
 
+#include <astra/posix_descriptor.h>
 #include <astra/process.h>
 #include <astra/runtime.h>
 #include <astra/syscall.h>
@@ -211,6 +212,9 @@ static void specific_destroy(void)
 void pthread_exit(void *result)
 {
     specific_destroy();
+    /* This thread's own partial log line; thread_entry returns through
+     * here too. Another thread's is out of reach (docs/SYSTEM_LOG.md). */
+    astra_posix_log_flush();
     astra_thread_exit((uint32_t)(uintptr_t)result);
 }
 

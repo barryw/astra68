@@ -81,7 +81,12 @@ reset(void)
                                     sizeof(catalog_records), base));
     assert(astra_event_store_init(&store, records, RECORD_COUNT, &catalog));
     assert(astra_events_backend_init(&backend, &store, NULL, &catalog));
+    backend.log_read = NULL;
+    backend.log_size = NULL;
+    backend.log_context = NULL;
 }
+
+static const char fake_syslog[] = "--- boot 2026 ---\nline two\n";
 
 /* Reads a whole leaf through the ops, one bounded page at a time. */
 static uint32_t
@@ -96,8 +101,11 @@ read_all(const char *path, char *out, uint32_t capacity)
                      ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
            ASTRA_VFS_OK);
     assert(info.kind == ASTRA_VFS_KIND_FILE);
-    /* A leaf has no size before it is read; the contract allows exactly that. */
-    assert(info.size == 0u);
+    /* A rendered leaf has no size before it is read; the contract allows
+     * exactly that. The syslog is a real file and has its real one. */
+    assert(info.size == (strcmp(path, "/log/syslog") == 0 &&
+                                 backend.log_size != NULL ?
+                             sizeof(fake_syslog) - 1u : 0u));
     for (;;) {
         uint32_t moved = 0u;
         uint32_t chunk = 24u; /* deliberately smaller than a line */
@@ -485,6 +493,147 @@ static void test_the_earliest_events_survive(void)
     assert(strncmp(text, "seq 1  ", 7) == 0);
 }
 
+
+/* The current file, then one rotation; syslog.2 and .3 do not exist. */
+static const char fake_syslog1[] = "--- boot 2025 ---\nolder\n";
+
+static const char *
+fake_file(uint32_t index, uint32_t *size)
+{
+    const char *text = index == 0u ? fake_syslog :
+                       index == 1u ? fake_syslog1 : "";
+
+    *size = (uint32_t)strlen(text);
+    return text;
+}
+
+static int
+fake_log_read(void *context, uint32_t index, uint64_t offset, void *buffer,
+              uint32_t length, uint32_t *moved)
+{
+    uint32_t size;
+    const char *text = fake_file(index, &size);
+    uint32_t take;
+
+    assert(context == &backend);
+    assert(index <= ASTRA_EVENTS_LOG_KEEP);
+    *moved = 0u;
+    if (offset >= size)
+        return 1;
+    take = size - (uint32_t)offset;
+    if (take > length)
+        take = length;
+    memcpy(buffer, text + offset, take);
+    *moved = take;
+    return 1;
+}
+
+static int
+fake_log_size(void *context, uint32_t index, uint64_t *bytes)
+{
+    uint32_t size;
+
+    assert(context == &backend);
+    assert(index <= ASTRA_EVENTS_LOG_KEEP);
+    (void)fake_file(index, &size);
+    *bytes = size;
+    return 1;
+}
+
+/* EVENTS:log/syslog is the service's text log, read-only, and absent when the
+ * service has none. */
+static void test_the_syslog_is_a_file(void)
+{
+    const AstraVfsBackendOps *ops = astra_events_backend_ops();
+    AstraVfsNodeInfo info;
+    uintptr_t node = 0u;
+    char name[64];
+    char text[64];
+    uint64_t next = 0u;
+    uint32_t moved = 0u;
+
+    reset();
+    backend.log_read = fake_log_read;
+    backend.log_size = fake_log_size;
+    backend.log_context = &backend;
+
+    assert(ops->readdir(&backend, 0u, "/", 3u, name, sizeof(name), &info,
+                        &next) == ASTRA_VFS_OK);
+    assert(strcmp(name, "log") == 0 && next == 4u);
+    assert(info.kind == ASTRA_VFS_KIND_DIRECTORY);
+    assert(ops->readdir(&backend, 0u, "/", 4u, name, sizeof(name), &info,
+                        &next) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->readdir(&backend, 0u, "/log", 0u, name, sizeof(name), &info,
+                        &next) == ASTRA_VFS_OK);
+    assert(strcmp(name, "syslog") == 0 && info.kind == ASTRA_VFS_KIND_FILE);
+    assert(info.size == sizeof(fake_syslog) - 1u);
+    /* A rotation is listed when it exists, and only then. */
+    assert(ops->readdir(&backend, 0u, "/log", next, name, sizeof(name),
+                        &info, &next) == ASTRA_VFS_OK);
+    assert(strcmp(name, "syslog.1") == 0 && info.kind == ASTRA_VFS_KIND_FILE);
+    assert(info.size == sizeof(fake_syslog1) - 1u);
+    assert(ops->readdir(&backend, 0u, "/log", next, name, sizeof(name),
+                        &info, &next) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->stat(&backend, "/log/syslog.1", &info) == ASTRA_VFS_OK &&
+           info.size == sizeof(fake_syslog1) - 1u);
+    assert(ops->stat(&backend, "/log/syslog.2", &info) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->stat(&backend, "/log/syslog.4", &info) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->stat(&backend, "/log/syslog.", &info) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->stat(&backend, "/log/syslog.01", &info) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->open(&backend, "/log/syslog.1", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) == ASTRA_VFS_OK);
+    assert(info.size == sizeof(fake_syslog1) - 1u);
+    assert(ops->stat_node(&backend, node, &info) == ASTRA_VFS_OK &&
+           info.size == sizeof(fake_syslog1) - 1u);
+    assert(ops->read(&backend, node, 0u, text, sizeof(text), &moved) ==
+           ASTRA_VFS_OK);
+    assert(moved == sizeof(fake_syslog1) - 1u &&
+           memcmp(text, fake_syslog1, moved) == 0);
+    assert(ops->close(&backend, node) == ASTRA_VFS_OK);
+    assert(ops->stat(&backend, "/log", &info) == ASTRA_VFS_OK &&
+           info.kind == ASTRA_VFS_KIND_DIRECTORY);
+    /* Its real size, so `ls -l` and anything trusting st_size see it. */
+    assert(ops->stat(&backend, "/log/syslog", &info) == ASTRA_VFS_OK &&
+           info.size == sizeof(fake_syslog) - 1u);
+
+    assert(ops->open(&backend, "/log/syslog", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) == ASTRA_VFS_OK);
+    assert(info.kind == ASTRA_VFS_KIND_FILE);
+    assert(info.size == sizeof(fake_syslog) - 1u);
+    assert(ops->stat_node(&backend, node, &info) == ASTRA_VFS_OK &&
+           info.size == sizeof(fake_syslog) - 1u);
+    assert(ops->read(&backend, node, 0u, text, sizeof(text), &moved) ==
+           ASTRA_VFS_OK);
+    assert(moved == sizeof(fake_syslog) - 1u);
+    assert(memcmp(text, fake_syslog, moved) == 0);
+    assert(ops->read(&backend, node, 5u, text, 4u, &moved) == ASTRA_VFS_OK);
+    assert(moved == 4u && memcmp(text, fake_syslog + 5, 4u) == 0);
+    assert(ops->close(&backend, node) == ASTRA_VFS_OK);
+    (void)read_all("/log/syslog", text, sizeof(text));
+    assert(strcmp(text, fake_syslog) == 0);
+
+    assert(ops->open(&backend, "/log/syslog",
+                     ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+           ASTRA_VFS_ERR_ACCESS);
+    assert(ops->open(&backend, "/log/other", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+
+    /* No log: neither the directory nor its listing exists. */
+    backend.log_read = NULL;
+    assert(ops->stat(&backend, "/log", &info) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->open(&backend, "/log/syslog", ASTRA_VFS_OPEN_READ,
+                     ASTRA_VFS_MODE_DEFAULT, &node, &info) ==
+           ASTRA_VFS_ERR_NOT_FOUND);
+    assert(ops->readdir(&backend, 0u, "/", 3u, name, sizeof(name), &info,
+                        &next) == ASTRA_VFS_ERR_NOT_FOUND);
+}
+
 int main(void)
 {
     test_a_leaf_renders_its_events();
@@ -496,6 +645,7 @@ int main(void)
     test_every_write_verb_is_refused();
     test_open_nodes_grow_past_old_ceiling();
     test_the_earliest_events_survive();
+    test_the_syslog_is_a_file();
     puts("astra events backend: PASS");
     return 0;
 }

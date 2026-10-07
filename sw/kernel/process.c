@@ -39,6 +39,8 @@
 #include "qualification.h"
 #include "ring.h"
 #include "sync.h"
+#include "time_page.h"
+#include "format.h"
 #include "trace.h"
 #include "user_copy.h"
 #include "vm.h"
@@ -1091,6 +1093,77 @@ static void process_name_set(KernelProcess *process,
     process->name[length] = '\0';
 }
 
+/*
+ * ASTRA_EVENT_MESSAGE_PROCESS_START: the process's name, chunked the way a
+ * user text line is, so a log reader learns who a pid is from the ring
+ * itself instead of asking a service that may not be up yet. One
+ * interrupt-disabled window keeps a chain's records consecutive. Each
+ * record's `activity` is its chunk's byte offset in the name, so a reader
+ * that meets a second half whose head the ring overwrote can tell.
+ */
+static void trace_process_start(const KernelProcess *process)
+{
+    uint32_t length = 0u;
+    uint32_t offset = 0u;
+    uint16_t saved_status;
+
+    while (length < sizeof(process->name) && process->name[length] != '\0')
+        ++length;
+    saved_status = kernel_interrupt_save_disable();
+    do {
+        uint32_t chunk = length - offset;
+        uint16_t flags = (uint16_t)(KERNEL_TRACE_LEVEL_INFO |
+                                    KERNEL_TRACE_FLAG_INLINE_STRING);
+
+        if (chunk > KERNEL_TRACE_ARGUMENT_BYTES) {
+            chunk = KERNEL_TRACE_ARGUMENT_BYTES;
+            flags |= KERNEL_TRACE_FLAG_CONTINUED;
+        }
+        (void)kernel_trace_write_user(
+            ASTRA_EVENT_MESSAGE_PROCESS_START, process->id, 0u, offset, flags,
+            chunk != 0u ? process->name + offset : NULL, chunk);
+        offset += chunk;
+    } while (offset < length);
+    kernel_interrupt_restore(saved_status);
+}
+
+/*
+ * A user fault as the kernel's own text line (process 0), so the events
+ * service writes it into the system log beside the program's last lines
+ * (docs/SYSTEM_LOG.md section 3). The console report says more; this is
+ * the one line a log reader searches for. The pid is printed as the log and
+ * `ps` print it. Chunked and kept consecutive as trace_process_start's chain.
+ */
+static void trace_fault_text(uint32_t process_id, uint32_t program_counter,
+                             uint32_t fault_address, uint32_t vector)
+{
+    char text[96];
+    uint32_t length = kernel_format(
+        text, sizeof(text), "user fault: process %08x pc 0x%08X address "
+        "0x%08X vector %u", process_id, program_counter, fault_address,
+        vector);
+    uint32_t offset = 0u;
+    uint16_t saved_status;
+
+    if (length >= sizeof(text))
+        length = sizeof(text) - 1u;
+    saved_status = kernel_interrupt_save_disable();
+    while (offset < length) {
+        uint32_t chunk = length - offset;
+        uint16_t flags = (uint16_t)(KERNEL_TRACE_LEVEL_ERROR |
+                                    KERNEL_TRACE_FLAG_INLINE_STRING);
+
+        if (chunk > KERNEL_TRACE_ARGUMENT_BYTES) {
+            chunk = KERNEL_TRACE_ARGUMENT_BYTES;
+            flags |= KERNEL_TRACE_FLAG_CONTINUED;
+        }
+        (void)kernel_trace_write_user(ASTRA_EVENT_MESSAGE_UNSTRUCTURED, 0u,
+                                      0u, 0u, flags, text + offset, chunk);
+        offset += chunk;
+    }
+    kernel_interrupt_restore(saved_status);
+}
+
 static uint64_t interval_timer_earliest(void)
 {
     uint64_t earliest = KERNEL_THREAD_DEADLINE_NEVER;
@@ -1394,6 +1467,7 @@ KernelProcessStatus activate_fast(KernelThread *next, SwitchCause cause,
     if (previous != next) {
         if (kernel_vm_switch(&next_process->address_space) != KERNEL_VM_OK)
             return KERNEL_PROCESS_CORRUPT;
+        kernel_time_page_update();
         runtime_stop(process_for_thread(previous), previous);
         count_switch(previous == NULL ? SWITCH_IDLE : cause);
         if (previous != NULL) {
@@ -4416,6 +4490,7 @@ static KernelProcessStatus clone_current_process(
         ++scheduler_stats.live_processes;
         *process_id = child->id;
         *process_handle = parent_handle;
+        trace_process_start(child);
     }
     kernel_interrupt_restore(saved_status);
     if (result != KERNEL_PROCESS_OK)
@@ -4566,6 +4641,7 @@ static KernelProcessStatus create_process(const void *image,
         ++scheduler_stats.created_processes;
         ++scheduler_stats.live_processes;
         *process_id = process->id;
+        trace_process_start(process);
     }
     kernel_interrupt_restore(saved_status);
     if (result != KERNEL_PROCESS_OK) {
@@ -4872,6 +4948,9 @@ static KernelProcessStatus exec_replace(
         if (status != KERNEL_PROCESS_OK)
             goto failed;
     }
+    status = kernel_time_page_map(replacement);
+    if (status != KERNEL_PROCESS_OK)
+        goto failed;
 
     /* Everything below is the no-allocation commit. */
     if (host_channels_close_process(process) != ASTRA_SYSCALL_OK) {
@@ -4993,6 +5072,7 @@ static KernelProcessStatus exec_replace(
     process_name_set(process, &request->arguments,
                      request->arguments.count != 0u ?
                          syscall_data.bytes : NULL);
+    trace_process_start(process);
     kernel_bytes_clear(&process->tls, sizeof(process->tls));
     if (replacement_tls.memory_size != 0u)
         kernel_bytes_copy(&process->tls, &replacement_tls,
@@ -7491,6 +7571,9 @@ static KernelProcessStatus prepare_executable_process(
         argument_bytes, environment, 0u, 0u, &initial_image);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
+    result = kernel_time_page_map(&process->address_space);
+    if (result != KERNEL_PROCESS_OK)
+        goto failed;
     process_name_set(process, arguments, argument_bytes);
     *created = process;
     return KERNEL_PROCESS_OK;
@@ -7519,6 +7602,7 @@ static KernelProcessStatus commit_executable_process(
         ++scheduler_stats.created_processes;
         ++scheduler_stats.live_processes;
         *process_id = process->id;
+        trace_process_start(process);
     }
     kernel_interrupt_restore(saved_status);
     (void)initial_thread_id;
@@ -8074,6 +8158,7 @@ void kernel_process_register_initial_image(uint32_t process_id)
         static const char name[] = "/rom/supervisor";
 
         kernel_bytes_copy(process->name, name, sizeof(name));
+        trace_process_start(process);
     }
 }
 
@@ -8505,6 +8590,7 @@ KernelProcessStatus kernel_process_on_timer(const uint32_t *registers,
     uint32_t expired;
     uint8_t highest;
 
+    kernel_time_page_update();
     if (next_context == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *next_context = NULL;
@@ -8565,6 +8651,7 @@ KernelProcessStatus kernel_process_on_supervisor_timer(void)
     KernelProcessStatus status;
     uint64_t now;
 
+    kernel_time_page_update();
     if (scheduler_initialized == 0u)
         return KERNEL_PROCESS_OK;
     /*
@@ -10691,7 +10778,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         uint32_t length = thread->context.data[4];
         int copy_status;
 
-        if (message == 0u || flags > UINT16_MAX ||
+        /* The reserved ids above UNSTRUCTURED are the kernel's to say. */
+        if (message == 0u ||
+            (message > ASTRA_EVENT_MESSAGE_UNSTRUCTURED &&
+             message <= ASTRA_EVENT_MESSAGE_RESERVED_MAX) ||
+            flags > UINT16_MAX ||
             (flags & ~(uint32_t)ASTRA_EVENT_FLAG_MASK) != 0u ||
             (flags & ASTRA_EVENT_LEVEL_MASK) > ASTRA_EVENT_LEVEL_ERROR ||
             length > ASTRA_EVENT_ARGUMENT_MAX ||
@@ -13940,6 +14031,8 @@ KernelProcessStatus kernel_process_on_fault(const uint32_t *registers,
     current->fault_status = frame.special_status;
     current->fault_address = frame.fault_address;
     ++scheduler_stats.user_faults;
+    trace_fault_text(current->id, frame.program_counter, frame.fault_address,
+                     frame.vector_offset >> 2);
     kernel_process_fault_report(current->id, thread->id,
                                 frame.program_counter, frame.fault_address,
                                 frame.vector_offset >> 2,

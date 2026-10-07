@@ -620,6 +620,27 @@ System services receive explicit resource-account quotas. No account may
 reserve more physical commit than exists after kernel, ROM, graphics, emergency,
 and wired-device reservations.
 
+## System log and time page
+
+Two per-process costs come from the system log (`docs/SYSTEM_LOG.md`).
+
+- **Log ring.** A process's first log line creates a 256 KiB area
+  (`ASTRA_LOG_RING_AREA_SIZE`) reserved, not committed. Pages commit on first
+  touch, one 16-page cluster at a time (`KERNEL_AREA_COMMIT_CLUSTER_PAGES`),
+  so a process that logs a few lines commits 64 KiB. The ring uses 258,112
+  bytes, which reaches into the area's last page, so a process that has
+  wrapped its ring once commits all 256 KiB. A process that never logs pays
+  nothing. A process makes at most eight rings in its life
+  (`ASTRA_LOG_SETUPS_MAX`): 2 MiB of reservation, and the same committed in
+  the worst case. The events service maps each live ring as well; that shares
+  the frames and costs it one 256 KiB span of address space per ring, up to
+  96 rings (`ASTRA_LOG_CLIENTS_MAX`, 24 MiB).
+- **Time page.** The page itself is one kernel frame shared by every process.
+  Its address, `0x48000000`, is alone in its 32 MiB root entry, so mapping
+  it costs each process a pointer table and a page table: 8 KiB. A shared
+  leaf table, attached the way shared areas attach theirs, would remove the
+  page table; that is not done.
+
 ## Low-memory gates
 
 Allocation sites are tagged by subsystem. Diagnostics report current, peak,

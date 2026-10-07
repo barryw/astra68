@@ -827,9 +827,17 @@ bool kernel_port_handle_retain(void *object, void *context)
         (KernelPortEndpoint)(uintptr_t)context;
 
     if (!valid_port_pointer(port) || !valid_endpoint(endpoint) ||
-        !active_state(port->state) || port->references == 0u)
+        port->references == 0u)
         return false;
     if (endpoint != KERNEL_PORT_ENDPOINT_SEND)
+        return false;
+    /*
+     * A send endpoint whose receiver is gone (CLOSING) is still a handle its
+     * holder has, and a copy of it -- fork, duplicate, a launch grant -- is
+     * exactly as dead: PEER_DEAD on send and wait. Refusing would make fork()
+     * fail for every process that happens to hold one.
+     */
+    if (!active_state(port->state) && port->state != KERNEL_PORT_CLOSING)
         return false;
     /*
      * A sender count of zero means every sender has gone and the port has

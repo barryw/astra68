@@ -6,6 +6,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <setjmp.h>
 #include <stdint.h>
 #include <stdlib.h>
 
@@ -97,7 +98,21 @@ uint32_t astra_rt_thread_create(const AstraThreadStart *start,
     *handle = 9u;
     return ASTRA_SYSCALL_OK;
 }
-void astra_thread_exit(uint32_t status) { (void)status; abort(); }
+static jmp_buf exit_jump;
+static int exit_armed;
+static uint32_t log_flushes;
+static uint32_t flushes_at_exit;
+static uint32_t destructor_flushes;
+/* console.c's; a thread's partial log line goes out before it does. */
+void astra_posix_log_flush(void) { ++log_flushes; }
+void astra_thread_exit(uint32_t status)
+{
+    (void)status;
+    if (!exit_armed)
+        abort();
+    flushes_at_exit = log_flushes;
+    longjmp(exit_jump, 1);
+}
 uint32_t astra_wait_one(uint32_t handle, uint64_t deadline, uint32_t *detail)
 {
     (void)handle; (void)deadline;
@@ -106,6 +121,12 @@ uint32_t astra_wait_one(uint32_t handle, uint64_t deadline, uint32_t *detail)
 }
 
 static void initialize_once(void) { ++once_calls; }
+/* A destructor may print: the flush comes after it. */
+static void specific_destructor(void *value)
+{
+    (void)value;
+    destructor_flushes = log_flushes + 1u;
+}
 static void *thread_start(void *argument) { return argument; }
 
 int main(void)
@@ -217,5 +238,18 @@ int main(void)
     assert(pthread_setspecific(key, &value) == 0);
     assert(pthread_getspecific(key) == &value);
     assert(pthread_key_delete(key) == 0);
+
+    /* pthread_exit flushes the thread's own partial log line, after its
+     * destructors and before the thread is gone. thread_entry returns
+     * through pthread_exit, so a start routine's return takes this path. */
+    assert(pthread_key_create(&key, specific_destructor) == 0);
+    assert(pthread_setspecific(key, &value) == 0);
+    log_flushes = 0u;
+    exit_armed = 1;
+    if (setjmp(exit_jump) == 0)
+        pthread_exit(NULL);
+    exit_armed = 0;
+    assert(destructor_flushes == 1u);
+    assert(log_flushes == 1u && flushes_at_exit == 1u);
     return 0;
 }

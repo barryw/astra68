@@ -259,8 +259,9 @@ bool kernel_trace_read_user(uint32_t slot, KernelTraceUserRecord *record,
  * many. `after_sequence` of zero means everything the ring still holds, which
  * is what a reader that has never read before asks for.
  *
- * `*cursor` becomes the sequence to pass next time -- the last event returned,
- * or `after_sequence` unchanged when there was nothing. A caller that stops
+ * `*cursor` becomes the sequence to pass next time -- the last slot examined,
+ * kernel records included, or `after_sequence` unchanged when there was
+ * nothing new. A gap is therefore reported once. A caller that stops
  * early because its buffer filled resumes exactly where it stopped, so a drain
  * is a bounded page and a cursor like every other enumeration in this system.
  *

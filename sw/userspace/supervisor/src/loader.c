@@ -17,6 +17,7 @@
 #include <astra/display.h>
 #include <astra/gui.h>
 #include <astra/event_control.h>
+#include <astra/log_ring.h>
 #include <astra/posix_process.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
@@ -1029,6 +1030,23 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 ASTRA_CAPABILITY_FLAG_NAMESPACE |
                     ASTRA_CAPABILITY_FLAG_READ,
                 held->root);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+        }
+    }
+    /* Every program may log (docs/SYSTEM_LOG.md section 7). The service that
+     * drains logs is excluded: it must never log about logging. Before it has
+     * started there is nothing to grant, and those programs use LOG_WRITE.
+     * A delegating entry (Terminal) must hold LOG with TRANSFER itself, or
+     * its own attempt to forward LOG to a command it launches is refused:
+     * a process cannot hand out a right it was not given. */
+    if (!entry_grants(entry, ASTRA_CAPABILITY_LOG) &&
+        !entry_serves(entry, ASTRA_CAPABILITY_LOG)) {
+        uint32_t published = named_service(ASTRA_CAPABILITY_LOG);
+
+        if (published != 0u) {
+            status = add_grant(out, count, ASTRA_CAPABILITY_LOG, published,
+                               ASTRA_RIGHT_SIGNAL | delegated, 0u, NULL);
             if (status != ASTRA_STATUS_OK)
                 return status;
         }

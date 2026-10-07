@@ -20,83 +20,19 @@
 #include <astra/event.h>
 #include <astra/event_emit.h>
 
+#include <astra/address_space.h>
 #include <astra/endian.h>
+#include <astra/log_ring.h>
+#include <astra/process.h>
+#include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
 #include <astra/syscall.h>
+#include <astra/time_page.h>
 
 #include <string.h>
 
 #include "log_internal.h"
-
-typedef struct LogPart {
-    const char *text;
-    uint32_t length;
-} LogPart;
-
-static uint32_t
-decimal(char out[10], uint32_t value)
-{
-    char reverse[10];
-    uint32_t count = 0u;
-
-    do {
-        reverse[count++] = (char)('0' + value % 10u);
-        value /= 10u;
-    } while (value != 0u);
-    for (uint32_t index = 0u; index < count; ++index)
-        out[index] = reverse[count - index - 1u];
-    return count;
-}
-
-static uint32_t
-log_parts(const LogPart *parts, uint32_t part_count)
-{
-    uint64_t total = 0u;
-    uint64_t sent = 0u;
-    uint32_t part = 0u;
-    uint32_t part_offset = 0u;
-
-    for (uint32_t index = 0u; index < part_count; ++index) {
-        if (parts[index].text == NULL && parts[index].length != 0u)
-            return ASTRA_SYSCALL_INVALID_ARGUMENT;
-        total += parts[index].length;
-    }
-    if (total == 0u || total > UINT32_MAX)
-        return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    while (sent < total) {
-        uint8_t payload[ASTRA_EVENT_ARGUMENT_MAX];
-        uint32_t length = 0u;
-        uint32_t flags = ASTRA_EVENT_LEVEL_NOTICE |
-                         ASTRA_EVENT_FLAG_INLINE_STRING;
-        uint32_t status;
-
-        while (length < sizeof(payload) && part < part_count) {
-            uint32_t available = parts[part].length - part_offset;
-            uint32_t copied = sizeof(payload) - length;
-
-            if (copied > available)
-                copied = available;
-            for (uint32_t index = 0u; index < copied; ++index)
-                payload[length + index] =
-                    (uint8_t)parts[part].text[part_offset + index];
-            length += copied;
-            part_offset += copied;
-            if (part_offset == parts[part].length) {
-                ++part;
-                part_offset = 0u;
-            }
-        }
-        if (sent + length < total)
-            flags |= ASTRA_EVENT_FLAG_CONTINUED;
-        status = astra_event_emit(ASTRA_EVENT_MESSAGE_UNSTRUCTURED, flags,
-                                  payload, length);
-        if (status != ASTRA_SYSCALL_OK)
-            return status;
-        sent += length;
-    }
-    return ASTRA_SYSCALL_OK;
-}
 
 uint32_t
 astra_event_emit(uint32_t message, uint32_t flags, const void *payload,
@@ -156,6 +92,34 @@ astra_irq_endpoint_info(uint32_t process_handle, uint32_t slot,
 }
 
 static uint32_t
+append(char *out, uint32_t capacity, uint32_t length, const char *text)
+{
+    while (text != NULL && *text != '\0' && length + 1u < capacity) {
+        out[length++] = *text++;
+    }
+    return length;
+}
+
+static uint32_t
+append_number(char *out, uint32_t capacity, uint32_t length, uint32_t value)
+{
+    char digits[10];
+    uint32_t count = 0u;
+
+    if (value == 0u) {
+        return append(out, capacity, length, "0");
+    }
+    while (value != 0u && count < sizeof(digits)) {
+        digits[count++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    }
+    while (count != 0u && length + 1u < capacity) {
+        out[length++] = digits[--count];
+    }
+    return length;
+}
+
+static uint32_t
 log_write_level(const void *bytes, uint32_t length, uint32_t level)
 {
     const uint8_t *text = bytes;
@@ -188,14 +152,486 @@ log_write_level(const void *bytes, uint32_t length, uint32_t level)
     return ASTRA_SYSCALL_OK;
 }
 
-uint32_t
-astra_log_write(const void *bytes, uint32_t length)
+#ifndef ASTRA_LOG_STARTUP_ADDRESS
+#define ASTRA_LOG_STARTUP_ADDRESS ((const AstraStartupInfo *)(uintptr_t) \
+                                   ASTRA_STARTUP_ADDRESS_START)
+#endif
+
+/*
+ * The process's log ring, made on the first line that wants it. Setup is
+ * claimed with one CAS; a thread that logs while another is setting up uses
+ * LOG_WRITE for that line rather than wait (docs/SYSTEM_LOG.md section 3).
+ *
+ * log_state is one word: the setup state in the low two bits, and above them
+ * the generation, the number of setups that have succeeded. A writer loads it
+ * once per line and uses only the producer that generation names, so a writer
+ * preempted across a re-setup finishes in the ring it reserved in, and its
+ * report of a dead ring can only retire the setup it saw (log_ring_died).
+ */
+#define LOG_SETUP_IDLE   0u
+#define LOG_SETUP_BUSY   1u
+#define LOG_SETUP_READY  2u
+#define LOG_STATE_MASK   3u
+#define LOG_GENERATION_SHIFT 2u
+#define LOG_SETUP_RETRY_AFTER 64u
+/*
+ * ponytail: one producer per successful setup, never reused, so a late writer
+ * can only write into the dead ring it reserved in. A dead ring's mapping and
+ * producer endpoint stay too (a 256 KiB reserved area, committed only where
+ * it was written, and one handle each). A new setup follows only a ring the
+ * live service let go of (refused or reaped) or a failed exec; after 8 the
+ * process stays on LOG_WRITE for good, which bounds that leak at 2 MiB of
+ * reservation.
+ */
+#define LOG_PRODUCERS    ASTRA_LOG_SETUPS_MAX
+
+static uint32_t log_state;
+static uint32_t log_setup_backoff;
+/*
+ * The service is dead: a setup was refused PEER_DEAD. A restarted service
+ * makes a new port that the startup handle will never name, so this latches
+ * LOG_WRITE for good, and a forked child keeps it (it holds the same handle).
+ * Separate from the generation, which counts rings the live service let go.
+ */
+static uint32_t log_service_dead;
+static AstraLogProducer log_producers[LOG_PRODUCERS];
+/* Each producer's mapping, the address astra_rt_area_map returned. */
+static void *log_producer_areas[LOG_PRODUCERS];
+/* Each producer's own endpoint, its doorbell context: held so the process's
+ * death reaches the service, and polled to see the service let go of it. */
+static uint32_t log_producer_endpoints[LOG_PRODUCERS];
+static uint32_t log_port;
+static AstraMessageHeader log_doorbell; /* written by setup before READY */
+
+/*
+ * The doorbell. Never blocks: a full queue is WOULD_BLOCK, which means a
+ * wake is already pending. PEER_DEAD from the port reports the service gone.
+ *
+ * On the drop path the ring is full, and that is also what a ring the service
+ * refused or reaped looks like: it closed the consumer end, and its port
+ * still takes doorbells. So there, and only there (once per
+ * ASTRA_LOG_DROP_DOORBELL_INTERVAL drops), the producer endpoint is polled:
+ * PEER_DEAD or CLOSED means nobody will ever read this ring.
+ */
+static uint32_t
+log_ring_notify(void *context, uint32_t dropping)
 {
-    return log_write_level(bytes, length, ASTRA_EVENT_LEVEL_NOTICE);
+    uint32_t status;
+
+    if (astra_port_send(log_port, &log_doorbell, sizeof(log_doorbell), NULL,
+                        0u) == ASTRA_SYSCALL_PEER_DEAD)
+        return 1u;
+    if (!dropping)
+        return 0u;
+    status = astra_wait_one(*(const uint32_t *)context, 0u /* poll */, NULL);
+    return status == ASTRA_SYSCALL_PEER_DEAD ||
+           status == ASTRA_SYSCALL_CLOSED ? 1u : 0u;
+}
+
+#ifndef ASTRA_LOG_PROGRAM_ORIGIN
+#define ASTRA_LOG_PROGRAM_ORIGIN ((uintptr_t)0)
+#endif
+
+/*
+ * The image's own ASTRA_PROGRAM name, or NULL. astra_user.ld puts the ELF and
+ * program headers at the start of the text segment, at
+ * ASTRA_EXECUTABLE_LINK_ADDRESS, and the record first in the read-only
+ * segment after it (astra_user_sections.ld). Only a dynamic program is read:
+ * its startup block says everything below the interpreter is its own, which
+ * bounds every read here. A static image falls back to argv[0].
+ */
+static const char *
+log_program_name(const AstraStartupInfo *startup)
+{
+    const uint32_t low = ASTRA_EXECUTABLE_LINK_ADDRESS;
+    uint32_t high;
+    const uint8_t *header;
+    uint32_t table;
+    uint32_t count;
+
+    if (startup == NULL ||
+        (startup->flags & ASTRA_STARTUP_FLAG_INTERPRETED) == 0u ||
+        startup->interpreter_base <= low ||
+        startup->interpreter_base - low < 52u)
+        return NULL;
+    high = startup->interpreter_base;
+    header = (const uint8_t *)(ASTRA_LOG_PROGRAM_ORIGIN + low);
+    if (header[0] != 0x7fu || header[1] != 'E' || header[2] != 'L' ||
+        header[3] != 'F' || astra_load_be16(header + 42u) != 32u)
+        return NULL;
+    table = astra_load_be32(header + 28u);
+    count = astra_load_be16(header + 44u);
+    if (table > high - low || count > (high - low - table) / 32u)
+        return NULL;
+    for (uint32_t index = 0u; index < count; ++index) {
+        const uint8_t *entry = header + table + index * 32u;
+        uint32_t address = astra_load_be32(entry + 8u);
+        const AstraProgram *record;
+
+        /* PT_LOAD, read-only: the rodata segment. */
+        if (astra_load_be32(entry) != 1u ||
+            astra_load_be32(entry + 24u) != 4u)
+            continue;
+        if (address < low || address > high ||
+            high - address < ASTRA_PROGRAM_SIZE ||
+            astra_load_be32(entry + 20u) < ASTRA_PROGRAM_SIZE)
+            return NULL;
+        record = (const AstraProgram *)(ASTRA_LOG_PROGRAM_ORIGIN + address);
+        return astra_load_be32(&record->magic) == ASTRA_PROGRAM_MAGIC &&
+               astra_load_be16(&record->record_version) ==
+                   ASTRA_PROGRAM_RECORD_VERSION &&
+               record->name[0] != '\0' ? record->name : NULL;
+    }
+    return NULL;
+}
+
+/* The ASTRA_PROGRAM name when the image declares one, else the basename of
+ * argv[0] (docs/SYSTEM_LOG.md section 2). */
+static void
+log_ident(char out[ASTRA_LOG_IDENT_MAX])
+{
+    const char *name = log_program_name(ASTRA_LOG_STARTUP_ADDRESS);
+    uint32_t limit = ASTRA_PROGRAM_NAME_MAX;
+    uint32_t length = 0u;
+
+    if (name == NULL) {
+        const char *path =
+            astra_startup_argument(ASTRA_LOG_STARTUP_ADDRESS, 0u);
+
+        if (path == NULL)
+            path = "?";
+        name = path;
+        for (const char *at = path; *at != '\0'; ++at)
+            if (*at == '/')
+                name = at + 1;
+        limit = ASTRA_LOG_IDENT_MAX - 1u;
+    }
+    while (length < limit && length + 1u < ASTRA_LOG_IDENT_MAX &&
+           name[length] != '\0') {
+        out[length] = name[length];
+        ++length;
+    }
+    while (length < ASTRA_LOG_IDENT_MAX)
+        out[length++] = '\0';
+}
+
+/* A READY state word's producer: generation g names log_producers[g - 1]. */
+static AstraLogProducer *
+log_producer_of(uint32_t state)
+{
+    return &log_producers[(state >> LOG_GENERATION_SHIFT) - 1u];
+}
+
+/* Returns the READY state word when the ring is ready after this call, else
+ * 0 (READY is never 0). */
+static uint32_t
+log_setup(void)
+{
+    /*
+     * Static, not on the stack, so the 64-bit host fake can read them through
+     * the 32-bit syscall ABI. Safe only because the BUSY claim below is
+     * exclusive: no other thread can hold BUSY until this one stores IDLE or
+     * READY, and log_ring_died cannot release a BUSY claim (it CASes from a
+     * READY word).
+     */
+    static AstraLogSetup setup;
+    static uint32_t handles[2];
+    const AstraStartupCapability *log;
+    uint32_t area = 0u;
+    uint32_t reader = 0u;
+    uint32_t producer = 0u;
+    uint32_t consumer = 0u;
+    void *address = NULL;
+    uint32_t size = 0u;
+    uint32_t state = __atomic_load_n(&log_state, __ATOMIC_ACQUIRE);
+    uint32_t generation = state >> LOG_GENERATION_SHIFT;
+    uint32_t backoff;
+    uint32_t status;
+
+    if ((state & LOG_STATE_MASK) == LOG_SETUP_READY)
+        return state;
+    if ((state & LOG_STATE_MASK) != LOG_SETUP_IDLE ||
+        generation == LOG_PRODUCERS ||
+        __atomic_load_n(&log_service_dead, __ATOMIC_RELAXED) != 0u)
+        return 0u;
+    backoff = __atomic_load_n(&log_setup_backoff, __ATOMIC_RELAXED);
+    if (backoff != 0u) {
+        /* Racy by design: a lost decrement only retries a little later. */
+        __atomic_store_n(&log_setup_backoff, backoff - 1u, __ATOMIC_RELAXED);
+        if (backoff != 1u)
+            return 0u;
+    }
+    if (!__atomic_compare_exchange_n(&log_state, &state,
+                                     state | LOG_SETUP_BUSY, 0,
+                                     __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+        return 0u;
+    log = astra_startup_capability(ASTRA_LOG_STARTUP_ADDRESS,
+                                   ASTRA_CAPABILITY_LOG);
+    if (log == NULL || log->handle == 0u)
+        goto unavailable;
+    if (astra_rt_area_create_flagged(
+            ASTRA_LOG_RING_AREA_SIZE,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+                ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER,
+            ASTRA_AREA_CREATE_RESERVED, &area) != ASTRA_SYSCALL_OK)
+        goto failed;
+    if (astra_rt_area_map(area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                          &address, &size) != ASTRA_SYSCALL_OK ||
+        size < ASTRA_LOG_RING_AREA_SIZE)
+        goto failed;
+    if (astra_rt_ring_create(area, ASTRA_LOG_RING_OFFSET,
+                             ASTRA_LOG_RING_SLOT_SIZE,
+                             ASTRA_LOG_RING_CAPACITY, 0u, &producer,
+                             &consumer) != ASTRA_SYSCALL_OK)
+        goto failed;
+    /* The service maps it read-write: it stores consumer_position. The
+     * kernel moves only handles that carry TRANSFER. */
+    if (astra_rt_handle_duplicate(area, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                                            ASTRA_RIGHT_MAP |
+                                            ASTRA_RIGHT_TRANSFER,
+                                  &reader) != ASTRA_SYSCALL_OK)
+        goto failed;
+    astra_message_header_set(&setup.header, sizeof(setup),
+                             ASTRA_LOG_SETUP_MAGIC, ASTRA_LOG_SETUP_VERSION,
+                             ASTRA_LOG_OPERATION_SETUP, 0u);
+    setup.magic = ASTRA_LOG_SETUP_MAGIC;
+    setup.version = ASTRA_LOG_SETUP_VERSION;
+    setup.area_size = ASTRA_LOG_RING_AREA_SIZE;
+    setup.ring_offset = ASTRA_LOG_RING_OFFSET;
+    setup.slot_size = ASTRA_LOG_RING_SLOT_SIZE;
+    setup.capacity = ASTRA_LOG_RING_CAPACITY;
+    log_ident(setup.ident);
+    handles[0] = consumer;
+    handles[1] = reader;
+    /* Never blocks: a full queue is WOULD_BLOCK, and this line falls back. */
+    status = astra_port_send(log->handle, &setup, sizeof(setup), handles, 2u);
+    if (status != ASTRA_SYSCALL_OK) {
+        if (status == ASTRA_SYSCALL_PEER_DEAD)
+            __atomic_store_n(&log_service_dead, 1u, __ATOMIC_RELAXED);
+        goto failed;
+    }
+    /* Both handles moved to the service on success. */
+    log_producer_endpoints[generation] = producer; /* older ones stay open */
+    log_producer_areas[generation] = address;
+    if (generation == 0u) {
+        /* Once: older rings' writers read these in their doorbells. */
+        log_port = log->handle;
+        astra_message_header_set(&log_doorbell, sizeof(log_doorbell),
+                                 ASTRA_LOG_SETUP_MAGIC,
+                                 ASTRA_LOG_SETUP_VERSION,
+                                 ASTRA_LOG_OPERATION_DOORBELL, 0u);
+    }
+    astra_log_producer_init(&log_producers[generation], address,
+                            log_ring_notify,
+                            &log_producer_endpoints[generation]);
+    (void)astra_close(area); /* the mapping keeps the area alive */
+    state = ((generation + 1u) << LOG_GENERATION_SHIFT) | LOG_SETUP_READY;
+    __atomic_store_n(&log_state, state, __ATOMIC_RELEASE);
+    return state;
+
+failed:
+    if (reader != 0u)
+        (void)astra_close(reader);
+    if (consumer != 0u)
+        (void)astra_close(consumer);
+    if (producer != 0u)
+        (void)astra_close(producer);
+    if (address != NULL)
+        (void)astra_rt_area_unmap(address);
+    if (area != 0u)
+        (void)astra_close(area);
+unavailable:
+    __atomic_store_n(&log_setup_backoff, LOG_SETUP_RETRY_AFTER,
+                     __ATOMIC_RELAXED);
+    __atomic_store_n(&log_state, generation << LOG_GENERATION_SHIFT,
+                     __ATOMIC_RELEASE);
+    return 0u;
 }
 
 /*
- * The same line, into the ring and no further.
+ * The ring of the READY word `state` reported DEAD. Only that setup is
+ * retired: a CAS from exactly that word to IDLE of the same generation. A
+ * stale report (a newer setup is READY, or one is BUSY) changes nothing, and
+ * only the winner backs off, so setup is retried on the 64th call after.
+ */
+static void
+log_ring_died(uint32_t state)
+{
+    uint32_t expected = state;
+
+    if (__atomic_compare_exchange_n(&log_state, &expected,
+                                    state & ~LOG_STATE_MASK, 0,
+                                    __ATOMIC_ACQ_REL, __ATOMIC_RELAXED))
+        __atomic_store_n(&log_setup_backoff, LOG_SETUP_RETRY_AFTER,
+                         __ATOMIC_RELAXED);
+}
+
+/*
+ * In a forked child, before it runs anything else (astra_process_clone). The
+ * kernel clones only a single-threaded process (sw/kernel/process.c,
+ * clone_current_process), so no writer is in a ring. The child inherited the
+ * parent's mappings of its rings and the state naming them, but not the
+ * producer endpoints, which do not clone: unmap the areas, and forget the
+ * endpoints unclosed, because their numbers may name a child handle later.
+ * The child's next line sets up a ring of its own, with a fresh budget of
+ * setups -- unless the service is dead (log_service_dead): the child holds
+ * the same startup handle, so it stays on LOG_WRITE too.
+ */
+void
+astra_log_after_fork_child(void)
+{
+    for (uint32_t index = 0u; index < LOG_PRODUCERS; ++index) {
+        if (log_producer_areas[index] != NULL)
+            (void)astra_rt_area_unmap(log_producer_areas[index]);
+        log_producer_areas[index] = NULL;
+        log_producer_endpoints[index] = 0u;
+    }
+    memset(log_producers, 0, sizeof(log_producers));
+    log_port = 0u;
+    log_setup_backoff = 0u;
+    __atomic_store_n(&log_state, LOG_SETUP_IDLE, __ATOMIC_RELEASE);
+}
+
+/*
+ * Just before PROCESS_EXEC (astra_exec_executable_stream). Exec keeps the
+ * handle table, so without this the service would never see these rings end:
+ * close the producer endpoints, and it sees PEER_DEAD and frees the client.
+ * Each producer is marked dead first, so a writer still in one falls back to
+ * LOG_WRITE. The mappings stay: the kernel refuses to exec a multi-threaded
+ * process only after this point, and such a writer could still be in them.
+ * A successful exec unmaps them; a failed one leaves the process IDLE at the
+ * same generation, and a line 64 calls later sets up a new ring. The backoff
+ * is what keeps a line written in the exec window itself (a signal handler)
+ * from setting up a ring the exec is about to discard.
+ */
+void
+astra_log_before_exec(void)
+{
+    uint32_t state = __atomic_load_n(&log_state, __ATOMIC_ACQUIRE);
+
+    for (uint32_t index = 0u; index < LOG_PRODUCERS; ++index) {
+        uint32_t endpoint = log_producer_endpoints[index];
+
+        if (endpoint == 0u)
+            continue;
+        __atomic_store_n(&log_producers[index].dead, 1u, __ATOMIC_RELEASE);
+        log_producer_endpoints[index] = 0u;
+        (void)astra_close(endpoint);
+    }
+    __atomic_store_n(&log_setup_backoff, LOG_SETUP_RETRY_AFTER,
+                     __ATOMIC_RELAXED);
+    /* From READY only: a BUSY setup is another thread's, and exec will be
+     * refused while it runs. */
+    if ((state & LOG_STATE_MASK) == LOG_SETUP_READY)
+        (void)__atomic_compare_exchange_n(&log_state, &state,
+                                          state & ~LOG_STATE_MASK, 0,
+                                          __ATOMIC_ACQ_REL,
+                                          __ATOMIC_RELAXED);
+}
+
+#ifdef ASTRA_LOG_TEST
+uint32_t
+astra_log_test_state(void)
+{
+    return log_state;
+}
+
+struct AstraLogProducer *
+astra_log_test_producer(void)
+{
+    return (log_state & LOG_STATE_MASK) == LOG_SETUP_READY ?
+               log_producer_of(log_state) : NULL;
+}
+
+void
+astra_log_test_ring_died(uint32_t state)
+{
+    log_ring_died(state);
+}
+
+void
+astra_log_test_reset(void)
+{
+    log_state = LOG_SETUP_IDLE;
+    log_setup_backoff = 0u;
+    log_service_dead = 0u;
+    for (uint32_t index = 0u; index < LOG_PRODUCERS; ++index) {
+        log_producer_endpoints[index] = 0u;
+        log_producer_areas[index] = NULL;
+    }
+    memset(log_producers, 0, sizeof(log_producers));
+    log_port = 0u;
+}
+#endif
+
+uint32_t
+astra_log_line(uint32_t level, uint32_t stream, const char *text,
+               uint32_t length)
+{
+    AstraLogRecordFields fields;
+    AstraTimeSample now;
+    uint32_t state;
+    uint32_t full;
+
+    if (text == NULL || level > ASTRA_EVENT_LEVEL_ERROR ||
+        stream > ASTRA_LOG_STREAM_MAX || stream == ASTRA_LOG_STREAM_KERNEL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    while (length != 0u && (text[length - 1u] == '\n' ||
+                            text[length - 1u] == '\r'))
+        --length;
+    /* An empty line is recorded: a program's blank line is part of its
+     * output. Only the kernel-ring fallback cannot carry one.
+     * Debug is live commentary, never stored (event_store.c drops it). */
+    state = level == ASTRA_EVENT_LEVEL_DEBUG ? 0u : log_setup();
+    if (state == 0u)
+        return length == 0u ? ASTRA_SYSCALL_OK :
+                              log_write_level(text, length, level);
+    /* A full ring drops the line before it costs a clock read. */
+    full = astra_log_producer_drop_if_full(log_producer_of(state), length);
+    if (full == ASTRA_LOG_WRITE_DROPPED)
+        return ASTRA_SYSCALL_OK;
+    /* A dead ring falls back before it costs a clock read too. */
+    if (full != ASTRA_LOG_WRITE_DEAD) {
+        astra_time_now(&now);
+        /* Every field, without a memset call; the writer overwrites
+         * sequence, dropped, text_length and slots. */
+        fields.sequence = 0u;
+        fields.dropped = 0u;
+        fields.text_length = 0u;
+        fields.slots = 0u;
+        fields.reserved = 0u;
+        fields.monotonic_high = (uint32_t)(now.monotonic_ns >> 32);
+        fields.monotonic_low = (uint32_t)now.monotonic_ns;
+        fields.wall_high = (uint32_t)(now.wall_ns >> 32);
+        fields.wall_low = (uint32_t)now.wall_ns;
+        fields.utc_offset = now.utc_offset;
+        fields.zone = now.zone;
+        fields.level = (uint8_t)level;
+        fields.stream = (uint8_t)stream;
+        fields.flags = now.wall_valid ? ASTRA_LOG_FLAG_WALL_VALID : 0u;
+        if (astra_log_producer_write(log_producer_of(state), &fields, text,
+                                     length) != ASTRA_LOG_WRITE_DEAD)
+            return ASTRA_SYSCALL_OK; /* written, or dropped and counted */
+    }
+    /* The service went away, or let go of this ring: kernel ring until a
+     * later setup works. The dead ring stays mapped (LOG_PRODUCERS): other
+     * writers may be in it. */
+    log_ring_died(state);
+    return length == 0u ? ASTRA_SYSCALL_OK :
+                          log_write_level(text, length, level);
+}
+
+uint32_t
+astra_log_write(const void *bytes, uint32_t length)
+{
+    if (bytes == NULL || length == 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    return astra_log_line(ASTRA_EVENT_LEVEL_NOTICE, ASTRA_LOG_STREAM_LOG,
+                          bytes, length);
+}
+
+/*
+ * The same line, into the kernel ring and no further.
  *
  * The event store drops debug at drain -- live subscription only, counted and
  * never kept -- which is exactly the difference between a machine's account of
@@ -225,73 +661,27 @@ astra_log(const char *text)
 uint32_t
 astra_log_failure(const char *operation, uint32_t status)
 {
-    static const char suffix[] = ": failed";
-    char digits[10];
-    LogPart parts[4];
-    size_t operation_length;
+    char line[ASTRA_LOG_FIRST_TEXT];
+    uint32_t length = 0u;
 
-    if (operation == NULL)
-        operation = "?";
-    operation_length = strlen(operation);
-    if (operation_length > UINT32_MAX)
-        return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    parts[0] = (LogPart){operation, (uint32_t)operation_length};
-    parts[1] = (LogPart){":", 1u};
-    parts[2] = (LogPart){digits, decimal(digits, status)};
-    parts[3] = (LogPart){suffix, sizeof(suffix) - 1u};
-    return log_parts(parts, 4u);
+    length = append(line, sizeof(line), length,
+                    operation != NULL ? operation : "?");
+    length = append(line, sizeof(line), length, ":");
+    length = append_number(line, sizeof(line), length, status);
+    length = append(line, sizeof(line), length, ": failed");
+    return astra_log_line(ASTRA_EVENT_LEVEL_ERROR, ASTRA_LOG_STREAM_LOG, line,
+                          length);
 }
 
 uint32_t
 astra_log_assertion(const char *file, uint32_t line, const char *expression)
 {
-    char digits[10];
-    LogPart parts[5];
-    size_t file_length;
-    size_t expression_length;
+    char text[ASTRA_LOG_FIRST_TEXT];
+    uint32_t length = astra_assert_message(text, sizeof(text), file, line,
+                                           expression);
 
-    if (file == NULL)
-        file = "?";
-    if (expression == NULL)
-        expression = "?";
-    file_length = strlen(file);
-    expression_length = strlen(expression);
-    if (file_length > UINT32_MAX || expression_length > UINT32_MAX)
-        return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    parts[0] = (LogPart){file, (uint32_t)file_length};
-    parts[1] = (LogPart){":", 1u};
-    parts[2] = (LogPart){digits, decimal(digits, line)};
-    parts[3] = (LogPart){": ", 2u};
-    parts[4] = (LogPart){expression, (uint32_t)expression_length};
-    return log_parts(parts, 5u);
-}
-
-static uint32_t
-append(char *out, uint32_t capacity, uint32_t length, const char *text)
-{
-    while (text != NULL && *text != '\0' && length + 1u < capacity) {
-        out[length++] = *text++;
-    }
-    return length;
-}
-
-static uint32_t
-append_number(char *out, uint32_t capacity, uint32_t length, uint32_t value)
-{
-    char digits[10];
-    uint32_t count = 0u;
-
-    if (value == 0u) {
-        return append(out, capacity, length, "0");
-    }
-    while (value != 0u && count < sizeof(digits)) {
-        digits[count++] = (char)('0' + (value % 10u));
-        value /= 10u;
-    }
-    while (count != 0u && length + 1u < capacity) {
-        out[length++] = digits[--count];
-    }
-    return length;
+    return astra_log_line(ASTRA_EVENT_LEVEL_ERROR, ASTRA_LOG_STREAM_LOG, text,
+                          length);
 }
 
 /*

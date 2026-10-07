@@ -10,8 +10,10 @@
 #include "pmmu.h"
 #include "port.h"
 #include "process.h"
+#include "time_page.h"
 
 #include <astra/copy_engine.h>
+#include <astra/time_page.h>
 #include <astra/render_batch.h>
 #include <astra/tls.h>
 #include <vesta.h>
@@ -1528,6 +1530,7 @@ static void initialize_test(void)
     timer_on_disable_armed = false;
     timer_on_disable_fired = false;
     kernel_process_init();
+    assert(kernel_time_page_init());
     milestone_calls = 0u;
     initial_image_exits = 0u;
     system_failures = 0u;
@@ -9509,8 +9512,6 @@ static void test_reading_the_stream_is_the_privileged_half(void)
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
     assert(kernel_process_snapshot(0u, &snapshot));
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, KERNEL_PROCESS_CODE_BASE, 0u);
-    assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
-           KERNEL_USER_COPY_OK);
 
     /*
      * The ring survives a re-init on purpose -- it is what a machine that just
@@ -9530,6 +9531,9 @@ static void test_reading_the_stream_is_the_privileged_half(void)
         registers[2] = next->data[2];
     } while (next->data[1] != 0u);
     cursor = registers[2];
+    /* After the drain: a full ten-event page reaches user_text. */
+    assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
+           KERNEL_USER_COPY_OK);
 
     /* Two events to read back: one bare, one carrying its text. */
     memset(registers, 0, sizeof(registers));
@@ -9574,14 +9578,17 @@ static void test_reading_the_stream_is_the_privileged_half(void)
     assert(drained[1].payload[0] == 's');
     assert(drained[1].sequence == cursor);
 
-    /* The cursor is where it stopped: nothing new, nothing repeated. */
+    /* The cursor is where it stopped: nothing new, nothing repeated. The
+     * full page stopped before the last record's argument slot, which this
+     * read examines, so the cursor moves past it and no further. */
     registers[2] = cursor;
     assert(kernel_process_on_syscall(registers,
                                      KERNEL_PROCESS_STACK_TOP - 8u, frame,
                                      &next) == KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(next->data[1] == 0u);
-    assert(next->data[2] == cursor);
+    assert(next->data[2] == cursor + 1u);
+    cursor = next->data[2];
 
     /* A caller can drain more than the old stack-array batch of eight. */
     for (uint32_t index = 0u; index < 10u; ++index) {
@@ -9807,6 +9814,58 @@ static void launch_build_image(void)
 
     launch_image[0x100] = 0x4eu; /* NOP at the entry point */
     launch_image[0x101] = 0x71u;
+}
+
+/* The sequence a drain should resume after to see only what comes next. */
+static uint32_t trace_cursor_now(void)
+{
+    KernelTraceHeader header;
+
+    assert(kernel_trace_header(&header));
+    return header.next_sequence - 1u;
+}
+
+/*
+ * The first event from `process_id` after `after` is its PROCESS_START chain,
+ * and the chain spells `name`. Returns the drain index just past the chain.
+ */
+static uint32_t assert_process_started(uint32_t after, uint32_t process_id,
+                                       const char *name)
+{
+    static AstraEventDrained events[128];
+    char joined[ASTRA_PROC_NAME_MAX];
+    uint32_t cursor = 0u;
+    uint32_t lost = 0u;
+    uint32_t length = 0u;
+    uint32_t index = 0u;
+    uint32_t count = kernel_trace_drain_user(after, events, 128u, &cursor,
+                                             &lost);
+
+    assert(lost == 0u);
+    while (index < count && events[index].process != process_id)
+        ++index;
+    for (;;) {
+        const AstraEventDrained *event = &events[index];
+
+        assert(index < count);
+        assert(event->process == process_id);
+        assert(event->message == ASTRA_EVENT_MESSAGE_PROCESS_START);
+        /* activity is the chunk's byte offset in the name: a reader can
+         * tell a chain's head from a second half orphaned by a wrap. */
+        assert(event->thread == 0u && event->activity == length);
+        assert((event->flags & ASTRA_EVENT_LEVEL_MASK) ==
+               ASTRA_EVENT_LEVEL_INFO);
+        assert((event->flags & ASTRA_EVENT_FLAG_INLINE_STRING) != 0u);
+        assert(length + event->payload_length < sizeof(joined));
+        memcpy(joined + length, event->payload, event->payload_length);
+        length += event->payload_length;
+        ++index;
+        if ((event->flags & ASTRA_EVENT_FLAG_CONTINUED) == 0u)
+            break;
+    }
+    joined[length] = '\0';
+    assert(strcmp(joined, name) == 0);
+    return index;
 }
 
 static void test_a_program_can_launch_a_program(void)
@@ -11646,6 +11705,90 @@ static uint32_t stream_exec(const uint8_t *program, uint32_t program_size,
     return status;
 }
 
+static void read_time_page(AstraTimePage *page)
+{
+    assert(kernel_user_copy_from_asm(page, ASTRA_TIME_PAGE_ADDRESS,
+                                     sizeof(*page)) == KERNEL_USER_COPY_OK);
+    assert(page->magic == ASTRA_TIME_PAGE_MAGIC);
+    assert(page->version == ASTRA_TIME_PAGE_VERSION);
+}
+
+static uint64_t time_page_monotonic(const AstraTimePage *page)
+{
+    const AstraTimePageCopy *copy = &page->copy[page->sequence & 1u];
+
+    return (uint64_t)copy->monotonic_high << 32 | copy->monotonic_low;
+}
+
+/*
+ * Every launched process reads the kernel's time page without a syscall,
+ * and the page moves with the tick and the context switch.
+ */
+static void test_time_page_is_mapped_and_follows_the_clock(void)
+{
+    AstraTimePage page;
+    const AstraTimePageCopy *copy;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t process_id = 0u;
+    uint32_t sequence;
+
+    launch_build_image();
+    initialize_test();
+    wall_clock_valid = true;
+    wall_clock_ns = UINT64_C(1755648000) * 1000000000u + 456u;
+    wall_clock_offset = -4 * 3600;
+    wall_clock_zone = 0x45445400u; /* "EDT" */
+    scheduler_test_cycles = 5000u;
+    assert(kernel_process_create_executable(
+               launch_image, sizeof(launch_image), NULL, 0u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+
+    /* Boot published once; switching to the new process published again. */
+    read_time_page(&page);
+    assert(page.sequence == 2u);
+    assert(time_page_monotonic(&page) ==
+           (uint64_t)5000u * KERNEL_PLATFORM_NS_PER_CPU_CYCLE);
+    copy = &page.copy[page.sequence & 1u];
+    assert(copy->flags == ASTRA_TIME_PAGE_WALL_VALID);
+    assert(((uint64_t)copy->wall_high << 32 | copy->wall_low) ==
+           wall_clock_ns);
+    assert(copy->utc_offset == -4 * 3600);
+    assert(copy->zone == 0x45445400u);
+    sequence = page.sequence;
+
+    /* A user-mode timer tick republishes. */
+    scheduler_test_cycles += 1000u;
+    make_frame(frame, 0u, 80u, LAUNCH_VADDR + 0x100u, 0u);
+    assert(kernel_process_on_timer(registers,
+                                   KERNEL_PROCESS_STACK_TOP - 16u, frame,
+                                   &next) == KERNEL_PROCESS_OK);
+    read_time_page(&page);
+    assert(page.sequence == sequence + 1u);
+    assert(time_page_monotonic(&page) ==
+           (uint64_t)6000u * KERNEL_PLATFORM_NS_PER_CPU_CYCLE);
+
+    /* With the clock invalid the page says so rather than answering 1970. */
+    wall_clock_valid = false;
+    scheduler_test_cycles += 1000u;
+    assert(kernel_process_on_timer(registers,
+                                   KERNEL_PROCESS_STACK_TOP - 16u, frame,
+                                   &next) == KERNEL_PROCESS_OK);
+    read_time_page(&page);
+    assert(page.sequence == sequence + 2u);
+    assert(page.copy[page.sequence & 1u].flags == 0u);
+
+    /* A supervisor-mode tick republishes too. */
+    scheduler_test_cycles += 1000u;
+    assert(kernel_process_on_supervisor_timer() == KERNEL_PROCESS_OK);
+    read_time_page(&page);
+    assert(page.sequence == sequence + 3u);
+    assert(time_page_monotonic(&page) ==
+           (uint64_t)8000u * KERNEL_PLATFORM_NS_PER_CPU_CYCLE);
+}
+
 static void test_exec_replaces_one_image_and_preserves_argv(void)
 {
     static const char arguments[] = "vim\0-R\0/work/notes.txt\0";
@@ -11672,6 +11815,7 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
     uint32_t user_handoff = user_environment + sizeof(environment);
     uint32_t user_channel = user_page + KERNEL_PAGE_SIZE - 256u;
     uint32_t host_handle = 0u;
+    uint32_t trace_after;
 
     launch_build_image();
     initialize_test();
@@ -11803,11 +11947,21 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
         assert(after.address_spaces == before.address_spaces);
         assert(next->program_counter == LAUNCH_VADDR + 0x100u);
     }
+    assert(kernel_trace_init());
+    trace_after = trace_cursor_now();
     assert(stream_exec(launch_image, sizeof(launch_image), NULL, 0u,
                        user_page, user_request, frame, &next) ==
            ASTRA_SYSCALL_OK);
+    /* The new image is named before it runs. */
+    (void)assert_process_started(trace_after, process_id, "vim");
     assert(next->program_counter == LAUNCH_VADDR + 0x100u);
     assert(next->usp == KERNEL_PROCESS_STACK_TOP);
+    {
+        AstraTimePage after;
+
+        /* The replacement space was given the page before the commit. */
+        read_time_page(&after);
+    }
     assert(next->data[2] == KERNEL_VM_USER_MIN);
     assert(next->data[4] == process_handle);
     assert(host_channel_close_calls == 1u);
@@ -13390,6 +13544,52 @@ static void test_fault_report_names_only_what_it_knows(void)
     assert(fault_reports == 1u);
     assert(last_fault_address == 0x60000000u);
     assert(last_fault_kind == KERNEL_PROCESS_FAULT_PRIVATE_WINDOW);
+    /*
+     * And in the ring, as the kernel's own text line (process 0), so the
+     * system log has it beside the program's last lines
+     * (docs/SYSTEM_LOG.md section 3: the kernel ring carries fault reports).
+     */
+    {
+        static AstraEventDrained drained[64];
+        char text[160];
+        char expected[160];
+        uint32_t used = 0u;
+        uint32_t after = 0u;
+        uint32_t count;
+        int complete = 0;
+
+        /* The ring is not reset between tests: the last chain counts. */
+        do {
+            uint32_t cursor = 0u;
+            uint32_t lost = 0u;
+
+            count = kernel_trace_drain_user(after, drained, 64u, &cursor,
+                                            &lost);
+            after = cursor;
+            for (uint32_t index = 0u; index < count; ++index) {
+                const AstraEventDrained *event = &drained[index];
+
+                if (event->process != 0u ||
+                    event->message != ASTRA_EVENT_MESSAGE_UNSTRUCTURED)
+                    continue;
+                assert((event->flags & ASTRA_EVENT_FLAG_INLINE_STRING) != 0u);
+                assert((event->flags & ASTRA_EVENT_LEVEL_MASK) ==
+                       ASTRA_EVENT_LEVEL_ERROR);
+                if (complete)
+                    used = 0u;
+                assert(used + event->payload_length < sizeof(text));
+                memcpy(text + used, event->payload, event->payload_length);
+                used += event->payload_length;
+                complete = (event->flags & ASTRA_EVENT_FLAG_CONTINUED) == 0u;
+            }
+        } while (count == 64u);
+        assert(complete);
+        text[used] = '\0';
+        snprintf(expected, sizeof(expected),
+                 "user fault: process %08x pc 0x%08X address 0x60000000 "
+                 "vector 2", process_id, KERNEL_PROCESS_CODE_BASE + 6u);
+        assert(strcmp(text, expected) == 0);
+    }
 
     /*
      * An address in another thread's slot is inside the arena and outside this
@@ -13861,6 +14061,281 @@ static void test_process_clone_rejects_multithreaded_source(void)
     assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(kernel_process_stats(&stats));
     assert(stats.live_processes == 1u && stats.live_threads == 2u);
+}
+
+/*
+ * Every image a process runs is named in the ring before it says anything,
+ * so a log reader never has to ask a service who a pid is.
+ */
+static void test_process_start_names_each_image(void)
+{
+    /* 31 bytes, the most a name holds: a two-record chain. */
+    static const char arguments[] = "/system/services/events-service\0-v\0";
+    static const char line[] = "hello";
+    AstraLaunchArguments launch;
+    AstraEventDrained events[8];
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    uint32_t user_text = KERNEL_PROCESS_STACK_TOP - 512u;
+    uint32_t process_id = 0u;
+    uint32_t child_id;
+    uint32_t after;
+    uint32_t index;
+    uint32_t count;
+    uint32_t cursor;
+    uint32_t lost;
+
+    launch_build_image();
+    initialize_test();
+    assert(kernel_trace_init());
+
+    /* Launch. */
+    after = trace_cursor_now();
+    memset(&launch, 0, sizeof(launch));
+    launch.count = 2u;
+    launch.length = sizeof(arguments) - 1u;
+    launch.source = ASTRA_LAUNCH_SOURCE_SHELL;
+    assert(kernel_process_launch(launch_image, sizeof(launch_image), 0u,
+                                 NULL, NULL, 0u, &launch, arguments, NULL,
+                                 &process_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LAUNCH_VADDR + 0x100u, 0u);
+    assert(kernel_user_copy_to_asm(user_text, line, sizeof(line) - 1u) ==
+           KERNEL_USER_COPY_OK);
+    registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+    registers[1] = ASTRA_EVENT_MESSAGE_UNSTRUCTURED;
+    registers[2] = ASTRA_EVENT_LEVEL_NOTICE | ASTRA_EVENT_FLAG_INLINE_STRING;
+    registers[3] = user_text;
+    registers[4] = sizeof(line) - 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    index = assert_process_started(after, process_id,
+                                   "/system/services/events-service");
+    count = kernel_trace_drain_user(after, events, 8u, &cursor, &lost);
+    assert(index < count && events[index].process == process_id &&
+           events[index].message == ASTRA_EVENT_MESSAGE_UNSTRUCTURED);
+
+    /* Only the kernel says a process started. */
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+    registers[1] = ASTRA_EVENT_MESSAGE_PROCESS_START;
+    registers[2] = ASTRA_EVENT_LEVEL_INFO | ASTRA_EVENT_FLAG_INLINE_STRING;
+    registers[3] = user_text;
+    registers[4] = sizeof(line) - 1u;
+    after = trace_cursor_now();
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(trace_cursor_now() == after);
+    /* Nor anything else in the kernel's reserved range. */
+    for (uint32_t message = ASTRA_EVENT_MESSAGE_PROCESS_START + 1u;
+         message <= ASTRA_EVENT_MESSAGE_RESERVED_MAX; ++message) {
+        registers[0] = ASTRA_SYSCALL_LOG_WRITE;
+        registers[1] = message;
+        registers[2] = ASTRA_EVENT_LEVEL_INFO |
+                       ASTRA_EVENT_FLAG_INLINE_STRING;
+        registers[3] = user_text;
+        registers[4] = sizeof(line) - 1u;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+        assert(trace_cursor_now() == after);
+    }
+
+    /* Fork: the child carries the parent's name. */
+    after = trace_cursor_now();
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_CLONE;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    child_id = next->data[2];
+    assert(child_id != 0u && child_id != process_id);
+    (void)assert_process_started(after, child_id,
+                                 "/system/services/events-service");
+}
+
+/*
+ * fork() copies every send handle, including one whose receiver is gone. The
+ * copy is as dead as the original -- PEER_DEAD on send -- and the fork itself
+ * must not fail over it: a shell holding a stale service handle could
+ * otherwise never run another command.
+ */
+static void test_fork_copies_a_send_handle_to_a_closed_port(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    const uint32_t message_address = KERNEL_PROCESS_STACK_TOP - 512u;
+    uint8_t message[ASTRA_MESSAGE_HEADER_SIZE + 8u];
+    KernelCpuContext *next;
+    KernelPortPoolStats ports;
+    KernelPortSnapshot port;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t parent_id;
+    uint32_t child_id;
+    uint32_t receive_handle;
+    uint32_t send_handle;
+    uint32_t duplicate;
+    KernelHandle child_handle;
+    uint32_t port_slot = UINT32_MAX;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &parent_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    test_call_message(message, sizeof(message), 1u, 7u);
+    assert(kernel_user_copy_to_asm(message_address, message,
+                                   sizeof(message)) == KERNEL_USER_COPY_OK);
+    assert(kernel_port_pool_stats(&ports));
+    assert(ports.closing_ports == 0u);
+
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PORT_CREATE,
+                     ASTRA_PORT_MESSAGES_MAX, ASTRA_PORT_BYTES_MAX, 0u, 0u,
+                     0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    receive_handle = next->data[1];
+    send_handle = next->data[2];
+    /* The receiver goes; the parent's send handle now reports it. */
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     receive_handle, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     send_handle, message_address, sizeof(message), 0u,
+                     0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    for (uint32_t slot = 0u; slot < KERNEL_PORT_MAX; ++slot) {
+        if (kernel_port_snapshot(slot, &port) &&
+            port.state == KERNEL_PORT_CLOSING) {
+            port_slot = slot;
+            break;
+        }
+    }
+    assert(port_slot != UINT32_MAX);
+    assert(port.send_references == 1u && port.receive_references == 0u);
+
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PROCESS_CLONE,
+                     0u, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    child_handle = next->data[1];
+    child_id = next->data[2];
+    assert(child_id != 0u && child_id != parent_id);
+    assert(kernel_port_snapshot(port_slot, &port));
+    assert(port.state == KERNEL_PORT_CLOSING &&
+           port.send_references == 2u && port.references == 2u);
+
+    /* A duplicate is the same copy, and as dead. */
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_HANDLE_DUPLICATE,
+                     send_handle, KERNEL_PORT_SEND_RIGHTS, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    duplicate = next->data[1];
+    assert(kernel_port_snapshot(port_slot, &port) &&
+           port.send_references == 3u);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     duplicate, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(kernel_port_snapshot(port_slot, &port) &&
+           port.send_references == 2u);
+
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PROCESS_RESUME,
+                     child_handle, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    select_process(child_id, registers, frame, &next);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                     send_handle, message_address, sizeof(message), 0u,
+                     0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_PEER_DEAD);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PROCESS_EXIT,
+                     0u, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+
+    /* The child's copy went with it; the parent's is the last reference. */
+    select_process(parent_id, registers, frame, &next);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(kernel_port_snapshot(port_slot, &port));
+    assert(port.state == KERNEL_PORT_CLOSING &&
+           port.send_references == 1u && port.references == 1u);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                     send_handle, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_port_pool_stats(&ports));
+    assert(ports.closing_ports == 0u);
+    assert(kernel_port_pool_valid());
+}
+
+/*
+ * A user-copy ring endpoint is not inherited (the ring has one producer and
+ * one consumer), and holding one must not make fork() fail.  The runtime's
+ * log ring is one: a program that has logged once still forks.
+ */
+static void test_fork_leaves_a_user_copy_ring_endpoint_behind(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    const uint32_t area_rights =
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER;
+    KernelCpuContext *next;
+    KernelRingSnapshot snapshot;
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t parent_id;
+    uint32_t child_id;
+    uint32_t area_handle;
+    uint32_t producer;
+    uint32_t ring_slot = UINT32_MAX;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &parent_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_AREA_CREATE,
+                     4u * KERNEL_PAGE_SIZE, area_rights, 0u, 0u, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    area_handle = next->data[1];
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_AREA_MAP,
+                     area_handle, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                     0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_RING_CREATE,
+                     area_handle, 0u, 16u, 4u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    producer = next->data[1];
+    for (uint32_t slot = 0u; slot < KERNEL_RING_MAX; ++slot) {
+        if (kernel_ring_snapshot(slot, &snapshot) &&
+            snapshot.producer_references != 0u) {
+            ring_slot = slot;
+            break;
+        }
+    }
+    assert(ring_slot != UINT32_MAX);
+    assert(snapshot.producer_references == 1u &&
+           snapshot.consumer_references == 1u);
+
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_PROCESS_CLONE,
+                     0u, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    child_id = next->data[2];
+    assert(child_id != 0u && child_id != parent_id);
+    /* The child has neither endpoint; the parent's still work. */
+    assert(kernel_ring_snapshot(ring_slot, &snapshot));
+    assert(snapshot.producer_references == 1u &&
+           snapshot.consumer_references == 1u);
+    assert(test_trap(user_stack, frame, &next, ASTRA_SYSCALL_RING_NOTIFY,
+                     producer, 0u, 0u, ASTRA_BULK_RING_PRODUCER, 0u) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_ring_pool_valid());
 }
 
 static void test_process_growth_is_resource_backed(void)
@@ -14444,6 +14919,7 @@ int main(void)
     test_streamed_launch_is_large_and_transactional();
     test_dynamic_stream_enters_interpreter_atomically();
     test_streamed_library_is_sparse_atomic_and_reclaimable();
+    test_time_page_is_mapped_and_follows_the_clock();
     test_exec_replaces_one_image_and_preserves_argv();
     test_exec_dynamic_image_enters_interpreter_atomically();
     test_reading_the_stream_is_the_privileged_half();
@@ -14457,6 +14933,9 @@ int main(void)
     test_reserved_area_faults_in_through_the_exception_path();
     test_private_memory_faults_in_through_the_exception_path();
     test_process_clone_returns_twice_and_is_waitable();
+    test_process_start_names_each_image();
+    test_fork_copies_a_send_handle_to_a_closed_port();
+    test_fork_leaves_a_user_copy_ring_endpoint_behind();
     test_process_clone_rebinds_startup_identity();
     test_process_clone_rejects_multithreaded_source();
     test_process_growth_is_resource_backed();

@@ -17,6 +17,7 @@
 
 #include <string.h>
 
+#include "log_internal.h"
 #include "stream_source.h"
 
 extern void astra_runtime_forget_current_thread_handle(void);
@@ -639,6 +640,7 @@ uint32_t astra_exec_executable_stream(
             goto failed;
     }
     (void)astra_log_debug("exec syscall entered", 20u);
+    astra_log_before_exec();
     astra_syscall5(ASTRA_SYSCALL_PROCESS_EXEC, load_handle,
                    (uint32_t)(uintptr_t)request, 0u, 0u, 0u, &result);
     status = result.status;
@@ -675,8 +677,10 @@ astra_process_clone(uint32_t *process_handle, uint32_t *process_id)
     if (result.status == ASTRA_SYSCALL_OK) {
         *process_handle = result.value0;
         *process_id = result.value1;
-        if (result.value1 == 0u)
+        if (result.value1 == 0u) {
             astra_runtime_forget_current_thread_handle();
+            astra_log_after_fork_child();
+        }
     }
     return result.status;
 }

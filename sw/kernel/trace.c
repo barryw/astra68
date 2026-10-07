@@ -594,6 +594,12 @@ uint32_t kernel_trace_drain_user(uint32_t after_sequence,
 
         if (after_sequence != 0u && !sequence_after(expected, after_sequence))
             continue;
+        /*
+         * The cursor is "examined through", not "last record returned": a
+         * kernel record moves it too, so a gap behind a ring that now holds
+         * only kernel records is reported once, not on every drain.
+         */
+        *cursor = expected;
         if (!kernel_trace_read_user(slot, &record, payload, sizeof(payload),
                                     &length)) {
             /*
@@ -626,7 +632,6 @@ uint32_t kernel_trace_drain_user(uint32_t after_sequence,
         event->reserved = 0u;
         for (uint32_t index = 0u; index < KERNEL_TRACE_ARGUMENT_BYTES; ++index)
             event->payload[index] = index < length ? payload[index] : 0u;
-        *cursor = record.commit_sequence;
         ++produced;
     }
     *lost = missed;

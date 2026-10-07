@@ -129,7 +129,7 @@ TERMINAL_CEILING = (
     "GUI CLIPBOARD WORK:rw HOME:rw TMP:rw RAM:rw DH0:r SYSTEM:r LOCAL:rw "
     "COMMANDS:r APPS:r LIBS:r EVENTS:r PROC:rw METRICS:r CONFIG_COMMANDS:r "
     "EVENT_CONTROL NETWORK NETWORK_LISTEN NTP PCM POSIX_PROCESS APP_LAUNCH "
-    "SERVICE_MANAGER ENTROPY")
+    "SERVICE_MANAGER ENTROPY LOG")
 PROVIDER_INDEX_MAGIC = 0x41505256  # "APRV"
 PROVIDER_INDEX_HEADER = struct.Struct(">IHHHHHHHHI")
 PROVIDER_INDEX_VERSION = 2
@@ -172,8 +172,10 @@ DISPLAY_STARTUP_MANIFEST = (
     "serves NETWORK NETWORK_LISTEN required priority=20\n"
     "service /services/ntpd grants CLOCK CONFIG:r LIBS:r NETWORK "
     "serves NTP required priority=20\n"
-    "service /services/events grants SYSTEM:r STORE:rw LIBS:r "
-    "serves EVENTS:r EVENT_CONTROL required priority=20\n"
+    # The log service drains only in time nobody else wants: below
+    # applications (docs/SYSTEM_LOG.md section 3, Priority).
+    "service /services/events grants SYSTEM:r STORE:rw WORK:rw LIBS:r "
+    "serves EVENTS:r EVENT_CONTROL LOG required priority=12\n"
     "service /services/input grants INPUT INPUT_IRQ "
     "serves INPUT_SERVICE required priority=20\n"
     "service /services/clipboard grants serves CLIPBOARD required priority=20\n"

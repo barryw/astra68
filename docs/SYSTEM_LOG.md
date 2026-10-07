@@ -1,7 +1,8 @@
 # System log: one place for every program's output
 
-Status: design, approved for planning 2026-10-05. Supersedes the 2026-10-01
-proposal (segments, LZ4, query protocol), which is in git history.
+Status: phase 1 built (a3f666f7), phases 2-4 open. Design approved for
+planning 2026-10-05. Supersedes the 2026-10-01 proposal (segments, LZ4, query
+protocol), which is in git history.
 
 ## The problem
 
@@ -121,14 +122,22 @@ overrides it.
 ## 3. Transport: a lock-free ring per process, no syscall per line
 
 Each logging process has one **log ring**: a bulk ring
-(`docs/SHARED_AREAS_AND_BULK_RINGS.md`) in a 64 KiB shared area it owns. The
-log service is the consumer.
+(`docs/SHARED_AREAS_AND_BULK_RINGS.md`) of 1024 slots in a 256 KiB shared
+area it owns. The log service is the consumer.
+
+The area is created reserved (`ASTRA_AREA_CREATE_RESERVED`), so a page is
+committed only when a slot in it is first written, and 256 KiB is one
+shared-table span of address space -- what a 64 KiB area took too -- in the
+process and in the service. The size is measured, not guessed: the service runs
+below applications, so a program's burst lands whole before the service runs,
+and SDL's `testkeys` writes its 512-line scancode table with no call that
+blocks. 256 slots dropped half of it.
 
 It is one ring per process, not one per thread, for a measured reason.
 Per-thread state needs thread-local storage, and the shared `runtime.library`
 has none (`runtime/src/syscall.c:25-27`: it is the dynamic loader and cannot
 relocate its own TLS). A4, the thread pointer, is 0 in any program without a
-TLS segment (`sw/kernel/process.c:3817`).
+TLS segment (`sw/kernel/process.c:3891`).
 
 **Writers never wait for each other.** The ring has one producer endpoint, but
 the writers inside the process coordinate without a lock:
@@ -137,7 +146,10 @@ the writers inside the process coordinate without a lock:
    on a process-local `reserved` counter. The claim succeeds only if
    `reserved + slots - consumer_position <= capacity`, using the consumer
    position in the shared header. If it fails, the ring is full: the line is
-   dropped and the process's `dropped` counter is incremented with a CAS.
+   dropped and the process's dropped-line count is incremented with a CAS.
+   The count lives in the ring header (`ASTRA_LOG_RING_DROPPED`, the first
+   `producer_reserved` word, which the kernel never reads), so the service can
+   read it without a record.
 2. **Write.** The writer copies the record into its slots, and then stores its
    slot's commit word (the slot's position + 1) after a release fence.
 3. **Publish.** A writer advances the shared `producer_position` over every
@@ -147,20 +159,34 @@ the writers inside the process coordinate without a lock:
 A writer preempted between reserve and commit holds back publication of later
 slots until it runs again, but no writer ever spins or sleeps on it: the
 others return at once. CAS uses the explicit compare-exchange loop the NDK
-mutex already uses (`ndk/include/astra/runtime.h:796`), because of the MC68040
+mutex already uses (`ndk/include/astra/runtime.h:796-807`), because of the MC68040
 GCC atomic-exchange defect recorded in `docs/CURRENT_STATE.md`.
+
+A thread killed between reserving and committing leaves its slots uncommitted
+forever; publication stops there and every later line is dropped and counted
+until the process exits. This is an accepted limit: Astra does not kill
+threads asynchronously, and a fault ends the whole process rather than one
+thread.
 
 **Setup.** On the process's first log call, the runtime:
 
 1. creates the area and ring with `astra_rt_area_create` and
    `astra_rt_ring_create`;
 2. maps the area read-write and keeps the producer endpoint;
-3. sends the consumer endpoint and a `READ|MAP` duplicate of the area handle to
-   the `LOG` port in **one** `astra_port_send`.
+3. sends the consumer endpoint and a `READ|WRITE|MAP|TRANSFER` duplicate of
+   the area handle to the `LOG` port in **one** `astra_port_send`. The service
+   writes `consumer_position` into the shared header, so it maps read-write,
+   and the kernel moves only handles that carry `TRANSFER`.
+
+Both messages to the `LOG` port begin with an `AstraMessageHeader`, because
+the kernel refuses a port message that does not (`valid_message_header` in
+`sw/kernel/process.c`): protocol `ASTRA_LOG_SETUP_MAGIC`, operation
+`ASTRA_LOG_OPERATION_SETUP` or `ASTRA_LOG_OPERATION_DOORBELL`
+(`sw/include/astra/log_ring.h`).
 
 `astra_port_send` never blocks: a full queue returns `WOULD_BLOCK`
-(`sw/kernel/port.c:917-922`). The kernel stamps the sending process's id on the
-message (`sw/kernel/port.c:946`), so the service learns the pid from the kernel,
+(`sw/kernel/port.c:926-930`). The kernel stamps the sending process's id on the
+message (`sw/kernel/port.c:954`), so the service learns the pid from the kernel,
 and a program cannot log in another program's name. Setup is claimed with one
 CAS, so a second thread that logs during it does not wait: it uses the
 `LOG_WRITE` fallback for that line. If the send is refused, that line also goes
@@ -170,7 +196,10 @@ to `LOG_WRITE`, and setup is retried after 64 further log calls.
 together, so a record is never interleaved with another. Each slot begins with
 its commit word. The record header carries:
 
-- a per-process sequence number
+- `sequence`, the ring position of the record's first slot -- not a count of
+  records, so a multi-slot record advances it by more than one and a gap
+  between consecutive values is expected and is not loss; loss is the
+  dropped-line count below
 - monotonic and wall time from the time page (§4)
 - level and stream
 - the dropped-line count at the time of writing
@@ -178,7 +207,7 @@ its commit word. The record header carries:
 
 There is no thread id: reading one costs a syscall in the shared runtime.
 
-**Doorbell.** A 4-byte message to the `LOG` port, sent with the
+**Doorbell.** A header-only message (24 bytes, no handles) to the `LOG` port, sent with the
 non-blocking `astra_port_send`. A writer sends it only when its record begins
 where the consumer had stopped, that is, when the ring was empty as far as the
 service knew. During a burst the service is not running, so its position does
@@ -198,14 +227,44 @@ branch of `kernel_ring_notify`).
 
 **Full ring.** The line is dropped and counted; the caller returns at once. The
 next record carries the count, and the service writes `[N lines dropped]`
-before it.
+before it. Drops no record carries -- the program filled the ring and wrote
+nothing after, or exited -- are announced from the header's count when the
+service has read the ring to its end: after the last line, stamped with its
+time. A ring is not done, and an exited process's ring is not released, until
+both its last slot and its last drop are written. The first drop and every 64th after it also ring the doorbell
+(`ASTRA_LOG_DROP_DOORBELL_INTERVAL`): a service that died while the ring was
+full never moves its position, so the burst doorbell alone would never find
+it gone.
+
+**Service death.** A doorbell answered `PEER_DEAD` marks the producer dead, and
+lines go to `LOG_WRITE`. Setup is retried on the 64th call after; a ring the
+live service let go of (the drop-path poll finds its consumer end closed) is
+retired the same way. The setup state word carries a generation, so a late
+report of an older ring's death cannot retire a newer one, and each setup gets
+a fresh producer, so a writer preempted across a re-setup finishes in the ring
+it reserved in. Dead rings stay mapped. After eight setups the process stays on
+`LOG_WRITE`, which bounds that at 2 MiB of reservation. A setup refused `PEER_DEAD` latches
+`LOG_WRITE` at once, in a flag of its own rather than the generation: a
+restarted service makes a new port, and the startup `LOG` handle names the dead
+one forever. A forked child keeps that flag, since it holds the same handle.
+
+**Fork and exec.** A forked child inherits its parent's ring mappings and the
+runtime state naming them, but not the producer endpoints, which do not clone.
+`astra_process_clone` resets the child: it unmaps the inherited areas, forgets
+the stale endpoints unclosed, and the child's next line sets up its own ring
+with a fresh budget of eight setups (none, if the service-dead latch is set).
+Exec keeps the handle table, so `astra_exec_executable_stream` closes the
+producer endpoints just before `PROCESS_EXEC` and the service frees the client.
+It also backs setup off 64 calls, so a line written in the exec window (a
+signal handler) does not set up a ring the exec is about to discard; a failed
+exec sets up a new ring 64 lines later.
 
 **Crash.** After the producer dies, the consumer may still drain published
 elements. The service drains the ring, then sees `PEER_DEAD` and frees it.
 
 **Priority.** The log service drops below applications (from 20 to 12). Waking
 a lower-priority thread never preempts the running one
-(`sw/kernel/process.c:1519-1528`), so the service drains only in time nobody
+(`ready_thread_preempts`, `sw/kernel/process.c:1593-1603`), so the service drains only in time nobody
 else wants. If an application never yields, its ring fills and lines are
 dropped and counted, never delayed. That is requirement 2 applied as stated.
 
@@ -234,16 +293,16 @@ class. It is mapped at launch and into the replacement space at exec; fork
 copies it as it copies every shared frame. Every RAM mapping on this machine
 is write-through and the MC68040 caches are physically tagged, so a kernel
 store through the identity alias is what the next user read sees
-(`docs/MEMORY_MAP_AND_PMMU.md:133-149`). The page begins with a magic word; a
+(`docs/MEMORY_MAP_AND_PMMU.md:134-150`). The page begins with a magic word; a
 reader that does not find it falls back to the clock syscalls. It holds:
 
-- a version word
+- an ABI version and a sequence word
 - two copies of {monotonic ns, wall-clock ns since the epoch, UTC offset,
-  zone name}
+  zone name, wall-valid flag}
 
-The kernel writes the inactive copy and then bumps the version, on every timer
-tick and every context switch. A reader loops until the version is unchanged
-across its read. Resolution is at most one quantum (5 ms,
+The kernel writes the inactive copy and then bumps the sequence, on every
+timer tick and every context switch. A reader loops until the sequence is
+unchanged across its read (`docs/ABI.md`, "Time page"). Resolution is at most one quantum (5 ms,
 `sw/include/astra/process.h:110`) and usually better.
 
 The source is the one `CLOCK_MONOTONIC` and `CLOCK_REALTIME` already use
@@ -265,13 +324,31 @@ if measurement says so.
   The fields are local wall time with offset, level, then ident `[pid]` with
   the pid in hex as `ps` prints it,
   then the stream (`stdout`, `stderr`, `log` or `kernel`), then the text.
-  Non-printable bytes are written as `\xNN`, so one record is always one line.
+  A kernel-ring line (`LOG_WRITE` from a process with no ring) is named
+  `kernel` for pid 0, otherwise by the basename of the name the kernel's
+  `PROCESS_START` record gave the pid -- the same string a ring's setup ident
+  is (`sw/include/astra/event.h`). The kernel writes that record, in one or
+  two chunks, when it launches, forks or execs an image and before anything
+  else from it, so the service reads names from the ring in order and never
+  asks anyone; a later one renames the pid. Each chunk's `activity` is its
+  byte offset in the name, so a tail whose head the ring overwrote is
+  discarded. The table holds 128 names, least recently used first out
+  (`sw/userspace/events/include/astra/log_names.h`). `?` is left for a pid
+  whose record is older than the ring, or forgotten. The records themselves
+  are neither syslog lines nor stored events.
+  Control bytes (below 0x20, and 0x7f) are written as `\xNN` and backslash as
+  `\\`; bytes from 0x80 up pass through so UTF-8 text survives. One record is
+  always one line.
 - **Order.** Each drain pass merges the heads of all rings and the kernel ring
   by monotonic time, so the file is in time order to within one quantum.
+  Kernel-ring lines are drain input like ring records, within the same
+  output budget (up to half of it, so rings keep the rest).
 - **Rotation.** The log rotates when `syslog` reaches 1 MiB, or at the first
   write after local midnight, whichever comes first. Rotating renames `syslog`
-  to `syslog.1` and shifts older files up (`syslog.1.gz` → `syslog.2.gz` …).
-  The service then compresses `syslog.1` to `syslog.1.gz` in the background.
+  to `syslog.1` and shifts older files up (`syslog.1` → `syslog.2` …). Phase 1
+  keeps `syslog.1` to `syslog.3`, plain. From phase 2 the service then
+  compresses `syslog.1` to `syslog.1.gz` in the background, and the shifted
+  files are `syslog.N.gz`.
 - **Compression.** Rotated files are gzip, produced by zlib (vendored unmodified
   in `third_party/zlib`). They are written to `syslog.1.gz.tmp`, synced and
   renamed, and only then is `syslog.1` removed, so a crash leaves either the
@@ -288,8 +365,69 @@ if measurement says so.
   - 5% free on the volume. Below it, the service stops writing, records one
     `log: paused, volume full` line, and resumes when space returns.
   The limits live in `CONFIG:services/events/settings.conf`.
-- **Boot.** Each boot begins with
-  `--- boot 2026-10-05T14:03:20-04:00 build <id> ---`.
+- **Boot.** Each boot begins with `--- boot 2026-10-05T14:03:20-04:00 ---`.
+  There is no build id: nothing userspace can reach without new ABI names
+  the build. A restarted service writes
+  `--- events service restarted <time> ---` instead.
+  The service keeps a resume point in `STORE:syslog.state` (written to a
+  temporary file and renamed, not synced): the last kernel-ring sequence
+  whose text is in the file, one ring record of the boot that wrote it, the
+  boot's wall-clock identity, and the name table. A pass that writes
+  kernel-ring text to the file saves the resume point immediately afterward
+  -- unsynced, temp file and rename as always -- so that text is never
+  written twice across a restart: the only duplicate window left is a crash
+  between the file append and the state rename, which spans one pass. A
+  name-table change, or the resume point catching up to records already
+  read with no kernel text pending, also marks the state dirty but is saved
+  at most once a second; neither can make a restart repeat a line, since
+  neither moves the point past text the file does not yet hold. At start, a
+  resume point from this boot means a restart: the service takes its names
+  and carries on after its sequence, so what the dead instance had not
+  drained -- the lines around its death -- is written once and nothing
+  twice. Anything else is a boot, drained from this boot's first record.
+  - **The ring decides first.** The saved record is named by its sequence,
+    raw timestamp, process and message. If the ring still holds that
+    sequence, it is a restart exactly when the record there is the same one
+    and is not before this boot's first record. The wall clock plays no
+    part, so neither an NTP step nor a machine with no valid clock changes
+    the answer.
+  - **The clock decides only when the ring has overwritten that record.**
+    Boot identity is then the wall-clock second the boot began (wall time
+    minus monotonic time); two must agree to within a second, and the saved
+    sequence must lie inside this boot's span of the ring. A real restart is
+    then mislabelled as a boot if the host clock stepped by more than a
+    second between the dead instance's last save and this one's start. With
+    no valid wall clock the identity is 0, and a cold boot whose ring looks
+    like the last boot's -- the previous boot's span fully overwritten --
+    could then be taken for a restart.
+  - **Why no sync.** The state matters only within one boot, and within a
+    boot the storage service's view of the volume is coherent whether or not
+    a block reached the medium. After a power loss a stale or torn state
+    fails its CRC or names a record the new ring does not hold. The
+    kernel-text save runs synchronously right after the write it follows, so
+    the 1 s rate limit on the name-table and idle-cursor saves cannot widen
+    a restart's duplicate window; only a crash inside that one pass, between
+    the append and the rename, can.
+  - **The ring outlives a warm reset.** It is `NOLOAD` and the kernel keeps
+    a valid header, so its sequence carries on, but each boot's timestamps
+    start again from that boot's reset. A record stamped earlier than the one
+    before it is therefore the first of a later boot, and nothing older is
+    this boot's to write.
+  - **What the ring lost.** When the ring overwrote records after the saved
+    point while no service was running, the restart marker is followed by
+    `log: N kernel-ring records (not necessarily log lines) lost while the
+    events service was down`. The count is the ring's overwritten-record
+    gap, not a count of log lines: the lost records are gone, so there is no
+    way to know how many were kernel text versus anything else the ring
+    carries (a typed event, a name record).
+  - **Names.** Names learned before the service went live (the boot set)
+    are pinned: the least recently used unpinned name is evicted first. A
+    pid the table does not know is named from its log ring's setup ident
+    when it has one.
+- **The service never logs.** `services/events/main.c` includes neither
+  `astra/event_emit.h` nor `astra/log.h` and never calls `astra_log_line` or
+  `astra_log_write`: a log service that logs about logging is how a logging
+  subsystem takes a machine down.
 - **Host copy.** The service is granted `WORK:rw` and appends the same lines to
   `WORK:.astra/syslog`. That is `/var/lib/astra/hostfs/work/.astra/syslog` on
   the DE25, which can be read from Beast with `tail -f` while the machine runs.
@@ -299,7 +437,8 @@ if measurement says so.
   file.
 - **`debug` is not written.** It is dropped at drain and counted, as the event
   store does today. Terminal emits every line it prints at `debug`
-  (`runtime/src/log.c:198-206`), and that is commentary, not record.
+  (`echo_line`, `services/terminal/console_session.c:51-55`), and that is
+  commentary, not record.
 - **Kept as it is:** the 256-record tiered store, which holds notification
   history.
 
@@ -323,9 +462,9 @@ if measurement says so.
 - **`LOG` for every process.** `LOG` is the send endpoint the log service
   publishes.
   - `build_grants` gives it to every entry, as it does `LIBS:`
-    (`supervisor/src/loader.c:1017`).
+    (`supervisor/src/loader.c:1043`, the `LOG` grant block).
   - Terminal's `launch_grants` adds it
-    (`services/terminal/console_session.c:98`).
+    (`services/terminal/console_session.c:99`).
   - It joins the application ceiling (`sw/include/astra/application_policy.h`).
   - zsh children inherit it through exec.
 - **APPL v5.** A launch request may carry STDIN, STDOUT and STDERR handles.
@@ -358,20 +497,46 @@ QEMU gates:
 - Launch Chocolate Doom from the desktop. Every line of its start-up banner must
   be in `EVENTS:log/syslog` with ident `chocolate-doom`, stream `stdout` and the
   right order.
-- A program writes 5000 lines as fast as it can. Its wall time with logging must
-  be within 5% of the same run with logging compiled out, and the file must
-  hold all 5000 lines or one exact drop count.
+- A program writes lines as fast as it can (`logburst`). Two checks:
+  - **Cost.** A logged line may cost the program at most 1,500 ns more than
+    formatting it alone, measured warm: the ring is set up before the clock
+    starts, and the 1,000-line burst fits the ring, so it measures writes,
+    not setup and not drops. Each arm runs five times, interleaved, and the
+    cheapest run of each is compared; host load only ever adds time. It is
+    checked from one thread and from four.
+  - **Count.** A cold 5,000-line burst overruns the ring: the file holds all
+    5,000 lines, or the missing ones are counted by one exact drop marker.
+
+  The plan's first bound, 5% of the same run with logging compiled out, could
+  not be met by any logger that stamps and copies a line. The baseline
+  formats `burst T I` with `snprintf` at about 1.4 us a line under QEMU, so 5%
+  of a 5,000-line run is about 350 us for everything, and ring setup alone
+  takes 200-300 us. Measured on beast under QEMU (`gcc` -O3, MC68040 TCG), a
+  ring write costs 600-900 ns a line. About 250 ns of that is committing the
+  ring's pages on first touch, and the rest is about 150 instructions plus
+  the fences and compare-and-swaps. A `LOG_WRITE` syscall per line costs
+  about 2,060 ns. The bound sits between the two: it has headroom for a
+  loaded host, and it still fails a logger that traps per line.
 - A program logs a line and faults. The line must be in the file.
+- Ten programs each log one line and exit at once. Every line must be in the
+  file: the service reads a dead producer's ring to its end before it lets
+  the ring go.
+- A program logs a line, sleeps until the service has drained it and gone
+  back to sleep, then logs another and exits. The second line must reach the
+  file within 3 s. The gate also runs this with a test build of the service
+  that has no 1 s sweep (`services/events` `VARIANT=nosweep`,
+  `test-system-log.py --no-sweep`), where only the doorbell can wake it.
 - `open` from Terminal prints the bundle's output in the terminal.
 
 Perturbation, so a green gate means the path is really taken:
 
 - Shrink the ring to 2 slots and require the drop marker.
-- Stop the service draining and require the burst test's wall time to stay
-  within the bound.
+- Stop the service draining and require the cost check to stay within the
+  bound while the count check fails.
 - Run the burst from four threads at once and require the same bound: no
   thread waits on another.
-- Remove the doorbell and require lines to arrive late, then not at all.
+- Remove the doorbell from a no-sweep build and require the wake check to
+  fail.
 
 Board: run Doom on the DE25 and read the banner from Beast with
 `tail -f /var/lib/astra/hostfs/work/.astra/syslog`.
@@ -399,9 +564,10 @@ Board: run Doom on the DE25 and read the banner from Beast with
 - **Per-thread state:** there is none in the shared runtime, so the design uses
   one ring per process with CAS (§3).
 - **Slot size:** capacity must be a power of two and the 64-byte header shares
-  the area, so the ring is 256 slots of 252 bytes: 64 + 256 x 252 = 64,576
-  bytes in a 65,536-byte area.
+  the area, so the ring is 1024 slots of 252 bytes: 64 + 1024 x 252 =
+  258,112 bytes in a 262,144-byte area (first planned as 256 slots in 64 KiB;
+  see §3 for why it grew).
 - **Publishing `LOG`:** the manifest's `serves` list maps names to
-  `astra_service_ready` handles by position (`supervisor/src/loader.c:1505`).
+  `astra_service_ready` handles by position (`supervisor/src/loader.c:1523-1526`).
   `LOG` is a raw capability, granted by name like `ENTROPY`.
 - **zlib's cost on the DE25** is measured in phase 2.

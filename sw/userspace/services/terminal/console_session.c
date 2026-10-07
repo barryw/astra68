@@ -10,6 +10,7 @@
 #include <astra/entropy.h>
 #include <astra/gui.h>
 #include <astra/event_control.h>
+#include <astra/log_ring.h>
 #include <astra/network.h>
 #include <astra/ntp.h>
 #include <astra/pcm_format.h>
@@ -105,6 +106,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
     };
     static const char *const authority_names[] = {
         ASTRA_CAPABILITY_EVENT_CONTROL,
+        ASTRA_CAPABILITY_LOG,
         ASTRA_CAPABILITY_NETWORK,
         ASTRA_CAPABILITY_NETWORK_LISTEN,
         ASTRA_CAPABILITY_NTP,

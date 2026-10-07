@@ -5,7 +5,6 @@
 
 #include <supervisor.h>
 
-#include <astra/event.h>
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 
@@ -227,34 +226,6 @@ test_failures_accumulate(void)
 
 
 /*
- * The supervisor links the runtime's startup validation, and validating a
- * startup block is what binds the diagnostic channel, so the syscall the
- * channel issues has to exist for this test to link. Recording it also lets
- * the binding itself be checked.
- */
-static uint32_t mock_log_calls;
-
-void
-astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
-               uint32_t argument2, uint32_t argument3, uint32_t argument4,
-               AstraSyscallResult *result)
-{
-    (void)argument1;
-    (void)argument2;
-    (void)argument3;
-    (void)argument4;
-    if (number == ASTRA_SYSCALL_LOG_WRITE) {
-        ++mock_log_calls;
-        /* A message id, not a handle: emitting names what it is saying. */
-        assert(argument0 == ASTRA_EVENT_MESSAGE_UNSTRUCTURED);
-    }
-    result->status = ASTRA_SYSCALL_OK;
-    result->value0 = 0u;
-    result->value1 = 0u;
-    result->value2 = 0u;
-}
-
-/*
  * Capability names are bounded strings now. The comparison has to refuse a
  * field with no NUL in it: reading one as a name would run off the record.
  */
@@ -286,29 +257,6 @@ test_capability_names_are_bounded_strings(void)
     assert(astra_capability_name_equal(field, "ABCDEFGHIJKLMNO"));
 }
 
-/*
- * Emitting needs nothing. The channel used to be handed its authority by a
- * validated startup block; now a process that has validated nothing and holds
- * nothing can still say what it is doing, because an account of what happened
- * that depends on a right has holes exactly where something went wrong.
- */
-static void
-test_emitting_needs_no_authority(void)
-{
-    AstraStartupInfo startup = valid_startup();
-    uint32_t calls = mock_log_calls;
-
-    assert(astra_log("supervisor up") == ASTRA_SYSCALL_OK);
-    assert(mock_log_calls == calls + 1u);
-
-    /* A refused launch changes nothing about it. */
-    startup.magic = 0u;
-    assert(astra_startup_validate(&startup) == 0);
-    calls = mock_log_calls;
-    assert(astra_log("still speaking") == ASTRA_SYSCALL_OK);
-    assert(mock_log_calls == calls + 1u);
-}
-
 int
 main(void)
 {
@@ -319,7 +267,6 @@ main(void)
     test_process_view();
     test_failures_accumulate();
     test_capability_names_are_bounded_strings();
-    test_emitting_needs_no_authority();
     puts("SUPERVISOR PASS");
     return 0;
 }

@@ -54,6 +54,7 @@
 #define VM_MAPPING_CLASS_MASK 0x00ffu
 #define VM_MAPPING_PRIVATE_CLASS 0x0fu
 #define VM_MAPPING_COW_CLASS 0x0eu
+#define VM_MAPPING_TIME_CLASS 0xfdu
 #define VM_MAPPING_DYNAMIC_CLASS 0xfeu
 #define VM_MAPPING_AREA_CLASS 0xffu
 
@@ -453,6 +454,11 @@ static bool shared_mapping_class(uint32_t virtual_address,
          * and a count limit without preventing a hardware alias hazard.
          */
         *mapping_class = VM_MAPPING_DYNAMIC_CLASS;
+        return true;
+    }
+    if (virtual_address >= ASTRA_TIME_PAGE_ADDRESS_START &&
+        virtual_address < ASTRA_TIME_PAGE_ADDRESS_END) {
+        *mapping_class = VM_MAPPING_TIME_CLASS;
         return true;
     }
     if (virtual_address < KERNEL_VM_AREA_BASE)
@@ -1791,11 +1797,17 @@ KernelVmStatus kernel_vm_map_shared_page(KernelAddressSpace *space,
 {
     if (frame_owner == KERNEL_OWNER_NONE)
         return KERNEL_VM_INVALID_ARGUMENT;
+    /* The time page is the kernel's to write; no process may alias it so. */
+    if (virtual_address >= ASTRA_TIME_PAGE_ADDRESS_START &&
+        virtual_address < ASTRA_TIME_PAGE_ADDRESS_END &&
+        (permissions & (KERNEL_VM_WRITE | KERNEL_VM_EXEC)) != 0u)
+        return KERNEL_VM_INVALID_ARGUMENT;
     return map_owned_page(space, virtual_address, physical_address,
                           permissions, KERNEL_FRAME_SHARED, false,
                           frame_owner,
                           (1u << ASTRA_ADDRESS_REGION_DYNAMIC_IMAGES) |
-                              (1u << ASTRA_ADDRESS_REGION_SHARED_AREAS),
+                              (1u << ASTRA_ADDRESS_REGION_SHARED_AREAS) |
+                              (1u << ASTRA_ADDRESS_REGION_TIME_PAGE),
                           true, true, false);
 }
 

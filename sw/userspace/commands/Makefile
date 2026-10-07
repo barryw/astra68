@@ -71,16 +71,17 @@ TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 # port builds them (it owns SDL's headers and build rules); this directory
 # strips them and checks their libraries like every other command.
 SDL_COMMANDS := loopwave
-COMMANDS := status events devices which open service shutdown restart ls ps metrics cat mkdir rm \
+COMMANDS := status events log devices which open service shutdown restart ls ps metrics cat mkdir rm \
 	    nice renice \
 	    heapbench fsstress date echo ntp ping lua vim zsh $(SDL_COMMANDS)
-TEST_COMMANDS := posix hello cxx fpucheck
+TEST_COMMANDS := posix hello cxx fpucheck logburst
 SBASE_PRIMARY := ls mkdir nice renice
 SOURCE_COMMANDS := $(filter-out lua cxx vim zsh $(SDL_COMMANDS) \
 	$(SBASE_PRIMARY),$(COMMANDS) $(TEST_COMMANDS))
 SOURCE_IMAGES := $(patsubst %,build/m68k/%,$(SOURCE_COMMANDS))
 TEST_IMAGES := $(patsubst %,build/m68k/%,$(TEST_COMMANDS))
 events_EXTRA_SOURCES := events/events_support.c
+log_EXTRA_SOURCES := log/log_filter.c
 date_EXTRA_SOURCES := date/date_support.c
 ps_EXTRA_SOURCES := ps/ps_support.c
 
@@ -90,6 +91,7 @@ ps_EXTRA_SOURCES := ps/ps_support.c
 # transitive library.
 status_LIBRARIES := $(LIBC_LIBRARY)
 events_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+log_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 devices_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 which_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 open_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)
@@ -107,6 +109,7 @@ renice_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 rm_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 posix_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 fpucheck_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+logburst_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 heapbench_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 fsstress_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 date_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
@@ -530,6 +533,10 @@ build/host/test_events_support: events/events_support.c \
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) $^ -o $@
 
+build/host/test_log_filter: log/log_filter.c tests/test_log_filter.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) $^ -o $@
+
 build/host/test_date_support: date/date_support.c tests/test_date_support.c \
 		../../common/civil.c ../../common/divide.c
 	@mkdir -p $(@D)
@@ -554,10 +561,12 @@ build/host/test_metrics: tests/test_metrics.c metrics/metrics.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CPPFLAGS) $(HOST_CFLAGS) $< -o $@
 
-test: build/host/test_events_support build/host/test_date_support \
+test: build/host/test_events_support build/host/test_log_filter \
+		build/host/test_date_support \
 		build/host/test_ps_support build/host/test_ps build/host/test_open \
 		build/host/test_metrics
 	./build/host/test_events_support
+	./build/host/test_log_filter
 	./build/host/test_date_support
 	./build/host/test_ps_support
 	./build/host/test_ps

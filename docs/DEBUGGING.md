@@ -7,8 +7,9 @@ rather than left to be discovered.
 The split worth holding in mind: **the diagnostic surface is a build
 decision**, `ASTRA_KERNEL_DEBUG_SURFACE` in `sw/kernel/process.h`. It is on in
 every build today. Turning it off removes the serial monitor and stops any
-process being granted `ASTRA_RIGHT_DEBUG` over itself, which closes the
-diagnostic channel to everyone. One switch, because a machine in the field
+process being granted `ASTRA_RIGHT_DEBUG` over itself. Logging does not
+depend on it: a program can always write to the system log. One switch,
+because a machine in the field
 should not be one forgotten `#ifdef` away from answering strangers on a UART
 with its page tables.
 
@@ -45,39 +46,68 @@ attaching from another host, or a different debugger.
 
 ## 2. A program can say something
 
-`astra_log("text")` puts a bounded line on the console the operator reads,
-prefixed with the writing process's id:
+Print, or call the log. Every line ends up in one file, the system log, in
+time order with every other program's, the services' and the kernel's
+(`docs/SYSTEM_LOG.md`):
+
+- `printf` and `write(1, ...)` with no terminal attached are recorded at
+  `notice` on stream `stdout`; stderr is recorded at `warning` on `stderr`.
+  In a terminal they go to the terminal only.
+- `astra_log("text")`, `astra_log_failure` and `astra_log_line(level,
+  stream, text, length)` are recorded wherever the program runs. A native
+  program's `assert` comes through here too; a POSIX program's is picolibc's
+  and goes to stderr.
 
 ```
-[log 10000011] volume mounted at /
+2026-10-05T14:03:22.117-04:00 notice chocolate-doom[10000011] stdout: V_Init: allocate screens.
 ```
 
-It is a capability, not a channel. The kernel gates the write on a process
-handle carrying `ASTRA_RIGHT_DEBUG`; the runtime binds that handle when
-`astra_startup_validate()` accepts the startup block. **Every call can be
-refused**, and the status is returned rather than acted on — a build without a
-debug surface refuses all of them, and a program that stops working when its
-diagnostics are turned off is a program with a bug in it.
+Local time with its offset, level, the program's name and its process id in
+hex as `ps` prints it, the stream, the text. The name is the image's
+`ASTRA_PROGRAM` name, else the basename of argv[0].
+
+Nothing gates the write and nothing waits on it. The first line sets up a
+ring shared with the log service; every later line is a store into it, with
+no syscall. A program that writes faster than the service drains loses
+lines, and the file says so: `[N lines dropped]`, at the place they were
+lost. `debug` lines are not written to the file.
+
+Reading it:
+
+| Where | How |
+|---|---|
+| In the guest | `log show`, filtered by `--boot N` (0 this boot, -1 the one before), `--last 10m`, `--level L` (that level and above), `--program P`, `--pid HEX`, `--stream S`, `--grep TEXT`; `log stream` with the same filters follows it until a line is entered. `cat`, `grep` and `tail` work on `EVENTS:log/syslog` |
+| On the board, from Beast | `ssh root@192.168.1.52 tail -f /var/lib/astra/hostfs/work/.astra/syslog` |
+| Under a QEMU gate | `<work>/hostfs/.astra/syslog`, the run's host directory |
+
+The file rotates at 1 MiB or at the first line on a new local date, keeping
+`syslog.1` to `syslog.3`. `log show` reads those too, oldest first.
 
 Rules worth knowing before they surprise you:
 
-- Lines are split into fixed event payloads and rejoined by the event reader;
-  their length is bounded only by the caller's address space.
-- Bytes that are not printable arrive as dots. The console is shared with the
-  kernel's own output; a program that could write escape sequences could clear
-  the screen or dress its next line up as a panic.
-- A handle to *another* process is refused even when it carries DEBUG. That is
-  a debugger's authority over a process, not the authority to write lines in
-  its name.
+- One line is one record of at most 1,944 bytes; a longer one is truncated.
+- Control bytes are written as `\xNN` and a backslash as `\\`, so a line
+  cannot forge another line or clear a terminal. UTF-8 passes through.
+- A program can only write in its own name: the kernel stamps the process id
+  on the ring's setup.
+- The log service itself never logs. A line that cannot reach a ring (no
+  `LOG` capability, the service gone) goes to the kernel event ring, which
+  the service also drains into the file.
+
+The gate is `emu/qemu/test-system-log.py QEMU ROM IMAGE`: cost per line,
+bursts that overrun the ring, the doorbell wake, ten programs exiting at
+once, a fault, `log show`, `log stream`, and Doom's banner. `--no-sweep`
+runs it against a build of the service with no timed wake, so only the
+doorbell can wake it; `--only CHECK` runs a subset.
 
 ## 3. Assertions carry evidence
 
-`assert()` in userspace now writes `file:line: expression` on the diagnostic
-channel, then exits with `ASTRA_ASSERT_STATUS_TAG | line` as it always did.
+`assert()` in a native program (the runtime's `assert.h`) writes
+`file:line: expression` to the system log at `error`, then exits with `ASTRA_ASSERT_STATUS_TAG | line` as it always did.
 
-Both halves exist because they fail in different circumstances: a build with no
-debug surface has only the status, and a status is one word that cannot say
-which of two files had an assertion on line 231.
+Both halves exist because they reach different readers: the status reaches
+whoever waits on the process, and a status is one word that cannot say which
+of two files had an assertion on line 231.
 
 ## 4. A fault says where and what
 

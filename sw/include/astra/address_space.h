@@ -58,8 +58,13 @@
 /** One past the last address of the shared-area region. */
 #define ASTRA_SHARED_AREA_ADDRESS_END         0x48000000u
 
+/** First byte of the kernel time page, mapped read-only in every process. */
+#define ASTRA_TIME_PAGE_ADDRESS_START         ASTRA_SHARED_AREA_ADDRESS_END
+/** One past the time page. */
+#define ASTRA_TIME_PAGE_ADDRESS_END           0x48001000u
+
 /** First address of the range reserved for future ABI growth. */
-#define ASTRA_RESERVED_ADDRESS_START          ASTRA_SHARED_AREA_ADDRESS_END
+#define ASTRA_RESERVED_ADDRESS_START          ASTRA_TIME_PAGE_ADDRESS_END
 /** One past the last address of the reserved range. */
 #define ASTRA_RESERVED_ADDRESS_END            0x4ff00000u
 
@@ -141,6 +146,7 @@
  * `ASTRA_ADDRESS_REGION_EXECUTABLE` (`executable`),
  * `ASTRA_ADDRESS_REGION_DYNAMIC_IMAGES` (`dynamic_images`),
  * `ASTRA_ADDRESS_REGION_SHARED_AREAS` (`shared_areas`),
+ * `ASTRA_ADDRESS_REGION_TIME_PAGE` (`time_page`),
  * `ASTRA_ADDRESS_REGION_RESERVED` (`reserved`),
  * `ASTRA_ADDRESS_REGION_HOST_CHANNELS` (`host_channels`),
  * `ASTRA_ADDRESS_REGION_DMA` (`dma`),
@@ -168,6 +174,9 @@
     X(ASTRA_ADDRESS_REGION_SHARED_AREAS, shared_areas,                     \
       ASTRA_SHARED_AREA_ADDRESS_START,                                     \
       ASTRA_SHARED_AREA_ADDRESS_END, "kernel shared areas")               \
+    X(ASTRA_ADDRESS_REGION_TIME_PAGE, time_page,                           \
+      ASTRA_TIME_PAGE_ADDRESS_START, ASTRA_TIME_PAGE_ADDRESS_END,          \
+      "kernel time page")                                                 \
     X(ASTRA_ADDRESS_REGION_RESERVED, reserved,                             \
       ASTRA_RESERVED_ADDRESS_START, ASTRA_RESERVED_ADDRESS_END,            \
       "reserved")                                                         \
@@ -246,7 +255,8 @@ _Static_assert(ASTRA_NULL_GUARD_END == ASTRA_STARTUP_ADDRESS_START &&
                ASTRA_STARTUP_ADDRESS_END == ASTRA_EXECUTABLE_ADDRESS_START &&
                ASTRA_EXECUTABLE_ADDRESS_END == ASTRA_DYNAMIC_IMAGE_BASE &&
                ASTRA_DYNAMIC_IMAGE_END == ASTRA_SHARED_AREA_ADDRESS_START &&
-               ASTRA_SHARED_AREA_ADDRESS_END == ASTRA_RESERVED_ADDRESS_START &&
+               ASTRA_SHARED_AREA_ADDRESS_END == ASTRA_TIME_PAGE_ADDRESS_START &&
+               ASTRA_TIME_PAGE_ADDRESS_END == ASTRA_RESERVED_ADDRESS_START &&
                ASTRA_RESERVED_ADDRESS_END == ASTRA_HOST_CHANNEL_ADDRESS_START &&
                ASTRA_HOST_CHANNEL_ADDRESS_END == ASTRA_DMA_ADDRESS_START &&
                ASTRA_DMA_ADDRESS_END == ASTRA_PRIVATE_ADDRESS_START &&

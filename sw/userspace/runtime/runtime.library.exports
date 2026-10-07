@@ -243,3 +243,13 @@ ASTRA_RUNTIME_1.12 {
         astra_audio_stream_open;
         astra_audio_stream_wait;
 } ASTRA_RUNTIME_1.11;
+
+ASTRA_RUNTIME_1.13 {
+    global:
+        astra_log_consumer_next;
+        astra_log_line;
+        astra_log_producer_init;
+        astra_log_producer_write;
+        astra_log_record_slots;
+        astra_time_now;
+} ASTRA_RUNTIME_1.12;

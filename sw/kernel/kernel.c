@@ -25,6 +25,7 @@
 #include "performance.h"
 #include "platform.h"
 #include "process.h"
+#include "time_page.h"
 #include "qualification.h"
 
 #include <astra/civil.h>
@@ -1983,6 +1984,9 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         kernel_panic("interrupt controller initialization failed");
     process_bootstrap_started = kernel_platform_cpu_cycles_low();
     kernel_process_init();
+    /* Before the first launch: every process maps it, and logs read it. */
+    if (!kernel_time_page_init())
+        kernel_panic("time page allocation failed");
     process_init_cycles =
         kernel_platform_cpu_cycles_low() - process_bootstrap_started;
     /* Boot deliberately runs at IPL7; latency accounting starts at runtime. */
