@@ -56,8 +56,12 @@ There is no alternative CPU or emulator implementation in the repository.
   only the page-rounded image and returns all remaining pages to the allocator.
   Do not reintroduce a guessed maximum: the old 48 KiB and 256 KiB holes both
   turned incidental layout into policy and eventually blocked a valid build.
-- **The board is BusyBox**: no `truncate`, `timeout`, `pkill`; `losetup` takes
-  `-o OFS LOOPDEV FILE`. `/` is read-only, only `/data` is writable.
+- **The DE25 is Ubuntu 22.04, not BusyBox** (Linux 6.12.11 vendor kernel,
+  systemd 249, util-linux 2.37.2, ext4 `/` read-write). The BusyBox limits --
+  no `truncate`/`timeout`/`pkill`, `losetup -o OFS LOOPDEV FILE`, read-only
+  `/` with only `/data` writable -- are the Arty's (`docs/INVENTORY.md` §1).
+  Reach the DE25 from beast as `root@192.168.1.52`; `astra-de25` does not
+  resolve there.
 - **QEMU's cycle counter is the guest monotonic timebase**, not a count of
   physical MC68040 clocks. Use it for guest latency and deadline behavior;
   report physical DE25 throughput separately.
