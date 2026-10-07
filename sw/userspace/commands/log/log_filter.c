@@ -130,7 +130,14 @@ log_filter_match(const LogFilter *filter, const char *line)
     uint32_t pid = 0u;
     int64_t when;
     int level = -1;
+    const int empty = !filter->has_level && filter->program == NULL &&
+                      !filter->has_pid && filter->stream == NULL &&
+                      filter->grep == NULL && !filter->has_since;
 
+    /* A marker ("--- boot ...", "--- events service restarted ...") is not
+     * a record: only an empty filter shows it. No record starts "--- ". */
+    if (strncmp(line, "--- ", 4u) == 0)
+        return empty;
     for (uint32_t index = 0u; index < 4u; ++index) {
         const char *space = strchr(at, ' ');
 
@@ -141,11 +148,9 @@ log_filter_match(const LogFilter *filter, const char *line)
         }
         at = space + 1;
     }
-    /* Not a record (a marker, or damage): only an empty filter shows it. */
+    /* Not a record (damage): only an empty filter shows it. */
     if (at == NULL)
-        return !filter->has_level && filter->program == NULL &&
-               !filter->has_pid && filter->stream == NULL &&
-               filter->grep == NULL && !filter->has_since;
+        return empty;
     text = at;
     /* ident[pid]: the pid is the last bracket pair, ident is before it. */
     close = field[3] - 2;

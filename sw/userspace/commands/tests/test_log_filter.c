@@ -56,6 +56,13 @@ int main(void)
 
         assert(log_filter_match(&none,
                                 "--- boot 2026-10-05T14:03:20.000-04:00 ---"));
+        /* Both marker shapes: the restart one has four words before the
+         * time, so it splits like a record and must not be parsed as one. */
+        assert(log_filter_match(&none, "--- events service restarted "
+                                       "2026-10-05T14:03:20.000-04:00 ---"));
+        assert(!log_filter_match(&f, "--- events service restarted "
+                                     "2026-10-05T14:03:20.000-04:00 ---"));
+        assert(log_filter_match(&none, "--- boot boot+1.250 ---"));
         /* An ident with brackets of its own: the pid is the last pair. */
         none.has_pid = 1; none.pid = 0x2au;
         none.program = "a[b]";
