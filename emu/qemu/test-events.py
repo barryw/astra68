@@ -90,12 +90,19 @@ def load_terminal_module():
 
 
 def read_host_syslog(root):
-    """The host copy of the syslog under the hostfs root, or ''."""
+    """The host copy of the syslog under the hostfs root, every kept
+    generation oldest first, or ''."""
     for directory, _, files in os.walk(root):
         if os.path.basename(directory) == ".astra" and "syslog" in files:
-            with open(os.path.join(directory, "syslog"), "r",
-                      errors="replace") as handle:
-                return handle.read()
+            # Oldest first: a rotation moves the start of a run into
+            # syslog.1, and a check that read only syslog would miss it.
+            text = ""
+            for name in ("syslog.3", "syslog.2", "syslog.1", "syslog"):
+                if name in files:
+                    with open(os.path.join(directory, name), "r",
+                              errors="replace") as handle:
+                        text += handle.read()
+            return text
     return ""
 
 
