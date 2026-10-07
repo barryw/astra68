@@ -49,6 +49,14 @@
  * latency without forcing process switches and PMMU flushes all day.
  */
 #define EVENTS_TRACE_POLL_NS 1000000000ull
+/*
+ * Test builds only (Makefile VARIANT=nosweep): no 1 s backstop sweep and no
+ * timed state save, so the service sleeps until a message arrives and a
+ * gate can prove a doorbell alone wakes it. The product always sweeps.
+ */
+#ifndef EVENTS_NO_SWEEP
+#define EVENTS_NO_SWEEP 0
+#endif
 
 /*
  * The LOG port carries setups and doorbells. A full queue means a wake is
@@ -1338,6 +1346,8 @@ int astra_main(const AstraStartupInfo *startup)
         if (log_state_dirty &&
             log_state_saved_ns + EVENTS_TRACE_POLL_NS < deadline)
             deadline = log_state_saved_ns + EVENTS_TRACE_POLL_NS;
+        if (EVENTS_NO_SWEEP)
+            deadline = ASTRA_DEADLINE_FOREVER;
         wait_status = astra_wait_multiple(waits, 3u, deadline, NULL, NULL);
         if (wait_status != ASTRA_SYSCALL_OK &&
             wait_status != ASTRA_SYSCALL_TIMED_OUT)
