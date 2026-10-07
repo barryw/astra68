@@ -493,17 +493,34 @@ QEMU gates:
 - Launch Chocolate Doom from the desktop. Every line of its start-up banner must
   be in `EVENTS:log/syslog` with ident `chocolate-doom`, stream `stdout` and the
   right order.
-- A program writes 5000 lines as fast as it can. Its wall time with logging must
-  be within 5% of the same run with logging compiled out, and the file must
-  hold all 5000 lines or one exact drop count.
+- A program writes lines as fast as it can (`logburst`). Two checks:
+  - **Cost.** A logged line may cost the program at most 1,500 ns more than
+    formatting it alone, measured warm: the ring is set up before the clock
+    starts, and the 1,000-line burst fits the ring, so it measures writes,
+    not setup and not drops. Each arm runs five times, interleaved, and the
+    cheapest run of each is compared; host load only ever adds time. It is
+    checked from one thread and from four.
+  - **Count.** A cold 5,000-line burst overruns the ring: the file holds all
+    5,000 lines, or the missing ones are counted by one exact drop marker.
+
+  The plan's first bound, 5% of the same run with logging compiled out, could
+  not be met by any logger that stamps and copies a line. The baseline
+  formats `burst T I` with `snprintf` at about 1.4 us a line under QEMU, so 5%
+  of a 5,000-line run is about 350 us for everything, and ring setup alone
+  takes 200-300 us. Measured on beast under QEMU (`gcc` -O3, MC68040 TCG), a
+  ring write costs 600-900 ns a line. About 250 ns of that is committing the
+  ring's pages on first touch, and the rest is about 150 instructions plus
+  the fences and compare-and-swaps. A `LOG_WRITE` syscall per line costs
+  about 2,060 ns. The bound sits between the two: it has headroom for a
+  loaded host, and it still fails a logger that traps per line.
 - A program logs a line and faults. The line must be in the file.
 - `open` from Terminal prints the bundle's output in the terminal.
 
 Perturbation, so a green gate means the path is really taken:
 
 - Shrink the ring to 2 slots and require the drop marker.
-- Stop the service draining and require the burst test's wall time to stay
-  within the bound.
+- Stop the service draining and require the cost check to stay within the
+  bound while the count check fails.
 - Run the burst from four threads at once and require the same bound: no
   thread waits on another.
 - Remove the doorbell and require lines to arrive late, then not at all.

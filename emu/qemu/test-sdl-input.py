@@ -160,13 +160,15 @@ def wait_clean_exit(machine, sequence, program, pid=None):
     # Other processes exit too (remote desktop retries with no host helper),
     # so the test is a clean exit among them and no faulting exit at all.
     # Reasons 3 and 4: user fault, signal (kernel process.h). With @p pid,
-    # only that process's exit counts, wherever it is in the ring.
+    # only that process's exit counts as the clean one, wherever it is in the
+    # ring; a fault by any process still fails.
     deadline = time.monotonic() + 20
     while True:
-        exits = exits_after(machine, sequence, pid)
+        exits = exits_after(machine, sequence)
         if any(reason in (3, 4) for _, reason in exits):
             raise RuntimeError("a process faulted: %r" % exits)
-        if (0, 1) in exits:
+        if (0, 1) in (exits if pid is None else
+                      exits_after(machine, sequence, pid)):
             return
         if time.monotonic() >= deadline:
             raise RuntimeError("%s did not exit clean: %r %r" %
@@ -227,13 +229,36 @@ def test_testkeys(machine):
             raise RuntimeError("testkeys logged no scancode table: %r" %
                                (said[-30:],))
         time.sleep(0.2)
-    # Its own exit, by the pid its syslog line names: the exit may already
-    # be in the ring before the line reached the file.
-    owner = re.search(r"\[([0-9a-f]{8})\] \w+: ", ends[0])
+    # Its own process, by the pid the first of its lines that carries one
+    # names: the exit may already be in the ring before the line reached the
+    # file.
+    owner = next((match for match in
+                  (re.search(r"\[([0-9a-f]{8})\] \w+: .*Scancode #", line)
+                   for line in said) if match is not None), None)
     if owner is None:
-        raise RuntimeError("testkeys' last line names no process: %r" %
-                           ends[0])
-    wait_clean_exit(machine, 0, "testkeys", int(owner.group(1), 16))
+        raise RuntimeError("testkeys' lines name no process: %r" %
+                           (said[-10:],))
+    pid = owner.group(1)
+    # The whole 512-line table, and nothing dropped: the ring holds the
+    # burst the service, below applications, cannot drain until testkeys
+    # yields (docs/SYSTEM_LOG.md section 3).
+    deadline = time.monotonic() + 30
+    while True:
+        mine = [line for line in machine.said_with_syslog(0)[0]
+                if "[%s] " % pid in line]
+        table = {int(match.group(1)) for match in
+                 (re.search(r": Scancode #(\d+),", line) for line in mine)
+                 if match is not None}
+        dropped = [line for line in mine if "lines dropped]" in line]
+        if dropped:
+            raise RuntimeError("testkeys dropped lines: %r" % dropped)
+        if table == set(range(512)):
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError("testkeys logged %d of 512 scancodes" %
+                               len(table))
+        time.sleep(0.2)
+    wait_clean_exit(machine, 0, "testkeys", int(pid, 16))
 
 
 def main():
@@ -272,8 +297,8 @@ def main():
                       % shapes.batches)
             else:
                 test_testkeys(machine)
-                print("SDL upstream testkeys QEMU: PASS (scancode names "
-                      "logged, clean exit)")
+                print("SDL upstream testkeys QEMU: PASS (all 512 scancode "
+                      "names logged, none dropped, clean exit)")
         finally:
             machine.close()
             helper.stopping = True
