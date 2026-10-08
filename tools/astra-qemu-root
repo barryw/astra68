@@ -85,10 +85,13 @@ CALLER=(setpriv --reuid="$SUDO_UID" --regid="$SUDO_GID" --init-groups
 
 # The largest image the helper copies. Its copy is fully allocated (the
 # loop device then writes only into reserved blocks), so this bounds what
-# one run can take from /var/tmp.
+# one run can take from BASE.
 MAX_IMAGE_BYTES=$((4 << 30))
+# Where R is made: root-owned and sticky, on real disk.
+BASE=/var/tmp
 # Serialises the free-space check with the allocation that reserves it.
-LOCKDIR=/var/tmp/astra-qemu-root-lock
+# In /run (root-only), so no other user can squat the name.
+LOCKDIR=/run/astra-qemu-root.lock
 
 R= LOOPDEV=
 cleanup() {
@@ -115,9 +118,9 @@ trap cleanup EXIT
 # Without a trap a signal kills bash before its EXIT trap runs.
 trap 'exit 143' TERM INT HUP
 
-[ ! -L /var/tmp ] && [ "$(stat -c '%u %a' /var/tmp)" = "0 1777" ] ||
-    die "/var/tmp must be root-owned and sticky"
-R=$(mktemp -d /var/tmp/astra-qemu-root.XXXXXX) || die "mktemp failed"
+[ ! -L "$BASE" ] && [ "$(stat -c '%u %a' -- "$BASE")" = "0 1777" ] ||
+    die "$BASE must be root-owned and sticky"
+R=$(mktemp -d "$BASE/astra-qemu-root.XXXXXX") || die "mktemp failed"
 # Only root and the caller's group may enter R: the mounted filesystem's
 # root carries whatever mode the caller gave it, and other users must not
 # reach it through R/mnt.
@@ -128,8 +131,8 @@ chown "$SUDO_UID:$SUDO_GID" -- "$R/mnt"
 PIDFILE=$R/qemu.pid
 
 # mkdir never follows a symlink; stat (no -L) answers for the entry
-# itself. A root-owned entry in sticky /var/tmp cannot be replaced by the
-# caller, so once this check passes the lock file inside is root's alone.
+# itself. /run is root's alone, so once this check passes so is the lock
+# file inside.
 mkdir -m 0700 -- "$LOCKDIR" 2>/dev/null || true
 [ "$(stat -c '%F %u %a' -- "$LOCKDIR")" = "directory 0 700" ] ||
     die "$LOCKDIR must be a root-owned 0700 directory"
@@ -175,7 +178,7 @@ write_scratch() {
         flock 9
         avail=$(( $(stat -f -c %a -- "$R") * $(stat -f -c %S -- "$R") ))
         [ "$size" -le "$avail" ] || {
-            echo "astra-qemu-root: image of $size bytes exceeds the $avail free in /var/tmp" >&2
+            echo "astra-qemu-root: image of $size bytes exceeds the $avail free in $BASE" >&2
             exit 1
         }
         : > "$R/img"

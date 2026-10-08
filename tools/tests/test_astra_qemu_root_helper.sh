@@ -21,6 +21,7 @@ CALLER_GID=$(id -g)
 WORK=$(mktemp -d /tmp/astra-qemu-root-helper-test.XXXXXX)
 chmod 700 "$WORK"
 PERTURB=
+SMALLFS=
 PASS=0
 FAIL=0
 SERIAL=0
@@ -28,6 +29,10 @@ SERIAL=0
 cleanup() {
     local status=$?
     [ -n "$PERTURB" ] && sudo -n rm -rf -- "$PERTURB"
+    if [ -n "$SMALLFS" ]; then
+        sudo -n umount -- "$SMALLFS"
+        sudo -n rmdir -- "$SMALLFS"
+    fi
     rm -rf -- "$WORK"
     exit "$status"
 }
@@ -204,57 +209,57 @@ run_test_cap() {
     expect_refusal image-over-cap "byte limit" "$WORK/huge.img"
 }
 
-# --- concurrent runs cannot overcommit /var/tmp -------------------------
+# --- concurrent runs cannot overcommit their filesystem -----------------
 #
-# A scratch copy of WRAPPER sees only ~768 MiB free: its avail source is
-# offset by (real avail - 768 MiB), measured here after a sync. Two
-# 512 MiB runs then overlap. The sizes dwarf beast's background churn in
-# free space (tens of MiB were seen between measurement and check). With the reservation (fallocate under the lock) the second
-# must see the first's 64 MiB gone and refuse; both passing means the
-# check reserved nothing. Prints "ok", "both" or "none (STATUS STATUS)";
+# Scratch copies of WRAPPER make R on SMALLFS, a 1 GiB tmpfs this test
+# mounts (root-owned, 1777, as the helper requires of its base), instead
+# of /var/tmp, so free space is known and nothing else changes it. Two
+# overlapping 640 MiB runs: with the reservation (fallocate under the
+# lock) the second must see the first's 640 MiB gone and refuse; both
+# passing means nothing was reserved. tmpfs is fine here: the stand-ins
+# are /bin/sleep, not QEMU. Prints "ok WHY", "both" or "none (A B)";
 # never PASS/FAIL itself.
-observe_concurrent() {
-    local wrapper=$1 label=$2 a b sa sb
-    a=$(make_provider "conc-$label-a")
-    b=$(make_provider "conc-$label-b")
-    truncate -s 512M -- "$a" "$b"
-    sudo -n "$wrapper" --image "$a" -- /bin/sleep 6 > "$WORK/conc-$label-a.log" 2>&1 &
-    local pa=$!
-    sleep 0.5
-    sudo -n "$wrapper" --image "$b" -- /bin/sleep 4 > "$WORK/conc-$label-b.log" 2>&1 &
-    local pb=$!
-    if wait "$pa"; then sa=0; else sa=$?; fi
-    if wait "$pb"; then sb=0; else sb=$?; fi
-    local why
-    why=$(grep -h "free in /var/tmp" "$WORK/conc-$label-a.log" "$WORK/conc-$label-b.log" | head -1)
-    if [ "$sa" -eq 0 ] && [ "$sb" -eq 0 ]; then
-        echo both
-    elif { [ "$sa" -eq 0 ] && [ "$sb" -eq 64 ] &&
-           grep -q "free in /var/tmp" "$WORK/conc-$label-b.log"; } ||
-         { [ "$sb" -eq 0 ] && [ "$sa" -eq 64 ] &&
-           grep -q "free in /var/tmp" "$WORK/conc-$label-a.log"; }; then
-        echo "ok $why"
-    else
-        echo "none ($sa $sb)"
+small_fs() {
+    if [ -z "$SMALLFS" ]; then
+        SMALLFS=$(sudo -n mktemp -d /var/tmp/astra-qemu-root-test-fs.XXXXXX)
+        sudo -n mount -t tmpfs -o size=1G,mode=1777 tmpfs "$SMALLFS"
     fi
 }
 
-small_avail_offset() {
-    sync
-    echo $(( $(stat -f -c %a /var/tmp) * $(stat -f -c %S /var/tmp) - (768 << 20) ))
+observe_concurrent() {
+    local wrapper=$1 label=$2 a b sa sb why
+    a=$(make_provider "conc-$label-a")
+    b=$(make_provider "conc-$label-b")
+    truncate -s 640M -- "$a" "$b"
+    sudo -n "$wrapper" --image "$a" -- /bin/sleep 6 > "$WORK/conc-$label-a.log" 2>&1 &
+    local pa=$!
+    sleep 1
+    sudo -n "$wrapper" --image "$b" -- /bin/sleep 6 > "$WORK/conc-$label-b.log" 2>&1 &
+    local pb=$!
+    if wait "$pa"; then sa=0; else sa=$?; fi
+    if wait "$pb"; then sb=0; else sb=$?; fi
+    why=$(grep -h "free in" "$WORK/conc-$label-a.log" "$WORK/conc-$label-b.log" | head -1)
+    if [ "$sa" -eq 0 ] && [ "$sb" -eq 0 ]; then
+        echo both
+    elif [ "$sa" -eq 0 ] && [ "$sb" -eq 64 ] && [ -n "$why" ]; then
+        echo "ok $why"
+    else
+        echo "none ($sa $sb) $(tail -2 "$WORK/conc-$label-a.log" "$WORK/conc-$label-b.log" | tr '\n' ' ')"
+    fi
 }
 
 run_test_concurrent() {
     local helper result
-    if helper=$(perturbed small-avail 'avail=$(( ' "avail=\$(( -$(small_avail_offset) + "); then
+    small_fs
+    if helper=$(perturbed small-fs '^BASE=/var/tmp$' "BASE=$SMALLFS"); then
         result=$(observe_concurrent "$helper" fixed)
         if [ "${result%% *}" = ok ]; then
-            note_pass "fs-root-helper concurrent reservation: second 512 MiB run refused with ~768 MiB free (${result#ok })"
+            note_pass "fs-root-helper concurrent reservation: second 640 MiB run refused on a 1 GiB filesystem (${result#ok })"
         else
-            note_fail "fs-root-helper concurrent reservation: expected one refusal, got $result"
+            note_fail "fs-root-helper concurrent reservation: expected the second run refused, got $result"
         fi
     else
-        note_fail "fs-root-helper concurrent reservation: could not build the small-avail copy"
+        note_fail "fs-root-helper concurrent reservation: could not build the small-fs copy"
     fi
 }
 
@@ -424,15 +429,17 @@ run_perturbations() {
     fi
 }
 
-# Perturbation for the reservation: the small-avail copy, back to round
-# 3's sparse copy with no fallocate, lets both runs pass.
+# Perturbation for the reservation: the small-fs copy, back to round 3's
+# sparse copy with no fallocate, lets both runs pass.
 perturb_reservation() {
-    local helper result
-    sed -e "s|avail=\$(( |avail=\$(( -$(small_avail_offset) + |" \
-        -e '/fallocate -l/d' -e 's/conv=notrunc/conv=sparse,notrunc/' \
+    local result
+    small_fs
+    sed -e "s|^BASE=/var/tmp\$|BASE=$SMALLFS|" -e '/fallocate -l/d' \
+        -e 's/conv=notrunc/conv=sparse,notrunc/' \
         "$WRAPPER" > "$WORK/perturb-no-reserve"
-    if cmp -s "$WRAPPER" "$WORK/perturb-no-reserve" ||
-            grep -q 'fallocate -l' "$WORK/perturb-no-reserve"; then
+    if ! grep -q "^BASE=$SMALLFS\$" "$WORK/perturb-no-reserve" ||
+            grep -q 'fallocate -l' "$WORK/perturb-no-reserve" ||
+            ! grep -q 'conv=sparse,notrunc' "$WORK/perturb-no-reserve"; then
         note_fail "fs-root-helper perturbation (no reservation): could not build"
         return
     fi
