@@ -36,8 +36,10 @@
   `/usr/local/sbin/astra-qemu-root`, allowed by
   `/etc/sudoers.d/astra-qemu-root`) treats the caller as hostile. Root
   opens, creates, mounts and unmounts only under its own
-  `mktemp -d /var/tmp/astra-qemu-root.XXXXXX` directory (root:root 0711),
-  never in a directory the caller can modify. A caller-credential reader
+  `mktemp -d /var/tmp/astra-qemu-root.XXXXXX` directory (root, group the
+  caller's, 0710), never in a directory the caller can modify. Images
+  over 4 GiB are refused; the copy is fallocated under a lock after the
+  free-space check, so concurrent runs cannot overcommit `/`. A caller-credential reader
   (`setpriv --reuid/--regid --no-new-privs`) opens the image no-follow,
   refuses anything but a regular file, and sends exactly its fstat size
   into root's `R/img`; that is loop-mounted at `R/mnt`

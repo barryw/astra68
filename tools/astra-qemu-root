@@ -8,25 +8,28 @@
 # The caller is untrusted. Root opens, creates, chmods, mounts and
 # unmounts paths only under R, a directory root makes with mktemp in
 # /var/tmp (root-owned and sticky, so the caller can neither rename nor
-# replace R) and keeps root:root 0711: the caller can reach a name inside
-# R only by knowing it, and can change nothing in it. Every path the
+# replace R) and keeps root:<caller's gid> 0710: the caller can reach a
+# name inside R only by knowing it and can change nothing in it, and
+# other users (outside the caller's group) cannot enter it. Every path the
 # caller names is touched solely by a process running with the caller's
 # own credentials (setpriv --reuid/--regid, --no-new-privs):
 #
 #   R/img      root's scratch copy of IMAGE, 0600. A caller-credential
 #              reader opens IMAGE (no-follow, non-blocking), refuses
 #              anything but a regular file, and sends its fstat size and
-#              exactly that many bytes; root writes no more than that
-#              size into R/img (sparse), and refuses a size the
-#              filesystem under R cannot hold.
-#   R/mnt      the mount point, 0755. The mounted filesystem's root is
-#              the caller's own (root_provider's mkfs.ext4 -E root_owner).
-#              Mounted nodev,nosuid,noexec.
+#              exactly that many bytes. Root refuses a size over
+#              MAX_IMAGE_BYTES, and, under a lock, one larger than the
+#              free space under R, then fallocates the whole size before
+#              copying, so the space is reserved when it is checked.
+#   R/mnt      the mount point, 0700, the caller's. The mounted
+#              filesystem's root is the caller's own (root_provider's
+#              mkfs.ext4 -E root_owner). Mounted nodev,nosuid,noexec.
 #   R/qemu.pid QEMU's pid, 0644.
 #
 # The helper's first stdout line, before QEMU starts, is
 #   ASTRA-QEMU-ROOT-MOUNT R/mnt
 # so the caller finds the mount and the pid file without naming either.
+# After the write-back completes it prints `ASTRA-QEMU-ROOT-DONE STATUS`.
 #
 # R is on /var/tmp, real disk, never tmpfs: a loop-mounted ext4 image
 # backed by a tmpfs file breaks HostFS's write-back under QEMU (booting to
@@ -80,17 +83,19 @@ done
 CALLER=(setpriv --reuid="$SUDO_UID" --regid="$SUDO_GID" --init-groups
         --no-new-privs --)
 
-# Without a trap a signal kills bash before its EXIT trap runs.
-trap 'exit 143' TERM INT HUP
+# The largest image the helper copies. Its copy is fully allocated (the
+# loop device then writes only into reserved blocks), so this bounds what
+# one run can take from /var/tmp.
+MAX_IMAGE_BYTES=$((4 << 30))
+# Serialises the free-space check with the allocation that reserves it.
+LOCKDIR=/var/tmp/astra-qemu-root-lock
 
-[ ! -L /var/tmp ] && [ "$(stat -c '%u %a' /var/tmp)" = "0 1777" ] ||
-    die "/var/tmp must be root-owned and sticky"
-R=$(mktemp -d /var/tmp/astra-qemu-root.XXXXXX) || die "mktemp failed"
-LOOPDEV=
+R= LOOPDEV=
 cleanup() {
     local status=$?
     set +e
     trap - TERM INT HUP
+    [ -n "$R" ] || exit "$status"
     if mountpoint -q -- "$R/mnt"; then
         # A caller process can hold the mount busy; detach it anyway.
         umount -- "$R/mnt" 2>/dev/null || umount -l -- "$R/mnt"
@@ -107,9 +112,27 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT
-chmod 0711 -- "$R"
-mkdir -m 0755 -- "$R/mnt"
+# Without a trap a signal kills bash before its EXIT trap runs.
+trap 'exit 143' TERM INT HUP
+
+[ ! -L /var/tmp ] && [ "$(stat -c '%u %a' /var/tmp)" = "0 1777" ] ||
+    die "/var/tmp must be root-owned and sticky"
+R=$(mktemp -d /var/tmp/astra-qemu-root.XXXXXX) || die "mktemp failed"
+# Only root and the caller's group may enter R: the mounted filesystem's
+# root carries whatever mode the caller gave it, and other users must not
+# reach it through R/mnt.
+chown "0:$SUDO_GID" -- "$R"
+chmod 0710 -- "$R"
+mkdir -m 0700 -- "$R/mnt"
+chown "$SUDO_UID:$SUDO_GID" -- "$R/mnt"
 PIDFILE=$R/qemu.pid
+
+# mkdir never follows a symlink; stat (no -L) answers for the entry
+# itself. A root-owned entry in sticky /var/tmp cannot be replaced by the
+# caller, so once this check passes the lock file inside is root's alone.
+mkdir -m 0700 -- "$LOCKDIR" 2>/dev/null || true
+[ "$(stat -c '%F %u %a' -- "$LOCKDIR")" = "directory 0 700" ] ||
+    die "$LOCKDIR must be a root-owned 0700 directory"
 
 # Root opens only R/img; the caller-credential reader opens IMAGE and
 # sends "SIZE\n" then exactly SIZE bytes.
@@ -144,13 +167,22 @@ write_scratch() {
     local size avail
     IFS= read -r size || return 1
     [[ $size =~ ^[0-9]{1,18}$ ]] || return 1
-    avail=$(( $(stat -f -c %a -- "$R") * $(stat -f -c %S -- "$R") ))
-    [ "$size" -le "$avail" ] || {
-        echo "astra-qemu-root: image of $size bytes exceeds the $avail free in /var/tmp" >&2
+    [ "$size" -le "$MAX_IMAGE_BYTES" ] || {
+        echo "astra-qemu-root: image of $size bytes exceeds the $MAX_IMAGE_BYTES-byte limit" >&2
         return 1
     }
+    (
+        flock 9
+        avail=$(( $(stat -f -c %a -- "$R") * $(stat -f -c %S -- "$R") ))
+        [ "$size" -le "$avail" ] || {
+            echo "astra-qemu-root: image of $size bytes exceeds the $avail free in /var/tmp" >&2
+            exit 1
+        }
+        : > "$R/img"
+        [ "$size" -eq 0 ] || fallocate -l "$size" -- "$R/img"
+    ) 9>> "$LOCKDIR/lock" || return 1
     dd of="$R/img" bs=1M iflag=fullblock,count_bytes count="$size" \
-        conv=sparse status=none || return 1
+        conv=notrunc status=none || return 1
     [ "$(stat -c %s -- "$R/img")" = "$size" ]
 }
 
@@ -190,4 +222,5 @@ trap 'exit 143' TERM INT HUP
 umount -- "$R/mnt" || die "cannot unmount"
 "${CALLER[@]}" tee -- "$IMAGE" < "$R/img" > /dev/null ||
     die "could not write the image back to the caller"
+echo "ASTRA-QEMU-ROOT-DONE $status"
 exit "$status"

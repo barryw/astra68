@@ -136,6 +136,10 @@ def main():
         finally:
             machine.close()
             shutil.rmtree(run, ignore_errors=True)
+        # close() returns once the helper has written the image back; a
+        # non-zero exit means the write-back may not have happened.
+        if machine.process.returncode != 0:
+            fail("launcher exited %d" % machine.process.returncode)
         checked = subprocess.run(["/usr/sbin/e2fsck", "-fn", provider],
                                  capture_output=True, text=True)
         if checked.returncode != 0:

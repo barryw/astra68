@@ -40,6 +40,7 @@ import argparse
 import json
 import os
 import re
+import select
 import shutil
 import socket
 import subprocess
@@ -753,14 +754,18 @@ class Machine:
         self.process = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1, env=environment)
+        self.launcher = tuple(launcher)
         if launcher:
-            announced = self.process.stdout.readline()
+            # The helper copies the image before it announces the mount.
+            ready, _, _ = select.select([self.process.stdout], [], [], 120)
+            announced = self.process.stdout.readline() if ready else ""
             if not announced.startswith(LAUNCHER_MOUNT):
                 self.process.kill()
                 self.process.wait()
                 shutil.rmtree(self.runtime_directory)
-                raise RuntimeError("launcher failed: %r%s" % (
-                    announced, self.process.stdout.read()[-400:]))
+                raise RuntimeError(
+                    "launcher announced no mount within 120 s: %r%s" % (
+                        announced, self.process.stdout.read()[-400:]))
             self.reader.hostfs_root = announced[len(LAUNCHER_MOUNT):].strip()
         self.serial = queue.Queue()
         self.log = []
@@ -944,11 +949,17 @@ class Machine:
             self.qmp.execute("quit")
         except (BrokenPipeError, EOFError, OSError, RuntimeError):
             pass
+        # A launcher unmounts and writes the image back after QEMU exits;
+        # killing it then would leave a half-written image. Give it time,
+        # and fail rather than let a caller inspect that image.
         try:
-            self.process.wait(timeout=5)
+            self.process.wait(timeout=120 if self.launcher else 5)
         except subprocess.TimeoutExpired:
             self.process.kill()
             self.process.wait()
+            if self.launcher:
+                raise RuntimeError("launcher still busy 120 s after quit; "
+                                   "its image is not trustworthy")
         self.qmp.close()
         self._pump_thread.join(timeout=1)
         self.recent_serial()

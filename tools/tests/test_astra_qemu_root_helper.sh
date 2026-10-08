@@ -197,6 +197,67 @@ run_test_growing() {
     fi
 }
 
+# --- an image over the 4 GiB cap is refused before anything is copied --
+
+run_test_cap() {
+    truncate -s 5G -- "$WORK/huge.img"
+    expect_refusal image-over-cap "byte limit" "$WORK/huge.img"
+}
+
+# --- concurrent runs cannot overcommit /var/tmp -------------------------
+#
+# A scratch copy of WRAPPER sees only ~768 MiB free: its avail source is
+# offset by (real avail - 768 MiB), measured here after a sync. Two
+# 512 MiB runs then overlap. The sizes dwarf beast's background churn in
+# free space (tens of MiB were seen between measurement and check). With the reservation (fallocate under the lock) the second
+# must see the first's 64 MiB gone and refuse; both passing means the
+# check reserved nothing. Prints "ok", "both" or "none (STATUS STATUS)";
+# never PASS/FAIL itself.
+observe_concurrent() {
+    local wrapper=$1 label=$2 a b sa sb
+    a=$(make_provider "conc-$label-a")
+    b=$(make_provider "conc-$label-b")
+    truncate -s 512M -- "$a" "$b"
+    sudo -n "$wrapper" --image "$a" -- /bin/sleep 6 > "$WORK/conc-$label-a.log" 2>&1 &
+    local pa=$!
+    sleep 0.5
+    sudo -n "$wrapper" --image "$b" -- /bin/sleep 4 > "$WORK/conc-$label-b.log" 2>&1 &
+    local pb=$!
+    if wait "$pa"; then sa=0; else sa=$?; fi
+    if wait "$pb"; then sb=0; else sb=$?; fi
+    local why
+    why=$(grep -h "free in /var/tmp" "$WORK/conc-$label-a.log" "$WORK/conc-$label-b.log" | head -1)
+    if [ "$sa" -eq 0 ] && [ "$sb" -eq 0 ]; then
+        echo both
+    elif { [ "$sa" -eq 0 ] && [ "$sb" -eq 64 ] &&
+           grep -q "free in /var/tmp" "$WORK/conc-$label-b.log"; } ||
+         { [ "$sb" -eq 0 ] && [ "$sa" -eq 64 ] &&
+           grep -q "free in /var/tmp" "$WORK/conc-$label-a.log"; }; then
+        echo "ok $why"
+    else
+        echo "none ($sa $sb)"
+    fi
+}
+
+small_avail_offset() {
+    sync
+    echo $(( $(stat -f -c %a /var/tmp) * $(stat -f -c %S /var/tmp) - (768 << 20) ))
+}
+
+run_test_concurrent() {
+    local helper result
+    if helper=$(perturbed small-avail 'avail=$(( ' "avail=\$(( -$(small_avail_offset) + "); then
+        result=$(observe_concurrent "$helper" fixed)
+        if [ "${result%% *}" = ok ]; then
+            note_pass "fs-root-helper concurrent reservation: second 512 MiB run refused with ~768 MiB free (${result#ok })"
+        else
+            note_fail "fs-root-helper concurrent reservation: expected one refusal, got $result"
+        fi
+    else
+        note_fail "fs-root-helper concurrent reservation: could not build the small-avail copy"
+    fi
+}
+
 # --- planted symlinks in the caller's directory are never followed ------
 #
 # Plants every name earlier helpers wrote beside the image -- qemu.pid,
@@ -271,8 +332,14 @@ check_gone() {
 run_test_cleanup() {
     local image r
     image=$(make_provider cleanup-success)
-    start "$WRAPPER" "$image" "$WORK/cleanup-success.log" /bin/sleep 1
+    start "$WRAPPER" "$image" "$WORK/cleanup-success.log" /bin/sleep 2
     r=$(announced_r "$WORK/cleanup-success.log")
+    if [ -n "$r" ] && ls -- "$r/mnt/work" > /dev/null 2>&1 &&
+            ! sudo -n -u nobody ls -- "$r/mnt" > /dev/null 2>&1; then
+        note_pass "fs-root-helper mount privacy: caller lists $r/mnt, nobody cannot"
+    else
+        note_fail "fs-root-helper mount privacy: caller/nobody access to ${r:-?}/mnt wrong"
+    fi
     finish
     [ "$STATUS" -eq 0 ] || note_fail "fs-root-helper cleanup (success): wrapper exit $STATUS"
     check_gone success "$r"
@@ -357,17 +424,41 @@ run_perturbations() {
     fi
 }
 
+# Perturbation for the reservation: the small-avail copy, back to round
+# 3's sparse copy with no fallocate, lets both runs pass.
+perturb_reservation() {
+    local helper result
+    sed -e "s|avail=\$(( |avail=\$(( -$(small_avail_offset) + |" \
+        -e '/fallocate -l/d' -e 's/conv=notrunc/conv=sparse,notrunc/' \
+        "$WRAPPER" > "$WORK/perturb-no-reserve"
+    if cmp -s "$WRAPPER" "$WORK/perturb-no-reserve" ||
+            grep -q 'fallocate -l' "$WORK/perturb-no-reserve"; then
+        note_fail "fs-root-helper perturbation (no reservation): could not build"
+        return
+    fi
+    sudo -n install -o root -g root -m 0755 "$WORK/perturb-no-reserve" "$PERTURB/no-reserve"
+    result=$(observe_concurrent "$PERTURB/no-reserve" perturbed)
+    if [ "$result" = both ]; then
+        note_pass "fs-root-helper perturbation (no reservation): both runs passed, the concurrent case catches it"
+    else
+        note_fail "fs-root-helper perturbation (no reservation): expected both to pass, got $result -- concurrent case has no teeth"
+    fi
+}
+
 LOOP_BEFORE=$(sudo -n losetup -a | wc -l)
 DIRS_BEFORE=$(helper_dirs)
 
 run_test_creds
 run_test_images
 run_test_growing
+run_test_cap
 run_test_planted
 run_test_work_symlink
 run_test_cleanup
 run_test_control
 run_perturbations
+run_test_concurrent
+perturb_reservation
 
 LOOP_AFTER=$(sudo -n losetup -a | wc -l)
 if [ "$LOOP_BEFORE" = "$LOOP_AFTER" ]; then
