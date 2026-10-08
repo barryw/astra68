@@ -63,6 +63,7 @@ static uint32_t mock_area_create_size;
 static uint32_t mock_close_count;
 static int mock_fail_area_create;
 static int mock_fail_area_map;
+static int mock_fail_duplicate;
 static atomic_uint mock_futex_wakes;
 static atomic_uint backend_bad_stat_paths;
 static uint32_t mock_sender;
@@ -170,6 +171,7 @@ mock_reset(void)
     mock_close_count = 0u;
     mock_fail_area_create = 0;
     mock_fail_area_map = 0;
+    mock_fail_duplicate = 0;
     atomic_store_explicit(&mock_futex_wakes, 0u, memory_order_relaxed);
     atomic_store_explicit(&backend_bad_stat_paths, 0u,
                           memory_order_relaxed);
@@ -392,7 +394,9 @@ astra_rt_handle_duplicate(uint32_t handle, uint32_t rights, uint32_t *duplicate)
 
     (void)rights;
     assert(pthread_mutex_lock(&mock_port_mutex) == 0);
-    if (duplicate == NULL || handle == 0u || handle >= MOCK_PORT_MAX ||
+    if (mock_fail_duplicate != 0) {
+        status = ASTRA_SYSCALL_RESOURCE_LIMIT;
+    } else if (duplicate == NULL || handle == 0u || handle >= MOCK_PORT_MAX ||
         !ports[handle].open || ports[handle].given_away) {
         status = ASTRA_SYSCALL_INVALID_HANDLE;
     } else {
@@ -1427,12 +1431,13 @@ legacy_transport(void *context, uint32_t operation,
     return astra_vfs_port_transport(client, operation, &legacy, reply);
 }
 
+/* Storage protocol 28 is the oldest served: an older HELLO is answered
+ * PROTOCOL and opens no session. */
 static void
-test_version_two_keeps_per_request_reply_ports(void)
+test_a_version_below_the_minimum_is_refused(void)
 {
     AstraVfsPortService host;
     AstraVfsClient remote;
-    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint32_t service_handle;
 
     mock_reset();
@@ -1443,17 +1448,95 @@ test_version_two_keeps_per_request_reply_ports(void)
     remote.port_service = service_handle;
     served = &host;
     assert(astra_vfs_connect(&remote, legacy_transport, &remote) ==
-           ASTRA_VFS_OK);
-    assert(remote.version == UINT16_C(2));
-    assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ, &file, NULL,
-                          NULL) == ASTRA_VFS_OK);
-    assert(astra_vfs_close(&remote, file) == ASTRA_VFS_OK);
-    assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
-    /* Service + one reply port and one duplicated send end per operation. */
-    assert(next_port == 7u);
+           ASTRA_VFS_ERR_PROTOCOL);
     for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index)
         assert(host.reply_sessions[index] == ASTRA_VFS_SESSION_INVALID);
     served = NULL;
+}
+
+/* Sends one HELLO carrying `fused` as its first operation (MKDIR "/x") at
+ * `version` and answers the reply's status and attached handle count. */
+static uint32_t
+fused_hello(AstraVfsPortService *host, uint32_t service_handle,
+            uint16_t version, uint32_t fused, uint32_t *attached)
+{
+    AstraVfsRequestMessage message;
+    AstraVfsReplyMessage reply;
+    uint32_t handles[1] = {0u};
+    uint32_t reply_handle = mock_open(1u);
+    uint32_t size = 0u;
+    uint32_t count = 0u;
+
+    memset(&message, 0, sizeof(message));
+    astra_message_header_set(&message.header, (uint32_t)sizeof(message),
+                             ASTRA_VFS_PROTOCOL, ASTRA_VFS_VERSION,
+                             ASTRA_VFS_OP_HELLO, 1u);
+    message.request.size = ASTRA_VFS_REQUEST_SIZE;
+    message.request.version = version;
+    message.request.file = fused;
+    message.request.body.path[0] = '/';
+    message.request.body.path[1] = 'x';
+    handles[0] = reply_handle;
+    assert(astra_port_send(service_handle, &message, sizeof(message),
+                           handles, 1u) == ASTRA_SYSCALL_OK);
+    assert(astra_vfs_port_service_pump(host, 1u) == 1u);
+    handles[0] = 0u;
+    assert(astra_port_receive(reply_handle, &reply, sizeof(reply), handles,
+                              1u, &size, &count) == ASTRA_SYSCALL_OK);
+    *attached = count;
+    return reply.reply.status;
+}
+
+/*
+ * The relay does not come back as a fused HELLO (review I1): a scoped port
+ * runs no operation fused with a HELLO at any version -- below 28 the HELLO
+ * itself is refused, at 28 it is answered alone with the scope and the
+ * client runs the operation on its lane.
+ */
+static void
+test_a_scoped_port_runs_no_fused_operation(void)
+{
+    AstraVfsPortService host;
+    uint32_t service_handle;
+    uint32_t attached = 0u;
+
+    mock_reset();
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    assert(astra_vfs_port_service_set_scope(&host, mock_open(1u)));
+    assert(fused_hello(&host, service_handle, UINT16_C(27),
+                       ASTRA_VFS_OP_MKDIR, &attached) ==
+           ASTRA_VFS_ERR_PROTOCOL);
+    assert(attached == 0u && backend_mkdir_calls == 0u);
+    assert(fused_hello(&host, service_handle, ASTRA_VFS_VERSION,
+                       ASTRA_VFS_OP_MKDIR, &attached) == ASTRA_VFS_OK);
+    assert(attached == 1u && backend_mkdir_calls == 0u);
+}
+
+/* A scoped HELLO that cannot attach its scope is refused: no session
+ * without a lane, and no fall-through to the service core. */
+static void
+test_a_scoped_hello_without_its_scope_is_refused(void)
+{
+    AstraVfsPortService host;
+    uint32_t service_handle;
+    uint32_t attached = 0u;
+
+    mock_reset();
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    assert(astra_vfs_port_service_set_scope(&host, mock_open(1u)));
+    mock_fail_duplicate = 1;
+    assert(fused_hello(&host, service_handle, ASTRA_VFS_VERSION,
+                       ASTRA_VFS_OP_MKDIR, &attached) != ASTRA_VFS_OK);
+    assert(fused_hello(&host, service_handle, ASTRA_VFS_VERSION,
+                       ASTRA_VFS_FILE_INVALID, &attached) != ASTRA_VFS_OK);
+    mock_fail_duplicate = 0;
+    assert(attached == 0u && backend_mkdir_calls == 0u);
+    for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index)
+        assert(host.reply_sessions[index] == ASTRA_VFS_SESSION_INVALID);
 }
 
 static void
@@ -2288,11 +2371,13 @@ main(void)
     test_host_accelerator_moves_data_plane_out_of_the_service();
     test_hello_attaches_the_scope_and_never_the_device();
     test_a_scoped_port_serves_no_data();
+    test_a_scoped_port_runs_no_fused_operation();
+    test_a_scoped_hello_without_its_scope_is_refused();
     test_shared_accelerated_client_keeps_thread_requests_in_flight();
     test_shared_port_client_keeps_thread_requests_in_flight();
     test_shared_lazy_client_opens_one_session_for_two_threads();
     test_two_path_operations_cross_atomically();
-    test_version_two_keeps_per_request_reply_ports();
+    test_a_version_below_the_minimum_is_refused();
     test_bulk_read_crosses_once_through_a_shared_area();
     test_borrowed_read_reuses_only_an_undisturbed_area();
     test_direct_borrowed_read_reuses_only_an_undisturbed_area();

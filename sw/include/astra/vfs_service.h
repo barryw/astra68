@@ -103,9 +103,13 @@
  * port that serves a host volume attaches one handle: the grant's filesystem
  * scope (ASTRA_SYSCALL_HOST_SCOPE_CREATE), never the host device. The client
  * drives its own host channel through it. Such a port answers every other
- * operation except BYE with ASTRA_VFS_ERR_UNSUPPORTED.
+ * operation except BYE with ASTRA_VFS_ERR_UNSUPPORTED, runs no operation
+ * fused with a HELLO, and refuses a HELLO it cannot attach the scope to.
+ * Version 28 is also the oldest version served: every earlier request layout
+ * and its compatibility path is deleted, and a HELLO below it is answered
+ * ASTRA_VFS_ERR_PROTOCOL.
  */
-#define ASTRA_VFS_VERSION_MIN UINT16_C(2)
+#define ASTRA_VFS_VERSION_MIN UINT16_C(28)
 
 /** Maximum byte length of a path, including its terminating NUL, on the wire. */
 #define ASTRA_VFS_PATH_MAX 192u

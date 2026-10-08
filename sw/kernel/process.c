@@ -139,7 +139,9 @@ typedef struct KernelHostChannel {
     uint8_t active;
     uint8_t waiting;
     uint8_t bound;
-    uint8_t reserved;
+    /* Closed in the provider by a failed revocation: every wait answers
+     * PEER_DEAD until the owner closes the slot. */
+    uint8_t dead;
 } KernelHostChannel;
 
 /*
@@ -2472,16 +2474,42 @@ static uint32_t host_channel_attach(uint32_t slot, KernelHostScope *scope)
  * anything naming it that has not started by the time each detach returns.
  * The channels themselves stay open: their other scopes are unaffected.
  */
+/*
+ * A provider that refused a DETACH may still hold the binding, and the
+ * kernel must not believe otherwise (review M3). The channel itself goes:
+ * closed in the provider, its waiter woken with PEER_DEAD, and every later
+ * wait answered PEER_DEAD until its owner closes the slot. Kernel and
+ * provider then agree -- nothing is bound because nothing is open.
+ */
+static void host_channel_kill(uint32_t slot)
+{
+    KernelHostChannel *channel = &host_channels[slot];
+
+    if (channel->dead != 0u)
+        return;
+    (void)kernel_platform_host_channel_close(
+        channel->owner, channel->host_generation,
+        channel->channel_generation, slot);
+    if (channel->waiting != 0u) {
+        uint32_t woken;
+
+        (void)kernel_thread_wake_all(&channel->waiters,
+                                     ASTRA_SYSCALL_PEER_DEAD, &woken);
+        channel->waiting = 0u;
+    }
+    channel->dead = 1u;
+}
+
 static uint32_t host_scope_revoke(KernelHostScope *scope)
 {
     uint32_t result = ASTRA_SYSCALL_OK;
     uint8_t index = host_scope_index(scope);
     uint32_t word = scope->word;
+    uint32_t unbound = 0u;
 
     if (scope->state != KERNEL_HOST_SCOPE_ACTIVE)
         return ASTRA_SYSCALL_OK;
     scope->state = KERNEL_HOST_SCOPE_REVOKED;
-    ++scope->references;    /* held while the bindings go */
     for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
          ++slot) {
         KernelHostChannel *channel = &host_channels[slot];
@@ -2491,16 +2519,22 @@ static uint32_t host_scope_revoke(KernelHostScope *scope)
         for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_SCOPE_MAX; ++at) {
             if (channel->scopes[at] != index)
                 continue;
-            if (kernel_platform_host_channel_detach(
+            if (channel->dead == 0u &&
+                kernel_platform_host_channel_detach(
                     channel->owner, channel->host_generation,
                     channel->channel_generation, slot, word) !=
-                ASTRA_SYSCALL_OK)
+                    ASTRA_SYSCALL_OK) {
                 result = ASTRA_SYSCALL_PEER_DEAD;
+                host_channel_kill(slot);
+            }
             channel->scopes[at] = 0u;
-            host_scope_drop(scope);
+            ++unbound;
         }
     }
-    host_scope_drop(scope);
+    /* The bindings' references go after the walk, so the scope cannot be
+     * freed under it and no extra reference is taken (review M4). */
+    while (unbound-- != 0u)
+        host_scope_drop(scope);
     return result;
 }
 
@@ -2537,7 +2571,8 @@ static uint32_t host_channel_close_slot(KernelProcess *process,
             result = ASTRA_SYSCALL_IO_ERROR;
         channel->waiting = 0u;
     }
-    if (kernel_platform_host_channel_close(
+    if (channel->dead == 0u &&
+        kernel_platform_host_channel_close(
             process->owner, channel->host_generation,
             channel->channel_generation, slot) != ASTRA_SYSCALL_OK)
         result = ASTRA_SYSCALL_PEER_DEAD;
@@ -2797,6 +2832,10 @@ static KernelProcessStatus host_channel_wait(
     channel = &host_channels[channel_slot];
     if (channel->channel_generation != thread->generation) {
         *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+        return KERNEL_PROCESS_OK;
+    }
+    if (channel->dead != 0u) {
+        *result = ASTRA_SYSCALL_PEER_DEAD;
         return KERNEL_PROCESS_OK;
     }
     /* A running owner cannot still be asleep on its previous synchronous op. */
@@ -13132,8 +13171,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
         }
-        /* A device channel answers to its device, not to scopes. */
-        result = host_channels[slot].bound != 0u ?
+        /* A device channel answers to its device, not to scopes; a channel
+         * a failed revocation closed answers to nothing. */
+        result = host_channels[slot].dead != 0u ? ASTRA_SYSCALL_PEER_DEAD :
+                 host_channels[slot].bound != 0u ?
             host_channel_attach(slot, scope) : ASTRA_SYSCALL_ACCESS_DENIED;
         break;
     }

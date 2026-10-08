@@ -1747,17 +1747,6 @@ test_client_through_transport(void)
                ASTRA_VFS_OK);
         assert(fake_find("/dir/relative.txt") == NULL);
         assert(astra_vfs_close(&client, directory) == ASTRA_VFS_OK);
-
-        client.version = UINT16_C(22);
-        assert(astra_vfs_open_at(&client, directory, "old", ASTRA_VFS_OPEN_READ,
-                                 &relative, NULL, NULL) ==
-               ASTRA_VFS_ERR_UNSUPPORTED);
-        assert(astra_vfs_stat_at_meta(&client, directory, "old", &metadata) ==
-               ASTRA_VFS_ERR_UNSUPPORTED);
-        client.version = UINT16_C(25);
-        assert(astra_vfs_stat_file_meta(&client, directory, &metadata) ==
-               ASTRA_VFS_ERR_UNSUPPORTED);
-        client.version = ASTRA_VFS_VERSION;
     }
     call_acquires = 0u;
     assert(astra_vfs_open_mode(&client, "/dir/note.txt",
@@ -1770,9 +1759,6 @@ test_client_through_transport(void)
                            &moved) == ASTRA_VFS_OK);
     assert(moved == sizeof(text) - 1u);
     assert(astra_vfs_sync(&client, file) == ASTRA_VFS_OK);
-    client.version = UINT16_C(12);
-    assert(astra_vfs_sync(&client, file) == ASTRA_VFS_ERR_UNSUPPORTED);
-    client.version = ASTRA_VFS_VERSION;
     assert(astra_vfs_truncate(&client, file, 4u) == ASTRA_VFS_OK);
 
     memset(buffer, 0, sizeof(buffer));
@@ -1801,15 +1787,6 @@ test_client_through_transport(void)
                                   sizeof(buffer), &length) == ASTRA_VFS_OK);
         assert(length == sizeof(target) - 1u);
         assert(memcmp(buffer, target, length) == 0);
-        client.version = UINT16_C(13);
-        assert(astra_vfs_readlink(&client, "/note-link", buffer,
-                                  sizeof(buffer), &length) ==
-               ASTRA_VFS_ERR_UNSUPPORTED);
-        assert(astra_vfs_mkdir_mode(&client, "/old", 0700u) ==
-               ASTRA_VFS_ERR_UNSUPPORTED);
-        assert(astra_vfs_symlink(&client, target, "/old-link") ==
-               ASTRA_VFS_ERR_UNSUPPORTED);
-        client.version = ASTRA_VFS_VERSION;
         link->used = 0;
     }
 
@@ -1836,22 +1813,11 @@ test_client_through_transport(void)
            ASTRA_VFS_OK);
     assert(size == 6u);
     assert(kind == ASTRA_VFS_KIND_FILE);
-    client.version = UINT16_C(10);
-    assert(astra_vfs_rename(&client, "/dir/note.txt", "/dir/renamed.txt") ==
-           ASTRA_VFS_ERR_UNSUPPORTED);
     {
         uint32_t requests = service.stats.requests;
 
-        client.version = UINT16_C(15);
         call_acquires = 0u;
         assert(astra_vfs_rename(&client, "/dir/note.txt",
-                                "/dir/legacy.txt") == ASTRA_VFS_OK);
-        assert(call_acquires == 1u);
-        assert(service.stats.requests == requests + 2u);
-        requests = service.stats.requests;
-        client.version = ASTRA_VFS_VERSION;
-        call_acquires = 0u;
-        assert(astra_vfs_rename(&client, "/dir/legacy.txt",
                                 "/dir/renamed.txt") == ASTRA_VFS_OK);
         assert(call_acquires == 1u);
         assert(service.stats.requests == requests + 1u);
@@ -1864,10 +1830,6 @@ test_client_through_transport(void)
            ASTRA_VFS_OK);
     assert(strcmp(linked_from, "/dir/renamed.txt") == 0);
     assert(strcmp(linked_to, "/dir/alias.txt") == 0);
-    client.version = UINT16_C(21);
-    assert(astra_vfs_link(&client, "/dir/renamed.txt", "/dir/old.txt") ==
-           ASTRA_VFS_ERR_UNSUPPORTED);
-    client.version = ASTRA_VFS_VERSION;
     assert(fake_create("/a", ASTRA_VFS_KIND_FILE) != NULL);
     assert(fake_create("/b", ASTRA_VFS_KIND_FILE) != NULL);
     assert(fake_create("/c", ASTRA_VFS_KIND_FILE) != NULL);
@@ -1949,20 +1911,6 @@ test_client_through_transport(void)
             }
             assert(entries[0].uid != entries[1].uid);
         }
-
-        /* A negotiated v3 peer keeps the one-entry API without a new op. */
-        client.version = UINT16_C(3);
-        cursor = 0u;
-        {
-            AstraVfsDirEntry entry;
-            uint32_t count = 0u;
-
-            assert(astra_vfs_readdir_batch(&client, "/", cursor, &entry, 1u,
-                                            &count, &cursor) == ASTRA_VFS_OK);
-            assert(count == 1u);
-            assert(cursor != 0u);
-        }
-        client.version = ASTRA_VFS_VERSION;
     }
 
     assert(astra_vfs_unlink(&client, "/dir/renamed.txt") == ASTRA_VFS_OK);

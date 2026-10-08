@@ -922,6 +922,7 @@ static uint32_t host_channel_attach_scope;
 static uint32_t host_channel_attach_flags;
 static uint32_t host_channel_detach_calls;
 static uint32_t host_channel_detach_scope;
+static uint32_t host_channel_detach_status;
 static uint32_t host_channel_physical;
 static uint32_t host_channel_byte_size;
 static uint32_t host_channel_slot;
@@ -1039,7 +1040,7 @@ uint32_t kernel_platform_host_channel_detach(
            slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT);
     host_channel_detach_scope = scope;
     ++host_channel_detach_calls;
-    return ASTRA_SYSCALL_OK;
+    return host_channel_detach_status;
 }
 
 void kernel_platform_host_channel_kick(uint32_t slot,
@@ -1196,6 +1197,7 @@ static void reset_host_device(void)
     host_channel_attach_flags = 0u;
     host_channel_detach_calls = 0u;
     host_channel_detach_scope = 0u;
+    host_channel_detach_status = ASTRA_SYSCALL_OK;
     memset(audio_stream_states, 0, sizeof(audio_stream_states));
     audio_stream_open_calls = 0u;
     audio_stream_close_calls = 0u;
@@ -9081,6 +9083,83 @@ static void test_host_scope(void)
 }
 
 /*
+ * A provider that refuses a DETACH may still hold the binding (review M3):
+ * the kernel closes the channel in the provider rather than forget the
+ * binding alone, answers PEER_DEAD to its waits and attaches, and does not
+ * close it in the provider a second time.
+ */
+static void test_host_scope_failed_detach(void)
+{
+    const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    const uint32_t user_open = KERNEL_PROCESS_STACK_TOP - 128u;
+    KernelProcessBootstrapCapability capability = {0};
+    KernelCpuContext *next = NULL;
+    AstraStartupCapability table[3];
+    AstraDmaBufferInfo buffer;
+    AstraHostChannelOpen channel;
+    uint32_t process_id = 0u;
+    uint32_t device = 0u;
+    uint32_t work;
+    uint32_t sound;
+
+    loader_build_image();
+    initialize_test();
+    host_state.capabilities |= ASTRA_HOST_CAP_FS_SCOPE;
+    capability.name = ASTRA_CAPABILITY_HOST_DEVICE;
+    capability.kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capability.device_id = ASTRA_DEVICE_ID_HOST0;
+    capability.rights = KERNEL_DEVICE_RIGHTS;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &capability, 1u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(
+               table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+               sizeof(table)) == KERNEL_USER_COPY_OK);
+    for (uint32_t index = 0u; index < 3u; ++index)
+        if (astra_capability_name_equal(table[index].name,
+                                        ASTRA_CAPABILITY_HOST_DEVICE))
+            device = table[index].handle;
+    assert(device != 0u);
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, device,
+                      ASTRA_HOST_FS_VOLUME_WORK, 0u, 0u, 0u, &next) ==
+           ASTRA_SYSCALL_OK);
+    work = next->data[1];
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, device,
+                      ASTRA_HOST_FS_VOLUME_SOUND, 0u, 0u, 0u, &next) ==
+           ASTRA_SYSCALL_OK);
+    sound = next->data[1];
+    assert(scope_call(ASTRA_SYSCALL_DMA_CREATE, KERNEL_PAGE_SIZE, user_info,
+                      0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+    memset(&channel, 0, sizeof(channel));
+    channel.size = sizeof(channel);
+    channel.buffer = buffer.handle;
+    channel.byte_size = ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                        ASTRA_HOST_COMMAND_SIZE;
+    channel.command_capacity = 1u;
+    assert(kernel_user_copy_to_asm(user_open, &channel, sizeof(channel)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_OPEN, work, user_open, 0u,
+                      0u, 0u, &next) == ASTRA_SYSCALL_OK);
+
+    host_channel_detach_status = ASTRA_SYSCALL_ACCESS_DENIED;
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_REVOKE, work, 0u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_PEER_DEAD);
+    host_channel_detach_status = ASTRA_SYSCALL_OK;
+    assert(host_channel_detach_calls == 1u && host_channel_close_calls == 1u);
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_WAIT, 0u, 1u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_PEER_DEAD);
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound, 0u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_PEER_DEAD);
+    assert(host_channel_attach_calls == 0u);
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, sound, 0u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_OK);
+    assert(host_channel_close_calls == 1u);
+}
+
+/*
  * Fault injection across the admission surface. STORAGE_AND_VFS.md requires
  * this before a filesystem is allowed to depend on the API, and the reason is
  * concrete: every rejection below is a case where a filesystem would otherwise
@@ -15190,6 +15269,7 @@ int main(void)
     test_host_admission();
     test_audio_stream();
     test_host_scope();
+    test_host_scope_failed_detach();
     test_bootstrap_capabilities();
     test_capability_roots_are_carried();
     test_arguments_and_environment_are_published();

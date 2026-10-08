@@ -641,8 +641,7 @@ begin_session_request(AstraVfsService *service, uint32_t session,
         *status = ASTRA_VFS_ERR_BAD_HANDLE;
         return NULL;
     }
-    if (slot->closing != 0u || slot->inflight == UINT16_MAX ||
-        (slot->version < UINT16_C(19) && slot->inflight != 0u)) {
+    if (slot->closing != 0u || slot->inflight == UINT16_MAX) {
         *status = ASTRA_VFS_ERR_BUSY;
         return NULL;
     }
@@ -762,8 +761,7 @@ handle_open(AstraVfsService *service, uint32_t session,
         reply->status = ASTRA_VFS_ERR_INVALID;
         return;
     }
-    if (session_slot->version >= UINT16_C(14) &&
-        (request->flags & ASTRA_VFS_OPEN_CREATE) != 0u &&
+    if ((request->flags & ASTRA_VFS_OPEN_CREATE) != 0u &&
         request->offset != ASTRA_VFS_MODE_DEFAULT &&
         request->offset > ASTRA_VFS_MODE_MASK) {
         reply->status = ASTRA_VFS_ERR_INVALID;
@@ -808,8 +806,7 @@ handle_open(AstraVfsService *service, uint32_t session,
         status = service->backend.ops->open(
             service->backend.context, (const char *)request->body.path,
             request->flags,
-            session_slot->version >= UINT16_C(14) &&
-                    (request->flags & ASTRA_VFS_OPEN_CREATE) != 0u ?
+            (request->flags & ASTRA_VFS_OPEN_CREATE) != 0u ?
                 (uint16_t)request->offset : ASTRA_VFS_MODE_DEFAULT,
             &node, &info);
     } else {
@@ -1189,8 +1186,7 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         reply->status = ASTRA_VFS_ERR_ACCESS;
         goto done;
     }
-    if (slot->closing != 0u || slot->inflight == UINT16_MAX ||
-        (slot->version < UINT16_C(19) && slot->inflight != 0u)) {
+    if (slot->closing != 0u || slot->inflight == UINT16_MAX) {
         reply->status = ASTRA_VFS_ERR_BUSY;
         goto done;
     }
@@ -1212,19 +1208,12 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         reply->status = ASTRA_VFS_OK;
         break;
     case ASTRA_VFS_OP_OPEN:
-        if (((request->flags & ASTRA_VFS_OPEN_EXCLUSIVE) != 0u &&
-             slot->version < UINT16_C(12)) ||
-            ((request->flags & ASTRA_VFS_OPEN_APPEND) != 0u &&
-             slot->version < UINT16_C(13)))
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-        else
-            handle_open(service, slot->id, request, NULL, reply);
+        handle_open(service, slot->id, request, NULL, reply);
         break;
     case ASTRA_VFS_OP_OPEN_AT:
-        if (slot->version < UINT16_C(23) || request->body.path[0] == '/' ||
+        if (request->body.path[0] == '/' ||
             request->body.path[0] == '\0') {
-            reply->status = slot->version < UINT16_C(23) ?
-                ASTRA_VFS_ERR_UNSUPPORTED : ASTRA_VFS_ERR_INVALID;
+            reply->status = ASTRA_VFS_ERR_INVALID;
             break;
         }
         file = find_file(service, slot->id, request->file, &status);
@@ -1264,10 +1253,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         handle_write(service, file, request, reply);
         break;
     case ASTRA_VFS_OP_SYNC:
-        if (slot->version < UINT16_C(13)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-            break;
-        }
         file = find_file(service, slot->id, request->file, &status);
         if (file == NULL) {
             reply->status = status;
@@ -1282,10 +1267,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         }
         break;
     case ASTRA_VFS_OP_TRUNCATE:
-        if (slot->version < UINT16_C(13)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-            break;
-        }
         file = find_file(service, slot->id, request->file, &status);
         if (file == NULL) {
             reply->status = status;
@@ -1319,10 +1300,9 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
     case ASTRA_VFS_OP_STAT_AT: {
         AstraVfsNodeInfo info;
 
-        if (slot->version < UINT16_C(25) || request->body.path[0] == '/' ||
+        if (request->body.path[0] == '/' ||
             request->body.path[0] == '\0' || request->flags != 0u) {
-            reply->status = slot->version < UINT16_C(25) ?
-                ASTRA_VFS_ERR_UNSUPPORTED : ASTRA_VFS_ERR_INVALID;
+            reply->status = ASTRA_VFS_ERR_INVALID;
             break;
         }
         file = find_file(service, slot->id, request->file, &status);
@@ -1348,9 +1328,8 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
     case ASTRA_VFS_OP_STAT_FILE: {
         AstraVfsNodeInfo info;
 
-        if (slot->version < UINT16_C(26) || request->flags != 0u) {
-            reply->status = slot->version < UINT16_C(26) ?
-                ASTRA_VFS_ERR_UNSUPPORTED : ASTRA_VFS_ERR_INVALID;
+        if (request->flags != 0u) {
+            reply->status = ASTRA_VFS_ERR_INVALID;
             break;
         }
         file = find_file(service, slot->id, request->file, &status);
@@ -1376,10 +1355,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         (void)state_acquire(service);
         break;
     case ASTRA_VFS_OP_READDIR_BATCH:
-        if (slot->version < UINT16_C(4)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-            break;
-        }
         state_release(service);
         handle_readdir_batch(service, request, reply);
         (void)state_acquire(service);
@@ -1388,8 +1363,7 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
         break;
     case ASTRA_VFS_OP_MKDIR:
-        if (slot->version >= UINT16_C(14) &&
-            request->offset != ASTRA_VFS_MODE_DEFAULT &&
+        if (request->offset != ASTRA_VFS_MODE_DEFAULT &&
             request->offset > ASTRA_VFS_MODE_MASK) {
             reply->status = ASTRA_VFS_ERR_INVALID;
         } else {
@@ -1397,8 +1371,7 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
             reply->status = service->backend.ops->mkdir(
                 service->backend.context,
                 (const char *)request->body.path,
-                slot->version >= UINT16_C(14) ?
-                    (uint16_t)request->offset : ASTRA_VFS_MODE_DEFAULT);
+                (uint16_t)request->offset);
             (void)state_acquire(service);
         }
         break;
@@ -1409,10 +1382,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         (void)state_acquire(service);
         break;
     case ASTRA_VFS_OP_RENAME_FROM:
-        if (slot->version < UINT16_C(11)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-            break;
-        }
         for (uint32_t index = 0u; index < ASTRA_VFS_PATH_MAX; ++index) {
             slot->staged_path[index] = (char)request->body.path[index];
             if (request->body.path[index] == 0u)
@@ -1422,10 +1391,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         reply->status = ASTRA_VFS_OK;
         break;
     case ASTRA_VFS_OP_RENAME_TO:
-        if (slot->version < UINT16_C(11)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-            break;
-        }
         if (slot->staged_operation != ASTRA_VFS_STAGE_RENAME) {
             reply->status = ASTRA_VFS_ERR_PROTOCOL;
             break;
@@ -1441,10 +1406,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         const AstraVfsRenameRequest *rename =
             (const AstraVfsRenameRequest *)request;
 
-        if (slot->version < UINT16_C(16)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-            break;
-        }
         state_release(service);
         reply->status = service->backend.ops->rename(
             service->backend.context,
@@ -1454,9 +1415,7 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         break;
     }
     case ASTRA_VFS_OP_CHMOD:
-        if (slot->version < UINT16_C(14)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-        } else if (request->offset > ASTRA_VFS_MODE_MASK) {
+        if (request->offset > ASTRA_VFS_MODE_MASK) {
             reply->status = ASTRA_VFS_ERR_INVALID;
         } else {
             state_release(service);
@@ -1467,33 +1426,29 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
             (void)state_acquire(service);
         }
         break;
-    case ASTRA_VFS_OP_READLINK:
-        if (slot->version < UINT16_C(14)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-        } else {
-            uint32_t length = 0u;
-            uint32_t capacity = request->length > ASTRA_VFS_IO_MAX ?
-                ASTRA_VFS_IO_MAX : request->length;
+    case ASTRA_VFS_OP_READLINK: {
+        uint32_t length = 0u;
+        uint32_t capacity = request->length > ASTRA_VFS_IO_MAX ?
+            ASTRA_VFS_IO_MAX : request->length;
 
-            state_release(service);
-            reply->status = service->backend.ops->readlink(
-                service->backend.context,
-                (const char *)request->body.path, reply->payload, capacity,
-                &length);
-            (void)state_acquire(service);
-            if (reply->status == ASTRA_VFS_OK) {
-                if (length > capacity ||
-                    !astra_utf8_validate(reply->payload, length, 0u))
-                    reply->status = ASTRA_VFS_ERR_PROTOCOL;
-                else
-                    reply->count = length;
-            }
+        state_release(service);
+        reply->status = service->backend.ops->readlink(
+            service->backend.context,
+            (const char *)request->body.path, reply->payload, capacity,
+            &length);
+        (void)state_acquire(service);
+        if (reply->status == ASTRA_VFS_OK) {
+            if (length > capacity ||
+                !astra_utf8_validate(reply->payload, length, 0u))
+                reply->status = ASTRA_VFS_ERR_PROTOCOL;
+            else
+                reply->count = length;
         }
         break;
+    }
     case ASTRA_VFS_OP_SYMLINK_TARGET:
-        if (slot->version < UINT16_C(15) || request->body.path[0] == 0u) {
-            reply->status = slot->version < UINT16_C(15) ?
-                ASTRA_VFS_ERR_UNSUPPORTED : ASTRA_VFS_ERR_INVALID;
+        if (request->body.path[0] == 0u) {
+            reply->status = ASTRA_VFS_ERR_INVALID;
             break;
         }
         for (uint32_t index = 0u; index < ASTRA_VFS_PATH_MAX; ++index) {
@@ -1505,10 +1460,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         reply->status = ASTRA_VFS_OK;
         break;
     case ASTRA_VFS_OP_SYMLINK_TO:
-        if (slot->version < UINT16_C(15)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-            break;
-        }
         if (slot->staged_operation != ASTRA_VFS_STAGE_SYMLINK) {
             reply->status = ASTRA_VFS_ERR_PROTOCOL;
             break;
@@ -1524,10 +1475,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         const AstraVfsRenameRequest *symlink =
             (const AstraVfsRenameRequest *)request;
 
-        if (slot->version < UINT16_C(19)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-            break;
-        }
         state_release(service);
         reply->status = service->backend.ops->symlink(
             service->backend.context,
@@ -1540,10 +1487,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         const AstraVfsRenameRequest *link =
             (const AstraVfsRenameRequest *)request;
 
-        if (slot->version < UINT16_C(22)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-            break;
-        }
         state_release(service);
         reply->status = service->backend.ops->link(
             service->backend.context,
@@ -1553,11 +1496,10 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         break;
     }
     case ASTRA_VFS_OP_UNLINK_AT:
-        if (slot->version < UINT16_C(23) || request->body.path[0] == '/' ||
+        if (request->body.path[0] == '/' ||
             request->body.path[0] == '\0' ||
             (request->flags & ~ASTRA_VFS_AT_REMOVE_DIRECTORY) != 0u) {
-            reply->status = slot->version < UINT16_C(23) ?
-                ASTRA_VFS_ERR_UNSUPPORTED : ASTRA_VFS_ERR_INVALID;
+            reply->status = ASTRA_VFS_ERR_INVALID;
             break;
         }
         file = find_file(service, slot->id, request->file, &status);
@@ -1577,10 +1519,8 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         }
         break;
     case ASTRA_VFS_OP_CHMOD_FILE:
-        if (slot->version < UINT16_C(23) ||
-            request->offset > ASTRA_VFS_MODE_MASK) {
-            reply->status = slot->version < UINT16_C(23) ?
-                ASTRA_VFS_ERR_UNSUPPORTED : ASTRA_VFS_ERR_INVALID;
+        if (request->offset > ASTRA_VFS_MODE_MASK) {
+            reply->status = ASTRA_VFS_ERR_INVALID;
             break;
         }
         file = find_file(service, slot->id, request->file, &status);
@@ -1598,12 +1538,11 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         }
         break;
     case ASTRA_VFS_OP_CHMOD_AT:
-        if (slot->version < UINT16_C(23) || request->body.path[0] == '/' ||
+        if (request->body.path[0] == '/' ||
             request->body.path[0] == '\0' ||
             request->offset > ASTRA_VFS_MODE_MASK ||
             (request->flags & ~ASTRA_VFS_AT_SYMLINK_NOFOLLOW) != 0u) {
-            reply->status = slot->version < UINT16_C(23) ?
-                ASTRA_VFS_ERR_UNSUPPORTED : ASTRA_VFS_ERR_INVALID;
+            reply->status = ASTRA_VFS_ERR_INVALID;
             break;
         }
         file = find_file(service, slot->id, request->file, &status);
@@ -1624,10 +1563,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         }
         break;
     case ASTRA_VFS_OP_FILESYSTEM_INFO:
-        if (slot->version < UINT16_C(23)) {
-            reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-            break;
-        }
         if (request->file == ASTRA_VFS_FILE_INVALID) {
             state_release(service);
             reply->status = astra_vfs_backend_filesystem_info_into(

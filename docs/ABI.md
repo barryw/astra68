@@ -67,7 +67,12 @@ under the volume it was opened in. `runtime.library` 1.14 exports
 
 Storage protocol 28: a HELLO on a port that serves a host volume attaches
 one handle, the grant's scope; such a port answers every other operation
-except BYE with `ASTRA_VFS_ERR_UNSUPPORTED`.
+except BYE with `ASTRA_VFS_ERR_UNSUPPORTED`, runs no operation fused with a
+HELLO, and refuses a HELLO it cannot attach the scope to. 28 is also
+`ASTRA_VFS_VERSION_MIN`: no earlier request layout is served, a HELLO below
+it is answered `ASTRA_VFS_ERR_PROTOCOL`, and every pre-28 compatibility path
+(per-request reply ports, unfused HELLO retry, two-message rename and
+symlink in the client, version-gated operations) is deleted.
 
 ## Filesystem Kit ABI 6.0
 
