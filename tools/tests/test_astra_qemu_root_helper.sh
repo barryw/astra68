@@ -1,39 +1,34 @@
 #!/bin/bash
-# Regression test for tools/astra-qemu-root's drop-privilege design: QEMU
-# must run as the caller, never as root, and the only root action -- the
-# loop mount -- must never be fooled by a symlink or leak anything after
-# it is done. Linux-only (loop mount, sudo, setpriv); run on beast, never
-# on the Mac.
+# Regression test for tools/astra-qemu-root: QEMU runs as the caller with
+# no privilege left, root acts only inside its own /var/tmp directory R
+# (never in a directory the caller can modify), the image read is bounded,
+# and nothing outlives the run. Linux-only (loop mount, sudo, setpriv);
+# run on beast, never on the Mac.
 #
 #   bash tools/tests/test_astra_qemu_root_helper.sh [/path/to/astra-qemu-root]
 #
-# Defaults to the repository copy, so this can run before (or after)
-# `sudo install` puts it at /usr/local/sbin/astra-qemu-root.
+# Defaults to the repository copy. The caller needs passwordless sudo for
+# the helper and, for setup and the perturbation copies, in general (on
+# beast barry has both). Perturbed helpers are installed in a root-owned
+# mktemp directory under /var/tmp and removed at exit; nothing is
+# installed in /usr/local/sbin.
 set -euo pipefail
 
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 WRAPPER=${1:-$HERE/../astra-qemu-root}
 CALLER_UID=$(id -u)
 CALLER_GID=$(id -g)
-# A home for this run's own non-fixture scratch files (the perturbation's
-# throwaway symlink target, logs, the vulnerable reconstruction script).
-# Provider image/mount pairs are NOT put here: each pair needs its own
-# directly-under-/tmp 0700 directory, exactly what private_tmp_dir()
-# requires (it refuses a nested /tmp/*/*), so they get their own
-# top-level mktemp below instead of living inside this one.
 WORK=$(mktemp -d /tmp/astra-qemu-root-helper-test.XXXXXX)
 chmod 700 "$WORK"
+PERTURB=
 PASS=0
 FAIL=0
-FIXTURE_DIRS=()
+SERIAL=0
 
 cleanup() {
     local status=$?
+    [ -n "$PERTURB" ] && sudo -n rm -rf -- "$PERTURB"
     rm -rf -- "$WORK"
-    local d
-    for d in "${FIXTURE_DIRS[@]:-}"; do
-        [ -n "$d" ] && rm -rf -- "$d"
-    done
     exit "$status"
 }
 trap cleanup EXIT
@@ -41,161 +36,216 @@ trap cleanup EXIT
 note_pass() { echo "PASS $*"; PASS=$((PASS + 1)); }
 note_fail() { echo "FAIL $*"; FAIL=$((FAIL + 1)); }
 
-# A provider image and its empty mount point, exactly as
-# qemu_runtime.root_provider builds them: siblings in their own 0700
-# directory directly under /tmp, work/ and sound/ pre-populated into the
-# image at mkfs time, owned by this caller. Prints "IMAGE MOUNT".
+# A provider image exactly as qemu_runtime.root_provider builds one:
+# work/ and sound/ made at mkfs time, the filesystem root owned by this
+# caller. `seed_work` replaces work/ with a symlink to that target.
 make_provider() {
-    local label=$1
-    local dir
-    dir=$(mktemp -d "/tmp/astra-qemu-root-helper-$label.XXXXXX")
-    chmod 700 -- "$dir"
-    FIXTURE_DIRS+=("$dir")
-    mkdir -p -- "$dir/seed/work" "$dir/seed/sound"
-    truncate -s 64M -- "$dir/image.img"
-    /usr/sbin/mke2fs -q -F -t ext4 -O "^orphan_file" \
-        -E "root_owner=$CALLER_UID:$CALLER_GID" \
-        -d "$dir/seed" "$dir/image.img"
-    mkdir -- "$dir/mount"
-    echo "$dir/image.img $dir/mount"
-}
-
-# A provider whose `work` entry is a symlink instead of a directory -- the
-# no-follow check must refuse this, and nothing must ever act on the
-# symlink's target (the fixed wrapper never creates or touches anything
-# inside the mount at all, so it is safe to point this at a real
-# sensitive path; see perturb_c_demonstrate_old_pattern below for why the
-# *historical* `install -d` pattern is instead demonstrated against a
-# scratch target, never a real system path).
-make_symlinked_work_provider() {
-    local label=$1 target=$2
-    local dir
-    dir=$(mktemp -d "/tmp/astra-qemu-root-helper-$label.XXXXXX")
-    chmod 700 -- "$dir"
-    FIXTURE_DIRS+=("$dir")
-    mkdir -p -- "$dir/seed"
-    ln -s -- "$target" "$dir/seed/work"
+    local label=$1 seed_work=${2:-}
+    local dir="$WORK/$label"
     mkdir -p -- "$dir/seed/sound"
+    if [ -n "$seed_work" ]; then
+        ln -s -- "$seed_work" "$dir/seed/work"
+    else
+        mkdir -- "$dir/seed/work"
+    fi
     truncate -s 64M -- "$dir/image.img"
     /usr/sbin/mke2fs -q -F -t ext4 -O "^orphan_file" \
         -E "root_owner=$CALLER_UID:$CALLER_GID" \
         -d "$dir/seed" "$dir/image.img"
-    mkdir -- "$dir/mount"
-    echo "$dir/image.img $dir/mount"
+    echo "$dir/image.img"
 }
 
-wait_for_file() {
-    local path=$1 deadline=${2:-5}
-    local end=$(($(date +%s) + deadline))
-    while [ ! -e "$path" ]; do
-        [ "$(date +%s)" -lt "$end" ] || return 1
-        sleep 0.1
-    done
+helper_dirs() { ls -d /var/tmp/astra-qemu-root.* 2>/dev/null | sort || true; }
+
+# Runs WRAPPER on IMAGE in the background with a stand-in command, log in
+# LOG. Sets BG to its pid.
+start() {
+    local wrapper=$1 image=$2 log=$3
+    shift 3
+    sudo -n "$wrapper" --image "$image" -- "$@" > "$log" 2>&1 &
+    BG=$!
 }
 
-# --- (a): the running "QEMU" process's uid is the caller's -------------
-#
-# Runs `wrapper` with a provider and a 3 s `/bin/sleep` stand-in, and
-# polls (not a single snapshot) for up to that 3 s for its pid to show
-# `expect_uid`: the exec chain (unshare -> bash -c -> setpriv -> the
-# stand-in) takes the uid through root briefly on its way to the
-# caller's, and a single read racing that transition -- likely under
-# load, which is exactly what caught this the first time, inside the
-# full suite rather than this script run alone -- would read "0" and
-# call a correctly-dropping wrapper broken. Prints nothing and never
-# calls note_pass/note_fail itself: it only reports "yes SEEN_UID" (the
-# expected uid was observed before the deadline) or "no SEEN_UID" (it
-# never was), so a caller expecting "no" -- the perturbation below --
-# can report that as its own PASS without ever printing a bare FAIL
-# line for an outcome the test wanted.
-observe_uid() {
-    local wrapper=$1 label=$2 expect_uid=$3
-    local image mount pidfile
-    read -r image mount < <(make_provider "a-$label")
-    pidfile="$(dirname -- "$mount")/qemu.pid"
-    sudo -n "$wrapper" --image "$image" --mount "$mount" \
-        -- /bin/sleep 3 >"$WORK/a-$label.log" 2>&1 &
-    local bg=$!
-    if ! wait_for_file "$pidfile" 10; then
-        if wait "$bg"; then :; fi
-        echo "no MISSING"
-        return
-    fi
-    local pid
-    pid=$(cat "$pidfile")
-    local seen=MISSING last_seen=MISSING deadline
-    deadline=$((SECONDS + 3))
-    while [ "$SECONDS" -le "$deadline" ]; do
-        seen=$(awk '/^Uid:/{print $2}' "/proc/$pid/status" 2>/dev/null || echo GONE)
-        [ "$seen" != GONE ] && last_seen=$seen
-        [ "$seen" = "$expect_uid" ] && break
-        [ "$seen" = GONE ] && break
+# The R the helper announced in LOG (empty if it never did within 10 s).
+announced_r() {
+    local log=$1 end=$((SECONDS + 10)) line
+    while [ "$SECONDS" -le "$end" ]; do
+        line=$(grep -m1 '^ASTRA-QEMU-ROOT-MOUNT ' "$log" 2>/dev/null || true)
+        if [ -n "$line" ]; then
+            dirname -- "${line#ASTRA-QEMU-ROOT-MOUNT }"
+            return
+        fi
+        kill -0 "$BG" 2>/dev/null || break
         sleep 0.05
     done
-    wait "$bg" 2>/dev/null || true
-    if [ "$seen" = "$expect_uid" ]; then
-        echo "yes $seen"
+}
+
+finish() { if wait "$BG"; then STATUS=0; else STATUS=$?; fi; }
+
+# --- N6: the running stand-in holds no privilege at all ------------------
+#
+# Polls (the exec chain passes through root on its way down) for all four
+# Uid: fields == caller, all four Gid: fields == caller gid, CapEff and
+# CapPrm zero. Prints "yes" or "no LAST-SEEN"; never PASS/FAIL itself, so
+# a perturbation that expects "no" prints no bare FAIL token.
+observe_creds() {
+    local wrapper=$1 label=$2
+    local image r pid want seen=MISSING
+    image=$(make_provider "creds-$label")
+    start "$wrapper" "$image" "$WORK/creds-$label.log" /bin/sleep 3
+    r=$(announced_r "$WORK/creds-$label.log")
+    if [ -z "$r" ]; then
+        finish
+        echo "no NO-ANNOUNCE($(tr '\n' ' ' < "$WORK/creds-$label.log"))"
+        return
+    fi
+    local end=$((SECONDS + 5))
+    pid=
+    while [ -z "$pid" ] && [ "$SECONDS" -le "$end" ]; do
+        pid=$(cat "$r/qemu.pid" 2>/dev/null || true)
+        [ -n "$pid" ] || sleep 0.05
+    done
+    want="$CALLER_UID $CALLER_UID $CALLER_UID $CALLER_UID|$CALLER_GID $CALLER_GID $CALLER_GID $CALLER_GID|0000000000000000|0000000000000000"
+    while [ -n "$pid" ] && [ "$SECONDS" -le "$end" ]; do
+        local now
+        now=$(awk '/^Uid:/{u=$2" "$3" "$4" "$5} /^Gid:/{g=$2" "$3" "$4" "$5}
+                   /^CapEff:/{e=$2} /^CapPrm:/{p=$2}
+                   END{print u"|"g"|"e"|"p}' "/proc/$pid/status" 2>/dev/null || true)
+        [ -n "$now" ] && [ "$now" != "|||" ] || break
+        seen=$now
+        [ "$seen" = "$want" ] && break
+        sleep 0.05
+    done
+    finish
+    if [ "$seen" = "$want" ]; then echo yes; else echo "no $seen"; fi
+}
+
+run_test_creds() {
+    local result
+    result=$(observe_creds "$WRAPPER" fixed)
+    if [ "$result" = yes ]; then
+        note_pass "fs-root-helper creds: stand-in ran with uid/gid all $CALLER_UID/$CALLER_GID, CapEff=CapPrm=0"
     else
-        echo "no $last_seen"
+        note_fail "fs-root-helper creds: expected uid/gid $CALLER_UID/$CALLER_GID and no capabilities, saw ${result#no }"
     fi
 }
 
-run_test_a() {
-    local wrapper=$1 label=$2 expect_uid=$3
-    local result matched seen
-    result=$(observe_uid "$wrapper" "$label" "$expect_uid")
-    matched=${result%% *}
-    seen=${result#* }
-    if [ "$matched" = yes ]; then
-        note_pass "fs-root-helper uid ($label): process ran as uid $seen"
+# --- a symlinked, unreadable or non-regular image is refused ------------
+
+expect_refusal() {
+    local name=$1 want=$2 image=$3 output status
+    output=$(timeout 30 sudo -n "$WRAPPER" --image "$image" -- /bin/true 2>&1) &&
+        status=0 || status=$?
+    if [ "$status" -eq 64 ] && [[ "$output" == *"$want"* ]]; then
+        note_pass "fs-root-helper $name: refused ($(echo "$output" | tr '\n' ' '))"
     else
-        note_fail "fs-root-helper uid ($label): expected uid $expect_uid, process was uid $seen"
+        note_fail "fs-root-helper $name: expected refusal '$want', got status=$status $output"
     fi
 }
 
-# --- (b): a symlinked or unreadable image is refused --------------------
+run_test_images() {
+    ln -s /etc/shadow "$WORK/shadow-link"
+    expect_refusal image-is-symlink "not a symlink" "$WORK/shadow-link"
 
-run_test_b() {
-    local image mount output status
-
-    mkdir -m 755 -- "$WORK/b-dummy-mount"
-    ln -s /etc/shadow "$WORK/b-shadow-link"
-    output=$(sudo -n "$WRAPPER" --image "$WORK/b-shadow-link" \
-        --mount "$WORK/b-dummy-mount" -- /bin/true 2>&1) && status=0 || status=$?
-    if [ "$status" -eq 64 ] && [[ "$output" == *"not a symlink"* ]]; then
-        note_pass "fs-root-helper image-is-symlink: refused ($output)"
-    else
-        note_fail "fs-root-helper image-is-symlink: expected refusal, got status=$status $output"
-    fi
-
-    read -r image mount < <(make_provider "b-unreadable")
+    local image
+    image=$(make_provider unreadable)
     sudo -n chown root:root "$image"
     sudo -n chmod 600 "$image"
-    output=$(sudo -n "$WRAPPER" --image "$image" --mount "$mount" \
-        -- /bin/true 2>&1) && status=0 || status=$?
-    if [ "$status" -eq 64 ] && [[ "$output" == *"could not read image as the caller"* ]]; then
-        note_pass "fs-root-helper image-caller-cannot-read: refused ($output)"
+    expect_refusal image-caller-cannot-read "could not read image as the caller" "$image"
+
+    mkfifo "$WORK/fifo.img"
+    expect_refusal image-is-fifo "regular file" "$WORK/fifo.img"
+}
+
+# --- N7: an image growing during the read is copied at its open size ---
+#
+# A sparse appender grows IMAGE far faster than anything can read it, from
+# before the helper starts until it announces the mount (the copy is done
+# by then). An unbounded reader (cat) would chase it to the appender's
+# cap; the bounded one copies the size it saw at open. Refusal for
+# exceeding /var/tmp's free space is also acceptable; unbounded is not.
+run_test_growing() {
+    local image r copied final cap=$((64 * 1024 * 1024 * 1024))
+    image=$(make_provider growing)
+    touch "$WORK/grow.run"
+    ( while [ -e "$WORK/grow.run" ] && [ "$(stat -c %s "$image")" -lt "$cap" ]; do
+          truncate -s +1M "$image"
+      done ) &
+    local grower=$!
+    sleep 0.2
+    start "$WRAPPER" "$image" "$WORK/growing.log" /bin/sleep 2
+    r=$(announced_r "$WORK/growing.log")
+    rm -f "$WORK/grow.run"
+    wait "$grower" || true
+    if [ -z "$r" ]; then
+        finish
+        if [ "$STATUS" -eq 64 ] && grep -q "exceeds the" "$WORK/growing.log"; then
+            note_pass "fs-root-helper image-growing: refused for size ($(tail -1 "$WORK/growing.log"))"
+        else
+            note_fail "fs-root-helper image-growing: no mount announced, status $STATUS: $(cat "$WORK/growing.log")"
+        fi
+        return
+    fi
+    copied=$(sudo -n stat -c %s "$r/img" 2>/dev/null || echo GONE)
+    final=$(stat -c %s "$image")
+    finish
+    if [ "$copied" != GONE ] && [ "$copied" -ge $((64 * 1024 * 1024)) ] &&
+            [ "$copied" -lt "$final" ]; then
+        note_pass "fs-root-helper image-growing: copied $copied bytes, image had grown to $final"
     else
-        note_fail "fs-root-helper image-caller-cannot-read: expected refusal, got status=$status $output"
+        note_fail "fs-root-helper image-growing: copied $copied bytes, image grew to $final"
     fi
 }
 
-# --- (c): a provider whose `work` is a symlink is refused ---------------
-
-run_test_c() {
-    local image mount output status
-
-    read -r image mount < <(make_symlinked_work_provider "c-etc" /etc)
-    local before after
-    before=$(stat -c '%U:%G:%a' /etc)
-    output=$(sudo -n "$WRAPPER" --image "$image" --mount "$mount" \
-        -- /bin/true 2>&1) && status=0 || status=$?
-    after=$(stat -c '%U:%G:%a' /etc)
-    if [ "$status" -eq 64 ] && [[ "$output" == *"symlink"* ]]; then
-        note_pass "fs-root-helper work-is-symlink-to-etc: refused ($output)"
+# --- planted symlinks in the caller's directory are never followed ------
+#
+# Plants every name earlier helpers wrote beside the image -- qemu.pid,
+# a scratch copy, a mount directory -- as symlinks to decoys this test
+# owns. Prints "unchanged" or "changed WHAT"; never PASS/FAIL itself.
+observe_planted() {
+    local wrapper=$1 label=$2
+    local image dir decoy before after
+    image=$(make_provider "planted-$label")
+    dir=$(dirname -- "$image")
+    decoy="$WORK/decoy-$label"
+    mkdir -- "$decoy" "$decoy/dir"
+    echo "decoy contents" > "$decoy/file"
+    chmod 600 -- "$decoy/file"
+    ln -s -- "$decoy/file" "$dir/qemu.pid"
+    ln -s -- "$decoy/file" "$dir/astra-qemu-root-scratch.AAAAAA"
+    ln -s -- "$decoy/dir" "$dir/mount"
+    ln -s -- "$decoy/dir" "$dir/provider"
+    before=$(stat -c '%a %s %Y %h' "$decoy/file" "$decoy/dir"; cat "$decoy/file")
+    start "$wrapper" "$image" "$WORK/planted-$label.log" /bin/sleep 1
+    finish
+    after=$(stat -c '%a %s %Y %h' "$decoy/file" "$decoy/dir"; cat "$decoy/file")
+    if [ "$STATUS" -ne 0 ]; then
+        echo "changed wrapper-exit-$STATUS"
+    elif [ "$before" = "$after" ] && [ -z "$(ls -A -- "$decoy/dir")" ]; then
+        echo unchanged
     else
-        note_fail "fs-root-helper work-is-symlink-to-etc: expected refusal, got status=$status $output"
+        echo "changed $(echo "$after" | tr '\n' ' ')"
     fi
+}
+
+run_test_planted() {
+    local result
+    result=$(observe_planted "$WRAPPER" fixed)
+    if [ "$result" = unchanged ]; then
+        note_pass "fs-root-helper planted-symlinks: decoys behind qemu.pid/scratch/mount links unchanged"
+    else
+        note_fail "fs-root-helper planted-symlinks: ${result#changed }"
+    fi
+}
+
+# --- a provider whose `work` is a symlink is refused --------------------
+
+run_test_work_symlink() {
+    local image before after
+    image=$(make_provider work-etc /etc)
+    before=$(stat -c '%U:%G:%a' /etc)
+    expect_refusal work-is-symlink-to-etc "symlink" "$image"
+    after=$(stat -c '%U:%G:%a' /etc)
     if [ "$before" = "$after" ]; then
         note_pass "fs-root-helper work-is-symlink-to-etc: /etc unchanged ($after)"
     else
@@ -203,183 +253,133 @@ run_test_c() {
     fi
 }
 
-# Perturbation for (c): the *historical* defect was `install -d -o U -g G
-# -m 0755 PATH` creating/fixing up PATH even when PATH is a symlink --
-# `install -d` follows it and chowns/chmods whatever it points to. Run
-# only the install(1) step itself -- never the full root flow -- and only
-# against a throwaway scratch target, never a real system path: this is
-# about proving the *mechanism* astra-qemu-root's `-d`/`-L` check now
-# refuses, not about reproducing privileged damage on shared infrastructure.
-perturb_c_demonstrate_old_pattern() {
-    local scratch="$WORK/c-perturb-scratch"
-    mkdir -m 711 -- "$scratch"
-    local before after
-    before=$(stat -c '%a' "$scratch")
-    ln -s -- "$scratch" "$WORK/c-perturb-link"
-    install -d -m 0755 -- "$WORK/c-perturb-link"
-    after=$(stat -c '%a' "$scratch")
-    if [ "$before" != "$after" ] && [ "$after" = 755 ]; then
-        note_pass "fs-root-helper work-symlink perturbation: the historical install -d pattern follows a symlink and modifies its target ($before -> $after on the scratch target) -- exactly what the fixed wrapper's -L check now refuses outright"
+# --- R, the mount and the loop device are gone after success and failure
+
+check_gone() {
+    local name=$1 r=$2
+    if [ -z "$r" ]; then
+        note_fail "fs-root-helper cleanup ($name): no mount announced"
+    elif sudo -n test -e "$r"; then
+        note_fail "fs-root-helper cleanup ($name): $r still exists"
+    elif findmnt -rn -o TARGET | grep -q '^/var/tmp/astra-qemu-root\.'; then
+        note_fail "fs-root-helper cleanup ($name): a helper mount remains"
     else
-        note_fail "fs-root-helper work-symlink perturbation: expected install -d to follow the symlink and change the scratch target's mode; saw $before -> $after"
+        note_pass "fs-root-helper cleanup ($name): $r removed, no helper mount"
     fi
 }
 
-# --- (d): nothing remains after the run, including after a failure ------
-#
-# The mount is NOT hidden from this (the default, host-wide) namespace
-# while QEMU runs: an earlier version of this wrapper tried that --
-# unmounting its own copy the moment a QEMU child's private namespace
-# held an independent one -- and the desktop never finished booting
-# behind it (it raced the host side of QEMU's own HostFS init). The
-# mount stays visible system-wide for the run's duration, by design (see
-# tools/astra-qemu-root's own comment); what this checks instead is that
-# nothing is left over once the run ends, success or not.
+run_test_cleanup() {
+    local image r
+    image=$(make_provider cleanup-success)
+    start "$WRAPPER" "$image" "$WORK/cleanup-success.log" /bin/sleep 1
+    r=$(announced_r "$WORK/cleanup-success.log")
+    finish
+    [ "$STATUS" -eq 0 ] || note_fail "fs-root-helper cleanup (success): wrapper exit $STATUS"
+    check_gone success "$r"
 
-run_test_d() {
-    local image mount status
-
-    read -r image mount < <(make_provider "d-success")
-    if sudo -n "$WRAPPER" --image "$image" --mount "$mount" \
-            -- /bin/sleep 2 >"$WORK/d-success.log" 2>&1; then
-        status=0
-    else
-        status=$?
-    fi
-    [ "$status" -eq 0 ] || echo "  (wrapper exit $status for the success run)"
-    if [ -z "$(ls -A -- "$mount" 2>/dev/null)" ]; then
-        note_pass "fs-root-helper cleanup (success): mount point empty again"
-    else
-        note_fail "fs-root-helper cleanup (success): mount point still has content: $(ls -A -- "$mount")"
-    fi
-    if ls "$(dirname -- "$mount")"/astra-qemu-root-scratch.* >/dev/null 2>&1; then
-        note_fail "fs-root-helper cleanup (success): scratch copy still exists"
-    else
-        note_pass "fs-root-helper cleanup (success): scratch copy removed"
-    fi
-
-    read -r image mount < <(make_provider "d-failure")
-    if sudo -n "$WRAPPER" --image "$image" --mount "$mount" \
-            -- /bin/sh -c 'exit 7' >"$WORK/d-failure.log" 2>&1; then
-        status=0
-    else
-        status=$?
-    fi
-    if [ "$status" -eq 7 ]; then
+    image=$(make_provider cleanup-failure)
+    start "$WRAPPER" "$image" "$WORK/cleanup-failure.log" /bin/sh -c 'exit 7'
+    r=$(announced_r "$WORK/cleanup-failure.log")
+    finish
+    if [ "$STATUS" -eq 7 ]; then
         note_pass "fs-root-helper cleanup (failure): wrapper propagated exit 7"
     else
-        note_fail "fs-root-helper cleanup (failure): expected exit 7, got $status"
+        note_fail "fs-root-helper cleanup (failure): expected exit 7, got $STATUS"
     fi
-    if [ -z "$(ls -A -- "$mount" 2>/dev/null)" ]; then
-        note_pass "fs-root-helper cleanup (failure): mount point empty again"
-    else
-        note_fail "fs-root-helper cleanup (failure): mount point still has content: $(ls -A -- "$mount")"
-    fi
-    if ls "$(dirname -- "$mount")"/astra-qemu-root-scratch.* >/dev/null 2>&1; then
-        note_fail "fs-root-helper cleanup (failure): scratch copy still exists"
-    else
-        note_pass "fs-root-helper cleanup (failure): scratch copy removed"
-    fi
+    check_gone failure "$r"
 }
 
-check_no_loop_leak() {
-    local before=$1
-    local after
-    after=$(sudo -n losetup -a | wc -l)
-    if [ "$before" = "$after" ]; then
-        note_pass "fs-root-helper loop devices: count unchanged ($after)"
-    else
-        note_fail "fs-root-helper loop devices: count changed $before -> $after"
-    fi
-}
+# --- a control: a specific marker round-trips through the write-back ----
 
-# --- (e): a control asserting a specific success marker, end to end -----
-
-run_test_e() {
-    local image mount status marker
-    read -r image mount < <(make_provider "e-success")
-    if sudo -n "$WRAPPER" --image "$image" --mount "$mount" \
-            -- /bin/bash -c \
-            'echo fs-root-helper-marker-$$ > "$ASTRA_HOSTFS_ROOT/work/marker.txt"' \
-            >"$WORK/e-success.log" 2>&1; then
-        status=0
-    else
-        status=$?
-    fi
-    if [ "$status" -ne 0 ]; then
-        note_fail "fs-root-helper control: wrapper exited $status: $(cat "$WORK/e-success.log")"
+run_test_control() {
+    local image marker
+    image=$(make_provider control)
+    start "$WRAPPER" "$image" "$WORK/control.log" /bin/bash -c \
+        'echo fs-root-helper-marker-$$ > "$ASTRA_HOSTFS_ROOT/work/marker.txt"'
+    finish
+    if [ "$STATUS" -ne 0 ]; then
+        note_fail "fs-root-helper control: wrapper exited $STATUS: $(cat "$WORK/control.log")"
         return
     fi
     marker=$(/usr/sbin/debugfs -R 'cat /work/marker.txt' "$image" 2>/dev/null | tr -d '\r\n')
     if [[ "$marker" == fs-root-helper-marker-* ]]; then
-        note_pass "fs-root-helper control: specific marker '$marker' round-tripped through the mount and the write-back"
+        note_pass "fs-root-helper control: marker '$marker' round-tripped through the mount and the write-back"
     else
         note_fail "fs-root-helper control: expected a fs-root-helper-marker-* line in the written-back image, got '$marker'"
     fi
 }
 
+# --- perturbations: scratch copies, root-owned, never the installed one --
+#
+# Each must make its case fail. The case's own observe_* prints nothing,
+# so an expected failure here is one PASS line, never a bare FAIL token.
+perturbed() {
+    local name=$1 from=$2 to=$3
+    sed "s|$from|$to|" "$WRAPPER" > "$WORK/perturb-$name" || return 1
+    local differ=0
+    cmp -s "$WRAPPER" "$WORK/perturb-$name" || differ=$?
+    if [ "$differ" -ne 1 ]; then
+        echo "perturbation $name matched nothing" >&2
+        return 1
+    fi
+    sudo -n install -o root -g root -m 0755 "$WORK/perturb-$name" "$PERTURB/$name"
+    echo "$PERTURB/$name"
+}
+
+run_perturbations() {
+    local helper result
+    PERTURB=$(sudo -n mktemp -d /var/tmp/astra-qemu-root-test-perturb.XXXXXX)
+    if helper=$(perturbed pidfile-in-caller-dir \
+            'PIDFILE=$R/qemu.pid' 'PIDFILE=$(dirname -- "$IMAGE")/qemu.pid'); then
+        result=$(observe_planted "$helper" perturbed)
+        if [ "$result" != unchanged ]; then
+            note_pass "fs-root-helper perturbation (pidfile in caller dir): planted-symlinks case caught it (${result#changed })"
+        else
+            note_fail "fs-root-helper perturbation (pidfile in caller dir): planted-symlinks case did NOT notice -- no teeth"
+        fi
+    else
+        note_fail "fs-root-helper perturbation (pidfile in caller dir): could not build"
+    fi
+
+    # Drops the uid but leaves the gid root: a check of the real uid alone
+    # passes this. (`--ruid` is no perturbation: util-linux 2.39 setpriv
+    # sets all four uids from it, and the next exec clears the caps.)
+    if helper=$(perturbed uid-only \
+            ' --regid="$SUDO_GID"' ''); then
+        result=$(observe_creds "$helper" perturbed)
+        if [ "$result" != yes ]; then
+            note_pass "fs-root-helper perturbation (gid left root): creds case caught it (${result#no })"
+        else
+            note_fail "fs-root-helper perturbation (gid left root): creds case did NOT notice -- no teeth"
+        fi
+    else
+        note_fail "fs-root-helper perturbation (gid left root): could not build"
+    fi
+}
+
 LOOP_BEFORE=$(sudo -n losetup -a | wc -l)
+DIRS_BEFORE=$(helper_dirs)
 
-run_test_a "$WRAPPER" fixed "$CALLER_UID"
-run_test_b
-run_test_c
-perturb_c_demonstrate_old_pattern
-run_test_d
-run_test_e
-check_no_loop_leak "$LOOP_BEFORE"
+run_test_creds
+run_test_images
+run_test_growing
+run_test_planted
+run_test_work_symlink
+run_test_cleanup
+run_test_control
+run_perturbations
 
-# Perturbation for (a): reconstruct the pre-redesign behavior (root execs
-# the command directly, no setpriv drop) as a throwaway scratch script --
-# never installed -- and show the SAME observe_uid() this test always
-# uses, asserting the SAME property it always asserts (the process runs
-# as the caller), correctly reports that this one never does: test (a)
-# is proven to have teeth, not just to pass because nothing is actually
-# checked. observe_uid() itself never prints PASS/FAIL (see its own
-# comment above) -- only the single line below does, so this always-
-# expected "no" prints exactly one clean PASS line, never a bare FAIL
-# token a suite's log scan would mistake for a real failure.
-cat > "$WORK/vulnerable-root-exec.sh" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-export PATH=/usr/sbin:/usr/bin:/sbin:/bin
-die() { echo "astra-qemu-root: $*" >&2; exit 64; }
-[ "$(id -u)" -eq 0 ] || die "run through sudo"
-IMAGE= MOUNT=
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --image) IMAGE=$2; shift 2 ;;
-        --mount) MOUNT=$2; shift 2 ;;
-        --env) shift 2 ;;
-        --) shift; break ;;
-        *) die "unknown option $1" ;;
-    esac
-done
-QEMU=$(realpath -e -- "$1"); shift
-# VULNERABLE RECONSTRUCTION, for this test's own perturbation only: runs
-# the command as root, the way the pre-redesign wrapper did. Never
-# installed anywhere.
-"$QEMU" "$@" &
-child=$!
-echo "$child" > "$(dirname -- "$MOUNT")/qemu.pid"
-chmod 0644 -- "$(dirname -- "$MOUNT")/qemu.pid"
-set +e
-wait "$child"
-status=$?
-set -e
-exit "$status"
-EOF
-chmod 755 "$WORK/vulnerable-root-exec.sh"
-sudo -n install -o root -g root -m 0755 \
-    "$WORK/vulnerable-root-exec.sh" /usr/local/sbin/astra-qemu-root-vulnerable-test
-vuln_result=$(observe_uid /usr/local/sbin/astra-qemu-root-vulnerable-test \
-    vulnerable "$CALLER_UID")
-sudo -n rm -f /usr/local/sbin/astra-qemu-root-vulnerable-test
-vuln_matched=${vuln_result%% *}
-vuln_seen=${vuln_result#* }
-if [ "$vuln_matched" = no ]; then
-    note_pass "fs-root-helper perturbation (a): the vulnerable (root-exec) reconstruction was correctly caught running as uid $vuln_seen, not the caller"
+LOOP_AFTER=$(sudo -n losetup -a | wc -l)
+if [ "$LOOP_BEFORE" = "$LOOP_AFTER" ]; then
+    note_pass "fs-root-helper loop devices: count unchanged ($LOOP_AFTER)"
 else
-    note_fail "fs-root-helper perturbation (a): the vulnerable reconstruction was NOT caught (ran as the caller's own uid) -- the uid test has no teeth"
+    note_fail "fs-root-helper loop devices: count changed $LOOP_BEFORE -> $LOOP_AFTER"
+fi
+DIRS_AFTER=$(helper_dirs)
+if [ "$DIRS_BEFORE" = "$DIRS_AFTER" ]; then
+    note_pass "fs-root-helper /var/tmp: no helper directory left behind"
+else
+    note_fail "fs-root-helper /var/tmp: helper directories changed: $DIRS_BEFORE -> $DIRS_AFTER"
 fi
 
 echo "ASTRA-QEMU-ROOT-HELPER-TEST passed $PASS failed $FAIL"

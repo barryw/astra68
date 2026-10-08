@@ -119,10 +119,11 @@ def main():
         image = os.path.join(work, "card.img")
         shutil.copyfile(arguments.image, image)
         astra_image.install_test_command(image, "fssem")
-        launcher, mount, provider = qemu_runtime.root_provider(work)
+        launcher, provider = qemu_runtime.root_provider(work)
         run = tempfile.mkdtemp(prefix="astra-fs-run-", dir="/tmp")
         machine = terminal.Machine(arguments.qemu, arguments.rom, image, run,
-                                   launcher=launcher, hostfs_root=mount)
+                                   launcher=launcher)
+        mount = machine.reader.hostfs_root
         try:
             if not terminal.open_terminal(machine, 120, 60):
                 fail("no terminal")

@@ -718,13 +718,19 @@ class TraceReader:
             time.sleep(0.25)
 
 
+LAUNCHER_MOUNT = "ASTRA-QEMU-ROOT-MOUNT "
+
+
 class Machine:
     def __init__(self, qemu, rom, image, socket_directory, extra_args=(),
                  hostfs_root=None, debug_guest=False, launcher=()):
         # Resolve every source-relative input before starting QEMU.  A missing
-        # catalog must not leave a live emulator behind.
-        hostfs_root = hostfs_root or os.environ.get(
-            "ASTRA_HOSTFS_ROOT", os.path.join(socket_directory, "hostfs"))
+        # catalog must not leave a live emulator behind.  A launcher
+        # (qemu_runtime.root_provider) chooses the HostFS root itself and
+        # announces it as its first line, before QEMU starts.
+        if not launcher:
+            hostfs_root = hostfs_root or os.environ.get(
+                "ASTRA_HOSTFS_ROOT", os.path.join(socket_directory, "hostfs"))
         self.reader = TraceReader(
             lambda line: self.qmp.monitor(line),
             os.path.join(socket_directory, "ring.bin"),
@@ -747,6 +753,15 @@ class Machine:
         self.process = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1, env=environment)
+        if launcher:
+            announced = self.process.stdout.readline()
+            if not announced.startswith(LAUNCHER_MOUNT):
+                self.process.kill()
+                self.process.wait()
+                shutil.rmtree(self.runtime_directory)
+                raise RuntimeError("launcher failed: %r%s" % (
+                    announced, self.process.stdout.read()[-400:]))
+            self.reader.hostfs_root = announced[len(LAUNCHER_MOUNT):].strip()
         self.serial = queue.Queue()
         self.log = []
         self._pump_thread = threading.Thread(target=self._pump, daemon=True)

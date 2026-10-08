@@ -218,10 +218,12 @@ must not export the same live filesystem to a guest raw writer or open a second
 writable image mount. QEMU image-based qualification uses a Linux-mounted image
 or equivalent Linux filesystem provider, not the retired guest engine. QEMU
 gates on `beast` run QEMU itself as the unprivileged caller -- never as root
--- through a drop-privilege helper (`tools/astra-qemu-root`): the helper's
-only root action is the loop mount, after which it `setpriv`-drops to the
-caller before QEMU ever executes, so QEMU opens every file, including its
-own `-bios`/`-drive`/`-qmp` paths, with the caller's own permissions. The
+-- through a drop-privilege helper (`tools/astra-qemu-root`): root acts
+only inside its own `/var/tmp` directory (the image copy, the loop mount
+and its removal), the caller's image is read and written back with the
+caller's credentials, and the helper `setpriv`-drops to the caller before
+QEMU ever executes, so QEMU opens every file, including its own
+`-bios`/`-drive`/`-qmp` paths, with the caller's own permissions. The
 gates exercise a real Linux mount without widening what sudo access on
 `beast` can reach.
 
@@ -778,9 +780,9 @@ adapter over those same operations. Each acceptance family includes success,
 refusal, resource exhaustion, and cleanup where applicable.
 
 QEMU gates run QEMU itself as the unprivileged caller on Beast, never as
-root, through a drop-privilege helper (`tools/astra-qemu-root`) whose only
-root action is the loop mount; QEMU `setpriv`-drops to the caller before it
-ever executes (FS11). A gate that passes under this posture has exercised a
+root, through a drop-privilege helper (`tools/astra-qemu-root`) whose root
+actions stay inside its own `/var/tmp` directory; QEMU `setpriv`-drops to
+the caller before it ever executes (FS11). A gate that passes under this posture has exercised a
 real Linux mount.
 
 | Acceptance family | Required evidence |

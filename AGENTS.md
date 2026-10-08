@@ -34,26 +34,26 @@
   and run QEMU as the caller -- QEMU never runs as root, on beast or on
   the board: `tools/astra-qemu-root` (installed as
   `/usr/local/sbin/astra-qemu-root`, allowed by
-  `/etc/sudoers.d/astra-qemu-root`) reads the caller's image with the
-  caller's own credentials (`setpriv --reuid/--regid`) into a root-owned
-  scratch copy beside it, loop-mounts that copy at the caller's `--mount`
-  directory, then `setpriv`-drops to the caller before exec'ing QEMU
-  inside its own private mount namespace, so QEMU opens every file --
-  its own `-bios`/`-drive`/`-qmp` paths and everything under the provider
-  mount -- with the caller's own permissions, never root's. The mount
-  stays visible system-wide for the run's duration rather than being
-  hidden: unmounting it from the wrapper's own namespace the moment a
-  QEMU child's private copy existed raced the host side of QEMU's own
-  HostFS init and broke the desktop boot every time, while leaving it in
-  place boots cleanly; the loop device and scratch copy are still always
-  removed when the run ends, success or not. Both the scratch copy and
-  the mount point must be on real disk, never tmpfs (`/run`): a
-  loop-mounted ext4 image backed by a tmpfs file breaks the same HostFS
-  path. The mounted image must already contain `work`/`sound`
-  (qemu_runtime.py's `root_provider` populates them at `mkfs.ext4 -d`
-  time); the wrapper only checks for them without following a symlink,
-  it never creates anything inside the mount. Reinstall it with `sudo
-  install -o root -g root -m 0755 tools/astra-qemu-root
+  `/etc/sudoers.d/astra-qemu-root`) treats the caller as hostile. Root
+  opens, creates, mounts and unmounts only under its own
+  `mktemp -d /var/tmp/astra-qemu-root.XXXXXX` directory (root:root 0711),
+  never in a directory the caller can modify. A caller-credential reader
+  (`setpriv --reuid/--regid --no-new-privs`) opens the image no-follow,
+  refuses anything but a regular file, and sends exactly its fstat size
+  into root's `R/img`; that is loop-mounted at `R/mnt`
+  (nodev,nosuid,noexec), announced on the helper's first stdout line
+  (`ASTRA-QEMU-ROOT-MOUNT R/mnt`, which `test-terminal.Machine` reads),
+  and QEMU runs as the caller in its own private mount namespace, its
+  pid in `R/qemu.pid`. Afterwards a caller-credential `tee` writes
+  `R/img` back to the image, and the mount, loop device and `R` are
+  removed, success or not. The mount stays visible system-wide for the
+  run: unmounting it once QEMU's private copy existed raced QEMU's
+  HostFS init and broke the desktop boot. `R` is on real disk, never
+  tmpfs (`/run`): a loop-mounted image backed by a tmpfs file breaks the
+  same HostFS path. The image must already contain `work`/`sound`
+  (qemu_runtime.py's `root_provider` makes them at `mkfs.ext4 -d` time);
+  the helper never creates anything inside the mount. Reinstall it with
+  `sudo install -o root -g root -m 0755 tools/astra-qemu-root
   /usr/local/sbin/` after any change; gates refuse a stale copy.
 
 ## Kernel Development Discipline

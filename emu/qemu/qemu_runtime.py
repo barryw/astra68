@@ -29,22 +29,20 @@ ROOT_WRAPPER_SOURCE = os.path.join(
 
 
 def root_provider(work, size_mib=256):
-    """A fresh ext4 provider image and its empty mount point in `work`,
-    `work`/`sound` pre-populated at mkfs time, owned by the caller.
+    """A fresh ext4 provider image in `work`, `work`/`sound` pre-populated
+    at mkfs time, its root owned by the caller.
 
-    `work` must be a caller-owned 0700 directory directly under /tmp (what
-    tempfile.mkdtemp(dir="/tmp") makes). Returns (launcher prefix, mount
-    point, image): the prefix runs QEMU through astra-qemu-root, which
-    loop-mounts the image at the mount point (on real disk -- /tmp, not a
-    tmpfs path like /run: a loop-mounted ext4 image backed by a tmpfs
-    file breaks HostFS's write-back path under QEMU, confirmed by booting
-    to the desktop on /tmp against the identical setup on /run, which
-    hangs before the desktop ever places an icon), then runs QEMU as the
-    caller, never as root (FS11), inside QEMU's own private mount
-    namespace. `work`/`sound` are pre-populated here, at mkfs time
-    (`-d`), because the wrapper never creates anything inside the mounted
-    filesystem itself. Explicit features keep the image mountable by the
-    board's e2fsprogs 1.46 (.superpowers/sdd/fs-linux-audit.md G15).
+    Returns (launcher prefix, image). The prefix runs QEMU through
+    astra-qemu-root, which loop-mounts a root-owned copy of the image
+    under its own /var/tmp directory, announces the mount point as its
+    first stdout line (`ASTRA-QEMU-ROOT-MOUNT PATH`, which
+    test-terminal.Machine reads), then runs QEMU as the caller, never as
+    root (FS11), inside QEMU's own private mount namespace, and finally
+    writes the copy back to `image` with the caller's credentials.
+    `work`/`sound` are made here because the helper never creates
+    anything inside the mounted filesystem. Explicit features keep the
+    image mountable by the board's e2fsprogs 1.46
+    (.superpowers/sdd/fs-linux-audit.md G15).
     """
     with open(ROOT_WRAPPER, "rb") as installed, \
             open(ROOT_WRAPPER_SOURCE, "rb") as source:
@@ -55,12 +53,9 @@ def root_provider(work, size_mib=256):
     os.makedirs(os.path.join(seed, "work"))
     os.makedirs(os.path.join(seed, "sound"))
     image = os.path.join(work, "provider.img")
-    mount = os.path.join(work, "provider")
-    os.mkdir(mount)
     with open(image, "wb") as handle:
         handle.truncate(size_mib * 1024 * 1024)
     subprocess.run(["/usr/sbin/mkfs.ext4", "-q", "-F", "-O", "^orphan_file",
                     "-E", "root_owner=%d:%d" % (os.getuid(), os.getgid()),
                     "-d", seed, image], check=True)
-    return (["sudo", "-n", ROOT_WRAPPER, "--image", image, "--mount", mount,
-             "--"], mount, image)
+    return ["sudo", "-n", ROOT_WRAPPER, "--image", image, "--"], image
