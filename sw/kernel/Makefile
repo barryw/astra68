@@ -63,7 +63,8 @@ KERNEL_HOST_TESTS = \
 	$(BUILD_DIR)/test_generation $(BUILD_DIR)/test_format \
 	$(BUILD_DIR)/test_allocation $(BUILD_DIR)/test_memory \
 	$(BUILD_DIR)/test_mmio $(BUILD_DIR)/test_trace $(BUILD_DIR)/test_irq \
-	$(BUILD_DIR)/test_platform $(BUILD_DIR)/test_interrupt \
+	$(BUILD_DIR)/test_platform $(BUILD_DIR)/test_boot_progress \
+	$(BUILD_DIR)/test_interrupt \
 	$(BUILD_DIR)/test_monitor $(BUILD_DIR)/test_dma $(BUILD_DIR)/test_block \
 	$(BUILD_DIR)/test_device $(BUILD_DIR)/test_vm \
 	$(BUILD_DIR)/test_exception $(BUILD_DIR)/test_fault \
@@ -380,6 +381,7 @@ test: $(KERNEL_HOST_TESTS)
 	./$(BUILD_DIR)/test_trace
 	./$(BUILD_DIR)/test_irq
 	./$(BUILD_DIR)/test_platform
+	./$(BUILD_DIR)/test_boot_progress
 	./$(BUILD_DIR)/test_interrupt
 	./$(BUILD_DIR)/test_monitor
 	./$(BUILD_DIR)/test_dma
@@ -494,6 +496,13 @@ $(BUILD_DIR)/test_platform: tests/test_platform.c platform.c platform.h \
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-DKERNEL_PLATFORM_HOST_TEST=1 -DKERNEL_MMIO_HOST_TEST=1 \
 		-I. -I../include mmio.c platform.c tests/test_platform.c -o $@
+
+$(BUILD_DIR)/test_boot_progress: tests/test_boot_progress.c \
+                                 ../include/astra/boot_progress.h \
+                                 ../include/astra/display.h \
+                                 ../include/astra/supervisor.h | $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
+		-I. -I../include tests/test_boot_progress.c -o $@
 
 $(BUILD_DIR)/test_interrupt: tests/test_interrupt.c interrupt.c interrupt.h trace.h \
 			 irq.c irq.h monitor.h platform.c platform.h mmio.c mmio.h \
