@@ -29,9 +29,20 @@ The boot-supplied supervisor and every later protected loader use this same
 contract. General ELF parsing remains userspace policy; Axiom validates the
 final mappings, entry, stack, handles, and startup block before publication.
 
+## Filesystem Kit ABI 5.0
+
+`filesystem.library.5` removes the host direct path. `AstraVfsClient` loses
+the `port_direct_*`, `direct_backend_*` and `port_accelerator_ops` fields and
+`AstraVfsPortLane` loses its direct area, so the layouts change and the major
+moves. Storage protocol 27 never attaches a capability to HELLO: every request
+for a host volume reaches the provider through HostFS, which enforces the
+grant (docs/FILESYSTEM_PRODUCTION_PRD.md FS44). Connect with
+`astra_vfs_port_connect` (eager) or `astra_vfs_client_connect_service` (HELLO
+fused with the first operation).
+
 ## Filesystem Kit ABI 3.0
 
-`filesystem.library.4` replaces the fixed startup-sized `AstraAssignTable`
+ABI 3 replaces the fixed startup-sized `AstraAssignTable`
 array with a growable pointer/count/capacity table and adds
 `astra_assign_table_destroy`. The startup page bounds only the namespace
 records delivered at launch; aliases, union members, and mounts added later

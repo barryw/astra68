@@ -35,7 +35,6 @@
  */
 
 struct AstraVfsClient;
-struct AstraVfsBackendOps;
 
 /**
  * Exchange one VFS request with a backend transport.
@@ -102,28 +101,9 @@ typedef struct AstraVfsPortLane {
     uint32_t area_send;
     void *area_address;
     uint32_t area_size;
-    uint32_t direct_area;
-    void *direct_address;
-    uint32_t direct_size;
     /** @endcond */
 } AstraVfsPortLane;
-/** Optional transport accelerator used behind the VFS client contract. */
-typedef struct AstraVfsPortAcceleratorOps {
-    /** Establish an accelerated device session. */
-    uint32_t (*connect)(struct AstraVfsClient *client, uint32_t device);
-    /** Disconnect a clean accelerated session. */
-    void (*disconnect)(struct AstraVfsClient *client);
-    /** Abandon a failed accelerated session without further I/O. */
-    void (*abandon)(struct AstraVfsClient *client);
-    /** Exchange one metadata request and reply. */
-    uint32_t (*transport)(struct AstraVfsClient *client, uint32_t operation,
-                          const AstraVfsRequest *request,
-                          AstraVfsReply *reply);
-    /** Exchange one request carrying bulk data. */
-    uint32_t (*bulk)(struct AstraVfsClient *client, uint32_t operation,
-                     const AstraVfsRequest *request, void *buffer,
-                     uint32_t capacity, AstraVfsReply *reply);
-} AstraVfsPortAcceleratorOps;
+
 
 /** Connected VFS client with independent per-thread in-flight state. */
 typedef struct AstraVfsClient {
@@ -142,17 +122,7 @@ typedef struct AstraVfsClient {
     uint32_t activity;
     /* Private state used by astra_vfs_port_connect/transport. */
     uint8_t port_area_capable;
-    uint8_t port_direct_detached;
     uint32_t port_service;
-    void *port_direct_address;
-    uint32_t port_direct_area;
-    uint32_t port_direct_device;
-    uint32_t port_direct_session;
-    uint32_t port_direct_lock __attribute__((aligned(4)));
-    const struct AstraVfsBackendOps *direct_backend_ops;
-    void *direct_backend_context;
-    uint32_t (*direct_backend_enter)(struct AstraVfsClient *client);
-    void (*direct_backend_leave)(struct AstraVfsClient *client);
     uint32_t port_connect_lock;
     volatile uint32_t port_connecting __attribute__((aligned(4)));
     volatile uint32_t port_inflight __attribute__((aligned(4)));
@@ -160,7 +130,6 @@ typedef struct AstraVfsClient {
     volatile uint32_t port_lifecycle __attribute__((aligned(4)));
     volatile uint32_t port_thread_lock __attribute__((aligned(4)));
     volatile uint32_t port_lane_lock __attribute__((aligned(4)));
-    const AstraVfsPortAcceleratorOps *port_accelerator_ops;
     AstraVfsPortThreadState *port_thread_states;
     uint32_t port_thread_capacity;
     AstraVfsPortLane port_lanes[ASTRA_PROCESS_THREAD_SLOT_COUNT];
