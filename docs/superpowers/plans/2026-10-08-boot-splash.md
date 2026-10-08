@@ -8,127 +8,164 @@ counted boot steps, never by time. The text console appears only on failure.
 
 **Architecture:**
 
-- **Record.** One 8-byte progress record sits in the unused tail of the
-  shared 4 KiB text page (guest `0xFFF22000`, the file
-  `/run/astra/post-text.bin` on the board). Its layout is in
-  `sw/include/astra/boot_progress.h`, shared by the ROM, the kernel and the
-  ARM helper.
-- **Writers.** The ROM creates the record at `screen_init` and counts POST
-  steps. At handoff the ROM stops, and from then on the kernel is the only
-  writer. The kernel counts its own steps, the supervisor stages, and one step
-  per boot service.
-- **Exact total.** Before the first service launch, the supervisor resolves
-  the whole launch list and announces its length N. The kernel then fixes
-  `total = step + N + 1`, where the `+1` is stage 8.
-- **Drawer.** `astra-terminal-display` draws the RGB565 splash plus the bar.
-  It stops at the guest's first frame through the existing `display_owned`
-  handoff. It shows the text page when the record says FAILED, after a panic,
-  or when the record has a version it cannot read.
+- **Record.** One 8-byte progress record lives in the unused tail of the
+  shared 4 KiB text page: guest address `0xFFF22000`, the file
+  `/run/astra/post-text.bin` on the board. Its layout is defined in
+  `sw/include/astra/boot_progress.h`, which the ROM, the kernel and the ARM
+  helper all include.
+- **Two phases, as Haiku does it.** Haiku's `boot_splash_set_stage`
+  (`~/Git/haiku/src/system/kernel/boot_splash.cpp:67-94`) lights a fixed
+  slice `width * stage / MAX` for each stage of a fixed enum
+  (`headers/private/kernel/boot_splash.h:14-24`). Astra does the same with
+  two phases:
+  - **Fixed phase, first 30% of the bar.** 21 steps known at compile time:
+    the ROM's 10 (9 POST checks and the kernel image load), the kernel's 4,
+    and supervisor stages 1-7. Each step is one equal increment.
+  - **Services phase, last 70%.** It is divided evenly into N parts once the
+    supervisor announces N. Stage 8 (DONE) is 100%.
+- **Record fields.** The record keeps the counts, not a fill:
+  - fixed step;
+  - an `announced` flag;
+  - service count N;
+  - services done.
 
-Haiku model:
+  The helper computes the fill with `astra_boot_progress_fill`, a function
+  in the shared header. Every transition leaves the 32-bit value no smaller
+  than it was. DONE is exact: all 21 fixed steps, an announcement, and
+  exactly N service reports.
+- **Who writes.** The ROM creates the record and counts its steps. It stops
+  writing at handoff, and from then on the kernel is the only writer.
+- **The helper.** The ARM helper `astra-terminal-display` draws the RGB565
+  splash and the bar. It stops at the guest's first frame through the
+  existing `display_owned` handoff. It shows the text page instead when the
+  record says FAILED, after a panic, or when the record version is unknown.
 
-- `boot_splash_set_stage` (`~/Git/haiku/src/system/kernel/boot_splash.cpp:67-94`)
-  lights the bar slice `width * stage / MAX`, from a fixed stage enum
-  (`headers/private/kernel/boot_splash.h:14-24`). app_server then draws over
-  it.
-- **Deviation, with its reason:** Haiku's stage count is a compile-time
-  enum. Astra's service count is data: the manifest on the volume plus the
-  user's `/config/services`. So the total is fixed when the supervisor
-  announces it, not when the kernel is built.
+**Deviation from Haiku, with the reason.** Haiku's whole stage count is a
+compile-time enum. Astra's service count is data: the manifest on the volume
+plus the user's `/config/services`. So only the 70% services share is
+divided at run time.
 
 Design: `/Users/barry/Git/astra68/.superpowers/sdd/boot-splash-design.md`.
 Facts: `/Users/barry/Git/astra68/.superpowers/sdd/splash-investigation.md`.
 
-**Tech Stack:** C11 freestanding (ROM, kernel), m68k-astra-gcc on `beast`,
-C11 Linux (aarch64 helper, host-built self-test), Python 3 gates on QEMU 9.2.4
-`astra68`.
+**Tech Stack:** C11 freestanding (ROM, kernel), m68k-astra-gcc on `beast`;
+C11 Linux (the aarch64 helper and its host-built self-test); Python 3 gates
+on QEMU 9.2.4 `astra68`.
 
 ## Global Constraints
 
-- **Scope.** DE25 only. QEMU-on-host stays headless and has no helper. Arty
-  is untouched: the helper's splash argument is optional, and the Arty
+- **Scope.** DE25 only. QEMU-on-host stays headless and runs no helper.
+  Arty is untouched: the helper's splash argument is optional, and the Arty
   release ships no splash.
-- **Look.** Use `sw/boot/assets/astra_boot_splash_1920x1080_blank.png`,
-  packed by `sw/boot/pack_arty_splash.py` to big-endian RGB565 (4,147,200
-  bytes). No new art.
-  - The bar is thin and horizontal, inside the art's lower panel: x 420,
-    y 834, 880 x 6 px.
-  - Track color is RGB565 `0x1187`; fill color is `0x4F3E`.
-- **Text console.** It appears only on failure: state FAILED, a kernel panic
-  (`ASTRA_DISPLAY_PANIC_TEXT`), or a record version the helper cannot read.
-  Serial output is unchanged except for one new kernel line,
-  `Boot services ....... N to start`.
-- **Progress is counted, never timed.** Nothing in this plan reads a clock to
-  move the bar.
+- **Look.**
+  - Art: `sw/boot/assets/astra_boot_splash_1920x1080_blank.png`, packed by
+    `sw/boot/pack_arty_splash.py` to big-endian RGB565 (4,147,200 bytes). No
+    new art.
+  - Bar: thin, horizontal, inside the art's lower panel. Position x 420,
+    y 834, size 880 x 6 px. Track color RGB565 `0x1187`, fill `0x4F3E`.
+    These are tuned on the board in Task 8.
+- **Text console only on failure:**
+  - the record's state is FAILED;
+  - a kernel panic (`ASTRA_DISPLAY_PANIC_TEXT`);
+  - a record version the helper does not know.
+
+  A failure that happens after the guest's first frame stays in the record
+  and the log only. That is accepted; `DEBUGGING.md` says so. Serial output
+  is unchanged except for one new line, `Boot services ....... N to start`.
+- **Progress is counted, never timed.** No clock moves the bar. The bar
+  never moves backwards.
 - **Record ABI (`sw/include/astra/boot_progress.h`), verbatim:**
-  - Header word at text-page offset `0xFE0`. Value word at `0xFE4`.
-  - Both are big-endian 32-bit words, naturally aligned, inside the unused
-    bytes 2700..4087. The cells are 0..2699 and the cursor block is
-    4088..4095.
-  - Header is `0x42500001`: magic `"BP"` (`0x4250`) in the high half, version
-    1 in the low half.
-  - Value bits: 31..28 state (0 BOOTING, 1 DONE, 2 FAILED); 27..24 zero;
-    23..12 total (0 means not yet announced); 11..0 step.
+  - Header word at text-page offset `0xFE0`, value word at `0xFE4`. Both are
+    big-endian, naturally aligned, and sit in the unused bytes 2700..4087.
+    The cells are 0..2699 and the cursor block is 4088..4095.
+  - Header = `0x42500001`: magic `"BP"` (`0x4250`) in the high half,
+    version 1 in the low half.
+  - Value bit layout:
+
+    | Bits | Field |
+    |---|---|
+    | 31..28 | state: 0 BOOTING, 1 DONE, 2 FAILED |
+    | 27 | announced |
+    | 26..21 | fixed step (0..21) |
+    | 20 | zero |
+    | 19..10 | service count N (0..1023) |
+    | 9..0 | services done |
+
+  - Fixed-phase steps: `ROM_STEPS` 10, `KERNEL_STEPS` 4,
+    `FIXED_STEPS` = 10 + 4 + `ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED` (7)
+    = 21.
+  - Fill in pixels of bar width W: W when DONE; otherwise
+    `W*300*fixed/(1000*21)` + (once announced and N > 0)
+    `W*700*done/(1000*N)`, capped at W.
+  - DONE at stage 8 if and only if announced, `fixed == 21` and
+    `done == N`. Anything else at stage 8 is FAILED.
   - Every legal transition leaves the 32-bit value greater than or equal to
-    what it was.
+    its previous value.
 - **One writer at a time.**
   - The ROM writes from `screen_init` until `boot_kernel_handoff`.
-  - The kernel adopts the record only if the header is exactly `0x42500001`.
-    From then on it is the sole writer.
+  - The kernel adopts the record only if the header is exactly
+    `0x42500001`, and marks it FAILED if the ROM did not count exactly 10
+    steps. From then on the kernel is the sole writer.
   - Writes happen only when `SYS_VIDEO_READY` and `VEGA_CAP_POST_TEXT` are
-    set, the condition text output already uses.
+    set, the same condition text output already uses.
 - **Memory ordering.**
-  - The writer publishes the value with one aligned 32-bit store: m68k
-    `move.l`, which TCG turns into one host store into the `RAM_SHARED` file
-    mapping. An aligned 32-bit access is single-copy atomic on Armv8 and x86.
+  - The writer publishes the value with one aligned 32-bit store: an m68k
+    `move.l` becomes one host store into QEMU's `RAM_SHARED` file mapping.
+    An aligned 32-bit access is single-copy atomic on Armv8 and x86.
   - The ROM writes the value (0) before the header. The header never changes
     after that, and `run-arty.sh` zeroes the page before every QEMU start.
   - The helper reads each word with one
-    `__atomic_load_n(..., __ATOMIC_RELAXED)` on a `volatile const uint32_t *`,
-    then converts from big-endian. Acquire is not needed: no other data is
-    read on the strength of this word, and the text cells keep their own
-    sequence protocol (`display.h:261-285`).
-  - The Python gate reads a word twice and accepts it only when both reads
+    `__atomic_load_n(..., __ATOMIC_RELAXED)` on a `volatile const uint32_t *`
+    and converts from big-endian. Acquire is not needed: nothing else is read
+    on the strength of this word, and the text cells keep their own sequence
+    protocol (`display.h:261-285`).
+  - The Python gate reads each word twice and accepts it only when both reads
     agree.
 - **Syscall ABI.**
   - `ASTRA_SYSCALL_PROGRESS` gains boot commands, encoded in `data[1]` by
-    prefix, the same way the qualification commands are
+    prefix the same way the qualification commands are
     (`sw/kernel/qualification.h:83-84`):
     - mask `0xffff0000`, prefix `0x42530000` (`"BS"`);
-    - operation in bits 15..12: `0x1000` SERVICES (argument N),
-      `0x2000` SERVICE (argument 0 READY, 1 FAILED, 2 SKIPPED);
+    - operation in bits 15..12: `0x1000` SERVICES (argument N), `0x2000`
+      SERVICE (argument 0 READY, 1 FAILED, 2 SKIPPED);
     - argument in bits 11..0.
-  - Only the registered initial image may send them. Any other process gets
+  - Only the registered initial image may send them; any other process gets
     `ASTRA_SYSCALL_ACCESS_DENIED`.
-  - The change is additive, so `ASTRA_SYSCALL_ABI_VERSION` goes from
-    `0x00010040u` to `0x00010041u`. This is the precedent: `1707179a` went
-    3F to 40 for new syscalls.
-  - Every in-tree consumer checks the version for exact equality, so
+  - The change is additive: `ASTRA_SYSCALL_ABI_VERSION` goes
+    `0x00010040u` to `0x00010041u`, following the precedent `1707179a` set
+    (3F to 40 for new syscalls). Consumers check for exact equality, so
     everything is rebuilt together. Commit with `!`.
-- **Launch order and behavior** stay as they are: storage, then the manifest
-  in file order (minus `trusted` and policy-skipped entries), then
-  `/config/services` definitions in scan order. The existing gates prove it.
+- **Launch order and behavior stay unchanged.** Storage starts first, then
+  the manifest in file order (minus `trusted` and policy-skipped entries),
+  then `/config/services` definitions in scan order. The existing gates
+  prove it.
 - **Kernel arithmetic.** The kernel links no libgcc. The record code uses
-  only constant shifts, masks and 32-bit adds (`CLAUDE.md`).
-- **Building on beast.**
-  - Builds and tests run on `beast`, one at a time, under the build lock.
-  - Every `~/astra-mg` script builds in `/home/barry/Git/astra68`, which
-    another agent also syncs. So sources are staged to
-    `beast:/home/barry/Git/astra68-splash/` and mirrored into the canonical
-    tree by `~/astra-mg/splash-run` (Task 0). The script holds the lock
-    across the copy and the command.
+  only constant shifts, masks and 32-bit adds (`CLAUDE.md`). The fill's
+  divisions run only in the helper and the tests.
+- **beast: isolation.** The splash work never builds in
+  `beast:~/Git/astra68`, where a filesystem branch builds concurrently.
+  - It uses its own tree, `~/Git/astra68-splash`, its own images in
+    `~/astra-mg/splash/`, its own logs under `/tmp/splash/mg-`, and its own
+    QEMU cache `~/.cache/astra68/qemu-9.2.4-splash`.
+  - Every command runs through `~/astra-mg/splash-env` (Task 0). It sets
+    those paths and takes the shared build lock, so only one build runs at a
+    time across both branches.
   - Mac sync, from `/Users/barry/Git/astra68-splash`:
     `rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/`
-  - Build userspace before `sw/boot` (`build-all.sh` does).
+    Never sync while one of this branch's own builds is running.
+  - Build userspace before `sw/boot`; `build-all.sh` does this.
   - Run `make -C sw/kernel clean` between the m68k build and the kernel host
     tests.
-- **QEMU.** This plan does not change `astra68.c`. Use the host binary named
-  by `tail -n1 /tmp/qemu-host-build.log`.
+- **QEMU.** This plan does not change `astra68.c`. The splash QEMU host
+  binary is named by the last line of `$ASTRA_QEMU_BUILD_LOG`, which is
+  `/tmp/splash/mg-qemu-host-build.log` under `splash-env`.
+- **Board.** The DE25 runs Ubuntu 22.04 (`CLAUDE.md:59`). It is reached as
+  `root@192.168.1.52` from beast.
 - **Never commit with failing tests.** Every task ends green on beast.
-- **Commits** end with
+- **Commit trailer.** Every commit ends with
   `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
 - **Perturbation.** Every behavior change gets a step that breaks it on
-  purpose, sees the expected failure, and reverts.
+  purpose, sees the expected failure, and then reverts.
 
 ---
 
@@ -136,112 +173,315 @@ C11 Linux (aarch64 helper, host-built self-test), Python 3 gates on QEMU 9.2.4
 
 | File | Responsibility |
 |---|---|
-| `sw/include/astra/boot_progress.h` (new) | Record layout, header, state values, and the pure transitions shared by ROM, kernel and helper |
+| `sw/include/astra/boot_progress.h` (new) | Record layout, phase constants, the pure transitions and `astra_boot_progress_fill`, shared by ROM, kernel and helper |
 | `sw/include/astra/syscall.h` | `ASTRA_PROGRESS_BOOT_*` commands; ABI `0x00010041u` |
-| `sw/kernel/platform.c`, `platform.h` | `kernel_platform_post_text_read32/write32` (aligned word access to the text page) |
-| `sw/kernel/boot_progress.c`, `boot_progress.h` (new) | Kernel side: adopt, step, stage, command, fail |
-| `sw/kernel/kernel.c` | Kernel steps, panic and degraded exit mark FAILED, stage hook, boot-command wrapper and its console line |
+| `sw/kernel/platform.c`, `platform.h` | `kernel_platform_post_text_read32/write32` |
+| `sw/kernel/boot_progress.c`, `boot_progress.h` (new) | Kernel side of the record: adopt, step, stage, command, fail |
+| `sw/kernel/kernel.c` | Kernel steps; panic, degraded exit and idle recovery mark FAILED; stage hook; the boot-command callback and its console line |
 | `sw/kernel/process.c`, `process.h` | Route boot commands from the initial image |
 | `sw/kernel/tests/test_boot_progress.c` (new), `tests/test_platform.c`, `tests/test_process.c`, `Makefile` | Host tests |
-| `sw/boot/boot.c`, `sw/boot/Makefile` | ROM creates the record, counts POST steps, marks POST failure |
+| `sw/boot/boot.c`, `sw/boot/Makefile` | ROM creates the record, counts its 10 steps, marks POST failure |
 | `sw/userspace/supervisor/src/loader.c` | Resolve the boot launch list up front, announce N, report each launch |
-| `sw/userspace/services/fault-probe/main.c` | `--fail-ready` mode: report READY with a failure status |
+| `sw/userspace/services/fault-probe/main.c` | `--fail-ready`: report READY with a failure status |
 | `emu/qemu/astra_image.py` | `--ready-fail` profile; `configuration=` parameter |
 | `emu/qemu/test-boot-progress.py` (new) | The gate |
 | `fpga/arty/linux/astra_terminal_display.c`, `Makefile` | Splash scene, bar, scene choice, self-test |
 | `emu/qemu/run-arty.sh`, `emu/qemu/test-run-arty.py` | Pass the splash when the release ships one |
 | `emu/qemu/create-de25-release.sh`, `emu/qemu/test-create-de25-release.py` | Ship `share/astra_boot_splash.rgb565` |
 | Docs | `docs/ABI.md`, `docs/DEBUGGING.md`, `docs/CURRENT_STATE.md`, `sw/boot/assets/README.md` |
-| beast only (not in git) | `~/astra-mg/splash-run` (new); one line in `~/astra-mg/gates.sh` |
+| beast only (not in git) | New: `~/astra-mg/tree-env.sh`, `splash-env`, `splash-dryrun.sh`. Edited, each backed up as `<name>.pre-splash`: `build-all.sh`, `images.sh`, `gates.sh`, `suite.sh`, `t9-verify.sh`, `verify-nopc.sh`, `verify-then-publish.sh` |
 
 ---
 
-### Task 0: Beast staging and the baseline
+### Task 0: Isolate the splash tree on beast, then take the baseline
+
+**Shared state.** Each item below is fixed by the variable shown. Every
+default is today's literal value.
+
+| Shared today | Read or written by | Per tree with |
+|---|---|---|
+| `~/Git/astra68` (`cd`) | all seven scripts (`gates.sh` spells it `/home/barry/Git/astra68`) | `ASTRA_TREE` |
+| `~/astra-mg/*.img` (`I=~/astra-mg`) | `images.sh`, `gates.sh`, `suite.sh`, `t9-verify.sh`, `verify-nopc.sh` | `ASTRA_IMG_DIR` |
+| `/tmp/mg-*.log` | `build-all.sh`, `images.sh`, `gates.sh` | `ASTRA_LOG_PREFIX` |
+| `/tmp/qemu-host-build.log` | written by `build-all.sh`; read by `gates.sh`, `suite.sh`, `t9-verify.sh`, `verify-nopc.sh` | `ASTRA_QEMU_BUILD_LOG` (derived) |
+| `/tmp/su-*.log` | `suite.sh`, `verify-nopc.sh` | `ASTRA_SUITE_PREFIX` (derived) |
+| `/tmp/v-*` (logs, `/tmp/v-fs`, `/tmp/v-mb.img`, `/tmp/v-s5.log`) | `verify-nopc.sh`, `verify-then-publish.sh` | `ASTRA_VERIFY_PREFIX` (derived) |
+| `~/.cache/astra68/qemu-9.2.4` | `build-all.sh`, `verify-then-publish.sh` | `ASTRA_QEMU_WORK_ROOT` |
+| `/tmp/astra-build.lock` | `build-lock.sh` | stays shared on purpose: one build at a time across branches |
+
+The three derived values equal today's literals whenever
+`ASTRA_LOG_PREFIX` is unset or `/tmp/mg-`. Under `splash-env` they become
+`/tmp/splash/mg-qemu-host-build.log`, `/tmp/splash/mg-su-` and
+`/tmp/splash/mg-v-`.
+
+What stays shared, read-only:
+
+- the m68k toolchain;
+- the DE25 sysroot `~/.cache/astra68/de25-jammy-arm64`;
+- `~/Git/SDL2*`.
+
+`t9-verify.sh` uses `$I` for both scripts and images. The edit gives the
+scripts their own fixed path, `~/astra-mg`.
 
 **Files:**
-- Create on beast: `~/astra-mg/splash-run`
+- Create on beast: `~/astra-mg/tree-env.sh`, `~/astra-mg/splash-env`,
+  `~/astra-mg/splash-dryrun.sh`
+- Modify on beast: the seven scripts above, after `cp X X.pre-splash`
 
 **Interfaces:**
-- Produces: `~/astra-mg/splash-run COMMAND...`. It mirrors
-  `~/Git/astra68-splash/` into `~/Git/astra68/` and runs COMMAND there,
-  holding the build lock throughout. Every later task uses it.
+- Produces `~/astra-mg/splash-env COMMAND...`. It runs COMMAND in
+  `~/Git/astra68-splash` with the splash paths exported, under the build
+  lock. Every later task uses it.
+- `bash ~/astra-mg/<script>.sh` keeps working unchanged for the other
+  branch.
 
-- [ ] **Step 1: Create the runner on beast**
+- [ ] **Step 1: Back up the seven scripts**
 
 ```bash
-rtk proxy ssh beast 'cat > ~/astra-mg/splash-run <<'"'"'EOF'"'"'
+rtk proxy ssh beast 'cd ~/astra-mg && for f in build-all.sh images.sh gates.sh suite.sh t9-verify.sh verify-nopc.sh verify-then-publish.sh; do [ -e $f.pre-splash ] || cp -p $f $f.pre-splash; done; ls -l *.pre-splash'
+```
+
+Expected: seven backups. Never overwrite an existing `.pre-splash`.
+
+- [ ] **Step 2: `tree-env.sh` and `splash-env`**
+
+```bash
+rtk proxy ssh beast 'cat > ~/astra-mg/tree-env.sh <<'"'"'EOF'"'"'
+# Sourced by the ~/astra-mg entry scripts, after build-lock.sh. Unset, every
+# value is what the scripts hard-coded before, so the canonical tree's runs
+# are unchanged byte for byte (splash-dryrun.sh proves it). Set by
+# splash-env for ~/Git/astra68-splash.
+ASTRA_TREE=${ASTRA_TREE:-$HOME/Git/astra68}
+ASTRA_IMG_DIR=${ASTRA_IMG_DIR:-$HOME/astra-mg}
+ASTRA_LOG_PREFIX=${ASTRA_LOG_PREFIX:-/tmp/mg-}
+if [ "$ASTRA_LOG_PREFIX" = /tmp/mg- ]; then
+    ASTRA_QEMU_BUILD_LOG=/tmp/qemu-host-build.log
+    ASTRA_SUITE_PREFIX=/tmp/su-
+    ASTRA_VERIFY_PREFIX=/tmp/v-
+else
+    ASTRA_QEMU_BUILD_LOG=${ASTRA_LOG_PREFIX}qemu-host-build.log
+    ASTRA_SUITE_PREFIX=${ASTRA_LOG_PREFIX}su-
+    ASTRA_VERIFY_PREFIX=${ASTRA_LOG_PREFIX}v-
+fi
+export ASTRA_TREE ASTRA_IMG_DIR ASTRA_LOG_PREFIX ASTRA_QEMU_BUILD_LOG \
+    ASTRA_SUITE_PREFIX ASTRA_VERIFY_PREFIX
+EOF
+cat > ~/astra-mg/splash-env <<'"'"'EOF'"'"'
 #!/bin/bash
-# ~/astra-mg/splash-run COMMAND...
-# Mirror the boot-splash staging tree into the canonical tree every
-# ~/astra-mg script builds in, then run COMMAND there -- all under the one
-# build lock, so no other sync can land between the copy and the build.
-# No -t: a changed source arrives newer than its object (AGENTS.md).
+# ~/astra-mg/splash-env COMMAND...
+# The boot-splash branch: its own tree, images, logs and QEMU cache, under
+# the build lock every branch shares (one build at a time on beast).
+export ASTRA_TREE=$HOME/Git/astra68-splash
+export ASTRA_IMG_DIR=$HOME/astra-mg/splash
+export ASTRA_LOG_PREFIX=/tmp/splash/mg-
+export ASTRA_QEMU_WORK_ROOT=$HOME/.cache/astra68/qemu-9.2.4-splash
+mkdir -p "$ASTRA_IMG_DIR" /tmp/splash
 source ~/astra-mg/build-lock.sh
-rsync -rlpgoD --checksum --delete --exclude .git --exclude build \
-    --exclude "*/build" ~/Git/astra68-splash/ ~/Git/astra68/ || exit 1
-cd ~/Git/astra68 || exit 1
+source ~/astra-mg/tree-env.sh
+cd "$ASTRA_TREE" || exit 1
 exec "$@"
 EOF
-chmod +x ~/astra-mg/splash-run'
+chmod +x ~/astra-mg/splash-env'
 ```
 
-- [ ] **Step 2: Sync and confirm the tree is the branch base**
+- [ ] **Step 3: Parameterize the seven scripts**
+
+The edit is mechanical. Every replacement must match the expected number of
+times, or nothing is written:
 
 ```bash
-cd /Users/barry/Git/astra68-splash && git log -1 --format=%h   # 81fe6e03 or a plan-only child
+rtk proxy ssh beast 'python3 - <<'"'"'EOF'"'"'
+import pathlib, re
+root = pathlib.Path.home() / "astra-mg"
+LOCK = "source ~/astra-mg/build-lock.sh\n"
+scripts = ["build-all.sh", "images.sh", "gates.sh", "suite.sh",
+           "t9-verify.sh", "verify-nopc.sh", "verify-then-publish.sh"]
+edited = {}
+for name in scripts:
+    s = (root / name).read_text()
+    assert s.count(LOCK) == 1, (name, "lock line")
+    assert "tree-env.sh" not in s, (name, "already edited")
+    s = s.replace(LOCK, LOCK + "source ~/astra-mg/tree-env.sh\n")
+    # t9 runs sibling scripts through $I; scripts stay in ~/astra-mg.
+    for script in ("build-all.sh", "images.sh", "suite.sh"):
+        s = s.replace("$I/" + script, "~/astra-mg/" + script)
+    s = s.replace("cd /home/barry/Git/astra68\n", "cd \"$ASTRA_TREE\"\n")
+    s = s.replace("cd ~/Git/astra68", "cd \"$ASTRA_TREE\"")
+    s = s.replace("I=~/astra-mg", "I=$ASTRA_IMG_DIR")
+    s = s.replace("/tmp/qemu-host-build.log", "$ASTRA_QEMU_BUILD_LOG")
+    s = s.replace("/tmp/mg-", "${ASTRA_LOG_PREFIX}")
+    s = s.replace("/tmp/su-", "${ASTRA_SUITE_PREFIX}")
+    s = s.replace("/tmp/v-", "${ASTRA_VERIFY_PREFIX}")
+    s = s.replace("ASTRA_QEMU_WORK_ROOT=$HOME/.cache/astra68/qemu-9.2.4",
+                  "ASTRA_QEMU_WORK_ROOT=${ASTRA_QEMU_WORK_ROOT:-$HOME/.cache/astra68/qemu-9.2.4}")
+    for leftover in ("Git/astra68", "/tmp/mg-", "/tmp/su-", "/tmp/v-",
+                     "qemu-host-build.log", "I=~/astra-mg"):
+        assert leftover not in s, (name, leftover)
+    edited[name] = s
+for name, s in edited.items():
+    (root / name).write_text(s)
+print("EDITED", len(edited))
+EOF
+cd ~/astra-mg && for f in build-all.sh images.sh gates.sh suite.sh t9-verify.sh verify-nopc.sh verify-then-publish.sh; do bash -n $f || echo SYNTAX-$f; done; diff build-all.sh.pre-splash build-all.sh'
+```
+
+Expected: `EDITED 7`, no `SYNTAX-` lines, and a `build-all.sh` diff that
+shows only the substitutions. If an assertion fires, the script on beast
+differs from the one this plan was written against (`81fe6e03`, read
+2026-10-08). Read it and adapt the edit. Never force it.
+
+- [ ] **Step 4: The dry-run harness**
+
+`~/astra-mg/splash-dryrun.sh MODE` runs `t9-verify.sh` and
+`verify-then-publish.sh` with every build and test command stubbed, in a
+private `/tmp` (`unshare -rm`, checked available on beast). It prints the
+scripts' output, then every file they left in `/tmp`, then the sorted
+command trace (cwd, command, arguments, and QEMU's work root). Modes:
+
+- `old`: the `.pre-splash` scripts;
+- `new`: the edited scripts with nothing set;
+- `splash`: the edited scripts under `splash-env`.
+
+```bash
+rtk proxy ssh beast 'cat > ~/astra-mg/splash-dryrun.sh <<'"'"'EOF'"'"'
+#!/bin/bash
+# ~/astra-mg/splash-dryrun.sh old|new|splash -- what the entry scripts would
+# run, with builds and tests stubbed and /tmp private. old and new must match.
+set -eu
+mode=$1
+real=$HOME/astra-mg
+dry=$HOME/splash-dry
+rm -rf "$dry"
+mkdir -p "$dry/home/astra-mg" "$dry/stub"
+for script in build-all.sh images.sh gates.sh suite.sh t9-verify.sh \
+              verify-nopc.sh verify-then-publish.sh; do
+    if [ "$mode" = old ]; then
+        cp "$real/$script.pre-splash" "$dry/home/astra-mg/$script"
+    else
+        cp "$real/$script" "$dry/home/astra-mg/$script"
+    fi
+done
+cp "$real/build-lock.sh" "$real/tree-env.sh" "$real/splash-env" \
+   "$dry/home/astra-mg/"
+cat > "$dry/stub/record" <<'"'"'STUB'"'"'
+#!/bin/bash
+name=$(basename "$0")
+printf "%s\t%s\t%s\n" "$PWD" "$name" "$*" >> "$HOME/trace"
+if [ "$name" = build.sh ]; then
+    printf "%s\tbuild.sh-env\tASTRA_QEMU_WORK_ROOT=%s\n" "$PWD" \
+        "${ASTRA_QEMU_WORK_ROOT:-}" >> "$HOME/trace"
+    echo /fake/qemu-system-m68k
+fi
+exit 0
+STUB
+chmod +x "$dry/stub/record"
+for name in make python3 cp rm; do ln -s record "$dry/stub/$name"; done
+for tree in astra68 astra68-splash; do
+    mkdir -p "$dry/home/Git/$tree/emu/qemu"
+    ln -s "$dry/stub/record" "$dry/home/Git/$tree/emu/qemu/build.sh"
+    ln -s "$dry/stub/record" "$dry/home/Git/$tree/emu/qemu/fs-gates.sh"
+done
+cat > "$dry/run" <<'"'"'RUN'"'"'
+#!/bin/bash
+mount -t tmpfs tmpfs /tmp
+export HOME=$DRY_HOME PATH=$DRY_STUB:$PATH ASTRA_BUILD_LOCK_HELD=1
+cd "$HOME"
+for script in t9-verify.sh verify-then-publish.sh; do
+    echo "== $script"
+    if [ "$DRY_MODE" = splash ]; then
+        ~/astra-mg/splash-env bash ~/astra-mg/$script
+    else
+        bash ~/astra-mg/$script
+    fi
+done
+echo "== /tmp"; find /tmp -mindepth 1 | sort
+echo "== trace"; sort "$HOME/trace"
+RUN
+DRY_HOME=$dry/home DRY_STUB=$dry/stub DRY_MODE=$mode \
+    unshare -rm --propagation private bash "$dry/run" 2>&1
+EOF
+chmod +x ~/astra-mg/splash-dryrun.sh'
+```
+
+- [ ] **Step 5: Prove the defaults are unchanged and the splash run is isolated**
+
+```bash
+rtk proxy ssh beast '~/astra-mg/locked bash -c "~/astra-mg/splash-dryrun.sh old > ~/splash-dry-old.txt; ~/astra-mg/splash-dryrun.sh new > ~/splash-dry-new.txt; ~/astra-mg/splash-dryrun.sh splash > ~/splash-dry-splash.txt"; wc -l ~/splash-dry-old.txt; diff ~/splash-dry-old.txt ~/splash-dry-new.txt && echo DEFAULTS-IDENTICAL; grep -nE "Git/astra68([/[:space:]]|$)|/tmp/(mg|su|v)-|/tmp/qemu-host-build|astra-mg/[a-z0-9-]+\.img|qemu-9\.2\.4([[:space:]]|$)" ~/splash-dry-splash.txt || echo SPLASH-ISOLATED; grep -c "astra68-splash" ~/splash-dry-splash.txt'
+```
+
+Expected:
+
+- `old` has several hundred lines, including `make`, `python3` and
+  `build.sh` trace lines and `/tmp/mg-*` files;
+- `DEFAULTS-IDENTICAL`;
+- `SPLASH-ISOLATED`;
+- a nonzero `astra68-splash` count.
+
+`/tmp/splash/mg-...` and `~/astra-mg/splash/base.img` do not match the
+grep, by construction.
+
+Perturb: in `~/astra-mg/tree-env.sh`, change the default
+`ASTRA_LOG_PREFIX` to `/tmp/mgx-`. Rerun the `new` dry run and the diff.
+Expected: the diff shows `/tmp/mgx-` lines. Revert and rerun:
+`DEFAULTS-IDENTICAL`.
+
+- [ ] **Step 6: Sync the tree and take the baseline**
+
+```bash
+cd /Users/barry/Git/astra68-splash && git log --oneline -1
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast '~/astra-mg/splash-run true && echo SYNC-OK'
+rtk proxy ssh beast 'nohup ~/astra-mg/splash-env bash ~/astra-mg/verify-then-publish.sh > /tmp/splash/baseline.out 2>&1 &'
 ```
 
-Expected: `SYNC-OK`. If the command prints `ASTRA-BUILD-BUSY`, wait and retry.
-Never work around the lock.
-
-- [ ] **Step 3: Full baseline build, images and the gate suite**
+The first build in the new QEMU cache builds QEMU from scratch. Poll until
+the run finishes:
 
 ```bash
-rtk proxy ssh beast 'nohup ~/astra-mg/splash-run bash ~/astra-mg/verify-then-publish.sh > /tmp/splash-baseline.out 2>&1 &'
+rtk proxy ssh beast 'grep -E "READY-TO-PUBLISH|VERIFY-FAILED" /tmp/splash/mg-v-s5.log; tail -3 /tmp/splash/mg-v-s5.log'
 ```
 
-Poll until it finishes:
+Expected: `READY-TO-PUBLISH`. A failure here is on `main` and not caused by
+this plan. Stop and report it.
+
+The run takes the shared lock. If it prints `ASTRA-BUILD-BUSY`, the
+filesystem branch is building: wait and retry. Never work around the lock.
+
+- [ ] **Step 7: Boot-time baseline**
 
 ```bash
-rtk proxy ssh beast 'grep -E "READY-TO-PUBLISH|VERIFY-FAILED" /tmp/v-s5.log; tail -3 /tmp/v-s5.log'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "cp \$ASTRA_IMG_DIR/base.img /tmp/splash/tb.img && python3 emu/qemu/time-boot.py \"\$(tail -n1 \$ASTRA_QEMU_BUILD_LOG)\" sw/boot/build/astra_boot.bin --image /tmp/splash/tb.img --runs 3" | tee /tmp/splash/timeboot-before.txt'
 ```
 
-Expected: `READY-TO-PUBLISH`. A failure here belongs to `main`, not to this
-plan. Stop and report it before you change anything.
-
-- [ ] **Step 4: Record the boot-time baseline**
-
-```bash
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "cp ~/astra-mg/base.img /tmp/splash-tb.img && python3 emu/qemu/time-boot.py \"\$(tail -n1 /tmp/qemu-host-build.log)\" sw/boot/build/astra_boot.bin --image /tmp/splash-tb.img --runs 3" | tee /tmp/splash-timeboot-before.txt'
-```
-
-Keep `/tmp/splash-timeboot-before.txt` for Task 8. No commit.
+No commit: nothing in git changed.
 
 ---
 
-### Task 1: The record ABI and its pure transitions
+### Task 1: The record ABI, its transitions, and the fill
 
 **Files:**
 - Create: `sw/include/astra/boot_progress.h`
-- Create: `sw/kernel/tests/test_boot_progress.c`. The pure-transition half is
-  written here; Task 2 adds the kernel half.
+- Create: `sw/kernel/tests/test_boot_progress.c`. The pure half is written
+  here; Task 2 adds the kernel half.
 - Modify: `sw/kernel/Makefile` (new host test)
 
 **Interfaces:**
-- Produces, all `static inline` and pure, with no I/O:
-  - `astra_boot_progress_pack(uint32_t state, uint32_t total, uint32_t step) -> uint32_t`
-  - `astra_boot_progress_state/total/step(uint32_t value) -> uint32_t`
-  - `astra_boot_progress_advance(uint32_t value) -> uint32_t`
-  - `astra_boot_progress_announce(uint32_t value, uint32_t services) -> uint32_t`
-  - `astra_boot_progress_finish(uint32_t value) -> uint32_t`
-  - `astra_boot_progress_fail(uint32_t value) -> uint32_t`
-- Constants: `ASTRA_BOOT_PROGRESS_HEADER_OFFSET` (0xFE0),
-  `ASTRA_BOOT_PROGRESS_VALUE_OFFSET` (0xFE4), `ASTRA_BOOT_PROGRESS_HEADER`
-  (0x42500001), `ASTRA_BOOT_PROGRESS_STATE_BOOTING/DONE/FAILED` (0/1/2),
-  `ASTRA_BOOT_PROGRESS_COUNT_MAX` (0xFFF).
-- Consumed by Tasks 2, 4 and 6.
+- Produces, all `static inline` and pure:
+  - `astra_boot_progress_pack(state, announced, fixed, count, done)`
+  - accessors `astra_boot_progress_state/announced/fixed/count/done(uint32_t)`
+  - `astra_boot_progress_advance(uint32_t)`: one fixed-phase step
+  - `astra_boot_progress_announce(uint32_t, uint32_t services)`
+  - `astra_boot_progress_service(uint32_t, uint32_t failed)`
+  - `astra_boot_progress_finish(uint32_t)`: stage 8
+  - `astra_boot_progress_fail(uint32_t)`
+  - `astra_boot_progress_fill(uint32_t value, uint32_t width) -> uint32_t`
+- Constants:
+  - offsets `ASTRA_BOOT_PROGRESS_HEADER_OFFSET` (0xFE0) and `..._VALUE_OFFSET`
+    (0xFE4);
+  - `ASTRA_BOOT_PROGRESS_HEADER` (0x42500001);
+  - `..._STATE_BOOTING/DONE/FAILED` (0/1/2);
+  - `..._ROM_STEPS` (10), `..._KERNEL_STEPS` (4), `..._FIXED_STEPS` (21);
+  - `..._SERVICES_MAX` (1023).
+- Consumed by Tasks 2, 4 and 6, and by the gate's constants in Task 5.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -257,68 +497,106 @@ Keep `/tmp/splash-timeboot-before.txt` for Task 8. No commit.
 #define BOOTING ASTRA_BOOT_PROGRESS_STATE_BOOTING
 #define DONE ASTRA_BOOT_PROGRESS_STATE_DONE
 #define FAILED ASTRA_BOOT_PROGRESS_STATE_FAILED
+#define FIXED ASTRA_BOOT_PROGRESS_FIXED_STEPS
+#define FILL astra_boot_progress_fill
 
 static void test_transitions(void)
 {
     uint32_t value = 0u;
+    uint32_t next;
 
-    /* Fields round-trip and sit where the ABI says. */
-    assert(PACK(FAILED, 0x123u, 0x456u) == 0x20123456u);
-    assert(astra_boot_progress_state(0x20123456u) == FAILED);
-    assert(astra_boot_progress_total(0x20123456u) == 0x123u);
-    assert(astra_boot_progress_step(0x20123456u) == 0x456u);
+    /* The fields sit where the ABI says. */
+    assert(FIXED == 21u);
+    assert(PACK(FAILED, 1u, 0x15u, 0x3ffu, 0x155u) == 0x2aaffd55u);
+    assert(astra_boot_progress_state(0x2aaffd55u) == FAILED);
+    assert(astra_boot_progress_announced(0x2aaffd55u) == 1u);
+    assert(astra_boot_progress_fixed(0x2aaffd55u) == 0x15u);
+    assert(astra_boot_progress_count(0x2aaffd55u) == 0x3ffu);
+    assert(astra_boot_progress_done(0x2aaffd55u) == 0x155u);
 
-    /* Steps before the total is known. */
-    for (uint32_t step = 1u; step <= 17u; ++step) {
-        uint32_t next = astra_boot_progress_advance(value);
+    /* The fixed phase: 21 steps, each one larger. */
+    for (uint32_t step = 0u; step < FIXED; ++step) {
+        next = astra_boot_progress_advance(value);
         assert(next > value);
         value = next;
     }
-    assert(value == PACK(BOOTING, 0u, 17u));
+    assert(value == PACK(BOOTING, 0u, FIXED, 0u, 0u));
+    /* A 22nd fixed step is a miscount. */
+    assert(astra_boot_progress_advance(value) ==
+           PACK(FAILED, 0u, FIXED, 0u, 0u));
 
-    /* The announcement fixes total = step + N + 1 (the +1 is stage 8). */
-    value = astra_boot_progress_announce(value, 14u);
-    assert(value == PACK(BOOTING, 32u, 17u));
-    /* A second announcement is a fault, not a new total. */
+    /* The announcement. */
+    next = astra_boot_progress_announce(value, 14u);
+    assert(next == PACK(BOOTING, 1u, FIXED, 14u, 0u) && next > value);
+    value = next;
+    /* Once only, and no fixed step after it. */
     assert(astra_boot_progress_announce(value, 3u) ==
-           PACK(FAILED, 32u, 17u));
+           PACK(FAILED, 1u, FIXED, 14u, 0u));
+    assert(astra_boot_progress_advance(value) ==
+           PACK(FAILED, 1u, FIXED, 14u, 0u));
+    /* Announced before the fixed phase is complete: counted, but FAILED. */
+    assert(astra_boot_progress_announce(PACK(BOOTING, 0u, 20u, 0u, 0u), 3u) ==
+           PACK(FAILED, 1u, 20u, 3u, 0u));
+    assert(astra_boot_progress_state(astra_boot_progress_announce(
+               PACK(BOOTING, 0u, FIXED, 0u, 0u),
+               ASTRA_BOOT_PROGRESS_SERVICES_MAX + 1u)) == FAILED);
 
-    for (uint32_t service = 0u; service < 14u; ++service)
-        value = astra_boot_progress_advance(value);
-    assert(value == PACK(BOOTING, 32u, 31u));
-    value = astra_boot_progress_finish(value);
-    assert(value == PACK(DONE, 32u, 32u));
+    /* Fourteen services, then stage 8. */
+    for (uint32_t service = 0u; service < 14u; ++service) {
+        next = astra_boot_progress_service(value, 0u);
+        assert(next > value);
+        value = next;
+    }
+    assert(value == PACK(BOOTING, 1u, FIXED, 14u, 14u));
+    /* A fifteenth report is a miscount. */
+    assert(astra_boot_progress_service(value, 0u) ==
+           PACK(FAILED, 1u, FIXED, 14u, 14u));
+    next = astra_boot_progress_finish(value);
+    assert(next == PACK(DONE, 1u, FIXED, 14u, 14u) && next > value);
+    value = next;
     /* DONE takes no more steps; only a failure moves it, upward. */
     assert(astra_boot_progress_advance(value) == value);
-    assert(astra_boot_progress_fail(value) == PACK(FAILED, 32u, 32u));
+    assert(astra_boot_progress_service(value, 0u) == value);
+    assert(astra_boot_progress_fail(value) ==
+           PACK(FAILED, 1u, FIXED, 14u, 14u));
     assert(astra_boot_progress_fail(value) > value);
 
-    /* A step past a known total is a bookkeeping fault. */
-    assert(astra_boot_progress_advance(PACK(BOOTING, 5u, 5u)) ==
-           PACK(FAILED, 5u, 5u));
-    /* Stage 8 with a report missing ends FAILED, not DONE. */
-    assert(astra_boot_progress_finish(PACK(BOOTING, 10u, 8u)) ==
-           PACK(FAILED, 10u, 9u));
-    /* Stage 8 with no announcement at all ends FAILED. */
-    assert(astra_boot_progress_finish(PACK(BOOTING, 0u, 8u)) ==
-           PACK(FAILED, 0u, 9u));
-    /* FAILED keeps counting, so a failed boot still reaches step == total. */
-    value = astra_boot_progress_advance(PACK(FAILED, 10u, 8u));
-    assert(value == PACK(FAILED, 10u, 9u));
-    assert(astra_boot_progress_finish(value) == PACK(FAILED, 10u, 10u));
-    /* An announcement that cannot fit the field fails. */
-    assert(astra_boot_progress_state(astra_boot_progress_announce(
-               PACK(BOOTING, 0u, 20u), ASTRA_BOOT_PROGRESS_COUNT_MAX)) ==
-           FAILED);
-    /* The step field never wraps. */
-    assert(astra_boot_progress_advance(
-               PACK(BOOTING, 0u, ASTRA_BOOT_PROGRESS_COUNT_MAX)) ==
-           PACK(FAILED, 0u, ASTRA_BOOT_PROGRESS_COUNT_MAX));
+    /* Stage 8 is DONE only when every step arrived. */
+    assert(astra_boot_progress_finish(PACK(BOOTING, 1u, FIXED, 14u, 13u)) ==
+           PACK(FAILED, 1u, FIXED, 14u, 13u));
+    assert(astra_boot_progress_finish(PACK(BOOTING, 0u, FIXED, 0u, 0u)) ==
+           PACK(FAILED, 0u, FIXED, 0u, 0u));
+    /* No services at all is a complete boot. */
+    assert(astra_boot_progress_finish(astra_boot_progress_announce(
+               PACK(BOOTING, 0u, FIXED, 0u, 0u), 0u)) ==
+           PACK(DONE, 1u, FIXED, 0u, 0u));
+
+    /* A service that fails: FAILED, and the count still completes. */
+    value = astra_boot_progress_service(PACK(BOOTING, 1u, FIXED, 2u, 0u), 1u);
+    assert(value == PACK(FAILED, 1u, FIXED, 2u, 1u));
+    value = astra_boot_progress_service(value, 0u);
+    assert(value == PACK(FAILED, 1u, FIXED, 2u, 2u));
+    assert(astra_boot_progress_finish(value) == value);
+}
+
+static void test_fill(void)
+{
+    /* 30% over 21 equal fixed steps, then 70% over N services. */
+    assert(FILL(0u, 880u) == 0u);
+    assert(FILL(PACK(BOOTING, 0u, 7u, 0u, 0u), 880u) == 88u);
+    assert(FILL(PACK(BOOTING, 0u, FIXED, 0u, 0u), 880u) == 264u);
+    assert(FILL(PACK(BOOTING, 1u, FIXED, 14u, 0u), 880u) == 264u);
+    assert(FILL(PACK(BOOTING, 1u, FIXED, 14u, 7u), 880u) == 572u);
+    assert(FILL(PACK(BOOTING, 1u, FIXED, 14u, 14u), 880u) == 880u);
+    assert(FILL(PACK(BOOTING, 1u, FIXED, 0u, 0u), 880u) == 264u);
+    assert(FILL(PACK(DONE, 1u, FIXED, 0u, 0u), 880u) == 880u);
+    assert(FILL(PACK(DONE, 1u, FIXED, 14u, 14u), 880u) == 880u);
 }
 
 int main(void)
 {
     test_transitions();
+    test_fill();
     puts("KERNEL BOOT PROGRESS PASS");
     return 0;
 }
@@ -335,7 +613,8 @@ In `sw/kernel/Makefile`:
 ```make
 $(BUILD_DIR)/test_boot_progress: tests/test_boot_progress.c \
                                  ../include/astra/boot_progress.h \
-                                 ../include/astra/display.h | $(BUILD_DIR)
+                                 ../include/astra/display.h \
+                                 ../include/astra/supervisor.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
 		-I. -I../include tests/test_boot_progress.c -o $@
 ```
@@ -344,10 +623,10 @@ $(BUILD_DIR)/test_boot_progress: tests/test_boot_progress.c \
 
 ```bash
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast '~/astra-mg/splash-run make -C sw/kernel build/test_boot_progress'
+rtk proxy ssh beast '~/astra-mg/splash-env make -C sw/kernel build/test_boot_progress'
 ```
 
-Expected: the compile fails with `astra/boot_progress.h: No such file or directory`.
+Expected: `astra/boot_progress.h: No such file or directory`.
 
 - [ ] **Step 3: Write `sw/include/astra/boot_progress.h`**
 
@@ -356,30 +635,33 @@ Expected: the compile fails with `astra/boot_progress.h: No such file or directo
 #define ASTRA_BOOT_PROGRESS_H
 
 /*
- * The boot progress record: how far the machine has come up, counted in
- * steps, in the unused tail of the shared text page (display.h). The DE25
- * display helper draws the splash bar from it and shows the text page
- * instead when it says FAILED.
+ * The boot progress record: how far the machine has come up, counted, in
+ * the unused tail of the shared text page (display.h). The DE25 display
+ * helper draws the splash bar from it and shows the text page instead when
+ * it says FAILED.
  *
- * Haiku lights a fixed share of its splash per stage
- * (src/system/kernel/boot_splash.cpp:67-94). Astra's stage count is data --
- * the startup manifest plus the user's /config/services -- so the total is
- * fixed when the supervisor announces how many services it will start, and
- * every step after that is exact.
+ * Haiku lights a fixed slice of its splash per stage of a fixed enum
+ * (src/system/kernel/boot_splash.cpp:67-94). The bar here has two phases:
+ * the fixed steps every boot takes before services -- ROM, kernel,
+ * supervisor stages 1-7 -- fill the first 30% in equal slices, and the
+ * services fill the remaining 70% in N equal slices once the supervisor
+ * announces N (Astra's service count is data, not a constant). Stage 8 is
+ * 100%.
  *
  * Writers: the ROM from screen_init until handoff, then the kernel alone.
  * Each word is one aligned big-endian 32-bit store and one aligned 32-bit
- * load: no reader can see half of one. The header is written once per boot,
+ * load: no reader sees half of one. The header is written once per boot,
  * after the value is zeroed, and never changes.
  *
- * Value: state in bits 31..28, zero in 27..24, total in 23..12 (zero until
- * announced), step in 11..0. Every legal transition leaves the value no
- * smaller than it was, so a reader that sees it decrease has found a bug.
+ * Value: state 31..28, announced 27, fixed step 26..21, zero 20, service
+ * count 19..10, services done 9..0. Every legal transition leaves it no
+ * smaller than it was; a reader that sees it decrease has found a bug.
  */
 
 #include <stdint.h>
 
 #include <astra/display.h>
+#include <astra/supervisor.h>
 
 #define ASTRA_BOOT_PROGRESS_HEADER_OFFSET 0xFE0u
 #define ASTRA_BOOT_PROGRESS_VALUE_OFFSET  0xFE4u
@@ -391,7 +673,23 @@ Expected: the compile fails with `astra/boot_progress.h: No such file or directo
 #define ASTRA_BOOT_PROGRESS_STATE_BOOTING 0u
 #define ASTRA_BOOT_PROGRESS_STATE_DONE    1u
 #define ASTRA_BOOT_PROGRESS_STATE_FAILED  2u
-#define ASTRA_BOOT_PROGRESS_COUNT_MAX     0xFFFu
+
+/* The fixed phase: every step a successful boot takes before services. */
+#define ASTRA_BOOT_PROGRESS_ROM_STEPS    10u /* 9 POST checks, kernel image */
+#define ASTRA_BOOT_PROGRESS_KERNEL_STEPS 4u
+#define ASTRA_BOOT_PROGRESS_FIXED_STEPS \
+    (ASTRA_BOOT_PROGRESS_ROM_STEPS + ASTRA_BOOT_PROGRESS_KERNEL_STEPS + \
+     ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED)
+#define ASTRA_BOOT_PROGRESS_SERVICES_MAX 1023u
+/* Bar shares in thousandths. */
+#define ASTRA_BOOT_PROGRESS_FIXED_SHARE  300u
+#define ASTRA_BOOT_PROGRESS_SHARE_TOTAL  1000u
+
+#define ASTRA_BOOT_PROGRESS_ANNOUNCED   (UINT32_C(1) << 27)
+#define ASTRA_BOOT_PROGRESS_FIXED_SHIFT 21
+#define ASTRA_BOOT_PROGRESS_FIXED_MASK  0x3Fu
+#define ASTRA_BOOT_PROGRESS_COUNT_SHIFT 10
+#define ASTRA_BOOT_PROGRESS_COUNT_MASK  0x3FFu
 
 _Static_assert(ASTRA_BOOT_PROGRESS_HEADER_OFFSET >=
                    ASTRA_TEXT_COLUMNS * ASTRA_TEXT_ROWS,
@@ -402,13 +700,23 @@ _Static_assert(ASTRA_BOOT_PROGRESS_VALUE_OFFSET + 4u <=
 _Static_assert((ASTRA_BOOT_PROGRESS_HEADER_OFFSET & 3u) == 0u &&
                    (ASTRA_BOOT_PROGRESS_VALUE_OFFSET & 3u) == 0u,
                "boot progress words must be naturally aligned");
+_Static_assert(ASTRA_BOOT_PROGRESS_FIXED_STEPS <
+                   ASTRA_BOOT_PROGRESS_FIXED_MASK,
+               "the fixed phase must fit its field");
 
 static inline uint32_t astra_boot_progress_pack(uint32_t state,
-                                                uint32_t total,
-                                                uint32_t step)
+                                                uint32_t announced,
+                                                uint32_t fixed,
+                                                uint32_t count,
+                                                uint32_t done)
 {
-    return (state << 28) | ((total & ASTRA_BOOT_PROGRESS_COUNT_MAX) << 12) |
-           (step & ASTRA_BOOT_PROGRESS_COUNT_MAX);
+    return (state << 28) |
+           (announced != 0u ? ASTRA_BOOT_PROGRESS_ANNOUNCED : 0u) |
+           ((fixed & ASTRA_BOOT_PROGRESS_FIXED_MASK)
+            << ASTRA_BOOT_PROGRESS_FIXED_SHIFT) |
+           ((count & ASTRA_BOOT_PROGRESS_COUNT_MASK)
+            << ASTRA_BOOT_PROGRESS_COUNT_SHIFT) |
+           (done & ASTRA_BOOT_PROGRESS_COUNT_MASK);
 }
 
 static inline uint32_t astra_boot_progress_state(uint32_t value)
@@ -416,95 +724,147 @@ static inline uint32_t astra_boot_progress_state(uint32_t value)
     return value >> 28;
 }
 
-static inline uint32_t astra_boot_progress_total(uint32_t value)
+static inline uint32_t astra_boot_progress_announced(uint32_t value)
 {
-    return (value >> 12) & ASTRA_BOOT_PROGRESS_COUNT_MAX;
+    return (value & ASTRA_BOOT_PROGRESS_ANNOUNCED) != 0u;
 }
 
-static inline uint32_t astra_boot_progress_step(uint32_t value)
+static inline uint32_t astra_boot_progress_fixed(uint32_t value)
 {
-    return value & ASTRA_BOOT_PROGRESS_COUNT_MAX;
+    return (value >> ASTRA_BOOT_PROGRESS_FIXED_SHIFT) &
+           ASTRA_BOOT_PROGRESS_FIXED_MASK;
 }
 
+static inline uint32_t astra_boot_progress_count(uint32_t value)
+{
+    return (value >> ASTRA_BOOT_PROGRESS_COUNT_SHIFT) &
+           ASTRA_BOOT_PROGRESS_COUNT_MASK;
+}
+
+static inline uint32_t astra_boot_progress_done(uint32_t value)
+{
+    return value & ASTRA_BOOT_PROGRESS_COUNT_MASK;
+}
+
+/* FAILED from any state: the state nibble only ever rises. */
 static inline uint32_t astra_boot_progress_fail(uint32_t value)
 {
-    return astra_boot_progress_pack(ASTRA_BOOT_PROGRESS_STATE_FAILED,
-                                    astra_boot_progress_total(value),
-                                    astra_boot_progress_step(value));
+    return (value & 0x0FFFFFFFu) |
+           (ASTRA_BOOT_PROGRESS_STATE_FAILED << 28);
 }
 
-/* One more step. DONE takes none; one past the total or the field fails. */
+/* One fixed-phase step. A step after the announcement or past the fixed
+   count is a miscount. DONE takes none. */
 static inline uint32_t astra_boot_progress_advance(uint32_t value)
 {
-    uint32_t state = astra_boot_progress_state(value);
-    uint32_t total = astra_boot_progress_total(value);
-    uint32_t step = astra_boot_progress_step(value);
-
-    if (state == ASTRA_BOOT_PROGRESS_STATE_DONE)
+    if (astra_boot_progress_state(value) == ASTRA_BOOT_PROGRESS_STATE_DONE)
         return value;
-    if (step == ASTRA_BOOT_PROGRESS_COUNT_MAX ||
-        (total != 0u && step == total))
+    if (astra_boot_progress_announced(value) ||
+        astra_boot_progress_fixed(value) >= ASTRA_BOOT_PROGRESS_FIXED_STEPS)
         return astra_boot_progress_fail(value);
-    return astra_boot_progress_pack(state, total, step + 1u);
+    return value + (UINT32_C(1) << ASTRA_BOOT_PROGRESS_FIXED_SHIFT);
 }
 
-/* The supervisor's count of boot services: total = step + N + stage 8. */
+/* The supervisor's service count. Announced before the fixed phase is
+   complete, it is recorded and FAILED. */
 static inline uint32_t astra_boot_progress_announce(uint32_t value,
                                                     uint32_t services)
 {
-    uint32_t step = astra_boot_progress_step(value);
-
     if (astra_boot_progress_state(value) == ASTRA_BOOT_PROGRESS_STATE_DONE ||
-        astra_boot_progress_total(value) != 0u ||
-        step >= ASTRA_BOOT_PROGRESS_COUNT_MAX ||
-        services > ASTRA_BOOT_PROGRESS_COUNT_MAX - 1u - step)
+        astra_boot_progress_announced(value) ||
+        services > ASTRA_BOOT_PROGRESS_SERVICES_MAX)
         return astra_boot_progress_fail(value);
-    return astra_boot_progress_pack(astra_boot_progress_state(value),
-                                    step + services + 1u, step);
+    value |= ASTRA_BOOT_PROGRESS_ANNOUNCED |
+             (services << ASTRA_BOOT_PROGRESS_COUNT_SHIFT);
+    return astra_boot_progress_fixed(value) ==
+                   ASTRA_BOOT_PROGRESS_FIXED_STEPS ?
+               value : astra_boot_progress_fail(value);
 }
 
-/* Stage 8: the last step. DONE only if every announced step arrived. */
+/* One announced service finished launching; @p failed marks the boot. */
+static inline uint32_t astra_boot_progress_service(uint32_t value,
+                                                   uint32_t failed)
+{
+    if (astra_boot_progress_state(value) == ASTRA_BOOT_PROGRESS_STATE_DONE)
+        return value;
+    if (!astra_boot_progress_announced(value) ||
+        astra_boot_progress_done(value) >= astra_boot_progress_count(value))
+        return astra_boot_progress_fail(value);
+    value += 1u;
+    return failed != 0u ? astra_boot_progress_fail(value) : value;
+}
+
+/* Stage 8. DONE only if every fixed step and every announced service
+   arrived. */
 static inline uint32_t astra_boot_progress_finish(uint32_t value)
 {
-    value = astra_boot_progress_advance(value);
     if (astra_boot_progress_state(value) != ASTRA_BOOT_PROGRESS_STATE_BOOTING)
         return value;
-    return astra_boot_progress_step(value) == astra_boot_progress_total(value) ?
-        astra_boot_progress_pack(ASTRA_BOOT_PROGRESS_STATE_DONE,
-                                 astra_boot_progress_total(value),
-                                 astra_boot_progress_step(value)) :
-        astra_boot_progress_fail(value);
+    return astra_boot_progress_announced(value) &&
+                   astra_boot_progress_fixed(value) ==
+                       ASTRA_BOOT_PROGRESS_FIXED_STEPS &&
+                   astra_boot_progress_done(value) ==
+                       astra_boot_progress_count(value) ?
+               value | (ASTRA_BOOT_PROGRESS_STATE_DONE << 28) :
+               astra_boot_progress_fail(value);
+}
+
+/* The bar's fill in pixels of @p width (width <= 4096). Never smaller for a
+   larger value of the same boot: each phase only grows, DONE is all. */
+static inline uint32_t astra_boot_progress_fill(uint32_t value,
+                                                uint32_t width)
+{
+    uint32_t fixed = astra_boot_progress_fixed(value);
+    uint32_t count = astra_boot_progress_count(value);
+    uint32_t done = astra_boot_progress_done(value);
+    uint32_t fill;
+
+    if (astra_boot_progress_state(value) == ASTRA_BOOT_PROGRESS_STATE_DONE)
+        return width;
+    if (fixed > ASTRA_BOOT_PROGRESS_FIXED_STEPS)
+        fixed = ASTRA_BOOT_PROGRESS_FIXED_STEPS;
+    fill = width * ASTRA_BOOT_PROGRESS_FIXED_SHARE * fixed /
+           (ASTRA_BOOT_PROGRESS_SHARE_TOTAL * ASTRA_BOOT_PROGRESS_FIXED_STEPS);
+    if (astra_boot_progress_announced(value) && count != 0u)
+        fill += width *
+                (ASTRA_BOOT_PROGRESS_SHARE_TOTAL -
+                 ASTRA_BOOT_PROGRESS_FIXED_SHARE) *
+                (done < count ? done : count) /
+                (ASTRA_BOOT_PROGRESS_SHARE_TOTAL * count);
+    return fill < width ? fill : width;
 }
 
 #endif
 ```
 
-The `step >= COUNT_MAX` clause in `astra_boot_progress_announce` is
-load-bearing. Without it, `COUNT_MAX - 1 - step` wraps when `step` is
-`COUNT_MAX`.
+Overflow check: the largest product is
+`4096 * 700 * 1023 = 2,933,145,600`, which is below 2^32. `fill` is never
+called in the kernel.
 
-- [ ] **Step 4: Run the test and see it pass**
+- [ ] **Step 4: Pass**
 
 ```bash
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "make -C sw/kernel build/test_boot_progress && sw/kernel/build/test_boot_progress"'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "make -C sw/kernel build/test_boot_progress && sw/kernel/build/test_boot_progress"'
 ```
 
 Expected: `KERNEL BOOT PROGRESS PASS`.
 
 - [ ] **Step 5: Perturb**
 
-1. In `astra_boot_progress_advance`, delete `(total != 0u && step == total)`.
-   Rerun Step 4. Expected: the assertion at
-   `PACK(BOOTING, 5u, 5u)` fails. Revert.
-2. In `astra_boot_progress_finish`, return DONE unconditionally. Expected:
-   the `PACK(BOOTING, 10u, 8u)` assertion fails. Revert and rerun: PASS.
+1. In `astra_boot_progress_finish`, drop the `done == count` term.
+   Expected: the `14u, 13u` assertion fails. Revert.
+2. In `astra_boot_progress_fill`, change `FIXED_SHARE` to `250u`. Expected:
+   `== 88u` fails. Revert.
+3. In `astra_boot_progress_advance`, drop the
+   `fixed >= ASTRA_BOOT_PROGRESS_FIXED_STEPS` test. Expected: the
+   "22nd fixed step" assertion fails. Revert, then rerun Step 4: PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add sw/include/astra/boot_progress.h sw/kernel/tests/test_boot_progress.c sw/kernel/Makefile
-git commit -m "feat(boot): boot progress record ABI and its transitions
+git commit -m "feat(boot): boot progress record ABI, two-phase transitions and fill
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -516,42 +876,40 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 **Files:**
 - Create: `sw/kernel/boot_progress.c`, `sw/kernel/boot_progress.h`
 - Modify:
-  - `sw/kernel/platform.c` and `platform.h`: word access to the text page
-  - `sw/kernel/kernel.c`: steps, stage hook, FAILED on panic, degraded exit
-    and idle recovery
-  - `sw/kernel/Makefile`: the object and the test link
+  - `sw/kernel/platform.c` and `platform.h`: word access;
+  - `sw/kernel/kernel.c`: steps, stage hook, FAILED marks;
+  - `sw/kernel/Makefile`;
+  - `sw/include/astra/syscall.h`: the commands and the ABI bump.
 - Test: `sw/kernel/tests/test_boot_progress.c`, `sw/kernel/tests/test_platform.c`
 
 **Interfaces:**
-- Consumes (Task 1): the transitions and offsets in `astra/boot_progress.h`.
+- Consumes: Task 1.
 - Produces:
   - `bool kernel_platform_post_text_read32(uint32_t offset, uint32_t *value)`
   - `bool kernel_platform_post_text_write32(uint32_t offset, uint32_t value)`.
     The offset must be 4-aligned and at most `ASTRA_TEXT_PLANE_BYTES - 4`.
-  - `void kernel_boot_progress_init(void)`: adopt the ROM's record.
+  - `void kernel_boot_progress_init(void)`
   - `uint32_t kernel_boot_progress_value(void)`
   - `void kernel_boot_progress_step(void)`
   - `void kernel_boot_progress_stage(uint32_t stage)`
   - `void kernel_boot_progress_fail(void)`
-  - `uint32_t kernel_boot_progress_command(uint32_t command)`. Returns an
-    `ASTRA_SYSCALL_*` status. Task 3 uses it.
-- The `ASTRA_PROGRESS_BOOT_*` constants this task's command function decodes
-  are added to `sw/include/astra/syscall.h` in Step 3, so this task builds on
-  its own.
+  - `uint32_t kernel_boot_progress_command(uint32_t command)`, which returns
+    an `ASTRA_SYSCALL_*` status. Task 3 uses it.
+  - `ASTRA_PROGRESS_BOOT_*` in `syscall.h`.
 
 - [ ] **Step 1: Failing platform test**
 
-In `sw/kernel/tests/test_platform.c`, insert after
+In `sw/kernel/tests/test_platform.c`, after
 `assert(!kernel_platform_post_text_write(VEGA_POST_COLS * VEGA_POST_ROWS, 0u));`
-(about line 176):
+(about line 176), add:
 
 ```c
     {
         uint32_t word = 0u;
 
-        assert(kernel_platform_post_text_write32(0xFE4u, 0x00011002u));
+        assert(kernel_platform_post_text_write32(0xFE4u, 0x01400000u));
         assert(kernel_platform_post_text_read32(0xFE4u, &word));
-        assert(word == 0x00011002u);
+        assert(word == 0x01400000u);
         /* Unaligned, past the page, or no destination: refused. */
         assert(!kernel_platform_post_text_write32(0xFE2u, 0u));
         assert(!kernel_platform_post_text_write32(ASTRA_TEXT_PLANE_BYTES - 2u,
@@ -561,25 +919,24 @@ In `sw/kernel/tests/test_platform.c`, insert after
     }
 ```
 
-Add `#include <astra/display.h>` to the test if it is not already included.
-Check with `grep -n "astra/display.h" sw/kernel/tests/test_platform.c`.
+Add `#include <astra/display.h>` to the test if
+`grep -n "astra/display.h" sw/kernel/tests/test_platform.c` finds nothing.
 
 - [ ] **Step 2: Failing kernel-module test**
 
-In `sw/kernel/tests/test_boot_progress.c`, add these includes after
+In `sw/kernel/tests/test_boot_progress.c`, add after
 `#include <astra/boot_progress.h>`:
 
 ```c
 #include "boot_progress.h"
 #include "platform.h"
 
-#include <astra/supervisor.h>
 #include <astra/syscall.h>
 #include <vega.h>
 #include <vesta.h>
 ```
 
-Add this before `main`:
+Before `main`, add:
 
 ```c
 static uint32_t record(void)
@@ -604,10 +961,22 @@ static uint32_t command(uint32_t operation, uint32_t argument)
     return kernel_boot_progress_command(operation | argument);
 }
 
+/* What a boot does between handoff and the announcement. */
+static void kernel_and_stages(void)
+{
+    for (uint32_t step = 0u; step < ASTRA_BOOT_PROGRESS_KERNEL_STEPS; ++step)
+        kernel_boot_progress_step();
+    for (uint32_t stage = ASTRA_SUPERVISOR_STAGE_SELF_VERIFIED;
+         stage <= ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED; ++stage)
+        kernel_boot_progress_stage(stage);
+}
+
 static void test_kernel(void)
 {
     VestaRegs *registers = kernel_platform_test_registers();
     VegaRegs *video = kernel_platform_test_vega_registers();
+    const uint32_t rom = PACK(BOOTING, 0u, ASTRA_BOOT_PROGRESS_ROM_STEPS, 0u,
+                              0u);
     uint32_t last;
 
     registers->SYS_STATUS = SYS_VIDEO_READY;
@@ -623,31 +992,35 @@ static void test_kernel(void)
     kernel_boot_progress_step();
     assert(record() == 0u);
 
-    /* A ROM record is adopted and continued, never decreasing. */
-    rom_wrote(PACK(BOOTING, 0u, 10u));
+    /* The ROM's record is adopted and continued, never decreasing. */
+    rom_wrote(rom);
     kernel_boot_progress_init();
+    assert(record() == rom);
     last = record();
     kernel_boot_progress_step();
-    assert(record() == PACK(BOOTING, 0u, 11u) && record() > last);
+    assert(record() > last);
+    for (uint32_t step = 1u; step < ASTRA_BOOT_PROGRESS_KERNEL_STEPS; ++step)
+        kernel_boot_progress_step();
     for (uint32_t stage = ASTRA_SUPERVISOR_STAGE_SELF_VERIFIED;
          stage <= ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED; ++stage) {
         last = record();
         kernel_boot_progress_stage(stage);
         assert(record() > last);
     }
-    assert(record() == PACK(BOOTING, 0u, 18u));
+    assert(record() == PACK(BOOTING, 0u, FIXED, 0u, 0u));
     /* A service report before the announcement is refused, unchanged. */
     assert(command(ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_PROGRESS_SERVICE_READY) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
-    assert(record() == PACK(BOOTING, 0u, 18u));
+    assert(record() == PACK(BOOTING, 0u, FIXED, 0u, 0u));
     assert(command(ASTRA_PROGRESS_BOOT_SERVICES, 3u) == ASTRA_SYSCALL_OK);
-    assert(record() == PACK(BOOTING, 22u, 18u));
+    assert(record() == PACK(BOOTING, 1u, FIXED, 3u, 0u));
     assert(command(ASTRA_PROGRESS_BOOT_SERVICES, 3u) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
     assert(command(ASTRA_PROGRESS_BOOT_SERVICE, 7u) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
-    assert(command(0x3000u | ASTRA_PROGRESS_BOOT_COMMAND_PREFIX, 0u) ==
+    assert(command(ASTRA_PROGRESS_BOOT_COMMAND_PREFIX | 0x3000u, 0u) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(record() == PACK(BOOTING, 1u, FIXED, 3u, 0u));
     assert(command(ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_PROGRESS_SERVICE_READY) ==
            ASTRA_SYSCALL_OK);
     assert(command(ASTRA_PROGRESS_BOOT_SERVICE,
@@ -655,17 +1028,24 @@ static void test_kernel(void)
     assert(command(ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_PROGRESS_SERVICE_READY) ==
            ASTRA_SYSCALL_OK);
     kernel_boot_progress_stage(ASTRA_SUPERVISOR_STAGE_TERMINAL);
-    assert(record() == PACK(DONE, 22u, 22u));
+    assert(record() == PACK(DONE, 1u, FIXED, 3u, 3u));
     assert(kernel_boot_progress_value() == record());
     assert(command(ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_PROGRESS_SERVICE_READY) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);
     /* The console failing after boot is still a failure. */
     kernel_boot_progress_stage(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
-    assert(record() == PACK(FAILED, 22u, 22u));
+    assert(record() == PACK(FAILED, 1u, FIXED, 3u, 3u));
+
+    /* A ROM that miscounted is caught at handoff. */
+    rom_wrote(PACK(BOOTING, 0u, ASTRA_BOOT_PROGRESS_ROM_STEPS - 1u, 0u, 0u));
+    kernel_boot_progress_init();
+    assert(record() == PACK(FAILED, 0u, ASTRA_BOOT_PROGRESS_ROM_STEPS - 1u, 0u,
+                            0u));
 
     /* A service that fails READY: FAILED, and the count still completes. */
-    rom_wrote(PACK(BOOTING, 0u, 4u));
+    rom_wrote(rom);
     kernel_boot_progress_init();
+    kernel_and_stages();
     assert(command(ASTRA_PROGRESS_BOOT_SERVICES, 2u) == ASTRA_SYSCALL_OK);
     assert(command(ASTRA_PROGRESS_BOOT_SERVICE,
                    ASTRA_PROGRESS_SERVICE_FAILED) == ASTRA_SYSCALL_OK);
@@ -673,28 +1053,30 @@ static void test_kernel(void)
     assert(command(ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_PROGRESS_SERVICE_READY) ==
            ASTRA_SYSCALL_OK);
     kernel_boot_progress_stage(ASTRA_SUPERVISOR_STAGE_TERMINAL);
-    assert(record() == PACK(FAILED, 7u, 7u));
+    assert(record() == PACK(FAILED, 1u, FIXED, 2u, 2u));
 
     /* A panic or degraded exit marks FAILED from any state. */
-    rom_wrote(PACK(BOOTING, 0u, 2u));
+    rom_wrote(rom);
     kernel_boot_progress_init();
     kernel_boot_progress_fail();
-    assert(record() == PACK(FAILED, 0u, 2u));
+    assert(record() == astra_boot_progress_fail(rom));
 
     /* Without the text page the kernel tracks but never writes. */
-    rom_wrote(PACK(BOOTING, 0u, 7u));
+    rom_wrote(rom);
     registers->SYS_STATUS = 0u;
     kernel_boot_progress_init();
     kernel_boot_progress_step();
-    assert(kernel_boot_progress_value() == PACK(BOOTING, 0u, 1u));
+    assert(kernel_boot_progress_value() == PACK(BOOTING, 0u, 1u, 0u, 0u));
     registers->SYS_STATUS = SYS_VIDEO_READY;
-    assert(record() == PACK(BOOTING, 0u, 7u));
+    assert(record() == rom);
 }
 ```
 
-Change `main` to call `test_transitions(); test_kernel();`.
+Change `main` to call `test_transitions(); test_fill(); test_kernel();`.
+`<astra/supervisor.h>` already comes in through `boot_progress.h`.
 
-Update the Makefile rule so the test links the kernel module:
+Replace the test's Makefile rule from Task 1 with this one, which links the
+module:
 
 ```make
 $(BUILD_DIR)/test_boot_progress: tests/test_boot_progress.c boot_progress.c \
@@ -711,14 +1093,14 @@ $(BUILD_DIR)/test_boot_progress: tests/test_boot_progress.c boot_progress.c \
 		tests/test_boot_progress.c -o $@
 ```
 
-Run as in Task 1 Step 2. Expected: the compile fails on the missing
+Run as in Task 1 Step 2. Expected: compile errors for the missing
 `boot_progress.h`, `kernel_platform_post_text_read32` and
 `ASTRA_PROGRESS_BOOT_SERVICE`.
 
-- [ ] **Step 3: Add the syscall constants**
+- [ ] **Step 3: The syscall constants**
 
-In `sw/include/astra/syscall.h`, replace the `ASTRA_SYSCALL_PROGRESS` comment
-and define (lines 50-58) with:
+In `sw/include/astra/syscall.h`, replace the `ASTRA_SYSCALL_PROGRESS`
+comment and define (lines 50-58) with:
 
 ```c
 /**
@@ -747,8 +1129,9 @@ and define (lines 50-58) with:
 ```
 
 Bump `#define ASTRA_SYSCALL_ABI_VERSION 0x00010040u` to `0x00010041u`.
-`sw/kernel/user_test.S:663`'s `0x00010040` is the bulk-ring header version
-(`ASTRA_BULK_RING_MAGIC` follows it), not the syscall ABI. Do not touch it.
+
+`sw/kernel/user_test.S:663`'s `0x00010040` is the bulk-ring header version:
+`ASTRA_BULK_RING_MAGIC` follows it. Do not touch it.
 
 - [ ] **Step 4: Platform word access**
 
@@ -798,14 +1181,15 @@ bool kernel_platform_post_text_write32(uint32_t offset, uint32_t value)
 
 /*
  * The kernel's half of the boot progress record (astra/boot_progress.h).
- * The ROM creates the record and counts POST; from handoff the kernel is
+ * The ROM creates it and counts its own steps; from handoff the kernel is
  * its only writer. Without a ROM record or a text page nothing is written,
  * but the value is still tracked so commands answer the same.
  */
 void kernel_boot_progress_init(void);
 uint32_t kernel_boot_progress_value(void);
+/* One of the kernel's ASTRA_BOOT_PROGRESS_KERNEL_STEPS. */
 void kernel_boot_progress_step(void);
-/* A supervisor stage reached: 8 finishes, 9 fails, the rest step. */
+/* A supervisor stage reached: 1-7 are fixed steps, 8 finishes, 9 fails. */
 void kernel_boot_progress_stage(uint32_t stage);
 void kernel_boot_progress_fail(void);
 /* An ASTRA_PROGRESS_BOOT_* command; returns an ASTRA_SYSCALL_* status. */
@@ -851,6 +1235,10 @@ void kernel_boot_progress_init(void)
         kernel_platform_post_text_read32(ASTRA_BOOT_PROGRESS_VALUE_OFFSET,
                                          &value);
     boot_progress = boot_progress_enabled ? value : 0u;
+    /* The ROM's count is part of the exact total: a miscount is a fault. */
+    if (boot_progress_enabled &&
+        astra_boot_progress_fixed(value) != ASTRA_BOOT_PROGRESS_ROM_STEPS)
+        publish(astra_boot_progress_fail(value));
 }
 
 uint32_t kernel_boot_progress_value(void)
@@ -881,23 +1269,22 @@ void kernel_boot_progress_stage(uint32_t stage)
 uint32_t kernel_boot_progress_command(uint32_t command)
 {
     uint32_t argument = command & ASTRA_PROGRESS_BOOT_ARGUMENT_MASK;
-    uint32_t announced = astra_boot_progress_total(boot_progress);
+    uint32_t announced = astra_boot_progress_announced(boot_progress);
 
     if (astra_boot_progress_state(boot_progress) ==
         ASTRA_BOOT_PROGRESS_STATE_DONE)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     switch (command & ~ASTRA_PROGRESS_BOOT_ARGUMENT_MASK) {
     case ASTRA_PROGRESS_BOOT_SERVICES:
-        if (announced != 0u)
+        if (announced)
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
         publish(astra_boot_progress_announce(boot_progress, argument));
         return ASTRA_SYSCALL_OK;
     case ASTRA_PROGRESS_BOOT_SERVICE:
-        if (announced == 0u || argument > ASTRA_PROGRESS_SERVICE_SKIPPED)
+        if (!announced || argument > ASTRA_PROGRESS_SERVICE_SKIPPED)
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
-        publish(astra_boot_progress_advance(
-            argument == ASTRA_PROGRESS_SERVICE_FAILED ?
-                astra_boot_progress_fail(boot_progress) : boot_progress));
+        publish(astra_boot_progress_service(
+            boot_progress, argument == ASTRA_PROGRESS_SERVICE_FAILED));
         return ASTRA_SYSCALL_OK;
     default:
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
@@ -907,7 +1294,8 @@ uint32_t kernel_boot_progress_command(uint32_t command)
 
 In `sw/kernel/Makefile`:
 
-- Add `$(BUILD_DIR)/boot_progress.o` to `OBJECTS`, after `$(BUILD_DIR)/platform.o`.
+- Add `$(BUILD_DIR)/boot_progress.o` to `OBJECTS` after
+  `$(BUILD_DIR)/platform.o`.
 - Add the rule:
 
 ```make
@@ -919,7 +1307,8 @@ $(BUILD_DIR)/boot_progress.o: boot_progress.c boot_progress.h platform.h \
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 ```
 
-- Add `boot_progress.h` to the `$(BUILD_DIR)/kernel.o` prerequisites.
+- Add `boot_progress.h` and `../include/astra/boot_progress.h` to the
+  `$(BUILD_DIR)/kernel.o` prerequisites.
 
 - [ ] **Step 6: Kernel hooks in `kernel.c`**
 
@@ -929,67 +1318,63 @@ Add `#include "boot_progress.h"` after `#include "block.h"`.
    ```c
        kernel_boot_progress_init();
    ```
-2. **Steps.** Add `kernel_boot_progress_step();` in four places:
-   - immediately after the whole
+2. **Steps.** Add `kernel_boot_progress_step();` in four places. These are
+   the `ASTRA_BOOT_PROGRESS_KERNEL_STEPS` (4); a fifth or a missing one
+   makes the announcement FAILED.
+   - Immediately after the whole
      `if (kernel_allocation_phase() != ... ) kernel_panic("runtime allocator validation failed");`
-     statement (the memory, VM and devices are up);
-   - immediately after
-     `console_puts("Vesta timer ........ OK, one-shot 5 ms\n");`;
-   - immediately after the closing `}` of the
+     statement: memory, VM and devices are up.
+   - Immediately after
+     `console_puts("Vesta timer ........ OK, one-shot 5 ms\n");`.
+   - Immediately after the closing `}` of the
      `if ((kernel_platform_system_status() & SYS_ASTRA_HOST) != 0u) {...} else {...}`
-     block (host runtime probed);
-   - immediately after `start_initial_user_image();` inside the `#else` of
+     block: the host runtime has been probed.
+   - Immediately after `start_initial_user_image();` inside the `#else` of
      `#if ASTRA_KERNEL_K1_QUALIFICATION`.
 3. **Panic.** In `panic_begin`, after `panic_reason = reason;`:
-   ```c
-       kernel_boot_progress_fail();
-   ```
+   `kernel_boot_progress_fail();`
 4. **Degraded exit.** In `kernel_process_initial_image_exited`, immediately
    before `console_puts("Initial image ....... EXITED, reason ");`:
-   ```c
-       kernel_boot_progress_fail();
-   ```
-   A clean shutdown or restart returns earlier and stays as it is.
+   `kernel_boot_progress_fail();`. A clean shutdown or restart returns
+   earlier and is unchanged.
 5. **Idle recovery.** In `kernel_main`, immediately before
    `console_puts("Recovery ............ idle; interrupts and diagnostics "`:
-   ```c
-           kernel_boot_progress_fail();
-   ```
+   `kernel_boot_progress_fail();`
 6. **Stage hook.** As the first statement of
-   `kernel_process_initial_image_progress` (before the `#if`):
+   `kernel_process_initial_image_progress`, before the `#if`:
    ```c
        /* Before the line: whoever reads "stage 8" reads the final record. */
        kernel_boot_progress_stage(stage);
    ```
+   This function runs only when the counter rises
+   (`process.c:11450-11454`), so a stage repeated by `volume.c:378,401`
+   counts once.
 
 - [ ] **Step 7: Host tests pass**
 
 ```bash
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "make -C sw/kernel clean && make -C sw/kernel -j32 test 2>&1 | tail -5"'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "make -C sw/kernel clean && make -C sw/kernel -j32 test 2>&1 | tail -5"'
 ```
 
-Expected: every test runs, `KERNEL BOOT PROGRESS PASS` is among them, and
-the exit status is 0.
+Expected: exit 0, with `KERNEL BOOT PROGRESS PASS` among the results.
 
 - [ ] **Step 8: m68k build, float-free check and size**
 
 ```bash
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "make -C sw/kernel clean && bash ~/astra-mg/build-all.sh && make -C sw/kernel clean"'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "bash ~/astra-mg/build-all.sh && make -C sw/kernel clean"'
 ```
 
 Expected: `BUILD-OK`. The kernel link runs
-`tools/check_kernel_float_free.py` and the `kernel payload` size check
-(`<= 0x80000`).
+`tools/check_kernel_float_free.py` and the `<= 0x80000` payload check.
 
 - [ ] **Step 9: Perturb**
 
-1. In `boot_progress.c`, delete `astra_boot_progress_total(value) != 0u` from
-   the SERVICES case. Rerun Step 7. Expected: the second-announcement
-   assertion fails. Revert.
-2. In `kernel_boot_progress_init`, drop the header comparison. Expected: the
-   "No ROM record" assertion fails (`record()` is nonzero). Revert. Rerun
-   Step 7: PASS.
+1. In `kernel_boot_progress_init`, drop the ROM-count check. Rerun Step 7.
+   Expected: the "ROM that miscounted" assertion fails. Revert.
+2. In the SERVICES case, drop `if (announced)`. Expected: the second
+   announcement's `INVALID_ARGUMENT` assertion fails. Revert, then rerun:
+   PASS.
 
 - [ ] **Step 10: Commit**
 
@@ -1089,7 +1474,7 @@ cases at lines 3959-3968 assert `next->data[0]` the same way.
 Run:
 
 ```bash
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "make -C sw/kernel clean && make -C sw/kernel build/test_process && sw/kernel/build/test_process"'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "make -C sw/kernel clean && make -C sw/kernel build/test_process && sw/kernel/build/test_process"'
 ```
 
 Expected: the build fails if `kernel_process_initial_image_boot_command` is
@@ -1160,7 +1545,7 @@ already reached through `process.h`, the explicit include is still correct.
 
 ```bash
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "make -C sw/kernel clean && make -C sw/kernel -j32 test 2>&1 | tail -3; make -C sw/kernel clean && bash ~/astra-mg/build-all.sh"'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "make -C sw/kernel clean && make -C sw/kernel -j32 test 2>&1 | tail -3; make -C sw/kernel clean && bash ~/astra-mg/build-all.sh"'
 ```
 
 Expected: kernel tests exit 0 and `BUILD-OK`.
@@ -1204,18 +1589,20 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `astra_boot_progress_advance/fail`, offsets and header (Task 1).
-- Produces: at handoff, a record with header `0x42500001` and
-  `PACK(BOOTING, 0, 10)`. The kernel continues from it (Task 2).
+- Produces: at handoff, a record with header `0x42500001` and value
+  `PACK(BOOTING, 0, 10, 0, 0)` = `0x01400000`. The kernel continues from it
+  and marks it FAILED if the fixed count is not exactly
+  `ASTRA_BOOT_PROGRESS_ROM_STEPS` (Task 2).
 
 - [ ] **Step 1: Failing check, in QEMU**
 
 There is no ROM host test for this path. The proof is the record that the
 next ROM leaves in a file-backed text page. Create the probe once, in
-`/tmp/rom-record.py` on beast. It is a verification command, not a repo
+`/tmp/splash/rom-record.py` on beast. It is a verification command, not a repo
 file:
 
 ```bash
-rtk proxy ssh beast 'cat > /tmp/rom-record.py <<'"'"'EOF'"'"'
+rtk proxy ssh beast 'cat > /tmp/splash/rom-record.py <<'"'"'EOF'"'"'
 import os, struct, subprocess, sys, tempfile, time
 qemu, rom = sys.argv[1], sys.argv[2]
 page = tempfile.NamedTemporaryFile(delete=False); page.write(bytes(4096)); page.close()
@@ -1230,10 +1617,11 @@ for line in proc.stdout:
 time.sleep(0.5); proc.kill(); proc.wait()
 data = open(page.name, "rb").read()
 header, value = struct.unpack_from(">II", data, 0xFE0)
-print("header=%08x value=%08x state=%u total=%u step=%u" % (
-    header, value, value >> 28, (value >> 12) & 0xfff, value & 0xfff))
+print("header=%08x value=%08x state=%u announced=%u fixed=%u count=%u done=%u" % (
+    header, value, value >> 28, (value >> 27) & 1, (value >> 21) & 0x3f,
+    (value >> 10) & 0x3ff, value & 0x3ff))
 EOF'
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "python3 /tmp/rom-record.py \"\$(tail -n1 /tmp/qemu-host-build.log)\" sw/boot/build/astra_boot.bin"'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "python3 /tmp/splash/rom-record.py \"\$(tail -n1 \$ASTRA_QEMU_BUILD_LOG)\" sw/boot/build/astra_boot.bin"'
 ```
 
 Expected on the Task 3 ROM: `header=00000000`. The kernel adopts nothing,
@@ -1318,21 +1706,30 @@ list (after `boot.c`).
 
 ```bash
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "bash ~/astra-mg/build-all.sh && python3 /tmp/rom-record.py \"\$(tail -n1 /tmp/qemu-host-build.log)\" sw/boot/build/astra_boot.bin"'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "bash ~/astra-mg/build-all.sh && python3 /tmp/splash/rom-record.py \"\$(tail -n1 \$ASTRA_QEMU_BUILD_LOG)\" sw/boot/build/astra_boot.bin"'
 ```
 
-Expected: `BUILD-OK`, then `header=42500001 value=0000000a state=0 total=0 step=10`
-(9 POST steps plus the kernel load). If the probe kills QEMU after the kernel
-has started, step is 11 or more and the kernel has taken over. That is
-correct too. The requirement is `header=42500001` and `state=0`.
+Expected: `BUILD-OK`, then
+`header=42500001 value=01400000 state=0 announced=0 fixed=10 count=0 done=0`
+(9 POST steps plus the kernel load).
+
+If the probe kills QEMU after the kernel has started, `fixed` is between 11
+and 21 and the kernel has taken over. That is correct too. The requirement
+is `header=42500001` and `state=0`. With `state=2` and `fixed=10`, the
+kernel found the ROM count right but something later failed. With
+`state=2` and `fixed` not 10, the ROM miscounted: check the nine
+`rom_progress_step()` sites.
 
 - [ ] **Step 4: Perturb**
 
 1. Comment out the header store in `screen_init`. Rebuild and rerun Step 3.
    Expected: `header=00000000`. Revert.
-2. In `kmain`, change `if (!run_post())` to `if (1)`. Rebuild and rerun the
+2. Delete one `rom_progress_step();`, for example the one after
+   `test_front_panel()`. Rebuild and rerun Step 3. Expected: `state=2` and
+   `fixed=9` or more: the kernel caught the miscount at handoff. Revert.
+3. In `kmain`, change `if (!run_post())` to `if (1)`. Rebuild and rerun the
    probe with its marker changed to `HALTED: POST FAILURE`: edit
-   `/tmp/rom-record.py`'s `"Starting Axiom kernel"` to that string. Expected:
+   `/tmp/splash/rom-record.py`'s `"Starting Axiom kernel"` to that string. Expected:
    `state=2`. Revert both. Rebuild, rerun Step 3: `state=0`.
 
 - [ ] **Step 5: Commit**
@@ -1449,13 +1846,13 @@ stage 8.
 
 Normal boot (a copy of BASE_IMAGE):
   - the 32-bit value never decreases;
-  - at stage 8 it is DONE with step == total;
+  - at stage 8 it is DONE: all 21 fixed steps, announced, done == count;
   - the kernel's announced service count equals what the image says boots:
     the manifest minus storage and `trusted`, plus the enabled start=boot
     definitions under /config/services.
 A service that refuses READY (the copy given `astra_image.py --ready-fail`):
-  - at stage 8 the record is FAILED with step == total, and the boot still
-    reached stage 8.
+  - at stage 8 the record is FAILED with every fixed step and done == count,
+    and the boot still reached stage 8.
 
 Usage: test-boot-progress.py QEMU ROM BASE_IMAGE
 """
@@ -1491,8 +1888,13 @@ SERVICES = re.compile(r"Boot services \.+ (\d+) to start")
 BOOT_DEADLINE = 240.0
 
 
+FIXED_STEPS = 21  # ASTRA_BOOT_PROGRESS_FIXED_STEPS (boot_progress.h)
+
+
 def fields(value):
-    return value >> 28, (value >> 12) & 0xFFF, value & 0xFFF
+    """(state, announced, fixed, count, done) -- boot_progress.h's layout."""
+    return (value >> 28, (value >> 27) & 1, (value >> 21) & 0x3F,
+            (value >> 10) & 0x3FF, value & 0x3FF)
 
 
 def stable_word(page, offset):
@@ -1567,14 +1969,16 @@ def boot(qemu, rom, image, expect_failed, services):
             if after < before:
                 raise RuntimeError("record went backwards: %08x -> %08x" %
                                    (before, after))
-        state, total, step = fields(final)
-        if step != total or total == 0:
-            raise RuntimeError("stage 8 with step %d of %d" % (step, total))
-        announced = [int(match.group(1)) for match in
-                     (SERVICES.search(line) for line in machine.log) if match]
-        if announced != [services]:
-            raise RuntimeError("announced %r, image boots %d services" %
-                               (announced, services))
+        state, announced, fixed, count, done = fields(final)
+        if not announced or fixed != FIXED_STEPS or done != count:
+            raise RuntimeError(
+                "stage 8 with announced=%d fixed=%d/%d done=%d/%d" %
+                (announced, fixed, FIXED_STEPS, done, count))
+        said = [int(match.group(1)) for match in
+                (SERVICES.search(line) for line in machine.log) if match]
+        if said != [services] or count != services:
+            raise RuntimeError("announced %r (record %d), image boots %d" %
+                               (said, count, services))
         if expect_failed:
             if state != FAILED:
                 raise RuntimeError("a failed service left state %d" % state)
@@ -1644,13 +2048,13 @@ These were true at `81fe6e03`.
 
 ```bash
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "bash ~/astra-mg/build-all.sh && bash ~/astra-mg/images.sh && python3 emu/qemu/test-boot-progress.py \"\$(tail -n1 /tmp/qemu-host-build.log)\" sw/boot/build/astra_boot.bin ~/astra-mg/base.img" 2>&1 | tail -8' | tee /tmp/splash-gate-before.txt
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "bash ~/astra-mg/build-all.sh && bash ~/astra-mg/images.sh && python3 emu/qemu/test-boot-progress.py \"\$(tail -n1 \$ASTRA_QEMU_BUILD_LOG)\" sw/boot/build/astra_boot.bin \$ASTRA_IMG_DIR/base.img" 2>&1 | tail -8' | tee /tmp/splash-gate-before.txt
 ```
 
-Expected: `RuntimeError: stage 8 with step 26 of 0` or similar (total is
-never announced, so `finish` leaves FAILED with total 0). The line
+Expected: `RuntimeError: stage 8 with announced=0 fixed=21/21 done=0/0`.
+Nothing is announced yet, so `finish` leaves FAILED. The line
 `ASTRA BOOT LAUNCH ORDER:` is not printed, because the check raises first.
-To capture the baseline order, temporarily move the `launches`/`print` block
+To capture the baseline order, temporarily move the `said_with_syslog`/`print` block
 above the `if header != HEADER` check. Run once, save the printed order to
 `/tmp/splash-order-before.txt` on the Mac, then move the block back.
 
@@ -1864,7 +2268,7 @@ Behavior notes. Each one must hold:
 
 ```bash
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "bash ~/astra-mg/build-all.sh && bash ~/astra-mg/images.sh && python3 emu/qemu/test-boot-progress.py \"\$(tail -n1 /tmp/qemu-host-build.log)\" sw/boot/build/astra_boot.bin ~/astra-mg/base.img" 2>&1 | tail -8'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "bash ~/astra-mg/build-all.sh && bash ~/astra-mg/images.sh && python3 emu/qemu/test-boot-progress.py \"\$(tail -n1 \$ASTRA_QEMU_BUILD_LOG)\" sw/boot/build/astra_boot.bin \$ASTRA_IMG_DIR/base.img" 2>&1 | tail -8'
 ```
 
 Expected:
@@ -1883,7 +2287,7 @@ Then run the gates that read `stage 8` and the service paths this task
 touched:
 
 ```bash
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "Q=\$(tail -n1 /tmp/qemu-host-build.log); R=sw/boot/build/astra_boot.bin; I=~/astra-mg; bash ~/astra-mg/gates.sh 2>&1 | grep -E \"^==|PASS|FAIL|EXIT\"; for p in fault-probe fault-critical; do cp \$I/base.img \$I/\$p.img; python3 emu/qemu/astra_image.py --\$p \$I/\$p.img >/dev/null; done; python3 emu/qemu/test-service-policy.py \$Q \$R \$I/fault-probe.img | tail -1; python3 emu/qemu/test-service-policy.py \$Q \$R \$I/fault-critical.img --critical | tail -1; cp \$I/draw2.img /tmp/v-mb.img; python3 emu/qemu/test-display-mailbox.py \$Q \$R /tmp/v-mb.img | tail -1; cp \$I/base.img \$I/ev.img; python3 emu/qemu/test-events.py \$Q \$R --image \$I/ev.img 2>&1 | tail -1"'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "Q=\$(tail -n1 \$ASTRA_QEMU_BUILD_LOG); R=sw/boot/build/astra_boot.bin; I=\$ASTRA_IMG_DIR; bash ~/astra-mg/gates.sh 2>&1 | grep -E \"^==|PASS|FAIL|EXIT\"; for p in fault-probe fault-critical; do cp \$I/base.img \$I/\$p.img; python3 emu/qemu/astra_image.py --\$p \$I/\$p.img >/dev/null; done; python3 emu/qemu/test-service-policy.py \$Q \$R \$I/fault-probe.img | tail -1; python3 emu/qemu/test-service-policy.py \$Q \$R \$I/fault-critical.img --critical | tail -1; cp \$I/draw2.img /tmp/splash/v-mb.img; python3 emu/qemu/test-display-mailbox.py \$Q \$R /tmp/splash/v-mb.img | tail -1; cp \$I/base.img \$I/ev.img; python3 emu/qemu/test-events.py \$Q \$R --image \$I/ev.img 2>&1 | tail -1"'
 ```
 
 Expected: every `EXIT=0`, `display` and `terminal` PASS, both service-policy
@@ -1895,50 +2299,60 @@ lines PASS, display-mailbox PASS, events PASS. These are the unchanged
 
 1. Delete the `boot_service_report(...)` call for manifest entries. Rebuild
    and rerun the gate. Expected: the clean boot raises
-   `a clean boot ended in state 2`, because `finish` sees step != total.
-   Revert.
+   `stage 8 with announced=1 fixed=21/21 done=2/14`, because only the two
+   definitions reported. Revert.
 2. Map FAILED to READY: change the manifest report's
    `ASTRA_PROGRESS_SERVICE_FAILED` and the definition report's to
    `..._READY`. Expected: the clean scenario passes and the failure scenario
    raises `a failed service left state 1`. Revert.
-3. Announce `boot_plan_count + 1u`. Expected:
-   `announced [15], image boots 14 services`. Revert.
+3. Announce `boot_plan_count + 1u`. Expected: the clean boot raises
+   `stage 8 with ... done=14/15`. Revert.
 
 Rebuild and rerun Step 5's gate: both PASS.
 
 - [ ] **Step 7: Register the gate on beast**
 
-`~/astra-mg/gates.sh` is shared with other branches, so the line is guarded
-on the script existing. It goes in the sequential tail, after the terminal
-line, not in the parallel group. The parallel gates boot
-`$I/base.img` itself, and copying an image another QEMU is writing yields a
-dirty journal (CLAUDE.md). The line:
+`~/astra-mg/gates.sh` is shared with the filesystem branch. The new lines
+are therefore silent when `emu/qemu/test-boot-progress.py` is absent: no
+command runs, no file is written, and the summary loop's list is unchanged.
+They go in the sequential tail after the terminal gate, not in the parallel
+group. The parallel gates boot `$I/base.img` themselves, and copying an
+image another QEMU is writing gives a dirty journal (CLAUDE.md).
+
+`gates.sh.pre-splash` already exists from Task 0; do not overwrite it.
 
 ```bash
-(if [ -f emu/qemu/test-boot-progress.py ]; then python3 emu/qemu/test-boot-progress.py $Q $R $I/base.img; else echo "boot-progress: not on this branch"; true; fi > /tmp/mg-boot-progress.log 2>&1; echo EXIT=$? >> /tmp/mg-boot-progress.log)
-```
-
-Apply it, and add `boot-progress` to the summary loop:
-
-```bash
-rtk proxy ssh beast 'cp ~/astra-mg/gates.sh ~/astra-mg/gates.sh.pre-splash && python3 - <<'"'"'EOF'"'"'
+rtk proxy ssh beast 'python3 - <<'"'"'EOF'"'"'
 import pathlib
 p = pathlib.Path.home() / "astra-mg/gates.sh"
 s = p.read_text()
-line = ("(if [ -f emu/qemu/test-boot-progress.py ]; then python3 emu/qemu/test-boot-progress.py $Q $R $I/base.img; "
-        "else echo \"boot-progress: not on this branch\"; true; fi > /tmp/mg-boot-progress.log 2>&1; "
-        "echo EXIT=$? >> /tmp/mg-boot-progress.log)\n")
-anchor = "echo EXIT=$? >> /tmp/mg-terminal.log)\n"
-assert s.count(anchor) == 1 and "mg-boot-progress" not in s
+anchor = "echo EXIT=$? >> ${ASTRA_LOG_PREFIX}terminal.log)\n"
+line = ("if [ -f emu/qemu/test-boot-progress.py ]; then (python3 emu/qemu/test-boot-progress.py $Q $R $I/base.img "
+        "> ${ASTRA_LOG_PREFIX}boot-progress.log 2>&1; echo EXIT=$? >> ${ASTRA_LOG_PREFIX}boot-progress.log); fi\n")
+loop = "display terminal; do"
+assert s.count(anchor) == 1 and s.count(loop) == 1 and "boot-progress" not in s
 s = s.replace(anchor, anchor + line, 1)
-s = s.replace("display terminal; do", "display terminal boot-progress; do", 1)
+s = s.replace(loop, "display terminal $([ -f emu/qemu/test-boot-progress.py ] && echo boot-progress); do", 1)
 p.write_text(s)
 EOF
-grep -n "boot-progress" ~/astra-mg/gates.sh'
+bash -n ~/astra-mg/gates.sh && grep -c "boot-progress" ~/astra-mg/gates.sh'
 ```
 
-Expected: two matching lines. Before editing, check the terminal line's
-exact ending with `grep -n "mg-terminal.log" ~/astra-mg/gates.sh`.
+Expected: `3`. Prove the filesystem branch sees no change: the dry run's
+fake canonical tree has no `test-boot-progress.py`.
+
+```bash
+rtk proxy ssh beast '~/astra-mg/locked bash -c "~/astra-mg/splash-dryrun.sh old > ~/splash-dry-old.txt; ~/astra-mg/splash-dryrun.sh new > ~/splash-dry-new.txt"; diff ~/splash-dry-old.txt ~/splash-dry-new.txt && echo DEFAULTS-IDENTICAL'
+```
+
+Expected: `DEFAULTS-IDENTICAL`. Then run the gate through the suite:
+
+```bash
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "Q=\$(tail -n1 \$ASTRA_QEMU_BUILD_LOG) R=sw/boot/build/astra_boot.bin bash ~/astra-mg/gates.sh 2>&1 | grep -A3 \"== boot-progress\""'
+```
+
+Expected: the `== boot-progress` block ends with
+`ASTRA BOOT PROGRESS FAILED-SERVICE PASS` and `EXIT=0`.
 
 - [ ] **Step 8: Commit**
 
@@ -1948,8 +2362,8 @@ git add sw/userspace/supervisor/src/loader.c sw/userspace/services/fault-probe/m
 git commit -m "feat(supervisor): resolve the boot launch list up front and report each launch
 
 The kernel's boot progress total is exact before the first service starts.
-test-boot-progress.py gates a clean boot (DONE, step == total, monotonic)
-and a boot service that refuses READY (FAILED).
+test-boot-progress.py gates a clean boot (DONE: every fixed step and every
+announced service, monotonic) and a boot service that refuses READY (FAILED).
 
 Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 ```
@@ -1989,10 +2403,14 @@ Add to `self_test`, immediately before
     {
         static uint8_t frame[ASTRA_FRAMEBUFFER_BYTES];
         _Alignas(4) uint8_t page[TEXT_PAGE_BYTES] = {0};
+        const uint32_t fixed = ASTRA_BOOT_PROGRESS_FIXED_STEPS;
+        /* Half the services of 14 started: 30% + 35% of 880 = 572. */
         const uint32_t booting = astra_boot_progress_pack(
-            ASTRA_BOOT_PROGRESS_STATE_BOOTING, 40u, 10u);
+            ASTRA_BOOT_PROGRESS_STATE_BOOTING, 1u, fixed, 14u, 7u);
         const uint32_t done = astra_boot_progress_pack(
-            ASTRA_BOOT_PROGRESS_STATE_DONE, 40u, 40u);
+            ASTRA_BOOT_PROGRESS_STATE_DONE, 1u, fixed, 14u, 14u);
+        uint32_t value = 0u;
+        uint32_t last_fill = 0u;
         const uint32_t failed = astra_boot_progress_fail(booting);
         const uint32_t header = ASTRA_BOOT_PROGRESS_HEADER;
         const uint8_t *pixel;
@@ -2008,10 +2426,29 @@ Add to `self_test`, immediately before
             boot_scene(false, false, header, booting) != BOOT_SCENE_TEXT ||
             boot_scene(true, false, header + 1u, booting) != BOOT_SCENE_TEXT)
             return EXIT_FAILURE;
-        if (splash_bar_fill(astra_boot_progress_pack(
-                ASTRA_BOOT_PROGRESS_STATE_BOOTING, 0u, 5u)) != 0u ||
-            splash_bar_fill(booting) != SPLASH_BAR_WIDTH / 4u ||
+        if (splash_bar_fill(0u) != 0u ||
+            splash_bar_fill(booting) != 572u ||
             splash_bar_fill(done) != SPLASH_BAR_WIDTH)
+            return EXIT_FAILURE;
+        /* A whole boot, step by step: the bar never moves backwards, the
+           fixed phase ends at 30%, and DONE is the full bar. */
+        for (uint32_t step = 0u; step < fixed; ++step) {
+            value = astra_boot_progress_advance(value);
+            if (splash_bar_fill(value) < last_fill)
+                return EXIT_FAILURE;
+            last_fill = splash_bar_fill(value);
+        }
+        if (last_fill != SPLASH_BAR_WIDTH * 3u / 10u)
+            return EXIT_FAILURE;
+        value = astra_boot_progress_announce(value, 14u);
+        for (uint32_t service = 0u; service < 14u; ++service) {
+            value = astra_boot_progress_service(value, 0u);
+            if (splash_bar_fill(value) < last_fill)
+                return EXIT_FAILURE;
+            last_fill = splash_bar_fill(value);
+        }
+        if (splash_bar_fill(astra_boot_progress_finish(value)) !=
+            SPLASH_BAR_WIDTH)
             return EXIT_FAILURE;
         /* The guest stores big-endian; the helper reads one word. */
         page[ASTRA_BOOT_PROGRESS_VALUE_OFFSET + 0u] = (uint8_t)(booting >> 24);
@@ -2028,12 +2465,11 @@ Add to `self_test`, immediately before
         if (pixel[0] != (uint8_t)(SPLASH_BAR_FILL >> 8) ||
             pixel[1] != (uint8_t)SPLASH_BAR_FILL)
             return EXIT_FAILURE;
-        pixel = SPLASH_PIXEL(SPLASH_BAR_X + SPLASH_BAR_WIDTH / 4u - 1u,
+        pixel = SPLASH_PIXEL(SPLASH_BAR_X + 571u,
                              SPLASH_BAR_Y + SPLASH_BAR_HEIGHT - 1u);
         if (pixel[0] != (uint8_t)(SPLASH_BAR_FILL >> 8))
             return EXIT_FAILURE;
-        pixel = SPLASH_PIXEL(SPLASH_BAR_X + SPLASH_BAR_WIDTH / 4u,
-                             SPLASH_BAR_Y);
+        pixel = SPLASH_PIXEL(SPLASH_BAR_X + 572u, SPLASH_BAR_Y);
         if (pixel[0] != (uint8_t)(SPLASH_BAR_TRACK >> 8) ||
             pixel[1] != (uint8_t)SPLASH_BAR_TRACK)
             return EXIT_FAILURE;
@@ -2057,7 +2493,7 @@ Run:
 
 ```bash
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "make -C fpga/arty/linux ../../../build/arty-graphics/linux/test-astra-terminal-display && build/arty-graphics/linux/test-astra-terminal-display --self-test"'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "make -C fpga/arty/linux ../../../build/arty-graphics/linux/test-astra-terminal-display && build/arty-graphics/linux/test-astra-terminal-display --self-test"'
 ```
 
 Expected: the compile fails with `boot_scene` undeclared.
@@ -2125,15 +2561,10 @@ static enum boot_scene boot_scene(bool have_splash, bool panicked,
                BOOT_SCENE_TEXT : BOOT_SCENE_SPLASH;
 }
 
-/* Haiku's slice, width * stage / MAX (boot_splash.cpp:83), by count. */
+/* Haiku's slices (boot_splash.cpp:83), two phases: boot_progress.h. */
 static uint32_t splash_bar_fill(uint32_t value)
 {
-    uint32_t total = astra_boot_progress_total(value);
-    uint32_t step = astra_boot_progress_step(value);
-
-    if (total == 0u)
-        return 0u;
-    return SPLASH_BAR_WIDTH * (step < total ? step : total) / total;
+    return astra_boot_progress_fill(value, SPLASH_BAR_WIDTH);
 }
 
 /* The bar into a big-endian RGB565 frame; nothing else is touched. */
@@ -2307,7 +2738,7 @@ The guest's first frame sets `display_owned` exactly as before, and the loop
 
 ```bash
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "make -C fpga/arty/linux ../../../build/arty-graphics/linux/test-astra-terminal-display && build/arty-graphics/linux/test-astra-terminal-display --self-test && make -C fpga/arty/linux PLATFORM=de25 CROSS_COMPILE=aarch64-linux-gnu- ../../../build/de25-graphics/linux/astra-terminal-display ../../../build/de25-graphics/linux/astra_boot_splash.rgb565 && ls -l build/de25-graphics/linux/astra_boot_splash.rgb565"'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "make -C fpga/arty/linux ../../../build/arty-graphics/linux/test-astra-terminal-display && build/arty-graphics/linux/test-astra-terminal-display --self-test && make -C fpga/arty/linux PLATFORM=de25 CROSS_COMPILE=aarch64-linux-gnu- ../../../build/de25-graphics/linux/astra-terminal-display ../../../build/de25-graphics/linux/astra_boot_splash.rgb565 && ls -l build/de25-graphics/linux/astra_boot_splash.rgb565"'
 ```
 
 Expected:
@@ -2381,7 +2812,7 @@ guard the existing scenarios use.
 
 ```bash
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast '~/astra-mg/splash-run python3 emu/qemu/test-run-arty.py'
+rtk proxy ssh beast '~/astra-mg/splash-env python3 emu/qemu/test-run-arty.py'
 ```
 
 Expected: it exits 0. Perturb: drop `${DISPLAY_SPLASH:+"$DISPLAY_SPLASH"}`
@@ -2476,10 +2907,10 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ```bash
 rtk rsync -az --checksum --no-times --delete --exclude .git --exclude build --exclude '*/build' ./ beast:/home/barry/Git/astra68-splash/
-rtk proxy ssh beast 'nohup ~/astra-mg/splash-run bash ~/astra-mg/verify-then-publish.sh > /tmp/splash-verify.out 2>&1 &'
+rtk proxy ssh beast 'nohup ~/astra-mg/splash-env bash ~/astra-mg/verify-then-publish.sh > /tmp/splash/verify.out 2>&1 &'
 ```
 
-Poll `rtk proxy ssh beast 'grep -E "READY-TO-PUBLISH|VERIFY-FAILED" /tmp/v-s5.log; grep -E "boot-progress|HELPER=|KTEST=|UTEST=" /tmp/v-s5.log'`.
+Poll `rtk proxy ssh beast 'grep -E "READY-TO-PUBLISH|VERIFY-FAILED" /tmp/splash/mg-v-s5.log; grep -A3 -E "== boot-progress" /tmp/splash/mg-v-s5.log; grep -E "HELPER=|KTEST=|UTEST=" /tmp/splash/mg-v-s5.log'`.
 
 Expected:
 
@@ -2492,15 +2923,15 @@ self-test. The two launcher and release contract tests are not in the
 verify script, so run them as well:
 
 ```bash
-rtk proxy ssh beast '~/astra-mg/splash-run bash -c "python3 emu/qemu/test-run-arty.py && python3 emu/qemu/test-create-de25-release.py"'
+rtk proxy ssh beast '~/astra-mg/splash-env bash -c "python3 emu/qemu/test-run-arty.py && python3 emu/qemu/test-create-de25-release.py"'
 ```
 
 Expected: exit 0 and `DE25 release creation contract: PASS`.
 
 - [ ] **Step 2: Boot time did not regress**
 
-Rerun Task 0 Step 4 into `/tmp/splash-timeboot-after.txt`. Compare each
-stage with `/tmp/splash-timeboot-before.txt`. Expected: `terminal up` within
+Rerun Task 0 Step 7 into `/tmp/splash/timeboot-after.txt`. Compare each
+stage with `/tmp/splash/timeboot-before.txt`. Expected: `terminal up` within
 run-to-run noise. The added work is ~40 word stores and ~16 extra small VFS
 reads moved earlier, not added. A stage more than 10% slower is investigated
 before publishing.
@@ -2508,10 +2939,10 @@ before publishing.
 - [ ] **Step 3: Publish to the DE25**
 
 ```bash
-rtk proxy ssh beast 'nohup ~/astra-mg/splash-run env SDL2_ROOT=$HOME/Git/SDL2 SDL_NET_ROOT=$HOME/Git/SDL2_net SDL_IMAGE_ROOT=$HOME/Git/SDL2_image SDL_MIXER_ROOT=$HOME/Git/SDL2_mixer SDL_TTF_ROOT=$HOME/Git/SDL2_ttf ASTRA_QEMU_WORK_ROOT=$HOME/.cache/astra68/qemu-9.2.4 emu/qemu/publish-de25-release.sh > /tmp/splash-publish.log 2>&1 &'
+rtk proxy ssh beast 'nohup ~/astra-mg/splash-env env SDL2_ROOT=$HOME/Git/SDL2 SDL_NET_ROOT=$HOME/Git/SDL2_net SDL_IMAGE_ROOT=$HOME/Git/SDL2_image SDL_MIXER_ROOT=$HOME/Git/SDL2_mixer SDL_TTF_ROOT=$HOME/Git/SDL2_ttf emu/qemu/publish-de25-release.sh > /tmp/splash/publish.log 2>&1 &'
 ```
 
-Poll `rtk proxy ssh beast 'tail -5 /tmp/splash-publish.log'` until it ends.
+Poll `rtk proxy ssh beast 'tail -5 /tmp/splash/publish.log'` until it ends.
 Then confirm:
 
 ```bash
@@ -2556,11 +2987,20 @@ Read the PNGs on the Mac with the Read tool. Expected:
   the one before it.
 - **Handoff:** one frame is the desktop, with no text page between the last
   splash and the desktop.
+- **Bar phases:** the bar reaches about 30% (264 px of 880) before the
+  first service launches, then grows in equal service slices.
 - **`record.txt`:** the 8 bytes are `42 50 00 01` then the value. The value
   never decreases. Its last line before the desktop is state `1` (the first
-  nibble of byte 4 is `1`) with total == step.
+  nibble of byte 4 is `1`), announced, fixed 21, done == count. Decode a line
+  with
+  `python3 -c 'v=0x...;print(v>>28,(v>>27)&1,(v>>21)&63,(v>>10)&1023,v&1023)'`.
 - **Optional photo:** take one with a camera if the capture misses the very
   first frames. The helper is up before the capture service accepts.
+- **Tuning:** if the bar sits wrong against the art's panel, adjust
+  `SPLASH_BAR_X/Y/WIDTH/HEIGHT/TRACK/FILL` in `astra_terminal_display.c`.
+  Then update the self-test's pixel offsets (572 and 571 scale with the
+  width) and its `572u` fill, rerun Task 6 Step 4, republish (Step 3), and
+  capture again. Commit the tuned values with this task's docs.
 
 - [ ] **Step 5: Perturb on the board: helper restart and failure text**
 
@@ -2573,7 +3013,8 @@ Read the PNGs on the Mac with the Read tool. Expected:
    desktop.
 2. **The text path on hardware.** During a fresh boot, while the splash
    shows, write a FAILED value into the shared page:
-   `printf '\040\000\000\005' | dd of=/run/astra/post-text.bin bs=1 seek=4068 conv=notrunc`.
+   `printf '\040\000\000\000' | dd of=/run/astra/post-text.bin bs=1 seek=4068 conv=notrunc`
+   (state FAILED, all counts zero).
    Capture at once. Expected: the text console. The kernel's next step
    overwrites the value, so the splash returns. That is expected and shows
    the scene is chosen from the live record.
@@ -2591,17 +3032,28 @@ On the DE25 the display helper shows `share/astra_boot_splash.rgb565` with a
 bar from power-on to the guest's first frame. The bar is driven by the boot
 progress record (`sw/include/astra/boot_progress.h`): two big-endian words at
 text-page offset `0xFE0`, written by the ROM during POST and by the kernel
-after handoff. One step per POST check, kernel milestone, supervisor stage
-and boot service; the total is fixed when the supervisor announces its
-service count (`Boot services ....... N to start` on serial).
+after handoff. Two phases, as Haiku's boot_splash: the 21 fixed steps every
+boot takes (10 ROM, 4 kernel, supervisor stages 1-7) fill the first 30% in
+equal slices; the boot services fill the remaining 70% in N equal slices once
+the supervisor announces N (`Boot services ....... N to start` on serial);
+stage 8 is 100%. Stage 8 is DONE only if all 21 fixed steps and exactly N
+service reports arrived; anything else is FAILED.
 
 The helper shows the text page instead when the record says FAILED (a POST
-failure, a boot service that failed to start, a degraded or panicked
-kernel), after a panic, or when the record has a version it does not know.
+failure or ROM miscount, a boot service that failed to start, a degraded or
+panicked kernel), after a panic, or when the record has a version it does
+not know.
+
+**A failure after the desktop has drawn is not on screen.** Once the guest
+presents its first frame the helper hands the display over, and only a panic
+takes it back. A boot service that fails after that -- the `/config/services`
+definitions such as `ramfs` and `remote-desktop` start after the desktop --
+is visible only in the record (state FAILED) and in the system log
+(`launch-failed /services/...`). Check both when a service is missing.
 
 Read it on the board: `od -A n -t x1 -j 4064 -N 8 /run/astra/post-text.bin`
-(`42 50 00 01`, then state:4 0:4 total:12 step:12). Under QEMU:
-`xp /2wx 0xFFF22FE0`. Gate: `emu/qemu/test-boot-progress.py`.
+(`42 50 00 01`, then state:4 announced:1 fixed:6 0:1 count:10 done:10).
+Under QEMU: `xp /2wx 0xFFF22FE0`. Gate: `emu/qemu/test-boot-progress.py`.
 ```
 
 In the kit table, after the "Reading the character plane" row, add:
@@ -2636,32 +3088,36 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ## Self-Review
 
-**Spec coverage** (design `boot-splash-design.md` plus the task brief):
+**Spec coverage** (design `boot-splash-design.md`, the task brief, and the
+controller's amendments of 2026-10-08):
 
 | Requirement | Task |
 |---|---|
-| Versioned record in a shared header, fixed offset in the unused tail, checked unused | 1. Static asserts against cells and cursor. Writers of the page were checked: ROM `boot.c:68,81-101`, kernel `kernel.c:272-330`, `platform.c:422-447`, QEMU plain RAM at `astra68.c:7153-7169`. No gate reads it (`git grep` of `emu/qemu`, `tools`) |
-| ROM steps recorded; single writer | 4 (ROM writes until handoff), 2 (kernel adopts) |
+| Versioned record in a shared header, fixed offset in the unused tail, checked unused | 1. Static asserts against the cells and the cursor. Every writer of the page was checked: ROM `boot.c:68,81-101`; kernel `kernel.c:272-330` and `platform.c:422-447`; QEMU is plain RAM (`astra68.c:7153-7169`). No gate reads the page (`git grep` of `emu/qemu`, `tools`) |
+| ROM steps recorded; single writer | 4 (ROM writes until handoff); 2 (kernel adopts and checks the ROM count) |
 | Memory ordering for the ARM reader | Global Constraints; `plane_load_be32` (6); `stable_word` (5) |
-| Exact total before services launch; full list resolved up front | 5 (`boot_plan_resolve`, announce), 1 (`total = step + N + 1`) |
-| Launch order and behavior unchanged, proven by existing gates | 5 Step 5 (gates.sh, service-policy, display-mailbox, events), 8 Step 1 (full verify), order line compared with baseline |
+| Fixed shares: 30% fixed phase in equal steps, 70% services in N equal parts, DONE = 100%, never backwards | 1 (`astra_boot_progress_fill`, `test_fill`); 6 (whole-boot sweep in the self-test) |
+| Record encodes the counts, value never decreases, exact DONE/FAILED | 1 (layout, transitions, tests); 2 (kernel, ROM-count check) |
+| Exact N before services launch; full list resolved up front | 5 (`boot_plan_resolve`, announce) |
+| Launch order and behavior unchanged, proven by existing gates | 5 Step 5 (gates.sh, service-policy, display-mailbox, events); 8 Step 1 (full verify); order line compared with the baseline |
 | PROGRESS sub-call, ABI bump | 2 Step 3, 3 |
 | Helper draws splash and bar, stops at first guest frame | 6 (`display_owned` path untouched) |
-| Restart shows splash; FAILED or panic shows text | 6 (`boot_scene` and self-test), 2 (panic, degraded and idle mark FAILED) |
+| Restart shows splash; FAILED or panic shows text | 6 (`boot_scene` and self-test); 2 (panic, degraded exit and idle recovery mark FAILED) |
 | Host test of rendering logic | 6 (existing `--self-test`, run by `make test-host`) |
 | Ship in DE25 release; release test | 7 |
-| Gates: monotonic to DONE at stage 8; injected READY failure gives FAILED; stage-8 gates unchanged | 5 (`test-boot-progress.py` both scenarios; registered in `gates.sh`) |
-| Board: publish, mid-boot capture, handoff | 8 Steps 3-5 |
-| Perturbation for every behavior change | 1.5, 2.9, 3.4, 4.4, 5.6, 6.5, 6.6, 7.3, 8.5 |
-| Haiku first | Header citation; `splash_bar_fill` cites `boot_splash.cpp:83` |
+| Gates: monotonic, DONE at stage 8; READY failure gives FAILED; stage-8 gates unchanged | 5 (`test-boot-progress.py`, both scenarios; registered silently in `gates.sh`) |
+| beast isolation: parameterized scripts, byte-for-byte defaults, per-tree QEMU log and images, backups | 0 (`tree-env.sh`, `splash-env`, `splash-dryrun.sh` old/new diff and isolation grep); rechecked after the gates.sh edit in 5 Step 7 |
+| Post-desktop failures documented | 8 Step 6 (`DEBUGGING.md` 6a) |
+| Board: publish, mid-boot capture, handoff, tune bar | 8 Steps 3-5 |
+| Perturbation for every behavior change | 0.5, 1.5, 2.9, 3.4, 4.4, 5.6, 6.5, 6.6, 7.3, 8.5 |
+| Haiku first | Header citation; the two-phase rule follows `boot_splash.cpp:83` |
 
-**Placeholder scan.** No TBD or TODO. Two steps tell the implementer to
+**Placeholder scan.** No TBD or TODO. Three steps tell the implementer to
 confirm a fact before relying on it, each with the exact command:
 
 - that `next->data[0]` is the caller after PROGRESS (Task 3);
-- the `test-terminal.py` helper names (Task 5).
-
-The ROM helper placement is pinned to lines 110-115.
+- the `test-terminal.py` helper names (Task 5);
+- the beast scripts matching the edit's assertions (Task 0 Step 3).
 
 **Type consistency.**
 
@@ -2669,14 +3125,16 @@ The ROM helper placement is pinned to lines 110-115.
   Tasks 2 and 3.
 - `kernel_process_initial_image_boot_command` is the same in `process.h`,
   `kernel.c` and the test stub.
-- `boot_scene(bool, bool, uint32_t, uint32_t)`, `splash_bar_fill`,
-  `splash_draw_bar` and `plane_load_be32` match between the self-test and
-  their definitions.
-- Offsets: `ASTRA_BOOT_PROGRESS_VALUE_OFFSET` is 0xFE4 = 4068. That is the
+- `astra_boot_progress_pack` takes five arguments everywhere: the header,
+  the kernel test, the helper self-test, and the gate's `fields()` order.
+- `boot_scene`, `splash_bar_fill` (a wrapper of `astra_boot_progress_fill`),
+  `splash_draw_bar` and `plane_load_be32` match their uses.
+- Offsets: `ASTRA_BOOT_PROGRESS_VALUE_OFFSET` is 0xFE4 = 4068. That is
   `seek=4068` in Task 8 and `od -j 4064 -N 8` (header plus value).
-- The Python gate's `HEADER = 0x42500001` equals
-  `ASTRA_BOOT_PROGRESS_HEADER`.
 
-**Arithmetic.** In the gate example, the clean boot has 14 services. The
-exact step count varies with the image, which is why the gate checks
-`step == total` and never a constant.
+**Arithmetic.**
+
+- Fill at W = 880: 21 fixed steps give 264 (88 at step 7); with 7 of 14
+  services done, 264 + 308 = 572; with 14 of 14, 880.
+- The largest intermediate product is `4096*700*1023 = 2.93e9`, below 2^32.
+- The ROM probe's `0x01400000` is fixed 10 in bits 26..21.
