@@ -5,11 +5,11 @@ usage: test-fs-semantics.py QEMU ROM IMAGE [--case NAME]... [--check NAME]...
                             [--bench LABEL OUT.json]
 
 Boots a copy of IMAGE with `fssem` installed. The provider root is a
-Linux-mounted ext4 image, and QEMU runs as root through astra-qemu-root,
-the board's posture (FS11). It opens a terminal the way a person does and
-runs `fssem` over the selected cases (all of CASES by default). Then it runs
-the selected orchestrated CHECKS (all by default). After the machine stops,
-it runs `e2fsck -fn` on the provider image.
+Linux-mounted ext4 image; QEMU itself runs as the caller, never as root
+(FS11). This gate opens a terminal the way a person does and runs
+`fssem` over the selected cases (all of CASES by default). Then it runs
+the selected orchestrated CHECKS (all by default). After the machine
+stops, it runs `e2fsck -fn` on the provider image.
 
 --bench runs `fsbench --label LABEL` instead and copies its result to
 OUT.json: the QEMU-on-beast record that per-task comparisons use.

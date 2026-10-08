@@ -1,31 +1,69 @@
 #!/bin/bash
-# astra-qemu-root -- run the built Astra QEMU as root against a
-# Linux-mounted ext4 provider root: the posture astra.service has on the
-# board (docs/FILESYSTEM_PRODUCTION_PRD.md FS11).
+# astra-qemu-root -- mount a provider image as root, then run the caller's
+# QEMU as the caller. QEMU never runs as root: the only root action here
+# is the loop mount. Reading the caller's image, running QEMU, and writing
+# the result back all happen under the caller's own uid/gid, so this
+# helper is never a wider door than the caller already has to their own
+# files (docs/FILESYSTEM_PRODUCTION_PRD.md FS11).
 #
 # usage: sudo -n astra-qemu-root --image IMAGE --mount DIR
 #            [--env TZ=VALUE] -- QEMU ARGS...
 #
-# Refuses anything but:
-#   IMAGE  a regular file in a caller-owned 0700 directory directly under /tmp;
-#   DIR    an empty caller-owned directory in that same directory;
-#   QEMU   ~caller/.cache/astra68/qemu-9.2.4/build-host-*/qemu-system-m68k;
-#   ARGS   -M -m -bios -display -monitor -serial -no-reboot -qmp -drive
-#          -nodefaults -S, every path in a caller-owned 0700 /tmp directory
-#          or inside ~caller/Git/astra68.
-# IMAGE is loop-mounted on DIR (nodev,nosuid) in the caller's mount
-# namespace, so a gate can read the host copy of the syslog. QEMU then runs
-# in a private mount namespace with umask 000, so the files it creates are
-# readable by the gate and the QMP socket accepts it. DIR is unmounted when
-# QEMU exits; a failed unmount is an error, never a lazy detach.
+# IMAGE must be a regular file (not a symlink) in a caller-owned, mode
+# 0700 directory directly under /tmp; DIR an empty caller-owned directory
+# beside it. IMAGE is read with the caller's own credentials (setpriv
+# --reuid/--regid) into a root-owned scratch copy next to it, so root
+# never reads a byte the caller could not read, and a swap of IMAGE after
+# this point touches only the caller's own file, never the scratch copy
+# that gets mounted. (The scratch copy, and DIR, must be on real disk, not
+# tmpfs: confirmed by booting to the desktop with them on /tmp -- beast's
+# real disk -- against the identical setup on /run, which is tmpfs and
+# hangs before the desktop ever places an icon. HostFS's write-back path
+# under QEMU breaks on a loop-mounted ext4 image backed by a tmpfs file.)
+#
+# The copy is loop-mounted, nodev,nosuid,noexec, at DIR, in this
+# process's own (the default, host-wide) mount namespace, and it stays
+# mounted there for the whole run -- moving it into DIR's own root-owned
+# directory, so it could be unmounted from here and hidden the moment a
+# QEMU child's private namespace held an independent copy, was tried and
+# confirmed broken: QEMU raced the host side of its own HostFS init
+# against that early unmount and never finished booting, even though the
+# identical mount left in place (as here) boots cleanly every time. QEMU
+# still gets its own private mount namespace (a snapshot of this mount,
+# below) -- nothing outside this process can change what QEMU sees once
+# it starts -- but this namespace keeps the mount visible system-wide for
+# the run's duration rather than hiding it from everything else, which a
+# measurably broken earlier version of this script tried to do too early
+# for QEMU's own HostFS init to tolerate. The loop device and the scratch
+# copy are always removed when this script exits, success or not.
+#
+# DIR must already contain `work` and `sound` directories
+# (qemu_runtime.py's root_provider populates them at mkfs time with
+# `-d`, owned by the caller). This script never creates anything inside
+# the mounted filesystem: it only checks each required entry is a real
+# directory, never a symlink (checked without following one), and
+# refuses otherwise.
+#
+# QEMU then runs as the caller (setpriv --reuid/--regid/--init-groups
+# --no-new-privs, env -i with a fixed allowlist, inside its own private
+# mount namespace so its view cannot be changed from outside once it
+# starts), with ASTRA_HOSTFS_ROOT pointed at DIR: QEMU opens every file
+# under it, and every -bios/-drive/-qmp path of its own, with the
+# caller's own permissions, never root's. Those arguments need no
+# validation here -- unprivileged QEMU can do nothing the caller could
+# not already do by running it themselves.
+#
+# When QEMU exits, the scratch copy is written back to IMAGE with the
+# caller's credentials, so IMAGE reflects what the run produced.
 set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+umask 077
 
 die() { echo "astra-qemu-root: $*" >&2; exit 64; }
 
 [ "$(id -u)" -eq 0 ] || die "run through sudo"
 [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ] && [ -n "${SUDO_USER:-}" ] ||
     die "run through sudo"
-CALLER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
 
 private_tmp_dir() {
     local dir
@@ -39,42 +77,19 @@ private_tmp_dir() {
         [ "$(stat -c %a "$dir")" = 700 ]
 }
 
-# Refuses `path` unless its *resolved* location is trustworthy -- never on
-# the strength of its unresolved dirname alone. A symlink at the expected
-# name (into /etc, a device, another user's file) must never be followed
-# into a check that only looked at where the link itself sits, so a leaf
-# symlink is refused outright; a path that does not yet exist (the QMP
-# socket QEMU has not bound yet) is allowed only because nothing but the
-# caller can have placed anything inside an already-validated, caller-owned,
-# mode-0700 directory.
-allowed_path() {
-    local path=$1 directory real
-    [ -L "$path" ] && return 1
-    if [ -e "$path" ]; then
-        real=$(realpath -e -- "$path") || return 1
-        [ "$(stat -c %u "$real")" = "$SUDO_UID" ] || return 1
-    else
-        real=$path
-    fi
-    directory=$(dirname -- "$real")
-    if private_tmp_dir "$directory"; then
-        return 0
-    fi
-    case "$real" in
-        "$CALLER_HOME/Git/astra68/"*) return 0 ;;
-    esac
-    return 1
-}
-
-IMAGE= MOUNT=
-ENVS=()
+IMAGE= MOUNT= TZ_OVERRIDE=
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --image) IMAGE=$2; shift 2 ;;
-        --mount) MOUNT=$2; shift 2 ;;
+        --image)
+            [ "$#" -ge 2 ] || die "--image needs a value"
+            IMAGE=$2; shift 2 ;;
+        --mount)
+            [ "$#" -ge 2 ] || die "--mount needs a value"
+            MOUNT=$2; shift 2 ;;
         --env)
+            [ "$#" -ge 2 ] || die "--env needs a value"
             case "$2" in
-                TZ=*) ENVS+=("$2") ;;
+                TZ=*) TZ_OVERRIDE=${2#TZ=} ;;
                 *) die "environment $2 not allowed" ;;
             esac
             shift 2 ;;
@@ -83,76 +98,79 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 [ -n "$IMAGE" ] && [ -n "$MOUNT" ] && [ "$#" -ge 1 ] || die "usage"
-# Resolved before anything is trusted about them: `-f`/`stat` on a symlink
-# answer for whatever it points to (or, for ownership, for the link itself,
-# which the caller trivially owns regardless of its target) -- neither
-# check is meaningful until the symlink is out of the picture.
+# Resolved before anything is trusted about it: `-f` on a symlink answers
+# for whatever it points to, which is not a question about IMAGE at all
+# until the symlink is out of the picture.
 [ ! -L "$IMAGE" ] && [ -f "$IMAGE" ] ||
     die "image must be a regular file, not a symlink"
-IMAGE=$(realpath -e -- "$IMAGE") || die "no image"
 private_tmp_dir "$(dirname -- "$IMAGE")" ||
     die "image must be a file in a private /tmp directory"
-[ "$(stat -c %u "$IMAGE")" = "$SUDO_UID" ] || die "image not the caller's"
 [ ! -L "$MOUNT" ] && [ -d "$MOUNT" ] ||
     die "mount point must be a directory, not a symlink"
-MOUNT=$(realpath -e -- "$MOUNT") || die "no mount point"
-[ "$(dirname -- "$MOUNT")" = "$(dirname -- "$IMAGE")" ] ||
+[ "$(realpath -e -- "$(dirname -- "$MOUNT")")" = \
+  "$(realpath -e -- "$(dirname -- "$IMAGE")")" ] ||
     die "mount point must sit beside the image"
 [ "$(stat -c %u "$MOUNT")" = "$SUDO_UID" ] &&
     [ -z "$(ls -A -- "$MOUNT")" ] || die "mount point must be empty"
 
 QEMU=$(realpath -e -- "$1") || die "no QEMU"
 shift
-case "$QEMU" in
-    "$CALLER_HOME"/.cache/astra68/qemu-9.2.4/build-host-*/qemu-system-m68k) ;;
-    *) die "QEMU must be a beast host build" ;;
-esac
-[ "$(stat -c %u "$QEMU")" = "$SUDO_UID" ] || die "QEMU not the caller's"
+[ -f "$QEMU" ] && [ -x "$QEMU" ] || die "QEMU must be an executable file"
 
-ARGS=()
-while [ "$#" -gt 0 ]; do
-    option=$1
-    case "$option" in
-        -no-reboot|-nodefaults|-S)
-            ARGS+=("$option"); shift; continue ;;
-        -M|-m|-bios|-display|-monitor|-serial|-qmp|-drive)
-            [ "$#" -ge 2 ] || die "$option needs a value"
-            value=$2 ;;
-        *) die "option $option not allowed" ;;
-    esac
-    case "$option" in
-        -M) case "$value" in astra68|astra68,accel=qtest) ;; *) die "machine $value" ;; esac ;;
-        -m) [[ "$value" =~ ^[0-9]+[MG]$ ]] || die "memory $value" ;;
-        -bios) allowed_path "$value" || die "ROM path $value" ;;
-        -display|-monitor) [ "$value" = none ] || die "$option $value" ;;
-        -serial) [ "$value" = stdio ] || die "serial $value" ;;
-        -qmp)
-            [[ "$value" =~ ^unix:([^,]+),server=on,wait=off$ ]] || die "qmp $value"
-            allowed_path "${BASH_REMATCH[1]}" || die "qmp path ${BASH_REMATCH[1]}" ;;
-        -drive)
-            [[ "$value" =~ ^if=none,format=raw,file=([^,]+)$ ]] || die "drive $value"
-            allowed_path "${BASH_REMATCH[1]}" || die "drive path ${BASH_REMATCH[1]}" ;;
-    esac
-    ARGS+=("$option" "$value")
-    shift 2
-done
-
-mount -o loop,nodev,nosuid -- "$IMAGE" "$MOUNT"
+SCRATCH=$(mktemp "$(dirname -- "$IMAGE")/astra-qemu-root-scratch.XXXXXX")
+LOOPDEV=
+MOUNTED=0
 cleanup() {
-    if ! umount -- "$MOUNT"; then
-        echo "astra-qemu-root: cannot unmount $MOUNT" >&2
-        exit 70
-    fi
+    local status=$?
+    set +e
+    [ "$MOUNTED" = 1 ] && umount -- "$MOUNT"
+    # losetup -d does not take a -- option terminator the way the rest of
+    # this script's calls do (util-linux 2.39: `losetup -d -- DEV` fails
+    # "No such device", treating "--" itself as the argument). LOOPDEV is
+    # never anything but this script's own prior `losetup -f --show`
+    # output, so there is nothing for -- to guard against here anyway.
+    [ -n "$LOOPDEV" ] && losetup -d "$LOOPDEV"
+    rm -f -- "$SCRATCH" "$(dirname -- "$MOUNT")/qemu.pid"
+    exit "$status"
 }
 trap cleanup EXIT
-# QEMU creates the volume directories 0700 as root (astra68.c,
-# astra68_init); creating them first keeps them the caller's.
-install -d -o "$SUDO_UID" -g "$SUDO_GID" -m 0755 "$MOUNT/work" "$MOUNT/sound"
 
-umask 000
-env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin ASTRA_HOSTFS_ROOT="$MOUNT" \
-    "${ENVS[@]}" unshare --mount --propagation private -- "$QEMU" "${ARGS[@]}" &
+# Snapshot the caller's image under the caller's own credentials: root
+# never reads a byte the caller could not read, and a swap of IMAGE after
+# this point touches only the caller's own file, not this copy.
+setpriv --reuid="$SUDO_UID" --regid="$SUDO_GID" --init-groups --no-new-privs \
+    -- cat -- "$IMAGE" > "$SCRATCH" ||
+    die "could not read image as the caller"
+
+LOOPDEV=$(losetup -f --show -- "$SCRATCH") || die "losetup failed"
+mount -o nodev,nosuid,noexec -- "$LOOPDEV" "$MOUNT" || die "mount failed"
+MOUNTED=1
+# Never created here -- only checked, with no-follow semantics, so a
+# symlink planted at "work" or "sound" (into /etc, say) is refused rather
+# than silently given to a directory-creation call that would follow it.
+for entry in work sound; do
+    [ -d "$MOUNT/$entry" ] && [ ! -L "$MOUNT/$entry" ] ||
+        die "provider missing $entry, or it is a symlink"
+done
+
+ENV_ARGS=(env -i "PATH=/usr/sbin:/usr/bin:/sbin:/bin" "ASTRA_HOSTFS_ROOT=$MOUNT")
+[ -n "$TZ_OVERRIDE" ] && ENV_ARGS+=("TZ=$TZ_OVERRIDE")
+
+export SUDO_UID SUDO_GID
+# QEMU still gets its own private mount namespace (a snapshot of the
+# mount above): nothing outside this process can change what QEMU sees
+# once it starts, even though -- see the top of this file -- this
+# process's own namespace keeps the mount visible system-wide for the
+# run's duration rather than hiding it.
+unshare --mount --propagation private -- bash -c '
+set -euo pipefail
+exec setpriv --reuid="$SUDO_UID" --regid="$SUDO_GID" --init-groups \
+    --no-new-privs -- "$@"
+' bash "${ENV_ARGS[@]}" "$QEMU" "$@" &
 child=$!
+echo "$child" > "$(dirname -- "$MOUNT")/qemu.pid"
+chmod 0644 -- "$(dirname -- "$MOUNT")/qemu.pid"
+
 trap 'kill -TERM "$child" 2>/dev/null || true' TERM INT HUP
 set +e
 wait "$child"
@@ -161,4 +179,11 @@ while kill -0 "$child" 2>/dev/null; do
     wait "$child"
     status=$?
 done
+set -e
+
+umount -- "$MOUNT" || die "cannot unmount"
+MOUNTED=0
+setpriv --reuid="$SUDO_UID" --regid="$SUDO_GID" --init-groups --no-new-privs \
+    -- tee -- "$IMAGE" < "$SCRATCH" > /dev/null ||
+    die "could not write the image back to the caller"
 exit "$status"

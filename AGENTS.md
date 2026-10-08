@@ -30,12 +30,30 @@
   session through completion. A wrapper returning without visible output is not
   proof that its remote child completed or failed; confirm both the session exit
   status and the expected artifact/log before starting a replacement run.
-- Filesystem gates run QEMU as root, as `astra.service` does on the board:
-  `tools/astra-qemu-root` (installed as `/usr/local/sbin/astra-qemu-root`,
-  allowed by `/etc/sudoers.d/astra-qemu-root`) loop-mounts a fresh ext4
-  provider image and runs only a `beast` host build of QEMU, with an
-  allowlisted argument shape, in a private mount namespace. Reinstall it
-  with `sudo install -o root -g root -m 0755 tools/astra-qemu-root
+- Filesystem gates mount the provider image as root, then drop privilege
+  and run QEMU as the caller -- QEMU never runs as root, on beast or on
+  the board: `tools/astra-qemu-root` (installed as
+  `/usr/local/sbin/astra-qemu-root`, allowed by
+  `/etc/sudoers.d/astra-qemu-root`) reads the caller's image with the
+  caller's own credentials (`setpriv --reuid/--regid`) into a root-owned
+  scratch copy beside it, loop-mounts that copy at the caller's `--mount`
+  directory, then `setpriv`-drops to the caller before exec'ing QEMU
+  inside its own private mount namespace, so QEMU opens every file --
+  its own `-bios`/`-drive`/`-qmp` paths and everything under the provider
+  mount -- with the caller's own permissions, never root's. The mount
+  stays visible system-wide for the run's duration rather than being
+  hidden: unmounting it from the wrapper's own namespace the moment a
+  QEMU child's private copy existed raced the host side of QEMU's own
+  HostFS init and broke the desktop boot every time, while leaving it in
+  place boots cleanly; the loop device and scratch copy are still always
+  removed when the run ends, success or not. Both the scratch copy and
+  the mount point must be on real disk, never tmpfs (`/run`): a
+  loop-mounted ext4 image backed by a tmpfs file breaks the same HostFS
+  path. The mounted image must already contain `work`/`sound`
+  (qemu_runtime.py's `root_provider` populates them at `mkfs.ext4 -d`
+  time); the wrapper only checks for them without following a symlink,
+  it never creates anything inside the mount. Reinstall it with `sudo
+  install -o root -g root -m 0755 tools/astra-qemu-root
   /usr/local/sbin/` after any change; gates refuse a stale copy.
 
 ## Kernel Development Discipline

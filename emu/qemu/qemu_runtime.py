@@ -29,19 +29,31 @@ ROOT_WRAPPER_SOURCE = os.path.join(
 
 
 def root_provider(work, size_mib=256):
-    """A fresh ext4 provider image and its empty mount point in `work`.
+    """A fresh ext4 provider image and its empty mount point in `work`,
+    `work`/`sound` pre-populated at mkfs time, owned by the caller.
 
     `work` must be a caller-owned 0700 directory directly under /tmp (what
     tempfile.mkdtemp(dir="/tmp") makes). Returns (launcher prefix, mount
-    point, image): the prefix runs QEMU as root through astra-qemu-root,
-    the board's posture (FS11). Explicit features keep the image mountable
-    by the board's e2fsprogs 1.46 (.superpowers/sdd/fs-linux-audit.md G15).
+    point, image): the prefix runs QEMU through astra-qemu-root, which
+    loop-mounts the image at the mount point (on real disk -- /tmp, not a
+    tmpfs path like /run: a loop-mounted ext4 image backed by a tmpfs
+    file breaks HostFS's write-back path under QEMU, confirmed by booting
+    to the desktop on /tmp against the identical setup on /run, which
+    hangs before the desktop ever places an icon), then runs QEMU as the
+    caller, never as root (FS11), inside QEMU's own private mount
+    namespace. `work`/`sound` are pre-populated here, at mkfs time
+    (`-d`), because the wrapper never creates anything inside the mounted
+    filesystem itself. Explicit features keep the image mountable by the
+    board's e2fsprogs 1.46 (.superpowers/sdd/fs-linux-audit.md G15).
     """
     with open(ROOT_WRAPPER, "rb") as installed, \
             open(ROOT_WRAPPER_SOURCE, "rb") as source:
         if installed.read() != source.read():
             raise RuntimeError("%s is stale; reinstall tools/astra-qemu-root"
                                % ROOT_WRAPPER)
+    seed = os.path.join(work, "seed")
+    os.makedirs(os.path.join(seed, "work"))
+    os.makedirs(os.path.join(seed, "sound"))
     image = os.path.join(work, "provider.img")
     mount = os.path.join(work, "provider")
     os.mkdir(mount)
@@ -49,6 +61,6 @@ def root_provider(work, size_mib=256):
         handle.truncate(size_mib * 1024 * 1024)
     subprocess.run(["/usr/sbin/mkfs.ext4", "-q", "-F", "-O", "^orphan_file",
                     "-E", "root_owner=%d:%d" % (os.getuid(), os.getgid()),
-                    image], check=True)
+                    "-d", seed, image], check=True)
     return (["sudo", "-n", ROOT_WRAPPER, "--image", image, "--mount", mount,
              "--"], mount, image)

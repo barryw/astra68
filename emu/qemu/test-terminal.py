@@ -743,8 +743,7 @@ class Machine:
                     if self.gdb_path else []) +
                    list(extra_args) +
                    ["-drive", "if=none,format=raw,file=%s" % image])
-        environment = qemu_environment(
-            qemu, hostfs_root=None if launcher else hostfs_root)
+        environment = qemu_environment(qemu, hostfs_root=hostfs_root)
         self.process = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1, env=environment)
