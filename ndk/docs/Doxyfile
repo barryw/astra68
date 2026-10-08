@@ -39,6 +39,7 @@ INPUT                  = include/astra ../sw/include/astra/gui.h \
                          ../sw/include/astra/input.h \
                          ../sw/include/astra/library.h \
                          ../sw/include/astra/limits.h \
+                         ../sw/include/astra/log_ring.h \
                          ../sw/include/astra/network.h \
                          ../sw/include/astra/ntp.h \
                          ../sw/include/astra/posix_process.h \
@@ -50,6 +51,7 @@ INPUT                  = include/astra ../sw/include/astra/gui.h \
                          ../sw/include/astra/status.h \
                          ../sw/include/astra/stream_service.h \
                          ../sw/include/astra/syscall.h \
+                         ../sw/include/astra/time_page.h \
                          ../sw/include/astra/vfs_service.h
 FILE_PATTERNS          = *.h
 RECURSIVE              = YES

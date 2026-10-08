@@ -18,6 +18,14 @@ Threads, waits, clocks, memory, logging, process entry, and text utilities from 
 :project: astra-ndk
 ```
 
+```{doxygenfile} time_page.h
+:project: astra-ndk
+```
+
+```{doxygenfile} log_ring.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} posix.h
 :project: astra-ndk
 ```

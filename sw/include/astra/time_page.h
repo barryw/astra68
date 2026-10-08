@@ -18,48 +18,58 @@
 
 #include <astra/address_space.h>
 
-/* Overridable so a host test can supply a page it can map. */
 #ifndef ASTRA_TIME_PAGE_ADDRESS
+/** Where the page is mapped; overridable so a host test can supply a page it can map. */
 #define ASTRA_TIME_PAGE_ADDRESS ASTRA_TIME_PAGE_ADDRESS_START
 #endif
-#define ASTRA_TIME_PAGE_MAGIC   0x54494D45u /* "TIME" */
+/** AstraTimePage::magic, "TIME". */
+#define ASTRA_TIME_PAGE_MAGIC   0x54494D45u
+/** AstraTimePage::version this header reads. */
 #define ASTRA_TIME_PAGE_VERSION 1u
 /** Set in `flags` when the wall-clock fields are valid (RTC_STATUS valid). */
 #define ASTRA_TIME_PAGE_WALL_VALID 0x1u
 
+/** One of the page's two copies of the clock state. */
 typedef struct AstraTimePageCopy {
-    uint32_t monotonic_high;   /* ns since boot */
-    uint32_t monotonic_low;
-    uint32_t wall_high;        /* ns since 1970-01-01T00:00:00Z */
-    uint32_t wall_low;
-    int32_t  utc_offset;       /* seconds east of UTC */
-    uint32_t zone;             /* packed 4-character zone name */
-    uint32_t flags;            /* ASTRA_TIME_PAGE_WALL_VALID */
-    uint32_t reserved;
+    uint32_t monotonic_high;   /**< High word of ns since boot. */
+    uint32_t monotonic_low;    /**< Low word of ns since boot. */
+    uint32_t wall_high;        /**< High word of ns since 1970-01-01T00:00:00Z. */
+    uint32_t wall_low;         /**< Low word of ns since 1970-01-01T00:00:00Z. */
+    int32_t  utc_offset;       /**< Seconds east of UTC. */
+    uint32_t zone;             /**< Packed 4-character zone name. */
+    uint32_t flags;            /**< ::ASTRA_TIME_PAGE_WALL_VALID. */
+    uint32_t reserved;         /**< Zero. */
 } AstraTimePageCopy;
 
+/** The page the kernel maps read-only at ::ASTRA_TIME_PAGE_ADDRESS. */
 typedef struct AstraTimePage {
-    uint32_t magic;
-    uint32_t version;
-    uint32_t sequence;         /* copy[sequence & 1] is current */
-    uint32_t reserved;
-    AstraTimePageCopy copy[2];
+    uint32_t magic;            /**< ::ASTRA_TIME_PAGE_MAGIC. */
+    uint32_t version;          /**< ::ASTRA_TIME_PAGE_VERSION. */
+    uint32_t sequence;         /**< copy[sequence & 1] is current. */
+    uint32_t reserved;         /**< Zero. */
+    AstraTimePageCopy copy[2]; /**< The current copy and the one being written. */
 } AstraTimePage;
 
+/** @cond ASTRA_INTERNAL */
 _Static_assert(sizeof(AstraTimePageCopy) == 32u, "time page copy ABI");
 _Static_assert(sizeof(AstraTimePage) == 80u, "time page ABI");
+/** @endcond */
 
+/** One consistent clock reading, as astra_time_now() returns it. */
 typedef struct AstraTimeSample {
-    uint64_t monotonic_ns;
-    uint64_t wall_ns;
-    int32_t  utc_offset;
-    uint32_t zone;
-    uint32_t wall_valid;
+    uint64_t monotonic_ns;     /**< Nanoseconds since boot. */
+    uint64_t wall_ns;          /**< Nanoseconds since 1970-01-01T00:00:00Z. */
+    int32_t  utc_offset;       /**< Seconds east of UTC. */
+    uint32_t zone;             /**< Packed 4-character zone name. */
+    uint32_t wall_valid;       /**< Nonzero when the wall-clock fields are valid. */
 } AstraTimeSample;
 
 /**
- * Read one consistent copy. Returns 1, or 0 when the page is absent or not
- * this ABI (the caller falls back to the clock syscalls).
+ * Read one consistent copy.
+ * @param page The time page, or NULL.
+ * @param sample Receives the reading.
+ * @return 1, or 0 when the page is absent or not this ABI (the caller falls
+ * back to the clock syscalls).
  */
 static inline int
 astra_time_page_read(const volatile AstraTimePage *page,
@@ -99,6 +109,8 @@ astra_time_page_read(const volatile AstraTimePage *page,
 /**
  * The writer half, shared by the kernel and the host test so both exercise
  * one implementation. Writes the copy readers are not using, then publishes.
+ * @param page The time page.
+ * @param value The new clock state.
  */
 static inline void
 astra_time_page_publish(volatile AstraTimePage *page,
