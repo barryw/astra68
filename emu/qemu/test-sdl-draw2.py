@@ -91,9 +91,14 @@ def main():
             stopped = display_count(machine, "astra-display-render-commands")
             time.sleep(1)
             settled = display_count(machine, "astra-display-render-commands")
+            # The display service holds LOG (docs/SYSTEM_LOG.md section 7):
+            # its render failure goes to the host syslog, never to serial.
+            # "user fault" is the kernel's own console text.
             if settled - stopped >= 100 or any(
-                    "user fault" in line or "display window-command render "
-                    "failed" in line for line in machine.recent_serial(100)):
+                    "user fault" in line
+                    for line in machine.recent_serial(100)) or any(
+                    "display window-command render failed" in line
+                    for line in machine.syslog_lines()):
                 raise RuntimeError("SDL quit left rendering or faults: "
                                    "commands=%d/%d trace=%r" %
                                    (stopped, settled, trace[-20:]))

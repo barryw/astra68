@@ -35,7 +35,10 @@ def main():
                                    machine.recent_serial(40))
             deadline = time.monotonic() + 45
             while time.monotonic() < deadline:
-                trace = machine.trace()
+                # net_probe.c holds LOG (docs/SYSTEM_LOG.md section 7): its
+                # astra_log markers leave the kernel ring for the host syslog
+                # on its first log call.
+                trace = machine.trace_with_syslog()
                 failures = [line for line in trace if "SDL_NET_" in line and
                             "_FAIL" in line]
                 if failures:

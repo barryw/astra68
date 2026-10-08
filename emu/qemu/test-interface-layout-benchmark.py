@@ -21,15 +21,8 @@ class Machine:
     def wait_for_serial(self, marker, deadline):
         return marker == terminal.BOOT_MARKER and deadline > 0
 
-    def wait_for_text(self, needles, deadline):
-        if deadline <= 0:
-            return None, 0
-        if all(any(needle in line for line in self.log) for needle in needles):
-            return self.log, 1
-        return None, 0
-
-    def said(self):
-        return self.log, 1
+    def syslog_lines(self):
+        return self.log
 
     def recent_faults(self):
         return []
