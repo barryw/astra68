@@ -21,6 +21,8 @@ enum {
 };
 
 static uint32_t device_handle;
+static uint32_t work_session;
+static uint32_t sound_session;
 static uint32_t work_scope;
 static uint32_t sound_scope;
 static _Alignas(4) uint32_t transport_lock;
@@ -38,8 +40,8 @@ static AstraVfsSessionSlot metrics_sessions[ASTRA_VFS_SESSION_MAX];
 static AstraVfsPortService metrics_port;
 static AstraVfsPortWorker metrics_worker;
 /* SOUND: is the host directory the Linux audio host reads SoundFonts from,
- * so an update here is what it plays. It has no direct path: a client's
- * commands come through this service, which names the volume. */
+ * so an update here is what it plays. Its clients reach it through their
+ * own lanes, bound to SOUND's scope, which names SOUND's root session. */
 static AstraVfsHostBackend sound_backend;
 static AstraVfsService sound_service;
 static AstraVfsSessionSlot sound_sessions[ASTRA_VFS_SESSION_MAX];
@@ -130,9 +132,8 @@ static const char *const fs_group_names[] = {
     "host.fs.write", "host.fs.sync", "host.fs.truncate", "host.fs.stat",
     "host.fs.readdir", "host.fs.mkdir", "host.fs.unlink", "host.fs.rename",
     "host.fs.chmod", "host.fs.readlink", "host.fs.symlink", "host.fs.link",
-    "host.fs.open_at", "host.fs.unlink_at", "host.fs.chmod_file",
-    "host.fs.chmod_at", "host.fs.filesystem_info", "host.fs.stat_at",
-    "host.fs.stat_file"
+    "host.fs.filesystem_info", "host.fs.session_open",
+    "host.fs.session_close", "host.fs.claim"
 };
 _Static_assert(sizeof(fs_group_names) / sizeof(fs_group_names[0]) ==
                    ASTRA_HOST_FS_MAX + 1u,
@@ -286,21 +287,35 @@ int astra_main(const AstraStartupInfo *startup)
             &transport, device_handle, astra_vfs_state_lock_acquire,
             astra_vfs_state_lock_release, &transport_lock))
         status = HOSTFS_FAIL_DEVICE;
-    /* One scope per volume: the grants of storage protocol 28 (Task 5 makes
-     * them one per grant). Nothing revokes them here; they live as long as
-     * HostFS, and the kernel revokes them when it dies. */
+    /* HostFS is the one claimed filesystem owner: no other HOST_DEVICE
+     * holder drives files, and only a session it opened can be bound to a
+     * scope it created. One root session per volume. */
     if (status == ASTRA_STATUS_OK &&
-        (astra_host_scope_create(device_handle, ASTRA_HOST_FS_VOLUME_WORK,
-                                 0u, &work_scope) != ASTRA_SYSCALL_OK ||
-         astra_host_scope_create(device_handle, ASTRA_HOST_FS_VOLUME_SOUND,
-                                 0u, &sound_scope) != ASTRA_SYSCALL_OK))
+        (astra_vfs_host_claim(&transport, transport.generation, 0) !=
+             ASTRA_VFS_OK ||
+         astra_vfs_host_session_open(&transport, transport.generation, 0u,
+                                     ASTRA_HOST_FS_VOLUME_WORK, "/", 0u,
+                                     &work_session) != ASTRA_VFS_OK ||
+         astra_vfs_host_session_open(&transport, transport.generation, 0u,
+                                     ASTRA_HOST_FS_VOLUME_SOUND, "/", 0u,
+                                     &sound_session) != ASTRA_VFS_OK))
+        status = HOSTFS_FAIL_DEVICE;
+    /* One scope per volume, naming its session: the grants of storage
+     * protocol 28 (Task 5 makes them one per grant). Nothing revokes them
+     * here; they live as long as HostFS, and the kernel revokes them when
+     * it dies, as the provider closes its sessions. */
+    if (status == ASTRA_STATUS_OK &&
+        (astra_host_scope_create(device_handle, work_session, 0u,
+                                 &work_scope) != ASTRA_SYSCALL_OK ||
+         astra_host_scope_create(device_handle, sound_session, 0u,
+                                 &sound_scope) != ASTRA_SYSCALL_OK))
         status = HOSTFS_FAIL_DEVICE;
     if (status == ASTRA_STATUS_OK &&
         (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
                                        &service_storage,
                                        &service_capacity) ||
          !astra_vfs_host_init(&backend, &transport, transport.generation,
-                              ASTRA_HOST_FS_VOLUME_WORK) ||
+                              work_session) ||
          !astra_vfs_service_init(
              &service, astra_vfs_host_ops(), &backend, service_sessions,
              ASTRA_VFS_SESSION_MAX, service_storage, service_capacity) ||
@@ -315,8 +330,7 @@ int astra_main(const AstraStartupInfo *startup)
         (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
                                        &sound_storage, &sound_capacity) ||
          !astra_vfs_host_init(&sound_backend, &transport,
-                              transport.generation,
-                              ASTRA_HOST_FS_VOLUME_SOUND) ||
+                              transport.generation, sound_session) ||
          !astra_vfs_service_init(
              &sound_service, astra_vfs_host_ops(), &sound_backend,
              sound_sessions, ASTRA_VFS_SESSION_MAX, sound_storage,

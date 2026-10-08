@@ -15,12 +15,10 @@ typedef struct AstraVfsHostDirect {
     uint32_t byte_size;
     uint32_t generation;     /* the provider generation the lane began in */
     AstraVfsHostBackend backend;
-    char staged_path[ASTRA_VFS_PATH_MAX];
-    uint8_t staged_operation;
 } AstraVfsHostDirect;
 
 #define ASTRA_VFS_HOST_DIRECT_MAGIC UINT32_C(0x56484452)
-#define ASTRA_VFS_HOST_DIRECT_VERSION 7u
+#define ASTRA_VFS_HOST_DIRECT_VERSION 8u
 
 /*
  * One host transport per process. A thread has one host channel, so every
@@ -133,8 +131,8 @@ uint32_t astra_vfs_host_direct_connect(AstraVfsClient *client,
 
     if (client == NULL || scope == 0u || client->port_direct_address != NULL)
         return ASTRA_VFS_ERR_INVALID;
-    /* The kernel says which session this scope binds; the client only
-     * names it back, and the provider refuses any other. */
+    /* The kernel says which provider session this scope binds; the client
+     * names it in every command, and the provider refuses any other. */
     if (astra_host_lease_query(scope, &lease) != ASTRA_SYSCALL_OK ||
         (lease.capabilities & ASTRA_HOST_CAP_FS_SCOPE) == 0u)
         return ASTRA_VFS_ERR_UNSUPPORTED;
@@ -179,8 +177,7 @@ static int direct_state_valid(const AstraVfsHostDirect *direct, uint32_t span,
 {
     return direct->magic == ASTRA_VFS_HOST_DIRECT_MAGIC &&
            direct->version == ASTRA_VFS_HOST_DIRECT_VERSION &&
-           direct->byte_size == span && session == 1u &&
-           direct->staged_operation <= ASTRA_VFS_STAGE_SYMLINK;
+           direct->byte_size == span && session == 1u;
 }
 
 /* After an in-place exec: the area and the scope handle survived, the lanes
@@ -318,16 +315,6 @@ static void publish_info(AstraVfsReply *reply, const AstraVfsNodeInfo *info)
     reply->kind = info->kind;
     reply->mode = info->mode;
     reply->nlink = info->nlink;
-}
-
-static int stage_path(AstraVfsHostDirect *direct, const uint8_t *path)
-{
-    for (uint32_t index = 0u; index < ASTRA_VFS_PATH_MAX; ++index) {
-        direct->staged_path[index] = (char)path[index];
-        if (path[index] == 0u)
-            return 1;
-    }
-    return 0;
 }
 
 static void direct_readdir(const AstraVfsBackend *backend,
@@ -585,24 +572,6 @@ uint32_t astra_vfs_host_direct_transport(
                 backend.context, request->file,
                 (const char *)request->body.path, request->flags);
         break;
-    case ASTRA_VFS_OP_RENAME_FROM:
-        if (!stage_path(direct, request->body.path))
-            reply->status = ASTRA_VFS_ERR_INVALID;
-        else {
-            direct->staged_operation = ASTRA_VFS_STAGE_RENAME;
-            reply->status = ASTRA_VFS_OK;
-        }
-        break;
-    case ASTRA_VFS_OP_RENAME_TO:
-        if (direct->staged_operation != ASTRA_VFS_STAGE_RENAME)
-            reply->status = ASTRA_VFS_ERR_PROTOCOL;
-        else {
-            direct->staged_operation = ASTRA_VFS_STAGE_NONE;
-            reply->status = ops->rename(
-                backend.context, direct->staged_path,
-                (const char *)request->body.path);
-        }
-        break;
     case ASTRA_VFS_OP_RENAME: {
         const AstraVfsRenameRequest *rename =
             (const AstraVfsRenameRequest *)request;
@@ -654,25 +623,6 @@ uint32_t astra_vfs_host_direct_transport(
             reply->status = ASTRA_VFS_ERR_PROTOCOL;
         break;
     }
-    case ASTRA_VFS_OP_SYMLINK_TARGET:
-        if (request->body.path[0] == 0u ||
-            !stage_path(direct, request->body.path))
-            reply->status = ASTRA_VFS_ERR_INVALID;
-        else {
-            direct->staged_operation = ASTRA_VFS_STAGE_SYMLINK;
-            reply->status = ASTRA_VFS_OK;
-        }
-        break;
-    case ASTRA_VFS_OP_SYMLINK_TO:
-        if (direct->staged_operation != ASTRA_VFS_STAGE_SYMLINK)
-            reply->status = ASTRA_VFS_ERR_PROTOCOL;
-        else {
-            direct->staged_operation = ASTRA_VFS_STAGE_NONE;
-            reply->status = ops->symlink(
-                backend.context, direct->staged_path,
-                (const char *)request->body.path);
-        }
-        break;
     case ASTRA_VFS_OP_SYMLINK: {
         const AstraVfsRenameRequest *symlink =
             (const AstraVfsRenameRequest *)request;

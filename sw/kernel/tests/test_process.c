@@ -914,6 +914,7 @@ static uint32_t host_byte_size;
 static uint32_t host_command_count;
 static uint32_t host_channel_open_calls;
 static uint32_t host_channel_close_calls;
+static uint32_t host_channel_close_status;
 static uint32_t host_channel_scope;
 static uint32_t host_channel_scope_flags;
 static uint32_t host_channel_scope_owner;
@@ -1015,7 +1016,7 @@ uint32_t kernel_platform_host_channel_close(
     memset(&host_channel_states[slot], 0,
            sizeof(host_channel_states[slot]));
     ++host_channel_close_calls;
-    return ASTRA_SYSCALL_OK;
+    return host_channel_close_status;
 }
 
 uint32_t kernel_platform_host_channel_attach(
@@ -1189,6 +1190,7 @@ static void reset_host_device(void)
     host_command_count = 0u;
     host_channel_open_calls = 0u;
     host_channel_close_calls = 0u;
+    host_channel_close_status = ASTRA_SYSCALL_OK;
     host_channel_scope = 0u;
     host_channel_scope_flags = 0u;
     host_channel_scope_owner = 0u;
@@ -9157,6 +9159,111 @@ static void test_host_scope_failed_detach(void)
     assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, sound, 0u, 0u, 0u, 0u,
                       &next) == ASTRA_SYSCALL_OK);
     assert(host_channel_close_calls == 1u);
+
+    /* The provider refuses the CLOSE as well (review N1): the kernel
+     * still answers PEER_DEAD, holds the channel dead, and never asks the
+     * provider to close it a second time. */
+    assert(scope_call(ASTRA_SYSCALL_DMA_CREATE, KERNEL_PAGE_SIZE, user_info,
+                      0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+    channel.buffer = buffer.handle;
+    channel.channel_generation = 0u;
+    channel.channel_address = 0u;
+    channel.host_generation = 0u;
+    assert(kernel_user_copy_to_asm(user_open, &channel, sizeof(channel)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_OPEN, sound, user_open, 0u,
+                      0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    host_channel_detach_status = ASTRA_SYSCALL_ACCESS_DENIED;
+    host_channel_close_status = ASTRA_SYSCALL_PEER_DEAD;
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_REVOKE, sound, 0u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_PEER_DEAD);
+    host_channel_detach_status = ASTRA_SYSCALL_OK;
+    host_channel_close_status = ASTRA_SYSCALL_OK;
+    assert(host_channel_detach_calls == 2u && host_channel_close_calls == 2u);
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_WAIT, 0u, 1u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_PEER_DEAD);
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, sound, 0u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_OK);
+    assert(host_channel_close_calls == 2u);
+}
+
+/*
+ * ATTACH makes the checks OPEN makes (review M5): a host that is not ready,
+ * or a channel opened in an earlier host generation, answers PEER_DEAD and
+ * never reaches the provider.
+ */
+static void test_host_scope_attach_checks(void)
+{
+    const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    const uint32_t user_open = KERNEL_PROCESS_STACK_TOP - 128u;
+    KernelProcessBootstrapCapability capability = {0};
+    KernelCpuContext *next = NULL;
+    AstraStartupCapability table[3];
+    AstraDmaBufferInfo buffer;
+    AstraHostChannelOpen channel;
+    uint32_t process_id = 0u;
+    uint32_t device = 0u;
+    uint32_t work;
+    uint32_t sound;
+
+    loader_build_image();
+    initialize_test();
+    host_state.capabilities |= ASTRA_HOST_CAP_FS_SCOPE;
+    capability.name = ASTRA_CAPABILITY_HOST_DEVICE;
+    capability.kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capability.device_id = ASTRA_DEVICE_ID_HOST0;
+    capability.rights = KERNEL_DEVICE_RIGHTS;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &capability, 1u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(
+               table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+               sizeof(table)) == KERNEL_USER_COPY_OK);
+    for (uint32_t index = 0u; index < 3u; ++index)
+        if (astra_capability_name_equal(table[index].name,
+                                        ASTRA_CAPABILITY_HOST_DEVICE))
+            device = table[index].handle;
+    assert(device != 0u);
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, device, 11u, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    work = next->data[1];
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, device, 12u, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    sound = next->data[1];
+    assert(scope_call(ASTRA_SYSCALL_DMA_CREATE, KERNEL_PAGE_SIZE, user_info,
+                      0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+    memset(&channel, 0, sizeof(channel));
+    channel.size = sizeof(channel);
+    channel.buffer = buffer.handle;
+    channel.byte_size = ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                        ASTRA_HOST_COMMAND_SIZE;
+    channel.command_capacity = 1u;
+    assert(kernel_user_copy_to_asm(user_open, &channel, sizeof(channel)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_OPEN, work, user_open, 0u,
+                      0u, 0u, &next) == ASTRA_SYSCALL_OK);
+
+    /* A host that is not ready. */
+    host_state.state_flags &= ~ASTRA_HOST_STATE_READY;
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound, 0u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_PEER_DEAD);
+    host_state.state_flags |= ASTRA_HOST_STATE_READY;
+    /* A channel of an earlier host generation. */
+    ++host_state.host_generation;
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound, 0u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_PEER_DEAD);
+    --host_state.host_generation;
+    assert(host_channel_attach_calls == 0u);
+    /* The same channel and scope, all checks met. */
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound, 0u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_OK);
+    assert(host_channel_attach_calls == 1u &&
+           host_channel_attach_scope == 12u);
 }
 
 /*
@@ -15270,6 +15377,7 @@ int main(void)
     test_audio_stream();
     test_host_scope();
     test_host_scope_failed_detach();
+    test_host_scope_attach_checks();
     test_bootstrap_capabilities();
     test_capability_roots_are_carried();
     test_arguments_and_environment_are_published();

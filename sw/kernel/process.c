@@ -2481,12 +2481,22 @@ static uint32_t host_channel_attach(uint32_t slot, KernelHostScope *scope)
  * wait answered PEER_DEAD until its owner closes the slot. Kernel and
  * provider then agree -- nothing is bound because nothing is open.
  */
-static void host_channel_kill(uint32_t slot)
+/*
+ * The provider's CLOSE result is not trusted to be OK either (review N1).
+ * Invariant: the provider refuses a CLOSE only for a slot it holds no
+ * active channel in, or for an owner or generation that does not match --
+ * and the kernel only kills a slot it holds open with the owner and
+ * generations it configured. So a refusal means nothing is open there to
+ * stay bound; the kernel answers PEER_DEAD and treats the channel as dead
+ * either way, never as still serving.
+ */
+static uint32_t host_channel_kill(uint32_t slot)
 {
     KernelHostChannel *channel = &host_channels[slot];
+    uint32_t result = ASTRA_SYSCALL_PEER_DEAD;
 
     if (channel->dead != 0u)
-        return;
+        return result;
     (void)kernel_platform_host_channel_close(
         channel->owner, channel->host_generation,
         channel->channel_generation, slot);
@@ -2498,6 +2508,7 @@ static void host_channel_kill(uint32_t slot)
         channel->waiting = 0u;
     }
     channel->dead = 1u;
+    return result;
 }
 
 static uint32_t host_scope_revoke(KernelHostScope *scope)
@@ -2524,8 +2535,7 @@ static uint32_t host_scope_revoke(KernelHostScope *scope)
                     channel->owner, channel->host_generation,
                     channel->channel_generation, slot, word) !=
                     ASTRA_SYSCALL_OK) {
-                result = ASTRA_SYSCALL_PEER_DEAD;
-                host_channel_kill(slot);
+                result = host_channel_kill(slot);
             }
             channel->scopes[at] = 0u;
             ++unbound;
@@ -13131,6 +13141,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     }
     case ASTRA_SYSCALL_HOST_SCOPE_REVOKE:
     case ASTRA_SYSCALL_HOST_SCOPE_ATTACH: {
+        KernelPlatformHostState host_state;
         KernelHostScope *scope = NULL;
         KernelHandleStatus handle_status = kernel_handle_lookup(
             current->handles, thread->context.data[1],
@@ -13159,6 +13170,22 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_PEER_DEAD;
             break;
         }
+        /* The checks OPEN makes (review M5): a lease that is still active,
+         * on a host that is ready. The channel's generation is compared
+         * below, once the channel is known. */
+        {
+            KernelDeviceSnapshot snapshot;
+
+            if (kernel_device_query(scope->lease, &snapshot) !=
+                    KERNEL_DEVICE_OK ||
+                snapshot.device_id != ASTRA_DEVICE_ID_HOST0 ||
+                snapshot.lease_state != ASTRA_DEVICE_LEASE_ACTIVE ||
+                !kernel_platform_host_state(&host_state) ||
+                (host_state.state_flags & ASTRA_HOST_STATE_READY) == 0u) {
+                result = ASTRA_SYSCALL_PEER_DEAD;
+                break;
+            }
+        }
         for (uint32_t index = 0u; index < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
              ++index)
             if (host_channels[index].active != 0u &&
@@ -13172,8 +13199,11 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             break;
         }
         /* A device channel answers to its device, not to scopes; a channel
-         * a failed revocation closed answers to nothing. */
-        result = host_channels[slot].dead != 0u ? ASTRA_SYSCALL_PEER_DEAD :
+         * a failed revocation closed, or one opened in an earlier host
+         * generation, answers to nothing. */
+        result = host_channels[slot].dead != 0u ||
+                 host_channels[slot].host_generation !=
+                     host_state.host_generation ? ASTRA_SYSCALL_PEER_DEAD :
                  host_channels[slot].bound != 0u ?
             host_channel_attach(slot, scope) : ASTRA_SYSCALL_ACCESS_DENIED;
         break;

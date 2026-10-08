@@ -57,17 +57,9 @@ typedef struct AstraVfsSessionSlot {
     uint32_t open_files;
     uint16_t generation;
     uint16_t version;       /* the version agreed at HELLO */
-    char staged_path[ASTRA_VFS_PATH_MAX];
     uint16_t inflight;
-    uint8_t staged_operation;
     uint8_t closing;
 } AstraVfsSessionSlot;
-
-enum {
-    ASTRA_VFS_STAGE_NONE = 0,
-    ASTRA_VFS_STAGE_RENAME,
-    ASTRA_VFS_STAGE_SYMLINK
-};
 
 typedef struct AstraVfsServiceStats {
     uint32_t requests;

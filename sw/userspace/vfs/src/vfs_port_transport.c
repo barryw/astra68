@@ -757,7 +757,6 @@ first_operation(uint32_t operation)
            operation == ASTRA_VFS_OP_UNLINK ||
            operation == ASTRA_VFS_OP_CHMOD ||
            operation == ASTRA_VFS_OP_READLINK ||
-           operation == ASTRA_VFS_OP_SYMLINK_TARGET ||
            operation == ASTRA_VFS_OP_READDIR_BATCH ||
            operation == ASTRA_VFS_OP_READ_PATH;
 }

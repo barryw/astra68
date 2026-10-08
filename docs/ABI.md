@@ -39,7 +39,8 @@ one, and the supervisor grants that right only as `HOST_FILESYSTEM`, to
 HostFS. Every other `HOST_DEVICE` grant arrives without it.
 
 - `ASTRA_SYSCALL_HOST_SCOPE_CREATE` (109): `data[1]` the device,
-  `data[2]` the provider word (a volume under host command record 2),
+  `data[2]` the provider word (a session of the claimed filesystem owner
+  under host command record 3),
   `data[3]` `ASTRA_HOST_SCOPE_READ_ONLY | ASTRA_HOST_SCOPE_DELEGATE`.
   Answers a handle with READ, WRITE, TRANSFER and ADMINISTER; UNSUPPORTED
   without `ASTRA_HOST_CAP_FS_SCOPE`.
@@ -58,12 +59,44 @@ HostFS. Every other `HOST_DEVICE` grant arrives without it.
 Host transport `0x0001000d` adds `ASTRA_HOST_CAP_FS_SCOPE` (bit 10). The
 kernel-to-provider channel configuration is version 2: `scope`,
 `scope_flags`, `scope_owner` and the operations ATTACH (3) and DETACH (4).
-On a bound channel the provider runs only filesystem commands whose volume
+On a bound channel the provider runs only filesystem commands whose session
 names an attached scope (else `ASTRA_STATUS_ACCESS`), refuses mutations
 under a read-only scope (`ASTRA_STATUS_READ_ONLY`), and answers a handle only
-under the volume it was opened in. `runtime.library` 1.14 exports
+in the session it was opened in. `runtime.library` 1.14 exports
 `astra_host_scope_create`, `astra_host_scope_revoke` and
-`astra_host_scope_attach`.
+`astra_host_scope_attach`. ATTACH makes the checks OPEN makes: an inactive
+lease, a host that is not ready, or a channel of an earlier host generation
+answers PEER_DEAD.
+
+Host transport `0x0001000e` adds `ASTRA_HOST_CAP_FS_SESSIONS` (bit 11) and
+host command record 3 (`ASTRA_HOST_COMMAND_VERSION` 3):
+
+- **One claimed owner.** `ASTRA_HOST_FS_CLAIM` binds the filesystem service
+  to the submitting owner (HostFS); every other owner's filesystem command
+  on an unbound channel or `HOST_EXECUTE` answers `ASTRA_STATUS_ACCESS`.
+  The claim, with every session and handle of the owner, goes when the
+  owner releases it or dies.
+- **Rooted sessions.** Every command names `session`, a root directory
+  opened by `ASTRA_HOST_FS_SESSION_OPEN` beneath a volume (session 0,
+  `value_lo` the volume) or beneath another session; a read-only session,
+  and one derived from it, refuses every mutation. Session ids are never
+  reused. Closing a session closes every handle opened in it, whoever
+  opened them; a handle answers only in its own session.
+- **Scopes name sessions.** A bound OPEN or ATTACH is accepted only for a
+  live session of the claimed owner whose creator is that owner. A bound
+  channel cannot claim, open or close sessions.
+- **Path operands.** `path_offset`, `path_length` and `path2_length` place
+  the unterminated operands in the data span, ahead of the data; each is
+  under `ASTRA_HOST_FS_PATH_MAX` (4096) bytes and holds no NUL.
+- **Node record.** OPEN, STAT and READDIR answer an `AstraHostNode`
+  (statx: inode, device, blocks, nanosecond and birth times, mount id) with
+  a validity mask.
+- **Base handles.** Every path operation resolves beneath `handle`, an open
+  directory of the session, or beneath the session root when it is 0. The
+  operation table is renumbered densely (1..19); the former `*_AT`,
+  `STAT_FILE` and `CHMOD_FILE` are the plain operations with a handle.
+  `ASTRA_HOST_METRICS_VERSION` is 3 and the snapshot size follows the
+  operation count.
 
 Storage protocol 28: a HELLO on a port that serves a host volume attaches
 one handle, the grant's scope; such a port answers every other operation
@@ -72,7 +105,10 @@ HELLO, and refuses a HELLO it cannot attach the scope to. 28 is also
 `ASTRA_VFS_VERSION_MIN`: no earlier request layout is served, a HELLO below
 it is answered `ASTRA_VFS_ERR_PROTOCOL`, and every pre-28 compatibility path
 (per-request reply ports, unfused HELLO retry, two-message rename and
-symlink in the client, version-gated operations) is deleted.
+symlink in the client, version-gated operations) is deleted. The server
+side of the two-message forms goes too: operations 17, 18, 23 and 24
+(RENAME_FROM/TO, SYMLINK_TARGET/TO) and their staged session state are
+gone, and the numbers are not reused.
 
 ## Filesystem Kit ABI 6.0
 

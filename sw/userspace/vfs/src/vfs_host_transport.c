@@ -66,46 +66,24 @@ static uint32_t channel_submit(AstraVfsHostLane *lane,
     return status;
 }
 
-static uint32_t publish_path(char destination[ASTRA_HOST_FS_PATH_MAX],
-                             const char source[ASTRA_HOST_FS_PATH_MAX])
-{
-    uint32_t length = 0u;
-
-    while (length < ASTRA_HOST_FS_PATH_MAX && source[length] != '\0') {
-        destination[length] = source[length];
-        ++length;
-    }
-    if (length == ASTRA_HOST_FS_PATH_MAX)
-        return ASTRA_VFS_ERR_INVALID;
-    destination[length] = '\0';
-    return ASTRA_VFS_OK;
-}
-
+/* The batch path carries no path operands: its commands are operand-free
+ * (metrics, handle operations), and every path operation goes through
+ * begin/submit, which lays its operands out in the lane's data span. */
 static uint32_t publish_command(AstraHostCommand *destination,
                                 const AstraHostCommand *source)
 {
+    if (source->path_length != 0u || source->path2_length != 0u ||
+        source->path_offset != 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    memset(destination, 0, sizeof(*destination));
     memcpy(destination, source, offsetof(AstraHostCommand, status));
     memcpy(&destination->handle, &source->handle,
            offsetof(AstraHostCommand, data_offset) -
                offsetof(AstraHostCommand, handle));
-    switch (source->operation) {
-    case ASTRA_HOST_FS_OPEN:
-    case ASTRA_HOST_FS_STAT:
-    case ASTRA_HOST_FS_READDIR:
-    case ASTRA_HOST_FS_MKDIR:
-    case ASTRA_HOST_FS_UNLINK:
-    case ASTRA_HOST_FS_CHMOD:
-    case ASTRA_HOST_FS_READLINK:
-        return publish_path(destination->path, source->path);
-    case ASTRA_HOST_FS_RENAME:
-    case ASTRA_HOST_FS_SYMLINK:
-    case ASTRA_HOST_FS_LINK:
-        if (publish_path(destination->path, source->path) != ASTRA_VFS_OK)
-            return ASTRA_VFS_ERR_INVALID;
-        return publish_path(destination->path2, source->path2);
-    default:
-        return ASTRA_VFS_OK;
-    }
+    memcpy(&destination->session, &source->session,
+           offsetof(AstraHostCommand, node) -
+               offsetof(AstraHostCommand, session));
+    return ASTRA_VFS_OK;
 }
 
 static void collect_command(AstraHostCommand *destination,
@@ -117,15 +95,7 @@ static void collect_command(AstraHostCommand *destination,
     destination->value_lo = source->value_lo;
     destination->result_length = source->result_length;
     destination->result_value = source->result_value;
-    destination->node_size_hi = source->node_size_hi;
-    destination->node_size_lo = source->node_size_lo;
-    destination->mtime_hi = source->mtime_hi;
-    destination->mtime_lo = source->mtime_lo;
-    destination->uid = source->uid;
-    destination->gid = source->gid;
-    destination->kind = source->kind;
-    destination->mode = source->mode;
-    destination->nlink = source->nlink;
+    destination->node = source->node;
 }
 
 uint32_t astra_vfs_host_status_from_syscall(uint32_t status)
@@ -160,9 +130,10 @@ int astra_vfs_host_transport_init(AstraVfsHostTransport *transport,
     if (astra_host_lease_query(device, &lease) != ASTRA_SYSCALL_OK ||
         (lease.capabilities & (ASTRA_HOST_CAP_FILESYSTEM |
                                ASTRA_HOST_CAP_OWNER_SCOPED |
-                               ASTRA_HOST_CAP_FS_SCOPE)) !=
+                               ASTRA_HOST_CAP_FS_SCOPE |
+                               ASTRA_HOST_CAP_FS_SESSIONS)) !=
             (ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
-             ASTRA_HOST_CAP_FS_SCOPE) ||
+             ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_FS_SESSIONS) ||
         (lease.state_flags & ASTRA_HOST_STATE_READY) == 0u ||
         lease.host_generation == 0u ||
         lease.maximum_transfer < ASTRA_HOST_COMMAND_SIZE ||
@@ -468,6 +439,10 @@ uint32_t astra_vfs_host_transport_begin(void *context, uint32_t scope,
         transport->channel_supported == 0u)
         return ASTRA_VFS_ERR_PEER;
     request->command = NULL;
+    request->path = NULL;
+    request->path_length = 0u;
+    request->path2 = NULL;
+    request->path2_length = 0u;
     request->private_lane = 0u;
     request->private_capacity = 0u;
     request->private_producer = 0u;
@@ -503,6 +478,7 @@ uint32_t astra_vfs_host_transport_submit(
     AstraHostCommand *command;
     uint32_t data_capacity = input_size > output_capacity ?
         input_size : output_capacity;
+    uint32_t operands;
     uint32_t data_offset;
     uint32_t status;
 
@@ -518,12 +494,31 @@ uint32_t astra_vfs_host_transport_submit(
                                   request->private_capacity ||
         request->private_producer != lane->producer_position + 1u)
         return ASTRA_VFS_ERR_INVALID;
+    /* The path operands lead the data span, unterminated; the data
+     * follows them. */
+    if (request->path_length >= ASTRA_HOST_FS_PATH_MAX ||
+        request->path2_length >= ASTRA_HOST_FS_PATH_MAX ||
+        (request->path_length != 0u && request->path == NULL) ||
+        (request->path2_length != 0u && request->path2 == NULL))
+        return ASTRA_VFS_ERR_INVALID;
+    operands = request->path_length + request->path2_length;
     data_offset = ASTRA_HOST_CHANNEL_HEADER_SIZE +
                   lane->command_capacity * ASTRA_HOST_COMMAND_SIZE;
     if (data_offset > lane->byte_size ||
-        data_capacity > lane->byte_size - data_offset)
+        operands > lane->byte_size - data_offset ||
+        data_capacity > lane->byte_size - data_offset - operands)
         return ASTRA_VFS_ERR_LIMIT;
     command = request->command;
+    command->path_offset = operands != 0u ? data_offset : 0u;
+    command->path_length = (uint16_t)request->path_length;
+    command->path2_length = (uint16_t)request->path2_length;
+    if (request->path_length != 0u)
+        memcpy(lane->bytes + data_offset, request->path,
+               request->path_length);
+    if (request->path2_length != 0u)
+        memcpy(lane->bytes + data_offset + request->path_length,
+               request->path2, request->path2_length);
+    data_offset += operands;
     command->data_offset = data_capacity != 0u ? data_offset : 0u;
     command->data_length = input_size;
     command->data_capacity = output_capacity;

@@ -73,6 +73,9 @@ def run(arguments):
                 if any("ASTRA HOSTBENCH SCOPE MINT NOT REFUSED" in line
                        for line in output):
                     raise RuntimeError("hostbench minted a scope")
+                if any("ASTRA HOSTBENCH FS NOT REFUSED" in line
+                       for line in output):
+                    raise RuntimeError("hostbench drove files unclaimed")
                 if any("ASTRA RAW USER FAIL" in line for line in output):
                     raise RuntimeError(
                         "userspace host benchmark failed\n%s" %
@@ -82,6 +85,11 @@ def run(arguments):
                     if not any("ASTRA HOSTBENCH SCOPE MINT REFUSED" in line
                                for line in output):
                         raise RuntimeError("hostbench minted a scope")
+                    # ... nor drive files: only the claimed owner may.
+                    if not any("ASTRA HOSTBENCH FS REFUSED" in line
+                               for line in output):
+                        raise RuntimeError("hostbench filesystem check "
+                                           "did not run")
                     passed = True
                     break
                 time.sleep(1.0)

@@ -45,10 +45,10 @@ HOST_GAUGE_PROPERTIES = (
 # operation missing here reads as commands nobody issued.
 HOST_OPERATION_PROPERTIES = tuple(
     "astra-host-fs-" + name for name in (
-        "invalid", "open", "open-at", "close", "read", "write", "sync",
-        "truncate", "stat", "stat-at", "stat-file", "readdir", "mkdir",
-        "unlink", "unlink-at", "rename", "chmod", "chmod-at", "chmod-file",
-        "readlink", "symlink", "link", "filesystem-info"))
+        "invalid", "open", "close", "read", "write", "sync", "truncate",
+        "stat", "readdir", "mkdir", "unlink", "rename", "chmod", "readlink",
+        "symlink", "link", "filesystem-info", "session-open",
+        "session-close", "claim"))
 HOST_OPERATION_TIMING_PROPERTIES = tuple(
     name + "-execution-ns" for name in HOST_OPERATION_PROPERTIES)
 

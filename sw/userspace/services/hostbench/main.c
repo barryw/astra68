@@ -294,6 +294,38 @@ int astra_main(const AstraStartupInfo *startup)
         }
         (void)astra_log("ASTRA HOSTBENCH SCOPE MINT REFUSED");
     }
+    /* Nor can it drive files: the provider answers filesystem commands
+     * only to the claimed owner, HostFS, or through a bound scope (review
+     * M1). A STAT of WORK's root, naming the first session HostFS opens. */
+    {
+        AstraHostChannelClient client;
+        AstraHostCommand *command;
+        uint32_t error;
+
+        memset(&client, 0, sizeof(client));
+        error = astra_host_client_open(device->handle,
+                                       ASTRA_HOST_CAP_FS_SESSIONS, 16u,
+                                       &client);
+        if (error != ASTRA_SYSCALL_OK)
+            return fail(bootstrap, 11u);
+        command = astra_host_client_prepare(
+            &client, ASTRA_HOST_SERVICE_FILESYSTEM, ASTRA_HOST_FS_STAT);
+        command->data_offset = 0u;
+        command->session = 1u;
+        command->path_offset = ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                               ASTRA_HOST_COMMAND_SIZE;
+        command->path_length = 1u;
+        client.data[0] = '/';
+        error = astra_host_client_submit(&client);
+        if (error != ASTRA_SYSCALL_OK ||
+            command->status != ASTRA_STATUS_ACCESS) {
+            (void)astra_host_client_close(&client);
+            (void)astra_log("ASTRA HOSTBENCH FS NOT REFUSED");
+            return fail(bootstrap, 12u);
+        }
+        (void)astra_host_client_close(&client);
+        (void)astra_log("ASTRA HOSTBENCH FS REFUSED");
+    }
     if (!run_memory())
         return fail(bootstrap, 9u);
     if (astra_host_lease_query(device->handle, &lease) != ASTRA_SYSCALL_OK ||

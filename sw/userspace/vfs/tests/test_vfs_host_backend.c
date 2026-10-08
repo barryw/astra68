@@ -3,6 +3,11 @@
 #include <assert.h>
 #include <string.h>
 
+static int operand(const char *bytes, uint32_t length, const char *expected)
+{
+    return length == strlen(expected) && memcmp(bytes, expected, length) == 0;
+}
+
 typedef struct FakeHost {
     AstraHostCommand command;
     uint16_t expected_operation;
@@ -35,19 +40,33 @@ uint32_t astra_vfs_host_transport_submit(
     assert(command->version == ASTRA_HOST_COMMAND_VERSION);
     assert(command->service == ASTRA_HOST_SERVICE_FILESYSTEM);
     assert(command->generation == 9u);
-    /* Every command names the volume its backend was made for. */
-    assert(command->volume == ASTRA_HOST_FS_VOLUME_SOUND);
+    /* Every command names the session its backend was made for, and its
+     * path operands travel beside it, not in the record. */
+    assert(command->session == 7u);
+    assert(command->path_offset == 0u && command->path_length == 0u &&
+           command->path2_length == 0u);
+    assert(request->path_length == 0u || request->path != NULL);
+    assert(request->path2_length == 0u || request->path2 != NULL);
     assert(command->operation == host->expected_operation);
     ++host->calls;
     switch (command->operation) {
     case ASTRA_HOST_FS_OPEN:
-        assert(strcmp(command->path, "/file") == 0);
+        if (command->handle == 0x1234u) {
+            assert(operand(request->path, request->path_length, "child") &&
+                   command->flags == ASTRA_VFS_OPEN_READ);
+            command->handle = 0x5678u;
+            command->node.size_lo = 23u;
+            command->node.kind = ASTRA_VFS_KIND_FILE;
+            break;
+        }
+        assert(operand(request->path, request->path_length, "/file"));
         assert((command->flags & ASTRA_VFS_OPEN_READ) != 0u);
+        assert(command->handle == 0u);
         command->handle = 0x1234u;
-        command->node_size_lo = 17u;
-        command->kind = ASTRA_VFS_KIND_FILE;
-        command->mode = 0640u;
-        command->nlink = 1u;
+        command->node.size_lo = 17u;
+        command->node.kind = ASTRA_VFS_KIND_FILE;
+        command->node.mode = 0640u;
+        command->node.nlink = 1u;
         break;
     case ASTRA_HOST_FS_READ:
         assert(command->handle == 0x1234u && command->offset_lo == 4u);
@@ -66,92 +85,92 @@ uint32_t astra_vfs_host_transport_submit(
         assert(command->handle == 0x1234u && command->value_lo == 12u);
         break;
     case ASTRA_HOST_FS_STAT:
-        assert(strcmp(command->path, "/file") == 0);
-        command->node_size_lo = 12u;
-        command->kind = ASTRA_VFS_KIND_FILE;
-        break;
-    case ASTRA_HOST_FS_STAT_AT:
-        assert(command->handle == 0x1234u &&
-               strcmp(command->path, "child") == 0);
-        command->node_size_lo = 23u;
-        command->mtime_lo = 99u;
-        command->uid = 17u;
-        command->gid = 23u;
-        command->kind = ASTRA_VFS_KIND_FILE;
-        command->mode = 0640u;
-        command->nlink = 2u;
-        break;
-    case ASTRA_HOST_FS_STAT_FILE:
-        assert(command->handle == 0x1234u);
-        command->node_size_lo = 31u;
-        command->kind = ASTRA_VFS_KIND_FILE;
-        command->mode = 0600u;
-        command->uid = 42u;
-        command->nlink = 1u;
+        if (command->handle == 0u) {
+            assert(operand(request->path, request->path_length, "/file"));
+            command->node.size_lo = 12u;
+            command->node.kind = ASTRA_VFS_KIND_FILE;
+        } else if (request->path_length != 0u) {
+            assert(command->handle == 0x1234u &&
+                   operand(request->path, request->path_length, "child"));
+            command->node.valid = ASTRA_HOST_NODE_TYPE | ASTRA_HOST_NODE_MODE |
+                                  ASTRA_HOST_NODE_NLINK | ASTRA_HOST_NODE_UID |
+                                  ASTRA_HOST_NODE_GID | ASTRA_HOST_NODE_SIZE |
+                                  ASTRA_HOST_NODE_MTIME;
+            command->node.size_lo = 23u;
+            command->node.mtime.seconds_lo = 99u;
+            command->node.uid = 17u;
+            command->node.gid = 23u;
+            command->node.kind = ASTRA_VFS_KIND_FILE;
+            command->node.mode = 0640u;
+            command->node.nlink = 2u;
+        } else {
+            assert(command->handle == 0x1234u);
+            command->node.size_lo = 31u;
+            command->node.kind = ASTRA_VFS_KIND_FILE;
+            command->node.mode = 0600u;
+            command->node.uid = 42u;
+            command->node.nlink = 1u;
+        }
         break;
     case ASTRA_HOST_FS_READDIR:
-        assert(command->handle == 0x1234u &&
-               strcmp(command->path, "/") == 0 && command->offset_lo == 5u);
+        /* An open directory's next entry: the handle, no path. */
+        assert(command->handle == 0x1234u && request->path_length == 0u &&
+               command->offset_lo == 5u);
         assert(output_capacity == ASTRA_VFS_NAME_MAX);
         memcpy(output, "entry", 5u);
         command->result_length = 5u;
         command->value_lo = 6u;
-        command->kind = ASTRA_VFS_KIND_FILE;
+        command->node.kind = ASTRA_VFS_KIND_FILE;
         break;
     case ASTRA_HOST_FS_MKDIR:
-        assert(strcmp(command->path, "/dir") == 0 &&
+        assert(operand(request->path, request->path_length, "/dir") &&
                command->value_lo == 0750u);
         break;
     case ASTRA_HOST_FS_UNLINK:
-        assert(strcmp(command->path, "/file") == 0);
+        if (command->handle == 0u) {
+            assert(operand(request->path, request->path_length, "/file") &&
+                   command->flags == 0u);
+        } else {
+            assert(command->handle == 0x1234u &&
+                   operand(request->path, request->path_length, "child") &&
+                   command->flags == ASTRA_HOST_FS_UNLINK_DIRECTORY);
+        }
         break;
     case ASTRA_HOST_FS_RENAME:
-        assert(strcmp(command->path, "/old") == 0 &&
-               strcmp(command->path2, "/new") == 0);
+        assert(command->handle == 0u && command->value_lo == 0u);
+        assert(operand(request->path, request->path_length, "/old") &&
+               operand(request->path2, request->path2_length, "/new"));
         break;
     case ASTRA_HOST_FS_CHMOD:
-        assert(strcmp(command->path, "/new") == 0 &&
-               command->value_lo == 0600u);
+        assert(command->flags == 0u);
+        if (command->handle == 0u) {
+            assert(operand(request->path, request->path_length, "/new") &&
+                   command->value_lo == 0600u);
+        } else if (request->path_length == 0u) {
+            assert(command->handle == 0x1234u && command->value_lo == 0644u);
+        } else {
+            assert(command->handle == 0x1234u &&
+                   operand(request->path, request->path_length, "child") &&
+                   command->value_lo == 0750u);
+        }
         break;
     case ASTRA_HOST_FS_READLINK:
-        assert(strcmp(command->path, "/link") == 0 && output_capacity == 16u);
+        assert(operand(request->path, request->path_length, "/link") && output_capacity == 16u);
         memcpy(output, "/new", 4u);
         command->result_length = 4u;
         break;
     case ASTRA_HOST_FS_SYMLINK:
-        assert(strcmp(command->path, "/new") == 0 &&
-               strcmp(command->path2, "/link") == 0);
+        assert(operand(request->path, request->path_length, "/new") &&
+               operand(request->path2, request->path2_length, "/link"));
         break;
     case ASTRA_HOST_FS_LINK:
-        assert(strcmp(command->path, "/new") == 0 &&
-               strcmp(command->path2, "/hard-link") == 0);
-        break;
-    case ASTRA_HOST_FS_OPEN_AT:
-        assert(command->handle == 0x1234u &&
-               strcmp(command->path, "child") == 0 &&
-               command->flags == ASTRA_VFS_OPEN_READ);
-        command->handle = 0x5678u;
-        command->node_size_lo = 23u;
-        command->kind = ASTRA_VFS_KIND_FILE;
-        break;
-    case ASTRA_HOST_FS_UNLINK_AT:
-        assert(command->handle == 0x1234u &&
-               strcmp(command->path, "child") == 0 &&
-               command->flags == ASTRA_VFS_AT_REMOVE_DIRECTORY);
-        break;
-    case ASTRA_HOST_FS_CHMOD_FILE:
-        assert(command->handle == 0x1234u && command->value_lo == 0644u);
-        break;
-    case ASTRA_HOST_FS_CHMOD_AT:
-        assert(command->handle == 0x1234u &&
-               strcmp(command->path, "child") == 0 &&
-               command->value_lo == 0750u &&
-               command->flags == ASTRA_VFS_AT_SYMLINK_NOFOLLOW);
+        assert(operand(request->path, request->path_length, "/new") &&
+               operand(request->path2, request->path2_length, "/hard-link"));
         break;
     case ASTRA_HOST_FS_FILESYSTEM_INFO: {
         AstraHostFilesystemInfo *about = output;
 
-        assert(command->handle == 0u && strcmp(command->path, "/") == 0);
+        assert(command->handle == 0u && operand(request->path, request->path_length, "/"));
         assert(output_capacity == sizeof(*about));
         memset(about, 0, sizeof(*about));
         about->size = sizeof(*about);
@@ -193,15 +212,14 @@ int main(void)
 
     assert(!astra_vfs_host_init(NULL,
                                (AstraVfsHostTransport *)(void *)&host, 9u,
-                               ASTRA_HOST_FS_VOLUME_WORK));
-    assert(!astra_vfs_host_init(&backend, NULL, 9u,
-                                ASTRA_HOST_FS_VOLUME_WORK));
+                               7u));
+    assert(!astra_vfs_host_init(&backend, NULL, 9u, 7u));
+    /* A backend names a provider session; 0 names none. */
     assert(!astra_vfs_host_init(
-        &backend, (AstraVfsHostTransport *)(void *)&host, 9u,
-        ASTRA_HOST_FS_VOLUME_COUNT));
+        &backend, (AstraVfsHostTransport *)(void *)&host, 9u, 0u));
     assert(astra_vfs_host_init(
-        &backend, (AstraVfsHostTransport *)(void *)&host, 9u,
-        ASTRA_HOST_FS_VOLUME_SOUND));
+        &backend, (AstraVfsHostTransport *)(void *)&host, 9u, 7u));
+    assert(backend.session == 7u);
     ops = astra_vfs_host_ops();
 
 #define EXPECT(operation) host.expected_operation = (operation)
@@ -243,17 +261,17 @@ int main(void)
     assert(ops->symlink(&backend, "/new", "/link") == ASTRA_VFS_OK);
     EXPECT(ASTRA_HOST_FS_LINK);
     assert(ops->link(&backend, "/new", "/hard-link") == ASTRA_VFS_OK);
-    EXPECT(ASTRA_HOST_FS_OPEN_AT);
+    EXPECT(ASTRA_HOST_FS_OPEN);
     assert(ops->open_at(&backend, node, "child", ASTRA_VFS_OPEN_READ,
                         ASTRA_VFS_MODE_DEFAULT, &child_node, &info) ==
            ASTRA_VFS_OK);
     assert(child_node == 0x5678u && info.size == 23u);
-    EXPECT(ASTRA_HOST_FS_UNLINK_AT);
+    EXPECT(ASTRA_HOST_FS_UNLINK);
     assert(ops->unlink_at(&backend, node, "child",
                           ASTRA_VFS_AT_REMOVE_DIRECTORY) == ASTRA_VFS_OK);
-    EXPECT(ASTRA_HOST_FS_CHMOD_FILE);
+    EXPECT(ASTRA_HOST_FS_CHMOD);
     assert(ops->chmod_node(&backend, node, 0644u) == ASTRA_VFS_OK);
-    EXPECT(ASTRA_HOST_FS_CHMOD_AT);
+    EXPECT(ASTRA_HOST_FS_CHMOD);
     assert(ops->chmod_at(&backend, node, "child", 0750u,
                          ASTRA_VFS_AT_SYMLINK_NOFOLLOW) == ASTRA_VFS_OK);
     EXPECT(ASTRA_HOST_FS_FILESYSTEM_INFO);
@@ -263,17 +281,18 @@ int main(void)
            filesystem_info.blocks == 100u &&
            filesystem_info.blocks_available == 30u &&
            filesystem_info.name_max == 255u);
-    EXPECT(ASTRA_HOST_FS_STAT_AT);
+    EXPECT(ASTRA_HOST_FS_STAT);
     assert(ops->stat_at(&backend, node, "child", &info) == ASTRA_VFS_OK);
     assert(info.size == 23u && info.mtime == 99 && info.uid == 17u &&
            info.gid == 23u && info.mode == 0640u && info.nlink == 2u);
-    EXPECT(ASTRA_HOST_FS_STAT_FILE);
+    EXPECT(ASTRA_HOST_FS_STAT);
     assert(ops->stat_node(&backend, node, &info) == ASTRA_VFS_OK);
     assert(info.size == 31u && info.uid == 42u && info.mode == 0600u);
     assert(ops->stat_node(&backend, 0u, &info) == ASTRA_VFS_ERR_INVALID);
     EXPECT(ASTRA_HOST_FS_CLOSE);
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
 #undef EXPECT
+    /* The same 22 backend calls, carried by 16 operations. */
     assert(host.calls == 22u);
     return 0;
 }

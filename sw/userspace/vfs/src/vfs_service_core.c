@@ -152,12 +152,8 @@ operation_takes_path(uint32_t operation)
            operation == ASTRA_VFS_OP_READDIR_AREA ||
            operation == ASTRA_VFS_OP_MKDIR ||
            operation == ASTRA_VFS_OP_UNLINK ||
-           operation == ASTRA_VFS_OP_RENAME_FROM ||
-           operation == ASTRA_VFS_OP_RENAME_TO ||
            operation == ASTRA_VFS_OP_CHMOD ||
            operation == ASTRA_VFS_OP_READLINK ||
-           operation == ASTRA_VFS_OP_SYMLINK_TARGET ||
-           operation == ASTRA_VFS_OP_SYMLINK_TO ||
            operation == ASTRA_VFS_OP_RENAME ||
            operation == ASTRA_VFS_OP_SYMLINK ||
            operation == ASTRA_VFS_OP_LINK ||
@@ -570,7 +566,6 @@ handle_hello(AstraVfsService *service, uint32_t owner,
             service->sessions[index].owner = owner;
             service->sessions[index].open_files = 0u;
             service->sessions[index].version = reply->version;
-            service->sessions[index].staged_operation = ASTRA_VFS_STAGE_NONE;
             service->sessions[index].inflight = 0u;
             service->sessions[index].closing = 0u;
             if (service->next_session == 0u) {
@@ -614,7 +609,6 @@ reap_session(AstraVfsService *service, AstraVfsSessionSlot *slot)
     slot->id = 0u;
     slot->owner = 0u;
     slot->open_files = 0u;
-    slot->staged_operation = ASTRA_VFS_STAGE_NONE;
     slot->inflight = 0u;
     slot->closing = 0u;
     ++slot->generation;
@@ -1195,11 +1189,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
     test_transition(service, ASTRA_VFS_TEST_AFTER_SESSION_RESERVE);
     reply->version = slot->version;
     reply->session = slot->id;
-    if (operation != ASTRA_VFS_OP_RENAME_FROM &&
-        operation != ASTRA_VFS_OP_RENAME_TO &&
-        operation != ASTRA_VFS_OP_SYMLINK_TARGET &&
-        operation != ASTRA_VFS_OP_SYMLINK_TO)
-        slot->staged_operation = ASTRA_VFS_STAGE_NONE;
 
     switch (operation) {
     case ASTRA_VFS_OP_BYE:
@@ -1381,27 +1370,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
             service->backend.context, (const char *)request->body.path);
         (void)state_acquire(service);
         break;
-    case ASTRA_VFS_OP_RENAME_FROM:
-        for (uint32_t index = 0u; index < ASTRA_VFS_PATH_MAX; ++index) {
-            slot->staged_path[index] = (char)request->body.path[index];
-            if (request->body.path[index] == 0u)
-                break;
-        }
-        slot->staged_operation = ASTRA_VFS_STAGE_RENAME;
-        reply->status = ASTRA_VFS_OK;
-        break;
-    case ASTRA_VFS_OP_RENAME_TO:
-        if (slot->staged_operation != ASTRA_VFS_STAGE_RENAME) {
-            reply->status = ASTRA_VFS_ERR_PROTOCOL;
-            break;
-        }
-        slot->staged_operation = ASTRA_VFS_STAGE_NONE;
-        state_release(service);
-        reply->status = service->backend.ops->rename(
-            service->backend.context, slot->staged_path,
-            (const char *)request->body.path);
-        (void)state_acquire(service);
-        break;
     case ASTRA_VFS_OP_RENAME: {
         const AstraVfsRenameRequest *rename =
             (const AstraVfsRenameRequest *)request;
@@ -1446,31 +1414,6 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         }
         break;
     }
-    case ASTRA_VFS_OP_SYMLINK_TARGET:
-        if (request->body.path[0] == 0u) {
-            reply->status = ASTRA_VFS_ERR_INVALID;
-            break;
-        }
-        for (uint32_t index = 0u; index < ASTRA_VFS_PATH_MAX; ++index) {
-            slot->staged_path[index] = (char)request->body.path[index];
-            if (request->body.path[index] == 0u)
-                break;
-        }
-        slot->staged_operation = ASTRA_VFS_STAGE_SYMLINK;
-        reply->status = ASTRA_VFS_OK;
-        break;
-    case ASTRA_VFS_OP_SYMLINK_TO:
-        if (slot->staged_operation != ASTRA_VFS_STAGE_SYMLINK) {
-            reply->status = ASTRA_VFS_ERR_PROTOCOL;
-            break;
-        }
-        slot->staged_operation = ASTRA_VFS_STAGE_NONE;
-        state_release(service);
-        reply->status = service->backend.ops->symlink(
-            service->backend.context, slot->staged_path,
-            (const char *)request->body.path);
-        (void)state_acquire(service);
-        break;
     case ASTRA_VFS_OP_SYMLINK: {
         const AstraVfsRenameRequest *symlink =
             (const AstraVfsRenameRequest *)request;

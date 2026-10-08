@@ -159,6 +159,35 @@ uint32_t astra_host_channel_close(uint32_t device)
     return ASTRA_SYSCALL_INVALID_ARGUMENT;
 }
 
+/* Operands a command must carry, unterminated, at its path_offset. */
+static const char *expected_path;
+static const char *expected_path2;
+static uint32_t operand_checks;
+
+static void check_operands(uint32_t slot, const AstraHostCommand *command)
+{
+    const AstraHostChannelHeader *header =
+        (const AstraHostChannelHeader *)(const void *)dma_storage[slot];
+    size_t first = expected_path != NULL ? strlen(expected_path) : 0u;
+    size_t second = expected_path2 != NULL ? strlen(expected_path2) : 0u;
+
+    assert(command->path_length == first && command->path2_length == second);
+    if (first + second == 0u) {
+        assert(command->path_offset == 0u);
+        return;
+    }
+    /* The operands lead the data span; the data follows them. */
+    assert(command->path_offset == header->data_offset);
+    assert(memcmp(dma_storage[slot] + command->path_offset, expected_path,
+                  first) == 0);
+    assert(second == 0u ||
+           memcmp(dma_storage[slot] + command->path_offset + first,
+                  expected_path2, second) == 0);
+    assert(command->data_offset == 0u ||
+           command->data_offset == command->path_offset + first + second);
+    ++operand_checks;
+}
+
 static void complete_channel(uint32_t slot, uint32_t producer)
 {
     AstraHostChannelHeader *header =
@@ -172,6 +201,7 @@ static void complete_channel(uint32_t slot, uint32_t producer)
             (position & (header->command_capacity - 1u)) *
                 ASTRA_HOST_COMMAND_SIZE);
 
+        check_operands(slot, command);
         command->status = ASTRA_VFS_OK;
         command->handle = 0x5678u + position;
         if (command->service == ASTRA_HOST_SERVICE_METRICS) {
@@ -338,8 +368,8 @@ static void test_lane_carries_scopes(void)
     AstraVfsHostRequest request;
 
     capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
-                   ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_CHANNEL |
-                   ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ;
+                   ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_FS_SESSIONS |
+                   ASTRA_HOST_CAP_CHANNEL | ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ;
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                          &lock_depth));
     assert(astra_vfs_host_transport_begin(&transport, 77u, 0u, &request) ==
@@ -383,6 +413,10 @@ int main(void)
                                           &lock_depth));
     capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
                    ASTRA_HOST_CAP_FS_SCOPE;
+    /* Record 3's provider is required: sessions and path operands. */
+    assert(!astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                          &lock_depth));
+    capabilities |= ASTRA_HOST_CAP_FS_SESSIONS;
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                          &lock_depth));
     assert(transport.generation == 9u);
@@ -412,8 +446,8 @@ int main(void)
 
     memset(&transport, 0, sizeof(transport));
     capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
-                   ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_CHANNEL |
-                   ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ |
+                   ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_FS_SESSIONS |
+                   ASTRA_HOST_CAP_CHANNEL | ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ |
                    ASTRA_HOST_CAP_METRICS;
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                          &lock_depth));
@@ -465,6 +499,50 @@ int main(void)
         assert(request.command->result_length == 4u);
     }
     assert(channel_kicks == 4u);
+    /* Path operands: laid out ahead of the data, unterminated, with the
+     * data after them; a write's input lands past both. */
+    {
+        uint32_t checks = operand_checks;
+
+        assert(astra_vfs_host_transport_begin(&transport, 0u, 4u + 9u,
+                                              &request) == ASTRA_VFS_OK);
+        request.command->generation = transport.generation;
+        request.command->operation = ASTRA_HOST_FS_WRITE;
+        request.path = "/from";
+        request.path_length = 5u;
+        request.path2 = "/to";
+        request.path2_length = 3u;
+        expected_path = "/from";
+        expected_path2 = "/to";
+        assert(astra_vfs_host_transport_submit(
+                   &transport, &request, "send", 4u, NULL, 0u) ==
+               ASTRA_VFS_OK);
+        assert(operand_checks == checks + 1u);
+        expected_path = NULL;
+        expected_path2 = NULL;
+        /* A path of ASTRA_HOST_FS_PATH_MAX bytes never reaches the wire,
+         * nor does a length without bytes. */
+        assert(astra_vfs_host_transport_begin(&transport, 0u, 0u,
+                                              &request) == ASTRA_VFS_OK);
+        request.path = "/x";
+        request.path_length = ASTRA_HOST_FS_PATH_MAX;
+        assert(astra_vfs_host_transport_submit(
+                   &transport, &request, NULL, 0u, NULL, 0u) ==
+               ASTRA_VFS_ERR_INVALID);
+        request.path = NULL;
+        request.path_length = 1u;
+        assert(astra_vfs_host_transport_submit(
+                   &transport, &request, NULL, 0u, NULL, 0u) ==
+               ASTRA_VFS_ERR_INVALID);
+        /* The batch path carries no operands. */
+        memset(&command, 0, sizeof(command));
+        command.generation = transport.generation;
+        command.path_length = 1u;
+        assert(astra_vfs_host_transport_execute(
+                   &transport, &command, NULL, 0u, NULL, 0u) ==
+               ASTRA_VFS_ERR_INVALID);
+    }
+    assert(channel_kicks == 5u);
     complete_on_wait_only = 1;
     {
         uint32_t waits = channel_waits;
@@ -478,7 +556,7 @@ int main(void)
         assert(channel_waits == waits + 1u);
     }
     complete_on_wait_only = 0;
-    assert(channel_kicks == 5u);
+    assert(channel_kicks == 6u);
     concurrent_kick_base = channel_kicks;
     wait_base = channel_waits;
     require_two_in_flight = 1;
@@ -492,7 +570,7 @@ int main(void)
     assert(pthread_join(threads[1], NULL) == 0);
     assert(calls[0].status == ASTRA_VFS_OK);
     assert(calls[1].status == ASTRA_VFS_OK);
-    assert(channel_kicks == 7u);
+    assert(channel_kicks == 8u);
     assert(channel_waits - wait_base <= 1u);
     require_two_in_flight = 0;
     {

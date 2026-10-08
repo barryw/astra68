@@ -196,15 +196,8 @@
 #define ASTRA_VFS_OP_WRITE_AREA UINT32_C(15)
 /** Read a directory listing into the session's bound transfer area. */
 #define ASTRA_VFS_OP_READDIR_AREA UINT32_C(16)
-/**
- * Stage the source path of a two-step rename transaction.
- *
- * Superseded for independent callers by ::ASTRA_VFS_OP_RENAME; this legacy
- * pair remains for peers that negotiated an older version.
- */
-#define ASTRA_VFS_OP_RENAME_FROM UINT32_C(17)
-/** Commit the destination path staged by ::ASTRA_VFS_OP_RENAME_FROM. */
-#define ASTRA_VFS_OP_RENAME_TO   UINT32_C(18)
+/* 17 and 18 were the staged RENAME_FROM/RENAME_TO pair, retired with the
+ * last pre-28 peer; the numbers are not reused. */
 /** Flush an open file's data to the backing store. */
 #define ASTRA_VFS_OP_SYNC        UINT32_C(19)
 /** Truncate or extend an open file to a given length. */
@@ -213,15 +206,8 @@
 #define ASTRA_VFS_OP_CHMOD       UINT32_C(21)
 /** Read the target of a symbolic link by path. */
 #define ASTRA_VFS_OP_READLINK    UINT32_C(22)
-/**
- * Stage the target of a two-step symlink-creation transaction.
- *
- * Superseded for independent callers by ::ASTRA_VFS_OP_SYMLINK; this legacy
- * pair remains for peers that negotiated an older version.
- */
-#define ASTRA_VFS_OP_SYMLINK_TARGET UINT32_C(23)
-/** Commit the link path staged by ::ASTRA_VFS_OP_SYMLINK_TARGET. */
-#define ASTRA_VFS_OP_SYMLINK_TO  UINT32_C(24)
+/* 23 and 24 were the staged SYMLINK_TARGET/SYMLINK_TO pair, retired with
+ * the last pre-28 peer; the numbers are not reused. */
 /** Atomically rename or move a path, carrying both paths in one request. */
 #define ASTRA_VFS_OP_RENAME      UINT32_C(25)
 /** Atomically create a symbolic link, carrying target and path in one request. */
