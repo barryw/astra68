@@ -2,8 +2,8 @@ astra-bundle 1
 kind kit
 id org.astra.runtime
 name "Astra Runtime Kit"
-version 1.13.0
+version 1.14.0
 provides compiler.library 2 2.0.0
-provides runtime.library 1 1.13.0
+provides runtime.library 1 1.14.0
 provides system.library 3 3.2.0
 provides loader.library 1 1.0.0

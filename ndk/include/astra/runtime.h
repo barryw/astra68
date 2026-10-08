@@ -979,6 +979,37 @@ uint32_t astra_host_channel_open(uint32_t device,
  */
 uint32_t astra_host_channel_close(uint32_t device);
 /**
+ * Create a filesystem scope (::ASTRA_SYSCALL_HOST_SCOPE_CREATE): the
+ * authority to drive host channels bound to one provider session.
+ * @param device Host device handle carrying ::ASTRA_RIGHT_HOST_SCOPE.
+ * @param word The provider's word for the session (a volume under host
+ *        command record 2, a session id from record 3).
+ * @param flags ::ASTRA_HOST_SCOPE_READ_ONLY and/or ::ASTRA_HOST_SCOPE_DELEGATE.
+ * @param scope Receives a handle with READ (query), WRITE (open and attach
+ *        channels), TRANSFER and ADMINISTER (revoke).
+ * @return ASTRA_SYSCALL_*; UNSUPPORTED when the provider lacks
+ *         ::ASTRA_HOST_CAP_FS_SCOPE, ACCESS_DENIED without the right.
+ */
+uint32_t astra_host_scope_create(uint32_t device, uint32_t word,
+                                 uint32_t flags, uint32_t *scope);
+/**
+ * Revoke a scope (::ASTRA_SYSCALL_HOST_SCOPE_REVOKE): it is detached from
+ * every channel that carries it, which the provider honors before this
+ * returns, and every later open, attach or query on it answers PEER_DEAD.
+ * @param scope The scope, with ::ASTRA_RIGHT_ADMINISTER.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_host_scope_revoke(uint32_t scope);
+/**
+ * Bind one more scope to the calling thread's host channel
+ * (::ASTRA_SYSCALL_HOST_SCOPE_ATTACH), which must have been opened on a
+ * scope; at most ::ASTRA_HOST_CHANNEL_SCOPE_MAX. A scope already bound there
+ * is not bound twice.
+ * @param scope The scope, with ::ASTRA_RIGHT_WRITE.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_host_scope_attach(uint32_t scope);
+/**
  * Notify the host of a new producer position.
  * @param channel_address Valid shared channel address.
  * @param producer_position Monotonic producer byte position.

@@ -1006,6 +1006,42 @@ astra_audio_stream_wait(uint32_t stream, uint64_t deadline_ns)
 }
 
 uint32_t
+astra_host_scope_create(uint32_t device, uint32_t word, uint32_t flags,
+                        uint32_t *scope)
+{
+    AstraSyscallResult result;
+
+    if (scope == NULL)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    *scope = 0u;
+    astra_syscall5(ASTRA_SYSCALL_HOST_SCOPE_CREATE, device, word, flags, 0u,
+                   0u, &result);
+    if (result.status == ASTRA_SYSCALL_OK)
+        *scope = result.value0;
+    return result.status;
+}
+
+uint32_t
+astra_host_scope_revoke(uint32_t scope)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_HOST_SCOPE_REVOKE, scope, 0u, 0u, 0u, 0u,
+                   &result);
+    return result.status;
+}
+
+uint32_t
+astra_host_scope_attach(uint32_t scope)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, scope, 0u, 0u, 0u, 0u,
+                   &result);
+    return result.status;
+}
+
+uint32_t
 astra_library_snapshot(uint32_t observer, uint32_t start,
                        AstraProcLibrarySnapshot *records, uint32_t capacity,
                        uint32_t *moved, uint32_t *library_count)

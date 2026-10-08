@@ -70,11 +70,18 @@ def run(arguments):
                 if machine.process.poll() is not None:
                     break
                 output = machine.said_with_syslog(0)[0]
+                if any("ASTRA HOSTBENCH SCOPE MINT NOT REFUSED" in line
+                       for line in output):
+                    raise RuntimeError("hostbench minted a scope")
                 if any("ASTRA RAW USER FAIL" in line for line in output):
                     raise RuntimeError(
                         "userspace host benchmark failed\n%s" %
                         "\n".join(output[-60:]))
                 if any("ASTRA RAW USER PASS" in line for line in output):
+                    # HOST_DEVICE must arrive unable to mint a scope.
+                    if not any("ASTRA HOSTBENCH SCOPE MINT REFUSED" in line
+                               for line in output):
+                        raise RuntimeError("hostbench minted a scope")
                     passed = True
                     break
                 time.sleep(1.0)

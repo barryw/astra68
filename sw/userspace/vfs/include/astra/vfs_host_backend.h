@@ -18,6 +18,9 @@ typedef struct AstraVfsHostBackend {
     uint32_t generation;
     /* The HostFS volume every command names (ASTRA_HOST_FS_VOLUME_*). */
     uint32_t volume;
+    /* The scope handle commands go through (HOST_SCOPE_ATTACH on first use
+     * by a lane); 0: the transport's own device handle. */
+    uint32_t scope;
 } AstraVfsHostBackend;
 
 int astra_vfs_host_init(AstraVfsHostBackend *backend,

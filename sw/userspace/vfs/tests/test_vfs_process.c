@@ -15,6 +15,10 @@ static uint32_t disconnects;
 static uint32_t abandons;
 static uint32_t fail_connect;
 static uint32_t seed_distinct;
+static uint32_t direct_connect;
+static uint32_t direct_resumes;
+static uint32_t fail_direct_resume;
+static uint32_t direct_forks;
 static uint32_t port_fork_rebinds;
 static uint32_t next_semaphore = 100u;
 static uint32_t seeds;
@@ -218,10 +222,47 @@ uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service)
     return ASTRA_VFS_OK;
 }
 
-uint32_t astra_vfs_client_connect_service(AstraVfsClient *client,
+uint32_t astra_vfs_host_port_connect_lazy(AstraVfsClient *client,
                                           uint32_t service)
 {
-    return astra_vfs_port_connect(client, service);
+    uint32_t status = astra_vfs_port_connect(client, service);
+
+    if (status == ASTRA_VFS_OK && direct_connect != 0u) {
+        client->port_direct_address = (void *)(uintptr_t)1u;
+        client->port_direct_area = 0x41u;
+        client->port_direct_scope = 0x42u;
+        client->port_direct_session = 0x43u;
+    }
+    return status;
+}
+
+uint32_t astra_vfs_host_direct_resume(AstraVfsClient *client, uint32_t area,
+                                      uint32_t scope, uint32_t session)
+{
+    assert(client != NULL && area == 0x41u && scope == 0x42u &&
+           session == 0x43u);
+    ++direct_resumes;
+    if (fail_direct_resume != 0u)
+        return ASTRA_VFS_ERR_IO;
+    client->port_direct_address = (void *)(uintptr_t)1u;
+    client->port_direct_area = area;
+    client->port_direct_scope = scope;
+    client->port_direct_session = session;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t fork_child_calls;
+
+void astra_vfs_host_direct_fork_child(void)
+{
+    ++fork_child_calls;
+}
+
+uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
+{
+    assert(client != NULL && client->port_direct_address != NULL);
+    ++direct_forks;
+    return ASTRA_VFS_OK;
 }
 
 void astra_vfs_port_abandon(AstraVfsClient *client)
@@ -454,36 +495,69 @@ int main(void)
         disconnects = 0u;
         abandons = 0u;
         port_fork_rebinds = 0u;
+        fork_child_calls = 0u;
         assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
         assert(astra_process_vfs_client() != NULL && connects == 1u);
         assert(astra_process_vfs_after_fork_child(&startup) == ASTRA_VFS_OK);
         assert(abandons == 1u && disconnects == 0u &&
                port_fork_rebinds == 1u);
+        assert(fork_child_calls == 1u);
         assert(astra_process_vfs_client() != NULL && connects == 2u);
         astra_process_vfs_close();
         assert(disconnects == 1u);
 
-        /* Exec keeps the service session: the replacement image resumes it
-         * from the exported state without another HELLO. */
+        /* A direct child replaces only its process-local channel. It does not
+         * throw away the namespace and pay another service HELLO. */
+        connects = 0u;
+        disconnects = 0u;
+        direct_connect = 1u;
+        direct_forks = 0u;
+        port_fork_rebinds = 0u;
+        fork_child_calls = 0u;
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_client() != NULL && connects == 1u);
+        assert(astra_process_vfs_after_fork_child(&startup) == ASTRA_VFS_OK);
+        assert(direct_forks == 1u && connects == 1u &&
+               port_fork_rebinds == 1u);
+        /* Once per fork, however many clients the child carries. */
+        assert(fork_child_calls == 1u);
+        astra_process_vfs_close();
+        assert(disconnects == 1u);
+        direct_connect = 0u;
+
+        /* Exec keeps the local service's session and open-file table. The
+         * replacement image must resume that accelerator instead of silently
+         * routing every operation back through the service port. */
         {
             void *state;
             uint32_t size;
             uint32_t used = 0u;
+            AstraVfsClient *client;
 
             connects = 0u;
             disconnects = 0u;
+            direct_connect = 1u;
+            direct_resumes = 0u;
             assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
-            assert(astra_process_vfs_client() != NULL && connects == 1u);
+            client = astra_process_vfs_client();
+            assert(client != NULL && client->port_direct_address != NULL);
             size = astra_process_vfs_state_size();
             state = malloc(size);
             assert(state != NULL);
             assert(astra_process_vfs_export(state, size, &used) ==
                        ASTRA_VFS_OK &&
                    used == size);
+            direct_connect = 0u;
+            fail_direct_resume = 1u;
+            assert(astra_process_vfs_import(&startup, state, size) ==
+                   ASTRA_VFS_ERR_IO);
+            fail_direct_resume = 0u;
             assert(astra_process_vfs_import(&startup, state, size) ==
                    ASTRA_VFS_OK);
             free(state);
-            assert(astra_process_vfs_client() != NULL && connects == 1u);
+            client = astra_process_vfs_client();
+            assert(client != NULL && direct_resumes == 2u &&
+                   client->port_direct_address != NULL);
             astra_process_vfs_close();
         }
 

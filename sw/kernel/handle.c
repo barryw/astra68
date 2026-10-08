@@ -165,6 +165,12 @@ static uint32_t detached_directory_physical[DETACHED_LEAF_COUNT]
 static uint16_t detached_backed_limit;
 static uint16_t detached_next_slot;
 static KernelHandleTransferStats transfer_stats;
+static KernelHandleImportRights import_rights;
+
+void kernel_handle_set_import_rights(KernelHandleImportRights filter)
+{
+    import_rights = filter;
+}
 
 #if defined(__m68k__)
 _Static_assert(sizeof(KernelHandleEntry) == 28u,
@@ -1393,7 +1399,9 @@ KernelHandleStatus kernel_handle_import_commit(
         destination->retain = source->retain;
         destination->release = source->release;
         destination->release_context = source->release_context;
-        destination->rights = source->rights;
+        destination->rights = import_rights != NULL ?
+            import_rights(source->type, source->object, source->rights) :
+            source->rights;
         destination->type = source->type;
         destination->occupied = 1u;
         destination->reserved = 0u;

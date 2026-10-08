@@ -508,6 +508,15 @@ static void test_invalid_arguments(void)
     assert(kernel_handle_close(NULL, 1u) == KERNEL_HANDLE_INVALID_ARGUMENT);
 }
 
+/* Strips TRANSFER from the first transferred object only: the hook sees the
+ * type and the object, as the kernel's scope hook does. */
+static uint32_t strip_transfer(KernelObjectType type, void *object,
+                               uint32_t rights)
+{
+    return type == KERNEL_OBJECT_SYNC && (uintptr_t)object == 0x1000u ?
+               rights & ~RIGHT_TRANSFER : rights;
+}
+
 static void test_atomic_export_import_and_cancel(void)
 {
     KernelHandleTable source;
@@ -584,20 +593,46 @@ static void test_atomic_export_import_and_cancel(void)
     KernelHandle imported[2] = {
         reservation.handles[0], reservation.handles[1]
     };
+    /* The import hook narrows what arrives, by type and object: the second
+     * object keeps TRANSFER, the first loses it. */
+    kernel_handle_set_import_rights(strip_transfer);
     assert(kernel_handle_import_commit(&destination, &reservation,
                                        detached) == KERNEL_HANDLE_OK);
+    kernel_handle_set_import_rights(NULL);
     assert(kernel_handle_count(&destination) == 2u);
     assert(kernel_handle_transfer_stats(&stats));
     assert(stats.live_detached == 0u);
+    assert(kernel_handle_lookup(&destination, imported[0], KERNEL_OBJECT_SYNC,
+                                RIGHT_TRANSFER, &object) ==
+           KERNEL_HANDLE_ACCESS_DENIED);
+    assert(kernel_handle_lookup(&destination, imported[1], KERNEL_OBJECT_SYNC,
+                                RIGHT_QUERY | RIGHT_TRANSFER, &object) ==
+           KERNEL_HANDLE_OK);
     for (uint32_t index = 0u; index < 2u; ++index) {
         assert(kernel_handle_lookup(&destination, imported[index],
-                                    KERNEL_OBJECT_SYNC,
-                                    RIGHT_QUERY | RIGHT_TRANSFER,
+                                    KERNEL_OBJECT_SYNC, RIGHT_QUERY,
                                     &object) == KERNEL_HANDLE_OK);
         assert((uintptr_t)object == 0x1000u + index);
-        assert(kernel_handle_close(&destination, imported[index]) ==
-               KERNEL_HANDLE_OK);
     }
+    /* With the hook reset, the same object arrives with every right. */
+    assert(kernel_handle_transfer_prepare(&destination, &imported[1], 1u,
+                                          RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_OK);
+    detached[0] = batch.detached[0];
+    assert(kernel_handle_transfer_commit_export(&destination, &batch) ==
+           KERNEL_HANDLE_OK);
+    assert(kernel_handle_import_reserve(&source, detached, 1u,
+                                        &reservation) == KERNEL_HANDLE_OK);
+    imported[1] = reservation.handles[0];
+    assert(kernel_handle_import_commit(&source, &reservation, detached) ==
+           KERNEL_HANDLE_OK);
+    assert(kernel_handle_lookup(&source, imported[1], KERNEL_OBJECT_SYNC,
+                                RIGHT_QUERY | RIGHT_TRANSFER, &object) ==
+           KERNEL_HANDLE_OK);
+    assert((uintptr_t)object == 0x1001u);
+    assert(kernel_handle_close(&destination, imported[0]) ==
+           KERNEL_HANDLE_OK);
+    assert(kernel_handle_close(&source, imported[1]) == KERNEL_HANDLE_OK);
     assert(released.calls == 2u);
     assert(released.object_sum == 0x2001u);
     assert(kernel_handle_transfer_pool_valid());

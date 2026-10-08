@@ -36,6 +36,11 @@
 /** On a host device handle: open audio streams (%audio_stream.h), and
  * nothing else the device offers. */
 #define ASTRA_RIGHT_AUDIO_STREAM (1u << 8)
+/** On a host device handle: create filesystem scopes
+ * (::ASTRA_SYSCALL_HOST_SCOPE_CREATE), and nothing else the device does not
+ * already allow. The supervisor grants it only as HOST_FILESYSTEM, to the
+ * filesystem service. */
+#define ASTRA_RIGHT_HOST_SCOPE (1u << 9)
 
 /** Maximum size of one shared or reserved area. */
 #define ASTRA_AREA_SIZE_MAX \

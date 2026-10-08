@@ -40,7 +40,7 @@ versioned Astra protocols; applications gain no alternate Linux API.
 | Area | Existing implementation | Production gap |
 |---|---|---|
 | System storage | Guest lwext4 mounts the selected SD partition; supervisor bootstrap and storage service independently select the first MBR Linux-type partition. | One verified system-volume selection and one Linux filesystem owner, including bootstrap. |
-| Linux-backed files | HostFS carries native operations over the host transport and is the only filesystem holder of the host device: since storage protocol 27 no client receives it, and every request reaches QEMU through a HostFS port served by its configured worker threads. The host exposes fixed WORK and SOUND directory exports. | Dynamic volume inventory, rooted grants, complete semantics, and mount lifecycle. |
+| Linux-backed files | HostFS carries native operations over the host transport and is the only holder of `HOST_FILESYSTEM`, the host device's right to mint filesystem scopes. Since storage protocol 28 a HELLO hands a client its volume's scope, and the client drives its own host channel: the kernel binds the channel to the scope and QEMU enforces volume, read-only rights and handle tags on every command. The host exposes fixed WORK and SOUND directory exports. | Dynamic volume inventory, rooted grants (roots and rights within a volume are still client-only), complete semantics, and mount lifecycle. |
 | RAM storage | An optional guest RAMFS service enforces a configured allocation cap. | Linux tmpfs with explicit host-memory limits and the common volume lifecycle. |
 | Namespace | Assigns provide slash roots; `/dh0` and protected conveniences are exposed. Some conveniences report synthetic symlink metadata while operations use independent grants. | Honest binding semantics, trusted enforcement, and coherent traversal. |
 | File objects | Directory-relative operations and live-handle metadata exist. | Stable volume/node IDs, retained cwd, shared offsets and inheritance, complete symlink behavior. |
@@ -482,9 +482,11 @@ not introduce filesystem records by repurposing unrelated private fields.
 
 FS44. Existing ordinary and accelerated requests converge on the same trusted
 validation and Linux implementation. Accelerators carry scoped authority and
-generations; the broad host-device handoff and hardcoded WORK path (removed at
-storage protocol 27) must not return as a grant bypass. Keep acceleration only where measurements
-justify it, with behavioral parity tests.
+generations. The broad host-device handoff was removed at storage protocol
+27. Protocol 28 hands a client a kernel-bound filesystem scope instead, which
+reaches only that scope's session; the device itself must not return as a
+grant bypass. Keep acceleration only where measurements justify it, with
+behavioral parity tests.
 
 FS45. Cut over the selected system volume, bootstrap loader, existing HostFS
 exports, RAM storage, and application bindings. Preserve existing files and

@@ -44,6 +44,7 @@ HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	include/astra/vfs_port_transport.h $(NDK)/include/astra/vfs_union.h \
 	$(NDK)/include/astra/vfs_process.h $(NDK)/include/astra/vfs_reader.h \
 	include/astra/vfs_host_backend.h include/astra/vfs_host_transport.h \
+	include/astra/vfs_host_direct.h \
 	include/astra/vfs_ram_backend.h \
 	include/astra/vfs_provider_index.h \
 	../../include/astra/vfs_service.h \
@@ -59,6 +60,7 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
 	build/m68k/backends/ext4.o build/m68k/backends/host.o \
 	build/m68k/vfs_host_transport.o \
+	build/m68k/vfs_host_direct.o \
 	build/m68k/vfs_union.o \
 	build/m68k/vfs_process.o build/m68k/process_filesystem.o \
 	build/m68k/vfs_reader.o \
@@ -67,16 +69,17 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 SERVICE_OBJECTS := build/m68k/library/vfs_service_core.o \
 	build/m68k/library/vfs_port_transport.o \
 	build/m68k/library/backends/host.o \
-	build/m68k/library/vfs_host_transport.o
+	build/m68k/library/vfs_host_transport.o \
+	build/m68k/library/vfs_host_direct.o
 LOADER_PIC_TARGET := build/m68k/libastravfs-loader-pic.a
 LOADER_PIC_SOURCES := vfs_service_core vfs_client vfs_assign vfs_path vfs_local_transport \
-	vfs_port_transport vfs_host_transport vfs_union \
+	vfs_port_transport vfs_host_transport vfs_host_direct vfs_union \
 	vfs_process vfs_reader vfs_provider_index vfs_status
 LOADER_PIC_OBJECTS := $(patsubst %,build/m68k/loader/%.o,$(LOADER_PIC_SOURCES)) \
 	build/m68k/loader/backends/host.o \
 	build/m68k/loader/system_manifest.o build/m68k/loader/system_bundle.o \
 	build/m68k/loader/system_utf8.o
-FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library.5
+FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library.6
 FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/filesystem_library_identity.o \
 	build/m68k/library/filesystem_library.o \
@@ -85,6 +88,7 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/vfs_path.o build/m68k/library/vfs_union.o \
 	build/m68k/library/vfs_port_transport.o \
 	build/m68k/library/vfs_host_transport.o \
+	build/m68k/library/vfs_host_direct.o \
 	build/m68k/library/backends/host.o \
 	build/m68k/library/vfs_process.o \
 	build/m68k/library/process_filesystem.o \
@@ -160,6 +164,11 @@ build/m68k/vfs_host_transport.o: src/vfs_host_transport.c $(HEADERS)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
+build/m68k/vfs_host_direct.o: src/vfs_host_direct.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
 build/m68k/vfs_process.o: src/vfs_process.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) \
@@ -212,7 +221,7 @@ $(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) \
 		| libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,filesystem.library.5 \
+		-Wl,-soname,filesystem.library.6 \
 		-Wl,--version-script=$(FILESYSTEM_LIBRARY_MAP) -o $@ \
 		$(FILESYSTEM_LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
@@ -235,9 +244,9 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.5 5.0.0 ABI 5.0$$'
+		grep -q '^filesystem.library.6 6.0.0 ABI 6.0$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
-	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.5]' >/dev/null
+	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.6]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
 		grep -Fc 'Shared library: [system.library.3]')" = 1
 	@test "$$($(READELF) -dW $< | \

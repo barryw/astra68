@@ -41,7 +41,7 @@
 /** Native-big-endian `STOR` storage-protocol signature. */
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
 /** Current storage-protocol wire-format version. */
-#define ASTRA_VFS_VERSION  UINT16_C(27)
+#define ASTRA_VFS_VERSION  UINT16_C(28)
 
 /**
  * The oldest version this build can still speak. A client asks for a minimum
@@ -98,6 +98,12 @@
  * Version 27 withdraws the version 18 attachment: HELLO answers with a session
  * and never a capability. Every request for a host volume reaches the provider
  * through the service that enforces its grant.
+ *
+ * Version 28 replaces 27's relay with the scoped direct lane. A HELLO on a
+ * port that serves a host volume attaches one handle: the grant's filesystem
+ * scope (ASTRA_SYSCALL_HOST_SCOPE_CREATE), never the host device. The client
+ * drives its own host channel through it. Such a port answers every other
+ * operation except BYE with ASTRA_VFS_ERR_UNSUPPORTED.
  */
 #define ASTRA_VFS_VERSION_MIN UINT16_C(2)
 

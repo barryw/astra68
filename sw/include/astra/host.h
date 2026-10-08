@@ -24,6 +24,9 @@
 #define ASTRA_DEVICE_ID_HOST0   UINT32_C(0x48410001)
 /** Capability name under which the host device lease is granted. */
 #define ASTRA_CAPABILITY_HOST_DEVICE "HOST_DEVICE"
+/** The host device with ::ASTRA_RIGHT_HOST_SCOPE: the filesystem
+ * service's grant. Every other holder is granted HOST_DEVICE without it. */
+#define ASTRA_CAPABILITY_HOST_FILESYSTEM "HOST_FILESYSTEM"
 
 /** Host transport protocol revision 1.1, superseded by ::ASTRA_HOST_VERSION. */
 #define ASTRA_HOST_VERSION_1_1 UINT32_C(0x00010001)
@@ -38,7 +41,7 @@
 /** Host transport protocol revision 1.8, superseded by ::ASTRA_HOST_VERSION. */
 #define ASTRA_HOST_VERSION_1_8 UINT32_C(0x00010008)
 /** Current host transport protocol version, as reported by HOST_QUERY. */
-#define ASTRA_HOST_VERSION     UINT32_C(0x0001000c)
+#define ASTRA_HOST_VERSION     UINT32_C(0x0001000d)
 /** The host exposes the filesystem service. */
 #define ASTRA_HOST_CAP_FILESYSTEM (1u << 0)
 /** Filesystem commands are scoped to the submitting process's authenticated owner. */
@@ -60,6 +63,21 @@
 /** Set in ::AstraHostLeaseInfo.capabilities when the host plays application
  * audio streams (%audio_stream.h, ::ASTRA_SYSCALL_AUDIO_STREAM_OPEN). */
 #define ASTRA_HOST_CAP_AUDIO_STREAM (1u << 9)
+/** Host channels may be bound to filesystem scopes
+ * (::ASTRA_SYSCALL_HOST_SCOPE_CREATE). On a bound channel the provider
+ * runs only filesystem commands, each through one scope the kernel
+ * attached: beneath its root, with its rights. */
+#define ASTRA_HOST_CAP_FS_SCOPE (1u << 10)
+/** Channel configuration: the scope words name a scope. Kernel-written. */
+#define ASTRA_HOST_SCOPE_BOUND     (1u << 0)
+/** The scope refuses every mutation (ASTRA_STATUS_READ_ONLY). */
+#define ASTRA_HOST_SCOPE_READ_ONLY (1u << 1)
+/** Kept by the kernel, never sent to the provider: the scope may be handed
+ * on, so it arrives with ::ASTRA_RIGHT_TRANSFER. Without it a scope
+ * arrives without TRANSFER: its holder may use it and fork with it. */
+#define ASTRA_HOST_SCOPE_DELEGATE  (1u << 2)
+/** Scopes one host channel carries at most. */
+#define ASTRA_HOST_CHANNEL_SCOPE_MAX 8u
 /** Set in ::AstraHostLeaseInfo.state_flags once the host lease is ready for commands. */
 #define ASTRA_HOST_STATE_READY    (1u << 0)
 
@@ -473,7 +491,8 @@ typedef struct AstraHostLeaseInfo {
     uint32_t host_generation;/**< Current host generation. */
     uint32_t maximum_transfer; /**< Largest byte_size HOST_EXECUTE or HOST_CHANNEL_OPEN accepts. */
     uint32_t maximum_commands; /**< Largest command_count or command_capacity accepted. */
-    uint32_t reserved[2];    /**< Reserved; zero. */
+    uint32_t scope;          /**< HOST_QUERY on a scope: the provider word it binds; 0 on a device. */
+    uint32_t scope_flags;    /**< HOST_QUERY on a scope: ::ASTRA_HOST_SCOPE_READ_ONLY or 0. */
 } AstraHostLeaseInfo;
 
 /** Fixed byte size of ::AstraHostTransportRequest. */
@@ -615,10 +634,15 @@ _Static_assert(sizeof(AstraHostChannelOpen) == ASTRA_HOST_CHANNEL_OPEN_SIZE,
  * inside the kernel's platform layer; never constructed by user code.
  */
 /** @cond ASTRA_INTERNAL */
-#define ASTRA_HOST_CHANNEL_CONFIG_VERSION 1u
+#define ASTRA_HOST_CHANNEL_CONFIG_VERSION 2u
 #define ASTRA_HOST_CHANNEL_CONFIG_SIZE 64u
 #define ASTRA_HOST_CHANNEL_CONFIG_OPEN  1u
 #define ASTRA_HOST_CHANNEL_CONFIG_CLOSE 2u
+/** Bind one more scope to an open bound channel. */
+#define ASTRA_HOST_CHANNEL_CONFIG_ATTACH 3u
+/** Unbind a scope (revocation): a command naming it that has not started
+ * is refused from the moment this configuration write returns. */
+#define ASTRA_HOST_CHANNEL_CONFIG_DETACH 4u
 typedef struct AstraHostChannelConfig {
     _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
     uint16_t version;
@@ -630,7 +654,10 @@ typedef struct AstraHostChannelConfig {
     uint32_t physical_buffer;
     uint32_t byte_size;
     uint32_t command_capacity;
-    uint32_t reserved[7];
+    uint32_t scope;        /**< OPEN (bound), ATTACH, DETACH: the scope's provider word. */
+    uint32_t scope_flags;  /**< ASTRA_HOST_SCOPE_BOUND | READ_ONLY; 0 for an unbound OPEN and for CLOSE and DETACH. */
+    uint32_t scope_owner;  /**< OPEN (bound), ATTACH: owner of the process that created the scope. */
+    uint32_t reserved[4];  /**< Zero. */
 } AstraHostChannelConfig;
 
 _Static_assert(sizeof(AstraHostChannelConfig) ==

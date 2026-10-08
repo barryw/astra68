@@ -914,6 +914,14 @@ static uint32_t host_byte_size;
 static uint32_t host_command_count;
 static uint32_t host_channel_open_calls;
 static uint32_t host_channel_close_calls;
+static uint32_t host_channel_scope;
+static uint32_t host_channel_scope_flags;
+static uint32_t host_channel_scope_owner;
+static uint32_t host_channel_attach_calls;
+static uint32_t host_channel_attach_scope;
+static uint32_t host_channel_attach_flags;
+static uint32_t host_channel_detach_calls;
+static uint32_t host_channel_detach_scope;
 static uint32_t host_channel_physical;
 static uint32_t host_channel_byte_size;
 static uint32_t host_channel_slot;
@@ -974,7 +982,8 @@ uint32_t kernel_platform_host_execute(uint32_t owner,
 uint32_t kernel_platform_host_channel_open(
     uint32_t owner, uint32_t host_generation, uint32_t channel_generation,
     uint32_t slot, uint32_t physical_buffer, uint32_t byte_size,
-    uint32_t command_capacity)
+    uint32_t command_capacity, uint32_t scope, uint32_t scope_flags,
+    uint32_t scope_owner)
 {
     assert(owner != 0u && host_generation == host_state.host_generation);
     assert(channel_generation != 0u &&
@@ -982,6 +991,9 @@ uint32_t kernel_platform_host_channel_open(
     assert(byte_size >= ASTRA_HOST_CHANNEL_HEADER_SIZE +
                         ASTRA_HOST_COMMAND_SIZE &&
            byte_size <= KERNEL_PAGE_SIZE && command_capacity == 1u);
+    host_channel_scope = scope;
+    host_channel_scope_flags = scope_flags;
+    host_channel_scope_owner = scope_owner;
     host_channel_physical = physical_buffer;
     host_channel_byte_size = byte_size;
     host_channel_slot = slot;
@@ -1002,6 +1014,31 @@ uint32_t kernel_platform_host_channel_close(
     memset(&host_channel_states[slot], 0,
            sizeof(host_channel_states[slot]));
     ++host_channel_close_calls;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t kernel_platform_host_channel_attach(
+    uint32_t owner, uint32_t host_generation, uint32_t channel_generation,
+    uint32_t slot, uint32_t scope, uint32_t scope_flags, uint32_t scope_owner)
+{
+    assert(owner != 0u && host_generation == host_state.host_generation);
+    assert(channel_generation != 0u && slot == host_channel_slot);
+    assert(scope_owner != 0u);
+    host_channel_attach_scope = scope;
+    host_channel_attach_flags = scope_flags;
+    ++host_channel_attach_calls;
+    return ASTRA_SYSCALL_OK;
+}
+
+uint32_t kernel_platform_host_channel_detach(
+    uint32_t owner, uint32_t host_generation, uint32_t channel_generation,
+    uint32_t slot, uint32_t scope)
+{
+    assert(owner != 0u && host_generation == host_state.host_generation);
+    assert(channel_generation != 0u &&
+           slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT);
+    host_channel_detach_scope = scope;
+    ++host_channel_detach_calls;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -1151,6 +1188,14 @@ static void reset_host_device(void)
     host_command_count = 0u;
     host_channel_open_calls = 0u;
     host_channel_close_calls = 0u;
+    host_channel_scope = 0u;
+    host_channel_scope_flags = 0u;
+    host_channel_scope_owner = 0u;
+    host_channel_attach_calls = 0u;
+    host_channel_attach_scope = 0u;
+    host_channel_attach_flags = 0u;
+    host_channel_detach_calls = 0u;
+    host_channel_detach_scope = 0u;
     memset(audio_stream_states, 0, sizeof(audio_stream_states));
     audio_stream_open_calls = 0u;
     audio_stream_close_calls = 0u;
@@ -8799,6 +8844,242 @@ static void test_audio_stream(void)
 #undef TRY_OPEN
 }
 
+static uint32_t scope_call(uint32_t number, uint32_t d1, uint32_t d2,
+                           uint32_t d3, uint32_t d4, uint32_t d5,
+                           KernelCpuContext **next)
+{
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    assert(test_trap(KERNEL_PROCESS_STACK_TOP - 1536u, frame, next, number,
+                     d1, d2, d3, d4, d5) == KERNEL_PROCESS_OK);
+    return (*next)->data[0];
+}
+
+/* Sends `handle` to this process through a fresh port and answers what
+ * arrives: the transfer path a HELLO reply takes. */
+static uint32_t scope_round_trip(uint32_t handle, KernelCpuContext **next)
+{
+    const uint32_t user_message = KERNEL_PROCESS_STACK_TOP - 1024u;
+    const uint32_t user_handles = KERNEL_PROCESS_STACK_TOP - 512u;
+    AstraMessageHeader message;
+    uint32_t receive;
+    uint32_t send;
+    uint32_t moved = 0u;
+
+    assert(scope_call(ASTRA_SYSCALL_PORT_CREATE, 1u, sizeof(message), 0u, 0u,
+                      0u, next) == ASTRA_SYSCALL_OK);
+    receive = (*next)->data[1];
+    send = (*next)->data[2];
+    memset(&message, 0, sizeof(message));
+    message.total_size = sizeof(message);
+    message.header_size = ASTRA_MESSAGE_HEADER_SIZE;
+    message.protocol = 0x53434f50u;
+    message.protocol_version = 1u;
+    message.operation = 1u;
+    assert(kernel_user_copy_to_asm(user_message, &message,
+                                   sizeof(message)) == KERNEL_USER_COPY_OK);
+    assert(kernel_user_copy_to_asm(user_handles, &handle, sizeof(handle)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_PORT_SEND_TRY, send, user_message,
+                      sizeof(message), user_handles, 1u, next) ==
+           ASTRA_SYSCALL_OK);
+    assert(scope_call(ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive, user_message,
+                      sizeof(message), user_handles, 1u, next) ==
+           ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&moved, user_handles, sizeof(moved)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_CLOSE, receive, 0u, 0u, 0u, 0u, next) ==
+           ASTRA_SYSCALL_OK);
+    assert(scope_call(ASTRA_SYSCALL_CLOSE, send, 0u, 0u, 0u, 0u, next) ==
+           ASTRA_SYSCALL_OK);
+    return moved;
+}
+
+/*
+ * A filesystem scope (FS15, FS44; decisions of 2026-10-08): minted only with
+ * ASTRA_RIGHT_HOST_SCOPE, stamped by the kernel into the channels bound to
+ * it, attached several to one thread's channel, revoked everywhere at once,
+ * delegated only when DELEGATE says so, and revoked with its creator.
+ */
+static void test_host_scope(void)
+{
+    const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    const uint32_t user_open = KERNEL_PROCESS_STACK_TOP - 128u;
+    const uint32_t user_lease = KERNEL_PROCESS_STACK_TOP - 256u;
+    KernelProcessBootstrapCapability capability = {0};
+    KernelCpuContext *next = NULL;
+    KernelProcessSnapshot process;
+    AstraStartupCapability table[3];
+    AstraDmaBufferInfo buffer;
+    AstraHostChannelOpen channel;
+    AstraHostLeaseInfo lease;
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint32_t process_id = 0u;
+    uint32_t device = 0u;
+    uint32_t no_scope_right;
+    uint32_t work;
+    uint32_t work_client;
+    uint32_t readonly;
+    uint32_t delegable;
+    uint32_t moved;
+
+    loader_build_image();
+    initialize_test();
+    host_state.capabilities |= ASTRA_HOST_CAP_FS_SCOPE;
+    capability.name = ASTRA_CAPABILITY_HOST_DEVICE;
+    capability.kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capability.device_id = ASTRA_DEVICE_ID_HOST0;
+    capability.rights = KERNEL_DEVICE_RIGHTS;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &capability, 1u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(
+               table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+               sizeof(table)) == KERNEL_USER_COPY_OK);
+    for (uint32_t index = 0u; index < 3u; ++index)
+        if (astra_capability_name_equal(table[index].name,
+                                        ASTRA_CAPABILITY_HOST_DEVICE))
+            device = table[index].handle;
+    assert(device != 0u);
+    assert(kernel_process_snapshot(0u, &process));
+
+    /* Entropy, media and remote desktop hold the device without
+     * HOST_SCOPE: they cannot mint a scope. */
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, device,
+                      KERNEL_DEVICE_RIGHTS & ~ASTRA_RIGHT_HOST_SCOPE, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    no_scope_right = next->data[1];
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, no_scope_right,
+                      ASTRA_HOST_FS_VOLUME_WORK, 0u, 0u, 0u, &next) ==
+           ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, device,
+                      ASTRA_HOST_FS_VOLUME_WORK, 1u << 7, 0u, 0u, &next) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    host_state.capabilities &= ~ASTRA_HOST_CAP_FS_SCOPE;
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, device,
+                      ASTRA_HOST_FS_VOLUME_WORK, 0u, 0u, 0u, &next) ==
+           ASTRA_SYSCALL_UNSUPPORTED);
+    host_state.capabilities |= ASTRA_HOST_CAP_FS_SCOPE;
+
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, device,
+                      ASTRA_HOST_FS_VOLUME_WORK, 0u, 0u, 0u, &next) ==
+           ASTRA_SYSCALL_OK);
+    work = next->data[1];
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, device,
+                      ASTRA_HOST_FS_VOLUME_SOUND, ASTRA_HOST_SCOPE_READ_ONLY,
+                      0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    readonly = next->data[1];
+
+    /* HOST_QUERY on a scope answers the word the kernel will stamp. */
+    assert(scope_call(ASTRA_SYSCALL_HOST_QUERY, readonly, user_lease, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&lease, user_lease, sizeof(lease)) ==
+           KERNEL_USER_COPY_OK);
+    assert(lease.scope == ASTRA_HOST_FS_VOLUME_SOUND &&
+           lease.scope_flags == ASTRA_HOST_SCOPE_READ_ONLY);
+
+    /* What a client receives: no ADMINISTER, and never the device path. */
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, work,
+                      ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                          ASTRA_RIGHT_TRANSFER, 0u, 0u, 0u, &next) ==
+           ASTRA_SYSCALL_OK);
+    work_client = next->data[1];
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_REVOKE, work_client, 0u, 0u,
+                      0u, 0u, &next) == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(scope_call(ASTRA_SYSCALL_HOST_EXECUTE, work_client, user_info, 0u,
+                      0u, 0u, &next) == ASTRA_SYSCALL_INVALID_HANDLE);
+    /* Nothing to attach to yet. */
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, readonly, 0u, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_INVALID_ARGUMENT);
+
+    /* A channel opened on the scope is bound to it by the kernel. */
+    assert(scope_call(ASTRA_SYSCALL_DMA_CREATE, KERNEL_PAGE_SIZE, user_info,
+                      0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+    memset(&channel, 0, sizeof(channel));
+    channel.size = sizeof(channel);
+    channel.buffer = buffer.handle;
+    channel.byte_size = ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                        ASTRA_HOST_COMMAND_SIZE;
+    channel.command_capacity = 1u;
+    assert(kernel_user_copy_to_asm(user_open, &channel, sizeof(channel)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_OPEN, work_client,
+                      user_open, 0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    assert(host_channel_open_calls == 1u);
+    assert(host_channel_scope == ASTRA_HOST_FS_VOLUME_WORK &&
+           host_channel_scope_flags == ASTRA_HOST_SCOPE_BOUND &&
+           host_channel_scope_owner == process.owner);
+
+    /* A second scope rides the same channel, once. */
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, readonly, 0u, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    assert(host_channel_attach_calls == 1u &&
+           host_channel_attach_scope == ASTRA_HOST_FS_VOLUME_SOUND &&
+           host_channel_attach_flags ==
+               (ASTRA_HOST_SCOPE_BOUND | ASTRA_HOST_SCOPE_READ_ONLY));
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, readonly, 0u, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    assert(host_channel_attach_calls == 1u);
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, device, 0u, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_INVALID_HANDLE);
+
+    /* Revocation unbinds it from every channel and refuses it after. */
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_REVOKE, readonly, 0u, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    assert(host_channel_detach_calls == 1u &&
+           host_channel_detach_scope == ASTRA_HOST_FS_VOLUME_SOUND);
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, readonly, 0u, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_PEER_DEAD);
+    assert(scope_call(ASTRA_SYSCALL_HOST_QUERY, readonly, user_lease, 0u,
+                      0u, 0u, &next) == ASTRA_SYSCALL_PEER_DEAD);
+    assert(host_channel_close_calls == 0u);
+
+    /* Delegation: a scope without DELEGATE arrives without TRANSFER, so its
+     * holder cannot duplicate or send it on; one with DELEGATE keeps it.
+     * Neither gains ADMINISTER on the way. */
+    moved = scope_round_trip(work_client, &next);
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, moved, ASTRA_RIGHT_READ,
+                      0u, 0u, 0u, &next) == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_REVOKE, moved, 0u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, device,
+                      ASTRA_HOST_FS_VOLUME_SOUND, ASTRA_HOST_SCOPE_DELEGATE,
+                      0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    delegable = next->data[1];
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, delegable,
+                      ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                          ASTRA_RIGHT_TRANSFER, 0u, 0u, 0u, &next) ==
+           ASTRA_SYSCALL_OK);
+    moved = scope_round_trip(next->data[1], &next);
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, moved, ASTRA_RIGHT_READ,
+                      0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, moved,
+                      ASTRA_RIGHT_READ | ASTRA_RIGHT_ADMINISTER, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_ACCESS_DENIED);
+    /* DELEGATE is the kernel's: the provider never sees it. */
+    assert(scope_call(ASTRA_SYSCALL_HOST_QUERY, moved, user_lease, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&lease, user_lease, sizeof(lease)) ==
+           KERNEL_USER_COPY_OK);
+    assert(lease.scope_flags == 0u);
+
+    /* The creator's death revokes what it created, channel binding first. */
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(host_channel_detach_calls == 2u &&
+           host_channel_detach_scope == ASTRA_HOST_FS_VOLUME_WORK);
+    assert(host_channel_close_calls == 1u);
+}
+
 /*
  * Fault injection across the admission surface. STORAGE_AND_VFS.md requires
  * this before a filesystem is allowed to depend on the API, and the reason is
@@ -14908,6 +15189,7 @@ int main(void)
     test_network_admission();
     test_host_admission();
     test_audio_stream();
+    test_host_scope();
     test_bootstrap_capabilities();
     test_capability_roots_are_carried();
     test_arguments_and_environment_are_published();

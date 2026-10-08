@@ -279,6 +279,21 @@ int astra_main(const AstraStartupInfo *startup)
                                          ASTRA_CAPABILITY_SERVICE_READY);
     if (device == NULL)
         return fail(bootstrap, 1u);
+    /* HOST_DEVICE arrives without ASTRA_RIGHT_HOST_SCOPE: only the
+     * filesystem service mints scopes (decision 2026-10-08). */
+    {
+        uint32_t scope = 0u;
+        uint32_t minted = astra_host_scope_create(
+            device->handle, ASTRA_HOST_FS_VOLUME_WORK, 0u, &scope);
+
+        if (minted != ASTRA_SYSCALL_ACCESS_DENIED) {
+            if (scope != 0u)
+                (void)astra_close(scope);
+            (void)astra_log("ASTRA HOSTBENCH SCOPE MINT NOT REFUSED");
+            return fail(bootstrap, 10u);
+        }
+        (void)astra_log("ASTRA HOSTBENCH SCOPE MINT REFUSED");
+    }
     if (!run_memory())
         return fail(bootstrap, 9u);
     if (astra_host_lease_query(device->handle, &lease) != ASTRA_SYSCALL_OK ||

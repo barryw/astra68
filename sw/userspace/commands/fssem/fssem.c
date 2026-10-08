@@ -8,12 +8,16 @@
  * "FSSEM PASS <case>" or "FSSEM FAIL <case>: <detail>". The last line is
  * "FSSEM DONE passed P failed F"; the exit status is 0 only when F is 0.
  * Cases use the POSIX layer unless their name says otherwise; the raw-*
- * cases speak the storage protocol on a port directly.
+ * cases go beneath it (raw-lane drives a host channel on its own scope).
  */
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <astra/host.h>
 #include <astra/program.h>
+#include <astra/runtime.h>
+#include <astra/vfs_assign.h>
+#include <astra/vfs_process.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -21,7 +25,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 ASTRA_PROGRAM("fssem", 1, 0, 0, "Barry Walker",
@@ -103,11 +109,127 @@ static int case_basic(const char *directory)
     return 0;
 }
 
+typedef struct RawLane {
+    uint32_t scope;
+    uint32_t error;
+    uint32_t statuses[3];
+} RawLane;
+
+/* On a thread of its own: a thread has one host channel, and the main
+ * thread's carries the Kit's lane. Three raw commands on a channel opened
+ * with fssem's own WORK scope. */
+static void *raw_lane_thread(void *argument)
+{
+    static const struct {
+        uint16_t service;
+        uint16_t operation;
+        uint32_t volume;
+        const char *path;
+    } steps[] = {
+        {ASTRA_HOST_SERVICE_FILESYSTEM, ASTRA_HOST_FS_STAT,
+         ASTRA_HOST_FS_VOLUME_WORK, "/"},
+        {ASTRA_HOST_SERVICE_FILESYSTEM, ASTRA_HOST_FS_MKDIR,
+         ASTRA_HOST_FS_VOLUME_SOUND, "/raw-lane-forged"},
+        {ASTRA_HOST_SERVICE_ENTROPY, ASTRA_HOST_ENTROPY_FILL, 0u, ""},
+    };
+    RawLane *raw = argument;
+    AstraHostChannelClient channel;
+
+    memset(&channel, 0, sizeof(channel));
+    raw->error = astra_host_client_open(raw->scope, ASTRA_HOST_CAP_FS_SCOPE,
+                                        64u, &channel);
+    if (raw->error != ASTRA_SYSCALL_OK)
+        return NULL;
+    for (uint32_t index = 0u; index < 3u; ++index) {
+        AstraHostCommand *command = astra_host_client_prepare(
+            &channel, steps[index].service, steps[index].operation);
+
+        command->volume = steps[index].volume;
+        command->value_lo = 0755u;
+        (void)strcpy(command->path, steps[index].path);
+        if (steps[index].service == ASTRA_HOST_SERVICE_ENTROPY)
+            command->data_capacity = 32u;
+        else
+            command->data_offset = 0u;
+        raw->error = astra_host_client_submit(&channel);
+        if (raw->error != ASTRA_SYSCALL_OK)
+            break;
+        raw->statuses[index] = command->status;
+    }
+    (void)astra_host_client_close(&channel);
+    return NULL;
+}
+
+/*
+ * A client's raw commands on its own lane (FS15, FS44): its own scope
+ * answers; a forged volume and every other service are refused by the
+ * provider. The gate's `lane` check confirms nothing landed in SOUND.
+ */
+static int case_raw_lane(const char *directory)
+{
+    const AstraAssign *work =
+        astra_assign_lookup(astra_process_vfs_assigns(), "WORK");
+    AstraVfsClient *client = astra_process_vfs_client_for(work);
+    pthread_t thread;
+    struct stat st;
+    RawLane raw;
+
+    (void)directory;
+    CHECK(stat("/work", &st) == 0 && client != NULL, "no WORK client");
+    memset(&raw, 0, sizeof(raw));
+    raw.scope = client->port_direct_scope;
+    CHECK(raw.scope != 0u, "WORK is not on a lane");
+    CHECK(pthread_create(&thread, NULL, raw_lane_thread, &raw) == 0 &&
+          pthread_join(thread, NULL) == 0, "raw lane thread");
+    CHECK(raw.error == ASTRA_SYSCALL_OK, "raw lane: %u", (unsigned)raw.error);
+    CHECK(raw.statuses[0] == ASTRA_STATUS_OK, "own scope STAT: %u",
+          (unsigned)raw.statuses[0]);
+    CHECK(raw.statuses[1] == ASTRA_STATUS_ACCESS, "forged volume: %u",
+          (unsigned)raw.statuses[1]);
+    CHECK(raw.statuses[2] == ASTRA_STATUS_ACCESS, "entropy on a lane: %u",
+          (unsigned)raw.statuses[2]);
+    return 0;
+}
+
+/* fork and exec keep host volumes working: the child opens its own lane on
+ * the inherited scope, and an exec'd image resumes it. No file is open at
+ * the fork: until Task 8, fork refuses while one is. */
+static int case_lane_fork_exec(const char *directory)
+{
+    char path[160];
+    struct stat st;
+    pid_t child;
+    int status;
+
+    join(path, sizeof(path), directory, "lane-file");
+    CHECK(write_text(path, "lane", O_WRONLY | O_CREAT | O_EXCL) == 0,
+          "seed");
+    child = fork();
+    CHECK(child >= 0, "fork: %s", strerror(errno));
+    if (child == 0)
+        _exit(stat(path, &st) == 0 && st.st_size == 4 ? 0 : 1);
+    CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+          WEXITSTATUS(status) == 0, "fork child could not stat on its lane");
+    child = fork();
+    CHECK(child >= 0, "fork: %s", strerror(errno));
+    if (child == 0) {
+        char *const argv[] = {"fssem", "--lane-helper", path, NULL};
+
+        execv("/commands/fssem", argv);
+        _exit(127);
+    }
+    CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status) &&
+          WEXITSTATUS(status) == 0, "exec'd image could not stat: %d",
+          WEXITSTATUS(status));
+    return 0;
+}
 static const struct {
     const char *name;
     FssemCase run;
 } cases[] = {
     {"basic", case_basic},
+    {"raw-lane", case_raw_lane},
+    {"lane-fork-exec", case_lane_fork_exec},
 };
 
 int main(int argc, char **argv)
@@ -115,6 +237,11 @@ int main(int argc, char **argv)
     uint32_t passed = 0u;
     uint32_t failed = 0u;
 
+    if (argc == 3 && strcmp(argv[1], "--lane-helper") == 0) {
+        struct stat st;
+
+        return stat(argv[2], &st) == 0 && st.st_size == 4 ? 0 : 2;
+    }
     if (argc < 2) {
         fprintf(stderr, "usage: fssem CASE...\n");
         return 2;

@@ -16,6 +16,7 @@
 #include <astra/bundle.h>
 #include <astra/display.h>
 #include <astra/gui.h>
+#include <astra/host.h>
 #include <astra/event_control.h>
 #include <astra/log_ring.h>
 #include <astra/posix_process.h>
@@ -25,6 +26,7 @@
 #include <astra/shutdown.h>
 #include <astra/status.h>
 #include <astra/vfs_path.h>
+#include <astra/vfs_host_direct.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_library_source.h>
 #include <astra/vfs_service_core.h>
@@ -870,6 +872,28 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                     return status;
                 continue;
             }
+            /* The host device reaches every host service; minting
+             * filesystem scopes is the filesystem service's alone, granted
+             * by name (decision 2026-10-08). */
+            if (strcmp(wanted->name, ASTRA_CAPABILITY_HOST_FILESYSTEM) == 0 ||
+                strcmp(wanted->name, ASTRA_CAPABILITY_HOST_DEVICE) == 0) {
+                const AstraStartupCapability *device =
+                    astra_startup_capability(startup,
+                                             ASTRA_CAPABILITY_HOST_DEVICE);
+
+                if (device == NULL)
+                    continue;
+                status = add_grant(
+                    out, count, wanted->name, device->handle,
+                    strcmp(wanted->name,
+                           ASTRA_CAPABILITY_HOST_FILESYSTEM) == 0 ?
+                        device->rights :
+                        device->rights & ~ASTRA_RIGHT_HOST_SCOPE,
+                    0u, NULL);
+                if (status != ASTRA_STATUS_OK)
+                    return status;
+                continue;
+            }
             const AstraStartupCapability *held = astra_startup_capability(
                 startup, wanted->name);
 
@@ -1225,7 +1249,8 @@ static uint32_t publish(const SupervisorManifestPublication *publication,
         return ASTRA_STATUS_OK;
     }
     client = &service_clients[service_count];
-    if (astra_vfs_port_connect(client, service_handles[service_count]) !=
+    if (astra_vfs_host_port_connect(client,
+                                    service_handles[service_count]) !=
             ASTRA_VFS_OK ||
         supervisor_vfs_register(client, handle) == 0u ||
         astra_assign_bind(supervisor_assigns(), publication->name, handle,

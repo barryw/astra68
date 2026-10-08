@@ -33,6 +33,9 @@ static int require_two_in_flight;
 static int complete_on_wait_only;
 static uint32_t concurrent_kick_base;
 static uint64_t mock_metric_value = UINT64_C(0x123456789abcdef0);
+static uint32_t last_open_device;
+static uint32_t scope_attaches;
+static uint32_t last_attached;
 
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
@@ -112,7 +115,8 @@ uint32_t astra_host_channel_open(uint32_t device,
     AstraHostChannelHeader *header =
         (AstraHostChannelHeader *)(void *)dma_storage[slot];
 
-    assert(device == 41u);
+    assert(device == 41u || device == 77u);
+    last_open_device = device;
     assert(channel->command_capacity != 0u &&
            (channel->command_capacity &
             (channel->command_capacity - 1u)) == 0u);
@@ -141,7 +145,7 @@ uint32_t astra_host_channel_open(uint32_t device,
 
 uint32_t astra_host_channel_close(uint32_t device)
 {
-    assert(device == 41u);
+    assert(device == 41u || device == 77u);
     for (uint32_t slot = 0u; slot < dma_slot_count; ++slot) {
         if (channel_opened[slot] == 0u ||
             channel_thread[slot] != current_thread)
@@ -283,6 +287,13 @@ uint32_t astra_close(uint32_t handle)
     return ASTRA_SYSCALL_OK;
 }
 
+uint32_t astra_host_scope_attach(uint32_t scope)
+{
+    ++scope_attaches;
+    last_attached = scope;
+    return ASTRA_SYSCALL_OK;
+}
+
 static int acquire(void *context)
 {
     assert(context == &lock_depth);
@@ -319,6 +330,39 @@ static void *execute_thread(void *opaque)
     return NULL;
 }
 
+/* One lane per thread carries every scope its process uses: the first
+ * opens the channel, the next attaches once, and device commands neither. */
+static void test_lane_carries_scopes(void)
+{
+    AstraVfsHostTransport transport;
+    AstraVfsHostRequest request;
+
+    capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
+                   ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_CHANNEL |
+                   ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ;
+    assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                         &lock_depth));
+    assert(astra_vfs_host_transport_begin(&transport, 77u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(last_open_device == 77u && scope_attaches == 0u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    assert(astra_vfs_host_transport_begin(&transport, 78u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(scope_attaches == 1u && last_attached == 78u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    assert(astra_vfs_host_transport_begin(&transport, 78u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(scope_attaches == 1u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    astra_vfs_host_transport_destroy(&transport);
+}
+
 int main(void)
 {
     AstraVfsHostTransport transport;
@@ -335,6 +379,10 @@ int main(void)
     assert(!astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                           &lock_depth));
     capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED;
+    assert(!astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                          &lock_depth));
+    capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
+                   ASTRA_HOST_CAP_FS_SCOPE;
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                          &lock_depth));
     assert(transport.generation == 9u);
@@ -364,7 +412,7 @@ int main(void)
 
     memset(&transport, 0, sizeof(transport));
     capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
-                   ASTRA_HOST_CAP_CHANNEL |
+                   ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_CHANNEL |
                    ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ |
                    ASTRA_HOST_CAP_METRICS;
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
@@ -390,7 +438,7 @@ int main(void)
     assert(command.handle == 0x5680u);
     assert(memcmp(output, "ring", sizeof(output)) == 0);
     assert(channel_opens == 1u && channel_kicks == 2u && executes == 2u);
-    assert(astra_vfs_host_transport_begin(&transport, sizeof(output),
+    assert(astra_vfs_host_transport_begin(&transport, 0u, sizeof(output),
                                           &request) == ASTRA_VFS_OK);
     assert((uint8_t *)(void *)request.command >= dma_storage[1] &&
            (uint8_t *)(void *)request.command <
@@ -406,7 +454,7 @@ int main(void)
     {
         uint32_t acquired = lock_acquires;
 
-        assert(astra_vfs_host_transport_begin(&transport, sizeof(output),
+        assert(astra_vfs_host_transport_begin(&transport, 0u, sizeof(output),
                                               &request) == ASTRA_VFS_OK);
         assert(lock_acquires == acquired);
         request.command->generation = transport.generation;
@@ -421,7 +469,7 @@ int main(void)
     {
         uint32_t waits = channel_waits;
 
-        assert(astra_vfs_host_transport_begin(&transport, 0u, &request) ==
+        assert(astra_vfs_host_transport_begin(&transport, 0u, 0u, &request) ==
                ASTRA_VFS_OK);
         request.command->generation = transport.generation;
         assert(astra_vfs_host_transport_submit(
@@ -490,5 +538,7 @@ int main(void)
                &transport, &command, NULL, 0u, NULL, 0u) ==
            ASTRA_VFS_ERR_LIMIT);
     astra_vfs_host_transport_destroy(&transport);
+    channel_open_status = ASTRA_SYSCALL_OK;
+    test_lane_carries_scopes();
     return 0;
 }

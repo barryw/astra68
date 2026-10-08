@@ -16,7 +16,16 @@ python3 emu/qemu/test-filesystem-stress.py "$Q" "$R" "$I" \
     --work /tmp/astra-fs-stress --host-work /tmp/astra-fs-stress-host \
     --operations 400 > /tmp/mg-fs-stress.log 2>&1
 echo "EXIT=$?" >> /tmp/mg-fs-stress.log
-for f in fs-root-helper fs-hostfs fs-semantics fs-stress; do
+# HOST_DEVICE holders cannot mint filesystem scopes (Task 3b).
+cp "$I" /tmp/mg-fs-hostbench.img
+python3 emu/qemu/astra_image.py --hostbench /tmp/mg-fs-hostbench.img \
+    > /tmp/mg-fs-hostbench.log 2>&1 &&
+python3 emu/qemu/test-host-channel-userspace.py "$Q" "$R" /tmp/mg-fs-hostbench.img \
+    --work /tmp/mg-fs-hcu-work --host-work /tmp/mg-fs-hcu-host \
+    >> /tmp/mg-fs-hostbench.log 2>&1
+echo "EXIT=$?" >> /tmp/mg-fs-hostbench.log
+rm -f /tmp/mg-fs-hostbench.img
+for f in fs-root-helper fs-hostfs fs-semantics fs-stress fs-hostbench; do
     echo "== $f"
     tail -4 /tmp/mg-$f.log
 done

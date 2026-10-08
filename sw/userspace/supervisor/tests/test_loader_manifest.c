@@ -26,7 +26,7 @@ static void valid_manifest(void)
         "# shipped startup\n"
             "service /services/storage grants BLOCK_DEVICE BLOCK_IRQ "
             "serves SYSTEM:r required\n"
-            "service /services/hostfs grants HOST_DEVICE "
+            "service /services/hostfs grants HOST_FILESYSTEM "
             "serves WORK:rw METRICS:r SOUND:rw required\n"
         "service /services/events grants SYSTEM:r STORE:rw serves EVENTS:r\n";
     SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
@@ -290,7 +290,8 @@ static void default_application_ceiling(void)
         "LIBS:r", "STORE:rw", "HOME:rw", "CONFIG:rw", "RAM:r",
     };
     static const char *refused[] = {
-        "DISPLAY", "INPUT", "HOST_DEVICE", "BLOCK_DEVICE", "CLOCK",
+        "DISPLAY", "INPUT", "HOST_DEVICE", "HOST_FILESYSTEM", "BLOCK_DEVICE",
+        "CLOCK",
         "SERVICE_MANAGER", "EVENT_CONTROL", "PROCESS", "APPS:rw",
         "LIBS:rw", "SYSTEM:r", "PROC:r", "PROC:rw", "COMMANDS:r", "STORE",
         "GUI:r", "UNKNOWN",

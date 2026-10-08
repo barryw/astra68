@@ -17,7 +17,11 @@ typedef struct AstraVfsHostLane {
     uint32_t channel_address;
     uint32_t producer_position;
     uint8_t active;
-    uint8_t reserved[3];
+    uint8_t scope_count;
+    uint8_t reserved[2];
+    /* The scope handles this lane's channel was opened on or has attached
+     * (ASTRA_SYSCALL_HOST_SCOPE_ATTACH). */
+    uint32_t scopes[ASTRA_HOST_CHANNEL_SCOPE_MAX];
 } AstraVfsHostLane;
 
 struct AstraVfsHostTransport {
@@ -51,7 +55,9 @@ void astra_vfs_host_transport_after_fork(AstraVfsHostTransport *transport);
 uint32_t astra_vfs_host_transport_execute(
     void *context, AstraHostCommand *command, const void *input,
     uint32_t input_size, void *output, uint32_t output_capacity);
-uint32_t astra_vfs_host_transport_begin(void *context,
+/* `scope` names the filesystem scope the command goes through, attached to
+ * this thread's lane on first use; 0 means the transport's own handle. */
+uint32_t astra_vfs_host_transport_begin(void *context, uint32_t scope,
                                         uint32_t data_capacity,
                                         AstraVfsHostRequest *request)
     __attribute__((noinline));

@@ -986,6 +986,31 @@
  * the host is gone.
  */
 #define ASTRA_SYSCALL_AUDIO_STREAM_WAIT 108
+/**
+ * Create a filesystem scope: the authority to drive host channels bound to
+ * one provider session (docs/FILESYSTEM_PRODUCTION_PRD.md FS15). data[1] is
+ * a host device handle carrying ::ASTRA_RIGHT_HOST_SCOPE; data[2] the
+ * provider's word for the session (a volume under host command record 2, a
+ * session id from record 3); data[3] ::ASTRA_HOST_SCOPE_READ_ONLY and/or
+ * ::ASTRA_HOST_SCOPE_DELEGATE. Returns in data[1] a handle with READ (query),
+ * WRITE (open and attach channels), TRANSFER and ADMINISTER (revoke).
+ * UNSUPPORTED when the provider lacks ::ASTRA_HOST_CAP_FS_SCOPE.
+ */
+#define ASTRA_SYSCALL_HOST_SCOPE_CREATE 109
+/**
+ * Revoke a scope: it is detached from every channel that carries it, which
+ * the provider honors before this returns, and every later open, attach
+ * or query on it answers PEER_DEAD. data[1] is the scope with
+ * ::ASTRA_RIGHT_ADMINISTER.
+ */
+#define ASTRA_SYSCALL_HOST_SCOPE_REVOKE 110
+/**
+ * Bind one more scope to the calling thread's host channel, which must have
+ * been opened on a scope; at most ::ASTRA_HOST_CHANNEL_SCOPE_MAX. A scope
+ * already bound there is not bound twice. data[1] is the scope with
+ * ::ASTRA_RIGHT_WRITE.
+ */
+#define ASTRA_SYSCALL_HOST_SCOPE_ATTACH 111
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

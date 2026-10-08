@@ -68,6 +68,9 @@ _Static_assert(KERNEL_VM_DMA_SLOT_COUNT *
 #define PROCESS_SLOT_NONE UINT16_MAX
 #define KERNEL_PROCESS_LOAD_RIGHT (1u << 0)
 
+_Static_assert(KERNEL_DEVICE_RIGHT_HOST_SCOPE == ASTRA_RIGHT_HOST_SCOPE,
+               "device scope right");
+
 _Static_assert(KERNEL_QUALIFICATION_SHARED_BASE == KERNEL_PROCESS_DATA_BASE,
                "the qualification image's shared block is the data page");
 _Static_assert(KERNEL_QUALIFICATION_OFFENDER_EXIT_STATUS ==
@@ -91,6 +94,33 @@ typedef struct KernelProcessDmaBuffer {
     uint8_t active;
 } KernelProcessDmaBuffer;
 
+/*
+ * A filesystem scope (docs/FILESYSTEM_PRODUCTION_PRD.md FS15, FS44): the
+ * authority to drive host channels bound to one provider session. Only a
+ * device handle carrying ASTRA_RIGHT_HOST_SCOPE creates one -- HostFS's, one
+ * per grant -- and clients receive duplicates without ADMINISTER. The kernel
+ * writes the scope's word, rights and creator into every channel bound to
+ * it; the provider enforces them. A bound channel holds a reference, so a
+ * scope outlives its handles while a channel carries it.
+ */
+#define KERNEL_HOST_SCOPE_MAX 64u
+enum {
+    KERNEL_HOST_SCOPE_FREE = 0,
+    KERNEL_HOST_SCOPE_ACTIVE,
+    KERNEL_HOST_SCOPE_REVOKED
+};
+typedef struct KernelHostScope {
+    KernelDeviceLease *lease;
+    uint32_t word;           /* the provider's name for the session */
+    uint32_t flags;          /* ASTRA_HOST_SCOPE_READ_ONLY | _DELEGATE */
+    uint32_t creator_owner;
+    uint16_t references;
+    uint8_t state;
+    uint8_t reserved;
+} KernelHostScope;
+_Static_assert(KERNEL_HOST_SCOPE_MAX < 256u,
+               "a channel names its scopes in one byte");
+
 typedef struct KernelHostChannel {
     KernelProcessDmaBuffer *buffer;
     KernelDmaToken token;
@@ -102,9 +132,14 @@ typedef struct KernelHostChannel {
     uint32_t virtual_address;
     uint32_t expected_consumer;
     uint32_t command_capacity;
+    uint32_t owner;          /* the process owner stamped at open */
+    /* host_scopes index + 1 of each scope bound here; 0 is empty. A channel
+     * opened on a scope is `bound`, and only a bound channel takes more. */
+    uint8_t scopes[ASTRA_HOST_CHANNEL_SCOPE_MAX];
     uint8_t active;
     uint8_t waiting;
-    uint8_t reserved[2];
+    uint8_t bound;
+    uint8_t reserved;
 } KernelHostChannel;
 
 /*
@@ -327,6 +362,7 @@ _Static_assert(sizeof(KernelProcess) <= 4608u,
 static KernelProcess *processes[PROCESS_SLOT_COUNT] KERNEL_TABLES;
 static KernelHostChannel
     host_channels[KERNEL_VM_HOST_CHANNEL_PAGE_COUNT] KERNEL_TABLES;
+static KernelHostScope host_scopes[KERNEL_HOST_SCOPE_MAX] KERNEL_TABLES;
 /*
  * Channels that may have a waiter, one bit per slot: the completion
  * interrupt visits these instead of all 256 slots. A superset -- the bit is
@@ -434,7 +470,10 @@ static uint32_t host_channel_open(
     KernelProcess *process, const KernelThread *thread,
     AstraHostChannelOpen *channel,
     uint32_t device_generation, const KernelPlatformHostState *state,
-    uint32_t user_address);
+    uint32_t user_address, KernelHostScope *scope);
+static uint32_t host_scope_import_rights(KernelObjectType type, void *object,
+                                         uint32_t rights);
+static void host_scopes_revoke_creator(uint32_t owner);
 static KernelProcessStatus clone_startup_identity(
     KernelProcess *process, const KernelThread *thread);
 
@@ -1650,6 +1689,7 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
     if (process->handles_closed == 0u) {
         uint32_t revoked_leases = 0u;
 
+        host_scopes_revoke_creator(process->owner);
         (void)host_channels_close_process(process);
         if (process->host_used != 0u) {
             kernel_platform_host_release_owner(process->owner);
@@ -2345,9 +2385,139 @@ static uint32_t execute_host_transport(
     return ASTRA_SYSCALL_OK;
 }
 
+static uint8_t host_scope_index(const KernelHostScope *scope)
+{
+    return (uint8_t)((uint32_t)(scope - host_scopes) + 1u);
+}
+
+static uint32_t host_scope_wire_flags(const KernelHostScope *scope)
+{
+    return ASTRA_HOST_SCOPE_BOUND |
+           (scope->flags & ASTRA_HOST_SCOPE_READ_ONLY);
+}
+
+static void host_scope_drop(KernelHostScope *scope)
+{
+    if (scope == NULL || scope->references == 0u)
+        return;
+    if (--scope->references != 0u)
+        return;
+    kernel_device_handle_release(scope->lease, NULL);
+    kernel_bytes_clear(scope, sizeof(*scope));
+}
+
+static bool host_scope_retain(void *object, void *context)
+{
+    KernelHostScope *scope = object;
+
+    (void)context;
+    if (scope == NULL || scope->state == KERNEL_HOST_SCOPE_FREE ||
+        scope->references == UINT16_MAX)
+        return false;
+    ++scope->references;
+    return true;
+}
+
+static void host_scope_release(void *object, void *context)
+{
+    (void)context;
+    host_scope_drop(object);
+}
+
+/* A scope that may not be delegated arrives without TRANSFER: its holder can
+ * use it and fork with it, not hand it on. The send from its creator is the
+ * one transfer it makes (decision 2026-10-08, delegation). */
+static uint32_t host_scope_import_rights(KernelObjectType type, void *object,
+                                         uint32_t rights)
+{
+    const KernelHostScope *scope = object;
+
+    if (type == KERNEL_OBJECT_HOST_SCOPE && scope != NULL &&
+        (scope->flags & ASTRA_HOST_SCOPE_DELEGATE) == 0u)
+        return rights & ~ASTRA_RIGHT_TRANSFER;
+    return rights;
+}
+
+/* Binds `scope` to the open bound channel in `slot`; the binding holds a
+ * reference. Already bound there: nothing to do. */
+static uint32_t host_channel_attach(uint32_t slot, KernelHostScope *scope)
+{
+    KernelHostChannel *channel = &host_channels[slot];
+    uint32_t free_at = ASTRA_HOST_CHANNEL_SCOPE_MAX;
+
+    for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_SCOPE_MAX; ++at) {
+        if (channel->scopes[at] == host_scope_index(scope))
+            return ASTRA_SYSCALL_OK;
+        if (channel->scopes[at] == 0u && free_at == ASTRA_HOST_CHANNEL_SCOPE_MAX)
+            free_at = at;
+    }
+    if (free_at == ASTRA_HOST_CHANNEL_SCOPE_MAX ||
+        scope->references == UINT16_MAX)
+        return ASTRA_SYSCALL_RESOURCE_LIMIT;
+    /* The provider refuses a word already bound to this channel, which only
+     * a second scope over the same session could be. */
+    if (kernel_platform_host_channel_attach(
+            channel->owner, channel->host_generation,
+            channel->channel_generation, slot, scope->word,
+            host_scope_wire_flags(scope), scope->creator_owner) !=
+        ASTRA_SYSCALL_OK)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    channel->scopes[free_at] = host_scope_index(scope);
+    ++scope->references;
+    return ASTRA_SYSCALL_OK;
+}
+
+/*
+ * The scope is unbound from every channel at once; the provider refuses
+ * anything naming it that has not started by the time each detach returns.
+ * The channels themselves stay open: their other scopes are unaffected.
+ */
+static uint32_t host_scope_revoke(KernelHostScope *scope)
+{
+    uint32_t result = ASTRA_SYSCALL_OK;
+    uint8_t index = host_scope_index(scope);
+    uint32_t word = scope->word;
+
+    if (scope->state != KERNEL_HOST_SCOPE_ACTIVE)
+        return ASTRA_SYSCALL_OK;
+    scope->state = KERNEL_HOST_SCOPE_REVOKED;
+    ++scope->references;    /* held while the bindings go */
+    for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+         ++slot) {
+        KernelHostChannel *channel = &host_channels[slot];
+
+        if (channel->active == 0u)
+            continue;
+        for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_SCOPE_MAX; ++at) {
+            if (channel->scopes[at] != index)
+                continue;
+            if (kernel_platform_host_channel_detach(
+                    channel->owner, channel->host_generation,
+                    channel->channel_generation, slot, word) !=
+                ASTRA_SYSCALL_OK)
+                result = ASTRA_SYSCALL_PEER_DEAD;
+            channel->scopes[at] = 0u;
+            host_scope_drop(scope);
+        }
+    }
+    host_scope_drop(scope);
+    return result;
+}
+
+/* Its creator is gone: so is what it granted. A restarted HostFS mints
+ * again; nothing its predecessor issued survives it. */
+static void host_scopes_revoke_creator(uint32_t owner)
+{
+    for (uint32_t index = 0u; index < KERNEL_HOST_SCOPE_MAX; ++index)
+        if (host_scopes[index].state == KERNEL_HOST_SCOPE_ACTIVE &&
+            host_scopes[index].creator_owner == owner)
+            (void)host_scope_revoke(&host_scopes[index]);
+}
+
 static uint32_t host_channel_close_slot(KernelProcess *process,
                                         uint32_t slot)
 {
+    KernelHostScope *bound[ASTRA_HOST_CHANNEL_SCOPE_MAX];
     KernelHostChannel *channel;
     uint32_t result = ASTRA_SYSCALL_OK;
 
@@ -2376,8 +2546,13 @@ static uint32_t host_channel_close_slot(KernelProcess *process,
         result = ASTRA_SYSCALL_IO_ERROR;
     if (kernel_dma_abort(&channel->token) != KERNEL_DMA_OK)
         result = ASTRA_SYSCALL_IO_ERROR;
+    for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_SCOPE_MAX; ++at)
+        bound[at] = channel->scopes[at] != 0u ?
+            &host_scopes[channel->scopes[at] - 1u] : NULL;
     kernel_bytes_clear(channel, sizeof(*channel));
     kernel_thread_wait_queue_init(&channel->waiters);
+    for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_SCOPE_MAX; ++at)
+        host_scope_drop(bound[at]);
     return result;
 }
 
@@ -2437,7 +2612,7 @@ static uint32_t host_channel_open(
     KernelProcess *process, const KernelThread *thread,
     AstraHostChannelOpen *channel,
     uint32_t device_generation, const KernelPlatformHostState *state,
-    uint32_t user_address)
+    uint32_t user_address, KernelHostScope *scope)
 {
     KernelProcessDmaBuffer *buffer = NULL;
     KernelHandleStatus handle_status;
@@ -2512,10 +2687,17 @@ static uint32_t host_channel_open(
         (void)kernel_dma_abort(&token);
         return ASTRA_SYSCALL_RESOURCE_LIMIT;
     }
+    if (scope != NULL && (scope->state != KERNEL_HOST_SCOPE_ACTIVE ||
+                          scope->references == UINT16_MAX)) {
+        (void)kernel_dma_abort(&token);
+        return ASTRA_SYSCALL_PEER_DEAD;
+    }
     if (kernel_platform_host_channel_open(
             process->owner, state->host_generation, thread->generation,
             slot, token.physical_address, channel->byte_size,
-            channel->command_capacity) != ASTRA_SYSCALL_OK) {
+            channel->command_capacity, scope != NULL ? scope->word : 0u,
+            scope != NULL ? host_scope_wire_flags(scope) : 0u,
+            scope != NULL ? scope->creator_owner : 0u) != ASTRA_SYSCALL_OK) {
         (void)kernel_dma_abort(&token);
         return ASTRA_SYSCALL_IO_ERROR;
     }
@@ -2541,6 +2723,12 @@ static uint32_t host_channel_open(
     host_channels[slot].channel_generation = thread->generation;
     host_channels[slot].virtual_address = channel->channel_address;
     host_channels[slot].command_capacity = channel->command_capacity;
+    host_channels[slot].owner = process->owner;
+    host_channels[slot].bound = scope != NULL ? 1u : 0u;
+    if (scope != NULL) {
+        host_channels[slot].scopes[0] = host_scope_index(scope);
+        ++scope->references;
+    }
     kernel_thread_wait_queue_init(&host_channels[slot].waiters);
     host_channels[slot].active = 1u;
     process->host_used = 1u;
@@ -3028,7 +3216,8 @@ static uint32_t network_syscall(KernelProcess *process, KernelThread *thread,
 }
 
 static uint32_t host_syscall(KernelProcess *process, KernelThread *thread,
-                             uint32_t syscall, uint32_t device_generation)
+                             uint32_t syscall, uint32_t device_generation,
+                             KernelHostScope *scope)
 {
     uint32_t user_address = thread->context.data[2];
     KernelPlatformHostState state;
@@ -3051,6 +3240,10 @@ static uint32_t host_syscall(KernelProcess *process, KernelThread *thread,
         info.host_generation = state.host_generation;
         info.maximum_transfer = state.maximum_transfer;
         info.maximum_commands = state.maximum_commands;
+        if (scope != NULL) {
+            info.scope = scope->word;
+            info.scope_flags = scope->flags & ASTRA_HOST_SCOPE_READ_ONLY;
+        }
         copy_status = kernel_copy_to_user(user_address, &info, sizeof(info));
         return copy_status == KERNEL_USER_COPY_OK ? ASTRA_SYSCALL_OK :
                copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
@@ -3065,7 +3258,7 @@ static uint32_t host_syscall(KernelProcess *process, KernelThread *thread,
         if (copy_status != KERNEL_USER_COPY_OK)
             return ASTRA_SYSCALL_BAD_ADDRESS;
         return host_channel_open(process, thread, &channel, device_generation,
-                                 &state, user_address);
+                                 &state, user_address, scope);
     }
     {
         AstraHostTransportRequest request;
@@ -3726,6 +3919,8 @@ void kernel_process_init(void)
     kernel_bytes_clear(&scheduler_stats, sizeof(scheduler_stats));
     kernel_thread_wait_queue_init(&sleep_waiters);
     kernel_bytes_clear(host_channels, sizeof(host_channels));
+    kernel_bytes_clear(host_scopes, sizeof(host_scopes));
+    kernel_handle_set_import_rights(host_scope_import_rights);
     for (uint32_t index = 0u;
          index < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT; ++index)
         kernel_thread_wait_queue_init(&host_channels[index].waiters);
@@ -12773,6 +12968,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     case ASTRA_SYSCALL_HOST_CHANNEL_OPEN:
     case ASTRA_SYSCALL_HOST_CHANNEL_CLOSE: {
         KernelDeviceLease *lease = NULL;
+        KernelHostScope *scope = NULL;
         KernelDeviceSnapshot snapshot;
         KernelHandleStatus handle_status;
         uint32_t required_rights = syscall == ASTRA_SYSCALL_HOST_QUERY ?
@@ -12781,6 +12977,22 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         handle_status = kernel_handle_lookup(
             current->handles, thread->context.data[1], KERNEL_OBJECT_DEVICE,
             required_rights, (void **)&lease);
+        /* A scope opens bound channels and answers queries; it never runs
+         * the synchronous HOST_EXECUTE path. */
+        if (handle_status == KERNEL_HANDLE_TYPE_MISMATCH &&
+            syscall != ASTRA_SYSCALL_HOST_EXECUTE) {
+            handle_status = kernel_handle_lookup(
+                current->handles, thread->context.data[1],
+                KERNEL_OBJECT_HOST_SCOPE, required_rights, (void **)&scope);
+            if (handle_status == KERNEL_HANDLE_OK && scope != NULL) {
+                if (scope->state != KERNEL_HOST_SCOPE_ACTIVE &&
+                    syscall != ASTRA_SYSCALL_HOST_CHANNEL_CLOSE) {
+                    result = ASTRA_SYSCALL_PEER_DEAD;
+                    break;
+                }
+                lease = scope->lease;
+            }
+        }
         if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
             handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
             result = ASTRA_SYSCALL_INVALID_HANDLE;
@@ -12805,7 +13017,124 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_PEER_DEAD;
             break;
         }
-        result = host_syscall(current, thread, syscall, snapshot.generation);
+        result = host_syscall(current, thread, syscall, snapshot.generation,
+                              scope);
+        break;
+    }
+    case ASTRA_SYSCALL_HOST_SCOPE_CREATE: {
+        KernelDeviceLease *lease = NULL;
+        KernelDeviceSnapshot snapshot;
+        KernelPlatformHostState state;
+        KernelHandleStatus handle_status;
+        KernelHostScope *scope = NULL;
+        KernelHandle handle;
+        uint32_t flags = thread->context.data[3];
+
+        handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1], KERNEL_OBJECT_DEVICE,
+            KERNEL_DEVICE_RIGHT_HOST_SCOPE, (void **)&lease);
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || lease == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if ((flags & ~(ASTRA_HOST_SCOPE_READ_ONLY |
+                       ASTRA_HOST_SCOPE_DELEGATE)) != 0u) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        if (kernel_device_query(lease, &snapshot) != KERNEL_DEVICE_OK ||
+            snapshot.device_id != ASTRA_DEVICE_ID_HOST0 ||
+            snapshot.lease_state != ASTRA_DEVICE_LEASE_ACTIVE ||
+            !kernel_platform_host_state(&state)) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        if ((state.capabilities & ASTRA_HOST_CAP_FS_SCOPE) == 0u) {
+            result = ASTRA_SYSCALL_UNSUPPORTED;
+            break;
+        }
+        for (uint32_t index = 0u; index < KERNEL_HOST_SCOPE_MAX; ++index)
+            if (host_scopes[index].state == KERNEL_HOST_SCOPE_FREE &&
+                host_scopes[index].references == 0u) {
+                scope = &host_scopes[index];
+                break;
+            }
+        if (scope == NULL || !kernel_device_handle_retain(lease, NULL)) {
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        scope->lease = lease;
+        scope->word = thread->context.data[2];
+        scope->flags = flags;
+        scope->creator_owner = current->owner;
+        scope->references = 1u;
+        scope->state = KERNEL_HOST_SCOPE_ACTIVE;
+        if (kernel_handle_install_cloneable(
+                current->handles, KERNEL_OBJECT_HOST_SCOPE,
+                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_TRANSFER |
+                    ASTRA_RIGHT_ADMINISTER,
+                scope, host_scope_retain, host_scope_release, NULL,
+                &handle) != KERNEL_HANDLE_OK) {
+            host_scope_drop(scope);
+            result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+            break;
+        }
+        thread->context.data[1] = handle;
+        result = ASTRA_SYSCALL_OK;
+        break;
+    }
+    case ASTRA_SYSCALL_HOST_SCOPE_REVOKE:
+    case ASTRA_SYSCALL_HOST_SCOPE_ATTACH: {
+        KernelHostScope *scope = NULL;
+        KernelHandleStatus handle_status = kernel_handle_lookup(
+            current->handles, thread->context.data[1],
+            KERNEL_OBJECT_HOST_SCOPE,
+            syscall == ASTRA_SYSCALL_HOST_SCOPE_REVOKE ?
+                ASTRA_RIGHT_ADMINISTER : ASTRA_RIGHT_WRITE,
+            (void **)&scope);
+        uint32_t slot = KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+
+        if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
+            handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
+            result = ASTRA_SYSCALL_INVALID_HANDLE;
+            break;
+        }
+        if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
+            result = ASTRA_SYSCALL_ACCESS_DENIED;
+            break;
+        }
+        if (handle_status != KERNEL_HANDLE_OK || scope == NULL)
+            return KERNEL_PROCESS_CORRUPT;
+        if (syscall == ASTRA_SYSCALL_HOST_SCOPE_REVOKE) {
+            result = host_scope_revoke(scope);
+            break;
+        }
+        if (scope->state != KERNEL_HOST_SCOPE_ACTIVE) {
+            result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        for (uint32_t index = 0u; index < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+             ++index)
+            if (host_channels[index].active != 0u &&
+                host_channels[index].process_id == current->id &&
+                host_channels[index].thread_id == thread->id) {
+                slot = index;
+                break;
+            }
+        if (slot == KERNEL_VM_HOST_CHANNEL_PAGE_COUNT) {
+            result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            break;
+        }
+        /* A device channel answers to its device, not to scopes. */
+        result = host_channels[slot].bound != 0u ?
+            host_channel_attach(slot, scope) : ASTRA_SYSCALL_ACCESS_DENIED;
         break;
     }
     case ASTRA_SYSCALL_AUDIO_STREAM_OPEN: {

@@ -31,7 +31,7 @@ capability APP_LAUNCH
 capability SERVICE_MANAGER
 capability ENTROPY
 requires compiler.library 2 2.0.0
-requires filesystem.library 5 5.0.0
+requires filesystem.library 6 6.0.0
 requires graphics.library 2 2.1.0
 requires interface.library 5 5.2.0
 requires runtime.library 1 1.6.0

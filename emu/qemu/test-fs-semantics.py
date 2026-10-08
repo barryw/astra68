@@ -43,7 +43,7 @@ def load(name, file):
 terminal = load("astra_terminal_gate", "test-terminal.py")
 
 # Every fssem case the suite runs. Later tasks append here and in fssem.c.
-CASES = ["basic"]
+CASES = ["basic", "raw-lane", "lane-fork-exec"]
 # Orchestrated checks: name -> function(machine, provider_mount). Later tasks
 # add entries; each prints "PASS <name>" or calls fail().
 CHECKS = {}
@@ -94,6 +94,30 @@ def run_bench(machine, mount, label, output):
         json.dump({"identity": {"host": "beast-qemu", "commit": commit},
                    "guest": guest}, out, indent=1, sort_keys=True)
     print("PASS bench %s -> %s" % (label, output))
+
+
+def scoped_commands(machine):
+    return machine.qmp.execute("qom-get", {
+        "path": "/machine", "property": "astra-host-scoped-commands"})
+
+
+def check_lane(machine, mount):
+    """The lane is the path taken (FS44): fssem's own work moves the
+    provider's scoped-command count, and raw-lane's forged MKDIR left
+    nothing in SOUND."""
+    before = scoped_commands(machine)
+    lines, status = command(machine, "fssem basic", 120, 61)
+    if status != 0:
+        fail("fssem basic: %r" % lines[-5:])
+    moved = scoped_commands(machine) - before
+    if moved < 10:
+        fail("only %d scoped commands for fssem basic" % moved)
+    if os.path.exists(os.path.join(mount, "sound", "raw-lane-forged")):
+        fail("a forged volume reached SOUND")
+    print("PASS lane %d" % moved)
+
+
+CHECKS["lane"] = check_lane
 
 
 def main():

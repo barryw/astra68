@@ -40,7 +40,8 @@ typedef enum KernelObjectType {
     KERNEL_OBJECT_PROCESS_LOAD = 13,
     KERNEL_OBJECT_LIBRARY_LOAD = 14,
     KERNEL_OBJECT_REPLY = 15,
-    KERNEL_OBJECT_AUDIO_STREAM = 16
+    KERNEL_OBJECT_AUDIO_STREAM = 16,
+    KERNEL_OBJECT_HOST_SCOPE = 17
 } KernelObjectType;
 
 typedef enum KernelHandleStatus {
@@ -178,6 +179,12 @@ KernelHandleStatus kernel_handle_transfer_commit_export(
     KernelHandleTable *source_table, KernelHandleTransferBatch *batch);
 KernelHandleStatus kernel_handle_transfer_rollback(
     KernelHandleTransferBatch *batch);
+/* Rights an imported handle keeps, given the object's type and the rights it
+ * was sent with. NULL keeps them all. One hook, set once at boot: the handle
+ * layer stays type-blind. */
+typedef uint32_t (*KernelHandleImportRights)(KernelObjectType type,
+                                             void *object, uint32_t rights);
+void kernel_handle_set_import_rights(KernelHandleImportRights filter);
 KernelHandleStatus kernel_handle_import_reserve(
     KernelHandleTable *destination_table,
     const KernelDetachedHandle *detached, uint32_t count,

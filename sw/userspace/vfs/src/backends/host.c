@@ -29,7 +29,7 @@ static uint32_t command_begin(AstraVfsHostBackend *backend,
 {
     AstraHostCommand *command;
     uint32_t status = astra_vfs_host_transport_begin(
-        backend->transport, data_capacity, request);
+        backend->transport, backend->scope, data_capacity, request);
 
     if (status != ASTRA_VFS_OK)
         return status;
@@ -509,6 +509,7 @@ int astra_vfs_host_init(AstraVfsHostBackend *backend,
     backend->transport = transport;
     backend->generation = generation;
     backend->volume = volume;
+    backend->scope = 0u;
     return 1;
 }
 

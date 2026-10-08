@@ -253,3 +253,10 @@ ASTRA_RUNTIME_1.13 {
         astra_log_record_slots;
         astra_time_now;
 } ASTRA_RUNTIME_1.12;
+
+ASTRA_RUNTIME_1.14 {
+    global:
+        astra_host_scope_attach;
+        astra_host_scope_create;
+        astra_host_scope_revoke;
+} ASTRA_RUNTIME_1.13;

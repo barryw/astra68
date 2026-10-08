@@ -90,6 +90,15 @@ STATUS_IS_DIR = 5
 STATUS_LOOP = 18
 KIND_SYMLINK = 3
 SYSCALL_INVALID_ARGUMENT = 2
+CONFIG_VERSION = 2
+CONFIG_OPEN = 1
+CONFIG_CLOSE = 2
+CONFIG_ATTACH = 3
+CONFIG_DETACH = 4
+SCOPE_BOUND = 1
+SCOPE_READ_ONLY = 2
+STATUS_READ_ONLY = 19
+CAP_FS_SCOPE = 1 << 10
 
 
 class QTest:
@@ -218,12 +227,194 @@ def configure_channel(qtest, generation, operation, slot=3, owner=0x1001,
     physical = buffer if operation == 1 else 0
     byte_size = byte_size if operation == 1 else 0
     capacity = capacity if operation == 1 else 0
-    struct.pack_into(">IHHIIIIIII", config, 0, 64, 1, operation, slot,
+    struct.pack_into(">IHHIIIIIII", config, 0, 64, CONFIG_VERSION, operation,
+                     slot,
                      owner, generation, channel_generation, physical,
                      byte_size, capacity)
     qtest.write(CHANNEL_CONFIG, config)
     qtest.write32(HACC_CHANNEL_CONFIG, CHANNEL_CONFIG)
     return qtest.read32(HACC_CHANNEL_RESULT)
+
+
+def configure_scope(qtest, generation, operation, slot, channel_generation,
+                    scope=0, scope_flags=0, scope_owner=0, owner=0x1001,
+                    buffer=BUFFER, byte_size=8192, capacity=2):
+    """The kernel's channel configuration, version 2, with scope words."""
+    config = bytearray(64)
+    opening = operation == CONFIG_OPEN
+    struct.pack_into(">IHHIIIIIIIIII", config, 0, 64, CONFIG_VERSION,
+                     operation, slot, owner, generation, channel_generation,
+                     buffer if opening else 0, byte_size if opening else 0,
+                     capacity if opening else 0, scope, scope_flags,
+                     scope_owner)
+    qtest.write(CHANNEL_CONFIG, config)
+    qtest.write32(HACC_CHANNEL_CONFIG, CHANNEL_CONFIG)
+    return qtest.read32(HACC_CHANNEL_RESULT)
+
+
+def scoped_post(qtest, slot, producer, command, buffer=BUFFER, capacity=2):
+    """Puts `command` at producer position `producer` and kicks."""
+    at = buffer + CHANNEL_HEADER_SIZE + \
+        ((producer - 1) % capacity) * COMMAND_SIZE
+    qtest.write(at, bytes(command))
+    qtest.write32(buffer + 36, producer)
+    qtest.write32(CHANNEL_APERTURE + slot * 4096 + 0x20, producer)
+    return at
+
+
+def scoped_wait(qtest, producer, at, buffer=BUFFER):
+    """Waits until the consumer has passed `producer` (a later command may
+    already have completed too) and answers the command's slot."""
+    deadline = time.monotonic() + 5.0
+    while qtest.read32(buffer + 48) < producer:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"consumer did not reach {producer}")
+        time.sleep(0.001)
+    return qtest.read(at, COMMAND_SIZE)
+
+
+def scoped(qtest, slot, producer, command):
+    return scoped_wait(qtest, producer, scoped_post(qtest, slot, producer,
+                                                    command))
+
+
+def scopes(qtest, root):
+    """A bound channel acts only through the scopes the kernel attached: the
+    command's volume picks one and an unattached volume is refused, other
+    services are refused, a read-only scope mutates nothing, a handle answers
+    only under the volume it was opened in, and malformed scope words are
+    refused at configuration."""
+    generation = qtest.read32(HACC_GENERATION)
+    # Unbound OPEN carries no scope words; a bound one names a real volume
+    # and a creator.
+    assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21,
+                           scope=VOLUME_SOUND) != 0
+    assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21,
+                           VOLUME_COUNT, SCOPE_BOUND, 0x2002) != 0
+    assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21,
+                           VOLUME_WORK, SCOPE_BOUND, 0) != 0
+    assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21,
+                           VOLUME_WORK, SCOPE_BOUND | 4, 0x2002) != 0
+    assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21,
+                           VOLUME_WORK, SCOPE_BOUND, 0x2002) == 0
+    made = scoped(qtest, 7, 1, make_command(
+        generation, FS_MKDIR, "/scoped-dir", value=0o755,
+        volume=VOLUME_WORK))
+    assert status(made) == STATUS_OK
+    assert os.path.isdir(os.path.join(root, "work", "scoped-dir"))
+    # A forged volume: SOUND is not attached to this channel.
+    forged = scoped(qtest, 7, 2, make_command(
+        generation, FS_MKDIR, "/forged-dir", value=0o755,
+        volume=VOLUME_SOUND))
+    assert status(forged) == STATUS_ACCESS
+    assert not os.path.exists(os.path.join(root, "sound", "forged-dir"))
+    entropy = scoped(qtest, 7, 3, make_command(
+        generation, ENTROPY_FILL, service=SERVICE_ENTROPY,
+        data_offset=CHANNEL_HEADER_SIZE + 2 * COMMAND_SIZE,
+        data_capacity=32))
+    assert status(entropy) == STATUS_ACCESS
+    # Attach a read-only SOUND scope: the same channel now reaches it, and
+    # only to read.
+    assert configure_scope(qtest, generation, CONFIG_ATTACH, 7, 21,
+                           VOLUME_SOUND, SCOPE_BOUND | SCOPE_READ_ONLY,
+                           0x2002) == 0
+    assert configure_scope(qtest, generation, CONFIG_ATTACH, 7, 21,
+                           VOLUME_SOUND, SCOPE_BOUND, 0x2002) != 0
+    refused = scoped(qtest, 7, 4, make_command(
+        generation, FS_MKDIR, "/ro-dir", value=0o755, volume=VOLUME_SOUND))
+    assert status(refused) == STATUS_READ_ONLY
+    assert not os.path.exists(os.path.join(root, "sound", "ro-dir"))
+    allowed = scoped(qtest, 7, 5, make_command(
+        generation, FS_STAT, "/", volume=VOLUME_SOUND))
+    assert status(allowed) == STATUS_OK
+    # A handle belongs to the volume it was opened under.
+    with open(os.path.join(root, "work", "scoped-file"), "wb") as out:
+        out.write(b"scoped")
+    opened = scoped(qtest, 7, 6, make_command(
+        generation, FS_OPEN, "/scoped-file", flags=OPEN_READ,
+        volume=VOLUME_WORK))
+    assert status(opened) == STATUS_OK
+    crossed = scoped(qtest, 7, 7, make_command(
+        generation, FS_CLOSE, handle=get32(opened, 16),
+        volume=VOLUME_SOUND))
+    assert status(crossed) == STATUS_BAD_HANDLE
+    closed = scoped(qtest, 7, 8, make_command(
+        generation, FS_CLOSE, handle=get32(opened, 16), volume=VOLUME_WORK))
+    assert status(closed) == STATUS_OK
+    assert configure_scope(qtest, generation, CONFIG_DETACH, 7, 21,
+                           VOLUME_SOUND) == 0
+    detached = scoped(qtest, 7, 9, make_command(
+        generation, FS_STAT, "/", volume=VOLUME_SOUND))
+    assert status(detached) == STATUS_ACCESS
+    assert configure_scope(qtest, generation, CONFIG_CLOSE, 7, 21) == 0
+    # A device channel takes no scopes.
+    assert configure_channel(qtest, generation, CONFIG_OPEN, slot=8,
+                             channel_generation=22) == 0
+    assert configure_scope(qtest, generation, CONFIG_ATTACH, 8, 22,
+                           VOLUME_WORK, SCOPE_BOUND, 0x2002) != 0
+    assert configure_channel(qtest, generation, CONFIG_CLOSE, slot=8,
+                             channel_generation=22) == 0
+    print("PASS scopes")
+
+
+def scope_revocation(qtest, root):
+    """What has started when the scope is detached finishes; what has not
+    is refused. The machine runs one thread-pool worker
+    (-object main-loop,thread-pool-max=1), so the second command waits
+    behind the first, which a FIFO holds open."""
+    qtest.detect_endian()
+    generation = qtest.read32(HACC_GENERATION)
+    fifo = os.path.join(root, "work", "held")
+    os.mkfifo(fifo)
+    assert configure_scope(qtest, generation, CONFIG_OPEN, 9, 31,
+                           VOLUME_WORK, SCOPE_BOUND, 0x2002) == 0
+    first = scoped_post(qtest, 9, 1, make_command(
+        generation, FS_OPEN, "/held", flags=OPEN_READ, volume=VOLUME_WORK))
+    time.sleep(0.5)
+    assert qtest.read32(BUFFER + 48) == 0, \
+        "the FIFO open did not hold the only worker"
+    second = scoped_post(qtest, 9, 2, make_command(
+        generation, FS_MKDIR, "/after-revoke", value=0o755,
+        volume=VOLUME_WORK))
+    assert configure_scope(qtest, generation, CONFIG_DETACH, 9, 31,
+                           VOLUME_WORK) == 0
+    writer = os.open(fifo, os.O_WRONLY)
+    try:
+        assert status(scoped_wait(qtest, 1, first)) == STATUS_OK
+        assert status(scoped_wait(qtest, 2, second)) == STATUS_ACCESS
+    finally:
+        os.close(writer)
+    assert not os.path.exists(os.path.join(root, "work", "after-revoke"))
+    later = scoped(qtest, 9, 3, make_command(generation, FS_STAT, "/",
+                                             volume=VOLUME_WORK))
+    assert status(later) == STATUS_ACCESS
+    assert configure_scope(qtest, generation, CONFIG_CLOSE, 9, 31) == 0
+    print("PASS scope-revocation")
+
+
+def booted(command, environment, qtest_path, body):
+    if os.path.exists(qtest_path):
+        os.unlink(qtest_path)
+    with tempfile.TemporaryFile(mode="w+") as errors:
+        process = subprocess.Popen(command, stdout=subprocess.DEVNULL,
+                                   stderr=errors, text=True,
+                                   env=environment)
+        qtest = None
+        try:
+            qtest = QTest(qtest_path)
+            body(qtest)
+        finally:
+            if qtest is not None:
+                qtest.close()
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            if process.returncode not in (-15, 0):
+                errors.seek(0)
+                raise SystemExit(errors.read())
 
 
 def volumes(qtest, root):
@@ -253,8 +444,8 @@ def volumes(qtest, root):
 
 def run(qtest, root, outside):
     qtest.detect_endian()
-    assert qtest.read32(HACC_VERSION) == 0x0001000C
-    assert qtest.read32(HACC_CAPS) == 511
+    assert qtest.read32(HACC_VERSION) == 0x0001000D
+    assert qtest.read32(HACC_CAPS) == 511 | CAP_FS_SCOPE
     assert qtest.read32(HACC_STATE) == 1
     assert qtest.read32(HACC_MAX_TRANSFER) == 2 * 1024 * 1024
     assert qtest.read32(HACC_MAX_COMMANDS) == 4096
@@ -736,29 +927,24 @@ def main():
         assert refused.returncode != 0
         assert "cannot open Astra host filesystem root" in refused.stderr
         environment["ASTRA_HOSTFS_ROOT"] = root
-        with tempfile.TemporaryFile(mode="w+") as errors:
-            process = subprocess.Popen(command, stdout=subprocess.DEVNULL,
-                                       stderr=errors, text=True,
-                                       env=environment)
-            qtest = None
-            try:
-                qtest = QTest(qtest_path)
-                run(qtest, os.path.join(root, "work"), outside)
-                volumes(qtest, root)
-                print("ASTRA QEMU HOSTFS PASS")
-            finally:
-                if qtest is not None:
-                    qtest.close()
-                process.terminate()
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                if process.returncode not in (-15, 0):
-                    errors.seek(0)
-                    raise SystemExit(errors.read())
 
+        def first(qtest):
+            run(qtest, os.path.join(root, "work"), outside)
+            volumes(qtest, root)
+            scopes(qtest, root)
+
+        booted(command, environment, qtest_path, first)
+        # A second machine with one thread-pool worker, so a held command
+        # keeps the next one queued behind it.
+        root2 = os.path.join(temp, "root2")
+        for name in ("", "work", "sound"):
+            os.mkdir(os.path.join(root2, name))
+        environment["ASTRA_HOSTFS_ROOT"] = root2
+        booted(command + ["-object",
+                          "main-loop,id=main-loop,thread-pool-max=1"],
+               environment, qtest_path,
+               lambda qtest: scope_revocation(qtest, root2))
+        print("ASTRA QEMU HOSTFS PASS")
 
 if __name__ == "__main__":
     main()

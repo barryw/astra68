@@ -74,7 +74,7 @@ SDL_COMMANDS := loopwave
 COMMANDS := status events log devices which open service shutdown restart ls ps metrics cat mkdir rm \
 	    nice renice \
 	    heapbench fsstress fsbench date echo ntp ping lua vim zsh $(SDL_COMMANDS)
-TEST_COMMANDS := posix hello cxx fpucheck logburst fssem
+TEST_COMMANDS := posix hello cxx fpucheck logburst fssem fsprobe
 SBASE_PRIMARY := ls mkdir nice renice
 SOURCE_COMMANDS := $(filter-out lua cxx vim zsh $(SDL_COMMANDS) \
 	$(SBASE_PRIMARY),$(COMMANDS) $(TEST_COMMANDS))
@@ -114,6 +114,7 @@ heapbench_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 fsstress_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 fsbench_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 fssem_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+fsprobe_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 date_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 echo_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 ntp_LIBRARIES := $(LIBC_LIBRARY) $(NTP_LIBRARY) $(RUNTIME_LIBRARY)

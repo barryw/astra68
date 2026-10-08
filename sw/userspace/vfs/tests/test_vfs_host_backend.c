@@ -9,12 +9,14 @@ typedef struct FakeHost {
     uint32_t calls;
 } FakeHost;
 
-uint32_t astra_vfs_host_transport_begin(void *context,
+uint32_t astra_vfs_host_transport_begin(void *context, uint32_t scope,
                                         uint32_t data_capacity,
                                         AstraVfsHostRequest *request)
 {
     FakeHost *host = context;
 
+    /* The backend under test was initialised without a scope. */
+    assert(scope == 0u);
     (void)data_capacity;
     memset(&host->command, 0, sizeof(host->command));
     memset(request, 0, sizeof(*request));

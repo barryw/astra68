@@ -29,6 +29,56 @@ The boot-supplied supervisor and every later protected loader use this same
 contract. General ELF parsing remains userspace policy; Axiom validates the
 final mappings, entry, stack, handles, and startup block before publication.
 
+## Filesystem scopes (storage protocol 28)
+
+A filesystem scope is the authority to drive host channels bound to one
+provider session (docs/FILESYSTEM_PRODUCTION_PRD.md FS15, FS44). The kernel
+object is `KERNEL_OBJECT_HOST_SCOPE` (17); only a host device handle carrying
+`ASTRA_RIGHT_HOST_SCOPE` (`1u << 9`, `sw/include/astra/object_abi.h`) creates
+one, and the supervisor grants that right only as `HOST_FILESYSTEM`, to
+HostFS. Every other `HOST_DEVICE` grant arrives without it.
+
+- `ASTRA_SYSCALL_HOST_SCOPE_CREATE` (109): `data[1]` the device,
+  `data[2]` the provider word (a volume under host command record 2),
+  `data[3]` `ASTRA_HOST_SCOPE_READ_ONLY | ASTRA_HOST_SCOPE_DELEGATE`.
+  Answers a handle with READ, WRITE, TRANSFER and ADMINISTER; UNSUPPORTED
+  without `ASTRA_HOST_CAP_FS_SCOPE`.
+- `ASTRA_SYSCALL_HOST_SCOPE_REVOKE` (110): ADMINISTER; detaches the scope from
+  every channel, after which open, attach and query answer PEER_DEAD. The
+  creator's exit revokes every scope it created.
+- `ASTRA_SYSCALL_HOST_SCOPE_ATTACH` (111): WRITE; binds the scope to the
+  calling thread's channel, which must have been opened on a scope; at most
+  `ASTRA_HOST_CHANNEL_SCOPE_MAX` (8) per channel.
+- `HOST_QUERY`, `HOST_CHANNEL_OPEN` and `HOST_CHANNEL_CLOSE` take a scope
+  where they took a device; `HOST_EXECUTE` does not. `AstraHostLeaseInfo`
+  answers the scope's `scope` word and `scope_flags` (READ_ONLY only).
+- A scope without `ASTRA_HOST_SCOPE_DELEGATE` loses TRANSFER when it is
+  received: its holder may use it and fork with it, not hand it on.
+
+Host transport `0x0001000d` adds `ASTRA_HOST_CAP_FS_SCOPE` (bit 10). The
+kernel-to-provider channel configuration is version 2: `scope`,
+`scope_flags`, `scope_owner` and the operations ATTACH (3) and DETACH (4).
+On a bound channel the provider runs only filesystem commands whose volume
+names an attached scope (else `ASTRA_STATUS_ACCESS`), refuses mutations
+under a read-only scope (`ASTRA_STATUS_READ_ONLY`), and answers a handle only
+under the volume it was opened in. `runtime.library` 1.14 exports
+`astra_host_scope_create`, `astra_host_scope_revoke` and
+`astra_host_scope_attach`.
+
+Storage protocol 28: a HELLO on a port that serves a host volume attaches
+one handle, the grant's scope; such a port answers every other operation
+except BYE with `ASTRA_VFS_ERR_UNSUPPORTED`.
+
+## Filesystem Kit ABI 6.0
+
+`filesystem.library.6` brings the lane back, scoped. `AstraVfsClient`
+regains `port_direct_address`, `port_direct_area`, `port_direct_scope` (the
+grant's scope handle), `port_direct_session`, `port_direct_detached`, the
+`direct_backend_*` fields and `port_accelerator_ops`; `port_direct_lock` is
+gone, because the lane's lock belongs to the process-wide transport.
+`AstraVfsPortLane` regains its direct area. `AstraVfsPortAcceleratorOps.connect`
+takes a scope. Kit 5 binaries do not load it.
+
 ## Filesystem Kit ABI 5.0
 
 `filesystem.library.5` removes the host direct path. `AstraVfsClient` loses

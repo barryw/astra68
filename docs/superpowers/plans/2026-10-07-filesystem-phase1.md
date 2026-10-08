@@ -16280,9 +16280,10 @@ is this tree's for both sides. In `--bench` mode it runs only the image's
 
 Expected:
 - `qemu-vs-baseline.txt` ends `BUDGET PASS`;
-- `probe-vs-baseline.txt` ends `PROBE PASS`. Each phase's
-  `cross/op <= 0.05` and `hostfs ns/op <= 500` are the structural
-  assertions, and the latency ratios include Task 12b's fast path;
+- `probe-vs-baseline.txt` ends `PROBE PASS`. The structural assertions are
+  cross/op at most the baseline's + 0.05 (stat) and + 0.5 (read),
+  `hostfs ns/op <= 500`, and syscalls/op at most the baseline's + 0.1, for
+  both phases; the latency ratios include Task 12b's fast path;
 - the final probe's `inline_per_op` is at least 0.9 for both phases.
 
 - [ ] **Step 3: Board closing runs, interleaved**

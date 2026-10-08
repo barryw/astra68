@@ -137,8 +137,8 @@ with open(os.path.join(astra_image.REPOSITORY,
                        "sw/userspace/kits/Runtime.kit/manifest"),
           encoding="ascii") as manifest:
     runtime_manifest = manifest.read()
-    assert "version 1.13.0\n" in runtime_manifest
-    assert "provides runtime.library 1 1.13.0\n" in runtime_manifest
+    assert "version 1.14.0\n" in runtime_manifest
+    assert "provides runtime.library 1 1.14.0\n" in runtime_manifest
     assert "version 1.6.0\n" not in runtime_manifest
     assert "provides runtime.library 1 1.6.0\n" not in runtime_manifest
 with open(os.path.join(astra_image.REPOSITORY,
@@ -157,8 +157,6 @@ for required in ("runs astra\n", "start boot\n", "provides RAM:rw\n",
                  'argument "/services/ramfs"\n'):
     assert required in ram_service
 assert "runs paired\n" not in ram_service
-assert astra_image.CONFIGURATION["services/hostfs/settings.conf"] == (
-    "astra-config 1\nschema 1\nworkers 4\n")
 assert "max_bytes 67108864\n" in astra_image.CONFIGURATION[
     "services/ramfs/settings.conf"]
 assert "entropy" in astra_image.DISPLAY_SERVICES
@@ -240,7 +238,7 @@ assert [line for line in startup
 assert startup[1] == \
     "service /services/posixd grants serves POSIX_PROCESS required priority=20"
 assert startup[2] == \
-    "service /services/hostfs grants HOST_DEVICE CONFIG:r " \
+    "service /services/hostfs grants HOST_FILESYSTEM " \
     "serves WORK:rw METRICS:r SOUND:rw required priority=20"
 assert startup[3] == \
     "service /services/entropy grants HOST_DEVICE serves ENTROPY required priority=20"
