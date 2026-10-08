@@ -40,7 +40,11 @@ def main():
                     if args.expect_no_provider else "ASTRA GUEST AUDIO PASS")
         while machine.process.poll() is None and time.monotonic() < end:
             try:
-                lines, after = machine.said(after)
+                # audio-certify holds LOG (docs/SYSTEM_LOG.md section 7): its
+                # result leaves the kernel ring for the host syslog. The
+                # first result line ends the loop, so rereading the whole
+                # syslog cannot count one twice.
+                lines, after = machine.said_with_syslog(after)
             except terminal.trace_decode.TraceError:
                 time.sleep(0.25)
                 continue

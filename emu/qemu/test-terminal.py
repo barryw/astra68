@@ -824,6 +824,19 @@ class Machine:
                 self.reader.hostfs_root).splitlines()
         return lines, highest
 
+    def syslog_lines(self):
+        """The host syslog's lines, every kept generation (docs/SYSTEM_LOG.md
+        section 7).
+
+        The events service drains the kernel ring into the syslog as well as
+        every per-process ring, so it holds a LOG holder's line wherever the
+        line went. A gate that counts lines, or refuses duplicates, reads
+        this alone: said_with_syslog() would see a kernel-ring line twice.
+        It is not cut by sequence; take its length first and slice."""
+        if self.reader.hostfs_root is None:
+            return []
+        return read_host_syslog(self.reader.hostfs_root).splitlines()
+
     def sequence(self):
         return self.said()[1]
 
@@ -998,10 +1011,22 @@ def interface_layout_benchmark(machine, boot_deadline):
                         INTERFACE_DISCLOSURE_OPERATIONS,
                         "INTERFACE SPLITTER n=%08x" %
                         INTERFACE_SPLITTER_OPERATIONS,)
-    lines, _ = machine.wait_for_text(needles, boot_deadline)
+    # Interface Gallery reports with astra_log, so a line is in its own log
+    # ring or the kernel ring and, either way, in the host syslog
+    # (docs/SYSTEM_LOG.md section 7). The checks below refuse duplicates, so
+    # read the syslog alone.
+    end = time.monotonic() + boot_deadline
+    while True:
+        lines = machine.syslog_lines()
+        if all(any(needle in line for line in lines) for needle in needles):
+            break
+        if time.monotonic() >= end:
+            lines = None
+            break
+        time.sleep(0.25)
     if lines is None:
         print("FAIL: interface layout benchmark did not finish")
-        for line in machine.said()[0]:
+        for line in machine.syslog_lines():
             if "INTERFACE " in line:
                 print("    |%s|" % line)
         for line in machine.recent_faults():

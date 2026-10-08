@@ -91,11 +91,16 @@ def run(arguments):
                                            arguments.deadline):
                 raise RuntimeError("boot did not reach stage 8")
             end = time.monotonic() + arguments.deadline
-            after = 0
+            # hostbench reports with astra_log, so its lines reach the host
+            # syslog whichever ring they went to (docs/SYSTEM_LOG.md section
+            # 7). The results below must not repeat: read the syslog alone,
+            # each line once.
+            seen = 0
             while time.monotonic() < end:
                 if machine.process.poll() is not None:
                     break
-                lines, after = machine.said(after)
+                logged = machine.syslog_lines()
+                lines, seen = logged[seen:], len(logged)
                 for line in lines:
                     output.append(line)
                     if "ASTRA RAW USER FAIL" in line:

@@ -35,7 +35,10 @@ def main():
                                    machine.recent_serial(40))
             deadline = time.monotonic() + 45
             while time.monotonic() < deadline:
-                trace = machine.trace()
+                # mixer_probe.c holds LOG (docs/SYSTEM_LOG.md section 7): its
+                # astra_log markers leave the kernel ring for the host syslog
+                # on its first log call.
+                trace = machine.trace_with_syslog()
                 failures = [index for index, line in enumerate(trace)
                             if "SDL_MIXER_" in line and "_FAIL" in line]
                 if failures:
@@ -47,7 +50,7 @@ def main():
                           "invalid input, 16 channels)")
                     return
                 time.sleep(0.1)
-            trace = machine.trace()
+            trace = machine.trace_with_syslog()
             progress = [line for line in trace if "SDL_MIXER_" in line]
             registers = machine.qmp.monitor("info registers")
             raise RuntimeError("SDL_mixer probe timed out: progress=%r "

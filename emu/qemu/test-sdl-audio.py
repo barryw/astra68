@@ -845,6 +845,10 @@ def main():
             # into SDL_QUIT, so it closes its stream and exits 0 -- the
             # marker only prints if the shell saw a normal exit.
             before = machine.sequence()
+            # loopwave holds LOG (docs/SYSTEM_LOG.md section 7): SDL_LogError
+            # is astra_log("ERROR: ..."), so an error reaches the host
+            # syslog, not said(). Only syslog lines from here on count.
+            syslog_before = len(machine.syslog_lines())
             machine.qmp.type_line("loopwave /home/sample.wav; "
                                   "print ASTRA-LOOPWAVE-EXIT-$?")
             deadline = time.monotonic() + loop_seconds * 3 + 90
@@ -864,13 +868,14 @@ def main():
                     subprocess.run(profile + ["start", "audio"], check=True)
                     profiling, profiled = True, (time.monotonic(), heard)
                 said = machine.said(before)[0]
+                logged = machine.syslog_lines()[syslog_before:]
                 # The typed line echoes the marker; only a line that is the
                 # marker says the shell got control back.
-                if (any("ERROR:" in line for line in said) or
+                if (any("ERROR:" in line for line in said + logged) or
                         any(line.startswith("ASTRA-LOOPWAVE-EXIT-")
                             for line in said)):
                     raise RuntimeError("loopwave stopped: %r" %
-                                       machine.said(before)[0][-20:])
+                                       (said + logged)[-20:])
                 if time.monotonic() >= deadline:
                     raise RuntimeError(
                         "loopwave gave %d of %d frames (voice formats %r): "
