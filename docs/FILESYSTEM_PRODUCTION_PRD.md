@@ -40,7 +40,7 @@ versioned Astra protocols; applications gain no alternate Linux API.
 | Area | Existing implementation | Production gap |
 |---|---|---|
 | System storage | Guest lwext4 mounts the selected SD partition; supervisor bootstrap and storage service independently select the first MBR Linux-type partition. | One verified system-volume selection and one Linux filesystem owner, including bootstrap. |
-| Linux-backed files | HostFS carries native operations over the host transport. The host exposes fixed WORK and SOUND directory exports. | Dynamic volume inventory, rooted grants, complete semantics, and mount lifecycle. |
+| Linux-backed files | HostFS carries native operations over the host transport and is the only filesystem holder of the host device: since storage protocol 27 no client receives it, and every request reaches QEMU through a HostFS port served by its configured worker threads. The host exposes fixed WORK and SOUND directory exports. | Dynamic volume inventory, rooted grants, complete semantics, and mount lifecycle. |
 | RAM storage | An optional guest RAMFS service enforces a configured allocation cap. | Linux tmpfs with explicit host-memory limits and the common volume lifecycle. |
 | Namespace | Assigns provide slash roots; `/dh0` and protected conveniences are exposed. Some conveniences report synthetic symlink metadata while operations use independent grants. | Honest binding semantics, trusted enforcement, and coherent traversal. |
 | File objects | Directory-relative operations and live-handle metadata exist. | Stable volume/node IDs, retained cwd, shared offsets and inheritance, complete symlink behavior. |
@@ -482,8 +482,8 @@ not introduce filesystem records by repurposing unrelated private fields.
 
 FS44. Existing ordinary and accelerated requests converge on the same trusted
 validation and Linux implementation. Accelerators carry scoped authority and
-generations; the current broad host-device handoff and hardcoded WORK path
-cannot survive as a grant bypass. Keep acceleration only where measurements
+generations; the broad host-device handoff and hardcoded WORK path (removed at
+storage protocol 27) must not return as a grant bypass. Keep acceleration only where measurements
 justify it, with behavioral parity tests.
 
 FS45. Cut over the selected system volume, bootstrap loader, existing HostFS

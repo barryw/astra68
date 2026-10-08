@@ -319,6 +319,12 @@ sender owner on every request, never a client-supplied one; Linux confines
 each rooted session with `openat2` `RESOLVE_BENEATH`. There is no guest-side
 filesystem-format implementation to keep in sync with Linux's.
 
+Today HostFS is the only filesystem holder of the host device: since storage
+protocol 27 no client receives it, and every request for a host volume goes
+through a HostFS port, served by its worker threads. Per-request grant
+enforcement in HostFS is not yet implemented; see
+[Storage and VFS](STORAGE_AND_VFS.md#current-implementation-to-be-replaced).
+
 The layering this section used to specify — a guest filesystem handler
 (FAT/AstraFS/RAM) behind a generic block protocol behind a physical block
 driver — is retired as the production design, not merely superseded in

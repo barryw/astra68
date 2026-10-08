@@ -83,31 +83,46 @@ What actually runs today, verified against source:
   block lease, and serves the native VFS protocol from it. Bootstrap and the
   storage service each select the partition on their own — the duplicate
   selector the PRD's gap table calls out and FS07 retires.
-- **HostFS.** `sw/userspace/services/hostfs/main.c` runs two fixed
-  host-backed volumes, `ASTRA_HOST_FS_VOLUME_WORK` and
+- **HostFS.** `sw/userspace/services/hostfs/main.c` is the only filesystem
+  holder of the host device and runs two fixed host-backed volumes, `ASTRA_HOST_FS_VOLUME_WORK` and
   `ASTRA_HOST_FS_VOLUME_SOUND` (`sw/include/astra/host.h`), each its own VFS
   service bound to one host directory export at startup. This is not a
   dynamic volume inventory: the volume a session reaches is fixed at
-  compile/link time, not discovered or mounted.
-- **Grant enforcement is client-only, and the host device is handed to
-  clients.** Rights and assign roots are checked only in the client library
+  compile/link time, not discovered or mounted. HostFS serves its ports with
+  `workers N` threads from `/system/config/services/hostfs/settings.conf`
+  (the image ships 4). N is bounded by the per-process DMA slots
+  (`ASTRA_DMA_SLOT_COUNT`, 4), because each worker owns one host-transport
+  lane; a larger value is refused at startup.
+- **Grant enforcement is client-only; the host device stays in HostFS.**
+  Rights and assign roots are checked only in the client library
   (`astra_assign_resolve`, `sw/userspace/vfs/src/vfs_assign.c`); the VFS
   service binds a session to the kernel-stamped sender pid and checks
   neither root nor rights. `..` is folded lexically before lookup
-  (`astra_path_normalise`). On HELLO the port service duplicates the
-  host-device capability (READ|WRITE|TRANSFER) to every client
-  (`vfs_port_transport.c`, HELLO version 18 and later), and the client then
-  sends raw host commands itself (`vfs_host_direct.c`, WORK hard-coded).
-  QEMU's per-handle owner stamp (`ASTRA_HOST_CAP_OWNER_SCOPED`) is the
-  kernel-authenticated owner of the process holding that device -- HostFS,
-  or any client that received the duplicate -- never the client
-  application, and QEMU takes the command's `volume` field as given. So a
-  client of one host volume can address the other, and can issue other
-  host services' commands. Host-root opens are confined with
+  (`astra_path_normalise`). Since storage protocol 27 a HELLO answers with
+  a session and never a capability: the version 18 host-device handoff and
+  the client's direct host commands (`vfs_host_direct.c`) are deleted, so
+  every request for a host volume reaches QEMU through a HostFS port. QEMU's
+  per-handle owner stamp (`ASTRA_HOST_CAP_OWNER_SCOPED`) is therefore HostFS,
+  and QEMU still takes the command's `volume` field as given. Host-root
+  opens are confined with
   `openat2(..., RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS)`,
-  which keeps every request inside the two fixed exports but cannot
-  separate one client's grant from another's. This is the FS15/FS44 gap
-  Phase 1 closes.
+  which keeps every request inside the two fixed exports but does not
+  separate one client's grant from another's: HostFS does not yet check a
+  request against its grant. That is the remaining FS15 gap Phase 1 closes.
+- **Cost of the HostFS hop.** Measured on QEMU/TCG on `beast` (not the
+  board), fsbench through the HostFS port at protocol 27 against the
+  direct-path baseline (`fs-phase1-baseline-20261007-133dc6bc`), median of
+  three runs, latency in µs (median / p95):
+
+  | Workload | Direct path | HostFS, 4 workers | HostFS, 1 worker |
+  |---|---|---|---|
+  | stat-warm | 37.8 / 65.4 | 96.3 / 112.2 (2.55x / 1.72x) | 99.7 / 119.3 (2.64x / 1.82x) |
+  | open-close-warm | 64.3 / 104.1 | 159.9 / 207.4 (2.49x / 1.99x) | 178.9 / 228.6 (2.78x / 2.20x) |
+  | rand-read | 31.9 / 55.0 | 83.6 / 108.5 (2.62x / 1.97x) | 81.9 / 105.1 (2.57x / 1.91x) |
+  | held-miss | 39.1 / 85.6 | 94.1 / 124.4 (2.40x / 1.45x) | 89.9 / 293.2 (2.30x / 3.43x) |
+
+  Records: `/mnt/Documents/astra68/builds/fs-phase1-task3-60f2d30a/`.
+  The DE25 cost is to be measured in Task 13.
 - **RAM storage.** `sw/userspace/services/ramfs/main.c` is a guest-side
   allocator bounded by `max_bytes` read from
   `/system/config/services/ramfs/settings.conf` (`astra_vfs_ram_init`) — not

@@ -62,35 +62,36 @@ def run(arguments):
                                            arguments.deadline):
                 raise RuntimeError("boot did not reach stage 8")
             end = time.monotonic() + arguments.deadline
-            after = 0
+            # hostbench holds LOG, so its records leave the kernel ring for
+            # the system log on its first astra_log (docs/SYSTEM_LOG.md
+            # section 7). Re-read both views whole each poll: the syslog
+            # file only grows, and PASS is hostbench's last record.
             while time.monotonic() < end:
                 if machine.process.poll() is not None:
                     break
-                lines, after = machine.said(after)
-                for line in lines:
-                    output.append(line)
-                    if "ASTRA RAW USER FAIL" in line:
-                        raise RuntimeError(
-                            "userspace host benchmark failed\n%s" %
-                            "\n".join(output[-60:]))
-                    match = RESULT.search(line)
-                    if match is not None:
-                        results.append(tuple(int(value, 16)
-                                             for value in match.groups()))
-                    match = ADAPT_RESULT.search(line)
-                    if match is not None:
-                        adaptive.append(tuple(int(value, 16)
-                                              for value in match.groups()))
-                    match = MEMORY_RESULT.search(line)
-                    if match is not None:
-                        memory.append((match.group(1),
-                                       int(match.group(2), 16),
-                                       int(match.group(3), 16)))
-                    if "ASTRA RAW USER PASS" in line:
-                        passed = True
-                if passed:
+                output = machine.said_with_syslog(0)[0]
+                if any("ASTRA RAW USER FAIL" in line for line in output):
+                    raise RuntimeError(
+                        "userspace host benchmark failed\n%s" %
+                        "\n".join(output[-60:]))
+                if any("ASTRA RAW USER PASS" in line for line in output):
+                    passed = True
                     break
-                time.sleep(0.1)
+                time.sleep(1.0)
+            for line in output:
+                match = RESULT.search(line)
+                if match is not None:
+                    results.append(tuple(int(value, 16)
+                                         for value in match.groups()))
+                match = ADAPT_RESULT.search(line)
+                if match is not None:
+                    adaptive.append(tuple(int(value, 16)
+                                          for value in match.groups()))
+                match = MEMORY_RESULT.search(line)
+                if match is not None:
+                    memory.append((match.group(1),
+                                   int(match.group(2), 16),
+                                   int(match.group(3), 16)))
             if not passed:
                 raise RuntimeError("userspace host benchmark timed out\n%s" %
                                    "\n".join(output[-60:]))
@@ -121,7 +122,9 @@ def run(arguments):
             [name for name, _, _ in memory] != ["memcpy", "memcmp"] or
             any(byte_count == 0 or elapsed == 0
                 for _, byte_count, elapsed in memory) or
-            values["astra-host-commands"] !=
+            # The counter is machine-wide: HostFS (the system log, the
+            # sampler), entropy and media use the host channel too.
+            values["astra-host-commands"] <
             sum(iterations for _, iterations, _ in results) +
             sum(iterations for _, iterations, _, _ in adaptive) or
             values["astra-host-inflight"] != 0 or
