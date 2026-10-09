@@ -5,6 +5,7 @@ import hashlib
 import os
 import pathlib
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -95,6 +96,19 @@ while True: time.sleep(0.05)
         path.chmod(0o555)
     root.chmod(0o555)
     return root, observed
+
+
+def stop(process):
+    """Terminate a launcher; whatever it leaves behind dies with its group."""
+    process.terminate()
+    try:
+        process.wait(timeout=2.0)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
 
 
 def environment(root, observed):
@@ -206,14 +220,14 @@ def main():
         launch_environment["ASTRA_HOST_TIME_MIN"] = str(int(time.time()) + 60)
         waiting = subprocess.Popen([str(RUN_ARTY)], env=launch_environment,
                                    stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL)
+                                   stderr=subprocess.DEVNULL,
+                                   start_new_session=True)
         try:
             time.sleep(0.1)
             assert waiting.poll() is None
             assert not (observed / "qemu.args").exists()
         finally:
-            waiting.terminate()
-            waiting.wait(timeout=2.0)
+            stop(waiting)
         launch_environment.pop("ASTRA_HOST_TIME_MIN")
 
         (root / "storage-terminal.img").chmod(0o644)
@@ -229,7 +243,8 @@ def main():
         launch_environment = environment(root, observed)
         first = subprocess.Popen([str(RUN_ARTY)], env=launch_environment,
                                  stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL)
+                                 stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
         try:
             deadline = time.monotonic() + 2.0
             while not (observed / "qemu.args").exists():
@@ -241,8 +256,7 @@ def main():
             assert second.returncode != 0
             assert "already active" in second.stderr
         finally:
-            first.terminate()
-            first.wait(timeout=2.0)
+            stop(first)
             writable(root)
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 0, status=88)

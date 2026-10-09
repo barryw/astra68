@@ -134,13 +134,18 @@ process_alive()
 {
     process_pid=$1
     [ -n "$process_pid" ] && kill -0 "$process_pid" 2>/dev/null || return 1
-    # A zombie still answers kill -0.
-    while read -r process_key process_state process_rest; do
-        [ "$process_key" = "State:" ] || continue
-        [ "$process_state" != "Z" ]
-        return
-    done 2>/dev/null <"/proc/$process_pid/status"
-    return 1
+    # A zombie still answers kill -0. The state comes from stat, not status:
+    # procfs regenerates the file on every read(), the shell reads a line in
+    # pieces, and a state whose text changes length between two of them
+    # ("R (running)", "S (sleeping)") or whose name changes across exec
+    # tore status's State: line away -- a live process read as gone. stat
+    # is one line with a one-byte state; torn, it reads as alive, never as
+    # a zombie. Explicit returns: a bare return inside bash's EXIT trap
+    # answers the exit status, and cleanup then waited on a live helper.
+    read -r process_stat 2>/dev/null <"/proc/$process_pid/stat" || return 1
+    process_stat=${process_stat##*) }
+    [ "${process_stat%% *}" = Z ] && return 1
+    return 0
 }
 
 mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")" \
