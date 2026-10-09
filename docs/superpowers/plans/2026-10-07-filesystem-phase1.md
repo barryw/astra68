@@ -108,7 +108,7 @@ tests with plain `assert`, qtest and full-boot Python gates.
   | Storage protocol `ASTRA_VFS_VERSION` | 27 | 28 | | 29 | 30 | 31 | 32 | 33 | |
   | Host transport `ASTRA_HOST_VERSION` | 0x0001000c | 0x0001000d | 0x0001000e | | 0x0001000f | | 0x00010010 | 0x00010011 | |
   | New host capability bit | | `FS_SCOPE` (10) | `FS_SESSIONS` (11) | | `FS_RESOLVES` (12) | | `FS_DESCRIPTIONS` (13) | `FS_PATHS` (14) | |
-  | Channel config `ASTRA_HOST_CHANNEL_CONFIG_VERSION` | 1 | 2 (scope words, ATTACH, DETACH) | | | | | | | 3 (`scope_files`) |
+  | Channel config `ASTRA_HOST_CHANNEL_CONFIG_VERSION` | 1 | 2 (scope words, ATTACH, DETACH) | 3 (provider flag, review I1) | | | | | | 4 (`scope_files`) |
   | Host command record `ASTRA_HOST_COMMAND_VERSION` | 2 | 2 | 3 | | | | | | |
   | Kernel syscalls | | `HOST_SCOPE_CREATE` 109, `HOST_SCOPE_REVOKE` 110, `HOST_SCOPE_ATTACH` 111 | | | | | | | `HOST_SCOPE_LIMIT` 112 |
   | Kernel object | | `KERNEL_OBJECT_HOST_SCOPE` 17 | | | | | | | |
@@ -311,7 +311,7 @@ Two prototype choices change, for reasons the prototype did not meet:
 | `tools/astra-qemu-root` | Narrow root helper for gates (Task 2) |
 | `emu/qemu/qemu_runtime.py`, `emu/qemu/test-terminal.py` | Gate helpers (Task 2) |
 | `sw/userspace/commands/fssem/fssem.c`, `emu/qemu/test-fs-semantics.py`, `emu/qemu/fs-gates.sh` | Semantic suite and gates (Task 2 on) |
-| `sw/include/astra/object_abi.h`, `sw/include/astra/syscall.h`, `sw/include/astra/host.h` | `ASTRA_RIGHT_HOST_SCOPE`, scope syscalls 109-111, transport minors, capability bits, channel config 2-3, command record 3 |
+| `sw/include/astra/object_abi.h`, `sw/include/astra/syscall.h`, `sw/include/astra/host.h` | `ASTRA_RIGHT_HOST_SCOPE`, scope syscalls 109-111, transport minors, capability bits, channel config 2-4, command record 3 |
 | `sw/kernel/process.c`, `sw/kernel/handle.c`, `handle.h`, `device.h`, `platform.c`, `platform.h` | Scope object, binding, revocation, import rights; DMA buffer records (Task 11) |
 | `sw/kernel/tests/test_process.c`, `test_platform.c`, `test_handle.c` | Kernel host tests for the above |
 | `sw/userspace/runtime/src/syscall.c`, `runtime.library.exports`, `ndk/include/astra/runtime.h` | `astra_host_scope_create/revoke/attach` (runtime 1.14) |
@@ -14287,7 +14287,7 @@ page, and keeps up to `KERNEL_PROCESS_DMA_BUFFER_MAX` (16) of them: one per
 thread slot.
 
 **Files:**
-- Modify: `sw/kernel/process.c` (DMA records, `HOST_SCOPE_LIMIT`, scope `files`), `sw/kernel/platform.c`, `sw/kernel/platform.h` (config word), `sw/include/astra/syscall.h` (112), `sw/include/astra/host.h` (config version 3, `scope_files`), `sw/include/astra/address_space.h` (`ASTRA_DMA_BUFFER_MAX`)
+- Modify: `sw/kernel/process.c` (DMA records, `HOST_SCOPE_LIMIT`, scope `files`), `sw/kernel/platform.c`, `sw/kernel/platform.h` (config word), `sw/include/astra/syscall.h` (112), `sw/include/astra/host.h` (config version 4, `scope_files`), `sw/include/astra/address_space.h` (`ASTRA_DMA_BUFFER_MAX`)
 - Test: `sw/kernel/tests/test_process.c` (`test_dma_buffers_fill_the_window`, `test_host_scope` extended)
 - Modify: `sw/userspace/runtime/src/syscall.c`, `sw/userspace/runtime/runtime.library.exports`, `ndk/include/astra/runtime.h`, runtime 1.15 (the files of Task 3b Step 6)
 - Modify: `emu/qemu/qemu-9.2/hw/m68k/astra68.c` (admission, per-scope file limit, gauges)
@@ -14304,7 +14304,7 @@ thread slot.
   none). It is refused `ASTRA_SYSCALL_BUSY` once any channel carries the
   scope. `ASTRA_DMA_BUFFER_MAX 16u` DMA buffers per process.
 - Produces (runtime 1.15): `uint32_t astra_host_scope_limit(uint32_t scope, uint32_t files)`.
-- Produces (provider): channel configuration version 3 with
+- Produces (provider): channel configuration version 4 with
   `scope_files`. Environment `ASTRA_HOSTFS_MAX_DESCRIPTORS` and
   `ASTRA_HOSTFS_MAX_DIRECTORIES` take a positive decimal; anything else
   refuses to start. QOM gauges: `astra-host-fs-descriptors`,
@@ -14471,7 +14471,7 @@ Expected: compile errors (`ASTRA_DMA_BUFFER_MAX`, `ASTRA_SYSCALL_HOST_SCOPE_LIMI
   `host_channel_attach` and the bound open pass `scope->files` to the
   platform as a new last argument. `kernel_platform_host_channel_open` and
   `_attach` gain `uint32_t scope_files`, written into the configuration's
-  `scope_files`. The configuration version is 3.
+  `scope_files`. The configuration version is 4 (Task 4 took 3).
 - The new case, beside `HOST_SCOPE_REVOKE`:
 
   ```c
@@ -14518,7 +14518,7 @@ Expected: compile errors (`ASTRA_DMA_BUFFER_MAX`, `ASTRA_SYSCALL_HOST_SCOPE_LIMI
   ```
 
 `sw/include/astra/syscall.h`: `ASTRA_SYSCALL_HOST_SCOPE_LIMIT 112` with a
-doc comment from Interfaces. `host.h`: `ASTRA_HOST_CHANNEL_CONFIG_VERSION 3u`,
+doc comment from Interfaces. `host.h`: `ASTRA_HOST_CHANNEL_CONFIG_VERSION 4u`,
 and `AstraHostChannelConfig`'s `reserved[4]` becomes
 `uint32_t scope_files; uint32_t reserved[3];`. Runtime 1.15: add
 `astra_host_scope_limit` beside Task 3b's three, the same way, with
@@ -16401,7 +16401,7 @@ What the host-volume path guarantees now, ahead of the Phase 2 cutover:
   `sw/include/astra/vfs_service.h` for the version history (27-33 are
   listed there);
 - add, to the host section: host command record 3, host transport
-  `0x00010011` with capability bits 10-14, and channel configuration 3;
+  `0x00010011` with capability bits 10-14, and channel configuration 4;
 - add the kernel scope ABI: syscalls 109-112, `ASTRA_RIGHT_HOST_SCOPE` and
   `KERNEL_OBJECT_HOST_SCOPE`;
 - add statuses 20 (`ESCAPED`) and 21 (`LOST`) wherever `status.h` values
