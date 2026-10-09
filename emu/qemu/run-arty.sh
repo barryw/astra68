@@ -139,13 +139,15 @@ process_alive()
     process_pid=$1
     [ -n "$process_pid" ] && kill -0 "$process_pid" 2>/dev/null || return 1
     # A zombie still answers kill -0. The state comes from stat, not status:
-    # procfs regenerates the file on every read(), the shell reads a line in
-    # pieces, and a state whose text changes length between two of them
-    # ("R (running)", "S (sleeping)") or whose name changes across exec
-    # tore status's State: line away -- a live process read as gone. stat
-    # is one line with a one-byte state; torn, it reads as alive, never as
-    # a zombie. Explicit returns: a bare return inside bash's EXIT trap
-    # answers the exit status, and cleanup then waited on a live helper.
+    # bash's read builtin reads ahead and seeks back to the end of the line,
+    # and procfs regenerates a seq_file whenever the offset moves, so a field
+    # that changed length in between ("R (running)" against "S (sleeping)",
+    # or Name: across an exec) shifted status under the next read and tore
+    # its State: line -- a live process read as gone. stat is one line, so
+    # one read takes all of it; torn, it reads as alive, never as a zombie.
+    # Every function the traps reach returns explicitly: a bare return
+    # inside bash's EXIT trap answers the trap's exit status, and cleanup
+    # then waited on a live helper.
     read -r process_stat 2>/dev/null <"/proc/$process_pid/stat" || return 1
     process_stat=${process_stat##*) }
     [ "${process_stat%% *}" = Z ] && return 1
@@ -220,7 +222,7 @@ stop_process()
 {
     pid=$1
     if [ -z "$pid" ]; then
-        return
+        return 0
     fi
     kill "$pid" 2>/dev/null || true
     count=0

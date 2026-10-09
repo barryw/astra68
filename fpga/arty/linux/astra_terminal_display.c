@@ -2077,15 +2077,17 @@ static enum boot_scene boot_scene(bool have_splash, bool panicked,
 }
 
 /*
- * The value never decreases within a boot, and the ROM zeroes it before
- * anything else. A drop to 0 under the header is therefore a new boot in
- * the same QEMU (a QMP system_reset keeps the page): whatever the last boot
- * left -- FAILED, a panic, the guest's frames -- is over.
+ * The value never decreases within a boot (every legal transition is
+ * non-decreasing), and the ROM zeroes it before anything else. Any decrease
+ * under the header is therefore a new boot in the same QEMU (a QMP
+ * system_reset keeps the page): whatever the last boot left -- FAILED, a
+ * panic, the guest's frames -- is over. Not only a drop to 0: the 0 lasts
+ * milliseconds, and the helper may sample only every 500 ms while the guest
+ * owns the screen, so it usually sees the new boot's first steps instead.
  */
 static bool boot_restarted(uint32_t header, uint32_t previous, uint32_t value)
 {
-    return header == ASTRA_BOOT_PROGRESS_HEADER && previous != 0u &&
-           value == 0u;
+    return header == ASTRA_BOOT_PROGRESS_HEADER && value < previous;
 }
 
 /* Haiku's slices (boot_splash.cpp:83), two phases: boot_progress.h. */
@@ -2125,14 +2127,21 @@ static uint8_t *splash_load(const char *path)
         perror("open boot splash");
         return NULL;
     }
-    if (fstat(fd, &info) != 0 ||
-        info.st_size != (off_t)ASTRA_FRAMEBUFFER_BYTES) {
-        fprintf(stderr, "boot splash must be exactly %u bytes\n",
-                ASTRA_FRAMEBUFFER_BYTES);
+    if (fstat(fd, &info) != 0) {
+        perror("stat boot splash");
+        (void)close(fd);
+        return NULL;
+    }
+    if (info.st_size != (off_t)ASTRA_FRAMEBUFFER_BYTES) {
+        fprintf(stderr, "boot splash must be exactly %u bytes, not %lld\n",
+                ASTRA_FRAMEBUFFER_BYTES, (long long)info.st_size);
         (void)close(fd);
         return NULL;
     }
     frame = malloc(ASTRA_FRAMEBUFFER_BYTES);
+    if (frame == NULL)
+        fprintf(stderr, "boot splash: cannot allocate %u bytes\n",
+                ASTRA_FRAMEBUFFER_BYTES);
     while (frame != NULL && loaded < ASTRA_FRAMEBUFFER_BYTES) {
         ssize_t received = read(fd, frame + loaded,
                                 ASTRA_FRAMEBUFFER_BYTES - loaded);
@@ -2140,7 +2149,11 @@ static uint8_t *splash_load(const char *path)
         if (received < 0 && errno == EINTR)
             continue;
         if (received <= 0) {
-            perror("read boot splash");
+            if (received < 0)
+                perror("read boot splash");
+            else
+                fprintf(stderr, "boot splash ended after %zu bytes\n",
+                        loaded);
             free(frame);
             frame = NULL;
             break;
@@ -2836,6 +2849,10 @@ static int self_test(void)
             boot_restarted(header, booting, done) ||
             boot_restarted(0u, booting, 0u) ||
             boot_restarted(header + 1u, booting, 0u) ||
+            /* Sampled late: the 0 was missed, the new boot has stepped. */
+            !boot_restarted(header, done, astra_boot_progress_advance(0u)) ||
+            !boot_restarted(header, failed, astra_boot_progress_advance(0u)) ||
+            boot_restarted(header, failed, failed) ||
             boot_scene(true, false, header, 0u) != BOOT_SCENE_SPLASH)
             return EXIT_FAILURE;
         if (splash_bar_fill(0u) != 0u ||

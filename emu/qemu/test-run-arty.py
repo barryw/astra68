@@ -114,6 +114,24 @@ def stop(process):
         process.wait()
 
 
+def launch(env, timeout=30.0):
+    """Run the launcher to its end. A hang fails the suite instead of
+    blocking it, and nothing the launcher started outlives the call."""
+    process = subprocess.Popen([str(RUN_ARTY)], env=env, text=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+    return subprocess.CompletedProcess(process.args, process.returncode,
+                                       stdout, stderr)
+
+
 def environment(root, observed):
     available = sorted(os.sched_getaffinity(0))
     return dict(
@@ -148,16 +166,14 @@ def main():
         invalid_environment = dict(launch_environment,
                                    ASTRA_AUX_CPU="%d:%d" %
                                    (aux_cpu, display_cpu))
-        result = subprocess.run([str(RUN_ARTY)], env=invalid_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(invalid_environment)
         assert result.returncode != 0
         assert "helper CPU assignments are invalid" in result.stderr
         # A HostFS root from before volumes is WORK's: it moves to work/.
         (observed / "hostfs").mkdir()
         (observed / "hostfs/notes.txt").write_text("kept")
         (observed / "hostfs/.hidden").write_text("kept too")
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 1, result.stderr
         assert sorted(item.name for item in (observed / "hostfs").iterdir()) \
             == ["sound", "work"]
@@ -209,8 +225,7 @@ def main():
         assert (root / "storage-terminal.img").read_bytes() == b"disk"
 
         (observed / "display.exit-once").touch()
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 1, result.stderr
         assert not (observed / "power.args").exists()
         assert int((observed / "display.launches").read_text()) >= 3
@@ -235,8 +250,7 @@ def main():
 
         (root / "storage-terminal.img").chmod(0o644)
         (root / "storage-terminal.img").write_bytes(b"stale")
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode != 0
         assert "release verification failed" in result.stderr
         writable(root)
@@ -253,9 +267,7 @@ def main():
             while not (observed / "qemu.args").exists():
                 assert time.monotonic() < deadline
                 time.sleep(0.01)
-            second = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                    text=True, capture_output=True,
-                                    check=False)
+            second = launch(launch_environment)
             assert second.returncode != 0
             assert "already active" in second.stderr
         finally:
@@ -264,30 +276,26 @@ def main():
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 0, status=88)
         launch_environment = environment(root, observed)
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 0, result.stderr
         assert (observed / "power.args").read_text().splitlines() == [
             "poweroff", "--no-block"]
         (observed / "power.args").unlink()
         launch_environment["ASTRA_TEST_POWER_STATUS"] = "1"
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 1, result.stderr
         assert (observed / "power.args").exists()
         writable(root)
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 0, status=89)
         launch_environment = environment(root, observed)
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 0, result.stderr
         assert (observed / "power.args").read_text().splitlines() == [
             "reboot", "--no-block"]
         (observed / "power.args").unlink()
         launch_environment["ASTRA_TEST_POWER_STATUS"] = "1"
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 1, result.stderr
         assert (observed / "power.args").read_text().splitlines() == [
             "reboot", "--no-block"]
@@ -295,9 +303,7 @@ def main():
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 0, "ASTRA68-QEMU SHUTDOWN\\n",
                                  status=1)
-        result = subprocess.run([str(RUN_ARTY)],
-                                env=environment(root, observed),
-                                text=True, capture_output=True, check=False)
+        result = launch(environment(root, observed))
         assert result.returncode == 1, result.stderr
         assert not (observed / "power.args").exists()
         writable(root)
@@ -305,8 +311,7 @@ def main():
         root, observed = fixture(directory, 0, "*** AXIOM KERNEL PANIC ***\n"
                                  "Fault:  0x40A00024\nSYSTEM HALTED\n", 1)
         launch_environment = environment(root, observed)
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 1
         report = (observed / "log/panic-latest.log").read_text()
         assert "AXIOM KERNEL PANIC" in report
@@ -317,9 +322,7 @@ def main():
     # argument. The first scenario proves a release without one gets three.
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 0.3, splash=True)
-        result = subprocess.run([str(RUN_ARTY)],
-                                env=environment(root, observed),
-                                text=True, capture_output=True, check=False)
+        result = launch(environment(root, observed))
         assert result.returncode == 1, result.stderr
         arguments = (observed / "display.args").read_text().splitlines()
         assert len(arguments) == 4, arguments
