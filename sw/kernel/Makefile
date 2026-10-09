@@ -121,6 +121,7 @@ LDFLAGS = -T kernel.ld -nostdlib -no-pie -Wl,--gc-sections \
 
 OBJECTS = $(BUILD_DIR)/entry.o $(BUILD_DIR)/vectors.o \
           $(BUILD_DIR)/kernel.o $(BUILD_DIR)/platform.o \
+          $(BUILD_DIR)/boot_progress.o \
           $(BUILD_DIR)/mmio.o $(BUILD_DIR)/trace.o \
           $(BUILD_DIR)/irq.o $(BUILD_DIR)/interrupt.o \
           $(BUILD_DIR)/monitor.o $(BUILD_DIR)/irq_latency.o \
@@ -169,9 +170,16 @@ $(BUILD_DIR)/vectors.o: vectors.S context.h dispatch.h thread.h user_copy.h \
                         irq_latency.h kernel.ld | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) allocation.h bytes.h device.h dispatch.h fault.h format.h interrupt.h irq_latency.h monitor.h process.h thread.h time_page.h trace.h \
+$(BUILD_DIR)/kernel.o: kernel.c $(BUILD_INFO) allocation.h boot_progress.h ../include/astra/boot_progress.h bytes.h device.h dispatch.h fault.h format.h interrupt.h irq_latency.h monitor.h process.h thread.h time_page.h trace.h \
                        ../include/astra/boot.h ../include/astra/supervisor.h \
                        | $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+$(BUILD_DIR)/boot_progress.o: boot_progress.c boot_progress.h platform.h \
+                              ../include/astra/boot_progress.h \
+                              ../include/astra/display.h \
+                              ../include/astra/supervisor.h \
+                              ../include/astra/syscall.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/platform.o: platform.c platform.h mmio.h ../include/astraea.h \
@@ -497,12 +505,18 @@ $(BUILD_DIR)/test_platform: tests/test_platform.c platform.c platform.h \
 		-DKERNEL_PLATFORM_HOST_TEST=1 -DKERNEL_MMIO_HOST_TEST=1 \
 		-I. -I../include mmio.c platform.c tests/test_platform.c -o $@
 
-$(BUILD_DIR)/test_boot_progress: tests/test_boot_progress.c \
+$(BUILD_DIR)/test_boot_progress: tests/test_boot_progress.c boot_progress.c \
+                                 boot_progress.h platform.c platform.h \
+                                 mmio.c mmio.h \
                                  ../include/astra/boot_progress.h \
                                  ../include/astra/display.h \
-                                 ../include/astra/supervisor.h | $(BUILD_DIR)
+                                 ../include/astra/supervisor.h \
+                                 ../include/astra/syscall.h \
+                                 ../include/vega.h ../include/vesta.h | $(BUILD_DIR)
 	$(HOST_CC) -std=c11 -Wall -Wextra -Werror $(HOST_EXTRA_FLAGS) \
-		-I. -I../include tests/test_boot_progress.c -o $@
+		-DKERNEL_PLATFORM_HOST_TEST=1 -DKERNEL_MMIO_HOST_TEST=1 \
+		-I. -I../include mmio.c platform.c boot_progress.c \
+		tests/test_boot_progress.c -o $@
 
 $(BUILD_DIR)/test_interrupt: tests/test_interrupt.c interrupt.c interrupt.h trace.h \
 			 irq.c irq.h monitor.h platform.c platform.h mmio.c mmio.h \

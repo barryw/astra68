@@ -1,4 +1,10 @@
 #include <astra/boot_progress.h>
+#include "boot_progress.h"
+#include "platform.h"
+
+#include <astra/syscall.h>
+#include <vega.h>
+#include <vesta.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -103,10 +109,154 @@ static void test_fill(void)
     assert(FILL(PACK(DONE, 1u, FIXED, 14u, 14u), 880u) == 880u);
 }
 
+/* platform.c's interrupt hooks; nothing here masks (as test_platform.c). */
+uint16_t kernel_interrupt_save_disable(void)
+{
+    return 0x2000u;
+}
+
+void kernel_interrupt_restore(uint16_t status_register)
+{
+    (void)status_register;
+}
+
+static uint32_t record(void)
+{
+    uint32_t value = 0u;
+
+    assert(kernel_platform_post_text_read32(ASTRA_BOOT_PROGRESS_VALUE_OFFSET,
+                                            &value));
+    return value;
+}
+
+static void rom_wrote(uint32_t value)
+{
+    assert(kernel_platform_post_text_write32(ASTRA_BOOT_PROGRESS_VALUE_OFFSET,
+                                             value));
+    assert(kernel_platform_post_text_write32(ASTRA_BOOT_PROGRESS_HEADER_OFFSET,
+                                             ASTRA_BOOT_PROGRESS_HEADER));
+}
+
+static uint32_t command(uint32_t operation, uint32_t argument)
+{
+    return kernel_boot_progress_command(operation | argument);
+}
+
+/* What a boot does between handoff and the announcement. */
+static void kernel_and_stages(void)
+{
+    for (uint32_t step = 0u; step < ASTRA_BOOT_PROGRESS_KERNEL_STEPS; ++step)
+        kernel_boot_progress_step();
+    for (uint32_t stage = ASTRA_SUPERVISOR_STAGE_SELF_VERIFIED;
+         stage <= ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED; ++stage)
+        kernel_boot_progress_stage(stage);
+}
+
+static void test_kernel(void)
+{
+    VestaRegs *registers = kernel_platform_test_registers();
+    VegaRegs *video = kernel_platform_test_vega_registers();
+    const uint32_t rom = PACK(BOOTING, 0u, ASTRA_BOOT_PROGRESS_ROM_STEPS, 0u,
+                              0u);
+    uint32_t last;
+
+    registers->SYS_STATUS = SYS_VIDEO_READY;
+    video->ID = VEGA_ID_MAGIC;
+    video->CAPS = VEGA_CAP_POST_TEXT;
+
+    /* No ROM record: the kernel adopts nothing and writes nothing. */
+    assert(kernel_platform_post_text_write32(ASTRA_BOOT_PROGRESS_HEADER_OFFSET,
+                                             0u));
+    assert(kernel_platform_post_text_write32(ASTRA_BOOT_PROGRESS_VALUE_OFFSET,
+                                             0u));
+    kernel_boot_progress_init();
+    kernel_boot_progress_step();
+    assert(record() == 0u);
+
+    /* The ROM's record is adopted and continued, never decreasing. */
+    rom_wrote(rom);
+    kernel_boot_progress_init();
+    assert(record() == rom);
+    last = record();
+    kernel_boot_progress_step();
+    assert(record() > last);
+    for (uint32_t step = 1u; step < ASTRA_BOOT_PROGRESS_KERNEL_STEPS; ++step)
+        kernel_boot_progress_step();
+    for (uint32_t stage = ASTRA_SUPERVISOR_STAGE_SELF_VERIFIED;
+         stage <= ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED; ++stage) {
+        last = record();
+        kernel_boot_progress_stage(stage);
+        assert(record() > last);
+    }
+    assert(record() == PACK(BOOTING, 0u, FIXED, 0u, 0u));
+    /* A service report before the announcement is refused, unchanged. */
+    assert(command(ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_PROGRESS_SERVICE_READY) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(record() == PACK(BOOTING, 0u, FIXED, 0u, 0u));
+    assert(command(ASTRA_PROGRESS_BOOT_SERVICES, 3u) == ASTRA_SYSCALL_OK);
+    assert(record() == PACK(BOOTING, 1u, FIXED, 3u, 0u));
+    assert(command(ASTRA_PROGRESS_BOOT_SERVICES, 3u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(command(ASTRA_PROGRESS_BOOT_SERVICE, 7u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(command(ASTRA_PROGRESS_BOOT_COMMAND_PREFIX | 0x3000u, 0u) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(record() == PACK(BOOTING, 1u, FIXED, 3u, 0u));
+    assert(command(ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_PROGRESS_SERVICE_READY) ==
+           ASTRA_SYSCALL_OK);
+    assert(command(ASTRA_PROGRESS_BOOT_SERVICE,
+                   ASTRA_PROGRESS_SERVICE_SKIPPED) == ASTRA_SYSCALL_OK);
+    assert(command(ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_PROGRESS_SERVICE_READY) ==
+           ASTRA_SYSCALL_OK);
+    kernel_boot_progress_stage(ASTRA_SUPERVISOR_STAGE_TERMINAL);
+    assert(record() == PACK(DONE, 1u, FIXED, 3u, 3u));
+    assert(kernel_boot_progress_value() == record());
+    assert(command(ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_PROGRESS_SERVICE_READY) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    /* The console failing after boot is still a failure. */
+    kernel_boot_progress_stage(ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED);
+    assert(record() == PACK(FAILED, 1u, FIXED, 3u, 3u));
+
+    /* A ROM that miscounted is caught at handoff. */
+    rom_wrote(PACK(BOOTING, 0u, ASTRA_BOOT_PROGRESS_ROM_STEPS - 1u, 0u, 0u));
+    kernel_boot_progress_init();
+    assert(record() == PACK(FAILED, 0u, ASTRA_BOOT_PROGRESS_ROM_STEPS - 1u, 0u,
+                            0u));
+
+    /* A service that fails READY: FAILED, and the count still completes. */
+    rom_wrote(rom);
+    kernel_boot_progress_init();
+    kernel_and_stages();
+    assert(command(ASTRA_PROGRESS_BOOT_SERVICES, 2u) == ASTRA_SYSCALL_OK);
+    assert(command(ASTRA_PROGRESS_BOOT_SERVICE,
+                   ASTRA_PROGRESS_SERVICE_FAILED) == ASTRA_SYSCALL_OK);
+    assert(astra_boot_progress_state(record()) == FAILED);
+    assert(command(ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_PROGRESS_SERVICE_READY) ==
+           ASTRA_SYSCALL_OK);
+    kernel_boot_progress_stage(ASTRA_SUPERVISOR_STAGE_TERMINAL);
+    assert(record() == PACK(FAILED, 1u, FIXED, 2u, 2u));
+
+    /* A panic or degraded exit marks FAILED from any state. */
+    rom_wrote(rom);
+    kernel_boot_progress_init();
+    kernel_boot_progress_fail();
+    assert(record() == astra_boot_progress_fail(rom));
+
+    /* Without the text page the kernel tracks but never writes. */
+    rom_wrote(rom);
+    registers->SYS_STATUS = 0u;
+    kernel_boot_progress_init();
+    kernel_boot_progress_step();
+    assert(kernel_boot_progress_value() == PACK(BOOTING, 0u, 1u, 0u, 0u));
+    registers->SYS_STATUS = SYS_VIDEO_READY;
+    assert(record() == rom);
+}
+
 int main(void)
 {
     test_transitions();
     test_fill();
+    test_kernel();
     puts("KERNEL BOOT PROGRESS PASS");
     return 0;
 }

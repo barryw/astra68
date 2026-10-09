@@ -40,7 +40,7 @@
  * A caller that does not recognize this value should refuse to run rather
  * than guess at a register layout that may have changed underneath it.
  */
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010040u
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010041u
 
 /**
  * Identifies the running kernel's syscall ABI. No argument. Returns
@@ -53,9 +53,30 @@
  * new progress value; it must be no less than the value already recorded,
  * or the call answers ::ASTRA_SYSCALL_INVALID_ARGUMENT. The initial user
  * image's progress additionally drives the kernel's own boot-milestone
- * accounting.
+ * accounting and the boot progress record (astra/boot_progress.h).
+ *
+ * A data[1] whose high half is ::ASTRA_PROGRESS_BOOT_COMMAND_PREFIX is a boot
+ * command, not a progress value, and those values are reserved from every
+ * process's counter. Only the initial image may send one; anything else gets
+ * ::ASTRA_SYSCALL_ACCESS_DENIED.
  */
 #define ASTRA_SYSCALL_PROGRESS  1
+/** The bits of a PROGRESS data[1] that mark a boot command. */
+#define ASTRA_PROGRESS_BOOT_COMMAND_MASK   0xffff0000u
+/** The high half of every boot command, "BS". */
+#define ASTRA_PROGRESS_BOOT_COMMAND_PREFIX 0x42530000u
+/** A boot command's argument, bits 11..0. */
+#define ASTRA_PROGRESS_BOOT_ARGUMENT_MASK  0x00000fffu
+/** SERVICES | N: N boot services will each report once before stage 8. Once. */
+#define ASTRA_PROGRESS_BOOT_SERVICES (ASTRA_PROGRESS_BOOT_COMMAND_PREFIX | 0x1000u)
+/** SERVICE | result: one announced boot service finished launching. */
+#define ASTRA_PROGRESS_BOOT_SERVICE  (ASTRA_PROGRESS_BOOT_COMMAND_PREFIX | 0x2000u)
+/** ::ASTRA_PROGRESS_BOOT_SERVICE result: the service is running. */
+#define ASTRA_PROGRESS_SERVICE_READY   0u
+/** ::ASTRA_PROGRESS_BOOT_SERVICE result: it failed to start; the boot is FAILED. */
+#define ASTRA_PROGRESS_SERVICE_FAILED  1u
+/** ::ASTRA_PROGRESS_BOOT_SERVICE result: policy did not start it. */
+#define ASTRA_PROGRESS_SERVICE_SKIPPED 2u
 /** Voluntarily yields the remainder of the calling thread's quantum. No argument. */
 #define ASTRA_SYSCALL_YIELD     2
 /** Exits the calling process. data[1] is the exit status. Does not return. */

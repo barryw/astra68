@@ -129,6 +129,9 @@ uint32_t kernel_platform_build_id(void);
 bool kernel_platform_post_text_present(void);
 bool kernel_platform_post_text_read(uint32_t cell, uint8_t *value);
 bool kernel_platform_post_text_write(uint32_t cell, uint8_t value);
+/* One aligned word of the text page, by byte offset (boot_progress.h). */
+bool kernel_platform_post_text_read32(uint32_t offset, uint32_t *value);
+bool kernel_platform_post_text_write32(uint32_t offset, uint32_t value);
 void kernel_platform_post_text_update_begin(void);
 void kernel_platform_post_text_update_end(void);
 bool kernel_platform_post_text_cursor(uint32_t row, uint32_t column,

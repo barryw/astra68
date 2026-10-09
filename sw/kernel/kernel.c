@@ -10,6 +10,7 @@
 #include "kernel_build_info.h"
 #include "allocation.h"
 #include "block.h"
+#include "boot_progress.h"
 #include "bytes.h"
 #include "dma.h"
 #include "device.h"
@@ -546,6 +547,7 @@ static void panic_begin(const char *reason)
         kernel_dispatch_last_supervisor_irq_sr(),
         kernel_platform_build_id());
     panic_reason = reason;
+    kernel_boot_progress_fail();
     panic_exception.present = 0u;
     screen_clear();
     early_log->flags |= ASTRA_EARLY_LOG_FLAG_PANIC;
@@ -1342,6 +1344,7 @@ void kernel_process_initial_image_exited(uint32_t exit_status,
         }
         return;
     }
+    kernel_boot_progress_fail();
     console_puts("Initial image ....... EXITED, reason ");
     console_dec32(exit_reason);
     console_puts(" status 0x");
@@ -1476,6 +1479,8 @@ void kernel_process_fault_report(uint32_t process_id, uint32_t thread_id,
 
 void kernel_process_initial_image_progress(uint32_t stage)
 {
+    /* Before the line: whoever reads "stage 8" reads the final record. */
+    kernel_boot_progress_stage(stage);
 #if !ASTRA_KERNEL_K1_QUALIFICATION
     if (stage == ASTRA_SUPERVISOR_STAGE_TERMINAL) {
         kernel_performance_freeze();
@@ -1866,6 +1871,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
 
     kernel_platform_debug_marker(ASTRA_KERNEL_STATUS_BOOTING);
     console_init();
+    kernel_boot_progress_init();
     trace_started = kernel_platform_cpu_cycles_low();
     if (!kernel_trace_init() ||
         !kernel_trace_write(
@@ -1938,6 +1944,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         memory_stats.emergency_available_frames !=
             KERNEL_EMERGENCY_RESERVE_FRAMES)
         kernel_panic("runtime allocator validation failed");
+    kernel_boot_progress_step();
 
     console_puts("BootInfo ........... OK\n");
     console_printf("Early log .......... OK @ 0x%08X\n",
@@ -1999,6 +2006,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
             kernel_panic("Vesta timer interrupt timeout");
     }
     console_puts("Vesta timer ........ OK, one-shot 5 ms\n");
+    kernel_boot_progress_step();
 
     if ((kernel_platform_system_status() & SYS_ASTRA_HOST) != 0u) {
         if (!kernel_platform_block_present()) {
@@ -2037,6 +2045,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
     } else {
         console_puts("AstraHost runtime ... not present\n");
     }
+    kernel_boot_progress_step();
 
 #if ASTRA_KERNEL_PANIC_SELFTEST == 2
     console_puts("Supervisor guard .... fault injection\n");
@@ -2120,6 +2129,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
      */
 #else
     start_initial_user_image();
+    kernel_boot_progress_step();
 #endif
     process_bootstrap_started = kernel_platform_cpu_cycles_low();
     kernel_disable_interrupts();
@@ -2128,6 +2138,7 @@ void kernel_main(uint32_t handoff_magic, const AstraBootInfo *firmware_info)
         first_context == NULL) {
         process_bootstrap_irqoff_cycles =
             kernel_platform_cpu_cycles_low() - process_bootstrap_started;
+        kernel_boot_progress_fail();
         console_puts("Recovery ............ idle; interrupts and diagnostics "
                      "remain available\n");
         kernel_enter_idle();
