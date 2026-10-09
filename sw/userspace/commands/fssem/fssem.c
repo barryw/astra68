@@ -310,7 +310,18 @@ typedef struct RawClient {
 
 #define RAW_LANE 0x5EA1u
 
+static uint32_t raw_open_until(RawClient *raw, uint32_t service,
+                               uint64_t deadline);
+
 static uint32_t raw_open(RawClient *raw, uint32_t service)
+{
+    return raw_open_until(raw, service, ASTRA_DEADLINE_FOREVER);
+}
+
+/* HELLO, answered by `deadline` or not at all: a service that declines a
+ * HELLO answers nothing, and ASTRA_SYSCALL_TIMED_OUT says so. */
+static uint32_t raw_open_until(RawClient *raw, uint32_t service,
+                               uint64_t deadline)
 {
     uint32_t reply_send = 0u;
     AstraVfsRequestMessage message;
@@ -336,7 +347,7 @@ static uint32_t raw_open(RawClient *raw, uint32_t service)
     status = astra_port_send(service, &message, sizeof(message), handles, 1u);
     if (status != ASTRA_SYSCALL_OK)
         return status;
-    status = astra_wait_one(raw->reply_receive, ASTRA_DEADLINE_FOREVER, NULL);
+    status = astra_wait_one(raw->reply_receive, deadline, NULL);
     if (status == ASTRA_SYSCALL_OK)
         status = astra_port_receive(raw->reply_receive, &reply, sizeof(reply),
                                     handles, 1u, &size, &count);
@@ -389,6 +400,22 @@ static uint32_t raw_call(RawClient *raw, uint32_t service, uint32_t session,
     else if (count != 0u)
         (void)astra_close(handles[0]);
     return status;
+}
+
+/* BYE, then drop the reply port and the scope: a raw client that leaves
+ * tidily (review N4). */
+static void raw_close(RawClient *raw)
+{
+    AstraVfsReplyMessage reply;
+
+    if (raw->session != ASTRA_VFS_SESSION_INVALID)
+        (void)raw_call(raw, raw->service, raw->session, ASTRA_VFS_OP_BYE, 0u,
+                       "", &reply, NULL);
+    if (raw->scope != 0u)
+        (void)astra_close(raw->scope);
+    if (raw->reply_receive != 0u)
+        (void)astra_close(raw->reply_receive);
+    memset(raw, 0, sizeof(*raw));
 }
 
 /* The grant-relative path of `leaf` in a /work case directory. */
@@ -453,8 +480,8 @@ static int case_raw_readonly(const char *directory)
     CHECK(lane_call(ro.scope, session, ASTRA_HOST_SERVICE_FILESYSTEM,
                     ASTRA_HOST_FS_STAT, 0u, wire) == ASTRA_STATUS_OK,
           "read-only STAT on the lane");
-    (void)astra_close(ro.scope);
-    (void)astra_close(rw.scope);
+    raw_close(&ro);
+    raw_close(&rw);
     (void)astra_close(derived);
     return 0;
 }
@@ -500,8 +527,8 @@ static int case_raw_cross_grant(const char *directory)
     join(posix, sizeof(posix), directory, "borrowed");
     CHECK(stat(posix, &st) != 0 && errno == ENOENT,
           "a refused request made the directory");
-    (void)astra_close(ro.scope);
-    (void)astra_close(rw.scope);
+    raw_close(&ro);
+    raw_close(&rw);
     (void)astra_close(derived);
     return 0;
 }
@@ -548,8 +575,8 @@ static int case_raw_subroot(const char *directory)
                    ASTRA_VFS_GRANT_READ, "/etc", &reply, NULL) ==
               ASTRA_SYSCALL_OK && reply.reply.status != ASTRA_VFS_OK,
           "derived a grant at an absolute root");
-    (void)astra_close(sub.scope);
-    (void)astra_close(rw.scope);
+    raw_close(&sub);
+    raw_close(&rw);
     (void)astra_close(derived);
     return 0;
 }
@@ -604,12 +631,136 @@ static int case_raw_delegate(const char *directory)
                                         &copy) == ASTRA_SYSCALL_OK,
               "a delegable scope lost TRANSFER");
         (void)astra_close(copy);
-        (void)astra_close(onward.scope);
+        raw_close(&onward);
         (void)astra_close(again);
     }
-    (void)astra_close(plain.scope);
-    (void)astra_close(rw.scope);
+    raw_close(&plain);
+    raw_close(&rw);
     (void)astra_close(derived);
+    return 0;
+}
+
+/* A grant derived from a non-delegable grant answers only its deriver
+ * (review C1). The derived port itself moves with TRANSFER -- every moved
+ * handle does -- so handing it to another process (here, by fork) must
+ * give that process nothing: its HELLO goes unanswered. A grant derived
+ * from a delegable one answers the same child, so the refusal is the
+ * binding and not the fork. */
+static int case_raw_onward(const char *directory)
+{
+    RawClient rw;
+    RawClient plain;
+    RawClient mine;
+    AstraVfsReplyMessage reply;
+    uint32_t free_grant = 0u;
+    uint32_t bound_grant = 0u;
+    uint32_t copy = 0u;
+    pid_t child;
+    int status;
+
+    (void)directory;
+    CHECK(raw_open(&rw, work_grant()) == ASTRA_SYSCALL_OK, "HELLO on WORK");
+    CHECK(raw_call(&rw, rw.service, rw.session, ASTRA_VFS_OP_GRANT_DERIVE,
+                   ASTRA_VFS_GRANT_READ | ASTRA_VFS_GRANT_WRITE, "", &reply,
+                   &free_grant) == ASTRA_SYSCALL_OK &&
+          reply.reply.status == ASTRA_VFS_OK && free_grant != 0u,
+          "derive from WORK");
+    CHECK(raw_open(&plain, free_grant) == ASTRA_SYSCALL_OK,
+          "HELLO on the non-delegable grant");
+    CHECK(raw_call(&plain, plain.service, plain.session,
+                   ASTRA_VFS_OP_GRANT_DERIVE, ASTRA_VFS_GRANT_READ, "",
+                   &reply, &bound_grant) == ASTRA_SYSCALL_OK &&
+          reply.reply.status == ASTRA_VFS_OK && bound_grant != 0u,
+          "derive from the non-delegable grant: status %u",
+          (unsigned)reply.reply.status);
+    /* The port can be handed on; that is the point of the binding. */
+    CHECK(astra_rt_handle_duplicate(bound_grant, ASTRA_RIGHT_SIGNAL |
+                                        ASTRA_RIGHT_TRANSFER, &copy) ==
+              ASTRA_SYSCALL_OK, "the derived port is not transferable");
+    (void)astra_close(copy);
+    child = fork();
+    CHECK(child >= 0, "fork: %s", strerror(errno));
+    if (child == 0) {
+        RawClient other;
+        uint32_t refused = raw_open_until(
+            &other, bound_grant,
+            astra_clock_monotonic() + UINT64_C(2000000000));
+        uint32_t allowed;
+
+        if (refused == ASTRA_SYSCALL_OK)
+            _exit(1);
+        allowed = raw_open(&other, free_grant);
+        _exit(allowed == ASTRA_SYSCALL_OK ? 0 : 2);
+    }
+    CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status),
+          "wait for the child");
+    CHECK(WEXITSTATUS(status) != 1,
+          "another process said HELLO on a grant bound to its deriver");
+    CHECK(WEXITSTATUS(status) == 0,
+          "the child could not HELLO a delegable parent's grant");
+    /* Its deriver still can. */
+    CHECK(raw_open(&mine, bound_grant) == ASTRA_SYSCALL_OK && mine.scope != 0u,
+          "the deriver could not HELLO its own grant");
+    raw_close(&mine);
+    raw_close(&plain);
+    raw_close(&rw);
+    (void)astra_close(bound_grant);
+    (void)astra_close(free_grant);
+    return 0;
+}
+
+/* A derived grant belongs to the session that derived it (review I1): when
+ * that session ends, every grant it derived is retired, held or not, and
+ * HostFS's table does not keep them. */
+static int case_raw_orphans(const char *directory)
+{
+    enum { DERIVED = 8 };
+    RawClient rw;
+    RawClient held;
+    AstraVfsReplyMessage reply;
+    AstraHostLeaseInfo lease;
+    uint32_t derived[DERIVED];
+    uint32_t answer = ASTRA_SYSCALL_OK;
+    int index;
+
+    (void)directory;
+    memset(derived, 0, sizeof(derived));
+    CHECK(raw_open(&rw, work_grant()) == ASTRA_SYSCALL_OK, "HELLO on WORK");
+    for (index = 0; index < DERIVED; ++index)
+        CHECK(raw_call(&rw, rw.service, rw.session,
+                       ASTRA_VFS_OP_GRANT_DERIVE, ASTRA_VFS_GRANT_READ, "",
+                       &reply, &derived[index]) == ASTRA_SYSCALL_OK &&
+                  reply.reply.status == ASTRA_VFS_OK && derived[index] != 0u,
+              "derive %d: status %u", index, (unsigned)reply.reply.status);
+    CHECK(raw_open(&held, derived[0]) == ASTRA_SYSCALL_OK && held.scope != 0u,
+          "HELLO on a derived grant before its deriver left");
+    raw_close(&rw);
+    /* The deriver's BYE retires all of them: the held scope is revoked and
+     * no derived port answers a HELLO again. */
+    for (int tries = 0; tries < 40 && answer == ASTRA_SYSCALL_OK; ++tries) {
+        struct timespec pause = {0, 50000000L};
+
+        answer = astra_host_lease_query(held.scope, &lease);
+        if (answer == ASTRA_SYSCALL_OK)
+            (void)nanosleep(&pause, NULL);
+    }
+    CHECK(answer == ASTRA_SYSCALL_PEER_DEAD,
+          "a derived grant's scope outlived its deriver: %u",
+          (unsigned)answer);
+    for (index = 0; index < DERIVED; ++index) {
+        RawClient late;
+        uint32_t status = raw_open_until(
+            &late, derived[index],
+            astra_clock_monotonic() + UINT64_C(2000000000));
+
+        CHECK(status != ASTRA_SYSCALL_OK,
+              "derived grant %d outlived its deriver", index);
+        if (late.reply_receive != 0u)
+            (void)astra_close(late.reply_receive);
+        (void)astra_close(derived[index]);
+    }
+    (void)astra_close(held.scope);
+    (void)astra_close(held.reply_receive);
     return 0;
 }
 
@@ -725,8 +876,9 @@ static int case_raw_retire(const char *directory)
     CHECK(astra_host_lease_query(ro.scope, &lease) ==
               ASTRA_SYSCALL_PEER_DEAD,
           "a retired grant's scope still answers queries");
-    (void)astra_close(ro.scope);
-    (void)astra_close(rw.scope);
+    ro.session = ASTRA_VFS_SESSION_INVALID; /* its grant is gone */
+    raw_close(&ro);
+    raw_close(&rw);
     return 0;
 }
 
@@ -742,6 +894,8 @@ static const struct {
     {"raw-subroot", case_raw_subroot},
     {"raw-delegate", case_raw_delegate},
     {"raw-retire", case_raw_retire},
+    {"raw-onward", case_raw_onward},
+    {"raw-orphans", case_raw_orphans},
 };
 
 int main(int argc, char **argv)
@@ -749,6 +903,17 @@ int main(int argc, char **argv)
     uint32_t passed = 0u;
     uint32_t failed = 0u;
 
+    /* N stats of one path through the Kit: the gate's attributable lane
+     * load (test-fs-semantics.py check_lane). */
+    if (argc == 4 && strcmp(argv[1], "--stat-loop") == 0) {
+        long count = strtol(argv[2], NULL, 10);
+        struct stat st;
+
+        for (long at = 0; at < count; ++at)
+            if (stat(argv[3], &st) != 0)
+                return 2;
+        return 0;
+    }
     if (argc == 3 && strcmp(argv[1], "--lane-helper") == 0) {
         struct stat st;
 

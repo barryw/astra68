@@ -92,18 +92,25 @@ What actually runs today, verified against source:
   compile/link time, not discovered or mounted. At startup HostFS claims the
   host filesystem (`ASTRA_HOST_FS_CLAIM`, host command record 3) and opens
   one root session per volume. Since storage protocol 29 every grant is a
-  HostFS port of its own (`services/hostfs/settings.conf` `grants N`, 32
-  shipped): each has its own provider session and its own filesystem scope
+  HostFS port of its own, in a table that grows on demand (the kernel's
+  scope pool and the wait-set ABI are the only limits): each has its own
+  provider session and its own filesystem scope
   (`ASTRA_SYSCALL_HOST_SCOPE_CREATE`) minted over that session with the
   grant's rights -- read-only without WRITE, delegable only with DELEGATE.
   The two volumes' base grants are delegable; `GRANT_DERIVE` makes a
   narrower one (a sub-root, read-only, non-delegable, never wider), and the
   supervisor derives one for every manifest grant narrower than the base and
   for every child that does not `delegate`. A session is answered only on
-  the grant port it said HELLO on. One pump serves every grant port; a port
-  is control only (HELLO, BYE, GRANT_DERIVE). When a grant's last holder
-  closes its port HostFS revokes its scope through the kernel and closes its
-  provider session. QEMU takes the claim
+  the grant port it said HELLO on. A grant derived from a non-delegable
+  one answers only the process that derived it: a port send handle always
+  moves with TRANSFER, so the authority is bound to the kernel-stamped
+  sender instead. A derived grant belongs to the session that derived it
+  and is retired when that session ends (BYE, the deriver's death, or its
+  own grant's retirement). One pump serves every grant port, starting at a
+  different grant each pass; a port is control only (HELLO, BYE,
+  GRANT_DERIVE). When a grant's last holder closes its port HostFS revokes
+  its scope through the kernel, ends its sessions with their reply lanes,
+  and closes its provider session. QEMU takes the claim
   only on a channel the kernel opened for a device handle carrying
   `ASTRA_RIGHT_HOST_SCOPE` (`ASTRA_HOST_CHANNEL_PROVIDER`), so no other
   `HOST_DEVICE` holder can claim, even while HostFS is restarting. Session

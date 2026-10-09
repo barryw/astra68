@@ -1336,6 +1336,8 @@ test_sessions_are_bound_to_their_grant(void)
     assert(astra_vfs_service_session_bound(&service, session, 7u, 1u));
     assert(!astra_vfs_service_session_bound(&service, session, 7u, 2u));
     assert(!astra_vfs_service_session_bound(&service, session, 8u, 1u));
+    assert(astra_vfs_service_session_grant(&service, session) == 1u);
+    assert(astra_vfs_service_session_grant(&service, session + 1u) == 0u);
 
     /* Every other operation answers no features. */
     begin_request(&request, session, "/owned.txt");
@@ -1361,6 +1363,7 @@ test_sessions_are_bound_to_their_grant(void)
 
     astra_vfs_service_release_grant(&service, 1u);
     assert(!astra_vfs_service_session_bound(&service, session, 7u, 1u));
+    assert(astra_vfs_service_session_grant(&service, session) == 0u);
 }
 
 static void

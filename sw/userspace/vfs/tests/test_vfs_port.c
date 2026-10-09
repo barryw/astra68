@@ -2311,17 +2311,23 @@ test_quota_storage_reserves_only_the_representable_table(void)
 
 static uint32_t derive_calls;
 static uint32_t derive_rights;
+static uint32_t derive_holder;
+static uint32_t derive_deriver;
+static uint32_t derive_session;
 static char derive_root[ASTRA_VFS_PATH_MAX];
 
 static uint32_t
-mock_derive(void *context, const AstraVfsPortGrant *parent, const char *root,
-            uint32_t rights, uint32_t *send)
+mock_derive(void *context, const AstraVfsPortDeriveRequest *request,
+            uint32_t *send)
 {
     (void)context;
-    (void)parent;
+    assert(request->parent != NULL);
     ++derive_calls;
-    derive_rights = rights;
-    strcpy(derive_root, root);
+    derive_rights = request->rights;
+    derive_holder = request->holder;
+    derive_deriver = request->deriver;
+    derive_session = request->session;
+    strcpy(derive_root, request->root);
     *send = mock_open(1u);
     return ASTRA_VFS_OK;
 }
@@ -2450,6 +2456,27 @@ test_grants_hand_out_their_scope_and_only_narrow(void)
     assert(received != 0u && derive_calls == 1u);
     assert(derive_rights == ASTRA_VFS_GRANT_READ);
     assert(strcmp(derive_root, "sub") == 0);
+    /* The deriver is the kernel-stamped sender on its own session. A
+     * delegable parent hands out a grant any holder may use. */
+    assert(derive_deriver == mock_sender && derive_session == session);
+    assert(derive_holder == 0u);
+    /* A non-delegable parent's derived grant answers only its deriver
+     * (review C1): the port it gets may travel, its authority may not. */
+    {
+        uint32_t readonly_session = 0u;
+
+        for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index)
+            if (host.reply_handles[index] == reply_two)
+                readonly_session = host.reply_sessions[index];
+        assert(readonly_session != 0u);
+        assert(grant_round_trip(&host, &readable, ASTRA_VFS_OP_GRANT_DERIVE,
+                                readonly_session, ASTRA_VFS_GRANT_READ, "",
+                                0u, reply_two, &reply,
+                                &received) == ASTRA_SYSCALL_OK);
+        assert(reply.reply.status == ASTRA_VFS_OK && received != 0u);
+        assert(derive_calls == 2u && derive_holder == mock_sender &&
+               derive_session == readonly_session);
+    }
 
     /* The plain pump serves no grant: it neither answers features nor
      * derives. */
@@ -2491,7 +2518,7 @@ test_grants_hand_out_their_scope_and_only_narrow(void)
                                   handles, 1u, &size, &count) ==
                ASTRA_SYSCALL_OK);
         assert(answer.reply.status == ASTRA_VFS_ERR_UNSUPPORTED &&
-               count == 0u && derive_calls == 1u);
+               count == 0u && derive_calls == 2u);
     }
 }
 
@@ -2586,6 +2613,78 @@ test_the_kit_derives_on_its_hello_lane(void)
     served = NULL;
 }
 
+/* A grant bound to a holder (derived from a non-delegable grant) answers a
+ * HELLO from that holder alone, unanswered for anyone else (review C1). */
+static void
+test_a_bound_grant_answers_only_its_holder(void)
+{
+    AstraVfsPortService host;
+    AstraVfsPortGrant grant;
+    AstraVfsReplyMessage reply;
+    uint32_t reply_handle;
+    uint32_t received = 0u;
+
+    mock_reset();
+    service_start();
+    grant = full_grant(mock_open(MOCK_QUEUE_MAX), 3u);
+    grant.rights = ASTRA_VFS_GRANT_READ;
+    grant.holder = 0x2222u;
+    assert(astra_vfs_port_service_init(&host, grant.receive, &service));
+    reply_handle = mock_open(4u);
+    assert(grant_round_trip(&host, &grant, ASTRA_VFS_OP_HELLO, 0u, 0u, "",
+                            reply_handle, reply_handle, &reply,
+                            &received) == ASTRA_SYSCALL_WOULD_BLOCK);
+    assert(host.refused == 1u && service.open_sessions == 0u);
+    mock_sender = 0x2222u;
+    reply_handle = mock_open(4u);
+    assert(grant_round_trip(&host, &grant, ASTRA_VFS_OP_HELLO, 0u, 0u, "",
+                            reply_handle, reply_handle, &reply,
+                            &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_OK && received != 0u);
+}
+
+/* Retiring a grant drops its sessions' reply lanes at once, not at the
+ * next reap of a dead peer (review M4). */
+static void
+test_retiring_a_grant_drops_its_reply_lanes(void)
+{
+    AstraVfsPortService host;
+    AstraVfsPortGrant grant;
+    AstraVfsPortGrant other;
+    AstraVfsReplyMessage reply;
+    uint32_t reply_handle;
+    uint32_t reply_other;
+    uint32_t received = 0u;
+    uint32_t session;
+    uint32_t kept;
+    uint32_t closes;
+
+    mock_reset();
+    service_start();
+    grant = full_grant(mock_open(MOCK_QUEUE_MAX), 4u);
+    other = full_grant(mock_open(MOCK_QUEUE_MAX), 5u);
+    assert(astra_vfs_port_service_init(&host, grant.receive, &service));
+    reply_handle = mock_open(4u);
+    reply_other = mock_open(4u);
+    assert(grant_round_trip(&host, &grant, ASTRA_VFS_OP_HELLO, 0u, 0u, "",
+                            reply_handle, reply_handle, &reply,
+                            &received) == ASTRA_SYSCALL_OK);
+    session = reply.reply.session;
+    assert(grant_round_trip(&host, &other, ASTRA_VFS_OP_HELLO, 0u, 0u, "",
+                            reply_other, reply_other, &reply,
+                            &received) == ASTRA_SYSCALL_OK);
+    kept = reply.reply.session;
+    closes = mock_close_count;
+    astra_vfs_port_service_release_grant(&host, grant.id);
+    for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index)
+        assert(host.reply_sessions[index] != session);
+    assert(mock_close_count > closes);
+    assert(!astra_vfs_service_session_bound(&service, session, mock_sender,
+                                            grant.id));
+    assert(astra_vfs_service_session_bound(&service, kept, mock_sender,
+                                           other.id));
+}
+
 int
 main(void)
 {
@@ -2598,6 +2697,8 @@ main(void)
     test_host_accelerator_moves_data_plane_out_of_the_service();
     test_grants_hand_out_their_scope_and_only_narrow();
     test_the_kit_derives_on_its_hello_lane();
+    test_a_bound_grant_answers_only_its_holder();
+    test_retiring_a_grant_drops_its_reply_lanes();
     test_a_scoped_port_runs_no_fused_operation();
     test_a_scoped_hello_without_its_scope_is_refused();
     test_shared_accelerated_client_keeps_thread_requests_in_flight();

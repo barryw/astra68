@@ -170,6 +170,9 @@ void astra_vfs_service_dispatch_grant(
 int astra_vfs_service_session_bound(const AstraVfsService *service,
                                     uint32_t session, uint32_t owner,
                                     uint32_t grant);
+/* The grant `session` is bound to; 0 for no session or no grant. */
+uint32_t astra_vfs_service_session_grant(const AstraVfsService *service,
+                                         uint32_t session);
 /* Releases every session bound to `grant`: its last holder has gone. */
 void astra_vfs_service_release_grant(AstraVfsService *service,
                                      uint32_t grant);

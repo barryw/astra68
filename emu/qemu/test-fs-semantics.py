@@ -44,7 +44,8 @@ terminal = load("astra_terminal_gate", "test-terminal.py")
 
 # Every fssem case the suite runs. Later tasks append here and in fssem.c.
 CASES = ["basic", "raw-lane", "lane-fork-exec", "raw-readonly",
-         "raw-cross-grant", "raw-subroot", "raw-delegate", "raw-retire"]
+         "raw-cross-grant", "raw-subroot", "raw-delegate", "raw-retire",
+         "raw-onward", "raw-orphans"]
 # Orchestrated checks: name -> function(machine, provider_mount). Later tasks
 # add entries; each prints "PASS <name>" or calls fail().
 CHECKS = {}
@@ -102,20 +103,38 @@ def scoped_commands(machine):
         "path": "/machine", "property": "astra-host-scoped-commands"})
 
 
+LANE_STATS = 400
+
+
 def check_lane(machine, mount):
-    """The lane is the path taken (FS44): fssem's own work moves the
-    provider's scoped-command count, and raw-lane's forged MKDIR left
-    nothing in SOUND."""
+    """The lane is the path taken (FS44), attributably: `fssem --stat-loop`
+    makes LANE_STATS stats of /work, each at least one scoped command, and
+    the provider's machine-wide scoped-command count must move by at least
+    that much. An idle window of about the same length measures everything
+    else on the machine and must stay well below it, so background traffic
+    can neither satisfy nor explain the check (review M5). raw-lane's
+    forged MKDIR must have left nothing in SOUND."""
     before = scoped_commands(machine)
-    lines, status = command(machine, "fssem basic", 120, 61)
+    started = time.monotonic()
+    lines, status = command(machine, "fssem --stat-loop %d /work" %
+                            LANE_STATS, 300, 61)
+    elapsed = time.monotonic() - started
     if status != 0:
-        fail("fssem basic: %r" % lines[-5:])
+        fail("fssem --stat-loop: status %d, %r" % (status, lines[-5:]))
     moved = scoped_commands(machine) - before
-    if moved < 10:
-        fail("only %d scoped commands for fssem basic" % moved)
+    idle_before = scoped_commands(machine)
+    time.sleep(elapsed)
+    idle = scoped_commands(machine) - idle_before
+    if moved < LANE_STATS:
+        fail("only %d scoped commands for %d lane stats" %
+             (moved, LANE_STATS))
+    if idle * 4 >= LANE_STATS:
+        fail("%d background scoped commands in %.1fs could satisfy the "
+             "check" % (idle, elapsed))
     if os.path.exists(os.path.join(mount, "sound", "raw-lane-forged")):
         fail("a forged volume reached SOUND")
-    print("PASS lane %d" % moved)
+    print("PASS lane %d for %d stats (idle %d in %.1fs)" %
+          (moved, LANE_STATS, idle, elapsed))
 
 
 CHECKS["lane"] = check_lane

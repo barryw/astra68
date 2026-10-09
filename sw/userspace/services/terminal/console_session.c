@@ -45,7 +45,9 @@ typedef struct ConsoleSession {
     uint64_t present_deadline;
     /* The shell's CWD: a grant derived from WORK's (storage protocol 29),
      * so the shell and every command it forks hold their working directory
-     * as a host client of its own beside WORK. Kept for the session. */
+     * as a host client of its own beside WORK. It narrows nothing: the
+     * shell is also handed WORK itself, the delegable base grant. It is
+     * owned by the terminal's WORK session and kept for the session. */
     uint32_t cwd_grant;
     int running;
 } ConsoleSession;
@@ -190,8 +192,8 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
             if (count >= ASTRA_LAUNCH_GRANT_MAX)
                 return UINT32_MAX;
             /* A provider-enforced WORK gives the shell a CWD grant of its
-             * own, as narrow as WORK as the terminal holds it and not
-             * delegable; any other WORK is shared as it is. */
+             * own (no DELEGATE, though the shell's WORK has it); any other
+             * WORK is shared as it is. */
             if (session.cwd_grant == 0u && client != NULL &&
                 astra_vfs_grant_derive(
                     client, work->root,

@@ -159,9 +159,8 @@ for required in ("runs astra\n", "start boot\n", "provides RAM:rw\n",
 assert "runs paired\n" not in ram_service
 assert "max_bytes 67108864\n" in astra_image.CONFIGURATION[
     "services/ramfs/settings.conf"]
-# HostFS's grant table (docs/FILESYSTEM_PRODUCTION_PRD.md FS15).
-assert "grants 32\n" in astra_image.CONFIGURATION[
-    "services/hostfs/settings.conf"]
+# HostFS's grant table grows on demand: there is no setting to read.
+assert "services/hostfs/settings.conf" not in astra_image.CONFIGURATION
 assert "entropy" in astra_image.DISPLAY_SERVICES
 remote_service = astra_image.CONFIGURATION[
     "services/remote-desktop/service.conf"]
@@ -241,7 +240,7 @@ assert [line for line in startup
 assert startup[1] == \
     "service /services/posixd grants serves POSIX_PROCESS required priority=20"
 assert startup[2] == \
-    "service /services/hostfs grants HOST_FILESYSTEM CONFIG:r " \
+    "service /services/hostfs grants HOST_FILESYSTEM " \
     "serves WORK:rw METRICS:r SOUND:rw required priority=20"
 assert startup[3] == \
     "service /services/entropy grants HOST_DEVICE serves ENTROPY required priority=20"

@@ -177,14 +177,31 @@ typedef struct AstraVfsPortGrant {
     uint32_t rights;           /* ASTRA_VFS_GRANT_* */
     uint32_t scope;            /* the grant's scope, ADMINISTER; HELLO hands
                                 * out a duplicate without it */
+    uint32_t holder;           /* nonzero: the only sender HELLO answers */
 } AstraVfsPortGrant;
 
-/* Makes a grant of at most `rights` (already a checked subset of `parent`'s)
- * rooted at `root` beneath `parent`'s root; answers its send handle in
- * *send, which the reply moves to the caller. */
+/*
+ * One GRANT_DERIVE the port layer has accepted: `rights` is a checked
+ * subset of `parent`'s. The deriver is the kernel-stamped sender and
+ * `session` its session on `parent`; the new grant is the deriver's, to be
+ * retired when that session ends. `holder` is what the new grant's record
+ * must carry: the deriver when `parent` is not delegable (review C1) --
+ * a port send handle always moves with TRANSFER, so the authority is bound
+ * to the sender instead -- and 0 otherwise.
+ */
+typedef struct AstraVfsPortDeriveRequest {
+    const AstraVfsPortGrant *parent;
+    const char *root;          /* relative to the parent's root */
+    uint32_t rights;
+    uint32_t deriver;
+    uint32_t session;
+    uint32_t holder;
+} AstraVfsPortDeriveRequest;
+
+/* Makes the grant; answers its send handle in *send, which the reply moves
+ * to the deriver. */
 typedef uint32_t (*AstraVfsPortDerive)(void *context,
-                                       const AstraVfsPortGrant *parent,
-                                       const char *root, uint32_t rights,
+                                       const AstraVfsPortDeriveRequest *request,
                                        uint32_t *send);
 
 typedef struct AstraVfsPortService {
@@ -245,5 +262,12 @@ uint32_t astra_vfs_port_service_grant_pump(AstraVfsPortService *host,
                                            AstraVfsPortWorker *worker,
                                            const AstraVfsPortGrant *grant,
                                            uint32_t budget);
+/* A grant is retired: its sessions end and their reply lanes, reply
+ * handles and transfer areas go with them now. */
+void astra_vfs_port_service_release_grant(AstraVfsPortService *host,
+                                          uint32_t grant);
+/* Ends every session whose client's reply port has gone (a dead client);
+ * the service otherwise does this only when a new client connects. */
+void astra_vfs_port_service_reap(AstraVfsPortService *host);
 
 #endif

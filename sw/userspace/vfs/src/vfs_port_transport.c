@@ -2350,8 +2350,13 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
             slot = lease.slot;
 
         if (wire_operation == ASTRA_VFS_OP_HELLO) {
-            if (handle_count != 1u) {
+            /* A grant bound to its holder answers nobody else (C1). */
+            if (handle_count != 1u ||
+                (grant != NULL && grant->holder != 0u &&
+                 sender != grant->holder)) {
                 port_refuse(host);
+                if (handle_count != 0u)
+                    (void)astra_close(handles[0]);
                 continue;
             }
             /*
@@ -2661,9 +2666,18 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
                      !astra_utf8_validate(root, root_length, 0u))
                 outgoing->reply.status = ASTRA_VFS_ERR_INVALID;
             else {
+                const AstraVfsPortDeriveRequest request = {
+                    .parent = grant,
+                    .root = root,
+                    .rights = incoming->request.flags,
+                    .deriver = sender,
+                    .session = incoming->request.session,
+                    .holder = (grant->rights & ASTRA_VFS_GRANT_DELEGATE) != 0u ?
+                        0u : sender,
+                };
+
                 outgoing->reply.status = host->derive(
-                    host->derive_context, grant, root,
-                    incoming->request.flags, &derived);
+                    host->derive_context, &request, &derived);
                 if (outgoing->reply.status == ASTRA_VFS_OK && derived != 0u) {
                     outgoing_handles[0] = derived;
                     outgoing_handle_count = 1u;
@@ -2756,6 +2770,34 @@ astra_vfs_port_service_grant_pump(AstraVfsPortService *host,
     if (grant == NULL || grant->receive == 0u || grant->id == 0u)
         return 0u;
     return pump(host, worker, grant->receive, grant, budget);
+}
+
+void
+astra_vfs_port_service_release_grant(AstraVfsPortService *host,
+                                     uint32_t grant)
+{
+    if (host == NULL || host->service == NULL || grant == 0u)
+        return;
+    for (uint32_t index = 0u; index < ASTRA_VFS_SESSION_MAX; ++index) {
+        uint32_t session = 0u;
+
+        if (!port_state_acquire(host))
+            return;
+        session = host->reply_sessions[index];
+        port_state_release(host);
+        if (session != ASTRA_VFS_SESSION_INVALID &&
+            astra_vfs_service_session_grant(host->service, session) == grant)
+            reply_session_close(host, session);
+    }
+    /* Sessions that never bound a reply lane. */
+    astra_vfs_service_release_grant(host->service, grant);
+}
+
+void
+astra_vfs_port_service_reap(AstraVfsPortService *host)
+{
+    if (host != NULL && host->service != NULL)
+        reply_reap_dead(host);
 }
 
 uint32_t

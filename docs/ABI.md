@@ -126,7 +126,10 @@ not exceed the grant's own, and `body.path`, the new root relative to the
 grant's root (`""` keeps it). Its reply carries one send handle, the derived
 grant's port; HELLO on that port hands out the derived grant's scope, which
 is read-only without WRITE and keeps TRANSFER only with DELEGATE. A grant
-whose last holder closes its port is retired: HostFS revokes its scope
+derived from a non-delegable grant answers HELLO only from the process that
+derived it (the port's send handle itself moves with TRANSFER, as every
+moved handle does). A derived grant is retired when the session that
+derived it ends. A grant whose last holder closes its port is retired: HostFS revokes its scope
 through the kernel and closes its provider session. The grant port is
 control only (HELLO, BYE, GRANT_DERIVE); the client's lane carries every
 data operation.

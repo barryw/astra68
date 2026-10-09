@@ -843,11 +843,23 @@ typedef struct SupervisorNarrowed {
     uint32_t source;
     uint32_t rights;
     uint32_t handle;
+    char root[ASTRA_CAPABILITY_ROOT_MAX];
 } SupervisorNarrowed;
 
 static SupervisorNarrowed *narrowed;
 static uint32_t narrowed_count;
 static uint32_t narrowed_capacity;
+
+/* A published service whose binding is a provider-enforced grant. */
+static int provider_enforced(uint32_t handle)
+{
+    for (uint32_t index = 0u; index < service_count; ++index)
+        if (service_handles[index] == handle)
+            return service_is_vfs[index] != 0u &&
+                   (service_clients[index].features &
+                    ASTRA_VFS_FEATURE_GRANTS) != 0u;
+    return 0;
+}
 
 static uint32_t narrowed_grant(const AstraAssign *held, uint32_t rights,
                                int delegates, uint32_t *handle)
@@ -862,13 +874,18 @@ static uint32_t narrowed_grant(const AstraAssign *held, uint32_t rights,
     if (client == NULL ||
         (client->features & ASTRA_VFS_FEATURE_GRANTS) == 0u)
         return ASTRA_STATUS_OK;
-    /* The published grant reads, writes and delegates: a child that may do
-     * all three gets it as it is. */
-    if ((held->rights & ~rights & ASTRA_RIGHT_WRITE) == 0u && delegates)
+    /* The published grant reads, writes and delegates at the provider
+     * (HostFS's base grants are R|W|D): only a child that asks for all
+     * three gets it as it is (review M3 -- the supervisor's own assign
+     * rights say nothing about the provider's). */
+    if (wanted == (ASTRA_VFS_GRANT_READ | ASTRA_VFS_GRANT_WRITE |
+                   ASTRA_VFS_GRANT_DELEGATE) &&
+        held->root[0] == '\0')
         return ASTRA_STATUS_OK;
     for (uint32_t index = 0u; index < narrowed_count; ++index)
         if (narrowed[index].source == held->handle &&
-            narrowed[index].rights == wanted) {
+            narrowed[index].rights == wanted &&
+            strcmp(narrowed[index].root, held->root) == 0) {
             *handle = narrowed[index].handle;
             return ASTRA_STATUS_OK;
         }
@@ -887,11 +904,17 @@ static uint32_t narrowed_grant(const AstraAssign *held, uint32_t rights,
     if (status != ASTRA_VFS_OK) {
         *handle = 0u;
         return status == ASTRA_VFS_ERR_LIMIT ? ASTRA_STATUS_LIMIT :
-                                               ASTRA_STATUS_ACCESS;
+               status == ASTRA_VFS_ERR_ACCESS ? ASTRA_STATUS_ACCESS :
+               status == ASTRA_VFS_ERR_PEER ? ASTRA_STATUS_PEER_DEAD :
+                                              ASTRA_STATUS_IO;
     }
-    narrowed[narrowed_count++] = (SupervisorNarrowed){
-        held->handle, wanted, *handle
-    };
+    narrowed[narrowed_count].source = held->handle;
+    narrowed[narrowed_count].rights = wanted;
+    narrowed[narrowed_count].handle = *handle;
+    (void)astra_string_copy(narrowed[narrowed_count].root,
+                            sizeof(narrowed[narrowed_count].root),
+                            held->root);
+    ++narrowed_count;
     return ASTRA_STATUS_OK;
 }
 
@@ -978,6 +1001,12 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
 
             if (held == NULL) {
                 uint32_t published = named_service(wanted->name);
+
+                /* A provider-enforced volume is granted as a namespace,
+                 * narrowed (review M2); a bare name would hand out the
+                 * delegable base grant. */
+                if (published != 0u && provider_enforced(published))
+                    return ASTRA_STATUS_ACCESS;
 
                 /* An application gets its own GUI session; a service keeps
                    the shared port. */

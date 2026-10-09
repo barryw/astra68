@@ -1624,6 +1624,25 @@ astra_vfs_service_session_bound(const AstraVfsService *service,
     return bound;
 }
 
+uint32_t
+astra_vfs_service_session_grant(const AstraVfsService *service,
+                                uint32_t session)
+{
+    AstraVfsService *mutable = (AstraVfsService *)(uintptr_t)service;
+    uint32_t grant = 0u;
+
+    if (service == NULL || session == ASTRA_VFS_SESSION_INVALID ||
+        !state_acquire(mutable))
+        return 0u;
+    for (uint32_t index = 0u; index < service->session_capacity; ++index)
+        if (service->sessions[index].id == session) {
+            grant = service->sessions[index].grant;
+            break;
+        }
+    state_release(mutable);
+    return grant;
+}
+
 void
 astra_vfs_service_release_grant(AstraVfsService *service, uint32_t grant)
 {
