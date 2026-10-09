@@ -31,6 +31,10 @@ ROM=${ROM:-$ASTRA_ROOT/rom/astra_boot.bin}
 BASE_STORAGE=${ASTRA_BASE_STORAGE:-$ASTRA_ROOT/storage-terminal.img}
 LIBDIR=${LIBDIR:-$ASTRA_ROOT/qemu/lib}
 TERMINAL_DISPLAY=${ASTRA_TERMINAL_DISPLAY:-$ASTRA_ROOT/bin/astra-terminal-display}
+# The DE25 release ships the boot splash; without one the helper shows the
+# text page, as on Arty.
+DISPLAY_SPLASH=${ASTRA_DISPLAY_SPLASH:-$ASTRA_ROOT/share/astra_boot_splash.rgb565}
+[ -r "$DISPLAY_SPLASH" ] || DISPLAY_SPLASH=
 INPUT_HOTPLUG=${ASTRA_INPUT_HOTPLUG:-$ASTRA_ROOT/bin/astra-input-hotplug.py}
 STATE_ROOT=${ASTRA_STATE_ROOT:-$ASTRA_STORE/state/$RELEASE_ID}
 RUN_ROOT=${ASTRA_RUN_ROOT:-/run/astra}
@@ -206,7 +210,7 @@ if [ ! -c "$DISPLAY_PAYLOAD" ]; then
         count=1 2>/dev/null
 fi
 start_helper "$DISPLAY_CPU" "$TERMINAL_DISPLAY" "$TEXT_PLANE" \
-    "$DISPLAY_MAILBOX" "$DISPLAY_PAYLOAD"
+    "$DISPLAY_MAILBOX" "$DISPLAY_PAYLOAD" ${DISPLAY_SPLASH:+"$DISPLAY_SPLASH"}
 display_pid=$started_pid
 input_pid=
 qemu_pid=
@@ -270,7 +274,7 @@ while process_alive "$qemu_pid"; do
         helper_status=$?
         echo "Astra display helper exited with status $helper_status; restarting" >&2
         start_helper "$DISPLAY_CPU" "$TERMINAL_DISPLAY" "$TEXT_PLANE" \
-            "$DISPLAY_MAILBOX" "$DISPLAY_PAYLOAD"
+            "$DISPLAY_MAILBOX" "$DISPLAY_PAYLOAD" ${DISPLAY_SPLASH:+"$DISPLAY_SPLASH"}
         display_pid=$started_pid
     fi
     if ! process_alive "$input_pid"; then

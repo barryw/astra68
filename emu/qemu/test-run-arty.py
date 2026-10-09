@@ -28,7 +28,7 @@ def writable(root):
 
 
 def fixture(directory, delay, output="", status=0, mailbox_bytes=8193,
-            payload_bytes=12345):
+            payload_bytes=12345, splash=False):
     container = pathlib.Path(directory)
     root = container / "release"
     observed = container / "observed"
@@ -83,6 +83,9 @@ while True: time.sleep(0.05)
     (root / "soundfonts").mkdir()
     (root / "soundfonts/Shipped.sf2").write_bytes(b"sfbk")
     (root / "soundfonts/default").write_text("Shipped.sf2\n")
+    if splash:
+        (root / "share").mkdir()
+        (root / "share/astra_boot_splash.rgb565").write_bytes(b"splash")
     records = []
     for path in sorted(item for item in root.rglob("*") if item.is_file()):
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -309,6 +312,19 @@ def main():
         assert "AXIOM KERNEL PANIC" in report
         assert "Fault:  0x40A00024" in report
         assert "SYSTEM HALTED" in report
+        writable(root)
+    # A DE25 release ships the boot splash: the helper gets it as a fourth
+    # argument. The first scenario proves a release without one gets three.
+    with tempfile.TemporaryDirectory() as directory:
+        root, observed = fixture(directory, 0.3, splash=True)
+        result = subprocess.run([str(RUN_ARTY)],
+                                env=environment(root, observed),
+                                text=True, capture_output=True, check=False)
+        assert result.returncode == 1, result.stderr
+        arguments = (observed / "display.args").read_text().splitlines()
+        assert len(arguments) == 4, arguments
+        assert arguments[3] == os.path.realpath(
+            root / "share/astra_boot_splash.rgb565"), arguments
         writable(root)
     print("Astra Arty launcher tests passed")
 
