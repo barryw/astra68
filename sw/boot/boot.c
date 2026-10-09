@@ -9,6 +9,7 @@
 #include "lz4_legacy.h"
 #include <astra/crc32.h>
 #include <astra/boot.h>
+#include <astra/boot_progress.h>
 #include <astra/front_panel.h>
 
 #define ROM_BANNER "ASTRA 68 SYSTEM ROM v" ASTRA_ROM_VERSION
@@ -112,12 +113,38 @@ static void screen_puts(const char *s)
     while (*s) screen_putc(*s++);
 }
 
+/*
+ * The boot progress record (astra/boot_progress.h). The ROM makes it and
+ * counts POST; at handoff the kernel takes it over and the ROM never writes
+ * again. One aligned 32-bit store per update, the value before the header,
+ * so a reader that sees the header never sees a previous boot's value.
+ */
+static uint32_t rom_progress;
+
+static void rom_progress_publish(uint32_t value)
+{
+    rom_progress = value;
+    if (screen_enabled)
+        *(volatile uint32_t *)(VEGA_POST_TEXT_BASE +
+                               ASTRA_BOOT_PROGRESS_VALUE_OFFSET) = value;
+}
+
+static void rom_progress_step(void)
+{
+    rom_progress_publish(astra_boot_progress_advance(rom_progress));
+}
+
 static void screen_init(void)
 {
     screen_enabled = (VESTA->SYS_STATUS & SYS_VIDEO_READY) != 0u &&
                      VEGA->ID == VEGA_ID_MAGIC &&
                      (VEGA->CAPS & VEGA_CAP_POST_TEXT) != 0u;
     screen_clear();
+    rom_progress_publish(0u);
+    if (screen_enabled)
+        *(volatile uint32_t *)(VEGA_POST_TEXT_BASE +
+                               ASTRA_BOOT_PROGRESS_HEADER_OFFSET) =
+            ASTRA_BOOT_PROGRESS_HEADER;
 }
 
 static void serial_putc(char c)
@@ -933,6 +960,7 @@ static int run_post(void)
     uart_puts("  SDRAM init ........ ");
     if (!wait_for_sdram()) return 0;
     uart_puts("OK\n");
+    rom_progress_step();
 
     if (screen_enabled && full_range_bist_complete()) {
         if (!start_graphics_splash())
@@ -947,6 +975,7 @@ static int run_post(void)
     uart_puts("  Front panel ....... ");
     if (!test_front_panel()) return 0;
     uart_puts("OK\n");
+    rom_progress_step();
 
     if (ram_size < MIB || (ram_size & 3u) != 0u) {
         return post_failure_text("invalid hardware RAM map");
@@ -958,30 +987,37 @@ static int run_post(void)
     uart_puts("  Data/byte lanes .... ");
     if (!test_data_bus(base) || !test_access_widths(ram_base)) return 0;
     uart_puts("OK\n");
+    rom_progress_step();
 
     uart_puts("  Address lines ...... ");
     if (!test_address_bus(base, words)) return 0;
     uart_puts("OK\n");
+    rom_progress_step();
 
     uart_puts("  Cache coherence .... ");
     if (!test_cache_coherence(ram_base)) return 0;
     uart_puts("OK\n");
+    rom_progress_step();
 
     screen_puts("  CPU BRAM access .... ");
     if (!benchmark_local_access_widths()) return 0;
     screen_puts("OK\n");
+    rom_progress_step();
 
     screen_puts("  CPU SDRAM access ... ");
     if (!benchmark_access_widths(ram_base)) return 0;
     screen_puts("OK\n");
+    rom_progress_step();
 
     screen_puts("  Astraea DMA ........ ");
     if (!benchmark_astraea(ram_base)) return 0;
     screen_puts("OK\n");
+    rom_progress_step();
 
     screen_puts("  Full-range BIST .... ");
     if (!test_full_range(ram_base, ram_size)) return 0;
     screen_puts("OK\n");
+    rom_progress_step();
     if (splash_deferred && !start_graphics_splash())
         return 0;
     if (astra_boot_splash_active() &&
@@ -1256,6 +1292,7 @@ static int prepare_kernel_handoff(void)
 
 static void idle_forever(const char *screen_message, const char *serial_message)
 {
+    rom_progress_publish(astra_boot_progress_fail(rom_progress));
     (void)astra_boot_splash_stop();
     uart_puts(screen_message);
     for (;;) {
@@ -1292,6 +1329,7 @@ void kmain(void)
     if (!prepare_kernel_handoff())
         idle_forever("HALTED: KERNEL LOAD FAILURE\n",
                      "\n" ROM_BANNER " - KERNEL LOAD FAILURE\n");
+    rom_progress_step();
     if (astra_boot_splash_active() &&
         !astra_boot_splash_mark_ok(ASTRA_SPLASH_STATUS_KERNEL))
         idle_forever("HALTED: SPLASH FAILURE\n",

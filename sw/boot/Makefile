@@ -71,6 +71,7 @@ ID_SRCS = Makefile ../../mk/m68k-cross.mk gen_build_info.py pack_payload.py \
           kernel_blob.S user_blob.S splash_blob.S splash.c splash.h lz4_legacy.c \
           lz4_legacy.h $(SPLASH_PACKER) $(SPLASH_SOURCE) assets/README.md \
           ../common/boot_contract.c ../include/astra/boot.h \
+          ../include/astra/boot_progress.h \
           ../include/astra/syscall.h ../include/astra/crc32.h \
           ../common/crc32.c ../include/vesta.h ../include/vega.h \
           ../include/astraea.h ../include/ohci.h \
@@ -117,7 +118,7 @@ $(ROM_PAYLOADS) $(KERNEL_PAYLOAD) $(USER_PAYLOAD) &: pack_payload.py \
 
 $(BOOT_ELF): crt0.S kernel_blob.S user_blob.S splash_blob.S splash.c \
                 splash.h lz4_legacy.c lz4_legacy.h \
-                $(SPLASH_PAYLOAD) boot.c \
+                $(SPLASH_PAYLOAD) boot.c ../include/astra/boot_progress.h \
                 ../common/boot_contract.c front_panel.c \
                 front_panel_memory_map.h front_panel_mmio.h \
                 ../include/ohci.h \
