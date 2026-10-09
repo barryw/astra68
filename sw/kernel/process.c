@@ -472,7 +472,7 @@ static uint32_t host_channel_open(
     KernelProcess *process, const KernelThread *thread,
     AstraHostChannelOpen *channel,
     uint32_t device_generation, const KernelPlatformHostState *state,
-    uint32_t user_address, KernelHostScope *scope);
+    uint32_t user_address, KernelHostScope *scope, bool provider);
 static uint32_t host_scope_import_rights(KernelObjectType type, void *object,
                                          uint32_t rights);
 static void host_scopes_revoke_creator(uint32_t owner);
@@ -2657,7 +2657,7 @@ static uint32_t host_channel_open(
     KernelProcess *process, const KernelThread *thread,
     AstraHostChannelOpen *channel,
     uint32_t device_generation, const KernelPlatformHostState *state,
-    uint32_t user_address, KernelHostScope *scope)
+    uint32_t user_address, KernelHostScope *scope, bool provider)
 {
     KernelProcessDmaBuffer *buffer = NULL;
     KernelHandleStatus handle_status;
@@ -2741,7 +2741,8 @@ static uint32_t host_channel_open(
             process->owner, state->host_generation, thread->generation,
             slot, token.physical_address, channel->byte_size,
             channel->command_capacity, scope != NULL ? scope->word : 0u,
-            scope != NULL ? host_scope_wire_flags(scope) : 0u,
+            scope != NULL ? host_scope_wire_flags(scope) :
+            provider ? ASTRA_HOST_CHANNEL_PROVIDER : 0u,
             scope != NULL ? scope->creator_owner : 0u) != ASTRA_SYSCALL_OK) {
         (void)kernel_dma_abort(&token);
         return ASTRA_SYSCALL_IO_ERROR;
@@ -3266,7 +3267,7 @@ static uint32_t network_syscall(KernelProcess *process, KernelThread *thread,
 
 static uint32_t host_syscall(KernelProcess *process, KernelThread *thread,
                              uint32_t syscall, uint32_t device_generation,
-                             KernelHostScope *scope)
+                             KernelHostScope *scope, bool provider)
 {
     uint32_t user_address = thread->context.data[2];
     KernelPlatformHostState state;
@@ -3307,7 +3308,7 @@ static uint32_t host_syscall(KernelProcess *process, KernelThread *thread,
         if (copy_status != KERNEL_USER_COPY_OK)
             return ASTRA_SYSCALL_BAD_ADDRESS;
         return host_channel_open(process, thread, &channel, device_generation,
-                                 &state, user_address, scope);
+                                 &state, user_address, scope, provider);
     }
     {
         AstraHostTransportRequest request;
@@ -13066,8 +13067,24 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_PEER_DEAD;
             break;
         }
-        result = host_syscall(current, thread, syscall, snapshot.generation,
-                              scope);
+        /* The filesystem provider is whoever holds the device with
+         * HOST_SCOPE -- the right syscall 109 checks -- and the kernel says
+         * so on the channel; the provider believes nothing else when the
+         * filesystem is claimed (review I1). */
+        {
+            KernelDeviceLease *scoped_lease = NULL;
+            bool provider =
+                syscall == ASTRA_SYSCALL_HOST_CHANNEL_OPEN && scope == NULL &&
+                kernel_handle_lookup(current->handles,
+                                     thread->context.data[1],
+                                     KERNEL_OBJECT_DEVICE,
+                                     KERNEL_DEVICE_RIGHT_HOST_SCOPE,
+                                     (void **)&scoped_lease) ==
+                    KERNEL_HANDLE_OK;
+
+            result = host_syscall(current, thread, syscall,
+                                  snapshot.generation, scope, provider);
+        }
         break;
     }
     case ASTRA_SYSCALL_HOST_SCOPE_CREATE: {

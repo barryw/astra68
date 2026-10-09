@@ -89,10 +89,17 @@ What actually runs today, verified against source:
   and runs two fixed host-backed volumes, `ASTRA_HOST_FS_VOLUME_WORK` and
   `ASTRA_HOST_FS_VOLUME_SOUND` (`sw/include/astra/host.h`). This is not a
   dynamic volume inventory: the volume a session reaches is fixed at
-  compile/link time, not discovered or mounted. At startup HostFS mints one
-  filesystem scope per volume (`ASTRA_SYSCALL_HOST_SCOPE_CREATE`) and serves
-  each volume's port with a single pump; the port is control only (HELLO,
-  BYE).
+  compile/link time, not discovered or mounted. At startup HostFS claims the
+  host filesystem (`ASTRA_HOST_FS_CLAIM`, host command record 3), opens one
+  root session per volume, mints one filesystem scope per session
+  (`ASTRA_SYSCALL_HOST_SCOPE_CREATE`) and serves each volume's port with a
+  single pump; the port is control only (HELLO, BYE). QEMU takes the claim
+  only on a channel the kernel opened for a device handle carrying
+  `ASTRA_RIGHT_HOST_SCOPE` (`ASTRA_HOST_CHANNEL_PROVIDER`), so no other
+  `HOST_DEVICE` holder can claim, even while HostFS is restarting. Session
+  ids are never reset; they are unique until 2^32 sessions have been opened
+  in one QEMU process, after which the id of a closed session could be
+  issued again to the claimant (a known limit, not a guarantee).
 - **The scoped direct lane.** Since storage protocol 28 a HELLO on a host
   volume's port attaches a duplicate of that volume's scope, never the
   device, without ADMINISTER, and without TRANSFER on arrival (the kernel's
@@ -101,9 +108,9 @@ What actually runs today, verified against source:
   transport, one lane per thread): the kernel binds the channel to the
   scopes the thread attaches (up to eight, `ASTRA_SYSCALL_HOST_SCOPE_ATTACH`)
   and writes their words into the provider's channel configuration, and
-  QEMU runs on a bound channel only filesystem commands whose volume names
+  QEMU runs on a bound channel only filesystem commands whose session names
   an attached scope, refuses mutations under a read-only scope, and answers
-  a handle only under the volume it was opened in. Revocation detaches a
+  a handle only in the session it was opened in. Revocation detaches a
   scope from every channel at once; HostFS's death revokes everything it
   minted. HostFS's METRICS port, and the ramfs, storage and proc services,
   still serve every operation through their service core.

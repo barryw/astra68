@@ -74,6 +74,10 @@ host command record 3 (`ASTRA_HOST_COMMAND_VERSION` 3):
 - **One claimed owner.** `ASTRA_HOST_FS_CLAIM` binds the filesystem service
   to the submitting owner (HostFS); every other owner's filesystem command
   on an unbound channel or `HOST_EXECUTE` answers `ASTRA_STATUS_ACCESS`.
+  The kernel authenticates the claim: a channel opened on a device handle
+  carrying `ASTRA_RIGHT_HOST_SCOPE` is configured with
+  `ASTRA_HOST_CHANNEL_PROVIDER` (channel configuration version 3), and the
+  provider takes CLAIM on no other channel, nor through `HOST_EXECUTE`.
   The claim, with every session and handle of the owner, goes when the
   owner releases it or dies.
 - **Rooted sessions.** Every command names `session`, a root directory

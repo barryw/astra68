@@ -9190,6 +9190,75 @@ static void test_host_scope_failed_detach(void)
 }
 
 /*
+ * The kernel names the filesystem provider (review I1): a channel opened on
+ * a device handle carrying HOST_SCOPE is stamped PROVIDER, the only channel
+ * the provider takes a CLAIM from; the same device without the right -- the
+ * entropy, media and remote-desktop grant -- opens an ordinary channel.
+ */
+static void test_host_channel_provider(void)
+{
+    const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
+    const uint32_t user_open = KERNEL_PROCESS_STACK_TOP - 128u;
+    KernelProcessBootstrapCapability capability = {0};
+    KernelCpuContext *next = NULL;
+    AstraStartupCapability table[3];
+    AstraDmaBufferInfo buffer;
+    AstraHostChannelOpen channel;
+    uint32_t process_id = 0u;
+    uint32_t device = 0u;
+    uint32_t no_scope_right;
+
+    loader_build_image();
+    initialize_test();
+    host_state.capabilities |= ASTRA_HOST_CAP_FS_SCOPE;
+    capability.name = ASTRA_CAPABILITY_HOST_DEVICE;
+    capability.kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+    capability.device_id = ASTRA_DEVICE_ID_HOST0;
+    capability.rights = KERNEL_DEVICE_RIGHTS;
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            &capability, 1u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(kernel_user_copy_from_asm(
+               table, KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+               sizeof(table)) == KERNEL_USER_COPY_OK);
+    for (uint32_t index = 0u; index < 3u; ++index)
+        if (astra_capability_name_equal(table[index].name,
+                                        ASTRA_CAPABILITY_HOST_DEVICE))
+            device = table[index].handle;
+    assert(device != 0u);
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, device,
+                      KERNEL_DEVICE_RIGHTS & ~ASTRA_RIGHT_HOST_SCOPE, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    no_scope_right = next->data[1];
+    assert(scope_call(ASTRA_SYSCALL_DMA_CREATE, KERNEL_PAGE_SIZE, user_info,
+                      0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
+           KERNEL_USER_COPY_OK);
+    memset(&channel, 0, sizeof(channel));
+    channel.size = sizeof(channel);
+    channel.buffer = buffer.handle;
+    channel.byte_size = ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                        ASTRA_HOST_COMMAND_SIZE;
+    channel.command_capacity = 1u;
+    assert(kernel_user_copy_to_asm(user_open, &channel, sizeof(channel)) ==
+           KERNEL_USER_COPY_OK);
+    host_channel_scope_flags = 0xFFFFFFFFu;
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_OPEN, device, user_open, 0u,
+                      0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    assert(host_channel_scope == 0u && host_channel_scope_owner == 0u &&
+           host_channel_scope_flags == ASTRA_HOST_CHANNEL_PROVIDER);
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, device, 0u, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_to_asm(user_open, &channel, sizeof(channel)) ==
+           KERNEL_USER_COPY_OK);
+    host_channel_scope_flags = 0xFFFFFFFFu;
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_OPEN, no_scope_right,
+                      user_open, 0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    assert(host_channel_scope == 0u && host_channel_scope_flags == 0u);
+}
+
+/*
  * ATTACH makes the checks OPEN makes (review M5): a host that is not ready,
  * or a channel opened in an earlier host generation, answers PEER_DEAD and
  * never reaches the provider.
@@ -15378,6 +15447,7 @@ int main(void)
     test_host_scope();
     test_host_scope_failed_detach();
     test_host_scope_attach_checks();
+    test_host_channel_provider();
     test_bootstrap_capabilities();
     test_capability_roots_are_carried();
     test_arguments_and_environment_are_published();

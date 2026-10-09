@@ -40,6 +40,9 @@ HACC_MAX_INFLIGHT = VESTA + 0x8DC
 BUFFER = 0x02010000
 # Bound channels live apart from BUFFER, which every execute() rewrites.
 SCOPED_BUFFER = 0x02050000
+# A claim's channel, and the release-race channel.
+CLAIM_BUFFER = 0x02060000
+RACE_BUFFER = 0x02070000
 SUBMISSION = 0x0200F000
 CHANNEL_CONFIG = 0x0200F040
 CHANNEL_APERTURE = 0xFFD00000
@@ -105,17 +108,20 @@ STATUS_INVALID = 8
 STATUS_BAD_HANDLE = 9
 STATUS_ACCESS = 6
 STATUS_IS_DIR = 5
+STATUS_NOT_DIR = 4
 STATUS_LOOP = 18
 STATUS_READ_ONLY = 19
 KIND_SYMLINK = 3
 SYSCALL_INVALID_ARGUMENT = 2
-CONFIG_VERSION = 2
+CONFIG_VERSION = 3
 CONFIG_OPEN = 1
 CONFIG_CLOSE = 2
 CONFIG_ATTACH = 3
 CONFIG_DETACH = 4
 SCOPE_BOUND = 1
 SCOPE_READ_ONLY = 2
+# Kernel-written on an unbound OPEN: the opener holds HOST_SCOPE.
+CHANNEL_PROVIDER = 1 << 3
 CAP_FS_SCOPE = 1 << 10
 CAP_FS_SESSIONS = 1 << 11
 NODE_INODE_BIT = 1 << 11
@@ -296,10 +302,38 @@ def output(qtest, answer, length):
     return qtest.read(BUFFER + answer.data_at, length)
 
 
-def claim(qtest, generation, owner=PROVIDER, release=False):
-    return status(execute(qtest, [Command(
-        generation, FS_CLAIM, flags=CLAIM_RELEASE if release else 0)],
-        owner=owner)[0])
+claim_generations = [100]
+
+
+def claim(qtest, generation, owner=PROVIDER, release=False, provider=True):
+    """CLAIM (or RELEASE) on an unbound channel of `owner`: one the kernel
+    stamped PROVIDER, as it does for a device handle carrying HOST_SCOPE,
+    or with provider=False an ordinary one (every other HOST_DEVICE
+    holder's)."""
+    claim_generations[0] += 1
+    channel_generation = claim_generations[0]
+    slot = 30
+    assert configure_channel(
+        qtest, generation, CONFIG_OPEN, slot=slot, owner=owner,
+        channel_generation=channel_generation, buffer=CLAIM_BUFFER,
+        scope_flags=CHANNEL_PROVIDER if provider else 0) == 0
+    channel_write(qtest, CLAIM_BUFFER, 1, [Command(
+        generation, FS_CLAIM, flags=CLAIM_RELEASE if release else 0)])
+    qtest.write32(CLAIM_BUFFER + 36, 1)
+    qtest.write32(CHANNEL_APERTURE + slot * 4096 + 0x20, 1)
+    qtest.wait32(CLAIM_BUFFER + 48, 1)
+    answer = status(qtest.read(CLAIM_BUFFER + CHANNEL_HEADER_SIZE,
+                               COMMAND_SIZE))
+    assert configure_channel(qtest, generation, CONFIG_CLOSE, slot=slot,
+                             owner=owner,
+                             channel_generation=channel_generation) == 0
+    return answer
+
+
+def executed_claim(qtest, generation, owner=PROVIDER):
+    """CLAIM through HOST_EXECUTE, which the kernel never stamps."""
+    return status(execute(qtest, [Command(generation, FS_CLAIM)],
+                          owner=owner)[0])
 
 
 def open_session(qtest, generation, volume=0, root="/", read_only=False,
@@ -327,15 +361,16 @@ def provider_holds(path):
 
 def configure_channel(qtest, generation, operation, slot=3, owner=PROVIDER,
                       channel_generation=7, buffer=BUFFER, byte_size=4096,
-                      capacity=1):
+                      capacity=1, scope_flags=0):
     config = bytearray(64)
     physical = buffer if operation == 1 else 0
     byte_size = byte_size if operation == 1 else 0
     capacity = capacity if operation == 1 else 0
-    struct.pack_into(">IHHIIIIIII", config, 0, 64, CONFIG_VERSION, operation,
-                     slot,
+    struct.pack_into(">IHHIIIIIIIII", config, 0, 64, CONFIG_VERSION,
+                     operation, slot,
                      owner, generation, channel_generation, physical,
-                     byte_size, capacity)
+                     byte_size, capacity, 0,
+                     scope_flags if operation == 1 else 0)
     qtest.write(CHANNEL_CONFIG, config)
     qtest.write32(HACC_CHANNEL_CONFIG, CHANNEL_CONFIG)
     return qtest.read32(HACC_CHANNEL_RESULT)
@@ -505,6 +540,11 @@ def scopes(qtest, root):
     orphan = step(Command(
         generation, FS_STAT, "/", session=work))
     assert status(orphan) == STATUS_ACCESS
+    # The window while HostFS restarts: the claim is free, and another
+    # HOST_DEVICE holder still cannot take it (review I1).
+    assert claim(qtest, generation, owner=0x2002, provider=False) == \
+        STATUS_ACCESS
+    assert executed_claim(qtest, generation, owner=0x2002) == STATUS_ACCESS
     assert claim(qtest, generation) == STATUS_OK
     renewed = open_session(qtest, generation)
     assert renewed not in (work, sound, sub)
@@ -562,6 +602,88 @@ def scope_revocation(qtest, root):
     assert status(later) == STATUS_ACCESS
     assert configure_scope(qtest, generation, CONFIG_CLOSE, 9, 31) == 0
     print("PASS scope-revocation")
+
+
+def orphan_open(qtest, root):
+    """An OPEN in flight when its session closes leaves no handle behind
+    (review M1): the FIFO holds the open in Linux while the session closes,
+    and the handle it would have made is closed instead of inserted."""
+    generation = qtest.read32(HACC_GENERATION)
+    assert claim(qtest, generation) == STATUS_OK
+    work = open_session(qtest, generation)
+    sub = open_session(qtest, generation, root="/", parent=work)
+    fifo = os.path.join(root, "work", "orphan")
+    os.mkfifo(fifo)
+    assert configure_scope(qtest, generation, CONFIG_OPEN, 10, 41,
+                           sub, SCOPE_BOUND, PROVIDER) == 0
+    pending = scoped_post(qtest, 10, 1, Command(
+        generation, FS_OPEN, "/orphan", flags=OPEN_READ, session=sub))
+    time.sleep(0.5)
+    assert qtest.read32(SCOPED_BUFFER + 48) == 0, \
+        "the FIFO open did not hold the worker"
+    assert status(execute(qtest, [Command(
+        generation, FS_SESSION_CLOSE, session=sub)])[0]) == STATUS_OK
+    writer = os.open(fifo, os.O_WRONLY)
+    try:
+        answer = scoped_wait(qtest, 1, pending)
+    finally:
+        os.close(writer)
+    assert status(answer) == STATUS_BAD_HANDLE, status(answer)
+    assert get32(answer, 16) == 0
+    assert not provider_holds(fifo)
+    assert configure_scope(qtest, generation, CONFIG_CLOSE, 10, 41) == 0
+    print("PASS orphan-open")
+
+
+def claim_race(qtest):
+    """A RELEASE racing SESSION_OPENs of the same claimant leaves no session
+    behind (review M2): sixty-three opens and one release go to the worker
+    pool at once, and afterwards every session any of them opened is gone."""
+    generation = qtest.read32(HACC_GENERATION)
+    capacity = 64
+    slot = 31
+    assert claim(qtest, generation) == STATUS_OK
+    assert configure_channel(
+        qtest, generation, CONFIG_OPEN, slot=slot, channel_generation=51,
+        buffer=RACE_BUFFER,
+        byte_size=CHANNEL_HEADER_SIZE + capacity * COMMAND_SIZE +
+        OPERAND_ROOM,
+        capacity=capacity, scope_flags=CHANNEL_PROVIDER) == 0
+    opened = refused = 0
+    for round_index in range(40):
+        assert claim(qtest, generation) == STATUS_OK
+        commands = [Command(generation, FS_SESSION_OPEN, "/", value=0)
+                    for _ in range(capacity)]
+        commands[capacity // 2] = Command(generation, FS_CLAIM,
+                                          flags=CLAIM_RELEASE)
+        channel_write(qtest, RACE_BUFFER, capacity, commands,
+                      first=round_index * capacity)
+        producer = (round_index + 1) * capacity
+        qtest.write32(RACE_BUFFER + 36, producer)
+        qtest.write32(CHANNEL_APERTURE + slot * 4096 + 0x20, producer)
+        qtest.wait32(RACE_BUFFER + 48, producer)
+        sessions = []
+        for index in range(capacity):
+            answer = qtest.read(RACE_BUFFER + CHANNEL_HEADER_SIZE +
+                                index * COMMAND_SIZE, COMMAND_SIZE)
+            if index == capacity // 2:
+                assert status(answer) == STATUS_OK
+            elif status(answer) == STATUS_OK:
+                sessions.append(get32(answer, 56))
+            else:
+                assert status(answer) == STATUS_ACCESS, status(answer)
+                refused += 1
+        opened += len(sessions)
+        assert claim(qtest, generation) == STATUS_OK
+        for session in sessions:
+            survivor = execute(qtest, [Command(generation, FS_STAT, "/",
+                                               session=session)])[0]
+            assert status(survivor) == STATUS_BAD_HANDLE, \
+                ("session %d outlived the release in round %d" %
+                 (session, round_index))
+    assert configure_channel(qtest, generation, CONFIG_CLOSE, slot=slot,
+                             channel_generation=51) == 0
+    print("PASS claim-race opened=%d refused=%d" % (opened, refused))
 
 
 def booted(command, environment, qtest_path, body):
@@ -623,6 +745,14 @@ def claims_and_sessions(qtest, root):
     stray = execute(qtest, [Command(generation, FS_STAT, "/", session=1)],
                     owner=0x2002)[0]
     assert status(stray) == STATUS_ACCESS
+    # Nobody holds the claim (boot, a reset, HostFS restarting), and still
+    # only a channel the kernel stamped PROVIDER takes one (review I1):
+    # not HOST_EXECUTE, not an ordinary channel, whoever the owner.
+    assert executed_claim(qtest, generation, owner=0x2002) == STATUS_ACCESS
+    assert executed_claim(qtest, generation) == STATUS_ACCESS
+    assert claim(qtest, generation, owner=0x2002, provider=False) == \
+        STATUS_ACCESS
+    assert claim(qtest, generation, provider=False) == STATUS_ACCESS
     assert claim(qtest, generation) == STATUS_OK
     assert claim(qtest, generation) == STATUS_OK
     assert claim(qtest, generation, owner=0x2002) == STATUS_ACCESS
@@ -693,6 +823,62 @@ def claims_and_sessions(qtest, root):
         generation, FS_READ, handle=get32(opened.raw, 16), capacity=2,
         session=work)])[0]
     assert status(crossed) == STATUS_BAD_HANDLE
+    # ... and so does a directory handle, as either base of a RENAME or a
+    # LINK: another session's directory is never a destination or a source
+    # (review M3).
+    sub_directory = execute(qtest, [Command(
+        generation, FS_OPEN, "/", flags=OPEN_READ | OPEN_DIRECTORY,
+        session=sub)])[0]
+    assert status(sub_directory) == STATUS_OK
+    other = get32(sub_directory.raw, 16)
+    with open(os.path.join(root, "loose"), "wb") as handle:
+        handle.write(b"loose")
+    for operation in (FS_RENAME, FS_LINK):
+        into = execute(qtest, [Command(
+            generation, operation, "/loose", "moved", value=other,
+            session=work)])[0]
+        assert status(into) == STATUS_BAD_HANDLE, (operation, status(into))
+        out_of = execute(qtest, [Command(
+            generation, operation, "inside", "/taken", handle=other,
+            session=work)])[0]
+        assert status(out_of) == STATUS_BAD_HANDLE, \
+            (operation, status(out_of))
+    assert not os.path.exists(os.path.join(root, "sub", "moved"))
+    assert not os.path.exists(os.path.join(root, "taken"))
+    assert os.path.exists(os.path.join(root, "loose"))
+
+    # A derived session cannot be left: not by "..", not through a host
+    # symlink (relative or absolute), not by an absolute path given with a
+    # directory handle (review M3).
+    os.symlink("..", os.path.join(root, "sub", "up"))
+    os.symlink("/etc", os.path.join(root, "sub", "abs"))
+    for path, expected in (("/up/loose", STATUS_LOOP),
+                           ("/up/sub/inside", STATUS_LOOP),
+                           ("/abs/passwd", STATUS_LOOP),
+                           ("/../loose", STATUS_INVALID),
+                           ("/inside/../../loose", STATUS_INVALID)):
+        escaped = execute(qtest, [Command(
+            generation, FS_OPEN, path, flags=OPEN_READ, session=sub)])[0]
+        assert status(escaped) == expected, (path, status(escaped))
+    for path in ("../loose", "/loose", "up/loose"):
+        escaped = execute(qtest, [Command(
+            generation, FS_OPEN, path, handle=other, flags=OPEN_READ,
+            session=sub)])[0]
+        assert status(escaped) in (STATUS_INVALID, STATUS_LOOP), \
+            (path, status(escaped))
+    listed_up = execute(qtest, [Command(
+        generation, FS_READDIR, "/up", capacity=NAME_CAPACITY,
+        session=sub)])[0]
+    # A final symlink opened as a directory: Linux answers ENOTDIR or ELOOP;
+    # either way nothing is listed.
+    assert status(listed_up) in (STATUS_LOOP, STATUS_NOT_DIR), \
+        status(listed_up)
+    stolen = execute(qtest, [Command(
+        generation, FS_RENAME, "/inside", "/up/stolen", session=sub)])[0]
+    assert status(stolen) == STATUS_LOOP, status(stolen)
+    assert not os.path.exists(os.path.join(root, "stolen"))
+    assert status(execute(qtest, [Command(
+        generation, FS_CLOSE, handle=other, session=sub)])[0]) == STATUS_OK
 
     # Operands: a 4095-byte path to a real file works, one byte more is
     # refused before Linux sees it, and so is an embedded NUL. Eighteen
@@ -735,6 +921,11 @@ def claims_and_sessions(qtest, root):
     assert claim(qtest, generation, release=True) == STATUS_OK
     assert status(execute(qtest, [Command(
         generation, FS_STAT, "/", session=work)])[0]) == STATUS_ACCESS
+    # Released, the claim is free -- and still only an owner the kernel
+    # authenticated takes it (review I1).
+    assert claim(qtest, generation, owner=0x2002, provider=False) == \
+        STATUS_ACCESS
+    assert executed_claim(qtest, generation, owner=0x2002) == STATUS_ACCESS
     assert claim(qtest, generation, owner=0x2002) == STATUS_OK
     assert status(execute(qtest, [Command(
         generation, FS_STAT, "/", session=work)], owner=0x2002)[0]) == \
@@ -1264,6 +1455,7 @@ def main():
             claims_and_sessions(qtest, os.path.join(root, "work"))
             volumes(qtest, root)
             scopes(qtest, root)
+            claim_race(qtest)
 
         booted(command, environment, qtest_path, first)
         # A second machine with one thread-pool worker, so a held command
@@ -1275,7 +1467,8 @@ def main():
         booted(command + ["-object",
                           "main-loop,id=main-loop,thread-pool-max=1"],
                environment, qtest_path,
-               lambda qtest: scope_revocation(qtest, root2))
+               lambda qtest: (scope_revocation(qtest, root2),
+                              orphan_open(qtest, root2)))
         print("ASTRA QEMU HOSTFS PASS")
 
 if __name__ == "__main__":

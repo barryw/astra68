@@ -296,7 +296,8 @@ int astra_main(const AstraStartupInfo *startup)
     }
     /* Nor can it drive files: the provider answers filesystem commands
      * only to the claimed owner, HostFS, or through a bound scope (review
-     * M1). A STAT of WORK's root, naming the first session HostFS opens. */
+     * M1). A STAT of WORK's root, naming the first session HostFS opens,
+     * then a CLAIM of its own. */
     {
         AstraHostChannelClient client;
         AstraHostCommand *command;
@@ -317,6 +318,16 @@ int astra_main(const AstraStartupInfo *startup)
         command->path_length = 1u;
         client.data[0] = '/';
         error = astra_host_client_submit(&client);
+        if (error == ASTRA_SYSCALL_OK &&
+            command->status == ASTRA_STATUS_ACCESS) {
+            /* Nor claim the filesystem: the kernel names the provider, so
+             * this refusal holds whether or not HostFS holds the claim
+             * (review I1). */
+            command = astra_host_client_prepare(
+                &client, ASTRA_HOST_SERVICE_FILESYSTEM, ASTRA_HOST_FS_CLAIM);
+            command->data_offset = 0u;
+            error = astra_host_client_submit(&client);
+        }
         if (error != ASTRA_SYSCALL_OK ||
             command->status != ASTRA_STATUS_ACCESS) {
             (void)astra_host_client_close(&client);

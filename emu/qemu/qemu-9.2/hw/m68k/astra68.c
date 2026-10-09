@@ -587,6 +587,9 @@ typedef struct AstraHostChannel {
     /* Opened on a scope: filesystem commands only, each through one of
      * `scopes` (vCPU writes under files_lock; workers read under it). */
     bool bound;
+    /* Opened unbound by the filesystem provider: the kernel saw HOST_SCOPE
+     * on its device handle. The only channel CLAIM is honoured on. */
+    bool provider;
     uint32_t scope_count;
     AstraHostChannelScope scopes[ASTRA_HOST_CHANNEL_SCOPE_MAX];
 } AstraHostChannel;
@@ -3113,9 +3116,11 @@ static void astra_host_release_owner(Astra68State *s, uint32_t owner)
     /* The claimed owner gone: its sessions, every handle opened in them
      * and the claim go with it, so a restarted service starts clean and
      * no handle of the old sessions answers again (review M2). */
-    astra_host_release_sessions(s, owner);
+    qemu_mutex_lock(&s->host.files_lock);
     if (qatomic_read(&s->host.fs_owner) == owner)
         qatomic_set(&s->host.fs_owner, 0u);
+    qemu_mutex_unlock(&s->host.files_lock);
+    astra_host_release_sessions(s, owner);
     if (s->host.owner == owner) {
         s->host.owner = 0;
     }
@@ -3463,7 +3468,11 @@ static int astra_host_publish_node(uint8_t *command, int directory,
     return 0;
 }
 
+/* Inserts an open file into `session`, or answers 0 and closes it when
+ * the session closed while the open ran: a session's handles go with it,
+ * including one whose open was in flight at the close (review M1). */
 static uint32_t astra_host_insert_file(Astra68State *s, uint32_t owner,
+                                       AstraHostSession *session,
                                        uint32_t session_id, int fd,
                                        DIR *directory, uint16_t flags)
 {
@@ -3479,6 +3488,11 @@ static uint32_t astra_host_insert_file(Astra68State *s, uint32_t owner,
     file->flags = flags;
     qemu_mutex_init(&file->lock);
     qemu_mutex_lock(&s->host.files_lock);
+    if (session->closing) {
+        qemu_mutex_unlock(&s->host.files_lock);
+        astra_host_file_free(file);
+        return 0u;
+    }
     do {
         astra_network_next(&s->host.next_handle);
         handle = s->host.next_handle;
@@ -3545,9 +3559,12 @@ static uint32_t astra_host_fs_operands(Astra68State *s, uint32_t physical,
         if (offset < command_bytes)
             return ASTRA_STATUS_INVALID;
         span = astra_dma_data(s, physical, bytes, offset, first + second);
-        if (span == NULL || memchr(span, 0, first + second) != NULL)
+        if (span == NULL)
             return ASTRA_STATUS_INVALID;
     }
+    /* Copy first, then judge the copy: the guest may store into the span
+     * while this runs, and only the copy is what the provider uses
+     * (review M4). */
     *path = g_malloc(first + 1u);
     *path2 = g_malloc(second + 1u);
     if (first != 0u)
@@ -3556,6 +3573,8 @@ static uint32_t astra_host_fs_operands(Astra68State *s, uint32_t physical,
     if (second != 0u)
         memcpy(*path2, span + first, second);
     (*path2)[second] = '\0';
+    if (memchr(*path, 0, first) != NULL || memchr(*path2, 0, second) != NULL)
+        return ASTRA_STATUS_INVALID;
     return ASTRA_STATUS_OK;
 }
 
@@ -4210,6 +4229,7 @@ static int astra_host_native_open_flags(uint16_t flags, int *native_flags)
 }
 
 static uint32_t astra_host_publish_open(Astra68State *s, uint32_t owner,
+                                        AstraHostSession *session,
                                         uint32_t session_id,
                                         uint8_t *command, int fd,
                                         uint16_t flags)
@@ -4237,8 +4257,13 @@ static uint32_t astra_host_publish_open(Astra68State *s, uint32_t owner,
             return status;
         }
     }
-    handle = astra_host_insert_file(s, owner, session_id, fd, directory,
-                                    flags);
+    handle = astra_host_insert_file(s, owner, session, session_id, fd,
+                                    directory, flags);
+    if (handle == 0u) {
+        /* The node record describes nothing the guest holds. */
+        memset(command + HOST_FIELD(node), 0, sizeof(AstraHostNode));
+        return ASTRA_STATUS_BAD_HANDLE;
+    }
     stl_be_p(command + HOST_FIELD(handle), handle);
     return ASTRA_STATUS_OK;
 }
@@ -4306,25 +4331,40 @@ static bool astra_host_fs_mutates(uint16_t operation, uint16_t flags)
     }
 }
 
-/* One owner speaks for the filesystem: the service that enforces the
- * grants (review M1). A second claim by the holder is idempotent; RELEASE
- * gives it up with every session and handle the holder opened. */
+/*
+ * One owner speaks for the filesystem: the service that enforces the
+ * grants (review M1), and only from a channel the kernel stamped PROVIDER
+ * -- the caller checks that (review I1). A second claim by the holder is
+ * idempotent; RELEASE gives it up with every session and handle the holder
+ * opened. fs_owner changes only under files_lock, where SESSION_OPEN
+ * re-checks it before inserting, so no session outlives the claim it was
+ * opened under (review M2).
+ */
 static uint32_t astra_host_fs_claim(Astra68State *s, uint32_t owner,
                                     uint16_t flags)
 {
+    uint32_t holder;
+
     if (owner == 0u || (flags & ~ASTRA_HOST_FS_CLAIM_RELEASE) != 0u)
         return ASTRA_STATUS_INVALID;
+    qemu_mutex_lock(&s->host.files_lock);
+    holder = qatomic_read(&s->host.fs_owner);
     if ((flags & ASTRA_HOST_FS_CLAIM_RELEASE) != 0u) {
-        if (qatomic_cmpxchg(&s->host.fs_owner, owner, 0u) != owner)
+        if (holder != owner) {
+            qemu_mutex_unlock(&s->host.files_lock);
             return ASTRA_STATUS_ACCESS;
+        }
+        qatomic_set(&s->host.fs_owner, 0u);
+        qemu_mutex_unlock(&s->host.files_lock);
         astra_host_release_files(s, owner);
         astra_host_release_sessions(s, owner);
         return ASTRA_STATUS_OK;
     }
-    if (qatomic_cmpxchg(&s->host.fs_owner, 0u, owner) == 0u ||
-        qatomic_read(&s->host.fs_owner) == owner)
-        return ASTRA_STATUS_OK;
-    return ASTRA_STATUS_ACCESS;
+    if (holder == 0u)
+        qatomic_set(&s->host.fs_owner, owner);
+    qemu_mutex_unlock(&s->host.files_lock);
+    return holder == 0u || holder == owner ? ASTRA_STATUS_OK :
+                                             ASTRA_STATUS_ACCESS;
 }
 
 /*
@@ -4382,6 +4422,18 @@ static uint32_t astra_host_fs_session_open(Astra68State *s, uint32_t owner,
     session->flags = flags;
     session->references = 1u;
     qemu_mutex_lock(&s->host.files_lock);
+    /* The claim may have gone since the command's check (review M2). */
+    if (qatomic_read(&s->host.fs_owner) != owner) {
+        qemu_mutex_unlock(&s->host.files_lock);
+        close(root);
+        g_free(session);
+        return ASTRA_STATUS_ACCESS;
+    }
+    /* next_session is 32 bits and never reset: ids are unique until 2^32
+     * sessions have been opened in this QEMU process, after which an id
+     * whose session closed could be issued again -- to the same claimant,
+     * since only it opens sessions. docs/STORAGE_AND_VFS.md records the
+     * limit. */
     do {
         astra_network_next(&s->host.next_session);
         id = s->host.next_session;
@@ -4516,7 +4568,11 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         session_owner = scope.owner;
     } else {
         if (operation == ASTRA_HOST_FS_CLAIM) {
-            status = astra_host_fs_claim(s, owner, flags);
+            /* The kernel names the provider (review I1): HOST_EXECUTE and
+             * every other channel are refused, claimed or not. */
+            status = channel != NULL && channel->provider ?
+                     astra_host_fs_claim(s, owner, flags) :
+                     ASTRA_STATUS_ACCESS;
             goto done;
         }
         /* One owner speaks for the filesystem: the service that enforces
@@ -4585,8 +4641,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             status = astra_host_status_from_errno(errno);
             break;
         }
-        status = astra_host_publish_open(s, owner, session_id, command, fd,
-                                         flags);
+        status = astra_host_publish_open(s, owner, session, session_id,
+                                         command, fd, flags);
         break;
     }
     case ASTRA_HOST_FS_CLOSE:
@@ -5002,9 +5058,9 @@ static void astra_host_reset(Astra68State *s)
     if (s->host.files != NULL) {
         astra_host_release_files(s, 0);
     }
+    qatomic_set(&s->host.fs_owner, 0u);
     if (s->host.sessions != NULL)
         astra_host_release_sessions(s, 0u);
-    qatomic_set(&s->host.fs_owner, 0u);
     astra_network_next(&s->host.generation);
     s->host.request_buffer = 0;
     s->host.request_bytes = 0;
@@ -5120,7 +5176,7 @@ static bool astra_host_config_scope(Astra68State *s, const uint8_t *config,
     case ASTRA_HOST_CHANNEL_CONFIG_DETACH:
         return flags == 0 && scope->owner == 0;
     case ASTRA_HOST_CHANNEL_CONFIG_OPEN:
-        if (flags == 0)
+        if (flags == 0 || flags == ASTRA_HOST_CHANNEL_PROVIDER)
             return scope->scope == 0 && scope->owner == 0;
         /* fall through */
     case ASTRA_HOST_CHANNEL_CONFIG_ATTACH:
@@ -5302,6 +5358,9 @@ static void astra_host_channel_configure(Astra68State *s, uint32_t physical)
     channel->owner = owner;
     qemu_mutex_lock(&s->host.files_lock);
     channel->bound = scope.owner != 0;
+    channel->provider = !channel->bound &&
+        ldl_be_p(config + HOST_CHANNEL_CONFIG_FIELD(scope_flags)) ==
+            ASTRA_HOST_CHANNEL_PROVIDER;
     channel->scope_count = channel->bound ? 1 : 0;
     channel->scopes[0] = scope;
     qemu_mutex_unlock(&s->host.files_lock);

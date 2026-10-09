@@ -135,7 +135,8 @@ enum {
  * carry it too. */
 #define ASTRA_HOST_FS_SESSION_READ_ONLY (1u << 0)
 /** CLAIM flag: release the claim and close every session and handle of
- * the owner. */
+ * the owner. CLAIM is honoured only on a channel the kernel opened with
+ * ASTRA_HOST_CHANNEL_PROVIDER; anywhere else it answers ACCESS. */
 #define ASTRA_HOST_FS_CLAIM_RELEASE     (1u << 0)
 
 /** AstraHostCommand::operation: fetch an ::AstraHostMetricsSnapshot into the
@@ -691,7 +692,8 @@ _Static_assert(sizeof(AstraHostChannelOpen) == ASTRA_HOST_CHANNEL_OPEN_SIZE,
  * inside the kernel's platform layer; never constructed by user code.
  */
 /** @cond ASTRA_INTERNAL */
-#define ASTRA_HOST_CHANNEL_CONFIG_VERSION 2u
+/* Version 3: an unbound OPEN may carry ASTRA_HOST_CHANNEL_PROVIDER. */
+#define ASTRA_HOST_CHANNEL_CONFIG_VERSION 3u
 #define ASTRA_HOST_CHANNEL_CONFIG_SIZE 64u
 #define ASTRA_HOST_CHANNEL_CONFIG_OPEN  1u
 #define ASTRA_HOST_CHANNEL_CONFIG_CLOSE 2u
@@ -700,6 +702,11 @@ _Static_assert(sizeof(AstraHostChannelOpen) == ASTRA_HOST_CHANNEL_OPEN_SIZE,
 /** Unbind a scope (revocation): a command naming it that has not started
  * is refused from the moment this configuration write returns. */
 #define ASTRA_HOST_CHANNEL_CONFIG_DETACH 4u
+/** scope_flags of an unbound OPEN: the opener's device handle carries
+ * ASTRA_RIGHT_HOST_SCOPE (the filesystem service's grant). Only such a
+ * channel may claim the filesystem (ASTRA_HOST_FS_CLAIM): the kernel, not
+ * the command, says who the provider is. */
+#define ASTRA_HOST_CHANNEL_PROVIDER (1u << 3)
 typedef struct AstraHostChannelConfig {
     _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
     uint16_t version;
@@ -712,7 +719,7 @@ typedef struct AstraHostChannelConfig {
     uint32_t byte_size;
     uint32_t command_capacity;
     uint32_t scope;        /**< OPEN (bound), ATTACH, DETACH: the scope's provider word. */
-    uint32_t scope_flags;  /**< ASTRA_HOST_SCOPE_BOUND | READ_ONLY; 0 for an unbound OPEN and for CLOSE and DETACH. */
+    uint32_t scope_flags;  /**< ASTRA_HOST_SCOPE_BOUND | READ_ONLY; an unbound OPEN 0 or ASTRA_HOST_CHANNEL_PROVIDER; 0 for CLOSE and DETACH. */
     uint32_t scope_owner;  /**< OPEN (bound), ATTACH: owner of the process that created the scope. */
     uint32_t reserved[4];  /**< Zero. */
 } AstraHostChannelConfig;
