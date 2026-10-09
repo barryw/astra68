@@ -14,6 +14,7 @@ STORAGE=${ASTRA_DE25_STORAGE:?set ASTRA_DE25_STORAGE}
 LIBDIR=${ASTRA_DE25_QEMU_LIBDIR:?set ASTRA_DE25_QEMU_LIBDIR}
 SOURCE_MANIFEST=${ASTRA_DE25_SOURCE_MANIFEST:?set ASTRA_DE25_SOURCE_MANIFEST}
 DISPLAY=$REPOSITORY/build/de25-graphics/linux/astra-terminal-display
+SPLASH=$REPOSITORY/build/de25-graphics/linux/astra_boot_splash.rgb565
 AUDIO=$REPOSITORY/build/de25-graphics/linux/astra-audio-host
 AUDIO_UNIT=$REPOSITORY/fpga/de25/astra-audio-host.service
 RUNTIME_UNIT=$REPOSITORY/fpga/de25/astra.service
@@ -23,12 +24,15 @@ DE25_SYSROOT=${ASTRA_DE25_SYSROOT:?set ASTRA_DE25_SYSROOT}
 RELEASE_TOOL=$REPOSITORY/tools/astra_release.py
 JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')
 
-# POST and panic are rendered by this small host binary. Always rebuild it
-# from the mirrored tree so a prior release cannot silently supply its font
-# metrics or generated assets.
+# POST, panic and the boot splash are rendered by this small host binary.
+# Always rebuild it from the mirrored tree so a prior release cannot silently
+# supply its font metrics or generated assets. The splash is packed 0600;
+# astra_release.py stages every artifact 0644 or 0755 and installs it 0444
+# or 0555, so the helper reads it whatever user astra.service runs it as.
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/arty/linux" \
     PLATFORM=de25 CROSS_COMPILE=aarch64-linux-gnu- \
     ../../../build/de25-graphics/linux/astra-terminal-display \
+    ../../../build/de25-graphics/linux/astra_boot_splash.rgb565 \
     ../../../build/de25-graphics/linux/astra-audio-host
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
     CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
@@ -52,6 +56,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "storage-terminal.img=$STORAGE" \
     "source/SOURCE_SHA256SUMS=$SOURCE_MANIFEST" \
     "bin/astra-terminal-display=$DISPLAY" \
+    "share/astra_boot_splash.rgb565=$SPLASH" \
     "bin/astra-audio-host=$AUDIO" \
     "systemd/astra.service=$RUNTIME_UNIT" \
     "systemd/astra-audio-host.service=$AUDIO_UNIT" \

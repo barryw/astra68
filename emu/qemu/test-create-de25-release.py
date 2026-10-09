@@ -13,6 +13,8 @@ for required in (
     "ASTRA_DE25_SOURCE_MANIFEST",
     "ASTRA_DE25_SYSROOT",
     "build/de25-graphics/linux/astra-terminal-display",
+    "build/de25-graphics/linux/astra_boot_splash.rgb565",
+    "share/astra_boot_splash.rgb565=",
     'make -B -j "$JOBS" -C "$REPOSITORY/fpga/arty/linux"',
     'make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux"',
     "bin/astra-remote-desktop=",
@@ -29,6 +31,9 @@ for required in (
 ):
     assert required in script, required
 assert "ASTRA_DE25_TERMINAL_DISPLAY" not in script
+
+launcher = Path(__file__).with_name("run-arty.sh").read_text()
+assert "$ASTRA_ROOT/share/astra_boot_splash.rgb565" in launcher
 
 graphics_makefile = (Path(__file__).parents[2] /
                      "fpga/arty/linux/Makefile").read_text()
