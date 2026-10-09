@@ -31,6 +31,25 @@ supervisor_loader_child_status(uint32_t status)
         SUPERVISOR_LOADER_FAIL_CHILD : status;
 }
 
+/*
+ * What one boot launch reports to the boot progress record
+ * (astra/boot_progress.h). Only a `required` or `critical` service -- the
+ * machine's, @p essential -- fails the boot when it does not start. A user
+ * service that does not start is SKIPPED: the bar completes and the failure
+ * stays in the log, as Haiku's launch_daemon only logs a job that fails
+ * (src/servers/launch/LaunchDaemon.cpp:1786) and its splash never hears of
+ * it. Under headless QEMU that is media and remote-desktop, which have no
+ * host to talk to.
+ */
+static inline uint32_t
+supervisor_boot_service_result(uint32_t status, uint32_t essential)
+{
+    if (status == ASTRA_STATUS_OK)
+        return ASTRA_PROGRESS_SERVICE_READY;
+    return essential != 0u ? ASTRA_PROGRESS_SERVICE_FAILED :
+                             ASTRA_PROGRESS_SERVICE_SKIPPED;
+}
+
 typedef struct SupervisorManifestGrant {
     char name[ASTRA_CAPABILITY_NAME_MAX];
     uint32_t rights;

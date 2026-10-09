@@ -45,6 +45,19 @@ int main(void)
     assert(!supervisor_process_table_reserve(&table, 65u,
                                              test_reallocate));
     assert(table.records == process_storage && table.capacity == 64u);
+    /* Only the machine's services fail the boot (boot_progress.h). */
+    assert(supervisor_boot_service_result(ASTRA_STATUS_OK, 0u) ==
+           ASTRA_PROGRESS_SERVICE_READY);
+    assert(supervisor_boot_service_result(ASTRA_STATUS_OK, 1u) ==
+           ASTRA_PROGRESS_SERVICE_READY);
+    assert(supervisor_boot_service_result(ASTRA_STATUS_PEER_DEAD, 1u) ==
+           ASTRA_PROGRESS_SERVICE_FAILED);
+    assert(supervisor_boot_service_result(ASTRA_STATUS_NOT_FOUND, 1u) ==
+           ASTRA_PROGRESS_SERVICE_FAILED);
+    assert(supervisor_boot_service_result(ASTRA_STATUS_PEER_DEAD, 0u) ==
+           ASTRA_PROGRESS_SERVICE_SKIPPED);
+    assert(supervisor_boot_service_result(ASTRA_STATUS_NOT_FOUND, 0u) ==
+           ASTRA_PROGRESS_SERVICE_SKIPPED);
     puts("SUPERVISOR LOADER STATUS PASS");
     return 0;
 }
