@@ -109,31 +109,37 @@ def check_tiers(shell):
         shell.refused(text)
 
 
-def probe_deaths(machine, after):
-    return sum(PROBE_DEATH in line for line in machine.said(after)[0])
+def probe_deaths(machine):
+    """Every fault-probe death the host syslog holds so far.
+
+    fault-probe holds LOG, so its astra_log line leaves the kernel ring for
+    its own ring and the host syslog (docs/SYSTEM_LOG.md section 7); said()
+    never sees it. Counted in the syslog alone (Machine.syslog_lines), each
+    death once. Callers subtract an earlier count."""
+    return sum(PROBE_DEATH in line for line in machine.syslog_lines())
 
 
 def check_backoff(machine, shell):
     shell.ok("service add crash-probe /services/fault-probe "
              "--manual --restart=always")
-    before = machine.sequence()
+    before = probe_deaths(machine)
     shell.ok("service start crash-probe")
     # Immediate restart, then 0.2 s doubling to a 10 s cap: about seven
     # deaths in six seconds, one or two in the next eight. A hot loop is
     # hundreds; no restart at all is one.
     time.sleep(6.0)
-    early = probe_deaths(machine, before)
+    early = probe_deaths(machine) - before
     if not 4 <= early <= 12:
         raise RuntimeError("crash-probe died %d times in 6 s" % early)
     time.sleep(8.0)
-    later = probe_deaths(machine, before)
+    later = probe_deaths(machine) - before
     if not early < later <= early + 4:
         raise RuntimeError("crash-probe backoff: %d deaths, then %d" %
                            (early, later))
     shell.ok("service stop crash-probe")
-    stopped = machine.sequence()
+    stopped = probe_deaths(machine)
     time.sleep(12.0)
-    if probe_deaths(machine, stopped) != 0:
+    if probe_deaths(machine) != stopped:
         raise RuntimeError("crash-probe restarted after service stop")
     shell.ok("service inspect crash-probe", "state: stopped")
     shell.ok("service delete crash-probe")

@@ -62,51 +62,53 @@ def run(arguments):
                                            arguments.deadline):
                 raise RuntimeError("boot did not reach stage 8")
             end = time.monotonic() + arguments.deadline
-            # hostbench holds LOG, so its records leave the kernel ring for
-            # the system log on its first astra_log (docs/SYSTEM_LOG.md
-            # section 7). Re-read both views whole each poll: the syslog
-            # file only grows, and PASS is hostbench's last record.
+            # hostbench reports with astra_log, so its lines reach the host
+            # syslog whichever ring they went to (docs/SYSTEM_LOG.md section
+            # 7). The results below must not repeat: read the syslog alone,
+            # each line once.
+            seen = 0
             while time.monotonic() < end:
                 if machine.process.poll() is not None:
                     break
-                output = machine.said_with_syslog(0)[0]
-                if any("ASTRA HOSTBENCH SCOPE MINT NOT REFUSED" in line
-                       for line in output):
-                    raise RuntimeError("hostbench minted a scope")
-                if any("ASTRA HOSTBENCH FS NOT REFUSED" in line
-                       for line in output):
-                    raise RuntimeError("hostbench drove files unclaimed")
-                if any("ASTRA RAW USER FAIL" in line for line in output):
-                    raise RuntimeError(
-                        "userspace host benchmark failed\n%s" %
-                        "\n".join(output[-60:]))
-                if any("ASTRA RAW USER PASS" in line for line in output):
-                    # HOST_DEVICE must arrive unable to mint a scope.
-                    if not any("ASTRA HOSTBENCH SCOPE MINT REFUSED" in line
-                               for line in output):
+                logged = machine.syslog_lines()
+                lines, seen = logged[seen:], len(logged)
+                for line in lines:
+                    output.append(line)
+                    if "ASTRA HOSTBENCH SCOPE MINT NOT REFUSED" in line:
                         raise RuntimeError("hostbench minted a scope")
-                    # ... nor drive files: only the claimed owner may.
-                    if not any("ASTRA HOSTBENCH FS REFUSED" in line
-                               for line in output):
-                        raise RuntimeError("hostbench filesystem check "
-                                           "did not run")
-                    passed = True
+                    if "ASTRA HOSTBENCH FS NOT REFUSED" in line:
+                        raise RuntimeError("hostbench drove files unclaimed")
+                    if "ASTRA RAW USER FAIL" in line:
+                        raise RuntimeError(
+                            "userspace host benchmark failed\n%s" %
+                            "\n".join(output[-60:]))
+                    match = RESULT.search(line)
+                    if match is not None:
+                        results.append(tuple(int(value, 16)
+                                             for value in match.groups()))
+                    match = ADAPT_RESULT.search(line)
+                    if match is not None:
+                        adaptive.append(tuple(int(value, 16)
+                                              for value in match.groups()))
+                    match = MEMORY_RESULT.search(line)
+                    if match is not None:
+                        memory.append((match.group(1),
+                                       int(match.group(2), 16),
+                                       int(match.group(3), 16)))
+                    if "ASTRA RAW USER PASS" in line:
+                        # HOST_DEVICE must arrive unable to mint a scope.
+                        if not any("ASTRA HOSTBENCH SCOPE MINT REFUSED" in
+                                   entry for entry in output):
+                            raise RuntimeError("hostbench minted a scope")
+                        # ... nor drive files: only the claimed owner may.
+                        if not any("ASTRA HOSTBENCH FS REFUSED" in entry
+                                   for entry in output):
+                            raise RuntimeError("hostbench filesystem check "
+                                               "did not run")
+                        passed = True
+                if passed:
                     break
-                time.sleep(1.0)
-            for line in output:
-                match = RESULT.search(line)
-                if match is not None:
-                    results.append(tuple(int(value, 16)
-                                         for value in match.groups()))
-                match = ADAPT_RESULT.search(line)
-                if match is not None:
-                    adaptive.append(tuple(int(value, 16)
-                                          for value in match.groups()))
-                match = MEMORY_RESULT.search(line)
-                if match is not None:
-                    memory.append((match.group(1),
-                                   int(match.group(2), 16),
-                                   int(match.group(3), 16)))
+                time.sleep(0.1)
             if not passed:
                 raise RuntimeError("userspace host benchmark timed out\n%s" %
                                    "\n".join(output[-60:]))
