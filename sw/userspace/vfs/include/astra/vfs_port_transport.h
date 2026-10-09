@@ -164,6 +164,29 @@ typedef struct AstraVfsPortWorker {
     AstraVfsReplyMessage outgoing;
 } AstraVfsPortWorker;
 
+/*
+ * One grant a service answers on its own port (docs/FILESYSTEM_PRODUCTION_PRD.md
+ * FS15). The kernel stamps which port a message arrived on, and so which
+ * grant it is under; the service owns these records. The same idea as
+ * PROC:rw and PROC:r being two ports (supervisor/src/loader.c): authority
+ * is which port you hold, never a word in the request.
+ */
+typedef struct AstraVfsPortGrant {
+    uint32_t receive;          /* the grant's receive port, 0 when free */
+    uint32_t id;               /* nonzero, never reused by its service */
+    uint32_t rights;           /* ASTRA_VFS_GRANT_* */
+    uint32_t scope;            /* the grant's scope, ADMINISTER; HELLO hands
+                                * out a duplicate without it */
+} AstraVfsPortGrant;
+
+/* Makes a grant of at most `rights` (already a checked subset of `parent`'s)
+ * rooted at `root` beneath `parent`'s root; answers its send handle in
+ * *send, which the reply moves to the caller. */
+typedef uint32_t (*AstraVfsPortDerive)(void *context,
+                                       const AstraVfsPortGrant *parent,
+                                       const char *root, uint32_t rights,
+                                       uint32_t *send);
+
 typedef struct AstraVfsPortService {
     uint32_t receive;
     AstraVfsService *service;
@@ -177,7 +200,8 @@ typedef struct AstraVfsPortService {
      * calling -- which cost an afternoon telling those two apart.
      */
     uint32_t stalled;
-    uint32_t scope;  /* the grant's scope; nonzero: a control-only port */
+    AstraVfsPortDerive derive;   /* GRANT_DERIVE on a grant; NULL refuses */
+    void *derive_context;
     uint32_t reply_sessions[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_lanes[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_handles[ASTRA_VFS_SESSION_MAX];
@@ -199,12 +223,10 @@ int astra_vfs_port_service_set_state_lock(AstraVfsPortService *host,
                                           AstraVfsStateAcquire acquire,
                                           AstraVfsStateRelease release,
                                           void *context);
-/* A port that serves a host volume: HELLO attaches a duplicate of the
- * grant's filesystem scope (storage protocol 28), and the port answers every
- * other operation but BYE with ASTRA_VFS_ERR_UNSUPPORTED -- the data plane is
- * the client's own lane. */
-int astra_vfs_port_service_set_scope(AstraVfsPortService *host,
-                                     uint32_t scope);
+/* How this service makes a derived grant (storage protocol 29). */
+int astra_vfs_port_service_set_derive(AstraVfsPortService *host,
+                                      AstraVfsPortDerive derive,
+                                      void *context);
 
 /* Handles at most `budget` requests and returns how many it answered. */
 uint32_t astra_vfs_port_service_pump(AstraVfsPortService *host,
@@ -212,5 +234,16 @@ uint32_t astra_vfs_port_service_pump(AstraVfsPortService *host,
 uint32_t astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
                                             AstraVfsPortWorker *worker,
                                             uint32_t budget);
+/*
+ * Serves `grant`'s port (storage protocol 29). HELLO opens a session bound
+ * to the grant, answers ASTRA_VFS_FEATURE_GRANTS and attaches a duplicate of
+ * its scope; a session is answered only on its own grant's port. The port is
+ * control only: HELLO, BYE and GRANT_DERIVE. Every other operation is
+ * answered ASTRA_VFS_ERR_UNSUPPORTED -- the data plane is the client's lane.
+ */
+uint32_t astra_vfs_port_service_grant_pump(AstraVfsPortService *host,
+                                           AstraVfsPortWorker *worker,
+                                           const AstraVfsPortGrant *grant,
+                                           uint32_t budget);
 
 #endif

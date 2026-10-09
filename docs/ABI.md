@@ -114,6 +114,33 @@ side of the two-message forms goes too: operations 17, 18, 23 and 24
 (RENAME_FROM/TO, SYMLINK_TARGET/TO) and their staged session state are
 gone, and the numbers are not reused.
 
+Storage protocol 29: a grant is a HostFS port
+(docs/FILESYSTEM_PRODUCTION_PRD.md FS15). A session is bound to the grant
+port it said HELLO on, and a request for it on any other port is refused
+unanswered. HELLO answers `AstraVfsReply.features` (which replaces
+`reserved2`; every other operation answers 0) with
+`ASTRA_VFS_FEATURE_GRANTS`, and attaches a duplicate of that grant's scope.
+`ASTRA_VFS_OP_GRANT_DERIVE` (36) takes `flags`, a subset of
+`ASTRA_VFS_GRANT_READ | WRITE | DELEGATE` that must include READ and may
+not exceed the grant's own, and `body.path`, the new root relative to the
+grant's root (`""` keeps it). Its reply carries one send handle, the derived
+grant's port; HELLO on that port hands out the derived grant's scope, which
+is read-only without WRITE and keeps TRANSFER only with DELEGATE. A grant
+whose last holder closes its port is retired: HostFS revokes its scope
+through the kernel and closes its provider session. The grant port is
+control only (HELLO, BYE, GRANT_DERIVE); the client's lane carries every
+data operation.
+
+## Filesystem Kit ABI 7.0
+
+`filesystem.library.7` adds `AstraVfsClient.features` (what the client's
+HELLO answered) and `AstraVfsPortThreadState.received_handle`, so both
+layouts change and the major moves; and `astra_vfs_grant_derive(client,
+root, rights, &handle)`, which a client connected to a grant uses to make a
+narrower one. A lane client sends GRANT_DERIVE to the grant's port on the
+lane its HELLO bound, never to its lane. The process exec state carries
+`features` (exec state version 7). Kit 6 binaries do not load it.
+
 ## Filesystem Kit ABI 6.0
 
 `filesystem.library.6` brings the lane back, scoped. `AstraVfsClient`

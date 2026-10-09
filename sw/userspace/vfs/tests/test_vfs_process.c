@@ -232,6 +232,7 @@ uint32_t astra_vfs_host_port_connect_lazy(AstraVfsClient *client,
         client->port_direct_area = 0x41u;
         client->port_direct_scope = 0x42u;
         client->port_direct_session = 0x43u;
+        client->features = ASTRA_VFS_FEATURE_GRANTS;
     }
     return status;
 }
@@ -558,6 +559,8 @@ int main(void)
             client = astra_process_vfs_client();
             assert(client != NULL && direct_resumes == 2u &&
                    client->port_direct_address != NULL);
+            /* A grant's client may still derive after exec (Kit 7). */
+            assert(client->features == ASTRA_VFS_FEATURE_GRANTS);
             astra_process_vfs_close();
         }
 

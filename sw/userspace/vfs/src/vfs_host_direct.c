@@ -24,8 +24,9 @@ typedef struct AstraVfsHostDirect {
  * One host transport per process. A thread has one host channel, so every
  * host-volume client of the process shares the thread's lane; each client
  * names its own scope per command (AstraVfsHostBackend.scope), and the lane
- * attaches it on first use. The first scope connected answers HOST_QUERY for
- * the transport.
+ * attaches it on first use. The first scope connected answers HOST_QUERY at
+ * init, and then the transport keeps no client's handle: that client may
+ * leave first, and its number may come back naming another scope.
  */
 static AstraVfsHostTransport lane_transport;
 static uint32_t lane_users;
@@ -37,12 +38,15 @@ static uint32_t lane_acquire(uint32_t scope, uint32_t *generation)
     uint32_t status = ASTRA_VFS_OK;
 
     (void)astra_vfs_state_lock_acquire(&lane_setup);
-    if (lane_users == 0u &&
-        !astra_vfs_host_transport_init(&lane_transport, scope,
-                                       astra_vfs_state_lock_acquire,
-                                       astra_vfs_state_lock_release,
-                                       &lane_lock))
-        status = ASTRA_VFS_ERR_UNSUPPORTED;
+    if (lane_users == 0u) {
+        if (astra_vfs_host_transport_init(&lane_transport, scope,
+                                          astra_vfs_state_lock_acquire,
+                                          astra_vfs_state_lock_release,
+                                          &lane_lock))
+            lane_transport.device = 0u;
+        else
+            status = ASTRA_VFS_ERR_UNSUPPORTED;
+    }
     if (status == ASTRA_VFS_OK) {
         ++lane_users;
         *generation = lane_transport.generation;
@@ -281,6 +285,7 @@ void astra_vfs_host_direct_disconnect(AstraVfsClient *client)
     client_clear(client);
     (void)astra_rt_area_unmap(address);
     (void)astra_close(area);
+    astra_vfs_host_transport_forget_scope(&lane_transport, scope);
     (void)astra_close(scope);
     lane_release();
 }

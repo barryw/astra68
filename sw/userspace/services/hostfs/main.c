@@ -1,3 +1,4 @@
+#include <astra/config_library.h>
 #include <astra/host.h>
 #include <astra/metrics.h>
 #include <astra/metrics_vfs.h>
@@ -8,7 +9,10 @@
 #include <astra/vfs_host_backend.h>
 #include <astra/vfs_host_transport.h>
 #include <astra/vfs_port_transport.h>
+#include <astra/vfs_process.h>
 #include <astra/vfs_service_core.h>
+
+#include <string.h>
 
 ASTRA_PROGRAM("hostfs", 0, 1, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
@@ -23,8 +27,6 @@ enum {
 static uint32_t device_handle;
 static uint32_t work_session;
 static uint32_t sound_session;
-static uint32_t work_scope;
-static uint32_t sound_scope;
 static _Alignas(4) uint32_t transport_lock;
 static _Alignas(4) uint32_t state_lock;
 static AstraVfsHostTransport transport;
@@ -41,14 +43,40 @@ static AstraVfsPortService metrics_port;
 static AstraVfsPortWorker metrics_worker;
 /* SOUND: is the host directory the Linux audio host reads SoundFonts from,
  * so an update here is what it plays. Its clients reach it through their
- * own lanes, bound to SOUND's scope, which names SOUND's root session. */
+ * own lanes, bound to their grant's scope beneath SOUND's root session. */
 static AstraVfsHostBackend sound_backend;
 static AstraVfsService sound_service;
 static AstraVfsSessionSlot sound_sessions[ASTRA_VFS_SESSION_MAX];
 static AstraVfsPortService sound_port;
-static AstraVfsPortWorker sound_worker;
 static volatile uint32_t shutdown_requested;
 static _Alignas(16) uint8_t signal_stack[4096u];
+
+/*
+ * A grant HostFS answers on its own port (docs/FILESYSTEM_PRODUCTION_PRD.md
+ * FS15): its provider session, the scope that binds clients' channels to
+ * that session with the grant's rights, and the service whose sessions it
+ * binds. The port record comes first, so the port layer's grant pointer is
+ * this record.
+ */
+typedef struct HostfsGrant {
+    AstraVfsPortGrant port;        /* receive, id, rights, scope */
+    AstraVfsService *service;      /* WORK's or SOUND's */
+    uint32_t session;              /* its provider session */
+} HostfsGrant;
+
+/* The kernel's scope pool is 64 (KERNEL_HOST_SCOPE_MAX in
+ * sw/kernel/process.c); one scope per grant, with room for recovery. */
+#define HOSTFS_GRANTS_MAX 48u
+
+static HostfsGrant *grants;
+static uint32_t grant_capacity;    /* settings.conf `grants N` */
+static uint32_t next_grant_id = 1u;
+static uint32_t *wait_handles;     /* grant_capacity + 2 */
+static uint32_t *wait_owners;      /* what each handle is */
+
+/* wait_owners values that are not a grant's index. */
+#define WAIT_METRICS  (UINT32_MAX - 1u)
+#define WAIT_SHUTDOWN UINT32_MAX
 
 static void hostfs_signal(int number)
 {
@@ -68,6 +96,13 @@ static uint32_t hostfs_unmount(void *context)
     return ASTRA_VFS_OK;
 }
 
+static AstraVfsPortService *grant_host(const HostfsGrant *grant)
+{
+    /* A port host's reply lanes are keyed by session, and sessions are
+     * unique per service, so SOUND's grants use SOUND's host. */
+    return grant->service == &service ? &port : &sound_port;
+}
+
 static uint32_t finish_hostfs(void)
 {
     const AstraVfsMountOps metrics_mount = {NULL, volume_noop_unmount};
@@ -76,12 +111,21 @@ static uint32_t finish_hostfs(void)
 
     while (astra_vfs_port_service_worker_pump(&metrics_port,
                                                &metrics_worker, 1u) != 0u) {}
-    while (astra_vfs_port_service_worker_pump(&sound_port, &sound_worker,
-                                               1u) != 0u) {}
-    while (astra_vfs_port_service_worker_pump(&port, &worker, 1u) != 0u) {}
+    for (uint32_t at = 0u; at < grant_capacity; ++at)
+        if (grants[at].port.receive != 0u)
+            while (astra_vfs_port_service_grant_pump(
+                       grant_host(&grants[at]), &worker, &grants[at].port,
+                       1u) != 0u) {}
     if (metrics_port.stalled != 0u || sound_port.stalled != 0u ||
         port.stalled != 0u)
         return ASTRA_STATUS_IO;
+    /* Every channel bound to a grant stops here, before its sessions go. */
+    for (uint32_t at = 0u; at < grant_capacity; ++at)
+        if (grants[at].port.receive != 0u) {
+            (void)astra_host_scope_revoke(grants[at].port.scope);
+            (void)astra_close(grants[at].port.scope);
+            grants[at].port.scope = 0u;
+        }
     status = astra_vfs_service_shutdown(&metrics_service, &metrics_mount,
                                         NULL);
     if (status != ASTRA_VFS_OK)
@@ -253,6 +297,127 @@ static int register_metrics(void)
                                  &transport);
 }
 
+/* services/hostfs/settings.conf `grants N`: the two base grants and every
+ * derived one, at most one wait set and the kernel's scope pool. */
+static uint32_t configured_grants(const AstraStartupInfo *startup,
+                                  uint32_t *count)
+{
+    AstraConfig config = ASTRA_CONFIG_INIT;
+    AstraConfigError error = {0};
+    uint64_t value = 0u;
+    uint32_t found = 0u;
+    uint32_t status;
+
+    if (astra_process_vfs_init(startup) != ASTRA_VFS_OK)
+        return ASTRA_STATUS_NOT_FOUND;
+    if (astra_config_open(startup, 1u, ASTRA_CONFIG_OPEN_READ, &config,
+                          &error) != ASTRA_CONFIG_OK)
+        return ASTRA_STATUS_INVALID;
+    status = astra_config_count(&config, "grants", &found);
+    if (status == ASTRA_CONFIG_OK && found == 1u)
+        status = astra_config_get_u64(&config, "grants", 0u, &value);
+    astra_config_close(&config);
+    if (status != ASTRA_CONFIG_OK || found != 1u || value < 2u ||
+        value > HOSTFS_GRANTS_MAX || value > ASTRA_WAIT_MULTIPLE_MAX - 2u)
+        return ASTRA_STATUS_INVALID;
+    *count = (uint32_t)value;
+    return ASTRA_STATUS_OK;
+}
+
+/* Adds a grant over provider `session` with `rights`; answers its send
+ * handle. Its scope carries exactly those rights: read-only without WRITE,
+ * delegable only with DELEGATE. */
+static uint32_t grant_add(AstraVfsService *owner, uint32_t session,
+                          uint32_t rights, uint32_t *send)
+{
+    HostfsGrant *grant = NULL;
+    uint32_t receive = 0u;
+    uint32_t scope = 0u;
+    uint32_t flags =
+        ((rights & ASTRA_VFS_GRANT_WRITE) == 0u ?
+             ASTRA_HOST_SCOPE_READ_ONLY : 0u) |
+        ((rights & ASTRA_VFS_GRANT_DELEGATE) != 0u ?
+             ASTRA_HOST_SCOPE_DELEGATE : 0u);
+
+    *send = 0u;
+    for (uint32_t index = 0u; index < grant_capacity; ++index)
+        if (grants[index].port.receive == 0u) {
+            grant = &grants[index];
+            break;
+        }
+    if (grant == NULL ||
+        astra_host_scope_create(device_handle, session, flags, &scope) !=
+            ASTRA_SYSCALL_OK)
+        return ASTRA_VFS_ERR_LIMIT;
+    if (astra_rt_port_create(
+            ASTRA_PORT_MESSAGES_MAX,
+            ASTRA_PORT_MESSAGES_MAX *
+                (uint32_t)sizeof(AstraVfsRenameRequestMessage),
+            &receive, send) != ASTRA_SYSCALL_OK) {
+        (void)astra_host_scope_revoke(scope);
+        (void)astra_close(scope);
+        *send = 0u;
+        return ASTRA_VFS_ERR_LIMIT;
+    }
+    memset(grant, 0, sizeof(*grant));
+    grant->service = owner;
+    grant->session = session;
+    grant->port.receive = receive;
+    grant->port.id = next_grant_id++;
+    grant->port.rights = rights;
+    grant->port.scope = scope;
+    return ASTRA_VFS_OK;
+}
+
+/* GRANT_DERIVE (storage protocol 29): a provider session beneath the
+ * parent's, read-only when the grant lacks WRITE, and a grant over it. The
+ * port layer has already checked that `rights` only narrow. */
+static uint32_t hostfs_derive(void *context, const AstraVfsPortGrant *parent,
+                              const char *root, uint32_t rights,
+                              uint32_t *send)
+{
+    const HostfsGrant *from = (const HostfsGrant *)(const void *)parent;
+    char provider_root[ASTRA_VFS_PATH_MAX + 1u];
+    uint32_t session = 0u;
+    uint32_t status;
+
+    (void)context;
+    *send = 0u;
+    /* A root is a relative path beneath the parent's root; the provider
+     * resolves it beneath that session and refuses anything outside. */
+    if (root[0] == '/')
+        return ASTRA_VFS_ERR_INVALID;
+    provider_root[0] = '/';
+    (void)strcpy(provider_root + 1, root);
+    status = astra_vfs_host_session_open(
+        &transport, transport.generation, from->session, 0u, provider_root,
+        (rights & ASTRA_VFS_GRANT_WRITE) == 0u ?
+            ASTRA_HOST_FS_SESSION_READ_ONLY : 0u, &session);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    status = grant_add(from->service, session, rights, send);
+    if (status != ASTRA_VFS_OK)
+        (void)astra_vfs_host_session_close(&transport, transport.generation,
+                                           session);
+    return status;
+}
+
+/* The grant's last holder closed its handle. Revoke its scope -- every
+ * channel bound to it stops at once -- then end its sessions and its
+ * provider session, whose handles go with it (Task 4). The way Haiku's
+ * disconnect_fd (src/system/kernel/fs/fd.cpp) cuts every descriptor of a
+ * vnode at once rather than waiting for each holder. */
+static void grant_retire(HostfsGrant *grant)
+{
+    (void)astra_host_scope_revoke(grant->port.scope);
+    (void)astra_close(grant->port.scope);
+    astra_vfs_service_release_grant(grant->service, grant->port.id);
+    (void)astra_vfs_host_session_close(&transport, transport.generation,
+                                       grant->session);
+    (void)astra_close(grant->port.receive);
+    memset(grant, 0, sizeof(*grant));
+}
+
 int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *device;
@@ -263,11 +428,9 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t service_capacity = 0u;
     uint32_t metrics_capacity = 0u;
     uint32_t sound_capacity = 0u;
-    uint32_t receive = 0u;
-    uint32_t send = 0u;
+    uint32_t work_send = 0u;
     uint32_t metrics_receive = 0u;
     uint32_t metrics_send = 0u;
-    uint32_t sound_receive = 0u;
     uint32_t sound_send = 0u;
     uint32_t shutdown_receive = 0u;
     uint32_t shutdown_send = 0u;
@@ -282,6 +445,17 @@ int astra_main(const AstraStartupInfo *startup)
     if (device == NULL || bootstrap == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     device_handle = device->handle;
+    if (configured_grants(startup, &grant_capacity) != ASTRA_STATUS_OK)
+        status = ASTRA_STATUS_INVALID;
+    if (status == ASTRA_STATUS_OK) {
+        grants = astra_runtime_callocate(grant_capacity, sizeof(*grants));
+        wait_handles = astra_runtime_callocate(grant_capacity + 2u,
+                                               sizeof(*wait_handles));
+        wait_owners = astra_runtime_callocate(grant_capacity + 2u,
+                                              sizeof(*wait_owners));
+        if (grants == NULL || wait_handles == NULL || wait_owners == NULL)
+            status = ASTRA_STATUS_LIMIT;
+    }
     if (status == ASTRA_STATUS_OK &&
         !astra_vfs_host_transport_init(
             &transport, device_handle, astra_vfs_state_lock_acquire,
@@ -299,16 +473,6 @@ int astra_main(const AstraStartupInfo *startup)
          astra_vfs_host_session_open(&transport, transport.generation, 0u,
                                      ASTRA_HOST_FS_VOLUME_SOUND, "/", 0u,
                                      &sound_session) != ASTRA_VFS_OK))
-        status = HOSTFS_FAIL_DEVICE;
-    /* One scope per volume, naming its session: the grants of storage
-     * protocol 28 (Task 5 makes them one per grant). Nothing revokes them
-     * here; they live as long as HostFS, and the kernel revokes them when
-     * it dies, as the provider closes its sessions. */
-    if (status == ASTRA_STATUS_OK &&
-        (astra_host_scope_create(device_handle, work_session, 0u,
-                                 &work_scope) != ASTRA_SYSCALL_OK ||
-         astra_host_scope_create(device_handle, sound_session, 0u,
-                                 &sound_scope) != ASTRA_SYSCALL_OK))
         status = HOSTFS_FAIL_DEVICE;
     if (status == ASTRA_STATUS_OK &&
         (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
@@ -352,17 +516,25 @@ int astra_main(const AstraStartupInfo *startup)
              metrics_sessions, ASTRA_VFS_SESSION_MAX, metrics_storage,
              metrics_capacity)))
         status = ASTRA_STATUS_LIMIT;
+    /* The base grants, one per volume. They are delegable: the supervisor
+     * narrows per child (supervisor/src/loader.c narrowed_grant). */
+    if (status == ASTRA_STATUS_OK) {
+        const uint32_t base = ASTRA_VFS_GRANT_READ | ASTRA_VFS_GRANT_WRITE |
+                              ASTRA_VFS_GRANT_DELEGATE;
+
+        if (grant_add(&service, work_session, base, &work_send) !=
+                ASTRA_VFS_OK ||
+            grant_add(&sound_service, sound_session, base, &sound_send) !=
+                ASTRA_VFS_OK)
+            status = ASTRA_STATUS_LIMIT;
+    }
     if (status == ASTRA_STATUS_OK &&
-        (astra_rt_port_create(
-             ASTRA_PORT_MESSAGES_MAX,
-             ASTRA_PORT_MESSAGES_MAX *
-                 (uint32_t)sizeof(AstraVfsRenameRequestMessage),
-             &receive, &send) != ASTRA_SYSCALL_OK ||
-         !astra_vfs_port_service_init(&port, receive, &service) ||
+        (!astra_vfs_port_service_init(&port, grants[0].port.receive,
+                                      &service) ||
          !astra_vfs_port_service_set_state_lock(
              &port, astra_vfs_state_lock_acquire,
              astra_vfs_state_lock_release, &state_lock) ||
-         !astra_vfs_port_service_set_scope(&port, work_scope)))
+         !astra_vfs_port_service_set_derive(&port, hostfs_derive, NULL)))
         status = HOSTFS_FAIL_PORT;
     if (status == ASTRA_STATUS_OK &&
         (astra_rt_port_create(
@@ -374,17 +546,13 @@ int astra_main(const AstraStartupInfo *startup)
                                       &metrics_service)))
         status = HOSTFS_FAIL_PORT;
     if (status == ASTRA_STATUS_OK &&
-        (astra_rt_port_create(
-             ASTRA_PORT_MESSAGES_MAX,
-             ASTRA_PORT_MESSAGES_MAX *
-                 (uint32_t)sizeof(AstraVfsRenameRequestMessage),
-             &sound_receive, &sound_send) != ASTRA_SYSCALL_OK ||
-         !astra_vfs_port_service_init(&sound_port, sound_receive,
+        (!astra_vfs_port_service_init(&sound_port, grants[1].port.receive,
                                       &sound_service) ||
          !astra_vfs_port_service_set_state_lock(
              &sound_port, astra_vfs_state_lock_acquire,
              astra_vfs_state_lock_release, &state_lock) ||
-         !astra_vfs_port_service_set_scope(&sound_port, sound_scope)))
+         !astra_vfs_port_service_set_derive(&sound_port, hostfs_derive,
+                                            NULL)))
         status = HOSTFS_FAIL_PORT;
     if (status == ASTRA_STATUS_OK &&
         astra_rt_signal_configure(
@@ -397,7 +565,7 @@ int astra_main(const AstraStartupInfo *startup)
             ASTRA_SYSCALL_OK)
         status = ASTRA_STATUS_LIMIT;
     {
-        uint32_t published[] = {send, metrics_send, sound_send};
+        uint32_t published[] = {work_send, metrics_send, sound_send};
         uint32_t ready = astra_service_ready_managed(bootstrap->handle, status,
                                              published, 3u, shutdown_send);
         if (ready != ASTRA_SYSCALL_OK && status == ASTRA_STATUS_OK)
@@ -408,14 +576,25 @@ int astra_main(const AstraStartupInfo *startup)
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK)
         return (int)status;
+    /* The pre-27 single pump, with the wait set built from the grant
+     * table each time round: HostFS serves only the control plane. */
     for (;;) {
-        uint32_t waits[] = {port.receive, metrics_port.receive,
-                            sound_port.receive, shutdown_receive};
+        uint32_t count = 0u;
         uint32_t selected = ASTRA_WAIT_INDEX_NONE;
 
-        status = astra_wait_multiple(waits, 4u, ASTRA_DEADLINE_FOREVER,
-                                     &selected, NULL);
-        if (status == ASTRA_SYSCALL_OK && selected == 3u) {
+        wait_handles[count] = shutdown_receive;
+        wait_owners[count++] = WAIT_SHUTDOWN;
+        wait_handles[count] = metrics_port.receive;
+        wait_owners[count++] = WAIT_METRICS;
+        for (uint32_t at = 0u; at < grant_capacity; ++at)
+            if (grants[at].port.receive != 0u) {
+                wait_handles[count] = grants[at].port.receive;
+                wait_owners[count++] = at;
+            }
+        status = astra_wait_multiple(wait_handles, count,
+                                     ASTRA_DEADLINE_FOREVER, &selected,
+                                     NULL);
+        if (status == ASTRA_SYSCALL_OK && selected == 0u) {
             AstraShutdownRequest request = {0};
             uint32_t reply = 0u;
             uint32_t result = astra_shutdown_receive(
@@ -435,15 +614,25 @@ int astra_main(const AstraStartupInfo *startup)
             return (int)finish_hostfs();
         if (status == ASTRA_SYSCALL_CANCELLED)
             continue;
-        if (status != ASTRA_SYSCALL_OK || selected >= 3u)
+        if (selected >= count || wait_owners[selected] == WAIT_SHUTDOWN)
             return (int)status;
-        if (selected == 0u)
-            (void)astra_vfs_port_service_worker_pump(&port, &worker, 1u);
-        else if (selected == 1u)
-            (void)astra_vfs_port_service_worker_pump(
-                &metrics_port, &metrics_worker, 1u);
-        else
-            (void)astra_vfs_port_service_worker_pump(
-                &sound_port, &sound_worker, 1u);
+        if (wait_owners[selected] == WAIT_METRICS) {
+            if (status != ASTRA_SYSCALL_OK)
+                return (int)status;
+            (void)astra_vfs_port_service_worker_pump(&metrics_port,
+                                                     &metrics_worker, 1u);
+            continue;
+        }
+        /* A grant's receive port with no sender left and nothing queued:
+         * its last holder has gone (sw/kernel/port.c). */
+        if (status == ASTRA_SYSCALL_PEER_DEAD) {
+            grant_retire(&grants[wait_owners[selected]]);
+            continue;
+        }
+        if (status != ASTRA_SYSCALL_OK)
+            return (int)status;
+        (void)astra_vfs_port_service_grant_pump(
+            grant_host(&grants[wait_owners[selected]]), &worker,
+            &grants[wait_owners[selected]].port, 1u);
     }
 }

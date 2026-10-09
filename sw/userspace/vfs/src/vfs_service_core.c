@@ -160,7 +160,8 @@ operation_takes_path(uint32_t operation)
            operation == ASTRA_VFS_OP_OPEN_AT ||
            operation == ASTRA_VFS_OP_UNLINK_AT ||
            operation == ASTRA_VFS_OP_CHMOD_AT ||
-           operation == ASTRA_VFS_OP_STAT_AT;
+           operation == ASTRA_VFS_OP_STAT_AT ||
+           operation == ASTRA_VFS_OP_GRANT_DERIVE;
 }
 
 static int
@@ -540,8 +541,8 @@ astra_vfs_service_set_test_transition(AstraVfsService *service,
 #endif
 
 static void
-handle_hello(AstraVfsService *service, uint32_t owner,
-             const AstraVfsRequest *request,
+handle_hello(AstraVfsService *service, uint32_t owner, uint32_t grant,
+             uint32_t features, const AstraVfsRequest *request,
              AstraVfsReply *reply)
 {
     uint32_t index;
@@ -564,6 +565,7 @@ handle_hello(AstraVfsService *service, uint32_t owner,
         if (service->sessions[index].id == 0u) {
             service->sessions[index].id = service->next_session++;
             service->sessions[index].owner = owner;
+            service->sessions[index].grant = grant;
             service->sessions[index].open_files = 0u;
             service->sessions[index].version = reply->version;
             service->sessions[index].inflight = 0u;
@@ -573,6 +575,8 @@ handle_hello(AstraVfsService *service, uint32_t owner,
             }
             reply->session = service->sessions[index].id;
             reply->status = ASTRA_VFS_OK;
+            if (reply->version >= UINT16_C(29))
+                reply->features = features;
             ++service->open_sessions;
             ++service->stats.sessions_opened;
             if (service->open_sessions > service->stats.peak_sessions) {
@@ -608,6 +612,7 @@ reap_session(AstraVfsService *service, AstraVfsSessionSlot *slot)
         return;
     slot->id = 0u;
     slot->owner = 0u;
+    slot->grant = 0u;
     slot->open_files = 0u;
     slot->inflight = 0u;
     slot->closing = 0u;
@@ -1129,9 +1134,9 @@ handle_readdir(AstraVfsService *service, const AstraVfsRequest *request,
 }
 
 static void
-dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
-                       uint32_t operation, const AstraVfsRequest *request,
-                       AstraVfsReply *reply)
+dispatch_unlocked(AstraVfsService *service, uint32_t owner, uint32_t grant,
+                  uint32_t features, uint32_t operation,
+                  const AstraVfsRequest *request, AstraVfsReply *reply)
 {
     AstraVfsSessionSlot *slot = NULL;
     AstraVfsOpenFile *file;
@@ -1165,7 +1170,7 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
     }
 
     if (operation == ASTRA_VFS_OP_HELLO) {
-        handle_hello(service, owner, request, reply);
+        handle_hello(service, owner, grant, features, request, reply);
         goto done;
     }
 
@@ -1177,6 +1182,12 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
     }
     if (slot->owner != owner) {
         ++service->stats.cross_owner_denied;
+        reply->status = ASTRA_VFS_ERR_ACCESS;
+        goto done;
+    }
+    /* A session is good only on the grant it said HELLO on (FS15). */
+    if (slot->grant != grant) {
+        ++service->stats.cross_session_denied;
         reply->status = ASTRA_VFS_ERR_ACCESS;
         goto done;
     }
@@ -1532,6 +1543,10 @@ dispatch_from_unlocked(AstraVfsService *service, uint32_t owner,
         if (reply->status == ASTRA_VFS_OK)
             reply->count = ASTRA_VFS_FILESYSTEM_INFO_SIZE;
         break;
+    case ASTRA_VFS_OP_GRANT_DERIVE:
+        /* Only a grant's port can carry the derived grant's handle. */
+        reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
+        break;
     default:
         ++service->stats.protocol_rejects;
         reply->status = ASTRA_VFS_ERR_PROTOCOL;
@@ -1552,10 +1567,11 @@ done:
 }
 
 void
-astra_vfs_service_dispatch_from(AstraVfsService *service, uint32_t owner,
-                                uint32_t operation,
-                                const AstraVfsRequest *request,
-                                AstraVfsReply *reply)
+astra_vfs_service_dispatch_grant(AstraVfsService *service, uint32_t owner,
+                                 uint32_t grant, uint32_t features,
+                                 uint32_t operation,
+                                 const AstraVfsRequest *request,
+                                 AstraVfsReply *reply)
 {
     if (service == NULL || reply == NULL)
         return;
@@ -1564,8 +1580,19 @@ astra_vfs_service_dispatch_from(AstraVfsService *service, uint32_t owner,
         reply->status = ASTRA_VFS_ERR_IO;
         return;
     }
-    dispatch_from_unlocked(service, owner, operation, request, reply);
+    dispatch_unlocked(service, owner, grant, features, operation, request,
+                      reply);
     state_release(service);
+}
+
+void
+astra_vfs_service_dispatch_from(AstraVfsService *service, uint32_t owner,
+                                uint32_t operation,
+                                const AstraVfsRequest *request,
+                                AstraVfsReply *reply)
+{
+    astra_vfs_service_dispatch_grant(service, owner, 0u, 0u, operation,
+                                     request, reply);
 }
 
 void
@@ -1577,23 +1604,43 @@ astra_vfs_service_dispatch(AstraVfsService *service, uint32_t operation,
 }
 
 int
-astra_vfs_service_session_owned(const AstraVfsService *service,
-                                uint32_t session, uint32_t owner)
+astra_vfs_service_session_bound(const AstraVfsService *service,
+                                uint32_t session, uint32_t owner,
+                                uint32_t grant)
 {
-    int owned = 0;
     AstraVfsService *mutable = (AstraVfsService *)(uintptr_t)service;
+    int bound = 0;
 
-    if (service == NULL || session == ASTRA_VFS_SESSION_INVALID)
-        return 0;
-    if (!state_acquire(mutable))
+    if (service == NULL || session == ASTRA_VFS_SESSION_INVALID ||
+        !state_acquire(mutable))
         return 0;
     for (uint32_t index = 0u; index < service->session_capacity; ++index)
         if (service->sessions[index].id == session) {
-            owned = service->sessions[index].owner == owner;
+            bound = service->sessions[index].owner == owner &&
+                    service->sessions[index].grant == grant;
             break;
         }
     state_release(mutable);
-    return owned;
+    return bound;
+}
+
+void
+astra_vfs_service_release_grant(AstraVfsService *service, uint32_t grant)
+{
+    if (service == NULL || grant == 0u)
+        return;
+    for (uint32_t index = 0u; index < service->session_capacity; ++index) {
+        uint32_t session = 0u;
+
+        if (!state_acquire(service))
+            return;
+        if (service->sessions[index].id != 0u &&
+            service->sessions[index].grant == grant)
+            session = service->sessions[index].id;
+        state_release(service);
+        if (session != 0u)
+            astra_vfs_service_release_session(service, session);
+    }
 }
 
 int

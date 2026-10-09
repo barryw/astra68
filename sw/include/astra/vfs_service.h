@@ -41,7 +41,7 @@
 /** Native-big-endian `STOR` storage-protocol signature. */
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
 /** Current storage-protocol wire-format version. */
-#define ASTRA_VFS_VERSION  UINT16_C(28)
+#define ASTRA_VFS_VERSION  UINT16_C(29)
 
 /**
  * The oldest version this build can still speak. A client asks for a minimum
@@ -108,6 +108,11 @@
  * Version 28 is also the oldest version served: every earlier request layout
  * and its compatibility path is deleted, and a HELLO below it is answered
  * ASTRA_VFS_ERR_PROTOCOL.
+ *
+ * Version 29 binds a session to the grant port it said HELLO on, and hands
+ * out that grant's scope. HELLO answers `features`. GRANT_DERIVE returns a
+ * narrower grant: a sub-root, read-only, non-delegable, or a mix; never
+ * wider.
  */
 #define ASTRA_VFS_VERSION_MIN UINT16_C(28)
 
@@ -230,8 +235,29 @@
 #define ASTRA_VFS_OP_STAT_AT     UINT32_C(34)
 /** Look up metadata for an already-open file or directory handle. */
 #define ASTRA_VFS_OP_STAT_FILE   UINT32_C(35)
+/**
+ * Derive a narrower grant: `flags` a subset of the session's grant rights,
+ * `body.path` the new root relative to its root ("" keeps it). The reply
+ * carries the new grant's send handle; HELLO on it hands out its scope.
+ */
+#define ASTRA_VFS_OP_GRANT_DERIVE UINT32_C(36)
 /** Highest operation code this build defines. */
-#define ASTRA_VFS_OP_MAX         ASTRA_VFS_OP_STAT_FILE
+#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_GRANT_DERIVE
+
+/* Rights a grant carries, in GRANT_DERIVE's flags. */
+/** Read files, list directories, stat. Every grant has it. */
+#define ASTRA_VFS_GRANT_READ     (UINT32_C(1) << 0)
+/** Create, write, truncate, rename, unlink, chmod, link. */
+#define ASTRA_VFS_GRANT_WRITE    (UINT32_C(1) << 1)
+/**
+ * Its holders may hand its scope on (the scope keeps TRANSFER) and derive
+ * grants that keep this right.
+ */
+#define ASTRA_VFS_GRANT_DELEGATE (UINT32_C(1) << 2)
+
+/* AstraVfsReply::features, answered by HELLO from version 29. */
+/** The session is bound to a grant the provider enforces. */
+#define ASTRA_VFS_FEATURE_GRANTS (UINT32_C(1) << 0)
 
 /**
  * One shared-area transfer, and the unit the whole read path is sized around.
@@ -589,8 +615,11 @@ typedef struct AstraVfsReply {
     uint16_t nlink;
     /** Must be zero. */
     uint16_t reserved;
-    /** Must be zero. */
-    uint32_t reserved2;
+    /**
+     * HELLO, version 29 on: ASTRA_VFS_FEATURE_* the service offers this
+     * session. Every other operation: zero.
+     */
+    uint32_t features;
     /** The entry name, symlink target, inline read bytes, or other operation payload. */
     uint8_t payload[ASTRA_VFS_IO_MAX];
 } AstraVfsReply;

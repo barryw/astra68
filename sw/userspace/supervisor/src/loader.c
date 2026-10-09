@@ -832,6 +832,85 @@ static uint32_t add_grant(AstraLaunchGrant *out, uint32_t *count,
     return ASTRA_STATUS_OK;
 }
 
+/*
+ * A narrower grant of a provider-enforced binding (storage protocol 29,
+ * docs/FILESYSTEM_PRODUCTION_PRD.md FS15), made once per source handle and
+ * rights and kept while the source is published. The client flags a launch
+ * grant carries are only the Kit's own bookkeeping; this is what the
+ * provider enforces.
+ */
+typedef struct SupervisorNarrowed {
+    uint32_t source;
+    uint32_t rights;
+    uint32_t handle;
+} SupervisorNarrowed;
+
+static SupervisorNarrowed *narrowed;
+static uint32_t narrowed_count;
+static uint32_t narrowed_capacity;
+
+static uint32_t narrowed_grant(const AstraAssign *held, uint32_t rights,
+                               int delegates, uint32_t *handle)
+{
+    AstraVfsClient *client = supervisor_vfs_client_for(held);
+    uint32_t wanted = ASTRA_VFS_GRANT_READ |
+        ((rights & ASTRA_RIGHT_WRITE) != 0u ? ASTRA_VFS_GRANT_WRITE : 0u) |
+        (delegates ? ASTRA_VFS_GRANT_DELEGATE : 0u);
+    uint32_t status;
+
+    *handle = held->handle;
+    if (client == NULL ||
+        (client->features & ASTRA_VFS_FEATURE_GRANTS) == 0u)
+        return ASTRA_STATUS_OK;
+    /* The published grant reads, writes and delegates: a child that may do
+     * all three gets it as it is. */
+    if ((held->rights & ~rights & ASTRA_RIGHT_WRITE) == 0u && delegates)
+        return ASTRA_STATUS_OK;
+    for (uint32_t index = 0u; index < narrowed_count; ++index)
+        if (narrowed[index].source == held->handle &&
+            narrowed[index].rights == wanted) {
+            *handle = narrowed[index].handle;
+            return ASTRA_STATUS_OK;
+        }
+    if (narrowed_count == narrowed_capacity) {
+        uint32_t capacity = narrowed_capacity == 0u ? 4u :
+                            narrowed_capacity * 2u;
+        SupervisorNarrowed *grown = astra_runtime_reallocate(
+            narrowed, (size_t)capacity * sizeof(*grown));
+
+        if (grown == NULL)
+            return ASTRA_STATUS_LIMIT;
+        narrowed = grown;
+        narrowed_capacity = capacity;
+    }
+    status = astra_vfs_grant_derive(client, held->root, wanted, handle);
+    if (status != ASTRA_VFS_OK) {
+        *handle = 0u;
+        return status == ASTRA_VFS_ERR_LIMIT ? ASTRA_STATUS_LIMIT :
+                                               ASTRA_STATUS_ACCESS;
+    }
+    narrowed[narrowed_count++] = (SupervisorNarrowed){
+        held->handle, wanted, *handle
+    };
+    return ASTRA_STATUS_OK;
+}
+
+/* A source was unpublished: its derived grants go with it, and closing the
+ * last holder retires each at the provider. */
+static void narrowed_drop(uint32_t source)
+{
+    uint32_t index = 0u;
+
+    while (index < narrowed_count) {
+        if (narrowed[index].source != source) {
+            ++index;
+            continue;
+        }
+        (void)astra_close(narrowed[index].handle);
+        narrowed[index] = narrowed[--narrowed_count];
+    }
+}
+
 static uint32_t build_grants(const AstraStartupInfo *startup,
                              const SupervisorManifestEntry *entry,
                              const char *bundle_root, uint32_t ready_send,
@@ -1021,12 +1100,18 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
             const AstraAssign *held = astra_assign_member(
                 supervisor_assigns(), wanted->name, member);
 
+            uint32_t handle = 0u;
+
             if (held == NULL)
                 break;
             if ((held->rights & wanted->rights) != wanted->rights)
                 return ASTRA_STATUS_ACCESS;
+            status = narrowed_grant(held, wanted->rights,
+                                    entry->delegates != 0u, &handle);
+            if (status != ASTRA_STATUS_OK)
+                return status;
             status = add_grant(
-                out, count, wanted->name, held->handle,
+                out, count, wanted->name, handle,
                 ASTRA_RIGHT_SIGNAL | delegated,
                 ASTRA_CAPABILITY_FLAG_NAMESPACE |
                     ((wanted->rights & ASTRA_RIGHT_READ) != 0u ?
@@ -1652,6 +1737,7 @@ static void unpublish_owner(const char *owner)
         }
         if (service_handles[index] == event_control_handle)
             event_control_handle = 0u;
+        narrowed_drop(service_handles[index]);
         (void)astra_close(service_handles[index]);
         --service_count;
         service_handles[index] = service_handles[service_count];

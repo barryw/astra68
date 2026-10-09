@@ -168,6 +168,7 @@ astra_vfs_connect(AstraVfsClient *client, AstraVfsTransport transport,
     client->call_acquire = NULL;
     client->session = ASTRA_VFS_SESSION_INVALID;
     client->version = ASTRA_VFS_VERSION;
+    client->features = 0u;
     client->port_area_capable = 0u;
     client->direct_backend_ops = NULL;
     client->direct_backend_context = NULL;
@@ -190,6 +191,7 @@ astra_vfs_connect(AstraVfsClient *client, AstraVfsTransport transport,
     }
     client->session = call->reply.session;
     client->version = call->reply.version;
+    client->features = call->reply.features;
     return ASTRA_VFS_OK;
 }
 

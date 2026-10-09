@@ -87,6 +87,7 @@ typedef struct AstraVfsPortThreadState {
     uint32_t borrow_valid;
     const struct AstraVfsClient *borrow_client;
     const uint8_t *borrow_base;
+    uint32_t received_handle; /* GRANT_DERIVE's reply handle (Kit 7) */
     /** @endcond */
 } AstraVfsPortThreadState;
 
@@ -134,6 +135,7 @@ typedef struct AstraVfsClient {
     AstraVfsCallAcquire call_acquire;
     ASTRA_VFS_ATOMIC(uint32_t) session;
     ASTRA_VFS_ATOMIC(uint16_t) version; /* the version agreed at connect */
+    uint32_t features;  /* ASTRA_VFS_FEATURE_* its HELLO answered (Kit 7) */
     /*
      * What the owner of this client is currently doing. Stamped on every
      * request so one request is one story across every process it touches.
@@ -208,6 +210,23 @@ uint32_t astra_vfs_client_connect_service(AstraVfsClient *client,
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_vfs_disconnect(AstraVfsClient *client);
+/**
+ * Derive a narrower grant of the one this client is connected through
+ * (storage protocol 29, docs/FILESYSTEM_PRODUCTION_PRD.md FS15). The new
+ * grant is rooted at `root` beneath this grant's root ("" keeps it) and
+ * carries at most `rights`, a subset of this grant's: never wider. The
+ * caller owns the answered send handle -- to keep, transfer to a child, or
+ * close; closing its last holder retires the grant.
+ * @param client A client connected to a grant's port.
+ * @param root The new root, relative to this grant's root.
+ * @param rights ASTRA_VFS_GRANT_* the new grant carries; READ is required.
+ * @param handle Receives the new grant's send handle, 0 on failure.
+ * @return ASTRA_VFS_ERR_UNSUPPORTED when the client is not connected to a
+ *         grant (ASTRA_VFS_FEATURE_GRANTS), ASTRA_VFS_ERR_ACCESS when
+ *         `rights` would widen it, otherwise an ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_grant_derive(AstraVfsClient *client, const char *root,
+                                uint32_t rights, uint32_t *handle);
 
 /**
  * Open a path with backend-default creation permissions.

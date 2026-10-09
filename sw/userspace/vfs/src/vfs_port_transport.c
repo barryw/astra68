@@ -449,9 +449,10 @@ port_client_session(const AstraVfsClient *client)
 
 static void
 port_client_publish_session(AstraVfsClient *client, uint32_t session,
-                            uint16_t version)
+                            uint16_t version, uint32_t features)
 {
     client->version = version;
+    client->features = features;
     atomic_store_explicit(&client->session, session, memory_order_release);
 }
 
@@ -665,6 +666,7 @@ astra_vfs_port_connect_with_accelerator(
           accelerator->bulk == NULL)))
         return ASTRA_VFS_ERR_INVALID;
     client->port_service = service;
+    client->features = 0u;
     memset(client->port_lanes, 0, sizeof(client->port_lanes));
     client->port_lane_lock = 0u;
     client->port_direct_address = NULL;
@@ -722,6 +724,7 @@ astra_vfs_port_connect_lazy_with_accelerator(
     client->port_area_capable = 1u;
     client->port_direct_detached = 0u;
     client->port_service = service;
+    client->features = 0u;
     memset(client->port_lanes, 0, sizeof(client->port_lanes));
     client->port_lane_lock = 0u;
     client->port_direct_address = NULL;
@@ -1079,6 +1082,15 @@ vfs_port_transport_call(void *context, uint32_t operation,
         retry->version = client->version;
         return astra_vfs_port_transport(client, operation, retry, reply);
     }
+    /* A lane client's port carries authority, never data: GRANT_DERIVE
+     * goes to the grant's port on the lane its HELLO bound, which is the
+     * only lane the service knows for a client whose data is its own. */
+    if (operation == ASTRA_VFS_OP_GRANT_DERIVE &&
+        client->port_direct_address != NULL && lane == NULL) {
+        lane = port_session_lane(client);
+        if (lane == NULL)
+            return ASTRA_VFS_ERR_BAD_HANDLE;
+    }
     if (operation != ASTRA_VFS_OP_HELLO &&
         operation != ASTRA_VFS_OP_BIND_LANE &&
         client->port_direct_address == NULL) {
@@ -1109,7 +1121,8 @@ vfs_port_transport_call(void *context, uint32_t operation,
         wire_operation = ASTRA_VFS_OP_HELLO;
     if (client->port_direct_address != NULL &&
         client->port_accelerator_ops != NULL &&
-        operation != ASTRA_VFS_OP_BYE) {
+        operation != ASTRA_VFS_OP_BYE &&
+        operation != ASTRA_VFS_OP_GRANT_DERIVE) {
         if (operation == ASTRA_VFS_OP_READDIR_AREA ||
             operation == ASTRA_VFS_OP_BIND_AREA)
             lane = port_lane(client);
@@ -1240,9 +1253,13 @@ vfs_port_transport_call(void *context, uint32_t operation,
      * forwarded to the caller as a status, because the caller would read a
      * field nobody filled in.
      */
+    /* A reply carries a handle only on a HELLO from version 28 (the
+     * grant's scope) or on GRANT_DERIVE (the new grant's port). */
     if (size != sizeof(*incoming) || reply_handle_count > 1u ||
         (reply_handle_count != 0u &&
-         wire_operation != ASTRA_VFS_OP_HELLO) ||
+         !((wire_operation == ASTRA_VFS_OP_HELLO &&
+            incoming->reply.version >= UINT16_C(28)) ||
+           wire_operation == ASTRA_VFS_OP_GRANT_DERIVE)) ||
         incoming->header.protocol != ASTRA_VFS_PROTOCOL ||
         incoming->header.operation != wire_operation ||
         incoming->header.transaction_id != lane->owner_thread ||
@@ -1253,7 +1270,10 @@ vfs_port_transport_call(void *context, uint32_t operation,
         return ASTRA_VFS_ERR_PROTOCOL;
     }
     *reply = incoming->reply;
-    if (reply_handle_count == 1u) {
+    if (reply_handle_count == 1u &&
+        wire_operation == ASTRA_VFS_OP_GRANT_DERIVE) {
+        port_state(client)->received_handle = reply_handles[0];
+    } else if (reply_handle_count == 1u) {
         status = client->port_accelerator_ops != NULL ?
             client->port_accelerator_ops->connect(client,
                                                   reply_handles[0]) :
@@ -1262,7 +1282,8 @@ vfs_port_transport_call(void *context, uint32_t operation,
             (void)astra_close(reply_handles[0]);
     }
     if (fused_hello && reply->session != ASTRA_VFS_SESSION_INVALID) {
-        port_client_publish_session(client, reply->session, reply->version);
+        port_client_publish_session(client, reply->session, reply->version,
+                                    reply->features);
         lane->session = reply->session;
         if (reply_handle_count == 1u) {
             AstraVfsRequest retry = *request;
@@ -1277,10 +1298,78 @@ vfs_port_transport_call(void *context, uint32_t operation,
     }
     if (operation == ASTRA_VFS_OP_HELLO &&
         reply->session != ASTRA_VFS_SESSION_INVALID) {
-        port_client_publish_session(client, reply->session, reply->version);
+        port_client_publish_session(client, reply->session, reply->version,
+                                    reply->features);
         lane->session = reply->session;
     }
     return ASTRA_VFS_OK;
+}
+
+/*
+ * A narrower grant of the one `client` is connected through (storage
+ * protocol 29). Control plane only: it goes to the grant's port, never to
+ * the lane, and it is serialised on the connect lock because a lane client
+ * has one reply lane at the service -- the one its HELLO bound.
+ */
+uint32_t
+astra_vfs_grant_derive(AstraVfsClient *client, const char *root,
+                       uint32_t rights, uint32_t *handle)
+{
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    size_t length;
+    uint32_t status;
+
+    if (handle != NULL)
+        *handle = 0u;
+    if (client == NULL || root == NULL || handle == NULL ||
+        (rights & ~(ASTRA_VFS_GRANT_READ | ASTRA_VFS_GRANT_WRITE |
+                    ASTRA_VFS_GRANT_DELEGATE)) != 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    length = strlen(root);
+    if (length >= ASTRA_VFS_PATH_MAX ||
+        !astra_utf8_validate(root, (uint32_t)length, 0u))
+        return ASTRA_VFS_ERR_INVALID;
+    /* Only a port serves grants; a lane client connects on first use. */
+    if (client->transport != astra_vfs_port_transport)
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    if (client->port_accelerator_ops != NULL) {
+        status = ensure_accelerated_connection(client);
+        if (status != ASTRA_VFS_OK)
+            return status;
+    }
+    /* A fork child's lane client holds no session at its grant's port
+     * (vfs_host_direct.c astra_vfs_host_direct_after_fork). */
+    if ((client->features & ASTRA_VFS_FEATURE_GRANTS) == 0u ||
+        client->port_direct_detached != 0u ||
+        port_client_session(client) == ASTRA_VFS_SESSION_INVALID)
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    memset(&request, 0, sizeof(request));
+    request.size = ASTRA_VFS_REQUEST_SIZE;
+    request.version = client->version;
+    request.session = port_client_session(client);
+    request.activity = client->activity;
+    request.flags = rights;
+    memcpy(request.body.path, root, length + 1u);
+    if (astra_wait_one_restart(client->port_connect_lock,
+                               ASTRA_DEADLINE_FOREVER, NULL) !=
+        ASTRA_SYSCALL_OK)
+        return ASTRA_VFS_ERR_PEER;
+    port_state(client)->received_handle = 0u;
+    status = astra_vfs_port_transport(client, ASTRA_VFS_OP_GRANT_DERIVE,
+                                      &request, &reply);
+    *handle = port_state(client)->received_handle;
+    port_state(client)->received_handle = 0u;
+    (void)astra_rt_signal(client->port_connect_lock, 1u, NULL);
+    if (status == ASTRA_VFS_OK)
+        status = reply.status;
+    if (status != ASTRA_VFS_OK) {
+        if (*handle != 0u)
+            (void)astra_close(*handle);
+        *handle = 0u;
+        return status;
+    }
+    return *handle != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_PROTOCOL;
 }
 
 static void
@@ -2097,7 +2186,8 @@ astra_vfs_port_service_init(AstraVfsPortService *host, uint32_t receive,
     host->refused = 0u;
     host->dropped = 0u;
     host->stalled = 0u;
-    host->scope = 0u;
+    host->derive = NULL;
+    host->derive_context = NULL;
     host->state_acquire = NULL;
     host->state_release = NULL;
     host->state_lock_context = NULL;
@@ -2130,24 +2220,33 @@ astra_vfs_port_service_set_state_lock(AstraVfsPortService *host,
 }
 
 int
-astra_vfs_port_service_set_scope(AstraVfsPortService *host, uint32_t scope)
+astra_vfs_port_service_set_derive(AstraVfsPortService *host,
+                                  AstraVfsPortDerive derive, void *context)
 {
-    if (host == NULL || scope == 0u || host->scope != 0u)
+    if (host == NULL || derive == NULL || host->derive != NULL)
         return 0;
-    host->scope = scope;
+    host->derive = derive;
+    host->derive_context = context;
     return 1;
 }
 
-uint32_t
-astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
-                                   AstraVfsPortWorker *worker,
-                                   uint32_t budget)
+/*
+ * The receive-dispatch-reply pump, for the host's own port (`grant` NULL)
+ * or for one grant's port. A grant's port is control only, and every
+ * session it opens is bound to that grant (FS15): the kernel stamps the
+ * sender and the receiving port, so neither can be forged from the request.
+ */
+static uint32_t
+pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
+     const AstraVfsPortGrant *grant, uint32_t budget)
 {
     AstraVfsRequestMessage *incoming;
     AstraVfsReplyMessage *outgoing;
     uint32_t answered = 0u;
+    const uint32_t grant_id = grant != NULL ? grant->id : 0u;
+    const uint32_t features = grant != NULL ? ASTRA_VFS_FEATURE_GRANTS : 0u;
 
-    if (host == NULL || worker == NULL || host->receive == 0u ||
+    if (host == NULL || worker == NULL || receive == 0u ||
         host->service == NULL) {
         return 0u;
     }
@@ -2172,13 +2271,13 @@ astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
         int sent;
         int slot = -1;
         uint32_t status = astra_port_receive_from(
-            host->receive, incoming, sizeof(worker->incoming), handles, 1u,
+            receive, incoming, sizeof(worker->incoming), handles, 1u,
             &size, &handle_count, &sender);
 
         if (status == ASTRA_SYSCALL_RESOURCE_LIMIT) {
             reply_reap_dead(host);
             status = astra_port_receive_from(
-                host->receive, incoming, sizeof(worker->incoming), handles, 1u,
+                receive, incoming, sizeof(worker->incoming), handles, 1u,
                 &size, &handle_count, &sender);
         }
 
@@ -2235,8 +2334,8 @@ astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
         int persistent_hello =
             wire_operation == ASTRA_VFS_OP_HELLO && !fused_hello;
         int session_owned = wire_operation == ASTRA_VFS_OP_HELLO ||
-            astra_vfs_service_session_owned(
-                host->service, incoming->request.session, sender);
+            astra_vfs_service_session_bound(
+                host->service, incoming->request.session, sender, grant_id);
 
         if (!session_owned) {
             port_refuse(host);
@@ -2291,13 +2390,15 @@ astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
             continue;
         }
 
-        /* A scoped port answers HELLO with the grant's scope: a
+        /* A grant's port answers HELLO with the grant's scope: a
          * capability that reaches that scope and nothing else, never the
          * device (FS44). It travels without ADMINISTER, and the kernel
          * strips TRANSFER on arrival unless the scope is delegable. */
-        if (wire_operation == ASTRA_VFS_OP_HELLO && host->scope != 0u) {
+        if (wire_operation == ASTRA_VFS_OP_HELLO &&
+            incoming->request.version >= UINT16_C(28) && grant != NULL &&
+            grant->scope != 0u) {
             if (astra_rt_handle_duplicate(
-                    host->scope,
+                    grant->scope,
                     ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
                         ASTRA_RIGHT_TRANSFER,
                     &outgoing_handles[0]) == ASTRA_SYSCALL_OK)
@@ -2308,8 +2409,8 @@ astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
 
         clear_service_reply(&outgoing->reply, incoming->request.version,
                             incoming->request.session);
-        /* A scoped port's session is worth nothing without its scope:
-         * refuse the HELLO rather than open one with no lane. */
+        /* A grant's session is worth nothing without its scope: refuse
+         * the HELLO rather than open one with no lane. */
         if (scope_refused) {
             outgoing->reply.status = ASTRA_VFS_ERR_LIMIT;
             goto answer_ready;
@@ -2334,10 +2435,11 @@ astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
                                           &previous);
             adopted = 1;
         }
-        /* The data plane is the client's own lane; a scoped port is
-         * control only (HELLO, BYE; GRANT_DERIVE from version 29). */
-        if (host->scope != 0u && wire_operation != ASTRA_VFS_OP_HELLO &&
-            wire_operation != ASTRA_VFS_OP_BYE) {
+        /* The data plane is the client's own lane; a grant's port is
+         * control only (HELLO, BYE, GRANT_DERIVE). */
+        if (grant != NULL && wire_operation != ASTRA_VFS_OP_HELLO &&
+            wire_operation != ASTRA_VFS_OP_BYE &&
+            wire_operation != ASTRA_VFS_OP_GRANT_DERIVE) {
             /* A BIND_AREA's area is not the reply port: nothing keeps it. */
             if (handle_count != 0u && handles[0] != reply_handle)
                 (void)astra_close(handles[0]);
@@ -2348,9 +2450,9 @@ astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
             AstraVfsRequest hello = incoming->request;
 
             hello.file = ASTRA_VFS_FILE_INVALID;
-            astra_vfs_service_dispatch_from(
-                host->service, sender, ASTRA_VFS_OP_HELLO, &hello,
-                &outgoing->reply);
+            astra_vfs_service_dispatch_grant(
+                host->service, sender, grant_id, features,
+                ASTRA_VFS_OP_HELLO, &hello, &outgoing->reply);
             if (outgoing->reply.status == ASTRA_VFS_OK) {
                 slot = reply_bind_acquire(
                     host, outgoing->reply.session, lane_id, reply_handle,
@@ -2369,9 +2471,9 @@ astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
         }
         if (fused_hello && slot < 0) {
             /* HELLO already produced the refusal to return. */
-        } else if (fused_hello && host->scope != 0u) {
-            /* A scoped port runs no data operation, fused or not: the client
-             * retries it on its own lane. */
+        } else if (fused_hello && grant != NULL) {
+            /* A grant's port runs no data operation, fused or not: the
+             * client retries it on its own lane. */
         } else if (operation == ASTRA_VFS_OP_BIND_LANE) {
             slot = reply_bind_acquire(
                 host, incoming->request.session, lane_id, reply_handle,
@@ -2537,10 +2639,44 @@ astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
                 if (outgoing->reply.status == ASTRA_VFS_OK)
                     outgoing->reply.node_size = position;
             }
+        } else if (operation == ASTRA_VFS_OP_GRANT_DERIVE) {
+            const char *root = (const char *)incoming->request.body.path;
+            uint32_t root_length = 0u;
+            uint32_t derived = 0u;
+
+            while (root_length < ASTRA_VFS_PATH_MAX &&
+                   root[root_length] != '\0')
+                ++root_length;
+
+            /* Never wider: the new rights are a subset of this grant's, and
+             * every grant reads. The root is resolved by whoever derives,
+             * beneath this grant's root. */
+            if (incoming->request.version < UINT16_C(29) || grant == NULL ||
+                host->derive == NULL)
+                outgoing->reply.status = ASTRA_VFS_ERR_UNSUPPORTED;
+            else if ((incoming->request.flags & ~grant->rights) != 0u ||
+                     (incoming->request.flags & ASTRA_VFS_GRANT_READ) == 0u)
+                outgoing->reply.status = ASTRA_VFS_ERR_ACCESS;
+            else if (root_length == ASTRA_VFS_PATH_MAX ||
+                     !astra_utf8_validate(root, root_length, 0u))
+                outgoing->reply.status = ASTRA_VFS_ERR_INVALID;
+            else {
+                outgoing->reply.status = host->derive(
+                    host->derive_context, grant, root,
+                    incoming->request.flags, &derived);
+                if (outgoing->reply.status == ASTRA_VFS_OK && derived != 0u) {
+                    outgoing_handles[0] = derived;
+                    outgoing_handle_count = 1u;
+                } else if (outgoing->reply.status == ASTRA_VFS_OK) {
+                    outgoing->reply.status = ASTRA_VFS_ERR_IO;
+                } else if (derived != 0u) {
+                    (void)astra_close(derived);
+                }
+            }
         } else {
-            astra_vfs_service_dispatch_from(
-                host->service, sender, operation, &incoming->request,
-                &outgoing->reply);
+            astra_vfs_service_dispatch_grant(
+                host->service, sender, grant_id, features, operation,
+                &incoming->request, &outgoing->reply);
         }
 answer_ready:
         /*
@@ -2601,6 +2737,25 @@ answer_ready:
             reply_session_close(host, incoming->request.session);
     }
     return answered;
+}
+
+uint32_t
+astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
+                                   AstraVfsPortWorker *worker,
+                                   uint32_t budget)
+{
+    return host == NULL ? 0u : pump(host, worker, host->receive, NULL, budget);
+}
+
+uint32_t
+astra_vfs_port_service_grant_pump(AstraVfsPortService *host,
+                                  AstraVfsPortWorker *worker,
+                                  const AstraVfsPortGrant *grant,
+                                  uint32_t budget)
+{
+    if (grant == NULL || grant->receive == 0u || grant->id == 0u)
+        return 0u;
+    return pump(host, worker, grant->receive, grant, budget);
 }
 
 uint32_t

@@ -258,14 +258,20 @@ cannot escape the grant. A shared transport capability alone grants no volume
 or mutation authority. Mount/administer and raw maintenance rights are separate
 from ordinary file read/write rights; delegation cannot increase them.
 
-Enforcement runs in the guest HostFS service: every request carries a
-kernel-stamped sender owner, never a client-supplied one, and the service
-checks it against the grant before acting. On the Linux side, each rooted
-session is confined with `openat2` `RESOLVE_BENEATH`, so a confined session
-cannot resolve outside its root through `..` or a symlink target. QEMU never
-trusts a client-supplied owner field; the owner the provider acts on is the
-one the kernel stamped at submission or channel-open time, not one read from
-the wire command.
+Enforcement is split between an authority and a boundary, and neither is a
+server on the data path. HostFS is the authority: it alone holds the host
+device's scope right, opens a rooted provider session per grant and mints
+that grant's *scope*, a kernel object naming the session and its rights.
+A client receives the scope when it says HELLO on the grant's port; the
+kernel stamps the scope's session, rights and creator into every channel
+the client binds to it, and never a client-supplied owner. QEMU is the
+boundary: on a bound channel it runs only filesystem commands, resolves
+every path beneath the session's root with `openat2` `RESOLVE_BENEATH`,
+refuses mutations through a read-only scope and handles from another
+session, and accepts a scope only if the claimed filesystem owner created
+it. A scope travels further only when its grant is delegable, and a holder
+can narrow a grant only through HostFS (`GRANT_DERIVE`). Revocation goes
+through the kernel, which detaches the scope from every channel at once.
 
 FS16. Namespace changes are atomic publications tied to a sequence and object
 generation. Public mount names and metadata form a live catalog visible to every

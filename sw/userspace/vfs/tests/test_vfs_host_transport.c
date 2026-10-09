@@ -393,6 +393,54 @@ static void test_lane_carries_scopes(void)
     astra_vfs_host_transport_destroy(&transport);
 }
 
+/*
+ * Two scopes on one channel (Task 3b review; controller addition 1 of
+ * Task 5): each operation goes through the scope it was issued under, and
+ * a scope the lane was told to forget -- its client closed the handle -- is
+ * attached afresh when the same handle number comes back naming another
+ * scope. Trusting the old number would leave the new scope unbound and its
+ * session refused, or reach the old scope's session.
+ */
+static void test_a_forgotten_scope_is_attached_again(void)
+{
+    AstraVfsHostTransport transport;
+    AstraVfsHostRequest request;
+    uint32_t attaches;
+
+    capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
+                   ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_FS_SESSIONS |
+                   ASTRA_HOST_CAP_CHANNEL | ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ;
+    assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                         &lock_depth));
+    assert(astra_vfs_host_transport_begin(&transport, 77u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(last_open_device == 77u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    attaches = scope_attaches;
+    assert(astra_vfs_host_transport_begin(&transport, 78u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(scope_attaches == attaches + 1u && last_attached == 78u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    astra_vfs_host_transport_forget_scope(&transport, 77u);
+    assert(astra_vfs_host_transport_begin(&transport, 78u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(scope_attaches == attaches + 1u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    assert(astra_vfs_host_transport_begin(&transport, 77u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(scope_attaches == attaches + 2u && last_attached == 77u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    astra_vfs_host_transport_destroy(&transport);
+}
+
 int main(void)
 {
     AstraVfsHostTransport transport;
@@ -618,5 +666,6 @@ int main(void)
     astra_vfs_host_transport_destroy(&transport);
     channel_open_status = ASTRA_SYSCALL_OK;
     test_lane_carries_scopes();
+    test_a_forgotten_scope_is_attached_again();
     return 0;
 }

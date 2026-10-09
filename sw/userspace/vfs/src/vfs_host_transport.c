@@ -177,6 +177,31 @@ void astra_vfs_host_transport_after_fork(AstraVfsHostTransport *transport)
     memset(transport->lanes, 0, sizeof(transport->lanes));
 }
 
+/* A client closed `scope`: no lane may trust that handle number again.
+ * Its kernel binding stays with the channel until the channel closes; the
+ * number, once reused for another scope, must be attached afresh. */
+void astra_vfs_host_transport_forget_scope(AstraVfsHostTransport *transport,
+                                           uint32_t scope)
+{
+    if (transport == NULL || scope == 0u)
+        return;
+    if (transport->acquire != NULL &&
+        !transport->acquire(transport->lock_context))
+        return;
+    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
+         ++index) {
+        AstraVfsHostLane *lane = &transport->lanes[index];
+        uint32_t kept = 0u;
+
+        for (uint32_t at = 0u; at < lane->scope_count; ++at)
+            if (lane->scopes[at] != scope)
+                lane->scopes[kept++] = lane->scopes[at];
+        lane->scope_count = (uint8_t)kept;
+    }
+    if (transport->release != NULL)
+        transport->release(transport->lock_context);
+}
+
 static int lane_carries(const AstraVfsHostLane *lane, uint32_t scope)
 {
     if (scope == 0u)

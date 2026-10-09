@@ -1100,7 +1100,7 @@ test_session_release_waits_for_pinned_file(void)
     assert(call.reply.status == ASTRA_VFS_OK);
     assert(fake.closes == 1u);
     assert(slow->open_count == 0);
-    assert(!astra_vfs_service_session_owned(&service, call.session, 0u));
+    assert(!astra_vfs_service_session_bound(&service, call.session, 0u, 0u));
     assert(pthread_cond_destroy(&concurrent_gate.changed) == 0);
     assert(pthread_mutex_destroy(&concurrent_gate.mutex) == 0);
     assert(pthread_mutex_destroy(&state_mutex) == 0);
@@ -1314,6 +1314,55 @@ test_session_handshake(void)
     assert(reply.status == ASTRA_VFS_ERR_PROTOCOL);
 }
 
+/*
+ * A session is bound to the grant it said HELLO on: the same session id on
+ * another grant is refused (docs/FILESYSTEM_PRODUCTION_PRD.md FS15).
+ */
+static void
+test_sessions_are_bound_to_their_grant(void)
+{
+    AstraVfsRequest request;
+    AstraVfsReply reply;
+    uint32_t session;
+
+    reset();
+    begin_request(&request, ASTRA_VFS_SESSION_INVALID, NULL);
+    astra_vfs_service_dispatch_grant(&service, 7u, 1u,
+                                     ASTRA_VFS_FEATURE_GRANTS,
+                                     ASTRA_VFS_OP_HELLO, &request, &reply);
+    assert(reply.status == ASTRA_VFS_OK);
+    assert(reply.features == ASTRA_VFS_FEATURE_GRANTS);
+    session = reply.session;
+    assert(astra_vfs_service_session_bound(&service, session, 7u, 1u));
+    assert(!astra_vfs_service_session_bound(&service, session, 7u, 2u));
+    assert(!astra_vfs_service_session_bound(&service, session, 8u, 1u));
+
+    /* Every other operation answers no features. */
+    begin_request(&request, session, "/owned.txt");
+    astra_vfs_service_dispatch_grant(&service, 7u, 1u,
+                                     ASTRA_VFS_FEATURE_GRANTS,
+                                     ASTRA_VFS_OP_STAT, &request, &reply);
+    assert(reply.features == 0u);
+
+    begin_request(&request, session, NULL);
+    astra_vfs_service_dispatch_grant(&service, 7u, 2u, 0u, ASTRA_VFS_OP_BYE,
+                                     &request, &reply);
+    assert(reply.status == ASTRA_VFS_ERR_ACCESS);
+    assert(astra_vfs_service_session_bound(&service, session, 7u, 1u));
+
+    /* The core answers GRANT_DERIVE UNSUPPORTED: only a port carries the
+     * new grant's handle. */
+    begin_request(&request, session, "");
+    request.flags = ASTRA_VFS_GRANT_READ;
+    astra_vfs_service_dispatch_grant(&service, 7u, 1u, 0u,
+                                     ASTRA_VFS_OP_GRANT_DERIVE, &request,
+                                     &reply);
+    assert(reply.status == ASTRA_VFS_ERR_UNSUPPORTED);
+
+    astra_vfs_service_release_grant(&service, 1u);
+    assert(!astra_vfs_service_session_bound(&service, session, 7u, 1u));
+}
+
 static void
 test_transport_owner_isolation_and_resource_exhaustion(void)
 {
@@ -1330,8 +1379,8 @@ test_transport_owner_isolation_and_resource_exhaustion(void)
     assert(reply.status == ASTRA_VFS_OK);
     session = reply.session;
     owner_sessions[0] = session;
-    assert(astra_vfs_service_session_owned(&service, session, owner));
-    assert(!astra_vfs_service_session_owned(&service, session, owner + 1u));
+    assert(astra_vfs_service_session_bound(&service, session, owner, 0u));
+    assert(!astra_vfs_service_session_bound(&service, session, owner + 1u, 0u));
 
     for (uint32_t index = 1u; index < ASTRA_VFS_SESSION_MAX; ++index) {
         begin_request(&request, ASTRA_VFS_SESSION_INVALID, NULL);
@@ -1940,6 +1989,7 @@ main(void)
     test_terminal_readdir_cookie();
     test_session_handshake();
     test_transport_owner_isolation_and_resource_exhaustion();
+    test_sessions_are_bound_to_their_grant();
     test_file_round_trip();
     test_handle_discipline();
     test_session_release_frees_files();

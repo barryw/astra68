@@ -54,6 +54,7 @@ enum {
 typedef struct AstraVfsSessionSlot {
     uint32_t id;            /* 0 when free */
     uint32_t owner;         /* authenticated transport owner, 0 for local */
+    uint32_t grant;         /* the grant it said HELLO on, 0 for none */
     uint32_t open_files;
     uint16_t generation;
     uint16_t version;       /* the version agreed at HELLO */
@@ -154,8 +155,24 @@ void astra_vfs_service_dispatch(AstraVfsService *service, uint32_t operation,
 void astra_vfs_service_dispatch_from(
     AstraVfsService *service, uint32_t owner, uint32_t operation,
     const AstraVfsRequest *request, AstraVfsReply *reply);
-int astra_vfs_service_session_owned(const AstraVfsService *service,
-                                    uint32_t session, uint32_t owner);
+/*
+ * A request that arrived on a grant's port (docs/FILESYSTEM_PRODUCTION_PRD.md
+ * FS15). HELLO binds the new session to `grant` and answers `features`; every
+ * other operation is refused ACCESS for a session bound to another grant.
+ * Grant 0 is no grant: astra_vfs_service_dispatch_from().
+ */
+void astra_vfs_service_dispatch_grant(
+    AstraVfsService *service, uint32_t owner, uint32_t grant,
+    uint32_t features, uint32_t operation, const AstraVfsRequest *request,
+    AstraVfsReply *reply);
+/* Nonzero when `session` is open, belongs to `owner` and is bound to
+ * `grant` (0 for a session opened on no grant). */
+int astra_vfs_service_session_bound(const AstraVfsService *service,
+                                    uint32_t session, uint32_t owner,
+                                    uint32_t grant);
+/* Releases every session bound to `grant`: its last holder has gone. */
+void astra_vfs_service_release_grant(AstraVfsService *service,
+                                     uint32_t grant);
 int astra_vfs_service_session_capacity_reached(
     const AstraVfsService *service);
 

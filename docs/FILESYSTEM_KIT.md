@@ -1,17 +1,20 @@
 # Filesystem Kit
 
-Status: `filesystem.library` ABI 6.0 is the shared, backend-neutral client layer
+Status: `filesystem.library` ABI 7.0 is the shared, backend-neutral client layer
 over Astra's VFS protocol, assign namespaces, and union policy. It does not
 create a second filesystem stack.
 
 ## Native application contract
 
 Applications link the direct symbols declared by the NDK. Their executable has
-an eager `DT_NEEDED` dependency on `filesystem.library.6`; launch fails before
+an eager `DT_NEEDED` dependency on `filesystem.library.7`; launch fails before
 `main()` with a precise diagnostic when the required ABI is unavailable. An
 `AstraFilesystem` attaches to the process namespace already built from its
 startup grants; it borrows those assign and client objects and cannot expand
-their rights.
+their rights. A client connected to a provider-enforced grant
+(`ASTRA_VFS_FEATURE_GRANTS`) narrows it with `astra_vfs_grant_derive`: a
+sub-root, read-only, non-delegable, or a mix, never wider
+(docs/FILESYSTEM_PRODUCTION_PRD.md FS15).
 
 The API provides assign-aware open/close, sequential and positioned I/O,
 64-bit seek, sync, truncate, stat and lstat, chmod, mkdir, unlink, atomic

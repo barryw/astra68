@@ -90,6 +90,7 @@ ASTRA_FILESYSTEM_3.0 {
         astra_vfs_disconnect;
         astra_vfs_filesystem_info_file;
         astra_vfs_filesystem_info_path;
+        astra_vfs_grant_derive;
         astra_vfs_link;
         astra_vfs_mkdir;
         astra_vfs_mkdir_mode;

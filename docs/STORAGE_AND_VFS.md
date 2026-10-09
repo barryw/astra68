@@ -90,10 +90,20 @@ What actually runs today, verified against source:
   `ASTRA_HOST_FS_VOLUME_SOUND` (`sw/include/astra/host.h`). This is not a
   dynamic volume inventory: the volume a session reaches is fixed at
   compile/link time, not discovered or mounted. At startup HostFS claims the
-  host filesystem (`ASTRA_HOST_FS_CLAIM`, host command record 3), opens one
-  root session per volume, mints one filesystem scope per session
-  (`ASTRA_SYSCALL_HOST_SCOPE_CREATE`) and serves each volume's port with a
-  single pump; the port is control only (HELLO, BYE). QEMU takes the claim
+  host filesystem (`ASTRA_HOST_FS_CLAIM`, host command record 3) and opens
+  one root session per volume. Since storage protocol 29 every grant is a
+  HostFS port of its own (`services/hostfs/settings.conf` `grants N`, 32
+  shipped): each has its own provider session and its own filesystem scope
+  (`ASTRA_SYSCALL_HOST_SCOPE_CREATE`) minted over that session with the
+  grant's rights -- read-only without WRITE, delegable only with DELEGATE.
+  The two volumes' base grants are delegable; `GRANT_DERIVE` makes a
+  narrower one (a sub-root, read-only, non-delegable, never wider), and the
+  supervisor derives one for every manifest grant narrower than the base and
+  for every child that does not `delegate`. A session is answered only on
+  the grant port it said HELLO on. One pump serves every grant port; a port
+  is control only (HELLO, BYE, GRANT_DERIVE). When a grant's last holder
+  closes its port HostFS revokes its scope through the kernel and closes its
+  provider session. QEMU takes the claim
   only on a channel the kernel opened for a device handle carrying
   `ASTRA_RIGHT_HOST_SCOPE` (`ASTRA_HOST_CHANNEL_PROVIDER`), so no other
   `HOST_DEVICE` holder can claim, even while HostFS is restarting. Session
@@ -101,7 +111,7 @@ What actually runs today, verified against source:
   in one QEMU process, after which the id of a closed session could be
   issued again to the claimant (a known limit, not a guarantee).
 - **The scoped direct lane.** Since storage protocol 28 a HELLO on a host
-  volume's port attaches a duplicate of that volume's scope, never the
+  volume's port attaches a duplicate of that grant's scope, never the
   device, without ADMINISTER, and without TRANSFER on arrival (the kernel's
   import hook strips it unless the scope is delegable). The client drives
   its own host channel through it (`vfs_host_direct.c`, one process-wide
@@ -114,13 +124,13 @@ What actually runs today, verified against source:
   scope from every channel at once; HostFS's death revokes everything it
   minted. HostFS's METRICS port, and the ramfs, storage and proc services,
   still serve every operation through their service core.
-- **Grant enforcement: volumes in the provider, roots in the client.** A
-  client reaches only the volumes whose scopes it was handed, enforced by
-  the kernel and QEMU. Rights and assign roots *within* a volume are still
-  checked only in the client library (`astra_assign_resolve`,
-  `sw/userspace/vfs/src/vfs_assign.c`), and `..` is folded lexically before
-  lookup (`astra_path_normalise`): grant roots move into the provider in
-  Phase 1 Task 5. Host-root opens are confined with
+- **Grant enforcement: in the provider.** A client reaches only the
+  sessions whose scopes it was handed, enforced by the kernel and QEMU: a
+  derived grant's session is rooted at its sub-root and read-only when the
+  grant is, so its root and rights hold whatever the client library does.
+  The Kit's own assign roots and `..` folding (`astra_assign_resolve`,
+  `astra_path_normalise`) remain client bookkeeping for the bindings the
+  provider does not yet own (Phase 2). Host-root opens are confined with
   `openat2(..., RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS)`.
 - **Cost of the lane.** Measured on QEMU/TCG on `beast` (not the board) with
   `fsprobe` (`emu/qemu/fs-probe.py`, `tools/fs-probe-compare.py`), ten

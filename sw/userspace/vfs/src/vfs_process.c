@@ -67,8 +67,9 @@ static uint32_t reserve_clients(uint32_t minimum)
 }
 
 #define PROCESS_VFS_EXEC_MAGIC 0x56465345u
-/* 5 was 62b72fc2's layout (no lane fields); never reuse it. */
-#define PROCESS_VFS_EXEC_VERSION 6u
+/* 5 was 62b72fc2's layout (no lane fields), 6 had no features (storage
+ * protocol 28); never reuse either. */
+#define PROCESS_VFS_EXEC_VERSION 7u
 
 typedef struct ProcessVfsExecHeader {
     uint32_t magic;
@@ -86,6 +87,7 @@ typedef struct ProcessVfsExecClient {
     uint32_t port_direct_area;
     uint32_t port_direct_scope;
     uint32_t port_direct_session;
+    uint32_t features;
     uint16_t version;
     uint8_t port_area_capable;
     uint8_t reserved;
@@ -150,6 +152,7 @@ uint32_t astra_process_vfs_export(void *state, uint32_t capacity,
         output[count].port_direct_scope = client->port_direct_scope;
         output[count].port_direct_session = client->port_direct_session;
         output[count].version = client->version;
+        output[count].features = client->features;
         output[count].port_area_capable = client->port_area_capable;
         ++count;
     }
@@ -278,6 +281,7 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
         client->activity = input[index].activity;
         client->port_service = input[index].port_service;
         client->version = input[index].version;
+        client->features = input[index].features;
         client->port_area_capable = input[index].port_area_capable;
         clients[slot].connected = 1u;
         status = astra_vfs_port_exec_lane_import(client, &input[index].lane);

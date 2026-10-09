@@ -683,6 +683,9 @@ def claim_race(qtest):
                  (session, round_index))
     assert configure_channel(qtest, generation, CONFIG_CLOSE, slot=slot,
                              channel_generation=51) == 0
+    # The race must actually have been run: both outcomes seen (Task 4
+    # re-review N3), or a serialised batch would pass inertly.
+    assert opened > 0 and refused > 0, (opened, refused)
     print("PASS claim-race opened=%d refused=%d" % (opened, refused))
 
 

@@ -53,6 +53,9 @@ static uint32_t mock_activity;
 static uint8_t mock_area[ASTRA_VFS_BULK_MAX];
 /* Set while the transport is blocked, so the service runs inside its wait. */
 static AstraVfsPortService *served;
+/* When set, the wait serves `served` on this grant's port (FS15). */
+static const AstraVfsPortGrant *served_grant;
+static AstraVfsPortWorker served_worker;
 static uint32_t backend_mkdir_calls;
 static int refuse_send;
 static uint32_t dead_reply_handle;
@@ -160,6 +163,7 @@ mock_reset(void)
     memset(ports, 0, sizeof(ports));
     next_port = 1u;
     served = NULL;
+    served_grant = NULL;
     backend_mkdir_calls = 0u;
     refuse_send = 0;
     dead_reply_handle = 0u;
@@ -723,7 +727,11 @@ astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
     assert(pthread_mutex_unlock(&mock_wait_mutex) == 0);
     if (served != NULL) {
         assert(pthread_mutex_lock(&mock_pump_mutex) == 0);
-        (void)astra_vfs_port_service_pump(served, 4u);
+        if (served_grant != NULL)
+            (void)astra_vfs_port_service_grant_pump(served, &served_worker,
+                                                    served_grant, 4u);
+        else
+            (void)astra_vfs_port_service_pump(served, 4u);
         assert(pthread_mutex_unlock(&mock_pump_mutex) == 0);
     }
     assert(pthread_mutex_lock(&mock_port_mutex) == 0);
@@ -970,6 +978,21 @@ service_start(void)
         (uint32_t)(sizeof(service_files) / sizeof(service_files[0]))));
 }
 
+/* A grant answered on `receive` with every right and a scope of its own. */
+static AstraVfsPortGrant
+full_grant(uint32_t receive, uint32_t id)
+{
+    AstraVfsPortGrant grant;
+
+    memset(&grant, 0, sizeof(grant));
+    grant.receive = receive;
+    grant.id = id;
+    grant.rights = ASTRA_VFS_GRANT_READ | ASTRA_VFS_GRANT_WRITE |
+                   ASTRA_VFS_GRANT_DELEGATE;
+    grant.scope = mock_open(1u);
+    return grant;
+}
+
 /*
  * Two clients over one service: one local, one across a port. Every assertion
  * below is that they agree.
@@ -1172,17 +1195,17 @@ test_host_accelerator_moves_data_plane_out_of_the_service(void)
     AstraVfsClient remote;
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint32_t service_handle;
-    uint32_t scope;
+    AstraVfsPortGrant grant;
     uint32_t moved = 0u;
     uint8_t bytes[8];
 
     mock_reset();
     service_start();
     service_handle = mock_open(MOCK_QUEUE_MAX);
-    scope = mock_open(1u);
+    grant = full_grant(service_handle, 1u);
     assert(astra_vfs_port_service_init(&host, service_handle, &service));
-    assert(astra_vfs_port_service_set_scope(&host, scope));
     served = &host;
+    served_grant = &grant;
     assert(astra_vfs_port_connect_lazy_with_accelerator(
                &remote, service_handle, &mock_accelerator_ops) ==
            ASTRA_VFS_OK);
@@ -1224,15 +1247,15 @@ test_shared_accelerated_client_keeps_thread_requests_in_flight(void)
     pthread_t second_thread;
     pthread_t closing_thread;
     uint32_t service_handle;
-    uint32_t scope;
+    AstraVfsPortGrant grant;
 
     mock_reset();
     service_start();
     service_handle = mock_open(MOCK_QUEUE_MAX);
-    scope = mock_open(1u);
+    grant = full_grant(service_handle, 1u);
     assert(astra_vfs_port_service_init(&host, service_handle, &service));
-    assert(astra_vfs_port_service_set_scope(&host, scope));
     served = &host;
+    served_grant = &grant;
     assert(astra_vfs_port_connect_lazy_with_accelerator(
                &remote, service_handle, &mock_accelerator_ops) ==
            ASTRA_VFS_OK);
@@ -1457,9 +1480,10 @@ test_a_version_below_the_minimum_is_refused(void)
 /* Sends one HELLO carrying `fused` as its first operation (MKDIR "/x") at
  * `version` and answers the reply's status and attached handle count. */
 static uint32_t
-fused_hello(AstraVfsPortService *host, uint32_t service_handle,
+fused_hello(AstraVfsPortService *host, const AstraVfsPortGrant *grant,
             uint16_t version, uint32_t fused, uint32_t *attached)
 {
+    AstraVfsPortWorker worker;
     AstraVfsRequestMessage message;
     AstraVfsReplyMessage reply;
     uint32_t handles[1] = {0u};
@@ -1477,9 +1501,10 @@ fused_hello(AstraVfsPortService *host, uint32_t service_handle,
     message.request.body.path[0] = '/';
     message.request.body.path[1] = 'x';
     handles[0] = reply_handle;
-    assert(astra_port_send(service_handle, &message, sizeof(message),
+    assert(astra_port_send(grant->receive, &message, sizeof(message),
                            handles, 1u) == ASTRA_SYSCALL_OK);
-    assert(astra_vfs_port_service_pump(host, 1u) == 1u);
+    assert(astra_vfs_port_service_grant_pump(host, &worker, grant, 1u) ==
+           1u);
     handles[0] = 0u;
     assert(astra_port_receive(reply_handle, &reply, sizeof(reply), handles,
                               1u, &size, &count) == ASTRA_SYSCALL_OK);
@@ -1497,19 +1522,18 @@ static void
 test_a_scoped_port_runs_no_fused_operation(void)
 {
     AstraVfsPortService host;
-    uint32_t service_handle;
+    AstraVfsPortGrant grant;
     uint32_t attached = 0u;
 
     mock_reset();
     service_start();
-    service_handle = mock_open(MOCK_QUEUE_MAX);
-    assert(astra_vfs_port_service_init(&host, service_handle, &service));
-    assert(astra_vfs_port_service_set_scope(&host, mock_open(1u)));
-    assert(fused_hello(&host, service_handle, UINT16_C(27),
+    grant = full_grant(mock_open(MOCK_QUEUE_MAX), 1u);
+    assert(astra_vfs_port_service_init(&host, grant.receive, &service));
+    assert(fused_hello(&host, &grant, UINT16_C(27),
                        ASTRA_VFS_OP_MKDIR, &attached) ==
            ASTRA_VFS_ERR_PROTOCOL);
     assert(attached == 0u && backend_mkdir_calls == 0u);
-    assert(fused_hello(&host, service_handle, ASTRA_VFS_VERSION,
+    assert(fused_hello(&host, &grant, ASTRA_VFS_VERSION,
                        ASTRA_VFS_OP_MKDIR, &attached) == ASTRA_VFS_OK);
     assert(attached == 1u && backend_mkdir_calls == 0u);
 }
@@ -1520,18 +1544,17 @@ static void
 test_a_scoped_hello_without_its_scope_is_refused(void)
 {
     AstraVfsPortService host;
-    uint32_t service_handle;
+    AstraVfsPortGrant grant;
     uint32_t attached = 0u;
 
     mock_reset();
     service_start();
-    service_handle = mock_open(MOCK_QUEUE_MAX);
-    assert(astra_vfs_port_service_init(&host, service_handle, &service));
-    assert(astra_vfs_port_service_set_scope(&host, mock_open(1u)));
+    grant = full_grant(mock_open(MOCK_QUEUE_MAX), 1u);
+    assert(astra_vfs_port_service_init(&host, grant.receive, &service));
     mock_fail_duplicate = 1;
-    assert(fused_hello(&host, service_handle, ASTRA_VFS_VERSION,
+    assert(fused_hello(&host, &grant, ASTRA_VFS_VERSION,
                        ASTRA_VFS_OP_MKDIR, &attached) != ASTRA_VFS_OK);
-    assert(fused_hello(&host, service_handle, ASTRA_VFS_VERSION,
+    assert(fused_hello(&host, &grant, ASTRA_VFS_VERSION,
                        ASTRA_VFS_FILE_INVALID, &attached) != ASTRA_VFS_OK);
     mock_fail_duplicate = 0;
     assert(attached == 0u && backend_mkdir_calls == 0u);
@@ -1766,7 +1789,7 @@ test_accelerated_bulk_append_returns_the_atomic_backend_position(void)
     AstraVfsClient remote;
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint32_t service_handle;
-    uint32_t scope;
+    AstraVfsPortGrant grant;
     uint32_t moved = 0u;
     uint64_t position = 0u;
     const uint8_t bytes[] = {5u, 6u, 7u};
@@ -1774,10 +1797,10 @@ test_accelerated_bulk_append_returns_the_atomic_backend_position(void)
     mock_reset();
     service_start();
     service_handle = mock_open(MOCK_QUEUE_MAX);
-    scope = mock_open(1u);
+    grant = full_grant(service_handle, 1u);
     assert(astra_vfs_port_service_init(&host, service_handle, &service));
-    assert(astra_vfs_port_service_set_scope(&host, scope));
     served = &host;
+    served_grant = &grant;
     assert(astra_vfs_port_connect_lazy_with_accelerator(
                &remote, service_handle, &mock_accelerator_ops) ==
            ASTRA_VFS_OK);
@@ -2286,76 +2309,280 @@ test_quota_storage_reserves_only_the_representable_table(void)
            mock_close_count == closes + 1u);
 }
 
-/*
- * Version 28: a scoped port answers HELLO with a session and one duplicate
- * of its scope, never the device; a port with no scope attaches nothing.
- */
-static void
-test_hello_attaches_the_scope_and_never_the_device(void)
+static uint32_t derive_calls;
+static uint32_t derive_rights;
+static char derive_root[ASTRA_VFS_PATH_MAX];
+
+static uint32_t
+mock_derive(void *context, const AstraVfsPortGrant *parent, const char *root,
+            uint32_t rights, uint32_t *send)
 {
-    AstraVfsPortService host;
+    (void)context;
+    (void)parent;
+    ++derive_calls;
+    derive_rights = rights;
+    strcpy(derive_root, root);
+    *send = mock_open(1u);
+    return ASTRA_VFS_OK;
+}
+
+/* Sends one standard request for `session` on `grant`'s port and pumps it. */
+static uint32_t
+grant_round_trip(AstraVfsPortService *host, const AstraVfsPortGrant *grant,
+                 uint32_t operation, uint32_t session, uint32_t flags,
+                 const char *path, uint32_t attach, uint32_t reply_handle,
+                 AstraVfsReplyMessage *reply, uint32_t *received)
+{
     AstraVfsRequestMessage message;
-    AstraVfsReplyMessage reply;
-    uint32_t handles[1] = {0u};
+    uint32_t handles[1] = {attach};
     uint32_t size = 0u;
     uint32_t count = 0u;
+    AstraVfsPortWorker worker;
 
-    for (int scoped = 0; scoped < 2; ++scoped) {
-        uint32_t service_handle;
-        uint32_t reply_handle;
-        uint32_t scope;
+    memset(&message, 0, sizeof(message));
+    astra_message_header_set(&message.header, (uint32_t)sizeof(message),
+                             ASTRA_VFS_PROTOCOL, ASTRA_VFS_VERSION, operation,
+                             1u);
+    message.request.size = ASTRA_VFS_REQUEST_SIZE;
+    message.request.version = ASTRA_VFS_VERSION;
+    message.request.session = session;
+    message.request.flags = flags;
+    strcpy((char *)message.request.body.path, path);
+    assert(astra_port_send(grant->receive, &message, sizeof(message),
+                           attach != 0u ? handles : NULL,
+                           attach != 0u ? 1u : 0u) == ASTRA_SYSCALL_OK);
+    if (astra_vfs_port_service_grant_pump(host, &worker, grant, 1u) == 0u)
+        return ASTRA_SYSCALL_WOULD_BLOCK;
+    handles[0] = 0u;
+    assert(astra_port_receive(reply_handle, reply, sizeof(*reply), handles,
+                              1u, &size, &count) == ASTRA_SYSCALL_OK);
+    *received = count != 0u ? handles[0] : 0u;
+    return ASTRA_SYSCALL_OK;
+}
 
-        mock_reset();
-        service_start();
-        service_handle = mock_open(MOCK_QUEUE_MAX);
-        reply_handle = mock_open(1u);
-        scope = mock_open(1u);
-        assert(astra_vfs_port_service_init(&host, service_handle, &service));
-        if (scoped)
-            assert(astra_vfs_port_service_set_scope(&host, scope));
+/*
+ * Storage protocol 29 (docs/FILESYSTEM_PRODUCTION_PRD.md FS15): a grant is a
+ * port. HELLO on it answers a session, the GRANTS feature and the grant's
+ * scope; a session is refused on any other grant's port; the port carries
+ * no data; GRANT_DERIVE only narrows.
+ */
+static void
+test_grants_hand_out_their_scope_and_only_narrow(void)
+{
+    AstraVfsPortService host;
+    AstraVfsPortGrant writable;
+    AstraVfsPortGrant readable;
+    AstraVfsReplyMessage reply;
+    uint32_t reply_handle;
+    uint32_t reply_two;
+    uint32_t received = 0u;
+    uint32_t session;
+
+    mock_reset();
+    service_start();
+    derive_calls = 0u;
+    writable = full_grant(mock_open(MOCK_QUEUE_MAX), 1u);
+    readable = full_grant(mock_open(MOCK_QUEUE_MAX), 2u);
+    readable.rights = ASTRA_VFS_GRANT_READ;
+    assert(astra_vfs_port_service_init(&host, writable.receive, &service));
+    assert(astra_vfs_port_service_set_derive(&host, mock_derive, NULL));
+    reply_handle = mock_open(4u);
+    reply_two = mock_open(4u);
+
+    /* HELLO on a grant: a session, the GRANTS feature, the grant's scope. */
+    assert(grant_round_trip(&host, &writable, ASTRA_VFS_OP_HELLO, 0u, 0u,
+                            "", reply_handle, reply_handle, &reply,
+                            &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_OK);
+    assert(reply.reply.version == ASTRA_VFS_VERSION);
+    assert(reply.reply.features == ASTRA_VFS_FEATURE_GRANTS);
+    assert(received != 0u && received != writable.scope &&
+           ports[received].target == ports[writable.scope].target);
+    session = reply.reply.session;
+
+    /* The same session on the read-only grant's port: refused unanswered. */
+    assert(grant_round_trip(&host, &readable, ASTRA_VFS_OP_BYE, session, 0u,
+                            "", 0u, reply_handle, &reply, &received) ==
+           ASTRA_SYSCALL_WOULD_BLOCK);
+    assert(host.refused == 1u);
+
+    /* A grant port is control only: the data is the lane's. */
+    assert(grant_round_trip(&host, &writable, ASTRA_VFS_OP_MKDIR, session,
+                            0u, "/x", 0u, reply_handle, &reply,
+                            &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_ERR_UNSUPPORTED);
+    assert(reply.reply.features == 0u);
+    assert(backend_mkdir_calls == 0u);
+
+    /* Derive: never wider, and DELEGATE only from a delegable grant. */
+    assert(grant_round_trip(&host, &readable, ASTRA_VFS_OP_HELLO, 0u, 0u,
+                            "", reply_two, reply_two, &reply,
+                            &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_OK && received != 0u);
+    {
+        uint32_t readonly_session = reply.reply.session;
+
+        assert(grant_round_trip(&host, &readable, ASTRA_VFS_OP_GRANT_DERIVE,
+                                readonly_session,
+                                ASTRA_VFS_GRANT_READ | ASTRA_VFS_GRANT_WRITE,
+                                "", 0u, reply_two, &reply,
+                                &received) == ASTRA_SYSCALL_OK);
+        assert(reply.reply.status == ASTRA_VFS_ERR_ACCESS && received == 0u);
+        assert(grant_round_trip(&host, &readable, ASTRA_VFS_OP_GRANT_DERIVE,
+                                readonly_session,
+                                ASTRA_VFS_GRANT_READ |
+                                    ASTRA_VFS_GRANT_DELEGATE,
+                                "", 0u, reply_two, &reply,
+                                &received) == ASTRA_SYSCALL_OK);
+        assert(reply.reply.status == ASTRA_VFS_ERR_ACCESS && received == 0u);
+        /* Every grant reads: a derived grant without READ is no grant. */
+        assert(grant_round_trip(&host, &readable, ASTRA_VFS_OP_GRANT_DERIVE,
+                                readonly_session, 0u, "", 0u, reply_two,
+                                &reply, &received) == ASTRA_SYSCALL_OK);
+        assert(reply.reply.status == ASTRA_VFS_ERR_ACCESS && received == 0u);
+        assert(derive_calls == 0u);
+    }
+    assert(grant_round_trip(&host, &writable, ASTRA_VFS_OP_GRANT_DERIVE,
+                            session, ASTRA_VFS_GRANT_READ, "sub", 0u,
+                            reply_handle, &reply,
+                            &received) == ASTRA_SYSCALL_OK);
+    assert(reply.reply.status == ASTRA_VFS_OK);
+    assert(received != 0u && derive_calls == 1u);
+    assert(derive_rights == ASTRA_VFS_GRANT_READ);
+    assert(strcmp(derive_root, "sub") == 0);
+
+    /* The plain pump serves no grant: it neither answers features nor
+     * derives. */
+    {
+        uint32_t plain = mock_open(MOCK_QUEUE_MAX);
+        AstraVfsPortService unscoped;
+        AstraVfsReplyMessage answer;
+        AstraVfsRequestMessage message;
+        uint32_t handles[1];
+        uint32_t size = 0u;
+        uint32_t count = 0u;
+        uint32_t reply_three = mock_open(4u);
+
+        assert(astra_vfs_port_service_init(&unscoped, plain, &service));
+        assert(astra_vfs_port_service_set_derive(&unscoped, mock_derive,
+                                                 NULL));
         memset(&message, 0, sizeof(message));
         astra_message_header_set(&message.header, (uint32_t)sizeof(message),
                                  ASTRA_VFS_PROTOCOL, ASTRA_VFS_VERSION,
                                  ASTRA_VFS_OP_HELLO, 1u);
         message.request.size = ASTRA_VFS_REQUEST_SIZE;
         message.request.version = ASTRA_VFS_VERSION;
-        handles[0] = reply_handle;
-        assert(astra_port_send(service_handle, &message, sizeof(message),
-                               handles, 1u) == ASTRA_SYSCALL_OK);
-        assert(astra_vfs_port_service_pump(&host, 1u) == 1u);
-        handles[0] = 0u;
-        assert(astra_port_receive(reply_handle, &reply, sizeof(reply),
+        handles[0] = reply_three;
+        assert(astra_port_send(plain, &message, sizeof(message), handles,
+                               1u) == ASTRA_SYSCALL_OK);
+        assert(astra_vfs_port_service_pump(&unscoped, 1u) == 1u);
+        assert(astra_port_receive(reply_three, &answer, sizeof(answer),
                                   handles, 1u, &size, &count) ==
                ASTRA_SYSCALL_OK);
-        assert(reply.reply.status == ASTRA_VFS_OK);
-        assert(reply.reply.version == UINT16_C(28));
-        assert(reply.reply.session != ASTRA_VFS_SESSION_INVALID);
-        assert(count == (scoped ? 1u : 0u));
-        /* The mock's duplicate keeps its source's target. */
-        if (scoped)
-            assert(handles[0] != scope &&
-                   ports[handles[0]].target == ports[scope].target);
+        assert(answer.reply.status == ASTRA_VFS_OK && count == 0u);
+        assert(answer.reply.features == 0u);
+        message.request.session = answer.reply.session;
+        message.request.flags = ASTRA_VFS_GRANT_READ;
+        message.header.operation = ASTRA_VFS_OP_GRANT_DERIVE;
+        assert(astra_port_send(plain, &message, sizeof(message), NULL, 0u) ==
+               ASTRA_SYSCALL_OK);
+        assert(astra_vfs_port_service_pump(&unscoped, 1u) == 1u);
+        assert(astra_port_receive(reply_three, &answer, sizeof(answer),
+                                  handles, 1u, &size, &count) ==
+               ASTRA_SYSCALL_OK);
+        assert(answer.reply.status == ASTRA_VFS_ERR_UNSUPPORTED &&
+               count == 0u && derive_calls == 1u);
     }
 }
 
-/* A scoped port runs no data operation: that is the client's lane. */
+typedef struct DeriveCall {
+    AstraVfsClient *client;
+    uint32_t handle;
+    uint32_t status;
+} DeriveCall;
+
+static void *
+derive_thread(void *context)
+{
+    DeriveCall *call = context;
+
+    call->status = astra_vfs_grant_derive(call->client, "", ASTRA_VFS_GRANT_READ,
+                                          &call->handle);
+    return NULL;
+}
+
+/*
+ * The Kit's GRANT_DERIVE (Kit 7): a lane client sends it to the grant's port,
+ * never to its lane, on the lane its HELLO bound -- from any thread -- and
+ * answers the new grant's send handle. A client without the GRANTS feature
+ * is refused locally.
+ */
 static void
-test_a_scoped_port_serves_no_data(void)
+test_the_kit_derives_on_its_hello_lane(void)
 {
     AstraVfsPortService host;
+    AstraVfsPortGrant grant;
     AstraVfsClient remote;
-    uint32_t service_handle;
+    AstraVfsClient plain;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    DeriveCall call;
+    pthread_t thread;
+    uint32_t handle = 0u;
+    uint32_t operations;
+    uint32_t plain_handle;
 
     mock_reset();
     service_start();
-    service_handle = mock_open(MOCK_QUEUE_MAX);
-    assert(astra_vfs_port_service_init(&host, service_handle, &service));
-    assert(astra_vfs_port_service_set_scope(&host, mock_open(1u)));
+    derive_calls = 0u;
+    grant = full_grant(mock_open(MOCK_QUEUE_MAX), 1u);
+    assert(astra_vfs_port_service_init(&host, grant.receive, &service));
+    assert(astra_vfs_port_service_set_derive(&host, mock_derive, NULL));
     served = &host;
-    assert(astra_vfs_port_connect(&remote, service_handle) == ASTRA_VFS_OK);
-    assert(astra_vfs_mkdir(&remote, "/x") == ASTRA_VFS_ERR_UNSUPPORTED);
-    assert(backend_mkdir_calls == 0u);
+    served_grant = &grant;
+    assert(astra_vfs_port_connect_lazy_with_accelerator(
+               &remote, grant.receive, &mock_accelerator_ops) ==
+           ASTRA_VFS_OK);
+    assert(remote.features == 0u);
+    assert(astra_vfs_open(&remote, "/a", ASTRA_VFS_OPEN_READ, &file, NULL,
+                          NULL) == ASTRA_VFS_OK);
+    assert(remote.features == ASTRA_VFS_FEATURE_GRANTS);
+    operations = direct_operations;
+    assert(astra_vfs_grant_derive(&remote, "sub", ASTRA_VFS_GRANT_READ,
+                                  &handle) == ASTRA_VFS_OK);
+    assert(handle != 0u && derive_calls == 1u);
+    assert(derive_rights == ASTRA_VFS_GRANT_READ);
+    assert(strcmp(derive_root, "sub") == 0);
+    assert(direct_operations == operations);
+    /* Another thread derives on the lane the HELLO bound: the service
+     * answers it rather than refusing a lane it never saw. */
+    call = (DeriveCall){.client = &remote};
+    assert(pthread_create(&thread, NULL, derive_thread, &call) == 0);
+    assert(pthread_join(thread, NULL) == 0);
+    assert(call.status == ASTRA_VFS_OK && call.handle != 0u &&
+           call.handle != handle && derive_calls == 2u);
+    assert(host.refused == 0u);
+    handle = 0u;
+    assert(astra_vfs_grant_derive(&remote, "", UINT32_C(1) << 3, &handle) ==
+           ASTRA_VFS_ERR_INVALID && handle == 0u);
     assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
+
+    /* An eager connect records the feature too; a port that serves no
+     * grant leaves it clear, and the Kit refuses without sending. */
+    assert(astra_vfs_port_connect_with_accelerator(
+               &remote, grant.receive, &mock_accelerator_ops) ==
+           ASTRA_VFS_OK);
+    assert(remote.features == ASTRA_VFS_FEATURE_GRANTS);
+    assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
+    served_grant = NULL;
+    plain_handle = mock_open(MOCK_QUEUE_MAX);
+    assert(astra_vfs_port_service_init(&host, plain_handle, &service));
+    assert(astra_vfs_port_connect(&plain, plain_handle) == ASTRA_VFS_OK);
+    assert(plain.features == 0u);
+    operations = host.requests;
+    assert(astra_vfs_grant_derive(&plain, "", ASTRA_VFS_GRANT_READ,
+                                  &handle) == ASTRA_VFS_ERR_UNSUPPORTED &&
+           handle == 0u && host.requests == operations);
+    assert(astra_vfs_disconnect(&plain) == ASTRA_VFS_OK);
     served = NULL;
 }
 
@@ -2369,8 +2596,8 @@ main(void)
     test_first_operation_shares_the_hello_round_trip();
     test_signal_cancellation_does_not_abandon_an_inflight_reply();
     test_host_accelerator_moves_data_plane_out_of_the_service();
-    test_hello_attaches_the_scope_and_never_the_device();
-    test_a_scoped_port_serves_no_data();
+    test_grants_hand_out_their_scope_and_only_narrow();
+    test_the_kit_derives_on_its_hello_lane();
     test_a_scoped_port_runs_no_fused_operation();
     test_a_scoped_hello_without_its_scope_is_refused();
     test_shared_accelerated_client_keeps_thread_requests_in_flight();

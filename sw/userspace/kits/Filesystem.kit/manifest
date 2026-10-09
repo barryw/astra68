@@ -3,6 +3,6 @@ kind kit
 id org.astra.filesystem
 name "Astra Filesystem Kit"
 version 4.1.0
-provides filesystem.library 6 6.0.0
+provides filesystem.library 7 7.0.0
 requires runtime.library 1 1.14.0
 requires system.library 3 3.0.0

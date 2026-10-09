@@ -43,6 +43,10 @@ typedef struct ConsoleSession {
     uint32_t shutdown_reply;
     uint32_t shutdown_transaction;
     uint64_t present_deadline;
+    /* The shell's CWD: a grant derived from WORK's (storage protocol 29),
+     * so the shell and every command it forks hold their working directory
+     * as a host client of its own beside WORK. Kept for the session. */
+    uint32_t cwd_grant;
     int running;
 } ConsoleSession;
 
@@ -181,10 +185,24 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
             astra_process_vfs_assigns(), "WORK");
 
         if (work != NULL) {
+            AstraVfsClient *client = astra_process_vfs_client_for(work);
+
             if (count >= ASTRA_LAUNCH_GRANT_MAX)
                 return UINT32_MAX;
+            /* A provider-enforced WORK gives the shell a CWD grant of its
+             * own, as narrow as WORK as the terminal holds it and not
+             * delegable; any other WORK is shared as it is. */
+            if (session.cwd_grant == 0u && client != NULL &&
+                astra_vfs_grant_derive(
+                    client, work->root,
+                    ASTRA_VFS_GRANT_READ |
+                        ((work->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                             ASTRA_VFS_GRANT_WRITE : 0u),
+                    &session.cwd_grant) != ASTRA_VFS_OK)
+                session.cwd_grant = 0u;
             astra_capability_name_set(grants[count].name, "CWD");
-            grants[count].handle = work->handle;
+            grants[count].handle = session.cwd_grant != 0u ?
+                session.cwd_grant : work->handle;
             grants[count].rights = ASTRA_RIGHT_SIGNAL;
             grants[count].flags = ASTRA_CAPABILITY_FLAG_NAMESPACE |
                 ((work->rights & ASTRA_RIGHT_READ) != 0u ?

@@ -2892,14 +2892,16 @@ static void astra_host_file_release(Astra68State *s, AstraHostFile *file)
     }
 }
 
-static void astra_host_release_files(Astra68State *s, uint32_t owner)
+/* Takes every handle of `owner`, or every handle when owner is 0, out of
+ * the table. The caller holds files_lock; astra_host_free_files closes
+ * them once it is dropped. */
+static GPtrArray *astra_host_steal_files(Astra68State *s, uint32_t owner)
 {
     GHashTableIter iterator;
     gpointer key;
     gpointer value;
     GPtrArray *released = g_ptr_array_new();
 
-    qemu_mutex_lock(&s->host.files_lock);
     g_hash_table_iter_init(&iterator, s->host.files);
     while (g_hash_table_iter_next(&iterator, &key, &value)) {
         AstraHostFile *file = value;
@@ -2911,11 +2913,25 @@ static void astra_host_release_files(Astra68State *s, uint32_t owner)
         g_hash_table_iter_steal(&iterator);
         g_ptr_array_add(released, file);
     }
-    qemu_mutex_unlock(&s->host.files_lock);
+    return released;
+}
+
+static void astra_host_free_files(Astra68State *s, GPtrArray *released)
+{
     for (guint index = 0; index < released->len; ++index) {
         astra_host_file_release(s, g_ptr_array_index(released, index));
     }
     g_ptr_array_free(released, true);
+}
+
+static void astra_host_release_files(Astra68State *s, uint32_t owner)
+{
+    GPtrArray *released;
+
+    qemu_mutex_lock(&s->host.files_lock);
+    released = astra_host_steal_files(s, owner);
+    qemu_mutex_unlock(&s->host.files_lock);
+    astra_host_free_files(s, released);
 }
 
 static AstraHostFile *astra_host_file_acquire(Astra68State *s,
@@ -3036,15 +3052,27 @@ static void astra_host_release_session_files(Astra68State *s, uint32_t id)
 
 /* Closes every session of `owner`, or every session when owner is 0, and
  * every handle opened in each. */
-static void astra_host_release_sessions(Astra68State *s, uint32_t owner)
+typedef struct AstraHostStolenSessions {
+    GPtrArray *sessions;
+    GArray *ids;
+} AstraHostStolenSessions;
+
+/* Takes every session of `owner`, or every session when owner is 0, out of
+ * the table and marks it closing. The caller holds files_lock, so a claim
+ * that clears fs_owner in the same critical section takes exactly the
+ * sessions opened under it -- never those of a re-claim that races the
+ * sweep (Task 4 re-review N1). Session ids are never reused, so the files
+ * swept by id afterwards are only these sessions' own. */
+static AstraHostStolenSessions astra_host_steal_sessions(Astra68State *s,
+                                                         uint32_t owner)
 {
+    AstraHostStolenSessions stolen = {
+        g_ptr_array_new(), g_array_new(false, false, sizeof(uint32_t))
+    };
     GHashTableIter iterator;
     gpointer key;
     gpointer value;
-    GPtrArray *released = g_ptr_array_new();
-    GArray *ids = g_array_new(false, false, sizeof(uint32_t));
 
-    qemu_mutex_lock(&s->host.files_lock);
     g_hash_table_iter_init(&iterator, s->host.sessions);
     while (g_hash_table_iter_next(&iterator, &key, &value)) {
         AstraHostSession *session = value;
@@ -3054,17 +3082,34 @@ static void astra_host_release_sessions(Astra68State *s, uint32_t owner)
             continue;
         session->closing = true;
         g_hash_table_iter_steal(&iterator);
-        g_ptr_array_add(released, session);
-        g_array_append_val(ids, id);
+        g_ptr_array_add(stolen.sessions, session);
+        g_array_append_val(stolen.ids, id);
     }
+    return stolen;
+}
+
+/* Closes stolen sessions and every handle opened in each. */
+static void astra_host_free_sessions(Astra68State *s,
+                                     AstraHostStolenSessions stolen)
+{
+    for (guint index = 0u; index < stolen.sessions->len; ++index) {
+        astra_host_release_session_files(s, g_array_index(stolen.ids,
+                                                          uint32_t, index));
+        astra_host_session_release(s,
+                                   g_ptr_array_index(stolen.sessions, index));
+    }
+    g_ptr_array_free(stolen.sessions, true);
+    g_array_free(stolen.ids, true);
+}
+
+static void astra_host_release_sessions(Astra68State *s, uint32_t owner)
+{
+    AstraHostStolenSessions stolen;
+
+    qemu_mutex_lock(&s->host.files_lock);
+    stolen = astra_host_steal_sessions(s, owner);
     qemu_mutex_unlock(&s->host.files_lock);
-    for (guint index = 0u; index < released->len; ++index) {
-        astra_host_release_session_files(s, g_array_index(ids, uint32_t,
-                                                          index));
-        astra_host_session_release(s, g_ptr_array_index(released, index));
-    }
-    g_ptr_array_free(released, true);
-    g_array_free(ids, true);
+    astra_host_free_sessions(s, stolen);
 }
 
 static void astra_host_channel_drain(AstraHostChannel *channel)
@@ -4354,10 +4399,18 @@ static uint32_t astra_host_fs_claim(Astra68State *s, uint32_t owner,
             qemu_mutex_unlock(&s->host.files_lock);
             return ASTRA_STATUS_ACCESS;
         }
+        GPtrArray *files;
+        AstraHostStolenSessions sessions;
+
+        /* The claim and everything opened under it leave together: a
+         * re-claim racing this release starts with nothing of ours and
+         * keeps everything of its own (Task 4 re-review N1). */
         qatomic_set(&s->host.fs_owner, 0u);
+        files = astra_host_steal_files(s, owner);
+        sessions = astra_host_steal_sessions(s, owner);
         qemu_mutex_unlock(&s->host.files_lock);
-        astra_host_release_files(s, owner);
-        astra_host_release_sessions(s, owner);
+        astra_host_free_files(s, files);
+        astra_host_free_sessions(s, sessions);
         return ASTRA_STATUS_OK;
     }
     if (holder == 0u)
@@ -5058,7 +5111,11 @@ static void astra_host_reset(Astra68State *s)
     if (s->host.files != NULL) {
         astra_host_release_files(s, 0);
     }
+    /* Under files_lock like every other change of the claim (review N2),
+     * though every channel is drained and HOST_EXECUTE runs on this vCPU. */
+    qemu_mutex_lock(&s->host.files_lock);
     qatomic_set(&s->host.fs_owner, 0u);
+    qemu_mutex_unlock(&s->host.files_lock);
     if (s->host.sessions != NULL)
         astra_host_release_sessions(s, 0u);
     astra_network_next(&s->host.generation);

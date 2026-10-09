@@ -43,7 +43,8 @@ def load(name, file):
 terminal = load("astra_terminal_gate", "test-terminal.py")
 
 # Every fssem case the suite runs. Later tasks append here and in fssem.c.
-CASES = ["basic", "raw-lane", "lane-fork-exec"]
+CASES = ["basic", "raw-lane", "lane-fork-exec", "raw-readonly",
+         "raw-cross-grant", "raw-subroot", "raw-delegate", "raw-retire"]
 # Orchestrated checks: name -> function(machine, provider_mount). Later tasks
 # add entries; each prints "PASS <name>" or calls fail().
 CHECKS = {}
