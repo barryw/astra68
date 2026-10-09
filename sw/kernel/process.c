@@ -68,9 +68,10 @@ _Static_assert(KERNEL_VM_DMA_SLOT_COUNT *
 #define PROCESS_SLOT_NONE UINT16_MAX
 #define KERNEL_PROCESS_LOAD_RIGHT (1u << 0)
 
-_Static_assert((KERNEL_QUALIFICATION_COMMAND_PREFIX &
-                ASTRA_PROGRESS_BOOT_COMMAND_MASK) !=
-                   ASTRA_PROGRESS_BOOT_COMMAND_PREFIX,
+_Static_assert(((KERNEL_QUALIFICATION_COMMAND_PREFIX ^
+                 ASTRA_PROGRESS_BOOT_COMMAND_PREFIX) &
+                KERNEL_QUALIFICATION_COMMAND_MASK &
+                ASTRA_PROGRESS_BOOT_COMMAND_MASK) != 0u,
                "boot and qualification PROGRESS commands overlap");
 _Static_assert(KERNEL_QUALIFICATION_SHARED_BASE == KERNEL_PROCESS_DATA_BASE,
                "the qualification image's shared block is the data page");

@@ -9,8 +9,10 @@
 #include <stdbool.h>
 
 /*
- * One writer: the stage hook and the degraded exit run in thread context and
- * cannot overlap; only the panic runs in fault context, and it never returns.
+ * One writer at a time. Init and its steps run before the first user thread;
+ * the stage hook, boot commands and the degraded exit (from a syscall or a
+ * user fault) run in the kernel's trap path on the one CPU, so none overlaps
+ * another. Only the panic can interrupt one, and it never returns.
  */
 static bool boot_progress_enabled;
 static uint32_t boot_progress;

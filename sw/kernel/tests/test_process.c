@@ -89,6 +89,7 @@ static uint32_t initial_image_progress_reports;
 static uint32_t last_initial_image_stage;
 static uint32_t boot_commands;
 static uint32_t last_boot_command;
+static uint32_t boot_command_result;
 static uint32_t last_initial_image_status;
 static uint32_t last_initial_image_reason;
 static uint32_t system_failures;
@@ -1205,7 +1206,7 @@ uint32_t kernel_process_initial_image_boot_command(uint32_t command)
 {
     ++boot_commands;
     last_boot_command = command;
-    return ASTRA_SYSCALL_OK;
+    return boot_command_result;
 }
 
 static uint32_t fault_reports;
@@ -1549,6 +1550,7 @@ static void initialize_test(void)
     last_initial_image_stage = 0u;
     boot_commands = 0u;
     last_boot_command = 0u;
+    boot_command_result = ASTRA_SYSCALL_OK;
     last_initial_image_status = 0u;
     last_initial_image_reason = 0u;
     soak_checkpoint_calls = 0u;
@@ -12423,6 +12425,13 @@ static void test_initial_image_exit_is_reported(void)
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
     assert(boot_commands == 2u);
+    /* The record's refusal is what the caller receives. */
+    boot_command_result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(boot_commands == 3u);
+    boot_command_result = ASTRA_SYSCALL_OK;
     registers[1] = ASTRA_SUPERVISOR_STAGE_TERMINAL;
     assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
            KERNEL_PROCESS_OK);

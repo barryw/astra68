@@ -125,7 +125,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | Number | Name | State | Contract |
 |---:|---|---|---|
 | 0 | `QUERY_ABI` | CURRENT | `D1=0x00010041`, `D2=process handle`, `D3=calling-thread handle` |
-| 1 | `PROGRESS` | CURRENT | `D1` = monotonic progress value; or, from the initial image only, a boot command `0x4253xyyy` (`x`=1 SERVICES with N=`yyy`, `x`=2 SERVICE with result 0 ready / 1 failed / 2 skipped) that drives the boot progress record (`sw/include/astra/boot_progress.h`) |
+| 1 | `PROGRESS` | CURRENT | `D1` = monotonic progress value; or, from the initial image only, a boot command `0x4253xyyy` (`x`=1 SERVICES with N=`yyy`, `x`=2 SERVICE with result 0 ready / 1 failed / 2 skipped) that drives the boot progress record (`sw/include/astra/boot_progress.h`); a boot command from any other process answers `ACCESS_DENIED`, and one the record refuses answers `INVALID_ARGUMENT` |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
 | 4 | `CLOSE` | CURRENT | closes `D1` in the caller's handle table |
