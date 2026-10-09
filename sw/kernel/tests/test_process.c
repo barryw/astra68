@@ -54,6 +54,7 @@
 #include <astra/host.h>
 #include <astra/network.h>
 #include <vesta.h>
+#include <astra/supervisor.h>
 #include <astra/syscall.h>
 #include <astra/display.h>
 #include <astra/input.h>
@@ -86,6 +87,8 @@ static uint32_t milestone_calls;
 static uint32_t initial_image_exits;
 static uint32_t initial_image_progress_reports;
 static uint32_t last_initial_image_stage;
+static uint32_t boot_commands;
+static uint32_t last_boot_command;
 static uint32_t last_initial_image_status;
 static uint32_t last_initial_image_reason;
 static uint32_t system_failures;
@@ -1198,6 +1201,13 @@ void kernel_process_initial_image_progress(uint32_t stage)
     last_initial_image_stage = stage;
 }
 
+uint32_t kernel_process_initial_image_boot_command(uint32_t command)
+{
+    ++boot_commands;
+    last_boot_command = command;
+    return ASTRA_SYSCALL_OK;
+}
+
 static uint32_t fault_reports;
 static uint32_t last_fault_process;
 static uint32_t last_fault_pc;
@@ -1537,6 +1547,8 @@ static void initialize_test(void)
     last_system_failure[0] = '\0';
     initial_image_progress_reports = 0u;
     last_initial_image_stage = 0u;
+    boot_commands = 0u;
+    last_boot_command = 0u;
     last_initial_image_status = 0u;
     last_initial_image_reason = 0u;
     soak_checkpoint_calls = 0u;
@@ -12385,6 +12397,39 @@ static void test_initial_image_exit_is_reported(void)
     assert(initial_image_progress_reports == 2u);
     assert(last_initial_image_stage == 3u);
 
+    /*
+     * A boot command from the initial image goes to the record and is not a
+     * progress value: the stage counter does not move.
+     */
+    registers[1] = ASTRA_PROGRESS_BOOT_SERVICES | 14u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(boot_commands == 1u);
+    assert(last_boot_command == (ASTRA_PROGRESS_BOOT_SERVICES | 14u));
+    assert(initial_image_progress_reports == 2u);
+    registers[0] = ASTRA_SYSCALL_PROGRESS;
+    registers[1] = 4u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(initial_image_progress_reports == 3u);
+    /*
+     * Stage 8 after a boot command is still accepted as stage 8: a command
+     * taken as progress would have raised the counter past it.
+     */
+    registers[1] = ASTRA_PROGRESS_BOOT_SERVICE | ASTRA_PROGRESS_SERVICE_READY;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(boot_commands == 2u);
+    registers[1] = ASTRA_SUPERVISOR_STAGE_TERMINAL;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(initial_image_progress_reports == 4u);
+    assert(last_initial_image_stage == ASTRA_SUPERVISOR_STAGE_TERMINAL);
+
     /* An unregistered process must not be mistaken for the initial image. */
     loader_build_image();
     initialize_test();
@@ -12393,6 +12438,19 @@ static void test_initial_image_exit_is_reported(void)
            KERNEL_PROCESS_OK);
     assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
     make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR, LOADER_TEXT_VADDR, 0u);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROGRESS;
+    registers[1] = ASTRA_PROGRESS_BOOT_SERVICE | ASTRA_PROGRESS_SERVICE_READY;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(boot_commands == 0u);
+    /* Nor while some other process is the registered initial image. */
+    kernel_process_register_initial_image(process_id + 1u);
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(boot_commands == 0u);
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
     registers[1] = exit_status;

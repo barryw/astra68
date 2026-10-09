@@ -6,6 +6,7 @@
 #include <astra/input.h>
 #include <astra/network.h>
 #include <astra/supervisor.h>
+#include <astra/syscall.h>
 
 #include "kernel_build_info.h"
 #include "allocation.h"
@@ -1532,6 +1533,18 @@ void kernel_process_initial_image_progress(uint32_t stage)
         console_putc('\n');
         break;
     }
+}
+
+uint32_t kernel_process_initial_image_boot_command(uint32_t command)
+{
+    uint32_t result = kernel_boot_progress_command(command);
+
+    if (result == ASTRA_SYSCALL_OK &&
+        (command & ~ASTRA_PROGRESS_BOOT_ARGUMENT_MASK) ==
+            ASTRA_PROGRESS_BOOT_SERVICES)
+        console_printf("Boot services ....... %u to start\n",
+                       command & ASTRA_PROGRESS_BOOT_ARGUMENT_MASK);
+    return result;
 }
 
 void kernel_process_milestone_reached(const KernelSchedulerStats *validated)

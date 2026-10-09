@@ -507,6 +507,11 @@ void kernel_process_initial_image_exited(uint32_t exit_status,
 /* Each new stage the firmware-supplied image reports as it comes up. */
 void kernel_process_initial_image_progress(uint32_t stage);
 /*
+ * An ASTRA_PROGRESS_BOOT_* command from the initial image (astra/syscall.h).
+ * Returns the ASTRA_SYSCALL_* status the caller receives.
+ */
+uint32_t kernel_process_initial_image_boot_command(uint32_t command);
+/*
  * The initial image declared the system unable to continue (a critical
  * service died). `reason` is bounded and printable. The kernel build halts
  * and does not return; the host test build records it and returns.

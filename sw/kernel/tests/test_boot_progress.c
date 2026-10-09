@@ -189,6 +189,10 @@ static void test_kernel(void)
         assert(record() > last);
     }
     assert(record() == PACK(BOOTING, 0u, FIXED, 0u, 0u));
+    /* Past the last supervisor stage is not a stage: nothing moves. */
+    kernel_boot_progress_stage(ASTRA_SUPERVISOR_STAGE_MAX + 1u);
+    kernel_boot_progress_stage(ASTRA_PROGRESS_BOOT_SERVICES | 14u);
+    assert(record() == PACK(BOOTING, 0u, FIXED, 0u, 0u));
     /* A service report before the announcement is refused, unchanged. */
     assert(command(ASTRA_PROGRESS_BOOT_SERVICE, ASTRA_PROGRESS_SERVICE_READY) ==
            ASTRA_SYSCALL_INVALID_ARGUMENT);

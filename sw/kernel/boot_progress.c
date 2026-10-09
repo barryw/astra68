@@ -8,6 +8,10 @@
 
 #include <stdbool.h>
 
+/*
+ * One writer: the stage hook and the degraded exit run in thread context and
+ * cannot overlap; only the panic runs in fault context, and it never returns.
+ */
 static bool boot_progress_enabled;
 static uint32_t boot_progress;
 
@@ -55,6 +59,8 @@ void kernel_boot_progress_fail(void)
 
 void kernel_boot_progress_stage(uint32_t stage)
 {
+    if (stage > ASTRA_SUPERVISOR_STAGE_MAX)
+        return;
     if (stage == ASTRA_SUPERVISOR_STAGE_TERMINAL)
         publish(astra_boot_progress_finish(boot_progress));
     else if (stage == ASTRA_SUPERVISOR_STAGE_CONSOLE_FAILED)
