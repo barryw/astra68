@@ -83,13 +83,17 @@ def stable_word(page, offset):
 
 def expected_services(configuration,
                       manifest=astra_image.DISPLAY_STARTUP_MANIFEST):
-    """What the supervisor must announce for an image built from these."""
+    """What the supervisor must announce for an image built from these.
+
+    Assumes no policy.conf start override under /config/services: the
+    images astra_image.py builds have none, and the supervisor would skip a
+    resident service the user set to start manually.
+    """
     count = 0
     for line in manifest.splitlines():
         words = line.split()
         if (words and words[0] in ("service", "application") and
-                words[1] != "/services/storage" and
-                "start=manual" not in words):
+                words[1] != "/services/storage"):
             count += 1
     for path, text in configuration.items():
         if (path.startswith("services/") and path.endswith("/service.conf")
@@ -124,6 +128,7 @@ def boot(qemu, rom, image, services, skipped=None, stops_after=None):
     os.environ["ASTRA_TEXT_PLANE_PATH"] = page_path
     machine = None
     sampler = None
+    page = None
     marker = "stage 8" if stops_after is None else EXITED
     try:
         machine = terminal.Machine(qemu, rom, image, work)
@@ -168,6 +173,14 @@ def boot(qemu, rom, image, services, skipped=None, stops_after=None):
                     "fixed=%d/%d done=%d/%d, expected FAILED done=%d" %
                     (state, announced, fixed, FIXED_STEPS, done, count,
                      stops_after))
+            # The failing service's report is FAILED itself: done never
+            # reaches it while BOOTING. Only a SKIPPED report followed by
+            # the exit would show that value, if the sampler is quick enough.
+            for value in values:
+                if (fields(value)[0] == BOOTING and
+                        fields(value)[4] == stops_after):
+                    raise RuntimeError("the required failure reported as "
+                                       "not failing: %08x" % value)
             return
         if not announced or fixed != FIXED_STEPS or done != count:
             raise RuntimeError(
@@ -190,6 +203,9 @@ def boot(qemu, rom, image, services, skipped=None, stops_after=None):
     finally:
         if sampler is not None:
             sampler.stop.set()
+            sampler.join()
+        if page is not None:
+            page.close()
         if machine is not None:
             machine.close()
         os.environ.pop("ASTRA_TEXT_PLANE_PATH", None)

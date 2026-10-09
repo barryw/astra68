@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <astra/boot_progress.h>
 #include <astra/process.h>
 #include <astra/proc.h>
 #include <astra/status.h>
@@ -48,6 +49,20 @@ supervisor_boot_service_result(uint32_t status, uint32_t essential)
         return ASTRA_PROGRESS_SERVICE_READY;
     return essential != 0u ? ASTRA_PROGRESS_SERVICE_FAILED :
                              ASTRA_PROGRESS_SERVICE_SKIPPED;
+}
+
+/*
+ * The SERVICES command announcing @p count boot launches. A count the record
+ * cannot hold is announced as SERVICES_MAX + 1, which the kernel records as
+ * FAILED (astra_boot_progress_announce), instead of spilling into the
+ * operation bits.
+ */
+static inline uint32_t
+supervisor_boot_services_command(uint32_t count)
+{
+    if (count > ASTRA_BOOT_PROGRESS_SERVICES_MAX)
+        count = ASTRA_BOOT_PROGRESS_SERVICES_MAX + 1u;
+    return ASTRA_PROGRESS_BOOT_SERVICES | count;
 }
 
 typedef struct SupervisorManifestGrant {

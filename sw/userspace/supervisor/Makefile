@@ -152,7 +152,8 @@ $(SERVICE_DEFINITION_TEST): src/service_definition_store.c \
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
 $(LOADER_STATUS_TEST): tests/test_loader_status.c include/loader.h \
-		../../include/astra/status.h ../../include/astra/syscall.h
+		../../include/astra/status.h ../../include/astra/syscall.h \
+		../../include/astra/boot_progress.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $< -o $@
 

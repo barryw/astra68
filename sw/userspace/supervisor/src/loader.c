@@ -98,8 +98,9 @@ static AstraServiceDefinition definition_scratch[2];
  * trusted ceilings and services the user set not to start at boot, then the
  * enabled start=boot definitions under /config/services -- the same choices,
  * in the same order, the launch loops always made one at a time.
- * ponytail: one full definition per entry (~5 KiB each) for the length of
- * the boot loop; index-only entries if a boot ever starts hundreds.
+ * ponytail: one full definition per entry (11,128 bytes each) for the
+ * length of the boot loop, grown by doubling; index-only entries if a boot
+ * ever starts hundreds.
  */
 typedef struct SupervisorBootLaunch {
     /* The manifest line, or NULL for a /config/services definition. */
@@ -111,6 +112,7 @@ typedef struct SupervisorBootLaunch {
 
 static SupervisorBootLaunch *boot_plan;
 static uint32_t boot_plan_count;
+static uint32_t boot_plan_capacity;
 static SupervisorProcessTable paused_services;
 #define paused_service_count (paused_services.count)
 static SupervisorProcessTable failed_services;
@@ -2665,17 +2667,25 @@ static void boot_plan_release(void)
     astra_runtime_deallocate(boot_plan);
     boot_plan = NULL;
     boot_plan_count = 0u;
+    boot_plan_capacity = 0u;
 }
 
 static uint32_t boot_plan_append(const SupervisorManifestEntry *entry,
                                  const AstraServiceDefinition *definition)
 {
-    SupervisorBootLaunch *grown = astra_runtime_reallocate(
-        boot_plan, ((size_t)boot_plan_count + 1u) * sizeof(*boot_plan));
+    SupervisorBootLaunch *grown = boot_plan;
 
-    if (grown == NULL)
-        return ASTRA_STATUS_LIMIT;
-    boot_plan = grown;
+    if (boot_plan_count == boot_plan_capacity) {
+        uint32_t capacity = boot_plan_capacity != 0u ?
+                                boot_plan_capacity * 2u : 16u;
+
+        grown = astra_runtime_reallocate(
+            boot_plan, (size_t)capacity * sizeof(*boot_plan));
+        if (grown == NULL)
+            return ASTRA_STATUS_LIMIT;
+        boot_plan = grown;
+        boot_plan_capacity = capacity;
+    }
     grown[boot_plan_count].entry = entry;
     grown[boot_plan_count].has_definition = definition != NULL;
     if (definition != NULL)
@@ -2869,21 +2879,28 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
     proc_tree_start();
     status = boot_plan_resolve(manifest);
     if (status != ASTRA_STATUS_OK) {
+        (void)astra_log_failure("boot launch list", status);
         boot_plan_release();
         return status;
     }
-    (void)astra_progress(ASTRA_PROGRESS_BOOT_SERVICES | boot_plan_count);
+    if (boot_plan_count > ASTRA_BOOT_PROGRESS_SERVICES_MAX)
+        (void)astra_log_failure("boot launch list over the progress record",
+                                ASTRA_STATUS_LIMIT);
+    (void)astra_progress(supervisor_boot_services_command(boot_plan_count));
     for (uint32_t index = 0u; index < boot_plan_count; ++index) {
         SupervisorBootLaunch *launch = &boot_plan[index];
 
         if (launch->entry == NULL) {
             /* A /config/services definition: after every manifest service. */
-            int running = service_process_slot(launch->definition.name) !=
-                          UINT32_MAX;
+            uint32_t running =
+                service_process_slot(launch->definition.name) != UINT32_MAX;
 
             status = launch_definition(startup, &launch->definition, 0u);
             if (status != ASTRA_STATUS_OK)
                 (void)astra_log_failure(launch->definition.name, status);
+            /* Always 0 today: the definition parser has no way to set
+               PROTECTED, so /config/services is user tier by construction.
+               Read anyway, so a protected one could never be SKIPPED. */
             boot_service_report(running ? ASTRA_PROGRESS_SERVICE_SKIPPED :
                 supervisor_boot_service_result(
                     status, (launch->definition.flags &
