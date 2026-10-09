@@ -125,14 +125,29 @@ unanswered. HELLO answers `AstraVfsReply.features` (which replaces
 not exceed the grant's own, and `body.path`, the new root relative to the
 grant's root (`""` keeps it). Its reply carries one send handle, the derived
 grant's port; HELLO on that port hands out the derived grant's scope, which
-is read-only without WRITE and keeps TRANSFER only with DELEGATE. A grant
-derived from a non-delegable grant answers HELLO only from the process that
-derived it (the port's send handle itself moves with TRANSFER, as every
-moved handle does). A derived grant is retired when the session that
-derived it ends. A grant whose last holder closes its port is retired: HostFS revokes its scope
+is read-only without WRITE and keeps TRANSFER only with DELEGATE. A port
+derived from a non-delegable grant arrives without TRANSFER (the reply uses
+the kernel's send dispositions, syscall ABI 0x00010042), so it cannot be
+moved on; a fork child keeps it as usual. A derived grant is retired when
+the session that derived it ends. A grant whose last holder closes its port is retired: HostFS revokes its scope
 through the kernel and closes its provider session. The grant port is
 control only (HELLO, BYE, GRANT_DERIVE); the client's lane carries every
 data operation.
+
+## Syscall ABI 0x00010042: send dispositions
+
+`ASTRA_SYSCALL_PORT_SEND_TRY` takes `ASTRA_PORT_SEND_DISPOSITIONS` (bit 31)
+in data[5]. With it, data[4] points at `AstraHandleDisposition` records
+(`{handle, rights}`) instead of bare handles, and each handle arrives with
+its own rights AND the record's mask: the sender chooses what the receiver
+gets, and a mask only narrows. This is Zircon's `zx_channel_write_etc` with
+`zx_handle_disposition_t` (operation MOVE, a rights mask); Haiku has no
+capability handles to follow. Every handle is still moved and needs
+ASTRA_RIGHT_TRANSFER to be; a mask may strip TRANSFER, and then what
+arrives cannot move again. A zero mask is refused with
+`ASTRA_SYSCALL_INVALID_ARGUMENT` and nothing moves. Without the flag a send
+is exactly as before. A reply to `PORT_CALL` honours the same masks.
+`runtime.library` 1.15 adds `astra_port_send_rights`.
 
 ## Filesystem Kit ABI 7.0
 

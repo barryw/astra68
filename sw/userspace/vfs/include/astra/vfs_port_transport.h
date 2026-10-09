@@ -177,17 +177,14 @@ typedef struct AstraVfsPortGrant {
     uint32_t rights;           /* ASTRA_VFS_GRANT_* */
     uint32_t scope;            /* the grant's scope, ADMINISTER; HELLO hands
                                 * out a duplicate without it */
-    uint32_t holder;           /* nonzero: the only sender HELLO answers */
 } AstraVfsPortGrant;
 
 /*
  * One GRANT_DERIVE the port layer has accepted: `rights` is a checked
  * subset of `parent`'s. The deriver is the kernel-stamped sender and
  * `session` its session on `parent`; the new grant is the deriver's, to be
- * retired when that session ends. `holder` is what the new grant's record
- * must carry: the deriver when `parent` is not delegable (review C1) --
- * a port send handle always moves with TRANSFER, so the authority is bound
- * to the sender instead -- and 0 otherwise.
+ * retired when that session ends. The port layer sends the new grant's
+ * port without TRANSFER when `parent` is not delegable (review C1).
  */
 typedef struct AstraVfsPortDeriveRequest {
     const AstraVfsPortGrant *parent;
@@ -195,7 +192,6 @@ typedef struct AstraVfsPortDeriveRequest {
     uint32_t rights;
     uint32_t deriver;
     uint32_t session;
-    uint32_t holder;
 } AstraVfsPortDeriveRequest;
 
 /* Makes the grant; answers its send handle in *send, which the reply moves

@@ -101,10 +101,9 @@ What actually runs today, verified against source:
   narrower one (a sub-root, read-only, non-delegable, never wider), and the
   supervisor derives one for every manifest grant narrower than the base and
   for every child that does not `delegate`. A session is answered only on
-  the grant port it said HELLO on. A grant derived from a non-delegable
-  one answers only the process that derived it: a port send handle always
-  moves with TRANSFER, so the authority is bound to the kernel-stamped
-  sender instead. A derived grant belongs to the session that derived it
+  the grant port it said HELLO on. A port derived from a non-delegable
+  grant arrives without TRANSFER (the kernel's send dispositions), so it
+  cannot be moved on. A derived grant belongs to the session that derived it
   and is retired when that session ends (BYE, the deriver's death, or its
   own grant's retirement). One pump serves every grant port, starting at a
   different grant each pass; a port is control only (HELLO, BYE,

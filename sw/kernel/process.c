@@ -9602,12 +9602,17 @@ static bool handle_status_to_syscall(KernelHandleStatus status,
  * on the one processor, and only one reply is ever being delivered.
  */
 static KernelHandleTransferBatch reply_transfer KERNEL_TABLES;
+/* PORT_SEND_TRY's disposition masks, beside the batch for the same reason:
+ * one send runs at a time, and 1 KiB more would overrun the send path's
+ * stack budget. */
+static uint32_t send_masks[ASTRA_MESSAGE_HANDLES_MAX] KERNEL_TABLES;
 static KernelHandleImportReservation reply_import KERNEL_TABLES;
 
 static __attribute__((noinline)) KernelProcessStatus deliver_reply(
     KernelProcess *current, KernelHandle reply_handle, void *object,
     void *context, const uint8_t *message, uint32_t message_size,
-    const KernelHandle *handles, uint32_t handle_count, uint32_t *result)
+    const KernelHandle *handles, const uint32_t *masks,
+    uint32_t handle_count, uint32_t *result)
 {
     KernelHandleTransferBatch *transfer = &reply_transfer;
     KernelHandleImportReservation *import = &reply_import;
@@ -9649,6 +9654,10 @@ static __attribute__((noinline)) KernelProcessStatus deliver_reply(
         if (handle_status != KERNEL_HANDLE_OK)
             return handle_status_to_syscall(handle_status, result) ?
                 KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
+        if (masks != NULL &&
+            kernel_handle_transfer_narrow(transfer, masks) !=
+                KERNEL_HANDLE_OK)
+            return KERNEL_PROCESS_CORRUPT;
         if (kernel_handle_transfer_commit_export(current->handles,
                                                  transfer) !=
             KERNEL_HANDLE_OK)
@@ -9833,12 +9842,16 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
 
     if (syscall == ASTRA_SYSCALL_PORT_SEND_TRY) {
         KernelHandle attached[ASTRA_MESSAGE_HANDLES_MAX];
+        uint32_t *masks = send_masks;
         uint8_t message[ASTRA_MESSAGE_SIZE_MAX];
         KernelPerformanceToken performance;
         uint32_t user_message = thread->context.data[2];
         uint32_t message_size = thread->context.data[3];
         uint32_t user_handles = thread->context.data[4];
-        uint32_t handle_count = thread->context.data[5];
+        const bool narrowed =
+            (thread->context.data[5] & ASTRA_PORT_SEND_DISPOSITIONS) != 0u;
+        uint32_t handle_count =
+            thread->context.data[5] & ~ASTRA_PORT_SEND_DISPOSITIONS;
         uint32_t woken = 0u;
         int copy_status;
 
@@ -9863,10 +9876,29 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
             *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             return KERNEL_PROCESS_OK;
         }
+        if (narrowed && handle_count == 0u) {
+            *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            return KERNEL_PROCESS_OK;
+        }
         if (handle_count != 0u) {
-            copy_status = kernel_copy_from_user(
-                attached, user_handles,
-                handle_count * sizeof(attached[0]));
+            /* Dispositions are {handle, rights} pairs (ABI 0x00010042),
+             * read one at a time: a pair array would not fit the stack. */
+            copy_status = KERNEL_USER_COPY_OK;
+            if (!narrowed)
+                copy_status = kernel_copy_from_user(
+                    attached, user_handles,
+                    handle_count * sizeof(attached[0]));
+            for (uint32_t index = 0u; narrowed && index < handle_count &&
+                                      copy_status == KERNEL_USER_COPY_OK;
+                 ++index) {
+                uint32_t pair[2];
+
+                copy_status = kernel_copy_from_user(
+                    pair, user_handles + index * (uint32_t)sizeof(pair),
+                    sizeof(pair));
+                attached[index] = pair[0];
+                masks[index] = pair[1];
+            }
             if (copy_status == KERNEL_USER_COPY_BAD_ADDRESS ||
                 copy_status == KERNEL_USER_COPY_INVALID_ARGUMENT) {
                 *result = ASTRA_SYSCALL_BAD_ADDRESS;
@@ -9874,12 +9906,18 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
             }
             if (copy_status != KERNEL_USER_COPY_OK)
                 return KERNEL_PROCESS_CORRUPT;
+            for (uint32_t index = 0u; narrowed && index < handle_count;
+                 ++index)
+                if (masks[index] == 0u) {
+                    *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+                    return KERNEL_PROCESS_OK;
+                }
         }
         if (is_reply) {
             KernelProcessStatus reply_status = deliver_reply(
                 current, thread->context.data[1], reply_object,
                 reply_context, message, message_size, attached,
-                handle_count, result);
+                narrowed ? masks : NULL, handle_count, result);
 
             if (reply_status != KERNEL_PROCESS_OK)
                 return reply_status;
@@ -9893,9 +9931,10 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
         }
         performance = kernel_performance_begin(
             KERNEL_PERFORMANCE_PORT_SEND);
-        port_status = kernel_port_send(
+        port_status = kernel_port_send_narrowed(
             port, current->handles, message, message_size,
-            handle_count != 0u ? attached : NULL, handle_count, &woken);
+            handle_count != 0u ? attached : NULL, handle_count,
+            narrowed ? masks : NULL, &woken);
         kernel_performance_end(performance);
         if (!port_status_to_syscall(port_status, result))
             return KERNEL_PROCESS_CORRUPT;

@@ -1157,6 +1157,35 @@ KernelHandleStatus kernel_handle_transfer_prepare(
     return KERNEL_HANDLE_OK;
 }
 
+/*
+ * The sender chooses what arrives: each prepared handle keeps only the
+ * rights in its mask (Zircon's zx_handle_disposition_t rights). A mask can
+ * only narrow, and one with no rights is refused, leaving the batch
+ * prepared and unchanged for the caller to roll back.
+ */
+KernelHandleStatus kernel_handle_transfer_narrow(
+    KernelHandleTransferBatch *batch, const uint32_t *masks)
+{
+    if (batch == NULL || masks == NULL ||
+        batch->state != KERNEL_HANDLE_BATCH_PREPARED || batch->count == 0u)
+        return KERNEL_HANDLE_INVALID_ARGUMENT;
+    for (uint32_t index = 0u; index < batch->count; ++index)
+        if (masks[index] == 0u)
+            return KERNEL_HANDLE_INVALID_ARGUMENT;
+    for (uint32_t index = 0u; index < batch->count; ++index) {
+        KernelDetachedEntry *entry = NULL;
+
+        if (find_detached_entry(batch->detached[index],
+                                KERNEL_DETACHED_RESERVED, &entry) !=
+            KERNEL_HANDLE_OK) {
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
+        entry->rights &= masks[index];
+    }
+    return KERNEL_HANDLE_OK;
+}
+
 KernelHandleStatus kernel_handle_transfer_commit_export(
     KernelHandleTable *source_table, KernelHandleTransferBatch *batch)
 {
@@ -1179,7 +1208,7 @@ KernelHandleStatus kernel_handle_transfer_commit_export(
             source->retain != destination->retain ||
             source->release != destination->release ||
             source->release_context != destination->release_context ||
-            source->rights != destination->rights ||
+            (destination->rights & ~source->rights) != 0u ||
             source->type != destination->type)
             return KERNEL_HANDLE_INVALID_STATE;
     }

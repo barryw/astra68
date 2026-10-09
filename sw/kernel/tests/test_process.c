@@ -8901,6 +8901,152 @@ static uint32_t scope_round_trip(uint32_t handle, KernelCpuContext **next)
 }
 
 /*
+ * PORT_SEND_TRY with dispositions (Zircon's zx_channel_write_etc rights):
+ * the sender chooses the rights that arrive. A mask only narrows; one that
+ * strips TRANSFER still moves the handle, and what arrives cannot move
+ * again; an empty mask is refused and moves nothing; without the flag a
+ * send is exactly as it was.
+ */
+static void test_port_send_rights_mask(void)
+{
+    const uint32_t user_message = KERNEL_PROCESS_STACK_TOP - 1024u;
+    const uint32_t user_handles = KERNEL_PROCESS_STACK_TOP - 512u;
+    KernelCpuContext *next = NULL;
+    AstraMessageHeader message;
+    AstraHandleDisposition disposition;
+    uint32_t process_id = 0u;
+    uint32_t receive;
+    uint32_t send;
+    uint32_t carried_receive;
+    uint32_t carried;
+    uint32_t moved = 0u;
+
+    loader_build_image();
+    initialize_test();
+    assert(kernel_process_create_executable(loader_image, loader_image_size,
+                                            NULL, 0u, &process_id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    assert(scope_call(ASTRA_SYSCALL_PORT_CREATE, 2u, 2u * sizeof(message),
+                      0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    receive = next->data[1];
+    send = next->data[2];
+    /* The handle to carry: another port's send endpoint, which has
+     * READ|SIGNAL|WAIT|TRANSFER and not ADMINISTER. */
+    assert(scope_call(ASTRA_SYSCALL_PORT_CREATE, 1u, sizeof(message), 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    carried_receive = next->data[1];
+    carried = next->data[2];
+    memset(&message, 0, sizeof(message));
+    message.total_size = sizeof(message);
+    message.header_size = ASTRA_MESSAGE_HEADER_SIZE;
+    message.protocol = 0x4d41534bu;
+    message.protocol_version = 1u;
+    message.operation = 1u;
+    assert(kernel_user_copy_to_asm(user_message, &message,
+                                   sizeof(message)) == KERNEL_USER_COPY_OK);
+
+    /* An empty mask is refused, and the handle stays where it was. */
+    disposition.handle = carried;
+    disposition.rights = 0u;
+    assert(kernel_user_copy_to_asm(user_handles, &disposition,
+                                   sizeof(disposition)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_PORT_SEND_TRY, send, user_message,
+                      sizeof(message), user_handles,
+                      1u | ASTRA_PORT_SEND_DISPOSITIONS, &next) ==
+           ASTRA_SYSCALL_INVALID_ARGUMENT);
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, carried,
+                      ASTRA_RIGHT_SIGNAL, 0u, 0u, 0u, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(scope_call(ASTRA_SYSCALL_CLOSE, next->data[1], 0u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_OK);
+
+    /* Strip TRANSFER and ask for ADMINISTER, which it never had: it moves,
+     * arrives with SIGNAL|WAIT and nothing more, and cannot move again. */
+    disposition.handle = carried;
+    disposition.rights = ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT |
+                         ASTRA_RIGHT_ADMINISTER;
+    assert(kernel_user_copy_to_asm(user_handles, &disposition,
+                                   sizeof(disposition)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_PORT_SEND_TRY, send, user_message,
+                      sizeof(message), user_handles,
+                      1u | ASTRA_PORT_SEND_DISPOSITIONS, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, carried,
+                      ASTRA_RIGHT_SIGNAL, 0u, 0u, 0u, &next) ==
+           ASTRA_SYSCALL_INVALID_HANDLE);
+    assert(scope_call(ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive, user_message,
+                      sizeof(message), user_handles, 1u, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&moved, user_handles, sizeof(moved)) ==
+           KERNEL_USER_COPY_OK);
+    assert(moved != 0u);
+    /* Without TRANSFER it can be neither copied nor moved. */
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, moved,
+                      ASTRA_RIGHT_SIGNAL, 0u, 0u, 0u, &next) ==
+           ASTRA_SYSCALL_ACCESS_DENIED);
+    assert(kernel_user_copy_to_asm(user_handles, &moved, sizeof(moved)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_PORT_SEND_TRY, send, user_message,
+                      sizeof(message), user_handles, 1u, &next) ==
+           ASTRA_SYSCALL_ACCESS_DENIED);
+    /* The narrowed handle still works for what it kept. */
+    assert(scope_call(ASTRA_SYSCALL_PORT_SEND_TRY, moved, user_message,
+                      sizeof(message), 0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    assert(scope_call(ASTRA_SYSCALL_PORT_RECEIVE_TRY, carried_receive,
+                      user_message, sizeof(message), user_handles, 1u,
+                      &next) == ASTRA_SYSCALL_OK);
+
+    /* A mask of every right widens nothing: TRANSFER stays, ADMINISTER,
+     * which the handle never had, does not appear. */
+    assert(scope_call(ASTRA_SYSCALL_PORT_CREATE, 1u, sizeof(message), 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    carried = next->data[2];
+    disposition.handle = carried;
+    disposition.rights = UINT32_MAX;
+    assert(kernel_user_copy_to_asm(user_handles, &disposition,
+                                   sizeof(disposition)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_PORT_SEND_TRY, send, user_message,
+                      sizeof(message), user_handles,
+                      1u | ASTRA_PORT_SEND_DISPOSITIONS, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(scope_call(ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive, user_message,
+                      sizeof(message), user_handles, 1u, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&moved, user_handles, sizeof(moved)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, moved,
+                      ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_OK);
+    assert(scope_call(ASTRA_SYSCALL_CLOSE, next->data[1], 0u, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_OK);
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, moved,
+                      ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_ADMINISTER, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_ACCESS_DENIED);
+
+    /* Without the flag, the same send moves every right, as before. */
+    assert(scope_call(ASTRA_SYSCALL_PORT_CREATE, 1u, sizeof(message), 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    carried = next->data[2];
+    assert(kernel_user_copy_to_asm(user_handles, &carried, sizeof(carried)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_PORT_SEND_TRY, send, user_message,
+                      sizeof(message), user_handles, 1u, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(scope_call(ASTRA_SYSCALL_PORT_RECEIVE_TRY, receive, user_message,
+                      sizeof(message), user_handles, 1u, &next) ==
+           ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_from_asm(&moved, user_handles, sizeof(moved)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, moved,
+                      ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_TRANSFER, 0u, 0u, 0u,
+                      &next) == ASTRA_SYSCALL_OK);
+}
+
+/*
  * A filesystem scope (FS15, FS44; decisions of 2026-10-08): minted only with
  * ASTRA_RIGHT_HOST_SCOPE, stamped by the kernel into the channels bound to
  * it, attached several to one thread's channel, revoked everywhere at once,
@@ -15445,6 +15591,7 @@ int main(void)
     test_host_admission();
     test_audio_stream();
     test_host_scope();
+    test_port_send_rights_mask();
     test_host_scope_failed_detach();
     test_host_scope_attach_checks();
     test_host_channel_provider();

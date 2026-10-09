@@ -1638,6 +1638,25 @@ uint32_t astra_shutdown_receive_reply(uint32_t reply_receive,
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
                          const uint32_t *handles, uint32_t handle_count);
 /**
+ * Send one message whose transferred capabilities arrive with the rights
+ * the sender chooses (runtime 1.15, syscall ABI 0x00010042): each handle
+ * keeps its own rights AND its disposition's mask, so a mask only narrows
+ * -- the way Zircon's zx_channel_write_etc takes zx_handle_disposition_t.
+ * Every handle is moved, so each needs ASTRA_RIGHT_TRANSFER, and a mask may
+ * strip TRANSFER so what arrives cannot travel further.
+ * @param handle Port send capability.
+ * @param message Message bytes.
+ * @param size Message byte count.
+ * @param dispositions Capabilities to transfer and the rights each keeps.
+ * @param count Number of dispositions, at least one.
+ * @return ASTRA_SYSCALL_* status; INVALID_ARGUMENT for a zero mask, and
+ *         nothing moves.
+ */
+uint32_t astra_port_send_rights(uint32_t handle, const void *message,
+                                uint32_t size,
+                                const AstraHandleDisposition *dispositions,
+                                uint32_t count);
+/**
  * Receive one queued message without blocking.
  * @param handle Port receive capability.
  * @param message Receives message bytes.

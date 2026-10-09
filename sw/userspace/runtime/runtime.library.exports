@@ -260,3 +260,8 @@ ASTRA_RUNTIME_1.14 {
         astra_host_scope_create;
         astra_host_scope_revoke;
 } ASTRA_RUNTIME_1.13;
+
+ASTRA_RUNTIME_1.15 {
+    global:
+        astra_port_send_rights;
+} ASTRA_RUNTIME_1.14;

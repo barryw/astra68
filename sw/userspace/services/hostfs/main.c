@@ -57,7 +57,7 @@ static _Alignas(16) uint8_t signal_stack[4096u];
  * this record.
  */
 typedef struct HostfsGrant {
-    AstraVfsPortGrant port;        /* receive, id, rights, scope, holder */
+    AstraVfsPortGrant port;        /* receive, id, rights, scope */
     AstraVfsService *service;      /* WORK's or SOUND's */
     uint32_t session;              /* its provider session */
     /* A derived grant belongs to the session that derived it (review I1):
@@ -343,7 +343,7 @@ static uint32_t scope_status(uint32_t status)
  * handle. Its scope carries exactly those rights: read-only without WRITE,
  * delegable only with DELEGATE. */
 static uint32_t grant_add(AstraVfsService *owner, uint32_t session,
-                          uint32_t rights, uint32_t holder, uint32_t *send,
+                          uint32_t rights, uint32_t *send,
                           HostfsGrant **added)
 {
     HostfsGrant *grant;
@@ -386,7 +386,6 @@ static uint32_t grant_add(AstraVfsService *owner, uint32_t session,
     grant->port.id = next_grant_id++;
     grant->port.rights = rights;
     grant->port.scope = scope;
-    grant->port.holder = holder;
     grants[grant_count++] = grant;
     if (added != NULL)
         *added = grant;
@@ -396,7 +395,7 @@ static uint32_t grant_add(AstraVfsService *owner, uint32_t session,
 /* GRANT_DERIVE (storage protocol 29): a provider session beneath the
  * parent's, read-only when the grant lacks WRITE, and a grant over it,
  * owned by the session that derived it. The port layer has already checked
- * that the rights only narrow, and chose the holder. */
+ * that the rights only narrow. */
 static uint32_t hostfs_derive(void *context,
                               const AstraVfsPortDeriveRequest *request,
                               uint32_t *send)
@@ -422,8 +421,8 @@ static uint32_t hostfs_derive(void *context,
             ASTRA_HOST_FS_SESSION_READ_ONLY : 0u, &session);
     if (status != ASTRA_VFS_OK)
         return status;
-    status = grant_add(from->service, session, request->rights,
-                       request->holder, send, &grant);
+    status = grant_add(from->service, session, request->rights, send,
+                       &grant);
     if (status != ASTRA_VFS_OK) {
         (void)astra_vfs_host_session_close(&transport, transport.generation,
                                            session);
@@ -593,9 +592,9 @@ int astra_main(const AstraStartupInfo *startup)
         const uint32_t base = ASTRA_VFS_GRANT_READ | ASTRA_VFS_GRANT_WRITE |
                               ASTRA_VFS_GRANT_DELEGATE;
 
-        if (grant_add(&service, work_session, base, 0u, &work_send,
-                      NULL) != ASTRA_VFS_OK ||
-            grant_add(&sound_service, sound_session, base, 0u, &sound_send,
+        if (grant_add(&service, work_session, base, &work_send, NULL) !=
+                ASTRA_VFS_OK ||
+            grant_add(&sound_service, sound_session, base, &sound_send,
                       NULL) != ASTRA_VFS_OK)
             status = ASTRA_STATUS_LIMIT;
     }

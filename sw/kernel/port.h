@@ -129,6 +129,13 @@ KernelPortStatus kernel_port_send(
     const void *message, uint32_t message_size,
     const KernelHandle *handles, uint32_t handle_count,
     uint32_t *woken_threads);
+/* As kernel_port_send, with each attached handle arriving with its rights
+ * AND masks[i] (ASTRA_PORT_SEND_DISPOSITIONS); NULL masks narrow nothing. */
+KernelPortStatus kernel_port_send_narrowed(
+    KernelPort *port, KernelHandleTable *source_table,
+    const void *message, uint32_t message_size,
+    const KernelHandle *handles, uint32_t handle_count,
+    const uint32_t *masks, uint32_t *woken_threads);
 KernelPortStatus kernel_port_receive_prepare(
     KernelPort *port, KernelHandleTable *destination_table,
     uint32_t message_capacity, uint32_t handle_capacity,

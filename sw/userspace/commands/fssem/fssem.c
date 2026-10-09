@@ -640,23 +640,55 @@ static int case_raw_delegate(const char *directory)
     return 0;
 }
 
-/* A grant derived from a non-delegable grant answers only its deriver
- * (review C1). The derived port itself moves with TRANSFER -- every moved
- * handle does -- so handing it to another process (here, by fork) must
- * give that process nothing: its HELLO goes unanswered. A grant derived
- * from a delegable one answers the same child, so the refusal is the
- * binding and not the fork. */
+/* Sends `handle` to this process through a fresh port: what handing it to
+ * another holder needs from the kernel. Answers the send's status and, when
+ * it moved, the handle that arrived. */
+static uint32_t carry(uint32_t handle, uint32_t *arrived)
+{
+    AstraMessageHeader message;
+    uint32_t receive = 0u;
+    uint32_t send = 0u;
+    uint32_t handles[1] = {handle};
+    uint32_t size = 0u;
+    uint32_t count = 0u;
+    uint32_t status;
+
+    *arrived = 0u;
+    status = astra_rt_port_create(1u, sizeof(message), &receive, &send);
+    if (status != ASTRA_SYSCALL_OK)
+        return status;
+    memset(&message, 0, sizeof(message));
+    astra_message_header_set(&message, (uint32_t)sizeof(message),
+                             ASTRA_VFS_PROTOCOL, ASTRA_VFS_VERSION, 1u, 1u);
+    status = astra_port_send(send, &message, sizeof(message), handles, 1u);
+    if (status == ASTRA_SYSCALL_OK &&
+        astra_port_receive(receive, &message, sizeof(message), handles, 1u,
+                           &size, &count) == ASTRA_SYSCALL_OK &&
+        count == 1u)
+        *arrived = handles[0];
+    (void)astra_close(send);
+    (void)astra_close(receive);
+    return status;
+}
+
+/* A port derived from a non-delegable grant arrives without TRANSFER
+ * (review C1; the kernel's send dispositions, syscall ABI 0x00010042): the
+ * kernel refuses to move it on, and a fork child keeps it as usual. A port
+ * derived from a delegable grant still travels and works. */
 static int case_raw_onward(const char *directory)
 {
     RawClient rw;
     RawClient plain;
     RawClient mine;
+    RawClient moved;
     AstraVfsReplyMessage reply;
     uint32_t free_grant = 0u;
     uint32_t bound_grant = 0u;
+    uint32_t arrived = 0u;
     uint32_t copy = 0u;
+    uint32_t status;
     pid_t child;
-    int status;
+    int exited;
 
     (void)directory;
     CHECK(raw_open(&rw, work_grant()) == ASTRA_SYSCALL_OK, "HELLO on WORK");
@@ -673,39 +705,41 @@ static int case_raw_onward(const char *directory)
           reply.reply.status == ASTRA_VFS_OK && bound_grant != 0u,
           "derive from the non-delegable grant: status %u",
           (unsigned)reply.reply.status);
-    /* The port can be handed on; that is the point of the binding. */
+    /* The kernel itself refuses to move it on. */
+    status = carry(bound_grant, &arrived);
+    CHECK(status == ASTRA_SYSCALL_ACCESS_DENIED && arrived == 0u,
+          "a port derived from a non-delegable grant was moved on: %u",
+          (unsigned)status);
     CHECK(astra_rt_handle_duplicate(bound_grant, ASTRA_RIGHT_SIGNAL |
                                         ASTRA_RIGHT_TRANSFER, &copy) ==
-              ASTRA_SYSCALL_OK, "the derived port is not transferable");
-    (void)astra_close(copy);
+              ASTRA_SYSCALL_ACCESS_DENIED,
+          "the derived port kept TRANSFER");
+    /* Its holder uses it, and a fork child keeps it as usual. */
+    CHECK(raw_open(&mine, bound_grant) == ASTRA_SYSCALL_OK && mine.scope != 0u,
+          "the holder could not HELLO its derived grant");
+    raw_close(&mine);
     child = fork();
     CHECK(child >= 0, "fork: %s", strerror(errno));
     if (child == 0) {
         RawClient other;
-        uint32_t refused = raw_open_until(
-            &other, bound_grant,
-            astra_clock_monotonic() + UINT64_C(2000000000));
-        uint32_t allowed;
 
-        if (refused == ASTRA_SYSCALL_OK)
-            _exit(1);
-        allowed = raw_open(&other, free_grant);
-        _exit(allowed == ASTRA_SYSCALL_OK ? 0 : 2);
+        _exit(raw_open(&other, bound_grant) == ASTRA_SYSCALL_OK ? 0 : 1);
     }
-    CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status),
-          "wait for the child");
-    CHECK(WEXITSTATUS(status) != 1,
-          "another process said HELLO on a grant bound to its deriver");
-    CHECK(WEXITSTATUS(status) == 0,
-          "the child could not HELLO a delegable parent's grant");
-    /* Its deriver still can. */
-    CHECK(raw_open(&mine, bound_grant) == ASTRA_SYSCALL_OK && mine.scope != 0u,
-          "the deriver could not HELLO its own grant");
-    raw_close(&mine);
+    CHECK(waitpid(child, &exited, 0) == child && WIFEXITED(exited) &&
+          WEXITSTATUS(exited) == 0,
+          "a fork child could not HELLO the inherited grant");
     raw_close(&plain);
-    raw_close(&rw);
     (void)astra_close(bound_grant);
-    (void)astra_close(free_grant);
+    /* A delegable parent's derived port moves and works where it lands. */
+    status = carry(free_grant, &arrived);
+    CHECK(status == ASTRA_SYSCALL_OK && arrived != 0u,
+          "a port derived from a delegable grant did not move: %u",
+          (unsigned)status);
+    CHECK(raw_open(&moved, arrived) == ASTRA_SYSCALL_OK,
+          "the moved port did not answer");
+    raw_close(&moved);
+    raw_close(&rw);
+    (void)astra_close(arrived);
     return 0;
 }
 

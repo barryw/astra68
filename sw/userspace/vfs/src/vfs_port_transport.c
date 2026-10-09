@@ -2231,6 +2231,27 @@ astra_vfs_port_service_set_derive(AstraVfsPortService *host,
 }
 
 /*
+ * A reply, its handles moved with their own rights, or with `rights` ANDed
+ * in when nonzero: the kernel's dispositions (ASTRA_PORT_SEND_DISPOSITIONS,
+ * Zircon's zx_handle_disposition_t), so the sender chooses what arrives.
+ */
+static uint32_t
+reply_send(uint32_t reply_handle, const void *message, uint32_t size,
+           const uint32_t *handles, uint32_t count, uint32_t rights)
+{
+    AstraHandleDisposition dispositions[1];
+
+    if (rights == 0u || count == 0u)
+        return astra_port_send(reply_handle, message, size, handles, count);
+    if (count > 1u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    dispositions[0].handle = handles[0];
+    dispositions[0].rights = rights;
+    return astra_port_send_rights(reply_handle, message, size, dispositions,
+                                  count);
+}
+
+/*
  * The receive-dispatch-reply pump, for the host's own port (`grant` NULL)
  * or for one grant's port. A grant's port is control only, and every
  * session it opens is bound to that grant (FS15): the kernel stamps the
@@ -2256,6 +2277,7 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
         AstraVfsReplyLease lease = {.slot = -1};
         uint32_t handles[1] = {0u};
         uint32_t outgoing_handles[1] = {0u};
+        uint32_t outgoing_rights = 0u;   /* 0: the handle's own rights */
         uint32_t handle_count = 0u;
         uint32_t outgoing_handle_count = 0u;
         uint32_t size = 0u;
@@ -2350,10 +2372,7 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
             slot = lease.slot;
 
         if (wire_operation == ASTRA_VFS_OP_HELLO) {
-            /* A grant bound to its holder answers nobody else (C1). */
-            if (handle_count != 1u ||
-                (grant != NULL && grant->holder != 0u &&
-                 sender != grant->holder)) {
+            if (handle_count != 1u) {
                 port_refuse(host);
                 if (handle_count != 0u)
                     (void)astra_close(handles[0]);
@@ -2672,8 +2691,6 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
                     .rights = incoming->request.flags,
                     .deriver = sender,
                     .session = incoming->request.session,
-                    .holder = (grant->rights & ASTRA_VFS_GRANT_DELEGATE) != 0u ?
-                        0u : sender,
                 };
 
                 outgoing->reply.status = host->derive(
@@ -2681,6 +2698,10 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
                 if (outgoing->reply.status == ASTRA_VFS_OK && derived != 0u) {
                     outgoing_handles[0] = derived;
                     outgoing_handle_count = 1u;
+                    /* A port derived from a non-delegable grant arrives
+                     * without TRANSFER: it cannot travel on (C1). */
+                    if ((grant->rights & ASTRA_VFS_GRANT_DELEGATE) == 0u)
+                        outgoing_rights = ~ASTRA_RIGHT_TRANSFER;
                 } else if (outgoing->reply.status == ASTRA_VFS_OK) {
                     outgoing->reply.status = ASTRA_VFS_ERR_IO;
                 } else if (derived != 0u) {
@@ -2720,9 +2741,9 @@ answer_ready:
             outgoing_handles[0] = 0u;
             outgoing_handle_count = 0u;
         }
-        sent = astra_port_send(reply_handle, outgoing, sizeof(*outgoing),
-                               outgoing_handles,
-                               outgoing_handle_count) == ASTRA_SYSCALL_OK;
+        sent = reply_send(reply_handle, outgoing, sizeof(*outgoing),
+                          outgoing_handles, outgoing_handle_count,
+                          outgoing_rights) == ASTRA_SYSCALL_OK;
         if (!sent && outgoing_handle_count != 0u)
             (void)astra_close(outgoing_handles[0]);
         if (sent) {

@@ -270,9 +270,9 @@ every path beneath the session's root with `openat2` `RESOLVE_BENEATH`,
 refuses mutations through a read-only scope and handles from another
 session, and accepts a scope only if the claimed filesystem owner created
 it. A scope travels further only when its grant is delegable, and a holder
-can narrow a grant only through HostFS (`GRANT_DERIVE`); a grant derived
-from a non-delegable one answers only the process that derived it, and
-every derived grant ends with the session that derived it. Revocation goes
+can narrow a grant only through HostFS (`GRANT_DERIVE`); a port derived
+from a non-delegable grant arrives without TRANSFER and cannot be moved on,
+and every derived grant ends with the session that derived it. Revocation goes
 through the kernel, which detaches the scope from every channel at once.
 
 FS16. Namespace changes are atomic publications tied to a sequence and object

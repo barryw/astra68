@@ -40,7 +40,7 @@
  * A caller that does not recognize this value should refuse to run rather
  * than guess at a register layout that may have changed underneath it.
  */
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010040u
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010042u
 
 /**
  * Identifies the running kernel's syscall ABI. No argument. Returns
@@ -154,8 +154,18 @@
  * blocking. data[1] is a port-send or reply handle; data[2] the message
  * address and data[3] its size; data[4] an attached-handle array address
  * and data[5] its count. WOULD_BLOCK if the port has no room.
+ *
+ * With ::ASTRA_PORT_SEND_DISPOSITIONS set in data[5] (ABI 0x00010042), the
+ * array holds ::AstraHandleDisposition records instead of bare handles, and
+ * each handle arrives with its rights AND the record's mask: the sender
+ * chooses what the receiver gets, and a mask only narrows (Zircon's
+ * zx_channel_write_etc with zx_handle_disposition_t). Every attached handle
+ * still needs TRANSFER to be moved, and is consumed. A mask of zero is
+ * refused with ::ASTRA_SYSCALL_INVALID_ARGUMENT and nothing moves.
  */
 #define ASTRA_SYSCALL_PORT_SEND_TRY    19
+/** ::ASTRA_SYSCALL_PORT_SEND_TRY data[5] flag: the array is dispositions. */
+#define ASTRA_PORT_SEND_DISPOSITIONS   (1u << 31)
 /**
  * Receives a message without blocking. data[1] is a port-receive handle;
  * data[2] the output message buffer and data[3] its capacity; data[4] an
@@ -1416,6 +1426,15 @@
 /* Plain 32-bit scalar arrays follow the m68k ABI, which aligns them to 2. */
 /** Required alignment for a plain 32-bit scalar array, which follows the m68k ABI's own alignment of 2 rather than ::ASTRA_ABI_ALIGNMENT. */
 #define ASTRA_SCALAR_ALIGNMENT 2u
+
+/** One attached handle and the rights it arrives with
+ * (::ASTRA_PORT_SEND_DISPOSITIONS). */
+typedef struct AstraHandleDisposition {
+    /** The sender's handle; moved, so it needs ASTRA_RIGHT_TRANSFER. */
+    uint32_t handle;
+    /** ASTRA_RIGHT_* the receiver gets, ANDed with the handle's; nonzero. */
+    uint32_t rights;
+} AstraHandleDisposition;
 
 /**
  * Argument block for ::ASTRA_SYSCALL_AREA_COPY_IN: `rows` rows of

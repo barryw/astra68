@@ -850,6 +850,85 @@ static void test_detached_pool_exhaustion_and_reuse(void)
     assert(kernel_handle_close(&table, replacement) == KERNEL_HANDLE_OK);
 }
 
+/*
+ * A rights mask on a transfer (Zircon's zx_handle_disposition_t rights):
+ * what arrives is the sent rights AND the mask. It only narrows, it can
+ * strip TRANSFER from a handle that still moves, a stripped handle cannot
+ * be moved again, and an empty mask is refused.
+ */
+static void test_transfer_rights_mask(void)
+{
+    KernelHandleTable source;
+    KernelHandleTable destination;
+    KernelHandleTransferBatch batch;
+    KernelHandleImportReservation reservation;
+    ReleaseState released = {0};
+    KernelHandle handles[2];
+    KernelDetachedHandle detached[2];
+    uint32_t masks[2];
+    void *object;
+
+    kernel_handle_transfer_pool_init();
+    kernel_handle_table_init(&source);
+    kernel_handle_table_init(&destination);
+    for (uint32_t index = 0u; index < 2u; ++index)
+        assert(kernel_handle_install(
+                   &source, KERNEL_OBJECT_SYNC, RIGHT_QUERY | RIGHT_TRANSFER,
+                   (void *)(uintptr_t)(0x2000u + index), release_object,
+                   &released, &handles[index]) == KERNEL_HANDLE_OK);
+
+    /* An empty mask is refused and moves nothing. */
+    assert(kernel_handle_transfer_prepare(&source, handles, 2u,
+                                          RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_OK);
+    masks[0] = RIGHT_QUERY;
+    masks[1] = 0u;
+    assert(kernel_handle_transfer_narrow(&batch, masks) ==
+           KERNEL_HANDLE_INVALID_ARGUMENT);
+    assert(kernel_handle_transfer_rollback(&batch) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_count(&source) == 2u);
+
+    /* The first loses TRANSFER and still moves; the second asks for a
+     * right it never had (CONTROL) and does not get it. */
+    assert(kernel_handle_transfer_prepare(&source, handles, 2u,
+                                          RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_OK);
+    masks[0] = RIGHT_QUERY;
+    masks[1] = RIGHT_QUERY | RIGHT_CONTROL | RIGHT_TRANSFER;
+    assert(kernel_handle_transfer_narrow(&batch, masks) == KERNEL_HANDLE_OK);
+    detached[0] = batch.detached[0];
+    detached[1] = batch.detached[1];
+    assert(kernel_handle_transfer_commit_export(&source, &batch) ==
+           KERNEL_HANDLE_OK);
+    assert(kernel_handle_count(&source) == 0u);
+    assert(kernel_handle_import_reserve(&destination, detached, 2u,
+                                        &reservation) == KERNEL_HANDLE_OK);
+    handles[0] = reservation.handles[0];
+    handles[1] = reservation.handles[1];
+    assert(kernel_handle_import_commit(&destination, &reservation,
+                                       detached) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_lookup(&destination, handles[0], KERNEL_OBJECT_SYNC,
+                                RIGHT_QUERY, &object) == KERNEL_HANDLE_OK &&
+           (uintptr_t)object == 0x2000u);
+    assert(kernel_handle_lookup(&destination, handles[0], KERNEL_OBJECT_SYNC,
+                                RIGHT_TRANSFER, &object) ==
+           KERNEL_HANDLE_ACCESS_DENIED);
+    assert(kernel_handle_lookup(&destination, handles[1], KERNEL_OBJECT_SYNC,
+                                RIGHT_CONTROL, &object) ==
+           KERNEL_HANDLE_ACCESS_DENIED);
+    assert(kernel_handle_lookup(&destination, handles[1], KERNEL_OBJECT_SYNC,
+                                RIGHT_QUERY | RIGHT_TRANSFER, &object) ==
+           KERNEL_HANDLE_OK);
+    /* Stripped of TRANSFER, it cannot be moved again. */
+    assert(kernel_handle_transfer_validate(&destination, &handles[0], 1u,
+                                           RIGHT_TRANSFER) ==
+           KERNEL_HANDLE_ACCESS_DENIED);
+    assert(kernel_handle_close(&destination, handles[0]) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_close(&destination, handles[1]) == KERNEL_HANDLE_OK);
+    assert(released.calls == 2u && released.object_sum == 0x4001u);
+    assert(kernel_handle_transfer_pool_valid());
+}
+
 int main(void)
 {
     kernel_handle_transfer_pool_init();
@@ -868,6 +947,7 @@ int main(void)
     test_export_validation_and_rollback();
     test_destination_full_and_detached_release();
     test_detached_pool_exhaustion_and_reuse();
+    test_transfer_rights_mask();
     assert(kernel_handle_transfer_pool_healthy());
     puts("handle tests passed");
     return 0;

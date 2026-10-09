@@ -175,6 +175,10 @@ KernelHandleStatus kernel_handle_transfer_prepare(
     const KernelHandleTable *source_table, const KernelHandle *source_handles,
     uint32_t count, uint32_t required_rights,
     KernelHandleTransferBatch *batch);
+/* Narrows each prepared handle's rights to its mask; refuses a zero mask.
+ * Between prepare and commit_export. */
+KernelHandleStatus kernel_handle_transfer_narrow(
+    KernelHandleTransferBatch *batch, const uint32_t *masks);
 KernelHandleStatus kernel_handle_transfer_commit_export(
     KernelHandleTable *source_table, KernelHandleTransferBatch *batch);
 KernelHandleStatus kernel_handle_transfer_rollback(
