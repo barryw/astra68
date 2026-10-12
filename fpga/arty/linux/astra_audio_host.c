@@ -1655,7 +1655,7 @@ static void setup_mailbox(AudioHost *host)
     {
         struct stat status;
 
-        if (fstat(fd, &status) != 0 ||
+        if (fstat(fd, &status) != 0 || fchmod(fd, 0660) != 0 ||
             (status.st_size < (off_t)ASTRA_AUDIO_MAILBOX_BYTES &&
              ftruncate(fd, ASTRA_AUDIO_MAILBOX_BYTES) != 0)) {
             fprintf(stderr, "ASTRA AUDIO HOST cannot size %s: %s\n", path,
@@ -1750,7 +1750,7 @@ static int setup_socket(AudioHost *host, const char *path)
     memcpy(address.sun_path, path, strlen(path) + 1u);
     if (bind(host->listener, (struct sockaddr *)&address,
              sizeof(address)) != 0 ||
-        chmod(path, 0600) != 0 || listen(host->listener, SOMAXCONN) != 0)
+        chmod(path, 0660) != 0 || listen(host->listener, SOMAXCONN) != 0)
         return -1;
     host->epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     if (host->epoll_fd < 0 ||

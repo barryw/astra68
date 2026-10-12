@@ -374,7 +374,7 @@ static uint32_t commit(ConfigState *state, uint32_t text_area, char *text,
 
     if ((state->flags & ASTRA_CONFIG_OPEN_WRITE) == 0u)
         goto denied;
-    status = astra_vfs_unlink(&state->client, state->temporary);
+    status = astra_vfs_unlink(&state->client, state->temporary, 0u);
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_NOT_FOUND)
         goto failed;
     status = astra_vfs_open_mode(
@@ -386,7 +386,7 @@ static uint32_t commit(ConfigState *state, uint32_t text_area, char *text,
         uint32_t moved = 0u;
 
         status = astra_vfs_write(
-            &state->client, file, used, text + used, length - used, &moved);
+            &state->client, file, used, UINT64_MAX, text + used, length - used, &moved);
         if (status == ASTRA_VFS_OK && moved == 0u)
             status = ASTRA_VFS_ERR_IO;
         used += moved;
@@ -413,7 +413,7 @@ static uint32_t commit(ConfigState *state, uint32_t text_area, char *text,
 failed:
     if (file != ASTRA_VFS_FILE_INVALID)
         (void)astra_vfs_close(&state->client, file);
-    (void)astra_vfs_unlink(&state->client, state->temporary);
+    (void)astra_vfs_unlink(&state->client, state->temporary, 0u);
     (void)astra_rt_area_unmap(text);
     (void)astra_close(text_area);
     return map_status(status);

@@ -3,6 +3,9 @@
 #include <astra/status.h>
 #include <astra/syscall.h>
 #include <astra/runtime.h>
+#include <astra/posix_descriptor.h>
+#include "../src/proc_internal.h"
+#include <stdlib.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -18,6 +21,10 @@ static uint32_t clone_pid = 123u;
 static uint32_t clone_result = ASTRA_SYSCALL_OK;
 static uint32_t clone_calls;
 static int file_fork_ready = 1;
+static int fork_shares;
+static uint32_t adoption_reply;
+static uint32_t barrier_order;
+static uint32_t release_order;
 static uint32_t obsolete_descriptor_gate_calls;
 static uint32_t logged_status;
 static uint32_t wait_result = ASTRA_SYSCALL_TIMED_OUT;
@@ -163,9 +170,23 @@ astra_process_resume(uint32_t handle)
     return ASTRA_SYSCALL_OK;
 }
 int
-astra_posix_file_fork_ready(void)
+astra_posix_file_fork_prepare(AstraProcessFileShare **shares, uint32_t *count)
 {
-    return file_fork_ready;
+    *shares = NULL; *count = 0u;
+    if (!file_fork_ready) { errno = ENOTSUP; return -1; }
+    if (fork_shares) {
+        *shares = calloc(1u, sizeof(**shares));
+        assert(*shares != NULL);
+        *count = 1u;
+    }
+    return 0;
+}
+
+void astra_posix_file_fork_release(AstraProcessFileShare *shares, uint32_t count)
+{
+    assert((shares == NULL) == (count == 0u));
+    release_order = ++operation_order;
+    free(shares);
 }
 
 int
@@ -176,8 +197,10 @@ astra_posix_descriptor_fork_ready(void)
 }
 
 int
-astra_posix_file_after_fork_child(void)
+astra_posix_file_after_fork_child(const AstraProcessFileShare *shares,
+                                  uint32_t count)
 {
+    assert(shares == NULL && count == 0u);
     ++file_after_fork_child_calls;
     return 0;
 }
@@ -193,6 +216,46 @@ astra_posix_socket_after_fork_child(void)
 {
     ++after_fork_child_calls;
     return 0;
+}
+
+uint32_t astra_rt_port_create(uint32_t message_max, uint32_t byte_max,
+                              uint32_t *receive, uint32_t *send)
+{
+    assert(message_max == 1u && byte_max == sizeof(PosixForkReady) &&
+           byte_max >= ASTRA_MESSAGE_HEADER_SIZE);
+    *receive = 70u; *send = 71u;
+    return ASTRA_SYSCALL_OK;
+}
+uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
+                         const uint32_t *handles, uint32_t count)
+{
+    const PosixForkReady *ready = message;
+    assert(handle == 71u && size == sizeof(*ready) && handles == NULL &&
+           count == 0u && ready->header.total_size == size &&
+           ready->header.header_size == ASTRA_MESSAGE_HEADER_SIZE);
+    return ASTRA_SYSCALL_OK;
+}
+uint32_t astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
+                            uint32_t *handles, uint32_t handle_capacity,
+                            uint32_t *size, uint32_t *count)
+{
+    PosixForkReady *ready = message;
+    assert(handle == 70u && capacity == sizeof(*ready) && handles == NULL &&
+           handle_capacity == 0u);
+    astra_message_header_set(&ready->header, sizeof(*ready),
+        POSIX_FORK_READY_PROTOCOL, 1u, 1u, 1u);
+    ready->status = adoption_reply;
+    *size = sizeof(*ready); *count = 0u;
+    return ASTRA_SYSCALL_OK;
+}
+uint32_t astra_wait_multiple(const uint32_t *handles, uint32_t count,
+                             uint64_t deadline, uint32_t *index,
+                             uint32_t *detail)
+{
+    assert(handles[0] == 70u && handles[1] == clone_handle && count == 2u &&
+           deadline == ASTRA_DEADLINE_FOREVER && index == NULL && detail == NULL);
+    barrier_order = ++operation_order;
+    return ASTRA_SYSCALL_OK;
 }
 
 uint32_t
@@ -277,6 +340,7 @@ main(void)
     assert(fork() == (pid_t)-1 && errno == ENOTSUP);
     assert(clone_calls == 0u);
     file_fork_ready = 1;
+    fork_shares = 1;
     logged_status = UINT32_MAX;
     assert(fork() == (pid_t)123);
     assert(clone_calls == 1u);
@@ -284,6 +348,8 @@ main(void)
     assert(logged_status == UINT32_MAX);
     assert(registered_handle == 7u && registered_pid == 123u);
     assert(resumed_handle == 7u && registration_order < resume_order);
+    assert(resume_order < barrier_order && barrier_order < release_order);
+    fork_shares = 0;
     assert(kill((pid_t)-123, SIGTERM) == 0);
     assert(signalled_selector == -123 && signalled_number == SIGTERM);
     /* No PROC: mount: one process is posixd's too. */
@@ -369,6 +435,13 @@ main(void)
     assert(wait(NULL) == (pid_t)-1 && errno == ECHILD);
     assert(waitpid((pid_t)-2, NULL, 0) == (pid_t)-1 && errno == EINVAL);
 
+    clone_pid = 126u;
+    clone_handle = 10u;
+    fork_shares = 1;
+    adoption_reply = EACCES;
+    assert(fork() == (pid_t)-1 && errno == EACCES);
+    assert(waitpid(126, NULL, WNOHANG) == -1 && errno == ECHILD);
+    fork_shares = 0;
     clone_result = ASTRA_SYSCALL_RESOURCE_LIMIT;
     assert(fork() == (pid_t)-1 && errno == ENOMEM);
     assert(logged_status == ASTRA_SYSCALL_RESOURCE_LIMIT);

@@ -199,4 +199,17 @@ uint32_t astra_assign_resolve(const AstraAssignTable *table, const char *path,
                               uint32_t rights, uint32_t member, char *wire,
                               uint32_t capacity, const AstraAssign **assign);
 
+/** Resolve a member without folding components before provider lookup.
+ * @param table Process namespace.
+ * @param path Assign-qualified input.
+ * @param rights Required rights.
+ * @param member Union-member index.
+ * @param wire Receives the rooted provider path.
+ * @param capacity Output capacity.
+ * @param assign Receives the borrowed binding, when non-NULL.
+ * @return ASTRA_VFS_* status. */
+uint32_t astra_assign_resolve_raw(const AstraAssignTable *table, const char *path,
+                                 uint32_t rights, uint32_t member, char *wire,
+                                 uint32_t capacity, const AstraAssign **assign);
+
 #endif

@@ -2,6 +2,7 @@
 
 #include <astra/string.h>
 #include <astra/vfs_service.h>
+#include <astra/vfs_path.h>
 
 #include <stddef.h>
 
@@ -77,9 +78,9 @@ int astra_posix_path_resolve(const char *cwd, const char *path,
     if (!input_path(cwd, path, input, sizeof(input)) ||
         !normalise(input, normal, normal_capacity))
         return -1;
-    if (!astra_string_copy(native, native_capacity, normal))
+    if (astra_path_collapse(input, native, native_capacity) != ASTRA_VFS_OK)
         return -1;
-    return normal[1] == '\0' ? 0 : 1;
+    return native[1] == '\0' ? 0 : 1;
 }
 
 int astra_posix_path_resolve_native(const char *cwd, const char *path,

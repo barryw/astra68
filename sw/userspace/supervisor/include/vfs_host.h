@@ -83,6 +83,7 @@ AstraAssignTable *supervisor_assigns(void);
  * cannot be granted to anything.
  */
 uint32_t supervisor_vfs_register(AstraVfsClient *client, uint32_t port_handle);
+void supervisor_vfs_unregister(AstraVfsClient *client);
 AstraVfsClient *supervisor_vfs_client_for(const AstraAssign *assign);
 AstraVfsClient *supervisor_vfs_assign_client(const AstraAssign *assign,
                                              void *context);

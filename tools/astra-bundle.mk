@@ -10,7 +10,7 @@
 #            `astra-bundle check` verifies)
 # BINARY     the linked m68k executable
 # MANIFEST   the bundle manifest (source controlled)
-# ICON       a built-in icon kind (terminal, gallery) or an image file that
+# ICON       a built-in icon kind (aicon.py) or an image file that
 #            tools/aicon.py converts; the manifest's `icon` names
 #            resources/NAME.aicon
 # RESOURCES  files copied flat into resources/ (may be empty)
@@ -35,7 +35,7 @@ FORCE_ASTRA_BUNDLE_TOOL:
 
 define astra_app_bundle
 $(1)/.$(2).app.stamp: $(3) $(4) $(ASTRA_ICON_TOOL) $(ASTRA_BUNDLE_TOOL) \
-		$(filter-out terminal gallery,$(5)) $(6) $(7)
+		$(filter-out terminal gallery framebench draw sprite geometry target scale keys mouse timer thread,$(5)) $(6) $(7)
 	rm -rf $(1)/$(2).app
 	@mkdir -p $(1)/$(2).app/bin/m68k-68040 $(1)/$(2).app/resources
 	cp $(4) $(1)/$(2).app/manifest

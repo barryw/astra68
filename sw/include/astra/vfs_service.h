@@ -41,93 +41,22 @@
 /** Native-big-endian `STOR` storage-protocol signature. */
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
 /** Current storage-protocol wire-format version. */
-#define ASTRA_VFS_VERSION  UINT16_C(29)
+#define ASTRA_VFS_VERSION  UINT16_C(36)
 
-/**
- * The oldest version this build can still speak. A client asks for a minimum
- * and the service replies with the version it chose; when the ranges do not
- * overlap the session is refused rather than downgraded silently.
- *
- * Version 3 keeps one reply port for the session instead of creating and
- * transferring one for every operation. Version 2 remains accepted so a
- * resident version 2 supervisor can boot a newer storage service and use its
- * per-request reply ports during a rolling image update. Version 1 is not
- * spoken: it would send a directory index where version 2 and later read a
- * backend cursor.
- *
- * Version 8 lets HELLO carry the first path operation in `file`. A version 8
- * service opens the session and performs that operation in the same exchange;
- * an older service answers the ordinary HELLO and the client retries the
- * operation with the negotiated session.
- *
- * Version 9 writes from the session's bound transfer area. Version 10 packs a
- * directory batch into that area. Older peers retain bounded inline replies.
- * Version 12 adds atomic exclusive create; clients must not emulate it with a
- * separate stat because that loses the only guarantee the flag exists for.
- * Version 13 adds append-at-write, file sync and open-file truncation.
- * Version 14 adds creation modes, chmod and symlink reads. Creation mode is
- * carried in `offset` for OPEN and MKDIR; those operations otherwise have no
- * byte offset, so the wire record does not grow or overload the open flags.
- * Version 15 adds atomic symlink creation as a two-record transaction: the
- * target is staged first and the link path commits it. Both records remain
- * ordinary bounded path payloads, so the fixed request ABI does not grow.
- * Version 16 carries both complete rename paths in one extended request. The
- * original 224-byte request remains the prefix and every older operation keeps
- * its wire size, so rolling updates still negotiate versions with old peers.
- * Version 19 carries a symlink target and path in one extended request. This
- * removes the last session-staged transaction, so independent requests from
- * one process can safely remain in flight together.
- * Version 20 binds one reply channel and transfer area per calling thread.
- * Threads share the session namespace and its open handles, while unrelated
- * requests have independent completion and bulk-data ownership.
- * Version 21 returns the atomic post-write position from WRITE_AREA, allowing
- * append writes to use the bulk path without guessing a concurrently changing
- * end-of-file offset.
- * Version 22 adds atomic hard links using the existing two-path request.
- * Version 23 adds operations relative to an open directory, handle-based
- * chmod, and filesystem-capacity reporting. Relative operations carry both
- * `file` and `body.path`; the open handle is the authority and the path is
- * interpreted beneath it by the backend.
- * Version 24 makes append a property of each write request rather than an
- * implicit property of the open handle. This preserves atomic append for
- * ordinary writes while allowing positioned writes to honor their explicit
- * offset on a descriptor opened with append enabled.
- * Version 25 adds no-follow metadata lookup beneath an open directory. The
- * backend stays responsible only for its own namespace; the Filesystem Kit
- * remains the one authority for logical symbolic-link traversal.
- * Version 27 withdraws the version 18 attachment: HELLO answers with a session
- * and never a capability. Every request for a host volume reaches the provider
- * through the service that enforces its grant.
- *
- * Version 28 replaces 27's relay with the scoped direct lane. A HELLO on a
- * port that serves a host volume attaches one handle: the grant's filesystem
- * scope (ASTRA_SYSCALL_HOST_SCOPE_CREATE), never the host device. The client
- * drives its own host channel through it. Such a port answers every other
- * operation except BYE with ASTRA_VFS_ERR_UNSUPPORTED, runs no operation
- * fused with a HELLO, and refuses a HELLO it cannot attach the scope to.
- * Version 28 is also the oldest version served: every earlier request layout
- * and its compatibility path is deleted, and a HELLO below it is answered
- * ASTRA_VFS_ERR_PROTOCOL.
- *
- * Version 29 binds a session to the grant port it said HELLO on, and hands
- * out that grant's scope. HELLO answers `features`. GRANT_DERIVE returns a
- * narrower grant: a sub-root, read-only, non-delegable, or a mix; never
- * wider.
- */
-#define ASTRA_VFS_VERSION_MIN UINT16_C(28)
+/** Current version only: in-tree clients and providers change together.
+ * Version 36 anchors ordered LOOKUP at a retained directory object. A mismatch
+ * fails closed; no rolling-upgrade or obsolete request format is supported. */
+#define ASTRA_VFS_VERSION_MIN UINT16_C(36)
 
 /** Maximum byte length of a path, including its terminating NUL, on the wire. */
 #define ASTRA_VFS_PATH_MAX 192u
 /** Maximum byte length of one path component (a directory entry name). */
 #define ASTRA_VFS_NAME_MAX 64u
 /**
- * What one message can carry.
- *
- * The header, the reply record and the payload all have to fit
- * ASTRA_MESSAGE_INLINE_MAX together, so this is derived rather than chosen:
- * read replies are the widest record and set the ceiling.
+ * Inline byte capacity for data and continuations. Complete request and reply
+ * records are checked against the port's message limit below.
  */
-#define ASTRA_VFS_IO_MAX 192u
+#define ASTRA_VFS_IO_MAX 208u
 
 /**
  * One READDIR_BATCH entry on the wire: a fixed record, then the name.
@@ -154,7 +83,7 @@
  *   24  i64  mtime, seconds since the epoch
  *   32  ..   name, not terminated
  *
- * ponytail: an entry is 32 bytes plus a name, so a 192-byte payload carries
+ * ponytail: an entry is 32 bytes plus a name, so a 208-byte payload carries
  * about four of them. When a listing of a large directory measures badly, the
  * fix is READDIR into the bound transfer area the way READ_PATH already does,
  * not a smaller record.
@@ -241,8 +170,23 @@
  * carries the new grant's send handle; HELLO on it hands out its scope.
  */
 #define ASTRA_VFS_OP_GRANT_DERIVE UINT32_C(36)
+/** Ordered provider lookup; flags select final following and missing leaves. */
+#define ASTRA_VFS_OP_LOOKUP       UINT32_C(37)
+/** Reposition a shared description; offset is signed and flags selects origin. */
+#define ASTRA_VFS_OP_SEEK         UINT32_C(38)
+/** Retain a one-use share, or withdraw offset's token with SHARE_DISCARD. */
+#define ASTRA_VFS_OP_SHARE        UINT32_C(39)
+/** Consume offset's share token into a handle owned by this session's caller. */
+#define ASTRA_VFS_OP_ADOPT        UINT32_C(40)
+/** Query or change shared APPEND/NONBLOCK; flags is mask, offset is value. */
+#define ASTRA_VFS_OP_FILE_FLAGS   UINT32_C(41)
+/** Return the current path of an open directory within its grant root. */
+#define ASTRA_VFS_OP_DIRECTORY_PATH UINT32_C(42)
 /** Highest operation code this build defines. */
-#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_GRANT_DERIVE
+#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_DIRECTORY_PATH
+
+/** STAT_AT follows the final symbolic link when this flag is set. */
+#define ASTRA_VFS_STAT_FOLLOW UINT32_C(1)
 
 /* Rights a grant carries, in GRANT_DERIVE's flags. */
 /** Read files, list directories, stat. Every grant has it. */
@@ -255,9 +199,95 @@
  */
 #define ASTRA_VFS_GRANT_DELEGATE (UINT32_C(1) << 2)
 
-/* AstraVfsReply::features, answered by HELLO from version 29. */
+/* AstraVfsReply::features, answered by HELLO. */
 /** The session is bound to a grant the provider enforces. */
 #define ASTRA_VFS_FEATURE_GRANTS (UINT32_C(1) << 0)
+/** The provider resolves components in order and returns namespace continuations. */
+#define ASTRA_VFS_FEATURE_RESOLVES (UINT32_C(1) << 1)
+/** HELLO feature: the provider reports node identity and metadata validity. */
+#define ASTRA_VFS_FEATURE_NODE_META (UINT32_C(1) << 2)
+/** The provider owns shared positions, cursors and mutable open status flags. */
+#define ASTRA_VFS_FEATURE_DESCRIPTIONS (UINT32_C(1) << 3)
+/** The provider supports anchored path operations and directory identity paths. */
+#define ASTRA_VFS_FEATURE_DIRECTORY_PATH (UINT32_C(1) << 4)
+/** Read at an open description's current directory cursor without seeking. */
+#define ASTRA_VFS_CURSOR_CURRENT UINT64_MAX
+
+/** Known filesystem identity. */
+#define ASTRA_VFS_META_VOLUME     (UINT32_C(1) << 0)
+/** Known inode number. */
+#define ASTRA_VFS_META_INODE      (UINT32_C(1) << 1)
+/** Known inode birth generation. */
+#define ASTRA_VFS_META_GENERATION (UINT32_C(1) << 2)
+/** Known allocation and preferred I/O size. */
+#define ASTRA_VFS_META_BLOCKS     (UINT32_C(1) << 3)
+/** Known access time. */
+#define ASTRA_VFS_META_ATIME      (UINT32_C(1) << 4)
+/** Known modification time. */
+#define ASTRA_VFS_META_MTIME      (UINT32_C(1) << 5)
+/** Known status-change time. */
+#define ASTRA_VFS_META_CTIME      (UINT32_C(1) << 6)
+/** Known permission mode, including a real zero. */
+#define ASTRA_VFS_META_MODE       (UINT32_C(1) << 7)
+/** Known full-width hard-link count. */
+#define ASTRA_VFS_META_NLINK      (UINT32_C(1) << 8)
+/** Known user and group owners. */
+#define ASTRA_VFS_META_OWNER      (UINT32_C(1) << 9)
+/** All defined metadata validity bits. */
+#define ASTRA_VFS_META_ALL        ((UINT32_C(1) << 10) - 1u)
+
+/** Node identity and metadata validity, shared by native result records.
+ * A field with its validity bit clear is unknown, even when its value is zero. */
+typedef struct AstraVfsNodeMeta {
+    uint32_t valid; /**< ASTRA_VFS_META_* bits. */
+    uint32_t volume; /**< Filesystem identity, shared by its bindings. */
+    uint64_t inode; /**< Filesystem node number. */
+    uint64_t generation; /**< Node birth time in nanoseconds when known. */
+    uint64_t blocks; /**< Allocated 512-byte blocks. */
+    uint32_t block_size; /**< Preferred I/O size. */
+    uint32_t nlink; /**< Full-width hard-link count. */
+    int64_t atime; /**< Access time, seconds since the epoch. */
+    uint32_t atime_nsec; /**< Access-time nanoseconds. */
+    uint32_t mtime_nsec; /**< Modification-time nanoseconds. */
+    int64_t ctime; /**< Status-change time, seconds since the epoch. */
+    uint32_t ctime_nsec; /**< Status-change-time nanoseconds. */
+    uint32_t reserved; /**< Zero. */
+} AstraVfsNodeMeta;
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraVfsNodeMeta) == 72u, "VFS node metadata ABI changed");
+/** @endcond */
+/** LOOKUP follows the final symbolic link. */
+#define ASTRA_VFS_LOOKUP_FOLLOW (UINT32_C(1) << 0)
+/** LOOKUP permits a missing final leaf, returning UNKNOWN metadata. */
+#define ASTRA_VFS_LOOKUP_MISSING (UINT32_C(1) << 1)
+/** Resolve a directory entry for mutation; a final link with '/' is NOT_DIR. */
+#define ASTRA_VFS_LOOKUP_ENTRY (UINT32_C(1) << 2)
+/** Maximum links followed by one native namespace lookup, across providers. */
+#define ASTRA_VFS_LINK_MAX 40u
+/** Parent traversal left the provider root. */
+#define ASTRA_VFS_ESCAPE_PARENT 1u
+/** Symbolic-link traversal left the provider root. */
+#define ASTRA_VFS_ESCAPE_SYMLINK 2u
+/** Fixed prefix of the LOOKUP payload. */
+#define ASTRA_VFS_ESCAPE_HEADER 12u
+/** Maximum continuation bytes carried inline. */
+#define ASTRA_VFS_ESCAPE_PATH_MAX (ASTRA_VFS_PATH_MAX - 1u)
+/** LOOKUP payload on OK or ESCAPED. The continuation is complete: callers
+ * resume it without rereading any link or appending the original suffix.
+ * Request length is the remaining link budget, from zero through 40. */
+typedef struct AstraVfsEscape {
+    uint16_t kind; /**< Zero on OK, otherwise ASTRA_VFS_ESCAPE_*. */
+    uint16_t length; /**< Continuation byte count, without a terminator. */
+    uint32_t consumed; /**< Original provider-request byte position. */
+    uint32_t links; /**< Links followed by this provider lookup. */
+    uint8_t path[ASTRA_VFS_ESCAPE_PATH_MAX]; /**< Absolute Astra continuation. */
+} AstraVfsEscape;
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraVfsEscape) <= ASTRA_VFS_IO_MAX,
+               "VFS continuation must fit an inline reply");
+_Static_assert(ASTRA_VFS_ESCAPE_PATH_MAX >= ASTRA_VFS_PATH_MAX - 1u,
+               "Every native pathname must fit a continuation");
+/** @endcond */
 
 /**
  * One shared-area transfer, and the unit the whole read path is sized around.
@@ -294,6 +324,15 @@
  * offset -- see ::ASTRA_VFS_WRITE_APPEND.
  */
 #define ASTRA_VFS_OPEN_APPEND    (UINT32_C(1) << 6)
+/** Refuse a final symbolic link with LOOP instead of following it. */
+#define ASTRA_VFS_OPEN_NOFOLLOW  (UINT32_C(1) << 7)
+/** Request nonblocking I/O where the node supports it. */
+#define ASTRA_VFS_OPEN_NONBLOCK  (UINT32_C(1) << 8)
+/** Defined open flags; unknown bits are refused. */
+#define ASTRA_VFS_OPEN_MASK     ((UINT32_C(1) << 9) - 1u)
+/** Mutable flags shared by every owner of an open description. */
+#define ASTRA_VFS_FILE_STATUS_MASK \
+    (ASTRA_VFS_OPEN_APPEND | ASTRA_VFS_OPEN_NONBLOCK)
 
 /* Per-write behavior. These are deliberately distinct from open flags. */
 /**
@@ -302,10 +341,14 @@
  * ::ASTRA_VFS_OPEN_APPEND.
  */
 #define ASTRA_VFS_WRITE_APPEND   (UINT32_C(1) << 0)
+/** READ/WRITE use and advance the provider description's shared position. */
+#define ASTRA_VFS_IO_SEQUENTIAL  (UINT32_C(1) << 1)
+/** ADOPT withdraws an unclaimed share; only its sharer may withdraw it. */
+#define ASTRA_VFS_ADOPT_DISCARD  (UINT32_C(1) << 0)
 
-/* Flags for directory-relative namespace operations. */
-/** With ::ASTRA_VFS_OP_UNLINK_AT, remove a directory rather than a file. */
-#define ASTRA_VFS_AT_REMOVE_DIRECTORY (UINT32_C(1) << 0)
+/* Flags for namespace operations. */
+/** With UNLINK or UNLINK_AT, require a directory rather than a non-directory. */
+#define ASTRA_VFS_UNLINK_DIRECTORY (UINT32_C(1) << 0)
 /** With ::ASTRA_VFS_OP_CHMOD_AT, change the symlink itself rather than following it. */
 #define ASTRA_VFS_AT_SYMLINK_NOFOLLOW (UINT32_C(1) << 1)
 
@@ -388,6 +431,12 @@
 #define ASTRA_VFS_ERR_LOOP          ((uint32_t)ASTRA_STATUS_LOOP)
 /** The filesystem or file is read-only. */
 #define ASTRA_VFS_ERR_READ_ONLY     ((uint32_t)ASTRA_STATUS_READ_ONLY)
+/** Continue lookup in the native namespace using the provider payload. */
+#define ASTRA_VFS_ERR_ESCAPED       ((uint32_t)ASTRA_STATUS_ESCAPED)
+/** The file, scope or service was lost; old handles stay lost. */
+#define ASTRA_VFS_ERR_LOST          ((uint32_t)ASTRA_STATUS_LOST)
+/** A nonempty write cannot fit within its exclusive maximum position. */
+#define ASTRA_VFS_ERR_FILE_TOO_LARGE ((uint32_t)ASTRA_STATUS_FILE_TOO_LARGE)
 
 /**
  * A protocol status as a word, or NULL for a number nothing has named yet.
@@ -454,9 +503,9 @@ _Static_assert(sizeof(AstraVfsFilesystemInfo) ==
 /** @endcond */
 
 /** Encoded byte size of ::AstraVfsRequest. */
-#define ASTRA_VFS_REQUEST_SIZE 224u
+#define ASTRA_VFS_REQUEST_SIZE 248u
 /** Encoded byte size of ::AstraVfsReply. */
-#define ASTRA_VFS_REPLY_SIZE   256u
+#define ASTRA_VFS_REPLY_SIZE   368u
 
 /*
  * One request record covers every operation. A union of per-operation records
@@ -474,8 +523,8 @@ _Static_assert(sizeof(AstraVfsFilesystemInfo) ==
  * at all, which is what a binary write of exactly ASTRA_VFS_IO_MAX bytes
  * looks like.
  *
- * Both arms are the same length, so the union adds no padding and the record
- * size does not depend on which arm a build happens to touch first.
+ * The payload arm sets the fixed body size; path validation keeps its own
+ * native pathname bound.
  */
 typedef union AstraVfsBody {
     /** The arm used by path-addressed operations. */
@@ -485,8 +534,8 @@ typedef union AstraVfsBody {
 } AstraVfsBody;
 
 /** @cond ASTRA_INTERNAL */
-_Static_assert(ASTRA_VFS_PATH_MAX == ASTRA_VFS_IO_MAX,
-               "VFS body arms must match or the record size becomes ambiguous");
+_Static_assert(sizeof(AstraVfsBody) == ASTRA_VFS_IO_MAX,
+               "VFS body size must match the payload capacity");
 /** @endcond */
 
 /**
@@ -525,6 +574,8 @@ typedef struct AstraVfsRequest {
      * correlation code to get it. Zero means no activity.
      */
     uint32_t activity;
+    /** WRITE/WRITE_AREA exclusive maximum byte position; UINT64_MAX is unbounded. */
+    uint64_t write_limit;
     /** The path or payload this operation carries; see ::AstraVfsBody. */
     AstraVfsBody body;
 } AstraVfsRequest;
@@ -593,10 +644,7 @@ typedef struct AstraVfsReply {
      * an editor that writes a file back has to be able to put the mode and
      * the times back the way it found them.
      *
-     * Zero means the backend does not have the field rather than that the
-     * field is zero. The distinction matters for `mode`: a filesystem with no
-     * permission bits and a file with none are not the same thing, and a
-     * client that cannot tell them apart prints a confident lie.
+     * `meta.valid` distinguishes an unknown field from a real zero value.
      *
      * Seconds since the epoch.
      */
@@ -616,10 +664,20 @@ typedef struct AstraVfsReply {
     /** Must be zero. */
     uint16_t reserved;
     /**
-     * HELLO, version 29 on: ASTRA_VFS_FEATURE_* the service offers this
+     * HELLO: ASTRA_VFS_FEATURE_* the service offers this
      * session. Every other operation: zero.
      */
     uint32_t features;
+    /** READ/WRITE and SEEK: byte position after the operation. */
+    uint64_t position;
+    /** SHARE: a one-use token bound to the originating grant. */
+    uint64_t token;
+    /** FILE_FLAGS: the description's current ASTRA_VFS_OPEN_* flags. */
+    uint32_t open_flags;
+    /** Must be zero. */
+    uint32_t description_reserved;
+    /** Node identity and validity; separate from operation payloads. */
+    AstraVfsNodeMeta meta;
     /** The entry name, symlink target, inline read bytes, or other operation payload. */
     uint8_t payload[ASTRA_VFS_IO_MAX];
 } AstraVfsReply;

@@ -87,6 +87,8 @@ status_of(int rc)
         return ASTRA_VFS_ERR_ACCESS;
     case ENOSPC:
         return ASTRA_VFS_ERR_NO_SPACE;
+    case EFBIG:
+        return ASTRA_VFS_ERR_FILE_TOO_LARGE;
     case ENOTEMPTY:
         return ASTRA_VFS_ERR_NOT_EMPTY;
     case EINVAL:
@@ -96,7 +98,7 @@ status_of(int rc)
     case EBUSY:
         return ASTRA_VFS_ERR_BUSY;
     case EROFS:
-        return ASTRA_VFS_ERR_ACCESS;
+        return ASTRA_VFS_ERR_READ_ONLY;
     default:
         return ASTRA_VFS_ERR_IO;
     }
@@ -185,8 +187,7 @@ remember_path(AstraVfsExt4Backend *backend, const char *path)
 /*
  * The metadata a listing shows, from one lookup. Failure is not an error: a
  * node whose metadata cannot be read is still a node with a name and a size,
- * and the fields stay zero, which is this protocol's word for "not known"
- * rather than for a real zero.
+ * and meta.valid leaves unavailable fields unknown.
  */
 static void
 fill_metadata(const ext4_file *file, AstraVfsNodeInfo *info, int with_size)
@@ -201,11 +202,11 @@ fill_metadata(const ext4_file *file, AstraVfsNodeInfo *info, int with_size)
     if (ext4_meta_get_handle(file, &mode, &uid, &gid, &mtime, &nlink,
                              with_size ? &size : NULL) != EOK)
         return;
-    info->mode = (uint16_t)mode;
+    astra_vfs_node_info_mode_links(info, (uint16_t)mode, nlink);
     info->uid = uid;
     info->gid = gid;
+    info->meta.valid |= ASTRA_VFS_META_OWNER;
     info->mtime = (int64_t)(uint64_t)mtime;
-    info->nlink = (uint16_t)nlink;
     if (with_size)
         info->size = size;
 }
@@ -447,7 +448,7 @@ ext4_backend_read(void *context, uintptr_t node, uint64_t offset,
 
 static uint32_t
 ext4_backend_write(void *context, uintptr_t node, uint64_t offset,
-                   uint32_t flags, const void *buffer, uint32_t length,
+                   uint32_t flags, uint64_t max_end, const void *buffer, uint32_t length,
                    uint32_t *moved, uint64_t *position)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
@@ -460,15 +461,8 @@ ext4_backend_write(void *context, uintptr_t node, uint64_t offset,
     if (file == NULL) {
         return ASTRA_VFS_ERR_BAD_HANDLE;
     }
-    if ((flags & ASTRA_VFS_WRITE_APPEND) == 0u) {
-        rc = ext4_fseek(file, (int64_t)offset, SEEK_SET);
-        if (rc != EOK)
-            return status_of(rc);
-    }
-    rc = ext4_fwrite(file, buffer, length, &count);
-    if (rc != EOK) {
-        return status_of(rc);
-    }
+    rc = ext4_fwrite_at(file, offset, (flags & ASTRA_VFS_WRITE_APPEND) != 0u,
+                        max_end, buffer, length, &count);
     /*
      * A short write with EOK used to be how lwext4 reported a failure it had
      * discarded; see third_party/lwext4 patch 0004. The status is honest now,
@@ -476,7 +470,7 @@ ext4_backend_write(void *context, uintptr_t node, uint64_t offset,
     */
     *moved = (uint32_t)count;
     *position = ext4_ftell(file);
-    return ASTRA_VFS_OK;
+    return count != 0u ? ASTRA_VFS_OK : status_of(rc);
 }
 
 static uint32_t
@@ -523,9 +517,9 @@ ext4_backend_stat_from(AstraVfsExt4Backend *backend,
                          &mtime, &nlink, &info->size);
     if (rc != EOK)
         return status_of(rc);
-    info->mode = (uint16_t)mode;
+    astra_vfs_node_info_mode_links(info, (uint16_t)mode, nlink);
+    info->meta.valid |= ASTRA_VFS_META_OWNER;
     info->mtime = (int64_t)(uint64_t)mtime;
-    info->nlink = (uint16_t)nlink;
     switch (mode & EXT4_INODE_MODE_TYPE_MASK) {
     case EXT4_INODE_MODE_DIRECTORY:
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
@@ -548,14 +542,16 @@ ext4_backend_stat(void *context, const char *path, AstraVfsNodeInfo *info)
 
 static uint32_t
 ext4_backend_stat_at(void *context, uintptr_t directory,
-                      const char *path, AstraVfsNodeInfo *info)
+                      const char *path, uint32_t flags, AstraVfsNodeInfo *info)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     ext4_dir *parent = directory_of(backend, directory);
 
     if (parent == NULL)
         return ASTRA_VFS_ERR_BAD_HANDLE;
-    return ext4_backend_stat_from(backend, parent, path, info);
+    uint32_t status = ext4_backend_stat_from(backend, parent, path, info);
+    return status == ASTRA_VFS_OK && (flags & ASTRA_VFS_STAT_FOLLOW) != 0u &&
+        info->kind == ASTRA_VFS_KIND_SYMLINK ? ASTRA_VFS_ERR_UNSUPPORTED : status;
 }
 
 static uint32_t
@@ -580,9 +576,9 @@ ext4_backend_stat_node(void *context, uintptr_t node,
                                &mtime, &nlink, &info->size);
     if (rc != EOK)
         return status_of(rc);
-    info->mode = (uint16_t)mode;
+    astra_vfs_node_info_mode_links(info, (uint16_t)mode, nlink);
+    info->meta.valid |= ASTRA_VFS_META_OWNER;
     info->mtime = (int64_t)(uint64_t)mtime;
-    info->nlink = (uint16_t)nlink;
     info->kind = (mode & EXT4_INODE_MODE_TYPE_MASK) ==
                          EXT4_INODE_MODE_DIRECTORY ?
                      ASTRA_VFS_KIND_DIRECTORY :
@@ -677,11 +673,11 @@ ext4_backend_readdir(void *context, uintptr_t directory, const char *path,
 
         if (ext4_dir_entry_meta(scan, entry, &mode, &uid, &gid,
                                 &mtime, &nlink, &size) == EOK) {
-            info->mode = (uint16_t)mode;
+            astra_vfs_node_info_mode_links(info, (uint16_t)mode, nlink);
             info->uid = uid;
             info->gid = gid;
+            info->meta.valid |= ASTRA_VFS_META_OWNER;
             info->mtime = (int64_t)(uint64_t)mtime;
-            info->nlink = (uint16_t)nlink;
             info->size = size;
         }
     }
@@ -711,28 +707,22 @@ ext4_backend_mkdir(void *context, const char *path, uint16_t create_mode)
 }
 
 static uint32_t
-ext4_backend_unlink(void *context, const char *path)
+ext4_backend_unlink(void *context, const char *path, uint32_t flags)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     char full[ASTRA_VFS_EXT4_PATH_MAX];
     int rc;
 
-    if (!build_path(backend, path, full, sizeof(full))) {
+    if ((flags & ~ASTRA_VFS_UNLINK_DIRECTORY) != 0u ||
+        !build_path(backend, path, full, sizeof(full))) {
         return ASTRA_VFS_ERR_INVALID;
     }
     if (!scan_lock(backend))
         return ASTRA_VFS_ERR_IO;
     close_scan(backend);
     scan_unlock(backend);
-    rc = ext4_fremove(full);
-    if (rc == EOK) {
-        return ASTRA_VFS_OK;
-    }
-    /* The legacy VFS remove operation may remove an empty directory, never a
-     * nonempty one. lwext4's ext4_dir_rm is recursive. */
-    if (rc == EISDIR || rc == EPERM || rc == EACCES) {
-        return status_of(ext4_dir_rmdir(full));
-    }
+    rc = flags & ASTRA_VFS_UNLINK_DIRECTORY ? ext4_dir_rmdir(full) :
+                                             ext4_fremove(full);
     return status_of(rc);
 }
 
@@ -746,14 +736,14 @@ ext4_backend_unlink_at(void *context, uintptr_t directory,
     if (parent == NULL)
         return ASTRA_VFS_ERR_BAD_HANDLE;
     if (path == NULL || path[0] == '/' || path[0] == '\0' ||
-        (flags & ~ASTRA_VFS_AT_REMOVE_DIRECTORY) != 0u)
+        (flags & ~ASTRA_VFS_UNLINK_DIRECTORY) != 0u)
         return ASTRA_VFS_ERR_INVALID;
     if (!scan_lock(backend))
         return ASTRA_VFS_ERR_IO;
     close_scan(backend);
     scan_unlock(backend);
     return status_of(ext4_unlinkat(
-        parent, path, (flags & ASTRA_VFS_AT_REMOVE_DIRECTORY) != 0u));
+        parent, path, (flags & ASTRA_VFS_UNLINK_DIRECTORY) != 0u));
 }
 
 static uint32_t
@@ -933,6 +923,7 @@ static const AstraVfsBackendOps ext4_ops = {
     .filesystem_info = ext4_backend_filesystem_info,
     .stat_at = ext4_backend_stat_at,
     .stat_node = ext4_backend_stat_node,
+    NULL,
 };
 
 const AstraVfsBackendOps *

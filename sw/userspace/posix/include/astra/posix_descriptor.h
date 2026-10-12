@@ -31,6 +31,7 @@ typedef struct AstraPosixFileOps {
                       off_t offset);
     int (*close)(uint32_t slot);
     off_t (*seek)(uint32_t slot, off_t offset, int whence);
+    int (*flags)(uint32_t slot, uint32_t mask, int flags);
     uint32_t (*exec_size)(void);
     int (*exec_export)(void *state, uint32_t capacity, uint32_t *used);
     int (*exec_import)(const AstraStartupInfo *startup, const void *state,
@@ -89,6 +90,9 @@ int astra_posix_descriptor_poll(int fd, short events, short *revents,
                                 uint32_t handles[2], uint32_t *count);
 
 int astra_posix_exec_export(void **state, uint32_t *size);
+uint32_t astra_posix_process_state_size(void);
+int astra_posix_process_export(void *state, uint32_t size);
+int astra_posix_process_import(const void *state, uint32_t size);
 
 /* Emits whatever either stream's calling-thread buffer still holds (console.c
  * log_write's _Thread_local lines). `_exit` calls this before the process
@@ -99,8 +103,12 @@ void astra_posix_log_flush(void);
 
 void astra_posix_file_prepare(void);
 void astra_posix_socket_prepare(void);
-int astra_posix_file_fork_ready(void);
-int astra_posix_file_after_fork_child(void);
+int astra_posix_file_fork_prepare(AstraProcessFileShare **shares,
+                                  uint32_t *count);
+void astra_posix_file_fork_release(AstraProcessFileShare *shares,
+                                   uint32_t count);
+int astra_posix_file_after_fork_child(const AstraProcessFileShare *shares,
+                                      uint32_t count);
 int astra_posix_socket_after_fork_child(void);
 
 #endif

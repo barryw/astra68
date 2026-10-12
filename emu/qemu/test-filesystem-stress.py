@@ -48,7 +48,8 @@ HOST_OPERATION_PROPERTIES = tuple(
         "invalid", "open", "close", "read", "write", "sync", "truncate",
         "stat", "readdir", "mkdir", "unlink", "rename", "chmod", "readlink",
         "symlink", "link", "filesystem-info", "session-open",
-        "session-close", "claim"))
+        "session-close", "claim", "seek", "share", "adopt", "file-flags",
+        "path"))
 HOST_OPERATION_TIMING_PROPERTIES = tuple(
     name + "-execution-ns" for name in HOST_OPERATION_PROPERTIES)
 

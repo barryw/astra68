@@ -18,7 +18,7 @@ typedef struct AstraVfsHostDirect {
 } AstraVfsHostDirect;
 
 #define ASTRA_VFS_HOST_DIRECT_MAGIC UINT32_C(0x56484452)
-#define ASTRA_VFS_HOST_DIRECT_VERSION 8u
+#define ASTRA_VFS_HOST_DIRECT_VERSION 10u
 
 /*
  * One host transport per process. A thread has one host channel, so every
@@ -86,6 +86,26 @@ static void client_clear(AstraVfsClient *client)
     client->direct_backend_leave = NULL;
 }
 
+static uint32_t lane_enter(AstraVfsClient *client)
+{
+    uint32_t status;
+
+    for (;;) {
+        AstraVfsHostDirect *direct;
+
+        status = astra_vfs_port_client_enter(client);
+        if (status != ASTRA_VFS_OK)
+            return status;
+        direct = client->port_direct_address;
+        if (direct == NULL || !__atomic_load_n(&direct->backend.lost, __ATOMIC_ACQUIRE))
+            return ASTRA_VFS_OK;
+        astra_vfs_port_client_leave(client);
+        status = astra_vfs_port_refresh(client);
+        if (status != ASTRA_VFS_OK)
+            return status;
+    }
+}
+
 static void client_bind(AstraVfsClient *client, AstraVfsHostDirect *direct,
                         uint32_t area, uint32_t scope, uint32_t session)
 {
@@ -96,7 +116,7 @@ static void client_bind(AstraVfsClient *client, AstraVfsHostDirect *direct,
     client->port_direct_detached = 0u;
     client->direct_backend_ops = astra_vfs_host_ops();
     client->direct_backend_context = &direct->backend;
-    client->direct_backend_enter = astra_vfs_port_client_enter;
+    client->direct_backend_enter = lane_enter;
     client->direct_backend_leave = astra_vfs_port_client_leave;
 }
 
@@ -137,8 +157,14 @@ uint32_t astra_vfs_host_direct_connect(AstraVfsClient *client,
         return ASTRA_VFS_ERR_INVALID;
     /* The kernel says which provider session this scope binds; the client
      * names it in every command, and the provider refuses any other. */
-    if (astra_host_lease_query(scope, &lease) != ASTRA_SYSCALL_OK ||
-        (lease.capabilities & ASTRA_HOST_CAP_FS_SCOPE) == 0u)
+    status = astra_host_lease_query(scope, &lease);
+    if (status != ASTRA_SYSCALL_OK)
+        return astra_vfs_storage_status(astra_vfs_host_status_from_syscall(status));
+    if ((lease.capabilities & (ASTRA_HOST_CAP_FS_SCOPE |
+                               ASTRA_HOST_CAP_FS_DESCRIPTIONS |
+                               (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS))) !=
+            (ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_FS_DESCRIPTIONS |
+             (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS)))
         return ASTRA_VFS_ERR_UNSUPPORTED;
     status = lane_acquire(scope, &generation);
     if (status != ASTRA_VFS_OK)
@@ -230,8 +256,8 @@ invalid:
 }
 
 /* A fork child's client: drop the parent's lane state and port session,
- * keep the inherited scope (the same grant's), HELLO again lazily, and
- * drive a lane of the child's own on that scope. */
+ * keep the inherited scope and negotiated contract, and drive a lane of
+ * the child's own on that scope. */
 uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
 {
     AstraVfsHostDirect *direct;
@@ -240,6 +266,9 @@ uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
     uint32_t scope;
     uint32_t service;
     uint32_t status;
+    uint32_t features;
+    uint16_t version;
+    uint8_t area_capable;
 
     if (client == NULL || client->port_direct_address == NULL ||
         client->port_direct_area == 0u || client->port_direct_scope == 0u)
@@ -249,6 +278,9 @@ uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
     area = client->port_direct_area;
     scope = client->port_direct_scope;
     service = client->port_service;
+    features = client->features;
+    version = client->version;
+    area_capable = client->port_area_capable;
     client_clear(client);
     (void)astra_rt_area_unmap(direct);
     (void)astra_close(area);
@@ -261,9 +293,15 @@ uint32_t astra_vfs_host_direct_after_fork(AstraVfsClient *client)
         return status;
     }
     client->activity = activity;
+    client->features = features;
+    client->version = version;
+    client->port_area_capable = area_capable;
     status = astra_vfs_host_direct_connect(client, scope);
     if (status != ASTRA_VFS_OK) {
         (void)astra_close(scope);
+        /* An unused parent client can still carry a pre-reset scope. */
+        if (status == ASTRA_VFS_ERR_LOST)
+            return astra_vfs_port_refresh(client);
         return status;
     }
     client->session = client->port_direct_session;
@@ -311,17 +349,6 @@ static AstraVfsBackend direct_backend(AstraVfsHostDirect *direct)
     return backend;
 }
 
-static void publish_info(AstraVfsReply *reply, const AstraVfsNodeInfo *info)
-{
-    reply->node_size = info->size;
-    reply->mtime = info->mtime;
-    reply->uid = info->uid;
-    reply->gid = info->gid;
-    reply->kind = info->kind;
-    reply->mode = info->mode;
-    reply->nlink = info->nlink;
-}
-
 static void direct_readdir(const AstraVfsBackend *backend,
                            const AstraVfsRequest *request,
                            AstraVfsReply *reply)
@@ -332,7 +359,7 @@ static void direct_readdir(const AstraVfsBackend *backend,
     uint32_t index = 0u;
 
     reply->status = backend->ops->readdir(
-        backend->context, 0u, (const char *)request->body.path,
+        backend->context, request->file, (const char *)request->body.path,
         request->offset, name, (uint32_t)sizeof(name), &info, &next);
     if (reply->status != ASTRA_VFS_OK)
         return;
@@ -347,7 +374,7 @@ static void direct_readdir(const AstraVfsBackend *backend,
     reply->payload[index] = 0u;
     reply->count = index;
     reply->cursor = next;
-    publish_info(reply, &info);
+    astra_vfs_node_info_publish(reply, &info);
 }
 
 uint32_t astra_vfs_host_direct_transport(
@@ -389,10 +416,7 @@ uint32_t astra_vfs_host_direct_transport(
         break;
     case ASTRA_VFS_OP_OPEN: {
         const uint32_t allowed =
-            ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
-            ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_TRUNCATE |
-            ASTRA_VFS_OPEN_DIRECTORY | ASTRA_VFS_OPEN_EXCLUSIVE |
-            ASTRA_VFS_OPEN_APPEND;
+            ASTRA_VFS_OPEN_MASK;
         AstraVfsNodeInfo info = {0};
         uintptr_t node = 0u;
         uint16_t create_mode = ASTRA_VFS_MODE_DEFAULT;
@@ -418,16 +442,13 @@ uint32_t astra_vfs_host_direct_transport(
             request->flags, create_mode, &node, &info);
         if (reply->status == ASTRA_VFS_OK) {
             reply->file = (AstraVfsFile)node;
-            publish_info(reply, &info);
+            astra_vfs_node_info_publish(reply, &info);
         }
         break;
     }
     case ASTRA_VFS_OP_OPEN_AT: {
         const uint32_t allowed =
-            ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
-            ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_TRUNCATE |
-            ASTRA_VFS_OPEN_DIRECTORY | ASTRA_VFS_OPEN_EXCLUSIVE |
-            ASTRA_VFS_OPEN_APPEND;
+            ASTRA_VFS_OPEN_MASK;
         AstraVfsNodeInfo info = {0};
         uintptr_t node = 0u;
         uint16_t create_mode = ASTRA_VFS_MODE_DEFAULT;
@@ -453,7 +474,7 @@ uint32_t astra_vfs_host_direct_transport(
             &node, &info);
         if (reply->status == ASTRA_VFS_OK) {
             reply->file = (AstraVfsFile)node;
-            publish_info(reply, &info);
+            astra_vfs_node_info_publish(reply, &info);
         }
         break;
     }
@@ -464,32 +485,63 @@ uint32_t astra_vfs_host_direct_transport(
         uint32_t length = request->length > ASTRA_VFS_IO_MAX ?
             ASTRA_VFS_IO_MAX : request->length;
 
-        reply->status = ops->read(
-            backend.context, request->file, request->offset, reply->payload,
-            length, &reply->count);
-        if (reply->status == ASTRA_VFS_OK && reply->count > length)
-            reply->status = ASTRA_VFS_ERR_PROTOCOL;
+        reply->status = astra_vfs_backend_read_position(
+            &backend, request->file, request->offset, request->flags,
+            reply->payload, length, &reply->count, &reply->position);
         break;
     }
     case ASTRA_VFS_OP_WRITE: {
         uint64_t position = request->offset;
 
-        if (request->length > ASTRA_VFS_IO_MAX) {
+        if (request->length > ASTRA_VFS_IO_MAX ||
+            (request->flags & ~(ASTRA_VFS_WRITE_APPEND |
+                                 ASTRA_VFS_IO_SEQUENTIAL)) != 0u) {
             reply->status = ASTRA_VFS_ERR_INVALID;
             break;
         }
         reply->status = ops->write(
-            backend.context, request->file, request->offset, 0u,
+            backend.context, request->file, request->offset, request->flags, request->write_limit,
             request->body.payload, request->length, &reply->count,
             &position);
         if (reply->status == ASTRA_VFS_OK) {
             if (reply->count > request->length)
                 reply->status = ASTRA_VFS_ERR_PROTOCOL;
             else
-                reply->node_size = position;
+                reply->position = position;
         }
         break;
     }
+    case ASTRA_VFS_OP_SEEK:
+        reply->status = ops->seek == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
+            request->flags > 2u ? ASTRA_VFS_ERR_INVALID :
+            ops->seek(backend.context, request->file,
+                      (int64_t)request->offset, request->flags,
+                      &reply->position);
+        break;
+    case ASTRA_VFS_OP_SHARE:
+        reply->status = ops->share == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
+            request->flags != 0u ? ASTRA_VFS_ERR_INVALID :
+            ops->share(backend.context, request->file, &reply->token);
+        break;
+    case ASTRA_VFS_OP_ADOPT: {
+        uintptr_t node = 0u;
+
+        reply->status = ops->adopt == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
+            request->file != ASTRA_VFS_FILE_INVALID ||
+            (request->flags & ~ASTRA_VFS_ADOPT_DISCARD) != 0u ?
+                ASTRA_VFS_ERR_INVALID :
+            ops->adopt(backend.context, request->offset, request->flags,
+                       &node);
+        if (reply->status == ASTRA_VFS_OK)
+            reply->file = (AstraVfsFile)node;
+        break;
+    }
+    case ASTRA_VFS_OP_FILE_FLAGS:
+        reply->status = ops->file_flags == NULL ? ASTRA_VFS_ERR_UNSUPPORTED :
+            request->offset > UINT32_MAX ? ASTRA_VFS_ERR_INVALID :
+            ops->file_flags(backend.context, request->file, request->flags,
+                            (uint32_t)request->offset, &reply->open_flags);
+        break;
     case ASTRA_VFS_OP_SYNC:
         reply->status = ops->sync(backend.context, request->file);
         break;
@@ -497,13 +549,17 @@ uint32_t astra_vfs_host_direct_transport(
         reply->status = ops->truncate(backend.context, request->file,
                                       request->offset);
         break;
+    case ASTRA_VFS_OP_LOOKUP:
+        reply->status = astra_vfs_backend_path_operation(&backend, operation,
+            request, request->file, 0u, reply);
+        break;
     case ASTRA_VFS_OP_STAT: {
         AstraVfsNodeInfo info = {0};
 
         reply->status = ops->stat(
             backend.context, (const char *)request->body.path, &info);
         if (reply->status == ASTRA_VFS_OK)
-            publish_info(reply, &info);
+            astra_vfs_node_info_publish(reply, &info);
         break;
     }
     case ASTRA_VFS_OP_STAT_AT: {
@@ -511,14 +567,15 @@ uint32_t astra_vfs_host_direct_transport(
 
         if (request->file == ASTRA_VFS_FILE_INVALID ||
             request->body.path[0] == '\0' ||
-            request->body.path[0] == '/' || request->flags != 0u)
+            request->body.path[0] == '/' ||
+            (request->flags & ~ASTRA_VFS_STAT_FOLLOW) != 0u)
             reply->status = ASTRA_VFS_ERR_INVALID;
         else
             reply->status = ops->stat_at(
                 backend.context, request->file,
-                (const char *)request->body.path, &info);
+                (const char *)request->body.path, request->flags, &info);
         if (reply->status == ASTRA_VFS_OK)
-            publish_info(reply, &info);
+            astra_vfs_node_info_publish(reply, &info);
         break;
     }
     case ASTRA_VFS_OP_STAT_FILE: {
@@ -531,7 +588,7 @@ uint32_t astra_vfs_host_direct_transport(
             reply->status = ops->stat_node(backend.context, request->file,
                                            &info);
         if (reply->status == ASTRA_VFS_OK)
-            publish_info(reply, &info);
+            astra_vfs_node_info_publish(reply, &info);
         break;
     }
     case ASTRA_VFS_OP_READDIR:
@@ -539,7 +596,7 @@ uint32_t astra_vfs_host_direct_transport(
         break;
     case ASTRA_VFS_OP_READDIR_BATCH:
         reply->status = astra_vfs_backend_readdir_into(
-            &backend, 0u, (const char *)request->body.path,
+            &backend, request->file, (const char *)request->body.path,
             request->offset, request->length, reply->payload,
             ASTRA_VFS_IO_MAX, &reply->count, &reply->cursor);
         break;
@@ -554,40 +611,34 @@ uint32_t astra_vfs_host_direct_transport(
         }
         break;
     case ASTRA_VFS_OP_MKDIR:
-        if (request->offset != ASTRA_VFS_MODE_DEFAULT &&
-            request->offset > ASTRA_VFS_MODE_MASK)
-            reply->status = ASTRA_VFS_ERR_INVALID;
-        else
-            reply->status = ops->mkdir(
-                backend.context, (const char *)request->body.path,
-                (uint16_t)request->offset);
+    case ASTRA_VFS_OP_RENAME:
+    case ASTRA_VFS_OP_LINK:
+    case ASTRA_VFS_OP_SYMLINK:
+    case ASTRA_VFS_OP_READLINK:
+    case ASTRA_VFS_OP_DIRECTORY_PATH:
+        reply->status = astra_vfs_backend_path_operation(&backend, operation,
+            request, request->file,
+            operation == ASTRA_VFS_OP_RENAME || operation == ASTRA_VFS_OP_LINK ?
+                (uintptr_t)request->offset : 0u, reply);
         break;
     case ASTRA_VFS_OP_UNLINK:
-        reply->status = ops->unlink(
-            backend.context, (const char *)request->body.path);
+        reply->status = (request->flags & ~ASTRA_VFS_UNLINK_DIRECTORY) != 0u ?
+            ASTRA_VFS_ERR_INVALID : ops->unlink(
+                backend.context, (const char *)request->body.path,
+                request->flags);
         break;
     case ASTRA_VFS_OP_UNLINK_AT:
         if (request->file == ASTRA_VFS_FILE_INVALID ||
             request->body.path[0] == '\0' ||
             request->body.path[0] == '/' ||
-            (request->flags & ~ASTRA_VFS_AT_REMOVE_DIRECTORY) != 0u)
+            (request->flags & ~ASTRA_VFS_UNLINK_DIRECTORY) != 0u)
             reply->status = ASTRA_VFS_ERR_INVALID;
         else
             reply->status = ops->unlink_at(
                 backend.context, request->file,
                 (const char *)request->body.path, request->flags);
         break;
-    case ASTRA_VFS_OP_RENAME: {
-        const AstraVfsRenameRequest *rename =
-            (const AstraVfsRenameRequest *)request;
 
-        reply->status = request->size != ASTRA_VFS_RENAME_REQUEST_SIZE ?
-            ASTRA_VFS_ERR_UNSUPPORTED :
-            ops->rename(backend.context,
-                        (const char *)rename->request.body.path,
-                        (const char *)rename->to);
-        break;
-    }
     case ASTRA_VFS_OP_CHMOD:
         if (request->offset > ASTRA_VFS_MODE_MASK)
             reply->status = ASTRA_VFS_ERR_INVALID;
@@ -617,39 +668,9 @@ uint32_t astra_vfs_host_direct_transport(
                 (const char *)request->body.path, (uint16_t)request->offset,
                 request->flags);
         break;
-    case ASTRA_VFS_OP_READLINK: {
-        uint32_t capacity = request->length > ASTRA_VFS_IO_MAX ?
-            ASTRA_VFS_IO_MAX : request->length;
 
-        reply->status = ops->readlink(
-            backend.context, (const char *)request->body.path,
-            reply->payload, capacity, &reply->count);
-        if (reply->status == ASTRA_VFS_OK && reply->count > capacity)
-            reply->status = ASTRA_VFS_ERR_PROTOCOL;
-        break;
-    }
-    case ASTRA_VFS_OP_SYMLINK: {
-        const AstraVfsRenameRequest *symlink =
-            (const AstraVfsRenameRequest *)request;
 
-        reply->status = request->size != ASTRA_VFS_RENAME_REQUEST_SIZE ?
-            ASTRA_VFS_ERR_UNSUPPORTED :
-            ops->symlink(backend.context,
-                         (const char *)symlink->request.body.path,
-                         (const char *)symlink->to);
-        break;
-    }
-    case ASTRA_VFS_OP_LINK: {
-        const AstraVfsRenameRequest *link =
-            (const AstraVfsRenameRequest *)request;
 
-        reply->status = request->size != ASTRA_VFS_RENAME_REQUEST_SIZE ?
-            ASTRA_VFS_ERR_UNSUPPORTED :
-            ops->link(backend.context,
-                      (const char *)link->request.body.path,
-                      (const char *)link->to);
-        break;
-    }
     case ASTRA_VFS_OP_FILESYSTEM_INFO:
         reply->status = astra_vfs_backend_filesystem_info_into(
             &backend, request->file,
@@ -685,16 +706,19 @@ uint32_t astra_vfs_host_direct_bulk(
     if (request->length == 0u || request->length > capacity)
         return ASTRA_VFS_OK;
     if (operation == ASTRA_VFS_OP_READ_AREA) {
-        reply->status = backend.ops->read(
-            backend.context, request->file, request->offset, buffer,
-            request->length, &moved);
+        reply->status = astra_vfs_backend_read_position(
+            &backend, request->file, request->offset, request->flags,
+            buffer, request->length, &moved, &reply->position);
     } else if (operation == ASTRA_VFS_OP_WRITE_AREA) {
-        reply->status = backend.ops->write(
+        reply->status =
+            (request->flags & ~(ASTRA_VFS_WRITE_APPEND |
+                                 ASTRA_VFS_IO_SEQUENTIAL)) != 0u ?
+            ASTRA_VFS_ERR_INVALID : backend.ops->write(
             backend.context, request->file, request->offset,
-            request->flags & ASTRA_VFS_WRITE_APPEND, buffer, request->length,
+            request->flags, request->write_limit, buffer, request->length,
             &moved, &position);
         if (reply->status == ASTRA_VFS_OK)
-            reply->node_size = position;
+            reply->position = position;
     } else if (operation == ASTRA_VFS_OP_READDIR_AREA) {
         uint64_t next = request->offset;
 

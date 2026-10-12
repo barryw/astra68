@@ -46,6 +46,9 @@
 #include "vm.h"
 
 #include <stddef.h>
+#if !defined(__m68k__)
+#include <stdlib.h>
+#endif
 
 _Static_assert(KERNEL_VM_DMA_SLOT_SIZE >=
                    ASTRA_DISPLAY_WIDTH * ASTRA_DISPLAY_HEIGHT *
@@ -103,7 +106,6 @@ typedef struct KernelProcessDmaBuffer {
  * it; the provider enforces them. A bound channel holds a reference, so a
  * scope outlives its handles while a channel carries it.
  */
-#define KERNEL_HOST_SCOPE_MAX 64u
 enum {
     KERNEL_HOST_SCOPE_FREE = 0,
     KERNEL_HOST_SCOPE_ACTIVE,
@@ -114,12 +116,19 @@ typedef struct KernelHostScope {
     uint32_t word;           /* the provider's name for the session */
     uint32_t flags;          /* ASTRA_HOST_SCOPE_READ_ONLY | _DELEGATE */
     uint32_t creator_owner;
+    uint32_t files;
     uint16_t references;
     uint8_t state;
     uint8_t reserved;
 } KernelHostScope;
-_Static_assert(KERNEL_HOST_SCOPE_MAX < 256u,
-               "a channel names its scopes in one byte");
+/* Stable records use the device metadata page pattern; fixed object caches
+ * cannot grow and channel references must survive pool growth. */
+typedef struct KernelHostScopeBlock {
+    struct KernelHostScopeBlock *next;
+    uint32_t physical;
+    uint16_t capacity;
+    KernelHostScope records[];
+} KernelHostScopeBlock;
 
 typedef struct KernelHostChannel {
     KernelProcessDmaBuffer *buffer;
@@ -133,9 +142,9 @@ typedef struct KernelHostChannel {
     uint32_t expected_consumer;
     uint32_t command_capacity;
     uint32_t owner;          /* the process owner stamped at open */
-    /* host_scopes index + 1 of each scope bound here; 0 is empty. A channel
+    /* Stable scope references; NULL is empty. A channel
      * opened on a scope is `bound`, and only a bound channel takes more. */
-    uint8_t scopes[ASTRA_HOST_CHANNEL_SCOPE_MAX];
+    KernelHostScope *scopes[ASTRA_HOST_CHANNEL_SCOPE_MAX];
     uint8_t active;
     uint8_t waiting;
     uint8_t bound;
@@ -241,7 +250,7 @@ typedef struct KernelProcess {
     uint8_t qualification_authorized;
     char name[ASTRA_PROC_NAME_MAX];
     uint16_t dma_pages;
-    KernelProcessDmaBuffer dma_buffers[KERNEL_VM_DMA_SLOT_COUNT];
+    KernelProcessDmaBuffer dma_buffers[ASTRA_DMA_BUFFER_MAX];
 } KernelProcess;
 
 typedef enum KernelExecutableLoadStage {
@@ -364,7 +373,7 @@ _Static_assert(sizeof(KernelProcess) <= 4608u,
 static KernelProcess *processes[PROCESS_SLOT_COUNT] KERNEL_TABLES;
 static KernelHostChannel
     host_channels[KERNEL_VM_HOST_CHANNEL_PAGE_COUNT] KERNEL_TABLES;
-static KernelHostScope host_scopes[KERNEL_HOST_SCOPE_MAX] KERNEL_TABLES;
+static KernelHostScopeBlock *host_scope_blocks;
 /*
  * Channels that may have a waiter, one bit per slot: the completion
  * interrupt visits these instead of all 256 slots. A superset -- the bit is
@@ -2060,6 +2069,37 @@ static void dma_buffer_release(void *object, void *context)
     buffer->active = 0u;
 }
 
+/* First page-aligned gap in the unchanged 32 MiB DMA window. */
+static bool dma_window_place(const KernelProcess *process,
+                             uint32_t page_count, uint32_t *base)
+{
+    const uint32_t end = KERNEL_VM_DMA_BASE +
+        KERNEL_VM_DMA_SLOT_COUNT * KERNEL_VM_DMA_SLOT_SIZE;
+    const uint32_t bytes = page_count * KERNEL_PAGE_SIZE;
+    uint32_t candidate = KERNEL_VM_DMA_BASE;
+    bool moved;
+
+    do {
+        moved = false;
+        if (candidate > end || bytes > end - candidate)
+            return false;
+        for (uint32_t index = 0u; index < ASTRA_DMA_BUFFER_MAX; ++index) {
+            const KernelProcessDmaBuffer *buffer = &process->dma_buffers[index];
+            uint32_t buffer_end = buffer->virtual_base +
+                (uint32_t)buffer->page_count * KERNEL_PAGE_SIZE;
+
+            if (buffer->active && candidate < buffer_end &&
+                buffer->virtual_base < candidate + bytes) {
+                candidate = buffer_end;
+                moved = true;
+                break;
+            }
+        }
+    } while (moved);
+    *base = candidate;
+    return true;
+}
+
 static KernelProcessStatus create_dma_buffer(KernelProcess *process,
                                              uint32_t byte_size,
                                              AstraDmaBufferInfo *info)
@@ -2072,6 +2112,7 @@ static KernelProcessStatus create_dma_buffer(KernelProcess *process,
     uint32_t page_count;
     uint32_t slot;
     uint32_t mapped = 0u;
+    uint32_t base;
 
     if (process == NULL || info == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
@@ -2080,13 +2121,13 @@ static KernelProcessStatus create_dma_buffer(KernelProcess *process,
     page_count = (byte_size + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
     if (page_count == 0u)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
-    for (slot = 0u; slot < KERNEL_VM_DMA_SLOT_COUNT; ++slot) {
+    for (slot = 0u; slot < ASTRA_DMA_BUFFER_MAX; ++slot) {
         if (process->dma_buffers[slot].active == 0u) {
             buffer = &process->dma_buffers[slot];
             break;
         }
     }
-    if (buffer == NULL)
+    if (buffer == NULL || !dma_window_place(process, page_count, &base))
         return KERNEL_PROCESS_RESOURCE_LIMIT;
 
     {
@@ -2113,7 +2154,7 @@ static KernelProcessStatus create_dma_buffer(KernelProcess *process,
     buffer->dma = dma;
     buffer->slot = (uint8_t)slot;
     buffer->page_count = (uint16_t)page_count;
-    buffer->virtual_base = KERNEL_VM_DMA_BASE + (slot * KERNEL_VM_DMA_SLOT_SIZE);
+    buffer->virtual_base = base;
     for (mapped = 0u; mapped < page_count; ++mapped) {
         vm_status = kernel_vm_map_transfer_page(
             &process->address_space,
@@ -2387,9 +2428,71 @@ static uint32_t execute_host_transport(
     return ASTRA_SYSCALL_OK;
 }
 
-static uint8_t host_scope_index(const KernelHostScope *scope)
+static KernelHostScope *host_scope_allocate(void)
 {
-    return (uint8_t)((uint32_t)(scope - host_scopes) + 1u);
+    KernelHostScopeBlock *block;
+
+    for (block = host_scope_blocks; block != NULL; block = block->next)
+        for (uint32_t index = 0u; index < block->capacity; ++index)
+            if (block->records[index].state == KERNEL_HOST_SCOPE_FREE)
+                return &block->records[index];
+#if defined(__m68k__)
+    uint32_t physical;
+    if (kernel_memory_alloc_zeroed_tagged(
+            KERNEL_ALLOCATION_SITE_HOST_SCOPE_METADATA, 1u, 1u,
+            KERNEL_FRAME_KERNEL, KERNEL_OWNER_CORE, &physical) != KERNEL_MEMORY_OK)
+        return NULL;
+    block = kernel_memory_access(physical, KERNEL_PAGE_SIZE);
+    if (block == NULL) {
+        (void)kernel_memory_release(physical, 1u, KERNEL_OWNER_CORE);
+        return NULL;
+    }
+    block->physical = physical;
+#else
+    if (!kernel_allocation_attempt(KERNEL_ALLOCATION_SITE_HOST_SCOPE_METADATA,
+                                   KERNEL_OWNER_CORE))
+        return NULL;
+    block = calloc(1u, KERNEL_PAGE_SIZE);
+    if (block == NULL || !kernel_allocation_commit(
+            KERNEL_ALLOCATION_SITE_HOST_SCOPE_METADATA, 1u, KERNEL_PAGE_SIZE,
+            KERNEL_OWNER_CORE)) {
+        free(block);
+        return NULL;
+    }
+#endif
+    block->capacity = (uint16_t)((KERNEL_PAGE_SIZE - sizeof(*block)) /
+                                 sizeof(block->records[0]));
+    block->next = host_scope_blocks;
+    host_scope_blocks = block;
+    return &block->records[0];
+}
+
+static bool host_scope_blocks_discard(void)
+{
+#if !defined(__m68k__)
+    KernelAllocationStats stats;
+    uint32_t blocks = 0u;
+#endif
+    while (host_scope_blocks != NULL) {
+        KernelHostScopeBlock *block = host_scope_blocks;
+        host_scope_blocks = block->next;
+#if defined(__m68k__)
+        if (kernel_memory_release(block->physical, 1u, KERNEL_OWNER_CORE) != KERNEL_MEMORY_OK)
+            return false;
+#else
+        free(block);
+        ++blocks;
+#endif
+    }
+#if !defined(__m68k__)
+    if (blocks != 0u && kernel_allocation_site_stats(
+            KERNEL_ALLOCATION_SITE_HOST_SCOPE_METADATA, &stats) &&
+        stats.current_units != 0u && !kernel_allocation_release(
+            KERNEL_ALLOCATION_SITE_HOST_SCOPE_METADATA, blocks,
+            blocks * KERNEL_PAGE_SIZE))
+        return false;
+#endif
+    return true;
 }
 
 static uint32_t host_scope_wire_flags(const KernelHostScope *scope)
@@ -2448,9 +2551,9 @@ static uint32_t host_channel_attach(uint32_t slot, KernelHostScope *scope)
     uint32_t free_at = ASTRA_HOST_CHANNEL_SCOPE_MAX;
 
     for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_SCOPE_MAX; ++at) {
-        if (channel->scopes[at] == host_scope_index(scope))
+        if (channel->scopes[at] == scope)
             return ASTRA_SYSCALL_OK;
-        if (channel->scopes[at] == 0u && free_at == ASTRA_HOST_CHANNEL_SCOPE_MAX)
+        if (channel->scopes[at] == NULL && free_at == ASTRA_HOST_CHANNEL_SCOPE_MAX)
             free_at = at;
     }
     if (free_at == ASTRA_HOST_CHANNEL_SCOPE_MAX ||
@@ -2461,10 +2564,10 @@ static uint32_t host_channel_attach(uint32_t slot, KernelHostScope *scope)
     if (kernel_platform_host_channel_attach(
             channel->owner, channel->host_generation,
             channel->channel_generation, slot, scope->word,
-            host_scope_wire_flags(scope), scope->creator_owner) !=
+            host_scope_wire_flags(scope), scope->creator_owner, scope->files) !=
         ASTRA_SYSCALL_OK)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    channel->scopes[free_at] = host_scope_index(scope);
+    channel->scopes[free_at] = scope;
     ++scope->references;
     return ASTRA_SYSCALL_OK;
 }
@@ -2514,7 +2617,6 @@ static uint32_t host_channel_kill(uint32_t slot)
 static uint32_t host_scope_revoke(KernelHostScope *scope)
 {
     uint32_t result = ASTRA_SYSCALL_OK;
-    uint8_t index = host_scope_index(scope);
     uint32_t word = scope->word;
     uint32_t unbound = 0u;
 
@@ -2528,7 +2630,7 @@ static uint32_t host_scope_revoke(KernelHostScope *scope)
         if (channel->active == 0u)
             continue;
         for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_SCOPE_MAX; ++at) {
-            if (channel->scopes[at] != index)
+            if (channel->scopes[at] != scope)
                 continue;
             if (channel->dead == 0u &&
                 kernel_platform_host_channel_detach(
@@ -2537,7 +2639,7 @@ static uint32_t host_scope_revoke(KernelHostScope *scope)
                     ASTRA_SYSCALL_OK) {
                 result = host_channel_kill(slot);
             }
-            channel->scopes[at] = 0u;
+            channel->scopes[at] = NULL;
             ++unbound;
         }
     }
@@ -2552,10 +2654,12 @@ static uint32_t host_scope_revoke(KernelHostScope *scope)
  * again; nothing its predecessor issued survives it. */
 static void host_scopes_revoke_creator(uint32_t owner)
 {
-    for (uint32_t index = 0u; index < KERNEL_HOST_SCOPE_MAX; ++index)
-        if (host_scopes[index].state == KERNEL_HOST_SCOPE_ACTIVE &&
-            host_scopes[index].creator_owner == owner)
-            (void)host_scope_revoke(&host_scopes[index]);
+    for (KernelHostScopeBlock *block = host_scope_blocks; block != NULL;
+         block = block->next)
+        for (uint32_t index = 0u; index < block->capacity; ++index)
+            if (block->records[index].state == KERNEL_HOST_SCOPE_ACTIVE &&
+                block->records[index].creator_owner == owner)
+                (void)host_scope_revoke(&block->records[index]);
 }
 
 static uint32_t host_channel_close_slot(KernelProcess *process,
@@ -2592,8 +2696,7 @@ static uint32_t host_channel_close_slot(KernelProcess *process,
     if (kernel_dma_abort(&channel->token) != KERNEL_DMA_OK)
         result = ASTRA_SYSCALL_IO_ERROR;
     for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_SCOPE_MAX; ++at)
-        bound[at] = channel->scopes[at] != 0u ?
-            &host_scopes[channel->scopes[at] - 1u] : NULL;
+        bound[at] = channel->scopes[at];
     kernel_bytes_clear(channel, sizeof(*channel));
     kernel_thread_wait_queue_init(&channel->waiters);
     for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_SCOPE_MAX; ++at)
@@ -2743,7 +2846,8 @@ static uint32_t host_channel_open(
             channel->command_capacity, scope != NULL ? scope->word : 0u,
             scope != NULL ? host_scope_wire_flags(scope) :
             provider ? ASTRA_HOST_CHANNEL_PROVIDER : 0u,
-            scope != NULL ? scope->creator_owner : 0u) != ASTRA_SYSCALL_OK) {
+            scope != NULL ? scope->creator_owner : 0u,
+            scope != NULL ? scope->files : 0u) != ASTRA_SYSCALL_OK) {
         (void)kernel_dma_abort(&token);
         return ASTRA_SYSCALL_IO_ERROR;
     }
@@ -2772,7 +2876,7 @@ static uint32_t host_channel_open(
     host_channels[slot].owner = process->owner;
     host_channels[slot].bound = scope != NULL ? 1u : 0u;
     if (scope != NULL) {
-        host_channels[slot].scopes[0] = host_scope_index(scope);
+        host_channels[slot].scopes[0] = scope;
         ++scope->references;
     }
     kernel_thread_wait_queue_init(&host_channels[slot].waiters);
@@ -3969,7 +4073,10 @@ void kernel_process_init(void)
     kernel_bytes_clear(&scheduler_stats, sizeof(scheduler_stats));
     kernel_thread_wait_queue_init(&sleep_waiters);
     kernel_bytes_clear(host_channels, sizeof(host_channels));
-    kernel_bytes_clear(host_scopes, sizeof(host_scopes));
+    if (!host_scope_blocks_discard()) {
+        process_pool_corrupt = 1u;
+        return;
+    }
     kernel_handle_set_import_rights(host_scope_import_rights);
     for (uint32_t index = 0u;
          index < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT; ++index)
@@ -9654,10 +9761,18 @@ static __attribute__((noinline)) KernelProcessStatus deliver_reply(
         if (handle_status != KERNEL_HANDLE_OK)
             return handle_status_to_syscall(handle_status, result) ?
                 KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
-        if (masks != NULL &&
-            kernel_handle_transfer_narrow(transfer, masks) !=
-                KERNEL_HANDLE_OK)
-            return KERNEL_PROCESS_CORRUPT;
+        if (masks != NULL) {
+            /* A mask that would leave a handle rightless is the sender's
+             * mistake, refused with nothing moved (re-review K1). */
+            handle_status = kernel_handle_transfer_narrow(transfer, masks);
+            if (handle_status != KERNEL_HANDLE_OK) {
+                if (kernel_handle_transfer_rollback(transfer) !=
+                    KERNEL_HANDLE_OK)
+                    return KERNEL_PROCESS_CORRUPT;
+                return handle_status_to_syscall(handle_status, result) ?
+                    KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
+            }
+        }
         if (kernel_handle_transfer_commit_export(current->handles,
                                                  transfer) !=
             KERNEL_HANDLE_OK)
@@ -10028,13 +10143,11 @@ static KernelProcessStatus port_syscall(KernelProcess *current,
 }
 
 /*
- * The kernel writes a reply into the caller's memory from the replier's
- * syscall, by physical page, with no chance to commit a page on demand. So the
- * buffers are committed now, on the caller's own behalf, and must be mapped
- * writable before anything is sent.
+ * Replies and signal frames need writable user buffers, including untouched
+ * private pages and copy-on-write pages retained by fork.
  */
-static bool reply_buffer_writable(KernelProcess *process, uint32_t address,
-                                  uint32_t size)
+static bool user_buffer_writable(KernelProcess *process, uint32_t address,
+                                 uint32_t size)
 {
     uint32_t page;
     uint32_t last;
@@ -10143,8 +10256,8 @@ static KernelProcessStatus port_call_syscall(KernelProcess *current,
         *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
         return KERNEL_PROCESS_OK;
     }
-    if (!reply_buffer_writable(current, call.reply, reply_capacity) ||
-        !reply_buffer_writable(
+    if (!user_buffer_writable(current, call.reply, reply_capacity) ||
+        !user_buffer_writable(
             current, call.reply_handles,
             call.reply_handle_capacity * sizeof(attached[0]))) {
         *result = ASTRA_SYSCALL_BAD_ADDRESS;
@@ -12334,8 +12447,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             (stack_top & 3u) != 0u ||
             kernel_vm_probe_current(trampoline, false, NULL) ==
                 KERNEL_VM_MAPPING_UNMAPPED ||
-            kernel_vm_probe_current(stack_top - 8u, false, NULL) !=
-                KERNEL_VM_MAPPING_READ_WRITE) {
+            !user_buffer_writable(current, stack_top - 8u, 8u)) {
             result = ASTRA_SYSCALL_BAD_ADDRESS;
             break;
         }
@@ -13165,13 +13277,12 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             result = ASTRA_SYSCALL_UNSUPPORTED;
             break;
         }
-        for (uint32_t index = 0u; index < KERNEL_HOST_SCOPE_MAX; ++index)
-            if (host_scopes[index].state == KERNEL_HOST_SCOPE_FREE &&
-                host_scopes[index].references == 0u) {
-                scope = &host_scopes[index];
-                break;
-            }
-        if (scope == NULL || !kernel_device_handle_retain(lease, NULL)) {
+        scope = host_scope_allocate();
+        if (scope == NULL) {
+            result = ASTRA_SYSCALL_OUT_OF_MEMORY;
+            break;
+        }
+        if (!kernel_device_handle_retain(lease, NULL)) {
             result = ASTRA_SYSCALL_RESOURCE_LIMIT;
             break;
         }
@@ -13196,13 +13307,14 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         break;
     }
     case ASTRA_SYSCALL_HOST_SCOPE_REVOKE:
+    case ASTRA_SYSCALL_HOST_SCOPE_LIMIT:
     case ASTRA_SYSCALL_HOST_SCOPE_ATTACH: {
         KernelPlatformHostState host_state;
         KernelHostScope *scope = NULL;
         KernelHandleStatus handle_status = kernel_handle_lookup(
             current->handles, thread->context.data[1],
             KERNEL_OBJECT_HOST_SCOPE,
-            syscall == ASTRA_SYSCALL_HOST_SCOPE_REVOKE ?
+            syscall != ASTRA_SYSCALL_HOST_SCOPE_ATTACH ?
                 ASTRA_RIGHT_ADMINISTER : ASTRA_RIGHT_WRITE,
             (void **)&scope);
         uint32_t slot = KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
@@ -13224,6 +13336,16 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         }
         if (scope->state != KERNEL_HOST_SCOPE_ACTIVE) {
             result = ASTRA_SYSCALL_PEER_DEAD;
+            break;
+        }
+        if (syscall == ASTRA_SYSCALL_HOST_SCOPE_LIMIT) {
+            result = ASTRA_SYSCALL_OK;
+            for (uint32_t index = 0u; index < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT; ++index)
+                for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_SCOPE_MAX; ++at)
+                    if (host_channels[index].scopes[at] == scope)
+                        result = ASTRA_SYSCALL_INVALID_ARGUMENT;
+            if (result == ASTRA_SYSCALL_OK)
+                scope->files = thread->context.data[2];
             break;
         }
         /* The checks OPEN makes (review M5): a lease that is still active,

@@ -1,7 +1,7 @@
 # Filesystem Kit
 
 Include `astra/filesystem_kit.h` for the complete API. Link against
-`filesystem.library.7` and declare the minimum compatible version in the
+`filesystem.library.12` and declare the minimum compatible version in the
 bundle manifest. The process loader resolves that dependency before `main`;
 applications call the declared `astra_filesystem_*` functions directly.
 
@@ -12,8 +12,92 @@ the underlying VFS client operations for filesystem and compatibility tools.
 The ABI has no dependency on lwext4 or any other on-disk implementation; RAM
 drives and other filesystem services use the same protocol and API.
 
-The native ABI is not a libc ABI. `libc.library.3` provides the POSIX file
+The native ABI is not a libc ABI. `libc.library.4` provides the POSIX file
 API -- descriptors, the current directory, `errno`, and stdio -- over these
 same operations; a POSIX program uses it instead. See the repository's
 `docs/FILESYSTEM_KIT.md` for the compatibility map and current service
 limits.
+
+Version 9 preserves dot components and trailing separators until ordered
+lookup. Links use `/assign/path` for absolute targets; a provider escape
+continues only through assigns held by the process. One 40-link budget covers
+the complete lookup. Final-link behavior follows the operation, and rejected
+mutations do not act on a final symlink's target.
+
+`AstraFileInfo.meta` and the metadata from stat and lookup include provider
+identity, allocation, full-width link counts, and nanosecond timestamps.
+`meta.valid` holds `ASTRA_VFS_META_*` bits; a clear bit means unknown and a
+set bit makes zero an ordinary value. Volume and inode identities agree
+across bindings and hard links. Generation is the node's birth time when
+available. Batched directory entries report unknown extended metadata.
+Path and directory-relative unlink use zero flags for a non-directory, or
+`ASTRA_VFS_UNLINK_DIRECTORY` for an empty directory. The provider checks the
+entry's kind during removal, and paths use the same ordered namespace walk.
+
+Storage protocol 36 carries metadata beside the continuation payload; every
+valid native pathname fits. All in-tree consumers require ABI 12.0.
+
+HostFS keeps the position, directory cursor, append and nonblocking flags in
+one shared provider description. Sequential I/O advances its position;
+positioned I/O preserves it and positioned writes ignore append. Use
+`astra_filesystem_file_flags` to query or change APPEND/NONBLOCK. Fork shares
+that description through one-use, grant-bound receipts and waits for child
+adoption before returning. Closing or exiting either owner leaves adopted
+handles alive. An in-place exec retains files and open directory descriptors
+unless marked close-on-exec, plus child wait handles and resource accounting.
+Providers without shared descriptions
+return UNSUPPORTED when asked to share one.
+
+The process VFS owns current directory identity. Process facades accept relative
+paths against that retained directory; rename does not reopen its old spelling.
+Fork shares the directory description and exec restores it in native VFS state.
+`astra_process_vfs_current_directory` returns its current native slash path or
+NOT_FOUND after removal or escape from its grant. Explicit directory-anchored
+APIs support mutations and readlink; STAT_AT selects final-link following with
+ASTRA_VFS_STAT_FOLLOW. These layout and signature changes require Filesystem
+Kit ABI 12.0 and filesystem.library.12.
+
+Path-based `astra_filesystem_*_at` calls take the attached `AstraFilesystem`
+first, then the retained directory and relative path. Ordered provider LOOKUP
+also accepts a directory token. A namespace escape continues from that object
+through the shared assign resolver, with its consumed links charged to the same
+40-link budget. Native calls and POSIX `openat`/`fstatat` therefore share routing.
+
+Provider loss returns `ASTRA_VFS_ERR_LOST`; POSIX reports `ESTALE`. Old file,
+directory and CWD descriptions stay lost even when the same pathname exists
+again. Fork can inherit a disconnected description. A provider reset preserves
+grant ports: the Kit refreshes the scope through HELLO while retaining its
+control session, and new absolute opens can succeed. A grant root is recovered
+only when its volume, inode and generation still match. Absolute chdir can
+replace a lost CWD; relative operations cannot silently reopen its spelling.
+When HostFS dies, its old grants remain lost. Supervisor restarts affected
+managed services with new grants; applications need a new launch.
+
+## Atomic write bounds
+
+ABI 12 retains the exclusive `max_end` byte position on sequential and
+positioned writes, including their accelerated callbacks. `UINT64_MAX` means
+unbounded. Providers select the current position or append EOF and check the
+bound within the same transaction as the write. A request crossing the bound
+returns a short write; a nonempty request starting at or beyond it returns
+`ASTRA_VFS_ERR_FILE_TOO_LARGE` (status 22) without moving the position. Zero
+writes succeed without changing size or position. Positioned writes ignore
+the open description's APPEND flag.
+
+STOR 35 introduced `AstraVfsRequest.write_limit` for inline and shared-area
+writes; Host transport `0x00010015` carries the bound in WRITE's input value
+and returns the resulting position there. Configuration version 4 is unchanged.
+HostFS serializes writes and truncations with its existing namespace lock,
+including writes through independent descriptions. RAMFS uses its filesystem
+lock; ext4 selects position, clamps length and writes under its mount lock.
+The POSIX adapter supplies `RLIMIT_FSIZE`, maps status 22 to `EFBIG`, and sends
+`SIGXFSZ` only when a finite bound refuses all bytes. Limit and signal policy
+remain in POSIX; providers implement the generic bound once.
+
+STOR 36/minimum 36 makes ordered LOOKUP accept a retained directory token.
+Filesystem Kit ABI 12.0 adds the attached namespace as the first argument
+of path-based `astra_filesystem_*_at` APIs. Provider continuations retain
+the same 40-link budget and use the shared namespace resolver; POSIX adapters
+call that native contract. Joined-assign opens use the member selected by
+lookup, including dangling-link shadowing. Rename/link retain namespace
+escapes instead of conflating them with a cross-device operation.

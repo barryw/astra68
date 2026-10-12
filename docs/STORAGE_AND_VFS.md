@@ -21,8 +21,10 @@ The trusted boundary, per the PRD's ownership table and FS15: grants bind
 authenticated owners to rooted directory objects and rights, and are enforced
 in the guest HostFS service using a kernel-stamped sender owner on every
 request, never one supplied by the client. On the Linux side, each rooted
-session is confined with `openat2` `RESOLVE_BENEATH`, so `..` and symlink
-traversal cannot walk a session out of its root. QEMU never trusts a
+session uses an ordered descriptor walk and a final `openat2` with
+`RESOLVE_BENEATH`. A path that leaves its root returns an escape continuation
+to the Filesystem Kit, which can route only through the caller's assigns;
+QEMU never traverses an absolute guest link in the Linux namespace. QEMU never trusts a
 client-supplied owner field.
 
 Kept from the earlier device/volume plan, per the PRD's architectural
@@ -130,13 +132,37 @@ What actually runs today, verified against source:
   scope from every channel at once; HostFS's death revokes everything it
   minted. HostFS's METRICS port, and the ramfs, storage and proc services,
   still serve every operation through their service core.
+- **Shared descriptions.** Storage protocol 32 and Filesystem Kit 9.0 make
+  HostFS's provider the authority for file position, directory cursor and
+  APPEND/NONBLOCK status. Sequential I/O advances that shared state in one
+  transaction; positioned I/O preserves it and positioned writes ignore
+  append. A one-use grant-bound receipt retains a pending reference for fork.
+  The child adopts its own owner-bound handle before fork returns in the
+  parent. Exec preserves handles, child wait state and resource accounting;
+  no operation reopens an inherited file by its former path. Non-HostFS
+  backends do not advertise shared descriptions and refuse sharing.
+- **Atomic write bounds.** STOR 35 and Filesystem Kit 12.0 require an
+  exclusive maximum byte position on each write (`UINT64_MAX` is unbounded).
+  Providers check the live position or EOF and clamp/write under one lock,
+  including independent append descriptions. Crossing the bound returns a
+  short write; starting there returns FILE_TOO_LARGE without mutation. Zero
+  writes preserve size and position. POSIX alone supplies RLIMIT_FSIZE and
+  translates the refusal to EFBIG/SIGXFSZ.
+- **Provider loss.** STOR 34 resumes an existing HELLO control session while
+  replacing a revoked scoped accelerator. Provider reset closes Linux
+  descriptions immediately and leaves owner-bound lost handles, including
+  inherited descriptions, until close or owner death. Old file, DIR and CWD
+  operations return LOST/ESTALE; fresh absolute opens can recover. HostFS
+  remints scopes only when a recorded grant root retains its volume, inode
+  and generation. HostFS death leaves old application grants lost, while
+  Supervisor restarts managed holders once their publications return.
 - **Grant enforcement: in the provider.** A client reaches only the
   sessions whose scopes it was handed, enforced by the kernel and QEMU: a
   derived grant's session is rooted at its sub-root and read-only when the
   grant is, so its root and rights hold whatever the client library does.
-  The Kit's own assign roots and `..` folding (`astra_assign_resolve`,
-  `astra_path_normalise`) remain client bookkeeping for the bindings the
-  provider does not yet own (Phase 2). Host-root opens are confined with
+  The Kit preserves dot components until lookup and rechecks authority at
+  every namespace continuation. Backends without ordered lookup use its
+  shared component walker. Host-root opens are confined with
   `openat2(..., RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS)`.
 - **Cost of the lane.** Measured on QEMU/TCG on `beast` (not the board) with
   `fsprobe` (`emu/qemu/fs-probe.py`, `tools/fs-probe-compare.py`), ten
@@ -173,3 +199,11 @@ What actually runs today, verified against source:
 Everything above is in scope for removal under PRD FS46 once Phase 2 and
 Phase 5 land: no legacy production engine or automatic fallback is meant to
 remain in the release image.
+
+STOR 36/minimum 36 makes ordered LOOKUP accept a retained directory token.
+Filesystem Kit ABI 12.0 adds the attached namespace as the first argument
+of path-based `astra_filesystem_*_at` APIs. Provider continuations retain
+the same 40-link budget and use the shared namespace resolver; POSIX adapters
+call that native contract. Joined-assign opens use the member selected by
+lookup, including dangling-link shadowing. Rename/link retain namespace
+escapes instead of conflating them with a cross-device operation.

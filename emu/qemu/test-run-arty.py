@@ -4,8 +4,10 @@
 import hashlib
 import os
 import pathlib
+import pwd
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -66,7 +68,10 @@ stat -c %s "$ASTRA_DISPLAY_MAILBOX_PATH" >"{observed}/mailbox.size"
 printf '%s\n' "$ASTRA_DISPLAY_PAYLOAD_PATH" >"{observed}/payload.path"
 stat -c %s "$ASTRA_DISPLAY_PAYLOAD_PATH" >"{observed}/payload.size"
 printf '%s\n' "$ASTRA_HOSTFS_ROOT" >"{observed}/hostfs.root"
+printf '%s\n' "$ASTRA_HOSTFS_MAX_DESCRIPTORS" "$ASTRA_HOSTFS_MAX_DIRECTORIES" >"{observed}/hostfs.budgets"
 printf '%s\\n' "$@" >"{observed}/qemu.args"
+id -u >"{observed}/qemu.uid"
+id -g >"{observed}/qemu.gid"
 sleep {delay}
 printf '%s' {output!r}
 exit {status}
@@ -76,6 +81,7 @@ import os, pathlib, signal, sys, time
 pathlib.Path({str(observed / 'hotplug.args')!r}).write_text('\\n'.join(sys.argv[1:]))
 pathlib.Path({str(observed / 'hotplug.affinity')!r}).write_text(
     ' '.join(str(cpu) for cpu in sorted(os.sched_getaffinity(0))))
+pathlib.Path({str(observed / 'hotplug.uid')!r}).write_text(str(os.getuid()))
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 while True: time.sleep(0.05)
 """)
@@ -113,7 +119,44 @@ def environment(root, observed):
     )
 
 
+def root_privilege_boundary():
+    """Root must reject root guests and prepare HostFS as the guest user."""
+    assert os.getuid() == 0, "run --root with sudo"
+    guest = pwd.getpwnam("nobody")
+    with tempfile.TemporaryDirectory() as directory:
+        root, observed = fixture(directory, 0.2)
+        pathlib.Path(directory).chmod(0o755)
+        observed.chmod(0o777)
+        hostfs = observed / "hostfs"
+        hostfs.mkdir()
+        os.chown(hostfs, guest.pw_uid, guest.pw_gid)
+        launch_environment = environment(root, observed)
+        launch_environment["ASTRA_QEMU_USER"] = "root"
+        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
+                                text=True, capture_output=True, check=False)
+        assert result.returncode != 0, "root guest was accepted"
+        assert not (observed / "qemu.args").exists(), "root guest was launched"
+        launch_environment["ASTRA_QEMU_USER"] = "nobody"
+        result = subprocess.run([str(RUN_ARTY), "-run-with", "user=0:0"],
+                                env=launch_environment, text=True,
+                                capture_output=True, check=False)
+        assert result.returncode == 1, result.stderr
+        assert int((observed / "qemu.uid").read_text()) == guest.pw_uid, \
+            "QEMU executable started as root"
+        assert int((observed / "qemu.gid").read_text()) == guest.pw_gid
+        assert int((observed / "hotplug.uid").read_text()) == guest.pw_uid, \
+            "QMP input/affinity helper started as root"
+        for path in (hostfs / "work", hostfs / "sound/soundfonts/default",
+                     hostfs / "sound/soundfonts/Shipped.sf2"):
+            assert path.stat().st_uid == guest.pw_uid, path
+        writable(root)
+    print("Astra launcher root privilege boundary: PASS")
+
+
 def main():
+    if sys.argv[1:] == ["--root"]:
+        root_privilege_boundary()
+        return
     launcher = RUN_ARTY.read_text()
     assert "ASTRA_STORE=${ASTRA_STORE:-/var/lib/astra}" in launcher
     assert "ASTRA_STORE=${ASTRA_STORE:-/data/astra}" not in launcher
@@ -158,9 +201,9 @@ def main():
         qmp_arguments = [qemu_args[index + 1] for index, value in
                          enumerate(qemu_args) if value == "-qmp"]
         assert qmp_arguments == [
-            "unix:%s,server=on,wait=off" % (observed / "run/qmp.sock"),
+            "unix:%s,server=on,wait=off" % (observed / "run/qemu/qmp.sock"),
             "unix:%s,server=on,wait=off" %
-            (observed / "run/remote-desktop-qmp.sock"),
+            (observed / "run/qemu/remote-desktop-qmp.sock"),
         ]
         assert "-no-reboot" not in qemu_args
         assert qemu_args[qemu_args.index("-display") + 1] == "none"
@@ -168,7 +211,7 @@ def main():
         assert "-nographic" not in qemu_args
         assert not any("input-linux" in argument for argument in qemu_args)
         hotplug_args = (observed / "hotplug.args").read_text().splitlines()
-        assert hotplug_args == ["--qmp", str(observed / "run/qmp.sock")]
+        assert hotplug_args == ["--qmp", str(observed / "run/qemu/qmp.sock")]
         assert (observed / "display.affinity").read_text().strip() == \
             str(display_cpu)
         assert (observed / "hotplug.affinity").read_text().strip() == \
@@ -189,9 +232,12 @@ def main():
             observed / "state/storage-terminal.img")
         assert (observed / "hostfs.root").read_text().strip() == str(
             observed / "hostfs")
+        assert (observed / "hostfs.budgets").read_text().splitlines() == ["2048", "1024"]
         assert (root / "storage-terminal.img").read_bytes() == b"disk"
 
         (observed / "display.exit-once").touch()
+        launch_environment.update(ASTRA_HOSTFS_MAX_DESCRIPTORS="512",
+                                  ASTRA_HOSTFS_MAX_DIRECTORIES="128")
         result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
                                 text=True, capture_output=True, check=False)
         assert result.returncode == 1, result.stderr
@@ -199,6 +245,7 @@ def main():
         assert int((observed / "display.launches").read_text()) >= 3
         assert "display helper exited with status 42; restarting" in \
             result.stderr
+        assert (observed / "hostfs.budgets").read_text().splitlines() == ["512", "128"]
         assert (observed / "hostfs/sound/soundfonts/default").read_text() == \
             "Mine.sf2\n"
 
@@ -242,7 +289,8 @@ def main():
             assert "already active" in second.stderr
         finally:
             first.terminate()
-            first.wait(timeout=2.0)
+            # Four helpers each have a bounded one-second stop interval.
+            first.wait(timeout=5.0)
             writable(root)
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 0, status=88)

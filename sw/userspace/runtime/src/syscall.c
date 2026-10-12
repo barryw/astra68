@@ -1042,6 +1042,16 @@ astra_host_scope_attach(uint32_t scope)
 }
 
 uint32_t
+astra_host_scope_limit(uint32_t scope, uint32_t files)
+{
+    AstraSyscallResult result;
+
+    astra_syscall5(ASTRA_SYSCALL_HOST_SCOPE_LIMIT, scope, files, 0u, 0u, 0u,
+                   &result);
+    return result.status;
+}
+
+uint32_t
 astra_library_snapshot(uint32_t observer, uint32_t start,
                        AstraProcLibrarySnapshot *records, uint32_t capacity,
                        uint32_t *moved, uint32_t *library_count)

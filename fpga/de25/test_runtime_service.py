@@ -13,7 +13,10 @@ for required in (
     "ConditionFileIsExecutable=/var/lib/astra/current/bin/run-arty.sh",
     "ConditionKernelCommandLine=astra.fabric=ready",
     "Environment=ASTRA_STORE=/var/lib/astra",
-    "Environment=ASTRA_FRONT_PANEL_MMIO_OFFSET=0x20107000",
+    "Environment=ASTRA_QEMU_USER=astra",
+    "NoNewPrivileges=true",
+    "Environment=ASTRA_FRONT_PANEL_MMIO_PATH=/dev/astra-front-panel",
+    "Environment=ASTRA_FRONT_PANEL_MMIO_OFFSET=0",
     "ExecStart=/var/lib/astra/current/bin/run-arty.sh",
     "Restart=on-failure",
     "StandardOutput=journal",
@@ -38,11 +41,12 @@ remote = (Path(__file__).with_name(
     "astra-remote-desktop.service")).read_text()
 for required in (
     "Before=astra.service",
+    "Group=astra",
     "PartOf=astra.service",
     "WantedBy=astra.service",
     "ConditionPathExists=/dev/astra-display-capture",
     "ExecStart=/var/lib/astra/current/bin/astra-remote-desktop",
-    "Environment=ASTRA_QMP_SOCKET=/run/astra/remote-desktop-qmp.sock",
+    "Environment=ASTRA_QMP_SOCKET=/run/astra/qemu/remote-desktop-qmp.sock",
     "Environment=ASTRA_REMOTE_DESKTOP_CONTROL_SOCKET="
     "/run/astra/remote-desktop-control.sock",
     "Environment=ASTRA_RFB_LISTEN_ADDRESS=0.0.0.0",
@@ -65,6 +69,7 @@ print("DE25 remote desktop service contract: PASS")
 audio = (Path(__file__).with_name("astra-audio-host.service")).read_text()
 for required in (
     "Before=astra.service",
+    "Group=astra",
     "PartOf=astra.service",
     "WantedBy=astra.service",
     "ExecStart=/var/lib/astra/current/bin/astra-audio-host",

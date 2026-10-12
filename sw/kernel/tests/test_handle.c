@@ -929,6 +929,120 @@ static void test_transfer_rights_mask(void)
     assert(kernel_handle_transfer_pool_valid());
 }
 
+/* Object 0x3000 loses every right; 0x3001 keeps only TRANSFER. */
+static uint32_t strip_query_transfer(KernelObjectType type, void *object,
+                                     uint32_t rights)
+{
+    if (type == KERNEL_OBJECT_SYNC && (uintptr_t)object == 0x3001u)
+        return rights & ~RIGHT_QUERY;
+    return type == KERNEL_OBJECT_SYNC && (uintptr_t)object == 0x3000u ?
+               rights & ~(RIGHT_QUERY | RIGHT_TRANSFER) : rights;
+}
+
+/*
+ * No transfer may leave a rightless handle (Task 5 re-review K1): a mask
+ * that shares no right with the handle, one that keeps only TRANSFER, and
+ * one -- or no mask at all -- whose result the import filter would empty
+ * are all refused before anything moves, a refusal of the second handle
+ * leaves the first with its sender, and the pool audit holds afterwards.
+ */
+static void test_transfer_never_leaves_no_rights(void)
+{
+    KernelHandleTable source;
+    KernelHandleTransferBatch batch;
+    ReleaseState released = {0};
+    KernelHandle handles[2];
+    uint32_t masks[2];
+    void *object;
+
+    kernel_handle_transfer_pool_init();
+    kernel_handle_table_init(&source);
+    assert(kernel_handle_install(
+               &source, KERNEL_OBJECT_SYNC, RIGHT_QUERY | RIGHT_TRANSFER,
+               (void *)(uintptr_t)0x3000u, release_object, &released,
+               &handles[0]) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_install(
+               &source, KERNEL_OBJECT_SYNC, RIGHT_QUERY | RIGHT_TRANSFER,
+               (void *)(uintptr_t)0x3001u, release_object, &released,
+               &handles[1]) == KERNEL_HANDLE_OK);
+    /* Disjoint: CONTROL on a handle without it. */
+    assert(kernel_handle_transfer_prepare(&source, &handles[1], 1u,
+                                          RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_OK);
+    masks[0] = RIGHT_CONTROL;
+    assert(kernel_handle_transfer_narrow(&batch, masks) ==
+           KERNEL_HANDLE_INVALID_ARGUMENT);
+    assert(kernel_handle_transfer_pool_valid());
+    assert(kernel_handle_transfer_rollback(&batch) == KERNEL_HANDLE_OK);
+    /* TRANSFER alone: a handle that can only move is no handle. */
+    assert(kernel_handle_transfer_prepare(&source, &handles[1], 1u,
+                                          RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_OK);
+    masks[0] = RIGHT_TRANSFER;
+    assert(kernel_handle_transfer_narrow(&batch, masks) ==
+           KERNEL_HANDLE_INVALID_ARGUMENT);
+    assert(kernel_handle_transfer_rollback(&batch) == KERNEL_HANDLE_OK);
+    /* The second of two is bad: neither is changed, both stay. */
+    assert(kernel_handle_transfer_prepare(&source, handles, 2u,
+                                          RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_OK);
+    masks[0] = RIGHT_QUERY;
+    masks[1] = RIGHT_CONTROL;
+    assert(kernel_handle_transfer_narrow(&batch, masks) ==
+           KERNEL_HANDLE_INVALID_ARGUMENT);
+    assert(kernel_handle_transfer_pool_valid());
+    assert(kernel_handle_transfer_rollback(&batch) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_count(&source) == 2u);
+    assert(kernel_handle_lookup(&source, handles[0], KERNEL_OBJECT_SYNC,
+                                RIGHT_QUERY | RIGHT_TRANSFER, &object) ==
+           KERNEL_HANDLE_OK);
+    /* What the import filter would empty is refused, masked or not:
+     * object 0x3000 loses QUERY and TRANSFER on import. */
+    kernel_handle_set_import_rights(strip_query_transfer);
+    assert(kernel_handle_transfer_prepare(&source, handles, 1u,
+                                          RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_INVALID_ARGUMENT);
+    assert(kernel_handle_transfer_validate(&source, handles, 1u,
+                                           RIGHT_TRANSFER) ==
+           KERNEL_HANDLE_INVALID_ARGUMENT);
+    /* TRANSFER surviving alone is still not a usable imported handle. */
+    assert(kernel_handle_transfer_prepare(&source, &handles[1], 1u,
+                                          RIGHT_TRANSFER, &batch) ==
+           KERNEL_HANDLE_INVALID_ARGUMENT);
+    assert(kernel_handle_transfer_validate(&source, &handles[1], 1u,
+                                           RIGHT_TRANSFER) ==
+           KERNEL_HANDLE_INVALID_ARGUMENT);
+    {
+        KernelHandle wide = KERNEL_HANDLE_INVALID;
+
+        assert(kernel_handle_install(
+                   &source, KERNEL_OBJECT_SYNC,
+                   RIGHT_QUERY | RIGHT_CONTROL | RIGHT_TRANSFER,
+                   (void *)(uintptr_t)0x3000u, release_object, &released,
+                   &wide) == KERNEL_HANDLE_OK);
+        /* Unmasked, CONTROL survives the filter: it may move. */
+        assert(kernel_handle_transfer_validate(&source, &wide, 1u,
+                                               RIGHT_TRANSFER) ==
+               KERNEL_HANDLE_OK);
+        assert(kernel_handle_transfer_prepare(&source, &wide, 1u,
+                                              RIGHT_TRANSFER, &batch) ==
+               KERNEL_HANDLE_OK);
+        masks[0] = RIGHT_QUERY | RIGHT_TRANSFER;
+        assert(kernel_handle_transfer_narrow(&batch, masks) ==
+               KERNEL_HANDLE_INVALID_ARGUMENT);
+        masks[0] = RIGHT_CONTROL;
+        assert(kernel_handle_transfer_narrow(&batch, masks) ==
+               KERNEL_HANDLE_OK);
+        assert(kernel_handle_transfer_rollback(&batch) == KERNEL_HANDLE_OK);
+        assert(kernel_handle_close(&source, wide) == KERNEL_HANDLE_OK);
+    }
+    kernel_handle_set_import_rights(NULL);
+    assert(kernel_handle_count(&source) == 2u);
+    assert(kernel_handle_close(&source, handles[0]) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_close(&source, handles[1]) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_transfer_pool_valid());
+}
+
 int main(void)
 {
     kernel_handle_transfer_pool_init();
@@ -948,6 +1062,7 @@ int main(void)
     test_destination_full_and_detached_release();
     test_detached_pool_exhaustion_and_reuse();
     test_transfer_rights_mask();
+    test_transfer_never_leaves_no_rights();
     assert(kernel_handle_transfer_pool_healthy());
     puts("handle tests passed");
     return 0;

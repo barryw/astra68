@@ -50,7 +50,7 @@ LIBRARY_OBJECTS := $(patsubst src/%.c,build/m68k/library/%.o,$(LIBRARY_SOURCES))
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(SOURCES))
 LIB := build/m68k/libastraposix.a
 PIC_LIB := build/m68k/libastraposix-pic.a
-LIBC_LIBRARY := build/m68k/libraries/libc.library.3
+LIBC_LIBRARY := build/m68k/libraries/libc.library.4
 LIBC_IDENTITY := build/m68k/library/libc_library.o
 LIBC_EXPORT_SOURCE := libc.posix.exports
 LIBC_DATA_SOURCE := libc.data.exports
@@ -70,7 +70,7 @@ PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 STREAMS_LIBRARY := $(STREAMS)/build/m68k/libraries/streams.library.1
-FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.7
+FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.12
 NETWORK_LIBRARY := $(NETWORK)/build/m68k/libraries/network.library.1
 NETWORK_LIB := $(NETWORK)/build/m68k/libastranetwork.a
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
@@ -179,7 +179,7 @@ $(LIBC_CONTRACT_STAMP): $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
 $(LIBC_EXPORTS) $(LIBC_UNDEFINED) &: $(LIBC_CONTRACT_STAMP)
 	@mkdir -p build/m68k
 	python3 $(LIBC_CONTRACT_TOOL) --readelf $(READELF) \
-		--version ASTRA_LIBC_2_0 --exports-out $(LIBC_EXPORTS) \
+		--version ASTRA_LIBC_4_0 --exports-out $(LIBC_EXPORTS) \
 		--undefined-out $(LIBC_UNDEFINED) --extra $(LIBC_EXPORT_SOURCE) \
 		--force-extra \
 		--allow $(LIBC_ARCHIVE_API) \
@@ -197,7 +197,7 @@ $(LIBC_LIBRARY): $(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
 		| libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(ASTRA_TARGET_ABI_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,libc.library.3 \
+		-Wl,-soname,libc.library.4 \
 		-Wl,--version-script=$(LIBC_EXPORTS) \
 		-Wl,@$(LIBC_UNDEFINED) -o $@ \
 		$(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
@@ -205,7 +205,7 @@ $(LIBC_LIBRARY): $(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-L$(dir $(NETWORK_LIBRARY)) \
 		-Wl,--no-as-needed \
-		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.7 \
+		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.12 \
 		-Wl,-l:network.library.1 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		-Wl,--start-group $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
@@ -219,18 +219,18 @@ libc-library-contract: $(LIBC_LIBRARY)
 	@python3 $(LIBC_EXPORT_CHECK) --readelf $(READELF) \
 		$(LIBC_EXPORTS) $(LIBC_LIBRARY)
 	@python3 ../../../tools/library_info.py $(LIBC_LIBRARY) | \
-		grep -q '^libc.library.3 3.0.0 ABI 3.0$$'
+		grep -q '^libc.library.4 4.0.0 ABI 4.0$$'
 	@$(READELF) -hW $(LIBC_LIBRARY) | grep -q 'Type:.*DYN'
 	@# The float ABI tag survives the link, so a soft-float program cannot
 	@# link against libc (docs/USERSPACE_FPU.md).
 	@$(READELF) -A $(LIBC_LIBRARY) | grep -q 'Tag_GNU_M68K_ABI_FP: hard float'
-	@$(READELF) -dW $(LIBC_LIBRARY) | grep -Fq 'Library soname: [libc.library.3]'
+	@$(READELF) -dW $(LIBC_LIBRARY) | grep -Fq 'Library soname: [libc.library.4]'
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [streams.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -Fc 'Shared library: [filesystem.library.7]')" = 1
+		grep -Fc 'Shared library: [filesystem.library.12]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
@@ -239,7 +239,7 @@ libc-library-contract: $(LIBC_LIBRARY)
 	@! $(READELF) -dW $(LIBC_LIBRARY) | grep -q 'TEXTREL'
 	@$(READELF) -lW $(LIBC_LIBRARY) | grep -q ' GNU_RELRO '
 	@$(READELF) -lW $(LIBC_LIBRARY) | grep -q ' TLS '
-	@$(READELF) -VW $(LIBC_LIBRARY) | grep -q 'ASTRA_LIBC_2_0'
+	@$(READELF) -VW $(LIBC_LIBRARY) | grep -q 'ASTRA_LIBC_4_0'
 	@python3 $(LIBC_API_CHECK) --cc $(CC) --readelf $(READELF) \
 		--include-dir $(PICOLIBC)/include --archive $(PICOLIBC_LIB) \
 		--library $(LIBC_LIBRARY) --extra $(LIBC_EXPORT_SOURCE) \
@@ -262,10 +262,12 @@ $(HOST_TEST): src/strftime_format.c tests/test_strftime_format.c
 	$(HOST_CC) -Iinclude -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
 		src/strftime_format.c tests/test_strftime_format.c -o $@
 
-$(PATH_TEST): src/path.c tests/test_path.c $(RUNTIME)/src/string.c
+PATH_HELPERS := $(VFS)/src/vfs_path.c ../../common/utf8.c
+
+$(PATH_TEST): src/path.c tests/test_path.c $(RUNTIME)/src/string.c $(PATH_HELPERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) -Isrc -I../../include -I$(NDK)/include -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
-	src/path.c $(RUNTIME)/src/string.c tests/test_path.c -o $@
+	src/path.c $(PATH_HELPERS) $(RUNTIME)/src/string.c tests/test_path.c -o $@
 
 $(DESCRIPTOR_TEST): src/console.c src/resource.c $(RUNTIME)/src/startup.c \
 		tests/heap_prepare_stub.c tests/test_descriptor.c
@@ -277,12 +279,12 @@ $(DESCRIPTOR_TEST): src/console.c src/resource.c $(RUNTIME)/src/startup.c \
 		tests/heap_prepare_stub.c \
 		tests/test_descriptor.c -o $@
 
-$(STARTUP_TEST): src/startup.c src/path.c $(RUNTIME)/src/string.c \
+$(STARTUP_TEST): src/startup.c src/path.c $(RUNTIME)/src/string.c $(PATH_HELPERS) \
 		tests/test_startup.c
 	@mkdir -p $(@D)
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
 		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
-		$(COMMON_FLAGS) -O2 -no-pie src/startup.c src/path.c \
+		$(COMMON_FLAGS) -O2 -no-pie src/startup.c src/path.c $(PATH_HELPERS) \
 		$(RUNTIME)/src/string.c tests/test_startup.c -o $@
 
 $(POLL_TEST): src/console.c src/poll.c src/resource.c $(RUNTIME)/src/startup.c \
@@ -478,7 +480,7 @@ $(LINK_CONTRACT): tests/link_standard_main.c kit/program.c $(LIBC_LIBRARY) \
 	@$(READELF) -lW $@ | grep -q ' INTERP '
 	@$(READELF) -p .interp $@ | grep -q 'loader.library.1'
 	@python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
-		--needed libc.library.3 --needed runtime.library.1 \
+		--needed libc.library.4 --needed runtime.library.1 \
 		--needed compiler.library.2 $@
 	@echo "astra posix dynamic standard main link: PASS"
 
@@ -515,7 +517,7 @@ sanitize:
 	./build/host/test_strftime_format_sanitize
 	$(HOST_CC) -Isrc -I../../include -I$(NDK)/include -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
-		src/path.c $(RUNTIME)/src/string.c tests/test_path.c \
+		src/path.c $(PATH_HELPERS) $(RUNTIME)/src/string.c tests/test_path.c \
 		-o build/host/test_path_sanitize
 	./build/host/test_path_sanitize
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \

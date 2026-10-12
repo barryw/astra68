@@ -438,7 +438,8 @@ enum {
     PORT_CLIENT_DRAINING,
     PORT_CLIENT_FAILED,
     PORT_CLIENT_CLEANING,
-    PORT_CLIENT_CLOSED
+    PORT_CLIENT_CLOSED,
+    PORT_CLIENT_REFRESHING
 };
 
 static uint32_t
@@ -487,9 +488,14 @@ port_client_finish(AstraVfsClient *client, int abandon)
 uint32_t
 astra_vfs_port_client_enter(AstraVfsClient *client)
 {
-    uint32_t state = __atomic_load_n(&client->port_lifecycle,
-                                     __ATOMIC_ACQUIRE);
+    uint32_t state;
 
+retry:
+    state = __atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE);
+    while (state == PORT_CLIENT_REFRESHING) {
+        (void)astra_futex_wait(&client->port_lifecycle, state, ASTRA_DEADLINE_FOREVER);
+        state = __atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE);
+    }
     if (state != PORT_CLIENT_OPEN) {
         (void)astra_log_failure("VFS port lifecycle", state);
         return ASTRA_VFS_ERR_PEER;
@@ -505,6 +511,8 @@ astra_vfs_port_client_enter(AstraVfsClient *client)
                         __ATOMIC_ACQUIRE) != 0u)
         (void)astra_futex_wake(&client->port_inflight, UINT32_MAX, NULL);
     state = __atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE);
+    if (state == PORT_CLIENT_REFRESHING)
+        goto retry;
     (void)astra_log_failure("VFS port lifecycle changed", state);
     return ASTRA_VFS_ERR_PEER;
 }
@@ -543,12 +551,18 @@ port_client_wait_idle(AstraVfsClient *client)
 static int
 port_client_begin_drain(AstraVfsClient *client)
 {
-    uint32_t expected = PORT_CLIENT_OPEN;
+    uint32_t expected;
 
-    if (!__atomic_compare_exchange_n(
-            &client->port_lifecycle, &expected, PORT_CLIENT_DRAINING, 0,
-            __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-        return 0;
+    for (;;) {
+        expected = PORT_CLIENT_OPEN;
+        if (__atomic_compare_exchange_n(
+                &client->port_lifecycle, &expected, PORT_CLIENT_DRAINING, 0,
+                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            break;
+        if (expected != PORT_CLIENT_REFRESHING)
+            return 0;
+        (void)astra_futex_wait(&client->port_lifecycle, expected, ASTRA_DEADLINE_FOREVER);
+    }
     port_client_wait_idle(client);
     return 1;
 }
@@ -559,13 +573,15 @@ port_client_fail(AstraVfsClient *client)
     uint32_t state = __atomic_load_n(&client->port_lifecycle,
                                      __ATOMIC_ACQUIRE);
 
-    while (state == PORT_CLIENT_OPEN || state == PORT_CLIENT_DRAINING) {
+    while (state == PORT_CLIENT_OPEN || state == PORT_CLIENT_DRAINING ||
+           state == PORT_CLIENT_REFRESHING) {
         if (__atomic_compare_exchange_n(
                 &client->port_lifecycle, &state, PORT_CLIENT_FAILED, 0,
                 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
             break;
     }
-    if (state != PORT_CLIENT_OPEN && state != PORT_CLIENT_DRAINING)
+    if (state != PORT_CLIENT_OPEN && state != PORT_CLIENT_DRAINING &&
+        state != PORT_CLIENT_REFRESHING)
         return;
     /* Closing receive capabilities wakes every lane blocked on a dead peer.
      * Mappings remain valid until the last in-flight caller leaves. */
@@ -575,6 +591,23 @@ port_client_fail(AstraVfsClient *client)
             (void)astra_close(client->port_lanes[index].reply_receive);
     __atomic_store_n(&client->port_connecting, 0u, __ATOMIC_RELEASE);
     (void)astra_futex_wake(&client->port_connecting, UINT32_MAX, NULL);
+    (void)astra_futex_wake(&client->port_lifecycle, UINT32_MAX, NULL);
+}
+
+void astra_vfs_port_fail(AstraVfsClient *client)
+{
+    if (client == NULL)
+        return;
+    port_client_fail(client);
+    if (__atomic_load_n(&client->port_inflight, __ATOMIC_ACQUIRE) == 0u)
+        port_client_finish(client, 0);
+}
+
+int astra_vfs_port_client_closed(const AstraVfsClient *client)
+{
+    return client != NULL &&
+        __atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE) ==
+            PORT_CLIENT_CLOSED;
 }
 
 static void
@@ -925,6 +958,50 @@ port_session_lane(AstraVfsClient *client)
     return lane;
 }
 
+uint32_t astra_vfs_port_refresh(AstraVfsClient *client)
+{
+    AstraVfsPortLane *lane;
+    AstraVfsRequest request = {0};
+    AstraVfsReply reply;
+    uint32_t expected = PORT_CLIENT_OPEN;
+    uint32_t status;
+
+    if (!__atomic_compare_exchange_n(&client->port_lifecycle, &expected,
+            PORT_CLIENT_REFRESHING, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        while (expected == PORT_CLIENT_REFRESHING) {
+            (void)astra_futex_wait(&client->port_lifecycle, expected, ASTRA_DEADLINE_FOREVER);
+            expected = __atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE);
+        }
+        return expected == PORT_CLIENT_OPEN ? ASTRA_VFS_OK : ASTRA_VFS_ERR_LOST;
+    }
+    port_client_wait_idle(client);
+    if (__atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE) != PORT_CLIENT_REFRESHING)
+        return ASTRA_VFS_ERR_LOST;
+    request.size = ASTRA_VFS_REQUEST_SIZE;
+    request.version = client->version;
+    request.session = port_client_session(client);
+    request.activity = client->activity;
+    lane = request.session == ASTRA_VFS_SESSION_INVALID ? port_lane(client) : port_session_lane(client);
+    status = lane == NULL ? ASTRA_VFS_ERR_BAD_HANDLE :
+        vfs_port_transport_call(client, ASTRA_VFS_OP_HELLO, &request, &reply, lane);
+    if (status == ASTRA_VFS_OK)
+        status = reply.status;
+    expected = PORT_CLIENT_REFRESHING;
+    if (!__atomic_compare_exchange_n(&client->port_lifecycle, &expected,
+            PORT_CLIENT_OPEN, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        port_client_finish(client, 0);
+        status = ASTRA_VFS_ERR_LOST;
+    }
+    (void)astra_futex_wake(&client->port_lifecycle, UINT32_MAX, NULL);
+    return astra_vfs_storage_status(status);
+}
+
+static uint32_t port_data_enter(AstraVfsClient *client)
+{
+    return client->direct_backend_enter != NULL ?
+        client->direct_backend_enter(client) : astra_vfs_port_client_enter(client);
+}
+
 uint32_t
 astra_vfs_port_transport(void *context, uint32_t operation,
                          const AstraVfsRequest *request, AstraVfsReply *reply)
@@ -955,7 +1032,14 @@ astra_vfs_port_transport(void *context, uint32_t operation,
         port_client_finish(client, 0);
         return status;
     }
-    status = astra_vfs_port_client_enter(client);
+    /* Area exchanges already run inside the public data operation's guard. */
+    status = operation == ASTRA_VFS_OP_BIND_AREA ||
+             operation == ASTRA_VFS_OP_BIND_LANE ||
+             operation == ASTRA_VFS_OP_READ_AREA ||
+             operation == ASTRA_VFS_OP_WRITE_AREA ||
+             operation == ASTRA_VFS_OP_READDIR_AREA ||
+             operation == ASTRA_VFS_OP_READ_PATH ?
+        astra_vfs_port_client_enter(client) : port_data_enter(client);
     if (status != ASTRA_VFS_OK)
         return status;
     if (operation != ASTRA_VFS_OP_HELLO) {
@@ -1122,6 +1206,7 @@ vfs_port_transport_call(void *context, uint32_t operation,
     if (client->port_direct_address != NULL &&
         client->port_accelerator_ops != NULL &&
         operation != ASTRA_VFS_OP_BYE &&
+        operation != ASTRA_VFS_OP_HELLO &&
         operation != ASTRA_VFS_OP_GRANT_DERIVE) {
         if (operation == ASTRA_VFS_OP_READDIR_AREA ||
             operation == ASTRA_VFS_OP_BIND_AREA)
@@ -1253,12 +1338,11 @@ vfs_port_transport_call(void *context, uint32_t operation,
      * forwarded to the caller as a status, because the caller would read a
      * field nobody filled in.
      */
-    /* A reply carries a handle only on a HELLO from version 28 (the
-     * grant's scope) or on GRANT_DERIVE (the new grant's port). */
+    /* HELLO carries the grant's scope; GRANT_DERIVE carries its new port. */
     if (size != sizeof(*incoming) || reply_handle_count > 1u ||
         (reply_handle_count != 0u &&
          !((wire_operation == ASTRA_VFS_OP_HELLO &&
-            incoming->reply.version >= UINT16_C(28)) ||
+            incoming->reply.version == ASTRA_VFS_VERSION) ||
            wire_operation == ASTRA_VFS_OP_GRANT_DERIVE)) ||
         incoming->header.protocol != ASTRA_VFS_PROTOCOL ||
         incoming->header.operation != wire_operation ||
@@ -1274,12 +1358,17 @@ vfs_port_transport_call(void *context, uint32_t operation,
         wire_operation == ASTRA_VFS_OP_GRANT_DERIVE) {
         port_state(client)->received_handle = reply_handles[0];
     } else if (reply_handle_count == 1u) {
+        if (client->port_direct_address != NULL && client->port_accelerator_ops != NULL)
+            client->port_accelerator_ops->disconnect(client);
         status = client->port_accelerator_ops != NULL ?
             client->port_accelerator_ops->connect(client,
                                                   reply_handles[0]) :
             ASTRA_VFS_ERR_UNSUPPORTED;
-        if (status != ASTRA_VFS_OK)
+        if (status != ASTRA_VFS_OK) {
             (void)astra_close(reply_handles[0]);
+            reply->status = status;
+            port_client_fail(client);
+        }
     }
     if (fused_hello && reply->session != ASTRA_VFS_SESSION_INVALID) {
         port_client_publish_session(client, reply->session, reply->version,
@@ -1336,7 +1425,7 @@ astra_vfs_grant_derive(AstraVfsClient *client, const char *root,
     if (client->port_accelerator_ops != NULL) {
         status = ensure_accelerated_connection(client);
         if (status != ASTRA_VFS_OK)
-            return status;
+            return astra_vfs_storage_status(status);
     }
     /* A fork child's lane client holds no session at its grant's port
      * (vfs_host_direct.c astra_vfs_host_direct_after_fork). */
@@ -1354,7 +1443,7 @@ astra_vfs_grant_derive(AstraVfsClient *client, const char *root,
     if (astra_wait_one_restart(client->port_connect_lock,
                                ASTRA_DEADLINE_FOREVER, NULL) !=
         ASTRA_SYSCALL_OK)
-        return ASTRA_VFS_ERR_PEER;
+        return ASTRA_VFS_ERR_LOST;
     port_state(client)->received_handle = 0u;
     status = astra_vfs_port_transport(client, ASTRA_VFS_OP_GRANT_DERIVE,
                                       &request, &reply);
@@ -1367,7 +1456,7 @@ astra_vfs_grant_derive(AstraVfsClient *client, const char *root,
         if (*handle != 0u)
             (void)astra_close(*handle);
         *handle = 0u;
-        return status;
+        return astra_vfs_storage_status(status);
     }
     return *handle != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_PROTOCOL;
 }
@@ -1588,12 +1677,12 @@ astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
 
     if (client == NULL || path == NULL || bytes == NULL || moved == NULL)
         return ASTRA_VFS_ERR_INVALID;
-    status = astra_vfs_port_client_enter(client);
+    status = port_data_enter(client);
     if (status == ASTRA_VFS_OK) {
         status = port_read_path_call(client, path, bytes, moved, node_size);
         astra_vfs_port_client_leave(client);
     }
-    return status;
+    return astra_vfs_storage_status(status);
 }
 
 uint32_t
@@ -1616,7 +1705,7 @@ astra_vfs_port_read_path_inline(AstraVfsClient *client, const char *path,
     status = astra_vfs_port_transport(client, ASTRA_VFS_OP_READ_PATH,
                                       &port_call.request, &port_call.reply);
     if (status != ASTRA_VFS_OK)
-        return status;
+        return astra_vfs_storage_status(status);
     if (node_size != NULL)
         *node_size = port_call.reply.node_size;
     if (port_call.reply.status != ASTRA_VFS_OK)
@@ -1704,6 +1793,8 @@ port_read_borrow_cached(AstraVfsClient *client, AstraVfsFile file,
 
     if (__atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE) !=
             PORT_CLIENT_OPEN ||
+        /* A refreshed scope keeps its control session, but loses old files. */
+        client->port_accelerator_ops != NULL ||
         state->borrow_valid == 0u ||
         state->borrow_client != client || state->request.file != file ||
         offset < state->request.offset)
@@ -1730,41 +1821,54 @@ astra_vfs_port_read_borrow(AstraVfsClient *client, AstraVfsFile file,
     *moved = 0u;
     if (port_read_borrow_cached(client, file, offset, length, bytes, moved))
         return ASTRA_VFS_OK;
-    status = astra_vfs_port_client_enter(client);
+    status = port_data_enter(client);
     if (status == ASTRA_VFS_OK) {
         status = port_read_borrow_call(client, file, offset, length, bytes,
                                        moved);
         astra_vfs_port_client_leave(client);
     }
-    return status;
+    return astra_vfs_storage_status(status);
 }
 
 static uint32_t
 port_read_bulk_call(AstraVfsClient *client, AstraVfsFile file,
-                    uint64_t offset, void *buffer, uint32_t length,
-                    uint32_t *moved)
+                    uint64_t offset, uint32_t flags, void *buffer,
+                    uint32_t length, uint32_t *moved, uint64_t *position)
 {
     AstraVfsPortLane *lane;
     uint8_t *out = buffer;
     const uint8_t *shared;
     uint32_t status;
-    uint32_t index;
 
-    if (client == NULL || buffer == NULL || moved == NULL || length == 0u)
+    if (client == NULL || buffer == NULL || moved == NULL ||
+        position == NULL || length == 0u ||
+        (flags & ~ASTRA_VFS_IO_SEQUENTIAL) != 0u)
         return ASTRA_VFS_ERR_INVALID;
     *moved = 0u;
+    *position = offset;
+    if ((flags & ASTRA_VFS_IO_SEQUENTIAL) != 0u &&
+        (client->features & ASTRA_VFS_FEATURE_DESCRIPTIONS) == 0u)
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    if (client->transport != astra_vfs_port_transport)
+        return astra_vfs_read_position(
+            client, file, offset, flags, buffer,
+            length < ASTRA_VFS_IO_MAX ? length : ASTRA_VFS_IO_MAX,
+            moved, position);
     if (client->direct_backend_ops != NULL) {
-        status = client->direct_backend_ops->read(
-            client->direct_backend_context, file, offset, buffer, length,
-            moved);
-        return status == ASTRA_VFS_OK && *moved > length ?
-            ASTRA_VFS_ERR_PROTOCOL : status;
+        AstraVfsBackend backend = {
+            client->direct_backend_ops, client->direct_backend_context
+        };
+
+        return astra_vfs_backend_read_position(&backend, file, offset,
+                                                flags, buffer, length,
+                                                moved, position);
     }
     if (direct_accelerated(client)) {
         prepare_request(client, ASTRA_VFS_OP_READ_AREA);
         port_call.request.file = file;
         port_call.request.offset = offset;
         port_call.request.length = length;
+        port_call.request.flags = flags;
         status = client->port_accelerator_ops->bulk(
             client, ASTRA_VFS_OP_READ_AREA, &port_call.request, buffer,
             length, &port_call.reply);
@@ -1775,6 +1879,7 @@ port_read_bulk_call(AstraVfsClient *client, AstraVfsFile file,
         if (port_call.reply.count > length)
             return ASTRA_VFS_ERR_PROTOCOL;
         *moved = port_call.reply.count;
+        *position = port_call.reply.position;
         return ASTRA_VFS_OK;
     }
     lane = port_lane(client);
@@ -1787,6 +1892,7 @@ port_read_bulk_call(AstraVfsClient *client, AstraVfsFile file,
     port_call.request.file = file;
     port_call.request.offset = offset;
     port_call.request.length = length;
+    port_call.request.flags = flags;
     status = astra_vfs_port_transport(client, ASTRA_VFS_OP_READ_AREA,
                                       &port_call.request, &port_call.reply);
     if (status != ASTRA_VFS_OK)
@@ -1796,9 +1902,9 @@ port_read_bulk_call(AstraVfsClient *client, AstraVfsFile file,
     if (port_call.reply.count > length)
         return ASTRA_VFS_ERR_PROTOCOL;
     shared = lane->area_address;
-    (void)index;
     memcpy(out, shared, port_call.reply.count);
     *moved = port_call.reply.count;
+    *position = port_call.reply.position;
     return ASTRA_VFS_OK;
 }
 
@@ -1807,22 +1913,36 @@ astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
                          uint64_t offset, void *buffer, uint32_t length,
                          uint32_t *moved)
 {
+    uint64_t position;
+
+    return astra_vfs_port_read_bulk_position(client, file, offset, 0u,
+                                             buffer, length, moved,
+                                             &position);
+}
+
+uint32_t
+astra_vfs_port_read_bulk_position(AstraVfsClient *client, AstraVfsFile file,
+                                  uint64_t offset, uint32_t flags,
+                                  void *buffer, uint32_t length,
+                                  uint32_t *moved, uint64_t *position)
+{
     uint32_t status;
 
-    if (client == NULL || buffer == NULL || moved == NULL || length == 0u)
+    if (client == NULL || buffer == NULL || moved == NULL ||
+        position == NULL || length == 0u)
         return ASTRA_VFS_ERR_INVALID;
-    status = astra_vfs_port_client_enter(client);
+    status = port_data_enter(client);
     if (status == ASTRA_VFS_OK) {
-        status = port_read_bulk_call(client, file, offset, buffer, length,
-                                     moved);
+        status = port_read_bulk_call(client, file, offset, flags, buffer,
+                                     length, moved, position);
         astra_vfs_port_client_leave(client);
     }
-    return status;
+    return astra_vfs_storage_status(status);
 }
 
 static uint32_t
 port_write_bulk_call(AstraVfsClient *client, AstraVfsFile file,
-                     uint64_t offset, uint32_t flags, const void *buffer,
+                     uint64_t offset, uint32_t flags, uint64_t max_end, const void *buffer,
                      uint32_t length, uint32_t *moved, uint64_t *position)
 {
     AstraVfsPortLane *lane;
@@ -1830,18 +1950,19 @@ port_write_bulk_call(AstraVfsClient *client, AstraVfsFile file,
 
     if (client == NULL || buffer == NULL || moved == NULL ||
         position == NULL || length == 0u ||
-        (flags & ~ASTRA_VFS_WRITE_APPEND) != 0u)
+        (flags & ~(ASTRA_VFS_WRITE_APPEND |
+                    ASTRA_VFS_IO_SEQUENTIAL)) != 0u)
         return ASTRA_VFS_ERR_INVALID;
     *moved = 0u;
     *position = offset;
     if (client->transport != astra_vfs_port_transport)
         return astra_vfs_write_position(
-            client, file, offset, flags, buffer,
+            client, file, offset, flags, max_end, buffer,
             length < ASTRA_VFS_IO_MAX ? length : ASTRA_VFS_IO_MAX,
             moved, position);
     if (client->direct_backend_ops != NULL) {
         status = client->direct_backend_ops->write(
-            client->direct_backend_context, file, offset, flags, buffer,
+            client->direct_backend_context, file, offset, flags, max_end, buffer,
             length, moved, position);
         return status == ASTRA_VFS_OK && *moved > length ?
             ASTRA_VFS_ERR_PROTOCOL : status;
@@ -1852,6 +1973,7 @@ port_write_bulk_call(AstraVfsClient *client, AstraVfsFile file,
         port_call.request.offset = offset;
         port_call.request.length = length;
         port_call.request.flags = flags;
+        port_call.request.write_limit = max_end;
         status = client->port_accelerator_ops->bulk(
             client, ASTRA_VFS_OP_WRITE_AREA, &port_call.request,
             (void *)buffer, length, &port_call.reply);
@@ -1862,7 +1984,7 @@ port_write_bulk_call(AstraVfsClient *client, AstraVfsFile file,
         if (port_call.reply.count > length)
             return ASTRA_VFS_ERR_PROTOCOL;
         *moved = port_call.reply.count;
-        *position = port_call.reply.node_size;
+        *position = port_call.reply.position;
         return ASTRA_VFS_OK;
     }
     lane = port_lane(client);
@@ -1877,6 +1999,7 @@ port_write_bulk_call(AstraVfsClient *client, AstraVfsFile file,
     port_call.request.offset = offset;
     port_call.request.length = length;
     port_call.request.flags = flags;
+    port_call.request.write_limit = max_end;
     status = astra_vfs_port_transport(client, ASTRA_VFS_OP_WRITE_AREA,
                                       &port_call.request, &port_call.reply);
     if (status != ASTRA_VFS_OK)
@@ -1886,25 +2009,25 @@ port_write_bulk_call(AstraVfsClient *client, AstraVfsFile file,
     if (port_call.reply.count > length)
         return ASTRA_VFS_ERR_PROTOCOL;
     *moved = port_call.reply.count;
-    *position = port_call.reply.node_size;
+    *position = port_call.reply.position;
     return ASTRA_VFS_OK;
 }
 
 uint32_t
 astra_vfs_port_write_bulk(AstraVfsClient *client, AstraVfsFile file,
-                          uint64_t offset, const void *buffer, uint32_t length,
+                          uint64_t offset, uint64_t max_end, const void *buffer, uint32_t length,
                           uint32_t *moved)
 {
     uint64_t position = offset;
 
     return astra_vfs_port_write_bulk_position(
-        client, file, offset, 0u, buffer, length, moved, &position);
+        client, file, offset, 0u, max_end, buffer, length, moved, &position);
 }
 
 uint32_t
 astra_vfs_port_write_bulk_position(
     AstraVfsClient *client, AstraVfsFile file, uint64_t offset,
-    uint32_t flags, const void *buffer, uint32_t length, uint32_t *moved,
+    uint32_t flags, uint64_t max_end, const void *buffer, uint32_t length, uint32_t *moved,
     uint64_t *position)
 {
     uint32_t status;
@@ -1912,13 +2035,13 @@ astra_vfs_port_write_bulk_position(
     if (client == NULL || buffer == NULL || moved == NULL ||
         position == NULL || length == 0u)
         return ASTRA_VFS_ERR_INVALID;
-    status = astra_vfs_port_client_enter(client);
+    status = port_data_enter(client);
     if (status == ASTRA_VFS_OK) {
-        status = port_write_bulk_call(client, file, offset, flags, buffer,
+        status = port_write_bulk_call(client, file, offset, flags, max_end, buffer,
                                       length, moved, position);
         astra_vfs_port_client_leave(client);
     }
-    return status;
+    return astra_vfs_storage_status(status);
 }
 
 static int
@@ -2265,7 +2388,8 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
     AstraVfsReplyMessage *outgoing;
     uint32_t answered = 0u;
     const uint32_t grant_id = grant != NULL ? grant->id : 0u;
-    const uint32_t features = grant != NULL ? ASTRA_VFS_FEATURE_GRANTS : 0u;
+    const uint32_t features = grant != NULL ?
+        ASTRA_VFS_FEATURE_GRANTS | grant->features : 0u;
 
     if (host == NULL || worker == NULL || receive == 0u ||
         host->service == NULL) {
@@ -2342,7 +2466,7 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
         lane_id = incoming->header.transaction_id;
         /* Below ASTRA_VFS_VERSION_MIN only HELLO is answered, and the
          * service core answers it ASTRA_VFS_ERR_PROTOCOL: no older request
-         * layout is served (storage protocol 28). */
+         * layout is served. */
         if (lane_id == 0u ||
             (incoming->request.version < ASTRA_VFS_VERSION_MIN &&
              wire_operation != ASTRA_VFS_OP_HELLO)) {
@@ -2374,8 +2498,6 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
         if (wire_operation == ASTRA_VFS_OP_HELLO) {
             if (handle_count != 1u) {
                 port_refuse(host);
-                if (handle_count != 0u)
-                    (void)astra_close(handles[0]);
                 continue;
             }
             /*
@@ -2419,7 +2541,7 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
          * device (FS44). It travels without ADMINISTER, and the kernel
          * strips TRANSFER on arrival unless the scope is delegable. */
         if (wire_operation == ASTRA_VFS_OP_HELLO &&
-            incoming->request.version >= UINT16_C(28) && grant != NULL &&
+            incoming->request.version >= ASTRA_VFS_VERSION_MIN && grant != NULL &&
             grant->scope != 0u) {
             if (astra_rt_handle_duplicate(
                     grant->scope,
@@ -2433,6 +2555,10 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
 
         clear_service_reply(&outgoing->reply, incoming->request.version,
                             incoming->request.session);
+        if (grant != NULL && grant->lost != 0u) {
+            outgoing->reply.status = ASTRA_VFS_ERR_LOST;
+            goto answer_ready;
+        }
         /* A grant's session is worth nothing without its scope: refuse
          * the HELLO rather than open one with no lane. */
         if (scope_refused) {
@@ -2620,7 +2746,8 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
 
             if (lease.area == NULL ||
                 incoming->request.length == 0u ||
-                incoming->request.length > lease.area_size) {
+                incoming->request.length > lease.area_size ||
+                incoming->request.flags != 0u) {
                 astra_vfs_service_dispatch(host->service,
                                            ASTRA_VFS_OP_READ,
                                            &piece, &outgoing->reply);
@@ -2640,6 +2767,8 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
                     incoming->request.length, &total);
                 outgoing->reply.count =
                     outgoing->reply.status == ASTRA_VFS_OK ? total : 0u;
+                if (outgoing->reply.status == ASTRA_VFS_OK)
+                    outgoing->reply.position = incoming->request.offset + total;
                 (void)piece;
             }
         } else if (operation == ASTRA_VFS_OP_WRITE_AREA && slot >= 0) {
@@ -2656,12 +2785,12 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
                     astra_vfs_service_write_position_from(
                     host->service, incoming->request.session,
                     incoming->request.file, incoming->request.offset,
-                    incoming->request.flags, lease.area,
+                    incoming->request.flags, incoming->request.write_limit, lease.area,
                     incoming->request.length, &total, &position);
                 outgoing->reply.count =
                     outgoing->reply.status == ASTRA_VFS_OK ? total : 0u;
                 if (outgoing->reply.status == ASTRA_VFS_OK)
-                    outgoing->reply.node_size = position;
+                    outgoing->reply.position = position;
             }
         } else if (operation == ASTRA_VFS_OP_GRANT_DERIVE) {
             const char *root = (const char *)incoming->request.body.path;
@@ -2675,7 +2804,7 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
             /* Never wider: the new rights are a subset of this grant's, and
              * every grant reads. The root is resolved by whoever derives,
              * beneath this grant's root. */
-            if (incoming->request.version < UINT16_C(29) || grant == NULL ||
+            if (grant == NULL ||
                 host->derive == NULL)
                 outgoing->reply.status = ASTRA_VFS_ERR_UNSUPPORTED;
             else if ((incoming->request.flags & ~grant->rights) != 0u ||
@@ -2726,11 +2855,21 @@ answer_ready:
                     (uint32_t)sizeof(*outgoing),
                     incoming->header.transaction_id);
         if (persistent_hello && outgoing->reply.status == ASTRA_VFS_OK) {
-            slot = reply_bind_acquire(host, outgoing->reply.session, lane_id,
-                                      reply_handle, &lease);
+            if (incoming->request.session != ASTRA_VFS_SESSION_INVALID &&
+                reply_acquire(host, outgoing->reply.session, lane_id, &lease)) {
+                slot = lease.slot;
+                (void)astra_close(reply_handle);
+                reply_handle = lease.handle;
+                if (!lease.active)
+                    outgoing->reply.status = ASTRA_VFS_ERR_BUSY;
+            } else {
+                slot = reply_bind_acquire(host, outgoing->reply.session, lane_id,
+                                          reply_handle, &lease);
+            }
             if (slot < 0) {
-                astra_vfs_service_release_session(host->service,
-                                                  outgoing->reply.session);
+                if (incoming->request.session == ASTRA_VFS_SESSION_INVALID)
+                    astra_vfs_service_release_session(host->service,
+                                                      outgoing->reply.session);
                 outgoing->reply.session = ASTRA_VFS_SESSION_INVALID;
                 outgoing->reply.status = ASTRA_VFS_ERR_LIMIT;
             }

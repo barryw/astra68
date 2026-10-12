@@ -12,7 +12,7 @@ from test_remote_desktop import connect, receive_exact
 
 
 MAGIC = 0x41554431
-VERSION = 3
+VERSION = 6
 # sw/include/astra/pcm_format.h: encoding | channels << 8 | rate << 12
 S16BE_STEREO = 2 | 2 << 8 | 48000 << 12
 
@@ -36,6 +36,19 @@ def test_select_marker():
         pass
     else:
         raise AssertionError("silent PCM was accepted as a sync marker")
+
+
+def test_host_request():
+    client, server = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    try:
+        server.sendall(struct.pack("<10I", MAGIC, 0, 7, 13, 23, 0, 0, 0, 0, 0))
+        reply = host_request(client, 2, handle=7, data=b"PCM!")
+        assert server.recv(64) == struct.pack("<8I", MAGIC, 6, 2, 7,
+                                              0, 0, 0, 4) + b"PCM!"
+        assert len(reply) == 10 and reply[4] == 23
+    finally:
+        client.close()
+        server.close()
 
 
 def receive_audio(connection):
@@ -67,9 +80,9 @@ def receive_audio(connection):
 
 
 def host_request(connection, operation, handle=0, value=0, data=b""):
-    connection.sendall(struct.pack("<7I", MAGIC, VERSION, operation,
-                                   handle, value, 0, len(data)) + data)
-    reply = struct.unpack("<9I", receive_exact(connection, 36))
+    connection.sendall(struct.pack("<8I", MAGIC, VERSION, operation,
+                                   handle, value, 0, 0, len(data)) + data)
+    reply = struct.unpack("<10I", receive_exact(connection, 40))
     if reply[:2] != (MAGIC, 0):
         raise AssertionError(f"audio host rejected operation {operation}: {reply}")
     return reply
@@ -92,10 +105,10 @@ def play_pcm(path, samples):
                 if time.monotonic() >= deadline:
                     raise AssertionError("audio host queue did not drain")
                 time.sleep(0.002)
-                queued = host_request(connection, 4, handle=handle)[3]
-            queued = host_request(connection, 2, handle=handle, data=data)[3]
+                queued = host_request(connection, 4, handle=handle)[4]
+            queued = host_request(connection, 2, handle=handle, data=data)[4]
         host_request(connection, 6, handle=handle)
-        while host_request(connection, 4, handle=handle)[3] != 0:
+        while host_request(connection, 4, handle=handle)[4] != 0:
             if time.monotonic() >= deadline:
                 raise AssertionError("audio host voice did not finish")
             time.sleep(0.002)
@@ -201,6 +214,7 @@ def main():
 if __name__ == "__main__":
     if sys.argv[1:] == ["--self-test"]:
         test_select_marker()
+        test_host_request()
         print("ASTRA_REMOTE_DESKTOP_AUDIO_MARKER PASS")
     else:
         main()

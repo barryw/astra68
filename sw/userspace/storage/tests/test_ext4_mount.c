@@ -838,6 +838,11 @@ static int
 check_journal_failure_contract(void)
 {
     ext4_file file;
+    AstraVfsExt4File files[1] = {0};
+    AstraVfsExt4Backend backend;
+    AstraVfsNodeInfo info = {0};
+    uintptr_t node = 0u;
+    uint32_t status;
     int rc;
 
     if (write_file(MOUNT_POINT "journal-failure", 242u, 1u))
@@ -849,7 +854,14 @@ check_journal_failure_contract(void)
     rc = ext4_fopen(&file, MOUNT_POINT "after-journal-failure", "wb");
     if (rc == EOK)
         (void)ext4_fclose(&file);
-    return rc == EROFS ? 0 : fail("aborted journal accepted mutation", rc);
+    if (rc != EROFS)
+        return fail("aborted journal accepted mutation", rc);
+    if (!astra_vfs_ext4_init(&backend, MOUNT_POINT, files, 1u))
+        return fail("aborted journal VFS init", 0);
+    status = astra_vfs_ext4_ops()->open(&backend, "/after-journal-failure",
+        ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE, 0600u, &node, &info);
+    return status == ASTRA_VFS_ERR_READ_ONLY ? 0 :
+        fail("aborted journal VFS lost read-only status", (int)status);
 }
 
 static int
@@ -1231,17 +1243,27 @@ check_vfs_nonrecursive_unlink(void)
     if (rc != ENOENT)
         return fail("missing name is ENOENT", rc);
 
-    status = ops->unlink(&backend, "/vfs-nonempty");
+    status = ops->unlink(&backend, "/vfs-nonempty/child",
+                          ASTRA_VFS_UNLINK_DIRECTORY);
+    if (status != ASTRA_VFS_ERR_NOT_DIR)
+        return fail("VFS directory removal rejects file", (int)status);
+    status = ops->unlink(&backend, "/vfs-empty", 0u);
+    if (status != ASTRA_VFS_ERR_IS_DIR)
+        return fail("VFS file removal rejects directory", (int)status);
+    status = ops->unlink(&backend, "/vfs-nonempty", ASTRA_VFS_UNLINK_DIRECTORY);
     if (status != ASTRA_VFS_ERR_NOT_EMPTY)
         return fail("VFS nonempty unlink must fail", (int)status);
-    status = ops->unlink(&backend, "/");
+    status = ops->unlink(&backend, "/", 0u);
+    if (status != ASTRA_VFS_ERR_IS_DIR)
+        return fail("VFS file removal rejects root directory", (int)status);
+    status = ops->unlink(&backend, "/", ASTRA_VFS_UNLINK_DIRECTORY);
     if (status != ASTRA_VFS_ERR_BUSY)
         return fail("VFS root unlink must fail", (int)status);
     rc = ext4_fopen2(&child, MOUNT_POINT "vfs-nonempty/child", O_RDONLY);
     if (rc != EOK)
         return fail("VFS rejected unlink preserved child", rc);
     (void)ext4_fclose(&child);
-    status = ops->unlink(&backend, "/vfs-empty");
+    status = ops->unlink(&backend, "/vfs-empty", ASTRA_VFS_UNLINK_DIRECTORY);
     if (status != ASTRA_VFS_OK)
         return fail("VFS empty unlink", (int)status);
     rc = ext4_fopen2(&child, MOUNT_POINT "vfs-empty", O_RDONLY);
@@ -1250,7 +1272,7 @@ check_vfs_nonrecursive_unlink(void)
     rc = ext4_fremove(MOUNT_POINT "vfs-nonempty/child");
     if (rc != EOK)
         return fail("VFS unlink test child cleanup", rc);
-    status = ops->unlink(&backend, "/vfs-nonempty");
+    status = ops->unlink(&backend, "/vfs-nonempty", ASTRA_VFS_UNLINK_DIRECTORY);
     if (status != ASTRA_VFS_OK)
         return fail("VFS now-empty unlink", (int)status);
     status = ops->filesystem_info(&backend, 0u, "/", &capacity);
@@ -1301,6 +1323,16 @@ check_vfs_open_at_after_rename(void)
     if (status != ASTRA_VFS_OK || child == 0u ||
         info.kind != ASTRA_VFS_KIND_FILE || (info.mode & 0777u) != 0600u)
         return fail("VFS create through renamed directory", (int)status);
+    status = ops->chmod_node(&backend, child, 0u);
+    if (status != ASTRA_VFS_OK)
+        return fail("VFS chmod zero permissions", (int)status);
+    status = ops->stat_node(&backend, child, &info);
+    if (status != ASTRA_VFS_OK || (info.mode & 07777u) != 0u ||
+        (info.meta.valid & (ASTRA_VFS_META_MODE | ASTRA_VFS_META_NLINK |
+                            ASTRA_VFS_META_OWNER)) !=
+            (ASTRA_VFS_META_MODE | ASTRA_VFS_META_NLINK | ASTRA_VFS_META_OWNER) ||
+        info.meta.nlink != 1u)
+        return fail("VFS zero permissions are known", (int)status);
     status = ops->chmod_node(&backend, child, 0640u);
     if (status != ASTRA_VFS_OK)
         return fail("VFS chmod live inode", (int)status);
@@ -1324,20 +1356,20 @@ check_vfs_open_at_after_rename(void)
     rc = ext4_inode_exist(MOUNT_POINT "vfs-at/child", EXT4_DE_REG_FILE);
     if (rc != ENOENT)
         return fail("VFS open-at stale path absent", rc);
-    status = ops->stat_at(&backend, directory, "child", &info);
+    status = ops->stat_at(&backend, directory, "child", 0u, &info);
     if (status != ASTRA_VFS_OK || info.kind != ASTRA_VFS_KIND_FILE ||
         (info.mode & 0777u) != 0640u)
         return fail("VFS stat-at renamed directory child", (int)status);
     status = ops->chmod_at(&backend, directory, "child", 0600u, 0u);
     if (status != ASTRA_VFS_OK)
         return fail("VFS chmod-at renamed directory child", (int)status);
-    status = ops->stat_at(&backend, directory, "child", &info);
+    status = ops->stat_at(&backend, directory, "child", 0u, &info);
     if (status != ASTRA_VFS_OK || (info.mode & 0777u) != 0600u)
         return fail("VFS chmod-at mode persisted", (int)status);
     status = ops->chmod_at(&backend, directory, "missing", 0600u, 0u);
     if (status != ASTRA_VFS_ERR_NOT_FOUND)
         return fail("VFS chmod-at missing child", (int)status);
-    status = ops->stat_at(&backend, directory, "missing", &info);
+    status = ops->stat_at(&backend, directory, "missing", 0u, &info);
     if (status != ASTRA_VFS_ERR_NOT_FOUND)
         return fail("VFS stat-at missing child", (int)status);
     status = ops->open_at(&backend, directory, "missing",
@@ -1351,7 +1383,7 @@ check_vfs_open_at_after_rename(void)
     if (status != ASTRA_VFS_ERR_INVALID)
         return fail("VFS open-at rejects absolute path", (int)status);
     status = ops->unlink_at(&backend, directory, "child",
-                             ASTRA_VFS_AT_REMOVE_DIRECTORY);
+                             ASTRA_VFS_UNLINK_DIRECTORY);
     if (status != ASTRA_VFS_ERR_NOT_DIR)
         return fail("VFS unlink-at file as directory", (int)status);
     status = ops->unlink_at(&backend, directory, "child", 0u);
@@ -1367,12 +1399,12 @@ check_vfs_open_at_after_rename(void)
     if (status != ASTRA_VFS_ERR_IS_DIR)
         return fail("VFS unlink-at directory as file", (int)status);
     status = ops->unlink_at(&backend, directory, "empty",
-                             ASTRA_VFS_AT_REMOVE_DIRECTORY);
+                             ASTRA_VFS_UNLINK_DIRECTORY);
     if (status != ASTRA_VFS_OK)
         return fail("VFS unlink-at empty directory", (int)status);
     if (ops->close(&backend, directory) != ASTRA_VFS_OK)
         return fail("VFS close open-at directory", 0);
-    if (ops->unlink(&backend, "/vfs-at-renamed") != ASTRA_VFS_OK)
+    if (ops->unlink(&backend, "/vfs-at-renamed", ASTRA_VFS_UNLINK_DIRECTORY) != ASTRA_VFS_OK)
         return fail("VFS open-at directory cleanup", 0);
     puts("VFS open-at: renamed directory inode retained; bad paths rejected");
     return 0;
@@ -2038,6 +2070,7 @@ race_release_pair(void)
 enum MutationOperation {
     MUTATION_CREATE_EXCLUSIVE,
     MUTATION_WRITE,
+    MUTATION_WRITE_AT,
     MUTATION_TRUNCATE,
     MUTATION_RENAME,
     MUTATION_UNLINK
@@ -2050,6 +2083,9 @@ typedef struct MutationJob {
     ext4_file *file;
     const uint8_t *bytes;
     size_t length;
+    uint64_t offset;
+    uint64_t max_end;
+    int append;
     int rc;
     size_t moved;
 } MutationJob;
@@ -2073,6 +2109,10 @@ run_mutation(void *argument)
         job->rc = ext4_frename(job->path, job->to);
     } else if (job->operation == MUTATION_UNLINK) {
         job->rc = ext4_fremove(job->path);
+    } else if (job->operation == MUTATION_WRITE_AT) {
+        job->rc = ext4_fwrite_at(job->file, job->offset, job->append,
+                                  job->max_end, job->bytes, job->length,
+                                  &job->moved);
     } else {
         job->rc = ext4_fwrite(job->file, job->bytes, job->length,
                               &job->moved);
@@ -2170,6 +2210,61 @@ check_concurrent_mutation_linearization(void)
         if (result[index] != expected)
             return fail("append write was torn", 0);
     }
+
+    if (ext4_fopen(&check, append_path, "wb") != EOK ||
+        ext4_fclose(&check) != EOK ||
+        ext4_fopen(&left_file, append_path, "ab") != EOK ||
+        ext4_fopen(&right_file, append_path, "ab") != EOK)
+        return fail("bounded append setup", 0);
+    left = (MutationJob){.operation = MUTATION_WRITE_AT, .file = &left_file,
+        .bytes = left_bytes, .length = sizeof(left_bytes), .append = 1,
+        .max_end = 3072u};
+    right = (MutationJob){.operation = MUTATION_WRITE_AT, .file = &right_file,
+        .bytes = right_bytes, .length = sizeof(right_bytes), .append = 1,
+        .max_end = 3072u};
+    if (run_mutation_pair(&left, &right) ||
+        !((left.rc == EOK && left.moved == 3072u && right.rc == EFBIG && right.moved == 0u) ||
+          (right.rc == EOK && right.moved == 3072u && left.rc == EFBIG && left.moved == 0u)))
+        return fail("bounded independent append race", 0);
+    if (ext4_fwrite_at(&right_file, 0u, false, 2u, "YZQ", 3u, &moved) != EOK ||
+        moved != 2u || ext4_ftell(&right_file) != 2u ||
+        ext4_fwrite_at(&right_file, 2u, false, 2u, "x", 1u, &moved) != EFBIG ||
+        moved != 0u || ext4_ftell(&right_file) != 2u ||
+        ext4_fwrite_at(&right_file, 2u, true, 0u, NULL, 0u, &moved) != EOK ||
+        moved != 0u || ext4_ftell(&right_file) != 2u)
+        return fail("bounded positioned/zero write on append handle", 0);
+    (void)ext4_fclose(&left_file);
+    (void)ext4_fclose(&right_file);
+    if (ext4_fopen(&check, append_path, "rb") != EOK ||
+        ext4_fsize(&check) != 3072u ||
+        ext4_fread(&check, result, 3072u, &moved) != EOK || moved != 3072u ||
+        result[0] != 'Y' || result[1] != 'Z')
+        return fail("bounded append/positioned readback", 0);
+    for (size_t index = 2u; index < 3072u; ++index)
+        if (result[index] != (left.moved != 0u ? left_bytes[index] : right_bytes[index]))
+            return fail("bounded append write was torn", 0);
+    (void)ext4_fclose(&check);
+
+    if (ext4_fopen(&right_file, append_path, "ab") != EOK ||
+        ext4_fwrite_at(&right_file, 8192u, false, UINT64_MAX,
+            left_bytes, sizeof(left_bytes), &moved) != EOK ||
+        moved != sizeof(left_bytes) || ext4_fsize(&right_file) != 12288u ||
+        ext4_fwrite_at(&right_file, UINT64_C(1) << 48, false, UINT64_MAX,
+            "x", 1u, &moved) != EFBIG || moved != 0u ||
+        ext4_ftell(&right_file) != 12288u || ext4_fsize(&right_file) != 12288u)
+        return fail("positioned sparse extension/range refusal", 0);
+    (void)ext4_fclose(&right_file);
+    if (ext4_fopen(&check, append_path, "rb") != EOK ||
+        ext4_fread(&check, result, sizeof(result), &moved) != EOK ||
+        moved != sizeof(result) || result[0] != 'Y' || result[1] != 'Z')
+        return fail("positioned sparse prefix readback", 0);
+    for (size_t index = 3072u; index < sizeof(result); ++index)
+        if (result[index] != 0u)
+            return fail("positioned sparse gap not zero", 0);
+    if (ext4_fread(&check, result, sizeof(left_bytes), &moved) != EOK ||
+        moved != sizeof(left_bytes) || memcmp(result, left_bytes, moved) != 0)
+        return fail("positioned sparse data misplaced", 0);
+    (void)ext4_fclose(&check);
 
     if (write_file(write_path, 213u, sizeof(left_bytes)) ||
         ext4_fopen(&left_file, write_path, "r+b") != EOK ||

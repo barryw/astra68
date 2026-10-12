@@ -38,7 +38,7 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections \
 	$(ASTRA_STATIC_LINK_SCRIPT_FLAGS)
-SOURCES := src/supervisor.c src/main.c src/volume.c src/loader.c \
+SOURCES := src/supervisor.c src/main.c src/volume.c src/loader.c src/bootstrap_host.c \
 	src/launch_report.c \
 	src/loader_manifest.c src/service_definition_store.c src/vfs_host.c \
 	src/vfs_read.c src/proc_tree.c
@@ -69,6 +69,7 @@ SERVICE_DEFINITION_TEST := build/host/test_service_definition_store
 LOADER_STATUS_TEST := build/host/test_loader_status
 LAUNCH_REPORT_TEST := build/host/test_launch_report
 VOLUME_READ_TEST := build/host/test_volume_read
+BOOTSTRAP_HOST_TEST := build/host/test_bootstrap_host
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
 	tests/test_supervisor.c
 ASTRA_PROGRAM_OWNER_TARGETS := $(RUNTIME):all $(ALLOC):all $(STORAGE):all \
@@ -170,9 +171,14 @@ $(VOLUME_READ_TEST): src/volume.c tests/test_volume_read.c include/volume.h
 		-DASTRA_SUPERVISOR_TEST -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections src/volume.c tests/test_volume_read.c -o $@
 
+$(BOOTSTRAP_HOST_TEST): src/bootstrap_host.c tests/test_bootstrap_host.c include/bootstrap_host.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/bootstrap_host.c tests/test_bootstrap_host.c -o $@
+
 test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST) \
 		$(SERVICE_DEFINITION_TEST) $(LOADER_STATUS_TEST) $(LAUNCH_REPORT_TEST) \
-		$(VOLUME_READ_TEST)
+		$(VOLUME_READ_TEST) $(BOOTSTRAP_HOST_TEST)
 	./$(HOST_TEST)
 	./$(LOADER_TEST)
 	./$(PROC_TREE_ROOT_TEST)
@@ -180,9 +186,13 @@ test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST) \
 	./$(LOADER_STATUS_TEST)
 	./$(LAUNCH_REPORT_TEST)
 	./$(VOLUME_READ_TEST)
+	./$(BOOTSTRAP_HOST_TEST)
 
 sanitize:
 	@mkdir -p build/host
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
+		src/bootstrap_host.c tests/test_bootstrap_host.c -o build/host/test_bootstrap_host_sanitize
+	./build/host/test_bootstrap_host_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) $(TEST_SOURCES) \
 		-o build/host/test_supervisor_sanitize

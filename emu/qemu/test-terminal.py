@@ -644,16 +644,16 @@ class TraceReader:
     desktop_icon() needs both, since the desktop now holds LOG and its own
     icon-placement line goes to its per-process ring instead."""
 
-    def __init__(self, monitor, ring_path, hostfs_root=None):
+    def __init__(self, monitor, ring_path, hostfs_root=None, source_root=ROOT):
         self.monitor = monitor
         self.ring_path = ring_path
         self.hostfs_root = hostfs_root
         self.names = trace_decode.kernel_event_names(
-            os.path.join(ROOT, "sw/kernel/trace.h"))
+            os.path.join(source_root, "sw/kernel/trace.h"))
         self.catalog = trace_decode.load_catalogs([
-            os.path.join(ROOT, "sw/userspace", "supervisor", "build",
+            os.path.join(source_root, "sw/userspace", "supervisor", "build",
                          "m68k", "astra_supervisor.elf"),
-            os.path.join(ROOT, "sw/userspace", "services", "terminal",
+            os.path.join(source_root, "sw/userspace", "services", "terminal",
                          "build", "m68k", "terminal.elf")])
 
     def trace(self):
@@ -724,7 +724,8 @@ LAUNCHER_MOUNT = "ASTRA-QEMU-ROOT-MOUNT "
 
 class Machine:
     def __init__(self, qemu, rom, image, socket_directory, extra_args=(),
-                 hostfs_root=None, debug_guest=False, launcher=()):
+                 hostfs_root=None, debug_guest=False, launcher=(),
+                 source_root=ROOT):
         # Resolve every source-relative input before starting QEMU.  A missing
         # catalog must not leave a live emulator behind.  A launcher
         # (qemu_runtime.root_provider) chooses the HostFS root itself and
@@ -735,7 +736,7 @@ class Machine:
         self.reader = TraceReader(
             lambda line: self.qmp.monitor(line),
             os.path.join(socket_directory, "ring.bin"),
-            hostfs_root=hostfs_root)
+            hostfs_root=hostfs_root, source_root=source_root)
         self.runtime_directory = tempfile.mkdtemp(prefix="astra-qmp-")
         self.qmp_path = os.path.join(self.runtime_directory, "qmp.sock")
         self.gdb_path = (os.path.join(self.runtime_directory, "gdb.sock")

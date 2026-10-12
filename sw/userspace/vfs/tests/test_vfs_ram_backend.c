@@ -35,10 +35,28 @@ static void test_tree(void)
     assert(ops->open_at(&fs, directory, "note",
                         ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_WRITE,
                         0640u, &file, &info) == ASTRA_VFS_OK);
-    assert(ops->write(&fs, file, 0u, 0u, "abc", 3u, &moved,
+    assert(ops->unlink(&fs, "/docs/note", ASTRA_VFS_UNLINK_DIRECTORY) ==
+           ASTRA_VFS_ERR_NOT_DIR);
+    assert(ops->unlink(&fs, "/docs", 0u) == ASTRA_VFS_ERR_IS_DIR);
+    assert(ops->unlink(&fs, "/docs", ASTRA_VFS_UNLINK_DIRECTORY) ==
+           ASTRA_VFS_ERR_NOT_EMPTY);
+    assert(ops->write(&fs, file, 0u, 0u, UINT64_MAX, "abc", 3u, &moved,
                       &position) == ASTRA_VFS_OK && moved == 3u &&
            position == 3u);
-    assert(ops->write(&fs, file, 8192u, 0u, "z", 1u, &moved,
+    assert(ops->write(&fs, file, 0u, ASTRA_VFS_WRITE_APPEND, UINT64_MAX, "d", 1u,
+                      &moved, &position) == ASTRA_VFS_OK && moved == 1u &&
+           position == 4u);
+    assert(ops->read(&fs, file, 0u, text, 4u, &moved) == ASTRA_VFS_OK &&
+           moved == 4u && memcmp(text, "abcd", 4u) == 0);
+    assert(ops->write(&fs, file, 0u, ASTRA_VFS_WRITE_APPEND, 6u,
+                      "efgh", 4u, &moved, &position) == ASTRA_VFS_OK &&
+           moved == 2u && position == 6u);
+    assert(ops->write(&fs, file, 0u, ASTRA_VFS_WRITE_APPEND, 6u,
+                      "x", 1u, &moved, &position) == ASTRA_VFS_ERR_FILE_TOO_LARGE &&
+           moved == 0u);
+    assert(ops->write(&fs, file, 0u, ASTRA_VFS_WRITE_APPEND, 6u,
+                      NULL, 0u, &moved, &position) == ASTRA_VFS_OK && moved == 0u);
+    assert(ops->write(&fs, file, 8192u, 0u, UINT64_MAX, "z", 1u, &moved,
                       &position) == ASTRA_VFS_OK && moved == 1u &&
            position == 8193u);
     memset(text, 0xff, sizeof(text));
@@ -47,6 +65,9 @@ static void test_tree(void)
     for (size_t i = 0u; i < sizeof(text); ++i) assert(text[i] == 0);
     assert(ops->stat_node(&fs, file, &info) == ASTRA_VFS_OK &&
            info.size == 8193u);
+    assert(ops->chmod_node(&fs, file, 0u) == ASTRA_VFS_OK);
+    assert(ops->stat_node(&fs, file, &info) == ASTRA_VFS_OK &&
+           info.mode == 0u && (info.meta.valid & ASTRA_VFS_META_MODE));
     assert(ops->link(&fs, "/docs/note", "/docs/hard") == ASTRA_VFS_OK);
     assert(ops->stat(&fs, "/docs/hard", &info) == ASTRA_VFS_OK &&
            info.nlink == 2u);
@@ -67,18 +88,22 @@ static void test_tree(void)
                      &alias, &info) == ASTRA_VFS_OK);
     assert(ops->read(&fs, alias, 0u, text, 3u, &moved) == ASTRA_VFS_OK &&
            moved == 3u && memcmp(text, "abc", 3u) == 0);
-    assert(ops->unlink(&fs, "/docs/hard") == ASTRA_VFS_OK);
-    assert(ops->unlink(&fs, "/docs/renamed") == ASTRA_VFS_OK);
+    assert(ops->unlink(&fs, "/docs/hard", 0u) == ASTRA_VFS_OK);
+    assert(ops->unlink(&fs, "/docs/renamed", 0u) == ASTRA_VFS_OK);
     assert(ops->stat_node(&fs, alias, &info) == ASTRA_VFS_OK &&
-           info.nlink == 0u);
+           info.nlink == 0u && info.meta.nlink == 0u &&
+           (info.meta.valid & ASTRA_VFS_META_NLINK));
     assert(ops->read(&fs, alias, 8192u, text, 1u, &moved) == ASTRA_VFS_OK &&
            moved == 1u && text[0] == 'z');
     assert(ops->close(&fs, alias) == ASTRA_VFS_OK);
     assert(ops->close(&fs, file) == ASTRA_VFS_OK);
     assert(ops->unlink_at(&fs, directory, "soft", 0u) == ASTRA_VFS_OK);
+    assert(ops->mkdir(&fs, "/empty", 0700u) == ASTRA_VFS_OK);
+    assert(ops->unlink(&fs, "/empty/", ASTRA_VFS_UNLINK_DIRECTORY) ==
+           ASTRA_VFS_OK);
     assert(ops->unlink_at(&fs, root, "docs", 0u) == ASTRA_VFS_ERR_IS_DIR);
     assert(ops->unlink_at(&fs, root, "docs",
-                          ASTRA_VFS_AT_REMOVE_DIRECTORY) == ASTRA_VFS_OK);
+                          ASTRA_VFS_UNLINK_DIRECTORY) == ASTRA_VFS_OK);
     assert(ops->close(&fs, directory) == ASTRA_VFS_OK);
     assert(ops->filesystem_info(&fs, root, NULL, &capacity) == ASTRA_VFS_OK &&
            capacity.block_size == 4096u && fs.node_count == 1u);
@@ -103,31 +128,31 @@ static void test_refusals(void)
     assert(ops->open(&fs, "/x", ASTRA_VFS_OPEN_CREATE |
                      ASTRA_VFS_OPEN_WRITE, 0600u, &file, &info) ==
            ASTRA_VFS_OK);
-    assert(ops->write(&fs, file, 0u, 0u, block, sizeof(block),
+    assert(ops->write(&fs, file, 0u, 0u, UINT64_MAX, block, sizeof(block),
                       &moved, &position) == ASTRA_VFS_OK &&
            moved == sizeof(block));
-    assert(ops->write(&fs, file, 4096u, 0u, block, sizeof(block),
+    assert(ops->write(&fs, file, 4096u, 0u, UINT64_MAX, block, sizeof(block),
                       &moved, &position) == ASTRA_VFS_OK &&
            moved == sizeof(block));
     before = fs.used_bytes;
-    assert(ops->write(&fs, file, 8192u, 0u, block, sizeof(block),
+    assert(ops->write(&fs, file, 8192u, 0u, UINT64_MAX, block, sizeof(block),
                       &moved, &position) == ASTRA_VFS_ERR_NO_SPACE &&
            moved == 0u && fs.used_bytes == before);
     assert(ops->stat_node(&fs, file, &info) == ASTRA_VFS_OK &&
            info.size == 8192u);
-    assert(ops->write(&fs, file, UINT64_MAX, 0u, "x", 1u, &moved,
+    assert(ops->write(&fs, file, UINT64_MAX, 0u, UINT64_MAX, "x", 1u, &moved,
                       &position) == ASTRA_VFS_ERR_INVALID);
     assert(ops->open(&fs, "/x", ASTRA_VFS_OPEN_CREATE |
                      ASTRA_VFS_OPEN_EXCLUSIVE, 0600u, &file, &info) ==
            ASTRA_VFS_ERR_EXISTS);
     assert(ops->mkdir(&fs, "/x/child", 0700u) == ASTRA_VFS_ERR_NOT_DIR);
-    assert(ops->unlink(&fs, "/") == ASTRA_VFS_ERR_ACCESS);
+    assert(ops->unlink(&fs, "/", 0u) == ASTRA_VFS_ERR_ACCESS);
     assert(ops->truncate(&fs, file, 0u) == ASTRA_VFS_OK &&
            fs.used_bytes < before);
-    assert(ops->write(&fs, file, 8192u, 0u, "x", 1u, &moved,
+    assert(ops->write(&fs, file, 8192u, 0u, UINT64_MAX, "x", 1u, &moved,
                       &position) == ASTRA_VFS_OK && moved == 1u);
     assert(ops->close(&fs, file) == ASTRA_VFS_OK);
-    assert(ops->unlink(&fs, "/x") == ASTRA_VFS_OK);
+    assert(ops->unlink(&fs, "/x", 0u) == ASTRA_VFS_OK);
     astra_vfs_ram_destroy(&fs);
     assert(fs.used_bytes == 0u);
 }
@@ -147,7 +172,7 @@ static void test_path_and_rename_boundaries(void)
                      ASTRA_VFS_OPEN_WRITE, 0600u, &file, &info) ==
            ASTRA_VFS_OK);
     assert(ops->stat(&fs, "/a/f//", &info) == ASTRA_VFS_ERR_NOT_DIR);
-    assert(ops->unlink(&fs, "/a/f//") == ASTRA_VFS_ERR_NOT_DIR);
+    assert(ops->unlink(&fs, "/a/f//", 0u) == ASTRA_VFS_ERR_NOT_DIR);
     assert(ops->stat(&fs, "/a/f", &info) == ASTRA_VFS_OK);
     assert(ops->rename(&fs, "/a", "/a/inside/cycle") ==
            ASTRA_VFS_ERR_INVALID);

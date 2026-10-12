@@ -14,6 +14,9 @@ CFLAGS := -std=c11 -O2 -pipe -Wall -Wextra -Werror -Wformat=2 \
 	-Wshadow -Wstrict-prototypes -D_FORTIFY_SOURCE=2 \
 	-I$(ROOT)/sw/include
 DE25_SYSROOT ?= $(HOME)/.cache/astra68/de25-jammy-arm64
+KERNEL_SOURCE ?= $(HOME)/astra-linux-6.12.11
+KERNEL_OUTPUT ?= $(HOME)/astra-linux-6.12.11-build
+MODULE_OUT := $(ROOT)/build/de25-linux/module
 QEMU_USER ?= qemu-aarch64
 COMPILER_INCLUDE := $(shell $(CC) -print-file-name=include)
 REMOTE_CFLAGS := $(CFLAGS) --sysroot=$(DE25_SYSROOT) -nostdinc \
@@ -24,9 +27,21 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 	-Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu \
 	-lvncserver
 
-.PHONY: all remote-desktop test clean
+.PHONY: all remote-desktop modules test clean
 
 all: $(CERTIFIER) $(BANDWIDTH)
+
+modules:
+	test "$$(cat $(KERNEL_OUTPUT)/include/config/kernel.release)" = 6.12.11-gd7d192a9ddd9
+	mkdir -p $(MODULE_OUT)
+	cp Makefile astra_graphics_arena.c astra_de25_media.h \
+		astra_host_arena_uapi.h astra_display_capture.c \
+		astra_display_capture_uapi.h $(MODULE_OUT)/
+	$(MAKE) -C $(KERNEL_SOURCE) O=$(KERNEL_OUTPUT) \
+		M=$(abspath $(MODULE_OUT)) ARCH=arm64 \
+		CROSS_COMPILE=aarch64-linux-gnu- modules
+	test "$$(modinfo -F vermagic $(MODULE_OUT)/astra_graphics_arena.ko | \
+		sed 's/ *$$//')" = '6.12.11-gd7d192a9ddd9 SMP preempt mod_unload aarch64'
 
 $(BANDWIDTH): astra_arena_bandwidth.c astra_de25_media.h Makefile
 	mkdir -p $(OUT)

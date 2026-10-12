@@ -1,6 +1,7 @@
 """Shared host environment for launching the packaged Astra QEMU."""
 
 import os
+import shutil
 import subprocess
 
 DEFAULT_MEMORY_BYTES = 512 * 1024 * 1024
@@ -28,7 +29,7 @@ ROOT_WRAPPER_SOURCE = os.path.join(
     "astra-qemu-root")
 
 
-def root_provider(work, size_mib=256):
+def root_provider(work, size_mib=256, system=None):
     """A fresh ext4 provider image in `work`, `work`/`sound` pre-populated
     at mkfs time, its root owned by the caller.
 
@@ -52,6 +53,10 @@ def root_provider(work, size_mib=256):
     seed = os.path.join(work, "seed")
     os.makedirs(os.path.join(seed, "work"))
     os.makedirs(os.path.join(seed, "sound"))
+    if system is not None:
+        startup = os.path.join(seed, "system", "startup")
+        os.makedirs(startup)
+        shutil.copyfile(system, os.path.join(startup, "system"))
     image = os.path.join(work, "provider.img")
     with open(image, "wb") as handle:
         handle.truncate(size_mib * 1024 * 1024)

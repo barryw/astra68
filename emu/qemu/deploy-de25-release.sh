@@ -11,7 +11,7 @@ RELEASE=$1
 BOARD=${ASTRA_DE25_BOARD:-root@192.168.1.52}
 STORE=${ASTRA_STORE:-/var/lib/astra}
 SERVICE=${ASTRA_DE25_SERVICE:-astra.service}
-QMP_SOCKET=${ASTRA_DE25_QMP_SOCKET:-/run/astra/qmp.sock}
+QMP_SOCKET=${ASTRA_DE25_QMP_SOCKET:-/run/astra/qemu/qmp.sock}
 SSH=${SSH:-ssh}
 SCP=${SCP:-scp}
 RELEASE_TOOL=$REPOSITORY/tools/astra_release.py
@@ -94,12 +94,44 @@ systemctl daemon-reload
 systemctl reenable astra-remote-desktop.service
 systemctl reenable astra-audio-host.service
 systemctl stop astra-remote-desktop.service
+systemctl stop '$SERVICE'
+if ! id -u astra >/dev/null 2>&1; then
+    useradd --system --user-group --home-dir /nonexistent \
+        --shell /usr/sbin/nologin astra
+fi
+test \"\$(id -u astra)\" -gt 0
+test \"\$(id -g astra)\" -gt 0
+test ! -L '$STORE/hostfs'
+mkdir -p '$STORE/hostfs'
+# GNU chown defaults to -P: never follow guest-owned symlinks.
+chown -hR -- astra:astra '$STORE/hostfs'
+module_source='$STORE/current/kernel/astra_graphics_arena.ko'
+module_target=/lib/modules/\$(uname -r)/extra/astra_graphics_arena.ko
+test \"\$(modinfo -F vermagic \"\$module_source\")\" = \
+    \"\$(modinfo -F vermagic fuse)\"
+install -m 0644 '$STORE/current/udev/99-astra-qemu.rules' \
+    /etc/udev/rules.d/99-astra-qemu.rules
+udevadm control --reload-rules
+if ! cmp -s \"\$module_source\" \"\$module_target\"; then
+    # No helper may submit after this stop; never free a live DMA arena.
+    '$STORE/current/bin/astra-terminal-display' --stop-render
+    modprobe -r astra_graphics_arena
+    install -m 0644 \"\$module_source\" \"\$module_target\"
+    depmod -a
+fi
+modprobe astra_graphics_arena
+udevadm trigger --subsystem-match=misc
+udevadm trigger --subsystem-match=input
+udevadm settle
+test -c /dev/astra-front-panel
 "
 $SSH "$BOARD" "systemctl restart '$SERVICE'"
 LIVE=$($SSH "$BOARD" "
 set -eu
 expected='$STORE/releases/$IDENTITY/qemu/bin/qemu-system-m68k-astra'
-while systemctl is-active --quiet '$SERVICE'; do
+guest_uid=\$(id -u astra)
+attempt=0
+while systemctl is-active --quiet '$SERVICE' && [ \"\$attempt\" -lt 1200 ]; do
     control_group=\$(systemctl show --property ControlGroup --value '$SERVICE')
     case \"\$control_group\" in
         /*)
@@ -107,7 +139,10 @@ while systemctl is-active --quiet '$SERVICE'; do
             if [ -r \"\$processes\" ]; then
                 for process_id in \$(cat \"\$processes\"); do
                     executable=\$(readlink -f \"/proc/\$process_id/exe\" 2>/dev/null || true)
-                    if [ \"\$executable\" = \"\$expected\" ] && [ -S '$QMP_SOCKET' ]; then
+                    credentials=\$(awk '\$1 == \"Uid:\" {print \$2, \$3, \$4, \$5}' \
+                        \"/proc/\$process_id/status\" 2>/dev/null || true)
+                    if [ \"\$executable\" = \"\$expected\" ] && [ -S '$QMP_SOCKET' ] &&
+                        [ \"\$credentials\" = \"\$guest_uid \$guest_uid \$guest_uid \$guest_uid\" ]; then
                         printf '%s\n' '$IDENTITY'
                         exit 0
                     fi
@@ -115,6 +150,7 @@ while systemctl is-active --quiet '$SERVICE'; do
             fi ;;
         *) ;;
     esac
+    attempt=\$((attempt + 1))
     sleep 0.1
 done
 systemctl status '$SERVICE' --no-pager >&2 || true

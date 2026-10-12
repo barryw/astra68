@@ -79,7 +79,7 @@ def settled(qmp):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--qmp", default="/run/astra/qmp.sock")
+    parser.add_argument("--qmp", default="/run/astra/qemu/qmp.sock")
     parser.add_argument("--start-x", type=int, default=500)
     parser.add_argument("--start-y", type=int, default=105)
     parser.add_argument("--distance", type=int, default=600)

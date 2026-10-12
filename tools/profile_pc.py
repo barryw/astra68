@@ -352,7 +352,7 @@ def main():
 
     capture_parser = subparsers.add_parser("capture")
     capture_parser.add_argument("output")
-    capture_parser.add_argument("--qmp", default="/run/astra/qmp.sock")
+    capture_parser.add_argument("--qmp", default="/run/astra/qemu/qmp.sock")
     capture_parser.add_argument("--duration", type=float, default=2.0)
     capture_parser.add_argument("--baseline", type=float, default=0.25,
                                 help="seconds sampled before the launch trigger")

@@ -114,7 +114,7 @@ static uint32_t write_all(AstraFile *file, const void *data, uint32_t length)
 
     while (length != 0u) {
         uint32_t moved = 0u;
-        uint32_t status = astra_filesystem_write(file, bytes, length, &moved);
+        uint32_t status = astra_filesystem_write(file, UINT64_MAX, bytes, length, &moved);
 
         if (status != ASTRA_VFS_OK)
             return status;

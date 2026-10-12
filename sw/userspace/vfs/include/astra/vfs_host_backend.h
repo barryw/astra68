@@ -26,6 +26,8 @@ typedef struct AstraVfsHostBackend {
     /* The scope handle commands go through (HOST_SCOPE_ATTACH on first use
      * by a lane); 0: the transport's own device handle. */
     uint32_t scope;
+    /* A rooted path answered LOST; handle-only loss leaves the session usable. */
+    uint32_t lost;
 } AstraVfsHostBackend;
 
 int astra_vfs_host_init(AstraVfsHostBackend *backend,
@@ -39,7 +41,8 @@ const AstraVfsBackendOps *astra_vfs_host_ops(void);
  * `root` beneath `volume`; a derived one opens it beneath its parent's
  * root. Each answers an ASTRA_VFS_* status. */
 uint32_t astra_vfs_host_claim(AstraVfsHostTransport *transport,
-                              uint32_t generation, int release);
+                              uint32_t generation, int release,
+                              uint32_t *epoch);
 uint32_t astra_vfs_host_session_open(AstraVfsHostTransport *transport,
                                      uint32_t generation, uint32_t parent,
                                      uint32_t volume, const char *root,

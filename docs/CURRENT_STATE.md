@@ -1,12 +1,100 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-09-25
+Status: active continuation map, 2026-10-11
 
-Graceful shutdown and restart are in progress. The current immutable DE25
-software release is
+The active filesystem continuation is the `fs-phase1` checkpoint containing
+Tasks 5–12 and final review fixes. Git history records its committed identity;
+the deployed source manifest and release identity are recorded below.
+Final review found four additional
+correctness gaps: joined-assign opens bypassed namespace shadowing, two-path
+HostFS operations discarded namespace continuation, native directory-relative
+APIs lacked filesystem context, and the root mount helper accepted UID 0.
+All four fixes pass current-source requalification: all 26 guest semantic
+cases, 1,600-operation stress, raw provider confinement, VFS/POSIX host and
+sanitizer suites, NDK headers/docs, and all 31 integration gates including
+111 Terminal commands, six power actions, desktop applications and events.
+The isolated AArch64 provider passes as UID 65534, including write bounds,
+recovery and memory limits. Evidence is under `review-target-1`,
+`review-integration-1` and `review-de25-provider-1` in the performance directory.
+The native directory-relative API now takes filesystem context, with
+Filesystem ABI 12.0/Filesystem.kit 9.0.0 and STOR 36. Host remains 0x00010015.
+Native-16, on the preceding ABI 11 source, passes all 26 semantic
+cases, recovery/admission/bootstrap checks, host and sanitizer suites, target
+builds and NDK contracts/documentation. The current atomic write-bound contract
+also passes isolated unprivileged DE25 provider qualification. Integration-1
+passes all 31 gates, events, NDK/docs and provider coverage, and exits zero with
+all 164 source hashes unchanged. Those retained checkpoints do not qualify
+the new ABI 12 source; the review checkpoints above do. Task 12b and Task 13
+performance qualification remain open.
+See [the filesystem continuation](HANDOVER_2026-10-10_FILESYSTEM.md).
+
+The selected production release is now
+`194b9202da7eb0ff61a05ad03633bd63f687ac7afce5fe05c08601fc357af249`,
+built on Beast and deployed with the current ABI 12 filesystem guest,
+worker-only resolver optimization and refreshed SDL icons. Its own staged
+ROM/image pass all 26 semantics and recovery/fsck before deployment.
+The previous release
+`299a6ade22eedddce3ae4db7f7cf8d15f08efa9e81be394649512ab4aa60f3a8`
+holds the privilege-corrected baseline; its QEMU, ROM and immutable guest image
+match original baseline `1d7137c1adfdec99518e65d1651e99846970ae0c3296852ab4cff93957032b1c`
+byte for byte. QEMU runs as
+`astra` UID/GID 999, with no supplementary groups or capabilities and
+`NoNewPrivs=1`. The launcher drops privileges before executable startup;
+the input/affinity helper runs as the same user. Root retains display/audio
+hardware and power duties. The existing Linux arena driver exposes a bounded
+front-panel page, so QEMU cannot open `/dev/mem`, the graphics arena or capture
+device. Physical permission/mmap bounds tests pass. Desktop reaches stage 8;
+runtime, audio and remote desktop are active with zero restarts. The privilege-only
+baseline update preserved its stopped runtime disk byte for byte; the ABI 12
+release uses its own coherent guest image. HostFS data remains in place.
+The preceding ABI 11 release's stopped mutable disk was archived and its
+checksum verified before normal retention removed that release/state.
+Current deployment and guest evidence: `review-release-1` and `review-deploy-1`.
+Evidence is on Beast under
+`/mnt/Documents/astra68/builds/fs-phase1-performance-20261011/runtime-user`.
+
+Ten SDL desktop icons render as native instrument glyphs in all three
+strikes. Physical DE25 desktop and responsive Doom gameplay captures appear
+in the README from release `194b9202`, with provenance in `docs/images/README.md`.
+Fresh gameplay changes after a keyboard turn; normal quit restores the identical
+desktop. Lossless conversion, installed identity and unprivileged credentials
+pass before/after capture in `review-visual-2`. All 14 physical
+benchmark workloads complete on both releases; the first target pair establishes
+a diagnostic baseline, not qualification.
+Five-run interleaved performance measurements are complete; acceptance fails.
+The benchmark
+harness must preserve each image's own ABI and use matching ELF trace
+catalogs; early failed attempts are retained. A measured worker-only Linux
+`openat2` shortcut in the canonical resolver passes raw confinement/race and
+sanitizer tests, then the five-pair stat/read probe budget on the preceding
+ABI 11 guest. Full workloads
+still fail the unchanged budget, chiefly spawn median (1.56× baseline) and
+several latency tails. Evidence: `worker-path-1` and `worker-path-five-1`
+under the performance directory. Final host five pairs test `194b9202` in
+`review-qemu-five-2`: all 10 workload/fsck and 10 probe executions pass, with
+immutable hashes unchanged. The stat/read probe passes (median/p95 ratios
+0.980/1.006 and 0.929/0.863). Full workload comparison fails: spawn median
+1.73×, cold sequential-read p95 1.23×, random-write throughput 0.867× and
+several open/stat metrics exceed the unchanged limits. Physical five pairs
+also finish under `review-de25-five-1`: all 14 workloads complete on both
+releases and all runs exceed the unchanged 20 MB/s held-miss floor. Full
+budget fails on 13 workload families: warm-open median 3.512×, readdir
+median/p95 2.592/2.603×, append p95 2.487× and spawn median 1.401×, among
+others. One thousand held files and 200 held directories use one fd/object,
+3.20 and 11.52 KiB RSS/object; descriptors return to baseline after close.
+Conservative configured provider allowance remains 56 MiB within 64 MiB.
+The runner restores `194b9202`; both strict comparisons end BUDGET FAIL.
+All ratios and evidence locations are in the filesystem continuation.
+Performance acceptance remains open. No budget waiver is accepted; further
+tuning stops at this measured failure, as Task 13 requires.
+
+## Shutdown implementation and retained board checkpoint
+
+Graceful shutdown and restart are in progress. The retained immutable DE25
+software checkpoint is
 `463154c7e4410ce4a4a5cecd07a28f80c34932135acda0ee8b77da33ececa870`.
-The installed release verified byte for byte, the running QEMU matches its
-selected executable, the guest reached stage 8, and Astra, audio, and remote
+At that checkpoint the installed release verified byte for byte, the running
+QEMU matched its selected executable, the guest reached stage 8, and Astra, audio, and remote
 desktop services started. A live authenticated RFB capture shows the ASTRA
 menu under its unboxed trigger, one divider between About and the paired
 Restart/Shut Down actions, and inactive File/Edit/View headings. Terminal
@@ -16,8 +104,8 @@ lookup returned to the prompt. Twenty-five further `ps` runs completed
 (median 335 ms). A target-code audit identified an MC68040 GCC atomic-exchange
 retry returning a stale previous value; the common NDK mutex now uses an
 explicit compare-exchange loop, with deterministic normal and contention
-regressions. The board
-has not yet exercised the Restart or Shut Down actions. A tested,
+regressions. That board checkpoint
+did not exercise the Restart or Shut Down actions. A tested,
 PID-1-only shutdown syscall distinguishes successful guest shutdown from faults
 and requires all other processes to have exited. The DE25 launcher requests
 Linux poweroff or reboot only on QEMU's distinct clean-exit codes.
@@ -46,12 +134,13 @@ actions and reached their respective 88/89 exits. The previous NDK window
 validator rejected every system action except About and killed the desktop;
 it now accepts the defined actions and rejects unknown values. The QEMU action
 tests passed before the above DE25 deployment.
-The active blockers are cancellation recovery after partial service teardown
+Remaining shutdown obligations are cancellation recovery after partial service teardown
 and user-visible shutdown consent/status.
 See `docs/SHUTDOWN.md`.
 
-This file contains current facts only. Git history holds superseded board,
-processor, benchmark, and milestone records. The platform is **Astra 68**, its
+The opening continuation status is authoritative. Retained measured checkpoints
+identify their source and do not replace the current release identity. Git history
+holds superseded board, processor, benchmark, and milestone records. The platform is **Astra 68**, its
 kernel is **Axiom**, and the user-facing system is **Astra OS**.
 
 ## Active machine
@@ -195,13 +284,14 @@ rendered the existing Atkinson Hyperlegible Next font and rejected missing and
 corrupt font inputs. HarfBuzz shaping and physical DE25 text quality remain
 unqualified. The native generic Codec Kit remains a design contract, not an
 implemented provider service or client library.
-An untouched Chocolate Doom 3.1.1 checkout at
-`410d96855b5df5410ff591a90efeafa889119224` cross-compiled all
-`chocolate-doom` objects against the Astra SDL2, SDL_mixer, and SDL_net
-libraries on Beast. Its upstream CMake link step still selects the old
-`crt0-hosted.o`/static POSIX archives, so no runnable game binary has been
-produced or tested. A generic Astra CMake link integration is needed; the
-upstream game source has not been changed.
+Chocolate Doom 3.1.1 at `410d96855b5df5410ff591a90efeafa889119224`
+builds from unmodified upstream source with its configure/Makefiles and links
+dynamically against Astra's SDL, SDL_mixer, SDL_net, libc, runtime and compiler
+libraries. The 2026-10-11 Task 12 integration checkpoint passes 30 seconds of
+gameplay, keyboard input, pointer lock, audio/music and clean ENDOOM exit without
+faults. The former CMake/static-link blocker is historical. Evidence is in
+`fs-phase1-task12-20261011/integration-1` on Beast; this is QEMU evidence, not
+new physical display qualification.
 
 Release `802122b1d20b658edd355713f995a1857f1f66e6d74b02cfa1bb70db2cbd4bb6`
 deploys the audio and remote-desktop Linux providers as systemd `Wants` of
@@ -1241,6 +1331,175 @@ ntpd services, and reached stage 8 through the real systemd/display path.
 Linux owns physical storage and networking. Axiom exposes mechanisms; protected
 services own filesystems, paths, configuration, networking, graphics, input,
 audio, and launch policy. VFS remains filesystem-agnostic.
+
+Filesystem Phase 1 is active on the `fs-phase1` correctness checkpoint,
+including Task 5 review fixes, Tasks 6–12 and final review fixes.
+HostFS owns grants and provider sessions;
+clients perform file operations through their own kernel-bound scopes, and
+QEMU enforces confinement. Storage protocol 36, Filesystem library ABI 12.0
+(Filesystem.kit 9.0.0),
+libc.library 4.0, runtime.library 1.16, and syscall ABI `0x00010043` are the current branch
+contracts. Task 5's rights-mask fix rejects transfers with no usable right
+after import filtering and rolls back invalid replies without moving handles.
+Derived grants are retired before the next control request after their deriving
+session ends, including process death and cascading child grants.
+The resumed checkpoint passed the kernel and userspace suites, all 30 t9
+integration gates, and NDK contract/documentation checks on Beast. New
+five-pair stat/read comparisons failed the unchanged latency budget:
+5,000 operations/run gave read median 1.114x and excess switches; a longer
+40,000-operation diagnostic gave stat p95 1.227x. HostFS CPU was zero
+ns/op and syscall counts unchanged. Performance remains an open release
+qualification issue. The user's 2026-10-10 direction is to finish correctness
+first, then qualify performance; it does not block the remaining semantic
+work. Tasks 6–7 now pass their correctness checks: ordered path resolution,
+provider identity, explicit metadata validity, and typed file/directory removal.
+The target build, host suites and sanitizers, all 18 guest semantic cases,
+111 terminal commands, provider image checks, NDK checks and provider coverage
+pass. The final t9 run passed 30 of 31 gates; its parallel SDL timer reported
+a 167 ms delay for a 1 ms request. Three isolated reruns passed unchanged
+thresholds (1.043–1.048 ms periods and 1,000 ms one-second delays); the failed
+parallel checkpoint remains recorded. Task 12 integration-1 later passes the
+same parallel timer thresholds. The reply carries metadata
+beside the continuation, and every valid 191-byte native pathname now fits.
+That Task 7 checkpoint requires ABI 8. Sources and artifacts are verified in
+`fs-phase1-task7-20261010/attempt-5` on Beast.
+
+The continuation is `docs/HANDOVER_2026-10-10_FILESYSTEM.md`.
+Task 9's provider checkpoint `fs-phase1-task9-20261011/provider-3` passes
+raw directory PATH rename/removal/confinement and the existing HostFS gates.
+Host version 0x00010012/metrics 5 and native CWD pass the complete semantic
+checkpoint `native-6`: host/sanitizer suites, MC68040 build, raw provider,
+NDK headers/coverage and HTML/PDF, all 22 FSSEM cases, lane (509 commands for
+500 stats, three idle) and provider fsck. `semantics-2.log` records the correct
+fixture; the first guest invocation failed before boot. Process VFS owns CWD,
+shared by native facades and POSIX, with fork adoption and exec state.
+Filesystem Kit ABI 10.0 and STOR 33 are qualified. An explicit four-byte CWD
+mutex alignment fixes native-4's shell stall; native-6 checks its target
+address. Exact source and artifact evidence is retained on Beast. Local
+Task 10 recovery changes are staged after that archive, with Host version
+0x00010013 and STOR 34/minimum 34, retaining Filesystem Kit ABI 10.0. HELLO
+resumption preserves the control session and derived grants while replacing
+the scope. Disconnected descriptions can be inherited without reopening a
+path; recovery verifies the original grant root's volume, inode and generation.
+Supervisor records delivered namespace dependencies and keeps publication
+clients at stable addresses. `native-3` passes hosts/sanitizers, target build,
+raw provider loss (12 resets), NDK/docs, all 22 guest cases and lane. Its
+provider-reset fork failed ENOSYS on an unused revoked scope. Native-4 fixes
+that and passes the loss probe, but the existing shell's next fork exposed
+SHARE skipping the refresh guard. The common guard regression starts red
+and the VFS suite now passes. Native-5 passes host/sanitizer/build/raw and
+NDK HTML/PDF gates, all 22 cases, lane and provider reset, but its HostFS-death
+completion marker timed out. Native-6 passes isolated HostFS death and fsck;
+native-7 passes the full sequential 22-case, lane, reset, HostFS-death,
+managed-holder restart, fresh Terminal and fsck gate with exact source and
+artifact hashes. Task 10 correctness is qualified; the earlier timeout is
+retained. Native-16 and integration-1 qualify the combined Tasks 5–12 source.
+
+Task 8 host VFS/POSIX suites, the full MC68040 build, raw provider gate,
+all 21 guest semantic cases, lane gate and provider fsck pass in
+`fs-phase1-task8-20261010/native-12`. Sanitizers and public-header documentation
+pass in `native-11`; the directory-path helper also passes host/sanitizer
+checks in `native-12`. Shared descriptions own positions,
+directory cursors, append and nonblocking flags. Fork uses one-use grant-bound
+receipts and waits for child adoption before returning; exec also retains
+child wait handles and accounting. Process client records now keep stable
+addresses through namespace-cache growth. Fork rebind preserves its negotiated
+features. Directory batches hold the provider lock for the whole transaction,
+read its current cursor, and roll back entries that do not fit. The new guest
+fork/exec/append regressions and NONBLOCK/CLOEXEC checks pass. The final broad
+integration passes in integration-1; Task 7's failed timer checkpoint is retained.
+
+Tasks 5–12 correctness is qualified by native-16, integration-1 and
+`de25-calibration-3`. Integration-1 passes all 31 gates plus desktop applications,
+provider index and events, NDK contract/documentation and provider coverage.
+Its 111-command Terminal, six shutdown/restart modes, remote desktop, all 26
+semantics, root-helper 20 checks and 1600-operation stress pass without relaxed
+thresholds. The parallel SDL timer passes at 1.051856 ms with callbacks
+99/299/64 and a 1000 ms one-second delay. All 164 source hashes remain unchanged
+through the run; source archive, gate logs and artifact hashes are retained in
+`fs-phase1-task12-20261011/integration-1` on Beast. DE25 provider qualification
+of the atomic write-bound correction passes in `de25-calibration-3`.
+Launcher admission defaults are measured;
+its termination, lock and power-action regression gate passes.
+The warm-command fast path (Task 12b)
+and final DE25 performance qualification (Task 13) follow correctness.
+Task 11 kernel/VFS hosts and VFS ASan/UBSan pass: cache first-use concurrency,
+facade lifetime, 96 scopes, allocation rollback, 16 DMA buffers and hole reuse.
+Scope records use reusable metadata pages in place of the old fixed pool.
+Native-4/5 pass the full MC68040/QEMU build, raw quotas/rollback/twelve resets
+and NDK checks. Native-6 passes all 25 guest cases, 16 simultaneous lanes,
+owner session/file exhaustion, memory holds, full-quota reset with old
+identities lost, shell/desktop, lane509/500 idle0, provider reset after585,
+HostFS death after703 with managed restart/fresh Terminal, and provider fsck.
+Evidence: `/mnt/Documents/astra68/builds/fs-phase1-task11-20261011/` on Beast.
+Native-5's nonexistent `/dev/null` flood fixture failed and remains retained.
+File/DIR holds return to 23 host FDs, five provider descriptors and one DIR;
+control sessions add no provider descriptor. Whole-QEMU RSS growth includes
+workload memory and is not a DE25 admission calibration. Host version
+0x00010014/configuration4 stamps scope quotas; HostFS CONFIG supplies positive
+file/session/queue limits. A thread's channel still carries eight scopes,
+with revoked-slot reuse tested.
+
+Task 12 adds optional SYSTEM volume2 without creating it when absent. A new
+pre-service Supervisor probe uses the canonical HostFS transport/backend,
+compares the exact lwext4 manifest, logs match/mismatch/absence, and releases
+file/session/claim and DMA/channel resources. Cleanup failure stops startup;
+absence or mismatch remains nonfatal. Host cleanup/short-read/failure tests,
+settings negative tests and sanitizers, target build, raw optional-system and
+claim-handover tests, and NDK HTML/PDF pass. Task 12 native-3 also passes all
+25 semantic cases, budgets/flood/lane/reset/HostFS death, fsck, exact/absent/
+mismatched bootstrap gates, and the DE25 cross-build. The probe must compare
+before the manifest parser mutates its input; native-2's false mismatch is
+retained. The later native-16/integration-1 checkpoints qualify the combined
+source. Isolated AArch64 calibration
+passes all raw provider gates as UID/GID 65534 without touching the live release.
+Its 1000-file/200-DIR holds return FD/description/DIR counters to baseline;
+DIR RSS growth is 30.72 KiB each. File RSS reused prior allocations, so zero
+observed growth is not zero allocation. Evidence is under Task 12
+`de25-calibration-2`. Conservative launcher defaults are staged at 2048 objects/
+descriptions and 1024 DIRs: 8 KiB per description/object plus 40 KiB extra per
+DIR totals 56 MiB, below the combined 64 MiB allowance. QEMU also reserves
+256 host FDs regardless of explicit environment limits. The new 26th semantic
+case failed in `append-before` without identifying its failing operation.
+Native-12's staged diagnostic found signal-handler installation failed before
+any write. The independent code audit found finite RLIMIT_FSIZE used a cached
+position before append and refused zero writes at the limit; its correction is
+staged in Filesystem ABI 11/STOR 35/Host 0x00010015.
+Every native caller, inline/bulk/direct transport and backend now carries one
+generic max_end bound, enforced with the live write position under the existing
+provider lock. Native-16 passes the complete kernel suite, VFS/POSIX/ext4/
+HostFS-settings/Supervisor host and sanitizer checks, MC68040/QEMU build, raw
+provider gates and NDK contracts/documentation. All 26 guest cases pass,
+including independent append descriptions, positioned/zero writes, SIGXFSZ
+delivery, bounded PROC control refusal and unchanged size after refused
+ftruncate. Budgets, full-quota reset, shell/desktop recovery, provider reset,
+HostFS death/managed restart and provider fsck pass. Bootstrap match, absence
+and mismatch and the DE25 cross-build pass. `de25-calibration-3` passes the
+current raw bounds/races/confinement/quotas/twelve-reset/bootstrap gate on
+AArch64 as UID/GID 65534. Its 1000-file/200-DIR holds return FD, description
+and DIR counters to baseline; DIR RSS growth is 30.08 KiB each. The raw qtest
+write diagnostic includes Python/socket/doorbell overhead and does not qualify
+native performance. Integration-1 passes the final broad gate. Native-16
+finishes exit zero with all 164 source
+hashes unchanged through the run.
+Evidence: `fs-phase1-task12-20261011/native-16` on Beast.
+
+The signal regression exposed three native fork defects. Signal configuration
+now uses the existing writable-user-buffer preparation to resolve copy-on-write
+signal stacks. Shared thread retirement accepts suspended READY threads without
+removing them from a queue they already left. Copy-on-write replacement now
+uses the existing ownership-transfer step when the original owner writes,
+preserving the child's original page when the parent is reaped. Kernel tests
+cover handler reconfiguration after fork, paused-child termination, both writer
+directions, surviving data and full memory recovery. Earlier failed checkpoints
+and the reaper diagnosis remain retained. POSIX limit signals now use the
+existing native-backed raise() path instead of bounded PROC control writes.
+The launcher termination test also exposed and fixed Bash EXIT-trap bare
+return inheriting an interrupted status, which skipped helper termination. Read-only inspection found its currently running unrelated
+release `1d7137c1adfdec99518e65d1651e99846970ae0c3296852ab4cff93957032b1c`
+running QEMU as root; isolated gates use an unprivileged caller. Production
+privilege/drop and permissions must be corrected before a new release is
+accepted. No release has been published or deployed by this continuation.
 
 The DE25 production storage image is immutable per release and copied to a
 writable per-release state image. The host filesystem root must exist before

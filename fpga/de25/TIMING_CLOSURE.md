@@ -1,5 +1,84 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-11: ABI 12 qualification and fresh visuals on the retained route
+
+- Software release
+  `194b9202da7eb0ff61a05ad03633bd63f687ac7afce5fe05c08601fc357af249`
+  was clean-built on Beast with `publish-de25-release.sh`, then staged guest
+  semantics/recovery/fsck and canonical deployment passed. Exact source
+  manifest SHA-256 is
+  `1c4cd408d52f91ab640187660a795ad85b8bcf30b91087e582fc655e871d26ab`.
+  Filesystem ABI 12/Kit 9/STOR 36 and the worker-only resolver are deployed;
+  Linux module remains `f52a4ec44b3be7e9c0d53bcecb057fad82a5993b5362d03bad0db51d893a7fcd`.
+- Final five interleaved physical baseline/current pairs execute all 14
+  workloads, pass absolute held-miss floors and provider pressure/resource
+  checks, but fail unchanged relative budgets. Warm-open median is 3.512×,
+  readdir median/p95 2.592/2.603× and spawn median 1.401×. Final host QEMU
+  probes pass; full workloads fail there too. All ratios are in the filesystem
+  continuation. Disposition: correctness qualified, performance acceptance
+  open; no workload removal, threshold waiver or further guest tuning.
+- Authenticated 1920×1080 physical captures show native glyph icons and
+  fullscreen Doom. Fresh gameplay pixels change after input; normal quit
+  returns to the identical desktop. Lossless raw/PNG checks pass. Immutable
+  release verifies before/after; all nine QEMU threads retain UID/GID 999,
+  no groups/capabilities and NoNewPrivs=1. All three services remain active
+  with zero restarts. Evidence: `fs-phase1-performance-20261011/review-visual-2`.
+  Failed cached-frame capture attempt 1 remains recorded.
+- No RTL, constraints, synthesis, placement, route or bitstream changed.
+  Retained route `b61dbda8`: 40,854/46,800 ALMs, 3,640,768/7,331,840 memory
+  bits, 317/358 RAM blocks, 67/376 DSP blocks. Previously measured setup:
+  graphics +0.262 ns, worst +0.130 ns; worst hold +0.001 ns, no negative
+  slack in any corner. These are retained timing results, not new route
+  measurements. Failed cone: none measured in this software checkpoint.
+
+## 2026-10-11: ABI 11 guest and refreshed desktop on the retained route
+
+- Selected software release
+  `aaf844a0b7682ddcae018de8727571930e61f00d91795c6b70e64e2db3b00d3c`
+  was built on Beast with the current MC68040 guest, AArch64 QEMU and exact
+  Linux module. The launcher retains the unprivileged UID/GID 999 boundary.
+  Stage 8 and runtime/audio/remote services pass with zero restarts.
+- All 14 physical filesystem workloads complete on this guest and the
+  privilege-corrected baseline. The first paired measurement fails several
+  latency budgets and is diagnostic evidence, not performance acceptance.
+- Authenticated 1920×1080 RFB captures show the native SDL glyphs and live
+  Doom gameplay. Fresh viewer pixels change after keyboard input; normal
+  Doom quit returns to the desktop. Captures are in `docs/images/` and raw
+  evidence in `fs-phase1-performance-20261011/visual-refresh` on Beast.
+- No RTL, constraints, synthesis, placement, route or bitstream changed.
+  Resources and all constrained-clock results remain those of `b61dbda8`
+  below. Failed cone: none measured in this software checkpoint.
+  Disposition: current guest and visual refresh deployed; performance remains
+  open. The later worker-only resolver optimization is not yet on the board.
+
+## 2026-10-11: unprivileged QEMU and bounded front-panel driver
+
+- Software-only release
+  `299a6ade22eedddce3ae4db7f7cf8d15f08efa9e81be394649512ab4aa60f3a8`
+  retains baseline QEMU, ROM and guest image byte for byte. Original guest
+  source manifest remains; `source/RUNTIME_USER_FIX_SHA256SUMS` identifies the
+  current Linux/launcher tree. Built on Beast with AArch64 GCC 13.3.0 against
+  exact kernel `6.12.11-gd7d192a9ddd9` and the production Ubuntu 22.04 sysroot.
+- Existing arena module adds only the fixed 4 KiB front-panel aperture.
+  Installed module SHA-256 is
+  `f52a4ec44b3be7e9c0d53bcecb057fad82a5993b5362d03bad0db51d893a7fcd`.
+  Deployment stopped runtime/capture users and the render engine before
+  unloading the old module and freeing its shared DMA allocation.
+- All nine QEMU threads run as UID/GID 999, with no supplementary groups,
+  zero effective/bounding capabilities and `NoNewPrivs=1`. The input/affinity
+  helper also runs as that user. Stage 8 and all three services are live with
+  zero restarts. Runtime storage was preserved byte for byte; HostFS remains
+  in place. Physical device gate permits only front-panel/host-arena mappings,
+  rejects their out-of-range mappings, and denies `/dev/mem`, graphics arena
+  and capture device access to the QEMU user.
+- No RTL, constraints, synthesis, placement, route or bitstream changed.
+  Resources and constrained-clock results remain those of the retained
+  `b61dbda8` route below; this is not a new timing measurement. Failed cone:
+  none measured in this software checkpoint. Disposition: privilege and
+  device boundary accepted; current filesystem performance and refreshed
+  guest/desktop/Doom hardware qualification remain open. Evidence on Beast:
+  `/mnt/Documents/astra68/builds/fs-phase1-performance-20261011/runtime-user`.
+
 ## 2026-10-04: line-builder beat FIFO 8 bursts (routed, deployed, rbf `b61dbda8`)
 
 - Built on `beast` with `build_astra_shell.sh` from `~/astra-mg/rtl-fifo`,

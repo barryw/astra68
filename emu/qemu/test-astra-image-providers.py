@@ -137,8 +137,8 @@ with open(os.path.join(astra_image.REPOSITORY,
                        "sw/userspace/kits/Runtime.kit/manifest"),
           encoding="ascii") as manifest:
     runtime_manifest = manifest.read()
-    assert "version 1.15.0\n" in runtime_manifest
-    assert "provides runtime.library 1 1.15.0\n" in runtime_manifest
+    assert "version 1.16.0\n" in runtime_manifest
+    assert "provides runtime.library 1 1.16.0\n" in runtime_manifest
     assert "version 1.6.0\n" not in runtime_manifest
     assert "provides runtime.library 1 1.6.0\n" not in runtime_manifest
 with open(os.path.join(astra_image.REPOSITORY,
@@ -159,8 +159,10 @@ for required in ("runs astra\n", "start boot\n", "provides RAM:rw\n",
 assert "runs paired\n" not in ram_service
 assert "max_bytes 67108864\n" in astra_image.CONFIGURATION[
     "services/ramfs/settings.conf"]
-# HostFS's grant table grows on demand: there is no setting to read.
-assert "services/hostfs/settings.conf" not in astra_image.CONFIGURATION
+hostfs_settings = astra_image.CONFIGURATION["services/hostfs/settings.conf"]
+for value in ("owner_files 1024\n", "owner_sessions 64\n", "queue_messages 16\n"):
+    assert value in hostfs_settings
+assert "grants " not in hostfs_settings
 assert "entropy" in astra_image.DISPLAY_SERVICES
 remote_service = astra_image.CONFIGURATION[
     "services/remote-desktop/service.conf"]
@@ -240,7 +242,7 @@ assert [line for line in startup
 assert startup[1] == \
     "service /services/posixd grants serves POSIX_PROCESS required priority=20"
 assert startup[2] == \
-    "service /services/hostfs grants HOST_FILESYSTEM " \
+    "service /services/hostfs grants HOST_FILESYSTEM CONFIG:r " \
     "serves WORK:rw METRICS:r SOUND:rw required priority=20"
 assert startup[3] == \
     "service /services/entropy grants HOST_DEVICE serves ENTROPY required priority=20"

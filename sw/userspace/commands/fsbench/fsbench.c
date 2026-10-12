@@ -567,9 +567,75 @@ static int report(void)
     return 0;
 }
 
+static int hold(const char *kind, const char *amount)
+{
+    char *end;
+    unsigned long count = strtoul(amount, &end, 10);
+    int directories = strcmp(kind, "dir") == 0;
+    int *files = NULL;
+    DIR **streams = NULL;
+    char marker[128];
+    struct stat metadata;
+    unsigned long opened = 0u;
+    int result = 1, fd;
+    time_t deadline;
+
+    if (*amount == '\0' || *end != '\0' || count == 0u || count > 65536u ||
+        (!directories && strcmp(kind, "file") != 0))
+        return 2;
+    if (directories)
+        streams = calloc(count, sizeof(*streams));
+    else
+        files = calloc(count, sizeof(*files));
+    if ((directories && streams == NULL) || (!directories && files == NULL))
+        goto done;
+    (void)mkdir("/work/.astra", 0755);
+    fd = open("/work/.astra/fsbench-hold-file", O_WRONLY | O_CREAT, 0644);
+    if (fd < 0 || close(fd) != 0)
+        goto done;
+    for (; opened < count; ++opened) {
+        if (directories) {
+            streams[opened] = opendir("/work/.astra");
+            if (streams[opened] == NULL)
+                goto done;
+            (void)readdir(streams[opened]); /* Include Linux DIR's buffer. */
+        } else {
+            files[opened] = open("/work/.astra/fsbench-hold-file", O_RDONLY);
+            if (files[opened] < 0)
+                goto done;
+        }
+    }
+    (void)snprintf(marker, sizeof(marker), "/work/.astra/fsbench-hold-%s.ready", kind);
+    fd = open(marker, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (fd < 0 || close(fd) != 0)
+        goto done;
+    printf("fsbench: holding %lu %s\n", count, kind);
+    fflush(stdout);
+    deadline = time(NULL) + 120;
+    while (stat(marker, &metadata) == 0 && time(NULL) < deadline) {
+        struct timespec pause = {0, 100000000L};
+        (void)nanosleep(&pause, NULL);
+    }
+    result = stat(marker, &metadata) == -1 && errno == ENOENT ? 0 : 1;
+    (void)unlink(marker);
+done:
+    while (opened != 0u) {
+        --opened;
+        if (directories ? closedir(streams[opened]) != 0 : close(files[opened]) != 0)
+            result = 1;
+    }
+    free(files);
+    free(streams);
+    printf("fsbench: hold %s\n", result == 0 ? "done" : "failed");
+    return result;
+}
+
 int main(int argc, char **argv)
 {
     int failed = 0;
+
+    if (argc == 4 && strcmp(argv[1], "--hold") == 0)
+        return hold(argv[2], argv[3]);
 
     for (int index = 1; index < argc; ++index) {
         if (strcmp(argv[index], "--label") == 0 && index + 1 < argc)

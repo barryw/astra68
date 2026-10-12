@@ -96,6 +96,31 @@ static struct miscdevice astra_host_arena_device = {
 	.mode = 0600,
 };
 
+static int astra_front_panel_mmap(struct file *file, struct vm_area_struct *vma)
+{
+    unsigned long bytes = vma->vm_end - vma->vm_start;
+
+    if (vma->vm_pgoff != 0 || bytes > ASTRA_DE25_FRONT_PANEL_BYTES)
+        return -EINVAL;
+    vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+    vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP);
+    return remap_pfn_range(vma, vma->vm_start,
+                          ASTRA_DE25_FRONT_PANEL_BASE >> PAGE_SHIFT,
+                          bytes, vma->vm_page_prot);
+}
+
+static const struct file_operations astra_front_panel_fops = {
+    .owner = THIS_MODULE,
+    .mmap = astra_front_panel_mmap,
+};
+
+static struct miscdevice astra_front_panel_device = {
+    .minor = MISC_DYNAMIC_MINOR,
+    .name = "astra-front-panel",
+    .fops = &astra_front_panel_fops,
+    .mode = 0600,
+};
+
 static int __init astra_arenas_init(void)
 {
 	struct device *device;
@@ -124,8 +149,14 @@ static int __init astra_arenas_init(void)
 	}
 	dev_info(device, "host arena %pad, %u bytes\n",
 		 &astra_host_arena_physical, ASTRA_HOST_ARENA_BYTES);
+	result = misc_register(&astra_front_panel_device);
+	if (result)
+		goto buffer;
 	return 0;
 
+buffer:
+	dma_free_coherent(device, ASTRA_HOST_ARENA_BYTES, astra_host_arena,
+			  astra_host_arena_physical);
 host:
 	misc_deregister(&astra_host_arena_device);
 arena:
@@ -135,6 +166,7 @@ arena:
 
 static void __exit astra_arenas_exit(void)
 {
+	misc_deregister(&astra_front_panel_device);
 	/* Every mapping holds its file, and so this module: nothing maps the
 	   buffer once exit runs. */
 	dma_free_coherent(astra_host_arena_device.this_device,

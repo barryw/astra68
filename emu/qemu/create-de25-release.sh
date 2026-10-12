@@ -33,6 +33,7 @@ make -B -j "$JOBS" -C "$REPOSITORY/fpga/arty/linux" \
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
     CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
     remote-desktop
+make -C "$REPOSITORY/fpga/de25/linux" modules
 
 # Astra's shared SoundFont set with its licences and default list. The
 # launcher installs it in the SOUND volume (run-arty.sh), where the guest
@@ -57,6 +58,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "systemd/astra-audio-host.service=$AUDIO_UNIT" \
     "bin/astra-remote-desktop=$REMOTE_DESKTOP" \
     "systemd/astra-remote-desktop.service=$REMOTE_DESKTOP_UNIT" \
+    "kernel/astra_graphics_arena.ko=$REPOSITORY/build/de25-linux/module/astra_graphics_arena.ko" \
+    "udev/99-astra-qemu.rules=$REPOSITORY/fpga/de25/99-astra-qemu.rules" \
     "bin/astra-input-hotplug.py=$SCRIPT_DIR/astra-input-hotplug.py" \
     "bin/run-arty.sh=$SCRIPT_DIR/run-arty.sh" \
     "bin/astra-top=$SCRIPT_DIR/astra-top.py" \

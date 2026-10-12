@@ -110,6 +110,7 @@ uint32_t astra_vfs_host_status_from_syscall(uint32_t status)
     case ASTRA_SYSCALL_OUT_OF_MEMORY: return ASTRA_VFS_ERR_LIMIT;
     case ASTRA_SYSCALL_WOULD_BLOCK: return ASTRA_VFS_ERR_BUSY;
     case ASTRA_SYSCALL_PEER_DEAD:
+    case ASTRA_SYSCALL_CLOSED:
     case ASTRA_SYSCALL_UNSUPPORTED: return ASTRA_VFS_ERR_PEER;
     default: return ASTRA_VFS_ERR_IO;
     }
@@ -131,9 +132,12 @@ int astra_vfs_host_transport_init(AstraVfsHostTransport *transport,
         (lease.capabilities & (ASTRA_HOST_CAP_FILESYSTEM |
                                ASTRA_HOST_CAP_OWNER_SCOPED |
                                ASTRA_HOST_CAP_FS_SCOPE |
-                               ASTRA_HOST_CAP_FS_SESSIONS)) !=
+                               ASTRA_HOST_CAP_FS_SESSIONS |
+                               ASTRA_HOST_CAP_FS_RESOLVES |
+                               ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS))) !=
             (ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
-             ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_FS_SESSIONS) ||
+             ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_FS_SESSIONS |
+             ASTRA_HOST_CAP_FS_RESOLVES | ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS)) ||
         (lease.state_flags & ASTRA_HOST_STATE_READY) == 0u ||
         lease.host_generation == 0u ||
         lease.maximum_transfer < ASTRA_HOST_COMMAND_SIZE ||
@@ -562,14 +566,15 @@ uint32_t astra_vfs_host_transport_submit(
     if (status != ASTRA_SYSCALL_OK)
         return astra_vfs_host_status_from_syscall(status);
     lane->producer_position = request->private_producer;
-    if (command->status != ASTRA_VFS_OK)
+    if (command->status != ASTRA_VFS_OK &&
+        command->status != ASTRA_VFS_ERR_ESCAPED)
         return command->status;
     if (output_capacity != 0u &&
         command->result_length > output_capacity)
         return ASTRA_VFS_ERR_IO;
     if (output_capacity != 0u && command->result_length != 0u)
         memcpy(output, lane->bytes + data_offset, command->result_length);
-    return ASTRA_VFS_OK;
+    return command->status;
 }
 
 uint32_t astra_vfs_host_metrics(AstraVfsHostTransport *transport,
@@ -734,7 +739,8 @@ uint32_t astra_vfs_host_transport_execute_batch(
             (position & (capacity - 1u)) * ASTRA_HOST_COMMAND_SIZE);
 
         collect_command(transfers[index].command, command);
-        if (command->status == ASTRA_VFS_OK &&
+        if ((command->status == ASTRA_VFS_OK ||
+             command->status == ASTRA_VFS_ERR_ESCAPED) &&
             transfers[index].output_capacity != 0u) {
             if (command->result_length >
                 transfers[index].output_capacity) {

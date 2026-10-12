@@ -192,6 +192,7 @@ static void test_process_suspend_preserves_wait_state(void)
     KernelThread *selected;
     KernelThreadSnapshot snapshot;
     uint32_t sequence;
+    uint32_t retired;
 
     kernel_performance_init();
     kernel_thread_pool_init();
@@ -233,6 +234,12 @@ static void test_process_suspend_preserves_wait_state(void)
     assert(kernel_thread_make_ready(other) == KERNEL_THREAD_OK);
     assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
     assert(selected == target && selected->effective_priority == 22u);
+    assert(kernel_thread_suspend_process(1u) == KERNEL_THREAD_OK);
+    assert(kernel_thread_retire_process(1u, ASTRA_SYSCALL_PEER_DEAD, &retired) ==
+           KERNEL_THREAD_OK && retired == 1u);
+    assert(kernel_thread_snapshot(target->slot, &snapshot));
+    assert(snapshot.state == KERNEL_THREAD_DEAD && snapshot.suspended == 0u);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK && selected == other);
     assert(kernel_thread_pool_valid());
 }
 

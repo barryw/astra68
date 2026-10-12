@@ -265,3 +265,8 @@ ASTRA_RUNTIME_1.15 {
     global:
         astra_port_send_rights;
 } ASTRA_RUNTIME_1.14;
+
+ASTRA_RUNTIME_1.16 {
+    global:
+        astra_host_scope_limit;
+} ASTRA_RUNTIME_1.15;

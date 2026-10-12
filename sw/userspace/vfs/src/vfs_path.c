@@ -11,6 +11,7 @@
 #include <astra/utf8.h>
 
 #include <stddef.h>
+#include <string.h>
 
 static int
 utf8_string(const char *text)
@@ -133,6 +134,27 @@ astra_path_qualify(const char *assign, const char *directory,
     return length == capacity ? ASTRA_VFS_ERR_INVALID : ASTRA_VFS_OK;
 }
 
+uint32_t astra_path_qualify_provider(const char *assign, const char *root,
+    const char *directory, const char *typed, char *out, uint32_t capacity)
+{
+    const char *rest;
+    size_t length;
+
+    if (!utf8_string(root) || !utf8_string(directory))
+        return ASTRA_VFS_ERR_INVALID;
+    rest = directory[0] == '/' ? directory + 1 : directory;
+    length = strlen(root);
+    if (length != 0u) {
+        if (strncmp(rest, root, length) != 0 ||
+            (rest[length] != '\0' && rest[length] != '/'))
+            return ASTRA_VFS_ERR_NOT_FOUND;
+        rest += length;
+        if (*rest == '/')
+            ++rest;
+    }
+    return astra_path_qualify(assign, rest, typed, out, capacity);
+}
+
 /* True for the component between `start` and `end` being exactly ".." */
 static int
 is_parent(const char *rest, uint32_t start, uint32_t end)
@@ -144,6 +166,26 @@ static int
 is_current(const char *rest, uint32_t start, uint32_t end)
 {
     return end - start == 1u && rest[start] == '.';
+}
+
+int astra_path_requires_walk(const char *path)
+{
+    uint32_t at = 0u;
+
+    if (path == NULL)
+        return 1;
+    while (path[at] != '\0') {
+        uint32_t start;
+
+        while (path[at] == '/')
+            ++at;
+        start = at;
+        while (path[at] != '\0' && path[at] != '/')
+            ++at;
+        if (is_current(path, start, at) || is_parent(path, start, at))
+            return 1;
+    }
+    return at != 0u && path[at - 1u] == '/';
 }
 
 uint32_t
@@ -202,5 +244,22 @@ astra_path_normalise(const char *rest, char *out, uint32_t capacity)
         }
         out[length] = '\0';
     }
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_path_collapse(const char *path, char *out, uint32_t capacity)
+{
+    uint32_t used = 0u;
+
+    if (!utf8_string(path) || out == NULL || capacity == 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    for (uint32_t at = 0u; path[at] != '\0'; ++at) {
+        if (path[at] == '/' && used != 0u && out[used - 1u] == '/')
+            continue;
+        if (used + 1u >= capacity)
+            return ASTRA_VFS_ERR_INVALID;
+        out[used++] = path[at];
+    }
+    out[used] = '\0';
     return ASTRA_VFS_OK;
 }

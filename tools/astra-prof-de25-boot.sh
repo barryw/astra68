@@ -86,7 +86,16 @@ trap restore EXIT HUP INT TERM
 
 systemctl stop astra-remote-desktop.service
 systemctl stop astra.service
+qemu_user=${ASTRA_QEMU_USER:-astra}
+qemu_uid=$(id -u "$qemu_user")
+qemu_gid=$(id -g "$qemu_user")
+if [ "$qemu_uid" -eq 0 ] || [ "$qemu_gid" -eq 0 ]; then
+    echo "QEMU profiling requires a non-root user and group" >&2
+    exit 1
+fi
+chmod 0711 "$work"
 mkdir -p "$work/run" "$work/state" "$work/log" "$work/hostfs"
+install -d -o "$qemu_uid" -g "$qemu_gid" -m 0700 "$work/hostfs" "$work/profile"
 rm -f "$work/profile.aprof"
 qemu_launcher=$qemu
 perf=
@@ -113,15 +122,15 @@ if [ "$mode" = latency ]; then
     ASTRA_LOG_ROOT="$work/log" ASTRA_HOSTFS_ROOT="$work/hostfs" \
     QEMU="$qemu_launcher" ROM="$rom" ASTRA_QEMU_BINARY="$qemu" \
     ASTRA_BASE_STORAGE="$storage" \
-    ASTRA_PERF_DATA="$work/host-perf.data" ASTRA_PERF_BINARY="${perf:-perf}" \
+    ASTRA_PERF_DATA="$work/profile/host-perf.data" ASTRA_PERF_BINARY="${perf:-perf}" \
     /var/lib/astra/current/bin/run-arty.sh \
     > "$work/runner.log" 2>&1 &
 else
-    profile_mode=control=$work/profile.sock
+    profile_mode=control=$work/profile/profile.sock
     if [ "$mode" = boot ]; then
         profile_mode=autostart=true,label=boot
     fi
-    plugin_options=$plugin,output=$work/profile.aprof,$profile_mode,memory=$memory
+    plugin_options=$plugin,output=$work/profile/profile.aprof,$profile_mode,memory=$memory
     if [ -n "$probes" ]; then
         plugin_options=$plugin_options,$probes
     fi
@@ -129,7 +138,7 @@ else
         ASTRA_LOG_ROOT="$work/log" ASTRA_HOSTFS_ROOT="$work/hostfs" \
         QEMU="$qemu_launcher" ROM="$rom" ASTRA_QEMU_BINARY="$qemu" \
         ASTRA_BASE_STORAGE="$storage" \
-        ASTRA_PERF_DATA="$work/host-perf.data" ASTRA_PERF_BINARY="${perf:-perf}" \
+        ASTRA_PERF_DATA="$work/profile/host-perf.data" ASTRA_PERF_BINARY="${perf:-perf}" \
         /var/lib/astra/current/bin/run-arty.sh \
         -plugin "$plugin_options" \
         > "$work/runner.log" 2>&1 &
@@ -156,20 +165,28 @@ done
 if [ "$elapsed" -ge "$timeout" ]; then
     echo "Astra profile timed out" >&2
 fi
+if [ "$result" -eq 0 ] && [ "$mode" != boot ]; then
+    terminal_icon=$(ASTRA_STORE="$work" python3 -B -c \
+        'import runpy,sys; print(*runpy.run_path(sys.argv[1])["terminal_icon"](30))' \
+        "$work/fs-baseline.py")
+    set -- $terminal_icon
+    terminal_x=$1
+    terminal_y=$2
+fi
 if [ "$result" -eq 0 ] && [ "$mode" = command ]; then
     if [ -n "$cleanup" ]; then
-        python3 "$work/measure-terminal-text.py" --qmp "$work/run/qmp.sock" \
-            --open-terminal --runs "$runs" --warmups "$warmups" \
+        python3 "$work/measure-terminal-text.py" --qmp "$work/run/qemu/qmp.sock" \
+            --open-terminal --terminal-icon "$terminal_x" "$terminal_y" --runs "$runs" --warmups "$warmups" \
             --deadline "$timeout" \
-            --profile-control "$work/profile.sock" --profile-label command \
+            --profile-control "$work/profile/profile.sock" --profile-label command \
             --ready-message "$ready_message" --trace-ring "$work/live-trace.bin" \
             --desktop-ready-message "$desktop_ready_message" \
             --cleanup "$cleanup" "$command" > "$work/command-metrics.jsonl" || result=$?
     else
-        python3 "$work/measure-terminal-text.py" --qmp "$work/run/qmp.sock" \
-            --open-terminal --runs "$runs" --warmups "$warmups" \
+        python3 "$work/measure-terminal-text.py" --qmp "$work/run/qemu/qmp.sock" \
+            --open-terminal --terminal-icon "$terminal_x" "$terminal_y" --runs "$runs" --warmups "$warmups" \
             --deadline "$timeout" \
-            --profile-control "$work/profile.sock" --profile-label command \
+            --profile-control "$work/profile/profile.sock" --profile-label command \
             --ready-message "$ready_message" --trace-ring "$work/live-trace.bin" \
             --desktop-ready-message "$desktop_ready_message" \
             "$command" > "$work/command-metrics.jsonl" || result=$?
@@ -177,16 +194,16 @@ if [ "$result" -eq 0 ] && [ "$mode" = command ]; then
 fi
 if [ "$result" -eq 0 ] && [ "$mode" = latency ]; then
     if [ -n "$cleanup" ]; then
-        python3 "$work/measure-terminal-text.py" --qmp "$work/run/qmp.sock" \
-            --open-terminal --runs "$runs" --warmups "$warmups" \
+        python3 "$work/measure-terminal-text.py" --qmp "$work/run/qemu/qmp.sock" \
+            --open-terminal --terminal-icon "$terminal_x" "$terminal_y" --runs "$runs" --warmups "$warmups" \
             --deadline "$timeout" \
             --ready-message "$ready_message" --trace-ring "$work/live-trace.bin" \
             --desktop-ready-message "$desktop_ready_message" \
             --max-milliseconds "$max_milliseconds" --cleanup "$cleanup" \
             "$command" > "$work/command-metrics.jsonl" || result=$?
     else
-        python3 "$work/measure-terminal-text.py" --qmp "$work/run/qmp.sock" \
-            --open-terminal --runs "$runs" --warmups "$warmups" \
+        python3 "$work/measure-terminal-text.py" --qmp "$work/run/qemu/qmp.sock" \
+            --open-terminal --terminal-icon "$terminal_x" "$terminal_y" --runs "$runs" --warmups "$warmups" \
             --deadline "$timeout" \
             --ready-message "$ready_message" --trace-ring "$work/live-trace.bin" \
             --desktop-ready-message "$desktop_ready_message" \
@@ -194,10 +211,10 @@ if [ "$result" -eq 0 ] && [ "$mode" = latency ]; then
             "$command" > "$work/command-metrics.jsonl" || result=$?
     fi
 fi
-python3 "$work/measure-terminal-text.py" --qmp "$work/run/qmp.sock" \
-    --dump-trace-ring "$work/trace.bin" || true
-if [ "$host_perf" = true ] && [ -S "$work/run/qmp.sock" ]; then
-    python3 "$work/measure-terminal-text.py" --qmp "$work/run/qmp.sock" \
+python3 "$work/measure-terminal-text.py" --qmp "$work/run/qemu/qmp.sock" \
+    --dump-trace-ring "$work/profile/trace.bin" || true
+if [ "$host_perf" = true ] && [ -S "$work/run/qemu/qmp.sock" ]; then
+    python3 "$work/measure-terminal-text.py" --qmp "$work/run/qemu/qmp.sock" \
         --quit || true
     count=0
     while kill -0 "$runner_pid" 2>/dev/null && [ "$count" -lt 100 ]; do
@@ -212,10 +229,16 @@ kill "$runner_pid" 2>/dev/null || true
 wait "$runner_pid" 2>/dev/null || true
 runner_pid=
 cp "$work/log/qemu-console.log" "$work/console.log"
+setpriv --reuid "$qemu_uid" --regid "$qemu_gid" --clear-groups \
+    --no-new-privs cat "$work/profile/trace.bin" >"$work/trace.bin"
 if [ "$mode" != latency ]; then
+    setpriv --reuid "$qemu_uid" --regid "$qemu_gid" --clear-groups \
+        --no-new-privs cat "$work/profile/profile.aprof" >"$work/profile.aprof"
     [ -s "$work/profile.aprof" ] || { echo "profiler emitted no data" >&2; exit 1; }
 fi
 if [ "$host_perf" = true ]; then
+    setpriv --reuid "$qemu_uid" --regid "$qemu_gid" --clear-groups \
+        --no-new-privs cat "$work/profile/host-perf.data" >"$work/host-perf.data"
     [ -s "$work/host-perf.data" ] || { echo "perf emitted no data" >&2; exit 1; }
     "$perf" report --stdio --no-children -i "$work/host-perf.data" \
         > "$work/host-perf.txt"

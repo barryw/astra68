@@ -9,6 +9,13 @@ test_splitting(void)
 {
     char name[ASTRA_CAPABILITY_NAME_MAX];
     char rest[64];
+    assert(!astra_path_requires_walk("/work/.config/file"));
+    assert(!astra_path_requires_walk("/work/a..b"));
+    assert(!astra_path_requires_walk("/work/a//b"));
+    assert(astra_path_requires_walk("/work/a/../b"));
+    assert(astra_path_requires_walk("/work/./b"));
+    assert(astra_path_requires_walk("/work/a/"));
+    assert(astra_path_requires_walk("/work/.."));
 
     assert(astra_path_split("/work/src/main.c", name, sizeof(name), rest,
                             sizeof(rest)) == ASTRA_VFS_OK);

@@ -53,6 +53,12 @@ CONFIG_DIRECTORY = "config"
 HOME_DIRECTORY = "home"
 CONFIG_SCOPES = ("system", "services", "commands", "applications")
 CONFIGURATION = {
+    "services/hostfs/settings.conf": (
+        "astra-config 1\n"
+        "schema 1\n"
+        "owner_files 1024\n"
+        "owner_sessions 64\n"
+        "queue_messages 16\n"),
     "system/network/resolv.conf": (
         "# Astra delegates getaddrinfo(3) to the host resolver.\n"
         "# DNS server selection remains host policy.\n"),
@@ -164,7 +170,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/storage grants BLOCK_DEVICE BLOCK_IRQ "
     "serves SYSTEM:r critical priority=20\n"
     "service /services/posixd grants serves POSIX_PROCESS required priority=20\n"
-    "service /services/hostfs grants HOST_FILESYSTEM "
+    "service /services/hostfs grants HOST_FILESYSTEM CONFIG:r "
     "serves WORK:rw METRICS:r SOUND:rw required priority=20\n"
     "service /services/entropy grants HOST_DEVICE "
     "serves ENTROPY required priority=20\n"

@@ -1,9 +1,18 @@
 # Astra filesystem production requirements
 
 Status: implementation PRD. The architectural direction was agreed on
-2026-10-06; implementation and production qualification remain outstanding.
-Phase 1 (baseline and trusted-boundary prototype) is next; no later phase has
-started.
+2026-10-06. Native-16, integration-1 and unprivileged DE25 provider gates
+qualified the preceding ABI 11 source on 2026-10-11. Final-review fixes pass
+current-source requalification at Filesystem ABI 12/Kit 9.0.0, STOR 36:
+all 26 semantics, stress, NDK/docs, all 31 integration gates and isolated
+unprivileged AArch64 provider checks. ABI 12 release `194b9202` is deployed
+with unprivileged QEMU and the canonical worker-only resolver optimization.
+Final five paired QEMU stat/read probes pass, but full workload budgets fail
+(spawn median 1.73× baseline, among other failures). Physical five pairs also
+fail unchanged budgets: warm-open median 3.51× and readdir median 2.59×,
+among other failures. Every workload executes successfully; provider memory
+and held-miss absolute floors pass. Performance acceptance remains open; no later
+production phase has started.
 
 Linux owns filesystem machinery. Astra owns the client experience: its native
 API, process-visible namespace, named volumes, grants, mount policy, desktop
@@ -40,10 +49,10 @@ versioned Astra protocols; applications gain no alternate Linux API.
 | Area | Existing implementation | Production gap |
 |---|---|---|
 | System storage | Guest lwext4 mounts the selected SD partition; supervisor bootstrap and storage service independently select the first MBR Linux-type partition. | One verified system-volume selection and one Linux filesystem owner, including bootstrap. |
-| Linux-backed files | HostFS carries native operations over the host transport and is the only holder of `HOST_FILESYSTEM`, the host device's right to mint filesystem scopes. Since storage protocol 28 a HELLO hands a client its volume's scope, and the client drives its own host channel: the kernel binds the channel to the scope and QEMU enforces volume, read-only rights and handle tags on every command. The host exposes fixed WORK and SOUND directory exports. | Dynamic volume inventory, rooted grants (roots and rights within a volume are still client-only), complete semantics, and mount lifecycle. |
+| Linux-backed files | HostFS owns `HOST_FILESYSTEM` and mints rooted, rights-bounded sessions/scopes. Clients drive kernel-bound host channels; QEMU enforces scope, ancestry, read-only rights, ownership and object tags for every command. Current storage protocol is 36. The host exposes fixed WORK and SOUND exports. | Dynamic volume inventory and mount lifecycle; full performance acceptance. |
 | RAM storage | An optional guest RAMFS service enforces a configured allocation cap. | Linux tmpfs with explicit host-memory limits and the common volume lifecycle. |
-| Namespace | Assigns provide slash roots; `/dh0` and protected conveniences are exposed. Some conveniences report synthetic symlink metadata while operations use independent grants. | Honest binding semantics, trusted enforcement, and coherent traversal. |
-| File objects | Directory-relative operations and live-handle metadata exist. | Stable volume/node IDs, retained cwd, shared offsets and inheritance, complete symlink behavior. |
+| Namespace | Assigns provide slash roots and protected conveniences through native binding semantics; traversal follows links in order and confines rooted grants. | Dynamic mount publication and removal. |
+| File objects | Stable volume/node identities, retained objects/cwd, shared descriptions/offsets, fork/exec inheritance and ordered symlink behavior pass current correctness gates. | Production lifecycle across dynamic media and final performance acceptance. |
 | Devices and mounts | The device/volume document defines the desired model; storage services have shutdown hooks. | General storage inventory, mount policy execution, hotplug, unmount/eject, and client notifications. |
 
 Implementation anchors are [supervisor bootstrap](../sw/userspace/supervisor/src/volume.c),

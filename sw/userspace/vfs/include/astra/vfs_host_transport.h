@@ -45,6 +45,8 @@ typedef struct AstraVfsHostTransfer {
     uint32_t output_capacity;
 } AstraVfsHostTransfer;
 
+uint32_t astra_vfs_host_status_from_syscall(uint32_t status);
+
 int astra_vfs_host_transport_init(AstraVfsHostTransport *transport,
                                   uint32_t device,
                                   AstraVfsStateAcquire acquire,

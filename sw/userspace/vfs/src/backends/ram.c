@@ -166,9 +166,7 @@ static void info_of(const AstraVfsRamNode *node, AstraVfsNodeInfo *info)
     memset(info, 0, sizeof(*info));
     info->size = node->size;
     info->kind = node->kind;
-    info->mode = node->mode;
-    info->nlink = node->links > UINT16_MAX ? UINT16_MAX :
-                  (uint16_t)node->links;
+    astra_vfs_node_info_mode_links(info, node->mode, node->links);
 }
 
 static void free_node(AstraVfsRamBackend *fs, AstraVfsRamNode *node)
@@ -460,7 +458,7 @@ static uint32_t ram_read(void *context, uintptr_t handle, uint64_t offset,
 }
 
 static uint32_t ram_write(void *context, uintptr_t handle, uint64_t offset,
-                          uint32_t flags, const void *buffer,
+                          uint32_t flags, uint64_t max_end, const void *buffer,
                           uint32_t length, uint32_t *moved,
                           uint64_t *position)
 {
@@ -477,12 +475,20 @@ static uint32_t ram_write(void *context, uintptr_t handle, uint64_t offset,
         unlocked(fs);
         return ASTRA_VFS_ERR_IS_DIR;
     }
-    if ((flags & ASTRA_VFS_OPEN_APPEND) != 0u)
+    if ((flags & ASTRA_VFS_WRITE_APPEND) != 0u)
         offset = node->size;
+    *moved = 0u;
+    *position = offset;
     if (offset > UINT64_MAX - length) {
         unlocked(fs);
         return ASTRA_VFS_ERR_INVALID;
     }
+    if (length != 0u && offset >= max_end) {
+        unlocked(fs);
+        return ASTRA_VFS_ERR_FILE_TOO_LARGE;
+    }
+    if (offset < max_end && (uint64_t)length > max_end - offset)
+        length = (uint32_t)(max_end - offset);
     while (done < length) {
         uint64_t at = offset + done;
         uint64_t index = at / RAM_PAGE_BYTES;
@@ -585,7 +591,7 @@ static uint32_t ram_stat(void *context, const char *path,
 }
 
 static uint32_t ram_stat_at(void *context, uintptr_t directory,
-                            const char *path, AstraVfsNodeInfo *info)
+                            const char *path, uint32_t flags, AstraVfsNodeInfo *info)
 {
     AstraVfsRamBackend *fs = context;
     AstraVfsRamNode *base = (AstraVfsRamNode *)directory;
@@ -595,6 +601,9 @@ static uint32_t ram_stat_at(void *context, uintptr_t directory,
         base->kind != ASTRA_VFS_KIND_DIRECTORY || !locked(fs))
         return ASTRA_VFS_ERR_INVALID;
     status = stat_from(fs, base, path, info);
+    if (status == ASTRA_VFS_OK && (flags & ASTRA_VFS_STAT_FOLLOW) != 0u &&
+        info->kind == ASTRA_VFS_KIND_SYMLINK)
+        status = ASTRA_VFS_ERR_UNSUPPORTED;
     unlocked(fs);
     return status;
 }
@@ -702,14 +711,15 @@ static uint32_t remove_from(AstraVfsRamBackend *fs, AstraVfsRamNode *base,
     return ASTRA_VFS_OK;
 }
 
-static uint32_t ram_unlink(void *context, const char *path)
+static uint32_t ram_unlink(void *context, const char *path, uint32_t flags)
 {
     AstraVfsRamBackend *fs = context;
     uint32_t status;
 
-    if (fs == NULL || !locked(fs))
+    if (fs == NULL || (flags & ~ASTRA_VFS_UNLINK_DIRECTORY) != 0u || !locked(fs))
         return ASTRA_VFS_ERR_INVALID;
-    status = remove_from(fs, fs->root, path, 0);
+    status = remove_from(fs, fs->root, path,
+                         flags & ASTRA_VFS_UNLINK_DIRECTORY ? 1 : 2);
     unlocked(fs);
     return status;
 }
@@ -723,10 +733,10 @@ static uint32_t ram_unlink_at(void *context, uintptr_t directory,
 
     if (fs == NULL || base == NULL || path == NULL || path[0] == '/' ||
         path[0] == '\0' ||
-        (flags & ~ASTRA_VFS_AT_REMOVE_DIRECTORY) != 0u || !locked(fs))
+        (flags & ~ASTRA_VFS_UNLINK_DIRECTORY) != 0u || !locked(fs))
         return ASTRA_VFS_ERR_INVALID;
     status = remove_from(fs, base, path,
-                         (flags & ASTRA_VFS_AT_REMOVE_DIRECTORY) != 0u ?
+                         (flags & ASTRA_VFS_UNLINK_DIRECTORY) != 0u ?
                              1 : 2);
     unlocked(fs);
     return status;
@@ -1010,6 +1020,7 @@ static const AstraVfsBackendOps ram_ops = {
     .filesystem_info = ram_filesystem_info,
     .stat_at = ram_stat_at,
     .stat_node = ram_stat_node,
+    NULL,
 };
 
 const AstraVfsBackendOps *astra_vfs_ram_ops(void)

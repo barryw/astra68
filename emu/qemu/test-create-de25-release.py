@@ -26,6 +26,9 @@ for required in (
     "qemu/lib/libpcre.so.3=",
     "qemu/lib/libglib-2.0.so.0=",
     "source/SOURCE_SHA256SUMS=",
+    'make -C "$REPOSITORY/fpga/de25/linux" modules',
+    "kernel/astra_graphics_arena.ko=",
+    "udev/99-astra-qemu.rules=",
     'python3 "$RELEASE_TOOL" create',
 ):
     assert required in script, required

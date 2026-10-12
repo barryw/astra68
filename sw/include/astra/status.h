@@ -84,8 +84,14 @@
 #define ASTRA_STATUS_LOOP            18
 /** The operation needs to write to storage that is mounted read-only. */
 #define ASTRA_STATUS_READ_ONLY       19
-/* 20..31 are unassigned, and are the system's to spend. */
-/** Highest value in the shared vocabulary; 20..31 are unassigned and reserved for it. */
+/** Ordered path lookup left its provider root; continue in the native namespace. */
+#define ASTRA_STATUS_ESCAPED         20
+/** The file, session or service was lost with its provider; reopen or restart. */
+#define ASTRA_STATUS_LOST            21
+/** A nonempty write starts at or beyond its maximum permitted byte position. */
+#define ASTRA_STATUS_FILE_TOO_LARGE  22
+/* 23..31 are unassigned, and are the system's to spend. */
+/** Highest value in the shared vocabulary; 23..31 are unassigned and reserved for it. */
 #define ASTRA_STATUS_SYSTEM_MAX      31
 
 /*

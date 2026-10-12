@@ -59,6 +59,8 @@ die() { echo "astra-qemu-root: $*" >&2; exit 64; }
 [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ] && [ -n "${SUDO_USER:-}" ] ||
     die "run through sudo"
 [[ $SUDO_UID =~ ^[0-9]+$ && $SUDO_GID =~ ^[0-9]+$ ]] || die "run through sudo"
+[ "$SUDO_UID" -ne 0 ] && [ "$SUDO_GID" -ne 0 ] ||
+    die "non-root caller UID and GID required"
 
 IMAGE= TZ_OVERRIDE=
 while [ "$#" -gt 0 ]; do

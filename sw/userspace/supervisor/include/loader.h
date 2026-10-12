@@ -91,6 +91,9 @@ typedef struct SupervisorProcessRecord {
     /* The application's own GUI session (ASTRA_GUI_OPEN_SESSION), kept to
        bring it forward when it is opened again; zero when it has none. */
     uint32_t gui_session;
+    char (*namespace_names)[ASTRA_CAPABILITY_NAME_MAX];
+    uint32_t namespace_count;
+    uint32_t namespace_lost;
     char service_name[ASTRA_VFS_NAME_MAX];
     /* "/apps/NAME.app" for an application, else empty. */
     char bundle[ASTRA_VFS_PATH_MAX];

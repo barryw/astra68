@@ -58,6 +58,11 @@ uint32_t astra_vfs_port_transport(void *context, uint32_t operation,
 /* Lifecycle guard used by an in-process backend bound to this transport. */
 uint32_t astra_vfs_port_client_enter(AstraVfsClient *client);
 void astra_vfs_port_client_leave(AstraVfsClient *client);
+/* Mark failed and retire resources after in-flight callers leave. */
+void astra_vfs_port_fail(AstraVfsClient *client);
+int astra_vfs_port_client_closed(const AstraVfsClient *client);
+/* Drain data calls, refresh the scope, retain the grant's control session. */
+uint32_t astra_vfs_port_refresh(AstraVfsClient *client);
 AstraVfsCallState *astra_vfs_port_call_acquire(AstraVfsClient *client);
 /*
  * Astra executables use native TLS for call scratch. A shared library, whose
@@ -125,15 +130,18 @@ uint32_t astra_vfs_port_read_borrow(AstraVfsClient *client, AstraVfsFile file,
 uint32_t astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
                                   uint64_t offset, void *buffer,
                                   uint32_t length, uint32_t *moved);
+uint32_t astra_vfs_port_read_bulk_position(AstraVfsClient *client,
+    AstraVfsFile file, uint64_t offset, uint32_t flags, void *buffer,
+    uint32_t length, uint32_t *moved, uint64_t *position);
 
 /* Version 9: one write from the caller's bound transfer area. */
 uint32_t astra_vfs_port_write_bulk(AstraVfsClient *client, AstraVfsFile file,
-                                   uint64_t offset, const void *buffer,
+                                   uint64_t offset, uint64_t max_end, const void *buffer,
                                    uint32_t length, uint32_t *moved);
 /* Version 21: bulk write plus its atomic post-write position. */
 uint32_t astra_vfs_port_write_bulk_position(
     AstraVfsClient *client, AstraVfsFile file, uint64_t offset,
-    uint32_t flags, const void *buffer, uint32_t length, uint32_t *moved,
+    uint32_t flags, uint64_t max_end, const void *buffer, uint32_t length, uint32_t *moved,
     uint64_t *position);
 
 /* Payload produced by the calling thread's most recent area operation. */
@@ -175,8 +183,10 @@ typedef struct AstraVfsPortGrant {
     uint32_t receive;          /* the grant's receive port, 0 when free */
     uint32_t id;               /* nonzero, never reused by its service */
     uint32_t rights;           /* ASTRA_VFS_GRANT_* */
+    uint32_t features;         /* provider capabilities, additional to GRANTS */
     uint32_t scope;            /* the grant's scope, ADMINISTER; HELLO hands
                                 * out a duplicate without it */
+    uint32_t lost;             /* provider root unavailable; answer LOST */
 } AstraVfsPortGrant;
 
 /*

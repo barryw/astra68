@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Compare two fs-baseline records against the PRD's release budget.
+"""Compare fs-baseline records against the PRD's release budget.
 
-usage: fs-baseline-compare.py BASE.json NEW.json [--budget 0.10]
+usage: fs-baseline-compare.py BASE[,BASE...] NEW[,NEW...] [--budget 0.10]
+
+Each side uses the per-workload median over its runs. Any failed run or
+workload absent from one run fails the comparison.
 
 A workload passes when its median and p95 are at most (1 + budget) times
 the baseline's, and its throughput, when it has one, is at least
@@ -14,13 +17,31 @@ performance gates".
 
 import argparse
 import json
+import statistics
 import sys
 
 
-def workloads(path):
-    with open(path) as source:
-        record = json.load(source)
-    return record.get("guest", record)["workloads"]
+def workloads(spec):
+    runs = []
+    for path in spec.split(","):
+        with open(path) as source:
+            record = json.load(source)
+        runs.append(record.get("guest", record)["workloads"])
+    merged = {}
+    for name in set.union(*(set(run) for run in runs)):
+        entries = [run[name] for run in runs if name in run]
+        merged[name] = {
+            "median_ns": statistics.median(e["median_ns"] for e in entries),
+            "p95_ns": statistics.median(e["p95_ns"] for e in entries),
+            "failed": len(entries) != len(runs) or
+                      any(e.get("failed") for e in entries),
+        }
+        rates = [e.get("throughput_bps") for e in entries]
+        if all(rate is not None for rate in rates):
+            merged[name]["throughput_bps"] = statistics.median(rates)
+        elif any(rate is not None for rate in rates):
+            merged[name]["failed"] = True
+    return merged
 
 
 def main():
@@ -31,7 +52,7 @@ def main():
     arguments = parser.parse_args()
     base = workloads(arguments.base)
     new = workloads(arguments.new)
-    failed = False
+    failed = not base or not new
     for name in sorted(set(base) - set(new)):
         print("%-16s MISSING (only in base)" % name)
         failed = True
@@ -46,12 +67,15 @@ def main():
             ok = ratio <= 1.0 + arguments.budget
             verdicts.append("%s %.2fx%s" % (key, ratio, "" if ok else "!"))
             failed |= not ok
-        if old.get("throughput_bps") and now.get("throughput_bps"):
+        if old.get("throughput_bps") and "throughput_bps" in now:
             ratio = now["throughput_bps"] / old["throughput_bps"]
             ok = ratio >= 1.0 - arguments.budget
             verdicts.append("throughput %.2fx%s" % (ratio, "" if ok else "!"))
             failed |= not ok
-        if now.get("failed"):
+        elif old.get("throughput_bps"):
+            verdicts.append("MISSING-THROUGHPUT")
+            failed = True
+        if old.get("failed") or now.get("failed"):
             verdicts.append("FAILED-RUN")
             failed = True
         print("%-16s %s" % (name, "  ".join(verdicts)))

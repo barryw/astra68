@@ -1988,7 +1988,9 @@ KernelVmStatus kernel_vm_cow_fault(KernelAddressSpace *space,
         (void)kernel_memory_release(replacement, 1u, space->owner);
         return KERNEL_VM_CORRUPT;
     }
-    if (!frame_mapping_remove(physical, KERNEL_FRAME_COW_WRITE,
+    if (cow_rehome_before_unmap(space, virtual_address, physical, &frame) !=
+            KERNEL_VM_OK ||
+        !frame_mapping_remove(physical, KERNEL_FRAME_COW_WRITE,
                               virtual_address)) {
         (void)frame_mapping_remove(replacement, KERNEL_FRAME_PROCESS,
                                    virtual_address);

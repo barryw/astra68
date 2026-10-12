@@ -29,7 +29,7 @@ static int remove_name(AstraProcessFilesystem *filesystem, const char *name)
 
     status = astra_process_path(name, typed, sizeof(typed));
     if (status == ASTRA_VFS_OK)
-        status = astra_filesystem_unlink(&filesystem->filesystem, typed);
+        status = astra_filesystem_unlink(&filesystem->filesystem, typed, 0u);
     if (status == ASTRA_VFS_OK)
         return 0;
     text = astra_vfs_status_text(status);

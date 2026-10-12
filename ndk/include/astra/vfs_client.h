@@ -135,13 +135,13 @@ typedef struct AstraVfsClient {
     AstraVfsCallAcquire call_acquire;
     ASTRA_VFS_ATOMIC(uint32_t) session;
     ASTRA_VFS_ATOMIC(uint16_t) version; /* the version agreed at connect */
-    uint32_t features;  /* ASTRA_VFS_FEATURE_* its HELLO answered (Kit 7) */
+    ASTRA_VFS_ATOMIC(uint32_t) features; /* HELLO may refresh during calls. */
     /*
      * What the owner of this client is currently doing. Stamped on every
      * request so one request is one story across every process it touches.
      * Zero until somebody sets it, which reads as no activity.
      */
-    uint32_t activity;
+    ASTRA_VFS_ATOMIC(uint32_t) activity;
     /* Private state used by astra_vfs_port_connect/transport. */
     uint8_t port_area_capable;
     uint8_t port_direct_detached;
@@ -312,18 +312,55 @@ uint32_t astra_vfs_close(AstraVfsClient *client, AstraVfsFile file);
 uint32_t astra_vfs_read(AstraVfsClient *client, AstraVfsFile file,
                         uint64_t offset, void *buffer, uint32_t length,
                         uint32_t *moved);
+/** Read bytes, optionally advancing the shared provider position.
+ * @param client Connected client. @param file Open file token.
+ * @param offset Positioned offset, ignored for sequential I/O.
+ * @param flags Zero or ASTRA_VFS_IO_SEQUENTIAL. @param buffer Receives bytes.
+ * @param length Requested bytes. @param moved Receives bytes read.
+ * @param position Receives the position after. @return ASTRA_VFS_* status. */
+uint32_t astra_vfs_read_position(AstraVfsClient *client, AstraVfsFile file,
+    uint64_t offset, uint32_t flags, void *buffer, uint32_t length,
+    uint32_t *moved, uint64_t *position);
+/** Seek the provider description.
+ * @param client Connected client. @param file Open file token.
+ * @param delta Signed offset. @param origin Begin/current/end (0/1/2).
+ * @param position Receives the new position. @return ASTRA_VFS_* status. */
+uint32_t astra_vfs_seek(AstraVfsClient *client, AstraVfsFile file,
+    int64_t delta, uint32_t origin, uint64_t *position);
+/** Retain a description for one adoption through this grant.
+ * @param client Connected client. @param file Open file token.
+ * @param token Receives a one-use share. @return ASTRA_VFS_* status. */
+uint32_t astra_vfs_share(AstraVfsClient *client, AstraVfsFile file,
+    uint64_t *token);
+/** Consume a share into a handle owned by this client.
+ * @param client Connected client. @param token Unclaimed share.
+ * @param file Receives a new handle. @return ASTRA_VFS_* status. */
+uint32_t astra_vfs_adopt(AstraVfsClient *client, uint64_t token,
+    AstraVfsFile *file);
+/** Withdraw a share, using its original client, independently of file close.
+ * @param client Original client. @param token Unclaimed share.
+ * @return ASTRA_VFS_* status; BAD_HANDLE if already adopted or withdrawn. */
+uint32_t astra_vfs_unshare(AstraVfsClient *client, uint64_t token);
+/** Query or change the description's mutable status flags.
+ * @param client Connected client. @param file Open file token.
+ * @param mask Zero to query, or ASTRA_VFS_OPEN_APPEND/NONBLOCK bits.
+ * @param flags Desired masked flags. @param result Receives current open flags.
+ * @return ASTRA_VFS_* status. */
+uint32_t astra_vfs_file_flags(AstraVfsClient *client, AstraVfsFile file,
+    uint32_t mask, uint32_t flags, uint32_t *result);
 /**
  * Write bytes at an explicit file offset.
  * @param client Connected client.
  * @param file Open file token.
  * @param offset Byte offset.
+ * @param max_end Exclusive maximum byte position, UINT64_MAX for no bound.
  * @param buffer Source bytes.
  * @param length Requested byte count.
  * @param moved Receives bytes written.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_vfs_write(AstraVfsClient *client, AstraVfsFile file,
-                         uint64_t offset, const void *buffer, uint32_t length,
+                         uint64_t offset, uint64_t max_end, const void *buffer, uint32_t length,
                          uint32_t *moved);
 /**
  * Write bytes and return the backend-selected resulting position.
@@ -331,6 +368,7 @@ uint32_t astra_vfs_write(AstraVfsClient *client, AstraVfsFile file,
  * @param file Open file token.
  * @param offset Byte offset.
  * @param flags ASTRA_VFS_WRITE_* operation flags.
+ * @param max_end Exclusive maximum byte position, checked with append/position.
  * @param buffer Source bytes.
  * @param length Requested byte count.
  * @param moved Receives bytes written.
@@ -338,7 +376,7 @@ uint32_t astra_vfs_write(AstraVfsClient *client, AstraVfsFile file,
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_vfs_write_position(AstraVfsClient *client, AstraVfsFile file,
-                                  uint64_t offset, uint32_t flags,
+                                  uint64_t offset, uint32_t flags, uint64_t max_end,
                                   const void *buffer, uint32_t length,
                                   uint32_t *moved, uint64_t *position);
 /**
@@ -415,6 +453,7 @@ typedef struct AstraVfsDirEntry {
         uint16_t member;
     };
     /** @endcond */
+    AstraVfsNodeMeta meta; /**< Identity and validity from stat or lookup. */
 } AstraVfsDirEntry;
 
 /**
@@ -433,17 +472,16 @@ uint32_t astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
                              AstraVfsDirEntry *meta);
 
 /**
- * Read no-follow metadata beneath an already-open directory.
- * Symbolic-link traversal belongs to the Filesystem Kit, not this backend
- * primitive.
+ * Read metadata beneath an already-open directory with explicit final-link policy.
  * @param client Connected client.
  * @param directory Open directory token that anchors resolution.
  * @param path Nonempty relative UTF-8 path.
+ * @param flags Zero or ASTRA_VFS_STAT_FOLLOW.
  * @param meta Receives metadata.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_vfs_stat_at_meta(AstraVfsClient *client,
-                                AstraVfsFile directory, const char *path,
+                                AstraVfsFile directory, const char *path, uint32_t flags,
                                 AstraVfsDirEntry *meta);
 
 /** Read current metadata for an open node, independent of its path.
@@ -506,16 +544,18 @@ uint32_t astra_vfs_mkdir_mode(AstraVfsClient *client, const char *path,
  * Remove one directory entry.
  * @param client Connected client.
  * @param path Mount-relative UTF-8 path.
+ * @param flags Zero for a non-directory entry, or
+ * ASTRA_VFS_UNLINK_DIRECTORY to remove an empty directory.
  * @return ASTRA_VFS_* status.
  */
-uint32_t astra_vfs_unlink(AstraVfsClient *client, const char *path);
+uint32_t astra_vfs_unlink(AstraVfsClient *client, const char *path, uint32_t flags);
 /**
  * Remove a relative entry beneath an open directory.
  * @param client Connected client.
  * @param directory Open directory token that anchors resolution.
  * @param path Nonempty relative UTF-8 path.
  * @param flags Zero for a non-directory entry, or
- * ASTRA_VFS_AT_REMOVE_DIRECTORY to remove a directory.
+ * ASTRA_VFS_UNLINK_DIRECTORY to remove a directory.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_vfs_unlink_at(AstraVfsClient *client,
@@ -612,5 +652,47 @@ uint32_t astra_vfs_filesystem_info_path(AstraVfsClient *client,
 uint32_t astra_vfs_filesystem_info_file(AstraVfsClient *client,
                                         AstraVfsFile file,
                                         AstraVfsFilesystemInfo *info);
+
+/** Ordered provider lookup, including native namespace continuations.
+ * @param client Connected or lazily connected client.
+ * @param directory Retained directory token, or zero for the provider root.
+ * @param path Rooted provider path, or relative path when directory is nonzero.
+ * @param flags ASTRA_VFS_LOOKUP_* flags.
+ * @param links_left Remaining native lookup link budget.
+ * @param meta Receives node metadata on success.
+ * @param escape Receives continuation and followed-link accounting.
+ * @return ASTRA_VFS_* status; UNSUPPORTED requests a Kit component walk. */
+uint32_t astra_vfs_lookup(AstraVfsClient *client, AstraVfsFile directory, const char *path,
+                          uint32_t flags, uint32_t links_left,
+                          AstraVfsDirEntry *meta, AstraVfsEscape *escape);
+
+/** Create a directory anchored at an open directory, or root when zero.
+ * @param client Connected client. @param directory Directory token or zero.
+ * @param path UTF-8 path. @param mode Creation permissions. @return ASTRA_VFS_* status. */
+uint32_t astra_vfs_mkdir_at(AstraVfsClient *client, AstraVfsFile directory, const char *path, uint16_t mode);
+/** Rename with independent directory anchors; zero means grant root.
+ * @param client Connected client. @param from_directory Source anchor.
+ * @param from Source path. @param to_directory Destination anchor.
+ * @param to Destination path. @return ASTRA_VFS_* status. */
+uint32_t astra_vfs_rename_at(AstraVfsClient *client, AstraVfsFile from_directory, const char *from, AstraVfsFile to_directory, const char *to);
+/** Link with independent directory anchors; zero means grant root.
+ * @param client Connected client. @param from_directory Source anchor.
+ * @param from Source path. @param to_directory Destination anchor.
+ * @param to Destination path. @return ASTRA_VFS_* status. */
+uint32_t astra_vfs_link_at(AstraVfsClient *client, AstraVfsFile from_directory, const char *from, AstraVfsFile to_directory, const char *to);
+/** Create a symbolic link anchored at a directory; zero means grant root.
+ * @param client Connected client. @param target Literal target text.
+ * @param directory Directory token or zero. @param path New link path. @return ASTRA_VFS_* status. */
+uint32_t astra_vfs_symlink_at(AstraVfsClient *client, const char *target, AstraVfsFile directory, const char *path);
+/** Read a link anchored at a directory; zero means grant root.
+ * @param client Connected client. @param directory Directory token or zero.
+ * @param path Link path. @param buffer Receives target bytes.
+ * @param capacity Buffer capacity. @param length Receives bytes written. @return ASTRA_VFS_* status. */
+uint32_t astra_vfs_readlink_at(AstraVfsClient *client, AstraVfsFile directory, const char *path, void *buffer, uint32_t capacity, uint32_t *length);
+/** Return an open directory's current path relative to its grant root.
+ * @param client Connected client. @param directory Open directory token.
+ * @param buffer Receives UTF-8 bytes without NUL. @param capacity Buffer capacity.
+ * @param length Receives bytes written. @return ASTRA_VFS_* status. */
+uint32_t astra_vfs_directory_path(AstraVfsClient *client, AstraVfsFile directory, void *buffer, uint32_t capacity, uint32_t *length);
 
 #endif

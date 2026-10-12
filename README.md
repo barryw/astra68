@@ -1,6 +1,6 @@
 <p align="center">
-  <img src="sw/boot/assets/astra_boot_splash_1280x720.png"
-       alt="Astra 68 boot screen"
+  <img src="sw/boot/assets/astra_boot_splash_1920x1080_blank.png"
+       alt="Astra 68 boot splash artwork"
        width="960">
 </p>
 
@@ -18,8 +18,8 @@
        src="https://img.shields.io/badge/CPU-MC68040%20%2B%20MMU-22d3ee">
   <img alt="Hardware: DE25-Nano"
        src="https://img.shields.io/badge/hardware-DE25--Nano-8b5cf6">
-  <img alt="Display: 1280 by 720 at 60 Hz"
-       src="https://img.shields.io/badge/display-1280%C3%97720p60-10b981">
+  <img alt="Display: 1920 by 1080 at 60 Hz"
+       src="https://img.shields.io/badge/display-1920%C3%971080p60-10b981">
 </p>
 
 Astra 68 keeps the directness and personality of classic 68k machines while
@@ -45,20 +45,34 @@ system is **Astra OS**.
   handling, device infrastructure, tracing, panic output, and performance
   gates.
 - The DE25 has separate 1 GiB LPDDR4 banks for the HPS and graphics. Astra uses
-  128 MiB of cached HPS memory; the FPGA owns the separate graphics bank.
-- The hardware-qualified 1280x720p60 graphics path includes RGB565/XRGB8888/
+  512 MiB of guest RAM; graphics and sound use 512 MiB of the separate media bank.
+- The hardware-qualified 1920x1080p60 graphics path includes RGB565/XRGB8888/
   INDEX8 framebuffers, two independently scrolling tile layers, 64 INDEX8
   sprites up to 128x128, sixteen per-sprite palette banks, alpha and opacity,
   scaling, signed off-screen positioning, clipping, collision reporting, and
   atomic frame-boundary scene promotion.
-- The bounded renderer transport, fences, descriptor validation, timeout/reset
-  handling, pixel writer, clipped fills, and overlap-safe basic copies pass an
-  exact full route and repeated Arty hardware tests.
-- The complete blitter feature set passes directed simulation, including
-  scaling, reflection, keying, MASK1, palette attachments, source-over,
-  opacity, all sixteen ROPs, and supported format conversion. Its 200 MHz
-  timing and integrated hardware release gates are still open.
+- The routed DE25 renderer drives a windowed desktop with hardware fills,
+  copies, compositing, glyphs, geometry, sprites and raster effects. Exact
+  timing and hardware checkpoints live in
+  [the DE25 timing record](fpga/de25/TIMING_CLOSURE.md).
+- Native applications and SDL2 ports share the same desktop, input, audio,
+  process and filesystem facilities. Terminal brings a real zsh shell;
+  Chocolate Doom brings something worth playing.
+- The native filesystem supports ext4, RAMFS and confined HostFS volumes,
+  with shared file descriptions, links, atomic bounded writes and recovery.
+  Current correctness gates pass; performance acceptance remains open.
 - The Astra QEMU backend runs on the active DE25 and is the only emulator.
+
+The current desktop uses crisp instrument icons in Astra's white and cyan
+palette. These frames were captured from the physical DE25 on October 11,
+2026, through its authenticated remote desktop service.
+
+![Astra OS desktop with native instrument icons](docs/images/astra-desktop.png)
+
+Chocolate Doom runs on the same native graphics, input, audio and filesystem
+facilities. Yes, this machine plays Doom.
+
+![Chocolate Doom running on Astra OS on the DE25](docs/images/astra-doom.png)
 
 ## Direction
 
@@ -131,8 +145,9 @@ emu/qemu/build.sh host
 fpga/arty/graphics/run_tests.sh
 ```
 
-Building the target kernel and ROM also requires an `m68k-elf` cross compiler.
-FPGA release builds require Vivado 2024.2 for the Arty target. Exact lab build,
+Building the target kernel and ROM uses the project's `m68k-astra` toolchain.
+Production FPGA builds use Quartus Pro on Beast; Vivado builds serve the Arty
+rollback platform. Exact lab build,
 route, deployment, and rollback procedures are intentionally kept in the
 component documentation because a reduced or unconstrained bitstream is not
 release evidence.

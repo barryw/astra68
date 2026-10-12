@@ -87,6 +87,20 @@ announced_r() {
 
 finish() { if wait "$BG"; then STATUS=0; else STATUS=$?; fi; }
 
+run_test_root_caller() {
+    local status=0
+    sudo -n env SUDO_UID=0 SUDO_GID=0 SUDO_USER=root \
+        "$WRAPPER" --image "$WORK/missing.img" -- /bin/true \
+        > "$WORK/root-caller.log" 2>&1 || status=$?
+    if [ "$status" -eq 64 ] &&
+            grep -q 'non-root caller' "$WORK/root-caller.log" &&
+            ! grep -q '^ASTRA-QEMU-ROOT-MOUNT ' "$WORK/root-caller.log"; then
+        note_pass "fs-root-helper refuses root caller before mounting"
+    else
+        note_fail "fs-root-helper accepted root caller or rejected it too late ($status)"
+    fi
+}
+
 # --- N6: the running stand-in holds no privilege at all ------------------
 #
 # Polls (the exec chain passes through root on its way down) for all four
@@ -455,6 +469,7 @@ perturb_reservation() {
 LOOP_BEFORE=$(sudo -n losetup -a | wc -l)
 DIRS_BEFORE=$(helper_dirs)
 
+run_test_root_caller
 run_test_creds
 run_test_images
 run_test_growing

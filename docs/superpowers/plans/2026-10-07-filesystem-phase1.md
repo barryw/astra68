@@ -1,5 +1,32 @@
 # Filesystem Phase 1 Implementation Plan
 
+**Execution status, 2026-10-11:** Four Important final-review findings are
+fixed; correctness requalification passes for native directory-relative
+namespace continuation, joined-open shadowing, two-path provider escapes and
+root-caller rejection. Current contracts: Filesystem ABI 12/Kit 9.0.0,
+STOR 36, Host 0x00010015/configuration 4, syscall 0x00010043, runtime 1.16.
+Current `review-target-1`/`review-integration-1` both exit 0: all 26 guest
+semantics, 1,600 stress operations, raw provider, NDK/docs, POSIX host and
+sanitizers, all 31 integration gates, 111 Terminal commands and six power
+actions pass. Physical isolated provider checks pass as UID 65534.
+On the preceding ABI 11 source, Tasks 5–12 pass native-16's full correctness
+checkpoint and calibration-3's unprivileged DE25 provider checks. Integration-1
+passes all 31 gates, events, NDK/docs and provider coverage, finishing exit zero
+with all 164 source hashes unchanged. Those retained results do not qualify
+the new ABI 12 source.
+The ABI 12 release `194b9202da7eb0ff61a05ad03633bd63f687ac7afce5fe05c08601fc357af249`
+is deployed with unprivileged QEMU and the ledgered worker-only canonical
+resolver optimization. Final host five-pair measurements pass all workload,
+fsck and probe executions; probe budgets pass, but full workload budgets fail
+(spawn median 1.73× baseline, among other failures). Physical five pairs also
+complete with all workloads/floors and resource pressure checks passing,
+but strict budgets fail (warm-open median 3.51×, readdir median 2.59×).
+The runner restores `194b9202`; all ratios are recorded in the filesystem
+continuation. Task 12b/13 performance acceptance remains open. Per Task 13,
+record failures and stop tuning; no thresholds or workloads are waived.
+The instructions and failed checkpoints below
+remain part of the implementation record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Revision 2026-10-08.** Task 3 (the HostFS relay, `62b72fc2`, `6d4e6a2c`)
@@ -106,15 +133,16 @@ tests with plain `assert`, qtest and full-boot Python gates.
   | Item | Task 3 (done) | 3b | 4 | 5 | 6 | 7 | 8 | 9 | 11 |
   |---|---|---|---|---|---|---|---|---|---|
   | Storage protocol `ASTRA_VFS_VERSION` | 27 | 28 | | 29 | 30 | 31 | 32 | 33 | |
-  | Host transport `ASTRA_HOST_VERSION` | 0x0001000c | 0x0001000d | 0x0001000e | | 0x0001000f | | 0x00010010 | 0x00010011 | |
-  | New host capability bit | | `FS_SCOPE` (10) | `FS_SESSIONS` (11) | | `FS_RESOLVES` (12) | | `FS_DESCRIPTIONS` (13) | `FS_PATHS` (14) | |
+  | Host transport `ASTRA_HOST_VERSION` | 0x0001000c | 0x0001000d | 0x0001000e | | 0x0001000f | | 0x00010011 | 0x00010012 | |
+  | New host capability bit | | `FS_SCOPE` (10) | `FS_SESSIONS` (11) | | `FS_RESOLVES` (12) | | `FS_DESCRIPTIONS` (13), `FS_DIRECTORY_BATCH` (14) | `FS_PATHS` (15) | |
   | Channel config `ASTRA_HOST_CHANNEL_CONFIG_VERSION` | 1 | 2 (scope words, ATTACH, DETACH) | 3 (provider flag, review I1) | | | | | | 4 (`scope_files`) |
   | Host command record `ASTRA_HOST_COMMAND_VERSION` | 2 | 2 | 3 | | | | | | |
   | Kernel syscalls | | `HOST_SCOPE_CREATE` 109, `HOST_SCOPE_REVOKE` 110, `HOST_SCOPE_ATTACH` 111 | | | | | | | `HOST_SCOPE_LIMIT` 112 |
   | Kernel object | | `KERNEL_OBJECT_HOST_SCOPE` 17 | | | | | | | |
   | Handle right | | `ASTRA_RIGHT_HOST_SCOPE` (1u << 9) | | | | | | | |
-  | `runtime.library` | 1.13 | 1.14 (`astra_host_scope_*`) | | | | | | | 1.15 (`astra_host_scope_limit`) |
-  | `filesystem.library` (Kit) | 5.0 | 6.0 (lane fields) | | 7.0 (`features`, `received_handle`) | | 8.0 (identity) | 8.1 | 8.2 | |
+  | `runtime.library` | 1.13 | 1.14 (`astra_host_scope_*`) | | 1.15 (`astra_port_send_rights`, Task 5 C1) | | | | | 1.16 (`astra_host_scope_limit`) |
+  | Syscall ABI `ASTRA_SYSCALL_ABI_VERSION` | 0x00010040 | | | 0x00010042 (send dispositions, Task 5 C1) | | | | | |
+  | `filesystem.library` (Kit) | 5.0 | 6.0 (lane fields) | | 7.0 (`features`, `received_handle`) | | 8.0 (identity) | 9.0 (descriptions) | 10.0 (retained cwd) | |
   | `ASTRA_HOST_METRICS_VERSION` | 2 | 2 | 3 | | | | 4 | 5 | |
 
   Every Filesystem Kit major bump edits Task 3 Step 7's file list and
@@ -5529,7 +5557,7 @@ record 3:
   `ASTRA_HOST_FS_CHMOD_FILE` is `ASTRA_HOST_FS_CHMOD` with an empty operand.
   `ASTRA_HOST_FS_CHMOD_AT` is `ASTRA_HOST_FS_CHMOD` with handle and operand,
   and `flags == 0`, since Task 4's provider never follows. `ASTRA_HOST_FS_UNLINK_AT`
-  with `ASTRA_VFS_AT_REMOVE_DIRECTORY` is `ASTRA_HOST_FS_UNLINK` with handle
+  with `ASTRA_VFS_UNLINK_DIRECTORY` is `ASTRA_HOST_FS_UNLINK` with handle
   and `flags == ASTRA_HOST_FS_UNLINK_DIRECTORY`. The path `unlink` sends
   `flags == 0` (either kind).
 - Metadata answers are written into `command->node`. For STAT_AT's answer:
@@ -5868,7 +5896,7 @@ goes.
     and `flags = 0`;
   - `host_unlink` sends `ASTRA_HOST_FS_UNLINK` with `flags = 0`;
   - `host_unlink_at` sends `ASTRA_HOST_FS_UNLINK` with `handle = directory`
-    and `flags = (flags & ASTRA_VFS_AT_REMOVE_DIRECTORY) != 0u ? ASTRA_HOST_FS_UNLINK_DIRECTORY : ASTRA_HOST_FS_UNLINK_FILE`;
+    and `flags = (flags & ASTRA_VFS_UNLINK_DIRECTORY) != 0u ? ASTRA_HOST_FS_UNLINK_DIRECTORY : ASTRA_HOST_FS_UNLINK_FILE`;
   - `host_two_paths` sets both operands, `handle = 0` and `value_lo = 0`
     (both bases are the session root).
 - `astra_vfs_host_init` refuses `session == 0u` and stores it.
@@ -7336,6 +7364,19 @@ git commit -m "feat(host): command record 3 -- claimed provider, rooted sessions
 
 ### Task 5: Grants are the control plane; scopes carry them (D2, corrected; FS15)
 
+**Continuation checkpoint, 2026-10-10:** the uncommitted re-review fixes
+reject transfers with no usable right after import filtering, including an
+import filter leaving only TRANSFER. Invalid masks roll back PORT_CALL
+replies; regression tests cover effective masks and atomic two-handle sends.
+HostFS retires orphan grants before pumping and has a booted process-death
+case. Kernel/userspace suites, all 30 t9 gates, and NDK checks passed on
+Beast. Fresh five-pair comparisons failed the existing performance budget:
+read median 1.114x at 5,000 ops/run, stat p95 1.227x in a longer 40,000-op
+diagnostic. Both are retained; performance qualification remains open.
+Evidence and next work are in `docs/HANDOVER_2026-10-10_FILESYSTEM.md`.
+The shared 64-scope pool remains Task 11 work; the eight per-channel slots
+remain Task 10 work.
+
 A grant becomes a HostFS port with a root, rights and a scope. HostFS keeps
 one `AstraVfsService` per volume for session bookkeeping. It answers each
 grant on that grant's own receive port. A session remembers the grant it was
@@ -7924,6 +7965,14 @@ Kit major 7: repeat Task 3 Step 7 with `6` -> `7`:
 `ndk/tests/headers.c` expects 7.
 
 - [ ] **Step 6: HostFS serves grants (`services/hostfs/main.c`)**
+
+> **Superseded in part (Task 5 review, 2026-10-09):** the grant table grows
+> on demand. `HOSTFS_GRANTS_MAX`, `configured_grants`, the `grants 32`
+> setting and HostFS's `CONFIG:r` below were removed (review I2); derived
+> grants are owned by the deriving session (I1); a port derived from a
+> non-delegable grant is sent without TRANSFER (C1, syscall ABI
+> 0x00010042). The code as committed (cf0c2ea9, 9d7a5cbd and after) is the
+> reference.
 
 Replace Task 3b's two scopes and two scoped ports with a grant table. HostFS
 stays single-threaded: it serves only the control plane. `METRICS` keeps
@@ -8731,6 +8780,15 @@ git commit -m "feat(hostfs): grants are ports with scopes; derive narrows, deleg
 
 ### Task 6: Ordered path resolution (D3)
 
+**User direction, 2026-10-10:** finish correctness before performance
+qualification. Implement and validate one ordered resolver now; defer Step
+4's candidate comparison and performance work to the qualification phase.
+Keep confinement, ordered symlink expansion, native namespace continuation,
+and all behavior/security tests. The code below is a design draft, not an
+implementation oracle: in particular, escape positions must refer to the
+original request after nested link expansion, and a moved base must be
+rejected before any operation, not only when it encounters `..`.
+
 QEMU stops refusing `.`, `..` and symbolic links (`astra68.c:3025-3150`,
 `:3873-3973`) and resolves them in order beneath the session root, the way
 Haiku's `vnode_path_to_vnode` does (`vfs.cpp:2204-2378`). A path that leaves
@@ -8739,12 +8797,20 @@ the root does not fail. The provider says where it left
 and the Filesystem Kit continues in the Astra namespace. The Kit and libc
 stop folding `..` for a binding whose provider resolves.
 
-D3 leaves one choice to measurement: a per-component walk alone, or
-`openat2(RESOLVE_BENEATH)` first with the walk as fallback. The walk is
-needed either way, because only it can say *where* a path left the root,
-and an `EXDEV` from `openat2` cannot. This task builds both, measures them
-on beast and the DE25, decides by the rule in Step 4, and deletes the
-loser.
+D3's performance choice remains deferred: the retained implementation uses
+the ordered descriptor walk and a confined `openat2` for the final open.
+The walk identifies the actual continuation when a path leaves its grant;
+an `EXDEV` from `openat2` alone cannot. Step 4's candidate code below is
+historical design material, not a prerequisite for correctness work.
+
+**Correctness checkpoint, 2026-10-10:** implemented and verified together
+with Task 7 under storage protocol 31 and Kit 8.0. VFS/resolver normal and
+ASan/UBSan suites, raw HostFS, all 18 guest semantics, provider e2fsck and
+111 terminal commands pass. Final opens remain confined beneath the held
+parent; moved-out bases are refused before mutation. Ordered missing-leaf
+policy, virtual-root protection, and typed unlink/rmdir are covered. Step 4
+and all performance qualification remain deferred. Task 7 records the full
+integration result, including its failed parallel timer gate.
 
 **Files:**
 - Create: `emu/qemu/qemu-9.2/hw/m68k/astra68-resolve.c`, `emu/qemu/qemu-9.2/hw/m68k/astra68-resolve.h`
@@ -8760,22 +8826,26 @@ loser.
 - Test: `sw/userspace/vfs/tests/test_vfs_union.c`, `sw/userspace/vfs/tests/test_vfs_path.c`, `sw/userspace/vfs/tests/test_vfs_service_core.c`
 
 **Interfaces:**
-- Produces (resolver): `astra_resolve(root, base, path, flags, AstraResolution *) -> 0 | -errno`,
-  `ASTRA_RESOLVE_FOLLOW_FINAL`, `ASTRA_RESOLVE_ESCAPE_PARENT` (1),
+- Produces (resolver): `astra_resolve(root, base, path, flags, links_left, AstraResolution *) -> 0 | -errno`,
+  `astra_resolve_rooted`, `astra_resolve_open`, `ASTRA_RESOLVE_FOLLOW_FINAL`,
+  `ASTRA_RESOLVE_ENTRY`, `ASTRA_RESOLVE_ESCAPE_PARENT` (1),
   `ASTRA_RESOLVE_ESCAPE_SYMLINK` (2), `ASTRA_RESOLVE_LINK_MAX` (40).
 - Produces (status): `ASTRA_STATUS_ESCAPED` (20) / `ASTRA_VFS_ERR_ESCAPED`.
 - Produces (host): `ASTRA_HOST_VERSION 0x0001000f`,
-  `ASTRA_HOST_CAP_FS_RESOLVES (1u << 12)`, `ASTRA_HOST_FS_STAT_FOLLOW`
-  (STAT flag), `ASTRA_HOST_FS_ESCAPE_PARENT`/`_SYMLINK`. On ESCAPED,
-  `result_value` answers the bytes consumed and `value_lo` the kind.
-- Produces (storage protocol 30): `ASTRA_VFS_FEATURE_RESOLVES_PATHS (1u << 1)`,
-  `ASTRA_VFS_OPEN_NOFOLLOW (1u << 7)`, `ASTRA_VFS_STAT_FOLLOW (1u << 0)`
-  (a STAT flag; Task 9 extends it to STAT_AT), and `AstraVfsEscape` (ESCAPED's payload).
-- Produces (backend): optional `stat_follow` and `escape` operations in
-  `AstraVfsBackendOps` (NULL: unsupported).
-- Produces (Kit): `astra_vfs_lookup(client, path, flags, entry, escape)`,
-  `astra_vfs_features(client)`, `astra_assign_resolve_raw(...)`,
-  `astra_vfs_assign_wire(...)`, `astra_path_normalise_escape(...)`.
+  `ASTRA_HOST_CAP_FS_RESOLVES (1u << 12)`, STAT flags FOLLOW/MISSING/BUDGET/ENTRY.
+  On ESCAPED, `result_value` answers the original request bytes consumed,
+  `value_lo` the kind, `value_hi` the links followed, and output data the
+  complete unresolved absolute Astra continuation. BUDGET takes the remaining
+  link allowance in `offset_lo`.
+- Produces (storage protocol 30, minimum 30): LOOKUP (37),
+  `ASTRA_VFS_FEATURE_RESOLVES (1u << 1)`, `ASTRA_VFS_OPEN_NOFOLLOW (1u << 7)`,
+  LOOKUP flags FOLLOW/MISSING/ENTRY and `AstraVfsEscape`. Successful LOOKUP
+  carries the links used; ESCAPED carries the complete continuation.
+- Produces (backend): optional `lookup` in `AstraVfsBackendOps` (NULL: unsupported).
+- Produces (Kit 7.1): `astra_vfs_lookup(client, path, flags, links_left, entry, escape)`,
+  `astra_assign_resolve_raw(...)`, `astra_vfs_assign_resolve_links(...)`,
+  `astra_vfs_assign_destination(...)`, `astra_path_collapse(...)`,
+  `astra_path_requires_walk(...)`.
 - Consumed by: Task 7 (identity of resolved nodes), Task 9 (cwd-relative
   resolution), Task 12 (bootstrap reads through the same resolver).
 
@@ -10495,505 +10565,145 @@ git commit -m "feat(fs): ordered resolution beneath a grant root, escapes contin
 
 ### Task 7: Stable identity and honest metadata (D4, first half)
 
-The wire has carried no `st_dev` or `st_ino` (`host.h:446-455` before
-Task 4; `AstraVfsReply` today), so POSIX invents them. Task 4 already gets a
-`statx` node from the provider. This task carries it to clients.
+**2026-10-10 implementation continuation:** the earlier draft's separate
+metadata output arguments and payload-only record are superseded by the
+contract below. The existing metadata result records carry one shared
+`AstraVfsNodeMeta`; no second stat API or namespace walk is added.
 
-- **Volume.** A volume identity is assigned by HostFS, one per Linux
-  filesystem the provider reports (by device number), stable for the
-  provider's generation. Bind mounts of one filesystem share a device
-  number, so every binding and alias of one filesystem shares the identity
-  (FS05).
-- **Node.** The inode number, plus a generation, which is the birth time
-  where Linux knows it, so a reused inode number is told apart.
-- **Validity.** Every metadata field gets a validity bit. A real mode 0 is
-  then reported as 0 (FS22).
-- **POSIX.** `st_dev` and `st_ino` come from these fields.
+- Volume identity is the provider device's 12-bit major and 20-bit minor,
+  identically encoded in every client, without a connection-local map.
+  Bindings of one filesystem agree. Unrepresentable devices report unknown.
+- Inode identity comes from the provider. Generation is birth time in
+  nanoseconds when available and representable; missing birth time remains
+  explicitly unknown.
+- Validity bits distinguish unknown fields from real zero values. The record
+  carries allocation, full-width link count, and nanosecond timestamps.
+- POSIX adapts these native fields into `struct stat`. Unknown fields retain
+  conventional POSIX defaults; mode zero is preserved when reported.
 
-**Files:**
-- Modify: `sw/include/astra/vfs_service.h` (version 31, `AstraVfsNodeMeta`, `ASTRA_VFS_FEATURE_NODE_META`)
-- Modify: `sw/userspace/vfs/include/astra/vfs_backend.h` (`AstraVfsNodeInfo` grows)
-- Modify: `sw/userspace/vfs/src/vfs_service_core.c`, `sw/userspace/vfs/src/backends/host.c`, `sw/userspace/vfs/include/astra/vfs_host_transport.h`, `sw/userspace/vfs/src/vfs_host_transport.c`
-- Modify: `ndk/include/astra/vfs_client.h`, `ndk/include/astra/vfs_union.h`, `ndk/include/astra/filesystem_library.h`, `sw/userspace/vfs/src/vfs_client.c`, `sw/userspace/vfs/src/vfs_union.c`, `sw/userspace/vfs/src/filesystem_library.c`, `sw/userspace/supervisor/src/loader.c`, `sw/userspace/vfs/filesystem.library.exports`
-- Modify: `sw/userspace/posix/src/file.c` (`fill`)
-- Modify: Kit major 8 (Task 3 Step 7's list)
-- Modify: `sw/userspace/commands/fssem/fssem.c`, `emu/qemu/test-fs-semantics.py`
-- Test: `sw/userspace/vfs/tests/test_vfs_host_backend.c`, `sw/userspace/vfs/tests/test_vfs_service_core.c`, `sw/userspace/vfs/tests/test_filesystem_library.c`
+**Interfaces and versioning:**
 
-**Interfaces:**
-- Produces (wire 31): `AstraVfsNodeMeta` (72 bytes) in the payload of OPEN,
-  OPEN_AT, STAT, STAT_AT and STAT_FILE replies when `valid != 0`; the
-  `ASTRA_VFS_META_*` bits; `ASTRA_VFS_FEATURE_NODE_META (1u << 2)`.
-- Produces (Kit 8): `astra_vfs_stat_meta`, `astra_vfs_stat_at_meta`,
-  `astra_vfs_stat_file_meta`, `astra_vfs_lookup`, `astra_vfs_assign_stat`
-  and `astra_vfs_assign_lstat` take `AstraVfsNodeMeta *meta` (NULL:
-  unwanted) after the entry. `AstraFileInfo` gains `meta_valid`, `volume`,
-  `inode`, `generation`, `blocks`, `block_size`, `nlink_full`, `atime`,
-  `ctime`, `atime_nsec`, `mtime_nsec`, `ctime_nsec`, `reserved`, filled when
-  `info->size` covers them.
-- Consumed by: Task 8 (shared descriptions keep identity), Task 9 (cwd
-  identity), Task 13 (`ls -i` evidence).
+- Storage protocol 31, minimum 31; no version-30 metadata fallback.
+  `AstraVfsReply.meta` is a separate 72-byte `AstraVfsNodeMeta`, preserving
+  LOOKUP's continuation and link accounting in the same reply.
+- Inline capacity is 208 bytes; ordinary requests are 240 bytes, two-path
+  requests 432 bytes, and replies 344 bytes. Complete messages fit the port
+  limit. Native paths remain bounded to 191 bytes plus NUL.
+- `AstraVfsEscape.path` carries all 191 native pathname bytes. Its padded
+  record fits the inline payload. Longer expansions fail explicitly.
+- Kit 8.0 appends `.meta` to existing `AstraFileInfo`, `AstraVfsDirEntry`, and
+  backend `AstraVfsNodeInfo`. Existing stat and lookup signatures stay intact;
+  assign results already copy the complete metadata record. All in-tree
+  producers, consumers, SONAMEs, tests, manifests, exports, and documentation
+  change together. Filesystem.kit 5.0.0 provides filesystem.library 8.0.0.
+- HostFS advertises `ASTRA_VFS_FEATURE_NODE_META`. The shared native encoder
+  replaces the duplicated service-core and direct-lane metadata publishers.
+- Compact batched directory records retain their existing format and report
+  unknown extended metadata. Directory-entry identity remains Phase 2.
+- Path and directory-relative unlink take zero flags for a non-directory or
+  `ASTRA_VFS_UNLINK_DIRECTORY` for an empty directory. Providers enforce kind
+  during removal. POSIX unlink/rmdir route the complete path through the
+  native ordered resolver, retaining protected roots and trailing slashes.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing backend test**
 
-`test_vfs_host_backend.c`: the STAT_AT answer from Task 4 also sets
-`command->node.valid |= ASTRA_HOST_NODE_INODE | ASTRA_HOST_NODE_DEVICE | ASTRA_HOST_NODE_BTIME`,
-`command->node.inode_lo = 4242u`, `device_hi = 8u`, `device_lo = 1u`,
-`btime.seconds_lo = 7u`, `btime.nanoseconds = 5u`. Assert:
+The Beast test failed to compile before the new record existed. It now
+checks inode 4242, encoded devices 8:1 and 8:2, repeated-device stability,
+birth generation 7,000,000,005, signed times and nanoseconds, 64-bit block
+counts, generation overflow/negative-time boundaries, and clearing unknown
+metadata on the next reply. Constant generation bounds avoid requiring a
+64-bit division helper in the target Filesystem library.
 
-```c
-    assert(info.valid & ASTRA_VFS_META_INODE);
-    assert(info.inode == 4242u);
-    assert(info.volume == 0x00800001u);     /* major 8, minor 1 */
-    assert(info.generation == UINT64_C(7000000005));
-```
+- [x] **Step 2: Wire, backend, and lane**
 
-A STAT answer with another device (`device_lo = 2u`) gives
-`volume == 0x00800002u`. The first device again gives `0x00800001u`
-(Step 3: the identity is computed from the device, the same in every
-process).
+The record is embedded once and copied by the shared publisher. HostFS fills
+it from the versioned provider node record. Client reply validation rejects
+obsolete versions, reserved fields, unknown validity bits, invalid known
+nanoseconds, and identity on a missing LOOKUP leaf. LOOKUP metadata and its
+link count are both retained. Exact-limit continuation and malformed-reply
+regressions cover the wire boundary.
 
-`test_vfs_service_core.c`: the fake's `stat` fills
-`info->valid = ASTRA_VFS_META_INODE | ASTRA_VFS_META_VOLUME | ASTRA_VFS_META_MODE`,
-`inode = 99`, `volume = 3`, `mode = 0`. A version-31 STAT reply carries an
-`AstraVfsNodeMeta` with those values and `ASTRA_VFS_META_MODE` set (a mode
-of 0 that is real). A version-30 reply's payload is all zero.
+- [x] **Step 3: Kit and POSIX**
 
-Run: `~/astra-mg/locked make -C sw/userspace/vfs test`. Expected: compile
-errors.
+Native stat, lstat, directory-relative stat, and open-file stat retain the
+record. POSIX reports provider device/inode, real mode zero, full link counts,
+allocation, and timestamps. Synthetic root metadata marks its mode and link
+count as known. RAMFS, ext4, PROC, METRICS and EVENTS use one shared publisher
+for known mode and full link count, including real zero; ext4 marks ownership.
+Their unavailable identity stays unknown. One directory allocation owns DIR
+plus its native state and two-entry batch, avoiding libc's fixed buffer limit.
 
-- [ ] **Step 2: The wire and the backend record**
+- [x] **Step 4: Guest cases registered**
 
-`vfs_service.h`: version 31 ("Version 31 carries node identity, an
-`AstraVfsNodeMeta`, in the payload of OPEN, OPEN_AT, STAT, STAT_AT and
-STAT_FILE replies"), and:
+`alias-identity` checks WORK/CWD aliases, hard links, rename, mode zero,
+unlinked held files, sparse allocation and nanosecond bounds.
+`raw-subroot` compares provider identity through the rooted grant and its
+parent using the existing scoped lane helper; data never uses HostFS's
+control port. `continuation-limit` resolves a 191-byte absolute link target.
+All 18 cases are selected by the harness, which refreshes current libraries
+in its scratch image before installing fssem.
 
-```c
-/** HELLO feature: metadata replies carry an AstraVfsNodeMeta. */
-#define ASTRA_VFS_FEATURE_NODE_META (UINT32_C(1) << 2)
+CWD is now its own derived grant (Task 5), so a cross-grant rename is not the
+same-client alias rename in the old draft. Operations combining independent
+grant roots retain their existing CROSS_DEVICE refusal; extending those
+transactions remains Phase 2.
 
-/* AstraVfsNodeMeta::valid -- a field whose bit is clear is unknown. */
-#define ASTRA_VFS_META_VOLUME     (UINT32_C(1) << 0)
-#define ASTRA_VFS_META_INODE      (UINT32_C(1) << 1)
-#define ASTRA_VFS_META_GENERATION (UINT32_C(1) << 2)
-#define ASTRA_VFS_META_BLOCKS     (UINT32_C(1) << 3)
-#define ASTRA_VFS_META_ATIME      (UINT32_C(1) << 4)
-#define ASTRA_VFS_META_MTIME      (UINT32_C(1) << 5)
-#define ASTRA_VFS_META_CTIME      (UINT32_C(1) << 6)
-#define ASTRA_VFS_META_MODE       (UINT32_C(1) << 7)
-#define ASTRA_VFS_META_NLINK      (UINT32_C(1) << 8)
-#define ASTRA_VFS_META_OWNER      (UINT32_C(1) << 9)
+- [x] **Step 5a: Verify target correctness**
 
-/** Node identity and the metadata the fixed reply fields cannot hold
- * (docs/FILESYSTEM_PRODUCTION_PRD.md FS05, FS22). */
-typedef struct AstraVfsNodeMeta {
-    uint32_t valid;         /**< ASTRA_VFS_META_* bits. */
-    /** One per mounted filesystem, shared by every binding of it. */
-    uint32_t volume;
-    uint64_t inode;         /**< The filesystem's node number. */
-    /** Tells a reused node number apart: its birth time, in ns. */
-    uint64_t generation;
-    uint64_t blocks;        /**< 512-byte blocks allocated. */
-    uint32_t block_size;    /**< Preferred I/O size. */
-    uint32_t nlink;         /**< Hard links, full width. */
-    int64_t atime;          /**< Last access, seconds. */
-    uint32_t atime_nsec;
-    uint32_t mtime_nsec;    /**< Nanoseconds of the reply's mtime. */
-    int64_t ctime;          /**< Last status change, seconds. */
-    uint32_t ctime_nsec;
-    uint32_t reserved;      /**< Zero. */
-} AstraVfsNodeMeta;
+Beast passes the complete userspace host suite, VFS/resolver normal and
+ASan/UBSan suites, target consumers and ROM build, raw HostFS, all 18 guest
+cases, provider e2fsck, 111 terminal commands, NDK headers/documentation and
+provider coverage. Source hashes match before and after follow-up checks;
+final artifact hashes are recorded. Evidence and failed attempts remain under
+`/mnt/Documents/astra68/builds/fs-phase1-task7-20261010/`.
 
-/** @cond ASTRA_INTERNAL */
-_Static_assert(sizeof(AstraVfsNodeMeta) == 72u, "VFS node meta ABI changed");
-_Static_assert(sizeof(AstraVfsNodeMeta) <= ASTRA_VFS_IO_MAX,
-               "VFS node meta must fit a reply payload");
-/** @endcond */
-```
+- [ ] **Step 5b: Complete integration qualification**
 
-`vfs_backend.h`: append to `AstraVfsNodeInfo`, after `reserved`:
-
-```c
-    /* Identity and the rest, with ASTRA_VFS_META_* validity; a backend that
-     * knows none of it leaves `valid` zero. */
-    uint32_t valid;
-    uint32_t volume;
-    uint64_t inode;
-    uint64_t generation;
-    uint64_t blocks;
-    uint32_t block_size;
-    uint32_t nlink_full;
-    int64_t atime;
-    uint32_t atime_nsec;
-    uint32_t mtime_nsec;
-    int64_t ctime;
-    uint32_t ctime_nsec;
-```
-
-`node_info_clear` (`vfs_service_core.c:197-208`) becomes
-`memset(info, 0, sizeof(*info));`. `node_info_publish` gains the slot's
-version and the reply:
-
-```c
-static void
-node_info_publish(AstraVfsReply *reply, const AstraVfsNodeInfo *info,
-                  uint16_t version)
-{
-    reply->node_size = info->size;
-    reply->mtime = info->mtime;
-    reply->uid = info->uid;
-    reply->gid = info->gid;
-    reply->kind = info->kind;
-    reply->mode = info->mode;
-    reply->nlink = info->nlink;
-    if (version >= UINT16_C(31) && info->valid != 0u) {
-        AstraVfsNodeMeta meta;
-
-        memset(&meta, 0, sizeof(meta));
-        meta.valid = info->valid;
-        meta.volume = info->volume;
-        meta.inode = info->inode;
-        meta.generation = info->generation;
-        meta.blocks = info->blocks;
-        meta.block_size = info->block_size;
-        meta.nlink = info->nlink_full;
-        meta.atime = info->atime;
-        meta.atime_nsec = info->atime_nsec;
-        meta.mtime_nsec = info->mtime_nsec;
-        meta.ctime = info->ctime;
-        meta.ctime_nsec = info->ctime_nsec;
-        memcpy(reply->payload, &meta, sizeof(meta));
-    }
-}
-```
-
-Pass the slot's version at each call site (OPEN, OPEN_AT, STAT, STAT_AT,
-STAT_FILE). HostFS grants add `ASTRA_VFS_FEATURE_NODE_META` to their
-`features`.
-
-- [ ] **Step 3: HostFS fills identity**
-
-Every client runs this backend itself (Global Constraints, the lane rule).
-A volume map kept per connection would number the filesystems differently
-in each process, and one file would show two `st_dev` values, which FS05
-forbids. So the identity is computed from the device number, with no table:
-
-```c
-/*
- * The Astra volume identity of the Linux filesystem on major:minor: the
- * same in every process and across provider restarts, with no table to
- * share. Zero (unknown) outside the classic 12-bit major, 20-bit minor
- * that every local Linux filesystem fits; ext4 and the synthetic trees
- * report no identity at all (Step 4), so nothing else uses these numbers.
- */
-static uint32_t volume_identity(uint32_t major, uint32_t minor)
-{
-    if (major >= (UINT32_C(1) << 12) || minor >= (UINT32_C(1) << 20))
-        return 0u;
-    return (major << 20) | minor;
-}
-```
-
-`publish_info` takes the backend and fills the rest from the node:
-
-```c
-    const AstraHostNode *node = &command->node;
-    uint32_t valid = node->valid;
-    ...
-    if ((valid & ASTRA_HOST_NODE_DEVICE) != 0u) {
-        info->volume = volume_identity(node->device_hi, node->device_lo);
-        if (info->volume != 0u)
-            info->valid |= ASTRA_VFS_META_VOLUME;
-    }
-    if ((valid & ASTRA_HOST_NODE_INODE) != 0u) {
-        info->inode = ((uint64_t)node->inode_hi << 32) | node->inode_lo;
-        info->valid |= ASTRA_VFS_META_INODE;
-    }
-    if ((valid & ASTRA_HOST_NODE_BTIME) != 0u) {
-        uint64_t seconds = ((uint64_t)(uint32_t)node->btime.seconds_hi << 32) |
-                           node->btime.seconds_lo;
-
-        info->generation = seconds * UINT64_C(1000000000) +
-                           node->btime.nanoseconds;
-        info->valid |= ASTRA_VFS_META_GENERATION;
-    }
-    if ((valid & ASTRA_HOST_NODE_BLOCKS) != 0u) {
-        info->blocks = ((uint64_t)node->blocks_hi << 32) | node->blocks_lo;
-        info->block_size = node->block_size;
-        info->valid |= ASTRA_VFS_META_BLOCKS;
-    }
-    if ((valid & ASTRA_HOST_NODE_ATIME) != 0u) {
-        info->atime = (int64_t)(((uint64_t)(uint32_t)node->atime.seconds_hi << 32) |
-                                node->atime.seconds_lo);
-        info->atime_nsec = node->atime.nanoseconds;
-        info->valid |= ASTRA_VFS_META_ATIME;
-    }
-    if ((valid & ASTRA_HOST_NODE_MTIME) != 0u) {
-        info->mtime_nsec = node->mtime.nanoseconds;
-        info->valid |= ASTRA_VFS_META_MTIME;
-    }
-    if ((valid & ASTRA_HOST_NODE_CTIME) != 0u) {
-        info->ctime = (int64_t)(((uint64_t)(uint32_t)node->ctime.seconds_hi << 32) |
-                                node->ctime.seconds_lo);
-        info->ctime_nsec = node->ctime.nanoseconds;
-        info->valid |= ASTRA_VFS_META_CTIME;
-    }
-    if ((valid & ASTRA_HOST_NODE_MODE) != 0u)
-        info->valid |= ASTRA_VFS_META_MODE;
-    if ((valid & ASTRA_HOST_NODE_NLINK) != 0u) {
-        info->nlink_full = node->nlink;
-        info->valid |= ASTRA_VFS_META_NLINK;
-    }
-    if ((valid & (ASTRA_HOST_NODE_UID | ASTRA_HOST_NODE_GID)) ==
-        (ASTRA_HOST_NODE_UID | ASTRA_HOST_NODE_GID))
-        info->valid |= ASTRA_VFS_META_OWNER;
-```
-
-READDIR's `publish_info` call stays; its entries do not carry identity on
-the wire. Directory entries with inode numbers are Phase 2's (the PRD's
-"Metadata and tools" family: `ls -i`, recursive cycle detection).
-
-- [ ] **Step 3b: The lane carries identity**
-
-Every client runs the host backend itself (Global Constraints, the lane
-rule), so the reply that carries an `AstraVfsNodeMeta` is built by the
-lane's translator as well as by the service core. Write the record once, in
-`vfs_backend.h` after `AstraVfsNodeInfo` (add `#include <string.h>` if the
-header lacks it):
-
-```c
-/* The reply payload's identity record for `info` (storage protocol 31),
- * built the same way by the service core and the lane's translator. */
-static inline void
-astra_vfs_node_meta_from_info(const AstraVfsNodeInfo *info,
-                              AstraVfsNodeMeta *meta)
-{
-    memset(meta, 0, sizeof(*meta));
-    meta->valid = info->valid;
-    meta->volume = info->volume;
-    meta->inode = info->inode;
-    meta->generation = info->generation;
-    meta->blocks = info->blocks;
-    meta->block_size = info->block_size;
-    meta->nlink = info->nlink_full;
-    meta->atime = info->atime;
-    meta->atime_nsec = info->atime_nsec;
-    meta->mtime_nsec = info->mtime_nsec;
-    meta->ctime = info->ctime;
-    meta->ctime_nsec = info->ctime_nsec;
-}
-```
-
-Step 2's `node_info_publish` uses it in place of its inline copy.
-`vfs_host_direct.c`'s `publish_info(reply, info)` gains
-`uint16_t version`, and every call passes `client->version`. After its
-fixed fields:
-
-```c
-    if (version >= UINT16_C(31) && info->valid != 0u) {
-        AstraVfsNodeMeta meta;
-
-        astra_vfs_node_meta_from_info(info, &meta);
-        memcpy(reply->payload, &meta, sizeof(meta));
-    }
-```
-
-In `vfs_client.c` (Step 4), a function that takes `AstraVfsNodeMeta *meta`
-and has a lane fast path fills it from the backend's `info`. That covers
-`astra_vfs_stat_meta`, `astra_vfs_stat_at_meta` and
-`astra_vfs_stat_file_meta`. After the backend call:
-
-```c
-        if (meta != NULL) {
-            if (status == ASTRA_VFS_OK && client->version >= UINT16_C(31))
-                astra_vfs_node_meta_from_info(&info, meta);
-            else
-                memset(meta, 0, sizeof(*meta));
-        }
-```
-
-Step 4's payload copy covers the exchange path.
-
-- [ ] **Step 4: The Kit and libc**
-
-- `vfs_client.c`: `astra_vfs_stat_meta`, `astra_vfs_stat_at_meta`,
-  `astra_vfs_stat_file_meta` and `astra_vfs_lookup` take
-  `AstraVfsNodeMeta *meta` after the entry. When `meta != NULL`, zero it,
-  and when `client->version >= 31` copy `call->reply.payload` into it.
-  Update the six declarations, and every caller (`grep -rn "astra_vfs_stat_meta\|astra_vfs_stat_at_meta\|astra_vfs_stat_file_meta\|astra_vfs_lookup" sw ndk | grep -v /build/`):
-  callers that do not need identity pass `NULL`.
-- `vfs_union.c`: `astra_vfs_assign_stat` and `astra_vfs_assign_lstat` take
-  `AstraVfsNodeMeta *meta` after `entry`, and pass it down to the lookup that
-  finds the node (`assign_raw_lookup`, or `assign_raw_lstat`'s
-  `astra_vfs_stat_meta`). `filesystem_locate` and `filesystem_locate_literal`
-  pass a meta through.
-- `filesystem_library.h`: append to `AstraFileInfo`:
-
-  ```c
-      /* Filesystem Kit 8: identity and the rest of the metadata, filled
-       * when `size` covers them. `meta_valid` holds ASTRA_VFS_META_* bits:
-       * a field whose bit is clear is unknown, never zero-by-default. */
-      uint32_t meta_valid;
-      uint32_t volume;     /**< Shared by every binding of one filesystem. */
-      uint64_t inode;
-      uint64_t generation;
-      uint64_t blocks;
-      uint32_t block_size;
-      uint32_t nlink_full;
-      int64_t atime;
-      int64_t ctime;
-      uint32_t atime_nsec;
-      uint32_t mtime_nsec;
-      uint32_t ctime_nsec;
-      uint32_t reserved;
-  ```
-
-  `filesystem_stat_common`, `astra_filesystem_stat_at` and
-  `astra_filesystem_file_info` copy them from the meta when
-  `info->size >= sizeof(AstraFileInfo)`.
-- `sw/userspace/posix/src/file.c` `fill` (`:960-979`):
-
-  ```c
-  static void
-  fill(struct stat *out, const AstraFileInfo *info)
-  {
-      int directory = info->kind == ASTRA_VFS_KIND_DIRECTORY;
-      int symlink = info->kind == ASTRA_VFS_KIND_SYMLINK;
-      int mode_known = (info->meta_valid & ASTRA_VFS_META_MODE) != 0u;
-
-      (void)memset(out, 0, sizeof(*out));
-      out->st_mode = (mode_t)((directory ? S_IFDIR : symlink ? S_IFLNK :
-                               S_IFREG) |
-                              (mode_known ? (info->mode & 07777u) :
-                               info->mode != 0u ? info->mode :
-                               (directory ? 0755u : symlink ? 0777u : 0644u)));
-      out->st_size = (off_t)info->byte_size;
-      out->st_nlink = (nlink_t)((info->meta_valid & ASTRA_VFS_META_NLINK) != 0u ?
-                                info->nlink_full :
-                                info->nlink != 0u ? info->nlink : 1u);
-      out->st_uid = (uid_t)info->uid;
-      out->st_gid = (gid_t)info->gid;
-      out->st_dev = (dev_t)info->volume;
-      out->st_ino = (ino_t)info->inode;
-      out->st_mtim.tv_sec = (time_t)info->mtime;
-      out->st_mtim.tv_nsec = (long)info->mtime_nsec;
-      if ((info->meta_valid & ASTRA_VFS_META_ATIME) != 0u) {
-          out->st_atim.tv_sec = (time_t)info->atime;
-          out->st_atim.tv_nsec = (long)info->atime_nsec;
-      } else {
-          out->st_atim = out->st_mtim;
-      }
-      if ((info->meta_valid & ASTRA_VFS_META_CTIME) != 0u) {
-          out->st_ctim.tv_sec = (time_t)info->ctime;
-          out->st_ctim.tv_nsec = (long)info->ctime_nsec;
-      } else {
-          out->st_ctim = out->st_mtim;
-      }
-      if ((info->meta_valid & ASTRA_VFS_META_BLOCKS) != 0u) {
-          out->st_blksize = (blksize_t)info->block_size;
-          out->st_blocks = (blkcnt_t)info->blocks;
-      } else {
-          out->st_blksize = 512;
-          out->st_blocks = (blkcnt_t)((info->byte_size + 511u) / 512u);
-      }
-  }
-  ```
-
-  A filesystem that reports no mode keeps the old defaults. That is the
-  guest ext4 and synthetic trees until Phase 2, and libc does not invent
-  `st_dev` or `st_ino` for them: they stay 0, honestly unknown.
-- Kit major 8: Task 3 Step 7's edit with `8`.
-
-- [ ] **Step 5: The guest case**
-
-```c
-/* One node through two bindings is one identity; a link shares it; mode 0
- * is real (docs/FILESYSTEM_PRODUCTION_PRD.md FS05, FS17, FS22). */
-static int case_alias_identity(const char *directory)
-{
-    char work[160];
-    char cwd[200];
-    char hard[160];
-    char other[160];
-    char moved[160];
-    struct stat a;
-    struct stat b;
-
-    join(work, sizeof(work), directory, "f");
-    (void)snprintf(cwd, sizeof(cwd), "/cwd%s/f",
-                   directory + strlen("/work"));
-    join(hard, sizeof(hard), directory, "h");
-    join(other, sizeof(other), directory, "g");
-    join(moved, sizeof(moved), directory, "moved");
-    CHECK(write_text(work, "id", O_WRONLY | O_CREAT | O_EXCL) == 0, "f");
-    CHECK(write_text(other, "id", O_WRONLY | O_CREAT | O_EXCL) == 0, "g");
-    CHECK(stat(work, &a) == 0 && stat(cwd, &b) == 0, "stat: %s",
-          strerror(errno));
-    CHECK(a.st_ino != 0u && a.st_dev != 0u, "identity missing");
-    CHECK(a.st_dev == b.st_dev && a.st_ino == b.st_ino,
-          "/work and /cwd disagree about one file");
-    CHECK(stat(other, &b) == 0 && b.st_ino != a.st_ino, "two files, one inode");
-    CHECK(link(work, hard) == 0, "link: %s", strerror(errno));
-    CHECK(stat(hard, &b) == 0 && b.st_ino == a.st_ino && b.st_nlink == 2,
-          "the link is another node");
-    (void)snprintf(cwd, sizeof(cwd), "/cwd%s/h",
-                   directory + strlen("/work"));
-    CHECK(rename(cwd, moved) == 0, "rename across bindings: %s",
-          strerror(errno));
-    CHECK(stat(moved, &b) == 0 && b.st_ino == a.st_ino,
-          "rename changed identity");
-    CHECK(chmod(work, 0) == 0 && stat(work, &b) == 0 &&
-          (b.st_mode & 07777) == 0, "mode 0 read back as %o",
-          (unsigned)(b.st_mode & 07777));
-    CHECK(chmod(work, 0644) == 0, "chmod back");
-    return 0;
-}
-```
-
-Register it as `alias-identity`, and add it to `CASES`. `/cwd` is the CWD
-grant Terminal passes to every command, the WORK grant itself
-(`console_session.c:179-197`). The rename crosses two names of one grant
-and must work. Two *different* grants of one volume are left for Phase 2
-(see Self-Review, gaps).
-
-In `case_raw_subroot`, compare identity across grants. The STAT of
-`/inside` through the derived grant and the STAT of the same file through
-WORK both carry an `AstraVfsNodeMeta` in `reply.reply.payload`. Assert
-that their `volume` and `inode` are equal and nonzero.
-
-- [ ] **Step 6: Run, perturb, full suite, commit**
-
-Sync, build and test userspace, build `sw/boot`, rebuild images, run
-`test-fs-semantics.py`. Expected: `FSSEM PASS alias-identity` and every
-earlier case still passes.
-
-Perturb (restore and re-sync each time):
-1. In `publish_info`, stop setting `ASTRA_VFS_META_INODE`. Expected:
-   `alias-identity` fails "identity missing".
-2. In `volume_identity`, return `transport->volume_count + 1u` without
-   storing, a new identity each call. Expected: the backend test fails on
-   the repeated device, and `raw-subroot` fails on volume equality.
-3. In `fill`, drop `mode_known` (always the defaults). Expected:
-   `alias-identity` fails "mode 0 read back as 644".
-
-`~/astra-mg/t9-verify.sh 2>&1 | tee /tmp/t9-task7.log`. Expected: green.
-The terminal gate's `ls -l` output must not change for ext4 files.
-
-```bash
-git add sw/include/astra/vfs_service.h sw/userspace/vfs ndk sw/userspace/posix/src/file.c \
-  sw/userspace/services/hostfs/main.c sw/userspace/supervisor/src/loader.c \
-  sw/userspace/commands/fssem/fssem.c emu/qemu/test-fs-semantics.py \
-  sw/userspace/posix/Makefile sw/userspace/libraries.mk sw/userspace/kits \
-  sw/userspace/config/Makefile sw/userspace/tests/test_boundaries.py \
-  sw/userspace/lua/Makefile sw/userspace/apps/Terminal.app/manifest \
-  sw/userspace/apps/InterfaceGallery.app/manifest \
-  tools/tests/test_check_bundle_dependencies.py docs/FILESYSTEM_KIT.md docs/ABI.md
-git commit -m "feat(fs): node identity and validity on the wire; st_dev/st_ino from the provider (FS05, FS22); storage protocol 31, Kit 8"
-```
+Attempt 5 completed t9 with 30 of 31 gates passing. The parallel SDL timer
+failed with a 167 ms delay for a 1 ms request. Three isolated runs passed the
+unchanged thresholds (periods 1.043–1.048 ms and 1,000 ms one-second delays).
+The failure remains unqualified; the isolated passes do not establish its
+cause. Desktop/lifecycle, provider, events, filesystem stress and helper
+checks passed. No performance claim follows from functional passes;
+qualification is deferred under the user's correctness-first direction.
 
 ---
 
 ### Task 8: Shared open descriptions (D5)
+
+**2026-10-10 continuation review:** this task is still unimplemented. The
+draft snippets below need these corrections before use:
+
+- LOOKUP already owns opcode 37; SEEK/SHARE/ADOPT now start at 38. If an
+  additional native operation is required, renumber later draft operations
+  together rather than colliding with DIRECTORY_PATH.
+- Adoptees must share one description object and lock, retaining the existing
+  handle lifetime mechanism. Duplicating a Linux fd with a separate handle
+  lock races read/seek and the returned position. Retire shared references on
+  owner/session loss and unclaimed tokens on the sharer's death.
+- Sequential writes honor the description's append state. Positioned writes
+  honor their offset and leave the shared position unchanged. The draft's
+  unconditional open-append test contradicts that contract.
+- Parent token withdrawal must retain the originating client/session even
+  when its file closes or its slot is reused. One token field overwritten by
+  successive forks cannot provide that lifetime; retain each child's shares.
+- Retained shares must also survive the parent's exec. Reuse the existing
+  `astra_process_vfs_client_handle` / `_handle_lookup` identity in serialized
+  receipts instead of pointers or file slots. The current POSIX exec handoff
+  exports descriptors and VFS state but no child list; audit reap accounting
+  and share withdrawal together rather than adding file-only cleanup.
+- Audit mutable append status and directory-stream state across fork alongside
+  file positions. A copied POSIX status flag or borrowed parent directory
+  token must not become a second authority in the child.
+- Sequential read/write must be one provider transaction, returning a short
+  count at the transport limit. Splitting one operation into multiple requests
+  allows another owner to interleave position updates. Positioned I/O can
+  retain its existing chunk loop because it does not change that position.
+- `fcntl(F_SETFL)` must change the native description's append state, and
+  `F_GETFL` must observe changes by another owner. Add a proper native operation
+  if needed; do not overload SEEK or retain a second POSIX append authority.
+- The draft's Kit 8.1 is provisional: changing existing callback signatures or
+  public object layouts requires an ABI major bump and all consumers together.
 
 The file position moves out of the client (`AstraFile._private_offset`,
 `filesystem_library.c:474-546`) into the Linux open file description the
@@ -11010,10 +10720,11 @@ description lives in QEMU, keyed by the process that opened it, so the
 share does too.
 
 Before the clone, the parent asks the provider, on its own lane, to *share*
-each open file. QEMU duplicates the Linux descriptor (`fcntl(F_DUPFD_CLOEXEC)`:
-the same open file description, so the same position). It holds the
-duplicate under a random 64-bit token, bound to the handle's session and
-charged to the parent.
+each open file. QEMU retains a reference to the existing description, including
+its descriptor, directory stream, status flags and mutex. It holds that
+reference under a random 64-bit token, bound to the handle's session and
+charged to the parent. Adoption creates another owner/session handle pointing
+to that same description; it does not create a separately locked duplicate.
 
 The child inherits the parent's grant scope (Task 3b) and opens its own lane
 on it. It *adopts* the token there and gets a handle of its own. QEMU allows
@@ -11022,8 +10733,9 @@ process holding another grant cannot take it, even with the token.
 
 The token lives in memory both processes have, so no pathname is ever
 reopened. The parent withdraws unclaimed tokens when it reaps the child, and
-a share dies with its sharer. Exec needs nothing new (Decisions, D5): it
-happens in place and already honors `FD_CLOEXEC`.
+a share dies with its sharer. Exec retains provider descriptions in place and
+honors `FD_CLOEXEC`, but userspace child/share receipts and reap accounting
+must also be serialized through the existing exec handoff.
 
 **Files:**
 - Modify: `sw/include/astra/host.h` (`SEEK`, `SHARE`, `ADOPT`, `ASTRA_HOST_FS_IO_SEQUENTIAL`, capability, version)
@@ -11050,10 +10762,10 @@ happens in place and already honors `FD_CLOEXEC`.
   - `ASTRA_VFS_IO_SEQUENTIAL (1u << 1)` on READ, READ_AREA, WRITE and
     WRITE_AREA: the offset is ignored, and `node_size` answers the position
     after;
-  - `ASTRA_VFS_OP_SEEK` (37): `file`, `offset` as int64, `flags` 0 set /
+  - `ASTRA_VFS_OP_SEEK` (38): `file`, `offset` as int64, `flags` 0 set /
     1 current / 2 end; `node_size` answers the position;
-  - `ASTRA_VFS_OP_SHARE` (38): `file`; `cursor` answers the token;
-  - `ASTRA_VFS_OP_ADOPT` (39): `offset` is the token; `file`, `kind` and
+  - `ASTRA_VFS_OP_SHARE` (39): `file`; `cursor` answers the token;
+  - `ASTRA_VFS_OP_ADOPT` (40): `offset` is the token; `file`, `kind` and
     `node_size` answer the adopted handle. The flag `ASTRA_VFS_ADOPT_DISCARD`
     withdraws an unclaimed share instead.
 - Produces (backend, optional): `read_sequential`, `seek`, `share`, `adopt`.
@@ -11462,13 +11174,13 @@ position: IO_SEQUENTIAL, SEEK, SHARE and ADOPT"), and:
 #define ASTRA_VFS_IO_SEQUENTIAL (UINT32_C(1) << 1)
 /** Move a description's position: `offset` (two's complement) from
  * `flags` 0 the start, 1 the position, 2 the end; `node_size` answers it. */
-#define ASTRA_VFS_OP_SEEK   UINT32_C(37)
+#define ASTRA_VFS_OP_SEEK   UINT32_C(38)
 /** Hold `file`'s description for another process of this grant; `cursor`
  * answers a 64-bit token. */
-#define ASTRA_VFS_OP_SHARE  UINT32_C(38)
+#define ASTRA_VFS_OP_SHARE  UINT32_C(39)
 /** Take the description shared under token `offset` as a new handle of
  * this session; with ASTRA_VFS_ADOPT_DISCARD, withdraw it unclaimed. */
-#define ASTRA_VFS_OP_ADOPT  UINT32_C(39)
+#define ASTRA_VFS_OP_ADOPT  UINT32_C(40)
 #define ASTRA_VFS_ADOPT_DISCARD (UINT32_C(1) << 0)
 /** Highest operation code this build defines. */
 #define ASTRA_VFS_OP_MAX    ASTRA_VFS_OP_ADOPT
@@ -12053,3356 +11765,315 @@ git commit -m "feat(fs): the provider holds positions; fork shares descriptions 
 
 ---
 
+Task 8 continuation (2026-10-10): implemented contract is protocol 32,
+Filesystem Kit 9.0 / Filesystem.kit 6.0.0 and libc 4.0 / Posix.kit 2.0.0.
+SHARE/ADOPT/unshare live in the existing process/VFS facilities. FILE_FLAGS
+(native 41, host 23) shares APPEND/NONBLOCK; directory-path opcodes in Task 9
+must therefore be native 42 and host 24. The reply is 368 bytes, with separate
+position/token/open-flags fields; node_size retains only its metadata meaning.
+Fork waits for adoption before returning, so a parent exit cannot destroy the
+pending receipts first. Exec retains child wait handles/accounting. Cache
+records have stable addresses even if the cache's pointer table moves.
+Host VFS/POSIX suites, target build, raw provider, all 21 guest cases, lane
+and provider fsck pass under `fs-phase1-task8-20261010/native-12`, including
+NONBLOCK/CLOEXEC, fork/exec inheritance, append and shared directory cursors.
+Sanitizers and NDK documentation pass in native-11; the resolver host and
+sanitizer suites also pass in native-12. Directory batches serialize the
+whole operation and roll back an entry that cannot fit. Fork rebinding
+preserves negotiated features. Broad integration remains pending and Task 7's
+parallel timer failure is not waived. Performance comparisons remain deferred
+by user direction. Earlier snippets are design inputs, not current ABI.
+
 ### Task 9: Retained cwd (D4, second half)
 
-Today the current directory is a string (`file.c` `cwd`, set by `chdir`
-at `:1522-1549`). Every relative path is joined to it and resolved again,
-so renaming the directory a process stands in breaks every relative name
-it uses. Haiku keeps `io_context->cwd` as a referenced vnode
-(`vfs.cpp:8343`, `set_cwd`) and builds `getcwd` from it
-(`dir_vnode_to_path`, `vfs.cpp:8318` and `:2637`). This task does the same.
-
-- cwd is a retained directory handle (`AstraFile`) whenever the binding's
-  service can say where a handle is (`ASTRA_VFS_FEATURE_DIRECTORY_PATH`,
-  HostFS only). Other services keep the string cwd. They are the guest
-  ext4, ram, proc and events trees, and Phase 2 deletes the first.
-- Every relative path operation is sent relative to that handle. The
-  storage protocol already has OPEN_AT, UNLINK_AT, CHMOD_AT and STAT_AT
-  (`vfs_service.h:224-234`). Version 33 lets MKDIR, RENAME, LINK, SYMLINK and
-  READLINK name a base handle too, and STAT_AT follow a final link. The host
-  wire has taken a base handle on every path operation since Task 4.
-- `getcwd` asks the provider where the handle is now (host `PATH`, storage
-  `DIRECTORY_PATH`). Linux's `/proc/self/fd` link is the hint, and the
-  answer is re-resolved beneath the session root and must name the same
-  inode. A cwd that has been removed, or moved where its binding cannot
-  name it, answers `ENOENT`. That is the defined failure, the same one
-  Linux `getcwd` gives for an unlinked cwd.
-- fork shares the cwd handle by Task 8's token, and exec exports it like an
-  open file.
-- An escape from a cwd-relative operation (`..` above the grant root, or a
-  link out of the volume) re-resolves the path as a string from the
-  current `getcwd`, which Task 6's continuation then follows.
-
-**Files:**
-- Modify: `sw/include/astra/host.h` (`PATH`, capability, version, metrics version)
-- Modify: `emu/qemu/qemu-9.2/hw/m68k/astra68.c`, `emu/qemu/test-hostfs.py`, `emu/qemu/test-filesystem-stress.py`, `sw/userspace/services/hostfs/main.c` (`fs_group_names`)
-- Modify: `sw/include/astra/vfs_service.h` (version 33, `DIRECTORY_PATH`, feature, `STAT_AT` follow)
-- Modify: `sw/userspace/vfs/include/astra/vfs_backend.h`, `sw/userspace/vfs/src/vfs_service_core.c`, `sw/userspace/vfs/src/backends/host.c`
-- Modify: `ndk/include/astra/vfs_client.h`, `ndk/include/astra/filesystem_library.h`, `sw/userspace/vfs/src/vfs_client.c`, `sw/userspace/vfs/src/filesystem_library.c`, `sw/userspace/vfs/filesystem.library.exports` (Kit 8.2)
-- Modify: `sw/userspace/posix/src/file.c`
-- Modify: `sw/userspace/commands/fssem/fssem.c`, `emu/qemu/test-fs-semantics.py`
-- Test: `sw/userspace/vfs/tests/test_vfs_service_core.c`, `sw/userspace/vfs/tests/test_vfs_host_backend.c`
-
-**Interfaces:**
-- Consumes: Task 4's base handles (`handle`, and `value_lo` for the second
-  operand); Task 6's `note_escape`, `host_readlink_at` and
-  `ASTRA_VFS_STAT_FOLLOW`; Task 8's `astra_filesystem_share/adopt/unshare`
-  and `astra_posix_file_share_all/unshare`.
-- Produces (host): `ASTRA_HOST_FS_PATH` (23) with `ASTRA_HOST_FS_MAX` set to it;
-  `ASTRA_HOST_CAP_FS_PATHS (1u << 14)`; `ASTRA_HOST_VERSION 0x00010011`;
-  `ASTRA_HOST_METRICS_VERSION 5`.
-- Produces (wire 33): `ASTRA_VFS_FEATURE_DIRECTORY_PATH (1u << 4)`;
-  `ASTRA_VFS_OP_DIRECTORY_PATH` (40: `file`; `length` the capacity;
-  `payload`/`count` answer the path beneath the grant root). MKDIR, READLINK
-  and SYMLINK (for its link path) take a base directory in `file`. RENAME
-  and LINK take the source's base in `file` and the destination's in
-  `offset`. `ASTRA_VFS_FILE_INVALID` (0) is the grant root with an absolute
-  path, as before. A real base requires a relative, non-empty path. STAT_AT
-  accepts `ASTRA_VFS_STAT_FOLLOW`.
-- Produces (backend, optional): `mkdir_at`, `rename_at`, `link_at`,
-  `symlink_at`, `readlink_at`, `stat_at_follow`, `directory_path`.
-- Produces (Kit 8.2): `astra_vfs_mkdir_at`, `astra_vfs_rename_at`,
-  `astra_vfs_link_at`, `astra_vfs_symlink_at`, `astra_vfs_readlink_at`,
-  `astra_vfs_stat_at_follow_meta`, `astra_vfs_directory_path`;
-  `astra_filesystem_mkdir_at`, `astra_filesystem_rename_at`,
-  `astra_filesystem_link_at`, `astra_filesystem_symlink_at`,
-  `astra_filesystem_readlink_at`, `astra_filesystem_stat_at_follow`,
-  `astra_filesystem_directory_path`.
-
-- [ ] **Step 1: Failing backend test**
-
-Directory-relative operations run in the host backend of each client
-(Step 3b explains why the service core gets none of them). Test them in
-`test_vfs_host_backend.c`. The fake transport's `submit` stub records
-`last_operation`, `last_handle`, `last_value_lo`, the first and second path
-operands (`last_path`/`last_path_length`, `last_path2`/`last_path2_length`,
-copied from the request). For `ASTRA_HOST_FS_PATH` it answers by copying
-`fake_path_answer` into the output buffer and setting `result_length`. Add
-what the fake lacks. Then:
-
-```c
-/* Version 33: a path operation relative to a base handle sends the handle
- * and the relative operand; PATH asks where a directory is now. */
-static void
-test_relative_operations_name_their_base(void)
-{
-    char where[16];
-    uint32_t length = 0u;
-
-    assert(host_ops->mkdir_at(&backend, 0x77u, "sub/new", 0750u) ==
-           ASTRA_VFS_OK);
-    assert(last_operation == ASTRA_HOST_FS_MKDIR && last_handle == 0x77u &&
-           last_value_lo == 0750u &&
-           operand(last_path, last_path_length, "sub/new"));
-    assert(host_ops->rename_at(&backend, 0x77u, "a", 0x78u, "b") ==
-           ASTRA_VFS_OK);
-    assert(last_operation == ASTRA_HOST_FS_RENAME && last_handle == 0x77u &&
-           last_value_lo == 0x78u &&
-           operand(last_path, last_path_length, "a") &&
-           operand(last_path2, last_path2_length, "b"));
-    assert(host_ops->symlink_at(&backend, "target", 0x77u, "link") ==
-           ASTRA_VFS_OK);
-    assert(last_operation == ASTRA_HOST_FS_SYMLINK && last_handle == 0x77u &&
-           operand(last_path, last_path_length, "target") &&
-           operand(last_path2, last_path2_length, "link"));
-    fake_path_answer = "/d";
-    assert(host_ops->directory_path(&backend, 0x77u, where, sizeof(where),
-                                    &length) == ASTRA_VFS_OK);
-    assert(last_operation == ASTRA_HOST_FS_PATH && last_handle == 0x77u &&
-           length == 2u && memcmp(where, "/d", 2u) == 0);
-}
-```
-
-`operand` is Task 4's helper in this file. Register the test. Expected:
-compile errors (`mkdir_at`, `ASTRA_HOST_FS_PATH`, the backend fields).
-
-- [ ] **Step 2: The provider**
-
-`host.h`:
-
-```c
-/** The provider reports where a handle is: ASTRA_HOST_FS_PATH. */
-#define ASTRA_HOST_CAP_FS_PATHS (1u << 14)
-```
-
-Append `ASTRA_HOST_FS_PATH` after `ASTRA_HOST_FS_ADOPT` with the doc comment
-"Where `handle` is now, beneath the session root, into the data span
-(`result_length` bytes); NOT_FOUND when it has no such path". Set
-`ASTRA_HOST_FS_MAX` to `ASTRA_HOST_FS_PATH`, `ASTRA_HOST_VERSION` to
-`0x00010011` and `ASTRA_HOST_METRICS_VERSION` to 5. Register `path` in the
-three lists (Global Constraints).
-
-`astra68.c`, beside the resolver includes:
-
-```c
-#ifdef CONFIG_LINUX
-/*
- * Where `fd` is now, as a path beneath `root`. The kernel's /proc/self/fd
- * link is only a hint: it says "(deleted)" for an unlinked directory and
- * may name a place outside `root`. So the answer is resolved again beneath
- * `root`, with no links, and must reach the same inode
- * (Haiku: dir_vnode_to_path, vfs.cpp:2637, walks the vnode chain instead).
- */
-static uint32_t astra_host_fs_path(int root, int fd, char *out,
-                                   uint32_t capacity, uint32_t *length)
-{
-    struct open_how how = {
-        .flags = O_PATH | O_CLOEXEC,
-        .resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS |
-                   RESOLVE_NO_MAGICLINKS,
-    };
-    char link[48];
-    char *root_path;
-    char *path;
-    const char *rest;
-    size_t prefix;
-    struct stat want;
-    struct stat got;
-    uint32_t status = ASTRA_STATUS_NOT_FOUND;
-    int check;
-
-    snprintf(link, sizeof(link), "/proc/self/fd/%d", root);
-    root_path = g_file_read_link(link, NULL);
-    snprintf(link, sizeof(link), "/proc/self/fd/%d", fd);
-    path = g_file_read_link(link, NULL);
-    if (root_path == NULL || path == NULL || fstat(fd, &want) != 0)
-        goto done;
-    prefix = strcmp(root_path, "/") == 0 ? 0u : strlen(root_path);
-    if (strncmp(path, root_path, prefix) != 0 ||
-        (path[prefix] != '\0' && path[prefix] != '/'))
-        goto done;
-    rest = path[prefix] == '\0' ? "/" : path + prefix;
-    check = syscall(SYS_openat2, root, rest[1] == '\0' ? "." : rest + 1,
-                    &how, sizeof(how));
-    if (check < 0)
-        goto done;
-    if (fstat(check, &got) == 0 && got.st_dev == want.st_dev &&
-        got.st_ino == want.st_ino) {
-        *length = (uint32_t)strlen(rest);
-        if (*length > capacity) {
-            status = ASTRA_STATUS_BUFFER_TOO_SMALL;
-        } else {
-            memcpy(out, rest, *length);
-            status = ASTRA_STATUS_OK;
-        }
-    }
-    close(check);
-done:
-    g_free(root_path);
-    g_free(path);
-    return status;
-}
-#endif
-```
-
-The case, in `astra_host_execute_fs` beside READLINK:
-
-```c
-    case ASTRA_HOST_FS_PATH: {
-        uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
-        uint8_t *data = astra_host_command_data(
-            s, physical, bytes, command_bytes, command, capacity);
-        uint32_t length = 0u;
-
-        file = astra_host_session_file(s, owner, session_id, handle);
-        if (file == NULL) {
-            status = ASTRA_STATUS_BAD_HANDLE;
-        } else if (data == NULL || capacity == 0u) {
-            status = ASTRA_STATUS_INVALID;
-        } else {
-#ifdef CONFIG_LINUX
-            status = astra_host_fs_path(root, file->fd, (char *)data,
-                                        capacity, &length);
-            if (status == ASTRA_STATUS_OK)
-                stl_be_p(command + HOST_FIELD(result_length), length);
-#else
-            status = ASTRA_STATUS_UNSUPPORTED;
-#endif
-        }
-        break;
-    }
-```
-
-The capability register adds `ASTRA_HOST_CAP_FS_PATHS` under
-`CONFIG_LINUX` only. On macOS the provider does not offer it, so HostFS
-there does not advertise `ASTRA_VFS_FEATURE_DIRECTORY_PATH` (Step 3).
-
-`test-hostfs.py`, a check `paths` (Task 4's helpers):
-- open session S on `work`; MKDIR `a`, MKDIR `a/b`; OPEN `a/b` with
-  `OPEN_DIRECTORY` as handle H; PATH H answers `/a/b`;
-- RENAME `a` to `c`; PATH H answers `/c/b`;
-- a derived session T rooted at `/c`: OPEN `b` in T as H2; PATH H2 answers
-  `/b`. The answer never shows what lies above a session's root;
-- UNLINK `c/b` with `UNLINK_DIRECTORY`; PATH H answers `STATUS_NOT_FOUND`
-  (2), not `/c/b (deleted)`.
-
-- [ ] **Step 3: The wire, the backend and the core**
-
-`vfs_service.h`: version 33 ("Version 33 lets a path operation name the
-directory it is relative to, and asks where a directory is:
-DIRECTORY_PATH"). Add:
-
-```c
-/** HELLO feature: DIRECTORY_PATH answers, so a client may hold its current
- * directory as a handle. */
-#define ASTRA_VFS_FEATURE_DIRECTORY_PATH (UINT32_C(1) << 4)
-/** Where directory `file` is now, beneath the grant root: `payload`,
- * `count` bytes, at most `length`. NOT_FOUND when it has no path. */
-#define ASTRA_VFS_OP_DIRECTORY_PATH UINT32_C(40)
-/** Highest operation code this build defines. */
-#define ASTRA_VFS_OP_MAX ASTRA_VFS_OP_DIRECTORY_PATH
-```
-
-Extend the comments on MKDIR, READLINK, SYMLINK, RENAME and LINK with the
-base-handle rule from Interfaces, and the STAT_AT comment with
-"`ASTRA_VFS_STAT_FOLLOW` (version 33) follows a final link".
-
-`vfs_backend.h`, after `adopt`:
-
-```c
-    /* Version 33: path operations relative to an open directory node; a
-     * node of 0 is the session root with an absolute path. NULL: the
-     * backend has no directory-relative form of the operation. */
-    uint32_t (*mkdir_at)(void *context, uintptr_t directory,
-                         const char *path, uint16_t create_mode);
-    uint32_t (*rename_at)(void *context, uintptr_t from_directory,
-                          const char *from, uintptr_t to_directory,
-                          const char *to);
-    uint32_t (*link_at)(void *context, uintptr_t from_directory,
-                        const char *from, uintptr_t to_directory,
-                        const char *to);
-    uint32_t (*symlink_at)(void *context, const char *target,
-                           uintptr_t directory, const char *path);
-    uint32_t (*readlink_at)(void *context, uintptr_t directory,
-                            const char *path, void *buffer,
-                            uint32_t capacity, uint32_t *length);
-    uint32_t (*stat_at_follow)(void *context, uintptr_t directory,
-                               const char *path, AstraVfsNodeInfo *info);
-    /** Where `node` is now, beneath the root; ASTRA_VFS_ERR_NOT_FOUND
-     * when it has no path. */
-    uint32_t (*directory_path)(void *context, uintptr_t node, char *buffer,
-                               uint32_t capacity, uint32_t *length);
-```
-
-The other backends initialise their tables positionally and stop before
-these fields, so C zero-fills them. No other table changes.
-
-`host.c`:
-
-```c
-static uint32_t host_mkdir_at(void *context, uintptr_t directory,
-                              const char *path, uint16_t create_mode)
-{
-    AstraVfsHostBackend *backend = context;
-    AstraVfsHostRequest request;
-    uint32_t status = command_begin(backend, &request, ASTRA_HOST_FS_MKDIR,
-                                    0u, path, NULL);
-
-    if (status != ASTRA_VFS_OK)
-        return status;
-    request.command->handle = (uint32_t)directory;
-    request.command->value_lo = create_mode == ASTRA_VFS_MODE_DEFAULT ?
-                                0777u : create_mode;
-    status = submit(backend, &request, NULL, 0u, NULL, 0u);
-    return status == ASTRA_VFS_ERR_ESCAPED ?
-        note_escape(backend, request.command, (uint32_t)directory, path) :
-        status;
-}
-
-/* RENAME and LINK: each operand beneath its own base. The provider
- * answers CROSS_DEVICE for an operand that leaves the session (Task 6). */
-static uint32_t host_two_paths_at(void *context, uint16_t operation,
-                                  uintptr_t left_directory, const char *left,
-                                  uintptr_t right_directory,
-                                  const char *right)
-{
-    AstraVfsHostBackend *backend = context;
-    AstraVfsHostRequest request;
-    uint32_t status = command_begin(backend, &request, operation, 0u, left,
-                                    right);
-
-    if (status != ASTRA_VFS_OK)
-        return status;
-    request.command->handle = (uint32_t)left_directory;
-    request.command->value_lo = (uint32_t)right_directory;
-    return submit(backend, &request, NULL, 0u, NULL, 0u);
-}
-
-static uint32_t host_rename_at(void *context, uintptr_t from_directory,
-                               const char *from, uintptr_t to_directory,
-                               const char *to)
-{
-    return host_two_paths_at(context, ASTRA_HOST_FS_RENAME, from_directory,
-                             from, to_directory, to);
-}
-
-static uint32_t host_link_at(void *context, uintptr_t from_directory,
-                             const char *from, uintptr_t to_directory,
-                             const char *to)
-{
-    return host_two_paths_at(context, ASTRA_HOST_FS_LINK, from_directory,
-                             from, to_directory, to);
-}
-
-static uint32_t host_symlink_at(void *context, const char *target,
-                                uintptr_t directory, const char *path)
-{
-    AstraVfsHostBackend *backend = context;
-    AstraVfsHostRequest request;
-    uint32_t status = command_begin(backend, &request, ASTRA_HOST_FS_SYMLINK,
-                                    0u, target, path);
-
-    if (status != ASTRA_VFS_OK)
-        return status;
-    request.command->handle = (uint32_t)directory;
-    status = submit(backend, &request, NULL, 0u, NULL, 0u);
-    return status == ASTRA_VFS_ERR_ESCAPED ?
-        note_escape(backend, request.command, (uint32_t)directory, path) :
-        status;
-}
-
-static uint32_t host_readlink_at_node(void *context, uintptr_t directory,
-                                      const char *path, void *buffer,
-                                      uint32_t capacity, uint32_t *length)
-{
-    return host_readlink_at(context, (uint32_t)directory, path, buffer,
-                            capacity, length);
-}
-
-static uint32_t host_directory_path(void *context, uintptr_t node,
-                                    char *buffer, uint32_t capacity,
-                                    uint32_t *length)
-{
-    AstraVfsHostBackend *backend = context;
-    AstraVfsHostRequest request;
-    uint32_t status = command_begin(backend, &request, ASTRA_HOST_FS_PATH,
-                                    capacity, NULL, NULL);
-
-    *length = 0u;
-    if (status != ASTRA_VFS_OK)
-        return status;
-    request.command->handle = (uint32_t)node;
-    status = submit(backend, &request, NULL, 0u, buffer, capacity);
-    if (status != ASTRA_VFS_OK)
-        return status;
-    if (request.command->result_length > capacity)
-        return ASTRA_VFS_ERR_PROTOCOL;
-    *length = request.command->result_length;
-    return ASTRA_VFS_OK;
-}
-```
-
-`host_stat_at_follow` is `host_stat_at` sending `ASTRA_HOST_FS_STAT_FOLLOW`
-in `flags`. Write both as one `host_stat_at_flags(context, directory, path, flags, info)`
-and two one-line wrappers. Add the seven functions to `host_ops` in field
-order. Check `host_readlink_at`'s first parameter type, which Task 6 wrote
-as the backend pointer, and cast as needed.
-
-The service core does not change: no core backend has these operations,
-and host volumes reach QEMU through the lane. Step 3b gives the lane's
-translator the base handles and DIRECTORY_PATH.
-
-HostFS grants add `ASTRA_VFS_FEATURE_DIRECTORY_PATH` when the lease has
-`ASTRA_HOST_CAP_FS_PATHS`. `astra_vfs_host_transport_init` does not
-require it, because the macOS provider lacks it.
-
-- [ ] **Step 3b: The lane carries base handles and DIRECTORY_PATH**
-
-No service-core backend has the `_at` operations or `directory_path`. Only
-host volumes do, and they reach QEMU through the lane (Global Constraints).
-So Step 3's `vfs_service_core.c` changes are **not** made: `base_node`, the
-dispatch changes and the DIRECTORY_PATH case. Their equivalents live in the
-lane's translator. There a base is simpler. A lane's file handles *are*
-the provider's handles of this process, so a base needs no file table:
-QEMU checks that it is a directory of the scope's session (Task 4) and
-answers `NOT_DIR` or `BAD_HANDLE` itself.
-
-`sw/userspace/vfs/src/vfs_host_direct.c`:
-
-```c
-/* Version 33's base handle: ASTRA_VFS_FILE_INVALID is the grant root with
- * the path as it always was; a real base is one of this client's own
- * directory handles and needs a relative, non-empty path. */
-static uint32_t direct_base(const AstraVfsClient *client, uint32_t handle,
-                            const uint8_t *path, uintptr_t *node)
-{
-    *node = 0u;
-    if (handle == ASTRA_VFS_FILE_INVALID)
-        return ASTRA_VFS_OK;
-    if (client->version < UINT16_C(33))
-        return ASTRA_VFS_ERR_UNSUPPORTED;
-    if (path[0] == '/' || path[0] == '\0')
-        return ASTRA_VFS_ERR_INVALID;
-    *node = handle;
-    return ASTRA_VFS_OK;
-}
-```
-
-In `astra_vfs_host_direct_transport`:
-- **MKDIR.** After its mode check:
-
-  ```c
-          uintptr_t base = 0u;
-
-          reply->status = direct_base(client, request->file,
-                                      request->body.path, &base);
-          if (reply->status == ASTRA_VFS_OK)
-              reply->status = base == 0u ?
-                  ops->mkdir(backend.context,
-                             (const char *)request->body.path, mode) :
-                  ops->mkdir_at(backend.context, base,
-                                (const char *)request->body.path, mode);
-  ```
-
-  `mode` is the value the case computes today.
-- **READLINK.** It is the same: a base selects
-  `ops->readlink_at(backend.context, base, path, reply->payload, capacity, &reply->count)`.
-- **SYMLINK** (the one-request form). The base is checked against the link
-  path `symlink->to`, and a base selects
-  `ops->symlink_at(backend.context, target, base, to)`.
-- **RENAME and LINK** (one-request forms). There are two bases:
-  `request->file` against `body.path`, and `(uint32_t)request->offset`
-  against `to`. An `offset` above `UINT32_MAX` is INVALID. When either
-  base is real, call `rename_at`/`link_at`, with 0 for the root side.
-- **STAT_AT.** Accept `request->flags == ASTRA_VFS_STAT_FOLLOW` when
-  `client->version >= 33`, and route it to `ops->stat_at_follow`.
-- **DIRECTORY_PATH:**
-
-  ```c
-      case ASTRA_VFS_OP_DIRECTORY_PATH: {
-          uint32_t length = 0u;
-          uint32_t capacity = request->length < ASTRA_VFS_PATH_MAX - 1u ?
-              request->length : ASTRA_VFS_PATH_MAX - 1u;
-
-          if (client->version < UINT16_C(33) ||
-              ops->directory_path == NULL) {
-              reply->status = ASTRA_VFS_ERR_UNSUPPORTED;
-              break;
-          }
-          reply->status = ops->directory_path(
-              backend.context, request->file, (char *)reply->payload,
-              capacity, &length);
-          if (reply->status == ASTRA_VFS_OK) {
-              if (length == 0u || length > capacity ||
-                  reply->payload[0] != '/' ||
-                  memchr(reply->payload, 0, length) != NULL ||
-                  !astra_utf8_validate(reply->payload, length, 0u))
-                  reply->status = ASTRA_VFS_ERR_PROTOCOL;
-              else
-                  reply->count = length;
-          }
-          break;
-      }
-  ```
-
-The capacity is bounded by `ASTRA_VFS_PATH_MAX - 1`: a cwd whose path is
-longer than the storage protocol carries (Decisions, D7) answers
-`BUFFER_TOO_SMALL`, which `getcwd` reports as `ENAMETOOLONG`. Step 4's Kit
-functions reach these cases through `exchange`, because none of them has a
-fast path. Step 1's failing test moves with the code. The core test of
-directory-relative operations becomes a `test_vfs_host_backend.c` test of
-the seven backend functions, which drive the provider with `handle` and
-`value_lo` set as Step 3's `host.c` shows. It asserts each command's
-`handle`, `value_lo` and operands.
-
-- [ ] **Step 4: The Kit**
-
-`vfs_client.c`. Split the body of `astra_vfs_stat_at_meta` into
-`static uint32_t stat_at_common(client, directory, path, flags, entry, meta)`,
-which sets `call->request.flags = flags` and refuses a non-zero `flags`
-below version 33. Then:
-
-```c
-static int relative_path_valid(const char *path)
-{
-    return path_text_valid(path, NULL) && path[0] != '\0' && path[0] != '/';
-}
-
-uint32_t astra_vfs_stat_at_follow_meta(AstraVfsClient *client,
-                                       AstraVfsFile directory,
-                                       const char *path,
-                                       AstraVfsDirEntry *entry,
-                                       AstraVfsNodeMeta *meta)
-{
-    return stat_at_common(client, directory, path, ASTRA_VFS_STAT_FOLLOW,
-                          entry, meta);
-}
-
-uint32_t astra_vfs_mkdir_at(AstraVfsClient *client, AstraVfsFile directory,
-                            const char *path, uint16_t create_mode)
-{
-    AstraVfsCallState *call;
-
-    if (client == NULL)
-        return ASTRA_VFS_ERR_INVALID;
-    if (directory == ASTRA_VFS_FILE_INVALID)
-        return ASTRA_VFS_ERR_BAD_HANDLE;
-    if (client->version < UINT16_C(33))
-        return ASTRA_VFS_ERR_UNSUPPORTED;
-    if (!relative_path_valid(path))
-        return ASTRA_VFS_ERR_INVALID;
-    call = begin(client);
-    (void)set_path(&call->request, path);
-    call->request.file = directory;
-    call->request.offset = create_mode;
-    return exchange(client, call, ASTRA_VFS_OP_MKDIR);
-}
-
-/* RENAME, LINK and SYMLINK carry two paths. A base of
- * ASTRA_VFS_FILE_INVALID means that operand is absolute from the grant
- * root. */
-static uint32_t two_paths_at(AstraVfsClient *client, uint32_t operation,
-                             AstraVfsFile first_directory, const char *first,
-                             AstraVfsFile second_directory,
-                             const char *second)
-{
-    AstraVfsCallState *call;
-    AstraVfsRenameRequest *request;
-
-    if (client == NULL)
-        return ASTRA_VFS_ERR_INVALID;
-    if (client->version < UINT16_C(33))
-        return ASTRA_VFS_ERR_UNSUPPORTED;
-    if ((first_directory != ASTRA_VFS_FILE_INVALID &&
-         !relative_path_valid(first)) ||
-        (second_directory != ASTRA_VFS_FILE_INVALID &&
-         !relative_path_valid(second)))
-        return ASTRA_VFS_ERR_INVALID;
-    call = call_state(client);
-    request = &call->rename_request;
-    begin_request(client, &request->request,
-                  (uint16_t)ASTRA_VFS_RENAME_REQUEST_SIZE);
-    if (!set_path(&request->request, first) ||
-        !set_path_bytes(request->to, second))
-        return ASTRA_VFS_ERR_INVALID;
-    request->request.file = first_directory;
-    request->request.offset = second_directory;
-    return exchange_request(client, operation, &request->request, call);
-}
-
-uint32_t astra_vfs_rename_at(AstraVfsClient *client,
-                             AstraVfsFile from_directory, const char *from,
-                             AstraVfsFile to_directory, const char *to)
-{
-    return two_paths_at(client, ASTRA_VFS_OP_RENAME, from_directory, from,
-                        to_directory, to);
-}
-
-uint32_t astra_vfs_link_at(AstraVfsClient *client,
-                           AstraVfsFile from_directory, const char *from,
-                           AstraVfsFile to_directory, const char *to)
-{
-    return two_paths_at(client, ASTRA_VFS_OP_LINK, from_directory, from,
-                        to_directory, to);
-}
-
-/* The target is stored, never resolved: it is not relative to anything. */
-uint32_t astra_vfs_symlink_at(AstraVfsClient *client, const char *target,
-                              AstraVfsFile directory, const char *path)
-{
-    AstraVfsCallState *call;
-    AstraVfsRenameRequest *request;
-
-    if (client == NULL || target == NULL || target[0] == '\0')
-        return ASTRA_VFS_ERR_INVALID;
-    if (directory == ASTRA_VFS_FILE_INVALID)
-        return ASTRA_VFS_ERR_BAD_HANDLE;
-    if (client->version < UINT16_C(33))
-        return ASTRA_VFS_ERR_UNSUPPORTED;
-    if (!relative_path_valid(path))
-        return ASTRA_VFS_ERR_INVALID;
-    call = call_state(client);
-    request = &call->rename_request;
-    begin_request(client, &request->request,
-                  (uint16_t)ASTRA_VFS_RENAME_REQUEST_SIZE);
-    if (!set_path(&request->request, target) ||
-        !set_path_bytes(request->to, path))
-        return ASTRA_VFS_ERR_INVALID;
-    request->request.file = directory;
-    return exchange_request(client, ASTRA_VFS_OP_SYMLINK, &request->request,
-                            call);
-}
-
-uint32_t astra_vfs_directory_path(AstraVfsClient *client,
-                                  AstraVfsFile directory, char *path,
-                                  uint32_t capacity, uint32_t *length)
-{
-    AstraVfsCallState *call;
-    uint32_t status;
-
-    if (client == NULL || path == NULL || capacity < 2u || length == NULL)
-        return ASTRA_VFS_ERR_INVALID;
-    *length = 0u;
-    if (client->version < UINT16_C(33))
-        return ASTRA_VFS_ERR_UNSUPPORTED;
-    call = begin(client);
-    call->request.file = directory;
-    call->request.length = capacity - 1u;
-    status = exchange(client, call, ASTRA_VFS_OP_DIRECTORY_PATH);
-    if (status != ASTRA_VFS_OK)
-        return status;
-    if (call->reply.count == 0u || call->reply.count > capacity - 1u)
-        return ASTRA_VFS_ERR_PROTOCOL;
-    memcpy(path, call->reply.payload, call->reply.count);
-    path[call->reply.count] = '\0';
-    *length = call->reply.count;
-    return ASTRA_VFS_OK;
-}
-```
-
-`astra_vfs_readlink_at(client, directory, path, buffer, capacity, length)`
-is `astra_vfs_readlink` with `call->request.file = directory`, the
-`relative_path_valid` check and the version-33 gate. Write it by moving
-`astra_vfs_readlink`'s body into `static uint32_t readlink_common(client, directory, path, buffer, capacity, length)`,
-used by both.
-
-`filesystem_library.c`:
-
-```c
-static uint32_t directory_for(const AstraFile *directory, uint32_t rights)
-{
-    if (!file_valid(directory))
-        return ASTRA_VFS_ERR_BAD_HANDLE;
-    if (directory->_private_kind != ASTRA_VFS_KIND_DIRECTORY)
-        return ASTRA_VFS_ERR_NOT_DIR;
-    if ((file_rights(directory) & rights) != rights)
-        return ASTRA_VFS_ERR_ACCESS;
-    return ASTRA_VFS_OK;
-}
-
-uint32_t astra_filesystem_mkdir_at(const AstraFile *directory,
-                                   const char *path, uint16_t create_mode)
-{
-    uint32_t status = directory_for(directory, ASTRA_RIGHT_WRITE);
-
-    return status != ASTRA_VFS_OK ? status :
-        astra_vfs_mkdir_at(directory->_private_client,
-                           directory->_private_file, path, create_mode);
-}
-
-uint32_t astra_filesystem_symlink_at(const char *target,
-                                     const AstraFile *directory,
-                                     const char *path)
-{
-    uint32_t status = directory_for(directory, ASTRA_RIGHT_WRITE);
-
-    return status != ASTRA_VFS_OK ? status :
-        astra_vfs_symlink_at(directory->_private_client, target,
-                             directory->_private_file, path);
-}
-
-uint32_t astra_filesystem_readlink_at(const AstraFile *directory,
-                                      const char *path, void *buffer,
-                                      uint32_t capacity, uint32_t *length)
-{
-    uint32_t status = directory_for(directory, ASTRA_RIGHT_READ);
-
-    return status != ASTRA_VFS_OK ? status :
-        astra_vfs_readlink_at(directory->_private_client,
-                              directory->_private_file, path, buffer,
-                              capacity, length);
-}
-
-typedef uint32_t (*FilesystemTwoPathsAt)(AstraVfsClient *, AstraVfsFile,
-                                         const char *, AstraVfsFile,
-                                         const char *);
-
-/*
- * One operand may be relative to a directory and the other absolute in
- * the namespace. Both must reach the same client: a rename cannot cross a
- * grant, which is CROSS_DEVICE as it is for two paths.
- */
-static uint32_t filesystem_two_paths_at(AstraFilesystem *filesystem,
-                                        const AstraFile *from_directory,
-                                        const char *from,
-                                        const AstraFile *to_directory,
-                                        const char *to,
-                                        FilesystemTwoPathsAt operation)
-{
-    AstraVfsClient *from_client = NULL;
-    AstraVfsClient *to_client = NULL;
-    AstraVfsFile from_base = ASTRA_VFS_FILE_INVALID;
-    AstraVfsFile to_base = ASTRA_VFS_FILE_INVALID;
-    char from_wire[ASTRA_VFS_PATH_MAX];
-    char to_logical[ASTRA_VFS_PATH_MAX];
-    char to_wire[ASTRA_VFS_PATH_MAX];
-    uint32_t status;
-
-    if (from == NULL || to == NULL ||
-        (from_directory == NULL && to_directory == NULL))
-        return ASTRA_VFS_ERR_INVALID;
-    if (from_directory != NULL) {
-        status = directory_for(from_directory, ASTRA_RIGHT_WRITE);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        from_client = from_directory->_private_client;
-        from_base = from_directory->_private_file;
-        if (strlen(from) >= sizeof(from_wire))
-            return ASTRA_VFS_ERR_INVALID;
-        (void)strcpy(from_wire, from);
-    } else {
-        status = filesystem_locate_literal(
-            filesystem, from, ASTRA_RIGHT_WRITE, &from_client, from_wire,
-            NULL, NULL, NULL, NULL, NULL);
-        if (status != ASTRA_VFS_OK)
-            return status;
-    }
-    if (to_directory != NULL) {
-        status = directory_for(to_directory, ASTRA_RIGHT_WRITE);
-        if (status != ASTRA_VFS_OK)
-            return status;
-        to_client = to_directory->_private_client;
-        to_base = to_directory->_private_file;
-        if (strlen(to) >= sizeof(to_wire))
-            return ASTRA_VFS_ERR_INVALID;
-        (void)strcpy(to_wire, to);
-    } else {
-        if (!filesystem_valid(filesystem))
-            return ASTRA_VFS_ERR_INVALID;
-        status = astra_vfs_assign_destination(
-            filesystem->_private_assigns, to, ASTRA_RIGHT_WRITE, 0,
-            filesystem_client_for, filesystem, to_logical,
-            sizeof(to_logical), to_wire, sizeof(to_wire), &to_client, NULL);
-        if (status != ASTRA_VFS_OK)
-            return status;
-    }
-    if (from_client != to_client)
-        return ASTRA_VFS_ERR_CROSS_DEVICE;
-    return operation(from_client, from_base, from_wire, to_base, to_wire);
-}
-
-uint32_t astra_filesystem_rename_at(AstraFilesystem *filesystem,
-                                    const AstraFile *from_directory,
-                                    const char *from,
-                                    const AstraFile *to_directory,
-                                    const char *to)
-{
-    return filesystem_two_paths_at(filesystem, from_directory, from,
-                                   to_directory, to, astra_vfs_rename_at);
-}
-
-uint32_t astra_filesystem_link_at(AstraFilesystem *filesystem,
-                                  const AstraFile *from_directory,
-                                  const char *from,
-                                  const AstraFile *to_directory,
-                                  const char *to)
-{
-    return filesystem_two_paths_at(filesystem, from_directory, from,
-                                   to_directory, to, astra_vfs_link_at);
-}
-
-/*
- * The namespace path of directory handle `directory`, opened through
- * binding `assign` (spelled as the caller spells it: the result's first
- * component). The provider answers where the handle is beneath the grant
- * root; this strips the binding's own root from that and prefixes the
- * name. NOT_FOUND: the directory was removed, or now lies outside what the
- * binding can name.
- */
-uint32_t astra_filesystem_directory_path(AstraFilesystem *filesystem,
-                                         const char *assign,
-                                         const AstraFile *directory,
-                                         char *path, size_t capacity)
-{
-    const AstraAssign *binding;
-    char wire[ASTRA_VFS_PATH_MAX];
-    const char *rest;
-    uint32_t length = 0u;
-    size_t root;
-    uint32_t status;
-
-    if (!filesystem_valid(filesystem) || assign == NULL || path == NULL ||
-        capacity == 0u)
-        return ASTRA_VFS_ERR_INVALID;
-    status = directory_for(directory, 0u);
-    if (status != ASTRA_VFS_OK)
-        return status;
-    if ((astra_vfs_features(directory->_private_client) &
-         ASTRA_VFS_FEATURE_DIRECTORY_PATH) == 0u)
-        return ASTRA_VFS_ERR_UNSUPPORTED;
-    binding = astra_assign_member(filesystem->_private_assigns, assign,
-                                  file_member(directory));
-    if (binding == NULL)
-        return ASTRA_VFS_ERR_INVALID;
-    status = astra_vfs_directory_path(directory->_private_client,
-                                      directory->_private_file, wire,
-                                      sizeof(wire), &length);
-    if (status != ASTRA_VFS_OK)
-        return status;
-    root = strlen(binding->root);
-    if (root == 0u) {
-        rest = wire;
-    } else if (strncmp(wire + 1, binding->root, root) == 0 &&
-               (wire[1 + root] == '\0' || wire[1 + root] == '/')) {
-        rest = wire + 1 + root;
-    } else {
-        return ASTRA_VFS_ERR_NOT_FOUND;
-    }
-    if (strcmp(rest, "/") == 0)
-        rest = "";
-    if (1u + strlen(assign) + strlen(rest) + 1u > capacity)
-        return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
-    path[0] = '/';
-    (void)strcpy(path + 1, assign);
-    (void)strcat(path, rest);
-    return ASTRA_VFS_OK;
-}
-```
-
-`astra_filesystem_stat_at_follow(directory, path, info)` is
-`astra_filesystem_stat_at` with `astra_vfs_stat_at_follow_meta`. Factor
-the shared body into one static function taking the lookup function.
-
-Declare every new function with a doc comment in `vfs_client.h` and
-`filesystem_library.h`, add them to `filesystem.library.exports` in sorted
-order, and set `ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR` to `2u` (identity
-`8, 2, 0`; the Makefile check `'^filesystem.library.8 8.2.0 ABI 8.2$$'`).
-
-Add `test_vfs_host_backend.c` cases for `host_mkdir_at` (the command
-carries `handle` and the path operand), `host_rename_at` (`handle` and
-`value_lo`) and `host_directory_path` (a fake answer of `/x/y` with
-`result_length` 4 arrives as `/x/y`; one longer than the capacity is
-`ASTRA_VFS_ERR_PROTOCOL`). Follow that file's existing fake-transport
-pattern.
-
-- [ ] **Step 5: libc holds cwd as a handle**
-
-`sw/userspace/posix/src/file.c`. State, beside `cwd`:
-
-```c
-/*
- * The current directory, as Haiku's io_context->cwd is a vnode
- * (vfs.cpp:8343): a held directory, so renaming it changes nothing for
- * relative names. `cwd` stays the last known path, which getcwd refreshes.
- * Only bindings whose service can say where a handle is are held; the rest
- * keep the string alone.
- */
-static AstraFile cwd_file = ASTRA_FILE_INIT;
-static int cwd_held;
-static char cwd_assign[ASTRA_CAPABILITY_NAME_MAX];
-static uint64_t cwd_share_token;
-```
-
-`PosixPath` gains `const AstraFile *base;` (NULL: `native` is a namespace
-path). Then:
-
-```c
-static void
-cwd_release(void)
-{
-    if (cwd_held)
-        (void)astra_filesystem_close(&cwd_file);
-    cwd_file = (AstraFile)ASTRA_FILE_INIT;
-    cwd_held = 0;
-    cwd_assign[0] = '\0';
-}
-
-/* Where the held cwd is now. 0 with errno set when it cannot be named. */
-static int
-cwd_refresh(void)
-{
-    char fresh[ASTRA_VFS_PATH_MAX];
-    uint32_t status;
-
-    if (!cwd_held)
-        return 1;
-    status = astra_filesystem_directory_path(&filesystem.filesystem,
-                                             cwd_assign, &cwd_file, fresh,
-                                             sizeof(fresh));
-    if (status != ASTRA_VFS_OK) {
-        errno = status == ASTRA_VFS_ERR_BUFFER_TOO_SMALL ? ENAMETOOLONG :
-                status == ASTRA_VFS_ERR_NOT_FOUND ? ENOENT :
-                posix_errno(status);
-        return 0;
-    }
-    if (strcmp(fresh, cwd) != 0) {
-        (void)strcpy(cwd, fresh);
-        (void)set_process_cwd(cwd);
-    }
-    return 1;
-}
-```
-
-`resolve_path` refreshes first when the path is relative and cwd is held,
-so callers that still need a namespace string (`execve`, `statvfs`,
-`opendir`'s root check) get the directory's current name:
-
-```c
-    if (cwd_held && !astra_posix_path_is_absolute(path) && !cwd_refresh())
-        return 0;
-```
-
-goes before the `astra_posix_path_resolve` call. Add:
-
-```c
-/*
- * A path for an operation that has a directory-relative form: a relative
- * path against the held cwd goes as it is, unresolved, and the provider
- * walks it from the handle. Anything else resolves as before.
- */
-static int
-resolve_beneath(const char *path, PosixPath *out, char *normal)
-{
-    out->base = NULL;
-    if (cwd_held && path != NULL && path[0] != '\0' &&
-        !astra_posix_path_is_absolute(path)) {
-        if (!start())
-            return 0;
-        if (strlen(path) >= sizeof(out->native)) {
-            errno = ENAMETOOLONG;
-            return 0;
-        }
-        (void)strcpy(out->native, path);
-        out->root = 0;
-        out->base = &cwd_file;
-        if (normal != NULL)
-            normal[0] = '\0';
-        return 1;
-    }
-    return resolve_path(path, out, normal);
-}
-
-/*
- * A cwd-relative operation left its grant (`..` above the root, or a link
- * out of the volume). Redo it as a namespace path from where cwd is now;
- * Task 6's continuation follows it from there.
- */
-static int
-rebase(uint32_t *status, const char *path, PosixPath *out, char *normal)
-{
-    if (*status != ASTRA_VFS_ERR_ESCAPED || out->base == NULL)
-        return 0;
-    out->base = NULL;
-    if (!resolve_path(path, out, normal)) {
-        *status = ASTRA_VFS_ERR_NOT_FOUND;
-        return 0;
-    }
-    return 1;
-}
-```
-
-`resolve_path` must set `out->base = NULL` too.
-
-Then each relative-capable operation uses `resolve_beneath` and a retry.
-`open_path`:
-
-```c
-    if (!resolve_beneath(path, &resolved, NULL))
-        return -1;
-    ...
-again:
-    status = resolved.base != NULL ?
-        astra_filesystem_open_at_mode(resolved.base, resolved.native, wanted,
-                                      (uint16_t)create_mode, &opened) :
-        astra_filesystem_open_mode(&filesystem.filesystem, resolved.native,
-                                   wanted, (uint16_t)create_mode, &opened);
-    if (status == ASTRA_VFS_ERR_IS_DIR && may_open_directory(wanted))
-        status = resolved.base != NULL ?
-            astra_filesystem_open_at_mode(resolved.base, resolved.native,
-                                          wanted | ASTRA_VFS_OPEN_DIRECTORY,
-                                          (uint16_t)create_mode, &opened) :
-            astra_filesystem_open_mode(&filesystem.filesystem,
-                                       resolved.native,
-                                       wanted | ASTRA_VFS_OPEN_DIRECTORY,
-                                       (uint16_t)create_mode, &opened);
-    if (rebase(&status, path, &resolved, NULL))
-        goto again;
-```
-
-The same shape, with these pairs (`base` form / path form):
-- `stat_path`: `astra_filesystem_stat_at_follow` or
-  `astra_filesystem_stat_at` (literal) / `astra_filesystem_stat` or
-  `astra_filesystem_lstat`. Keep the "final slash, `.` or `..` names a
-  directory" rule ahead of both.
-- `mkdir`: `astra_filesystem_mkdir_at` / `astra_filesystem_mkdir_mode`.
-- `remove_path`: with a base, `astra_filesystem_unlink_at(resolved.base, resolved.native, flags)`.
-  The provider walks a multi-component relative path, so the parent-split
-  code stays for the path form only.
-- `chmod`: `astra_filesystem_chmod_at(base, native, mode, 0u)` / `astra_filesystem_chmod`.
-- `readlink`: `astra_filesystem_readlink_at` / `astra_filesystem_readlink`.
-- `symlink`: `astra_filesystem_symlink_at(native_target, base, native)` / `astra_filesystem_symlink`.
-- `rename` and `link`: resolve both operands with `resolve_beneath`, then
-  `astra_filesystem_rename_at(&filesystem.filesystem, from.base, from.native, to.base, to.native)`
-  when either has a base, or the path form when neither does. On ESCAPED,
-  rebase both.
-
-`fstatat`, `unlinkat`, `fchmodat` and `openat` with `AT_FDCWD` reach these
-functions already. `fstatat` with a real `dirfd` is wrong today in both
-directions (`file.c:1053-1068`): with `AT_SYMLINK_NOFOLLOW` it answers
-`ENOTSUP`, and without it, it calls `astra_filesystem_stat_at`, which is
-the no-follow lookup (STAT_AT, `vfs_service.h:233`). Make the flag choose:
-`AT_SYMLINK_NOFOLLOW` calls `astra_filesystem_stat_at`, and no flag calls
-`astra_filesystem_stat_at_follow`.
-
-`chdir`:
-
-```c
-int
-chdir(const char *path)
-{
-    AstraFile opened = ASTRA_FILE_INIT;
-    PosixPath resolved;
-    char normal[ASTRA_VFS_PATH_MAX];
-    char assign[ASTRA_CAPABILITY_NAME_MAX];
-    char fresh[ASTRA_VFS_PATH_MAX];
-    const uint32_t flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY;
-    uint32_t status;
-
-    if (!resolve_beneath(path, &resolved, normal))
-        return -1;
-again:
-    if (resolved.root) {
-        if (set_process_cwd("/") != 0)
-            return -1;
-        cwd_release();
-        (void)strcpy(cwd, "/");
-        return 0;
-    }
-    status = resolved.base != NULL ?
-        astra_filesystem_open_at(resolved.base, resolved.native, flags,
-                                 &opened) :
-        astra_filesystem_open(&filesystem.filesystem, resolved.native, flags,
-                              &opened);
-    if (rebase(&status, path, &resolved, normal))
-        goto again;
-    if (status != ASTRA_VFS_OK)
-        return fail(status);
-    /* The binding a held cwd names: the first component of the namespace
-     * path, or the old cwd's when the path was relative to it. */
-    if (resolved.base != NULL) {
-        (void)strcpy(assign, cwd_assign);
-    } else {
-        const char *start = normal + 1;
-        size_t length = strcspn(start, "/");
-
-        if (length >= sizeof(assign)) {
-            (void)astra_filesystem_close(&opened);
-            errno = ENAMETOOLONG;
-            return -1;
-        }
-        memcpy(assign, start, length);
-        assign[length] = '\0';
-    }
-    status = astra_filesystem_directory_path(&filesystem.filesystem, assign,
-                                             &opened, fresh, sizeof(fresh));
-    if (status == ASTRA_VFS_ERR_UNSUPPORTED) {
-        /* A service that cannot say where a handle is: the string cwd. */
-        (void)astra_filesystem_close(&opened);
-        if (resolved.base != NULL) {
-            errno = EIO;
-            return -1;
-        }
-        if (set_process_cwd(normal) != 0)
-            return -1;
-        cwd_release();
-        (void)strcpy(cwd, normal);
-        return 0;
-    }
-    if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_NOT_FOUND &&
-        status != ASTRA_VFS_ERR_BUFFER_TOO_SMALL) {
-        (void)astra_filesystem_close(&opened);
-        return fail(status);
-    }
-    cwd_release();
-    cwd_file = opened;
-    cwd_held = 1;
-    (void)strcpy(cwd_assign, assign);
-    if (status == ASTRA_VFS_OK) {
-        (void)strcpy(cwd, fresh);
-    } else if (resolved.base == NULL) {
-        (void)strcpy(cwd, normal);
-    } else {
-        cwd[0] = '\0';          /* only getcwd's failure can describe it */
-    }
-    if (cwd[0] != '\0')
-        (void)set_process_cwd(cwd);
-    return 0;
-}
-```
-
-The `resolved.base != NULL` arm of the UNSUPPORTED branch cannot happen,
-because a held cwd is held only when its service supports the feature. It
-is answered rather than asserted.
-
-`getcwd`:
-
-```c
-    if (!start())
-        return NULL;
-    if (cwd_held && !cwd_refresh())
-        return NULL;            /* ENOENT: removed, or out of its binding */
-    if (cwd[0] == '\0') {
-        errno = ENOENT;
-        return NULL;
-    }
-```
-
-before the length check.
-
-Exec. `PosixFileExecHeader` gains, after `cwd`:
-
-```c
-    uint32_t cwd_held;
-    char cwd_assign[ASTRA_CAPABILITY_NAME_MAX];
-    AstraPosixFileExecState cwd_handle;
-```
-
-Set `POSIX_FILE_EXEC_VERSION` to 2. `file_exec_export` fills them with
-`astra_process_file_export(&cwd_file, &header->cwd_handle)` when held.
-`file_exec_import` validates `cwd_assign` is terminated. After
-`astra_process_filesystem_open`, it imports the handle with
-`astra_process_file_import(&header->cwd_handle, &cwd_file)` when
-`cwd_held`. It calls `set_process_cwd` only when `header->cwd[0] != '\0'`.
-
-Fork. Task 8's `astra_posix_file_share_all` also shares the held cwd:
-`astra_filesystem_share(&cwd_file, &cwd_share_token)` into the next token
-slot. `astra_posix_file_open_count()` counts it, so the token array has
-room. `astra_posix_file_unshare` withdraws `cwd_share_token` like a file's.
-`astra_posix_file_after_fork_child` adopts it after the files with
-`astra_filesystem_adopt(&cwd_file, cwd_share_token)`. A failure is the same
-exit-127 path as a file's.
-
-`posix_errno` maps nothing new. `ASTRA_VFS_ERR_ESCAPED` from a dirfd-relative
-call (not cwd) stays `EIO` as Task 6 defined. A dirfd has no binding name
-to rebase from, and Phase 2's live namespace gives one.
-
-- [ ] **Step 6: The guest case**
-
-```c
-/* A process standing in a directory that is renamed keeps working, and
- * getcwd follows it; one standing in a removed directory gets ENOENT
- * (docs/FILESYSTEM_PRODUCTION_PRD.md FS19). */
-static int case_cwd_rename(const char *directory)
-{
-    char old[256];
-    char before[160];
-    char after[160];
-    char here[256];
-    char text[16];
-    char gone[160];
-    struct stat st;
-    pid_t child;
-    int status;
-    int fd;
-
-    CHECK(getcwd(old, sizeof(old)) != NULL, "getcwd: %s", strerror(errno));
-    join(before, sizeof(before), directory, "cwd-a");
-    join(after, sizeof(after), directory, "cwd-b");
-    CHECK(mkdir(before, 0755) == 0, "mkdir: %s", strerror(errno));
-    CHECK(chdir(before) == 0, "chdir: %s", strerror(errno));
-    CHECK(write_text("inside", "1", O_WRONLY | O_CREAT | O_EXCL) == 0,
-          "create relative");
-    CHECK(rename(before, after) == 0, "rename cwd: %s", strerror(errno));
-    CHECK(stat("inside", &st) == 0, "relative stat after rename: %s",
-          strerror(errno));
-    CHECK(write_text("second", "2", O_WRONLY | O_CREAT | O_EXCL) == 0,
-          "relative create after rename");
-    CHECK(mkdir("sub", 0755) == 0 && rename("sub", "sub2") == 0 &&
-          rmdir("sub2") == 0, "relative mkdir/rename/rmdir: %s",
-          strerror(errno));
-    CHECK(symlink("inside", "alias") == 0 &&
-          readlink("alias", text, sizeof(text)) == 6 &&
-          memcmp(text, "inside", 6) == 0, "relative symlink/readlink");
-    fd = open(".", O_RDONLY | O_DIRECTORY);
-    CHECK(fd >= 0 && fstatat(fd, "alias", &st, 0) == 0 &&
-          S_ISREG(st.st_mode) &&
-          fstatat(fd, "alias", &st, AT_SYMLINK_NOFOLLOW) == 0 &&
-          S_ISLNK(st.st_mode), "fstatat follow/nofollow");
-    (void)close(fd);
-    CHECK(link("inside", "hard") == 0 && stat("hard", &st) == 0 &&
-          st.st_nlink == 2, "relative link");
-    CHECK(getcwd(here, sizeof(here)) != NULL && strcmp(here, after) == 0,
-          "getcwd %s, wanted %s", here, after);
-    child = fork();
-    CHECK(child >= 0, "fork: %s", strerror(errno));
-    if (child == 0)
-        _exit(stat("second", &st) == 0 ? 0 : 1);
-    CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status) &&
-          WEXITSTATUS(status) == 0, "the fork child lost the cwd");
-    CHECK(chdir("..") == 0 && getcwd(here, sizeof(here)) != NULL &&
-          strcmp(here, directory) == 0, "cd .. reached %s", here);
-
-    join(gone, sizeof(gone), directory, "cwd-gone");
-    CHECK(mkdir(gone, 0755) == 0 && chdir(gone) == 0, "chdir gone");
-    CHECK(rmdir(gone) == 0, "rmdir the cwd: %s", strerror(errno));
-    CHECK(getcwd(here, sizeof(here)) == NULL && errno == ENOENT,
-          "getcwd of a removed cwd: %s", strerror(errno));
-    fd = open("new", O_WRONLY | O_CREAT, 0644);
-    CHECK(fd < 0 && errno == ENOENT, "created in a removed directory");
-    CHECK(chdir(old) == 0, "chdir back: %s", strerror(errno));
-    return 0;
-}
-```
-
-Register `cwd-rename` and add it to `CASES`. The case assumes `directory`
-is the normalized namespace path the harness passes to every case. If
-`getcwd` reports a different spelling of the same place (case of the
-assign), compare with `strcasecmp` on the first component and say so in
-the case comment.
-
-- [ ] **Step 7: Run, perturb, full suite, commit**
-
-Sync, then build and test userspace, build `sw/boot`, run
-`emu/qemu/build.sh host`, rebuild images, and run `test-hostfs.py` and
-`test-fs-semantics.py`. Expected: PASS, including `paths` and `cwd-rename`.
-
-Perturb (restore and re-sync each time):
-1. `resolve_beneath`: never set `base` (fall through to `resolve_path`).
-   Expected: `cwd-rename` fails "relative stat after rename". This is the
-   bug the task removes.
-2. QEMU `astra_host_fs_path`: skip the inode comparison (treat any
-   successful `openat2` as a match, and use the link text without the
-   prefix check). Expected: `test-hostfs.py` `paths` fails on the removed
-   directory, and `cwd-rename` fails "getcwd of a removed cwd".
-3. libc fork: do not share the cwd. Expected: the fork child's relative
-   `stat` uses the parent's handle, which another owner holds (BAD_HANDLE, so
-   `EBADF`), and `cwd-rename` fails "the fork child lost the cwd".
-
-`~/astra-mg/t9-verify.sh 2>&1 | tee /tmp/t9-task9.log`. Expected: green.
-The terminal gate's zsh `cd` paths are the main consumer. Run one
-`--bench t9` and compare it with Task 3b's `qemu-t3b-1.json`. Relative names now cost
-the same as absolute ones, so `stat-warm` should not regress.
-
-```bash
-git add sw/include/astra emu/qemu/qemu-9.2/hw/m68k/astra68.c sw/userspace/vfs ndk \
-  sw/userspace/services/hostfs/main.c sw/userspace/posix/src/file.c \
-  sw/userspace/commands/fssem/fssem.c emu/qemu/test-fs-semantics.py \
-  emu/qemu/test-hostfs.py emu/qemu/test-filesystem-stress.py
-git commit -m "feat(fs): cwd is a held directory; getcwd asks the provider (FS19); storage protocol 33, Kit 8.2"
-```
-
----
+**2026-10-11 continuation: implemented and semantically qualified.**
+The provider checkpoint `fs-phase1-task9-20261011/provider-3` passes the full
+raw HostFS gate. The Task 8 executable rejects PATH with UNSUPPORTED; the new
+executable reports renamed directory identity and refuses removed or escaped
+directories. Native checkpoint `native-6` passes hosts, sanitizers, full
+MC68040 build, raw HostFS, NDK checks and HTML/PDF, all 22 FSSEM cases,
+the attributable lane gate (509 commands for 500 stats, three idle), and
+provider fsck. `semantics-2.log` uses the corrected image fixture; the first
+invocation failed before boot. Native-4's shell stall exposed an MC68040
+two-byte-aligned CWD mutex; `_Alignas(4)` fixes it and the target artifact
+records/checks 0x4101c. Native-5 was stopped after preserving that evidence.
+The source archive and six artifact hashes precede Task 10's local work.
+
+The canonical process VFS owns CWD. It retains an `AstraFile` when the provider
+advertises DIRECTORY_PATH, and uses the existing string namespace only for
+providers without that facility. POSIX owns no separate CWD object or string.
+Process filesystem facades acquire the native CWD mutex across each relative
+provider operation. They use OPEN_AT, UNLINK_AT, CHMOD_AT, STAT_AT and the
+extended MKDIR/RENAME/LINK/SYMLINK/READLINK requests; an ESCAPED result uses the
+held directory's current spelling for the existing namespace continuation.
+Two-path operations acquire CWD once and send independent bases on one grant.
+Native loader source opens also use the retained directory. Directory
+enumeration opens and owns an independent directory description.
+
+Linux `/proc/self/fd` supplies a spelling hint only. The existing resolver
+module reopens it beneath the session root with openat2 and compares device
+and inode before publishing it. A removed directory or one outside its grant
+returns NOT_FOUND. The existing confinement check cannot produce a validated
+spelling, which is why this one additional resolver entry point is needed.
+
+Fork shares CWD using the existing one-use description receipt and adoption
+barrier. Native process exec state version 8 owns CWD and client state;
+POSIX file exec state version 3 contains personality bookkeeping only.
+
+Current contracts:
+
+- Host version 0x00010012, metrics 5, PATH opcode 24/MAX 24 and FS_PATHS bit 15.
+- Native STOR version/minimum 33, DIRECTORY_PATH opcode 42/MAX 42 and feature
+  bit 4. DIRECTORY_PATH carries file plus capacity and returns payload/count.
+- MKDIR/READLINK/SYMLINK use file as directory base. RENAME/LINK use file for
+  source base and offset for destination base. Zero means grant root; a real
+  base requires a nonempty relative operand. Backend and direct/service
+  dispatch share validation. The service pins directory nodes during calls.
+- Existing STAT_AT takes zero for no-follow or ASTRA_VFS_STAT_FOLLOW; there is
+  no second stat callback or wire format.
+- Filesystem Kit ABI 10.0, filesystem.library.10, ASTRA_FILESYSTEM_10.0,
+  Filesystem.kit 7.0.0. libc remains ABI 4.0. Every in-tree dependency changes
+  together; no old library identity or setter signature remains.
+- Native process setter takes one qualified or relative path. Current-directory
+  query, fork receipt and loader source operations are native facilities.
+  Native high- and low-level APIs expose anchored mutation/readlink/path calls.
+
+Qualification remaining:
+
+- [x] Raw provider PATH red/green, rename/removal/confinement and fd cleanup.
+- [x] Existing VFS and POSIX host suites plus new service anchored request tests.
+- [x] Host sanitizers and target rebuild of the final source.
+- [x] All 22 FSSEM cases, including `cwd-identity`: rename and replacement,
+  relative create/stat/mkdir/rename/link/chmod/symlink/readlink, STAT_AT follow
+  policy, native facade/enumeration, fork, relative exec, current parent,
+  removed-CWD failure, small getcwd buffer and absolute recovery.
+- [x] NDK headers, exports, documentation and dependency/provider checks.
+- [ ] Full integration alongside Tasks 10–12; Task 7's parallel SDL timer
+  failure remains unresolved and cannot be waived by isolated passes.
 
 ### Task 10: Provider loss (D6)
 
-Two losses, one answer. A client whose files or service are gone gets
-`ASTRA_VFS_ERR_LOST`, and POSIX reports it as `ESTALE`, the errno NFS uses
-for the same situation. It never gets a wrong file, a hang, or `ENOENT`.
-Each loss leaves a defined way back (FS35). The user's decision of
-2026-10-07 holds: the supervisor restarts its managed services that hold
-HostFS grants, and applications get `ESTALE`.
-
-- **The provider loses its state.** QEMU's provider restarts; in Phase 1
-  the seam is a QOM write, `astra-host-fs-reset`. Every session goes, and
-  so does the claim. Every handle is *disconnected*, the way Haiku's
-  `disconnect_fd` marks a descriptor `O_DISCONNECTED`
-  (`src/system/kernel/fs/fd.cpp:262-264`): its Linux descriptor is closed,
-  and it answers `LOST` until its owner closes it. A bound channel naming
-  a lost session answers `LOST` too.
-
-  The client's lane marks itself lost. The Kit fails that client, and its
-  next use says HELLO on the same grant port again.
-
-  HostFS recovers on that HELLO, or on any other control message. It first
-  sees the provider's *epoch* change, which its claim answers. Then it
-  claims again, and reopens each grant's provider session from the grant's
-  recorded volume and root. It revokes each grant's old scope through the
-  kernel, which detaches it from every channel, and mints a new one over
-  the new session. The HELLO hands out the new scope.
-
-  So the files opened before the loss answer `LOST`, and new opens through
-  the same grant work. The grant ports never closed, so no process loses
-  its namespace. Reopening by recorded path is what a restarted Linux
-  provider would have to do too. A grant whose root directory was renamed
-  after it was made fails to reopen, and HostFS logs it (below).
-- **HostFS dies** (killed, or faulted). The kernel revokes every scope it
-  created (Task 3b, `host_scopes_revoke_creator`). QEMU drops its claim,
-  sessions and handles (Task 4). Every lane then answers `LOST`, and the
-  Kit's re-HELLO finds the grant port dead, so it answers `LOST` from then
-  on.
-
-  The supervisor restarts HostFS, and the new instance publishes new grant
-  ports. The supervisor then restarts every managed service whose manifest
-  grants a name the new HostFS serves (decision 2026-10-07). Those services
-  get the new grants. Applications keep `ESTALE` for their old grants until
-  they are restarted. Re-binding a running application's namespace needs
-  Phase 2's live namespace publication (FS16).
-
-**Files:**
-- Modify: `sw/include/astra/status.h`, `sw/include/astra/vfs_service.h` (`LOST`)
-- Modify: `emu/qemu/qemu-9.2/hw/m68k/astra68.c` (disconnected handles, lost bound sessions, scope tombstones, fs reset, epoch, QOM seam)
-- Modify: `sw/userspace/vfs/include/astra/vfs_host_backend.h`, `sw/userspace/vfs/src/backends/host.c` (`lost`, claim epoch)
-- Modify: `sw/userspace/vfs/src/vfs_host_direct.c`, `sw/userspace/vfs/src/vfs_port_transport.c`, `sw/userspace/vfs/include/astra/vfs_port_transport.h`, `sw/userspace/vfs/src/vfs_process.c`, `sw/userspace/vfs/src/vfs_client.c` (the lane fails and reconnects; PEER becomes LOST)
-- Modify: `sw/userspace/services/hostfs/main.c` (recovery)
-- Modify: `sw/userspace/supervisor/src/loader.c`, `sw/userspace/supervisor/include/loader.h` (restart the holders of a republished name)
-- Modify: `sw/userspace/posix/src/file.c` (`ESTALE`)
-- Modify: `sw/userspace/commands/fssem/fssem.c`, `emu/qemu/test-fs-semantics.py`, `emu/qemu/test-hostfs.py`
-- Test: `sw/userspace/vfs/tests/test_vfs_host_backend.c`, `sw/userspace/vfs/tests/test_vfs_port.c`
-
-**Interfaces:**
-- Produces (status): `ASTRA_STATUS_LOST` (21) and
-  `ASTRA_VFS_ERR_LOST ((uint32_t)ASTRA_STATUS_LOST)`.
-- Produces (QEMU): QOM `astra-host-fs-reset` (write-only bool; `true` resets
-  the filesystem provider) and `astra-host-fs-resets` (read, count).
-  CLAIM answers the provider epoch in `result_value`. A disconnected handle,
-  or a bound channel's lost or revoked session, answers `ASTRA_STATUS_LOST`.
-- Produces (backend): `AstraVfsHostBackend.lost`;
-  `astra_vfs_host_claim(transport, generation, release, &epoch)`.
-- Produces (port): `void astra_vfs_port_fail(AstraVfsClient *)`,
-  `int astra_vfs_port_client_closed(const AstraVfsClient *)`.
-- Produces (Kit): a storage call whose service or scope is gone answers
-  `ASTRA_VFS_ERR_LOST` rather than `ASTRA_VFS_ERR_PEER`. The transport
-  function `astra_vfs_port_transport` still answers PEER, as its contract
-  says (`vfs_port_transport.h:44-53`); the mapping is one level up.
-- Produces (gate): fssem `--loss-probe PATH SECONDS reopen|dead`; checks
-  `provider-reset` and `hostfs-kill`.
-
-- [ ] **Step 1: Failing tests**
-
-`test_vfs_host_backend.c`. The fake transport answers `ASTRA_VFS_ERR_LOST`
-on demand (`fake_lost = 1`). A path operation that answers LOST marks the
-backend lost. A handle operation does not: only that file is gone.
-
-```c
-static void
-test_a_lost_session_marks_the_backend(void)
-{
-    AstraVfsNodeInfo info;
-    uint8_t bytes[4];
-    uint32_t moved = 0u;
-
-    assert(astra_vfs_host_init(&backend, transport, 9u, 7u));
-    fake_lost = 1;
-    assert(host_ops->read(&backend, 0x1234u, 0u, bytes, sizeof(bytes),
-                          &moved) == ASTRA_VFS_ERR_LOST);
-    assert(backend.lost == 0u);
-    assert(host_ops->stat(&backend, "/a", &info) == ASTRA_VFS_ERR_LOST);
-    assert(backend.lost == 1u);
-    fake_lost = 0;
-}
-```
-
-Use the file's own names for the backend, the transport fake and the ops
-table (`grep -n "astra_vfs_host_ops()\|static AstraVfsHostBackend" sw/userspace/vfs/tests/test_vfs_host_backend.c`).
-The fake's `submit` stub sets `request->command->status = ASTRA_STATUS_LOST`
-and answers `ASTRA_VFS_ERR_LOST` while `fake_lost` is set.
-
-`test_vfs_port.c`. Two assertions say that a vanished service answers
-`ASTRA_VFS_ERR_PEER`: `:1068` through `astra_vfs_open`, and `:1551` through
-the bulk read. They now expect `ASTRA_VFS_ERR_LOST`. Update their comments:
-the transport says PEER, and the caller is told LOST. Add:
-
-```c
-/* A failed client is closed, and says so: vfs_process reconnects it. */
-static void
-test_a_failed_client_reports_closed(void)
-{
-    AstraVfsPortService host;
-    AstraVfsClient remote;
-    uint32_t service_handle;
-
-    mock_reset();
-    service_start();
-    service_handle = mock_open(MOCK_QUEUE_MAX);
-    assert(astra_vfs_port_service_init(&host, service_handle, &service));
-    served = &host;
-    assert(astra_vfs_port_connect(&remote, service_handle) == ASTRA_VFS_OK);
-    assert(!astra_vfs_port_client_closed(&remote));
-    astra_vfs_port_fail(&remote);
-    assert(astra_vfs_port_client_closed(&remote));
-    served = NULL;
-}
-```
-
-Expected: compile errors, then the two port assertions failing.
-
-- [ ] **Step 2: Status and wire**
-
-`status.h`, after `ASTRA_STATUS_ESCAPED`:
-
-```c
-/* The object, session or service a request named was lost with its
- * provider (restart or reset); reopen through a fresh grant. */
-#define ASTRA_STATUS_LOST            21
-```
-
-`vfs_service.h`: `#define ASTRA_VFS_ERR_LOST ((uint32_t)ASTRA_STATUS_LOST)`
-with the comment "The file, scope or service was lost with its provider;
-old handles stay lost, and new opens may succeed". This adds a status value
-and changes no layout or operation, so there is no version bump. A
-version-32 client that sees 21 maps it to `EIO` through its default case.
-
-- [ ] **Step 3: The provider**
-
-`astra68.c`. Add to `AstraHostState`:
-
-```c
-    uint32_t fs_lost_owner;  /* the claimant at the last fs reset, until it
-                                claims again */
-    uint32_t fs_epoch;       /* advances at every fs reset; CLAIM answers it */
-    uint64_t fs_resets;
-    GHashTable *lost_handles;/* handle -> owner: disconnected, not yet closed */
-```
-
-`astra68_init` creates `lost_handles` beside `files`
-(`g_hash_table_new(g_direct_hash, g_direct_equal)`) and sets
-`s->host.fs_epoch = 1u;`. `AstraHostChannelScope` gains `bool live;`.
-Task 3b's `astra_host_channel_rebind` keeps a detached scope as a
-tombstone (`live = false`) rather than removing it. An ATTACH reuses a
-tombstone's slot when no free slot is left. `astra_host_channel_scope`
-copies tombstones out too, so the caller can tell *revoked* (LOST) from
-*never bound* (ACCESS).
-
-```c
-/*
- * The filesystem provider loses its state, as a restarted Linux provider
- * would. Every session goes, and the claim with them. Every handle is
- * disconnected (Haiku's O_DISCONNECTED): its descriptor closes now, and it
- * answers LOST until its owner closes it. The owner that held the claim is
- * told LOST, not ACCESS, until it claims again.
- */
-static void astra_host_fs_reset(Astra68State *s)
-{
-    uint32_t owner = qatomic_xchg(&s->host.fs_owner, 0u);
-    GHashTableIter iterator;
-    gpointer key;
-    gpointer value;
-
-    if (owner != 0u)
-        qatomic_set(&s->host.fs_lost_owner, owner);
-    qemu_mutex_lock(&s->host.files_lock);
-    g_hash_table_iter_init(&iterator, s->host.files);
-    while (g_hash_table_iter_next(&iterator, &key, &value)) {
-        AstraHostFile *file = value;
-
-        g_hash_table_insert(s->host.lost_handles, key,
-                            GUINT_TO_POINTER(file->owner));
-    }
-    qemu_mutex_unlock(&s->host.files_lock);
-    astra_host_release_files(s, 0);
-    astra_host_release_sessions(s, 0u);
-    qatomic_inc(&s->host.fs_epoch);
-    qatomic_inc(&s->host.fs_resets);
-}
-
-/* A handle `owner` held when the provider was reset. */
-static bool astra_host_handle_lost(Astra68State *s, uint32_t owner,
-                                   uint32_t handle)
-{
-    bool lost;
-
-    qemu_mutex_lock(&s->host.files_lock);
-    lost = GPOINTER_TO_UINT(g_hash_table_lookup(
-               s->host.lost_handles, GUINT_TO_POINTER(handle))) == owner;
-    qemu_mutex_unlock(&s->host.files_lock);
-    return lost;
-}
-
-/* CLOSE of a disconnected handle: forget it. */
-static bool astra_host_forget_lost(Astra68State *s, uint32_t owner,
-                                   uint32_t handle)
-{
-    bool forgotten = false;
-
-    qemu_mutex_lock(&s->host.files_lock);
-    if (GPOINTER_TO_UINT(g_hash_table_lookup(
-            s->host.lost_handles, GUINT_TO_POINTER(handle))) == owner)
-        forgotten = g_hash_table_remove(s->host.lost_handles,
-                                        GUINT_TO_POINTER(handle));
-    qemu_mutex_unlock(&s->host.files_lock);
-    return forgotten;
-}
-
-static void astra_host_fs_reset_set(Object *object, Visitor *visitor,
-                                    const char *name, void *opaque,
-                                    Error **errp)
-{
-    bool value;
-
-    if (!visit_type_bool(visitor, name, &value, errp) || !value)
-        return;
-    astra_host_fs_reset(opaque);
-}
-```
-
-Handle numbers come from `next_handle`, which a reset does not rewind
-(`astra68.c:3268`). So a lost number is not reused until the counter wraps.
-`astra_host_release_owner` removes the owner's entries from `lost_handles`,
-and `astra_host_reset` clears the table.
-
-Registered beside the other host properties in `astra68_init`:
-
-```c
-    object_property_add(OBJECT(machine), "astra-host-fs-reset", "bool",
-                        NULL, astra_host_fs_reset_set, NULL, s);
-    object_property_add_uint64_ptr(OBJECT(machine), "astra-host-fs-resets",
-                                   &s->host.fs_resets, OBJ_PROP_FLAG_READ);
-```
-
-In `astra_host_execute_fs`:
-- The unbound claim check (Task 4 Step 4b) becomes:
-
-  ```c
-          if (owner == 0u || owner != qatomic_read(&s->host.fs_owner)) {
-              status = owner != 0u &&
-                       owner == qatomic_read(&s->host.fs_lost_owner) ?
-                  ASTRA_STATUS_LOST : ASTRA_STATUS_ACCESS;
-              goto done;
-          }
-  ```
-
-- On a bound channel, a tombstoned scope answers LOST, while a word never
-  bound answers ACCESS. When the session cannot be acquired, the answer
-  is LOST as well. A bound session vanishes only through a provider reset,
-  a retired grant or HostFS's death, and to the client each is a loss:
-
-  ```c
-          if (!astra_host_channel_scope(s, channel, session_id, &scope)) {
-              status = ASTRA_STATUS_ACCESS;
-              goto done;
-          }
-          if (!scope.live || scope.owner != qatomic_read(&s->host.fs_owner)) {
-              status = ASTRA_STATUS_LOST;
-              goto done;
-          }
-          ...
-      session = astra_host_session_acquire(s, session_owner, session_id);
-      if (session == NULL) {
-          status = bound ? ASTRA_STATUS_LOST : ASTRA_STATUS_BAD_HANDLE;
-          goto done;
-      }
-  ```
-
-- CLOSE: when `astra_host_close_file` fails and
-  `astra_host_forget_lost(s, owner, handle)` succeeds, answer OK.
-- At `done:`, before the status is stored:
-
-  ```c
-      if (status == ASTRA_STATUS_BAD_HANDLE && handle != 0u &&
-          astra_host_handle_lost(s, owner, handle))
-          status = ASTRA_STATUS_LOST;
-  ```
-
-`astra_host_fs_claim`'s success path runs
-`qatomic_cmpxchg(&s->host.fs_lost_owner, owner, 0u);` and answers the epoch:
-`stl_be_p(command + HOST_FIELD(result_value), qatomic_read(&s->host.fs_epoch));`.
-It gains `command` as a parameter. `astra_host_release_owner` clears
-`fs_lost_owner` the same way, and so does `astra_host_reset`
-(`qatomic_set(&s->host.fs_lost_owner, 0u)`), because a reset machine has no
-survivors to tell.
-
-The property is a test seam, like the existing read-write
-`astra-host-execution-max-ns`. It is reachable only through QMP on the host
-side, which the board's launcher binds to a root-owned socket
-(`run-arty.sh:50`). The guest cannot reach it.
-
-A CLOSE of a disconnected handle answers OK *before* the session is
-looked up, because its session is gone too. In the prologue, ahead of the
-session acquisition, add:
-
-```c
-    if (operation == ASTRA_HOST_FS_CLOSE &&
-        astra_host_forget_lost(s, owner, handle)) {
-        status = ASTRA_STATUS_OK;
-        goto done;
-    }
-```
-
-`test-hostfs.py` gains a `loss` check. The first boot also gets a QMP
-socket (`-qmp unix:<temp>/qmp.sock,server=on,wait=off`), because qtest
-cannot set a QOM property. `loss(qtest, root, qmp_path)` runs after
-`scopes`:
-
-```python
-STATUS_LOST = 21
-
-
-def qmp_set(path, prop, value):
-    """One qom-set on /machine over the QMP socket."""
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.connect(path)
-        stream = sock.makefile("rw")
-        json.loads(stream.readline())
-        for command in ({"execute": "qmp_capabilities"},
-                        {"execute": "qom-set",
-                         "arguments": {"path": "/machine", "property": prop,
-                                       "value": value}}):
-            stream.write(json.dumps(command) + "\n")
-            stream.flush()
-            reply = json.loads(stream.readline())
-            while "return" not in reply and "error" not in reply:
-                reply = json.loads(stream.readline())
-            assert "return" in reply, reply
-
-
-def loss(qtest, root, qmp_path):
-    """After a provider reset: the claimant hears LOST until it claims again,
-    and its new claim answers a new epoch; a held handle answers LOST until
-    closed; a bound channel's session answers LOST; a stranger still hears
-    ACCESS."""
-    generation = qtest.read32(HACC_GENERATION)
-    claimed = execute(qtest, [Command(generation, FS_CLAIM)])[0]
-    assert status(claimed) == STATUS_OK
-    epoch = get32(claimed.raw, 56)
-    work = open_session(qtest, generation)
-    with open(os.path.join(root, "work", "lost-file"), "wb") as out:
-        out.write(b"lost")
-    opened = execute(qtest, [Command(generation, FS_OPEN, "/lost-file",
-                                     flags=OPEN_READ, session=work)])[0]
-    assert status(opened) == STATUS_OK
-    handle = get32(opened.raw, 16)
-    assert configure_scope(qtest, generation, CONFIG_OPEN, 12, 51, work,
-                           SCOPE_BOUND, 0x1001,
-                           byte_size=8192 + 4096) == 0
-    qmp_set(qmp_path, "astra-host-fs-reset", True)
-    assert status(execute(qtest, [Command(
-        generation, FS_STAT, "/", session=work)])[0]) == STATUS_LOST
-    assert status(execute(qtest, [Command(
-        generation, FS_STAT, "/", session=work)], owner=0x2002)[0]) == \
-        STATUS_ACCESS
-    bound = scoped(qtest, 12, 1, Command(generation, FS_STAT, "/",
-                                         session=work))
-    assert status(bound) == STATUS_LOST
-    again = execute(qtest, [Command(generation, FS_CLAIM)])[0]
-    assert status(again) == STATUS_OK and get32(again.raw, 56) == epoch + 1
-    assert status(execute(qtest, [Command(
-        generation, FS_READ, handle=handle, capacity=4,
-        session=work)])[0]) == STATUS_LOST
-    assert status(execute(qtest, [Command(
-        generation, FS_CLOSE, handle=handle, session=work)])[0]) == STATUS_OK
-    assert status(execute(qtest, [Command(
-        generation, FS_CLOSE, handle=handle, session=work)])[0]) == \
-        STATUS_BAD_HANDLE
-    assert configure_scope(qtest, generation, CONFIG_CLOSE, 12, 51) == 0
-    print("PASS loss")
-```
-
-Add `import json`.
-
-- [ ] **Step 4: The backend marks itself lost**
-
-`vfs_host_backend.h`: `AstraVfsHostBackend` gains
-
-```c
-    /* A path operation answered LOST: the scope's session is gone. The lane
-     * fails its client on next use, and the client reconnects. */
-    volatile uint32_t lost;
-```
-
-`astra_vfs_host_init` zeroes it. `host.c` `submit`, where it returns the
-command's status:
-
-```c
-    if (status == ASTRA_VFS_ERR_LOST && request->command->handle == 0u)
-        backend->lost = 1u;
-```
-
-A handle operation that answers LOST names a disconnected file, and the
-session may still be fine.
-
-`astra_vfs_host_claim` gains `uint32_t *epoch` (NULL: unwanted). It is
-`control(..., ASTRA_HOST_FS_CLAIM, ..., epoch)`, because `control` already
-answers `result_value`.
-
-- [ ] **Step 5: The lane fails and reconnects**
-
-`sw/userspace/vfs/src/vfs_port_transport.c`. Export the two lifecycle
-facts, and declare them in `vfs_port_transport.h`:
-
-```c
-/* Fail the client: in-flight calls finish with PEER, the lane is
- * abandoned, and the client becomes closed (see port_client_fail). */
-void astra_vfs_port_fail(AstraVfsClient *client)
-{
-    if (client != NULL)
-        port_client_fail(client);
-}
-
-int astra_vfs_port_client_closed(const AstraVfsClient *client)
-{
-    return client != NULL &&
-           __atomic_load_n(&client->port_lifecycle, __ATOMIC_ACQUIRE) ==
-               PORT_CLIENT_CLOSED;
-}
-```
-
-`sw/userspace/vfs/src/vfs_host_direct.c`. The lane's enter hook notices a
-lost scope before it runs anything:
-
-```c
-/* Entry to every lane operation. A scope the provider lost cannot be used
- * again: fail the client, answer LOST, and let the next use reconnect --
- * which says HELLO, which is where HostFS recovers (Task 10). */
-static uint32_t lane_enter(AstraVfsClient *client)
-{
-    AstraVfsHostDirect *direct = client->port_direct_address;
-    uint32_t status = astra_vfs_port_client_enter(client);
-
-    if (status != ASTRA_VFS_OK || direct == NULL ||
-        direct->backend.lost == 0u)
-        return status;
-    astra_vfs_port_client_leave(client);
-    astra_vfs_port_fail(client);
-    return ASTRA_VFS_ERR_LOST;
-}
-```
-
-`client_bind` (Task 3b) sets `client->direct_backend_enter = lane_enter;`.
-`astra_vfs_host_direct_transport` and `astra_vfs_host_direct_bulk` start
-with:
-
-```c
-    if (direct->backend.lost != 0u) {
-        astra_vfs_port_fail(client);
-        return ASTRA_VFS_ERR_LOST;
-    }
-```
-
-`sw/userspace/vfs/src/vfs_process.c`, `client_ready`: before the existing
-connect, a closed client is reconnected on the same grant handle:
-
-```c
-    if (clients[slot].connected != 0u &&
-        astra_vfs_port_client_closed(&clients[slot].client)) {
-        astra_vfs_port_abandon(&clients[slot].client);
-        clients[slot].connected = 0u;
-    }
-```
-
-`vfs_client.c` `exchange_request`, where the transport's status is
-returned:
-
-```c
-    status = client->transport(client->context, operation, request, reply);
-    /* The transport's PEER is the caller's LOST: the service holding this
-     * session is gone, and nothing reached through it comes back (FS35). */
-    if (status == ASTRA_VFS_ERR_PEER)
-        return ASTRA_VFS_ERR_LOST;
-    if (status != ASTRA_VFS_OK)
-        return status;
-```
-
-`vfs_port_transport.c`: the public data-plane functions that answer the
-caller directly return through `caller_status`:
-- `astra_vfs_port_read_bulk_position`;
-- `astra_vfs_port_read_bulk`;
-- `astra_vfs_port_write_bulk`;
-- any other `astra_vfs_port_*` entry point listed in
-  `vfs_port_transport.h` that returns a filesystem status to a Kit caller.
-
-```c
-static uint32_t caller_status(uint32_t status)
-{
-    return status == ASTRA_VFS_ERR_PEER ? ASTRA_VFS_ERR_LOST : status;
-}
-```
-
-Find them with `grep -n "^astra_vfs_port_" sw/userspace/vfs/src/vfs_port_transport.c`.
-Leave `astra_vfs_port_transport` and the service-side pump alone. The
-lane's fast paths in `vfs_client.c` return the backend's status unchanged,
-and the backend already says LOST.
-
-`posix/src/file.c` `posix_errno`: `case ASTRA_VFS_ERR_LOST: return ESTALE;`.
-
-- [ ] **Step 6: HostFS recovers**
-
-`HostfsGrant` gains:
-
-```c
-    uint32_t volume;                          /* ASTRA_HOST_FS_VOLUME_* */
-    uint16_t session_flags;                   /* READ_ONLY or 0 */
-    char root[ASTRA_VFS_PATH_MAX + 1u];       /* absolute in the volume */
-```
-
-`grant_add` gains `uint32_t volume, const char *root, uint16_t session_flags`
-and records them. The base grants pass `"/"`. `hostfs_derive` passes:
-- the parent's `volume`;
-- the joined root: `from->root`, then `/`, then `root`, with no doubled
-  slash when the parent is `/`; longer than `ASTRA_VFS_PATH_MAX` is
-  `ASTRA_VFS_ERR_INVALID`;
-- the flags it opened the session with.
-
-Then:
-
-```c
-static uint32_t provider_epoch;   /* the claim's answer for the live sessions */
-
-/* Every grant's scope flags, from its rights (Task 5's grant_add). */
-static uint32_t grant_scope_flags(const HostfsGrant *grant)
-{
-    return ((grant->port.rights & ASTRA_VFS_GRANT_WRITE) == 0u ?
-                ASTRA_HOST_SCOPE_READ_ONLY : 0u) |
-           ((grant->port.rights & ASTRA_VFS_GRANT_DELEGATE) != 0u ?
-                ASTRA_HOST_SCOPE_DELEGATE : 0u);
-}
-
-/*
- * Before any control message: has the provider lost everything (FS35)?
- * The claim answers its epoch. If it moved, reopen every grant's session
- * where the grant says it is rooted, revoke the grant's old scope -- the
- * kernel detaches it from every channel, which then answers LOST -- and
- * mint a new one over the new session for the next HELLO to hand out.
- */
-static void hostfs_check_provider(void)
-{
-    uint32_t epoch = 0u;
-
-    if (astra_vfs_host_claim(&transport, transport.generation, 0, &epoch) !=
-            ASTRA_VFS_OK ||
-        epoch == provider_epoch)
-        return;
-    for (uint32_t index = 0u; index < grant_capacity; ++index) {
-        HostfsGrant *grant = &grants[index];
-        uint32_t session = 0u;
-        uint32_t scope = 0u;
-
-        if (grant->port.receive == 0u)
-            continue;
-        (void)astra_host_scope_revoke(grant->port.scope);
-        (void)astra_close(grant->port.scope);
-        if (astra_vfs_host_session_open(
-                &transport, transport.generation, 0u, grant->volume,
-                grant->root, grant->session_flags, &session) !=
-                ASTRA_VFS_OK ||
-            astra_host_scope_create(device_handle, session,
-                                    grant_scope_flags(grant), &scope) !=
-                ASTRA_SYSCALL_OK) {
-            ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_FILESYSTEM,
-                         ASTRA_EVENT_LEVEL_WARNING,
-                         "grant %u root gone after provider loss",
-                         grant->port.id);
-            scope = 0u;
-        }
-        /* 0: HELLO attaches nothing, and the Kit answers LOST. */
-        grant->session = session;
-        grant->port.scope = scope;
-    }
-    provider_epoch = epoch;
-    ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_FILESYSTEM, ASTRA_EVENT_LEVEL_NOTICE,
-                 "hostfs recovered from provider loss");
-}
-```
-
-- Startup records `provider_epoch` from its first claim (Task 4's
-  `astra_vfs_host_claim` call gains `&provider_epoch`).
-- The pump calls `hostfs_check_provider();` before each grant pump. Every
-  control message (HELLO, BYE, GRANT_DERIVE) costs one CLAIM command;
-  no data operation pays it.
-- Task 5's HELLO attachment already skips a grant whose `scope` is 0.
-- On the Kit side, a HELLO on a grant (`ASTRA_VFS_FEATURE_GRANTS`) that
-  attaches no scope leaves the client without a lane. The client answers
-  `ASTRA_VFS_ERR_LOST` for every data operation: in
-  `astra_vfs_port_transport`, a lane client (`port_accelerator_ops != NULL`)
-  whose `port_direct_address` is NULL after its HELLO fails with LOST.
-- Check the event subsystem constant's name in `sw/include/astra/event.h`
-  (`grep -n "ASTRA_EVENT_SUBSYSTEM_" sw/include/astra/event.h`), and use
-  the filesystem one or the closest one listed there.
-
-A detached scope is now a tombstone that answers LOST, so three earlier
-checks change their expectation from `ACCESS` to `LOST`:
-- Task 3b's `scopes` (`status(detached)`);
-- `scope_revocation` (the second command and `later`);
-- Task 5's `raw-retire`. Update its comment too.
-
-A word that was never bound still answers `ACCESS` (`scopes`' forged
-volume or session).
-
-- [ ] **Step 7: The supervisor restarts the holders of a republished name**
-
-The decision of 2026-10-07: after a HostFS restart, the supervisor restarts
-its managed services that hold HostFS grants. Their old scopes died with
-HostFS, so only a restart gives them the new grants.
-
-`sw/userspace/supervisor/src/loader.c`:
-- The process record gains
-  `const SupervisorManifestEntry *entry;  /* the manifest line it came from; NULL for an application */`.
-  It is set where the record is filled at launch (`loader.c:1536-1556`,
-  `process_table.records[process_count].critical = entry->critical;`).
-  Applications launched from bundles leave it NULL.
-- A list of names whose provider died, beside `paused_services`:
-
-```c
-/* Namespace names whose provider died while published: when a provider
- * publishes one of them again, the managed services granted it restart, so
- * they hold the new provider's grant (decision 2026-10-07). */
-static char orphaned_names[SUPERVISOR_MANIFEST_PUBLICATION_MAX * 4u]
-                          [ASTRA_CAPABILITY_NAME_MAX];
-static uint32_t orphaned_count;
-
-static void orphan_names_of(const char *owner)
-{
-    for (uint32_t index = 0u; index < service_count; ++index)
-        if (service_is_vfs[index] != 0u &&
-            strcmp(service_owner_names[index], owner) == 0 &&
-            orphaned_count < sizeof(orphaned_names) /
-                                 sizeof(orphaned_names[0]))
-            astra_capability_name_set(orphaned_names[orphaned_count++],
-                                      service_names[index]);
-}
-
-static void restart_grantees(const char *name)
-{
-    for (uint32_t at = 0u; at < orphaned_count; ++at) {
-        if (!astra_capability_name_equal(orphaned_names[at], name))
-            continue;
-        (void)memcpy(orphaned_names[at], orphaned_names[--orphaned_count],
-                     sizeof(orphaned_names[at]));
-        for (uint32_t slot = 0u; slot < process_count; ++slot) {
-            const SupervisorManifestEntry *entry =
-                process_table.records[slot].entry;
-
-            if (entry != NULL &&
-                process_table.records[slot].service_name[0] != '\0' &&
-                process_table.records[slot].action ==
-                    SUPERVISOR_PROCESS_ACTION_NONE &&
-                entry_grants(entry, name)) {
-                restart_log("service restart for republished ", name);
-                (void)stop_process_slot(slot,
-                                        SUPERVISOR_PROCESS_ACTION_RESTART);
-            }
-        }
-        return;
-    }
-}
-```
-
-- In the exit handler (`loader.c:2950`), call
-  `orphan_names_of(service_name);` before `unpublish_owner(service_name);`,
-  but only when the process died unasked
-  (`action == SUPERVISOR_PROCESS_ACTION_NONE`). A service the user stopped
-  or restarted is not a provider loss.
-- At the end of a successful VFS `publish` (after `++service_count`), call
-  `restart_grantees(publication->name);`.
-
-`stop_process_slot` with `SUPERVISOR_PROCESS_ACTION_RESTART` is the path
-`service restart` takes (`loader.c:1921`). The exit handler relaunches the
-service when it is gone. A critical holder restarted this way is not a
-system failure, because its action is not NONE.
-
-- [ ] **Step 8: The probe and the gate checks**
-
-`fssem.c`, before the case loop in `main`:
-
-```c
-    if (argc == 5 && strcmp(argv[1], "--loss-probe") == 0)
-        return loss_probe(argv[2], atoi(argv[3]),
-                          strcmp(argv[4], "reopen") == 0);
-```
-
-and:
-
-```c
-static int loss_fail(const char *what, int error)
-{
-    printf("FSSEM LOSS FAIL %s errno=%d\n", what, error);
-    return 1;
-}
-
-/*
- * Writes to PATH until the provider is lost under it, then checks the
- * answer is the defined one: ESTALE, for the write and for the descriptor
- * afterwards. With `reopen`, a fresh open through the same namespace must
- * work (HostFS recovered); without, it must also be ESTALE (HostFS died,
- * and this process's grant died with it). Always ends with one verdict
- * line: PASS, FAIL or none.
- */
-static int loss_probe(const char *path, int seconds, int reopen)
-{
-    char again[200];
-    struct stat st;
-    time_t end;
-    long writes = 0;
-    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-
-    if (fd < 0)
-        return loss_fail("open", errno);
-    printf("FSSEM LOSS armed\n");
-    fflush(stdout);
-    end = time(NULL) + seconds;
-    while (time(NULL) < end) {
-        if (write(fd, "0123456789abcdef", 16) == 16) {
-            ++writes;
-            continue;
-        }
-        if (errno != ESTALE)
-            return loss_fail("write", errno);
-        if (fstat(fd, &st) == 0 || errno != ESTALE)
-            return loss_fail("descriptor did not stay lost", errno);
-        (void)close(fd);
-        (void)snprintf(again, sizeof(again), "%s.after", path);
-        fd = open(again, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (reopen ? fd < 0 : !(fd < 0 && errno == ESTALE))
-            return loss_fail("reopen", fd < 0 ? errno : 0);
-        if (fd >= 0)
-            (void)close(fd);
-        printf("FSSEM LOSS PASS after=%ld\n", writes);
-        return 0;
-    }
-    printf("FSSEM LOSS none after=%ld\n", writes);
-    return 2;
-}
-```
-
-Add `#include <time.h>`. The write that first sees the loss answers LOST
-from the provider (a disconnected handle). The `fstat` answers LOST from
-the lane, which fails its client then. The `open` reconnects the client:
-its HELLO is where HostFS recovers, and the new scope serves the open.
-
-`test-fs-semantics.py`. The gate's machine runs HostFS as a restartable
-user service, so the kill check can end it. A required service refuses
-`kill` (`test-terminal.py:376-377`), and `test-events.py:69-71` does the
-same for the events service:
-
-```python
-# HostFS as a user service, so `kill` may end it (hostfs-kill).
-MANIFEST = astra_image.STARTUP_MANIFEST.replace(
-    "serves WORK:rw METRICS:r SOUND:rw required priority=20",
-    "serves WORK:rw METRICS:r SOUND:rw priority=20")
-# Checks that leave the machine changed run after all the others.
-FINAL_CHECKS = ("hostfs-kill",)
-```
-
-In `main`, after `install_test_command`:
-
-```python
-        if MANIFEST == astra_image.STARTUP_MANIFEST:
-            fail("the hostfs manifest line changed: update MANIFEST")
-        manifest = os.path.join(work, "startup")
-        with open(manifest, "w", encoding="ascii", newline="\n") as out:
-            out.write(MANIFEST)
-        astra_image._replace_volume_file(image, manifest, "/startup/system")
-```
-
-and the check loop becomes
-`for name in sorted(arguments.check or CHECKS, key=lambda name: (name in FINAL_CHECKS, name)):`.
-
-```python
-VERDICTS = ("FSSEM LOSS PASS", "FSSEM LOSS FAIL", "FSSEM LOSS none")
-
-
-def wait_line(machine, before, needles, timeout):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        lines, _ = machine.said(before)
-        if any(needle in line for line in lines for needle in needles):
-            return lines
-        time.sleep(0.2)
-    fail("never saw %r: %r" % (needles, machine.said(before)[0][-20:]))
-
-
-def loss(machine, mode, act):
-    """The probe writes in the background; `act` loses the provider under
-    it; the probe's verdict decides."""
-    machine.settle()
-    before = machine.sequence()
-    machine.qmp.type_line("fssem --loss-probe /work/loss-%s 120 %s &"
-                          % (mode, mode))
-    wait_line(machine, before, ("FSSEM LOSS armed",) + VERDICTS, 60)
-    machine.settle()
-    act()
-    lines = wait_line(machine, before, VERDICTS, 180)
-    if not any(line.startswith("FSSEM LOSS PASS") for line in lines):
-        fail("loss probe (%s): %r" % (mode, lines[-10:]))
-
-
-def check_provider_reset(machine, mount):
-    def reset():
-        machine.qmp.execute("qom-set", {"path": "/machine",
-                                        "property": "astra-host-fs-reset",
-                                        "value": True})
-    loss(machine, "reopen", reset)
-    # The same terminal's namespace still works: the grant survived.
-    lines, status = command(machine, "fssem basic", 120, 31)
-    if status != 0:
-        fail("fssem after provider reset: %r" % lines[-10:])
-    print("PASS provider-reset")
-
-
-# Ends HostFS the way a fault would (test-events.py:58-63).
-KILL_HOSTFS = ("ps | while read -r id rest; do "
-               "[[ $rest == *' /services/hostfs' ]] && "
-               "print kill > /proc/$id/ctl; done")
-
-
-def sample_mtime(mount):
-    try:
-        return os.stat(os.path.join(mount, "work", ".astra", "sample")).st_mtime
-    except OSError:
-        return 0.0
-
-
-def check_hostfs_kill(machine, mount):
-    """HostFS dies under a writer. The writer gets ESTALE; the supervisor
-    restarts HostFS and the managed services that hold its grants (the
-    sampler writes WORK again); a terminal opened afterwards sees /work."""
-    killed_at = time.time()
-    loss(machine, "dead", lambda: machine.qmp.type_line(KILL_HOSTFS))
-    deadline = time.monotonic() + 60
-    while sample_mtime(mount) <= killed_at + 1.0:
-        if time.monotonic() > deadline:
-            fail("the sampler never wrote WORK after the HostFS restart")
-        time.sleep(0.5)
-    before = machine.sequence()
-    machine.qmp.double_click(*machine.desktop_icon())
-    if machine.wait_for_text(terminal.BANNER, 60, before)[0] is None or \
-            not machine.wait_for_ready(60, before):
-        fail("no second terminal after the HostFS restart")
-    lines, status = command(
-        machine, "print -r -- alive > /work/after-kill && "
-                 "cat /work/after-kill", 60, 41)
-    if status != 0 or "alive" not in lines:
-        fail("/work after the HostFS restart: %r" % lines[-10:])
-    print("PASS hostfs-kill")
-
-
-CHECKS["provider-reset"] = check_provider_reset
-CHECKS["hostfs-kill"] = check_hostfs_kill
-```
-
-The probe runs in the background, so the kill line lands at a prompt.
-Confirm that `terminal.BANNER` and `machine.wait_for_ready` are the names
-`open_terminal` uses (`test-terminal.py:942-980`). Typed text goes to the
-focused window, which is the new terminal after the double click. The
-sampler copies the machine's accounting to `WORK:.astra/sample` once a
-second (`astra_image.py`, the manifest comment), so its file's mtime is
-the evidence that it was restarted with a live grant.
-
-- [ ] **Step 9: Run, perturb, full suite, commit**
-
-Sync, then build and test userspace, build `sw/boot`, run
-`emu/qemu/build.sh host`, rebuild images, and run `test-hostfs.py` and
-`test-fs-semantics.py`. Expected: `PASS loss`,
-`PASS provider-reset` and `PASS hostfs-kill`.
-
-Perturb. Restore and re-sync after each.
-
-1. **QEMU forgets the claimant.** Answer `ACCESS` for the lost owner, as
-   before this task. Expected: HostFS's epoch check still sees the new
-   epoch, but `test-hostfs.py`'s `loss` fails at the `0x1001`
-   `STATUS_LOST` assertion.
-2. **Handles are freed rather than disconnected.** Skip filling
-   `lost_handles` in `astra_host_fs_reset`. Expected: the probe's write
-   answers `EBADF`, the probe prints `FSSEM LOSS FAIL write errno=9`, and
-   `provider-reset` fails.
-3. **The lane never fails.** Make `lane_enter` ignore `backend.lost`.
-   Expected: the reopen keeps the dead scope, the probe prints
-   `FSSEM LOSS FAIL reopen errno=116` (`ESTALE`), and `provider-reset`
-   fails.
-4. **No re-mint.** In `hostfs_check_provider`, keep the old scope. Expected:
-   `provider-reset` fails the same way: the HELLO hands out a revoked
-   scope.
-5. **Kit says PEER.** Remove the PEER-to-LOST mapping in
-   `exchange_request`. Expected: the probe prints
-   `FSSEM LOSS FAIL reopen errno=5` (EIO) after the kill, `hostfs-kill`
-   fails, and the port test's two assertions fail too.
-6. **No holder restart.** Skip `restart_grantees` in `publish`. Expected:
-   `hostfs-kill` fails "the sampler never wrote WORK after the HostFS
-   restart".
-
-`~/astra-mg/t9-verify.sh 2>&1 | tee /tmp/t9-task10.log`. Expected: green.
-
-```bash
-git add sw/include/astra emu/qemu/qemu-9.2/hw/m68k/astra68.c sw/userspace/vfs \
-  sw/userspace/services/hostfs/main.c sw/userspace/supervisor \
-  sw/userspace/posix/src/file.c sw/userspace/commands/fssem/fssem.c \
-  emu/qemu/test-fs-semantics.py emu/qemu/test-hostfs.py
-git commit -m "feat(fs): provider loss is one answer, LOST/ESTALE; lanes reconnect, HostFS re-mints, holders restart (FS35)"
-```
-
----
+Implementation is staged; qualification remains open. Current contracts are
+STOR 34/minimum 34, Host 0x00010013, Filesystem Kit ABI 10.0 and libc ABI 4.0.
+No older wire contract or public library alias is retained.
+
+#### Required behavior and retained implementation
+
+- Storage boundaries map vanished peers to ASTRA_VFS_ERR_LOST (status 21),
+  including grant derivation. POSIX maps LOST to ESTALE. The raw port transport
+  retains its PEER return contract.
+- QOM `astra-host-fs-reset=true` drains active channel jobs, closes provider
+  descriptions, clears sessions and pending shares, drops the claim and
+  advances a nonzero epoch. Host channels and unrelated host services remain
+  live. `astra-host-fs-resets` reports the reset count; CLAIM returns the epoch.
+- Disconnected file handles remain owner-bound tombstones until close or owner
+  death. They return LOST even after fresh opens succeed. Other owners cannot
+  read, close, share or discard them. SHARE/ADOPT can inherit a disconnected
+  description through the existing random, one-use session-bound receipt;
+  this allocates another lost handle and never reopens a pathname.
+- A lost scope/session reply carries a nonzero epoch marker; a lost individual
+  handle carries zero. The backend fails only the affected scope in the former
+  case. Revoked scopes remain channel tombstones until their slot is reused;
+  repeated recovery does not exhaust the channel's eight slots.
+- A resumed HELLO names an existing caller/grant control session. It retains
+  that session and reply lane while replacing the scoped accelerator. HostFS
+  sees epoch changes before pumping control messages, reclaims the provider,
+  revokes old scopes and remints new ones. Recovery compares each recorded
+  root's volume, inode and generation; missing, renamed or replaced roots
+  remain LOST. Retaining the control session preserves the existing strict
+  rule that a derived grant dies when its deriver's session ends.
+- Accelerator refresh excludes new calls and waits for existing calls to
+  finish before replacing mappings. The plain port guard remains the common
+  in-flight mechanism; nested data calls do not recursively refresh. Borrowed
+  read caching is disabled on scoped accelerators because the control session
+  survives a scope replacement and therefore cannot identify cached bytes.
+- Native process file sharing refreshes once after LOST before minting the
+  inheritance receipt. CWD identity stays lost until an explicit absolute
+  chdir replaces it. Fork adopts lost files, directory descriptors and CWD;
+  an unused client carrying a pre-reset scope refreshes through its grant in
+  the child. Negotiated features survive child rebinding.
+- HostFS death revokes every scope it created. Applications keep LOST on old
+  grants. Supervisor snapshots the publication names behind each managed
+  process's actually delivered namespace. Once all affected names are
+  republished, it restarts that process through the existing restart path.
+  This uses stable VFS-client cells and explicit unregister on unpublication;
+  packed registry growth or deletion cannot retarget a borrowed client.
+
+The root record uses the host pathname bound (4096), not the shorter native
+request bound. Grant and reply cleanup retain normal ownership and error
+handling, including failed publication and partially completed launches.
+
+#### Gates and retained failures
+
+- Host VFS, Supervisor and POSIX suites and ASan/UBSan; resolver host/sanitizer
+  suites; full MC68040/QEMU build; target CWD mutex alignment; NDK contract
+  and documentation checks.
+- Raw provider regression: twelve filesystem-only resets, descriptor closure,
+  old-owner isolation, inherited disconnected descriptions, fresh-path
+  recovery, scope-slot reuse and existing claim/session/orphan checks.
+- All 22 FSSEM cases and the background-subtracted 500-stat lane gate.
+- `fssem --loss-probe PATH SECONDS reopen|dead` holds file, directory and CWD
+  identities during injected loss. Provider reset must retain lost identities,
+  recover fresh absolute opens, preserve a derived grant with a live deriver,
+  refuse a replacement grant root, fork lost descriptions and recover CWD by
+  absolute chdir. HostFS kill must leave old application grants lost, restart
+  managed holders and permit a fresh Terminal to read/write WORK.
+- Provider image e2fsck after the complete fault sequence; exact source and
+  artifact hashes retained with each accepted checkpoint.
+
+Evidence is under `/mnt/Documents/astra68/builds/fs-phase1-task10-20261011/`
+on Beast:
+
+- `native-1`: initial refresh opened another control session and hit LIMIT.
+  Resumed HELLO now reuses its original session and reply lane; host tests
+  cover refresh and teardown while two calls remain in flight.
+- `native-2`: hosts, sanitizers, target build and existing raw cases passed.
+  The new reset fixture created its file with mode 000, correctly refusing
+  the next open. The fixture now uses 0644.
+- `native-3`: all host/sanitizer/build/raw and NDK/docs gates passed. Raw loss
+  passed twelve resets and child adoption. All 22 guest cases and the lane
+  passed. Provider reset reached recovery but fork returned ENOSYS: rebinding
+  an unused revoked scope was incorrectly classified as UNSUPPORTED.
+- `native-4`: revoked-scope mapping and child refresh pass the complete loss
+  probe, including fork with disconnected descriptions. All 22 cases and
+  lane also pass. The existing shell's next fork fails: SHARE used the plain
+  port guard and never refreshed its lost scope. The probe had already
+  refreshed through fstat, exposing the missing first-operation case.
+- `share-first-red.log` fails the new guard regression; `share-first-green-2.log`
+  passes the full host VFS suite after the common port guard fix. Area
+  exchanges retain their existing outer guard to avoid nested refresh.
+- `native-5`: hosts/sanitizers/full target build/raw/NDK and HTML/PDF pass.
+  All 22 cases, lane and provider reset pass; the HostFS-death completion
+  marker times out. Retained as a failed checkpoint, without a claimed cause.
+- `native-6`: isolated HostFS death, old application loss, managed restart,
+  fresh Terminal and fsck pass. Added stage markers and full timeout trace.
+- `native-7`: the full sequential 22-case/lane/provider-reset/HostFS-death
+  gate and provider fsck pass, with exact source archive and six artifact
+  hashes. This qualifies Task 10 together with native-5's hosts/sanitizers,
+  raw gate, full target build and NDK/docs. Earlier failures remain retained.
+
+Task 7's parallel timer failure remains unresolved. Broad integration and
+Tasks 11–12 follow; performance qualification remains deferred.
 
 ### Task 11: Host budgets and admission (D9)
 
-Measure what each provider object costs the host. Then bound by
-configuration every pool that can grow when a guest asks (FS37, FS38). With
-the lane, HostFS is off the data path, so the per-process limits move to
-the code that holds the objects: QEMU, keyed by the scope the kernel bound.
-
-| Resource | Owner | Bound | Configured by |
-|---|---|---|---|
-| Linux descriptors held for guests (sessions, handles, shares) | QEMU | `ASTRA_HOSTFS_MAX_DESCRIPTORS` | the launcher's environment; default: QEMU's own `RLIMIT_NOFILE` less 256 for QEMU itself |
-| Directory streams (each also a `DIR` buffer) | QEMU | `ASTRA_HOSTFS_MAX_DIRECTORIES` | the launcher; default: the descriptor bound |
-| Open handles and shares per process, per scope | QEMU, from the scope the kernel bound | `owner_files` | `services/hostfs/settings.conf`; stamped into each grant's scope (`HOST_SCOPE_LIMIT`) |
-| HostFS sessions per process | HostFS (control plane) | `owner_sessions` | same file |
-| Queued control requests per grant | HostFS (its grant port) | `queue_messages` | same file, at most the kernel's `ASTRA_PORT_MESSAGES_MAX` |
-| Grants | HostFS | `grants` (Task 5) | same file |
-| Lanes per process (one DMA buffer each) | the kernel | `KERNEL_PROCESS_DMA_BUFFER_MAX` (16) within the 32 MiB DMA window | compiled: a kernel table, sized to the thread slots |
-
-No value is compiled into an image except the kernel's table size. The
-defaults come from the host's own limit, and the board's launcher sets the
-measured ones (Step 8). `owner_files 1024` is Linux's default soft
-`RLIMIT_NOFILE`, the per-process expectation POSIX programs are written
-against. `owner_sessions 64` allows one session per thread slot with room
-for library clients. Check `ASTRA_PROCESS_THREAD_SLOT_COUNT`, and raise it
-if the slot count is larger.
-
-**The lane cap.** Before this task a process could hold four DMA buffers:
-`KernelProcess.dma_buffers[KERNEL_VM_DMA_SLOT_COUNT]`, one 8 MiB window slot
-each. Every thread that touches a host volume needs a lane, which is one
-DMA buffer, so the fifth such thread failed with `VFS host DMA create:5`.
-That is what capped HostFS at four workers in `62b72fc2`. The window stays
-32 MiB and a buffer stays at most one slot (8 MiB, the static assert on a
-native frame). The kernel now places buffers anywhere in the window by
-page, and keeps up to `KERNEL_PROCESS_DMA_BUFFER_MAX` (16) of them: one per
-thread slot.
-
-**Files:**
-- Modify: `sw/kernel/process.c` (DMA records, `HOST_SCOPE_LIMIT`, scope `files`), `sw/kernel/platform.c`, `sw/kernel/platform.h` (config word), `sw/include/astra/syscall.h` (112), `sw/include/astra/host.h` (config version 4, `scope_files`), `sw/include/astra/address_space.h` (`ASTRA_DMA_BUFFER_MAX`)
-- Test: `sw/kernel/tests/test_process.c` (`test_dma_buffers_fill_the_window`, `test_host_scope` extended)
-- Modify: `sw/userspace/runtime/src/syscall.c`, `sw/userspace/runtime/runtime.library.exports`, `ndk/include/astra/runtime.h`, runtime 1.15 (the files of Task 3b Step 6)
-- Modify: `emu/qemu/qemu-9.2/hw/m68k/astra68.c` (admission, per-scope file limit, gauges)
-- Modify: `sw/userspace/vfs/include/astra/vfs_service_core.h`, `sw/userspace/vfs/src/vfs_service_core.c` (HELLO sessions per owner)
-- Modify: `sw/userspace/services/hostfs/main.c` (settings), `emu/qemu/astra_image.py` (settings values)
-- Modify: `sw/userspace/commands/fsbench/fsbench.c` (`--hold`), `sw/userspace/commands/fssem/fssem.c` (`--hold-sessions`, `--flood`, `many-lanes`)
-- Modify: `emu/qemu/fs-baseline.py` (`--budget`), `emu/qemu/test-fs-semantics.py` (`budgets`, `flood`), `emu/qemu/test-hostfs.py` (`limits`)
-- Modify: `emu/qemu/run-arty.sh` (measured limits); `emu/qemu/test-run-arty.py` if it asserts the environment
-- Test: `sw/userspace/vfs/tests/test_vfs_service_core.c`
-
-**Interfaces:**
-- Produces (kernel): `ASTRA_SYSCALL_HOST_SCOPE_LIMIT` (112). `data[1]` is
-  a scope with ADMINISTER and `data[2]` the per-process handle limit (0:
-  none). It is refused `ASTRA_SYSCALL_BUSY` once any channel carries the
-  scope. `ASTRA_DMA_BUFFER_MAX 16u` DMA buffers per process.
-- Produces (runtime 1.15): `uint32_t astra_host_scope_limit(uint32_t scope, uint32_t files)`.
-- Produces (provider): channel configuration version 4 with
-  `scope_files`. Environment `ASTRA_HOSTFS_MAX_DESCRIPTORS` and
-  `ASTRA_HOSTFS_MAX_DIRECTORIES` take a positive decimal; anything else
-  refuses to start. QOM gauges: `astra-host-fs-descriptors`,
-  `astra-host-fs-directories`, `astra-host-rss-kib`, `astra-host-fds`.
-  Refusal is `ASTRA_STATUS_LIMIT`.
-- Produces (core): `int astra_vfs_service_set_owner_sessions(AstraVfsService *, uint32_t sessions)`
-  (0: no limit). Refusals are counted in the existing, so far unused,
-  `owner_session_quota_denied` (`vfs_service_core.h:83-84`).
-- Produces (tools): `fsbench --hold file|dir COUNT`;
-  `fssem --hold-sessions COUNT`; `fssem --flood DIR LIMIT`;
-  `fs-baseline.py LABEL OUT.json --budget`.
-
-- [ ] **Step 1: Failing kernel tests**
-
-`sw/kernel/tests/test_process.c`:
-
-```c
-/*
- * A process holds up to ASTRA_DMA_BUFFER_MAX DMA buffers, placed by page in
- * its DMA window: one lane per thread slot (Task 11, the lane cap). The
- * window, not a slot count, bounds the bytes.
- */
-static void test_dma_buffers_fill_the_window(void)
-{
-    const uint32_t user_info = KERNEL_PROCESS_STACK_TOP - 64u;
-    KernelProcessBootstrapCapability capability = {0};
-    KernelCpuContext *next = NULL;
-    AstraDmaBufferInfo buffer;
-    uint32_t bases[ASTRA_DMA_BUFFER_MAX];
-    uint32_t handles[ASTRA_DMA_BUFFER_MAX];
-    uint32_t process_id = 0u;
-
-    loader_build_image();
-    initialize_test();
-    capability.name = ASTRA_CAPABILITY_HOST_DEVICE;
-    capability.kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
-    capability.device_id = ASTRA_DEVICE_ID_HOST0;
-    capability.rights = KERNEL_DEVICE_RIGHTS;
-    assert(kernel_process_create_executable(loader_image, loader_image_size,
-                                            &capability, 1u, &process_id) ==
-           KERNEL_PROCESS_OK);
-    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
-    for (uint32_t index = 0u; index < ASTRA_DMA_BUFFER_MAX; ++index) {
-        assert(scope_call(ASTRA_SYSCALL_DMA_CREATE, 2u * KERNEL_PAGE_SIZE,
-                          user_info, 0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
-        assert(kernel_user_copy_from_asm(&buffer, user_info,
-                                         sizeof(buffer)) ==
-               KERNEL_USER_COPY_OK);
-        bases[index] = buffer.virtual_base;
-        handles[index] = buffer.handle;
-        assert(bases[index] >= ASTRA_DMA_ADDRESS_START &&
-               bases[index] + 2u * KERNEL_PAGE_SIZE <= ASTRA_DMA_ADDRESS_END);
-        for (uint32_t prior = 0u; prior < index; ++prior)
-            assert(bases[index] + 2u * KERNEL_PAGE_SIZE <= bases[prior] ||
-                   bases[prior] + 2u * KERNEL_PAGE_SIZE <= bases[index]);
-    }
-    assert(scope_call(ASTRA_SYSCALL_DMA_CREATE, KERNEL_PAGE_SIZE, user_info,
-                      0u, 0u, 0u, &next) == ASTRA_SYSCALL_RESOURCE_LIMIT);
-    /* A freed buffer's pages are placed again; a whole slot still fits. */
-    for (uint32_t index = 0u; index < ASTRA_DMA_BUFFER_MAX; ++index)
-        assert(scope_call(ASTRA_SYSCALL_CLOSE, handles[index], 0u, 0u, 0u,
-                          0u, &next) == ASTRA_SYSCALL_OK);
-    assert(scope_call(ASTRA_SYSCALL_DMA_CREATE, ASTRA_DMA_SLOT_SIZE,
-                      user_info, 0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
-}
-```
-
-If the kernel memory fixture cannot back a whole 8 MiB slot, the last
-create answers `ASTRA_SYSCALL_OUT_OF_MEMORY`. In that case assert a 1 MiB
-buffer instead, and note it in the test's comment.
-
-`test_host_scope` (Task 3b) gains, before the creator-death block:
-
-```c
-    /* The per-process handle limit rides the scope into every channel; it
-     * is fixed before the first binding. */
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, device,
-                      ASTRA_HOST_FS_VOLUME_SOUND, 0u, 0u, 0u, &next) ==
-           ASTRA_SYSCALL_OK);
-    limited = next->data[1];
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_LIMIT, limited, 1024u, 0u, 0u,
-                      0u, &next) == ASTRA_SYSCALL_OK);
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, limited, 0u, 0u, 0u,
-                      0u, &next) == ASTRA_SYSCALL_OK);
-    assert(host_channel_attach_files == 1024u);
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_LIMIT, limited, 8u, 0u, 0u,
-                      0u, &next) == ASTRA_SYSCALL_BUSY);
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_LIMIT, work_client, 8u, 0u,
-                      0u, 0u, &next) == ASTRA_SYSCALL_ACCESS_DENIED);
-```
-
-with `uint32_t limited;` declared and the attach fake recording
-`host_channel_attach_files` (its new parameter).
-Register `test_dma_buffers_fill_the_window` after `test_host_scope`.
-
-Run: `~/astra-mg/locked make -C sw/kernel clean && ~/astra-mg/locked make -C sw/kernel test`.
-Expected: compile errors (`ASTRA_DMA_BUFFER_MAX`, `ASTRA_SYSCALL_HOST_SCOPE_LIMIT`).
-
-- [ ] **Step 2: The kernel**
-
-`sw/include/astra/address_space.h`, after `ASTRA_DMA_SLOT_COUNT`:
-
-```c
-/** DMA buffers one process may hold at once, each at most
- * ::ASTRA_DMA_SLOT_SIZE, placed by page within the DMA region: one host
- * lane per thread slot. */
-#define ASTRA_DMA_BUFFER_MAX 16u
-```
-
-`sw/kernel/process.c`:
-- `KernelProcess.dma_buffers[KERNEL_VM_DMA_SLOT_COUNT]` becomes
-  `dma_buffers[ASTRA_DMA_BUFFER_MAX]`. Build the kernel host test:
-  `_Static_assert(sizeof(KernelProcess) <= 4608u, ...)` is the check. If it
-  fires, stop and report the measured size. Do not raise the bound without
-  the user: the process table's memory budget is `docs/MEMORY_BUDGET.md`'s.
-- `create_dma_buffer` finds a free record among the 16, and places the
-  buffer with:
-
-  ```c
-  /* The lowest page-aligned base in the process's DMA window where
-   * `page_count` pages overlap no live buffer; false when none. First fit,
-   * at most sixteen buffers: the scan is the table. */
-  static bool dma_window_place(const KernelProcess *process,
-                               uint32_t page_count, uint32_t *base)
-  {
-      const uint32_t end = KERNEL_VM_DMA_BASE +
-          KERNEL_VM_DMA_SLOT_COUNT * KERNEL_VM_DMA_SLOT_SIZE;
-      const uint32_t bytes = page_count * KERNEL_PAGE_SIZE;
-      uint32_t candidate = KERNEL_VM_DMA_BASE;
-      bool moved = true;
-
-      while (moved) {
-          moved = false;
-          if (candidate > end || bytes > end - candidate)
-              return false;
-          for (uint32_t index = 0u; index < ASTRA_DMA_BUFFER_MAX; ++index) {
-              const KernelProcessDmaBuffer *buffer =
-                  &process->dma_buffers[index];
-              uint32_t buffer_end;
-
-              if (buffer->active == 0u)
-                  continue;
-              buffer_end = buffer->virtual_base +
-                           (uint32_t)buffer->page_count * KERNEL_PAGE_SIZE;
-              if (candidate < buffer_end &&
-                  buffer->virtual_base < candidate + bytes) {
-                  candidate = buffer_end;
-                  moved = true;
-              }
-          }
-      }
-      *base = candidate;
-      return true;
-  }
-  ```
-
-  Call it after the record search. No base means
-  `KERNEL_PROCESS_RESOURCE_LIMIT`, before the engine allocates anything.
-  Use its answer for `buffer->virtual_base` in place of
-  `KERNEL_VM_DMA_BASE + (slot * KERNEL_VM_DMA_SLOT_SIZE)`. `buffer->slot`
-  records the record index, as it did. Nothing else reads the slot as an
-  address (`grep -n "dma_buffers\|KERNEL_VM_DMA_BASE" sw/kernel/*.c`).
-- `KernelHostScope` gains `uint32_t files;  /* per-process handle limit; 0: none */`.
-  `host_channel_attach` and the bound open pass `scope->files` to the
-  platform as a new last argument. `kernel_platform_host_channel_open` and
-  `_attach` gain `uint32_t scope_files`, written into the configuration's
-  `scope_files`. The configuration version is 4 (Task 4 took 3).
-- The new case, beside `HOST_SCOPE_REVOKE`:
-
-  ```c
-      case ASTRA_SYSCALL_HOST_SCOPE_LIMIT: {
-          KernelHostScope *scope = NULL;
-          KernelHandleStatus handle_status = kernel_handle_lookup(
-              current->handles, thread->context.data[1],
-              KERNEL_OBJECT_HOST_SCOPE, ASTRA_RIGHT_ADMINISTER,
-              (void **)&scope);
-          bool bound = false;
-
-          if (handle_status == KERNEL_HANDLE_INVALID_HANDLE ||
-              handle_status == KERNEL_HANDLE_TYPE_MISMATCH) {
-              result = ASTRA_SYSCALL_INVALID_HANDLE;
-              break;
-          }
-          if (handle_status == KERNEL_HANDLE_ACCESS_DENIED) {
-              result = ASTRA_SYSCALL_ACCESS_DENIED;
-              break;
-          }
-          if (handle_status != KERNEL_HANDLE_OK || scope == NULL)
-              return KERNEL_PROCESS_CORRUPT;
-          /* Fixed before the first binding, so every channel carrying the
-           * scope carries the same limit. */
-          for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT &&
-               !bound; ++slot)
-              for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_SCOPE_MAX; ++at)
-                  if (host_channels[slot].active != 0u &&
-                      host_channels[slot].scopes[at] ==
-                          host_scope_index(scope)) {
-                      bound = true;
-                      break;
-                  }
-          if (scope->state != KERNEL_HOST_SCOPE_ACTIVE)
-              result = ASTRA_SYSCALL_PEER_DEAD;
-          else if (bound)
-              result = ASTRA_SYSCALL_BUSY;
-          else {
-              scope->files = thread->context.data[2];
-              result = ASTRA_SYSCALL_OK;
-          }
-          break;
-      }
-  ```
-
-`sw/include/astra/syscall.h`: `ASTRA_SYSCALL_HOST_SCOPE_LIMIT 112` with a
-doc comment from Interfaces. `host.h`: `ASTRA_HOST_CHANNEL_CONFIG_VERSION 4u`,
-and `AstraHostChannelConfig`'s `reserved[4]` becomes
-`uint32_t scope_files; uint32_t reserved[3];`. Runtime 1.15: add
-`astra_host_scope_limit` beside Task 3b's three, the same way, with
-`ASTRA_RUNTIME_1.15`. That covers the identity `1, 15`, the Makefile
-check, the Runtime.kit manifest and Filesystem.kit's
-`requires runtime.library 1 1.15.0`. Use `ASTRA_SYSCALL_BUSY` if the
-status header names it so; otherwise use the closest "in use" status
-there, and use it in both the kernel and the test.
-
-Run the kernel tests again. Expected: PASS.
-
-- [ ] **Step 3: HELLO sessions per owner, in the core**
-
-`test_vfs_service_core.c`:
-
-```c
-static void
-test_owner_sessions_are_limited(void)
-{
-    AstraVfsService service;
-    AstraVfsRequest request;
-    AstraVfsReply reply;
-
-    service_start(&service);
-    assert(astra_vfs_service_set_owner_sessions(&service, 2u));
-    memset(&request, 0, sizeof(request));
-    request.size = ASTRA_VFS_REQUEST_SIZE;
-    request.version = ASTRA_VFS_VERSION;
-    for (int index = 0; index < 2; ++index) {
-        astra_vfs_service_dispatch_grant(&service, 7u, 1u, 0u,
-                                         ASTRA_VFS_OP_HELLO, &request,
-                                         &reply);
-        assert(reply.status == ASTRA_VFS_OK);
-    }
-    astra_vfs_service_dispatch_grant(&service, 7u, 1u, 0u,
-                                     ASTRA_VFS_OP_HELLO, &request, &reply);
-    assert(reply.status == ASTRA_VFS_ERR_LIMIT);
-    /* Another owner is not charged for owner 7. */
-    astra_vfs_service_dispatch_grant(&service, 8u, 1u, 0u,
-                                     ASTRA_VFS_OP_HELLO, &request, &reply);
-    assert(reply.status == ASTRA_VFS_OK);
-    assert(service.stats.owner_session_quota_denied == 1u);
-}
-```
-
-`vfs_service_core.h`: `AstraVfsService` gains `uint32_t owner_session_limit;`
-and the declaration from Interfaces. `vfs_service_core.c`:
-
-```c
-int
-astra_vfs_service_set_owner_sessions(AstraVfsService *service,
-                                     uint32_t sessions)
-{
-    if (service == NULL)
-        return 0;
-    service->owner_session_limit = sessions;
-    return 1;
-}
-
-/* Sessions one owner holds. Called with the state lock held.
- * ponytail: a scan of the session table per HELLO; keep a per-owner count
- * if a profile ever shows it. */
-static uint32_t
-owner_sessions(const AstraVfsService *service, uint32_t owner)
-{
-    uint32_t count = 0u;
-
-    for (uint32_t index = 0u; index < service->session_capacity; ++index)
-        if (service->sessions[index].id != ASTRA_VFS_SESSION_INVALID &&
-            service->sessions[index].owner == owner)
-            ++count;
-    return count;
-}
-```
-
-In the HELLO path, before a slot is claimed: when `owner_session_limit != 0`
-and `owner != 0` and the owner already holds that many, answer
-`ASTRA_VFS_ERR_LIMIT` and `++service->stats.owner_session_quota_denied`.
-Use the session-in-use test and the capacity field HELLO itself uses, if
-they are not `id == ASTRA_VFS_SESSION_INVALID` and `session_capacity`.
-
-- [ ] **Step 4: HostFS settings**
-
-Replace Task 5's `configured_grants` with one reader:
-
-```c
-/* services/hostfs/settings.conf: one positive integer `name N`, required,
- * within [minimum, maximum]. */
-static uint32_t setting(AstraConfig *config, const char *name,
-                        uint64_t minimum, uint64_t maximum, uint32_t *out)
-{
-    uint64_t value = 0u;
-    uint32_t found = 0u;
-    uint32_t status = astra_config_count(config, name, &found);
-
-    if (status == ASTRA_CONFIG_OK && found == 1u)
-        status = astra_config_get_u64(config, name, 0u, &value);
-    if (status != ASTRA_CONFIG_OK || found != 1u || value < minimum ||
-        value > maximum)
-        return ASTRA_STATUS_INVALID;
-    *out = (uint32_t)value;
-    return ASTRA_STATUS_OK;
-}
-
-typedef struct HostfsSettings {
-    uint32_t grants;
-    uint32_t owner_files;
-    uint32_t owner_sessions;
-    uint32_t queue_messages;
-} HostfsSettings;
-
-static uint32_t read_settings(const AstraStartupInfo *startup,
-                              HostfsSettings *out)
-{
-    AstraConfig config = ASTRA_CONFIG_INIT;
-    AstraConfigError error = {0};
-    uint32_t status;
-
-    if (astra_process_vfs_init(startup) != ASTRA_VFS_OK)
-        return ASTRA_STATUS_NOT_FOUND;
-    if (astra_config_open(startup, 1u, ASTRA_CONFIG_OPEN_READ, &config,
-                          &error) != ASTRA_CONFIG_OK)
-        return ASTRA_STATUS_INVALID;
-    status = setting(&config, "grants", 2u,
-                     HOSTFS_GRANTS_MAX < ASTRA_WAIT_MULTIPLE_MAX - 2u ?
-                         HOSTFS_GRANTS_MAX : ASTRA_WAIT_MULTIPLE_MAX - 2u,
-                     &out->grants);
-    if (status == ASTRA_STATUS_OK)
-        status = setting(&config, "owner_files", 1u, UINT32_MAX,
-                         &out->owner_files);
-    if (status == ASTRA_STATUS_OK)
-        status = setting(&config, "owner_sessions", 1u, UINT32_MAX,
-                         &out->owner_sessions);
-    if (status == ASTRA_STATUS_OK)
-        status = setting(&config, "queue_messages", 1u,
-                         ASTRA_PORT_MESSAGES_MAX, &out->queue_messages);
-    astra_config_close(&config);
-    return status;
-}
-```
-
-- Startup calls `read_settings` once into a file-scope `settings`, and uses
-  `settings.grants` where Task 5 used `grant_capacity`'s reader.
-- Call `astra_vfs_service_set_owner_sessions(&service, settings.owner_sessions)`
-  for both services.
-- `grant_add` creates the grant port with
-  `astra_rt_port_create(settings.queue_messages, settings.queue_messages * (uint32_t)sizeof(AstraVfsRenameRequestMessage), ...)`.
-- Right after `astra_host_scope_create`, `grant_add` stamps the limit:
-  `astra_host_scope_limit(scope, settings.owner_files)`. Failure revokes
-  and closes the scope and answers `ASTRA_VFS_ERR_LIMIT`. Task 10's
-  recovery re-mints through the same two calls.
-
-`astra_image.py`, `services/hostfs/settings.conf`, after `grants 32`:
-
-```python
-          "owner_files 1024\n"
-          "owner_sessions 64\n"
-          "queue_messages 16\n"
-```
-
-If the kernel's `ASTRA_PORT_MESSAGES_MAX` is below 16, use it for
-`queue_messages` (`grep -rn "define ASTRA_PORT_MESSAGES_MAX" sw/include`).
-
-- [ ] **Step 5: QEMU admission, the per-scope limit and the gauges**
-
-`AstraHostState` gains:
-
-```c
-    /* Provider admission (FS37, FS38): Linux descriptors held for guests
-     * (sessions, handles, shares) and directory streams, under files_lock.
-     * Bounds come from the launcher, or from QEMU's own descriptor limit;
-     * never compiled in. */
-    uint32_t fs_descriptors;
-    uint32_t fs_directories;
-    uint32_t fs_max_descriptors;
-    uint32_t fs_max_directories;
-    /* Handles and shares per (owner, session), under files_lock: what the
-     * scope's `files` limit counts. Key: g_new(guint64) (owner << 32 |
-     * session); value: GUINT_TO_POINTER(count). */
-    GHashTable *owner_files;
-```
-
-`astra68_init` creates it:
-`g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, NULL)`.
-
-`AstraHostChannelScope` gains `uint32_t files;`, read from the
-configuration's `scope_files` by `astra_host_config_scope`. A bound
-channel's OPEN and ADOPT (Task 8) refuse before acting:
-
-```c
-        if (bound && scope.files != 0u &&
-            astra_host_owner_files(s, owner, session_id) >= scope.files) {
-            status = ASTRA_STATUS_LIMIT;
-            goto done;
-        }
-```
-
-with:
-
-```c
-static guint64 astra_host_owner_key(uint32_t owner, uint32_t session)
-{
-    return ((guint64)owner << 32) | session;
-}
-
-static uint32_t astra_host_owner_files(Astra68State *s, uint32_t owner,
-                                       uint32_t session)
-{
-    guint64 key = astra_host_owner_key(owner, session);
-    uint32_t count;
-
-    qemu_mutex_lock(&s->host.files_lock);
-    count = GPOINTER_TO_UINT(g_hash_table_lookup(s->host.owner_files, &key));
-    qemu_mutex_unlock(&s->host.files_lock);
-    return count;
-}
-
-/* Called with files_lock held. */
-static void astra_host_owner_files_add(Astra68State *s, uint32_t owner,
-                                       uint32_t session, int delta)
-{
-    guint64 key = astra_host_owner_key(owner, session);
-    uint32_t count = GPOINTER_TO_UINT(
-        g_hash_table_lookup(s->host.owner_files, &key)) + (uint32_t)delta;
-    guint64 *stored;
-
-    if (count == 0u) {
-        g_hash_table_remove(s->host.owner_files, &key);
-        return;
-    }
-    stored = g_new(guint64, 1);
-    *stored = key;
-    g_hash_table_replace(s->host.owner_files, stored,
-                         GUINT_TO_POINTER(count));
-}
-```
-
-`astra_host_insert_file` adds 1 under `files_lock` for `(owner, session)`.
-The final release of a file subtracts 1, under the same lock. A pending
-share (Task 8) counts for its sharer, from SHARE until it is adopted or
-withdrawn. The unbound HostFS channel opens no handles, so its zero limit
-costs nothing.
-
-In `astra68_init`, before the volumes are opened:
-
-```c
-static uint32_t astra_host_fs_bound(const char *name, uint32_t fallback)
-{
-    const char *text = g_getenv(name);
-    uint64_t value = 0;
-
-    if (text == NULL || text[0] == '\0')
-        return fallback;
-    if (qemu_strtou64(text, NULL, 10, &value) != 0 || value == 0 ||
-        value > UINT32_MAX) {
-        error_report("%s must be a positive count, not '%s'", name, text);
-        exit(EXIT_FAILURE);
-    }
-    return (uint32_t)value;
-}
-```
-
-```c
-    {
-        struct rlimit files;
-        uint32_t own;
-
-        if (getrlimit(RLIMIT_NOFILE, &files) != 0 ||
-            (files.rlim_cur != RLIM_INFINITY && files.rlim_cur <= 256u)) {
-            error_report("Astra host filesystem: descriptor limit too low");
-            exit(EXIT_FAILURE);
-        }
-        own = files.rlim_cur == RLIM_INFINITY ||
-              files.rlim_cur - 256u > UINT32_MAX ?
-            UINT32_MAX : (uint32_t)(files.rlim_cur - 256u);
-        s->host.fs_max_descriptors =
-            astra_host_fs_bound("ASTRA_HOSTFS_MAX_DESCRIPTORS", own);
-        s->host.fs_max_directories =
-            astra_host_fs_bound("ASTRA_HOSTFS_MAX_DIRECTORIES",
-                                s->host.fs_max_descriptors);
-    }
-```
-
-Admission. `astra_host_insert_file` checks and charges under `files_lock`,
-and answers handle 0 when full:
-
-```c
-    qemu_mutex_lock(&s->host.files_lock);
-    if (s->host.fs_descriptors >= s->host.fs_max_descriptors ||
-        (directory != NULL &&
-         s->host.fs_directories >= s->host.fs_max_directories)) {
-        qemu_mutex_unlock(&s->host.files_lock);
-        qemu_mutex_destroy(&file->lock);
-        g_free(file);
-        return 0u;
-    }
-    ++s->host.fs_descriptors;
-    if (directory != NULL)
-        ++s->host.fs_directories;
-```
-
-Each caller of `astra_host_insert_file` (through `astra_host_publish_open`)
-closes the descriptor on 0 (`closedir` for a stream) and answers
-`ASTRA_STATUS_LIMIT`. The final release of a file decrements both counts
-under `files_lock`. A session open charges one descriptor the same way and
-answers `ASTRA_STATUS_LIMIT` when full, and a share (Task 8) does the same
-for its duplicate. A session's release, and a share's adoption or
-withdrawal, give the descriptor back.
-
-Gauges, beside the other host properties:
-
-```c
-static void astra_host_rss_get(Object *object, Visitor *visitor,
-                               const char *name, void *opaque, Error **errp)
-{
-    uint64_t value = 0;
-#ifdef CONFIG_LINUX
-    unsigned long size;
-    unsigned long resident;
-    FILE *statm = fopen("/proc/self/statm", "r");
-
-    if (statm != NULL) {
-        if (fscanf(statm, "%lu %lu", &size, &resident) == 2)
-            value = (uint64_t)resident * qemu_real_host_page_size() / 1024u;
-        fclose(statm);
-    }
-#endif
-    visit_type_uint64(visitor, name, &value, errp);
-}
-
-static void astra_host_fds_get(Object *object, Visitor *visitor,
-                               const char *name, void *opaque, Error **errp)
-{
-    uint64_t value = 0;
-#ifdef CONFIG_LINUX
-    DIR *list = opendir("/proc/self/fd");
-    struct dirent *entry;
-
-    if (list != NULL) {
-        while ((entry = readdir(list)) != NULL)
-            if (entry->d_name[0] != '.')
-                ++value;
-        closedir(list);
-        if (value != 0)
-            --value;                    /* the listing's own descriptor */
-    }
-#endif
-    visit_type_uint64(visitor, name, &value, errp);
-}
-```
-
-```c
-    object_property_add_uint32_ptr(OBJECT(machine),
-                                   "astra-host-fs-descriptors",
-                                   &s->host.fs_descriptors,
-                                   OBJ_PROP_FLAG_READ);
-    object_property_add_uint32_ptr(OBJECT(machine),
-                                   "astra-host-fs-directories",
-                                   &s->host.fs_directories,
-                                   OBJ_PROP_FLAG_READ);
-    object_property_add(OBJECT(machine), "astra-host-rss-kib", "uint64",
-                        astra_host_rss_get, NULL, NULL, s);
-    object_property_add(OBJECT(machine), "astra-host-fds", "uint64",
-                        astra_host_fds_get, NULL, NULL, s);
-```
-
-Include `<sys/resource.h>` and `<dirent.h>` if `astra68.c` does not
-already.
-
-`test-hostfs.py`. Task 3b's `booted` helper boots a machine with small
-bounds:
-
-```python
-def limits(qtest):
-    """MAX_DESCRIPTORS=4 (the session root and three handles),
-    MAX_DIRECTORIES=1, and a scope limiting its owner to two handles."""
-    qtest.detect_endian()
-    generation = qtest.read32(HACC_GENERATION)
-    assert claim(qtest, generation) == STATUS_OK
-    work = open_session(qtest, generation)
-    handles = []
-    for index in range(2):
-        answer = execute(qtest, [Command(
-            generation, FS_OPEN, "/f%d" % index,
-            flags=OPEN_READ | OPEN_WRITE | OPEN_CREATE, session=work)])[0]
-        assert status(answer) == STATUS_OK, status(answer)
-        handles.append(get32(answer.raw, 16))
-    directory = execute(qtest, [Command(
-        generation, FS_OPEN, "/", flags=OPEN_READ | OPEN_DIRECTORY,
-        session=work)])[0]
-    assert status(directory) == STATUS_OK
-    full = execute(qtest, [Command(
-        generation, FS_OPEN, "/f9", flags=OPEN_READ | OPEN_WRITE | OPEN_CREATE,
-        session=work)])[0]
-    assert status(full) == STATUS_LIMIT, status(full)
-    closed = execute(qtest, [Command(
-        generation, FS_CLOSE, handle=handles[0], session=work)])[0]
-    assert status(closed) == STATUS_OK
-    second_directory = execute(qtest, [Command(
-        generation, FS_OPEN, "/", flags=OPEN_READ | OPEN_DIRECTORY,
-        session=work)])[0]
-    assert status(second_directory) == STATUS_LIMIT
-    print("PASS limits")
-
-
-def scope_files(qtest):
-    """A scope's `files` limit counts its owner's handles in its session."""
-    qtest.detect_endian()
-    generation = qtest.read32(HACC_GENERATION)
-    assert claim(qtest, generation) == STATUS_OK
-    work = open_session(qtest, generation)
-    assert configure_scope(qtest, generation, CONFIG_OPEN, 13, 61, work,
-                           SCOPE_BOUND, 0x1001, owner=0x3003,
-                           byte_size=8192 + 4096, files=2) == 0
-    for producer in (1, 2):
-        opened = scoped(qtest, 13, producer, Command(
-            generation, FS_OPEN, "/s%d" % producer,
-            flags=OPEN_READ | OPEN_WRITE | OPEN_CREATE, session=work))
-        assert status(opened) == STATUS_OK
-    third = scoped(qtest, 13, 3, Command(
-        generation, FS_OPEN, "/s3", flags=OPEN_READ | OPEN_WRITE | OPEN_CREATE,
-        session=work))
-    assert status(third) == STATUS_LIMIT
-    assert configure_scope(qtest, generation, CONFIG_CLOSE, 13, 61,
-                           owner=0x3003) == 0
-    print("PASS scope-files")
-```
-
-- `configure_scope` gains `files=0`, packed as the fourteenth word, and
-  writes `CONFIG_VERSION = 3`.
-- Add `STATUS_LIMIT = 10`.
-- In `main`, refuse `ASTRA_HOSTFS_MAX_DESCRIPTORS=0` the way the missing
-  root is refused: exit non-zero, with a message that names the variable.
-- Boot a third time with a fresh `qtest-limits.sock`,
-  `ASTRA_HOSTFS_MAX_DESCRIPTORS=4` and `ASTRA_HOSTFS_MAX_DIRECTORIES=1`,
-  and run `limits`.
-- `scope_files` runs in the first boot, after `scopes`.
-
-- [ ] **Step 6: The measuring tools and the lane cap case**
-
-`fsbench.c`, before the option loop in `main`:
-
-```c
-    if (argc == 4 && strcmp(argv[1], "--hold") == 0)
-        return hold(argv[2], strtol(argv[3], NULL, 10));
-```
-
-and:
-
-```c
-/*
- * --hold file|dir COUNT: keep COUNT open files or directory streams while
- * a host driver measures what they cost it (FS37). Creates
- * /work/.astra/fsbench-hold-KIND.ready, prints "fsbench: holding", waits
- * until the driver removes the file, then releases everything.
- */
-static int hold(const char *kind, long count)
-{
-    const char *target = "/work/.astra/fsbench-hold.target";
-    char marker[96];
-    int directory = strcmp(kind, "dir") == 0;
-    int *fds = NULL;
-    DIR **streams = NULL;
-    struct stat st;
-    long held = 0;
-    int status = 0;
-    int fd;
-
-    if ((!directory && strcmp(kind, "file") != 0) || count <= 0) {
-        fprintf(stderr, "usage: fsbench --hold file|dir COUNT\n");
-        return 2;
-    }
-    {
-        /* libc's own descriptor limit is not what is being measured. */
-        struct rlimit unlimited = {RLIM_INFINITY, RLIM_INFINITY};
-
-        (void)setrlimit(RLIMIT_NOFILE, &unlimited);
-    }
-    fd = open(target, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0)
-        return 1;
-    (void)close(fd);
-    fds = directory ? NULL : calloc((size_t)count, sizeof(*fds));
-    streams = directory ? calloc((size_t)count, sizeof(*streams)) : NULL;
-    if (fds == NULL && streams == NULL)
-        return 1;
-    for (; held < count; ++held) {
-        if (directory)
-            streams[held] = opendir("/work/.astra");
-        else
-            fds[held] = open(target, O_RDONLY);
-        if (directory ? streams[held] == NULL : fds[held] < 0) {
-            printf("fsbench: hold %s failed at %ld: %s\n", kind, held,
-                   strerror(errno));
-            status = 1;
-            break;
-        }
-    }
-    (void)snprintf(marker, sizeof(marker),
-                   "/work/.astra/fsbench-hold-%s.ready", kind);
-    if (status == 0) {
-        fd = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd >= 0)
-            (void)close(fd);
-        printf("fsbench: holding %ld %s\n", held, kind);
-        fflush(stdout);
-        while (stat(marker, &st) == 0)
-            usleep(100000);
-    }
-    while (held > 0) {
-        --held;
-        if (directory)
-            (void)closedir(streams[held]);
-        else
-            (void)close(fds[held]);
-    }
-    free(fds);
-    free(streams);
-    printf("fsbench: hold done %s\n", kind);
-    return status;
-}
-```
-
-Add `#include <unistd.h>` and `#include <sys/resource.h>` if absent. The
-file hold stays below `owner_files` (1000 < 1024) and so measures QEMU,
-not the limit.
-
-`fssem.c`, two more modes before the case loop:
-
-```c
-    if (argc == 3 && strcmp(argv[1], "--hold-sessions") == 0)
-        return hold_sessions(atoi(argv[2]));
-    if (argc == 4 && strcmp(argv[1], "--flood") == 0)
-        return flood(argv[2], atol(argv[3]));
-```
-
-```c
-/*
- * --hold-sessions COUNT: COUNT provider sessions (each a derived grant, so
- * one O_PATH directory in QEMU) held while the gate measures them.
- */
-static int hold_sessions(int count)
-{
-    const char *marker = "/work/.astra/fssem-sessions.ready";
-    const AstraAssign *work =
-        astra_assign_lookup(astra_process_vfs_assigns(), "WORK");
-    AstraVfsClient *client = astra_process_vfs_client_for(work);
-    uint32_t handles[64];
-    struct stat st;
-    int held = 0;
-    int fd;
-
-    if (client == NULL || count <= 0 || count > 64)
-        return 2;
-    for (; held < count; ++held)
-        if (astra_vfs_grant_derive(client, "", ASTRA_VFS_GRANT_READ,
-                                   &handles[held]) != ASTRA_VFS_OK)
-            break;
-    fd = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd >= 0)
-        (void)close(fd);
-    printf("FSSEM SESSIONS holding %d\n", held);
-    fflush(stdout);
-    while (held == count && stat(marker, &st) == 0)
-        usleep(100000);
-    while (held > 0)
-        (void)astra_close(handles[--held]);
-    printf("FSSEM SESSIONS done\n");
-    return 0;
-}
-
-/*
- * --flood DIR LIMIT: open one file until refused, hold everything, and
- * pass when the refusal is EMFILE at the scope's per-process limit (FS38),
- * which QEMU enforces -- not libc's, and not QEMU's global bound. A few of
- * the process's handles may already be open (its cwd, the namespace), so
- * the count is LIMIT less at most 8.
- */
-static int flood(const char *directory, long limit)
-{
-    const char *marker = "/work/.astra/fssem-flood.ready";
-    struct rlimit unlimited = {RLIM_INFINITY, RLIM_INFINITY};
-    char path[160];
-    struct stat st;
-    int *fds = NULL;
-    long count = 0;
-    long capacity = 0;
-    long opened;
-    int error = 0;
-    int fd;
-
-    (void)setrlimit(RLIMIT_NOFILE, &unlimited);
-    (void)mkdir(directory, 0755);
-    join(path, sizeof(path), directory, "target");
-    if (write_text(path, "x", O_WRONLY | O_CREAT | O_TRUNC) != 0)
-        return fail("flood target: %s", strerror(errno));
-    for (;;) {
-        if (count == capacity) {
-            int *grown = realloc(fds, (size_t)(capacity + 256) *
-                                          sizeof(*fds));
-
-            if (grown == NULL) {
-                error = ENOMEM;
-                break;
-            }
-            fds = grown;
-            capacity += 256;
-        }
-        fd = open(path, O_RDONLY);
-        if (fd < 0) {
-            error = errno;
-            break;
-        }
-        fds[count++] = fd;
-    }
-    opened = count;
-    if (count > 0)
-        (void)close(fds[--count]);     /* one back, for the marker */
-    fd = open(marker, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd >= 0)
-        (void)close(fd);
-    printf("FSSEM FLOOD n=%ld errno=%d\n", opened, error);
-    fflush(stdout);
-    while (stat(marker, &st) == 0)
-        usleep(100000);
-    while (count > 0)
-        (void)close(fds[--count]);
-    free(fds);
-    if (error == EMFILE && opened <= limit && opened >= limit - 8) {
-        printf("FSSEM FLOOD PASS\n");
-        return 0;
-    }
-    printf("FSSEM FLOOD FAIL n=%ld errno=%d\n", opened, error);
-    return 1;
-}
-
-typedef struct LaneThread {
-    char path[160];
-    int failures;
-} LaneThread;
-
-static void *lane_thread(void *argument)
-{
-    LaneThread *lane = argument;
-    struct stat st;
-
-    for (int index = 0; index < 50; ++index)
-        if (stat(lane->path, &st) != 0)
-            ++lane->failures;
-    return NULL;
-}
-
-/* Eight threads use WORK at once: eight lanes, one DMA buffer each, past
- * the old four-buffer cap (Task 11). */
-static int case_many_lanes(const char *directory)
-{
-    LaneThread lanes[8];
-    pthread_t threads[8];
-
-    for (int index = 0; index < 8; ++index) {
-        join(lanes[index].path, sizeof(lanes[index].path), directory,
-             "lanes");
-        lanes[index].failures = 0;
-    }
-    CHECK(write_text(lanes[0].path, "x", O_WRONLY | O_CREAT | O_EXCL) == 0,
-          "seed");
-    for (int index = 0; index < 8; ++index)
-        CHECK(pthread_create(&threads[index], NULL, lane_thread,
-                             &lanes[index]) == 0, "thread %d", index);
-    for (int index = 0; index < 8; ++index) {
-        CHECK(pthread_join(threads[index], NULL) == 0, "join %d", index);
-        CHECK(lanes[index].failures == 0, "lane %d: %d failed stats",
-              index, lanes[index].failures);
-    }
-    return 0;
-}
-```
-
-Add `#include <sys/resource.h>`. Register
-`{"many-lanes", case_many_lanes}`, and add `"many-lanes"` to `CASES`.
-
-- [ ] **Step 7: The gate and the board driver**
-
-`test-fs-semantics.py`:
-
-```python
-GAUGES = ("astra-host-rss-kib", "astra-host-fds",
-          "astra-host-fs-descriptors", "astra-host-fs-directories")
-HOLDS = (("fsbench --hold file 1000", "fsbench: holding",
-          "fsbench-hold-file.ready", "fsbench: hold done", 1000, "file"),
-         ("fsbench --hold dir 200", "fsbench: holding",
-          "fsbench-hold-dir.ready", "fsbench: hold done", 200, "dir"),
-         ("fssem --hold-sessions 16", "FSSEM SESSIONS holding",
-          "fssem-sessions.ready", "FSSEM SESSIONS done", 16, "session"))
-OWNER_FILES = 1024          # services/hostfs/settings.conf
-
-
-def gauges(machine):
-    return {name: machine.qmp.execute("qom-get", {"path": "/machine",
-                                                  "property": name})
-            for name in GAUGES}
-
-
-def check_budgets(machine, mount):
-    """What one file, directory stream and session cost QEMU (FS37)."""
-    record = {}
-    for command_text, ready, marker, done, count, kind in HOLDS:
-        before = gauges(machine)
-        machine.settle()
-        start_at = machine.sequence()
-        machine.qmp.type_line(command_text + " &")
-        wait_line(machine, start_at, (ready,), 300)
-        time.sleep(1.0)
-        during = gauges(machine)
-        machine.qmp.type_line("rm /work/.astra/" + marker)
-        wait_line(machine, start_at, (done,), 120)
-        record[kind] = {name: (during[name] - before[name]) / count
-                        for name in GAUGES}
-        if record[kind]["astra-host-fds"] < 0.9:
-            fail("%s: %r descriptors per object" % (kind, record[kind]))
-    with open("/tmp/fs-budget-beast.json", "w") as out:
-        json.dump(record, out, indent=1, sort_keys=True)
-    print("PASS budgets %s" % json.dumps(record, sort_keys=True))
-
-
-def check_flood(machine, mount):
-    """A handle flood is refused at the scope's per-process limit, and the
-    terminal and the desktop still answer (FS38)."""
-    machine.settle()
-    start_at = machine.sequence()
-    machine.qmp.type_line("fssem --flood /work/flood %d &" % OWNER_FILES)
-    lines = wait_line(machine, start_at, ("FSSEM FLOOD n=",), 600)
-    print([line for line in lines if line.startswith("FSSEM FLOOD")][-1])
-    lines, status = command(machine, "ls /work > /dev/null", 10, 51)
-    if status != 0:
-        fail("the terminal under a flood: %r" % lines[-5:])
-    before = machine.sequence()
-    machine.qmp.double_click(*machine.desktop_icon())
-    if machine.wait_for_text(terminal.BANNER, 60, before)[0] is None or \
-            not machine.wait_for_ready(60, before):
-        fail("the desktop could not open a terminal under a flood")
-    machine.qmp.type_line("rm /work/.astra/fssem-flood.ready")
-    lines = wait_line(machine, start_at,
-                      ("FSSEM FLOOD PASS", "FSSEM FLOOD FAIL"), 120)
-    if "FSSEM FLOOD PASS" not in lines:
-        fail("flood: %r" % [line for line in lines
-                            if line.startswith("FSSEM FLOOD")])
-    print("PASS flood")
-
-
-CHECKS["budgets"] = check_budgets
-CHECKS["flood"] = check_flood
-```
-
-The `rm` is typed into the second terminal, which has focus. The flood
-reads the marker through its own lane, so it does not matter which terminal
-removes the file. Its verdict is a line (`FSSEM FLOOD PASS` or `FAIL`),
-because a background job's exit status is not reported where the gate reads
-it. The flood's process is limited per scope, so the second terminal, a
-different process, opens freely: that is FS38's "the desktop still
-answers".
-
-`fs-baseline.py` gets a `--budget` flag. When it is given, it runs this
-after opening Terminal:
-
-```python
-BOARD_HOLDS = (("file", 1000), ("dir", 200))
-
-
-def budget(pid, output):
-    record = {"identity": identity(), "holds": {}}
-    for kind, count in BOARD_HOLDS:
-        ready = os.path.join(ASTRA, "fsbench-hold-%s.ready" % kind)
-        before = host_sample(pid)
-        if not rfb("--keys", "fsbench --hold %s %d\n" % (kind, count)):
-            raise SystemExit("fs-baseline: typing failed")
-        deadline = time.monotonic() + 300
-        while not os.path.exists(ready):
-            if time.monotonic() > deadline:
-                raise SystemExit("fs-baseline: hold %s never ready" % kind)
-            time.sleep(0.2)
-        time.sleep(1.0)
-        during = host_sample(pid)
-        os.unlink(ready)
-        time.sleep(5.0)
-        record["holds"][kind] = {
-            "count": count,
-            "rss_kib_per_object":
-                (during["rss_kib"] - before["rss_kib"]) / count,
-            "fds_per_object": (during["fds"] - before["fds"]) / count,
-            "mem_available_kib": during["mem_available_kib"],
-        }
-    with open(output, "w") as out:
-        json.dump(record, out, indent=1, sort_keys=True)
-    print("fs-baseline: wrote %s" % output)
-```
-
-In `main`: `parser.add_argument("--budget", action="store_true")`, and
-after `pid = qemu_pid()`, `if arguments.budget: budget(pid, arguments.output); return`.
-
-- [ ] **Step 8: Measure and set the board's bounds**
-
-On beast: sync, run the kernel tests, build userspace and `sw/boot`, build
-QEMU, rebuild images, and run `test-hostfs.py` and `test-fs-semantics.py`.
-Expected:
-- the kernel suites PASS;
-- `PASS limits`, `PASS scope-files`;
-- `FSSEM PASS many-lanes`;
-- `PASS budgets {...}`, `PASS flood`.
-
-On the board, after publishing this build as Task 1 Step 7 does:
-
-```bash
-ssh root@192.168.1.52 "python3 /var/lib/astra/current/bin/fs-baseline.py budget /data/fs-budget.json --budget --restart"
-scp root@192.168.1.52:/data/fs-budget.json /mnt/Documents/astra68/builds/fs-phase1-budget-$(date +%Y%m%d)-$(git rev-parse --short HEAD)/de25.json
-cp /tmp/fs-budget-beast.json /mnt/Documents/astra68/builds/fs-phase1-budget-$(date +%Y%m%d)-$(git rev-parse --short HEAD)/beast.json
-```
-
-Run the `scp` and `cp` from `beast`, which reaches both the board and the
-NAS. The bounds follow from the measurement and from the host budget for
-provider objects, 64 MiB (decision 2026-10-07):
-
-```bash
-python3 - <<'EOF'
-import json, glob
-record = json.load(open(sorted(glob.glob(
-    "/mnt/Documents/astra68/builds/fs-phase1-budget-*/de25.json"))[-1]))
-budget_kib = 64 * 1024
-for kind in ("file", "dir"):
-    per = max(record["holds"][kind]["rss_kib_per_object"], 0.25)
-    print(kind, int(budget_kib / per))
-EOF
-```
-
-Write the two numbers into `emu/qemu/run-arty.sh`, beside `HOSTFS_ROOT`:
-
-```sh
-# Provider admission (FS37): measured per-object host cost on the DE25
-# (fs-phase1-budget-<date>-<sha>/de25.json) against a 64 MiB budget for
-# provider objects. Override in the environment.
-HOSTFS_MAX_DESCRIPTORS=${ASTRA_HOSTFS_MAX_DESCRIPTORS:-<file count>}
-HOSTFS_MAX_DIRECTORIES=${ASTRA_HOSTFS_MAX_DIRECTORIES:-<dir count>}
-```
-
-Pass them in the `env` list that starts QEMU
-(`ASTRA_HOSTFS_MAX_DESCRIPTORS="$HOSTFS_MAX_DESCRIPTORS" \` and the
-directory one, after `ASTRA_HOSTFS_ROOT=`).
-- The two counts are the printed numbers, not values chosen here.
-- The comment names the evidence directory, so the numbers can be traced.
-- Update `emu/qemu/test-run-arty.py` if it asserts the exact QEMU
-  environment.
-
-- [ ] **Step 9: Perturb, full suite, commit**
-
-Perturb. Restore and re-sync each time.
-
-1. **QEMU per-scope limit.** Skip the `scope.files` check. Expected: the
-   flood runs to the global bound, `flood` fails with
-   `FSSEM FLOOD FAIL n=<more than 1024>`, and `test-hostfs.py` fails in
-   `scope_files`.
-2. **QEMU global bound.** Skip the descriptor check in
-   `astra_host_insert_file`. Expected: `test-hostfs.py` fails in `limits` at
-   the `STATUS_LIMIT` assertion.
-3. **The lane cap.** Set `ASTRA_DMA_BUFFER_MAX` back to 4. Expected:
-   `test_dma_buffers_fill_the_window` fails. Rebuilt end to end,
-   `many-lanes` fails "lane 4: 50 failed stats" (or a higher lane number).
-4. **The limit is fixed before binding.** Let `HOST_SCOPE_LIMIT` succeed on
-   a bound scope. Expected: `test_host_scope` fails at the `BUSY`
-   assertion.
-
-`~/astra-mg/t9-verify.sh 2>&1 | tee /tmp/t9-task11.log`. Expected: green.
-
-```bash
-git add sw/include/astra sw/kernel ndk/include/astra/runtime.h sw/userspace/runtime \
-  sw/userspace/kits emu/qemu/qemu-9.2/hw/m68k/astra68.c sw/userspace/vfs \
-  sw/userspace/services/hostfs/main.c emu/qemu/astra_image.py \
-  sw/userspace/commands/fsbench/fsbench.c sw/userspace/commands/fssem/fssem.c \
-  sw/userspace/commands/Makefile emu/qemu/fs-baseline.py \
-  emu/qemu/test-fs-semantics.py emu/qemu/test-hostfs.py emu/qemu/run-arty.sh \
-  emu/qemu/test-run-arty.py
-git commit -m "feat(fs): measured host budgets; per-scope and provider admission; 16 DMA buffers per process (FS37, FS38)"
-```
-
----
+Kernel and provider admission plus guest exhaustion/recovery correctness pass.
+Isolated DE25 memory calibration and measured launcher defaults pass. Performance
+qualification (Tasks 12b/13) remains deferred.
+
+Current contract:
+
+- Syscall ABI `0x00010043`, `HOST_SCOPE_LIMIT` 112, Runtime 1.16. ADMINISTER
+  sets a scope's owner handle/token limit (zero unlimited); INVALID_ARGUMENT
+  while a channel carries it. Host protocol `0x00010015`, channel config 4,
+  `scope_files` at byte 48. All producers, consumers, exports and fixtures agree.
+- Kernel scope records use reusable metadata pages instead of a fixed pool.
+  Allocation failure rolls back; channel bindings retain stable scope pointers.
+  Sixteen DMA records use first-fit pages in the unchanged 32 MiB window;
+  each buffer remains at most 8 MiB. The process size guard still passes.
+- QEMU reserves Linux descriptor/DIR capacity before create/truncate. Aliases
+  and receipts retain one shared physical description. Sessions, live/lost
+  handles and receipts also share the configured global object bound, so
+  reset cannot create unbounded tombstones. Failed adoption preserves its
+  receipt. Owner/scope quotas count handles and receipts, including loss.
+- Positive uint32 decimal environment settings bound descriptors and DIRs;
+  explicit limits are clamped to RLIMIT_NOFILE minus 256 and DIRs to descriptors.
+  The launcher defaults to 2048 objects/descriptions and 1024 DIRs. QOM reports
+  descriptors, DIRs, objects, RSS and host FD count.
+- HostFS CONFIG supplies `owner_files 1024`, `owner_sessions 64` and
+  `queue_messages 16`; no grant-count setting. Limits are stamped before
+  binding and recovery. Control-session caps apply per owner to each native
+  volume service, including derived grants; resumed HELLO consumes no slot.
+- Process cache initialization/growth is locked; cells stay stable and lost
+  cells remain borrowed until quiescent process teardown. Facade close only
+  detaches its facade. Features/activity are atomic without a target ABI
+  layout change. Fork/exec import/export requires quiescence.
+
+Evidence: `/mnt/Documents/astra68/builds/fs-phase1-task11-20261011/` on Beast.
+
+- `host-1`: new scope/DMA checks passed, then obsolete four-buffer fixture
+  and missing pthread feature macro failed. Target kernel build/size passed.
+- `host-2`: kernel and VFS hosts pass, including 96 scopes, allocation
+  rollback, 16 DMA buffers, hole reuse, concurrent first use and facade lifetime.
+- `native-1`: invalid planned BUSY enum rejected. Existing INVALID_ARGUMENT
+  now expresses bound-scope refusal.
+- `native-2/3`: kernel/VFS/Supervisor/POSIX hosts and VFS ASan/UBSan pass.
+  Obsolete image assertions (no HostFS settings/no CONFIG grant) fail and
+  are updated to check the complete new contract.
+- `native-4`: full MC68040/QEMU build, image contracts, raw provider admission,
+  twelve resets and NDK checks pass.
+- `native-5`: full build/raw/NDK, all 25 guest cases and memory probes pass;
+  flood orchestration fails on nonexistent `/dev/null`. Fixture uses ordinary
+  `ls /work` instead. The failure remains retained.
+- `native-6`: all 25 cases; simultaneous 16 lanes; 64-session owner isolation;
+  1024 native handles and refusal-before-mutation; 1000-file, 200-DIR and
+  16-control-session holds; full-quota reset/lost identities; shell/desktop;
+  lane509/500 idle0; provider reset after585; HostFS death after703 with managed
+  restart/fresh Terminal; provider fsck. Exact source archive and seven artifact
+  hashes retained. It uses native-5's QEMU and target libraries plus updated
+  fssem/gate. A later include-only QEMU warning fix awaits the next build.
+
+Memory probes return to 23 host FDs, five provider descriptors and one DIR.
+Native-6 observed incremental whole-QEMU RSS of 2.74 KiB/file and 17.18 KiB/DIR;
+native-5 observed 4.368/17.0. These include guest workload memory and are upper
+footprint observations, not isolated provider allocation sizes or DE25 limits.
+Control sessions share the grant's provider session and add no Linux descriptor.
+
+Remaining:
+
+- [x] Calibrate conservative simultaneous descriptor/DIR bounds on the DE25
+  against 64 MiB incremental provider memory; retain AArch64 evidence and
+  wire measured values into the board launcher. Use an isolated test instance,
+  preserve the currently running unrelated release.
+- [x] Negative HostFS settings fixtures and complete NDK HTML/PDF validation
+  pass in Task 12 native-3.
+- [x] Task 12 bootstrap and final broad integration pass in native-16 and
+  integration-1. Parallel SDL timer passes unchanged; its earlier failure is retained.
+
+Isolated Task 12 `de25-calibration-2` passes raw provider gates as UID/GID 65534,
+with 32 MiB qtest RAM and no changes to the live release. FD/description/DIR
+counts return to baseline after 1000-file/200-DIR holds. DIR RSS growth is
+30.72 KiB each; file RSS reuses earlier allocations and is not zero allocation.
+Conservative 8 KiB per object/description plus 40 KiB per DIR totals 56 MiB
+at the selected launcher limits, below the combined 64 MiB allowance.
+The full launcher regression passes after fixing Bash EXIT-trap bare `return`
+in `process_alive`, which inherited interruption status and skipped termination.
+
+Atomic native write bounds are staged at Filesystem ABI 11/STOR 35/Host
+0x00010015. Every write takes exclusive `max_end` (`UINT64_MAX` unbounded),
+carried through inline/bulk/direct transports and checked with current position
+or EOF under the existing backend lock. POSIX alone supplies RLIMIT_FSIZE and
+EFBIG/SIGXFSZ policy. The new 26th guest case initially fails without identifying
+the operation; native-12 identifies signal installation before any write. It
+checks short/zero/positioned writes, signal delivery and independent append
+descriptions. Host VFS/POSIX and full ext4 mutation/ASan/UBSan gates pass.
+The target build exposed shared read-only callback migration and the ext4
+fixture's older STAT_AT signature; both are corrected. A further ext4 sparse
+positioned-write audit reused existing tail-zeroing and block materialization.
+Native-16 passes kernel/VFS/POSIX/ext4/settings/Supervisor host and sanitizer
+checks, MC68040/QEMU build, raw provider, NDK and all 26 guest cases plus
+budgets/flood/lane/reset/death/managed restart/fsck. Bootstrap match/absence/
+mismatch and DE25 cross-build pass. Native-16 finishes exit zero with 164 source
+hashes unchanged. DE25 provider qualification passes in `de25-calibration-3`
+as UID/GID 65534, including bounded concurrent writes, confinement, quotas,
+twelve resets and bootstrap handover. File/DIR holds return all counters to
+baseline; measured DIR growth is 30.08 KiB each. Its raw qtest write diagnostic
+includes harness overhead and is not native performance qualification.
+Integration-1 passes the final broad run: all 31 gates, desktop applications,
+provider index and events, NDK/docs and provider coverage; all 164 source hashes
+remain unchanged and the runner exits zero. The parallel SDL timer passes the
+unchanged threshold (1.051856 ms), while the earlier Task 7 failure is retained.
+Tasks 5–12 correctness is qualified. Task 12b and Task 13 remain open.
+
+The guest signal test also exposes native fork correctness defects: signal
+configuration rejected a COW stack; retirement rejected suspended READY
+threads; parent COW writes left the surviving original page owned by the parent.
+The fixes reuse writable-user-buffer preparation, shared thread retirement and
+existing COW ownership transfer. Host regressions cover both writer directions,
+surviving data and complete memory recovery; the 26-case guest gate passes.
+POSIX size-limit refusals use raise(SIGXFSZ), avoiding recursive bounded PROC
+control writes through kill(). Native-11 through native-15 failures and the
+reaper debugger diagnosis remain retained under the Task 12 evidence directory.
 
 ### Task 12: Bootstrap availability (D10, FS09)
 
@@ -15745,6 +12416,17 @@ git commit -m "feat(supervisor): read the startup manifest through the Linux pro
 ---
 
 ### Task 12b: Warm commands run on the vCPU (fast path; decision 2026-10-08)
+
+**Superseded proposal, 2026-10-11:** the ledger records why the current
+locking and metadata operations cannot promise nonblocking vCPU execution.
+The retained implementation combines ordinary non-mutating Linux path opens
+inside the canonical resolver on workers, with ordered-walk fallback and
+held-base ancestry checks. Host/sanitizer/raw confinement/race tests pass;
+five interleaved stat/read probes meet the unchanged latency and structural
+budgets. No inline execution count is claimed or required for this revised
+strategy. The proposal below remains historical rationale; its code and
+inline-count acceptance line are not current implementation instructions.
+Task 13's full five-pair workload budgets remain binding.
 
 With the lane, the guest's share of a warm `stat` is the same as the old
 direct path's. Two thirds of its 35 µs is the host handoff:
@@ -16457,7 +13139,7 @@ git commit -m "docs(fs): Phase 1 closed; DE25 and QEMU measured against the base
 |---|---|---|
 | Raw-request confinement | Task 3b (kernel binding, provider enforcement), Task 4 (sessions, creator check), Task 5 (grant ports, scopes per grant) | `test_host_scope`; `test-hostfs.py` `scopes`, `scope_revocation`, `claims_and_sessions`; fssem `raw-lane`, `raw-readonly`, `raw-cross-grant`, `raw-subroot`, `raw-delegate`, `raw-retire` (raw lanes and raw port messages, no Kit) |
 | Symlink traversal | Task 6 | `test-astra68-resolve` (host); fssem `symlink-in-volume`, `symlink-cross-volume`, `dotdot-at-root`, `escape-relative`, `link-edges` |
-| cwd/rename | Task 9 | fssem `cwd-rename`; `test-hostfs.py` `paths` |
+| cwd/rename | Task 9 | fssem `cwd-identity`; `test-hostfs.py` `paths` |
 | Same-volume aliases | Task 7 | fssem `alias-identity`; `raw-subroot` identity equality |
 | Shared descriptions | Task 8 | fssem `shared-description`, `append-race`, `exec-inherit`; `test-hostfs.py` `descriptions` |
 | Provider loss | Task 10 | `test-hostfs.py` `loss`; gate checks `provider-reset`, `hostfs-kill` (with the holders' restart) |
@@ -16572,6 +13254,12 @@ turns its new test red.
 
 ### Gaps, stated rather than hidden
 
+This retained draft list predates final review. Item 6 is superseded by
+Filesystem ABI 12/STOR 36: explicit directory-relative namespace escapes now
+use the same native resolver as absolute/CWD operations. Item 10's inline
+`RESOLVE_CACHED` strategy was replaced by the ledgered worker-only resolver
+optimization. The execution status above and current API documentation govern.
+
 1. **Storage-protocol long paths** (FS18, D7) are deferred to Phase 2
    (Decisions). The host wire takes 4096-byte paths from Task 4, but client
    requests stay at 192 bytes. A cwd with a longer path answers
@@ -16601,8 +13289,11 @@ turns its new test red.
 10. **`RESOLVE_CACHED` in the resolver** is trusted to the kernel's
     contract. Without root no test can drop the dentry cache, so a
     resolver that ignored the flag would pass every gate (Task 12b).
-11. **The kernel scope pool is 64.** HostFS caps its grants at 48. A
-    process holds at most eight distinct scopes on one thread's lane.
+11. **At Task 5 the kernel scope pool is 64, shared system-wide.** HostFS's
+    grant table grows on demand, bounded by the wait-set ABI and memory;
+    it has no 48-grant ceiling. Task 11 must remove the fixed scope pool
+    and enforce per-holder admission. One thread's lane carries at most
+    eight distinct scopes.
 
 ### Placeholder scan
 
@@ -16624,25 +13315,33 @@ on purpose, each with the command that produces it:
   `ASTRA_HOST_FS_MAX` follows the last. `ASTRA_HOST_METRICS_VERSION` is 3,
   4 and 5 at Tasks 4, 8 and 9.
 - **Host transport:** `0x0001000d` (3b), `0x0001000e` (4), `0x0001000f`
-  (6), `0x00010010` (8), `0x00010011` (9). The capability bits are
+  (6), `0x00010010` (8 descriptions), `0x00010011` (8 directory batches),
+  `0x00010012` (9), `0x00010013` (10), `0x00010014` (11) and
+  `0x00010015` (atomic write bounds). The capability bits are
   `FS_SCOPE` 10, `FS_SESSIONS` 11, `FS_RESOLVES` 12, `FS_DESCRIPTIONS` 13
-  and `FS_PATHS` 14. Task 12 adds a volume and no version.
-- **Channel configuration:** 2 (3b: scope words, ATTACH, DETACH) and 3
-  (11: `scope_files`).
+  `FS_DIRECTORY_BATCH` 14 and `FS_PATHS` 15. The optional SYSTEM volume
+  does not change the version.
+- **Channel configuration:** 2 (3b: scope words, ATTACH, DETACH), 3
+  (4: the provider flag, review I1) and 4 (11: `scope_files`).
 - **Kernel ABI:** syscalls 109 `HOST_SCOPE_CREATE`, 110 `HOST_SCOPE_REVOKE`,
   111 `HOST_SCOPE_ATTACH` (3b) and 112 `HOST_SCOPE_LIMIT` (11);
   `KERNEL_OBJECT_HOST_SCOPE` 17; `ASTRA_RIGHT_HOST_SCOPE` (1u << 9);
-  `ASTRA_DMA_BUFFER_MAX` 16 (11). `runtime.library` 1.14 (3b) and 1.15
-  (11).
+  `ASTRA_DMA_BUFFER_MAX` 16 (11). `runtime.library` 1.14 (3b), 1.15 (5:
+  `astra_port_send_rights`) and 1.16 (11). Syscall ABI 0x00010042 (5: send
+  dispositions), then 0x00010043 (11: scope limits).
 - **Storage protocol:** 27 (3), 28 (3b), 29 (5), 30 (6), 31 (7), 32 (8),
-  33 (9).
-  - Operation codes: 36 (`GRANT_DERIVE`), 37-39 (`SEEK`, `SHARE`,
-    `ADOPT`), 40 (`DIRECTORY_PATH`).
+  33 (9), 34 (10), 35 (atomic write bounds), and 36 (retained-directory
+  LOOKUP; current minimum 36).
+  - Operation codes: 36 (`GRANT_DERIVE`), 37 (`LOOKUP`), 38-40 (`SEEK`,
+    `SHARE`, `ADOPT`), 41 (`FILE_FLAGS`) and 42 (`DIRECTORY_PATH`).
   - HELLO feature bits 0-4: `GRANTS`, `RESOLVES_PATHS`, `NODE_META`,
     `DESCRIPTIONS` and `DIRECTORY_PATH`, at Tasks 5, 6, 7, 8 and 9.
   - Grant rights: `READ`, `WRITE`, `DELEGATE` (bits 0-2).
-- **Statuses:** `ESCAPED` 20 (Task 6), `LOST` 21 (Task 10).
-- **Filesystem Kit:** 5 (3), 6 (3b), 7 (5), 8 (7), 8.1 (8), 8.2 (9).
+- **Statuses:** `ESCAPED` 20 (Task 6), `LOST` 21 (Task 10),
+  `FILE_TOO_LARGE` 22 (atomic write bounds).
+- **Filesystem library ABI:** 5 (3), 6 (3b), 7 (5), 8 (7), 9 (8),
+  10 (9–10), 11 (atomic write bounds), 12 (directory-relative namespace
+  context); current Filesystem.kit version 9.0.0.
 - **Shared names:**
   - `astra_host_session_file(s, owner, session_id, handle)`,
     `astra_host_publish_open(s, owner, session_id, command, fd, flags)`
@@ -16679,7 +13378,7 @@ These are facts the plan uses but could not check without building:
 8. `astra_vfs_host_transport_destroy` releases the channel slot as well as
    the DMA area (Task 12; with one channel per thread, the supervisor's
    later lane depends on it).
-9. The kernel's in-use status is named `ASTRA_SYSCALL_BUSY` (Task 11).
+9. The kernel's in-use status is named `ASTRA_SYSCALL_INVALID_ARGUMENT` (Task 11).
 10. The kernel fixture can back an 8 MiB DMA buffer (Task 11's window
     test).
 

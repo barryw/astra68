@@ -3,6 +3,8 @@
 # usage: fs-gates.sh QEMU ROM IMAGE   -- run from the repository root on beast
 set -u
 Q=$1 R=$2 I=$3
+make -C emu/qemu/tests test > /tmp/mg-fs-resolve.log 2>&1
+echo "EXIT=$?" >> /tmp/mg-fs-resolve.log
 bash tools/tests/test_astra_qemu_root_helper.sh /usr/local/sbin/astra-qemu-root \
     > /tmp/mg-fs-root-helper.log 2>&1
 echo "EXIT=$?" >> /tmp/mg-fs-root-helper.log
@@ -25,7 +27,7 @@ python3 emu/qemu/test-host-channel-userspace.py "$Q" "$R" /tmp/mg-fs-hostbench.i
     >> /tmp/mg-fs-hostbench.log 2>&1
 echo "EXIT=$?" >> /tmp/mg-fs-hostbench.log
 rm -f /tmp/mg-fs-hostbench.img
-for f in fs-root-helper fs-hostfs fs-semantics fs-stress fs-hostbench; do
+for f in fs-resolve fs-root-helper fs-hostfs fs-semantics fs-stress fs-hostbench; do
     echo "== $f"
     tail -4 /tmp/mg-$f.log
 done

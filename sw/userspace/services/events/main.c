@@ -244,7 +244,7 @@ snapshot_write(SnapshotFile *snapshot, const void *buffer, uint32_t length)
         uint32_t moved = 0u;
 
         if (astra_filesystem_write_at(
-                &snapshot->file, done, in + done, length - done, &moved) !=
+                &snapshot->file, done, UINT64_MAX, in + done, length - done, &moved) !=
                 ASTRA_VFS_OK || moved == 0u) {
             return 0;
         }
@@ -473,7 +473,7 @@ log_append(void *context, const char *name, const void *bytes,
     while (done < length) {
         uint32_t moved = 0u;
 
-        if (astra_filesystem_write(&file, in + done, length - done,
+        if (astra_filesystem_write(&file, UINT64_MAX, in + done, length - done,
                                    &moved) != ASTRA_VFS_OK || moved == 0u)
             break;
         done += moved;
@@ -704,7 +704,7 @@ log_state_save(void)
     while (done < length) {
         uint32_t moved = 0u;
 
-        if (astra_filesystem_write(&file, log_state_bytes + done,
+        if (astra_filesystem_write(&file, UINT64_MAX, log_state_bytes + done,
                                    length - done, &moved) != ASTRA_VFS_OK ||
             moved == 0u)
             break;

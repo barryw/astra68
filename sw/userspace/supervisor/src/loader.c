@@ -1,4 +1,5 @@
 #include <loader.h>
+#include <bootstrap_host.h>
 #include <launch_report.h>
 #include <proc_tree.h>
 #include <service_definition_store.h>
@@ -60,11 +61,12 @@ enum SupervisorProcessAction {
 static uint32_t service_handles[ASTRA_HANDLE_COUNT_MAX];
 static char service_names[ASTRA_HANDLE_COUNT_MAX]
                          [ASTRA_CAPABILITY_NAME_MAX];
-static AstraVfsClient service_clients[ASTRA_HANDLE_COUNT_MAX];
+static AstraVfsClient *service_clients[ASTRA_HANDLE_COUNT_MAX];
 static uint32_t service_is_vfs[ASTRA_HANDLE_COUNT_MAX];
 static char service_owner_names[ASTRA_HANDLE_COUNT_MAX][ASTRA_VFS_NAME_MAX];
 static uint32_t supervisor_process_handle;
 static uint32_t service_count;
+static void unpublish_owner(const char *owner);
 static uint32_t event_target_receive;
 static uint32_t event_target_send;
 static uint32_t event_control_handle;
@@ -238,7 +240,7 @@ static uint32_t copy_default(const char *defaults, const char *store_path,
         uint32_t chunk = length - written > ASTRA_VFS_IO_MAX ?
             ASTRA_VFS_IO_MAX : length - written;
 
-        status = astra_vfs_write(client, file, written, bytes + written,
+        status = astra_vfs_write(client, file, written, UINT64_MAX, bytes + written,
                                  chunk, &moved);
         if (status == ASTRA_VFS_OK && moved == 0u)
             status = ASTRA_VFS_ERR_IO;
@@ -388,7 +390,7 @@ static uint32_t service_file_write(const char *name, const char *leaf,
     status = astra_vfs_mkdir_mode(client, directory, 0700u);
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS)
         return status;
-    status = astra_vfs_unlink(client, temporary);
+    status = astra_vfs_unlink(client, temporary, 0u);
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_NOT_FOUND)
         return status;
     status = astra_vfs_open_mode(
@@ -399,7 +401,7 @@ static uint32_t service_file_write(const char *name, const char *leaf,
     while (status == ASTRA_VFS_OK && used < length) {
         uint32_t moved = 0u;
 
-        status = astra_vfs_write(client, file, used, text + used,
+        status = astra_vfs_write(client, file, used, UINT64_MAX, text + used,
                                  length - used, &moved);
         if (status == ASTRA_VFS_OK && moved == 0u)
             status = ASTRA_STATUS_IO;
@@ -416,7 +418,7 @@ static uint32_t service_file_write(const char *name, const char *leaf,
     if (status == ASTRA_VFS_OK)
         status = astra_vfs_rename(client, temporary, path);
     if (status != ASTRA_VFS_OK)
-        (void)astra_vfs_unlink(client, temporary);
+        (void)astra_vfs_unlink(client, temporary, 0u);
     return status;
 }
 
@@ -667,7 +669,8 @@ static void service_info(const AstraServiceDefinition *definition,
 
         for (uint32_t service = 0u; service < service_count; ++service)
             if (strcmp(service_names[service], name) == 0)
-                info->client_count += service_clients[service].session != 0u;
+                info->client_count += service_clients[service] != NULL &&
+                    service_clients[service]->session != 0u;
     }
 }
 
@@ -856,7 +859,7 @@ static int provider_enforced(uint32_t handle)
     for (uint32_t index = 0u; index < service_count; ++index)
         if (service_handles[index] == handle)
             return service_is_vfs[index] != 0u &&
-                   (service_clients[index].features &
+                   (service_clients[index]->features &
                     ASTRA_VFS_FEATURE_GRANTS) != 0u;
     return 0;
 }
@@ -1358,18 +1361,26 @@ static uint32_t publish(const SupervisorManifestPublication *publication,
         (void)astra_string_concat(service_owner_names[service_count],
                      sizeof(service_owner_names[service_count]), owner);
     if (publication->rights == 0u) {
+        service_clients[service_count] = NULL;
         service_is_vfs[service_count] = 0u;
         ++service_count;
         return ASTRA_STATUS_OK;
     }
-    client = &service_clients[service_count];
+    client = astra_runtime_callocate(1u, sizeof(*client));
+    if (client == NULL)
+        return ASTRA_STATUS_LIMIT;
     if (astra_vfs_host_port_connect(client,
                                     service_handles[service_count]) !=
             ASTRA_VFS_OK ||
         supervisor_vfs_register(client, handle) == 0u ||
         astra_assign_bind(supervisor_assigns(), publication->name, handle,
-                          publication->rights, "") != ASTRA_VFS_OK)
+                          publication->rights, "") != ASTRA_VFS_OK) {
+        supervisor_vfs_unregister(client);
+        (void)astra_vfs_disconnect(client);
+        astra_runtime_deallocate(client);
         return SUPERVISOR_LOADER_FAIL_PUBLISH;
+    }
+    service_clients[service_count] = client;
     service_is_vfs[service_count] = 1u;
     ++service_count;
     return ASTRA_STATUS_OK;
@@ -1526,6 +1537,8 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
     const AstraLaunchArguments *launch_arguments = arguments;
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX];
     uint32_t grant_count = 0u;
+    char (*namespace_names)[ASTRA_CAPABILITY_NAME_MAX] = NULL;
+    uint32_t namespace_count = 0u;
     uint32_t receive = 0u;
     uint32_t send = 0u;
     uint32_t shutdown_send = 0u;
@@ -1584,6 +1597,34 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
     }
     status = build_grants(startup, entry, bundle_root, send, grants,
                           &grant_count);
+    if (status == ASTRA_STATUS_OK && service != NULL && grant_count != 0u) {
+        namespace_names = astra_runtime_callocate(grant_count,
+                                                   sizeof(*namespace_names));
+        if (namespace_names == NULL)
+            status = ASTRA_STATUS_LIMIT;
+        else for (uint32_t index = 0u; index < grant_count; ++index) {
+            uint32_t source = grants[index].handle;
+
+            if ((grants[index].flags & ASTRA_CAPABILITY_FLAG_NAMESPACE) == 0u)
+                continue;
+            for (uint32_t at = 0u; at < narrowed_count; ++at)
+                if (narrowed[at].handle == source) {
+                    source = narrowed[at].source;
+                    break;
+                }
+            for (uint32_t at = 0u; at < service_count; ++at) {
+                uint32_t known;
+
+                if (!service_is_vfs[at] || service_handles[at] != source)
+                    continue;
+                for (known = 0u; known < namespace_count; ++known)
+                    if (strcmp(namespace_names[known], service_names[at]) == 0)
+                        break;
+                if (known == namespace_count)
+                    strcpy(namespace_names[namespace_count++], service_names[at]);
+            }
+        }
+    }
     uint64_t load_start = astra_clock_monotonic();
     uint32_t load_us;
     uint64_t ready_start;
@@ -1635,6 +1676,7 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
             (void)astra_close(child_wait);
         if (child != 0u)
             (void)astra_close(child);
+        astra_runtime_deallocate(namespace_names);
         return status;
     }
     ready_start = astra_clock_monotonic();
@@ -1655,6 +1697,7 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
         if (child_wait != 0u)
             (void)astra_close(child_wait);
         (void)astra_close(child);
+        astra_runtime_deallocate(namespace_names);
         return status;
     }
     for (uint32_t index = 0u;
@@ -1665,8 +1708,12 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
             astra_capability_name_equal(entry->serves[index].name,
                                         ASTRA_CAPABILITY_EVENT_CONTROL))
             event_control_handle = published[index];
+        if (status == ASTRA_STATUS_OK)
+            published[index] = 0u;
     }
     if (status != ASTRA_STATUS_OK) {
+        if (service != NULL)
+            unpublish_owner(service->name);
         (void)astra_close(shutdown_send);
         for (uint32_t index = 0u; index < expected_handles; ++index)
             if (published[index] != 0u)
@@ -1674,8 +1721,12 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
         if (child_wait != 0u)
             (void)astra_close(child_wait);
         (void)astra_close(child);
+        astra_runtime_deallocate(namespace_names);
         return status;
     }
+    process_table.records[process_count].namespace_names = namespace_names;
+    process_table.records[process_count].namespace_count = namespace_count;
+    process_table.records[process_count].namespace_lost = 0u;
     process_table.records[process_count].resident = entry->resident;
     process_table.records[process_count].shutdown_send = shutdown_send;
     process_table.records[process_count].shutdown_managed =
@@ -1754,15 +1805,26 @@ static void unpublish_owner(const char *owner)
 {
     uint32_t index = 0u;
 
+    if (owner == NULL || owner[0] == '\0')
+        return;
     while (index < service_count) {
         if (strcmp(service_owner_names[index], owner) != 0) {
             ++index;
             continue;
         }
         if (service_is_vfs[index] != 0u) {
+            for (uint32_t slot = 0u; slot < process_count; ++slot) {
+                SupervisorProcessRecord *record = &process_table.records[slot];
+
+                for (uint32_t at = 0u; at < record->namespace_count; ++at)
+                    if (strcmp(record->namespace_names[at], service_names[index]) == 0)
+                        record->namespace_lost = 1u;
+            }
             (void)astra_assign_unbind(supervisor_assigns(),
                                       service_names[index]);
-            (void)astra_vfs_disconnect(&service_clients[index]);
+            supervisor_vfs_unregister(service_clients[index]);
+            (void)astra_vfs_disconnect(service_clients[index]);
+            astra_runtime_deallocate(service_clients[index]);
         }
         if (service_handles[index] == event_control_handle)
             event_control_handle = 0u;
@@ -1782,6 +1844,7 @@ static void unpublish_owner(const char *owner)
 
 static void remove_process_slot(uint32_t slot)
 {
+    astra_runtime_deallocate(process_table.records[slot].namespace_names);
     if (process_table.records[slot].gui_session != 0u)
         (void)astra_close(process_table.records[slot].gui_session);
     (void)astra_close(process_table.records[slot].shutdown_send);
@@ -1813,6 +1876,27 @@ static uint32_t stop_process_slot(uint32_t slot, uint32_t action)
         return status;
     }
     return ASTRA_STATUS_OK;
+}
+
+/* Repair managed holders only after every publication they held is back. */
+static void restart_namespace_holders(void)
+{
+    for (uint32_t slot = 0u; slot < process_count; ++slot) {
+        SupervisorProcessRecord *record = &process_table.records[slot];
+        uint32_t at;
+
+        if (!record->namespace_lost || record->action != SUPERVISOR_PROCESS_ACTION_NONE)
+            continue;
+        for (at = 0u; at < record->namespace_count; ++at)
+            if (astra_assign_lookup(supervisor_assigns(), record->namespace_names[at]) == NULL)
+                break;
+        if (at == record->namespace_count) {
+            uint32_t status = stop_process_slot(slot, SUPERVISOR_PROCESS_ACTION_RESTART);
+
+            if (status != ASTRA_STATUS_OK)
+                (void)astra_log_failure("namespace holder restart", status);
+        }
+    }
 }
 
 static void remove_paused_name(uint32_t slot)
@@ -2015,9 +2099,9 @@ static uint32_t dynamic_definition_remove(const char *name)
         !astra_string_concat(directory, sizeof(directory), "/") ||
         !astra_string_concat(directory, sizeof(directory), name))
         return ASTRA_STATUS_LIMIT;
-    status = astra_vfs_unlink(client, path);
+    status = astra_vfs_unlink(client, path, 0u);
     if (status == ASTRA_VFS_OK)
-        (void)astra_vfs_unlink(client, directory);
+        (void)astra_vfs_unlink(client, directory, ASTRA_VFS_UNLINK_DIRECTORY);
     return status;
 }
 
@@ -2794,9 +2878,12 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
                                           &manifest_length);
     if (status != ASTRA_VFS_OK)
         return ASTRA_STATUS_NOT_FOUND;
-    status = supervisor_manifest_parse(manifest_text, manifest_length,
-                                       manifest) ? ASTRA_STATUS_OK :
-                                       SUPERVISOR_LOADER_FAIL_MANIFEST;
+    /* Parsing tokenizes this buffer in place; compare the original bytes first. */
+    status = supervisor_bootstrap_probe(startup, manifest_text, manifest_length);
+    if (status == ASTRA_STATUS_OK)
+        status = supervisor_manifest_parse(manifest_text, manifest_length,
+                                           manifest) ? ASTRA_STATUS_OK :
+                                           SUPERVISOR_LOADER_FAIL_MANIFEST;
     astra_runtime_deallocate(manifest_text);
     if (status != ASTRA_STATUS_OK)
         return SUPERVISOR_LOADER_FAIL_MANIFEST;
@@ -2999,6 +3086,7 @@ uint32_t supervisor_loader_watch(const AstraStartupInfo *startup)
     uint32_t waits[ASTRA_WAIT_MULTIPLE_MAX];
 
     for (;;) {
+        restart_namespace_holders();
         uint32_t index = ASTRA_WAIT_INDEX_NONE;
         uint32_t status;
 

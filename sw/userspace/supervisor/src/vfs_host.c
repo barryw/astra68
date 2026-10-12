@@ -248,6 +248,17 @@ supervisor_vfs_register(AstraVfsClient *client, uint32_t port_handle)
 }
 
 void
+supervisor_vfs_unregister(AstraVfsClient *client)
+{
+    for (uint32_t index = 0u; index < vfs_clients.count; ++index)
+        if (vfs_clients.entries[index].client == client) {
+            vfs_clients.entries[index] =
+                vfs_clients.entries[--vfs_clients.count];
+            return;
+        }
+}
+
+void
 supervisor_vfs_set_activity(uint32_t activity)
 {
     for (uint32_t index = 0u; index < vfs_clients.count; ++index) {

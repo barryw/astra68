@@ -1,12 +1,16 @@
+#define _POSIX_C_SOURCE 200809L
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#include <sched.h>
 
 #include <astra/library.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
+#include <astra/vfs_path.h>
 #include <astra/vfs_provider_index.h>
 
 static uint32_t closes;
@@ -23,6 +27,8 @@ static uint32_t port_fork_rebinds;
 static uint32_t next_semaphore = 100u;
 static uint32_t seeds;
 static int fail_allocate;
+static int force_move;
+static size_t reallocated_size;
 static int whole_file_enabled;
 static uint32_t whole_file_moved;
 static uint64_t whole_file_node_size;
@@ -30,6 +36,8 @@ static const uint8_t *whole_file_bytes;
 static const uint8_t default_file_content[] = "hello";
 static const uint8_t *mock_file_content = default_file_content;
 static uint32_t mock_file_length = 5u;
+static const char *held_directory_path = "/before";
+static uint32_t held_directory_status;
 static AstraAssign mock_assigns[ASTRA_STARTUP_CAPABILITY_MAX + 16u];
 
 void *astra_runtime_allocate(size_t size)
@@ -38,7 +46,22 @@ void *astra_runtime_allocate(size_t size)
 }
 void *astra_runtime_reallocate(void *pointer, size_t size)
 {
-    return fail_allocate ? NULL : realloc(pointer, size);
+    void *grown;
+
+    if (fail_allocate)
+        return NULL;
+    if (force_move && pointer != NULL) {
+        grown = malloc(size);
+        if (grown == NULL)
+            return NULL;
+        memcpy(grown, pointer, size < reallocated_size ? size : reallocated_size);
+        free(pointer);
+    } else {
+        grown = realloc(pointer, size);
+    }
+    if (grown != NULL)
+        reallocated_size = size;
+    return grown;
 }
 void astra_runtime_deallocate(void *pointer) { free(pointer); }
 
@@ -109,7 +132,7 @@ const AstraAssign *astra_assign_lookup(const AstraAssignTable *table,
  * offer it. This suite exercises the resolver, not the transport, so both
  * refuse and the caller falls back to the library path it already covers.
  */
-uint32_t astra_assign_resolve(const AstraAssignTable *table,
+uint32_t astra_assign_resolve_raw(const AstraAssignTable *table,
                               const char *path,
                               uint32_t rights, uint32_t member, char *wire,
                               uint32_t capacity, const AstraAssign **assign)
@@ -143,20 +166,22 @@ uint32_t astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 
-uint32_t astra_vfs_port_read_bulk(AstraVfsClient *client, AstraVfsFile file,
-                                  uint64_t offset, void *buffer,
-                                  uint32_t length, uint32_t *moved)
+uint32_t astra_vfs_port_read_bulk_position(AstraVfsClient *client, AstraVfsFile file,
+                                  uint64_t offset, uint32_t flags, void *buffer,
+                                  uint32_t length, uint32_t *moved,
+                                  uint64_t *position)
 {
     (void)client; (void)file; (void)offset; (void)buffer; (void)length;
-    (void)moved;
+    (void)moved; (void)flags; (void)position;
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 
 uint32_t astra_vfs_port_write_bulk_position(
     AstraVfsClient *client, AstraVfsFile file, uint64_t offset,
-    uint32_t flags, const void *buffer, uint32_t length, uint32_t *moved,
+    uint32_t flags, uint64_t max_end, const void *buffer, uint32_t length, uint32_t *moved,
     uint64_t *position)
 {
+    (void)max_end;
     (void)client; (void)file; (void)offset; (void)flags; (void)buffer;
     (void)length; (void)moved; (void)position;
     return ASTRA_VFS_ERR_UNSUPPORTED;
@@ -219,7 +244,13 @@ uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service)
     client->session = service;
     client->port_service = service;
     client->version = ASTRA_VFS_VERSION;
+    client->port_lifecycle = 0u;
     return ASTRA_VFS_OK;
+}
+
+int astra_vfs_port_client_closed(const AstraVfsClient *client)
+{
+    return client->port_lifecycle == 1u;
 }
 
 uint32_t astra_vfs_host_port_connect_lazy(AstraVfsClient *client,
@@ -290,9 +321,24 @@ uint32_t astra_filesystem_open(AstraFilesystem *filesystem, const char *path,
                                uint32_t flags, AstraFile *file)
 {
     (void)filesystem;
-    assert(strcmp(path, "/app/test") == 0 && flags == ASTRA_VFS_OPEN_READ);
+    assert((strcmp(path, "/app/test") == 0 ||
+            strcmp(path, "/app/link/../test") == 0) && flags == ASTRA_VFS_OPEN_READ);
     file->_private_file = 1u;
     return ASTRA_VFS_OK;
+}
+
+uint32_t astra_filesystem_attach_io(AstraFilesystem *filesystem,
+    const AstraAssignTable *table, AstraVfsAssignClientFn lookup,
+    AstraFilesystemReadFn read_at, AstraFilesystemWriteFn write_at, void *context)
+{
+    (void)lookup; (void)read_at; (void)write_at; (void)context;
+    filesystem->_private_assigns = table;
+    return ASTRA_VFS_OK;
+}
+
+void astra_filesystem_detach(AstraFilesystem *filesystem)
+{
+    *filesystem = (AstraFilesystem)ASTRA_FILESYSTEM_INIT;
 }
 
 uint32_t astra_filesystem_file_info(const AstraFile *file,
@@ -321,6 +367,97 @@ uint32_t astra_filesystem_close(AstraFile *file)
     ++closes;
     file->_private_file = ASTRA_VFS_FILE_INVALID;
     return ASTRA_VFS_OK;
+}
+
+uint32_t astra_futex_wait(volatile uint32_t *word, uint32_t expected, uint64_t deadline)
+{
+    (void)word; (void)expected; (void)deadline;
+    sched_yield();
+    return ASTRA_SYSCALL_WOULD_BLOCK;
+}
+uint32_t astra_futex_wake(volatile uint32_t *word, uint32_t limit, uint32_t *woken)
+{
+    (void)word; (void)limit;
+    if (woken != NULL) *woken = 0u;
+    return ASTRA_SYSCALL_OK;
+}
+const AstraAssign *astra_assign_member(const AstraAssignTable *table, const char *name, uint32_t member)
+{
+    return member == 0u ? astra_assign_lookup(table, name) : NULL;
+}
+uint32_t astra_vfs_assign_stat(const AstraAssignTable *table, const char *path,
+    uint32_t rights, AstraVfsAssignClientFn lookup, void *context, char *wire,
+    uint32_t capacity, AstraVfsDirEntry *info, AstraVfsClient **client,
+    const AstraAssign **binding, uint32_t *member)
+{
+    char name[ASTRA_CAPABILITY_NAME_MAX], rest[ASTRA_VFS_PATH_MAX];
+    (void)rights;
+    if (astra_path_split(path, name, sizeof(name), rest, sizeof(rest)) != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_INVALID;
+    *binding = astra_assign_lookup(table, name);
+    if (*binding == NULL) return ASTRA_VFS_ERR_NOT_FOUND;
+    *client = lookup(*binding, context);
+    if (*client == NULL) return ASTRA_VFS_ERR_IO;
+    assert(strlen(rest) < capacity);
+    strcpy(wire, rest);
+    *info = (AstraVfsDirEntry){.kind = ASTRA_VFS_KIND_DIRECTORY};
+    *member = 0u;
+    return ASTRA_VFS_OK;
+}
+uint32_t astra_vfs_open(AstraVfsClient *client, const char *path, uint32_t flags,
+    AstraVfsFile *file, uint64_t *size, uint16_t *kind)
+{
+    (void)client; (void)path;
+    assert(flags == (ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY));
+    *file = 1000u; *size = 0u; *kind = ASTRA_VFS_KIND_DIRECTORY;
+    return ASTRA_VFS_OK;
+}
+uint32_t astra_vfs_open_at(AstraVfsClient *client, AstraVfsFile directory,
+    const char *path, uint32_t flags, AstraVfsFile *file, uint64_t *size, uint16_t *kind)
+{
+    (void)directory;
+    return astra_vfs_open(client, path, flags, file, size, kind);
+}
+uint32_t astra_vfs_close(AstraVfsClient *client, AstraVfsFile file)
+{
+    (void)client; assert(file != ASTRA_VFS_FILE_INVALID);
+    return ASTRA_VFS_OK;
+}
+uint32_t astra_vfs_directory_path(AstraVfsClient *client, AstraVfsFile file,
+    void *buffer, uint32_t capacity, uint32_t *length)
+{
+    assert(client != NULL && file == 1000u);
+    if (held_directory_status != ASTRA_VFS_OK)
+        return held_directory_status;
+    *length = (uint32_t)strlen(held_directory_path);
+    if (*length > capacity)
+        return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
+    memcpy(buffer, held_directory_path, *length);
+    return ASTRA_VFS_OK;
+}
+uint32_t astra_vfs_adopt(AstraVfsClient *client, uint64_t token, AstraVfsFile *file)
+{
+    (void)client;
+    assert(token != 0u);
+    *file = 1000u;
+    return ASTRA_VFS_OK;
+}
+static pthread_barrier_t cache_start;
+static AstraVfsClient *thread_clients[16];
+
+static void *lookup_client_thread(void *argument)
+{
+    uint32_t index = (uint32_t)(uintptr_t)argument;
+    AstraStartupInfo startup = {.capabilities_address = 1u};
+    AstraAssign assign = {.handle = 9000u + index};
+
+    pthread_barrier_wait(&cache_start);
+    assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+    thread_clients[index] = astra_process_vfs_client_for(&assign);
+    assert(thread_clients[index] != NULL);
+    for (uint32_t pass = 0u; pass < 50u; ++pass)
+        assert(astra_process_vfs_client_for(&assign) == thread_clients[index]);
+    return NULL;
 }
 
 int main(void)
@@ -417,42 +554,42 @@ int main(void)
 
             assert(astra_process_path("file", path, sizeof(path)) ==
                        ASTRA_VFS_OK &&
-                   strcmp(path, "/cwd/file") == 0);
-            assert(astra_process_vfs_set_current_directory("CWD", "proto") ==
+                   strcmp(path, "file") == 0);
+            assert(astra_process_vfs_set_current_directory("/cwd/proto") ==
                    ASTRA_VFS_OK);
             assert(astra_process_path("file", path, sizeof(path)) ==
                        ASTRA_VFS_OK &&
-                   strcmp(path, "/cwd/proto/file") == 0);
+                   strcmp(path, "file") == 0);
             assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
             assert(seeds == seeded);
             assert(astra_process_path("file", path, sizeof(path)) ==
                        ASTRA_VFS_OK &&
-                   strcmp(path, "/cwd/proto/file") == 0);
-            assert(astra_process_vfs_after_fork_child(&startup) ==
+                   strcmp(path, "file") == 0);
+            assert(astra_process_vfs_after_fork_child(&startup, NULL) ==
                    ASTRA_VFS_OK);
             assert(seeds == seeded);
             assert(astra_process_path("file", path, sizeof(path)) ==
                        ASTRA_VFS_OK &&
-                   strcmp(path, "/cwd/proto/file") == 0);
-            assert(astra_process_vfs_set_current_directory("WORK", "other") ==
+                   strcmp(path, "file") == 0);
+            assert(astra_process_vfs_set_current_directory("/work/other") ==
                    ASTRA_VFS_OK);
             assert(astra_process_path("file", path, sizeof(path)) ==
                        ASTRA_VFS_OK &&
-                   strcmp(path, "/work/other/file") == 0);
-            assert(astra_process_vfs_set_current_directory("MISSING", "") ==
+                   strcmp(path, "file") == 0);
+            assert(astra_process_vfs_set_current_directory("/missing") ==
                    ASTRA_VFS_ERR_NOT_FOUND);
         }
-        assert(connects == 0u);
+        assert(connects == 2u);
         /* First use is what connects, and only once however often it is asked. */
         assert(astra_process_vfs_client() != NULL);
-        assert(connects == 1u);
+        assert(connects == 2u);
         {
             AstraFile original = ASTRA_FILE_INIT;
             AstraFile restored = ASTRA_FILE_INIT;
             AstraProcessFileState state;
 
             original._private_client = astra_process_vfs_client();
-            original._private_read_at = astra_vfs_port_read_bulk;
+            original._private_read = astra_vfs_port_read_bulk_position;
             original._private_file = 0x1234u;
             original._private_flags = ASTRA_VFS_OPEN_READ |
                                       ASTRA_VFS_OPEN_WRITE;
@@ -465,8 +602,8 @@ int main(void)
             assert(astra_process_file_import(&state, &restored) ==
                    ASTRA_VFS_OK);
             assert(restored._private_client == original._private_client);
-            assert(restored._private_read_at == astra_vfs_port_read_bulk);
-            assert(restored._private_write_at ==
+            assert(restored._private_read == astra_vfs_port_read_bulk_position);
+            assert(restored._private_write ==
                    astra_vfs_port_write_bulk_position);
             assert(restored._private_file == original._private_file);
             assert(restored._private_flags == original._private_flags);
@@ -479,7 +616,7 @@ int main(void)
                    ASTRA_VFS_ERR_BAD_HANDLE);
         }
         assert(astra_process_vfs_client() != NULL);
-        assert(connects == 1u);
+        assert(connects == 2u);
         astra_process_vfs_set_activity(0x12345678u);
         assert(astra_process_vfs_client_for(
                    &astra_process_vfs_assigns()->entries[0])->activity ==
@@ -499,7 +636,7 @@ int main(void)
         fork_child_calls = 0u;
         assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
         assert(astra_process_vfs_client() != NULL && connects == 1u);
-        assert(astra_process_vfs_after_fork_child(&startup) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_after_fork_child(&startup, NULL) == ASTRA_VFS_OK);
         assert(abandons == 1u && disconnects == 0u &&
                port_fork_rebinds == 1u);
         assert(fork_child_calls == 1u);
@@ -517,7 +654,7 @@ int main(void)
         fork_child_calls = 0u;
         assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
         assert(astra_process_vfs_client() != NULL && connects == 1u);
-        assert(astra_process_vfs_after_fork_child(&startup) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_after_fork_child(&startup, NULL) == ASTRA_VFS_OK);
         assert(direct_forks == 1u && connects == 1u &&
                port_fork_rebinds == 1u);
         /* Once per fork, however many clients the child carries. */
@@ -591,6 +728,8 @@ int main(void)
 
         /* Allocation failure refuses only the new cache entry. */
         assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        AstraVfsClient *borrowed = astra_process_vfs_client_for(
+            &astra_process_vfs_assigns()->entries[0]);
         for (uint32_t index = 3u; index < 9u; ++index) {
             AstraAssignTable *table = astra_process_vfs_assigns();
 
@@ -608,24 +747,88 @@ int main(void)
             assert(astra_process_vfs_client_for(&table->entries[9]) == NULL);
             fail_allocate = 0;
             assert(astra_process_vfs_client_for(&table->entries[0]) != NULL);
+            force_move = 1;
             assert(astra_process_vfs_client_for(&table->entries[9]) != NULL);
+            assert(borrowed == astra_process_vfs_client_for(&table->entries[0]));
+            force_move = 0;
         }
         astra_process_vfs_close();
 
-        /* Every startup mount fits, and a later mount grows the cache. */
+        /* Growing the cache must preserve clients borrowed by open files. */
+        AstraFile held = ASTRA_FILE_INIT;
+        AstraProcessFileState held_state;
         seed_distinct = 1u;
         assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
         assert(astra_process_vfs_client_for(
                    &astra_process_vfs_assigns()->entries[
                        ASTRA_STARTUP_CAPABILITY_MAX - 1u]) != NULL);
+        held._private_client = astra_process_vfs_client_for(
+            &astra_process_vfs_assigns()->entries[0]);
+        held._private_file = 1u;
+        assert(astra_process_file_export(&held, &held_state) == ASTRA_VFS_OK);
         astra_process_vfs_assigns()->entries[
             ASTRA_STARTUP_CAPABILITY_MAX].handle = 1000u;
         ++astra_process_vfs_assigns()->count;
         assert(astra_process_vfs_client_for(
                    &astra_process_vfs_assigns()->entries[
                        ASTRA_STARTUP_CAPABILITY_MAX]) != NULL);
+        assert(astra_process_file_export(&held, &held_state) == ASTRA_VFS_OK);
+        assert(held._private_client == astra_process_vfs_client_for(
+            &astra_process_vfs_assigns()->entries[0]));
+        uint32_t old_connects = connects;
+        held._private_client->port_lifecycle = 1u;
+        assert(held._private_client == astra_process_vfs_client_for(
+            &astra_process_vfs_assigns()->entries[0]));
+        assert(connects == old_connects && held._private_client->port_lifecycle == 1u);
         astra_process_vfs_close();
         seed_distinct = 0u;
+    }
+
+    {
+        AstraStartupInfo startup = {.capabilities_address = 1u};
+        AstraProcessFilesystem first = ASTRA_PROCESS_FILESYSTEM_INIT;
+        AstraProcessFilesystem second = ASTRA_PROCESS_FILESYSTEM_INIT;
+        AstraProcessFilesystem unopened = ASTRA_PROCESS_FILESYSTEM_INIT;
+        AstraFile held = ASTRA_FILE_INIT;
+        AstraProcessFileState state;
+
+        disconnects = 0u;
+        assert(astra_process_filesystem_open(&first, &startup) == ASTRA_VFS_OK);
+        assert(astra_process_filesystem_open(&second, &startup) == ASTRA_VFS_OK);
+        held._private_client = astra_process_vfs_client();
+        held._private_file = 1u;
+        astra_process_filesystem_close(&unopened);
+        astra_process_filesystem_close(&first);
+        astra_process_filesystem_close(&first);
+        astra_process_filesystem_close(&second);
+        assert(disconnects == 0u);
+        assert(astra_process_file_export(&held, &state) == ASTRA_VFS_OK);
+        assert(held._private_client == astra_process_vfs_client());
+        astra_process_vfs_close();
+        assert(disconnects == 1u);
+    }
+
+    {
+        pthread_t threads[16];
+        uint32_t before_seeds = seeds;
+        uint32_t before_connects = connects;
+
+        force_move = 1;
+        assert(pthread_barrier_init(&cache_start, NULL, 16) == 0);
+        for (uint32_t index = 0u; index < 16u; ++index)
+            assert(pthread_create(&threads[index], NULL, lookup_client_thread,
+                                  (void *)(uintptr_t)index) == 0);
+        for (uint32_t index = 0u; index < 16u; ++index)
+            assert(pthread_join(threads[index], NULL) == 0);
+        assert(seeds == before_seeds + 1u && connects == before_connects + 16u);
+        for (uint32_t index = 0u; index < 16u; ++index) {
+            assert(astra_process_vfs_client_handle(thread_clients[index]) == 9000u + index);
+            for (uint32_t prior = 0u; prior < index; ++prior)
+                assert(thread_clients[prior] != thread_clients[index]);
+        }
+        pthread_barrier_destroy(&cache_start);
+        force_move = 0;
+        astra_process_vfs_close();
     }
 
     {
@@ -692,6 +895,9 @@ int main(void)
                                        sizeof(bytes), &length) ==
                ASTRA_VFS_OK);
         assert(length == 4u && memcmp(bytes, "fast", 4u) == 0);
+        assert(astra_process_read_file(&filesystem, "/app/link/../test", bytes,
+                                       sizeof(bytes), &length) == ASTRA_VFS_OK);
+        assert(length == 5u && memcmp(bytes, "hello", 5u) == 0);
 
         whole_file_bytes = (const uint8_t *)"evil";
         whole_file_node_size = UINT64_C(0x100000004);
@@ -700,6 +906,36 @@ int main(void)
                ASTRA_VFS_OK);
         assert(length == 5u && memcmp(bytes, "hello", 5u) == 0);
         whole_file_enabled = 0;
+        astra_process_vfs_close();
+    }
+
+    {
+        AstraStartupInfo startup = {.capabilities_address = 1u};
+        char cwd[ASTRA_VFS_PATH_MAX];
+        uint32_t used;
+
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        AstraVfsClient *client = astra_process_vfs_client();
+        client->features |= ASTRA_VFS_FEATURE_DESCRIPTIONS | ASTRA_VFS_FEATURE_DIRECTORY_PATH;
+        assert(astra_process_vfs_set_current_directory("/work/before") == ASTRA_VFS_OK);
+        assert(astra_process_vfs_current_directory(cwd, sizeof(cwd)) == ASTRA_VFS_OK &&
+               strcmp(cwd, "/work/before") == 0);
+        held_directory_path = "/after";
+        assert(astra_process_vfs_current_directory(cwd, sizeof(cwd)) == ASTRA_VFS_OK &&
+               strcmp(cwd, "/work/after") == 0);
+        assert(astra_process_vfs_current_directory(cwd, 2u) == ASTRA_VFS_ERR_BUFFER_TOO_SMALL);
+        uint32_t size = astra_process_vfs_state_size();
+        void *state = malloc(size);
+        assert(state != NULL && astra_process_vfs_export(state, size, &used) == ASTRA_VFS_OK && used == size);
+        assert(astra_process_vfs_import(&startup, state, size) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_current_directory(cwd, sizeof(cwd)) == ASTRA_VFS_OK &&
+               strcmp(cwd, "/work/after") == 0);
+        free(state);
+        held_directory_status = ASTRA_VFS_ERR_NOT_FOUND;
+        assert(astra_process_vfs_current_directory(cwd, sizeof(cwd)) == ASTRA_VFS_ERR_NOT_FOUND);
+        assert(astra_process_vfs_set_current_directory("/") == ASTRA_VFS_OK);
+        assert(astra_process_vfs_current_directory(cwd, sizeof(cwd)) == ASTRA_VFS_OK && strcmp(cwd, "/") == 0);
+        held_directory_status = ASTRA_VFS_OK;
         astra_process_vfs_close();
     }
 

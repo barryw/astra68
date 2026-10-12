@@ -170,12 +170,44 @@ def write_record(record, guest, floor_mb_s, output_path):
             (check["mb_s"], check["floor"], output_path))
 
 
+def budget(pid, output):
+    record = {"identity": identity(), "holds": {}}
+    for kind, count in (("file", 1000), ("dir", 200)):
+        ready = os.path.join(ASTRA, "fsbench-hold-%s.ready" % kind)
+        if os.path.exists(ready):
+            raise SystemExit("fs-baseline: stale hold marker " + ready)
+        before = host_sample(pid)
+        if not rfb("--keys", "fsbench --hold %s %d\n" % (kind, count)):
+            raise SystemExit("fs-baseline: typing failed")
+        deadline = time.monotonic() + 180
+        while not os.path.exists(ready):
+            if time.monotonic() >= deadline:
+                raise SystemExit("fs-baseline: hold never ready: " + kind)
+            time.sleep(0.2)
+        during = host_sample(pid)
+        os.unlink(ready)
+        deadline = time.monotonic() + 30
+        while host_sample(pid)["fds"] > before["fds"] + 2:
+            if time.monotonic() >= deadline:
+                raise SystemExit("fs-baseline: hold leaked descriptors: " + kind)
+            time.sleep(0.2)
+        after = host_sample(pid)
+        record["holds"][kind] = dict(count=count, before=before,
+            during=during, after=after,
+            rss_kib_per_object=max(0, during["rss_kib"] - before["rss_kib"]) / count,
+            fds_per_object=(during["fds"] - before["fds"]) / count)
+        with open(output, "w") as stream:
+            json.dump(record, stream, indent=1, sort_keys=True)
+    print("fs-baseline: wrote " + output)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("label")
     parser.add_argument("output")
     parser.add_argument("--restart", action="store_true")
     parser.add_argument("--no-cold", action="store_true")
+    parser.add_argument("--budget", action="store_true", help="measure held provider objects")
     parser.add_argument("--held-miss-floor", type=float, default=20.0,
                         metavar="MB_S", help="held-miss throughput floor "
                         "in MB/s regression guard (0 disables)")
@@ -196,6 +228,9 @@ def main():
         raise SystemExit("fs-baseline: double click failed")
     time.sleep(15)
     pid = qemu_pid()
+    if arguments.budget:
+        budget(pid, arguments.output)
+        return
     before = host_sample(pid)
     result_path = os.path.join(ASTRA, "fsbench-%s.json" % arguments.label)
     cold_path = os.path.join(ASTRA, "fsbench-%s.cold" % arguments.label)

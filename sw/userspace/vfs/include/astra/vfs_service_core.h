@@ -114,6 +114,7 @@ typedef struct AstraVfsService {
     uint32_t next_session;
     uint16_t open_sessions;
     uint32_t open_files;
+    uint32_t owner_session_limit;
     AstraVfsStateAcquire state_acquire;
     AstraVfsStateRelease state_release;
     AstraVfsStateWait state_wait;
@@ -138,6 +139,9 @@ int astra_vfs_service_set_state_lock(AstraVfsService *service,
 int astra_vfs_service_set_state_wait(AstraVfsService *service,
                                      AstraVfsStateWait wait,
                                      AstraVfsStateWake wake);
+/* Per-owner sessions in this service; zero disables the bound. */
+int astra_vfs_service_set_owner_sessions(AstraVfsService *service,
+                                         uint32_t sessions);
 #ifdef ASTRA_VFS_TEST_HOOKS
 void astra_vfs_service_set_test_transition(AstraVfsService *service,
                                            AstraVfsTestTransition transition,
@@ -207,11 +211,11 @@ uint32_t astra_vfs_service_read_into(AstraVfsService *service,
 /* The write-side twin: bytes come from the session's bound transfer area. */
 uint32_t astra_vfs_service_write_from(AstraVfsService *service,
                                       uint32_t session, AstraVfsFile file,
-                                      uint64_t offset, const void *buffer,
+                                      uint64_t offset, uint64_t max_end, const void *buffer,
                                       uint32_t length, uint32_t *moved);
 uint32_t astra_vfs_service_write_position_from(
     AstraVfsService *service, uint32_t session, AstraVfsFile file,
-    uint64_t offset, uint32_t flags, const void *buffer, uint32_t length,
+    uint64_t offset, uint32_t flags, uint64_t max_end, const void *buffer, uint32_t length,
     uint32_t *moved, uint64_t *position);
 
 /* Packs directory records into an arbitrary bounded buffer. */

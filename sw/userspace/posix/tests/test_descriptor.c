@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -476,8 +478,9 @@ main(void)
     int duplicate;
     void *handoff;
     uint32_t handoff_size;
-    ssize_t (*read_call)(int, void *, size_t) = read;
-    ssize_t (*write_call)(int, const void *, size_t) = write;
+    /* Exercise Astra validation without glibc folding deliberate bad inputs. */
+    ssize_t (*volatile read_call)(int, void *, size_t) = read;
+    ssize_t (*volatile write_call)(int, const void *, size_t) = write;
 
     {
         static const AstraStartupCapability capabilities[] = {
@@ -534,7 +537,11 @@ main(void)
     }
     astra_posix_start(NULL);
     astra_posix_file_bind(&file_ops);
-    assert(astra_posix_descriptor_file(99u, 0) == 0);
+    assert(astra_posix_descriptor_file(99u,
+           O_RDWR | O_CREAT | O_EXCL | O_TRUNC | O_CLOEXEC) == 0);
+    assert(fcntl(0, F_GETFL) == O_RDWR);
+    assert(fcntl(0, F_GETFD) == FD_CLOEXEC);
+    assert(fcntl(0, F_SETFD, 0) == 0);
     assert(pread(0, bytes, 1u, 37) == 1 && bytes[0] == 'R' &&
            positioned_offset == 37);
     assert(pwrite(0, "W", 1u, 41) == 1 && positioned_offset == 41);
@@ -560,6 +567,24 @@ main(void)
     assert(close(6) == 0 && file_closes == 1u);
     assert(pipe(fildes) == 0);
     assert(fildes[0] == 0 && fildes[1] == 1);
+    assert(read_call(fildes[0], NULL, 0u) == 0);
+    assert(write_call(fildes[1], NULL, 0u) == 0);
+    errno = 0;
+    assert(read_call(fildes[0], NULL, 1u) == -1 && errno == EFAULT);
+    errno = 0;
+    assert(write_call(fildes[1], NULL, 1u) == -1 && errno == EFAULT);
+    errno = 0;
+    assert(read_call(fildes[0], bytes, SIZE_MAX) == -1 && errno == EINVAL);
+    errno = 0;
+    assert(write_call(fildes[1], bytes, SIZE_MAX) == -1 && errno == EINVAL);
+    errno = 0;
+    assert(write_call(fildes[0], NULL, 0u) == -1 && errno == EBADF);
+    errno = 0;
+    assert(read_call(fildes[1], NULL, 0u) == -1 && errno == EBADF);
+    errno = 0;
+    assert(pwrite(fildes[0], "x", 1u, 0) == -1 && errno == EBADF);
+    errno = 0;
+    assert(pread(fildes[1], bytes, 1u, 0) == -1 && errno == EBADF);
     errno = 0;
     assert(!isatty(fildes[0]) && errno == ENOTTY);
     errno = 0;
@@ -611,6 +636,7 @@ main(void)
     astra_posix_file_bind(&file_ops);
     astra_posix_socket_bind(&socket_ops);
     assert(astra_posix_descriptor_socket(77u, O_NONBLOCK) == 0);
+    assert((fcntl(0, F_GETFL) & O_ACCMODE) == O_RDWR);
     assert(dup(0) == 1);
     assert(fcntl(1, F_SETFD, FD_CLOEXEC) == 0);
     assert(astra_posix_exec_export(&handoff, &handoff_size) == 0);

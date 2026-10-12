@@ -82,6 +82,8 @@
 /** Number of DMA slots the region holds. */
 #define ASTRA_DMA_SLOT_COUNT \
     ((ASTRA_DMA_ADDRESS_END - ASTRA_DMA_ADDRESS_START) / ASTRA_DMA_SLOT_SIZE)
+/** Maximum live DMA buffers per process within the fixed DMA window. */
+#define ASTRA_DMA_BUFFER_MAX 16u
 
 /** First address of the kernel private-VM region. */
 #define ASTRA_PRIVATE_ADDRESS_START           ASTRA_DMA_ADDRESS_END

@@ -148,6 +148,21 @@ def wad_icons():
 def main():
     image_icons()
     wad_icons()
+    # Each desktop tool must retain a distinct, legible native strike.
+    instrument_icons = ("framebench", "draw", "sprite", "geometry", "target",
+                        "scale", "keys", "mouse", "timer", "thread")
+    by_size = {size: set() for size in (16, 32, 64)}
+    for kind in instrument_icons:
+        encoded = aicon.build(kind)
+        assert encoded == aicon.build(kind)
+        assert palette_count(encoded) <= 16
+        for width, height, pixels in strikes(encoded):
+            assert width == height and len(pixels) == width * height
+            assert pixels[0] == 0 and pixels[-1] == 0
+            assert {0, 4, 5} <= set(pixels)
+            assert sum(pixel == 4 for pixel in pixels) < width * height // 3
+            by_size[width].add(pixels)
+    assert all(len(icons) == 10 for icons in by_size.values())
     for width, height, pixels in strikes(aicon.build("terminal")):
         assert width == height and len(pixels) == width * height
         assert 3 in pixels and 4 in pixels and 5 in pixels

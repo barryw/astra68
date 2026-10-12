@@ -166,6 +166,8 @@ static uint16_t detached_backed_limit;
 static uint16_t detached_next_slot;
 static KernelHandleTransferStats transfer_stats;
 static KernelHandleImportRights import_rights;
+/* ASTRA_RIGHT_TRANSFER: the handle layer stays free of the ABI headers. */
+#define KERNEL_HANDLE_RIGHT_TRANSFER (1u << 5)
 
 void kernel_handle_set_import_rights(KernelHandleImportRights filter)
 {
@@ -1037,6 +1039,17 @@ static void reset_transfer_batch(KernelHandleTransferBatch *batch)
     batch->reserved[1] = 0u;
 }
 
+/* What a moved handle may arrive with: some right besides TRANSFER, still
+ * there after the import filter. A handle that can only travel, or that
+ * would arrive with no rights at all, is refused before it moves. */
+static bool transferable_rights(uint16_t type, void *object, uint32_t rights)
+{
+    uint32_t imported = import_rights != NULL ?
+        import_rights((KernelObjectType)type, object, rights) : rights;
+
+    return (imported & ~(uint32_t)KERNEL_HANDLE_RIGHT_TRANSFER) != 0u;
+}
+
 static KernelHandleStatus validate_transfer_sources(
     const KernelHandleTable *source_table,
     const KernelHandle *source_handles, uint32_t count,
@@ -1057,6 +1070,9 @@ static KernelHandleStatus validate_transfer_sources(
         if (source->object == NULL || source->release == NULL ||
             source->type == KERNEL_OBJECT_NONE)
             return KERNEL_HANDLE_CORRUPT;
+        if (!transferable_rights(source->type, source->object,
+                                 source->rights))
+            return KERNEL_HANDLE_INVALID_ARGUMENT;
         for (uint32_t prior = 0u; prior < index; ++prior)
             if (source_handles[prior] == source_handles[index])
                 return KERNEL_HANDLE_DUPLICATE;
@@ -1169,9 +1185,24 @@ KernelHandleStatus kernel_handle_transfer_narrow(
     if (batch == NULL || masks == NULL ||
         batch->state != KERNEL_HANDLE_BATCH_PREPARED || batch->count == 0u)
         return KERNEL_HANDLE_INVALID_ARGUMENT;
-    for (uint32_t index = 0u; index < batch->count; ++index)
-        if (masks[index] == 0u)
+    /* Every entry is judged before any is changed: a narrowed handle must
+     * keep a right besides TRANSFER, and keep one after the import filter
+     * too, or it would arrive rightless -- which the pool audit rightly
+     * calls corruption (re-review K1). */
+    for (uint32_t index = 0u; index < batch->count; ++index) {
+        KernelDetachedEntry *entry = NULL;
+        uint32_t rights;
+
+        if (find_detached_entry(batch->detached[index],
+                                KERNEL_DETACHED_RESERVED, &entry) !=
+            KERNEL_HANDLE_OK) {
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
+        rights = entry->rights & masks[index];
+        if (!transferable_rights(entry->type, entry->object, rights))
             return KERNEL_HANDLE_INVALID_ARGUMENT;
+    }
     for (uint32_t index = 0u; index < batch->count; ++index) {
         KernelDetachedEntry *entry = NULL;
 

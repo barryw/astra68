@@ -48,8 +48,11 @@ else
     DISPLAY_PAYLOAD=$RUN_ROOT/display-payload.bin
 fi
 HOSTFS_ROOT=${ASTRA_HOSTFS_ROOT:-$ASTRA_STORE/hostfs}
-QMP_SOCKET=${ASTRA_QMP_SOCKET:-$RUN_ROOT/qmp.sock}
-REMOTE_DESKTOP_QMP_SOCKET=${ASTRA_REMOTE_DESKTOP_QMP_SOCKET:-$RUN_ROOT/remote-desktop-qmp.sock}
+# DE25: 8 KiB per description/object plus 40 KiB per DIR stays below 64 MiB.
+HOSTFS_MAX_DESCRIPTORS=${ASTRA_HOSTFS_MAX_DESCRIPTORS-2048}
+HOSTFS_MAX_DIRECTORIES=${ASTRA_HOSTFS_MAX_DIRECTORIES-1024}
+QMP_SOCKET=${ASTRA_QMP_SOCKET:-$RUN_ROOT/qemu/qmp.sock}
+REMOTE_DESKTOP_QMP_SOCKET=${ASTRA_REMOTE_DESKTOP_QMP_SOCKET:-$RUN_ROOT/qemu/remote-desktop-qmp.sock}
 CONSOLE_LOG=${ASTRA_CONSOLE_LOG:-$LOG_ROOT/qemu-console.log}
 PANIC_LOG=${ASTRA_PANIC_LOG:-$LOG_ROOT/panic-latest.log}
 MEMORY=${ASTRA_MEMORY:-512M}
@@ -120,6 +123,44 @@ if ! command -v taskset >/dev/null 2>&1; then
     exit 1
 fi
 
+QEMU_UID=$(id -u)
+QEMU_GID=$(id -g)
+if [ "$QEMU_UID" -eq 0 ]; then
+    QEMU_UID=$(id -u "${ASTRA_QEMU_USER:-astra}")
+    QEMU_GID=$(id -g "${ASTRA_QEMU_USER:-astra}")
+    if [ "$QEMU_UID" -eq 0 ] || [ "$QEMU_GID" -eq 0 ]; then
+        echo "Astra QEMU requires an unprivileged user and group" >&2
+        exit 1
+    fi
+    if [ -L "$HOSTFS_ROOT" ] || [ ! -d "$HOSTFS_ROOT" ] ||
+        [ "$(stat -c %u "$HOSTFS_ROOT")" != "$QEMU_UID" ]; then
+        echo "Astra HostFS must be provisioned for the QEMU user: $HOSTFS_ROOT" >&2
+        exit 1
+    fi
+fi
+
+run_unprivileged()
+{
+    if [ "$(id -u)" -eq 0 ]; then
+        exec setpriv --reuid "$QEMU_UID" --regid "$QEMU_GID" \
+            --clear-groups --no-new-privs --bounding-set=-all \
+            --inh-caps=-all --ambient-caps=-all "$@"
+    fi
+    exec "$@"
+}
+
+hostfs_init()
+{
+    # Root never copies or moves files in the guest-writable namespace.
+    if [ "$(id -u)" -eq 0 ]; then
+        set -- setpriv --reuid "$QEMU_UID" --regid "$QEMU_GID" \
+            --clear-groups --no-new-privs
+    else
+        set --
+    fi
+    "$@" sh -eu -s -- "$HOSTFS_ROOT" "$ASTRA_ROOT"
+}
+
 start_helper()
 {
     helper_cpu=$1
@@ -137,8 +178,9 @@ process_alive()
     # A zombie still answers kill -0.
     while read -r process_key process_state process_rest; do
         [ "$process_key" = "State:" ] || continue
-        [ "$process_state" != "Z" ]
-        return
+        # Bash's bare return inside a trap inherits the interrupted status.
+        [ "$process_state" != "Z" ] || return 1
+        return 0
     done 2>/dev/null <"/proc/$process_pid/status"
     return 1
 }
@@ -146,7 +188,7 @@ process_alive()
 mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")" \
     "$(dirname "$REMOTE_DESKTOP_QMP_SOCKET")" \
     "$(dirname "$PANIC_LOG")" "$HOSTFS_ROOT" "$STATE_ROOT"
-exec 9>"$(dirname "$QMP_SOCKET")/runtime.lock"
+exec 9>"$RUN_ROOT/runtime.lock"
 if ! flock -n 9; then
     echo "Astra runtime is already active" >&2
     exit 1
@@ -154,6 +196,9 @@ fi
 # HostFS keeps one directory per volume (work, sound). Before that, the
 # root was WORK itself: move what it held into work/ once. A move that was
 # interrupted resumes from the staging directory.
+hostfs_init <<'HOSTFS_INIT'
+HOSTFS_ROOT=$1
+ASTRA_ROOT=$2
 if [ ! -d "$HOSTFS_ROOT/work" ]; then
     staging=$HOSTFS_ROOT/.work-migrating
     mkdir -p "$staging"
@@ -175,6 +220,7 @@ for shipped in "$ASTRA_ROOT"/soundfonts/*; do
             mv "$installed.new" "$installed"
     fi
 done
+HOSTFS_INIT
 if [ -z "${STORAGE+x}" ]; then
     STORAGE=$STATE_ROOT/storage-terminal.img
     if [ ! -e "$STORAGE" ]; then
@@ -200,18 +246,30 @@ if [ ! -c "$DISPLAY_PAYLOAD" ]; then
     dd if=/dev/zero of="$DISPLAY_PAYLOAD" bs="$DISPLAY_PAYLOAD_BYTES" \
         count=1 2>/dev/null
 fi
+if [ "$(id -u)" -eq 0 ]; then
+    # Root owns the buffer names; QEMU can change their bytes, not replace them.
+    chgrp "$QEMU_GID" "$STATE_ROOT" "$STORAGE" "$TEXT_PLANE" "$DISPLAY_MAILBOX"
+    chmod 0750 "$STATE_ROOT"
+    chmod 0660 "$STORAGE" "$TEXT_PLANE" "$DISPLAY_MAILBOX"
+    if [ ! -c "$DISPLAY_PAYLOAD" ]; then
+        chgrp "$QEMU_GID" "$DISPLAY_PAYLOAD"
+        chmod 0660 "$DISPLAY_PAYLOAD"
+    fi
+    install -d -o "$QEMU_UID" -g "$QEMU_GID" -m 0700 \
+        "$(dirname "$QMP_SOCKET")" "$(dirname "$REMOTE_DESKTOP_QMP_SOCKET")"
+fi
 start_helper "$DISPLAY_CPU" "$TERMINAL_DISPLAY" "$TEXT_PLANE" \
     "$DISPLAY_MAILBOX" "$DISPLAY_PAYLOAD"
 display_pid=$started_pid
 input_pid=
 qemu_pid=
 log_pid=
-console_pipe="$(dirname "$QMP_SOCKET")/qemu-console.pipe"
+console_pipe="$RUN_ROOT/qemu-console.pipe"
 stop_process()
 {
     pid=$1
     if [ -z "$pid" ]; then
-        return
+        return 0
     fi
     kill "$pid" 2>/dev/null || true
     count=0
@@ -243,10 +301,12 @@ rm -f "$console_pipe"
 mkfifo "$console_pipe"
 taskset -c "$AUX_CPU" tee "$CONSOLE_LOG" <"$console_pipe" &
 log_pid=$!
-env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
+run_unprivileged env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     ASTRA_DISPLAY_MAILBOX_PATH="$DISPLAY_MAILBOX" \
     ASTRA_DISPLAY_PAYLOAD_PATH="$DISPLAY_PAYLOAD" \
     ASTRA_HOSTFS_ROOT="$HOSTFS_ROOT" \
+    ASTRA_HOSTFS_MAX_DESCRIPTORS="$HOSTFS_MAX_DESCRIPTORS" \
+    ASTRA_HOSTFS_MAX_DIRECTORIES="$HOSTFS_MAX_DIRECTORIES" \
     LD_LIBRARY_PATH="$LIBDIR" "$QEMU" \
     -object memory-backend-ram,id=astra-ram,size="$MEMORY",prealloc=on \
     -M astra68,memory-backend=astra-ram -m "$MEMORY" -bios "$ROM" \
@@ -254,10 +314,11 @@ env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     -display none -monitor none -serial stdio \
     -qmp "unix:$QMP_SOCKET,server=on,wait=off" \
     -qmp "unix:$REMOTE_DESKTOP_QMP_SOCKET,server=on,wait=off" "$@" \
-    >"$console_pipe" 2>&1 &
+    >"$console_pipe" 2>&1 9>&- &
 qemu_pid=$!
-start_helper "$AUX_CPU" python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET"
-input_pid=$started_pid
+run_unprivileged taskset -c "$AUX_CPU" python3 "$INPUT_HOTPLUG" \
+    --qmp "$QMP_SOCKET" 9>&- &
+input_pid=$!
 set +e
 while process_alive "$qemu_pid"; do
     if ! process_alive "$display_pid"; then
@@ -272,8 +333,9 @@ while process_alive "$qemu_pid"; do
         wait "$input_pid"
         helper_status=$?
         echo "Astra input helper exited with status $helper_status; restarting" >&2
-        start_helper "$AUX_CPU" python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET"
-        input_pid=$started_pid
+        run_unprivileged taskset -c "$AUX_CPU" python3 "$INPUT_HOTPLUG" \
+            --qmp "$QMP_SOCKET" 9>&- &
+        input_pid=$!
     fi
     # Each pass forks only this sleep; a helper is restarted within 0.5 s.
     sleep 0.5

@@ -25,11 +25,11 @@ LIBRARY_IDENTITY := build/m68k/dynamic/lua_library.o
 LIBRARY_MAP := build/m68k/lua.library.exports
 EXPORT_TOOL := ../../../tools/generate_header_exports.py
 PUBLIC_HEADERS := $(LUA)/lua.h $(LUA)/lauxlib.h $(LUA)/lualib.h
-LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.3
+LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.4
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 STREAMS_LIBRARY := $(STREAMS)/build/m68k/libraries/streams.library.1
-FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.7
+FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.12
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 
 all: $(LIB) lua-library-contract
@@ -61,8 +61,11 @@ $(LIBRARY_MAP): $(PUBLIC_HEADERS) $(EXPORT_TOOL)
 libc-library-ready:
 	$(MAKE) -C $(POSIX) library
 
+$(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY): | libc-library-ready
+
 $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_OBJECTS) $(LIBRARY_MAP) \
-		$(ASTRA_SHARED_LINK_INPUTS) | libc-library-ready
+		$(ASTRA_SHARED_LINK_INPUTS) $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) \
+		$(COMPILER_LIBRARY) | libc-library-ready
 	@mkdir -p $(@D)
 	$(CC) $(ASTRA_TARGET_ABI_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
 		-Wl,-soname,lua.library.6 -Wl,--version-script=$(LIBRARY_MAP) \
@@ -73,7 +76,7 @@ $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_OBJECTS) $(LIBRARY_MAP) \
 		-Wl,-rpath-link,$(abspath $(VFS)/build/m68k/libraries) \
 		-Wl,-rpath-link,$(abspath $(RUNTIME)/build/m68k/libraries) \
 		-L$(dir $(RUNTIME_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:libc.library.3 -Wl,-l:runtime.library.1 \
+		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.1 \
 		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 lua-library-contract: $(LIBRARY)
@@ -87,7 +90,7 @@ lua-library-contract: $(LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
 		grep -q '^lua.library.6 5.5.1 ABI 6.0$$'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [lua.library.6]'
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.3]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.4]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 3

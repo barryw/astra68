@@ -29,7 +29,7 @@
 #define ASTRA_CAPABILITY_HOST_FILESYSTEM "HOST_FILESYSTEM"
 
 /** Current host transport protocol version, as reported by HOST_QUERY. */
-#define ASTRA_HOST_VERSION     UINT32_C(0x0001000e)
+#define ASTRA_HOST_VERSION     UINT32_C(0x00010015)
 /** The host exposes the filesystem service. */
 #define ASTRA_HOST_CAP_FILESYSTEM (1u << 0)
 /** Filesystem commands are scoped to the submitting process's authenticated owner. */
@@ -59,6 +59,14 @@
 /** Filesystem commands use record version 3: one claimed owner, rooted
  * sessions, path operands in the data span and the AstraHostNode record. */
 #define ASTRA_HOST_CAP_FS_SESSIONS (1u << 11)
+/** Ordered dot and symlink resolution, with rooted namespace continuations. */
+#define ASTRA_HOST_CAP_FS_RESOLVES (1u << 12)
+/** Provider-owned position, status flags and shared open descriptions. */
+#define ASTRA_HOST_CAP_FS_DESCRIPTIONS (1u << 13)
+/** READDIR returns a bounded packed batch under one description lock. */
+#define ASTRA_HOST_CAP_FS_DIRECTORY_BATCH (1u << 14)
+/** Report the current confined path of a retained directory. */
+#define ASTRA_HOST_CAP_FS_PATHS (1u << 15)
 /** Channel configuration: the scope words name a scope. Kernel-written. */
 #define ASTRA_HOST_SCOPE_BOUND     (1u << 0)
 /** The scope refuses every mutation (ASTRA_STATUS_READ_ONLY). */
@@ -95,11 +103,11 @@ enum {
     ASTRA_HOST_FS_OPEN = 1u,        /**< Open a path; `handle` answers the new handle. */
     ASTRA_HOST_FS_CLOSE,            /**< Close `handle`. */
     ASTRA_HOST_FS_READ,             /**< Read `handle` at offset_hi/offset_lo. */
-    ASTRA_HOST_FS_WRITE,            /**< Write `handle` at offset_hi/offset_lo, or append. */
+    ASTRA_HOST_FS_WRITE,            /**< Write at offset or append; value is exclusive maximum on input, resulting position on output. */
     ASTRA_HOST_FS_SYNC,             /**< fsync(2) `handle`. */
     ASTRA_HOST_FS_TRUNCATE,         /**< Set `handle`'s length to value_hi/value_lo. */
     ASTRA_HOST_FS_STAT,             /**< No-follow metadata of a path, or of `handle` itself when the path is empty. */
-    ASTRA_HOST_FS_READDIR,          /**< Next entry of open directory `handle` (empty path), or of the path. */
+    ASTRA_HOST_FS_READDIR,          /**< Packed native dirents: value_lo bounds entries, result_length bytes, value answers next cookie. */
     ASTRA_HOST_FS_MKDIR,            /**< Create a directory; value_lo is its mode. */
     ASTRA_HOST_FS_UNLINK,           /**< Remove a path; ASTRA_HOST_FS_UNLINK_* in flags. */
     ASTRA_HOST_FS_RENAME,           /**< Rename `path` (beneath `handle`) to `path2` (beneath directory handle value_lo). */
@@ -110,30 +118,56 @@ enum {
     ASTRA_HOST_FS_FILESYSTEM_INFO,  /**< ::AstraHostFilesystemInfo for a path or `handle`. */
     ASTRA_HOST_FS_SESSION_OPEN,     /**< Open a rooted session; result_value answers its id. */
     ASTRA_HOST_FS_SESSION_CLOSE,    /**< Close `session`. */
-    ASTRA_HOST_FS_CLAIM             /**< Bind the filesystem service to the submitting owner, or release it. */
+    ASTRA_HOST_FS_CLAIM,            /**< Bind the filesystem service to the submitting owner, or release it. */
+    ASTRA_HOST_FS_SEEK,             /**< Signed offset, flags 0/1/2: begin/current/end; value answers position. */
+    ASTRA_HOST_FS_SHARE,            /**< Retain handle's description; value answers a one-use token. */
+    ASTRA_HOST_FS_ADOPT,            /**< Consume offset's token in this session; handle answers the new handle. */
+    ASTRA_HOST_FS_FILE_FLAGS,       /**< flags masks mutable status, value_lo supplies it; value_lo answers open flags. */
+    ASTRA_HOST_FS_PATH              /**< Current directory path beneath the session root, or NOT_FOUND when unnamed. */
 };
 /** Highest valid ASTRA_HOST_FS_* operation code. */
-#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_CLAIM
+#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_PATH
 
 /** Volumes a root session may open (SESSION_OPEN value_lo with session 0):
  * one host directory each beneath the provider root. */
 enum {
     ASTRA_HOST_FS_VOLUME_WORK = 0u, /**< The general-purpose working volume. */
     ASTRA_HOST_FS_VOLUME_SOUND,     /**< The volume holding shared SoundFonts. */
+    /** Optional bootstrap system volume; absent providers return NOT_FOUND. */
+    ASTRA_HOST_FS_VOLUME_SYSTEM,
     ASTRA_HOST_FS_VOLUME_COUNT      /**< Count of defined volumes. */
 };
 
 /** WRITE flag: append at end of file, atomically, for this write. */
 #define ASTRA_HOST_FS_WRITE_APPEND      (1u << 15)
-/** UNLINK flag: the path must be a directory. */
+/** READ/WRITE at the shared position; value answers the position after. */
+#define ASTRA_HOST_FS_IO_SEQUENTIAL     (1u << 14)
+/** ADOPT withdraws an unclaimed token; only its sharer may withdraw. */
+#define ASTRA_HOST_FS_ADOPT_DISCARD     (1u << 0)
+/** UNLINK flag: remove an empty directory; zero flags require a non-directory. */
 #define ASTRA_HOST_FS_UNLINK_DIRECTORY  (1u << 0)
-/** UNLINK flag: the path must not be a directory. With neither flag the
- * provider removes whichever the path names. */
-#define ASTRA_HOST_FS_UNLINK_FILE       (1u << 1)
 /** SESSION_OPEN flag: every mutation in the session is refused
  * (ASTRA_STATUS_READ_ONLY); a session derived from a read-only one must
  * carry it too. */
 #define ASTRA_HOST_FS_SESSION_READ_ONLY (1u << 0)
+/** STAT flag: follow the final symbolic link. */
+#define ASTRA_HOST_FS_STAT_FOLLOW (1u << 0)
+/** STAT flag: permit a missing final leaf, returning zero node metadata. */
+#define ASTRA_HOST_FS_STAT_MISSING (1u << 1)
+/** STAT flag: offset_lo carries the remaining link budget; value_hi answers
+ * the links followed. Without this flag the provider uses its 40-link limit. */
+#define ASTRA_HOST_FS_STAT_BUDGET (1u << 2)
+/** Resolve the final directory entry without following it, even with '/'. */
+#define ASTRA_HOST_FS_STAT_ENTRY (1u << 3)
+/** ESCAPED result: a parent component left the session root. */
+#define ASTRA_HOST_FS_ESCAPE_PARENT 1u
+/** ESCAPED result: a symbolic link left the session root. */
+#define ASTRA_HOST_FS_ESCAPE_SYMLINK 2u
+/** ESCAPED replies put the original byte position in result_value, the
+ * reason in value_lo, links followed in value_hi, and the complete absolute
+ * Astra namespace continuation in data (result_length bytes, no NUL).
+ * No outside host path is followed. SESSION_OPEN refuses escapes with ACCESS;
+ * RENAME and LINK refuse them with CROSS_DEVICE. */
 /** CLAIM flag: release the claim and close every session and handle of
  * the owner. CLAIM is honoured only on a channel the kernel opened with
  * ASTRA_HOST_CHANNEL_PROVIDER; anywhere else it answers ACCESS. */
@@ -144,7 +178,7 @@ enum {
  */
 #define ASTRA_HOST_METRICS_SNAPSHOT UINT16_C(1)
 /** Wire-format version the host stamps into AstraHostMetricsSnapshot::version. */
-#define ASTRA_HOST_METRICS_VERSION UINT16_C(3)
+#define ASTRA_HOST_METRICS_VERSION UINT16_C(5)
 
 /** AstraHostCommand::operation: connect to the remote-desktop session
  * (idempotent if already connected) and receive its next queued event.
@@ -693,7 +727,7 @@ _Static_assert(sizeof(AstraHostChannelOpen) == ASTRA_HOST_CHANNEL_OPEN_SIZE,
  */
 /** @cond ASTRA_INTERNAL */
 /* Version 3: an unbound OPEN may carry ASTRA_HOST_CHANNEL_PROVIDER. */
-#define ASTRA_HOST_CHANNEL_CONFIG_VERSION 3u
+#define ASTRA_HOST_CHANNEL_CONFIG_VERSION 4u
 #define ASTRA_HOST_CHANNEL_CONFIG_SIZE 64u
 #define ASTRA_HOST_CHANNEL_CONFIG_OPEN  1u
 #define ASTRA_HOST_CHANNEL_CONFIG_CLOSE 2u
@@ -721,7 +755,8 @@ typedef struct AstraHostChannelConfig {
     uint32_t scope;        /**< OPEN (bound), ATTACH, DETACH: the scope's provider word. */
     uint32_t scope_flags;  /**< ASTRA_HOST_SCOPE_BOUND | READ_ONLY; an unbound OPEN 0 or ASTRA_HOST_CHANNEL_PROVIDER; 0 for CLOSE and DETACH. */
     uint32_t scope_owner;  /**< OPEN (bound), ATTACH: owner of the process that created the scope. */
-    uint32_t reserved[4];  /**< Zero. */
+    uint32_t scope_files;  /**< Per-owner handles and shares in this scope; zero for unlimited. */
+    uint32_t reserved[3];  /**< Zero. */
 } AstraHostChannelConfig;
 
 _Static_assert(sizeof(AstraHostChannelConfig) ==

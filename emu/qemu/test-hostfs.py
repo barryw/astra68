@@ -3,7 +3,9 @@
 
 import argparse
 import glob
+import json
 import os
+import runpy
 import socket
 import struct
 import subprocess
@@ -50,7 +52,8 @@ COMMAND_SIZE = 512
 COMMAND_VERSION = 3
 VOLUME_WORK = 0
 VOLUME_SOUND = 1
-VOLUME_COUNT = 2
+VOLUME_SYSTEM = 2
+VOLUME_COUNT = 3
 SUBMISSION_SIZE = 64
 CHANNEL_HEADER_SIZE = 64
 SESSION_FIELD = 60
@@ -86,6 +89,13 @@ FS_FILESYSTEM_INFO = 16
 FS_SESSION_OPEN = 17
 FS_SESSION_CLOSE = 18
 FS_CLAIM = 19
+FS_SEEK = 20
+FS_SHARE = 21
+FS_ADOPT = 22
+FS_FILE_FLAGS = 23
+FS_PATH = 24
+IO_SEQUENTIAL = 1 << 14
+ADOPT_DISCARD = 1
 UNLINK_DIRECTORY = 1
 SESSION_READ_ONLY = 1
 CLAIM_RELEASE = 1
@@ -94,16 +104,25 @@ METRICS_SNAPSHOT = 1
 SERVICE_ENTROPY = 4
 ENTROPY_FILL = 1
 ENTROPY_MAX = 256
-METRICS_CAPACITY = 16 + 8 * (12 + 2 * 20)
+METRICS_CAPACITY = 16 + 8 * (12 + 2 * 25)
 METRIC_HOST_COMMANDS = 8
 
 OPEN_READ = 1 << 0
 OPEN_WRITE = 1 << 1
 OPEN_CREATE = 1 << 2
+OPEN_TRUNCATE = 1 << 3
 OPEN_DIRECTORY = 1 << 4
 OPEN_EXCLUSIVE = 1 << 5
+OPEN_NOFOLLOW = 1 << 7
+OPEN_APPEND = 1 << 6
+OPEN_NONBLOCK = 1 << 8
+STAT_FOLLOW = 1
+STAT_MISSING = 2
+STAT_BUDGET = 4
 
 STATUS_OK = 0
+STATUS_NOT_FOUND = 2
+STATUS_EXISTS = 3
 STATUS_INVALID = 8
 STATUS_BAD_HANDLE = 9
 STATUS_ACCESS = 6
@@ -111,9 +130,13 @@ STATUS_IS_DIR = 5
 STATUS_NOT_DIR = 4
 STATUS_LOOP = 18
 STATUS_READ_ONLY = 19
+STATUS_ESCAPED = 20
+STATUS_LOST = 21
+STATUS_FILE_TOO_LARGE = 22
+STATUS_LIMIT = 10
 KIND_SYMLINK = 3
 SYSCALL_INVALID_ARGUMENT = 2
-CONFIG_VERSION = 3
+CONFIG_VERSION = 4
 CONFIG_OPEN = 1
 CONFIG_CLOSE = 2
 CONFIG_ATTACH = 3
@@ -124,6 +147,11 @@ SCOPE_READ_ONLY = 2
 CHANNEL_PROVIDER = 1 << 3
 CAP_FS_SCOPE = 1 << 10
 CAP_FS_SESSIONS = 1 << 11
+CAP_FS_RESOLVES = 1 << 12
+CAP_FS_DESCRIPTIONS = 1 << 13
+CAP_FS_DIRECTORY_BATCH = 1 << 14
+CAP_FS_PATHS = 1 << 15
+CURSOR_CURRENT = (1 << 64) - 1
 NODE_INODE_BIT = 1 << 11
 NODE_DEVICE_BIT = 1 << 12
 # The claimed filesystem owner (HostFS) and a client process on a lane.
@@ -210,9 +238,12 @@ class Command:
     """One record-3 command and its operands; place() lays them out."""
 
     def __init__(self, generation, operation, path=b"", path2=b"", flags=0,
-                 handle=0, value=0, offset=0, data=b"", capacity=0,
+                 handle=0, value=None, offset=0, data=b"", capacity=0,
                  service=1, session=0):
         self.raw = bytearray(COMMAND_SIZE)
+        if value is None:
+            value = (1 << 64) - 1 if operation == FS_WRITE else \
+                1 if operation == FS_READDIR else 0
         struct.pack_into(">IHHHH", self.raw, 0, COMMAND_SIZE, COMMAND_VERSION,
                          service, operation, flags)
         put32(self.raw, 16, handle)
@@ -302,10 +333,21 @@ def output(qtest, answer, length):
     return qtest.read(BUFFER + answer.data_at, length)
 
 
+def directory_names(data):
+    names = []
+    while data:
+        assert len(data) >= 33 and data[7] == 0
+        length = data[6]
+        assert length and len(data) >= 32 + length
+        names.append(data[32:32 + length])
+        data = data[32 + length:]
+    return names
+
+
 claim_generations = [100]
 
 
-def claim(qtest, generation, owner=PROVIDER, release=False, provider=True):
+def claim(qtest, generation, owner=PROVIDER, release=False, provider=True, epoch=False):
     """CLAIM (or RELEASE) on an unbound channel of `owner`: one the kernel
     stamped PROVIDER, as it does for a device handle carrying HOST_SCOPE,
     or with provider=False an ordinary one (every other HOST_DEVICE
@@ -322,8 +364,8 @@ def claim(qtest, generation, owner=PROVIDER, release=False, provider=True):
     qtest.write32(CLAIM_BUFFER + 36, 1)
     qtest.write32(CHANNEL_APERTURE + slot * 4096 + 0x20, 1)
     qtest.wait32(CLAIM_BUFFER + 48, 1)
-    answer = status(qtest.read(CLAIM_BUFFER + CHANNEL_HEADER_SIZE,
-                               COMMAND_SIZE))
+    record = qtest.read(CLAIM_BUFFER + CHANNEL_HEADER_SIZE, COMMAND_SIZE)
+    answer = (status(record), get32(record, 56)) if epoch else status(record)
     assert configure_channel(qtest, generation, CONFIG_CLOSE, slot=slot,
                              owner=owner,
                              channel_generation=channel_generation) == 0
@@ -379,8 +421,8 @@ def configure_channel(qtest, generation, operation, slot=3, owner=PROVIDER,
 def configure_scope(qtest, generation, operation, slot, channel_generation,
                     scope=0, scope_flags=0, scope_owner=0, owner=CLIENT,
                     buffer=SCOPED_BUFFER, byte_size=8192 + OPERAND_ROOM,
-                    capacity=2):
-    """The kernel's channel configuration, version 2, with scope words. The
+                    capacity=2, scope_files=0):
+    """The kernel's channel configuration with scope words. The
     channel belongs to a client; the scope's creator is the provider."""
     config = bytearray(64)
     opening = operation == CONFIG_OPEN
@@ -389,6 +431,7 @@ def configure_scope(qtest, generation, operation, slot, channel_generation,
                      buffer if opening else 0, byte_size if opening else 0,
                      capacity if opening else 0, scope, scope_flags,
                      scope_owner)
+    struct.pack_into(">I", config, 48, scope_files)
     qtest.write(CHANNEL_CONFIG, config)
     qtest.write32(HACC_CHANNEL_CONFIG, CHANNEL_CONFIG)
     return qtest.read32(HACC_CHANNEL_RESULT)
@@ -505,7 +548,7 @@ def scopes(qtest, root):
                            sound) == 0
     detached = step(Command(
         generation, FS_STAT, "/", session=sound))
-    assert status(detached) == STATUS_ACCESS
+    assert status(detached) == STATUS_LOST
 
     # A session's handles die with it, whoever opened them.
     with open(os.path.join(root, "work", "held-open"), "wb") as out:
@@ -523,7 +566,7 @@ def scopes(qtest, root):
     assert not provider_holds(target)
     assert status(step(Command(
         generation, FS_CLOSE, handle=get32(held, 16), session=sub))) == \
-        STATUS_BAD_HANDLE
+        STATUS_OK
 
     # The claimed owner dies (HostFS exits): every session it opened and
     # every handle in them go, and a handle from before never answers
@@ -539,7 +582,7 @@ def scopes(qtest, root):
     assert not provider_holds(os.path.join(root, "work", "survivor"))
     orphan = step(Command(
         generation, FS_STAT, "/", session=work))
-    assert status(orphan) == STATUS_ACCESS
+    assert status(orphan) == STATUS_LOST
     # The window while HostFS restarts: the claim is free, and another
     # HOST_DEVICE holder still cannot take it (review I1).
     assert claim(qtest, generation, owner=0x2002, provider=False) == \
@@ -554,7 +597,7 @@ def scopes(qtest, root):
         stale = step(Command(
             generation, FS_READ, handle=old_handle, capacity=4,
             session=session))
-        assert status(stale) == STATUS_BAD_HANDLE, (session, status(stale))
+        assert status(stale) == STATUS_LOST, (session, status(stale))
     assert configure_scope(qtest, generation, CONFIG_CLOSE, 7, 21) == 0
     # A device channel takes no scopes.
     assert configure_channel(qtest, generation, CONFIG_OPEN, slot=8,
@@ -593,13 +636,13 @@ def scope_revocation(qtest, root):
     writer = os.open(fifo, os.O_WRONLY)
     try:
         assert status(scoped_wait(qtest, 1, first)) == STATUS_OK
-        assert status(scoped_wait(qtest, 2, second)) == STATUS_ACCESS
+        assert status(scoped_wait(qtest, 2, second)) == STATUS_LOST
     finally:
         os.close(writer)
     assert not os.path.exists(os.path.join(root, "work", "after-revoke"))
     later = scoped(qtest, 9, 3, Command(generation, FS_STAT, "/",
                                         session=work))
-    assert status(later) == STATUS_ACCESS
+    assert status(later) == STATUS_LOST
     assert configure_scope(qtest, generation, CONFIG_CLOSE, 9, 31) == 0
     print("PASS scope-revocation")
 
@@ -736,6 +779,10 @@ def volumes(qtest, root):
     unknown = execute(qtest, [Command(
         generation, FS_SESSION_OPEN, "/", value=VOLUME_COUNT)])[0]
     assert status(unknown) == STATUS_INVALID
+    absent = execute(qtest, [Command(
+        generation, FS_SESSION_OPEN, "/", value=VOLUME_SYSTEM)])[0]
+    assert status(absent) == STATUS_NOT_FOUND
+    assert not os.path.exists(os.path.join(root, "system"))
     stale = Command(generation, FS_STAT, "/fonts", session=sound)
     struct.pack_into(">H", stale.raw, 4, COMMAND_VERSION - 1)
     assert status(execute(qtest, [stale])[0]) == STATUS_INVALID
@@ -813,7 +860,7 @@ def claims_and_sessions(qtest, root):
         generation, FS_READDIR, handle=get32(listed.raw, 16),
         capacity=NAME_CAPACITY, session=sub)])[0]
     assert status(entry) == STATUS_OK
-    assert output(qtest, entry, get32(entry.raw, 52)) == b"inside"
+    assert directory_names(output(qtest, entry, get32(entry.raw, 52))) == [b"inside"]
     assert status(execute(qtest, [Command(
         generation, FS_CLOSE, handle=get32(listed.raw, 16),
         session=sub)])[0]) == STATUS_OK
@@ -855,31 +902,45 @@ def claims_and_sessions(qtest, root):
     # directory handle (review M3).
     os.symlink("..", os.path.join(root, "sub", "up"))
     os.symlink("/etc", os.path.join(root, "sub", "abs"))
-    for path, expected in (("/up/loose", STATUS_LOOP),
-                           ("/up/sub/inside", STATUS_LOOP),
-                           ("/abs/passwd", STATUS_LOOP),
-                           ("/../loose", STATUS_INVALID),
-                           ("/inside/../../loose", STATUS_INVALID)):
+    for path, expected in (("/up/loose", STATUS_ESCAPED),
+                           ("/up/sub/inside", STATUS_ESCAPED),
+                           ("/abs/passwd", STATUS_ESCAPED),
+                           ("/../loose", STATUS_ESCAPED),
+                           ("/inside/../../loose", STATUS_NOT_DIR)):
         escaped = execute(qtest, [Command(
-            generation, FS_OPEN, path, flags=OPEN_READ, session=sub)])[0]
+            generation, FS_OPEN, path, flags=OPEN_READ, capacity=NAME_CAPACITY,
+            session=sub)])[0]
         assert status(escaped) == expected, (path, status(escaped))
     for path in ("../loose", "/loose", "up/loose"):
         escaped = execute(qtest, [Command(
             generation, FS_OPEN, path, handle=other, flags=OPEN_READ,
-            session=sub)])[0]
-        assert status(escaped) in (STATUS_INVALID, STATUS_LOOP), \
+            capacity=NAME_CAPACITY, session=sub)])[0]
+        assert status(escaped) == (STATUS_INVALID if path[0] == "/" else STATUS_ESCAPED), \
             (path, status(escaped))
     listed_up = execute(qtest, [Command(
         generation, FS_READDIR, "/up", capacity=NAME_CAPACITY,
         session=sub)])[0]
-    # A final symlink opened as a directory: Linux answers ENOTDIR or ELOOP;
-    # either way nothing is listed.
-    assert status(listed_up) in (STATUS_LOOP, STATUS_NOT_DIR), \
+    # The provider reports the namespace continuation without listing outside.
+    assert status(listed_up) == STATUS_ESCAPED, \
         status(listed_up)
     stolen = execute(qtest, [Command(
-        generation, FS_RENAME, "/inside", "/up/stolen", session=sub)])[0]
-    assert status(stolen) == STATUS_LOOP, status(stolen)
+        generation, FS_RENAME, "/inside", "/up/stolen", capacity=NAME_CAPACITY,
+        session=sub)])[0]
+    assert status(stolen) == STATUS_ESCAPED, status(stolen)
     assert not os.path.exists(os.path.join(root, "stolen"))
+    for operation in (FS_RENAME, FS_LINK):
+        for left, right in (("/abs/passwd", "/untouched"),
+                            ("/inside", "/abs/untouched"),
+                            ("abs/passwd", "untouched")):
+            escaped = execute(qtest, [Command(
+                generation, operation, left, right,
+                handle=other if left[0] != "/" else 0,
+                value=other if right[0] != "/" else 0,
+                capacity=NAME_CAPACITY, session=sub)])[0]
+            assert status(escaped) == STATUS_ESCAPED, (operation, left, right, status(escaped))
+            assert output(qtest, escaped, get32(escaped.raw, 52)).startswith(b"/etc/")
+    assert os.path.exists(os.path.join(root, "sub", "inside"))
+    assert not os.path.exists(os.path.join(root, "sub", "untouched"))
     assert status(execute(qtest, [Command(
         generation, FS_CLOSE, handle=other, session=sub)])[0]) == STATUS_OK
 
@@ -939,8 +1000,10 @@ def claims_and_sessions(qtest, root):
 
 def run(qtest, root, outside):
     qtest.detect_endian()
-    assert qtest.read32(HACC_VERSION) == 0x0001000E
-    assert qtest.read32(HACC_CAPS) == 511 | CAP_FS_SCOPE | CAP_FS_SESSIONS
+    assert qtest.read32(HACC_VERSION) == 0x00010015
+    assert qtest.read32(HACC_CAPS) == (511 | CAP_FS_SCOPE | CAP_FS_SESSIONS |
+                                    CAP_FS_RESOLVES | CAP_FS_DESCRIPTIONS |
+                                    CAP_FS_DIRECTORY_BATCH | CAP_FS_PATHS)
     assert qtest.read32(HACC_STATE) == 1
     assert qtest.read32(HACC_MAX_TRANSFER) == 2 * 1024 * 1024
     assert qtest.read32(HACC_MAX_COMMANDS) == 4096
@@ -956,7 +1019,7 @@ def run(qtest, root, outside):
     snapshot = output(qtest, metrics, metrics_size)
     size, version, count = struct.unpack_from(">IHH", snapshot, 0)
     assert size == metrics_size
-    assert version == 3
+    assert version == 5
     assert count == (metrics_size - 16) // 8
     assert count > METRIC_HOST_COMMANDS
     assert get64(snapshot, 16) != 0
@@ -1058,6 +1121,43 @@ def run(qtest, root, outside):
             concurrent_buffer + CHANNEL_HEADER_SIZE + index * COMMAND_SIZE,
             COMMAND_SIZE)
         assert status(command) == STATUS_OK
+    # Independent descriptions enter the worker pool together; one generic
+    # bound must cover EOF selection and the write, not a preflight seek.
+    race_path = os.path.join(root, "bounded-append-race")
+    for round_index in range(16):
+        with open(race_path, "wb"):
+            pass
+        opened = execute(qtest, [Command(generation, FS_OPEN,
+            "/bounded-append-race", flags=OPEN_WRITE | OPEN_APPEND,
+            session=work) for _ in range(concurrent_capacity)])
+        assert all(status(answer) == STATUS_OK for answer in opened)
+        handles = [get32(answer.raw, 16) for answer in opened]
+        payloads = [bytes([index + 1]) * 128 for index in range(concurrent_capacity)]
+        channel_write(qtest, concurrent_buffer, concurrent_capacity, [
+            Command(generation, FS_WRITE, handle=handle, flags=IO_SEQUENTIAL,
+                value=100, data=payload, session=work)
+            for handle, payload in zip(handles, payloads)],
+            first=(round_index + 1) * concurrent_capacity)
+        producer = (round_index + 2) * concurrent_capacity
+        qtest.write32(concurrent_buffer + 36, producer)
+        qtest.write32(CHANNEL_APERTURE + 5 * 4096 + 0x20, producer)
+        qtest.wait32(concurrent_buffer + 48, producer)
+        winners = []
+        for index in range(concurrent_capacity):
+            answer = qtest.read(concurrent_buffer + CHANNEL_HEADER_SIZE +
+                index * COMMAND_SIZE, COMMAND_SIZE)
+            if status(answer) == STATUS_OK:
+                assert get32(answer, 52) == 100
+                winners.append(index)
+            else:
+                assert status(answer) == STATUS_FILE_TOO_LARGE
+                assert get32(answer, 52) == 0
+        assert len(winners) == 1, winners
+        with open(race_path, "rb") as fixture:
+            assert fixture.read() == payloads[winners[0]][:100]
+        assert all(status(answer) == STATUS_OK for answer in execute(qtest, [
+            Command(generation, FS_CLOSE, handle=handle, session=work)
+            for handle in handles]))
     assert configure_channel(qtest, generation, 2, slot=5,
                              channel_generation=9) == 0
 
@@ -1258,6 +1358,27 @@ def run(qtest, root, outside):
     assert status(hard_linked) == STATUS_OK
     assert os.path.samefile(os.path.join(root, "data"),
                             os.path.join(root, "data-hard-link"))
+    for operation in (FS_RENAME, FS_LINK):
+        refused = execute(qtest, [Command(generation, operation, "/data",
+            "/absent/", session=work)])[0]
+        assert status(refused) != STATUS_OK
+        assert os.path.exists(os.path.join(root, "data"))
+        assert not os.path.exists(os.path.join(root, "absent"))
+    os.mkdir(os.path.join(root, "dir-target"))
+    os.symlink("dir-target", os.path.join(root, "dir-link"))
+    made = execute(qtest, [Command(generation, FS_MKDIR, "/dir-link/",
+        value=0o755, session=work)])[0]
+    assert status(made) == STATUS_EXISTS
+    read_link = execute(qtest, [Command(generation, FS_READLINK, "/dir-link/",
+        capacity=NAME_CAPACITY, session=work)])[0]
+    assert status(read_link) == STATUS_INVALID
+    for operation, path2 in ((FS_UNLINK, ""), (FS_RENAME, "/stolen-dir"),
+                             (FS_LINK, "/stolen-dir")):
+        refused = execute(qtest, [Command(generation, operation, "/dir-link/",
+            path2, session=work)])[0]
+        assert status(refused) == STATUS_NOT_DIR
+        assert os.path.islink(os.path.join(root, "dir-link"))
+        assert os.path.isdir(os.path.join(root, "dir-target"))
 
     malformed = Command(generation, FS_READ, handle=handle, session=work)
     put32(malformed.raw, 48, 1)
@@ -1268,8 +1389,36 @@ def run(qtest, root, outside):
     assert status(made_link) == STATUS_OK
     opened_link = execute(qtest, [Command(
         generation, FS_OPEN, "/data-link", flags=OPEN_READ,
+        capacity=NAME_CAPACITY, session=work)])[0]
+    assert status(opened_link) == STATUS_ESCAPED, status(opened_link)
+    assert output(qtest, opened_link, get32(opened_link.raw, 52)) == b"/data"
+    assert get32(opened_link.raw, 56) == len("/data-link")
+    assert get32(opened_link.raw, 36) == 2 and get32(opened_link.raw, 32) == 1
+    refused_link = execute(qtest, [Command(
+        generation, FS_OPEN, "/data-link", flags=OPEN_READ | OPEN_NOFOLLOW,
         session=work)])[0]
-    assert status(opened_link) == STATUS_LOOP, status(opened_link)
+    assert status(refused_link) == STATUS_LOOP
+    os.symlink("data", os.path.join(root, "relative-link"))
+    relative = execute(qtest, [Command(
+        generation, FS_OPEN, "/relative-link", flags=OPEN_READ, session=work)])[0]
+    assert status(relative) == STATUS_OK
+    assert status(execute(qtest, [Command(generation, FS_CLOSE,
+        handle=get32(relative.raw, 16), session=work)])[0]) == STATUS_OK
+    followed = execute(qtest, [Command(generation, FS_STAT, "/relative-link",
+        flags=STAT_FOLLOW | STAT_BUDGET, offset=1, session=work)])[0]
+    assert status(followed) == STATUS_OK and get32(followed.raw, 32) == 1
+    limited = execute(qtest, [Command(generation, FS_STAT, "/relative-link",
+        flags=STAT_FOLLOW | STAT_BUDGET, offset=0, session=work)])[0]
+    assert status(limited) == STATUS_LOOP
+    missing = execute(qtest, [Command(generation, FS_STAT, "/new-leaf",
+        flags=STAT_FOLLOW | STAT_MISSING | STAT_BUDGET, offset=40,
+        session=work)])[0]
+    assert status(missing) == STATUS_OK
+    assert struct.unpack_from(">H", missing.raw, NODE_KIND)[0] == 0
+    missing_parent = execute(qtest, [Command(generation, FS_STAT,
+        "/new-dir/../new-leaf", flags=STAT_FOLLOW | STAT_MISSING | STAT_BUDGET,
+        offset=40, session=work)])[0]
+    assert status(missing_parent) == 2
     linked = execute(qtest, [Command(
         generation, FS_STAT, "/data-link", session=work)])[0]
     assert status(linked) == STATUS_OK
@@ -1285,19 +1434,27 @@ def run(qtest, root, outside):
 
     os.symlink(outside, os.path.join(root, "escape"))
     escaped = execute(qtest, [Command(
-        generation, FS_STAT, "/escape/sentinel", session=work)])[0]
-    assert status(escaped) == STATUS_LOOP, status(escaped)
+        generation, FS_STAT, "/escape/sentinel", capacity=PATH_MAX,
+        session=work)])[0]
+    assert status(escaped) == STATUS_ESCAPED, status(escaped)
+    assert output(qtest, escaped, get32(escaped.raw, 52)) == (outside + "/sentinel").encode()
+    assert get32(escaped.raw, 56) == len("/escape") and get32(escaped.raw, 36) == 2
     traversed = execute(qtest, [Command(
-        generation, FS_STAT, "/../sentinel", session=work)])[0]
-    assert status(traversed) == STATUS_INVALID
+        generation, FS_STAT, "/../sentinel", capacity=NAME_CAPACITY,
+        session=work)])[0]
+    assert status(traversed) == STATUS_ESCAPED
+    assert output(qtest, traversed, get32(traversed.raw, 52)) == b"/sentinel"
+    assert get32(traversed.raw, 56) == 3 and get32(traversed.raw, 36) == 1
     for malformed_path in ("//data", "/./data", "/batch-0/../data"):
         malformed_path_result = execute(qtest, [Command(
             generation, FS_STAT, malformed_path, session=work)])[0]
-        assert status(malformed_path_result) == STATUS_INVALID, (
+        assert status(malformed_path_result) == STATUS_OK, (
             malformed_path, status(malformed_path_result))
     renamed = execute(qtest, [Command(
-        generation, FS_RENAME, "/data", "/escape/stolen", session=work)])[0]
-    assert status(renamed) == STATUS_LOOP, status(renamed)
+        generation, FS_RENAME, "/data", "/escape/stolen",
+        capacity=NAME_CAPACITY, session=work)])[0]
+    assert status(renamed) == STATUS_ESCAPED, status(renamed)
+    assert output(qtest, renamed, get32(renamed.raw, 52)) == (outside + "/stolen").encode()
     with open(os.path.join(outside, "sentinel"), "rb") as source:
         assert source.read() == b"outside"
     assert not os.path.exists(os.path.join(outside, "stolen"))
@@ -1315,14 +1472,14 @@ def run(qtest, root, outside):
         generation, FS_READDIR, handle=directory, capacity=NAME_CAPACITY,
         session=work)])[0]
     assert status(first) == STATUS_OK
-    first_name = output(qtest, first, get32(first.raw, 52))
+    first_name, = directory_names(output(qtest, first, get32(first.raw, 52)))
     cursor = get64(first.raw, 32)
     assert first_name not in (b".", b"..") and cursor != 0
     second = execute(qtest, [Command(
         generation, FS_READDIR, handle=directory, offset=cursor,
         capacity=NAME_CAPACITY, session=work)])[0]
     assert status(second) == STATUS_OK, status(second)
-    second_name = output(qtest, second, get32(second.raw, 52))
+    second_name, = directory_names(output(qtest, second, get32(second.raw, 52)))
     assert second_name not in (b".", b"..", first_name)
     # With a handle, READDIR takes no path.
     assert status(execute(qtest, [Command(
@@ -1354,6 +1511,31 @@ def run(qtest, root, outside):
     assert status(relative_stat) == STATUS_OK
     assert get64(relative_stat.raw, NODE_INODE) == \
         os.stat(os.path.join(root, "relative-child")).st_ino
+    os.mkdir(os.path.join(root, "moving"))
+    with open(os.path.join(root, "moving", "child"), "wb") as fixture:
+        fixture.write(b"kept")
+    held = execute(qtest, [Command(generation, FS_OPEN, "/moving",
+        flags=OPEN_READ | OPEN_DIRECTORY, session=work)])[0]
+    assert status(held) == STATUS_OK
+    moving_handle = get32(held.raw, 16)
+    moved_path = os.path.join(outside, "moving")
+    os.rename(os.path.join(root, "moving"), moved_path)
+    for operation, name, flags, capacity in (
+            (FS_STAT, "", 0, 0), (FS_STAT, "child", 0, 0),
+            (FS_OPEN, "child", OPEN_WRITE | OPEN_TRUNCATE, 0),
+            (FS_READDIR, "", 0, NAME_CAPACITY), (FS_CHMOD, "", 0, 0)):
+        refused = execute(qtest, [Command(generation, operation, name,
+            handle=moving_handle, flags=flags, capacity=capacity,
+            value=0o700, session=work)])[0]
+        assert status(refused) != STATUS_OK
+    with open(os.path.join(moved_path, "child"), "rb") as fixture:
+        assert fixture.read() == b"kept"
+    os.rename(moved_path, os.path.join(root, "moving"))
+    restored = execute(qtest, [Command(generation, FS_STAT, "child",
+        handle=moving_handle, session=work)])[0]
+    assert status(restored) == STATUS_OK
+    assert status(execute(qtest, [Command(generation, FS_CLOSE,
+        handle=moving_handle, session=work)])[0]) == STATUS_OK
     # A relative path needs a directory handle, an absolute one none.
     assert status(execute(qtest, [Command(
         generation, FS_STAT, "relative-child", handle=relative_handle,
@@ -1384,11 +1566,17 @@ def run(qtest, root, outside):
         session=work)])[0]
     assert status(removed_at) == STATUS_OK
     assert not os.path.exists(os.path.join(root, "renamed-child"))
-    # UNLINK's kind flags: DIRECTORY refuses a file, both are invalid.
+    # Removal checks the required kind; zero flags must not remove a directory.
+    assert status(execute(qtest, [Command(
+        generation, FS_UNLINK, "/batch-7", session=work)])[0]) == STATUS_IS_DIR
+    assert os.path.isdir(os.path.join(root, "batch-7"))
     assert status(execute(qtest, [Command(
         generation, FS_UNLINK, "/write-only", flags=UNLINK_DIRECTORY,
-        session=work)])[0]) != STATUS_OK
+        session=work)])[0]) == STATUS_NOT_DIR
     assert os.path.exists(os.path.join(root, "write-only"))
+    assert status(execute(qtest, [Command(
+        generation, FS_UNLINK, "/write-only", flags=2,
+        session=work)])[0]) == STATUS_INVALID
     assert status(execute(qtest, [Command(
         generation, FS_UNLINK, "/write-only", flags=3,
         session=work)])[0]) == STATUS_INVALID
@@ -1421,9 +1609,485 @@ def run(qtest, root, outside):
     print("PASS run")
 
 
+def descriptions(qtest, root):
+    """Position and mutable flags belong to one description across owners."""
+    generation = qtest.read32(HACC_GENERATION)
+    assert claim(qtest, generation) == STATUS_OK
+    session = open_session(qtest, generation)
+    other = open_session(qtest, generation)
+    path = os.path.join(root, "work", "shared-description")
+    with open(path, "wb") as fixture:
+        fixture.write(b"abcdef")
+
+    def parent(op, **kwargs):
+        return execute(qtest, [Command(generation, op, session=session,
+                                        **kwargs)])[0]
+
+    opened = parent(FS_OPEN, path="/shared-description",
+                    flags=OPEN_READ | OPEN_WRITE | OPEN_APPEND)
+    assert status(opened) == STATUS_OK
+    handle = get32(opened.raw, 16)
+    first = parent(FS_READ, handle=handle, flags=IO_SEQUENTIAL, capacity=2)
+    assert status(first) == STATUS_OK and get64(first.raw, 32) == 2
+    assert output(qtest, first, 2) == b"ab"
+    shared = parent(FS_SHARE, handle=handle)
+    assert status(shared) == STATUS_OK
+    token = get64(shared.raw, 32)
+    assert token != 0
+
+    buffer = 0x02080000
+    assert configure_scope(qtest, generation, CONFIG_OPEN, 25, 61,
+                           session, SCOPE_BOUND, PROVIDER, buffer=buffer) == 0
+    producer = 0
+
+    def child(op, session_id=session, **kwargs):
+        nonlocal producer
+        producer += 1
+        command = Command(generation, op, session=session_id, **kwargs)
+        at = scoped_post(qtest, 25, producer, command, buffer=buffer)
+        return scoped_wait(qtest, producer, at, buffer=buffer)
+
+    assert configure_scope(qtest, generation, CONFIG_ATTACH, 25, 61,
+                           other, SCOPE_BOUND, PROVIDER) == 0
+    assert status(child(FS_ADOPT, session_id=other, offset=token)) == STATUS_ACCESS
+    adopted = child(FS_ADOPT, offset=token)
+    assert status(adopted) == STATUS_OK
+    alias = get32(adopted, 16)
+    assert alias != 0 and alias != handle
+    assert status(child(FS_ADOPT, offset=token)) == STATUS_BAD_HANDLE
+    positioned = child(FS_READ, handle=alias, offset=0, capacity=2)
+    assert status(positioned) == STATUS_OK
+    assert qtest.read(buffer + get32(positioned, 40), 2) == b"ab"
+    sequential = child(FS_READ, handle=alias, flags=IO_SEQUENTIAL,
+                       offset=99, capacity=2)
+    assert status(sequential) == STATUS_OK and get64(sequential, 32) == 4
+    assert qtest.read(buffer + get32(sequential, 40), 2) == b"cd"
+    assert get64(parent(FS_SEEK, handle=handle, flags=1).raw, 32) == 4
+
+    appended = child(FS_WRITE, handle=alias, flags=IO_SEQUENTIAL, value=7, data=b"XYZ")
+    assert status(appended) == STATUS_OK and get64(appended, 32) == 7
+    assert get32(appended, 52) == 1
+    assert status(child(FS_WRITE, handle=alias, flags=IO_SEQUENTIAL,
+                        value=7, data=b"x")) == STATUS_FILE_TOO_LARGE
+    assert status(child(FS_WRITE, handle=alias, offset=7, value=7, data=b"x")) == STATUS_FILE_TOO_LARGE
+    assert status(child(FS_WRITE, handle=alias, offset=6, value=7, data=b"XZ")) == STATUS_OK
+    assert get64(parent(FS_SEEK, handle=handle, flags=1).raw, 32) == 7
+    assert status(child(FS_SEEK, handle=alias, offset=1)) == STATUS_OK
+    empty = child(FS_WRITE, handle=alias, flags=IO_SEQUENTIAL, value=0)
+    assert status(empty) == STATUS_OK and get32(empty, 52) == 0
+    assert get64(parent(FS_SEEK, handle=handle, flags=1).raw, 32) == 1
+    assert status(child(FS_SEEK, handle=alias, offset=7)) == STATUS_OK
+    overwritten = child(FS_WRITE, handle=alias, offset=0, data=b"Z")
+    assert status(overwritten) == STATUS_OK
+    assert get64(parent(FS_SEEK, handle=handle, flags=1).raw, 32) == 7
+    assert open(path, "rb").read() == b"ZbcdefX"
+    cleared = child(FS_FILE_FLAGS, handle=alias,
+                    flags=OPEN_APPEND | OPEN_NONBLOCK, value=OPEN_NONBLOCK)
+    assert status(cleared) == STATUS_OK and not get32(cleared, 36) & OPEN_APPEND
+    assert get32(parent(FS_FILE_FLAGS, handle=handle).raw, 36) & \
+        (OPEN_APPEND | OPEN_NONBLOCK) == OPEN_NONBLOCK
+    assert status(child(FS_SEEK, handle=alias, offset=1)) == STATUS_OK
+    ordinary = parent(FS_WRITE, handle=handle, flags=IO_SEQUENTIAL, data=b"Y")
+    assert status(ordinary) == STATUS_OK and get64(ordinary.raw, 32) == 2
+    assert open(path, "rb").read() == b"ZYcdefX"
+    assert status(child(FS_SEEK, handle=alias, flags=3)) == STATUS_INVALID
+    assert status(child(FS_SEEK, handle=alias, offset=(1 << 64) - 1)) != STATUS_OK
+    assert status(child(FS_FILE_FLAGS, handle=alias, flags=OPEN_WRITE,
+                        value=OPEN_WRITE)) == STATUS_INVALID
+
+    pending = child(FS_SHARE, handle=alias)
+    pending_token = get64(pending, 32)
+    assert status(pending) == STATUS_OK and pending_token != 0
+    assert status(parent(FS_ADOPT, flags=ADOPT_DISCARD,
+                         offset=pending_token)) == STATUS_ACCESS
+    assert status(child(FS_CLOSE, handle=alias)) == STATUS_OK
+    held = parent(FS_ADOPT, offset=pending_token)
+    assert status(held) == STATUS_OK
+    held_handle = get32(held.raw, 16)
+    withdrawn = parent(FS_SHARE, handle=handle)
+    assert status(withdrawn) == STATUS_OK
+    withdrawn_token = get64(withdrawn.raw, 32)
+    assert status(parent(FS_ADOPT, flags=ADOPT_DISCARD,
+                         offset=withdrawn_token)) == STATUS_OK
+    assert status(parent(FS_ADOPT, offset=withdrawn_token)) == STATUS_BAD_HANDLE
+    assert status(parent(FS_CLOSE, handle=handle)) == STATUS_OK
+    assert status(parent(FS_READ, handle=held_handle, flags=IO_SEQUENTIAL,
+                         capacity=1)) == STATUS_OK
+    assert status(parent(FS_CLOSE, handle=held_handle)) == STATUS_OK
+    assert not provider_holds(path)
+    # A dead sharer loses pending references; already adopted owners retain theirs.
+    directory_path = os.path.join(root, "work", "shared-directory")
+    os.mkdir(directory_path)
+    expected = {b"alpha", b"bravo", b"charlie"}
+    for name in expected:
+        open(os.path.join(directory_path, name.decode()), "wb").close()
+    opened = parent(FS_OPEN, path="/shared-directory",
+                    flags=OPEN_READ | OPEN_DIRECTORY)
+    assert status(opened) == STATUS_OK
+    directory = get32(opened.raw, 16)
+    receipt = parent(FS_SHARE, handle=directory)
+    adopted = child(FS_ADOPT, offset=get64(receipt.raw, 32))
+    assert status(receipt) == STATUS_OK and status(adopted) == STATUS_OK
+    child_directory = get32(adopted, 16)
+
+    def parent_names(capacity=128, limit=1):
+        answer = parent(FS_READDIR, handle=directory, offset=CURSOR_CURRENT,
+                        value=limit, capacity=capacity)
+        assert status(answer) == STATUS_OK, status(answer)
+        return directory_names(output(qtest, answer, get32(answer.raw, 52)))
+
+    first, = parent_names()
+    answer = child(FS_READDIR, handle=child_directory, offset=CURSOR_CURRENT,
+                   capacity=128)
+    assert status(answer) == STATUS_OK
+    second, = directory_names(qtest.read(buffer + get32(answer, 40),
+                                         get32(answer, 52)))
+    third, = parent_names()
+    assert {first, second, third} == expected
+    assert status(child(FS_SEEK, handle=child_directory, offset=0)) == STATUS_OK
+    too_small = parent(FS_READDIR, handle=directory, offset=CURSOR_CURRENT,
+                       capacity=33)
+    assert status(too_small) == 15
+    assert parent_names() == [first], "small buffer consumed directory entry"
+    assert status(parent(FS_SEEK, handle=directory, offset=0)) == STATUS_OK
+    assert parent_names(capacity=32 + len(first) + 32, limit=2) == [first]
+    assert parent_names() == [second], "partial batch consumed next entry"
+    assert parent_names() == [third]
+    assert status(parent(FS_CLOSE, handle=directory)) == STATUS_OK
+    assert status(child(FS_CLOSE, handle=child_directory)) == STATUS_OK
+    assert not provider_holds(directory_path)
+    opened = child(FS_OPEN, path="/shared-description", flags=OPEN_READ)
+    assert status(opened) == STATUS_OK
+    dying_handle = get32(opened, 16)
+    adopted_token = get64(child(FS_SHARE, handle=dying_handle), 32)
+    survivor = parent(FS_ADOPT, offset=adopted_token)
+    assert status(survivor) == STATUS_OK
+    survivor_handle = get32(survivor.raw, 16)
+    abandoned = get64(child(FS_SHARE, handle=dying_handle), 32)
+    qtest.write32(HACC_RELEASE_OWNER, CLIENT)
+    assert status(parent(FS_ADOPT, offset=abandoned)) == STATUS_BAD_HANDLE
+    alive = parent(FS_READ, handle=survivor_handle, flags=IO_SEQUENTIAL, capacity=1)
+    assert status(alive) == STATUS_OK and output(qtest, alive, 1) == b"Z"
+    assert status(parent(FS_CLOSE, handle=survivor_handle)) == STATUS_OK
+    assert not provider_holds(path)
+    print("PASS shared-descriptions")
+
+
+def paths(qtest, root):
+    """Directory identity survives rename; its spelling must remain confined."""
+    generation = qtest.read32(HACC_GENERATION)
+    assert claim(qtest, generation) == STATUS_OK
+    session = open_session(qtest, generation)
+    before = os.path.join(root, "work", "cwd-before")
+    after = os.path.join(root, "work", "cwd-after")
+    os.mkdir(before)
+
+    def call(operation, **kwargs):
+        return execute(qtest, [Command(generation, operation, session=session,
+                                        **kwargs)])[0]
+
+    opened = call(FS_OPEN, path="/cwd-before", flags=OPEN_READ | OPEN_DIRECTORY)
+    assert status(opened) == STATUS_OK
+    handle = get32(opened.raw, 16)
+
+    def where(expected):
+        answer = call(FS_PATH, handle=handle, capacity=PATH_MAX)
+        assert status(answer) == STATUS_OK, status(answer)
+        assert output(qtest, answer, get32(answer.raw, 52)) == expected
+
+    where(b"/cwd-before")
+    assert status(call(FS_PATH, handle=handle, capacity=1)) == 15
+    assert status(call(FS_PATH, handle=handle, path="x", capacity=128)) == STATUS_INVALID
+    os.rename(before, after)
+    os.mkdir(before)
+    where(b"/cwd-after")
+    os.rmdir(after)
+    os.mkdir(after)
+    assert status(call(FS_PATH, handle=handle, capacity=128)) == STATUS_NOT_FOUND
+    assert status(call(FS_CLOSE, handle=handle)) == STATUS_OK
+    opened = call(FS_OPEN, path="/cwd-before", flags=OPEN_READ | OPEN_DIRECTORY)
+    assert status(opened) == STATUS_OK
+    handle = get32(opened.raw, 16)
+    os.rename(before, os.path.join(root, "cwd-outside"))
+    assert status(call(FS_PATH, handle=handle, capacity=128)) == STATUS_NOT_FOUND
+    assert status(call(FS_CLOSE, handle=handle)) == STATUS_OK
+    assert not provider_holds(os.path.join(root, "cwd-outside"))
+    print("PASS directory-paths")
+
+
+def provider_loss(qtest, root, qmp_path):
+    """Reset only the Linux filesystem provider; unrelated channels stay live."""
+    QmpClient = runpy.run_path(os.path.join(os.path.dirname(__file__),
+        "astra-input-hotplug.py"))["QmpClient"]
+    qmp = QmpClient(qmp_path)
+    try:
+        qtest.write32(HACC_RESET, 1)
+        generation = qtest.read32(HACC_GENERATION)
+        result, epoch = claim(qtest, generation, epoch=True)
+        assert result == STATUS_OK and epoch != 0
+        session = open_session(qtest, generation)
+        assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21,
+            session, SCOPE_BOUND, PROVIDER) == 0
+        produced = 0
+        def call(operation, **kwargs):
+            nonlocal produced
+            produced += 1
+            return scoped(qtest, 7, produced, Command(generation, operation,
+                session=session, **kwargs))
+        for attempt in range(12):
+            opened = call(FS_OPEN, path="/lost.bin", flags=OPEN_READ | OPEN_WRITE | OPEN_CREATE, value=0o644)
+            assert status(opened) == STATUS_OK, (attempt, status(opened))
+            handle = get32(opened, 16)
+            host_path = os.path.join(root, "work", "lost.bin")
+            assert provider_holds(host_path)
+            qmp.execute("qom-set", {"path": "/machine",
+                "property": "astra-host-fs-reset", "value": True})
+            assert qtest.read32(HACC_GENERATION) == generation
+            assert not provider_holds(host_path)
+            assert status(call(FS_READ, handle=handle, capacity=8)) == STATUS_LOST
+            assert status(execute(qtest, [Command(generation, FS_STAT,
+                path="/", session=session)], owner=0xDEAD)[0]) == STATUS_ACCESS
+            result, next_epoch = claim(qtest, generation, epoch=True)
+            assert result == STATUS_OK and next_epoch != epoch
+            epoch = next_epoch
+            old = session
+            assert configure_scope(qtest, generation, CONFIG_DETACH, 7, 21, old) == 0
+            session = open_session(qtest, generation)
+            assert configure_scope(qtest, generation, CONFIG_ATTACH, 7, 21,
+                session, SCOPE_BOUND, PROVIDER) == 0
+            # An old FD never binds to a new file, even after a fresh session.
+            assert status(call(FS_STAT, path="/lost.bin")) == STATUS_OK
+            assert status(call(FS_READ, handle=handle, capacity=8)) == STATUS_LOST
+            shared = call(FS_SHARE, handle=handle)
+            assert status(shared) == STATUS_OK
+            token = get64(shared, 32)
+            child = CLIENT + 1
+            assert configure_scope(qtest, generation, CONFIG_OPEN, 8, 22,
+                session, SCOPE_BOUND, PROVIDER, owner=child, buffer=RACE_BUFFER) == 0
+            child_produced = 0
+            def child_call(operation, **kwargs):
+                nonlocal child_produced
+                child_produced += 1
+                at = scoped_post(qtest, 8, child_produced, Command(generation,
+                    operation, session=session, **kwargs), buffer=RACE_BUFFER)
+                return scoped_wait(qtest, child_produced, at, buffer=RACE_BUFFER)
+            assert status(child_call(FS_ADOPT, offset=token, flags=ADOPT_DISCARD)) == STATUS_ACCESS
+            adopted = child_call(FS_ADOPT, offset=token)
+            assert status(adopted) == STATUS_OK
+            inherited = get32(adopted, 16)
+            assert inherited != handle
+            assert status(child_call(FS_READ, handle=handle, capacity=8)) == STATUS_BAD_HANDLE
+            assert status(child_call(FS_READ, handle=inherited, capacity=8)) == STATUS_LOST
+            assert status(child_call(FS_CLOSE, handle=inherited)) == STATUS_OK
+            assert configure_scope(qtest, generation, CONFIG_CLOSE, 8, 22, owner=child) == 0
+            assert status(call(FS_CLOSE, handle=handle)) == STATUS_OK
+            assert status(call(FS_READ, handle=handle, capacity=8)) == STATUS_BAD_HANDLE
+        assert qmp.execute("qom-get", {"path": "/machine",
+            "property": "astra-host-fs-resets"}) == 12
+        assert configure_scope(qtest, generation, CONFIG_CLOSE, 7, 21) == 0
+        print("PASS provider-loss resets=12 old-fds-lost inherited-fds-lost fresh-paths-ok")
+    finally:
+        qmp.close()
+
+
+def budgets(qtest, root, qmp_path):
+    """Admission precedes mutation; aliases, tokens and lost IDs stay bounded."""
+    QmpClient = runpy.run_path(os.path.join(os.path.dirname(__file__),
+        "astra-input-hotplug.py"))["QmpClient"]
+    qtest.detect_endian()
+    generation = qtest.read32(HACC_GENERATION)
+    assert claim(qtest, generation) == STATUS_OK
+    session = open_session(qtest, generation)
+    fixture = os.path.join(root, "work", "quota-file")
+    with open(fixture, "wb") as stream:
+        stream.write(b"unchanged")
+    qmp = QmpClient(qmp_path)
+    produced = {7: 0, 8: 0}
+    buffers = {7: SCOPED_BUFFER, 8: RACE_BUFFER}
+
+    def gauge(name):
+        return qmp.execute("qom-get", {"path": "/machine",
+            "property": "astra-host-" + name})
+
+    def call(slot, operation, **kwargs):
+        produced[slot] += 1
+        at = scoped_post(qtest, slot, produced[slot], Command(generation,
+            operation, session=session, **kwargs), buffer=buffers[slot])
+        return scoped_wait(qtest, produced[slot], at, buffer=buffers[slot])
+
+    def direct(operation, **kwargs):
+        return execute(qtest, [Command(generation, operation,
+            session=session, **kwargs)])[0]
+
+    try:
+        for slot, owner in ((7, CLIENT), (8, CLIENT + 1)):
+            assert configure_scope(qtest, generation, CONFIG_OPEN, slot,
+                21 + slot, session, SCOPE_BOUND, PROVIDER, owner=owner,
+                buffer=buffers[slot], scope_files=4) == 0
+        handles = [get32(call(7, FS_OPEN, path="/quota-file", flags=OPEN_READ), 16)
+                   for _ in range(2)]
+        assert all(handles)
+        shares = [call(7, FS_SHARE, handle=handles[0]) for _ in range(2)]
+        assert all(status(reply) == STATUS_OK for reply in shares)
+        tokens = [get64(reply, 32) for reply in shares]
+        assert gauge("fs-descriptors") == 3
+        assert gauge("fs-objects") == 5
+        for path, flags in (("/quota-new", OPEN_WRITE | OPEN_CREATE),
+                            ("/quota-file", OPEN_WRITE | OPEN_TRUNCATE)):
+            assert status(call(7, FS_OPEN, path=path, flags=flags,
+                               value=0o644)) == STATUS_LIMIT
+        assert not os.path.exists(os.path.join(root, "work", "quota-new"))
+        assert open(fixture, "rb").read() == b"unchanged"
+        other = [get32(call(8, FS_OPEN, path="/quota-file", flags=OPEN_READ), 16)
+                 for _ in range(4)]
+        assert all(other), other
+        assert status(call(8, FS_ADOPT, offset=tokens[0])) == STATUS_LIMIT
+        assert status(call(8, FS_CLOSE, handle=other.pop())) == STATUS_OK
+        before = gauge("fs-descriptors")
+        alias = call(8, FS_ADOPT, offset=tokens[0])
+        assert status(alias) == STATUS_OK
+        other.append(get32(alias, 16))
+        assert gauge("fs-descriptors") == before
+        # Same-owner adoption replaces its token; no additional owner slot.
+        own = call(7, FS_ADOPT, offset=tokens[1])
+        assert status(own) == STATUS_OK
+        handles.append(get32(own, 16))
+        for handle in handles:
+            assert status(call(7, FS_CLOSE, handle=handle)) == STATUS_OK
+        for handle in other:
+            assert status(call(8, FS_CLOSE, handle=handle)) == STATUS_OK
+        assert gauge("fs-descriptors") == gauge("fs-objects") == 1
+        directories = [get32(call(7, FS_OPEN, path="/",
+            flags=OPEN_READ | OPEN_DIRECTORY), 16) for _ in range(2)]
+        assert all(directories) and gauge("fs-directories") == 2
+        assert status(call(7, FS_OPEN, path="/",
+            flags=OPEN_READ | OPEN_DIRECTORY)) == STATUS_LIMIT
+        for handle in directories:
+            assert status(call(7, FS_READDIR, handle=handle,
+                capacity=512, value=8)) == STATUS_OK
+            assert status(call(7, FS_CLOSE, handle=handle)) == STATUS_OK
+        assert gauge("fs-directories") == 0
+        assert status(direct(FS_OPEN, path="/missing", flags=OPEN_READ)) == STATUS_NOT_FOUND
+        assert gauge("fs-descriptors") == gauge("fs-objects") == 1
+        # Provider opens have no owner quota; global descriptor/object cap is 12.
+        held = []
+        for _ in range(11):
+            answer = direct(FS_OPEN, path="/quota-file", flags=OPEN_READ)
+            assert status(answer) == STATUS_OK
+            held.append(get32(answer.raw, 16))
+        assert gauge("fs-descriptors") == gauge("fs-objects") == 12
+        assert status(direct(FS_SHARE, handle=held[0])) == STATUS_LIMIT
+        assert status(direct(FS_OPEN, path="/quota-file",
+            flags=OPEN_WRITE | OPEN_TRUNCATE)) == STATUS_LIMIT
+        assert open(fixture, "rb").read() == b"unchanged"
+        qmp.execute("qom-set", {"path": "/machine",
+            "property": "astra-host-fs-reset", "value": True})
+        assert gauge("fs-descriptors") == 0
+        assert gauge("fs-objects") == 11
+        assert claim(qtest, generation) == STATUS_OK
+        session = open_session(qtest, generation)
+        assert gauge("fs-objects") == 12
+        assert status(direct(FS_OPEN, path="/quota-file", flags=OPEN_READ)) == STATUS_LIMIT
+        assert status(direct(FS_CLOSE, handle=held.pop())) == STATUS_OK
+        fresh = direct(FS_OPEN, path="/quota-file", flags=OPEN_READ)
+        assert status(fresh) == STATUS_OK
+        assert status(direct(FS_CLOSE, handle=get32(fresh.raw, 16))) == STATUS_OK
+        for handle in held:
+            assert status(direct(FS_CLOSE, handle=handle)) == STATUS_OK
+        for slot, owner in ((7, CLIENT), (8, CLIENT + 1)):
+            assert configure_scope(qtest, generation, CONFIG_CLOSE, slot,
+                21 + slot, owner=owner) == 0
+        assert status(direct(FS_SESSION_CLOSE)) == STATUS_OK
+        assert gauge("fs-descriptors") == gauge("fs-directories") == gauge("fs-objects") == 0
+        print("PASS budgets scope=4 descriptors=12 directories=2 rollback aliases lost-ids")
+    finally:
+        qmp.close()
+
+
+def system_volume(qtest, root):
+    qtest.detect_endian()
+    generation = qtest.read32(HACC_GENERATION)
+    assert claim(qtest, generation) == STATUS_OK
+    session = open_session(qtest, generation, volume=VOLUME_SYSTEM, read_only=True)
+    opened = execute(qtest, [Command(generation, FS_OPEN, "/startup/system",
+        session=session, flags=OPEN_READ)])[0]
+    assert status(opened) == STATUS_OK
+    handle = get32(opened.raw, 16)
+    read = execute(qtest, [Command(generation, FS_READ, handle=handle,
+        session=session, capacity=64)])[0]
+    assert status(read) == STATUS_OK and output(qtest, read, get32(read.raw, 52)) == b"bootstrap\n"
+    refused = execute(qtest, [Command(generation, FS_OPEN, "/startup/system",
+        session=session, flags=OPEN_WRITE | OPEN_TRUNCATE)])[0]
+    assert status(refused) == STATUS_READ_ONLY
+    assert open(os.path.join(root, "system", "startup", "system"), "rb").read() == b"bootstrap\n"
+    assert status(execute(qtest, [Command(generation, FS_CLOSE,
+        session=session, handle=handle)])[0]) == STATUS_OK
+    assert status(execute(qtest, [Command(generation, FS_SESSION_CLOSE,
+        session=session)])[0]) == STATUS_OK
+    assert claim(qtest, generation, release=True) == STATUS_OK
+    assert claim(qtest, generation, owner=PROVIDER + 1) == STATUS_OK
+    assert claim(qtest, generation, owner=PROVIDER + 1, release=True) == STATUS_OK
+    print("PASS optional-system readonly bootstrap-read claim-handover")
+
+
+def measure_objects(qtest, root, qmp_path, destination):
+    """Measure provider-only growth in a preallocated, stopped qtest guest."""
+    QmpClient = runpy.run_path(os.path.join(os.path.dirname(__file__),
+        "astra-input-hotplug.py"))["QmpClient"]
+    qtest.detect_endian()
+    generation = qtest.read32(HACC_GENERATION)
+    assert claim(qtest, generation) == STATUS_OK
+    session = open_session(qtest, generation)
+    qmp = QmpClient(qmp_path)
+    names = ("fs-descriptors", "fs-directories", "fs-objects", "rss-kib", "fds")
+
+    def sample():
+        return {name: qmp.execute("qom-get", {"path": "/machine",
+            "property": "astra-host-" + name}) for name in names}
+
+    def call(operation, **kwargs):
+        answer = execute(qtest, [Command(generation, operation,
+            session=session, **kwargs)])[0]
+        assert status(answer) == STATUS_OK, (operation, status(answer))
+        return answer
+
+    record = {"host": os.uname().machine, "holds": {}}
+    try:
+        for kind, count, path, flags in (
+                ("file", 1000, "/cost/file", OPEN_READ),
+                ("dir", 200, "/cost", OPEN_READ | OPEN_DIRECTORY)):
+            before = sample()
+            held = []
+            for _ in range(count):
+                handle = get32(call(FS_OPEN, path=path, flags=flags).raw, 16)
+                held.append(handle)
+                if kind == "dir":
+                    call(FS_READDIR, handle=handle, capacity=8192, value=128)
+            during = sample()
+            assert during["fs-descriptors"] - before["fs-descriptors"] == count
+            assert during["fds"] - before["fds"] == count
+            for handle in held:
+                call(FS_CLOSE, handle=handle)
+            after = sample()
+            assert after["fs-descriptors"] == before["fs-descriptors"]
+            assert after["fs-directories"] == before["fs-directories"]
+            assert after["fds"] == before["fds"]
+            record["holds"][kind] = dict(count=count, before=before,
+                during=during, after=after,
+                rss_kib_per_object=max(0, during["rss-kib"] - before["rss-kib"]) / count)
+            with open(destination, "w") as stream:
+                json.dump(record, stream, indent=2, sort_keys=True)
+        call(FS_SESSION_CLOSE)
+        assert sample()["fs-descriptors"] == 0
+        print("PASS provider-only memory " + json.dumps(record, sort_keys=True))
+    finally:
+        qmp.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("qemu", help="Astra QEMU system emulator")
+    parser.add_argument("--budget-out", help="record provider-only memory on this host")
     args = parser.parse_args()
 
     with tempfile.TemporaryDirectory(prefix="astra-hostfs-") as temp:
@@ -1435,12 +2099,14 @@ def main():
             output_file.write(b"outside")
         rom = os.path.join(temp, "hostfs-test.rom")
         qtest_path = os.path.join(temp, "qtest.sock")
+        qmp_path = os.path.join(temp, "qmp.sock")
         with open(rom, "wb") as output_file:
             output_file.write(struct.pack(">II", 0x02001000, 0xFFE00008))
         command = [
             args.qemu, "-machine", "astra68,accel=qtest", "-m", "32M",
             "-bios", rom, "-S", "-display", "none", "-nodefaults",
             "-qtest", f"unix:{qtest_path},server=on,wait=off",
+            "-qmp", f"unix:{qmp_path},server=on,wait=off",
         ]
         environment = os.environ.copy()
         environment["ASTRA_HOSTFS_ROOT"] = os.path.join(temp, "missing")
@@ -1450,6 +2116,12 @@ def main():
         assert refused.returncode != 0
         assert "cannot open Astra host filesystem root" in refused.stderr
         environment["ASTRA_HOSTFS_ROOT"] = root
+        for variable in ("ASTRA_HOSTFS_MAX_DESCRIPTORS", "ASTRA_HOSTFS_MAX_DIRECTORIES"):
+            for invalid in ("", "0", "-1", "+1", " 1", "1 ", "0x10", "4294967296"):
+                refused = subprocess.run(command, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE, text=True, timeout=5,
+                    env=dict(environment, **{variable: invalid}))
+                assert refused.returncode != 0 and variable in refused.stderr, (variable, invalid, refused.stderr)
 
         def first(qtest):
             run(qtest, os.path.join(root, "work"), outside)
@@ -1459,6 +2131,9 @@ def main():
             volumes(qtest, root)
             scopes(qtest, root)
             claim_race(qtest)
+            descriptions(qtest, root)
+            paths(qtest, root)
+            provider_loss(qtest, root, qmp_path)
 
         booted(command, environment, qtest_path, first)
         # A second machine with one thread-pool worker, so a held command
@@ -1472,6 +2147,31 @@ def main():
                environment, qtest_path,
                lambda qtest: (scope_revocation(qtest, root2),
                               orphan_open(qtest, root2)))
+        root3 = os.path.join(temp, "root3")
+        for name in ("", "work", "sound"):
+            os.mkdir(os.path.join(root3, name))
+        environment.update(ASTRA_HOSTFS_ROOT=root3,
+            ASTRA_HOSTFS_MAX_DESCRIPTORS="12", ASTRA_HOSTFS_MAX_DIRECTORIES="2")
+        booted(command, environment, qtest_path,
+               lambda qtest: budgets(qtest, root3, qmp_path))
+        root4 = os.path.join(temp, "root4")
+        os.makedirs(os.path.join(root4, "system", "startup"))
+        with open(os.path.join(root4, "system", "startup", "system"), "wb") as stream:
+            stream.write(b"bootstrap\n")
+        environment["ASTRA_HOSTFS_ROOT"] = root4
+        booted(command, environment, qtest_path,
+               lambda qtest: system_volume(qtest, root4))
+        if args.budget_out:
+            root5 = os.path.join(temp, "root5")
+            cost = os.path.join(root5, "work", "cost")
+            os.makedirs(cost)
+            open(os.path.join(cost, "file"), "wb").close()
+            for index in range(2000):
+                open(os.path.join(cost, "entry-%04d-%s" % (index, "x" * 48)), "wb").close()
+            environment.update(ASTRA_HOSTFS_ROOT=root5,
+                ASTRA_HOSTFS_MAX_DESCRIPTORS="4096", ASTRA_HOSTFS_MAX_DIRECTORIES="512")
+            booted(command + ["-mem-prealloc"], environment, qtest_path,
+                lambda qtest: measure_objects(qtest, root5, qmp_path, args.budget_out))
         print("ASTRA QEMU HOSTFS PASS")
 
 if __name__ == "__main__":

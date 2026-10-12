@@ -2404,12 +2404,13 @@ static KernelThreadStatus retire_process_threads(uint16_t process_slot,
             thread->process_slot != process_slot ||
             thread->state == KERNEL_THREAD_DEAD || thread == survivor)
             continue;
-        if (thread->state == KERNEL_THREAD_READY &&
-            thread->suspended == 0u) {
-            KernelThreadStatus status = remove_ready(thread);
+        if (thread->state == KERNEL_THREAD_READY) {
+            if (thread->suspended == 0u) {
+                KernelThreadStatus status = remove_ready(thread);
 
-            if (status != KERNEL_THREAD_OK)
-                return status;
+                if (status != KERNEL_THREAD_OK)
+                    return status;
+            }
             clear_irq_wake(thread->slot);
         } else if (thread->state == KERNEL_THREAD_BLOCKED) {
             bool cancelled_deadline =

@@ -27,6 +27,7 @@ static uint32_t maximum_kick_batch;
 static uint32_t lock_depth;
 static uint32_t lock_acquires;
 static pthread_mutex_t transport_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t mock_command_status = ASTRA_VFS_OK;
 static pthread_mutex_t kick_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t kick_condition = PTHREAD_COND_INITIALIZER;
 static int require_two_in_flight;
@@ -202,7 +203,7 @@ static void complete_channel(uint32_t slot, uint32_t producer)
                 ASTRA_HOST_COMMAND_SIZE);
 
         check_operands(slot, command);
-        command->status = ASTRA_VFS_OK;
+        command->status = mock_command_status;
         command->handle = 0x5678u + position;
         if (command->service == ASTRA_HOST_SERVICE_METRICS) {
             AstraHostMetricsSnapshot *snapshot = (void *)(
@@ -368,7 +369,7 @@ static void test_lane_carries_scopes(void)
     AstraVfsHostRequest request;
 
     capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
-                   ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_FS_SESSIONS |
+                   ASTRA_HOST_CAP_FS_SCOPE | (ASTRA_HOST_CAP_FS_SESSIONS | ASTRA_HOST_CAP_FS_RESOLVES | ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS)) |
                    ASTRA_HOST_CAP_CHANNEL | ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ;
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                          &lock_depth));
@@ -408,7 +409,7 @@ static void test_a_forgotten_scope_is_attached_again(void)
     uint32_t attaches;
 
     capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
-                   ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_FS_SESSIONS |
+                   ASTRA_HOST_CAP_FS_SCOPE | (ASTRA_HOST_CAP_FS_SESSIONS | ASTRA_HOST_CAP_FS_RESOLVES | ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS)) |
                    ASTRA_HOST_CAP_CHANNEL | ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ;
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                          &lock_depth));
@@ -453,6 +454,9 @@ int main(void)
     uint32_t wait_base;
     uint8_t output[4];
 
+    assert(astra_vfs_host_status_from_syscall(ASTRA_SYSCALL_CLOSED) == ASTRA_VFS_ERR_PEER);
+    assert(astra_vfs_host_status_from_syscall(ASTRA_SYSCALL_PEER_DEAD) == ASTRA_VFS_ERR_PEER);
+
     capabilities = ASTRA_HOST_CAP_FILESYSTEM;
     assert(!astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                           &lock_depth));
@@ -464,7 +468,7 @@ int main(void)
     /* Record 3's provider is required: sessions and path operands. */
     assert(!astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                           &lock_depth));
-    capabilities |= ASTRA_HOST_CAP_FS_SESSIONS;
+    capabilities |= (ASTRA_HOST_CAP_FS_SESSIONS | ASTRA_HOST_CAP_FS_RESOLVES | ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS));
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                          &lock_depth));
     assert(transport.generation == 9u);
@@ -494,7 +498,7 @@ int main(void)
 
     memset(&transport, 0, sizeof(transport));
     capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
-                   ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_FS_SESSIONS |
+                   ASTRA_HOST_CAP_FS_SCOPE | (ASTRA_HOST_CAP_FS_SESSIONS | ASTRA_HOST_CAP_FS_RESOLVES | ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS)) |
                    ASTRA_HOST_CAP_CHANNEL | ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ |
                    ASTRA_HOST_CAP_METRICS;
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
@@ -667,5 +671,29 @@ int main(void)
     channel_open_status = ASTRA_SYSCALL_OK;
     test_lane_carries_scopes();
     test_a_forgotten_scope_is_attached_again();
+    {
+        AstraVfsHostTransfer escaped[2] = {0};
+        AstraHostCommand commands[2] = {0};
+        uint8_t continuations[2][4] = {{0}};
+
+        memset(&transport, 0, sizeof(transport));
+        assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                             &lock_depth));
+        mock_command_status = ASTRA_VFS_ERR_ESCAPED;
+        for (uint32_t index = 0u; index < 2u; ++index) {
+            commands[index].generation = transport.generation;
+            escaped[index].command = &commands[index];
+            escaped[index].output = continuations[index];
+            escaped[index].output_capacity = sizeof(continuations[index]);
+        }
+        assert(astra_vfs_host_transport_execute_batch(&transport, escaped, 2u) ==
+               ASTRA_VFS_ERR_ESCAPED);
+        for (uint32_t index = 0u; index < 2u; ++index) {
+            assert(commands[index].status == ASTRA_VFS_ERR_ESCAPED);
+            assert(memcmp(continuations[index], "ring", 4u) == 0);
+        }
+        astra_vfs_host_transport_destroy(&transport);
+        mock_command_status = ASTRA_VFS_OK;
+    }
     return 0;
 }

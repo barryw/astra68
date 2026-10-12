@@ -1009,6 +1009,10 @@ uint32_t astra_host_scope_revoke(uint32_t scope);
  * @return ASTRA_SYSCALL_* status.
  */
 uint32_t astra_host_scope_attach(uint32_t scope);
+/** Set a scope's per-owner handles/share bound before binding it.
+ * @param scope Scope carrying ADMINISTER. @param files Bound, zero for unlimited.
+ * @return ASTRA_SYSCALL_* status; BUSY when bound to any channel. */
+uint32_t astra_host_scope_limit(uint32_t scope, uint32_t files);
 /**
  * Notify the host of a new producer position.
  * @param channel_address Valid shared channel address.
@@ -1634,6 +1638,8 @@ uint32_t astra_shutdown_receive_reply(uint32_t reply_receive,
  * @param handles Capabilities to transfer.
  * @param handle_count Number of transferred capabilities.
  * @return ASTRA_SYSCALL_* status, including WOULD_BLOCK for back pressure.
+ *         INVALID_ARGUMENT when a transferred handle retains no right
+ *         besides TRANSFER after import filtering; nothing moves.
  */
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
                          const uint32_t *handles, uint32_t handle_count);
@@ -1649,8 +1655,8 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
  * @param size Message byte count.
  * @param dispositions Capabilities to transfer and the rights each keeps.
  * @param count Number of dispositions, at least one.
- * @return ASTRA_SYSCALL_* status; INVALID_ARGUMENT for a zero mask, and
- *         nothing moves.
+ * @return ASTRA_SYSCALL_* status; INVALID_ARGUMENT if a mask leaves no
+ *         right besides TRANSFER after import filtering; nothing moves.
  */
 uint32_t astra_port_send_rights(uint32_t handle, const void *message,
                                 uint32_t size,

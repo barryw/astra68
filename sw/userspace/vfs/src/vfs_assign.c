@@ -354,10 +354,10 @@ astra_assign_unbind(AstraAssignTable *table, const char *name)
     return removed != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
 }
 
-uint32_t
-astra_assign_resolve(const AstraAssignTable *table, const char *path,
+static uint32_t
+assign_resolve(const AstraAssignTable *table, const char *path,
                      uint32_t rights, uint32_t member, char *wire,
-                     uint32_t capacity, const AstraAssign **assign)
+                     uint32_t capacity, const AstraAssign **assign, int raw)
 {
     char name[ASTRA_CAPABILITY_NAME_MAX];
     const AstraAssign *found;
@@ -413,7 +413,8 @@ astra_assign_resolve(const AstraAssignTable *table, const char *path,
      * the root: the `..` refusal and the assign boundary are one mechanism
      * rather than two that have to agree with each other.
      */
-    status = astra_path_normalise(rest, wire + length, capacity - length);
+    status = raw ? astra_path_collapse(rest, wire + length, capacity - length) :
+                   astra_path_normalise(rest, wire + length, capacity - length);
     if (status != ASTRA_VFS_OK) {
         return status;
     }
@@ -425,4 +426,18 @@ astra_assign_resolve(const AstraAssignTable *table, const char *path,
         *assign = found;
     }
     return ASTRA_VFS_OK;
+}
+
+uint32_t astra_assign_resolve(const AstraAssignTable *table, const char *path,
+                              uint32_t rights, uint32_t member, char *wire,
+                              uint32_t capacity, const AstraAssign **assign)
+{
+    return assign_resolve(table, path, rights, member, wire, capacity, assign, 0);
+}
+
+uint32_t astra_assign_resolve_raw(const AstraAssignTable *table, const char *path,
+                                  uint32_t rights, uint32_t member, char *wire,
+                                  uint32_t capacity, const AstraAssign **assign)
+{
+    return assign_resolve(table, path, rights, member, wire, capacity, assign, 1);
 }

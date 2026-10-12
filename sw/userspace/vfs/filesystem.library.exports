@@ -1,11 +1,12 @@
 /* Tracked ABI source; generated linker maps remain ignored build products. */
-ASTRA_FILESYSTEM_3.0 {
+ASTRA_FILESYSTEM_12.0 {
     global:
         astra_assign_bind;
         astra_assign_join;
         astra_assign_lookup;
         astra_assign_member;
         astra_assign_resolve;
+        astra_assign_resolve_raw;
         astra_assign_seed;
         astra_assign_table_destroy;
         astra_assign_table_init;
@@ -25,6 +26,7 @@ ASTRA_FILESYSTEM_3.0 {
         astra_filesystem_directory_rewind;
         astra_filesystem_directory_from_file;
         astra_filesystem_file_info;
+        astra_filesystem_file_flags;
         astra_filesystem_link;
         astra_filesystem_lstat;
         astra_filesystem_mkdir;
@@ -49,7 +51,13 @@ ASTRA_FILESYSTEM_3.0 {
         astra_filesystem_write_at;
         astra_path_normalise;
         astra_path_qualify;
+        astra_path_qualify_provider;
         astra_path_split;
+        astra_path_collapse;
+        astra_path_requires_walk;
+        astra_process_file_share;
+        astra_process_file_adopt;
+        astra_process_file_unshare;
         astra_process_file_export;
         astra_process_file_import;
         astra_process_filesystem_close;
@@ -76,6 +84,7 @@ ASTRA_FILESYSTEM_3.0 {
         astra_vfs_read_source_open;
         astra_vfs_read_source_read_at;
         astra_vfs_assign_destination;
+        astra_vfs_assign_destination_at;
         astra_vfs_assign_lstat;
         astra_vfs_assign_open;
         astra_vfs_assign_primary;
@@ -99,12 +108,19 @@ ASTRA_FILESYSTEM_3.0 {
         astra_vfs_open_at_mode;
         astra_vfs_open_mode;
         astra_vfs_read;
+        astra_vfs_read_position;
+        astra_vfs_seek;
+        astra_vfs_share;
+        astra_vfs_adopt;
+        astra_vfs_unshare;
+        astra_vfs_file_flags;
         astra_vfs_readdir;
         astra_vfs_readdir_batch;
         astra_vfs_readdir_file_batch;
         astra_vfs_readlink;
         astra_vfs_rename;
         astra_vfs_stat;
+        astra_vfs_lookup;
         astra_vfs_stat_meta;
         astra_vfs_symlink;
         astra_vfs_sync;
@@ -117,12 +133,26 @@ ASTRA_FILESYSTEM_3.0 {
         astra_vfs_unlink_at;
         astra_vfs_write;
         astra_vfs_write_position;
+        astra_application_catalog_destroy;
+        astra_application_catalog_load;
+        astra_filesystem_mkdir_at;
+        astra_filesystem_rename_at;
+        astra_filesystem_link_at;
+        astra_filesystem_symlink_at;
+        astra_filesystem_readlink_at;
+        astra_filesystem_directory_path;
+        astra_vfs_mkdir_at;
+        astra_vfs_rename_at;
+        astra_vfs_link_at;
+        astra_vfs_symlink_at;
+        astra_vfs_readlink_at;
+        astra_vfs_directory_path;
+        astra_process_vfs_current_directory;
+        astra_process_vfs_share_current_directory;
+        astra_process_vfs_source_open;
+        astra_process_vfs_current_acquire;
+        astra_process_vfs_current_release;
+        astra_process_vfs_current_qualify;
     local:
         *;
 };
-
-ASTRA_FILESYSTEM_4.1 {
-    global:
-        astra_application_catalog_destroy;
-        astra_application_catalog_load;
-} ASTRA_FILESYSTEM_3.0;

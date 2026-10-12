@@ -40,7 +40,7 @@
  * A caller that does not recognize this value should refuse to run rather
  * than guess at a register layout that may have changed underneath it.
  */
-#define ASTRA_SYSCALL_ABI_VERSION 0x00010042u
+#define ASTRA_SYSCALL_ABI_VERSION 0x00010043u
 
 /**
  * Identifies the running kernel's syscall ABI. No argument. Returns
@@ -160,8 +160,11 @@
  * each handle arrives with its rights AND the record's mask: the sender
  * chooses what the receiver gets, and a mask only narrows (Zircon's
  * zx_channel_write_etc with zx_handle_disposition_t). Every attached handle
- * still needs TRANSFER to be moved, and is consumed. A mask of zero is
- * refused with ::ASTRA_SYSCALL_INVALID_ARGUMENT and nothing moves.
+ * still needs TRANSFER to be moved, and is consumed. A mask must leave a
+ * right besides TRANSFER that survives the receiver's import filter; a
+ * zero, disjoint or TRANSFER-only mask is refused with
+ * ::ASTRA_SYSCALL_INVALID_ARGUMENT and nothing moves. The handles of an
+ * ::ASTRA_SYSCALL_PORT_CALL request take no dispositions.
  */
 #define ASTRA_SYSCALL_PORT_SEND_TRY    19
 /** ::ASTRA_SYSCALL_PORT_SEND_TRY data[5] flag: the array is dispositions. */
@@ -1021,6 +1024,10 @@
  * ::ASTRA_RIGHT_WRITE.
  */
 #define ASTRA_SYSCALL_HOST_SCOPE_ATTACH 111
+/** Set a scope's per-owner handle/share bound before any channel binding.
+ * data[1]: scope with ADMINISTER. data[2]: bound, zero for unlimited.
+ * Returns INVALID_ARGUMENT while any channel carries the scope. */
+#define ASTRA_SYSCALL_HOST_SCOPE_LIMIT 112
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */
@@ -1432,7 +1439,7 @@
 typedef struct AstraHandleDisposition {
     /** The sender's handle; moved, so it needs ASTRA_RIGHT_TRANSFER. */
     uint32_t handle;
-    /** ASTRA_RIGHT_* the receiver gets, ANDed with the handle's; nonzero. */
+    /** Rights mask; a right besides TRANSFER must survive import filtering. */
     uint32_t rights;
 } AstraHandleDisposition;
 

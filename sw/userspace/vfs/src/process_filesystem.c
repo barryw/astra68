@@ -12,17 +12,11 @@
 #include <astra/runtime.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
+#include <astra/vfs_path.h>
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
-
-/*
- * The namespace, clients, and transfer areas are process-wide. Multiple
- * consumers may attach a high-level facade without reseeding that state; the
- * final close owns teardown.
- */
-static uint32_t filesystem_opens;
 
 uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
                                        const AstraStartupInfo *startup)
@@ -35,12 +29,15 @@ uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
     status = astra_process_vfs_init(startup);
     if (status != ASTRA_VFS_OK)
         return status;
-    ++filesystem_opens;
     status = astra_filesystem_attach_io(
         &filesystem->filesystem, astra_process_vfs_assigns(),
-        astra_process_vfs_assign_client, astra_vfs_port_read_bulk,
+        astra_process_vfs_assign_client, astra_vfs_port_read_bulk_position,
         astra_vfs_port_write_bulk_position, NULL);
-    if (status != ASTRA_VFS_OK)
+    if (status == ASTRA_VFS_OK) {
+        filesystem->filesystem._private_cwd_acquire = astra_process_vfs_current_acquire;
+        filesystem->filesystem._private_cwd_release = astra_process_vfs_current_release;
+        filesystem->filesystem._private_cwd_qualify = astra_process_vfs_current_qualify;
+    } else
         astra_process_filesystem_close(filesystem);
     return status;
 }
@@ -66,7 +63,8 @@ uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,
         const AstraAssign *assign = NULL;
         char wire[ASTRA_VFS_PATH_MAX];
 
-        if (astra_assign_resolve(assigns, path, ASTRA_RIGHT_READ, 0u, wire,
+        if (!astra_path_requires_walk(path) &&
+            astra_assign_resolve_raw(assigns, path, ASTRA_RIGHT_READ, 0u, wire,
                                  sizeof(wire), &assign) == ASTRA_VFS_OK) {
             AstraVfsClient *client = astra_process_vfs_client_for(assign);
             const uint8_t *whole = NULL;
@@ -164,7 +162,5 @@ void astra_process_filesystem_close(AstraProcessFilesystem *filesystem)
     if (filesystem == NULL)
         return;
     astra_filesystem_detach(&filesystem->filesystem);
-    if (filesystem_opens != 0u && --filesystem_opens == 0u)
-        astra_process_vfs_close();
     *filesystem = (AstraProcessFilesystem)ASTRA_PROCESS_FILESYSTEM_INIT;
 }

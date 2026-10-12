@@ -33,7 +33,7 @@ def test_production_qmp_default(monkeypatch):
     finally:
         sys.argv = previous
 
-    assert observed == ["/run/astra/qmp.sock"]
+    assert observed == ["/run/astra/qemu/qmp.sock"]
     assert "/data/astra/run/qmp.sock" not in observed
 
 
@@ -187,7 +187,7 @@ def test_terminal_open_has_independent_ready_deadlines(monkeypatch):
 
     class FakeQmp:
         def double_click(self, x, y):
-            assert (x, y) == (70, 90)
+            assert (x, y) == (168, 448)
 
     monkeypatch.setattr(module, "wait_ready",
                         lambda _qmp, _path, _message, _prior, deadline:
@@ -201,7 +201,8 @@ def test_terminal_open_has_independent_ready_deadlines(monkeypatch):
     times = iter((10.0, 20.0))
     monkeypatch.setattr(module.time, "monotonic", lambda: next(times))
 
-    module.open_terminal(FakeQmp(), 0.1, "/tmp/trace", 7, 8, 5.0)
+    module.open_terminal(FakeQmp(), 0.1, "/tmp/trace", 7, 8, 5.0,
+                         (168, 448))
 
     assert deadlines == [25.0]
 
@@ -216,6 +217,14 @@ def test_partial_profile_configuration_is_rejected_before_qmp(monkeypatch):
             module.main()
     finally:
         sys.argv = previous
+
+
+def test_open_terminal_requires_placement_before_qmp(monkeypatch):
+    monkeypatch.setattr(module, "Qmp",
+                        lambda *_args: pytest.fail("missing icon opened QMP"))
+    monkeypatch.setattr(sys, "argv", [str(SOURCE), "--open-terminal"])
+    with pytest.raises(SystemExit, match="requires --terminal-icon"):
+        module.main()
 
 
 def test_unprofiled_ready_measurement_is_allowed(monkeypatch, capsys):

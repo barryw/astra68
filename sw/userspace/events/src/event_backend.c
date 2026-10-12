@@ -494,8 +494,8 @@ events_node_info(const AstraEventsBackend *backend,
     info->size = node->kind == KIND_LOG_FILE ?
         log_file_size(backend, node->log_index) : 0u;
     info->kind = directory ? ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
-    info->mode = directory ? 0500u : 0400u;
-    info->nlink = directory ? 2u : 1u;
+    astra_vfs_node_info_mode_links(info, directory ? 0500u : 0400u,
+                                   directory ? 2u : 1u);
 }
 
 /* ------------------------------------------------------------------- verbs */
@@ -891,6 +891,7 @@ static const AstraVfsBackendOps events_ops = {
     .filesystem_info = astra_vfs_backend_no_filesystem_info,
     .stat_at = astra_vfs_backend_no_stat_at,
     .stat_node = events_stat_node,
+    NULL,
 };
 
 int
