@@ -1,0 +1,19 @@
+astra-bundle 1
+kind application
+id org.astra.atlas
+name "Atlas"
+version 0.1.0
+executable bin/m68k-68040/Atlas
+icon resources/Atlas.aicon
+capability GUI
+capability DH0:r
+capability APPS:r
+capability LIBS:r
+capability LOG
+requires compiler.library 2 2.0.0
+requires filesystem.library 12 12.0.0
+requires font.library 2 2.2.0
+requires graphics.library 2 2.2.0
+requires interface.library 5 5.3.0
+requires runtime.library 1 1.5.0
+requires system.library 3 3.0.0

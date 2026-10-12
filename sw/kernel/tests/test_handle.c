@@ -546,6 +546,12 @@ static void test_atomic_export_import_and_cancel(void)
     assert(kernel_handle_transfer_stats(&stats));
     assert(stats.reserved_detached == 2u);
     assert(stats.live_detached == 0u);
+    assert(kernel_handle_detached_reference_count(
+               KERNEL_OBJECT_SYNC, (void *)(uintptr_t)0x1000u) == 0u);
+    assert(kernel_handle_detached_reference_count(
+               KERNEL_OBJECT_NONE, (void *)(uintptr_t)0x1000u) == UINT32_MAX);
+    assert(kernel_handle_detached_reference_count(KERNEL_OBJECT_SYNC, NULL) ==
+           UINT32_MAX);
     for (uint32_t index = 0u; index < 2u; ++index) {
         assert(kernel_handle_lookup(&source, source_handles[index],
                                     KERNEL_OBJECT_SYNC, RIGHT_QUERY,
@@ -560,6 +566,10 @@ static void test_atomic_export_import_and_cancel(void)
     assert(kernel_handle_transfer_stats(&stats));
     assert(stats.reserved_detached == 0u);
     assert(stats.live_detached == 2u);
+    assert(kernel_handle_detached_reference_count(
+               KERNEL_OBJECT_SYNC, (void *)(uintptr_t)0x1000u) == 1u);
+    assert(kernel_handle_detached_reference_count(
+               KERNEL_OBJECT_PROCESS, (void *)(uintptr_t)0x1000u) == 0u);
     for (uint32_t index = 0u; index < 2u; ++index) {
         assert(kernel_handle_lookup(&source, source_handles[index],
                                     KERNEL_OBJECT_SYNC, 0u, &object) ==
@@ -569,6 +579,8 @@ static void test_atomic_export_import_and_cancel(void)
     memset(&reservation, 0xa5, sizeof(reservation));
     assert(kernel_handle_import_reserve(
                &destination, detached, 2u, &reservation) == KERNEL_HANDLE_OK);
+    assert(kernel_handle_detached_reference_count(
+               KERNEL_OBJECT_SYNC, (void *)(uintptr_t)0x1000u) == 1u);
     assert(reservation.handles[2] == UINT32_C(0xa5a5a5a5));
     assert(reservation.slots[2] == UINT8_C(0xa5));
     assert(kernel_handle_available(&destination) ==
@@ -602,6 +614,8 @@ static void test_atomic_export_import_and_cancel(void)
     assert(kernel_handle_count(&destination) == 2u);
     assert(kernel_handle_transfer_stats(&stats));
     assert(stats.live_detached == 0u);
+    assert(kernel_handle_detached_reference_count(
+               KERNEL_OBJECT_SYNC, (void *)(uintptr_t)0x1000u) == 0u);
     assert(kernel_handle_lookup(&destination, imported[0], KERNEL_OBJECT_SYNC,
                                 RIGHT_TRANSFER, &object) ==
            KERNEL_HANDLE_ACCESS_DENIED);

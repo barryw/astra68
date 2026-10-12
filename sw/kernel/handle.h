@@ -167,6 +167,11 @@ uint32_t kernel_handle_close_type(KernelHandleTable *table,
 uint32_t kernel_handle_count(const KernelHandleTable *table);
 uint32_t kernel_handle_available(const KernelHandleTable *table);
 bool kernel_handle_table_valid(const KernelHandleTable *table);
+/* After validating the transfer pool, count committed exports still owning
+ * object references. Reservations alias table entries and are not counted.
+ * Invalid arguments or damaged backing return UINT32_MAX. */
+uint32_t kernel_handle_detached_reference_count(KernelObjectType type,
+                                                const void *object);
 KernelHandleStatus kernel_handle_transfer_validate(
     const KernelHandleTable *source_table,
     const KernelHandle *source_handles, uint32_t count,

@@ -4,7 +4,7 @@ Status: active implementation ledger for the design in
 `~/Downloads/Astra68 Desktop Design/Astra Desktop.dc.html`.
 
 The current source package has SHA-256
-`1005463fc51826aac33def242c70d9f4122a616352680e93ae44e58f10960603`.
+`836e4991ea8a79ab58769471e24749a064eddd93195552a017596cd0e97cbab9`.
 Its written control list is authoritative by name; the adjacent total is not,
 because Scrollbar is specified in the ScrollView section but omitted from that
 numbered list. Implementation status in the design file is illustrative only;
@@ -44,7 +44,7 @@ order needed to finish the complete design without application-private UI.
 | Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | cyan orbit and tracked ASTRA wordmark, focus-aware bold application pill independent of the window title; hardware-composited ASTRA menu with functional About panel and 16 px labels; app-owned menu publication, palette, and shortcuts pending |
 | Telescope | 2a, 3a | Cmd-Space search/launch surface, filesystem change index, ranked results, keyboard selection and open | pending |
 | System panels | 4b, 5a-5b | Open, Save, Fonts, and truthful pixel-format-aware Colour services | pending |
-| Atlas | 2b | shared sidebar and toolbar with grid, list, and columns views | pending; initial filesystem scope is one root-directory icon window, with broader browsing/management deferred; see the [volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md) |
+| Atlas | 2b | shared sidebar and toolbar with grid, list, and columns views | native DH0 root icon viewer accepted on DE25 release `5bc3bbea`; guest enumeration, scrolling, resize and retirement pass; broader browsing/management deferred; see [Atlas continuation](HANDOVER_2026-10-12_ATLAS.md) and the [volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md) |
 | Dock and window policy | 2c | pinned/running/minimized groups, instance state, hold menu, durable ordering | hardware overlap path started; policy UI pending |
 | Workspace finish | 1a-1c | volume objects, titlebar treatment B, designed icon strikes, status surfaces | partial |
 | Scenes | 3a | discoverable scene ledger and menu switching over fixed 1080p60 timing | hardware contract complete; UI pending |
@@ -74,9 +74,10 @@ the DE25 without weakening the existing frame or layout budgets.
 
 IconView and ImageView need immutable protected image references in the shared
 Interface/window draw-list path. The existing Graphics Kit surface draw-list
-path already provides protected source-surface blits: desktop decodes each AICON
-strike once into an ARGB8888 source surface, then uses `astra_draw_blit` on
-repaint. Reuse that resource ownership and validation when integrating shared
+path already provides protected source-surface blits. Graphics library 2.2's
+`astra_surface_from_aicon` now centralizes strike validation, ARGB decoding and
+protected source-surface upload for Desktop and Atlas. Both use `astra_draw_blit`
+on repaint. Reuse that resource ownership and validation when integrating shared
 icon presentation; do not restore the obsolete rectangle-per-pixel painter or
 copy an icon backend into Atlas.
 
@@ -90,6 +91,8 @@ The initial Atlas root-directory viewer requires only the icon presentation
 needed for named file/folder cells, existing retained wrap layout, and existing
 scroll support. General ImageView behavior and the pending list/tree/table/
 columns/toolbar collection suite are not prerequisites for that viewer.
+Interface library 5.3 exposes indexed retained frame/clip queries for this
+custom canvas and lets ScrollView itself take focus for passive content.
 
 ## Artifact-specific behavior still to preserve
 

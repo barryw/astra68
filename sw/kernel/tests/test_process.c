@@ -13943,6 +13943,43 @@ static void test_initial_supervisor_opens_any_process(void)
     assert(snapshot_for(child_id, &child));
     assert(child.default_priority == 12u);
 
+    /* A queued process handle still owns its reference before import. */
+    {
+        const uint32_t user_buffer = KERNEL_PROCESS_STACK_TOP - 512u;
+        const uint32_t stack = KERNEL_PROCESS_STACK_TOP - 8u;
+        TestCallRequest message;
+        KernelHandle moving;
+        uint32_t receive;
+        uint32_t send;
+
+        assert(kernel_process_grant_handle(supervisor_id, child_id,
+                   KERNEL_PROCESS_RIGHT_QUERY | KERNEL_PROCESS_RIGHT_TRANSFER,
+                   &moving) == KERNEL_PROCESS_OK);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_CREATE,
+                         1u, 2u * sizeof(message), 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+        receive = next->data[1];
+        send = next->data[2];
+        test_call_message(&message, sizeof(message), 2u, 0x712u);
+        assert(kernel_user_copy_to_asm(user_buffer, &message, sizeof(message)) ==
+               KERNEL_USER_COPY_OK);
+        assert(kernel_user_copy_to_asm(user_buffer + 128u, &moving, sizeof(moving)) ==
+               KERNEL_USER_COPY_OK);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PORT_SEND_TRY,
+                         send, user_buffer, sizeof(message), user_buffer + 128u,
+                         1u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_PROCESS_OPEN,
+                         supervisor_handle, child_id, child.generation,
+                         KERNEL_PROCESS_RIGHT_QUERY, 0u) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                         next->data[1], 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                         receive, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+        assert(test_trap(stack, frame, &next, ASTRA_SYSCALL_CLOSE,
+                         send, 0u, 0u, 0u, 0u) == KERNEL_PROCESS_OK);
+    }
+
     /* Debug authority is not on offer, nor is nothing at all. */
     memset(registers, 0, sizeof(registers));
     registers[0] = ASTRA_SYSCALL_PROCESS_OPEN;

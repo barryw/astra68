@@ -43,6 +43,12 @@ with {c:func}`astra_draw_list_reset`, after the post -- so a frame lays its
 uploads side by side and the next frame may reuse the area.
 
 The screen is 1920x1080. A window's content is RGB565.
+
+Bundle icons use {c:func}`astra_surface_from_aicon` (Graphics library 2.2.0).
+Pass validated file bytes and an existing strike size (16, 32, or 64) to create
+an owned ARGB8888 source surface, then blit it at the required display size.
+The helper validates and uploads the icon through the protected display API;
+close the returned surface when it is no longer needed.
 {c:func}`astra_display_layout_calculate` computes the exact crop and viewport
 the hardware scaler would use for a logical scene, without floating point.
 

@@ -36,6 +36,9 @@ PIC_TARGET := build/m68k/libastragraphics-pic.a
 PIC_OBJECTS := build/m68k/pic/surface.o build/m68k/pic/shared_surface.o \
 	build/m68k/pic/render_builder.o
 HOST_TEST := build/host/test_surface
+HOST_AICON_TEST := build/host/test_aicon_surface
+AICON_TEST_SOURCES := src/aicon_surface.c tests/test_aicon_surface.c \
+	$(SYSTEM)/src/bundle.c
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
 GRAPHICS_LIBRARY := build/m68k/libraries/graphics.library.2
@@ -43,6 +46,7 @@ FONT_LIBRARY := build/m68k/libraries/font.library.2
 GRAPHICS_LIBRARY_MAP := graphics.library.exports
 FONT_LIBRARY_MAP := font.library.exports
 GRAPHICS_LIBRARY_OBJECTS := build/m68k/library/graphics_library.o \
+	build/m68k/library/aicon_surface.o \
 	build/m68k/library/graphics_surface.o \
 	build/m68k/library/graphics_shared_surface.o
 FONT_LIBRARY_OBJECTS := build/m68k/library/font_library.o \
@@ -119,6 +123,11 @@ build/m68k/library/graphics_library.o: src/graphics_library.c \
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
+build/m68k/library/aicon_surface.o: src/aicon_surface.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
 build/m68k/library/font_library.o: src/font_library.c \
 		../../../ndk/include/astra/font_library.h \
 		../../include/astra/library.h
@@ -191,7 +200,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/check_library_exports.py $(FONT_LIBRARY_MAP) \
 		$(NDK)/include/astra/font_library.h $(NDK)/include/astra/surface.h
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
-		grep -q '^graphics.library.2 2.1.0 ABI 2.1$$'
+		grep -q '^graphics.library.2 2.2.0 ABI 2.2$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
 		grep -q '^font.library.2 2.2.0 ABI 2.2$$'
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
@@ -224,15 +233,30 @@ $(HOST_TEST): src/surface.c src/render_builder.c src/texture_reference.c \
 
 $(HOST_TEST): $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 
-test: $(HOST_TEST)
-	./$(HOST_TEST)
+build/host/test-drawer.aicon: ../../../tools/aicon.py
+	@mkdir -p $(@D)
+	python3 $< drawer $@
 
-sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
+$(HOST_AICON_TEST): $(AICON_TEST_SOURCES)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		-ffunction-sections -fdata-sections $(AICON_TEST_SOURCES) \
+		-Wl,--gc-sections -o $@
+
+test: $(HOST_TEST) $(HOST_AICON_TEST) build/host/test-drawer.aicon
+	./$(HOST_TEST)
+	./$(HOST_AICON_TEST) build/host/test-drawer.aicon
+
+sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) build/host/test-drawer.aicon
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
 		src/surface.c src/render_builder.c src/texture_reference.c \
 		tests/test_surface.c -o build/host/test_surface_sanitize
 	./build/host/test_surface_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
+		-ffunction-sections -fdata-sections $(AICON_TEST_SOURCES) \
+		-Wl,--gc-sections -o build/host/test_aicon_surface_sanitize
+	./build/host/test_aicon_surface_sanitize build/host/test-drawer.aicon
 
 analyze: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 	@mkdir -p build/analyzer

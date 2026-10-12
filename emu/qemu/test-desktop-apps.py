@@ -23,7 +23,8 @@ terminal_gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(terminal_gate)
 
 # Bundles the system image ships, other than Terminal (the terminal gate's).
-APPLICATIONS = ("/apps/InterfaceGallery.app", "/apps/SDLTestDraw2.app")
+APPLICATIONS = ("/apps/InterfaceGallery.app", "/apps/Atlas.app",
+                "/apps/SDLTestDraw2.app")
 
 
 def display_count(machine, name):

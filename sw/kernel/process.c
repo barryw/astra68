@@ -937,6 +937,10 @@ static bool process_pool_valid(void)
 
         if (process == NULL)
             continue;
+        references = kernel_handle_detached_reference_count(
+            KERNEL_OBJECT_PROCESS, process);
+        if (references == UINT32_MAX)
+            return false;
         waiters = kernel_thread_wait_queue_count(&process->death_waiters);
 
         if ((process->process_state == KERNEL_PROCESS_CREATED ||

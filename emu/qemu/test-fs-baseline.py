@@ -126,3 +126,43 @@ with mock.patch.object(semantic.terminal.trace_decode, "kernel_event_names",
         "/historical/sw/userspace/supervisor/build/m68k/astra_supervisor.elf",
         "/historical/sw/userspace/services/terminal/build/m68k/terminal.elf"])
 print("fs-baseline historical trace catalog test: PASS")
+
+# Terminal startup may overwrite the early bootstrap event in the trace ring.
+# Qualify its exact payload first, while the record and arguments survive.
+with tempfile.TemporaryDirectory() as directory:
+    image = Path(directory) / "current.img"
+    image.write_bytes(b"current guest")
+    machine = mock.Mock()
+    machine.process.returncode = 0
+    machine.reader.hostfs_root = directory
+    machine.wait_for_serial.return_value = True
+    verdict = "bootstrap-provider match bytes=%d" % len(
+        semantic.astra_image.STARTUP_MANIFEST.encode("ascii"))
+    machine.wait_for_text.return_value = ([verdict], 21)
+    machine.trace_with_syslog.side_effect = AssertionError(
+        "bootstrap verdict read after Terminal overwrote it")
+
+    def open_after_verdict(*args):
+        machine.wait_for_text.assert_called_once_with(
+            "bootstrap-provider match", 120)
+        machine.wait_for_text.return_value = (None, 3000)
+        return True
+
+    with mock.patch.object(sys, "argv", ["test-fs-semantics.py", "qemu", "rom",
+             str(image), "--case", "basic", "--check", "budgets"]), \
+         mock.patch.object(semantic.astra_image, "install"), \
+         mock.patch.object(semantic.astra_image, "install_test_command"), \
+         mock.patch.object(semantic.qemu_runtime, "root_provider",
+             return_value=("launcher", "provider")), \
+         mock.patch.object(semantic.terminal, "Machine", return_value=machine), \
+         mock.patch.object(semantic.terminal, "open_terminal",
+             side_effect=open_after_verdict), \
+         mock.patch.object(semantic, "run_cases") as cases, \
+         mock.patch.dict(semantic.CHECKS, {"budgets": mock.Mock()}, clear=True), \
+         mock.patch.object(semantic.subprocess, "run",
+             return_value=subprocess.CompletedProcess([], 0, stdout="")):
+        semantic.main()
+        cases.assert_called_once_with(machine, ["basic"])
+        machine.trace_with_syslog.assert_not_called()
+        machine.close.assert_called_once()
+print("fs-semantics bootstrap before trace wrap test: PASS")

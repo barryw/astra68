@@ -112,16 +112,16 @@ library-contract: $(INTERFACE_TARGET)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(INTERFACE_LIBRARY_MAP) $(INTERFACE_TARGET)
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_button_init@@ASTRA_INTERFACE_5\.2$$'
+		grep -Eq ' astra_interface_button_init@@ASTRA_INTERFACE_5\.3$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_command_invoke@@ASTRA_INTERFACE_5\.2$$'
+		grep -Eq ' astra_interface_command_invoke@@ASTRA_INTERFACE_5\.3$$'
 	@! $(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -q 'ASTRA_INTERFACE_5\.1'
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.5 5.2.0 ABI 5.2$$'
+		grep -q '^interface.library.5 5.3.0 ABI 5.3$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [graphics.library.2]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \

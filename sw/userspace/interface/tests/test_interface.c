@@ -2189,6 +2189,17 @@ static void test_scroll_view_keyboard_listener(void)
     event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x2bu, 0u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK);
+    assert((controls[0]._private_dynamic_state & ASTRA_CONTROL_FOCUSED) != 0u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x51u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_SCROLL_CHANGED &&
+           action.control_id == 200u);
+    assert(astra_scroll_get_state(&model, &state) == ASTRA_OK);
+    assert(state.offset_y == 16u);
+    assert(astra_scroll_set_offset(&model, 0u, 0u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &root) == ASTRA_OK);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x2bu, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
     assert((controls[2]._private_dynamic_state & ASTRA_CONTROL_FOCUSED) != 0u);
     event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x51u, 0u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==

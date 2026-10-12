@@ -58,19 +58,28 @@ system is **Astra OS**.
 - Native applications and SDL2 ports share the same desktop, input, audio,
   process and filesystem facilities. Terminal brings a real zsh shell;
   Chocolate Doom brings something worth playing.
+- Double-clicking the mounted DH0 desktop volume opens native Atlas with its
+  actual root entries as file/folder icons. The initial viewer supports
+  scrolling and resize; navigation and live removable volumes are next.
 - The native filesystem supports ext4, RAMFS and confined HostFS volumes,
   with shared file descriptions, links, atomic bounded writes and recovery.
   Current correctness gates pass; performance acceptance remains open.
 - The Astra QEMU backend runs on the active DE25 and is the only emulator.
 
 The current desktop uses crisp instrument icons in Astra's white and cyan
-palette. These frames were captured from the physical DE25 on October 11,
-2026, through its authenticated remote desktop service.
+palette. This desktop and the Atlas window below were captured from the
+physical DE25 on October 12, 2026, through its authenticated remote desktop
+service. Capture identities and validation are in [the image record](docs/images/README.md).
 
 ![Astra OS desktop with native instrument icons](docs/images/astra-desktop.png)
 
+Atlas opens the mounted DH0 volume through the native filesystem and launcher.
+
+![Native Atlas showing the real DH0 root on the DE25](docs/images/astra-atlas.png)
+
 Chocolate Doom runs on the same native graphics, input, audio and filesystem
-facilities. Yes, this machine plays Doom.
+facilities. Yes, this machine plays Doom. This gameplay frame was captured on
+October 11, 2026.
 
 ![Chocolate Doom running on Astra OS on the DE25](docs/images/astra-doom.png)
 

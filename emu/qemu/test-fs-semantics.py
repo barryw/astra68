@@ -350,21 +350,27 @@ def main():
                                    launcher=launcher, source_root=arguments.tree)
         mount = machine.reader.hostfs_root
         try:
-            if not terminal.open_terminal(machine, 120, 60):
-                fail("no terminal")
-            if arguments.bench:
-                run_bench(machine, mount, *arguments.bench, tree=arguments.tree)
-            else:
+            if not arguments.bench:
+                # Capture the early verdict before desktop/Terminal boot can
+                # wrap the bounded trace ring and overwrite its arguments.
+                if not machine.wait_for_serial("Initial image ....... loaded", 120):
+                    fail("no initial image")
                 verdict = "bootstrap-provider " + arguments.bootstrap
-                if not any(verdict in line for line in machine.trace_with_syslog()):
+                bootstrap_lines, _ = machine.wait_for_text(verdict, 120)
+                if bootstrap_lines is None:
                     for line in machine.trace_with_syslog():
                         print(line)
                     fail("missing bootstrap verdict " + verdict)
                 if arguments.bootstrap == "match" and not any(
                         "bootstrap-provider match bytes=%d" % len(selected_manifest.encode("ascii")) in line
-                        for line in machine.trace_with_syslog()):
+                        for line in bootstrap_lines):
                     fail("bootstrap compared wrong manifest bytes")
                 print("PASS bootstrap " + arguments.bootstrap)
+            if not terminal.open_terminal(machine, 120, 60):
+                fail("no terminal")
+            if arguments.bench:
+                run_bench(machine, mount, *arguments.bench, tree=arguments.tree)
+            else:
                 run_cases(machine, arguments.case or CASES)
                 for name in sorted(arguments.check or CHECKS, key=lambda name: (name in FINAL_CHECKS, name)):
                     CHECKS[name](machine, mount)

@@ -192,8 +192,9 @@ DISPLAY_STARTUP_MANIFEST = (
     # for the host's astra-top.
     "service /services/sampler grants PROC:r WORK:rw\n"
     "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r "
-    "LIBS:r SYSTEM:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
-    "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n")
+    "LIBS:r SYSTEM:r DH0:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
+    "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
+    "trusted /apps/Atlas.app grants GUI DH0:r APPS:r LIBS:r LOG\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("storage", "ramfs", "posixd", "hostfs", "entropy", "network", "ntpd", "events",
                     "input", "clipboard", "display", "media", "sampler",

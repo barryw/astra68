@@ -8,7 +8,32 @@ mount/unmount/safe-remove/eject, live native namespace publication, and labeled
 desktop volume icons opening Atlas. The user chooses writable automount for
 supported USB filesystems and authorizes the CD-ROM kernel work. The
 [production volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md)
-is written for review; implementation has not started. Read-only board inspection
+now guides implementation. The initial native Atlas `/dh0` slice is accepted on
+DE25 release
+`5bc3bbeae347c964d73971ec12cfbb8036608e0a26d503bc3dc187ddae62849e`:
+Desktop checks the real DH0 binding, launches Atlas with native arguments, and
+Atlas enumerates all batches into a read-only root icon window. Shared AICON
+surface construction is in Graphics library 2.2; retained geometry and passive
+ScrollView keyboard focus are in Interface library 5.3. Host tests/sanitizers,
+MC68040 build/analyzer, native DH0/257-entry/error/scroll/resize/retirement gates,
+and desktop applications pass. The full Terminal gate exposed an existing
+process-reference validator omission: queued IPC process handles still own
+references, but only table entries were counted. A focused regression fails
+before the shared detached-handle query fixes that accounting; the corruption
+check remains intact. Kernel host/target verification, all 111 Terminal commands
+and all 26 filesystem semantics/recovery/fsck cases now pass in `kernel-green-1`
+under `/mnt/Documents/astra68/builds/atlas-dh0-20261012/`. Exact staged Atlas,
+desktop, bit-exact audio, Doom and full filesystem gates pass in `release-2`,
+including bootstrap match/mismatch/absent and unchanged ROM/image hashes. The
+bootstrap gate now captures its early verdict before desktop/Terminal logs can
+wrap the bounded trace ring; a focused regression preserves that check.
+`deploy-1` archives the stopped previous disk and verifies `/home` and `/local`
+contents/metadata survive migration. QEMU remains UID/GID 999, without groups
+or capabilities, with `NoNewPrivs=1`; all three services are active with zero
+restarts and no new panic. `board-2` verifies real DH0 double-click, 16 named
+entries (15 folders and one file), fresh physical pixels, process retirement
+and an identical restored desktop. See [Atlas continuation](HANDOVER_2026-10-12_ATLAS.md).
+Previous release is `36791f1e`; the FPGA remains `b61dbda8`. Read-only board inspection
 confirms the current Image lacks `sr_mod`, despite installed ISO9660/UDF modules,
 so optical support needs a matching rebuilt Linux Image and modules. Initial
 Atlas is narrowed to one root-directory window showing named file/folder icons,
@@ -18,9 +43,9 @@ browser and collection suite are deferred. No USB storage or
 optical drive is attached for physical qualification. Existing correctness and
 failed performance checkpoints below remain unchanged; no budget is waived.
 
-The active app-latency checkpoint is release
+The retained app-latency checkpoint, now the previous release, is
 `36791f1e24e86a94856446a7389392127f6e6db5fe831d5bd8d3cc88cc97f175`,
-selected on DE25 with QEMU UID/GID 999, no groups or capabilities, and
+qualified on DE25 with QEMU UID/GID 999, no groups or capabilities, and
 `NoNewPrivs=1`. Audio.kit 3.0.0 / `pcm.library.3` replaces ABI 2 throughout
 the current tree. MIDI activity queries now submit and collect the existing
 correlated reply without blocking the SDL audio callback. The recurring

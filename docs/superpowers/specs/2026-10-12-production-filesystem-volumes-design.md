@@ -2,8 +2,11 @@
 
 Date: 2026-10-12
 
-Status: proposed written design; user review pending. Product code, runtime,
-kernel, and deployed data are unchanged at this checkpoint.
+Status: user authorizes implementation, starting with the narrowed native Atlas
+viewer against existing `/dh0`. That slice is accepted on immutable DE25 release
+`5bc3bbeae347c964d73971ec12cfbb8036608e0a26d503bc3dc187ddae62849e`;
+see [Atlas continuation](../../HANDOVER_2026-10-12_ATLAS.md). Linux storage
+cutover, live numbered mounts and physical optical support remain later phases.
 
 ## Requested outcome
 
@@ -32,10 +35,10 @@ name to `/ram0`, makes writable USB mounting the shipped trusted-policy default,
 and fixes the desktop-to-Atlas behavior. The existing authority, identity,
 durability, revocation, and performance requirements remain binding.
 
-## Current implementation and measured constraints
+## Design baseline and measured constraints
 
-Source checkpoint: `f073478dc1091488e4811fc25c344eacb572e592` on `fs-phase1`.
-Selected DE25 release:
+Source checkpoint at design time: `f073478dc1091488e4811fc25c344eacb572e592` on `fs-phase1`.
+Selected DE25 release at design time, now retained as previous:
 `36791f1e24e86a94856446a7389392127f6e6db5fe831d5bd8d3cc88cc97f175`.
 The qualified Phase 1 contract is Filesystem ABI 12, Filesystem.kit 9,
 STOR 36, Host 0x00010015. Its correctness evidence and failed performance
@@ -57,8 +60,9 @@ Existing mechanisms to extend:
   private bindings and retained cwd/file objects.
 - Desktop currently enumerates application bundles and waits on window events.
   It has no mounted-volume collection or storage subscription.
-- Atlas is marked pending in the Interface implementation ledger; no Atlas
-  application implementation exists. The launcher already supports validated
+- Before this work, Atlas was pending in the Interface implementation ledger.
+  The initial native app now uses the existing directory, window, retained
+  layout and protected Graphics facilities. The launcher supports validated
   arguments through `astra_application_launch_with_arguments`.
 - The initial Atlas viewer needs existing window/layout/scroll primitives and
   shared icon presentation, not the pending list/tree/table/columns/toolbar

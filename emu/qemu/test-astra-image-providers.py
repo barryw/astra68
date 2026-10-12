@@ -74,14 +74,15 @@ else:
     raise AssertionError("unsafe test app name accepted")
 assert not any(line.startswith("application ") and line.endswith(" required")
                for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines())
-# The launch policy: the ceiling table parses, Terminal is the one trusted
-# bundle, and a bundle beyond its ceiling never reaches a volume.
+# Trusted bundles get explicit ceilings; ordinary applications cannot read DH0.
 ceiling = astra_image._application_ceiling()
 assert ceiling["GUI"] == "" and ceiling["APPS"] == "r" and \
-    ceiling["STORE"] == "rw" and "SERVICE_MANAGER" not in ceiling
+    ceiling["STORE"] == "rw" and "SERVICE_MANAGER" not in ceiling and \
+    "DH0" not in ceiling
 assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
         if line.startswith("trusted ")] == [
-    "trusted /apps/Terminal.app grants " + astra_image.TERMINAL_CEILING]
+    "trusted /apps/Terminal.app grants " + astra_image.TERMINAL_CEILING,
+    "trusted /apps/Atlas.app grants GUI DH0:r APPS:r LIBS:r LOG"]
 for grant, admitted in (("GUI", True), ("APPS:r", True), ("APPS:rw", False),
                         ("GUI:r", False), ("STORE", False), ("DISPLAY", False),
                         ("HOME:x", False), ("STORE:rw", True)):
@@ -99,9 +100,14 @@ with tempfile.TemporaryDirectory() as directory:
     ordinary = bundle("Game.app", ["GUI", "PCM", "STORE:rw"])
     greedy = bundle("Greedy.app", ["GUI", "DISPLAY"])
     shell = bundle("Terminal.app", ["GUI", "SERVICE_MANAGER", "SYSTEM:r"])
+    atlas = bundle("Atlas.app", ["GUI", "DH0:r", "APPS:r", "LIBS:r", "LOG"])
+    disk = bundle("Disk.app", ["GUI", "DH0:r"])
     astra_image.check_application_policy(
-        [ordinary, shell], astra_image.DISPLAY_STARTUP_MANIFEST)
+        [ordinary, shell, atlas], astra_image.DISPLAY_STARTUP_MANIFEST)
+    bundle("Atlas.app", ["GUI", "DH0:rw"])
     for bundles, manifest in (([greedy], astra_image.DISPLAY_STARTUP_MANIFEST),
+                              ([disk], astra_image.DISPLAY_STARTUP_MANIFEST),
+                              ([atlas], astra_image.DISPLAY_STARTUP_MANIFEST),
                               ([shell], "service /services/storage grants\n")):
         try:
             astra_image.check_application_policy(bundles, manifest)
@@ -225,6 +231,7 @@ startup = astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
 desktop_startup = next(line for line in startup
                        if line.startswith("service /services/desktop "))
 assert " grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r LIBS:r " in desktop_startup
+assert "DH0:r" in desktop_startup.split()
 assert "/apps/r" not in desktop_startup
 assert startup[0].startswith("service /services/storage ")
 # The machine's tiers: storage and display halt it, the desktop is restarted,

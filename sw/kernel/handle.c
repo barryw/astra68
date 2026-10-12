@@ -390,28 +390,6 @@ static KernelHandleStatus find_detached_entry(
     return KERNEL_HANDLE_OK;
 }
 
-static uint32_t detached_live_count(void)
-{
-    uint32_t count = 0u;
-
-    for (uint32_t index = 0u; index < detached_backed_limit; ++index) {
-        if (detached_entry_at(index)->state == KERNEL_DETACHED_LIVE)
-            ++count;
-    }
-    return count;
-}
-
-static uint32_t detached_reserved_count(void)
-{
-    uint32_t count = 0u;
-
-    for (uint32_t index = 0u; index < detached_backed_limit; ++index) {
-        if (detached_entry_at(index)->state == KERNEL_DETACHED_RESERVED)
-            ++count;
-    }
-    return count;
-}
-
 static KernelHandleStatus find_entry(const KernelHandleTable *table,
                                      KernelHandle handle,
                                      const KernelHandleEntry **entry)
@@ -1572,8 +1550,8 @@ bool kernel_handle_transfer_pool_valid(void)
     KernelAllocationStats allocations;
     KernelAllocationStats metadata;
     uint32_t allocated_leaves = 0u;
-    uint32_t live;
-    uint32_t reserved;
+    uint32_t live = 0u;
+    uint32_t reserved = 0u;
 
     if (!kernel_handle_transfer_pool_healthy())
         return false;
@@ -1606,12 +1584,14 @@ bool kernel_handle_transfer_pool_valid(void)
             if (entry->object == NULL || entry->release == NULL ||
                 entry->rights == 0u || entry->type == KERNEL_OBJECT_NONE)
                 return false;
+            if (entry->state == KERNEL_DETACHED_LIVE)
+                ++live;
+            else
+                ++reserved;
         } else {
             return false;
         }
     }
-    live = detached_live_count();
-    reserved = detached_reserved_count();
     return kernel_allocation_site_stats(
                KERNEL_ALLOCATION_SITE_DETACHED_HANDLE, &allocations) &&
            allocations.current_units == live + reserved &&
@@ -1629,6 +1609,26 @@ bool kernel_handle_transfer_pool_valid(void)
            reserved <= KERNEL_HANDLE_DETACHED_MAX - live &&
            transfer_stats.max_live_detached >= live &&
            transfer_stats.max_live_detached <= KERNEL_HANDLE_DETACHED_MAX;
+}
+
+uint32_t kernel_handle_detached_reference_count(KernelObjectType type,
+                                                const void *object)
+{
+    uint32_t count = 0u;
+
+    if (type <= KERNEL_OBJECT_NONE || type > KERNEL_OBJECT_HOST_SCOPE ||
+        object == NULL || !kernel_handle_transfer_pool_healthy())
+        return UINT32_MAX;
+    for (uint32_t index = 0u; index < detached_backed_limit; ++index) {
+        const KernelDetachedEntry *entry = detached_entry_at(index);
+
+        if (entry == NULL)
+            return UINT32_MAX;
+        if (entry->state == KERNEL_DETACHED_LIVE && entry->type == type &&
+            entry->object == object)
+            ++count;
+    }
+    return count;
 }
 
 bool kernel_handle_transfer_stats(KernelHandleTransferStats *stats)

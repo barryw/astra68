@@ -51,6 +51,8 @@ typedef struct DesktopApps {
     AstraApplicationCatalog catalog;
     AstraSurface *icons; /* one per shown entry; unused when closed */
     uint32_t shown; /* entries that fit the grid */
+    AstraSurface volume_icon;
+    uint32_t volume_visible;
 } DesktopApps;
 
 ASTRA_PROGRAM("desktop", 0, 4, 0, "Barry Walker",
@@ -125,7 +127,7 @@ done:
     astra_runtime_deallocate(frames);
 }
 
-static void launch_error(uint32_t gui, const AstraApplicationEntry *entry,
+static void launch_error(uint32_t gui, const char *name, const char *path,
                          AstraResult failure)
 {
     AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
@@ -134,12 +136,12 @@ static void launch_error(uint32_t gui, const AstraApplicationEntry *entry,
     AstraString message;
 
     (void)astra_log_failure("desktop launch", (uint32_t)(-failure));
-    (void)astra_log(entry->bundle);
+    (void)astra_log(path);
     astra_string_init(&message, storage, sizeof(storage));
     if (failure == ASTRA_ERROR_NO_RESOURCES)
         (void)astra_string_append(
             &message, "There are not enough resources to start ");
-    (void)astra_string_append(&message, entry->name);
+    (void)astra_string_append(&message, name);
     (void)astra_string_append(&message,
                               failure == ASTRA_ERROR_NO_RESOURCES ?
                                   "." : " could not be started.");
@@ -184,53 +186,28 @@ static void power_error(uint32_t gui, int restart)
 
 /* One icon as an ARGB8888 surface of the desktop window: uploaded once,
    blended by the blitter on every repaint. */
-static AstraResult load_icon(AstraDisplay *display,
-                             const AstraApplicationEntry *entry,
+static AstraResult load_icon(AstraDisplay *display, const char *path,
                              AstraSurface *surface)
 {
-    static uint32_t pixels[ASTRA_DESKTOP_ICON_SIZE * ASTRA_DESKTOP_ICON_SIZE];
-    AstraSurfaceCreateInfo create = ASTRA_SURFACE_CREATE_INFO_INIT;
-    AstraAicon icon;
-    AstraAiconStrike strike;
     uint8_t *bytes = NULL;
     uint32_t length = 0u;
     AstraResult result;
 
-    if (astra_process_read_file_alloc(&process_filesystem, entry->icon,
+    if (astra_process_read_file_alloc(&process_filesystem, path,
                                       (void **)&bytes, &length) !=
-            ASTRA_VFS_OK ||
-        astra_aicon_open(bytes, length, &icon) != ASTRA_BUNDLE_OK ||
-        astra_aicon_strike(&icon, ASTRA_DESKTOP_ICON_SIZE, &strike) !=
-            ASTRA_BUNDLE_OK ||
-        astra_aicon_strike_argb(&icon, &strike, pixels,
-                                ASTRA_DESKTOP_ICON_SIZE) != ASTRA_BUNDLE_OK) {
+            ASTRA_VFS_OK) {
         astra_runtime_deallocate(bytes);
         return ASTRA_ERROR_INVALID_ARGUMENT;
     }
+    result = astra_surface_from_aicon(display, bytes, length,
+                                     ASTRA_DESKTOP_ICON_SIZE, surface);
     astra_runtime_deallocate(bytes);
-    create.flags = ASTRA_SURFACE_DRAW_SOURCE | ASTRA_SURFACE_CPU_WRITE;
-    create.width = ASTRA_DESKTOP_ICON_SIZE;
-    create.height = ASTRA_DESKTOP_ICON_SIZE;
-    create.format = ASTRA_PIXEL_FORMAT_ARGB8888;
-    result = astra_surface_create(display, &create, surface);
-    if (result == ASTRA_OK)
-        result = astra_surface_write(
-            display, surface,
-            &(AstraRectI32){ 0, 0, ASTRA_DESKTOP_ICON_SIZE,
-                             ASTRA_DESKTOP_ICON_SIZE },
-            pixels, ASTRA_DESKTOP_ICON_SIZE * 4u);
-    if (result != ASTRA_OK &&
-        surface->_private_handle != ASTRA_INVALID_HANDLE) {
-        AstraResult ignored = astra_surface_close(surface);
-
-        (void)ignored;
-    }
     return result;
 }
 
 /* "desktop icon /apps/X.app LEFT TOP WIDTH HEIGHT" in screen pixels: where
    a person, or a gate, double-clicks to open that application. */
-static void log_icon(const AstraApplicationEntry *entry, uint32_t dx,
+static void log_icon(const char *path, uint32_t dx,
                      uint32_t dy)
 {
     char storage[ASTRA_APPLICATION_PATH_MAX + 64u];
@@ -243,7 +220,7 @@ static void log_icon(const AstraApplicationEntry *entry, uint32_t dx,
 
     astra_string_init(&line, storage, sizeof(storage));
     (void)astra_string_append(&line, "desktop icon ");
-    (void)astra_string_append(&line, entry->bundle);
+    (void)astra_string_append(&line, path);
     for (uint32_t at = 0u; at < 4u; ++at) {
         (void)astra_string_append_char(&line, ' ');
         (void)astra_string_append_u64(&line, box[at]);
@@ -256,6 +233,18 @@ static void load_apps(AstraDisplay *display, DesktopApps *apps)
     uint32_t status = astra_application_catalog_load(
         &process_filesystem, APPLICATIONS_DIRECTORY, &apps->catalog);
     uint32_t capacity = astra_desktop_capacity(DESKTOP_WIDTH, DESKTOP_HEIGHT);
+    AstraFileInfo volume = ASTRA_FILE_INFO_INIT;
+
+    apps->volume_icon = (AstraSurface)ASTRA_SURFACE_INIT;
+    if (capacity != 0u &&
+        astra_filesystem_stat(&process_filesystem.filesystem, "/dh0", &volume) ==
+            ASTRA_VFS_OK && volume.kind == ASTRA_VFS_KIND_DIRECTORY &&
+        load_icon(display, "/apps/Atlas.app/resources/volume.aicon",
+                   &apps->volume_icon) == ASTRA_OK) {
+        apps->volume_visible = 1u;
+        --capacity;
+        log_icon("/dh0", 0u, 0u);
+    }
 
     if (status != ASTRA_VFS_OK)
         (void)astra_log_failure("desktop application catalog", status);
@@ -281,11 +270,11 @@ static void load_apps(AstraDisplay *display, DesktopApps *apps)
         uint32_t dy;
 
         apps->icons[at] = (AstraSurface)ASTRA_SURFACE_INIT;
-        if (load_icon(display, &apps->catalog.entries[at],
+        if (load_icon(display, apps->catalog.entries[at].icon,
                       &apps->icons[at]) != ASTRA_OK)
             (void)astra_log(apps->catalog.entries[at].icon);
-        astra_desktop_cell_offset(at, DESKTOP_HEIGHT, &dx, &dy);
-        log_icon(&apps->catalog.entries[at], dx, dy);
+        astra_desktop_cell_offset(at + apps->volume_visible, DESKTOP_HEIGHT, &dx, &dy);
+        log_icon(apps->catalog.entries[at].bundle, dx, dy);
     }
 }
 
@@ -307,9 +296,13 @@ static AstraResult paint(AstraDisplay *display, AstraSurface *content,
     result = astra_draw_list_create(content, &whole, &list);
     if (result == ASTRA_OK)
         result = astra_draw_rectangle(&list, &whole, 1, &canvas);
-    for (uint32_t at = 0u; result == ASTRA_OK && at < apps->shown; ++at) {
-        const AstraApplicationEntry *entry = &apps->catalog.entries[at];
-        const char *label = entry->name;
+    for (uint32_t at = 0u; result == ASTRA_OK &&
+                           at < apps->shown + apps->volume_visible; ++at) {
+        uint32_t is_volume = apps->volume_visible != 0u && at == 0u;
+        const char *label = is_volume != 0u ? "DH0" :
+            apps->catalog.entries[at - apps->volume_visible].name;
+        const AstraSurface *icon = is_volume != 0u ? &apps->volume_icon :
+            &apps->icons[at - apps->volume_visible];
         /* As window titles do, a label longer than its cell is clipped at
            a whole scalar. */
         uint32_t length = astra_surface_ui_text_fit(
@@ -319,9 +312,9 @@ static AstraResult paint(AstraDisplay *display, AstraSurface *content,
         uint32_t dy;
 
         astra_desktop_cell_offset(at, DESKTOP_HEIGHT, &dx, &dy);
-        if (apps->icons[at]._private_handle != ASTRA_INVALID_HANDLE)
+        if (icon->_private_handle != ASTRA_INVALID_HANDLE)
             result = astra_draw_blit(
-                &list, &apps->icons[at],
+                &list, icon,
                 &(AstraRectI32){ 0, 0, ASTRA_DESKTOP_ICON_SIZE,
                                  ASTRA_DESKTOP_ICON_SIZE },
                 &(AstraRectI32){ (int32_t)(ASTRA_DESKTOP_ICON_X + dx),
@@ -363,7 +356,8 @@ int astra_main(const AstraStartupInfo *startup)
     AstraWindow window = ASTRA_WINDOW_INIT;
     AstraDisplay display = ASTRA_DISPLAY_INIT;
     AstraSurface content = ASTRA_SURFACE_INIT;
-    DesktopApps apps = { ASTRA_APPLICATION_CATALOG_INIT, NULL, 0u };
+    DesktopApps apps = { ASTRA_APPLICATION_CATALOG_INIT, NULL, 0u,
+                         ASTRA_SURFACE_INIT, 0u };
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *gui;
     const AstraStartupCapability *launcher;
@@ -483,16 +477,25 @@ int astra_main(const AstraStartupInfo *startup)
                 event.data.pointer.x, event.data.pointer.y, DESKTOP_WIDTH,
                 DESKTOP_HEIGHT);
 
-            if (cell < apps.shown) {
+            if (apps.volume_visible != 0u && cell == 0u) {
+                const char *arguments[] = {"/dh0"};
+                uint32_t process_id;
+                AstraResult launch_result = astra_application_launch_with_arguments(
+                    launcher->handle, "/apps/Atlas.app", sizeof("/apps/Atlas.app") - 1u,
+                    ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 1u, &process_id);
+                if (launch_result != ASTRA_OK)
+                    launch_error(gui->handle, "Atlas", "/apps/Atlas.app", launch_result);
+            } else if (cell >= apps.volume_visible &&
+                       cell - apps.volume_visible < apps.shown) {
                 const AstraApplicationEntry *entry =
-                    &apps.catalog.entries[cell];
+                    &apps.catalog.entries[cell - apps.volume_visible];
                 uint32_t process_id;
                 AstraResult launch_result = astra_application_launch(
                     launcher->handle, entry->bundle,
                     (uint16_t)strlen(entry->bundle), &process_id);
 
                 if (launch_result != ASTRA_OK)
-                    launch_error(gui->handle, entry, launch_result);
+                    launch_error(gui->handle, entry->name, entry->bundle, launch_result);
             }
         }
     }

@@ -15,7 +15,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.5. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 5u
 /** Current backward-compatible Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 2u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 3u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -227,6 +227,16 @@ AstraResult astra_interface_ui_measure(
  */
 AstraResult astra_interface_ui_layout(AstraUIContext *context,
                                       const AstraFlexLayout *layout);
+/** Read retained geometry for application content drawn through Graphics Kit.
+ * @param context Laid-out UI context.
+ * @param index Index in the caller-owned control array.
+ * @param frame Receives logical content bounds.
+ * @param clip Receives the visible clip inherited from parent viewports.
+ * @return ASTRA_OK, ASTRA_ERROR_WOULD_BLOCK for an unlaid-out/collapsed control,
+ * or a validation error. Outputs remain unchanged on error.
+ */
+AstraResult astra_interface_ui_geometry(const AstraUIContext *context,
+    uint32_t index, AstraControlFrame *frame, AstraControlFrame *clip);
 /** Replace application-owned semantic control state.
  * @param context UI context owning @p control.
  * @param control Control whose application-owned state is replaced.

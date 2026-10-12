@@ -192,7 +192,6 @@ static int control_valid(const AstraControl *control)
                control->_private_style != 0u &&
                (control->_private_state & ~ASTRA_CONTROL_COLLAPSED) == 0u &&
                control->_private_preview_state == 0u &&
-               control->_private_dynamic_state == 0u &&
                control->_private_value_step >= 0 &&
                control->_private_value_step <= 1 &&
                astra_scroll_get_state(
@@ -694,6 +693,7 @@ static int focusable(const AstraControl *control)
            control->_private_control_kind == ASTRA_CONTROL_STEPPER ||
            CHOICE_KINDS(control->_private_control_kind) ||
            control->_private_control_kind == ASTRA_CONTROL_FIELD ||
+           control->_private_control_kind == ASTRA_CONTROL_SCROLL_VIEW ||
            control->_private_control_kind == ASTRA_CONTROL_SPLITTER;
 }
 
@@ -1720,8 +1720,11 @@ static uint32_t scroll_content_extent(const AstraControl *control, int width)
                                 control->_private_measured_height;
     uint32_t minimum = width ? control->_private_minimum_width :
                                control->_private_minimum_height;
+    uint32_t maximum = width ? control->_private_maximum_width :
+                               control->_private_maximum_height;
 
-    return measured > minimum ? measured : minimum;
+    uint32_t extent = measured > minimum ? measured : minimum;
+    return extent < maximum ? extent : maximum;
 }
 
 static AstraResult layout_scroll_view(AstraUIContext *context,
@@ -4975,7 +4978,7 @@ static AstraResult scroll_key(AstraUIContext *context,
     if ((event->flags & ASTRA_WINDOW_EVENT_DOWN) == 0u ||
         context->_private_focus == CONTROL_NONE)
         return ASTRA_OK;
-    at = context->_private_controls[context->_private_focus]._private_parent;
+    at = context->_private_focus;
     while (at != CONTROL_NONE) {
         AstraControl *view = &context->_private_controls[at];
 
@@ -5432,6 +5435,23 @@ AstraResult astra_interface_ui_update_pointer(const AstraUIContext *context,
     if (result == ASTRA_OK)
         *applied_shape = shape;
     return result;
+}
+
+AstraResult astra_interface_ui_geometry(const AstraUIContext *context,
+    uint32_t index, AstraControlFrame *frame, AstraControlFrame *clip)
+{
+    const AstraControl *control;
+
+    if (!context_valid(context) || frame == NULL || clip == NULL ||
+        index >= context->_private_control_count)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    control = &context->_private_controls[index];
+    if (context->_private_has_layout == 0u ||
+        control->_private_laid_out == 0u)
+        return ASTRA_ERROR_WOULD_BLOCK;
+    *frame = control->_private_frame;
+    *clip = control->_private_clip;
+    return ASTRA_OK;
 }
 
 AstraResult astra_interface_ui_damage(const AstraUIContext *context,

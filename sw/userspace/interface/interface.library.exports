@@ -1,4 +1,4 @@
-ASTRA_INTERFACE_5.2 {
+ASTRA_INTERFACE_5.3 {
     global:
         astra_interface_button_init;
         astra_interface_checkbox_init;
@@ -31,6 +31,7 @@ ASTRA_INTERFACE_5.2 {
         astra_interface_ui_damage;
         astra_interface_ui_damage_clear;
         astra_interface_ui_handle_event;
+        astra_interface_ui_geometry;
         astra_interface_ui_init;
         astra_interface_ui_layout;
         astra_interface_ui_measure;

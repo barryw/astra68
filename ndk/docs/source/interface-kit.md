@@ -120,6 +120,15 @@ when the viewport contains multiple controls. Separate horizontal or vertical
 scrollbars bind to the same model and may live inside or outside the viewport.
 No scrollbar is required.
 
+ScrollView itself accepts focus, so a viewport containing only passive content
+can scroll by keyboard after a click or Tab. Focused descendants retain the
+same keyboard scrolling behavior. This requires version 5.3.0 or newer.
+
+For custom drawing, {c:func}`astra_interface_ui_geometry` returns the retained
+frame and effective clip for an indexed control after layout. Use the shared
+layout and scrolling geometry rather than duplicating placement or reading
+private fields. The query requires version 5.3.0 or newer.
+
 Wheel and keyboard input move in model line units. Nested views consume a
 gesture only while they can move in that direction, then chain to the parent.
 The 10-pixel track owns a six-pixel thumb with a 24-pixel minimum. Track clicks

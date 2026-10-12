@@ -29,6 +29,63 @@ GALLERY_PALETTE = (
 
 INSTRUMENT_KINDS = ("framebench", "draw", "sprite", "geometry", "target",
                     "scale", "keys", "mouse", "timer", "thread")
+OBJECT_KINDS = ("atlas", "volume", "drawer", "document")
+OBJECT_PALETTE = ((0, 0, 0, 0), (247, 249, 249, 255),
+                  (223, 228, 230, 255), (92, 104, 112, 255),
+                  (107, 119, 128, 255), (43, 127, 134, 255),
+                  (236, 239, 240, 255), (25, 34, 42, 255))
+
+
+def object_strike(kind, size):
+    """Atlas object geometry from the supplied 40-unit desktop design grid."""
+    pixels = bytearray(size * size)
+    thick = max(1, size // 32)
+
+    def line(x0, y0, x1, y1, color):
+        x0, y0, x1, y1 = (round(v * size / 40) for v in (x0, y0, x1, y1))
+        steps = max(abs(x1 - x0), abs(y1 - y0), 1)
+        for step in range(steps + 1):
+            x = round(x0 + (x1 - x0) * step / steps)
+            y = round(y0 + (y1 - y0) * step / steps)
+            for dy in range(thick):
+                for dx in range(thick):
+                    if 0 <= x + dx < size and 0 <= y + dy < size:
+                        pixels[(y + dy) * size + x + dx] = color
+
+    def polygon(points, fill, stroke):
+        for y in range(size):
+            for x in range(size):
+                px, py = (x + .5) * 40 / size, (y + .5) * 40 / size
+                inside = False
+                for (x0, y0), (x1, y1) in zip(points, points[1:] + points[:1]):
+                    if (y0 > py) != (y1 > py) and \
+                            px < (x1 - x0) * (py - y0) / (y1 - y0) + x0:
+                        inside = not inside
+                if inside:
+                    pixels[y * size + x] = fill
+        for first, last in zip(points, points[1:] + points[:1]):
+            line(*first, *last, stroke)
+
+    if kind in ("drawer", "atlas"):
+        polygon(((5.5, 11.5), (16.5, 11.5), (20, 16), (34.5, 16),
+                 (34.5, 34), (5.5, 34)), 2, 3)
+        line(10, 22, 30, 22, 5)
+        if kind == "atlas":
+            line(20, 25, 20, 31, 5)
+            line(17, 28, 23, 28, 5)
+    elif kind == "document":
+        polygon(((8.5, 4.5), (31.5, 4.5), (31.5, 35.5), (8.5, 35.5)), 1, 3)
+        for y in (12, 17, 22):
+            line(13, y, 27, y, 4)
+        line(13, 27, 21, 27, 5)
+    elif kind == "volume":
+        polygon(((5, 10), (35, 10), (35, 31), (5, 31)), 7, 6)
+        polygon(((11, 15), (29, 15), (29, 21), (11, 21)), 7, 6)
+        line(19, 27, 29, 27, 6)
+        line(10, 27, 12, 27, 5)
+    else:
+        raise ValueError("unknown object icon: %s" % kind)
+    return bytes(pixels)
 
 
 def terminal_strike(size):
@@ -520,6 +577,9 @@ def build(kind):
     elif kind in INSTRUMENT_KINDS:
         palette = TERMINAL_PALETTE
         builder = lambda size: instrument_strike(kind, size)
+    elif kind in OBJECT_KINDS:
+        palette = OBJECT_PALETTE
+        builder = lambda size: object_strike(kind, size)
     elif kind.lower().endswith((".bmp", ".png")):
         palette, builder = image_icon(kind)
     elif kind.lower().endswith(".wad"):
@@ -548,7 +608,7 @@ def build(kind):
 def main():
     if len(sys.argv) != 3:
         raise SystemExit("usage: aicon.py {terminal|gallery|" +
-                         "|".join(INSTRUMENT_KINDS) + "|IMAGE.bmp|"
+                         "|".join(INSTRUMENT_KINDS + OBJECT_KINDS) + "|IMAGE.bmp|"
                          "IMAGE.png|DOOM.wad} "
                          "OUTPUT.aicon")
     with open(sys.argv[2], "wb") as handle:

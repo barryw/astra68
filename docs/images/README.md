@@ -1,5 +1,38 @@
 # Physical Astra OS captures
 
+## DH0 desktop and Atlas
+
+`astra-desktop.png` and `astra-atlas.png` were captured on 2026-10-12 from the
+physical DE25-Nano through authenticated RFB at 1920×1080. Selected release:
+`5bc3bbeae347c964d73971ec12cfbb8036608e0a26d503bc3dc187ddae62849e`.
+FPGA remains `b61dbda8`; no new timing checkpoint is claimed.
+
+Real input double-clicks the native DH0 volume target. Atlas reads the actual
+root through the native Filesystem Kit: 16 entries, 15 folders and one file.
+Fresh capture shows their named icons in the ordinary root window. Close retires
+the process and restores byte-identical desktop pixels. A persistent controller
+keeps capture active; fresh viewers wait for refresh before reading frames.
+
+Beast converts raw RGB to PNG and verifies decoded pixels equal the source
+bytes. No pixels were edited. PNG SHA-256:
+
+- `astra-desktop.png`:
+  `cb49cf0b14fa0538f0df478cf48338ea8fed6e6b8c69447da1e7ca98a6917798`.
+- `astra-atlas.png`:
+  `94d33c467ac476b9512d2406df092ee7309a260b59a1cca7bc64a2e9e3c8169c`.
+
+Evidence: `/mnt/Documents/astra68/builds/atlas-dh0-20261012/board-2`.
+Runtime/audio/remote services retain their identities, remain active with zero
+restarts, and the panic record's hash/mtime stays unchanged. Deployment verifies
+QEMU UID/GID 999, empty groups, zero capabilities and NoNewPrivs=1, and preserves
+`/home` and `/local` contents/metadata. The first `board-1` attempt checked an old
+one-second process sample; Atlas remained alive. The accepted retry waits for
+fresh samples and repeats launch/capture/close. Guest scrolling/resize/error
+gates and the remaining production limits are in
+[Atlas continuation](../HANDOVER_2026-10-12_ATLAS.md).
+
+## Doom gameplay and historical desktop
+
 Captured on 2026-10-11 EDT (2026-10-12 UTC) from the DE25-Nano through its authenticated RFB
 service, at 1920×1080. The raw RGB frames were converted to PNG on Beast;
 their pixels were not retouched or composited.
@@ -11,8 +44,8 @@ resolver optimization and native SDL instrument
 icons. QEMU runs as `astra`, UID/GID 999. The retained FPGA image is
 `b61dbda8`; this capture does not establish a new timing checkpoint.
 
-- `astra-desktop.png`: clean desktop, identical before gameplay and after
-  normal Doom quit; PNG SHA-256
+- Historical desktop frame retained under `review-visual-2`: clean desktop,
+  identical before gameplay and after normal Doom quit; PNG SHA-256
   `9e138479a04579974fb92ae7dbd7083c7413d5e3a2c5cf44a1a5162894cb4a5c`.
 - `astra-doom.png`: live Chocolate Doom gameplay after a keyboard turn.
   PNG SHA-256
