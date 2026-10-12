@@ -19,7 +19,7 @@ class Machine:
         self.log = lines
 
     def wait_for_serial(self, marker, deadline):
-        return marker == terminal.BOOT_MARKER and deadline > 0
+        raise AssertionError("Terminal already consumed the boot marker")
 
     def syslog_lines(self):
         return self.log

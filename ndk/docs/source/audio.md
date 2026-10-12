@@ -6,7 +6,7 @@ synthesizer. The MC68040 hands it samples or MIDI and does no signal
 processing. Every audio API takes the `PCM` startup capability
 (`ASTRA_CAPABILITY_PCM`), which an application's manifest asks for with
 `capability PCM`. The functions are in `pcm.library` (the Audio Kit); link
-`-l:pcm.library.2`.
+`-l:pcm.library.3`.
 
 There are three ways to make sound. Pick by what the program has:
 

@@ -15,11 +15,11 @@
 #define _THIS SDL_AudioDevice *_this
 
 /* Buffers SDL fills in place (Haiku's sizing: max(3, latency/period+2)). */
-#define ASTRAAUDIO_BUFFERS 3u
+#define ASTRAAUDIO_BUFFERS 2u
 /* A host that takes nothing for this long is gone. */
 #define ASTRAAUDIO_WAIT_NS UINT64_C(1000000000)
 
-/* With an audio stream (pcm.library 2.5) SDL mixes straight into buffers
+/* With an audio stream (pcm.library 3.0) SDL mixes straight into buffers
  * the host reads, and each costs one wait; without one, the media service's
  * voice and a copy. */
 struct SDL_PrivateAudioData {

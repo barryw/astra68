@@ -101,6 +101,7 @@ typedef struct Voice {
      * position it has read its ring to. */
     uint32_t stream_generation;
     uint32_t stream_position;
+    uint32_t stream_buffer_bytes; /* Validated geometry for this generation. */
 } Voice;
 
 /* A conversion the guest reads back instead of hearing. */
@@ -396,8 +397,8 @@ static void stream_remove(AudioHost *host, uint32_t slot)
 /*
  * Take from each application stream's ring what the next @p sink_frames of
  * mix need, and no more: the ring, not this voice, is where a stream waits,
- * so its latency stays the mailbox's two buffers. When taking makes room for
- * another buffer, wake QEMU to copy it (audio_mailbox.h).
+ * so its latency stays the mailbox's two buffers. When taking completes a
+ * buffer, wake QEMU to return it and copy the next (audio_mailbox.h).
  */
 static void pull_streams(AudioHost *host, uint32_t sink_frames)
 {
@@ -426,15 +427,17 @@ static void pull_streams(AudioHost *host, uint32_t sink_frames)
         if (generation == 0u || host->stream_failed[slot] == generation)
             continue;
         if (host->stream_voices[slot] == NULL) {
-            uint32_t frame_bytes = astra_pcm_format_frame_bytes(ring->format);
+            uint32_t format = ring->format;
+            uint32_t frame_bytes = astra_pcm_format_frame_bytes(format);
+            uint32_t buffer_bytes = ring->buffer_bytes;
             uint32_t status = ASTRA_SYSCALL_OK;
 
-            if (frame_bytes == 0u || ring->buffer_bytes == 0u ||
-                ring->buffer_bytes % frame_bytes != 0u ||
-                ring->buffer_bytes > ASTRA_AUDIO_MAILBOX_RING_BYTES /
-                                         ASTRA_AUDIO_MAILBOX_DEPTH)
+            if (frame_bytes == 0u || buffer_bytes == 0u ||
+                buffer_bytes % frame_bytes != 0u ||
+                buffer_bytes > ASTRA_AUDIO_MAILBOX_RING_BYTES /
+                                   ASTRA_AUDIO_MAILBOX_DEPTH)
                 status = ASTRA_SYSCALL_INVALID_ARGUMENT;
-            voice = status == ASTRA_SYSCALL_OK ? new_voice(ring->format) :
+            voice = status == ASTRA_SYSCALL_OK ? new_voice(format) :
                                                  NULL;
             if (voice == NULL) {
                 /* Refuse it where the application will see it: QEMU puts
@@ -453,6 +456,7 @@ static void pull_streams(AudioHost *host, uint32_t sink_frames)
             }
             voice->stream_generation = generation;
             voice->stream_position = ring->start;
+            voice->stream_buffer_bytes = buffer_bytes;
             voice->next = host->streams.voices;
             host->streams.voices = voice;
             host->stream_voices[slot] = voice;
@@ -494,8 +498,10 @@ static void pull_streams(AudioHost *host, uint32_t sink_frames)
         }
         __atomic_store_n(&ring->read, voice->stream_position,
                          __ATOMIC_RELEASE);
-        if (before > ring->buffer_bytes &&
-            written - voice->stream_position <= ring->buffer_bytes)
+        if ((before + voice->stream_buffer_bytes - 1u) /
+                voice->stream_buffer_bytes !=
+            (written - voice->stream_position +
+             voice->stream_buffer_bytes - 1u) / voice->stream_buffer_bytes)
             room_made = 1;
     }
     if (room_made || refused) {
@@ -511,6 +517,14 @@ static void mix_frame(AudioHost *host, int32_t *left, int32_t *right)
     int64_t sum_right = 0;
     uint32_t active_voices = 0u;
 
+    /* QEMU can refill a drained stream while this batch is being mixed. */
+    for (const Voice *voice = host->streams.voices; voice != NULL;
+         voice = voice->next) {
+        if (!voice_ready(voice)) {
+            pull_streams(host, 1u);
+            break;
+        }
+    }
     for (Client *client = first_owner(host); client != NULL;
          client = next_owner(host, client))
         for (Voice *voice = client->voices; voice != NULL;
@@ -524,6 +538,11 @@ static void mix_frame(AudioHost *host, int32_t *left, int32_t *right)
                     !voice->gap_reported) {
                     ++host->software_gaps;
                     voice->gap_reported = 1;
+                    fprintf(stderr, "ASTRA AUDIO HOST source gap generation=%u "
+                            "rate=%u queued=%u lookahead=%u position=%u\n",
+                            voice->stream_generation, voice->rate,
+                            voice->queued, voice->lookahead,
+                            voice->stream_position);
                 }
                 continue;
             }
@@ -1955,6 +1974,12 @@ static int stream_self_test(void)
     mix_frame(&host, &left, &right);
     if (left != 256 || right != 256)
         goto done;
+    /* Published geometry is immutable for this generation. */
+    ring->buffer_bytes = 0u;
+    pull_streams(&host, 512u);
+    ring->buffer_bytes = 1024u;
+    if (ring->read != ring->written || mailbox->room_sequence != 2u)
+        goto done;
     ring->generation = 0u;
     pull_streams(&host, 300u);
     if (host.stream_voices[3] != NULL || host.streams.voices != NULL)
@@ -1965,6 +1990,15 @@ static int stream_self_test(void)
     if (host.stream_voices[3] == NULL ||
         host.stream_voices[3]->stream_position != ring->written ||
         host.stream_voices[3]->queued != 0u)
+        goto done;
+    /* The producer can publish after the batch's initial pull. */
+    for (uint32_t at = 0u; at < ring->buffer_bytes; at += 2u) {
+        data[(ring->written + at) % ASTRA_AUDIO_MAILBOX_RING_BYTES] = 0u;
+        data[(ring->written + at + 1u) % ASTRA_AUDIO_MAILBOX_RING_BYTES] = 1u;
+    }
+    ring->written += ring->buffer_bytes;
+    mix_frame(&host, &left, &right);
+    if (left != 256 || right != 256 || host.software_gaps != 0u)
         goto done;
     /* A stream it cannot play is refused once, where QEMU will see it. */
     {

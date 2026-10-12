@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Chocolate Doom 3.1.1, unmodified, started as an application.
+"""Chocolate Doom 3.1.1 with Astra quit branding, started as an application.
 
 The image holds ChocolateDoom.app (the game, the shareware doom1.wad and
 nothing else Doom needs outside Astra's shared libraries) and starts it with

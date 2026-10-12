@@ -29,8 +29,7 @@ struct _NativeMidiSong {
     Uint32 length;
 };
 
-/* How long the host's answer to "still playing?" stands. SDL_mixer asks
- * every audio callback; each fresh answer is a round trip to the host. */
+/* Refresh status between callbacks without waiting for the control service. */
 #define ASTRA_MIDI_ACTIVE_NS UINT64_C(250000000)
 
 static AstraMidiSynth voice = ASTRA_MIDI_SYNTH_INIT;
@@ -231,10 +230,16 @@ int native_midi_active(void)
     now = astra_clock_monotonic();
     if (now >= active_until) {
         int sounding = 0;
+        AstraResult result = astra_midi_active(&voice, &sounding);
 
-        active = astra_midi_active(&voice, &sounding) == ASTRA_OK &&
-                 sounding != 0;
-        active_until = now + ASTRA_MIDI_ACTIVE_NS;
+        if (result == ASTRA_OK) {
+            active = sounding != 0;
+            active_until = now + ASTRA_MIDI_ACTIVE_NS;
+        } else if (result != ASTRA_ERROR_WOULD_BLOCK &&
+                   result != ASTRA_ERROR_BUSY) {
+            active = 0;
+            error_text = "Astra MIDI status unavailable";
+        }
     }
     return active;
 }

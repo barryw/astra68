@@ -74,6 +74,8 @@ facilities. Yes, this machine plays Doom.
 
 ![Chocolate Doom running on Astra OS on the DE25](docs/images/astra-doom.png)
 
+Even Doom knows where it lives: [quit to Astra](docs/images/astra-doom-quit.png).
+
 ## Direction
 
 Astra OS is intended to be a compact, responsive graphical system with a

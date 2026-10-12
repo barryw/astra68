@@ -1,6 +1,36 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-11
+Status: active continuation map, 2026-10-12
+
+The active app-latency checkpoint is release
+`36791f1e24e86a94856446a7389392127f6e6db5fe831d5bd8d3cc88cc97f175`,
+selected on DE25 with QEMU UID/GID 999, no groups or capabilities, and
+`NoNewPrivs=1`. Audio.kit 3.0.0 / `pcm.library.3` replaces ABI 2 throughout
+the current tree. MIDI activity queries now submit and collect the existing
+correlated reply without blocking the SDL audio callback. The recurring
+35–45 ms producer stalls are gone: a 40-second physical trace has zero write
+stalls over 35 ms and zero audio faults, versus 47 stalls before the fix.
+Twenty physical gunshots across two Doom launches also have zero audio faults;
+the user confirms that gunshots now track muzzle flash through monitor/TV
+speakers. This is listening acceptance, not an instrumented acoustic measurement.
+Interface Gallery no longer runs its nine benchmarks on normal launch; repeated
+physical launches finish in roughly 0.2 seconds instead of six seconds.
+An empty futex queue lifetime defect found during Doom launch is also fixed
+before owner-page reclamation. Kernel host/MC68040 verification, native PCM
+sanitizers/contracts, the full guest app/Terminal/power/filesystem gates, and
+packaged NDK documentation/examples pass. Runtime, audio and remote desktop
+remain active with zero restarts and no new panic. The stopped previous disk
+was archived and `/home` and `/local` contents/metadata survived migration.
+See [app latency continuation](HANDOVER_2026-10-12_APP_LATENCY.md) for exact
+evidence, retained failed explorations, and qualification limits.
+The Doom quit prompt now reads “PRESS Y TO QUIT TO ASTRA.” The target binary
+has the new prompt and no old DOS prompt; fresh guest desktop/audio/Doom and
+filesystem gates pass. Its QEMU and audio daemon match accepted audio release
+`8dfdbdaf` byte for byte. A physical capture verifies the branded confirmation,
+then F10/Y/Space closes the actual Doom process and restores the desktop.
+Capture, services and panic evidence are in `board-quit-2`; user-state
+preservation and unprivileged credentials pass in `deploy-quit-1`.
+Broad filesystem performance acceptance remains open.
 
 The active filesystem continuation is the `fs-phase1` checkpoint containing
 Tasks 5–12 and final review fixes. Git history records its committed identity;
@@ -28,9 +58,9 @@ the new ABI 12 source; the review checkpoints above do. Task 12b and Task 13
 performance qualification remain open.
 See [the filesystem continuation](HANDOVER_2026-10-10_FILESYSTEM.md).
 
-The selected production release is now
+The filesystem and visual qualification release was
 `194b9202da7eb0ff61a05ad03633bd63f687ac7afce5fe05c08601fc357af249`,
-built on Beast and deployed with the current ABI 12 filesystem guest,
+built on Beast and deployed with the ABI 12 filesystem guest,
 worker-only resolver optimization and refreshed SDL icons. Its own staged
 ROM/image pass all 26 semantics and recovery/fsck before deployment.
 The previous release
@@ -285,7 +315,7 @@ corrupt font inputs. HarfBuzz shaping and physical DE25 text quality remain
 unqualified. The native generic Codec Kit remains a design contract, not an
 implemented provider service or client library.
 Chocolate Doom 3.1.1 at `410d96855b5df5410ff591a90efeafa889119224`
-builds from unmodified upstream source with its configure/Makefiles and links
+builds from pinned upstream source with its configure/Makefiles and links
 dynamically against Astra's SDL, SDL_mixer, SDL_net, libc, runtime and compiler
 libraries. The 2026-10-11 Task 12 integration checkpoint passes 30 seconds of
 gameplay, keyboard input, pointer lock, audio/music and clean ENDOOM exit without

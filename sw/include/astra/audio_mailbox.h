@@ -12,14 +12,15 @@
  * (ASTRA_AUDIO_MAILBOX_PATH) that QEMU and astra-audio-host both map. It is
  * Haiku's mixer input (MixerInput.cpp:263-298) split across two processes:
  * when an application hands a stream buffer to the host, QEMU copies it out
- * of guest memory into that stream's ring here and gives the buffer back at
- * once; the daemon's feed thread, clocked by the output FIFO, decodes from
- * the ring just as much as the next mix needs.
+ * of guest memory into that stream's ring here; the daemon's feed thread,
+ * clocked by the output FIFO, decodes just as much as the next mix needs.
+ * QEMU gives the buffer back after the daemon consumes it.
  *
  * A ring holds at most ASTRA_AUDIO_MAILBOX_DEPTH buffers, so a stream is at
- * most that many buffers ahead of the mix here, plus the application's own.
- * When the daemon's reading makes room for another buffer it increments
- * `room_sequence` and futex-wakes it; QEMU then copies the next queued
+ * most that many buffers ahead of the mix here. Copied buffers still count
+ * against the application's group, so these queues do not add their depths.
+ * When the daemon consumes a complete buffer it increments `room_sequence`
+ * and futex-wakes it; QEMU returns that buffer and copies the next queued
  * buffers. One wake per buffer, in each direction, and no reply.
  *
  * Counters are free-running 32-bit byte counts. `written` is QEMU's alone,

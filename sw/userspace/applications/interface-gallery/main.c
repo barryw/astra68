@@ -1775,6 +1775,8 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *gui;
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *clipboard;
+    const char *argument;
+    uint32_t benchmarks;
     uint32_t status;
 
     if (!astra_startup_validate(startup) || startup->capabilities_address == 0u)
@@ -1786,29 +1788,37 @@ int astra_main(const AstraStartupInfo *startup)
                                          ASTRA_CAPABILITY_CLIPBOARD);
     if (gui == NULL || clipboard == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
-    status = astra_process_filesystem_open(&process_filesystem, startup);
-    if (status != ASTRA_STATUS_OK)
-        status = GALLERY_FAIL_LIBRARY;
+    argument = astra_startup_argument(startup, 1u);
+    benchmarks = argument != NULL &&
+        astra_string_compare_ascii_nocase(argument, "--benchmark") == 0;
+    status = startup->argc <= 1u || (startup->argc == 2u && benchmarks) ?
+        ASTRA_STATUS_OK : ASTRA_STATUS_INVALID;
+    if (status == ASTRA_STATUS_OK) {
+        status = astra_process_filesystem_open(&process_filesystem, startup);
+        if (status != ASTRA_STATUS_OK)
+            status = GALLERY_FAIL_LIBRARY;
+    }
     if (status == ASTRA_STATUS_OK)
         status = build_controls();
-    if (status == ASTRA_STATUS_OK)
+    if (status == ASTRA_STATUS_OK && benchmarks) {
         status = benchmark_layouts();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_undo();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_text_model();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_segmented();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_tab();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_stepper();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_dial();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_disclosure();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_splitter();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_undo();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_text_model();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_segmented();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_tab();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_stepper();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_dial();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_disclosure();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_splitter();
+    }
     if (status == ASTRA_STATUS_OK)
         status = create_window(gui->handle);
     if (status == ASTRA_STATUS_OK)

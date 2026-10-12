@@ -1018,9 +1018,6 @@ def open_terminal(machine, boot_deadline, command_deadline):
 
 
 def interface_layout_benchmark(machine, boot_deadline):
-    if not machine.wait_for_serial(BOOT_MARKER, boot_deadline):
-        print("FAIL: interface layout benchmark never reached the desktop")
-        return False
     needles = tuple("INTERFACE LAYOUT controls=%08x" % count
                     for count in INTERFACE_LAYOUT_CASES) + (
                         "INTERFACE UNDO n=%08x" %
@@ -1480,6 +1477,9 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                           debug_guest=sbase_only)
         try:
             if interface_layout_only:
+                if not open_terminal(machine, boot_deadline, command_deadline):
+                    return 1
+                machine.qmp.type_line("open /apps/InterfaceGallery.app --benchmark")
                 return 0 if interface_layout_benchmark(
                     machine, boot_deadline) else 1
             if not open_terminal(machine, boot_deadline, command_deadline):

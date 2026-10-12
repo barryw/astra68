@@ -32,9 +32,40 @@ _Static_assert((uint32_t)ASTRA_MIDI_REVERB == ASTRA_HOST_MIDI_SET_REVERB &&
                        ASTRA_HOST_MIDI_SET_POLYPHONY,
                "MIDI settings are the host's");
 
+/* One pending query shares the existing correlated session reply port. */
+static AstraResult finish_activity(AstraMidiSynth *song, int wait,
+                                   AstraPcmReply *reply)
+{
+    AstraResult result;
+
+    if (song == NULL || !astra_pcm_session_valid(&song->session))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (song->activity_pending == 0u)
+        return ASTRA_OK;
+    result = astra_pcm_reply_receive(song->session.reply,
+                                     song->session.transaction,
+                                     reply, NULL, wait);
+
+    if (result != ASTRA_ERROR_WOULD_BLOCK)
+        song->activity_pending = 0u;
+    return result;
+}
+
+static AstraResult midi_exchange(AstraMidiSynth *song, uint32_t operation,
+                                 uint32_t frames, uint32_t value,
+                                 uint32_t target, AstraPcmReply *reply)
+{
+    AstraResult result = finish_activity(song, 1, reply);
+
+    if (result != ASTRA_OK && result != ASTRA_ERROR_BUSY)
+        return result;
+    return astra_pcm_session_exchange(&song->session, operation, frames,
+                                      value, target, reply);
+}
+
 AstraResult astra_midi_open(AstraHandle service, AstraMidiSynth *song)
 {
-    if (song == NULL)
+    if (song == NULL || song->activity_pending != 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     /* The session's format word only sizes its transfers: bytes. */
     return astra_pcm_session_open(service, ASTRA_PCM_MIDI_OPEN,
@@ -62,8 +93,7 @@ static AstraResult send_pieces(AstraMidiSynth *song, uint32_t operation,
         if (!astra_pcm_session_valid(&song->session))
             return ASTRA_ERROR_INVALID_ARGUMENT;
         (void)memcpy(song->session.mapped, from + sent, piece);
-        result = astra_pcm_session_exchange(&song->session, operation, piece,
-                                            sent, bytes, &reply);
+        result = midi_exchange(song, operation, piece, sent, bytes, &reply);
         if (result != ASTRA_OK)
             return result;
         sent += piece;
@@ -83,9 +113,8 @@ AstraResult astra_midi_add_system_font(AstraMidiSynth *song, const char *name)
     if (length == 0u || length >= ASTRA_PCM_FONT_NAME_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     (void)memcpy(song->session.mapped, name, length);
-    return astra_pcm_session_exchange(&song->session,
-                                      ASTRA_PCM_MIDI_SYSTEM_FONT,
-                                      (uint32_t)length, 0u, 0u, &reply);
+    return midi_exchange(song, ASTRA_PCM_MIDI_SYSTEM_FONT,
+                          (uint32_t)length, 0u, 0u, &reply);
 }
 
 AstraResult astra_midi_add_font(AstraMidiSynth *song, const void *font,
@@ -106,8 +135,7 @@ AstraResult astra_midi_play(AstraMidiSynth *song, int32_t plays)
 
     if (song == NULL || plays == 0 || plays < ASTRA_MIDI_FOREVER)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    return astra_pcm_session_exchange(
-        &song->session, ASTRA_PCM_MIDI_PLAY, 0u,
+    return midi_exchange(song, ASTRA_PCM_MIDI_PLAY, 0u,
         plays == ASTRA_MIDI_FOREVER ? ASTRA_PCM_MIDI_FOREVER :
                                       (uint32_t)plays, 0u, &reply);
 }
@@ -118,8 +146,8 @@ AstraResult astra_midi_pause(AstraMidiSynth *song, int paused)
 
     if (song == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    return astra_pcm_session_exchange(&song->session, ASTRA_PCM_PAUSE, 0u,
-                                      paused != 0 ? 1u : 0u, 0u, &reply);
+    return midi_exchange(song, ASTRA_PCM_PAUSE, 0u,
+                          paused != 0 ? 1u : 0u, 0u, &reply);
 }
 
 AstraResult astra_midi_stop(AstraMidiSynth *song)
@@ -128,8 +156,7 @@ AstraResult astra_midi_stop(AstraMidiSynth *song)
 
     if (song == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    return astra_pcm_session_exchange(&song->session, ASTRA_PCM_MIDI_STOP,
-                                      0u, 0u, 0u, &reply);
+    return midi_exchange(song, ASTRA_PCM_MIDI_STOP, 0u, 0u, 0u, &reply);
 }
 
 AstraResult astra_midi_gain(AstraMidiSynth *song, uint32_t gain_q16)
@@ -138,8 +165,7 @@ AstraResult astra_midi_gain(AstraMidiSynth *song, uint32_t gain_q16)
 
     if (song == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    return astra_pcm_session_exchange(&song->session, ASTRA_PCM_GAIN, 0u,
-                                      gain_q16, 0u, &reply);
+    return midi_exchange(song, ASTRA_PCM_GAIN, 0u, gain_q16, 0u, &reply);
 }
 
 AstraResult astra_midi_active(AstraMidiSynth *song, int *active)
@@ -147,19 +173,34 @@ AstraResult astra_midi_active(AstraMidiSynth *song, int *active)
     AstraPcmReply reply = {0};
     AstraResult result;
 
-    if (song == NULL || active == NULL)
+    if (song == NULL || active == NULL ||
+        !astra_pcm_session_valid(&song->session))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    result = astra_pcm_session_exchange(&song->session, ASTRA_PCM_MIDI_STATUS,
-                                        0u, 0u, 0u, &reply);
-    *active = result == ASTRA_OK && reply.value != 0u;
+    if (song->activity_pending == 0u) {
+        result = astra_pcm_session_submit(&song->session,
+                                          ASTRA_PCM_MIDI_STATUS, 0u, 0u, 0u);
+        if (result != ASTRA_OK)
+            return result;
+        song->activity_pending = 1u;
+    }
+    result = finish_activity(song, 0, &reply);
+    if (result == ASTRA_OK)
+        *active = reply.value != 0u;
     return result;
 }
 
 AstraResult astra_midi_close(AstraMidiSynth *song)
 {
+    AstraPcmReply reply = {0};
+    AstraResult result;
+    AstraResult closed;
+
     if (song == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    return astra_pcm_close(&song->session);
+    result = finish_activity(song, 1, &reply);
+    closed = astra_pcm_close(&song->session);
+    song->activity_pending = 0u;
+    return result == ASTRA_OK ? closed : result;
 }
 
 /* A request whose answer the service wrote into the area: frames_out
@@ -172,8 +213,7 @@ static AstraResult list(AstraMidiSynth *song, uint32_t operation,
 
     if (!astra_pcm_session_valid(&song->session))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    result = astra_pcm_session_exchange(&song->session, operation, 0u, first,
-                                        0u, reply);
+    result = midi_exchange(song, operation, 0u, first, 0u, reply);
     if (result != ASTRA_OK)
         return result;
     if (reply->frames_out > MIDI_CHUNK_BYTES ||
@@ -266,8 +306,7 @@ AstraResult astra_midi_send(AstraMidiSynth *song, const AstraMidiEvent *events,
             return ASTRA_ERROR_INVALID_ARGUMENT;
         (void)memcpy(song->session.mapped, events + sent,
                      piece * sizeof(AstraMidiEvent));
-        result = astra_pcm_session_exchange(
-            &song->session, ASTRA_PCM_MIDI_EVENTS,
+        result = midi_exchange(song, ASTRA_PCM_MIDI_EVENTS,
             piece * (uint32_t)sizeof(AstraMidiEvent), 0u, 0u, &reply);
         if (result != ASTRA_OK)
             return result;
@@ -284,8 +323,8 @@ AstraResult astra_midi_set(AstraMidiSynth *song, AstraMidiSetting setting,
     if (song == NULL || (uint32_t)setting == 0u ||
         (uint32_t)setting > ASTRA_HOST_MIDI_SET_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    return astra_pcm_session_exchange(&song->session, ASTRA_PCM_MIDI_SET, 0u,
-                                      (uint32_t)setting, value, &reply);
+    return midi_exchange(song, ASTRA_PCM_MIDI_SET, 0u,
+                          (uint32_t)setting, value, &reply);
 }
 
 AstraResult astra_midi_status(AstraMidiSynth *song, AstraMidiStatus *status)

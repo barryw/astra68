@@ -436,7 +436,7 @@ typedef struct AstraDisplayState {
 
 /* One application audio stream (astra/audio_stream.h): its buffers are in
    guest memory, and each is copied into the stream's mailbox ring when the
-   ring has room for it, then given back. */
+   ring has room for it, then given back when the mixer consumes it. */
 typedef struct AstraAudioStream {
     uint32_t owner;
     uint32_t generation;
@@ -447,6 +447,7 @@ typedef struct AstraAudioStream {
     uint32_t audio_bytes;
     /* Buffers given back: the header's `consumed` is written from this. */
     uint32_t consumed;
+    uint32_t copied;
     /* The header's `queued` as the last kick read it. Only the vCPU thread
        reads the header's counter, right after the guest's own stores to the
        buffers it covers; the main loop, refilling on a daemon wake, works
@@ -6349,7 +6350,7 @@ static void astra_audio_stream_interrupt(Astra68State *s,
     astra_update_irq(s);
 }
 
-/* Copy every queued buffer the ring has room for, give each back, and raise
+/* Copy queued buffers that fit, return buffers the mixer consumed, and raise
    the armed interrupt when that freed one. @p kick: called from the guest's
    STREAM_KICK, so the header's `queued` may be read. */
 static void astra_audio_stream_refill(Astra68State *s, uint32_t slot,
@@ -6363,6 +6364,8 @@ static void astra_audio_stream_refill(Astra68State *s, uint32_t slot,
     uint32_t used;
     uint32_t written;
     uint32_t copied = 0;
+    uint32_t in_mailbox;
+    uint32_t completed;
 
     if (slot >= ASTRA_AUDIO_MAILBOX_STREAMS || !s->audio.streams[slot].active) {
         return;
@@ -6386,7 +6389,8 @@ static void astra_audio_stream_refill(Astra68State *s, uint32_t slot,
         stream->queued = ldl_be_p(base + AUDIO_HEADER_FIELD(queued));
     }
     outstanding = stream->queued - stream->consumed;
-    if (outstanding > stream->buffer_count) {
+    in_mailbox = stream->copied - stream->consumed;
+    if (outstanding > stream->buffer_count || in_mailbox > outstanding) {
         stl_be_p(base + AUDIO_HEADER_FIELD(status),
                  ASTRA_SYSCALL_INVALID_ARGUMENT);
         astra_audio_stream_interrupt(s, stream);
@@ -6394,14 +6398,18 @@ static void astra_audio_stream_refill(Astra68State *s, uint32_t slot,
     }
     written = ring->written;
     used = written - qatomic_load_acquire(&ring->read);
-    if (used > ASTRA_AUDIO_MAILBOX_RING_BYTES) {
-        used = ASTRA_AUDIO_MAILBOX_RING_BYTES; /* a stale read: wait */
+    if (used > in_mailbox * stream->audio_bytes) {
+        return; /* a stale read from the previous generation: wait */
     }
+    completed = (in_mailbox * stream->audio_bytes - used) /
+                stream->audio_bytes;
+    stream->consumed += completed;
+    outstanding = stream->queued - stream->copied;
     while (outstanding != 0 &&
            used + stream->audio_bytes <=
                ASTRA_AUDIO_MAILBOX_DEPTH * stream->audio_bytes) {
         const uint8_t *source = base + ASTRA_AUDIO_STREAM_HEADER_SIZE +
-            (stream->consumed % stream->buffer_count) * stream->stride;
+            (stream->copied % stream->buffer_count) * stream->stride;
         uint32_t at = written % ASTRA_AUDIO_MAILBOX_RING_BYTES;
         uint32_t first = MIN(stream->audio_bytes,
                              ASTRA_AUDIO_MAILBOX_RING_BYTES - at);
@@ -6410,18 +6418,20 @@ static void astra_audio_stream_refill(Astra68State *s, uint32_t slot,
         memcpy(data, source + first, stream->audio_bytes - first);
         written += stream->audio_bytes;
         used += stream->audio_bytes;
-        ++stream->consumed;
+        ++stream->copied;
         --outstanding;
         ++copied;
     }
-    if (copied == 0) {
+    if (copied == 0 && completed == 0) {
         return;
     }
-    qatomic_store_release(&ring->written, written);
-    /* The copies have read every byte before the guest may refill them. */
+    if (copied != 0) {
+        qatomic_store_release(&ring->written, written);
+    }
+    /* Playback bounds the guest queue; copying ahead does not free a slot. */
     smp_mb();
     stl_be_p(base + AUDIO_HEADER_FIELD(consumed), stream->consumed);
-    if (stream->armed) {
+    if (completed != 0 && stream->armed) {
         astra_audio_stream_interrupt(s, stream);
     }
 }

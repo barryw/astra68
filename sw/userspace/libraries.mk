@@ -40,7 +40,7 @@ ASTRA_NETWORK_LIBRARY := \
 ASTRA_CONFIG_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/config/build/m68k/libraries/config.library.1
 ASTRA_PCM_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/audio/build/m68k/libraries/pcm.library.2
+	$(ASTRA_USERSPACE_ROOT)/audio/build/m68k/libraries/pcm.library.3
 ASTRA_SDL2_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/sdl2/build/m68k/libraries/SDL2.library.3
 ASTRA_SDL2_NET_LIBRARY := \

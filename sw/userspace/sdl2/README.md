@@ -117,7 +117,7 @@ including YUV, are converted by SDL on upload.
 QEMU renders nothing, so the gates check submissions and command counters;
 pixels need the texture-engine RTL and the DE25.
 
-The audio backend runs over `pcm.library.2`. It
+The audio backend runs over `pcm.library.3`. It
 opens the app's native `PCM` capability and opens the device at the app's
 own sample format, channels and rate (the Linux host converts and
 resamples; SDL converts only more than two channels or a rate outside

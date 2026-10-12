@@ -18,12 +18,15 @@ AstraResult astra_pcm_session_open(AstraHandle service, uint32_t operation,
                                    uint32_t format, uint32_t target,
                                    uint32_t area_bytes,
                                    AstraPcmStream *stream);
-/* Waits for and validates one reply on @p reply_port; with @p received,
- * an OK reply must carry exactly one handle, which lands there. */
+/* Validates one reply, optionally waiting. An empty port returns WOULD_BLOCK;
+ * a received service BUSY is distinct. An OK grant carries one handle. */
 AstraResult astra_pcm_reply_receive(uint32_t reply_port,
                                     uint32_t transaction,
                                     AstraPcmReply *reply,
-                                    uint32_t *received);
+                                    uint32_t *received, int wait);
+AstraResult astra_pcm_session_submit(AstraPcmStream *stream,
+                                     uint32_t operation, uint32_t frames,
+                                     uint32_t value, uint32_t target);
 AstraResult astra_pcm_session_exchange(AstraPcmStream *stream,
                                        uint32_t operation, uint32_t frames,
                                        uint32_t value, uint32_t target,

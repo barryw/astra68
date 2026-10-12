@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy the pinned, unmodified Chocolate Doom tree into build/vendor."""
+"""Copy pinned Chocolate Doom with Astra's quit-prompt branding."""
 
 import hashlib
 import shutil
@@ -30,6 +30,12 @@ def prepare(source: Path, output: Path) -> Path:
         shutil.rmtree(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source, output, ignore=shutil.ignore_patterns(".git"))
+    english = output / "src/doom/d_englsh.h"
+    text = english.read_text()
+    old = '"(press y to quit to dos.)"'
+    if text.count(old) != 1:
+        raise ValueError("Chocolate Doom quit prompt changed upstream")
+    english.write_text(text.replace(old, '"(press y to quit to Astra.)"'))
     marker.write_text(stamp)
     return output
 

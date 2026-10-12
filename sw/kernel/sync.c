@@ -735,6 +735,22 @@ KernelFutexStatus kernel_futex_wake_all_irq(uint32_t process_id,
     return KERNEL_FUTEX_OK;
 }
 
+KernelFutexStatus kernel_futex_reap(void)
+{
+    KernelFutexSlot *slot = futex_slots;
+
+    while (slot != NULL) {
+        KernelFutexSlot *next = slot->next;
+        uint32_t waiters = kernel_thread_wait_queue_count(&slot->waiters);
+
+        if (waiters == UINT32_MAX ||
+            (waiters == 0u && !futex_slot_release(slot)))
+            return KERNEL_FUTEX_CORRUPT;
+        slot = next;
+    }
+    return KERNEL_FUTEX_OK;
+}
+
 KernelSyncStatus kernel_sync_create_event(uint32_t owner, uint32_t flags,
                                           KernelSyncObject **object)
 {

@@ -64,9 +64,8 @@ assert astra_image.FAULT_PROBE_SERVICES == \
 assert astra_image.FAULT_CRITICAL_STARTUP_MANIFEST == \
     astra_image.DISPLAY_STARTUP_MANIFEST + \
     "service /services/fault-probe grants critical\n"
-assert astra_image.INTERFACE_GALLERY_STARTUP_MANIFEST == \
-    astra_image.DISPLAY_STARTUP_MANIFEST + \
-    "application /apps/InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n"
+assert "application /apps/InterfaceGallery.app" not in \
+    astra_image.DISPLAY_STARTUP_MANIFEST
 try:
     astra_image.install_test_app("unused.img", "../unsafe/../probe!.app")
 except RuntimeError as error:

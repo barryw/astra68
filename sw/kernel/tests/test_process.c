@@ -15733,6 +15733,66 @@ static void test_process_signal_is_capability_checked_and_delivered(void)
     assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
 }
 
+static void test_process_death_retires_futex_addresses_before_reclaim(void)
+{
+    static const uint8_t image[] = {0x4eu, 0x71u};
+    const uint32_t user_stack = KERNEL_PROCESS_STACK_TOP - 8u;
+    const uint32_t address = KERNEL_PROCESS_STACK_TOP - 256u;
+    KernelCpuContext *next;
+    KernelHandle handle;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0u};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t observer_id;
+    uint32_t target_id;
+    uint32_t word = 0u;
+
+    initialize_test();
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &observer_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u,
+                                 &target_id) == KERNEL_PROCESS_OK);
+    assert(kernel_process_grant_handle(
+               observer_id, target_id, TEST_PROCESS_TERMINATE_RIGHTS,
+               &handle) == KERNEL_PROCESS_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE, 0u);
+    select_process(target_id, registers, frame, &next);
+    assert(kernel_copy_to_user(address, &word, sizeof(word)) ==
+           KERNEL_USER_COPY_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_FUTEX_WAIT;
+    registers[1] = address;
+    registers[3] = INT32_MAX;
+    registers[4] = UINT32_MAX;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_PROCESS_TERMINATE;
+    registers[1] = handle;
+    registers[2] = 9u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(kernel_sync_pool_valid());
+    memset(registers, 0, sizeof(registers));
+    registers[0] = ASTRA_SYSCALL_FUTEX_WAKE;
+    registers[1] = address;
+    registers[2] = 1u;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    assert(next->data[0] == ASTRA_SYSCALL_OK && next->data[1] == 0u);
+    registers[0] = ASTRA_SYSCALL_CLOSE;
+    registers[1] = handle;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_OK);
+    registers[0] = ASTRA_SYSCALL_PROCESS_EXIT;
+    assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
+           KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+}
+
 static void test_process_terminate_preserves_signal_wait_status(void)
 {
     static const uint8_t image[] = {0x4eu, 0x71u, 0x4eu, 0x71u};
@@ -15971,6 +16031,7 @@ int main(void)
     test_thread_sleep_is_timed_and_signal_atomic();
     test_process_signal_is_capability_checked_and_delivered();
     test_process_terminate_preserves_signal_wait_status();
+    test_process_death_retires_futex_addresses_before_reclaim();
     test_process_suspend_resume_preserves_execution();
     test_any_process_may_emit_an_event();
     test_no_debug_surface_closes_only_the_console();

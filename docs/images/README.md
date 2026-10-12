@@ -30,3 +30,18 @@ before and after capture. Runtime, audio and remote desktop stay active with
 zero restarts. Failed cached-frame attempt `review-visual-1` is retained;
 the server intentionally skips hardware capture without connected clients.
 Earlier ABI 11 captures remain under `visual-refresh` and are historical.
+
+## Astra quit confirmation
+
+`astra-doom-quit.png` was captured on 2026-10-12 from selected release
+`36791f1e24e86a94856446a7389392127f6e6db5fe831d5bd8d3cc88cc97f175`.
+The same authenticated RFB path reads the physical 1920×1080 HDMI output;
+RGB-to-PNG conversion runs on Beast. No pixels were edited. F10 opens the
+confirmation, which now says “PRESS Y TO QUIT TO ASTRA.” Y and Space then
+close the actual Doom process, verified through the existing process sampler.
+Runtime/audio/remote service identities and the old panic hash/mtime remain
+unchanged. QEMU remains UID/GID 999 without groups/capabilities, NoNewPrivs=1.
+Evidence: `/mnt/Documents/astra68/builds/app-latency-20261011/board-quit-2`.
+The initial `board-quit-1` navigation captured the skill menu and is not used.
+PNG SHA-256:
+`08b6b99ef67a82c56b786a81292ee0df2924ccb11514cfc7acb5d935cd53b18b`.

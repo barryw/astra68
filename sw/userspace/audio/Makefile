@@ -11,7 +11,7 @@ CPPFLAGS := -I$(NDK)/include -I../../include -I$(RUNTIME)/include
 FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic \
 	$(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
-TARGET := build/m68k/libraries/pcm.library.2
+TARGET := build/m68k/libraries/pcm.library.3
 OBJECTS := build/m68k/pcm_library.o build/m68k/midi_library.o \
 	build/m68k/pcm_buffers.o build/m68k/pcm_library_identity.o
 EXPORTS := pcm.library.exports
@@ -34,7 +34,7 @@ runtime-library-ready:
 $(TARGET): $(OBJECTS) $(EXPORTS) $(ASTRA_SHARED_LINK_INPUTS) | runtime-library-ready
 	@mkdir -p $(@D)
 	$(CC) $(ASTRA_TARGET_ABI_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,pcm.library.2 -o $@ \
+		-Wl,-soname,pcm.library.3 -o $@ \
 		-Wl,--version-script=$(EXPORTS) $(OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:runtime.library.1 \
@@ -46,7 +46,7 @@ library-contract: $(TARGET)
 		$(NDK)/include/astra/pcm.h $(NDK)/include/astra/midi.h
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(EXPORTS) $(TARGET)
-	@$(READELF) -dW $(TARGET) | grep -Fq 'Library soname: [pcm.library.2]'
+	@$(READELF) -dW $(TARGET) | grep -Fq 'Library soname: [pcm.library.3]'
 	@$(READELF) -dW $(TARGET) | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $(TARGET) | grep -q 'TEXTREL'
 	@$(READELF) -lW $(TARGET) | grep -q ' GNU_RELRO '
@@ -70,7 +70,8 @@ test: library-contract build/host/test_pcm_library build/host/test_pcm_buffers
 sanitize: library-contract
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic \
-		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-fsanitize=address,undefined -fno-sanitize-recover=all \
+		-fno-omit-frame-pointer \
 		src/pcm_library.c src/midi_library.c tests/test_pcm_library.c \
 		-o build/host/test_pcm_library_sanitize
 	./build/host/test_pcm_library_sanitize

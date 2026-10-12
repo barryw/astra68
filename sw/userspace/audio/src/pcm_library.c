@@ -31,14 +31,17 @@ static void release(AstraPcmStream *stream)
 AstraResult astra_pcm_reply_receive(uint32_t reply_port,
                                     uint32_t transaction,
                                     AstraPcmReply *reply,
-                                    uint32_t *received)
+                                    uint32_t *received, int wait)
 {
     uint32_t bytes = 0u, count = 0u;
-    uint32_t status = astra_wait_one_restart(reply_port,
-                                              ASTRA_DEADLINE_FOREVER, NULL);
+    uint32_t status = ASTRA_SYSCALL_OK;
 
-    if (status != ASTRA_SYSCALL_OK)
-        return astra_result_from_syscall(status);
+    if (wait) {
+        status = astra_wait_one_restart(reply_port,
+                                        ASTRA_DEADLINE_FOREVER, NULL);
+        if (status != ASTRA_SYSCALL_OK)
+            return astra_result_from_syscall(status);
+    }
     status = astra_port_receive(reply_port, reply, sizeof(*reply),
                                 received, received == NULL ? 0u : 1u,
                                 &bytes, &count);
@@ -70,13 +73,12 @@ static AstraResult receive_reply(AstraPcmStream *stream,
                                  uint32_t *received)
 {
     return astra_pcm_reply_receive(stream->reply, stream->transaction, reply,
-                                   received);
+                                   received, 1);
 }
 
-AstraResult astra_pcm_session_exchange(AstraPcmStream *stream,
-                                       uint32_t operation, uint32_t frames,
-                                       uint32_t value, uint32_t target,
-                                       AstraPcmReply *reply)
+AstraResult astra_pcm_session_submit(AstraPcmStream *stream,
+                                     uint32_t operation, uint32_t frames,
+                                     uint32_t value, uint32_t target)
 {
     AstraPcmRequest request = {0};
     uint32_t status;
@@ -94,8 +96,19 @@ AstraResult astra_pcm_session_exchange(AstraPcmStream *stream,
     request.target = target;
     status = astra_port_send(stream->control, &request, sizeof(request),
                              NULL, 0u);
-    if (status != ASTRA_SYSCALL_OK)
-        return astra_result_from_syscall(status);
+    return astra_result_from_syscall(status);
+}
+
+AstraResult astra_pcm_session_exchange(AstraPcmStream *stream,
+                                       uint32_t operation, uint32_t frames,
+                                       uint32_t value, uint32_t target,
+                                       AstraPcmReply *reply)
+{
+    AstraResult result = astra_pcm_session_submit(stream, operation, frames,
+                                                 value, target);
+
+    if (result != ASTRA_OK)
+        return result;
     return receive_reply(stream, reply, NULL);
 }
 
@@ -198,8 +211,9 @@ static AstraResult take_output(const AstraPcmStream *stream,
     if (reply->frames_out > capacity - *produced ||
         (uint64_t)reply->frames_out * frame_bytes > area_bytes)
         return ASTRA_ERROR_IO;
-    (void)memcpy(target + (size_t)*produced * frame_bytes, stream->mapped,
-                 (size_t)reply->frames_out * frame_bytes);
+    if (reply->frames_out != 0u)
+        (void)memcpy(target + (size_t)*produced * frame_bytes, stream->mapped,
+                     (size_t)reply->frames_out * frame_bytes);
     *produced += reply->frames_out;
     return ASTRA_OK;
 }
@@ -256,8 +270,9 @@ AstraResult astra_pcm_convert(AstraHandle service, uint32_t source_format,
         if (!ended && reply.queued_frames == 0u) {
             batch = source_frames - sent < batch_limit ?
                     source_frames - sent : batch_limit;
-            (void)memcpy(stream.mapped, from + (size_t)sent * source_bytes,
-                         (size_t)batch * source_bytes);
+            if (batch != 0u)
+                (void)memcpy(stream.mapped, from + (size_t)sent * source_bytes,
+                             (size_t)batch * source_bytes);
         }
         result = astra_pcm_session_exchange(
             &stream, ASTRA_PCM_CONVERT, batch,

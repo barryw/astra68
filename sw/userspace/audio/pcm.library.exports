@@ -1,4 +1,4 @@
-ASTRA_PCM_2.0 {
+ASTRA_PCM_3.0 {
     global:
         astra_pcm_open;
         astra_pcm_write;
@@ -8,22 +8,8 @@ ASTRA_PCM_2.0 {
         astra_pcm_status;
         astra_pcm_finish;
         astra_pcm_close;
-    local:
-        *;
-};
-
-ASTRA_PCM_2.1 {
-    global:
         astra_pcm_wait;
-} ASTRA_PCM_2.0;
-
-ASTRA_PCM_2.2 {
-    global:
         astra_pcm_convert;
-} ASTRA_PCM_2.1;
-
-ASTRA_PCM_2.3 {
-    global:
         astra_midi_open;
         astra_midi_add_system_font;
         astra_midi_add_font;
@@ -34,22 +20,16 @@ ASTRA_PCM_2.3 {
         astra_midi_gain;
         astra_midi_active;
         astra_midi_close;
-} ASTRA_PCM_2.2;
-
-ASTRA_PCM_2.4 {
-    global:
         astra_midi_fonts;
         astra_midi_presets;
         astra_midi_send;
         astra_midi_set;
         astra_midi_status;
-} ASTRA_PCM_2.3;
-
-ASTRA_PCM_2.5 {
-    global:
         astra_pcm_buffers_open;
         astra_pcm_buffers_get;
         astra_pcm_buffers_queue;
         astra_pcm_buffers_wait;
         astra_pcm_buffers_close;
-} ASTRA_PCM_2.4;
+    local:
+        *;
+};

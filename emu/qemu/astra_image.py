@@ -213,8 +213,6 @@ PCM_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
 FAULT_PROBE_SERVICES = DISPLAY_SERVICES + ("fault-probe",)
 FAULT_CRITICAL_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "service /services/fault-probe grants critical\n")
-INTERFACE_GALLERY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
-    "application /apps/InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n")
 
 
 def _build_current_userspace():
@@ -997,9 +995,6 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3 and sys.argv[1] == "--fault-critical":
         install(sys.argv[2], service_names=FAULT_PROBE_SERVICES,
                 manifest_text=FAULT_CRITICAL_STARTUP_MANIFEST)
-    elif len(sys.argv) == 3 and sys.argv[1] == "--interface-gallery":
-        install(sys.argv[2], service_names=DISPLAY_SERVICES,
-                manifest_text=INTERFACE_GALLERY_STARTUP_MANIFEST)
     elif len(sys.argv) == 4 and sys.argv[1] == "--create":
         try:
             size_mib = int(sys.argv[3], 10)
@@ -1014,6 +1009,6 @@ if __name__ == "__main__":
         raise SystemExit(
             "usage: astra_image.py "
             "[--display|--hostbench|--audio-certify|--pcm-certify|"
-            "--fault-probe|--fault-critical|--interface-gallery] IMAGE | "
+            "--fault-probe|--fault-critical] IMAGE | "
             "--create IMAGE SIZE_MIB | --service NAME IMAGE | "
             "--test-app BUNDLE IMAGE")

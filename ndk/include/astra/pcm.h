@@ -131,7 +131,7 @@ ASTRA_NODISCARD AstraResult astra_pcm_finish(AstraPcmStream *stream);
  */
 ASTRA_NODISCARD AstraResult astra_pcm_close(AstraPcmStream *stream);
 
-/** Convert PCM between formats and rates on the host (pcm.library 2.2).
+/** Convert PCM between formats and rates on the host (pcm.library 3.0).
  * The Linux audio host decodes, resamples with the mixer's windowed sinc
  * and encodes; the MC68040 only moves bytes. The result is exactly
  * floor(@p source_frames * target rate / source rate) frames, with silence
@@ -156,7 +156,7 @@ ASTRA_NODISCARD AstraResult astra_pcm_convert(AstraHandle service,
                                               uint32_t target_capacity,
                                               uint32_t *target_frames);
 
-/** An application's own group of playback buffers (pcm.library 2.5).
+/** An application's own group of playback buffers (pcm.library 3.0).
  *
  * The way to play a steady stream: Haiku's BBufferGroup and BSoundPlayer.
  * The buffers are shared with the host, so the application fills them in

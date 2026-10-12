@@ -7,7 +7,7 @@ it with Ctrl-C: SDL turns SIGINT into SDL_QUIT, so loopwave must close its
 PCM stream and exit 0.
 
 loopwave decodes test/sample.wav (MS-ADPCM, mono, 22050 Hz) in SDL and plays
-it in a loop through pcm.library.2, the media service and QEMU's host audio
+it in a loop through pcm.library.3, the media service and QEMU's host audio
 provider. The Linux audio host converts and resamples every stream, so
 SDL's device takes loopwave's own format (S16BE mono 22050 Hz) and the
 MC68040 converts nothing. The provider talks to the Linux daemon's socket,
@@ -325,7 +325,8 @@ class AudioHost:
                 continue
             struct.pack_into("=I", box, at + 20, voice.position)
             after = (written - voice.position) & 0xFFFFFFFF
-            if available > buffer_bytes >= after:
+            if (available + buffer_bytes - 1) // buffer_bytes != \
+                    (after + buffer_bytes - 1) // buffer_bytes:
                 room = True
         if room:
             sequence = struct.unpack_from("=I", box, MAILBOX_ROOM)[0]

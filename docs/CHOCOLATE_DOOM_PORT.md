@@ -1,8 +1,9 @@
 # Chocolate Doom on Astra: port audit
 
-Status: audit only (2026-09-30). Nothing below has been built or run except
-where stated. Target: Chocolate Doom 3.1.1 (`~/Git/chocolate-doom`, tag
-`410d968`), built from unmodified upstream source. Every missing piece is
+Status: historical audit (2026-09-30), with quit branding updated 2026-10-12.
+Current build and qualification records are in `CURRENT_STATE.md`.
+Target: Chocolate Doom 3.1.1 (`~/Git/chocolate-doom`, tag
+`410d968`), with only the quit prompt changed to “quit to Astra”. Every missing piece is
 implemented once, in the Astra layer that owns it (SDL port, native library,
 supervisor, toolchain, host), for every program that needs it.
 

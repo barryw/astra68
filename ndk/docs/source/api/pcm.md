@@ -1,6 +1,6 @@
 # PCM playback
 
-`pcm.library.2` is the Audio Kit. The guide is [Audio](../audio.md): which
+`pcm.library.3` is the Audio Kit. The guide is [Audio](../audio.md): which
 of its three ways to use, the buffer-group loop and its sizing, one-shot
 voices, conversion and the wavetable synthesizer.
 

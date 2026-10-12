@@ -1696,6 +1696,12 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
     uint32_t released_buffers = 0u;
     uint32_t deferred_buffers = 0u;
     uint32_t released_frames = 0u;
+    uint16_t futex_saved_status = kernel_interrupt_save_disable();
+    KernelFutexStatus futex_status = kernel_futex_reap();
+
+    kernel_interrupt_restore(futex_saved_status);
+    if (futex_status != KERNEL_FUTEX_OK)
+        return KERNEL_PROCESS_CORRUPT;
 
     if (process->handles_closed == 0u) {
         uint32_t revoked_leases = 0u;
