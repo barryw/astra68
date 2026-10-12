@@ -14,6 +14,15 @@ among other failures. Every workload executes successfully; provider memory
 and held-miss absolute floors pass. Performance acceptance remains open; no later
 production phase has started.
 
+The 2026-10-12 user request makes the remaining production phases the active
+priority. The user specifies `/ram0` naming, writable automatic mounts for
+supported USB filesystems, labeled desktop volume icons, and double-click into
+Atlas, and authorizes the Linux kernel work needed for CD-ROM support. The
+[production volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md)
+records the implementation boundaries and migration/acceptance requirements;
+its written-spec review is pending. These are requested outcomes, not shipped
+capabilities or performance acceptance.
+
 Linux owns filesystem machinery. Astra owns the client experience: its native
 API, process-visible namespace, named volumes, grants, mount policy, desktop
 behavior, and diagnostics. Native and POSIX applications use one Astra
@@ -85,7 +94,8 @@ Production qualification requires these user-visible outcomes:
 4. A supported USB optical drive exposes a data disc at `/cd0` or its next
    available optical name. Read-only status, insertion, removal, and eject are
    visible to clients. Audio-CD playback is a separate media feature.
-5. `/ram` is a bounded, volatile Linux tmpfs volume. `/tmp` uses a separate
+5. `/ram0` is a bounded, volatile Linux tmpfs volume. Additional configured RAM
+   volumes use `/ram1`, `/ram2`, and subsequent ordinals. `/tmp` uses a separate
    bounded tmpfs mount by default in the production profile; persistent temporary
    storage requires an explicit configuration choice.
 6. Removing a drive with live files produces a precise loss/error state. An
@@ -104,7 +114,7 @@ Production qualification requires these user-visible outcomes:
 |---|---|---|
 | Fixed internal SD | Linux ext4 for the selected system partition. | Mount after identity and recovery checks; never select by enumeration order alone. |
 | Additional fixed disk or partition | Linux ext4. | Explicit persistent mount policy or an authorized manual mount. |
-| USB mass storage | ext4, FAT32, and exFAT with drivers included in the release kernel/modules. | Recognized removable data media may mount read-only under Astra policy; writable access requires an explicit policy or mount action. |
+| USB mass storage | ext4, FAT32, and exFAT with drivers included in the release kernel/modules. | Supported data volumes automatically mount writable under the shipped trusted policy; requested writable mounts that fail remain unmounted with a reason. Explicit policy/actions may request read-only access. |
 | USB data CD/DVD | ISO9660 including common extensions, and UDF. | Read-only; publish only after Linux has identified and mounted the inserted medium. |
 | RAM storage | Linux tmpfs. | Explicit byte and inode limits; production RAM storage must not use swap. |
 
@@ -152,6 +162,14 @@ namespace views must pass the Phase 1 prototype before the guest engines are
 removed. A separate Linux service is introduced only if required privilege or
 lifecycle isolation cannot be achieved in the existing provider.
 
+The current qualified runtime keeps QEMU unprivileged, with no capabilities
+and NoNewPrivs set. Dynamic source probing, mount/unmount, and optical eject
+require a confined privileged Linux control component. The production volumes
+design records this concrete isolation need: that component owns actual
+source/mount state, while QEMU retains its canonical scoped file-I/O path in
+the same runtime-private mount namespace. Applications still use only the
+versioned native contract; QEMU does not gain mount or raw-device privilege.
+
 ## Devices partitions volumes and identities
 
 FS01. Inventory separates a physical device, inserted medium, partition,
@@ -164,7 +182,8 @@ Axiom's boot device registry or granting an MMIO lease for each Linux disk.
 FS02. Preserve the planned names: internal storage starts at `/dev/disk0`, with
 partitions numbered from one such as `/dev/disk0p1`. Filesystems on unpartitioned
 media associate directly with the device. Volume conveniences include `/dh0`,
-`/dh1`, `/usb0`, `/cd0`, and `/ram`; `/df0` is reserved for an enabled floppy
+`/dh1`, `/usb0`, `/cd0`, and `/ram0`, with subsequent ordinals for each class;
+`/df0` is reserved for an enabled floppy
 provider. Ordinals count volumes of that class, not physical devices. Linux
 paths such as `/dev/sda` remain provider details.
 `/dev` is a rights-checked adapter over the same native storage/device objects.
@@ -400,10 +419,14 @@ Other media classes may support safe removal without a physical eject operation.
 Data volumes may be removed independently; ordinary runtime removal of the
 selected system volume is refused.
 
-FS31. Automatic removable mounting follows an explicit filesystem allowlist and
-read-only default. Writable defaults require trusted persisted policy. Inventory
-never formats or repairs media automatically. Mounts use restrictions suitable
-for data media, and labels cannot supply executable paths or shell commands.
+FS31. Automatic removable mounting follows an explicit filesystem allowlist.
+The shipped trusted persisted policy mounts supported ext4, FAT32, and exFAT
+USB data volumes writable, as requested on 2026-10-12. Optical data volumes are
+read-only; configured rules and explicit mount actions may request read-only USB
+access. A requested writable mount that fails remains unmounted with a useful
+reason instead of silently changing mode. Inventory never formats or repairs
+media automatically. Mounts use restrictions suitable for data media, and labels
+cannot supply executable paths or shell commands.
 
 ## Durability shutdown and provider failure
 
@@ -438,7 +461,8 @@ failure state rather than silently selecting another disk.
 
 ## RAM capacity and resource policy
 
-FS36. `/ram` and default volatile `/tmp` are Linux tmpfs mounts with explicit
+FS36. `/ram0`, additional configured numbered RAM volumes, and default volatile
+`/tmp` are Linux tmpfs mounts with explicit
 byte and inode limits, no swap use, and inspectable usage. Configuration is
 charged against host memory remaining after the reserved guest and other
 platform commitments. Missing/invalid limits refuse the mount; a required mount
@@ -474,6 +498,17 @@ progress, busy clients, read-only status, and failed/lost state. Backend paths,
 Linux tool command lines, and raw transport details do not appear in ordinary
 user flows. Existing native apps, Vim, Lua, zsh, and shipped game ports require
 no filesystem-specific workaround.
+
+Use the nonempty volume label or uppercase canonical fallback (`DH0`, `USB0`,
+`CD0`, `RAM0`). Duplicate labels remain separate generation-safe mount objects.
+Double-click opens Atlas at the selected volume's canonical root through the
+existing native launcher argument contract; labels are not launch paths.
+Successful unmount and media loss remove the icon; failed/busy unmount preserves
+it. Empty optical drives and unmounted/unsupported sources remain visible in
+device inventory without a mounted-volume desktop icon. Atlas and the desktop
+consume the same live native catalog as filesystem tools. Atlas's required
+native browsing and mount-control scope is defined in the production volumes
+design, rather than assumed to be an already implemented application.
 
 FS41. Later formatting, repair, and partition-edit operations require typed
 native administration requests naming an exact device/partition identity and
@@ -656,7 +691,7 @@ Serialize conflicting operations by source/mount while keeping unrelated
 inventory and volumes responsive. Cancellation that wins before publication
 requires rollback when late Linux work retires.
 
-Read-only automatic mounting must not secretly authorize recovery writes.
+A read-only mount request must not secretly authorize recovery writes.
 Linux ext4 can replay its journal even with `ro`; use a non-writing policy where
 consistent, otherwise refuse the mount with recovery-required status. Do not
 publish a dirty filesystem as healthy merely by skipping required replay.
@@ -719,8 +754,10 @@ evaluate `/system/config/mounts.conf`. Reserve `/dh0` from the verified boot
 handoff, apply exact configured identity matches, and allocate monotonically
 increasing names for eligible removable volumes. Duplicate UUIDs, overlapping
 rules, unsupported formats, or ambiguous media remain unmounted with a reason.
-The default removable rule is read-only data mounting from the allowlist;
-writable behavior requires explicit trusted policy.
+The shipped trusted removable rule mounts supported USB data volumes writable
+from the allowlist. Optical mounts and explicitly read-only rules remain
+read-only. A writable mount refusal leaves the source unmounted and inspectable;
+an explicit read-only request is a separate operation.
 
 On remove, mark the medium and dependent mount generations lost before accepting
 further requests, withdraw bindings, notify sessions, and retire work through
@@ -780,7 +817,7 @@ reconciliation share the shutdown implementation.
 | S2 Native catalog and tools | Supervisor authority, live namespace sessions, query/subscription operations, `lsblk`/`blkid`, and public/private visibility. | Existing processes and late first filesystem initialization see catalog updates; unauthorized queries/data access cannot escape their scope. |
 | S3 Manual mount | Typed mount request, name reservation, Linux mount object, rooted grants, atomic publication, and operation status/cancel. Requires Phase 2 ownership and sessions. | Mount a second disposable Linux-backed volume beside `/dh0`; failure/cancel at each transaction step leaves no usable half-mount or leaked Linux object. |
 | S4 Unmount and safe removal | Canonical busy-owner accounting, quiescence, sync, actual unmount, whole-device dependency checks, and shutdown integration. | Two mounted partitions, held cwd/files, stalled I/O, failed sync/unmount, cancel races, and surprise removal; no false safe-remove success. |
-| S5 Policy and USB hotplug | Load persisted rules, automatic read-only publication, non-reused names, overflow/rescan recovery, and current-session updates. Completes Phase 3. | Two real USB devices, multiple partitions, duplicate UUIDs, unplug/reinsert, missed events, and native/POSIX use without restarting clients on DE25. |
+| S5 Policy and USB hotplug | Load persisted rules, writable USB automount default, explicit read-only rules, non-reused names, overflow/rescan recovery, and current-session updates. Completes Phase 3. | Two real USB devices, multiple partitions, duplicate UUIDs, unplug/reinsert, missed events, writable refusal, and native/POSIX use without restarting clients on DE25. |
 | S6 Optical and desktop controls | Drive/media separation, ISO9660/UDF mounting, eject, volume UI, progress, and owner/error presentation. Completes Phase 4. | Physical optical drive: insert, replace disc, busy eject, failed eject, and detach while mounted; pre-existing apps observe every transition. |
 | S7 Release reconciliation | Launcher/kernel/dependency packaging, restart recovery, budgets, documentation, and final legacy-engine removal. Completes Phase 5. | Exact-source QEMU and DE25 stress/fault/semantic gates under input, graphics, and audio load. |
 

@@ -2,6 +2,19 @@
 
 Status: active continuation map, 2026-10-12
 
+Active priority: finish the remaining production filesystem phases, including
+Linux-owned `/dh0` bootstrap/storage, numbered fixed/USB/optical/RAM volumes,
+mount/unmount/safe-remove/eject, live native namespace publication, and labeled
+desktop volume icons opening Atlas. The user chooses writable automount for
+supported USB filesystems and authorizes the CD-ROM kernel work. The
+[production volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md)
+is written for review; implementation has not started. Read-only board inspection
+confirms the current Image lacks `sr_mod`, despite installed ISO9660/UDF modules,
+so optical support needs a matching rebuilt Linux Image and modules. Atlas and
+the required shared collection controls are still pending. No USB storage or
+optical drive is attached for physical qualification. Existing correctness and
+failed performance checkpoints below remain unchanged; no budget is waived.
+
 The active app-latency checkpoint is release
 `36791f1e24e86a94856446a7389392127f6e6db5fe831d5bd8d3cc88cc97f175`,
 selected on DE25 with QEMU UID/GID 999, no groups or capabilities, and
