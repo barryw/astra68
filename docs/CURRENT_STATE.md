@@ -10,8 +10,11 @@ supported USB filesystems and authorizes the CD-ROM kernel work. The
 [production volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md)
 is written for review; implementation has not started. Read-only board inspection
 confirms the current Image lacks `sr_mod`, despite installed ISO9660/UDF modules,
-so optical support needs a matching rebuilt Linux Image and modules. Atlas and
-the required shared collection controls are still pending. No USB storage or
+so optical support needs a matching rebuilt Linux Image and modules. Initial
+Atlas is narrowed to one root-directory window showing named file/folder icons,
+with real native enumeration and loading/empty/error/loss handling. Existing
+layout/scroll and necessary shared icon presentation suffice; the broader Atlas
+browser and collection suite are deferred. No USB storage or
 optical drive is attached for physical qualification. Existing correctness and
 failed performance checkpoints below remain unchanged; no budget is waived.
 

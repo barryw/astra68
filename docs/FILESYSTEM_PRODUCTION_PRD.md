@@ -23,6 +23,11 @@ records the implementation boundaries and migration/acceptance requirements;
 its written-spec review is pending. These are requested outcomes, not shipped
 capabilities or performance acceptance.
 
+Initial Atlas scope is a single root-directory window with named file/folder
+icons, proving native open and enumeration of the selected mounted volume.
+Broader browsing and Atlas management UI wait until storage works; native mount
+tools and desktop volume actions remain in the production filesystem scope.
+
 Linux owns filesystem machinery. Astra owns the client experience: its native
 API, process-visible namespace, named volumes, grants, mount policy, desktop
 behavior, and diagnostics. Native and POSIX applications use one Astra
@@ -506,9 +511,12 @@ existing native launcher argument contract; labels are not launch paths.
 Successful unmount and media loss remove the icon; failed/busy unmount preserves
 it. Empty optical drives and unmounted/unsupported sources remain visible in
 device inventory without a mounted-volume desktop icon. Atlas and the desktop
-consume the same live native catalog as filesystem tools. Atlas's required
-native browsing and mount-control scope is defined in the production volumes
-design, rather than assumed to be an already implemented application.
+consume the same live native catalog as filesystem tools. Initial Atlas shows
+the selected root's real files and folders as named icons, with scrolling and
+truthful loading/empty/error/loss states. Subdirectory navigation, file actions,
+sidebar/toolbar, and Atlas mount-management UI are deferred. The production
+volumes design records this minimum viewer scope; Atlas is not assumed to be an
+already implemented application.
 
 FS41. Later formatting, repair, and partition-edit operations require typed
 native administration requests naming an exact device/partition identity and

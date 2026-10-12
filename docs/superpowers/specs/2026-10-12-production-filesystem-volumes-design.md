@@ -22,6 +22,11 @@ Atlas at their root when double-clicked, and disappear after successful unmount
 or media loss. Attaching an empty optical drive exposes a device in inventory;
 inserting a supported data disc creates the mounted volume and desktop icon.
 
+The user narrows initial Atlas delivery to a root-directory viewer: double-click
+a mounted volume, open one window, and show its root entries as named file/folder
+icons. This is the visual proof of mounting, opening, and native enumeration.
+Broader Atlas features wait until the production filesystem works.
+
 This document refines the existing PRD. It changes the canonical RAM volume
 name to `/ram0`, makes writable USB mounting the shipped trusted-policy default,
 and fixes the desktop-to-Atlas behavior. The existing authority, identity,
@@ -55,9 +60,12 @@ Existing mechanisms to extend:
 - Atlas is marked pending in the Interface implementation ledger; no Atlas
   application implementation exists. The launcher already supports validated
   arguments through `astra_application_launch_with_arguments`.
-- Collection controls required by Atlas remain unfinished. Extend the public
-  Interface Kit, following its retained layout and command contracts, before
-  Atlas consumes those controls. Do not put private list/icon painters in Atlas.
+- The initial Atlas viewer needs existing window/layout/scroll primitives and
+  shared icon presentation, not the pending list/tree/table/columns/toolbar
+  collection suite. Add only a missing icon integration required by this viewer
+  to the public Kit; do not put a private icon painter in Atlas. Desktop already
+  uploads AICON strikes to protected Graphics surfaces and blits them, providing
+  an existing resource path to reuse rather than invent another pixel backend.
 
 Read-only DE25 inspection through Beast on 2026-10-12 found:
 
@@ -311,26 +319,45 @@ its canonical root. Atlas validates and opens that root through the native
 Filesystem Kit. If unmount wins before open, show a precise unavailable-volume
 result. Never use the label as the pathname or retarget a stale click.
 
-The first Atlas delivery required by this filesystem work is a functional native
-browser: mounted-volume sidebar, directory list, path/location display, parent
-and back/forward navigation, directory activation, refresh, capacity/read-only
-status, and truthful loading/error/lost state. Use retained Interface Kit layout,
-shared collection controls, scroll support, and command model. Perform directory
-I/O outside UI interaction paths and return bounded generation-checked results;
-slow media cannot freeze window input. The larger Atlas grid/columns and document
-editing feature set remain tracked in the Interface ledger; do not require an
-unrequested Finder feature clone to qualify storage.
+Initial Atlas opens one ordinary native window for the requested mounted root.
+The title identifies the volume, and the content shows every returned root entry
+with its name and either the shared folder icon or shared generic file icon.
+Use the metadata returned by native batched directory enumeration; no stat per
+entry, filename-based directory guesses, host-path access, or canned fixture data.
+Include ordinary dot-prefixed entries, exclude only the enumeration contract's
+`.` and `..`, and show an explicit empty state when the root has no entries.
 
-Provide authorized mount controls in Atlas's device/volume view and desktop
-volume actions: mount, unmount, safe remove, and optical eject, with progress,
-busy-owner details, and error presentation. Atlas releases its own directory
-references when it initiates removal, returns to a stable volume overview on
-success, and reports other owners without killing their applications. External
-unmount may correctly report Atlas as busy while it is browsing the volume.
-On surprise loss, drop authority, retire pending I/O, and show lost-volume state.
+Reuse retained wrap layout, labels, and existing scroll primitives for the icon
+cells. Reuse two shared icon resources instead of allocating a surface per file.
+Add only the public icon presentation missing from that path; do not build list,
+tree, table, columns, toolbar, or a general collection framework for this proof.
+Resize/reflow and scrolling must keep all admitted entries reachable; do not
+silently stop at the desktop's icon count or first directory batch. Capacity
+exhaustion and enumeration failure are visible errors, not successful empty or
+complete views. Keep filenames byte-exact in the model and clip displayed text
+only at validated UTF-8 boundaries.
 
-An empty drive and unsupported/unmounted source appear in the inventory view,
-not as an empty mounted desktop disk. After successful unmount or loss, its disk
+Perform root enumeration outside the UI interaction path through existing native
+thread/wait mechanisms. Show loading until results arrive; close and input remain
+responsive on slow media. Bounded results carry the requested mount identity and
+generation, and close/loss cancels or retires work without reusing its buffers.
+Close the retained directory when enumeration finishes and release all remaining
+references on window close. A completed root snapshot does not pin the volume as
+busy merely because its window remains open. While enumeration is active, normal
+unmount may report its real directory/request reference as busy.
+
+Subscribe to native mount loss so an unmounted or removed volume clears its old
+entries and displays unavailable state. A stale completion cannot repopulate the
+view or open replacement media. Root-entry icons have no activation behavior in
+this slice: subdirectory navigation, file opening, sidebar, breadcrumbs, back/
+forward, sorting modes, file operations, and Atlas administration UI are deferred.
+The full Atlas design remains in the Interface ledger for subsequent work.
+
+Mount, unmount, safe remove, and optical eject remain part of the filesystem work
+through native tools and authorized desktop volume actions, with progress,
+busy-owner details, and errors. They do not require an Atlas device-management
+pane. An empty drive and unsupported/unmounted source appear in native inventory
+tools, not as an empty mounted desktop disk. After successful unmount or loss, its disk
 icon disappears; a failed unmount retains the icon. After Linux reports mount
 readiness or loss, catalog/desktop updates target two seconds under qualified
 load. Probe/recovery time is measured separately and displays progress.
@@ -347,7 +374,7 @@ Write the detailed implementation plan after this spec is reviewed.
 | Live namespace and manual controls | VFS process/assign/library/transport, runtime startup, POSIX adapters, native tools | Already-running clients and late first initialization see mounts; manual mount, busy/unmount, cancellation and rollback pass |
 | USB policy and lifecycle | Provider udev/probe/control, Supervisor persisted policy, lifecycle/shutdown | Writable default, two drives/partitions, loss/reinsertion, flush refusal and whole-device removal on DE25 |
 | Optical platform and media | Exact-source Linux Image/modules, kernel packaging, provider optical lifecycle | USB optical discovery, ISO9660/UDF, media change, eject, no mixed-kernel module set |
-| Desktop and Atlas | Desktop/layout tests, native Atlas bundle, public Interface collections/commands, launcher and image manifest | Live labeled icons, double-click exact root, removal and busy/loss UI, native browser works on all media classes |
+| Desktop and initial Atlas | Desktop/layout tests, native Atlas bundle, existing layout/scroll and shared icon presentation, launcher and image manifest | Live labeled volume icons, double-click exact root, real file/folder enumeration, empty/error/loss states, all admitted entries reachable on every media class |
 | Production reconciliation | Release/deployment, storage oracles, NDK/contracts/docs, current-state records | Exact-source whole-stack qualification, legacy engine removal, retained data/rollback evidence, performance/resource disposition |
 
 Delete production lwext4/ext4 and RAMFS service integration, duplicate partition
@@ -369,11 +396,11 @@ under `/mnt/Documents/astra68/builds/` according to Artifact Policy.
 | Bootstrap | Exact configured image/partition, multiple unrelated devices, absent/ambiguous/corrupt selection, first-read Linux backend, no second writable owner |
 | Live visibility | Native/POSIX clients, shell, desktop and late first initialization started before mount; root enumeration/open/rewind, fork/exec, gaps and rescan |
 | Media/identity | Two drives and two partitions, unpartitioned source, duplicate labels/UUIDs, stale probe/token/click, cross-volume links, aliases and retained cwd/description identity |
-| Removal | Busy owners, Atlas self-release, stalled I/O, failed sync/unmount, cancel at each stage, surprise detach, reinsertion, whole-device dependencies and provider restart |
+| Removal | Busy owners, active Atlas enumeration and completed-snapshot release, stalled I/O, failed sync/unmount, cancel at each stage, surprise detach, reinsertion, whole-device dependencies and provider restart |
 | Optical | Rebuilt Image and all matching modules, empty drive, insert/replace/eject physical discs, ISO9660/Joliet/Rock Ridge/UDF contents, read-only and eject failure |
 | RAM/resources | Byte/inode/full-metadata pressure, aggregate RAM/recovery margin, handle/admission floods, process death, charges returned, UI/audio remain responsive |
 | Durability/data | Pre/post byte and metadata inventories, atomic saves and directory sync, clean restart, Linux-owned fault oracle, offline checking on disposable media |
-| Desktop/Atlas | Labeled/fallback class icons, duplicate labels, first snapshot/event races, exact root open, mount controls, disappearance only on successful unmount/loss, physical captures/input |
+| Desktop/Atlas | Labeled/fallback volume icons, duplicate labels, snapshot/event races, exact root open, named file/folder icons matching real enumeration, empty/large/Unicode roots, scrolling/reflow, close/loss during I/O, desktop mount controls and disappearance only on successful unmount/loss, physical captures/input |
 
 Existing broad performance budgets remain failed and visible; this work grants
 no waiver. Record target baselines before new namespace/IPC/copy/UI hot paths,

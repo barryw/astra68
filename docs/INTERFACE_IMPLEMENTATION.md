@@ -44,7 +44,7 @@ order needed to finish the complete design without application-private UI.
 | Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | cyan orbit and tracked ASTRA wordmark, focus-aware bold application pill independent of the window title; hardware-composited ASTRA menu with functional About panel and 16 px labels; app-owned menu publication, palette, and shortcuts pending |
 | Telescope | 2a, 3a | Cmd-Space search/launch surface, filesystem change index, ranked results, keyboard selection and open | pending |
 | System panels | 4b, 5a-5b | Open, Save, Fonts, and truthful pixel-format-aware Colour services | pending |
-| Atlas | 2b | shared sidebar and toolbar with grid, list, and columns views | pending; production filesystem browser/mount-control scope proposed in the [volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md) |
+| Atlas | 2b | shared sidebar and toolbar with grid, list, and columns views | pending; initial filesystem scope is one root-directory icon window, with broader browsing/management deferred; see the [volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md) |
 | Dock and window policy | 2c | pinned/running/minimized groups, instance state, hold menu, durable ordering | hardware overlap path started; policy UI pending |
 | Workspace finish | 1a-1c | volume objects, titlebar treatment B, designed icon strikes, status surfaces | partial |
 | Scenes | 3a | discoverable scene ledger and menu switching over fixed 1080p60 timing | hardware contract complete; UI pending |
@@ -72,17 +72,24 @@ the DE25 without weakening the existing frame or layout budgets.
 
 ## Image presentation boundary
 
-IconView and ImageView depend on one missing Graphics Kit foundation: draw
-lists must reference immutable protected image resources. The existing desktop
-AICON painter expands indexed pixels into coalesced rectangle fills, consumes
-the fixed draw-command budget, and is not a reusable control boundary. It must
-not be promoted into Interface Kit.
+IconView and ImageView need immutable protected image references in the shared
+Interface/window draw-list path. The existing Graphics Kit surface draw-list
+path already provides protected source-surface blits: desktop decodes each AICON
+strike once into an ARGB8888 source surface, then uses `astra_draw_blit` on
+repaint. Reuse that resource ownership and validation when integrating shared
+icon presentation; do not restore the obsolete rectangle-per-pixel painter or
+copy an icon backend into Atlas.
 
 Once the resource reference exists, IconView owns compact icon presentation
 (AICON strike selection, intrinsic size, tint/state, baseline, and adjacent
 text composition) while ImageView owns content presentation (fit, fill, crop,
 and integer zoom). Buttons, menu items, tabs, fields, and toolbars use the same
 icon descriptor and painter as IconView; no control gets a private icon path.
+
+The initial Atlas root-directory viewer requires only the icon presentation
+needed for named file/folder cells, existing retained wrap layout, and existing
+scroll support. General ImageView behavior and the pending list/tree/table/
+columns/toolbar collection suite are not prerequisites for that viewer.
 
 ## Artifact-specific behavior still to preserve
 
