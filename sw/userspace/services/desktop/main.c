@@ -55,7 +55,7 @@ typedef struct DesktopApps {
     uint32_t volume_visible;
 } DesktopApps;
 
-ASTRA_PROGRAM("desktop", 0, 4, 0, "Barry Walker",
+ASTRA_PROGRAM("desktop", 0, 5, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 static AstraProcessFilesystem process_filesystem =
@@ -154,6 +154,46 @@ static void launch_error(uint32_t gui, const char *name, const char *path,
     info.button_length = 2u;
     alert_result = astra_interface_show_alert(gui, &info);
     (void)alert_result;
+}
+
+typedef struct DesktopCommands {
+    const DesktopApps *apps;
+    uint32_t gui;
+    uint32_t launcher;
+} DesktopCommands;
+
+static AstraResult open_query(void *opaque, AstraCommandState *state)
+{
+    const DesktopCommands *context = opaque;
+    *state = (AstraCommandState){"Open", 4u,
+        context->apps->shown + context->apps->volume_visible != 0u, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult open_icon(void *opaque, const AstraCommandArguments *args)
+{
+    const DesktopCommands *context = opaque;
+    const DesktopApps *apps = context->apps;
+    uint32_t cell, process_id;
+    AstraResult result;
+
+    if (args == NULL || args->length != sizeof(cell))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    memcpy(&cell, args->bytes, sizeof(cell));
+    if (apps->volume_visible != 0u && cell == 0u) {
+        const char *arguments[] = {"/dh0"};
+        result = astra_application_launch_with_arguments(context->launcher,
+            "/apps/Atlas.app", sizeof("/apps/Atlas.app") - 1u,
+            ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 1u, &process_id);
+        if (result != ASTRA_OK)
+            launch_error(context->gui, "Atlas", "/apps/Atlas.app", result);
+    } else if (cell >= apps->volume_visible && cell - apps->volume_visible < apps->shown) {
+        const AstraApplicationEntry *entry = &apps->catalog.entries[cell - apps->volume_visible];
+        result = astra_application_launch(context->launcher, entry->bundle,
+            (uint16_t)strlen(entry->bundle), &process_id);
+        if (result != ASTRA_OK) launch_error(context->gui, entry->name, entry->bundle, result);
+    } else return ASTRA_ERROR_INVALID_ARGUMENT;
+    return result;
 }
 
 static AstraResult show_about(uint32_t gui)
@@ -364,6 +404,14 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *manager;
     const AstraStartupCapability *pcm;
     uint32_t status;
+    AstraUIContext controls = ASTRA_UI_CONTEXT_INIT;
+    AstraContextMenu context_menu = ASTRA_CONTEXT_MENU_INIT;
+    uint32_t menu_cell = UINT32_MAX;
+    AstraCommandArguments menu_arguments = {1u, 1u, &menu_cell, sizeof(menu_cell)};
+    const AstraContextMenuItem menu_items[] = {{"desktop.open", 12u, &menu_arguments}};
+    DesktopCommands command_context = {&apps, 0u, 0u};
+    const AstraCommand commands[] = {{"desktop.open", 12u, 1u, 1u, open_query, open_icon, &command_context}};
+    const AstraCommandScope command_scope = {NULL, commands, 1u};
 
     if (!astra_startup_validate(startup) || startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
@@ -378,6 +426,10 @@ int astra_main(const AstraStartupInfo *startup)
     if (bootstrap == NULL || gui == NULL || launcher == NULL ||
         manager == NULL || (manager->rights & ASTRA_RIGHT_SIGNAL) == 0u)
         return ASTRA_STATUS_BAD_HANDLE;
+    command_context.gui = gui->handle;
+    command_context.launcher = launcher->handle;
+    if (astra_interface_ui_init(&controls, NULL, 0u, DESKTOP_WIDTH, DESKTOP_HEIGHT) != ASTRA_OK)
+        return DESKTOP_FAIL_INTERFACE;
     status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status != ASTRA_STATUS_OK) status = DESKTOP_FAIL_FILESYSTEM;
     /* A GPU-surface window: its first shared area is only the initial
@@ -444,6 +496,29 @@ int astra_main(const AstraStartupInfo *startup)
             &window, &event, ASTRA_DEADLINE_INFINITE);
 
         if (result != ASTRA_OK) return (int)(-result);
+        {
+            AstraUIAction action = ASTRA_UI_ACTION_INIT;
+            int handled = 0;
+            result = astra_interface_context_menu_handle_event(&context_menu, &event, &handled);
+            if (handled) {
+                if (result != ASTRA_OK)
+                    (void)astra_log_failure("desktop menu command", (uint32_t)(-result));
+                continue;
+            }
+            result = astra_interface_ui_handle_event(&controls, &event, &action);
+            if (result == ASTRA_OK && action.type == ASTRA_UI_ACTION_CONTEXT_MENU &&
+                event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON) {
+                uint32_t cell = astra_desktop_cell_at(event.data.pointer.x, event.data.pointer.y,
+                    DESKTOP_WIDTH, DESKTOP_HEIGHT);
+                if (cell < apps.volume_visible + apps.shown) {
+                    result = astra_interface_context_menu_open(&context_menu, &window,
+                        &command_scope, menu_items, 1u, event.data.pointer.x, event.data.pointer.y);
+                    if (result == ASTRA_OK) menu_cell = cell;
+                    else (void)astra_log_failure("desktop context menu", (uint32_t)(-result));
+                }
+                continue;
+            }
+        }
         if (event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
             event.data.system_action.action == ASTRA_SYSTEM_ACTION_ABOUT) {
             if (show_about(gui->handle) != ASTRA_OK)
@@ -477,25 +552,11 @@ int astra_main(const AstraStartupInfo *startup)
                 event.data.pointer.x, event.data.pointer.y, DESKTOP_WIDTH,
                 DESKTOP_HEIGHT);
 
-            if (apps.volume_visible != 0u && cell == 0u) {
-                const char *arguments[] = {"/dh0"};
-                uint32_t process_id;
-                AstraResult launch_result = astra_application_launch_with_arguments(
-                    launcher->handle, "/apps/Atlas.app", sizeof("/apps/Atlas.app") - 1u,
-                    ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 1u, &process_id);
-                if (launch_result != ASTRA_OK)
-                    launch_error(gui->handle, "Atlas", "/apps/Atlas.app", launch_result);
-            } else if (cell >= apps.volume_visible &&
-                       cell - apps.volume_visible < apps.shown) {
-                const AstraApplicationEntry *entry =
-                    &apps.catalog.entries[cell - apps.volume_visible];
-                uint32_t process_id;
-                AstraResult launch_result = astra_application_launch(
-                    launcher->handle, entry->bundle,
-                    (uint16_t)strlen(entry->bundle), &process_id);
-
-                if (launch_result != ASTRA_OK)
-                    launch_error(gui->handle, entry->name, entry->bundle, launch_result);
+            if (cell < apps.volume_visible + apps.shown) {
+                AstraCommandArguments arguments = {1u, 1u, &cell, sizeof(cell)};
+                result = astra_interface_command_invoke(&command_scope, "desktop.open", 12u, &arguments);
+                if (result != ASTRA_OK)
+                    (void)astra_log_failure("desktop open command", (uint32_t)(-result));
             }
         }
     }

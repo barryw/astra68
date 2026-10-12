@@ -22,7 +22,7 @@ ASTRA_EXTERN_C_BEGIN
 /** Display refresh used to derive deterministic animation phases. */
 #define ASTRA_UI_VBLANK_HZ 60u
 
-/** Control kinds implemented by Interface Kit ABI 5.3. */
+/** Control kinds implemented by Interface Kit ABI 5.4. */
 enum {
     ASTRA_CONTROL_LABEL = 1u,
     ASTRA_CONTROL_BUTTON = 2u,
@@ -641,7 +641,11 @@ enum {
     ASTRA_UI_ACTION_COPY = 5u,
     ASTRA_UI_ACTION_CUT = 6u,
     ASTRA_UI_ACTION_PASTE = 7u,
-    ASTRA_UI_ACTION_SCROLL_CHANGED = 8u
+    ASTRA_UI_ACTION_SCROLL_CHANGED = 8u,
+    /** Secondary click or keyboard context gesture; control_id is its target. */
+    ASTRA_UI_ACTION_CONTEXT_MENU = 9u,
+    /** A transient control was dismissed without activation. */
+    ASTRA_UI_ACTION_DISMISS = 10u
 };
 
 /** Semantic result emitted by a handled window event. */

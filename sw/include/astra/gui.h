@@ -14,7 +14,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 19u
+#define ASTRA_GUI_VERSION 20u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -108,7 +108,7 @@ typedef struct AstraWindowFrame {
 } AstraWindowFrame;
 
 /** Current serialized window-event version. */
-#define ASTRA_WINDOW_EVENT_VERSION 7u
+#define ASTRA_WINDOW_EVENT_VERSION 8u
 
 /** Window event kinds. */
 enum {
@@ -124,7 +124,9 @@ enum {
     ASTRA_WINDOW_EVENT_KEY = 8,
     ASTRA_WINDOW_EVENT_TEXT = 9,
     /** An action selected from the display-owned system menu. */
-    ASTRA_WINDOW_EVENT_SYSTEM_ACTION = 10
+    ASTRA_WINDOW_EVENT_SYSTEM_ACTION = 10,
+    /** Terminal result for a window-owned transient menu. */
+    ASTRA_WINDOW_EVENT_MENU_RESULT = 11
 };
 
 enum {
@@ -279,6 +281,14 @@ typedef struct AstraWindowSystemActionEvent {
     uint32_t reserved[6]; /**< Must be zero. */
 } AstraWindowSystemActionEvent;
 
+/** Menu result: selection is a one-based row, zero means cancellation. */
+typedef struct AstraWindowMenuResultEvent {
+    uint32_t request; /**< Nonzero caller correlation token. */
+    uint32_t selection; /**< Selected row, or zero when dismissed. */
+    uint32_t status; /**< Common service status; errors have selection zero. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraWindowMenuResultEvent;
+
 /** Event-kind-specific payload preserving the public wire extent. */
 typedef union AstraWindowEventData {
     /** Pointer motion or button data. */
@@ -297,6 +307,8 @@ typedef union AstraWindowEventData {
     AstraWindowTextEvent text;
     /** System menu command data. */
     AstraWindowSystemActionEvent system_action;
+    /** Correlated menu result. */
+    AstraWindowMenuResultEvent menu_result;
     /** Reserved wire storage. */
     uint32_t reserved[7];
 } AstraWindowEventData;
@@ -415,7 +427,22 @@ enum {
     ASTRA_GUI_WINDOW_SET_POINTER_GRAB = 20u,
     /* x, y: the content position the pointer moves to. */
     ASTRA_GUI_WINDOW_WARP_POINTER = 21u,
+    /* flags: nonzero menu correlation token; x,y: client-local anchor.
+       One attached area contains the counted AMNU document below. */
+    ASTRA_GUI_WINDOW_MENU_OPEN = 22u,
+    /* flags: correlation token of this window's menu to dismiss. */
+    ASTRA_GUI_WINDOW_MENU_CLOSE = 23u,
 };
+
+/* AMNU v1: all fields big-endian. Header: magic, version, total bytes, row
+   count. Each row: flags, label offset, label bytes, reserved zero. Labels
+   follow the row table contiguously. No pointers cross the GUI boundary. */
+#define ASTRA_GUI_MENU_MAGIC UINT32_C(0x414d4e55)
+#define ASTRA_GUI_MENU_VERSION 1u
+#define ASTRA_GUI_MENU_HEADER_BYTES 16u
+#define ASTRA_GUI_MENU_ROW_BYTES 16u
+/* Same bounded document budget as submitted managed draw lists. */
+#define ASTRA_GUI_MENU_BYTES_MAX UINT32_C(0x00100000)
 
 typedef struct AstraGuiOpenWindow {
     AstraMessageHeader header;

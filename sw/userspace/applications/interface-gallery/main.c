@@ -1119,6 +1119,33 @@ static uint32_t benchmark_layouts(void)
     return status;
 }
 
+static uint32_t benchmark_menu(void)
+{
+    const AstraMenuItem rows[] = {{"Open", 4u, 0u}, {NULL, 0u, ASTRA_MENU_SEPARATOR},
+        {"Disabled", 8u, ASTRA_MENU_DISABLED}, {"Checked", 7u, ASTRA_MENU_CHECKED}};
+    const AstraControlFrame work = {0, 34, 1920, 1004};
+    AstraMenu menu = ASTRA_MENU_INIT;
+    AstraWindowEvent event = {.size = sizeof(event), .version = ASTRA_WINDOW_EVENT_VERSION,
+        .type = ASTRA_WINDOW_EVENT_KEY, .flags = ASTRA_WINDOW_EVENT_DOWN};
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraMenuState state;
+    uint64_t started;
+
+    if (astra_interface_menu_init(&menu, rows, 4u, &work, 24, 60, 160u, 0u) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    started = astra_clock_monotonic();
+    for (uint32_t at = 0u; at < 10000u; ++at) {
+        event.data.key.usage = (at & 1u) == 0u ? 0x51u : 0x52u;
+        if (astra_interface_menu_handle_event(&menu, &event, &action) != ASTRA_OK ||
+            action.type != ASTRA_UI_ACTION_NONE)
+            return GALLERY_FAIL_CONTROL;
+    }
+    report_control("MENU", 10000u, astra_clock_monotonic() - started);
+    if (astra_interface_menu_get_state(&menu, &state) != ASTRA_OK || state.selection != 4u)
+        return GALLERY_FAIL_CONTROL;
+    return ASTRA_STATUS_OK;
+}
+
 static uint32_t benchmark_segmented(void)
 {
     AstraChoiceInfo info = ASTRA_CHOICE_INFO_INIT;
@@ -1818,6 +1845,8 @@ int astra_main(const AstraStartupInfo *startup)
             status = benchmark_disclosure();
         if (status == ASTRA_STATUS_OK)
             status = benchmark_splitter();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_menu();
     }
     if (status == ASTRA_STATUS_OK)
         status = create_window(gui->handle);

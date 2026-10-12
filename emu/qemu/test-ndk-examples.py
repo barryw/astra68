@@ -60,6 +60,7 @@ EXPECTED = {
     # decode, so the line is matched by its byte count (16 + 6 + 1).
     "text_field": "(23 bytes)",
     "text_clipboard": 'text_clipboard: copied and pasted "Astra"',
+    "interface_menu": "interface_menu: disabled rows skipped; Open invoked",
     "interface_controls":
         "interface_controls: Tab, Enter turned Snap to grid on",
     "interface_tabs":

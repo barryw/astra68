@@ -51,6 +51,7 @@ valid = [
     "INTERFACE DIAL n=00002710 elapsed-ns=000000000000b800",
     "INTERFACE DISCLOSURE n=00002710 elapsed-ns=000000000000bc00",
     "INTERFACE SPLITTER n=00002710 elapsed-ns=000000000000c000",
+    "INTERFACE MENU n=00002710 elapsed-ns=000000000000c800",
     "stage 8",
 ]
 assert terminal.interface_layout_benchmark(Machine(valid), 1)
@@ -75,14 +76,19 @@ slow_text[4] = (
 with redirect_stdout(io.StringIO()):
     assert not terminal.interface_layout_benchmark(Machine(slow_text), 1)
 slow_splitter = valid.copy()
-slow_splitter[-2] = (
+slow_splitter[-3] = (
     "INTERFACE SPLITTER n=00002710 elapsed-ns=0000000011e1a301")
 with redirect_stdout(io.StringIO()):
     assert not terminal.interface_layout_benchmark(Machine(slow_splitter), 1)
 slow_disclosure = valid.copy()
-slow_disclosure[-3] = (
+slow_disclosure[-4] = (
     "INTERFACE DISCLOSURE n=00002710 elapsed-ns=0000000023c34601")
 with redirect_stdout(io.StringIO()):
     assert not terminal.interface_layout_benchmark(
         Machine(slow_disclosure), 1)
 print("interface layout benchmark parser: PASS")
+
+slow_menu = valid.copy()
+slow_menu[-2] = "INTERFACE MENU n=00002710 elapsed-ns=0000000007735941"
+with redirect_stdout(io.StringIO()):
+    assert not terminal.interface_layout_benchmark(Machine(slow_menu), 1)

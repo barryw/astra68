@@ -1,5 +1,13 @@
-ASTRA_INTERFACE_5.3 {
+ASTRA_INTERFACE_5.4 {
     global:
+        astra_interface_menu_init;
+        astra_interface_menu_get_state;
+        astra_interface_menu_hit;
+        astra_interface_menu_handle_event;
+        astra_interface_menu_render;
+        astra_interface_context_menu_open;
+        astra_interface_context_menu_handle_event;
+        astra_interface_context_menu_close;
         astra_interface_button_init;
         astra_interface_checkbox_init;
         astra_interface_command_invoke;

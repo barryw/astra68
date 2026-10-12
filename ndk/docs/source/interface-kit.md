@@ -1,10 +1,69 @@
 # Interface Kit
 
 `interface.library.5` is the shared implementation for native window controls,
-integer flex layout, TextSurface presentation, the typed system clipboard, and
+integer flex layout, shared transient menus, TextSurface presentation, the typed system clipboard, and
 per-document undo histories. Applications call its versioned ELF symbols
 directly; they do not compile private Interface Kit sources or speak directly
 to the display and clipboard services.
+
+## Context menus
+
+Interface 5.4 and System 3.3 provide window-owned context menus. The same
+{c:type}`AstraMenu` control paints and handles the compositor's ASTRA menu and
+application popups. It uses the existing surface and draw-list renderer.
+
+`astra_interface_ui_handle_event` emits `ASTRA_UI_ACTION_CONTEXT_MENU` on a
+secondary-button release, the Menu key, or Shift-F10. `control_id` identifies
+the deepest visible control under the pointer, including passive and disabled
+controls, or the focused control for keyboard input. Zero identifies the
+window background. These gestures never activate or toggle the control.
+An input-loss event clears pending pointer and keyboard interaction.
+
+Keep one {c:type}`AstraContextMenu` per window. Pass command references and the
+existing {c:type}`AstraCommandScope` to `astra_interface_context_menu_open`.
+Queries supply current labels, enabled and checked state. Labels are copied
+immediately; a zero command reference creates a separator. The compositor
+copies and validates the complete counted document before presenting it. The
+wire document has the same 1 MiB byte budget as managed draw-list submissions;
+rows are allocated on demand, with no separate item-count slab. Rendering uses
+the existing compositor replay and grouped glyph runs. A 200-row menu paints
+only its visible viewport.
+
+Feed every window event to `astra_interface_context_menu_handle_event` before
+ordinary control dispatch. It consumes correlated selection/cancellation
+results and invokes through the same command responder chain, which queries
+enabled state again. Keep the scope, command references and argument documents
+alive and unchanged until the terminal event or successful explicit close.
+Close the session before closing its window if it will be reused; otherwise
+discard the session together with the window.
+Stale results are consumed without invocation. Results are mandatory regardless
+of the window's event subscription mask. A full event queue retains a
+cancellation with `ASTRA_WINDOW_EVENT_LOSS`; the helper clears the session and
+returns `ASTRA_ERROR_IO`. The application may report that cancelled interaction
+without terminating its event loop.
+
+Anchors use client coordinates. For a keyboard request, use the focused
+control's retained geometry rather than the pointer position. Popup bounds
+flip and clamp into the display work area. Arrow, Home/End and Page keys skip
+disabled rows and separators; Enter/Space selects, Escape dismisses, and the
+wheel scrolls long menus. Outside clicks are consumed, including releases of
+buttons still held when a menu closes. Focus stays with the owning window.
+Owner loss, geometry/focus changes, pointer grabs and input reset dismiss it.
+One popup owns input at a time; another open request returns
+`ASTRA_ERROR_BUSY`. Explicit close names its request cookie, so an old close
+cannot dismiss a newer popup and succeeds if that old request already ended.
+A terminal event with a rendering error clears the session and returns its
+translated result (for example `ASTRA_ERROR_NO_RESOURCES`).
+
+This first version has flat menus. Submenus and application menu-strip
+publication remain future work. The low-level `astra_window_menu_open/close`
+transport and direct menu-control APIs are available to framework hosts;
+applications normally use the command-backed helper.
+
+```{literalinclude} ../../examples/interface_menu.c
+:language: c
+:linenos:
+```
 
 ## Opening a compatible library
 

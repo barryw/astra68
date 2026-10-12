@@ -61,6 +61,10 @@ system is **Astra OS**.
 - Double-clicking the mounted DH0 desktop volume opens native Atlas with its
   actual root entries as file/folder icons. The initial viewer supports
   scrolling and resize; navigation and live removable volumes are next.
+- Right-click DH0 or an application icon for its native Open menu. Desktop
+  context menus and ASTRA share the common menu control, with keyboard
+  navigation, checked/disabled rows and scrolling. See the
+  [physical context-menu capture](docs/images/astra-context-menu.png).
 - The native filesystem supports ext4, RAMFS and confined HostFS volumes,
   with shared file descriptions, links, atomic bounded writes and recovery.
   Current correctness gates pass; performance acceptance remains open.

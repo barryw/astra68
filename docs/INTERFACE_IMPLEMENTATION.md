@@ -40,8 +40,8 @@ order needed to finish the complete design without application-private UI.
 | Collection controls | 1d, 2b, 4a | scroll model, ScrollView, scrollbar, splitter, list, tree, table, grid, columns, toolbar, status, pagination | scroll model/view/bar and splitter accepted; list, tree, table, grid, columns, toolbar, status, and pagination pending |
 | TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer, selection paint/hit test/extraction, typed clipboard, Terminal copy/paste and resource-backed styled scrollback, shared undo/redo, piece-table model, and field accepted; find, wide cells, and code/flow layout pending |
 | Input vocabulary | 6a-6b | keymap-selected Meta labels and immutable system/workspace/app shortcut tiers | input service emits one normalized Meta bit; detection, override, labels, and shortcut tiers pending |
-| Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | caller-owned responder chain, state query and invocation accepted in ABI 5.2; desktop Terminal launch uses it; cross-process publication and menu/shortcut consumers pending |
-| Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | cyan orbit and tracked ASTRA wordmark, focus-aware bold application pill independent of the window title; hardware-composited ASTRA menu with functional About panel and 16 px labels; app-owned menu publication, palette, and shortcuts pending |
+| Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | caller-owned responder chain, state query and invocation; Desktop double-click/context Open share one command in Interface 5.4; cross-process publication and palette/shortcut consumers pending |
+| Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | shared Interface 5.4 transient menu control drives ASTRA and command-backed context menus; DE25 functionality and 1.947 µs semantic-action gate pass on release `0aa2d713`; internal feedback timing, app menu-strip publication, submenus, palette and shortcuts pending |
 | Telescope | 2a, 3a | Cmd-Space search/launch surface, filesystem change index, ranked results, keyboard selection and open | pending |
 | System panels | 4b, 5a-5b | Open, Save, Fonts, and truthful pixel-format-aware Colour services | pending |
 | Atlas | 2b | shared sidebar and toolbar with grid, list, and columns views | native DH0 root icon viewer accepted on DE25 release `5bc3bbea`; guest enumeration, scrolling, resize and retirement pass; broader browsing/management deferred; see [Atlas continuation](HANDOVER_2026-10-12_ATLAS.md) and the [volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md) |
@@ -63,12 +63,47 @@ the DE25 without weakening the existing frame or layout budgets.
 - Segmented selection and numeric stepping share a 12.5-microsecond semantic
   action gate. The physical 69.416 MHz baselines are 7.003 and 8.926
   microseconds per action respectively.
+- The four-row common menu's 10,000-action DE25 workload measures 1.947464
+  microseconds per action against the same 12.5-microsecond gate. Correctness
+  includes 200-row viewport rendering; long-menu timing remains unqualified.
 - Pointer presentation targets one frame; ordinary control, key, menu, and
   window feedback targets two frames.
 - Every new nested layout, text-layout, menu-search, and collection-view hot
   path gets a target workload and regression threshold before another layer
   depends on it.
 - No benchmark result from the Mac or Beast substitutes for a DE25 result.
+
+## Shared transient menus
+
+Interface 5.4 owns one `AstraMenu` model and painter for compositor-owned
+ASTRA and application context menus. Rows support disabled/checked state,
+separators, fitted screen placement, scrolling, release-only pointer selection,
+Escape, arrow/Home/End/Page traversal and Enter/Space selection. Rendering uses
+the existing surface/draw-list compositor; event handling allocates no memory.
+
+The retained UI dispatcher emits `ASTRA_UI_ACTION_CONTEXT_MENU` on secondary
+release, Menu key or Shift-F10, identifying the most specific hit control or
+focused control. `AstraContextMenu` queries the existing command scope, copies
+presentation state through System 3.3's private window endpoint, and invokes
+the still-enabled command only on a matching terminal result. GUI wire 20 and
+event 8 carry counted immutable snapshots and correlated mandatory completions.
+Input loss, focus/geometry/owner changes, outside clicks and resource failure
+cancel safely; consumed presses retain ownership through their text and release.
+
+Desktop is the first consumer: DH0 and application icons offer Open through
+the same command used by double-click. Common retained controls expose the
+keyboard gesture; Desktop icon keyboard focus is not yet implemented. This
+slice supplies flat context menus, not app menu-strip publication or file
+management operations. Public usage is in `ndk/examples/interface_menu.c` and
+the [Interface Kit guide](../ndk/docs/source/interface-kit.md).
+
+Release `0aa2d713` passes host/sanitizer/analyzer/MC68040 and exact guest/NDK
+gates, plus physical DH0/app Open, ASTRA keyboard About, process retirement and
+identical restored pixels. Existing bitmap caching now compares a committed
+paint snapshot across popup lifetimes. Repeated identical menus need no new
+GPU painting; changed content and uncommitted work invalidate the cache. RFB
+timing diagnostics do not establish an end-to-end speedup or the internal
+two-frame budget. See [menu continuation](HANDOVER_2026-10-12_CONTEXT_MENUS.md).
 
 ## Image presentation boundary
 

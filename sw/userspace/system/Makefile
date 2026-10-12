@@ -138,7 +138,7 @@ system-library-contract: $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(SYSTEM_MAP) $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^system.library.3 3.2.0 ABI 3.2$$'
+		grep -q '^system.library.3 3.3.0 ABI 3.3$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [system.library.3]'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1

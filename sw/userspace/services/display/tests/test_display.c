@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <astra/gui.h>
@@ -13,6 +14,21 @@
 #pragma GCC diagnostic ignored "-Wpedantic"
 #include <astra_render_protocol.h>
 #pragma GCC diagnostic pop
+
+static uint32_t menu_allocations;
+static uint32_t fail_menu_allocate;
+void *astra_runtime_allocate(size_t size)
+{
+    if (fail_menu_allocate) { --fail_menu_allocate; return NULL; }
+    void *pointer = malloc(size);
+    if (pointer != NULL) ++menu_allocations;
+    return pointer;
+}
+void astra_runtime_deallocate(void *pointer)
+{
+    if (pointer != NULL) { assert(menu_allocations != 0u); --menu_allocations; }
+    free(pointer);
+}
 
 static AstraGuiWindowEvent delivered;
 static AstraGuiWindowEvent previous_delivered;
@@ -1500,16 +1516,54 @@ static void test_content_banks(void)
     /* An open menu is drawn once and then only when its hover moves. */
     set_overlay(&state, DISPLAY_OVERLAY_MENU);
     compose_commit(&state, 7u);
-    assert(state.overlay_drawn == DISPLAY_OVERLAY_MENU);
-    damage_both(&state, overlay_bounds(DISPLAY_OVERLAY_MENU));
+    assert(state.overlay_drawn == DISPLAY_OVERLAY_MENU && state.overlay_pending == 0u);
+    {
+        AstraRenderBuilder builder;
+        AstraMenu other = ASTRA_MENU_INIT;
+        AstraMenuItem rows[4];
+        AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+
+        set_overlay(&state, DISPLAY_OVERLAY_NONE);
+        compose_commit(&state, 8u);
+        set_overlay(&state, DISPLAY_OVERLAY_MENU);
+        assert(astra_render_builder_init(&builder, batch, sizeof(batch), 9u));
+        assert(build_overlay_surface(&builder, &state, &theme));
+        assert(builder.command_count == 0u && state.overlay_pending == 0u);
+
+        menu_end(&state, 0u, 0u, ASTRA_STATUS_OK);
+        memcpy(rows, system_menu_items, sizeof(rows));
+        rows[2].label = "Reboot!"; /* Same length, geometry and initial revision. */
+        assert(astra_interface_menu_init(&other, rows, 4u, &menu_work,
+            DISPLAY_MENU_X, DISPLAY_MENU_Y, DISPLAY_MENU_WIDTH,
+            ASTRA_MENU_ATTACHED_TOP | ASTRA_MENU_TRACK_OPEN_PRESS) == ASTRA_OK);
+        assert(menu_install(&state, &other, 0u, 0u, NULL, NULL) == ASTRA_STATUS_OK);
+        assert(astra_render_builder_init(&builder, batch, sizeof(batch), 10u));
+        assert(build_overlay_surface(&builder, &state, &theme));
+        assert(builder.command_count != 0u && state.overlay_drawn == DISPLAY_OVERLAY_NONE);
+        /* An uncommitted repaint cannot promise that old pixels survived. */
+        menu_end(&state, 0u, 0u, ASTRA_STATUS_OK);
+        set_overlay(&state, DISPLAY_OVERLAY_MENU);
+        assert(astra_render_builder_init(&builder, batch, sizeof(batch), 11u));
+        assert(build_overlay_surface(&builder, &state, &theme));
+        assert(builder.command_count != 0u);
+        commit_render_state(&state);
+    }
+    damage_both(&state, overlay_bounds(&state));
     state.system_initialized = 1u;
     assert(valid_batch(compose(batch, 8u, &state, &(uint32_t){0}, NULL))
            != 0u);
     assert(read_be32(batch + 12u) == 0u);
-    state.overlay_hover = 2u;
+    {
+        AstraWindowEvent key = {.size = sizeof(key), .version = ASTRA_WINDOW_EVENT_VERSION,
+            .type = ASTRA_WINDOW_EVENT_KEY, .flags = ASTRA_WINDOW_EVENT_DOWN};
+        AstraUIAction action = ASTRA_UI_ACTION_INIT;
+        key.data.key.usage = 0x51u;
+        assert(astra_interface_menu_handle_event(&state.menu, &key, &action) == ASTRA_OK);
+    }
     assert(valid_batch(compose(batch, 8u, &state, &(uint32_t){0}, NULL))
            != 0u);
     assert(read_be32(batch + 12u) != 0u && state.overlay_pending != 0u);
+    set_overlay(&state, DISPLAY_OVERLAY_NONE);
 }
 
 /* Every BLIT reads inside its source surface: the FPGA blitter refuses a
@@ -1742,6 +1796,181 @@ static void test_shrunk_window_copy_forward(void)
     assert(batch_blits_within_sources());
 }
 
+static void test_menu_key_ownership(void)
+{
+    DisplayWindow window = {.id = 1u, .generation = 1u, .event_send = 0x500u,
+        .request = {.type = ASTRA_WINDOW_STANDARD, .flags = ASTRA_WINDOW_ACTIVE,
+                    .event_mask = ASTRA_WINDOW_SUBSCRIBE_KEY | ASTRA_WINDOW_SUBSCRIBE_TEXT,
+                    .x = 100u, .y = 100u, .width = 320u, .height = 180u}};
+    DisplayState state = {.windows = &window, .count = 1u};
+    AstraLogicalInputEvent key = {.type = ASTRA_INPUT_EVENT_KEY, .flags = ASTRA_INPUT_LOGICAL_DOWN,
+        .code = 0xe1u};
+    AstraLogicalInputEvent text = {.type = ASTRA_INPUT_EVENT_TEXT, .code = ' '};
+    uint32_t effects = 0u, frame = 0u, timestamp = 0u;
+
+    delivered_count = 0u;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(delivered_count == 1u);
+    set_overlay(&state, DISPLAY_OVERLAY_MENU);
+    key.flags = 0u;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(delivered_count == 2u && delivered.event.data.key.usage == 0xe1u && delivered.event.flags == 0u);
+    send_would_block = 1u;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(state.pending_input_valid == 0u && state.overlay == DISPLAY_OVERLAY_MENU && window.event_lost != 0u);
+    key.code = 0x51u;
+    key.flags = ASTRA_INPUT_LOGICAL_DOWN;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    key.flags = 0u;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    key.code = 0x2cu;
+    key.flags = ASTRA_INPUT_LOGICAL_DOWN;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(state.overlay == DISPLAY_OVERLAY_NONE);
+    assert(handle_pointer(&state, &text, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    key.flags |= ASTRA_INPUT_LOGICAL_REPEAT;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(handle_pointer(&state, &text, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    key.flags = 0u;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(delivered_count == 2u); /* No closing Space text, repeat or up reaches the app. */
+    key.code = 0x04u;
+    key.flags = ASTRA_INPUT_LOGICAL_DOWN;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    text.code = 'a';
+    assert(handle_pointer(&state, &text, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(delivered_count == 4u && delivered.event.type == ASTRA_WINDOW_EVENT_TEXT &&
+        delivered.event.data.text.codepoint == 'a');
+}
+
+static void test_dense_menu_render(void)
+{
+    DisplayState state = {0};
+    AstraMenu menu = ASTRA_MENU_INIT;
+    AstraMenuItem rows[200];
+    char label[200];
+    AstraRenderBuilder builder;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+
+    memset(label, 'a', sizeof(label));
+    for (uint32_t at = 0u; at < 200u; ++at) rows[at] = (AstraMenuItem){label, sizeof(label), 0u};
+    assert(astra_interface_menu_init(&menu, rows, 200u, &menu_work, 0, 34, 1800u, 0u) == ASTRA_OK);
+    state.last_click_window = 42u;
+    assert(menu_install(&state, &menu, 0u, 0u, NULL, NULL) == ASTRA_STATUS_OK);
+    assert(state.last_click_window == 0u);
+    assert(astra_render_builder_init(&builder, batch, sizeof(batch), 4u));
+    assert(build_overlay_surface(&builder, &state, &theme));
+    assert(builder.glyph_count > 1024u && builder.command_count < ASTRA_RENDER_RING_ENTRIES);
+    assert(astra_render_builder_finish(&builder) != 0u);
+    menu_end(&state, 0u, 0u, ASTRA_STATUS_OK);
+}
+
+static void test_context_menu_transport(void)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayWindow windows[2] = {{.id = 1u, .generation = 1u, .event_send = 0x500u,
+        .request = {.type = ASTRA_WINDOW_STANDARD, .flags = ASTRA_WINDOW_ACTIVE,
+                    .x = 100u, .y = 100u, .width = 320u, .height = 180u}}};
+    DisplayState state = {.windows = windows, .count = 1u};
+    AstraGuiWindowCommand command = {.window = 1u, .generation = 1u,
+        .action = ASTRA_GUI_WINDOW_MENU_OPEN, .x = 12u, .y = 24u, .flags = 42u};
+    DisplayWindow closed;
+    uint32_t area;
+    uint8_t *bytes;
+    uint32_t mapped;
+    int changed;
+
+    astra_message_header_set(&command.header, sizeof(command), ASTRA_GUI_PROTOCOL,
+        ASTRA_GUI_VERSION, ASTRA_GUI_WINDOW_COMMAND, 1u);
+    assert(valid_command(&command, sizeof(command), 2u, 1u, 320u, 180u));
+    assert(!valid_command(&command, sizeof(command), 1u, 1u, 320u, 180u));
+    assert(!valid_command(&command, sizeof(command), 2u, 2u, 320u, 180u));
+    command.flags = 0u;
+    assert(!valid_command(&command, sizeof(command), 2u, 1u, 320u, 180u));
+    command.flags = 42u;
+    assert(astra_rt_area_create(4096u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP, &area) == ASTRA_SYSCALL_OK);
+    assert(astra_rt_area_map(area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+        (void **)&bytes, &mapped) == ASTRA_SYSCALL_OK);
+    astra_store_be32(bytes, ASTRA_GUI_MENU_MAGIC);
+    astra_store_be32(bytes + 4u, ASTRA_GUI_MENU_VERSION);
+    astra_store_be32(bytes + 8u, 36u);
+    astra_store_be32(bytes + 12u, 1u);
+    astra_store_be32(bytes + 16u, 0u);
+    astra_store_be32(bytes + 20u, 32u);
+    astra_store_be32(bytes + 24u, 4u);
+    astra_store_be32(bytes + 28u, 0u);
+    memcpy(bytes + 32u, "Open", 4u);
+    windows[0].request.flags = 0u;
+    assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_ACCESS);
+    windows[0].request.flags = ASTRA_WINDOW_ACTIVE;
+    fail_menu_allocate = 1u;
+    assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_LIMIT);
+    assert(state.overlay == DISPLAY_OVERLAY_NONE && menu_allocations == 0u);
+    assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_OK);
+    assert(menu_allocations == 2u && state.menu_owner == 1u && state.menu_request == 42u);
+    memset(bytes + 32u, 'X', 4u);
+    assert(memcmp(state.menu_rows[0].label, "Open", 4u) == 0);
+    assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_BUSY);
+    {
+        AstraGuiWindowCommand title = {.window = 1u, .action = ASTRA_GUI_WINDOW_SET_TITLE,
+            .title_length = 4u, .title = "Name"};
+        assert(apply_command(&state, &theme, &title, &closed, &changed) == ASTRA_STATUS_OK);
+        assert(state.overlay == DISPLAY_OVERLAY_MENU && state.menu_request == 42u);
+    }
+    command.action = ASTRA_GUI_WINDOW_MENU_CLOSE;
+    command.x = command.y = 0u;
+    command.flags = 43u;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK && !changed);
+    assert(state.overlay == DISPLAY_OVERLAY_MENU);
+    command.flags = 42u;
+    send_would_block = 1u;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK && changed);
+    assert(state.overlay == DISPLAY_OVERLAY_NONE && menu_allocations == 0u);
+    assert(windows[0].pending_menu.type == ASTRA_WINDOW_EVENT_MENU_RESULT);
+    command.action = ASTRA_GUI_WINDOW_MENU_OPEN;
+    command.x = 12u; command.y = 24u;
+    assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_BUSY);
+    assert(signal_vblank(&state) == ASTRA_STATUS_OK);
+    assert(windows[0].pending_menu.type == 0u && delivered.event.type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
+        delivered.event.data.menu_result.request == 42u && delivered.event.data.menu_result.selection == 0u &&
+        (delivered.event.flags & ASTRA_WINDOW_EVENT_LOSS) != 0u);
+    /* A completion cannot be masked, even by a window subscribing to no events. */
+    assert(windows[0].request.event_mask == 0u);
+    memcpy(bytes + 32u, "Open", 4u);
+    for (uint32_t invalid = 0u; invalid < 7u; ++invalid) {
+        uint8_t saved[36];
+        memcpy(saved, bytes, sizeof(saved));
+        if (invalid == 0u) astra_store_be32(bytes + 4u, ASTRA_GUI_MENU_VERSION + 1u);
+        if (invalid == 1u) astra_store_be32(bytes + 8u, mapped + 1u);
+        if (invalid == 2u) astra_store_be32(bytes + 12u, UINT32_MAX);
+        if (invalid == 3u) astra_store_be32(bytes + 20u, 31u);
+        if (invalid == 4u) astra_store_be32(bytes + 28u, 1u);
+        if (invalid == 5u) bytes[32] = '\n';
+        if (invalid == 6u) astra_store_be32(bytes + 8u, 37u); /* untracked suffix */
+        assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_PROTOCOL);
+        assert(state.overlay == DISPLAY_OVERLAY_NONE && menu_allocations == 0u);
+        memcpy(bytes, saved, sizeof(saved));
+    }
+    assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_OK);
+    command.action = ASTRA_GUI_WINDOW_MOVE;
+    command.flags = 0u;
+    command.x = 120u; command.y = 120u;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK && changed);
+    assert(state.overlay == DISPLAY_OVERLAY_NONE && menu_allocations == 0u);
+    command.action = ASTRA_GUI_WINDOW_MENU_OPEN;
+    command.flags = 44u;
+    command.x = 12u; command.y = 24u;
+    assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_OK);
+    assert(activate(&state, &theme, 0u, 0, 5u));
+    assert(state.overlay == DISPLAY_OVERLAY_NONE && menu_allocations == 0u);
+    windows[0].request.flags = ASTRA_WINDOW_ACTIVE;
+    assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_OK);
+    command.action = ASTRA_GUI_WINDOW_CLOSE;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK && changed);
+    assert(state.count == 0u && state.overlay == DISPLAY_OVERLAY_NONE && menu_allocations == 0u);
+    assert(astra_close(area) == ASTRA_SYSCALL_OK);
+}
+
 int main(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -1806,6 +2035,9 @@ int main(void)
     }
     test_dynamic_window_resources();
     test_window_graphics();
+    test_menu_key_ownership();
+    test_dense_menu_render();
+    test_context_menu_transport();
     test_content_banks();
 
     {
@@ -2116,130 +2348,63 @@ int main(void)
         AstraRenderBuilder builder;
         AstraTheme menu_theme = ASTRA_THEME_SYSTEM_INIT;
         DisplayWindow active = {.id = 1u, .event_send = 0x500u,
-            .request = {
-            .type = ASTRA_WINDOW_DESKTOP,
-            .event_mask = ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION,
-            .flags = ASTRA_WINDOW_ACTIVE, .x = 700u, .y = 300u,
-            .width = 200u, .height = 200u}};
+            .request = {.type = ASTRA_WINDOW_DESKTOP,
+                .event_mask = ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION,
+                .flags = ASTRA_WINDOW_ACTIVE, .x = 700u, .y = 300u,
+                .width = 200u, .height = 200u}};
         DisplayState menu = {.windows = &active, .count = 1u};
-        AstraLogicalInputEvent down = {
-            .type = ASTRA_INPUT_EVENT_POINTER_BUTTON,
-            .flags = ASTRA_INPUT_LOGICAL_DOWN,
-            .code = ASTRA_INPUT_BUTTON_LEFT};
+        AstraLogicalInputEvent down = {.type = ASTRA_INPUT_EVENT_POINTER_BUTTON,
+            .flags = ASTRA_INPUT_LOGICAL_DOWN, .code = ASTRA_INPUT_BUTTON_LEFT};
         AstraLogicalInputEvent up = down;
-        AstraLogicalInputEvent motion = {
-            .type = ASTRA_INPUT_EVENT_POINTER_MOTION};
-        uint32_t effects = 0u;
-        uint32_t frame_window = 0u;
-        uint32_t frame_timestamp = 0u;
-
+        AstraLogicalInputEvent motion = {.type = ASTRA_INPUT_EVENT_POINTER_MOTION};
+        uint32_t effects = 0u, frame_window = 0u, frame_timestamp = 0u;
+        AstraMenuState info;
         up.flags = 0u;
         menu.pointer_x = 40;
         menu.pointer_y = 15;
-        assert(handle_pointer(&menu, &down, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(menu.overlay == DISPLAY_OVERLAY_MENU &&
-               menu.swallow_pointer_up != 0u &&
-               (effects & (DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR)) ==
-                   (DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR));
-        assert((active.request.flags & ASTRA_WINDOW_ACTIVE) != 0u &&
-               menu.capture_window == 0u);
-        assert(handle_pointer(&menu, &up, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(menu.overlay == DISPLAY_OVERLAY_MENU &&
-               menu.swallow_pointer_up == 0u);
-
-        menu.overlay_offset = DISPLAY_MEDIA_BASE;
-        menu.overlay_capacity = align_media_bytes(
-            DISPLAY_MENU_WIDTH * DISPLAY_MENU_HEIGHT * 2u);
+        assert(handle_pointer(&menu, &down, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(menu.overlay == DISPLAY_OVERLAY_MENU && menu.swallow_pointer_up == 1u);
+        assert(handle_pointer(&menu, &up, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(menu.overlay == DISPLAY_OVERLAY_MENU && menu.capture_window == 0u);
+        assert(astra_interface_menu_get_state(&menu.menu, &info) == ASTRA_OK);
+        assert(info.frame.width == DISPLAY_MENU_WIDTH && info.frame.height == 136u);
         assert(astra_render_builder_init(&builder, batch, sizeof(batch), 4u));
         assert(build_overlay_surface(&builder, &menu, &menu_theme));
-        assert(astra_render_builder_finish(&builder) != 0u);
-        assert(builder.glyph_count == 32u);
-        assert(DISPLAY_MENU_X == 12);
-        assert(batch_has_fill(0, 0, DISPLAY_MENU_WIDTH,
-                              menu_theme.window_radius,
-                              color(menu_theme.frame)));
-        assert(batch_has_fill(12, 44, DISPLAY_MENU_WIDTH - 24u,
-                              1u, color(menu_theme.border_soft)));
-        assert(!batch_has_fill(12, 84, DISPLAY_MENU_WIDTH - 24u,
-                               1u, color(menu_theme.border_soft)));
-        assert(menu_item_at(DISPLAY_MENU_X + 8,
-                            DISPLAY_MENU_Y + 8) == 1u);
-        assert(menu_item_at(DISPLAY_MENU_X + 7,
-                            DISPLAY_MENU_Y + 8) == 0u);
-        assert(menu_item_at(DISPLAY_MENU_X + 24,
-                            DISPLAY_MENU_Y + 44) == 0u);
-        assert(menu_item_at(DISPLAY_MENU_X + 24,
-                            DISPLAY_MENU_Y + 84) == 0u);
-
+        assert(astra_render_builder_finish(&builder) != 0u && builder.glyph_count == 32u);
+        assert(batch_has_fill(0, 0, DISPLAY_MENU_WIDTH, menu_theme.window_radius, color(menu_theme.frame)));
+        assert(batch_has_fill(12, 52, DISPLAY_MENU_WIDTH - 24u, 1u, color(menu_theme.border_soft)));
         motion.value_x = DISPLAY_MENU_X + 24;
         motion.value_y = DISPLAY_MENU_Y + 24;
-        assert(handle_pointer(&menu, &motion, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(menu.overlay_hover != 0u);
+        assert(handle_pointer(&menu, &motion, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(astra_interface_menu_get_state(&menu.menu, &info) == ASTRA_OK && info.selection == 1u);
         motion.value_x = DISPLAY_MENU_X + DISPLAY_MENU_WIDTH + 10;
-        assert(handle_pointer(&menu, &motion, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(menu.overlay_hover == 0u);
-        motion.value_x = DISPLAY_MENU_X + 24;
-        assert(handle_pointer(&menu, &motion, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(menu.overlay_hover != 0u);
         delivered_count = 0u;
-        assert(handle_pointer(&menu, &down, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(menu.overlay == DISPLAY_OVERLAY_NONE);
-        assert(delivered_count == 1u &&
-               delivered.event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
-               delivered.event.data.system_action.action ==
-                   ASTRA_SYSTEM_ACTION_ABOUT);
-        assert(handle_pointer(&menu, &up, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(delivered_count == 1u);
-        menu.pointer_x = DISPLAY_MENU_X + 24;
-        menu.pointer_y = DISPLAY_MENU_Y + 72;
-        assert(menu_item_at(menu.pointer_x, menu.pointer_y) == 2u);
-        assert(menu_item_at(DISPLAY_MENU_X - 1, menu.pointer_y) == 0u);
-        menu.pointer_x = 40;
-        menu.pointer_y = 15;
-        assert(handle_pointer(&menu, &down, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(handle_pointer(&menu, &up, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        menu.pointer_x = DISPLAY_MENU_X + 24;
-        menu.pointer_y = DISPLAY_MENU_Y + 72;
+        assert(handle_pointer(&menu, &motion, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(astra_interface_menu_get_state(&menu.menu, &info) == ASTRA_OK && info.selection == 0u);
+        assert(delivered_count == 0u); /* Motion never falls through an open menu. */
+        for (uint32_t at = 0u; at < 3u; ++at) {
+            const uint32_t actions[] = {ASTRA_SYSTEM_ACTION_ABOUT, ASTRA_SYSTEM_ACTION_RESTART,
+                                       ASTRA_SYSTEM_ACTION_SHUTDOWN};
+            if (menu.overlay == DISPLAY_OVERLAY_NONE) set_overlay(&menu, DISPLAY_OVERLAY_MENU);
+            menu.pointer_x = DISPLAY_MENU_X + 24;
+            menu.pointer_y = DISPLAY_MENU_Y + (at == 0u ? 24 : at == 1u ? 72 : 116);
+            delivered_count = 0u;
+            assert(handle_pointer(&menu, &down, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+            assert(delivered_count == 0u && menu.overlay == DISPLAY_OVERLAY_MENU);
+            assert(handle_pointer(&menu, &up, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+            assert(menu.overlay == DISPLAY_OVERLAY_NONE && delivered_count == 1u &&
+                delivered.event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
+                delivered.event.data.system_action.action == actions[at]);
+        }
+        set_overlay(&menu, DISPLAY_OVERLAY_MENU);
+        menu.pointer_x = 750;
+        menu.pointer_y = 350;
         delivered_count = 0u;
-        assert(handle_pointer(&menu, &down, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(delivered_count == 1u &&
-               delivered.event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
-               delivered.event.data.system_action.action ==
-                   ASTRA_SYSTEM_ACTION_RESTART);
-        assert(handle_pointer(&menu, &up, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        menu.pointer_x = 40;
-        menu.pointer_y = 15;
-        assert(handle_pointer(&menu, &down, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(handle_pointer(&menu, &up, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        menu.pointer_x = DISPLAY_MENU_X + 24;
-        menu.pointer_y = DISPLAY_MENU_Y + 116;
-        assert(menu_item_at(menu.pointer_x, menu.pointer_y) == 3u);
-        delivered_count = 0u;
-        assert(handle_pointer(&menu, &down, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(delivered_count == 1u &&
-               delivered.event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
-               delivered.event.data.system_action.action ==
-                   ASTRA_SYSTEM_ACTION_SHUTDOWN);
-        menu.pointer_x = 240;
-        menu.pointer_y = 15;
-        delivered_count = 0u;
-        assert(handle_pointer(&menu, &down, &effects, &frame_window,
-                              &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(menu.overlay == DISPLAY_OVERLAY_NONE && delivered_count == 0u);
+        down.code = up.code = ASTRA_INPUT_BUTTON_RIGHT;
+        assert(handle_pointer(&menu, &down, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(menu.overlay == DISPLAY_OVERLAY_NONE && menu.swallow_pointer_up == 4u);
+        assert(handle_pointer(&menu, &up, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered_count == 0u && menu.swallow_pointer_up == 0u);
     }
 
     {

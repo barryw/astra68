@@ -3,6 +3,10 @@
 
 #include <astra/control.h>
 
+int astra_interface_single_line_text_valid(const char *text, uint32_t bytes);
+int astra_interface_draw_list_has_room(const AstraSurfaceView *surface,
+                                       uint64_t commands, uint64_t payload);
+
 AstraResult astra_interface_label_init(AstraControl *control,
                                        const AstraLabelInfo *info);
 AstraResult astra_interface_button_init(AstraControl *control,

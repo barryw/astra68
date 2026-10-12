@@ -38,6 +38,13 @@ Interface Gallery opens directly from the desktop. Its retained benchmark
 suites run only with `open /apps/InterfaceGallery.app --benchmark`; the Terminal
 gate's `--interface-layout-only` option invokes that path explicitly.
 
+`test-context-menus.py QEMU ROM IMAGE` exercises the common window-owned popup
+through real Desktop right-click input, Escape and outside-click cancellation,
+release-only activation, DH0 Open by pointer and keyboard, and ASTRA keyboard
+navigation/About. It uses the same native runtime and copied provider image as
+the desktop/Atlas gates. The Interface benchmark includes 10,000 menu actions
+under the existing 12.5-microsecond semantic-action gate.
+
 ## AstraHost block service
 
 The machine implements the Vesta block registers at `0x150..0x1b0` over a host

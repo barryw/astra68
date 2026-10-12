@@ -19,6 +19,8 @@
 
 ASTRA_EXTERN_C_BEGIN
 
+struct AstraMenuItem;
+
 /** Opaque identity returned by the window server. */
 typedef struct AstraWindow {
     /** @cond ASTRA_INTERNAL */
@@ -32,6 +34,22 @@ typedef struct AstraWindow {
 
 /** Empty window-handle initializer. */
 #define ASTRA_WINDOW_INIT { 0, 0, 0, 0, 0 }
+
+/** Show an immutable presentation snapshot owned by this window.
+ * Most callers use Interface Kit's command-backed context menu session.
+ * @param window Owning live window.
+ * @param items Counted presentation rows copied before return.
+ * @param count Number of rows.
+ * @param x Client-local anchor x.
+ * @param y Client-local anchor y.
+ * @param request Nonzero caller correlation token.
+ * @return ASTRA_OK or a validation, permission or capacity error.
+ */
+ASTRA_NODISCARD AstraResult astra_window_menu_open(AstraWindow *window,
+    const struct AstraMenuItem *items, uint32_t count, int32_t x, int32_t y,
+    uint32_t request);
+/** Dismiss this window's correlated menu. @param window Owning window. @param request Menu correlation token. @return ASTRA_OK or an error. */
+ASTRA_NODISCARD AstraResult astra_window_menu_close(AstraWindow *window, uint32_t request);
 
 /** Current server-owned placement and state. */
 typedef struct AstraWindowInfo {

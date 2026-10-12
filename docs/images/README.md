@@ -1,5 +1,26 @@
 # Physical Astra OS captures
 
+## Shared context menus
+
+`astra-context-menu.png` was captured on 2026-10-12 from the physical DE25-Nano
+through authenticated RFB at 1920×1080. Selected release:
+`0aa2d7130c3120df7d7b64481e5ee2b6393b603767814213b673285fd68f9b36`.
+FPGA remains `b61dbda8`. The native DH0 icon opens the common context menu;
+keyboard selection launches Atlas with its actual 16 root entries (15 folders).
+Application context Open, shared ASTRA About, process retirement and identical
+restored desktop pixels also pass. The 10,000-action menu workload measures
+1.947464 µs/action, below 12.5 µs.
+
+Beast converts raw RGB to PNG and verifies decoded pixels match the source.
+No pixels were edited. PNG SHA-256:
+`cd2e1c0e5c4407870f8d701d6c945fe1ddff14f3de46296189386ec17854ca51`.
+Evidence: `/mnt/Documents/astra68/builds/context-menus-20261012/board-2`.
+Runtime/audio/remote services remain active with zero restarts; the panic
+record's hash and mtime stay unchanged. Deployment preserves user contents and
+metadata and verifies QEMU UID/GID 999, empty groups, zero capabilities and
+`NoNewPrivs=1`. See [menu continuation](../HANDOVER_2026-10-12_CONTEXT_MENUS.md)
+for cache/timing evidence and qualification limits.
+
 ## DH0 desktop and Atlas
 
 `astra-desktop.png` and `astra-atlas.png` were captured on 2026-10-12 from the

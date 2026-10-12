@@ -11,6 +11,7 @@ include ../../libraries.mk
 GRAPHICS := ../../graphics
 NDK := ../../../../ndk
 SYSTEM := ../../system
+INTERFACE := ../../interface
 ASTRA_COMMON := ../../../common
 CPPFLAGS := -I../../../../ndk/include -I../../../include -I$(RUNTIME)/include \
 	-I$(GRAPHICS)/include -I../../../../fpga/arty/linux
@@ -31,7 +32,7 @@ GRAPHICS_FONT_INPUTS := $(GRAPHICS)/fonts/astra-workbench.afnt \
 	../../../../tools/fonts/afnt.py $(NDK)/include/astra/font_library.h
 HOST_TEST := build/host/test_display
 HOST_TEST_SANITIZE := build/host/test_display_sanitize
-LIBRARIES := $(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_FONT_LIBRARY) \
+LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_FONT_LIBRARY) \
 	$(ASTRA_SYSTEM_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) \
 	$(ASTRA_COMPILER_LIBRARY)
 ASTRA_PROGRAM_PRIVATE_INPUTS := $(GRAPHICS_RENDERER_LIB)
@@ -48,14 +49,16 @@ $(GRAPHICS_FONT_HEADERS): $(GRAPHICS_FONT_INPUTS)
 $(HOST_TEST): main.c window_graphics.c window_graphics.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c \
-		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c
+		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c \
+		$(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
-		$(ASTRA_COMMON)/utf8.c window_graphics.c tests/test_display.c -o $@
+		$(ASTRA_COMMON)/utf8.c $(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c \
+		window_graphics.c tests/test_display.c -o $@
 
 test: $(HOST_TEST)
 	./$(HOST_TEST)
@@ -63,7 +66,8 @@ test: $(HOST_TEST)
 $(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c \
-		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c
+		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c \
+		$(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O1 -fsanitize=address,undefined \
@@ -71,7 +75,8 @@ $(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h \
 		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
-		$(ASTRA_COMMON)/utf8.c window_graphics.c tests/test_display.c -o $@
+		$(ASTRA_COMMON)/utf8.c $(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c \
+		window_graphics.c tests/test_display.c -o $@
 
 sanitize: $(HOST_TEST_SANITIZE)
 	./$(HOST_TEST_SANITIZE)

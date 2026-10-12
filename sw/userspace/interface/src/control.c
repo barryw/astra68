@@ -113,7 +113,7 @@ static void private_u32_set(int64_t *value, uint32_t bits)
     *value = bits;
 }
 
-static int field_text_valid(const char *text, uint32_t bytes)
+int astra_interface_single_line_text_valid(const char *text, uint32_t bytes)
 {
     uint32_t at = 0u;
 
@@ -144,7 +144,7 @@ static int field_content_valid(const AstraTextModel *model)
         const char *text;
         uint32_t bytes;
         if (astra_text_model_read(model, offset, &text, &bytes) != ASTRA_OK ||
-            bytes == 0u || !field_text_valid(text, bytes))
+            bytes == 0u || !astra_interface_single_line_text_valid(text, bytes))
             return 0;
         offset += bytes;
     }
@@ -703,7 +703,8 @@ static int interactive(const AstraControl *control)
            control->_private_control_kind == ASTRA_CONTROL_SCROLLBAR;
 }
 
-static uint32_t hit_test(const AstraUIContext *context, int32_t x, int32_t y)
+static uint32_t hit_test(const AstraUIContext *context, int32_t x, int32_t y,
+                          int context_request)
 {
     for (uint32_t count = context->_private_control_count; count != 0u;
          --count) {
@@ -716,9 +717,9 @@ static uint32_t hit_test(const AstraUIContext *context, int32_t x, int32_t y)
         int64_t clip_right = (int64_t)clip->x + clip->width;
         int64_t clip_bottom = (int64_t)clip->y + clip->height;
 
-        if (interactive(control) &&
+        if ((context_request || interactive(control)) &&
             control->_private_laid_out != 0u &&
-            (control->_private_state & ASTRA_CONTROL_DISABLED) == 0u &&
+            (context_request || (control->_private_state & ASTRA_CONTROL_DISABLED) == 0u) &&
             x >= frame->x && (int64_t)x < right &&
             y >= frame->y && (int64_t)y < bottom &&
             x >= clip->x && (int64_t)x < clip_right &&
@@ -2829,7 +2830,7 @@ static int render_requirements(const AstraUIContext *context,
     return 1;
 }
 
-static int draw_list_has_room(const AstraSurfaceView *surface,
+int astra_interface_draw_list_has_room(const AstraSurfaceView *surface,
                               uint64_t commands, uint64_t payload)
 {
     AstraSurfaceView adopted;
@@ -4279,7 +4280,7 @@ AstraResult astra_interface_field_replace_selection(
 
     if (index == CONTROL_NONE ||
         control->_private_control_kind != ASTRA_CONTROL_FIELD ||
-        !field_text_valid(replacement, replacement_bytes))
+        !astra_interface_single_line_text_valid(replacement, replacement_bytes))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if ((control->_private_style & ASTRA_FIELD_READ_ONLY) != 0u)
         return ASTRA_ERROR_PERMISSION;
@@ -4595,7 +4596,7 @@ AstraResult astra_interface_ui_render(AstraUIContext *context,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     accelerated = scroll_copy_prepare(context, surface, &copy);
     if (surface->kind == ASTRA_SURFACE_VIEW_DRAW_LIST) {
-        if (!draw_list_has_room(surface,
+        if (!astra_interface_draw_list_has_room(surface,
                                 commands + (accelerated ?
                                     1u + copy.exposed_count : 0u), payload))
             return ASTRA_ERROR_NO_RESOURCES;
@@ -4691,9 +4692,29 @@ static AstraResult pointer_event(AstraUIContext *context,
                                  const AstraWindowEvent *event,
                                  AstraUIAction *action)
 {
-    uint32_t hit = hit_test(context, event->data.pointer.x,
-                            event->data.pointer.y);
+    uint32_t hit;
 
+    if (event->type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
+        event->data.pointer.button == ASTRA_INPUT_BUTTON_RIGHT &&
+        (event->flags & (ASTRA_WINDOW_EVENT_DOWN | ASTRA_WINDOW_EVENT_LOSS)) == 0u &&
+        event->data.pointer.x >= 0 && event->data.pointer.y >= 0 &&
+        (uint32_t)event->data.pointer.x < context->_private_width &&
+        (uint32_t)event->data.pointer.y < context->_private_height) {
+        uint32_t target = hit_test(context, event->data.pointer.x,
+                                   event->data.pointer.y, 1);
+        clear_capture(context);
+        clear_keyboard(context);
+        if (target != CONTROL_NONE) {
+            const AstraControl *control = &context->_private_controls[target];
+            if (focusable(control) && (control->_private_state & ASTRA_CONTROL_DISABLED) == 0u)
+                set_focus(context, target, 0);
+            action->control_id = control->_private_id;
+        }
+        action->type = ASTRA_UI_ACTION_CONTEXT_MENU;
+        return ASTRA_OK;
+    }
+
+    hit = hit_test(context, event->data.pointer.x, event->data.pointer.y, 0);
     set_hover(context, hit);
     {
         uint32_t part = STEPPER_PART_VALUE;
@@ -5335,6 +5356,26 @@ AstraResult astra_interface_ui_handle_event(AstraUIContext *context,
     action->control_id = 0u;
     action->value = 0;
     action->decimal_places = 0u;
+    if ((event->flags & ASTRA_WINDOW_EVENT_LOSS) != 0u ||
+        event->type == ASTRA_WINDOW_EVENT_STATE_RESET) {
+        reset_interaction(context, 1);
+        return ASTRA_OK;
+    }
+    if (event->type == ASTRA_WINDOW_EVENT_KEY &&
+        (event->flags & (ASTRA_WINDOW_EVENT_DOWN | ASTRA_WINDOW_EVENT_REPEAT |
+                         ASTRA_WINDOW_EVENT_LOSS)) == ASTRA_WINDOW_EVENT_DOWN &&
+        (event->data.key.modifiers & (ASTRA_INPUT_MOD_CTRL | ASTRA_INPUT_MOD_ALT |
+                                     ASTRA_INPUT_MOD_GUI | ASTRA_INPUT_MOD_META)) == 0u &&
+        (event->data.key.usage == 0x65u ||
+         (event->data.key.usage == 0x43u &&
+          (event->data.key.modifiers & ASTRA_INPUT_MOD_SHIFT) != 0u))) {
+        clear_capture(context);
+        clear_keyboard(context);
+        action->type = ASTRA_UI_ACTION_CONTEXT_MENU;
+        if (context->_private_focus != CONTROL_NONE)
+            action->control_id = context->_private_controls[context->_private_focus]._private_id;
+        return ASTRA_OK;
+    }
     if (event->type == ASTRA_WINDOW_EVENT_POINTER_MOTION ||
         event->type == ASTRA_WINDOW_EVENT_POINTER_BUTTON)
         return pointer_event(context, event, action);
@@ -5371,11 +5412,8 @@ AstraResult astra_interface_ui_handle_event(AstraUIContext *context,
             return astra_interface_ui_layout(
                 context, &context->_private_layout);
     }
-    else if (event->type == ASTRA_WINDOW_EVENT_STATE_RESET)
-        reset_interaction(context, 1);
     else if (event->type == ASTRA_WINDOW_EVENT_STATE &&
-             (((event->data.state.flags & ASTRA_WINDOW_ACTIVE) == 0u) ||
-              (event->flags & ASTRA_WINDOW_EVENT_LOSS) != 0u))
+             (event->data.state.flags & ASTRA_WINDOW_ACTIVE) == 0u)
         reset_interaction(context, 1);
     return ASTRA_OK;
 }

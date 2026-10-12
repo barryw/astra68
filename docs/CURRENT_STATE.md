@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-10-12
 
+Current integration slice: shared right-click context menus in Interface 5.4
+and System 3.3, with GUI wire 20 / event 8. One common menu model replaces the
+private ASTRA dropdown painter and input walk. Native window ownership,
+immutable bounded snapshots, correlated mandatory results, keyboard/pointer
+press ownership and queue-loss cancellation support Desktop's existing Open
+command for DH0 and application icons. Host/sanitizer/analyzer/MC68040 and NDK
+header/HTML/PDF gates pass. Release `0aa2d713` passes exact guest menus, Atlas,
+desktop, four power actions, all 111 Terminal commands, all 26 filesystem
+cases/recovery/fsck, bit-exact audio, Doom and 15 packaged NDK examples. It is
+selected on the board with previous menu release `e7023a1b`, preserved user
+state, unprivileged QEMU and no new panic. Physical menu/app/Atlas/About input,
+retirement and restored pixels pass; 10,000 model actions average 1.947 µs
+against 12.5 µs. The existing bitmap cache now compares a 16 KiB committed
+paint snapshot across popup lifetimes, avoiding repeated GPU painting while
+rejecting different labels and uncommitted repaints. Default RFB socket timing
+remains frame-quantized; an explicit TCP_NODELAY probe measures 33.128/32.969 ms
+open/close medians. These diagnostics do not establish an end-to-end cache
+speedup or the internal two-frame feedback budget; no waiver is claimed.
+Final correctness/semantic-action evidence is under
+`/mnt/Documents/astra68/builds/context-menus-20261012/`. Flat menus are the
+current scope; submenus, app menu-strip publication and broader Atlas operations
+remain later work. See [menu continuation](HANDOVER_2026-10-12_CONTEXT_MENUS.md)
+and the [common-menu plan](superpowers/plans/2026-10-12-common-context-menus.md).
+
 Active priority: finish the remaining production filesystem phases, including
 Linux-owned `/dh0` bootstrap/storage, numbered fixed/USB/optical/RAM volumes,
 mount/unmount/safe-remove/eject, live native namespace publication, and labeled

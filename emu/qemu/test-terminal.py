@@ -107,6 +107,9 @@ INTERFACE_DISCLOSURE = re.compile(
 INTERFACE_SPLITTER = re.compile(
     r"INTERFACE SPLITTER n=([0-9a-f]{8}) "
     r"elapsed-ns=([0-9a-f]{16})")
+INTERFACE_MENU = re.compile(
+    r"INTERFACE MENU n=([0-9a-f]{8}) elapsed-ns=([0-9a-f]{16})")
+INTERFACE_MENU_OPERATIONS = 10000
 INTERFACE_UNDO_OPERATIONS = 10000
 INTERFACE_TEXT_OPERATIONS = 4096
 INTERFACE_SEGMENTED_OPERATIONS = 10000
@@ -1035,7 +1038,8 @@ def interface_layout_benchmark(machine, boot_deadline):
                         "INTERFACE DISCLOSURE n=%08x" %
                         INTERFACE_DISCLOSURE_OPERATIONS,
                         "INTERFACE SPLITTER n=%08x" %
-                        INTERFACE_SPLITTER_OPERATIONS,)
+                        INTERFACE_SPLITTER_OPERATIONS,
+                        "INTERFACE MENU n=%08x" % INTERFACE_MENU_OPERATIONS,)
     # Interface Gallery reports with astra_log, so a line is in its own log
     # ring or the kernel ring and, either way, in the host syslog
     # (docs/SYSTEM_LOG.md section 7). The checks below refuse duplicates, so
@@ -1156,7 +1160,9 @@ def interface_layout_benchmark(machine, boot_deadline):
              INTERFACE_DISCLOSURE_OPERATIONS,
              INTERFACE_DISCLOSURE_MAX_NS_PER_ACTION),
             ("splitter", INTERFACE_SPLITTER, INTERFACE_SPLITTER_OPERATIONS,
-             INTERFACE_SPLITTER_MAX_NS_PER_ACTION)):
+             INTERFACE_SPLITTER_MAX_NS_PER_ACTION),
+            ("menu", INTERFACE_MENU, INTERFACE_MENU_OPERATIONS,
+             INTERFACE_VALUE_CONTROL_MAX_NS_PER_ACTION)):
         results = [tuple(int(value, 16) for value in match.groups())
                    for line in lines
                    for match in [pattern.search(line)] if match is not None]
@@ -1170,6 +1176,7 @@ def interface_layout_benchmark(machine, boot_deadline):
             return False
         print("%5u %-11s %7.1f ns/action" %
               (expected, name, results[0][1] / expected))
+    print("ASTRA INTERFACE MENU PASS")
     print("ASTRA INTERFACE SPLITTER PASS")
     print("ASTRA INTERFACE DISCLOSURE PASS")
     print("ASTRA INTERFACE DIAL PASS")

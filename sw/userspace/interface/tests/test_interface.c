@@ -2670,6 +2670,64 @@ static void test_disclosure_control(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_context_request(void)
+{
+    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraToggleInfo checkbox = ASTRA_TOGGLE_INFO_INIT;
+    AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlFrame frame, clip;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraWindowEvent event;
+
+    checkbox.id = 21u;
+    checkbox.text = "Check";
+    checkbox.text_length = 5u;
+    label.id = 22u;
+    label.text = "Label";
+    label.text_length = 5u;
+    assert(astra_interface_checkbox_init(&controls[0], &checkbox) == ASTRA_OK);
+    assert(astra_interface_label_init(&controls[1], &label) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls, 2u, 200u, 80u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_geometry(&context, 0u, &frame, &clip) == ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON, ASTRA_WINDOW_EVENT_DOWN,
+        frame.x + 1, frame.y + 1);
+    event.data.pointer.button = 3u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_NONE);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_CONTEXT_MENU && action.control_id == 21u);
+    assert((controls[0]._private_state & ASTRA_CONTROL_SELECTED) == 0u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x65u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_CONTEXT_MENU && action.control_id == 21u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x43u, ASTRA_INPUT_MOD_SHIFT);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_CONTEXT_MENU && action.control_id == 21u);
+    event.flags |= ASTRA_WINDOW_EVENT_REPEAT;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_NONE);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x43u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type != ASTRA_UI_ACTION_CONTEXT_MENU);
+    assert(astra_interface_ui_geometry(&context, 1u, &frame, &clip) == ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON, 0u,
+        frame.x + 1, frame.y + 1);
+    event.data.pointer.button = 3u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_CONTEXT_MENU && action.control_id == 22u);
+    event.flags = ASTRA_WINDOW_EVENT_LOSS;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_NONE);
+    assert(astra_interface_ui_init(&context, NULL, 0u, 200u, 80u) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_CONTEXT_MENU && action.control_id == 0u);
+}
+
 int main(void)
 {
     static const char malformed_utf8[] = {(char)0xed, (char)0xa0, (char)0x80};
@@ -2730,6 +2788,7 @@ int main(void)
         assert(first_text_color != astra_surface_rgb565(
             theme.client.red, theme.client.green, theme.client.blue));
     }
+    test_context_request();
     test_controls();
     test_fault_label();
     test_button_preview_states();
