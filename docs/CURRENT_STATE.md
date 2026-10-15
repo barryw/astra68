@@ -12,8 +12,9 @@ immutable release
 Its clean kernel, userspace, ROM, image, seven filesystem gates, native volume
 lifecycle (ISO, busy holders, RAM/HostFS/restart, stale generations), Atlas
 overflow, desktop volume/safe-removal UI, Terminal/Vim and 30-second Doom
-gameplay/audio/MIDI replay pass. Source 25 also passed NDK examples, six power
-cases, service policy and eight SDL probes. Source 28 corrected the launcher
+gameplay/audio/MIDI replay pass. Source 28 also passed extracted NDK examples,
+six power cases, service policy, and SDL runtime/video/input/media probes.
+Source 28 corrected the launcher
 preflight to accept a readable, non-executable Python image selector; the
 isolated new-runtime and old-runtime rollback trials both reached POST/stage 8
 on DE25 with separate image/export clones and unprivileged QEMU.
@@ -48,10 +49,74 @@ status zero and matching host SHA256, then removed through guest `rm`. No trial
 drop-in remains; production state and exports are selected.
 
 Physical USB/CD hotplug, safe-removal and eject remain unqualified because no
-such devices are attached. Linux root `/dev/mmcblk0p2` still carries its
-pre-existing ext4 `clean with errors` flag; do not fsck the mounted root. No
-new kernel I/O error appeared during qualification. Network mounts are excluded;
-broad performance qualification follows correctness, not this cutover.
+such devices are attached. Network mounts are excluded; broad performance
+qualification follows correctness, not this cutover.
+
+DE25 Linux root `/dev/mmcblk0p2` has been repaired offline. A volatile U-Boot
+RAM rescue boot left p2 unmounted; no persistent boot setting changed. The
+first 30,951,865,856-byte streaming backup did **not** match the board and is
+forensic evidence only, never a rollback source. A second full backup at
+`/home/barry/astra-fs14-rescue-20261015/mmcblk0p2-pre-fsck-copy2.img` on
+Beast matched the board's independent SHA256
+`786e72bc43d7b250ae75c25e142d5d7c7f83c2608357bc6ec8363c3630ee66fd`.
+Read-only diagnosis of that verified copy found three deleted inodes without
+deletion timestamps and bitmap-count differences; it did not reproduce the
+first backup's spurious multiply-claimed firmware block. A cloned repair trial
+used board e2fsck 1.46.5 (`-f -p`, exit 1), followed by `-fn` exit 0; content
+and metadata comparisons of `/home`, `/etc`, and `/var/lib/astra` against the
+verified original were empty. Only then did the board run the same `-f -p`
+offline (exit 1), with follow-up `-fn` exit 0. Its next normal boot selected
+the same source 28 release and boot script, reached stage 8 with one active
+`astra.service`, unprivileged QEMU, zero service restarts, clean root state,
+and validated production backup checksums. Live `/home` and `/etc` content and
+metadata still match the verified pre-repair image. Physical Atlas opened DH0
+and enumerated 16 root entries, including 15 folders.
+
+One post-repair `ext4_block_to_path` warning names the 6.6 KiB, readable
+`/var/lib/astra/log/qemu-console.log` (inode 112146) and logical block
+1074791436, exactly the first block past the legacy triple-indirect mapping
+limit; [Linux ext4's parser](https://github.com/torvalds/linux/blob/v6.12/fs/ext4/indirect.c#L68-L105)
+identifies that as an out-of-range request, not an on-disk block reference.
+Root remains `clean`, with no new MMC I/O error.
+Retain this warning in follow-up diagnostics if it recurs. Repair logs and
+both backups remain on Beast; only the byte-matched second copy is trusted.
+
+## Filesystem 14 correctness closure, 2026-10-15
+
+Beast's exact source-only mirror of `a7c3ce60fed99e1641bea137f365395c0ad3dc33`
+built userspace `all test`, DE25 boot `all test verify`, QEMU host, the storage
+provider and NDK `dist-check`; ROM and kernel carry that nonzero source ID.
+The tested ROM SHA256 is
+`275a76097fe3913f587a9c5212cd07fc2f7f76a676d5d2e0509abbdb1fadf121`,
+kernel SHA256 `20209689e7a787f4951919f521acef4086a77a3565c5495ad802ff73e5829f2f`,
+QEMU SHA256 `c8ba2eacc2230e7452b07b005864c766e1851627c86067cfb3d0f27cd9af3544`,
+and provider SHA256
+`b0eb43048750e6bedf2418678e3abc672e0851c55cc31688ac38e25d79a773c1`.
+The selected source 28 image SHA256 is
+`5044ba8fe5457913fa49a985c50696f01a626c375fc9c2bd1fb6c7ec573664cd`.
+Installed provider and root helper match their tested source. All seven
+`emu/qemu/fs-gates.sh` gates passed twice, including native/POSIX atomic save,
+file and parent sync, injected post-ack provider-reset failure (status 88),
+acknowledged-byte readback after provider reset and HostFS death, and clean
+provider-image fsck. Provider failure is not physical power-loss proof.
+
+The coherent cross-system matrix passed 29 gates: Linux lifecycle,
+Terminal/POSIX/Vim, FPU/fork/exec, Desktop/Atlas/volume/context UI, service
+policy, SDL timer/thread/video/draw/render/keyboard/mouse/image/mixer/TTF/net/audio,
+30-second Doom, six shutdown/restart variants, all 15 extracted NDK examples,
+and system-log persistence on a fresh first-boot image. A separate critical
+service fault test halted the guest and named the failed service. The 46
+QEMU/ROM/kernel/provider/image/policy/library/fixture inputs matched SHA256
+before and after the matrix and after the critical test. Logs and hashes are
+under `/home/barry/astra-fs14-evidence-20261015/` on Beast:
+`fs-gates-final.log`, `durability-focused-7.log`, `matrix.status`,
+`matrix-run-12.log`, `service-critical.log`, and `final-inputs.log`.
+Read-only Haiku reference: `~/Git/haiku/src/system/kernel/fs/vfs.cpp`
+`common_sync()` resolves a descriptor then calls its filesystem's single
+`fsync` operation. Astra retains one native filesystem sync with the POSIX
+adapter above it; this closure changed test harnesses, not that substrate.
+The system-log harness now reads the provider's private mounted root through
+its root observer while the provider's raw-image lease remains intact.
 
 ## Historical filesystem investigation (superseded checkpoints)
 

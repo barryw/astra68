@@ -42,19 +42,16 @@
   free-space check, so concurrent runs cannot overcommit `/`. A caller-credential reader
   (`setpriv --reuid/--regid --no-new-privs`) opens the image no-follow,
   refuses anything but a regular file, and sends exactly its fstat size
-  into root's `R/img`; that is loop-mounted at `R/mnt`
-  (nodev,nosuid,noexec), announced on the helper's first stdout line
-  (`ASTRA-QEMU-ROOT-MOUNT R/mnt`, which `test-terminal.Machine` reads),
-  and QEMU runs as the caller in its own private mount namespace, its
-  pid in `R/qemu.pid`. Afterwards a caller-credential `tee` writes
-  `R/img` back to the image, and the mount, loop device and `R` are
-  removed, success or not. The mount stays visible system-wide for the
-  run: unmounting it once QEMU's private copy existed raced QEMU's
-  HostFS init and broke the desktop boot. `R` is on real disk, never
-  tmpfs (`/run`): a loop-mounted image backed by a tmpfs file breaks the
-  same HostFS path. The image must already contain `work`/`sound`
-  (qemu_runtime.py's `root_provider` makes them at `mkfs.ext4 -d` time);
-  the helper never creates anything inside the mount. Reinstall it with
+  into root's `R/img` (0600). The installed storage provider mounts that
+  copy in its private mount namespace, then launches QEMU as the caller;
+  QEMU never owns the mount. The helper announces only its root-owned
+  `R/exports` (`ASTRA-QEMU-ROOT-EXPORTS R/exports`) for WORK/SOUND observation,
+  not the mounted system volume, and records the provider PID in
+  `R/provider.pid`. Afterwards a caller-credential `tee` writes `R/img`
+  back to the image. Provider cleanup releases the loop device and `R`;
+  a retained backing reference leaves `R` for investigation. `R` is on
+  real disk, never tmpfs (`/run`): a loop-mounted image backed by a tmpfs
+  file breaks HostFS. Reinstall the helper with
   `sudo install -o root -g root -m 0755 tools/astra-qemu-root
   /usr/local/sbin/` after any change; gates refuse a stale copy.
 

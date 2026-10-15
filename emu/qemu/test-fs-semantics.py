@@ -159,11 +159,13 @@ CHECKS["lane"] = check_lane
 MANIFEST = astra_image.STARTUP_MANIFEST.replace(
     "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE RAM_READ RAM_WRITE critical priority=20",
     "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE RAM_READ RAM_WRITE priority=20")
+HOSTFS_KILL = ("ps | while read -r id rest; do "
+               "[[ $rest == *' /services/hostfs' ]] && "
+               "print kill > /proc/$id/ctl; done")
 FINAL_CHECKS = ("hostfs-kill",)
 
 
 def loss(machine, mode, act):
-    machine.settle()
     before = machine.sequence()
     machine.qmp.type_line("fssem --loss-probe /work/loss-%s 120 %s &" % (mode, mode))
     if machine.wait_for_text("FSSEM LOSS armed", 60, before)[0] is None:
@@ -201,26 +203,69 @@ def check_provider_reset(machine, mount):
     print("PASS provider-reset")
 
 
+def wait_for_hostfs_recovery(machine, mount, killed_at, sequence, timeout):
+    if not machine.wait_for_trace_text("desktop ready", timeout, sequence):
+        fail("desktop did not regain its namespace after HostFS restart")
+    deadline = time.monotonic() + timeout
+    sample = os.path.join(mount, "work", ".astra", "sample")
+    while not os.path.exists(sample) or os.stat(sample).st_mtime <= killed_at + 1.0:
+        if time.monotonic() > deadline:
+            fail("sampler did not regain WORK after HostFS restart: %r" %
+                 machine.trace_with_syslog()[-50:])
+        time.sleep(0.5)
+
+
+def check_durability(machine, mount):
+    path = "/work/fs14-ack"
+    payload = "ack-68040"
+    machine.settle()
+    before = machine.sequence()
+    machine.qmp.type_line("posix --durability-gated %s %s; print DUR-EXIT-$?" %
+                          (path, payload))
+    if machine.wait_for_text("ASTRA DURABILITY READY", 60, before)[0] is None:
+        lines = machine.said(before)[0]
+        fail("POSIX durability probe did not arm: %r ... %r" % (lines[:20], lines[-20:]))
+    machine.qmp.key("ret")
+    if machine.wait_for_text("ASTRA DURABILITY SYNCED", 60, before)[0] is None:
+        fail("file and parent directory did not acknowledge sync")
+    machine.qmp.execute("qom-set", {"path": "/machine",
+        "property": "astra-host-fs-reset", "value": True})
+    machine.qmp.key("ret")
+    if machine.wait_for_text("DUR-EXIT-88", 90, before)[0] is None:
+        fail("stale post-ack fsync did not report failure")
+    lines = machine.said(before)[0]
+    if not any("durability post-sync barrier" in line for line in lines) or \
+            any(line == "ASTRA DURABILITY PASS" for line in lines):
+        fail("post-ack fsync error was not distinguished: %r" % lines[-20:])
+    print("PASS durability post-ack sync loss reported failure")
+    check = "posix --durability-check %s %s" % (path, payload)
+    lines, status = command(machine, check, 90, 32)
+    if status != 0 or "ASTRA DURABILITY EXACT" not in lines:
+        fail("acknowledged bytes after provider reset: %r" % lines[-20:])
+    print("PASS durability acknowledged bytes after provider reset")
+    before = machine.sequence()
+    killed_at = time.time()
+    machine.qmp.type_line(HOSTFS_KILL)
+    wait_for_hostfs_recovery(machine, mount, killed_at, before, 90)
+    if not terminal.open_terminal_window(machine, 90):
+        fail("no Terminal after HostFS restart in durability probe")
+    lines, status = command(machine, check, 90, 33)
+    if status != 0 or "ASTRA DURABILITY EXACT" not in lines:
+        fail("acknowledged bytes after HostFS death: %r" % lines[-20:])
+    print("PASS durability POSIX file/parent barriers "
+          "sync-loss refusal provider-death acknowledged readback")
+
+
 def check_hostfs_kill(machine, mount):
     killed_at = None
     killed_sequence = None
-    kill = ("ps | while read -r id rest; do "
-            "[[ $rest == *' /services/hostfs' ]] && "
-            "print kill > /proc/$id/ctl; done")
     def kill_now():
         nonlocal killed_at, killed_sequence
         killed_at = time.time()
         killed_sequence = machine.sequence()
-        machine.qmp.type_line(kill)
+        machine.qmp.type_line(HOSTFS_KILL)
     loss(machine, "dead", kill_now)
-    if not machine.wait_for_trace_text("desktop ready", 60, killed_sequence):
-        fail("desktop did not regain its namespace after HostFS restart")
-    deadline = time.monotonic() + 60
-    sample = os.path.join(mount, "work", ".astra", "sample")
-    while not os.path.exists(sample) or os.stat(sample).st_mtime <= killed_at + 1.0:
-        if time.monotonic() > deadline:
-            fail("sampler did not regain WORK after HostFS restart: %r" % machine.trace_with_syslog()[-50:])
-        time.sleep(0.5)
+    wait_for_hostfs_recovery(machine, mount, killed_at, killed_sequence, 60)
     if not terminal.open_terminal_window(machine, 60):
         fail("no fresh terminal after HostFS restart")
     lines, status = command(machine, "print -r -- alive > /work/after-kill && cat /work/after-kill", 60, 41)
@@ -230,6 +275,7 @@ def check_hostfs_kill(machine, mount):
 
 
 CHECKS["provider-reset"] = check_provider_reset
+CHECKS["durability"] = check_durability
 CHECKS["hostfs-kill"] = check_hostfs_kill
 
 GAUGES = ("fs-descriptors", "fs-directories", "fs-objects", "rss-kib", "fds")
@@ -365,11 +411,15 @@ def main():
     # directly here before being installed, the same as every other gate's
     # test command (test-fpu.py's fpucheck, test-system-log.py's logburst).
     if not arguments.bench:
+        targets = ["build/m68k/fssem"]
+        if "durability" in (arguments.check or CHECKS):
+            targets.append("build/m68k/posix")
         built = subprocess.run(
             astra_image._build_invocation(["make", "-C", os.path.join(ROOT, "sw", "userspace", "commands"),
-             "build/m68k/fssem"]), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+             *targets]),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if built.returncode != 0:
-            fail("could not build fssem: %s" % built.stdout[-400:].decode(
+            fail("could not build filesystem test commands: %s" % built.stdout[-400:].decode(
                 "utf-8", "replace"))
     work = tempfile.mkdtemp(prefix="astra-fs-sem-", dir="/tmp")
     try:
@@ -378,7 +428,9 @@ def main():
         if not arguments.bench:
             astra_image.install(image)
             astra_image.install_test_command(image, "fssem")
-        if not arguments.bench and "hostfs-kill" in (arguments.check or CHECKS):
+            if "durability" in (arguments.check or CHECKS):
+                astra_image.install_test_command(image, "posix")
+        if not arguments.bench and {"hostfs-kill", "durability"} & set(arguments.check or CHECKS):
             if MANIFEST == astra_image.STARTUP_MANIFEST:
                 fail("HostFS startup manifest changed")
             manifest = os.path.join(work, "startup")

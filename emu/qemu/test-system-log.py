@@ -33,8 +33,10 @@ boot volume's copy:
   store    the boot volume's copy holds the host copy's lines, less only
            what was written in the last seconds before the machine stopped.
 
-It takes `qemu rom image`; the image is the base system image (it ships
+It takes `qemu rom image`; the image is a fresh base system image (it ships
 ChocolateDoom.app and `log`), copied first so the original is untouched.
+The root observer reads live store banks through the provider's private mount;
+the provider keeps its exclusive lease on the raw image until shutdown.
 """
 
 import argparse
@@ -336,40 +338,47 @@ def check_fork(machine):
     print("PASS fork (child %s)" % child)
 
 
-def store_header(image, work):
-    """(generation, lost_in_transport) of the newest store snapshot on the
-    running machine's volume, read from a copy whose journal is replayed
-    first: early in a boot the banks' inodes may be only in the journal."""
-    offset, length = astra_image.ext4_partition(image)
-    volume = os.path.join(work, "live.img")
-    astra_image._slice(image, offset, length, volume)
-    subprocess.run(["e2fsck", "-fy", volume], stdout=subprocess.PIPE,
-                   stderr=subprocess.STDOUT, check=False)
+def mounted_store_root(machine):
+    """Read the provider's private mount without opening its leased image."""
+    provider = next((line.split() for line in machine.log
+                     if line.startswith("ASTRA-STORAGE-PROVIDER ")), None)
+    if provider is None or len(provider) != 3:
+        fail("quiet: no provider mount identity")
+    pid, domain = provider[1:]
+    if not pid.isdecimal() or not domain.startswith("/var/tmp/astra-storage."):
+        fail("quiet: invalid provider mount identity")
+    with open("/proc/%s/mountinfo" % pid, encoding="ascii") as mounts:
+        for line in mounts:
+            fields = line.split()
+            if fields[4].startswith(domain + "/") and \
+                    fields[fields.index("-") + 1] == "ext4":
+                root = "/proc/%s/root%s" % (pid, fields[4])
+                if os.path.isdir(os.path.join(root, "events")):
+                    return root
+    fail("quiet: no mounted provider system volume")
+
+
+def store_header(mount):
+    """(generation, lost_in_transport) from the mounted provider volume."""
     newest = None
     for bank in STORE_BANKS:
-        out = os.path.join(work, "bank")
-        if os.path.exists(out):
-            os.unlink(out)
-        subprocess.run(["debugfs", "-R", "dump %s %s" % (bank, out), volume],
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       check=False)
-        if not os.path.exists(out):
+        try:
+            with open(os.path.join(mount, bank.lstrip("/")), "rb") as handle:
+                head = handle.read(100)
+        except FileNotFoundError:
             continue
-        with open(out, "rb") as handle:
-            head = handle.read(100)
         if len(head) < 100:
             continue
         generation = int.from_bytes(head[12:16], "big")
         lost = int.from_bytes(head[96:100], "big")
         if newest is None or generation > newest[0]:
             newest = (generation, lost)
-    os.unlink(volume)
     if newest is None:
         fail("quiet: no store snapshot on the volume")
     return newest
 
 
-def check_quiet(machine, image, work):
+def check_quiet(machine):
     """A ring that wrapped past every user record holds only kernel records
     the events service skips. The gap is reported once; after that an idle
     machine neither counts more loss nor rewrites the store each sweep."""
@@ -396,9 +405,10 @@ def check_quiet(machine, image, work):
                  (wrapped, machine.said(start)[0][-10:]))
         time.sleep(0.1)
     time.sleep(3)  # the next sweep reports the gap, once
-    before = store_header(image, work)
+    mount = mounted_store_root(machine)
+    before = store_header(mount)
     time.sleep(QUIET_S)
-    after = store_header(image, work)
+    after = store_header(mount)
     deadline = time.monotonic() + settle_ms / 1000 + 60
     while "SYSLOG-GATE-12-0" not in machine.said(start)[0]:
         if time.monotonic() > deadline:
@@ -664,7 +674,7 @@ def main():
             if "fork" in wanted:
                 check_fork(machine)
             if "quiet" in wanted:
-                check_quiet(machine, image, work)
+                check_quiet(machine)
             if "fault" in wanted:
                 pid = check_fault(machine)
                 check_show(machine, pid)
