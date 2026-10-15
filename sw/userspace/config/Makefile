@@ -21,10 +21,10 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIBRARY := build/m68k/libraries/config.library.1
 LIBRARY_OBJECTS := build/m68k/config_library.o build/m68k/config_document.o
 LIBRARY_MAP := config.library.exports
-SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.3
+SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
-FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.12
+FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.14
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 HOST_TEST := build/host/test_config_document
 
@@ -55,9 +55,9 @@ $(LIBRARY): $(LIBRARY_OBJECTS) $(LIBRARY_MAP) $(ASTRA_SHARED_LINK_INPUTS) \
 		-Wl,--version-script=$(LIBRARY_MAP) -o $@ $(LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -L$(dir $(FILESYSTEM_LIBRARY)) \
-		-Wl,--no-as-needed -Wl,-l:system.library.3 \
+		-Wl,--no-as-needed -Wl,-l:system.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
-		-Wl,-l:filesystem.library.12 $(ASTRA_SHARED_LINK_END)
+		-Wl,-l:filesystem.library.14 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py $(LIBRARY)
@@ -69,11 +69,11 @@ library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(LIBRARY_MAP) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $(LIBRARY) | \
-		grep -q '^config.library.1 1.0.0 ABI 1.0$$'
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [system.library.3]')" = 1
+		grep -q '^config.library.1 1.0.1 ABI 1.0$$'
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [filesystem.library.12]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [filesystem.library.14]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 4
 	@$(READELF) -VW $< | grep -q 'ASTRA_CONFIG_1.0'
 	$(call ASTRA_CHECK_DSO,$(LIBRARY))
@@ -85,10 +85,21 @@ $(HOST_TEST): src/config_document.c $(SYSTEM)/src/config_scope.c \
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $^ -o $@
 
-test: $(HOST_TEST)
+build/host/test_config_paths: tests/test_config_paths.c src/config_library.c \
+		$(NDK)/include/astra/config_library.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
+		tests/test_config_paths.c -Wl,--gc-sections -o $@
+
+test: $(HOST_TEST) build/host/test_config_paths
 	./$(HOST_TEST)
+	./build/host/test_config_paths
 
 sanitize:
+	@mkdir -p build/host
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
+		$(SANITIZER_FLAGS) tests/test_config_paths.c -Wl,--gc-sections -o build/host/test_config_paths_sanitize
+	./build/host/test_config_paths_sanitize
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $(SANITIZER_FLAGS) \
 		src/config_document.c $(SYSTEM)/src/config_scope.c \

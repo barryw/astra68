@@ -1,9 +1,12 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+void *astra_runtime_allocate(size_t size) { return malloc(size); }
 #include <string.h>
 
 #include <astra/vfs_assign.h>
+#include <astra/vfs_assign_internal.h>
 
 static int fail_reallocate;
 
@@ -45,7 +48,7 @@ static void
 test_refusals(void)
 {
     AstraAssignTable table;
-    char oversized[ASTRA_CAPABILITY_NAME_MAX + 4];
+    char oversized[ASTRA_ASSIGN_NAME_MAX + 4];
 
     astra_assign_table_init(&table);
     memset(oversized, 'A', sizeof(oversized));
@@ -541,6 +544,28 @@ test_seeding_at_capacity(void)
     astra_assign_table_destroy(&table);
 }
 
+static void test_native_names_exceed_startup_names(void)
+{
+    AstraAssignTable table = ASTRA_ASSIGN_TABLE_INIT;
+    AstraVolumeReference volume = {9u, 23u, 4u};
+    const AstraAssign *binding = NULL;
+    char wire[ASTRA_VFS_PATH_MAX];
+    AstraStartupCapability malformed;
+
+    assert(astra_assign_bind_volume(&table, "usb18446744073709551615", &volume,
+                                   99u, ASTRA_RIGHT_READ) == ASTRA_VFS_OK);
+    assert(astra_assign_resolve_raw(&table, "/usb18446744073709551615/docs",
+                                   ASTRA_RIGHT_READ, 0u, wire, sizeof(wire),
+                                   &binding) == ASTRA_VFS_OK);
+    assert(binding != NULL && strcmp(binding->name, "USB18446744073709551615") == 0);
+    assert(strcmp(wire, "/docs") == 0);
+    capability(&malformed, "WORK", 1u, ASTRA_RIGHT_READ);
+    memset(malformed.name, 'A', sizeof(malformed.name));
+    assert(astra_assign_seed(&table, &malformed, 1u) == ASTRA_VFS_OK);
+    assert(table.count == 0u);
+    astra_assign_table_destroy(&table);
+}
+
 static void
 test_joining_makes_members(void)
 {
@@ -662,9 +687,47 @@ test_unbinding_a_union_keeps_the_order_of_the_rest(void)
     astra_assign_table_destroy(&table);
 }
 
+static void test_authority_retirement_preserves_other_union_members(void)
+{
+    AstraAssignTable table = ASTRA_ASSIGN_TABLE_INIT;
+    assert(astra_assign_bind(&table, "COMMANDS", 7u, ASTRA_VFS_GRANT_READ, "a") == ASTRA_VFS_OK);
+    assert(astra_assign_join(&table, "COMMANDS", 8u, ASTRA_VFS_GRANT_READ, "b") == ASTRA_VFS_OK);
+    assert(astra_assign_join(&table, "COMMANDS", 9u, ASTRA_VFS_GRANT_READ, "c") == ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "HOME", 8u, ASTRA_VFS_GRANT_READ, "home") == ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "OTHER", 10u, ASTRA_VFS_GRANT_READ, "") == ASTRA_VFS_OK);
+    assert(astra_vfs_assign_retire_handle(&table, 8u) == ASTRA_VFS_OK);
+    assert(table.count == 3u && astra_assign_lookup(&table, "HOME") == NULL);
+    assert(astra_assign_member(&table, "COMMANDS", 0u)->handle == 7u);
+    assert(astra_assign_member(&table, "COMMANDS", 1u)->handle == 9u);
+    assert(astra_assign_lookup(&table, "OTHER")->handle == 10u);
+    assert(astra_vfs_assign_retire_handle(&table, 8u) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_vfs_assign_retire_handle(&table, 0u) == ASTRA_VFS_ERR_INVALID);
+    astra_assign_table_destroy(&table);
+}
+
 int
 main(void)
 {
+    {
+        AstraAssignTable table = ASTRA_ASSIGN_TABLE_INIT;
+        AstraVolumeReference volume = {11u, 23u, 7u};
+        char wire[ASTRA_VFS_PATH_MAX];
+        const AstraAssign *binding;
+        assert(astra_assign_bind_volume(&table, "usb0", &volume, 99u, ASTRA_RIGHT_READ) == ASTRA_VFS_OK);
+        assert(astra_assign_resolve_raw(&table, "/usb0/docs", ASTRA_RIGHT_READ, 0u,
+            wire, sizeof(wire), &binding) == ASTRA_VFS_OK);
+        assert(binding->handle == 0u && binding->broker == 99u && binding->volume.id == 23u && strcmp(wire, "/docs") == 0);
+        assert(astra_assign_bind_volume(&table, "USB0", &volume, 99u, ASTRA_RIGHT_READ) == ASTRA_VFS_ERR_EXISTS);
+        assert(astra_assign_bind_volume(&table, "CD0", &volume, 99u, ASTRA_RIGHT_WRITE) == ASTRA_VFS_ERR_INVALID);
+        assert(astra_assign_bind_volume(&table, "CD0", &volume, 0u, ASTRA_RIGHT_READ) == ASTRA_VFS_ERR_INVALID);
+        volume.generation = 0u;
+        assert(astra_assign_bind_volume(&table, "CD0", &volume, 99u, ASTRA_RIGHT_READ) == ASTRA_VFS_ERR_INVALID);
+        assert(astra_assign_bind(&table, "USB0", 99u, ASTRA_RIGHT_READ, "") == ASTRA_VFS_OK);
+        assert(astra_assign_lookup(&table, "USB0")->volume.id == 0u &&
+            astra_assign_lookup(&table, "USB0")->broker == 0u);
+        astra_assign_table_destroy(&table);
+    }
+    test_authority_retirement_preserves_other_union_members();
     test_bind_and_look_up();
     test_refusals();
     test_roots_are_normalised();
@@ -680,6 +743,7 @@ main(void)
     test_seeding_refusals();
     test_seeding_skipped_first_record_still_binds();
     test_seeding_at_capacity();
+    test_native_names_exceed_startup_names();
     puts("ASTRA VFS ASSIGN PASS");
     return 0;
 }

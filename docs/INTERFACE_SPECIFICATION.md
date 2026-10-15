@@ -111,6 +111,13 @@ overrides are not part of the NDK contract.
 Window type selects a system recipe. It is not an invitation for an
 application to restyle the frame.
 
+`ASTRA_WINDOW_MODAL` applies to the owning GUI session. Its newest visible
+modal receives interaction in place of other windows in that session; unrelated
+applications remain usable. Windows opened through the shared service GUI port
+share session zero. Minimizing or closing the modal releases this restriction;
+closing a nested modal restores the remaining visible modal. The window's
+ordinary close, cancellation, event and catalog notification paths remain active.
+
 ## 5. Gadget states
 
 Every gadget has normal, hover, pressed, focused, and disabled appearances:

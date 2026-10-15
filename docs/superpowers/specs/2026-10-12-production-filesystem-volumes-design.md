@@ -25,6 +25,18 @@ Atlas at their root when double-clicked, and disappear after successful unmount
 or media loss. Attaching an empty optical drive exposes a device in inventory;
 inserting a supported data disc creates the mounted volume and desktop icon.
 
+The user also requests mounting ISO files. Image mounting uses the same native
+catalog, authority and lifecycle as physical media. A readable retained native
+file is the source; no application supplies a Linux pathname. The provider
+retains and verifies that exact object, rejects conflicting writers, and creates
+a read-only loop-backed ISO9660/UDF mount. The mounted image receives an optical
+class `/cdN` volume, its label/fallback desktop icon and normal Atlas root view.
+The image remains pinned until real unmount and loop cleanup. Its backing
+volume cannot be safely removed while that dependency exists; usage reporting
+identifies the mounted image and backing file. Rename/unlink of the image does
+not substitute another object. Backing-volume loss withdraws dependent image
+mounts, and nested dependencies are accounted for during shutdown/removal.
+
 The user narrows initial Atlas delivery to a root-directory viewer: double-click
 a mounted volume, open one window, and show its root entries as named file/folder
 icons. This is the visual proof of mounting, opening, and native enumeration.
@@ -108,6 +120,18 @@ mount state, and required Linux operations. QEMU keeps the existing file-object
 implementation and data workers, receiving mounted roots through the internal
 provider connection. Neither process exposes a Linux API to Astra applications.
 
+Implementation inspection adds a required permission boundary: preserved system
+data is UID/GID 0, including `/home/.viminfo` mode 0600 and `/home` mode 0755
+(`context-menus-20261012/deploy-2/user-state.json`). UID/GID 999 QEMU cannot
+perform direct Linux path operations on that data. Do not rewrite ownership or
+modes to conceal this gap. The confined provider must perform rooted opens and
+permission-sensitive path/metadata operations under native grant authority,
+then transfer Linux file descriptors internally for QEMU's canonical retained
+descriptions and data I/O. Reuse the existing ordered resolver, enforce rooted
+authority at that boundary, and keep one implementation for each operation.
+Mode/owner reporting and the native single-owner profile must remain coherent.
+Qualify old root-owned data and mode-zero objects before the storage cutover.
+
 The provider and QEMU share one runtime-private mount namespace, established by
 the privileged launcher before QEMU drops privilege. Mount propagation is
 private. Provider mount directories and control endpoints are root-owned and
@@ -144,10 +168,11 @@ the remaining production work requires.
 The `x` in `/dhx` or `/cdx` denotes numbered instances, not a literal name.
 Numbers count volumes; two partitions on one USB device can publish two USB
 volumes. Reserve `/dh0` for the verified system selection. Automatically assigned
-names are not recycled during an Astra boot; a later insertion can receive
-`/cd1` or `/usb1` even after the first volume disappeared. Persistently configured
-names may be rebound only after the old binding is withdrawn and its generation
-is retired. Old handles and pending UI actions cannot target the replacement.
+names use the lowest free number. A name remains reserved until the old mount,
+binding and retained Linux resources have actually retired; only then may a
+later insertion reuse it. Object IDs never recycle within a provider epoch.
+Persistently configured names follow the same retirement rule. Old handles and
+pending UI actions cannot target a replacement sharing the same spelling.
 
 Display the nonempty validated label, otherwise the uppercase fallback name.
 Duplicate labels remain distinct objects and show their canonical name as
@@ -273,6 +298,13 @@ mount state remain intact. No lazy unmount substitutes for normal success.
 
 Device safe removal checks all partitions, including externally used mounts.
 Eject follows successful unmount and reports hardware failure truthfully.
+The user requests **Unmount** in removable-volume context menus. It uses this
+safe-removal transaction without force-closing clients. Busy results identify
+each process and retained file, directory/current directory or pending request,
+with accurate paths and object identity; the dialog exposes all returned rows.
+Retry refreshes actual usage. A generic refusal cannot replace available detail.
+The same native usage query backs `lsof`; filters and pagination are shared,
+while the command and dialog format the returned records.
 Ordinary runtime removal of the selected system volume is refused. Surprise
 removal immediately withdraws new access, advances generations, reports loss to
 pending and retained objects, and leaves close/cleanup possible. No stale object

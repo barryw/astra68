@@ -1171,15 +1171,6 @@ static void report_kernel_performance_failure(
  * the ELF acceptance profile the loader already enforces.
  */
 #if !ASTRA_KERNEL_K1_QUALIFICATION
-static bool block_service_available(void)
-{
-    if (!kernel_platform_block_present())
-        return false;
-    if ((kernel_platform_system_status() & SYS_ASTRA_HOST) == 0u)
-        return true;
-    return (kernel_platform_block_state_flags() & BLOCK_STATE_LINK_UP) != 0u;
-}
-
 static void start_initial_user_image(void)
 {
     KernelProcessBootstrapCapability capabilities[
@@ -1196,28 +1187,12 @@ static void start_initial_user_image(void)
         return;
     }
 
-    /*
-     * The initial image is the block service until there is a launch path for
-     * a separate one. It receives the device lease and the completion endpoint
-     * as part of the load, so a grant failure unwinds the whole launch.
-     */
+    /* Linux owns filesystem devices. Supervisor bootstraps through HOST_DEVICE
+     * and transfers rooted filesystem authority to HostFS; no block grant can
+     * authorize a second writer to the selected system image. */
     kernel_bytes_clear(capabilities, sizeof(capabilities));
-    if (block_service_available()) {
-        capabilities[capability_count].name = ASTRA_CAPABILITY_BLOCK_DEVICE;
-        capabilities[capability_count].kind =
-            KERNEL_PROCESS_BOOTSTRAP_DEVICE;
-        capabilities[capability_count].device_id = ASTRA_DEVICE_ID_BLOCK0;
-        capabilities[capability_count].rights = KERNEL_DEVICE_RIGHTS;
-        ++capability_count;
-        capabilities[capability_count].name = ASTRA_CAPABILITY_BLOCK_IRQ;
-        capabilities[capability_count].kind = KERNEL_PROCESS_BOOTSTRAP_IRQ;
-        capabilities[capability_count].irq_source = IRQ_SRC_STORAGE;
-        capabilities[capability_count].rights = KERNEL_IRQ_RIGHTS;
-        ++capability_count;
-    }
     /*
-     * The keyboard, for the same reason and on the same terms as the block
-     * device: a terminal cannot read a key without a lease on the device the
+     * The keyboard and its completion endpoint: a terminal cannot read a key without a lease on the device the
      * events come from. A machine with no input device boots without one.
      */
     if (kernel_platform_input_present()) {

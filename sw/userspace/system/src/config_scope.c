@@ -29,7 +29,7 @@ static uint32_t build_root(const char *parent, const char *directory,
 {
     uint32_t used = 0u;
 
-    if (parent == NULL || parent[0] == '\0' ||
+    if (parent == NULL ||
         (directory != NULL && !component_valid(directory)) ||
         (owner != NULL && !component_valid(owner)) ||
         out == NULL || capacity == 0u)
@@ -82,7 +82,7 @@ uint32_t
 astra_config_owner_root(const char *parent, const char *owner,
                         char *out, uint32_t capacity)
 {
-    return build_root(parent, NULL, owner, out, capacity);
+    return component_valid(owner) ? build_root(parent, NULL, owner, out, capacity) : ASTRA_CONFIG_INVALID;
 }
 
 uint32_t

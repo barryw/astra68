@@ -58,16 +58,15 @@ application is deciding.
 2. After apps have exited, stop services in dependency order. A service fault
    does not become a kernel panic. Never terminate a writable volume before
    its clients and request workers have stopped.
-3. For each mounted filesystem, VFS releases sessions, invokes the backend's
-   `flush` hook, then its `unmount` hook. A read-only backend uses a no-op
-   flush. Ext4 commits its journal, disables write-back, stops the journal,
-   unmounts, unregisters the device, and flushes the block device. RAMFS
-   releases its memory; HostFS closes guest sessions and lets Linux's normal
-   poweroff flush its host filesystem. AstraFS and other backends provide
-   their own hooks; the supervisor never calls filesystem-specific functions.
-   Any failure prevents clean shutdown. See
-   [the filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md) for how this
-   contract integrates with Linux-owned mounts going forward (FS33).
+3. HostFS stops volume admission, drains workers and retires grants through
+   the same lifecycle used for normal removal. Stalled ports, busy resources
+   or failed session/claim release prevent a READY response. The Linux provider
+   owns filesystem synchronization, unmount, loop/source release and child
+   retirement; QEMU does not implement a second filesystem flush engine.
+   The runtime waits for actual provider exit and never converts a cleanup
+   delay into a forced kill. An outside guardian retains exact domain and
+   child lifetimes for fatal provider cleanup. See
+   [the filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md) (FS33).
 4. PID 1 invokes `ASTRA_SYSCALL_SYSTEM_SHUTDOWN` or
    `ASTRA_SYSCALL_SYSTEM_RESTART` only after every phase succeeds. Axiom
    rejects any other caller and refuses while any other guest process or PID 1
@@ -78,17 +77,22 @@ application is deciding.
    respectively. A crash, panic, unrelated QEMU exit, or `systemctl stop astra`
    never triggers either host power action.
 
-Current implementation: the VFS mount lifecycle, ext4, RAMFS, and HostFS stop
+Current implementation: the native mount lifecycle and HostFS/provider stop
 handlers, process lifecycle transport, managed startup declaration, Terminal's
 clean-prompt/zsh-exit gate, Supervisor reverse-order stop sequence, CLI and
 desktop Shut Down/Restart actions, explicit kernel/QEMU power markers, and
-Linux poweroff/reboot gates build with host tests. Beast-hosted QEMU boots from
-the current source ran `shutdown` and `restart` in Terminal and exited with
+Linux poweroff/reboot gates build with host tests. Beast-hosted QEMU boots ran
+`shutdown` and `restart` in Terminal and exited with
 codes 88 and 89; an edited/busy Terminal delayed Restart until it returned to
 a clean prompt. QEMU pointer tests also clicked both ASTRA menu actions and
 observed their respective clean-exit codes. The window-event NDK accepts all
-three defined system actions and rejects unknown values.
+three defined system actions and rejects unknown values. The complete native
+filesystem lifecycle gate also verifies acknowledged data after clean shutdown
+and offline fsck. Normal/fatal provider tests reread durable file and directory
+acknowledgements after retirement. These tests do not simulate physical power
+loss or loss of Linux's page cache.
 Malformed wire replies have host tests. Desktop consent/status UI and recovery
 from a cancellation after partial service teardown remain to be built. The NDK
 request acknowledges only that the supervisor accepted the request, not that
-the power action completed. No DE25 deployment has been made for this work.
+the power action completed. [Current State](CURRENT_STATE.md) records the exact
+qualified build and production deployment status.

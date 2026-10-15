@@ -1,8 +1,14 @@
 #!/bin/sh
 set -eu
 
+MODE=activate
+case "${1:-}" in
+    --stage-kernel) MODE=stage; shift ;;
+    --arm-kernel) MODE=arm; shift ;;
+    --rollback-kernel) MODE=rollback; shift ;;
+esac
 if [ "$#" -ne 1 ]; then
-    echo "usage: $0 RELEASE_DIRECTORY" >&2
+    echo "usage: $0 [--stage-kernel|--arm-kernel|--rollback-kernel] RELEASE_DIRECTORY" >&2
     exit 2
 fi
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
@@ -51,7 +57,62 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT
+kernel_action() {
+    kernel_mode=$1
+    kernel_candidate=$2
+    $SSH "$BOARD" "
+set -eu
+boot_mount=/mnt/astra-kernel-boot
+mounted=0
+mkdir -p \"\$boot_mount\"
+if mountpoint -q \"\$boot_mount\"; then
+    test \"\$(findmnt -n -o SOURCE --mountpoint \"\$boot_mount\")\" = /dev/mmcblk0p1
+else
+    # Reuse an existing mount so the same FAT cannot be mounted twice.
+    if existing=\$(findmnt -rn -o TARGET -S /dev/mmcblk0p1); then
+        test -n \"\$existing\"
+        boot_mount=\$existing
+    else
+        mount -t vfat /dev/mmcblk0p1 \"\$boot_mount\"
+        mounted=1
+    fi
+fi
+cleanup_kernel_mount() {
+    if [ \"\$mounted\" = 1 ]; then umount \"\$boot_mount\"; fi
+}
+trap cleanup_kernel_mount EXIT HUP INT TERM
+python3 '$kernel_candidate/bin/astra-kernel-install.py' '$kernel_mode' \
+    '$kernel_candidate/kernel' \"\$boot_mount\" '$STORE/kernel-boot-state.json'
+"
+}
 $SCP -r "$RELEASE/." "$BOARD:$INCOMING/"
+if [ "$MODE" != activate ]; then
+    # Install without selecting the runtime. Keep the candidate reachable by
+    # the normal retention policy while kernel boot acceptance is pending.
+    INSTALLED=$($SSH "$BOARD" \
+        "PYTHONDONTWRITEBYTECODE=1 python3 '$INCOMING/bin/astra-release.py' \
+install --no-activate '$INCOMING' '$STORE'")
+    test "$INSTALLED" = "$IDENTITY"
+    CANDIDATE=$STORE/releases/$IDENTITY
+    $SSH "$BOARD" "PYTHONDONTWRITEBYTECODE=1 python3 \
+'$CANDIDATE/bin/astra-release.py' select '$STORE' by-boot/kernel-stage '$IDENTITY'" >/dev/null
+    kernel_action "$MODE" "$CANDIDATE"
+    INCOMING=
+    echo "ASTRA_DE25_KERNEL_$MODE PASS release=$IDENTITY runtime_selector_unchanged=1"
+    exit 0
+fi
+kernel_action verify "$INCOMING"
+# Kernel cutover is a complete Image/module transaction performed before runtime
+# activation. Refuse incompatible running kernels before changing any selector.
+$SSH "$BOARD" "
+set -eu
+package='$INCOMING/kernel/package'
+python3 '$INCOMING/bin/astra-release.py' verify '$INCOMING' >/dev/null
+kernel_release=\$(cat \"\$package/metadata/kernel.release\")
+test \"\$(uname -r)\" = \"\$kernel_release\" || {
+    echo 'Boot the complete packaged kernel before activating this runtime' >&2; exit 1;
+}
+"
 INSTALLED=$($SSH "$BOARD" \
     "PYTHONDONTWRITEBYTECODE=1 python3 '$INCOMING/bin/astra-release.py' \
 install '$INCOMING' '$STORE'")
@@ -103,22 +164,14 @@ test \"\$(id -u astra)\" -gt 0
 test \"\$(id -g astra)\" -gt 0
 test ! -L '$STORE/hostfs'
 mkdir -p '$STORE/hostfs'
-# GNU chown defaults to -P: never follow guest-owned symlinks.
-chown -hR -- astra:astra '$STORE/hostfs'
-module_source='$STORE/current/kernel/astra_graphics_arena.ko'
-module_target=/lib/modules/\$(uname -r)/extra/astra_graphics_arena.ko
-test \"\$(modinfo -F vermagic \"\$module_source\")\" = \
-    \"\$(modinfo -F vermagic fuse)\"
+# The root provider preserves existing guest ownership and modes. Private bind
+# exports lend exact descriptors to QEMU; no recursive ownership migration.
+test ! -L '$STORE/hostfs/work'
+test ! -L '$STORE/hostfs/sound'
+mkdir -p '$STORE/hostfs/work' '$STORE/hostfs/sound'
 install -m 0644 '$STORE/current/udev/99-astra-qemu.rules' \
     /etc/udev/rules.d/99-astra-qemu.rules
 udevadm control --reload-rules
-if ! cmp -s \"\$module_source\" \"\$module_target\"; then
-    # No helper may submit after this stop; never free a live DMA arena.
-    '$STORE/current/bin/astra-terminal-display' --stop-render
-    modprobe -r astra_graphics_arena
-    install -m 0644 \"\$module_source\" \"\$module_target\"
-    depmod -a
-fi
 modprobe astra_graphics_arena
 udevadm trigger --subsystem-match=misc
 udevadm trigger --subsystem-match=input
@@ -189,6 +242,7 @@ systemctl status astra-remote-desktop.service --no-pager >&2 || true
 echo 'remote desktop did not start from the selected release' >&2
 exit 1
 "
+kernel_action confirm "$STORE/releases/$IDENTITY"
 $SSH "$BOARD" "PYTHONDONTWRITEBYTECODE=1 python3 \
 '$STORE/current/bin/astra-release.py' prune '$STORE'"
 INCOMING=

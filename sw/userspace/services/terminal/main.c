@@ -98,7 +98,7 @@ static uint32_t load_title_icon(AstraArea *area, uint32_t *length)
     AstraAicon icon;
     char *bundle_manifest_text = NULL;
     void *icon_bytes = NULL;
-    char path[ASTRA_VFS_PATH_MAX];
+    char *path;
     uint32_t manifest_length = 0u;
     uint32_t line = 0u;
     uint32_t status;
@@ -119,8 +119,15 @@ static uint32_t load_title_icon(AstraArea *area, uint32_t *length)
         return TERMINAL_FAIL_ICON;
     }
     astra_runtime_deallocate(bundle_manifest_text);
+    path = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
+    if (path == NULL) {
+        astra_bundle_manifest_destroy(&manifest);
+        (void)astra_log("Terminal icon path allocation failed");
+        return ASTRA_STATUS_LIMIT;
+    }
     if (astra_path_qualify(
-            "APP", "", manifest.icon, path, sizeof(path)) != ASTRA_VFS_OK) {
+            "APP", "", manifest.icon, path, ASTRA_VFS_PATH_MAX) != ASTRA_VFS_OK) {
+        astra_runtime_deallocate(path);
         astra_bundle_manifest_destroy(&manifest);
         (void)astra_log("Terminal icon path failed");
         return TERMINAL_FAIL_ICON;
@@ -128,6 +135,7 @@ static uint32_t load_title_icon(AstraArea *area, uint32_t *length)
     astra_bundle_manifest_destroy(&manifest);
     status = astra_process_read_file_alloc(
         &process_filesystem, path, &icon_bytes, length);
+    astra_runtime_deallocate(path);
     if (status != ASTRA_VFS_OK || *length == 0u ||
         *length > ASTRA_WINDOW_TITLE_ICON_BYTES_MAX ||
         astra_aicon_open(icon_bytes, *length, &icon) != ASTRA_BUNDLE_OK) {

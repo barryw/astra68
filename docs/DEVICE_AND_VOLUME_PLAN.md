@@ -1,84 +1,62 @@
 # Devices, volumes, and boot selection
 
-Status: superseded as the production design by
-[the filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md), which now owns
-the device/partition/volume model, boot-selection rules, namespace grants, and
-mount/hotplug/eject lifecycle (PRD FS01–FS06, FS07–FS11, FS12–FS18, FS25–FS31,
-FS39–FS41). This page summarizes what is retained and links to the PRD rather
-than restating it. The
-["Current implementation (to be replaced)"](#current-implementation-to-be-replaced)
-section below is the only part of this page describing what actually runs
-today.
+The [filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md) owns the complete
+device, partition, namespace and removal contract. This page describes the
+implemented native model; [Current State](CURRENT_STATE.md) distinguishes
+software gates from physical release acceptance.
 
-## What the PRD retains from this plan
+## Selection and identity
 
-Per the PRD's architectural-authority section, these rules carry forward
-unchanged and are specified in full there, not here:
+The internal SD card remains the fixed system disk. The Linux provider verifies
+the configured system source; missing, ambiguous or corrupt system storage
+refuses normal startup rather than selecting another attached disk. Supervisor
+bootstraps read-only through this provider and transfers responsibility to
+HostFS. The DE25 boot chain remains U-Boot, Linux, QEMU/MC68040, Astra ROM and
+Supervisor.
 
-- The internal SD card is the fixed Astra system disk; selection is explicit
-  and verified, never enumeration order (PRD FS07–FS08).
-- Devices, inserted media, partitions, filesystems, mounted instances,
-  namespace bindings, and open objects are distinct identities (PRD FS01).
-- Naming: `/dev/disk0`, `/dev/disk0p1`, and volume conveniences `/dh0`,
-  `/dh1`, `/usb0`, `/cd0`, `/ram` (`/df0` reserved for an enabled floppy
-  provider); ordinals count volumes of a class, not physical devices
-  (PRD FS02).
-- One native mount authority; labels are mutable display metadata and never
-  grant authority; stable policy keys are verified filesystem UUIDs
-  (PRD FS04).
-- Names are not recycled within a boot; a reinserted medium gets a new mount
-  generation (PRD FS03).
-- No alternate-media boot fallback: missing, ambiguous, or corrupt system
-  media stops normal startup with a diagnostic rather than falling back to
-  another partition or device (PRD FS08).
+Device, inserted medium, source, mounted instance and open object are distinct
+identities. Every public reference carries its provider epoch, ID and
+generation. Labels are display metadata, never authority. Catalog pagination
+refuses a changed snapshot, and subscribers refresh after coalesced invalidation.
 
-## What changes
+Mounted names are `/dh0`, `/dh1`, `/usb0`, `/usb1`, `/cd0`, `/cd1`, `/ram0`,
+and so on. Ordinals count mounted volumes of a class, not physical devices.
+Names are reusable only after actual retirement; a new incarnation cannot
+reuse an old reference. `/system` is a protected namespace alias for `/dh0`
+and exposes link metadata. Independently granted roots such as `/home`, `/apps`,
+`/commands`, `/libs`, `/local`, `/config`, `/cwd` and `/work` report directories
+and retain their own rights. Their backing location does not make them aliases
+or create independent mounted instances.
 
-- **Linux, not Astra, does the mounting.** The device/medium/partition/mount
-  records the PRD defines (FS01, "Inventory records and control operations")
-  are owned by the Linux provider; Astra's supervisor owns policy and
-  published bindings over those records, not a second guessed copy of them.
-- **Grants replace the old display-only root links.** `/system`, `/home`,
-  `/apps`, `/commands`, `/libs`, `/local`, `/config`, `/cwd`, and `/work`
-  become independently scoped directory bindings with their own rights;
-  `lstat` reports directories rather than invented symlinks (PRD FS13). This
-  deliberately replaces this document's earlier "disk-backed root
-  conveniences... link to their granted backing roots" description.
-- **CDFS is gone, not deferred.** Optical media is a Linux ISO9660/UDF mount
-  like any other Linux-mounted volume; there is no guest CDFS adapter to
-  finish (see [Storage and VFS](STORAGE_AND_VFS.md#superseded-by-the-prd)).
-- **`/ram` is Linux tmpfs**, not the guest `ramfs` service described below
-  (PRD FS36).
-- **Hotplug, unmount, safe-remove, and eject** get one real lifecycle
-  (discovered/unmounted → mounting → mounted → quiescing → unmounted or
-  lost/failed) driven by actual Linux mount state, replacing this document's
-  "storage services have shutdown hooks" starting point (PRD FS25–FS31).
+## Mount and removal
 
-## Current implementation (to be replaced)
+Linux discovery and probing feed one provider catalog. Supported writable USB
+filesystems default to writable mounts, subject to filesystem and device
+restrictions. Optical volumes are always read-only. RAM uses bounded tmpfs.
+An ISO mount retains an already-open native file and its actual backing inode;
+it does not accept an application-supplied Linux path.
 
-What actually runs today, verified against source:
+`volumes`, `volumes --all --references`, `df`, `mount`, `unmount` and `lsof`
+use native inventory, root brokers and administrator/usage capabilities.
+`mount --image /native/file.iso` mounts an ISO; `unmount --eject /cd0` performs
+safe unmount before physical eject. Successful removal waits for actual cleanup.
+Failed cleanup remains visible for retry; the running system volume cannot be
+unmounted. See [Filesystem Kit](FILESYSTEM_KIT.md) for command/API details.
 
-- **Namespace.** `sw/userspace/supervisor/src/vfs_host.c`
-  (`bind_standard_assigns`) binds `DH0`, `SYSTEM`, `SERVICES`, `STARTUP`,
-  `CONFIG`, `LIBS`, `APPS`, `HOME`, and `COMMANDS` as assigns into the one
-  storage-service volume. These are assign-table entries with independent
-  rights, not separate mounted volumes and not genuine symlinks — matching
-  the PRD's own description of this gap ("Some conveniences report synthetic
-  symlink metadata while operations use independent grants").
-- **System-volume selection.** `sw/userspace/supervisor/src/volume.c`
-  (bootstrap) and `sw/userspace/services/storage/main.c` (the running
-  service) each independently scan the MBR for the first Linux-type
-  partition and mount it with guest lwext4; there is no verified UUID/
-  identity handoff between them yet, and no persisted
-  `/system/config/mounts.conf` policy file exists in the tree.
-  `/dev/disk0`-style naming, `/dev` as a rights-checked adapter, `/usb0`,
-  `/cd0`, device/partition inventory, and hotplug are design in the PRD, not
-  implemented.
-- **Boot chain.** The DE25 HPS runs U-Boot, then Linux, then the Astra QEMU
-  ROM containing Axiom and the initial supervisor, unchanged from this
-  document's earlier description; nothing above changes that chain.
-- **Tools.** No `lsblk`, `blkid`, `mount`, `umount`, or safe-remove/eject
-  tools exist yet; inventory and mount control are PRD FS39 work.
+Desktop watches the same catalog, shows mounted volume labels (or class names),
+and opens Atlas with an exact incarnation on double-click. Atlas lists the
+selected root's files and folders through a readonly native grant. Desktop's
+Unmount context action fences admission and reports exact retained objects when
+busy; it removes the icon after confirmed removal. Device loss withdraws stale
+results and cannot redirect an existing window or CWD to replacement media.
 
-See [Storage and VFS](STORAGE_AND_VFS.md#current-implementation-to-be-replaced)
-for the HostFS, storage-service, and RAM-storage facts this namespace sits on.
+## Acceptance limits
+
+Real provider ISO mounts, RAM remounts, native/POSIX access, busy refusal,
+namespace refresh, source retirement and HostFS recovery have software gates.
+Physical USB and CD/DVD drives were unavailable during this completion work;
+image mounts do not qualify physical discovery, optical media change or eject.
+The final kernel must ship the supported Linux drivers and pass together with
+the exact provider, QEMU, ROM, libraries, policy and preserved data image.
+
+Network filesystem mounts are outside the current work.

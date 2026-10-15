@@ -130,7 +130,7 @@ static uint32_t parent_of(AstraVfsRamBackend *fs, AstraVfsRamNode *start,
                           const char *path, AstraVfsRamNode **parent,
                           char name[ASTRA_VFS_NAME_MAX])
 {
-    char prefix[ASTRA_VFS_PATH_MAX];
+    char *prefix;
     size_t length;
     size_t base;
     uint32_t status;
@@ -139,7 +139,7 @@ static uint32_t parent_of(AstraVfsRamBackend *fs, AstraVfsRamNode *start,
         return ASTRA_VFS_ERR_INVALID;
     length = strlen(path);
     while (length > 1u && path[length - 1u] == '/') --length;
-    if (length == 0u || length >= sizeof(prefix))
+    if (length == 0u || length >= ASTRA_VFS_PATH_MAX)
         return ASTRA_VFS_ERR_INVALID;
     base = length;
     while (base != 0u && path[base - 1u] != '/') --base;
@@ -153,9 +153,13 @@ static uint32_t parent_of(AstraVfsRamBackend *fs, AstraVfsRamNode *start,
         return walk(fs, start, ".", parent, NULL, NULL);
     if (base == 1u && path[0] == '/')
         return walk(fs, fs->root, "/", parent, NULL, NULL);
+    prefix = fs->allocate(base);
+    if (prefix == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     memcpy(prefix, path, base - 1u);
     prefix[base - 1u] = '\0';
     status = walk(fs, start, prefix, parent, NULL, NULL);
+    fs->deallocate(prefix);
     if (status == ASTRA_VFS_OK && (*parent)->kind != ASTRA_VFS_KIND_DIRECTORY)
         status = ASTRA_VFS_ERR_NOT_DIR;
     return status;

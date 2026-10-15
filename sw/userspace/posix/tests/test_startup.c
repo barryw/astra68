@@ -24,7 +24,6 @@ static int signal_prepared;
 static int program_calls;
 static int ready_calls;
 static int closed_calls;
-static int bootstrap_present;
 static uint32_t ready_result;
 static const AstraStartupInfo *seen_startup;
 static const AstraStartupCapability bootstrap = { .handle = 37u };
@@ -37,20 +36,23 @@ static char *environment[] = {
     "TMPDIR=/ram0/tmp", "PATH=/local/commands:/commands",
     "TERM=astra-256color", "OLDPWD=relative:literal", NULL
 };
+static _Alignas(ASTRA_STARTUP_BLOCK_SIZE) struct {
+    AstraStartupInfo info;
+    AstraStartupCapability capabilities[1];
+    uint8_t padding[ASTRA_STARTUP_BLOCK_SIZE - ASTRA_STARTUP_INFO_SIZE -
+                    ASTRA_STARTUP_CAPABILITY_SIZE];
+} startup_block;
+static _Alignas(ASTRA_STARTUP_BLOCK_SIZE) struct {
+    uint32_t arguments[8];
+    uint32_t environment[8];
+    char text[512];
+} payload;
 
 void
 astra_posix_start(const AstraStartupInfo *startup)
 {
     seen_startup = startup;
     environ = environment;
-}
-
-const AstraStartupCapability *
-astra_startup_capability(const AstraStartupInfo *startup, const char *name)
-{
-    assert(startup == seen_startup);
-    assert(strcmp(name, ASTRA_CAPABILITY_SERVICE_READY) == 0);
-    return bootstrap_present ? &bootstrap : NULL;
 }
 
 uint32_t
@@ -114,27 +116,64 @@ main(int argc, char **argv)
         return 73;
     }
     {
-        AstraStartupInfo startup = {
+        AstraStartupInfo *startup = &startup_block.info;
+        uint32_t used = 0u;
+
+        for (uint32_t index = 0u; index < 7u; ++index) {
+            size_t length = strlen(arguments[index]) + 1u;
+
+            payload.arguments[index] = (uint32_t)(uintptr_t)(payload.text + used);
+            memcpy(payload.text + used, arguments[index], length);
+            used += (uint32_t)length;
+        }
+        for (uint32_t index = 0u; index < 7u; ++index) {
+            size_t length = strlen(environment[index]) + 1u;
+
+            payload.environment[index] = (uint32_t)(uintptr_t)(payload.text + used);
+            memcpy(payload.text + used, environment[index], length);
+            used += (uint32_t)length;
+        }
+        *startup = (AstraStartupInfo){
+            .magic = ASTRA_STARTUP_MAGIC,
+            .abi_version = ASTRA_STARTUP_ABI_VERSION,
+            .program_entry = 0x00100000u,
+            .header_size = ASTRA_STARTUP_INFO_SIZE,
+            .total_size = ASTRA_STARTUP_INFO_SIZE + ASTRA_STARTUP_CAPABILITY_SIZE,
+            .syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION,
+            .capability_count = 1u,
+            .capabilities_address = (uint32_t)(uintptr_t)startup_block.capabilities,
             .argc = 7u,
-            .argv_address = (uint32_t)(uintptr_t)arguments,
+            .argv_address = (uint32_t)(uintptr_t)payload.arguments,
             .environment_count = 7u,
-            .environment_address = (uint32_t)(uintptr_t)environment
+            .environment_address = (uint32_t)(uintptr_t)payload.environment,
+            .vector_data_address = (uint32_t)(uintptr_t)&payload,
+            .vector_data_size = sizeof(payload.arguments) +
+                                sizeof(payload.environment) + used,
         };
+        startup_block.capabilities[0] = bootstrap;
+        astra_capability_name_set(startup_block.capabilities[0].name,
+                                   ASTRA_CAPABILITY_SERVICE_READY);
 
         entered = 1;
-        bootstrap_present = 1;
-        assert(astra_posix_enter(&startup, main) == 73);
-        assert(seen_startup == &startup);
+        assert(astra_posix_enter(startup, main) == 73);
+        assert(seen_startup == startup);
         assert(signal_prepared == 1);
         assert(program_calls == 1 && ready_calls == 1 && closed_calls == 1);
 
         ready_result = ASTRA_SYSCALL_INVALID_ARGUMENT;
-        assert(astra_posix_enter(&startup, main) == 1);
+        assert(astra_posix_enter(startup, main) == 1);
         assert(program_calls == 1 && ready_calls == 2 && closed_calls == 2);
 
-        bootstrap_present = 0;
-        assert(astra_posix_enter(&startup, main) == 73);
+        startup->capability_count = 0u;
+        startup->capabilities_address = 0u;
+        startup->total_size = ASTRA_STARTUP_INFO_SIZE;
+        assert(astra_posix_enter(startup, main) == 73);
         assert(program_calls == 2 && ready_calls == 2 && closed_calls == 2);
+        assert(astra_posix_enter(NULL, main) == 1);
+        assert(program_calls == 2);
+        startup->vector_data_address = 1u;
+        assert(astra_posix_enter(startup, main) == 1);
+        assert(program_calls == 2);
     }
     return 0;
 }

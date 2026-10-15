@@ -48,11 +48,24 @@ void *astra_runtime_reallocate(void *pointer, size_t size)
 {
     return realloc(pointer, size);
 }
+void *astra_runtime_allocate(size_t size) { return malloc(size); }
 
 void astra_runtime_deallocate(void *pointer)
 {
     free(pointer);
 }
+
+static const AstraAssignTable *namespace_table;
+static uint32_t namespace_acquires, namespace_releases;
+static uint32_t namespace_acquire(const AstraAssignTable **table, void **owner)
+{
+    *table = namespace_table;
+    *owner = (void *)namespace_table;
+    ++namespace_acquires;
+    return ASTRA_VFS_OK;
+}
+static void namespace_release(void *owner)
+{ assert(owner != NULL); ++namespace_releases; }
 
 uint32_t astra_vfs_connect(AstraVfsClient *value, AstraVfsTransport transport,
                            void *context)
@@ -266,7 +279,9 @@ uint32_t astra_vfs_lookup(AstraVfsClient *value, AstraVfsFile directory, const c
                            AstraVfsDirEntry *meta, AstraVfsEscape *escape)
 {
     (void)links_left;
-    memset(escape, 0, sizeof(*escape));
+    uint8_t *path_buffer = escape->path;
+    uint32_t path_capacity = escape->capacity;
+    *escape = (AstraVfsEscape){.path = path_buffer, .capacity = path_capacity};
     if (directory == 2u) {
         if (same(path, "absolute-link") || same(path, "../work/note")) {
             escape->kind = same(path, "absolute-link") ? ASTRA_VFS_ESCAPE_SYMLINK :
@@ -632,8 +647,10 @@ uint32_t astra_vfs_link(AstraVfsClient *value, const char *from,
 
 uint32_t astra_vfs_port_transport(void *context, uint32_t operation,
                                   const AstraVfsRequest *request,
+                                  const AstraVfsTransfer *transfer,
                                   AstraVfsReply *reply)
 {
+    (void)transfer;
     (void)context;
     (void)operation;
     (void)request;
@@ -952,8 +969,96 @@ static void test_namespace_at_continuation(void)
     astra_assign_table_destroy(&table);
 }
 
+static uint32_t inherited_releases;
+static void release_inherited(AstraVfsClient *value, uint32_t epoch)
+{
+    assert(value == &client && epoch == 4u);
+    ++inherited_releases;
+}
+
+static void test_copied_native_tokens_do_not_reach_reused_child_tokens(void)
+{
+    AstraFile old = ASTRA_FILE_INIT;
+    AstraFile fresh;
+    AstraFile directory_file = ASTRA_FILE_INIT;
+    AstraDirectory directory = ASTRA_DIRECTORY_INIT;
+    AstraDirectoryEntry entry;
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    uint8_t byte;
+    uint32_t moved, count;
+    uint64_t offset;
+
+    client.ownership_epoch = 4u;
+    old._private_client = &client;
+    old._private_file = 1u;
+    old._private_ownership_epoch = 4u;
+    old._private_flags = ASTRA_VFS_OPEN_READ;
+    old._private_kind = ASTRA_VFS_KIND_FILE;
+    directory_file = old;
+    directory_file._private_file = 2u;
+    directory_file._private_kind = ASTRA_VFS_KIND_DIRECTORY;
+    assert(astra_filesystem_directory_from_file(&directory_file, &directory) == ASTRA_VFS_OK);
+    directory._private_reserved |= 4u; /* The directory now owns that file. */
+    client.ownership_epoch = 5u;
+    client.description_release = release_inherited;
+    inherited_releases = 0u;
+    fresh = old;
+    fresh._private_ownership_epoch = 5u;
+    uint32_t reads_before = read_calls;
+    assert(astra_filesystem_read(&old, &byte, 1u, &moved) == ASTRA_VFS_ERR_LOST);
+    assert(astra_filesystem_read_at(&old, 0u, &byte, 1u, &moved) == ASTRA_VFS_ERR_LOST);
+    assert(astra_filesystem_file_info(&old, &info) == ASTRA_VFS_ERR_LOST);
+    assert(astra_filesystem_seek(&old, 0, ASTRA_FILE_SEEK_BEGIN, &offset) == ASTRA_VFS_ERR_LOST);
+    assert(read_calls == reads_before);
+    assert(astra_filesystem_directory_read(&directory, &entry, 1u, &count) == ASTRA_VFS_ERR_LOST);
+    assert(astra_filesystem_directory_rewind(&directory) == ASTRA_VFS_ERR_LOST);
+    assert(astra_filesystem_read_at(&fresh, 0u, &byte, 1u, &moved) == ASTRA_VFS_OK);
+    assert(read_calls == reads_before + 1u);
+    assert(astra_filesystem_close(&old) == ASTRA_VFS_ERR_LOST);
+    assert(old._private_client == NULL && inherited_releases == 1u);
+    assert(astra_filesystem_close(&old) == ASTRA_VFS_ERR_BAD_HANDLE && inherited_releases == 1u);
+    astra_filesystem_directory_close(&directory);
+    assert(directory._private_active == 0u && inherited_releases == 2u);
+    astra_filesystem_directory_close(&directory);
+    assert(inherited_releases == 2u);
+    client.description_release = NULL;
+    assert(astra_filesystem_close(&fresh) == ASTRA_VFS_OK);
+    client.ownership_epoch = 0u;
+}
+
 int main(void)
 {
+    {
+        AstraAssignTable old = ASTRA_ASSIGN_TABLE_INIT, replacement = ASTRA_ASSIGN_TABLE_INIT;
+        AstraFilesystem facade = ASTRA_FILESYSTEM_INIT;
+        AstraDirectory first = ASTRA_DIRECTORY_INIT, second = ASTRA_DIRECTORY_INIT;
+        AstraDirectoryEntry entry;
+        uint32_t count;
+        assert(astra_assign_bind(&old, "DH0", 7u, ASTRA_RIGHT_READ, "") == ASTRA_VFS_OK);
+        assert(astra_assign_bind(&old, "USB0", 8u, ASTRA_RIGHT_READ, "") == ASTRA_VFS_OK);
+        assert(astra_assign_bind(&replacement, "DH0", 7u, ASTRA_RIGHT_READ, "") == ASTRA_VFS_OK);
+        assert(astra_assign_bind(&replacement, "CD0", 8u, ASTRA_RIGHT_READ, "") == ASTRA_VFS_OK);
+        assert(astra_filesystem_attach(&facade, &old, client_for, NULL, NULL) == ASTRA_VFS_OK);
+        facade._private_namespace_acquire = namespace_acquire;
+        facade._private_namespace_release = namespace_release;
+        namespace_table = &old;
+        assert(astra_filesystem_directory_open(&facade, "/", &first) == ASTRA_VFS_OK);
+        assert(astra_filesystem_directory_read(&first, &entry, 1u, &count) == ASTRA_VFS_OK && count == 1u);
+        assert(strcmp(entry.name, "dh0") == 0);
+        namespace_table = &replacement;
+        assert(astra_filesystem_directory_read(&first, &entry, 1u, &count) == ASTRA_VFS_OK && count == 1u);
+        assert(strcmp(entry.name, "usb0") == 0);
+        assert(astra_filesystem_directory_open(&facade, "/", &second) == ASTRA_VFS_OK);
+        assert(astra_filesystem_directory_read(&second, &entry, 1u, &count) == ASTRA_VFS_OK && count == 1u);
+        assert(astra_filesystem_directory_read(&second, &entry, 1u, &count) == ASTRA_VFS_OK && count == 1u);
+        assert(strcmp(entry.name, "cd0") == 0);
+        assert(namespace_acquires == 2u && namespace_releases == 0u);
+        astra_filesystem_directory_close(&first);
+        astra_filesystem_directory_close(&second);
+        assert(namespace_releases == 2u);
+        astra_filesystem_detach(&facade);
+        astra_assign_table_destroy(&old); astra_assign_table_destroy(&replacement);
+    }
     test_namespace_at_continuation();
     test_unlink_readonly_missing();
     test_protected_root_links();
@@ -1374,6 +1479,7 @@ int main(void)
     astra_filesystem_detach(&filesystem);
     astra_assign_table_destroy(&assigns);
     test_provider_position_is_the_authority();
+    test_copied_native_tokens_do_not_reach_reused_child_tokens();
     puts("filesystem.library tests passed");
     return 0;
 }

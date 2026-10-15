@@ -37,16 +37,28 @@
 struct AstraVfsClient;
 struct AstraVfsBackendOps;
 
+/** Native borrowed transfer view. Port transports copy inputs into the bound
+ * area and copy result bytes back; local transports use these same bounded
+ * operands directly. None of these pointers is part of the wire record. */
+typedef struct AstraVfsTransfer {
+    const void *input; /**< Complete immutable pathname operand bytes. */
+    uint32_t input_size; /**< Exact input bytes, including operand terminators. */
+    void *output; /**< Caller-owned result buffer, or NULL. */
+    uint32_t output_capacity; /**< Result bytes available in output. */
+} AstraVfsTransfer;
+
 /**
  * Exchange one VFS request with a backend transport.
  * @param context Transport-owned context.
  * @param operation ASTRA_VFS_OP_* operation.
  * @param request Request to send.
+ * @param transfer Bounded native input/output payload view.
  * @param reply Receives the service reply.
  * @return ASTRA_VFS_* transport status.
  */
 typedef uint32_t (*AstraVfsTransport)(void *context, uint32_t operation,
                                       const AstraVfsRequest *request,
+                                      const AstraVfsTransfer *transfer,
                                       AstraVfsReply *reply);
 /**
  * Locate the shared payload area for a connected client.
@@ -61,8 +73,12 @@ typedef const uint8_t *(*AstraVfsAreaPayload)(
 typedef struct AstraVfsCallState {
     /** @cond ASTRA_INTERNAL */
     AstraVfsRequest request;
-    AstraVfsRenameRequest rename_request;
     AstraVfsReply reply;
+    AstraVfsTransfer transfer;
+    uint8_t *path_bytes;
+    uint32_t path_capacity;
+    uint8_t *result_bytes;
+    uint32_t result_capacity;
     /** @endcond */
 } AstraVfsCallState;
 
@@ -79,7 +95,7 @@ typedef struct AstraVfsPortThreadState {
     /** @cond ASTRA_INTERNAL */
     uint32_t owner_thread;
     AstraVfsCallState client_call;
-    AstraVfsRequestMessageBuffer outgoing;
+    AstraVfsRequestMessage outgoing;
     AstraVfsReplyMessage incoming;
     AstraVfsRequest area_request;
     AstraVfsRequest request;
@@ -119,10 +135,12 @@ typedef struct AstraVfsPortAcceleratorOps {
     /** Exchange one metadata request and reply. */
     uint32_t (*transport)(struct AstraVfsClient *client, uint32_t operation,
                           const AstraVfsRequest *request,
+                          const AstraVfsTransfer *transfer,
                           AstraVfsReply *reply);
     /** Exchange one request carrying bulk data. */
     uint32_t (*bulk)(struct AstraVfsClient *client, uint32_t operation,
-                     const AstraVfsRequest *request, void *buffer,
+                     const AstraVfsRequest *request,
+                     const AstraVfsTransfer *transfer, void *buffer,
                      uint32_t capacity, AstraVfsReply *reply);
 } AstraVfsPortAcceleratorOps;
 
@@ -133,6 +151,9 @@ typedef struct AstraVfsClient {
     void *context;
     AstraVfsAreaPayload area_payload;
     AstraVfsCallAcquire call_acquire;
+    void (*description_acquire)(struct AstraVfsClient *client);
+    void (*description_release)(struct AstraVfsClient *client, uint32_t epoch);
+    uint32_t ownership_epoch;
     ASTRA_VFS_ATOMIC(uint32_t) session;
     ASTRA_VFS_ATOMIC(uint16_t) version; /* the version agreed at connect */
     ASTRA_VFS_ATOMIC(uint32_t) features; /* HELLO may refresh during calls. */

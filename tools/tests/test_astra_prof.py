@@ -181,7 +181,7 @@ assert len(annotated) == 1 and annotated[0]["executions"] == 8
 
 signature = "00112233445566778899aabbccddeeff"
 relocatable = {
-    "name": "system.library.3", "path": "loader.library.1",
+    "name": "system.library.4", "path": "loader.library.1",
     "base": None, "bias": 0,
     "relocatable": True, "addresses": [0x1000],
     "symbols": [(0x1000, 0x20, "astra_call")],
@@ -194,7 +194,7 @@ relocation_profile = [{"blocks": [{
 inferred = module.relocate_images(relocation_profile, [relocatable])
 assert len(inferred) == 1 and inferred[0]["bias"] == 0x20000000
 assert module.resolve_image(inferred, 0x20001000, signature)[:2] == \
-    ("system.library.3", "astra_call")
+    ("system.library.4", "astra_call")
 ambiguous = {**relocatable, "executable_segments": [
     (0x1000, bytes.fromhex(signature) * 2)]}
 assert module.relocate_images(relocation_profile, [ambiguous]) == []
@@ -252,7 +252,7 @@ with tempfile.TemporaryDirectory() as directory:
     image_path = root / "sw/userspace/services/demo/build/m68k/demo.elf"
     library_path = root / \
         "sw/userspace/runtime/build/m68k/libraries/runtime.library.1"
-    ndk_path = root / "sw/userspace/system/build/m68k/libraries/system.library.3"
+    ndk_path = root / "sw/userspace/system/build/m68k/libraries/system.library.4"
     image_path.parent.mkdir(parents=True)
     library_path.parent.mkdir(parents=True)
     ndk_path.parent.mkdir(parents=True)
@@ -368,9 +368,10 @@ assert board_script.count('--deadline "$timeout"') == 4
 assert 'case "$timeout" in \'\'|*[!0-9]*|0)' in board_script
 assert 'ASTRA_BASE_STORAGE="$storage"' in board_script
 
-perf_wrapper = (tool.parent / "qemu-perf-wrapper.sh").read_text()
-assert 'PERF=${ASTRA_PERF_BINARY:-perf}' in perf_wrapper
-assert 'exec "$PERF" record' in perf_wrapper
+assert 'record -p "$peer_pid"' in board_script
+assert 'QEMU="$qemu"' in board_script
+assert 'qemu-perf-wrapper' not in board_script
+assert 'ASTRA_HOSTFS_ROOT' not in board_script
 
 plugin_source = (tool.parents[1] / "emu/qemu/qemu-9.2/contrib/plugins/astra_profile.c").read_text()
 assert "qemu_plugin_register_vcpu_tb_exec_inline_per_vcpu" in plugin_source
@@ -399,9 +400,10 @@ if sys.argv[1:] == ["--root"]:
         qemu.write_text('''#!/usr/bin/env python3
 import os, pathlib, socket, sys
 assert os.getuid() != 0 and os.getgid() != 0 and not os.getgroups()
-hostfs = pathlib.Path(os.environ['ASTRA_HOSTFS_ROOT'])
-assert hostfs.stat().st_uid == os.getuid(), 'HostFS is not owned by QEMU user'
-options = dict(v.split('=', 1) for v in sys.argv[2].split(',')[1:])
+exports = pathlib.Path(os.environ['ASTRA_EXPORTS_ROOT'])
+assert exports.stat().st_uid == 0, 'export metadata changed'
+assert (exports / 'work').is_dir() and (exports / 'sound').is_dir()
+options = dict(v.split('=', 1) for v in sys.argv[sys.argv.index('-plugin') + 1].split(',')[1:])
 control = socket.socket(socket.AF_UNIX)
 control.bind(options['control'])
 pathlib.Path(options['output']).write_text('unprivileged profile\\n')
@@ -445,5 +447,5 @@ sleep 5
         assert (work / "profile.aprof").read_text() == "unprivileged profile\n"
         assert (work / "trace.bin").read_text() == "trace\n"
         assert work.stat().st_uid == 0 and work.stat().st_mode & 0o022 == 0
-        assert (work / "hostfs").stat().st_uid == guest.pw_uid
+        assert (work / "exports").stat().st_uid == 0
         print("astra-prof unprivileged root-adapter: PASS")

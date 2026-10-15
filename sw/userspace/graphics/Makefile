@@ -18,6 +18,7 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
+
 FONT_SOURCE := ../../../assets/fonts/astra_8x16.hex
 FONT_HEADER := build/generated/astra_font8x8.inc
 UI_FONT_SOURCE := fonts/astra-workbench.afnt
@@ -51,7 +52,7 @@ GRAPHICS_LIBRARY_OBJECTS := build/m68k/library/graphics_library.o \
 	build/m68k/library/graphics_shared_surface.o
 FONT_LIBRARY_OBJECTS := build/m68k/library/font_library.o \
 	build/m68k/library/font_surface.o
-SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.3
+SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
@@ -67,6 +68,19 @@ pic: $(PIC_TARGET)
 
 renderer: $(RENDERER_TARGET)
 
+# Other owners' host tests link these products instead of compiling Graphics
+# source with their private flags.
+build/host/surface.o: src/surface.c $(NDK)/include/astra/surface.h \
+        $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
+		-ffunction-sections -fdata-sections -c $< -o $@
+
+build/host/surface_sanitize.o: src/surface.c $(NDK)/include/astra/surface.h \
+        $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) -ffunction-sections -fdata-sections -c $< -o $@
 $(TARGET): $(TARGET_OBJECTS)
 	$(ASTRA_REPLACE_ARCHIVE)
 
@@ -167,7 +181,7 @@ $(GRAPHICS_LIBRARY): $(GRAPHICS_LIBRARY_OBJECTS) $(GRAPHICS_LIBRARY_MAP) \
 		$(GRAPHICS_LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:system.library.3 -Wl,-l:runtime.library.1 \
+		-Wl,-l:system.library.4 -Wl,-l:runtime.library.1 \
 		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) \
@@ -204,7 +218,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
 		grep -q '^font.library.2 2.2.0 ABI 2.2$$'
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
-		grep -Fc 'Shared library: [system.library.3]')" = 1
+		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
@@ -225,7 +239,7 @@ $(HOST_TEST): src/surface.c src/render_builder.c src/texture_reference.c \
 		tests/test_surface.c \
 		../../../ndk/include/astra/surface.h include/astra/render_builder.h \
 		../../include/astra/rounded.h ../../include/astra/window_scene.h \
-		$(FONT_HEADER)
+		$(FONT_HEADER) ../../../fpga/arty/linux/astra_render_protocol.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/surface.c src/render_builder.c src/texture_reference.c \
@@ -247,7 +261,8 @@ test: $(HOST_TEST) $(HOST_AICON_TEST) build/host/test-drawer.aicon
 	./$(HOST_TEST)
 	./$(HOST_AICON_TEST) build/host/test-drawer.aicon
 
-sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) build/host/test-drawer.aicon
+sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
+	../../../fpga/arty/linux/astra_render_protocol.h build/host/test-drawer.aicon
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
 		src/surface.c src/render_builder.c src/texture_reference.c \
@@ -258,7 +273,8 @@ sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) build/host/test-d
 		-Wl,--gc-sections -o build/host/test_aicon_surface_sanitize
 	./build/host/test_aicon_surface_sanitize build/host/test-drawer.aicon
 
-analyze: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
+analyze: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
+	../../../fpga/arty/linux/astra_render_protocol.h
 	@mkdir -p build/analyzer
 	$(ANALYZER_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/surface.c -o build/analyzer/surface.o

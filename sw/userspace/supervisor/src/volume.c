@@ -1,404 +1,180 @@
-/*
- * Mounting a real ext4 volume from the device lease.
- *
- * This is the step that takes the filesystem off the host. Every other gate
- * mounts a volume held in RAM through the deterministic memory backend; here
- * lwext4 runs against the lease-backed device, which is the whole reason the
- * block facade was built with two interchangeable backends.
- *
- * The volume is found through the partition table rather than assumed to start
- * at sector 0. The card carries a FAT boot partition beside Astra's own, and
- * the port is given a window it may not address outside of, so a filesystem
- * defect cannot reach the partition that boots the machine.
- *
- * This is not a permanent home for filesystem policy. The supervisor verifies
- * what it was granted, and mounting the volume it was leased is the next thing
- * after proving a sector round-trip. The VFS service takes it over when it
- * exists.
- */
-
+/* Read-only bootstrap through the same provider backend HostFS owns later.
+ * Linux has already mounted and validated the system volume. No guest block
+ * lease or second filesystem engine participates in boot. */
 #include <volume.h>
 
-#include <astra/alloc.h>
-#include <astra/block.h>
-#include <astra/bytes.h>
-#include <astra/ext4_alloc.h>
-#include <astra/ext4_port.h>
-#include <astra/ext4_time.h>
-#include <astra/lease_block.h>
-#include <astra/mbr.h>
+#include <astra/host.h>
 #include <astra/runtime.h>
-#include <astra/supervisor.h>
-#include <astra/vfs_service.h>
+#include <astra/status.h>
+#include <astra/vfs_host_backend.h>
+#include <astra/vfs_host_transport.h>
 
-#include <ext4.h>
+#include <string.h>
 
-#define VOLUME_MOUNT_POINT "/vol/"
-#define VOLUME_DEVICE_NAME "astra"
-#define VOLUME_CHECK_PATH VOLUME_MOUNT_POINT "astra.chk"
-#define VOLUME_CHECK_BYTES 4096u
+static AstraVfsHostTransport transport;
+static AstraVfsHostBackend backend;
+static AstraVolumeCatalogPage catalog;
+static uint32_t session;
+static int claimed;
+static int initialized;
+static uintptr_t source;
+static uint32_t source_size;
+static uint8_t source_bytes[ASTRA_MEMORY_PAGE_SIZE];
 
-/* The bootstrap mount uses the same bounded filesystem profile as storage. */
-static AstraAllocScalar volume_arena[ASTRA_EXT4_ARENA_BYTES /
-                                     sizeof(AstraAllocScalar)];
-static AstraAllocator volume_allocator;
-
-static AstraExt4Port volume_port;
-/*
- * The window the check found. The loader keeps this mount only long enough to
- * read the manifest and storage image, then the protected service mounts the
- * same window for normal operation.
- */
-static AstraExt4Partition volume_window;
-static AstraBlockDevice *volume_block;
-static int volume_window_valid;
-/*
- * Set while lwext4 holds the volume. It is what tells the caller its device and
- * lease are still spoken for: the port keeps a pointer to the device across a
- * mount, so releasing either while this is set leaves the filesystem addressing
- * memory nobody owns any more.
- */
-static int volume_mounted;
-static ext4_file volume_source;
-static uint32_t volume_source_size;
-static int volume_source_open;
-static uint8_t volume_source_bytes[ASTRA_MEMORY_PAGE_SIZE];
-static uint8_t volume_sector[ASTRA_BLOCK_SECTOR_BYTES];
-static uint8_t volume_pattern[VOLUME_CHECK_BYTES];
-
-static uint8_t
-pattern_byte(uint32_t offset)
+uint32_t supervisor_volume_unmount(void)
 {
-    return (uint8_t)((offset * 7u) + (offset >> 8) + 0x5au);
-}
-
-/*
- * Finds Astra's volume in the partition table. A card with no table, or with no
- * Linux partition on it, is not a failure — there is simply nothing to mount.
- */
-static int
-find_volume(AstraBlockDevice *block, AstraExt4Partition *window)
-{
-    AstraMbrTable table;
-    const AstraMbrEntry *entry;
-
-    if (astra_mbr_read(block, volume_sector, sizeof(volume_sector), &table,
-                       0u) != ASTRA_BLOCK_OK) {
-        return 0;
-    }
-    entry = astra_mbr_find(&table, ASTRA_MBR_LINUX);
-    if (entry == NULL) {
-        return 0;
-    }
-    window->first_sector = entry->first_sector;
-    window->sector_count = entry->sector_count;
-    return 1;
-}
-
-static uint32_t
-write_and_verify(void)
-{
-    ext4_file file;
-    size_t moved = 0u;
-    uint32_t index;
-
-    for (index = 0u; index < VOLUME_CHECK_BYTES; ++index) {
-        volume_pattern[index] = pattern_byte(index);
-    }
-
-    if (ext4_fopen(&file, VOLUME_CHECK_PATH, "wb") != EOK) {
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    if (ext4_fwrite(&file, volume_pattern, VOLUME_CHECK_BYTES, &moved) != EOK ||
-        moved != VOLUME_CHECK_BYTES) {
-        (void)ext4_fclose(&file);
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    if (ext4_fclose(&file) != EOK) {
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-
-    /*
-     * Reopened rather than rewound, so the read goes back through the inode and
-     * the block cache instead of returning what is still in hand.
-     */
-    (void)memset(volume_pattern, 0, sizeof(volume_pattern));
-    if (ext4_fopen(&file, VOLUME_CHECK_PATH, "rb") != EOK) {
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    if (ext4_fsize(&file) != (uint64_t)VOLUME_CHECK_BYTES) {
-        (void)ext4_fclose(&file);
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    if (ext4_fread(&file, volume_pattern, VOLUME_CHECK_BYTES, &moved) != EOK ||
-        moved != VOLUME_CHECK_BYTES) {
-        (void)ext4_fclose(&file);
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    (void)ext4_fclose(&file);
-
-    for (index = 0u; index < VOLUME_CHECK_BYTES; ++index) {
-        if (volume_pattern[index] != pattern_byte(index)) {
-            return ASTRA_SUPERVISOR_FAIL_VOLUME;
-        }
-    }
-
-    /* Leave the volume as it was found. */
-    if (ext4_fremove(VOLUME_CHECK_PATH) != EOK) {
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    return 0u;
-}
-
-int
-supervisor_volume_is_mounted(void)
-{
-    return volume_mounted;
-}
-
-uint32_t
-supervisor_volume_read_alloc(const char *path, void **buffer,
-                             uint32_t *length)
-{
-    ext4_file file;
-    uint8_t *out = NULL;
-    uint64_t size;
-    size_t moved = 0u;
-    uint32_t done = 0u;
     uint32_t status = ASTRA_VFS_OK;
+    uint32_t released;
 
-    if (!volume_mounted || path == NULL || buffer == NULL || length == NULL) {
+    if (source != 0u)
         return ASTRA_VFS_ERR_INVALID;
+    if (session != 0u) {
+        status = astra_vfs_host_session_close(&transport, transport.generation, session);
+        session = 0u;
     }
+    if (claimed) {
+        released = astra_vfs_host_claim(&transport, transport.generation, 1, NULL);
+        if (status == ASTRA_VFS_OK)
+            status = released;
+        claimed = 0;
+    }
+    if (initialized) {
+        astra_vfs_host_transport_destroy(&transport);
+        initialized = 0;
+    }
+    return status;
+}
+
+uint32_t supervisor_volume_open(const AstraStartupInfo *startup)
+{
+    const AstraStartupCapability *device;
+    AstraVolumeReference volume;
+    uint32_t status;
+
+    if (initialized)
+        return ASTRA_VFS_ERR_INVALID;
+    device = astra_startup_capability(startup, ASTRA_CAPABILITY_HOST_DEVICE);
+    if (device == NULL || device->handle == 0u)
+        return ASTRA_VFS_ERR_BAD_HANDLE;
+    if (!astra_vfs_host_transport_init(&transport, device->handle, NULL, NULL, NULL))
+        return ASTRA_VFS_ERR_IO;
+    initialized = 1;
+    status = astra_vfs_host_claim(&transport, transport.generation, 0, NULL);
+    if (status == ASTRA_VFS_OK) {
+        claimed = 1;
+        status = astra_vfs_host_lookup_mount(&transport, transport.generation,
+            "/dh0", ASTRA_VOLUME_SYSTEM, &catalog, &volume);
+    }
+    if (status == ASTRA_VFS_OK)
+        status = astra_vfs_host_session_open(&transport, transport.generation,
+            0u, &volume, "/", ASTRA_HOST_FS_SESSION_READ_ONLY, 0u, &session);
+    if (status == ASTRA_VFS_OK &&
+        !astra_vfs_host_init(&backend, &transport, transport.generation, session))
+        status = ASTRA_VFS_ERR_INVALID;
+    if (status != ASTRA_VFS_OK) {
+        uint32_t cleanup = supervisor_volume_unmount();
+        return cleanup == ASTRA_VFS_OK ? status : cleanup;
+    }
+    return ASTRA_VFS_OK;
+}
+
+uint32_t supervisor_volume_source_open(const char *path, uint32_t *length)
+{
+    AstraVfsNodeInfo info = {0};
+    uintptr_t node = 0u;
+    uint32_t status;
+
+    if (session == 0u || source != 0u || path == NULL || length == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *length = 0u;
+    status = astra_vfs_host_ops()->open(&backend, path, ASTRA_VFS_OPEN_READ,
+        ASTRA_VFS_MODE_DEFAULT, &node, &info);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (info.kind != ASTRA_VFS_KIND_FILE || info.size > UINT32_MAX) {
+        uint32_t closed = astra_vfs_host_ops()->close(&backend, node);
+        return closed != ASTRA_VFS_OK ? closed :
+            info.kind != ASTRA_VFS_KIND_FILE ? ASTRA_VFS_ERR_INVALID : ASTRA_VFS_ERR_LIMIT;
+    }
+    source = node;
+    source_size = (uint32_t)info.size;
+    *length = source_size;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t supervisor_volume_source_read_at(void *context, uint32_t offset,
+    uint32_t length, const uint8_t **bytes, uint32_t *moved)
+{
+    uint32_t status;
+    uint32_t want = length < sizeof(source_bytes) ? length : sizeof(source_bytes);
+
+    (void)context;
+    if (source == 0u || bytes == NULL || moved == NULL || length == 0u ||
+        offset > source_size || length > source_size - offset)
+        return ASTRA_VFS_ERR_INVALID;
+    *bytes = NULL;
+    *moved = 0u;
+    status = astra_vfs_host_ops()->read(&backend, source, offset, source_bytes, want, moved);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (*moved == 0u || *moved > want)
+        return ASTRA_VFS_ERR_IO;
+    *bytes = source_bytes;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t supervisor_volume_source_close(void *context)
+{
+    uintptr_t node = source;
+
+    (void)context;
+    if (node == 0u)
+        return ASTRA_VFS_OK;
+    source = 0u;
+    source_size = 0u;
+    return astra_vfs_host_ops()->close(&backend, node);
+}
+
+uint32_t supervisor_volume_read_alloc(const char *path, void **buffer, uint32_t *length)
+{
+    uint32_t size;
+    uint32_t done = 0u;
+    uint8_t *out = NULL;
+    uint32_t status;
+    uint32_t closed;
+
+    if (buffer == NULL || length == NULL)
+        return ASTRA_VFS_ERR_INVALID;
     *buffer = NULL;
     *length = 0u;
-    if (ext4_fopen(&file, path, "rb") != EOK)
-        return ASTRA_VFS_ERR_NOT_FOUND;
-    size = ext4_fsize(&file);
-    if (size >= UINT32_MAX) {
+    status = supervisor_volume_source_open(path, &size);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    if (size == UINT32_MAX)
         status = ASTRA_VFS_ERR_LIMIT;
-    } else {
+    else {
         out = astra_runtime_allocate((size_t)size + 1u);
         if (out == NULL)
             status = ASTRA_VFS_ERR_LIMIT;
     }
-    while (status == ASTRA_VFS_OK && done < (uint32_t)size) {
-        moved = 0u;
-        if (ext4_fread(&file, out + done, (uint32_t)size - done,
-                       &moved) != EOK || moved == 0u ||
-            moved > (uint32_t)size - done) {
-            status = ASTRA_VFS_ERR_IO;
-            break;
+    while (status == ASTRA_VFS_OK && done < size) {
+        const uint8_t *bytes;
+        uint32_t moved;
+        status = supervisor_volume_source_read_at(NULL, done, size - done, &bytes, &moved);
+        if (status == ASTRA_VFS_OK) {
+            memcpy(out + done, bytes, moved);
+            done += moved;
         }
-        done += (uint32_t)moved;
     }
-    if (ext4_fclose(&file) != EOK && status == ASTRA_VFS_OK)
-        status = ASTRA_VFS_ERR_IO;
-    if (status != ASTRA_VFS_OK || done != (uint32_t)size) {
+    closed = supervisor_volume_source_close(NULL);
+    if (status == ASTRA_VFS_OK)
+        status = closed;
+    if (status != ASTRA_VFS_OK) {
         astra_runtime_deallocate(out);
-        return status == ASTRA_VFS_OK ? ASTRA_VFS_ERR_IO : status;
+        return status;
     }
-    out[done] = '\0';
+    out[size] = '\0';
     *buffer = out;
-    *length = done;
+    *length = size;
     return ASTRA_VFS_OK;
-}
-
-#ifdef ASTRA_SUPERVISOR_TEST
-void
-supervisor_volume_test_set_mounted(int mounted)
-{
-    volume_mounted = mounted;
-}
-#endif
-
-uint32_t
-supervisor_volume_source_open(const char *path, uint32_t *length)
-{
-    uint64_t size;
-
-    if (!volume_mounted || volume_source_open || path == NULL || length == NULL)
-        return ASTRA_VFS_ERR_INVALID;
-    *length = 0u;
-    if (ext4_fopen(&volume_source, path, "rb") != EOK)
-        return ASTRA_VFS_ERR_NOT_FOUND;
-    size = ext4_fsize(&volume_source);
-    if (size > UINT32_MAX) {
-        (void)ext4_fclose(&volume_source);
-        return ASTRA_VFS_ERR_LIMIT;
-    }
-    volume_source_size = (uint32_t)size;
-    volume_source_open = 1;
-    *length = volume_source_size;
-    return ASTRA_VFS_OK;
-}
-
-uint32_t
-supervisor_volume_source_read_at(void *context, uint32_t offset,
-                                 uint32_t length, const uint8_t **bytes,
-                                 uint32_t *moved)
-{
-    uint32_t read_length = length;
-    size_t read = 0u;
-
-    (void)context;
-    if (!volume_source_open || bytes == NULL || moved == NULL ||
-        length == 0u || offset > volume_source_size ||
-        length > volume_source_size - offset)
-        return ASTRA_VFS_ERR_INVALID;
-    *bytes = NULL;
-    *moved = 0u;
-    if (read_length > sizeof(volume_source_bytes))
-        read_length = sizeof(volume_source_bytes);
-    if (ext4_fseek(&volume_source, offset, SEEK_SET) != EOK ||
-        ext4_fread(&volume_source, volume_source_bytes, read_length, &read) !=
-            EOK ||
-        read != read_length)
-        return ASTRA_VFS_ERR_IO;
-    *bytes = volume_source_bytes;
-    *moved = (uint32_t)read;
-    return ASTRA_VFS_OK;
-}
-
-uint32_t
-supervisor_volume_source_close(void *context)
-{
-    int status;
-
-    (void)context;
-    if (!volume_source_open)
-        return ASTRA_VFS_OK;
-    volume_source_open = 0;
-    volume_source_size = 0u;
-    status = ext4_fclose(&volume_source);
-    return status == EOK ? ASTRA_VFS_OK : ASTRA_VFS_ERR_IO;
-}
-
-uint32_t
-supervisor_volume_unmount(void)
-{
-    if (!volume_mounted || volume_source_open)
-        return ASTRA_VFS_ERR_INVALID;
-    (void)ext4_journal_stop(VOLUME_MOUNT_POINT);
-    volume_mounted = 0;
-    if (ext4_umount(VOLUME_MOUNT_POINT) != EOK ||
-        ext4_device_unregister(VOLUME_DEVICE_NAME) != EOK)
-        return ASTRA_VFS_ERR_IO;
-    astra_ext4_alloc_bind(NULL);
-    return ASTRA_VFS_OK;
-}
-
-uint32_t
-supervisor_volume_device_status(void)
-{
-    return (uint32_t)volume_port.last_status;
-}
-
-uint32_t
-supervisor_volume_device_failure(void)
-{
-    /*
-     * Only the lease backend keeps this. A memory-backed device has no
-     * transfers to refuse, and asking one for a failure site would be reading
-     * a different backend's context as though it were a lease.
-     */
-    if (volume_block == NULL ||
-        volume_block->backend != astra_lease_block_backend()) {
-        return 0u;
-    }
-    return astra_lease_block_last_failure(volume_block->backend_context);
-}
-
-uint32_t
-supervisor_verify_volume(AstraBlockDevice *block, int keep_mounted)
-{
-    AstraExt4Partition window;
-    uint32_t failure;
-    int rc;
-
-    if (block == NULL) {
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    if (!find_volume(block, &window)) {
-        return 0u;
-    }
-    volume_window = window;
-    volume_block = block;
-    volume_window_valid = 1;
-    (void)astra_progress(ASTRA_SUPERVISOR_STAGE_VOLUME_FOUND);
-
-    if (astra_alloc_init(&volume_allocator, astra_ext4_alloc_classes,
-                         ASTRA_EXT4_ALLOC_CLASS_COUNT, volume_arena,
-                         sizeof(volume_arena)) != ASTRA_ALLOC_OK) {
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    astra_ext4_alloc_bind(&volume_allocator);
-    /*
-     * The filesystem's clock. Bound beside the allocator because it is the
-     * same kind of thing: lwext4 asks the port for both, and a volume mounted
-     * without one writes files with no date on them.
-     */
-    astra_ext4_clock_bind(astra_ext4_clock_machine);
-
-    if (astra_ext4_port_init(&volume_port, block, &window, volume_sector,
-                             sizeof(volume_sector), 0u) != ASTRA_EXT4_OK) {
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    if (ext4_device_register(astra_ext4_port_blockdev(&volume_port),
-                             VOLUME_DEVICE_NAME) != EOK) {
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    if (ext4_mount(VOLUME_DEVICE_NAME, VOLUME_MOUNT_POINT, false) != EOK) {
-        (void)ext4_device_unregister(VOLUME_DEVICE_NAME);
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    /*
-     * Recovery runs before anything is written. A volume left dirty by a power
-     * cut is exactly the case this has to survive, and ENOTSUP only means the
-     * volume carries no journal.
-     */
-    rc = ext4_recover(VOLUME_MOUNT_POINT);
-    if (rc != EOK && rc != ENOTSUP) {
-        (void)ext4_umount(VOLUME_MOUNT_POINT);
-        (void)ext4_device_unregister(VOLUME_DEVICE_NAME);
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    if (ext4_journal_start(VOLUME_MOUNT_POINT) != EOK) {
-        (void)ext4_umount(VOLUME_MOUNT_POINT);
-        (void)ext4_device_unregister(VOLUME_DEVICE_NAME);
-        return ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    volume_mounted = 1;
-    (void)astra_progress(ASTRA_SUPERVISOR_STAGE_VOLUME_MOUNTED);
-
-    failure = write_and_verify();
-
-    /* The loader reads the manifest and first service before handing off. */
-    if (keep_mounted && failure == 0u) {
-        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED);
-        return 0u;
-    }
-
-    (void)ext4_journal_stop(VOLUME_MOUNT_POINT);
-    volume_mounted = 0;
-    if (ext4_umount(VOLUME_MOUNT_POINT) != EOK) {
-        failure = ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    (void)ext4_device_unregister(VOLUME_DEVICE_NAME);
-
-    /*
-     * An unmounted volume must leave nothing allocated, the arena must not have
-     * been over-run, and the port must never have addressed outside its window.
-     * Any of those is a defect worth failing the boot for.
-     */
-    if (astra_alloc_metrics(&volume_allocator)->live_blocks != 0u ||
-        astra_alloc_metrics(&volume_allocator)->failures != 0u ||
-        astra_alloc_valid(&volume_allocator) == 0 ||
-        volume_port.out_of_partition_refusals != 0u) {
-        failure = ASTRA_SUPERVISOR_FAIL_VOLUME;
-    }
-    if (failure == 0u) {
-        (void)astra_progress(ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED);
-    }
-    return failure;
 }

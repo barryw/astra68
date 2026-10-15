@@ -7,6 +7,7 @@ READELF := $(CROSS)readelf
 HOST_CC ?= cc
 RUNTIME := ../runtime
 VFS := ../vfs
+SYSTEM := ../system
 NDK := ../../../ndk
 PICOLIBC ?= $(HOME)/picolibc-astra
 CPPFLAGS := -I../../include -I$(RUNTIME)/include -I$(VFS)/include \
@@ -19,6 +20,7 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto -ffreestanding \
 DEPFLAGS := -MMD -MP
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart-loader-pic.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs-loader-pic.a
+SYSTEM_LIB := $(SYSTEM)/build/m68k/libastra-pic.a
 PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
 OBJECTS := build/m68k/start.o build/m68k/self_relocate.o build/m68k/main.o \
 	build/m68k/loader_identity.o
@@ -30,6 +32,7 @@ all: contract
 dependencies:
 	+$(MAKE) -C $(RUNTIME) loader-pic
 	+$(MAKE) -C $(VFS) loader-pic
+	+$(MAKE) -C $(SYSTEM) pic
 
 ifeq ($(ASTRA_LOADER_DEPS_READY),)
 contract:
@@ -45,12 +48,12 @@ build/m68k/%.o: %.S
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(ASTRA_TARGET_ABI_FLAGS) -fPIC $(DEPFLAGS) -c $< -o $@
 
-$(TARGET): $(OBJECTS) $(RUNTIME_LIB) $(VFS_LIB) \
+$(TARGET): $(OBJECTS) $(RUNTIME_LIB) $(VFS_LIB) $(SYSTEM_LIB) \
 		$(PICOLIBC_LIB) $(ASTRA_SHARED_LINK_INPUTS)
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) -Wl,-e,_start \
 		-Wl,-soname,loader.library.1 -o $@ $(OBJECTS) \
-		-Wl,--start-group $(VFS_LIB) $(RUNTIME_LIB) \
+		-Wl,--start-group $(VFS_LIB) $(SYSTEM_LIB) $(RUNTIME_LIB) \
 		$(PICOLIBC_LIB) -lgcc -Wl,--end-group $(ASTRA_SHARED_LINK_END)
 
 contract: $(TARGET)

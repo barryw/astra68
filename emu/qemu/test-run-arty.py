@@ -31,10 +31,14 @@ def writable(root):
 def fixture(directory, delay, output="", status=0, mailbox_bytes=8193,
             payload_bytes=12345):
     container = pathlib.Path(directory)
+    container.chmod(0o755)
     root = container / "release"
     observed = container / "observed"
     root.mkdir()
-    observed.mkdir()
+    observed.mkdir(mode=0o777)
+    observed.chmod(0o777)
+    (observed / "exports/work").mkdir(parents=True)
+    (observed / "exports/sound").mkdir()
     (observed / "bin").mkdir()
     write_executable(observed / "bin/systemctl", f"""#!/bin/sh
 printf '%s\\n' "$@" >"{observed}/power.args"
@@ -46,6 +50,7 @@ exit "${{ASTRA_TEST_POWER_STATUS:-0}}"
     (root / "rom/astra_boot.bin").write_bytes(b"rom")
     (root / "storage-terminal.img").write_bytes(b"disk")
     shutil.copyfile(RELEASE_TOOL, root / "bin/astra-release.py")
+    shutil.copyfile(RUN_ARTY.with_name("runtime-supervisor.py"), root / "bin/runtime-supervisor.py")
     write_executable(root / "bin/astra-terminal-display", f"""#!/bin/sh
 if [ "$1" = --mailbox-bytes ]; then echo {mailbox_bytes}; exit 0; fi
 if [ "$1" = --payload-bytes ]; then echo {payload_bytes}; exit 0; fi
@@ -63,11 +68,11 @@ trap '' TERM
 while :; do sleep 1; done
 """)
     write_executable(root / "qemu/bin/qemu-system-m68k-astra", f"""#!/bin/sh
-test -d "$ASTRA_HOSTFS_ROOT" || exit 97
+test -n "$ASTRA_STORAGE_CONTROL_FD" && test -n "$ASTRA_STORAGE_PATH_FD" || exit 97
+test -z "${{ASTRA_HOSTFS_ROOT+x}}" || exit 98
 stat -c %s "$ASTRA_DISPLAY_MAILBOX_PATH" >"{observed}/mailbox.size"
 printf '%s\n' "$ASTRA_DISPLAY_PAYLOAD_PATH" >"{observed}/payload.path"
 stat -c %s "$ASTRA_DISPLAY_PAYLOAD_PATH" >"{observed}/payload.size"
-printf '%s\n' "$ASTRA_HOSTFS_ROOT" >"{observed}/hostfs.root"
 printf '%s\n' "$ASTRA_HOSTFS_MAX_DESCRIPTORS" "$ASTRA_HOSTFS_MAX_DIRECTORIES" >"{observed}/hostfs.budgets"
 printf '%s\\n' "$@" >"{observed}/qemu.args"
 id -u >"{observed}/qemu.uid"
@@ -75,6 +80,27 @@ id -g >"{observed}/qemu.gid"
 sleep {delay}
 printf '%s' {output!r}
 exit {status}
+""")
+    # Published selector is read-only data for python3, not an executable.
+    (root / "bin/astra-storage-image.py").write_text(
+        "#!/usr/bin/env python3\nprint('0 4096 fixture-uuid')\n")
+    write_executable(root / "bin/astra-storage", f"""#!/usr/bin/env python3
+import os, pathlib, sys
+args = sys.argv[1:]
+assert os.getuid() == 0
+uid, gid = args[args.index('--uid') + 1], args[args.index('--gid') + 1]
+assert int(uid) > 0 and int(gid) > 0
+pathlib.Path({str(observed / 'provider.args')!r}).write_text('\\n'.join(args))
+assert args[args.index('--discovery') + 1] == 'udev'
+assert args[args.index('--system') + 4] == 'fixture-uuid'
+assert args[args.index('--work') + 1] == {str(observed / 'exports/work')!r}
+assert args[args.index('--sound') + 1] == {str(observed / 'exports/sound')!r}
+assert args[args.index('--seed-sound') + 1] == {str(root / 'soundfonts')!r}
+os.environ['ASTRA_STORAGE_CONTROL_FD'] = '3'
+os.environ['ASTRA_STORAGE_PATH_FD'] = '4'
+os.execvp('setpriv', ['setpriv', '--reuid', uid, '--regid', gid,
+    '--clear-groups', '--no-new-privs', '--bounding-set=-all',
+    '--inh-caps=-all', '--ambient-caps=-all', *args[args.index('--') + 1:]])
 """)
     write_executable(root / "bin/astra-input-hotplug.py", f"""#!/usr/bin/env python3
 import os, pathlib, signal, sys, time
@@ -112,7 +138,8 @@ def environment(root, observed):
         ASTRA_STATE_ROOT=str(observed / "state"),
         ASTRA_RUN_ROOT=str(observed / "run"),
         ASTRA_LOG_ROOT=str(observed / "log"),
-        ASTRA_HOSTFS_ROOT=str(observed / "hostfs"),
+        ASTRA_EXPORTS_ROOT=str(observed / "exports"),
+        ASTRA_QEMU_USER="nobody",
         ASTRA_AUX_CPU=str(available[0]),
         ASTRA_DISPLAY_CPU=str(available[-1]),
         PATH=str(observed / "bin") + os.pathsep + os.environ["PATH"],
@@ -127,9 +154,11 @@ def root_privilege_boundary():
         root, observed = fixture(directory, 0.2)
         pathlib.Path(directory).chmod(0o755)
         observed.chmod(0o777)
-        hostfs = observed / "hostfs"
-        hostfs.mkdir()
-        os.chown(hostfs, guest.pw_uid, guest.pw_gid)
+        hostfs = observed / "exports"
+        private = hostfs / "work/private"
+        private.write_bytes(b"preserved")
+        private.chmod(0o600)
+        before = private.stat()
         launch_environment = environment(root, observed)
         launch_environment["ASTRA_QEMU_USER"] = "root"
         result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
@@ -146,17 +175,16 @@ def root_privilege_boundary():
         assert int((observed / "qemu.gid").read_text()) == guest.pw_gid
         assert int((observed / "hotplug.uid").read_text()) == guest.pw_uid, \
             "QMP input/affinity helper started as root"
-        for path in (hostfs / "work", hostfs / "sound/soundfonts/default",
-                     hostfs / "sound/soundfonts/Shipped.sf2"):
-            assert path.stat().st_uid == guest.pw_uid, path
+        after = private.stat()
+        assert before.st_uid == after.st_uid == 0 and before.st_gid == after.st_gid
+        assert before.st_mode == after.st_mode and private.read_bytes() == b"preserved"
         writable(root)
     print("Astra launcher root privilege boundary: PASS")
 
 
 def main():
-    if sys.argv[1:] == ["--root"]:
-        root_privilege_boundary()
-        return
+    assert os.getuid() == 0, "run launcher fixture as root observer; QEMU peer is nobody"
+    root_privilege_boundary()
     launcher = RUN_ARTY.read_text()
     assert "ASTRA_STORE=${ASTRA_STORE:-/var/lib/astra}" in launcher
     assert "ASTRA_STORE=${ASTRA_STORE:-/data/astra}" not in launcher
@@ -178,24 +206,16 @@ def main():
                                 text=True, capture_output=True, check=False)
         assert result.returncode != 0
         assert "helper CPU assignments are invalid" in result.stderr
-        # A HostFS root from before volumes is WORK's: it moves to work/.
-        (observed / "hostfs").mkdir()
-        (observed / "hostfs/notes.txt").write_text("kept")
-        (observed / "hostfs/.hidden").write_text("kept too")
+        private = observed / "exports/work/notes.txt"
+        private.write_text("kept")
+        private.chmod(0o600)
+        before = private.stat()
         result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
                                 text=True, capture_output=True, check=False)
         assert result.returncode == 1, result.stderr
-        assert sorted(item.name for item in (observed / "hostfs").iterdir()) \
-            == ["sound", "work"]
-        assert (observed / "hostfs/sound/soundfonts/Shipped.sf2").read_bytes() \
-            == b"sfbk"
-        assert (observed / "hostfs/sound/soundfonts/default").read_text() == \
-            "Shipped.sf2\n"
-        # Later launches fill in only what the SOUND volume lacks.
-        (observed / "hostfs/sound/soundfonts/default").write_text("Mine.sf2\n")
-        assert (observed / "hostfs/work/notes.txt").read_text() == "kept"
-        assert (observed / "hostfs/work/.hidden").read_text() == "kept too"
+        assert private.read_text() == "kept" and private.stat().st_mode == before.st_mode
         assert not (observed / "power.args").exists()
+        assert (observed / "qemu.args").exists(), (result.stdout, result.stderr)
         qemu_args = (observed / "qemu.args").read_text().splitlines()
         assert qemu_args.count("-qmp") == 2
         qmp_arguments = [qemu_args[index + 1] for index, value in
@@ -227,11 +247,10 @@ def main():
             assert (observed / "display.args").read_text().splitlines() == [
                 str(observed / "run/post-text.bin"),
                 str(observed / "run/display.bin"), str(payload)]
-        storage = qemu_args[qemu_args.index("-drive") + 1]
-        assert storage == "if=none,format=raw,file=%s" % (
-            observed / "state/storage-terminal.img")
-        assert (observed / "hostfs.root").read_text().strip() == str(
-            observed / "hostfs")
+        assert "-drive" not in qemu_args
+        provider_args = (observed / "provider.args").read_text().splitlines()
+        assert provider_args[provider_args.index("--system") + 1] == str(observed / "state/storage-terminal.img")
+        assert provider_args[provider_args.index("--seed-sound") + 1] == str(root / "soundfonts")
         assert (observed / "hostfs.budgets").read_text().splitlines() == ["2048", "1024"]
         assert (root / "storage-terminal.img").read_bytes() == b"disk"
 
@@ -246,8 +265,6 @@ def main():
         assert "display helper exited with status 42; restarting" in \
             result.stderr
         assert (observed / "hostfs.budgets").read_text().splitlines() == ["512", "128"]
-        assert (observed / "hostfs/sound/soundfonts/default").read_text() == \
-            "Mine.sf2\n"
 
         (observed / "qemu.args").unlink()
         launch_environment["ASTRA_HOST_TIME_MIN"] = str(int(time.time()) + 60)

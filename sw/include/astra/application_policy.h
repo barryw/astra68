@@ -24,6 +24,8 @@
     X("POSIX_PROCESS", RAW) \
     X("APP_LAUNCH", RAW) \
     X("LOG", RAW) \
+    X("VOLUMES", RAW) \
+    X("VOLUME_READ", RAW) \
     X("APPS", R) \
     X("LIBS", R) \
     X("STORE", RW) \
@@ -31,6 +33,7 @@
     X("HOME", RW) \
     X("WORK", RW) \
     X("TMP", RW) \
-    X("RAM", RW)
+    X("RAM_READ", RAW) \
+    X("RAM_WRITE", RAW)
 
 #endif

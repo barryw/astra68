@@ -42,12 +42,14 @@ uint32_t atlas_directory_load(AtlasDirectory *model,
     AstraFilesystem *filesystem, const char *path, const uint32_t *cancelled)
 {
     AstraDirectory directory = ASTRA_DIRECTORY_INIT;
-    AstraDirectoryEntry batch[8];
+    AstraDirectoryEntry *batch;
     uint32_t status;
 
     if (model == NULL || filesystem == NULL || path == NULL)
         return ASTRA_VFS_ERR_INVALID;
     atlas_directory_dispose(model);
+    batch = astra_runtime_allocate(8u * sizeof(*batch));
+    if (batch == NULL) { model->status = ASTRA_VFS_ERR_LIMIT; return model->status; }
     status = astra_filesystem_directory_open(filesystem, path, &directory);
     if (status == ASTRA_VFS_OK) {
         while (status == ASTRA_VFS_OK) {
@@ -79,6 +81,7 @@ uint32_t atlas_directory_load(AtlasDirectory *model,
     }
     if (status != ASTRA_VFS_OK)
         atlas_directory_dispose(model);
+    astra_runtime_deallocate(batch);
     model->status = status;
     return status;
 }

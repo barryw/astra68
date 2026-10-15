@@ -99,8 +99,7 @@ def main(qemu):
                 command = [qemu, "-machine", "astra68,accel=qtest", "-m", "32M",
                            "-bios", str(rom), "-S", "-display", "none", "-nodefaults",
                            "-qtest", "unix:" + qtest_path + ",server=on,wait=off"]
-                environment = dict(os.environ, ASTRA_HOSTFS_ROOT=work,
-                                   ASTRA_AUDIO_MAILBOX_PATH=str(path))
+                environment = dict(os.environ, ASTRA_AUDIO_MAILBOX_PATH=str(path))
                 hostfs.booted(command, environment, qtest_path,
                               lambda qtest: run(qtest, mailbox))
 

@@ -6,6 +6,8 @@
 #include <astra/limits.h>
 #include <astra/vfs_backend.h>
 #include <astra/vfs_service.h>
+#include <astra/vfs_client.h>
+#include <astra/vfs_path_payload.h>
 
 /*
  * The storage service, with no transport in it.
@@ -90,6 +92,9 @@ typedef int (*AstraVfsStateWait)(void *context,
                                 uint32_t expected);
 typedef void (*AstraVfsStateWake)(void *context,
                                  volatile uint32_t *sequence);
+/* Called under the service state lock after authenticated session admission
+ * and actual retirement. It must not reenter this service. */
+typedef void (*AstraVfsSessionChanged)(void *context);
 
 #ifdef ASTRA_VFS_TEST_HOOKS
 enum {
@@ -120,6 +125,8 @@ typedef struct AstraVfsService {
     AstraVfsStateWait state_wait;
     AstraVfsStateWake state_wake;
     void *state_lock_context;
+    AstraVfsSessionChanged session_changed;
+    void *session_changed_context;
 #ifdef ASTRA_VFS_TEST_HOOKS
     AstraVfsTestTransition test_transition;
     void *test_transition_context;
@@ -139,6 +146,9 @@ int astra_vfs_service_set_state_lock(AstraVfsService *service,
 int astra_vfs_service_set_state_wait(AstraVfsService *service,
                                      AstraVfsStateWait wait,
                                      AstraVfsStateWake wake);
+/* Configure before the service admits sessions. */
+int astra_vfs_service_set_session_changed(AstraVfsService *service,
+    AstraVfsSessionChanged changed, void *context);
 /* Per-owner sessions in this service; zero disables the bound. */
 int astra_vfs_service_set_owner_sessions(AstraVfsService *service,
                                          uint32_t sessions);
@@ -155,10 +165,12 @@ void astra_vfs_service_set_test_transition(AstraVfsService *service,
  */
 void astra_vfs_service_dispatch(AstraVfsService *service, uint32_t operation,
                                 const AstraVfsRequest *request,
+                                const AstraVfsTransfer *transfer,
                                 AstraVfsReply *reply);
 void astra_vfs_service_dispatch_from(
     AstraVfsService *service, uint32_t owner, uint32_t operation,
-    const AstraVfsRequest *request, AstraVfsReply *reply);
+    const AstraVfsRequest *request, const AstraVfsTransfer *transfer,
+    AstraVfsReply *reply);
 /*
  * A request that arrived on a grant's port (docs/FILESYSTEM_PRODUCTION_PRD.md
  * FS15). HELLO binds the new session to `grant` and answers `features`; every
@@ -168,6 +180,7 @@ void astra_vfs_service_dispatch_from(
 void astra_vfs_service_dispatch_grant(
     AstraVfsService *service, uint32_t owner, uint32_t grant,
     uint32_t features, uint32_t operation, const AstraVfsRequest *request,
+    const AstraVfsTransfer *transfer,
     AstraVfsReply *reply);
 /* Nonzero when `session` is open, belongs to `owner` and is bound to
  * `grant` (0 for a session opened on no grant). */

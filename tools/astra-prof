@@ -685,8 +685,7 @@ def command_de25_boot(args):
     required = [qemu, rom, storage, kernel, rom_elf,
                 str(root / "tools/astra-prof-de25-boot.sh"),
                 str(root / "emu/qemu/fs-baseline.py"),
-                str(root / "tools/measure-terminal-text.py"),
-                str(root / "tools/qemu-perf-wrapper.sh")]
+                str(root / "tools/measure-terminal-text.py")]
     if profiling:
         required.append(plugin)
     if mode in ("command", "latency"):
@@ -702,8 +701,7 @@ def command_de25_boot(args):
     filenames = [qemu, rom, storage,
                  str(root / "tools/astra-prof-de25-boot.sh"),
                  str(root / "emu/qemu/fs-baseline.py"),
-                 str(root / "tools/measure-terminal-text.py"),
-                 str(root / "tools/qemu-perf-wrapper.sh")]
+                 str(root / "tools/measure-terminal-text.py")]
     if profiling:
         filenames.append(plugin)
     try:

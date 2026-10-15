@@ -47,7 +47,8 @@ uint32_t astra_process_file_share(const AstraFile *file,
 /**
  * Consume a receipt after rebinding the child's process VFS clients.
  * @param share Receipt produced by astra_process_file_share().
- * @param file Receives a child-owned handle to the same description.
+ * @param file Initialized closed file, or the inherited invalid owner to
+ * replace. Success consumes its inherited local pin exactly once.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_process_file_adopt(const AstraProcessFileShare *share,
@@ -79,8 +80,13 @@ uint32_t astra_process_vfs_init(const AstraStartupInfo *startup);
 void astra_process_vfs_close(void);
 /**
  * Reinitialize process-local synchronization after fork in the child.
+ * Copied files, provider-backed directories and read sources stay LOST until
+ * closed or explicitly adopted. Their local client pins remain owned. Virtual
+ * namespace iterators retain their snapshots. Only single-thread clones are
+ * admitted by the kernel; finish all filesystem calls before cloning.
  * @param startup Child startup record.
- * @param cwd Current-directory receipt, or NULL when no identity was retained.
+ * @param cwd Current-directory receipt; NULL only if no directory identity was
+ * retained. Omitting a receipt for a retained CWD returns INVALID.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_process_vfs_after_fork_child(
@@ -108,14 +114,18 @@ uint32_t astra_process_vfs_current_acquire(const AstraFile **directory);
 void astra_process_vfs_current_release(void);
 uint32_t astra_process_vfs_current_qualify(const char *path, char *out, uint32_t capacity);
 /** @endcond */
-/** @return Mutable process-global assign table. */
-AstraAssignTable *astra_process_vfs_assigns(void);
+/** @return Read-only explicit startup grants. Mounted-volume views are acquired by the process filesystem facade. */
+const AstraAssignTable *astra_process_vfs_assigns(void);
+/** @cond ASTRA_INTERNAL */
+uint32_t astra_process_vfs_namespace_acquire(const AstraAssignTable **table, void **owner);
+void astra_process_vfs_namespace_release(void *owner);
+/** @endcond */
 /** @return Borrowed primary process-global VFS client, or NULL. */
 AstraVfsClient *astra_process_vfs_client(void);
 /**
  * Resolve the process client serving an assign member.
  * @param assign Borrowed namespace member.
- * @return Borrowed connected client, or NULL.
+ * @return Borrowed connected client, or NULL. Keep the namespace view or an open description while borrowing a dynamic client.
  */
 AstraVfsClient *astra_process_vfs_client_for(const AstraAssign *assign);
 /**

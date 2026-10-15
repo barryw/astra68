@@ -10,6 +10,9 @@
 #include <astra/theme.h>
 #include <astra/vfs_process.h>
 #include <astra/window.h>
+#include <astra/volume.h>
+#include <astra/ascii.h>
+#include <astra/result.h>
 
 #include "directory.h"
 
@@ -40,11 +43,119 @@ static AstraControl *controls;
 static uint32_t worker, cancelled, completed, visible_data;
 static uint16_t width = 760u, height = 460u;
 static const char *root;
+static AstraVolumeReference viewed_volume;
+static AstraVolumeWatch volume_watch = ASTRA_VOLUME_WATCH_INIT;
+static AstraHandle volume_metadata, volume_grant;
+static AstraAssignTable volume_assigns = ASTRA_ASSIGN_TABLE_INIT;
+static AstraVfsClient volume_client;
+static AstraFilesystem volume_filesystem = ASTRA_FILESYSTEM_INIT;
+static uint32_t volume_connected, volume_lost, volume_refresh;
+static uint64_t volume_retry;
+static char volume_path[32], volume_title[ASTRA_WINDOW_TITLE_MAX + 1u];
+
+static int reference_number(const char *text, uint64_t *out)
+{
+    uint64_t value = 0u;
+    if (text == NULL || *text == '\0') return 0;
+    for (; *text != '\0'; ++text) {
+        if (*text < '0' || *text > '9' || value > (UINT64_MAX - (uint32_t)(*text - '0')) / 10u)
+            return 0;
+        value = value * 10u + (uint32_t)(*text - '0');
+    }
+    *out = value;
+    return value != 0u;
+}
+
+static AstraVfsClient *volume_client_for(const AstraAssign *assign, void *context)
+{
+    (void)context;
+    return assign->handle == volume_grant && volume_connected ? &volume_client : NULL;
+}
+
+static AstraResult volume_observe(AstraVolumeRecord *record)
+{
+    AstraVolumeSnapshot snapshot = ASTRA_VOLUME_SNAPSHOT_INIT;
+    AstraResult result = astra_volume_snapshot_open(volume_metadata, &snapshot);
+    if (result == ASTRA_OK) {
+        result = ASTRA_ERROR_INVALID_HANDLE;
+        if (snapshot.epoch == viewed_volume.epoch)
+            for (uint32_t at = 0u; at < snapshot.count; ++at) {
+                const AstraVolumeRecord *row = &snapshot.records[at];
+                if (row->id == viewed_volume.id && row->generation == viewed_volume.generation &&
+                    row->kind == ASTRA_VOLUME_MOUNT &&
+                    (row->state == ASTRA_VOLUME_MOUNTED || row->state == ASTRA_VOLUME_QUIESCING)) {
+                    if (record != NULL) *record = *row;
+                    result = ASTRA_OK;
+                    break;
+                }
+            }
+    }
+    astra_volume_snapshot_close(&snapshot);
+    return result;
+}
+
+static void volume_close(void)
+{
+    if (volume_watch.receive != ASTRA_INVALID_HANDLE) {
+        AstraResult ignored = astra_volume_watch_close(volume_metadata, &volume_watch);
+        (void)ignored;
+    }
+    astra_filesystem_detach(&volume_filesystem);
+    if (volume_connected) { (void)astra_vfs_disconnect(&volume_client); volume_connected = 0u; }
+    astra_assign_table_destroy(&volume_assigns);
+    if (volume_grant != ASTRA_INVALID_HANDLE) {
+        AstraResult ignored = astra_handle_close(&volume_grant);
+        (void)ignored;
+    }
+}
+
+static AstraResult volume_open(const AstraStartupInfo *startup)
+{
+    const AstraStartupCapability *metadata = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUMES);
+    const AstraStartupCapability *broker = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUME_READ);
+    if (metadata == NULL || broker == NULL) return ASTRA_ERROR_PERMISSION;
+    volume_metadata = metadata->handle;
+    AstraResult result = astra_volume_watch_open(volume_metadata, &volume_watch);
+    AstraVolumeRecord record = {0};
+    if (result == ASTRA_OK) result = volume_observe(&record);
+    if (result == ASTRA_OK && record.name[0] != '/') result = ASTRA_ERROR_IO;
+    if (result == ASTRA_OK) {
+        memcpy(volume_path, record.name, sizeof(volume_path));
+        root = volume_path;
+        const char *label = record.label[0] != '\0' ? record.label : record.name + 1u;
+        uint32_t length = (uint32_t)strlen(label);
+        uint32_t kept = astra_string_utf8_prefix(label, length, ASTRA_WINDOW_TITLE_MAX);
+        memcpy(volume_title, label, kept);
+        volume_title[kept] = '\0';
+        if (record.label[0] == '\0')
+            for (uint32_t at = 0u; at < kept; ++at) volume_title[at] = astra_ascii_upper(volume_title[at]);
+        if ((record.flags & ASTRA_VOLUME_SYSTEM) != 0u) {
+            /* System browsing retains its explicit startup authority. Public
+             * root brokers cannot expand an application's system grants. */
+            if (strcmp(root, "/dh0") != 0) result = ASTRA_ERROR_PERMISSION;
+        } else {
+            result = astra_volume_root(broker->handle, &viewed_volume, ASTRA_RIGHT_READ, &volume_grant);
+            if (result == ASTRA_OK)
+                result = astra_result_from_service(astra_assign_bind(&volume_assigns,
+                    root + 1u, volume_grant, ASTRA_RIGHT_READ, ""));
+            if (result == ASTRA_OK) {
+                result = astra_result_from_service(astra_vfs_client_connect_service(&volume_client, volume_grant));
+                volume_connected = result == ASTRA_OK;
+            }
+            if (result == ASTRA_OK)
+                result = astra_result_from_service(astra_filesystem_attach(&volume_filesystem,
+                    &volume_assigns, volume_client_for, NULL, NULL));
+        }
+    }
+    if (result != ASTRA_OK) volume_close();
+    return result;
+}
 
 static void read_root(uint32_t argument)
 {
     (void)argument;
-    (void)atlas_directory_load(&directory, &filesystem.filesystem, root,
+    (void)atlas_directory_load(&directory,
+                                volume_connected ? &volume_filesystem : &filesystem.filesystem, root,
                                 &cancelled);
     __atomic_store_n(&completed, 1u, __ATOMIC_RELEASE);
 }
@@ -159,6 +270,7 @@ invalid:
 
 static const char *message(void)
 {
+    if (volume_lost) return "This volume is unavailable.";
     if (visible_data == 0u)
         return "Reading volume...";
     switch (directory.status) {
@@ -192,7 +304,7 @@ static AstraResult paint(void)
         const char *text = message();
         result = astra_draw_ui_text(&list, (AstraPointI32){28, 32}, text,
             (uint32_t)strlen(text), theme.title_font_height, 0u,
-            directory.status == ASTRA_VFS_OK ? theme.client_text_secondary : theme.fault);
+            !volume_lost && (visible_data == 0u || directory.status == ASTRA_VFS_OK) ? theme.client_text_secondary : theme.fault);
     }
     for (uint32_t at = 0u; result == ASTRA_OK && visible_data != 0u &&
                            directory.status == ASTRA_VFS_OK && at < directory.count; ++at) {
@@ -245,13 +357,15 @@ static AstraResult paint(void)
 
 static void log_root(void)
 {
-    char bytes[ASTRA_VFS_PATH_MAX + 96u];
+    uint32_t capacity = (uint32_t)strlen(root) + 96u;
+    char *bytes = astra_runtime_allocate(capacity);
     AstraString line;
     uint32_t folders = 0u;
 
     for (uint32_t at = 0u; at < directory.count; ++at)
         folders += directory.entries[at].kind == ASTRA_VFS_KIND_DIRECTORY;
-    astra_string_init(&line, bytes, sizeof(bytes));
+    if (bytes == NULL) return;
+    astra_string_init(&line, bytes, capacity);
     (void)astra_string_append(&line, "atlas root ");
     (void)astra_string_append(&line, root);
     (void)astra_string_append(&line, " entries ");
@@ -261,27 +375,66 @@ static void log_root(void)
     (void)astra_string_append(&line, " status ");
     (void)astra_string_append_u64(&line, directory.status);
     (void)astra_log(bytes);
+    astra_runtime_deallocate(bytes);
 }
 
 static AstraResult run(void)
 {
     for (;;) {
-        uint32_t waits[2] = {astra_window_event_wait_handle(&window), worker};
+        uint32_t waits[3] = {astra_window_event_wait_handle(&window)};
+        uint32_t wait_count = 1u, worker_slot = UINT32_MAX, volume_slot = UINT32_MAX;
+        if (worker != 0u) { worker_slot = wait_count; waits[wait_count++] = worker; }
+        if (volume_watch.receive != ASTRA_INVALID_HANDLE && !volume_lost) {
+            volume_slot = wait_count; waits[wait_count++] = volume_watch.receive;
+        }
         uint32_t selected = 0u;
         AstraWindowEvent event = {0};
         AstraControlFrame damage;
         uint32_t repaint = 0u;
         AstraResult result;
 
-        if (astra_wait_multiple(waits, worker != 0u ? 2u : 1u,
-                                ASTRA_DEADLINE_FOREVER, &selected, NULL) != ASTRA_SYSCALL_OK)
+        uint32_t waited = astra_wait_multiple(waits, wait_count,
+            volume_refresh ? volume_retry : ASTRA_DEADLINE_FOREVER,
+            &selected, NULL);
+        if (waited != ASTRA_SYSCALL_OK && waited != ASTRA_SYSCALL_TIMED_OUT &&
+            !(selected == volume_slot && waited == ASTRA_SYSCALL_PEER_DEAD))
             return ASTRA_ERROR_IO;
-        if (worker != 0u && selected == 1u) {
+        if (waited != ASTRA_SYSCALL_TIMED_OUT && selected == volume_slot) {
+            AstraVolumeChange change;
+            result = astra_volume_watch_receive(&volume_watch, &change);
+            if (result != ASTRA_OK || change.status != ASTRA_STATUS_OK) volume_lost = 1u;
+            volume_refresh = 1u;
+            volume_retry = 0u;
+        }
+        if (worker != 0u && waited == ASTRA_SYSCALL_OK && selected == worker_slot) {
             (void)astra_close(worker);
             worker = 0u;
             if (__atomic_load_n(&completed, __ATOMIC_ACQUIRE) == 0u)
                 directory.status = ASTRA_VFS_ERR_IO;
-            visible_data = 1u;
+            volume_refresh = viewed_volume.id != 0u;
+            volume_retry = 0u;
+            visible_data = !volume_refresh;
+        }
+        if (volume_refresh && astra_clock_monotonic() >= volume_retry) {
+            result = volume_lost ? ASTRA_ERROR_INVALID_HANDLE : volume_observe(NULL);
+            if (result == ASTRA_ERROR_BUSY || result == ASTRA_ERROR_OUT_OF_MEMORY || result == ASTRA_ERROR_IO) {
+                volume_retry = astra_clock_monotonic() + UINT64_C(50000000);
+            } else {
+                volume_refresh = 0u;
+                if (result != ASTRA_OK) {
+                    volume_lost = 1u;
+                    __atomic_store_n(&cancelled, 1u, __ATOMIC_RELEASE);
+                    visible_data = 0u;
+                } else if (worker == 0u) visible_data = 1u;
+                repaint = 1u;
+            }
+        }
+        if (worker == 0u && (repaint || (waited == ASTRA_SYSCALL_OK && selected == worker_slot))) {
+            if (volume_lost) {
+                atlas_directory_dispose(&directory);
+                directory.status = ASTRA_VFS_ERR_LOST;
+                visible_data = 1u;
+            }
             log_root();
             result = build_view();
             if (result != ASTRA_OK)
@@ -340,11 +493,19 @@ int astra_main(const AstraStartupInfo *startup)
     ready = astra_startup_capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
     if (gui == NULL || ready == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
-    root = startup->argc > 1u ? astra_startup_argument(startup, 1u) : "/dh0";
-    if (root == NULL || root[0] != '/' || startup->argc > 2u ||
+    const char *first_argument = startup->argc > 1u ? astra_startup_argument(startup, 1u) : NULL;
+    int exact_volume = startup->argc == 5u && first_argument != NULL && strcmp(first_argument, "--volume") == 0;
+    root = exact_volume ? "/dh0" : startup->argc > 1u ? astra_startup_argument(startup, 1u) : "/dh0";
+    if (root == NULL || root[0] != '/' || (!exact_volume && startup->argc > 2u) ||
         strlen(root) >= ASTRA_VFS_PATH_MAX)
         return ASTRA_STATUS_INVALID;
+    if (exact_volume && (!reference_number(astra_startup_argument(startup, 2u), &viewed_volume.epoch) ||
+        !reference_number(astra_startup_argument(startup, 3u), &viewed_volume.id) ||
+        !reference_number(astra_startup_argument(startup, 4u), &viewed_volume.generation)))
+        return ASTRA_STATUS_INVALID;
     status = astra_process_filesystem_open(&filesystem, startup);
+    if (status == ASTRA_VFS_OK && exact_volume && volume_open(startup) != ASTRA_OK)
+        status = ASTRA_VFS_ERR_LOST;
     if (status == ASTRA_VFS_OK)
         result = astra_area_create(4096u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
             ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &placeholder);
@@ -358,7 +519,7 @@ int astra_main(const AstraStartupInfo *startup)
         info.flags = ASTRA_WINDOW_RESIZABLE;
         info.content_format = ASTRA_WINDOW_CONTENT_SURFACE;
         info.type = ASTRA_WINDOW_STANDARD;
-        info.title = strcmp(root, "/dh0") == 0 ? "DH0" : "Atlas";
+        info.title = exact_volume ? volume_title : strcmp(root, "/dh0") == 0 ? "DH0" : "Atlas";
         info.title_length = (uint16_t)strlen(info.title);
         info.event_mask = ASTRA_WINDOW_SUBSCRIBE_DEFAULT |
             ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON | ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL |
@@ -419,6 +580,7 @@ int astra_main(const AstraStartupInfo *startup)
         atlas_directory_dispose(&directory);
         astra_runtime_deallocate(controls);
         astra_process_filesystem_close(&filesystem);
+        volume_close();
     }
     if (result != ASTRA_OK)
         (void)astra_log_failure("Atlas window", (uint32_t)(-result));

@@ -17,6 +17,7 @@
 
 #include <astra/message_abi.h>
 #include <astra/syscall.h>
+#include <astra/volume_abi.h>
 
 /** Native-big-endian `HACC` host device class, matched by device lookup. */
 #define ASTRA_DEVICE_CLASS_HOST UINT32_C(0x48414343) /* HACC */
@@ -29,7 +30,7 @@
 #define ASTRA_CAPABILITY_HOST_FILESYSTEM "HOST_FILESYSTEM"
 
 /** Current host transport protocol version, as reported by HOST_QUERY. */
-#define ASTRA_HOST_VERSION     UINT32_C(0x00010015)
+#define ASTRA_HOST_VERSION     UINT32_C(0x00030000)
 /** The host exposes the filesystem service. */
 #define ASTRA_HOST_CAP_FILESYSTEM (1u << 0)
 /** Filesystem commands are scoped to the submitting process's authenticated owner. */
@@ -56,7 +57,7 @@
  * runs only filesystem commands, each through one scope the kernel
  * attached: beneath its root, with its rights. */
 #define ASTRA_HOST_CAP_FS_SCOPE (1u << 10)
-/** Filesystem commands use record version 3: one claimed owner, rooted
+/** Filesystem commands use ::ASTRA_HOST_COMMAND_VERSION: one claimed owner, rooted
  * sessions, path operands in the data span and the AstraHostNode record. */
 #define ASTRA_HOST_CAP_FS_SESSIONS (1u << 11)
 /** Ordered dot and symlink resolution, with rooted namespace continuations. */
@@ -67,6 +68,8 @@
 #define ASTRA_HOST_CAP_FS_DIRECTORY_BATCH (1u << 14)
 /** Report the current confined path of a retained directory. */
 #define ASTRA_HOST_CAP_FS_PATHS (1u << 15)
+/** Public volume metadata does not confer a rooted file or control grant. */
+#define ASTRA_HOST_CAP_VOLUME_CATALOG (1u << 16)
 /** Channel configuration: the scope words name a scope. Kernel-written. */
 #define ASTRA_HOST_SCOPE_BOUND     (1u << 0)
 /** The scope refuses every mutation (ASTRA_STATUS_READ_ONLY). */
@@ -90,6 +93,38 @@
 #define ASTRA_HOST_SERVICE_ENTROPY UINT16_C(4)
 /** AstraHostCommand::service selecting the audio service. */
 #define ASTRA_HOST_SERVICE_AUDIO UINT16_C(5)
+/** Native volume metadata and lifecycle transport. */
+#define ASTRA_HOST_SERVICE_VOLUMES UINT16_C(6)
+/** Query a coherent AstraVolumeCatalogPage using an AstraVolumeCatalogQuery. */
+#define ASTRA_HOST_VOLUME_CATALOG UINT16_C(1)
+/** Submit a typed AstraHostVolumeControl through the claimed provider. */
+#define ASTRA_HOST_VOLUME_CONTROL UINT16_C(2)
+/** Query a coherent AstraVolumeUsagePage using an AstraVolumeUsageQuery. */
+#define ASTRA_HOST_VOLUME_USAGE UINT16_C(3)
+/** Claimed-provider-only notification that canonical native control-session
+ * holders changed. All operands and payload lengths are zero. It advances the
+ * same usage mutation sequence as description/session changes. */
+#define ASTRA_HOST_VOLUME_HOLDERS_CHANGED UINT16_C(4)
+/** Provider-only lifecycle request. requester is kernel-stamped by HostFS's
+ * receive endpoint, never accepted from an application payload. */
+typedef struct AstraHostVolumeControl {
+    AstraVolumeControl control; /**< Exact incarnation, operation and resource limits. */
+    uint32_t requester; /**< Kernel-authenticated native requesting process. */
+    uint32_t reserved; /**< Zero. */
+} AstraHostVolumeControl;
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraHostVolumeControl) == 64u, "host volume control ABI");
+/** @endcond */
+/** Every SESSION_OPEN supplies this typed provider-only payload. Parent
+ * sessions use a zero reference; requester is authenticated by HostFS IPC. */
+typedef struct AstraHostSessionOpen {
+    AstraVolumeReference volume; /**< Exact root mount; zero when deriving from a session. */
+    uint32_t requester; /**< Kernel-authenticated native requesting process. */
+    uint32_t reserved; /**< Zero. */
+} AstraHostSessionOpen;
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraHostSessionOpen) == 32u, "host session open ABI");
+/** @endcond */
 /** Bytes of the largest path buffer, terminator included: a path operand
  * on the wire is at most ASTRA_HOST_FS_PATH_MAX - 1 bytes, unterminated. */
 #define ASTRA_HOST_FS_PATH_MAX 4096u
@@ -128,16 +163,9 @@ enum {
 /** Highest valid ASTRA_HOST_FS_* operation code. */
 #define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_PATH
 
-/** Volumes a root session may open (SESSION_OPEN value_lo with session 0):
- * one host directory each beneath the provider root. */
-enum {
-    ASTRA_HOST_FS_VOLUME_WORK = 0u, /**< The general-purpose working volume. */
-    ASTRA_HOST_FS_VOLUME_SOUND,     /**< The volume holding shared SoundFonts. */
-    /** Optional bootstrap system volume; absent providers return NOT_FOUND. */
-    ASTRA_HOST_FS_VOLUME_SYSTEM,
-    ASTRA_HOST_FS_VOLUME_COUNT      /**< Count of defined volumes. */
-};
-
+/** A root SESSION_OPEN carries an exact AstraVolumeReference in its input
+ * payload. Derived sessions carry no target payload and inherit their parent.
+ * The catalog supplies identity; it never supplies data authority. */
 /** WRITE flag: append at end of file, atomically, for this write. */
 #define ASTRA_HOST_FS_WRITE_APPEND      (1u << 15)
 /** READ/WRITE at the shared position; value answers the position after. */
@@ -500,16 +528,16 @@ typedef struct AstraHostNode {
     uint32_t uid;           /**< Owning user. */
     uint32_t gid;           /**< Owning group. */
     uint32_t block_size;    /**< Preferred I/O size. */
-    uint32_t device_hi;     /**< Device major. */
-    uint32_t device_lo;     /**< Device minor. */
+    uint32_t device_hi;     /**< Native volume identity, upper 32 bits. */
+    uint32_t device_lo;     /**< Native volume identity, lower 32 bits. */
     uint32_t inode_hi;      /**< Inode number, upper 32 bits. */
     uint32_t inode_lo;      /**< Inode number, lower 32 bits. */
     uint32_t size_hi;       /**< Bytes, upper 32 bits. */
     uint32_t size_lo;       /**< Bytes, lower 32 bits. */
     uint32_t blocks_hi;     /**< 512-byte blocks allocated, upper 32 bits. */
     uint32_t blocks_lo;     /**< 512-byte blocks allocated, lower 32 bits. */
-    uint32_t mount_hi;      /**< Linux mount id, upper 32 bits. */
-    uint32_t mount_lo;      /**< Linux mount id, lower 32 bits. */
+    uint32_t mount_hi;      /**< Native mount identity, upper 32 bits. */
+    uint32_t mount_lo;      /**< Native mount identity, lower 32 bits. */
     AstraHostTime atime;    /**< Last access. */
     AstraHostTime mtime;    /**< Last modification. */
     AstraHostTime ctime;    /**< Last status change. */
@@ -522,7 +550,7 @@ _Static_assert(sizeof(AstraHostNode) == 112u, "host node ABI changed");
 /** @endcond */
 
 /** Wire-format version of ::AstraHostCommand. */
-#define ASTRA_HOST_COMMAND_VERSION 3u
+#define ASTRA_HOST_COMMAND_VERSION 5u
 /** Fixed byte size of ::AstraHostCommand. */
 #define ASTRA_HOST_COMMAND_SIZE 512u
 
@@ -726,9 +754,9 @@ _Static_assert(sizeof(AstraHostChannelOpen) == ASTRA_HOST_CHANNEL_OPEN_SIZE,
  * inside the kernel's platform layer; never constructed by user code.
  */
 /** @cond ASTRA_INTERNAL */
-/* Version 3: an unbound OPEN may carry ASTRA_HOST_CHANNEL_PROVIDER. */
-#define ASTRA_HOST_CHANNEL_CONFIG_VERSION 4u
-#define ASTRA_HOST_CHANNEL_CONFIG_SIZE 64u
+/* Version 5: OPEN carries the native PID separately from resource ownership. */
+#define ASTRA_HOST_CHANNEL_CONFIG_VERSION 5u
+#define ASTRA_HOST_CHANNEL_CONFIG_SIZE 68u
 #define ASTRA_HOST_CHANNEL_CONFIG_OPEN  1u
 #define ASTRA_HOST_CHANNEL_CONFIG_CLOSE 2u
 /** Bind one more scope to an open bound channel. */
@@ -756,6 +784,7 @@ typedef struct AstraHostChannelConfig {
     uint32_t scope_flags;  /**< ASTRA_HOST_SCOPE_BOUND | READ_ONLY; an unbound OPEN 0 or ASTRA_HOST_CHANNEL_PROVIDER; 0 for CLOSE and DETACH. */
     uint32_t scope_owner;  /**< OPEN (bound), ATTACH: owner of the process that created the scope. */
     uint32_t scope_files;  /**< Per-owner handles and shares in this scope; zero for unlimited. */
+    uint32_t process;      /**< OPEN: kernel-authenticated native PID, independent of owner; zero for other operations. */
     uint32_t reserved[3];  /**< Zero. */
 } AstraHostChannelConfig;
 

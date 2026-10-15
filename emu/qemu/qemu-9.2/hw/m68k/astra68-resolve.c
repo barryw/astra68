@@ -68,14 +68,14 @@ static bool same_node(const struct stat *left, const struct stat *right)
 
 static int start_at(Walk *walk, int root, int base);
 
-int astra_resolve_directory_path(int root, int fd, char *path,
+int astra_resolve_descriptor_path(int root, int fd, char *path,
                                   uint32_t capacity, uint32_t *length)
 {
 #ifdef __linux__
     char proc[64], root_path[TEXT_MAX], node_path[TEXT_MAX];
     struct stat root_st, node_st, check_st;
     struct open_how how = {
-        .flags = O_PATH | O_DIRECTORY | O_CLOEXEC,
+        .flags = O_PATH | O_CLOEXEC,
         .resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS |
                    RESOLVE_NO_MAGICLINKS,
     };
@@ -89,7 +89,7 @@ int astra_resolve_directory_path(int root, int fd, char *path,
     *length = 0u;
     if (fstat(root, &root_st) != 0 || fstat(fd, &node_st) != 0)
         return -errno;
-    if (!S_ISDIR(root_st.st_mode) || !S_ISDIR(node_st.st_mode))
+    if (!S_ISDIR(root_st.st_mode) || (!S_ISDIR(node_st.st_mode) && !S_ISREG(node_st.st_mode)))
         return -ENOTDIR;
     if (node_st.st_nlink == 0)
         return -ENOENT;

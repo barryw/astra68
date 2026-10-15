@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include <astra/vfs_service.h>
 
@@ -18,7 +19,7 @@ int main(void)
         {"us status=", UINT32_MAX},
     };
     char path[ASTRA_VFS_PATH_MAX];
-    char output[512];
+    char *output;
     uint32_t length;
 
     memset(path, 'p', sizeof(path) - 1u);
@@ -27,8 +28,10 @@ int main(void)
         NULL, 0u, "launch ", path, fields,
         (uint32_t)(sizeof(fields) / sizeof(fields[0])));
     assert(length > 224u);
+    output = malloc(length + 1u);
+    assert(output != NULL);
     assert(supervisor_launch_report_format(
-               output, sizeof(output), "launch ", path, fields,
+               output, length + 1u, "launch ", path, fields,
                (uint32_t)(sizeof(fields) / sizeof(fields[0]))) == length);
     assert(strlen(output) == length);
     assert(strstr(output, path) == output + sizeof("launch ") - 1u);
@@ -40,7 +43,8 @@ int main(void)
                (uint32_t)(sizeof(fields) / sizeof(fields[0]))) == 0u);
     assert(output[0] == '\0');
     assert(supervisor_launch_report_format(
-               output, sizeof(output), NULL, path, fields,
+               output, length + 1u, NULL, path, fields,
                (uint32_t)(sizeof(fields) / sizeof(fields[0]))) == 0u);
+    free(output);
     return 0;
 }

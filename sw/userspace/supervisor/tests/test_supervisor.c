@@ -11,8 +11,8 @@
 #define PROCESS_HANDLE 0x11111111u
 #define THREAD_HANDLE 0x22222222u
 
-static AstraStartupInfo
-valid_startup(void)
+static void
+valid_startup(AstraStartupInfo *result)
 {
     AstraStartupInfo startup;
 
@@ -27,8 +27,9 @@ valid_startup(void)
     startup.process_handle = PROCESS_HANDLE;
     startup.thread_handle = THREAD_HANDLE;
     startup.capability_count = 2u;
-    startup.capabilities_address = 0x00001040u;
-    return startup;
+    startup.capabilities_address =
+        (uint32_t)(uintptr_t)result + ASTRA_STARTUP_INFO_SIZE;
+    *result = startup;
 }
 
 static void
@@ -70,10 +71,11 @@ valid_probe(void)
 static void
 test_accepts_a_correct_launch(void)
 {
-    AstraStartupInfo startup = valid_startup();
+    AstraStartupInfo startup;
     AstraStartupCapability capabilities[2];
     SupervisorProbe probe = valid_probe();
 
+    valid_startup(&startup);
     valid_capabilities(capabilities);
     assert(supervisor_validate(&startup, capabilities, &probe) ==
            ASTRA_SUPERVISOR_STATUS_OK);
@@ -82,10 +84,11 @@ test_accepts_a_correct_launch(void)
 static void
 test_startup_failures_stop_everything(void)
 {
-    AstraStartupInfo startup = valid_startup();
+    AstraStartupInfo startup;
     AstraStartupCapability capabilities[2];
     SupervisorProbe probe = valid_probe();
 
+    valid_startup(&startup);
     valid_capabilities(capabilities);
     assert(supervisor_validate(NULL, capabilities, &probe) ==
            (ASTRA_SUPERVISOR_STATUS_TAG | ASTRA_SUPERVISOR_FAIL_STARTUP));
@@ -97,11 +100,11 @@ test_startup_failures_stop_everything(void)
            (ASTRA_SUPERVISOR_STATUS_TAG | ASTRA_SUPERVISOR_FAIL_STARTUP));
 
     /* A launch without self handles is not a launch this service survives. */
-    startup = valid_startup();
+    valid_startup(&startup);
     startup.process_handle = 0u;
     assert(supervisor_validate(&startup, capabilities, &probe) ==
            (ASTRA_SUPERVISOR_STATUS_TAG | ASTRA_SUPERVISOR_FAIL_STARTUP));
-    startup = valid_startup();
+    valid_startup(&startup);
     startup.thread_handle = 0u;
     assert(supervisor_validate(&startup, capabilities, &probe) ==
            (ASTRA_SUPERVISOR_STATUS_TAG | ASTRA_SUPERVISOR_FAIL_STARTUP));
@@ -110,10 +113,11 @@ test_startup_failures_stop_everything(void)
 static void
 test_abi_disagreements(void)
 {
-    AstraStartupInfo startup = valid_startup();
+    AstraStartupInfo startup;
     AstraStartupCapability capabilities[2];
     SupervisorProbe probe;
 
+    valid_startup(&startup);
     valid_capabilities(capabilities);
 
     probe = valid_probe();
@@ -146,15 +150,16 @@ test_capability_table(void)
     const uint32_t expected =
         ASTRA_SUPERVISOR_STATUS_TAG | ASTRA_SUPERVISOR_FAIL_CAPABILITIES;
 
-    startup = valid_startup();
+    valid_startup(&startup);
     valid_capabilities(capabilities);
     assert(supervisor_validate(&startup, NULL, &probe) == expected);
 
-    startup = valid_startup();
+    valid_startup(&startup);
     startup.capability_count = 1u;
+    startup.total_size = ASTRA_STARTUP_INFO_SIZE + ASTRA_STARTUP_CAPABILITY_SIZE;
     assert(supervisor_validate(&startup, capabilities, &probe) == expected);
 
-    startup = valid_startup();
+    valid_startup(&startup);
     valid_capabilities(capabilities);
     capabilities[0].handle = PROCESS_HANDLE + 1u;
     assert(supervisor_validate(&startup, capabilities, &probe) == expected);
@@ -172,12 +177,13 @@ test_capability_table(void)
 static void
 test_process_view(void)
 {
-    AstraStartupInfo startup = valid_startup();
+    AstraStartupInfo startup;
     AstraStartupCapability capabilities[2];
     SupervisorProbe probe;
     const uint32_t content =
         ASTRA_SUPERVISOR_STATUS_TAG | ASTRA_SUPERVISOR_FAIL_INFO_CONTENT;
 
+    valid_startup(&startup);
     valid_capabilities(capabilities);
 
     probe = valid_probe();
@@ -210,10 +216,11 @@ test_process_view(void)
 static void
 test_failures_accumulate(void)
 {
-    AstraStartupInfo startup = valid_startup();
+    AstraStartupInfo startup;
     AstraStartupCapability capabilities[2];
     SupervisorProbe probe = valid_probe();
 
+    valid_startup(&startup);
     valid_capabilities(capabilities);
     capabilities[0].rights = 0u;
     probe.abi_version = 0u;

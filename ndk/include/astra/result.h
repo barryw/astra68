@@ -46,15 +46,42 @@ static inline AstraResult astra_result_from_service(uint32_t status)
     case ASTRA_STATUS_PROTOCOL:
     case ASTRA_STATUS_INVALID: return ASTRA_ERROR_INVALID_ARGUMENT;
     case ASTRA_STATUS_BAD_HANDLE:
+    case ASTRA_STATUS_LOST:
     case ASTRA_STATUS_NOT_FOUND: return ASTRA_ERROR_INVALID_HANDLE;
-    case ASTRA_STATUS_ACCESS: return ASTRA_ERROR_PERMISSION;
+    case ASTRA_STATUS_ACCESS:
+    case ASTRA_STATUS_READ_ONLY: return ASTRA_ERROR_PERMISSION;
     case ASTRA_STATUS_LIMIT:
     case ASTRA_STATUS_NO_SPACE: return ASTRA_ERROR_NO_RESOURCES;
     case ASTRA_STATUS_UNSUPPORTED: return ASTRA_ERROR_UNSUPPORTED;
     case ASTRA_STATUS_BUSY: return ASTRA_ERROR_BUSY;
     case ASTRA_STATUS_BUFFER_TOO_SMALL: return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    case ASTRA_STATUS_NAME_TOO_LONG: return ASTRA_ERROR_NAME_TOO_LONG;
     case ASTRA_STATUS_PEER_DEAD: return ASTRA_ERROR_PEER_DEAD;
     default: return ASTRA_ERROR_IO;
+    }
+}
+
+/** Translate a native client outcome into the common service vocabulary.
+ * @param result AstraResult outcome. @return ASTRA_STATUS_*; outcomes without
+ * a service equivalent report IO. */
+static inline uint32_t astra_status_from_result(AstraResult result)
+{
+    switch (result) {
+    case ASTRA_OK: return ASTRA_STATUS_OK;
+    case ASTRA_ERROR_NOT_PRESENT: return ASTRA_STATUS_NOT_FOUND;
+    case ASTRA_ERROR_INVALID_ARGUMENT: return ASTRA_STATUS_INVALID;
+    case ASTRA_ERROR_UNSUPPORTED: return ASTRA_STATUS_UNSUPPORTED;
+    case ASTRA_ERROR_BUSY:
+    case ASTRA_ERROR_WOULD_BLOCK: return ASTRA_STATUS_BUSY;
+    case ASTRA_ERROR_PERMISSION: return ASTRA_STATUS_ACCESS;
+    case ASTRA_ERROR_NO_RESOURCES:
+    case ASTRA_ERROR_OUT_OF_MEMORY: return ASTRA_STATUS_LIMIT;
+    case ASTRA_ERROR_INVALID_HANDLE: return ASTRA_STATUS_BAD_HANDLE;
+    case ASTRA_ERROR_BUFFER_TOO_SMALL: return ASTRA_STATUS_BUFFER_TOO_SMALL;
+    case ASTRA_ERROR_NAME_TOO_LONG: return ASTRA_STATUS_NAME_TOO_LONG;
+    case ASTRA_ERROR_PEER_DEAD:
+    case ASTRA_ERROR_CLOSED: return ASTRA_STATUS_PEER_DEAD;
+    default: return ASTRA_STATUS_IO;
     }
 }
 

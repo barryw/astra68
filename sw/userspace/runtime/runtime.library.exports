@@ -270,3 +270,8 @@ ASTRA_RUNTIME_1.16 {
     global:
         astra_host_scope_limit;
 } ASTRA_RUNTIME_1.15;
+
+ASTRA_RUNTIME_1.17 {
+    global:
+        memchr;
+} ASTRA_RUNTIME_1.16;

@@ -1,16 +1,15 @@
 # Astra filesystem concurrency design
 
-Status: implementation in progress; Phase D read concurrency and mutation
-linearization checkpoints pass, as does the first physical Phase E
-dirty-shutdown checkpoint
+Status: historical guest-ext4 design and measured checkpoints. Production
+filesystem machinery now belongs to the Linux provider.
 
 This document defines what Astra means by a multi-threaded filesystem and the
-minimum implementation that may claim it, for the guest ext4 engine described
-in [`STORAGE_AND_VFS.md`](STORAGE_AND_VFS.md#current-implementation-to-be-replaced).
+minimum implementation that may claim it, for the retired guest ext4 engine.
+[Storage and VFS](STORAGE_AND_VFS.md#one-filesystem-implementation) describes
+the current production boundary.
 [The filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md) is now
 authoritative for namespace, media, persistence, resource, and block-device
-behavior going forward; this document's concurrency proof applies to the
-engine it retires.
+behavior; this document's concurrency proof applies to the historical engine.
 
 ## 1. Goal
 

@@ -29,9 +29,10 @@ int astra_resolve(int root, int base, const char *path, unsigned flags,
                   uint32_t links_left, AstraResolution *out);
 /* Descriptor-based confinement, also checked after the final atomic open. */
 int astra_resolve_rooted(int root, int fd);
-/* Current directory spelling beneath root, revalidated against its inode.
- * An unlinked or moved-out directory has no name and returns -ENOENT. */
-int astra_resolve_directory_path(int root, int fd, char *path,
+/* Current descriptor spelling beneath root, revalidated against its inode.
+ * Regular files and directories share this contract. Unlinked/moved-out
+ * objects have no current name and return -ENOENT. */
+int astra_resolve_descriptor_path(int root, int fd, char *path,
                                   uint32_t capacity, uint32_t *length);
 /* Open the resolved entry with RESOLVE_BENEATH and no final link traversal.
  * Truncation happens only after rechecking the held parent's ancestry. */

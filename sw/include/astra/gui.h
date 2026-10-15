@@ -53,6 +53,10 @@ enum {
 /** Window creation and state flags. */
 enum {
     ASTRA_WINDOW_RESIZABLE = 1u << 0,
+    /** While visible, blocks input and activation of other windows opened
+        through the same GUI session. The newest visible modal owns that
+        session's interaction; other applications remain usable. Windows on
+        the shared service GUI port belong to session zero. */
     ASTRA_WINDOW_MODAL = 1u << 1,
     ASTRA_WINDOW_ACTIVE = 1u << 2
 };

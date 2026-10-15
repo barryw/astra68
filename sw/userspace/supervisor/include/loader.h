@@ -7,6 +7,7 @@
 #include <astra/process.h>
 #include <astra/proc.h>
 #include <astra/status.h>
+#include <astra/service_manager_abi.h>
 #include <astra/syscall.h>
 #include <astra/vfs_service.h>
 
@@ -94,7 +95,7 @@ typedef struct SupervisorProcessRecord {
     char (*namespace_names)[ASTRA_CAPABILITY_NAME_MAX];
     uint32_t namespace_count;
     uint32_t namespace_lost;
-    char service_name[ASTRA_VFS_NAME_MAX];
+    char service_name[ASTRA_SERVICE_NAME_MAX];
     /* "/apps/NAME.app" for an application, else empty. */
     char bundle[ASTRA_VFS_PATH_MAX];
 } SupervisorProcessRecord;

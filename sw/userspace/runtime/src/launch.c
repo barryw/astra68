@@ -247,6 +247,8 @@ static uint32_t stream_segments(uint32_t load_handle,
                                 AstraSyscallResult *result,
                                 AstraProcessLoadProfile *profile)
 {
+    uint8_t page[ASTRA_MEMORY_PAGE_SIZE];
+
     while (result->value1 != 0u) {
         const AstraReadSource *source;
         const uint8_t *bytes;
@@ -265,6 +267,32 @@ static uint32_t stream_segments(uint32_t load_handle,
             result->value0, result->value1, &bytes, &moved, profile);
         if (status != ASTRA_SYSCALL_OK)
             return status;
+        /* Intermediate kernel writes must end on a page boundary. A read
+         * source may return any positive prefix, including a short page. */
+        if (moved < result->value1 &&
+            moved % ASTRA_MEMORY_PAGE_SIZE != 0u) {
+            if (moved >= ASTRA_MEMORY_PAGE_SIZE) {
+                moved -= moved % ASTRA_MEMORY_PAGE_SIZE;
+            } else {
+                uint32_t needed = result->value1 < ASTRA_MEMORY_PAGE_SIZE ?
+                    result->value1 : ASTRA_MEMORY_PAGE_SIZE;
+
+                memcpy(page, bytes, moved);
+                while (moved < needed) {
+                    uint32_t additional;
+
+                    status = astra_stream_read_up_to(
+                        source->read_at, source->context, source->length,
+                        result->value0 + moved, needed - moved,
+                        &bytes, &additional, profile);
+                    if (status != ASTRA_SYSCALL_OK)
+                        return status;
+                    memcpy(page + moved, bytes, additional);
+                    moved += additional;
+                }
+                bytes = page;
+            }
+        }
         {
             uint64_t start = load_profile_start(profile);
 

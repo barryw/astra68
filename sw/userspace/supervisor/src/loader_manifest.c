@@ -311,13 +311,15 @@ int supervisor_manifest_parse(char *text, uint32_t length,
                               SupervisorManifest *manifest)
 {
     uint32_t start = 0u;
+    SupervisorManifestEntry *entry;
 
     if (text == NULL || manifest == NULL || length == 0u)
         return 0;
     supervisor_manifest_destroy(manifest);
+    entry = astra_runtime_reallocate(NULL, sizeof(*entry));
+    if (entry == NULL) return 0;
     while (start < length) {
         uint32_t at = start;
-        SupervisorManifestEntry entry;
         char *line;
         char *owned = NULL;
         int result;
@@ -338,28 +340,32 @@ int supervisor_manifest_parse(char *text, uint32_t length,
             owned = astra_runtime_reallocate(NULL, (size_t)tail + 1u);
             if (owned == NULL) {
                 supervisor_manifest_destroy(manifest);
-                return 0;
+                goto failed;
             }
             (void)memcpy(owned, &text[start], tail);
             owned[tail] = '\0';
             line = owned;
         }
-        result = parse_line(line, &entry);
+        result = parse_line(line, entry);
         astra_runtime_deallocate(owned);
         if (result == 0) {
             supervisor_manifest_destroy(manifest);
-            return 0;
+            goto failed;
         }
         if (result == 1) {
             if (manifest->count == manifest->capacity &&
                 !manifest_reserve(manifest)) {
                 supervisor_manifest_destroy(manifest);
-                return 0;
+                goto failed;
             }
-            manifest->entries[manifest->count] = entry;
+            manifest->entries[manifest->count] = *entry;
             ++manifest->count;
         }
         start = at + (at < length ? 1u : 0u);
     }
+    astra_runtime_deallocate(entry);
     return manifest->count != 0u;
+failed:
+    astra_runtime_deallocate(entry);
+    return 0;
 }

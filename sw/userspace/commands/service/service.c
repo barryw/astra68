@@ -9,7 +9,7 @@
 ASTRA_PROGRAM("service", 0, 1, 0, "Astra68 contributors",
               "Copyright 2026 Astra68 contributors");
 
-static AstraServiceDefinition definition;
+static AstraServiceDefinition definition = ASTRA_SERVICE_DEFINITION_INIT;
 
 static const char *state_name(uint32_t state)
 {
@@ -85,7 +85,7 @@ static int list(AstraHandle manager)
     (void)fputs("SERVICE                  TIER     BOOT RESTART  STATE      PID\n",
                 stdout);
     for (;;) {
-        AstraServiceInfo info;
+        AstraServiceInfo info ASTRA_AUTO_SERVICE_INFO = ASTRA_SERVICE_INFO_INIT;
         AstraServiceListCursor next;
         AstraResult result = astra_service_list(
             manager, &cursor, &info, &next);
@@ -103,7 +103,7 @@ static int list(AstraHandle manager)
 
 static int inspect(AstraHandle manager, const char *name)
 {
-    AstraServiceInfo info;
+    AstraServiceInfo info ASTRA_AUTO_SERVICE_INFO = ASTRA_SERVICE_INFO_INIT;
     AstraResult result = astra_service_inspect(
         manager, name, &info, &definition);
     uint32_t argument = 0u;
@@ -247,7 +247,7 @@ int main(int argc, char **argv)
     const AstraStartupInfo *startup = astra_posix_startup();
     const AstraStartupCapability *capability;
     uint32_t action;
-    AstraServiceInfo info;
+    AstraServiceInfo info ASTRA_AUTO_SERVICE_INFO = ASTRA_SERVICE_INFO_INIT;
     AstraResult result;
 
     if (!astra_startup_validate(startup))

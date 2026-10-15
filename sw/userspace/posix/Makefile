@@ -70,13 +70,14 @@ PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 STREAMS_LIBRARY := $(STREAMS)/build/m68k/libraries/streams.library.1
-FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.12
+FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.14
 NETWORK_LIBRARY := $(NETWORK)/build/m68k/libraries/network.library.1
 NETWORK_LIB := $(NETWORK)/build/m68k/libastranetwork.a
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0-hosted.o
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
+SYSTEM_LIB := $(ASTRA_POSIX_SYSTEM)/build/m68k/libastra.a
 LINK_CONTRACT := build/m68k/link-standard-main.elf
 HOST_TEST := build/host/test_strftime_format
 PATH_TEST := build/host/test_path
@@ -144,6 +145,7 @@ static-libraries-ready:
 		build/m68k/crt0-dynamic.o
 	$(MAKE) -C $(STREAMS) build/m68k/libastrastreams.a
 	$(MAKE) -C $(VFS) build/m68k/libastravfs.a
+	$(MAKE) -C $(ASTRA_POSIX_SYSTEM) build/m68k/libastra.a
 	$(MAKE) -C $(NETWORK) build/m68k/libastranetwork.a
 
 PICOLIBC_HEADERS := $(shell find $(PICOLIBC)/include -type f -name '*.h')
@@ -205,7 +207,7 @@ $(LIBC_LIBRARY): $(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-L$(dir $(NETWORK_LIBRARY)) \
 		-Wl,--no-as-needed \
-		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.12 \
+		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.14 \
 		-Wl,-l:network.library.1 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		-Wl,--start-group $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
@@ -230,7 +232,7 @@ libc-library-contract: $(LIBC_LIBRARY)
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [streams.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -Fc 'Shared library: [filesystem.library.12]')" = 1
+		grep -Fc 'Shared library: [filesystem.library.14]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
@@ -266,34 +268,34 @@ PATH_HELPERS := $(VFS)/src/vfs_path.c ../../common/utf8.c
 
 $(PATH_TEST): src/path.c tests/test_path.c $(RUNTIME)/src/string.c $(PATH_HELPERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) -Isrc -I../../include -I$(NDK)/include -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
+	$(HOST_CC) -Isrc -I../../include -I$(VFS)/include -I$(NDK)/include -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
 	src/path.c $(PATH_HELPERS) $(RUNTIME)/src/string.c tests/test_path.c -o $@
 
-$(DESCRIPTOR_TEST): src/console.c src/resource.c $(RUNTIME)/src/startup.c \
+$(DESCRIPTOR_TEST): src/console.c src/resource.c $(RUNTIME)/src/startup.c ../../common/utf8.c \
 		tests/heap_prepare_stub.c tests/test_descriptor.c
 	@mkdir -p $(@D)
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
 		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
 		$(COMMON_FLAGS) $(HOST_RESOURCE_DEFINES) -O2 -no-pie -ffunction-sections \
-		-Wl,--gc-sections src/console.c src/resource.c $(RUNTIME)/src/startup.c \
+		-Wl,--gc-sections src/console.c src/resource.c $(RUNTIME)/src/startup.c ../../common/utf8.c \
 		tests/heap_prepare_stub.c \
 		tests/test_descriptor.c -o $@
 
-$(STARTUP_TEST): src/startup.c src/path.c $(RUNTIME)/src/string.c $(PATH_HELPERS) \
+$(STARTUP_TEST): src/startup.c src/path.c $(RUNTIME)/src/startup.c $(RUNTIME)/src/string.c $(PATH_HELPERS) \
 		tests/test_startup.c
 	@mkdir -p $(@D)
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
 		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
 		$(COMMON_FLAGS) -O2 -no-pie src/startup.c src/path.c $(PATH_HELPERS) \
-		$(RUNTIME)/src/string.c tests/test_startup.c -o $@
+		$(RUNTIME)/src/startup.c $(RUNTIME)/src/string.c tests/test_startup.c -o $@
 
-$(POLL_TEST): src/console.c src/poll.c src/resource.c $(RUNTIME)/src/startup.c \
+$(POLL_TEST): src/console.c src/poll.c src/resource.c $(RUNTIME)/src/startup.c ../../common/utf8.c \
 		tests/heap_prepare_stub.c tests/test_poll.c
 	@mkdir -p $(@D)
 	$(HOST_CC) -Iinclude -I../../include -I$(RUNTIME)/include \
 		-I$(STREAMS)/include -I$(VFS)/include -I$(NDK)/include \
 		$(COMMON_FLAGS) $(HOST_RESOURCE_DEFINES) -O2 -no-pie -ffunction-sections \
-		-Wl,--gc-sections src/console.c src/poll.c src/resource.c $(RUNTIME)/src/startup.c \
+		-Wl,--gc-sections src/console.c src/poll.c src/resource.c $(RUNTIME)/src/startup.c ../../common/utf8.c \
 		tests/heap_prepare_stub.c \
 		tests/test_poll.c -o $@
 
@@ -435,7 +437,7 @@ $(CXX_PROGRAM_OBJECT): kit/program.c
 
 $(CXX_LINK_CONTRACT): tests/cxx_runtime.cpp $(CXX_PROGRAM_OBJECT) $(LIB) \
 		$(RUNTIME_LIB) $(RUNTIME_CRT0) $(STREAMS_LIB) $(VFS_LIB) \
-		$(NETWORK_LIB)
+		$(NETWORK_LIB) $(SYSTEM_LIB)
 	$(CXX) $(CXX_CPPFLAGS) -std=c++17 -Wall -Wextra -Werror -pedantic \
 		$(CXX_TARGET_FLAGS) $(ASTRA_POSIX_STATIC_LDFLAGS) \
 		-o $@ $(ASTRA_POSIX_STATIC_CRT0) \
@@ -460,6 +462,9 @@ $(STREAMS_LIB): | static-libraries-ready
 	@test -f $@
 
 $(VFS_LIB): | static-libraries-ready
+	@test -f $@
+
+$(SYSTEM_LIB): | static-libraries-ready
 	@test -f $@
 
 $(NETWORK_LIB): | static-libraries-ready
@@ -515,7 +520,7 @@ sanitize:
 		src/strftime_format.c tests/test_strftime_format.c \
 		-o build/host/test_strftime_format_sanitize
 	./build/host/test_strftime_format_sanitize
-	$(HOST_CC) -Isrc -I../../include -I$(NDK)/include -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
+	$(HOST_CC) -Isrc -I../../include -I$(VFS)/include -I$(NDK)/include -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		src/path.c $(PATH_HELPERS) $(RUNTIME)/src/string.c tests/test_path.c \
 		-o build/host/test_path_sanitize
@@ -528,7 +533,7 @@ sanitize:
 		-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
 		-Dread=astra_posix_test_read -Dwrite=astra_posix_test_write \
 		-Dpipe=astra_posix_test_pipe \
-		src/console.c src/resource.c $(RUNTIME)/src/startup.c \
+		src/console.c src/resource.c $(RUNTIME)/src/startup.c ../../common/utf8.c \
 		tests/heap_prepare_stub.c tests/test_descriptor.c \
 		-o build/host/test_descriptor_sanitize
 	./build/host/test_descriptor_sanitize

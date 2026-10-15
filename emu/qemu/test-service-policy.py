@@ -6,14 +6,14 @@ Default mode, on an image built with `astra_image.py --fault-probe`:
   - every lifecycle and policy operation on a system or critical service is
     refused;
   - a user choice for a manifest service (media: not at boot, never
-    restarted) survives a clean restart and is obeyed at boot;
+    restarted) survives system-image installation and is obeyed at boot;
   - a user service that keeps dying (fault-probe, restart=always) restarts
     at once, then backs off instead of hot-looping, and `service stop` ends
     the retries.
 
 --critical, on an image built with `astra_image.py --fault-critical`:
-  - fault-probe is a critical service; its death must halt the machine with
-    a panic that names it.
+  - fault-probe is a critical service; its death must halt the machine and
+    name the failed service.
 """
 
 import argparse
@@ -95,17 +95,17 @@ def listed_tier(lines, service):
 
 def check_tiers(shell):
     lines = shell.ok("service list", "TIER")
-    for service, tier in (("storage", "critical"), ("display", "critical"),
+    for service, tier in (("hostfs", "critical"), ("display", "critical"),
                           ("desktop", "system"), ("input", "system"),
                           ("media", "user"), ("remote-desktop", "user")):
         if listed_tier(lines, service) != tier:
             raise RuntimeError("%s is not %s:\n%s" %
                                (service, tier, "\n".join(lines)))
     for text in ("service stop desktop", "service restart display",
-                 "service pause storage", "service start input",
+                 "service pause hostfs", "service start input",
                  "service disable desktop", "service enable display",
                  "service set desktop restart never",
-                 "service set storage restart always"):
+                 "service set hostfs restart always"):
         shell.refused(text)
 
 
@@ -191,13 +191,16 @@ def run_policy(arguments, root):
         clean_shutdown(machine, arguments.command_deadline)
     finally:
         machine.close()
+    # Upgrade the stopped copy through the production installer. A restart
+    # alone cannot detect an installer that deletes persisted user policy.
+    terminal.astra_image.install(image)
     machine = boot(arguments.qemu, arguments.rom, image, second, arguments)
     try:
         check_policy_after_restart(Shell(machine))
     finally:
         machine.close()
     print("ASTRA SERVICE POLICY PASS (tiers refused, %d probe deaths "
-          "backed off, media policy persisted)" % deaths)
+          "backed off, media policy survived image installation)" % deaths)
 
 
 def run_critical(arguments, root):

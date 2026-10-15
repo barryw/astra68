@@ -174,6 +174,18 @@ memcmp(const void *left, const void *right, size_t count)
 }
 #endif
 
+ASTRA_LIBC_FALLBACK void *
+memchr(const void *source, int value, size_t count)
+{
+    const unsigned char *bytes = source;
+    unsigned char byte = (unsigned char)value;
+
+    for (size_t at = 0u; at < count; ++at)
+        if (bytes[at] == byte)
+            return (void *)(bytes + at);
+    return NULL;
+}
+
 ASTRA_LIBC_FALLBACK size_t
 strlen(const char *text)
 {

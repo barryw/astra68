@@ -9,6 +9,7 @@ import struct
 import subprocess
 import tempfile
 import time
+from qemu_runtime import qemu_environment, qemu_test_credentials, unprivileged_command
 
 
 VESTA = 0xFFF00000
@@ -663,6 +664,10 @@ def main():
     SDRAM_SIZE = args.memory_mib * 1024 * 1024
 
     with tempfile.TemporaryDirectory(prefix="astra-block-") as temp:
+        credentials = qemu_test_credentials()
+        if os.geteuid() == 0:
+            os.chown(temp, *credentials)
+            os.chmod(temp, 0o755)
         rom = os.path.join(temp, "block-test.rom")
         image = os.path.join(temp, "storage.img")
         qtest_path = os.path.join(temp, "qtest.sock")
@@ -677,6 +682,8 @@ def main():
             output.write(struct.pack("<I", 0x504E4C30))
             output.seek(0x10)
             output.write(struct.pack("<I", 0x00000200))
+        if os.geteuid() == 0:
+            for path in (image, panel_path): os.chown(path, *credentials)
 
         command = [
             args.qemu, "-machine", "astra68,accel=qtest", "-m",
@@ -689,13 +696,8 @@ def main():
         environment = os.environ.copy()
         environment["ASTRA_FRONT_PANEL_MMIO_PATH"] = panel_path
         environment["ASTRA_FRONT_PANEL_MMIO_OFFSET"] = "0"
-        private_lib = os.path.realpath(
-            os.path.join(os.path.dirname(args.qemu), "..", "lib"))
-        if os.path.isdir(private_lib):
-            existing = environment.get("LD_LIBRARY_PATH")
-            environment["LD_LIBRARY_PATH"] = (
-                private_lib if not existing else f"{private_lib}:{existing}"
-            )
+        environment = qemu_environment(args.qemu, environment)
+        command = unprivileged_command(command, credentials)
         process = subprocess.Popen(command, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL,
                                    env=environment)

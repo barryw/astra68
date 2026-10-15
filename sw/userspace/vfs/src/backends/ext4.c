@@ -14,6 +14,7 @@
  */
 
 #include <astra/vfs_ext4_backend.h>
+#include <astra/vfs_path_storage.h>
 
 #include <ext4.h>
 
@@ -218,12 +219,16 @@ ext4_backend_open_from(void *context, const ext4_dir *parent,
                        AstraVfsNodeInfo *info)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
-    char full[ASTRA_VFS_EXT4_PATH_MAX];
+    AstraVfsPathStorage full_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *full = full_storage.bytes;
+    if (full == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     uint32_t index;
     int native_flags;
     int rc;
 
-    if (parent == NULL && !build_path(backend, path, full, sizeof(full))) {
+    if (parent == NULL && !build_path(backend, path, full, ASTRA_VFS_EXT4_PATH_MAX)) {
         return ASTRA_VFS_ERR_INVALID;
     }
     if ((flags & (ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
@@ -502,13 +507,17 @@ ext4_backend_stat_from(AstraVfsExt4Backend *backend,
                         const ext4_dir *parent, const char *path,
                         AstraVfsNodeInfo *info)
 {
-    char full[ASTRA_VFS_EXT4_PATH_MAX];
+    AstraVfsPathStorage full_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *full = full_storage.bytes;
+    if (full == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     uint32_t mode = 0u;
     uint32_t mtime = 0u;
     uint32_t nlink = 0u;
     int rc;
 
-    if (parent == NULL && !build_path(backend, path, full, sizeof(full)))
+    if (parent == NULL && !build_path(backend, path, full, ASTRA_VFS_EXT4_PATH_MAX))
         return ASTRA_VFS_ERR_INVALID;
     rc = parent == NULL ?
         ext4_meta_get(full, &mode, &info->uid, &info->gid, &mtime,
@@ -602,7 +611,11 @@ ext4_backend_readdir(void *context, uintptr_t directory, const char *path,
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     ext4_dir *scan = NULL;
-    char full[ASTRA_VFS_EXT4_PATH_MAX];
+    AstraVfsPathStorage full_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *full = full_storage.bytes;
+    if (full == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     const ext4_direntry *entry;
     uint32_t copied;
     int rc;
@@ -610,7 +623,7 @@ ext4_backend_readdir(void *context, uintptr_t directory, const char *path,
     (void)directory;
     if (directory != 0u)
         scan = directory_of(backend, directory);
-    else if (!build_path(backend, path, full, sizeof(full)))
+    else if (!build_path(backend, path, full, ASTRA_VFS_EXT4_PATH_MAX))
         return ASTRA_VFS_ERR_INVALID;
     if (directory != 0u && scan == NULL)
         return ASTRA_VFS_ERR_BAD_HANDLE;
@@ -692,9 +705,13 @@ static uint32_t
 ext4_backend_mkdir(void *context, const char *path, uint16_t create_mode)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
-    char full[ASTRA_VFS_EXT4_PATH_MAX];
+    AstraVfsPathStorage full_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *full = full_storage.bytes;
+    if (full == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
 
-    if (!build_path(backend, path, full, sizeof(full))) {
+    if (!build_path(backend, path, full, ASTRA_VFS_EXT4_PATH_MAX)) {
         return ASTRA_VFS_ERR_INVALID;
     }
     if (!scan_lock(backend))
@@ -710,11 +727,15 @@ static uint32_t
 ext4_backend_unlink(void *context, const char *path, uint32_t flags)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
-    char full[ASTRA_VFS_EXT4_PATH_MAX];
+    AstraVfsPathStorage full_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *full = full_storage.bytes;
+    if (full == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     int rc;
 
     if ((flags & ~ASTRA_VFS_UNLINK_DIRECTORY) != 0u ||
-        !build_path(backend, path, full, sizeof(full))) {
+        !build_path(backend, path, full, ASTRA_VFS_EXT4_PATH_MAX)) {
         return ASTRA_VFS_ERR_INVALID;
     }
     if (!scan_lock(backend))
@@ -750,11 +771,19 @@ static uint32_t
 ext4_backend_rename(void *context, const char *from, const char *to)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
-    char old_path[ASTRA_VFS_EXT4_PATH_MAX];
-    char new_path[ASTRA_VFS_EXT4_PATH_MAX];
+    AstraVfsPathStorage old_path_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *old_path = old_path_storage.bytes;
+    if (old_path == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    AstraVfsPathStorage new_path_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *new_path = new_path_storage.bytes;
+    if (new_path == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
 
-    if (!build_path(backend, from, old_path, sizeof(old_path)) ||
-        !build_path(backend, to, new_path, sizeof(new_path)))
+    if (!build_path(backend, from, old_path, ASTRA_VFS_EXT4_PATH_MAX) ||
+        !build_path(backend, to, new_path, ASTRA_VFS_EXT4_PATH_MAX))
         return ASTRA_VFS_ERR_INVALID;
     if (!scan_lock(backend))
         return ASTRA_VFS_ERR_IO;
@@ -767,9 +796,13 @@ static uint32_t
 ext4_backend_chmod(void *context, const char *path, uint16_t mode)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
-    char full[ASTRA_VFS_EXT4_PATH_MAX];
+    AstraVfsPathStorage full_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *full = full_storage.bytes;
+    if (full == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
 
-    if (!build_path(backend, path, full, sizeof(full)))
+    if (!build_path(backend, path, full, ASTRA_VFS_EXT4_PATH_MAX))
         return ASTRA_VFS_ERR_INVALID;
     if (!scan_lock(backend))
         return ASTRA_VFS_ERR_IO;
@@ -816,12 +849,16 @@ ext4_backend_readlink(void *context, const char *path, void *buffer,
                       uint32_t capacity, uint32_t *length)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
-    char full[ASTRA_VFS_EXT4_PATH_MAX];
+    AstraVfsPathStorage full_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *full = full_storage.bytes;
+    if (full == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     size_t moved = 0u;
     int rc;
 
     if (buffer == NULL || length == NULL || capacity == 0u ||
-        !build_path(backend, path, full, sizeof(full)))
+        !build_path(backend, path, full, ASTRA_VFS_EXT4_PATH_MAX))
         return ASTRA_VFS_ERR_INVALID;
     rc = ext4_readlink(full, buffer, capacity, &moved);
     if (rc == EOK)
@@ -833,10 +870,14 @@ static uint32_t
 ext4_backend_symlink(void *context, const char *target, const char *path)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
-    char full[ASTRA_VFS_EXT4_PATH_MAX];
+    AstraVfsPathStorage full_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *full = full_storage.bytes;
+    if (full == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
 
     if (target == NULL || target[0] == '\0' ||
-        !build_path(backend, path, full, sizeof(full)))
+        !build_path(backend, path, full, ASTRA_VFS_EXT4_PATH_MAX))
         return ASTRA_VFS_ERR_INVALID;
     if (!scan_lock(backend))
         return ASTRA_VFS_ERR_IO;
@@ -849,11 +890,19 @@ static uint32_t
 ext4_backend_link(void *context, const char *from, const char *to)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
-    char from_full[ASTRA_VFS_EXT4_PATH_MAX];
-    char to_full[ASTRA_VFS_EXT4_PATH_MAX];
+    AstraVfsPathStorage from_full_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *from_full = from_full_storage.bytes;
+    if (from_full == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    AstraVfsPathStorage to_full_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *to_full = to_full_storage.bytes;
+    if (to_full == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
 
-    if (!build_path(backend, from, from_full, sizeof(from_full)) ||
-        !build_path(backend, to, to_full, sizeof(to_full)))
+    if (!build_path(backend, from, from_full, ASTRA_VFS_EXT4_PATH_MAX) ||
+        !build_path(backend, to, to_full, ASTRA_VFS_EXT4_PATH_MAX))
         return ASTRA_VFS_ERR_INVALID;
     if (!scan_lock(backend))
         return ASTRA_VFS_ERR_IO;
@@ -868,7 +917,11 @@ ext4_backend_filesystem_info(void *context, uintptr_t node,
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     struct ext4_mount_stats stats;
-    char full[ASTRA_VFS_EXT4_PATH_MAX];
+    AstraVfsPathStorage full_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *full = full_storage.bytes;
+    if (full == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     int rc;
 
     if (info == NULL || ((node == 0u) == (path == NULL)))
@@ -878,7 +931,7 @@ ext4_backend_filesystem_info(void *context, uintptr_t node,
             directory_of(backend, node) == NULL)
             return ASTRA_VFS_ERR_BAD_HANDLE;
     } else {
-        if (!build_path(backend, path, full, sizeof(full)))
+        if (!build_path(backend, path, full, ASTRA_VFS_EXT4_PATH_MAX))
             return ASTRA_VFS_ERR_INVALID;
         rc = ext4_inode_exist(full, EXT4_DE_UNKNOWN);
         if (rc != EOK)

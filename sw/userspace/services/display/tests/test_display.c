@@ -1841,6 +1841,27 @@ static void test_menu_key_ownership(void)
     assert(handle_pointer(&state, &text, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
     assert(delivered_count == 4u && delivered.event.type == ASTRA_WINDOW_EVENT_TEXT &&
         delivered.event.data.text.codepoint == 'a');
+
+    /* A desktop keeps the same popup ownership contract even though its
+       application ACTIVE flag deliberately remains clear. */
+    window.request.type = ASTRA_WINDOW_DESKTOP;
+    window.request.flags &= ~ASTRA_WINDOW_ACTIVE;
+    key.code = 0xe1u;
+    key.flags = ASTRA_INPUT_LOGICAL_DOWN;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(delivered_count == 5u);
+    set_overlay(&state, DISPLAY_OVERLAY_MENU);
+    key.flags = 0u;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(delivered_count == 6u &&
+           delivered.event.data.key.usage == 0xe1u && delivered.event.flags == 0u);
+    key.code = 0x29u;
+    key.flags = ASTRA_INPUT_LOGICAL_DOWN;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(state.overlay == DISPLAY_OVERLAY_NONE && delivered_count == 6u);
+    key.flags = 0u;
+    assert(handle_pointer(&state, &key, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(delivered_count == 6u);
 }
 
 static void test_dense_menu_render(void)
@@ -1869,7 +1890,7 @@ static void test_context_menu_transport(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     DisplayWindow windows[2] = {{.id = 1u, .generation = 1u, .event_send = 0x500u,
-        .request = {.type = ASTRA_WINDOW_STANDARD, .flags = ASTRA_WINDOW_ACTIVE,
+        .request = {.type = ASTRA_WINDOW_STANDARD, .flags = ASTRA_WINDOW_ACTIVE | ASTRA_WINDOW_MODAL,
                     .x = 100u, .y = 100u, .width = 320u, .height = 180u}}};
     DisplayState state = {.windows = windows, .count = 1u};
     AstraGuiWindowCommand command = {.window = 1u, .generation = 1u,
@@ -1971,6 +1992,121 @@ static void test_context_menu_transport(void)
     assert(astra_close(area) == ASTRA_SYSCALL_OK);
 }
 
+static void test_modal_windows(void)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayWindow windows[TEST_WINDOW_COUNT] = {0};
+    DisplayState state = {.windows = windows, .capacity = TEST_WINDOW_COUNT};
+    AstraGuiWindowCommand command = {.window = 1u, .action = ASTRA_GUI_WINDOW_ACTIVATE};
+    DisplayWindow closed = {0};
+    uint32_t effects = 0u, frame = 0u, timestamp = 0u, blocked = 0u, region = HIT_NONE;
+    int changed = 0;
+
+    add_window(&state, 0u, ASTRA_WINDOW_STANDARD, 100u, 100u, 300u, 190u,
+               ASTRA_WINDOW_ACTIVE, ASTRA_WINDOW_GADGET_CLOSE);
+    add_window(&state, 1u, ASTRA_WINDOW_STANDARD, 1100u, 300u, 300u, 190u, 0u, 0u);
+    windows[0].session = 7u; windows[1].session = 8u;
+    windows[0].request.event_mask = ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON;
+    windows[0].request.close_state = ASTRA_GADGET_PRESSED;
+    state.capture_window = 1u; state.capture_region = HIT_CLOSE;
+    state.pending_input_valid = 1u; state.pending_input_window = 1u;
+    add_window(&state, 2u, ASTRA_WINDOW_DIALOG, 600u, 300u, 300u, 190u,
+               ASTRA_WINDOW_MODAL, ASTRA_WINDOW_GADGET_CLOSE);
+    windows[2].session = 7u;
+    windows[2].request.event_mask = ASTRA_WINDOW_SUBSCRIBE_KEY;
+    /* Admission uses canonical activation; an old owner's capture ends with
+       the ordinary loss/reset event, including any pressed frame gadget. */
+    assert(activate(&state, &theme, 3u, 1, 0u));
+    assert(state.capture_window == 0u && windows[0].request.close_state == ASTRA_GADGET_NORMAL);
+    assert(state.pending_input_valid == 0u && windows[0].event_lost != 0u);
+    assert(delivered.event.type == ASTRA_WINDOW_EVENT_STATE_RESET &&
+           (delivered.event.flags & ASTRA_WINDOW_EVENT_LOSS) != 0u);
+    windows[0].request.event_mask = windows[2].request.event_mask = ASTRA_WINDOW_SUBSCRIBE_ALL;
+    assert(modal_window(&state, find_id(&state, 1u)) == find_id(&state, 3u));
+    assert(modal_window(&state, find_id(&state, 2u)) == find_id(&state, 2u));
+    state.pointer_x = 150; state.pointer_y = 150;
+    assert(pointer_target(&state, &theme, &region, &blocked) == state.count &&
+           blocked == find_id(&state, 3u));
+    AstraLogicalInputEvent pointer = {.type = ASTRA_INPUT_EVENT_POINTER_BUTTON,
+        .flags = ASTRA_INPUT_LOGICAL_DOWN, .code = ASTRA_INPUT_BUTTON_LEFT};
+    uint32_t before = delivered_count;
+    assert(handle_pointer(&state, &pointer, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    pointer.flags = 0u;
+    assert(handle_pointer(&state, &pointer, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(delivered_count == before && state.swallow_pointer_up == 0u &&
+           state.windows[active_window(&state)].id == 3u);
+    pointer.code = ASTRA_INPUT_BUTTON_WHEEL_UP; pointer.flags = ASTRA_INPUT_LOGICAL_DOWN;
+    assert(handle_pointer(&state, &pointer, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(delivered_count == before);
+    assert(menu_open(&state, &theme, find_id(&state, 1u), &command, 0u) == ASTRA_STATUS_ACCESS);
+    /* Another application can work while this one waits for its dialog. */
+    assert(activate(&state, &theme, 2u, 1, 0u));
+    assert(state.windows[keyboard_window(&state)].id == 2u);
+    changed = 0;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK && changed);
+    assert(state.windows[keyboard_window(&state)].id == 3u);
+    command.action = ASTRA_GUI_WINDOW_RAISE; changed = 0;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK);
+    assert(state.windows[state.count - 1u].id == 3u);
+    add_window(&state, state.count, ASTRA_WINDOW_STANDARD, 700u, 400u, 300u, 190u,
+               ASTRA_WINDOW_MODAL | ASTRA_WINDOW_RESIZABLE, ASTRA_WINDOW_GADGET_CLOSE);
+    state.windows[state.count - 1u].session = 7u;
+    assert(activate(&state, &theme, 4u, 1, 0u));
+    assert(state.windows[modal_window(&state, find_id(&state, 1u))].id == 4u);
+    assert(menu_open(&state, &theme, find_id(&state, 3u), &command, 0u) == ASTRA_STATUS_ACCESS);
+    command.window = 4u; command.action = ASTRA_GUI_WINDOW_LOWER; changed = 0;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_BUSY && !changed);
+    command.action = ASTRA_GUI_WINDOW_MINIMIZE;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK);
+    assert(state.windows[modal_window(&state, find_id(&state, 1u))].id == 3u);
+    /* An intervening real click raises A above the minimized B. Restoring B
+       must put B back in front before the modal target is resolved. */
+    state.pointer_x = 650; state.pointer_y = 350;
+    pointer.code = ASTRA_INPUT_BUTTON_LEFT; pointer.flags = ASTRA_INPUT_LOGICAL_DOWN;
+    assert(handle_pointer(&state, &pointer, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    pointer.flags = 0u;
+    assert(handle_pointer(&state, &pointer, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(state.windows[state.count - 1u].id == 3u);
+    command.action = ASTRA_GUI_WINDOW_RESTORE;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK);
+    assert(state.windows[active_window(&state)].id == 4u && state.windows[state.count - 1u].id == 4u);
+    for (uint32_t cycle = 0u; cycle < 2u; ++cycle) {
+        command.action = ASTRA_GUI_WINDOW_MINIMIZE;
+        assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK);
+        pointer.code = ASTRA_INPUT_BUTTON_LEFT; pointer.flags = ASTRA_INPUT_LOGICAL_DOWN;
+        assert(handle_pointer(&state, &pointer, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+        pointer.flags = 0u;
+        assert(handle_pointer(&state, &pointer, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+        assert(state.windows[state.count - 1u].id == 3u);
+        command.action = ASTRA_GUI_WINDOW_MAXIMIZE;
+        assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK);
+        assert(state.windows[active_window(&state)].id == 4u &&
+               state.windows[state.count - 1u].id == 4u &&
+               state.windows[state.count - 1u].state == ASTRA_WINDOW_STATE_MAXIMIZED);
+    }
+    command.action = ASTRA_GUI_WINDOW_CLOSE;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK);
+    assert(find_id(&state, 4u) == state.count && state.windows[keyboard_window(&state)].id == 3u);
+    state.pointer_x = 150; state.pointer_y = 150;
+    pointer.flags = ASTRA_INPUT_LOGICAL_DOWN;
+    for (pointer.code = ASTRA_INPUT_BUTTON_LEFT; pointer.code <= ASTRA_INPUT_BUTTON_RIGHT; ++pointer.code) {
+        assert(handle_pointer(&state, &pointer, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+        assert((state.swallow_pointer_up & (1u << (pointer.code - 1u))) != 0u);
+    }
+    command.window = 3u;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK);
+    assert(modal_window(&state, find_id(&state, 1u)) == find_id(&state, 1u));
+    before = delivered_count; pointer.flags = 0u;
+    for (pointer.code = ASTRA_INPUT_BUTTON_LEFT; pointer.code <= ASTRA_INPUT_BUTTON_RIGHT; ++pointer.code)
+        assert(handle_pointer(&state, &pointer, &effects, &frame, &timestamp) == ASTRA_STATUS_OK);
+    assert(delivered_count == before && state.swallow_pointer_up == 0u);
+    /* Ordinary window teardown removes all modal authority with the resource;
+       no separate modal record survives a session or its last window. */
+    command.window = 1u;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK);
+    assert(state.count == 1u && state.windows[0].session == 8u);
+}
+
 int main(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -2036,6 +2172,7 @@ int main(void)
     test_dynamic_window_resources();
     test_window_graphics();
     test_menu_key_ownership();
+    test_modal_windows();
     test_dense_menu_render();
     test_context_menu_transport();
     test_content_banks();
@@ -2628,6 +2765,59 @@ int main(void)
                               &desktop_frame, &desktop_timestamp) ==
                ASTRA_STATUS_OK);
         assert((desktop_effects & DISPLAY_POINTER_RENDER) == 0u);
+
+        down.flags = 0u;
+        assert(handle_pointer(&desktop, &down, &desktop_effects,
+                              &desktop_frame, &desktop_timestamp) == ASTRA_STATUS_OK);
+        add_window(&desktop, 1u, ASTRA_WINDOW_STANDARD, 100u, 100u,
+                   320u, 180u, ASTRA_WINDOW_ACTIVE, 0u);
+        assert(active_window(&desktop) == 1u && keyboard_window(&desktop) == 1u);
+        down.flags = ASTRA_INPUT_LOGICAL_DOWN;
+        assert(handle_pointer(&desktop, &down, &desktop_effects,
+                              &desktop_frame, &desktop_timestamp) == ASTRA_STATUS_OK);
+        down.flags = 0u;
+        assert(handle_pointer(&desktop, &down, &desktop_effects,
+                              &desktop_frame, &desktop_timestamp) == ASTRA_STATUS_OK);
+        assert(active_window(&desktop) == desktop.count && keyboard_window(&desktop) == 0u);
+        assert(desktop.windows[0].id == 1u && desktop.windows[1].id == 2u &&
+               (desktop.windows[0].request.flags & ASTRA_WINDOW_ACTIVE) == 0u &&
+               (desktop.windows[1].request.flags & ASTRA_WINDOW_ACTIVE) == 0u);
+        AstraLogicalInputEvent key = {.type = ASTRA_INPUT_EVENT_KEY,
+            .flags = ASTRA_INPUT_LOGICAL_DOWN, .code = 0x4du};
+        uint32_t before = delivered_count;
+        uint32_t desktop_sequence = desktop.windows[0].event_sequence;
+        uint32_t application_sequence = desktop.windows[1].event_sequence;
+        assert(handle_pointer(&desktop, &key, &desktop_effects,
+                              &desktop_frame, &desktop_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered_count == before + 1u && desktop.windows[0].event_sequence == desktop_sequence + 1u &&
+               desktop.windows[1].event_sequence == application_sequence &&
+               delivered.event.type == ASTRA_WINDOW_EVENT_KEY && delivered.event.data.key.usage == 0x4du);
+        AstraLogicalInputEvent text = {.type = ASTRA_INPUT_EVENT_TEXT, .code = 'a'};
+        assert(handle_pointer(&desktop, &text, &desktop_effects,
+                              &desktop_frame, &desktop_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered_count == before + 2u && desktop.windows[0].event_sequence == desktop_sequence + 2u &&
+               delivered.event.type == ASTRA_WINDOW_EVENT_TEXT);
+        AstraLogicalInputEvent reset = {.type = ASTRA_INPUT_EVENT_STATE_RESET};
+        assert(handle_pointer(&desktop, &reset, &desktop_effects,
+                              &desktop_frame, &desktop_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered_count == before + 3u && desktop.windows[0].event_sequence == desktop_sequence + 3u &&
+               delivered.event.type == ASTRA_WINDOW_EVENT_STATE_RESET &&
+               (delivered.event.flags & ASTRA_WINDOW_EVENT_LOSS) != 0u && desktop.capture_window == 0u);
+        desktop.windows[0].state = ASTRA_WINDOW_STATE_MINIMIZED;
+        assert(keyboard_window(&desktop) == desktop.count);
+        assert(handle_pointer(&desktop, &key, &desktop_effects,
+                              &desktop_frame, &desktop_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered_count == before + 3u);
+        desktop.windows[0].state = ASTRA_WINDOW_STATE_NORMAL;
+        assert(activate(&desktop, &theme, 2u, 1, 0u));
+        assert(keyboard_window(&desktop) == 1u);
+        before = delivered_count;
+        application_sequence = desktop.windows[1].event_sequence;
+        key.code = 0x4au;
+        assert(handle_pointer(&desktop, &key, &desktop_effects,
+                              &desktop_frame, &desktop_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered_count == before + 1u && desktop.windows[1].event_sequence == application_sequence + 1u &&
+               delivered.event.data.key.usage == 0x4au);
     }
 
     {
@@ -2721,6 +2911,9 @@ int main(void)
     state.damage[0] = (DamageRect){0};
     add_window(&state, 2u, ASTRA_WINDOW_DIALOG, 520u, 300u,
                400u, 190u, ASTRA_WINDOW_MODAL, ASTRA_WINDOW_GADGET_CLOSE);
+    /* This geometry/gallery matrix has an independent dialog subject. The
+       same-owner interaction restriction is covered by test_modal_windows. */
+    state.windows[2].session = 3u;
     damage_window(&state, &theme, &state.windows[2]);
     assert(valid_batch(compose(batch, 3u, &state, &error, NULL)) != 0u);
     commit_render_state(&state);

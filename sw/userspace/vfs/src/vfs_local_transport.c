@@ -26,12 +26,13 @@
 uint32_t
 astra_vfs_local_transport(void *context, uint32_t operation,
                           const AstraVfsRequest *request,
+                          const AstraVfsTransfer *transfer,
                           AstraVfsReply *reply)
 {
     if (context == NULL) {
         return ASTRA_VFS_ERR_INVALID;
     }
     astra_vfs_service_dispatch((AstraVfsService *)context, operation, request,
-                               reply);
+                               transfer, reply);
     return ASTRA_VFS_OK;
 }

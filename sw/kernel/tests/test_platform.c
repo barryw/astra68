@@ -294,6 +294,8 @@ static void test_owner_scoped_host_transport(void)
 
     clear_registers(registers);
     registers->HOST_ACCEL_ID = HOST_ACCEL_ID_MAGIC;
+    registers->HOST_ACCEL_VERSION = ASTRA_HOST_VERSION - UINT32_C(0x00010000);
+    assert(!kernel_platform_host_present());
     registers->HOST_ACCEL_VERSION = ASTRA_HOST_VERSION;
     registers->HOST_ACCEL_STATUS = ASTRA_SYSCALL_OK;
     registers->HOST_ACCEL_COMPLETED = 3u;
@@ -306,7 +308,7 @@ static void test_owner_scoped_host_transport(void)
     assert(registers->HOST_ACCEL_REQ_COUNT == 3u);
     registers->HOST_ACCEL_CHANNEL_RESULT = ASTRA_SYSCALL_OK;
     assert(kernel_platform_host_channel_open(
-               0x10000021u, 7u, 3u, 2u, 0x02010000u, 4096u, 1u, 0u, 0u,
+               0x10000021u, 42u, 7u, 3u, 2u, 0x02010000u, 4096u, 1u, 0u, 0u,
                0u, 0u) ==
            ASTRA_SYSCALL_OK);
     assert(registers->HOST_ACCEL_CHANNEL_CONFIG != 0u &&

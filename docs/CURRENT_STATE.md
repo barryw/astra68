@@ -1,6 +1,936 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-12
+Status: active continuation map, 2026-10-15
+
+Latest user scope is the complete fixed/removable filesystem, explicitly
+excluding network mounts. Correctness remains ahead of performance.
+
+Current production checkpoint: coherent Startup ABI 8 source 28, manifest
+`443536186af4626cfc75a2f8404a0a22d6e9a9bda9e1afe60a25675f219af05c`,
+immutable release
+`eeb95de8da994a2d0d976f74f691f7644fcdf9354d249af9bcf7b00fab116350`.
+Its clean kernel, userspace, ROM, image, seven filesystem gates, native volume
+lifecycle (ISO, busy holders, RAM/HostFS/restart, stale generations), Atlas
+overflow, desktop volume/safe-removal UI, Terminal/Vim and 30-second Doom
+gameplay/audio/MIDI replay pass. Source 25 also passed NDK examples, six power
+cases, service policy and eight SDL probes. Source 28 corrected the launcher
+preflight to accept a readable, non-executable Python image selector; the
+isolated new-runtime and old-runtime rollback trials both reached POST/stage 8
+on DE25 with separate image/export clones and unprivileged QEMU.
+
+DE25 now runs the complete production-storage Linux kernel
+`6.12.11-astra-storage1-gd7d192a9ddd9`, package identity
+`ab511cc12039f8bd0cb0d75b78295ef9513c9f40b90d6f52b07eadb1dc51844d`.
+Canonical stage, arm, physical boot, vendor rollback, and re-arm/second boot
+all passed through Beast. Old Astra release
+`0aa2d7130c3120df7d7b64481e5ee2b6393b603767814213b673285fd68f9b36`
+remains pinned as rollback predecessor with its original state image. A fresh
+stopped-state backup after its final production boot is sealed at
+`/var/backups/astra/fs14-final-20261015/` and duplicated under
+`/home/barry/astra-fs14-production-20261015/final/` on Beast. Image SHA256 is
+`84e534e5130625a97671ebc27857d0d048b9286b3f0a1620eec95cff8d078a51`;
+WORK/SOUND archive SHA256 is
+`a009061993c4edf9deee063b1f8510ecd89763ebbf391ad7cae8304aa4beea93`.
+Archive restore matched exported content and metadata. Journal replay and a
+free-block-count correction were applied only to a separate reference copy;
+source 28 image install then preserved all 23 existing `/home`, `/local` and
+`/config` entries and passed clean fsck. Installed candidate SHA256 was
+`5044ba8fe5457913fa49a985c50696f01a626c375fc9c2bd1fb6c7ec573664cd`.
+
+Canonical DE25 activation and kernel confirmation passed. Production source 28
+reached POST/stage 8 before and after runtime restart, with QMP, three active
+services, zero automatic restarts and QEMU UID/GID 999, no groups/capabilities,
+and `NoNewPrivs=1`. Physical 1920x1080 HDMI DMA capture passed; DH0 double-click
+opened Atlas and enumerated root. Guest `volumes --all`, `df -k` and `lsof /dh0`
+returned mounted volumes, capacities and exact live holders. A unique WORK file
+was written through guest zsh, read back through guest `cat` after restart with
+status zero and matching host SHA256, then removed through guest `rm`. No trial
+drop-in remains; production state and exports are selected.
+
+Physical USB/CD hotplug, safe-removal and eject remain unqualified because no
+such devices are attached. Linux root `/dev/mmcblk0p2` still carries its
+pre-existing ext4 `clean with errors` flag; do not fsck the mounted root. No
+new kernel I/O error appeared during qualification. Network mounts are excluded;
+broad performance qualification follows correctness, not this cutover.
+
+## Historical filesystem investigation (superseded checkpoints)
+
+Filesystem 14 / Kit 11 development began with native administrator control,
+exact unmount fencing and retained-file image admission. Those mechanisms
+passed the earlier control/provider gates. Provider protocol 2
+adds physical eject, explicit image-source retirement, private retained-backing
+inspection and typed admission references. Linux provider, real image mounts,
+discovery and sanitizers pass in the isolated
+`astra68-fs-lifecycle-gate/build/linux-first/volume-lifecycle-cleanup-2.log`.
+Fault-injected rollback and CLI lifecycle tests also pass host and sanitizers:
+failed cleanup remains visible and charged until actual release, mount names
+reuse only after real retirement, and CLI completion respects exact generations,
+failed eject, provider loss and retained cleanup. The first image-policy gate
+had a stale Desktop grant expectation; the corrected second gate passes.
+Configured RAM source identity now survives unmount independently of its
+current mount name. RAM_READ/RAM_WRITE scoped brokers replace the static RAM0
+publication, preserving restricted RAM authority across remounts without
+retargeting old grants. The actual raw provider ISO gate
+`volume-usage-iso-provider-4.log` passes retained-file admission, read-only ISO
+enumeration with UTF-8 names, exact backing/directory usage, busy refusal and
+actual source retirement; preserved root-owned data and clean fsck pass too.
+`volume-lifecycle-consumers-2.log` passes the native heap consumers, HostFS
+host/sanitizers and Linux image admission including actual inode validation.
+System 4 host/sanitizers and complete library contracts pass in
+`system-consumer-2.log`; Supervisor/catalog/Atlas native objects compile in the
+third diagnostic, whose obsolete launch-report oracle is being corrected.
+These are focused checkpoints, not a coherent Filesystem 14 runtime release.
+
+Final review found detached cleanup retries and failed-authority resume gaps;
+both now use quarantined FAILED state, with actual reaper fault tests passing
+host and sanitizers in `volume-lifecycle-cleanup-7.log`. That gate also passes
+shared root holder projection, paging and notification-failure tests, native
+volume host/sanitizers and HostFS/Desktop target compilation. Usage
+protocol/format 2 projects shared root holders from the
+existing authenticated VFS sessions, with a process cursor key and changes
+published through the existing QEMU usage sequence. No parallel holder ledger
+was introduced. QEMU source `03660fae95ef3ffe36c12c5de4a2bb00a632274f0a33086e982477ec19a0b1ac`
+and `volume-usage-iso-provider-6.log` pass the complete raw ISO/control gate,
+including holder notification authority and stale usage-page refusal. Its
+previous failure was a test helper inferring append-write operands for volume
+operation 4; typed zero operands correct that oracle.
+Usage attribution, detailed Desktop safe removal, live namespace integration,
+coordinated 255-byte-name/4095-byte-path transport/launch contracts and full
+production cutover still require coherent build and guest/board qualification.
+The first native board provider test failed at transient final loop release;
+its bounded retry oracle is corrected and `volume-provider-board-2.log` passes
+actual AArch64 provider/image/loss/cleanup tests with transfer hashes verified.
+System/Supervisor consumer gate 4 passes the final owned host/sanitizer/target
+and System 4 library contracts. VFS/SDK full qualification is still in progress.
+Fatal provider exit now has an outside owner retaining the exact domain inode
+and child lifetimes. `volume-domain-guardian-2.log` passes real mounts, provider
+and rollback sanitizers, fatal SIGKILL/SIGABRT cleanup, retained external-loop
+retirement and AArch64 builds. The first guard gate exposed a real namespace
+anchor defect: the child now reopens the same owned domain inside its private
+namespace, with inode and mount-identity oracles. There is no global directory
+sweep or alternate storage cleanup engine. The native board provider unit passes
+the new constructor. `volume-domain-guardian-board-3.log` passes the actual DE25
+launcher, normal/fatal descendants, crash-directory retirement and retained
+external-loop cleanup with transfer hashes checked. The earlier board failures
+were fixture traversal permissions and Python 3.10 signal-enum formatting; both
+oracles are corrected. `volume-usage-iso-provider-7.log` passes the matching
+guardian/provider raw ISO gate. `volume-guardian-hostile-caller-1.log` passes all
+21 privileged-helper tests, including concurrent disk reservation, preserved
+root-owned metadata and exact cleanup on success and failure.
+
+Whole userspace build 1 stopped at the bootstrap interpreter's missing canonical
+System PIC dependency; the corrected closed loader contract passes. Further
+review found copied native file/client ownership across fork and shared-client
+reinitialization during concurrent lazy admission. Epoch-checked native objects
+and retained local pins pass focused fork/token-reuse tests, including image
+sharing and failed CWD adoption. Full VFS/POSIX host, ASan/UBSan, MC68040,
+C++, closed Loader and SDK header/HTML/623-page PDF gates pass in
+`volume-fork-owner-final-2.log`. Its final ThreadSanitizer step exposed shared
+mock-area aliasing; the corrected per-resource test model passes ASan/UBSan,
+ThreadSanitizer, normal and embedded port gates with zero warnings in
+`volume-lazy-port-final-2.log`. Coherent guest qualification remains pending. `df`
+now queries mounted instances through canonical capacity APIs and exact public
+root grants; target analyzer passes, actual guest checks are pending.
+The source-only export is `/home/barry/Git/astra68-fs-release-14`. Its clean
+whole build 2 exposed an ncurses configure probe missing the canonical System
+static archive; the corrected dependency passes fresh configure/archive/shared
+contracts in `volume-terminfo-system-static-1.log`. Release review also found
+that system-image installation erased persisted `/config` policy. The corrected
+installer passes actual repeated ext4 preservation, missing-default, clean-fsck
+and atomic conflict-refusal tests in `installer-preservation-3.log`. Upgrade/boot
+policy and stopped production-state migration remain required.
+Whole userspace compilation and library ownership pass; obsolete CWD-stack and
+192-byte events-path test oracles are corrected. Complete userspace tests and
+kernel/ROM verification pass with explicit exit zero in
+`production-filesystem-build-6.log`. Source identity is
+`8bd9f48e4b2ebaecf9f2384c48bbe4202d3359f95d9caafd6d2b0559026270a7`.
+The first coherent live guest gate, `production-filesystem-linux-first-1.log`,
+fails before Terminal: Desktop returns 36 during graphics/control setup, and
+Supervisor logs `store defaults:4: failed`. Desktop now assigns its ScrollView
+child's parent before UI admission; Supervisor seeds new-store defaults only
+from a validated bundle root, never beneath a raw service ELF. Rebuild 7 passes
+the relevant host/target and ROM gates; actual Desktop/Terminal startup passes.
+The next live gate exposed an empty root-path query in `df`; canonical `/`
+fixes it. Rebuild 8 passes, and `production-filesystem-linux-first-3.log` passes
+volume listing/capacity, system reads and HOME/RAM/TMP/WORK writes. Its first
+native ISO admission fails with permission error -6. Its native share/control
+authority mismatch is corrected in the HostChannel 5 source below; the
+coordinated rebuild and full lifecycle/UI/durability remain unaccepted. That
+measured build's source identity is
+`8db5e77eef1cd13666f0b935d9c3316aa5e6a8d0e0167ebd06edc44f3d2c487e`.
+Production remains unchanged; no network mount work or physical USB/CD
+acceptance occurred.
+
+The complete production storage kernel now builds from the frozen source-only
+export with explicit exit zero in `production-filesystem-kernel-3.log`. Package
+`build/de25-kernel-storage/package-3` contains 1,344 modules, including `sr_mod`,
+`cdrom` and both Astra modules, with verified depmod output, matching vermagic,
+full DTBs and SHA256SUMS. Release is
+`6.12.11-astra-storage1-gd7d192a9ddd9`; package manifest identity is
+`703bb41efcf0a00fa659da498268395c4799e1b4cd4e7631efc55dfe3c581ab5`.
+The verified package, exact source manifest and build log are retained at
+`/mnt/Documents/astra68/builds/production-filesystem14-20261014/kernel-3`.
+This is build evidence, not physical kernel acceptance. Native ISO admission
+capture 2 in the separate VFS gate tree closes with exit 1 and isolates the
+refusal before the Linux provider: authenticated native PID 39 is compared
+directly against retained-file host owner `0x10000027`. The owner tag/PID
+boundary and usage PID projection are being corrected together; ownership
+checks must remain exact. The host owner counter is allocated independently of
+PID, so decoding its prefix is invalid. The coordinated fix carries the
+kernel-stamped native process identity beside the existing resource owner in
+HostChannel 5; accounting and release continue to use the resource owner.
+Kernel tests/all/verify and the focused raw identity/PID-reuse/refusal oracles
+pass. The first complete raw gate stops at an old directory-usage fixture that
+substituted resource owner for PID; its typed-channel correction is being
+qualified without rebuilding unchanged QEMU. Final native port negotiation now
+advertises retained descriptions only when its direct transport can implement
+them. Port/process/volume-client, ASan/UBSan/ThreadSanitizer, native VFS/service,
+closed Loader and NDK header gates all pass with explicit exit zero in
+`volume-negotiated-port-1.log`. Temporary ISO diagnostics are removed. Sources
+are frozen for the next coherent source-only build.
+Coherent source-only build 9 passes complete userspace tests, kernel/ROM
+verification and fresh image production from source
+`aa172de3945a0460ab6b8d244711e97cc77968de0309abedc69d14f55b8ab1e0`.
+The first actual native ISO admission/read now succeeds. Its compound-output
+oracle originally redirected only the last command; shared Atlas command capture
+now groups the complete command, with no product change. Actual native gate 5
+passes three ISO mount/enumeration/UTF-8-read/busy-lsof/readonly/Atlas/removal and
+source-retirement cycles, plus RAM remount. It closes with exit 1 during HostFS
+restart while RAM is absent: `VFS port lifecycle:4` is the CLOSED lifecycle enum,
+not a syscall status, and recovery re-enters a closed client. That recovery path
+was the next blocker. Supervisor now reads first-publisher policy through its
+existing read-only provider bootstrap and retains immediate failures in the
+existing retry/backoff state. Strict policy absence/error and failed-state tests
+pass host, sanitizers and MC68040 in `supervisor-recovery-policy-{1,2}.log`.
+Coherent build 10 passes with source
+`f392babc5b9f951bec51b942fe587b6b630cdf8d7fb7e13b0547969fcfe53074`.
+Native gate 6 proves HostFS and desktop recovery, then stops on a harness waiting
+for the already-consumed boot marker. Shared window-opening logic now supports
+an already-running desktop and is reused by recovery/quota gates.
+`production-filesystem-linux-first-7.log` passes with explicit exit zero: three
+ISO cycles, exact busy/lsof, readonly enforcement, Atlas, source retirement,
+RAM remounts, HostFS restart while RAM remains absent, shell namespace refresh,
+stale incarnation refusal, durable shutdown/readback and clean offline fsck.
+The complete desktop overflow/context gates and 30-case filesystem suite remain
+next; physical USB/CD and the production kernel/runtime cutover are unaccepted.
+Desktop overflow replay accepts all 176 fixture icons but fails End-key
+scrolling: Desktop activation intentionally clears application ACTIVE flags,
+while display keyboard routing consulted only those flags. The correction
+derives its keyboard target from the existing active application or visible
+Desktop and preserves activation, stacking and popup ownership. Focused and
+actual UI qualification remain required. Release preparation also found that
+the constructor's storage-provider make output disagreed with its declared
+packaged path. The constructor now supplies its explicit output directory;
+fresh and deliberately stale-output behavior fixtures await qualification.
+Storage/device/driver/shutdown documentation now describes the Linux-owned
+production boundary instead of claiming the retired guest engines run in the
+new release. HostChannel comments describe version 5 consistently.
+The constructor's fresh-output and deliberately stale-artifact cases pass
+with exit zero in `release-tools-create-2.log`.
+The user's Haiku reference requirement is now persistent in AGENTS.md.
+Read-only review of Haiku commit
+`e9ade57f61b587a9c6599cf4effadaa37ad7822f` confirms retained objects, admission
+fencing, canonical notifications and separate desktop keyboard focus. Exact
+references/adaptations are recorded in the production-volumes plan. It also
+exposes an existing common-dialog gap: MODAL is accepted but never enforced.
+Owner-session modal routing and CWD-only busy-removal coverage are being
+completed before the coherent rebuild. No Haiku checkout changes occurred.
+The modal slice is now source-complete: it derives owner-session targets from
+the existing ordered window list, preserves unrelated applications, retires
+blocked capture/pending input and handles nested/minimize/restore/close
+transitions. Focused compilation, sanitizers and actual outside-click UI checks
+remain required. The new CWD-only ISO oracle runs unmount and usage observers
+from `/`, requires the parent shell's exact directory PID/inode/path and then
+releases it before the existing successful removal. This extends actual
+coverage without changing filesystem implementation.
+Read-only DE25 inventory confirms the previous selected runtime
+`0aa2d7130c3120df7d7b64481e5ee2b6393b603767814213b673285fd68f9b36`, vendor
+kernel `6.12.11-gd7d192a9ddd9`, internal SD only and 13 GiB available. The real
+QEMU process has UID/GID 999, no groups/capabilities and NoNewPrivs 1.
+Coherent build 11 (`2b585188abc77069b167322f4b8fef059115fb01383646cb623d634e610f01cc`)
+is rejected despite its wrapper exit zero: the conditional subshell masked
+failed display checks while later compilation/image steps continued. Its log
+retains both failures and must not be treated as a pass. The geometry fixture
+assigned its independent visual dialog and draggable window the same default
+GUI session, so correct new modality blocked the drag. The fixture now names
+its independent session and preserves the exact position assertions. Independent
+review also corrected nested restore/maximize visibility ordering and swallowed
+middle-button release; their exact triggers have regression tests. The next
+runner uses unconditional strict-error execution and stops on the first failed
+step. Source and products from build 11 are not runtime acceptance evidence.
+Strict coherent build 12 passes with explicit exit zero in
+`production-filesystem-build-12.log`, from source
+`02f07df5ffb8fa4fa2f039b4616082c66df659c6d744318e75554e9e0532eda9`.
+Display host/ASan/UBSan/MC68040, complete userspace tests, kernel host/all/verify,
+ROM and fresh image creation pass, with source fingerprints checked before
+and after the build. ROM SHA256 is
+`e0476d1ef5d91083f5043be8d81f414d333a8b2f94374a2740972a1e7185d0bb`;
+image `production-filesystem-14-12.img` SHA256 is
+`c2269714e8a48a0b82b8a8093e220b5cf076fdc16f10e168732099c50cf4ebc6`.
+Actual desktop overflow/context, extended native CWD lifecycle and full
+filesystem qualification are next. No production cutover has occurred.
+Actual Atlas/desktop overflow passes in `atlas-overflow-14-12-1.log`:
+all 176 icons remain reachable through scrollbar drag, wheel, Home and End;
+DH0/RAM0 readonly grants, 257 UTF-8 entries, empty/missing/non-directory roots,
+reflow, stale-incarnation refusal and process retirement pass. The same strict
+job is now running the complete context/busy-modal gate; it is not yet accepted.
+The combined UI job closes with exit 1 after Atlas passes. The context menu
+opens and its observer verifies all 33 exact file holders, but no busy-list
+render appears; selection delivery versus an earlier error dialog is not yet
+distinguished. Temporary numeric Desktop diagnostics are prepared locally for
+an isolated replay after the filesystem slot. They change no authority or
+interaction behavior and must be removed after diagnosis.
+Extended native gate 8 passes with source/products from build 12, including
+CWD-only refusal with the exact parent shell PID, directory inode and
+`/cd0/Folder` path, followed by successful removal after CWD release.
+`production-filesystem-linux-first-8.log` also passes all ISO/remount/recovery
+and durable-shutdown/readback checks with clean fsck. The strict combined
+session is now running `production-filesystem-full-gates-1.log`; no full-suite
+verdict is available yet.
+The combined native/full-suite session closes with exit 1: extended native
+lifecycle 8 passes, as do resolver, hostile-caller, raw HostFS, 400-operation
+stress/offline fsck and hostbench. Semantics exits with command status 126
+before any of its 30 cases run. The harness already builds `fssem` explicitly;
+its actual executable/launch failure is being diagnosed rather than attributed
+to filesystem semantics without evidence. Full-suite logs remain at
+`/tmp/astra-fs-gates.wlQPhj` on Beast. Desktop's isolated numeric diagnostic
+replay now owns the test slot; root release sources remain unchanged.
+The isolated diagnostic build 2 passes after removing only its relocated
+generated FreeType cache. Runtime replay closes with exit 1 and proves the
+Unmount callback reaches the shared usage query, which returns
+`ASTRA_ERROR_IO` (-9) before any busy-list paint. This is now a usage-query
+diagnosis, not a context-menu delivery assumption. Temporary Desktop numeric
+logging remains diagnostic-only and must be removed after the fix.
+Accepted coherent build 12, native lifecycle 8, Atlas overflow, exact sources,
+ROM/image/QEMU/provider and the failed full-suite logs are SHA-verified and
+retained at
+`/mnt/Documents/astra68/builds/production-filesystem14-20261014/coherent12`.
+The separate diagnostic tree now owns a temporary kernel exec trace to capture
+the actual packed-startup capacity rejection before changing that contract.
+Production remains unchanged.
+Desktop usage-query diagnosis identifies the actual layout refusal: the
+dialog requests a 14-pixel font strike, but installed strikes are 11, 13 and
+16 pixels. Zero fitted advance becomes `ASTRA_ERROR_IO` before painting.
+The source fix uses the existing theme body font consistently for measurement
+and rendering, with a real-font UTF-8 wrapping regression in the existing
+Desktop layout test. Temporary Desktop diagnostics are removed. Focused
+host/sanitizer/MC68040 checks and the complete actual busy-dialog replay remain
+required before accepting the fix.
+Focused font gate 1 passes normal, ASan/UBSan and MC68040 checks. Actual UI
+replay 1 validates all 33 rows, matching text CRC and real drawing, then
+rejects its own fixed-timer actor race: RAM0 was removed before modal readiness
+was confirmed. The fixture now uses a WORK readiness handshake. Replay 2
+closes with exit 1 before the modal because the new watcher command does not
+complete its native oracle; that fixture failure is being diagnosed. Neither
+replay is a complete UI acceptance pass.
+The unchanged semantics replay with the temporary kernel trace confirms the
+startup capacity defect: 37 capability records plus 31 argv entries occupy
+4,040 bytes; 11 environment strings occupy 179 bytes and their pointer vector
+needs another 48 bytes. The 4,267-byte result exceeds the shared 4,096-byte page
+by 171 bytes. The rejection occurs before `fssem` runs. Diagnostic session
+39387 closes with exit 1 after kernel/ROM build and verification pass; its ROM
+and log are retained separately. Startup ABI 8 is being completed with separate
+read-only vector pages through the existing owned VM publisher, retaining the
+bounded 4 KiB packed-string input and atomic replacement/rollback contract.
+Producer/consumer, validation, clone, capacity and allocation-failure gates
+remain required.
+Initial Startup 8 host gate 1 closes with exit 134. Its vector-page allocation
+failure oracle exposes an existing essential-launch cleanup leak: physical
+frames are released, but the empty protected-owner ledger remains charged.
+The existing prepared-executable destructor now unprotects that owner after
+release. Strict capability/payload geometry and POSIX validation order are
+also being completed locally; no passing Startup 8 gate is claimed yet.
+The new read-only state-preservation verifier and real ext4 corruption
+canaries are queued in the separate system gate. Observation compares full
+binary/empty attributes and actual fast/long/broken link targets; canonical
+installation and journal recovery remain separate copy-only operations.
+Installer state verifier gate 1 now passes with explicit exit zero in session
+61726, retained at the separate system gate's
+`build/linux-first/installer-state-verifier-1.log`. It includes two complete
+actual ext4 installs, full binary/empty xattrs, corruption beyond attribute
+display truncation, fast/long/broken/byte-target symlinks, hardlink identity,
+metadata/content/default/addition refusals, CLI and no-follow input checks,
+and explicit rejection of unrepresentable directory observations. Reference
+and candidate hashes remain unchanged by observation. This qualifies the
+verifier/installer seam, not production-data migration.
+Startup 8 focused qualification now passes: session 38712 accepts full POSIX
+host tests and Runtime/POSIX ASan/UBSan; session 87931 accepts the complete
+kernel host suite and MC68040 all/verify, Runtime static/PIC/dynamic contracts,
+POSIX shared contract, Supervisor host/sanitizer fixtures and native `fssem`.
+All recorded input hashes remain unchanged. The final fixtures retain exact
+allocation accounting and query the actual surviving self handle after failed
+exec. These gates qualify the producer/consumer slice; a coherent ABI 8 ROM,
+image and actual filesystem/UI run remain required. Temporary publication
+timing instrumentation must be removed after the same-host comparison and
+before final release qualification.
+Coherent build 13 passes full userspace tests/all, kernel tests/all/verify,
+ROM tests/verification, fresh-image production and all 5,746 source hash/mode
+checks from source
+`6cca621cdc29ce4b8f15f83f687fe4bf19d67869dfae6612db11e9a09d5f9ffb`.
+However, its source-only build omitted the explicit kernel/ROM revision
+environment: both embedded revision IDs are zero. These artifacts are retained
+as diagnostic code evidence and rejected for release. The next build must set
+the authoritative source revision through the existing generators and assert
+the exact strings and nonzero numeric IDs before acceptance.
+Actual session 46141 closes with exit 1: Startup 8 now reaches all 30 filesystem
+cases, with 29 passing, including deep CWD fork/exec, E2BIG rollback and durable
+saves. The owner-sessions case fails before the orchestrated recovery/resource
+checks. Native trace shows the parent killing its cloned child during failed
+fork-adoption cleanup, before the application's child session open. A precise
+stage/errno diagnostic retains all quota and owner-isolation assertions; no
+quota-policy defect is claimed before that replay.
+Actual UI replay 3, session 30456, closes with exit 1 and identifies the watcher
+fixture failure: `sleep` is not installed at the assumed command path. The
+watcher spins and floods output instead of waiting for modal readiness; the
+earlier fixed-delay actor also never slept. The status-zero answer and
+`MODAL-WATCH-ARMED` are captured, but the following shell prompt is absent.
+Source hashes remain unchanged. The fixture will use an existing native delay
+tool before another complete UI replay. No production migration or activation
+has occurred.
+Identity-correct rebuild 14 passes kernel/ROM all, verification and tests from
+source `e0fce4c73b8dfa8aa2f9837cda813c3cd5428ab8b9f542ef2485634566370e02`.
+Both generated headers and actual binaries contain that exact revision plus
+`-fs14`, with nonzero ID `0xe0fce4c7`; zero-ID artifacts remain SHA-verified in
+`build/linux-first/production-filesystem-zero-13/`. Focused session 84741 closes
+with exit 1 and identifies native handle admission before the intended VFS
+quota: raw clients retain reply, scope and area handles against the public
+255-handle namespace. The fixture will use control-only sessions and a shared
+reply endpoint to isolate the VFS limit, retaining exact admission, cleanup and
+independent-owner assertions. It also exposes a real POSIX adapter defect:
+`getpid()` needs broker-reply resources and returns -1 under handle pressure.
+The existing direct native process-info query provides self identity without
+that admission; the adapter fix and real pressure oracle remain required.
+Actual UI replay 4, session 97178, closes with exit 1. Canonical admission and
+execution of the existing native `sbase-sleep` helper fix the watcher. The real
+dialog passes all 33 exact rows, matching CRC, actual drawing and RAM-presence
+checks, but End does not scroll after the viewport and outside-Desktop clicks.
+The unchanged-source, nonzero-identity run isolates the next UI focus/control
+routing diagnosis; it does not qualify complete safe removal. No production
+data or activation has changed.
+Joint diagnostic build 15 uses source
+`bdef4fe612e48ce7ce4c846ad9cc6ad4e5a00002a69931e0c60bd22e032686d5`
+with that complete source ID plus `-fs14` embedded and nonzero ID `0xbdef4fe6`.
+Its kernel, ROM and fresh image hashes are retained in the build log. The outer
+session 1143 completion was lost during interrupted polling, so no whole-pipeline
+exit or complete gate acceptance is claimed. Focused owner replay 2 stops at
+`native handle pressure accepted 0 status 4`: WORK lacks transfer authority,
+so duplicating that grant did not exercise handle exhaustion. The corrected
+fixture duplicates an owned transferable PORT_SEND endpoint, preserving the
+native 255-handle boundary and the independent 64-session VFS quota. Actual
+saturation and the full suite remain pending. POSIX `getpid()` now queries the
+existing native PROCESS_INFO facility instead of admitting broker-reply handles;
+normal, sanitizer and target adapter tests pass, while the pressure oracle still
+requires the corrected guest replay. No native rights or quotas were relaxed.
+Actual GUI trace 5 closes session 19485 with exit 1 against the exact build 15
+ROM/image and unchanged sources. It proves that releasing a valid ScrollView
+click emits ACTIVATE for control 2, and Desktop then closes the dialog on every
+activation. The local correction dismisses only for its existing Close button,
+control 5; shared control behavior is unchanged. The existing GUI regression now
+checks viewport End/Home before repeating outside-owner click and scrolling
+checks. Read-only Haiku Alert review confirms exact button-message dispatch.
+Both temporary Desktop traces are removed; corrected-binary qualification is
+required before accepting the fix.
+The matching build 15 startup observer closes session 68875 with exit zero and
+a matching durable exit stamp in `startup8-publication-1.{log,exit}`. Immutable
+ROM/image/QEMU hashes pass. Two 37-capability, one-argument publications measure
+2,392 and 1,603 QEMU virtual-clock-scaled units; six-capability observations range
+from 256 to 551 units. The earlier short-launch baseline was 832 units for 37
+capabilities and 194/197 for six. This records the correctness change's added
+publication cost; it is neither physical MC68040 cycle evidence nor a speedup
+claim. Temporary kernel publication tracing is now removed locally. Coherent
+build 16 must qualify the combined changes with exact source identity, complete
+userspace/kernel tests, actual GUI replay and existing filesystem gates. Its
+runner records a durable source/status/phase exit stamp and retains the exact
+live session until completion. Production release, state and kernel remain
+unchanged; network mounts remain excluded and physical USB/CD tests unavailable.
+Coherent build 16 now completes with an explicit failure status rather than an
+unknown outer result: session 92002 and its durable exit stamp agree on exit 1
+in `filesystem-gates`, from source
+`5d79ffc2f5a46651e7cdbb15f56bbb549d2e0a78d6b011a85f898025362a5005`.
+Complete userspace tests/all, POSIX sanitizers/target, kernel tests/all/verify
+and ROM tests/all/verify pass. Generated headers and actual binaries contain
+that exact source revision plus `-fs14`, with nonzero ID `0x5d79ffc2`. Kernel
+SHA-256 is `84cc341265e56ba8d7bac80ad76cb7e1f62e51ee8a61ed0307e88f69fa9c5cea`,
+ROM is `b249369961c7372da16ff6c4fb4e1e10ee8934067d661711b62906ae963199b9`
+and fresh image 16 is
+`4fa38fa127557aea3d7bb3faa6941a070a37e707a284c8f7d7c507f6508860cb`.
+The focused pressure/quota replay passes with 185 duplicated native handles,
+stable PID and complete handle return, followed by lane and clean-fsck checks.
+All 30 filesystem cases then pass together, including a second pressure replay
+with 164 duplicates. Budgets, flood/reset recovery, lane, resolver, hostile
+caller, HostFS, 400-operation stress/fsck and host authority checks pass.
+The remaining failure is the orchestrated loss probe's reopen assertion in
+`/tmp/astra-fs-gates.ZkELjK/semantics.log`. Its message, "grant rebound to
+replacement root errno=0", currently labels every status other than wire LOST
+as rebinding and does not report the actual status. Existing HostFS recovery
+compares retained volume/inode/generation and closes the retired native port;
+raw PEER_DEAD may therefore be the correct observed boundary. Exact stage/status
+evidence is required before changing that assertion or claiming actual
+replacement-root access. Read-only Haiku VFS review confirms that retained
+descriptors disconnect instead of retargeting. A fixture-only diagnostic is
+being prepared; production authority and quota rules remain unchanged. All
+5,746 source hashes/modes pass a post-failure verification and no stale remote
+jobs remain. Corrected Desktop GUI replay 6 now owns the sole test slot against
+these frozen build 16 products; the complete release is still unqualified.
+GUI replay 6 closes session 35153 with exit 1 and unchanged source/input hashes.
+The product correction passes viewport activation, End/Home and outside-Desktop
+click followed by End: modal keyboard focus survives. The following wheel
+assertion fails because the fixture left the pointer outside the viewport.
+Display and CommonKit deliberately route wheel input by pointer hit; read-only
+Haiku EventDispatcher/Window review confirms that contract. The fixture now
+uses existing `qmp.point(800, 540)` before the wheel event, retaining the exact
+scroll amount, Home, live-catalog and removal assertions. No product behavior
+changed; a complete corrected replay remains required.
+Diagnostic source 17 is frozen separately as
+`9d8d41f4a21e33bb97215abd9119cc2430ab0a2d1d53bbf3d9a6db44a10c7744`.
+It adds only precise loss-probe evidence and continuation documentation to
+source 16; the later wheel-fixture correction is not in that private snapshot.
+Focused session 31678 closes with exit 1 against the unchanged, SHA-verified
+build 16 ROM/image and matching ABI 8 libraries. Its durable stamp agrees;
+source and input checks both return zero. The strict diagnostic records
+`status=8 stage=hello-send session=0 scope=0 replacement_inode=102656032`.
+HELLO was rejected by the retired native endpoint before any session or scope
+admission; no root STAT succeeded. This proves native PEER_DEAD, not a wire LOST
+reply or replacement-root access. The fixture now accepts only zero-session,
+zero-scope rejection at the exact typed boundary: wire LOST at `hello-status`
+or native PEER_DEAD at `hello-send`. Every other status/stage and every
+successful admission still fails. Unexpected success retains a read-only root
+identity diagnostic. No product implementation, authority or quota changed.
+This is diagnostic evidence, not a coherent source 17 release qualification.
+The next joint source 18 includes that corrected oracle and the pointer-target
+wheel fixture. It must pass complete filesystem gates, including the final
+HostFS-kill recovery check not reached after source 16's provider-reset failure,
+and the full GUI removal replay. No production state has changed.
+Coherent source 18 is now accepted by the complete filesystem runner:
+`c7b24fb19f53c25e405b779a1ae324e7a468b38bdbfcf084aabb9e65d1170e6c`.
+Session 14475 closes with exit zero; its durable stamp agrees on source,
+status zero and phase `complete`. Userspace/POSIX/kernel/ROM checks, all 30
+filesystem cases and every orchestrated check, including final HostFS-kill
+recovery, pass. Resolver, hostile caller, raw HostFS, 400-operation stress/fsck
+and host-authority gates also pass with zero failures in
+`production-filesystem-full-gates-3.log`; detailed logs are retained at
+`/tmp/astra-fs-gates.pSlkvI`. All 5,746 source hashes/modes pass before and after.
+ROM SHA-256 is `137f22a87ce4ea80bd113b780733eea84c0a65aa462711b60d7d25b468f87114`,
+image 18 is `b802264dde5e6ae3aa815c6f802751e42141d062d5acfcda75353481705a4378`
+and kernel is `dbaae6824cd1306bf90511271ed4096a9b0ed6bbba3c4816f24094c7568cfce8`.
+The exact frozen export remains unchanged while the native/runtime gate batch
+runs. GUI replay 7 closes session 88784 with exit 1 after all 33 holder rows,
+matching CRC, real drawing, UTF-8/wrapped paths, modal focus, End/wheel/Home and
+live RAM catalog checks pass. Canonical safe removal logs `desktop volume
+unmounted` and removes the icon. The final shell observer then receives no
+command: the preceding desktop context menu owns keyboard focus, but the
+fixture sends `volumes --all` without reactivating Terminal. Read-only Haiku
+Desktop focus review confirms that ownership. The fixture now uses its existing
+`atlas.click(machine, 200, 140)` before that observer, retaining every catalog
+and source-retirement assertion. No product code changes. Sources and inputs
+remain unchanged throughout replay 7. A final source 19 freeze and complete
+matching GUI replay are required after the source 18 runtime batch retires;
+do not mirror the workspace into a running gate.
+Native/runtime/SDK, staged release, stopped-state preservation and physical
+kernel/runtime cutover still require their remaining gates. Kernel and runtime
+rollback rehearsals must precede the final stopped snapshot. Runtime rehearsal
+uses existing state/export overrides with disposable data; the final snapshot
+captures the last predecessor boot. Preserve both the exact image and external
+WORK/SOUND metadata before migration. Production remains unchanged; no network
+mounts or unavailable physical USB/CD tests are claimed.
+Source 18 runtime session 10903 closes with exit 1 in `terminal-full-vim`.
+Native lifecycle passes all three ISO cycles, CWD-only busy refusal, RAM remount,
+HostFS recovery and durable shutdown/readback. Atlas overflow also passes;
+sources and five pinned inputs are verified after both phases. The normal-user
+Terminal observer then receives EACCES while traversing the provider's private
+exports, before command oracles run. Its two direct make calls now use the
+existing non-root build-account adapter so a privileged metadata observer can
+run without building or running QEMU as root. The existing readiness regression
+exercises both delegated make calls through the actual CLI and retains build
+failure propagation; Beast execution and remaining runtime checks are pending.
+Provider permissions and hostile caller rules remain unchanged. No product
+filesystem defect is shown.
+The subsequent retention attempt closes with exit 1 before copying: Terminal's
+workspace ROM refresh changed the generated kernel and ROM artifacts. All 5,746
+source hashes and the original image/provider/QEMU hashes still pass. Original
+build, filesystem and GUI receipts remain valid, but the original source 18
+kernel/ROM binaries were not retained before refresh and must not be claimed as
+archived. Preserve the changed artifacts separately with exact identities, and
+use a pinned ROM outside the workspace refresh path for remaining diagnostics.
+The private source 19 snapshot contains only the GUI focus fix and continuation
+notes; it has not been mirrored or published. The next source 20 adds the
+corrected Terminal build-account fixture and its regression gate. Remaining
+runtime qualification must identify that diagnostic fixture separately from
+the unchanged source 18 product binaries; final publication rebuilds every
+producer with its final source identity.
+Source 20 diagnostic session 93859 closes with exit 1 in `terminal-full-vim`.
+The focused build-account regression passes on Beast, followed by exact source
+and pinned-input checks. The privileged observer then boots Terminal and reaches
+the command oracles without the private-export permission failure. Its first
+root listing still expects obsolete `/ram` and a TMP link. The fixture now
+checks canonical `/ram0` and mounted TMP directory kinds, migrates all eight RAM
+paths together, and retains alias, protected-root, write/read/cleanup and
+CWD checks. Read-only Haiku mount-coverage review confirms that a mounted root
+and an explicit symlink have distinct metadata. No product source changes.
+Source 21 must qualify the remaining runtime gates with the same pinned source
+18 products, keeping diagnostic fixture identity separate from binary identity.
+Source 21 runtime session 95630 closes with exit 1 at the first root-listing
+oracle. Existing-Machine observer session 11813 then closes with exit zero:
+complete WORK-captured `ls -F /`, `ls -l /` and `pwd` results each return zero,
+with source and pinned inputs verified before and after. All independently
+granted convenience roots report directories; only `/system -> /dh0` exposes
+link metadata. The fixture now checks all 15 observed root names/kinds, the
+explicit SYSTEM alias and the existing protected-removal/CWD/write/cleanup
+contracts. Public namespace prose now makes that same distinction. No product
+source changes. Full GUI replay 8 owns the test slot against source 21 fixtures
+and pinned source 18 products; the next source 22 must wait for its actual
+closure before mirroring or running the remaining Terminal/runtime gates.
+Full GUI replay 8 now passes: session 85537 closes with exit zero and a matching
+durable `complete` stamp. All 33 holder rows/CRC, actual rendering, UTF-8 paths,
+modal focus, scrolling, live RAM updates, safe removal, icon withdrawal and ISO
+source retirement pass. Source 21 fixture hashes and pinned source 18 artifacts
+match before and after; final cached-receipt collection 706 also closes with
+exit zero. These identities remain distinct; this is complete software UI
+evidence, not a claim of a coherent source 21 release.
+Source 22 runtime session 13620 closes with exit 1 after the corrected root
+oracles, at the existing public `which status` pipeline assertion. Observer
+73049 and receipt 930 close with exit zero and prove the command emits private
+provider path `/status [0]` instead of `/commands/status [0]`, with all command,
+source and pinned-input checks passing. The CLI now prints its already-qualified
+public path rather than the mount-relative wire path, retaining union selection,
+member index and errors. The failing integration expectation remains unchanged;
+target compilation and corrected runtime qualification are still required.
+Independent auxiliary session 17994 closes with exit 1 at Doom startup. All six
+shutdown/restart/veto/menu gates and SDL video, render, image, mixer, font,
+timer, thread and drawing gates pass, each followed by source/input checks.
+Doom exits before QMP and receives no runtime acceptance. Separate policy
+session 91456 closes with exit zero and durable `complete`: actual image
+upgrade preserves policy, restart backoff works and the critical service exits
+with its named halt diagnosis. Source 22 and pinned source 18 inputs remain
+unchanged throughout these checks.
+The bounded Doom startup observer, session 21952, closes with exit 1 and records
+the exact admission error: QEMU cannot own the root-owned, mode-0600 audio
+mailbox. Both display buffers already belong to the explicit QEMU account.
+Source and artifact checks still pass after the failure. An ignored diagnostic
+wrapper exposes the existing initial serial stream without changing shared
+harness behavior, permissions or assertions. The remaining fixture correction
+must share only explicitly owned audio resources with the configured unprivileged
+QEMU credentials, including each caller's own private-directory traversal. No
+production audio or provider permission change is justified by this failure.
+The shared AudioHost fixture now grants only the configured QEMU group traversal
+of its explicitly owned temporary directory and read/write access to its socket
+and mailbox. NDK audio examples place those endpoints in their already-owned
+outer fixture directory. Actual target-credential access and exclusion checks,
+corrected Terminal integration and Doom runtime qualification remain pending.
+Independent source 22 SDK qualification passes public header/API checks, HTML/PDF
+documentation and extracted dynamic/static C/C++ distribution builds. Its fresh
+storage kernel package 4 is compiling under the retained SDK/kernel session
+12385; no package or release acceptance is claimed before actual completion.
+All nine isolated release-tools gates pass with exit zero in
+`release-tools-*-1.log`, including real FIT generation/full 1,344-module staging,
+kernel transaction/rollback, immutable packages, publisher, image selector,
+filesystem runner and unprivileged launcher. Package 3 remains a measured
+checkpoint; the final changed header inputs require a fresh package and gate.
+Durability review found
+that the existing file-sync probe omits the parent-directory barrier and fatal
+provider tests do not reread acknowledged bytes. The extended existing gates now
+pass with exit zero in focused durability gate 2: host/sanitizers, MC68040 and
+analyzer, sync-error propagation/recovery, and acknowledged-data readback with
+clean fsck after fatal provider termination. Native atomic-save/parent-directory
+sync and the POSIX probe still require the coordinated guest run.
+The guest-block power-cut runner cannot qualify loss of Linux's page
+cache and must not be cited as physical power-loss evidence.
+
+Filesystem 13.2 / Kit 10.2 now provides distinct public read/write root brokers
+and complete owned catalog snapshots. Root requests authenticate the requesting
+process, require exact epoch/ID/generation, enforce configured owner budgets,
+refuse private/system expansion and readonly writes, and return nondelegable
+grants. HostFS retains canonical owner sessions separately from public grants.
+Quota-storage construction now returns an owned area to every caller, so dynamic
+owners can actually retire both mappings and handles. Shared volume wire records
+live in a standalone ABI header used by QEMU and the SDK.
+The complete Beast filesystem runner passes all 28 semantics, finite descriptor
+and session recovery, quota flood, provider reset, HostFS restart, stress,
+independent clean fsck and hostbench. Sampling drains submitted host work and
+accounts for non-filesystem services explicitly. This is correctness evidence,
+not performance acceptance. Exact source/artifacts/logs are retained in
+`production-volumes-20261012/native-volume-root-launcher-1`.
+
+Production launcher source now uses the confined provider, exact system-image
+selector and processed udev. SoundFont seeding reuses the ordered resolver and
+publishes fsynced files atomically without replacing existing entries or changing
+their metadata. One Python process owner replaces shell numeric-PID supervision;
+the old shell intermittently waited on live helpers after peer exit. Launcher-6
+passes shutdown, restart, helper recovery and privilege tests without intervention.
+Earlier interrupted/manually unstuck launcher runs are retained as failures.
+Release recipes package provider/selector/process owner and the complete optical
+kernel Image/module/DTB set. Deployment refuses an incompatible running kernel or
+module set before changing selectors and no longer recursively changes guest-data
+ownership. Profiler source attaches perf to the provider's exact QEMU peer.
+Release/profiler contract gates pass; production activation remains pending.
+
+Desktop and Atlas live-volume integration is being qualified. Desktop subscribes
+before its snapshot, displays mounted volumes with labels or uppercase canonical
+names, and launches Atlas with exact volume identity. Atlas acquires its own
+readonly native root grant, checks completion against the catalog and withdraws
+results on loss; system browsing keeps explicit DH0 authority. Transient catalog
+failures retain state and retry without blocking window input. Dynamic HostFS
+metrics now use full incarnation identity so replacement media cannot collide
+with still-retiring owners. Native UI builds, host/sanitizers, NDK HTML/PDF
+(609 pages) and actual guest UI pass. `volume-ui-guest-3.log` covers DH0/RAM0
+exact roots, 257 entries, UTF-8, empty/error states, input/reflow, process
+retirement and stale-incarnation refusal. The second UI oracle mistook the
+expected stale-launch error for a later valid launch failure; the corrected
+oracle checks the actual nonzero command status and runs that negative case
+after the positive views. Whole-mount recovery now uses exact mount identity
+and inode without requiring unsupported birth-time metadata; subdirectory
+recovery still requires its node generation. Host/sanitizers/MC68040 pass that
+contract. Remaining paused block/qualification launchers use explicit non-root
+test credentials, and the actual block gate passes. A final persisted boot /
+shutdown check is in progress. Live process namespace, native lifecycle/
+usage/lsof/ISO controls, detailed busy dialog, desktop overflow handling, long
+path/name contracts and complete production cutover still remain. Network work
+and physical USB/CD acceptance remain excluded/unavailable respectively.
+
+Native metadata is now available through a distinct `VOLUMES` capability.
+HostFS hosts one versioned native catalog/subscription port; applications cannot
+gain data or mount authority from it. Provider and native clients share one
+keyset/epoch/sequence validator. Subscription ownership comes from the kernel's
+sender identity, uses the configured owner-session budget, coalesces a full
+one-message queue, and retires closed endpoints. Filesystem 13.1 / Kit 10.1
+exports the client API; Terminal forwards its metadata capability to commands.
+`volumes` lists mounts and `volumes --all` includes devices, media, sources and
+private bindings. The first semantic oracle wrongly counted WORK/SOUND bindings
+as mounts; the corrected oracle checks their distinct kinds and exact names.
+All 27 semantics, finite descriptor/directory/session resources, flood, direct
+lane attribution, provider reset, HostFS restart and independent clean fsck pass
+in `build/linux-first/volume-catalog-semantics-2.log`. Real desktop/Terminal
+boot also passes the new commands, persisted system/export writes and normal
+shutdown. NDK headers, HTML and PDF pass. Source/artifacts/logs are archived in
+`production-volumes-20261012/native-volume-catalog-1`.
+Standalone display, mailbox and boot-stage launchers now reuse `Machine`;
+paused mailbox tests explicitly drop root privilege. Final stricter UTF-8/graph
+validation and launcher checks are still being qualified. Data grants, control,
+usage/lsof, live namespace, desktop/Atlas, long path/name contracts and complete
+production launcher/release migration remain required. No production activation
+or network mount work occurred.
+
+Processed libudev discovery now subscribes before enumeration, reserves
+Linux-mounted devices, containing disks and recursive slaves, and maps
+disk/partition observations into the existing device/medium/source catalog.
+Root/system host disks and loop-backed native image sources cannot acquire
+physical guest authority. Per-device sequence watermarks reject stale events
+without discarding another udev worker's out-of-order completion. Pending
+partition observations wait for their processed parent. Media/partition changes
+retire the previous exact generations; device removal retires descendants.
+USB supported filesystems automount writable unless the device is read-only;
+optical media automount read-only. Fixed volumes remain explicit mounts.
+Manual unmount is not undone by automount. Discovery and probe/mount resources
+remain bounded; one canonical provider reaper now handles live loss and shutdown
+using real unmount/release, retaining busy and pending Linux references.
+Host, sanitizers, pinned AArch64 and actual DE25 provider/discovery gates pass,
+including 1000 insertion/removal cycles, actual processed inventory, a disposable
+read-only optical block mount, stale authority and busy-directory retirement.
+Physical USB/CD hotplug and eject remain unqualified without attached devices.
+
+Desktop test `Machine` now uses the confined provider, not a guest image writer.
+Root observers launch QEMU with explicit non-root accounts and inspect preserved
+metadata; image builds run as the real build account. The hostile-caller
+`astra-qemu-root` uses an installed root-owned provider, copies images within its
+existing locked 4 GiB/free-space bounds, disables discovery, publishes only
+observation exports, and verifies real backing retirement before write-back.
+All 21 helper/security/cleanup checks pass on Beast; the matching helper and
+provider are installed there only. Root-owned 0600 file data and metadata survive
+native access and write-back. All 26 guest filesystem cases and finite resource
+recovery pass with independent clean fsck. The full recovery run also passes
+flood, direct-lane attribution and provider reset, but exposed a real HostFS
+restart failure: SYSTEM was excluded from publication ownership and its old
+Supervisor handle survived. A coordinated fix is being qualified: all service
+publications share ownership, SYSTEM borrows the owned client for aliases,
+retirement removes only that authority's ordered assign members, and bootstrap
+and HostFS recovery use one read-only provider loader before releasing the claim.
+HostFS metrics now retain aggregate additive counters and expose each volume's
+own peaks/last failure; independently timed peaks are not summed. Metrics and
+assign-retirement host/sanitizer gates pass. Fresh ROM `recovery-3.log` passes
+publisher death, the canonical bootstrap restart, dependent Desktop recovery,
+fresh Terminal and WORK writes. The test now waits for the new Desktop ready
+event before clicking; its earlier pre-arm timestamp and old icon selection
+could race legitimate service recovery. `semantics-4.log` exposed a separate
+global-counter attribution race with background sampler I/O. The final
+`semantics-5.log` uses authenticated QMP peer credentials and exact fixture
+inode/descriptor observations: 1000 held files and 200 directories return to
+zero, and 16 idle control sessions retain no new directory descriptor. All 26
+cases, finite resources, full-quota flood, direct-lane attribution, provider
+reset, HostFS restart, fresh Terminal and independent clean fsck pass together.
+Root-observer diagnostics refuse symlink leaves; its immutable ROM copy is
+completed before lending ownership of the peer's temporary directory.
+One exact image/window selector now serves image publication and launchers;
+the installed selector refuses symlinks, ambiguous MBRs and out-of-file windows.
+The updated helper again passes all 21 security/cleanup tests (`launch-2.log`).
+Development evidence is in `build/linux-first/discovery-*`, `launch-1.log`,
+`semantics-1.log` through `semantics-3.log`, and `recovery-build-*` on Beast.
+Production release and kernel remain unchanged. Production runner/release,
+remaining standalone test launchers, public live namespace/control/usage,
+`lsof`, ISO control, desktop/Atlas and long path/name contracts remain required.
+
+
+Current Linux-first cutover slice replaces Supervisor's guest ext4/block reader
+with a read-only canonical provider session and makes static HostFS the first
+service. One allocated volume-owner shape replaces duplicated WORK/SOUND
+services and covers dh0, work, sound, ram0 and tmp. Startup publishes these
+ports; RAM policy is now RAM0, and temporary/work exports are no longer SD
+subdirectories. Initial kernel launch no longer grants block write authority.
+The retired comparison-only bootstrap reader is deleted.
+
+Beast host/MC68040/Supervisor/HostFS builds, sanitizer readers/config validation,
+VFS tests/sanitizers and ownership boundaries pass in `build/linux-first/`.
+Image contract tests now match runtime 1.17 and the native startup layout.
+Real boot now reaches desktop, Terminal and zsh. System-root reads and writes
+through HOME, RAM0 and TMP pass. Retained failures exposed duplicated LIBS
+prefixes after grant narrowing, oversized libc reads beyond the host channel's
+2 MiB capacity, a public connector that could not accept scoped channels,
+empty command-config roots, and a full eight-scope channel binding cache.
+Canonical namespace grant assembly, payload negotiation/partial reads, the
+scope-aware public connector, actual private config-directory provisioning
+and channel-cache rotation address those contracts. Filesystem is now 13.0.1,
+Configuration 1.0.1, System 3.3.1; Runtime Kit 1.17.1 packages unchanged runtime
+1.17.0 with System 3.3.1. `boot-8.log` passes the real desktop/Terminal/zsh boot, dh0 reads, HOME/RAM0/TMP/WORK
+writes and ps, followed by native shutdown status 88. Independent e2fsck and
+debugfs confirm clean system image and persisted /home bytes; external WORK
+bytes match. This qualifies the Linux-first software bootstrap slice, not the
+remaining removable integration or complete production migration. Evidence is archived
+under `production-volumes-20261012/linux-first-1` with source/artifact hashes,
+all retained failures and passing boot-8/boot-9 logs. Final host/sanitizer,
+MC68040, kernel, ownership and image-contract checks pass. No stale test/build/
+QEMU processes remain.
+A root observer now inspects root-owned logs without changing their metadata;
+provider still runs every QEMU thread as an explicit non-root UID/GID with no
+groups/caps and no-new-privileges. Earlier fixture errors (ungranted /startup
+path and non-root cleanup of root-owned logs) are retained separately from
+product failures in `build/linux-first/boot-1.log` through `boot-7.log`.
+
+Test and production launch helpers still need coordinated provider migration;
+no old HostFS-root environment or guest image writer may ship with Host 2.
+
+The earlier [network assessment](NETWORK_FILESYSTEM_REQUIREMENTS.md) is deferred.
+The latest user instruction excludes network mount work from this completion.
+
+Production volume implementation is now active under the
+[coordinated plan](superpowers/plans/2026-10-12-production-volumes.md). The user
+adds safe **Unmount** in removable-volume context menus, detailed process/object
+usage dialogs, `lsof` over that same native usage query, and read-only ISO file
+mounts alongside physical optical drives. Image sources retain their backing
+file/mount dependencies; removal must identify dependent mounted images.
+Linux provider/QEMU integration is in progress; native live namespace and
+Desktop integration remain pending. `catalog-1` and
+`foundation-1` pass lifecycle/loss/stale completion/rollback/metadata/snapshot/
+budget tests on Beast, sanitizers and the pinned AArch64 sysroot.
+`probe-images-1` passes real ext4, ISO9660, UDF and unformatted-image probing,
+read-only-source checks, cancellation, deadlines and child retirement on both
+host and AArch64. `mount-images-5` passes real Linux Rock Ridge, pure Joliet
+and UDF mounts in an isolated namespace, UTF-8 contents read by an unprivileged
+consumer, mount restrictions, busy refusal/restoration and verified loop detach.
+An extra loop opener causes pending cleanup with retained charges, followed by
+successful retry. `board-images-3` repeats those checks on the actual DE25,
+with UID/GID 999 consumers, verified binary/image hashes, preserved selected
+release/services and disposable fixtures only. A root-owned mode-0600 fixture
+also proves authorized descriptor lending can preserve owner/mode while UID 999
+reads/writes through the descriptor. This is a primitive, not the native broker.
+Preserved `/home` and `/local` are UID/GID 0; direct UID 999 path I/O would break
+that data. Rooted opens and permission-sensitive mutations must use the confined
+provider and existing resolver, with native grants enforced, before cutover.
+The provider core now implements authenticated private control/path packets,
+random provider epochs, private bind-mount export authority, bounded FIFO probe
+admission, RAM aggregate limits and read-only image leases. Existing writers
+refuse image admission; lease breaks retire source/mount generations. Actual
+loop detach and failed-mount cleanup retain resources until confirmed. The
+ordered resolver is reused for privileged opens and path mutations; metadata
+ownership and modes remain unchanged. `provider-core-2` passes clean-source
+host/sanitizer/pinned-AArch64 gates and native DE25 execution with UID/GID 999
+consumers, including same-inode/outside-mount descriptor refusal, stale epoch
+and generation checks, paginated catalog/root lending, tmpfs limits, queued
+probe cancellation, image dependencies and resource return. Its source hashes
+match before/after the build, transferred hashes match, and selected board
+release/services remain unchanged. Provider test binary SHA-256 is
+`82a22e25162f16b39522d6fa35e2d1a023fd9fcf04f4e56bcbdd1553b63f5449`.
+This is still a Linux core/library with exercised private transport, not a
+deployed discovery/control daemon or a QEMU-integrated native facility.
+`provider-async-1` now qualifies bounded mount/unmount worker processes and the
+inherited-endpoint service loop. Parent owns loop/backing/target before fork;
+workers retain only the operation's descriptors. Catalog snapshots remain
+available during mutation, source loss cancels/invalidates mounting work, and
+actual protected-target reconciliation handles a lost acknowledgement after
+Linux commits. Quiescence restores usable state only with verified root
+authority. SIGCHLD/lease notifications and precise probe deadlines wake the
+service loop; cancelled uninterruptible children are not busy-polled. Fresh
+host/sanitizer/pinned-AArch64 and actual DE25 gates pass with identical source
+hashes across the build and unchanged board release/services. New provider
+test SHA-256 is
+`382f90b85d1e4a9184d92dd1f804d7fd894bfee283ada3ceb96bdb83e1d9d2a8`.
+`provider-launcher-3` now qualifies the actual root launcher and private QEMU
+bridge on Beast and native DE25. Exact ext4 image/window/UUID selection has an
+exclusive write lease and loop-retained flock before read-only probing. The
+launcher mounts `/dh0`, approved private bindings and bounded `/ram0`/`/tmp`,
+then execs its peer without inherited storage descriptors, groups or caps and
+with no-new-privileges. Source lease loss stops the peer before actual cleanup.
+Rooted opens/mutations, directory names/confinement and sensitive readdir metadata
+use the shared provider/resolver; QEMU owns canonical descriptions and data I/O.
+Path operations share the bounded mount worker owner. A blocked FIFO leaves
+catalog queries responsive; loss cancels it without lending a stale descriptor.
+Workers have parent-death handling and remain charged until actual reap.
+Fresh host/sanitizer/pinned-AArch64 gates and actual UID/GID-999 DE25 QEMU pass
+native path/grant/scope/description/directory checks and twelve provider resets.
+Root-owned mode-0700 directories and mode-0600 files enumerate/read/write without
+metadata changes. Real shutdown, fsck and independent image inspection verify
+persistence. Source hashes, transferred hashes and production services match.
+Launcher SHA-256: `1ded0c1d22c2b333a78e0c21915e537cce643b65580a67825410e147c984cdda`.
+QEMU SHA-256: `208499bf1af198084a33fac73716a174f4e3c27af67561da2cf0acfd48b79ff0`.
+This is a private bridge, not a booted production migration. Guest bootstrap,
+storage and fixed volume sessions still need coordinated cutover. QEMU source
+removes `ASTRA_HOSTFS_ROOT`; do not pair it with the old launcher or publish a
+release until all native bootstrap/HostFS/launch/test/release consumers migrate.
+Processed udev, dynamic native catalog/control/usage and UI/tools remain required.
+The unreleased native catalog now projects one shared versioned record model,
+with no Linux paths, descriptors or private mount IDs. Host 2 / command record 4
+replaces fixed root selectors with exact 64-bit epoch/ID/generation references.
+Whole-mount authority retains no Linux descriptor; exact subdirectory and open
+directory objects do. STOR 37 / Filesystem ABI 13 / Kit 10 carry full-width native
+volume identity, and runtime 1.17 supplies canonical bounded byte search.
+Host protocol gates pass catalog visibility/refusal, stale references, rooted
+scope/description/path behavior, twelve resets, retained-directory retirement,
+single-worker scope revocation/orphaned opens, descriptor/directory/owner budgets,
+root0700/0600 data, real shutdown, fsck and persistence. C/MC68040 runtime, VFS,
+Supervisor, HostFS and hostbench builds pass; kernel host and target gates pass.
+Fresh `native-volume-abi-3` repeats those gates on Beast and actual DE25 QEMU
+with UID/GID 999, no groups/caps and no-new-privileges. Source hashes match
+before/after; transfer hashes and selected production state match. Standalone
+volume-header C++/MC68040, complete installed NDK C/C++ header contract, HTML
+and PDF gates pass. AArch64 QEMU SHA-256:
+`5291b0642aebdfa4720acb54cb5ec2e1ed50b05c51f2564b7bc5b11f8b18317d`.
+The private provider binary remains
+`1ded0c1d22c2b333a78e0c21915e537cce643b65580a67825410e147c984cdda`.
+This does not finish Linux-first bootstrap, public native catalog service/live
+namespace, usage/control, UI/tools or production launch/release migration.
+The new complete optical kernel build uses a distinct release name and output
+tree, rebuilding Image, all standard modules, Astra graphics/capture modules and
+DTBs together. First build reached complete Linux products but exposed a fixed
+relative include path in Astra's module recipe. That path is now an explicit
+matching-source argument. Fresh build 2 completes release
+`6.12.11-astra-storage1-gd7d192a9ddd9` with 1344 matching standard/Astra modules,
+full Image and DTBs. Source inputs and kernel source stay unchanged; all
+vermagic values and package checksums verify. Image SHA-256:
+`f8b42ca62f93ba7d3d83caeb001cefdcf1d5815fc5d3f715b687d56151b81890`.
+Package manifest SHA-256:
+`994ea6f9ea12e8c4b23210f81798b431e30d133b079615e430e60c9ac5271368`.
+Products are in `build/de25-kernel-storage/package-2` on Beast. No kernel
+installation or production activation has occurred; physical boot/graphics/
+storage/HDMI and optical checks remain.
+Native usage queries and UI/tool integration remain unimplemented. Evidence lives under
+`/mnt/Documents/astra68/builds/production-volumes-20261012/`.
+No production storage cutover or board activation has occurred. Fresh board
+inspection retains release `0aa2d713`, Linux `6.12.11-gd7d192a9ddd9`, all three
+services active and only the internal SD attached. The user confirms USB data
+and optical hardware are not yet available; physical hotplug/eject gates remain
+pending. Processed discovery, native live namespace/usage/tools, storage
+cutover, desktop controls, matching CD-ROM kernel and full release gates remain
+required. The latest request explicitly asks to finish provider, namespace, UI
+and tools together; that integration is not finished by this core checkpoint.
+Performance qualification stays deferred.
 
 Current integration slice: shared right-click context menus in Interface 5.4
 and System 3.3, with GUI wire 20 / event 8. One common menu model replaces the
@@ -26,7 +956,13 @@ current scope; submenus, app menu-strip publication and broader Atlas operations
 remain later work. See [menu continuation](HANDOVER_2026-10-12_CONTEXT_MENUS.md)
 and the [common-menu plan](superpowers/plans/2026-10-12-common-context-menus.md).
 
-Active priority: finish the remaining production filesystem phases, including
+Work order reaffirmed by the user: make it work, make it right, then make it
+fast. Complete functional correctness and data-safety gates before resuming
+two-frame menu latency, long-menu timing or broad filesystem performance
+qualification. Existing failed or unqualified timing results remain recorded;
+deferring measurement does not waive their budgets or claim acceptance.
+
+Active correctness priority: finish the remaining production filesystem phases, including
 Linux-owned `/dh0` bootstrap/storage, numbered fixed/USB/optical/RAM volumes,
 mount/unmount/safe-remove/eject, live native namespace publication, and labeled
 desktop volume icons opening Atlas. The user chooses writable automount for
@@ -607,10 +1543,12 @@ entries are derived from the complete records that fit in the linker-reserved
 1 KiB handoff storage; the full resource-backed capacity validates, while an
 over-count is rejected before any range access.
 
-Startup ABI 7 likewise derives its 43-capability capacity from the complete
-92-byte records that fit beside the 84-byte header in the actual 4 KiB startup
-page. The old independent 32-entry ceiling is gone; tests accept the full page
-capacity and reject one record beyond it.
+The earlier Startup ABI 7 checkpoint removed the independent 32-capability
+ceiling. Current Startup ABI 8 retains 43 complete 92-byte capability records
+beside its 92-byte header in the actual 4 KiB startup page. Argument/environment
+vectors now occupy separately owned read-only pages, so their bounded packed
+strings cannot consume capability capacity. Producer, Runtime and POSIX consumers
+share this geometry; the active coherent qualification is recorded above.
 
 The ELF acceptance profile no longer rejects a fifth loadable segment. The
 measured compiler output for zsh, vim, Lua, Terminal, and Interface Gallery is
@@ -2391,7 +3329,13 @@ events service can no longer create its own mount root. Primary `ls` and
 enumeration was repaired in EVENTS and PROC, and target checks cover nested
 directories in both. This is not final `ls` qualification: VFS has no stable
 device/inode IDs yet, so `ls -i` and recursive cycle detection need the shared
-metadata work before release. The fixed internal SD volume is exposed as
+metadata work before release.
+
+Historical checkpoint: the following root-link and RAM-service receipts belong
+to the earlier `b8cbff25` generation. The native provider namespace above
+supersedes that layout; retain these measurements as history.
+
+The fixed internal SD volume is exposed as
 `/dh0`; `/system` and disk-backed conveniences including `/apps`, `/commands`,
 `/home`, `/libs`, `/local`, `/work`, and `/tmp` are protected,
 capability-backed root links. `/tmp` currently uses persistent SD storage.

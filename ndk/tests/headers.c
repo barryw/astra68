@@ -1,5 +1,6 @@
 #include <astra/ndk.h>
 #include <astra/vfs_client.h>
+#include <astra/volume.h>
 
 #include <stddef.h>
 

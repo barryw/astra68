@@ -26,7 +26,7 @@ INTERFACE_LIBRARY_MAP := interface.library.exports
 NDK_HOST_UTF8 := $(SYSTEM)/build/host/utf8.o
 GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.2
 FONT_LIBRARY := $(GRAPHICS)/build/m68k/libraries/font.library.2
-SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.3
+SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
@@ -37,6 +37,8 @@ TEXT_MODEL_HOST_TEST := build/host/test_text_model
 SCROLL_HOST_TEST := build/host/test_scroll
 COMMAND_HOST_TEST := build/host/test_command
 MENU_HOST_TEST := build/host/test_menu
+GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o
+GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o
 GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
 	$(GRAPHICS)/build/generated/astra_ui_font.inc \
 	$(GRAPHICS)/build/generated/astra_mono_font.inc
@@ -108,7 +110,7 @@ $(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(INTERFACE_LIBRARY_MAP) \
 		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(SYSTEM_LIBRARY)) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:graphics.library.2 \
-		-Wl,-l:font.library.2 -Wl,-l:system.library.3 \
+		-Wl,-l:font.library.2 -Wl,-l:system.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
@@ -132,7 +134,7 @@ library-contract: $(INTERFACE_TARGET)
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [font.library.2]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -Fc 'Shared library: [system.library.3]')" = 1
+		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
@@ -175,11 +177,14 @@ $(COMMAND_HOST_TEST): src/command.c tests/test_command.c
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
 MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/command.c src/control.c \
-	$(GRAPHICS)/src/surface.c tests/test_menu.c
-$(MENU_HOST_TEST): $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS)
+	tests/test_menu.c
+$(GRAPHICS_HOST_SURFACE) $(GRAPHICS_HOST_SURFACE_SANITIZE): FORCE
+	$(MAKE) -C $(GRAPHICS) $(patsubst $(GRAPHICS)/%,%,$@)
+
+$(MENU_HOST_TEST): $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
-		-ffunction-sections -Wl,--gc-sections $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) -o $@
+		-ffunction-sections -Wl,--gc-sections $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_HOST_SURFACE) -o $@
 
 $(NDK_HOST_UTF8):
 	$(MAKE) -C $(SYSTEM) build/host/utf8.o
@@ -195,7 +200,7 @@ test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 	./$(COMMAND_HOST_TEST)
 	./$(MENU_HOST_TEST)
 
-sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS)
+sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANITIZE)
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_SYSTEM_TEST \
@@ -228,7 +233,8 @@ sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS)
 
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -ffunction-sections -Wl,--gc-sections \
-		$(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) -o build/host/test_menu_sanitize
+		$(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_HOST_SURFACE_SANITIZE) -o build/host/test_menu_sanitize
+
 	./build/host/test_menu_sanitize
 
 analyze:
@@ -260,3 +266,6 @@ clean:
 
 .PHONY: all interface-library test sanitize analyze library-contract clean \
 	shared-libraries-ready
+
+FORCE:
+.PHONY: FORCE

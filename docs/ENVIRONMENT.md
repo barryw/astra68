@@ -94,10 +94,12 @@ launch.
 - **Terminal**: zsh starts with `TERM` only; everything else is synthesized.
   Commands inherit the shell's environment through fork and exec, so `export`
   works as on any Unix.
-- **Size**: the environment, arguments and capabilities share the 4 KiB
-  startup page. The supervisor refuses an oversized environment with a clear
-  error. Growing the page is a later ABI change, made only if real setups need
-  it.
+- **Size**: arguments and environment share a 4,096-byte packed-string budget,
+  including NUL terminators. Startup ABI 8 publishes their aligned pointer
+  vectors and strings in owned read-only pages; capability records keep their
+  separate 4 KiB page. The supervisor refuses oversized launch strings, and
+  POSIX reports `E2BIG`. The native publication owner admits the complete
+  payload plus opaque exec handoff before the executable's first segment.
 
 ## Commands
 

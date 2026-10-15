@@ -6,22 +6,97 @@ The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
 Kernel-internal structures and function calls may change at any time.
 
-## Process startup ABI 7
+## Unreleased native volume migration
 
-`sw/include/astra/process.h` defines the 84-byte `AstraStartupInfo` and
-92-byte `AstraStartupCapability` records (`ASTRA_STARTUP_ABI_VERSION` 7). ABI
+Host transport is now `0x00030000`, command record 5. SESSION_OPEN takes a
+32-byte payload: the 24-byte big-endian `AstraVolumeReference` (provider epoch,
+object ID, generation), an authenticated requester PID and a zero reserved
+word. Root sessions carry the exact reference; derived sessions carry a zero
+reference and inherit the parent's exact identity and readonly policy.
+HostFS stamps the requester from the kernel's sender identity; service roots
+use zero. Fixed numeric selectors and older records are refused.
+
+The provider catalog projects the shared native records in
+`ndk/include/astra/volume.h`: version 1, a 32-byte query and an 8104-byte
+page containing at most sixteen 504-byte records. Epoch and sequence checks
+protect keyset pagination. Metadata grants no filesystem claim, rooted session
+or mount-control authority. Linux paths, descriptors and private mount IDs do
+not cross this interface.
+
+STOR 38 and Filesystem Kit 14.0 (`filesystem.library.14`, kit 11.0.0) carry
+the full 64-bit native volume identity. `AstraVfsNodeMeta` is 80 bytes, with
+zero identity padding before the volume field; `AstraVfsReply` is 376 bytes.
+Host node device and mount fields carry native identity, not Linux device
+major/minor numbers or private namespace mount IDs. Native IDs are not recycled;
+exhaustion refuses new sessions. Whole-mount sessions retain logical authority
+only; subdirectory sessions and open directories retain their exact objects.
+STOR requests remain 256 bytes. Complete pathname operands use validated
+offset/length descriptors in the session's existing transfer area; providers
+snapshot them before dispatch. Components support 255 bytes and complete paths
+4095 bytes, excluding NUL. There is no short inline-path or extended rename
+format. Continuation/readlink/path results use caller-owned transfer storage.
+Native status 23 reports NAME_TOO_LONG; POSIX translates it to ENAMETOOLONG.
+VOLUME_ADMIN and VOLUME_USAGE remain distinct from metadata and data brokers.
+Native VOL protocol 2 / usage format 2 pages are 8392 bytes and contain two
+complete 4160-byte records. Their cursor orders kind, full native handle and
+holder PID, so shared retained roots identify every authenticated process.
+HostFS projects holders from canonical native control sessions; admitted HELLO
+and actual retirement invalidate the existing QEMU usage sequence. Derivation's
+creator does not replace actual holder ownership. Coherent owned snapshots
+include every page or return failure without partial output. PID, object kind,
+handle, inode, exact volume, access and complete native path come from canonical
+retained resources. RAM_READ/RAM_WRITE constrain root grants to the configured
+RAM source's exact incarnation; old grants never follow replacement mounts.
+Runtime 1.17 adds the canonical freestanding `memchr` needed by bounded catalog
+validation.
+
+System library ABI 4 (`system.library.4`, `ASTRA_SYSTEM_4.0`, Runtime.kit
+2.0.0) gives bundle executable/icon strings and application-catalog paths
+explicit heap ownership. Their existing destroy functions release these paths
+with all other owned metadata. APPL 5 replaces inline argv with a 40-byte
+control message and a transferred readonly shared area bounded by the native
+4096-byte argument maximum. The area is handle zero and the call's reply-send
+capability is handle one. Supervisor snapshots the declared byte span, closes
+the area, validates exact UTF-8 string count and byte consumption, then uses
+that owned snapshot through launch. There is no older inline wire format.
+
+SVCM 7 separates the 64-byte service-identifier domain from filesystem names.
+Its 120-byte request and 152-byte reply carry fixed control and runtime fields;
+executable strings and complete pointer-free definition records use transferred
+readonly areas. Public definitions and info objects own their executable paths.
+The same native area snapshot/seal/create primitive serves APPL and SVCM. Both
+validate a private byte copy after closing the transferred mapping/capability.
+Definition decoding commits only a fully validated object; read or malformed
+payload failures cannot become configuration defaults or partial output.
+
+This coordinated source migration is not a production release. Bootstrap,
+storage, live publication, usage/control, UI and launch/release integration are
+still required. The selected board release retains its qualified older ABI;
+never combine its launcher or kernel with this Host 3 QEMU.
+
+## Process startup ABI 8
+
+`sw/include/astra/process.h` defines the 92-byte `AstraStartupInfo` and
+92-byte `AstraStartupCapability` records (`ASTRA_STARTUP_ABI_VERSION` 8). ABI
 3 added the conventional null-terminated environment vector; ABI 4 replaces
 the final reserved words with an optional read-only personality handoff address
 and size used by atomic image replacement. The initial thread
 enters `_start` with the read-only startup-block logical address in `D2`, its
 process self handle in `D4`, and its thread self handle in `D5`. The block
 carries explicit bounded argument, environment, and initial-capability
-tables. Arguments, environment pointers, strings, and capabilities must fit
-the actual 4 KiB startup page; there is no smaller environment quota. Counts
-are independent of addresses. ABI 7 derives the maximum capability count from
-the records that actually fit in the 4 KiB page (43 currently), rather than an
-independent 32-entry ceiling. A handoff
+tables. The header and capability records occupy one 4 KiB page, with a
+43-record capacity derived from their actual sizes. ABI 8 gives argv and the
+environment an explicit `vector_data_address`/`vector_data_size` extent in
+separate owned read-only pages. Both aligned NULL-terminated pointer vectors
+precede their packed UTF-8 strings. The combined string budget remains 4,096
+bytes including NULs; pointer storage follows the admitted counts and never
+competes with capability records. Consumers validate every pointer and NUL
+against the payload extent before reading strings. The payload follows the
+rounded opaque exec handoff, with their combined rounded span admitted before
+the executable's first PT_LOAD. Launch/exec allocation failures roll back the
+new space; clone retains the payload through ordinary VM lifetime. A handoff
 is either absent or a complete mapped range; its bytes are opaque to Axiom.
+There is no ABI 7 startup format or fallback.
 `docs/USERSPACE_RUNTIME.md` defines
 validation, ownership, and exit.
 
@@ -191,8 +266,13 @@ escapes instead of conflating them with a cross-device operation.
 ## Syscall ABI 0x00010043: filesystem admission
 
 Runtime 1.16 exports `astra_host_scope_limit`. Host transport 0x00010015
-uses 64-byte channel configuration version 4: `scope_files` at byte 48
-binds the per-owner handle/token quota to each scope. OPEN reserves Linux
+binds the per-owner handle/token quota to each scope with `scope_files` at
+byte 48. Current channel configuration version 5 is 68 bytes: `process` at
+byte 52 carries the kernel-authenticated native PID independently of the
+resource owner. File, pending-share and active-operation usage records retain
+that PID. Image admission confirms the PID and full resource owner against
+current channels, so a recycled PID cannot claim an older retained token.
+OPEN reserves Linux
 descriptor and directory capacity before any create or truncate. SHARE and
 ADOPT account aliases and pending receipts without charging another Linux
 descriptor. Refusal returns LIMIT; an unsuccessful adoption keeps its token.

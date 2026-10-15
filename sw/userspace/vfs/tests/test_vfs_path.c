@@ -3,6 +3,46 @@
 #include <string.h>
 
 #include <astra/vfs_path.h>
+#include <astra/vfs_path_payload.h>
+
+static void test_path_payload_framing(void)
+{
+    char bytes[ASTRA_VFS_PATH_MAX * 2u];
+    char oversized[ASTRA_VFS_NAME_MAX + 1u];
+    AstraVfsPathFields fields;
+    AstraVfsPathOperands paths;
+    uint32_t used;
+
+    assert(astra_vfs_path_pack("/a", "/second/path", bytes, sizeof(bytes),
+                                &fields, &used) == ASTRA_VFS_OK);
+    assert(astra_vfs_path_unpack(&fields, bytes, used, 2u, &paths) == ASTRA_VFS_OK);
+    assert(strcmp(paths.first, "/a") == 0 && strcmp(paths.second, "/second/path") == 0);
+    ++fields.second_offset;
+    assert(astra_vfs_path_unpack(&fields, bytes, used, 2u, &paths) == ASTRA_VFS_ERR_PROTOCOL);
+    --fields.second_offset;
+    bytes[fields.first_length - 1u] = 'x';
+    assert(astra_vfs_path_unpack(&fields, bytes, used, 2u, &paths) == ASTRA_VFS_ERR_PROTOCOL);
+    bytes[fields.first_length - 1u] = '\0';
+    bytes[1] = '\0';
+    assert(astra_vfs_path_unpack(&fields, bytes, used, 2u, &paths) == ASTRA_VFS_ERR_PROTOCOL);
+    assert(astra_vfs_path_pack("", NULL, bytes, sizeof(bytes), &fields, &used) == ASTRA_VFS_OK);
+    assert(used == 1u && astra_vfs_path_unpack(&fields, bytes, used, 1u, &paths) == ASTRA_VFS_OK);
+    assert(astra_vfs_path_unpack(&fields, bytes, used + 1u, 1u, &paths) == ASTRA_VFS_ERR_PROTOCOL);
+    assert(astra_vfs_path_pack(NULL, NULL, NULL, 0u, &fields, &used) == ASTRA_VFS_OK);
+    assert(astra_vfs_path_unpack(&fields, NULL, 0u, 0u, &paths) == ASTRA_VFS_OK);
+    assert(astra_vfs_path_pack("/hello", NULL, bytes, 2u, &fields, &used) ==
+           ASTRA_VFS_ERR_BUFFER_TOO_SMALL);
+    assert(used == 0u && fields.first_length == 0u);
+    memset(oversized, 'n', ASTRA_VFS_NAME_MAX);
+    oversized[ASTRA_VFS_NAME_MAX] = '\0';
+    assert(astra_vfs_path_pack(oversized, NULL, bytes, sizeof(bytes), &fields, &used) ==
+           ASTRA_VFS_ERR_NAME_TOO_LONG);
+    assert(astra_vfs_path_pack("\xc0\x80", NULL, bytes, sizeof(bytes), &fields, &used) ==
+           ASTRA_VFS_ERR_INVALID);
+    fields = (AstraVfsPathFields){0u, UINT32_MAX, UINT32_MAX, 2u};
+    assert(astra_vfs_path_unpack(&fields, bytes, sizeof(bytes), 2u, &paths) ==
+           ASTRA_VFS_ERR_PROTOCOL);
+}
 
 static void
 test_splitting(void)
@@ -71,7 +111,7 @@ test_refusals(void)
                             sizeof(rest)) == ASTRA_VFS_ERR_INVALID);
     /* Truncation would name a different file, so it is refused. */
     assert(astra_path_split("/work/src/main.c", name, sizeof(name), tiny,
-                            sizeof(tiny)) == ASTRA_VFS_ERR_INVALID);
+                            sizeof(tiny)) == ASTRA_VFS_ERR_BUFFER_TOO_SMALL);
     assert(astra_path_split(malformed_assign, name, sizeof(name), rest,
                             sizeof(rest)) == ASTRA_VFS_ERR_INVALID);
     assert(astra_path_split(malformed_rest, name, sizeof(name), rest,
@@ -112,7 +152,7 @@ test_normalising(void)
 
     /* The output that does not fit is refused rather than truncated. */
     assert(astra_path_normalise("src/main.c", out, 4u) ==
-           ASTRA_VFS_ERR_INVALID);
+           ASTRA_VFS_ERR_BUFFER_TOO_SMALL);
     assert(astra_path_normalise("src", out, 4u) == ASTRA_VFS_OK);
     assert(strcmp(out, "src") == 0);
     assert(astra_path_normalise(malformed, out, sizeof(out)) ==
@@ -225,11 +265,11 @@ test_qualify_refusals(void)
            ASTRA_VFS_ERR_INVALID);
     /* Truncation would name a different file. */
     assert(astra_path_qualify("WORK", "src", "main.c", tiny, sizeof(tiny)) ==
-           ASTRA_VFS_ERR_INVALID);
+           ASTRA_VFS_ERR_BUFFER_TOO_SMALL);
     assert(astra_path_qualify("WORK", "src", "/sys/a/very/long/one", tiny,
-                              sizeof(tiny)) == ASTRA_VFS_ERR_INVALID);
+                              sizeof(tiny)) == ASTRA_VFS_ERR_BUFFER_TOO_SMALL);
     assert(astra_path_qualify("WORK", "src", NULL, tiny, 2u) ==
-           ASTRA_VFS_ERR_INVALID);
+           ASTRA_VFS_ERR_BUFFER_TOO_SMALL);
 }
 
 int
@@ -241,6 +281,7 @@ main(void)
     test_dotdot_cannot_climb_out();
     test_qualifying();
     test_qualify_refusals();
+    test_path_payload_framing();
     puts("ASTRA VFS PATH PASS");
     return 0;
 }

@@ -248,24 +248,21 @@ kernel's no-forced-thread-destruction and bounded-latency invariants.
 
 ## 8. Namespace presentation
 
-Native logical locations may use names such as `SYS:`, `WORK:`, `HOME:`,
-`RAM:`, and `APP:`. POSIX programs see one stable slash-path view of the same
-underlying storage objects: `SYS:commands/zsh` is `/SYS/commands/zsh`,
-`WORK:file` is `/WORK/file`, and a future `DH0:docs` is `/DH0/docs`. The first
-slash component is an assign, not a second mount or a raw device. `/` exposes
-only the names granted to that process. See
+Native and POSIX programs use the same slash paths. Mounted volumes use names
+such as `/dh0`, `/usb0`, `/cd0`, and `/ram0`. Independently granted roots such as
+`/home`, `/apps`, `/commands`, `/libs`, `/local`, `/config`, `/cwd`, and `/work`
+report directories and retain their own rights. `/system` is a protected
+namespace alias for `/dh0` and exposes link metadata. `/` exposes only the
+names granted to that process. See
 [DEVICE_AND_VOLUME_PLAN.md](DEVICE_AND_VOLUME_PLAN.md) for physical-device,
 partition, mounted-volume, and alias identities.
 
-The two syntaxes are views, not duplicate filesystems. `chdir`, desktop
-navigation, drag and drop, and native open operations ultimately resolve to the
-same object identity and capability checks. POSIX software should use slash
-paths in `HOME`, `PATH`, startup files, prompts, and API results; it must not
-depend on zsh parsing native `NAME:` spellings. The current Terminal startup
-still uses `HOME=HOME:` and a `CONFIG:` startup path; converting those to slash
-spellings is part of the device/volume namespace work, not an upstream zsh
-change. A current directory must remain bound to its original VFS object when
-an alias changes or a removable volume disappears.
+`chdir`, desktop navigation, drag and drop, and native open operations resolve
+through the same object identity and capability checks. Terminal startup,
+`HOME`, `PATH`, startup files, prompts, and API results use slash paths; no
+`NAME:` spelling or zsh translation layer is part of the contract. A current
+directory remains bound to its original VFS object when an alias changes or a
+removable volume disappears.
 
 ## 9. Porting stages
 

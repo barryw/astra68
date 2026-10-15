@@ -319,22 +319,23 @@ sender owner on every request, never a client-supplied one; Linux confines
 each rooted session with `openat2` `RESOLVE_BENEATH`. There is no guest-side
 filesystem-format implementation to keep in sync with Linux's.
 
-Today HostFS holds `HOST_FILESYSTEM`, the host device with
-`ASTRA_RIGHT_HOST_SCOPE`, and mints one filesystem scope per volume. Since
-storage protocol 28 a client's HELLO hands it that scope, and the client
-drives its own scoped host channel: the kernel binds the channel to the
-scope, and QEMU enforces the scope's volume and rights on every command.
-Entropy, media and remote desktop hold `HOST_DEVICE`, which cannot mint a
-scope. Grant roots within a volume are still enforced only in the client;
-see [Storage and VFS](STORAGE_AND_VFS.md#current-implementation-to-be-replaced).
+HostFS holds `HOST_FILESYSTEM` with `ASTRA_RIGHT_HOST_SCOPE` and mints a
+filesystem scope for each rooted grant. Storage protocol 38 admits the scoped
+direct transport through HELLO. The kernel binds channels to those scopes;
+QEMU enforces the retained root, volume incarnation and rights on every
+command. HostChannel 5 carries native PID separately from resource owner for
+usage/control attribution and resource accounting. Entropy, media and remote
+desktop hold `HOST_DEVICE`, which cannot mint a filesystem scope. Grant-root
+confinement is enforced by the provider, not merely by client path resolution.
+See [Storage and VFS](STORAGE_AND_VFS.md#authority-and-identity).
 
 The layering this section used to specify — a guest filesystem handler
 (FAT/AstraFS/RAM) behind a generic block protocol behind a physical block
 driver — is retired as the production design, not merely superseded in
 emphasis: Linux performs the mount, cache, and journal that layer assumed
 Astra's own code would parse. See
-[Storage and VFS](STORAGE_AND_VFS.md#current-implementation-to-be-replaced)
-for what that retired layering still runs as today, and
+[Storage and VFS](STORAGE_AND_VFS.md#one-filesystem-implementation)
+for the production bootstrap and provider boundary, and
 [Devices and volumes](DEVICE_AND_VOLUME_PLAN.md) for the namespace and naming
 rules built on top of it.
 

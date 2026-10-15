@@ -11,6 +11,7 @@ SOURCE_AFTER=$WORKSPACE/source-after.sha256
 SOURCE_GIT=$WORKSPACE/source.git
 JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')
 DE25_SYSROOT=${DE25_SYSROOT:-${XDG_CACHE_HOME:-"$HOME/.cache"}/astra68/de25-jammy-arm64}
+DE25_KERNEL_PACKAGE=${DE25_KERNEL_PACKAGE:?set DE25_KERNEL_PACKAGE to the complete qualified kernel package}
 PYTHONPYCACHEPREFIX=$WORKSPACE/pycache
 export PYTHONPYCACHEPREFIX
 
@@ -74,7 +75,10 @@ python3 "$SCRIPT_DIR/astra_image.py" --create "$STORAGE" 256
 QEMU=$($SCRIPT_DIR/build.sh de25)
 
 source_manifest >"$SOURCE_AFTER"
-cmp "$SOURCE_BEFORE" "$SOURCE_AFTER"
+if ! cmp "$SOURCE_BEFORE" "$SOURCE_AFTER"; then
+    diff -u "$SOURCE_BEFORE" "$SOURCE_AFTER" >&2 || true
+    exit 1
+fi
 
 ASTRA_DE25_QEMU=$QEMU \
 ASTRA_DE25_ROM=$REPOSITORY/sw/boot/build/astra_boot.bin \
@@ -82,7 +86,13 @@ ASTRA_DE25_STORAGE=$STORAGE \
 ASTRA_DE25_QEMU_LIBDIR=$DE25_SYSROOT/usr/lib/aarch64-linux-gnu \
 ASTRA_DE25_SOURCE_MANIFEST=$SOURCE_AFTER \
 ASTRA_DE25_SYSROOT=$DE25_SYSROOT \
+ASTRA_DE25_KERNEL_PACKAGE=$DE25_KERNEL_PACKAGE \
     "$SCRIPT_DIR/create-de25-release.sh" "$RELEASE"
+source_manifest >"$SOURCE_AFTER"
+if ! cmp "$SOURCE_BEFORE" "$SOURCE_AFTER"; then
+    diff -u "$SOURCE_BEFORE" "$SOURCE_AFTER" >&2 || true
+    exit 1
+fi
 if [ -z "${ASTRA_DE25_RELEASE_OUTPUT:-}" ]; then
     "$SCRIPT_DIR/deploy-de25-release.sh" "$RELEASE"
 else

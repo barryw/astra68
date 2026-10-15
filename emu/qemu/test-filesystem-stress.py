@@ -112,31 +112,19 @@ def open_terminal(machine):
 
 
 def machine_stats(machine):
-    machine.qmp.execute("stop")
-    try:
-        return {
-            name: machine.qmp.execute("qom-get", {
-                "path": "/machine", "property": name,
-            }) for name in BLOCK_PROPERTIES +
-            HOST_PROPERTIES + HOST_GAUGE_PROPERTIES +
-            HOST_OPERATION_PROPERTIES + HOST_OPERATION_TIMING_PROPERTIES
-        }
-    finally:
-        machine.qmp.execute("cont")
+    return machine.qmp.host_snapshot(BLOCK_PROPERTIES + HOST_PROPERTIES +
+        HOST_GAUGE_PROPERTIES + HOST_OPERATION_PROPERTIES + HOST_OPERATION_TIMING_PROPERTIES +
+        ("astra-host-non-fs-commands", "astra-host-non-fs-execution-ns"))
 
 
 def independent_fsck(e2fsck, image, volume):
     offset, length = terminal.astra_image.ext4_partition(image)
     terminal.astra_image._slice(image, offset, length, volume)
-    repaired = subprocess.run([e2fsck, "-fy", volume],
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT, text=True)
     clean = subprocess.run([e2fsck, "-fn", volume],
                            stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT, text=True)
-    if repaired.returncode > 2 or clean.returncode != 0:
-        raise RuntimeError("independent e2fsck failed\n%s\n%s" %
-                           (repaired.stdout, clean.stdout))
+    if clean.returncode != 0:
+        raise RuntimeError("independent e2fsck failed\n%s" % clean.stdout)
 
 
 def run_seed(args, seed):
@@ -267,8 +255,9 @@ def run_seed(args, seed):
             for name in HOST_OPERATION_TIMING_PROPERTIES}
         host_operation_execution_ns = sum(
             host_operation_timing_delta.values())
-        host_queue_ns = (host_delta["astra-host-execution-ns"] -
-                         host_operation_execution_ns)
+        non_fs_commands = stats_after["astra-host-non-fs-commands"] - stats_before["astra-host-non-fs-commands"]
+        non_fs_ns = stats_after["astra-host-non-fs-execution-ns"] - stats_before["astra-host-non-fs-execution-ns"]
+        host_overhead_ns = host_delta["astra-host-execution-ns"] - host_operation_execution_ns - non_fs_ns
         print("fsstress: block read-requests=%d read-sectors=%d" %
               (delta["astra-block-read-requests"],
                delta["astra-block-read-sectors"]), flush=True)
@@ -287,8 +276,8 @@ def run_seed(args, seed):
                             "-execution-ns"),
                         host_operation_timing_delta[name])
             for name in HOST_OPERATION_TIMING_PROPERTIES), flush=True)
-        print("fsstress: host operation-execution-ns-total=%d queue-ns=%d" %
-              (host_operation_execution_ns, host_queue_ns), flush=True)
+        print("fsstress: host operation-execution-ns-total=%d non-fs-commands=%d non-fs-ns=%d overhead-ns=%d" %
+              (host_operation_execution_ns, non_fs_commands, non_fs_ns, host_overhead_ns), flush=True)
         print("fsstress: host inflight=%d max-inflight=%d->%d" %
               (stats_after["astra-host-inflight"],
                stats_before["astra-host-max-inflight"],
@@ -299,10 +288,10 @@ def run_seed(args, seed):
                 (args.workers > 1 and
                  stats_after["astra-host-max-inflight"] < 2)):
             raise RuntimeError("invalid host concurrency accounting")
-        if sum(host_operation_delta.values()) != host_delta[
+        if sum(host_operation_delta.values()) + non_fs_commands != host_delta[
                 "astra-host-commands"]:
             raise RuntimeError("host operation accounting disagrees")
-        if host_queue_ns < 0:
+        if host_overhead_ns < 0:
             raise RuntimeError("host operation timing exceeds total timing")
     except Exception as error:
         try:

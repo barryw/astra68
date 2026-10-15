@@ -129,8 +129,8 @@ def main():
                 "/%s/ndk-%s" % (astra_image.LOCAL_COMMANDS_DIRECTORY, name))
         run_dir = os.path.join(temporary, "run")
         os.mkdir(run_dir)
-        host = audio_gate.AudioHost(os.path.join(run_dir, "audio.sock"))
-        os.environ["ASTRA_AUDIO_HOST_SOCKET"] = os.path.join(run_dir,
+        host = audio_gate.AudioHost(os.path.join(temporary, "audio.sock"))
+        os.environ["ASTRA_AUDIO_HOST_SOCKET"] = os.path.join(temporary,
                                                              "audio.sock")
         machine = terminal.Machine(args.qemu, args.rom, scratch, run_dir)
         try:

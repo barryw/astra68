@@ -112,9 +112,7 @@ def run(arguments):
             if not passed:
                 raise RuntimeError("userspace host benchmark timed out\n%s" %
                                    "\n".join(output[-60:]))
-            values = {name: machine.qmp.execute("qom-get", {
-                "path": "/machine", "property": name,
-            }) for name in PROPERTIES}
+            values = machine.qmp.host_snapshot(PROPERTIES)
         except Exception as error:
             raise RuntimeError("host benchmark failed (%s)\n%s\n%s" %
                                (error, "\n".join(output[-60:]),

@@ -7,6 +7,7 @@
 #include <astra/filesystem_library.h>
 #include <astra/runtime.h>
 #include <astra/string.h>
+#include <astra/vfs_path_storage.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -65,42 +66,55 @@ static int add_bundle(AstraProcessFilesystem *filesystem,
                       AstraApplicationCatalog *catalog)
 {
     AstraBundleManifest manifest = ASTRA_BUNDLE_MANIFEST_INIT;
-    AstraApplicationEntry entry;
-    char path[ASTRA_APPLICATION_PATH_MAX];
+    AstraApplicationEntry entry = {0};
+    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(3u);
+    char *bundle = astra_vfs_path_storage_at(&paths, 0u);
+    char *path = astra_vfs_path_storage_at(&paths, 1u);
+    char *icon = astra_vfs_path_storage_at(&paths, 2u);
     char *text = NULL;
     uint32_t length = 0u;
     uint32_t line = 0u;
     int added = 0;
 
-    (void)memset(&entry, 0, sizeof(entry));
-    if (!join(entry.bundle, sizeof(entry.bundle), directory, "/", name))
+    if (paths.bytes == NULL) return -1;
+    if (!join(bundle, ASTRA_APPLICATION_PATH_MAX, directory, "/", name))
         return 0;
     /* A union assign can list one name from several members; the first is
        the one a launch resolves, so later copies are not applications. */
     for (uint32_t at = 0u; at < catalog->count; ++at)
-        if (strcmp(catalog->entries[at].bundle, entry.bundle) == 0)
+        if (strcmp(catalog->entries[at].bundle, bundle) == 0)
             return 1;
-    if (!join(path, sizeof(path), entry.bundle, "/manifest", "") ||
-        astra_process_read_file_alloc(filesystem, path, (void **)&text,
-                                      &length) != ASTRA_VFS_OK)
+    if (!join(path, ASTRA_APPLICATION_PATH_MAX, bundle, "/manifest", ""))
         return 0;
-    if (astra_bundle_manifest_parse(text, length, &manifest, &line) ==
-            ASTRA_BUNDLE_OK &&
+    uint32_t status = astra_process_read_file_alloc(filesystem, path, (void **)&text, &length);
+    if (status != ASTRA_VFS_OK) return status == ASTRA_VFS_ERR_LIMIT ? -1 : 0;
+    uint32_t parsed = astra_bundle_manifest_parse(text, length, &manifest, &line);
+    if (parsed == ASTRA_BUNDLE_OK &&
         manifest.kind == ASTRA_BUNDLE_APPLICATION &&
         astra_string_copy(entry.id, sizeof(entry.id), manifest.id) &&
         astra_string_copy(entry.name, sizeof(entry.name),
                           manifest.name[0] != '\0' ? manifest.name : name) &&
-        join(entry.icon, sizeof(entry.icon), entry.bundle, "/",
-             manifest.icon)) {
+        join(icon, ASTRA_APPLICATION_PATH_MAX, bundle, "/", manifest.icon)) {
         entry.version = manifest.version;
         added = 1;
     }
     astra_bundle_manifest_destroy(&manifest);
     astra_runtime_deallocate(text);
-    if (!added)
-        return 0;
-    if (catalog->count == catalog->capacity && !reserve(catalog))
+    if (!added) return parsed == ASTRA_BUNDLE_LIMIT ? -1 : 0;
+    entry.bundle = astra_runtime_allocate(strlen(bundle) + 1u);
+    entry.icon = astra_runtime_allocate(strlen(icon) + 1u);
+    if (entry.bundle == NULL || entry.icon == NULL) {
+        astra_runtime_deallocate(entry.bundle);
+        astra_runtime_deallocate(entry.icon);
         return -1;
+    }
+    strcpy(entry.bundle, bundle); strcpy(entry.icon, icon);
+    if (catalog->count == catalog->capacity && !reserve(catalog))
+    {
+        astra_runtime_deallocate(entry.bundle);
+        astra_runtime_deallocate(entry.icon);
+        return -1;
+    }
     {
         uint32_t at = catalog->count;
 
@@ -118,6 +132,10 @@ void astra_application_catalog_destroy(AstraApplicationCatalog *catalog)
 {
     if (catalog == NULL)
         return;
+    for (uint32_t at = 0u; at < catalog->count; ++at) {
+        astra_runtime_deallocate(catalog->entries[at].bundle);
+        astra_runtime_deallocate(catalog->entries[at].icon);
+    }
     astra_runtime_deallocate(catalog->entries);
     *catalog = (AstraApplicationCatalog)ASTRA_APPLICATION_CATALOG_INIT;
 }
@@ -127,7 +145,7 @@ uint32_t astra_application_catalog_load(AstraProcessFilesystem *filesystem,
                                         AstraApplicationCatalog *catalog)
 {
     AstraDirectory scan = ASTRA_DIRECTORY_INIT;
-    AstraDirectoryEntry batch[CATALOG_BATCH];
+    AstraDirectoryEntry *batch = NULL;
     uint32_t status;
 
     if (catalog == NULL)
@@ -135,6 +153,8 @@ uint32_t astra_application_catalog_load(AstraProcessFilesystem *filesystem,
     astra_application_catalog_destroy(catalog);
     if (filesystem == NULL || directory == NULL || directory[0] == '\0')
         return ASTRA_VFS_ERR_INVALID;
+    batch = astra_runtime_allocate(CATALOG_BATCH * sizeof(*batch));
+    if (batch == NULL) return ASTRA_VFS_ERR_LIMIT;
     status = astra_filesystem_directory_open(&filesystem->filesystem,
                                              directory, &scan);
     while (status == ASTRA_VFS_OK) {
@@ -144,6 +164,7 @@ uint32_t astra_application_catalog_load(AstraProcessFilesystem *filesystem,
                                                  &count);
         if (status != ASTRA_VFS_OK || count == 0u)
             break;
+        if (count > CATALOG_BATCH) { status = ASTRA_VFS_ERR_PROTOCOL; break; }
         for (uint32_t at = 0u; at < count; ++at) {
             int result;
 
@@ -161,6 +182,7 @@ uint32_t astra_application_catalog_load(AstraProcessFilesystem *filesystem,
         }
     }
     astra_filesystem_directory_close(&scan);
+    astra_runtime_deallocate(batch);
     if (status != ASTRA_VFS_OK)
         astra_application_catalog_destroy(catalog);
     return status;

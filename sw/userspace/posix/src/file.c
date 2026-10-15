@@ -50,7 +50,7 @@ static int started;
 static mode_t creation_mask = 0022u;
 
 typedef struct PosixPath {
-    char native[ASTRA_VFS_PATH_MAX];
+    const char *native;
     int root;
 } PosixPath;
 
@@ -86,6 +86,7 @@ posix_errno(uint32_t status)
     case ASTRA_VFS_ERR_ESCAPED:     return EIO;
     case ASTRA_VFS_ERR_LOST:        return ESTALE;
     case ASTRA_VFS_ERR_FILE_TOO_LARGE: return EFBIG;
+    case ASTRA_VFS_ERR_NAME_TOO_LONG: return ENAMETOOLONG;
     default:                      return EIO;
     }
 }
@@ -188,7 +189,7 @@ static const AstraPosixFileOps ops = {
 };
 
 #define POSIX_FILE_EXEC_MAGIC 0x50464558u
-#define POSIX_FILE_EXEC_VERSION 3u
+#define POSIX_FILE_EXEC_VERSION 4u
 
 typedef struct PosixFileExecHeader {
     uint32_t magic;
@@ -288,13 +289,22 @@ astra_posix_file_after_fork_child(const AstraProcessFileShare *shares,
 }
 
 static uint32_t
+file_exec_process_offset(uint32_t vfs_size)
+{
+    uint64_t offset = ((uint64_t)sizeof(PosixFileExecHeader) + vfs_size + 3u) &
+        ~UINT64_C(3);
+    return offset <= UINT32_MAX ? (uint32_t)offset : 0u;
+}
+
+static uint32_t
 file_exec_size(void)
 {
     uint32_t process_size = astra_posix_process_state_size();
-    uint64_t size = sizeof(PosixFileExecHeader) +
-        (uint64_t)astra_process_vfs_state_size() + process_size;
+    uint32_t process_offset = file_exec_process_offset(astra_process_vfs_state_size());
+    uint64_t size = (uint64_t)process_offset + process_size;
 
-    return process_size == 0u || size > UINT32_MAX ? 0u : (uint32_t)size;
+    return process_offset == 0u || process_size == 0u || size > UINT32_MAX ?
+        0u : (uint32_t)size;
 }
 
 static int
@@ -326,7 +336,7 @@ file_exec_export(void *state, uint32_t capacity, uint32_t *used)
         errno = EIO;
         return -1;
     }
-    if (astra_posix_process_export((uint8_t *)(header + 1) + header->vfs_size,
+    if (astra_posix_process_export((uint8_t *)header + file_exec_process_offset(header->vfs_size),
                                     header->process_size) < 0)
         return -1;
     return 0;
@@ -338,18 +348,25 @@ file_exec_import(const AstraStartupInfo *startup, const void *state,
 {
     const PosixFileExecHeader *header = state;
     uint32_t status;
+    uint32_t process_offset;
 
     if (state == NULL || size < sizeof(*header) ||
         header->magic != POSIX_FILE_EXEC_MAGIC ||
         header->version != POSIX_FILE_EXEC_VERSION ||
         header->total_size != size ||
         header->vfs_size > size - (uint32_t)sizeof(*header) ||
-        header->process_size != size - (uint32_t)sizeof(*header) -
-                                    header->vfs_size ||
         (header->creation_mask & ~(uint32_t)0777u) != 0u) {
         errno = EINVAL;
         return -1;
     }
+    process_offset = file_exec_process_offset(header->vfs_size);
+    if (process_offset == 0u || process_offset > size ||
+        header->process_size != size - process_offset) {
+        errno = EINVAL;
+        return -1;
+    }
+    for (uint32_t at = sizeof(*header) + header->vfs_size; at < process_offset; ++at)
+        if (((const uint8_t *)state)[at] != 0u) { errno = EINVAL; return -1; }
     status = astra_process_vfs_import(startup, header + 1, header->vfs_size);
     if (status != ASTRA_VFS_OK) {
         (void)astra_log_failure("POSIX VFS restore", status);
@@ -362,8 +379,7 @@ file_exec_import(const AstraStartupInfo *startup, const void *state,
         return -1;
     }
     creation_mask = (mode_t)header->creation_mask;
-    if (astra_posix_process_import((const uint8_t *)(header + 1) +
-                                    header->vfs_size,
+    if (astra_posix_process_import((const uint8_t *)header + process_offset,
                                     header->process_size) < 0)
         return -1;
     astra_posix_file_bind(&ops);
@@ -374,38 +390,42 @@ file_exec_import(const AstraStartupInfo *startup, const void *state,
 static int
 file_state_export(uint32_t slot, void *state, uint32_t size)
 {
-    AstraPosixFileExecState *output = state;
+    AstraPosixFileExecState output;
     uint32_t status;
 
-    if (state == NULL || size != sizeof(*output) || slot >= file_capacity ||
+    if (state == NULL || size != sizeof(output) || slot >= file_capacity ||
         file_slots[slot].used == 0u) {
         errno = EBADF;
         return -1;
     }
-    status = astra_process_file_export(&file_slots[slot].file, output);
+    status = astra_process_file_export(&file_slots[slot].file, &output);
     if (status != ASTRA_VFS_OK) {
         errno = EIO;
         return -1;
     }
+    memcpy(state, &output, sizeof(output));
     return 0;
 }
 
 static int
 file_state_import(const void *state, uint32_t size, uint32_t *slot_out)
 {
-    const AstraPosixFileExecState *input = state;
+    AstraPosixFileExecState input;
     int slot;
 
-    if (!started || state == NULL || size != sizeof(*input) ||
-        slot_out == NULL || input->service == 0u ||
-        input->file == ASTRA_VFS_FILE_INVALID) {
+    if (!started || state == NULL || size != sizeof(input) || slot_out == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    memcpy(&input, state, sizeof(input));
+    if (input.service == 0u || input.file == ASTRA_VFS_FILE_INVALID) {
         errno = EINVAL;
         return -1;
     }
     slot = claim();
     if (slot < 0)
         return -1;
-    if (astra_process_file_import(input, &file_slots[slot].file) !=
+    if (astra_process_file_import(&input, &file_slots[slot].file) !=
         ASTRA_VFS_OK) {
         errno = EIO;
         return -1;
@@ -454,11 +474,11 @@ resolve(const char *path, PosixPath *out)
     if (!start())
         return 0;
     size_t length = strlen(path);
-    if (length >= sizeof(out->native)) {
+    if (length >= ASTRA_VFS_PATH_MAX) {
         errno = ENAMETOOLONG;
         return 0;
     }
-    memcpy(out->native, path, length + 1u);
+    out->native = path;
     out->root = strcmp(path, "/") == 0;
     return 1;
 }
@@ -894,14 +914,14 @@ execve(const char *path, char *const argv[], char *const envp[])
         .release = astra_vfs_read_source_close,
         .context = &program_source,
     };
-    vectors = malloc(ASTRA_STARTUP_BLOCK_SIZE);
+    vectors = malloc(ASTRA_LAUNCH_STRING_BYTES);
     if (vectors == NULL) {
         errno = ENOMEM;
         goto failed;
     }
     failure_operation = "execve arguments";
     status = astra_exec_request_pack(
-        &request, vectors, ASTRA_STARTUP_BLOCK_SIZE,
+        &request, vectors, ASTRA_LAUNCH_STRING_BYTES,
         astra_startup_launch_source(astra_posix_startup()), argv, envp);
     if (status != ASTRA_SYSCALL_OK) {
         errno = status == ASTRA_SYSCALL_RESOURCE_LIMIT ? E2BIG : EINVAL;
@@ -1441,53 +1461,31 @@ ssize_t
 readlink(const char *path, char *buffer, size_t capacity)
 {
     PosixPath resolved;
-    char native_target[ASTRA_VFS_PATH_MAX + 1u];
-    char posix_target[ASTRA_VFS_PATH_MAX + 2u];
     uint32_t length = 0u;
     uint32_t status;
-    size_t moved;
-
-    if (buffer == NULL) {
-        errno = EFAULT;
-        return -1;
+    if (buffer == NULL) { errno = EFAULT; return -1; }
+    if (capacity == 0u) { errno = EINVAL; return -1; }
+    if (!resolve(path, &resolved)) return -1;
+    if (resolved.root) { errno = EINVAL; return -1; }
+    /* Native paths are complete UTF-8. POSIX truncates raw bytes, including
+       within a multibyte character, after the native operation succeeds. */
+    char *target = malloc(ASTRA_VFS_PATH_MAX);
+    if (target == NULL) { errno = ENOMEM; return -1; }
+    status = astra_filesystem_readlink(&filesystem.filesystem,
+        resolved.native, target, ASTRA_VFS_PATH_MAX - 1u, &length);
+    if (status == ASTRA_VFS_OK) {
+        if (length > capacity)
+            length = (uint32_t)capacity;
+        memcpy(buffer, target, length);
     }
-    if (capacity == 0u) {
-        errno = EINVAL;
-        return -1;
-    }
-    if (!resolve(path, &resolved))
-        return -1;
-    if (resolved.root) {
-        errno = EINVAL;
-        return -1;
-    }
-    status = astra_filesystem_readlink(
-        &filesystem.filesystem, resolved.native, native_target,
-        ASTRA_VFS_PATH_MAX, &length);
-    if (status != ASTRA_VFS_OK)
-        return fail(status);
-    if (length > ASTRA_VFS_PATH_MAX) {
-        errno = EIO;
-        return -1;
-    }
-    native_target[length] = '\0';
-    if (astra_posix_link_target_to_posix(native_target, posix_target,
-                                         sizeof(posix_target)) != 0) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    moved = strlen(posix_target);
-    if (moved > capacity)
-        moved = capacity;               /* POSIX readlink truncates. */
-    (void)memcpy(buffer, posix_target, moved);
-    return (ssize_t)moved;
+    free(target);
+    return status == ASTRA_VFS_OK ? (ssize_t)length : fail(status);
 }
 
 int
 symlink(const char *target, const char *path)
 {
     PosixPath resolved;
-    char native_target[ASTRA_VFS_PATH_MAX];
     uint32_t status;
 
     if (target == NULL || path == NULL) {
@@ -1504,13 +1502,8 @@ symlink(const char *target, const char *path)
         errno = EEXIST;
         return -1;
     }
-    if (astra_posix_link_target_to_native(target, native_target,
-                                          sizeof(native_target)) != 0) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
     status = astra_filesystem_symlink(
-        native_target, &filesystem.filesystem, resolved.native);
+        target, &filesystem.filesystem, resolved.native);
     return status == ASTRA_VFS_OK ? 0 : fail(status);
 }
 

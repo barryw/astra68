@@ -1,7 +1,21 @@
 /* Tracked ABI source; generated linker maps remain ignored build products. */
-ASTRA_FILESYSTEM_12.0 {
+ASTRA_FILESYSTEM_14.0 {
     global:
+        astra_volume_catalog;
+        astra_volume_broker_info;
+        astra_volume_usage;
+        astra_volume_usage_snapshot_open;
+        astra_volume_usage_snapshot_close;
+        astra_volume_snapshot_open;
+        astra_volume_snapshot_close;
+        astra_volume_root;
+        astra_volume_control;
+        astra_volume_image;
+        astra_volume_watch_open;
+        astra_volume_watch_receive;
+        astra_volume_watch_close;
         astra_assign_bind;
+        astra_assign_bind_volume;
         astra_assign_join;
         astra_assign_lookup;
         astra_assign_member;
@@ -69,6 +83,8 @@ ASTRA_FILESYSTEM_12.0 {
         astra_process_vfs_after_fork_child;
         astra_process_vfs_assign_client;
         astra_process_vfs_assigns;
+        astra_process_vfs_namespace_acquire;
+        astra_process_vfs_namespace_release;
         astra_process_vfs_client;
         astra_process_vfs_client_for;
         astra_process_vfs_client_handle;

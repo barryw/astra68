@@ -7,6 +7,10 @@
 #include <astra/process.h>
 #include <astra/vfs_service.h>
 
+/** Native assign-name storage including NUL. Filesystem mount names are
+ * independent of the smaller startup capability-name field. */
+#define ASTRA_ASSIGN_NAME_MAX 32u
+
 /**
  * Split /name/rest into an assign name and its byte-exact remainder. The
  * name is canonicalised to uppercase; Makefile and makefile remain distinct.

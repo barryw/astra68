@@ -68,6 +68,15 @@ fi
 was_astra=$(systemctl is-active astra.service || true)
 was_remote=$(systemctl is-active astra-remote-desktop.service || true)
 runner_pid=
+perf_pid=
+stop_perf()
+{
+    if [ -n "$perf_pid" ]; then
+        kill -INT "$perf_pid" 2>/dev/null || true
+        wait "$perf_pid" 2>/dev/null || true
+        perf_pid=
+    fi
+}
 restore()
 {
     if [ -n "$runner_pid" ]; then
@@ -75,6 +84,7 @@ restore()
         wait "$runner_pid" 2>/dev/null || true
         runner_pid=
     fi
+    stop_perf
     if [ "$was_astra" = active ]; then
         systemctl start astra.service
     fi
@@ -94,10 +104,9 @@ if [ "$qemu_uid" -eq 0 ] || [ "$qemu_gid" -eq 0 ]; then
     exit 1
 fi
 chmod 0711 "$work"
-mkdir -p "$work/run" "$work/state" "$work/log" "$work/hostfs"
-install -d -o "$qemu_uid" -g "$qemu_gid" -m 0700 "$work/hostfs" "$work/profile"
+mkdir -p "$work/run" "$work/state" "$work/log" "$work/exports/work" "$work/exports/sound"
+install -d -o "$qemu_uid" -g "$qemu_gid" -m 0700 "$work/profile"
 rm -f "$work/profile.aprof"
-qemu_launcher=$qemu
 perf=
 if [ "$host_perf" = true ]; then
     for candidate in /usr/lib/linux-tools/*/perf /usr/bin/perf; do
@@ -107,7 +116,6 @@ if [ "$host_perf" = true ]; then
         fi
     done
     [ -n "$perf" ] || { echo "working perf not found" >&2; exit 1; }
-    qemu_launcher=$work/qemu-perf-wrapper.sh
 fi
 {
     date -u '+started=%Y-%m-%dT%H:%M:%SZ'
@@ -119,11 +127,11 @@ fi
 
 if [ "$mode" = latency ]; then
     env ASTRA_RUN_ROOT="$work/run" ASTRA_STATE_ROOT="$work/state" \
-    ASTRA_LOG_ROOT="$work/log" ASTRA_HOSTFS_ROOT="$work/hostfs" \
-    QEMU="$qemu_launcher" ROM="$rom" ASTRA_QEMU_BINARY="$qemu" \
+    ASTRA_LOG_ROOT="$work/log" ASTRA_EXPORTS_ROOT="$work/exports" \
+    QEMU="$qemu" ROM="$rom" \
     ASTRA_BASE_STORAGE="$storage" \
-    ASTRA_PERF_DATA="$work/profile/host-perf.data" ASTRA_PERF_BINARY="${perf:-perf}" \
     /var/lib/astra/current/bin/run-arty.sh \
+    -perfmap -pidfile "$work/run/qemu/peer.pid" \
     > "$work/runner.log" 2>&1 &
 else
     profile_mode=control=$work/profile/profile.sock
@@ -135,15 +143,35 @@ else
         plugin_options=$plugin_options,$probes
     fi
     env ASTRA_RUN_ROOT="$work/run" ASTRA_STATE_ROOT="$work/state" \
-        ASTRA_LOG_ROOT="$work/log" ASTRA_HOSTFS_ROOT="$work/hostfs" \
-        QEMU="$qemu_launcher" ROM="$rom" ASTRA_QEMU_BINARY="$qemu" \
+        ASTRA_LOG_ROOT="$work/log" ASTRA_EXPORTS_ROOT="$work/exports" \
+        QEMU="$qemu" ROM="$rom" \
         ASTRA_BASE_STORAGE="$storage" \
-        ASTRA_PERF_DATA="$work/profile/host-perf.data" ASTRA_PERF_BINARY="${perf:-perf}" \
-        /var/lib/astra/current/bin/run-arty.sh \
-        -plugin "$plugin_options" \
+            /var/lib/astra/current/bin/run-arty.sh \
+        -plugin "$plugin_options" -perfmap -pidfile "$work/run/qemu/peer.pid" \
         > "$work/runner.log" 2>&1 &
 fi
 runner_pid=$!
+if [ "$host_perf" = true ]; then
+    count=0
+    while [ ! -s "$work/run/qemu/peer.pid" ]; do
+        kill -0 "$runner_pid" 2>/dev/null || { echo "Astra exited before perf attach" >&2; exit 1; }
+        [ "$count" -lt "$timeout" ] || { echo "Astra peer PID timed out" >&2; exit 1; }
+        sleep 1
+        count=$((count + 1))
+    done
+    read -r peer_pid <"$work/run/qemu/peer.pid"
+    case "$peer_pid" in ''|*[!0-9]*|0) echo "invalid QEMU peer PID" >&2; exit 1 ;; esac
+    [ "$(stat -c %u /proc/"$peer_pid")" -eq "$qemu_uid" ] &&
+        [ "$(readlink -f /proc/"$peer_pid"/exe)" = "$(readlink -f "$qemu")" ] || {
+        echo "perf target is not the authenticated QEMU executable" >&2; exit 1;
+    }
+    # Attach to the provider's exact peer. perf must not fork a different QEMU
+    # PID because private storage endpoints authenticate that process identity.
+    # Output remains in the root-owned work directory, outside guest writes.
+    "$perf" record -p "$peer_pid" -F "${ASTRA_PERF_FREQUENCY:-999}" -g \
+        -o "$work/host-perf.data" >"$work/host-perf-record.log" 2>&1 &
+    perf_pid=$!
+fi
 elapsed=0
 result=1
 while [ "$elapsed" -lt "$timeout" ]; do
@@ -228,6 +256,7 @@ fi
 kill "$runner_pid" 2>/dev/null || true
 wait "$runner_pid" 2>/dev/null || true
 runner_pid=
+stop_perf
 cp "$work/log/qemu-console.log" "$work/console.log"
 setpriv --reuid "$qemu_uid" --regid "$qemu_gid" --clear-groups \
     --no-new-privs cat "$work/profile/trace.bin" >"$work/trace.bin"
@@ -237,8 +266,6 @@ if [ "$mode" != latency ]; then
     [ -s "$work/profile.aprof" ] || { echo "profiler emitted no data" >&2; exit 1; }
 fi
 if [ "$host_perf" = true ]; then
-    setpriv --reuid "$qemu_uid" --regid "$qemu_gid" --clear-groups \
-        --no-new-privs cat "$work/profile/host-perf.data" >"$work/host-perf.data"
     [ -s "$work/host-perf.data" ] || { echo "perf emitted no data" >&2; exit 1; }
     "$perf" report --stdio --no-children -i "$work/host-perf.data" \
         > "$work/host-perf.txt"

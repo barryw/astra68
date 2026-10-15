@@ -983,7 +983,7 @@ uint32_t astra_host_channel_close(uint32_t device);
  * authority to drive host channels bound to one provider session.
  * @param device Host device handle carrying ::ASTRA_RIGHT_HOST_SCOPE.
  * @param word The provider's word for the session (a volume under host
- *        command record 2, a session id from record 3).
+ *        command record 2, a session id from record 4).
  * @param flags ::ASTRA_HOST_SCOPE_READ_ONLY and/or ::ASTRA_HOST_SCOPE_DELEGATE.
  * @param scope Receives a handle with READ (query), WRITE (open and attach
  *        channels), TRANSFER and ADMINISTER (revoke).

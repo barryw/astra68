@@ -22,6 +22,8 @@ import importlib.util
 import json
 import os
 import shutil
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -45,11 +47,11 @@ def load(name, file):
 terminal = load("astra_terminal_gate", "test-terminal.py")
 
 # Every fssem case the suite runs. Later tasks append here and in fssem.c.
-CASES = ["basic", "raw-lane", "lane-fork-exec", "raw-readonly",
+CASES = ["basic", "durable-save", "volume-catalog", "volume-root", "raw-lane", "lane-fork-exec", "raw-readonly",
          "raw-cross-grant", "raw-subroot", "raw-delegate", "raw-retire",
          "raw-onward", "raw-orphans", "raw-orphans-death",
          "symlink-in-volume", "symlink-cross-volume", "dotdot-at-root",
-         "escape-relative", "link-edges", "alias-identity", "continuation-limit",
+         "escape-relative", "link-edges", "alias-identity", "continuation-limit", "path-boundaries",
          "shared-description", "exec-inherit", "append-race", "file-size-limit", "cwd-identity",
          "many-lanes", "owner-sessions", "owner-files"]
 # Orchestrated checks: name -> function(machine, provider_mount). Later tasks
@@ -155,8 +157,8 @@ CHECKS["lane"] = check_lane
 
 # Fault injection needs a user-controllable HostFS, with normal restart policy.
 MANIFEST = astra_image.STARTUP_MANIFEST.replace(
-    "serves WORK:rw METRICS:r SOUND:rw required priority=20",
-    "serves WORK:rw METRICS:r SOUND:rw priority=20")
+    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE RAM_READ RAM_WRITE critical priority=20",
+    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE RAM_READ RAM_WRITE priority=20")
 FINAL_CHECKS = ("hostfs-kill",)
 
 
@@ -200,20 +202,26 @@ def check_provider_reset(machine, mount):
 
 
 def check_hostfs_kill(machine, mount):
-    killed_at = time.time()
+    killed_at = None
+    killed_sequence = None
     kill = ("ps | while read -r id rest; do "
             "[[ $rest == *' /services/hostfs' ]] && "
             "print kill > /proc/$id/ctl; done")
-    loss(machine, "dead", lambda: machine.qmp.type_line(kill))
+    def kill_now():
+        nonlocal killed_at, killed_sequence
+        killed_at = time.time()
+        killed_sequence = machine.sequence()
+        machine.qmp.type_line(kill)
+    loss(machine, "dead", kill_now)
+    if not machine.wait_for_trace_text("desktop ready", 60, killed_sequence):
+        fail("desktop did not regain its namespace after HostFS restart")
     deadline = time.monotonic() + 60
     sample = os.path.join(mount, "work", ".astra", "sample")
     while not os.path.exists(sample) or os.stat(sample).st_mtime <= killed_at + 1.0:
         if time.monotonic() > deadline:
             fail("sampler did not regain WORK after HostFS restart: %r" % machine.trace_with_syslog()[-50:])
         time.sleep(0.5)
-    before = machine.sequence()
-    machine.qmp.double_click(*machine.desktop_icon())
-    if machine.wait_for_text(terminal.BANNER, 60, before)[0] is None or not machine.wait_for_ready(60, before):
+    if not terminal.open_terminal_window(machine, 60):
         fail("no fresh terminal after HostFS restart")
     lines, status = command(machine, "print -r -- alive > /work/after-kill && cat /work/after-kill", 60, 41)
     if status != 0 or "alive" not in lines:
@@ -232,43 +240,85 @@ def gauges(machine):
         "property": "astra-host-" + name}) for name in GAUGES}
 
 
+def fixture_descriptors(machine, path, include_path=False):
+    """Independent Linux oracle for this fixture's exact retained inode.
+
+    QMP peer credentials identify the emulator rather than its privileged
+    launcher. A global descriptor delta cannot attribute a guest operation
+    while the sampler/event store opens and closes unrelated files.
+    """
+    pid, uid, gid = struct.unpack("3i", machine.qmp.socket.getsockopt(
+        socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+    if pid <= 0 or uid <= 0 or gid <= 0:
+        fail("descriptor oracle requires the authenticated non-root QEMU peer")
+    try:
+        expected = os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        return 0
+    count = 0
+    for name in os.listdir("/proc/%d/fd" % pid):
+        try:
+            info = os.stat("/proc/%d/fd/%s" % (pid, name))
+            if (info.st_dev, info.st_ino) != (expected.st_dev, expected.st_ino):
+                continue
+            with open("/proc/%d/fdinfo/%s" % (pid, name)) as stream:
+                flags = next(int(line.split()[1], 8) for line in stream if line.startswith("flags:"))
+            if include_path or not flags & os.O_PATH:
+                count += 1
+        except FileNotFoundError:
+            continue  # an unrelated descriptor closed during the observation
+    return count
+
+
 def check_budgets(machine, mount):
     record = {}
     for kind, count in (("file", 1000), ("dir", 200)):
         machine.settle()
+        target = os.path.join(mount, "work", ".astra", "fsbench-hold-file") if kind == "file" else \
+            os.path.join(mount, "work", ".astra")
+        fixture_before = fixture_descriptors(machine, target)
         before = gauges(machine)
         start = machine.sequence()
         machine.qmp.type_line("fsbench --hold %s %d" % (kind, count))
         if machine.wait_for_text("fsbench: holding", 180, start)[0] is None:
             fail("budget hold did not start: %r" % machine.trace_with_syslog()[-50:])
         during = gauges(machine)
+        fixture_during = fixture_descriptors(machine, target)
         marker = os.path.join(mount, "work", ".astra", "fsbench-hold-%s.ready" % kind)
         os.unlink(marker)
         if machine.wait_for_text("fsbench: hold done", 120, start)[0] is None:
             fail("budget hold did not cleanly finish")
         machine.settle()
         after = gauges(machine)
-        if during["fs-descriptors"] - before["fs-descriptors"] != count:
-            fail("%s descriptor accounting: %r %r" % (kind, before, during))
-        if after["fs-descriptors"] != before["fs-descriptors"] or after["fs-directories"] != before["fs-directories"]:
-            fail("%s leaked descriptors: %r %r" % (kind, before, after))
+        fixture_after = fixture_descriptors(machine, target)
+        if fixture_during - fixture_before != count:
+            fail("%s fixture descriptor accounting: %d -> %d, expected %d" %
+                 (kind, fixture_before, fixture_during, count))
+        if fixture_after != fixture_before:
+            fail("%s fixture leaked descriptors: %d -> %d" % (kind, fixture_before, fixture_after))
         record[kind] = dict(count=count, before=before, during=during, after=after,
+            fixture=dict(before=fixture_before, during=fixture_during, after=fixture_after),
             rss_kib_per_object=max(0, during["rss-kib"] - before["rss-kib"]) / count)
     machine.settle()
     before = gauges(machine)
+    target = os.path.join(mount, "work")
+    fixture_before = fixture_descriptors(machine, target, include_path=True)
     start = machine.sequence()
     machine.qmp.type_line("fssem --hold-sessions 16")
     if machine.wait_for_text("FSSEM SESSIONS holding 16", 120, start)[0] is None:
         fail("control-session hold did not start")
     during = gauges(machine)
+    fixture_during = fixture_descriptors(machine, target, include_path=True)
     os.unlink(os.path.join(mount, "work", ".astra", "fssem-sessions.ready"))
     if machine.wait_for_text("FSSEM SESSIONS done", 120, start)[0] is None:
         fail("control-session hold did not finish")
     machine.settle()
     after = gauges(machine)
-    if during["fs-descriptors"] != before["fs-descriptors"] or after["fs-descriptors"] != before["fs-descriptors"]:
+    fixture_after = fixture_descriptors(machine, target, include_path=True)
+    if fixture_during != fixture_before or fixture_after != fixture_before:
         fail("control sessions opened/leaked provider descriptors")
-    record["session"] = dict(count=16, before=before, during=during, after=after)
+    record["session"] = dict(count=16, before=before, during=during, after=after,
+        fixture=dict(before=fixture_before, during=fixture_during, after=fixture_after))
     print("PASS budgets " + json.dumps(record, sort_keys=True))
 
 
@@ -283,9 +333,7 @@ def check_flood(machine, mount):
     lines, status = command(machine, "ls /work", 30, 51)
     if status != 0:
         fail("shell stopped under quota: %r" % lines)
-    before = machine.sequence()
-    machine.qmp.double_click(*machine.desktop_icon())
-    if machine.wait_for_text(terminal.BANNER, 60, before)[0] is None or not machine.wait_for_ready(60, before):
+    if not terminal.open_terminal_window(machine, 60):
         fail("desktop could not open terminal under quota")
     machine.qmp.execute("qom-set", {"path": "/machine",
         "property": "astra-host-fs-reset", "value": True})
@@ -312,15 +360,14 @@ def main():
     parser.add_argument("--bench", nargs=2, metavar=("LABEL", "OUT"))
     parser.add_argument("--tree", default=ROOT,
                         help="source tree supplying this image's trace catalogs")
-    parser.add_argument("--bootstrap", choices=("match", "mismatch", "absent"), default="match")
     arguments = parser.parse_args()
     # fssem is a TEST_COMMAND: "make all" never builds it, so it is built
     # directly here before being installed, the same as every other gate's
     # test command (test-fpu.py's fpucheck, test-system-log.py's logburst).
     if not arguments.bench:
         built = subprocess.run(
-            ["make", "-C", os.path.join(ROOT, "sw", "userspace", "commands"),
-             "build/m68k/fssem"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            astra_image._build_invocation(["make", "-C", os.path.join(ROOT, "sw", "userspace", "commands"),
+             "build/m68k/fssem"]), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if built.returncode != 0:
             fail("could not build fssem: %s" % built.stdout[-400:].decode(
                 "utf-8", "replace"))
@@ -338,34 +385,11 @@ def main():
             with open(manifest, "w", encoding="ascii", newline="\n") as out:
                 out.write(MANIFEST)
             astra_image._replace_volume_file(image, manifest, "/startup/system")
-        selected_manifest = MANIFEST if not arguments.bench and "hostfs-kill" in (arguments.check or CHECKS) else astra_image.STARTUP_MANIFEST
-        bootstrap = None
-        if not arguments.bench and arguments.bootstrap != "absent":
-            bootstrap = os.path.join(work, "provider-startup")
-            with open(bootstrap, "w", encoding="ascii", newline="\n") as stream:
-                stream.write(selected_manifest if arguments.bootstrap == "match" else "mismatch\n")
-        launcher, provider = qemu_runtime.root_provider(work, system=bootstrap)
         run = tempfile.mkdtemp(prefix="astra-fs-run-", dir="/tmp")
         machine = terminal.Machine(arguments.qemu, arguments.rom, image, run,
-                                   launcher=launcher, source_root=arguments.tree)
+                                   source_root=arguments.tree)
         mount = machine.reader.hostfs_root
         try:
-            if not arguments.bench:
-                # Capture the early verdict before desktop/Terminal boot can
-                # wrap the bounded trace ring and overwrite its arguments.
-                if not machine.wait_for_serial("Initial image ....... loaded", 120):
-                    fail("no initial image")
-                verdict = "bootstrap-provider " + arguments.bootstrap
-                bootstrap_lines, _ = machine.wait_for_text(verdict, 120)
-                if bootstrap_lines is None:
-                    for line in machine.trace_with_syslog():
-                        print(line)
-                    fail("missing bootstrap verdict " + verdict)
-                if arguments.bootstrap == "match" and not any(
-                        "bootstrap-provider match bytes=%d" % len(selected_manifest.encode("ascii")) in line
-                        for line in bootstrap_lines):
-                    fail("bootstrap compared wrong manifest bytes")
-                print("PASS bootstrap " + arguments.bootstrap)
             if not terminal.open_terminal(machine, 120, 60):
                 fail("no terminal")
             if arguments.bench:
@@ -374,6 +398,14 @@ def main():
                 run_cases(machine, arguments.case or CASES)
                 for name in sorted(arguments.check or CHECKS, key=lambda name: (name in FINAL_CHECKS, name)):
                     CHECKS[name](machine, mount)
+        except BaseException:
+            print("native kernel failure trace:")
+            for line in machine.trace()[-500:]:
+                print(line)
+            print("native failure trace:")
+            for line in machine.trace_with_syslog()[-250:]:
+                print(line)
+            raise
         finally:
             machine.close()
             shutil.rmtree(run, ignore_errors=True)
@@ -381,7 +413,10 @@ def main():
         # non-zero exit means the write-back may not have happened.
         if machine.process.returncode != 0:
             fail("launcher exited %d" % machine.process.returncode)
-        checked = subprocess.run(["/usr/sbin/e2fsck", "-fn", provider],
+        offset, length = astra_image.ext4_partition(image)
+        volume = os.path.join(work, "system.ext4")
+        astra_image._slice(image, offset, length, volume)
+        checked = subprocess.run(["/usr/sbin/e2fsck", "-fn", volume],
                                  capture_output=True, text=True)
         if checked.returncode != 0:
             fail("provider e2fsck: %s" % checked.stdout[-400:])

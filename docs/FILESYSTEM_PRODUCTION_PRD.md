@@ -1,9 +1,17 @@
 # Astra filesystem production requirements
 
-Status: implementation PRD. The architectural direction was agreed on
-2026-10-06. Native-16, integration-1 and unprivileged DE25 provider gates
-qualified the preceding ABI 11 source on 2026-10-11. Final-review fixes pass
-current-source requalification at Filesystem ABI 12/Kit 9.0.0, STOR 36:
+Status: active implementation PRD. The architectural direction was agreed on
+2026-10-06. Current candidate uses Filesystem ABI 14 / Kit 11.0.0, STOR 38
+and the Linux-owned fixed/removable/optical/ISO/RAM provider. Native lifecycle,
+exact file/CWD busy removal, recovery, durability and Atlas overflow pass their
+current gates. Complete GUI/semantics qualification and production migration
+remain required; [Current state](CURRENT_STATE.md) records exact evidence.
+Network mounts are excluded from this completion task. Performance acceptance
+follows correctness.
+
+Historical qualification: Native-16, integration-1 and unprivileged DE25
+provider gates qualified the preceding ABI 11 source on 2026-10-11.
+Final-review fixes passed Filesystem ABI 12/Kit 9.0.0, STOR 36:
 all 26 semantics, stress, NDK/docs, all 31 integration gates and isolated
 unprivileged AArch64 provider checks. ABI 12 release `194b9202` is deployed
 with unprivileged QEMU and the canonical worker-only resolver optimization.
@@ -11,17 +19,17 @@ Final five paired QEMU stat/read probes pass, but full workload budgets fail
 (spawn median 1.73× baseline, among other failures). Physical five pairs also
 fail unchanged budgets: warm-open median 3.51× and readdir median 2.59×,
 among other failures. Every workload executes successfully; provider memory
-and held-miss absolute floors pass. Performance acceptance remains open; no later
-production phase has started.
+and held-miss absolute floors pass. Performance acceptance remains open; those
+measurements do not qualify the current candidate.
 
 The 2026-10-12 user request makes the remaining production phases the active
 priority. The user specifies `/ram0` naming, writable automatic mounts for
 supported USB filesystems, labeled desktop volume icons, and double-click into
 Atlas, and authorizes the Linux kernel work needed for CD-ROM support. The
 [production volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md)
-records the implementation boundaries and migration/acceptance requirements;
-its written-spec review is pending. These are requested outcomes, not shipped
-capabilities or performance acceptance.
+records the implementation boundaries and migration/acceptance requirements.
+Completed source and focused gates do not establish physical-drive acceptance
+or production cutover.
 
 Initial Atlas scope is a single root-directory window with named file/folder
 icons, proving native open and enumeration of the selected mounted volume.
@@ -46,7 +54,7 @@ ownership assumptions in [Storage and VFS](STORAGE_AND_VFS.md),
 [Devices and volumes](DEVICE_AND_VOLUME_PLAN.md), and the storage sections of
 [Driver and service architecture](DRIVER_AND_SERVICE_ARCHITECTURE.md).
 It also replaces the assumption that guest ext4 and guest RAMFS remain production
-engines. Those documents must be reconciled as part of implementation.
+engines. Those documents now describe the Linux-owned production boundary.
 
 The useful device and mount rules from the existing plan are retained: fixed
 internal-SD system selection, separate device and volume identities, one native
@@ -60,22 +68,27 @@ versioned Astra protocols; applications gain no alternate Linux API.
 
 ## Current implementation and gaps
 
+The table describes candidate source; it does not claim deployment or physical
+drive qualification.
+
 | Area | Existing implementation | Production gap |
 |---|---|---|
-| System storage | Guest lwext4 mounts the selected SD partition; supervisor bootstrap and storage service independently select the first MBR Linux-type partition. | One verified system-volume selection and one Linux filesystem owner, including bootstrap. |
-| Linux-backed files | HostFS owns `HOST_FILESYSTEM` and mints rooted, rights-bounded sessions/scopes. Clients drive kernel-bound host channels; QEMU enforces scope, ancestry, read-only rights, ownership and object tags for every command. Current storage protocol is 36. The host exposes fixed WORK and SOUND exports. | Dynamic volume inventory and mount lifecycle; full performance acceptance. |
-| RAM storage | An optional guest RAMFS service enforces a configured allocation cap. | Linux tmpfs with explicit host-memory limits and the common volume lifecycle. |
-| Namespace | Assigns provide slash roots and protected conveniences through native binding semantics; traversal follows links in order and confines rooted grants. | Dynamic mount publication and removal. |
+| System storage | The canonical image selector validates one exact system partition. Supervisor bootstrap and HostFS access the same Linux-owned provider; guest ext4/storage services are absent from the production release. | Final coherent release and stopped-state migration with preserved user data. |
+| Linux-backed files | HostFS owns `HOST_FILESYSTEM` and mints rooted, rights-bounded sessions/scopes. Clients drive kernel-bound host channels; QEMU enforces scope, ancestry, read-only rights, ownership and object tags for every command. Current storage protocol is 38. The Linux provider owns fixed, removable, optical, image and RAM backing instances; WORK and SOUND remain explicit exports. | Coherent dynamic-volume lifecycle qualification and production cutover; full performance acceptance. |
+| RAM storage | Configured Linux tmpfs has explicit limits and source identity independent of its current mount. Native scoped brokers preserve rights across remounts. | Final coherent release/board qualification. |
+| Namespace | Canonical volume snapshots update native process assigns; exact incarnation checks prevent old grants from targeting replacement mounts. Ordered traversal confines rooted grants. | Final coherent lifecycle qualification and production cutover. |
 | File objects | Stable volume/node identities, retained objects/cwd, shared descriptions/offsets, fork/exec inheritance and ordered symlink behavior pass current correctness gates. | Production lifecycle across dynamic media and final performance acceptance. |
-| Devices and mounts | The device/volume document defines the desired model; storage services have shutdown hooks. | General storage inventory, mount policy execution, hotplug, unmount/eject, and client notifications. |
+| Devices and mounts | Linux discovery subscribes before scanning; the provider implements device/source/mount identity, supported-media policy, safe unmount/eject, ISO admission and canonical notifications. | Real USB/optical discovery/eject qualification and final production cutover. |
 
 Implementation anchors are [supervisor bootstrap](../sw/userspace/supervisor/src/volume.c),
-[storage service](../sw/userspace/services/storage/main.c),
+[Linux storage provider](../fpga/de25/linux/astra_storage_provider.c),
+[device discovery](../fpga/de25/linux/astra_storage_discovery.c),
 [HostFS service](../sw/userspace/services/hostfs/main.c),
 [host backend](../sw/userspace/vfs/src/backends/host.c), and
-[host protocol](../sw/include/astra/host.h). The existing host protocol names two
-fixed exports; it is not a general device or mount inventory. Input hotplug does
-not establish storage hotplug. The current gaps are also recorded in
+[host protocol](../sw/include/astra/host.h). The native
+[volume contract](../sw/include/astra/volume_abi.h) supplies general device,
+source and mount inventory; WORK and SOUND remain explicit exports. Image
+qualification does not establish physical storage hotplug. Current gaps are recorded in
 [Current state](CURRENT_STATE.md).
 
 The filesystem review identified client-only grant enforcement, premature inode
@@ -195,11 +208,16 @@ paths such as `/dev/sda` remain provider details.
 Publish only endpoints with defined device-file operations; inventory visibility
 alone does not grant raw access or manufacture nodes for unrelated peripherals.
 
-FS03. Device and automatically assigned removable-volume names are not recycled
-within an Astra boot. A reinserted medium obtains a new mount generation and
-next available automatic name. Persistently configured mountpoints may be
-rebound only through an explicit mount transaction after old bindings are
-withdrawn; retained handles still refer to the old generation.
+FS03. Device identities and mounted-instance IDs are never recycled within a
+provider epoch. Automatic volume names identify active namespace slots, not
+mounted-instance identity. A name may be reused only after the previous Linux
+mount, worker and retained cleanup resources have actually retired; lost or
+cleanup-pending instances still reserve their names. A reinserted medium obtains
+a fresh mounted-instance ID and the lowest available name for its class.
+Persistently configured mountpoints may be rebound only through an explicit
+mount transaction after old bindings are withdrawn. Retained files, directories,
+roots and cwd remain tied to their exact epoch/ID/generation and never resolve
+to replacement media through a reused name.
 
 FS04. Stable policy selection uses verified filesystem UUID plus device and
 partition identity where needed. Formats without a sufficiently unique UUID
@@ -268,12 +286,12 @@ including native directory-relative operations and POSIX `dirfd`/`openat`.
 Ordinary create/unlink/rename directly under `/` returns read-only. A separate
 authorized namespace operation publishes or removes bindings.
 
-FS13. `/system` is a directory binding to the selected system volume. `/home`,
-`/apps`, `/commands`, `/libs`, `/local`, `/config`, `/cwd`, and `/work` may be
-independently scoped directory bindings. Their own rights remain meaningful,
-and `lstat` reports directories rather than invented symlinks. A genuine symlink
-reports its stored target and actually traverses it under the namespace's
-authority rules. This deliberately replaces the current display-only root links.
+FS13. `/system` is a protected namespace alias for `/dh0` and exposes link
+metadata and its target. Independently granted roots such as `/home`, `/apps`,
+`/commands`, `/libs`, `/local`, `/config`, `/cwd`, and `/work` report directories
+and retain their own rights. Their backing location does not make them aliases.
+Explicit namespace aliases and filesystem symlinks report their targets and
+traverse them under the caller's authority rules.
 
 FS14. Astra defines the namespace view and provider routing; Linux performs
 storage pathname resolution and object operations within a confined view.
@@ -759,8 +777,8 @@ receive errors/overflow and provider restart trigger an authoritative rescan.
 
 On attach, publish inventory first, finish generation-checked probing, then
 evaluate `/system/config/mounts.conf`. Reserve `/dh0` from the verified boot
-handoff, apply exact configured identity matches, and allocate monotonically
-increasing names for eligible removable volumes. Duplicate UUIDs, overlapping
+handoff, apply exact configured identity matches, and allocate the lowest free
+numbered name for eligible removable volumes. Duplicate UUIDs, overlapping
 rules, unsupported formats, or ambiguous media remain unmounted with a reason.
 The shipped trusted removable rule mounts supported USB data volumes writable
 from the allowlist. Optical mounts and explicitly read-only rules remain
@@ -771,7 +789,8 @@ On remove, mark the medium and dependent mount generations lost before accepting
 further requests, withdraw bindings, notify sessions, and retire work through
 the shared cancellation/lifetime machinery. Keep tombstones only as needed for
 stale-token refusal and diagnosis; reclaim detailed records under the resource
-budget without recycling names in the current boot.
+budget. Release a name only after its previous mount and all retained Linux
+resources have retired; object identities never recycle within an epoch.
 
 Qualify actual optical media-change notifications independently of drive attach.
 If the shipped drive/kernel does not reliably emit them, use bounded Linux-side
@@ -825,7 +844,7 @@ reconciliation share the shutdown implementation.
 | S2 Native catalog and tools | Supervisor authority, live namespace sessions, query/subscription operations, `lsblk`/`blkid`, and public/private visibility. | Existing processes and late first filesystem initialization see catalog updates; unauthorized queries/data access cannot escape their scope. |
 | S3 Manual mount | Typed mount request, name reservation, Linux mount object, rooted grants, atomic publication, and operation status/cancel. Requires Phase 2 ownership and sessions. | Mount a second disposable Linux-backed volume beside `/dh0`; failure/cancel at each transaction step leaves no usable half-mount or leaked Linux object. |
 | S4 Unmount and safe removal | Canonical busy-owner accounting, quiescence, sync, actual unmount, whole-device dependency checks, and shutdown integration. | Two mounted partitions, held cwd/files, stalled I/O, failed sync/unmount, cancel races, and surprise removal; no false safe-remove success. |
-| S5 Policy and USB hotplug | Load persisted rules, writable USB automount default, explicit read-only rules, non-reused names, overflow/rescan recovery, and current-session updates. Completes Phase 3. | Two real USB devices, multiple partitions, duplicate UUIDs, unplug/reinsert, missed events, writable refusal, and native/POSIX use without restarting clients on DE25. |
+| S5 Policy and USB hotplug | Load persisted rules, writable USB automount default, explicit read-only rules, names reserved through actual retirement, overflow/rescan recovery, and current-session updates. Completes Phase 3. | Two real USB devices, multiple partitions, duplicate UUIDs, unplug/reinsert, missed events, writable refusal, and native/POSIX use without restarting clients on DE25. |
 | S6 Optical and desktop controls | Drive/media separation, ISO9660/UDF mounting, eject, volume UI, progress, and owner/error presentation. Completes Phase 4. | Physical optical drive: insert, replace disc, busy eject, failed eject, and detach while mounted; pre-existing apps observe every transition. |
 | S7 Release reconciliation | Launcher/kernel/dependency packaging, restart recovery, budgets, documentation, and final legacy-engine removal. Completes Phase 5. | Exact-source QEMU and DE25 stress/fault/semantic gates under input, graphics, and audio load. |
 

@@ -11,9 +11,13 @@
  */
 
 #include <astra/vfs_assign.h>
+#include <astra/vfs_assign_internal.h>
 
 #include <astra/ascii.h>
 #include <astra/runtime.h>
+#include <astra/vfs_path_storage.h>
+#include <astra/vfs_path_payload.h>
+#include <string.h>
 
 #include <stddef.h>
 
@@ -37,10 +41,11 @@ canonical(const char *name, char *out)
     if (name == NULL || name[0] == '\0') {
         return 0;
     }
+    memset(out, 0, ASTRA_ASSIGN_NAME_MAX);
     while (name[index] != '\0') {
         char value;
 
-        if (index + 1u >= ASTRA_CAPABILITY_NAME_MAX) {
+        if (index + 1u >= ASTRA_ASSIGN_NAME_MAX) {
             return 0;
         }
         value = astra_ascii_upper(name[index]);
@@ -50,9 +55,6 @@ canonical(const char *name, char *out)
         out[index] = value;
         ++index;
     }
-    while (index < ASTRA_CAPABILITY_NAME_MAX) {
-        out[index++] = '\0';
-    }
     return 1;
 }
 
@@ -61,7 +63,7 @@ same(const char *left, const char *right)
 {
     uint32_t index;
 
-    for (index = 0u; index < ASTRA_CAPABILITY_NAME_MAX; ++index) {
+    for (index = 0u; index < ASTRA_ASSIGN_NAME_MAX; ++index) {
         if (left[index] != right[index]) {
             return 0;
         }
@@ -102,6 +104,8 @@ astra_assign_table_destroy(AstraAssignTable *table)
 {
     if (table == NULL)
         return;
+    for (uint32_t at = 0u; at < table->count; ++at)
+        astra_runtime_deallocate(table->entries[at].root);
     astra_runtime_deallocate(table->entries);
     astra_assign_table_init(table);
 }
@@ -134,8 +138,10 @@ uint32_t
 astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
                   uint32_t rights, const char *root)
 {
-    char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
-    char canonical_root[ASTRA_ASSIGN_ROOT_MAX];
+    char canonical_name[ASTRA_ASSIGN_NAME_MAX];
+    AstraVfsPathStorage root_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(1u);
+    char *canonical_root = root_storage.bytes;
+    char *owned_root;
 
     /*
      * A handle of zero or rights of zero would bind a name that resolves and
@@ -153,10 +159,16 @@ astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
      * downstream of here trusts it. Checked before anything is removed: a
      * bad root must never cost an existing binding its members.
      */
-    if (astra_path_normalise(root, canonical_root, sizeof(canonical_root)) !=
-        ASTRA_VFS_OK) {
-        return ASTRA_VFS_ERR_INVALID;
-    }
+    if (canonical_root == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    uint32_t path_status = astra_vfs_path_measure(root, NULL);
+    if (path_status != ASTRA_VFS_OK)
+        return path_status;
+    path_status = astra_path_normalise(root, canonical_root, ASTRA_VFS_PATH_MAX);
+    if (path_status != ASTRA_VFS_OK)
+        return path_status == ASTRA_VFS_ERR_NAME_TOO_LONG ? path_status : ASTRA_VFS_ERR_INVALID;
+    if (strlen(canonical_root) >= ASTRA_VFS_PATH_MAX - 1u)
+        return ASTRA_VFS_ERR_NAME_TOO_LONG;
     /*
      * A name has one meaning at a time, and that meaning may now be a list --
      * so binding drops every member of the name before it makes the new one,
@@ -169,14 +181,42 @@ astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle,
         (table->count == UINT32_MAX ||
          reserve(table, table->count + 1u) != ASTRA_VFS_OK))
         return ASTRA_VFS_ERR_LIMIT;
+    owned_root = astra_runtime_allocate(strlen(canonical_root) + 1u);
+    if (owned_root == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    strcpy(owned_root, canonical_root);
     (void)astra_assign_unbind(table, canonical_name);
+    table->entries[table->count] = (AstraAssign){0};
     copy(table->entries[table->count].name, canonical_name,
-         ASTRA_CAPABILITY_NAME_MAX);
-    copy(table->entries[table->count].root, canonical_root,
-         ASTRA_ASSIGN_ROOT_MAX);
+         ASTRA_ASSIGN_NAME_MAX);
+    table->entries[table->count].root = owned_root;
     table->entries[table->count].handle = handle;
     table->entries[table->count].rights = rights;
     ++table->count;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_assign_bind_volume(AstraAssignTable *table, const char *name,
+    const AstraVolumeReference *reference, uint32_t broker, uint32_t rights)
+{
+    char canonical_name[ASTRA_ASSIGN_NAME_MAX];
+    if (table == NULL || broker == 0u || reference == NULL || reference->epoch == 0u ||
+        reference->id == 0u || reference->generation == 0u ||
+        (rights & ASTRA_RIGHT_READ) == 0u ||
+        (rights & ~(ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE)) != 0u ||
+        !canonical(name, canonical_name))
+        return ASTRA_VFS_ERR_INVALID;
+    if (astra_assign_lookup(table, name) != NULL)
+        return ASTRA_VFS_ERR_EXISTS;
+    if (table->count == UINT32_MAX || reserve(table, table->count + 1u) != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_LIMIT;
+    char *root = astra_runtime_allocate(1u);
+    if (root == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    root[0] = '\0';
+    AstraAssign *entry = &table->entries[table->count++];
+    *entry = (AstraAssign){.root = root, .rights = rights, .volume = *reference, .broker = broker};
+    copy(entry->name, canonical_name, sizeof(entry->name));
     return ASTRA_VFS_OK;
 }
 
@@ -184,17 +224,25 @@ uint32_t
 astra_assign_join(AstraAssignTable *table, const char *name, uint32_t handle,
                   uint32_t rights, const char *root)
 {
-    char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
-    char canonical_root[ASTRA_ASSIGN_ROOT_MAX];
+    char canonical_name[ASTRA_ASSIGN_NAME_MAX];
+    AstraVfsPathStorage root_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(1u);
+    char *canonical_root = root_storage.bytes;
+    char *owned_root;
 
     if (table == NULL || handle == 0u || rights == 0u || root == NULL ||
         !canonical(name, canonical_name)) {
         return ASTRA_VFS_ERR_INVALID;
     }
-    if (astra_path_normalise(root, canonical_root, sizeof(canonical_root)) !=
-        ASTRA_VFS_OK) {
-        return ASTRA_VFS_ERR_INVALID;
-    }
+    if (canonical_root == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    uint32_t path_status = astra_vfs_path_measure(root, NULL);
+    if (path_status != ASTRA_VFS_OK)
+        return path_status;
+    path_status = astra_path_normalise(root, canonical_root, ASTRA_VFS_PATH_MAX);
+    if (path_status != ASTRA_VFS_OK)
+        return path_status == ASTRA_VFS_ERR_NAME_TOO_LONG ? path_status : ASTRA_VFS_ERR_INVALID;
+    if (strlen(canonical_root) >= ASTRA_VFS_PATH_MAX - 1u)
+        return ASTRA_VFS_ERR_NAME_TOO_LONG;
     if (astra_assign_member(table, canonical_name, 0u) == NULL) {
         return ASTRA_VFS_ERR_NOT_FOUND;
     }
@@ -202,10 +250,14 @@ astra_assign_join(AstraAssignTable *table, const char *name, uint32_t handle,
         reserve(table, table->count + 1u) != ASTRA_VFS_OK) {
         return ASTRA_VFS_ERR_LIMIT;
     }
+    owned_root = astra_runtime_allocate(strlen(canonical_root) + 1u);
+    if (owned_root == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    strcpy(owned_root, canonical_root);
+    table->entries[table->count] = (AstraAssign){0};
     copy(table->entries[table->count].name, canonical_name,
-         ASTRA_CAPABILITY_NAME_MAX);
-    copy(table->entries[table->count].root, canonical_root,
-         ASTRA_ASSIGN_ROOT_MAX);
+         ASTRA_ASSIGN_NAME_MAX);
+    table->entries[table->count].root = owned_root;
     table->entries[table->count].handle = handle;
     table->entries[table->count].rights = rights;
     ++table->count;
@@ -237,7 +289,7 @@ const AstraAssign *
 astra_assign_member(const AstraAssignTable *table, const char *name,
                     uint32_t member)
 {
-    char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
+    char canonical_name[ASTRA_ASSIGN_NAME_MAX];
 
     return table != NULL && canonical(name, canonical_name) ?
         member_canonical(table, canonical_name, member) : NULL;
@@ -256,12 +308,10 @@ astra_assign_seed(AstraAssignTable *table,
     }
     for (index = 0u; index < count; ++index) {
         /*
-         * The name is copied out and terminated here: the published field is
-         * fixed-width bytes and is not a C string until somebody says so. The
-         * kernel terminates at the same place, so a name too long to carry is
-         * the same name on both sides of the launch.
+         * Startup names retain their bounded wire width. Reject malformed
+         * unterminated fields; native assign storage is independently wider.
          */
-        char name[ASTRA_CAPABILITY_NAME_MAX];
+        char name[ASTRA_ASSIGN_NAME_MAX];
 
         uint32_t rights = 0u;
 
@@ -288,11 +338,22 @@ astra_assign_seed(AstraAssignTable *table,
          * and then refuse every operation, which tells its holder one call too
          * late that it was never given anything.
          */
-        char root[ASTRA_ASSIGN_ROOT_MAX];
+        char root[ASTRA_CAPABILITY_ROOT_MAX];
         uint32_t status;
 
-        copy(name, capabilities[index].name, ASTRA_CAPABILITY_NAME_MAX);
-        copy(root, capabilities[index].root, ASTRA_ASSIGN_ROOT_MAX);
+        uint32_t name_length = 0u;
+        while (name_length < ASTRA_CAPABILITY_NAME_MAX &&
+               capabilities[index].name[name_length] != '\0')
+            ++name_length;
+        if (name_length == ASTRA_CAPABILITY_NAME_MAX)
+            continue;
+        copy(name, capabilities[index].name, ASTRA_ASSIGN_NAME_MAX);
+        uint32_t root_length = 0u;
+        while (root_length < ASTRA_CAPABILITY_ROOT_MAX && capabilities[index].root[root_length] != '\0')
+            ++root_length;
+        if (root_length == ASTRA_CAPABILITY_ROOT_MAX)
+            continue;
+        copy(root, capabilities[index].root, ASTRA_CAPABILITY_ROOT_MAX);
         /*
          * The first record of a name binds and every later one joins, so order
          * in the capability table is order in the namespace. The grant array is
@@ -324,16 +385,10 @@ astra_assign_lookup(const AstraAssignTable *table, const char *name)
     return astra_assign_member(table, name, 0u);
 }
 
-uint32_t
-astra_assign_unbind(AstraAssignTable *table, const char *name)
+static uint32_t remove_members(AstraAssignTable *table, const char *name, uint32_t handle)
 {
-    char canonical_name[ASTRA_CAPABILITY_NAME_MAX];
     uint32_t index = 0u;
     uint32_t removed = 0u;
-
-    if (table == NULL || !canonical(name, canonical_name)) {
-        return ASTRA_VFS_ERR_INVALID;
-    }
     /*
      * Every member goes, and the rest shift down. The last entry used to be
      * moved into the hole, on the reasoning that order is not a property of a
@@ -341,10 +396,11 @@ astra_assign_unbind(AstraAssignTable *table, const char *name)
      * in, so compacting by swap would silently reorder somebody else's union.
      */
     while (index < table->count) {
-        if (!same(table->entries[index].name, canonical_name)) {
+        if (name != NULL ? !same(table->entries[index].name, name) : table->entries[index].handle != handle) {
             ++index;
             continue;
         }
+        astra_runtime_deallocate(table->entries[index].root);
         for (uint32_t at = index; at + 1u < table->count; ++at) {
             table->entries[at] = table->entries[at + 1u];
         }
@@ -354,12 +410,27 @@ astra_assign_unbind(AstraAssignTable *table, const char *name)
     return removed != 0u ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;
 }
 
+uint32_t astra_assign_unbind(AstraAssignTable *table, const char *name)
+{
+    char canonical_name[ASTRA_ASSIGN_NAME_MAX];
+    if (table == NULL || !canonical(name, canonical_name))
+        return ASTRA_VFS_ERR_INVALID;
+    return remove_members(table, canonical_name, 0u);
+}
+
+uint32_t astra_vfs_assign_retire_handle(AstraAssignTable *table, uint32_t handle)
+{
+    if (table == NULL || handle == 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    return remove_members(table, NULL, handle);
+}
+
 static uint32_t
 assign_resolve(const AstraAssignTable *table, const char *path,
                      uint32_t rights, uint32_t member, char *wire,
                      uint32_t capacity, const AstraAssign **assign, int raw)
 {
-    char name[ASTRA_CAPABILITY_NAME_MAX];
+    char name[ASTRA_ASSIGN_NAME_MAX];
     const AstraAssign *found;
     const char *rest;
     uint32_t index = 0u;
@@ -371,6 +442,9 @@ assign_resolve(const AstraAssignTable *table, const char *path,
     }
     if (path == NULL)
         return ASTRA_VFS_ERR_INVALID;
+    status = astra_vfs_path_measure(path, NULL);
+    if (status != ASTRA_VFS_OK)
+        return status;
     if (path[0] != '/')
         return ASTRA_VFS_ERR_INVALID;
     ++index;
@@ -440,4 +514,29 @@ uint32_t astra_assign_resolve_raw(const AstraAssignTable *table, const char *pat
                                   uint32_t capacity, const AstraAssign **assign)
 {
     return assign_resolve(table, path, rights, member, wire, capacity, assign, 1);
+}
+
+uint32_t astra_vfs_assign_clone(AstraAssignTable *target, const AstraAssignTable *source)
+{
+    AstraAssignTable replacement = ASTRA_ASSIGN_TABLE_INIT;
+    uint32_t status = ASTRA_VFS_OK;
+    for (uint32_t at = 0u; at < source->count; ++at) {
+        const AstraAssign *entry = &source->entries[at];
+        if (entry->volume.id != 0u)
+            status = astra_assign_bind_volume(&replacement, entry->name,
+                &entry->volume, entry->broker, entry->rights);
+        else if (astra_assign_lookup(&replacement, entry->name) != NULL)
+            status = astra_assign_join(&replacement, entry->name, entry->handle,
+                entry->rights, entry->root);
+        else
+            status = astra_assign_bind(&replacement, entry->name, entry->handle,
+                entry->rights, entry->root);
+        if (status != ASTRA_VFS_OK) {
+            astra_assign_table_destroy(&replacement);
+            return status;
+        }
+    }
+    astra_assign_table_destroy(target);
+    *target = replacement;
+    return ASTRA_VFS_OK;
 }

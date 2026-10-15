@@ -1,209 +1,93 @@
 # Astra storage and VFS
 
-Status: superseded as the production design by
-[the filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md). Linux now owns
-filesystem machinery; this page summarizes what that means for the VFS layer
-and links to the PRD for the full contract (FS01–FS46) instead of repeating
-it. The ["Current implementation (to be replaced)"](#current-implementation-to-be-replaced)
-section below is the only part of this page describing what actually runs
-today.
+The [filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md) owns the production
+contract. [Current State](CURRENT_STATE.md) records accepted source identities,
+test evidence and remaining release gates; an implemented contract is not a
+claim that physical removable media have been qualified.
 
-## Architecture
+## One filesystem implementation
 
-Linux owns filesystem machinery: mounts, formats, partition probing, caching,
-and journaling. Astra owns the client experience: its native API,
-process-visible namespace, named volumes, grants, mount policy, desktop
-behavior, and diagnostics. Native and POSIX applications share one native
-client facility over that Linux-backed storage; there is no separate guest
-filesystem implementation to keep in sync with it.
+Linux owns filesystem mounts, format drivers, partition probing, caching and
+journaling. The Linux storage provider owns device, medium, source and mounted
+instance records. QEMU exposes that provider through versioned Astra protocols.
+HostFS publishes the native grants, inventory, notifications and control
+endpoints. Supervisor owns startup grants and service policy. Applications use
+`filesystem.library.14`; POSIX file descriptors adapt those same native objects.
 
-The trusted boundary, per the PRD's ownership table and FS15: grants bind
-authenticated owners to rooted directory objects and rights, and are enforced
-in the guest HostFS service using a kernel-stamped sender owner on every
-request, never one supplied by the client. On the Linux side, each rooted
-session uses an ordered descriptor walk and a final `openat2` with
-`RESOLVE_BENEATH`. A path that leaves its root returns an escape continuation
-to the Filesystem Kit, which can route only through the caller's assigns;
-QEMU never traverses an absolute guest link in the Linux namespace. QEMU never trusts a
-client-supplied owner field.
+The production bootstrap opens the selected system volume read-only through
+the same provider, reads startup policy and closes its claim before HostFS
+starts. Recovery uses that bootstrap when the system publication is absent.
+Missing policy alone permits defaults; malformed policy, I/O, disabled policy
+and failed claim cleanup refuse launch. There is no independent guest format
+mount or alternate-media fallback.
 
-Kept from the earlier device/volume plan, per the PRD's architectural
-authority section: fixed internal-SD system selection, separate device and
-volume identities, one native mount authority, labels as mutable display
-metadata only, protected namespace publication, generation-safe removal, and
-no alternate-media boot fallback. See
-[Devices and volumes](DEVICE_AND_VOLUME_PLAN.md) for the namespace and naming
-rules built on those.
+The old guest ext4 and RAM backends remain test/development implementations,
+not production fallbacks. Production RAM storage is bounded Linux tmpfs;
+optical media and retained ISO files use Linux ISO9660/UDF support.
 
-## Superseded by the PRD
+## Authority and identity
 
-This document used to specify the production filesystem as guest code. That
-design is retired, not merely deferred:
+Storage protocol 38 is the minimum accepted version. Its fixed control record
+and bounded operand areas carry 255-byte UTF-8 names and 4095-byte paths.
+Filesystem Kit 11 exports Filesystem library ABI 14. HostChannel 5 carries the
+kernel-stamped native PID separately from the resource owner: usage attribution
+and mount requests use native process identity, while quotas and resource
+retirement use the exact owner. Neither field is inferred from the other.
 
-- **Guest lwext4 as the production writable engine.** Adopted 2026-08-05 and
-  measured extensively — see `third_party/lwext4/ASTRA_VENDOR.md` and
-  `sw/userspace/storage/lwext4-eval` for that record, and this document's git
-  history for the performance/memory baselines that used to live here. Linux
-  now mounts ext4 directly; the PRD's cutover (FS45–FS46) removes the guest
-  ext4 link entirely.
-- **Guest CDFS (optical media).** That work was removed from `main`; it is
-  archived on branch `feat/cdfs`. Optical media becomes a Linux ISO9660/UDF
-  mount, published the same way as any other Linux-mounted volume (PRD FS01,
-  scope table).
-- **Guest RAMFS as the production RAM engine.** `/ram` becomes a Linux tmpfs
-  mount with explicit byte/inode limits and no swap (PRD FS36–FS38), not a
-  guest-side allocator.
-- **Block-only Linux ownership.** The layering below — a synchronous block
-  facade, a lease-backed block device, an Arty bring-up image — was built on
-  the assumption that Astra parses the on-disk format and Linux only moves
-  blocks. Under the PRD, Linux performs the mount, cache, and journal; Astra's
-  job is the namespace, grants, and policy on top of it.
+Only HostFS holds `HOST_FILESYSTEM` with scope-creation authority. Ordinary
+`HOST_DEVICE` clients cannot create filesystem scopes. Each grant has a retained
+provider root, rights and exact volume incarnation. Kernel-bound channels and
+QEMU enforce those sessions and rights; client-side path checks are not the
+trust boundary. Ordered descriptor lookup and `openat2` confinement prevent host
+namespace traversal. Escape continuations return to the caller's native assign
+resolver, which retains the link budget and rechecks mount-crossing authority.
 
-## Filesystem handler contract (interface retained, implementations retiring)
+Inventory metadata grants neither file access nor mount authority. Separate
+read/write brokers admit exact public roots; administrator and usage
+capabilities authorize lifecycle control and diagnostics. Configured RAM
+brokers retain source identity while unmounted, so a new `/ram0` incarnation
+cannot retarget an old grant.
 
-VFS still owns path parsing, `.`/`..`, assign expansion, mount crossing,
-access policy, current directories, and process-visible handles; a handler
-still receives one validated, bounded path component at a time. Names remain
-UTF-8, case-sensitive, and byte-exact — a foreign filesystem's own
-case-folding behavior is a property it reports, never something the Kit
-normalizes. These rules carry forward unchanged. What changes under the PRD
-is what sits behind that contract: a Linux-backed HostFS session with dynamic
-volumes and rooted grants, rather than a guest-side format driver per media
-class.
+## Objects and failure
 
-## Current implementation (to be replaced)
+Provider descriptions own offsets, directory cursors and append state. Fork
+uses retained, single-use share/adopt receipts; it never reopens inherited files
+by pathname. Only a transport implementing retained descriptions advertises
+that feature. Epoch-checked local objects and pins prevent token reuse and
+concurrent close from targeting replacement descriptions.
 
-What actually runs today, verified against source:
+Unlink and rename preserve open-object identity. Current directories retain
+directory objects. Native and POSIX resolution share one namespace, including
+root dirfds, cross-volume links, trailing separators and no-follow operations.
+File and directory sync propagate errors. Durable atomic save requires file
+sync, rename and parent-directory sync; a successful write alone is not durable
+acknowledgement.
 
-- **Bootstrap mount.** `sw/userspace/supervisor/src/volume.c`
-  (`supervisor_verify_volume`) finds the MBR Linux-type partition on the
-  Axiom-leased block device, mounts it with guest lwext4 at a fixed internal
-  mountpoint, runs journal recovery, and keeps it mounted only long enough to
-  read the manifest and launch the storage service.
-- **Storage service.** `sw/userspace/services/storage/main.c` independently
-  re-finds and mounts that same partition with guest lwext4 over the Axiom
-  block lease, and serves the native VFS protocol from it. Bootstrap and the
-  storage service each select the partition on their own — the duplicate
-  selector the PRD's gap table calls out and FS07 retires.
-- **HostFS.** `sw/userspace/services/hostfs/main.c` is the only holder of
-  `HOST_FILESYSTEM` -- the host device with `ASTRA_RIGHT_HOST_SCOPE`; the
-  supervisor grants every other `HOST_DEVICE` holder the device without it --
-  and runs two fixed host-backed volumes, `ASTRA_HOST_FS_VOLUME_WORK` and
-  `ASTRA_HOST_FS_VOLUME_SOUND` (`sw/include/astra/host.h`). This is not a
-  dynamic volume inventory: the volume a session reaches is fixed at
-  compile/link time, not discovered or mounted. At startup HostFS claims the
-  host filesystem (`ASTRA_HOST_FS_CLAIM`, host command record 3) and opens
-  one root session per volume. Since storage protocol 29 every grant is a
-  HostFS port of its own, in a table that grows on demand (the kernel's
-  scope pool and the wait-set ABI are the only limits): each has its own
-  provider session and its own filesystem scope
-  (`ASTRA_SYSCALL_HOST_SCOPE_CREATE`) minted over that session with the
-  grant's rights -- read-only without WRITE, delegable only with DELEGATE.
-  The two volumes' base grants are delegable; `GRANT_DERIVE` makes a
-  narrower one (a sub-root, read-only, non-delegable, never wider), and the
-  supervisor derives one for every manifest grant narrower than the base and
-  for every child that does not `delegate`. A session is answered only on
-  the grant port it said HELLO on. A port derived from a non-delegable
-  grant arrives without TRANSFER (the kernel's send dispositions), so it
-  cannot be moved on. A derived grant belongs to the session that derived it
-  and is retired when that session ends (BYE, the deriver's death, or its
-  own grant's retirement). One pump serves every grant port, starting at a
-  different grant each pass; a port is control only (HELLO, BYE,
-  GRANT_DERIVE). When a grant's last holder closes its port HostFS revokes
-  its scope through the kernel, ends its sessions with their reply lanes,
-  and closes its provider session. QEMU takes the claim
-  only on a channel the kernel opened for a device handle carrying
-  `ASTRA_RIGHT_HOST_SCOPE` (`ASTRA_HOST_CHANNEL_PROVIDER`), so no other
-  `HOST_DEVICE` holder can claim, even while HostFS is restarting. Session
-  ids are never reset; they are unique until 2^32 sessions have been opened
-  in one QEMU process, after which the id of a closed session could be
-  issued again to the claimant (a known limit, not a guarantee).
-- **The scoped direct lane.** Since storage protocol 28 a HELLO on a host
-  volume's port attaches a duplicate of that grant's scope, never the
-  device, without ADMINISTER, and without TRANSFER on arrival (the kernel's
-  import hook strips it unless the scope is delegable). The client drives
-  its own host channel through it (`vfs_host_direct.c`, one process-wide
-  transport, one lane per thread): the kernel binds the channel to the
-  scopes the thread attaches (up to eight, `ASTRA_SYSCALL_HOST_SCOPE_ATTACH`)
-  and writes their words into the provider's channel configuration, and
-  QEMU runs on a bound channel only filesystem commands whose session names
-  an attached scope, refuses mutations under a read-only scope, and answers
-  a handle only in the session it was opened in. Revocation detaches a
-  scope from every channel at once; HostFS's death revokes everything it
-  minted. HostFS's METRICS port, and the ramfs, storage and proc services,
-  still serve every operation through their service core.
-- **Shared descriptions.** Storage protocol 32 and Filesystem Kit 9.0 make
-  HostFS's provider the authority for file position, directory cursor and
-  APPEND/NONBLOCK status. Sequential I/O advances that shared state in one
-  transaction; positioned I/O preserves it and positioned writes ignore
-  append. A one-use grant-bound receipt retains a pending reference for fork.
-  The child adopts its own owner-bound handle before fork returns in the
-  parent. Exec preserves handles, child wait state and resource accounting;
-  no operation reopens an inherited file by its former path. Non-HostFS
-  backends do not advertise shared descriptions and refuse sharing.
-- **Atomic write bounds.** STOR 35 and Filesystem Kit 12.0 require an
-  exclusive maximum byte position on each write (`UINT64_MAX` is unbounded).
-  Providers check the live position or EOF and clamp/write under one lock,
-  including independent append descriptions. Crossing the bound returns a
-  short write; starting there returns FILE_TOO_LARGE without mutation. Zero
-  writes preserve size and position. POSIX alone supplies RLIMIT_FSIZE and
-  translates the refusal to EFBIG/SIGXFSZ.
-- **Provider loss.** STOR 34 resumes an existing HELLO control session while
-  replacing a revoked scoped accelerator. Provider reset closes Linux
-  descriptions immediately and leaves owner-bound lost handles, including
-  inherited descriptions, until close or owner death. Old file, DIR and CWD
-  operations return LOST/ESTALE; fresh absolute opens can recover. HostFS
-  remints scopes only when a recorded grant root retains its volume, inode
-  and generation. HostFS death leaves old application grants lost, while
-  Supervisor restarts managed holders once their publications return.
-- **Grant enforcement: in the provider.** A client reaches only the
-  sessions whose scopes it was handed, enforced by the kernel and QEMU: a
-  derived grant's session is rooted at its sub-root and read-only when the
-  grant is, so its root and rights hold whatever the client library does.
-  The Kit preserves dot components until lookup and rechecks authority at
-  every namespace continuation. Backends without ordered lookup use its
-  shared component walker. Host-root opens are confined with
-  `openat2(..., RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS)`.
-- **Cost of the lane.** Measured on QEMU/TCG on `beast` (not the board) with
-  `fsprobe` (`emu/qemu/fs-probe.py`, `tools/fs-probe-compare.py`), ten
-  interleaved pairs against the pre-relay direct path (`60f2d30a`), median
-  of the ten, latency in µs (median / p95):
+Unmount fences new admission and refuses retained files, directories, shares,
+active operations and image dependencies. The complete usage query powers both
+Desktop's detailed busy dialog and `lsof`. Failed cleanup stays visible and
+charged until the actual mount, descriptions and source lease retire. Names
+become reusable only after that retirement; identities never recycle within a
+provider epoch.
 
-  | Operation | Direct path (`60f2d30a`) | Lane | Ratio |
-  |---|---|---|---|
-  | warm stat | 36.2 / 47.0 | 33.1 / 41.7 | 0.91x / 0.89x |
-  | 4 KiB pread | 32.2 / 45.0 | 32.9 / 43.9 | 1.02x / 0.98x |
+Provider loss invalidates old descriptions and grants. Old handles and CWDs
+return lost/stale errors; they do not silently reconnect to replacement media.
+Fresh absolute opens may obtain a new exact root through surviving brokers.
+HostFS recovery restarts managed clients after its publications return. An
+outside provider guardian retains exact child/domain lifetimes and completes
+normal or fatal cleanup without scanning unrelated mounts or directories.
 
-  HostFS used no CPU on either path, and the client made 3.0 syscalls per
-  operation on both. Cross-address-space switches per stat were 0.012 on
-  both; in the read window both paths showed about one per read (direct
-  1.06, lane 1.17, median): background services preempting the probe
-  (`/services/events` alone ran 30-50 ms per window), not HostFS.
+## Qualification
 
-  The relay it replaced (storage protocol 27) cost 2.55x stat-warm and
-  2.62x rand-read at the median in fsbench
-  (`/mnt/Documents/astra68/builds/fs-phase1-task3-60f2d30a/`). Records:
-  `/mnt/Documents/astra68/builds/fs-phase1-task3b-20261008/`. The DE25 cost
-  is to be measured in Task 13.
-- **RAM storage.** `sw/userspace/services/ramfs/main.c` is a guest-side
-  allocator bounded by `max_bytes` read from
-  `/system/config/services/ramfs/settings.conf` (`astra_vfs_ram_init`) — not
-  Linux tmpfs.
-- **Namespace.** `sw/userspace/supervisor/src/vfs_host.c` binds root
-  conveniences (`DH0`, `SYSTEM`, `APPS`, `HOME`, `COMMANDS`, `CONFIG`,
-  `LIBS`, ...) as assigns into the one storage-service volume, not as
-  independent volumes or genuine symlinks. See
-  [Devices and volumes](DEVICE_AND_VOLUME_PLAN.md) for what that namespace
-  does and does not implement today.
+`emu/qemu/fs-gates.sh` runs resolver and hostile-caller checks, raw HostFS,
+native/POSIX semantics, resource recovery, stress, offline fsck and host-channel
+authority tests. `test-linux-first.py --lifecycle` covers real ISO mounts,
+readonly enforcement, busy reporting, Atlas, source retirement, RAM remount,
+HostFS recovery and durable shutdown. QEMU runs as the unprivileged caller;
+privileged observers mount only private disposable images.
 
-Everything above is in scope for removal under PRD FS46 once Phase 2 and
-Phase 5 land: no legacy production engine or automatic fallback is meant to
-remain in the release image.
-
-STOR 36/minimum 36 makes ordered LOOKUP accept a retained directory token.
-Filesystem Kit ABI 12.0 adds the attached namespace as the first argument
-of path-based `astra_filesystem_*_at` APIs. Provider continuations retain
-the same 40-link budget and use the shared namespace resolver; POSIX adapters
-call that native contract. Joined-assign opens use the member selected by
-lookup, including dangling-link shadowing. Rename/link retain namespace
-escapes instead of conflating them with a cross-device operation.
+Physical USB discovery, optical media change/eject, device I/O faults and power
+loss require their own hardware evidence. Killing QEMU does not simulate loss
+of Linux's page cache. Performance qualification follows correctness; historical
+lane measurements remain in this document's Git history and the durable stores
+linked from Current State.

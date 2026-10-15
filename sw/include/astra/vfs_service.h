@@ -12,6 +12,7 @@
  */
 
 #include <astra/compiler.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <astra/status.h>
@@ -41,17 +42,18 @@
 /** Native-big-endian `STOR` storage-protocol signature. */
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
 /** Current storage-protocol wire-format version. */
-#define ASTRA_VFS_VERSION  UINT16_C(36)
+#define ASTRA_VFS_VERSION  UINT16_C(38)
 
 /** Current version only: in-tree clients and providers change together.
- * Version 36 anchors ordered LOOKUP at a retained directory object. A mismatch
+ * Version 38 carries complete pathname operands in the bound transfer area.
+ * Version 37 carried full-width native volume identity. A mismatch
  * fails closed; no rolling-upgrade or obsolete request format is supported. */
-#define ASTRA_VFS_VERSION_MIN UINT16_C(36)
+#define ASTRA_VFS_VERSION_MIN UINT16_C(38)
 
 /** Maximum byte length of a path, including its terminating NUL, on the wire. */
-#define ASTRA_VFS_PATH_MAX 192u
-/** Maximum byte length of one path component (a directory entry name). */
-#define ASTRA_VFS_NAME_MAX 64u
+#define ASTRA_VFS_PATH_MAX 4096u
+/** Storage for one 255-byte UTF-8 name plus its terminating NUL. */
+#define ASTRA_VFS_NAME_MAX 256u
 /**
  * Inline byte capacity for data and continuations. Complete request and reply
  * records are checked against the port's message limit below.
@@ -166,7 +168,8 @@
 #define ASTRA_VFS_OP_STAT_FILE   UINT32_C(35)
 /**
  * Derive a narrower grant: `flags` a subset of the session's grant rights,
- * `body.path` the new root relative to its root ("" keeps it). The reply
+ * the first complete path operand is the new root relative to its root
+ * ("" keeps it). The reply
  * carries the new grant's send handle; HELLO on it hands out its scope.
  */
 #define ASTRA_VFS_OP_GRANT_DERIVE UINT32_C(36)
@@ -240,7 +243,8 @@
  * A field with its validity bit clear is unknown, even when its value is zero. */
 typedef struct AstraVfsNodeMeta {
     uint32_t valid; /**< ASTRA_VFS_META_* bits. */
-    uint32_t volume; /**< Filesystem identity, shared by its bindings. */
+    uint32_t identity_reserved; /**< Zero; keeps the wire layout identical on host and MC68040. */
+    uint64_t volume; /**< Native mount identity; never a host device number. */
     uint64_t inode; /**< Filesystem node number. */
     uint64_t generation; /**< Node birth time in nanoseconds when known. */
     uint64_t blocks; /**< Allocated 512-byte blocks. */
@@ -254,7 +258,8 @@ typedef struct AstraVfsNodeMeta {
     uint32_t reserved; /**< Zero. */
 } AstraVfsNodeMeta;
 /** @cond ASTRA_INTERNAL */
-_Static_assert(sizeof(AstraVfsNodeMeta) == 72u, "VFS node metadata ABI changed");
+_Static_assert(sizeof(AstraVfsNodeMeta) == 80u, "VFS node metadata ABI changed");
+_Static_assert(offsetof(AstraVfsNodeMeta, volume) == 8u, "VFS volume identity offset changed");
 /** @endcond */
 /** LOOKUP follows the final symbolic link. */
 #define ASTRA_VFS_LOOKUP_FOLLOW (UINT32_C(1) << 0)
@@ -270,24 +275,20 @@ _Static_assert(sizeof(AstraVfsNodeMeta) == 72u, "VFS node metadata ABI changed")
 #define ASTRA_VFS_ESCAPE_SYMLINK 2u
 /** Fixed prefix of the LOOKUP payload. */
 #define ASTRA_VFS_ESCAPE_HEADER 12u
-/** Maximum continuation bytes carried inline. */
+/** Maximum native continuation bytes, excluding NUL. */
 #define ASTRA_VFS_ESCAPE_PATH_MAX (ASTRA_VFS_PATH_MAX - 1u)
-/** LOOKUP payload on OK or ESCAPED. The continuation is complete: callers
+/** Native LOOKUP result on OK or ESCAPED. The continuation is complete: callers
  * resume it without rereading any link or appending the original suffix.
- * Request length is the remaining link budget, from zero through 40. */
+ * Request length is the remaining link budget, from zero through 40. Wire
+ * replies encode the 12-byte metadata prefix and path in the transfer area. */
 typedef struct AstraVfsEscape {
     uint16_t kind; /**< Zero on OK, otherwise ASTRA_VFS_ESCAPE_*. */
     uint16_t length; /**< Continuation byte count, without a terminator. */
     uint32_t consumed; /**< Original provider-request byte position. */
     uint32_t links; /**< Links followed by this provider lookup. */
-    uint8_t path[ASTRA_VFS_ESCAPE_PATH_MAX]; /**< Absolute Astra continuation. */
+    uint8_t *path; /**< Caller-owned absolute continuation buffer. */
+    uint32_t capacity; /**< Available continuation bytes, excluding NUL. */
 } AstraVfsEscape;
-/** @cond ASTRA_INTERNAL */
-_Static_assert(sizeof(AstraVfsEscape) <= ASTRA_VFS_IO_MAX,
-               "VFS continuation must fit an inline reply");
-_Static_assert(ASTRA_VFS_ESCAPE_PATH_MAX >= ASTRA_VFS_PATH_MAX - 1u,
-               "Every native pathname must fit a continuation");
-/** @endcond */
 
 /**
  * One shared-area transfer, and the unit the whole read path is sized around.
@@ -437,6 +438,8 @@ _Static_assert(ASTRA_VFS_ESCAPE_PATH_MAX >= ASTRA_VFS_PATH_MAX - 1u,
 #define ASTRA_VFS_ERR_LOST          ((uint32_t)ASTRA_STATUS_LOST)
 /** A nonempty write cannot fit within its exclusive maximum position. */
 #define ASTRA_VFS_ERR_FILE_TOO_LARGE ((uint32_t)ASTRA_STATUS_FILE_TOO_LARGE)
+/** A pathname or filename exceeds the native naming limit. */
+#define ASTRA_VFS_ERR_NAME_TOO_LONG  ((uint32_t)ASTRA_STATUS_NAME_TOO_LONG)
 
 /**
  * A protocol status as a word, or NULL for a number nothing has named yet.
@@ -503,32 +506,29 @@ _Static_assert(sizeof(AstraVfsFilesystemInfo) ==
 /** @endcond */
 
 /** Encoded byte size of ::AstraVfsRequest. */
-#define ASTRA_VFS_REQUEST_SIZE 248u
+#define ASTRA_VFS_REQUEST_SIZE 256u
 /** Encoded byte size of ::AstraVfsReply. */
-#define ASTRA_VFS_REPLY_SIZE   368u
+#define ASTRA_VFS_REPLY_SIZE   376u
 
 /*
  * One request record covers every operation. A union of per-operation records
  * would save a few bytes on the wire and cost a decode step that has to be
  * right for every operation forever; a fixed record is checked once.
  */
-/**
- * The trailing bytes are a path or a payload.
- *
- * Most operations are addressed by either a path or an open handle. Version
- * 23 directory-relative operations deliberately carry a directory handle and
- * a relative path. Spelling the body as a union rather than reusing one array
- * keeps the two validation rules apart -- a path must be NUL-terminated
- * inside the record, and payload bytes must not be required to contain a NUL
- * at all, which is what a binary write of exactly ASTRA_VFS_IO_MAX bytes
- * looks like.
- *
- * The payload arm sets the fixed body size; path validation keeps its own
- * native pathname bound.
- */
+/** Complete NUL-terminated pathname operands in one bound transfer area.
+ * Lengths include NUL; the first starts at zero, the second immediately
+ * follows it. Unused fields are zero. No pathname is carried inline. */
+typedef struct AstraVfsPathFields {
+    uint32_t first_offset; /**< Zero for the first operand. */
+    uint32_t first_length; /**< First operand bytes including NUL, or zero. */
+    uint32_t second_offset; /**< First length for a pair, otherwise zero. */
+    uint32_t second_length; /**< Second operand bytes including NUL, or zero. */
+} AstraVfsPathFields;
+
+/** Typed pathname descriptors or inline binary write bytes. */
 typedef union AstraVfsBody {
-    /** The arm used by path-addressed operations. */
-    uint8_t path[ASTRA_VFS_PATH_MAX];
+    /** Complete operands reside in the session's existing transfer area. */
+    AstraVfsPathFields paths;
     /** The arm used by ::ASTRA_VFS_OP_WRITE's binary payload. */
     uint8_t payload[ASTRA_VFS_IO_MAX];
 } AstraVfsBody;
@@ -553,6 +553,10 @@ typedef struct AstraVfsRequest {
     uint32_t session;
     /** The subject file or directory handle, or ::ASTRA_VFS_FILE_INVALID. */
     uint32_t file;
+    /** Destination directory for RENAME/LINK; zero for other operations. */
+    uint32_t second_file;
+    /** Must be zero; keeps the fixed wire alignment explicit. */
+    uint32_t file_reserved;
     /** Operation-specific flags, such as the ASTRA_VFS_OPEN_* open modes. */
     uint32_t flags;
     /**
@@ -583,29 +587,6 @@ typedef struct AstraVfsRequest {
 /** @cond ASTRA_INTERNAL */
 _Static_assert(sizeof(AstraVfsRequest) == ASTRA_VFS_REQUEST_SIZE,
                "VFS request ABI size changed");
-/** @endcond */
-
-/** Encoded byte size of ::AstraVfsRenameRequest. */
-#define ASTRA_VFS_RENAME_REQUEST_SIZE \
-    (ASTRA_VFS_REQUEST_SIZE + ASTRA_VFS_PATH_MAX)
-
-/**
- * Version 16 extension: both paths, at their full ordinary path capacity.
- *
- * Used by ::ASTRA_VFS_OP_RENAME, ::ASTRA_VFS_OP_SYMLINK, and
- * ::ASTRA_VFS_OP_LINK to carry a second complete path in one request.
- */
-typedef struct AstraVfsRenameRequest {
-    /** The base request; its `body.path` is the source path or symlink target. */
-    AstraVfsRequest request;
-    /** The second path: the destination, new link path, or new symlink path. */
-    uint8_t to[ASTRA_VFS_PATH_MAX];
-} AstraVfsRenameRequest;
-
-/** @cond ASTRA_INTERNAL */
-_Static_assert(sizeof(AstraVfsRenameRequest) ==
-                   ASTRA_VFS_RENAME_REQUEST_SIZE,
-               "VFS rename request ABI size changed");
 /** @endcond */
 
 /**
@@ -695,28 +676,6 @@ typedef struct AstraVfsRequestMessage {
     AstraVfsRequest request;
 } AstraVfsRequestMessage;
 
-/** An ::AstraVfsRenameRequest wrapped in its message-port envelope. */
-typedef struct AstraVfsRenameRequestMessage {
-    /** The message envelope; see astra/%message_abi.h. */
-    AstraMessageHeader header;
-    /** The two-path request itself. */
-    AstraVfsRenameRequest request;
-} AstraVfsRenameRequestMessage;
-
-/**
- * Either shape of outgoing request message, sized for the larger of the two.
- *
- * A sender picks the arm matching the operation it is sending; a receiver
- * reads the header and ::AstraVfsRequest::size first to know which arm it
- * received.
- */
-typedef union AstraVfsRequestMessageBuffer {
-    /** The ordinary single-path request message. */
-    AstraVfsRequestMessage standard;
-    /** The two-path request message used by RENAME, SYMLINK, and LINK. */
-    AstraVfsRenameRequestMessage rename;
-} AstraVfsRequestMessageBuffer;
-
 /** An ::AstraVfsReply wrapped in its message-port envelope. */
 typedef struct AstraVfsReplyMessage {
     /** The message envelope; see astra/%message_abi.h. */
@@ -732,8 +691,6 @@ typedef struct AstraVfsReplyMessage {
  */
 _Static_assert(sizeof(AstraVfsRequestMessage) <= ASTRA_MESSAGE_SIZE_MAX,
                "VFS request message exceeds the port message limit");
-_Static_assert(sizeof(AstraVfsRenameRequestMessage) <= ASTRA_MESSAGE_SIZE_MAX,
-               "VFS rename request message exceeds the port message limit");
 _Static_assert(sizeof(AstraVfsReplyMessage) <= ASTRA_MESSAGE_SIZE_MAX,
                "VFS reply message exceeds the port message limit");
 /** @endcond */

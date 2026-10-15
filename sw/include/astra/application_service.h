@@ -25,7 +25,7 @@
 /** `APPL` protocol identifier carried by every application-launch message. */
 #define ASTRA_APPLICATION_PROTOCOL UINT32_C(0x4150504c) /* APPL */
 /** Current application-launch wire protocol version. */
-#define ASTRA_APPLICATION_VERSION 4u
+#define ASTRA_APPLICATION_VERSION 5u
 
 /** Request operation: launch the bundle named in the request. */
 #define ASTRA_APPLICATION_LAUNCH 1u
@@ -35,10 +35,12 @@
 /**
  * Bytes available for packed argv strings in one launch request.
  *
- * The request uses the complete message payload: 16 bytes of argument
- * metadata surround the packed strings.
+ * Packed strings travel in one transferred readonly shared area. The native
+ * kernel validates the combined argument/environment string budget and
+ * publishes aligned pointers and strings in its owned startup payload.
+ * Capability records occupy their separate startup page.
  */
-#define ASTRA_APPLICATION_ARGUMENT_BYTES (ASTRA_MESSAGE_INLINE_MAX - 16u)
+#define ASTRA_APPLICATION_ARGUMENT_BYTES ASTRA_LAUNCH_ARGUMENT_BYTES
 /** Maximum bundle path length, matching the filesystem's own path limit. */
 #define ASTRA_APPLICATION_PATH_MAX ASTRA_VFS_PATH_MAX
 /**
@@ -48,30 +50,24 @@
  * with `ASTRA_ERROR_NO_RESOURCES` if the actual strings do not fit
  * ::ASTRA_APPLICATION_ARGUMENT_BYTES.
  */
-#define ASTRA_APPLICATION_ARGUMENT_MAX \
-    (ASTRA_APPLICATION_ARGUMENT_BYTES / 2u)
+#define ASTRA_APPLICATION_ARGUMENT_MAX ASTRA_LAUNCH_ARGUMENT_MAX
 
-/** Packed argv, and a reserved environment block, for one application launch. */
+/** Control metadata for packed argv in the transferred shared area. */
 typedef struct AstraApplicationLaunchArguments {
-    /** Number of packed NUL-terminated strings in #bytes; entry 0 is the bundle path. */
+    /** Number of packed NUL-terminated strings; entry 0 is the bundle path. */
     uint16_t count;
-    /** Total bytes used in #bytes. */
+    /** Exact bytes used in the transferred area. */
     uint16_t length;
     /** ::AstraLaunchSource of the request, narrowed to 16 bits; the service accepts only SHELL or DESKTOP. */
     uint16_t source;
     /** Reserved launch flags; must be zero -- the service refuses a nonzero value. */
     uint16_t flags;
-    /** Packed NUL-terminated UTF-8 argv strings, back to back; the first is the bundle path. */
-    char bytes[ASTRA_APPLICATION_ARGUMENT_BYTES];
-    /** Reserved for a future environment block; must be zero. */
-    uint16_t environment_count;
-    /** Reserved for a future environment block; must be zero. */
-    uint16_t environment_length;
-    /** Reserved for a future environment block; must be zero. */
-    uint32_t environment_address;
+    /** Reserved; both words must be zero. */
+    uint32_t reserved[2];
 } AstraApplicationLaunchArguments;
 
-/** Request to launch an application bundle, sent to the application-launch service. */
+/** Request to launch an application bundle. Handle0 is the owned READ|MAP
+ * payload area; handle1 is the reply-send capability inserted by port_call. */
 typedef struct AstraApplicationLaunchRequest {
     /** Common message header; operation is ::ASTRA_APPLICATION_LAUNCH. */
     AstraMessageHeader header;
@@ -89,8 +85,8 @@ typedef struct AstraApplicationLaunchReply {
     uint32_t process_id;
 } AstraApplicationLaunchReply;
 
-/** Fixed wire size of ::AstraApplicationLaunchRequest: the full inline message. */
-#define ASTRA_APPLICATION_LAUNCH_REQUEST_SIZE ASTRA_MESSAGE_SIZE_MAX
+/** Fixed wire size of ::AstraApplicationLaunchRequest. */
+#define ASTRA_APPLICATION_LAUNCH_REQUEST_SIZE 40u
 /** Fixed wire size of ::AstraApplicationLaunchReply. */
 #define ASTRA_APPLICATION_LAUNCH_REPLY_SIZE 32u
 

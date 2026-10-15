@@ -1004,7 +1004,7 @@
  * one provider session (docs/FILESYSTEM_PRODUCTION_PRD.md FS15). data[1] is
  * a host device handle carrying ::ASTRA_RIGHT_HOST_SCOPE; data[2] the
  * provider's word for the session (a volume under host command record 2, a
- * session id from record 3); data[3] ::ASTRA_HOST_SCOPE_READ_ONLY and/or
+ * session id from record 4); data[3] ::ASTRA_HOST_SCOPE_READ_ONLY and/or
  * ::ASTRA_HOST_SCOPE_DELEGATE. Returns in data[1] a handle with READ (query),
  * WRITE (open and attach channels), TRANSFER and ADMINISTER (revoke).
  * UNSUPPORTED when the provider lacks ::ASTRA_HOST_CAP_FS_SCOPE.

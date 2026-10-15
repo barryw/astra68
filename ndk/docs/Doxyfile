@@ -52,7 +52,8 @@ INPUT                  = include/astra ../sw/include/astra/gui.h \
                          ../sw/include/astra/stream_service.h \
                          ../sw/include/astra/syscall.h \
                          ../sw/include/astra/time_page.h \
-                         ../sw/include/astra/vfs_service.h
+                         ../sw/include/astra/vfs_service.h \
+                         ../sw/include/astra/volume_abi.h
 FILE_PATTERNS          = *.h
 RECURSIVE              = YES
 EXCLUDE_PATTERNS       = */internal/*

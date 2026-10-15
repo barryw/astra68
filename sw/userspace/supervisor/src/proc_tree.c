@@ -39,6 +39,7 @@
 #include <astra/process.h>
 #include <astra/proc.h>
 #include <astra/runtime.h>
+#include <astra/vfs_path_storage.h>
 #include <astra/syscall.h>
 #include <astra/vfs_backend.h>
 #include <astra/vfs_port_transport.h>
@@ -320,13 +321,16 @@ provider_leaf(const char *leaf, char *name, uint16_t *abi)
 static uint32_t
 provider_size(const char *path, uint64_t *size)
 {
+    AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(1u);
+    if (path_storage.bytes == NULL) { return ASTRA_VFS_ERR_LIMIT; }
+
     AstraVfsClient *client = NULL;
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint16_t kind = ASTRA_VFS_KIND_UNKNOWN;
-    char wire[ASTRA_VFS_PATH_MAX];
+    char *wire = astra_vfs_path_storage_at(&path_storage, 0u);
     uint32_t status = astra_vfs_assign_open(
         supervisor_assigns(), path, ASTRA_RIGHT_READ, ASTRA_VFS_OPEN_READ,
-        supervisor_vfs_assign_client, NULL, wire, sizeof(wire), &file, size,
+        supervisor_vfs_assign_client, NULL, wire, ASTRA_VFS_PATH_MAX, &file, size,
         &kind, &client, NULL);
 
     if (status != ASTRA_VFS_OK)
@@ -366,6 +370,9 @@ render_disk_row(ProcText *text, const AstraLibraryReference *library,
 static uint32_t
 render_disk_libraries(ProcText *text)
 {
+    AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(3u);
+    if (path_storage.bytes == NULL) { return ASTRA_VFS_ERR_LIMIT; }
+
     static AstraVfsDirEntry entries[8];
     AstraAssignTable *assigns = supervisor_assigns();
     AstraVfsUnionDirectory directory = ASTRA_VFS_UNION_DIRECTORY_INIT;
@@ -383,7 +390,7 @@ render_disk_libraries(ProcText *text)
     for (;;) {
         const AstraAssign *assign = NULL;
         AstraVfsClient *client;
-        char wire[ASTRA_VFS_PATH_MAX];
+        char *wire = astra_vfs_path_storage_at(&path_storage, 0u);
         uint32_t count = 0u;
         uint32_t member = 0u;
 
@@ -396,7 +403,7 @@ render_disk_libraries(ProcText *text)
             break;
         failure = "PROC library member resolve";
         status = astra_assign_resolve(assigns, base, ASTRA_RIGHT_READ,
-                                      member, wire, sizeof(wire), &assign);
+                                      member, wire, ASTRA_VFS_PATH_MAX, &assign);
         if (status != ASTRA_VFS_OK)
             break;
         client = supervisor_vfs_client_for(assign);
@@ -412,8 +419,9 @@ render_disk_libraries(ProcText *text)
             uint64_t binary_size = 0u;
             uint16_t abi = 0u;
             char name[ASTRA_LIBRARY_NAME_MAX];
-            char index_path[ASTRA_VFS_PATH_MAX] = {0};
-            char target[ASTRA_VFS_PATH_MAX];
+            char *index_path = astra_vfs_path_storage_at(&path_storage, 1u);
+            index_path[0] = '\0';
+            char *target = astra_vfs_path_storage_at(&path_storage, 2u);
 
             if (entries[item].kind != ASTRA_VFS_KIND_FILE)
                 continue;
@@ -422,16 +430,16 @@ render_disk_libraries(ProcText *text)
                 status = ASTRA_VFS_ERR_PROTOCOL;
                 break;
             }
-            if (!path_append(index_path, sizeof(index_path), wire) ||
-                !path_append(index_path, sizeof(index_path), "/") ||
-                !path_append(index_path, sizeof(index_path),
+            if (!path_append(index_path, ASTRA_VFS_PATH_MAX, wire) ||
+                !path_append(index_path, ASTRA_VFS_PATH_MAX, "/") ||
+                !path_append(index_path, ASTRA_VFS_PATH_MAX,
                              entries[item].name)) {
                 failure = "PROC library provider path";
                 status = ASTRA_VFS_ERR_LIMIT;
                 break;
             }
             failure = "PROC library provider read";
-            status = astra_vfs_port_read_path_inline(
+            status = astra_vfs_port_read_path(
                 client, index_path, &bytes, &moved, &index_size);
             if (status != ASTRA_VFS_OK)
                 break;
@@ -441,7 +449,7 @@ render_disk_libraries(ProcText *text)
                 break;
             }
             if (!astra_vfs_provider_index_parse(
-                    bytes, moved, "LIBS", name, abi, target, sizeof(target),
+                    bytes, moved, "LIBS", name, abi, target, ASTRA_VFS_PATH_MAX,
                     &library)) {
                 failure = "PROC library provider parse";
                 status = ASTRA_VFS_ERR_PROTOCOL;

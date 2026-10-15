@@ -47,6 +47,10 @@ static uint32_t operation_order;
 static volatile int32_t signalled_selector;
 static volatile int32_t signalled_group;
 static volatile uint32_t signalled_number;
+static volatile uint32_t process_query_calls;
+static volatile uint32_t process_query_result = ASTRA_STATUS_OK;
+static volatile uint32_t process_info_calls;
+static volatile uint32_t process_info_result = ASTRA_SYSCALL_OK;
 AstraPosixProcessReply process_reply;
 static const AstraStartupInfo startup = {
     .process_handle = 5u,
@@ -148,6 +152,9 @@ astra_posix_process_query(uint32_t service, int32_t process,
                           AstraPosixProcessReply *reply)
 {
     assert(service == 6u && reply != NULL);
+    ++process_query_calls;
+    if (process_query_result != ASTRA_STATUS_OK)
+        return process_query_result;
     *reply = process_reply;
     if (process != 0)
         reply->process = process;
@@ -294,6 +301,10 @@ uint32_t
 astra_process_info(uint32_t handle, AstraProcessInfo *info)
 {
     assert(info != NULL && info->size == sizeof(*info));
+    ++process_info_calls;
+    if (process_info_result != ASTRA_SYSCALL_OK)
+        return process_info_result;
+    info->id = handle == 5u ? 100u : handle;
     info->runtime_ns = handle == 5u ? UINT64_C(1234567890) :
                                      (uint64_t)handle * UINT64_C(1000000);
     info->peak_resident_frames = handle == 5u ? 12u : handle + 1u;
@@ -384,6 +395,22 @@ main(void)
         .process = 100, .parent = 50, .group = 100, .session = 100,
     };
     assert(getpid() == (pid_t)100 && getppid() == (pid_t)50);
+    {
+        uint32_t queries = process_query_calls;
+        uint32_t infos = process_info_calls;
+
+        /* Self identity needs no broker reply resources. Parent and group
+         * policy still belong to the process broker. */
+        process_query_result = ASTRA_STATUS_LIMIT;
+        assert(getpid() == (pid_t)100);
+        assert(process_query_calls == queries && process_info_calls == infos + 1u);
+        assert(getppid() == (pid_t)-1 && process_query_calls == queries + 1u);
+        process_query_result = ASTRA_STATUS_OK;
+        process_info_result = ASTRA_SYSCALL_INVALID_HANDLE;
+        errno = 0;
+        assert(getpid() == (pid_t)-1 && errno == EIO);
+        process_info_result = ASTRA_SYSCALL_OK;
+    }
     assert(getpgrp() == (pid_t)100 && getpgid(123) == (pid_t)100);
     assert(getsid(0) == (pid_t)100 && setsid() == (pid_t)100);
     assert(waitpid((pid_t)999, &status, WNOHANG) == (pid_t)-1);

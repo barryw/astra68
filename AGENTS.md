@@ -60,6 +60,11 @@
 
 ## Kernel Development Discipline
 
+- Before implementing or changing an operating-system mechanism or common
+  control, review the corresponding implementation in `~/Git/haiku`. Record
+  the relevant source paths and the patterns adopted or deliberately adapted
+  to Astra's native contracts. Use Haiku as a read-only reference and respect
+  its repository contribution policy; do not modify that checkout.
 - Before adding a kernel function, type, module, state machine, or test helper,
   search the existing implementation and tests for the same responsibility.
   Extend or consolidate the existing mechanism when it can preserve the

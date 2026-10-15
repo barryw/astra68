@@ -54,15 +54,16 @@ supervisor_vfs_client_table_reserve(SupervisorVfsClientTable *table,
 }
 
 /*
- * Connects the protected storage service's published port, opens the
- * supervisor's session, and binds the standard assigns over it.
+ * Bind the owned, already-connected SYSTEM publication. The loader owns this
+ * client like every other publication; this module borrows it for aliases.
  */
-int supervisor_vfs_start(uint32_t port_handle);
+int supervisor_vfs_bind_system(AstraVfsClient *client, uint32_t port_handle);
+void supervisor_vfs_unbind_system(AstraVfsClient *client);
 
-/* NULL until supervisor_vfs_start() has succeeded. */
+/* NULL while SYSTEM is unpublished. */
 AstraVfsClient *supervisor_vfs_client(void);
 
-/* This process's namespace. NULL until supervisor_vfs_start() has succeeded. */
+/* This process's namespace, including unrelated publications during loss. */
 AstraAssignTable *supervisor_assigns(void);
 
 /*

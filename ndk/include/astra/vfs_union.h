@@ -32,10 +32,11 @@ typedef struct AstraVfsUnionDirectory {
     const AstraAssignTable *table; /**< Borrowed process namespace. */
     AstraVfsAssignClientFn client_for; /**< Member-to-client resolver. */
     void *context; /**< Resolver context. */
-    char path[ASTRA_VFS_PATH_MAX]; /**< Assign-qualified UTF-8 path. */
+    char *path; /**< Owned assign-qualified UTF-8 path. */
     uint64_t cursor; /**< Current member's directory cursor. */
     AstraVfsClient *client; /**< Current member's borrowed client. */
     AstraVfsFile file; /**< Current open directory handle. */
+    uint32_t ownership_epoch; /**< Owner epoch of the retained directory token. */
     uint32_t member; /**< Current union member index. */
     uint32_t worst; /**< Most informative error seen while scanning. */
     uint8_t active; /**< Nonzero while one member is open. */
@@ -44,7 +45,7 @@ typedef struct AstraVfsUnionDirectory {
 
 /** Static initializer for an unopened union-directory traversal. */
 #define ASTRA_VFS_UNION_DIRECTORY_INIT \
-    { 0, 0, 0, { 0 }, 0, 0, ASTRA_VFS_FILE_INVALID, 0, \
+    { 0, 0, 0, 0, 0, 0, ASTRA_VFS_FILE_INVALID, 0, 0, \
       ASTRA_VFS_ERR_NOT_FOUND, 0, 0 }
 
 /**

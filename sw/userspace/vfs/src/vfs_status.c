@@ -30,7 +30,7 @@ astra_vfs_status_text(uint32_t status)
          */
         "the service is gone", "cross-device operation",
         "too many symbolic links", "read-only namespace", "left the provider root",
-        "the provider was lost", "file size limit reached"
+        "the provider was lost", "file size limit reached", "name too long"
     };
 
     if (status >= (uint32_t)(sizeof(text) / sizeof(text[0])))

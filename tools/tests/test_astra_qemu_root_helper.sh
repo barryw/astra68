@@ -16,6 +16,7 @@ set -euo pipefail
 
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 WRAPPER=${1:-$HERE/../astra-qemu-root}
+CLIENT=${2:?matching test-storage-client required}
 CALLER_UID=$(id -u)
 CALLER_GID=$(id -g)
 WORK=$(mktemp -d /tmp/astra-qemu-root-helper-test.XXXXXX)
@@ -47,7 +48,8 @@ note_fail() { echo "FAIL $*"; FAIL=$((FAIL + 1)); }
 make_provider() {
     local label=$1 seed_work=${2:-}
     local dir="$WORK/$label"
-    mkdir -p -- "$dir/seed/sound"
+    mkdir -p -- "$dir/seed/sound" "$dir/seed/home"
+    printf '%s' private-data > "$dir/seed/home/private"
     if [ -n "$seed_work" ]; then
         ln -s -- "$seed_work" "$dir/seed/work"
     else
@@ -57,6 +59,12 @@ make_provider() {
     /usr/sbin/mke2fs -q -F -t ext4 -O "^orphan_file" \
         -E "root_owner=$CALLER_UID:$CALLER_GID" \
         -d "$dir/seed" "$dir/image.img"
+    /usr/sbin/debugfs -w -R 'set_inode_field /home uid 0' "$dir/image.img" >/dev/null 2>&1
+    /usr/sbin/debugfs -w -R 'set_inode_field /home gid 0' "$dir/image.img" >/dev/null 2>&1
+    /usr/sbin/debugfs -w -R 'set_inode_field /home mode 040700' "$dir/image.img" >/dev/null 2>&1
+    /usr/sbin/debugfs -w -R 'set_inode_field /home/private uid 0' "$dir/image.img" >/dev/null 2>&1
+    /usr/sbin/debugfs -w -R 'set_inode_field /home/private gid 0' "$dir/image.img" >/dev/null 2>&1
+    /usr/sbin/debugfs -w -R 'set_inode_field /home/private mode 0100600' "$dir/image.img" >/dev/null 2>&1
     echo "$dir/image.img"
 }
 
@@ -75,9 +83,9 @@ start() {
 announced_r() {
     local log=$1 end=$((SECONDS + 10)) line
     while [ "$SECONDS" -le "$end" ]; do
-        line=$(grep -m1 '^ASTRA-QEMU-ROOT-MOUNT ' "$log" 2>/dev/null || true)
+        line=$(grep -m1 '^ASTRA-QEMU-ROOT-EXPORTS ' "$log" 2>/dev/null || true)
         if [ -n "$line" ]; then
-            dirname -- "${line#ASTRA-QEMU-ROOT-MOUNT }"
+            dirname -- "${line#ASTRA-QEMU-ROOT-EXPORTS }"
             return
         fi
         kill -0 "$BG" 2>/dev/null || break
@@ -94,7 +102,7 @@ run_test_root_caller() {
         > "$WORK/root-caller.log" 2>&1 || status=$?
     if [ "$status" -eq 64 ] &&
             grep -q 'non-root caller' "$WORK/root-caller.log" &&
-            ! grep -q '^ASTRA-QEMU-ROOT-MOUNT ' "$WORK/root-caller.log"; then
+            ! grep -q '^ASTRA-QEMU-ROOT-EXPORTS ' "$WORK/root-caller.log"; then
         note_pass "fs-root-helper refuses root caller before mounting"
     else
         note_fail "fs-root-helper accepted root caller or rejected it too late ($status)"
@@ -121,7 +129,7 @@ observe_creds() {
     local end=$((SECONDS + 5))
     pid=
     while [ -z "$pid" ] && [ "$SECONDS" -le "$end" ]; do
-        pid=$(cat "$r/qemu.pid" 2>/dev/null || true)
+        pid=$(sed -n 's/^ASTRA-STORAGE-PEER //p' "$WORK/creds-$label.log" | head -1)
         [ -n "$pid" ] || sleep 0.05
     done
     want="$CALLER_UID $CALLER_UID $CALLER_UID $CALLER_UID|$CALLER_GID $CALLER_GID $CALLER_GID $CALLER_GID|0000000000000000|0000000000000000"
@@ -291,7 +299,7 @@ observe_planted() {
     mkdir -- "$decoy" "$decoy/dir"
     echo "decoy contents" > "$decoy/file"
     chmod 600 -- "$decoy/file"
-    ln -s -- "$decoy/file" "$dir/qemu.pid"
+    ln -s -- "$decoy/file" "$dir/provider.pid"
     ln -s -- "$decoy/file" "$dir/astra-qemu-root-scratch.AAAAAA"
     ln -s -- "$decoy/dir" "$dir/mount"
     ln -s -- "$decoy/dir" "$dir/provider"
@@ -324,7 +332,16 @@ run_test_work_symlink() {
     local image before after
     image=$(make_provider work-etc /etc)
     before=$(stat -c '%U:%G:%a' /etc)
-    expect_refusal work-is-symlink-to-etc "symlink" "$image"
+    # WORK authority comes from the helper's private export, never from an
+    # image directory. A hostile image symlink may remain data but grants no
+    # host /etc authority and cannot influence provider export selection.
+    start "$WRAPPER" "$image" "$WORK/work-symlink.log" "$CLIENT" "$CALLER_UID" "$CALLER_GID"
+    finish
+    if [ "$STATUS" -eq 0 ]; then
+        note_pass "fs-root-helper image WORK symlink supplies no export authority"
+    else
+        note_fail "fs-root-helper image WORK symlink: wrapper exited $STATUS"
+    fi
     after=$(stat -c '%U:%G:%a' /etc)
     if [ "$before" = "$after" ]; then
         note_pass "fs-root-helper work-is-symlink-to-etc: /etc unchanged ($after)"
@@ -353,9 +370,10 @@ run_test_cleanup() {
     image=$(make_provider cleanup-success)
     start "$WRAPPER" "$image" "$WORK/cleanup-success.log" /bin/sleep 2
     r=$(announced_r "$WORK/cleanup-success.log")
-    if [ -n "$r" ] && ls -- "$r/mnt/work" > /dev/null 2>&1 &&
-            ! sudo -n -u nobody ls -- "$r/mnt" > /dev/null 2>&1; then
-        note_pass "fs-root-helper mount privacy: caller lists $r/mnt, nobody cannot"
+    if [ -n "$r" ] && sudo -n test -d "$r/exports/work" &&
+            ! ls -- "$r/exports/work" > /dev/null 2>&1 &&
+            ! sudo -n -u nobody ls -- "$r/exports" > /dev/null 2>&1; then
+        note_pass "fs-root-helper export privacy: root observer only, native descriptors supply data authority"
     else
         note_fail "fs-root-helper mount privacy: caller/nobody access to ${r:-?}/mnt wrong"
     fi
@@ -378,20 +396,21 @@ run_test_cleanup() {
 # --- a control: a specific marker round-trips through the write-back ----
 
 run_test_control() {
-    local image marker
+    local image marker metadata
     image=$(make_provider control)
-    start "$WRAPPER" "$image" "$WORK/control.log" /bin/bash -c \
-        'echo fs-root-helper-marker-$$ > "$ASTRA_HOSTFS_ROOT/work/marker.txt"'
+    start "$WRAPPER" "$image" "$WORK/control.log" "$CLIENT" "$CALLER_UID" "$CALLER_GID"
     finish
     if [ "$STATUS" -ne 0 ]; then
         note_fail "fs-root-helper control: wrapper exited $STATUS: $(cat "$WORK/control.log")"
         return
     fi
-    marker=$(/usr/sbin/debugfs -R 'cat /work/marker.txt' "$image" 2>/dev/null | tr -d '\r\n')
-    if [[ "$marker" == fs-root-helper-marker-* ]]; then
-        note_pass "fs-root-helper control: marker '$marker' round-tripped through the mount and the write-back"
+    marker=$(/usr/sbin/debugfs -R 'cat /home/private' "$image" 2>/dev/null | tr -d '\r\n')
+    metadata=$(/usr/sbin/debugfs -R 'stat /home/private' "$image" 2>/dev/null)
+    if [ "$marker" = private-dataAstra ] && [[ "$metadata" == *0600* ]] &&
+            [[ "$metadata" == *'User:     0'* ]] && [[ "$metadata" == *'Group:     0'* ]]; then
+        note_pass "fs-root-helper native data/write-back preserves root-owned 0600 metadata"
     else
-        note_fail "fs-root-helper control: expected a fs-root-helper-marker-* line in the written-back image, got '$marker'"
+        note_fail "fs-root-helper control: native marker/metadata mismatch '$marker'"
     fi
 }
 
@@ -416,7 +435,7 @@ run_perturbations() {
     local helper result
     PERTURB=$(sudo -n mktemp -d /var/tmp/astra-qemu-root-test-perturb.XXXXXX)
     if helper=$(perturbed pidfile-in-caller-dir \
-            'PIDFILE=$R/qemu.pid' 'PIDFILE=$(dirname -- "$IMAGE")/qemu.pid'); then
+            'PIDFILE=$R/provider.pid' 'PIDFILE=$(dirname -- "$IMAGE")/provider.pid'); then
         result=$(observe_planted "$helper" perturbed)
         if [ "$result" != unchanged ]; then
             note_pass "fs-root-helper perturbation (pidfile in caller dir): planted-symlinks case caught it (${result#changed })"
@@ -431,7 +450,7 @@ run_perturbations() {
     # passes this. (`--ruid` is no perturbation: util-linux 2.39 setpriv
     # sets all four uids from it, and the next exec clears the caps.)
     if helper=$(perturbed uid-only \
-            ' --regid="$SUDO_GID"' ''); then
+            '--gid "$SUDO_GID"' '--gid 1'); then
         result=$(observe_creds "$helper" perturbed)
         if [ "$result" != yes ]; then
             note_pass "fs-root-helper perturbation (gid left root): creds case caught it (${result#no })"

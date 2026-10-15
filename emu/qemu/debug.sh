@@ -14,7 +14,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 
-QEMU=${QEMU:-/tmp/qemu-final-build/qemu-system-m68k}
+QEMU=${QEMU:?set QEMU to the qualified Beast emulator}
 ROM=${ROM:-$ROOT/sw/boot/build/astra_boot.bin}
 KERNEL_ELF=${KERNEL_ELF:-$ROOT/sw/kernel/build/astra_kernel.elf}
 USER_ELF=${USER_ELF:-$ROOT/sw/userspace/supervisor/build/m68k/astra_supervisor.elf}
@@ -25,6 +25,7 @@ BOOT_ELF=${BOOT_ELF:-$ROOT/sw/boot/build/astra_boot.elf}
 BOOT_TEXT=${BOOT_TEXT:-0xffe00400}
 PORT=${PORT:-1234}
 IMAGE=${IMAGE:-}
+STORAGE_HELPER=/usr/local/sbin/astra-qemu-root
 GDB=${GDB:-gdb-multiarch}
 
 usage() {
@@ -52,14 +53,19 @@ while [ $# -gt 0 ]; do
 done
 
 [ -f "$QEMU" ] || { echo "no emulator at $QEMU; set QEMU=" >&2; exit 1; }
+[ "$(id -u)" -ne 0 ] || { echo "invoke debugger as the non-root test account" >&2; exit 1; }
+[ -n "$IMAGE" ] && [ -f "$IMAGE" ] || { echo "--image CARD is required" >&2; exit 2; }
+cmp "$ROOT/tools/astra-qemu-root" "$STORAGE_HELPER" >/dev/null || {
+    echo "installed astra-qemu-root is stale; reinstall tools/astra-qemu-root" >&2; exit 1;
+}
 [ -f "$ROM" ] || { echo "no ROM at $ROM; run make in sw/boot" >&2; exit 1; }
 [ -f "$KERNEL_ELF" ] || echo "warning: no kernel symbols at $KERNEL_ELF" >&2
 [ -f "$USER_ELF" ] || echo "warning: no user symbols at $USER_ELF" >&2
 [ -f "$BOOT_ELF" ] || echo "warning: no ROM symbols at $BOOT_ELF" >&2
 
-set -- "$QEMU" -M astra68 -m "${ASTRA_MEMORY:-512M}" -bios "$ROM" -display none -monitor none \
+set -- sudo -n "$STORAGE_HELPER" --image "$IMAGE" -- \
+    "$QEMU" -M astra68 -m "${ASTRA_MEMORY:-512M}" -bios "$ROM" -display none -monitor none \
     -serial mon:stdio -no-reboot -S -gdb "tcp::$PORT"
-[ -n "$IMAGE" ] && set -- "$@" -drive "if=none,format=raw,file=$IMAGE"
 
 if [ "$ATTACH" -eq 0 ]; then
     echo "gdb: $GDB -ex 'target remote :$PORT' $KERNEL_ELF"
@@ -68,12 +74,18 @@ fi
 
 "$@" &
 QEMU_PID=$!
-trap 'kill "$QEMU_PID" 2>/dev/null || true' EXIT INT TERM
+cleanup() {
+    kill "$QEMU_PID" 2>/dev/null || true
+    wait "$QEMU_PID" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # The stub is listening before QEMU reports anything, but not instantly.
 sleep 1
 
-exec "$GDB" \
+"$GDB" \
     -ex "set confirm off" \
     -ex "set architecture m68k" \
     -ex "file $KERNEL_ELF" \

@@ -1,130 +1,177 @@
 #include <volume.h>
-
+#include <astra/host.h>
 #include <astra/runtime.h>
-#include <astra/vfs_service.h>
-
-#include <ext4.h>
-#include <ext4_errno.h>
-
+#include <astra/vfs_host_backend.h>
+#include <astra/vfs_host_transport.h>
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define SOURCE_BYTES (300u * 1024u + 7u)
+static uint8_t payload[300u * 1024u + 7u];
+static uint64_t payload_size;
+static uint16_t kind;
+static int present, initialized, claimed, session_live, file_live, allocation_failed;
+static uint32_t claim_status, lookup_status, open_status, read_status, close_status;
+static uint32_t session_status, session_close_status, release_status, read_mode;
+static uint32_t closes, releases, destroys;
+static AstraStartupCapability device = {.handle = 7u};
 
-static uint8_t source[SOURCE_BYTES];
-static uint64_t source_size;
-static int fail_allocation;
-static int short_read;
-static uint32_t close_count;
-static uint32_t free_count;
-
-void *
-astra_runtime_allocate(size_t size)
+void *astra_runtime_allocate(size_t size) { return allocation_failed ? NULL : malloc(size); }
+void astra_runtime_deallocate(void *pointer) { free(pointer); }
+const AstraStartupCapability *astra_startup_capability(const AstraStartupInfo *startup, const char *name)
 {
-    return fail_allocation ? NULL : malloc(size);
+    (void)startup;
+    assert(strcmp(name, ASTRA_CAPABILITY_HOST_DEVICE) == 0);
+    return present ? &device : NULL;
 }
-
-void
-astra_runtime_deallocate(void *pointer)
+int astra_vfs_host_transport_init(AstraVfsHostTransport *transport, uint32_t handle,
+    AstraVfsStateAcquire acquire, AstraVfsStateRelease release, void *context)
 {
-    if (pointer != NULL)
-        ++free_count;
-    free(pointer);
+    assert(handle == 7u && acquire == NULL && release == NULL && context == NULL);
+    memset(transport, 0, sizeof(*transport));
+    transport->generation = 9u;
+    return initialized;
 }
-
-int
-ext4_fopen(ext4_file *file, const char *path, const char *flags)
+void astra_vfs_host_transport_destroy(AstraVfsHostTransport *transport)
 {
-    assert(strcmp(path, "/vol/startup/system") == 0);
-    assert(strcmp(flags, "rb") == 0);
-    file->fpos = 0u;
-    return EOK;
+    ++destroys;
+    memset(transport, 0, sizeof(*transport));
 }
-
-uint64_t
-ext4_fsize(ext4_file *file)
+uint32_t astra_vfs_host_claim(AstraVfsHostTransport *transport, uint32_t generation,
+    int release, uint32_t *epoch)
 {
-    (void)file;
-    return source_size;
-}
-
-int
-ext4_fread(ext4_file *file, void *buffer, size_t size, size_t *moved)
-{
-    size_t available;
-
-    if (short_read) {
-        *moved = 0u;
-        return EOK;
+    (void)transport;
+    assert(generation == 9u && epoch == NULL);
+    if (!release) {
+        assert(!claimed);
+        claimed = claim_status == ASTRA_VFS_OK;
+        return claim_status;
     }
-    available = (size_t)(source_size - file->fpos);
-    if (size > available)
-        size = available;
-    if (size > 4093u)
-        size = 4093u;
-    memcpy(buffer, source + file->fpos, size);
-    file->fpos += size;
-    *moved = size;
-    return EOK;
+    ++releases;
+    claimed = file_live = session_live = 0;
+    return release_status;
 }
-
-int
-ext4_fclose(ext4_file *file)
+uint32_t astra_vfs_host_lookup_mount(AstraVfsHostTransport *transport, uint32_t generation,
+    const char *name, uint32_t flags, AstraVolumeCatalogPage *scratch, AstraVolumeReference *volume)
 {
-    (void)file;
-    ++close_count;
-    return EOK;
+    (void)transport; (void)scratch;
+    assert(claimed && generation == 9u && strcmp(name, "/dh0") == 0 && flags == ASTRA_VOLUME_SYSTEM);
+    *volume = (AstraVolumeReference){1u, 2u, 1u};
+    return lookup_status;
 }
-
-static void
-reads_large_file_whole(void)
+uint32_t astra_vfs_host_session_open(AstraVfsHostTransport *transport, uint32_t generation,
+    uint32_t parent, const AstraVolumeReference *volume, const char *root,
+    uint16_t flags, uint32_t requester, uint32_t *session)
 {
-    uint8_t *bytes = NULL;
-    uint32_t length = 0u;
-
-    source_size = sizeof(source);
-    for (uint32_t at = 0u; at < sizeof(source); ++at)
-        source[at] = (uint8_t)(at * 17u);
-    assert(supervisor_volume_read_alloc("/vol/startup/system",
-                                        (void **)&bytes, &length) ==
-           ASTRA_VFS_OK);
-    assert(length == sizeof(source));
-    assert(memcmp(bytes, source, sizeof(source)) == 0);
-    assert(bytes[length] == '\0');
-    astra_runtime_deallocate(bytes);
+    (void)transport;
+    assert(claimed && generation == 9u && parent == 0u && volume->id == 2u &&
+        strcmp(root, "/") == 0 && flags == ASTRA_HOST_FS_SESSION_READ_ONLY && requester == 0u);
+    if (session_status == ASTRA_VFS_OK) { *session = 3u; session_live = 1; }
+    return session_status;
 }
-
-static void
-refuses_failed_or_incomplete_read(void)
+uint32_t astra_vfs_host_session_close(AstraVfsHostTransport *transport, uint32_t generation, uint32_t session)
+{
+    (void)transport;
+    assert(generation == 9u && session == 3u);
+    session_live = file_live = 0;
+    return session_close_status;
+}
+int astra_vfs_host_init(AstraVfsHostBackend *backend, AstraVfsHostTransport *transport,
+    uint32_t generation, uint32_t session)
+{
+    (void)backend; (void)transport;
+    assert(generation == 9u && session == 3u);
+    return 1;
+}
+static uint32_t open_node(void *context, const char *path, uint32_t flags, uint16_t mode,
+    uintptr_t *node, AstraVfsNodeInfo *info)
+{
+    (void)context;
+    assert(session_live && strcmp(path, "/startup/system") == 0 &&
+        flags == ASTRA_VFS_OPEN_READ && mode == ASTRA_VFS_MODE_DEFAULT);
+    if (open_status == ASTRA_VFS_OK) {
+        *node = 1u; info->size = payload_size; info->kind = kind; file_live = 1;
+    }
+    return open_status;
+}
+static uint32_t read_node(void *context, uintptr_t node, uint64_t offset,
+    void *bytes, uint32_t length, uint32_t *moved)
+{
+    (void)context;
+    assert(file_live && node == 1u && offset + length <= payload_size);
+    *moved = read_mode == 1u ? 0u : read_mode == 2u ? length + 1u :
+        length > 4093u ? 4093u : length;
+    if (*moved <= length) memcpy(bytes, payload + offset, *moved);
+    return read_status;
+}
+static uint32_t close_node(void *context, uintptr_t node)
+{
+    (void)context;
+    assert(file_live && node == 1u);
+    ++closes; file_live = 0;
+    return close_status;
+}
+const AstraVfsBackendOps *astra_vfs_host_ops(void)
+{
+    static const AstraVfsBackendOps ops = {.open = open_node, .read = read_node, .close = close_node};
+    return &ops;
+}
+static void reset(void)
+{
+    present = initialized = 1;
+    claimed = session_live = file_live = allocation_failed = 0;
+    claim_status = lookup_status = open_status = read_status = close_status = ASTRA_VFS_OK;
+    session_status = session_close_status = release_status = ASTRA_VFS_OK;
+    read_mode = closes = releases = destroys = 0u;
+    kind = ASTRA_VFS_KIND_FILE;
+    payload_size = sizeof(payload);
+    for (uint32_t at = 0u; at < sizeof(payload); ++at) payload[at] = (uint8_t)(at * 17u);
+}
+static void read_case(uint32_t expected)
 {
     void *bytes = (void *)1;
     uint32_t length = 99u;
-    uint32_t freed = free_count;
-
-    source_size = sizeof(source);
-    fail_allocation = 1;
-    assert(supervisor_volume_read_alloc("/vol/startup/system", &bytes,
-                                        &length) == ASTRA_VFS_ERR_LIMIT);
-    assert(bytes == NULL && length == 0u);
-    fail_allocation = 0;
-
-    bytes = (void *)1;
-    length = 99u;
-    short_read = 1;
-    assert(supervisor_volume_read_alloc("/vol/startup/system", &bytes,
-                                        &length) == ASTRA_VFS_ERR_IO);
-    assert(bytes == NULL && length == 0u);
-    assert(free_count == freed + 1u);
-    short_read = 0;
+    assert(supervisor_volume_open(NULL) == ASTRA_VFS_OK);
+    assert(supervisor_volume_read_alloc("/startup/system", &bytes, &length) == expected);
+    if (expected == ASTRA_VFS_OK) {
+        assert(length == sizeof(payload) && memcmp(bytes, payload, length) == 0);
+        assert(((uint8_t *)bytes)[length] == 0u);
+        free(bytes);
+    } else assert(bytes == NULL && length == 0u);
+    assert(supervisor_volume_unmount() == ASTRA_VFS_OK);
+    assert(!claimed && !session_live && !file_live && releases == 1u && destroys == 1u);
 }
-
-int
-main(void)
+int main(void)
 {
-    supervisor_volume_test_set_mounted(1);
-    reads_large_file_whole();
-    refuses_failed_or_incomplete_read();
-    assert(close_count == 3u);
+    reset(); read_case(ASTRA_VFS_OK);
+    reset(); allocation_failed = 1; read_case(ASTRA_VFS_ERR_LIMIT);
+    reset(); read_mode = 1u; read_case(ASTRA_VFS_ERR_IO);
+    reset(); read_mode = 2u; read_case(ASTRA_VFS_ERR_IO);
+    reset(); read_status = ASTRA_VFS_ERR_LOST; read_case(ASTRA_VFS_ERR_LOST);
+    reset(); close_status = ASTRA_VFS_ERR_IO; read_case(ASTRA_VFS_ERR_IO);
+    reset(); kind = ASTRA_VFS_KIND_DIRECTORY; read_case(ASTRA_VFS_ERR_INVALID);
+    reset(); payload_size = UINT64_C(1) << 32; read_case(ASTRA_VFS_ERR_LIMIT);
+    reset(); present = 0; assert(supervisor_volume_open(NULL) == ASTRA_VFS_ERR_BAD_HANDLE);
+    reset(); initialized = 0; assert(supervisor_volume_open(NULL) == ASTRA_VFS_ERR_IO);
+    reset(); claim_status = ASTRA_VFS_ERR_ACCESS;
+    assert(supervisor_volume_open(NULL) == ASTRA_VFS_ERR_ACCESS && destroys == 1u && releases == 0u);
+    reset(); lookup_status = ASTRA_VFS_ERR_NOT_FOUND;
+    assert(supervisor_volume_open(NULL) == ASTRA_VFS_ERR_NOT_FOUND && releases == 1u && !claimed);
+    reset(); session_status = ASTRA_VFS_ERR_LOST;
+    assert(supervisor_volume_open(NULL) == ASTRA_VFS_ERR_LOST && releases == 1u && !claimed);
+    reset(); assert(supervisor_volume_open(NULL) == ASTRA_VFS_OK);
+    uint32_t length; const uint8_t *bytes; uint32_t moved;
+    assert(supervisor_volume_source_open("/startup/system", &length) == ASTRA_VFS_OK);
+    assert(supervisor_volume_unmount() == ASTRA_VFS_ERR_INVALID && claimed && file_live);
+    assert(supervisor_volume_source_read_at(NULL, length, 1u, &bytes, &moved) == ASTRA_VFS_ERR_INVALID);
+    assert(supervisor_volume_source_read_at(NULL, 7u, 100u, &bytes, &moved) == ASTRA_VFS_OK);
+    assert(moved == 100u && memcmp(bytes, payload + 7u, 100u) == 0);
+    assert(supervisor_volume_source_close(NULL) == ASTRA_VFS_OK);
+    assert(supervisor_volume_source_close(NULL) == ASTRA_VFS_OK && closes == 1u);
+    session_close_status = ASTRA_VFS_ERR_IO;
+    assert(supervisor_volume_unmount() == ASTRA_VFS_ERR_IO && releases == 1u && !claimed);
+    reset(); assert(supervisor_volume_open(NULL) == ASTRA_VFS_OK); release_status = ASTRA_VFS_ERR_IO;
+    assert(supervisor_volume_unmount() == ASTRA_VFS_ERR_IO && destroys == 1u);
+    reset(); read_case(ASTRA_VFS_OK); /* A released bootstrap claim can be reacquired. */
     return 0;
 }

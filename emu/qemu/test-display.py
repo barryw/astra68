@@ -2,21 +2,16 @@
 """Boot a clear desktop, launch Terminal by double-click, and verify GUI I/O."""
 
 import argparse
-import json
 import os
 import re
 import shutil
-import socket
-import subprocess
 import sys
 import tempfile
-import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import astra_image
 import importlib.util
-from qemu_runtime import DEFAULT_MEMORY, qemu_environment
 
 BOOT_MARKER = "stage 8"
 DISPLAY_QUEUE = 0xFFF001E0
@@ -80,75 +75,9 @@ def pointer_route_settled(updates, x, y, submissions, completions,
             and submissions == completions)
 
 
-class Qmp:
-    def __init__(self, path, deadline=20.0):
-        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        end = time.monotonic() + deadline
-        while True:
-            try:
-                self.socket.connect(path)
-                break
-            except (FileNotFoundError, ConnectionRefusedError):
-                if time.monotonic() >= end:
-                    raise
-                time.sleep(0.05)
-        self.file = self.socket.makefile("rwb", buffering=0)
-        self.file.readline()
-        self.execute("qmp_capabilities")
-
-    def execute(self, command, arguments=None):
-        request = {"execute": command}
-        if arguments is not None:
-            request["arguments"] = arguments
-        self.file.write(json.dumps(request).encode("ascii") + b"\n")
-        while True:
-            reply = json.loads(self.file.readline())
-            if "event" in reply:
-                continue
-            if "error" in reply:
-                raise RuntimeError("QMP %s failed: %s" %
-                                   (command, reply["error"]))
-            return reply.get("return")
-
-    def monitor(self, line):
-        return self.execute("human-monitor-command", {"command-line": line})
-
-    def property(self, name):
-        return self.execute("qom-get", {"path": "/machine",
-                                        "property": name})
-
-    def word(self, address):
-        for token in self.monitor("xp /1xw 0x%x" % address).split():
-            if token.startswith("0x") and len(token) == 10:
-                return int(token, 16)
-        raise RuntimeError("no word read back from 0x%x" % address)
-
-    def key(self, qcode):
-        for down in (True, False):
-            self.execute("input-send-event", {"events": [{
-                "type": "key", "data": {"down": down,
-                "key": {"type": "qcode", "data": qcode}}}]})
-            time.sleep(0.02)
-
-    def move(self, x, y):
-        self.execute("input-send-event", {"events": [{
-            "type": "abs", "data": {"axis": "x", "value": x}}, {
-            "type": "abs", "data": {"axis": "y", "value": y}}]})
-        time.sleep(0.02)
-
-    def button(self, down):
-        self.execute("input-send-event", {"events": [{
-            "type": "btn", "data": {"button": "left", "down": down}}]})
-        time.sleep(0.02)
-
-    def click(self):
-        self.button(True)
-        self.button(False)
-
 
 def run(qemu, rom, image, catalog, deadline, prepared_image=False):
     with tempfile.TemporaryDirectory(prefix="astra-display-") as directory:
-        socket_path = os.path.join(directory, "display-qmp.sock")
         scratch = os.path.join(directory, "card.img")
         shutil.copyfile(image, scratch)
         if not prepared_image:
@@ -156,36 +85,20 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                 scratch, catalog,
                 service_names=astra_image.DISPLAY_SERVICES,
                 manifest_text=astra_image.DISPLAY_STARTUP_MANIFEST)
-        environment = qemu_environment(
-            qemu, hostfs_root=os.path.join(directory, "hostfs"))
-        machine = subprocess.Popen(
-            [qemu, "-M", "astra68", "-m", DEFAULT_MEMORY, "-bios", rom,
-             "-display", "none", "-monitor", "none", "-serial", "stdio",
-             "-no-reboot", "-qmp", "unix:%s,server=on,wait=off" % socket_path,
-             "-drive", "if=none,format=raw,file=%s" % scratch],
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, env=environment)
-        booted = threading.Event()
-        serial = []
-
-        def drain():
-            for line in machine.stdout:
-                line = line.rstrip("\n")
-                serial.append(line)
-                if BOOT_MARKER in line:
-                    booted.set()
-
-        threading.Thread(target=drain, daemon=True).start()
+        native = terminal_gate.Machine(qemu, rom, scratch, directory)
+        machine = native.process
+        serial = native.log
+        booted = False
         started = time.monotonic()
         try:
-            qmp = Qmp(socket_path)
-            reader = terminal_gate.TraceReader(
-                qmp.monitor, os.path.join(directory, "ring.bin"),
-                hostfs_root=os.path.join(directory, "hostfs"))
+            qmp = native.qmp
+            reader = native.reader
             end = time.monotonic() + deadline
             last_counts = (0, 0, 0)
-            while not booted.is_set() and machine.poll() is None and \
+            while not booted and machine.poll() is None and \
                     time.monotonic() < end:
+                native.recent_serial()
+                booted = any(BOOT_MARKER in line for line in serial)
                 try:
                     last_counts = (
                         qmp.property("astra-display-submissions"),
@@ -194,7 +107,7 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                 except (BrokenPipeError, ConnectionError):
                     break
                 time.sleep(0.05)
-            if not booted.is_set():
+            if not booted:
                 registers = "unavailable"
                 if machine.poll() is None:
                     try:
@@ -297,11 +210,13 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             terminal_icon = reader.desktop_icon()
             desktop_batches = batches
             try:
-                qmp.move(*terminal_icon)
+                qmp.point(*terminal_icon)
                 launch_started = time.monotonic()
-                qmp.click()
+                qmp.button(True)
+                qmp.button(False)
                 time.sleep(0.08)
-                qmp.click()
+                qmp.button(True)
+                qmp.button(False)
             except ConnectionError as error:
                 raise RuntimeError(
                     "Terminal launch terminated machine exit=%s serial=%s" %
@@ -446,9 +361,9 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             resize_glyphs = keyboard_glyphs
             resize_started = time.monotonic()
             try:
-                qmp.move(1020, 578)
+                qmp.point(1020, 578)
                 qmp.button(True)
-                qmp.move(1120, 658)
+                qmp.point(1120, 658)
                 qmp.button(False)
                 resize_deadline = time.monotonic() + 3.0
                 while (qmp.property("astra-display-render-batches") <=
@@ -491,8 +406,9 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             # The fixture opens at (180,90), 840 pixels wide, with the system
             # theme's 2-pixel frame, 4-pixel spacing and 20-pixel gadgets.
             maximize_batches = resized_batches
-            qmp.move(1088, 105)
-            qmp.click()
+            qmp.point(1088, 105)
+            qmp.button(True)
+            qmp.button(False)
             maximize_deadline = time.monotonic() + 3.0
             while (qmp.property("astra-display-render-batches") <
                    maximize_batches + 3 or
@@ -510,8 +426,9 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                     (maximized_batches,
                      qmp.property("astra-display-submissions"),
                      qmp.property("astra-display-completions")))
-            qmp.move(1244, 49)
-            qmp.click()
+            qmp.point(1244, 49)
+            qmp.button(True)
+            qmp.button(False)
             restore_deadline = time.monotonic() + 3.0
             while (qmp.property("astra-display-render-batches") <
                    maximized_batches + 1 or
@@ -534,10 +451,12 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                      qmp.property("astra-display-completions")))
             second_batches = restored_batches
             second_glyphs = qmp.property("astra-display-glyph-commands")
-            qmp.move(*terminal_icon)
-            qmp.click()
+            qmp.point(*terminal_icon)
+            qmp.button(True)
+            qmp.button(False)
             time.sleep(0.08)
-            qmp.click()
+            qmp.button(True)
+            qmp.button(False)
             second_deadline = time.monotonic() + 5.0
             while (qmp.property("astra-display-render-batches") <
                    second_batches + 2 or
@@ -557,7 +476,7 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                      second_glyphs,
                      qmp.property("astra-display-glyph-commands")))
             second_batches = qmp.property("astra-display-render-batches")
-            qmp.move(1008, 105)
+            qmp.point(1008, 105)
             close_hover_deadline = time.monotonic() + 3.0
             while qmp.property("astra-display-render-batches") <= \
                     second_batches and time.monotonic() < close_hover_deadline:
@@ -566,7 +485,8 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                 "astra-display-render-batches")
             if close_hover_batches <= second_batches:
                 raise RuntimeError("close gadget did not enter hover state")
-            qmp.click()
+            qmp.button(True)
+            qmp.button(False)
             time.sleep(0.2)
             second_close_deadline = time.monotonic() + 3.0
             while (qmp.property("astra-display-render-batches") <
@@ -581,10 +501,12 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             closed_batches = qmp.property("astra-display-render-batches")
             relaunch_batches = closed_batches
             relaunch_glyphs = qmp.property("astra-display-glyph-commands")
-            qmp.move(*terminal_icon)
-            qmp.click()
+            qmp.point(*terminal_icon)
+            qmp.button(True)
+            qmp.button(False)
             time.sleep(0.08)
-            qmp.click()
+            qmp.button(True)
+            qmp.button(False)
             relaunch_deadline = time.monotonic() + 5.0
             while (qmp.property("astra-display-render-batches") <
                    relaunch_batches + 1 or
@@ -609,10 +531,12 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                      qmp.property("astra-display-glyph-commands"),
                      serial[-100:]))
             about_batches = qmp.property("astra-display-render-batches")
-            qmp.move(40, 15)
-            qmp.click()
-            qmp.move(70, 65)
-            qmp.click()
+            qmp.point(40, 15)
+            qmp.button(True)
+            qmp.button(False)
+            qmp.point(70, 65)
+            qmp.button(True)
+            qmp.button(False)
             about_deadline = time.monotonic() + 5.0
             while qmp.property("astra-display-render-batches") < \
                     about_batches + 2 and time.monotonic() < about_deadline:
@@ -620,9 +544,9 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             if qmp.property("astra-display-render-batches") < \
                     about_batches + 2:
                 raise RuntimeError("About system action did not open a dialog")
-            qmp.move(800, 550)
+            qmp.point(800, 550)
             qmp.click()  # Inert dialog interior must not kill the display service.
-            qmp.move(900, 520)
+            qmp.point(900, 520)
             pointer_deadline = time.monotonic() + 2.0
             while (qmp.property("astra-display-cursor-x") != 900 or
                    qmp.property("astra-display-cursor-y") != 520) and \
@@ -632,8 +556,9 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                     qmp.property("astra-display-cursor-y")) != (900, 520):
                 raise RuntimeError("About interior click killed display input")
             dialog_batches = qmp.property("astra-display-render-batches")
-            qmp.move(1158, 481)
-            qmp.click()
+            qmp.point(1158, 481)
+            qmp.button(True)
+            qmp.button(False)
             close_deadline = time.monotonic() + 3.0
             while qmp.property("astra-display-render-batches") <= \
                     dialog_batches and time.monotonic() < close_deadline:
@@ -672,8 +597,7 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
                    RESIZE_BUDGET_CYCLES, resize_elapsed))
             return 0
         finally:
-            machine.kill()
-            machine.wait()
+            native.close()
 
 
 def main():

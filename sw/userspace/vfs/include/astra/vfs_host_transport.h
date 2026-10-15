@@ -53,6 +53,8 @@ int astra_vfs_host_transport_init(AstraVfsHostTransport *transport,
                                   AstraVfsStateRelease release,
                                   void *lock_context);
 void astra_vfs_host_transport_destroy(AstraVfsHostTransport *transport);
+/* Largest payload that fits one command and page-rounded DMA in this lease. */
+uint32_t astra_vfs_host_transport_payload_limit(const AstraVfsHostTransport *transport);
 void astra_vfs_host_transport_after_fork(AstraVfsHostTransport *transport);
 /* A client closed `scope`: every lane forgets it, so a reused handle number
  * is attached again rather than trusted as the old scope's binding. */

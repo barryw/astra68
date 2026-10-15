@@ -1,6 +1,6 @@
 #!/bin/bash
-# astra-qemu-root -- loop-mount a copy of the caller's provider image as
-# root, then run the caller's QEMU as the caller. QEMU never runs as root
+# astra-qemu-root -- bounded caller-image copy, then the installed confined
+# storage provider and caller's QEMU. QEMU never runs as root
 # (docs/FILESYSTEM_PRODUCTION_PRD.md FS11).
 #
 # usage: sudo -n astra-qemu-root --image IMAGE [--env TZ=VALUE] -- QEMU ARGS...
@@ -21,14 +21,13 @@
 #              MAX_IMAGE_BYTES, and, under a lock, one larger than the
 #              free space under R, then fallocates the whole size before
 #              copying, so the space is reserved when it is checked.
-#   R/mnt      the mount point, 0700, the caller's. The mounted
-#              filesystem's root is the caller's own (root_provider's
-#              mkfs.ext4 -E root_owner). Mounted nodev,nosuid,noexec.
-#   R/qemu.pid QEMU's pid, 0644.
+#   R/exports  disposable root-owned WORK/SOUND exports, observation only.
+#   R/provider.pid the installed provider launcher/guardian PID, 0644. Its peer PID is
+#              announced by the provider after the credential-safe fork.
 #
 # The helper's first stdout line, before QEMU starts, is
-#   ASTRA-QEMU-ROOT-MOUNT R/mnt
-# so the caller finds the mount and the pid file without naming either.
+#   ASTRA-QEMU-ROOT-EXPORTS R/exports
+# so an observer finds exports without gaining private mount authority.
 # After the write-back completes it prints `ASTRA-QEMU-ROOT-DONE STATUS`.
 #
 # R is on /var/tmp, real disk, never tmpfs: a loop-mounted ext4 image
@@ -36,19 +35,12 @@
 # the desktop with the scratch copy on /tmp works; the identical setup on
 # /run, tmpfs, hangs before the desktop places an icon).
 #
-# The mount stays visible system-wide for the run. QEMU gets its own
-# private mount namespace (a snapshot of the mount), so nothing outside
-# can change what QEMU sees; unmounting the host copy once that snapshot
-# existed raced QEMU's own HostFS init and the desktop never booted.
-#
-# The image must already contain `work` and `sound` directories
-# (qemu_runtime.py's root_provider makes them at mkfs time). Root never
-# creates anything inside the mounted filesystem; it only checks each
-# entry is a real directory, not a symlink, and refuses otherwise.
-#
-# When QEMU exits, R/mnt is unmounted and R/img is written back to IMAGE
-# by a caller-credential process (root opens only R/img). The mount, the
-# loop device and R are always removed on exit, success or not.
+# Only the installed root-owned provider performs mounts in its private
+# namespace. No caller path or executable runs with privilege. Discovery is
+# disabled for this hostile-caller fixture; physical discovery is trusted
+# production service policy. Preserved filesystem metadata is never rewritten.
+# After actual provider cleanup, R/img is written back with caller credentials.
+# Retained Linux backing references retain R rather than being lazy-detached.
 set -euo pipefail
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 umask 077
@@ -95,22 +87,35 @@ BASE=/var/tmp
 # In /run (root-only), so no other user can squat the name.
 LOCKDIR=/run/astra-qemu-root.lock
 
-R= LOOPDEV=
+PROVIDER=/usr/local/libexec/astra-storage
+IMAGE_SELECTOR=/usr/local/libexec/astra-storage-image.py
+for directory in /usr /usr/local /usr/local/libexec; do
+    [ ! -L "$directory" ] && [ "$(stat -c %u -- "$directory")" = 0 ] ||
+        die "provider installation must be root-owned"
+    mode=$(stat -c %a -- "$directory")
+    [ "$((8#$mode & 022))" -eq 0 ] || die "provider installation must not be writable"
+done
+[ ! -L "$PROVIDER" ] && [ -f "$PROVIDER" ] && [ -x "$PROVIDER" ] &&
+    [ "$(stat -c %u -- "$PROVIDER")" = 0 ] || die "installed storage provider required"
+mode=$(stat -c %a -- "$PROVIDER")
+[ "$((8#$mode & 022))" -eq 0 ] || die "installed storage provider must not be writable"
+[ ! -L "$IMAGE_SELECTOR" ] && [ -f "$IMAGE_SELECTOR" ] &&
+    [ "$(stat -c %u -- "$IMAGE_SELECTOR")" = 0 ] || die "installed image selector required"
+mode=$(stat -c %a -- "$IMAGE_SELECTOR")
+[ "$((8#$mode & 022))" -eq 0 ] || die "installed image selector must not be writable"
+
+R= child=
 cleanup() {
     local status=$?
     set +e
     trap - TERM INT HUP
     [ -n "$R" ] || exit "$status"
-    if mountpoint -q -- "$R/mnt"; then
-        # A caller process can hold the mount busy; detach it anyway.
-        umount -- "$R/mnt" 2>/dev/null || umount -l -- "$R/mnt"
+    if [ -n "$child" ] && kill -0 "$child" 2>/dev/null; then
+        kill -TERM "$child"
+        wait "$child"
     fi
-    # losetup -d takes no -- (util-linux 2.39 reads it as the device);
-    # LOOPDEV is only ever this script's own `losetup -f --show` output.
-    [ -n "$LOOPDEV" ] && losetup -d "$LOOPDEV"
-    # Never recurse into a filesystem the caller owns.
-    if mountpoint -q -- "$R/mnt"; then
-        echo "astra-qemu-root: $R/mnt still mounted; leaving $R" >&2
+    if [ -n "$(losetup -j "$R/img")" ]; then
+        echo "astra-qemu-root: backing reference retained; leaving $R" >&2
     else
         rm -rf --one-file-system -- "$R"
     fi
@@ -128,9 +133,8 @@ R=$(mktemp -d "$BASE/astra-qemu-root.XXXXXX") || die "mktemp failed"
 # reach it through R/mnt.
 chown "0:$SUDO_GID" -- "$R"
 chmod 0710 -- "$R"
-mkdir -m 0700 -- "$R/mnt"
-chown "$SUDO_UID:$SUDO_GID" -- "$R/mnt"
-PIDFILE=$R/qemu.pid
+mkdir -m 0700 -- "$R/exports" "$R/exports/work" "$R/exports/sound"
+PIDFILE=$R/provider.pid
 
 # mkdir never follows a symlink; stat (no -L) answers for the entry
 # itself. /run is root's alone, so once this check passes so is the lock
@@ -194,21 +198,22 @@ write_scratch() {
 read_image_as_caller | write_scratch ||
     die "could not read image as the caller"
 
-LOOPDEV=$(losetup -f --show -- "$R/img") || die "losetup failed"
-mount -o nodev,nosuid,noexec -- "$LOOPDEV" "$R/mnt" || die "mount failed"
-for entry in work sound; do
-    [ -d "$R/mnt/$entry" ] && [ ! -L "$R/mnt/$entry" ] ||
-        die "provider missing $entry, or it is a symlink"
-done
-
-ENV_ARGS=(env -i "PATH=/usr/sbin:/usr/bin:/sbin:/bin"
-          "ASTRA_HOSTFS_ROOT=$R/mnt")
+# Only the installed selector parses root's completed regular copy. Isolated
+# Python cannot import caller code. This is the same selector used by image
+# publication, trusted production launch and the root-observer gates.
+window=$(python3 -I "$IMAGE_SELECTOR" "$R/img") || die "invalid system image"
+read -r offset length uuid extra <<< "$window"
+[[ $offset =~ ^[0-9]+$ && $length =~ ^[0-9]+$ ]] && [ -z "$extra" ] || die "invalid system window"
+[[ $uuid =~ ^[a-fA-F0-9-]{36}$ ]] || die "invalid ext4 UUID"
+ENV_ARGS=(env -i "PATH=/usr/sbin:/usr/bin:/sbin:/bin")
 [ -n "$TZ_OVERRIDE" ] && ENV_ARGS+=("TZ=$TZ_OVERRIDE")
 
-echo "ASTRA-QEMU-ROOT-MOUNT $R/mnt"
-# unshare execs setpriv in place, so $! is QEMU's own pid.
-unshare --mount --propagation private -- "${CALLER[@]}" \
-    "${ENV_ARGS[@]}" "$@" &
+echo "ASTRA-QEMU-ROOT-EXPORTS $R/exports"
+"${ENV_ARGS[@]}" "$PROVIDER" --uid "$SUDO_UID" --gid "$SUDO_GID" \
+    --system "$R/img" "$offset" "$length" "$uuid" \
+    --work "$R/exports/work" --sound "$R/exports/sound" \
+    --limits 8388608 8388608 4 10000 4 100663296 8192 67108864 4096 33554432 4096 \
+    --discovery none --seed-sound none -- "$@" &
 child=$!
 echo "$child" > "$PIDFILE"
 chmod 0644 -- "$PIDFILE"
@@ -223,8 +228,9 @@ while kill -0 "$child" 2>/dev/null; do
 done
 set -e
 trap 'exit 143' TERM INT HUP
+child=
 
-umount -- "$R/mnt" || die "cannot unmount"
+[ -z "$(losetup -j "$R/img")" ] || die "provider backing reference retained"
 "${CALLER[@]}" tee -- "$IMAGE" < "$R/img" > /dev/null ||
     die "could not write the image back to the caller"
 echo "ASTRA-QEMU-ROOT-DONE $status"

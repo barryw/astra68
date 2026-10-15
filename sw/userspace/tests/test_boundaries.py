@@ -70,17 +70,35 @@ def test_terminal_does_not_depend_on_supervisor_implementation():
         )
 
 
+def filesystem_private_access(source: str):
+    # Different owning types legitimately use _private_size/_private_flags.
+    # Recognize Menu's declared receivers rather than exempting Interface or
+    # weakening checks of file, directory and filesystem receivers.
+    menus = set(re.findall(r"\bAstra(?:Context)?Menu\s+\*?\s*(\w+)", source))
+    files = set(re.findall(r"\bAstra(?:File|Filesystem|Directory)\s+\*?\s*(\w+)", source))
+    for match in re.finditer(
+        r"(\w+)\s*(?:\.|->)\s*_private_"
+        r"(client|read_at|write_at|file|flags|offset|size|kind|member)\b", source
+    ):
+        receiver, field = match.groups()
+        if receiver in menus and receiver not in files and field in ("size", "flags"):
+            continue
+        return True
+    return False
+
+
 def test_filesystem_private_state_stays_in_vfs():
-    private_fields = re.compile(
-        r"\._private_(?:client|read_at|write_at|file|flags|offset|size|kind|member)\b|"
-        r"->_private_(?:client|read_at|write_at|file|flags|offset|size|kind|member)\b"
-    )
+    assert not filesystem_private_access("AstraMenu *menu; menu->_private_size; menu->_private_flags;")
+    assert not filesystem_private_access("AstraContextMenu *menu; menu->_private_size;")
+    assert filesystem_private_access("AstraFile *file; file->_private_size;")
+    assert filesystem_private_access("AstraMenu *menu; menu->_private_file;")
+    assert filesystem_private_access("AstraMenu *menu; AstraFile *menu; menu->_private_size;")
     for path in production_sources(USERSPACE):
         # system.library's own handle wrappers share these field names.
         if USERSPACE / "vfs" in path.parents or \
                 USERSPACE / "system" in path.parents:
             continue
-        if private_fields.search(path.read_text()):
+        if filesystem_private_access(path.read_text()):
             raise AssertionError(
                 f"{relative(path)}: reaches through filesystem.library private state"
             )
@@ -111,7 +129,7 @@ def test_vfs_backend_dependencies_follow_current_sources():
 
 
 def test_service_startup_protocol_is_shared():
-    services = ("events", "display", "storage", "input", "desktop", "terminal")
+    services = ("events", "display", "hostfs", "input", "desktop", "terminal")
     for service in services:
         path = USERSPACE / "services" / service / "main.c"
         require_absent(
@@ -157,9 +175,6 @@ def require_aligned_service_locks(source: str, names):
 
 def test_vfs_services_use_the_mutex_expected_by_state_wait():
     locks = {
-        "storage": ("state_lock", "mount_lock", "mount_reader_lock",
-                    "cache_lock", "fill_lock", "backend_table_lock",
-                    "backend_scan_lock"),
         "hostfs": ("transport_lock", "state_lock"),
     }
     for name, words in locks.items():
@@ -167,15 +182,13 @@ def test_vfs_services_use_the_mutex_expected_by_state_wait():
         require_vfs_mutex_contract(source)
         require_aligned_service_locks(source, words)
         assert "astra_vfs_state_futex_wait" in source
-    storage = (USERSPACE / "services" / "storage" / "main.c").read_text()
-    assert "astra_mutex_lock(&cache_lock)" in storage
-    assert "astra_mutex_unlock(&cache_lock)" in storage
+    source = (USERSPACE / "services" / "hostfs" / "main.c").read_text()
 
     # The previous semaphore callback and semaphore creation must both fail.
     for invalid in (
-        storage.replace("astra_vfs_state_lock_acquire",
+        source.replace("astra_vfs_state_lock_acquire",
                         "vfs_state_acquire"),
-        storage + "\nastra_rt_semaphore_create(1u, 1u, 0u, &state_lock);\n",
+        source + "\nastra_rt_semaphore_create(1u, 1u, 0u, &state_lock);\n",
     ):
         try:
             require_vfs_mutex_contract(invalid)
@@ -185,8 +198,8 @@ def test_vfs_services_use_the_mutex_expected_by_state_wait():
             raise AssertionError("VFS mutex regression was accepted")
     try:
         require_aligned_service_locks(
-            storage.replace("_Alignas(4) uint32_t mount_lock",
-                            "uint32_t mount_lock"), locks["storage"]
+            source.replace("_Alignas(4) uint32_t state_lock",
+                           "uint32_t state_lock"), locks["hostfs"]
         )
     except AssertionError:
         pass
@@ -196,11 +209,12 @@ def test_vfs_services_use_the_mutex_expected_by_state_wait():
 
 def require_storage_boot_gate(source: str):
     if not re.search(
-        r"if\s*\(block_device\s*==\s*0u\)\s*"
+        r"status\s*=\s*supervisor_volume_open\(startup\);\s*"
+        r"if\s*\(status\s*!=\s*ASTRA_VFS_OK\)\s*"
         r"return\s*\(int\)\(ASTRA_SUPERVISOR_STATUS_TAG\s*\|\s*"
-        r"ASTRA_SUPERVISOR_FAIL_BLOCK_LEASE\)", source
+        r"ASTRA_SUPERVISOR_FAIL_VOLUME\)", source
     ):
-        raise AssertionError("boot must fail when no storage lease exists")
+        raise AssertionError("boot must fail when the system provider cannot be opened")
     if re.search(r"\bpark\s*\(", source):
         raise AssertionError("missing storage must not park silently")
 
@@ -209,37 +223,32 @@ def test_missing_storage_stops_normal_boot():
     source = (USERSPACE / "supervisor" / "src" / "main.c").read_text()
     require_storage_boot_gate(source)
     try:
-        require_storage_boot_gate(source.replace(
-            "ASTRA_SUPERVISOR_FAIL_BLOCK_LEASE", "ASTRA_STATUS_OK"
-        ))
+        require_storage_boot_gate(source.replace("ASTRA_SUPERVISOR_FAIL_VOLUME", "ASTRA_STATUS_OK"))
     except AssertionError:
         pass
     else:
-        raise AssertionError("storage-free boot was accepted")
+        raise AssertionError("provider-free boot was accepted")
 
 
 def require_storage_service_boot_gate(source: str):
     startup = source.split("uint32_t supervisor_loader_start(", 1)[1]
-    storage = startup.split("supervisor_bootstrap_block_close();", 1)[0]
-    gate = "if (status != ASTRA_STATUS_OK)\n        return status;\n    supervisor_bootstrap_block_close();"
-
-    assert "launch_entry(startup, &manifest->entries[0]" in storage
-    assert gate in startup
+    first = startup.split("if (astra_rt_port_create(8u,", 1)[0]
+    assert 'strcmp(manifest->entries[0].path, "/services/hostfs")' in first
+    assert "launch_entry(startup, &manifest->entries[0]" in first
+    assert "if (status != ASTRA_STATUS_OK)\n        return status;" in first
+    assert "supervisor_volume_unmount();" in source.split("static uint32_t release_bootstrap_source", 1)[1].split("static uint32_t launch_entry_attempt", 1)[0]
 
 
 def test_failed_storage_service_stops_normal_boot():
     source = (USERSPACE / "supervisor" / "src" / "loader.c").read_text()
     require_storage_service_boot_gate(source)
-    broken = source.replace(
-        "if (status != ASTRA_STATUS_OK)\n        return status;\n    supervisor_bootstrap_block_close();",
-        "supervisor_bootstrap_block_close();",
-    )
+    broken = source.replace("if (status != ASTRA_STATUS_OK)\n        return status;", "")
     try:
         require_storage_service_boot_gate(broken)
     except AssertionError:
         pass
     else:
-        raise AssertionError("storage launch failure was allowed to continue")
+        raise AssertionError("HostFS launch failure was allowed to continue")
 
 
 def test_program_startup_capability_lookup_is_shared():
@@ -328,15 +337,15 @@ def test_posix_command_uses_the_vfs_path_authority():
 
     for name in ("before", "after"):
         if not re.search(
-            rf"char\s+{name}\s*\[ASTRA_VFS_PATH_MAX\]", text
+            rf"getcwd\(\s*{name}\s*,\s*ASTRA_VFS_PATH_MAX\s*\)", text
         ):
             raise AssertionError(
                 f"{relative(path)}: {name} has a private current-directory "
                 "limit instead of the VFS path authority"
             )
-    if re.search(r"char\s+(?:before|after)\s*\[[0-9]+\]", text):
+    if re.search(r"char\s+(?:before|after)\s*\[[^]]+\]", text):
         raise AssertionError(
-            f"{relative(path)}: numeric current-directory limit returned"
+            f"{relative(path)}: full current-directory scratch returned to the stack"
         )
 
 
@@ -674,8 +683,8 @@ def test_library_contracts_match_exact_readelf_fields():
 
     config = (USERSPACE / "config" / "Makefile").read_text()
     required = (
-        "grep -Fc 'Shared library: [system.library.3]'",
-        "grep -Fc 'Shared library: [filesystem.library.12]'",
+        "grep -Fc 'Shared library: [system.library.4]'",
+        "grep -Fc 'Shared library: [filesystem.library.14]'",
     )
     for contract in required:
         if contract not in config:
@@ -856,7 +865,7 @@ def test_native_gui_programs_use_the_eager_dynamic_loader():
 
 def test_ordinary_native_programs_share_the_dynamic_link_contract():
     bootstrap_exceptions = {
-        USERSPACE / "services" / "storage" / "Makefile",
+        USERSPACE / "services" / "hostfs" / "Makefile",
     }
     service_makefiles = set((USERSPACE / "services").glob("*/Makefile"))
     application_makefiles = set(
@@ -1407,7 +1416,7 @@ def test_program_build_order_is_shared():
         USERSPACE / "commands" / "Makefile",
         USERSPACE / "supervisor" / "Makefile",
         *(USERSPACE / "services" / service / "Makefile" for service in (
-            "events", "display", "storage", "desktop", "input", "terminal"
+            "events", "display", "hostfs", "desktop", "input", "terminal"
         )),
     )
     for path in makefiles:

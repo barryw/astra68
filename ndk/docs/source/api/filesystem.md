@@ -2,6 +2,14 @@
 
 Volumes, assigns, paths, files, unions, process namespaces, and streams (filesystem.library, streams.library).
 
+```{doxygenfile} volume.h
+:project: astra-ndk
+```
+
+```{doxygenfile} volume_abi.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} filesystem_kit.h
 :project: astra-ndk
 ```

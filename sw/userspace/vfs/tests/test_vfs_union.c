@@ -54,6 +54,11 @@ void *astra_runtime_reallocate(void *pointer, size_t size)
     return realloc(pointer, size);
 }
 
+void *astra_runtime_allocate(size_t size)
+{
+    return malloc(size);
+}
+
 void astra_runtime_deallocate(void *pointer)
 {
     free(pointer);
@@ -108,7 +113,9 @@ uint32_t astra_vfs_lookup(AstraVfsClient *client, AstraVfsFile directory, const 
     (void)client;
     (void)directory;
     (void)flags;
-    memset(escape, 0, sizeof(*escape));
+    uint8_t *path_buffer = escape->path;
+    uint32_t path_capacity = escape->capacity;
+    *escape = (AstraVfsEscape){.path = path_buffer, .capacity = path_capacity};
     if (!provider_fixture)
         return ASTRA_VFS_ERR_UNSUPPORTED;
     if (provider_fixture == 3) {

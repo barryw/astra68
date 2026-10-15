@@ -1,7 +1,7 @@
 # Filesystem Kit
 
 Include `astra/filesystem_kit.h` for the complete API. Link against
-`filesystem.library.12` and declare the minimum compatible version in the
+`filesystem.library.14` and declare the minimum compatible version in the
 bundle manifest. The process loader resolves that dependency before `main`;
 applications call the declared `astra_filesystem_*` functions directly.
 
@@ -34,8 +34,22 @@ Path and directory-relative unlink use zero flags for a non-directory, or
 `ASTRA_VFS_UNLINK_DIRECTORY` for an empty directory. The provider checks the
 entry's kind during removal, and paths use the same ordered namespace walk.
 
-Storage protocol 36 carries metadata beside the continuation payload; every
-valid native pathname fits. All in-tree consumers require ABI 12.0.
+Storage protocol 38 is the minimum accepted version. Its fixed 256-byte
+control request references complete paths in the bound transfer area; rename
+and link carry both complete operands there. Providers snapshot these bytes
+before resolution. There is one wire form, including for short paths.
+Components accept 255 UTF-8 bytes and native paths accept 4095 bytes, excluding
+the terminating zero. Longer components or paths return
+`ASTRA_VFS_ERR_NAME_TOO_LONG` (native status 23); POSIX maps it to
+`ENAMETOOLONG`. Metadata and continuation payloads retain full-width volume
+references. Every in-tree consumer requires Filesystem ABI 14.0.
+
+ABI 14.0 adds the native volume catalog, complete owned snapshots, subscriptions
+and exact-incarnation root grants. `VOLUMES` conveys metadata only; distinct
+`VOLUME_READ` and `VOLUME_WRITE` brokers admit public mounted roots. System and
+private roots retain their explicit startup grants. A catalog snapshot publishes
+no partial result when its sequence changes between pages. Close snapshot and
+root owners after use. Network mounting is not part of this implementation.
 
 HostFS keeps the position, directory cursor, append and nonblocking flags in
 one shared provider description. Sequential I/O advances its position;
@@ -47,15 +61,25 @@ handles alive. An in-place exec retains files and open directory descriptors
 unless marked close-on-exec, plus child wait handles and resource accounting.
 Providers without shared descriptions
 return UNSUPPORTED when asked to share one.
+Native file, directory and borrowed-reader objects carry an ownership epoch.
+In a fork child, copied objects return LOST; receivers obtain current owners
+through native receipt adoption. Closing a copy releases its local inherited
+pin; it does not
+close the parent's description. These pins keep borrowed clients alive through
+namespace refresh. POSIX fork adopts its descriptors and cwd through the same
+native mechanism. Multi-threaded fork is refused by the kernel before clone and
+maps to `ENOTSUP` in POSIX.
 
 The process VFS owns current directory identity. Process facades accept relative
 paths against that retained directory; rename does not reopen its old spelling.
 Fork shares the directory description and exec restores it in native VFS state.
+Exec state version 12 owns variable-length root and current-directory strings;
+it preserves the same complete native path bounds across handoff.
 `astra_process_vfs_current_directory` returns its current native slash path or
 NOT_FOUND after removal or escape from its grant. Explicit directory-anchored
 APIs support mutations and readlink; STAT_AT selects final-link following with
 ASTRA_VFS_STAT_FOLLOW. These layout and signature changes require Filesystem
-Kit ABI 12.0 and filesystem.library.12.
+Kit ABI 14.0 and filesystem.library.14.
 
 Path-based `astra_filesystem_*_at` calls take the attached `AstraFilesystem`
 first, then the retained directory and relative path. Ordered provider LOOKUP
@@ -85,8 +109,9 @@ writes succeed without changing size or position. Positioned writes ignore
 the open description's APPEND flag.
 
 STOR 35 introduced `AstraVfsRequest.write_limit` for inline and shared-area
-writes; Host transport `0x00010015` carries the bound in WRITE's input value
-and returns the resulting position there. Configuration version 4 is unchanged.
+writes; Host transport `0x00030000` carries the bound in WRITE's input value
+and returns the resulting position there. Host channel configuration 5 carries
+the kernel-stamped native process identity separately from resource ownership.
 HostFS serializes writes and truncations with its existing namespace lock,
 including writes through independent descriptions. RAMFS uses its filesystem
 lock; ext4 selects position, clamps length and writes under its mount lock.
@@ -94,8 +119,8 @@ The POSIX adapter supplies `RLIMIT_FSIZE`, maps status 22 to `EFBIG`, and sends
 `SIGXFSZ` only when a finite bound refuses all bytes. Limit and signal policy
 remain in POSIX; providers implement the generic bound once.
 
-STOR 36/minimum 36 makes ordered LOOKUP accept a retained directory token.
-Filesystem Kit ABI 12.0 adds the attached namespace as the first argument
+Ordered LOOKUP accepts a retained directory token.
+Filesystem Kit ABI 14.0 retains the attached namespace as the first argument
 of path-based `astra_filesystem_*_at` APIs. Provider continuations retain
 the same 40-link budget and use the shared namespace resolver; POSIX adapters
 call that native contract. Joined-assign opens use the member selected by

@@ -8,7 +8,7 @@ ASTRA_USERSPACE_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 ASTRA_REPOSITORY_ROOT := $(abspath $(ASTRA_USERSPACE_ROOT)/../..)
 
 ASTRA_SYSTEM_LIBRARY := \
-	$(ASTRA_REPOSITORY_ROOT)/sw/userspace/system/build/m68k/libraries/system.library.3
+	$(ASTRA_REPOSITORY_ROOT)/sw/userspace/system/build/m68k/libraries/system.library.4
 ASTRA_COMPILER_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/compiler/build/m68k/libraries/compiler.library.2
 ASTRA_UNWIND_LIBRARY := \
@@ -18,7 +18,7 @@ ASTRA_RUNTIME_LIBRARY := \
 ASTRA_STREAMS_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/streams/build/m68k/libraries/streams.library.1
 ASTRA_FILESYSTEM_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/vfs/build/m68k/libraries/filesystem.library.12
+	$(ASTRA_USERSPACE_ROOT)/vfs/build/m68k/libraries/filesystem.library.14
 ASTRA_LIBC_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/posix/build/m68k/libraries/libc.library.4
 ASTRA_TERMINFO_LIBRARY := \

@@ -46,6 +46,7 @@
 #include "hw/m68k/astra_render_batch.h"
 #include "hw/m68k/astra_render_protocol.h"
 #include "astra68-resolve.h"
+#include "astra_storage_transport.h"
 #include "astra/block.h"
 #include "astra/boot.h"
 #include "astra/audio_host.h"
@@ -54,6 +55,7 @@
 #include "astra/copy_engine.h"
 #include "astra/display.h"
 #include "astra/host.h"
+#include "astra/process.h"
 #include "astra/network.h"
 #include "astra/status.h"
 #include "astra/vfs_service.h"
@@ -535,27 +537,43 @@ typedef struct AstraHostDescription {
     QemuMutex lock;
 } AstraHostDescription;
 
+/* Native identity survives descriptor loss; files and pending shares use
+ * the same retained identity rather than inventing a lost-object ledger. */
+typedef struct AstraHostIdentity {
+    uint64_t mount;
+    uint64_t mount_generation;
+    uint64_t inode;
+    uint16_t flags;
+    uint16_t kind;
+} AstraHostIdentity;
+
 typedef struct AstraHostFile {
     AstraHostDescription *description;
     uint32_t owner;
+    uint32_t process;
     uint32_t session; /* the session it was opened in */
     uint32_t references;
     bool closing;
+    AstraHostIdentity identity;
 } AstraHostFile;
 
 typedef struct AstraHostShare {
     uint64_t token;
     uint32_t owner;
+    uint32_t process;
     uint32_t session;
     AstraHostDescription *description;
+    AstraHostIdentity identity;
 } AstraHostShare;
 
 /* A rooted session: a directory every path of its commands resolves
- * beneath, opened by the claimed filesystem owner (record 3). */
+ * beneath, opened by the claimed filesystem owner (record 4). */
 typedef struct AstraHostSession {
     int root;               /* directory fd: the confinement root */
     uint32_t owner;         /* the claimed owner that opened it */
-    uint32_t volume;
+    uint32_t requester;     /* authenticated grant holder, zero for service roots */
+    uint64_t mount;
+    uint64_t mount_generation;
     uint32_t references;
     uint16_t flags;         /* ASTRA_HOST_FS_SESSION_READ_ONLY */
     bool closing;
@@ -565,6 +583,7 @@ typedef struct AstraHostJob {
     Astra68State *machine;
     uint32_t slot;
     uint32_t owner;
+    uint32_t process;
     uint32_t host_generation;
     uint32_t channel_generation;
     uint32_t physical_buffer;
@@ -572,6 +591,9 @@ typedef struct AstraHostJob {
     uint32_t command_capacity;
     uint32_t position;
     uint64_t started_ns;
+    struct AstraHostJob *next;
+    AstraHostSession *session; /* borrowed while this canonical command executes */
+    uint64_t id;
 } AstraHostJob;
 
 /* A scope the kernel bound to a channel: the provider word (a session of
@@ -586,6 +608,7 @@ typedef struct AstraHostChannelScope {
 
 typedef struct AstraHostChannel {
     uint32_t owner;
+    uint32_t process;
     uint32_t host_generation;
     uint32_t channel_generation;
     uint32_t physical_buffer;
@@ -629,9 +652,18 @@ typedef struct AstraHostState {
     uint64_t fs_directories;
     uint64_t fs_max_descriptors;
     uint64_t fs_max_directories;
-    /* ASTRA_HOSTFS_ROOT, and its subdirectory for each volume. */
-    int root_fd;
-    int volume_fds[ASTRA_HOST_FS_VOLUME_COUNT];
+    uint64_t usage_sequence; /* canonical resource mutations, never reset */
+    uint64_t next_job;
+    AstraHostJob *jobs; /* canonical queued/active commands, under files_lock */
+    /* Private Linux provider authority. Native descriptions remain here. */
+    int provider_control;
+    int provider_path;
+    bool provider_broken;
+    uint64_t provider_epoch;
+    uint64_t provider_control_serial;
+    uint64_t provider_path_serial;
+    QemuMutex provider_control_lock;
+    QemuMutex provider_path_lock;
     uint32_t next_handle;
     uint32_t generation;
     uint32_t request_buffer;
@@ -642,6 +674,8 @@ typedef struct AstraHostState {
     uint32_t owner;
     uint64_t submissions;
     uint64_t commands;
+    uint64_t non_fs_commands;
+    uint64_t non_fs_execution_ns;
     uint64_t execution_ns;
     /* Worst submit-to-completion time of a channel command (writable, so a
      * measurement can start from zero), and how many took over 20 ms. */
@@ -804,7 +838,7 @@ static void astra_display_count_batch(Astra68State *s, uint32_t source,
           scene_bytes < 64u || scene_offset < ASTRA_RENDER_BATCH_ARENA_OFFSET ||
           (uint64_t)(scene_offset - ASTRA_RENDER_BATCH_ARENA_OFFSET) +
               scene_bytes > byte_size)))
-        return false;
+        return;
     ++display->batch_submissions;
     display->batch_commands += count;
     for (uint32_t index = 0; index < count; ++index) {
@@ -2892,6 +2926,23 @@ static void astra_network_execute(Astra68State *s)
 
 #define HOST_FIELD(field) offsetof(AstraHostCommand, field)
 
+static void astra_host_usage_changed_locked(Astra68State *s)
+{
+    if (s->host.usage_sequence != UINT64_MAX) ++s->host.usage_sequence;
+}
+
+static void astra_host_job_session(Astra68State *s, AstraHostJob *job,
+                                    AstraHostSession *session)
+{
+    if (job == NULL) return;
+    qemu_mutex_lock(&s->host.files_lock);
+    if (job->session != session) {
+        job->session = session;
+        astra_host_usage_changed_locked(s);
+    }
+    qemu_mutex_unlock(&s->host.files_lock);
+}
+
 static void astra_host_description_release(AstraHostDescription *description)
 {
     if (description != NULL && g_atomic_int_dec_and_test(&description->references)) {
@@ -2931,6 +2982,7 @@ static void astra_host_release_shares(Astra68State *s, uint32_t owner,
             (session != 0u && share->session != session))
             continue;
         g_hash_table_iter_steal(&iterator);
+        astra_host_usage_changed_locked(s);
         g_ptr_array_add(released, share);
     }
     qemu_mutex_unlock(&s->host.files_lock);
@@ -2960,6 +3012,7 @@ static void astra_host_file_release(Astra68State *s, AstraHostFile *file)
     qemu_mutex_lock(&s->host.files_lock);
     assert(file->references != 0);
     --file->references;
+    astra_host_usage_changed_locked(s);
     free_file = file->references == 0;
     qemu_mutex_unlock(&s->host.files_lock);
     if (free_file) {
@@ -2988,11 +3041,15 @@ static GPtrArray *astra_host_steal_files(Astra68State *s, uint32_t owner,
         if (disconnected) {
             AstraHostFile *lost = g_new0(AstraHostFile, 1);
             lost->owner = file->owner;
+            lost->process = file->process;
             lost->session = file->session;
+            lost->identity = file->identity;
             g_hash_table_insert(s->host.lost_handles, key, lost);
+            astra_host_usage_changed_locked(s);
         }
         file->closing = true;
         g_hash_table_iter_steal(&iterator);
+        astra_host_usage_changed_locked(s);
         g_ptr_array_add(released, file);
     }
     return released;
@@ -3032,6 +3089,7 @@ static AstraHostFile *astra_host_file_acquire(Astra68State *s,
         file = NULL;
     } else {
         ++file->references;
+        astra_host_usage_changed_locked(s);
     }
     qemu_mutex_unlock(&s->host.files_lock);
     return file;
@@ -3091,11 +3149,13 @@ static void astra_host_session_release(Astra68State *s,
     last = --session->references == 0u;
     qemu_mutex_unlock(&s->host.files_lock);
     if (last) {
-        close(session->root);
-        qemu_mutex_lock(&s->host.files_lock);
-        assert(s->host.fs_descriptors != 0u);
-        --s->host.fs_descriptors;
-        qemu_mutex_unlock(&s->host.files_lock);
+        if (session->root >= 0) {
+            close(session->root);
+            qemu_mutex_lock(&s->host.files_lock);
+            assert(s->host.fs_descriptors != 0u);
+            --s->host.fs_descriptors;
+            qemu_mutex_unlock(&s->host.files_lock);
+        }
         g_free(session);
     }
 }
@@ -3130,9 +3190,12 @@ static void astra_host_release_session_files(Astra68State *s, uint32_t id)
         AstraHostFile *lost = g_new0(AstraHostFile, 1);
         lost->owner = file->owner;
         lost->session = file->session;
+        lost->identity = file->identity;
         g_hash_table_insert(s->host.lost_handles, key, lost);
+        astra_host_usage_changed_locked(s);
         file->closing = true;
         g_hash_table_iter_steal(&iterator);
+        astra_host_usage_changed_locked(s);
         g_ptr_array_add(released, file);
     }
     qemu_mutex_unlock(&s->host.files_lock);
@@ -3156,7 +3219,9 @@ typedef struct AstraHostStolenSessions {
  * sweep (Task 4 re-review N1). Session ids are never reused, so the files
  * swept by id afterwards are only these sessions' own. */
 static AstraHostStolenSessions astra_host_steal_sessions(Astra68State *s,
-                                                         uint32_t owner)
+                                                         uint32_t owner,
+                                                         uint64_t mount,
+                                                         uint64_t generation)
 {
     AstraHostStolenSessions stolen = {
         g_ptr_array_new(), g_array_new(false, false, sizeof(uint32_t))
@@ -3172,8 +3237,12 @@ static AstraHostStolenSessions astra_host_steal_sessions(Astra68State *s,
 
         if (owner != 0u && session->owner != owner)
             continue;
+        if (mount != 0u && (session->mount != mount ||
+                           session->mount_generation != generation))
+            continue;
         session->closing = true;
         g_hash_table_iter_steal(&iterator);
+        astra_host_usage_changed_locked(s);
         g_ptr_array_add(stolen.sessions, session);
         g_array_append_val(stolen.ids, id);
     }
@@ -3199,14 +3268,16 @@ static void astra_host_release_sessions(Astra68State *s, uint32_t owner)
     AstraHostStolenSessions stolen;
 
     qemu_mutex_lock(&s->host.files_lock);
-    stolen = astra_host_steal_sessions(s, owner);
+    stolen = astra_host_steal_sessions(s, owner, 0u, 0u);
     qemu_mutex_unlock(&s->host.files_lock);
     astra_host_free_sessions(s, stolen);
 }
 
-static void astra_host_channel_drain(AstraHostChannel *channel)
+static void astra_host_channel_drain(Astra68State *s, AstraHostChannel *channel)
 {
+    qemu_mutex_lock(&s->host.files_lock);
     channel->active = false;
+    qemu_mutex_unlock(&s->host.files_lock);
     channel->completion_pending = false;
     while (channel->jobs != 0) {
         aio_poll(qemu_get_aio_context(), true);
@@ -3216,9 +3287,11 @@ static void astra_host_channel_drain(AstraHostChannel *channel)
     if (channel->audio_fd >= 0)
         close(channel->audio_fd);
     g_free(channel->completed);
+    qemu_mutex_lock(&s->host.files_lock);
     memset(channel, 0, sizeof(*channel));
     channel->remote_desktop_fd = -1;
     channel->audio_fd = -1;
+    qemu_mutex_unlock(&s->host.files_lock);
 }
 
 static void astra_host_refresh_completion(Astra68State *s)
@@ -3239,7 +3312,7 @@ static void astra_host_release_owner(Astra68State *s, uint32_t owner)
     for (uint32_t slot = 0; slot < ASTRA_HOST_CHANNEL_COUNT; ++slot) {
         if (s->host.channels[slot].active &&
             s->host.channels[slot].owner == owner) {
-            astra_host_channel_drain(&s->host.channels[slot]);
+            astra_host_channel_drain(s, &s->host.channels[slot]);
         }
     }
     for (uint32_t slot = 0; slot < ASTRA_AUDIO_MAILBOX_STREAMS; ++slot) {
@@ -3261,9 +3334,12 @@ static void astra_host_release_owner(Astra68State *s, uint32_t owner)
     GHashTableIter iterator;
     gpointer value;
     g_hash_table_iter_init(&iterator, s->host.lost_handles);
-    while (g_hash_table_iter_next(&iterator, NULL, &value))
-        if (((AstraHostFile *)value)->owner == owner)
+    while (g_hash_table_iter_next(&iterator, NULL, &value)) {
+        if (((AstraHostFile *)value)->owner == owner) {
             g_hash_table_iter_remove(&iterator);
+            astra_host_usage_changed_locked(s);
+        }
+    }
     qemu_mutex_unlock(&s->host.files_lock);
     astra_host_release_sessions(s, owner);
     if (s->host.owner == owner) {
@@ -3287,10 +3363,13 @@ static uint32_t astra_host_status_from_errno(int error)
 #endif
         return ASTRA_STATUS_NO_SPACE;
     case ENOTEMPTY: return ASTRA_STATUS_NOT_EMPTY;
-    case EINVAL:
-    case ENAMETOOLONG: return ASTRA_STATUS_INVALID;
+    case EINVAL: return ASTRA_STATUS_INVALID;
+    case ENAMETOOLONG: return ASTRA_STATUS_NAME_TOO_LONG;
     case ELOOP: return ASTRA_STATUS_LOOP;
+    case EAGAIN:
     case EBUSY: return ASTRA_STATUS_BUSY;
+    case ESTALE:
+    case ENODEV: return ASTRA_STATUS_LOST;
     case EBADF: return ASTRA_STATUS_BAD_HANDLE;
     case EMFILE:
     case ENFILE: return ASTRA_STATUS_LIMIT;
@@ -3321,23 +3400,54 @@ static bool astra_host_fs_path_valid(int base, const char *path)
            (base < 0 ? path[0] == '/' : path[0] != '/');
 }
 
-/* One walk owns both absolute and held-directory resolution. */
-static int astra_host_fs_resolve(int root, int base, const char *path,
-                                 unsigned flags, uint32_t links_left,
-                                 AstraResolution *resolved)
+/* Rooted opens/mutations execute once in the confined Linux provider. QEMU
+ * owns the resulting descriptions, positions, shares and data I/O. */
+static int astra_host_provider_path(Astra68State *s, const AstraHostSession *session,
+                                    int root, int base, int second,
+                                    const char *path, const char *path2,
+                                    uint32_t operation, uint32_t flags, uint32_t mode,
+                                    uint32_t resolve, uint32_t links, uint32_t capacity,
+                                    AstraStoragePathReply *reply, int *result)
 {
-    int result;
+    AstraStoragePathRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+        .operation = operation, .epoch = s->host.provider_epoch,
+        .mount = session->mount, .generation = session->mount_generation,
+        .fd_mask = 1u | (base >= 0 ? 2u : 0u) | (second >= 0 ? 4u : 0u),
+        .flags = flags, .mode = mode, .resolve = resolve, .links = links,
+        .capacity = capacity};
+    int fds[3] = {root, base, second};
+    int error;
+    *result = -1;
+    memset(reply, 0, sizeof(*reply));
+    if (strlen(path) >= sizeof(request.path) || strlen(path2) >= sizeof(request.path2))
+        return ENAMETOOLONG;
+    strcpy(request.path, path);
+    strcpy(request.path2, path2);
+    qemu_mutex_lock(&s->host.provider_path_lock);
+    if (qatomic_read(&s->host.provider_broken))
+        error = ENODEV;
+    else if (s->host.provider_path_serial == UINT64_MAX)
+        error = EOVERFLOW;
+    else {
+        request.serial = ++s->host.provider_path_serial;
+        error = astra_storage_path_call(s->host.provider_path, &request, fds, reply, result);
+        if (error != 0)
+            qatomic_set(&s->host.provider_broken, true);
+        else
+            error = reply->error;
+    }
+    qemu_mutex_unlock(&s->host.provider_path_lock);
+    return error;
+}
 
-    if (!astra_host_fs_path_valid(base, path)) {
-        errno = EINVAL;
-        return -1;
-    }
-    result = astra_resolve(root, base < 0 ? root : base, path, flags, links_left, resolved);
-    if (result < 0) {
-        errno = -result;
-        return -1;
-    }
-    return 0;
+static void astra_host_resolution(const AstraStoragePathReply *reply,
+                                  AstraResolution *resolved)
+{
+    *resolved = (AstraResolution){.parent = -1, .trailing = reply->trailing,
+        .missing = reply->missing, .escape = reply->escape,
+        .consumed = reply->consumed, .links = reply->links};
+    memcpy(resolved->leaf, reply->leaf, sizeof(resolved->leaf));
+    memcpy(resolved->continuation, reply->continuation, sizeof(resolved->continuation));
 }
 
 static uint32_t astra_host_path_status(int error,
@@ -3347,23 +3457,105 @@ static uint32_t astra_host_path_status(int error,
            astra_host_status_from_errno(error);
 }
 
-static int astra_host_open_resolved(int root, int base, const char *path,
+static int astra_host_open_resolved(Astra68State *s, const AstraHostSession *session,
+                                    int root, int base, const char *path,
                                     int flags, mode_t mode, unsigned resolve,
                                     uint32_t links_left, AstraResolution *resolved)
 {
+    AstraStoragePathReply reply;
     int fd;
-
     if (!astra_host_fs_path_valid(base, path)) {
         errno = EINVAL;
         return -1;
     }
-    fd = astra_resolve_open_path(root, base < 0 ? root : base, path,
-                                flags, mode, resolve, links_left, resolved);
-    if (fd < 0) {
-        errno = -fd;
+    int error = astra_host_provider_path(s, session, root, base, -1, path, "",
+        ASTRA_STORAGE_PATH_OPEN, flags, mode, resolve, links_left, 0u, &reply, &fd);
+    astra_host_resolution(&reply, resolved);
+    if (error != 0) {
+        errno = error;
         return -1;
     }
     return fd;
+}
+
+static int astra_host_rooted(Astra68State *s, const AstraHostSession *session,
+                             int root, int fd)
+{
+    AstraStoragePathReply reply;
+    int result;
+    return -astra_host_provider_path(s, session, root, fd, -1, "", "",
+        ASTRA_STORAGE_PATH_ROOTED, 0u, 0u, 0u, 0u, 0u, &reply, &result);
+}
+
+static int astra_host_descriptor_path(Astra68State *s, const AstraHostSession *session,
+                                     int root, int fd, char *path,
+                                     uint32_t capacity, uint32_t *length)
+{
+    AstraStoragePathReply reply;
+    int result;
+    int error = astra_host_provider_path(s, session, root, fd, -1, "", "",
+        ASTRA_STORAGE_PATH_NAME, 0u, 0u, 0u, 0u,
+        MIN(capacity, ASTRA_STORAGE_PROVIDER_PATH_MAX), &reply, &result);
+    if (error == 0) {
+        memcpy(path, reply.data, reply.length);
+        *length = reply.length;
+    }
+    return -error;
+}
+
+static int astra_host_provider_endpoint(const char *name)
+{
+    const char *text = g_getenv(name);
+    char *end;
+    struct ucred peer;
+    socklen_t bytes = sizeof(peer);
+    if (text == NULL || text[0] < '0' || text[0] > '9')
+        return -EINVAL;
+    errno = 0;
+    long fd = strtol(text, &end, 10);
+    if (errno != 0 || *end != '\0' || fd < 3 || fd > INT_MAX)
+        return -EINVAL;
+    int type = 0;
+    socklen_t type_bytes = sizeof(type);
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &type_bytes) != 0 ||
+        type != SOCK_SEQPACKET ||
+        getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &bytes) != 0 ||
+        bytes != sizeof(peer) || peer.pid != getppid() || peer.uid != 0u || peer.gid != 0u)
+        return -EACCES;
+    if (fcntl(fd, F_SETFD, FD_CLOEXEC) != 0)
+        return -errno;
+    return (int)fd;
+}
+
+static void astra_host_provider_init(Astra68State *s)
+{
+    const char *control = g_getenv("ASTRA_STORAGE_CONTROL_FD");
+    const char *path = g_getenv("ASTRA_STORAGE_PATH_FD");
+    if (g_getenv("ASTRA_HOSTFS_ROOT") != NULL) {
+        error_report("ASTRA_HOSTFS_ROOT was replaced by the confined storage provider");
+        exit(EXIT_FAILURE);
+    }
+    if (control == NULL && path == NULL)
+        return;
+    int a = astra_host_provider_endpoint("ASTRA_STORAGE_CONTROL_FD");
+    int b = astra_host_provider_endpoint("ASTRA_STORAGE_PATH_FD");
+    if (a < 0 || b < 0 || a == b || getuid() == 0 || geteuid() == 0) {
+        error_report("Astra storage requires distinct inherited provider sockets and an unprivileged QEMU");
+        exit(EXIT_FAILURE);
+    }
+    s->host.provider_control = a;
+    s->host.provider_path = b;
+    AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+        .operation = ASTRA_STORAGE_CONTROL_SNAPSHOT, .serial = ++s->host.provider_control_serial};
+    AstraStorageControlReply reply;
+    int fd;
+    if (astra_storage_control_call(a, &request, -1, &reply, &fd) != 0 || reply.error != 0)
+        goto failed;
+    s->host.provider_epoch = reply.epoch;
+    return;
+failed:
+    error_report("cannot acquire coherent storage provider roots");
+    exit(EXIT_FAILURE);
 }
 
 #define NODE_FIELD(field) (HOST_FIELD(node) + offsetof(AstraHostNode, field))
@@ -3391,7 +3583,7 @@ static void astra_host_put_time(uint8_t *command, size_t field,
  * fields with whole seconds, and no birth time.
  */
 static int astra_host_publish_node(uint8_t *command, int directory,
-                                   const char *path)
+                                   const char *path, uint64_t mount)
 {
     uint32_t valid = 0u;
 #ifdef CONFIG_LINUX
@@ -3425,17 +3617,9 @@ static int astra_host_publish_node(uint8_t *command, int directory,
     stl_be_p(command + NODE_FIELD(uid), sx.stx_uid);
     stl_be_p(command + NODE_FIELD(gid), sx.stx_gid);
     stl_be_p(command + NODE_FIELD(block_size), sx.stx_blksize);
-    stl_be_p(command + NODE_FIELD(device_hi), sx.stx_dev_major);
-    stl_be_p(command + NODE_FIELD(device_lo), sx.stx_dev_minor);
     astra_host_put64(command, NODE_FIELD(inode_hi), sx.stx_ino);
     astra_host_put64(command, NODE_FIELD(size_hi), sx.stx_size);
     astra_host_put64(command, NODE_FIELD(blocks_hi), sx.stx_blocks);
-# ifdef STATX_MNT_ID
-    if ((sx.stx_mask & STATX_MNT_ID) != 0u) {
-        valid |= ASTRA_HOST_NODE_MOUNT;
-        astra_host_put64(command, NODE_FIELD(mount_hi), sx.stx_mnt_id);
-    }
-# endif
     astra_host_put_time(command, NODE_FIELD(atime), sx.stx_atime.tv_sec,
                         sx.stx_atime.tv_nsec);
     astra_host_put_time(command, NODE_FIELD(mtime), sx.stx_mtime.tv_sec,
@@ -3463,7 +3647,6 @@ static int astra_host_publish_node(uint8_t *command, int directory,
     stl_be_p(command + NODE_FIELD(uid), st.st_uid);
     stl_be_p(command + NODE_FIELD(gid), st.st_gid);
     stl_be_p(command + NODE_FIELD(block_size), st.st_blksize);
-    astra_host_put64(command, NODE_FIELD(device_hi), (uint64_t)st.st_dev);
     astra_host_put64(command, NODE_FIELD(inode_hi), st.st_ino);
     astra_host_put64(command, NODE_FIELD(size_hi), st.st_size);
     astra_host_put64(command, NODE_FIELD(blocks_hi), st.st_blocks);
@@ -3471,6 +3654,11 @@ static int astra_host_publish_node(uint8_t *command, int directory,
     astra_host_put_time(command, NODE_FIELD(mtime), st.st_mtime, 0u);
     astra_host_put_time(command, NODE_FIELD(ctime), st.st_ctime, 0u);
 #endif
+    /* Public identity is the native mount, never a recycled Linux loop
+     * device number or private namespace mount id. */
+    valid |= ASTRA_HOST_NODE_DEVICE | ASTRA_HOST_NODE_MOUNT;
+    astra_host_put64(command, NODE_FIELD(device_hi), mount);
+    astra_host_put64(command, NODE_FIELD(mount_hi), mount);
     stl_be_p(command + NODE_FIELD(valid), valid);
     return 0;
 }
@@ -3486,7 +3674,19 @@ static uint32_t astra_host_insert_file_locked(Astra68State *s,
         handle = s->host.next_handle;
     } while (g_hash_table_contains(s->host.files, GUINT_TO_POINTER(handle)) ||
              g_hash_table_contains(s->host.lost_handles, GUINT_TO_POINTER(handle)));
+    if (file->description != NULL && file->identity.mount == 0u) {
+        AstraHostSession *session = g_hash_table_lookup(s->host.sessions, GUINT_TO_POINTER(file->session));
+        struct stat info;
+        if (session != NULL) {
+            file->identity.mount = session->mount;
+            file->identity.mount_generation = session->mount_generation;
+        }
+        file->identity.flags = file->description->flags;
+        file->identity.kind = file->description->directory != NULL ? ASTRA_VOLUME_USAGE_DIRECTORY : ASTRA_VOLUME_USAGE_FILE;
+        if (fstat(file->description->fd, &info) == 0) file->identity.inode = info.st_ino;
+    }
     g_hash_table_insert(s->host.files, GUINT_TO_POINTER(handle), file);
+    astra_host_usage_changed_locked(s);
     return handle;
 }
 
@@ -3545,7 +3745,7 @@ static bool astra_host_admit(Astra68State *s, uint32_t owner,
 /* Inserts an open file into `session`, or answers 0 and closes it when
  * the session closed while the open ran: a session's handles go with it,
  * including one whose open was in flight at the close (review M1). */
-static uint32_t astra_host_insert_file(Astra68State *s, uint32_t owner,
+static uint32_t astra_host_insert_file(Astra68State *s, uint32_t owner, uint32_t process,
                                        AstraHostSession *session,
                                        uint32_t session_id, int fd,
                                        DIR *directory, uint16_t flags)
@@ -3562,6 +3762,7 @@ static uint32_t astra_host_insert_file(Astra68State *s, uint32_t owner,
     file->description->flags = flags;
     qemu_mutex_init(&file->description->lock);
     file->owner = owner;
+    file->process = process;
     file->session = session_id;
     file->references = 1;
     qemu_mutex_lock(&s->host.files_lock);
@@ -3590,6 +3791,7 @@ static bool astra_host_close_file(Astra68State *s, uint32_t owner,
     }
     file->closing = true;
     g_hash_table_steal(s->host.files, GUINT_TO_POINTER(handle));
+    astra_host_usage_changed_locked(s);
     qemu_mutex_unlock(&s->host.files_lock);
     astra_host_file_release(s, file);
     return true;
@@ -3633,15 +3835,18 @@ static uint32_t astra_host_share_file(Astra68State *s, AstraHostFile *file,
         g_free(share);
         return ASTRA_STATUS_BUSY;
     }
+    share->identity = file != NULL ? file->identity : lost->identity;
+    share->process = file != NULL ? file->process : lost->process;
     if (share->description != NULL)
         g_atomic_int_inc(&share->description->references);
     g_hash_table_insert(s->host.shares, &share->token, share);
+    astra_host_usage_changed_locked(s);
     *token = share->token;
     qemu_mutex_unlock(&s->host.files_lock);
     return ASTRA_STATUS_OK;
 }
 
-static uint32_t astra_host_adopt_file(Astra68State *s, uint32_t owner,
+static uint32_t astra_host_adopt_file(Astra68State *s, uint32_t owner, uint32_t process,
                                       AstraHostSession *session,
                                       uint32_t session_id, uint64_t token,
                                       bool discard, uint32_t scope_files,
@@ -3667,16 +3872,21 @@ static uint32_t astra_host_adopt_file(Astra68State *s, uint32_t owner,
         return ASTRA_STATUS_LIMIT;
     }
     g_hash_table_steal(s->host.shares, &token);
+    astra_host_usage_changed_locked(s);
     if (!discard) {
         file = g_new0(AstraHostFile, 1);
         file->owner = owner;
+        file->process = process;
         file->session = session_id;
         file->references = 1;
         file->description = share->description;
+        file->identity = share->identity;
         *handle = astra_host_insert_file_locked(s, file);
         if (share->description == NULL) {
             g_hash_table_steal(s->host.files, GUINT_TO_POINTER(*handle));
+            astra_host_usage_changed_locked(s);
             g_hash_table_insert(s->host.lost_handles, GUINT_TO_POINTER(*handle), file);
+            astra_host_usage_changed_locked(s);
         }
     }
     qemu_mutex_unlock(&s->host.files_lock);
@@ -3747,7 +3957,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                                   AstraHostChannel *channel,
                                   uint8_t *command, uint32_t physical,
                                   uint32_t bytes, uint32_t command_bytes,
-                                  uint32_t expected_generation);
+                                  uint32_t expected_generation, AstraHostJob *job);
 
 static void astra_host_metrics_put(uint8_t *snapshot, uint32_t metric,
                                    uint64_t value)
@@ -4234,18 +4444,425 @@ done:
     stl_be_p(command + HOST_FIELD(status), status);
 }
 
+static void astra_host_reconcile_mounts(Astra68State *s);
+static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
+    AstraHostChannel *channel, uint8_t *data);
+
+static int astra_host_storage_control(Astra68State *s, AstraStorageControlRequest *request,
+    int input, AstraStorageControlReply *reply, int *output)
+{
+    int error;
+    *output = -1;
+    qemu_mutex_lock(&s->host.provider_control_lock);
+    if (qatomic_read(&s->host.provider_broken) || s->host.provider_control < 0)
+        error = ENODEV;
+    else if (s->host.provider_control_serial == UINT64_MAX)
+        error = EOVERFLOW;
+    else {
+        request->serial = ++s->host.provider_control_serial;
+        error = astra_storage_control_call(s->host.provider_control, request, input, reply, output);
+        if (error != 0) qatomic_set(&s->host.provider_broken, true);
+        else error = reply->error;
+    }
+    qemu_mutex_unlock(&s->host.provider_control_lock);
+    return error;
+}
+
+static int astra_host_provider_root(Astra68State *s, uint64_t mount, uint64_t generation);
+
+typedef struct AstraHostUsageObject {
+    AstraHostIdentity identity;
+    uint64_t handle;
+    uint32_t process;
+    uint32_t kind;
+    uint32_t flags;
+    int fd;
+    const AstraStorageRecord *image;
+} AstraHostUsageObject;
+
+static int astra_host_usage_compare(const void *left, const void *right)
+{
+    const AstraHostUsageObject *a = left, *b = right;
+    return astra_volume_usage_key_compare(a->kind, a->handle, a->process,
+        b->kind, b->handle, b->process);
+}
+
+static const AstraStorageRecord *astra_host_usage_mount(const GArray *catalog,
+    uint64_t mount, uint64_t generation)
+{
+    for (guint at = 0u; at < catalog->len; ++at) {
+        const AstraStorageRecord *row = &g_array_index(catalog, AstraStorageRecord, at);
+        if (row->id == mount && row->generation == generation &&
+            (row->kind == ASTRA_VOLUME_MOUNT || row->kind == ASTRA_VOLUME_BINDING))
+            return row;
+    }
+    return NULL;
+}
+
+/* Names derive from retained descriptors through the canonical privileged
+ * resolver. No application pathname and no Linux descriptor escapes this port. */
+static void astra_host_usage_name(Astra68State *s, const GArray *catalog,
+    const AstraHostUsageObject *object, AstraVolumeUsageRecord *row)
+{
+    const AstraStorageRecord *mount = astra_host_usage_mount(catalog,
+        row->volume.id, row->volume.generation);
+    row->flags |= ASTRA_VOLUME_USAGE_UNNAMED;
+    if (mount == NULL || (mount->state != ASTRA_VOLUME_MOUNTED && mount->state != ASTRA_VOLUME_QUIESCING)) {
+        row->flags |= ASTRA_VOLUME_USAGE_LOST;
+        return;
+    }
+    int fd = object->fd, image_fd = -1;
+    if (object->image != NULL) {
+        AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+            .operation = ASTRA_STORAGE_CONTROL_BACKING, .epoch = row->volume.epoch,
+            .target = object->image->id, .generation = object->image->generation};
+        AstraStorageControlReply reply;
+        if (astra_host_storage_control(s, &request, -1, &reply, &image_fd) != 0) return;
+        fd = image_fd;
+    }
+    if (fd < 0) return;
+    int root = astra_host_provider_root(s, row->volume.id, row->volume.generation);
+    if (root >= 0) {
+        char relative[ASTRA_HOST_FS_PATH_MAX];
+        uint32_t length = 0u;
+        AstraHostSession authority = {.mount = row->volume.id, .mount_generation = row->volume.generation};
+        int status = astra_host_descriptor_path(s, &authority, root, fd, relative, sizeof(relative), &length);
+        size_t prefix = strlen(mount->name);
+        if (status == 0 && prefix != 0u && length != 0u && relative[0] == '/' &&
+            prefix + length < sizeof(row->path)) {
+            memcpy(row->path, mount->name, prefix);
+            memcpy(row->path + prefix, relative, length);
+            row->path_length = prefix + length;
+            row->path[row->path_length] = '\0';
+            if (g_utf8_validate(row->path, row->path_length, NULL))
+                row->flags &= ~ASTRA_VOLUME_USAGE_UNNAMED;
+            else {
+                row->path_length = 0u; row->path[0] = '\0';
+                row->flags |= ASTRA_VOLUME_USAGE_INVALID_NAME;
+            }
+        } else if (status == -ERANGE || status == -ENAMETOOLONG ||
+            (status == 0 && prefix + length >= sizeof(row->path)))
+            row->flags |= ASTRA_VOLUME_USAGE_INVALID_NAME;
+        close(root);
+    }
+    if (image_fd >= 0) close(image_fd);
+}
+
+/* A page samples the existing resource objects while their canonical lock
+ * is held. Separate provider and resource generations reject changed tails. */
+static uint32_t astra_host_volume_usage(Astra68State *s, uint32_t owner,
+    AstraHostChannel *channel, uint8_t *wire)
+{
+    if (channel == NULL || !channel->provider || channel->bound || owner == 0u ||
+        owner != qatomic_read(&s->host.fs_owner)) return ASTRA_STATUS_ACCESS;
+    AstraVolumeUsageQuery query = {
+        .version = ldl_be_p(wire), .size = ldl_be_p(wire + 4u),
+        .volume = {ldq_be_p(wire + 8u), ldq_be_p(wire + 16u), ldq_be_p(wire + 24u)},
+        .sequence = ldq_be_p(wire + 32u), .catalog_sequence = ldq_be_p(wire + 40u),
+        .after = ldq_be_p(wire + 48u), .after_kind = ldl_be_p(wire + 56u),
+        .after_process = ldl_be_p(wire + 60u)};
+    if (query.version != ASTRA_VOLUME_USAGE_VERSION || query.size != sizeof(query) ||
+        ((query.volume.id == 0u) != (query.volume.generation == 0u)) ||
+        (query.volume.id != 0u && query.volume.epoch == 0u) ||
+        ((query.sequence == 0u) != (query.catalog_sequence == 0u)) ||
+        ((query.after == 0u) != (query.after_kind == 0u)) ||
+        (query.after == 0u && query.after_process != 0u) ||
+        query.after_kind > ASTRA_VOLUME_USAGE_IMAGE ||
+        (query.volume.epoch == 0u && query.sequence != 0u) ||
+        (query.sequence == 0u && query.after != 0u)) return ASTRA_STATUS_INVALID;
+    if (query.volume.epoch != 0u && query.volume.epoch != s->host.provider_epoch)
+        return ASTRA_STATUS_LOST;
+    GArray *catalog = g_array_new(false, false, sizeof(AstraStorageRecord));
+    GArray *objects = g_array_new(false, false, sizeof(AstraHostUsageObject));
+    AstraVolumeUsagePage *page = g_new0(AstraVolumeUsagePage, 1);
+    uint32_t status = ASTRA_STATUS_OK;
+    int output = -1, error = 0;
+    uint64_t catalog_sequence = 0u;
+    qemu_mutex_lock(&s->host.namespace_lock);
+    AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+        .operation = ASTRA_STORAGE_CONTROL_SNAPSHOT, .epoch = s->host.provider_epoch};
+    AstraStorageControlReply response;
+    do {
+        error = astra_host_storage_control(s, &request, -1, &response, &output);
+        if (output >= 0) { close(output); output = -1; }
+        if (error != 0) goto out;
+        catalog_sequence = response.sequence;
+        g_array_append_vals(catalog, response.records, response.count);
+        request.sequence = response.sequence; request.after = response.next;
+    } while (request.after != 0u);
+    if (query.catalog_sequence != 0u && query.catalog_sequence != catalog_sequence) {
+        error = EBUSY; goto out;
+    }
+    qemu_mutex_lock(&s->host.files_lock);
+    if (s->host.usage_sequence == UINT64_MAX) { status = ASTRA_STATUS_LIMIT; goto unlocked; }
+    if (query.sequence != 0u && query.sequence != s->host.usage_sequence) {
+        status = ASTRA_STATUS_BUSY; goto unlocked;
+    }
+    GHashTable *tables[] = {s->host.files, s->host.lost_handles};
+    GHashTableIter iterator;
+    gpointer key, value;
+    for (size_t at = 0u; at < G_N_ELEMENTS(tables); ++at) {
+        g_hash_table_iter_init(&iterator, tables[at]);
+        while (g_hash_table_iter_next(&iterator, &key, &value)) {
+            AstraHostFile *file = value;
+            AstraHostUsageObject object = {.identity = file->identity,
+                .handle = GPOINTER_TO_UINT(key), .process = file->process,
+                .kind = file->identity.kind, .fd = file->description != NULL ? file->description->fd : -1,
+                .flags = at != 0u ? ASTRA_VOLUME_USAGE_LOST | ASTRA_VOLUME_USAGE_UNNAMED :
+                    file->references > 1u ? ASTRA_VOLUME_USAGE_ACTIVE : 0u};
+            g_array_append_val(objects, object);
+        }
+    }
+    g_hash_table_iter_init(&iterator, s->host.shares);
+    while (g_hash_table_iter_next(&iterator, NULL, &value)) {
+        AstraHostShare *share = value;
+        AstraHostUsageObject object = {.identity = share->identity, .handle = share->token,
+            .process = share->process, .kind = ASTRA_VOLUME_USAGE_SHARE,
+            .fd = share->description != NULL ? share->description->fd : -1,
+            .flags = share->description == NULL ? ASTRA_VOLUME_USAGE_LOST | ASTRA_VOLUME_USAGE_UNNAMED : 0u};
+        g_array_append_val(objects, object);
+    }
+    g_hash_table_iter_init(&iterator, s->host.sessions);
+    while (g_hash_table_iter_next(&iterator, &key, &value)) {
+        AstraHostSession *session = value;
+        if (session->root < 0) continue;
+        struct stat info;
+        AstraHostUsageObject object = {.identity = {.mount = session->mount,
+            .mount_generation = session->mount_generation,
+            .flags = ASTRA_VFS_OPEN_READ | ((session->flags & ASTRA_HOST_FS_SESSION_READ_ONLY) == 0u ? ASTRA_VFS_OPEN_WRITE : 0u)},
+            .handle = GPOINTER_TO_UINT(key), .process = session->requester,
+            .kind = ASTRA_VOLUME_USAGE_ROOT, .fd = session->root};
+        if (fstat(session->root, &info) == 0) object.identity.inode = info.st_ino;
+        g_array_append_val(objects, object);
+    }
+    for (AstraHostJob *job = s->host.jobs; job != NULL; job = job->next) {
+        if (job->session == NULL) continue;
+        AstraHostUsageObject object = {.identity = {.mount = job->session->mount,
+            .mount_generation = job->session->mount_generation}, .handle = job->id,
+            .process = job->process, .kind = ASTRA_VOLUME_USAGE_OPERATION, .fd = -1,
+            .flags = ASTRA_VOLUME_USAGE_ACTIVE | ASTRA_VOLUME_USAGE_UNNAMED};
+        if (job->session->closing) object.flags |= ASTRA_VOLUME_USAGE_LOST | ASTRA_VOLUME_USAGE_CLEANUP_PENDING;
+        g_array_append_val(objects, object);
+    }
+    for (guint at = 0u; at < catalog->len; ++at) {
+        const AstraStorageRecord *image = &g_array_index(catalog, AstraStorageRecord, at);
+        /* Loss publication precedes backing/probe/lease cleanup. The canonical
+         * provider removes this object only after its real resources retire. */
+        if (image->kind != ASTRA_VOLUME_SOURCE || image->origin != ASTRA_VOLUME_ORIGIN_IMAGE) continue;
+        AstraHostUsageObject object = {.identity = {.mount = image->parent,
+            .mount_generation = image->parent_generation, .inode = image->backing_object,
+            .flags = ASTRA_VFS_OPEN_READ}, .handle = image->id, .kind = ASTRA_VOLUME_USAGE_IMAGE,
+            .fd = -1, .image = image,
+            .flags = image->state == ASTRA_VOLUME_LOST ? ASTRA_VOLUME_USAGE_LOST | ASTRA_VOLUME_USAGE_CLEANUP_PENDING :
+                (image->flags & ASTRA_VOLUME_CLEANUP_PENDING) != 0u ? ASTRA_VOLUME_USAGE_CLEANUP_PENDING : 0u};
+        g_array_append_val(objects, object);
+    }
+    if (query.volume.id != 0u && astra_host_usage_mount(catalog,
+            query.volume.id, query.volume.generation) == NULL) {
+        bool retained = false;
+        for (guint at = 0u; at < objects->len; ++at) {
+            const AstraHostUsageObject *object = &g_array_index(objects, AstraHostUsageObject, at);
+            if (object->identity.mount == query.volume.id && object->identity.mount_generation == query.volume.generation) {
+                retained = true; break;
+            }
+        }
+        /* Retained lost objects remain inspectable by their exact identity.
+         * An unknown/stale mount is never reported as a successful empty set. */
+        if (!retained) { status = ASTRA_STATUS_LOST; goto unlocked; }
+    }
+    g_array_sort(objects, astra_host_usage_compare);
+    page->version = ASTRA_VOLUME_USAGE_VERSION; page->size = sizeof(*page);
+    page->volume = (AstraVolumeReference){s->host.provider_epoch, query.volume.id, query.volume.generation};
+    page->sequence = s->host.usage_sequence; page->catalog_sequence = catalog_sequence;
+    for (guint at = 0u; at < objects->len; ++at) {
+        const AstraHostUsageObject *object = &g_array_index(objects, AstraHostUsageObject, at);
+        if (object->identity.mount == 0u || object->identity.mount_generation == 0u ||
+            (query.volume.id != 0u && (object->identity.mount != query.volume.id ||
+                object->identity.mount_generation != query.volume.generation)) ||
+            astra_volume_usage_key_compare(object->kind, object->handle, object->process,
+                query.after_kind, query.after, query.after_process) <= 0) continue;
+        if (page->count == ASTRA_VOLUME_USAGE_PAGE_RECORDS) {
+            page->next = page->records[page->count - 1u].handle;
+            page->next_kind = page->records[page->count - 1u].kind;
+            page->next_process = page->records[page->count - 1u].process;
+            break;
+        }
+        AstraVolumeUsageRecord *row = &page->records[page->count++];
+        row->volume = (AstraVolumeReference){s->host.provider_epoch, object->identity.mount, object->identity.mount_generation};
+        row->handle = object->handle; row->inode = object->identity.inode;
+        row->process = object->process; row->kind = object->kind; row->flags = object->flags;
+        row->rights = ((object->identity.flags & ASTRA_VFS_OPEN_READ) != 0u ? ASTRA_RIGHT_READ : 0u) |
+            ((object->identity.flags & ASTRA_VFS_OPEN_WRITE) != 0u ? ASTRA_RIGHT_WRITE : 0u);
+        astra_host_usage_name(s, catalog, object, row);
+    }
+unlocked:
+    qemu_mutex_unlock(&s->host.files_lock);
+    if (status == ASTRA_STATUS_OK) {
+        request.sequence = 0u; request.after = 0u;
+        error = astra_host_storage_control(s, &request, -1, &response, &output);
+        if (output >= 0) { close(output); output = -1; }
+        if (error == 0 && response.sequence != catalog_sequence) error = EBUSY;
+    }
+out:
+    qemu_mutex_unlock(&s->host.namespace_lock);
+    if (error != 0) status = astra_host_status_from_errno(error);
+    if (status == ASTRA_STATUS_OK) {
+        memset(wire, 0, sizeof(*page));
+#define USAGE32(field) stl_be_p(wire + offsetof(AstraVolumeUsagePage, field), page->field)
+#define USAGE64(field) stq_be_p(wire + offsetof(AstraVolumeUsagePage, field), page->field)
+        USAGE32(version); USAGE32(size); USAGE64(volume.epoch); USAGE64(volume.id);
+        USAGE64(volume.generation); USAGE64(sequence); USAGE64(catalog_sequence);
+        USAGE64(next); USAGE32(next_kind); USAGE32(count); USAGE32(next_process);
+#undef USAGE32
+#undef USAGE64
+        for (uint32_t at = 0u; at < page->count; ++at) {
+            const AstraVolumeUsageRecord *record = &page->records[at];
+            uint8_t *row = wire + offsetof(AstraVolumeUsagePage, records) + at * sizeof(*record);
+#define ROW32(field) stl_be_p(row + offsetof(AstraVolumeUsageRecord, field), record->field)
+#define ROW64(field) stq_be_p(row + offsetof(AstraVolumeUsageRecord, field), record->field)
+            ROW64(volume.epoch); ROW64(volume.id); ROW64(volume.generation); ROW64(handle); ROW64(inode);
+            ROW32(process); ROW32(kind); ROW32(rights); ROW32(flags); ROW32(path_length);
+#undef ROW32
+#undef ROW64
+            memcpy(row + offsetof(AstraVolumeUsageRecord, path), record->path, record->path_length);
+        }
+    }
+    g_free(page); g_array_free(objects, true); g_array_free(catalog, true);
+    return status;
+}
+
+/* Public metadata is separate from rooted data authority and administrator
+ * control. One snapshot comes from the provider's canonical catalog. */
+static void astra_host_execute_volumes(Astra68State *s, uint32_t owner,
+                                       AstraHostChannel *channel, uint8_t *command,
+                                       uint32_t physical, uint32_t bytes,
+                                       uint32_t command_bytes, uint32_t generation)
+{
+    uint32_t status = ASTRA_STATUS_INVALID;
+    stl_be_p(command + HOST_FIELD(result_length), 0u);
+    stl_be_p(command + HOST_FIELD(result_value), 0u);
+    if (ldl_be_p(command + HOST_FIELD(size)) != ASTRA_HOST_COMMAND_SIZE ||
+        lduw_be_p(command + HOST_FIELD(version)) != ASTRA_HOST_COMMAND_VERSION ||
+        ldl_be_p(command + HOST_FIELD(generation)) != generation ||
+        (lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_CATALOG &&
+         lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_CONTROL &&
+         lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_USAGE &&
+         lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_HOLDERS_CHANGED) ||
+        lduw_be_p(command + HOST_FIELD(flags)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(handle)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(session)) != 0u ||
+        astra_host_get64(command, HOST_FIELD(offset_hi)) != 0u ||
+        astra_host_get64(command, HOST_FIELD(value_hi)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(path_offset)) != 0u ||
+        lduw_be_p(command + HOST_FIELD(path_length)) != 0u ||
+        lduw_be_p(command + HOST_FIELD(path2_length)) != 0u)
+        goto done;
+    for (size_t at = HOST_FIELD(reserved); at < ASTRA_HOST_COMMAND_SIZE; ++at)
+        if (command[at] != 0u)
+            goto done;
+    if (lduw_be_p(command + HOST_FIELD(operation)) == ASTRA_HOST_VOLUME_HOLDERS_CHANGED) {
+        if (channel == NULL || !channel->provider || channel->bound || owner == 0u ||
+            owner != qatomic_read(&s->host.fs_owner)) { status = ASTRA_STATUS_ACCESS; goto done; }
+        if (ldl_be_p(command + HOST_FIELD(data_offset)) != 0u ||
+            ldl_be_p(command + HOST_FIELD(data_length)) != 0u ||
+            ldl_be_p(command + HOST_FIELD(data_capacity)) != 0u) goto done;
+        qemu_mutex_lock(&s->host.files_lock);
+        status = s->host.usage_sequence == UINT64_MAX ? ASTRA_STATUS_LIMIT : ASTRA_STATUS_OK;
+        if (status == ASTRA_STATUS_OK) astra_host_usage_changed_locked(s);
+        qemu_mutex_unlock(&s->host.files_lock);
+        goto done;
+    }
+    if (lduw_be_p(command + HOST_FIELD(operation)) == ASTRA_HOST_VOLUME_USAGE) {
+        if (ldl_be_p(command + HOST_FIELD(data_length)) != sizeof(AstraVolumeUsageQuery) ||
+            ldl_be_p(command + HOST_FIELD(data_capacity)) < sizeof(AstraVolumeUsagePage)) goto done;
+        uint8_t *data = astra_host_command_data(s, physical, bytes, command_bytes, command,
+            sizeof(AstraVolumeUsagePage));
+        if (data == NULL) goto done;
+        status = astra_host_volume_usage(s, owner, channel, data);
+        if (status == ASTRA_STATUS_OK) stl_be_p(command + HOST_FIELD(result_length), sizeof(AstraVolumeUsagePage));
+        goto done;
+    }
+    if (lduw_be_p(command + HOST_FIELD(operation)) == ASTRA_HOST_VOLUME_CONTROL) {
+        if (ldl_be_p(command + HOST_FIELD(data_length)) != sizeof(AstraHostVolumeControl) ||
+            ldl_be_p(command + HOST_FIELD(data_capacity)) < sizeof(AstraVolumeReference)) goto done;
+        uint8_t *data = astra_host_command_data(s, physical, bytes, command_bytes,
+            command, sizeof(AstraHostVolumeControl));
+        if (data == NULL) goto done;
+        status = astra_host_volume_control(s, owner, channel, data);
+        if (status == ASTRA_STATUS_OK)
+            stl_be_p(command + HOST_FIELD(result_length), sizeof(AstraVolumeReference));
+        goto done;
+    }
+    if (ldl_be_p(command + HOST_FIELD(data_length)) != sizeof(AstraVolumeCatalogQuery) ||
+        ldl_be_p(command + HOST_FIELD(data_capacity)) < sizeof(AstraVolumeCatalogPage)) goto done;
+    uint8_t *data = astra_host_command_data(s, physical, bytes, command_bytes,
+        command, sizeof(AstraVolumeCatalogPage));
+    if (data == NULL || ldl_be_p(data) != ASTRA_VOLUME_CATALOG_VERSION ||
+        ldl_be_p(data + 4u) != sizeof(AstraVolumeCatalogQuery))
+        goto done;
+    AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+        .operation = ASTRA_STORAGE_CONTROL_SNAPSHOT,
+        .epoch = ldq_be_p(data + offsetof(AstraVolumeCatalogQuery, epoch)),
+        .sequence = ldq_be_p(data + offsetof(AstraVolumeCatalogQuery, sequence)),
+        .after = ldq_be_p(data + offsetof(AstraVolumeCatalogQuery, after))};
+    if ((request.epoch == 0u && (request.sequence != 0u || request.after != 0u)) ||
+        (request.sequence == 0u && request.after != 0u))
+        goto done;
+    AstraStorageControlReply reply;
+    int fd = -1, error;
+    error = astra_host_storage_control(s, &request, -1, &reply, &fd);
+    astra_host_reconcile_mounts(s);
+    if (error != 0) {
+        status = astra_host_status_from_errno(error);
+        goto done;
+    }
+    memset(data, 0, sizeof(AstraVolumeCatalogPage));
+    stl_be_p(data, ASTRA_VOLUME_CATALOG_VERSION);
+    stl_be_p(data + 4u, sizeof(AstraVolumeCatalogPage));
+    stq_be_p(data + offsetof(AstraVolumeCatalogPage, epoch), reply.epoch);
+    stq_be_p(data + offsetof(AstraVolumeCatalogPage, sequence), reply.sequence);
+    stq_be_p(data + offsetof(AstraVolumeCatalogPage, next), reply.next);
+    stl_be_p(data + offsetof(AstraVolumeCatalogPage, count), reply.count);
+    for (uint32_t at = 0u; at < reply.count; ++at) {
+        const AstraStorageRecord *record = &reply.records[at];
+        uint8_t *row = data + offsetof(AstraVolumeCatalogPage, records) + at * sizeof(AstraVolumeRecord);
+#define VOLUME64(field) stq_be_p(row + offsetof(AstraVolumeRecord, field), record->field)
+#define VOLUME32(field) stl_be_p(row + offsetof(AstraVolumeRecord, field), record->field)
+        VOLUME64(id); VOLUME64(generation); VOLUME64(parent); VOLUME64(parent_generation);
+        VOLUME64(byte_limit); VOLUME64(inode_limit); VOLUME64(backing_object);
+        VOLUME32(kind); VOLUME32(class_id); VOLUME32(state); VOLUME32(format);
+        VOLUME32(origin); VOLUME32(flags);
+#undef VOLUME64
+#undef VOLUME32
+        stl_be_p(row + offsetof(AstraVolumeRecord, status), astra_host_status_from_errno(record->error));
+        memcpy(row + offsetof(AstraVolumeRecord, name), record->name, sizeof(record->name));
+        memcpy(row + offsetof(AstraVolumeRecord, uuid), record->uuid, sizeof(record->uuid));
+        memcpy(row + offsetof(AstraVolumeRecord, label), record->label, sizeof(record->label));
+    }
+    stl_be_p(command + HOST_FIELD(result_length), sizeof(AstraVolumeCatalogPage));
+    status = ASTRA_STATUS_OK;
+done:
+    stl_be_p(command + HOST_FIELD(status), status);
+}
+
 static void astra_host_execute_command(Astra68State *s, uint32_t owner,
                                        AstraHostChannel *channel,
                                        uint8_t *command,
                                        uint32_t physical, uint32_t bytes,
                                        uint32_t command_bytes,
-                                       uint32_t expected_generation)
+                                       uint32_t expected_generation, AstraHostJob *job)
 {
+    uint16_t service = lduw_be_p(command + HOST_FIELD(service));
+    bool non_fs = service == ASTRA_HOST_SERVICE_METRICS ||
+        service == ASTRA_HOST_SERVICE_REMOTE_DESKTOP ||
+        service == ASTRA_HOST_SERVICE_ENTROPY ||
+        service == ASTRA_HOST_SERVICE_VOLUMES || service == ASTRA_HOST_SERVICE_AUDIO;
+    int64_t started = non_fs ? qemu_clock_get_ns(QEMU_CLOCK_REALTIME) : 0;
     if (channel != NULL && channel->bound &&
         lduw_be_p(command + HOST_FIELD(service)) !=
             ASTRA_HOST_SERVICE_FILESYSTEM) {
         stl_be_p(command + HOST_FIELD(status), ASTRA_STATUS_ACCESS);
-        return;
+        goto done;
     }
     if (lduw_be_p(command + HOST_FIELD(service)) ==
             ASTRA_HOST_SERVICE_METRICS)
@@ -4260,12 +4877,22 @@ static void astra_host_execute_command(Astra68State *s, uint32_t owner,
         astra_host_execute_entropy(s, command, physical, bytes,
                                    command_bytes, expected_generation);
     else if (lduw_be_p(command + HOST_FIELD(service)) ==
+                 ASTRA_HOST_SERVICE_VOLUMES)
+        astra_host_execute_volumes(s, owner, channel, command, physical, bytes,
+                                   command_bytes, expected_generation);
+    else if (lduw_be_p(command + HOST_FIELD(service)) ==
                  ASTRA_HOST_SERVICE_AUDIO)
         astra_host_execute_audio(s, channel, command, physical, bytes,
                                  command_bytes, expected_generation);
     else
         astra_host_execute_fs(s, owner, channel, command, physical, bytes,
-                              command_bytes, expected_generation);
+                              command_bytes, expected_generation, job);
+done:
+    if (non_fs) {
+        qatomic_inc(&s->host.non_fs_commands);
+        qatomic_add(&s->host.non_fs_execution_ns,
+            qemu_clock_get_ns(QEMU_CLOCK_REALTIME) - started);
+    }
 }
 
 static int astra_host_native_open_flags(uint16_t flags, int *native_flags)
@@ -4288,7 +4915,7 @@ static int astra_host_native_open_flags(uint16_t flags, int *native_flags)
     return 1;
 }
 
-static uint32_t astra_host_publish_open(Astra68State *s, uint32_t owner,
+static uint32_t astra_host_publish_open(Astra68State *s, uint32_t owner, uint32_t process,
                                         AstraHostSession *session,
                                         uint32_t session_id,
                                         uint8_t *command, int fd,
@@ -4298,7 +4925,7 @@ static uint32_t astra_host_publish_open(Astra68State *s, uint32_t owner,
     struct stat st;
     uint32_t handle;
 
-    if (fstat(fd, &st) < 0 || astra_host_publish_node(command, fd, "") < 0) {
+    if (fstat(fd, &st) < 0 || astra_host_publish_node(command, fd, "", session->mount) < 0) {
         uint32_t status = astra_host_status_from_errno(errno);
 
         close(fd);
@@ -4317,7 +4944,7 @@ static uint32_t astra_host_publish_open(Astra68State *s, uint32_t owner,
             return status;
         }
     }
-    handle = astra_host_insert_file(s, owner, session, session_id, fd,
+    handle = astra_host_insert_file(s, owner, process, session, session_id, fd,
                                     directory, flags);
     if (handle == 0u) {
         /* The node record describes nothing the guest holds. */
@@ -4422,7 +5049,7 @@ static uint32_t astra_host_fs_claim(Astra68State *s, uint32_t owner,
          * keeps everything of its own (Task 4 re-review N1). */
         qatomic_set(&s->host.fs_owner, 0u);
         files = astra_host_steal_files(s, owner, false);
-        sessions = astra_host_steal_sessions(s, owner);
+        sessions = astra_host_steal_sessions(s, owner, 0u, 0u);
         qemu_mutex_unlock(&s->host.files_lock);
         astra_host_free_files(s, files);
         astra_host_free_sessions(s, sessions);
@@ -4440,81 +5067,307 @@ static uint32_t astra_host_fs_claim(Astra68State *s, uint32_t owner,
 }
 
 /*
- * A root session opens a volume's directory; a derived session opens a
- * directory beneath its parent's root, and inherits read-only. The root is
- * an O_PATH descriptor on Linux: it names a directory and grants nothing
- * by itself. Ids are never reused (next_session is never reset), so a
+ * Whole-mount sessions retain native identity only, so idle grants do not
+ * prevent safe removal. A subdirectory session retains its exact O_PATH
+ * object and inherits read-only. Every operation validates the generation
+ * through the provider before using its root. Ids are never reused (next_session is never reset), so a
  * scope or handle of a closed session never names a later one (review M2).
  */
+static int astra_host_provider_root(Astra68State *s, uint64_t mount, uint64_t generation)
+{
+    AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+        .operation = ASTRA_STORAGE_CONTROL_ROOT, .epoch = s->host.provider_epoch,
+        .target = mount, .generation = generation};
+    AstraStorageControlReply reply;
+    int fd = -1, error;
+    error = astra_host_storage_control(s, &request, -1, &reply, &fd);
+    if (error != 0) {
+        errno = error;
+        return -1;
+    }
+    return fd;
+}
+
+/* Reuse canonical session retirement on media loss. Catalog polling also
+ * retires idle descriptors; no subsequent application I/O is required.
+ * QUIESCING is temporary admission refusal, never source loss. */
+static void astra_host_reconcile_mounts(Astra68State *s)
+{
+    GArray *references = g_array_new(false, false, sizeof(AstraVolumeReference));
+    GHashTableIter iterator;
+    gpointer value;
+    qemu_mutex_lock(&s->host.namespace_lock);
+    qemu_mutex_lock(&s->host.files_lock);
+    g_hash_table_iter_init(&iterator, s->host.sessions);
+    while (g_hash_table_iter_next(&iterator, NULL, &value)) {
+        AstraHostSession *session = value;
+        AstraVolumeReference reference = {s->host.provider_epoch,
+                                          session->mount, session->mount_generation};
+        bool found = false;
+        for (guint at = 0u; at < references->len; ++at) {
+            const AstraVolumeReference *held = &g_array_index(references, AstraVolumeReference, at);
+            if (held->id == reference.id && held->generation == reference.generation) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) g_array_append_val(references, reference);
+    }
+    qemu_mutex_unlock(&s->host.files_lock);
+    for (guint at = 0u; at < references->len; ++at) {
+        const AstraVolumeReference *reference = &g_array_index(references, AstraVolumeReference, at);
+        int root = astra_host_provider_root(s, reference->id, reference->generation);
+        int error = errno;
+        if (root >= 0) {
+            close(root);
+            continue;
+        }
+        if (error != ESTALE && error != ENODEV) continue;
+        qemu_mutex_lock(&s->host.files_lock);
+        AstraHostStolenSessions stolen = astra_host_steal_sessions(s, 0u,
+            reference->id, reference->generation);
+        qemu_mutex_unlock(&s->host.files_lock);
+        astra_host_free_sessions(s, stolen);
+    }
+    qemu_mutex_unlock(&s->host.namespace_lock);
+    g_array_free(references, true);
+}
+
+/* Safe removal fences new admission before examining the one canonical
+ * description/session/share set. Active borrowers count until actual exit. */
+static bool astra_host_mount_busy(Astra68State *s, uint64_t mount, uint64_t generation)
+{
+    GHashTableIter iterator;
+    gpointer key, value;
+    bool busy = false;
+    qemu_mutex_lock(&s->host.files_lock);
+    g_hash_table_iter_init(&iterator, s->host.sessions);
+    while (g_hash_table_iter_next(&iterator, &key, &value)) {
+        AstraHostSession *session = value;
+        if (session->mount != mount || session->mount_generation != generation) continue;
+        if (session->root >= 0 || session->references > 1u) { busy = true; break; }
+        uint32_t id = GPOINTER_TO_UINT(key);
+        GHashTableIter held;
+        gpointer item;
+        g_hash_table_iter_init(&held, s->host.files);
+        while (g_hash_table_iter_next(&held, NULL, &item))
+            if (((AstraHostFile *)item)->session == id) { busy = true; break; }
+        if (busy) break;
+        g_hash_table_iter_init(&held, s->host.shares);
+        while (g_hash_table_iter_next(&held, NULL, &item))
+            if (((AstraHostShare *)item)->session == id) { busy = true; break; }
+        if (busy) break;
+    }
+    qemu_mutex_unlock(&s->host.files_lock);
+    return busy;
+}
+
+/* The caller holds files_lock. Native PID names the requester, while the
+ * kernel-stamped resource owner identifies its incarnation. A current channel
+ * must confirm both; a recycled PID cannot claim a retained older token. */
+static bool astra_host_share_requester(Astra68State *s, const AstraHostShare *share,
+    uint32_t requester)
+{
+    bool held = false;
+    if (share == NULL || share->process != requester) return false;
+    for (uint32_t at = 0u; at < ASTRA_HOST_CHANNEL_COUNT; ++at) {
+        const AstraHostChannel *channel = &s->host.channels[at];
+        if (!channel->active || channel->process != requester) continue;
+        if (channel->owner != share->owner) return false;
+        held = true;
+    }
+    return held;
+}
+
+static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
+    AstraHostChannel *channel, uint8_t *data)
+{
+    if (channel == NULL || !channel->provider || channel->bound || owner == 0u ||
+        owner != qatomic_read(&s->host.fs_owner)) return ASTRA_STATUS_ACCESS;
+    uint32_t requester = ldl_be_p(data + 56u);
+    uint32_t operation = ldl_be_p(data + 24u);
+    uint64_t image_share = ldq_be_p(data + 48u);
+    AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+        .epoch = ldq_be_p(data), .target = ldq_be_p(data + 8u),
+        .generation = ldq_be_p(data + 16u), .flags = ldl_be_p(data + 28u),
+        .byte_limit = ldq_be_p(data + 32u), .inode_limit = ldq_be_p(data + 40u)};
+    AstraStorageControlReply reply;
+    AstraVolumeReference reference = {0};
+    AstraHostDescription *description = NULL;
+    int output = -1, input = -1, error = EINVAL;
+    if (requester == 0u || ldl_be_p(data + 60u) != 0u) return ASTRA_STATUS_INVALID;
+    qemu_mutex_lock(&s->host.namespace_lock);
+    if (operation == ASTRA_VOLUME_IMAGE) {
+        if (request.epoch || request.target || request.generation || request.flags ||
+            request.byte_limit || request.inode_limit || !image_share) goto done;
+        qemu_mutex_lock(&s->host.files_lock);
+        AstraHostShare *share = g_hash_table_lookup(s->host.shares, &image_share);
+        AstraHostSession *session = share == NULL ? NULL :
+            g_hash_table_lookup(s->host.sessions, GUINT_TO_POINTER(share->session));
+        if (!astra_host_share_requester(s, share, requester) || share->description == NULL ||
+            session == NULL || session->closing) error = EACCES;
+        else if ((share->description->flags & ASTRA_VFS_OPEN_WRITE) != 0u ||
+                 (share->description->flags & ASTRA_VFS_OPEN_READ) == 0u ||
+                 share->description->directory != NULL) error = EACCES;
+        else {
+            description = share->description;
+            g_atomic_int_inc(&description->references);
+            request.epoch = s->host.provider_epoch;
+            request.target = session->mount; request.generation = session->mount_generation;
+            struct stat info;
+            error = fstat(description->fd, &info) == 0 && S_ISREG(info.st_mode) ? 0 : EINVAL;
+            if (error == 0) { request.backing_object = info.st_ino; input = description->fd; }
+        }
+        qemu_mutex_unlock(&s->host.files_lock);
+        if (error != 0) goto done;
+        request.operation = ASTRA_STORAGE_CONTROL_IMAGE;
+    } else {
+        if (image_share || !request.epoch || !request.target || !request.generation) goto done;
+        if (operation == ASTRA_VOLUME_MOUNT_SOURCE) {
+            if (request.flags & ~ASTRA_VOLUME_READ_ONLY) goto done;
+            request.operation = ASTRA_STORAGE_CONTROL_MOUNT;
+        } else if (operation == ASTRA_VOLUME_UNMOUNT) {
+            if (request.flags || request.byte_limit || request.inode_limit) goto done;
+            request.operation = ASTRA_STORAGE_CONTROL_QUIESCE;
+            error = astra_host_storage_control(s, &request, -1, &reply, &output);
+            if (error != 0) goto done;
+            if (astra_host_mount_busy(s, request.target, request.generation)) {
+                request.operation = ASTRA_STORAGE_CONTROL_RESUME;
+                error = astra_host_storage_control(s, &request, -1, &reply, &output);
+                if (error == 0) error = EBUSY;
+                goto done;
+            }
+            request.operation = ASTRA_STORAGE_CONTROL_UNMOUNT;
+        } else if (operation == ASTRA_VOLUME_EJECT || operation == ASTRA_VOLUME_RELEASE_IMAGE_SOURCE) {
+            if (request.flags || request.byte_limit || request.inode_limit) goto done;
+            request.operation = operation == ASTRA_VOLUME_EJECT ? ASTRA_STORAGE_CONTROL_EJECT :
+                ASTRA_STORAGE_CONTROL_RELEASE_IMAGE_SOURCE;
+        } else goto done;
+    }
+    error = astra_host_storage_control(s, &request, input, &reply, &output);
+    if (error != 0 && operation == ASTRA_VOLUME_UNMOUNT) {
+        int first = error;
+        request.operation = ASTRA_STORAGE_CONTROL_RESUME;
+        (void)astra_host_storage_control(s, &request, -1, &reply, &output);
+        error = first;
+    }
+    if (error == 0) {
+        if (operation == ASTRA_VOLUME_UNMOUNT || operation == ASTRA_VOLUME_EJECT ||
+            operation == ASTRA_VOLUME_RELEASE_IMAGE_SOURCE)
+            reference = (AstraVolumeReference){request.epoch, request.target, request.generation};
+        else if (reply.count != 1u || reply.records[0].id != reply.object ||
+            reply.records[0].generation == 0u || reply.epoch != s->host.provider_epoch)
+            error = EPROTO;
+        else reference = (AstraVolumeReference){reply.epoch, reply.records[0].id, reply.records[0].generation};
+        if (error == 0) {
+            stq_be_p(data, reference.epoch); stq_be_p(data + 8u, reference.id);
+            stq_be_p(data + 16u, reference.generation);
+        }
+    }
+done:
+    if (output >= 0) close(output);
+    if (description != NULL) astra_host_description_release(description);
+    qemu_mutex_unlock(&s->host.namespace_lock);
+    return astra_host_status_from_errno(error);
+}
+
 static uint32_t astra_host_fs_session_open(Astra68State *s, uint32_t owner,
                                            uint8_t *command, uint16_t flags,
-                                           const char *path)
+                                           const char *path, const uint8_t *target)
 {
     uint32_t parent_id = ldl_be_p(command + HOST_FIELD(session));
-    uint32_t volume = ldl_be_p(command + HOST_FIELD(value_lo));
     AstraHostSession *parent = NULL;
     AstraHostSession *session;
+    AstraHostSession authority = {0};
     uint32_t id;
-    int base;
-    int root;
+    int base = -1, root = -1, error = 0;
+    bool borrowed = false, lazy = false;
     AstraResolution resolved;
-#ifdef CONFIG_LINUX
     const int directory_flags = O_PATH | O_DIRECTORY;
-#else
-    const int directory_flags = O_RDONLY | O_DIRECTORY;
-#endif
 
     if ((flags & ~ASTRA_HOST_FS_SESSION_READ_ONLY) != 0u ||
-        ldl_be_p(command + HOST_FIELD(handle)) != 0u)
+        ldl_be_p(command + HOST_FIELD(handle)) != 0u ||
+        astra_host_get64(command, HOST_FIELD(value_hi)) != 0u)
         return ASTRA_STATUS_INVALID;
     if (parent_id == 0u) {
-        if (volume >= ASTRA_HOST_FS_VOLUME_COUNT)
+        if (target == NULL || ldq_be_p(target) != s->host.provider_epoch)
+            return target == NULL ? ASTRA_STATUS_INVALID : ASTRA_STATUS_LOST;
+        authority.mount = ldq_be_p(target + 8u);
+        authority.mount_generation = ldq_be_p(target + 16u);
+        if (authority.mount == 0u || authority.mount_generation == 0u)
             return ASTRA_STATUS_INVALID;
-        if (s->host.volume_fds[volume] < 0)
-            return ASTRA_STATUS_NOT_FOUND;
-        base = s->host.volume_fds[volume];
+        lazy = path[0] == '\0' || strcmp(path, "/") == 0;
     } else {
-        if (volume != 0u)
+        if (target == NULL || ldq_be_p(target) != 0u || ldq_be_p(target + 8u) != 0u ||
+            ldq_be_p(target + 16u) != 0u)
             return ASTRA_STATUS_INVALID;
         parent = astra_host_session_acquire(s, owner, parent_id);
         if (parent == NULL)
             return ASTRA_STATUS_BAD_HANDLE;
         flags |= parent->flags & ASTRA_HOST_FS_SESSION_READ_ONLY;
-        volume = parent->volume;
+        authority.mount = parent->mount;
+        authority.mount_generation = parent->mount_generation;
         base = parent->root;
+        lazy = base < 0 && (path[0] == '\0' || strcmp(path, "/") == 0);
     }
-    root = astra_host_open_resolved(base, -1, path[0] == '\0' ? "/" : path,
-                                    directory_flags, 0,
-                                    ASTRA_RESOLVE_FOLLOW_FINAL, ASTRA_RESOLVE_LINK_MAX, &resolved);
+    if (base < 0) {
+        base = astra_host_provider_root(s, authority.mount, authority.mount_generation);
+        borrowed = true;
+    }
+    if (base >= 0) {
+        struct statvfs about;
+        if (fstatvfs(base, &about) != 0) {
+            error = errno;
+            if (borrowed) close(base);
+            if (parent != NULL) astra_host_session_release(s, parent);
+            return astra_host_status_from_errno(error);
+        }
+        if (about.f_flag & ST_RDONLY)
+            flags |= ASTRA_HOST_FS_SESSION_READ_ONLY;
+        if (!lazy)
+            root = astra_host_open_resolved(s, &authority, base, -1,
+                path[0] == '\0' ? "/" : path, directory_flags, 0u,
+                ASTRA_RESOLVE_FOLLOW_FINAL, ASTRA_RESOLVE_LINK_MAX, &resolved);
+        if (!lazy && root < 0)
+            error = errno;
+        if (borrowed) close(base);
+    } else
+        error = errno;
     if (parent != NULL)
         astra_host_session_release(s, parent);
-    if (root < 0)
-        return errno == EXDEV ? ASTRA_STATUS_ACCESS :
-               astra_host_status_from_errno(errno);
+    if (base < 0 || (!lazy && root < 0))
+        return error == EXDEV ? ASTRA_STATUS_ACCESS : astra_host_status_from_errno(error);
     session = g_new0(AstraHostSession, 1);
     session->root = root;
     session->owner = owner;
-    session->volume = volume;
+    session->requester = ldl_be_p(target + 24u);
+    session->mount = authority.mount;
+    session->mount_generation = authority.mount_generation;
     session->flags = flags;
     session->references = 1u;
     qemu_mutex_lock(&s->host.files_lock);
     /* The claim may have gone since the command's check (review M2). */
     if (qatomic_read(&s->host.fs_owner) != owner) {
         qemu_mutex_unlock(&s->host.files_lock);
-        close(root);
+        if (root >= 0) close(root);
         g_free(session);
         return ASTRA_STATUS_ACCESS;
     }
-    /* next_session is 32 bits and never reset: ids are unique until 2^32
-     * sessions have been opened in this QEMU process, after which an id
-     * whose session closed could be issued again -- to the same claimant,
-     * since only it opens sessions. docs/STORAGE_AND_VFS.md records the
-     * limit. */
-    do {
-        astra_network_next(&s->host.next_session);
-        id = s->host.next_session;
-    } while (g_hash_table_contains(s->host.sessions, GUINT_TO_POINTER(id)));
+    /* A stale scope must never name a later session, even after exhaustion. */
+    if (s->host.next_session == UINT32_MAX) {
+        qemu_mutex_unlock(&s->host.files_lock);
+        if (root >= 0) close(root);
+        g_free(session);
+        return ASTRA_STATUS_LIMIT;
+    }
+    id = ++s->host.next_session;
+    if (lazy) {
+        /* Admission charged the root loan; no descriptor remains retained. */
+        assert(s->host.fs_descriptors != 0u);
+        --s->host.fs_descriptors;
+    }
     g_hash_table_insert(s->host.sessions, GUINT_TO_POINTER(id), session);
+    astra_host_usage_changed_locked(s);
     qemu_mutex_unlock(&s->host.files_lock);
     stl_be_p(command + HOST_FIELD(result_value), id);
     return ASTRA_STATUS_OK;
@@ -4535,6 +5388,7 @@ static uint32_t astra_host_fs_session_close(Astra68State *s, uint32_t owner,
     }
     session->closing = true;
     g_hash_table_steal(s->host.sessions, GUINT_TO_POINTER(id));
+    astra_host_usage_changed_locked(s);
     qemu_mutex_unlock(&s->host.files_lock);
     astra_host_release_session_files(s, id);
     astra_host_session_release(s, session);
@@ -4569,8 +5423,10 @@ static bool astra_host_lost_file(Astra68State *s, uint32_t owner,
     qemu_mutex_lock(&s->host.files_lock);
     AstraHostFile *identity = g_hash_table_lookup(s->host.lost_handles, GUINT_TO_POINTER(handle));
     lost = owner != 0u && identity != NULL && identity->owner == owner;
-    if (lost && close_handle)
+    if (lost && close_handle) {
         g_hash_table_remove(s->host.lost_handles, GUINT_TO_POINTER(handle));
+        astra_host_usage_changed_locked(s);
+    }
     qemu_mutex_unlock(&s->host.files_lock);
     return lost;
 }
@@ -4582,7 +5438,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                                   uint8_t *command,
                                   uint32_t physical, uint32_t bytes,
                                   uint32_t command_bytes,
-                                  uint32_t expected_generation)
+                                  uint32_t expected_generation, AstraHostJob *job)
 {
     uint16_t operation = lduw_be_p(command + HOST_FIELD(operation));
     uint16_t flags = lduw_be_p(command + HOST_FIELD(flags));
@@ -4599,7 +5455,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     char *path = NULL;
     char *path2 = NULL;
     uint32_t status = ASTRA_STATUS_INVALID;
-    int root;
+    int root = -1;
+    bool borrowed_root = false;
     int base;
     bool namespace_locked = false;
     bool descriptor_reserved = false;
@@ -4680,6 +5537,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     if (status != ASTRA_STATUS_OK)
         goto done;
     if (operation == ASTRA_HOST_FS_SESSION_OPEN) {
+        status = ASTRA_STATUS_INVALID;
         qemu_mutex_lock(&s->host.namespace_lock);
         namespace_locked = true;
         if (!astra_host_admit(s, owner, 0u, 0u, 1u, 0u)) {
@@ -4687,7 +5545,17 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             goto done;
         }
         descriptor_reserved = true;
-        status = astra_host_fs_session_open(s, owner, command, flags, path);
+        uint32_t target_bytes = ldl_be_p(command + HOST_FIELD(data_length));
+        const uint8_t *target = NULL;
+        {
+            if (target_bytes != sizeof(AstraHostSessionOpen))
+                goto done;
+            target = astra_host_command_data(s, physical, bytes, command_bytes, command,
+                sizeof(AstraHostSessionOpen));
+            if (target == NULL || ldl_be_p(target + 28u) != 0u)
+                goto done;
+        }
+        status = astra_host_fs_session_open(s, owner, command, flags, path, target);
         descriptor_reserved = status != ASTRA_STATUS_OK;
         goto done;
     }
@@ -4704,6 +5572,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             stl_be_p(command + HOST_FIELD(result_value), s->host.fs_epoch);
         goto done;
     }
+    astra_host_job_session(s, job, session);
     if (operation == ASTRA_HOST_FS_SESSION_CLOSE) {
         status = astra_host_fs_session_close(s, owner, session_id);
         goto done;
@@ -4716,6 +5585,17 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     /* Paths resolve beneath the session root, or beneath an open
      * directory of this session; handles answer only in their session. */
     root = session->root;
+    if (operation != ASTRA_HOST_FS_CLOSE) {
+        int admitted = astra_host_provider_root(s, session->mount, session->mount_generation);
+        if (admitted < 0) {
+            status = astra_host_status_from_errno(errno);
+            goto done;
+        }
+        if (root < 0) {
+            root = admitted;
+            borrowed_root = true;
+        } else close(admitted);
+    }
     if (operation != ASTRA_HOST_FS_CLOSE && operation != ASTRA_HOST_FS_READ &&
         operation != ASTRA_HOST_FS_SYNC &&
         operation != ASTRA_HOST_FS_SEEK && operation != ASTRA_HOST_FS_FILE_FLAGS) {
@@ -4751,10 +5631,17 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             goto done;
         }
     }
+    if (operation != ASTRA_HOST_FS_CLOSE) {
+        int live = astra_host_rooted(s, session, root, root);
+        if (live != 0) {
+            status = astra_host_status_from_errno(-live);
+            goto done;
+        }
+    }
     base = file != NULL ? file->description->fd : -1;
     if (file != NULL && file->description->directory != NULL &&
         operation != ASTRA_HOST_FS_PATH) {
-        int confined = astra_resolve_rooted(root, base);
+        int confined = astra_host_rooted(s, session, root, base);
 
         if (confined < 0) {
             status = astra_host_status_from_errno(-confined);
@@ -4781,7 +5668,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         if (data == NULL || capacity == 0u || flags != 0u ||
             path[0] != '\0' || path2[0] != '\0')
             break;
-        result = astra_resolve_directory_path(root, file->description->fd,
+        result = astra_host_descriptor_path(s, session, root, file->description->fd,
                                                (char *)data, capacity,
                                                &length);
         status = result == 0 ? ASTRA_STATUS_OK : result == -ERANGE ?
@@ -4808,7 +5695,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             break;
         }
         descriptor_reserved = true;
-        fd = astra_host_open_resolved(root, base, path, native_flags, mode,
+        fd = astra_host_open_resolved(s, session, root, base, path, native_flags, mode,
             (flags & ASTRA_VFS_OPEN_NOFOLLOW) ||
             ((flags & (ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_EXCLUSIVE)) ==
                 (ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_EXCLUSIVE)) ? 0u :
@@ -4817,7 +5704,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             status = astra_host_path_status(errno, &resolved);
             break;
         }
-        status = astra_host_publish_open(s, owner, session, session_id,
+        status = astra_host_publish_open(s, owner, channel != NULL ? channel->process : 0u, session, session_id,
                                          command, fd, flags);
         if (status == ASTRA_STATUS_OK)
             descriptor_reserved = directory_reserved = false;
@@ -4999,7 +5886,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     case ASTRA_HOST_FS_ADOPT:
         if (flags & ~ASTRA_HOST_FS_ADOPT_DISCARD || handle || path[0] || path2[0])
             break;
-        status = astra_host_adopt_file(s, owner, session, session_id,
+        status = astra_host_adopt_file(s, owner, channel != NULL ? channel->process : 0u, session, session_id,
             astra_host_get64(command, HOST_FIELD(offset_hi)),
             flags & ASTRA_HOST_FS_ADOPT_DISCARD, bound ? scope.files : 0u, &handle);
         if (status != ASTRA_STATUS_OK || flags & ASTRA_HOST_FS_ADOPT_DISCARD)
@@ -5014,7 +5901,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             break;
         }
         if (file->description->directory != NULL) {
-            int confined = astra_resolve_rooted(root, file->description->fd);
+            int confined = astra_host_rooted(s, session, root, file->description->fd);
 
             if (confined < 0) {
                 status = astra_host_status_from_errno(-confined);
@@ -5022,7 +5909,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                 break;
             }
         }
-        if (astra_host_publish_node(command, file->description->fd, "") < 0) {
+        if (astra_host_publish_node(command, file->description->fd, "", session->mount) < 0) {
             status = astra_host_path_status(errno, &resolved);
             astra_host_close_file(s, owner, session_id, handle);
             memset(command + HOST_FIELD(node), 0, sizeof(AstraHostNode));
@@ -5087,11 +5974,11 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             (ASTRA_HOST_FS_STAT_FOLLOW | ASTRA_HOST_FS_STAT_ENTRY))
             break;
         if (base >= 0 && path[0] == '\0') {
-            status = astra_host_publish_node(command, base, "") == 0 ?
+            status = astra_host_publish_node(command, base, "", session->mount) == 0 ?
                      ASTRA_STATUS_OK : astra_host_path_status(errno, &resolved);
             break;
         }
-        fd = astra_host_open_resolved(root, base, path, metadata_flags, 0,
+        fd = astra_host_open_resolved(s, session, root, base, path, metadata_flags, 0,
             flags & ASTRA_HOST_FS_STAT_FOLLOW ? ASTRA_RESOLVE_FOLLOW_FINAL :
             flags & ASTRA_HOST_FS_STAT_ENTRY ? ASTRA_RESOLVE_ENTRY : 0u,
             flags & ASTRA_HOST_FS_STAT_BUDGET ?
@@ -5101,7 +5988,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                  errno == ENOENT && resolved.missing &&
                     (flags & ASTRA_HOST_FS_STAT_MISSING) ? ASTRA_STATUS_OK :
                     astra_host_path_status(errno, &resolved) :
-                 astra_host_publish_node(command, fd, "") == 0 ?
+                 astra_host_publish_node(command, fd, "", session->mount) == 0 ?
                  ASTRA_STATUS_OK : astra_host_path_status(errno, &resolved);
         stl_be_p(command + HOST_FIELD(value_hi), resolved.links);
         if (fd >= 0)
@@ -5131,7 +6018,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                 status = ASTRA_STATUS_BAD_HANDLE;
                 break;
             }
-            int confined = astra_resolve_rooted(root, file->description->fd);
+            int confined = astra_host_rooted(s, session, root, file->description->fd);
             if (confined < 0) {
                 status = astra_host_status_from_errno(-confined);
                 break;
@@ -5144,7 +6031,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             }
         } else {
             directory_fd = astra_host_open_resolved(
-                root, -1, path, O_RDONLY | O_DIRECTORY, 0,
+                s, session, root, -1, path, O_RDONLY | O_DIRECTORY, 0,
                 ASTRA_RESOLVE_FOLLOW_FINAL, ASTRA_RESOLVE_LINK_MAX, &resolved);
             if (directory_fd < 0) {
                 status = astra_host_path_status(errno, &resolved);
@@ -5195,8 +6082,15 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
                 status = ASTRA_STATUS_INVALID;
                 break;
             }
-            if (astra_host_publish_node(command, dirfd(directory),
-                                         entry->d_name) < 0) {
+            AstraResolution child_resolution;
+            int child_fd = astra_host_open_resolved(s, session, root, dirfd(directory),
+                entry->d_name, O_PATH, 0u, 0u, ASTRA_RESOLVE_LINK_MAX, &child_resolution);
+            int metadata = child_fd < 0 ? -1 : astra_host_publish_node(command, child_fd, "", session->mount);
+            int metadata_error = errno;
+            if (child_fd >= 0)
+                close(child_fd);
+            if (metadata < 0) {
+                errno = metadata_error;
                 if (errno == ENOENT)
                     continue;
                 status = astra_host_path_status(errno, &resolved);
@@ -5239,206 +6133,74 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         }
         break;
     }
-    case ASTRA_HOST_FS_MKDIR: {
-        for (size_t length = strlen(path);
-             length > 1u && path[length - 1u] == '/'; --length)
-            path[length - 1u] = '\0';
-        if (astra_host_fs_resolve(root, base, path, ASTRA_RESOLVE_ENTRY, ASTRA_RESOLVE_LINK_MAX,
-                                  &resolved) < 0) {
-            status = astra_host_path_status(errno, &resolved);
-        } else if (resolved.leaf[0] == '\0') {
-            status = ASTRA_STATUS_EXISTS;
-            close(resolved.parent);
-        } else {
-            status = mkdirat(resolved.parent, resolved.leaf, mode) == 0 ?
-                     ASTRA_STATUS_OK : astra_host_path_status(errno, &resolved);
-            close(resolved.parent);
-        }
-        break;
-    }
-    case ASTRA_HOST_FS_UNLINK: {
-        int at;
-
-        if ((flags & ~ASTRA_HOST_FS_UNLINK_DIRECTORY) != 0u)
-            break;
-        if (astra_host_fs_resolve(root, base, path, ASTRA_RESOLVE_ENTRY, ASTRA_RESOLVE_LINK_MAX,
-                                  &resolved) < 0) {
-            status = astra_host_path_status(errno, &resolved);
-            break;
-        }
-        if (resolved.leaf[0] == '\0') {
-            status = ASTRA_STATUS_ACCESS;
-            close(resolved.parent);
-            break;
-        }
-        at = flags & ASTRA_HOST_FS_UNLINK_DIRECTORY ? AT_REMOVEDIR : 0;
-        status = unlinkat(resolved.parent, resolved.leaf, at) == 0 ?
-                 ASTRA_STATUS_OK : astra_host_path_status(errno, &resolved);
-        close(resolved.parent);
-        break;
-    }
+    case ASTRA_HOST_FS_MKDIR:
+    case ASTRA_HOST_FS_UNLINK:
     case ASTRA_HOST_FS_RENAME:
-    case ASTRA_HOST_FS_LINK: {
-        uint32_t second_handle = ldl_be_p(command + HOST_FIELD(value_lo));
-        char left_leaf[ASTRA_HOST_FS_PATH_MAX];
-        char right_leaf[ASTRA_HOST_FS_PATH_MAX];
+    case ASTRA_HOST_FS_LINK:
+    case ASTRA_HOST_FS_CHMOD:
+    case ASTRA_HOST_FS_READLINK:
+    case ASTRA_HOST_FS_SYMLINK: {
+        AstraStoragePathReply reply;
         AstraHostFile *second = NULL;
-        int left_parent = -1;
-        int right_parent = -1;
-        int second_base = -1;
-        bool left_trailing = false;
-
-        /* Each side resolves against its own base: `handle` for path,
-         * directory handle value_lo for path2, both in this session. */
-        if (second_handle != 0u) {
-            if (second_handle == handle) {
+        uint32_t broker_operation, broker_flags = 0u;
+        uint32_t resolve = ASTRA_RESOLVE_ENTRY;
+        uint32_t capacity = 0u;
+        int second_base = -1, result;
+        uint8_t *data = NULL;
+        switch (operation) {
+        case ASTRA_HOST_FS_MKDIR: broker_operation = ASTRA_STORAGE_PATH_MKDIR; break;
+        case ASTRA_HOST_FS_UNLINK:
+            if (flags & ~ASTRA_HOST_FS_UNLINK_DIRECTORY)
+                goto done;
+            broker_operation = ASTRA_STORAGE_PATH_UNLINK;
+            broker_flags = flags & ASTRA_HOST_FS_UNLINK_DIRECTORY ? AT_REMOVEDIR : 0u;
+            break;
+        case ASTRA_HOST_FS_RENAME:
+        case ASTRA_HOST_FS_LINK: {
+            uint32_t second_handle = ldl_be_p(command + HOST_FIELD(value_lo));
+            broker_operation = operation == ASTRA_HOST_FS_RENAME ?
+                ASTRA_STORAGE_PATH_RENAME : ASTRA_STORAGE_PATH_LINK;
+            if (second_handle == handle)
                 second_base = base;
-            } else {
-                second = astra_host_fs_base(s, owner, session_id,
-                                            second_handle);
+            else if (second_handle != 0u) {
+                second = astra_host_fs_base(s, owner, session_id, second_handle);
                 if (second == NULL) {
                     status = ASTRA_STATUS_BAD_HANDLE;
-                    break;
+                    goto done;
                 }
                 second_base = second->description->fd;
             }
+            break;
         }
-        int left_result = astra_host_fs_resolve(root, base, path,
-                                                ASTRA_RESOLVE_ENTRY, ASTRA_RESOLVE_LINK_MAX, &resolved);
-        if (left_result == 0) {
-            left_parent = resolved.parent;
-            strcpy(left_leaf, resolved.leaf);
-            left_trailing = resolved.trailing;
+        case ASTRA_HOST_FS_CHMOD:
+            if (flags & ~ASTRA_VFS_AT_SYMLINK_NOFOLLOW)
+                goto done;
+            broker_operation = ASTRA_STORAGE_PATH_CHMOD;
+            resolve = flags & ASTRA_VFS_AT_SYMLINK_NOFOLLOW ? 0u : ASTRA_RESOLVE_FOLLOW_FINAL;
+            break;
+        case ASTRA_HOST_FS_READLINK:
+            broker_operation = ASTRA_STORAGE_PATH_READLINK;
+            resolve = 0u;
+            capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
+            data = astra_host_command_data(s, physical, bytes, command_bytes, command, capacity);
+            if (data == NULL || capacity == 0u)
+                goto done;
+            capacity = MIN(capacity, ASTRA_STORAGE_PROVIDER_PATH_MAX);
+            break;
+        default: broker_operation = ASTRA_STORAGE_PATH_SYMLINK; break;
         }
-        int right_result = left_result < 0 ? -1 :
-            astra_host_fs_resolve(root, second_base, path2,
-                                  ASTRA_RESOLVE_ENTRY, ASTRA_RESOLVE_LINK_MAX, &resolved);
-        if (right_result == 0) {
-            right_parent = resolved.parent;
-            strcpy(right_leaf, resolved.leaf);
+        int error = astra_host_provider_path(s, session, root, base, second_base,
+            path, path2, broker_operation, broker_flags, mode, resolve,
+            ASTRA_RESOLVE_LINK_MAX, capacity, &reply, &result);
+        astra_host_resolution(&reply, &resolved);
+        status = error == ERANGE ? ASTRA_STATUS_BUFFER_TOO_SMALL :
+            astra_host_path_status(error, &resolved);
+        if (operation == ASTRA_HOST_FS_READLINK && error == 0) {
+            memcpy(data, reply.data, reply.length);
+            stl_be_p(command + HOST_FIELD(result_length), reply.length);
         }
-        if (left_result < 0 || right_result < 0) {
-            status = astra_host_path_status(errno, &resolved);
-        } else if (left_leaf[0] == '\0' || right_leaf[0] == '\0') {
-            status = ASTRA_STATUS_ACCESS;
-        } else if (resolved.trailing) {
-            struct stat st;
-
-            if (operation == ASTRA_HOST_FS_LINK) {
-                status = ASTRA_STATUS_NOT_FOUND;
-            } else if (fstatat(left_parent, left_leaf, &st, AT_SYMLINK_NOFOLLOW) < 0 ||
-                !S_ISDIR(st.st_mode)) {
-                status = ASTRA_STATUS_NOT_DIR;
-            } else {
-                status = renameat(left_parent, left_leaf, right_parent,
-                                  right_leaf) == 0 ? ASTRA_STATUS_OK :
-                         astra_host_status_from_errno(errno);
-            }
-        } else if (left_trailing && operation == ASTRA_HOST_FS_LINK) {
-            status = ASTRA_STATUS_IS_DIR;
-        } else {
-            status = (operation == ASTRA_HOST_FS_RENAME ?
-                          renameat(left_parent, left_leaf, right_parent,
-                                   right_leaf) :
-                          linkat(left_parent, left_leaf, right_parent,
-                                 right_leaf, 0)) == 0 ?
-                     ASTRA_STATUS_OK : astra_host_path_status(errno, &resolved);
-        }
-        if (left_parent >= 0)
-            close(left_parent);
-        if (right_parent >= 0)
-            close(right_parent);
         if (second != NULL)
             astra_host_file_release(s, second);
-        break;
-    }
-    case ASTRA_HOST_FS_CHMOD: {
-        int fd = -1;
-
-        /* Mode changes act on the resolved node. */
-        if (flags & ~ASTRA_VFS_AT_SYMLINK_NOFOLLOW)
-            break;
-        if (base >= 0 && path[0] == '\0') {
-            status = fchmod(base, mode) == 0 ?
-                     ASTRA_STATUS_OK : astra_host_path_status(errno, &resolved);
-            break;
-        }
-#ifdef CONFIG_LINUX
-        fd = astra_host_open_resolved(root, base, path, O_PATH, 0,
-            flags & ASTRA_VFS_AT_SYMLINK_NOFOLLOW ? 0u : ASTRA_RESOLVE_FOLLOW_FINAL,
-            ASTRA_RESOLVE_LINK_MAX, &resolved);
-        if (fd < 0) {
-            status = astra_host_path_status(errno, &resolved);
-        } else {
-            struct stat st;
-            char proc[64];
-
-            if (fstat(fd, &st) < 0)
-                status = astra_host_status_from_errno(errno);
-            else if (S_ISLNK(st.st_mode))
-                status = ASTRA_STATUS_UNSUPPORTED;
-            else {
-                /* O_PATH permits chmod without read permission; this names
-                 * the held inode rather than looking the guest path up twice. */
-                snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
-                status = chmod(proc, mode) == 0 ? ASTRA_STATUS_OK :
-                         astra_host_status_from_errno(errno);
-            }
-        }
-#else
-        status = ASTRA_STATUS_UNSUPPORTED;
-#endif
-        if (fd >= 0)
-            close(fd);
-        break;
-    }
-    case ASTRA_HOST_FS_READLINK: {
-        uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
-        uint8_t *data = astra_host_command_data(
-            s, physical, bytes, command_bytes, command, capacity);
-        char *target;
-        ssize_t length;
-
-        if (data == NULL || capacity == 0)
-            break;
-        if (astra_host_fs_resolve(root, base, path, 0u, ASTRA_RESOLVE_LINK_MAX,
-                                  &resolved) < 0) {
-            status = astra_host_path_status(errno, &resolved);
-        } else if (resolved.leaf[0] == '\0') {
-            status = ASTRA_STATUS_INVALID;
-            close(resolved.parent);
-        } else {
-            target = g_malloc((size_t)capacity + 1u);
-            length = readlinkat(resolved.parent, resolved.leaf, target, (size_t)capacity + 1u);
-            status = length < 0 ? astra_host_path_status(errno, &resolved) :
-                     (uint32_t)length > capacity ?
-                         ASTRA_STATUS_BUFFER_TOO_SMALL : ASTRA_STATUS_OK;
-            if (length >= 0 && (uint32_t)length <= capacity) {
-                memcpy(data, target, length);
-                stl_be_p(command + HOST_FIELD(result_length), length);
-            }
-            g_free(target);
-            close(resolved.parent);
-        }
-        break;
-    }
-    case ASTRA_HOST_FS_SYMLINK: {
-
-        /* `path` is the literal target; the link is `path2`. */
-        if (astra_host_fs_resolve(root, base, path2, ASTRA_RESOLVE_ENTRY, ASTRA_RESOLVE_LINK_MAX,
-                                  &resolved) < 0) {
-            status = astra_host_path_status(errno, &resolved);
-        } else if (resolved.trailing) {
-            status = ASTRA_STATUS_NOT_FOUND;
-            close(resolved.parent);
-        } else if (resolved.leaf[0] == '\0') {
-            status = ASTRA_STATUS_EXISTS;
-            close(resolved.parent);
-        } else {
-            status = symlinkat(path, resolved.parent, resolved.leaf) == 0 ? ASTRA_STATUS_OK :
-                     astra_host_path_status(errno, &resolved);
-            close(resolved.parent);
-        }
         break;
     }
     case ASTRA_HOST_FS_FILESYSTEM_INFO: {
@@ -5455,7 +6217,7 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
             status = fstatvfs(base, &about) == 0 ? ASTRA_STATUS_OK :
                      astra_host_path_status(errno, &resolved);
         } else {
-            fd = astra_host_open_resolved(root, base, path, O_RDONLY, 0,
+            fd = astra_host_open_resolved(s, session, root, base, path, O_RDONLY, 0,
                                           ASTRA_RESOLVE_FOLLOW_FINAL, ASTRA_RESOLVE_LINK_MAX, &resolved);
             status = fd < 0 ? astra_host_path_status(errno, &resolved) :
                      fstatvfs(fd, &about) == 0 ? ASTRA_STATUS_OK :
@@ -5476,6 +6238,8 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     }
 
 done:
+    astra_host_job_session(s, job, NULL);
+    if (borrowed_root) close(root);
     if (descriptor_reserved) {
         qemu_mutex_lock(&s->host.files_lock);
         assert(s->host.fs_descriptors != 0u);
@@ -5493,6 +6257,11 @@ done:
         status = ASTRA_STATUS_LOST;
     if (file != NULL)
         astra_host_file_unlock(s, file);
+    if (namespace_locked && astra_host_fs_mutates(operation, flags)) {
+        qemu_mutex_lock(&s->host.files_lock);
+        astra_host_usage_changed_locked(s);
+        qemu_mutex_unlock(&s->host.files_lock);
+    }
     if (namespace_locked)
         qemu_mutex_unlock(&s->host.namespace_lock);
     if (session != NULL)
@@ -5537,7 +6306,7 @@ static void astra_host_fs_reset(Astra68State *s)
     astra_network_next(&s->host.fs_epoch);
     ++s->host.fs_resets;
     files = astra_host_steal_files(s, 0u, true);
-    sessions = astra_host_steal_sessions(s, 0u);
+    sessions = astra_host_steal_sessions(s, 0u, 0u, 0u);
     qemu_mutex_unlock(&s->host.files_lock);
     astra_host_free_files(s, files);
     astra_host_free_sessions(s, sessions);
@@ -5600,7 +6369,7 @@ static void astra_host_budget_get(Object *object, Visitor *visitor,
 static void astra_host_reset(Astra68State *s)
 {
     for (uint32_t slot = 0; slot < ASTRA_HOST_CHANNEL_COUNT; ++slot) {
-        astra_host_channel_drain(&s->host.channels[slot]);
+        astra_host_channel_drain(s, &s->host.channels[slot]);
     }
     for (uint32_t slot = 0; slot < ASTRA_AUDIO_MAILBOX_STREAMS; ++slot) {
         astra_audio_stream_stop(s, slot);
@@ -5616,6 +6385,7 @@ static void astra_host_reset(Astra68State *s)
     qatomic_set(&s->host.fs_owner, 0u);
     qatomic_set(&s->host.fs_lost_owner, 0u);
     g_hash_table_remove_all(s->host.lost_handles);
+    astra_host_usage_changed_locked(s);
     qemu_mutex_unlock(&s->host.files_lock);
     if (s->host.sessions != NULL)
         astra_host_release_sessions(s, 0u);
@@ -5638,7 +6408,7 @@ static void astra_host_execute(Astra68State *s)
 
     s->host.completed = 0;
     s->host.status = ASTRA_SYSCALL_INVALID_ARGUMENT;
-    if (s->host.root_fd < 0 || s->host.owner == 0 ||
+    if (s->host.provider_control < 0 || s->host.owner == 0 ||
         s->host.request_count == 0 ||
         s->host.request_count > UINT32_MAX / ASTRA_HOST_COMMAND_SIZE) {
         return;
@@ -5658,7 +6428,7 @@ static void astra_host_execute(Astra68State *s)
         astra_host_execute_command(s, s->host.owner, NULL,
                               base + index * ASTRA_HOST_COMMAND_SIZE,
                               s->host.request_buffer, s->host.request_bytes,
-                              command_bytes, s->host.generation);
+                              command_bytes, s->host.generation, NULL);
         ++s->host.completed;
     }
     qatomic_add(&s->host.commands, s->host.completed);
@@ -5824,6 +6594,10 @@ static void astra_host_channel_configure(Astra68State *s, uint32_t physical)
         }
     }
     operation = lduw_be_p(config + HOST_CHANNEL_CONFIG_FIELD(operation));
+    uint32_t process = ldl_be_p(config + HOST_CHANNEL_CONFIG_FIELD(process));
+    if (operation == ASTRA_HOST_CHANNEL_CONFIG_OPEN ?
+            process == 0u || process > ASTRA_PROCESS_ID_MAX : process != 0u)
+        return;
     slot = ldl_be_p(config + HOST_CHANNEL_CONFIG_FIELD(slot));
     owner = ldl_be_p(config + HOST_CHANNEL_CONFIG_FIELD(owner));
     host_generation = ldl_be_p(
@@ -5858,7 +6632,7 @@ static void astra_host_channel_configure(Astra68State *s, uint32_t physical)
                 ASTRA_SYSCALL_ACCESS_DENIED : ASTRA_SYSCALL_PEER_DEAD;
             return;
         }
-        astra_host_channel_drain(channel);
+        astra_host_channel_drain(s, channel);
         qemu_mutex_lock(&s->host.files_lock);
         channel->bound = false;
         channel->scope_count = 0;
@@ -5923,8 +6697,9 @@ static void astra_host_channel_configure(Astra68State *s, uint32_t physical)
              channel_generation);
     stl_be_p(header + HOST_CHANNEL_HEADER_FIELD(transport_status),
              ASTRA_SYSCALL_OK);
-    channel->owner = owner;
     qemu_mutex_lock(&s->host.files_lock);
+    channel->owner = owner;
+    channel->process = ldl_be_p(config + HOST_CHANNEL_CONFIG_FIELD(process));
     channel->bound = scope.owner != 0;
     channel->provider = !channel->bound &&
         ldl_be_p(config + HOST_CHANNEL_CONFIG_FIELD(scope_flags)) ==
@@ -5943,7 +6718,9 @@ static void astra_host_channel_configure(Astra68State *s, uint32_t physical)
     channel->completed = g_new0(uint8_t, command_capacity);
     channel->remote_desktop_fd = -1;
     channel->audio_fd = -1;
+    qemu_mutex_lock(&s->host.files_lock);
     channel->active = true;
+    qemu_mutex_unlock(&s->host.files_lock);
     s->host.channel_result = ASTRA_SYSCALL_OK;
 }
 
@@ -6017,7 +6794,7 @@ static int astra_host_channel_worker(void *opaque)
             (job->position & (job->command_capacity - 1u)) *
                 ASTRA_HOST_COMMAND_SIZE,
         job->physical_buffer, job->byte_size, command_bytes,
-        job->host_generation);
+        job->host_generation, job);
     return 0;
 }
 
@@ -6067,6 +6844,12 @@ static void astra_host_channel_complete(void *opaque, int ret)
     uint8_t *base;
     uint64_t elapsed;
 
+    qemu_mutex_lock(&s->host.files_lock);
+    AstraHostJob **held = &s->host.jobs;
+    while (*held != NULL && *held != job) held = &(*held)->next;
+    assert(*held == job && job->session == NULL);
+    *held = job->next;
+    qemu_mutex_unlock(&s->host.files_lock);
     assert(channel->jobs != 0);
     --channel->jobs;
     assert(qatomic_read(&s->host.inflight) != 0);
@@ -6284,6 +7067,14 @@ static void astra_host_channel_kick(Astra68State *s, uint32_t slot,
     if (pending == 0) {
         return;
     }
+    qemu_mutex_lock(&s->host.files_lock);
+    bool exhausted = s->host.next_job > UINT64_MAX - pending;
+    qemu_mutex_unlock(&s->host.files_lock);
+    if (exhausted) {
+        channel->status = ASTRA_SYSCALL_RESOURCE_LIMIT;
+        stl_be_p(base + HOST_CHANNEL_HEADER_FIELD(transport_status), channel->status);
+        return;
+    }
     qatomic_inc(&s->host.submissions);
     channel->submitted_position = producer;
     for (uint32_t position = producer - pending;
@@ -6293,6 +7084,7 @@ static void astra_host_channel_kick(Astra68State *s, uint32_t slot,
         job->machine = s;
         job->slot = slot;
         job->owner = channel->owner;
+        job->process = channel->process;
         job->host_generation = channel->host_generation;
         job->channel_generation = channel->channel_generation;
         job->physical_buffer = channel->physical_buffer;
@@ -6300,6 +7092,11 @@ static void astra_host_channel_kick(Astra68State *s, uint32_t slot,
         job->command_capacity = channel->command_capacity;
         job->position = position;
         job->started_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+        qemu_mutex_lock(&s->host.files_lock);
+        job->id = ++s->host.next_job;
+        job->next = s->host.jobs;
+        s->host.jobs = job;
+        qemu_mutex_unlock(&s->host.files_lock);
         ++channel->jobs;
         qatomic_inc(&s->host.inflight);
         if (qatomic_read(&s->host.inflight) >
@@ -7035,10 +7832,10 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x854: return g_hash_table_size(s->network.endpoints);
     case 0x858: return s->network.ready_sequence;
     case 0x880:
-        return s->host.root_fd >= 0 ? HOST_ACCEL_ID_MAGIC : 0u;
+        return s->host.provider_control >= 0 ? HOST_ACCEL_ID_MAGIC : 0u;
     case 0x884: return ASTRA_HOST_VERSION;
     case 0x888:
-        return s->host.root_fd >= 0 ?
+        return s->host.provider_control >= 0 ?
             ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
                 ASTRA_HOST_CAP_SUBMISSION_DESCRIPTOR |
                 ASTRA_HOST_CAP_CHANNEL |
@@ -7053,10 +7850,11 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
                 ASTRA_HOST_CAP_FS_RESOLVES |
                 ASTRA_HOST_CAP_FS_DESCRIPTIONS |
                 ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS |
+                ASTRA_HOST_CAP_VOLUME_CATALOG |
 #endif
                 (s->audio.enabled ? ASTRA_HOST_CAP_AUDIO_STREAM : 0u) : 0u;
     case 0x88c:
-        return s->host.root_fd >= 0 ? ASTRA_HOST_STATE_READY : 0u;
+        return s->host.provider_control >= 0 ? ASTRA_HOST_STATE_READY : 0u;
     case 0x890: return s->host.generation;
     case 0x894: return HOST_ACCEL_MAX_TRANSFER;
     case 0x898: return HOST_ACCEL_MAX_TRANSFER / ASTRA_HOST_COMMAND_SIZE;
@@ -7949,7 +8747,6 @@ static void astra68_init(MachineState *machine)
     GError *gerror = NULL;
     const char *display_mailbox_path;
     const char *display_payload_path;
-    const char *hostfs_root;
     const char *text_plane_path;
     const char *cut_after_text;
     int i;
@@ -7976,9 +8773,10 @@ static void astra68_init(MachineState *machine)
         g_direct_hash, g_direct_equal, NULL, astra_network_endpoint_free);
     s->network.resolvers = g_hash_table_new_full(
         g_direct_hash, g_direct_equal, NULL, astra_network_resolver_free);
-    s->host.root_fd = -1;
-    for (uint32_t volume = 0; volume < ASTRA_HOST_FS_VOLUME_COUNT; ++volume)
-        s->host.volume_fds[volume] = -1;
+    s->host.provider_control = -1;
+    s->host.provider_path = -1;
+    qemu_mutex_init(&s->host.provider_control_lock);
+    qemu_mutex_init(&s->host.provider_path_lock);
     qemu_mutex_init(&s->host.files_lock);
     qemu_mutex_init(&s->host.namespace_lock);
     for (uint32_t slot = 0; slot < ASTRA_HOST_CHANNEL_COUNT; ++slot) {
@@ -7987,6 +8785,7 @@ static void astra68_init(MachineState *machine)
         s->host.channels[slot].audio_fd = -1;
     }
     s->host.files = g_hash_table_new(g_direct_hash, g_direct_equal);
+    s->host.usage_sequence = 1u;
     s->host.lost_handles = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, g_free);
     s->host.shares = g_hash_table_new(g_int64_hash, g_int64_equal);
     s->host.sessions = g_hash_table_new(g_direct_hash, g_direct_equal);
@@ -8002,42 +8801,7 @@ static void astra68_init(MachineState *machine)
         astra_host_budget("ASTRA_HOSTFS_MAX_DESCRIPTORS", available_descriptors));
     s->host.fs_max_directories = MIN(s->host.fs_max_descriptors,
         astra_host_budget("ASTRA_HOSTFS_MAX_DIRECTORIES", s->host.fs_max_descriptors));
-    hostfs_root = g_getenv("ASTRA_HOSTFS_ROOT");
-    if (hostfs_root != NULL && hostfs_root[0] != '\0') {
-        s->host.root_fd = open(hostfs_root,
-                               O_RDONLY | O_DIRECTORY | O_CLOEXEC |
-                                   O_NOFOLLOW);
-        if (s->host.root_fd < 0) {
-            error_report("cannot open Astra host filesystem root '%s': %s",
-                         hostfs_root, strerror(errno));
-            exit(EXIT_FAILURE);
-        }
-        for (uint32_t volume = 0; volume < ASTRA_HOST_FS_VOLUME_COUNT;
-             ++volume) {
-            static const char *const names[ASTRA_HOST_FS_VOLUME_COUNT] = {
-                [ASTRA_HOST_FS_VOLUME_WORK] = "work",
-                [ASTRA_HOST_FS_VOLUME_SOUND] = "sound",
-                [ASTRA_HOST_FS_VOLUME_SYSTEM] = "system",
-            };
-
-            if (volume != ASTRA_HOST_FS_VOLUME_SYSTEM &&
-                mkdirat(s->host.root_fd, names[volume], 0700) < 0 &&
-                errno != EEXIST) {
-                error_report("cannot create Astra host volume '%s/%s': %s",
-                             hostfs_root, names[volume], strerror(errno));
-                exit(EXIT_FAILURE);
-            }
-            s->host.volume_fds[volume] = openat(
-                s->host.root_fd, names[volume],
-                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-            if (s->host.volume_fds[volume] < 0 &&
-                !(volume == ASTRA_HOST_FS_VOLUME_SYSTEM && errno == ENOENT)) {
-                error_report("cannot open Astra host volume '%s/%s': %s",
-                             hostfs_root, names[volume], strerror(errno));
-                exit(EXIT_FAILURE);
-            }
-        }
-    }
+    astra_host_provider_init(s);
     astra_input_machine = s;
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-block-read-requests",
@@ -8092,6 +8856,10 @@ static void astra68_init(MachineState *machine)
                                    "astra-host-commands",
                                    &s->host.commands,
                                    OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine), "astra-host-non-fs-commands",
+                                   &s->host.non_fs_commands, OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine), "astra-host-non-fs-execution-ns",
+                                   &s->host.non_fs_execution_ns, OBJ_PROP_FLAG_READ);
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-host-execution-ns",
                                    &s->host.execution_ns,

@@ -84,6 +84,15 @@ test_registry(void)
 
     /* A sampler given too little room reports nothing rather than truncating. */
     assert(astra_metric_sample(group, samples, 1u) == 0u);
+    assert(!astra_metric_unregister("second", two_samples, &first));
+    assert(astra_metric_group_count() == 2u);
+    assert(astra_metric_unregister("first", two_samples, &first));
+    assert(astra_metric_group_count() == 1u && astra_metric_find("first") == NULL);
+    assert(astra_metric_group(0u)->context == &second);
+    assert(astra_metric_register("first", two_samples, &first) == ASTRA_METRIC_OK);
+    assert(astra_metric_unregister("second", two_samples, &second));
+    assert(astra_metric_unregister("first", two_samples, &first));
+    assert(astra_metric_group_count() == 0u);
 }
 
 static void

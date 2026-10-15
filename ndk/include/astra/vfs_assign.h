@@ -7,6 +7,7 @@
 #include <astra/process.h>
 #include <astra/vfs_path.h>
 #include <astra/vfs_service.h>
+#include <astra/volume_abi.h>
 
 /*
  * A process's namespace: the names it may use, and the authority each one
@@ -26,24 +27,26 @@
  * follows the colon is byte-exact and is not this file's business.
  */
 /*
- * Where an assign begins inside its mount. This is the grant's root field and
- * nothing else: two constants for one limit is the mistake that cost four
- * tasks the last time, so there is one.
+ * Native roots are complete paths. Startup capabilities contain only their
+ * small grant-relative root; variable native roots are serialized separately
+ * for process handoff rather than enlarging the startup record.
  */
 /** Bytes reserved for a NUL-terminated mount-relative assign root. */
-#define ASTRA_ASSIGN_ROOT_MAX ASTRA_CAPABILITY_ROOT_MAX
+#define ASTRA_ASSIGN_ROOT_MAX ASTRA_VFS_PATH_MAX
 
 /** One namespace binding from an assign name to a rooted capability. */
 typedef struct AstraAssign {
-    char name[ASTRA_CAPABILITY_NAME_MAX]; /**< Canonical uppercase name. */
+    char name[ASTRA_ASSIGN_NAME_MAX]; /**< Canonical uppercase name. */
     /*
      * Normalised and mount-relative, with no leading separator: "work", or ""
      * for the mount's own root. Stored in the form it is joined in, so
      * resolution is a copy rather than a parse.
      */
-    char root[ASTRA_ASSIGN_ROOT_MAX]; /**< Normalized mount-relative root. */
+    char *root; /**< Owned normalized mount-relative root. */
     uint32_t handle; /**< Filesystem service capability. */
     uint32_t rights; /**< Rights delegated with the capability. */
+    AstraVolumeReference volume; /**< Exact incarnation for a lazy volume binding; zero for an explicit capability. */
+    uint32_t broker; /**< Root authority for a lazy binding; zero for an explicit capability. */
 } AstraAssign;
 
 /** Complete ordered namespace for one process. */
@@ -80,6 +83,13 @@ void astra_assign_table_destroy(AstraAssignTable *table);
  */
 uint32_t astra_assign_bind(AstraAssignTable *table, const char *name,
                            uint32_t handle, uint32_t rights, const char *root);
+/** Bind an exact public mount without acquiring its root yet.
+ * @param table Namespace to modify. @param name Canonical mount name.
+ * @param reference Exact mount incarnation. @param broker Native root authority.
+ * @param rights Native read/write authority.
+ * @return ASTRA_VFS_* status; existing names are refused. */
+uint32_t astra_assign_bind_volume(AstraAssignTable *table, const char *name,
+    const AstraVolumeReference *reference, uint32_t broker, uint32_t rights);
 
 /**
  * Appends one member to a name that already exists. Order is join order and

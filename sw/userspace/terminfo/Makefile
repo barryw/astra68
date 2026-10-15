@@ -34,6 +34,7 @@ SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
 STREAMS_LIB := $(STREAMS)/build/m68k/libastrastreams.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
+SYSTEM_LIB := $(SYSTEM)/build/m68k/libastra.a
 POSIX_LIB := $(POSIX)/build/m68k/libastraposix.a
 NETWORK_LIB := $(NETWORK)/build/m68k/libastranetwork.a
 PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
@@ -64,6 +65,7 @@ CONFIG_LDFLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-T $(abspath $(RUNTIME)/astra_static_user.ld) \
 	$(abspath $(RUNTIME_CRT0)) $(abspath $(CONFIG_PROGRAM))
 CONFIG_LIBS := -Wl,--start-group $(abspath $(VFS_LIB)) \
+	$(abspath $(SYSTEM_LIB)) \
 	$(abspath $(STREAMS_LIB)) $(abspath $(POSIX_LIB)) \
 	$(abspath $(NETWORK_LIB)) \
 	$(abspath $(RUNTIME_LIB)) $(abspath $(PICOLIBC_LIB)) \
@@ -88,19 +90,20 @@ dependencies-ready:
 		build/m68k/crt0-hosted.o
 	$(MAKE) -C $(STREAMS) build/m68k/libastrastreams.a
 	$(MAKE) -C $(VFS) build/m68k/libastravfs.a
+	$(MAKE) -C $(SYSTEM) build/m68k/libastra.a
 	$(MAKE) -C $(NETWORK) build/m68k/libastranetwork.a
 	$(MAKE) -C $(POSIX) build/m68k/libastraposix.a
 	$(MAKE) -C $(POSIX) library
 
 $(NCURSES_INPUT_STAMP): $(PICOLIBC)/include/sys/termios.h \
 		$(PICOLIBC)/include/sys/ioctl.h $(POSIX_LIB) $(RUNTIME_LIB) \
-		$(STREAMS_LIB) $(VFS_LIB) $(NETWORK_LIB) $(RUNTIME_CRT0) \
+		$(STREAMS_LIB) $(VFS_LIB) $(SYSTEM_LIB) $(NETWORK_LIB) $(RUNTIME_CRT0) \
 		$(CONFIG_PROGRAM) \
 		$(ASTRA_TOOLCHAIN_STAMP) Makefile $(NCURSES_SOURCE)/configure \
 		| dependencies-ready
 	$(call ASTRA_UPDATE_CONTENT_STAMP,$(PICOLIBC)/include/sys/termios.h \
 		$(PICOLIBC)/include/sys/ioctl.h $(POSIX_LIB) $(RUNTIME_LIB) \
-		$(STREAMS_LIB) $(VFS_LIB) $(NETWORK_LIB) $(RUNTIME_CRT0) \
+		$(STREAMS_LIB) $(VFS_LIB) $(SYSTEM_LIB) $(NETWORK_LIB) $(RUNTIME_CRT0) \
 		$(CONFIG_PROGRAM) \
 		$(ASTRA_TOOLCHAIN_STAMP) Makefile $(NCURSES_SOURCE)/configure)
 

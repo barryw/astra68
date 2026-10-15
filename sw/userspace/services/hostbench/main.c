@@ -284,7 +284,7 @@ int astra_main(const AstraStartupInfo *startup)
     {
         uint32_t scope = 0u;
         uint32_t minted = astra_host_scope_create(
-            device->handle, ASTRA_HOST_FS_VOLUME_WORK, 0u, &scope);
+            device->handle, 1u, 0u, &scope);
 
         if (minted != ASTRA_SYSCALL_ACCESS_DENIED) {
             if (scope != 0u)

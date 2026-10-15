@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,10 @@
 #include <astra/vfs_process.h>
 #include <astra/vfs_path.h>
 #include <astra/vfs_provider_index.h>
+#include <astra/volume.h>
+#include <astra/runtime.h>
+#include <astra/vfs_file_lifetime.h>
+#include <astra/ascii.h>
 
 static uint32_t closes;
 static uint32_t connects;
@@ -28,7 +33,6 @@ static uint32_t next_semaphore = 100u;
 static uint32_t seeds;
 static int fail_allocate;
 static int force_move;
-static size_t reallocated_size;
 static int whole_file_enabled;
 static uint32_t whole_file_moved;
 static uint64_t whole_file_node_size;
@@ -38,32 +42,191 @@ static const uint8_t *mock_file_content = default_file_content;
 static uint32_t mock_file_length = 5u;
 static const char *held_directory_path = "/before";
 static uint32_t held_directory_status;
+static uint32_t adopt_status;
 static AstraAssign mock_assigns[ASTRA_STARTUP_CAPABILITY_MAX + 16u];
+static int catalog_enabled;
+static uint32_t catalog_count;
+static AstraVolumeRecord catalog_records[8];
+static int catalog_changed;
+static AstraResult catalog_failure;
+static uint32_t root_requests;
+static uint32_t root_closes;
+static uint32_t file_closes;
+static uint32_t watch_opens;
+static uint32_t next_root = 50000u;
+static uint32_t global_brokers = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE;
+static uint32_t ram_brokers;
+static AstraVolumeReference ram_source = {77u, 600u, 1u};
+static AstraResult ram_info_failure;
+static AstraHandle last_root_broker;
+static uint32_t last_root_rights;
+
+const AstraStartupCapability *astra_startup_capability(const AstraStartupInfo *startup, const char *name)
+{
+    (void)startup;
+    static const AstraStartupCapability capabilities[] = {
+        {.name = "VOLUMES", .handle = 90001u},
+        {.name = "VOLUME_READ", .handle = 90002u},
+        {.name = "VOLUME_WRITE", .handle = 90003u},
+        {.name = "RAM_READ", .handle = 90005u},
+        {.name = "RAM_WRITE", .handle = 90006u}};
+    if (!catalog_enabled) return NULL;
+    for (uint32_t at = 0u; at < sizeof(capabilities) / sizeof(capabilities[0]); ++at)
+        if (strcmp(name, capabilities[at].name) == 0) {
+            if (at == 1u && (global_brokers & ASTRA_RIGHT_READ) == 0u) return NULL;
+            if (at == 2u && (global_brokers & ASTRA_RIGHT_WRITE) == 0u) return NULL;
+            if (at == 3u && (ram_brokers & ASTRA_RIGHT_READ) == 0u) return NULL;
+            if (at == 4u && (ram_brokers & ASTRA_RIGHT_WRITE) == 0u) return NULL;
+            return &capabilities[at];
+        }
+    return NULL;
+}
+uint32_t astra_close(uint32_t handle) { if (handle >= 50000u && handle < 90000u) ++root_closes; return ASTRA_SYSCALL_OK; }
+AstraResult astra_volume_watch_open(AstraHandle service, AstraVolumeWatch *watch)
+{
+    assert(service == 90001u); ++watch_opens;
+    *watch = (AstraVolumeWatch){watch_opens, 90004u, 0u};
+    return ASTRA_OK;
+}
+AstraResult astra_volume_watch_receive(const AstraVolumeWatch *watch, AstraVolumeChange *change)
+{
+    (void)watch; (void)change;
+    if (!catalog_changed) return ASTRA_ERROR_WOULD_BLOCK;
+    catalog_changed = 0;
+    return ASTRA_OK;
+}
+AstraResult astra_volume_watch_close(AstraHandle service, AstraVolumeWatch *watch)
+{
+    (void)service; *watch = (AstraVolumeWatch)ASTRA_VOLUME_WATCH_INIT; return ASTRA_OK;
+}
+AstraResult astra_volume_snapshot_open(AstraHandle service, AstraVolumeSnapshot *snapshot)
+{
+    assert(service == 90001u);
+    if (catalog_failure != ASTRA_OK) return catalog_failure;
+    if (catalog_count != 0u) {
+        snapshot->records = astra_runtime_allocate(catalog_count * sizeof(AstraVolumeRecord));
+        if (snapshot->records == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
+        memcpy(snapshot->records, catalog_records, catalog_count * sizeof(AstraVolumeRecord));
+    }
+    snapshot->epoch = 77u; snapshot->sequence = 1u; snapshot->count = catalog_count;
+    return ASTRA_OK;
+}
+void astra_volume_snapshot_close(AstraVolumeSnapshot *snapshot)
+{
+    astra_runtime_deallocate(snapshot->records); *snapshot = (AstraVolumeSnapshot)ASTRA_VOLUME_SNAPSHOT_INIT;
+}
+AstraResult astra_volume_root(AstraHandle broker, const AstraVolumeReference *reference, uint32_t rights, AstraHandle *root)
+{
+    assert(broker == 90002u || broker == 90003u || broker == 90005u || broker == 90006u);
+    assert((rights & ASTRA_RIGHT_READ) != 0u);
+    if (broker == 90002u || broker == 90005u) assert(rights == ASTRA_RIGHT_READ);
+    for (uint32_t at = 0u; at < catalog_count; ++at)
+        if (reference->epoch == 77u && reference->id == catalog_records[at].id &&
+            reference->generation == catalog_records[at].generation) {
+            if (broker == 90005u || broker == 90006u)
+                assert(catalog_records[at].parent == ram_source.id &&
+                    catalog_records[at].parent_generation == ram_source.generation);
+            last_root_broker = broker; last_root_rights = rights;
+            ++root_requests; *root = next_root++; return ASTRA_OK;
+        }
+    return ASTRA_ERROR_IO;
+}
+AstraResult astra_volume_broker_info(AstraHandle broker, AstraVolumeBrokerInfo *info)
+{
+    assert(broker == 90005u || broker == 90006u);
+    if (ram_info_failure != ASTRA_OK) return ram_info_failure;
+    *info = (AstraVolumeBrokerInfo){.source = ram_source,
+        .rights = ASTRA_RIGHT_READ | (broker == 90006u ? ASTRA_RIGHT_WRITE : 0u)};
+    return ASTRA_OK;
+}
+
+static uint32_t mock_binding(AstraAssignTable *table, const char *name,
+    uint32_t handle, uint32_t rights, const char *root, const AstraVolumeReference *volume)
+{
+    if (table->count == table->capacity) {
+        uint32_t capacity = table->capacity == 0u ? 8u : table->capacity * 2u;
+        AstraAssign *grown = astra_runtime_reallocate(table->entries, capacity * sizeof(*grown));
+        if (grown == NULL) return ASTRA_VFS_ERR_LIMIT;
+        table->entries = grown; table->capacity = capacity;
+    }
+    AstraAssign *binding = &table->entries[table->count++];
+    *binding = (AstraAssign){.handle = handle, .rights = rights};
+    for (uint32_t at = 0u; at + 1u < sizeof(binding->name) && name[at] != '\0'; ++at)
+        binding->name[at] = astra_ascii_upper(name[at]);
+    binding->root = astra_runtime_allocate(strlen(root) + 1u);
+    if (binding->root == NULL) { --table->count; return ASTRA_VFS_ERR_LIMIT; }
+    strcpy(binding->root, root);
+    if (volume != NULL) binding->volume = *volume;
+    return ASTRA_VFS_OK;
+}
+uint32_t astra_assign_bind(AstraAssignTable *table, const char *name, uint32_t handle, uint32_t rights, const char *root)
+{ return mock_binding(table, name, handle, rights, root, NULL); }
+uint32_t astra_assign_join(AstraAssignTable *table, const char *name, uint32_t handle, uint32_t rights, const char *root)
+{ return mock_binding(table, name, handle, rights, root, NULL); }
+uint32_t astra_assign_bind_volume(AstraAssignTable *table, const char *name, const AstraVolumeReference *volume, uint32_t broker, uint32_t rights)
+{
+    if (broker == 0u) return ASTRA_VFS_ERR_INVALID;
+    uint32_t status = mock_binding(table, name, 0u, rights, "", volume);
+    if (status == ASTRA_VFS_OK) table->entries[table->count - 1u].broker = broker;
+    return status;
+}
+void astra_assign_table_destroy(AstraAssignTable *table)
+{
+    if (table->entries != mock_assigns) {
+        for (uint32_t at = 0u; at < table->count; ++at)
+            astra_runtime_deallocate(table->entries[at].root);
+        astra_runtime_deallocate(table->entries);
+    }
+    *table = (AstraAssignTable)ASTRA_ASSIGN_TABLE_INIT;
+}
+uint32_t astra_vfs_assign_clone(AstraAssignTable *target, const AstraAssignTable *source)
+{
+    for (uint32_t at = 0u; at < source->count; ++at) {
+        const AstraAssign *entry = &source->entries[at];
+        uint32_t status = mock_binding(target, entry->name, entry->handle,
+            entry->rights, entry->root, &entry->volume);
+        if (status != ASTRA_VFS_OK) { astra_assign_table_destroy(target); return status; }
+        target->entries[at].broker = entry->broker;
+    }
+    return ASTRA_VFS_OK;
+}
+
+typedef union MockAllocation {
+    max_align_t alignment;
+    size_t size;
+} MockAllocation;
 
 void *astra_runtime_allocate(size_t size)
 {
-    return fail_allocate ? NULL : malloc(size);
+    if (fail_allocate || size > SIZE_MAX - sizeof(MockAllocation))
+        return NULL;
+    MockAllocation *allocation = malloc(sizeof(*allocation) + size);
+    if (allocation == NULL) return NULL;
+    allocation->size = size;
+    return allocation + 1;
 }
 void *astra_runtime_reallocate(void *pointer, size_t size)
 {
-    void *grown;
+    MockAllocation *old = pointer != NULL ? (MockAllocation *)pointer - 1 : NULL;
+    MockAllocation *grown;
 
-    if (fail_allocate)
+    if (fail_allocate || size > SIZE_MAX - sizeof(MockAllocation))
         return NULL;
-    if (force_move && pointer != NULL) {
-        grown = malloc(size);
+    if (force_move && old != NULL) {
+        grown = malloc(sizeof(*grown) + size);
         if (grown == NULL)
             return NULL;
-        memcpy(grown, pointer, size < reallocated_size ? size : reallocated_size);
-        free(pointer);
+        memcpy(grown + 1, pointer, size < old->size ? size : old->size);
+        free(old);
     } else {
-        grown = realloc(pointer, size);
+        grown = realloc(old, sizeof(*grown) + size);
     }
     if (grown != NULL)
-        reallocated_size = size;
-    return grown;
+        grown->size = size;
+    return grown != NULL ? grown + 1 : NULL;
 }
-void astra_runtime_deallocate(void *pointer) { free(pointer); }
+void astra_runtime_deallocate(void *pointer)
+{ if (pointer != NULL) free((MockAllocation *)pointer - 1); }
 
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
@@ -98,6 +261,8 @@ uint32_t astra_assign_seed(AstraAssignTable *table,
     memset(table, 0, sizeof(*table));
     memset(mock_assigns, 0, sizeof(mock_assigns));
     table->entries = mock_assigns;
+    for (uint32_t at = 0u; at < sizeof(mock_assigns) / sizeof(mock_assigns[0]); ++at)
+        mock_assigns[at].root = "";
     table->capacity = (uint32_t)(sizeof(mock_assigns) / sizeof(mock_assigns[0]));
     if (seed_distinct != 0u) {
         table->count = ASTRA_STARTUP_CAPABILITY_MAX;
@@ -189,8 +354,10 @@ uint32_t astra_vfs_port_write_bulk_position(
 
 uint32_t astra_vfs_port_transport(void *context, uint32_t operation,
                                   const AstraVfsRequest *request,
+                                  const AstraVfsTransfer *transfer,
                                   AstraVfsReply *reply)
 {
+    (void)transfer;
     (void)context; (void)operation; (void)request; (void)reply;
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }
@@ -253,7 +420,7 @@ int astra_vfs_port_client_closed(const AstraVfsClient *client)
     return client->port_lifecycle == 1u;
 }
 
-uint32_t astra_vfs_host_port_connect_lazy(AstraVfsClient *client,
+uint32_t astra_vfs_client_connect_service(AstraVfsClient *client,
                                           uint32_t service)
 {
     uint32_t status = astra_vfs_port_connect(client, service);
@@ -409,7 +576,10 @@ uint32_t astra_vfs_open(AstraVfsClient *client, const char *path, uint32_t flags
 {
     (void)client; (void)path;
     assert(flags == (ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY));
-    *file = 1000u; *size = 0u; *kind = ASTRA_VFS_KIND_DIRECTORY;
+    *file = 1000u;
+    if (size != NULL) *size = 0u;
+    if (kind != NULL) *kind = ASTRA_VFS_KIND_DIRECTORY;
+    if (client->description_acquire != NULL) client->description_acquire(client);
     return ASTRA_VFS_OK;
 }
 uint32_t astra_vfs_open_at(AstraVfsClient *client, AstraVfsFile directory,
@@ -420,7 +590,10 @@ uint32_t astra_vfs_open_at(AstraVfsClient *client, AstraVfsFile directory,
 }
 uint32_t astra_vfs_close(AstraVfsClient *client, AstraVfsFile file)
 {
-    (void)client; assert(file != ASTRA_VFS_FILE_INVALID);
+    assert(file != ASTRA_VFS_FILE_INVALID);
+    ++file_closes;
+    if (client->description_release != NULL)
+        client->description_release(client, client->ownership_epoch);
     return ASTRA_VFS_OK;
 }
 uint32_t astra_vfs_directory_path(AstraVfsClient *client, AstraVfsFile file,
@@ -439,7 +612,10 @@ uint32_t astra_vfs_adopt(AstraVfsClient *client, uint64_t token, AstraVfsFile *f
 {
     (void)client;
     assert(token != 0u);
+    if (adopt_status != ASTRA_VFS_OK)
+        return adopt_status;
     *file = 1000u;
+    if (client->description_acquire != NULL) client->description_acquire(client);
     return ASTRA_VFS_OK;
 }
 static pthread_barrier_t cache_start;
@@ -589,6 +765,7 @@ int main(void)
             AstraProcessFileState state;
 
             original._private_client = astra_process_vfs_client();
+            original._private_ownership_epoch = original._private_client->ownership_epoch;
             original._private_read = astra_vfs_port_read_bulk_position;
             original._private_file = 0x1234u;
             original._private_flags = ASTRA_VFS_OPEN_READ |
@@ -731,24 +908,19 @@ int main(void)
         AstraVfsClient *borrowed = astra_process_vfs_client_for(
             &astra_process_vfs_assigns()->entries[0]);
         for (uint32_t index = 3u; index < 9u; ++index) {
-            AstraAssignTable *table = astra_process_vfs_assigns();
-
-            table->entries[index].handle = index + 100u;
-            table->count = index + 1u;
-            assert(astra_process_vfs_client_for(&table->entries[index]) !=
+            AstraAssign extra = {.handle = index + 100u};
+            assert(astra_process_vfs_client_for(&extra) !=
                    NULL);
         }
         {
-            AstraAssignTable *table = astra_process_vfs_assigns();
-
-            table->entries[9].handle = 109u;
-            table->count = 10u;
+            const AstraAssignTable *table = astra_process_vfs_assigns();
+            AstraAssign extra = {.handle = 109u};
             fail_allocate = 1;
-            assert(astra_process_vfs_client_for(&table->entries[9]) == NULL);
+            assert(astra_process_vfs_client_for(&extra) == NULL);
             fail_allocate = 0;
             assert(astra_process_vfs_client_for(&table->entries[0]) != NULL);
             force_move = 1;
-            assert(astra_process_vfs_client_for(&table->entries[9]) != NULL);
+            assert(astra_process_vfs_client_for(&extra) != NULL);
             assert(borrowed == astra_process_vfs_client_for(&table->entries[0]));
             force_move = 0;
         }
@@ -764,14 +936,11 @@ int main(void)
                        ASTRA_STARTUP_CAPABILITY_MAX - 1u]) != NULL);
         held._private_client = astra_process_vfs_client_for(
             &astra_process_vfs_assigns()->entries[0]);
+        held._private_ownership_epoch = held._private_client->ownership_epoch;
         held._private_file = 1u;
         assert(astra_process_file_export(&held, &held_state) == ASTRA_VFS_OK);
-        astra_process_vfs_assigns()->entries[
-            ASTRA_STARTUP_CAPABILITY_MAX].handle = 1000u;
-        ++astra_process_vfs_assigns()->count;
-        assert(astra_process_vfs_client_for(
-                   &astra_process_vfs_assigns()->entries[
-                       ASTRA_STARTUP_CAPABILITY_MAX]) != NULL);
+        AstraAssign extra = {.handle = 1000u};
+        assert(astra_process_vfs_client_for(&extra) != NULL);
         assert(astra_process_file_export(&held, &held_state) == ASTRA_VFS_OK);
         assert(held._private_client == astra_process_vfs_client_for(
             &astra_process_vfs_assigns()->entries[0]));
@@ -796,6 +965,7 @@ int main(void)
         assert(astra_process_filesystem_open(&first, &startup) == ASTRA_VFS_OK);
         assert(astra_process_filesystem_open(&second, &startup) == ASTRA_VFS_OK);
         held._private_client = astra_process_vfs_client();
+        held._private_ownership_epoch = held._private_client->ownership_epoch;
         held._private_file = 1u;
         astra_process_filesystem_close(&unopened);
         astra_process_filesystem_close(&first);
@@ -939,6 +1109,248 @@ int main(void)
         astra_process_vfs_close();
     }
 
+    {
+        AstraStartupInfo startup = {.capabilities_address = 1u};
+        const AstraAssignTable *first, *second;
+        void *first_owner, *second_owner;
+        catalog_enabled = 1; catalog_count = 1u;
+        catalog_records[0] = (AstraVolumeRecord){.id = 7u, .generation = 1u,
+            .kind = ASTRA_VOLUME_MOUNT, .state = ASTRA_VOLUME_MOUNTED,
+            .origin = ASTRA_VOLUME_ORIGIN_DEVICE, .name = "/usb0"};
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_namespace_acquire(&first, &first_owner) == ASTRA_VFS_OK);
+        const AstraAssign *mount = astra_assign_lookup(first, "USB0");
+        assert(mount != NULL && mount->handle == 0u && mount->volume.generation == 1u);
+        assert(root_requests == 0u);
+        AstraVfsClient *old = astra_process_vfs_client_for(mount);
+        assert(old != NULL && root_requests == 1u);
+        AstraVfsFile held;
+        assert(astra_vfs_open(old, "/", ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY,
+            &held, NULL, NULL) == ASTRA_VFS_OK);
+        /* A replacement never rewrites a table or client already borrowed. */
+        catalog_records[0].generation = 2u; catalog_changed = 1;
+        assert(astra_process_vfs_namespace_acquire(&second, &second_owner) == ASTRA_VFS_OK);
+        assert(astra_assign_lookup(first, "USB0")->volume.generation == 1u);
+        mount = astra_assign_lookup(second, "USB0");
+        assert(mount != NULL && mount->volume.generation == 2u);
+        AstraVfsClient *replacement = astra_process_vfs_client_for(mount);
+        assert(replacement != NULL && replacement != old && root_requests == 2u);
+        astra_process_vfs_namespace_release(first_owner);
+        assert(root_closes == 0u);
+        /* Transient catalog failure keeps the last complete namespace. */
+        catalog_changed = 1; catalog_failure = ASTRA_ERROR_BUSY;
+        astra_process_vfs_namespace_release(second_owner);
+        assert(astra_process_vfs_namespace_acquire(&second, &second_owner) == ASTRA_VFS_OK);
+        assert(astra_assign_lookup(second, "USB0")->volume.generation == 2u);
+        catalog_failure = ASTRA_OK;
+        astra_process_vfs_namespace_release(second_owner);
+        /* Exec state includes the current binding and the held old description. */
+        uint32_t size = astra_process_vfs_state_size(), used;
+        void *state = malloc(size); assert(state != NULL);
+        assert(astra_process_vfs_export(state, size, &used) == ASTRA_VFS_OK && used == size);
+        assert(astra_process_vfs_import(&startup, state, size) == ASTRA_VFS_OK);
+        free(state);
+        assert(astra_process_vfs_namespace_acquire(&second, &second_owner) == ASTRA_VFS_OK);
+        assert(astra_assign_lookup(second, "USB0")->volume.generation == 2u);
+        astra_process_vfs_namespace_release(second_owner);
+        assert(astra_vfs_close(old, held) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_namespace_acquire(&second, &second_owner) == ASTRA_VFS_OK);
+        astra_process_vfs_namespace_release(second_owner);
+        assert(root_closes == 1u);
+        /* Repeated hotplug retires roots rather than leaking one per incarnation. */
+        for (uint32_t generation = 3u; generation < 103u; ++generation) {
+            catalog_records[0].generation = generation; catalog_changed = 1;
+            assert(astra_process_vfs_namespace_acquire(&second, &second_owner) == ASTRA_VFS_OK);
+            mount = astra_assign_lookup(second, "USB0");
+            assert(astra_process_vfs_client_for(mount) != NULL);
+            astra_process_vfs_namespace_release(second_owner);
+        }
+        catalog_count = 0u; catalog_changed = 1;
+        assert(astra_process_vfs_namespace_acquire(&second, &second_owner) == ASTRA_VFS_OK);
+        assert(astra_assign_lookup(second, "USB0") == NULL);
+        astra_process_vfs_namespace_release(second_owner);
+        assert(root_requests == root_closes);
+        astra_process_vfs_close(); catalog_enabled = 0;
+    }
+    {
+        /* RAM role authority follows its configured SOURCE through unmount and
+         * a fresh process start, without exposing other RAM or USB sources. */
+        AstraStartupInfo startup = {.capabilities_address = 1u};
+        const AstraAssignTable *view;
+        void *owner;
+        global_brokers = 0u; ram_brokers = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE;
+        catalog_enabled = 1; catalog_count = 4u;
+        catalog_records[0] = (AstraVolumeRecord){.id = ram_source.id,
+            .generation = ram_source.generation, .kind = ASTRA_VOLUME_SOURCE,
+            .state = ASTRA_VOLUME_UNMOUNTED, .class_id = ASTRA_VOLUME_RAM,
+            .origin = ASTRA_VOLUME_ORIGIN_RAM, .flags = ASTRA_VOLUME_CONFIGURED_RAM};
+        catalog_records[1] = (AstraVolumeRecord){.id = 601u, .generation = 1u,
+            .parent = ram_source.id, .parent_generation = ram_source.generation,
+            .kind = ASTRA_VOLUME_MOUNT, .state = ASTRA_VOLUME_MOUNTED,
+            .class_id = ASTRA_VOLUME_RAM, .origin = ASTRA_VOLUME_ORIGIN_RAM,
+            .name = "/ram0"};
+        catalog_records[2] = (AstraVolumeRecord){.id = 602u, .generation = 1u,
+            .parent = 599u, .parent_generation = 1u, .kind = ASTRA_VOLUME_MOUNT,
+            .state = ASTRA_VOLUME_MOUNTED, .class_id = ASTRA_VOLUME_RAM,
+            .origin = ASTRA_VOLUME_ORIGIN_RAM, .name = "/ram1"};
+        catalog_records[3] = (AstraVolumeRecord){.id = 603u, .generation = 1u,
+            .kind = ASTRA_VOLUME_MOUNT, .state = ASTRA_VOLUME_MOUNTED,
+            .origin = ASTRA_VOLUME_ORIGIN_DEVICE, .name = "/usb0"};
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        const AstraAssign *mount = astra_assign_lookup(view, "RAM0");
+        assert(mount != NULL && mount->broker == 90006u &&
+            mount->rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE));
+        assert(astra_assign_lookup(view, "RAM1") == NULL && astra_assign_lookup(view, "USB0") == NULL);
+        AstraVfsClient *old = astra_process_vfs_client_for(mount);
+        assert(old != NULL && last_root_broker == 90006u && last_root_rights == mount->rights);
+        AstraAssign other_authority = *mount;
+        other_authority.broker = 90003u;
+        assert(astra_process_vfs_client_for(&other_authority) == NULL);
+        AstraVfsFile held;
+        assert(astra_vfs_open(old, "/", ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY,
+            &held, NULL, NULL) == ASTRA_VFS_OK);
+        astra_process_vfs_namespace_release(owner);
+        catalog_records[1].state = ASTRA_VOLUME_UNMOUNTED; catalog_changed = 1;
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        assert(astra_assign_lookup(view, "RAM0") == NULL);
+        astra_process_vfs_namespace_release(owner);
+        catalog_records[1].id = 604u; catalog_records[1].state = ASTRA_VOLUME_MOUNTED;
+        catalog_changed = 1;
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        mount = astra_assign_lookup(view, "RAM0");
+        assert(mount != NULL && mount->volume.id == 604u && astra_process_vfs_client_for(mount) != old);
+        astra_process_vfs_namespace_release(owner);
+        assert(astra_vfs_close(old, held) == ASTRA_VFS_OK);
+        /* A same-name mount from another source incarnation is not the role. */
+        ++catalog_records[1].parent_generation; catalog_changed = 1;
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        assert(astra_assign_lookup(view, "RAM0") == NULL);
+        astra_process_vfs_namespace_release(owner);
+        catalog_records[1].parent_generation = ram_source.generation;
+        catalog_records[1].state = ASTRA_VOLUME_UNMOUNTED;
+        astra_process_vfs_close();
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        assert(astra_assign_lookup(view, "RAM0") == NULL);
+        astra_process_vfs_namespace_release(owner);
+        catalog_records[1].id = 605u; catalog_records[1].state = ASTRA_VOLUME_MOUNTED;
+        catalog_records[1].flags = ASTRA_VOLUME_READ_ONLY; catalog_changed = 1;
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        mount = astra_assign_lookup(view, "RAM0");
+        assert(mount != NULL && mount->rights == ASTRA_RIGHT_READ);
+        assert(astra_process_vfs_client_for(mount) != NULL && last_root_rights == ASTRA_RIGHT_READ);
+        astra_process_vfs_namespace_release(owner);
+        /* A transient info failure cannot publish a partial replacement. */
+        catalog_records[1].id = 606u; catalog_changed = 1;
+        ram_info_failure = ASTRA_ERROR_BUSY;
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        assert(astra_assign_lookup(view, "RAM0")->volume.id == 605u);
+        astra_process_vfs_namespace_release(owner);
+        ram_info_failure = ASTRA_OK;
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        assert(astra_assign_lookup(view, "RAM0")->volume.id == 606u);
+        astra_process_vfs_namespace_release(owner);
+        astra_process_vfs_close();
+        /* A read role never acquires writes even when the mount is writable. */
+        ram_brokers = ASTRA_RIGHT_READ; catalog_records[1].flags = 0u;
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        mount = astra_assign_lookup(view, "RAM0");
+        assert(mount != NULL && mount->broker == 90005u && mount->rights == ASTRA_RIGHT_READ);
+        assert(astra_process_vfs_client_for(mount) != NULL && last_root_broker == 90005u);
+        astra_process_vfs_namespace_release(owner);
+        astra_process_vfs_close();
+        catalog_enabled = 0; ram_brokers = 0u; global_brokers = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE;
+    }
+    {
+        /* A child invalidates raw copied tokens but retains their exact local
+           pins. Adoption replaces one pin; refresh cannot free the other. */
+        AstraStartupInfo startup = {.capabilities_address = 1u};
+        const AstraAssignTable *view;
+        void *owner;
+        catalog_enabled = 1; catalog_count = 1u;
+        catalog_records[0] = (AstraVolumeRecord){.id = 707u, .generation = 1u,
+            .kind = ASTRA_VOLUME_MOUNT, .state = ASTRA_VOLUME_MOUNTED,
+            .origin = ASTRA_VOLUME_ORIGIN_DEVICE, .name = "/usb0"};
+        uint32_t roots_before = root_closes;
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        AstraVfsClient *old = astra_process_vfs_client_for(astra_assign_lookup(view, "USB0"));
+        assert(old != NULL);
+        AstraFile raw = ASTRA_FILE_INIT, adopted = ASTRA_FILE_INIT;
+        AstraVfsFile token;
+        assert(astra_vfs_open(old, "/", ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY,
+            &token, NULL, NULL) == ASTRA_VFS_OK);
+        AstraProcessFileState record = {.service = old->port_service, .file = token,
+            .flags = ASTRA_VFS_OPEN_READ, .kind = ASTRA_VFS_KIND_DIRECTORY};
+        assert(astra_process_file_import(&record, &raw) == ASTRA_VFS_OK);
+        assert(astra_vfs_open(old, "/", ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY,
+            &token, NULL, NULL) == ASTRA_VFS_OK);
+        assert(astra_process_file_import(&record, &adopted) == ASTRA_VFS_OK);
+        AstraProcessFileShare receipt = {.file = record, .token = 1u};
+        uint32_t parent_epoch = old->ownership_epoch;
+        astra_process_vfs_namespace_release(owner);
+        assert(astra_process_vfs_after_fork_child(&startup, NULL) == ASTRA_VFS_OK);
+        assert(old->ownership_epoch == parent_epoch + 1u);
+        assert(astra_process_file_export(&raw, &record) == ASTRA_VFS_ERR_LOST);
+        assert(astra_process_file_adopt(&receipt, &adopted) == ASTRA_VFS_OK);
+        assert(adopted._private_ownership_epoch == old->ownership_epoch);
+        assert(astra_process_file_export(&adopted, &record) == ASTRA_VFS_OK);
+        /* Another fork must retain already-invalid pins as well as move the
+           newly adopted owner. Epochs cannot revive an older raw token. */
+        receipt.file = record; receipt.token = 2u;
+        assert(astra_process_vfs_after_fork_child(&startup, NULL) == ASTRA_VFS_OK);
+        assert(old->ownership_epoch == parent_epoch + 2u);
+        assert(astra_process_file_export(&adopted, &record) == ASTRA_VFS_ERR_LOST);
+        assert(astra_process_file_adopt(&receipt, &adopted) == ASTRA_VFS_OK);
+        assert(astra_process_file_export(&adopted, &record) == ASTRA_VFS_OK);
+        catalog_records[0].generation = 2u; catalog_changed = 1;
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        astra_process_vfs_namespace_release(owner);
+        assert(root_closes == roots_before);
+        assert(astra_vfs_file_owner_status(raw._private_client, raw._private_ownership_epoch) == ASTRA_VFS_ERR_LOST);
+        assert(astra_vfs_file_owner_close(adopted._private_client, adopted._private_file,
+            adopted._private_ownership_epoch) == ASTRA_VFS_OK);
+        adopted = (AstraFile)ASTRA_FILE_INIT;
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        astra_process_vfs_namespace_release(owner);
+        assert(root_closes == roots_before);
+        uint32_t closed_before = file_closes;
+        assert(astra_vfs_file_owner_close(raw._private_client, raw._private_file,
+            raw._private_ownership_epoch) == ASTRA_VFS_ERR_LOST);
+        raw = (AstraFile)ASTRA_FILE_INIT;
+        assert(file_closes == closed_before);
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        astra_process_vfs_namespace_release(owner);
+        assert(root_closes == roots_before + 1u);
+        astra_process_vfs_close();
+        catalog_enabled = 0;
+    }
+    {
+        /* Failed CWD receipt adoption leaves an inherited local owner. It must
+         * neither issue another old-token request nor close a new child token. */
+        AstraStartupInfo startup = {.capabilities_address = 1u};
+        AstraProcessFileShare receipt = {.token = 3u};
+        const AstraFile *directory;
+        char cwd[64];
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        AstraVfsClient *client = astra_process_vfs_client();
+        client->features |= ASTRA_VFS_FEATURE_DESCRIPTIONS | ASTRA_VFS_FEATURE_DIRECTORY_PATH;
+        assert(astra_process_vfs_set_current_directory("/work/before") == ASTRA_VFS_OK);
+        assert(astra_process_vfs_current_acquire(&directory) == ASTRA_VFS_OK && directory != NULL);
+        assert(astra_process_file_export(directory, &receipt.file) == ASTRA_VFS_OK);
+        astra_process_vfs_current_release();
+        adopt_status = ASTRA_VFS_ERR_IO;
+        assert(astra_process_vfs_after_fork_child(&startup, &receipt) == ASTRA_VFS_ERR_IO);
+        adopt_status = ASTRA_VFS_OK;
+        assert(astra_process_vfs_current_directory(cwd, sizeof(cwd)) == ASTRA_VFS_ERR_LOST);
+        uint32_t closed_before = file_closes;
+        assert(astra_process_vfs_set_current_directory("/") == ASTRA_VFS_OK);
+        assert(file_closes == closed_before);
+        assert(astra_process_vfs_current_directory(cwd, sizeof(cwd)) == ASTRA_VFS_OK && strcmp(cwd, "/") == 0);
+        astra_process_vfs_close();
+    }
     puts("astra process library resolver: PASS");
     return 0;
 }

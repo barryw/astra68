@@ -133,10 +133,10 @@ static void check_moved_base_and_open(void)
     {
         char path[32];
         uint32_t length;
-        assert(astra_resolve_directory_path(root, base, path, sizeof(path),
+        assert(astra_resolve_descriptor_path(root, base, path, sizeof(path),
                                              &length) == 0);
         assert(length == 4u && memcmp(path, "/a/b", length) == 0);
-        assert(astra_resolve_directory_path(root, base, path, 2u, &length) ==
+        assert(astra_resolve_descriptor_path(root, base, path, 2u, &length) ==
                -ERANGE);
     }
     assert(astra_resolve(root, base, "f", ASTRA_RESOLVE_FOLLOW_FINAL, ASTRA_RESOLVE_LINK_MAX, &out) == 0);
@@ -147,7 +147,7 @@ static void check_moved_base_and_open(void)
     {
         char path[32];
         uint32_t length;
-        assert(astra_resolve_directory_path(root, base, path, sizeof(path),
+        assert(astra_resolve_descriptor_path(root, base, path, sizeof(path),
                                              &length) == 0);
         assert(length == 13u && memcmp(path, "/new-parent/b", length) == 0);
     }
@@ -166,7 +166,7 @@ static void check_moved_base_and_open(void)
     {
         char path[32];
         uint32_t length;
-        assert(astra_resolve_directory_path(root, base, path, sizeof(path),
+        assert(astra_resolve_descriptor_path(root, base, path, sizeof(path),
                                              &length) == -ENOENT);
     }
     assert(astra_resolve(root, base, "f", 0, ASTRA_RESOLVE_LINK_MAX, &out) == -ESTALE);
@@ -235,6 +235,30 @@ static void check_open_paths(void)
     }
 }
 
+static void check_file_names(void)
+{
+    char path[64], outside[512];
+    uint32_t length;
+    make_file("named-file");
+    int file = openat(root, "named-file", O_RDONLY);
+    assert(file >= 0);
+    assert(astra_resolve_descriptor_path(root, file, path, sizeof(path), &length) == 0 &&
+        length == 11u && memcmp(path, "/named-file", length) == 0);
+    assert(renameat(root, "named-file", root, "renamed-file") == 0);
+    assert(astra_resolve_descriptor_path(root, file, path, sizeof(path), &length) == 0 &&
+        length == 13u && memcmp(path, "/renamed-file", length) == 0);
+    assert(astra_resolve_descriptor_path(root, file, path, 4u, &length) == -ERANGE);
+    snprintf(outside, sizeof(outside), "%s/outside-file", top);
+    assert(renameat(root, "renamed-file", AT_FDCWD, outside) == 0);
+    assert(astra_resolve_descriptor_path(root, file, path, sizeof(path), &length) == -ENOENT);
+    assert(renameat(AT_FDCWD, outside, root, "renamed-file") == 0);
+    assert(unlinkat(root, "renamed-file", 0) == 0);
+    make_file("renamed-file");
+    /* A replacement inode at the former name cannot name the retained file. */
+    assert(astra_resolve_descriptor_path(root, file, path, sizeof(path), &length) == -ENOENT);
+    assert(close(file) == 0);
+}
+
 static int remove_entry(const char *path, const struct stat *st, int type,
                         struct FTW *walk)
 {
@@ -280,6 +304,7 @@ int main(void)
     check_cases();
     check_open_paths();
     check_moved_base_and_open();
+    check_file_names();
     assert(close(root) == 0);
     assert(nftw(top, remove_entry, 32, FTW_DEPTH | FTW_PHYS) == 0);
     puts("ASTRA68 RESOLVE PASS");

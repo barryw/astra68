@@ -26,15 +26,19 @@ about hardware.
 
 import argparse
 import os
+from pathlib import Path
 import shutil
-import subprocess
 import sys
 import tempfile
-import threading
 import time
 
 import astra_image
-from qemu_runtime import DEFAULT_MEMORY, qemu_environment
+from qemu_runtime import DEFAULT_MEMORY
+import importlib.util
+
+_SPEC = importlib.util.spec_from_file_location("terminal_gate", Path(__file__).with_name("test-terminal.py"))
+terminal_gate = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(terminal_gate)
 
 # In the order the boot emits them. Each is matched once, in sequence, so a
 # marker that also appears in later output cannot be picked up twice.
@@ -42,59 +46,28 @@ MARKERS = [
     ("POST PASS", "POST"),
     ("Starting Axiom kernel", "kernel handoff"),
     ("Initial image ....... loaded", "user image loaded"),
-    ("block round-trip verified", "block round-trip"),
-    ("volume found in the partition table", "partition read"),
-    ("volume mounted, journal recovered", "mount + journal"),
-    ("volume verified, written and re-read", "volume verify"),
-    ("stage 8", "terminal up"),
+    ("stage 8", "desktop up"),
 ]
 
 
-def run_once(qemu, rom, image, memory, deadline, hostfs_root):
-    """Boots once and returns {label: seconds since launch}."""
-    command = [qemu, "-M", "astra68", "-m", memory, "-bios", rom,
-               "-nographic", "-monitor", "none", "-serial", "stdio",
-               "-no-reboot"]
-    if image is not None:
-        command += ["-drive", "if=none,format=raw,file=%s" % image]
-
-    environment = qemu_environment(qemu, hostfs_root=hostfs_root)
-    process = subprocess.Popen(
-        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=True, bufsize=1, env=environment)
-
-    start = time.monotonic()
+def run_once(qemu, rom, image, memory, deadline, directory):
+    """Serial observation timestamps start at the canonical provider launch."""
+    machine = terminal_gate.Machine(qemu, rom, image, directory, memory=memory)
     reached = {}
     pending = list(MARKERS)
-
-    # The deadline has to be enforced by killing the process, not by checking
-    # the clock in the loop: booting without media legitimately goes quiet
-    # after the block lease and parks, so the next read never returns and a
-    # check that only runs per line never runs again.
-    finished = threading.Event()
-
-    def watchdog():
-        if not finished.wait(deadline):
-            process.kill()
-
-    guard = threading.Thread(target=watchdog, daemon=True)
-    guard.start()
-
+    end = time.monotonic() + deadline
+    seen = 0
     try:
-        for line in process.stdout:
-            if pending[0][0] in line:
-                _, label = pending.pop(0)
-                reached[label] = time.monotonic() - start
-                # Break here rather than at the top of the next iteration:
-                # the last marker is the last line the boot emits, and the
-                # service is resident, so waiting for one more line hangs.
-                if not pending:
-                    break
+        while pending and machine.process.poll() is None and time.monotonic() < end:
+            samples = machine.serial_times[seen:]
+            seen += len(samples)
+            for elapsed, line in samples:
+                if pending and pending[0][0] in line:
+                    _, label = pending.pop(0)
+                    reached[label] = elapsed
+            time.sleep(0.02)
     finally:
-        # The service is resident by design and will not exit on its own.
-        finished.set()
-        process.kill()
-        process.wait()
+        machine.close()
     return reached
 
 
@@ -102,7 +75,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("qemu", help="qemu-system-m68k carrying the astra68 machine")
     parser.add_argument("rom", help="astra_boot.bin")
-    parser.add_argument("--image", help="card image; omit to boot without media")
+    parser.add_argument("--image", required=True, help="canonical system image")
     parser.add_argument("--catalog", default=astra_image.DEFAULT_CATALOG,
                         help="catalog installed with commands and services")
     parser.add_argument("--memory", default=DEFAULT_MEMORY)
@@ -110,19 +83,15 @@ def main():
     parser.add_argument("--deadline", type=float, default=120.0,
                         help="give up on a run after this many seconds")
     parser.add_argument("--budget", type=float, default=0.0,
-                        help="fail if 'terminal up' exceeds this many seconds")
+                        help="fail if 'desktop up' exceeds this many seconds")
     arguments = parser.parse_args()
 
     with tempfile.TemporaryDirectory(prefix="astra-boot-time-") as temporary:
-        hostfs_root = os.path.join(temporary, "hostfs")
-        image = arguments.image
-        if image is not None:
-            scratch = os.path.join(temporary, "card.img")
-            shutil.copyfile(image, scratch)
-            astra_image.install(scratch, arguments.catalog)
-            image = scratch
+        image = os.path.join(temporary, "card.img")
+        shutil.copyfile(arguments.image, image)
+        astra_image.install(image, arguments.catalog)
         runs = [run_once(arguments.qemu, arguments.rom, image,
-                         arguments.memory, arguments.deadline, hostfs_root)
+                         arguments.memory, arguments.deadline, temporary)
                 for _ in range(arguments.runs)]
 
     print("%-22s %8s %8s   %s" % ("stage", "median", "delta", "samples"))
@@ -140,19 +109,18 @@ def main():
               (label, median, median - previous,
                " ".join("%.2f" % value for value in values)))
         previous = median
-        if label == "terminal up":
+        if label == "desktop up":
             terminal = median
 
-    # Booting without media legitimately stops after the user image comes up.
-    if missed and arguments.image is not None:
+    if missed:
         print("FAIL: never reached %s" % ", ".join(missed))
         return 1
     if arguments.budget > 0.0:
         if terminal is None:
-            print("FAIL: no terminal to measure against the budget")
+            print("FAIL: no desktop to measure against the budget")
             return 1
         if terminal > arguments.budget:
-            print("FAIL: terminal up at %.2fs exceeds the %.2fs budget"
+            print("FAIL: desktop up at %.2fs exceeds the %.2fs budget"
                   % (terminal, arguments.budget))
             return 1
         print("within budget: %.2fs of %.2fs" % (terminal, arguments.budget))

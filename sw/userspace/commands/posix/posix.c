@@ -385,25 +385,73 @@ durability_probe(const char *path, const char *payload, int gated)
 {
     size_t length = strlen(payload);
     char *observed = malloc(length + 1u);
+    const char *slash = strrchr(path, '/');
+    const char *name = slash == NULL ? path : slash + 1u;
+    size_t parent_length = slash == NULL ? 1u : (size_t)(slash - path);
+    char *parent = malloc((parent_length == 0u ? 1u : parent_length) + 1u);
+    int directory_fd, file_fd;
     FILE *file;
 
-    if (observed == NULL)
+    if (observed == NULL || parent == NULL) {
+        free(observed);
+        free(parent);
         return complain(FAIL_DURABILITY, "durability buffer");
+    }
+    if (slash == NULL)
+        strcpy(parent, ".");
+    else if (parent_length == 0u)
+        strcpy(parent, "/");
+    else {
+        memcpy(parent, path, parent_length);
+        parent[parent_length] = '\0';
+    }
     if (gated) {
         printf("ASTRA DURABILITY READY\n");
         (void)fflush(stdout);
         if (getchar() == EOF) {
             free(observed);
+            free(parent);
             return complain(FAIL_DURABILITY, "durability start gate");
         }
     }
-    file = fopen(path, "wb");
+    directory_fd = open(parent, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    free(parent);
+    if (directory_fd < 0) {
+        free(observed);
+        return complain(FAIL_DURABILITY, "durability parent open");
+    }
+    /* Keep the directory that owns the created name, even if another caller
+     * renames that directory before the barrier. A final symlink cannot create
+     * a file beneath a different parent and acknowledge the wrong directory. */
+    file_fd = openat(directory_fd, name,
+        O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0666);
+    file = file_fd < 0 ? NULL : fdopen(file_fd, "wb");
     if (file == NULL || fwrite(payload, 1u, length, file) != length ||
         fflush(file) != 0 || fsync(fileno(file)) != 0) {
+        int error = errno;
         if (file != NULL)
             (void)fclose(file);
+        else if (file_fd >= 0)
+            (void)close(file_fd);
+        (void)close(directory_fd);
         free(observed);
+        errno = error;
         return complain(FAIL_DURABILITY, "durability fsync");
+    }
+    if (fsync(directory_fd) != 0) {
+        int error = errno;
+        (void)close(directory_fd);
+        (void)fclose(file);
+        free(observed);
+        errno = error;
+        return complain(FAIL_DURABILITY, "durability directory fsync");
+    }
+    if (close(directory_fd) != 0) {
+        int error = errno;
+        (void)fclose(file);
+        free(observed);
+        errno = error;
+        return complain(FAIL_DURABILITY, "durability directory close");
     }
     printf("ASTRA DURABILITY SYNCED\n");
     (void)fflush(stdout);
@@ -506,15 +554,13 @@ read_terminal_reply(uint8_t *reply, size_t capacity, uint8_t terminator,
     return 0;
 }
 
-int
-main(int argc, char **argv)
+static int
+posix_probe(int argc, char **argv, char *before, char *after)
 {
     static const char *const expected_arguments[] = {
         "posix", "-R", "+42", "--cmd", "set number", "--",
         "/work/notes.txt"
     };
-    char before[ASTRA_VFS_PATH_MAX];
-    char after[ASTRA_VFS_PATH_MAX];
     char buffer[64];
     struct stat about;
     DIR *directory;
@@ -522,25 +568,6 @@ main(int argc, char **argv)
     char first_directory_entry[sizeof(entry->d_name)];
     int found = 0;
     int fd;
-
-    if (argc == 2 && strcmp(argv[1], "--network-child") == 0)
-        return network_child();
-    if (argc == 2 && strcmp(argv[1], "--synthetic-fstat") == 0)
-        return synthetic_fstat();
-    if (argc == 2 && strcmp(argv[1], "--at-stat") == 0)
-        return directory_relative_stat();
-    if (argc == 3 && strcmp(argv[1], "--stdio-memory") == 0)
-        return stdio_memory_probe(argv[2]);
-    if (argc == 3 && strcmp(argv[1], "--stdio-early-close") == 0)
-        return stdio_early_close_probe(argv[2]);
-    if (argc == 4 && strcmp(argv[1], "--regex-close") == 0)
-        return regex_close_probe(argv[2], argv[3]);
-    if (argc == 4 && strcmp(argv[1], "--durability") == 0)
-        return durability_probe(argv[2], argv[3], 0);
-    if (argc == 4 && strcmp(argv[1], "--durability-gated") == 0)
-        return durability_probe(argv[2], argv[3], 1);
-    if (argc == 4 && strcmp(argv[1], "--durability-check") == 0)
-        return durability_check(argv[2], argv[3]);
 
     if (argc != 1 &&
         argc != (int)(sizeof(expected_arguments) /
@@ -650,7 +677,7 @@ main(int argc, char **argv)
      * Where a bare name resolves. The first component is an assign granted by
      * the launcher, viewed through the POSIX slash namespace.
      */
-    if (getcwd(before, sizeof(before)) == NULL || before[0] == '\0')
+    if (getcwd(before, ASTRA_VFS_PATH_MAX) == NULL || before[0] == '\0')
         return complain(FAIL_GETCWD, "getcwd");
     if (before[0] != '/')
         return FAIL_CWD_SPELLING;
@@ -882,7 +909,7 @@ main(int argc, char **argv)
      */
     if (chdir(DIRECTORY) != 0)
         return complain(FAIL_CHDIR, "chdir");
-    if (getcwd(after, sizeof(after)) == NULL || strcmp(after, before) == 0)
+    if (getcwd(after, ASTRA_VFS_PATH_MAX) == NULL || strcmp(after, before) == 0)
         return FAIL_CWD_MOVED;
     if (stat(RENAMED, &about) != 0)
         return complain(FAIL_BARE_STAT, "stat of a bare name");
@@ -895,7 +922,7 @@ main(int argc, char **argv)
     if (errno != ENOENT)
         return FAIL_MISSING_IS_ENOENT;
 
-    if (chdir("..") != 0 || getcwd(after, sizeof(after)) == NULL ||
+    if (chdir("..") != 0 || getcwd(after, ASTRA_VFS_PATH_MAX) == NULL ||
         strcmp(after, before) != 0)
         return complain(FAIL_CHDIR_BACK, "chdir back");
     if (rmdir(DIRECTORY) != 0)
@@ -1160,4 +1187,33 @@ main(int argc, char **argv)
     printf("POSIX RAW PASS: %s\n", before);
     (void)fflush(stdout);
     return 0;
+}
+
+int
+main(int argc, char **argv)
+{
+    if (argc == 2 && strcmp(argv[1], "--network-child") == 0)
+        return network_child();
+    if (argc == 2 && strcmp(argv[1], "--synthetic-fstat") == 0)
+        return synthetic_fstat();
+    if (argc == 2 && strcmp(argv[1], "--at-stat") == 0)
+        return directory_relative_stat();
+    if (argc == 3 && strcmp(argv[1], "--stdio-memory") == 0)
+        return stdio_memory_probe(argv[2]);
+    if (argc == 3 && strcmp(argv[1], "--stdio-early-close") == 0)
+        return stdio_early_close_probe(argv[2]);
+    if (argc == 4 && strcmp(argv[1], "--regex-close") == 0)
+        return regex_close_probe(argv[2], argv[3]);
+    if (argc == 4 && strcmp(argv[1], "--durability") == 0)
+        return durability_probe(argv[2], argv[3], 0);
+    if (argc == 4 && strcmp(argv[1], "--durability-gated") == 0)
+        return durability_probe(argv[2], argv[3], 1);
+    if (argc == 4 && strcmp(argv[1], "--durability-check") == 0)
+        return durability_check(argv[2], argv[3]);
+
+    char *paths = malloc(2u * ASTRA_VFS_PATH_MAX);
+    if (paths == NULL) { errno = ENOMEM; return complain(FAIL_MALLOC, "cwd path storage"); }
+    int result = posix_probe(argc, argv, paths, paths + ASTRA_VFS_PATH_MAX);
+    free(paths);
+    return result;
 }

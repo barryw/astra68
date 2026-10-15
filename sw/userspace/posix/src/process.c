@@ -350,13 +350,20 @@ fail_fork:
 pid_t
 getpid(void)
 {
-    AstraPosixProcessReply reply;
-    uint32_t service = astra_posix_process_service();
+    const AstraStartupInfo *startup = astra_posix_startup();
+    AstraProcessInfo info = {0};
 
-    if (service == 0u ||
-        astra_posix_process_query(service, 0, &reply) != ASTRA_STATUS_OK)
+    if (startup == NULL || startup->process_handle == 0u) {
+        errno = EIO;
         return (pid_t)-1;
-    return (pid_t)reply.process;
+    }
+    info.size = sizeof(info);
+    if (astra_process_info(startup->process_handle, &info) !=
+        ASTRA_SYSCALL_OK) {
+        errno = EIO;
+        return (pid_t)-1;
+    }
+    return (pid_t)info.id;
 }
 
 pid_t

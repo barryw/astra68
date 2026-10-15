@@ -26,7 +26,8 @@ IOSchedulingClass=best-effort
 IOSchedulingPriority=0
 KillMode=mixed
 NoNewPrivileges=true
-TimeoutStopSec=10
+# Storage cleanup retains mounts/loops until Linux confirms real retirement.
+TimeoutStopSec=infinity
 
 [Install]
 WantedBy=multi-user.target

@@ -1038,6 +1038,28 @@ static uint32_t top_visible(const DisplayState *state)
     return 0u;
 }
 
+/* The ordered retained windows are also the modal owner contract. A GUI
+   session's newest visible modal blocks its other windows, while applications
+   in other sessions remain usable. Session zero is the shared service door. */
+static uint32_t modal_window(const DisplayState *state, uint32_t index)
+{
+    if (index >= state->count)
+        return index;
+    for (uint32_t at = state->count; at != 0u; --at) {
+        const DisplayWindow *window = &state->windows[at - 1u];
+
+        if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u &&
+            window->state != ASTRA_WINDOW_STATE_MINIMIZED &&
+            window->session == state->windows[index].session)
+            return at - 1u;
+    }
+    return index;
+}
+
+static int set_gadget_visual(DisplayState *state, const AstraTheme *theme,
+                             DisplayWindow *window, uint32_t region,
+                             uint8_t visual);
+
 static void reorder(DisplayState *state, const AstraTheme *theme,
                     uint32_t from, uint32_t to)
 {
@@ -1063,6 +1085,34 @@ static void reorder(DisplayState *state, const AstraTheme *theme,
     damage_scene(state, theme);
 }
 
+/* Revealing a modal admits it at the front of its owner's interaction order;
+   another modal may have moved in front while this one was minimized. */
+static DisplayWindow *raise_revealed_modal(DisplayState *state,
+                                          const AstraTheme *theme,
+                                          uint32_t index)
+{
+    DisplayWindow *window = &state->windows[index];
+
+    if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u) {
+        reorder(state, theme, index, state->count - 1u);
+        window = &state->windows[state->count - 1u];
+    }
+    return window;
+}
+
+static DisplayWindow *restore_minimized_window(DisplayState *state,
+                                               const AstraTheme *theme,
+                                               uint32_t index)
+{
+    DisplayWindow *window = &state->windows[index];
+
+    window->state = window->restore_state;
+    dirty_cache(window);
+    next_generation(window);
+    damage_window(state, theme, window);
+    return raise_revealed_modal(state, theme, index);
+}
+
 static int activate(DisplayState *state, const AstraTheme *theme,
                     uint32_t id, int raise, uint32_t timestamp_ms)
 {
@@ -1071,6 +1121,10 @@ static int activate(DisplayState *state, const AstraTheme *theme,
 
     if (id != 0u && index == state->count)
         return 0;
+    if (id != 0u) {
+        index = modal_window(state, index);
+        id = state->windows[index].id;
+    }
     if (id != 0u &&
         state->windows[index].request.type == ASTRA_WINDOW_DESKTOP) {
         id = 0u;
@@ -1089,6 +1143,29 @@ static int activate(DisplayState *state, const AstraTheme *theme,
         changed |= index != state->count - 1u;
         reorder(state, theme, index, state->count - 1u);
         index = state->count - 1u;
+    }
+    if (state->capture_window != 0u) {
+        uint32_t captured = find_id(state, state->capture_window);
+
+        if (captured != state->count && modal_window(state, captured) != captured) {
+            AstraWindowEvent reset = {.type = ASTRA_WINDOW_EVENT_STATE_RESET,
+                .flags = ASTRA_WINDOW_EVENT_LOSS, .timestamp_ms = timestamp_ms};
+
+            (void)set_gadget_visual(state, theme, &state->windows[captured],
+                                   state->capture_region, ASTRA_GADGET_NORMAL);
+            (void)send_event(&state->windows[captured], &reset);
+            state->capture_window = 0u;
+            state->capture_region = HIT_NONE;
+            changed = 1;
+        }
+    }
+    if (state->pending_input_valid != 0u) {
+        uint32_t pending = find_id(state, state->pending_input_window);
+
+        if (pending != state->count && modal_window(state, pending) != pending) {
+            state->windows[pending].event_lost = 1u;
+            state->pending_input_valid = 0u;
+        }
     }
     for (uint32_t at = 0u; at < state->count; ++at) {
         DisplayWindow *window = &state->windows[at];
@@ -1587,6 +1664,23 @@ static uint32_t active_window(const DisplayState *state)
             state->windows[index - 1u].state !=
                 ASTRA_WINDOW_STATE_MINIMIZED)
             return index - 1u;
+    return state->count;
+}
+
+/* Desktop activation deliberately leaves the application focus empty. Its
+   subscribed keyboard controls still own input when no application is active;
+   derive that target from the existing window list, without changing stacking,
+   application activation, menus or pointer grabs. */
+static uint32_t keyboard_window(const DisplayState *state)
+{
+    uint32_t index = active_window(state);
+
+    if (index != state->count)
+        return modal_window(state, index);
+    for (uint32_t at = state->count; at != 0u; --at)
+        if (state->windows[at - 1u].request.type == ASTRA_WINDOW_DESKTOP &&
+            state->windows[at - 1u].state != ASTRA_WINDOW_STATE_MINIMIZED)
+            return modal_window(state, at - 1u);
     return state->count;
 }
 
@@ -2379,7 +2473,7 @@ static uint32_t menu_open(DisplayState *state, const AstraTheme *theme,
     if (state->overlay != DISPLAY_OVERLAY_NONE || window->pending_menu.type != 0u ||
         state->capture_window != 0u || grab_target(state) != state->count)
         return ASTRA_STATUS_BUSY;
-    if (window->state == ASTRA_WINDOW_STATE_MINIMIZED ||
+    if (window->state == ASTRA_WINDOW_STATE_MINIMIZED || modal_window(state, index) != index ||
         (active != index && !(window->request.type == ASTRA_WINDOW_DESKTOP && active == state->count)))
         return ASTRA_STATUS_ACCESS;
     status = service_status(astra_rt_area_map(area, ASTRA_AREA_MAP_READ, &mapping, &mapped));
@@ -3367,12 +3461,19 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
         *changed = 1;
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_RAISE:
+        index = modal_window(state, index);
         if (index != state->count - 1u) {
             reorder(state, theme, index, state->count - 1u);
             *changed = 1;
         }
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_LOWER:
+        if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u &&
+            window->state != ASTRA_WINDOW_STATE_MINIMIZED)
+            for (uint32_t at = 0u; at < state->count; ++at)
+                if (at != index && state->windows[at].session == window->session &&
+                    state->windows[at].state != ASTRA_WINDOW_STATE_MINIMIZED)
+                    return ASTRA_STATUS_BUSY;
         if (index != 0u) {
             uint32_t was_active = window->request.flags & ASTRA_WINDOW_ACTIVE;
 
@@ -3384,10 +3485,7 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_ACTIVATE:
         if (window->state == ASTRA_WINDOW_STATE_MINIMIZED) {
-            window->state = window->restore_state;
-            dirty_cache(window);
-            next_generation(window);
-            damage_window(state, theme, window);
+            window = restore_minimized_window(state, theme, index);
             *changed = 1;
         }
         *changed |= activate(state, theme, window->id, 1, 0u);
@@ -3416,6 +3514,7 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
         if ((window->request.flags & ASTRA_WINDOW_RESIZABLE) == 0u)
             return ASTRA_STATUS_UNSUPPORTED;
         {
+            int was_minimized = window->state == ASTRA_WINDOW_STATE_MINIMIZED;
             uint8_t restored_state =
                 window->state == ASTRA_WINDOW_STATE_MINIMIZED ?
                     window->restore_state : window->state;
@@ -3423,7 +3522,7 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
             uint16_t width;
             uint16_t height;
 
-            if (restored_state == ASTRA_WINDOW_STATE_MAXIMIZED)
+            if (restored_state == ASTRA_WINDOW_STATE_MAXIMIZED && !was_minimized)
                 return ASTRA_STATUS_OK;
             if (restored_state == ASTRA_WINDOW_STATE_FULLSCREEN)
                 return ASTRA_STATUS_INVALID;
@@ -3446,14 +3545,15 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
             next_generation(window);
             damage_window(state, theme, window);
             *changed = 1;
+            if (was_minimized)
+                window = raise_revealed_modal(state, theme, index);
         }
+        if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u)
+            *changed |= activate(state, theme, window->id, 1, 0u);
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_RESTORE:
         if (window->state == ASTRA_WINDOW_STATE_MINIMIZED) {
-            window->state = window->restore_state;
-            dirty_cache(window);
-            next_generation(window);
-            damage_window(state, theme, window);
+            window = restore_minimized_window(state, theme, index);
             *changed = 1;
         } else if (window->state == ASTRA_WINDOW_STATE_FULLSCREEN) {
             DisplayWindow source = *window;
@@ -3497,6 +3597,9 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
             damage_window(state, theme, window);
             *changed = 1;
         }
+        if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u &&
+            window->state != ASTRA_WINDOW_STATE_MINIMIZED)
+            *changed |= activate(state, theme, window->id, 1, 0u);
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_FULLSCREEN:
         /* Only an application's own window may take the whole display. */
@@ -3657,25 +3760,38 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
 }
 
 static uint32_t pointer_target(DisplayState *state, const AstraTheme *theme,
-                               uint32_t *region)
+                               uint32_t *region, uint32_t *blocked)
 {
-    uint32_t index;
+    uint32_t index = state->count;
+
+    if (blocked != NULL) *blocked = state->count;
 
     if (state->capture_window != 0u) {
         index = find_id(state, state->capture_window);
         if (index != state->count) {
             *region = state->capture_region;
-            return index;
+        } else {
+            state->capture_window = 0u;
+            state->capture_region = HIT_NONE;
         }
-        state->capture_window = 0u;
-        state->capture_region = HIT_NONE;
     }
-    index = grab_target(state);
+    if (index == state->count) {
+        index = grab_target(state);
+        if (index != state->count)
+            *region = HIT_CONTENT;
+        else
+            index = hit_test(state, theme, state->pointer_x, state->pointer_y, region);
+    }
     if (index != state->count) {
-        *region = HIT_CONTENT;
-        return index;
+        uint32_t modal = modal_window(state, index);
+
+        if (modal != index) {
+            if (blocked != NULL) *blocked = modal;
+            *region = HIT_NONE;
+            return state->count;
+        }
     }
-    return hit_test(state, theme, state->pointer_x, state->pointer_y, region);
+    return index;
 }
 
 static uint32_t display_pointer_shape(DisplayState *state,
@@ -3686,7 +3802,7 @@ static uint32_t display_pointer_shape(DisplayState *state,
 
     if (state->overlay != DISPLAY_OVERLAY_NONE)
         return ASTRA_POINTER_SHAPE_DEFAULT;
-    index = pointer_target(state, theme, &region);
+    index = pointer_target(state, theme, &region, NULL);
 
     if (index == state->count)
         return ASTRA_POINTER_SHAPE_DEFAULT;
@@ -3709,7 +3825,7 @@ static uint32_t prepare_pointer_image(
     uint32_t *armed)
 {
     uint32_t region = HIT_NONE;
-    uint32_t index = pointer_target(state, theme, &region);
+    uint32_t index = pointer_target(state, theme, &region, NULL);
     DisplayWindow *window;
 
     if (index == state->count || region != HIT_CONTENT ||
@@ -3901,7 +4017,7 @@ static uint32_t handle_pointer(DisplayState *state,
                 state->menu_text_owned = 0u;
                 /* A modifier pressed before opening still releases in its owner. */
                 if (!owned && state->overlay != DISPLAY_OVERLAY_NONE) {
-                    index = active_window(state);
+                    index = keyboard_window(state);
                     if (index != state->count) {
                         AstraWindowEvent release = logical_key_event(input);
                         /* A full owner queue loses state; it cannot stall the popup. */
@@ -3923,14 +4039,14 @@ static uint32_t handle_pointer(DisplayState *state,
                                   frame_window, frame_timestamp);
             return ASTRA_STATUS_OK;
         }
-        index = active_window(state);
+        index = keyboard_window(state);
         if (index != state->count)
             key_event(state, &state->windows[index], input);
         return ASTRA_STATUS_OK;
     }
     if (input->type == ASTRA_INPUT_EVENT_STATE_RESET) {
         *effects |= DISPLAY_POINTER_CURSOR;
-        index = active_window(state);
+        index = keyboard_window(state);
         if (state->overlay != DISPLAY_OVERLAY_NONE) {
             set_overlay(state, DISPLAY_OVERLAY_NONE);
             *effects |= DISPLAY_POINTER_RENDER;
@@ -3960,7 +4076,7 @@ static uint32_t handle_pointer(DisplayState *state,
         state->pointer_y = input->value_y;
         if (state->overlay != DISPLAY_OVERLAY_NONE)
             return menu_input(state, input, effects);
-        index = pointer_target(state, &theme, &region);
+        index = pointer_target(state, &theme, &region, NULL);
         if (index != state->count) {
             DisplayWindow *window = &state->windows[index];
 
@@ -4036,7 +4152,17 @@ static uint32_t handle_pointer(DisplayState *state,
     if (state->overlay != DISPLAY_OVERLAY_NONE)
         return menu_input(state, input, effects);
 
-    index = pointer_target(state, &theme, &region);
+    uint32_t blocked = state->count;
+    index = pointer_target(state, &theme, &region, &blocked);
+    if (blocked != state->count) {
+        if ((input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u &&
+            input->code >= ASTRA_INPUT_BUTTON_LEFT && input->code <= ASTRA_INPUT_BUTTON_RIGHT) {
+            state->swallow_pointer_up |= (uint8_t)(1u << (input->code - 1u));
+            if (activate(state, &theme, state->windows[blocked].id, 1, input->timestamp_ms))
+                *effects |= DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR;
+        }
+        return ASTRA_STATUS_OK;
+    }
     if (input->code >= ASTRA_INPUT_BUTTON_WHEEL_UP &&
         input->code <= ASTRA_INPUT_BUTTON_WHEEL_RIGHT) {
         if ((input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u &&
@@ -4585,7 +4711,7 @@ static void receive_open(uint32_t device, uint32_t irq,
         added = 1;
         candidate = (DisplayWindow){0};
         damage_window(state, &theme, &state->windows[state->count - 1u]);
-        if ((request.flags & ASTRA_WINDOW_ACTIVE) != 0u)
+        if ((request.flags & (ASTRA_WINDOW_ACTIVE | ASTRA_WINDOW_MODAL)) != 0u)
             activate(state, &theme, state->windows[state->count - 1u].id,
                      1, 0u);
         status = render_window_change(device, irq, framebuffer,

@@ -49,11 +49,7 @@ SUBMISSION = 0x0200F000
 CHANNEL_CONFIG = 0x0200F040
 CHANNEL_APERTURE = 0xFFD00000
 COMMAND_SIZE = 512
-COMMAND_VERSION = 3
-VOLUME_WORK = 0
-VOLUME_SOUND = 1
-VOLUME_SYSTEM = 2
-VOLUME_COUNT = 3
+COMMAND_VERSION = 5
 SUBMISSION_SIZE = 64
 CHANNEL_HEADER_SIZE = 64
 SESSION_FIELD = 60
@@ -132,11 +128,12 @@ STATUS_LOOP = 18
 STATUS_READ_ONLY = 19
 STATUS_ESCAPED = 20
 STATUS_LOST = 21
+STATUS_BUSY = 14
 STATUS_FILE_TOO_LARGE = 22
 STATUS_LIMIT = 10
 KIND_SYMLINK = 3
 SYSCALL_INVALID_ARGUMENT = 2
-CONFIG_VERSION = 4
+CONFIG_VERSION = 5
 CONFIG_OPEN = 1
 CONFIG_CLOSE = 2
 CONFIG_ATTACH = 3
@@ -151,6 +148,7 @@ CAP_FS_RESOLVES = 1 << 12
 CAP_FS_DESCRIPTIONS = 1 << 13
 CAP_FS_DIRECTORY_BATCH = 1 << 14
 CAP_FS_PATHS = 1 << 15
+CAP_VOLUME_CATALOG = 1 << 16
 CURSOR_CURRENT = (1 << 64) - 1
 NODE_INODE_BIT = 1 << 11
 NODE_DEVICE_BIT = 1 << 12
@@ -235,7 +233,7 @@ def get64(command, offset):
 
 
 class Command:
-    """One record-3 command and its operands; place() lays them out."""
+    """One record-4 command and its operands; place() lays them out."""
 
     def __init__(self, generation, operation, path=b"", path2=b"", flags=0,
                  handle=0, value=None, offset=0, data=b"", capacity=0,
@@ -378,11 +376,40 @@ def executed_claim(qtest, generation, owner=PROVIDER):
                           owner=owner)[0])
 
 
-def open_session(qtest, generation, volume=0, root="/", read_only=False,
+def volume_page(qtest, generation, epoch=0, sequence=0, after=0):
+    query = struct.pack(">IIQQQ", 1, 32, epoch, sequence, after)
+    return execute(qtest, [Command(generation, 1, service=6,
+        data=query, capacity=8104)], owner=0x2002)[0]
+
+
+def volume_reference(qtest, generation, name):
+    """Resolve the current identity from public metadata, never a slot number."""
+    epoch = sequence = after = 0
+    found = None
+    while True:
+        answer = volume_page(qtest, generation, epoch, sequence, after)
+        assert status(answer) == STATUS_OK, status(answer)
+        page = output(qtest, answer, get32(answer.raw, 52))
+        version, size, epoch, sequence, after, count, reserved = struct.unpack_from(">IIQQQII", page)
+        assert version == 1 and size == 8104 and len(page) == size
+        assert epoch and sequence and reserved == 0 and count <= 16
+        for index in range(count):
+            row = page[40 + index * 504:40 + (index + 1) * 504]
+            kind, _, state = struct.unpack_from(">III", row, 56)
+            if kind in (4, 5) and state == 5 and \
+                    row[88:120].split(b"\0", 1)[0].decode() == name:
+                assert found is None, ("duplicate mounted name", name)
+                found = struct.pack(">QQQ", epoch, *struct.unpack_from(">QQ", row))
+        if after == 0:
+            assert found is not None, ("missing mounted volume", name)
+            return found
+
+
+def open_session(qtest, generation, volume="/work", root="/", read_only=False,
                  parent=0, owner=PROVIDER):
     answer = execute(qtest, [Command(
         generation, FS_SESSION_OPEN, path=root,
-        value=volume if parent == 0 else 0,
+        data=(volume_reference(qtest, generation, volume) if parent == 0 else bytes(24)) + struct.pack(">II", owner, 0),
         flags=SESSION_READ_ONLY if read_only else 0, session=parent)],
         owner=owner)[0]
     assert status(answer) == STATUS_OK, status(answer)
@@ -390,11 +417,12 @@ def open_session(qtest, generation, volume=0, root="/", read_only=False,
 
 
 def provider_holds(path):
-    """True while a process of ours -- the QEMU under test -- holds `path`."""
-    target = os.path.realpath(path)
+    """Observe the held inode, including its private bind-mount spelling."""
+    target = os.stat(path)
     for fd in glob.glob("/proc/[0-9]*/fd/*"):
         try:
-            if os.readlink(fd) == target:
+            held = os.stat(fd)
+            if (held.st_dev, held.st_ino) == (target.st_dev, target.st_ino):
                 return True
         except OSError:
             pass
@@ -403,16 +431,17 @@ def provider_holds(path):
 
 def configure_channel(qtest, generation, operation, slot=3, owner=PROVIDER,
                       channel_generation=7, buffer=BUFFER, byte_size=4096,
-                      capacity=1, scope_flags=0):
-    config = bytearray(64)
+                      capacity=1, scope_flags=0, process=None):
+    config = bytearray(68)
     physical = buffer if operation == 1 else 0
     byte_size = byte_size if operation == 1 else 0
     capacity = capacity if operation == 1 else 0
-    struct.pack_into(">IHHIIIIIIIII", config, 0, 64, CONFIG_VERSION,
+    struct.pack_into(">IHHIIIIIIIII", config, 0, 68, CONFIG_VERSION,
                      operation, slot,
                      owner, generation, channel_generation, physical,
                      byte_size, capacity, 0,
                      scope_flags if operation == 1 else 0)
+    struct.pack_into(">I", config, 52, (owner if process is None else process) if operation == CONFIG_OPEN else 0)
     qtest.write(CHANNEL_CONFIG, config)
     qtest.write32(HACC_CHANNEL_CONFIG, CHANNEL_CONFIG)
     return qtest.read32(HACC_CHANNEL_RESULT)
@@ -421,17 +450,18 @@ def configure_channel(qtest, generation, operation, slot=3, owner=PROVIDER,
 def configure_scope(qtest, generation, operation, slot, channel_generation,
                     scope=0, scope_flags=0, scope_owner=0, owner=CLIENT,
                     buffer=SCOPED_BUFFER, byte_size=8192 + OPERAND_ROOM,
-                    capacity=2, scope_files=0):
+                    capacity=2, scope_files=0, process=None):
     """The kernel's channel configuration with scope words. The
     channel belongs to a client; the scope's creator is the provider."""
-    config = bytearray(64)
+    config = bytearray(68)
     opening = operation == CONFIG_OPEN
-    struct.pack_into(">IHHIIIIIIIIII", config, 0, 64, CONFIG_VERSION,
+    struct.pack_into(">IHHIIIIIIIIII", config, 0, 68, CONFIG_VERSION,
                      operation, slot, owner, generation, channel_generation,
                      buffer if opening else 0, byte_size if opening else 0,
                      capacity if opening else 0, scope, scope_flags,
                      scope_owner)
     struct.pack_into(">I", config, 48, scope_files)
+    struct.pack_into(">I", config, 52, (owner if process is None else process) if opening else 0)
     qtest.write(CHANNEL_CONFIG, config)
     qtest.write32(HACC_CHANNEL_CONFIG, CHANNEL_CONFIG)
     return qtest.read32(HACC_CHANNEL_RESULT)
@@ -482,7 +512,7 @@ def scopes(qtest, root):
 
     assert claim(qtest, generation) == STATUS_OK
     work = open_session(qtest, generation)
-    sound = open_session(qtest, generation, volume=VOLUME_SOUND)
+    sound = open_session(qtest, generation, volume="/sound")
     # Unbound OPEN carries no scope words; a bound one names a live session
     # of the claimed owner, and the claimed owner as its creator.
     assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21,
@@ -497,6 +527,10 @@ def scopes(qtest, root):
     # refused at the binding, even over a live session.
     assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21, work,
                            SCOPE_BOUND, 0x2002) != 0
+    assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21,
+                           work, SCOPE_BOUND, PROVIDER, process=0) != 0
+    assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21,
+                           work, SCOPE_BOUND, PROVIDER, process=65536) != 0
     assert configure_scope(qtest, generation, CONFIG_OPEN, 7, 21,
                            work, SCOPE_BOUND, PROVIDER) == 0
     made = step(Command(
@@ -619,7 +653,7 @@ def scope_revocation(qtest, root):
     generation = qtest.read32(HACC_GENERATION)
     assert claim(qtest, generation) == STATUS_OK
     work = open_session(qtest, generation)
-    open_session(qtest, generation, volume=VOLUME_SOUND)
+    open_session(qtest, generation, volume="/sound")
     fifo = os.path.join(root, "work", "held")
     os.mkfifo(fifo)
     assert configure_scope(qtest, generation, CONFIG_OPEN, 9, 31,
@@ -695,7 +729,12 @@ def claim_race(qtest):
     opened = refused = 0
     for round_index in range(40):
         assert claim(qtest, generation) == STATUS_OK
-        commands = [Command(generation, FS_SESSION_OPEN, "/", value=0)
+        # Establish a real retained session before releasing under load. Slow
+        # rooted I/O may let RELEASE win every racing open; that is a valid
+        # outcome, not proof that publication or retirement was exercised.
+        baseline = open_session(qtest, generation)
+        target = volume_reference(qtest, generation, "/work") + struct.pack(">II", PROVIDER, 0)
+        commands = [Command(generation, FS_SESSION_OPEN, "/", data=target)
                     for _ in range(capacity)]
         commands[capacity // 2] = Command(generation, FS_CLAIM,
                                           flags=CLAIM_RELEASE)
@@ -705,7 +744,7 @@ def claim_race(qtest):
         qtest.write32(RACE_BUFFER + 36, producer)
         qtest.write32(CHANNEL_APERTURE + slot * 4096 + 0x20, producer)
         qtest.wait32(RACE_BUFFER + 48, producer)
-        sessions = []
+        sessions = [baseline]
         for index in range(capacity):
             answer = qtest.read(RACE_BUFFER + CHANNEL_HEADER_SIZE +
                                 index * COMMAND_SIZE, COMMAND_SIZE)
@@ -726,8 +765,8 @@ def claim_race(qtest):
                  (session, round_index))
     assert configure_channel(qtest, generation, CONFIG_CLOSE, slot=slot,
                              channel_generation=51) == 0
-    # The race must actually have been run: both outcomes seen (Task 4
-    # re-review N3), or a serialised batch would pass inertly.
+    # Both real issued identities and racing refusals must be observed. Every
+    # issued identity, including the controlled baseline, must be retired.
     assert opened > 0 and refused > 0, (opened, refused)
     print("PASS claim-race opened=%d refused=%d" % (opened, refused))
 
@@ -758,13 +797,11 @@ def booted(command, environment, qtest_path, body):
 
 
 def volumes(qtest, root):
-    """One host root, a directory per volume: a root session opens one, a
-    path in one never reaches another, and a volume the machine does not
-    have is refused."""
+    """Catalog identities select roots; paths cannot cross them or use stale identities."""
     generation = qtest.read32(HACC_GENERATION)
     assert claim(qtest, generation) == STATUS_OK
     work = open_session(qtest, generation)
-    sound = open_session(qtest, generation, volume=VOLUME_SOUND)
+    sound = open_session(qtest, generation, volume="/sound")
     created = execute(qtest, [Command(
         generation, FS_MKDIR, "/fonts", value=0o755, session=sound)])[0]
     assert status(created) == STATUS_OK
@@ -776,20 +813,27 @@ def volumes(qtest, root):
     escaped = execute(qtest, [Command(
         generation, FS_STAT, "/../work", session=sound)])[0]
     assert status(escaped) != STATUS_OK
-    unknown = execute(qtest, [Command(
-        generation, FS_SESSION_OPEN, "/", value=VOLUME_COUNT)])[0]
-    assert status(unknown) == STATUS_INVALID
-    absent = execute(qtest, [Command(
-        generation, FS_SESSION_OPEN, "/", value=VOLUME_SYSTEM)])[0]
-    assert status(absent) == STATUS_NOT_FOUND
-    assert not os.path.exists(os.path.join(root, "system"))
+    target = volume_reference(qtest, generation, "/work")
+    epoch, object_id, object_generation = struct.unpack(">QQQ", target)
+    for reference in ((epoch, (1 << 64) - 1, object_generation),
+                      (epoch, object_id, object_generation + 1),
+                      (epoch ^ 1, object_id, object_generation)):
+        unknown = execute(qtest, [Command(generation, FS_SESSION_OPEN, "/",
+            data=struct.pack(">QQQII", *reference, PROVIDER, 0))])[0]
+        assert status(unknown) == STATUS_LOST, status(unknown)
+    # The obsolete numeric-volume spelling carries no identity and is refused.
+    obsolete = execute(qtest, [Command(generation, FS_SESSION_OPEN, "/", value=1)])[0]
+    assert status(obsolete) == STATUS_INVALID
+    zero = execute(qtest, [Command(generation, FS_SESSION_OPEN, "/",
+        data=struct.pack(">QQQII", epoch, 0, object_generation, PROVIDER, 0))])[0]
+    assert status(zero) == STATUS_INVALID
     stale = Command(generation, FS_STAT, "/fonts", session=sound)
     struct.pack_into(">H", stale.raw, 4, COMMAND_VERSION - 1)
     assert status(execute(qtest, [stale])[0]) == STATUS_INVALID
 
 
 def claims_and_sessions(qtest, root):
-    """Record 3: one claimed owner, rooted sessions, read-only sessions,
+    """Record 4: one claimed owner, rooted sessions, read-only sessions,
     handles bound to their session, path operands."""
     generation = qtest.read32(HACC_GENERATION)
     stray = execute(qtest, [Command(generation, FS_STAT, "/", session=1)],
@@ -840,9 +884,8 @@ def claims_and_sessions(qtest, root):
     assert status(inside) == STATUS_OK
     assert get64(inside.raw, NODE_INODE) == \
         os.stat(os.path.join(root, "sub", "inside")).st_ino
-    st_dev = os.stat(os.path.join(root, "sub", "inside")).st_dev
     assert get64(inside.raw, NODE_DEVICE) == \
-        (os.major(st_dev) << 32) | os.minor(st_dev)
+        struct.unpack(">QQQ", volume_reference(qtest, generation, "/work"))[1]
     assert get32(inside.raw, NODE_FIELD) & (NODE_INODE_BIT | NODE_DEVICE_BIT) \
         == NODE_INODE_BIT | NODE_DEVICE_BIT
     assert get64(inside.raw, NODE_SIZE) == 2
@@ -1000,10 +1043,10 @@ def claims_and_sessions(qtest, root):
 
 def run(qtest, root, outside):
     qtest.detect_endian()
-    assert qtest.read32(HACC_VERSION) == 0x00010015
+    assert qtest.read32(HACC_VERSION) == 0x00030000
     assert qtest.read32(HACC_CAPS) == (511 | CAP_FS_SCOPE | CAP_FS_SESSIONS |
                                     CAP_FS_RESOLVES | CAP_FS_DESCRIPTIONS |
-                                    CAP_FS_DIRECTORY_BATCH | CAP_FS_PATHS)
+                                    CAP_FS_DIRECTORY_BATCH | CAP_FS_PATHS | CAP_VOLUME_CATALOG)
     assert qtest.read32(HACC_STATE) == 1
     assert qtest.read32(HACC_MAX_TRANSFER) == 2 * 1024 * 1024
     assert qtest.read32(HACC_MAX_COMMANDS) == 4096
@@ -1371,7 +1414,7 @@ def run(qtest, root, outside):
     assert status(made) == STATUS_EXISTS
     read_link = execute(qtest, [Command(generation, FS_READLINK, "/dir-link/",
         capacity=NAME_CAPACITY, session=work)])[0]
-    assert status(read_link) == STATUS_INVALID
+    assert status(read_link) == STATUS_INVALID, ("trailing-slash READLINK", status(read_link))
     for operation, path2 in ((FS_UNLINK, ""), (FS_RENAME, "/stolen-dir"),
                              (FS_LINK, "/stolen-dir")):
         refused = execute(qtest, [Command(generation, operation, "/dir-link/",
@@ -1930,7 +1973,7 @@ def budgets(qtest, root, qmp_path):
         shares = [call(7, FS_SHARE, handle=handles[0]) for _ in range(2)]
         assert all(status(reply) == STATUS_OK for reply in shares)
         tokens = [get64(reply, 32) for reply in shares]
-        assert gauge("fs-descriptors") == 3
+        assert gauge("fs-descriptors") == 2
         assert gauge("fs-objects") == 5
         for path, flags in (("/quota-new", OPEN_WRITE | OPEN_CREATE),
                             ("/quota-file", OPEN_WRITE | OPEN_TRUNCATE)):
@@ -1956,26 +1999,26 @@ def budgets(qtest, root, qmp_path):
             assert status(call(7, FS_CLOSE, handle=handle)) == STATUS_OK
         for handle in other:
             assert status(call(8, FS_CLOSE, handle=handle)) == STATUS_OK
-        assert gauge("fs-descriptors") == gauge("fs-objects") == 1
+        assert gauge("fs-descriptors") == 0 and gauge("fs-objects") == 1
         directories = [get32(call(7, FS_OPEN, path="/",
             flags=OPEN_READ | OPEN_DIRECTORY), 16) for _ in range(2)]
         assert all(directories) and gauge("fs-directories") == 2
-        assert status(call(7, FS_OPEN, path="/",
-            flags=OPEN_READ | OPEN_DIRECTORY)) == STATUS_LIMIT
+        overflow = call(7, FS_OPEN, path="/", flags=OPEN_READ | OPEN_DIRECTORY)
+        assert status(overflow) == STATUS_LIMIT, status(overflow)
         for handle in directories:
             assert status(call(7, FS_READDIR, handle=handle,
                 capacity=512, value=8)) == STATUS_OK
             assert status(call(7, FS_CLOSE, handle=handle)) == STATUS_OK
         assert gauge("fs-directories") == 0
         assert status(direct(FS_OPEN, path="/missing", flags=OPEN_READ)) == STATUS_NOT_FOUND
-        assert gauge("fs-descriptors") == gauge("fs-objects") == 1
+        assert gauge("fs-descriptors") == 0 and gauge("fs-objects") == 1
         # Provider opens have no owner quota; global descriptor/object cap is 12.
         held = []
         for _ in range(11):
             answer = direct(FS_OPEN, path="/quota-file", flags=OPEN_READ)
             assert status(answer) == STATUS_OK
             held.append(get32(answer.raw, 16))
-        assert gauge("fs-descriptors") == gauge("fs-objects") == 12
+        assert gauge("fs-descriptors") == 11 and gauge("fs-objects") == 12
         assert status(direct(FS_SHARE, handle=held[0])) == STATUS_LIMIT
         assert status(direct(FS_OPEN, path="/quota-file",
             flags=OPEN_WRITE | OPEN_TRUNCATE)) == STATUS_LIMIT
@@ -2004,11 +2047,11 @@ def budgets(qtest, root, qmp_path):
         qmp.close()
 
 
-def system_volume(qtest, root):
+def system_volume(qtest):
     qtest.detect_endian()
     generation = qtest.read32(HACC_GENERATION)
     assert claim(qtest, generation) == STATUS_OK
-    session = open_session(qtest, generation, volume=VOLUME_SYSTEM, read_only=True)
+    session = open_session(qtest, generation, volume="/dh0", read_only=True)
     opened = execute(qtest, [Command(generation, FS_OPEN, "/startup/system",
         session=session, flags=OPEN_READ)])[0]
     assert status(opened) == STATUS_OK
@@ -2019,7 +2062,6 @@ def system_volume(qtest, root):
     refused = execute(qtest, [Command(generation, FS_OPEN, "/startup/system",
         session=session, flags=OPEN_WRITE | OPEN_TRUNCATE)])[0]
     assert status(refused) == STATUS_READ_ONLY
-    assert open(os.path.join(root, "system", "startup", "system"), "rb").read() == b"bootstrap\n"
     assert status(execute(qtest, [Command(generation, FS_CLOSE,
         session=session, handle=handle)])[0]) == STATUS_OK
     assert status(execute(qtest, [Command(generation, FS_SESSION_CLOSE,
@@ -2027,7 +2069,7 @@ def system_volume(qtest, root):
     assert claim(qtest, generation, release=True) == STATUS_OK
     assert claim(qtest, generation, owner=PROVIDER + 1) == STATUS_OK
     assert claim(qtest, generation, owner=PROVIDER + 1, release=True) == STATUS_OK
-    print("PASS optional-system readonly bootstrap-read claim-handover")
+    print("PASS system readonly bootstrap-read claim-handover")
 
 
 def measure_objects(qtest, root, qmp_path, destination):
@@ -2087,92 +2129,22 @@ def measure_objects(qtest, root, qmp_path, destination):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("qemu", help="Astra QEMU system emulator")
+    parser.add_argument("provider", help="matching confined storage launcher")
+    parser.add_argument("--uid", type=int, required=True)
+    parser.add_argument("--gid", type=int, required=True)
     parser.add_argument("--budget-out", help="record provider-only memory on this host")
     args = parser.parse_args()
-
-    with tempfile.TemporaryDirectory(prefix="astra-hostfs-") as temp:
-        root = os.path.join(temp, "root")
-        outside = os.path.join(temp, "outside")
-        os.mkdir(root)
-        os.mkdir(outside)
-        with open(os.path.join(outside, "sentinel"), "wb") as output_file:
-            output_file.write(b"outside")
-        rom = os.path.join(temp, "hostfs-test.rom")
-        qtest_path = os.path.join(temp, "qtest.sock")
-        qmp_path = os.path.join(temp, "qmp.sock")
-        with open(rom, "wb") as output_file:
-            output_file.write(struct.pack(">II", 0x02001000, 0xFFE00008))
-        command = [
-            args.qemu, "-machine", "astra68,accel=qtest", "-m", "32M",
-            "-bios", rom, "-S", "-display", "none", "-nodefaults",
-            "-qtest", f"unix:{qtest_path},server=on,wait=off",
-            "-qmp", f"unix:{qmp_path},server=on,wait=off",
-        ]
-        environment = os.environ.copy()
-        environment["ASTRA_HOSTFS_ROOT"] = os.path.join(temp, "missing")
-        refused = subprocess.run(command, stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.PIPE, text=True,
-                                 env=environment, timeout=5)
-        assert refused.returncode != 0
-        assert "cannot open Astra host filesystem root" in refused.stderr
-        environment["ASTRA_HOSTFS_ROOT"] = root
-        for variable in ("ASTRA_HOSTFS_MAX_DESCRIPTORS", "ASTRA_HOSTFS_MAX_DIRECTORIES"):
-            for invalid in ("", "0", "-1", "+1", " 1", "1 ", "0x10", "4294967296"):
-                refused = subprocess.run(command, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE, text=True, timeout=5,
-                    env=dict(environment, **{variable: invalid}))
-                assert refused.returncode != 0 and variable in refused.stderr, (variable, invalid, refused.stderr)
-
-        def first(qtest):
-            run(qtest, os.path.join(root, "work"), outside)
-            # A reset drops every claim and session.
-            qtest.write32(HACC_RESET, 1)
-            claims_and_sessions(qtest, os.path.join(root, "work"))
-            volumes(qtest, root)
-            scopes(qtest, root)
-            claim_race(qtest)
-            descriptions(qtest, root)
-            paths(qtest, root)
-            provider_loss(qtest, root, qmp_path)
-
-        booted(command, environment, qtest_path, first)
-        # A second machine with one thread-pool worker, so a held command
-        # keeps the next one queued behind it.
-        root2 = os.path.join(temp, "root2")
-        for name in ("", "work", "sound"):
-            os.mkdir(os.path.join(root2, name))
-        environment["ASTRA_HOSTFS_ROOT"] = root2
-        booted(command + ["-object",
-                          "main-loop,id=main-loop,thread-pool-max=1"],
-               environment, qtest_path,
-               lambda qtest: (scope_revocation(qtest, root2),
-                              orphan_open(qtest, root2)))
-        root3 = os.path.join(temp, "root3")
-        for name in ("", "work", "sound"):
-            os.mkdir(os.path.join(root3, name))
-        environment.update(ASTRA_HOSTFS_ROOT=root3,
-            ASTRA_HOSTFS_MAX_DESCRIPTORS="12", ASTRA_HOSTFS_MAX_DIRECTORIES="2")
-        booted(command, environment, qtest_path,
-               lambda qtest: budgets(qtest, root3, qmp_path))
-        root4 = os.path.join(temp, "root4")
-        os.makedirs(os.path.join(root4, "system", "startup"))
-        with open(os.path.join(root4, "system", "startup", "system"), "wb") as stream:
-            stream.write(b"bootstrap\n")
-        environment["ASTRA_HOSTFS_ROOT"] = root4
-        booted(command, environment, qtest_path,
-               lambda qtest: system_volume(qtest, root4))
-        if args.budget_out:
-            root5 = os.path.join(temp, "root5")
-            cost = os.path.join(root5, "work", "cost")
-            os.makedirs(cost)
-            open(os.path.join(cost, "file"), "wb").close()
-            for index in range(2000):
-                open(os.path.join(cost, "entry-%04d-%s" % (index, "x" * 48)), "wb").close()
-            environment.update(ASTRA_HOSTFS_ROOT=root5,
-                ASTRA_HOSTFS_MAX_DESCRIPTORS="4096", ASTRA_HOSTFS_MAX_DIRECTORIES="512")
-            booted(command + ["-mem-prealloc"], environment, qtest_path,
-                lambda qtest: measure_objects(qtest, root5, qmp_path, args.budget_out))
-        print("ASTRA QEMU HOSTFS PASS")
+    # Every protocol oracle runs through the real privilege-separated provider.
+    provider_main = runpy.run_path(os.path.join(os.path.dirname(__file__),
+        "test-storage-provider.py"))["main"]
+    for scenario in ("full", "serial", "budgets"):
+        provider_main([args.qemu, args.provider, "--uid", str(args.uid),
+            "--gid", str(args.gid), "--scenario", scenario])
+    if args.budget_out:
+        provider_main([args.qemu, args.provider, "--uid", str(args.uid),
+            "--gid", str(args.gid), "--scenario", "memory",
+            "--budget-out", args.budget_out])
+    print("ASTRA QEMU HOSTFS PASS")
 
 if __name__ == "__main__":
     main()

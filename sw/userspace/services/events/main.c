@@ -1139,14 +1139,14 @@ events_start(const AstraStartupInfo *startup)
         return EVENTS_FAIL_BACKEND;
     }
     {
-        void *file_storage = NULL;
+        static AstraArea file_storage = ASTRA_AREA_INIT;
         uint32_t file_capacity = 0u;
 
         if (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
                                            &file_storage, &file_capacity) ||
             !astra_vfs_service_init(
                 &service, astra_events_backend_ops(), &backend,
-                service_sessions, ASTRA_VFS_SESSION_MAX, file_storage,
+                service_sessions, ASTRA_VFS_SESSION_MAX, file_storage.address,
                 file_capacity)) {
             return EVENTS_FAIL_SERVICE;
         }
@@ -1158,7 +1158,7 @@ events_start(const AstraStartupInfo *startup)
      */
     if (astra_rt_port_create(EVENTS_PORT_MESSAGES,
                           EVENTS_PORT_MESSAGES *
-                          (uint32_t)sizeof(AstraVfsRenameRequestMessage),
+                          (uint32_t)sizeof(AstraVfsRequestMessage),
                           &events_receive, &events_handle) !=
         ASTRA_SYSCALL_OK) {
         return EVENTS_FAIL_PORT;

@@ -27,10 +27,12 @@ typedef struct AstraVfsReadSource {
     AstraVfsFile file;
     /** File length in bytes when it was opened. */
     uint32_t length;
+    /** Owner epoch of the retained file token. */
+    uint32_t ownership_epoch;
 } AstraVfsReadSource;
 
 /** Initializer for a closed ::AstraVfsReadSource. */
-#define ASTRA_VFS_READ_SOURCE_INIT { NULL, ASTRA_VFS_FILE_INVALID, 0u }
+#define ASTRA_VFS_READ_SOURCE_INIT { NULL, ASTRA_VFS_FILE_INVALID, 0u, 0u }
 
 /**
  * Resolve @p path through an assign table and open it for reading.
@@ -73,7 +75,7 @@ uint32_t astra_vfs_read_source_close(void *context);
  * Open the installed provider of one library identity through the current
  * process namespace, which must already be initialized.
  *
- * @param identity Exact library identity, such as `system.library.3`.
+ * @param identity Exact library identity, such as `system.library.4`.
  * @param[out] source Closed source that receives the provider binary.
  * @param[out] reference Receives the provider's library reference.
  * @return ASTRA_VFS_OK or an ASTRA_VFS_ERR_* status.

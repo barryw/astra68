@@ -195,12 +195,9 @@ void astra_vfs_host_transport_forget_scope(AstraVfsHostTransport *transport,
     for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
          ++index) {
         AstraVfsHostLane *lane = &transport->lanes[index];
-        uint32_t kept = 0u;
-
         for (uint32_t at = 0u; at < lane->scope_count; ++at)
-            if (lane->scopes[at] != scope)
-                lane->scopes[kept++] = lane->scopes[at];
-        lane->scope_count = (uint8_t)kept;
+            if (lane->scopes[at] == scope)
+                lane->scopes[at] = 0u;
     }
     if (transport->release != NULL)
         transport->release(transport->lock_context);
@@ -214,24 +211,6 @@ static int lane_carries(const AstraVfsHostLane *lane, uint32_t scope)
         if (lane->scopes[at] == scope)
             return 1;
     return 0;
-}
-
-/* A thread has one channel (one doorbell page per thread slot), so every
- * host-volume client of the process shares it: each scope is attached the
- * first time the lane carries it. A full cache only costs the syscall,
- * which the kernel answers OK for a scope already bound. */
-static uint32_t lane_attach(AstraVfsHostLane *lane, uint32_t scope)
-{
-    uint32_t status;
-
-    if (lane_carries(lane, scope))
-        return ASTRA_VFS_OK;
-    status = astra_host_scope_attach(scope);
-    if (status != ASTRA_SYSCALL_OK)
-        return astra_vfs_host_status_from_syscall(status);
-    if (lane->scope_count < ASTRA_HOST_CHANNEL_SCOPE_MAX)
-        lane->scopes[lane->scope_count++] = scope;
-    return ASTRA_VFS_OK;
 }
 
 static uint32_t lane_open(AstraVfsHostTransport *transport,
@@ -264,6 +243,31 @@ static uint32_t lane_open(AstraVfsHostTransport *transport,
     lane->scope_count = 0u;
     if (scope != 0u)
         lane->scopes[lane->scope_count++] = scope;
+    return ASTRA_VFS_OK;
+}
+
+/* Channel bindings are a finite cache, not a volume limit. Closing a
+ * drained thread channel retires its bindings without closing filesystem
+ * sessions or descriptions. Forgotten numeric handles retain tombstones until
+ * that close: their kernel bindings otherwise still occupy real slots. */
+static uint32_t lane_attach(AstraVfsHostTransport *transport,
+    AstraVfsHostLane *lane, uint32_t scope)
+{
+    uint32_t status;
+
+    if (lane_carries(lane, scope))
+        return ASTRA_VFS_OK;
+    if (lane->scope_count == ASTRA_HOST_CHANNEL_SCOPE_MAX) {
+        status = astra_host_channel_close(scope);
+        if (status != ASTRA_SYSCALL_OK)
+            return astra_vfs_host_status_from_syscall(status);
+        lane->active = 0u;
+        return lane_open(transport, lane, lane->thread, scope);
+    }
+    status = astra_host_scope_attach(scope);
+    if (status != ASTRA_SYSCALL_OK)
+        return astra_vfs_host_status_from_syscall(status);
+    lane->scopes[lane->scope_count++] = scope;
     return ASTRA_VFS_OK;
 }
 
@@ -319,6 +323,17 @@ static int lane_layout(const AstraVfsHostTransport *transport,
         return 0;
     *needed += data_bytes;
     return *needed <= transport->maximum_transfer;
+}
+
+uint32_t astra_vfs_host_transport_payload_limit(const AstraVfsHostTransport *transport)
+{
+    uint32_t overhead;
+    uint32_t available;
+
+    if (transport == NULL || !lane_layout(transport, 1u, 0u, &overhead))
+        return 0u;
+    available = transport->maximum_transfer & ~(ASTRA_MEMORY_PAGE_SIZE - 1u);
+    return available > overhead ? available - overhead : 0u;
 }
 
 /* A reopened channel carries only the scope it was opened on: lane_open
@@ -484,7 +499,7 @@ uint32_t astra_vfs_host_transport_begin(void *context, uint32_t scope,
         if (status != ASTRA_VFS_OK)
             return status;
     }
-    status = lane_attach(lane, scope);
+    status = lane_attach(transport, lane, scope);
     if (status != ASTRA_VFS_OK)
         return status;
     request->command = (AstraHostCommand *)(void *)(

@@ -33,6 +33,8 @@ astra_launch_arguments_pack(AstraLaunchArguments *arguments, char *storage,
         }
         if (!utf8_string(values[index], at))
             return ASTRA_SYSCALL_INVALID_ARGUMENT;
+        if (length >= capacity)
+            return ASTRA_SYSCALL_RESOURCE_LIMIT;
         storage[length++] = '\0';
     }
     arguments->count = (uint16_t)count;
@@ -103,7 +105,7 @@ astra_exec_request_pack(AstraExecRequest *request, char *storage,
     uint32_t used = 0u;
 
     if (request == NULL || storage == NULL || capacity == 0u ||
-        capacity > ASTRA_STARTUP_BLOCK_SIZE || argv == NULL ||
+        capacity > ASTRA_LAUNCH_STRING_BYTES || argv == NULL ||
         argv[0] == NULL || source > ASTRA_LAUNCH_SOURCE_DESKTOP)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     *request = (AstraExecRequest){0};

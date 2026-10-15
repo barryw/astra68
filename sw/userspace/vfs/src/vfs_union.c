@@ -6,6 +6,8 @@
 
 #include <astra/vfs_union.h>
 #include <astra/vfs_path.h>
+#include <astra/vfs_path_storage.h>
+#include <astra/vfs_file_lifetime.h>
 #include <astra/runtime.h>
 
 #include <stddef.h>
@@ -190,15 +192,23 @@ static uint32_t append_path(char *out, uint32_t capacity, const char *suffix)
 static uint32_t canonical_path(const char *path, char *out,
                                uint32_t capacity)
 {
-    char assign[ASTRA_CAPABILITY_NAME_MAX];
-    char rest[ASTRA_VFS_PATH_MAX];
-    char collapsed[ASTRA_VFS_PATH_MAX];
-    uint32_t status = astra_path_collapse(path, collapsed, sizeof(collapsed));
+    char assign[ASTRA_ASSIGN_NAME_MAX];
+    AstraVfsPathStorage rest_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *rest = rest_storage.bytes;
+    if (rest == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    AstraVfsPathStorage collapsed_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *collapsed = collapsed_storage.bytes;
+    if (collapsed == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    uint32_t status = astra_path_collapse(path, collapsed, ASTRA_VFS_PATH_MAX);
 
     if (status != ASTRA_VFS_OK)
         return status;
     status = astra_path_split(collapsed, assign, sizeof(assign), rest,
-                              sizeof(rest));
+                              ASTRA_VFS_PATH_MAX);
 
     if (status != ASTRA_VFS_OK)
         return status;
@@ -226,7 +236,7 @@ static void namespace_root_parents(char *path)
 static uint32_t continue_escape(char *current, const AstraVfsEscape *escape,
                                 const char *suffix, AstraVfsPathHistory *history)
 {
-    if (escape->length == 0u || escape->length > sizeof(escape->path) ||
+    if (escape->length == 0u || escape->length > escape->capacity ||
         escape->links > ASTRA_VFS_LINK_MAX - history->links)
         return ASTRA_VFS_ERR_PROTOCOL;
     history->links += escape->links;
@@ -247,8 +257,12 @@ static uint32_t follow_path_inner(
     const AstraAssign **found_assign, uint32_t *member, char *wire,
     uint32_t capacity, AstraVfsPathHistory *history)
 {
-    char current[ASTRA_VFS_PATH_MAX];
-    uint32_t status = astra_path_collapse(path, current, sizeof(current));
+    AstraVfsPathStorage current_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *current = current_storage.bytes;
+    if (current == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    uint32_t status = astra_path_collapse(path, current, ASTRA_VFS_PATH_MAX);
     int follow_final = (flags & ASTRA_VFS_LOOKUP_FOLLOW) != 0u;
     int entry_final = (flags & ASTRA_VFS_LOOKUP_ENTRY) != 0u;
 
@@ -257,8 +271,12 @@ static uint32_t follow_path_inner(
         (follow_final && entry_final))
         return ASTRA_VFS_ERR_INVALID;
     for (;;) {
-        char assign[ASTRA_CAPABILITY_NAME_MAX];
-        char rest[ASTRA_VFS_PATH_MAX];
+        char assign[ASTRA_ASSIGN_NAME_MAX];
+        AstraVfsPathStorage rest_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+            astra_vfs_path_storage_open(1u);
+        char *rest = rest_storage.bytes;
+        if (rest == NULL)
+            return ASTRA_VFS_ERR_LIMIT;
         uint32_t rest_length = 0u;
         uint32_t start = 0u;
         int single_component = 1;
@@ -270,14 +288,14 @@ static uint32_t follow_path_inner(
                 return ASTRA_VFS_ERR_INVALID;
             return ASTRA_VFS_ERR_ESCAPED;
         }
-        status = canonical_path(current, current, sizeof(current));
+        status = canonical_path(current, current, ASTRA_VFS_PATH_MAX);
         if (status != ASTRA_VFS_OK)
             return status;
         status = path_visit(history, current);
         if (status != ASTRA_VFS_OK)
             return status;
         status = astra_path_split(current, assign, sizeof(assign), rest,
-                                  sizeof(rest));
+                                  ASTRA_VFS_PATH_MAX);
         if (status != ASTRA_VFS_OK)
             return status;
         while (rest[rest_length] != '\0') {
@@ -292,12 +310,21 @@ static uint32_t follow_path_inner(
          * not implement ordered lookup sends us through the shared walk.
          */
         if (!joined || single_component || rest_length == 0u) {
-            char direct_wire[ASTRA_VFS_PATH_MAX];
+            AstraVfsPathStorage direct_wire_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                astra_vfs_path_storage_open(1u);
+            char *direct_wire = direct_wire_storage.bytes;
+            if (direct_wire == NULL)
+                return ASTRA_VFS_ERR_LIMIT;
             AstraVfsDirEntry direct = {0};
             AstraVfsClient *serving = NULL;
             const AstraAssign *binding = NULL;
             uint32_t found_member = 0u;
-            AstraVfsEscape escape = {0};
+            AstraVfsPathStorage escape_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                astra_vfs_path_storage_open(1u);
+            if (escape_storage.bytes == NULL)
+                return ASTRA_VFS_ERR_LIMIT;
+            AstraVfsEscape escape = {.path = (uint8_t *)escape_storage.bytes,
+                .capacity = ASTRA_VFS_ESCAPE_PATH_MAX};
             uint32_t lookup_flags = flags |
                 (allow_missing_final ? ASTRA_VFS_LOOKUP_MISSING : 0u);
             /* The first union entry owns a link, including a dangling one. */
@@ -306,7 +333,7 @@ static uint32_t follow_path_inner(
 
             status = assign_raw_lstat(
                 table, current, rights, client_for, context, direct_wire,
-                sizeof(direct_wire), &direct, &serving, &binding,
+                ASTRA_VFS_PATH_MAX, &direct, &serving, &binding,
                 &found_member, lookup_flags,
                 ASTRA_VFS_LINK_MAX - history->links, &escape);
             if (status == ASTRA_VFS_ERR_ESCAPED) {
@@ -357,9 +384,21 @@ static uint32_t follow_path_inner(
 
         /* The empty rest names the assign root and has one node to inspect. */
         do {
-            char prefix_rest[ASTRA_VFS_PATH_MAX];
-            char prefix[ASTRA_VFS_PATH_MAX];
-            char prefix_wire[ASTRA_VFS_PATH_MAX];
+            AstraVfsPathStorage prefix_rest_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                astra_vfs_path_storage_open(1u);
+            char *prefix_rest = prefix_rest_storage.bytes;
+            if (prefix_rest == NULL)
+                return ASTRA_VFS_ERR_LIMIT;
+            AstraVfsPathStorage prefix_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                astra_vfs_path_storage_open(1u);
+            char *prefix = prefix_storage.bytes;
+            if (prefix == NULL)
+                return ASTRA_VFS_ERR_LIMIT;
+            AstraVfsPathStorage prefix_wire_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                astra_vfs_path_storage_open(1u);
+            char *prefix_wire = prefix_wire_storage.bytes;
+            if (prefix_wire == NULL)
+                return ASTRA_VFS_ERR_LIMIT;
             AstraVfsDirEntry found = {0};
             AstraVfsClient *serving = NULL;
             const AstraAssign *binding = NULL;
@@ -374,7 +413,11 @@ static uint32_t follow_path_inner(
             final = end == rest_length || trailing;
             if ((end - start == 1u && rest[start] == '.') ||
                 (end - start == 2u && rest[start] == '.' && rest[start + 1u] == '.')) {
-                char remaining[ASTRA_VFS_PATH_MAX];
+                AstraVfsPathStorage remaining_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                    astra_vfs_path_storage_open(1u);
+                char *remaining = remaining_storage.bytes;
+                if (remaining == NULL)
+                    return ASTRA_VFS_ERR_LIMIT;
                 uint32_t parent = start == 0u ? 0u : start - 1u;
                 int above = end - start == 2u && parent == 0u;
 
@@ -391,10 +434,10 @@ static uint32_t follow_path_inner(
                     status = ASTRA_VFS_OK;
                 } else {
                     status = astra_path_qualify(assign, "", rest, current,
-                                                sizeof(current));
+                                                ASTRA_VFS_PATH_MAX);
                 }
                 if (status != ASTRA_VFS_OK ||
-                    append_path(current, sizeof(current), remaining) != ASTRA_VFS_OK)
+                    append_path(current, ASTRA_VFS_PATH_MAX, remaining) != ASTRA_VFS_OK)
                     return ASTRA_VFS_ERR_INVALID;
                 break;
             }
@@ -402,13 +445,18 @@ static uint32_t follow_path_inner(
                 prefix_rest[index] = rest[index];
             prefix_rest[end] = '\0';
             status = astra_path_qualify(assign, "", prefix_rest, prefix,
-                                        sizeof(prefix));
+                                        ASTRA_VFS_PATH_MAX);
             if (status != ASTRA_VFS_OK)
                 return status;
-            AstraVfsEscape escape = {0};
+            AstraVfsPathStorage escape_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                astra_vfs_path_storage_open(1u);
+            if (escape_storage.bytes == NULL)
+                return ASTRA_VFS_ERR_LIMIT;
+            AstraVfsEscape escape = {.path = (uint8_t *)escape_storage.bytes,
+                .capacity = ASTRA_VFS_ESCAPE_PATH_MAX};
             status = assign_raw_lstat(
                 table, prefix, final ? rights : ASTRA_RIGHT_READ, client_for,
-                context, prefix_wire, sizeof(prefix_wire), &found, &serving,
+                context, prefix_wire, ASTRA_VFS_PATH_MAX, &found, &serving,
                 &binding, &found_member, 0u,
                 ASTRA_VFS_LINK_MAX - history->links, &escape);
             if (status == ASTRA_VFS_ERR_ESCAPED) {
@@ -427,20 +475,36 @@ static uint32_t follow_path_inner(
                 return status;
             if (found.kind == ASTRA_VFS_KIND_SYMLINK &&
                 (!final || follow_final || (trailing && !entry_final))) {
-                char target[ASTRA_VFS_PATH_MAX + 1u];
-                char parent[ASTRA_VFS_PATH_MAX];
-                char replacement[ASTRA_VFS_PATH_MAX];
-                char combined[ASTRA_VFS_PATH_MAX];
+                AstraVfsPathStorage target_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                    astra_vfs_path_storage_open(1u);
+                char *target = target_storage.bytes;
+                if (target == NULL)
+                    return ASTRA_VFS_ERR_LIMIT;
+                AstraVfsPathStorage parent_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                    astra_vfs_path_storage_open(1u);
+                char *parent = parent_storage.bytes;
+                if (parent == NULL)
+                    return ASTRA_VFS_ERR_LIMIT;
+                AstraVfsPathStorage replacement_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                    astra_vfs_path_storage_open(1u);
+                char *replacement = replacement_storage.bytes;
+                if (replacement == NULL)
+                    return ASTRA_VFS_ERR_LIMIT;
+                AstraVfsPathStorage combined_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                    astra_vfs_path_storage_open(1u);
+                char *combined = combined_storage.bytes;
+                if (combined == NULL)
+                    return ASTRA_VFS_ERR_LIMIT;
                 uint32_t length = 0u;
                 uint32_t parent_length = start == 0u ? 0u : start - 1u;
 
                 if (++history->links > ASTRA_VFS_LINK_MAX)
                     return ASTRA_VFS_ERR_LOOP;
                 status = astra_vfs_readlink(serving, prefix_wire, target,
-                                            ASTRA_VFS_PATH_MAX, &length);
+                                            ASTRA_VFS_PATH_MAX - 1u, &length);
                 if (status != ASTRA_VFS_OK)
                     return status;
-                if (length == 0u || length > ASTRA_VFS_PATH_MAX)
+                if (length == 0u || length >= ASTRA_VFS_PATH_MAX)
                     return ASTRA_VFS_ERR_INVALID;
                 target[length] = '\0';
                 for (uint32_t index = 0u; index < parent_length; ++index)
@@ -448,14 +512,14 @@ static uint32_t follow_path_inner(
                 parent[parent_length] = '\0';
                 status = astra_path_qualify(assign, parent, target,
                                             replacement,
-                                            sizeof(replacement));
+                                            ASTRA_VFS_PATH_MAX);
                 if (status != ASTRA_VFS_OK ||
-                    !copy_path_to(combined, sizeof(combined), replacement))
+                    !copy_path_to(combined, ASTRA_VFS_PATH_MAX, replacement))
                     return ASTRA_VFS_ERR_INVALID;
-                status = append_path(combined, sizeof(combined), rest + end);
+                status = append_path(combined, ASTRA_VFS_PATH_MAX, rest + end);
                 if (status != ASTRA_VFS_OK)
                     return status;
-                status = astra_path_collapse(combined, current, sizeof(current));
+                status = astra_path_collapse(combined, current, ASTRA_VFS_PATH_MAX);
                 if (status != ASTRA_VFS_OK)
                     return status;
                 break;                  /* restart after replacing this hop */
@@ -510,12 +574,16 @@ astra_vfs_assign_lstat(const AstraAssignTable *table, const char *path,
                        AstraVfsClient **client,
                        const AstraAssign **found_assign, uint32_t *member)
 {
-    char logical[ASTRA_VFS_PATH_MAX];
+    AstraVfsPathStorage logical_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *logical = logical_storage.bytes;
+    if (logical == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
 
     if (table == NULL || path == NULL || client_for == NULL || wire == NULL)
         return ASTRA_VFS_ERR_INVALID;
     return follow_path(table, path, rights, client_for, context, 0, 0,
-                       logical, sizeof(logical), entry, client, found_assign,
+                       logical, ASTRA_VFS_PATH_MAX, entry, client, found_assign,
                        member, wire, capacity);
 }
 
@@ -527,12 +595,16 @@ astra_vfs_assign_stat(const AstraAssignTable *table, const char *path,
                       AstraVfsClient **client,
                       const AstraAssign **found_assign, uint32_t *member)
 {
-    char logical[ASTRA_VFS_PATH_MAX];
+    AstraVfsPathStorage logical_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *logical = logical_storage.bytes;
+    if (logical == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
 
     if (table == NULL || path == NULL || client_for == NULL || wire == NULL)
         return ASTRA_VFS_ERR_INVALID;
     return follow_path(table, path, rights, client_for, context, 1, 0,
-                       logical, sizeof(logical), entry, client, found_assign,
+                       logical, ASTRA_VFS_PATH_MAX, entry, client, found_assign,
                        member, wire, capacity);
 }
 
@@ -544,16 +616,24 @@ astra_vfs_assign_resolve_links(const AstraAssignTable *table,
                                void *context, char *logical,
                                uint32_t capacity)
 {
-    char resolved[ASTRA_VFS_PATH_MAX];
-    char wire[ASTRA_VFS_PATH_MAX];
+    AstraVfsPathStorage resolved_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *resolved = resolved_storage.bytes;
+    if (resolved == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    AstraVfsPathStorage wire_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *wire = wire_storage.bytes;
+    if (wire == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     uint32_t status;
 
     if (logical == NULL || capacity == 0u)
         return ASTRA_VFS_ERR_INVALID;
     status = follow_path(table, path, rights, client_for, context,
                          flags, allow_missing_final, resolved,
-                         sizeof(resolved), NULL, NULL, NULL, NULL, wire,
-                         sizeof(wire));
+                         ASTRA_VFS_PATH_MAX, NULL, NULL, NULL, NULL, wire,
+                         ASTRA_VFS_PATH_MAX);
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_ESCAPED)
         return status;
     return copy_path_to(logical, capacity, resolved) ? status :
@@ -581,11 +661,15 @@ astra_vfs_assign_destination(const AstraAssignTable *table, const char *path,
     if (status != ASTRA_VFS_OK || *client != NULL)
         return status;
     {
-        char name[ASTRA_CAPABILITY_NAME_MAX];
-        char rest[ASTRA_VFS_PATH_MAX];
+        char name[ASTRA_ASSIGN_NAME_MAX];
+        AstraVfsPathStorage rest_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+            astra_vfs_path_storage_open(1u);
+        char *rest = rest_storage.bytes;
+        if (rest == NULL)
+            return ASTRA_VFS_ERR_LIMIT;
 
         if ((rights & ASTRA_RIGHT_WRITE) != 0u &&
-            astra_path_split(logical, name, sizeof(name), rest, sizeof(rest)) == ASTRA_VFS_OK &&
+            astra_path_split(logical, name, sizeof(name), rest, ASTRA_VFS_PATH_MAX) == ASTRA_VFS_OK &&
             rest[0] == '\0' && astra_assign_lookup(table, name) == NULL)
             return ASTRA_VFS_ERR_READ_ONLY;
     }
@@ -602,10 +686,23 @@ uint32_t astra_vfs_assign_destination_at(const AstraAssignTable *table,
     AstraVfsDirEntry *entry)
 {
     AstraVfsDirEntry meta = {0};
-    AstraVfsEscape escape = {0};
+    AstraVfsPathStorage escape_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+                astra_vfs_path_storage_open(1u);
+            if (escape_storage.bytes == NULL)
+                return ASTRA_VFS_ERR_LIMIT;
+            AstraVfsEscape escape = {.path = (uint8_t *)escape_storage.bytes,
+                .capacity = ASTRA_VFS_ESCAPE_PATH_MAX};
     AstraVfsPathHistory history = {0};
-    char logical[ASTRA_VFS_PATH_MAX];
-    char continued[ASTRA_VFS_PATH_MAX];
+    AstraVfsPathStorage logical_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *logical = logical_storage.bytes;
+    if (logical == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    AstraVfsPathStorage continued_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *continued = continued_storage.bytes;
+    if (continued == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     uint32_t status;
 
     if (table == NULL || directory_client == NULL || directory == ASTRA_VFS_FILE_INVALID ||
@@ -630,14 +727,18 @@ uint32_t astra_vfs_assign_destination_at(const AstraAssignTable *table,
     if (status == ASTRA_VFS_ERR_ESCAPED) {
         status = continue_escape(continued, &escape, "", &history);
     } else if (status == ASTRA_VFS_ERR_UNSUPPORTED) {
-        char provider[ASTRA_VFS_PATH_MAX];
+        AstraVfsPathStorage provider_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+            astra_vfs_path_storage_open(1u);
+        char *provider = provider_storage.bytes;
+        if (provider == NULL)
+            return ASTRA_VFS_ERR_LIMIT;
         uint32_t length = 0u;
 
         status = astra_vfs_directory_path(directory_client, directory, provider,
-                                          sizeof(provider) - 1u, &length);
+                                          ASTRA_VFS_PATH_MAX - 1u, &length);
         if (status != ASTRA_VFS_OK)
             return status;
-        if (length >= sizeof(provider))
+        if (length >= ASTRA_VFS_PATH_MAX)
             return ASTRA_VFS_ERR_PROTOCOL;
         provider[length] = '\0';
         status = ASTRA_VFS_ERR_NOT_FOUND;
@@ -647,7 +748,7 @@ uint32_t astra_vfs_assign_destination_at(const AstraAssignTable *table,
             if (client_for(binding, context) != directory_client)
                 continue;
             status = astra_path_qualify_provider(binding->name, binding->root,
-                provider, path, continued, sizeof(continued));
+                provider, path, continued, ASTRA_VFS_PATH_MAX);
             if (status == ASTRA_VFS_OK)
                 break;
             if (status != ASTRA_VFS_ERR_NOT_FOUND)
@@ -658,7 +759,7 @@ uint32_t astra_vfs_assign_destination_at(const AstraAssignTable *table,
         return status;
     status = follow_path_inner(table, continued, rights, client_for, context,
         flags & ~ASTRA_VFS_LOOKUP_MISSING, (flags & ASTRA_VFS_LOOKUP_MISSING) != 0u,
-        logical, sizeof(logical), entry, client, assign, member, wire, capacity, &history);
+        logical, ASTRA_VFS_PATH_MAX, entry, client, assign, member, wire, capacity, &history);
     astra_runtime_deallocate(history.paths);
     if (status == ASTRA_VFS_ERR_ESCAPED && !copy_path_to(wire, capacity, logical))
         return ASTRA_VFS_ERR_INVALID;
@@ -680,7 +781,12 @@ astra_vfs_union_directory_open(const AstraAssignTable *table,
                                AstraVfsUnionDirectory *directory)
 {
     AstraVfsDirEntry entry = {0};
-    char wire[ASTRA_VFS_PATH_MAX];
+    AstraVfsPathStorage wire_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    char *wire = astra_vfs_path_storage_at(&wire_storage, 1u);
+    char *logical = wire_storage.bytes;
+    if (wire == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     uint32_t status;
 
     if (table == NULL || client_for == NULL || directory == NULL)
@@ -688,12 +794,16 @@ astra_vfs_union_directory_open(const AstraAssignTable *table,
     /* Open owns every field: read and close trust client and file. */
     *directory = (AstraVfsUnionDirectory)ASTRA_VFS_UNION_DIRECTORY_INIT;
     status = follow_path(table, path, ASTRA_RIGHT_READ, client_for, context,
-                         1, 0, directory->path, sizeof(directory->path),
-                         &entry, NULL, NULL, NULL, wire, sizeof(wire));
+                         1, 0, logical, ASTRA_VFS_PATH_MAX,
+                         &entry, NULL, NULL, NULL, wire, ASTRA_VFS_PATH_MAX);
     if (status != ASTRA_VFS_OK)
         return status;
     if (entry.kind != ASTRA_VFS_KIND_DIRECTORY)
         return ASTRA_VFS_ERR_NOT_DIR;
+    directory->path = astra_runtime_allocate(strlen(logical) + 1u);
+    if (directory->path == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    strcpy(directory->path, logical);
     directory->table = table;
     directory->client_for = client_for;
     directory->context = context;
@@ -710,9 +820,11 @@ union_directory_close_file(AstraVfsUnionDirectory *directory)
 {
     if (directory->client != NULL &&
         directory->file != ASTRA_VFS_FILE_INVALID)
-        (void)astra_vfs_close(directory->client, directory->file);
+        (void)astra_vfs_file_owner_close(directory->client, directory->file,
+            directory->ownership_epoch);
     directory->client = NULL;
     directory->file = ASTRA_VFS_FILE_INVALID;
+    directory->ownership_epoch = 0u;
 }
 
 uint32_t
@@ -724,17 +836,24 @@ astra_vfs_union_directory_read(AstraVfsUnionDirectory *directory,
         count == NULL || directory->active == 0u)
         return ASTRA_VFS_ERR_INVALID;
     *count = 0u;
+    if (directory->client != NULL && directory->file != ASTRA_VFS_FILE_INVALID &&
+        astra_vfs_file_owner_status(directory->client, directory->ownership_epoch) != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_LOST;
     if (directory->done != 0u)
         return ASTRA_VFS_OK;
     for (;;) {
         const AstraAssign *assign = NULL;
         AstraVfsClient *client;
-        char wire[ASTRA_VFS_PATH_MAX];
+        AstraVfsPathStorage wire_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+            astra_vfs_path_storage_open(1u);
+        char *wire = wire_storage.bytes;
+        if (wire == NULL)
+            return ASTRA_VFS_ERR_LIMIT;
         uint64_t next = 0u;
         uint32_t found = 0u;
         uint32_t status = astra_assign_resolve_raw(
             directory->table, directory->path, ASTRA_RIGHT_READ,
-            directory->member, wire, sizeof(wire), &assign);
+            directory->member, wire, ASTRA_VFS_PATH_MAX, &assign);
 
         if (status == ASTRA_VFS_ERR_NOT_FOUND) {
             directory->done = 1u;
@@ -778,6 +897,7 @@ astra_vfs_union_directory_read(AstraVfsUnionDirectory *directory,
                 continue;
             }
             directory->client = client;
+            directory->ownership_epoch = client->ownership_epoch;
         }
         status = astra_vfs_readdir_file_batch(
             client, directory->file, wire,
@@ -816,6 +936,7 @@ void astra_vfs_union_directory_close(AstraVfsUnionDirectory *directory)
 {
     if (directory != NULL) {
         union_directory_close_file(directory);
+        astra_runtime_deallocate(directory->path);
         *directory = (AstraVfsUnionDirectory)
             ASTRA_VFS_UNION_DIRECTORY_INIT;
     }
@@ -829,8 +950,16 @@ astra_vfs_assign_open(const AstraAssignTable *table, const char *path,
                       uint64_t *size, uint16_t *kind, AstraVfsClient **client,
                       uint32_t *member)
 {
-    char logical[ASTRA_VFS_PATH_MAX];
-    char followed_wire[ASTRA_VFS_PATH_MAX];
+    AstraVfsPathStorage logical_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *logical = logical_storage.bytes;
+    if (logical == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    AstraVfsPathStorage followed_wire_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *followed_wire = followed_wire_storage.bytes;
+    if (followed_wire == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     const AstraAssign *assign = NULL;
     AstraVfsClient *serving = NULL;
     uint32_t selected = 0u;
@@ -858,7 +987,7 @@ astra_vfs_assign_open(const AstraAssignTable *table, const char *path,
         (ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_EXCLUSIVE)) {
         uint32_t exists = astra_vfs_assign_lstat(
             table, path, rights, client_for, context, followed_wire,
-            sizeof(followed_wire), NULL, NULL, NULL, NULL);
+            ASTRA_VFS_PATH_MAX, NULL, NULL, NULL, NULL);
 
         if (exists == ASTRA_VFS_OK)
             return ASTRA_VFS_ERR_EXISTS;
@@ -868,7 +997,7 @@ astra_vfs_assign_open(const AstraAssignTable *table, const char *path,
     status = astra_vfs_assign_destination(
         table, path, rights, ((flags & ASTRA_VFS_OPEN_NOFOLLOW) ? 0u : ASTRA_VFS_LOOKUP_FOLLOW) |
         ((flags & ASTRA_VFS_OPEN_CREATE) ? ASTRA_VFS_LOOKUP_MISSING : 0u),
-        client_for, context, logical, sizeof(logical), wire, capacity,
+        client_for, context, logical, ASTRA_VFS_PATH_MAX, wire, capacity,
         &serving, &selected);
     if (status != ASTRA_VFS_OK)
         return status;

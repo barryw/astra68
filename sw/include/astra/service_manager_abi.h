@@ -28,7 +28,9 @@
 /** `SVCM` protocol identifier carried by every service-manager message. */
 #define ASTRA_SERVICE_MANAGER_PROTOCOL UINT32_C(0x5356434d) /* SVCM */
 /** Current service-manager wire protocol version. */
-#define ASTRA_SERVICE_MANAGER_VERSION 6u
+#define ASTRA_SERVICE_MANAGER_VERSION 7u
+/** Stable service identifier bytes, including NUL; independent of filenames. */
+#define ASTRA_SERVICE_NAME_MAX 64u
 
 /** Service-manager operation codes, carried in the message header's operation field. */
 enum {
@@ -149,8 +151,9 @@ typedef struct AstraServicePublication {
 
 /*
  * Full definitions travel in a shared area. Their only collection ceilings
- * are the child startup page and the number of handles one READY message can
- * publish; configured-service count is deliberately not represented here.
+ * are the child capability page, combined launch-string budget and number of
+ * handles one READY message can publish; configured-service count is deliberately
+ * not represented here. Argument pointer storage uses owned startup payload pages.
  */
 /** A service's complete configuration; too large for an inline message, it travels in a shared area. */
 typedef struct AstraServiceDefinition {
@@ -163,9 +166,9 @@ typedef struct AstraServiceDefinition {
     /** ::AstraServiceRestartPolicy value. */
     uint32_t restart_policy;
     /** The service's unique name. */
-    char name[ASTRA_VFS_NAME_MAX];
-    /** Path to the service's executable or application bundle. */
-    char executable[ASTRA_VFS_PATH_MAX];
+    char name[ASTRA_SERVICE_NAME_MAX];
+    /** Owned executable or bundle path; initialize and destroy through the NDK. */
+    char *executable;
     /** Number of packed NUL-terminated strings in #arguments; entry 0 is #executable. */
     uint16_t argument_count;
     /** Total bytes used in #arguments. */
@@ -198,9 +201,9 @@ typedef struct AstraServiceDefinition {
 /** Snapshot of one configured service's identity, policy and run state. */
 typedef struct AstraServiceInfo {
     /** The service's name. */
-    char name[ASTRA_VFS_NAME_MAX];
-    /** Path to the service's executable or application bundle. */
-    char executable[ASTRA_VFS_PATH_MAX];
+    char name[ASTRA_SERVICE_NAME_MAX];
+    /** Owned executable or bundle path; released by astra_service_info_destroy(). */
+    char *executable;
     /** `ASTRA_SERVICE_*` bits, mirrored from the service's ::AstraServiceDefinition. */
     uint32_t flags;
     /** ::AstraServiceState value. */
@@ -218,6 +221,51 @@ typedef struct AstraServiceInfo {
     /** Number of other registered services currently bound to one of this service's published capabilities. */
     uint32_t client_count;
 } AstraServiceInfo;
+
+/** Empty owned definition and service-info initializers. */
+#define ASTRA_SERVICE_DEFINITION_INIT {0}
+/** Empty owned service-info snapshot initializer. */
+#define ASTRA_SERVICE_INFO_INIT {0}
+
+/* Pointer-free shared-area representation. The trailing executable span is
+ * canonical: offset sizeof(record), length includes exactly one final NUL. */
+/** Pointer-free SVCM 7 definition header followed by its executable string.
+ * The enclosing control message declares the complete area byte count. */
+typedef struct AstraServiceDefinitionRecord {
+    uint32_t structure_size; /**< sizeof(AstraServiceDefinitionRecord). */
+    uint32_t flags; /**< ASTRA_SERVICE_* configuration flags. */
+    uint32_t start_policy; /**< AstraServiceStartPolicy. */
+    uint32_t restart_policy; /**< AstraServiceRestartPolicy. */
+    char name[ASTRA_SERVICE_NAME_MAX]; /**< NUL-terminated stable identifier. */
+    uint32_t executable_offset; /**< sizeof(this record), offset from area start. */
+    uint32_t executable_length; /**< Executable bytes including its final NUL. */
+    uint16_t argument_count; /**< Number of packed argument strings. */
+    uint16_t argument_length; /**< Exact bytes consumed by packed arguments. */
+    char arguments[ASTRA_LAUNCH_ARGUMENT_BYTES]; /**< Packed UTF-8 argv strings. */
+    uint32_t grant_count; /**< Used entries in grants. */
+    AstraServiceAuthority grants[ASTRA_LAUNCH_GRANT_MAX]; /**< Requested launch authority. */
+    uint32_t publication_count; /**< Used entries in publications. */
+    AstraServicePublication publications[ASTRA_MESSAGE_HANDLES_MAX]; /**< READY publications. */
+    uint32_t dependency_count; /**< Used entries in dependencies. */
+    char dependencies[ASTRA_LAUNCH_GRANT_MAX][ASTRA_CAPABILITY_NAME_MAX]; /**< Required published capabilities. */
+    uint32_t priority; /**< Native scheduler priority; zero selects normal. */
+} AstraServiceDefinitionRecord;
+
+/** Bounded runtime metadata; executable bytes travel in the reply area. */
+typedef struct AstraServiceInfoRecord {
+    char name[ASTRA_SERVICE_NAME_MAX]; /**< NUL-terminated stable service identifier. */
+    uint32_t flags; /**< ASTRA_SERVICE_* flags mirrored from its definition. */
+    uint32_t state; /**< AstraServiceState. */
+    uint32_t start_policy; /**< Current AstraServiceStartPolicy. */
+    uint32_t restart_policy; /**< Current AstraServiceRestartPolicy. */
+    uint32_t process_id; /**< Running PID, or zero while stopped. */
+    uint32_t generation; /**< Reserved run generation; currently zero. */
+    uint32_t exit_status; /**< Last shared outcome; currently zero. */
+    uint32_t client_count; /**< Clients bound to its published capabilities. */
+} AstraServiceInfoRecord;
+
+/** Maximum complete definition-area bytes, including the executable string. */
+#define ASTRA_SERVICE_DEFINITION_PAYLOAD_MAX (sizeof(AstraServiceDefinitionRecord) + ASTRA_VFS_PATH_MAX)
 
 /** Which list ::AstraServiceListCursor.position is enumerating. */
 typedef enum AstraServiceListSource {
@@ -251,11 +299,15 @@ typedef struct AstraServiceManagerRequest {
     /** Pagination cursor; meaningful only for ::ASTRA_SERVICE_MANAGER_LIST. */
     AstraServiceListCursor cursor;
     /** Target service name; empty for ::ASTRA_SERVICE_MANAGER_LIST, SHUTDOWN and SYSTEM_RESTART. */
-    char name[ASTRA_VFS_NAME_MAX];
+    char name[ASTRA_SERVICE_NAME_MAX];
     /** The operation's argument; zero for every operation that takes none, such as an ::AstraServiceRestartPolicy for SET_RESTART. */
     uint32_t value;
     /** Must be zero. */
     uint32_t reserved;
+    /** ADD: exact definition-area bytes; zero for other operations. */
+    uint32_t payload_size;
+    /** Zero; keeps the fixed record identical on 32/64-bit build hosts. */
+    uint32_t reserved_payload;
 } AstraServiceManagerRequest;
 
 /** Reply to an ::AstraServiceManagerRequest; header.operation is always ::ASTRA_SERVICE_MANAGER_REPLY. */
@@ -269,7 +321,11 @@ typedef struct AstraServiceManagerReply {
     /** For ::ASTRA_SERVICE_MANAGER_LIST, the cursor to pass back to continue enumeration. */
     AstraServiceListCursor next_cursor;
     /** The targeted service's info; meaningful when #status is `ASTRA_STATUS_OK` and the request named one service. */
-    AstraServiceInfo info;
+    AstraServiceInfoRecord info;
+    /** Exact transferred bytes, zero when no information is returned. */
+    uint32_t payload_size;
+    /** Zero for no payload, 1 for executable string, 2 for full definition. */
+    uint32_t payload_kind;
 } AstraServiceManagerReply;
 
 /** @cond ASTRA_INTERNAL */
@@ -277,6 +333,8 @@ _Static_assert(sizeof(AstraServiceManagerRequest) <= ASTRA_MESSAGE_SIZE_MAX,
                "service manager request exceeds port ABI");
 _Static_assert(sizeof(AstraServiceManagerReply) <= ASTRA_MESSAGE_SIZE_MAX,
                "service manager reply exceeds port ABI");
+_Static_assert(sizeof(AstraServiceManagerRequest) == 120u, "service manager request ABI");
+_Static_assert(sizeof(AstraServiceManagerReply) == 152u, "service manager reply ABI");
 /** @endcond */
 
 #endif

@@ -18,6 +18,7 @@
 #include <stdint.h>
 
 #include <astra/vfs_client.h>
+#include <astra/area.h>
 #include <astra/vfs_service.h>
 #include <astra/vfs_service_core.h>
 
@@ -54,6 +55,7 @@ void astra_vfs_state_futex_wake(void *context,
  */
 uint32_t astra_vfs_port_transport(void *context, uint32_t operation,
                                   const AstraVfsRequest *request,
+                                  const AstraVfsTransfer *transfer,
                                   AstraVfsReply *reply);
 /* Lifecycle guard used by an in-process backend bound to this transport. */
 uint32_t astra_vfs_port_client_enter(AstraVfsClient *client);
@@ -78,7 +80,7 @@ uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service);
 uint32_t astra_vfs_port_connect_with_accelerator(
     AstraVfsClient *client, uint32_t service,
     const AstraVfsPortAcceleratorOps *accelerator);
-/* Version 8: defer HELLO and fuse it with the first path operation. */
+/* Defer HELLO until first use; complete paths use the bound transfer area. */
 uint32_t astra_vfs_port_connect_lazy_with_accelerator(
     AstraVfsClient *client, uint32_t service,
     const AstraVfsPortAcceleratorOps *accelerator);
@@ -94,20 +96,12 @@ void astra_vfs_port_abandon(AstraVfsClient *client);
  * astra_vfs_port_read_borrow: valid until the next operation on this thread's
  * lane.
  *
- * Answers ASTRA_VFS_ERR_UNSUPPORTED against a peer older than version 5, and
- * ASTRA_VFS_ERR_LIMIT for a file larger than the area, filling `node_size` so
- * the caller can fall back knowing the size.
+ * Answers ASTRA_VFS_ERR_LIMIT for a file larger than the current area,
+ * filling `node_size`; the client grows its area before retrying.
  */
 uint32_t astra_vfs_port_read_path(AstraVfsClient *client, const char *path,
                                   const uint8_t **bytes, uint32_t *moved,
                                   uint64_t *node_size);
-/* Version 7: whole files up to ASTRA_VFS_IO_MAX in the normal reply. */
-uint32_t astra_vfs_port_read_path_inline(AstraVfsClient *client,
-                                         const char *path,
-                                         const uint8_t **bytes,
-                                         uint32_t *moved,
-                                         uint64_t *node_size);
-
 /*
  * A bulk read that hands back the transfer area instead of copying out of it.
  *
@@ -156,9 +150,10 @@ void astra_vfs_port_after_fork_child(AstraVfsClient *client);
 /*
  * Maps one reserved area as a lazily committed service table. Physical pages
  * are charged to the service owner only when records are touched; the owner's
- * area quota and the VFS handle width are the only ceilings.
+ * area quota and the VFS handle width are the only ceilings. Caller supplies
+ * an empty owned area and closes it with astra_area_close after service shutdown.
  */
-int astra_vfs_port_quota_storage(uint32_t element_size, void **storage,
+int astra_vfs_port_quota_storage(uint32_t element_size, AstraArea *storage,
                                  uint32_t *capacity);
 
 /*
@@ -168,7 +163,7 @@ int astra_vfs_port_quota_storage(uint32_t element_size, void **storage,
  * blocked in its own receive would stop the child it is serving.
  */
 typedef struct AstraVfsPortWorker {
-    AstraVfsRequestMessageBuffer incoming;
+    AstraVfsRequestMessage incoming;
     AstraVfsReplyMessage outgoing;
 } AstraVfsPortWorker;
 
@@ -261,7 +256,7 @@ uint32_t astra_vfs_port_service_worker_pump(AstraVfsPortService *host,
  * Serves `grant`'s port (storage protocol 29). HELLO opens a session bound
  * to the grant, answers ASTRA_VFS_FEATURE_GRANTS and attaches a duplicate of
  * its scope; a session is answered only on its own grant's port. The port is
- * control only: HELLO, BYE and GRANT_DERIVE. Every other operation is
+ * control only: HELLO, BYE, lane/area binding and GRANT_DERIVE. Data is
  * answered ASTRA_VFS_ERR_UNSUPPORTED -- the data plane is the client's lane.
  */
 uint32_t astra_vfs_port_service_grant_pump(AstraVfsPortService *host,

@@ -6,7 +6,10 @@
 #include <astra/service.h>
 #include <astra/status.h>
 
-static AstraStartupCapability capabilities[2];
+static struct {
+    AstraStartupInfo info;
+    AstraStartupCapability capabilities[2];
+} startup_block;
 static AstraServiceReady sent_message;
 static uint32_t sent_handle;
 static uint32_t sent_handles[ASTRA_MESSAGE_HANDLES_MAX];
@@ -28,26 +31,29 @@ astra_port_send(uint32_t handle, const void *message, uint32_t size,
     return ASTRA_SYSCALL_OK;
 }
 
-static AstraStartupInfo
+static AstraStartupInfo *
 startup_info(void)
 {
-    AstraStartupInfo startup = {0};
+    AstraStartupInfo *startup = &startup_block.info;
 
-    startup.magic = ASTRA_STARTUP_MAGIC;
-    startup.abi_version = ASTRA_STARTUP_ABI_VERSION;
-    startup.header_size = ASTRA_STARTUP_INFO_SIZE;
-    startup.total_size = ASTRA_STARTUP_INFO_SIZE;
-    startup.syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION;
-    startup.program_entry = 0x00100000u;
-    startup.capability_count = 2u;
-    startup.capabilities_address = (uint32_t)(uintptr_t)capabilities;
+    memset(&startup_block, 0, sizeof(startup_block));
+    startup->magic = ASTRA_STARTUP_MAGIC;
+    startup->abi_version = ASTRA_STARTUP_ABI_VERSION;
+    startup->header_size = ASTRA_STARTUP_INFO_SIZE;
+    startup->total_size = sizeof(startup_block);
+    startup->syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION;
+    startup->program_entry = 0x00100000u;
+    startup->capability_count = 2u;
+    startup->capabilities_address =
+        (uint32_t)(uintptr_t)startup_block.capabilities;
     return startup;
 }
 
 int
 main(void)
 {
-    AstraStartupInfo startup = startup_info();
+    AstraStartupInfo *startup = startup_info();
+    AstraStartupCapability *capabilities = startup_block.capabilities;
     uint32_t handles[2] = {0x11111111u, 0x22222222u};
 
     memcpy(capabilities[0].name, "SERVICE_READY", sizeof("SERVICE_READY"));
@@ -55,10 +61,10 @@ main(void)
     memcpy(capabilities[1].name, "GUI", sizeof("GUI"));
     capabilities[1].handle = 9u;
 
-    assert(astra_startup_capability(&startup, "GUI") == &capabilities[1]);
-    assert(astra_startup_capability(&startup, "MISSING") == NULL);
+    assert(astra_startup_capability(startup, "GUI") == &capabilities[1]);
+    assert(astra_startup_capability(startup, "MISSING") == NULL);
     assert(astra_startup_capability(NULL, "GUI") == NULL);
-    assert(astra_startup_capability(&startup, NULL) == NULL);
+    assert(astra_startup_capability(startup, NULL) == NULL);
 
     assert(astra_service_ready(7u, ASTRA_STATUS_OK, handles, 2u) ==
            ASTRA_SYSCALL_OK);

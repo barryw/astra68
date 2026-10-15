@@ -45,16 +45,18 @@ int main(void)
 {
     AstraFile file = ASTRA_FILE_INIT;
     char path[ASTRA_VFS_PATH_MAX];
-    char subsystem[169];
+    char subsystem[ASTRA_VFS_PATH_MAX];
+    const size_t subsystem_length =
+        sizeof(path) - sizeof("/events/subsystem/") - strlen("/notice");
     uint64_t offset = UINT64_MAX;
 
     memset(subsystem, 's', sizeof(subsystem));
-    subsystem[166] = '\0';
+    subsystem[subsystem_length] = '\0';
     assert(events_build_path(path, sizeof(path), 0, NULL, subsystem,
                              "notice", 0));
     assert(strlen(path) == sizeof(path) - 1u);
-    subsystem[166] = 's';
-    subsystem[167] = '\0';
+    subsystem[subsystem_length] = 's';
+    subsystem[subsystem_length + 1u] = '\0';
     assert(!events_build_path(path, sizeof(path), 0, NULL, subsystem,
                               "notice", 0));
 

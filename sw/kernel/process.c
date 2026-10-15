@@ -2851,7 +2851,7 @@ static uint32_t host_channel_open(
         return ASTRA_SYSCALL_PEER_DEAD;
     }
     if (kernel_platform_host_channel_open(
-            process->owner, state->host_generation, thread->generation,
+            process->owner, process->id, state->host_generation, thread->generation,
             slot, token.physical_address, channel->byte_size,
             channel->command_capacity, scope != NULL ? scope->word : 0u,
             scope != NULL ? host_scope_wire_flags(scope) :
@@ -5037,7 +5037,7 @@ static uint8_t launch_header[KERNEL_ELF_HEADER_SIZE];
  * consuming most of a guarded 8 KiB supervisor stack on every syscall. */
 static _Alignas(4) uint8_t startup_page[ASTRA_STARTUP_BLOCK_SIZE];
 static union {
-    char bytes[ASTRA_STARTUP_BLOCK_SIZE];
+    char bytes[ASTRA_LAUNCH_STRING_BYTES];
     AstraEventDrained events[ASTRA_STARTUP_BLOCK_SIZE /
                              sizeof(AstraEventDrained)];
 } syscall_data;
@@ -5075,7 +5075,8 @@ static KernelProcessStatus publish_startup_block(
     KernelHandle thread_handle, const AstraStartupCapability *bootstrap,
     uint32_t bootstrap_count, const AstraLaunchArguments *arguments,
     const char *argument_bytes, const char *environment,
-    uint32_t handoff_address, uint32_t handoff_size,
+    uint32_t handoff_source, uint32_t handoff_size,
+    const KernelElfImage *plan,
     const KernelInitialImage *initial_image);
 static KernelProcessStatus accept_executable(const void *image,
                                              uint32_t image_size,
@@ -5141,20 +5142,24 @@ static KernelProcessStatus read_exec_startup(
 
 static KernelProcessStatus publish_exec_handoff(
     KernelAddressSpace *space, uint32_t owner, uint32_t source,
-    uint32_t size, const KernelElfImage *plan, uint32_t *address)
+    uint32_t size, const KernelElfImage *plan, uint32_t vector_size,
+    uint32_t *address, uint32_t *vector_address)
 {
     const uint32_t base = KERNEL_PROCESS_STARTUP_BASE + KERNEL_PAGE_SIZE;
     uint32_t first_segment = UINT32_MAX;
     uint32_t rounded;
+    uint32_t vector_rounded;
 
-    if (space == NULL || plan == NULL || address == NULL ||
+    if (space == NULL || plan == NULL || address == NULL || vector_address == NULL ||
         (source == 0u) != (size == 0u))
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *address = 0u;
-    if (size == 0u)
+    *vector_address = 0u;
+    if (size == 0u && vector_size == 0u)
         return KERNEL_PROCESS_OK;
-    if (source < KERNEL_VM_USER_MIN || source > KERNEL_VM_USER_MAX ||
-        size - 1u > KERNEL_VM_USER_MAX - source)
+    if (size != 0u &&
+        (source < KERNEL_VM_USER_MIN || source > KERNEL_VM_USER_MAX ||
+         size - 1u > KERNEL_VM_USER_MAX - source))
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     for (uint32_t index = 0u; index < plan->segment_count; ++index) {
         const KernelElfSegment *segment =
@@ -5165,11 +5170,17 @@ static KernelProcessStatus publish_exec_handoff(
         if (segment->virtual_address < first_segment)
             first_segment = segment->virtual_address;
     }
-    if (size > UINT32_MAX - (KERNEL_PAGE_SIZE - 1u))
+    if (size > UINT32_MAX - (KERNEL_PAGE_SIZE - 1u) ||
+        vector_size > UINT32_MAX - (KERNEL_PAGE_SIZE - 1u))
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     rounded = (size + KERNEL_PAGE_SIZE - 1u) & ~(KERNEL_PAGE_SIZE - 1u);
-    if (first_segment <= base || rounded > first_segment - base)
+    vector_rounded = (vector_size + KERNEL_PAGE_SIZE - 1u) &
+                     ~(KERNEL_PAGE_SIZE - 1u);
+    if (first_segment <= base || rounded > first_segment - base ||
+        vector_rounded > first_segment - base - rounded)
         return KERNEL_PROCESS_RESOURCE_LIMIT;
+    if (vector_size != 0u)
+        *vector_address = base + rounded;
     for (uint32_t offset = 0u; offset < rounded; offset += KERNEL_PAGE_SIZE) {
         uint32_t copied = size - offset;
         KernelProcessStatus status;
@@ -5185,7 +5196,8 @@ static KernelProcessStatus publish_exec_handoff(
         if (status != KERNEL_PROCESS_OK)
             return status;
     }
-    *address = base;
+    if (size != 0u)
+        *address = base;
     return KERNEL_PROCESS_OK;
 }
 
@@ -5218,7 +5230,6 @@ static KernelProcessStatus exec_replace(
     AstraStartupInfo prior_startup;
     KernelProcessStatus status;
     uint32_t bootstrap_count = 0u;
-    uint32_t handoff_address = 0u;
     uint32_t entry_base;
     uint32_t entry_size;
     uint32_t new_tls_base = 0u;
@@ -5280,11 +5291,6 @@ static KernelProcessStatus exec_replace(
         return status;
     request->arguments.source = (uint16_t)prior_startup.launch_source;
 
-    status = publish_exec_handoff(
-        replacement, process->owner, request->handoff_address,
-        request->handoff_size, plan, &handoff_address);
-    if (status != KERNEL_PROCESS_OK)
-        goto failed;
     status = publish_startup_block(
         replacement, process->owner, process->self_handle,
         thread->self_handle, &exec_capabilities[2], bootstrap_count,
@@ -5292,7 +5298,7 @@ static KernelProcessStatus exec_replace(
         request->arguments.count != 0u ? syscall_data.bytes : NULL,
         request->arguments.environment_count != 0u ?
             syscall_data.bytes + request->arguments.length : NULL,
-        handoff_address, request->handoff_size, &initial_image);
+        request->handoff_address, request->handoff_size, plan, &initial_image);
     if (status != KERNEL_PROCESS_OK)
         goto failed;
     status = publish_page(
@@ -5945,11 +5951,15 @@ static uint32_t copy_launch_arguments(uint32_t user_address,
         return ASTRA_SYSCALL_BAD_ADDRESS;
     if (arguments->count > ASTRA_LAUNCH_ARGUMENT_MAX ||
         arguments->length > ASTRA_LAUNCH_ARGUMENT_BYTES ||
+        arguments->environment_count > ASTRA_LAUNCH_ENVIRONMENT_MAX ||
+        arguments->environment_length > ASTRA_LAUNCH_ENVIRONMENT_BYTES ||
+        arguments->length + arguments->environment_length >
+            (uint32_t)sizeof(syscall_data.bytes))
+        return ASTRA_SYSCALL_RESOURCE_LIMIT;
+    if (
         (arguments->count != 0u) != (arguments->length != 0u) ||
         (arguments->count != 0u) !=
             (arguments->argument_address != 0u) ||
-        arguments->environment_count > ASTRA_LAUNCH_ENVIRONMENT_MAX ||
-        arguments->environment_length > ASTRA_LAUNCH_ENVIRONMENT_BYTES ||
         (arguments->environment_count != 0u) !=
             (arguments->environment_length != 0u) ||
         (arguments->environment_count != 0u) !=
@@ -5960,8 +5970,6 @@ static uint32_t copy_launch_arguments(uint32_t user_address,
          (arguments->priority < KERNEL_THREAD_PRIORITY_USER_MIN ||
           arguments->priority > KERNEL_THREAD_PRIORITY_USER_MAX)) ||
         arguments->reserved != 0u ||
-        arguments->length + arguments->environment_length >
-            (uint32_t)sizeof(syscall_data.bytes) ||
         (arguments->count == 0u &&
          arguments->environment_count == 0u &&
          arguments->source != ASTRA_LAUNCH_SOURCE_SYSTEM))
@@ -7408,36 +7416,19 @@ static KernelProcessStatus grant_bootstrap_capabilities(
     return KERNEL_PROCESS_OK;
 }
 
-/*
- * The argument vector, after the capability table in the same page.
- *
- * A vector of addresses and then the bytes they point at, both inside the one
- * page the child already maps read-only. Nothing is copied a second time and
- * nothing needs an allocator before `main`, which is what makes an argument
- * cheap enough that a program can have several.
- *
- * Returns the bytes appended, or 0 when there is nothing to append. `*vector`
- * is where the child will find the addresses.
- */
-static uint32_t append_vector(uint8_t *page, uint32_t at, uint32_t capacity,
-                              const char *bytes, uint32_t byte_count,
-                              uint32_t word_count, int environment,
-                              uint32_t *vector, uint32_t *count)
+/* Validate once before allocating any startup payload pages. The strings are
+ * the same admitted snapshot used to construct the immutable pointer vector. */
+static KernelProcessStatus validate_startup_vector(
+    const char *bytes, uint32_t byte_count, uint32_t word_count, bool environment)
 {
-    uint32_t vector_at = at;
-    uint32_t text_at;
     uint32_t consumed = 0u;
-    uint32_t written = 0u;
 
-    *vector = 0u;
-    *count = 0u;
-    if (word_count == 0u)
-        return 0u;
-    text_at = vector_at + ((word_count + 1u) * 4u);
-    if (text_at + byte_count > capacity)
-        return 0u;
+    if ((word_count == 0u) != (byte_count == 0u) ||
+        (byte_count != 0u && bytes == NULL) ||
+        word_count > byte_count ||
+        (environment && word_count > byte_count / 3u))
+        return KERNEL_PROCESS_INVALID_ARGUMENT;
     for (uint32_t index = 0u; index < word_count; ++index) {
-        uint32_t address = KERNEL_PROCESS_STARTUP_BASE + text_at + written;
         uint32_t length = 0u;
         uint32_t equals = UINT32_MAX;
 
@@ -7450,23 +7441,12 @@ static uint32_t append_vector(uint8_t *page, uint32_t at, uint32_t capacity,
         if (consumed + length >= byte_count ||
             !astra_utf8_validate(bytes + consumed, length, 0u) ||
             (environment && (equals == UINT32_MAX || equals == 0u))) {
-            /* Invalid text, or a count that promises more words than exist. */
-            return 0u;
+            return KERNEL_PROCESS_INVALID_ARGUMENT;
         }
-        page[vector_at + (index * 4u)] = (uint8_t)(address >> 24);
-        page[vector_at + (index * 4u) + 1u] = (uint8_t)(address >> 16);
-        page[vector_at + (index * 4u) + 2u] = (uint8_t)(address >> 8);
-        page[vector_at + (index * 4u) + 3u] = (uint8_t)address;
-        for (uint32_t byte = 0u; byte <= length; ++byte)
-            page[text_at + written + byte] = (uint8_t)bytes[consumed + byte];
-        written += length + 1u;
         consumed += length + 1u;
     }
-    if (consumed != byte_count)
-        return 0u;
-    *vector = KERNEL_PROCESS_STARTUP_BASE + vector_at;
-    *count = word_count;
-    return ((word_count + 1u) * 4u) + written;
+    return consumed == byte_count ? KERNEL_PROCESS_OK :
+                                   KERNEL_PROCESS_INVALID_ARGUMENT;
 }
 
 static KernelProcessStatus publish_startup_block(
@@ -7474,7 +7454,8 @@ static KernelProcessStatus publish_startup_block(
     KernelHandle thread_handle, const AstraStartupCapability *bootstrap,
     uint32_t bootstrap_count, const AstraLaunchArguments *arguments,
     const char *argument_bytes, const char *environment,
-    uint32_t handoff_address, uint32_t handoff_size,
+    uint32_t handoff_source, uint32_t handoff_size,
+    const KernelElfImage *plan,
     const KernelInitialImage *initial_image)
 {
     AstraStartupInfo info;
@@ -7489,10 +7470,45 @@ static KernelProcessStatus publish_startup_block(
                                            ASTRA_STARTUP_INFO_SIZE);
     uint32_t count = 2u + bootstrap_count;
     uint32_t published_bytes;
+    uint32_t argument_count = arguments != NULL ? arguments->count : 0u;
+    uint32_t environment_count = arguments != NULL ? arguments->environment_count : 0u;
+    uint32_t argument_length = arguments != NULL ? arguments->length : 0u;
+    uint32_t environment_length = arguments != NULL ? arguments->environment_length : 0u;
+    uint32_t argument_slots = argument_count != 0u ? argument_count + 1u : 0u;
+    uint32_t environment_slots = environment_count != 0u ? environment_count + 1u : 0u;
+    uint32_t vector_bytes;
+    uint32_t vector_size;
+    uint32_t vector_address;
+    uint32_t handoff_address;
+    uint32_t argument_at = 0u;
+    uint32_t environment_at = 0u;
+    KernelProcessStatus status;
 
     if (bootstrap_count > KERNEL_PROCESS_BOOTSTRAP_CAPABILITY_MAX ||
-        initial_image == NULL || initial_image->program_entry == 0u)
+        initial_image == NULL || initial_image->program_entry == 0u || plan == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
+    if (argument_count > ASTRA_LAUNCH_ARGUMENT_MAX ||
+        environment_count > ASTRA_LAUNCH_ENVIRONMENT_MAX ||
+        argument_length > ASTRA_LAUNCH_STRING_BYTES ||
+        environment_length > ASTRA_LAUNCH_STRING_BYTES - argument_length)
+        return KERNEL_PROCESS_RESOURCE_LIMIT;
+    status = validate_startup_vector(argument_bytes, argument_length,
+                                     argument_count, false);
+    if (status != KERNEL_PROCESS_OK)
+        return status;
+    status = validate_startup_vector(environment, environment_length,
+                                     environment_count, true);
+    if (status != KERNEL_PROCESS_OK)
+        return status;
+    vector_bytes = (argument_slots + environment_slots) * 4u;
+    vector_size = vector_bytes + argument_length + environment_length;
+    /* The existing handoff owner admits the combined rounded span before the
+     * first ELF segment. Every page has ordinary VM ownership and rollback. */
+    status = publish_exec_handoff(space, owner, handoff_source, handoff_size,
+                                   plan, vector_size, &handoff_address,
+                                   &vector_address);
+    if (status != KERNEL_PROCESS_OK)
+        return status;
     kernel_bytes_clear(&info, sizeof(info));
     kernel_bytes_clear(startup_page, sizeof(startup_page));
     published_bytes = ASTRA_STARTUP_INFO_SIZE +
@@ -7517,6 +7533,13 @@ static KernelProcessStatus publish_startup_block(
     info.interpreter_span = initial_image->interpreter_span;
     info.interpreter_entry = initial_image->interpreter_entry;
     info.program_writable_bytes = initial_image->program_writable_bytes;
+    info.argc = argument_count;
+    info.environment_count = environment_count;
+    info.vector_data_address = vector_address;
+    info.vector_data_size = vector_size;
+    info.argv_address = argument_count != 0u ? vector_address : 0u;
+    info.environment_address = environment_count != 0u ?
+        vector_address + argument_slots * 4u : 0u;
     if (initial_image->interpreter_base != 0u)
         info.flags |= ASTRA_STARTUP_FLAG_INTERPRETED;
 
@@ -7533,29 +7556,47 @@ static KernelProcessStatus publish_startup_block(
         kernel_bytes_copy(&capability[2], bootstrap,
                           bootstrap_count * sizeof(capability[0]));
 
-    if (arguments != NULL && arguments->count != 0u) {
-        uint32_t appended = append_vector(
-            startup_page, published_bytes, (uint32_t)sizeof(startup_page),
-            argument_bytes,
-            arguments->length, arguments->count, 0, &info.argv_address,
-            &info.argc);
+    /* Serialize directly into one existing page scratch. Pointer pages and
+     * string pages are published once; no payload-sized kernel array exists. */
+    for (uint32_t offset = 0u; offset < vector_size; offset += KERNEL_PAGE_SIZE) {
+        uint32_t page_end = offset + KERNEL_PAGE_SIZE;
 
-        if (appended == 0u)
-            return KERNEL_PROCESS_INVALID_ARGUMENT;
-        published_bytes += appended;
-        info.total_size = published_bytes;
-    }
-    if (arguments != NULL && arguments->environment_count != 0u) {
-        uint32_t appended = append_vector(
-            startup_page, published_bytes, (uint32_t)sizeof(startup_page),
-            environment,
-            arguments->environment_length, arguments->environment_count, 1,
-            &info.environment_address, &info.environment_count);
+        if (page_end > vector_size)
+            page_end = vector_size;
+        kernel_bytes_clear(launch_page, sizeof(launch_page));
+        for (uint32_t at = offset; at < page_end && at < vector_bytes; at += 4u) {
+            uint32_t slot = at / 4u;
+            uint32_t address = 0u;
 
-        if (appended == 0u)
-            return KERNEL_PROCESS_INVALID_ARGUMENT;
-        published_bytes += appended;
-        info.total_size = published_bytes;
+            if (slot < argument_slots) {
+                if (slot < argument_count) {
+                    address = vector_address + vector_bytes + argument_at;
+                    while (argument_bytes[argument_at++] != '\0') { }
+                }
+            } else if (slot - argument_slots < environment_count) {
+                address = vector_address + vector_bytes + argument_length + environment_at;
+                while (environment[environment_at++] != '\0') { }
+            }
+            launch_page[at - offset] = (uint8_t)(address >> 24);
+            launch_page[at - offset + 1u] = (uint8_t)(address >> 16);
+            launch_page[at - offset + 2u] = (uint8_t)(address >> 8);
+            launch_page[at - offset + 3u] = (uint8_t)address;
+        }
+        for (uint32_t list = 0u; list < 2u; ++list) {
+            uint32_t region = vector_bytes + (list != 0u ? argument_length : 0u);
+            uint32_t length = list != 0u ? environment_length : argument_length;
+            const char *source = list != 0u ? environment : argument_bytes;
+            uint32_t first = offset > region ? offset : region;
+            uint32_t last = page_end < region + length ? page_end : region + length;
+
+            if (first < last)
+                kernel_bytes_copy(launch_page + first - offset, source + first - region,
+                                   last - first);
+        }
+        status = publish_page(space, owner, vector_address + offset, launch_page,
+                               page_end - offset, KERNEL_VM_READ);
+        if (status != KERNEL_PROCESS_OK)
+            return status;
     }
     kernel_bytes_copy(startup_page, &info, sizeof(info));
 
@@ -7792,6 +7833,7 @@ static void destroy_prepared_executable(KernelProcess *process,
     if (process->address_space.initialized != 0u)
         (void)kernel_vm_destroy_address_space(&process->address_space);
     (void)kernel_memory_release_owner(process->owner, NULL);
+    (void)kernel_memory_unprotect_owner(process->owner);
     process->process_state = KERNEL_PROCESS_DEAD;
     maybe_release_process_record(process);
 }
@@ -7930,7 +7972,7 @@ static KernelProcessStatus prepare_executable_process(
     result = publish_startup_block(
         &process->address_space, process->owner, self_handle,
         prepared->handle, startup_granted, capability_count, arguments,
-        argument_bytes, environment, 0u, 0u, &initial_image);
+        argument_bytes, environment, 0u, 0u, plan, &initial_image);
     if (result != KERNEL_PROCESS_OK)
         goto failed;
     result = kernel_time_page_map(&process->address_space);
@@ -8601,6 +8643,7 @@ KernelProcessStatus kernel_process_grant_handle(
     KernelProcess *target = find_process_by_id(target_process_id);
     KernelHandleStatus handle_status;
     KernelProcessStatus status;
+    void *installed = NULL;
 
     /*
      * DEBUG is grantable over another process on purpose: it is the authority
@@ -8619,9 +8662,18 @@ KernelProcessStatus kernel_process_grant_handle(
     handle_status = kernel_handle_install_cloneable(
         recipient->handles, KERNEL_OBJECT_PROCESS, rights, target,
         process_handle_retain, process_handle_release, NULL, handle);
+    /* Unrelated owners may be midway through interruptible close callbacks.
+     * Audit this admission here; full pool audits need a quiescent point. */
     if (handle_status == KERNEL_HANDLE_OK)
-        return process_pool_valid() ? KERNEL_PROCESS_OK :
-                                      KERNEL_PROCESS_CORRUPT;
+        return process_pool_healthy() &&
+                   kernel_handle_transfer_pool_healthy() &&
+                   valid_process_handle_object(target) &&
+                   target->handle_references != 0u &&
+                   kernel_handle_lookup(recipient->handles, *handle,
+                                        KERNEL_OBJECT_PROCESS, rights,
+                                        &installed) == KERNEL_HANDLE_OK &&
+                   installed == target ? KERNEL_PROCESS_OK :
+                                          KERNEL_PROCESS_CORRUPT;
     process_handle_release(target, NULL);
     return handle_status == KERNEL_HANDLE_TABLE_FULL ?
         KERNEL_PROCESS_RESOURCE_LIMIT : KERNEL_PROCESS_CORRUPT;
@@ -8652,15 +8704,9 @@ KernelProcessStatus kernel_process_grant_irq(
     handle_status = kernel_handle_install_cloneable(
         recipient->handles, KERNEL_OBJECT_IRQ, rights, endpoint,
         kernel_irq_handle_retain, kernel_irq_handle_release, NULL, handle);
-    if (handle_status == KERNEL_HANDLE_OK) {
-#if defined(KERNEL_PROCESS_HOST_TEST)
-        return process_pool_valid() ? KERNEL_PROCESS_OK :
-                                      KERNEL_PROCESS_CORRUPT;
-#else
+    if (handle_status == KERNEL_HANDLE_OK)
         return process_pool_healthy() && kernel_irq_pool_healthy() ?
             KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
-#endif
-    }
     kernel_irq_abandon_unpublished(endpoint);
     return handle_status == KERNEL_HANDLE_TABLE_FULL ?
         KERNEL_PROCESS_RESOURCE_LIMIT : KERNEL_PROCESS_CORRUPT;
@@ -8694,7 +8740,7 @@ KernelProcessStatus kernel_process_grant_device(
         kernel_device_handle_retain, kernel_device_handle_release, NULL,
         handle);
     if (handle_status == KERNEL_HANDLE_OK)
-        return process_pool_valid() && kernel_device_pool_valid() ?
+        return process_pool_healthy() && kernel_device_pool_healthy() ?
             KERNEL_PROCESS_OK : KERNEL_PROCESS_CORRUPT;
     kernel_device_abandon_unpublished(lease);
     return handle_status == KERNEL_HANDLE_TABLE_FULL ?

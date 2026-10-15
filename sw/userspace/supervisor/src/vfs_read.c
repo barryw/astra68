@@ -2,6 +2,7 @@
 
 #include <astra/syscall.h>
 #include <astra/runtime.h>
+#include <astra/vfs_path_storage.h>
 #include <astra/vfs_path.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_union.h>
@@ -10,23 +11,27 @@
 uint32_t supervisor_vfs_read(const char *path, void *buffer,
                              uint32_t capacity, uint32_t *length)
 {
+    AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = {0};
+
     uint8_t *bytes = buffer;
 
     if (path == NULL || buffer == NULL || capacity == 0u || length == NULL)
         return ASTRA_VFS_ERR_INVALID;
     *length = 0u;
+    path_storage = astra_vfs_path_storage_open(1u);
+    if (path_storage.bytes == NULL) return ASTRA_VFS_ERR_LIMIT;
     {
         AstraVfsClient *client = NULL;
         AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
         uint64_t size = 0u;
         uint16_t kind = 0u;
         uint32_t status;
-        char wire[ASTRA_VFS_PATH_MAX];
+        char *wire = astra_vfs_path_storage_at(&path_storage, 0u);
 
         status = astra_vfs_assign_open(
             supervisor_assigns(), path, ASTRA_RIGHT_READ,
             ASTRA_VFS_OPEN_READ, supervisor_vfs_assign_client, NULL, wire,
-            sizeof(wire), &file, &size, &kind, &client, NULL);
+            ASTRA_VFS_PATH_MAX, &file, &size, &kind, &client, NULL);
         if (status != ASTRA_VFS_OK)
             return status;
         if (kind != ASTRA_VFS_KIND_FILE || size > capacity) {
@@ -63,21 +68,26 @@ uint32_t supervisor_vfs_read(const char *path, void *buffer,
 uint32_t supervisor_vfs_read_alloc(const char *path, void **buffer,
                                    uint32_t *length)
 {
+    AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = {0};
+
     AstraVfsClient *client = NULL;
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint64_t size = 0u;
     uint16_t kind = 0u;
     uint8_t *bytes = NULL;
     uint32_t status;
-    char wire[ASTRA_VFS_PATH_MAX];
+    char *wire;
 
     if (path == NULL || buffer == NULL || length == NULL)
         return ASTRA_VFS_ERR_INVALID;
     *buffer = NULL;
     *length = 0u;
+    path_storage = astra_vfs_path_storage_open(1u);
+    if (path_storage.bytes == NULL) return ASTRA_VFS_ERR_LIMIT;
+    wire = astra_vfs_path_storage_at(&path_storage, 0u);
     status = astra_vfs_assign_open(
         supervisor_assigns(), path, ASTRA_RIGHT_READ, ASTRA_VFS_OPEN_READ,
-        supervisor_vfs_assign_client, NULL, wire, sizeof(wire), &file, &size,
+        supervisor_vfs_assign_client, NULL, wire, ASTRA_VFS_PATH_MAX, &file, &size,
         &kind, &client, NULL);
     if (status == ASTRA_VFS_OK &&
         (kind != ASTRA_VFS_KIND_FILE || size >= UINT32_MAX))

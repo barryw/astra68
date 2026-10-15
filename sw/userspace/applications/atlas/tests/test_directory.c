@@ -39,6 +39,10 @@ uint32_t astra_filesystem_directory_read(AstraDirectory *directory,
             strcpy(entry->name, ".hidden");
         else if (cursor == 1u)
             strcpy(entry->name, "caf\xc3\xa9");
+        else if (cursor == 2u) {
+            memset(entry->name, 'p', sizeof(entry->name) - 1u);
+            entry->name[sizeof(entry->name) - 1u] = '\0';
+        }
         else
             (void)snprintf(entry->name, sizeof(entry->name), "file-%u", cursor);
         entry->kind = cursor % 2u == 0u ? ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
@@ -69,6 +73,7 @@ int main(void)
     assert(model.count == 257u && closes == 1u && allocations > 1u);
     assert(strcmp(model.entries[0].name, ".hidden") == 0);
     assert(strcmp(model.entries[1].name, "caf\xc3\xa9") == 0);
+    assert(strlen(model.entries[2].name) == ASTRA_VFS_NAME_MAX - 1u);
     assert(strcmp(model.entries[256].name, "file-256") == 0);
     assert(model.entries[256].byte_size == 256u &&
            model.entries[256].kind == ASTRA_VFS_KIND_DIRECTORY);
@@ -76,6 +81,10 @@ int main(void)
     reset(0u);
     assert(atlas_directory_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_OK);
     assert(model.count == 0u && closes == 1u);
+    reset(257u);
+    fail_after = 1u;
+    assert(atlas_directory_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_ERR_LIMIT);
+    assert(model.count == 0u && model.entries == NULL && closes == 0u);
     reset(257u);
     fail_after = 2u;
     assert(atlas_directory_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_ERR_LIMIT);

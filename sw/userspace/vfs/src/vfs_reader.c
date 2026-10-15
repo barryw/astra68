@@ -4,6 +4,8 @@
 #include <astra/address_space.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_provider_index.h>
+#include <astra/vfs_path_storage.h>
+#include <astra/vfs_file_lifetime.h>
 
 static int path_append(char *path, uint32_t capacity, const char *text)
 {
@@ -47,15 +49,20 @@ astra_vfs_read_source_open(AstraVfsReadSource *source,
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint64_t size = 0u;
     uint16_t kind = 0u;
-    char wire[ASTRA_VFS_PATH_MAX];
+    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE = {0};
+    char *wire;
     uint32_t status;
 
     if (source == NULL || table == NULL || path == NULL ||
         client_for == NULL || source->file != ASTRA_VFS_FILE_INVALID)
         return ASTRA_VFS_ERR_INVALID;
+    paths = astra_vfs_path_storage_open(1u);
+    wire = astra_vfs_path_storage_at(&paths, 0u);
+    if (wire == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     status = astra_vfs_assign_open(
         table, path, ASTRA_RIGHT_READ, ASTRA_VFS_OPEN_READ, client_for,
-        context, wire, sizeof(wire), &file, &size, &kind, &client, NULL);
+        context, wire, ASTRA_VFS_PATH_MAX, &file, &size, &kind, &client, NULL);
     if (status != ASTRA_VFS_OK)
         return status;
     if (kind != ASTRA_VFS_KIND_FILE || size > UINT32_MAX) {
@@ -66,6 +73,7 @@ astra_vfs_read_source_open(AstraVfsReadSource *source,
     source->client = client;
     source->file = file;
     source->length = (uint32_t)size;
+    source->ownership_epoch = client->ownership_epoch;
     return ASTRA_VFS_OK;
 }
 
@@ -87,6 +95,8 @@ astra_vfs_read_source_read_at(void *context, uint32_t offset,
         return ASTRA_VFS_ERR_INVALID;
     *bytes = NULL;
     *moved = 0u;
+    status = astra_vfs_file_owner_status(source->client, source->ownership_epoch);
+    if (status != ASTRA_VFS_OK) return status;
     read_length = length;
     if (length >= ASTRA_MEMORY_PAGE_SIZE) {
         read_length = ASTRA_VFS_BULK_MAX - offset % ASTRA_VFS_BULK_MAX;
@@ -98,11 +108,11 @@ astra_vfs_read_source_read_at(void *context, uint32_t offset,
     if (status != ASTRA_VFS_OK)
         return status;
     supplied = length < read_length ? length : read_length;
-    if (*bytes == NULL || available < supplied) {
+    if (*bytes == NULL || available == 0u || available > read_length) {
         *bytes = NULL;
         return ASTRA_VFS_ERR_IO;
     }
-    *moved = supplied;
+    *moved = available < supplied ? available : supplied;
     return ASTRA_VFS_OK;
 }
 
@@ -112,6 +122,7 @@ astra_vfs_read_source_close(void *context)
     AstraVfsReadSource *source = context;
     AstraVfsClient *client;
     AstraVfsFile file;
+    uint32_t epoch;
 
     if (source == NULL)
         return ASTRA_VFS_ERR_INVALID;
@@ -119,8 +130,9 @@ astra_vfs_read_source_close(void *context)
         return ASTRA_VFS_OK;
     client = source->client;
     file = source->file;
+    epoch = source->ownership_epoch;
     *source = (AstraVfsReadSource)ASTRA_VFS_READ_SOURCE_INIT;
-    return astra_vfs_close(client, file);
+    return astra_vfs_file_owner_close(client, file, epoch);
 }
 
 uint32_t astra_vfs_library_resolve(
@@ -136,7 +148,8 @@ uint32_t astra_vfs_library_resolve(
     uint32_t close_status;
     uint16_t abi = 0u;
     char name[ASTRA_LIBRARY_NAME_MAX];
-    char index_path[ASTRA_VFS_PATH_MAX] = {0};
+    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE = {0};
+    char *index_path;
 
     if (table == NULL || assign == NULL ||
         identity == NULL || client_for == NULL || reference == NULL ||
@@ -144,14 +157,18 @@ uint32_t astra_vfs_library_resolve(
         return ASTRA_VFS_ERR_INVALID;
     binary_path[0] = '\0';
     *reference = (AstraLibraryReference){0};
+    paths = astra_vfs_path_storage_open(1u);
+    index_path = astra_vfs_path_storage_at(&paths, 0u);
+    if (index_path == NULL)
+        return ASTRA_VFS_ERR_LIMIT;
     if (!astra_vfs_provider_identity_parse(identity, name, sizeof(name),
                                             &abi) ||
-        !path_append(index_path, sizeof(index_path), "/") ||
-        !path_append(index_path, sizeof(index_path), assign) ||
-        !path_append(index_path, sizeof(index_path), "/.providers/") ||
-        !path_append(index_path, sizeof(index_path), name) ||
-        !path_append(index_path, sizeof(index_path), ".abi-") ||
-        !path_append_number(index_path, sizeof(index_path), abi))
+        !path_append(index_path, ASTRA_VFS_PATH_MAX, "/") ||
+        !path_append(index_path, ASTRA_VFS_PATH_MAX, assign) ||
+        !path_append(index_path, ASTRA_VFS_PATH_MAX, "/.providers/") ||
+        !path_append(index_path, ASTRA_VFS_PATH_MAX, name) ||
+        !path_append(index_path, ASTRA_VFS_PATH_MAX, ".abi-") ||
+        !path_append_number(index_path, ASTRA_VFS_PATH_MAX, abi))
         return ASTRA_VFS_ERR_INVALID;
     for (uint32_t at = 1u; index_path[at] != '/'; ++at)
         index_path[at] = astra_ascii_lower(index_path[at]);
@@ -185,14 +202,21 @@ uint32_t astra_vfs_library_source_open(
     AstraVfsAssignClientFn client_for, void *context,
     AstraLibraryReference *reference)
 {
-    char binary_path[ASTRA_VFS_PATH_MAX];
+    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE = {0};
+    char *binary_path;
     uint32_t status;
 
-    if (source == NULL || source->file != ASTRA_VFS_FILE_INVALID)
+    if (source == NULL || reference == NULL || source->file != ASTRA_VFS_FILE_INVALID)
         return ASTRA_VFS_ERR_INVALID;
+    paths = astra_vfs_path_storage_open(1u);
+    binary_path = astra_vfs_path_storage_at(&paths, 0u);
+    if (binary_path == NULL) {
+        *reference = (AstraLibraryReference){0};
+        return ASTRA_VFS_ERR_LIMIT;
+    }
     status = astra_vfs_library_resolve(
         table, assign, identity, client_for, context,
-        binary_path, sizeof(binary_path), reference);
+        binary_path, ASTRA_VFS_PATH_MAX, reference);
     if (status == ASTRA_VFS_OK)
         status = astra_vfs_read_source_open(
             source, table, binary_path, client_for, context);

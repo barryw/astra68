@@ -51,6 +51,20 @@ astra_metric_group_count(void)
     return registry_count;
 }
 
+int astra_metric_unregister(const char *name, AstraMetricSampler sample, void *context)
+{
+    if (name == NULL || sample == NULL) return 0;
+    for (uint32_t at = 0u; at < registry_count; ++at) {
+        if (strcmp(registry[at].name, name) != 0 || registry[at].sample != sample ||
+            registry[at].context != context) continue;
+        for (uint32_t next = at + 1u; next < registry_count; ++next)
+            registry[next - 1u] = registry[next];
+        --registry_count;
+        return 1;
+    }
+    return 0;
+}
+
 const AstraMetricGroup *
 astra_metric_group(uint32_t index)
 {

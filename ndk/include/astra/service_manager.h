@@ -12,6 +12,17 @@
 
 ASTRA_EXTERN_C_BEGIN
 
+/** Release an initialized definition's owned executable and reset it.
+ * @param definition Object initialized with ASTRA_SERVICE_DEFINITION_INIT. */
+void astra_service_definition_destroy(AstraServiceDefinition *definition);
+/** Release an initialized runtime-info snapshot's owned executable.
+ * @param info Object initialized with ASTRA_SERVICE_INFO_INIT. */
+void astra_service_info_destroy(AstraServiceInfo *info);
+/** Automatically release a local service definition at scope exit. */
+#define ASTRA_AUTO_SERVICE_DEFINITION ASTRA_CLEANUP(astra_service_definition_destroy)
+/** Automatically release a local service-info snapshot at scope exit. */
+#define ASTRA_AUTO_SERVICE_INFO ASTRA_CLEANUP(astra_service_info_destroy)
+
 /**
  * Test whether a name is a valid stable service identifier.
  * @param name NUL-terminated UTF-8 service name.
@@ -21,7 +32,7 @@ int astra_service_name_valid(const char *name);
 
 /**
  * Initialize a definition with manual, enabled, no-restart defaults.
- * @param definition Receives initialized definition state.
+ * @param definition Initialized owned object that receives the definition.
  * @param name Stable UTF-8 service identifier.
  * @param executable Assign-qualified executable path.
  * @param runs_on ASTRA_SERVICE_RUNS_ON_* execution location.
@@ -85,7 +96,7 @@ ASTRA_NODISCARD AstraResult astra_service_definition_validate(
  * cursor's source is ASTRA_SERVICE_LIST_SOURCE_DONE.
  * @param manager Service-manager capability handle.
  * @param cursor Cursor selecting the next result.
- * @param info Receives service identity and runtime state.
+ * @param info Initialized owned object that receives identity and runtime state.
  * @param next_cursor Receives the cursor for the following result.
  * @return ASTRA_RESULT_* status.
  */

@@ -5,6 +5,9 @@ import importlib.util
 import contextlib
 import io
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 HERE = Path(__file__).resolve().parent
@@ -87,5 +90,34 @@ with contextlib.redirect_stdout(failure):
     assert not terminal.refresh_workspace_rom(workspace_rom)
 assert "could not refresh the workspace boot ROM" in failure.getvalue()
 terminal.subprocess.run = original_run
+
+with tempfile.TemporaryDirectory() as directory:
+    image = Path(directory) / "fixture.img"
+    image.write_bytes(b"fixture")
+    commands.clear()
+
+    def build_result(command, **_kwargs):
+        commands.append(command)
+        return Result(0 if command[-1] == "build/astra_boot.bin" else 2)
+
+    failure = io.StringIO()
+    with patch.object(terminal.astra_image.os, "geteuid", return_value=0), \
+            patch.dict(terminal.os.environ, {
+                "ASTRA_TEST_QEMU_UID": "1000", "ASTRA_TEST_QEMU_GID": "1000"}), \
+            patch.object(terminal.astra_image.pwd, "getpwuid", return_value=
+                         SimpleNamespace(pw_name="fixture-builder", pw_gid=1000)), \
+            patch.object(terminal.subprocess, "run", side_effect=build_result), \
+            patch.object(terminal.sys, "argv", ["test-terminal.py", "qemu", workspace_rom,
+                         "--image", str(image), "--prepared-image", "--sbase-only"]), \
+            contextlib.redirect_stdout(failure):
+        assert terminal.main() == 1
+    assert len(commands) == 2
+    assert all(command[:5] == ["runuser", "-u", "fixture-builder", "--", "make"]
+               for command in commands)
+    assert commands[0][5:] == ["-C", terminal.os.path.join(terminal.ROOT, "sw", "boot"),
+                               "build/astra_boot.bin"]
+    assert commands[1][5:7] == ["-C", terminal.os.path.join(
+        terminal.ROOT, "sw", "userspace", "commands")]
+    assert "could not build integration test commands" in failure.getvalue()
 
 print("terminal command readiness test: PASS")

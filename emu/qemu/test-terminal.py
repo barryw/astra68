@@ -42,6 +42,7 @@ import os
 import re
 import select
 import shutil
+import stat
 import socket
 import subprocess
 import sys
@@ -57,7 +58,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import astra_image
-from qemu_runtime import DEFAULT_MEMORY, qemu_environment
+from qemu_runtime import DEFAULT_MEMORY, LAUNCHER_EXPORTS, qemu_environment, storage_fixture
 
 # RAM the gate boots with. A module global so --memory can prove that the
 # machine works at a size other than the one it was written against.
@@ -275,26 +276,25 @@ SBASE_SCRIPT = [
 ]
 
 SCRIPT = [
-    # cwd and work are the host directory's own root here (hostfs serves
-    # WORK), so they are mounts, not links into /system.
-    ("ls -F /", ("dh0/", "ram/", "events/", "metrics/", "proc/", "cwd/",
-                 "home@", "libs@", "local@", "work/", "tmp@")),
-    ("mkdir /ram/smoke; print ASTRA-RAM-MKDIR-$?",
+    # Derived subtree capabilities are rooted directories, as are the native
+    # RAM0/TMP volumes. SYSTEM alone is the explicit link to the boot volume.
+    ("ls -F /", ("apps/", "commands/", "config/", "cwd/", "dh0/",
+                 "events/", "home/", "libs/", "local/", "metrics/", "proc/",
+                 "ram0/", "system@", "tmp/", "work/")),
+    ("mkdir /ram0/smoke; print ASTRA-RAM-MKDIR-$?",
      "ASTRA-RAM-MKDIR-0"),
-    ("print -r -- ram-works > /ram/smoke/note; cat /ram/smoke/note",
+    ("print -r -- ram-works > /ram0/smoke/note; cat /ram0/smoke/note",
      "ram-works"),
-    ("print -r -- split-works > /ram/smoke/split; print RAM-SPLIT-WRITE-$?",
+    ("print -r -- split-works > /ram0/smoke/split; print RAM-SPLIT-WRITE-$?",
      "RAM-SPLIT-WRITE-0"),
-    ("cat /ram/smoke/split", "split-works"),
-    ("rm /ram/smoke/split; print RAM-SPLIT-CLEAN-$?",
+    ("cat /ram0/smoke/split", "split-works"),
+    ("rm /ram0/smoke/split; print RAM-SPLIT-CLEAN-$?",
      "RAM-SPLIT-CLEAN-0"),
-    ("rm /ram/smoke/note; sbase-rmdir /ram/smoke; "
+    ("rm /ram0/smoke/note; sbase-rmdir /ram0/smoke; "
      "print ASTRA-RAM-CLEAN-$?", "ASTRA-RAM-CLEAN-0"),
-    ("sbase-rmdir /ram; print ASTRA-RAM-ROOT-$?",
+    ("sbase-rmdir /ram0; print ASTRA-RAM-ROOT-$?",
      "ASTRA-RAM-ROOT-1"),
-    ("ls -l /", ("system -> /dh0", "apps -> /system/apps",
-                 "commands -> /system/commands", "home -> /system/home",
-                 "libs -> /system/libs", "tmp -> /system/tmp")),
+    ("ls -l /", "system -> /dh0"),
     ("rm /system; print ASTRA-SYSTEM-UNLINK-$?",
      "ASTRA-SYSTEM-UNLINK-1"),
     ("rm /apps; print ASTRA-APPS-UNLINK-$?",
@@ -544,6 +544,35 @@ class Qmp:
                 return int(token, 16)
         raise RuntimeError("no word read back from 0x%x" % address)
 
+    def host_snapshot(self, properties, deadline=30.0):
+        """Pause guest submissions and drain host work before a coherent read.
+
+        Pausing a vCPU does not stop its already submitted host workers. Never
+        interpret their partially updated counters as a completed snapshot.
+        """
+        self.execute("stop")
+        end = time.monotonic() + deadline
+        try:
+            while time.monotonic() < end:
+                inflight = self.execute("qom-get", {"path": "/machine",
+                    "property": "astra-host-inflight"})
+                if inflight != 0:
+                    time.sleep(0.01)
+                    continue;
+                before = self.execute("qom-get", {"path": "/machine",
+                    "property": "astra-host-commands"})
+                values = {name: self.execute("qom-get", {"path": "/machine",
+                    "property": name}) for name in properties}
+                after = self.execute("qom-get", {"path": "/machine",
+                    "property": "astra-host-commands"})
+                inflight = self.execute("qom-get", {"path": "/machine",
+                    "property": "astra-host-inflight"})
+                if before == after and inflight == 0:
+                    return values
+            raise RuntimeError("host commands did not drain for snapshot")
+        finally:
+            self.execute("cont")
+
     def input_events(self, events, deadline=30.0):
         # A machine that stopped draining input fails here, not forever.
         end = time.monotonic() + deadline
@@ -624,16 +653,21 @@ def read_host_syslog(root):
     astra_log/astra_log_line calls leave the kernel trace ring for its own
     per-process ring, drained here by the events service rather than left
     for a pmemsave of the ring. The desktop is one such program."""
-    for directory, _, files in os.walk(root):
+    for directory, _, files, directory_fd in os.fwalk(root, follow_symlinks=False):
         if os.path.basename(directory) == ".astra" and "syslog" in files:
             # Oldest first: a rotation moves the start of a run into
             # syslog.1, and a check that read only syslog would miss it.
             text = ""
             for name in ("syslog.3", "syslog.2", "syslog.1", "syslog"):
                 if name in files:
-                    with open(os.path.join(directory, name), "r",
-                              errors="replace") as handle:
-                        text += handle.read()
+                    try:
+                        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                     dir_fd=directory_fd)
+                    except (FileNotFoundError, OSError):
+                        continue
+                    with os.fdopen(fd, "r", errors="replace") as handle:
+                        if stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                            text += handle.read()
             return text
     return ""
 
@@ -657,7 +691,9 @@ class TraceReader:
             os.path.join(source_root, "sw/userspace", "supervisor", "build",
                          "m68k", "astra_supervisor.elf"),
             os.path.join(source_root, "sw/userspace", "services", "terminal",
-                         "build", "m68k", "terminal.elf")])
+                         "build", "m68k", "terminal.elf"),
+            os.path.join(source_root, "sw/userspace", "services", "desktop",
+                         "build", "m68k", "desktop.elf")])
 
     def trace(self):
         reply = self.monitor('pmemsave 0x%08x %d "%s"'
@@ -711,7 +747,7 @@ class TraceReader:
             lines = self.said()[0]
             if self.hostfs_root is not None:
                 lines = lines + read_host_syslog(self.hostfs_root).splitlines()
-            for line in lines:
+            for line in reversed(lines):
                 match = DESKTOP_ICON.search(line)
                 if match is not None and match.group(1) == bundle:
                     left, top, width, height = (
@@ -722,39 +758,46 @@ class TraceReader:
             time.sleep(0.25)
 
 
-LAUNCHER_MOUNT = "ASTRA-QEMU-ROOT-MOUNT "
-
-
 class Machine:
     def __init__(self, qemu, rom, image, socket_directory, extra_args=(),
                  hostfs_root=None, debug_guest=False, launcher=(),
-                 source_root=ROOT):
+                 source_root=ROOT, socket_owner=None, environment=None,
+                 memory=MEMORY):
         # Resolve every source-relative input before starting QEMU.  A missing
         # catalog must not leave a live emulator behind.  A launcher
-        # (qemu_runtime.root_provider) chooses the HostFS root itself and
-        # announces it as its first line, before QEMU starts.
+        # A launcher announces observation exports before QEMU starts.
         if not launcher:
-            hostfs_root = hostfs_root or os.environ.get(
-                "ASTRA_HOSTFS_ROOT", os.path.join(socket_directory, "hostfs"))
-        self.reader = TraceReader(
-            lambda line: self.qmp.monitor(line),
-            os.path.join(socket_directory, "ring.bin"),
-            hostfs_root=hostfs_root, source_root=source_root)
+            launcher, socket_owner = storage_fixture(image, socket_directory,
+                                                     hostfs_root, socket_owner)
         self.runtime_directory = tempfile.mkdtemp(prefix="astra-qmp-")
+        # Complete privileged writes while this fresh directory is root-only.
+        # The peer may replace names after taking directory ownership.
+        launch_rom = os.path.join(self.runtime_directory, "rom.bin")
+        shutil.copyfile(rom, launch_rom)
+        os.chmod(launch_rom, 0o444)
+        if socket_owner is not None:
+            # A root fixture may observe preserved root-owned metadata while
+            # the provider runs QEMU as an explicitly unprivileged user.
+            if os.geteuid() != 0 or min(socket_owner) <= 0:
+                raise ValueError("non-root QEMU socket UID/GID required by root observer")
+            os.chown(self.runtime_directory, *socket_owner)
+        self.ring_path = os.path.join(self.runtime_directory, "ring.bin")
+        self.reader = TraceReader(lambda line: self.qmp.monitor(line), self.ring_path,
+                                 hostfs_root=hostfs_root, source_root=source_root)
         self.qmp_path = os.path.join(self.runtime_directory, "qmp.sock")
         self.gdb_path = (os.path.join(self.runtime_directory, "gdb.sock")
                          if debug_guest else None)
-        self.ring_path = os.path.join(socket_directory, "ring.bin")
-        command = list(launcher) + ([qemu, "-M", "astra68", "-m", MEMORY,
-                    "-bios", rom,
+        command = list(launcher) + ([qemu, "-M", "astra68", "-m", memory,
+                    "-bios", launch_rom,
                     "-display", "none", "-monitor", "none", "-serial", "stdio",
                     "-no-reboot",
                     "-qmp", "unix:%s,server=on,wait=off" % self.qmp_path] +
                    (["-gdb", "unix:%s,server=on,wait=off" % self.gdb_path]
                     if self.gdb_path else []) +
-                   list(extra_args) +
-                   ["-drive", "if=none,format=raw,file=%s" % image])
-        environment = qemu_environment(qemu, hostfs_root=hostfs_root)
+                   list(extra_args))
+        environment = qemu_environment(qemu, environment)
+        self.serial_started = time.monotonic()
+        self.serial_times = []
         self.process = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1, env=environment)
@@ -763,14 +806,14 @@ class Machine:
             # The helper copies the image before it announces the mount.
             ready, _, _ = select.select([self.process.stdout], [], [], 120)
             announced = self.process.stdout.readline() if ready else ""
-            if not announced.startswith(LAUNCHER_MOUNT):
+            if not announced.startswith(LAUNCHER_EXPORTS):
                 self.process.kill()
                 self.process.wait()
                 shutil.rmtree(self.runtime_directory)
                 raise RuntimeError(
                     "launcher announced no mount within 120 s: %r%s" % (
                         announced, self.process.stdout.read()[-400:]))
-            self.reader.hostfs_root = announced[len(LAUNCHER_MOUNT):].strip()
+            self.reader.hostfs_root = announced[len(LAUNCHER_EXPORTS):].strip()
         self.serial = queue.Queue()
         self.log = []
         self._pump_thread = threading.Thread(target=self._pump, daemon=True)
@@ -796,6 +839,7 @@ class Machine:
             raise
     def _pump(self):
         for line in self.process.stdout:
+            self.serial_times.append((time.monotonic() - self.serial_started, line.rstrip("\n")))
             self.serial.put(line.rstrip("\n"))
         self.serial.put(None)
 
@@ -993,6 +1037,11 @@ def open_terminal(machine, boot_deadline, command_deadline):
         for line in machine.recent_trace(80):
             print("    %s" % line)
         return False
+    return open_terminal_window(machine, command_deadline)
+
+
+def open_terminal_window(machine, command_deadline):
+    """Open a fresh terminal on an already running desktop."""
     # The desktop has to have painted before a click lands on an icon, and
     # what says it painted is the launch report for the app it is running.
     time.sleep(2.0)
@@ -1417,8 +1466,9 @@ def refresh_workspace_rom(rom):
     if os.path.realpath(rom) != os.path.realpath(workspace_rom):
         return True
     result = subprocess.run(
-        ["make", "-C", os.path.join(ROOT, "sw", "boot"),
-         "build/astra_boot.bin"], check=False)
+        astra_image._build_invocation(
+            ["make", "-C", os.path.join(ROOT, "sw", "boot"),
+             "build/astra_boot.bin"]), check=False)
     if result.returncode != 0:
         print("FAIL: could not refresh the workspace boot ROM")
         return False
@@ -1462,9 +1512,10 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             test_commands.extend("sbase-" + name for name in SBASE_COMMANDS)
         if test_commands:
             result = subprocess.run(
-                ["make", "-C", os.path.join(ROOT, "sw", "userspace",
-                                              "commands")] +
-                ["build/m68k/" + name for name in test_commands],
+                astra_image._build_invocation(
+                    ["make", "-C", os.path.join(ROOT, "sw", "userspace",
+                                                  "commands")] +
+                    ["build/m68k/" + name for name in test_commands]),
                 check=False)
             if result.returncode != 0:
                 print("FAIL: could not build integration test commands")

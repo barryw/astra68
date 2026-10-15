@@ -3,6 +3,7 @@
 
 #include <astra/host.h>
 #include <astra/vfs_backend.h>
+#include <astra/volume.h>
 
 typedef struct AstraVfsHostRequest {
     AstraHostCommand *command;
@@ -45,9 +46,24 @@ uint32_t astra_vfs_host_claim(AstraVfsHostTransport *transport,
                               uint32_t *epoch);
 uint32_t astra_vfs_host_session_open(AstraVfsHostTransport *transport,
                                      uint32_t generation, uint32_t parent,
-                                     uint32_t volume, const char *root,
-                                     uint16_t flags, uint32_t *session);
+                                     const AstraVolumeReference *volume, const char *root,
+                                     uint16_t flags, uint32_t requester, uint32_t *session);
+uint32_t astra_vfs_host_usage(AstraVfsHostTransport *transport, uint32_t generation,
+    const AstraVolumeUsageQuery *query, AstraVolumeUsagePage *page);
+uint32_t astra_vfs_host_usage_holders_changed(AstraVfsHostTransport *transport,
+    uint32_t generation);
 uint32_t astra_vfs_host_session_close(AstraVfsHostTransport *transport,
                                       uint32_t generation, uint32_t session);
+/* Public metadata only; no filesystem claim, data session or root is lent. */
+uint32_t astra_vfs_host_lookup_mount(AstraVfsHostTransport *transport, uint32_t generation,
+                                     const char *name, uint32_t required_flags,
+                                     AstraVolumeCatalogPage *scratch,
+                                     AstraVolumeReference *volume);
+uint32_t astra_vfs_host_catalog(AstraVfsHostTransport *transport, uint32_t generation,
+                                const AstraVolumeCatalogQuery *query,
+                                AstraVolumeCatalogPage *page);
+uint32_t astra_vfs_host_volume_control(AstraVfsHostTransport *transport,
+    uint32_t generation, uint32_t requester, const AstraVolumeControl *control,
+    AstraVolumeReference *reference);
 
 #endif

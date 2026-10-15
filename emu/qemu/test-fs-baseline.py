@@ -102,14 +102,13 @@ with tempfile.TemporaryDirectory() as directory:
              side_effect=AssertionError("benchmark replaced historical libraries")), \
          mock.patch.object(semantic.astra_image, "install_test_command",
              side_effect=AssertionError("benchmark injected a current command")), \
-         mock.patch.object(semantic.qemu_runtime, "root_provider",
-             return_value=("launcher", "provider")) as provider, \
+         mock.patch.object(semantic.astra_image, "ext4_partition", return_value=(0, image.stat().st_size)), \
+         mock.patch.object(semantic.astra_image, "_slice"), \
          mock.patch.object(semantic.terminal, "Machine", side_effect=boot), \
          mock.patch.object(semantic.terminal, "open_terminal", return_value=True), \
          mock.patch.object(semantic, "run_bench") as benchmark, \
          mock.patch.object(semantic.subprocess, "run", side_effect=subprocess_run):
         semantic.main()
-        assert provider.call_args.kwargs.get("system") is None
         benchmark.assert_called_once_with(machine, directory, "old",
                                           str(Path(directory) / "out.json"),
                                           tree=directory)
@@ -124,11 +123,12 @@ with mock.patch.object(semantic.terminal.trace_decode, "kernel_event_names",
     names.assert_called_once_with("/historical/sw/kernel/trace.h")
     catalogs.assert_called_once_with([
         "/historical/sw/userspace/supervisor/build/m68k/astra_supervisor.elf",
-        "/historical/sw/userspace/services/terminal/build/m68k/terminal.elf"])
+        "/historical/sw/userspace/services/terminal/build/m68k/terminal.elf",
+        "/historical/sw/userspace/services/desktop/build/m68k/desktop.elf"])
 print("fs-baseline historical trace catalog test: PASS")
 
-# Terminal startup may overwrite the early bootstrap event in the trace ring.
-# Qualify its exact payload first, while the record and arguments survive.
+# Bootstrap and HostFS read one system image; no comparison-only root or
+# independent ext4 writer may be introduced by the correctness gate.
 with tempfile.TemporaryDirectory() as directory:
     image = Path(directory) / "current.img"
     image.write_bytes(b"current guest")
@@ -136,27 +136,21 @@ with tempfile.TemporaryDirectory() as directory:
     machine.process.returncode = 0
     machine.reader.hostfs_root = directory
     machine.wait_for_serial.return_value = True
-    verdict = "bootstrap-provider match bytes=%d" % len(
-        semantic.astra_image.STARTUP_MANIFEST.encode("ascii"))
-    machine.wait_for_text.return_value = ([verdict], 21)
-    machine.trace_with_syslog.side_effect = AssertionError(
-        "bootstrap verdict read after Terminal overwrote it")
+    machine.trace_with_syslog.side_effect = AssertionError("retired bootstrap comparison read")
 
-    def open_after_verdict(*args):
-        machine.wait_for_text.assert_called_once_with(
-            "bootstrap-provider match", 120)
-        machine.wait_for_text.return_value = (None, 3000)
-        return True
+    def boot_current(_qemu, _rom, copied_image, _run, **kwargs):
+        assert Path(copied_image).read_bytes() == image.read_bytes()
+        assert "launcher" not in kwargs
+        return machine
 
     with mock.patch.object(sys, "argv", ["test-fs-semantics.py", "qemu", "rom",
              str(image), "--case", "basic", "--check", "budgets"]), \
          mock.patch.object(semantic.astra_image, "install"), \
          mock.patch.object(semantic.astra_image, "install_test_command"), \
-         mock.patch.object(semantic.qemu_runtime, "root_provider",
-             return_value=("launcher", "provider")), \
-         mock.patch.object(semantic.terminal, "Machine", return_value=machine), \
-         mock.patch.object(semantic.terminal, "open_terminal",
-             side_effect=open_after_verdict), \
+         mock.patch.object(semantic.astra_image, "ext4_partition", return_value=(0, image.stat().st_size)), \
+         mock.patch.object(semantic.astra_image, "_slice"), \
+         mock.patch.object(semantic.terminal, "Machine", side_effect=boot_current) as boot, \
+         mock.patch.object(semantic.terminal, "open_terminal", return_value=True), \
          mock.patch.object(semantic, "run_cases") as cases, \
          mock.patch.dict(semantic.CHECKS, {"budgets": mock.Mock()}, clear=True), \
          mock.patch.object(semantic.subprocess, "run",
@@ -165,4 +159,6 @@ with tempfile.TemporaryDirectory() as directory:
         cases.assert_called_once_with(machine, ["basic"])
         machine.trace_with_syslog.assert_not_called()
         machine.close.assert_called_once()
-print("fs-semantics bootstrap before trace wrap test: PASS")
+        assert "launcher" not in boot.call_args.kwargs
+        machine.wait_for_text.assert_not_called()
+print("fs-semantics single system writer test: PASS")

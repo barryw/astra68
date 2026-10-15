@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <astra/vfs_service.h>
+#include <astra/vfs_client.h>
 
 /* A transport's missing peer is a lost storage object for its caller. */
 static inline uint32_t astra_vfs_storage_status(uint32_t status)
@@ -221,7 +222,8 @@ astra_vfs_backend_read_position(const AstraVfsBackend *backend,
 
 /* One validation and dispatch contract for root and anchored path operations. */
 uint32_t astra_vfs_backend_path_operation(const AstraVfsBackend *backend,
-    uint32_t operation, const AstraVfsRequest *request, uintptr_t base,
+    uint32_t operation, const AstraVfsRequest *request,
+    const AstraVfsTransfer *transfer, uintptr_t base,
     uintptr_t second_base, AstraVfsReply *reply);
 
 /* Shared wire encoders used by both the service and the direct host adapter. */

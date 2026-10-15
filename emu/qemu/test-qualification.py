@@ -42,7 +42,7 @@ import tempfile
 import threading
 import time
 
-from qemu_runtime import DEFAULT_MEMORY
+from qemu_runtime import DEFAULT_MEMORY, qemu_environment, qemu_test_credentials, unprivileged_command
 
 # Bits 7, 8 and 9: USB, Vega and Astraea. Storage (4) and input (5) are
 # present under the emulator and cannot be provoked from inside it.
@@ -74,16 +74,23 @@ def boot(qemu, rom, image, memory, deadline):
     """
     directory = tempfile.mkdtemp()
     try:
+        credentials = qemu_test_credentials()
         scratch = os.path.join(directory, "card.img")
         shutil.copyfile(image, scratch)
+        if os.geteuid() == 0:
+            os.chown(directory, *credentials)
+            os.chmod(directory, 0o755)
+            os.chown(scratch, *credentials)
         command = [qemu, "-M", "astra68", "-m", memory, "-bios", rom,
                    "-nographic", "-monitor", "none", "-serial", "stdio",
                    "-no-reboot", "-icount",
                    "shift=4,align=off,sleep=off",
                    "-drive", "if=none,format=raw,file=%s" % scratch]
+        command = unprivileged_command(command, credentials)
         process = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT, text=True, bufsize=1)
+            stderr=subprocess.STDOUT, text=True, bufsize=1,
+            env=qemu_environment(qemu))
 
         # The deadline has to kill the process rather than be checked in the
         # loop: a harness that dies leaves the machine idle and the next read

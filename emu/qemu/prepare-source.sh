@@ -27,6 +27,10 @@ PUBLIC_BOOT="$REPOSITORY/sw/include/astra/boot.h"
 PUBLIC_BLOCK="$REPOSITORY/sw/include/astra/block.h"
 PUBLIC_NETWORK="$REPOSITORY/sw/include/astra/network.h"
 PUBLIC_HOST="$REPOSITORY/sw/include/astra/host.h"
+PUBLIC_PROCESS="$REPOSITORY/sw/include/astra/process.h"
+STORAGE_WIRE="$REPOSITORY/sw/include/astra/storage_provider.h"
+PUBLIC_VOLUME="$REPOSITORY/sw/include/astra/volume_abi.h"
+STORAGE_TRANSPORT="$REPOSITORY/fpga/de25/linux/astra_storage_transport"
 PUBLIC_AUDIO_HOST="$REPOSITORY/sw/include/astra/audio_host.h"
 PUBLIC_PCM_FORMAT="$REPOSITORY/sw/include/astra/pcm_format.h"
 PUBLIC_AUDIO_STREAM="$REPOSITORY/sw/include/astra/audio_stream.h"
@@ -95,8 +99,14 @@ overlay_identity()
             "sw/include/astra/block.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_NETWORK")" \
             "sw/include/astra/network.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_VOLUME")" "sw/include/astra/volume_abi.h"
+        printf '%s  %s\n' "$(sha256_file "$STORAGE_WIRE")" "sw/include/astra/storage_provider.h"
+        printf '%s  %s\n' "$(sha256_file "$STORAGE_TRANSPORT.c")" "fpga/de25/linux/astra_storage_transport.c"
+        printf '%s  %s\n' "$(sha256_file "$STORAGE_TRANSPORT.h")" "fpga/de25/linux/astra_storage_transport.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_HOST")" \
             "sw/include/astra/host.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_PROCESS")" \
+            "sw/include/astra/process.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_AUDIO_HOST")" \
             "sw/include/astra/audio_host.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_PCM_FORMAT")" \
@@ -179,6 +189,7 @@ done
 cp "$OVERLAY/hw/m68k/astra68.c" "$STAGED_SOURCE/hw/m68k/astra68.c"
 cp "$OVERLAY/hw/m68k/astra68-resolve.c" "$STAGED_SOURCE/hw/m68k/"
 cp "$OVERLAY/hw/m68k/astra68-resolve.h" "$STAGED_SOURCE/hw/m68k/"
+cp "$STORAGE_TRANSPORT.c" "$STORAGE_TRANSPORT.h" "$STAGED_SOURCE/hw/m68k/"
 cp "$OVERLAY/contrib/plugins/astra_profile.c" \
     "$STAGED_SOURCE/contrib/plugins/astra_profile.c"
 cp "$PUBLIC_INPUT" "$STAGED_SOURCE/include/hw/m68k/astra_input.h"
@@ -203,6 +214,9 @@ cp "$PUBLIC_BOOT" "$STAGED_SOURCE/include/astra/boot.h"
 cp "$PUBLIC_BLOCK" "$STAGED_SOURCE/include/astra/block.h"
 cp "$PUBLIC_NETWORK" "$STAGED_SOURCE/include/astra/network.h"
 cp "$PUBLIC_HOST" "$STAGED_SOURCE/include/astra/host.h"
+cp "$PUBLIC_PROCESS" "$STAGED_SOURCE/include/astra/process.h"
+cp "$STORAGE_WIRE" "$STAGED_SOURCE/include/astra/storage_provider.h"
+cp "$PUBLIC_VOLUME" "$STAGED_SOURCE/include/astra/volume_abi.h"
 cp "$PUBLIC_AUDIO_HOST" "$STAGED_SOURCE/include/astra/audio_host.h"
 cp "$PUBLIC_PCM_FORMAT" "$STAGED_SOURCE/include/astra/pcm_format.h"
 cp "$PUBLIC_AUDIO_STREAM" "$STAGED_SOURCE/include/astra/audio_stream.h"

@@ -9,7 +9,7 @@
  * "FSSEM DONE passed P failed F"; the exit status is 0 only when F is 0.
  * Cases use the POSIX layer unless their name says otherwise; the raw-*
  * cases go beneath it: raw-lane drives a host channel on its own scope, and
- * the grant cases (storage protocol 30, FS15) drive grant ports with raw
+ * the grant cases (storage protocol 38, FS15) drive grant ports with raw
  * messages and lanes with the scopes those grants hand out -- what a hostile
  * program can send, with no Kit in the way.
  */
@@ -18,12 +18,14 @@
 #define _XOPEN_SOURCE 700
 
 #include <astra/host.h>
+#include <astra/limits.h>
 #include <astra/posix.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/vfs_assign.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_service.h>
+#include <astra/volume.h>
 
 #include <dirent.h>
 #include <errno.h>
@@ -119,6 +121,53 @@ static int case_basic(const char *directory)
     return 0;
 }
 
+static int case_durable_save(const char *directory)
+{
+    AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
+    AstraFile parent = ASTRA_FILE_INIT, file = ASTRA_FILE_INIT;
+    char path[160], pending[160], text[32];
+    uint32_t moved = 0u;
+    int dirfd, fd;
+
+    CHECK(astra_process_filesystem_open(&native, astra_posix_startup()) == ASTRA_VFS_OK &&
+          astra_filesystem_open(&native.filesystem, directory,
+              ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY, &parent) == ASTRA_VFS_OK,
+          "native durable parent open");
+    CHECK(astra_filesystem_open_at(&native.filesystem, &parent, "pending",
+              ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_EXCLUSIVE,
+              &file) == ASTRA_VFS_OK &&
+          astra_filesystem_write(&file, UINT64_MAX, "native-old", 10u, &moved) == ASTRA_VFS_OK &&
+          moved == 10u && astra_filesystem_sync(&file) == ASTRA_VFS_OK &&
+          astra_filesystem_close(&file) == ASTRA_VFS_OK,
+          "native durable file write/sync/close");
+    CHECK(astra_filesystem_rename_at(&native.filesystem, &parent, "pending",
+              &parent, "saved") == ASTRA_VFS_OK &&
+          astra_filesystem_sync(&parent) == ASTRA_VFS_OK,
+          "native atomic save/parent sync");
+    join(path, sizeof(path), directory, "saved");
+    CHECK(read_text(path, text, sizeof(text)) == 10 && strcmp(text, "native-old") == 0,
+          "POSIX read of native durable save");
+    dirfd = open(directory, O_RDONLY | O_DIRECTORY);
+    CHECK(dirfd >= 0, "POSIX durable parent open: %s", strerror(errno));
+    fd = openat(dirfd, "pending", O_WRONLY | O_CREAT | O_EXCL, 0644);
+    CHECK(fd >= 0 && write(fd, "posix-new", 9u) == 9 && fsync(fd) == 0 && close(fd) == 0,
+          "POSIX durable file write/sync/close: %s", strerror(errno));
+    join(pending, sizeof(pending), directory, "pending");
+    CHECK(rename(pending, path) == 0 && fsync(dirfd) == 0,
+          "POSIX atomic replacement/parent sync: %s", strerror(errno));
+    CHECK(astra_filesystem_open_at(&native.filesystem, &parent, "saved",
+              ASTRA_VFS_OPEN_READ, &file) == ASTRA_VFS_OK &&
+          astra_filesystem_read(&file, text, sizeof(text), &moved) == ASTRA_VFS_OK &&
+          moved == 9u && memcmp(text, "posix-new", 9u) == 0 &&
+          astra_filesystem_close(&file) == ASTRA_VFS_OK,
+          "native read of POSIX durable replacement");
+    CHECK(unlinkat(dirfd, "saved", 0) == 0 && fsync(dirfd) == 0 && close(dirfd) == 0 &&
+          astra_filesystem_close(&parent) == ASTRA_VFS_OK,
+          "durable save cleanup: %s", strerror(errno));
+    astra_process_filesystem_close(&native);
+    return 0;
+}
+
 static int case_symlink_in_volume(const char *directory)
 {
     char a[160], b[160], file[160], link[160], path[192], text[32];
@@ -138,6 +187,11 @@ static int case_symlink_in_volume(const char *directory)
     CHECK(stat(path, &st) == -1 && errno == ENOENT, "missing component was folded away");
     join(path, sizeof(path), directory, "a/file/../file");
     CHECK(stat(path, &st) == -1 && errno == ENOTDIR, "file component was folded away");
+    CHECK(unlink(link) == 0 && symlink("\xC3\xA9", link) == 0,
+          "UTF-8 symlink fixture: %s", strerror(errno));
+    unsigned char truncated[2] = {0u, 0xA5u};
+    CHECK(readlink(link, (char *)truncated, 1u) == 1 && truncated[0] == 0xC3u &&
+          truncated[1] == 0xA5u, "readlink byte truncation split UTF-8 incorrectly: %s", strerror(errno));
     return 0;
 }
 
@@ -474,21 +528,126 @@ static int case_alias_identity(const char *directory)
 
 static int case_continuation_limit(const char *directory)
 {
-    char link[160], target[ASTRA_VFS_PATH_MAX];
+    char link[160];
+    char *target = malloc(ASTRA_VFS_PATH_MAX);
     struct stat st;
     size_t length = strlen("/system");
 
+    CHECK(target != NULL, "continuation allocation");
     strcpy(target, "/system");
-    while (length + 2u < sizeof(target)) {
+    while (length + 2u < ASTRA_VFS_PATH_MAX) {
         target[length++] = '/';
         target[length++] = '.';
     }
     target[length] = '\0';
     CHECK(length == ASTRA_VFS_PATH_MAX - 1u, "exact-limit fixture");
     join(link, sizeof(link), directory, "long");
-    CHECK(symlink(target, link) == 0 && stat(link, &st) == 0 &&
-          S_ISDIR(st.st_mode), "valid maximum-length continuation: %s", strerror(errno));
+    int valid = symlink(target, link) == 0 && stat(link, &st) == 0 && S_ISDIR(st.st_mode);
+    int saved_error = errno;
+    free(target);
+    CHECK(valid, "valid maximum-length continuation: %s", strerror(saved_error));
     return 0;
+}
+
+static int path_boundaries(const char *directory, char *path, char *other, char *saved)
+{
+    CHECK(ASTRA_VFS_PATH_MAX == 4096u && ASTRA_VFS_NAME_MAX == 256u,
+          "production path/name contract not installed");
+    size_t base = strlen(directory);
+    memcpy(path, directory, base);
+    path[base] = '/';
+    memset(path + base + 1u, 'n', 255u);
+    path[base + 256u] = '\0';
+    CHECK(write_text(path, "full", O_WRONLY | O_CREAT | O_EXCL) == 0,
+          "255-byte component: %s", strerror(errno));
+    DIR *listing = opendir(directory);
+    CHECK(listing != NULL, "long-name directory");
+    int found = 0;
+    struct dirent *entry;
+    while ((entry = readdir(listing)) != NULL)
+        if (strcmp(entry->d_name, path + base + 1u) == 0) found = 1;
+    int closed = closedir(listing);
+    CHECK(found && closed == 0, "255-byte name not enumerated intact");
+    path[base + 256u] = 'n';
+    path[base + 257u] = '\0';
+    struct stat info;
+    errno = 0;
+    CHECK(stat(path, &info) == -1 && errno == ENAMETOOLONG,
+          "256-byte component errno %d", errno);
+    AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
+    uint32_t opened = astra_process_filesystem_open(&native, astra_posix_startup());
+    AstraFileInfo native_info = ASTRA_FILE_INFO_INIT;
+    uint32_t native_status = opened == ASTRA_VFS_OK ?
+        astra_filesystem_stat(&native.filesystem, path, &native_info) : opened;
+    astra_process_filesystem_close(&native);
+    CHECK(native_status == ASTRA_VFS_ERR_NAME_TOO_LONG,
+          "native long component status %u", native_status);
+    path[base + 256u] = '\0';
+    CHECK(unlink(path) == 0, "long-name cleanup");
+
+    strcpy(path, directory);
+    size_t length = base;
+    while (ASTRA_VFS_PATH_MAX - 1u - length > 256u) {
+        path[length++] = '/';
+        memset(path + length, 'd', 255u);
+        length += 255u;
+        path[length] = '\0';
+        CHECK(mkdir(path, 0755) == 0, "deep directory length %lu: %s",
+              (unsigned long)length, strerror(errno));
+    }
+    size_t parent_length = length;
+    size_t remaining = ASTRA_VFS_PATH_MAX - 1u - length;
+    CHECK(remaining > 1u && remaining <= 256u, "deep fixture remainder");
+    path[length++] = '/';
+    memset(path + length, 'f', remaining - 1u);
+    length += remaining - 1u;
+    path[length] = '\0';
+    CHECK(length == 4095u && write_text(path, "full", O_WRONLY | O_CREAT | O_EXCL) == 0 &&
+          stat(path, &info) == 0 && info.st_size == 4, "4095-byte path: %s", strerror(errno));
+    opened = astra_process_filesystem_open(&native, astra_posix_startup());
+    native_status = opened == ASTRA_VFS_OK ?
+        astra_filesystem_stat(&native.filesystem, path, &native_info) : opened;
+    astra_process_filesystem_close(&native);
+    CHECK(native_status == ASTRA_VFS_OK, "native maximum path status %u", native_status);
+    path[length] = 'f'; path[length + 1u] = '\0';
+    errno = 0;
+    CHECK(stat(path, &info) == -1 && errno == ENAMETOOLONG, "4096-byte path errno %d", errno);
+    opened = astra_process_filesystem_open(&native, astra_posix_startup());
+    native_status = opened == ASTRA_VFS_OK ?
+        astra_filesystem_stat(&native.filesystem, path, &native_info) : opened;
+    astra_process_filesystem_close(&native);
+    CHECK(native_status == ASTRA_VFS_ERR_NAME_TOO_LONG, "native overlong path status %u", native_status);
+    path[length] = '\0';
+    strcpy(other, path); other[length - 1u] = 'r';
+    CHECK(rename(path, other) == 0 && stat(other, &info) == 0 && info.st_size == 4,
+          "two maximum-length rename operands: %s", strerror(errno));
+    CHECK(unlink(other) == 0, "deep file cleanup");
+    path[parent_length] = '\0';
+    CHECK(getcwd(saved, ASTRA_VFS_PATH_MAX) != NULL && chdir(path) == 0 &&
+          getcwd(other, ASTRA_VFS_PATH_MAX) != NULL && strcmp(path, other) == 0,
+          "deep CWD identity: %s", strerror(errno));
+    pid_t child = fork();
+    CHECK(child >= 0, "deep CWD fork");
+    if (child == 0) {
+        char *const arguments[] = {"fssem", "--cwd-helper", path, NULL};
+        execv("/commands/fssem", arguments);
+        _exit(127);
+    }
+    int status;
+    CHECK(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          "deep CWD exec handoff: %d", status);
+    CHECK(unlink("exec") == 0 && chdir(saved) == 0, "deep CWD cleanup");
+    return 0;
+}
+
+static int case_path_boundaries(const char *directory)
+{
+    size_t bytes = (size_t)ASTRA_VFS_PATH_MAX + 1u;
+    char *storage = malloc(bytes * 3u);
+    CHECK(storage != NULL, "path boundary allocation");
+    int result = path_boundaries(directory, storage, storage + bytes, storage + bytes * 2u);
+    free(storage);
+    return result;
 }
 
 /* fork and exec keep host volumes working: the child opens its own lane on
@@ -632,6 +791,24 @@ static int case_exec_inherit(const char *directory)
     CHECK(write_text(path, "abcdef", O_WRONLY | O_CREAT | O_EXCL) == 0, "seed");
     fd = open(path, O_RDWR);
     CHECK(fd >= 0 && read(fd, bytes, 1u) == 1, "open/read");
+    {
+        char *oversize = malloc(ASTRA_LAUNCH_STRING_BYTES + 1u);
+        char *const no_environment[] = {NULL};
+        pid_t before = getpid();
+
+        CHECK(oversize != NULL, "exec budget allocation");
+        memset(oversize, 'x', ASTRA_LAUNCH_STRING_BYTES);
+        oversize[ASTRA_LAUNCH_STRING_BYTES] = '\0';
+        char *const arguments[] = {"fssem", oversize, NULL};
+        errno = 0;
+        int replaced = execve("/commands/fssem", arguments, no_environment);
+        int saved_error = errno;
+        free(oversize);
+        CHECK(replaced == -1 && saved_error == E2BIG && getpid() == before &&
+              lseek(fd, 0, SEEK_CUR) == 1,
+              "exec budget changed live image/description: return %d errno %d",
+              replaced, saved_error);
+    }
     (void)snprintf(fd_text, sizeof(fd_text), "%d", fd);
     child = fork();
     CHECK(child >= 0, "fork: %s", strerror(errno));
@@ -909,24 +1086,31 @@ static int case_append_race(const char *directory)
 typedef struct RawClient {
     uint32_t service;
     uint32_t reply_receive;
+    uint32_t owns_reply;
     uint32_t session;
     uint32_t scope;            /* what its HELLO attached */
+    uint32_t area;
+    void *address;
+    uint32_t capacity;
+    const char *stage;
 } RawClient;
 
 #define RAW_LANE 0x5EA1u
 
 static uint32_t raw_open_until(RawClient *raw, uint32_t service,
-                               uint64_t deadline);
+                               uint64_t deadline, uint32_t reply_receive,
+                               uint32_t reply_send, int control_only);
 
 static uint32_t raw_open(RawClient *raw, uint32_t service)
 {
-    return raw_open_until(raw, service, ASTRA_DEADLINE_FOREVER);
+    return raw_open_until(raw, service, ASTRA_DEADLINE_FOREVER, 0u, 0u, 0);
 }
 
 /* HELLO, answered by `deadline` or not at all: a service that declines a
  * HELLO answers nothing, and ASTRA_SYSCALL_TIMED_OUT says so. */
 static uint32_t raw_open_until(RawClient *raw, uint32_t service,
-                               uint64_t deadline)
+                               uint64_t deadline, uint32_t reply_receive,
+                               uint32_t shared_reply_send, int control_only)
 {
     uint32_t reply_send = 0u;
     AstraVfsRequestMessage message;
@@ -938,8 +1122,18 @@ static uint32_t raw_open_until(RawClient *raw, uint32_t service,
 
     memset(raw, 0, sizeof(*raw));
     raw->service = service;
-    status = astra_rt_port_create(4u, 4u * (uint32_t)sizeof(reply),
-                                  &raw->reply_receive, &reply_send);
+    if (reply_receive != 0u) {
+        raw->reply_receive = reply_receive;
+        raw->stage = "reply-duplicate";
+        status = astra_rt_handle_duplicate(shared_reply_send,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT |
+            ASTRA_RIGHT_TRANSFER, &reply_send);
+    } else {
+        raw->owns_reply = 1u;
+        raw->stage = "reply-port";
+        status = astra_rt_port_create(4u, 4u * (uint32_t)sizeof(reply),
+                                      &raw->reply_receive, &reply_send);
+    }
     if (status != ASTRA_SYSCALL_OK)
         return status;
     memset(&message, 0, sizeof(message));
@@ -949,20 +1143,73 @@ static uint32_t raw_open_until(RawClient *raw, uint32_t service,
     message.request.size = ASTRA_VFS_REQUEST_SIZE;
     message.request.version = ASTRA_VFS_VERSION;
     handles[0] = reply_send;
+    raw->stage = "hello-send";
     status = astra_port_send(service, &message, sizeof(message), handles, 1u);
     (void)astra_close(reply_send);
     if (status != ASTRA_SYSCALL_OK)
         return status;
+    raw->stage = "hello-wait";
     status = astra_wait_one(raw->reply_receive, deadline, NULL);
-    if (status == ASTRA_SYSCALL_OK)
+    if (status == ASTRA_SYSCALL_OK) {
+        raw->stage = "hello-receive";
         status = astra_port_receive(raw->reply_receive, &reply, sizeof(reply),
                                     handles, 1u, &size, &count);
+    }
     if (status != ASTRA_SYSCALL_OK)
         return status;
-    if (reply.reply.status != ASTRA_VFS_OK)
+    raw->stage = "hello-status";
+    if (reply.reply.status != ASTRA_VFS_OK) {
+        if (count != 0u)
+            (void)astra_close(handles[0]);
         return reply.reply.status;
+    }
     raw->session = reply.reply.session;
     raw->scope = count != 0u ? handles[0] : 0u;
+    if (control_only) {
+        raw->stage = "ready";
+        return ASTRA_SYSCALL_OK;
+    }
+    raw->stage = "area-create";
+    status = astra_rt_area_create(4096u,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER | ASTRA_RIGHT_ADMINISTER, &raw->area);
+    if (status == ASTRA_SYSCALL_OK) {
+        raw->stage = "area-map";
+        status = astra_rt_area_map(raw->area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+            &raw->address, &raw->capacity);
+    }
+    if (status != ASTRA_SYSCALL_OK) return status;
+    memset(&message, 0, sizeof(message));
+    astra_message_header_set(&message.header, (uint32_t)sizeof(message),
+        ASTRA_VFS_PROTOCOL, ASTRA_VFS_VERSION, ASTRA_VFS_OP_BIND_AREA, RAW_LANE);
+    message.request.size = ASTRA_VFS_REQUEST_SIZE;
+    message.request.version = ASTRA_VFS_VERSION;
+    message.request.session = raw->session;
+    message.request.length = raw->capacity;
+    uint32_t area_send = 0u;
+    raw->stage = "area-duplicate";
+    status = astra_rt_handle_duplicate(raw->area,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &area_send);
+    if (status == ASTRA_SYSCALL_OK) {
+        handles[0] = area_send;
+        raw->stage = "bind-send";
+        status = astra_port_send(service, &message, sizeof(message), handles, 1u);
+    }
+    if (area_send != 0u) (void)astra_close(area_send);
+    if (status == ASTRA_SYSCALL_OK) {
+        raw->stage = "bind-wait";
+        status = astra_wait_one(raw->reply_receive, deadline, NULL);
+    }
+    if (status == ASTRA_SYSCALL_OK) {
+        raw->stage = "bind-receive";
+        status = astra_port_receive(raw->reply_receive, &reply, sizeof(reply),
+            handles, 1u, &size, &count);
+    }
+    if (status != ASTRA_SYSCALL_OK) return status;
+    if (count != 0u) (void)astra_close(handles[0]);
+    raw->stage = "bind-status";
+    if (reply.reply.status != ASTRA_VFS_OK) return reply.reply.status;
+    raw->stage = "ready";
     return ASTRA_SYSCALL_OK;
 }
 
@@ -989,8 +1236,12 @@ static uint32_t raw_call(RawClient *raw, uint32_t service, uint32_t session,
     message.request.session = session;
     message.request.flags = flags;
     message.request.offset = ASTRA_VFS_MODE_DEFAULT;
-    (void)snprintf((char *)message.request.body.path, ASTRA_VFS_PATH_MAX,
-                   "%s", path);
+    if (operation == ASTRA_VFS_OP_GRANT_DERIVE || path[0] != '\0') {
+        size_t bytes = strlen(path) + 1u;
+        if (bytes > ASTRA_VFS_PATH_MAX || bytes > raw->capacity) return ASTRA_VFS_ERR_NAME_TOO_LONG;
+        memcpy(raw->address, path, bytes);
+        message.request.body.paths.first_length = (uint32_t)bytes;
+    }
     status = astra_port_send(service, &message, sizeof(message), NULL, 0u);
     if (status != ASTRA_SYSCALL_OK)
         return status;
@@ -1019,8 +1270,10 @@ static void raw_close(RawClient *raw)
                        "", &reply, NULL);
     if (raw->scope != 0u)
         (void)astra_close(raw->scope);
-    if (raw->reply_receive != 0u)
+    if (raw->owns_reply && raw->reply_receive != 0u)
         (void)astra_close(raw->reply_receive);
+    if (raw->address != NULL) (void)astra_rt_area_unmap(raw->address);
+    if (raw->area != 0u) (void)astra_close(raw->area);
     memset(raw, 0, sizeof(*raw));
 }
 
@@ -1403,7 +1656,7 @@ static int case_raw_orphans(const char *directory)
         RawClient late;
         uint32_t status = raw_open_until(
             &late, derived[index],
-            astra_clock_monotonic() + UINT64_C(2000000000));
+            astra_clock_monotonic() + UINT64_C(2000000000), 0u, 0u, 0);
 
         CHECK(status != ASTRA_SYSCALL_OK,
               "derived grant %d outlived its deriver", index);
@@ -1474,7 +1727,7 @@ static int case_raw_orphans_death(const char *directory)
         RawClient late;
         uint32_t status = raw_open_until(
             &late, got[index],
-            astra_clock_monotonic() + UINT64_C(2000000000));
+            astra_clock_monotonic() + UINT64_C(2000000000), 0u, 0u, 0);
 
         CHECK(status != ASTRA_SYSCALL_OK,
               "%s outlived its dead deriver",
@@ -1658,46 +1911,149 @@ static int case_many_lanes(const char *directory)
 
 static int case_owner_sessions(const char *directory)
 {
-    RawClient held[65];
+    RawClient *held = calloc(65u, sizeof(*held));
+    uint32_t *pressure = calloc(ASTRA_HANDLE_COUNT_MAX, sizeof(*pressure));
+    uint32_t pressure_count = 0u;
+    uint32_t native_handles;
+    uint32_t reply_receive = 0u, reply_send = 0u;
+    uint32_t pressure_receive = 0u, pressure_send = 0u;
     uint32_t count = 0u;
     uint32_t status = ASTRA_SYSCALL_OK;
     int result = 0;
+    pid_t parent = getpid();
     pid_t child;
     int child_status;
 
     (void)directory;
-    memset(held, 0, sizeof(held));
+    if (held == NULL || pressure == NULL || parent <= 0) {
+        result = fail("owner-sessions fixture allocation or self identity");
+        goto done;
+    }
+    status = astra_rt_port_create(4u, 4u * (uint32_t)sizeof(AstraVfsReplyMessage),
+                                  &reply_receive, &reply_send);
+    if (status != ASTRA_SYSCALL_OK) {
+        result = fail("native pressure reply endpoint: %u", status);
+        goto done;
+    }
+
+    /* Native handle admission is a separate boundary from the VFS owner
+     * quota. Duplicate an owned, transferable PORT_SEND, rather than a
+     * filesystem authority grant. Self PROCESS_INFO must remain usable with
+     * every handle occupied. */
+    while (pressure_count < ASTRA_HANDLE_COUNT_MAX) {
+        status = astra_rt_handle_duplicate(reply_send,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT |
+            ASTRA_RIGHT_TRANSFER, &pressure[pressure_count]);
+        if (status != ASTRA_SYSCALL_OK)
+            break;
+        ++pressure_count;
+    }
+    if (status != ASTRA_SYSCALL_RESOURCE_LIMIT || pressure_count == 0u)
+        result = fail("native handle pressure accepted %u status %u", pressure_count, status);
+    if (result == 0 && getpid() != parent)
+        result = fail("self identity changed under native handle pressure (expected %ld)", (long)parent);
+    status = astra_rt_port_create(4u, 4u * (uint32_t)sizeof(AstraVfsReplyMessage),
+                                  &pressure_receive, &pressure_send);
+    if (result == 0 && status != ASTRA_SYSCALL_RESOURCE_LIMIT)
+        result = fail("native handle pressure admitted reply port: %u", status);
+    if (pressure_receive != 0u) (void)astra_close(pressure_receive);
+    if (pressure_send != 0u) (void)astra_close(pressure_send);
+    native_handles = pressure_count;
+    while (pressure_count != 0u)
+        (void)astra_close(pressure[--pressure_count]);
+    if (result != 0)
+        goto done;
+
+    /* Only HELLO/BYE are needed here. One serial reply endpoint and no
+     * bound data areas let the test reach 64 VFS sessions within the 255
+     * native handle slots, instead of first exhausting unrelated handles. */
+    status = astra_rt_port_create(4u, 4u * (uint32_t)sizeof(AstraVfsReplyMessage),
+                                  &pressure_receive, &pressure_send);
+    if (status != ASTRA_SYSCALL_OK) {
+        result = fail("native handles did not return after pressure: %u", status);
+        goto done;
+    }
+    (void)astra_close(pressure_receive);
+    (void)astra_close(pressure_send);
+    printf("FSSEM owner-sessions native-pressure pid=%ld duplicated=%u identity-preserved handles-returned\n",
+           (long)parent, native_handles);
     while (count < 65u) {
-        status = raw_open(&held[count], work_grant());
+        status = raw_open_until(&held[count], work_grant(), ASTRA_DEADLINE_FOREVER,
+                                reply_receive, reply_send, 1);
         if (status != ASTRA_SYSCALL_OK)
             break;
         ++count;
     }
-    if (status != ASTRA_VFS_ERR_LIMIT || count != 63u)
-        result = fail("owner sessions accepted %u status %u (one Kit session held)", count, status);
+    if (status != ASTRA_VFS_ERR_LIMIT || count != 63u) {
+        result = fail("owner=%ld sessions accepted %u stage=%s status=%u (one Kit session held)",
+                      (long)parent, count, count < 65u ? held[count].stage : "over-quota", status);
+    }
     if (count < 65u)
         raw_close(&held[count]);
+    if (result != 0)
+        goto done;
+    if (getpid() != parent) {
+        result = fail("self identity changed under VFS owner quota (expected %ld)", (long)parent);
+        goto done;
+    }
     child = fork();
     if (child == 0) {
         RawClient other;
         uint32_t opened = raw_open(&other, work_grant());
 
+        if (opened != ASTRA_SYSCALL_OK) {
+            printf("FSSEM owner-sessions child pid=%ld raw-stage=%s status=%u session=%u\n",
+                   (long)getpid(), other.stage, opened, other.session);
+            fflush(stdout);
+        }
         raw_close(&other);
         _exit(opened == ASTRA_SYSCALL_OK ? 0 : 1);
     }
-    if (child < 0 || waitpid(child, &child_status, 0) != child ||
-        !WIFEXITED(child_status) || WEXITSTATUS(child_status) != 0)
-        result = fail("one owner's sessions blocked another owner");
+    if (child < 0) {
+        result = fail("owner-sessions parent pid=%ld fork errno=%d with %u raw sessions held",
+                      (long)parent, errno, count);
+    } else {
+        pid_t waited = waitpid(child, &child_status, 0);
+
+        if (waited != child)
+            result = fail("owner-sessions wait child=%ld result=%ld errno=%d",
+                          (long)child, (long)waited, errno);
+        else if (!WIFEXITED(child_status))
+            result = fail("owner-sessions child=%ld wait-status=0x%x signal=%d",
+                          (long)child, child_status,
+                          WIFSIGNALED(child_status) ? WTERMSIG(child_status) : 0);
+        else if (WEXITSTATUS(child_status) == 127)
+            result = fail("owner-sessions child=%ld failed I/O reinitialization (127)",
+                          (long)child);
+        else if (WEXITSTATUS(child_status) != 0)
+            result = fail("one owner's sessions blocked child=%ld exit=%d",
+                          (long)child, WEXITSTATUS(child_status));
+    }
     if (count != 0u) {
         raw_close(&held[--count]);
-        status = raw_open(&held[count], work_grant());
-        if (status != ASTRA_SYSCALL_OK)
+        status = raw_open_until(&held[count], work_grant(), ASTRA_DEADLINE_FOREVER,
+                                reply_receive, reply_send, 1);
+        if (status != ASTRA_SYSCALL_OK && result == 0)
             result = fail("closed session did not release quota: %u", status);
-        else
+        if (status == ASTRA_SYSCALL_OK)
             ++count;
+        if (status == ASTRA_SYSCALL_OK) {
+            status = raw_open_until(&held[count], work_grant(), ASTRA_DEADLINE_FOREVER,
+                                    reply_receive, reply_send, 1);
+            if (status != ASTRA_VFS_ERR_LIMIT && result == 0)
+                result = fail("released session widened owner quota: %u", status);
+            raw_close(&held[count]);
+        } else {
+            raw_close(&held[count]);
+        }
     }
+done:
     while (count != 0u)
         raw_close(&held[--count]);
+    if (reply_send != 0u) (void)astra_close(reply_send);
+    if (reply_receive != 0u) (void)astra_close(reply_receive);
+    free(pressure);
+    free(held);
     return result;
 }
 
@@ -1827,11 +2183,145 @@ done:
     return result;
 }
 
+static int case_volume_catalog(const char *directory)
+{
+    (void)directory;
+    const AstraStartupCapability *capability = astra_startup_capability(
+        astra_posix_startup(), ASTRA_CAPABILITY_VOLUMES);
+    CHECK(capability != NULL, "missing native VOLUMES capability");
+    AstraVolumeCatalogPage *page = malloc(sizeof(*page));
+    CHECK(page != NULL, "catalog page allocation");
+    AstraVolumeWatch watch = ASTRA_VOLUME_WATCH_INIT;
+    AstraVolumeChange change = {0};
+    AstraResult result = astra_volume_watch_open(capability->handle, &watch);
+    if (result == ASTRA_OK)
+        result = astra_volume_watch_receive(&watch, &change);
+    if (result == ASTRA_OK && (change.status != ASTRA_STATUS_OK ||
+        change.epoch == 0u || change.sequence == 0u)) result = ASTRA_ERROR_IO;
+    AstraVolumeCatalogQuery query = {ASTRA_VOLUME_CATALOG_VERSION, sizeof(query), 0u, 0u, 0u};
+    uint32_t mounts = 0u, bindings = 0u, system = 0u, present = 0u;
+    uint64_t last = 0u;
+    while (result == ASTRA_OK) {
+        result = astra_volume_catalog(capability->handle, &query, page);
+        if (result != ASTRA_OK) break;
+        for (uint32_t at = 0u; at < page->count; ++at) {
+            const AstraVolumeRecord *record = &page->records[at];
+            if (record->id <= last) { result = ASTRA_ERROR_IO; break; }
+            last = record->id;
+            if (record->kind == ASTRA_VOLUME_MOUNT && record->state == ASTRA_VOLUME_MOUNTED) {
+                ++mounts;
+                if (strcmp(record->name, "/dh0") == 0 &&
+                    (record->flags & ASTRA_VOLUME_SYSTEM) != 0u) ++system;
+            }
+            if (record->kind == ASTRA_VOLUME_BINDING && record->state == ASTRA_VOLUME_MOUNTED)
+                ++bindings;
+            if ((record->kind == ASTRA_VOLUME_MOUNT || record->kind == ASTRA_VOLUME_BINDING) &&
+                record->state == ASTRA_VOLUME_MOUNTED) {
+                const char *const expected[] = {"/dh0", "/work", "/sound", "/ram0", "/tmp"};
+                for (uint32_t name = 0u; name < sizeof(expected) / sizeof(expected[0]); ++name)
+                    if (strcmp(record->name, expected[name]) == 0) present |= 1u << name;
+            }
+        }
+        query.epoch = page->epoch; query.sequence = page->sequence; query.after = page->next;
+        if (page->next == 0u) break;
+    }
+    if (result == ASTRA_OK && (mounts < 3u || bindings < 2u || system != 1u || present != 31u))
+        result = ASTRA_ERROR_IO;
+    if (result == ASTRA_OK) {
+        query.after = 0u;
+        query.sequence = 0u;
+        query.epoch ^= UINT64_C(0x100000000);
+        if (astra_volume_catalog(capability->handle, &query, page) != ASTRA_ERROR_INVALID_HANDLE ||
+            page->count != 0u || page->epoch != 0u) result = ASTRA_ERROR_IO;
+    }
+    AstraResult closed = astra_volume_watch_close(capability->handle, &watch);
+    if (result == ASTRA_OK) result = closed;
+    if (result == ASTRA_OK && (watch.id != 0u || watch.receive != ASTRA_INVALID_HANDLE))
+        result = ASTRA_ERROR_IO;
+    /* Repeated construction must return each native port/subscription resource. */
+    for (uint32_t at = 0u; at < 32u && result == ASTRA_OK; ++at) {
+        result = astra_volume_watch_open(capability->handle, &watch);
+        if (result == ASTRA_OK) result = astra_volume_watch_receive(&watch, &change);
+        closed = astra_volume_watch_close(capability->handle, &watch);
+        if (result == ASTRA_OK) result = closed;
+    }
+    free(page);
+    CHECK(result == ASTRA_OK, "native catalog/subscription result=%ld mounts=%u bindings=%u system=%u present=%u",
+        (long)result, mounts, bindings, system, present);
+    return 0;
+}
+
+static int case_volume_root(const char *directory)
+{
+    (void)directory;
+    const AstraStartupInfo *startup = astra_posix_startup();
+    const AstraStartupCapability *metadata = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUMES);
+    const AstraStartupCapability *reader = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUME_READ);
+    const AstraStartupCapability *writer = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUME_WRITE);
+    CHECK(metadata != NULL && reader != NULL && writer != NULL, "missing root broker capabilities");
+    AstraVolumeCatalogPage *page = malloc(sizeof(*page));
+    CHECK(page != NULL, "root catalog allocation");
+    AstraVolumeReference ram = {0}, system = {0};
+    AstraVolumeCatalogQuery query = {ASTRA_VOLUME_CATALOG_VERSION, sizeof(query), 0u, 0u, 0u};
+    AstraResult result = ASTRA_OK;
+    do {
+        result = astra_volume_catalog(metadata->handle, &query, page);
+        if (result != ASTRA_OK) break;
+        for (uint32_t at = 0u; at < page->count; ++at) {
+            const AstraVolumeRecord *row = &page->records[at];
+            if (row->kind != ASTRA_VOLUME_MOUNT || row->state != ASTRA_VOLUME_MOUNTED) continue;
+            if (strcmp(row->name, "/ram0") == 0) ram = (AstraVolumeReference){page->epoch, row->id, row->generation};
+            if (strcmp(row->name, "/dh0") == 0) system = (AstraVolumeReference){page->epoch, row->id, row->generation};
+        }
+        query.epoch = page->epoch; query.sequence = page->sequence; query.after = page->next;
+    } while (query.after != 0u);
+    free(page);
+    CHECK(result == ASTRA_OK && ram.id != 0u && system.id != 0u, "root catalog identities");
+    AstraHandle root = ASTRA_INVALID_HANDLE;
+    CHECK(astra_volume_root(metadata->handle, &ram, ASTRA_RIGHT_READ, &root) == ASTRA_ERROR_PERMISSION,
+        "metadata minted data authority");
+    CHECK(astra_volume_root(reader->handle, &ram, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, &root) == ASTRA_ERROR_PERMISSION,
+        "reader minted write authority");
+    CHECK(astra_volume_root(reader->handle, &system, ASTRA_RIGHT_READ, &root) == ASTRA_ERROR_PERMISSION,
+        "public broker bypassed system grant policy");
+    AstraVolumeReference stale = ram; ++stale.generation;
+    CHECK(astra_volume_root(reader->handle, &stale, ASTRA_RIGHT_READ, &root) == ASTRA_ERROR_INVALID_HANDLE,
+        "stale root reference accepted");
+    for (uint32_t attempt = 0u; attempt < 2u; ++attempt) {
+        uint32_t rights = ASTRA_RIGHT_READ | (attempt != 0u ? ASTRA_RIGHT_WRITE : 0u);
+        CHECK(astra_volume_root(attempt == 0u ? reader->handle : writer->handle, &ram, rights, &root) == ASTRA_OK,
+            "root grant failed");
+        AstraVfsClient *client = calloc(1u, sizeof(*client));
+        CHECK(client != NULL, "root client allocation");
+        uint32_t status = astra_vfs_client_connect_service(client, root);
+        AstraVfsDirEntry info = {0};
+        if (status == ASTRA_VFS_OK) status = astra_vfs_stat_meta(client, "/", &info);
+        if (status == ASTRA_VFS_OK && info.kind != ASTRA_VFS_KIND_DIRECTORY) status = ASTRA_VFS_ERR_INVALID;
+        char path[64]; snprintf(path, sizeof(path), "/volume-root-%ld", (long)getpid());
+        if (status == ASTRA_VFS_OK && attempt == 0u) {
+            uint32_t refused = astra_vfs_mkdir(client, path);
+            if (refused != ASTRA_VFS_ERR_READ_ONLY && refused != ASTRA_VFS_ERR_ACCESS) status = ASTRA_VFS_ERR_ACCESS;
+        } else if (status == ASTRA_VFS_OK) {
+            status = astra_vfs_mkdir(client, path);
+            if (status == ASTRA_VFS_OK) status = astra_vfs_unlink(client, path, ASTRA_VFS_UNLINK_DIRECTORY);
+        }
+        uint32_t disconnected = astra_vfs_disconnect(client);
+        free(client);
+        uint32_t closed = astra_close(root); root = ASTRA_INVALID_HANDLE;
+        CHECK(status == ASTRA_VFS_OK && disconnected == ASTRA_VFS_OK && closed == ASTRA_SYSCALL_OK,
+            "root data/control cleanup status=%u disconnect=%u close=%u", status, disconnected, closed);
+    }
+    return 0;
+}
+
 static const struct {
     const char *name;
     FssemCase run;
 } cases[] = {
     {"basic", case_basic},
+    {"durable-save", case_durable_save},
+    {"volume-catalog", case_volume_catalog},
+    {"volume-root", case_volume_root},
     {"symlink-in-volume", case_symlink_in_volume},
     {"symlink-cross-volume", case_symlink_cross_volume},
     {"dotdot-at-root", case_dotdot_at_root},
@@ -1839,6 +2329,7 @@ static const struct {
     {"link-edges", case_link_edges},
     {"alias-identity", case_alias_identity},
     {"continuation-limit", case_continuation_limit},
+    {"path-boundaries", case_path_boundaries},
     {"raw-lane", case_raw_lane},
     {"lane-fork-exec", case_lane_fork_exec},
     {"shared-description", case_shared_description},
@@ -1873,6 +2364,7 @@ static int loss_probe(const char *path, int seconds, int reopen)
     time_t end;
     long writes = 0;
     uint32_t derived = 0u, replaced = 0u;
+    uint64_t replacement_inode = 0u;
     AstraVfsClient *client = astra_process_vfs_client_handle_lookup(work_grant());
     DIR *directory;
     int fd;
@@ -1889,8 +2381,9 @@ static int loss_probe(const char *path, int seconds, int reopen)
         snprintf(root, sizeof(root), "%s.root", path);
         snprintf(moved, sizeof(moved), "%s.moved", path);
         if (mkdir(root, 0755) != 0 || astra_vfs_grant_derive(client, root + 6u, ASTRA_VFS_GRANT_READ, &replaced) != ASTRA_VFS_OK ||
-            rename(root, moved) != 0 || mkdir(root, 0755) != 0)
+            rename(root, moved) != 0 || mkdir(root, 0755) != 0 || stat(root, &st) != 0)
             return loss_fail("replacement root", errno);
+        replacement_inode = (uint64_t)st.st_ino;
     }
     printf("FSSEM LOSS armed\n");
     fflush(stdout);
@@ -1927,10 +2420,30 @@ static int loss_probe(const char *path, int seconds, int reopen)
             if (raw_open(&held, derived) != ASTRA_SYSCALL_OK)
                 return loss_fail("derived grant lost with live deriver", 0);
             raw_close(&held);
-            if (raw_open(&wrong, replaced) != ASTRA_STATUS_LOST)
-                return loss_fail("grant rebound to replacement root", 0);
-            if (wrong.reply_receive != 0u)
-                astra_close(wrong.reply_receive);
+            uint32_t rejected = raw_open(&wrong, replaced);
+            /* A live lost grant replies LOST; canonical retirement instead
+             * closes its native endpoint before HELLO can admit authority. */
+            int refused = wrong.session == 0u && wrong.scope == 0u &&
+                ((rejected == ASTRA_STATUS_LOST && strcmp(wrong.stage, "hello-status") == 0) ||
+                 (rejected == ASTRA_SYSCALL_PEER_DEAD && strcmp(wrong.stage, "hello-send") == 0));
+            printf("FSSEM LOSS retained grant status=%lu stage=%s session=%lu scope=%lu replacement_inode=%llu\n",
+                (unsigned long)rejected, wrong.stage, (unsigned long)wrong.session,
+                (unsigned long)wrong.scope, (unsigned long long)replacement_inode);
+            if (rejected == ASTRA_SYSCALL_OK) {
+                AstraVfsReplyMessage reply = {0};
+                uint32_t inspected = raw_call(&wrong, wrong.service, wrong.session,
+                    ASTRA_VFS_OP_STAT, 0u, "/", &reply, NULL);
+                printf("FSSEM LOSS retained root stat transport=%lu status=%lu valid=%lu volume=%llu inode=%llu\n",
+                    (unsigned long)inspected, (unsigned long)reply.reply.status,
+                    (unsigned long)reply.reply.meta.valid, (unsigned long long)reply.reply.meta.volume,
+                    (unsigned long long)reply.reply.meta.inode);
+            }
+            fflush(stdout);
+            raw_close(&wrong);
+            if (!refused) {
+                printf("FSSEM LOSS FAIL retained grant rejection boundary status=%lu\n", (unsigned long)rejected);
+                return 1;
+            }
             child = fork();
             if (child < 0)
                 return loss_fail("fork with disconnected descriptions", errno);
@@ -2004,10 +2517,12 @@ int main(int argc, char **argv)
                WEXITSTATUS(status) == 42 ? 0 : 2;
     }
     if (argc == 3 && strcmp(argv[1], "--cwd-helper") == 0) {
-        char cwd[192];
-
-        return getcwd(cwd, sizeof(cwd)) != NULL && strcmp(cwd, argv[2]) == 0 &&
+        size_t capacity = strlen(argv[2]) + 1u;
+        char *cwd = malloc(capacity);
+        int result = cwd != NULL && getcwd(cwd, capacity) != NULL && strcmp(cwd, argv[2]) == 0 &&
             write_text("exec", "exec", O_WRONLY | O_CREAT | O_EXCL) == 0 ? 0 : 2;
+        free(cwd);
+        return result;
     }
     if (argc < 2) {
         fprintf(stderr, "usage: fssem CASE...\n");

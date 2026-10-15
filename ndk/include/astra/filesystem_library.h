@@ -11,7 +11,7 @@
 /** Package provider name resolved by the eager ELF loader. */
 #define ASTRA_FILESYSTEM_LIBRARY_NAME "filesystem.library"
 /** Minimum compatible Filesystem Kit ABI major requested by applications. */
-#define ASTRA_FILESYSTEM_LIBRARY_VERSION 12u
+#define ASTRA_FILESYSTEM_LIBRARY_VERSION 14u
 /** Current Filesystem Kit ABI major. */
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
 /** Current backward-compatible Filesystem Kit ABI revision. */
@@ -67,6 +67,7 @@ typedef struct AstraFile {
     AstraFilesystemReadFn _private_read;
     AstraFilesystemWriteFn _private_write;
     AstraVfsFile _private_file;
+    uint32_t _private_ownership_epoch;
     uint32_t _private_flags;
     uint64_t _private_offset;
     uint64_t _private_size;
@@ -86,6 +87,8 @@ typedef struct AstraFilesystem {
     uint32_t (*_private_cwd_acquire)(const AstraFile **directory);
     void (*_private_cwd_release)(void);
     uint32_t (*_private_cwd_qualify)(const char *, char *, uint32_t);
+    uint32_t (*_private_namespace_acquire)(const AstraAssignTable **, void **);
+    void (*_private_namespace_release)(void *);
     /** @endcond */
 } AstraFilesystem;
 
@@ -124,29 +127,33 @@ typedef AstraVfsDirEntry AstraDirectoryEntry;
 typedef struct AstraDirectory {
     /** @cond ASTRA_INTERNAL */
     AstraFilesystem *_private_filesystem;
-    char _private_path[ASTRA_VFS_PATH_MAX];
+    char *_private_path;
     uint64_t _private_cursor;
     AstraVfsClient *_private_client;
     AstraVfsFile _private_file;
+    uint32_t _private_ownership_epoch;
     uint32_t _private_member;
     uint32_t _private_worst;
     uint8_t _private_active;
     uint8_t _private_done;
     uint16_t _private_reserved;
+    AstraFilesystem *_private_owned_filesystem;
+    void *_private_namespace;
+    void (*_private_namespace_release)(void *);
     /** @endcond */
 } AstraDirectory;
 
 /** Static initializer for a detached AstraFilesystem. */
-#define ASTRA_FILESYSTEM_INIT { 0, 0, 0, 0, 0, 0, 0, 0 }
+#define ASTRA_FILESYSTEM_INIT { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }
 /** Static initializer for a closed AstraFile. */
-#define ASTRA_FILE_INIT { 0, 0, 0, ASTRA_VFS_FILE_INVALID, 0, 0, 0, 0, 0 }
+#define ASTRA_FILE_INIT { 0, 0, 0, ASTRA_VFS_FILE_INVALID, 0, 0, 0, 0, 0, 0 }
 /** Static initializer for an ABI-sized AstraFileInfo. */
 #define ASTRA_FILE_INFO_INIT { sizeof(AstraFileInfo), 0, 0, 0, 0, 0, 0, \
                                0, 0, 0, 0, { 0 } }
 /** Static initializer for an inactive AstraDirectory. */
 #define ASTRA_DIRECTORY_INIT \
-    { 0, { 0 }, 0, 0, ASTRA_VFS_FILE_INVALID, 0, \
-      ASTRA_VFS_ERR_NOT_FOUND, 0, 0, 0 }
+    { 0, 0, 0, 0, ASTRA_VFS_FILE_INVALID, 0, 0, \
+      ASTRA_VFS_ERR_NOT_FOUND, 0, 0, 0, 0, 0, 0 }
 
 /**
  * Attach a filesystem with read-only accelerated I/O.

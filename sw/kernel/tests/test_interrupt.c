@@ -6,6 +6,7 @@
 #include "platform.h"
 #include "trace.h"
 #include "worker.h"
+#include <astra/host.h>
 
 #include <assert.h>
 #include <stdint.h>
@@ -229,7 +230,7 @@ static void advertise_monitor_spi(VestaRegs *registers)
 static void advertise_host(VestaRegs *registers)
 {
     registers->HOST_ACCEL_ID = HOST_ACCEL_ID_MAGIC;
-    registers->HOST_ACCEL_VERSION = HOST_ACCEL_VERSION_1_0;
+    registers->HOST_ACCEL_VERSION = ASTRA_HOST_VERSION;
 }
 
 static void select_interrupt(VestaRegs *registers, uint8_t source);

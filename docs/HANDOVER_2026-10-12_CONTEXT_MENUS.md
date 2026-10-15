@@ -129,3 +129,9 @@ The production filesystem volumes/hotplug/mount/eject work remains the next
 separate integration slice. Supported USB automount should be writable;
 optical media remain read-only. Existing filesystem performance failures stay
 recorded without a waiver.
+
+The user reaffirms correctness first: functional correctness and data safety
+precede further performance qualification. Shared flat-menu correctness gates
+pass; two-frame feedback, long-menu timing and broad filesystem tuning remain
+deferred while the production volume lifecycle is completed. This sequencing
+does not change the timing targets or establish performance acceptance.

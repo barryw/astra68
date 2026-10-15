@@ -12,6 +12,7 @@
  */
 uint32_t astra_vfs_local_transport(void *context, uint32_t operation,
                                    const AstraVfsRequest *request,
+                          const AstraVfsTransfer *transfer,
                                    AstraVfsReply *reply);
 
 #endif

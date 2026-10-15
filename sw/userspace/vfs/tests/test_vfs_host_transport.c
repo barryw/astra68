@@ -116,7 +116,7 @@ uint32_t astra_host_channel_open(uint32_t device,
     AstraHostChannelHeader *header =
         (AstraHostChannelHeader *)(void *)dma_storage[slot];
 
-    assert(device == 41u || device == 77u);
+    assert(device == 41u || (device >= 77u && device < 100u));
     last_open_device = device;
     assert(channel->command_capacity != 0u &&
            (channel->command_capacity &
@@ -146,7 +146,7 @@ uint32_t astra_host_channel_open(uint32_t device,
 
 uint32_t astra_host_channel_close(uint32_t device)
 {
-    assert(device == 41u || device == 77u);
+    assert(device == 41u || (device >= 77u && device < 100u));
     for (uint32_t slot = 0u; slot < dma_slot_count; ++slot) {
         if (channel_opened[slot] == 0u ||
             channel_thread[slot] != current_thread)
@@ -442,8 +442,42 @@ static void test_a_forgotten_scope_is_attached_again(void)
     astra_vfs_host_transport_destroy(&transport);
 }
 
+static void test_scope_cache_rotation(void)
+{
+    AstraVfsHostTransport transport;
+    AstraVfsHostRequest request;
+    uint32_t opened = channel_opens;
+    uint32_t closed = channel_closes;
+    uint32_t previous_thread = current_thread;
+
+    /* The earlier fork fixture retains a simulated parent channel on 1. */
+    current_thread = 8u;
+    assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release, &lock_depth));
+    for (uint32_t index = 0u; index <= ASTRA_HOST_CHANNEL_SCOPE_MAX; ++index) {
+        assert(astra_vfs_host_transport_begin(&transport, 77u + index, 0u, &request) == ASTRA_VFS_OK);
+        request.command->generation = transport.generation;
+        assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u, NULL, 0u) == ASTRA_VFS_OK);
+        /* Forgetting a numeric handle must not hide the still occupied
+         * kernel binding slot from the finite channel cache. */
+        astra_vfs_host_transport_forget_scope(&transport, 77u + index);
+    }
+    assert(channel_opens == opened + 2u && channel_closes == closed + 1u);
+    assert(last_open_device == 77u + ASTRA_HOST_CHANNEL_SCOPE_MAX);
+    astra_vfs_host_transport_destroy(&transport);
+    current_thread = previous_thread;
+}
+
 int main(void)
 {
+    {
+        AstraVfsHostTransport limits = {0};
+        assert(astra_vfs_host_transport_payload_limit(NULL) == 0u);
+        assert(astra_vfs_host_transport_payload_limit(&limits) == 0u);
+        limits.channel_supported = 1u;
+        limits.maximum_transfer = 8193u;
+        assert(astra_vfs_host_transport_payload_limit(&limits) ==
+            8192u - ASTRA_HOST_CHANNEL_HEADER_SIZE - ASTRA_HOST_COMMAND_SIZE);
+    }
     AstraVfsHostTransport transport;
     AstraHostCommand command;
     AstraHostCommand batch_commands[8];
@@ -671,6 +705,7 @@ int main(void)
     channel_open_status = ASTRA_SYSCALL_OK;
     test_lane_carries_scopes();
     test_a_forgotten_scope_is_attached_again();
+    test_scope_cache_rotation();
     {
         AstraVfsHostTransfer escaped[2] = {0};
         AstraHostCommand commands[2] = {0};

@@ -82,7 +82,7 @@ typedef struct PosixDescriptor {
 } PosixDescriptor;
 
 #define POSIX_EXEC_MAGIC 0x50584543u
-#define POSIX_EXEC_VERSION 4u
+#define POSIX_EXEC_VERSION 5u
 
 typedef struct PosixExecHeader {
     uint32_t magic;
@@ -582,6 +582,7 @@ astra_posix_exec_export(void **state, uint32_t *size)
     PosixExecDescriptor *wire_descriptors = NULL;
     PosixExecDescription *wire_descriptions = NULL;
     uint32_t active = 0u;
+    uint32_t descriptions_capacity = 0u;
     uint32_t unique_count = 0u;
     uint32_t file_size;
     uint32_t socket_size = 0u;
@@ -603,10 +604,14 @@ astra_posix_exec_export(void **state, uint32_t *size)
     /* Exec discards this thread's buffers; what was written must not be. */
     astra_posix_log_flush();
     for (uint32_t fd = 0u; fd < descriptor_capacity; ++fd)
-        if (descriptors[fd].description != NULL &&
-            (descriptors[fd].descriptor_flags & FD_CLOEXEC) == 0u)
-            ++active;
-    unique = calloc(active == 0u ? 1u : active, sizeof(*unique));
+        if (descriptors[fd].description != NULL) {
+            ++descriptions_capacity;
+            if ((descriptors[fd].descriptor_flags & FD_CLOEXEC) == 0u) ++active;
+        }
+    /* Provider descriptions survive the image replacement. Carry excluded
+     * descriptions too: the new image closes zero-reference owners only
+     * after commit, while a failed exec keeps every original descriptor. */
+    unique = calloc(descriptions_capacity == 0u ? 1u : descriptions_capacity, sizeof(*unique));
     if (unique == NULL) {
         errno = ENOMEM;
         return -1;
@@ -615,8 +620,7 @@ astra_posix_exec_export(void **state, uint32_t *size)
         PosixOpenDescription *description = descriptors[fd].description;
         uint32_t index;
 
-        if (description == NULL ||
-            (descriptors[fd].descriptor_flags & FD_CLOEXEC) != 0u)
+        if (description == NULL)
             continue;
         for (index = 0u; index < unique_count; ++index)
             if (unique[index] == description)
@@ -1017,9 +1021,11 @@ astra_posix_start(const AstraStartupInfo *startup)
     (void)memset(initial_descriptions, 0, sizeof(initial_descriptions));
     startup_block = startup;
     astra_posix_resource_reset();
+    environ = empty_environment;
+    if (!astra_startup_validate(startup))
+        return;
     astra_posix_heap_prepare(startup != NULL ?
                              startup->program_writable_bytes : 0u);
-    environ = empty_environment;
     if (startup != NULL && startup->environment_count != 0u &&
         startup->environment_address != 0u)
         environ = (char **)(uintptr_t)startup->environment_address;
@@ -1027,8 +1033,6 @@ astra_posix_start(const AstraStartupInfo *startup)
     if (restored < 0)
         (void)astra_log_failure("POSIX descriptor restore", (uint32_t)errno);
     if (restored != 0)
-        return;
-    if (!astra_startup_validate(startup))
         return;
     for (uint32_t fd = 0u; fd < 3u; ++fd) {
         const AstraStartupCapability *capability =

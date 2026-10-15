@@ -38,17 +38,23 @@ In both cases the initial entry receives:
 | `D5` | initial thread self handle |
 | `USP` | top of the writable initial user stack |
 
-`AstraStartupInfo` is 80 bytes, naturally four-byte aligned, and defined in
+`AstraStartupInfo` is 92 bytes, naturally four-byte aligned, and defined in
 `sw/include/astra/process.h`. It records its magic, size, startup ABI, syscall
 ABI, process/thread handles, argument and environment vector addresses, and a
 bounded capability table. Version 5 also records the program entry and, for an
 interpreted image, the interpreter load bias, exact mapped span, and relocated
-entry. Counts are explicit; absent vectors use a zero count and zero address.
-Reserved words must be zero.
+entry. Startup ABI 8 adds the exact owned vector payload address and byte size.
+Aligned argv/environment pointer vectors and packed strings live in separate
+read-only pages after the rounded opaque exec handoff; both spans must end
+before the executable's first segment. Counts are explicit; absent vectors use
+a zero count and zero address. The combined UTF-8 string budget is 4,096 bytes
+including NULs, independent of capability count. Native validation checks the
+complete vector geometry and each pointer/string bound before use. POSIX copies
+the validated vectors and strings into its existing writable process heap.
 
 The loader validates every mapped range, string bound, handle right, and
 entry/stack permission before making the thread runnable. The runtime performs
-cheap structural validation again before calling:
+bounded startup validation again before calling:
 
 ```c
 int astra_main(const AstraStartupInfo *startup);
@@ -60,7 +66,7 @@ return to the loader.
 
 Each `AstraStartupCapability` is 92 bytes: a counted capability name,
 process-local handle, exact granted rights and namespace flags, plus its
-mount-relative root. ABI 7 derives the current 43-entry capacity from the
+mount-relative root. ABI 8 derives the current 43-entry capacity from the
 complete records that fit in the startup page rather than imposing a second
 count. Handles are transferred into the new process exactly once before launch;
 startup-block destruction does not close them.
