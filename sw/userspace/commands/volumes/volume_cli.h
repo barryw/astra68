@@ -17,6 +17,7 @@ int volume_cli_select(VolumeCli *cli, const char *selector, uint32_t kind,
     AstraVolumeReference *parent);
 int volume_cli_wait(VolumeCli *cli, const AstraVolumeReference *reference,
     uint32_t wanted, int disappearance_completes, AstraVolumeRecord *record);
+int volume_cli_wait_removal(VolumeCli *cli, AstraVolumeRemoval *removal);
 int volume_cli_apply(VolumeCli *cli, const AstraVolumeControl *control,
     AstraVolumeReference *reference);
 int volume_cli_mount(VolumeCli *cli, const AstraVolumeReference *source,

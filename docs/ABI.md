@@ -30,6 +30,10 @@ Host node device and mount fields carry native identity, not Linux device
 major/minor numbers or private namespace mount IDs. Native IDs are not recycled;
 exhaustion refuses new sessions. Whole-mount sessions retain logical authority
 only; subdirectory sessions and open directories retain their exact objects.
+
+Filesystem library ABI 14.1 (`filesystem.library.14`, kit 11.1.0) adds native
+removal observation. Clients wait for actual image-source disappearance after
+unmount; a LOST catalog row never certifies backing retirement.
 STOR requests remain 256 bytes. Complete pathname operands use validated
 offset/length descriptors in the session's existing transfer area; providers
 snapshot them before dispatch. Components support 255 bytes and complete paths

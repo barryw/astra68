@@ -1,6 +1,6 @@
 # Filesystem Kit
 
-Status: `filesystem.library` ABI 14.0 is the shared, backend-neutral client layer
+Status: `filesystem.library` ABI 14.1 is the shared, backend-neutral client layer
 over Astra's VFS protocol, assign namespaces, and union policy. It does not
 create a second filesystem stack.
 
@@ -72,6 +72,12 @@ resource sequence. Roots awaiting adoption or cleanup are service-owned.
 Successful CLI removal waits for real cleanup; admission alone is not success.
 Mounted image removal also releases its source lease. The running system volume
 cannot be unmounted.
+Desktop and CLI use `astra_volume_removal_advance` to distinguish refusal,
+retained cleanup, provider retirement and actual source disappearance.
+Haiku reference: `~/Git/haiku/src/system/kernel/fs/vfs.cpp` (`fs_unmount`)
+checks busy references and publishes removal after teardown. Astra keeps that
+sequencing in its provider and shares only catalog interpretation in the native
+Volume client.
 
 `RAM_READ` and `RAM_WRITE` are scoped root brokers for the exact configured RAM
 source. They do not grant access to unrelated RAM, USB or fixed volumes.

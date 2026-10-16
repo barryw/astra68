@@ -19,6 +19,7 @@ static uint32_t maps, closes, queued;
 static uint64_t subscription;
 static unsigned allocations, fail_allocation, snapshot_pages, fail_continuation;
 static uint32_t shares, unshares;
+static uint32_t image_releases;
 uint32_t astra_vfs_share(AstraVfsClient *client, AstraVfsFile file, uint64_t *token)
 { assert(client != NULL && file == 9u); ++shares; *token = 99u; return ASTRA_STATUS_OK; }
 uint32_t astra_vfs_unshare(AstraVfsClient *client, uint64_t token)
@@ -117,6 +118,11 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
     } else if (control && reply->status == 0u) {
         const AstraVolumeControlRequest *wanted = call->request;
         assert(astra_volume_control_valid(&wanted->control) && call->handle_count == 0u);
+        if (wanted->control.operation == ASTRA_VOLUME_RELEASE_IMAGE_SOURCE) {
+            assert(wanted->control.reference.epoch == 25u &&
+                wanted->control.reference.id == 3u && wanted->control.reference.generation == 1u);
+            ++image_releases;
+        }
         ((AstraVolumeControlReply *)reply)->reference = (AstraVolumeReference){25u, 8u, 1u};
     } else if (request->header.operation == ASTRA_VOLUME_ROOT && reply->status == 0u) {
         const AstraVolumeRootRequest *root_request = call->request;
@@ -189,8 +195,77 @@ AstraResult astra_port_receive_try(AstraHandle receive, void *out, uint32_t capa
     queued = 0u; memcpy(out, &notification, sizeof(notification)); *size = sizeof(notification); *count = 0u;
     return ASTRA_OK;
 }
+static void removal_lifecycle(void)
+{
+    AstraVolumeRecord records[2] = {
+        {.id = 5u, .generation = 1u, .kind = ASTRA_VOLUME_MOUNT,
+            .state = ASTRA_VOLUME_QUIESCING},
+        {.id = 3u, .generation = 1u, .kind = ASTRA_VOLUME_SOURCE,
+            .state = ASTRA_VOLUME_UNMOUNTED}
+    };
+    AstraVolumeSnapshot snapshot = {.epoch = 25u, .records = records, .count = 2u};
+    AstraVolumeRemoval removal = {.mount = {25u, 5u, 1u},
+        .image_source = {25u, 3u, 1u}};
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_PENDING && image_releases == 0u);
+    records[0].state = ASTRA_VOLUME_UNMOUNTED;
+    records[0].flags = ASTRA_VOLUME_CLEANUP_PENDING;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_PENDING && image_releases == 0u);
+    records[0].flags = 0u;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_PENDING && image_releases == 1u);
+    assert(removal.source_admitted == 1u);
+    records[1].state = ASTRA_VOLUME_LOST;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_PENDING && image_releases == 1u);
+    snapshot.count = 1u;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_COMPLETE);
+
+    removal = (AstraVolumeRemoval){.mount = {25u, 5u, 1u},
+        .image_source = {25u, 3u, 1u}};
+    snapshot.count = 2u;
+    records[1].generation = 2u;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_PENDING &&
+        removal.source_admitted == 1u && image_releases == 1u);
+    records[1].generation = 1u;
+    removal.source_admitted = 0u;
+    service_failure = ASTRA_STATUS_BUSY;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_PENDING && removal.source_admitted == 0u);
+    service_failure = 0u;
+
+    records[0].state = ASTRA_VOLUME_MOUNTED;
+    records[0].status = ASTRA_STATUS_BUSY;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_REFUSED && removal.status == ASTRA_STATUS_BUSY);
+    records[0].state = ASTRA_VOLUME_FAILED;
+    records[0].status = ASTRA_STATUS_IO;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_RETAINED && removal.status == ASTRA_STATUS_IO);
+    records[0].state = ASTRA_VOLUME_LOST;
+    records[0].status = 0u;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_RETAINED && removal.status == ASTRA_STATUS_LOST);
+    snapshot.epoch = 26u;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_PROVIDER_RETIRED && image_releases == 1u);
+    snapshot.epoch = 25u;
+    removal = (AstraVolumeRemoval){.mount = {25u, 5u, 1u}};
+    snapshot.count = 0u;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
+    assert(removal.state == ASTRA_VOLUME_REMOVAL_COMPLETE);
+    removal.image_source = removal.mount;
+    assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(image_releases == 1u);
+    balanced();
+}
+
 int main(void)
 {
+    removal_lifecycle();
     AstraVolumeControl control = {.reference = {25u, 5u, 1u}, .operation = ASTRA_VOLUME_UNMOUNT};
     AstraVolumeReference admitted;
     assert(astra_volume_control(77u, &control, &admitted) == ASTRA_OK && admitted.id == 8u);

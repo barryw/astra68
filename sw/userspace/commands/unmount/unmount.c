@@ -32,11 +32,15 @@ int main(int argc, char **argv)
     }
     AstraVolumeControl control = {.reference = reference,
         .operation = source_only ? ASTRA_VOLUME_RELEASE_IMAGE_SOURCE : ASTRA_VOLUME_UNMOUNT};
-    if (!volume_cli_apply(&cli, &control, &retired) ||
-        !volume_cli_wait(&cli, &reference, source_only ? 0u : ASTRA_VOLUME_UNMOUNTED, 1, &record)) goto done;
-    if (eject || (!source_only && origin == ASTRA_VOLUME_ORIGIN_IMAGE)) {
+    AstraVolumeRemoval removal = {.mount = reference};
+    if (!source_only && origin == ASTRA_VOLUME_ORIGIN_IMAGE)
+        removal.image_source = parent;
+    if (!volume_cli_apply(&cli, &control, &retired)) goto done;
+    if (source_only ? !volume_cli_wait(&cli, &reference, 0u, 1, &record) :
+            !volume_cli_wait_removal(&cli, &removal)) goto done;
+    if (eject) {
         control.reference = parent;
-        control.operation = eject ? ASTRA_VOLUME_EJECT : ASTRA_VOLUME_RELEASE_IMAGE_SOURCE;
+        control.operation = ASTRA_VOLUME_EJECT;
         if (!volume_cli_apply(&cli, &control, &retired) ||
             !volume_cli_wait(&cli, &parent, 0u, 1, &record)) goto done;
     }

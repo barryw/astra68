@@ -42,7 +42,8 @@ Components accept 255 UTF-8 bytes and native paths accept 4095 bytes, excluding
 the terminating zero. Longer components or paths return
 `ASTRA_VFS_ERR_NAME_TOO_LONG` (native status 23); POSIX maps it to
 `ENAMETOOLONG`. Metadata and continuation payloads retain full-width volume
-references. Every in-tree consumer requires Filesystem ABI 14.0.
+references. Existing consumers require Filesystem ABI 14.0; removal clients
+require 14.1.
 
 ABI 14.0 adds the native volume catalog, complete owned snapshots, subscriptions
 and exact-incarnation root grants. `VOLUMES` conveys metadata only; distinct
@@ -50,6 +51,12 @@ and exact-incarnation root grants. `VOLUMES` conveys metadata only; distinct
 private roots retain their explicit startup grants. A catalog snapshot publishes
 no partial result when its sequence changes between pages. Close snapshot and
 root owners after use. Network mounting is not part of this implementation.
+
+ABI 14.1 adds `astra_volume_removal_advance` for clients that observe an
+admitted unmount. It separates pending cleanup, refusal, retained lost objects,
+provider retirement and actual completion, and releases an image source only
+after its mount retires. `LOST` does not prove that retained backing is gone;
+completion waits for the source record to disappear.
 
 HostFS keeps the position, directory cursor, append and nonblocking flags in
 one shared provider description. Sequential I/O advances its position;

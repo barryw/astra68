@@ -34,6 +34,23 @@ typedef struct AstraVolumeSnapshot {
 /** Empty complete-catalog initializer. */
 #define ASTRA_VOLUME_SNAPSHOT_INIT { 0u, 0u, NULL, 0u }
 
+/** Progress of one admitted unmount and its optional retained image source. */
+enum AstraVolumeRemovalState {
+    ASTRA_VOLUME_REMOVAL_PENDING = 0u,
+    ASTRA_VOLUME_REMOVAL_COMPLETE,
+    ASTRA_VOLUME_REMOVAL_REFUSED,
+    ASTRA_VOLUME_REMOVAL_RETAINED,
+    ASTRA_VOLUME_REMOVAL_PROVIDER_RETIRED
+};
+
+typedef struct AstraVolumeRemoval {
+    AstraVolumeReference mount; /**< Exact admitted mount. */
+    AstraVolumeReference image_source; /**< Optional retained source; all zero otherwise. */
+    uint32_t source_admitted; /**< Source release admitted; wait for actual disappearance. */
+    uint32_t state; /**< AstraVolumeRemovalState after observation. */
+    uint32_t status; /**< Provider status, or LOST if RETAINED has no status. */
+} AstraVolumeRemoval;
+
 /** Owned complete resource snapshot. Failed collection leaves it empty. */
 typedef struct AstraVolumeUsageSnapshot {
     AstraVolumeReference volume; /**< Exact filter, ID zero for every mount. */
@@ -116,6 +133,16 @@ ASTRA_NODISCARD AstraResult astra_volume_catalog(AstraHandle service,
  */
 ASTRA_NODISCARD AstraResult astra_volume_snapshot_open(AstraHandle service,
     AstraVolumeSnapshot *snapshot);
+/** Advance one admitted unmount against a coherent catalog. May admit release
+ * of its image source only after mount retirement; completion requires source
+ * disappearance. LOST alone never proves backing release. The caller chooses
+ * when to observe again and how to present REFUSED/RETAINED/provider loss.
+ * @param administrator VOLUME_ADMIN capability. @param snapshot Complete catalog.
+ * @param removal Exact mount and optional source, retained between observations.
+ * @return ASTRA_OK with updated state/status, or control/argument error.
+ */
+ASTRA_NODISCARD AstraResult astra_volume_removal_advance(AstraHandle administrator,
+    const AstraVolumeSnapshot *snapshot, AstraVolumeRemoval *removal);
 /** Release a complete catalog and reset its owner.
  * @param snapshot Owned snapshot; NULL is ignored.
  */

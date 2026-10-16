@@ -172,3 +172,8 @@ ASTRA_FILESYSTEM_14.0 {
     local:
         *;
 };
+
+ASTRA_FILESYSTEM_14.1 {
+    global:
+        astra_volume_removal_advance;
+} ASTRA_FILESYSTEM_14.0;

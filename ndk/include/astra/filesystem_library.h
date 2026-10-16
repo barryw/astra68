@@ -15,7 +15,7 @@
 /** Current Filesystem Kit ABI major. */
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
 /** Current backward-compatible Filesystem Kit ABI revision. */
-#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 0u
+#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 1u
 enum {
     ASTRA_FILE_SEEK_BEGIN = 0,
     ASTRA_FILE_SEEK_CURRENT = 1,

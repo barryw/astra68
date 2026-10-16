@@ -94,8 +94,9 @@ int volume_cli_select(VolumeCli *cli, const char *selector, uint32_t kind,
     return found;
 }
 
-int volume_cli_wait(VolumeCli *cli, const AstraVolumeReference *reference,
-    uint32_t wanted, int disappearance_completes, AstraVolumeRecord *record)
+static int wait_lifecycle(VolumeCli *cli, const AstraVolumeReference *reference,
+    uint32_t wanted, int disappearance_completes, AstraVolumeRecord *record,
+    AstraVolumeRemoval *removal)
 {
     uint64_t deadline = astra_clock_monotonic() + UINT64_C(60000000000);
     for (;;) {
@@ -109,35 +110,58 @@ int volume_cli_wait(VolumeCli *cli, const AstraVolumeReference *reference,
         AstraVolumeSnapshot snapshot = ASTRA_VOLUME_SNAPSHOT_INIT;
         result = astra_volume_snapshot_open(cli->metadata, &snapshot);
         if (result == ASTRA_OK) {
-            int found = 0;
-            if (snapshot.epoch == reference->epoch)
-                for (uint32_t at = 0u; at < snapshot.count; ++at) {
-                    const AstraVolumeRecord *row = &snapshot.records[at];
-                    if (row->id == reference->id) {
-                        *record = *row;
-                        found = 1;
-                        break;
-                    }
+            if (removal != NULL) {
+                result = astra_volume_removal_advance(cli->administrator, &snapshot, removal);
+                astra_volume_snapshot_close(&snapshot);
+                if (result != ASTRA_OK) {
+                    fprintf(stderr, "volume: removal observation failed (%ld)\n", (long)result);
+                    return 0;
                 }
-            int complete = found ? wanted != 0u && record->generation == reference->generation &&
-                record->state == wanted : disappearance_completes;
-            int failed = found && (record->state == ASTRA_VOLUME_FAILED ||
-                (!disappearance_completes && (record->state == ASTRA_VOLUME_LOST ||
-                    record->generation != reference->generation)) ||
-                (wanted == ASTRA_VOLUME_UNMOUNTED && record->state == ASTRA_VOLUME_MOUNTED) ||
-                (wanted == 0u && record->generation == reference->generation &&
-                    record->state == ASTRA_VOLUME_UNMOUNTED && record->status != ASTRA_STATUS_OK));
-            int epoch_lost = snapshot.epoch != reference->epoch;
-            astra_volume_snapshot_close(&snapshot);
-            if (epoch_lost) {
-                fputs("volume: provider incarnation retired during operation\n", stderr);
-                return 0;
-            }
-            if (complete) return 1;
-            if (!found || failed) {
-                fprintf(stderr, "volume: lifecycle failed (status %u, state %u)\n",
-                    found ? record->status : ASTRA_STATUS_LOST, found ? record->state : ASTRA_VOLUME_LOST);
-                return 0;
+                if (removal->state == ASTRA_VOLUME_REMOVAL_COMPLETE) return 1;
+                if (removal->state == ASTRA_VOLUME_REMOVAL_PROVIDER_RETIRED) {
+                    fputs("volume: provider incarnation retired during operation\n", stderr);
+                    return 0;
+                }
+                if (removal->state == ASTRA_VOLUME_REMOVAL_REFUSED ||
+                    removal->state == ASTRA_VOLUME_REMOVAL_RETAINED) {
+                    fprintf(stderr, "volume: %s (status %u)\n",
+                        removal->state == ASTRA_VOLUME_REMOVAL_REFUSED ?
+                            "unmount refused; volume remains mounted" :
+                            "removal incomplete; storage resources remain retained",
+                        removal->status);
+                    return 0;
+                }
+            } else {
+                int found = 0;
+                if (snapshot.epoch == reference->epoch)
+                    for (uint32_t at = 0u; at < snapshot.count; ++at) {
+                        const AstraVolumeRecord *row = &snapshot.records[at];
+                        if (row->id == reference->id) {
+                            *record = *row;
+                            found = 1;
+                            break;
+                        }
+                    }
+                int complete = found ? wanted != 0u && record->generation == reference->generation &&
+                    record->state == wanted : disappearance_completes;
+                int failed = found && (record->state == ASTRA_VOLUME_FAILED ||
+                    (!disappearance_completes && (record->state == ASTRA_VOLUME_LOST ||
+                        record->generation != reference->generation)) ||
+                    (wanted == ASTRA_VOLUME_UNMOUNTED && record->state == ASTRA_VOLUME_MOUNTED) ||
+                    (wanted == 0u && record->generation == reference->generation &&
+                        record->state == ASTRA_VOLUME_UNMOUNTED && record->status != ASTRA_STATUS_OK));
+                int epoch_lost = snapshot.epoch != reference->epoch;
+                astra_volume_snapshot_close(&snapshot);
+                if (epoch_lost) {
+                    fputs("volume: provider incarnation retired during operation\n", stderr);
+                    return 0;
+                }
+                if (complete) return 1;
+                if (!found || failed) {
+                    fprintf(stderr, "volume: lifecycle failed (status %u, state %u)\n",
+                        found ? record->status : ASTRA_STATUS_LOST, found ? record->state : ASTRA_VOLUME_LOST);
+                    return 0;
+                }
             }
         } else if (result != ASTRA_ERROR_BUSY) {
             fprintf(stderr, "volume: catalog failed after admission (%ld)\n", (long)result);
@@ -158,6 +182,17 @@ int volume_cli_wait(VolumeCli *cli, const AstraVolumeReference *reference,
             return 0;
         }
     }
+}
+
+int volume_cli_wait(VolumeCli *cli, const AstraVolumeReference *reference,
+    uint32_t wanted, int disappearance_completes, AstraVolumeRecord *record)
+{
+    return wait_lifecycle(cli, reference, wanted, disappearance_completes, record, NULL);
+}
+
+int volume_cli_wait_removal(VolumeCli *cli, AstraVolumeRemoval *removal)
+{
+    return wait_lifecycle(cli, &removal->mount, 0u, 0, NULL, removal);
 }
 
 int volume_cli_apply(VolumeCli *cli, const AstraVolumeControl *control,

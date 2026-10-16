@@ -79,9 +79,9 @@ static uint16_t bar_pixels[DESKTOP_SCROLLBAR_WIDTH * DESKTOP_HEIGHT];
 static AstraSurface bar_surface = ASTRA_SURFACE_INIT;
 typedef struct DesktopRemoval {
     struct DesktopRemoval *next;
-    AstraVolumeReference mount, image_source;
-    uint32_t source_admitted;
+    AstraVolumeRemoval operation;
     uint32_t failure;
+    uint32_t reported;
 } DesktopRemoval;
 static DesktopRemoval *removals;
 static uint64_t removal_retry;
@@ -285,8 +285,9 @@ static int can_unmount(const DesktopApps *apps, uint32_t cell)
     if (record->kind != ASTRA_VOLUME_MOUNT || record->state != ASTRA_VOLUME_MOUNTED ||
         (record->flags & (ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_TEMPORARY)) != 0u) return 0;
     for (DesktopRemoval *at = removals; at != NULL; at = at->next)
-        if (at->mount.epoch == apps->volumes.epoch && at->mount.id == record->id &&
-            at->mount.generation == record->generation) return 0;
+        if (at->operation.mount.epoch == apps->volumes.epoch &&
+            at->operation.mount.id == record->id &&
+            at->operation.mount.generation == record->generation) return 0;
     return 1;
 }
 
@@ -310,47 +311,31 @@ static void volume_error(uint32_t gui, const char *message, AstraResult failure)
     AstraResult ignored = astra_interface_show_alert(gui, &info); (void)ignored;
 }
 
-/* The provider may retire successful mount records before the next catalog.
- * Image source release follows actual retirement, never unmount admission. */
 static void removal_complete(const AstraVolumeSnapshot *catalog)
 {
     DesktopRemoval **link = &removals;
     while (*link != NULL) {
         DesktopRemoval *pending = *link;
-        const AstraVolumeRecord *mount = NULL;
-        if (catalog->epoch == pending->mount.epoch)
-            for (uint32_t at = 0u; at < catalog->count; ++at)
-                if (catalog->records[at].id == pending->mount.id)
-                    mount = &catalog->records[at];
-        if (mount != NULL && mount->state == ASTRA_VOLUME_MOUNTED && mount->status != ASTRA_STATUS_OK) {
-            pending->failure = mount->status;
+        AstraResult result = astra_volume_removal_advance(
+            volume_administrator, catalog, &pending->operation);
+        if (result != ASTRA_OK) {
+            (void)astra_log_failure("desktop volume removal", (uint32_t)(-result));
             link = &pending->next;
             continue;
         }
-        int retired = mount == NULL || (mount->state == ASTRA_VOLUME_UNMOUNTED &&
-            (mount->flags & ASTRA_VOLUME_CLEANUP_PENDING) == 0u);
-        if (!retired) { link = &pending->next; continue; }
-        if (pending->image_source.id != 0u && catalog->epoch == pending->image_source.epoch) {
-            const AstraVolumeRecord *source = NULL;
-            for (uint32_t at = 0u; at < catalog->count; ++at)
-                if (catalog->records[at].id == pending->image_source.id) source = &catalog->records[at];
-            /* LOST is publication state, not proof that its retained backing
-             * description and probe/lease resources have actually retired. */
-            if (source != NULL) {
-                /* Loss advances generation before actual cleanup. Object IDs
-                 * never repeat; observation by ID must continue until absent. */
-                if (source->generation != pending->image_source.generation) pending->source_admitted = 1u;
-                if (pending->source_admitted) { link = &pending->next; continue; }
-                AstraVolumeControl release = {.reference = pending->image_source, .operation = ASTRA_VOLUME_RELEASE_IMAGE_SOURCE};
-                AstraVolumeReference admitted = {0};
-                AstraResult result = astra_volume_control(volume_administrator, &release, &admitted);
-                if (result == ASTRA_OK || result == ASTRA_ERROR_INVALID_HANDLE) pending->source_admitted = 1u;
-                if (result != ASTRA_OK && result != ASTRA_ERROR_BUSY && result != ASTRA_ERROR_INVALID_HANDLE)
-                    (void)astra_log_failure("desktop image source release", (uint32_t)(-result));
-                link = &pending->next; continue;
-            }
+        if (pending->operation.state == ASTRA_VOLUME_REMOVAL_REFUSED)
+            pending->failure = pending->operation.status;
+        if (pending->operation.state == ASTRA_VOLUME_REMOVAL_RETAINED &&
+            pending->operation.status != 0u && !pending->reported) {
+            pending->failure = pending->operation.status;
+            pending->reported = 1u;
         }
-        int same_provider = catalog->epoch == pending->mount.epoch;
+        if (pending->operation.state != ASTRA_VOLUME_REMOVAL_COMPLETE &&
+            pending->operation.state != ASTRA_VOLUME_REMOVAL_PROVIDER_RETIRED) {
+            link = &pending->next;
+            continue;
+        }
+        int same_provider = pending->operation.state == ASTRA_VOLUME_REMOVAL_COMPLETE;
         *link = pending->next; astra_runtime_deallocate(pending);
         (void)astra_log(same_provider ? "desktop volume unmounted" : "desktop volume provider retired");
     }
@@ -367,10 +352,13 @@ static AstraResult unmount_icon(void *opaque, const AstraCommandArguments *args)
     const AstraVolumeRecord *record = &context->apps->volumes.records[cell];
     DesktopRemoval *pending = astra_runtime_callocate(1u, sizeof(*pending));
     if (pending == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
-    pending->mount = (AstraVolumeReference){context->apps->volumes.epoch, record->id, record->generation};
+    pending->operation.mount = (AstraVolumeReference){context->apps->volumes.epoch,
+        record->id, record->generation};
     if (record->origin == ASTRA_VOLUME_ORIGIN_IMAGE)
-        pending->image_source = (AstraVolumeReference){pending->mount.epoch, record->parent, record->parent_generation};
-    AstraVolumeControl control = {.reference = pending->mount, .operation = ASTRA_VOLUME_UNMOUNT};
+        pending->operation.image_source = (AstraVolumeReference){
+            pending->operation.mount.epoch, record->parent, record->parent_generation};
+    AstraVolumeControl control = {.reference = pending->operation.mount,
+        .operation = ASTRA_VOLUME_UNMOUNT};
     AstraVolumeReference admitted = {0};
     AstraResult result = astra_volume_control(volume_administrator, &control, &admitted);
     if (result == ASTRA_OK) {
@@ -379,7 +367,7 @@ static AstraResult unmount_icon(void *opaque, const AstraCommandArguments *args)
         (void)astra_log("desktop volume unmount admitted");
         return ASTRA_OK;
     }
-    AstraVolumeReference reference = pending->mount;
+    AstraVolumeReference reference = pending->operation.mount;
     astra_runtime_deallocate(pending);
     if (result == ASTRA_ERROR_BUSY) {
         result = usage_open(context->usage, context->gui, volume_inspector, &process_filesystem, &reference);
@@ -873,14 +861,22 @@ int astra_main(const AstraStartupInfo *startup)
             while (*link != NULL) {
                 DesktopRemoval *failed = *link;
                 if (failed->failure == 0u) { link = &failed->next; continue; }
-                AstraVolumeReference reference = failed->mount;
+                AstraVolumeReference reference = failed->operation.mount;
                 uint32_t failure = failed->failure;
-                *link = failed->next; astra_runtime_deallocate(failed);
+                int refused = failed->operation.state == ASTRA_VOLUME_REMOVAL_REFUSED;
+                if (refused) {
+                    *link = failed->next;
+                    astra_runtime_deallocate(failed);
+                } else {
+                    failed->failure = 0u;
+                    link = &failed->next;
+                }
                 result = failure == ASTRA_STATUS_BUSY ?
                     usage_open(busy_dialog, gui->handle, volume_inspector, &process_filesystem, &reference) :
                     astra_result_from_service(failure);
                 if (result != ASTRA_OK) volume_error(gui->handle,
-                    "The storage provider could not finish unmounting; the volume remains mounted", result);
+                    refused ? "The storage provider refused to unmount; the volume remains mounted" :
+                        "The storage provider could not finish removal; storage resources remain retained", result);
                 break;
             }
         }

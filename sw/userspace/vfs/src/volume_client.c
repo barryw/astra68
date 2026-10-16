@@ -311,6 +311,70 @@ void astra_volume_snapshot_close(AstraVolumeSnapshot *snapshot)
     *snapshot = (AstraVolumeSnapshot)ASTRA_VOLUME_SNAPSHOT_INIT;
 }
 
+AstraResult astra_volume_removal_advance(AstraHandle administrator,
+    const AstraVolumeSnapshot *snapshot, AstraVolumeRemoval *removal)
+{
+    const AstraVolumeRecord *mount = NULL, *source = NULL;
+    AstraVolumeReference admitted = {0};
+    AstraVolumeControl release;
+    AstraResult result;
+    if (administrator == ASTRA_INVALID_HANDLE || snapshot == NULL || removal == NULL ||
+        removal->mount.epoch == 0u || removal->mount.id == 0u ||
+        removal->mount.generation == 0u || snapshot->epoch == 0u ||
+        (snapshot->count != 0u && snapshot->records == NULL) ||
+        (removal->image_source.id == 0u &&
+            (removal->image_source.epoch != 0u || removal->image_source.generation != 0u)) ||
+        (removal->image_source.id != 0u &&
+            (removal->image_source.epoch != removal->mount.epoch ||
+             removal->image_source.generation == 0u ||
+             removal->image_source.id == removal->mount.id)))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    removal->state = ASTRA_VOLUME_REMOVAL_PENDING;
+    removal->status = 0u;
+    if (snapshot->epoch != removal->mount.epoch) {
+        removal->state = ASTRA_VOLUME_REMOVAL_PROVIDER_RETIRED;
+        return ASTRA_OK;
+    }
+    for (uint32_t at = 0u; at < snapshot->count; ++at) {
+        const AstraVolumeRecord *row = &snapshot->records[at];
+        if (row->id == removal->mount.id) mount = row;
+        if (row->id == removal->image_source.id) source = row;
+    }
+    if (mount != NULL) {
+        if (mount->state == ASTRA_VOLUME_MOUNTED && mount->status != 0u &&
+            mount->generation == removal->mount.generation) {
+            removal->state = ASTRA_VOLUME_REMOVAL_REFUSED;
+            removal->status = mount->status;
+            return ASTRA_OK;
+        }
+        if (mount->state == ASTRA_VOLUME_FAILED || mount->state == ASTRA_VOLUME_LOST ||
+            mount->generation != removal->mount.generation ||
+            (mount->state == ASTRA_VOLUME_UNMOUNTED && mount->status != 0u)) {
+            removal->state = ASTRA_VOLUME_REMOVAL_RETAINED;
+            removal->status = mount->status != 0u ? mount->status : ASTRA_STATUS_LOST;
+            return ASTRA_OK;
+        }
+        if (mount->state != ASTRA_VOLUME_UNMOUNTED ||
+            (mount->flags & ASTRA_VOLUME_CLEANUP_PENDING) != 0u)
+            return ASTRA_OK;
+    }
+    if (removal->image_source.id == 0u || source == NULL) {
+        removal->state = ASTRA_VOLUME_REMOVAL_COMPLETE;
+        return ASTRA_OK;
+    }
+    if (source->generation != removal->image_source.generation)
+        removal->source_admitted = 1u;
+    if (removal->source_admitted != 0u) return ASTRA_OK;
+    release = (AstraVolumeControl){.reference = removal->image_source,
+        .operation = ASTRA_VOLUME_RELEASE_IMAGE_SOURCE};
+    result = astra_volume_control(administrator, &release, &admitted);
+    if (result == ASTRA_OK || result == ASTRA_ERROR_INVALID_HANDLE)
+        removal->source_admitted = 1u;
+    else if (result != ASTRA_ERROR_BUSY)
+        return result;
+    return ASTRA_OK;
+}
+
 AstraResult astra_volume_snapshot_open(AstraHandle service, AstraVolumeSnapshot *snapshot)
 {
     if (service == ASTRA_INVALID_HANDLE || snapshot == NULL || snapshot->epoch != 0u ||

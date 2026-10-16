@@ -284,7 +284,7 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.14 14.0.0 ABI 14.0$$'
+		grep -q '^filesystem.library.14 14.1.0 ABI 14.1$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.14]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
@@ -296,6 +296,8 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 	@test "$$($(READELF) -dW $< | awk '/TEXTREL/{n++} END{print n+0}')" = 0
 	@$(READELF) -lW $< | grep ' GNU_RELRO ' >/dev/null
 	@$(READELF) -VW $< | grep 'ASTRA_FILESYSTEM_14.0' >/dev/null
+	@$(READELF) --dyn-syms -W $< | \
+		grep -Eq ' astra_volume_removal_advance@@ASTRA_FILESYSTEM_14\.1$$'
 	@$(READELF) --dyn-syms -W $< | \
 		grep -Eq ' astra_application_catalog_load@@ASTRA_FILESYSTEM_14\.0$$'
 	@ASTRA_LIBRARY_FIXTURE=$(abspath $<) $(KERNEL_ELF_TEST) >/dev/null
