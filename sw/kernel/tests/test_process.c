@@ -2213,6 +2213,47 @@ static void test_preemption_fault_containment_and_teardown(void)
     assert(milestone_calls == 1u);
 }
 
+static void test_reap_retries_after_pinned_owner_frame(void)
+{
+    static const uint8_t image[] = {0x70u, 0x01u, 0x4eu, 0x4fu,
+                                    0x60u, 0xfau, 0x4eu, 0x71u};
+    KernelMemoryStats baseline;
+    KernelMemoryStats final;
+    KernelProcessSnapshot process;
+    KernelCpuContext *next;
+    uint32_t registers[KERNEL_CONTEXT_REGISTER_COUNT] = {0};
+    uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+    uint32_t id;
+    uint32_t pinned;
+
+    initialize_test();
+    assert(kernel_memory_stats(&baseline));
+    assert(kernel_process_create(image, sizeof(image), 0u, 0u, &id) ==
+           KERNEL_PROCESS_OK);
+    assert(kernel_process_snapshot(0u, &process));
+    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, process.owner,
+                               &pinned) == KERNEL_MEMORY_OK);
+    assert(kernel_memory_pin(pinned, 1u, process.owner) == KERNEL_MEMORY_OK);
+    assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+
+    registers[0] = ASTRA_SYSCALL_EXIT;
+    make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+               KERNEL_PROCESS_CODE_BASE + 2u, 0u);
+    assert(kernel_process_on_syscall(registers,
+                                     KERNEL_PROCESS_STACK_TOP - 8u, frame,
+                                     &next) == KERNEL_PROCESS_NO_RUNNABLE);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_DEFERRED);
+    assert(kernel_process_maintenance_pending());
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_DEFERRED);
+    assert(kernel_process_maintenance_pending());
+    assert(kernel_memory_unpin(pinned, 1u, process.owner) ==
+           KERNEL_MEMORY_OK);
+    assert(kernel_process_maintenance() == KERNEL_PROCESS_OK);
+    assert(!kernel_process_maintenance_pending());
+    assert(kernel_memory_stats(&final));
+    assert(final.free_frames == baseline.free_frames);
+}
+
 static void test_soak_relaunches_only_after_exact_teardown(void)
 {
     static const uint8_t image[] = {0x70u, 0x01u, 0x4eu, 0x4fu,
@@ -16358,6 +16399,7 @@ int main(void)
     test_visible_process_ids_start_at_one_and_are_small();
     test_preemption_fault_containment_and_teardown();
     test_soak_relaunches_only_after_exact_teardown();
+    test_reap_retries_after_pinned_owner_frame();
     test_soak_rejects_unexplained_frame_loss();
     test_invalid_creation_does_not_allocate();
     test_multi_page_raw_image_maps_every_page();

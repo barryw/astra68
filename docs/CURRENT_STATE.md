@@ -31,6 +31,55 @@ upper/lower colors. Its raw frame SHA-256 is
 `a2431151cea8c717b1962c8616b9b5d237059889eddc7c915b1cc52ffaae6ba3`.
 Production services returned to stage 8, active with zero restarts.
 
+Long-run kernel stability remains an open release gate. A previous FS14 ROM
+(`443536186af4`, built 2026-10-15) panicked after about 22 guest hours on
+`WAIT_MULTIPLE` with `KERNEL_PROCESS_CORRUPT`; an intermediate graphics
+candidate (`fc05a5`, built 2026-10-16) panicked during deferred worker service
+after repeated remote-desktop exits. Neither panic report identifies the
+failing internal branch. The selected graphics release passed short physical
+trials, not a comparable long soak. Diagnostic-only wait and worker failure
+traces, plus process-maintenance diagnostics, are under test on disposable
+images. A separate deterministic reaper defect was found: after thread
+records were released, a pinned owner frame deferred memory release, and the
+next maintenance pass tried to release the same threads again. Teardown now
+records that completed step; a focused host test failed before the fix and
+passes afterward, including repeated deferred passes. Kernel MC68040 build,
+host suite, and ASan/UBSan process tests pass. This defect has not been tied to
+either historical panic report; stability certification remains open.
+Haiku reference: `~/Git/haiku/src/system/kernel/events/wait_for_objects.cpp`
+registers object selections before sleeping and preserves events arriving
+during registration. Astra retains its native queue-sequence checks; this
+investigation changes failure observation only. `WAIT_FAILURE` trace arguments
+are source line, wait index/count, failing status, thread ID. `WORKER_FAILURE`
+arguments are work mask, class index, service status, worker state. Reap
+maintenance `observed` is source line and `expected` is process/thread ID;
+pool-health `observed` bit order is process, port, area, ring, IRQ, transfer,
+sync, device.
+Haiku `~/Git/haiku/src/system/kernel/team.cpp:team_delete_team` also separates
+team exit from final reference release. Astra keeps its native reaper and
+records completed teardown phases across `KERNEL_MEMORY_BUSY` retries.
+
+Beast QEMU panic soaks on disposable images passed 600 seconds each with 65
+remote-desktop retries, before and after the reaper fix. The fixed ROM SHA-256
+is `beb3dea8a0958263f76f7d1ec82038c9287b14982a946930599b9012cf0c5ccf`.
+An isolated DE25 run of the pre-fix diagnostic ROM reached stage 8 and ran
+about nine guest minutes with 58 remote-desktop retries and no panic; the
+fixed ROM reached stage 8 and ran about nine guest minutes with 56 retries and
+no panic. Both trials used disposable storage; their evidence is under
+`/var/tmp/astra-panic-trial-20261016b/` and
+`/var/tmp/astra-panic-trial-20261016c/` on DE25. The first launcher attempt
+failed before guest boot because the disposable audio-mailbox directory was
+root-owned; the corrected launcher passed. Production state was never used as
+trial storage. Production returned to stage 8 with runtime, audio, and remote
+services active and zero automatic restarts. The selected release remains
+`57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`.
+A 24-hour Beast QEMU soak of the fixed ROM is running as user unit
+`astra-panic-fixed-24h.service`; progress is in
+`/var/tmp/astra-panic-fixed-24h.log` on Beast. Its completion and any exact
+failure trace remain the long-run release gate, especially for the historical
+22-hour `WAIT_MULTIPLE` panic. The fixed ROM is diagnostic only, not selected
+on DE25.
+
 Font-management work is isolated from production storage. Interface Kit 6.0
 adds a shared, composed List control with an Interface Gallery consumer and
 requires draw-list views for native controls and menus. This ABI bump is

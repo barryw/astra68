@@ -4,6 +4,7 @@
 #include "performance.h"
 #include "platform.h"
 #include "process.h"
+#include "trace.h"
 
 #include <assert.h>
 #include <stdbool.h>
@@ -23,6 +24,21 @@ static uint32_t monitor_calls;
 static uint32_t monitor_last_batch;
 static uint32_t device_calls;
 static uint32_t staged_trace_records;
+static KernelTraceEvent failure_event;
+static uint32_t failure_arguments[4];
+
+bool kernel_trace_write(KernelTraceEvent event, uint16_t flags,
+                        uint32_t argument0, uint32_t argument1,
+                        uint32_t argument2, uint32_t argument3)
+{
+    assert(flags == KERNEL_TRACE_LEVEL_ERROR);
+    failure_event = event;
+    failure_arguments[0] = argument0;
+    failure_arguments[1] = argument1;
+    failure_arguments[2] = argument2;
+    failure_arguments[3] = argument3;
+    return true;
+}
 
 uint32_t kernel_trace_flush_staged(uint32_t batch_limit)
 {
@@ -304,6 +320,20 @@ static void test_trace_flush_is_bounded_and_retried(void)
     assert(stats.class_retries[4] == 1u);
 }
 
+static void test_maintenance_failure_identifies_worker_class(void)
+{
+    maintenance_result = KERNEL_PROCESS_CORRUPT;
+    assert(kernel_worker_signal(KERNEL_WORKER_PROCESS_REAP) ==
+           KERNEL_WORKER_OK);
+    assert(kernel_worker_try_select());
+    assert(kernel_worker_test_service_once() == KERNEL_WORKER_CORRUPT);
+    assert(failure_event == KERNEL_TRACE_EVENT_WORKER_FAILURE);
+    assert(failure_arguments[0] == KERNEL_WORKER_PROCESS_REAP);
+    assert(failure_arguments[1] == 0u);
+    assert(failure_arguments[2] == KERNEL_PROCESS_CORRUPT);
+    assert(failure_arguments[3] == KERNEL_WORKER_RUNNING);
+}
+
 int main(void)
 {
     kernel_performance_init();
@@ -312,7 +342,8 @@ int main(void)
     test_registered_service_is_bounded_and_retried();
     test_device_batch_is_measured();
     test_trace_flush_is_bounded_and_retried();
-    assert(save_disable_calls == 6u);
+    test_maintenance_failure_identifies_worker_class();
+    assert(save_disable_calls == 7u);
     assert(restore_calls == save_disable_calls);
     puts("worker tests passed");
     return 0;

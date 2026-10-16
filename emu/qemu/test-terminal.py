@@ -756,7 +756,8 @@ class TraceReader:
                         int(match.group(index)) for index in range(2, 6))
                     return left + width // 2, top + height // 2
             if time.monotonic() >= end:
-                raise RuntimeError("the desktop never placed %s" % bundle)
+                raise RuntimeError("the desktop never placed %s; recent logs:\n%s" %
+                                   (bundle, "\n".join(lines[-30:])))
             time.sleep(0.25)
 
 

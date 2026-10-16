@@ -1,5 +1,32 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-16: kernel panic diagnostic trials on retained route
+
+- Source: uncommitted kernel diagnostic worktree based on
+  `3703da1b2eadb73d256ace14da66345387355430`, built on Beast. Pre-fix
+  diagnostic ROM SHA-256 is
+  `4aec10afd3391dc1e08dcd0717e0d730bd41bf4e5edcb83ff6a408f034961fbd`;
+  reaper-retry fix ROM SHA-256 is
+  `beb3dea8a0958263f76f7d1ec82038c9287b14982a946930599b9012cf0c5ccf`.
+  Neither is an immutable release or selected production ROM.
+- DE25 disposable trials used the current release's read-only 256 MiB base
+  image, never production user state. Both reached stage 8. Pre-fix ROM ran
+  about nine guest minutes with 58 remote-desktop retries; fixed ROM ran
+  about nine guest minutes with 56 retries. Neither wrote a panic report.
+  Evidence: `/var/tmp/astra-panic-trial-20261016b/` and
+  `/var/tmp/astra-panic-trial-20261016c/` on DE25. An initial launcher attempt
+  failed before guest boot because the disposable audio-mailbox directory was
+  root-owned; correcting trial directory ownership resolved it. Production
+  runtime/audio/remote services returned to stage 8 with zero automatic
+  restarts after each trial.
+- No RTL, constraints, synthesis, placement, route, or bitstream changed.
+  Retained `b61dbda8` full-feature route remains 40,854/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM blocks, 67/376 DSPs;
+  prior measured graphics setup +0.262 ns, worst setup +0.130 ns, worst hold
+  +0.001 ns, all production clocks constrained. No new route or failed cone
+  was measured. Disposition: software panic diagnosis continues; 24-hour Beast
+  soak and immutable-release gate remain open.
+
 ## 2026-10-16: production graphics cutover on retained route
 
 - Beast installed immutable source manifest

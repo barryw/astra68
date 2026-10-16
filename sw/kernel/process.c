@@ -243,6 +243,7 @@ typedef struct KernelProcess {
     uint8_t supervisor_guard_pages;
     uint8_t handles_closed;
     uint8_t address_space_destroyed;
+    uint8_t threads_released;
     uint8_t host_used;
     uint8_t suspended;
     uint8_t dynamic_state;
@@ -671,6 +672,12 @@ static KernelProcessStatus maintenance_failed(
     return status;
 }
 
+static KernelProcessStatus reap_corrupt(
+    KernelProcessMaintenanceFailure failure, uint32_t line, uint32_t id)
+{
+    return maintenance_failed(failure, KERNEL_PROCESS_CORRUPT, line, id);
+}
+
 /* A thread may begin in either the program or an attached shared library. */
 static bool entry_within_code(const KernelProcess *process, uint32_t entry)
 {
@@ -877,6 +884,21 @@ static bool process_pool_healthy(void)
 {
     return process_pool_corrupt == 0u;
 }
+
+#if !defined(KERNEL_PROCESS_HOST_TEST)
+static uint32_t process_subsystem_unhealthy(void)
+{
+    /* Bits: process, port, area, ring, IRQ, transfer, sync, device. */
+    return ((uint32_t)!process_pool_healthy() << 0) |
+           ((uint32_t)!kernel_port_pool_healthy() << 1) |
+           ((uint32_t)!kernel_area_pool_healthy() << 2) |
+           ((uint32_t)!kernel_ring_pool_healthy() << 3) |
+           ((uint32_t)!kernel_irq_pool_healthy() << 4) |
+           ((uint32_t)!kernel_handle_transfer_pool_healthy() << 5) |
+           ((uint32_t)!kernel_sync_pool_healthy() << 6) |
+           ((uint32_t)!kernel_device_pool_healthy() << 7);
+}
+#endif
 
 static bool process_pool_valid(void)
 {
@@ -1705,7 +1727,8 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
 
     kernel_interrupt_restore(futex_saved_status);
     if (futex_status != KERNEL_FUTEX_OK)
-        return KERNEL_PROCESS_CORRUPT;
+        return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                            process->id);
 
     if (process->handles_closed == 0u) {
         uint32_t revoked_leases = 0u;
@@ -1723,9 +1746,11 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
         if (device_status != KERNEL_DEVICE_OK &&
             device_status != KERNEL_DEVICE_QUIESCE_FAILED &&
             device_status != KERNEL_DEVICE_RESET_FAILED)
-            return KERNEL_PROCESS_CORRUPT;
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                                process->id);
         if (!display_dma_abort_owner(process->owner))
-            return KERNEL_PROCESS_CORRUPT;
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                                process->id);
         (void)revoked_leases;
         (void)kernel_handle_close_all(process->handles);
         process->self_handle = KERNEL_HANDLE_INVALID;
@@ -1735,20 +1760,22 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
             !kernel_handle_transfer_pool_valid() ||
             !kernel_irq_pool_valid() || !kernel_device_pool_valid() ||
             !process_pool_valid())
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                                process->id);
 #else
-        if (!kernel_sync_pool_healthy() || !kernel_port_pool_healthy() ||
-            !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
-            !kernel_irq_pool_healthy() ||
-            !kernel_handle_transfer_pool_healthy() ||
-            !kernel_device_pool_healthy() ||
-            !process_pool_healthy())
+        uint32_t unhealthy = process_subsystem_unhealthy();
+
+        if (unhealthy != 0u)
+            return maintenance_failed(
+                KERNEL_PROCESS_MAINTENANCE_POOL_HEALTH,
+                KERNEL_PROCESS_CORRUPT, unhealthy, 0u);
 #endif
-            return KERNEL_PROCESS_CORRUPT;
         process->handles_closed = 1u;
     }
     if (kernel_block_revoke_owner(process->owner, &released_buffers,
                                   &deferred_buffers) != KERNEL_BLOCK_OK)
-        return KERNEL_PROCESS_CORRUPT;
+        return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                            process->id);
     (void)released_buffers;
     if (process->address_space_destroyed == 0u) {
         /*
@@ -1767,7 +1794,8 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
         if (deactivated != KERNEL_VM_OK ||
             kernel_vm_destroy_address_space(&process->address_space) !=
             KERNEL_VM_OK)
-            return KERNEL_PROCESS_CORRUPT;
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                                process->id);
         process->address_space_destroyed = 1u;
     }
     if (deferred_buffers != 0u)
@@ -1776,25 +1804,33 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
         uint32_t peak_frames = 0u;
 
         if (!kernel_memory_owner_usage(process->owner, NULL, &peak_frames))
-            return KERNEL_PROCESS_CORRUPT;
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                                process->id);
         if (peak_frames > process->peak_resident_frames)
             process->peak_resident_frames = peak_frames;
     }
-    if (kernel_thread_release_process(process->slot) != KERNEL_THREAD_OK)
-        return KERNEL_PROCESS_CORRUPT;
+    if (process->threads_released == 0u) {
+        if (kernel_thread_release_process(process->slot) != KERNEL_THREAD_OK)
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                                process->id);
+        process->threads_released = 1u;
+    }
     switch (kernel_memory_release_owner(process->owner, &released_frames)) {
     case KERNEL_MEMORY_OK:
         break;
     case KERNEL_MEMORY_BUSY:
         return KERNEL_PROCESS_DEFERRED;
     default:
-        return KERNEL_PROCESS_CORRUPT;
+        return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                            process->id);
     }
     if (!kernel_memory_unprotect_owner(process->owner))
-        return KERNEL_PROCESS_CORRUPT;
+        return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                            process->id);
     scheduler_stats.forced_frame_releases += released_frames;
     if (exiting_process_count == 0u)
-        return KERNEL_PROCESS_CORRUPT;
+        return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                            process->id);
     --exiting_process_count;
     process->process_state = KERNEL_PROCESS_DEAD;
     process->live_threads = 0u;
@@ -1805,7 +1841,8 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
     process->supervisor_stack_pages = 0u;
     process->supervisor_guard_pages = 0u;
     if (kernel_thread_wait_queue_count(&process->death_waiters) != 0u)
-        return KERNEL_PROCESS_CORRUPT;
+        return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_REAP, __LINE__,
+                            process->id);
     if (process->exit_reason == KERNEL_PROCESS_EXIT_USER_FAULT)
         ++scheduler_stats.completed_user_fault_teardowns;
     ++scheduler_stats.dead_processes;
@@ -1826,22 +1863,27 @@ static KernelProcessStatus finish_thread_reaps(void)
         if (thread == NULL || thread->reap_pending == 0u)
             continue;
         if (thread->state != KERNEL_THREAD_DEAD)
-            return KERNEL_PROCESS_CORRUPT;
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_THREAD_REAP,
+                                __LINE__, thread->id);
         process = process_at_slot(thread->process_slot);
         if (process == NULL)
-            return KERNEL_PROCESS_CORRUPT;
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_THREAD_REAP,
+                                __LINE__, thread->id);
         if (process->process_state == KERNEL_PROCESS_EXITING)
             continue;
         if (process->process_state != KERNEL_PROCESS_CREATED &&
             process->process_state != KERNEL_PROCESS_RUNNING)
-            return KERNEL_PROCESS_CORRUPT;
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_THREAD_REAP,
+                                __LINE__, thread->id);
         if (thread->stack_slot >= KERNEL_PROCESS_THREAD_SLOT_COUNT)
-            return KERNEL_PROCESS_CORRUPT;
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_THREAD_REAP,
+                                __LINE__, thread->id);
         performance = kernel_performance_begin(
             KERNEL_PERFORMANCE_THREAD_REAP);
         if (host_channel_close(process, thread) != ASTRA_SYSCALL_OK) {
             kernel_performance_end(performance);
-            return KERNEL_PROCESS_CORRUPT;
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_THREAD_REAP,
+                                __LINE__, thread->id);
         }
         stack_bit = astra_u64_bit(thread->stack_slot);
         if (thread->stack_released == 0u) {
@@ -1861,7 +1903,8 @@ static KernelProcessStatus finish_thread_reaps(void)
                 process->user_stack_pages < committed ||
                 process->user_guard_pages == 0u) {
                 kernel_performance_end(performance);
-                return KERNEL_PROCESS_CORRUPT;
+                return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_THREAD_REAP,
+                                    __LINE__, thread->id);
             }
             for (uint32_t page = 0u; page < committed; ++page) {
                 if (kernel_vm_unmap_page(
@@ -1869,7 +1912,9 @@ static KernelProcessStatus finish_thread_reaps(void)
                         thread->user_stack_base +
                             (page * KERNEL_PAGE_SIZE)) != KERNEL_VM_OK) {
                     kernel_performance_end(performance);
-                    return KERNEL_PROCESS_CORRUPT;
+                    return reap_corrupt(
+                        KERNEL_PROCESS_MAINTENANCE_THREAD_REAP, __LINE__,
+                        thread->id);
                 }
             }
             for (uint32_t page = 0u; page < thread->tls_pages; ++page) {
@@ -1878,7 +1923,9 @@ static KernelProcessStatus finish_thread_reaps(void)
                         thread->tls_base + page * KERNEL_PAGE_SIZE) !=
                     KERNEL_VM_OK) {
                     kernel_performance_end(performance);
-                    return KERNEL_PROCESS_CORRUPT;
+                    return reap_corrupt(
+                        KERNEL_PROCESS_MAINTENANCE_THREAD_REAP, __LINE__,
+                        thread->id);
                 }
             }
             thread->tls_base = 0u;
@@ -1891,7 +1938,8 @@ static KernelProcessStatus finish_thread_reaps(void)
         if (kernel_thread_finish_reap(thread, &released) !=
             KERNEL_THREAD_OK) {
             kernel_performance_end(performance);
-            return KERNEL_PROCESS_CORRUPT;
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_THREAD_REAP,
+                                __LINE__, thread->id);
         }
         if (!released) {
             kernel_performance_end(performance);
@@ -1903,7 +1951,8 @@ static KernelProcessStatus finish_thread_reaps(void)
             process->supervisor_guard_pages <
                 KERNEL_THREAD_SUPERVISOR_GUARD_SIZE / KERNEL_PAGE_SIZE) {
             kernel_performance_end(performance);
-            return KERNEL_PROCESS_CORRUPT;
+            return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_THREAD_REAP,
+                                __LINE__, thread->id);
         }
         --process->thread_count;
         process->supervisor_stack_pages -=
@@ -9335,6 +9384,22 @@ static KernelRingEndpoint ring_endpoint_for_type(KernelObjectType type)
         KERNEL_RING_ENDPOINT_PRODUCER : KERNEL_RING_ENDPOINT_CONSUMER;
 }
 
+static void trace_wait_failure(uint32_t line, uint32_t index,
+                               uint32_t detail)
+{
+    (void)kernel_trace_write(KERNEL_TRACE_EVENT_WAIT_FAILURE,
+                             KERNEL_TRACE_LEVEL_ERROR, line, index, detail,
+                             scheduler_stats.current_thread_id);
+}
+
+static KernelProcessStatus wait_handle_set_corrupt(uint32_t line,
+                                                   uint32_t index,
+                                                   uint32_t detail)
+{
+    trace_wait_failure(line, index, detail);
+    return KERNEL_PROCESS_CORRUPT;
+}
+
 static KernelProcessStatus wait_handle_set(
     KernelProcess *process, KernelThread *thread,
     const KernelHandle *handles, uint32_t count, uint64_t now,
@@ -9371,7 +9436,8 @@ static KernelProcessStatus wait_handle_set(
             return KERNEL_PROCESS_OK;
         }
         if (handle_status != KERNEL_HANDLE_OK || object == NULL)
-            return KERNEL_PROCESS_CORRUPT;
+            return wait_handle_set_corrupt(__LINE__, index,
+                                           (uint32_t)handle_status);
         if (type != KERNEL_OBJECT_SYNC && type != KERNEL_OBJECT_TIMER &&
             type != KERNEL_OBJECT_THREAD && type != KERNEL_OBJECT_PROCESS &&
             type != KERNEL_OBJECT_PORT_SEND &&
@@ -9408,7 +9474,7 @@ static KernelProcessStatus wait_handle_set(
         } else if (kernel_handle_lookup_any(
                        process->handles, handles[index], ASTRA_RIGHT_WAIT,
                        &type, &object) != KERNEL_HANDLE_OK || object == NULL) {
-            return KERNEL_PROCESS_CORRUPT;
+            return wait_handle_set_corrupt(__LINE__, index, 0u);
         }
 
         if (type == KERNEL_OBJECT_SYNC || type == KERNEL_OBJECT_TIMER) {
@@ -9424,7 +9490,8 @@ static KernelProcessStatus wait_handle_set(
             if (sync_status == KERNEL_SYNC_CLOSED) {
                 wait_result = kernel_sync_terminal_result(sync);
                 if (wait_result == ASTRA_SYSCALL_OK)
-                    return KERNEL_PROCESS_CORRUPT;
+                    return wait_handle_set_corrupt(__LINE__, index,
+                                                   (uint32_t)sync_status);
                 *syscall_result = wait_result;
                 if (multiple)
                     set_wait_outputs(thread, true, index, 0u);
@@ -9437,7 +9504,9 @@ static KernelProcessStatus wait_handle_set(
             if (sync_status != KERNEL_SYNC_BLOCKED)
                 return sync_status == KERNEL_SYNC_INVALID_ARGUMENT ||
                                sync_status == KERNEL_SYNC_INVALID_STATE ?
-                    KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
+                    KERNEL_PROCESS_INVALID_STATE :
+                    wait_handle_set_corrupt(__LINE__, index,
+                                            (uint32_t)sync_status);
         } else if (type == KERNEL_OBJECT_PORT_SEND ||
                    type == KERNEL_OBJECT_PORT_RECEIVE) {
             KernelPortEndpoint endpoint =
@@ -9471,7 +9540,9 @@ static KernelProcessStatus wait_handle_set(
             if (port_status != KERNEL_PORT_WOULD_BLOCK)
                 return port_status == KERNEL_PORT_INVALID_ARGUMENT ||
                                port_status == KERNEL_PORT_INVALID_STATE ?
-                    KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
+                    KERNEL_PROCESS_INVALID_STATE :
+                    wait_handle_set_corrupt(__LINE__, index,
+                                            (uint32_t)port_status);
         } else if (type == KERNEL_OBJECT_RING_PRODUCER ||
                    type == KERNEL_OBJECT_RING_CONSUMER) {
             KernelRingStatus ring_status = kernel_ring_prepare_wait(
@@ -9484,7 +9555,8 @@ static KernelProcessStatus wait_handle_set(
             }
             if (ring_status != KERNEL_RING_WOULD_BLOCK) {
                 if (!ring_status_to_syscall(ring_status, syscall_result))
-                    return KERNEL_PROCESS_CORRUPT;
+                    return wait_handle_set_corrupt(__LINE__, index,
+                                                   (uint32_t)ring_status);
                 if (multiple)
                     set_wait_outputs(thread, true, index, 0u);
                 return KERNEL_PROCESS_OK;
@@ -9503,7 +9575,8 @@ static KernelProcessStatus wait_handle_set(
                     read_status != KERNEL_IRQ_OVERFLOW &&
                     read_status != KERNEL_IRQ_STORM &&
                     read_status != KERNEL_IRQ_DEVICE_ERROR)
-                    return KERNEL_PROCESS_CORRUPT;
+                    return wait_handle_set_corrupt(__LINE__, index,
+                                                   (uint32_t)read_status);
                 set_wait_outputs(thread, multiple, index, event_flags);
                 return KERNEL_PROCESS_OK;
             }
@@ -9516,7 +9589,9 @@ static KernelProcessStatus wait_handle_set(
             if (irq_status != KERNEL_IRQ_WOULD_BLOCK)
                 return irq_status == KERNEL_IRQ_INVALID_ARGUMENT ||
                                irq_status == KERNEL_IRQ_INVALID_STATE ?
-                    KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
+                    KERNEL_PROCESS_INVALID_STATE :
+                    wait_handle_set_corrupt(__LINE__, index,
+                                            (uint32_t)irq_status);
         } else if (type == KERNEL_OBJECT_THREAD) {
             bool ready;
             KernelThreadStatus thread_status =
@@ -9530,7 +9605,8 @@ static KernelProcessStatus wait_handle_set(
                 return KERNEL_PROCESS_OK;
             }
             if (thread_status != KERNEL_THREAD_OK)
-                return KERNEL_PROCESS_CORRUPT;
+                return wait_handle_set_corrupt(__LINE__, index,
+                                               (uint32_t)thread_status);
             if (ready) {
                 *syscall_result = wait_result;
                 set_wait_outputs(thread, multiple, index, detail);
@@ -9549,7 +9625,8 @@ static KernelProcessStatus wait_handle_set(
                 return KERNEL_PROCESS_OK;
             }
             if (process_status != KERNEL_PROCESS_OK)
-                return KERNEL_PROCESS_CORRUPT;
+                return wait_handle_set_corrupt(__LINE__, index,
+                                               (uint32_t)process_status);
             if (ready) {
                 *syscall_result = wait_result;
                 set_wait_outputs(thread, multiple, index, detail);
@@ -9588,7 +9665,9 @@ static KernelProcessStatus wait_handle_set(
         return thread_status == KERNEL_THREAD_INVALID_ARGUMENT ||
                        thread_status == KERNEL_THREAD_INVALID_STATE ||
                        thread_status == KERNEL_THREAD_CONDITION_CHANGED ?
-            KERNEL_PROCESS_INVALID_STATE : KERNEL_PROCESS_CORRUPT;
+            KERNEL_PROCESS_INVALID_STATE :
+            wait_handle_set_corrupt(__LINE__, count,
+                                    (uint32_t)thread_status);
 
     for (uint32_t index = 0u; index < count; ++index) {
         KernelObjectType type;
@@ -9600,11 +9679,12 @@ static KernelProcessStatus wait_handle_set(
         } else if (kernel_handle_lookup_any(
                        process->handles, handles[index], ASTRA_RIGHT_WAIT,
                        &type, &object) != KERNEL_HANDLE_OK || object == NULL) {
-            return KERNEL_PROCESS_CORRUPT;
+            return wait_handle_set_corrupt(__LINE__, index, 0u);
         }
         if (type == KERNEL_OBJECT_SYNC || type == KERNEL_OBJECT_TIMER) {
             if (kernel_sync_commit_wait(object) != KERNEL_SYNC_OK)
-                return KERNEL_PROCESS_CORRUPT;
+                return wait_handle_set_corrupt(__LINE__, index,
+                                               (uint32_t)type);
         } else if (type == KERNEL_OBJECT_PORT_SEND ||
                    type == KERNEL_OBJECT_PORT_RECEIVE) {
             KernelPortEndpoint endpoint =
@@ -9614,25 +9694,30 @@ static KernelProcessStatus wait_handle_set(
 
             if (kernel_port_commit_wait(object, endpoint) !=
                 KERNEL_PORT_OK)
-                return KERNEL_PROCESS_CORRUPT;
+                return wait_handle_set_corrupt(__LINE__, index,
+                                               (uint32_t)type);
         } else if (type == KERNEL_OBJECT_RING_PRODUCER ||
                    type == KERNEL_OBJECT_RING_CONSUMER) {
             if (kernel_ring_commit_wait(object,
                                         ring_endpoint_for_type(type)) !=
                 KERNEL_RING_OK)
-                return KERNEL_PROCESS_CORRUPT;
+                return wait_handle_set_corrupt(__LINE__, index,
+                                               (uint32_t)type);
         } else if (type == KERNEL_OBJECT_IRQ) {
             if (kernel_irq_commit_wait(object) != KERNEL_IRQ_OK)
-                return KERNEL_PROCESS_CORRUPT;
+                return wait_handle_set_corrupt(__LINE__, index,
+                                               (uint32_t)type);
         } else if (type == KERNEL_OBJECT_THREAD) {
             if (kernel_thread_commit_death_wait(object) !=
                 KERNEL_THREAD_OK)
-                return KERNEL_PROCESS_CORRUPT;
+                return wait_handle_set_corrupt(__LINE__, index,
+                                               (uint32_t)type);
             ++scheduler_stats.thread_death_waits;
         } else {
             if (commit_process_death_wait(object) !=
                 KERNEL_PROCESS_OK)
-                return KERNEL_PROCESS_CORRUPT;
+                return wait_handle_set_corrupt(__LINE__, index,
+                                               (uint32_t)type);
         }
     }
     *blocked = true;
@@ -10765,8 +10850,12 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     *next_context = NULL;
     status = capture_current(registers, user_stack, raw_frame,
                              ASTRA_SYSCALL_VECTOR, &current, &thread);
-    if (status != KERNEL_PROCESS_OK)
+    if (status != KERNEL_PROCESS_OK) {
+        if (registers != NULL && registers[0] == ASTRA_SYSCALL_WAIT_MULTIPLE)
+            trace_wait_failure(__LINE__, ASTRA_WAIT_INDEX_NONE,
+                               (uint32_t)status);
         return status;
+    }
     ++thread->syscall_count;
     if (++scheduler_stats.total_syscalls_low == 0u)
         ++scheduler_stats.total_syscalls_high;
@@ -14225,7 +14314,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             break;
         }
         if (copy_status != KERNEL_USER_COPY_OK)
-            return KERNEL_PROCESS_CORRUPT;
+            return wait_handle_set_corrupt(__LINE__, count,
+                                           (uint32_t)copy_status);
         now = scheduler_cycles();
         status = wait_handle_set(current, thread, handles, count, now,
                                  deadline_cycles, true, port_probe_handle,
@@ -14237,8 +14327,10 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         ++scheduler_stats.wait_blocks;
         status = schedule_next(SWITCH_BLOCK, next_context);
         if (status != KERNEL_PROCESS_OK &&
-            status != KERNEL_PROCESS_NO_RUNNABLE)
+            status != KERNEL_PROCESS_NO_RUNNABLE) {
+            trace_wait_failure(__LINE__, count, (uint32_t)status);
             return status;
+        }
         check_milestone();
         return status;
     }
@@ -14519,8 +14611,12 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         wake_preemption_pending ||
         ready_thread_outranks(thread)) {
         status = schedule_pending(next_context, false);
-        if (status != KERNEL_PROCESS_OK)
+        if (status != KERNEL_PROCESS_OK) {
+            if (syscall == ASTRA_SYSCALL_WAIT_MULTIPLE)
+                trace_wait_failure(__LINE__, ASTRA_WAIT_INDEX_NONE,
+                                   (uint32_t)status);
             return status;
+        }
     } else {
         *next_context = runtime_resume(thread);
     }
@@ -14712,17 +14808,21 @@ KernelProcessStatus kernel_process_maintenance(void)
 {
     KernelProcessStatus status = KERNEL_PROCESS_OK;
 
+    kernel_bytes_clear(&maintenance_diagnostics,
+                       sizeof(maintenance_diagnostics));
 #if defined(KERNEL_PROCESS_HOST_TEST)
     if (!process_pool_valid())
+        return maintenance_failed(KERNEL_PROCESS_MAINTENANCE_POOL_HEALTH,
+                                  KERNEL_PROCESS_CORRUPT, 1u, 0u);
 #else
     if (!process_pool_healthy() || !kernel_port_pool_healthy() ||
         !kernel_area_pool_healthy() || !kernel_ring_pool_healthy() ||
         !kernel_irq_pool_healthy() ||
         !kernel_handle_transfer_pool_healthy())
+        return maintenance_failed(KERNEL_PROCESS_MAINTENANCE_POOL_HEALTH,
+                                  KERNEL_PROCESS_CORRUPT,
+                                  process_subsystem_unhealthy(), 0u);
 #endif
-        return KERNEL_PROCESS_CORRUPT;
-    kernel_bytes_clear(&maintenance_diagnostics,
-                       sizeof(maintenance_diagnostics));
 
     if (kernel_irq_revocation_pending()) {
         if (!kernel_interrupt_schedule_device_reset())
@@ -14749,10 +14849,14 @@ KernelProcessStatus kernel_process_maintenance(void)
                 KERNEL_PROCESS_CORRUPT, (uint32_t)block_status,
                 (uint32_t)KERNEL_BLOCK_OK);
         status = kernel_process_reap_deferred();
-        if (status != KERNEL_PROCESS_OK)
+        if (status != KERNEL_PROCESS_OK) {
+            if (maintenance_diagnostics.failure !=
+                KERNEL_PROCESS_MAINTENANCE_NONE)
+                return status;
             return maintenance_failed(KERNEL_PROCESS_MAINTENANCE_REAP,
                                       status, (uint32_t)status,
                                       (uint32_t)KERNEL_PROCESS_OK);
+        }
     }
 #if ASTRA_KERNEL_SOAK_SELFTEST
     if (soak_state.enabled != 0u &&
