@@ -38,6 +38,12 @@ STORAGE_PROVIDER_SOURCES := astra_storage_provider.c astra_storage_discovery.c a
 	astra_storage_mount.c astra_storage_probe.c astra_storage_path.c astra_storage_work.c \
 	astra_storage_transport.c \
 	$(STORAGE_RESOLVER)/astra68-resolve.c $(ROOT)/sw/common/utf8.c
+FONT_CONVERT_SOURCES := astra_font_convert.c test_font_convert.c \
+	$(ROOT)/sw/common/utf8.c ../../arty/linux/astra_sha256.c
+FONT_CODEC := $(ROOT)/sw/common/build/host/libastraafnt.a
+FONT_CONVERT_FLAGS = -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
+	-I$(ROOT)/sw/include -I$(ROOT)/ndk/include \
+	$(shell pkg-config --cflags freetype2)
 STORAGE_HEADERS := astra_storage_catalog.h astra_storage_discovery.h astra_storage_probe.h \
 	astra_storage_mount.h astra_storage_path.h astra_storage_provider.h \
 	astra_storage_work.h astra_storage_transport.h \
@@ -56,6 +62,7 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 	storage-catalog-sanitize storage-catalog-target-test storage-probe-test \
 	storage-probe-target-test storage-mount-test storage-path-test storage-provider-test
 .PHONY: storage-provider-sanitize
+.PHONY: font-convert-test font-convert-sanitize
 .PHONY: storage-cleanup-test storage-cleanup-sanitize
 .PHONY: storage-provider storage-provider-target
 .PHONY: storage-launcher-test
@@ -89,6 +96,27 @@ $(OUT)/astra-storage-aarch64: $(STORAGE_PROVIDER_SOURCES) astra_storage_main.c $
 		-Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu -lblkid -lmount -ludev
 
 all: $(CERTIFIER) $(BANDWIDTH)
+
+$(FONT_CODEC): $(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/common/Makefile
+	$(MAKE) -C $(ROOT)/sw/common host
+
+$(OUT)/test-font-convert: $(FONT_CONVERT_SOURCES) $(FONT_CODEC) astra_font_convert.h Makefile
+	mkdir -p $(OUT)
+	$(HOST_CC) $(FONT_CONVERT_FLAGS) $(FONT_CONVERT_SOURCES) $(FONT_CODEC) \
+		-o $@ $(shell pkg-config --libs freetype2)
+
+font-convert-test: $(OUT)/test-font-convert
+	cd $(CURDIR) && $(abspath $<)
+
+font-convert-sanitize:
+	mkdir -p $(OUT)
+	$(HOST_CC) $(FONT_CONVERT_FLAGS) -fsanitize=address,undefined \
+		-fno-omit-frame-pointer $(FONT_CONVERT_SOURCES) \
+		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
+		-o $(OUT)/test-font-convert-sanitize \
+		$(shell pkg-config --libs freetype2)
+	cd $(CURDIR) && $(abspath $(OUT)/test-font-convert-sanitize)
 
 modules:
 	test "$$(cat $(KERNEL_OUTPUT)/include/config/kernel.release)" = "$(EXPECTED_KERNEL_RELEASE)"

@@ -34,7 +34,7 @@ typedef struct AstraVolumeSnapshot {
 /** Empty complete-catalog initializer. */
 #define ASTRA_VOLUME_SNAPSHOT_INIT { 0u, 0u, NULL, 0u }
 
-/** Progress of one admitted unmount and its optional retained image source. */
+/** States of one admitted unmount and its optional retained image source. */
 enum AstraVolumeRemovalState {
     ASTRA_VOLUME_REMOVAL_PENDING = 0u,
     ASTRA_VOLUME_REMOVAL_COMPLETE,
@@ -43,6 +43,7 @@ enum AstraVolumeRemovalState {
     ASTRA_VOLUME_REMOVAL_PROVIDER_RETIRED
 };
 
+/** Progress record retained between unmount observations. */
 typedef struct AstraVolumeRemoval {
     AstraVolumeReference mount; /**< Exact admitted mount. */
     AstraVolumeReference image_source; /**< Optional retained source; all zero otherwise. */

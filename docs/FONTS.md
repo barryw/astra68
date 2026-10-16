@@ -388,8 +388,9 @@ typedef struct AstraTextLayoutOptions {
 } AstraTextLayoutOptions;
 ```
 
-The source-level 0.1 definitions are frozen in `ndk/include/astra/font.h`; that
-header is the normative field and initializer contract. Family names, UTF-8,
+These value layouts are proposed; `ndk/include/astra/font.h` does not exist yet.
+It becomes the normative field and initializer contract when the native font
+service lands. Family names, UTF-8,
 and language tags are passed as explicit pointer + byte-count arguments to the
 NDK library and marshalled into service messages; raw process pointers never
 appear in the wire protocol. Optional style-span arrays remain a compatible
@@ -440,6 +441,16 @@ Users may replace desktop defaults without changing software; recovery code can
 request the non-replaceable rescue role explicitly.
 
 The initial role identifiers are `UI`, `UI_EMPHASIS`, `MONO`, and `RESCUE`.
+The system font preference selects an installed face and its designed weight;
+component roles retain their own pixel sizes from the shared theme. Menu text,
+desktop labels, window titles, and controls need not share one size. Terminal
+may choose its own face in its private application settings. The scoped
+Config Kit ownership and failure rules are in [SETTINGS.md](SETTINGS.md).
+For the draw-command boundary, reviewed Haiku
+`src/servers/app/drawing/DrawingEngine.cpp` and
+`src/servers/app/drawing/interface/remote/RemoteDrawingEngine.cpp`: clients
+express drawing operations while a backend owns raster output. Astra adapts
+that separation with Astraea as its production UI pixel writer.
 Role matching returns an `AstraFontFace`; `AstraFontRequest` then resolves a
 draw-ready strike-backed `AstraFont`. A returned match reports the actual strike
 size and format so software never assumes that a bitmap was scaled.
@@ -450,13 +461,12 @@ IDs and metrics for editors or font tools, but rendering still enters through a
 validated draw list. A plain-text convenience function may create a temporary
 layout, but retained UI text should use an explicit reusable layout.
 
-The NDK 0.1 header and symbols are published with ABI-size assertions,
-argument-validation tests, automatic-cleanup tests, a checked example, and an
-explicit unavailable backend. That direct-MMIO backend returns
-`ASTRA_ERROR_NOT_PRESENT` when opening a face because it has no font service;
-it does not simulate successful font behavior. The OS implementation, live
-handle/stale-handle tests, service protocol, and draw-list bridge must land
-together before the service advertises itself as present.
+The NDK 0.1 header and symbols must be published with ABI-size assertions,
+argument-validation tests, automatic-cleanup tests, and a checked example.
+The OS implementation, live handle/stale-handle tests, service protocol, and
+draw-list bridge must land together before the service advertises itself as
+present. None of these APIs is shipped yet; current `font.library.2` exposes
+resident bitmap strikes only.
 
 TextSurface is a consumer of this object graph, not another font system. Grid,
 code, and flow modes must take resolved fonts/layouts and returned metrics;
@@ -468,16 +478,56 @@ handle or an MC68040 bitmap-scaling fallback.
 
 ## 7. Import and style compatibility
 
-One shared host/native AFNT writer owns conversion and validation. Import is an
-installation/build operation, not an application rendering path:
+The first Fonts tool import scope is native AFNT, static TrueType (`.ttf`),
+OpenType (`.otf`), TrueType/OpenType collections (`.ttc`), variable TrueType and
+OpenType at their default axis coordinates, and classic monochrome Amiga disk
+fonts.
+This covers the common current macOS outline containers listed by
+[Apple Font Book](https://support.apple.com/en-gb/guide/font-book/fntbk1000/mac)
+and Amiga bitmap fonts. A collection is one input but contributes all its
+faces to the managed
+installation transaction. Every installed face becomes validated AFNT before
+the catalog exposes it; applications and Astraea never parse source formats.
+Color glyph formats, including OpenType-SVG, need a separate color-strike
+conversion path. The monochrome A8 outline importer rejects them rather than
+silently dropping color. Legacy Mac font suitcases, resource-fork `.dfont`,
+PostScript Type 1, WOFF/WOFF2, BDF, and PCF are outside this first scope.
 
-- TTF, OTF, and TTC enter through FreeType plus the OpenType shaping tables;
-- WOFF and WOFF2 are decoded to their OpenType form before the same pipeline;
-- BDF, PCF, and other passive bitmap formats enter through the bitmap importer;
+The target installation architecture uses one AFNT conversion and validation
+path. Import is an installation/build operation, not an application rendering
+path:
+
+- TTF, OTF, and TTC enter through the outline rasterizer and OpenType parser;
 - classic Amiga disk fonts enter through the bounded importer below;
 - every import records source hashes, source format, face/collection index,
   variation axes, selected strike sizes, converter versions, license, and
   source character mapping.
+
+The current build-time tool supports one TTF, OTF, or selected TTC face per
+invocation, plus monochrome Amiga disk strikes. It writes AFNT 0.2 and passes
+the shared AFNT validator. Variable outlines produce their default instance
+and record those axis coordinates; custom coordinates and additional named
+instances are later work. The managed worker, all-face collection expansion,
+catalog, and Fonts UI import transaction are not yet implemented.
+
+`sw/common/Makefile` builds host, MC68040, and AArch64 `libastraafnt.a`
+variants for shared C validation and canonical packing of AFNT 0.2
+at the native import boundary; host and sanitizer tests run it against shipped
+faces, Iosevka and Amiga spike output, and malformed records. The HPS C
+outline converter in `fpga/de25/linux/astra_font_convert.c` reuses that codec,
+FreeType, UTF-8 validation, CRC32 and SHA-256; static Iosevka TTF and Source
+Sans OTF conversion tests pass. It is a worker component, not yet a running
+service. Build-time Python remains a development asset pipeline and oracle.
+It is not an Astra user-facing importer or a runtime dependency. Users will
+import from the native Fonts UI through the managed service transaction.
+
+Beast format checks on 2026-10-15: Adobe Source Sans 3 static OTF validated
+with 1,615 cmap entries; its variable TTF and OTF each validated with 1,616
+entries and recorded default `wght=200`; a two-face test TTC imported its
+second face; AROS ISOHelvetica 11- and 13-pixel Amiga strikes validated with
+225 cmap entries and two strikes. The official Adobe sources and results are
+isolated in `/home/barry/astra-font-spike-20261015/` on Beast. These prove
+build-time conversion, not installed-font runtime behavior.
 
 Importers render requested MASK1/A4/A8 or indexed strikes, then feed the same
 AFNT writer and validator. Common UI sizes can ship prebuilt. For a scalable
@@ -494,14 +544,13 @@ drawn as decorations from the strike metrics and never alter or duplicate
 glyph bitmaps. The resolved `AstraFontInfo` reports synthetic weight/slant so a
 typographically exact application may refuse it.
 
-The current `font.library` 2.1 draw-list path implements the same fallback for
-resident MASK1 and A8 strikes: bold is a deterministic horizontal embolden,
-italic is
-a baseline-relative shear, and underline/strikeout use AFNT metrics. Plain and
-styled runs share one glyph source; styled command data is synthesized while
-the draw list is lowered, then glyph expansion remains hardware-rendered. A
-font-service cache is still required before scalable faces advertise synthetic
-matches through `AstraFontInfo`.
+The current `font.library` 2.3 draw-list path prepares built-in synthetic bold,
+italic, and combined strikes from resident AFNT during the build. Bold uses a
+deterministic horizontal embolden, italic a baseline-relative shear, and
+underline/strikeout use AFNT metrics. Runtime selects a prepared strike and
+submits glyph descriptors; Astraea expands glyph coverage. Installed scalable
+faces still need the font-service cache before advertising synthetic matches
+through `AstraFontInfo`.
 
 ### 7.1 Settings drag-import transaction
 
@@ -515,7 +564,9 @@ One drop is one all-or-nothing transaction:
 1. identify each input by bounded content inspection rather than its suffix;
 2. expand collections into their individual faces and report the complete
    candidate list in a progress sheet;
-3. run the selected format handler in an unprivileged, restartable host worker;
+3. run the selected format handler in an unprivileged, restartable Astra C
+   worker on the DE25 HPS, reached only through the versioned native font
+   service protocol;
 4. convert every requested native strike and retain complete source provenance;
 5. validate every AFNT, name/style collision, bitmap range, and catalog entry;
 6. durably store immutable content-addressed font objects; and
@@ -540,16 +591,16 @@ service transaction API. They do not parse formats, write AFNT files, or edit a
 private font registry. AFNT dropped directly follows the same full validator
 and transaction path without lossy reconversion.
 
-The build-time outline importer currently converts complete Unicode cmaps from
-TTF sources into A8 AFNT strikes using pinned fontTools and Pillow versions.
-It is the behavioral oracle for the service writer; wiring the host worker,
-collection/WOFF/bitmap handlers, progress protocol, and catalog publication is
-still required before Settings advertises drag installation.
+The build-time outline importer converts Unicode cmaps from TTF, OTF, and a
+selected TTC face into A8 AFNT strikes using pinned fontTools and Pillow
+versions. It is the behavioral oracle for the service writer; wiring the host
+worker, all-face collection expansion, progress protocol, and catalog
+publication is required before Settings advertises drag installation.
 
 ### 7.2 Amiga import compatibility
 
-Amiga fonts are useful content, not the Astra ABI. The importer accepts classic
-bitmap disk fonts without executing them and converts:
+Amiga fonts are useful content, not the Astra ABI. The production importer
+must accept classic bitmap disk fonts without executing them and convert:
 
 - the strike bitmap and per-character location/width table;
 - proportional spacing and kerning arrays when present;
@@ -557,10 +608,15 @@ bitmap disk fonts without executing them and converts:
 - `ColorTextFont` bitplanes and palette into an AFNT indexed-color strike.
 
 Classic files are relocatable 68k load modules containing a `DiskFontHeader`
-and pointer-based `TextFont` or `ColorTextFont` data. The importer therefore
-uses a bounded hunk parser in a sandboxed user process. It does not call
+and pointer-based `TextFont` or `ColorTextFont` data. The production importer
+therefore needs a bounded hunk parser in a sandboxed user process. It must not call
 `LoadSeg`, run embedded return code, trust relocation addresses, or pass planar
 data to Astraea.
+
+The current build-time `import-amiga` uses pinned monobit 0.53 on a host and
+validates the resulting AFNT. The checked-in AROS ISOHelvetica monochrome
+strikes pass. A sandboxed managed worker and color Amiga conversion remain
+pending; the first Fonts release accepts monochrome classic disk fonts only.
 
 Imported glyphs receive Unicode mappings through an explicit source-encoding
 choice such as Amiga Latin-1 or a supplied mapping table. Unknown encodings do

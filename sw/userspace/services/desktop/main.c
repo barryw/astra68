@@ -4,6 +4,7 @@
 #include <astra/bundle.h>
 #include <astra/bytes.h>
 #include <astra/display.h>
+#include <astra/draw_list.h>
 #include <astra/event_emit.h>
 #include <astra/gui.h>
 #include <astra/graphics.h>
@@ -71,11 +72,11 @@ static uint64_t volume_retry;
 static AstraScrollModel icon_scroll = ASTRA_SCROLL_MODEL_INIT;
 static AstraControl icon_controls[3];
 static AstraUIContext icon_ui = ASTRA_UI_CONTEXT_INIT;
-/* The standard scrollbar painter targets this small raster surface. Input
+/* The standard scrollbar painter targets hardware commands. Input
    remains in icon_ui; both views borrow the same canonical scroll model. */
 static AstraControl bar_control;
 static AstraUIContext bar_ui = ASTRA_UI_CONTEXT_INIT;
-static uint16_t bar_pixels[DESKTOP_SCROLLBAR_WIDTH * DESKTOP_HEIGHT];
+static uint32_t bar_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
 static AstraSurface bar_surface = ASTRA_SURFACE_INIT;
 typedef struct DesktopRemoval {
     struct DesktopRemoval *next;
@@ -148,7 +149,7 @@ static AstraResult create_icon_controls(AstraDisplay *display)
     surface.width = DESKTOP_SCROLLBAR_WIDTH;
     surface.height = DESKTOP_HEIGHT;
     surface.format = ASTRA_PIXEL_FORMAT_RGB565;
-    surface.flags = ASTRA_SURFACE_CPU_WRITE | ASTRA_SURFACE_DRAW_SOURCE;
+    surface.flags = ASTRA_SURFACE_DRAW_TARGET | ASTRA_SURFACE_DRAW_SOURCE;
     if (result == ASTRA_OK) result = astra_surface_create(display, &surface, &bar_surface);
     return result;
 }
@@ -449,8 +450,8 @@ static void power_error(uint32_t gui, int restart)
     (void)astra_interface_show_alert(gui, &info);
 }
 
-/* One icon as an ARGB8888 surface of the desktop window: uploaded once,
-   blended by the blitter on every repaint. */
+/* One indexed icon source of the desktop window: uploaded once, palette
+   expanded and blended by Astraea on every repaint. */
 static AstraResult load_icon(AstraDisplay *display, const char *path,
                              AstraSurface *surface)
 {
@@ -561,7 +562,7 @@ static void log_visible_icons(const DesktopApps *apps)
 }
 
 /* The whole desktop in one list: canvas, then each icon and its label. */
-static AstraResult paint(AstraDisplay *display, AstraSurface *content,
+static AstraResult paint(AstraSurface *content,
                          const DesktopApps *apps)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -635,18 +636,21 @@ static AstraResult paint(AstraDisplay *display, AstraSurface *content,
                 theme.text_primary);
     }
     if (result == ASTRA_OK && state.maximum_y != 0u) {
-        AstraSurfaceView raster;
-        if (!astra_surface_view_init(&raster, bar_pixels, sizeof(bar_pixels),
-                DESKTOP_SCROLLBAR_WIDTH, DESKTOP_HEIGHT, DESKTOP_SCROLLBAR_WIDTH * 2u))
+        AstraSurfaceView commands;
+        if (!astra_draw_list_view_init(&commands, bar_commands,
+                sizeof(bar_commands), DESKTOP_SCROLLBAR_WIDTH, DESKTOP_HEIGHT))
             result = ASTRA_ERROR_INVALID_ARGUMENT;
         else {
-            astra_surface_clear(&raster, astra_surface_rgb565(
+            astra_surface_clear(&commands, astra_surface_rgb565(
                 theme.canvas.red, theme.canvas.green, theme.canvas.blue));
-            result = astra_interface_ui_render(&bar_ui, &raster);
+            result = astra_interface_ui_render(&bar_ui, &commands);
         }
-        if (result == ASTRA_OK) result = astra_surface_write(display, &bar_surface,
-            &(AstraRectI32){0, 0, DESKTOP_SCROLLBAR_WIDTH, DESKTOP_HEIGHT},
-            bar_pixels, DESKTOP_SCROLLBAR_WIDTH * 2u);
+        if (result == ASTRA_OK)
+            result = astra_draw_list_set_target(&list, &bar_surface);
+        if (result == ASTRA_OK)
+            result = astra_draw_list_append_view(&list, &commands);
+        if (result == ASTRA_OK)
+            result = astra_draw_list_set_target(&list, content);
         if (result == ASTRA_OK) result = astra_draw_list_set_clip(&list, &whole);
         if (result == ASTRA_OK) result = astra_draw_blit(&list, &bar_surface,
             &(AstraRectI32){0, 0, DESKTOP_SCROLLBAR_WIDTH, DESKTOP_HEIGHT},
@@ -775,7 +779,7 @@ int astra_main(const AstraStartupInfo *startup)
         }
         if (result == ASTRA_OK) {
             log_visible_icons(&apps);
-            result = paint(&display, &content, &apps);
+            result = paint(&content, &apps);
         }
         if (result == ASTRA_OK)
             result = astra_window_present(&window);
@@ -849,7 +853,7 @@ int astra_main(const AstraStartupInfo *startup)
                     if ((uint64_t)count + apps.shown > UINT32_MAX ||
                         layout_icons(count + apps.shown) != ASTRA_OK) return DESKTOP_FAIL_INTERFACE;
                     log_visible_icons(&apps);
-                    if (paint(&display, &content, &apps) != ASTRA_OK) return DESKTOP_FAIL_GRAPHICS;
+                    if (paint(&content, &apps) != ASTRA_OK) return DESKTOP_FAIL_GRAPHICS;
                 }
             }
             astra_volume_snapshot_close(&replacement);
@@ -905,7 +909,7 @@ int astra_main(const AstraStartupInfo *startup)
                 if (result != ASTRA_OK) return DESKTOP_FAIL_INTERFACE;
                 menu_cell = clicked_cell = UINT32_MAX;
                 log_visible_icons(&apps);
-                if (paint(&display, &content, &apps) != ASTRA_OK) return DESKTOP_FAIL_GRAPHICS;
+                if (paint(&content, &apps) != ASTRA_OK) return DESKTOP_FAIL_GRAPHICS;
                 continue;
             }
             if (result == ASTRA_OK && action.type == ASTRA_UI_ACTION_CONTEXT_MENU &&

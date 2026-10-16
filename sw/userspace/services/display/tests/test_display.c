@@ -1135,6 +1135,74 @@ static void test_window_graphics(void)
                .width = 16u, .height = 8u, .offset = 8192u - 64u * 7u,
                .pitch = 64u}, 0u, &reply) == ASTRA_STATUS_INVALID);
 
+    /* INDEX8 owns a cleared, disjoint hardware palette. Updating entries
+       copies only palette metadata into a render batch. */
+    {
+        uint32_t indexed;
+        uint32_t palette_offset;
+
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_SURFACE_CREATE,
+                   .width = 16u, .height = 16u,
+                   .format = ASTRA_PIXEL_FORMAT_INDEX8,
+                   .flags = ASTRA_SURFACE_DRAW_SOURCE |
+                            ASTRA_SURFACE_CPU_WRITE}, 0u, &reply) ==
+               ASTRA_STATUS_OK && graphics_batch_count == 1u);
+        indexed = reply.object;
+        assert(reply.pitch == 16u);
+        command = recorded_command(0u, 1u);
+        record = recorded_record(0u, read_be32(command + 32u));
+        palette_offset = read_be32(record + 8u);
+        assert(read_be32(command + 4u) >> 16 == ASTRA_RENDER_OP_FILL &&
+               read_be32(record + 24u) >> 24 ==
+                   ASTRA_RENDER_FORMAT_ARGB8888 &&
+               (palette_offset & 63u) == 0u);
+        memset(staging + 1024u, 1, 16u * 16u);
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_SURFACE_WRITE,
+                   .object = indexed, .width = 16u, .height = 16u,
+                   .offset = 1024u, .pitch = 16u}, 0u, &reply) ==
+               ASTRA_STATUS_OK && graphics_batch_count == 1u);
+        command = recorded_command(0u, 0u);
+        record = recorded_record(0u, read_be32(command + 36u));
+        assert((read_be32(command + 4u) &
+                ASTRA_RENDER_FLAG_BLIT_PALETTE) == 0u &&
+               read_be32(record + 24u) >> 24 ==
+                   ASTRA_RENDER_FORMAT_INDEX8);
+        for (uint32_t at = 0u; at < 8u; ++at)
+            staging[1024u + at] = (uint8_t)(at * 11u);
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_PALETTE_WRITE,
+                   .object = indexed, .x = 7, .width = 2u,
+                   .offset = 1024u}, 0u, &reply) ==
+               ASTRA_STATUS_OK && graphics_batch_count == 1u);
+        command = recorded_command(0u, 0u);
+        record = recorded_record(0u, read_be32(command + 32u));
+        assert(read_be32(command + 4u) >> 16 == ASTRA_RENDER_OP_BLIT &&
+               read_be32(record + 8u) == palette_offset &&
+               read_be32(command + 48u) == (7u << 16));
+        record = recorded_record(0u, read_be32(command + 36u));
+        assert(memcmp(recorded_record(0u, read_be32(record + 8u)),
+                      staging + 1024u, 8u) == 0);
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_PALETTE_WRITE,
+                   .object = indexed, .x = 255, .width = 2u},
+                            0u, &reply) == ASTRA_STATUS_INVALID);
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_PALETTE_WRITE,
+                   .object = sprite, .width = 1u},
+                            0u, &reply) == ASTRA_STATUS_ACCESS);
+        assert(graphics_run(window.graphics, &host,
+                            (AstraGuiGraphicsCommand){
+                   .action = ASTRA_GUI_GRAPHICS_SURFACE_DESTROY,
+                   .object = indexed}, 0u, &reply) == ASTRA_STATUS_OK);
+    }
+
     /* A large write is split into batches that each fit the mailbox. */
     graphics_batch_count = 0u;
     window.graphics->staging = big_staging;
@@ -1649,7 +1717,6 @@ static void build_aicon(uint8_t *bytes)
    of that session presents, or the session ends. */
 static void test_launch_panel(void)
 {
-    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     DisplayWindow windows[TEST_WINDOW_COUNT] = {0};
     DisplayState state = {
         .windows = windows,
@@ -1702,9 +1769,39 @@ static void test_launch_panel(void)
     assert(read_be32(batch_scene() + 20u) == 3u);
     assert(batch_scene_layer_source(2u) == state.launch_offset);
     assert(state.launch_drawn == 5u);
-    assert(launch_icon_pixels[0] == astra_surface_rgb565(0x20, 0xc0, 0x40));
-    assert(launch_icon_pixels[DISPLAY_LAUNCH_ICON - 1u] ==
-           color(theme.title_inactive));
+    {
+        uint32_t icon_blits = 0u;
+
+        for (uint32_t at = 0u; at < read_be32(batch + 12u); ++at) {
+            const uint8_t *command = batch_command(at);
+            uint32_t flags = read_be32(command + 4u);
+            uint32_t source;
+            const uint8_t *descriptor;
+            const uint8_t *indices;
+            const uint8_t *palette;
+
+            if ((flags >> 16u) != ASTRA_RENDER_OP_BLIT ||
+                (flags & ASTRA_RENDER_FLAG_BLIT_PALETTE) == 0u)
+                continue;
+            source = read_be32(command + 36u);
+            descriptor = batch + source - ASTRA_RENDER_BATCH_ARENA_OFFSET;
+            indices = batch + batch_descriptor_offset(source) -
+                      ASTRA_RENDER_BATCH_ARENA_OFFSET;
+            palette = batch + read_be32(descriptor + 28u) -
+                      ASTRA_RENDER_BATCH_ARENA_OFFSET;
+            assert((flags & ASTRA_RENDER_FLAG_BLIT_ALPHA) != 0u);
+            assert((read_be32(descriptor + 24u) >> 24u) ==
+                   ASTRA_RENDER_FORMAT_INDEX8);
+            assert(indices[0] == 1u &&
+                   indices[DISPLAY_LAUNCH_ICON - 1u] == 0u);
+            assert(read_be32(palette) == 0u);
+            assert(read_be32(palette + 4u) == UINT32_C(0xff20c040));
+            assert((read_be32(command + 60u) >>
+                    ASTRA_RENDER_BLIT_OPTION_OPACITY_SHIFT) == 255u);
+            ++icon_blits;
+        }
+        assert(icon_blits == 1u);
+    }
 
     /* Its window opens under the panel: no frame yet, the panel stays. */
     add_window(&state, 0u, ASTRA_WINDOW_STANDARD, 100u, 100u, 200u, 150u,
@@ -2384,7 +2481,6 @@ int main(void)
         DisplayWindow icon_window = {0};
         uint8_t palette[8] = {0, 0, 0, 0, 0x20, 0xc0, 0x40, 0xff};
         uint8_t pixels[16u * 16u];
-        uint16_t icon_color = astra_surface_rgb565(0x20, 0xc0, 0x40);
         uint32_t destination;
 
         memset(pixels, 1, sizeof(pixels));
@@ -2398,7 +2494,26 @@ int main(void)
         assert(destination != 0u);
         assert(draw_title_icon(&builder, destination, &icon_window, 13, 7));
         assert(astra_render_builder_finish(&builder) != 0u);
-        assert(batch_has_fill(13, 7, 16u, 16u, icon_color));
+        assert(read_be32(batch + 12u) == 1u);
+        assert((read_be32(batch_command(0u) + 4u) &
+                (ASTRA_RENDER_FLAG_BLIT_PALETTE |
+                 ASTRA_RENDER_FLAG_BLIT_ALPHA)) ==
+               (ASTRA_RENDER_FLAG_BLIT_PALETTE |
+                ASTRA_RENDER_FLAG_BLIT_ALPHA));
+        assert(read_be32(batch_command(0u) + 48u) ==
+               ((uint32_t)13u << 16u | 7u));
+        {
+            uint32_t source = read_be32(batch_command(0u) + 36u);
+            const uint8_t *descriptor = batch + source -
+                                        ASTRA_RENDER_BATCH_ARENA_OFFSET;
+            const uint8_t *indices = batch + batch_descriptor_offset(source) -
+                                     ASTRA_RENDER_BATCH_ARENA_OFFSET;
+            const uint8_t *colors = batch + read_be32(descriptor + 28u) -
+                                    ASTRA_RENDER_BATCH_ARENA_OFFSET;
+
+            assert(indices[0] == 1u);
+            assert(read_be32(colors + 4u) == UINT32_C(0xff20c040));
+        }
 
         {
             uint8_t maximum[ASTRA_AICON_STRIKE_WIDTH_MAX *
@@ -2418,8 +2533,9 @@ int main(void)
             assert(draw_title_icon(
                 &builder, destination, &icon_window, 13, 7));
             assert(astra_render_builder_finish(&builder) != 0u);
-            assert(batch_has_fill(13, 7, 1u,
-                                  ASTRA_AICON_STRIKE_WIDTH_MAX, icon_color));
+            assert(read_be32(batch + 12u) == 1u);
+            assert((read_be32(batch_command(0u) + 4u) &
+                    ASTRA_RENDER_FLAG_BLIT_PALETTE) != 0u);
         }
 
         {

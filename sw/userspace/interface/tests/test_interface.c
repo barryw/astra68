@@ -19,10 +19,10 @@ void astra_interface_test_paint(AstraSurfaceView *surface,
 void astra_interface_test_layout(void);
 
 _Static_assert(sizeof(AstraControl) == (sizeof(void *) == 4u ? 252u : 264u),
-               "AstraControl ABI 5 layout changed; bump the ABI major");
+               "AstraControl ABI 6 layout changed; bump the ABI major");
 _Static_assert(sizeof(AstraUIContext) ==
                    (sizeof(void *) == 4u ? 168u : 176u),
-               "AstraUIContext ABI 5 layout changed; bump the ABI major");
+               "AstraUIContext ABI 6 layout changed; bump the ABI major");
 
 static uint16_t first_text_color;
 static uint16_t last_text_color;
@@ -31,7 +31,23 @@ static int32_t fill_x[32];
 static int32_t fill_y[32];
 static uint32_t fill_width[32];
 static uint32_t fill_height[32];
-static uint16_t render_pixels[320u * 200u];
+static _Alignas(4) uint16_t render_pixels[320u * 200u];
+
+static AstraSurfaceView render_view(uint16_t width, uint16_t height)
+{
+    AstraDrawListHeader *header = (AstraDrawListHeader *)(void *)render_pixels;
+
+    *header = (AstraDrawListHeader){
+        .magic = ASTRA_DRAW_LIST_MAGIC,
+        .version = ASTRA_DRAW_LIST_VERSION_1_7,
+        .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
+        .width = width,
+        .height = height,
+        .command_capacity = ASTRA_DRAW_LIST_COMMAND_MAX,
+    };
+    return (AstraSurfaceView){render_pixels, sizeof(render_pixels), 0u,
+        width, height, ASTRA_SURFACE_VIEW_DRAW_LIST, 0u, 0u, width, height};
+}
 static uint32_t fill_calls;
 static uint32_t text_calls;
 static uint16_t text_clip_top;
@@ -456,9 +472,7 @@ static void test_controls(void)
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraControlSize measured = {0};
     AstraControlFrame damage = {0};
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 320u * sizeof(uint16_t),
-        320u, 200u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 320u, 200u};
+    AstraSurfaceView surface = render_view(320u, 200u);
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
     AstraWindowEvent event;
 
@@ -526,6 +540,10 @@ static void test_controls(void)
            ASTRA_ERROR_WOULD_BLOCK);
 
     reset_render_calls();
+    surface.kind = ASTRA_SURFACE_VIEW_RGB565;
+    assert(astra_interface_ui_render(&context, &surface) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    surface.kind = ASTRA_SURFACE_VIEW_DRAW_LIST;
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     assert(text_calls == 3u && fill_calls == 2u);
     assert(first_text_color == astra_surface_rgb565(
@@ -629,9 +647,7 @@ static void test_fault_label(void)
     AstraLabelInfo info = ASTRA_LABEL_INFO_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 100u * sizeof(uint16_t),
-        100u, 40u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 100u, 40u};
+    AstraSurfaceView surface = render_view(100u, 40u);
 
     info.id = 11u;
     info.text = "Fault";
@@ -667,9 +683,7 @@ static void test_button_preview_states(void)
     AstraControl controls[BUTTON_COUNT];
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 320u * sizeof(uint16_t),
-        320u, 200u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 320u, 200u};
+    AstraSurfaceView surface = render_view(320u, 200u);
 
     for (uint32_t at = 0u; at < BUTTON_COUNT; ++at) {
         AstraButtonInfo info = ASTRA_BUTTON_INFO_INIT;
@@ -768,9 +782,7 @@ static void test_control_rejections(void)
     AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
     AstraButtonInfo info = ASTRA_BUTTON_INFO_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 100u * sizeof(uint16_t),
-        100u, 100u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 100u, 100u};
+    AstraSurfaceView surface = render_view(100u, 100u);
 
     info.id = 1u;
     info.text = "A";
@@ -916,9 +928,7 @@ static void test_checkbox_mark_geometry(void)
     AstraToggleInfo info = ASTRA_TOGGLE_INFO_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 100u * sizeof(uint16_t),
-        100u, 40u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 100u, 40u};
+    AstraSurfaceView surface = render_view(100u, 40u);
     static const int32_t expected_x[5] = {3, 5, 7, 9, 11};
     static const int32_t expected_y[5] = {7, 9, 7, 5, 3};
 
@@ -947,9 +957,7 @@ static void test_switch_off_geometry(void)
     AstraToggleInfo info = ASTRA_TOGGLE_INFO_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 100u * sizeof(uint16_t),
-        100u, 40u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 100u, 40u};
+    AstraSurfaceView surface = render_view(100u, 40u);
 
     info.id = 12u;
     info.text = "Off";
@@ -1083,9 +1091,7 @@ static void test_dial_control(void)
     AstraControlSize measured = {0};
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
     AstraWindowEvent event;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 120u * sizeof(uint16_t),
-        120u, 80u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 120u, 80u};
+    AstraSurfaceView surface = render_view(120u, 80u);
     int64_t value = 0;
     uint32_t decimal_places = 0u;
 
@@ -1242,9 +1248,7 @@ static void test_progress_control(void)
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
     AstraControlFrame damage;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 200u * sizeof(uint16_t),
-        200u, 40u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 200u, 40u};
+    AstraSurfaceView surface = render_view(200u, 40u);
 
     info.id = 31u;
     assert(astra_interface_progress_init(&control, &info) == ASTRA_OK);
@@ -1309,9 +1313,7 @@ static void test_segmented_control(void)
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
     AstraWindowEvent event;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 240u * sizeof(uint16_t),
-        240u, 40u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 240u, 40u};
+    AstraSurfaceView surface = render_view(240u, 40u);
     int64_t value = -1;
 
     info.id = 51u;
@@ -1408,6 +1410,165 @@ static void test_segmented_control(void)
     }
 }
 
+static void test_list_control(void)
+{
+    static const AstraChoiceItem items[] = {
+        {"Astra Sans", 10u, {0u, 0u}},
+        {"Astra Mono", 10u, {0u, 0u}},
+        {"Iosevka Fixed", 13u, {0u, 0u}}
+    };
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraChoiceInfo info = ASTRA_CHOICE_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlSize size = {0};
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraWindowEvent event;
+    AstraSurfaceView surface = render_view(240u, 160u);
+    int64_t value = 0;
+
+    info.id = 73u;
+    info.items = items;
+    info.item_count = 3u;
+    info.selected = UINT32_MAX;
+    assert(astra_interface_list_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 240u, 160u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &control, &size) == ASTRA_OK);
+    assert(size.height == 3u * theme.control_height);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_control_get_value(&control, &value, NULL) ==
+           ASTRA_OK && value == -1);
+
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+                          ASTRA_WINDOW_EVENT_DOWN,
+                          control._private_frame.x + 8,
+                          control._private_frame.y +
+                              theme.control_height + 4);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_NONE);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+           action.control_id == 73u && action.value == 1);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x51u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.value == 2);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x50u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_NONE);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4au, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.value == 0);
+    assert(astra_interface_control_set_value(&context, &control, -1) ==
+           ASTRA_OK);
+    assert(astra_interface_control_set_value(&context, &control, 3) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(text_calls == 3u && fill_calls >= 5u);
+
+    info.items = NULL;
+    info.item_count = 0u;
+    assert(astra_interface_list_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 240u, 160u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(text_calls == 0u);
+    assert(astra_interface_control_set_value(&context, &control, 0) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    info.selected = 0u;
+    assert(astra_interface_list_init(&control, &info) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
+static void test_scrolled_list_control(void)
+{
+    AstraChoiceItem items[100];
+    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraScrollModel model = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo model_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraScrollViewInfo view_info = ASTRA_SCROLL_VIEW_INFO_INIT;
+    AstraChoiceInfo list_info = ASTRA_CHOICE_INFO_INIT;
+    AstraFlexItem flex = ASTRA_FLEX_ITEM_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraWindowEvent event;
+    AstraSurfaceView surface = render_view(240u, 80u);
+    AstraDrawListHeader draw_header = {
+        .magic = ASTRA_DRAW_LIST_MAGIC,
+        .version = ASTRA_DRAW_LIST_VERSION_1_7,
+        .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
+        .width = 240u,
+        .height = 80u,
+        .command_capacity = ASTRA_DRAW_LIST_COMMAND_MAX};
+    AstraSurfaceView draw_list = {
+        (uint16_t *)(void *)&draw_header, ASTRA_DRAW_LIST_AREA_BYTES, 0u,
+        240u, 80u, ASTRA_SURFACE_VIEW_DRAW_LIST, 0u, 0u, 240u, 80u};
+
+    for (uint32_t at = 0u; at < 100u; ++at) {
+        items[at] = (AstraChoiceItem){"Font", 4u, {0u, 0u}};
+    }
+    model_info.line_height = theme.control_height;
+    assert(astra_scroll_init(&model, &model_info) == ASTRA_OK);
+    view_info.id = 74u;
+    view_info.model = &model;
+    view_info.preferred_width = 240u;
+    view_info.preferred_height = 80u;
+    assert(astra_interface_scroll_view_init(&controls[0], &view_info) ==
+           ASTRA_OK);
+    flex.minimum_width = flex.maximum_width = 240u;
+    flex.minimum_height = flex.maximum_height = 80u;
+    assert(astra_interface_control_set_flex(&controls[0], &flex) == ASTRA_OK);
+    list_info.id = 75u;
+    list_info.items = items;
+    list_info.item_count = 100u;
+    list_info.selected = UINT32_MAX;
+    assert(astra_interface_list_init(&controls[1], &list_info) == ASTRA_OK);
+    flex = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    flex.parent_id = 74u;
+    assert(astra_interface_control_set_flex(&controls[1], &flex) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls, 2u, 240u, 80u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_scroll_get_state(&model, &state) == ASTRA_OK);
+    assert(state.content_height == 100u * theme.control_height);
+    assert(astra_scroll_set_offset(&model, 0u, 50u * theme.control_height) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &draw_list) == ASTRA_OK);
+    assert(text_calls <= 4u && text_calls >= 3u);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+                          ASTRA_WINDOW_EVENT_DOWN, 8, 8);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+           action.control_id == 75u && action.value == 50);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4du, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+           action.value == 99);
+    assert(astra_scroll_get_state(&model, &state) == ASTRA_OK &&
+           state.offset_y == state.maximum_y);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(text_calls <= 4u && text_calls >= 3u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4au, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.value == 0);
+    assert(astra_scroll_get_state(&model, &state) == ASTRA_OK &&
+           state.offset_y == 0u);
+}
+
 static void test_tab_control_and_collapsed_pages(void)
 {
     static const AstraChoiceItem items[] = {
@@ -1429,9 +1590,7 @@ static void test_tab_control_and_collapsed_pages(void)
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
     AstraWindowEvent event;
     uint32_t pointer_fill_calls;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 320u * sizeof(uint16_t),
-        320u, 120u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 320u, 120u};
+    AstraSurfaceView surface = render_view(320u, 120u);
 
     info.id = 60u;
     info.items = items;
@@ -1541,9 +1700,7 @@ static void test_stepper_control(void)
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
     AstraWindowEvent event;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 160u * sizeof(uint16_t),
-        160u, 40u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 160u, 40u};
+    AstraSurfaceView surface = render_view(160u, 40u);
     int64_t value = 0;
 
     info.id = 52u;
@@ -1718,9 +1875,7 @@ static void test_text_field(void)
     AstraFieldInfo info = ASTRA_FIELD_INFO_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 160u * sizeof(uint16_t),
-        160u, 40u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 160u, 40u};
+    AstraSurfaceView surface = render_view(160u, 40u);
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
     AstraWindowEvent event;
     char copied[32];
@@ -1969,6 +2124,7 @@ static void test_scroll_view_layout_and_wheel(void)
     AstraSurfaceView draw_list = {
         (uint16_t *)(void *)&list, ASTRA_DRAW_LIST_AREA_BYTES, 0u,
         130u, 60u, ASTRA_SURFACE_VIEW_DRAW_LIST, 0u, 0u, 130u, 60u};
+    AstraSurfaceView surface = render_view(130u, 60u);
 
     model_info.line_width = 8u;
     model_info.line_height = 16u;
@@ -2030,10 +2186,7 @@ static void test_scroll_view_layout_and_wheel(void)
            controls[2]._private_clip.width == state.content_width &&
            controls[2]._private_clip.height == 60u);
     reset_render_calls();
-    assert(astra_interface_ui_render(&context, &(AstraSurfaceView){
-               render_pixels, sizeof(render_pixels),
-               320u * sizeof(uint16_t), 130u, 60u,
-               ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 130u, 60u}) == ASTRA_OK);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     assert(fill_calls == 2u);
     assert(fill_x[0] == 120 && fill_y[0] == 0 &&
            fill_width[0] == 10u && fill_height[0] == 60u);
@@ -2041,10 +2194,7 @@ static void test_scroll_view_layout_and_wheel(void)
            fill_width[1] == 6u && fill_height[1] == 24u);
     assert(astra_scroll_set_marks(&model, marks, 2u) == ASTRA_OK);
     reset_render_calls();
-    assert(astra_interface_ui_render(&context, &(AstraSurfaceView){
-               render_pixels, sizeof(render_pixels),
-               320u * sizeof(uint16_t), 130u, 60u,
-               ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 130u, 60u}) == ASTRA_OK);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     assert(fill_calls == 4u && fill_height[2] == 2u &&
            fill_height[3] == 2u);
     astra_interface_ui_damage_clear(&context);
@@ -2126,10 +2276,7 @@ static void test_scroll_view_layout_and_wheel(void)
                    &action) == ASTRA_OK);
     assert(!astra_interface_ui_animations_active(&context));
     reset_render_calls();
-    assert(astra_interface_ui_render(&context, &(AstraSurfaceView){
-               render_pixels, sizeof(render_pixels),
-               320u * sizeof(uint16_t), 130u, 60u,
-               ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 130u, 60u}) == ASTRA_OK);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     assert(fill_calls == 0u);
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_MOTION, 0u, 125, 30);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
@@ -2474,9 +2621,7 @@ static void test_splitter_composition(void)
 
     fill_calls = 0u;
     {
-        AstraSurfaceView surface = {
-            render_pixels, sizeof(render_pixels), 200u * sizeof(uint16_t),
-            200u, 80u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 200u, 80u};
+        AstraSurfaceView surface = render_view(200u, 80u);
         assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     }
     assert(fill_calls == 1u);
@@ -2599,9 +2744,7 @@ static void test_disclosure_control(void)
         ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
-    AstraSurfaceView surface = {
-        render_pixels, sizeof(render_pixels), 240u * sizeof(uint16_t),
-        240u, 100u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 240u, 100u};
+    AstraSurfaceView surface = render_view(240u, 100u);
     AstraWindowEvent event;
 
     disclosure.id = 530u;
@@ -2775,9 +2918,7 @@ int main(void)
     alert_name_result = ASTRA_OK;
     text_calls = 0u;
     {
-        AstraSurfaceView surface = {
-            render_pixels, sizeof(render_pixels), 420u * sizeof(uint16_t),
-            420u, 150u, ASTRA_SURFACE_VIEW_RGB565, 0u, 0u, 420u, 150u};
+        AstraSurfaceView surface = render_view(420u, 150u);
         AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
 
         astra_interface_test_paint(&surface, &info);
@@ -2802,6 +2943,8 @@ int main(void)
     test_dial_control();
     test_progress_control();
     test_segmented_control();
+    test_list_control();
+    test_scrolled_list_control();
     test_tab_control_and_collapsed_pages();
     test_stepper_control();
     test_animation_ownership();

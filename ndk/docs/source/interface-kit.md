@@ -1,6 +1,6 @@
 # Interface Kit
 
-`interface.library.5` is the shared implementation for native window controls,
+`interface.library.6` is the shared implementation for native window controls,
 integer flex layout, shared transient menus, TextSurface presentation, the typed system clipboard, and
 per-document undo histories. Applications call its versioned ELF symbols
 directly; they do not compile private Interface Kit sources or speak directly
@@ -73,7 +73,7 @@ fixes behavior without breaking the ABI. A consumer links directly and records
 the oldest compatible version in its bundle manifest:
 
 ```c
-requires interface.library 5 5.0.0
+requires interface.library 6 6.0.0
 ```
 
 The linker records the ABI-major SONAME and required symbol versions. The
@@ -113,7 +113,7 @@ state.
 
 Labels, buttons, checkboxes, radios, switches, sliders, dials, numeric steppers,
 segmented selectors, tab strips, disclosures, progress indicators, fields,
-and containers share this lifecycle. Label, button, toggle, disclosure, and
+lists, and containers share this lifecycle. Label, button, toggle, disclosure, and
 choice-item text spans are borrowed, not copied; keep
 their UTF-8 bytes alive for the control lifetime. Segmented selectors divide
 their frame evenly, change value on pointer release, and support
@@ -123,7 +123,15 @@ repeat after 400 ms; unavailable arrows remain visible but muted at a bound.
 All value changes return the same `ASTRA_UI_ACTION_VALUE_CHANGED` action.
 Numeric actions carry a signed 64-bit value; `decimal_places` is zero for
 integer controls and gives the Dial's fixed-point scale. The controls in the
-following example require `interface.library.5` version 5.0.0 or newer.
+following example require `interface.library.6` version 6.0.0 or newer.
+
+`astra_interface_list_init` (Interface Kit 6.0) creates a single-selection
+vertical list from borrowed `AstraChoiceItem` labels. An empty list is valid:
+set `items` to `NULL`, `item_count` to zero, and `selected` to `UINT32_MAX`.
+`UINT32_MAX` also means no selection for a populated list. Put the List inside
+a ScrollView when its rows exceed the viewport. Pointer release selects a row;
+Up/Down and Home/End change selection and reveal the selected row. List values
+use zero-based indexes, with `-1` for no selection.
 
 ```{literalinclude} ../../examples/interface_controls.c
 :language: c
@@ -142,7 +150,7 @@ of its descendants leave layout, rendering, hit testing, focus traversal, and
 animation together; applications do not maintain separate hidden states in
 each subsystem. `astra_interface_ui_set_state` reflows after a collapse change
 and clears any interaction owned by a descendant that left the active page. Tabs and
-collapsed containers require `interface.library.5` version 5.0.0 or newer.
+collapsed containers require `interface.library.6` version 6.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_tabs.c
 :language: c
@@ -162,8 +170,8 @@ Use a disclosure for optional settings that should reflow in place. The target
 must be an ordinary sibling container, which keeps the header reachable while
 its body is closed and prevents ambiguous ownership. State remains
 application-owned and can be restored by setting the target container before
-or after UI initialization. Disclosures require `interface.library.5` version
-5.2.0 or newer.
+or after UI initialization. Disclosures require `interface.library.6` version
+6.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_disclosure.c
 :language: c
@@ -203,7 +211,7 @@ the same transaction also selects the normal path. These are correctness
 fallbacks, not different application APIs.
 
 Scroll models, their bound views, and scrollbars require
-`interface.library.5` version 5.0.0 or newer.
+`interface.library.6` version 6.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_scroll.c
 :language: c
@@ -220,7 +228,7 @@ moves one logical pixel; Home and End move to the permitted extremes. The same
 live change is reported as `ASTRA_UI_ACTION_VALUE_CHANGED`, and
 `astra_interface_control_set_value` restores a saved first-pane extent.
 
-Splitters require `interface.library.5` version 5.0.0 or newer.
+Splitters require `interface.library.6` version 6.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_splitter.c
 :language: c
@@ -245,7 +253,7 @@ MC68040. The indicator's angular position is normalized internally; 0 through
 100 is not part of the public value contract. `astra_interface_control_get_value` and every
 value-change action return both the exact integer and its scale.
 
-Dials require `interface.library.5` version 5.0.0 or newer. Their indicator
+Dials require `interface.library.6` version 6.0.0 or newer. Their indicator
 uses Graphics Kit's shared
 clipped line primitive, which replays as a hardware line on draw-list surfaces.
 
@@ -281,7 +289,7 @@ together at vertical blank; the MC68040 does not paint or composite the
 pointer.
 
 Pointer-image APIs and automatic Interface Kit selection require
-`interface.library.5` version 5.0.0 or newer.
+`interface.library.6` version 6.0.0 or newer.
 
 ## Text models and fields
 

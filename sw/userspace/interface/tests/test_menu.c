@@ -99,7 +99,6 @@ static void model(void)
     AstraMenuState info;
     AstraUIAction action;
     uint32_t draw[ASTRA_DRAW_LIST_AREA_BYTES / 4u];
-    uint16_t pixels[640u * 400u];
     AstraSurfaceView surface;
 
     assert(astra_interface_menu_init(&menu, items, 4u, &work, 630, 430, 160u, 0u) == ASTRA_OK);
@@ -117,6 +116,10 @@ static void model(void)
     assert(send_key(&menu, 0x52u).type == ASTRA_UI_ACTION_NONE && state(&menu).selection == 4u);
     assert(astra_draw_list_view_init(&surface, draw, sizeof(draw), 160u, 136u));
     assert(astra_interface_menu_render(&menu, &surface) == ASTRA_OK);
+    surface.kind = ASTRA_SURFACE_VIEW_RGB565;
+    assert(astra_interface_menu_render(&menu, &surface) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    surface.kind = ASTRA_SURFACE_VIEW_DRAW_LIST;
     assert(((AstraDrawListHeader *)draw)->command_count >= 8u);
     {
         AstraDrawListHeader *header = (AstraDrawListHeader *)draw;
@@ -126,7 +129,7 @@ static void model(void)
         assert(header->command_count == ASTRA_DRAW_LIST_COMMAND_MAX);
         header->command_count = before;
     }
-    assert(astra_surface_view_init(&surface, pixels, sizeof(pixels), 160u, 136u, 320u));
+    assert(astra_draw_list_view_init(&surface, draw, sizeof(draw), 160u, 136u));
     assert(astra_interface_menu_render(&menu, &surface) == ASTRA_OK);
     surface.clip_right = 161u;
     assert(astra_interface_menu_render(&menu, &surface) == ASTRA_ERROR_INVALID_ARGUMENT);

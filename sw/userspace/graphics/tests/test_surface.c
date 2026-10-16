@@ -142,6 +142,75 @@ static void test_rgb565_upload_uses_hardware_blit(void)
     assert(builder.failed == ASTRA_RENDER_BUILDER_FAILURE_SURFACE);
 }
 
+static void test_index8_upload_uses_palette_blit(void)
+{
+    static uint8_t storage[ASTRA_RENDER_BUILDER_BYTES];
+    static const uint8_t pixels[] = {0u, 1u, 1u, 0u};
+    uint32_t palette[256] = {0u};
+    AstraRenderBuilder builder;
+    uint32_t source;
+    const uint8_t *descriptor;
+    const uint8_t *command;
+
+    palette[0] = UINT32_C(0x00000000);
+    palette[1] = UINT32_C(0x80ff4000);
+    assert(astra_render_builder_init(&builder, storage, sizeof(storage), 1u));
+    source = astra_render_builder_upload_index8(
+        &builder, pixels, 2u, 2u, 2u, palette);
+    assert(source != 0u);
+    descriptor = batch_record(storage, source);
+    assert((be32(descriptor + 24u) >> 24u) == ASTRA_RENDER_FORMAT_INDEX8);
+    assert(memcmp(batch_record(storage, be32(descriptor + 8u)),
+                  pixels, sizeof(pixels)) == 0);
+    assert(be32(batch_record(storage, be32(descriptor + 28u)) + 4u) ==
+           palette[1]);
+    assert(astra_render_builder_blit_region(
+        &builder, astra_render_builder_frame(&builder), source,
+        0, 0, 3, 4, 2u, 2u));
+    command = batch_command(storage, 0u);
+    assert((be32(command + 4u) &
+            (ASTRA_RENDER_FLAG_BLIT_PALETTE |
+             ASTRA_RENDER_FLAG_BLIT_ALPHA)) ==
+           (ASTRA_RENDER_FLAG_BLIT_PALETTE |
+            ASTRA_RENDER_FLAG_BLIT_ALPHA));
+    assert((be32(command + 60u) >>
+            ASTRA_RENDER_BLIT_OPTION_OPACITY_SHIFT) == 255u);
+    assert(finish_batch(&builder, storage) != 0u);
+
+    assert(astra_render_builder_init(&builder, storage, sizeof(storage), 2u));
+    assert(astra_render_builder_upload_index8(
+        &builder, pixels, 2u, 2u, 2u, NULL) == 0u);
+    assert(builder.failed == ASTRA_RENDER_BUILDER_FAILURE_SURFACE);
+}
+
+static void test_index8_upload_stays_indexed(void)
+{
+    static uint8_t storage[ASTRA_RENDER_BUILDER_BYTES];
+    AstraRenderBuilder builder;
+    uint32_t destination;
+    uint32_t source;
+    uint32_t attachment_offset;
+    const uint8_t *command;
+
+    assert(astra_render_builder_init(&builder, storage, sizeof(storage), 3u));
+    destination = astra_render_builder_surface_format_at(
+        &builder, UINT32_C(0x02000000), 4u, 2u, 2u, 2u,
+        ASTRA_RENDER_FORMAT_INDEX8,
+        ASTRA_RENDER_SURFACE_READ | ASTRA_RENDER_SURFACE_WRITE);
+    source = astra_render_builder_upload_reserve(
+        &builder, 2u, 2u, 2u, ASTRA_RENDER_FORMAT_INDEX8,
+        &attachment_offset);
+    assert(destination != 0u && source != 0u);
+    assert(astra_render_builder_blit_region(
+        &builder, destination, source, 0, 0, 0, 0, 2u, 2u));
+    command = batch_command(storage, 0u);
+    assert((be32(command + 4u) &
+            (ASTRA_RENDER_FLAG_BLIT_PALETTE |
+             ASTRA_RENDER_FLAG_BLIT_ALPHA)) == 0u);
+    assert(astra_render_builder_finish_render_only(&builder) >=
+           attachment_offset + 4u);
+}
+
 /* A reserved upload copies nothing: its descriptor keeps the staging pitch
    and names the batch's last data, where the device places the rows. */
 static void test_upload_reserve_ends_the_batch_data(void)
@@ -926,6 +995,81 @@ static void test_styled_text_uses_one_glyph_source(void)
            !astra_render_builder_replay(&builder, destination, header));
 }
 
+static void test_prepared_style_strikes(void)
+{
+    const uint32_t styles[] = {
+        ASTRA_TEXT_STYLE_BOLD, ASTRA_TEXT_STYLE_ITALIC,
+        ASTRA_TEXT_STYLE_BOLD | ASTRA_TEXT_STYLE_ITALIC};
+    const uint32_t scalars[] = {'A', 'g', 'j', 0xfffdu};
+
+    for (uint32_t mono = 0u; mono < 2u; ++mono)
+        for (uint32_t size = 0u; size < (mono ? 1u : 3u); ++size) {
+            uint16_t height = mono ? 16u : (uint16_t)(11u + size * 2u +
+                                                       (size == 2u));
+            const AstraUiStrike *regular = mono ?
+                astra_mono_font_strike(height) : astra_ui_font_strike(height);
+
+            assert(regular != NULL &&
+                   regular->bitmap_format == ASTRA_FONT_BITMAP_A8);
+            for (uint32_t style = 0u; style < 3u; ++style) {
+                const AstraUiStrike *prepared = mono ?
+                    astra_mono_font_strike_styled(height, styles[style]) :
+                    astra_ui_font_strike_styled(height, styles[style]);
+
+                assert(prepared != NULL && prepared != regular);
+                assert(prepared->glyph_count == regular->glyph_count);
+                for (uint32_t index = 0u; index < 4u; ++index) {
+                    const AstraUiGlyph *source = mono ?
+                        astra_mono_font_glyph(regular, scalars[index]) :
+                        astra_ui_font_glyph(regular, scalars[index]);
+                    const AstraUiGlyph *target = mono ?
+                        astra_mono_font_glyph(prepared, scalars[index]) :
+                        astra_ui_font_glyph(prepared, scalars[index]);
+                    const uint8_t *source_bitmap = mono ?
+                        astra_mono_font_bitmap(source) :
+                        astra_ui_font_bitmap(source);
+                    const uint8_t *target_bitmap = mono ?
+                        astra_mono_font_bitmap(target) :
+                        astra_ui_font_bitmap(target);
+                    uint32_t bold = astra_ui_bold_strength(height,
+                                                           styles[style]);
+                    int32_t minimum;
+                    uint32_t width;
+
+                    astra_ui_style_extents(source, styles[style], bold,
+                                           &minimum, &width);
+                    assert(target->width == width &&
+                           target->bearing_x == source->bearing_x +
+                                                minimum * 64 &&
+                           target->advance_x == source->advance_x);
+                    for (uint32_t row = 0u; row < source->height; ++row)
+                        for (uint32_t column = 0u; column < width; ++column) {
+                            int32_t shift =
+                                (styles[style] & ASTRA_TEXT_STYLE_ITALIC) ?
+                                    astra_ui_italic_shift(source, row) : 0;
+                            uint8_t expected = 0u;
+
+                            for (uint32_t weight = 0u; weight <= bold;
+                                 ++weight) {
+                                int32_t from = (int32_t)column - shift +
+                                               minimum - (int32_t)weight;
+
+                                if (from >= 0 && from < source->width) {
+                                    uint8_t coverage = source_bitmap[
+                                        row * source->pitch + (uint32_t)from];
+
+                                    if (coverage > expected)
+                                        expected = coverage;
+                                }
+                            }
+                            assert(target_bitmap[row * target->pitch +
+                                                 column] == expected);
+                        }
+                }
+            }
+        }
+}
+
 static void test_direct_styled_text(void)
 {
     static uint8_t batch_storage[ASTRA_RENDER_BUILDER_BYTES];
@@ -1124,6 +1268,11 @@ static uint32_t resolve_test_surface(void *context,
         return astra_render_builder_surface_format_at(
             builder, surfaces->index_offset, 16u * 16u, 16u, 16u, 16u,
             ASTRA_RENDER_FORMAT_INDEX8, ASTRA_RENDER_SURFACE_READ);
+    if (surface_id == 10u)
+        return astra_render_builder_surface_index8_at(
+            builder, surfaces->index_offset, 16u * 16u, 16u, 16u, 16u,
+            surfaces->index_offset + 0x1000u,
+            ASTRA_RENDER_SURFACE_READ);
     return 0u;
 }
 
@@ -1230,6 +1379,34 @@ static void test_session_blit_lowers_to_hardware(void)
     blit->source = 9u; /* INDEX8 needs a palette to reach RGB565 */
     assert(replay_session(&builder, storage, 8u, &resolver, &destination) ==
            UINT32_MAX);
+    blit->source = 10u;
+    blit->source_x = 0;
+    blit->source_y = 0;
+    blit->source_width = 8u;
+    blit->source_height = 8u;
+    blit->width = 8u;
+    blit->height = 8u;
+    blit->flags = 0u;
+    assert(replay_session(&builder, storage, 8u, &resolver, &destination) ==
+           1u);
+    render = batch_command(storage, 0u);
+    source = batch_record(storage, be32(render + 36u));
+    assert((be32(render + 4u) & 0xffffu) ==
+           ASTRA_RENDER_FLAG_BLIT_PALETTE);
+    assert(be32(source + 28u) == surfaces.index_offset + 0x1000u);
+    blit->flags = BLEND_ALPHA;
+    assert(replay_session(&builder, storage, 8u, &resolver, &destination) ==
+           1u);
+    render = batch_command(storage, 0u);
+    assert((be32(render + 4u) & 0xffffu) ==
+           (ASTRA_RENDER_FLAG_BLIT_PALETTE |
+            ASTRA_RENDER_FLAG_BLIT_ALPHA));
+    blit->width = 64u;
+    blit->height = 32u;
+    blit->source_width = 32u;
+    blit->source_height = 16u;
+    blit->source_x = 16;
+    blit->source_y = 8;
     blit->source = 3u; /* unknown surface */
     assert(replay_session(&builder, storage, 9u, &resolver, &destination) ==
            UINT32_MAX);
@@ -2711,6 +2888,8 @@ int main(void)
     test_session_lines();
     test_batch_header_reserves_presentation_words();
     test_rgb565_upload_uses_hardware_blit();
+    test_index8_upload_uses_palette_blit();
+    test_index8_upload_stays_indexed();
     test_upload_reserve_ends_the_batch_data();
     test_window_scene_batch();
     test_builder_uses_the_capacity_it_is_given();
@@ -2730,6 +2909,7 @@ int main(void)
     test_command_failure_reason();
     test_mono_draw_list();
     test_styled_text_uses_one_glyph_source();
+    test_prepared_style_strikes();
     test_direct_styled_text();
     test_draw_list_copy_is_a_hardware_self_blit();
     test_text_box_scroll_uses_overlap_safe_copy();

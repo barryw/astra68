@@ -35,6 +35,7 @@ def display_count(machine, name):
 def open_application(machine, bundle, deadline):
     before = machine.sequence()
     submissions = display_count(machine, "submissions")
+    palette_blits = display_count(machine, "palette-blit-commands")
     machine.qmp.double_click(*machine.desktop_icon(bundle))
     end = time.monotonic() + deadline
     while time.monotonic() < end:
@@ -50,12 +51,17 @@ def open_application(machine, bundle, deadline):
                    if "application launch refused" in line or
                    "desktop launch" in line]
         if refused:
-            raise RuntimeError("%s did not launch: %s" % (bundle, refused))
+            details = [line for line in lines if "display" in line.lower() or
+                       "render" in line.lower()]
+            raise RuntimeError("%s did not launch: %s; recent=%s" %
+                               (bundle, details[-20:], lines[-10:]))
         launched = any(("launch " + bundle) in line for line in lines)
-        if launched and display_count(machine, "submissions") > submissions:
+        if (launched and display_count(machine, "submissions") > submissions
+                and display_count(machine, "palette-blit-commands") >
+                palette_blits):
             return
         time.sleep(0.25)
-    raise RuntimeError("%s launched no drawing within %.0fs: %s" %
+    raise RuntimeError("%s launched no drawing or indexed icon within %.0fs: %s" %
                        (bundle, deadline,
                         machine.said_with_syslog(before)[0][-20:]))
 

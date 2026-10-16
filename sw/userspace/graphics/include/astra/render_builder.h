@@ -83,6 +83,12 @@ uint32_t astra_render_builder_surface_format_at(
     AstraRenderBuilder *builder, uint32_t data_offset,
     uint32_t data_capacity, uint16_t width, uint16_t height, uint32_t pitch,
     uint8_t format, uint8_t access);
+/* INDEX8 source with a separate, 64-byte-aligned 256-entry ARGB palette in
+   Media RAM. The palette must not overlap the pixel range. */
+uint32_t astra_render_builder_surface_index8_at(
+    AstraRenderBuilder *builder, uint32_t data_offset,
+    uint32_t data_capacity, uint16_t width, uint16_t height, uint32_t pitch,
+    uint32_t palette_offset, uint8_t access);
 /* Row bytes for width pixels of format, or zero for an unknown format. */
 uint32_t astra_render_format_row_bytes(uint8_t format, uint32_t width);
 /* Rows of source pixels copied into the batch; returns a READ descriptor. */
@@ -112,6 +118,12 @@ uint32_t astra_render_builder_upload_rgb565(AstraRenderBuilder *builder,
                                              const void *pixels,
                                              uint32_t source_pitch,
                                              uint16_t width, uint16_t height);
+/* Upload indices with 256 ARGB palette entries; Astraea expands on blit. */
+uint32_t astra_render_builder_upload_index8(AstraRenderBuilder *builder,
+                                             const void *pixels,
+                                             uint32_t source_pitch,
+                                             uint16_t width, uint16_t height,
+                                             const uint32_t *palette_argb);
 int astra_render_builder_fill(AstraRenderBuilder *builder,
                               uint32_t destination, int32_t x, int32_t y,
                               uint32_t width, uint32_t height,

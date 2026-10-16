@@ -23,6 +23,7 @@ typedef struct DisplayGraphicsSurface {
     uint32_t id;
     uint32_t offset;
     uint32_t bytes;
+    uint32_t palette_offset; /* INDEX8 only; 256 ARGB entries in Media RAM. */
     uint32_t pitch;
     uint16_t width;
     uint16_t height;

@@ -37,7 +37,7 @@ order needed to finish the complete design without application-private UI.
 | Theme, surfaces, font strikes | 1a-1d, 3b | semantic generation-5 tokens, integer UI scale, bitmap strikes | partial |
 | Retained layout | all | nested row/column/wrap containers, intrinsic measurement, reflow, clipping | complete; physical ABI-2 gate passed |
 | Primitive controls | 1d, 4a | label, button, field, check, radio, switch, slider, dial, stepper, popup, combo, segmented, tags, disclosure, progress | label/button/check/radio/switch/slider/progress/field and tabs accepted; segmented, stepper, dial, and disclosure host-certified in current source |
-| Collection controls | 1d, 2b, 4a | scroll model, ScrollView, scrollbar, splitter, list, tree, table, grid, columns, toolbar, status, pagination | scroll model/view/bar and splitter accepted; list, tree, table, grid, columns, toolbar, status, and pagination pending |
+| Collection controls | 1d, 2b, 4a | scroll model, ScrollView, scrollbar, splitter, list, tree, table, grid, columns, toolbar, status, pagination | scroll model/view/bar and splitter accepted; single-selection List host and target build pass in Interface 5.5, physical consumer pending; tree, table, grid, columns, toolbar, status, and pagination pending |
 | TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer, selection paint/hit test/extraction, typed clipboard, Terminal copy/paste and resource-backed styled scrollback, shared undo/redo, piece-table model, and field accepted; find, wide cells, and code/flow layout pending |
 | Input vocabulary | 6a-6b | keymap-selected Meta labels and immutable system/workspace/app shortcut tiers | input service emits one normalized Meta bit; detection, override, labels, and shortcut tiers pending |
 | Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | caller-owned responder chain, state query and invocation; Desktop double-click/context Open share one command in Interface 5.4; cross-process publication and palette/shortcut consumers pending |
@@ -48,6 +48,16 @@ order needed to finish the complete design without application-private UI.
 | Dock and window policy | 2c | pinned/running/minimized groups, instance state, hold menu, durable ordering | hardware overlap path started; policy UI pending |
 | Workspace finish | 1a-1c | volume objects, titlebar treatment B, designed icon strikes, status surfaces | partial |
 | Scenes | 3a | discoverable scene ledger and menu switching over fixed 1080p60 timing | hardware contract complete; UI pending |
+
+Interface 5.5 List reuses the existing choice item/state/action contract,
+semantic theme and text primitives, flex layout, and ScrollView/scroll model.
+Only vertical row geometry and row paint are new. Its keyboard reveal uses the
+same scroll transaction as wheel input. Interface Gallery is the first native
+consumer. Read-only Haiku references:
+`~/Git/haiku/src/kits/interface/ListView.cpp` for selection and keyboard
+behavior, plus `~/Git/haiku/src/preferences/appearance/FontSelectionView.cpp`
+for a settings pane composed from common controls. Astra retains its own
+explicit layout/borrowed-item ABI rather than copying Haiku's view ownership.
 
 "Complete" in this table means implemented through the public ABI with unit,
 sanitizer, malformed-input, and application-consumer coverage. A layer is not

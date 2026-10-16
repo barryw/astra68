@@ -506,12 +506,16 @@ int astra_main(const AstraStartupInfo *startup)
     status = astra_process_filesystem_open(&filesystem, startup);
     if (status == ASTRA_VFS_OK && exact_volume && volume_open(startup) != ASTRA_OK)
         status = ASTRA_VFS_ERR_LOST;
-    if (status == ASTRA_VFS_OK)
+    const char *step = "filesystem";
+
+    if (status == ASTRA_VFS_OK) {
+        step = "area create";
         result = astra_area_create(4096u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
             ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &placeholder);
-    else
+    } else
         result = ASTRA_ERROR_IO;
     if (result == ASTRA_OK) {
+        step = "window create";
         info.x = 360u;
         info.y = 120u;
         info.width = width;
@@ -530,26 +534,45 @@ int astra_main(const AstraStartupInfo *startup)
         AstraResult ignored = astra_area_close(&placeholder);
         (void)ignored;
     }
-    if (result == ASTRA_OK)
-        result = astra_window_set_application_name(&window, "Atlas", 5u);
-    if (result == ASTRA_OK)
-        result = astra_window_display(&window, &display);
-    if (result == ASTRA_OK)
-        result = astra_window_surface(&window, &content);
-    if (result == ASTRA_OK)
-        result = load_icon("/apps/Atlas.app/resources/drawer.aicon", &folder_icon);
-    if (result == ASTRA_OK)
-        result = load_icon("/apps/Atlas.app/resources/document.aicon", &file_icon);
-    model.line_height = CELL_HEIGHT + GRID_GAP_Y;
-    if (result == ASTRA_OK)
-        result = astra_scroll_init(&scroll, &model);
-    if (result == ASTRA_OK)
-        result = build_view();
-    if (result == ASTRA_OK)
-        result = paint();
-    if (result == ASTRA_OK)
-        result = astra_window_activate(&window);
     if (result == ASTRA_OK) {
+        step = "window name";
+        result = astra_window_set_application_name(&window, "Atlas", 5u);
+    }
+    if (result == ASTRA_OK) {
+        step = "display open";
+        result = astra_window_display(&window, &display);
+    }
+    if (result == ASTRA_OK) {
+        step = "window surface";
+        result = astra_window_surface(&window, &content);
+    }
+    if (result == ASTRA_OK) {
+        step = "folder icon";
+        result = load_icon("/apps/Atlas.app/resources/drawer.aicon", &folder_icon);
+    }
+    if (result == ASTRA_OK) {
+        step = "file icon";
+        result = load_icon("/apps/Atlas.app/resources/document.aicon", &file_icon);
+    }
+    model.line_height = CELL_HEIGHT + GRID_GAP_Y;
+    if (result == ASTRA_OK) {
+        step = "scroll model";
+        result = astra_scroll_init(&scroll, &model);
+    }
+    if (result == ASTRA_OK) {
+        step = "control tree";
+        result = build_view();
+    }
+    if (result == ASTRA_OK) {
+        step = "first paint";
+        result = paint();
+    }
+    if (result == ASTRA_OK) {
+        step = "window activation";
+        result = astra_window_activate(&window);
+    }
+    if (result == ASTRA_OK) {
+        step = "directory worker";
         AstraThreadStart start = {read_root, 0u};
         if (astra_rt_thread_create(&start, ASTRA_PROCESS_PRIORITY_NORMAL,
             ASTRA_RIGHT_WAIT | ASTRA_RIGHT_READ | ASTRA_RIGHT_ADMINISTER,
@@ -582,7 +605,9 @@ int astra_main(const AstraStartupInfo *startup)
         astra_process_filesystem_close(&filesystem);
         volume_close();
     }
-    if (result != ASTRA_OK)
+    if (result != ASTRA_OK) {
+        (void)astra_log(step);
         (void)astra_log_failure("Atlas window", (uint32_t)(-result));
+    }
     return result == ASTRA_OK ? 0 : ASTRA_STATUS_PROGRAM_FIRST;
 }

@@ -14,7 +14,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 20u
+#define ASTRA_GUI_VERSION 21u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -390,6 +390,9 @@ enum {
        the window as WINDOW_PRESENT does, without a STATE event. A frame
        that fails is dropped and logged. */
     ASTRA_GUI_GRAPHICS_FRAME = 9u,
+    /* INDEX8 surface object; x = first palette entry, width = count,
+       offset = packed big-endian ARGB entries in the staging area. */
+    ASTRA_GUI_GRAPHICS_PALETTE_WRITE = 10u,
 };
 
 /** FRAME flags. */

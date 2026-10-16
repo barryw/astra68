@@ -89,7 +89,9 @@ enum {
     GALLERY_DISCLOSURE_BODY,
     GALLERY_DISCLOSURE_OPTION_A,
     GALLERY_DISCLOSURE_OPTION_B,
-    GALLERY_CONTROL_COUNT = GALLERY_DISCLOSURE_OPTION_B
+    GALLERY_LIST_LABEL,
+    GALLERY_LIST,
+    GALLERY_CONTROL_COUNT = GALLERY_LIST
 };
 
 enum {
@@ -139,6 +141,11 @@ static const AstraChoiceItem gallery_choices[] = {
     {"Windows", sizeof("Windows") - 1u, {0u, 0u}},
     {"Scenes", sizeof("Scenes") - 1u, {0u, 0u}},
     {"Ports", sizeof("Ports") - 1u, {0u, 0u}}
+};
+static const AstraChoiceItem gallery_fonts[] = {
+    {"Astra Sans", sizeof("Astra Sans") - 1u, {0u, 0u}},
+    {"Astra Mono", sizeof("Astra Mono") - 1u, {0u, 0u}},
+    {"Rescue Mono", sizeof("Rescue Mono") - 1u, {0u, 0u}}
 };
 
 #define GALLERY_CONTROL(id) (&controls[(id) - 1u])
@@ -347,6 +354,18 @@ static uint32_t add_segmented(uint32_t index, uint32_t id,
     info.selected = selected;
     return astra_interface_segmented_init(&controls[index], &info) ==
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+}
+
+static uint32_t add_list(uint32_t index, uint32_t id)
+{
+    AstraChoiceInfo info = ASTRA_CHOICE_INFO_INIT;
+
+    info.id = id;
+    info.items = gallery_fonts;
+    info.item_count = sizeof(gallery_fonts) / sizeof(gallery_fonts[0]);
+    info.selected = 0u;
+    return astra_interface_list_init(&controls[index], &info) == ASTRA_OK ?
+        ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
 static uint32_t add_tabs(uint32_t index, uint32_t id)
@@ -816,6 +835,13 @@ static uint32_t build_controls(void)
         status = add_segmented(GALLERY_SEGMENTED - 1u,
                                GALLERY_SEGMENTED, 0u);
     if (status == ASTRA_STATUS_OK)
+        status = add_label(GALLERY_LIST_LABEL - 1u, GALLERY_LIST_LABEL,
+                           "SINGLE-SELECTION LIST",
+                           sizeof("SINGLE-SELECTION LIST") - 1u,
+                           ASTRA_TEXT_CLIENT_SECONDARY);
+    if (status == ASTRA_STATUS_OK)
+        status = add_list(GALLERY_LIST - 1u, GALLERY_LIST);
+    if (status == ASTRA_STATUS_OK)
         status = add_label(GALLERY_STEPPER_LABEL - 1u,
                            GALLERY_STEPPER_LABEL, "STEPPER · KB",
                            sizeof("STEPPER · KB") - 1u,
@@ -919,6 +945,10 @@ static uint32_t build_controls(void)
             ASTRA_FLEX_BREAK_AFTER, 1u);
     PAGE_ITEM(GALLERY_DISCLOSURE_OPTION_A, GALLERY_DISCLOSURE_BODY, 0u);
     PAGE_ITEM(GALLERY_DISCLOSURE_OPTION_B, GALLERY_DISCLOSURE_BODY,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_LIST_LABEL, GALLERY_PAGE_CHOICE,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_LIST, GALLERY_PAGE_CHOICE,
               ASTRA_FLEX_BREAK_AFTER);
 
     PAGE_ITEM(GALLERY_SLIDER_LABEL, GALLERY_PAGE_VALUE,

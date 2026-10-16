@@ -14,8 +14,15 @@ typedef struct ASTRA_WindowData {
     AstraDisplay display;
     /* The window content, sized when the framebuffer was last created. */
     AstraSurface content;
+    AstraSurface indexed_framebuffer;
+    AstraDrawList framebuffer_list;
     uint8_t *framebuffer;
     uint32_t framebuffer_pitch;
+    uint32_t framebuffer_format;
+    uint32_t palette_offset;
+    uint32_t palette_version;
+    const void *palette_identity;
+    uint8_t palette_ready;
     /* The window's ASTRA_WINDOW_SUBSCRIBE_* mask; the renderer adds VBLANK
      * while it presents with vsync. */
     uint32_t event_mask;

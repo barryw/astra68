@@ -1,11 +1,117 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-15
+Status: active continuation map, 2026-10-16
 
-Latest user scope is the complete fixed/removable filesystem, explicitly
-excluding network mounts. Correctness remains ahead of performance.
+Latest work covers native font management, scoped settings, and migration of
+native UI pixel rendering to Astraea. The fixed/removable filesystem remains
+in scope; network mounts remain excluded. Correctness remains ahead of
+performance.
 
-Current production checkpoint: coherent Startup ABI 8 source 28, manifest
+Graphics offload now targets broad SDL compatibility: keep streaming textures
+and writable window surfaces for existing software renderers, while moving
+feasible drawing and indexed palette conversion to Astraea. DevilutionX and
+ScummVM are next port targets; both need those general paths and enough CPU
+headroom for game logic. The current SDL renderer already accelerates draws.
+Native INDEX8 window presentation and palette updates pass host, MC68040 and
+QEMU render-probe gates. A disposable full-desktop QEMU image launches
+Interface Gallery, Atlas, and SDL TestDraw2 with indexed icon blits. Physical
+DE25 candidate `57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`
+reached stage 8 and passed 1920×1080 desktop, Atlas, styled Gallery text and
+live Doom HDMI captures, normal Doom quit, balanced hardware submissions, and
+zero host-service restarts. A second isolated run of the same release captured
+Terminal, animated SDL TestDraw2 and the DH0 right-click menu; SDL close
+settled at 17,512/17,512 hardware submissions/completions. The release is now
+selected on DE25 with the existing production user state; the previous release
+and its state remain available for rollback. Actual DevilutionX/ScummVM port workloads and
+their performance measurements remain open.
+An isolated physical SDL INDEX8 probe also captured a live palette-backed
+window through HDMI DMA: four hardware triangles, three surface reads, 19
+palette blits, 77/77 submissions/completions, and expected RGB565-quantized
+upper/lower colors. Its raw frame SHA-256 is
+`a2431151cea8c717b1962c8616b9b5d237059889eddc7c915b1cc52ffaae6ba3`.
+Production services returned to stage 8, active with zero restarts.
+
+Font-management work is isolated from production storage. Interface Kit 6.0
+adds a shared, composed List control with an Interface Gallery consumer and
+requires draw-list views for native controls and menus. This ABI bump is
+not in the production checkpoint. Interface host, sanitizer, analyzer and
+MC68040 gates, full userspace `all test`, and NDK `dist-check` with installed
+example links on Beast pass. A disposable Beast image passes QEMU desktop
+launches for Interface Gallery, Atlas, and SDL TestDraw2, plus context-menu
+pointer and keyboard interaction. A separate disposable SDL render-probe image
+passes four hardware triangle commands, three surface reads, and 65/65 display
+submissions. Native display and Doom input/rendering passed the isolated DE25
+candidate gate. Build-time
+AFNT conversion now covers TTF, OTF, selected TTC faces, variable default
+instances, and monochrome Amiga disk
+fonts. Shared C AFNT 0.2 validation and packing round-trip shipped fonts plus
+Iosevka, Source Sans, and Amiga spike AFNT on Beast. A reusable HPS C outline
+converter turns static Iosevka TTF and Source Sans OTF into validated A8 AFNT;
+host/sanitizer and AArch64 compile checks pass. It is not connected to a host
+worker, native font service, or Fonts UI yet. Interface Kit bundle metadata now
+provides 6.0.0, matching its current ABI. [Font scope and runtime gaps](FONTS.md#7-import-and-style-compatibility)
+and the [Iosevka evaluation](IOSEVKA_EVALUATION.md) record details. Config Kit
+1.1 now opens a separate `CONFIG_SYSTEM` grant for resident services, rooted at
+`/config/system/<service>`; apps retain private `CONFIG` and cannot receive
+the system grant. [Settings ownership](SETTINGS.md) fixes the system/app split
+and default-on-damage policy. No font-service consumer is connected yet. Direct
+RGB565 software surfaces still have CPU glyph loops; native draw-list text uses
+Astraea. Font Kit 2.3 prepares built-in bold/italic AFNT-derived strikes at
+build time, removing per-frame style bitmap synthesis. Beast pixel-oracle,
+sanitizer, analyzer, MC68040 library, and full userspace tests pass; QEMU and
+physical DE25 styled-text visuals pass on the candidate.
+SDL's RGB565 writable framebuffer and Chocolate Doom's software renderer remain
+CPU graphics paths. AICON desktop/Atlas icons now upload indices and palette
+metadata rather than expand pixels on the CPU. Launch-panel and title-bar
+icons use the same palette-backed blit; indexed uploads preserve raw indices
+until Astraea expands them. Graphics Kit 3.0 returns
+palette-backed INDEX8 icon sources; System Kit 4.2 adds the native palette
+update call and GUI protocol 21 carries it. These changes are QEMU- and
+DE25-qualified and selected in the production checkpoint.
+[Graphics audit](GRAPHICS_RENDER_AUDIT.md) tracks hardware
+offload opportunities, current limits, and release gates.
+Desktop's scrollbar now renders through Interface Kit commands appended to
+the system draw list, removing its production CPU pixel path. System Kit 4.2
+adds the checked view-to-session append API. Full userspace build/test and
+System/Desktop host, sanitizer, analyzer, and MC68040 builds pass on Beast;
+QEMU and DE25 candidate visual gates pass.
+There is no
+installed-font service/catalog or Fonts UI import transaction yet. Build-time
+Python conversion is a development oracle, not a user import path.
+
+Current production checkpoint: graphics release
+`57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`,
+source manifest
+`e1d6324b734baa6f888bc0fc9b542434ba08f9bff32274bba6ca419f54c9e96a`.
+Production source 28 was stopped before copying its 256 MiB state image and
+WORK/SOUND exports to both DE25 and Beast; image SHA-256
+`1cf291e0176902cbf1d066e12d032d0fa322ad459d771bddd2afbf48900c221b`
+and export archive SHA-256
+`6b7253eb56cb0445c1cfb436c2c3a403093e4496b6777c052f7b067e8f0da41b`
+match across hosts. Beast installed the candidate's system products into an
+image clone, then `verify-state-preservation.py` confirmed all 25 existing
+`/home`, `/local`, and `/config` entries and their content/inode metadata
+unchanged. The staged image SHA-256 was
+`32e4114e4864cbdd6dad8fd520420f50111febc079b168110352647a3d4bfbc0`.
+DE25 booted this exact staged state with the existing exports, reached POST and
+stage 8, shut down cleanly, and passed offline `e2fsck -fn` plus a second
+25-entry preservation check. The postboot image SHA-256 was
+`f6fc7e15e267f02a90935e5b424d0a2e715f3072560f12361a2e12557ec50ab7`.
+After atomic selector change, normal production boot and warm restart both
+reached stage 8. QEMU runs as UID/GID 999 with no supplementary groups or
+capabilities and `NoNewPrivs=1`; runtime, audio, and remote services are active
+with zero automatic restarts. Physical 1920×1080 HDMI DMA capture passed and
+matched the earlier qualified desktop frame SHA-256
+`37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`.
+The older source-28 production log still records a rare
+`syscall dispatch contract failed` panic from `WAIT_MULTIPLE` after about 22
+guest hours. An intermediate graphics candidate also had one deferred-worker
+panic with missing host services; a 9-minute isolated run of the selected
+release with those services absent did not reproduce it and all eight watched
+pool-corruption flags stayed clear. Neither root cause is established; longer
+soak and targeted fault diagnosis remain open.
+
+Previous production checkpoint: coherent Startup ABI 8 source 28, manifest
 `443536186af4626cfc75a2f8404a0a22d6e9a9bda9e1afe60a25675f219af05c`,
 immutable release
 `eeb95de8da994a2d0d976f74f691f7644fcdf9354d249af9bcf7b00fab116350`.
@@ -1436,12 +1542,12 @@ the DE25 release gate passed and the live RFB frame capture and Astra,
 remote-desktop, and audio-host services remain active. A physical reproduction
 of the formerly stuck resize cursor has not yet been repeated by the user.
 
-The latest retained and deployed production Agilex 5 capture shell routes with
-every clock constrained. Setup, hold, recovery, removal, and minimum-pulse
-slack are +0.024 ns, 0.000 ns, +2.645 ns, +0.046 ns, and +0.220 ns. Resource
-use is 45,797 / 46,800 ALMs and 354 / 358 RAM blocks. Exact build and
-deployment evidence belongs in
-`fpga/de25/TIMING_CLOSURE.md`.
+The latest retained and deployed production Agilex 5 capture shell is
+`b61dbda8`. It routes with every clock constrained: 40,854 / 46,800 ALMs,
+317 / 358 RAM blocks, and 67 / 376 DSP blocks. Graphics setup slack is
++0.262 ns; worst setup is +0.130 ns and worst hold +0.001 ns. Exact build and
+deployment evidence belongs in `fpga/de25/TIMING_CLOSURE.md`. The older
+45,797-ALM capture shell below is historical, not current capacity.
 
 The latest isolated source checkpoint removes the old tile controls, Copper
 targets, validators, line builders, and scene AXI arbiter while retaining
@@ -1987,10 +2093,10 @@ IPC, window titles, and interface labels reject malformed complete spans;
 terminal byte streams replace malformed input with U+FFFD. Editing-key
 sentinels now live above U+10FFFF and cannot collide with Unicode characters.
 
-AFNT 0.2 and `font.library` 2.1 now carry baseline-relative
+AFNT 0.2 and `font.library` 2.3 now carry baseline-relative
 ascent/descent/line-gap, cap-height, x-height, maximum advance, underline, and
-strikeout metrics. The draw-list renderer synthesizes bold and italic from one
-resident glyph source and positions underline/strikeout from those metrics;
+strikeout metrics. Built-in bold and italic strikes are prepared from AFNT at
+build time; the draw-list renderer positions underline/strikeout from metrics;
 glyph expansion remains hardware work. `interface.library` 2.2 adds the shared
 TextSurface fixed-grid renderer, and Terminal now consumes it for styled runs,
 logical colors, carets, and hardware-blit scrolling instead of owning a private

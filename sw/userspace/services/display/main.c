@@ -77,16 +77,6 @@ typedef struct DamageRect {
     uint32_t valid;
 } DamageRect;
 
-typedef struct TitleIconRun {
-    uint16_t x;
-    uint16_t y;
-    uint16_t width;
-    uint16_t height;
-    uint8_t matched;
-} TitleIconRun;
-
-#define TITLE_ICON_RUN_MAX ((ASTRA_AICON_STRIKE_WIDTH_MAX + 1u) / 2u)
-
 typedef struct DisplayWindow {
     AstraGuiOpenWindow request;
     char application_name[ASTRA_WINDOW_TITLE_MAX];
@@ -1926,83 +1916,38 @@ static void draw_gadget(AstraRenderBuilder *builder, uint32_t destination,
                  theme->gadget_glyph, gadget, color(glyph));
 }
 
+static uint32_t upload_icon_strike(AstraRenderBuilder *builder,
+                                   const AstraAicon *icon,
+                                   const AstraAiconStrike *strike)
+{
+    uint32_t palette[256] = {0u};
+
+    if (icon->palette_count == 0u || icon->palette_count > 256u ||
+        strike->width > ASTRA_AICON_STRIKE_WIDTH_MAX ||
+        strike->height > ASTRA_AICON_STRIKE_WIDTH_MAX)
+        return 0u;
+    for (uint16_t index = 0u; index < icon->palette_count; ++index) {
+        uint8_t rgba[4];
+
+        if (astra_aicon_palette(icon, index, rgba) != ASTRA_BUNDLE_OK)
+            return 0u;
+        palette[index] = ((uint32_t)rgba[3] << 24u) |
+                         ((uint32_t)rgba[0] << 16u) |
+                         ((uint32_t)rgba[1] << 8u) | rgba[2];
+    }
+    return astra_render_builder_upload_index8(builder, strike->pixels,
+        strike->width, strike->width, strike->height, palette);
+}
+
 static int draw_title_icon(AstraRenderBuilder *builder, uint32_t destination,
                            const DisplayWindow *window, int32_t x, int32_t y)
 {
-    const AstraAiconStrike *strike = &window->title_icon_strike;
+    uint32_t source = upload_icon_strike(
+        builder, &window->title_icon, &window->title_icon_strike);
 
-    if (strike->width > ASTRA_AICON_STRIKE_WIDTH_MAX)
-        return 0;
-    for (uint16_t color_index = 1u;
-         color_index < window->title_icon.palette_count; ++color_index) {
-        TitleIconRun active[TITLE_ICON_RUN_MAX];
-        uint32_t active_count = 0u;
-        uint8_t rgba[4];
-        uint16_t pixel;
-
-        if (astra_aicon_palette(&window->title_icon, color_index, rgba) !=
-                ASTRA_BUNDLE_OK || rgba[3] == 0u)
-            continue;
-        pixel = astra_surface_rgb565(rgba[0], rgba[1], rgba[2]);
-        for (uint16_t row = 0u; row < strike->height; ++row) {
-            TitleIconRun current[TITLE_ICON_RUN_MAX];
-            uint32_t current_count = 0u;
-            uint16_t column = 0u;
-
-            for (uint32_t at = 0u; at < active_count; ++at)
-                active[at].matched = 0u;
-            while (column < strike->width) {
-                uint16_t start;
-                uint32_t match = active_count;
-
-                while (column < strike->width && strike->pixels[
-                           (uint32_t)row * strike->width + column] !=
-                           color_index)
-                    ++column;
-                start = column;
-                while (column < strike->width && strike->pixels[
-                           (uint32_t)row * strike->width + column] ==
-                           color_index)
-                    ++column;
-                if (start == column)
-                    break;
-                for (uint32_t at = 0u; at < active_count; ++at)
-                    if (active[at].x == start &&
-                        active[at].width == column - start &&
-                        active[at].matched == 0u) {
-                        match = at;
-                        break;
-                    }
-                if (current_count == sizeof(current) / sizeof(current[0]))
-                    return 0;
-                if (match != active_count) {
-                    active[match].matched = 1u;
-                    ++active[match].height;
-                    current[current_count++] = active[match];
-                } else {
-                    current[current_count++] = (TitleIconRun){
-                        start, row, (uint16_t)(column - start), 1u, 1u};
-                }
-            }
-            for (uint32_t at = 0u; at < active_count; ++at)
-                if (active[at].matched == 0u &&
-                    !astra_render_builder_fill(
-                        builder, destination, x + active[at].x,
-                        y + active[at].y, active[at].width,
-                        active[at].height, pixel))
-                    return 0;
-            active_count = current_count;
-            for (uint32_t at = 0u; at < current_count; ++at)
-                active[at] = current[at];
-        }
-        for (uint32_t at = 0u; at < active_count; ++at)
-            if (!astra_render_builder_fill(
-                    builder, destination, x + active[at].x,
-                    y + active[at].y, active[at].width,
-                    active[at].height, pixel))
-                return 0;
-    }
-    return 1;
+    return source != 0u && astra_render_builder_blit_region(
+        builder, destination, source, 0, 0, x, y,
+        window->title_icon_strike.width, window->title_icon_strike.height);
 }
 
 /* A decorated window's frame and title bar. The client area is left in
@@ -2230,36 +2175,6 @@ static int build_overlay_surface(AstraRenderBuilder *builder,
     return 1;
 }
 
-static uint8_t launch_blend(uint8_t over, uint8_t under, uint8_t alpha)
-{
-    return (uint8_t)(((uint32_t)over * alpha +
-                      (uint32_t)under * (255u - alpha) + 127u) / 255u);
-}
-
-static uint16_t launch_icon_pixels[DISPLAY_LAUNCH_ICON * DISPLAY_LAUNCH_ICON];
-
-/* The icon's 64-pixel strike over the panel, blended by palette alpha:
-   one upload, however many colors the icon has. */
-static void launch_icon_compose(const DisplayLaunch *launch,
-                                AstraColorRGBA8 under)
-{
-    uint16_t palette[256];
-
-    for (uint16_t index = 0u; index < launch->icon.palette_count; ++index) {
-        uint8_t rgba[4] = {0u, 0u, 0u, 0u};
-
-        (void)astra_aicon_palette(&launch->icon, index, rgba);
-        palette[index] = astra_surface_rgb565(
-            launch_blend(rgba[0], under.red, rgba[3]),
-            launch_blend(rgba[1], under.green, rgba[3]),
-            launch_blend(rgba[2], under.blue, rgba[3]));
-    }
-    /* astra_aicon_open bounds every index by the palette. */
-    for (uint32_t at = 0u; at < DISPLAY_LAUNCH_ICON * DISPLAY_LAUNCH_ICON;
-         ++at)
-        launch_icon_pixels[at] = palette[launch->strike.pixels[at]];
-}
-
 static int launch_text(AstraRenderBuilder *builder, uint32_t destination,
                        int32_t y, const char *text, uint32_t length,
                        uint16_t height, uint16_t color, uint32_t style)
@@ -2303,12 +2218,8 @@ static int build_launch_surface(AstraRenderBuilder *builder,
             color(theme->title_inactive)))
         return 0;
     if (launch->icon_bytes != NULL) {
-        uint32_t source;
-
-        launch_icon_compose(launch, theme->title_inactive);
-        source = astra_render_builder_upload_rgb565(
-            builder, launch_icon_pixels, DISPLAY_LAUNCH_ICON * 2u,
-            DISPLAY_LAUNCH_ICON, DISPLAY_LAUNCH_ICON);
+        uint32_t source = upload_icon_strike(
+            builder, &launch->icon, &launch->strike);
         if (source == 0u || !astra_render_builder_blit_region(
                 builder, state->launch_resource, source, 0, 0,
                 (int32_t)(width - DISPLAY_LAUNCH_ICON) / 2,
@@ -4799,8 +4710,9 @@ static uint32_t graphics_request(void *context, uint32_t operation,
 static uint32_t graphics_submit(void *context, uint32_t bytes,
                                 const DisplayGraphicsAttachment *attachment)
 {
+    /* Client staging may be rewritten as soon as its command returns. */
     return graphics_request(context, ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH,
-                            bytes, attachment, 0);
+                            bytes, attachment, attachment != NULL);
 }
 
 static uint32_t graphics_read(void *context, uint32_t bytes)

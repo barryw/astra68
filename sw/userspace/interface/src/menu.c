@@ -278,24 +278,25 @@ AstraResult astra_interface_menu_render(const AstraMenu *menu, AstraSurfaceView 
         surface->clip_left > surface->clip_right || surface->clip_right > surface->width ||
         surface->clip_top > surface->clip_bottom || surface->clip_bottom > surface->height)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    if (surface->kind == ASTRA_SURFACE_VIEW_DRAW_LIST) {
-        top = (int64_t)PAD - menu->_private_scroll;
-        for (uint32_t at = 0u; at < menu->_private_count; ++at) {
-            const AstraMenuItem *item = &menu->_private_items[at];
-            if (top < surface->height - PAD && top + pitch(item) > PAD) {
-                commands += 4u;
-                if (item->label_length != 0u)
-                    payload += astra_surface_ui_text_fit(item->label, item->label_length,
-                        ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, surface->width - 40u);
-            }
-            top += pitch(item);
-        }
-        if (!astra_interface_draw_list_has_room(surface, commands, payload))
-            return ASTRA_ERROR_NO_RESOURCES;
-    } else if (surface->kind != ASTRA_SURFACE_VIEW_RGB565 ||
-        !astra_surface_view_init(&target, surface->pixels, surface->byte_size,
-                                 surface->width, surface->height, surface->pitch))
+    if (surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST)
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (!astra_draw_list_view_adopt(&target, surface->pixels,
+                                    surface->byte_size, surface->width,
+                                    surface->height))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    top = (int64_t)PAD - menu->_private_scroll;
+    for (uint32_t at = 0u; at < menu->_private_count; ++at) {
+        const AstraMenuItem *item = &menu->_private_items[at];
+        if (top < surface->height - PAD && top + pitch(item) > PAD) {
+            commands += 4u;
+            if (item->label_length != 0u)
+                payload += astra_surface_ui_text_fit(item->label, item->label_length,
+                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, surface->width - 40u);
+        }
+        top += pitch(item);
+    }
+    if (!astra_interface_draw_list_has_room(surface, commands, payload))
+        return ASTRA_ERROR_NO_RESOURCES;
     target = *surface;
     astra_surface_fill_round(&target, 0, 0, target.width, target.height,
                             theme.window_radius, color(theme.frame));

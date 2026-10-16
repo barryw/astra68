@@ -25,3 +25,9 @@ ASTRA_FONT_2.2 {
         astra_ui_font_scalar;
         astra_ui_font_strike;
 } ASTRA_FONT_2.1;
+
+ASTRA_FONT_2.3 {
+    global:
+        astra_mono_font_strike_styled;
+        astra_ui_font_strike_styled;
+} ASTRA_FONT_2.2;

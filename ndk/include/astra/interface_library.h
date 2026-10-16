@@ -13,10 +13,10 @@
 #include <astra/undo.h>
 #include <astra/window.h>
 
-/** Breaking Interface Kit ABI generation carried by interface.library.5. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 5u
+/** Breaking Interface Kit ABI generation carried by interface.library.6. */
+#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 6u
 /** Current backward-compatible Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 4u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 0u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -134,6 +134,14 @@ AstraResult astra_interface_segmented_init(AstraControl *control,
  */
 AstraResult astra_interface_tab_init(AstraControl *control,
                                      const AstraChoiceInfo *info);
+/** Initialize a single-selection vertical list. Empty lists and no selection are valid.
+ * Compose with ScrollView for overflow; item labels remain caller-owned.
+ * @param control Caller-owned control to initialize.
+ * @param info Choice description; UINT32_MAX selects no item.
+ * @return ASTRA_OK or a validation error.
+ */
+AstraResult astra_interface_list_init(AstraControl *control,
+                                      const AstraChoiceInfo *info);
 /** Initialize a single-line UTF-8 field.
  * @param control Caller-owned control to initialize.
  * @param info Field description; its text model remains caller-owned.

@@ -22,7 +22,7 @@ ASTRA_EXTERN_C_BEGIN
 /** Display refresh used to derive deterministic animation phases. */
 #define ASTRA_UI_VBLANK_HZ 60u
 
-/** Control kinds implemented by Interface Kit ABI 5.4. */
+/** Control kinds implemented by Interface Kit ABI 6.0. */
 enum {
     ASTRA_CONTROL_LABEL = 1u,
     ASTRA_CONTROL_BUTTON = 2u,
@@ -40,7 +40,9 @@ enum {
     ASTRA_CONTROL_SCROLLBAR = 14u,
     ASTRA_CONTROL_SPLITTER = 15u,
     ASTRA_CONTROL_DIAL = 16u,
-    ASTRA_CONTROL_DISCLOSURE = 17u
+    ASTRA_CONTROL_DISCLOSURE = 17u,
+    /** Single-selection vertical list; compose with ScrollView for overflow. */
+    ASTRA_CONTROL_LIST = 18u
 };
 
 /** Semantic state owned by an application. */
@@ -494,11 +496,11 @@ typedef struct AstraChoiceInfo {
     uint32_t size;
     /** Nonzero ID unique within the UI context. */
     uint32_t id;
-    /** Borrowed item array retained for the control lifetime. */
+    /** Borrowed item array; NULL permitted for an empty List. */
     const AstraChoiceItem *items;
     /** Number of items; storage capacity is the only ceiling. */
     uint32_t item_count;
-    /** Initially selected zero-based item. */
+    /** Initially selected zero-based item; UINT32_MAX means none for List. */
     uint32_t selected;
     /** Application-owned disabled or error semantic state. */
     uint32_t state;

@@ -712,10 +712,23 @@ void astra_surface_text8x8(AstraSurfaceView *surface, int32_t x, int32_t y,
 static const AstraUiStrike *font_strike(const AstraFontBank *font,
                                         uint16_t pixel_height)
 {
-    for (uint32_t index = 0u; index < font->strike_count; ++index)
+    for (uint32_t index = 0u; index < font->strike_count / 4u; ++index)
         if (font->strikes[index].pixel_height == pixel_height)
             return &font->strikes[index];
     return NULL;
+}
+
+static const AstraUiStrike *font_strike_styled(const AstraFontBank *font,
+                                               uint16_t pixel_height,
+                                               uint32_t style_flags)
+{
+    const AstraUiStrike *regular = font_strike(font, pixel_height);
+    uint32_t style =
+        ((style_flags & ASTRA_TEXT_STYLE_BOLD) != 0u ? 1u : 0u) |
+        ((style_flags & ASTRA_TEXT_STYLE_ITALIC) != 0u ? 2u : 0u);
+
+    return regular == NULL ? NULL :
+        regular + style * (font->strike_count / 4u);
 }
 
 const AstraUiStrike *astra_ui_font_strike(uint16_t pixel_height)
@@ -723,9 +736,21 @@ const AstraUiStrike *astra_ui_font_strike(uint16_t pixel_height)
     return font_strike(&ui_font, pixel_height);
 }
 
+const AstraUiStrike *astra_ui_font_strike_styled(uint16_t pixel_height,
+                                                 uint32_t style_flags)
+{
+    return font_strike_styled(&ui_font, pixel_height, style_flags);
+}
+
 const AstraUiStrike *astra_mono_font_strike(uint16_t pixel_height)
 {
     return font_strike(&mono_font, pixel_height);
+}
+
+const AstraUiStrike *astra_mono_font_strike_styled(uint16_t pixel_height,
+                                                   uint32_t style_flags)
+{
+    return font_strike_styled(&mono_font, pixel_height, style_flags);
 }
 
 uint32_t astra_ui_font_scalar(const char *text, uint32_t length,
@@ -900,7 +925,6 @@ static int font_text(AstraSurfaceView *surface, int32_t x, int32_t y,
     int32_t pen_26_6 = x * 64;
     int32_t start_26_6 = pen_26_6;
     uint32_t at = 0u;
-    uint32_t embolden = astra_ui_bold_strength(pixel_height, style_flags);
 
     if (surface == NULL || utf8 == NULL ||
         (style_flags & ~ASTRA_TEXT_RENDER_STYLE_MASK) != 0u)
@@ -912,7 +936,7 @@ static int font_text(AstraSurfaceView *surface, int32_t x, int32_t y,
                                  ASTRA_DRAW_LIST_TEXT,
             style_flags);
     }
-    strike = font_strike(font, pixel_height);
+    strike = font_strike_styled(font, pixel_height, style_flags);
     if (strike == NULL ||
         (strike->bitmap_format != ASTRA_FONT_BITMAP_MASK1 &&
          strike->bitmap_format != ASTRA_FONT_BITMAP_A8))
@@ -926,29 +950,12 @@ static int font_text(AstraSurfaceView *surface, int32_t x, int32_t y,
         int32_t glyph_y = astra_ui_glyph_y(y * 64 + strike->ascent, glyph);
         const uint8_t *bitmap = &font->bitmap[glyph->bitmap_offset];
 
-        for (uint32_t row_index = 0u; row_index < glyph->height; ++row_index) {
-            int32_t shift =
-                (style_flags & ASTRA_TEXT_STYLE_ITALIC) != 0u ?
-                    astra_ui_italic_shift(glyph, row_index) : 0;
-
-            for (uint32_t column = 0u;
-                 column < (uint32_t)glyph->width + embolden; ++column) {
-                uint8_t coverage = 0u;
-
-                for (uint32_t weight = 0u; weight <= embolden; ++weight)
-                    if (column >= weight && column - weight < glyph->width) {
-                        uint8_t candidate = glyph_coverage(
-                            strike, glyph, bitmap, column - weight,
-                            row_index);
-
-                        if (candidate > coverage)
-                            coverage = candidate;
-                    }
-                blend_glyph_pixel(
-                    surface, glyph_x + shift + (int32_t)column,
-                    glyph_y + (int32_t)row_index, color, coverage);
-            }
-        }
+        for (uint32_t row_index = 0u; row_index < glyph->height; ++row_index)
+            for (uint32_t column = 0u; column < glyph->width; ++column)
+                blend_glyph_pixel(surface, glyph_x + (int32_t)column,
+                                  glyph_y + (int32_t)row_index, color,
+                                  glyph_coverage(strike, glyph, bitmap,
+                                                 column, row_index));
         pen_26_6 += astra_ui_glyph_advance(glyph, cell_width);
         at += consumed;
     }

@@ -30,11 +30,11 @@ ASTRA_LUA_LIBRARY := \
 ASTRA_NTP_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/ntp/build/m68k/libraries/ntp.library.1
 ASTRA_GRAPHICS_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/graphics/build/m68k/libraries/graphics.library.2
+	$(ASTRA_USERSPACE_ROOT)/graphics/build/m68k/libraries/graphics.library.3
 ASTRA_FONT_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/graphics/build/m68k/libraries/font.library.2
 ASTRA_INTERFACE_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/interface/build/m68k/libraries/interface.library.5
+	$(ASTRA_USERSPACE_ROOT)/interface/build/m68k/libraries/interface.library.6
 ASTRA_NETWORK_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/network/build/m68k/libraries/network.library.1
 ASTRA_CONFIG_LIBRARY := \

@@ -17,6 +17,12 @@ static int surface_closes;
 static int area_closes;
 static int display_closes;
 static int writes;
+static int palette_writes;
+static int draw_uploads;
+static int draw_blits;
+static int draw_posts;
+static AstraRectI32 last_blit;
+static uint32_t last_palette_offset;
 static AstraRectI32 last_write;
 static uint32_t last_write_offset;
 static uint32_t last_write_pitch;
@@ -141,12 +147,92 @@ AstraResult astra_surface_close(AstraSurface *surface)
     *surface = (AstraSurface)ASTRA_SURFACE_INIT;
     return ASTRA_OK;
 }
+AstraResult astra_surface_create(const AstraDisplay *display,
+                                const AstraSurfaceCreateInfo *create,
+                                AstraSurface *surface)
+{
+    assert(display->_private_handle == 9u &&
+           create->format == ASTRA_PIXEL_FORMAT_INDEX8 &&
+           create->width == 320u && create->height == 200u &&
+           create->flags == (ASTRA_SURFACE_DRAW_SOURCE |
+                             ASTRA_SURFACE_CPU_WRITE));
+    surface->_private_handle = 9u;
+    surface->_private_id = 2u;
+    surface->_private_width = create->width;
+    surface->_private_height = create->height;
+    return ASTRA_OK;
+}
+AstraResult astra_surface_palette_write_staged(const AstraSurface *surface,
+                                                uint16_t first, uint16_t count,
+                                                uint32_t offset)
+{
+    assert(surface->_private_id == 2u && first == 0u && count == 256u);
+    ++palette_writes;
+    last_palette_offset = offset;
+    return ASTRA_OK;
+}
+AstraResult astra_draw_list_create(const AstraSurface *destination,
+                                   const AstraRectI32 *clip,
+                                   AstraDrawList *list)
+{
+    assert(destination->_private_id == ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID &&
+           clip->width == 320u && clip->height == 200u);
+    list->_private_handle = 9u;
+    return ASTRA_OK;
+}
+AstraResult astra_draw_list_close(AstraDrawList *list)
+{
+    assert(list->_private_handle == 9u);
+    *list = (AstraDrawList)ASTRA_DRAW_LIST_INIT;
+    return ASTRA_OK;
+}
+AstraResult astra_draw_list_reset(AstraDrawList *list)
+{
+    assert(list->_private_handle == 9u);
+    return ASTRA_OK;
+}
+AstraResult astra_draw_upload(AstraDrawList *list,
+                              const AstraSurface *surface,
+                              const AstraRectI32 *rect,
+                              uint32_t offset, uint32_t pitch)
+{
+    assert(list->_private_handle == 9u && surface->_private_id == 2u &&
+           rect->width == 10u && rect->height == 11u &&
+           offset == 3u * 320u + 2u && pitch == 320u);
+    ++draw_uploads;
+    return ASTRA_OK;
+}
+AstraResult astra_draw_list_set_clip(AstraDrawList *list,
+                                     const AstraRectI32 *clip)
+{
+    assert(list->_private_handle == 9u && clip->width > 0u);
+    return ASTRA_OK;
+}
+AstraResult astra_draw_blit(AstraDrawList *list, const AstraSurface *source,
+                            const AstraRectI32 *source_rect,
+                            const AstraRectI32 *destination_rect,
+                            const AstraBlitOptions *options)
+{
+    assert(list->_private_handle == 9u && source->_private_id == 2u &&
+           options == NULL &&
+           memcmp(source_rect, destination_rect, sizeof(*source_rect)) == 0);
+    ++draw_blits;
+    last_blit = *source_rect;
+    return ASTRA_OK;
+}
+AstraResult astra_draw_post(AstraDrawList *list, uint32_t flags)
+{
+    assert(list->_private_handle == 9u && flags == ASTRA_DRAW_POST_PRESENT);
+    ++draw_posts;
+    return ASTRA_OK;
+}
 AstraResult astra_display_staging(AstraDisplay *display,
                                   uint32_t minimum_bytes, void **pixels,
                                   uint32_t *bytes)
 {
     assert(display->_private_handle == 9u &&
-           minimum_bytes == 320u * 200u * 2u);
+           (minimum_bytes == 320u * 200u * 2u ||
+            minimum_bytes == 320u * 200u + 1024u));
     *pixels = backing;
     *bytes = sizeof(backing);
     return ASTRA_OK;
@@ -551,9 +637,14 @@ int main(void)
     void *pixels = NULL;
     int pitch = 0;
     SDL_Rect damage[] = {{2, 3, 8, 9}, {7, 8, 5, 6}};
+    SDL_Color colors[256] = {{0}};
+    SDL_Palette palette = {0};
+    SDL_PixelFormat pixel_format = {0};
+    SDL_Surface indexed_surface = {0};
 
     created = ASTRA_CreateDevice();
     assert(created != NULL && created->VideoQuit != NULL &&
+           created->checked_texture_framebuffer == SDL_TRUE &&
            created->SetWindowFullscreen == ASTRA_SetWindowFullscreen &&
            created->SetWindowMouseGrab == ASTRA_SetWindowMouseGrab &&
            created->SetWindowMouseRect == ASTRA_SetWindowMouseRect);
@@ -608,6 +699,32 @@ int main(void)
            last_damage.width == 10u && last_damage.height == 11u);
     assert(ASTRA_UpdateWindowFramebuffer(&device, &window, NULL, 1) < 0);
     assert(presents == 1 && writes == 1); /* malformed: nothing sent */
+    palette.ncolors = 256;
+    palette.colors = colors;
+    palette.version = 1u;
+    colors[7] = (SDL_Color){ 11u, 22u, 33u, 255u };
+    pixel_format.palette = &palette;
+    indexed_surface.format = &pixel_format;
+    window.surface = &indexed_surface;
+    window.fullscreen_mode.format = SDL_PIXELFORMAT_INDEX8;
+    assert(ASTRA_CreateWindowFramebuffer(&device, &window, &format,
+                                         &pixels, &pitch) == 0);
+    assert(format == SDL_PIXELFORMAT_INDEX8 && pixels == backing &&
+           pitch == 320 && surface_closes == 1);
+    assert(ASTRA_UpdateWindowFramebuffer(&device, &window, damage, 2) == 0);
+    assert(palette_writes == 1 && last_palette_offset == 64000u &&
+           draw_uploads == 1 && draw_blits == 1 && draw_posts == 1 &&
+           last_blit.width == 320u && last_blit.height == 200u);
+    assert(((uint8_t *)backing)[64000u + 7u * 4u] == 255u &&
+           ((uint8_t *)backing)[64000u + 7u * 4u + 1u] == 11u);
+    colors[7].r = 44u;
+    ++palette.version;
+    assert(ASTRA_UpdateWindowFramebuffer(&device, &window, NULL, 0) == 0);
+    assert(palette_writes == 2 && draw_uploads == 1 &&
+           draw_blits == 2 && draw_posts == 2 &&
+           last_blit.width == 320u && last_blit.height == 200u &&
+           ((uint8_t *)backing)[64000u + 7u * 4u + 1u] == 44u);
+    window.surface = NULL;
     ASTRA_SetWindowTitle(&device, &window);
     window.x = 210;
     window.y = 120;
@@ -663,6 +780,6 @@ int main(void)
     test_mouse(&device, &window);
     ASTRA_DestroyWindow(&device, &window);
     assert(window.driverdata == NULL && window_closes == 1 &&
-           surface_closes == 1 && display_closes == 1 && area_closes == 2);
+           surface_closes == 3 && display_closes == 1 && area_closes == 2);
     return 0;
 }

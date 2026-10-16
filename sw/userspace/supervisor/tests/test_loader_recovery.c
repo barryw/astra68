@@ -14,6 +14,8 @@ static uint32_t logged_status;
 static uint64_t now;
 static const char *policy_text;
 static const AstraStartupInfo *expected_startup;
+static char created[2][ASTRA_VFS_PATH_MAX];
+static uint32_t creation_count;
 
 void *astra_runtime_allocate(size_t size)
 {
@@ -37,6 +39,15 @@ uint32_t astra_log_failure(const char *operation, uint32_t status)
 AstraVfsClient *supervisor_vfs_client(void)
 {
     return managed ? &managed_client : NULL;
+}
+
+uint32_t astra_vfs_mkdir_mode(AstraVfsClient *client, const char *path,
+                              uint16_t mode)
+{
+    assert(client == &managed_client && mode == 0700u);
+    assert(creation_count < 2u);
+    strcpy(created[creation_count++], path);
+    return ASTRA_VFS_OK;
 }
 
 static uint32_t read_policy(const char *path, void **buffer, uint32_t *length)
@@ -95,6 +106,32 @@ int main(void)
     AstraStartupInfo startup = {0};
     AstraServiceDefinition definition = ASTRA_SERVICE_DEFINITION_INIT;
     expected_startup = &startup;
+    {
+        SupervisorManifestEntry entry = {0};
+        char root[ASTRA_VFS_PATH_MAX];
+
+        managed = 1;
+        strcpy(entry.path, "/services/fonts");
+        entry.resident = 1u;
+        assert(private_config_root(&entry, "config",
+                                   ASTRA_CONFIG_OWNER_SYSTEM,
+                                   root, sizeof(root)) == ASTRA_CONFIG_OK);
+        assert(strcmp(root, "config/system/fonts") == 0);
+        assert(creation_count == 2u);
+        assert(strcmp(created[0], "/config/system") == 0);
+        assert(strcmp(created[1], "/config/system/fonts") == 0);
+        creation_count = 0u;
+        strcpy(entry.path, "/apps/Terminal.app");
+        entry.resident = 0u;
+        assert(private_config_root(&entry, "config",
+                                   ASTRA_CONFIG_OWNER_APPLICATION,
+                                   root, sizeof(root)) == ASTRA_CONFIG_OK);
+        assert(strcmp(root, "config/applications/Terminal.app") == 0);
+        assert(strcmp(created[0], "/config/applications") == 0);
+        assert(strcmp(created[1], "/config/applications/Terminal.app") == 0);
+        creation_count = 0u;
+        managed = 0;
+    }
     assert(astra_service_definition_init(&definition, "hostfs", HOSTFS_IMAGE_PATH,
                                          ASTRA_SERVICE_RUNS_ASTRA) == ASTRA_OK);
     definition.start_policy = ASTRA_SERVICE_START_BOOT;

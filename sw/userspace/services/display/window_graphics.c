@@ -153,7 +153,7 @@ int display_window_graphics_command_valid(
            command->header.transaction_id != 0u &&
            command->window == window && command->generation != 0u &&
            command->action >= ASTRA_GUI_GRAPHICS_SURFACE_CREATE &&
-           command->action <= ASTRA_GUI_GRAPHICS_FRAME &&
+           command->action <= ASTRA_GUI_GRAPHICS_PALETTE_WRITE &&
            astra_words_zero(command->reserved, 2u);
 }
 
@@ -249,7 +249,8 @@ static uint32_t surface_create(DisplayWindowGraphics *graphics,
     DisplayGraphicsSurface surface;
     AstraRenderBuilder builder;
     uint32_t target;
-    uint32_t bytes;
+    uint64_t bytes;
+    uint32_t allocation_bytes;
     uint32_t status;
 
     if (format == UINT8_MAX || command->width == 0u ||
@@ -262,10 +263,13 @@ static uint32_t surface_create(DisplayWindowGraphics *graphics,
         return ASTRA_STATUS_INVALID;
     if ((command->flags & ~SUPPORTED_SURFACE_FLAGS) != 0u)
         return ASTRA_STATUS_UNSUPPORTED;
-    bytes = row * command->height;
+    bytes = (uint64_t)row * command->height;
+    if (format == ASTRA_RENDER_FORMAT_INDEX8)
+        bytes = ((bytes + 63u) & ~UINT64_C(63)) + 1024u;
     if (graphics->surface_count >= DISPLAY_GRAPHICS_SURFACE_MAX ||
         bytes > DISPLAY_GRAPHICS_BYTES_MAX - graphics->surface_bytes)
         return ASTRA_STATUS_LIMIT;
+    allocation_bytes = (uint32_t)bytes;
     if (graphics->surface_count == graphics->surface_capacity) {
         uint32_t capacity = graphics->surface_capacity == 0u ? 64u :
                             graphics->surface_capacity * 2u;
@@ -301,8 +305,8 @@ static uint32_t surface_create(DisplayWindowGraphics *graphics,
     } while (find_surface(graphics, graphics->next_surface) != NULL);
     surface = (DisplayGraphicsSurface){
         .id = graphics->next_surface,
-        .offset = host->allocate(host->context, bytes),
-        .bytes = bytes,
+        .offset = host->allocate(host->context, allocation_bytes),
+        .bytes = allocation_bytes,
         .pitch = row,
         .width = (uint16_t)command->width,
         .height = (uint16_t)command->height,
@@ -311,6 +315,9 @@ static uint32_t surface_create(DisplayWindowGraphics *graphics,
     };
     if (surface.offset == 0u)
         return ASTRA_STATUS_LIMIT;
+    if (format == ASTRA_RENDER_FORMAT_INDEX8)
+        surface.palette_offset = surface.offset +
+            (((uint32_t)row * command->height + 63u) & ~UINT32_C(63));
     /* Media RAM is reused across clients: clear it before anyone can read
        it, ARGB8888 to transparent black. */
     status = builder_begin(&builder, host);
@@ -323,6 +330,21 @@ static uint32_t surface_create(DisplayWindowGraphics *graphics,
         !astra_render_builder_fill(&builder, target, 0, 0, surface.width,
                                    surface.height, 0u))
         return ASTRA_STATUS_LIMIT;
+    if (surface.palette_offset != 0u) {
+        DisplayGraphicsSurface palette = {
+            .offset = surface.palette_offset, .bytes = 1024u,
+            .pitch = 1024u, .width = 256u, .height = 1u,
+            .format = ASTRA_RENDER_FORMAT_ARGB8888,
+        };
+        uint32_t palette_target = descriptor(
+            &builder, &palette, palette.format,
+            ASTRA_RENDER_SURFACE_WRITE);
+
+        if (palette_target == 0u ||
+            !astra_render_builder_fill(&builder, palette_target,
+                                       0, 0, 256u, 1u, 0u))
+            return ASTRA_STATUS_LIMIT;
+    }
     status = builder_submit(&builder, host, NULL);
     if (status != ASTRA_STATUS_OK)
         return status;
@@ -464,6 +486,55 @@ static uint32_t surface_write(DisplayWindowGraphics *graphics,
                        command->pitch, row);
 }
 
+static uint32_t palette_write(DisplayWindowGraphics *graphics,
+                              const DisplayGraphicsHost *host,
+                              const AstraGuiGraphicsCommand *command)
+{
+    DisplayGraphicsSurface *surface = find_surface(graphics, command->object);
+    DisplayGraphicsSurface palette;
+    AstraRenderBuilder builder;
+    uint32_t bytes;
+    uint32_t target;
+    uint32_t source;
+    uint32_t status;
+
+    if (surface == NULL)
+        return ASTRA_STATUS_NOT_FOUND;
+    if (surface->palette_offset == 0u ||
+        (surface->flags & ASTRA_SURFACE_CPU_WRITE) == 0u)
+        return ASTRA_STATUS_ACCESS;
+    if (command->target != 0u || command->y != 0 ||
+        command->height != 0u || command->format != 0u ||
+        command->flags != 0u || command->pitch != 0u ||
+        command->x < 0 || command->x >= 256 ||
+        command->width == 0u ||
+        command->width > 256u - (uint32_t)command->x)
+        return ASTRA_STATUS_INVALID;
+    bytes = command->width * 4u;
+    if (command->offset > graphics->staging_bytes ||
+        bytes > graphics->staging_bytes - command->offset)
+        return ASTRA_STATUS_INVALID;
+    palette = (DisplayGraphicsSurface){
+        .offset = surface->palette_offset, .bytes = 1024u,
+        .pitch = 1024u, .width = 256u, .height = 1u,
+        .format = ASTRA_RENDER_FORMAT_ARGB8888,
+    };
+    status = builder_begin(&builder, host);
+    if (status != ASTRA_STATUS_OK)
+        return status;
+    target = descriptor(&builder, &palette, palette.format,
+                        ASTRA_RENDER_SURFACE_WRITE);
+    source = astra_render_builder_upload(
+        &builder, graphics->staging + command->offset, bytes,
+        (uint16_t)command->width, 1u, ASTRA_RENDER_FORMAT_ARGB8888);
+    if (target == 0u || source == 0u ||
+        !astra_render_builder_blit_region(
+            &builder, target, source, 0, 0, command->x, 0,
+            (uint16_t)command->width, 1u))
+        return ASTRA_STATUS_LIMIT;
+    return builder_submit(&builder, host, NULL);
+}
+
 /* Rows of a surface, read back from Media RAM by the display helper,
    written into the client's staging area (docs/TEXTURE_ENGINE.md 8). */
 static uint32_t surface_read(DisplayWindowGraphics *graphics,
@@ -499,7 +570,7 @@ static uint32_t surface_read(DisplayWindowGraphics *graphics,
             .magic = ASTRA_DISPLAY_SURFACE_READ_MAGIC,
             .version = ASTRA_DISPLAY_SURFACE_READ_VERSION,
             .data_offset = surface.offset,
-            .data_bytes = surface.bytes,
+            .data_bytes = surface.pitch * surface.height,
             .pitch = surface.pitch,
             .width = surface.width,
             .height = surface.height,
@@ -582,6 +653,11 @@ static uint32_t resolve_source(void *context, AstraRenderBuilder *builder,
     if (!lookup_surface(resolve->graphics, resolve->host, id, &surface) ||
         (surface.flags & ASTRA_SURFACE_DRAW_SOURCE) == 0u)
         return 0u;
+    if (surface.palette_offset != 0u)
+        return astra_render_builder_surface_index8_at(
+            builder, surface.offset, surface.bytes, surface.width,
+            surface.height, surface.pitch, surface.palette_offset,
+            ASTRA_RENDER_SURFACE_READ);
     return descriptor(builder, &surface, surface.format,
                       ASTRA_RENDER_SURFACE_READ);
 }
@@ -747,6 +823,8 @@ uint32_t display_window_graphics_command(
         return surface_destroy(graphics, command);
     case ASTRA_GUI_GRAPHICS_SURFACE_WRITE:
         return surface_write(graphics, host, command);
+    case ASTRA_GUI_GRAPHICS_PALETTE_WRITE:
+        return palette_write(graphics, host, command);
     case ASTRA_GUI_GRAPHICS_STAGING_SET: {
         uint8_t *staging = NULL;
         uint32_t bytes = 0u;

@@ -239,7 +239,8 @@ row address. Horizontal, vertical, and diagonal scroll are all pixel-granular.
 Version 1 uses two complete ring surfaces for continuously updated content:
 
 1. Vega scans the active ring.
-2. Astraea and the CPU update newly exposed strips in the writable back ring.
+2. CPU submits drawing commands for newly exposed strips; Astraea updates the
+   writable back ring.
 3. The display service submits render fences and the next viewport scene.
 4. Vega swaps ring descriptors atomically at a qualifying vblank.
 

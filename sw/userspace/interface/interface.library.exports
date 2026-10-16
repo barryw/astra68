@@ -1,4 +1,4 @@
-ASTRA_INTERFACE_5.4 {
+ASTRA_INTERFACE_6.0 {
     global:
         astra_interface_menu_init;
         astra_interface_menu_get_state;
@@ -23,6 +23,7 @@ ASTRA_INTERFACE_5.4 {
         astra_interface_field_refresh;
         astra_interface_field_replace_selection;
         astra_interface_label_init;
+        astra_interface_list_init;
         astra_interface_progress_init;
         astra_interface_progress_set;
         astra_interface_radio_init;

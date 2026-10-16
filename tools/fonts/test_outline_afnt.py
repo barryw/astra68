@@ -5,6 +5,10 @@ from argparse import Namespace
 import importlib.util
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from fontTools.ttLib import TTCollection, TTFont
+from fontTools.colorLib.builder import buildCOLR, buildCPAL
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,7 +19,8 @@ afnt = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(afnt)
 
 
-def convert(path: Path, family: str, revision: str, strikes, monospaced=False):
+def convert(path: Path, family: str, revision: str, strikes,
+            monospaced=False, face_index=0):
     return afnt.build_outline_afnt(Namespace(
         input=path,
         family=family,
@@ -24,6 +29,7 @@ def convert(path: Path, family: str, revision: str, strikes, monospaced=False):
         source_revision=revision,
         strikes=strikes,
         monospaced=monospaced,
+        face_index=face_index,
     ))
 
 
@@ -77,5 +83,41 @@ except ValueError as error:
     assert str(error) == "invalid glyph record"
 else:
     raise AssertionError("invalid A8 pitch was accepted")
+
+with TemporaryDirectory() as directory:
+    collection_path = Path(directory) / "mixed.ttc"
+    collection = TTCollection()
+    collection.fonts = [TTFont(atkinson), TTFont(jetbrains)]
+    try:
+        collection.save(collection_path)
+    finally:
+        collection.close()
+    imported = convert(collection_path, "Astra Mono", "test",
+                       [(16, 13)], monospaced=True, face_index=1)
+    imported_cmap, imported_strikes, _, _ = afnt.unpack_afnt(imported)
+    assert len(imported_cmap) >= 1300
+    assert imported_strikes[0][2] == 8
+    assert json.loads(afnt.parse_afnt(imported)[b"NAME"])[
+        "source_face_index"] == 1
+    for path, index in ((collection_path, 2), (atkinson, 1)):
+        try:
+            convert(path, "Invalid", "test", [(16, 13)], face_index=index)
+        except ValueError as error:
+            assert "face index" in str(error)
+        else:
+            raise AssertionError("invalid collection face index was accepted")
+
+    color_path = Path(directory) / "color.ttf"
+    color_face = TTFont(atkinson)
+    color_face["COLR"] = buildCOLR({"A": [("A", 0)]})
+    color_face["CPAL"] = buildCPAL([[(0, 0, 0, 1)]])
+    color_face.save(color_path)
+    color_face.close()
+    try:
+        convert(color_path, "Color", "test", [(16, 13)])
+    except ValueError as error:
+        assert "color glyphs" in str(error)
+    else:
+        raise AssertionError("color font was silently reduced to A8")
 
 print("AFNT outline-font contract: PASS")

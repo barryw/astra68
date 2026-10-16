@@ -69,7 +69,7 @@ library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(LIBRARY_MAP) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $(LIBRARY) | \
-		grep -q '^config.library.1 1.0.1 ABI 1.0$$'
+		grep -q '^config.library.1 1.1.0 ABI 1.1$$'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1

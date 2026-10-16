@@ -6,12 +6,12 @@
 #include <astra/graphics.h>
 #include <astra/surface.h>
 
-/** Breaking Graphics Kit ABI generation carried by graphics.library.2. */
-#define ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR 2u
+/** Breaking Graphics Kit ABI generation carried by graphics.library.3. */
+#define ASTRA_GRAPHICS_LIBRARY_ABI_MAJOR 3u
 /** Current backward-compatible Graphics Kit revision. */
-#define ASTRA_GRAPHICS_LIBRARY_ABI_MINOR 2u
+#define ASTRA_GRAPHICS_LIBRARY_ABI_MINOR 0u
 
-/** Decode one validated AICON strike into a protected ARGB8888 source surface.
+/** Upload one validated AICON strike as a palette-backed INDEX8 source surface.
  * @param display Window's graphics connection.
  * @param bytes Complete AICON file, borrowed until this call returns.
  * @param length File bytes.

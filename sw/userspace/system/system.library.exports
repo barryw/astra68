@@ -47,6 +47,7 @@ ASTRA_SYSTEM_4.0 {
         astra_draw_line;
         astra_draw_lines;
         astra_draw_list_cleanup;
+        astra_draw_list_append_view;
         astra_draw_list_close;
         astra_draw_list_create;
         astra_draw_list_reset;
@@ -99,6 +100,7 @@ ASTRA_SYSTEM_4.0 {
         astra_surface_close;
         astra_surface_create;
         astra_surface_get_info;
+        astra_surface_palette_write_staged;
         astra_surface_read;
         astra_surface_write;
         astra_surface_write_staged;

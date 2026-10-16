@@ -32,6 +32,11 @@ int main(void)
     SDL_Renderer *renderer;
     SDL_Texture *sprite;
     SDL_Texture *target;
+    SDL_Surface *indexed;
+    SDL_DisplayMode indexed_mode = { SDL_PIXELFORMAT_INDEX8, 320, 200, 0, NULL };
+    SDL_Color colors[3] = {
+        { 0, 0, 0, 255 }, { 220, 40, 30, 255 }, { 30, 80, 220, 255 }
+    };
     SDL_Rect whole = { 0, 0, 64, 64 };
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0)
@@ -111,12 +116,39 @@ int main(void)
                              SDL_PIXELFORMAT_ABGR8888, readback,
                              16 * 4) != 0)
         return fail("SDL_RENDER_READ_WINDOW_FAIL");
-    puts("SDL_RENDER_READY");
-    (void)astra_log("SDL_RENDER_READY");
-    SDL_Delay(10000u);
     SDL_DestroyTexture(target);
     SDL_DestroyTexture(sprite);
     SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+
+    window = SDL_CreateWindow("SDL Indexed Probe", SDL_WINDOWPOS_CENTERED,
+                              SDL_WINDOWPOS_CENTERED, 320, 200,
+                              SDL_WINDOW_SHOWN);
+    if (window == NULL || SDL_SetWindowDisplayMode(window, &indexed_mode) != 0)
+        return fail("SDL_INDEXED_CREATE_FAIL");
+    indexed = SDL_GetWindowSurface(window);
+    if (indexed == NULL)
+        return fail("SDL_INDEXED_SURFACE_FAIL");
+    if (indexed->format->format != SDL_PIXELFORMAT_INDEX8)
+        return fail("SDL_INDEXED_FORMAT_FAIL");
+    if (indexed->format->palette == NULL)
+        return fail("SDL_INDEXED_PALETTE_FAIL");
+    if (SDL_SetPaletteColors(indexed->format->palette, colors, 0, 3) != 0)
+        return fail("SDL_INDEXED_COLORS_FAIL");
+    for (int row = 0; row < indexed->h; ++row)
+        SDL_memset((Uint8 *)indexed->pixels + row * indexed->pitch,
+                   row < 100 ? 1 : 2, (size_t)indexed->w);
+    if (SDL_UpdateWindowSurface(window) != 0)
+        return fail("SDL_INDEXED_PRESENT_FAIL");
+    colors[1] = (SDL_Color){ 30, 220, 60, 255 };
+    if (SDL_SetPaletteColors(indexed->format->palette, colors + 1, 1, 1) != 0 ||
+        SDL_UpdateWindowSurface(window) != 0)
+        return fail("SDL_INDEXED_RECOLOR_FAIL");
+    puts("SDL_INDEXED_READY");
+    (void)astra_log("SDL_INDEXED_READY");
+    puts("SDL_RENDER_READY");
+    (void)astra_log("SDL_RENDER_READY");
+    SDL_Delay(10000u);
     SDL_DestroyWindow(window);
     SDL_Quit();
     return 0;

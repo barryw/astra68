@@ -653,6 +653,8 @@ def read_host_syslog(root):
     astra_log/astra_log_line calls leave the kernel trace ring for its own
     per-process ring, drained here by the events service rather than left
     for a pmemsave of the ring. The desktop is one such program."""
+    if not os.access(root, os.R_OK | os.X_OK):
+        return ""
     for directory, _, files, directory_fd in os.fwalk(root, follow_symlinks=False):
         if os.path.basename(directory) == ".astra" and "syslog" in files:
             # Oldest first: a rotation moves the start of a run into

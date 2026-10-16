@@ -432,6 +432,29 @@ AstraResult astra_surface_write_staged(const AstraSurface *surface,
                             &reply);
 }
 
+AstraResult astra_surface_palette_write_staged(const AstraSurface *surface,
+                                               uint16_t first, uint16_t count,
+                                               uint32_t offset)
+{
+    AstraGuiGraphicsCommand request = {0};
+    AstraGuiGraphicsReply reply = {0};
+
+    if (!surface_live(surface) ||
+        surface->_private_format != ASTRA_PIXEL_FORMAT_INDEX8 ||
+        count == 0u || first >= 256u || count > 256u - first)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if ((surface->_private_flags & ASTRA_SURFACE_CPU_WRITE) == 0u)
+        return ASTRA_ERROR_PERMISSION;
+    request.action = ASTRA_GUI_GRAPHICS_PALETTE_WRITE;
+    request.object = surface->_private_id;
+    request.x = first;
+    request.width = count;
+    request.offset = offset;
+    return graphics_command(surface->_private_handle,
+                            surface->_private_window, &request, 0, 0u,
+                            &reply);
+}
+
 AstraResult astra_display_stage(AstraDisplay *display, uint32_t offset,
                                 const void *pixels, uint32_t pitch,
                                 uint32_t row_bytes, uint32_t rows)
@@ -782,6 +805,126 @@ AstraResult astra_draw_list_set_target(AstraDrawList *draw_list,
             .clip_bottom = destination->_private_height,
         };
     return result;
+}
+
+AstraResult astra_draw_list_append_view(AstraDrawList *draw_list,
+                                        const AstraSurfaceView *view)
+{
+    const AstraDrawListHeader *source;
+    const AstraDrawListCommand *commands;
+    AstraDrawListHeader *target;
+    AstraDrawListCommand *appended;
+    uint32_t source_offset = ASTRA_DRAW_LIST_PAYLOAD_OFFSET;
+    uint32_t old_count, old_payload, payload_base, new_count, new_payload;
+    uint32_t target_offset;
+    AstraResult result;
+
+    if (!list_live(draw_list) || view == NULL || view->pixels == NULL ||
+        ((uintptr_t)view->pixels & 3u) != 0u ||
+        view->kind != ASTRA_SURFACE_VIEW_DRAW_LIST ||
+        view->byte_size < ASTRA_DRAW_LIST_AREA_BYTES ||
+        ((uint64_t)(uintptr_t)view->pixels <
+             (uint64_t)(uintptr_t)draw_list->_private_commands +
+                 draw_list->_private_bytes &&
+         (uint64_t)(uintptr_t)draw_list->_private_commands <
+             (uint64_t)(uintptr_t)view->pixels +
+                 ASTRA_DRAW_LIST_AREA_BYTES) ||
+        draw_list->_private_sealed == LIST_SUBMITTED ||
+        view->width != draw_list->_private_target_width ||
+        view->height != draw_list->_private_target_height)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    source = (const AstraDrawListHeader *)(const void *)view->pixels;
+    if (source->magic != ASTRA_DRAW_LIST_MAGIC ||
+        source->version != ASTRA_DRAW_LIST_VERSION_1_7 ||
+        source->total_bytes != ASTRA_DRAW_LIST_AREA_BYTES ||
+        source->command_capacity != ASTRA_DRAW_LIST_COMMAND_MAX ||
+        source->command_count > ASTRA_DRAW_LIST_COMMAND_MAX ||
+        source->payload_bytes > ASTRA_DRAW_LIST_PAYLOAD_BYTES ||
+        source->width != view->width || source->height != view->height ||
+        !astra_words_zero(source->reserved, 9u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    commands = (const AstraDrawListCommand *)(source + 1);
+    for (uint32_t at = 0u; at < source->command_count; ++at) {
+        const AstraDrawListCommand *command = &commands[at];
+        int text = command->operation == ASTRA_DRAW_LIST_TEXT ||
+                   command->operation == ASTRA_DRAW_LIST_MONO_TEXT;
+
+        if (command->operation != ASTRA_DRAW_LIST_FILL &&
+            command->operation != ASTRA_DRAW_LIST_FILL_ROUNDED &&
+            command->operation != ASTRA_DRAW_LIST_LINE &&
+            command->operation != ASTRA_DRAW_LIST_BLIT && !text)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (command->source != ASTRA_DRAW_LIST_SOURCE_DESTINATION ||
+            command->clip_left > command->clip_right ||
+            command->clip_right > view->width ||
+            command->clip_top > command->clip_bottom ||
+            command->clip_bottom > view->height ||
+            command->payload_bytes > source->payload_bytes ||
+            (!text && command->payload_bytes != 0u) ||
+            (text && (command->payload_bytes == 0u ||
+                      command->payload_offset < source_offset ||
+                      command->payload_offset - source_offset >
+                          source->payload_bytes - command->payload_bytes)))
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
+    result = list_reclaim(draw_list);
+    if (result != ASTRA_OK)
+        return result;
+    target = list_header(draw_list);
+    old_count = target->command_count;
+    old_payload = target->payload_bytes;
+    payload_base = source->payload_bytes != 0u ?
+        (old_payload + 3u) & ~3u : old_payload;
+    new_count = old_count + source->command_count;
+    new_payload = payload_base + source->payload_bytes;
+    if (new_count < old_count || new_payload < payload_base)
+        return ASTRA_ERROR_NO_RESOURCES;
+    if (new_count > target->command_capacity ||
+        new_payload > payload_capacity(target)) {
+        uint32_t capacity = target->command_capacity;
+
+        if (capacity < new_count)
+            capacity = new_count;
+        result = list_attach(draw_list, capacity, new_payload,
+                             target->width, target->height);
+        if (result != ASTRA_OK)
+            return result;
+        target = list_header(draw_list);
+    }
+    target_offset = astra_draw_list_payload_offset(target->command_capacity);
+    appended = (AstraDrawListCommand *)(target + 1) + old_count;
+    for (uint32_t at = 0u; at < source->command_count; ++at) {
+        appended[at] = commands[at];
+        if (appended[at].payload_bytes != 0u)
+            appended[at].payload_offset = target_offset + payload_base +
+                commands[at].payload_offset - source_offset;
+        if (appended[at].clip_left < draw_list->_private_clip.x)
+            appended[at].clip_left = (uint16_t)draw_list->_private_clip.x;
+        if (appended[at].clip_top < draw_list->_private_clip.y)
+            appended[at].clip_top = (uint16_t)draw_list->_private_clip.y;
+        if (appended[at].clip_right > (uint32_t)draw_list->_private_clip.x +
+                draw_list->_private_clip.width)
+            appended[at].clip_right = (uint16_t)(
+                draw_list->_private_clip.x + draw_list->_private_clip.width);
+        if (appended[at].clip_bottom > (uint32_t)draw_list->_private_clip.y +
+                draw_list->_private_clip.height)
+            appended[at].clip_bottom = (uint16_t)(
+                draw_list->_private_clip.y + draw_list->_private_clip.height);
+        if (appended[at].clip_left > appended[at].clip_right)
+            appended[at].clip_right = appended[at].clip_left;
+        if (appended[at].clip_top > appended[at].clip_bottom)
+            appended[at].clip_bottom = appended[at].clip_top;
+    }
+    if (payload_base != old_payload)
+        memset((uint8_t *)target + target_offset + old_payload, 0,
+               payload_base - old_payload);
+    if (source->payload_bytes != 0u)
+        memcpy((uint8_t *)target + target_offset + payload_base,
+               (const uint8_t *)source + source_offset,
+               source->payload_bytes);
+    target->command_count = new_count;
+    target->payload_bytes = new_payload;
+    return ASTRA_OK;
 }
 
 AstraResult astra_draw_list_set_clip(AstraDrawList *draw_list,

@@ -1,5 +1,77 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-16: production graphics cutover on retained route
+
+- Beast installed immutable source manifest
+  `e1d6324b734baa6f888bc0fc9b542434ba08f9bff32274bba6ca419f54c9e96a`
+  release `57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`
+  into a stopped production-state clone. All 25 user entries and inode metadata
+  survived install and DE25 boot; offline fsck passed. Normal production boot
+  and warm restart reached stage 8, with runtime/audio/remote active and zero
+  automatic restarts. A physical 1920×1080 HDMI DMA frame passed and matched
+  the earlier qualified desktop SHA-256
+  `37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`.
+  A separate disposable-image physical SDL INDEX8 probe reached stage 8 and
+  captured the live palette-backed window through HDMI DMA. Hardware reported
+  four triangles, three surface reads, 19 palette blits, and 77/77 display
+  submissions/completions; captured upper/lower pixels matched RGB565-rounded
+  requested colors. Raw frame SHA-256:
+  `a2431151cea8c717b1962c8616b9b5d237059889eddc7c915b1cc52ffaae6ba3`.
+  Evidence: `/var/tmp/astra-render-probe-20261016/` on DE25 and
+  `/home/barry/astra-graphics-cutover-20261016/` on Beast. Normal production
+  services were restored afterward and reached stage 8 with zero restarts.
+  Disposition: software/graphics release selected; source-28 release and state
+  retained as rollback. Actual DevilutionX/ScummVM workloads and rare kernel
+  panic investigations remain open.
+- No RTL, constraints, synthesis, placement, route, or bitstream changed.
+  Retained `b61dbda8` full-feature route: 40,854/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM blocks, 67/376 DSPs;
+  measured graphics setup +0.262 ns, worst setup +0.130 ns, worst hold
+  +0.001 ns, all production clocks constrained. No new failed cone was
+  measured; these are retained route results, not new timing measurements.
+
+## 2026-10-16: graphics candidate on retained production route
+
+- Source was exact-mirrored to `beast`; MC68040 userspace, AArch64 QEMU,
+  release ROM and image were built and verified there. Immutable candidate is
+  `57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`;
+  source manifest SHA-256 is
+  `e1d6324b734baa6f888bc0fc9b542434ba08f9bff32274bba6ca419f54c9e96a`,
+  ROM SHA-256 is
+  `b28cc515d4fc9c25bb79001a84f0a6169b8c3b8b765d98515b283d4e841b599d`,
+  and image SHA-256 is
+  `91f0f6d6413d6f2401e22259f5fe8f7e1c9d17382a98f1258d49cfc022ca5f05`.
+- Isolated DE25 trial reached POST/stage 8. Physical 1920×1080 HDMI DMA
+  captures passed desktop, Atlas root, styled Gallery text, and live Doom.
+  Doom quit restored desktop cursor. Final hardware counters recorded
+  23,244/23,244 submissions/completions, 32 palette blits, and 178 glyph
+  commands; no guest panic, degraded-system message, or automatic audio/remote
+  service restart occurred. A second isolated run of the same candidate
+  captured Terminal, animated SDL TestDraw2, and the DH0 right-click menu;
+  closing the SDL window settled at 17,512/17,512 hardware
+  submissions/completions with no panic or host-service restart. Evidence:
+  `/var/tmp/astra-graphics-trial.wZ7G6h/` and
+  `/var/tmp/astra-graphics-trial.OfgQwT/` on DE25, build log
+  `/var/tmp/astra-graphics-release-final-build.log` on Beast. Trial exited
+  cleanly and restored all three production services; selector was unchanged
+  during these candidate trials.
+- Failed experiment retained: intermediate immutable candidate
+  `fc05a5e3808d889fef4cb6792f601e092233304bc46193d6fdd858ca29c020d5`
+  ran the first direct-capture trial with host audio and remote services
+  absent. Repeated guest remote-desktop exits preceded a
+  `deferred worker service failed` panic after about six minutes. Evidence:
+  `/var/tmp/astra-graphics-trial.nzw9Z7/log/panic-latest.log` on DE25. Normal
+  host-service and final trials did not reproduce it. Animated capture may
+  return `EAGAIN`; paused-guest DMA capture passes. These are runtime/capture
+  limits, not route results.
+- No RTL, constraints, synthesis, placement, route, or bitstream changed.
+  Retained `b61dbda8` full-feature route: 40,854/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM blocks, and 67/376 DSPs.
+  Previously measured graphics setup +0.262 ns, worst setup +0.130 ns, worst
+  hold +0.001 ns, all production clocks constrained. No new failed timing
+  cone was measured. Disposition: graphics candidate passes physical checks;
+  production activation and new port workloads remain separate gates.
+
 ## 2026-10-11: ABI 12 qualification and fresh visuals on the retained route
 
 - Software release

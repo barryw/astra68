@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Boot the SDL render probe and require texture-engine work and readback.
+"""Boot the SDL render probe and require hardware drawing and indexed blits.
 
 The probe (sw/userspace/sdl2/tests/render_probe.c) draws through every
-texture-engine path of the astra renderer and reads back a target and the
-window. Host-only QEMU renders nothing, so this gate checks what reached the
-display device: TRIANGLES commands in render-only batches, completed surface
-reads, and no failed submission.
+texture-engine path of the astra renderer, reads back a target and the
+window, then presents an INDEX8 window with two palettes. Host-only QEMU
+renders nothing, so this gate checks commands reaching the display device.
 """
 
 import argparse
@@ -14,6 +13,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -41,33 +41,56 @@ def main():
         try:
             if not machine.wait_for_serial(terminal_gate.BOOT_MARKER, 120):
                 raise RuntimeError("Astra did not finish booting")
-            if not machine.wait_for_trace_text("SDL_RENDER_READY", 60):
-                raise RuntimeError("SDL render probe did not finish: %s" %
-                                   machine.recent_trace())
 
             def display_count(name):
                 return machine.qmp.execute(
                     "qom-get", {"path": "/machine", "property": name})
 
-            triangles = display_count("astra-display-triangle-commands")
-            reads = display_count("astra-display-surface-reads")
-            render_only = display_count("astra-display-render-only-batches")
-            blits = display_count("astra-display-blit-commands")
-            fills = display_count("astra-display-fill-commands")
-            submissions = display_count("astra-display-submissions")
-            completions = display_count("astra-display-completions")
+            deadline = time.monotonic() + 15
+            while True:
+                triangles = display_count("astra-display-triangle-commands")
+                reads = display_count("astra-display-surface-reads")
+                palette_blits = display_count(
+                    "astra-display-palette-blit-commands")
+                render_only = display_count(
+                    "astra-display-render-only-batches")
+                blits = display_count("astra-display-blit-commands")
+                fills = display_count("astra-display-fill-commands")
+                submissions = display_count("astra-display-submissions")
+                completions = display_count("astra-display-completions")
+                if (triangles >= 3 and reads >= EXPECTED_SURFACE_READS and
+                        palette_blits >= 2 and submissions == completions) or \
+                        time.monotonic() >= deadline:
+                    break
+                time.sleep(0.05)
+            root = machine.reader.hostfs_root
+            visible_logs = root is not None and os.access(
+                root, os.R_OK | os.X_OK)
+            syslog = terminal_gate.read_host_syslog(root) if visible_logs else ""
+            if visible_logs:
+                marker_deadline = time.monotonic() + 5
+                while "SDL_INDEXED_READY" not in syslog and \
+                        time.monotonic() < marker_deadline:
+                    time.sleep(0.05)
+                    syslog = terminal_gate.read_host_syslog(root)
             if triangles < 3 or reads != EXPECTED_SURFACE_READS or \
-                    render_only == 0 or submissions != completions:
+                    palette_blits < 2 or render_only == 0 or \
+                    submissions != completions or \
+                    (visible_logs and "SDL_INDEXED_READY" not in syslog):
+                markers = [line for line in syslog.splitlines()
+                           if "SDL_" in line or "render-probe" in line]
                 raise RuntimeError(
                     "SDL render probe work: triangles=%d reads=%d "
-                    "render_only=%d submissions=%d completions=%d" %
-                    (triangles, reads, render_only, submissions,
-                     completions))
+                    "palette_blits=%d render_only=%d "
+                    "submissions=%d completions=%d markers=%s" %
+                    (triangles, reads, palette_blits, render_only, submissions,
+                     completions, markers[-12:]))
             print("SDL render QEMU: PASS (%d triangle commands, %d surface "
-                  "reads, %d render-only batches, %d blits, %d fills, "
+                  "reads, %d palette blits, %d render-only batches, "
+                  "%d blits, %d fills, "
                   "%d/%d submissions completed)" %
-                  (triangles, reads, render_only, blits, fills, completions,
-                   submissions))
+                  (triangles, reads, palette_blits, render_only, blits,
+                   fills, completions, submissions))
         finally:
             machine.close()
 

@@ -10,11 +10,13 @@
 /** Config Kit ELF ABI major version. */
 #define ASTRA_CONFIG_LIBRARY_ABI_MAJOR 1u
 /** Config Kit backward-compatible ABI revision. */
-#define ASTRA_CONFIG_LIBRARY_ABI_MINOR 0u
+#define ASTRA_CONFIG_LIBRARY_ABI_MINOR 1u
 /** Minimum compatible config.library major version. */
 #define ASTRA_CONFIG_LIBRARY_VERSION ASTRA_CONFIG_LIBRARY_ABI_MAJOR
 /** Launch capability carrying the caller's private configuration root. */
 #define ASTRA_CONFIG_CAPABILITY "CONFIG"
+/** Launch capability carrying a system component's settings root. */
+#define ASTRA_CONFIG_SYSTEM_CAPABILITY "CONFIG_SYSTEM"
 /** Launch capability carrying the configuration root for commands. */
 #define ASTRA_CONFIG_COMMANDS_CAPABILITY "CONFIG_COMMANDS"
 
@@ -106,6 +108,18 @@ typedef struct AstraConfigError {
 uint32_t astra_config_open(const AstraStartupInfo *startup,
                            uint32_t schema_version, uint32_t flags,
                            AstraConfig *config, AstraConfigError *error);
+/** Open a system component's settings through its scoped CONFIG_SYSTEM grant.
+ * Only resident system services may receive this grant.
+ * @param startup Valid startup record with a CONFIG_SYSTEM capability.
+ * @param schema_version Service schema version.
+ * @param flags ASTRA_CONFIG_OPEN_* flags.
+ * @param config Receives the handle.
+ * @param error Optional parse error.
+ * @return ASTRA_CONFIG_* status.
+ */
+uint32_t astra_config_open_system(const AstraStartupInfo *startup,
+                                  uint32_t schema_version, uint32_t flags,
+                                  AstraConfig *config, AstraConfigError *error);
 /** Close an open configuration. @param config Configuration to close. */
 void astra_config_close(AstraConfig *config);
 /** Reload committed values. @param config Open configuration. @param error Optional parse error. @return ASTRA_CONFIG_* status. */

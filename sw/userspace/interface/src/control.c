@@ -42,7 +42,8 @@
     ((kind) == ASTRA_CONTROL_CHECKBOX || (kind) == ASTRA_CONTROL_RADIO || \
      (kind) == ASTRA_CONTROL_SWITCH)
 #define CHOICE_KINDS(kind) \
-    ((kind) == ASTRA_CONTROL_SEGMENTED || (kind) == ASTRA_CONTROL_TAB)
+    ((kind) == ASTRA_CONTROL_SEGMENTED || (kind) == ASTRA_CONTROL_TAB || \
+     (kind) == ASTRA_CONTROL_LIST)
 #define CONTAINER_KINDS(kind) \
     ((kind) == ASTRA_CONTROL_CONTAINER || \
      (kind) == ASTRA_CONTROL_SCROLL_VIEW)
@@ -330,6 +331,21 @@ static int control_valid(const AstraControl *control)
                control->_private_value >= 0 &&
                control->_private_maximum_value >= 0 &&
                control->_private_value <= control->_private_maximum_value &&
+               control->_private_value_step == 0;
+    if (control->_private_control_kind == ASTRA_CONTROL_LIST)
+        return (control->_private_text_length == 0u ||
+                control->_private_text != NULL) &&
+               control->_private_style == 0u &&
+               (state & ~CONTROL_VALUE_STATES) == 0u &&
+               control->_private_preview_state == 0u &&
+               control->_private_value >= -1 &&
+               control->_private_value <=
+                   (int64_t)control->_private_text_length - 1 &&
+               control->_private_minimum_value >= -1 &&
+               control->_private_minimum_value <=
+                   (int64_t)control->_private_text_length - 1 &&
+               control->_private_maximum_value ==
+                   (int64_t)control->_private_text_length - 1 &&
                control->_private_value_step == 0;
     if (CHOICE_KINDS(control->_private_control_kind))
         return control->_private_text != NULL &&
@@ -1056,9 +1072,13 @@ static AstraResult choice_init(AstraControl *control,
                                const AstraChoiceInfo *info, uint32_t kind)
 {
     if (control == NULL || info == NULL || info->size < sizeof(*info) ||
-        info->id == 0u || info->items == NULL || info->item_count == 0u ||
+        info->id == 0u ||
+        (info->item_count != 0u && info->items == NULL) ||
+        (kind != ASTRA_CONTROL_LIST && info->item_count == 0u) ||
         info->item_count > (uint32_t)INT32_MAX ||
-        info->selected >= info->item_count ||
+        (info->selected != UINT32_MAX &&
+         info->selected >= info->item_count) ||
+        (kind != ASTRA_CONTROL_LIST && info->selected == UINT32_MAX) ||
         (info->state & ~CONTROL_VALUE_STATES) != 0u ||
         !astra_words_zero(info->reserved, 4u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -1076,9 +1096,10 @@ static AstraResult choice_init(AstraControl *control,
     control->_private_state = info->state;
     control->_private_text = (const char *)(const void *)info->items;
     control->_private_text_length = info->item_count;
-    control->_private_value = (int32_t)info->selected;
+    control->_private_value = info->selected == UINT32_MAX ?
+                              -1 : (int32_t)info->selected;
     control->_private_minimum_value = -1;
-    control->_private_maximum_value = (int32_t)(info->item_count - 1u);
+    control->_private_maximum_value = (int32_t)info->item_count - 1;
     return ASTRA_OK;
 }
 
@@ -1092,6 +1113,12 @@ AstraResult astra_interface_tab_init(AstraControl *control,
                                      const AstraChoiceInfo *info)
 {
     return choice_init(control, info, ASTRA_CONTROL_TAB);
+}
+
+AstraResult astra_interface_list_init(AstraControl *control,
+                                      const AstraChoiceInfo *info)
+{
+    return choice_init(control, info, ASTRA_CONTROL_LIST);
 }
 
 AstraResult astra_interface_field_init(AstraControl *control,
@@ -1441,6 +1468,28 @@ static AstraResult measure_control(const AstraControl *control,
     if (control->_private_control_kind == ASTRA_CONTROL_PROGRESS) {
         size->width = theme.spacing_unit * 32u;
         size->height = theme.spacing_unit * 2u;
+        return ASTRA_OK;
+    }
+    if (control->_private_control_kind == ASTRA_CONTROL_LIST) {
+        const AstraChoiceItem *items = choice_items(control);
+        uint32_t widest = 0u;
+        uint64_t height = (uint64_t)(control->_private_text_length != 0u ?
+            control->_private_text_length : 1u) * theme.control_height;
+
+        if (height > INT32_MAX) return ASTRA_ERROR_NO_RESOURCES;
+        for (uint32_t at = 0u; at < control->_private_text_length; ++at) {
+            uint32_t item_width = astra_surface_ui_text_width(
+                items[at].text, items[at].text_length,
+                theme.control_font_height);
+
+            if (item_width > widest) widest = item_width;
+        }
+        if (widest > UINT32_MAX - (uint32_t)theme.control_padding_x * 2u)
+            return ASTRA_ERROR_NO_RESOURCES;
+        size->width = widest + (uint32_t)theme.control_padding_x * 2u;
+        if (size->width < theme.spacing_unit * 32u)
+            size->width = theme.spacing_unit * 32u;
+        size->height = (uint32_t)height;
         return ASTRA_OK;
     }
     if (CHOICE_KINDS(control->_private_control_kind)) {
@@ -2426,7 +2475,8 @@ AstraResult astra_interface_control_set_value(AstraUIContext *context,
     if (control->_private_control_kind == ASTRA_CONTROL_SPLITTER)
         return splitter_set_position(context, index, value, NULL);
     if (CHOICE_KINDS(control->_private_control_kind)) {
-        if (value < 0 || value > control->_private_maximum_value)
+        if (value < (control->_private_control_kind == ASTRA_CONTROL_LIST ?
+                     -1 : 0) || value > control->_private_maximum_value)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         snapped = value;
     } else {
@@ -2708,9 +2758,33 @@ static int field_render_requirements(const AstraUIContext *context,
     return 1;
 }
 
+static void list_visible_range(const AstraControl *control,
+                               uint32_t row_height, uint32_t *first,
+                               uint32_t *end)
+{
+    const AstraControlFrame *frame = &control->_private_frame;
+    const AstraControlFrame *clip = &control->_private_clip;
+    int64_t top = frame->y > clip->y ? frame->y : clip->y;
+    int64_t bottom = (int64_t)frame->y + frame->height;
+    int64_t clip_bottom = (int64_t)clip->y + clip->height;
+    uint64_t after;
+
+    *first = *end = 0u;
+    if (bottom > clip_bottom) bottom = clip_bottom;
+    if (bottom <= top || row_height == 0u) return;
+    *first = (uint32_t)((top - frame->y) / row_height);
+    after = (uint64_t)(bottom - frame->y + row_height - 1u) / row_height;
+    if (*first > control->_private_text_length)
+        *first = control->_private_text_length;
+    *end = after > control->_private_text_length ?
+        control->_private_text_length : (uint32_t)after;
+}
+
 static int render_requirements(const AstraUIContext *context,
                                uint64_t *commands, uint64_t *payload)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+
     *commands = 0u;
     *payload = 0u;
     for (uint32_t at = 0u; at < context->_private_control_count; ++at) {
@@ -2731,6 +2805,17 @@ static int render_requirements(const AstraUIContext *context,
             if (!field_render_requirements(context, control,
                                            commands, payload))
                 return 0;
+            continue;
+        }
+        if (control->_private_control_kind == ASTRA_CONTROL_LIST) {
+            const AstraChoiceItem *items = choice_items(control);
+            uint32_t first;
+            uint32_t end;
+
+            list_visible_range(control, theme.control_height, &first, &end);
+            *commands += 5u + (uint64_t)(end - first) * 2u;
+            for (uint32_t item = first; item < end; ++item)
+                *payload += items[item].text_length;
             continue;
         }
         if (control->_private_control_kind == ASTRA_CONTROL_SCROLLBAR) {
@@ -3735,6 +3820,67 @@ static void render_progress(const AstraTheme *theme,
                              color(fill));
 }
 
+static void render_list(const AstraTheme *theme,
+                        const AstraControl *control,
+                        AstraSurfaceView *surface)
+{
+    const AstraControlFrame *frame = &control->_private_frame;
+    const AstraChoiceItem *items = choice_items(control);
+    uint32_t state = effective_state(control);
+    uint32_t first;
+    uint32_t end;
+    uint16_t border = color((state & ASTRA_CONTROL_ERROR) != 0u ?
+        theme->fault : (state & CONTROL_FOCUS_VISIBLE) != 0u ?
+        theme->control_focus : theme->client_border);
+
+    list_visible_range(control, theme->control_height, &first, &end);
+    astra_surface_fill(surface, frame->x, frame->y, frame->width,
+                       frame->height, color(theme->surface_raised));
+    astra_surface_fill(surface, frame->x, frame->y, frame->width, 1u, border);
+    astra_surface_fill(surface, frame->x,
+                       frame->y + (int32_t)frame->height - 1,
+                       frame->width, 1u, border);
+    astra_surface_fill(surface, frame->x, frame->y, 1u,
+                       frame->height, border);
+    astra_surface_fill(surface,
+                       frame->x + (int32_t)frame->width - 1,
+                       frame->y, 1u, frame->height, border);
+    for (uint32_t at = first; at < end; ++at) {
+        int32_t y = (int32_t)((int64_t)frame->y +
+                              (uint64_t)at * theme->control_height);
+        int selected = control->_private_value == (int64_t)at;
+        int hot = control->_private_minimum_value == (int64_t)at &&
+                  (state & ASTRA_CONTROL_HOVERED) != 0u;
+        AstraColorRGBA8 text_color =
+            (state & ASTRA_CONTROL_DISABLED) != 0u ?
+                theme->text_tertiary :
+                (selected ? theme->accent_text : theme->client_text);
+        uint32_t text_width = frame->width >
+            (uint32_t)theme->control_padding_x * 2u ?
+            frame->width - (uint32_t)theme->control_padding_x * 2u : 0u;
+        uint32_t fitted = astra_surface_ui_text_fit(
+            items[at].text, items[at].text_length,
+            theme->control_font_height, text_width);
+
+        if (selected || hot) {
+            AstraColorRGBA8 fill = selected ? theme->accent : theme->client;
+
+            if ((state & ASTRA_CONTROL_DISABLED) != 0u)
+                fill = theme->control_disabled;
+            if (frame->width > 2u)
+                astra_surface_fill(surface, frame->x + 1, y,
+                                   frame->width - 2u,
+                                   theme->control_height, color(fill));
+        }
+        astra_surface_ui_text(
+            surface, frame->x + theme->control_padding_x,
+            y + (int32_t)(theme->control_height -
+                          theme->control_font_height) / 2,
+            items[at].text, fitted, theme->control_font_height,
+            color(text_color));
+    }
+}
+
 static void render_segmented(const AstraTheme *theme,
                              const AstraControl *control,
                              AstraSurfaceView *surface)
@@ -3927,8 +4073,16 @@ static void render_tab(const AstraTheme *theme,
     }
 }
 
-static int32_t choice_index_at(const AstraControl *control, int32_t x)
+static int32_t choice_index_at(const AstraControl *control, int32_t x,
+                               int32_t y)
 {
+    if (control->_private_control_kind == ASTRA_CONTROL_LIST) {
+        AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+        uint32_t index = (uint32_t)((int64_t)y -
+            control->_private_frame.y) / theme.control_height;
+
+        return index < control->_private_text_length ? (int32_t)index : -1;
+    }
     if (control->_private_control_kind == ASTRA_CONTROL_TAB) {
         AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
         const AstraChoiceItem *items = choice_items(control);
@@ -3959,10 +4113,11 @@ static int32_t choice_index_at(const AstraControl *control, int32_t x)
     return (int32_t)(index < count ? index : count - 1u);
 }
 
-static void choice_hot(AstraUIContext *context, uint32_t index, int32_t x)
+static void choice_hot(AstraUIContext *context, uint32_t index, int32_t x,
+                       int32_t y)
 {
     AstraControl *control = &context->_private_controls[index];
-    int32_t hot = choice_index_at(control, x);
+    int32_t hot = choice_index_at(control, x, y);
 
     if (hot == control->_private_minimum_value)
         return;
@@ -3984,6 +4139,42 @@ static void choice_action(AstraUIContext *context, uint32_t index,
     action->control_id = control->_private_id;
     action->value = control->_private_value;
     action->decimal_places = 0u;
+}
+
+static AstraResult list_reveal_row(AstraUIContext *context, uint32_t index,
+                                   uint32_t row)
+{
+    AstraControl *control = &context->_private_controls[index];
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    int64_t top = (int64_t)control->_private_frame.y +
+                  (int64_t)row * theme.control_height;
+    int64_t bottom = top + theme.control_height;
+    int64_t clip_top = control->_private_clip.y;
+    int64_t clip_bottom = clip_top + control->_private_clip.height;
+    int64_t delta = top < clip_top ? top - clip_top :
+                    bottom > clip_bottom ? bottom - clip_bottom : 0;
+    uint32_t parent = control->_private_parent;
+
+    if (delta == 0) return ASTRA_OK;
+    while (parent != CONTROL_NONE) {
+        AstraControl *view = &context->_private_controls[parent];
+
+        if (view->_private_control_kind == ASTRA_CONTROL_SCROLL_VIEW) {
+            AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
+            AstraUIAction ignored = ASTRA_UI_ACTION_INIT;
+            int64_t offset;
+
+            if (astra_scroll_get_state(scroll_model(view), &state) != ASTRA_OK)
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+            offset = (int64_t)state.offset_y + delta;
+            if (offset < 0) offset = 0;
+            if (offset > state.maximum_y) offset = state.maximum_y;
+            return scroll_apply(context, scroll_model(view), state.offset_x,
+                                (uint32_t)offset, view->_private_id, &ignored);
+        }
+        parent = view->_private_parent;
+    }
+    return ASTRA_OK;
 }
 
 static void range_action(AstraUIContext *context, uint32_t index,
@@ -4568,6 +4759,8 @@ static AstraResult render_one_control(const AstraUIContext *context,
         render_segmented(theme, control, surface);
     else if (control->_private_control_kind == ASTRA_CONTROL_TAB)
         render_tab(theme, control, surface);
+    else if (control->_private_control_kind == ASTRA_CONTROL_LIST)
+        render_list(theme, control, surface);
     else
         render_toggle(theme, control, surface);
     return ASTRA_OK;
@@ -4590,21 +4783,18 @@ AstraResult astra_interface_ui_render(AstraUIContext *context,
         surface->clip_right > surface->width ||
         surface->clip_top > surface->clip_bottom ||
         surface->clip_bottom > surface->height ||
-        (surface->kind != ASTRA_SURFACE_VIEW_RGB565 &&
-         surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST) ||
+        surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST ||
         !render_requirements(context, &commands, &payload))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    accelerated = scroll_copy_prepare(context, surface, &copy);
-    if (surface->kind == ASTRA_SURFACE_VIEW_DRAW_LIST) {
-        if (!astra_interface_draw_list_has_room(surface,
-                                commands + (accelerated ?
-                                    1u + copy.exposed_count : 0u), payload))
-            return ASTRA_ERROR_NO_RESOURCES;
-    } else if (!astra_surface_view_init(
-                   &validated, surface->pixels, surface->byte_size,
-                   surface->width, surface->height, surface->pitch)) {
+    if (!astra_draw_list_view_adopt(&validated, surface->pixels,
+                                    surface->byte_size, surface->width,
+                                    surface->height))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    }
+    accelerated = scroll_copy_prepare(context, surface, &copy);
+    if (!astra_interface_draw_list_has_room(surface,
+                            commands + (accelerated ?
+                                1u + copy.exposed_count : 0u), payload))
+        return ASTRA_ERROR_NO_RESOURCES;
     validated = *surface;
     if (accelerated) {
         AstraTheme background = ASTRA_THEME_SYSTEM_INIT;
@@ -4740,7 +4930,8 @@ static AstraResult pointer_event(AstraUIContext *context,
     if (hit != CONTROL_NONE &&
         CHOICE_KINDS(context->_private_controls[hit]
                          ._private_control_kind))
-        choice_hot(context, hit, event->data.pointer.x);
+        choice_hot(context, hit, event->data.pointer.x,
+                   event->data.pointer.y);
     if (event->type == ASTRA_WINDOW_EVENT_POINTER_MOTION) {
         if (context->_private_capture != CONTROL_NONE) {
             uint32_t captured = context->_private_capture;
@@ -5164,8 +5355,42 @@ static AstraResult key_event(AstraUIContext *context,
         return disclosure_set(context, context->_private_focus,
                               event->data.key.usage == 0x4fu, action);
     if (down && context->_private_focus != CONTROL_NONE &&
+        context->_private_controls[context->_private_focus]
+                ._private_control_kind == ASTRA_CONTROL_LIST) {
+        AstraControl *control = &context->_private_controls[context->_private_focus];
+        int32_t value = (int32_t)control->_private_value;
+        uint32_t usage = event->data.key.usage;
+
+        if (control->_private_text_length == 0u)
+            return ASTRA_OK;
+        if (usage == 0x52u || usage == 0x51u) {
+            if (value < 0)
+                value = 0;
+            else if (usage == 0x52u && value > 0)
+                --value;
+            else if (usage == 0x51u && value < control->_private_maximum_value)
+                ++value;
+        } else if (usage == 0x4au) {
+            value = 0;
+        } else if (usage == 0x4du) {
+            value = (int32_t)control->_private_maximum_value;
+        } else {
+            value = -1;
+        }
+        if (value >= 0) {
+            AstraResult result = list_reveal_row(
+                context, context->_private_focus, (uint32_t)value);
+
+            if (result != ASTRA_OK) return result;
+            choice_action(context, context->_private_focus, value, action);
+            return ASTRA_OK;
+        }
+    }
+    if (down && context->_private_focus != CONTROL_NONE &&
         CHOICE_KINDS(context->_private_controls[context->_private_focus]
-                         ._private_control_kind)) {
+                         ._private_control_kind) &&
+        context->_private_controls[context->_private_focus]
+                ._private_control_kind != ASTRA_CONTROL_LIST) {
         AstraControl *control =
             &context->_private_controls[context->_private_focus];
         int32_t value = control->_private_value;

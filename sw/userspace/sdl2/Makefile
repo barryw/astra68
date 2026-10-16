@@ -165,7 +165,7 @@ $(SDL2_SHARED): $(SDL2_IDENTITY) $(SDL2_ARCHIVE) \
 		-Wl,-soname,SDL2.library.3 -Wl,--version-script=$(SDL2_EXPORTS) \
 		-Wl,@$(SDL2_UNDEFINED) -o $@ $(SDL2_IDENTITY) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
-		-Wl,-l:pcm.library.3 -Wl,-l:graphics.library.2 \
+		-Wl,-l:pcm.library.3 -Wl,-l:graphics.library.3 \
 		-Wl,-l:system.library.4 -Wl,-l:libc.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(SDL2_ARCHIVE) $(ASTRA_SHARED_LINK_END)

@@ -38,11 +38,13 @@ PIC_OBJECTS := build/m68k/pic/surface.o build/m68k/pic/shared_surface.o \
 	build/m68k/pic/render_builder.o
 HOST_TEST := build/host/test_surface
 HOST_AICON_TEST := build/host/test_aicon_surface
+HOST_AFNT_TEST := build/host/test_afnt
+HOST_AFNT_LIBRARY := ../../common/build/host/libastraafnt.a
 AICON_TEST_SOURCES := src/aicon_surface.c tests/test_aicon_surface.c \
 	$(SYSTEM)/src/bundle.c
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
-GRAPHICS_LIBRARY := build/m68k/libraries/graphics.library.2
+GRAPHICS_LIBRARY := build/m68k/libraries/graphics.library.3
 FONT_LIBRARY := build/m68k/libraries/font.library.2
 GRAPHICS_LIBRARY_MAP := graphics.library.exports
 FONT_LIBRARY_MAP := font.library.exports
@@ -176,7 +178,7 @@ $(GRAPHICS_LIBRARY): $(GRAPHICS_LIBRARY_OBJECTS) $(GRAPHICS_LIBRARY_MAP) \
 		$(ASTRA_SHARED_LINK_INPUTS) | shared-libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,graphics.library.2 -o $@ \
+		-Wl,-soname,graphics.library.3 -o $@ \
 		-Wl,--version-script=$(GRAPHICS_LIBRARY_MAP) \
 		$(GRAPHICS_LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
@@ -193,7 +195,7 @@ $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) \
 		-Wl,--version-script=$(FONT_LIBRARY_MAP) \
 		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:graphics.library.2 -Wl,-l:runtime.library.1 \
+		-Wl,-l:graphics.library.3 -Wl,-l:runtime.library.1 \
 		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
@@ -214,9 +216,9 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/check_library_exports.py $(FONT_LIBRARY_MAP) \
 		$(NDK)/include/astra/font_library.h $(NDK)/include/astra/surface.h
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
-		grep -q '^graphics.library.2 2.2.0 ABI 2.2$$'
+		grep -q '^graphics.library.3 3.0.0 ABI 3.0$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
-		grep -q '^font.library.2 2.2.0 ABI 2.2$$'
+		grep -q '^font.library.2 2.3.0 ABI 2.3$$'
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
@@ -226,7 +228,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		awk '/NEEDED/{n++} END{print n+0}')" = 3
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
-		grep -Fc 'Shared library: [graphics.library.2]')" = 1
+		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
@@ -257,9 +259,19 @@ $(HOST_AICON_TEST): $(AICON_TEST_SOURCES)
 		-ffunction-sections -fdata-sections $(AICON_TEST_SOURCES) \
 		-Wl,--gc-sections -o $@
 
-test: $(HOST_TEST) $(HOST_AICON_TEST) build/host/test-drawer.aicon
+$(HOST_AFNT_LIBRARY): ../../common/afnt.c ../../common/crc32.c ../../common/Makefile
+	$(MAKE) -C ../../common host
+
+$(HOST_AFNT_TEST): $(HOST_AFNT_LIBRARY) tests/test_afnt.c \
+		../../include/astra/afnt.h ../../include/astra/crc32.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		tests/test_afnt.c $(HOST_AFNT_LIBRARY) -o $@
+
+test: $(HOST_TEST) $(HOST_AICON_TEST) $(HOST_AFNT_TEST) build/host/test-drawer.aicon
 	./$(HOST_TEST)
 	./$(HOST_AICON_TEST) build/host/test-drawer.aicon
+	./$(HOST_AFNT_TEST)
 
 sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	../../../fpga/arty/linux/astra_render_protocol.h build/host/test-drawer.aicon
@@ -272,6 +284,10 @@ sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 		-ffunction-sections -fdata-sections $(AICON_TEST_SOURCES) \
 		-Wl,--gc-sections -o build/host/test_aicon_surface_sanitize
 	./build/host/test_aicon_surface_sanitize build/host/test-drawer.aicon
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
+		../../common/afnt.c ../../common/crc32.c tests/test_afnt.c \
+		-o build/host/test_afnt_sanitize
+	./build/host/test_afnt_sanitize
 
 analyze: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	../../../fpga/arty/linux/astra_render_protocol.h

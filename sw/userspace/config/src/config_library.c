@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <string.h>
 
-ASTRA_DYNAMIC_LIBRARY("config.library.1", 1, 0, 1,
+ASTRA_DYNAMIC_LIBRARY("config.library.1", 1, 1, 0,
               ASTRA_CONFIG_LIBRARY_ABI_MAJOR,
               ASTRA_CONFIG_LIBRARY_ABI_MINOR,
               "Astra68 contributors", "Copyright 2026 Astra68 contributors");
@@ -239,9 +239,10 @@ static uint32_t load(ConfigState *state, AstraConfigError *error)
     return ASTRA_CONFIG_OK;
 }
 
-uint32_t astra_config_open(const AstraStartupInfo *startup,
-                            uint32_t schema_version, uint32_t flags,
-                            AstraConfig *config, AstraConfigError *error)
+static uint32_t open_capability(const AstraStartupInfo *startup,
+                                const char *capability_name,
+                                uint32_t schema_version, uint32_t flags,
+                                AstraConfig *config, AstraConfigError *error)
 {
     const AstraStartupCapability *capability;
     ConfigState *state = NULL;
@@ -252,7 +253,7 @@ uint32_t astra_config_open(const AstraStartupInfo *startup,
         schema_version == 0u || flags == 0u ||
         (flags & ~(ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE)) != 0u)
         return ASTRA_CONFIG_INVALID;
-    capability = astra_startup_capability(startup, ASTRA_CONFIG_CAPABILITY);
+    capability = astra_startup_capability(startup, capability_name);
     if (capability == NULL ||
         (capability->flags & ASTRA_CAPABILITY_FLAG_NAMESPACE) == 0u ||
         (capability->flags & ASTRA_CAPABILITY_FLAG_READ) == 0u ||
@@ -298,6 +299,22 @@ failed:
     (void)astra_rt_area_unmap(state);
     (void)astra_close(state_area);
     return status;
+}
+
+uint32_t astra_config_open(const AstraStartupInfo *startup,
+                            uint32_t schema_version, uint32_t flags,
+                            AstraConfig *config, AstraConfigError *error)
+{
+    return open_capability(startup, ASTRA_CONFIG_CAPABILITY,
+                           schema_version, flags, config, error);
+}
+
+uint32_t astra_config_open_system(const AstraStartupInfo *startup,
+                                   uint32_t schema_version, uint32_t flags,
+                                   AstraConfig *config, AstraConfigError *error)
+{
+    return open_capability(startup, ASTRA_CONFIG_SYSTEM_CAPABILITY,
+                           schema_version, flags, config, error);
 }
 
 void astra_config_close(AstraConfig *config)

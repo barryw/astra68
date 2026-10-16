@@ -18,13 +18,13 @@ HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
-INTERFACE_TARGET := build/m68k/libraries/interface.library.5
+INTERFACE_TARGET := build/m68k/libraries/interface.library.6
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o \
 	build/m68k/scroll.o build/m68k/command.o build/m68k/menu.o build/m68k/menu_context.o
 INTERFACE_LIBRARY_MAP := interface.library.exports
 NDK_HOST_UTF8 := $(SYSTEM)/build/host/utf8.o
-GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.2
+GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.3
 FONT_LIBRARY := $(GRAPHICS)/build/m68k/libraries/font.library.2
 SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
@@ -104,12 +104,12 @@ $(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(INTERFACE_LIBRARY_MAP) \
 		| shared-libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,interface.library.5 \
+		-Wl,-soname,interface.library.6 \
 		-Wl,--version-script=$(INTERFACE_LIBRARY_MAP) \
 		-o $@ $(INTERFACE_OBJECTS) \
 		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(SYSTEM_LIBRARY)) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
-		-Wl,--no-as-needed -Wl,-l:graphics.library.2 \
+		-Wl,--no-as-needed -Wl,-l:graphics.library.3 \
 		-Wl,-l:font.library.2 -Wl,-l:system.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
@@ -119,18 +119,20 @@ library-contract: $(INTERFACE_TARGET)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(INTERFACE_LIBRARY_MAP) $(INTERFACE_TARGET)
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_button_init@@ASTRA_INTERFACE_5\.4$$'
+		grep -Eq ' astra_interface_button_init@@ASTRA_INTERFACE_6\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_command_invoke@@ASTRA_INTERFACE_5\.4$$'
+		grep -Eq ' astra_interface_command_invoke@@ASTRA_INTERFACE_6\.0$$'
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_list_init@@ASTRA_INTERFACE_6\.0$$'
 	@! $(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -q 'ASTRA_INTERFACE_5\.1'
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.5 5.4.0 ABI 5.4$$'
+		grep -q '^interface.library.6 6.0.0 ABI 6.0$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -Fc 'Shared library: [graphics.library.2]')" = 1
+		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [font.library.2]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \

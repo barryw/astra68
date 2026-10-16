@@ -412,6 +412,7 @@ typedef struct AstraDisplayState {
     uint64_t render_only_batches;
     uint64_t fill_commands;
     uint64_t blit_commands;
+    uint64_t palette_blit_commands;
     uint64_t glyph_commands;
     uint64_t triangle_commands;
     uint64_t surface_reads;
@@ -850,8 +851,13 @@ static void astra_display_count_batch(Astra68State *s, uint32_t source,
         if (opcode == ASTRA_RENDER_OP_FILL ||
             opcode == ASTRA_RENDER_OP_FILL_RECTS)
             ++display->fill_commands;
-        else if (opcode == ASTRA_RENDER_OP_BLIT)
+        else if (opcode == ASTRA_RENDER_OP_BLIT) {
             ++display->blit_commands;
+            if ((ldl_be_p(batch + records +
+                          index * ASTRA_RENDER_COMMAND_BYTES + 4u) &
+                 ASTRA_RENDER_FLAG_BLIT_PALETTE) != 0u)
+                ++display->palette_blit_commands;
+        }
         else if (opcode == ASTRA_RENDER_OP_GLYPH_RUN)
             ++display->glyph_commands;
         else if (opcode == ASTRA_RENDER_OP_TRIANGLES)
@@ -9002,6 +9008,10 @@ static void astra68_init(MachineState *machine)
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-display-blit-commands",
                                    &s->display.blit_commands,
+                                   OBJ_PROP_FLAG_READ);
+    object_property_add_uint64_ptr(OBJECT(machine),
+                                   "astra-display-palette-blit-commands",
+                                   &s->display.palette_blit_commands,
                                    OBJ_PROP_FLAG_READ);
     object_property_add_uint64_ptr(OBJECT(machine),
                                    "astra-display-glyph-commands",

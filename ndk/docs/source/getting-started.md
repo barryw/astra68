@@ -14,7 +14,7 @@ generates hard-float code by default and tags every object with its float
 ABI, so a soft-float object cannot be linked in by accident. A program is a
 position-independent executable that the system loader binds to versioned
 shared libraries (`runtime.library.1`, `system.library.4`,
-`graphics.library.2`, and so on) before it starts.
+`graphics.library.3`, and so on) before it starts.
 
 ## Building a program
 

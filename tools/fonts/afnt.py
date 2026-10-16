@@ -257,7 +257,7 @@ def bitmap_pitch(bitmap_format: int, width: int) -> int:
 
 def build_outline_afnt(args: argparse.Namespace) -> bytes:
     try:
-        from fontTools.ttLib import TTFont
+        from fontTools.ttLib import TTFont, TTLibError
         from PIL import ImageFont
     except ImportError as error:
         raise SystemExit(
@@ -266,8 +266,25 @@ def build_outline_afnt(args: argparse.Namespace) -> bytes:
         ) from error
 
     path = args.input
-    face = TTFont(path, lazy=False)
+    with path.open("rb") as source:
+        header = source.read(12)
+    collection = header[:4] == b"ttcf"
+    face_index = args.face_index
+    if face_index < 0 or (collection and
+                          (len(header) != 12 or face_index >=
+                           int.from_bytes(header[8:12], "big"))) or (
+                           not collection and face_index != 0):
+        raise ValueError(f"{path}: face index {face_index} is unavailable")
     try:
+        face = TTFont(path, fontNumber=face_index, lazy=False)
+    except TTLibError as error:
+        raise ValueError(f"{path}: invalid outline font: {error}") from error
+    try:
+        if any(tag in face for tag in ("COLR", "CBDT", "sbix", "SVG ")):
+            raise ValueError(f"{path}: color glyphs are not supported by the A8 importer")
+        variation_axes = ({axis.axisTag: axis.defaultValue
+                           for axis in face["fvar"].axes}
+                          if "fvar" in face else None)
         best_cmap = face.getBestCmap()
         source_cmap = {
             scalar: glyph_name
@@ -310,7 +327,10 @@ def build_outline_afnt(args: argparse.Namespace) -> bytes:
         glyph_first = 0
         for pixel_height, ppem in args.strikes:
             font = ImageFont.truetype(
-                str(path), ppem, layout_engine=ImageFont.Layout.BASIC)
+                str(path), ppem, index=face_index,
+                layout_engine=ImageFont.Layout.BASIC)
+            if variation_axes is not None:
+                font.set_variation_by_axes(list(variation_axes.values()))
             ascent, descent = font.getmetrics()
             strike_glyphs = []
             max_advance = 0
@@ -385,6 +405,10 @@ def build_outline_afnt(args: argparse.Namespace) -> bytes:
         "outline_ppem": [ppem for _, ppem in args.strikes],
         "glyphs_per_strike": len(ordered_names),
     }
+    if collection:
+        metadata["source_face_index"] = face_index
+    if variation_axes is not None:
+        metadata["variation_axes"] = variation_axes
     return serialize_afnt(metadata, cmap, strike_records, glyph_records,
                           bytes(bitmap))
 
@@ -480,8 +504,74 @@ def emit_array(out, name: str, values, ctype: str, width: int = 8) -> None:
     out.write("};\n\n")
 
 
+def prepared_styles(strikes, glyphs, bitmap):
+    """Append immutable bold, italic, and bold-italic strike rasters."""
+    result_strikes = list(strikes)
+    result_glyphs = list(glyphs)
+    result_bitmap = bytearray(bitmap)
+    for style in (1, 2, 3):
+        for strike in strikes:
+            (strike_id, bitmap_format, pixel_width, pixel_height, ascent,
+             descent, line_gap, cap_height, x_height, max_advance,
+             underline_position, underline_thickness, strikeout_position,
+             strikeout_thickness, first, count, record_size, flags,
+             reserved) = strike
+            if bitmap_format not in (MASK1, A8):
+                raise ValueError("C font tables require MASK1 or A8 glyphs")
+            styled_first = len(result_glyphs)
+            bold = (pixel_height + 15) // 16 if style & 1 else 0
+            for glyph in glyphs[first:first + count]:
+                (glyph_id, offset, length, width, height, pitch, glyph_flags,
+                 bearing_x, bearing_y, advance) = glyph
+                shifts = []
+                for row in range(height):
+                    vertical = (bearing_y - row * 64) * 12
+                    scaled = vertical // 64 if vertical >= 0 else -((-vertical) // 64)
+                    shifts.append(scaled // 64 if style & 2 else 0)
+                minimum = min(shifts, default=0)
+                styled_width = width + max(shifts, default=0) - minimum + bold
+                styled_pitch = bitmap_pitch(bitmap_format, styled_width)
+                styled_bearing = bearing_x + minimum * 64
+                if (styled_width > 0xffff or styled_pitch > 0xffff or
+                        not -0x80000000 <= styled_bearing <= 0x7fffffff or
+                        len(result_bitmap) + styled_pitch * height > 0xffffffff):
+                    raise ValueError("styled glyph exceeds C font table limits")
+                pixels = bytearray(styled_pitch * height)
+                for row, shift in enumerate(shifts):
+                    for column in range(width):
+                        source = row * pitch + column
+                        if bitmap_format == MASK1:
+                            coverage = 255 if bitmap[offset + row * pitch + column // 8] & (0x80 >> (column & 7)) else 0
+                        else:
+                            coverage = bitmap[offset + source]
+                        if not coverage:
+                            continue
+                        for weight in range(bold + 1):
+                            target = shift - minimum + column + weight
+                            if bitmap_format == MASK1:
+                                pixels[row * styled_pitch + target // 8] |= 0x80 >> (target & 7)
+                            else:
+                                index = row * styled_pitch + target
+                                pixels[index] = max(pixels[index], coverage)
+                styled_offset = len(result_bitmap)
+                result_bitmap.extend(pixels)
+                result_glyphs.append((glyph_id, styled_offset, len(pixels),
+                                      styled_width, height, styled_pitch,
+                                      glyph_flags, styled_bearing,
+                                      bearing_y, advance))
+            result_strikes.append((strike_id, bitmap_format, pixel_width,
+                                   pixel_height, ascent, descent, line_gap,
+                                   cap_height, x_height, max_advance,
+                                   underline_position, underline_thickness,
+                                   strikeout_position, strikeout_thickness,
+                                   styled_first, count, record_size, flags,
+                                   reserved))
+    return result_strikes, result_glyphs, result_bitmap
+
+
 def emit_c(data: bytes, output: Path, prefix: str) -> None:
     cmap, strikes, glyphs, bitmap = unpack_afnt(data)
+    strikes, glyphs, bitmap = prepared_styles(strikes, glyphs, bitmap)
     from io import StringIO
     out = StringIO()
     out.write("/* Generated by tools/fonts/afnt.py; do not edit. */\n")
@@ -569,6 +659,7 @@ def main() -> int:
     outline.add_argument("--license", required=True)
     outline.add_argument("--source-revision", required=True)
     outline.add_argument("--monospaced", action="store_true")
+    outline.add_argument("--face-index", type=int, default=0)
     outline.add_argument("--strike", dest="strikes", action="append",
                          type=parse_strike, required=True,
                          metavar="PIXEL_HEIGHT:PPEM")

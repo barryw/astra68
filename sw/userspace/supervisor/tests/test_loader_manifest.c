@@ -295,6 +295,7 @@ static void default_application_ceiling(void)
         "SERVICE_MANAGER", "EVENT_CONTROL", "PROCESS", "APPS:rw",
         "LIBS:rw", "SYSTEM:r", "PROC:r", "PROC:rw", "COMMANDS:r", "STORE",
         "GUI:r", "RAM_READ:r", "RAM_WRITE:rw", "RAM0:r", "UNKNOWN",
+        "CONFIG_SYSTEM:r", "CONFIG_SYSTEM:rw",
     };
 
     for (uint32_t at = 0u; at < sizeof(admitted) / sizeof(admitted[0]);
