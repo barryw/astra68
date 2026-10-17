@@ -102,6 +102,11 @@ CONFIGURATION = {
 }
 DEFAULT_SERVICES = os.path.join(
     REPOSITORY, "sw/userspace/services")
+SYSTEM_FONTS = (
+    os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-workbench.afnt"),
+    os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-mono.afnt"),
+    os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-rescue-mono.afnt"),
+)
 DEFAULT_KITS = os.path.join(REPOSITORY, "sw/userspace/kits/build")
 # Every directory that ships applications; each names its shipped bundles in
 # a build-written `.apps` inventory (tools/astra-bundle.mk).
@@ -886,6 +891,17 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
                      optional=True)
             _debugfs(volume, "write %s %s" % (path, target),
                      "service " + name)
+
+        if service_names is not None and "fonts" in service_names:
+            _mkdir(volume, "/fonts", "the system font directory")
+            for path in SYSTEM_FONTS:
+                if not os.path.isfile(path):
+                    raise RuntimeError("system font asset is missing: " + path)
+                target = "/fonts/" + os.path.basename(path)
+                _debugfs(volume, "rm %s" % target, "an old system font",
+                         optional=True)
+                _debugfs(volume, "write %s %s" % (path, target),
+                         "system font " + os.path.basename(path))
 
         if service_names is not None and "desktop" in service_names:
             _mkdir(volume, "/media", "the system media directory")

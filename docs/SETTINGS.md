@@ -69,8 +69,9 @@ RGB565 rendering APIs must be retired from production UI use before
 system-wide installed-font selection can be called complete.
 
 Current implementation provides scoped Config Kit grants and document storage.
-Font service, catalog, Fonts UI, runtime font selection, and live settings
-notification remain unimplemented; hard-coded resident fonts remain active.
+An isolated font-service draft can catalog AFNT and persist a validated face
+choice; standard startup does not publish it because Fonts UI and runtime font
+selection remain unimplemented. Hard-coded resident fonts remain active.
 Config Kit currently assumes one writer per settings document; multiple app
 instances need an owner-mediated write path before concurrent editing is safe.
 

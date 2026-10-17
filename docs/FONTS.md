@@ -530,6 +530,19 @@ role size from `astra/theme.h`. Beast host, sanitizer, MC68040, AArch64, and
 outline-conversion checks pass. This does not install fonts or change the active
 system font.
 
+A bounded, versioned native catalog snapshot now serializes face IDs, family,
+designed style, and available strikes. Shared C code extracts these fields from
+validated AFNT into caller-owned storage; shipped AFNT round trips through the
+catalog on Beast under host and sanitizer tests, and the codec builds for
+MC68040 and AArch64. A resident `fonts` service draft scans immutable system
+AFNT and its protected `CONFIG_SYSTEM/installed` directory, keeps read and
+administrative request ports separate, and validates theme role sizes before
+persisting a choice through Config Kit. Its service/policy build and focused
+tests pass. An isolated disposable QEMU boot launched the service with status
+zero. Standard startup does not yet publish the service: there is no native
+import transaction, Fonts UI, or renderer consumer, so a saved choice would
+not change text. Those are required before enabling it in a release.
+
 Haiku reference for this catalog boundary: `src/servers/app/font/FontManager.cpp`
 groups families and styles, `src/servers/app/font/FontFamily.cpp` keeps designed
 styles distinct, and `src/servers/app/font/GlobalFontManager.cpp` owns installed

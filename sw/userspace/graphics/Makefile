@@ -39,6 +39,7 @@ PIC_OBJECTS := build/m68k/pic/surface.o build/m68k/pic/shared_surface.o \
 HOST_TEST := build/host/test_surface
 HOST_AICON_TEST := build/host/test_aicon_surface
 HOST_AFNT_TEST := build/host/test_afnt
+HOST_CATALOG_TEST := build/host/test_font_catalog
 HOST_AFNT_LIBRARY := ../../common/build/host/libastraafnt.a
 AICON_TEST_SOURCES := src/aicon_surface.c tests/test_aicon_surface.c \
 	$(SYSTEM)/src/bundle.c
@@ -259,7 +260,8 @@ $(HOST_AICON_TEST): $(AICON_TEST_SOURCES)
 		-ffunction-sections -fdata-sections $(AICON_TEST_SOURCES) \
 		-Wl,--gc-sections -o $@
 
-$(HOST_AFNT_LIBRARY): ../../common/afnt.c ../../common/crc32.c ../../common/Makefile
+$(HOST_AFNT_LIBRARY): ../../common/afnt.c ../../common/crc32.c \
+		../../common/utf8.c ../../common/font_catalog.c ../../common/Makefile
 	$(MAKE) -C ../../common host
 
 $(HOST_AFNT_TEST): $(HOST_AFNT_LIBRARY) tests/test_afnt.c \
@@ -268,10 +270,18 @@ $(HOST_AFNT_TEST): $(HOST_AFNT_LIBRARY) tests/test_afnt.c \
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		tests/test_afnt.c $(HOST_AFNT_LIBRARY) -o $@
 
-test: $(HOST_TEST) $(HOST_AICON_TEST) $(HOST_AFNT_TEST) build/host/test-drawer.aicon
+$(HOST_CATALOG_TEST): $(HOST_AFNT_LIBRARY) tests/test_font_catalog.c \
+		../../include/astra/font_catalog.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		tests/test_font_catalog.c $(HOST_AFNT_LIBRARY) -o $@
+
+test: $(HOST_TEST) $(HOST_AICON_TEST) $(HOST_AFNT_TEST) \
+	$(HOST_CATALOG_TEST) build/host/test-drawer.aicon
 	./$(HOST_TEST)
 	./$(HOST_AICON_TEST) build/host/test-drawer.aicon
 	./$(HOST_AFNT_TEST)
+	./$(HOST_CATALOG_TEST)
 
 sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	../../../fpga/arty/linux/astra_render_protocol.h build/host/test-drawer.aicon
@@ -288,6 +298,11 @@ sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 		../../common/afnt.c ../../common/crc32.c tests/test_afnt.c \
 		-o build/host/test_afnt_sanitize
 	./build/host/test_afnt_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
+		../../common/font_catalog.c ../../common/afnt.c \
+		../../common/crc32.c ../../common/utf8.c \
+		tests/test_font_catalog.c -o build/host/test_font_catalog_sanitize
+	./build/host/test_font_catalog_sanitize
 
 analyze: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	../../../fpga/arty/linux/astra_render_protocol.h

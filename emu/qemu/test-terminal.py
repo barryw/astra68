@@ -538,6 +538,10 @@ class Qmp:
     def monitor(self, line):
         return self.execute("human-monitor-command", {"command-line": line})
 
+    def property(self, name):
+        return self.execute("qom-get", {"path": "/machine",
+                                        "property": name})
+
     def word(self, address):
         for token in self.monitor("xp /1xw 0x%x" % address).split():
             if token.startswith("0x") and len(token) == 10:

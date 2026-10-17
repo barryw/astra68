@@ -7,7 +7,7 @@ AARCH64_CC ?= aarch64-linux-gnu-gcc
 AARCH64_AR ?= aarch64-linux-gnu-ar
 CPPFLAGS := -I$(ROOT)/sw/include -I$(ROOT)/ndk/include
 CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -pedantic
-SOURCES := afnt.c crc32.c
+SOURCES := afnt.c crc32.c utf8.c font_catalog.c
 HOST_OBJECTS := $(patsubst %.c,build/host/%.o,$(SOURCES))
 M68K_OBJECTS := $(patsubst %.c,build/m68k/%.o,$(SOURCES))
 AARCH64_OBJECTS := $(patsubst %.c,build/aarch64/%.o,$(SOURCES))
@@ -17,16 +17,16 @@ host: build/host/libastraafnt.a
 m68k: build/m68k/libastraafnt.a
 aarch64: build/aarch64/libastraafnt.a
 
-build/host/%.o: %.c $(ROOT)/sw/include/astra/afnt.h $(ROOT)/sw/include/astra/crc32.h
+build/host/%.o: %.c $(ROOT)/sw/include/astra/afnt.h $(ROOT)/sw/include/astra/crc32.h $(ROOT)/sw/include/astra/font_catalog.h $(ROOT)/ndk/include/astra/utf8.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-build/m68k/%.o: %.c $(ROOT)/sw/include/astra/afnt.h $(ROOT)/sw/include/astra/crc32.h
+build/m68k/%.o: %.c $(ROOT)/sw/include/astra/afnt.h $(ROOT)/sw/include/astra/crc32.h $(ROOT)/sw/include/astra/font_catalog.h $(ROOT)/ndk/include/astra/utf8.h
 	@mkdir -p $(@D)
 	$(TARGET_CC) $(CPPFLAGS) $(CFLAGS) -m68040 -ffixed-a4 \
 		-ffreestanding -fno-builtin -fPIC -c $< -o $@
 
-build/aarch64/%.o: %.c $(ROOT)/sw/include/astra/afnt.h $(ROOT)/sw/include/astra/crc32.h
+build/aarch64/%.o: %.c $(ROOT)/sw/include/astra/afnt.h $(ROOT)/sw/include/astra/crc32.h $(ROOT)/sw/include/astra/font_catalog.h $(ROOT)/ndk/include/astra/utf8.h
 	@mkdir -p $(@D)
 	$(AARCH64_CC) $(CPPFLAGS) $(CFLAGS) -fPIC -c $< -o $@
 

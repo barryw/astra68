@@ -101,7 +101,7 @@ now expose family, designed style, and strike metrics without passing disk
 records to UI clients. The HPS converter prepares 11, 13, 16, and 20-pixel
 strikes, covering current proportional theme roles; Beast host, sanitizer,
 MC68040/AArch64 codec, and outline-conversion gates pass. It is not connected to a host
-worker, native font service, or Fonts UI yet. Interface Kit bundle metadata now
+worker or Fonts UI yet. Interface Kit bundle metadata now
 provides 6.0.0, matching its current ABI. [Font scope and runtime gaps](FONTS.md#7-import-and-style-compatibility)
 and the [Iosevka evaluation](IOSEVKA_EVALUATION.md) record details. Config Kit
 1.1 now opens a separate `CONFIG_SYSTEM` grant for resident services, rooted at
@@ -128,9 +128,13 @@ the system draw list, removing its production CPU pixel path. System Kit 4.2
 adds the checked view-to-session append API. Full userspace build/test and
 System/Desktop host, sanitizer, analyzer, and MC68040 builds pass on Beast;
 QEMU and DE25 candidate visual gates pass.
-There is no
-installed-font service/catalog or Fonts UI import transaction yet. Build-time
-Python conversion is a development oracle, not a user import path.
+There is now a native validated AFNT catalog snapshot and a draft resident
+`fonts` service with separate read/admin ports. Its MC68040 build, focused
+policy tests, sanitizer, and analyzer pass; an isolated disposable QEMU boot
+launched it with status zero. Standard startup does not publish it yet. Native
+import transaction, Fonts UI, renderer consumption of saved choice, and their
+release gates remain open. Build-time Python conversion is a development oracle,
+not a user import path.
 
 Current production checkpoint: graphics release
 `57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`,
