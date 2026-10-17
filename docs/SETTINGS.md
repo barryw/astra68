@@ -71,9 +71,10 @@ system-wide installed-font selection can be called complete.
 Current implementation provides scoped Config Kit grants and document storage.
 The resident font service catalogs AFNT and persists validated choice. The
 native Fonts UI imports an outline font and saves that imported face as system
-choice in a disposable QEMU gate. Display reads this choice at startup, while
-live updates and client-side metrics remain open. The selected DE25 release
-does not yet include this font work.
+choice in a disposable QEMU gate. It offers a confirmation flow for removing
+imported faces after changing away from the active choice. Display reads the
+choice at startup; live updates and client-side metrics remain open. The
+selected DE25 release does not yet include this font work.
 Config Kit currently assumes one writer per settings document; multiple app
 instances need an owner-mediated write path before concurrent editing is safe.
 

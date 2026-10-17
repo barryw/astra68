@@ -11,7 +11,7 @@ capability FONTS_ADMIN
 capability DH0:r
 capability LIBS:r
 requires compiler.library 2 2.0.0
-requires font.library 2 2.5.0
+requires font.library 2 2.7.0
 requires filesystem.library 14 14.0.0
 requires graphics.library 3 3.0.0
 requires interface.library 6 6.0.0

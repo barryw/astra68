@@ -596,14 +596,17 @@ MC68040 builds, host policy/client tests, full userspace tests, static analysis,
 and a disposable QEMU Fonts autostart pass. A test-only native Astra probe
 passes AFNT import, catalog publication, duplicate-idempotence, selected-face
 save, and catalog/choice reload after reboot on a disposable QEMU image. A
-third boot with a valid Config Kit document containing a damaged installed-font
+fourth boot with a valid Config Kit document containing a damaged installed-font
 inventory and unavailable saved choice confirms built-in fallback and refusal
 to overwrite the damaged inventory. It found and fixed an import port-call
-handle-order bug. Interactive Fonts UI import now passes the focused QEMU GUI
-gate; physical DE25 qualification remains open.
-Font service protocol 3 publishes `FONTS_RENDER` separately from catalog and
+handle-order bug. A two-boot GUI gate imports a TTF, selects it, selects a
+shipped face again, confirms uninstall, and checks that the catalog and AFNT
+object are removed. A native probe checks active and shipped-face rejection,
+retained-face catalog integrity after compaction, and restart persistence.
+Physical DE25 qualification remains open.
+Font service protocol 4 publishes `FONTS_RENDER` separately from catalog and
 administration. It rereads and validates an installed AFNT, checks the full
-content token for user faces, and transfers an immutable area. Font Kit 2.6
+content token for user faces, and transfers an immutable area. Font Kit 2.7
 maps that area read-only. A native QEMU probe compares delivered bytes with
 the built-in and newly imported source, including after restart and damaged
 inventory fallback. Normal startup grants this port only to display. Display
@@ -617,9 +620,18 @@ independent font. The current-ROM native AFNT import probe also passes
 selection, restart, and damaged-inventory fallback. Display does not yet watch
 for selection changes, and clients still lay out text with built-in
 metrics. Static TTF/OTF/TTC now enter through the HPS worker and native Fonts
-service; a disposable two-face TTC import/restart gate passes. Production DE25
-still uses the previous selected release. Live updates, coherent metrics and
-styles, variable/Amiga import, interactive UI, and physical gates remain open.
+service; a disposable two-face TTC import/restart gate passes. Imported faces
+can be removed only after choosing another system face. Config Kit commits the
+inventory change before the service retires the catalog entry and unlinks its
+AFNT object. If unlink fails, the unlisted object remains on disk and the
+service logs the cleanup error; it does not restore a removed catalog entry.
+This follows Haiku's delist-and-revision pattern in
+`~/Git/haiku/src/servers/app/font/AppFontManager.cpp:101-106` and
+`~/Git/haiku/src/servers/app/font/FontManager.cpp:354-370`, adapted to Astra's
+content-addressed store and Config Kit transaction. Production DE25 still
+uses the previous selected release. Live updates, coherent metrics and
+styles, variable/Amiga import, removable-volume browsing, and physical gates
+remain open.
 
 Haiku reference for this catalog boundary: `src/servers/app/font/FontManager.cpp`
 groups families and styles, `src/servers/app/font/FontFamily.cpp` keeps designed

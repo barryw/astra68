@@ -220,6 +220,21 @@ AstraResult astra_fonts_select(AstraHandle admin, const char *id,
                     &reply, &ignored);
 }
 
+AstraResult astra_fonts_uninstall(AstraHandle admin, const char *id,
+                                  uint32_t id_length)
+{
+    AstraFontServiceReply reply = {0};
+    AstraHandle ignored = ASTRA_INVALID_HANDLE;
+
+    if (admin == ASTRA_INVALID_HANDLE || id == NULL || id_length == 0u ||
+        id_length >= ASTRA_FONT_ID_MAX ||
+        memchr(id, '\0', id_length) != NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return exchange(admin, ASTRA_FONT_SERVICE_UNINSTALL, id, id_length,
+                    ASTRA_INVALID_HANDLE, 0u, NULL, 0u,
+                    &reply, &ignored);
+}
+
 AstraResult astra_fonts_face_open(AstraHandle render, const char *id,
                                   uint32_t id_length, AstraArea *face,
                                   uint32_t *length)

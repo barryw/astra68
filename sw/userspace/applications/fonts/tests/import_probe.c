@@ -14,6 +14,7 @@ ASTRA_PROGRAM("font-import-probe", 0, 1, 0, "Astra68 contributors",
 
 #define SOURCE "/SYSTEM/fonts/astra-workbench.afnt"
 #define SOURCE_NAME "astra-workbench.afnt"
+#define SECOND_SOURCE "/SYSTEM/fonts/astra-mono.afnt"
 
 enum {
     PROBE_FAIL_FILES = ASTRA_STATUS_PROGRAM_FIRST,
@@ -35,7 +36,16 @@ enum {
     PROBE_FAIL_CORRUPT_WRITE,
     PROBE_FAIL_OPEN_FACE,
     PROBE_FAIL_FACE_BYTES,
-    PROBE_FAIL_FACE_CLOSE
+    PROBE_FAIL_FACE_CLOSE,
+    PROBE_FAIL_UNINSTALL_ACTIVE,
+    PROBE_FAIL_UNINSTALL_SYSTEM,
+    PROBE_FAIL_UNINSTALL_SELECT,
+    PROBE_FAIL_UNINSTALL,
+    PROBE_FAIL_UNINSTALL_CATALOG,
+    PROBE_FAIL_UNINSTALL_RENDER,
+    PROBE_FAIL_UNINSTALL_RESTART,
+    PROBE_FAIL_SECOND_IMPORT,
+    PROBE_FAIL_RETAINED_FACE
 };
 
 static uint32_t matches(const AstraFontsCatalog *catalog, const char *id)
@@ -71,17 +81,23 @@ int astra_main(const AstraStartupInfo *startup)
     AstraFontsCatalog before = ASTRA_FONTS_CATALOG_INIT;
     AstraFontsCatalog after = ASTRA_FONTS_CATALOG_INIT;
     AstraFontsCatalog selected = ASTRA_FONTS_CATALOG_INIT;
+    AstraFontsCatalog removed = ASTRA_FONTS_CATALOG_INIT;
+    AstraFontsCatalog remaining = ASTRA_FONTS_CATALOG_INIT;
     AstraArea face_area = ASTRA_AREA_INIT;
     void *source = NULL;
+    void *second_source = NULL;
     uint32_t source_size = 0u;
+    uint32_t second_size = 0u;
     uint32_t face_size = 0u;
     uint32_t receive = 0u, send = 0u, index = 0u;
     uint32_t status = PROBE_FAIL_FILES;
     char id[ASTRA_FONT_ID_MAX] = {0};
     char duplicate[ASTRA_FONT_ID_MAX] = {0};
+    char second_id[ASTRA_FONT_ID_MAX] = {0};
     uint32_t resumed = 0u;
     uint32_t expect_again = 0u;
     uint32_t expect_corrupt = 0u;
+    uint32_t expect_uninstalled = 0u;
     AstraResult result;
 
     if (!astra_startup_validate(startup)) return ASTRA_STATUS_INVALID;
@@ -116,7 +132,9 @@ int astra_main(const AstraStartupInfo *startup)
     if (marker(&files, "/SYSTEM/expect-font-import-again",
                &expect_again) != ASTRA_VFS_OK ||
         marker(&files, "/SYSTEM/expect-font-inventory-corrupt",
-               &expect_corrupt) != ASTRA_VFS_OK)
+               &expect_corrupt) != ASTRA_VFS_OK ||
+        marker(&files, "/SYSTEM/expect-font-uninstalled",
+               &expect_uninstalled) != ASTRA_VFS_OK)
         goto done;
     if (expect_corrupt) {
         status = PROBE_FAIL_CORRUPT_CATALOG;
@@ -135,6 +153,19 @@ int astra_main(const AstraStartupInfo *startup)
                                SOURCE_NAME, sizeof(SOURCE_NAME) - 1u,
                                id) != ASTRA_ERROR_IO)
             goto done;
+        status = ASTRA_STATUS_OK;
+        goto done;
+    }
+    if (expect_uninstalled) {
+        status = PROBE_FAIL_UNINSTALL_RESTART;
+        if (strcmp(before.selected_id, "system:astra-workbench") != 0)
+            goto done;
+        for (uint32_t at = 0u; at < before.face_count; ++at) {
+            AstraInstalledFont face;
+            if (astra_fonts_catalog_face(&before, at, &face) != ASTRA_OK ||
+                (face.id_length >= 5u &&
+                 memcmp(face.id, "user:", 5u) == 0)) goto done;
+        }
         status = ASTRA_STATUS_OK;
         goto done;
     }
@@ -181,6 +212,54 @@ int astra_main(const AstraStartupInfo *startup)
                            duplicate) != ASTRA_OK) goto done;
     status = PROBE_FAIL_DUPLICATE_ID;
     if (strcmp(duplicate, id) != 0) goto done;
+    if (resumed) {
+        status = PROBE_FAIL_SECOND_IMPORT;
+        if (astra_process_read_file_alloc(&files, SECOND_SOURCE,
+                                          &second_source, &second_size) !=
+                ASTRA_VFS_OK || second_size == 0u ||
+            astra_fonts_import(admin->handle, second_source, second_size,
+                               "astra-mono.afnt", 15u,
+                               second_id) != ASTRA_OK)
+            goto done;
+        status = PROBE_FAIL_UNINSTALL_ACTIVE;
+        if (astra_fonts_uninstall(admin->handle, id,
+                                  (uint32_t)strlen(id)) != ASTRA_ERROR_BUSY)
+            goto done;
+        status = PROBE_FAIL_UNINSTALL_SYSTEM;
+        if (astra_fonts_uninstall(admin->handle,
+                                  "system:astra-workbench", 22u) !=
+            ASTRA_ERROR_PERMISSION) goto done;
+        status = PROBE_FAIL_UNINSTALL_SELECT;
+        if (astra_fonts_select(admin->handle,
+                               "system:astra-workbench", 22u) != ASTRA_OK)
+            goto done;
+        status = PROBE_FAIL_UNINSTALL;
+        if (astra_fonts_uninstall(admin->handle, id,
+                                  (uint32_t)strlen(id)) != ASTRA_OK)
+            goto done;
+        status = PROBE_FAIL_RETAINED_FACE;
+        if (astra_fonts_catalog_open(read->handle, &remaining) != ASTRA_OK ||
+            matches(&remaining, id) != 0u ||
+            matches(&remaining, second_id) != 1u ||
+            remaining.face_count != before.face_count ||
+            remaining.generation != selected.generation + 3u)
+            goto done;
+        if (astra_fonts_uninstall(admin->handle, second_id,
+                                  (uint32_t)strlen(second_id)) != ASTRA_OK)
+            goto done;
+        status = PROBE_FAIL_UNINSTALL_CATALOG;
+        if (astra_fonts_catalog_open(read->handle, &removed) != ASTRA_OK ||
+            matches(&removed, id) != 0u ||
+            removed.face_count != before.face_count - 1u ||
+            strcmp(removed.selected_id, "system:astra-workbench") != 0 ||
+            removed.generation != selected.generation + 4u)
+            goto done;
+        status = PROBE_FAIL_UNINSTALL_RENDER;
+        if (astra_fonts_face_open(render->handle, id,
+                                  (uint32_t)strlen(id), &face_area,
+                                  &face_size) != ASTRA_ERROR_NOT_PRESENT)
+            goto done;
+    }
     status = ASTRA_STATUS_OK;
 done:
     if (face_area.handle != ASTRA_INVALID_HANDLE) {
@@ -189,6 +268,14 @@ done:
     }
     if (selected.generation != 0u) {
         AstraResult ignored = astra_fonts_catalog_close(&selected);
+        (void)ignored;
+    }
+    if (removed.generation != 0u) {
+        AstraResult ignored = astra_fonts_catalog_close(&removed);
+        (void)ignored;
+    }
+    if (remaining.generation != 0u) {
+        AstraResult ignored = astra_fonts_catalog_close(&remaining);
         (void)ignored;
     }
     if (after.generation != 0u) {
@@ -200,6 +287,7 @@ done:
         (void)ignored;
     }
     astra_runtime_deallocate(source);
+    astra_runtime_deallocate(second_source);
     astra_process_filesystem_close(&files);
     if (status == ASTRA_STATUS_OK &&
         astra_rt_port_create(1u, 256u, &receive, &send) != ASTRA_SYSCALL_OK)
@@ -211,6 +299,7 @@ done:
         return (int)status;
     }
     (void)astra_log(expect_corrupt ? "FONT_IMPORT_CORRUPT_PASS" :
+                    expect_uninstalled ? "FONT_UNINSTALL_RESTART_PASS" :
                     resumed ? "FONT_IMPORT_AGAIN_PASS" :
                               "FONT_IMPORT_FIRST_PASS");
     for (;;)

@@ -24,6 +24,19 @@ def display_count(machine, name):
         "path": "/machine", "property": "astra-display-" + name})
 
 
+def open_fonts(machine):
+    before = display_count(machine, "glyph-commands")
+    machine.qmp.double_click(*machine.desktop_icon("/apps/Fonts.app"))
+    end = time.monotonic() + 30
+    while time.monotonic() < end:
+        if any("launch /apps/Fonts.app" in line and "status=0" in line
+               for line in machine.said_with_syslog()[0]) and \
+                display_count(machine, "glyph-commands") > before:
+            return
+        time.sleep(.1)
+    raise RuntimeError("Fonts window did not open")
+
+
 def state_on_disk(image, work):
     offset, length = astra_image.ext4_partition(image)
     volume = str(Path(work) / "inspect-volume.ext4")
@@ -59,18 +72,7 @@ def main():
         try:
             if not machine.wait_for_serial(terminal.BOOT_MARKER, 120):
                 raise RuntimeError("Astra did not reach stage 8")
-            before = display_count(machine, "glyph-commands")
-            machine.qmp.double_click(
-                *machine.desktop_icon("/apps/Fonts.app"))
-            end = time.monotonic() + 30
-            while time.monotonic() < end:
-                if any("launch /apps/Fonts.app" in line and "status=0" in line
-                       for line in machine.said_with_syslog()[0]) and \
-                        display_count(machine, "glyph-commands") > before:
-                    break
-                time.sleep(.1)
-            else:
-                raise RuntimeError("Fonts window did not open")
+            open_fonts(machine)
             # Fixture root enumerates the injected font at row 2.
             for _ in range(3):
                 machine.qmp.key("tab")
@@ -127,7 +129,43 @@ def main():
             stderr=subprocess.STDOUT, text=True)
         if result.returncode != 0 or "Inode:" not in result.stdout:
             raise RuntimeError("UI import AFNT object missing: " + result.stdout)
-    print("ASTRA FONTS UI PASS TTF import, AFNT object, family detail, imported system choice")
+        machine = terminal.Machine(args.qemu, args.rom, image, work)
+        try:
+            if not machine.wait_for_serial(terminal.BOOT_MARKER, 120):
+                raise RuntimeError("Astra did not restart after font selection")
+            open_fonts(machine)
+            # Choose shipped face before removing current imported system face.
+            for key in ("tab", "tab", "home", "ret"):
+                machine.qmp.key(key)
+            for _ in range(4):
+                machine.qmp.key("tab")
+            machine.qmp.key("ret")
+            for _ in range(3):
+                machine.qmp.key("tab")
+            machine.qmp.key("ret")
+            for key in ("tab", "tab", "end", "ret"):
+                machine.qmp.key(key)
+            for _ in range(5):
+                machine.qmp.key("tab")
+            machine.qmp.key("ret")
+            # Confirmation view contains Cancel and Remove font.
+            machine.qmp.key("tab")
+            machine.qmp.key("tab")
+            machine.qmp.key("ret")
+            time.sleep(.5)
+        finally:
+            machine.close()
+        selected, inventory = state_on_disk(image, work)
+        if selected is None or not selected.startswith("system:") or inventory != "":
+            raise RuntimeError("UI uninstall did not save built-in choice and empty inventory: %r, %r" %
+                               (selected, inventory))
+        result = subprocess.run([
+            "debugfs", "-R", "stat /config/system/fonts/installed/" +
+            token + ".afnt", volume], stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True)
+        if "Inode:" in result.stdout:
+            raise RuntimeError("UI uninstall left AFNT object on disk")
+    print("ASTRA FONTS UI PASS TTF import, AFNT object, family detail, system choice, uninstall")
     return 0
 
 

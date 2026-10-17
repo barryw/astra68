@@ -34,7 +34,8 @@ enum {
     FONTS_BACK,
     FONTS_USE,
     FONTS_IMPORT,
-    FONTS_CONTROL_COUNT = FONTS_IMPORT
+    FONTS_UNINSTALL,
+    FONTS_CONTROL_COUNT = FONTS_UNINSTALL
 };
 
 enum {
@@ -68,6 +69,7 @@ static AstraChoiceItem browser_items[FONTS_BROWSER_MAX];
 static uint32_t browser_count;
 static uint32_t browser_selection;
 static uint32_t browsing;
+static uint32_t confirm_uninstall;
 static char browser_path[ASTRA_VFS_PATH_MAX] = "/dh0";
 static AstraControl controls[FONTS_CONTROL_COUNT];
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
@@ -302,6 +304,7 @@ static uint32_t build_controls(void)
     AstraButtonInfo back = ASTRA_BUTTON_INFO_INIT;
     AstraButtonInfo use = ASTRA_BUTTON_INFO_INIT;
     AstraButtonInfo import = ASTRA_BUTTON_INFO_INIT;
+    AstraButtonInfo uninstall = ASTRA_BUTTON_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
     const AstraChoiceItem *title = active_family == UINT32_MAX ? NULL :
                                    &families[active_family];
@@ -315,7 +318,8 @@ static uint32_t build_controls(void)
     if (astra_interface_label_init(CONTROL(FONTS_TITLE), &label) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     label.id = FONTS_HINT;
-    label.text = message != NULL ? message : browsing ?
+    label.text = message != NULL ? message : confirm_uninstall ?
+                 "Remove this imported style and all its sizes? Source file remains." : browsing ?
                  "Open a folder or select a font file to import" :
                  active_family == UINT32_MAX ?
                  (family_count == 0u ? "No fonts installed" :
@@ -329,6 +333,7 @@ static uint32_t build_controls(void)
     view.model = &scroll;
     view.preferred_width = FONTS_WIDTH - 48u;
     view.preferred_height = FONTS_HEIGHT - 160u;
+    view.state = confirm_uninstall ? ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_scroll_view_init(CONTROL(FONTS_SCROLL), &view) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     list.id = FONTS_LIST;
@@ -339,10 +344,12 @@ static uint32_t build_controls(void)
     list.selected = list.item_count == 0u ? UINT32_MAX :
                     browsing ? browser_selection :
                     active_family == UINT32_MAX ? main_selection : detail_selection;
+    list.state = confirm_uninstall ? ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_list_init(CONTROL(FONTS_LIST), &list) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     back.id = FONTS_BACK;
-    back.text = browsing ? "Up" : "Back to families";
+    back.text = confirm_uninstall ? "Cancel" :
+                browsing ? "Up" : "Back to families";
     back.text_length = (uint32_t)strlen(back.text);
     back.state = !browsing && active_family == UINT32_MAX ?
                  ASTRA_CONTROL_COLLAPSED : 0u;
@@ -351,7 +358,8 @@ static uint32_t build_controls(void)
     use.id = FONTS_USE;
     use.text = browsing ? "Import selected font" : "Use for system text";
     use.text_length = (uint32_t)strlen(use.text);
-    use.state = !browsing && active_family == UINT32_MAX ?
+    use.state = confirm_uninstall ||
+                (!browsing && active_family == UINT32_MAX) ?
                 ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_USE), &use) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
@@ -362,6 +370,13 @@ static uint32_t build_controls(void)
                    ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_IMPORT), &import) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
+    uninstall.id = FONTS_UNINSTALL;
+    uninstall.text = confirm_uninstall ? "Remove font" : "Uninstall…";
+    uninstall.text_length = (uint32_t)strlen(uninstall.text);
+    uninstall.state = browsing || active_family == UINT32_MAX ?
+                      ASTRA_CONTROL_COLLAPSED : 0u;
+    if (astra_interface_button_init(CONTROL(FONTS_UNINSTALL), &uninstall) !=
+        ASTRA_OK) return FONTS_FAIL_CONTROL;
 
     if (astra_interface_control_set_flex(CONTROL(FONTS_TITLE), &item) != ASTRA_OK ||
         astra_interface_control_set_flex(CONTROL(FONTS_HINT), &item) != ASTRA_OK)
@@ -382,6 +397,8 @@ static uint32_t build_controls(void)
         return FONTS_FAIL_CONTROL;
     if (astra_interface_control_set_flex(CONTROL(FONTS_IMPORT), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
+    if (astra_interface_control_set_flex(CONTROL(FONTS_UNINSTALL), &item) !=
+        ASTRA_OK) return FONTS_FAIL_CONTROL;
     if (astra_interface_ui_init(&ui, controls, FONTS_CONTROL_COUNT,
                                 client_width, client_height) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
@@ -439,6 +456,7 @@ static uint32_t reload_catalog(void)
     main_selection = 0u;
     active_family = UINT32_MAX;
     browsing = 0u;
+    confirm_uninstall = 0u;
     catalog = fresh;
     return collect_families();
 }
@@ -511,6 +529,45 @@ static uint32_t action(const AstraUIAction *event)
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
         return present();
     }
+    if (confirm_uninstall && event->type == ASTRA_UI_ACTION_ACTIVATE &&
+        event->control_id == FONTS_BACK) {
+        confirm_uninstall = 0u;
+        message = NULL;
+        if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+        return present();
+    }
+    if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
+        event->control_id == FONTS_UNINSTALL) {
+        AstraInstalledFont face;
+
+        if (detail_selection >= detail_count ||
+            astra_fonts_catalog_face(&catalog,
+                detail_faces[detail_selection], &face) != ASTRA_OK)
+            return FONTS_FAIL_CATALOG;
+        if ((face.flags & ASTRA_INSTALLED_FONT_SYSTEM) != 0u) {
+            message = "Built-in fonts cannot be removed";
+            if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+            return present();
+        }
+        if (!confirm_uninstall) {
+            confirm_uninstall = 1u;
+            message = NULL;
+        } else {
+            AstraResult result = astra_fonts_uninstall(
+                fonts_admin, face.id, face.id_length);
+            confirm_uninstall = 0u;
+            if (result == ASTRA_OK) {
+                if (reload_catalog() != ASTRA_STATUS_OK)
+                    return FONTS_FAIL_CATALOG;
+                message = "Font removed";
+            } else
+                message = result == ASTRA_ERROR_BUSY ?
+                    "Choose another system font before removing this one" :
+                    "Could not remove font";
+        }
+        if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+        return present();
+    }
     if (event->control_id == FONTS_LIST &&
         event->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
         active_family != UINT32_MAX && event->value >= 0 &&
@@ -530,6 +587,7 @@ static uint32_t action(const AstraUIAction *event)
             return FONTS_FAIL_CATALOG;
         active_family = main_selection;
         detail_selection = 0u;
+        confirm_uninstall = 0u;
         message = NULL;
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
         return present();
@@ -537,6 +595,7 @@ static uint32_t action(const AstraUIAction *event)
     if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
         event->control_id == FONTS_BACK) {
         active_family = UINT32_MAX;
+        confirm_uninstall = 0u;
         message = NULL;
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
         return present();

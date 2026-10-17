@@ -148,6 +148,9 @@ int main(void)
     assert(astra_fonts_catalog_strike(&catalog, 0u, 1u, &size) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
     assert(astra_fonts_select(1u, face.id, face.id_length) == ASTRA_OK);
+    assert(astra_fonts_uninstall(1u, "user:test", 9u) == ASTRA_OK);
+    assert(astra_fonts_uninstall(1u, "", 0u) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
     assert(astra_fonts_catalog_close(&catalog) == ASTRA_OK);
     assert(closed_handles == 1u);
 

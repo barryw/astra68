@@ -163,6 +163,17 @@ object token. A stray Flex break flag had placed the List outside the client are
 removing it restored pointer and keyboard interaction. Native variable/Amiga
 import, live render-context refresh, removable-volume browsing, and physical
 release gates remain open.
+Font service protocol 4 and Font Kit 2.7 add administrative uninstall for
+imported faces. The service refuses removal of shipped or active faces, commits
+the new Config Kit inventory before retiring the catalog entry, and then
+unlinks the unreferenced AFNT object. The native Fonts UI confirms removal and
+reloads its catalog. A two-boot disposable QEMU GUI gate imports and selects a
+TTF, selects a shipped face, confirms uninstall, and verifies inventory and
+object removal. A focused native probe covers catalog compaction with another
+imported face retained, generation changes, active/shipped rejection, and
+restart persistence. Haiku's app-server font removal path informed the
+delist-and-revision behavior; Astra uses Config Kit as its publication point.
+These changes are not in the selected DE25 release.
 An isolated native QEMU probe imports shipped AFNT through the same admin-only
 API, checks catalog publication and idempotence, selects the imported face,
 then reboots the disposable image and verifies persisted catalog and choice.

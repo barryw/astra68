@@ -36,15 +36,25 @@ capability. `astra_fonts_catalog_open`, `astra_fonts_catalog_face`, and
 `astra_fonts_catalog_strike` return installed family, designed style, and
 available AFNT sizes. Close the snapshot after use; its names are borrowed.
 
-`FONTS_ADMIN` permits `astra_fonts_import` and `astra_fonts_select`. Import
-accepts one validated AFNT source of at most 32 MiB and returns its stable
-installed ID. Other source formats currently return unsupported. Selection
-persists through Config Kit, but the current draw-list text backend still uses
-its built-in face. Do not treat an installed catalog entry as a drawable font
-handle until the font service and renderer publish that contract.
+`FONTS_ADMIN` permits `astra_fonts_import`, `astra_fonts_select`, and
+`astra_fonts_uninstall`. Import accepts native AFNT and static TTF, OTF, or TTC
+sources up to 32 MiB. The resident service converts outlines through the
+host worker, validates every resulting AFNT face, and returns a stable ID.
+Variable outlines and Amiga disk fonts are not yet accepted at runtime.
+Uninstall accepts only imported faces; select another system face first if the
+face is active. Shipped faces cannot be uninstalled. The service commits the
+new Config Kit inventory before retiring a face from the catalog, then removes
+its unreferenced AFNT object. A cleanup error leaves an unlisted object on
+disk and is logged; the removed font is not restored to the catalog.
+
+Selection persists through Config Kit. Display loads the selected AFNT at
+startup for proportional draw-list text. Existing clients still lay out text
+with built-in metrics, and running Display does not yet refresh after a change.
+An installed catalog entry is metadata, not a drawable handle for applications.
 
 Display alone receives `FONTS_RENDER` in the normal startup manifest.
 `astra_fonts_face_open` returns an immutable, read-only area containing a
 validated installed AFNT and its exact byte length. The caller closes the
-area with `astra_area_close`. This supplies face bytes to the renderer; it does
-not yet select that face for drawing.
+area with `astra_area_close`. Display validates and uses the selected face for
+supported regular proportional strikes, with built-in fallback for missing
+strikes and styles.

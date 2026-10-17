@@ -134,6 +134,16 @@ ASTRA_NODISCARD AstraResult astra_fonts_import(
     AstraHandle admin, const void *bytes, uint32_t length,
     const char *source_name, uint32_t name_length,
     char installed_id[ASTRA_FONT_ID_MAX]);
+/** Uninstall one user-imported face after choosing a different system face.
+ * Shipped faces cannot be removed. The catalog stops exposing a successfully
+ * uninstalled face even if cleanup of its now-unreferenced AFNT file fails.
+ * @param admin FONTS_ADMIN send capability.
+ * @param id Counted catalog face ID.
+ * @param id_length Bytes at @p id, without a terminator.
+ * @return ::ASTRA_OK, ::ASTRA_ERROR_BUSY for current system choice,
+ * ::ASTRA_ERROR_PERMISSION for a shipped face, or another negative result. */
+ASTRA_NODISCARD AstraResult astra_fonts_uninstall(
+    AstraHandle admin, const char *id, uint32_t id_length);
 
 ASTRA_EXTERN_C_END
 #endif

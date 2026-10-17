@@ -50,6 +50,7 @@ int fonts_request_valid(const AstraFontServiceRequest *request,
              request->header.operation == ASTRA_FONT_SERVICE_CATALOG) ||
             (port_role == FONTS_PORT_ADMIN &&
              (request->header.operation == ASTRA_FONT_SERVICE_SELECT ||
+              request->header.operation == ASTRA_FONT_SERVICE_UNINSTALL ||
               import)) ||
             (port_role == FONTS_PORT_RENDER &&
              request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE)) &&

@@ -380,6 +380,63 @@ static uint32_t commit_import(FontImportStage *stage)
     return ASTRA_STATUS_OK;
 }
 
+static uint32_t uninstall_face(const char *id)
+{
+    char manifest[FONT_INVENTORY_MAX] = {0};
+    uint32_t face_at = installed_count;
+    uint32_t token_at = inventory_count;
+    uint32_t used = 0u;
+    uint32_t status;
+
+    if (strncmp(id, "system:", 7u) == 0) return ASTRA_STATUS_ACCESS;
+    if (strncmp(id, "user:", 5u) != 0 ||
+        strlen(id) != 5u + ASTRA_FONT_OBJECT_TOKEN_LENGTH ||
+        !astra_font_object_token_valid(id + 5u,
+                                       ASTRA_FONT_OBJECT_TOKEN_LENGTH))
+        return ASTRA_STATUS_INVALID;
+    if (!inventory_ready || !config_ready) return ASTRA_STATUS_IO;
+    if (strcmp(selected, id) == 0) return ASTRA_STATUS_BUSY;
+    for (uint32_t at = 0u; at < installed_count; ++at)
+        if (strcmp(installed[at].id, id) == 0) { face_at = at; break; }
+    for (uint32_t at = 0u; at < inventory_count; ++at)
+        if (strcmp(inventory_tokens[at], id + 5u) == 0) {
+            token_at = at;
+            break;
+        }
+    if (face_at == installed_count || token_at == inventory_count)
+        return ASTRA_STATUS_NOT_FOUND;
+    for (uint32_t at = 0u; at < inventory_count; ++at) {
+        if (at == token_at) continue;
+        if (used + (used != 0u) + ASTRA_FONT_OBJECT_TOKEN_LENGTH >=
+            sizeof(manifest)) return ASTRA_STATUS_LIMIT;
+        if (used != 0u) manifest[used++] = ' ';
+        memcpy(manifest + used, inventory_tokens[at],
+               ASTRA_FONT_OBJECT_TOKEN_LENGTH);
+        used += ASTRA_FONT_OBJECT_TOKEN_LENGTH;
+        manifest[used] = '\0';
+    }
+    if (astra_config_set_string(&config, "installed", 0u, manifest) !=
+        ASTRA_CONFIG_OK) return ASTRA_STATUS_IO;
+    memcpy(inventory_text, manifest, used + 1u);
+    for (uint32_t at = token_at; at + 1u < inventory_count; ++at)
+        memcpy(inventory_tokens[at], inventory_tokens[at + 1u],
+               ASTRA_FONT_OBJECT_TOKEN_SIZE);
+    --inventory_count;
+    for (uint32_t at = face_at; at + 1u < installed_count; ++at) {
+        installed[at] = installed[at + 1u];
+        installed[at].face.id = installed[at].id;
+        installed[at].face.family = installed[at].family;
+        installed[at].face.style = installed[at].style;
+        installed[at].face.strikes = installed[at].strikes;
+    }
+    --installed_count;
+    if (++generation == 0u) generation = 1u;
+    status = remove_object(id + 5u);
+    if (status != ASTRA_VFS_OK)
+        (void)astra_log_failure("fonts uninstall cleanup", status);
+    return ASTRA_STATUS_OK;
+}
+
 typedef struct FontConvertJob {
     const void *source;
     uint32_t source_size;
@@ -666,6 +723,9 @@ static void serve(uint32_t port, uint32_t role)
     } else if (status == ASTRA_STATUS_OK &&
                request.header.operation == ASTRA_FONT_SERVICE_OPEN_FACE) {
         status = face_area(request.face_id, &area, &area_size);
+    } else if (status == ASTRA_STATUS_OK &&
+               request.header.operation == ASTRA_FONT_SERVICE_UNINSTALL) {
+        status = uninstall_face(request.face_id);
     } else if (status == ASTRA_STATUS_OK) {
         FontEntry *face = find_face(request.face_id);
         if (face == NULL) status = ASTRA_STATUS_NOT_FOUND;

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Exercise native AFNT import, catalog choice, and restart persistence."""
+"""Exercise native AFNT import, selection, uninstall and restart persistence."""
 
 import argparse
 import importlib.util
 from pathlib import Path
+import re
 import shutil
+import subprocess
 import tempfile
 import time
 
@@ -16,6 +18,18 @@ terminal = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(terminal)
 
 PROBE = "/apps/FontImportProbe.app"
+
+
+def stored_objects(image, work):
+    offset, length = astra_image.ext4_partition(image)
+    volume = str(Path(work) / "inspect-volume.ext4")
+    astra_image._slice(image, offset, length, volume)
+    result = subprocess.run(
+        ["debugfs", "-R", "ls -p /config/system/fonts/installed", volume],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if result.returncode != 0 or "while " in result.stdout:
+        raise RuntimeError("cannot inspect font store: " + result.stdout)
+    return re.findall(r"[a-z2-7]{52}\.(?:afnt|tmp)", result.stdout)
 
 
 def boot(qemu, rom, image, work, phase):
@@ -68,6 +82,13 @@ def main():
         astra_image._replace_volume_file(
             image, str(expectation), "/expect-font-import-again")
         boot(args.qemu, args.rom, image, work, "restart")
+        if stored_objects(image, work):
+            raise RuntimeError("uninstalled AFNT object remains on disk")
+        removed = Path(work) / "expect-uninstalled"
+        removed.write_text("uninstalled\n", encoding="ascii")
+        astra_image._replace_volume_file(
+            image, str(removed), "/expect-font-uninstalled")
+        boot(args.qemu, args.rom, image, work, "uninstall restart")
         settings = Path(work) / "damaged-settings"
         settings.write_text(
             "astra-config 1\nschema 1\ninstalled = invalid\n"
@@ -80,7 +101,7 @@ def main():
             image, str(marker), "/expect-font-inventory-corrupt")
         boot(args.qemu, args.rom, image, work, "damaged inventory")
     print("ASTRA FONT IMPORT PASS native AFNT, idempotence, selection, "
-          "restart, damaged-inventory fallback")
+          "uninstall, restart, damaged-inventory fallback")
     return 0
 
 

@@ -37,6 +37,11 @@ int main(void)
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
     assert(fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_RENDER));
+    request.header.operation = ASTRA_FONT_SERVICE_UNINSTALL;
+    assert(fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
+    assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
+    assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_RENDER));
+    request.header.operation = ASTRA_FONT_SERVICE_SELECT;
     memset(request.face_id, 'x', sizeof(request.face_id));
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
     request.face_id[0] = '\0';

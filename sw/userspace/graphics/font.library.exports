@@ -50,3 +50,8 @@ ASTRA_FONT_2.6 {
     global:
         astra_fonts_face_open;
 } ASTRA_FONT_2.5;
+
+ASTRA_FONT_2.7 {
+    global:
+        astra_fonts_uninstall;
+} ASTRA_FONT_2.6;
