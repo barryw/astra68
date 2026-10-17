@@ -1,0 +1,17 @@
+astra-bundle 1
+kind application
+id org.astra.font-amiga-probe
+name "Font Amiga Probe"
+version 0.1.0
+executable bin/m68k-68040/FontAmigaProbe
+icon resources/FontAmigaProbe.aicon
+capability FONTS
+capability FONTS_ADMIN
+capability FONTS_RENDER
+capability SYSTEM:r
+capability LIBS:r
+requires compiler.library 2 2.0.0
+requires font.library 3 3.0.0
+requires filesystem.library 14 14.0.0
+requires runtime.library 1 1.5.0
+requires system.library 4 4.0.0

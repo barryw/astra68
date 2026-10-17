@@ -34,6 +34,7 @@ enum {
     FONTS_BACK,
     FONTS_USE,
     FONTS_IMPORT,
+    FONTS_ENCODING,
     FONTS_UNINSTALL,
     FONTS_CONTROL_COUNT = FONTS_UNINSTALL
 };
@@ -69,6 +70,7 @@ static AstraChoiceItem browser_items[FONTS_BROWSER_MAX];
 static uint32_t browser_count;
 static uint32_t browser_selection;
 static uint32_t browsing;
+static uint32_t amiga_encoding;
 static uint32_t confirm_uninstall;
 static char browser_path[ASTRA_VFS_PATH_MAX] = "/dh0";
 static AstraControl controls[FONTS_CONTROL_COUNT];
@@ -169,7 +171,10 @@ static uint32_t collect_details(uint32_t family_index)
                  (!astra_string_append_u64(&text, strike.pixel_width) ||
                   !astra_string_append_char(&text, 'x'))) ||
                 !astra_string_append_u64(&text, strike.pixel_height) ||
-                !astra_string_append(&text, " px"))
+                !astra_string_append(&text, " px  ·  ") ||
+                !astra_string_append(&text,
+                    (face.flags & ASTRA_INSTALLED_FONT_SELECTABLE) != 0u ?
+                    "Can be system font" : "Cannot be system font"))
                 return FONTS_FAIL_CATALOG;
             details[detail_count] = (AstraChoiceItem){
                 text.text, text.length, {0u, 0u}
@@ -288,10 +293,18 @@ static AstraResult browser_import(void)
     if (bytes == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
     status = astra_process_read_file(&files, path, bytes,
                                      (uint32_t)info.byte_size, &length);
-    result = status == ASTRA_VFS_OK && length == info.byte_size ?
-             astra_fonts_import(fonts_admin, bytes, length, node->name,
-                                (uint32_t)strlen(node->name), id) :
-             ASTRA_ERROR_IO;
+    if (status == ASTRA_VFS_OK && length == info.byte_size && length >= 4u &&
+        memcmp(bytes, "\0\0\3\363", 4u) == 0 &&
+        amiga_encoding == ASTRA_FONT_ENCODING_AUTO) {
+        message = "Choose Amiga encoding before import";
+        result = ASTRA_ERROR_INVALID_ARGUMENT;
+    } else if (status == ASTRA_VFS_OK && length == info.byte_size) {
+        uint32_t encoding = length >= 4u &&
+            memcmp(bytes, "\0\0\3\363", 4u) == 0 ? amiga_encoding :
+            ASTRA_FONT_ENCODING_AUTO;
+        result = astra_fonts_import(fonts_admin, bytes, length, node->name,
+                                    (uint32_t)strlen(node->name), encoding, id);
+    } else result = ASTRA_ERROR_IO;
     astra_runtime_deallocate(bytes);
     return result;
 }
@@ -304,10 +317,22 @@ static uint32_t build_controls(void)
     AstraButtonInfo back = ASTRA_BUTTON_INFO_INIT;
     AstraButtonInfo use = ASTRA_BUTTON_INFO_INIT;
     AstraButtonInfo import = ASTRA_BUTTON_INFO_INIT;
+    AstraButtonInfo encoding = ASTRA_BUTTON_INFO_INIT;
     AstraButtonInfo uninstall = ASTRA_BUTTON_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
     const AstraChoiceItem *title = active_family == UINT32_MAX ? NULL :
                                    &families[active_family];
+    AstraInstalledFont selected_face;
+    uint32_t system_ready = 0u;
+
+    if (!browsing && active_family != UINT32_MAX &&
+        detail_selection < detail_count) {
+        if (astra_fonts_catalog_face(&catalog,
+            detail_faces[detail_selection], &selected_face) != ASTRA_OK)
+            return FONTS_FAIL_CATALOG;
+        system_ready = (selected_face.flags &
+                        ASTRA_INSTALLED_FONT_SELECTABLE) != 0u;
+    }
 
     label.id = FONTS_TITLE;
     label.text = browsing ? browser_path : title == NULL ? "Fonts" :
@@ -324,7 +349,9 @@ static uint32_t build_controls(void)
                  active_family == UINT32_MAX ?
                  (family_count == 0u ? "No fonts installed" :
                   "Double-click a family to see installed styles and sizes") :
-                 "Select a style, then use it for system text";
+                 system_ready ?
+                 "Select a style, then use it for system text" :
+                 "System text requires 11, 13, and 16 px strikes";
     label.text_length = (uint32_t)strlen(label.text);
     label.text_role = ASTRA_TEXT_CLIENT_SECONDARY;
     if (astra_interface_label_init(CONTROL(FONTS_HINT), &label) != ASTRA_OK)
@@ -356,11 +383,12 @@ static uint32_t build_controls(void)
     if (astra_interface_button_init(CONTROL(FONTS_BACK), &back) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     use.id = FONTS_USE;
-    use.text = browsing ? "Import selected font" : "Use for system text";
+    use.text = browsing ? "Import selected font" : "Use as system font";
     use.text_length = (uint32_t)strlen(use.text);
     use.state = confirm_uninstall ||
                 (!browsing && active_family == UINT32_MAX) ?
-                ASTRA_CONTROL_COLLAPSED : 0u;
+                ASTRA_CONTROL_COLLAPSED :
+                !browsing && !system_ready ? ASTRA_CONTROL_DISABLED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_USE), &use) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     import.id = FONTS_IMPORT;
@@ -369,6 +397,15 @@ static uint32_t build_controls(void)
     import.state = browsing || active_family != UINT32_MAX ?
                    ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_IMPORT), &import) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
+    encoding.id = FONTS_ENCODING;
+    encoding.text = amiga_encoding == ASTRA_FONT_ENCODING_ISO_8859_1 ?
+        "Amiga encoding: ISO-8859-1" :
+        amiga_encoding == ASTRA_FONT_ENCODING_ISO_8859_2 ?
+        "Amiga encoding: ISO-8859-2" : "Choose Amiga encoding";
+    encoding.text_length = (uint32_t)strlen(encoding.text);
+    encoding.state = browsing ? 0u : ASTRA_CONTROL_COLLAPSED;
+    if (astra_interface_button_init(CONTROL(FONTS_ENCODING), &encoding) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     uninstall.id = FONTS_UNINSTALL;
     uninstall.text = confirm_uninstall ? "Remove font" : "Uninstall…";
@@ -396,6 +433,8 @@ static uint32_t build_controls(void)
     if (astra_interface_control_set_flex(CONTROL(FONTS_USE), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     if (astra_interface_control_set_flex(CONTROL(FONTS_IMPORT), &item) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
+    if (astra_interface_control_set_flex(CONTROL(FONTS_ENCODING), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     if (astra_interface_control_set_flex(CONTROL(FONTS_UNINSTALL), &item) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
@@ -463,12 +502,13 @@ static uint32_t reload_catalog(void)
 
 static uint32_t import_selected(void)
 {
+    message = NULL;
     AstraResult result = browser_import();
 
     if (result == ASTRA_OK) {
         if (reload_catalog() != ASTRA_STATUS_OK) return FONTS_FAIL_CATALOG;
         message = "Font imported";
-    } else {
+    } else if (message == NULL) {
         message = result == ASTRA_ERROR_UNSUPPORTED ?
                   "This font format is not supported yet" :
                   result == ASTRA_ERROR_INVALID_ARGUMENT ?
@@ -482,6 +522,15 @@ static uint32_t import_selected(void)
 static uint32_t action(const AstraUIAction *event)
 {
     if (browsing) {
+        if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
+            event->control_id == FONTS_ENCODING) {
+            amiga_encoding = amiga_encoding == ASTRA_FONT_ENCODING_ISO_8859_1 ?
+                ASTRA_FONT_ENCODING_ISO_8859_2 :
+                ASTRA_FONT_ENCODING_ISO_8859_1;
+            message = NULL;
+            if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+            return present();
+        }
         if (event->control_id == FONTS_LIST &&
             (event->type == ASTRA_UI_ACTION_VALUE_CHANGED ||
              event->type == ASTRA_UI_ACTION_ACTIVATE) &&
@@ -571,8 +620,11 @@ static uint32_t action(const AstraUIAction *event)
     if (event->control_id == FONTS_LIST &&
         event->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
         active_family != UINT32_MAX && event->value >= 0 &&
-        (uint64_t)event->value < detail_count)
+        (uint64_t)event->value < detail_count) {
         detail_selection = (uint32_t)event->value;
+        if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+        return present();
+    }
     if (event->control_id == FONTS_LIST &&
         event->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
         active_family == UINT32_MAX && event->value >= 0 &&
@@ -609,6 +661,8 @@ static uint32_t action(const AstraUIAction *event)
             astra_fonts_catalog_face(&catalog,
                 detail_faces[detail_selection], &face) != ASTRA_OK)
             return FONTS_FAIL_CATALOG;
+        if ((face.flags & ASTRA_INSTALLED_FONT_SELECTABLE) == 0u)
+            return ASTRA_STATUS_OK;
         result = astra_fonts_select(fonts_admin, face.id, face.id_length);
         message = result == ASTRA_OK ? "System font choice saved" :
                   result == ASTRA_ERROR_UNSUPPORTED ?

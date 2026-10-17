@@ -95,6 +95,39 @@ outline-probe: all build/FontOutlineProbe.app/manifest \
 		build/FontOutlineProbe.app/resources/FontOutlineProbe.aicon
 	../../../../tools/build/astra-bundle check build/FontOutlineProbe.app
 
+build/m68k/amiga_probe.o: tests/outline_probe.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(FLAGS) -DASTRA_FONT_PROBE_AMIGA -MMD -MP -c $< -o $@
+
+build/m68k/amiga_probe.elf: build/m68k/amiga_probe.o $(PROBE_LIBRARIES) \
+		$(ASTRA_PROGRAM_CRT0)
+	$(CC) $(TARGET_FLAGS) $(ASTRA_PROGRAM_LINK_FLAGS) -o $@ \
+		$(ASTRA_PROGRAM_CRT0) build/m68k/amiga_probe.o \
+		$(foreach library,$(PROBE_LIBRARIES),-Wl,-l:$(notdir $(library)))
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(PROBE_LIBRARIES),--needed $(notdir $(library))) $@
+
+build/m68k/amiga_probe: build/m68k/amiga_probe.elf
+	$(OBJCOPY) $(ASTRA_PROGRAM_STRIP_FLAGS) $< $@
+
+build/FontAmigaProbe.app/manifest: tests/FontAmigaProbe.app/manifest
+	@mkdir -p $(@D)
+	cp $< $@
+
+build/FontAmigaProbe.app/bin/m68k-68040/FontAmigaProbe: build/m68k/amiga_probe
+	@mkdir -p $(@D)
+	cp $< $@
+
+build/FontAmigaProbe.app/resources/FontAmigaProbe.aicon: \
+		../../../../tools/aicon.py
+	@mkdir -p $(@D)
+	python3 $< fonts $@
+
+amiga-probe: all build/FontAmigaProbe.app/manifest \
+		build/FontAmigaProbe.app/bin/m68k-68040/FontAmigaProbe \
+		build/FontAmigaProbe.app/resources/FontAmigaProbe.aicon
+	../../../../tools/build/astra-bundle check build/FontAmigaProbe.app
+
 test sanitize:
 	@true
 

@@ -1,4 +1,5 @@
 #include "astra_font_convert.h"
+#include "astra_amiga_font.h"
 
 #include <astra/afnt.h>
 #include <astra/font_worker.h>
@@ -12,6 +13,7 @@
 #include FT_MULTIPLE_MASTERS_H
 
 #include <limits.h>
+#include <iconv.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -489,5 +491,189 @@ done:
     if (variation != NULL) FT_Done_MM_Var(library, variation);
     if (face != NULL) FT_Done_Face(face);
     FT_Done_FreeType(library);
+    return result;
+}
+
+static int amiga_scalar(iconv_t codec, uint8_t code, uint32_t *scalar)
+{
+    char input = (char)code, output[4];
+    char *in = &input, *out = output;
+    size_t in_left = 1u, out_left = sizeof(output);
+    if (iconv(codec, &in, &in_left, &out, &out_left) == (size_t)-1 ||
+        in_left != 0u || out_left != 0u) return 0;
+    *scalar = (uint32_t)(uint8_t)output[0] << 24 |
+              (uint32_t)(uint8_t)output[1] << 16 |
+              (uint32_t)(uint8_t)output[2] << 8 | (uint8_t)output[3];
+    return *scalar <= 0x10ffffu &&
+           (*scalar < 0xd800u || *scalar > 0xdfffu);
+}
+
+static int amiga_metadata(Bytes *name, const AstraAmigaFont *font,
+                          const char *encoding, const char *source_name,
+                          const char *license, const uint8_t digest[32])
+{
+    static const char digits[] = "0123456789abcdef";
+    char suffix[128];
+    int length;
+    /* Fall back to UTF-8 filename if legacy family bytes are not UTF-8. */
+    const char *family = astra_utf8_validate(font->name,
+        (uint32_t)strlen(font->name), 0u) ? font->name : source_name;
+    const char *style = (font->style & 0x06u) == 0x06u ? "Bold Italic" :
+                        (font->style & 0x02u) != 0u ? "Bold" :
+                        (font->style & 0x04u) != 0u ? "Italic" : "Regular";
+    if (!literal(name, "{\"family\":") || !json_string(name, family) ||
+        !literal(name, ",\"style\":") || !json_string(name, style) ||
+        !literal(name, ",\"license\":") ||
+        !json_string(name, license) ||
+        !literal(name, ",\"source_encoding\":") ||
+        !json_string(name, encoding) ||
+        !literal(name, ",\"source_files\":[{\"name\":") ||
+        !json_string(name, source_name) ||
+        !literal(name, ",\"sha256\":\"")) return 0;
+    for (uint32_t at = 0u; at < 32u; ++at) {
+        char hex[] = {digits[digest[at] >> 4], digits[digest[at] & 15u]};
+        if (!append(name, hex, 2u)) return 0;
+    }
+    length = snprintf(suffix, sizeof(suffix),
+        "\"}],\"source_face_index\":0,\"converter\":\"astra-font-worker/0.2\","
+        "\"outline_ppem\":[%u],\"glyphs_per_strike\":%u}",
+        (unsigned)font->height, (unsigned)font->glyph_count);
+    return length > 0 && (size_t)length < sizeof(suffix) &&
+           append(name, suffix, (uint32_t)length);
+}
+
+int astra_font_convert_amiga(const void *source, uint32_t source_length,
+    const char *encoding, const char *source_name, const char *license,
+    uint8_t **output, uint32_t *output_length, uint32_t *face_count)
+{
+    AstraAmigaFont font;
+    AstraAfntView validated;
+    AstraSha256 hash;
+    Bytes name = {0}, cmap = {0}, strikes = {0}, glyphs = {0}, bitmap = {0};
+    MapEntry entries[258];
+    uint8_t digest[32], *packed = NULL;
+    uint32_t packed_length = 0u, map_count = 0u, max_advance = 0u;
+    iconv_t codec = (iconv_t)-1;
+    int result = ASTRA_FONT_CONVERT_INVALID;
+
+    if (output == NULL || output_length == NULL || face_count == NULL)
+        return result;
+    *output = NULL;
+    *output_length = *face_count = 0u;
+    if (source == NULL || encoding == NULL || source_name == NULL ||
+        license == NULL || strlen(source_name) > 255u ||
+        strlen(license) > 255u ||
+        !astra_utf8_validate(source_name, (uint32_t)strlen(source_name), 0u) ||
+        !astra_utf8_validate(license, (uint32_t)strlen(license), 0u) ||
+        (strcmp(encoding, "ISO-8859-1") != 0 &&
+         strcmp(encoding, "ISO-8859-2") != 0) ||
+        !astra_amiga_font_parse(source, source_length, &font))
+        return result;
+    *face_count = 1u;
+    codec = iconv_open("UTF-32BE", encoding);
+    if (codec == (iconv_t)-1) return ASTRA_FONT_CONVERT_UNSUPPORTED;
+    for (uint32_t at = 0u; at + 1u < font.glyph_count; ++at) {
+        uint32_t scalar;
+        if (!amiga_scalar(codec, (uint8_t)(font.first_code + at), &scalar)) {
+            result = ASTRA_FONT_CONVERT_UNSUPPORTED;
+            goto done;
+        }
+        entries[map_count++] = (MapEntry){scalar, at};
+    }
+    entries[map_count++] = (MapEntry){0xfffdu, font.glyph_count - 1u};
+    qsort(entries, map_count, sizeof(entries[0]), map_compare);
+    if (!u32(&cmap, map_count)) { result = ASTRA_FONT_CONVERT_NOMEM; goto done; }
+    for (uint32_t at = 0u; at < map_count; ++at) {
+        if ((at != 0u && entries[at].scalar == entries[at - 1u].scalar) ||
+            !u32(&cmap, entries[at].scalar) || !u32(&cmap, entries[at].glyph)) {
+            result = ASTRA_FONT_CONVERT_INVALID; goto done;
+        }
+    }
+    if (!u32(&strikes, 1u) || !u32(&glyphs, font.glyph_count)) {
+        result = ASTRA_FONT_CONVERT_NOMEM; goto done;
+    }
+    for (uint32_t at = 0u; at < font.glyph_count; ++at) {
+        uint32_t offset = bitmap.length;
+        uint32_t width = font.width[at], pitch = (width + 7u) / 8u;
+        uint32_t height = font.height, size;
+        int32_t advance = (int32_t)font.spacing[at] * 64;
+        int32_t bearing_x = (int32_t)font.kerning[at] * 64;
+        int32_t bearing_y = (int32_t)(font.baseline + 1u) * 64;
+        if (advance < 0) { result = ASTRA_FONT_CONVERT_UNSUPPORTED; goto done; }
+        if ((uint32_t)advance > max_advance) max_advance = (uint32_t)advance;
+        if (width == 0u) {
+            const uint8_t empty = 0u;
+            width = height = pitch = size = 1u;
+            bearing_x = bearing_y = 0;
+            if (!append(&bitmap, &empty, 1u)) {
+                result = ASTRA_FONT_CONVERT_NOMEM; goto done;
+            }
+        } else {
+            size = pitch * height;
+            if (!grow(&bitmap, size)) { result = ASTRA_FONT_CONVERT_NOMEM; goto done; }
+            memset(bitmap.data + bitmap.length, 0, size);
+            for (uint32_t row = 0u; row < height; ++row)
+                for (uint32_t bit = 0u; bit < width; ++bit) {
+                    uint32_t source_bit = font.location[at] + bit;
+                    uint8_t source_byte = font.bitmap[row * font.modulo + source_bit / 8u];
+                    if ((source_byte & (uint8_t)(0x80u >> (source_bit & 7u))) != 0u)
+                        bitmap.data[bitmap.length + row * pitch + bit / 8u] |=
+                            (uint8_t)(0x80u >> (bit & 7u));
+                }
+            bitmap.length += size;
+        }
+        if (!u32(&glyphs, at) || !u32(&glyphs, offset) || !u32(&glyphs, size) ||
+            !u16(&glyphs, (uint16_t)width) || !u16(&glyphs, (uint16_t)height) ||
+            !u16(&glyphs, (uint16_t)pitch) || !u16(&glyphs, 0u) ||
+            !u32(&glyphs, (uint32_t)bearing_x) ||
+            !u32(&glyphs, (uint32_t)bearing_y) ||
+            !u32(&glyphs, (uint32_t)advance)) {
+            result = ASTRA_FONT_CONVERT_NOMEM; goto done;
+        }
+    }
+    if (max_advance == 0u || font.width[font.glyph_count - 1u] == 0u) {
+        result = ASTRA_FONT_CONVERT_INVALID; goto done;
+    }
+    if (!u16(&strikes, 0u) || !u16(&strikes, 1u) ||
+        !u16(&strikes, 0u) || !u16(&strikes, font.height) ||
+        !u32(&strikes, (uint32_t)(font.baseline + 1u) * 64u) ||
+        !u32(&strikes, (uint32_t)(font.height - font.baseline - 1u) * 64u) ||
+        !u32(&strikes, 0u) || !u32(&strikes, 0u) || !u32(&strikes, 0u) ||
+        !u32(&strikes, max_advance) || !u32(&strikes, 64u) ||
+        !u32(&strikes, 64u) || !u32(&strikes, 64u) || !u32(&strikes, 64u) ||
+        !u32(&strikes, 0u) || !u32(&strikes, font.glyph_count) ||
+        !u32(&strikes, 32u) || !u32(&strikes, 0u) || !u32(&strikes, 0u)) {
+        result = ASTRA_FONT_CONVERT_NOMEM; goto done;
+    }
+    astra_sha256_init(&hash);
+    astra_sha256_update(&hash, source, source_length);
+    astra_sha256_final(&hash, digest);
+    if (!amiga_metadata(&name, &font, encoding, source_name, license, digest)) {
+        result = ASTRA_FONT_CONVERT_NOMEM; goto done;
+    }
+    AstraAfntChunk chunks[ASTRA_AFNT_CHUNK_COUNT] = {
+        {name.data, name.length}, {cmap.data, cmap.length},
+        {strikes.data, strikes.length}, {glyphs.data, glyphs.length},
+        {bitmap.data, bitmap.length}
+    };
+    if (!astra_afnt_pack(chunks, NULL, 0u, &packed_length) ||
+        packed_length > FONT_OUTPUT_LIMIT ||
+        (packed = malloc(packed_length)) == NULL ||
+        !astra_afnt_pack(chunks, packed, packed_length, &packed_length) ||
+        !astra_afnt_validate(packed, packed_length, &validated)) {
+        result = ASTRA_FONT_CONVERT_LIMIT; goto done;
+    }
+    *output = packed;
+    *output_length = packed_length;
+    packed = NULL;
+    result = ASTRA_FONT_CONVERT_OK;
+done:
+    free(packed);
+    free(name.data);
+    free(cmap.data);
+    free(strikes.data);
+    free(glyphs.data);
+    free(bitmap.data);
+    if (codec != (iconv_t)-1) iconv_close(codec);
     return result;
 }

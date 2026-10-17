@@ -33,7 +33,8 @@ int main(void)
     };
     const AstraFontCatalogFace faces[] = {
         {"system:astra-sans", 17u, "Astra Sans", 10u, "Regular", 7u,
-         sans_strikes, 3u, ASTRA_FONT_CATALOG_SYSTEM},
+         sans_strikes, 3u,
+         ASTRA_FONT_CATALOG_SYSTEM | ASTRA_FONT_CATALOG_SELECTABLE},
         {"user:0123456789abcdef", 21u, "Iosevka", 7u, "Bold", 4u,
          mono_strikes, 1u, 0u}
     };
@@ -50,7 +51,8 @@ int main(void)
     assert(face.family_length == 10u &&
            memcmp(face.family, "Astra Sans", 10u) == 0 &&
            face.strike_count == 3u && face.strikes[0].pixel_height == 11u &&
-           face.strikes[2].pixel_height == 16u);
+           face.strikes[2].pixel_height == 16u &&
+           (face.flags & ASTRA_FONT_CATALOG_SELECTABLE) != 0u);
     assert(astra_font_catalog_face(bytes, length, 1u, &face));
     assert(face.style_length == 4u &&
            memcmp(face.style, "Bold", 4u) == 0 &&
@@ -72,7 +74,7 @@ int main(void)
     bytes[saved] = 0xffu;
     assert(!astra_font_catalog_validate(bytes, length));
     bytes[saved] = 'A';
-    record->flags = 2u;
+    record->flags = 4u;
     assert(!astra_font_catalog_validate(bytes, length));
     free(bytes);
 

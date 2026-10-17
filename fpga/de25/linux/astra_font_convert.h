@@ -16,4 +16,9 @@ int astra_font_convert_outline(const void *source, uint32_t source_length,
     uint32_t face_index, const char *source_name, const char *license,
     uint8_t **output, uint32_t *output_length, uint32_t *face_count);
 
+/* Explicit character encoding is required for Amiga's 8-bit glyph codes. */
+int astra_font_convert_amiga(const void *source, uint32_t source_length,
+    const char *encoding, const char *source_name, const char *license,
+    uint8_t **output, uint32_t *output_length, uint32_t *face_count);
+
 #endif

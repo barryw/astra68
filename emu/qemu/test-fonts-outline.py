@@ -102,7 +102,14 @@ def main():
     parser.add_argument("--expect-limit", action="store_true")
     parser.add_argument("--expect-later-failure", action="store_true")
     parser.add_argument("--expect-variable", action="store_true")
+    parser.add_argument("--amiga", action="store_true",
+                        help="run fixed-strike Amiga import probe")
     args = parser.parse_args()
+    global PROBE
+    if args.amiga:
+        if args.expect_limit or args.expect_later_failure or args.expect_variable:
+            parser.error("--amiga cannot combine with outline-only cases")
+        PROBE = "/apps/FontAmigaProbe.app"
     if not Path("/usr/local/libexec/astra-font-worker").is_file():
         raise RuntimeError("installed Astra font worker required")
     with tempfile.TemporaryDirectory(prefix="astra-font-outline-") as work:
@@ -115,7 +122,8 @@ def main():
             source = str(Path(work) / "bad-second-face.ttc")
             corrupt_later_face(args.source, source)
         astra_image._replace_volume_file(
-            image, source, "/fonts/outline-fixture.ttf")
+            image, source, "/fonts/amiga-fixture.amiga" if args.amiga else
+            "/fonts/outline-fixture.ttf")
         if args.expect_limit:
             limit = Path(work) / "expect-limit"
             limit.write_text("limit\n", encoding="ascii")
@@ -153,7 +161,9 @@ def main():
         astra_image._replace_volume_file(
             image, str(marker), "/expect-outline-again")
         boot(args.qemu, args.rom, image, work, "restart")
-    if args.expect_variable:
+    if args.amiga:
+        print("ASTRA FONT AMIGA PASS native import, AFNT, catalog, restart")
+    elif args.expect_variable:
         print("ASTRA FONT OUTLINE PASS variable styles, AFNT, selection, restart")
     else:
         print("ASTRA FONT OUTLINE PASS native outline->AFNT, render, selection, restart")

@@ -3,6 +3,7 @@
 
 #include <astra/afnt.h>
 #include <astra/font_worker.h>
+#include <astra/font_encoding.h>
 
 #include <assert.h>
 #include <stdint.h>
@@ -40,7 +41,8 @@ static void transfer(int fd, void *buffer, size_t size, int output)
 }
 
 static void check(const uint8_t *source, uint32_t source_size,
-                  uint32_t face_index, uint32_t expected_faces,
+                  uint32_t face_index, uint32_t encoding,
+                  uint32_t expected_faces,
                   const char *expected_style, int valid)
 {
     int request_pipe[2], reply_pipe[2], child_status;
@@ -76,6 +78,7 @@ static void check(const uint8_t *source, uint32_t source_size,
     encode32(request + 12u, source_size);
     encode32(request + 16u, 8u);
     encode32(request + 20u, 7u);
+    encode32(request + 24u, encoding);
     transfer(request_pipe[1], request, sizeof(request), 1);
     if (source != NULL) {
         transfer(request_pipe[1], "test.ttf", 8u, 1);
@@ -96,7 +99,7 @@ static void check(const uint8_t *source, uint32_t source_size,
         assert(afnt != NULL);
         transfer(reply_pipe[0], afnt, length, 0);
         assert(astra_afnt_validate(afnt, length, &view));
-        assert(view.strike_count == 4u);
+        assert(view.strike_count == (encoding == ASTRA_FONT_ENCODING_AUTO ? 4u : 1u));
         if (expected_style != NULL) {
             char style[64];
             assert(astra_afnt_name_string(&view, "style", style,
@@ -127,10 +130,11 @@ int main(int argc, char **argv)
     assert(source != NULL &&
            fread(source, 1u, (size_t)size, file) == (size_t)size &&
            fclose(file) == 0);
-    check(source, (uint32_t)size, 0u, 1u, NULL, 1);
+    check(source, (uint32_t)size, 0u, ASTRA_FONT_ENCODING_AUTO, 1u, NULL, 1);
     memset(source, 0, 16u);
-    check(source, (uint32_t)size, 0u, 0u, NULL, 0);
-    check(NULL, ASTRA_FONT_WORKER_SOURCE_MAX + 1u, 0u, 0u, NULL, 0);
+    check(source, (uint32_t)size, 0u, ASTRA_FONT_ENCODING_AUTO, 0u, NULL, 0);
+    check(NULL, ASTRA_FONT_WORKER_SOURCE_MAX + 1u, 0u,
+          ASTRA_FONT_ENCODING_AUTO, 0u, NULL, 0);
     free(source);
     file = fopen("tests/fonts/STIXTwoText.ttf", "rb");
     assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
@@ -143,8 +147,23 @@ int main(int argc, char **argv)
            fclose(file) == 0);
     static const char *styles[] = {"Regular", "Medium", "SemiBold", "Bold"};
     for (uint32_t at = 0u; at < 4u; ++at)
-        check(source, (uint32_t)size, at, 4u, styles[at], 1);
-    check(source, (uint32_t)size, 4u, 0u, NULL, 0);
+        check(source, (uint32_t)size, at, ASTRA_FONT_ENCODING_AUTO,
+              4u, styles[at], 1);
+    check(source, (uint32_t)size, 4u, ASTRA_FONT_ENCODING_AUTO, 0u, NULL, 0);
+    free(source);
+    file = fopen("../../../sw/userspace/graphics/fonts/aros-isohelvetica/11.amiga", "rb");
+    assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+    size = ftell(file);
+    assert(size > 0 && size <= ASTRA_FONT_WORKER_SOURCE_MAX &&
+           fseek(file, 0, SEEK_SET) == 0);
+    source = malloc((size_t)size);
+    assert(source != NULL &&
+           fread(source, 1u, (size_t)size, file) == (size_t)size &&
+           fclose(file) == 0);
+    check(source, (uint32_t)size, 0u, ASTRA_FONT_ENCODING_ISO_8859_2,
+          1u, "Regular", 1);
+    check(source, (uint32_t)size, 0u, ASTRA_FONT_ENCODING_AUTO,
+          0u, NULL, 0);
     free(source);
     puts("versioned HPS font worker passed");
     return 0;

@@ -2,6 +2,7 @@
 
 #include <astra/theme.h>
 #include <astra/utf8.h>
+#include <astra/font_encoding.h>
 
 #include <string.h>
 
@@ -45,7 +46,9 @@ int fonts_request_valid(const AstraFontServiceRequest *request,
            request->header.protocol_version == ASTRA_FONT_SERVICE_VERSION &&
            request->header.reserved == 0u &&
            request->header.transaction_id != 0u &&
-           request->reserved[0] == 0u && request->reserved[1] == 0u &&
+           request->reserved == 0u &&
+           request->source_encoding <= ASTRA_FONT_ENCODING_ISO_8859_2 &&
+           (import || request->source_encoding == ASTRA_FONT_ENCODING_AUTO) &&
            ((port_role == FONTS_PORT_CATALOG &&
              request->header.operation == ASTRA_FONT_SERVICE_CATALOG) ||
             (port_role == FONTS_PORT_ADMIN &&

@@ -38,9 +38,9 @@ STORAGE_PROVIDER_SOURCES := astra_storage_provider.c astra_storage_discovery.c a
 	astra_storage_mount.c astra_storage_probe.c astra_storage_path.c astra_storage_work.c \
 	astra_storage_transport.c \
 	$(STORAGE_RESOLVER)/astra68-resolve.c $(ROOT)/sw/common/utf8.c
-FONT_CONVERT_SOURCES := astra_font_convert.c test_font_convert.c \
+FONT_CONVERT_SOURCES := astra_font_convert.c astra_amiga_font.c test_font_convert.c \
 	$(ROOT)/sw/common/utf8.c
-FONT_WORKER_SOURCES := astra_font_convert.c astra_font_worker.c \
+FONT_WORKER_SOURCES := astra_font_convert.c astra_amiga_font.c astra_font_worker.c \
 	$(ROOT)/sw/common/utf8.c
 FONT_CODEC := $(ROOT)/sw/common/build/host/libastraafnt.a
 FONT_CODEC_AARCH64 := $(ROOT)/sw/common/build/aarch64/libastraafnt.a
@@ -69,6 +69,7 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 	storage-probe-target-test storage-mount-test storage-path-test storage-provider-test
 .PHONY: storage-provider-sanitize
 .PHONY: font-convert-test font-convert-sanitize
+.PHONY: font-amiga-test font-amiga-sanitize font-amiga-convert-test
 .PHONY: font-worker-test font-worker-sanitize font-worker-target font-host-test font-host-sanitize
 .PHONY: storage-cleanup-test storage-cleanup-sanitize
 .PHONY: storage-provider storage-provider-target
@@ -119,6 +120,32 @@ $(OUT)/test-font-convert: $(FONT_CONVERT_SOURCES) $(FONT_CODEC) astra_font_conve
 		-o $@ $(shell pkg-config --libs freetype2)
 
 font-convert-test: $(OUT)/test-font-convert
+	cd $(CURDIR) && $(abspath $<)
+
+$(OUT)/test-amiga-font: astra_amiga_font.c astra_amiga_font.h \
+		test_amiga_font.c Makefile
+	mkdir -p $(OUT)
+	$(HOST_CC) $(CFLAGS) astra_amiga_font.c test_amiga_font.c -o $@
+
+font-amiga-test: $(OUT)/test-amiga-font
+	cd $(CURDIR) && $(abspath $<)
+
+font-amiga-sanitize:
+	mkdir -p $(OUT)
+	$(HOST_CC) $(CFLAGS) -fsanitize=address,undefined \
+		-fno-omit-frame-pointer astra_amiga_font.c test_amiga_font.c \
+		-o $(OUT)/test-amiga-font-sanitize
+	cd $(CURDIR) && $(abspath $(OUT)/test-amiga-font-sanitize)
+
+$(OUT)/test-amiga-convert: astra_font_convert.c astra_amiga_font.c \
+		test_amiga_convert.c $(FONT_CODEC) astra_font_convert.h \
+		astra_amiga_font.h Makefile
+	mkdir -p $(OUT)
+	$(HOST_CC) $(FONT_CONVERT_FLAGS) astra_font_convert.c \
+		astra_amiga_font.c test_amiga_convert.c $(ROOT)/sw/common/utf8.c \
+		$(FONT_CODEC) -o $@ $(shell pkg-config --libs freetype2)
+
+font-amiga-convert-test: $(OUT)/test-amiga-convert
 	cd $(CURDIR) && $(abspath $<)
 
 $(OUT)/astra-font-worker: $(FONT_WORKER_SOURCES) astra_font_worker_main.c \

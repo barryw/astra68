@@ -1,6 +1,7 @@
 #include "host.h"
 
 #include <astra/font_worker.h>
+#include <astra/font_encoding.h>
 #include <astra/runtime.h>
 #include <astra/status.h>
 
@@ -75,6 +76,7 @@ uint32_t fonts_host_begin(FontsHost *host, uint32_t device,
 }
 
 uint32_t fonts_host_convert(FontsHost *host, uint32_t face,
+    uint32_t encoding,
     void **afnt, uint32_t *afnt_size, uint32_t *faces)
 {
     AstraHostCommand *command;
@@ -83,7 +85,8 @@ uint32_t fonts_host_convert(FontsHost *host, uint32_t face,
 
     if (host == NULL || !host->active || afnt == NULL ||
         afnt_size == NULL || faces == NULL ||
-        face >= ASTRA_FONT_WORKER_FACES_MAX)
+        face >= ASTRA_FONT_WORKER_FACES_MAX ||
+        encoding > ASTRA_FONT_ENCODING_ISO_8859_2)
         return ASTRA_STATUS_INVALID;
     *afnt = NULL;
     *afnt_size = 0u;
@@ -91,6 +94,7 @@ uint32_t fonts_host_convert(FontsHost *host, uint32_t face,
     command = astra_host_client_prepare(&host->channel,
         ASTRA_HOST_SERVICE_FONTS, ASTRA_HOST_FONT_CONVERT);
     command->value_lo = face;
+    command->value_hi = encoding;
     status = submit(host);
     if (status != ASTRA_STATUS_OK) return status;
     length = command->result_value;

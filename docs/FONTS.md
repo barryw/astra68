@@ -482,9 +482,10 @@ The first Fonts tool import scope is native AFNT, static TrueType (`.ttf`),
 OpenType (`.otf`), TrueType/OpenType collections (`.ttc`), variable TrueType and
 OpenType at default and named-instance axis coordinates, and classic
 monochrome Amiga disk fonts. Current native runtime supports AFNT, static
-TTF/OTF/TTC, and default plus distinct named instances from variable outlines.
-Amiga disk fonts remain
-open runtime work.
+TTF/OTF/TTC, default plus distinct named instances from variable outlines,
+and bounded monochrome Amiga disk-font conversion. Native service/QEMU import,
+AFNT validation, catalog reload, and restart gate pass. Application-specific
+font rendering remains open.
 This covers the common current macOS outline containers listed by
 [Apple Font Book](https://support.apple.com/en-gb/guide/font-book/fntbk1000/mac)
 and Amiga bitmap fonts. A collection is one input but contributes all its
@@ -748,14 +749,29 @@ therefore needs a bounded hunk parser in a sandboxed user process. It must not c
 `LoadSeg`, run embedded return code, trust relocation addresses, or pass planar
 data to Astraea.
 
-The current build-time `import-amiga` uses pinned monobit 0.53 on a host and
-validates the resulting AFNT. The checked-in AROS ISOHelvetica monochrome
-strikes pass. A sandboxed managed worker and color Amiga conversion remain
-pending; the first Fonts release accepts monochrome classic disk fonts only.
+The build-time `import-amiga` uses pinned monobit 0.53 as a development oracle.
+Native HPS C code validates one monochrome HUNK_CODE/HUNK_DATA disk font without
+executing or relocating it, converts its fixed bitmap strike into MASK1 AFNT,
+and validates the packed AFNT. The checked-in AROS ISOHelvetica 11- and
+13-pixel fixtures pass bounded-parser, conversion, sanitizer, host-worker, and
+AArch64 worker checks. Color Amiga conversion remains pending; the first Fonts
+release accepts monochrome classic disk fonts only. The user-facing Fonts
+importer requires an explicit ISO-8859-1 or ISO-8859-2 choice for these files.
 
-Imported glyphs receive Unicode mappings through an explicit source-encoding
-choice such as Amiga Latin-1 or a supplied mapping table. Unknown encodings do
-not silently become Unicode.
+Imported glyphs receive Unicode mappings through that explicit choice. Unknown
+encodings do not silently become Unicode. System-choice eligibility requires
+11-, 13-, and 16-pixel strikes; fixed-size Amiga fonts remain installed and
+catalog-visible when they lack those sizes. The catalog carries the service's
+eligibility decision, and Fonts labels each style accordingly. A named-face
+application draw-list command is still needed before applications can render
+an imported Amiga font independently of the system face.
+
+Read-only implementation references: Haiku
+`src/servers/app/font/FontManager.cpp` for catalog/style ownership and
+`src/preferences/appearance/FontView.cpp` for preference presentation; Amiga
+NDK `graphics/text.h` and `libraries/diskfont.h` for source metrics and bit
+flags; monobit 0.53 `storage/fontformats/amiga.py` for disk-font layout.
+Astra retains its AFNT validator and catalog as the native contracts.
 
 Host and native tooling should share the same AFNT writer and golden files.
 Amiga import is tested with monochrome, proportional, kerning, missing-glyph,

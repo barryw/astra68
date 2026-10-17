@@ -3,6 +3,7 @@
 #include "astra_font_convert.h"
 
 #include <astra/font_worker.h>
+#include <astra/font_encoding.h>
 
 #include <errno.h>
 #include <poll.h>
@@ -90,7 +91,8 @@ static int reap(pid_t child, int64_t deadline, int terminate)
 }
 
 int astra_font_host_convert(const char *worker, const void *source,
-    uint32_t source_size, uint32_t face_index, const char *name,
+    uint32_t source_size, uint32_t face_index, uint32_t encoding,
+    const char *name,
     uint32_t name_size, const char *license, uint32_t license_size,
     AstraFontHostResult *result)
 {
@@ -109,6 +111,7 @@ int astra_font_host_convert(const char *worker, const void *source,
         source == NULL || source_size == 0u ||
         source_size > ASTRA_FONT_WORKER_SOURCE_MAX ||
         face_index >= ASTRA_FONT_WORKER_FACES_MAX ||
+        encoding > ASTRA_FONT_ENCODING_ISO_8859_2 ||
         name == NULL || name_size == 0u ||
         name_size > ASTRA_FONT_WORKER_TEXT_MAX ||
         license == NULL || license_size > ASTRA_FONT_WORKER_TEXT_MAX ||
@@ -153,6 +156,7 @@ close_actions:
     encode32(request + 12u, source_size);
     encode32(request + 16u, name_size);
     encode32(request + 20u, license_size);
+    encode32(request + 24u, encoding);
     error = exact(sockets[0], request, sizeof(request), 1, deadline);
     if (error == 0) error = exact(sockets[0], (void *)name, name_size, 1, deadline);
     if (error == 0) error = exact(sockets[0], (void *)license, license_size, 1, deadline);

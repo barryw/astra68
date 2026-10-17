@@ -12,6 +12,8 @@ _Static_assert(ASTRA_FONT_ID_MAX == ASTRA_FONT_FACE_ID_MAX,
                "font id contract drift");
 _Static_assert(ASTRA_INSTALLED_FONT_SYSTEM == ASTRA_FONT_CATALOG_SYSTEM,
                "font system flag drift");
+_Static_assert(ASTRA_INSTALLED_FONT_SELECTABLE == ASTRA_FONT_CATALOG_SELECTABLE,
+               "font selectability flag drift");
 _Static_assert(ASTRA_FONT_IMPORT_MAX == ASTRA_FONT_SOURCE_MAX,
                "font import size drift");
 _Static_assert(ASTRA_FONT_IMPORT_NAME_MAX == ASTRA_FONT_SOURCE_NAME_MAX,
@@ -21,6 +23,7 @@ static AstraResult exchange(AstraHandle service, uint32_t operation,
                             const char *id, uint32_t id_length,
                             AstraHandle input_area, uint32_t source_size,
                             const char *source_name, uint32_t name_length,
+                            uint32_t encoding,
                             AstraFontServiceReply *reply,
                             AstraHandle *area)
 {
@@ -36,6 +39,7 @@ static AstraResult exchange(AstraHandle service, uint32_t operation,
     if (result != ASTRA_OK) goto done;
     if (id_length != 0u) memcpy(request.face_id, id, id_length);
     request.source_size = source_size;
+    request.source_encoding = encoding;
     if (name_length != 0u)
         memcpy(request.source_name, source_name, name_length);
     call.request = &request;
@@ -109,7 +113,7 @@ AstraResult astra_fonts_catalog_open(AstraHandle service,
         catalog->face_count != 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = exchange(service, ASTRA_FONT_SERVICE_CATALOG, NULL, 0u,
-                      ASTRA_INVALID_HANDLE, 0u, NULL, 0u,
+                      ASTRA_INVALID_HANDLE, 0u, NULL, 0u, 0u,
                       &reply, &handle);
     if (result != ASTRA_OK) return result;
     if (reply.area_size < sizeof(header) ||
@@ -216,7 +220,7 @@ AstraResult astra_fonts_select(AstraHandle admin, const char *id,
         memchr(id, '\0', id_length) != NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return exchange(admin, ASTRA_FONT_SERVICE_SELECT, id, id_length,
-                    ASTRA_INVALID_HANDLE, 0u, NULL, 0u,
+                    ASTRA_INVALID_HANDLE, 0u, NULL, 0u, 0u,
                     &reply, &ignored);
 }
 
@@ -231,7 +235,7 @@ AstraResult astra_fonts_uninstall(AstraHandle admin, const char *id,
         memchr(id, '\0', id_length) != NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return exchange(admin, ASTRA_FONT_SERVICE_UNINSTALL, id, id_length,
-                    ASTRA_INVALID_HANDLE, 0u, NULL, 0u,
+                    ASTRA_INVALID_HANDLE, 0u, NULL, 0u, 0u,
                     &reply, &ignored);
 }
 
@@ -251,7 +255,7 @@ AstraResult astra_fonts_face_open(AstraHandle render, const char *id,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *length = 0u;
     result = exchange(render, ASTRA_FONT_SERVICE_OPEN_FACE,
-                      id, id_length, ASTRA_INVALID_HANDLE, 0u, NULL, 0u,
+                      id, id_length, ASTRA_INVALID_HANDLE, 0u, NULL, 0u, 0u,
                       &reply, &handle);
     if (result != ASTRA_OK) return result;
     if (reply.area_size < 128u || reply.area_size > ASTRA_FONT_IMPORT_MAX) {
@@ -281,7 +285,7 @@ failed:
 
 AstraResult astra_fonts_import(AstraHandle admin, const void *bytes,
                                uint32_t length, const char *source_name,
-                               uint32_t name_length,
+                               uint32_t name_length, uint32_t encoding,
                                char installed_id[ASTRA_FONT_ID_MAX])
 {
     AstraArea payload = ASTRA_AREA_INIT;
@@ -294,7 +298,7 @@ AstraResult astra_fonts_import(AstraHandle admin, const void *bytes,
         length > ASTRA_FONT_SOURCE_MAX || source_name == NULL ||
         name_length == 0u || name_length >= ASTRA_FONT_SOURCE_NAME_MAX ||
         memchr(source_name, '\0', name_length) != NULL ||
-        installed_id == NULL)
+        installed_id == NULL || encoding > ASTRA_FONT_ENCODING_ISO_8859_2)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     installed_id[0] = '\0';
     result = astra_area_create(
@@ -319,6 +323,7 @@ AstraResult astra_fonts_import(AstraHandle admin, const void *bytes,
     if (result == ASTRA_OK)
         result = exchange(admin, ASTRA_FONT_SERVICE_IMPORT, NULL, 0u,
                           immutable, length, source_name, name_length,
+                          encoding,
                           &reply, &ignored);
     immutable = ASTRA_INVALID_HANDLE;
     {

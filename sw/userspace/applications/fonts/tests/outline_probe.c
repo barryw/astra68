@@ -9,11 +9,22 @@
 #include <stdint.h>
 #include <string.h>
 
-ASTRA_PROGRAM("font-outline-probe", 0, 1, 0, "Astra68 contributors",
-              "Astra native test");
-
+#ifdef ASTRA_FONT_PROBE_AMIGA
+#define PROBE_NAME "font-amiga-probe"
+#define SOURCE "/SYSTEM/fonts/amiga-fixture.amiga"
+#define NAME "amiga-fixture.amiga"
+#define PROBE_ENCODING ASTRA_FONT_ENCODING_ISO_8859_2
+#define PROBE_STRIKES 1u
+#else
+#define PROBE_NAME "font-outline-probe"
 #define SOURCE "/SYSTEM/fonts/outline-fixture.ttf"
 #define NAME "outline-fixture.ttf"
+#define PROBE_ENCODING ASTRA_FONT_ENCODING_AUTO
+#define PROBE_STRIKES 4u
+#endif
+
+ASTRA_PROGRAM(PROBE_NAME, 0, 1, 0, "Astra68 contributors",
+              "Astra native test");
 
 enum {
     FAIL_FILES = ASTRA_STATUS_PROGRAM_FIRST,
@@ -35,7 +46,9 @@ static int has_face(const AstraFontsCatalog *catalog, const char *id)
             return 0;
         if (face.id_length == strlen(id) &&
             memcmp(face.id, id, face.id_length) == 0 &&
-            face.strike_count >= 4u)
+            face.strike_count >= PROBE_STRIKES &&
+            ((face.flags & ASTRA_INSTALLED_FONT_SELECTABLE) != 0u) ==
+                (PROBE_ENCODING == ASTRA_FONT_ENCODING_AUTO))
             return 1;
     }
     return 0;
@@ -100,7 +113,8 @@ int astra_main(const AstraStartupInfo *startup)
     if (resumed && astra_filesystem_close(&marker) != ASTRA_VFS_OK)
         goto done;
     status = FAIL_RESTART;
-    if (resumed != (strncmp(before.selected_id, "user:", 5u) == 0))
+    if (PROBE_ENCODING == ASTRA_FONT_ENCODING_AUTO &&
+        resumed != (strncmp(before.selected_id, "user:", 5u) == 0))
         goto done;
     expect_limit = astra_filesystem_open(&files.filesystem,
         "/SYSTEM/expect-outline-limit", ASTRA_VFS_OPEN_READ,
@@ -133,7 +147,8 @@ int astra_main(const AstraStartupInfo *startup)
     }
     status = FAIL_IMPORT;
     result = astra_fonts_import(admin->handle, source, source_size,
-                                NAME, sizeof(NAME) - 1u, id);
+                                NAME, sizeof(NAME) - 1u,
+                                PROBE_ENCODING, id);
     if (expect_limit) {
         if (result != ASTRA_ERROR_NO_RESOURCES ||
             astra_fonts_catalog_open(read->handle, &after) != ASTRA_OK ||
@@ -181,14 +196,19 @@ int astra_main(const AstraStartupInfo *startup)
         goto done;
     if (astra_area_close(&face) != ASTRA_OK) goto done;
     status = FAIL_SELECT;
-    if (astra_fonts_select(admin->handle, id,
-                           (uint32_t)strlen(id)) != ASTRA_OK ||
+    result = astra_fonts_select(admin->handle, id,
+                                (uint32_t)strlen(id));
+    if (result != (PROBE_ENCODING == ASTRA_FONT_ENCODING_AUTO ?
+                  ASTRA_OK : ASTRA_ERROR_UNSUPPORTED) ||
         astra_fonts_catalog_open(read->handle, &selected) != ASTRA_OK ||
-        strcmp(selected.selected_id, id) != 0)
+        strcmp(selected.selected_id,
+               PROBE_ENCODING == ASTRA_FONT_ENCODING_AUTO ?
+               id : before.selected_id) != 0)
         goto done;
     status = FAIL_REPEAT;
     if (astra_fonts_import(admin->handle, source, source_size,
-                           NAME, sizeof(NAME) - 1u, again) != ASTRA_OK ||
+                           NAME, sizeof(NAME) - 1u,
+                           PROBE_ENCODING, again) != ASTRA_OK ||
         strcmp(again, id) != 0)
         goto done;
     status = ASTRA_STATUS_OK;
@@ -220,8 +240,9 @@ done:
         (void)astra_log_failure("font outline probe", status);
         return (int)status;
     }
-    (void)astra_log(resumed ? "FONT_OUTLINE_AGAIN_PASS" :
-                              "FONT_OUTLINE_FIRST_PASS");
+    (void)astra_log(PROBE_ENCODING == ASTRA_FONT_ENCODING_AUTO ?
+        (resumed ? "FONT_OUTLINE_AGAIN_PASS" : "FONT_OUTLINE_FIRST_PASS") :
+        (resumed ? "FONT_AMIGA_AGAIN_PASS" : "FONT_AMIGA_FIRST_PASS"));
     for (;;)
         if (astra_wait_multiple(&receive, 1u, ASTRA_DEADLINE_FOREVER,
                                 &index, NULL) != ASTRA_SYSCALL_OK)

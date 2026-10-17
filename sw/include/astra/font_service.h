@@ -5,7 +5,7 @@
 #include <astra/message_abi.h>
 
 #define ASTRA_FONT_SERVICE_PROTOCOL UINT32_C(0x464f4e54) /* FONT */
-#define ASTRA_FONT_SERVICE_VERSION UINT16_C(4)
+#define ASTRA_FONT_SERVICE_VERSION UINT16_C(5)
 #define ASTRA_CAPABILITY_FONTS "FONTS"
 #define ASTRA_CAPABILITY_FONTS_ADMIN "FONTS_ADMIN"
 #define ASTRA_CAPABILITY_FONTS_RENDER "FONTS_RENDER"
@@ -27,7 +27,8 @@ typedef struct AstraFontServiceRequest {
     char face_id[ASTRA_FONT_FACE_ID_MAX];
     uint32_t source_size;
     char source_name[ASTRA_FONT_SOURCE_NAME_MAX];
-    uint32_t reserved[2];
+    uint32_t source_encoding;
+    uint32_t reserved;
 } AstraFontServiceRequest;
 
 typedef struct AstraFontServiceReply {

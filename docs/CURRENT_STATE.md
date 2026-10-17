@@ -93,8 +93,16 @@ submissions. Native display and Doom input/rendering passed the isolated DE25
 candidate gate. Build-time AFNT conversion covers TTF, OTF, selected TTC faces,
 variable default instances, and monochrome Amiga disk fonts. Native runtime
 import covers AFNT, static TTF/OTF/TTC, and default plus distinct named
-variable instances. Custom variable coordinates and Amiga runtime import
-remain open. Shared C AFNT 0.2 validation and packing round-trip shipped fonts,
+variable instances. A bounded HPS C parser and converter now produce validated
+MASK1 AFNT from classic monochrome Amiga disk-font hunks with explicit
+ISO-8859-1/2 character maps. Parser, converter, worker, sanitizer, and AArch64
+checks pass; the native service/QEMU installation and restart gate passes.
+Application-specific rendering and physical release gates remain open.
+Fonts labels each style as able or unable to serve as a system font and disables
+system selection for ineligible styles, using the service's catalog decision;
+fixed-size Amiga faces without all
+three UI sizes cannot become system fonts. Custom variable coordinates remain
+open. Shared C AFNT 0.2 validation and packing round-trip shipped fonts,
 Iosevka, Source Sans, and Amiga spike AFNT on Beast. A reusable HPS C outline
 converter turns static Iosevka TTF and Source Sans OTF into validated A8 AFNT;
 host/sanitizer and AArch64 compile checks pass. Shared AFNT C metadata readers

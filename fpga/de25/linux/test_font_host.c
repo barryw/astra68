@@ -28,27 +28,27 @@ int main(int argc, char **argv)
     assert(source != NULL &&
            fread(source, 1u, (size_t)size, file) == (size_t)size &&
            fclose(file) == 0);
-    assert(astra_font_host_convert(argv[1], source, (uint32_t)size, 0u,
+    assert(astra_font_host_convert(argv[1], source, (uint32_t)size, 0u, 0u,
         "test.ttf", 8u, "OFL-1.1", 7u, &result) == 0);
     assert(result.status == ASTRA_FONT_CONVERT_OK && result.faces >= 1u &&
            result.afnt_size > 128u &&
            astra_afnt_validate(result.afnt, result.afnt_size, &view));
     free(result.afnt);
-    assert(astra_font_host_convert(argv[1], source, (uint32_t)size, 0u,
+    assert(astra_font_host_convert(argv[1], source, (uint32_t)size, 0u, 0u,
         "test.ttf", 8u, "", 0u, &result) == 0);
     assert(result.status == ASTRA_FONT_CONVERT_OK &&
            astra_afnt_validate(result.afnt, result.afnt_size, &view));
     free(result.afnt);
     memset(source, 0, 16u);
-    assert(astra_font_host_convert(argv[1], source, (uint32_t)size, 0u,
+    assert(astra_font_host_convert(argv[1], source, (uint32_t)size, 0u, 0u,
         "test.ttf", 8u, "", 0u, &result) == 0);
     assert(result.status == ASTRA_FONT_CONVERT_INVALID &&
            result.afnt == NULL && result.afnt_size == 0u);
     assert(astra_font_host_convert("/no/such/astra-font-worker", source,
-        (uint32_t)size, 0u, "test.ttf", 8u, "", 0u,
+        (uint32_t)size, 0u, 0u, "test.ttf", 8u, "", 0u,
         &result) == -ENOENT);
     assert(astra_font_host_convert("/bin/true", source, (uint32_t)size,
-        0u, "test.ttf", 8u, "", 0u, &result) < 0);
+        0u, 0u, "test.ttf", 8u, "", 0u, &result) < 0);
     free(source);
     puts("QEMU font worker invocation passed");
     return 0;

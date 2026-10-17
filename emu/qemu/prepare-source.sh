@@ -34,6 +34,7 @@ STORAGE_TRANSPORT="$REPOSITORY/fpga/de25/linux/astra_storage_transport"
 FONT_HOST="$REPOSITORY/fpga/de25/linux/astra_font_host"
 FONT_CONVERT="$REPOSITORY/fpga/de25/linux/astra_font_convert.h"
 PUBLIC_FONT_WORKER="$REPOSITORY/sw/include/astra/font_worker.h"
+PUBLIC_FONT_ENCODING="$REPOSITORY/ndk/include/astra/font_encoding.h"
 PUBLIC_AUDIO_HOST="$REPOSITORY/sw/include/astra/audio_host.h"
 PUBLIC_PCM_FORMAT="$REPOSITORY/sw/include/astra/pcm_format.h"
 PUBLIC_AUDIO_STREAM="$REPOSITORY/sw/include/astra/audio_stream.h"
@@ -110,6 +111,7 @@ overlay_identity()
         printf '%s  %s\n' "$(sha256_file "$FONT_HOST.h")" "fpga/de25/linux/astra_font_host.h"
         printf '%s  %s\n' "$(sha256_file "$FONT_CONVERT")" "fpga/de25/linux/astra_font_convert.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_FONT_WORKER")" "sw/include/astra/font_worker.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_FONT_ENCODING")" "ndk/include/astra/font_encoding.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_HOST")" \
             "sw/include/astra/host.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_PROCESS")" \
@@ -209,6 +211,7 @@ cp "$PUBLIC_RENDER_PROTOCOL" \
     "$STAGED_SOURCE/include/hw/m68k/astra_render_protocol.h"
 mkdir -p "$STAGED_SOURCE/include/astra"
 cp "$PUBLIC_FONT_WORKER" "$STAGED_SOURCE/include/astra/font_worker.h"
+cp "$PUBLIC_FONT_ENCODING" "$STAGED_SOURCE/include/astra/font_encoding.h"
 cp "$PUBLIC_DISPLAY" "$STAGED_SOURCE/include/astra/display.h"
 cp "$PUBLIC_DISPLAY_CAPTURE" "$STAGED_SOURCE/include/astra/display_capture.h"
 cp "$PUBLIC_COPY_ENGINE" "$STAGED_SOURCE/include/astra/copy_engine.h"

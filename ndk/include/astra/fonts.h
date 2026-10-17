@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <astra/area.h>
 #include <astra/attributes.h>
+#include <astra/font_encoding.h>
 #include <astra/types.h>
 
 ASTRA_EXTERN_C_BEGIN
@@ -38,11 +39,14 @@ typedef struct AstraInstalledFont {
     uint32_t style_length;
     /** Number of installed bitmap strikes. */
     uint32_t strike_count;
-    /** ASTRA_INSTALLED_FONT_SYSTEM when shipped with the system. */
+    /** Shipped and system-choice eligibility flags. */
     uint32_t flags;
 } AstraInstalledFont;
 
-enum { ASTRA_INSTALLED_FONT_SYSTEM = 1u << 0 };
+enum {
+    ASTRA_INSTALLED_FONT_SYSTEM = 1u << 0,
+    ASTRA_INSTALLED_FONT_SELECTABLE = 1u << 1
+};
 
 /** One installed bitmap size. */
 typedef struct AstraInstalledFontStrike {
@@ -128,11 +132,12 @@ ASTRA_NODISCARD AstraResult astra_fonts_face_open(
  * @param length Source byte count.
  * @param source_name Counted UTF-8 display name of source file.
  * @param name_length Bytes of @p source_name, without terminator.
+ * @param encoding AUTO for AFNT/outline, explicit ISO-8859 codepage for Amiga.
  * @param installed_id Receives stable face ID; at least ASTRA_FONT_ID_MAX bytes.
  * @return ::ASTRA_OK or a negative ::AstraResult. */
 ASTRA_NODISCARD AstraResult astra_fonts_import(
     AstraHandle admin, const void *bytes, uint32_t length,
-    const char *source_name, uint32_t name_length,
+    const char *source_name, uint32_t name_length, uint32_t encoding,
     char installed_id[ASTRA_FONT_ID_MAX]);
 /** Uninstall one user-imported face after choosing a different system face.
  * Shipped faces cannot be removed. The catalog stops exposing a successfully

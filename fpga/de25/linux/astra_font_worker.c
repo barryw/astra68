@@ -2,6 +2,7 @@
 #include "astra_font_worker.h"
 
 #include <astra/font_worker.h>
+#include <astra/font_encoding.h>
 
 #include <errno.h>
 #include <stdint.h>
@@ -41,7 +42,7 @@ int astra_font_worker_run(int input, int output)
     uint8_t request[ASTRA_FONT_WORKER_REQUEST_SIZE];
     uint8_t reply[ASTRA_FONT_WORKER_REPLY_SIZE] = {0};
     uint8_t *source = NULL, *afnt = NULL;
-    uint32_t source_size, name_size, license_size, face_index;
+    uint32_t source_size, name_size, license_size, face_index, encoding;
     uint32_t afnt_size = 0u, faces = 0u;
     char name[ASTRA_FONT_WORKER_TEXT_MAX + 1u];
     char license[ASTRA_FONT_WORKER_TEXT_MAX + 1u];
@@ -53,12 +54,14 @@ int astra_font_worker_run(int input, int output)
     name_size = decode32(request + 16u);
     license_size = decode32(request + 20u);
     face_index = decode32(request + 8u);
+    encoding = decode32(request + 24u);
     if (memcmp(request, ASTRA_FONT_WORKER_REQUEST_MAGIC, 4u) != 0 ||
         decode32(request + 4u) != ASTRA_FONT_WORKER_VERSION ||
         source_size == 0u || source_size > ASTRA_FONT_WORKER_SOURCE_MAX ||
         name_size == 0u || name_size > ASTRA_FONT_WORKER_TEXT_MAX ||
         license_size > ASTRA_FONT_WORKER_TEXT_MAX ||
-        face_index >= ASTRA_FONT_WORKER_FACES_MAX)
+        face_index >= ASTRA_FONT_WORKER_FACES_MAX ||
+        encoding > ASTRA_FONT_ENCODING_ISO_8859_2)
         goto done;
     if (!transfer_exact(input, name, name_size, 0) ||
         !transfer_exact(input, license, license_size, 0) ||
@@ -73,9 +76,20 @@ int astra_font_worker_run(int input, int output)
         goto done;
     }
     if (!transfer_exact(input, source, source_size, 0)) goto done;
-    result = astra_font_convert_outline(source, source_size, face_index,
-                                        name, license, &afnt, &afnt_size,
-                                        &faces);
+    if (source_size >= 4u &&
+        memcmp(source, "\0\0\3\363", 4u) == 0) {
+        const char *codepage = encoding == ASTRA_FONT_ENCODING_ISO_8859_1 ?
+            "ISO-8859-1" : encoding == ASTRA_FONT_ENCODING_ISO_8859_2 ?
+            "ISO-8859-2" : NULL;
+        result = codepage == NULL || face_index != 0u ?
+            ASTRA_FONT_CONVERT_INVALID :
+            astra_font_convert_amiga(source, source_size, codepage,
+                name, license, &afnt, &afnt_size, &faces);
+    } else if (encoding == ASTRA_FONT_ENCODING_AUTO) {
+        result = astra_font_convert_outline(source, source_size, face_index,
+                                            name, license, &afnt, &afnt_size,
+                                            &faces);
+    }
     if (result == ASTRA_FONT_CONVERT_OK &&
         (afnt == NULL || afnt_size == 0u ||
          afnt_size > ASTRA_FONT_WORKER_OUTPUT_MAX)) {

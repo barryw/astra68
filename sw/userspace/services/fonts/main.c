@@ -3,6 +3,7 @@
 #include <astra/filesystem_library.h>
 #include <astra/font_catalog.h>
 #include <astra/font_service.h>
+#include <astra/font_encoding.h>
 #include <astra/font_store.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
@@ -442,6 +443,7 @@ typedef struct FontConvertJob {
     uint32_t source_size;
     const char *name;
     uint32_t name_size;
+    uint32_t encoding;
     uint32_t ready;
     uint32_t resume;
     uint32_t cancel;
@@ -464,7 +466,7 @@ static void convert_outline(uint32_t argument)
         return;
     }
     for (uint32_t face = 0u; face == 0u || face < faces; ++face) {
-        job->status = fonts_host_convert(&host, face, &job->afnt,
+        job->status = fonts_host_convert(&host, face, job->encoding, &job->afnt,
                                           &job->afnt_size, &job->faces);
         if (job->status == ASTRA_STATUS_OK &&
             faces != 0u && faces != job->faces)
@@ -482,10 +484,12 @@ static void convert_outline(uint32_t argument)
 
 static uint32_t import_outline(FontImportStage *stage, const void *source,
                                uint32_t size, const char *name,
+                               uint32_t encoding,
                                char imported[ASTRA_FONT_FACE_ID_MAX])
 {
     FontConvertJob job = { .source = source, .source_size = size,
-        .name = name, .name_size = (uint32_t)strlen(name) };
+        .name = name, .name_size = (uint32_t)strlen(name),
+        .encoding = encoding };
     AstraThreadStart start = {convert_outline, (uint32_t)(uintptr_t)&job};
     uint32_t worker = 0u, status = ASTRA_STATUS_LIMIT, faces = 0u;
 
@@ -557,14 +561,24 @@ static uint32_t import_font(uint32_t area,
         status = ASTRA_STATUS_PROTOCOL;
     } else if (request->source_size >= 4u &&
                memcmp(mapping, "AFNT", 4u) == 0) {
-        status = stage_afnt(&stage, mapping, request->source_size, imported);
+        status = request->source_encoding == ASTRA_FONT_ENCODING_AUTO ?
+            stage_afnt(&stage, mapping, request->source_size, imported) :
+            ASTRA_STATUS_INVALID;
         if (status != ASTRA_STATUS_OK)
             (void)astra_log_debug("fonts AFNT stage failed", 23u);
     } else if (font_device == 0u) {
         status = ASTRA_STATUS_UNSUPPORTED;
     } else {
+        uint32_t amiga = request->source_size >= 4u &&
+            memcmp(mapping, "\0\0\3\363", 4u) == 0;
+        if ((amiga && request->source_encoding == ASTRA_FONT_ENCODING_AUTO) ||
+            (!amiga && request->source_encoding != ASTRA_FONT_ENCODING_AUTO)) {
+            status = ASTRA_STATUS_INVALID;
+        } else {
         status = import_outline(&stage, mapping, request->source_size,
-                                request->source_name, imported);
+                                request->source_name,
+                                request->source_encoding, imported);
+        }
         if (status != ASTRA_STATUS_OK)
             (void)astra_log_failure("fonts outline import", status);
     }
@@ -601,8 +615,11 @@ static uint32_t catalog_area(uint32_t *area, uint32_t *size)
     uint32_t mapped_size = 0u;
     uint32_t status;
 
-    for (uint32_t at = 0u; at < installed_count; ++at)
+    for (uint32_t at = 0u; at < installed_count; ++at) {
         faces[at] = installed[at].face;
+        if (fonts_face_selectable(&installed[at].face))
+            faces[at].flags |= ASTRA_FONT_CATALOG_SELECTABLE;
+    }
     if (!astra_font_catalog_pack(faces, installed_count, generation,
                                  NULL, 0u, size) ||
         *size > ASTRA_AREA_SIZE_MAX)

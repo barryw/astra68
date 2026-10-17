@@ -39,7 +39,8 @@ static int face_valid(const AstraFontCatalogFace *face)
         face->style == NULL || face->style_length == 0u ||
         !astra_utf8_validate(face->style, face->style_length, 0u) ||
         face->strikes == NULL || face->strike_count == 0u ||
-        (face->flags & ~ASTRA_FONT_CATALOG_SYSTEM) != 0u)
+        (face->flags & ~(ASTRA_FONT_CATALOG_SYSTEM |
+                         ASTRA_FONT_CATALOG_SELECTABLE)) != 0u)
         return 0;
     for (uint32_t at = 0u; at < face->strike_count; ++at)
         if (!strike_valid(&face->strikes[at])) return 0;
@@ -149,7 +150,8 @@ int astra_font_catalog_validate(const void *source, uint32_t length)
             !astra_utf8_validate(bytes + record.style_offset,
                                  record.style_length, 0u) ||
             record.strike_count == 0u ||
-            (record.flags & ~ASTRA_FONT_CATALOG_SYSTEM) != 0u ||
+            (record.flags & ~(ASTRA_FONT_CATALOG_SYSTEM |
+                              ASTRA_FONT_CATALOG_SELECTABLE)) != 0u ||
             record.reserved != 0u) return 0;
         for (uint32_t strike = 0u; strike < record.strike_count; ++strike) {
             AstraFontCatalogStrike info;

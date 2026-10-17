@@ -1,4 +1,5 @@
 #include "../policy.h"
+#include <astra/font_encoding.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -37,6 +38,11 @@ int main(void)
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
     assert(fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_RENDER));
+    request.source_encoding = ASTRA_FONT_ENCODING_ISO_8859_2;
+    assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
+    request.source_encoding = ASTRA_FONT_ENCODING_ISO_8859_2 + 1u;
+    assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
+    request.source_encoding = ASTRA_FONT_ENCODING_AUTO;
     request.header.operation = ASTRA_FONT_SERVICE_UNINSTALL;
     assert(fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
@@ -54,6 +60,11 @@ int main(void)
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
     assert(fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_RENDER));
+    request.source_encoding = ASTRA_FONT_ENCODING_ISO_8859_2;
+    assert(fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
+    request.source_encoding = ASTRA_FONT_ENCODING_ISO_8859_2 + 1u;
+    assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
+    request.source_encoding = ASTRA_FONT_ENCODING_AUTO;
     request.source_name[0] = '\0';
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
     request.source_name[0] = (char)0xff;

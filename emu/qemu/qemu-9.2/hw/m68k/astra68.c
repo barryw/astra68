@@ -58,6 +58,7 @@
 #include "astra/display.h"
 #include "astra/host.h"
 #include "astra/font_worker.h"
+#include "astra/font_encoding.h"
 #include "astra/process.h"
 #include "astra/network.h"
 #include "astra/status.h"
@@ -4377,7 +4378,7 @@ static void astra_host_execute_fonts(Astra68State *s,
         }
     } else if (operation == ASTRA_HOST_FONT_CONVERT) {
         if (length == 0u && capacity == 0u && offset == 0u && extra == 0u &&
-            ldl_be_p(command + HOST_FIELD(value_hi)) == 0u &&
+            ldl_be_p(command + HOST_FIELD(value_hi)) <= ASTRA_FONT_ENCODING_ISO_8859_2 &&
             value < ASTRA_FONT_WORKER_FACES_MAX &&
             font->received == font->source_size) {
             int error;
@@ -4385,6 +4386,7 @@ static void astra_host_execute_fonts(Astra68State *s,
             font->result = (AstraFontHostResult){0};
             error = astra_font_host_convert(astra_host_font_worker_path(),
                 font->source, font->source_size, value,
+                ldl_be_p(command + HOST_FIELD(value_hi)),
                 font->name, font->name_size, font->license,
                 font->license_size, &font->result);
             if (error == 0) {

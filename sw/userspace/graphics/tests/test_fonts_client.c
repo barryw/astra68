@@ -41,6 +41,7 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
         assert(call->handles[0] == 4u);
         assert(request->source_size == imported_length);
         assert(strcmp(request->source_name, "test.afnt") == 0);
+        assert(request->source_encoding == ASTRA_FONT_ENCODING_AUTO);
         call->handles[0] = ASTRA_INVALID_HANDLE;
     } else
         assert(call->handle_count == 0u && call->reply_index == 0u);
@@ -174,16 +175,19 @@ int main(void)
     imported_length = sizeof(source_bytes) - 1u;
     bad_reply = 0u;
     assert(astra_fonts_import(1u, source_bytes, imported_length,
-                              "test.afnt", 9u, installed_id) == ASTRA_OK);
+                              "test.afnt", 9u, ASTRA_FONT_ENCODING_AUTO,
+                              installed_id) == ASTRA_OK);
     assert(strcmp(installed_id, "user:test") == 0);
     assert(memcmp(imported_bytes, source_bytes, imported_length) == 0);
     assert(closed_handles == 6u);
     bad_reply = 3u;
     assert(astra_fonts_import(1u, source_bytes, imported_length,
-                              "test.afnt", 9u, installed_id) ==
+                              "test.afnt", 9u, ASTRA_FONT_ENCODING_AUTO,
+                              installed_id) ==
            ASTRA_ERROR_IO);
     assert(installed_id[0] == '\0' && closed_handles == 7u);
     assert(astra_fonts_import(1u, source_bytes, 0u, "test.afnt", 9u,
+                              ASTRA_FONT_ENCODING_AUTO,
                               installed_id) == ASTRA_ERROR_INVALID_ARGUMENT);
     AstraArea rendered = ASTRA_AREA_INIT;
     uint32_t face_bytes = 0u;

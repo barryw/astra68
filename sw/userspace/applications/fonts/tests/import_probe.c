@@ -151,7 +151,7 @@ int astra_main(const AstraStartupInfo *startup)
         status = PROBE_FAIL_CORRUPT_WRITE;
         if (astra_fonts_import(admin->handle, source, source_size,
                                SOURCE_NAME, sizeof(SOURCE_NAME) - 1u,
-                               id) != ASTRA_ERROR_IO)
+                               ASTRA_FONT_ENCODING_AUTO, id) != ASTRA_ERROR_IO)
             goto done;
         status = ASTRA_STATUS_OK;
         goto done;
@@ -174,7 +174,8 @@ int astra_main(const AstraStartupInfo *startup)
     if (resumed != expect_again) goto done;
     status = PROBE_FAIL_IMPORT;
     result = astra_fonts_import(admin->handle, source, source_size,
-                                SOURCE_NAME, sizeof(SOURCE_NAME) - 1u, id);
+                                SOURCE_NAME, sizeof(SOURCE_NAME) - 1u,
+                                ASTRA_FONT_ENCODING_AUTO, id);
     if (result != ASTRA_OK) {
         status = 50u + (uint32_t)-result;
         goto done;
@@ -209,7 +210,7 @@ int astra_main(const AstraStartupInfo *startup)
     status = PROBE_FAIL_DUPLICATE;
     if (astra_fonts_import(admin->handle, source, source_size,
                            SOURCE_NAME, sizeof(SOURCE_NAME) - 1u,
-                           duplicate) != ASTRA_OK) goto done;
+                           ASTRA_FONT_ENCODING_AUTO, duplicate) != ASTRA_OK) goto done;
     status = PROBE_FAIL_DUPLICATE_ID;
     if (strcmp(duplicate, id) != 0) goto done;
     if (resumed) {
@@ -219,6 +220,7 @@ int astra_main(const AstraStartupInfo *startup)
                 ASTRA_VFS_OK || second_size == 0u ||
             astra_fonts_import(admin->handle, second_source, second_size,
                                "astra-mono.afnt", 15u,
+                               ASTRA_FONT_ENCODING_AUTO,
                                second_id) != ASTRA_OK)
             goto done;
         status = PROBE_FAIL_UNINSTALL_ACTIVE;
