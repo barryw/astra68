@@ -42,3 +42,9 @@ installed ID. Other source formats currently return unsupported. Selection
 persists through Config Kit, but the current draw-list text backend still uses
 its built-in face. Do not treat an installed catalog entry as a drawable font
 handle until the font service and renderer publish that contract.
+
+Display alone receives `FONTS_RENDER` in the normal startup manifest.
+`astra_fonts_face_open` returns an immutable, read-only area containing a
+validated installed AFNT and its exact byte length. The caller closes the
+area with `astra_area_close`. This supplies face bytes to the renderer; it does
+not yet select that face for drawing.

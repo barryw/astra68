@@ -249,6 +249,11 @@ assert startup[0].startswith("service /services/hostfs ")
 assert startup[0].endswith(" critical priority=20")
 display_startup = next(line for line in startup
                        if line.startswith("service /services/display "))
+fonts_startup = next(line for line in startup
+                     if line.startswith("service /services/fonts "))
+assert "serves FONTS FONTS_ADMIN FONTS_RENDER" in fonts_startup
+assert "FONTS_RENDER" in display_startup.split()
+assert "FONTS_ADMIN" not in display_startup.split()
 assert display_startup.endswith(" critical priority=20")
 assert desktop_startup.endswith(" required priority=20")
 assert [line for line in startup

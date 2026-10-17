@@ -51,15 +51,17 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
                              request->header.transaction_id);
     reply->status = ASTRA_STATUS_OK;
     reply->generation = document_generation;
-    reply->catalog_size = request->header.operation ==
-        ASTRA_FONT_SERVICE_CATALOG ? document_size : 0u;
+    reply->area_size = request->header.operation ==
+        ASTRA_FONT_SERVICE_CATALOG ? document_size :
+        request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE ? 128u : 0u;
     memcpy(reply->selected_id, "system:test", sizeof("system:test"));
     if (request->header.operation == ASTRA_FONT_SERVICE_IMPORT &&
         bad_reply != 3u)
         memcpy(reply->imported_id, "user:test", sizeof("user:test"));
     call->reply_size = bad_reply == 1u ? sizeof(*reply) - 1u : sizeof(*reply);
-    call->reply_handle_count = request->header.operation ==
-        ASTRA_FONT_SERVICE_CATALOG ? 1u : 0u;
+    call->reply_handle_count =
+        request->header.operation == ASTRA_FONT_SERVICE_CATALOG ||
+        request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE ? 1u : 0u;
     if (call->reply_handle_count != 0u) *call->reply_handles = 2u;
     if (bad_reply == 2u) reply->header.protocol_version = 99u;
     return ASTRA_OK;
@@ -180,5 +182,18 @@ int main(void)
     assert(installed_id[0] == '\0' && closed_handles == 7u);
     assert(astra_fonts_import(1u, source_bytes, 0u, "test.afnt", 9u,
                               installed_id) == ASTRA_ERROR_INVALID_ARGUMENT);
+    AstraArea rendered = ASTRA_AREA_INIT;
+    uint32_t face_bytes = 0u;
+    bad_reply = 0u;
+    assert(astra_fonts_face_open(1u, "system:test", 11u, &rendered,
+                                 &face_bytes) == ASTRA_OK);
+    assert(face_bytes == 128u && rendered.address == document);
+    assert(astra_area_close(&rendered) == ASTRA_OK && closed_handles == 8u);
+    assert(astra_fonts_face_open(1u, "", 0u, &rendered,
+                                 &face_bytes) == ASTRA_ERROR_INVALID_ARGUMENT);
+    bad_reply = 2u;
+    assert(astra_fonts_face_open(1u, "system:test", 11u, &rendered,
+                                 &face_bytes) == ASTRA_ERROR_IO);
+    assert(closed_handles == 9u);
     return 0;
 }

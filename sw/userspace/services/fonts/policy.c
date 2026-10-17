@@ -28,7 +28,7 @@ int fonts_face_selectable(const AstraFontCatalogFace *face)
 }
 
 int fonts_request_valid(const AstraFontServiceRequest *request,
-                        uint32_t size, uint32_t admin)
+                        uint32_t size, uint32_t port_role)
 {
     uint32_t import;
     const char *name_end;
@@ -46,10 +46,16 @@ int fonts_request_valid(const AstraFontServiceRequest *request,
            request->header.reserved == 0u &&
            request->header.transaction_id != 0u &&
            request->reserved[0] == 0u && request->reserved[1] == 0u &&
-           (request->header.operation == ASTRA_FONT_SERVICE_CATALOG ||
-            (admin && (request->header.operation == ASTRA_FONT_SERVICE_SELECT ||
-                       import))) &&
+           ((port_role == FONTS_PORT_CATALOG &&
+             request->header.operation == ASTRA_FONT_SERVICE_CATALOG) ||
+            (port_role == FONTS_PORT_ADMIN &&
+             (request->header.operation == ASTRA_FONT_SERVICE_SELECT ||
+              import)) ||
+            (port_role == FONTS_PORT_RENDER &&
+             request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE)) &&
            memchr(request->face_id, '\0', sizeof(request->face_id)) != NULL &&
+           (request->header.operation != ASTRA_FONT_SERVICE_OPEN_FACE ||
+            request->face_id[0] != '\0') &&
            (import ?
                 request->face_id[0] == '\0' &&
                 request->source_size > 0u &&

@@ -395,7 +395,69 @@ static uint32_t catalog_area(uint32_t *area, uint32_t *size)
     return ASTRA_STATUS_OK;
 }
 
-static void serve(uint32_t port, uint32_t admin)
+static uint32_t face_area(const char *id, uint32_t *area, uint32_t *size)
+{
+    char path[ASTRA_VFS_PATH_MAX];
+    char token[ASTRA_FONT_OBJECT_TOKEN_SIZE];
+    AstraAfntView view;
+    void *bytes = NULL, *mapping = NULL;
+    uint32_t length = 0u, mapped_size = 0u, writable = 0u;
+    uint32_t status;
+    int path_length;
+
+    if (find_face(id) == NULL) return ASTRA_STATUS_NOT_FOUND;
+    if (strncmp(id, "system:", 7u) == 0)
+        path_length = snprintf(path, sizeof(path), "/SYSTEM/fonts/%s.afnt",
+                               id + 7u);
+    else if (strncmp(id, "user:", 5u) == 0)
+        path_length = snprintf(path, sizeof(path),
+                               "/CONFIG_SYSTEM/installed/%s.afnt", id + 5u);
+    else return ASTRA_STATUS_INVALID;
+    if (path_length <= 0 || (size_t)path_length >= sizeof(path))
+        return ASTRA_STATUS_LIMIT;
+    status = read_afnt(path, &bytes, &length);
+    if (status != ASTRA_VFS_OK) return ASTRA_STATUS_IO;
+    status = astra_afnt_validate(bytes, length, &view) ? ASTRA_STATUS_OK :
+                                                         ASTRA_STATUS_INVALID;
+    if (status == ASTRA_STATUS_OK && strncmp(id, "user:", 5u) == 0) {
+        astra_font_object_token(bytes, length, token);
+        if (strcmp(token, id + 5u) != 0) status = ASTRA_STATUS_INVALID;
+    }
+    if (status != ASTRA_STATUS_OK) goto done;
+    status = astra_rt_area_create(
+        length, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+                    ASTRA_RIGHT_TRANSFER, &writable);
+    if (status != ASTRA_SYSCALL_OK) {
+        status = ASTRA_STATUS_LIMIT;
+        goto done;
+    }
+    status = astra_rt_area_map(writable,
+                               ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                               &mapping, &mapped_size);
+    if (status != ASTRA_SYSCALL_OK || mapped_size < length) {
+        status = ASTRA_STATUS_IO;
+        goto done;
+    }
+    memcpy(mapping, bytes, length);
+    status = astra_rt_area_unmap(mapping);
+    mapping = NULL;
+    if (status != ASTRA_SYSCALL_OK) {
+        status = ASTRA_STATUS_IO;
+        goto done;
+    }
+    status = astra_rt_handle_duplicate(
+        writable, ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
+        area);
+    if (status == ASTRA_SYSCALL_OK) *size = length;
+    else status = ASTRA_STATUS_IO;
+done:
+    if (mapping != NULL) (void)astra_rt_area_unmap(mapping);
+    if (writable != 0u) (void)astra_close(writable);
+    astra_runtime_deallocate(bytes);
+    return status;
+}
+
+static void serve(uint32_t port, uint32_t role)
 {
     AstraFontServiceRequest request = {0};
     AstraFontServiceReply reply = {0};
@@ -407,7 +469,7 @@ static void serve(uint32_t port, uint32_t admin)
         ASTRA_MESSAGE_HANDLES_MAX, &bytes, &count);
     if (status != ASTRA_SYSCALL_OK) return;
     if (bytes == sizeof(request)) memcpy(&request, packet, sizeof(request));
-    status = fonts_request_valid(&request, bytes, admin) ? ASTRA_STATUS_OK :
+    status = fonts_request_valid(&request, bytes, role) ? ASTRA_STATUS_OK :
                                                     ASTRA_STATUS_PROTOCOL;
     if (count != (request.header.operation == ASTRA_FONT_SERVICE_IMPORT ?
                   2u : 1u)) status = ASTRA_STATUS_PROTOCOL;
@@ -419,6 +481,9 @@ static void serve(uint32_t port, uint32_t admin)
                request.header.operation == ASTRA_FONT_SERVICE_IMPORT) {
         /* Port-call appends the reply capability after the source area. */
         status = import_afnt(handles[0], &request, reply.imported_id);
+    } else if (status == ASTRA_STATUS_OK &&
+               request.header.operation == ASTRA_FONT_SERVICE_OPEN_FACE) {
+        status = face_area(request.face_id, &area, &area_size);
     } else if (status == ASTRA_STATUS_OK) {
         FontEntry *face = find_face(request.face_id);
         if (face == NULL) status = ASTRA_STATUS_NOT_FOUND;
@@ -436,7 +501,7 @@ static void serve(uint32_t port, uint32_t admin)
                              request.header.transaction_id);
     reply.status = status;
     reply.generation = generation;
-    reply.catalog_size = status == ASTRA_STATUS_OK ? area_size : 0u;
+    reply.area_size = status == ASTRA_STATUS_OK ? area_size : 0u;
     memcpy(reply.selected_id, selected, sizeof(selected));
     if (count != 0u &&
         astra_port_send(handles[count - 1u], &reply, sizeof(reply),
@@ -453,8 +518,8 @@ int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *bootstrap;
     AstraConfigError error = {0};
-    uint32_t receive[2] = {0};
-    uint32_t published[2] = {0};
+    uint32_t receive[3] = {0};
+    uint32_t published[3] = {0};
     uint32_t status;
 
     if (!astra_startup_validate(startup)) return ASTRA_STATUS_INVALID;
@@ -502,19 +567,19 @@ int astra_main(const AstraStartupInfo *startup)
         if (fallback != NULL && fonts_face_selectable(&fallback->face))
             memcpy(selected, fallback->id, sizeof(selected));
     }
-    for (uint32_t at = 0u; at < 2u; ++at)
+    for (uint32_t at = 0u; at < 3u; ++at)
         if (astra_rt_port_create(16u, 16u * sizeof(AstraFontServiceRequest),
                                  &receive[at], &published[at]) !=
             ASTRA_SYSCALL_OK) return ASTRA_STATUS_LIMIT;
     status = astra_service_ready(bootstrap->handle, ASTRA_STATUS_OK,
-                                 published, 2u);
+                                 published, 3u);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_SYSCALL_OK) return ASTRA_STATUS_PEER_DEAD;
     for (;;) {
         uint32_t index = 0u;
-        status = astra_wait_multiple(receive, 2u, ASTRA_DEADLINE_FOREVER,
+        status = astra_wait_multiple(receive, 3u, ASTRA_DEADLINE_FOREVER,
                                      &index, NULL);
-        if (status != ASTRA_SYSCALL_OK || index > 1u)
+        if (status != ASTRA_SYSCALL_OK || index > 2u)
             return ASTRA_STATUS_PEER_DEAD;
         serve(receive[index], index);
     }

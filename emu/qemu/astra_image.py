@@ -180,9 +180,9 @@ DISPLAY_STARTUP_MANIFEST = (
     "serves INPUT_SERVICE required priority=20\n"
     "service /services/clipboard grants serves CLIPBOARD required priority=20\n"
     "service /services/fonts grants CONFIG_SYSTEM:rw SYSTEM:r LIBS:r "
-    "serves FONTS FONTS_ADMIN required priority=20\n"
+    "serves FONTS FONTS_ADMIN FONTS_RENDER required priority=20\n"
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
-    "INPUT_SERVICE serves GUI critical priority=20\n"
+    "INPUT_SERVICE FONTS FONTS_RENDER serves GUI critical priority=20\n"
     "service /services/media grants HOST_DEVICE serves PCM priority=16\n"
     # The machine's accounting, copied to WORK:.astra/sample once a second
     # for the host's astra-top.

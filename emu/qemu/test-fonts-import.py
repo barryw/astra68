@@ -54,12 +54,12 @@ def main():
     with tempfile.TemporaryDirectory(prefix="astra-font-import-") as work:
         image = str(Path(work) / "system.img")
         shutil.copyfile(args.image, image)
-        astra_image.install_service(image, "fonts")
+        astra_image.install(image)
         astra_image.install_test_app(image, args.bundle)
         startup = Path(work) / "startup"
         startup.write_text(
             astra_image.DISPLAY_STARTUP_MANIFEST +
-            "service %s grants FONTS FONTS_ADMIN SYSTEM:r LIBS:r "
+            "service %s grants FONTS FONTS_ADMIN FONTS_RENDER SYSTEM:r LIBS:r "
             "required priority=20\n" % PROBE, encoding="ascii")
         astra_image._replace_volume_file(image, str(startup), "/startup/system")
         boot(args.qemu, args.rom, image, work, "first boot")

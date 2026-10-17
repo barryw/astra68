@@ -176,7 +176,16 @@ Beast MC68040 font-service build, focused tests, sanitizer and analyzer pass;
 full userspace `all test` passed before the final logging-only change. A fresh
 disposable image with the final service passes the Fonts native autostart and
 hardware-glyph QEMU gate. Inventory recovery with an injected damaged settings
-document has not yet been exercised in QEMU.
+document passes in the isolated native QEMU import probe. Font service
+protocol 3 adds a separate `FONTS_RENDER` capability that delivers a
+revalidated, read-only AFNT area for an installed face; normal startup grants
+it only to display. Font Kit 2.6 exposes the matching client call. Beast
+MC68040 builds, focused service/client tests, sanitizer and analyzer, full
+userspace `all test`, and NDK `dist-check` pass on Beast.
+The disposable QEMU probe checks exact built-in and imported AFNT bytes
+through this port, including after restart and damaged-inventory fallback.
+Display does not yet consume these areas; saved choice still does not change
+visible text.
 
 Current production checkpoint: graphics release
 `57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`,

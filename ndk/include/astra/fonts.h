@@ -13,6 +13,8 @@ ASTRA_EXTERN_C_BEGIN
 #define ASTRA_CAPABILITY_FONTS "FONTS"
 /** Administrative font-choice startup capability. */
 #define ASTRA_CAPABILITY_FONTS_ADMIN "FONTS_ADMIN"
+/** Read-only AFNT face delivery to the privileged display renderer. */
+#define ASTRA_CAPABILITY_FONTS_RENDER "FONTS_RENDER"
 /** Maximum bytes in a face ID, including its terminator. */
 #define ASTRA_FONT_ID_MAX 64u
 /** Largest source accepted by native font import. */
@@ -104,6 +106,20 @@ ASTRA_NODISCARD AstraResult astra_fonts_catalog_close(
  * @return ::ASTRA_OK or a negative ::AstraResult. */
 ASTRA_NODISCARD AstraResult astra_fonts_select(
     AstraHandle admin, const char *id, uint32_t id_length);
+/** Open validated AFNT bytes through display's FONTS_RENDER capability.
+ * The mapped bytes remain immutable until @p face closes.
+ * Only the display service receives this capability; ordinary applications
+ * use catalog metadata and draw-list text. The renderer must validate the
+ * returned AFNT before consuming it.
+ * @param render FONTS_RENDER send capability.
+ * @param id Counted installed face ID.
+ * @param id_length Bytes in @p id, excluding terminator.
+ * @param face Empty area; close with astra_area_close().
+ * @param length Exact AFNT byte count, excluding area page padding.
+ * @return ::ASTRA_OK or a negative ::AstraResult. */
+ASTRA_NODISCARD AstraResult astra_fonts_face_open(
+    AstraHandle render, const char *id, uint32_t id_length,
+    AstraArea *face, uint32_t *length);
 /** Import one native AFNT source into protected installed-font storage.
  * The service rejects unsupported source formats until its converter worker
  * is available. Returned ID is NUL-terminated on success and empty on error.

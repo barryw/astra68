@@ -32,7 +32,10 @@ enum {
     PROBE_FAIL_RESTART,
     PROBE_FAIL_CORRUPT_CATALOG,
     PROBE_FAIL_CORRUPT_CHOICE,
-    PROBE_FAIL_CORRUPT_WRITE
+    PROBE_FAIL_CORRUPT_WRITE,
+    PROBE_FAIL_OPEN_FACE,
+    PROBE_FAIL_FACE_BYTES,
+    PROBE_FAIL_FACE_CLOSE
 };
 
 static uint32_t matches(const AstraFontsCatalog *catalog, const char *id)
@@ -63,13 +66,15 @@ static uint32_t marker(AstraProcessFilesystem *files, const char *path,
 
 int astra_main(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *read, *admin, *bootstrap;
+    const AstraStartupCapability *read, *admin, *render, *bootstrap;
     AstraProcessFilesystem files = ASTRA_PROCESS_FILESYSTEM_INIT;
     AstraFontsCatalog before = ASTRA_FONTS_CATALOG_INIT;
     AstraFontsCatalog after = ASTRA_FONTS_CATALOG_INIT;
     AstraFontsCatalog selected = ASTRA_FONTS_CATALOG_INIT;
+    AstraArea face_area = ASTRA_AREA_INIT;
     void *source = NULL;
     uint32_t source_size = 0u;
+    uint32_t face_size = 0u;
     uint32_t receive = 0u, send = 0u, index = 0u;
     uint32_t status = PROBE_FAIL_FILES;
     char id[ASTRA_FONT_ID_MAX] = {0};
@@ -82,9 +87,10 @@ int astra_main(const AstraStartupInfo *startup)
     if (!astra_startup_validate(startup)) return ASTRA_STATUS_INVALID;
     read = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS);
     admin = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_ADMIN);
+    render = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_RENDER);
     bootstrap = astra_startup_capability(startup,
                                          ASTRA_CAPABILITY_SERVICE_READY);
-    if (read == NULL || admin == NULL || bootstrap == NULL)
+    if (read == NULL || admin == NULL || render == NULL || bootstrap == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
         goto done;
@@ -94,6 +100,16 @@ int astra_main(const AstraStartupInfo *startup)
         goto done;
     status = PROBE_FAIL_SIZE;
     if (source_size == 0u || source_size > ASTRA_FONT_IMPORT_MAX) goto done;
+    status = PROBE_FAIL_OPEN_FACE;
+    if (astra_fonts_face_open(render->handle, "system:astra-workbench", 22u,
+                              &face_area, &face_size) != ASTRA_OK)
+        goto done;
+    status = PROBE_FAIL_FACE_BYTES;
+    if (face_size != source_size ||
+        memcmp(face_area.address, source, source_size) != 0)
+        goto done;
+    status = PROBE_FAIL_FACE_CLOSE;
+    if (astra_area_close(&face_area) != ASTRA_OK) goto done;
     status = PROBE_FAIL_CATALOG_BEFORE;
     if (astra_fonts_catalog_open(read->handle, &before) != ASTRA_OK)
         goto done;
@@ -136,6 +152,16 @@ int astra_main(const AstraStartupInfo *startup)
     if (astra_fonts_catalog_open(read->handle, &after) != ASTRA_OK) goto done;
     status = PROBE_FAIL_MATCH;
     if (matches(&after, id) != 1u) goto done;
+    status = PROBE_FAIL_OPEN_FACE;
+    if (astra_fonts_face_open(render->handle, id, (uint32_t)strlen(id),
+                              &face_area, &face_size) != ASTRA_OK)
+        goto done;
+    status = PROBE_FAIL_FACE_BYTES;
+    if (face_size != source_size ||
+        memcmp(face_area.address, source, source_size) != 0)
+        goto done;
+    status = PROBE_FAIL_FACE_CLOSE;
+    if (astra_area_close(&face_area) != ASTRA_OK) goto done;
     status = PROBE_FAIL_COUNT;
     if (after.face_count != before.face_count + (resumed ? 0u : 1u))
         goto done;
@@ -155,6 +181,10 @@ int astra_main(const AstraStartupInfo *startup)
     if (strcmp(duplicate, id) != 0) goto done;
     status = ASTRA_STATUS_OK;
 done:
+    if (face_area.handle != ASTRA_INVALID_HANDLE) {
+        AstraResult ignored = astra_area_close(&face_area);
+        (void)ignored;
+    }
     if (selected.generation != 0u) {
         AstraResult ignored = astra_fonts_catalog_close(&selected);
         (void)ignored;

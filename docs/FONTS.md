@@ -573,11 +573,17 @@ third boot with a valid Config Kit document containing a damaged installed-font
 inventory and unavailable saved choice confirms built-in fallback and refusal
 to overwrite the damaged inventory. It found and fixed an import port-call
 handle-order bug. Interactive Fonts UI import still needs a runtime gate.
-Only AFNT is accepted at runtime; the HPS converter is not wired to the
-service. System choice is not consumed by the live render path, so changing it
-does not yet alter system typography. Production DE25 still uses the previous
-selected release. Converter, render path, and interactive gates must land
-before enabling this draft in a production release.
+Font service protocol 3 publishes `FONTS_RENDER` separately from catalog and
+administration. It rereads and validates an installed AFNT, checks the full
+content token for user faces, and transfers an immutable area. Font Kit 2.6
+maps that area read-only. A native QEMU probe compares delivered bytes with
+the built-in and newly imported source, including after restart and damaged
+inventory fallback. Normal startup grants this port only to display. Display
+does not yet consume it. Only AFNT is accepted at runtime; the HPS converter
+is not wired to the service. System choice is not consumed by the live render
+path, so changing it does not yet alter system typography. Production DE25
+still uses the previous selected release. Converter, render path, and
+interactive gates must land before enabling this draft in production.
 
 Haiku reference for this catalog boundary: `src/servers/app/font/FontManager.cpp`
 groups families and styles, `src/servers/app/font/FontFamily.cpp` keeps designed

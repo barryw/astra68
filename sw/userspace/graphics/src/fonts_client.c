@@ -62,13 +62,15 @@ static AstraResult exchange(AstraHandle service, uint32_t operation,
         memchr(reply->selected_id, '\0', sizeof(reply->selected_id)) == NULL ||
         memchr(reply->imported_id, '\0', sizeof(reply->imported_id)) == NULL ||
         (reply->status == ASTRA_STATUS_OK &&
-         ((operation == ASTRA_FONT_SERVICE_CATALOG) !=
+         ((operation == ASTRA_FONT_SERVICE_CATALOG ||
+           operation == ASTRA_FONT_SERVICE_OPEN_FACE) !=
           (call.reply_handle_count == 1u))) ||
         (reply->status != ASTRA_STATUS_OK &&
          call.reply_handle_count != 0u) ||
         (operation != ASTRA_FONT_SERVICE_CATALOG &&
-         reply->catalog_size != 0u) ||
-        (reply->status != ASTRA_STATUS_OK && reply->catalog_size != 0u) ||
+         operation != ASTRA_FONT_SERVICE_OPEN_FACE &&
+         reply->area_size != 0u) ||
+        (reply->status != ASTRA_STATUS_OK && reply->area_size != 0u) ||
         (reply->status == ASTRA_STATUS_OK &&
          (operation == ASTRA_FONT_SERVICE_IMPORT ?
           reply->imported_id[0] == '\0' : reply->imported_id[0] != '\0')) ||
@@ -110,8 +112,8 @@ AstraResult astra_fonts_catalog_open(AstraHandle service,
                       ASTRA_INVALID_HANDLE, 0u, NULL, 0u,
                       &reply, &handle);
     if (result != ASTRA_OK) return result;
-    if (reply.catalog_size < sizeof(header) ||
-        reply.catalog_size > ASTRA_AREA_SIZE_MAX) {
+    if (reply.area_size < sizeof(header) ||
+        reply.area_size > ASTRA_AREA_SIZE_MAX) {
         result = ASTRA_ERROR_IO;
         goto fail;
     }
@@ -119,9 +121,9 @@ AstraResult astra_fonts_catalog_open(AstraHandle service,
     handle = ASTRA_INVALID_HANDLE;
     result = astra_area_map(&catalog->_private_area, ASTRA_AREA_MAP_READ);
     if (result != ASTRA_OK) goto fail;
-    if (catalog->_private_area.size < reply.catalog_size ||
+    if (catalog->_private_area.size < reply.area_size ||
         !astra_font_catalog_validate(catalog->_private_area.address,
-                                     reply.catalog_size)) {
+                                     reply.area_size)) {
         result = ASTRA_ERROR_IO;
         goto fail;
     }
@@ -130,7 +132,7 @@ AstraResult astra_fonts_catalog_open(AstraHandle service,
         result = ASTRA_ERROR_IO;
         goto fail;
     }
-    catalog->_catalog_bytes = reply.catalog_size;
+    catalog->_catalog_bytes = reply.area_size;
     catalog->generation = reply.generation;
     catalog->face_count = header.face_count;
     memcpy(catalog->selected_id, reply.selected_id,
@@ -216,6 +218,50 @@ AstraResult astra_fonts_select(AstraHandle admin, const char *id,
     return exchange(admin, ASTRA_FONT_SERVICE_SELECT, id, id_length,
                     ASTRA_INVALID_HANDLE, 0u, NULL, 0u,
                     &reply, &ignored);
+}
+
+AstraResult astra_fonts_face_open(AstraHandle render, const char *id,
+                                  uint32_t id_length, AstraArea *face,
+                                  uint32_t *length)
+{
+    AstraFontServiceReply reply = {0};
+    AstraHandle handle = ASTRA_INVALID_HANDLE;
+    AstraResult result;
+
+    if (render == ASTRA_INVALID_HANDLE || id == NULL || id_length == 0u ||
+        id_length >= ASTRA_FONT_ID_MAX ||
+        memchr(id, '\0', id_length) != NULL || face == NULL ||
+        face->handle != ASTRA_INVALID_HANDLE || face->address != NULL ||
+        face->size != 0u || face->map_flags != 0u || length == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *length = 0u;
+    result = exchange(render, ASTRA_FONT_SERVICE_OPEN_FACE,
+                      id, id_length, ASTRA_INVALID_HANDLE, 0u, NULL, 0u,
+                      &reply, &handle);
+    if (result != ASTRA_OK) return result;
+    if (reply.area_size < 128u || reply.area_size > ASTRA_FONT_IMPORT_MAX) {
+        result = ASTRA_ERROR_IO;
+        goto failed;
+    }
+    face->handle = handle;
+    handle = ASTRA_INVALID_HANDLE;
+    result = astra_area_map(face, ASTRA_AREA_MAP_READ);
+    if (result != ASTRA_OK || face->size < reply.area_size) {
+        if (result == ASTRA_OK) result = ASTRA_ERROR_IO;
+        goto failed;
+    }
+    *length = reply.area_size;
+    return ASTRA_OK;
+failed:
+    if (handle != ASTRA_INVALID_HANDLE) {
+        AstraResult ignored = astra_handle_close(&handle);
+        (void)ignored;
+    }
+    if (face->handle != ASTRA_INVALID_HANDLE) {
+        AstraResult ignored = astra_area_close(face);
+        (void)ignored;
+    }
+    return result;
 }
 
 AstraResult astra_fonts_import(AstraHandle admin, const void *bytes,
