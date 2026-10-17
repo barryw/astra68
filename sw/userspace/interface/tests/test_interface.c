@@ -1452,9 +1452,40 @@ static void test_list_control(void)
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK && action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
            action.control_id == 73u && action.value == 1);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+                          ASTRA_WINDOW_EVENT_DOWN,
+                          control._private_frame.x + 8,
+                          control._private_frame.y +
+                              theme.control_height + 4);
+    event.data.pointer.click_count = 2u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_NONE);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_ACTIVATE &&
+           action.control_id == 73u && action.value == 1);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x28u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_NONE);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_ACTIVATE &&
+           action.control_id == 73u && action.value == 1);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+                          ASTRA_WINDOW_EVENT_DOWN,
+                          control._private_frame.x + 8,
+                          control._private_frame.y +
+                              2u * theme.control_height + 4u);
+    event.data.pointer.click_count = 2u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_NONE);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+           action.value == 2);
     event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x51u, 0u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
-           ASTRA_OK && action.value == 2);
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_NONE);
     event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x50u, 0u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK && action.type == ASTRA_UI_ACTION_NONE);

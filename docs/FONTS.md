@@ -544,9 +544,15 @@ the FONTS capability, exposes counted family/style names and strike sizes,
 and sends selection through the separate FONTS_ADMIN capability. MC68040
 library/link contracts and host malformed-reply/catalog tests pass. This is
 client infrastructure, not a Fonts application or live typography change.
-Standard startup does not yet publish the service: there is no native
-import transaction, Fonts UI, or renderer consumer, so a saved choice would
-not change text. Those are required before enabling it in a release.
+The disposable display image now starts the service and installs a native
+Fonts bundle. The first UI reads catalog snapshots, groups installed faces by
+family, and opens a style/bitmap-size detail view through the shared List
+control. A disposable QEMU autostart confirms bundle launch and hardware glyph
+submissions; family-detail interaction still needs a focused GUI gate.
+System-font selection, import, and renderer consumption are absent, so the app
+does not claim to change typography yet. Production DE25 still uses the
+previous selected release. The native import transaction and render path must
+land before enabling system font selection in a release.
 
 Haiku reference for this catalog boundary: `src/servers/app/font/FontManager.cpp`
 groups families and styles, `src/servers/app/font/FontFamily.cpp` keeps designed

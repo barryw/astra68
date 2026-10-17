@@ -179,6 +179,8 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/input grants INPUT INPUT_IRQ "
     "serves INPUT_SERVICE required priority=20\n"
     "service /services/clipboard grants serves CLIPBOARD required priority=20\n"
+    "service /services/fonts grants CONFIG_SYSTEM:rw SYSTEM:r LIBS:r "
+    "serves FONTS FONTS_ADMIN required priority=20\n"
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
     "INPUT_SERVICE serves GUI critical priority=20\n"
     "service /services/media grants HOST_DEVICE serves PCM priority=16\n"
@@ -188,10 +190,11 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER VOLUMES VOLUME_ADMIN VOLUME_USAGE PROC:r APPS:r "
     "LIBS:r SYSTEM:r DH0:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
-    "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r APPS:r LIBS:r LOG\n")
+    "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r APPS:r LIBS:r LOG\n"
+    "trusted /apps/Fonts.app grants GUI FONTS LIBS:r\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",
-                    "input", "clipboard", "display", "media", "sampler",
+                    "input", "clipboard", "fonts", "display", "media", "sampler",
                     "desktop",
                     "remote-desktop")
 HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)

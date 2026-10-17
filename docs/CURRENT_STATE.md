@@ -133,10 +133,23 @@ There is now a native validated AFNT catalog snapshot and a draft resident
 policy tests, sanitizer, and analyzer pass; an isolated disposable QEMU boot
 launched it with status zero. Font Kit 2.4 adds a client for read-only catalog
 snapshots and admin-only choice, with malformed-reply/catalog tests and an
-MC68040 library contract pass. Standard startup does not publish it yet. Native
-import transaction, Fonts UI, renderer consumption of saved choice, and their
-release gates remain open. Build-time Python conversion is a development oracle,
-not a user import path.
+MC68040 library contract pass. Disposable display startup now publishes the
+service and installs a native Fonts bundle. Its first UI groups installed
+families and shows designed styles and AFNT strike sizes; shared List activation
+uses Haiku's selected-row double-click/keyboard pattern. MC68040 bundle, image
+policy, Interface sanitizer/analyzer, full userspace `all test`, and NDK
+`dist-check` pass on Beast. A disposable QEMU boot reported fonts and desktop
+service startup status zero; a separate Fonts autostart image launched the
+native bundle and submitted hardware glyph commands. Family-detail interaction
+was not qualified in that boot because the desktop retained input focus.
+Desktop icon-launch
+qualification remains open: the confined `astra-qemu-root` fixture keeps its
+WORK/SOUND exports root-only by design, so the existing icon-position gate
+cannot read Desktop's per-process syslog and loses placement lines from the
+finite kernel trace ring. Do not infer Fonts application launch from that gate.
+Native import transaction, Fonts UI import/system-choice controls, renderer
+consumption of saved choice, and physical release gates remain open. Build-time
+Python conversion is a development oracle, not a user import path.
 
 Current production checkpoint: graphics release
 `57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`,

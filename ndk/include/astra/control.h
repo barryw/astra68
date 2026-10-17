@@ -658,7 +658,7 @@ typedef struct AstraUIAction {
     uint32_t type;
     /** ID of the control that emitted the action. */
     uint32_t control_id;
-    /** Current value for `ASTRA_UI_ACTION_VALUE_CHANGED`. */
+    /** Current value for VALUE_CHANGED, or selected row for List ACTIVATE. */
     int64_t value;
     /** Decimal places for @ref value; zero for nonnumeric actions. */
     uint32_t decimal_places;

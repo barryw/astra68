@@ -29,7 +29,7 @@ GALLERY_PALETTE = (
 
 INSTRUMENT_KINDS = ("framebench", "draw", "sprite", "geometry", "target",
                     "scale", "keys", "mouse", "timer", "thread")
-OBJECT_KINDS = ("atlas", "volume", "drawer", "document")
+OBJECT_KINDS = ("atlas", "volume", "drawer", "document", "fonts")
 OBJECT_PALETTE = ((0, 0, 0, 0), (247, 249, 249, 255),
                   (223, 228, 230, 255), (92, 104, 112, 255),
                   (107, 119, 128, 255), (43, 127, 134, 255),
@@ -78,6 +78,11 @@ def object_strike(kind, size):
         for y in (12, 17, 22):
             line(13, y, 27, y, 4)
         line(13, 27, 21, 27, 5)
+    elif kind == "fonts":
+        polygon(((8.5, 4.5), (31.5, 4.5), (31.5, 35.5), (8.5, 35.5)), 1, 3)
+        line(12, 29, 20, 11, 5)
+        line(20, 11, 28, 29, 5)
+        line(15, 23, 25, 23, 4)
     elif kind == "volume":
         polygon(((5, 10), (35, 10), (35, 31), (5, 31)), 7, 6)
         polygon(((11, 15), (29, 15), (29, 21), (11, 21)), 7, 6)

@@ -5101,11 +5101,21 @@ static AstraResult pointer_event(AstraUIContext *context,
         if (slider)
             slider_pointer(context, captured, event->data.pointer.x,
                            event->data.pointer.y, action);
-        else if (choice && hit == captured)
-            choice_action(
-                context, captured,
-                context->_private_controls[captured]._private_minimum_value,
-                action);
+        else if (choice && hit == captured) {
+            AstraControl *control = &context->_private_controls[captured];
+            int invoke = control->_private_control_kind == ASTRA_CONTROL_LIST &&
+                         event->data.pointer.click_count >= 2u &&
+                         control->_private_value >= 0 &&
+                         control->_private_value == control->_private_minimum_value;
+
+            choice_action(context, captured, control->_private_minimum_value,
+                          action);
+            if (invoke) {
+                action->type = ASTRA_UI_ACTION_ACTIVATE;
+                action->control_id = control->_private_id;
+                action->value = control->_private_value;
+            }
+        }
         else if (splitter) {
             AstraResult result = splitter_pointer(
                 context, captured, event->data.pointer.x,
@@ -5283,6 +5293,13 @@ static AstraResult activate_control(AstraUIContext *context, uint32_t index,
 {
     AstraControl *control = &context->_private_controls[index];
 
+    if (control->_private_control_kind == ASTRA_CONTROL_LIST) {
+        if (control->_private_value < 0) return ASTRA_OK;
+        action->type = ASTRA_UI_ACTION_ACTIVATE;
+        action->control_id = control->_private_id;
+        action->value = control->_private_value;
+        return ASTRA_OK;
+    }
     if (control->_private_control_kind == ASTRA_CONTROL_SLIDER ||
         control->_private_control_kind == ASTRA_CONTROL_DIAL ||
         control->_private_control_kind == ASTRA_CONTROL_STEPPER ||
