@@ -507,6 +507,20 @@ Coverage/policy host and sanitizer tests and the full userspace suite pass on
 Beast. The disposable native GUI gate also passes TTF import, family details,
 keyboard style selection, saved system choice, restart, and uninstall with
 catalog v3. These checks do not replace the open physical release gate.
+Detail rows allocate from catalog style lengths with checked size arithmetic,
+and place eligibility and size before the style name. A 127-byte valid style
+previously imported successfully but exceeded the row buffer when its family
+opened. `test-fonts-ui.py --long-style` now covers import, details, selection,
+restart, and uninstall for that case; the gate failed before the fix and passes
+afterward. Haiku's `FontSelectionView.cpp:UpdateFontsMenu` passes complete
+style names to owned `BMenuItem` labels; Astra retains its List/AstraString
+controls and sizes their backing storage from the validated catalog.
+
+The shared renderer also makes AFNT a dependency of HPS display helpers.
+`fpga/arty/linux/Makefile` now includes the existing AFNT, CRC32, and UTF-8
+sources for every renderer consumer. Host and AArch64 display self-tests and
+the AArch64 host-read helper link pass; this repairs the clean publisher's
+previous unresolved `astra_afnt_*` references without a second font reader.
 
 This covers the common current macOS outline containers listed by
 [Apple Font Book](https://support.apple.com/en-gb/guide/font-book/fntbk1000/mac)

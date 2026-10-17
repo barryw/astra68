@@ -56,7 +56,8 @@ static const char system_font_requirements[] =
 static AstraChoiceItem families[FONTS_FACE_MAX];
 static uint32_t family_count;
 static AstraChoiceItem *details;
-static char (*detail_text)[160];
+static char *detail_text;
+static uint32_t detail_text_stride;
 static uint32_t *detail_faces;
 static uint32_t detail_capacity;
 static uint32_t detail_count;
@@ -110,6 +111,7 @@ static int same_family(const AstraInstalledFont *face,
 static uint32_t collect_families(void)
 {
     uint32_t strikes = 0u;
+    uint32_t longest_style = 0u;
 
     if (catalog.face_count > FONTS_FACE_MAX) return FONTS_FAIL_CATALOG;
     for (uint32_t at = 0u; at < catalog.face_count; ++at) {
@@ -122,6 +124,8 @@ static uint32_t collect_families(void)
             face.strike_count > FONTS_DETAIL_MAX - strikes)
             return FONTS_FAIL_CATALOG;
         strikes += face.strike_count;
+        if (face.style_length > longest_style)
+            longest_style = face.style_length;
         for (; match < family_count; ++match)
             if (same_family(&face, &families[match])) break;
         if (match != family_count) continue;
@@ -130,11 +134,16 @@ static uint32_t collect_families(void)
         };
         ++family_count;
     }
+    uint64_t stride = (uint64_t)longest_style +
+        sizeof("Cannot be system font  ·  65535x65535 px  ·  ");
+    if (stride > UINT32_MAX || (uint64_t)strikes * stride > SIZE_MAX)
+        return FONTS_FAIL_CATALOG;
+    detail_text_stride = (uint32_t)stride;
     if (strikes != 0u) {
         details = astra_runtime_allocate(
             (size_t)strikes * sizeof(*details));
         detail_text = astra_runtime_allocate(
-            (size_t)strikes * sizeof(*detail_text));
+            (size_t)strikes * detail_text_stride);
         detail_faces = astra_runtime_allocate(
             (size_t)strikes * sizeof(*detail_faces));
         if (details == NULL || detail_text == NULL || detail_faces == NULL)
@@ -164,19 +173,20 @@ static uint32_t collect_details(uint32_t family_index)
             if (astra_fonts_catalog_strike(&catalog, at, strike_at,
                                            &strike) != ASTRA_OK)
                 return FONTS_FAIL_CATALOG;
-            astra_string_init(&text, detail_text[detail_count],
-                              sizeof(detail_text[detail_count]));
-            if (!astra_string_append_bytes(&text, face.style,
-                                           face.style_length) ||
+            astra_string_init(&text,
+                              detail_text + (size_t)detail_count * detail_text_stride,
+                              detail_text_stride);
+            if (!astra_string_append(&text,
+                    (face.flags & ASTRA_INSTALLED_FONT_SELECTABLE) != 0u ?
+                    "Can be system font" : "Cannot be system font") ||
                 !astra_string_append(&text, "  ·  ") ||
                 (strike.pixel_width != 0u &&
                  (!astra_string_append_u64(&text, strike.pixel_width) ||
                   !astra_string_append_char(&text, 'x'))) ||
                 !astra_string_append_u64(&text, strike.pixel_height) ||
                 !astra_string_append(&text, " px  ·  ") ||
-                !astra_string_append(&text,
-                    (face.flags & ASTRA_INSTALLED_FONT_SELECTABLE) != 0u ?
-                    "Can be system font" : "Cannot be system font"))
+                !astra_string_append_bytes(&text, face.style,
+                                           face.style_length))
                 return FONTS_FAIL_CATALOG;
             details[detail_count] = (AstraChoiceItem){
                 text.text, text.length, {0u, 0u}

@@ -108,8 +108,13 @@ def main():
     parser.add_argument("qemu")
     parser.add_argument("rom")
     parser.add_argument("image")
-    parser.add_argument("font", help="TTF to import through Fonts from DH0")
+    parser.add_argument("font", nargs="?",
+                        help="font to import through Fonts from DH0")
+    parser.add_argument("--long-style", action="store_true",
+                        help="exercise the longest accepted AFNT style name")
     args = parser.parse_args()
+    if args.font is None and not args.long_style:
+        parser.error("font is required unless --long-style is selected")
     if os.geteuid() != 0:
         parser.error("run as root observer with ASTRA_TEST_QEMU_UID/GID set to a non-root account")
     with tempfile.TemporaryDirectory(prefix="astra-fonts-ui-") as work:
@@ -117,7 +122,21 @@ def main():
         shutil.copyfile(args.image, image)
         astra_image.install(image, vim_runtime=None)
         previous, old_inventory = state_on_disk(image, work)
-        astra_image._replace_volume_file(image, args.font,
+        source = args.font
+        if args.long_style:
+            parts = font_format.parse_afnt((HERE.parents[1] /
+                "sw/userspace/graphics/fonts/astra-workbench.afnt").read_bytes())
+            metadata = json.loads(parts[b"NAME"])
+            metadata.update(family="Long Style Fixture", style="S" * 127)
+            source = str(Path(work) / "long-style.afnt")
+            Path(source).write_bytes(font_format.serialize_afnt(
+                metadata, parts[b"CMAP"],
+                [parts[b"STRK"][at:at + font_format.STRIKE.size]
+                 for at in range(4, len(parts[b"STRK"]), font_format.STRIKE.size)],
+                [parts[b"GLYP"][at:at + font_format.GLYPH.size]
+                 for at in range(4, len(parts[b"GLYP"]), font_format.GLYPH.size)],
+                parts[b"BITM"]))
+        astra_image._replace_volume_file(image, source,
                                          "/zz-astra-font.ttf")
         machine = terminal.Machine(args.qemu, args.rom, image, work)
         try:
@@ -220,7 +239,8 @@ def main():
             stderr=subprocess.STDOUT, text=True)
         if "Inode:" in result.stdout:
             raise RuntimeError("UI uninstall left AFNT object on disk")
-    print("ASTRA FONTS UI PASS TTF import, AFNT object, family detail, system choice, uninstall")
+    print("ASTRA FONTS UI PASS %s, AFNT object, family detail, system choice, uninstall" %
+          ("long AFNT style" if args.long_style else "font import"))
     return 0
 
 

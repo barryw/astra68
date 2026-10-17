@@ -49,7 +49,9 @@ GRAPHICS_INCLUDE := $(GRAPHICS)/include
 GRAPHICS_GENERATED := $(GRAPHICS)/build/generated
 TEXTURE_REFERENCE_SOURCE := $(GRAPHICS)/src/texture_reference.c
 GRAPHICS_SOURCES := $(GRAPHICS)/src/surface.c \
-	$(GRAPHICS)/src/render_builder.c
+	$(GRAPHICS)/src/render_builder.c \
+	../../../sw/common/afnt.c ../../../sw/common/crc32.c \
+	../../../sw/common/utf8.c
 WINDOW_SCENE_SOURCES := astra_window_scene.c
 GRAPHICS_FONT_HEADERS := $(GRAPHICS_GENERATED)/astra_font8x8.inc \
 	$(GRAPHICS_GENERATED)/astra_ui_font.inc \

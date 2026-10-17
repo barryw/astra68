@@ -80,6 +80,14 @@ failure trace remain the long-run release gate, especially for the historical
 22-hour `WAIT_MULTIPLE` panic. The fixed ROM is diagnostic only, not selected
 on DE25.
 
+The 2026-10-17 font-trial precheck found one automatic restart of that selected
+production release and a retained `deferred worker service failed` panic from
+the 2026-10-16T20:14:31Z ROM. The report is preserved on Beast as
+`/var/tmp/astra-pre-font-production-panic-20261017.log`, SHA-256
+`689c383252c8050574d7ae528aa96b9445a061bac1423f1664353f4d1f6c91f6`.
+The diagnostic reaper fix was not selected on the board. Its separate Beast
+soak remains live past 18 hours; that partial run does not close stability.
+
 Font-management work is isolated from production storage. Interface Kit 6.0
 adds a shared, composed List control with an Interface Gallery consumer and
 requires draw-list views for native controls and menus. This ABI bump is
@@ -109,6 +117,17 @@ Beast host and sanitizer coverage/policy tests, full userspace `all test`,
 and NDK `dist-check` pass. The normal root-observed disposable QEMU GUI gate passes native TTF
 import, family details, keyboard selection, saved system choice, restart,
 and uninstall with catalog v3; QEMU remains unprivileged.
+The native GUI regression also passes a valid AFNT with a 127-byte style name:
+the previous fixed row buffer rejected details after import, preventing choice
+save. Row storage now follows catalog lengths with checked arithmetic;
+eligibility and size precede the style so they stay visible when a long name
+is clipped. The clean release publisher also caught missing shared AFNT
+dependencies in the HPS display-helper link. The common renderer source list
+now includes the existing codec; host/AArch64 display self-tests and the
+AArch64 host-read helper link pass. Initial publication failed because
+FluidSynth moved, then because of the missing codec link; neither produced or
+deployed a release. Beast publication uses the clean pinned checkout through
+`FLUIDSYNTH_ROOT=/home/barry/Git/fluidsynth`.
 Fixed-size Amiga faces without all three UI sizes cannot become system fonts.
 Custom variable coordinates remain
 open. Shared C AFNT 0.2 validation and packing round-trip shipped fonts,
