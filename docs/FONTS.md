@@ -705,6 +705,34 @@ and complete physical qualification.
 Full userspace tests and updated NDK distribution/examples pass in
 `/var/tmp/astra-font-live-remeasure-sdk-20261017.log`.
 
+Physical Iosevka qualification found two further stale-pixel paths despite
+successful client adoption: Desktop submitted redraw commands without asking
+for presentation, and Display retained its menu-bar cache after font changes
+when no popup was open. Desktop now uses the existing posted-frame presentation
+contract for every paint; its initial synchronous presentation still supplies
+the startup visibility barrier. Display invalidates the system-surface cache
+alongside its window caches. The existing content-bank copy-forward mechanism
+preserves pixels across consecutive presentations. No new buffering path is
+introduced. Haiku's read-only references are
+`src/servers/app/Desktop.cpp:RebuildAndRedrawAfterWindowChange` (dirty pixels
+must reach screen redraw) and the font-change propagation references above.
+The real-AFNT cache regression fails before invalidation and passes afterward.
+Display/Desktop host and sanitizer gates, MC68040 builds, Display/Fonts
+analyzers and coherent userspace/ROM pass in
+`/var/tmp/astra-font-live-present-green-20261017.log` on Beast.
+The native import test now waits for a fresh successful UI import completion
+instead of sleeping eight seconds; a retained-log regression covers readiness.
+The native Iosevka GUI gate passes import, live Desktop/Fonts adoption,
+persisted choice, restart, built-in restoration and uninstall in
+`/var/tmp/astra-font-live-present-ui-20261017.log`. Physical replacement
+qualification remains required.
+
+Font previews will extend the shared Label control with an explicit installed
+face and size. Ordinary system labels retain their fixed role sizes. This
+follows Haiku's `src/preferences/appearance/FontSelectionView.cpp`, which uses
+an ordinary text control with a chosen font for its preview, rather than a
+preferences-only text renderer. This extension is not implemented yet.
+
 The shared renderer also makes AFNT a dependency of HPS display helpers.
 `fpga/arty/linux/Makefile` now includes the existing AFNT, CRC32, and UTF-8
 sources for every renderer consumer. Host and AArch64 display self-tests and

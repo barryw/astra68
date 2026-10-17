@@ -528,7 +528,10 @@ static uint32_t import_selected(void)
                   "Could not import font file";
     }
     if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-    return present();
+    uint32_t status = present();
+    if (status == ASTRA_STATUS_OK && result == ASTRA_OK)
+        (void)astra_log("fonts UI import complete");
+    return status;
 }
 
 static uint32_t action(const AstraUIAction *event)

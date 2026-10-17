@@ -4480,6 +4480,7 @@ static AstraResult refresh_system_font(DisplayState *state)
     state->font_generation = generation;
     display_font_release(previous);
     menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+    state->system_initialized = 0u;
     state->launch_drawn = 0u;
     for (uint32_t at = 0u; at < state->count; ++at) {
         DisplayWindow *window = &state->windows[at];

@@ -30,6 +30,10 @@ def display_count(machine, name):
         "path": "/machine", "property": "astra-display-" + name})
 
 
+def fresh_lines(machine, trace_before, syslog_before):
+    return machine.said(trace_before)[0] + machine.syslog_lines()[syslog_before:]
+
+
 def open_fonts(machine):
     before = display_count(machine, "glyph-commands")
     trace_before = machine.sequence()
@@ -38,7 +42,7 @@ def open_fonts(machine):
     end = time.monotonic() + 30
     while time.monotonic() < end:
         # Retained host logs include earlier boots and window activations.
-        lines = machine.said(trace_before)[0] + machine.syslog_lines()[syslog_before:]
+        lines = fresh_lines(machine, trace_before, syslog_before)
         if any("launch /apps/Fonts.app" in line and "status=0" in line
                for line in lines) and \
                 display_count(machine, "glyph-commands") > before:
@@ -47,10 +51,20 @@ def open_fonts(machine):
     raise RuntimeError("Fonts window did not open")
 
 
+def wait_import(machine, trace_before, syslog_before):
+    end = time.monotonic() + 90
+    while time.monotonic() < end:
+        lines = fresh_lines(machine, trace_before, syslog_before)
+        if any("fonts UI import complete" in line for line in lines):
+            return
+        time.sleep(.1)
+    raise RuntimeError("Fonts import UI did not complete: " + repr(lines[-30:]))
+
+
 def wait_live_font(machine, prefix, trace_before, syslog_before, glyphs_before):
     end = time.monotonic() + 15
     while time.monotonic() < end:
-        lines = machine.said(trace_before)[0] + machine.syslog_lines()[syslog_before:]
+        lines = fresh_lines(machine, trace_before, syslog_before)
         adopted = {}
         for line in lines:
             match = re.search(r"display font adopted: (Desktop|Fonts) -> ([A-Za-z0-9:._-]+)", line)
@@ -174,8 +188,10 @@ def main():
             machine.qmp.key("home")
             for _ in range(row):
                 machine.qmp.key("down")
+            trace_before = machine.sequence()
+            syslog_before = len(machine.syslog_lines())
             machine.qmp.key("ret")
-            time.sleep(8)
+            wait_import(machine, trace_before, syslog_before)
             before = display_count(machine, "glyph-commands")
             # First family row: client List begins at (24, 70).
             machine.qmp.double_click(520, 330)

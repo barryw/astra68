@@ -25,6 +25,21 @@ static uint32_t font_snapshot_closes;
 static uint32_t font_reply_status;
 static uint32_t font_duplicate_status;
 static uint32_t font_duplicate_closes;
+static const char *font_catalog_selected;
+
+AstraResult astra_fonts_catalog_open(AstraHandle service, AstraFontsCatalog *catalog)
+{
+    assert(service == 0xb00u && font_catalog_selected != NULL);
+    catalog->generation = 9u;
+    strcpy(catalog->selected_id, font_catalog_selected);
+    return ASTRA_OK;
+}
+
+AstraResult astra_fonts_catalog_close(AstraFontsCatalog *catalog)
+{
+    *catalog = (AstraFontsCatalog)ASTRA_FONTS_CATALOG_INIT;
+    return ASTRA_OK;
+}
 
 AstraResult astra_fonts_face_open(AstraHandle render, const char *id,
                                    uint32_t id_length, AstraArea *face,
@@ -1436,6 +1451,13 @@ static void test_window_graphics(void)
                 assert(use_display_font(owned) == ASTRA_OK &&
                        font_snapshot_closes == closes);
                 DisplayState fonts = {.ui_font = owned, .fonts = &registry};
+                fonts.font_catalog = 0xb00u;
+                fonts.system_initialized = 1u;
+                font_catalog_selected = "user:fixture";
+                assert(refresh_system_font(&fonts) == ASTRA_OK);
+                assert(fonts.system_initialized == 0u && fonts.font_generation == 9u &&
+                       owned->references == 1u);
+                font_catalog_selected = NULL;
                 astra_message_header_set(&request.header, sizeof(request),
                     ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT, 9u);
                 assert(valid_session_request(&request.header, sizeof(request),

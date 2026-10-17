@@ -1,5 +1,33 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-17: live Fonts software trial rejected for stale pixels
+
+- Beast clean-built source `31b709ecdcdae3c24e071332e56cbc0883b764a1`;
+  release `0824c4104c68a0f870cb1f67f1df09c71b1722a6b6b5474ccd3dced04578de84`,
+  ROM `05bc7fa465f8c7d010ee741a882755354cf00044d5770df7b8ce45fe70014ebd`,
+  source manifest `e3fe4d7047c33c8d1f9ae14daf874efa5f7213949ae9de32e0935885ceb53dc1`.
+  No RTL, constraints, route, fabric installation or kernel selection changed.
+- Disposable DE25 Iosevka Regular 34.9.0 import, live adoption acknowledgements,
+  saved choice, restart, built-in restoration and uninstall all pass. Provider
+  cleanup and no-panic checks pass. Visual inspection rejects live acceptance:
+  Fonts changes immediately, while Desktop labels and menu headings keep the
+  previous face until restart. The shared Desktop presentation and Display
+  menu-cache invalidation defects are being corrected; no hardware workaround.
+  HDMI DMA captures pass at 1920x1080, 6,220,800 RGB bytes. Choice capture has
+  333 glyph commands and 118/118 submissions/completions.
+- Evidence: Beast `/var/tmp/astra-font-live-evidence-20261017/`, trial log
+  `/var/tmp/astra-font-live-physical-trial-20261017.log`. Failed visual evidence
+  is retained. Production selector stays `57078599`; stopped production image
+  SHA-256 before/after is
+  `beed144787492f7194927676f706d980a29837e387d36ca76cc429195d78c6dd`.
+  Runtime/audio/remote services restored active, zero automatic restarts.
+- Same installed RBF `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`:
+  Beast Quartus Pro 26.1.1 Build 130, 40,754/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376 DSPs. All production
+  clocks constrained; graphics setup +0.259 ns, worst setup +0.007 ns,
+  worst hold +0.000 ns. No new timing measurement or failed cone.
+  Disposition: software candidate withheld pending corrected physical retry.
+
 ## 2026-10-17: blend-isolation shell booted, initial production pixels match
 
 - Installed RBF

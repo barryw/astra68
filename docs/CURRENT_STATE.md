@@ -2,6 +2,31 @@
 
 Status: active continuation map, 2026-10-17
 
+The `31b709ec` Fonts candidate passed native adoption/persistence checks but
+failed physical live-pixel acceptance. Release
+`0824c4104c68a0f870cb1f67f1df09c71b1722a6b6b5474ccd3dced04578de84`
+(ROM `05bc7fa465f8c7d010ee741a882755354cf00044d5770df7b8ce45fe70014ebd`,
+source manifest `e3fe4d7047c33c8d1f9ae14daf874efa5f7213949ae9de32e0935885ceb53dc1`)
+remains withheld. Captures show Iosevka in Fonts immediately, but Desktop/menu
+text changes only after reboot. Desktop paint lacked presentation; Display
+failed to invalidate its system-menu cache. Both paths now use their existing
+presentation/invalidation mechanisms. Host/sanitizer/native builds and analyzers
+pass. The corrected native GUI gate passes Iosevka import, live adoption,
+persisted choice, restart and uninstall in
+`/var/tmp/astra-font-live-present-ui-20261017.log`; physical retry remains pending.
+Evidence is retained on Beast under
+`/var/tmp/astra-font-live-evidence-20261017/`. The disposable trial imported
+Iosevka, selected and persisted it, restored the built-in face and uninstalled
+the imported object without a panic or retained provider. Production selector
+`57078599`, fabric and user image were preserved: stopped image hashes before
+and after both equal
+`beed144787492f7194927676f706d980a29837e387d36ca76cc429195d78c6dd`.
+Runtime/audio/remote services are restored active with zero automatic restarts.
+The import gate now waits for a fresh UI completion marker; its earlier fixed
+delay captured the source browser before conversion finished. Shared Label
+preview extension is agreed but still pending, along with designed-style
+resolution and the remaining Fonts acceptance work.
+
 The blend-isolation FPGA shell is now installed on DE25: RBF
 `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`.
 U-Boot reconfiguration and exact-SOF JTAG verification pass. The existing

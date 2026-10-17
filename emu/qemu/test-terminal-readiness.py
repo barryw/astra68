@@ -153,11 +153,12 @@ class FontsMachine:
         return ["old launch /apps/Fonts.app status=0"], 7
 
     def syslog_lines(self):
-        lines = ["old launch /apps/Fonts.app status=0"]
+        lines = ["old launch /apps/Fonts.app status=0", "old fonts UI import complete"]
         if self.clicked:
             self.polls += 1
             if self.polls >= 2:
                 lines.append("new launch /apps/Fonts.app status=0")
+                lines.append("new fonts UI import complete")
         return lines
 
 
@@ -165,5 +166,12 @@ machine = FontsMachine()
 with patch.object(fonts.time, "sleep"):
     fonts.open_fonts(machine)
 assert machine.polls == 2, "old launch log satisfied new Fonts launch"
+
+machine = FontsMachine()
+syslog_before = len(machine.syslog_lines())
+machine.clicked = True
+with patch.object(fonts.time, "sleep"):
+    fonts.wait_import(machine, 7, syslog_before)
+assert machine.polls == 2, "old import log satisfied new Fonts import"
 
 print("native launch and terminal command readiness test: PASS")

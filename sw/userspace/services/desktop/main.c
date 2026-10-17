@@ -568,7 +568,6 @@ static AstraResult paint(AstraSurface *content,
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraDrawList list = ASTRA_DRAW_LIST_INIT;
-    AstraFence fence = ASTRA_FENCE_INIT;
     AstraDrawPaint canvas = ASTRA_DRAW_PAINT_INIT;
     AstraBlitOptions blend = ASTRA_BLIT_OPTIONS_INIT;
     const AstraRectI32 whole = { 0, 0, DESKTOP_WIDTH, DESKTOP_HEIGHT };
@@ -659,12 +658,7 @@ static AstraResult paint(AstraSurface *content,
             &blend);
     }
     if (result == ASTRA_OK)
-        result = astra_draw_submit(&list, &fence);
-    if (fence._private_handle != ASTRA_INVALID_HANDLE) {
-        AstraResult ignored = astra_fence_close(&fence);
-
-        (void)ignored;
-    }
+        result = astra_draw_post(&list, ASTRA_DRAW_POST_PRESENT);
     if (list._private_handle != ASTRA_INVALID_HANDLE) {
         AstraResult ignored = astra_draw_list_close(&list);
 
@@ -785,6 +779,7 @@ int astra_main(const AstraStartupInfo *startup)
             result = paint(&content, &apps);
         }
         if (result == ASTRA_OK)
+            /* Startup readiness waits for the initial frame to be visible. */
             result = astra_window_present(&window);
         if (result != ASTRA_OK)
             status = DESKTOP_FAIL_GRAPHICS + (uint32_t)(-result);
