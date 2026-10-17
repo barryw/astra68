@@ -1,8 +1,8 @@
 #ifndef ASTRA_SHA256_H
 #define ASTRA_SHA256_H
 
-/* SHA-256 (FIPS 180-4), for naming host-side assets such as SoundFonts by
- * their content. Streaming: init, any number of updates, final. */
+/* SHA-256 (FIPS 180-4), shared by native and HPS content-addressed stores.
+ * Streaming: init, any number of updates, final. */
 
 #include <stddef.h>
 #include <stdint.h>

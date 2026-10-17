@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-#include "astra_sha256.h"
+#include <astra/sha256.h>
 
 #include <string.h>
 

@@ -24,11 +24,13 @@ LIBRARIES := $(ASTRA_CONFIG_LIBRARY) $(ASTRA_LIBC_LIBRARY) \
 include ../../dynamic-program.mk
 
 $(COMMON): ../../../common/font_catalog.c ../../../common/afnt.c \
-		../../../common/crc32.c ../../../common/utf8.c
+		../../../common/crc32.c ../../../common/utf8.c \
+		../../../common/sha256.c ../../../common/font_store.c
 	$(MAKE) -C ../../../common m68k
 
 $(HOST_COMMON): ../../../common/font_catalog.c ../../../common/afnt.c \
-		../../../common/crc32.c ../../../common/utf8.c
+		../../../common/crc32.c ../../../common/utf8.c \
+		../../../common/sha256.c ../../../common/font_store.c
 	$(MAKE) -C ../../../common host
 
 build/m68k/main.o: main.c policy.h ../../../include/astra/font_service.h \
@@ -52,7 +54,9 @@ sanitize: test
 	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		policy.c ../../../common/font_catalog.c ../../../common/afnt.c \
-		../../../common/crc32.c ../../../common/utf8.c tests/test_policy.c \
+		../../../common/crc32.c ../../../common/utf8.c \
+		../../../common/sha256.c ../../../common/font_store.c \
+		tests/test_policy.c \
 		-o build/host/test_policy_sanitize
 	./build/host/test_policy_sanitize
 

@@ -5,7 +5,7 @@
 #include "astra_audio_convert.h"
 #include "astra_audio_synth.h"
 #include "astra_graphics_hw.h"
-#include "astra_sha256.h"
+#include <astra/sha256.h>
 
 #include <astra/audio_host.h>
 #include <astra/audio_mailbox.h>

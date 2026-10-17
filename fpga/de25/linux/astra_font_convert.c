@@ -4,7 +4,7 @@
 #include <astra/theme.h>
 #include <astra/utf8.h>
 
-#include "../../arty/linux/astra_sha256.h"
+#include <astra/sha256.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H

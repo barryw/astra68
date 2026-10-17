@@ -150,6 +150,16 @@ finite kernel trace ring. Do not infer Fonts application launch from that gate.
 Native import transaction, Fonts UI import/system-choice controls, renderer
 consumption of saved choice, and physical release gates remain open. Build-time
 Python conversion is a development oracle, not a user import path.
+Draft installed-font storage now uses full SHA-256 content tokens and a single
+validated Config Kit inventory value as its future atomic publication point.
+The service caps AFNT reads, verifies referenced objects, and falls back to
+built-in faces without editing damaged user settings. This is groundwork only:
+the native import operation, source conversion worker, and UI are still absent.
+Beast MC68040 font-service build, focused tests, sanitizer and analyzer pass;
+full userspace `all test` passed before the final logging-only change. A fresh
+disposable image with the final service passes the Fonts native autostart and
+hardware-glyph QEMU gate. Inventory recovery with an injected damaged settings
+document has not yet been exercised in QEMU.
 
 Current production checkpoint: graphics release
 `57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`,

@@ -3,6 +3,7 @@
 #include <astra/filesystem_library.h>
 #include <astra/font_catalog.h>
 #include <astra/font_service.h>
+#include <astra/font_store.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
@@ -24,6 +25,7 @@ ASTRA_PROGRAM("fonts", 0, 1, 0, "Barry Walker",
 #define FONT_FACE_MAX 64u
 #define FONT_STRIKE_MAX 32u
 #define FONT_FILE_MAX (4u * 1024u * 1024u)
+#define FONT_INVENTORY_MAX (FONT_FACE_MAX * ASTRA_FONT_OBJECT_TOKEN_SIZE)
 
 typedef struct FontEntry {
     char id[ASTRA_FONT_FACE_ID_MAX];
@@ -39,12 +41,85 @@ static AstraConfig config = ASTRA_CONFIG_INIT;
 static uint32_t installed_count;
 static uint32_t generation = 1u;
 static char selected[ASTRA_FONT_FACE_ID_MAX];
+static char inventory_text[FONT_INVENTORY_MAX];
+static char inventory_tokens[FONT_FACE_MAX][ASTRA_FONT_OBJECT_TOKEN_SIZE];
 
 static FontEntry *find_face(const char *id)
 {
     for (uint32_t at = 0u; at < installed_count; ++at)
         if (strcmp(installed[at].id, id) == 0) return &installed[at];
     return NULL;
+}
+
+static uint32_t read_afnt(const char *path, void **bytes, uint32_t *length)
+{
+    AstraFile file = ASTRA_FILE_INIT;
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    uint32_t status = astra_filesystem_open(
+        &files.filesystem, path, ASTRA_VFS_OPEN_READ, &file);
+    if (status != ASTRA_VFS_OK) return status;
+    status = astra_filesystem_file_info(&file, &info);
+    if (status == ASTRA_VFS_OK &&
+        (info.kind != ASTRA_VFS_KIND_FILE || info.byte_size == 0u ||
+         info.byte_size > FONT_FILE_MAX))
+        status = ASTRA_VFS_ERR_INVALID;
+    if (status == ASTRA_VFS_OK) {
+        *bytes = astra_runtime_allocate((size_t)info.byte_size);
+        if (*bytes == NULL) status = ASTRA_VFS_ERR_LIMIT;
+    }
+    *length = 0u;
+    while (status == ASTRA_VFS_OK && *length < info.byte_size) {
+        uint32_t moved = 0u;
+        status = astra_filesystem_read(
+            &file, (uint8_t *)*bytes + *length,
+            (uint32_t)info.byte_size - *length, &moved);
+        if (status == ASTRA_VFS_OK && moved == 0u) status = ASTRA_VFS_ERR_IO;
+        *length += moved;
+    }
+    uint32_t closed = astra_filesystem_close(&file);
+    if (status == ASTRA_VFS_OK) status = closed;
+    if (status != ASTRA_VFS_OK) {
+        astra_runtime_deallocate(*bytes);
+        *bytes = NULL;
+        *length = 0u;
+    }
+    return status;
+}
+
+static uint32_t load_face(const char *path, const char *id, uint32_t flags,
+                          const char *token)
+{
+    FontEntry *entry;
+    void *bytes = NULL;
+    uint32_t length = 0u;
+    uint32_t status;
+
+    if (installed_count == FONT_FACE_MAX || find_face(id) != NULL)
+        return ASTRA_VFS_ERR_LIMIT;
+    status = read_afnt(path, &bytes, &length);
+    if (status != ASTRA_VFS_OK) return status;
+    if (token != NULL) {
+        char actual[ASTRA_FONT_OBJECT_TOKEN_SIZE];
+        astra_font_object_token(bytes, length, actual);
+        if (strcmp(actual, token) != 0) status = ASTRA_VFS_ERR_INVALID;
+    }
+    entry = &installed[installed_count];
+    if (status == ASTRA_VFS_OK && strlen(id) >= sizeof(entry->id))
+        status = ASTRA_VFS_ERR_INVALID;
+    if (status == ASTRA_VFS_OK) {
+        strcpy(entry->id, id);
+    }
+    if (status == ASTRA_VFS_OK &&
+        (!astra_font_catalog_face_from_afnt(
+             bytes, length, entry->id, (uint32_t)strlen(entry->id), flags,
+             entry->family, sizeof(entry->family), entry->style,
+             sizeof(entry->style), entry->strikes, FONT_STRIKE_MAX,
+             &entry->face)))
+        status = ASTRA_VFS_ERR_INVALID;
+    if (status == ASTRA_VFS_OK)
+        ++installed_count;
+    astra_runtime_deallocate(bytes);
+    return status;
 }
 
 static uint32_t scan(const char *root, const char *prefix, uint32_t flags)
@@ -66,9 +141,7 @@ static uint32_t scan(const char *root, const char *prefix, uint32_t flags)
                                           sizeof(node->name));
             size_t name_length;
             char path[ASTRA_VFS_PATH_MAX];
-            FontEntry *entry;
-            void *bytes = NULL;
-            uint32_t length = 0u;
+            char id[ASTRA_FONT_FACE_ID_MAX];
 
             if (name_end == NULL) continue;
             name_length = (size_t)(name_end - node->name);
@@ -77,32 +150,54 @@ static uint32_t scan(const char *root, const char *prefix, uint32_t flags)
                 name_length < 6u || strcmp(node->name + name_length - 5u,
                                             ".afnt") != 0)
                 continue;
-            if (installed_count == FONT_FACE_MAX) {
-                status = ASTRA_VFS_ERR_LIMIT;
-                break;
-            }
-            entry = &installed[installed_count];
-            int id_length = snprintf(entry->id, sizeof(entry->id), "%s%.*s",
+            int id_length = snprintf(id, sizeof(id), "%s%.*s",
                                      prefix, (int)(name_length - 5u),
                                      node->name);
             int path_length = snprintf(path, sizeof(path), "%s/%s", root,
                                        node->name);
-            if (id_length <= 0 || (size_t)id_length >= sizeof(entry->id) ||
+            if (id_length <= 0 || (size_t)id_length >= sizeof(id) ||
                 path_length <= 0 || (size_t)path_length >= sizeof(path))
                 continue;
-            if (astra_process_read_file_alloc(&files, path, &bytes, &length) !=
-                ASTRA_VFS_OK) continue;
-            if (length <= FONT_FILE_MAX &&
-                astra_font_catalog_face_from_afnt(
-                    bytes, length, entry->id, (uint32_t)id_length, flags,
-                    entry->family, sizeof(entry->family), entry->style,
-                    sizeof(entry->style), entry->strikes, FONT_STRIKE_MAX,
-                    &entry->face)) ++installed_count;
-            astra_runtime_deallocate(bytes);
+            if (installed_count == FONT_FACE_MAX) {
+                status = ASTRA_VFS_ERR_LIMIT;
+                break;
+            }
+            (void)load_face(path, id, flags, NULL);
         }
     }
     astra_filesystem_directory_close(&directory);
     return status;
+}
+
+static uint32_t load_inventory(void)
+{
+    uint32_t length = 0u, count = 0u, values = 0u;
+    uint32_t result = astra_config_count(&config, "installed", &values);
+    if (result != ASTRA_CONFIG_OK || values > 1u)
+        return ASTRA_VFS_ERR_INVALID;
+    if (values == 0u) return ASTRA_VFS_OK;
+    result = astra_config_get_string(&config, "installed", 0u,
+                                     inventory_text, sizeof(inventory_text),
+                                     &length);
+    if (result != ASTRA_CONFIG_OK ||
+        !fonts_inventory_parse(inventory_text, length, inventory_tokens,
+                               FONT_FACE_MAX - installed_count, &count))
+        return ASTRA_VFS_ERR_INVALID;
+    for (uint32_t at = 0u; at < count; ++at) {
+        char path[ASTRA_VFS_PATH_MAX];
+        char id[ASTRA_FONT_FACE_ID_MAX];
+        int path_length = snprintf(path, sizeof(path),
+                                   "/CONFIG_SYSTEM/installed/%s.afnt",
+                                   inventory_tokens[at]);
+        int id_length = snprintf(id, sizeof(id), "user:%s",
+                                 inventory_tokens[at]);
+        if (path_length <= 0 || (size_t)path_length >= sizeof(path) ||
+            id_length <= 0 || (size_t)id_length >= sizeof(id))
+            return ASTRA_VFS_ERR_INVALID;
+        uint32_t status = load_face(path, id, 0u, inventory_tokens[at]);
+        if (status != ASTRA_VFS_OK) return status;
+    }
+    return ASTRA_VFS_OK;
 }
 
 static uint32_t catalog_area(uint32_t *area, uint32_t *size)
@@ -206,25 +301,37 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_NOT_FOUND;
     status = scan("/SYSTEM/fonts", "system:", ASTRA_FONT_CATALOG_SYSTEM);
     if (status != ASTRA_VFS_OK) return status;
+    uint32_t system_count = installed_count;
     status = astra_filesystem_mkdir(&files.filesystem,
                                     "/CONFIG_SYSTEM/installed");
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS)
-        return status;
-    status = scan("/CONFIG_SYSTEM/installed", "user:", 0u);
-    if (status != ASTRA_VFS_OK) return status;
-    if (astra_config_open_system(startup, 1u,
+        (void)astra_log_failure("fonts installed directory", status);
+    uint32_t config_status =
+        status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS ?
+        astra_config_open_system(startup, 1u,
                                  ASTRA_CONFIG_OPEN_READ |
                                  ASTRA_CONFIG_OPEN_WRITE, &config,
-                                 &error) == ASTRA_CONFIG_OK) {
+                                 &error) : ASTRA_CONFIG_IO;
+    if (config_status == ASTRA_CONFIG_OK) {
         char wanted[ASTRA_FONT_FACE_ID_MAX] = {0};
         uint32_t length = 0u;
-        if (astra_config_get_string(&config, "system_font", 0u, wanted,
-                                    sizeof(wanted), &length) == ASTRA_CONFIG_OK) {
+        /* Damaged inventory stays untouched; built-ins still boot. */
+        status = load_inventory();
+        if (status != ASTRA_VFS_OK) {
+            (void)astra_log_failure("fonts installed inventory", status);
+            installed_count = system_count;
+        }
+        uint32_t choice_status = astra_config_get_string(
+            &config, "system_font", 0u, wanted, sizeof(wanted), &length);
+        if (choice_status == ASTRA_CONFIG_OK) {
             FontEntry *face = find_face(wanted);
             if (face != NULL && fonts_face_selectable(&face->face))
                 memcpy(selected, wanted, sizeof(selected));
-        }
-    }
+            else (void)astra_log("fonts system_font unavailable");
+        } else if (choice_status != ASTRA_CONFIG_NOT_FOUND)
+            (void)astra_log_failure("fonts system_font", choice_status);
+    } else
+        (void)astra_log_failure("fonts system settings", config_status);
     if (selected[0] == '\0') {
         FontEntry *fallback = find_face("system:astra-workbench");
         if (fallback != NULL && fonts_face_selectable(&fallback->face))

@@ -42,3 +42,34 @@ int fonts_request_valid(const AstraFontServiceRequest *request,
             (admin && request->header.operation == ASTRA_FONT_SERVICE_SELECT)) &&
            memchr(request->face_id, '\0', sizeof(request->face_id)) != NULL;
 }
+
+int fonts_inventory_parse(const char *text, uint32_t length,
+                          char tokens[][ASTRA_FONT_OBJECT_TOKEN_SIZE],
+                          uint32_t capacity, uint32_t *count)
+{
+    uint32_t used = 0u;
+
+    if (count == NULL || (length != 0u && text == NULL) ||
+        (capacity != 0u && tokens == NULL))
+        return 0;
+    *count = 0u;
+    if (length == 0u) return 1;
+    for (uint32_t at = 0u; at < length;) {
+        if (used == capacity || length - at < ASTRA_FONT_OBJECT_TOKEN_LENGTH ||
+            !astra_font_object_token_valid(text + at,
+                                           ASTRA_FONT_OBJECT_TOKEN_LENGTH))
+            return 0;
+        for (uint32_t previous = 0u; previous < used; ++previous)
+            if (memcmp(tokens[previous], text + at,
+                       ASTRA_FONT_OBJECT_TOKEN_LENGTH) == 0)
+                return 0;
+        memcpy(tokens[used], text + at, ASTRA_FONT_OBJECT_TOKEN_LENGTH);
+        tokens[used][ASTRA_FONT_OBJECT_TOKEN_LENGTH] = '\0';
+        ++used;
+        at += ASTRA_FONT_OBJECT_TOKEN_LENGTH;
+        if (at == length) break;
+        if (text[at++] != ' ' || at == length) return 0;
+    }
+    *count = used;
+    return 1;
+}

@@ -549,6 +549,15 @@ Fonts bundle. The first UI reads catalog snapshots, groups installed faces by
 family, and opens a style/bitmap-size detail view through the shared List
 control. A disposable QEMU autostart confirms bundle launch and hardware glyph
 submissions; family-detail interaction still needs a focused GUI gate.
+The draft installed-font store now assigns every AFNT object its full SHA-256
+digest in canonical base32. Config Kit's single `installed` string lists those
+tokens, so a future multi-face importer can publish one complete inventory
+with one atomic settings commit after writing its objects. Service startup
+accepts only referenced objects whose bytes match their names and whose AFNT
+metadata validates. It bounds each read to 4 MiB. A damaged or unavailable
+user inventory remains on disk and falls back to built-in fonts without
+blocking system startup. No import operation publishes that inventory yet;
+loose files in the protected directory are not installed.
 System-font selection, import, and renderer consumption are absent, so the app
 does not claim to change typography yet. Production DE25 still uses the
 previous selected release. The native import transaction and render path must

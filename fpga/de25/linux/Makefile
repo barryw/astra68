@@ -39,7 +39,7 @@ STORAGE_PROVIDER_SOURCES := astra_storage_provider.c astra_storage_discovery.c a
 	astra_storage_transport.c \
 	$(STORAGE_RESOLVER)/astra68-resolve.c $(ROOT)/sw/common/utf8.c
 FONT_CONVERT_SOURCES := astra_font_convert.c test_font_convert.c \
-	$(ROOT)/sw/common/utf8.c ../../arty/linux/astra_sha256.c
+	$(ROOT)/sw/common/utf8.c
 FONT_CODEC := $(ROOT)/sw/common/build/host/libastraafnt.a
 FONT_CONVERT_FLAGS = -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
 	-I$(ROOT)/sw/include -I$(ROOT)/ndk/include \
@@ -98,6 +98,7 @@ $(OUT)/astra-storage-aarch64: $(STORAGE_PROVIDER_SOURCES) astra_storage_main.c $
 all: $(CERTIFIER) $(BANDWIDTH)
 
 $(FONT_CODEC): $(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/common/sha256.c $(ROOT)/sw/include/astra/sha256.h \
 		$(ROOT)/sw/common/Makefile
 	$(MAKE) -C $(ROOT)/sw/common host
 
@@ -114,6 +115,7 @@ font-convert-sanitize:
 	$(HOST_CC) $(FONT_CONVERT_FLAGS) -fsanitize=address,undefined \
 		-fno-omit-frame-pointer $(FONT_CONVERT_SOURCES) \
 		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/common/sha256.c \
 		-o $(OUT)/test-font-convert-sanitize \
 		$(shell pkg-config --libs freetype2)
 	cd $(CURDIR) && $(abspath $(OUT)/test-font-convert-sanitize)

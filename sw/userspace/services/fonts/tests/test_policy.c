@@ -40,6 +40,30 @@ int main(void)
     request.header.flags = 1u;
     assert(!fonts_request_valid(&request, sizeof(request), 1u));
 
+    char token[ASTRA_FONT_OBJECT_TOKEN_SIZE];
+    char inventory[2u * ASTRA_FONT_OBJECT_TOKEN_LENGTH + 1u];
+    char parsed[2][ASTRA_FONT_OBJECT_TOKEN_SIZE];
+    uint32_t count = UINT32_MAX;
+    astra_font_object_token("abc", 3u, token);
+    assert(fonts_inventory_parse("", 0u, parsed, 2u, &count) && count == 0u);
+    assert(fonts_inventory_parse(token, ASTRA_FONT_OBJECT_TOKEN_LENGTH,
+                                 parsed, 2u, &count) && count == 1u &&
+           strcmp(parsed[0], token) == 0);
+    memcpy(inventory, token, ASTRA_FONT_OBJECT_TOKEN_LENGTH);
+    inventory[ASTRA_FONT_OBJECT_TOKEN_LENGTH] = ' ';
+    memcpy(inventory + ASTRA_FONT_OBJECT_TOKEN_LENGTH + 1u,
+           token, ASTRA_FONT_OBJECT_TOKEN_LENGTH);
+    assert(!fonts_inventory_parse(inventory, sizeof(inventory), parsed,
+                                  2u, &count));
+    inventory[ASTRA_FONT_OBJECT_TOKEN_LENGTH] = '\n';
+    assert(!fonts_inventory_parse(inventory, sizeof(inventory), parsed,
+                                  2u, &count));
+    assert(!fonts_inventory_parse(token, ASTRA_FONT_OBJECT_TOKEN_LENGTH,
+                                  parsed, 0u, &count));
+    token[ASTRA_FONT_OBJECT_TOKEN_LENGTH - 1u] = 'b';
+    assert(!fonts_inventory_parse(token, ASTRA_FONT_OBJECT_TOKEN_LENGTH,
+                                  parsed, 2u, &count));
+
     FILE *built_in = fopen("../../graphics/fonts/astra-workbench.afnt", "rb");
     assert(built_in != NULL && fseek(built_in, 0, SEEK_END) == 0);
     long file_size = ftell(built_in);

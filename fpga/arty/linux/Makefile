@@ -139,9 +139,9 @@ $(AUDIO_TARGET): astra_audio_certify.c astra_graphics_hw.h
 FLUIDSYNTH_ROOT ?= $(abspath ../../../../fluidsynth)
 DE25_SYSROOT ?= $(HOME)/.cache/astra68/de25-jammy-arm64
 AUDIO_HOST_SOURCES := astra_audio_host.c astra_audio_convert.c \
-	astra_audio_synth.c astra_sha256.c
+	astra_audio_synth.c ../../../sw/common/sha256.c
 AUDIO_HOST_HEADERS := astra_audio_convert.h astra_audio_synth.h \
-	astra_sha256.h $(ASTRA_INCLUDE)/astra/audio_host.h \
+	$(ASTRA_INCLUDE)/astra/sha256.h $(ASTRA_INCLUDE)/astra/audio_host.h \
 	$(ASTRA_INCLUDE)/astra/pcm_format.h $(ASTRA_INCLUDE)/astra/host.h \
 	$(ASTRA_INCLUDE)/astra/status.h
 FLUIDSYNTH_BUILD := $(abspath $(OUT))/fluidsynth
@@ -217,7 +217,7 @@ analyze: astra_render_protocol.h $(GRAPHICS_FONT_HEADERS)
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_certify.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_host.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_audio_convert.c
-	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_sha256.c
+	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only ../../../sw/common/sha256.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_hdmi_link.c
 	$(CC) $(CFLAGS) -fanalyzer -fsyntax-only astra_time_sync.c
 	$(CC) $(CFLAGS) -I. -I$(OUT) -I$(ASTRA_INCLUDE) -I$(NDK_INCLUDE) \
