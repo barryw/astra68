@@ -44,6 +44,7 @@ ASTRA_SYSTEM_4.0 {
         astra_display_stage;
         astra_display_staging;
         astra_draw_blit;
+        astra_draw_font_text;
         astra_draw_line;
         astra_draw_lines;
         astra_draw_list_cleanup;

@@ -721,6 +721,26 @@ ASTRA_NODISCARD AstraResult astra_draw_ui_text(
     AstraDrawList *draw_list, AstraPointI32 origin, const char *utf8,
     uint32_t utf8_bytes, uint32_t pixel_height, uint32_t style_flags,
     AstraColorRGBA8 color);
+/** Append text in an installed AFNT face, drawn by the hardware glyph engine.
+ * Obtain a counted face ID and available strike height from the Fonts catalog.
+ * The named face must have the exact requested strike. Bold and italic are
+ * chosen as designed face styles; only underline and strikethrough flags apply.
+ * Missing or uninstalled faces fail when the list is submitted.
+ * @param[in,out] draw_list Mutable destination list.
+ * @param origin Left edge and top of text, in destination pixels.
+ * @param[in] face_id Counted installed face ID from Fonts catalog.
+ * @param id_bytes Byte count of @p face_id, excluding terminator.
+ * @param[in] utf8 Valid UTF-8 text without NUL bytes.
+ * @param utf8_bytes Text byte count, 1 through 4096.
+ * @param pixel_height Exact installed strike height.
+ * @param style_flags Underline or strikethrough style flags.
+ * @param color Opaque text color.
+ * @return ::ASTRA_OK on append, or a negative ::AstraResult error.
+ */
+ASTRA_NODISCARD AstraResult astra_draw_font_text(
+    AstraDrawList *draw_list, AstraPointI32 origin, const char *face_id,
+    uint32_t id_bytes, const char *utf8, uint32_t utf8_bytes,
+    uint32_t pixel_height, uint32_t style_flags, AstraColorRGBA8 color);
 
 /**
  * Seal and asynchronously submit a draw list.

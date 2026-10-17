@@ -3,6 +3,7 @@
 #include <astra/area.h>
 #include <astra/bytes.h>
 #include <astra/draw_list.h>
+#include <astra/fonts.h>
 #include <astra/gui.h>
 #include <astra/limits.h>
 #include <astra/port.h>
@@ -607,7 +608,7 @@ static AstraResult list_attach(AstraDrawList *list, uint32_t capacity,
     header = (AstraDrawListHeader *)area.address;
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_7,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
         .total_bytes = area.size < ASTRA_DRAW_LIST_SESSION_BYTES_MAX ?
                        area.size : ASTRA_DRAW_LIST_SESSION_BYTES_MAX,
         .command_count = count,
@@ -835,7 +836,7 @@ AstraResult astra_draw_list_append_view(AstraDrawList *draw_list,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     source = (const AstraDrawListHeader *)(const void *)view->pixels;
     if (source->magic != ASTRA_DRAW_LIST_MAGIC ||
-        source->version != ASTRA_DRAW_LIST_VERSION_1_7 ||
+        source->version != ASTRA_DRAW_LIST_VERSION_1_8 ||
         source->total_bytes != ASTRA_DRAW_LIST_AREA_BYTES ||
         source->command_capacity != ASTRA_DRAW_LIST_COMMAND_MAX ||
         source->command_count > ASTRA_DRAW_LIST_COMMAND_MAX ||
@@ -1462,10 +1463,11 @@ AstraResult astra_draw_lines(AstraDrawList *draw_list,
     return ASTRA_OK;
 }
 
-AstraResult astra_draw_ui_text(AstraDrawList *draw_list, AstraPointI32 origin,
-                               const char *utf8, uint32_t utf8_bytes,
-                               uint32_t pixel_height, uint32_t style_flags,
-                               AstraColorRGBA8 color)
+static AstraResult draw_text(AstraDrawList *draw_list, AstraPointI32 origin,
+                             const char *utf8, uint32_t utf8_bytes,
+                             uint32_t pixel_height, uint32_t style_flags,
+                             AstraColorRGBA8 color, const char *face_id,
+                             uint32_t id_bytes)
 {
     AstraDrawListCommand *command;
     uint32_t index;
@@ -1478,14 +1480,21 @@ AstraResult astra_draw_ui_text(AstraDrawList *draw_list, AstraPointI32 origin,
         (style_flags & ~(uint32_t)ASTRA_TEXT_RENDER_STYLE_MASK) != 0u ||
         color.alpha != 255u || !int16_value(origin.x) ||
         !int16_value(origin.y) ||
-        !astra_utf8_validate(utf8, utf8_bytes, 0u))
+        !astra_utf8_validate(utf8, utf8_bytes, 0u) ||
+        (face_id == NULL && id_bytes != 0u) ||
+        (face_id != NULL &&
+         (id_bytes == 0u || id_bytes >= ASTRA_FONT_ID_MAX ||
+          memchr(face_id, '\0', id_bytes) != NULL ||
+          (style_flags & (ASTRA_TEXT_STYLE_BOLD |
+                          ASTRA_TEXT_STYLE_ITALIC)) != 0u)))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    command = append(draw_list, ASTRA_DRAW_LIST_TEXT, &result);
+    command = append(draw_list, face_id == NULL ? ASTRA_DRAW_LIST_TEXT :
+                                   ASTRA_DRAW_LIST_NAMED_TEXT, &result);
     if (command == 0)
         return result;
     /* The payload may move the list; find the command again by index. */
     index = list_header(draw_list)->command_count - 1u;
-    offset = append_payload(draw_list, utf8_bytes, &result);
+    offset = append_payload(draw_list, id_bytes + utf8_bytes, &result);
     if (result != ASTRA_OK) {
         --list_header(draw_list)->command_count;
         return result;
@@ -1496,10 +1505,34 @@ AstraResult astra_draw_ui_text(AstraDrawList *draw_list, AstraPointI32 origin,
     command->y = origin.y;
     command->color = argb(color);
     command->font_height = (uint16_t)pixel_height;
+    command->source = id_bytes;
     command->payload_offset = offset;
-    command->payload_bytes = utf8_bytes;
-    memcpy((uint8_t *)list_header(draw_list) + offset, utf8, utf8_bytes);
+    command->payload_bytes = id_bytes + utf8_bytes;
+    if (id_bytes != 0u)
+        memcpy((uint8_t *)list_header(draw_list) + offset, face_id, id_bytes);
+    memcpy((uint8_t *)list_header(draw_list) + offset + id_bytes,
+           utf8, utf8_bytes);
     return ASTRA_OK;
+}
+
+AstraResult astra_draw_ui_text(AstraDrawList *draw_list, AstraPointI32 origin,
+                               const char *utf8, uint32_t utf8_bytes,
+                               uint32_t pixel_height, uint32_t style_flags,
+                               AstraColorRGBA8 color)
+{
+    return draw_text(draw_list, origin, utf8, utf8_bytes, pixel_height,
+                     style_flags, color, NULL, 0u);
+}
+
+AstraResult astra_draw_font_text(AstraDrawList *draw_list,
+                                 AstraPointI32 origin, const char *face_id,
+                                 uint32_t id_bytes, const char *utf8,
+                                 uint32_t utf8_bytes, uint32_t pixel_height,
+                                 uint32_t style_flags, AstraColorRGBA8 color)
+{
+    if (face_id == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    return draw_text(draw_list, origin, utf8, utf8_bytes, pixel_height,
+                     style_flags, color, face_id, id_bytes);
 }
 
 /*

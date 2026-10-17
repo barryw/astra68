@@ -529,6 +529,40 @@ static void test_ui_text(const AstraSurface *content)
     CHECK(astra_draw_list_close(list) == ASTRA_OK);
 }
 
+static void test_named_text(const AstraSurface *content)
+{
+    static const char id[] = "user:abcdef";
+    AstraDrawList list = ASTRA_DRAW_LIST_INIT;
+    AstraFence fence = ASTRA_FENCE_INIT;
+    const AstraColorRGBA8 ink = { 1, 2, 3, 255 };
+    const AstraDrawListCommand *command;
+
+    CHECK(astra_draw_list_create(content,
+                                 &(AstraRectI32){0, 0, 320, 200}, &list) ==
+          ASTRA_OK);
+    CHECK(astra_draw_font_text(&list, (AstraPointI32){4, 5}, id,
+                               sizeof(id) - 1u, "Hi", 2u, 11u, 0u,
+                               ink) == ASTRA_OK);
+    CHECK(astra_draw_font_text(&list, (AstraPointI32){4, 5}, id,
+                               sizeof(id) - 1u, "Hi", 2u, 11u,
+                               ASTRA_TEXT_STYLE_BOLD, ink) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    CHECK(astra_draw_font_text(&list, (AstraPointI32){4, 5}, id,
+                               0u, "Hi", 2u, 11u, 0u,
+                               ink) == ASTRA_ERROR_INVALID_ARGUMENT);
+    CHECK(astra_draw_submit(&list, &fence) == ASTRA_OK);
+    command = &fake_submitted[0];
+    CHECK(fake_submitted_header.command_count == 1u &&
+          command->operation == ASTRA_DRAW_LIST_NAMED_TEXT &&
+          command->source == sizeof(id) - 1u &&
+          command->font_height == 11u &&
+          command->payload_bytes == sizeof(id) - 1u + 2u &&
+          memcmp(fake_submitted_list + command->payload_offset,
+                 "user:abcdefHi", sizeof(id) - 1u + 2u) == 0);
+    CHECK(astra_fence_close(&fence) == ASTRA_OK);
+    CHECK(astra_draw_list_close(&list) == ASTRA_OK);
+}
+
 static void test_append_view(const AstraSurface *content)
 {
     uint32_t storage[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)] = {0};
@@ -548,7 +582,7 @@ static void test_append_view(const AstraSurface *content)
 
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_7,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
         .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
         .command_count = 2u,
         .payload_bytes = 3u,
@@ -847,7 +881,7 @@ static void test_posted_frame(AstraDisplay *display,
           fake_posted.target == target._private_id &&
           fake_posted.flags ==
               (ASTRA_GUI_FRAME_PRESENT | ASTRA_GUI_FRAME_DISCARD));
-    CHECK(fake_submitted_header.version == ASTRA_DRAW_LIST_VERSION_1_7 &&
+    CHECK(fake_submitted_header.version == ASTRA_DRAW_LIST_VERSION_1_8 &&
           fake_submitted_header.command_count == 3u &&
           fake_submitted[0].operation == ASTRA_DRAW_LIST_FILL &&
           fake_submitted[0].clip_right == 64u &&
@@ -1119,7 +1153,7 @@ static void test_window_graphics_session(void)
           fake_last.object == list._private_list &&
           fake_last.target == ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID);
     CHECK(fake_submitted_header.magic == ASTRA_DRAW_LIST_MAGIC &&
-          fake_submitted_header.version == ASTRA_DRAW_LIST_VERSION_1_7 &&
+          fake_submitted_header.version == ASTRA_DRAW_LIST_VERSION_1_8 &&
           fake_submitted_header.width == 320u &&
           fake_submitted_header.command_count == 1107u &&
           fake_submitted_header.command_capacity >= 1107u);
@@ -1178,6 +1212,7 @@ static void test_window_graphics_session(void)
     CHECK(astra_fence_close(&fence) == ASTRA_OK);
     test_triangles(&sprite, &content);
     test_ui_text(&content);
+    test_named_text(&content);
     test_append_view(&content);
     test_rectangles(&content);
     test_lines(&content);

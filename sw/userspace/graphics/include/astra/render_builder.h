@@ -48,6 +48,9 @@ typedef struct AstraRenderSourceResolver {
     uint32_t (*resolve)(void *context, AstraRenderBuilder *builder,
                         uint32_t surface_id);
     void *context;
+    /* Borrow a validated installed face for this command's replay only. */
+    const AstraRenderFont *(*resolve_font)(void *context, const char *id,
+                                           uint32_t id_length);
 } AstraRenderSourceResolver;
 
 struct AstraRenderBuilder {
@@ -168,6 +171,10 @@ int astra_render_builder_replay_range(
 int astra_render_builder_replay(AstraRenderBuilder *builder,
                                 uint32_t destination,
                                 const AstraDrawListHeader *draw_list);
+int astra_render_builder_replay_resolved(
+    AstraRenderBuilder *builder, uint32_t destination,
+    const AstraDrawListHeader *draw_list,
+    const AstraRenderSourceResolver *resolver);
 int astra_render_builder_blit(AstraRenderBuilder *builder,
                               uint32_t destination, uint32_t source,
                               int32_t x, int32_t y, uint16_t width,

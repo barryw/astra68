@@ -1,4 +1,8 @@
 #include <astra/fonts.h>
+#ifdef ASTRA_FONT_PROBE_AMIGA
+#include <astra/graphics.h>
+#include <astra/window.h>
+#endif
 #include <astra/filesystem_library.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
@@ -37,6 +41,67 @@ enum {
     FAIL_REPEAT,
     FAIL_RESTART
 };
+
+#ifdef ASTRA_FONT_PROBE_AMIGA
+static AstraWindow probe_window = ASTRA_WINDOW_INIT;
+static AstraDisplay probe_display = ASTRA_DISPLAY_INIT;
+static AstraSurface probe_surface = ASTRA_SURFACE_INIT;
+
+static int probe_named_draw(const AstraStartupInfo *startup, const char *id)
+{
+    const AstraStartupCapability *gui = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_GUI);
+    AstraArea placeholder = ASTRA_AREA_INIT;
+    AstraWindowCreateInfo info = ASTRA_WINDOW_CREATE_INFO_INIT;
+    AstraDrawList list = ASTRA_DRAW_LIST_INIT;
+    AstraFence fence = ASTRA_FENCE_INIT;
+    AstraResult completion = ASTRA_OK;
+    AstraResult result;
+
+    if (gui == NULL ||
+        astra_area_create(4096u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+            ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &placeholder) != ASTRA_OK)
+        return 0;
+    info.x = 360u;
+    info.y = 120u;
+    info.width = 320u;
+    info.height = 100u;
+    info.content_format = ASTRA_WINDOW_CONTENT_SURFACE;
+    info.type = ASTRA_WINDOW_STANDARD;
+    info.title = "Amiga font draw probe";
+    info.title_length = sizeof("Amiga font draw probe") - 1u;
+    result = astra_window_create(gui->handle, placeholder.handle,
+                                 &info, &probe_window);
+    if (astra_area_close(&placeholder) != ASTRA_OK) return 0;
+    if (result == ASTRA_OK)
+        result = astra_window_display(&probe_window, &probe_display);
+    if (result == ASTRA_OK)
+        result = astra_window_surface(&probe_window, &probe_surface);
+    if (result == ASTRA_OK)
+        result = astra_draw_list_create(&probe_surface,
+            &(AstraRectI32){0, 0, 320, 100}, &list);
+    if (result == ASTRA_OK)
+        result = astra_draw_font_text(&list, (AstraPointI32){20, 20},
+            id, (uint32_t)strlen(id), "Amiga font", 10u, 11u, 0u,
+            (AstraColorRGBA8){255u, 255u, 255u, 255u});
+    if (result == ASTRA_OK)
+        result = astra_draw_submit(&list, &fence);
+    if (result == ASTRA_OK)
+        result = astra_fence_wait(&fence, 5000u, &completion);
+    if (result == ASTRA_OK) result = completion;
+    if (result == ASTRA_OK)
+        result = astra_window_present(&probe_window);
+    if (fence._private_handle != ASTRA_INVALID_HANDLE) {
+        AstraResult ignored = astra_fence_close(&fence);
+        (void)ignored;
+    }
+    if (list._private_handle != ASTRA_INVALID_HANDLE) {
+        AstraResult ignored = astra_draw_list_close(&list);
+        (void)ignored;
+    }
+    return result == ASTRA_OK;
+}
+#endif
 
 static int has_face(const AstraFontsCatalog *catalog, const char *id)
 {
@@ -81,7 +146,10 @@ int astra_main(const AstraStartupInfo *startup)
     AstraArea face = ASTRA_AREA_INIT;
     AstraFile marker = ASTRA_FILE_INIT;
     void *source = NULL;
-    uint32_t source_size = 0u, face_size = 0u;
+    uint32_t source_size = 0u;
+#ifndef ASTRA_FONT_PROBE_AMIGA
+    uint32_t face_size = 0u;
+#endif
     uint32_t expected_faces = 1u;
     uint32_t receive = 0u, send = 0u, index = 0u;
     uint32_t status = FAIL_FILES;
@@ -97,7 +165,8 @@ int astra_main(const AstraStartupInfo *startup)
     render = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_RENDER);
     bootstrap = astra_startup_capability(startup,
         ASTRA_CAPABILITY_SERVICE_READY);
-    if (read == NULL || admin == NULL || render == NULL || bootstrap == NULL)
+    if (read == NULL || admin == NULL || bootstrap == NULL ||
+        (PROBE_ENCODING == ASTRA_FONT_ENCODING_AUTO && render == NULL))
         return ASTRA_STATUS_BAD_HANDLE;
     if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
         goto done;
@@ -188,6 +257,10 @@ int astra_main(const AstraStartupInfo *startup)
          !has_imported_style(&after, "SemiBold") ||
          !has_imported_style(&after, "Bold")))
         goto done;
+#ifdef ASTRA_FONT_PROBE_AMIGA
+    status = FAIL_FACE;
+    if (!probe_named_draw(startup, id)) goto done;
+#else
     status = FAIL_FACE;
     if (astra_fonts_face_open(render->handle, id,
                               (uint32_t)strlen(id), &face, &face_size) !=
@@ -195,6 +268,7 @@ int astra_main(const AstraStartupInfo *startup)
         memcmp(face.address, "AFNT", 4u) != 0)
         goto done;
     if (astra_area_close(&face) != ASTRA_OK) goto done;
+#endif
     status = FAIL_SELECT;
     result = astra_fonts_select(admin->handle, id,
                                 (uint32_t)strlen(id));

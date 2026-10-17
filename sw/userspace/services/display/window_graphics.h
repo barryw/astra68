@@ -86,6 +86,8 @@ typedef struct DisplayGraphicsHost {
     /* The batch storage, once no request still running uses it; a failure
        of that request is returned here. */
     uint32_t (*storage)(void *context, void **storage);
+    const AstraRenderFont *(*resolve_font)(void *context, const char *id,
+                                           uint32_t id_length);
     /* The content bank the client draws into now. */
     uint32_t content_offset;
     uint32_t content_bytes;

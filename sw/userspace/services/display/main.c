@@ -169,6 +169,9 @@ typedef struct DisplayLaunch {
 typedef struct DisplayState {
     DisplayWindow *windows;
     const AstraRenderFont *ui_font;
+    AstraHandle font_render;
+    AstraArea named_font_area;
+    AstraRenderFont named_font;
     uint32_t windows_area;
     uint32_t capacity;
     DamageRect damage[2];
@@ -2440,11 +2443,40 @@ done:
 static uint32_t display_pointer_shape(DisplayState *state,
                                       const AstraTheme *theme);
 
+static const AstraRenderFont *display_named_font(void *context,
+                                                 const char *id,
+                                                 uint32_t id_length)
+{
+    DisplayState *state = context;
+    uint32_t bytes = 0u;
+
+    /* shortcut: reopen per command; add a generation-aware cache after
+       profiling. */
+    if (state->named_font_area.handle != ASTRA_INVALID_HANDLE) {
+        if (astra_area_close(&state->named_font_area) != ASTRA_OK)
+            return NULL;
+    }
+    if (state->font_render == ASTRA_INVALID_HANDLE ||
+        astra_fonts_face_open(state->font_render, id, id_length,
+                              &state->named_font_area, &bytes) != ASTRA_OK)
+        return NULL;
+    if (!astra_render_font_init(&state->named_font,
+                                state->named_font_area.address, bytes)) {
+        AstraResult ignored = astra_area_close(&state->named_font_area);
+        (void)ignored;
+        return NULL;
+    }
+    return &state->named_font;
+}
+
 static uint32_t compose(void *storage, uint32_t fence,
                         DisplayState *state, uint32_t *error,
                         uint32_t *failure)
 {
     AstraRenderBuilder builder = {0};
+    AstraRenderSourceResolver font_resolver = {
+        .context = state, .resolve_font = display_named_font
+    };
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     uint32_t buffer = (fence & 1u) != 0u ? 1u : 0u;
     DamageRect *damage = &state->damage[buffer];
@@ -2548,8 +2580,9 @@ static uint32_t compose(void *storage, uint32_t fence,
                      window->request.width, window->request.height,
                      color(theme.client))) &&
                 (window->content_dirty == 0u ||
-                 astra_render_builder_replay(
-                     &builder, window->content_resource, list));
+                 astra_render_builder_replay_resolved(
+                     &builder, window->content_resource, list,
+                     &font_resolver));
         }
         if (window->content_resource == 0u || !content_ok) {
             return compose_failed(
@@ -4687,6 +4720,15 @@ typedef struct GraphicsHostContext {
     uint32_t buffer;
 } GraphicsHostContext;
 
+static const AstraRenderFont *graphics_named_font(void *context,
+                                                  const char *id,
+                                                  uint32_t id_length)
+{
+    const GraphicsHostContext *host = context;
+
+    return display_named_font(host->state, id, id_length);
+}
+
 static uint32_t graphics_allocate(void *context, uint32_t bytes)
 {
     const GraphicsHostContext *host = context;
@@ -4753,6 +4795,7 @@ static uint32_t receive_graphics(uint32_t device, uint32_t irq,
         .submit = graphics_submit,
         .read = graphics_read,
         .storage = graphics_storage,
+        .resolve_font = graphics_named_font,
         .content_offset = window->content_offset[window->content_back],
         .content_bytes = window->content_bytes,
         .content_pitch = window->content_pitch,
@@ -5353,11 +5396,14 @@ static void serve_windows(uint32_t device, uint32_t irq,
                           AstraDmaBufferInfo *pointer_buffer,
                           uint32_t gui_receive, uint32_t input_receive,
                           const volatile AstraInputPointerState *pointer,
-                          const AstraRenderFont *ui_font)
+                          const AstraRenderFont *ui_font,
+                          AstraHandle font_render)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     DisplayState state = {
         .ui_font = ui_font,
+        .font_render = font_render,
+        .named_font_area = ASTRA_AREA_INIT,
         .damage = {
             { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u },
             { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u }
@@ -5600,7 +5646,9 @@ int astra_main(const AstraStartupInfo *startup)
     }
     serve_windows(device->handle, irq->handle, vblank_irq->handle,
                   framebuffer, &pointer_buffer, gui_receive, input_receive,
-                  shared_pointer, active_font);
+                  shared_pointer, active_font,
+                  fonts_render == NULL ? ASTRA_INVALID_HANDLE :
+                                         fonts_render->handle);
     if (font_area.handle != ASTRA_INVALID_HANDLE) {
         AstraResult ignored = astra_area_close(&font_area);
         (void)ignored;

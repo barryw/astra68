@@ -97,7 +97,9 @@ variable instances. A bounded HPS C parser and converter now produce validated
 MASK1 AFNT from classic monochrome Amiga disk-font hunks with explicit
 ISO-8859-1/2 character maps. Parser, converter, worker, sanitizer, and AArch64
 checks pass; the native service/QEMU installation and restart gate passes.
-Application-specific rendering and physical release gates remain open.
+Native named-face application drawing through display's validated AFNT resolver
+and Astraea glyph engine passes the disposable Amiga QEMU gate without granting
+raw-font access to the application. Physical release gates remain open.
 Fonts labels each style as able or unable to serve as a system font and disables
 system selection for ineligible styles, using the service's catalog decision;
 fixed-size Amiga faces without all

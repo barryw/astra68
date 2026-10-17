@@ -79,6 +79,11 @@ def boot(qemu, rom, image, work, phase):
             lines = machine.said()[0]
             if any("launch " + PROBE in line and "status=0" in line
                    for line in lines):
+                if PROBE.endswith("FontAmigaProbe.app") and \
+                        machine.qmp.execute("qom-get", {
+                            "path": "/machine",
+                            "property": "astra-display-glyph-commands"}) == 0:
+                    raise RuntimeError("Amiga named draw submitted no hardware glyph command")
                 return
             if any("launch-failed " + PROBE in line for line in lines):
                 raise RuntimeError("%s: %s" %
@@ -140,10 +145,12 @@ def main():
             astra_image._replace_volume_file(
                 image, str(marker), "/expect-outline-variable")
         startup = Path(work) / "startup"
+        grants = ("FONTS FONTS_ADMIN GUI SYSTEM:r LIBS:r" if args.amiga else
+                  "FONTS FONTS_ADMIN FONTS_RENDER SYSTEM:r LIBS:r")
         startup.write_text(
             astra_image.DISPLAY_STARTUP_MANIFEST +
-            "service %s grants FONTS FONTS_ADMIN FONTS_RENDER SYSTEM:r LIBS:r "
-            "required priority=20\n" % PROBE, encoding="ascii")
+            "service %s grants %s required priority=20\n" % (PROBE, grants),
+            encoding="ascii")
         astra_image._replace_volume_file(image, str(startup), "/startup/system")
         boot(args.qemu, args.rom, image, work, "first boot")
         if args.expect_later_failure:
@@ -162,7 +169,7 @@ def main():
             image, str(marker), "/expect-outline-again")
         boot(args.qemu, args.rom, image, work, "restart")
     if args.amiga:
-        print("ASTRA FONT AMIGA PASS native import, AFNT, catalog, restart")
+        print("ASTRA FONT AMIGA PASS native import, named hardware draw, restart")
     elif args.expect_variable:
         print("ASTRA FONT OUTLINE PASS variable styles, AFNT, selection, restart")
     else:

@@ -484,8 +484,12 @@ OpenType at default and named-instance axis coordinates, and classic
 monochrome Amiga disk fonts. Current native runtime supports AFNT, static
 TTF/OTF/TTC, default plus distinct named instances from variable outlines,
 and bounded monochrome Amiga disk-font conversion. Native service/QEMU import,
-AFNT validation, catalog reload, and restart gate pass. Application-specific
-font rendering remains open.
+AFNT validation, catalog reload, and restart gate pass. Applications can draw
+an installed face by catalog ID and exact strike size using
+`astra_draw_font_text`; display resolves validated AFNT through its privileged
+Fonts capability and submits glyph masks to Astraea. The disposable Amiga
+probe draws through ordinary GUI capability without raw-font access. Physical
+release gate remains open.
 This covers the common current macOS outline containers listed by
 [Apple Font Book](https://support.apple.com/en-gb/guide/font-book/fntbk1000/mac)
 and Amiga bitmap fonts. A collection is one input but contributes all its

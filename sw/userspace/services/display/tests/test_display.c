@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include <astra/gui.h>
+#include <astra/fonts.h>
 #include <astra/input_service.h>
 #include <astra/display_mailbox.h>
 #include <astra/render_batch.h>
@@ -16,6 +17,20 @@
 #pragma GCC diagnostic pop
 
 static uint32_t menu_allocations;
+
+AstraResult astra_fonts_face_open(AstraHandle render, const char *id,
+                                   uint32_t id_length, AstraArea *face,
+                                   uint32_t *length)
+{
+    (void)render; (void)id; (void)id_length; (void)face; (void)length;
+    return ASTRA_ERROR_NOT_PRESENT;
+}
+
+AstraResult astra_area_close(AstraArea *area)
+{
+    area->handle = ASTRA_INVALID_HANDLE;
+    return ASTRA_OK;
+}
 static uint32_t fail_menu_allocate;
 void *astra_runtime_allocate(size_t size)
 {
@@ -755,7 +770,7 @@ static void test_window_graphics_argb_target(DisplayWindowGraphics *graphics,
                              &mapped) == ASTRA_SYSCALL_OK);
     *list = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_7,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
         .total_bytes = 8192u,
         .command_count = 1u,
         .width = 16u,
@@ -1250,7 +1265,7 @@ static void test_window_graphics(void)
                              &mapped) == ASTRA_SYSCALL_OK);
     *list = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_7,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
         .total_bytes = 8192u,
         .command_count = 1u,
         .width = 320u,

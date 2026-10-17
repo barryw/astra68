@@ -7,7 +7,7 @@ executable bin/m68k-68040/FontAmigaProbe
 icon resources/FontAmigaProbe.aicon
 capability FONTS
 capability FONTS_ADMIN
-capability FONTS_RENDER
+capability GUI
 capability SYSTEM:r
 capability LIBS:r
 requires compiler.library 2 2.0.0

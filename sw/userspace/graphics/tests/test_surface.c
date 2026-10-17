@@ -499,7 +499,7 @@ static void test_draw_list_clip_reaches_hardware(void)
     astra_surface_fill(&surface, 0, 0, 20u, 10u, 0x1234u);
     header = (const AstraDrawListHeader *)(const void *)draw_storage;
     draw = (AstraDrawListCommand *)(void *)(header + 1);
-    assert(header->version == ASTRA_DRAW_LIST_VERSION_1_7);
+    assert(header->version == ASTRA_DRAW_LIST_VERSION_1_8);
     assert(draw->clip_left == 4u && draw->clip_top == 3u &&
            draw->clip_right == 12u && draw->clip_bottom == 8u);
     assert(!astra_draw_list_covers(header, 20u, 10u));
@@ -685,9 +685,19 @@ static void test_font_advance_and_baseline(void)
            3 + strike->ascent / 64);
 }
 
+static const AstraRenderFont *resolve_installed_font(void *context,
+                                                     const char *id,
+                                                     uint32_t id_length)
+{
+    assert(id_length == sizeof("user:fixture") - 1u &&
+           memcmp(id, "user:fixture", id_length) == 0);
+    return context;
+}
+
 static void test_installed_afnt_reaches_hardware_glyph_run(void)
 {
     static uint8_t batch[ASTRA_RENDER_BUILDER_BYTES];
+    static uint8_t list_area[ASTRA_DRAW_LIST_AREA_BYTES];
     FILE *file = fopen("fonts/astra-mono.afnt", "rb");
     AstraRenderFont font;
     AstraRenderBuilder builder;
@@ -697,6 +707,11 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
     long length;
     uint32_t strike_index = 0u;
     uint32_t destination;
+    AstraDrawListHeader *list = (AstraDrawListHeader *)(void *)list_area;
+    AstraDrawListCommand *named = (AstraDrawListCommand *)(void *)(list + 1);
+    AstraRenderSourceResolver resolver = {
+        .context = &font, .resolve_font = resolve_installed_font
+    };
     const uint8_t *command, *records, *source_descriptor, *source;
 
     assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
@@ -729,6 +744,42 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
     for (uint32_t row = 0u; row < first.height; ++row)
         assert(memcmp(source + row * be32(source_descriptor + 16u),
                       first.bitmap + row * first.pitch, first.pitch) == 0);
+    *list = (AstraDrawListHeader){
+        .magic = ASTRA_DRAW_LIST_MAGIC,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
+        .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
+        .command_count = 1u,
+        .payload_bytes = sizeof("user:fixture") - 1u + 2u,
+        .width = 160u, .height = 80u,
+        .command_capacity = ASTRA_DRAW_LIST_COMMAND_MAX,
+    };
+    *named = (AstraDrawListCommand){
+        .operation = ASTRA_DRAW_LIST_NAMED_TEXT,
+        .x = 5, .y = 7, .color = 0xffffffffu,
+        .source = sizeof("user:fixture") - 1u,
+        .font_height = strike.pixel_height,
+        .payload_offset = ASTRA_DRAW_LIST_PAYLOAD_OFFSET,
+        .payload_bytes = sizeof("user:fixture") - 1u + 2u,
+        .clip_right = 160u, .clip_bottom = 80u,
+    };
+    memcpy(list_area + ASTRA_DRAW_LIST_PAYLOAD_OFFSET,
+           "user:fixtureIW", named->payload_bytes);
+    assert(astra_render_builder_init(&builder, batch, sizeof(batch), 2u));
+    destination = astra_render_builder_surface(&builder, 160u, 80u);
+    assert(astra_render_builder_replay_resolved(&builder, destination,
+                                                list, &resolver));
+    assert(batch_record(batch, be32(batch_command(batch, 0u) + 36u))[24u] ==
+           ASTRA_RENDER_FORMAT_A8);
+    assert(astra_render_builder_init(&builder, batch, sizeof(batch), 3u));
+    destination = astra_render_builder_surface(&builder, 160u, 80u);
+    named->font_height = 15u;
+    assert(!astra_render_builder_replay_resolved(&builder, destination,
+                                                 list, &resolver));
+    named->font_height = strike.pixel_height;
+    named->source = 0u;
+    assert(!astra_render_builder_replay_resolved(&builder, destination,
+                                                 list, &resolver));
+    named->source = sizeof("user:fixture") - 1u;
     bytes[0] ^= 1u;
     assert(!astra_render_font_init(&font, bytes, (uint32_t)length));
     free(bytes);
@@ -1271,7 +1322,7 @@ static AstraDrawListHeader *session_begin(uint16_t width, uint16_t height)
     memset(session_list, 0, sizeof(session_list));
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_7,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
         .total_bytes = sizeof(session_list),
         .width = width,
         .height = height,
@@ -1365,7 +1416,7 @@ static void test_session_blit_lowers_to_hardware(void)
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x80000u, 0u
     };
-    AstraRenderSourceResolver resolver = { resolve_test_surface, &surfaces };
+    AstraRenderSourceResolver resolver = { .resolve = resolve_test_surface, .context = &surfaces };
     AstraDrawListHeader *header = session_begin(320u, 200u);
     AstraDrawListCommand *blit = session_add(header, ASTRA_DRAW_LIST_BLIT);
     AstraRenderBuilder builder;
@@ -1830,7 +1881,7 @@ static void test_session_triangles_encoding(void)
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x80000u, 0u
     };
-    AstraRenderSourceResolver resolver = { resolve_test_surface, &surfaces };
+    AstraRenderSourceResolver resolver = { .resolve = resolve_test_surface, .context = &surfaces };
     AstraDrawListHeader *header = session_begin(320u, 200u);
     AstraDrawListCommand *triangles =
         session_add(header, ASTRA_DRAW_LIST_TRIANGLES);
@@ -1901,7 +1952,7 @@ static void test_session_triangles_rejections(void)
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x80000u, 0u
     };
-    AstraRenderSourceResolver resolver = { resolve_test_surface, &surfaces };
+    AstraRenderSourceResolver resolver = { .resolve = resolve_test_surface, .context = &surfaces };
     AstraDrawListHeader *header = session_begin(320u, 200u);
     AstraDrawListCommand *triangles =
         session_add(header, ASTRA_DRAW_LIST_TRIANGLES);
@@ -2034,7 +2085,7 @@ static void test_session_engine_lowering(void)
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x80000u, 0u
     };
-    AstraRenderSourceResolver resolver = { resolve_test_surface, &surfaces };
+    AstraRenderSourceResolver resolver = { .resolve = resolve_test_surface, .context = &surfaces };
     AstraDrawListHeader *header = session_begin(320u, 200u);
     AstraDrawListCommand *blit = session_add(header, ASTRA_DRAW_LIST_BLIT);
     AstraRenderBuilder builder;
@@ -2340,7 +2391,7 @@ static void test_session_triangles_on_reference_model(void)
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x80000u, 0u
     };
-    AstraRenderSourceResolver resolver = { resolve_test_surface, &surfaces };
+    AstraRenderSourceResolver resolver = { .resolve = resolve_test_surface, .context = &surfaces };
     AstraDrawListHeader *header;
     AstraDrawListCommand *blit;
     AstraRenderBuilder builder;

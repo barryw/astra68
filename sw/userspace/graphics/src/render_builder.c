@@ -2,6 +2,7 @@
 
 #include <astra/bytes.h>
 #include <astra/display.h>
+#include <astra/fonts.h>
 #include <astra/endian.h>
 #include <astra/render_batch.h>
 #include <astra/window_scene.h>
@@ -1056,7 +1057,7 @@ static int header_valid(const AstraDrawListHeader *header,
     uint32_t payload_offset;
 
     if (header->magic != ASTRA_DRAW_LIST_MAGIC ||
-        header->version != ASTRA_DRAW_LIST_VERSION_1_7 ||
+        header->version != ASTRA_DRAW_LIST_VERSION_1_8 ||
         !astra_words_zero(header->reserved, 9u) ||
         header->width == 0u || header->height == 0u ||
         header->command_capacity == 0u ||
@@ -1161,6 +1162,16 @@ static int command_valid(const AstraDrawListHeader *header, uint16_t width,
                item->height == 0u && item->radius == 0u &&
                int16_coordinate(item->x) && int16_coordinate(item->y) &&
                no_source(item) && payload_inside;
+    if (item->operation == ASTRA_DRAW_LIST_NAMED_TEXT)
+        return (item->flags & ~(ASTRA_TEXT_STYLE_UNDERLINE |
+                                ASTRA_TEXT_STYLE_STRIKETHROUGH)) == 0u &&
+               item->source != 0u && item->source < ASTRA_FONT_ID_MAX &&
+               item->payload_bytes > item->source && payload_inside &&
+               item->width == 0u && item->height == 0u &&
+               item->radius == 0u && item->font_height != 0u &&
+               int16_coordinate(item->x) && int16_coordinate(item->y) &&
+               item->source_x == 0 && item->source_y == 0 &&
+               item->source_width == 0u && item->source_height == 0u;
     if (item->operation == ASTRA_DRAW_LIST_BLIT)
         return (item->flags & ~(ASTRA_DRAW_LIST_FLIP_X |
                                 ASTRA_DRAW_LIST_FLIP_Y |
@@ -1899,6 +1910,44 @@ static int replay_command(AstraRenderBuilder *builder, uint32_t destination,
                    (uint16_t)item->width, color, item->clip_left,
                    item->clip_top, item->clip_right, item->clip_bottom,
                    item->flags);
+    case ASTRA_DRAW_LIST_NAMED_TEXT: {
+        char id[ASTRA_FONT_ID_MAX];
+        const AstraRenderFont *font;
+        const AstraRenderFont *previous = builder->ui_font;
+        int found = 0;
+        int ok;
+
+        if (!text_format(format) || resolver == NULL ||
+            resolver->resolve_font == NULL)
+            return 0;
+        memcpy(id, (const uint8_t *)header + item->payload_offset,
+               item->source);
+        id[item->source] = '\0';
+        if (memchr(id, '\0', item->source) != NULL) return 0;
+        font = resolver->resolve_font(resolver->context, id, item->source);
+        if (font == NULL) return 0;
+        for (uint32_t at = 0u; at < font->view.strike_count; ++at) {
+            AstraAfntStrikeInfo strike;
+
+            if (astra_afnt_strike_info(&font->view, at, &strike) &&
+                strike.pixel_height == item->font_height &&
+                strike_render_format(strike.bitmap_format) != UINT8_MAX) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) return 0;
+        builder->ui_font = font;
+        ok = builder_text(builder, destination, item->x, item->y,
+                          (const char *)header + item->payload_offset +
+                              item->source,
+                          item->payload_bytes - item->source,
+                          item->font_height, 0u, color, item->clip_left,
+                          item->clip_top, item->clip_right,
+                          item->clip_bottom, item->flags);
+        builder->ui_font = previous;
+        return ok;
+    }
     case ASTRA_DRAW_LIST_LINE:
         return (ASTRA_DRAW_LIST_BLEND_MODE(item->flags) ==
                     ASTRA_DRAW_LIST_BLEND_NONE ||
@@ -2001,6 +2050,15 @@ int astra_render_builder_replay(AstraRenderBuilder *builder,
                                 uint32_t destination,
                                 const AstraDrawListHeader *header)
 {
+    return astra_render_builder_replay_resolved(builder, destination,
+                                                header, NULL);
+}
+
+int astra_render_builder_replay_resolved(
+    AstraRenderBuilder *builder, uint32_t destination,
+    const AstraDrawListHeader *header,
+    const AstraRenderSourceResolver *resolver)
+{
     uint32_t next;
 
     return header != NULL &&
@@ -2008,7 +2066,7 @@ int astra_render_builder_replay(AstraRenderBuilder *builder,
            header->command_capacity == ASTRA_DRAW_LIST_COMMAND_MAX &&
            astra_render_builder_replay_range(
                builder, destination, header, ASTRA_DRAW_LIST_AREA_BYTES,
-               NULL, 0u, &next) == ASTRA_RENDER_REPLAY_DONE;
+               resolver, 0u, &next) == ASTRA_RENDER_REPLAY_DONE;
 }
 
 static int blit_region(AstraRenderBuilder *builder, uint32_t destination,

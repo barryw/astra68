@@ -111,10 +111,10 @@ arena, returns zero rows.
 
 `ASTRA_SURFACE_SCANOUT` returns `UNSUPPORTED`.
 
-## 4. Draw lists (ADLT v1.7)
+## 4. Draw lists (ADLT v1.8)
 
 The retained window list and the session draw list share one wire format and
-one lowering (`astra_render_builder_replay`). ADLT v1.7 replaces v1.6; every
+one lowering (`astra_render_builder_replay`). ADLT v1.8 replaces v1.7; every
 in-tree writer and reader moves together.
 
 - The header records `total_bytes` (16 KiB for retained window lists, up to
@@ -133,9 +133,15 @@ in-tree writer and reader moves together.
   - `payload_offset` and `payload_bytes`
   - `font_height` and `radius`
   - a per-command clip in destination pixels
-- The operations are FILL, FILL_ROUNDED, TEXT, MONO_TEXT, LINE, BLIT,
+- The operations are FILL, FILL_ROUNDED, TEXT, MONO_TEXT, NAMED_TEXT, LINE, BLIT,
   TRIANGLES, FILL_RECTS, LINES, TARGET, and UPLOAD. COPY is removed: it is a BLIT
   whose source is the destination.
+- NAMED_TEXT (12, v1.8) carries a counted installed face ID in `source` bytes
+  at the start of its payload, followed by UTF-8 text. Display resolves the
+  validated AFNT through its `FONTS_RENDER` capability and requires the exact
+  strike height. Ordinary applications use `astra_draw_font_text` and the
+  read-only Fonts catalog; they receive no raw-font capability. Astraea draws
+  the glyph mask.
 - TARGET (10, v1.6) makes surface `source` (never 0) the destination of the
   commands after it; `width` and `height` are that surface's and its clip
   is all of it. So one session list carries a frame for several surfaces

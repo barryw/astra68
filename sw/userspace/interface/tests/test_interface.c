@@ -39,7 +39,7 @@ static AstraSurfaceView render_view(uint16_t width, uint16_t height)
 
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_7,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
         .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
         .width = width,
         .height = height,
@@ -78,7 +78,7 @@ int astra_draw_list_view_init(AstraSurfaceView *surface, void *storage,
 
     memset(storage, 0, byte_size);
     header->magic = ASTRA_DRAW_LIST_MAGIC;
-    header->version = ASTRA_DRAW_LIST_VERSION_1_7;
+    header->version = ASTRA_DRAW_LIST_VERSION_1_8;
     header->total_bytes = ASTRA_DRAW_LIST_AREA_BYTES;
     header->width = width;
     header->height = height;
@@ -230,7 +230,7 @@ int astra_draw_list_view_adopt(AstraSurfaceView *surface, void *storage,
         byte_size < ASTRA_DRAW_LIST_AREA_BYTES)
         return 0;
     return header->magic == ASTRA_DRAW_LIST_MAGIC &&
-           header->version == ASTRA_DRAW_LIST_VERSION_1_7 &&
+           header->version == ASTRA_DRAW_LIST_VERSION_1_8 &&
            header->total_bytes == ASTRA_DRAW_LIST_AREA_BYTES &&
            header->command_capacity == ASTRA_DRAW_LIST_COMMAND_MAX &&
            header->width == width && header->height == height &&
@@ -1534,7 +1534,7 @@ static void test_scrolled_list_control(void)
     AstraSurfaceView surface = render_view(240u, 80u);
     AstraDrawListHeader draw_header = {
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_7,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
         .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
         .width = 240u,
         .height = 80u,
@@ -2147,7 +2147,7 @@ static void test_scroll_view_layout_and_wheel(void)
     AstraWindowEvent event;
     AstraDrawListHeader list = {
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_7,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
         .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
         .width = 130u,
         .height = 60u,

@@ -662,6 +662,15 @@ static uint32_t resolve_source(void *context, AstraRenderBuilder *builder,
                       ASTRA_RENDER_SURFACE_READ);
 }
 
+static const AstraRenderFont *resolve_font(void *context, const char *id,
+                                           uint32_t id_length)
+{
+    const ResolveContext *resolve = context;
+
+    return resolve->host->resolve_font == NULL ? NULL :
+           resolve->host->resolve_font(resolve->host->context, id, id_length);
+}
+
 /* An UPLOAD of @p list at command @p index, which replay_range validated:
    the client may rewrite its area, so the command is read once and its
    surface and staging rows are checked here. */
@@ -705,7 +714,10 @@ static uint32_t list_replay(DisplayWindowGraphics *graphics,
                             uint32_t first_target)
 {
     ResolveContext context = { graphics, host };
-    AstraRenderSourceResolver resolver = { resolve_source, &context };
+    AstraRenderSourceResolver resolver = {
+        .resolve = resolve_source, .context = &context,
+        .resolve_font = resolve_font
+    };
     DisplayGraphicsSurface target;
     uint32_t next = 0u;
     int result = ASTRA_RENDER_REPLAY_FULL;
