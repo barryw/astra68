@@ -363,7 +363,6 @@ static uint32_t build_controls(void)
     if (astra_interface_button_init(CONTROL(FONTS_IMPORT), &import) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
 
-    item.flags = ASTRA_FLEX_BREAK_AFTER;
     if (astra_interface_control_set_flex(CONTROL(FONTS_TITLE), &item) != ASTRA_OK ||
         astra_interface_control_set_flex(CONTROL(FONTS_HINT), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;

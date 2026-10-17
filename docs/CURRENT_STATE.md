@@ -143,30 +143,32 @@ uses Haiku's selected-row double-click/keyboard pattern. MC68040 bundle, image
 policy, Interface sanitizer/analyzer, full userspace `all test`, and NDK
 `dist-check` pass on Beast. A disposable QEMU boot reported fonts and desktop
 service startup status zero; a separate Fonts autostart image launched the
-native bundle and submitted hardware glyph commands. Family-detail interaction
-was not qualified in that boot because the desktop retained input focus.
-Desktop icon-launch
-qualification remains open: the confined `astra-qemu-root` fixture keeps its
-WORK/SOUND exports root-only by design, so the existing icon-position gate
-cannot read Desktop's per-process syslog and loses placement lines from the
-finite kernel trace ring. Do not infer Fonts application launch from that gate.
+native bundle and submitted hardware glyph commands. A separate root-observed
+disposable QEMU gate now launches Fonts through its desktop icon, double-clicks
+a family, opens its style/strike detail view, and saves a system-face choice.
+The standard confined `astra-qemu-root` fixture keeps WORK/SOUND exports
+root-only; this focused gate observes desktop logs through the root-owned
+fixture without weakening that boundary.
 Font Kit exposes an admin-only font import call. The resident service
 writes a validated content-addressed object, syncs it, commits its full SHA-256
 token through Config Kit, and publishes the new catalog generation. The native
 Fonts UI has composed List/button views for a DH0 file browser and system-face
 choice. A disposable QEMU image with current bundles passes Fonts autostart and
 Astraea glyph submissions; focused service/client and boundary checks pass on
-Beast. Interactive Fonts UI import, native variable/Amiga import, live
-render-context refresh, removable-volume browsing, and physical release gates
-remain open.
+Beast. A fresh disposable QEMU image now passes a full GUI path: Fonts imports a
+TTF from DH0 through its file browser, publishes a content-addressed AFNT
+object and Config Kit inventory, opens family details, and saves the system
+choice. A stray Flex break flag had placed the List outside the client area;
+removing it restored pointer and keyboard interaction. Native variable/Amiga
+import, live render-context refresh, removable-volume browsing, and physical
+release gates remain open.
 An isolated native QEMU probe imports shipped AFNT through the same admin-only
 API, checks catalog publication and idempotence, selects the imported face,
 then reboots the disposable image and verifies persisted catalog and choice.
 A third boot with a damaged installed-font inventory and unavailable choice
 proves built-in fallback and refusal to write over the damaged inventory.
 It exposed and fixed a port-call handle-order defect: the source area precedes
-the reply capability in an import request. This does not qualify Fonts UI
-interaction or a physical DE25 release.
+the reply capability in an import request. Physical DE25 release remains open.
 Build-time Python conversion is a development oracle, not a user import path.
 Installed-font storage uses full SHA-256 content tokens and a single
 validated Config Kit inventory value as its atomic publication point.

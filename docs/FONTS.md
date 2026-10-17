@@ -539,9 +539,13 @@ newly created AFNT objects before the inventory commit; disposable QEMU checks
 the unchanged catalog and empty installed-object directory. If Config Kit
 reports a failed commit, objects remain because its durable outcome may be
 ambiguous. The native UI uses its existing file
-browser and Import action. Interactive UI import and a complete DE25 release
-have not been qualified. Saved system-face choice is loaded by Display at
-startup; live change notification and render-context refresh remain open.
+browser and Import action. A fresh disposable QEMU gate now drives the desktop
+icon, imports a TTF through that browser, checks the AFNT object and Config Kit
+inventory, opens family details, and saves system choice. The gate found a Flex
+break flag that moved the List outside the client area; the flag was removed.
+A complete DE25 release has not been qualified. Display loads the saved
+system-face choice at startup; live change notification and render-context
+refresh remain open.
 
 The shared C codec now exposes validated AFNT family/style strings and strike
 metrics for the future service catalog and Fonts detail view. Its NAME reader
@@ -573,7 +577,7 @@ The disposable display image now starts the service and installs a native
 Fonts bundle. The first UI reads catalog snapshots, groups installed faces by
 family, and opens a style/bitmap-size detail view through the shared List
 control. A disposable QEMU autostart confirms bundle launch and hardware glyph
-submissions; family-detail interaction still needs a focused GUI gate.
+submissions; a focused GUI gate covers family-detail interaction.
 The draft installed-font store now assigns every AFNT object its full SHA-256
 digest in canonical base32. Config Kit's single `installed` string lists those
 tokens, so the multi-face TTC importer publishes one complete inventory
@@ -594,7 +598,8 @@ save, and catalog/choice reload after reboot on a disposable QEMU image. A
 third boot with a valid Config Kit document containing a damaged installed-font
 inventory and unavailable saved choice confirms built-in fallback and refusal
 to overwrite the damaged inventory. It found and fixed an import port-call
-handle-order bug. Interactive Fonts UI import still needs a runtime gate.
+handle-order bug. Interactive Fonts UI import now passes the focused QEMU GUI
+gate; physical DE25 qualification remains open.
 Font service protocol 3 publishes `FONTS_RENDER` separately from catalog and
 administration. It rereads and validates an installed AFNT, checks the full
 content token for user faces, and transfers an immutable area. Font Kit 2.6
