@@ -29,7 +29,10 @@ enum {
     PROBE_FAIL_SELECTED,
     PROBE_FAIL_DUPLICATE,
     PROBE_FAIL_DUPLICATE_ID,
-    PROBE_FAIL_RESTART
+    PROBE_FAIL_RESTART,
+    PROBE_FAIL_CORRUPT_CATALOG,
+    PROBE_FAIL_CORRUPT_CHOICE,
+    PROBE_FAIL_CORRUPT_WRITE
 };
 
 static uint32_t matches(const AstraFontsCatalog *catalog, const char *id)
@@ -46,11 +49,22 @@ static uint32_t matches(const AstraFontsCatalog *catalog, const char *id)
     return count;
 }
 
+static uint32_t marker(AstraProcessFilesystem *files, const char *path,
+                       uint32_t *present)
+{
+    AstraFile file = ASTRA_FILE_INIT;
+    uint32_t status = astra_filesystem_open(
+        &files->filesystem, path, ASTRA_VFS_OPEN_READ, &file);
+
+    *present = status == ASTRA_VFS_OK;
+    if (status == ASTRA_VFS_OK) return astra_filesystem_close(&file);
+    return status == ASTRA_VFS_ERR_NOT_FOUND ? ASTRA_VFS_OK : status;
+}
+
 int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *read, *admin, *bootstrap;
     AstraProcessFilesystem files = ASTRA_PROCESS_FILESYSTEM_INIT;
-    AstraFile expectation = ASTRA_FILE_INIT;
     AstraFontsCatalog before = ASTRA_FONTS_CATALOG_INIT;
     AstraFontsCatalog after = ASTRA_FONTS_CATALOG_INIT;
     AstraFontsCatalog selected = ASTRA_FONTS_CATALOG_INIT;
@@ -62,6 +76,7 @@ int astra_main(const AstraStartupInfo *startup)
     char duplicate[ASTRA_FONT_ID_MAX] = {0};
     uint32_t resumed = 0u;
     uint32_t expect_again = 0u;
+    uint32_t expect_corrupt = 0u;
     AstraResult result;
 
     if (!astra_startup_validate(startup)) return ASTRA_STATUS_INVALID;
@@ -82,15 +97,31 @@ int astra_main(const AstraStartupInfo *startup)
     status = PROBE_FAIL_CATALOG_BEFORE;
     if (astra_fonts_catalog_open(read->handle, &before) != ASTRA_OK)
         goto done;
-    uint32_t opened = astra_filesystem_open(
-        &files.filesystem, "/SYSTEM/expect-font-import-again",
-        ASTRA_VFS_OPEN_READ, &expectation);
-    if (opened == ASTRA_VFS_OK) {
-        expect_again = 1u;
-        if (astra_filesystem_close(&expectation) != ASTRA_VFS_OK)
-            goto done;
-    } else if (opened != ASTRA_VFS_ERR_NOT_FOUND)
+    if (marker(&files, "/SYSTEM/expect-font-import-again",
+               &expect_again) != ASTRA_VFS_OK ||
+        marker(&files, "/SYSTEM/expect-font-inventory-corrupt",
+               &expect_corrupt) != ASTRA_VFS_OK)
         goto done;
+    if (expect_corrupt) {
+        status = PROBE_FAIL_CORRUPT_CATALOG;
+        for (uint32_t at = 0u; at < before.face_count; ++at) {
+            AstraInstalledFont face;
+            if (astra_fonts_catalog_face(&before, at, &face) != ASTRA_OK ||
+                (face.id_length >= 5u &&
+                 memcmp(face.id, "user:", 5u) == 0))
+                goto done;
+        }
+        status = PROBE_FAIL_CORRUPT_CHOICE;
+        if (strcmp(before.selected_id, "system:astra-workbench") != 0)
+            goto done;
+        status = PROBE_FAIL_CORRUPT_WRITE;
+        if (astra_fonts_import(admin->handle, source, source_size,
+                               SOURCE_NAME, sizeof(SOURCE_NAME) - 1u,
+                               id) != ASTRA_ERROR_IO)
+            goto done;
+        status = ASTRA_STATUS_OK;
+        goto done;
+    }
     resumed = strncmp(before.selected_id, "user:", 5u) == 0;
     status = PROBE_FAIL_RESTART;
     if (resumed != expect_again) goto done;
@@ -147,8 +178,9 @@ done:
         (void)astra_log_failure("font import probe", status);
         return (int)status;
     }
-    (void)astra_log(resumed ? "FONT_IMPORT_AGAIN_PASS" :
-                             "FONT_IMPORT_FIRST_PASS");
+    (void)astra_log(expect_corrupt ? "FONT_IMPORT_CORRUPT_PASS" :
+                    resumed ? "FONT_IMPORT_AGAIN_PASS" :
+                              "FONT_IMPORT_FIRST_PASS");
     for (;;)
         if (astra_wait_multiple(&receive, 1u, ASTRA_DEADLINE_FOREVER,
                                 &index, NULL) != ASTRA_SYSCALL_OK)

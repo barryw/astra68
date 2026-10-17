@@ -427,3 +427,66 @@ int astra_afnt_strike_info(const AstraAfntView *view, uint32_t index,
     };
     return 1;
 }
+
+static int cmap_glyph(const AstraAfntView *view, uint32_t count,
+                      uint32_t scalar, uint32_t *id)
+{
+    uint32_t low = 0u, high = count;
+
+    while (low < high) {
+        uint32_t middle = low + (high - low) / 2u;
+        uint32_t candidate = be32(view->cmap.bytes + 4u + middle * 8u);
+        if (candidate < scalar) low = middle + 1u;
+        else high = middle;
+    }
+    if (low == count ||
+        be32(view->cmap.bytes + 4u + low * 8u) != scalar)
+        return 0;
+    *id = be32(view->cmap.bytes + 4u + low * 8u + 4u);
+    return 1;
+}
+
+int astra_afnt_glyph_info(const AstraAfntView *view, uint32_t strike_index,
+                          uint32_t scalar, AstraAfntGlyphInfo *info)
+{
+    const uint8_t *strike, *glyph;
+    uint32_t cmap_count, glyph_count, id, first, count;
+    uint32_t offset, length;
+
+    if (view == NULL || info == NULL || view->cmap.bytes == NULL ||
+        view->strikes.bytes == NULL || view->glyphs.bytes == NULL ||
+        view->bitmap.bytes == NULL || view->cmap.length < 4u ||
+        view->strikes.length < 4u || view->glyphs.length < 4u ||
+        strike_index >= view->strike_count ||
+        strike_index >= (view->strikes.length - 4u) / STRIKE_SIZE)
+        return 0;
+    cmap_count = be32(view->cmap.bytes);
+    glyph_count = be32(view->glyphs.bytes);
+    if (cmap_count == 0u || cmap_count > (view->cmap.length - 4u) / 8u ||
+        glyph_count == 0u ||
+        glyph_count > (view->glyphs.length - 4u) / GLYPH_SIZE)
+        return 0;
+    if (!cmap_glyph(view, cmap_count, scalar, &id) &&
+        !cmap_glyph(view, cmap_count, UINT32_C(0xfffd), &id))
+        return 0;
+    strike = view->strikes.bytes + 4u + strike_index * STRIKE_SIZE;
+    first = be32(strike + 48u);
+    count = be32(strike + 52u);
+    if (first > glyph_count || count > glyph_count - first || id >= count)
+        return 0;
+    glyph = view->glyphs.bytes + 4u + (first + id) * GLYPH_SIZE;
+    offset = be32(glyph + 4u);
+    length = be32(glyph + 8u);
+    if (!span(offset, length, view->bitmap.length)) return 0;
+    *info = (AstraAfntGlyphInfo){
+        .bitmap = view->bitmap.bytes + offset,
+        .bitmap_length = length,
+        .width = be16(glyph + 12u),
+        .height = be16(glyph + 14u),
+        .pitch = be16(glyph + 16u),
+        .bearing_x = signed32(glyph + 20u),
+        .bearing_y = signed32(glyph + 24u),
+        .advance_x = signed32(glyph + 28u)
+    };
+    return 1;
+}

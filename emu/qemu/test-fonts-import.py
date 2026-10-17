@@ -68,7 +68,19 @@ def main():
         astra_image._replace_volume_file(
             image, str(expectation), "/expect-font-import-again")
         boot(args.qemu, args.rom, image, work, "restart")
-    print("ASTRA FONT IMPORT PASS native AFNT, idempotence, selection, restart")
+        settings = Path(work) / "damaged-settings"
+        settings.write_text(
+            "astra-config 1\nschema 1\ninstalled = invalid\n"
+            "system_font = user:missing\n", encoding="ascii")
+        astra_image._replace_volume_file(
+            image, str(settings), "/config/system/fonts/settings.conf")
+        marker = Path(work) / "expect-corrupt"
+        marker.write_text("corrupt\n", encoding="ascii")
+        astra_image._replace_volume_file(
+            image, str(marker), "/expect-font-inventory-corrupt")
+        boot(args.qemu, args.rom, image, work, "damaged inventory")
+    print("ASTRA FONT IMPORT PASS native AFNT, idempotence, selection, "
+          "restart, damaged-inventory fallback")
     return 0
 
 

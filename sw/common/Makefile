@@ -34,13 +34,20 @@ build/host/test-font-store: tests/test_font_store.c font_store.c sha256.c $(ROOT
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) tests/test_font_store.c font_store.c sha256.c -o $@
 
-test: build/host/test-font-store
+build/host/test-afnt-glyph: tests/test_afnt_glyph.c afnt.c crc32.c utf8.c $(ROOT)/sw/include/astra/afnt.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) tests/test_afnt_glyph.c afnt.c crc32.c utf8.c -o $@
+
+test: build/host/test-font-store build/host/test-afnt-glyph
 	./build/host/test-font-store
+	./build/host/test-afnt-glyph
 
 sanitize: tests/test_font_store.c font_store.c sha256.c
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_font_store.c font_store.c sha256.c -o build/host/test-font-store-sanitize
 	./build/host/test-font-store-sanitize
+	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer tests/test_afnt_glyph.c afnt.c crc32.c utf8.c -o build/host/test-afnt-glyph-sanitize
+	./build/host/test-afnt-glyph-sanitize
 
 build/host/libastraafnt.a: $(HOST_OBJECTS)
 	$(HOST_AR) rcs $@ $^

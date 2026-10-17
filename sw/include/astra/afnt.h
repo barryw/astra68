@@ -35,6 +35,17 @@ typedef struct AstraAfntStrikeInfo {
     int32_t strikeout_thickness;
 } AstraAfntStrikeInfo;
 
+typedef struct AstraAfntGlyphInfo {
+    const uint8_t *bitmap; /* Borrows the validated AFNT buffer. */
+    uint32_t bitmap_length;
+    uint16_t width;
+    uint16_t height;
+    uint16_t pitch;
+    int32_t bearing_x;
+    int32_t bearing_y;
+    int32_t advance_x;
+} AstraAfntGlyphInfo;
+
 enum {
     ASTRA_AFNT_NAME = 0,
     ASTRA_AFNT_CMAP,
@@ -52,6 +63,9 @@ int astra_afnt_name_string(const AstraAfntView *view, const char *key,
 /* Read one validated strike without exposing disk record layout to clients. */
 int astra_afnt_strike_info(const AstraAfntView *view, uint32_t index,
                            AstraAfntStrikeInfo *info);
+/* Resolve a Unicode scalar in one validated strike, using U+FFFD if absent. */
+int astra_afnt_glyph_info(const AstraAfntView *view, uint32_t strike_index,
+                          uint32_t scalar, AstraAfntGlyphInfo *info);
 /* Packs chunks in canonical order. NULL output queries required length. */
 int astra_afnt_pack(const AstraAfntChunk chunks[ASTRA_AFNT_CHUNK_COUNT],
                     void *output, uint32_t capacity, uint32_t *length);

@@ -524,7 +524,10 @@ import from the native Fonts UI through the managed service transaction.
 The shared C codec now exposes validated AFNT family/style strings and strike
 metrics for the future service catalog and Fonts detail view. Its NAME reader
 decodes JSON escapes, rejects malformed Unicode and duplicate requested fields,
-and leaves source buffers owned by the caller. The HPS C converter now prepares
+and leaves source buffers owned by the caller. It also resolves Unicode scalars
+to borrowed glyph rasters and metrics in validated strikes, falling back to
+U+FFFD without a second file parser. Beast host, sanitizer, MC68040, and
+AArch64 codec builds pass. The HPS C converter now prepares
 11, 13, 16, and 20-pixel A8 strikes, including every current proportional UI
 role size from `astra/theme.h`. Beast host, sanitizer, MC68040, AArch64, and
 outline-conversion checks pass. This does not install fonts or change the active
@@ -565,9 +568,11 @@ system-face choice through the admin port, which persists in Config Kit.
 MC68040 builds, host policy/client tests, full userspace tests, static analysis,
 and a disposable QEMU Fonts autostart pass. A test-only native Astra probe
 passes AFNT import, catalog publication, duplicate-idempotence, selected-face
-save, and catalog/choice reload after reboot on a disposable QEMU image. It
-found and fixed an import port-call handle-order bug. Interactive Fonts UI
-import and corrupt-inventory recovery still need runtime gates.
+save, and catalog/choice reload after reboot on a disposable QEMU image. A
+third boot with a valid Config Kit document containing a damaged installed-font
+inventory and unavailable saved choice confirms built-in fallback and refusal
+to overwrite the damaged inventory. It found and fixed an import port-call
+handle-order bug. Interactive Fonts UI import still needs a runtime gate.
 Only AFNT is accepted at runtime; the HPS converter is not wired to the
 service. System choice is not consumed by the live render path, so changing it
 does not yet alter system typography. Production DE25 still uses the previous
