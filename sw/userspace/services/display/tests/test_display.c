@@ -1416,7 +1416,7 @@ static void test_window_graphics(void)
             {
                 AstraArea face = {.handle = 0xa00u, .address = bytes,
                     .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
-                AstraGuiSessionRequest request = {0};
+                AstraGuiFontContextRequest request = {0};
                 DisplayFontRegistry registry = {0};
                 DisplayFontFace *owned = NULL, *second_face = NULL;
                 DisplayFontSet retained = {.registry = &registry};
@@ -1436,6 +1436,14 @@ static void test_window_graphics(void)
                 DisplayState fonts = {.ui_font = owned, .fonts = &registry};
                 astra_message_header_set(&request.header, sizeof(request),
                     ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT, 9u);
+                assert(valid_session_request(&request.header, sizeof(request),
+                    sizeof(request), ASTRA_GUI_FONT_CONTEXT));
+                assert(!valid_session_request(&request.header,
+                    sizeof(AstraGuiSessionRequest), sizeof(request), ASTRA_GUI_FONT_CONTEXT));
+                --request.header.protocol_version;
+                assert(!valid_session_request(&request.header, sizeof(request),
+                    sizeof(request), ASTRA_GUI_FONT_CONTEXT));
+                ++request.header.protocol_version;
                 font_context_reply(&fonts, 0u, &request, 0x501u);
                 assert(delivered_font_context.status == ASTRA_STATUS_OK &&
                     delivered_font_context.area_size == (uint32_t)length &&
@@ -1443,6 +1451,7 @@ static void test_window_graphics(void)
                     delivered_font_handles == 1u &&
                     strcmp(delivered_font_context.face_id, "user:fixture") == 0);
                 assert(owned->references == 2u);
+                memcpy(request.adopted_id, "user:fixture", sizeof("user:fixture"));
                 font_reply_status = ASTRA_SYSCALL_WOULD_BLOCK;
                 uint32_t duplicate_closes = font_duplicate_closes;
                 font_context_reply(&fonts, 0u, &request, 0x501u);
@@ -1463,10 +1472,11 @@ static void test_window_graphics(void)
                     ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP,
                     &fonts.sessions[0].receive) == ASTRA_SYSCALL_OK);
                 font_context_reply(&fonts, 7u, &request, 0x501u);
-                assert(owned->references == 3u && fonts.sessions[0].font == owned);
+                assert(owned->references == 3u && fonts.sessions[0].fonts.pending == owned);
                 close_session(&fonts, 0u);
                 assert(fonts.session_count == 0u && owned->references == 2u &&
-                       fonts.sessions[0].font == NULL);
+                       fonts.sessions[0].fonts.pending == NULL &&
+                       fonts.sessions[0].fonts.confirmed == NULL);
                 display_font_set_begin(&retained);
                 assert(display_font_set_resolve(&retained, "user:fixture", 12u) ==
                        &owned->render);
@@ -1478,6 +1488,10 @@ static void test_window_graphics(void)
                     delivered_font_context.area_size == 0u &&
                     delivered_font_context.face_id[0] == '\0' &&
                     delivered_font_handles == 0u);
+                assert(fonts.shared_font_context.confirmed == owned);
+                request.adopted_id[0] = '\0';
+                font_context_reply(&fonts, 0u, &request, 0x501u);
+                assert(fonts.shared_font_context.confirmed == NULL);
                 /* The catalog source is unavailable, but a retained document
                    still owns its immutable bytes after the default changes. */
                 display_font_release(owned);
@@ -1491,6 +1505,38 @@ static void test_window_graphics(void)
                     .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
                 assert(display_font_adopt(&registry, &face, (uint32_t)length,
                     "user:other", 10u, &second_face) == ASTRA_OK);
+                {
+                    DisplayState switching = {.ui_font = owned, .fonts = &registry};
+                    AstraGuiFontContextRequest query = {0};
+                    astra_message_header_set(&query.header, sizeof(query),
+                        ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT, 10u);
+                    font_context_reply(&switching, 0u, &query, 0x501u);
+                    assert(switching.shared_font_context.pending == owned);
+                    memcpy(query.adopted_id, "user:fixture", sizeof("user:fixture"));
+                    switching.ui_font = second_face;
+                    font_context_reply(&switching, 0u, &query, 0x501u);
+                    assert(switching.shared_font_context.confirmed == owned &&
+                           switching.shared_font_context.pending == second_face);
+                    /* Client could not map the new reply. Retrying with its
+                       actual old ID must preserve that font, without growth. */
+                    font_context_reply(&switching, 0u, &query, 0x501u);
+                    assert(owned->references == 2u && second_face->references == 2u);
+                    memset(query.adopted_id, 'x', sizeof(query.adopted_id));
+                    font_context_reply(&switching, 0u, &query, 0x501u);
+                    assert(delivered_font_context.status == ASTRA_STATUS_PROTOCOL &&
+                           owned->references == 2u && second_face->references == 2u);
+                    memcpy(query.adopted_id, "user:other", sizeof("user:other"));
+                    font_context_reply(&switching, 0u, &query, 0x501u);
+                    assert(switching.shared_font_context.confirmed == second_face &&
+                           owned->references == 1u && second_face->references == 3u);
+                    switching.ui_font = NULL;
+                    font_context_reply(&switching, 0u, &query, 0x501u);
+                    assert(second_face->references == 2u);
+                    query.adopted_id[0] = '\0';
+                    font_context_reply(&switching, 0u, &query, 0x501u);
+                    assert(switching.shared_font_context.confirmed == NULL &&
+                           second_face->references == 1u);
+                }
                 /* Rollback drops new references, preserving old document. */
                 display_font_set_begin(&retained);
                 assert(display_font_set_resolve(&retained, "user:other", 10u) ==

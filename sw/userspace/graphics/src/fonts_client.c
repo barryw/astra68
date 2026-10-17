@@ -3,6 +3,8 @@
 #include <astra/font_catalog.h>
 #include <astra/font_service.h>
 #include <astra/gui.h>
+
+#include "font_context.h"
 #include <astra/port.h>
 #include <astra/resource.h>
 #include <astra/result.h>
@@ -24,13 +26,15 @@ _Static_assert(ASTRA_FONT_IMPORT_NAME_MAX == ASTRA_FONT_SOURCE_NAME_MAX,
 
 AstraResult astra_fonts_use_system(AstraHandle gui)
 {
-    AstraGuiSessionRequest request = {0};
+    AstraGuiFontContextRequest request = {0};
     AstraGuiFontContext reply = {0};
     AstraArea area = ASTRA_AREA_INIT;
     AstraCall call = {0};
     AstraResult result;
 
     if (gui == ASTRA_INVALID_HANDLE) return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_font_context_id(request.adopted_id);
+    if (result != ASTRA_OK) return result;
     result = astra_message_header_init(&request.header, sizeof(request),
         ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT, 1u);
     if (result != ASTRA_OK) return result;

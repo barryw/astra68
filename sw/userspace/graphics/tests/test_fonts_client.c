@@ -5,6 +5,7 @@
 #include <astra/resource.h>
 #include <astra/status.h>
 #include <astra/gui.h>
+#include "../src/font_context.h"
 
 #include <assert.h>
 #include <string.h>
@@ -17,12 +18,23 @@ static uint32_t closed_handles;
 static uint8_t imported_bytes[16];
 static uint32_t imported_length;
 static uint32_t installed_contexts;
+static char adopted_id[ASTRA_FONT_ID_MAX];
+static uint32_t fail_snapshot;
+static uint32_t fail_context_map;
+
+AstraResult astra_font_context_id(char id[ASTRA_FONT_ID_MAX])
+{
+    memcpy(id, adopted_id, sizeof(adopted_id));
+    return ASTRA_OK;
+}
 
 AstraResult astra_fonts_use_snapshot(AstraArea *area, uint32_t length, const char *id)
 {
     assert(length == 128u && strcmp(id, "system:test") == 0);
     assert(area->handle == 2u && area->address == document &&
         area->map_flags == ASTRA_AREA_MAP_READ);
+    if (fail_snapshot) return ASTRA_ERROR_INVALID_ARGUMENT;
+    memcpy(adopted_id, id, strlen(id) + 1u);
     *area = (AstraArea)ASTRA_AREA_INIT;
     ++installed_contexts;
     return ASTRA_OK;
@@ -47,9 +59,11 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
     (void)deadline;
     assert(service == 1u);
     if (request->header.protocol == ASTRA_GUI_PROTOCOL) {
+        const AstraGuiFontContextRequest *query = call->request;
         AstraGuiFontContext *context = call->reply;
-        assert(call->request_size == sizeof(AstraGuiSessionRequest) &&
+        assert(call->request_size == sizeof(*query) &&
             request->header.operation == ASTRA_GUI_FONT_CONTEXT);
+        assert(strcmp(query->adopted_id, adopted_id) == 0);
         assert(call->reply_capacity == sizeof(*context));
         astra_message_header_set(&context->header, sizeof(*context),
             ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
@@ -101,6 +115,7 @@ AstraResult astra_area_map(AstraArea *area, uint32_t flags)
     assert(area->handle == 2u || area->handle == 3u);
     assert(flags == (area->handle == 2u ? ASTRA_AREA_MAP_READ :
                      ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE));
+    if (fail_context_map) return ASTRA_ERROR_OUT_OF_MEMORY;
     area->address = area->handle == 2u ? document : imported_bytes;
     area->size = area->handle == 2u ? sizeof(document) :
                                         sizeof(imported_bytes);
@@ -238,5 +253,16 @@ int main(void)
     bad_reply = 2u;
     assert(astra_fonts_use_system(1u) == ASTRA_ERROR_IO && installed_contexts == 1u);
     assert(closed_handles == 11u);
+    bad_reply = 0u;
+    fail_context_map = 1u;
+    assert(astra_fonts_use_system(1u) == ASTRA_ERROR_OUT_OF_MEMORY &&
+           installed_contexts == 1u && strcmp(adopted_id, "system:test") == 0);
+    fail_context_map = 0u;
+    fail_snapshot = 1u;
+    assert(astra_fonts_use_system(1u) == ASTRA_ERROR_INVALID_ARGUMENT &&
+           installed_contexts == 1u && strcmp(adopted_id, "system:test") == 0);
+    fail_snapshot = 0u;
+    assert(astra_fonts_use_system(1u) == ASTRA_OK && installed_contexts == 2u);
+    assert(closed_handles == 13u);
     return 0;
 }

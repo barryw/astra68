@@ -143,8 +143,35 @@ delivery. The native GUI import/detail/choice/restart/uninstall gate also passes
 log `/var/tmp/astra-font-lifetime-ui-20261017.log`. Live switching still needs
 explicit client-adoption handling: a delivered snapshot is not proof that the
 client mapped/adopted it, so notification work must preserve the previous
-context across client-side failure. Live notifications/client reflow,
-designed-style resolution and complete physical font qualification remain open.
+context across client-side failure. The following GUI 23 checkpoint implements
+that adoption handoff. Live notifications/client reflow, designed-style
+resolution and complete physical font qualification remain open.
+
+GUI protocol 23 replaces the header-only font-context query with a request
+carrying the client's actually adopted ID. Display retains bounded confirmed
+and pending slots per session and reconciles them on the next request. Failed
+client mapping/validation therefore cannot retire its still-active snapshot;
+recovery and session cleanup release the same owned references. Font Kit
+reads the ID through its existing context mutex, shared with text submission.
+Public Font Kit ABI remains 3.1. Graphics/Display host and ASan/UBSan gates,
+MC68040 builds and Display analyzer pass. Full userspace `all test`, coherent
+ROM build, Graphics library contract and NDK `dist-check` pass; log
+`/var/tmp/astra-font-adoption-all-20261017.log`. The GUI 23 ROM SHA-256 is
+`414b14e64f8228169ca03e4159daa6672b8e34b7dbdc91a2a807cf28e3f87247`.
+Native GUI import/detail/choice/restart/uninstall passes with it; log
+`/var/tmp/astra-font-adoption-ui-20261017.log`.
+System window/graphics, Supervisor loader-recovery and Display host tests now
+depend on the GUI header, preventing stale test binaries after protocol changes.
+Forced-header dry runs and refreshed host/sanitizer gates pass in
+`/var/tmp/astra-font-adoption-host-final-20261017.log`.
+Supervisor's existing per-process `gui_session` reference already keeps each
+application's session alive until process retirement; no additional client GUI
+clone, new port lease or broadened transfer rights are needed. Manually created
+sessions remain their owner's responsibility. No font software is deployed to
+DE25. Live notifications/reflow and complete physical qualification remain open.
+Final Graphics host/sanitizer/build/contract checks pass in
+`/var/tmp/astra-font-adoption-final-20261017.log`; the Font Kit binary matches
+the one used by the passing native GUI gate byte for byte.
 
 Latest work covers native font management, scoped settings, and migration of
 native UI pixel rendering to Astraea. The fixed/removable filesystem remains

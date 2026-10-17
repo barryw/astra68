@@ -9,6 +9,7 @@
 #include <astra/theme.h>
 #include <astra/ui_font.h>
 #include <astra/fonts.h>
+#include "../src/font_context.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -762,6 +763,8 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
             .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
         AstraSurfaceView surface;
         assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length, id) == ASTRA_OK);
+        char adopted[ASTRA_FONT_ID_MAX];
+        assert(astra_font_context_id(adopted) == ASTRA_OK && strcmp(adopted, id) == 0);
         assert(snapshot.handle == ASTRA_INVALID_HANDLE);
         assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) ==
                expected_width);
@@ -793,6 +796,7 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
         }
         id[0] = '\0';
         assert(astra_fonts_use_snapshot(&snapshot, 0u, id) == ASTRA_OK);
+        assert(astra_font_context_id(adopted) == ASTRA_OK && adopted[0] == '\0');
         assert(closed_font_snapshots == 1u);
         assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) !=
                expected_width);
@@ -801,6 +805,7 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
         bytes[0] ^= 1u;
         assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length,
             "user:fixture") == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_font_context_id(adopted) == ASTRA_OK && adopted[0] == '\0');
         assert(snapshot.handle == 77u &&
             astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) !=
                 expected_width);

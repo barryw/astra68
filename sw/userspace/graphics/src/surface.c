@@ -27,6 +27,7 @@
 #if defined(ASTRA_SURFACE_FONT)
 #include "astra_font8x8.inc"
 #include "font_data.h"
+#include "font_context.h"
 #endif
 
 
@@ -78,6 +79,15 @@ static _Alignas(4) volatile uint32_t system_font_lock;
 static AstraArea system_font_area = ASTRA_AREA_INIT;
 static AstraAfntView system_font_view;
 static char system_font_id[ASTRA_FONT_ID_MAX];
+
+AstraResult astra_font_context_id(char id[ASTRA_FONT_ID_MAX])
+{
+    if (astra_mutex_lock(&system_font_lock) != ASTRA_SYSCALL_OK)
+        return ASTRA_ERROR_IO;
+    memcpy(id, system_font_id, sizeof(system_font_id));
+    (void)astra_mutex_unlock(&system_font_lock);
+    return ASTRA_OK;
+}
 
 AstraResult astra_fonts_use_snapshot(AstraArea *area, uint32_t length,
                                    const char *id)
@@ -810,10 +820,7 @@ static int draw_list_text(AstraSurfaceView *surface, int32_t x, int32_t y,
     if (clip_empty(surface) || length == 0u)
         return 1;
     if (operation == ASTRA_DRAW_LIST_TEXT) {
-        if (astra_mutex_lock(&system_font_lock) != ASTRA_SYSCALL_OK)
-            return 0;
-        memcpy(id, system_font_id, sizeof(id));
-        (void)astra_mutex_unlock(&system_font_lock);
+        if (astra_font_context_id(id) != ASTRA_OK) return 0;
         id_length = (uint32_t)strlen(id);
         if (id_length != 0u) {
             operation = ASTRA_DRAW_LIST_NAMED_TEXT;

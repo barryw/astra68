@@ -152,13 +152,16 @@ system-library-contract: $(SYSTEM_LIBRARY)
 define system_host_test
 build/host/test_$(1): $$(TEST_SOURCES_$(1)) tests/test_$(1).c
 	@mkdir -p $$(@D)
-	$$(HOST_CC) $$(HOST_CFLAGS) $$^ -o $$@
+	$$(HOST_CC) $$(HOST_CFLAGS) $$(TEST_SOURCES_$(1)) tests/test_$(1).c -o $$@
 
 build/host/test_$(1)_sanitize: $$(TEST_SOURCES_$(1)) tests/test_$(1).c
 	@mkdir -p $$(@D)
-	$$(HOST_CC) $$(HOST_CFLAGS) $$(SANITIZER_FLAGS) $$^ -o $$@
+	$$(HOST_CC) $$(HOST_CFLAGS) $$(SANITIZER_FLAGS) $$(TEST_SOURCES_$(1)) tests/test_$(1).c -o $$@
 endef
 $(foreach test,$(HOST_TESTS),$(eval $(call system_host_test,$(test))))
+
+build/host/test_window build/host/test_window_sanitize \
+build/host/test_graphics build/host/test_graphics_sanitize: ../../include/astra/gui.h
 
 test: $(addprefix build/host/test_,$(HOST_TESTS))
 	@set -e; for test in $^; do ./$$test; done

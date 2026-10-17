@@ -10,11 +10,18 @@ static int valid_id(const char *id, uint32_t length)
         memchr(id, '\0', length) == NULL;
 }
 
+static int face_matches(const DisplayFontFace *face, const char *id,
+                         uint32_t length)
+{
+    return face != NULL && strlen(face->id) == length &&
+        memcmp(face->id, id, length) == 0;
+}
+
 static DisplayFontFace *find_face(DisplayFontRegistry *registry,
                                    const char *id, uint32_t length)
 {
     for (DisplayFontFace *face = registry->faces; face != NULL; face = face->next)
-        if (strlen(face->id) == length && memcmp(face->id, id, length) == 0)
+        if (face_matches(face, id, length))
             return face;
     return NULL;
 }
@@ -100,6 +107,28 @@ AstraResult display_font_acquire(DisplayFontRegistry *registry,
     return result;
 }
 
+void display_font_context_confirm(DisplayFontContext *context,
+    const char *id, uint32_t id_length)
+{
+    DisplayFontFace *adopted = NULL;
+    if (face_matches(context->pending, id, id_length)) {
+        adopted = context->pending;
+        context->pending = NULL;
+    } else if (face_matches(context->confirmed, id, id_length)) {
+        adopted = context->confirmed;
+        context->confirmed = NULL;
+    }
+    display_font_context_close(context);
+    context->confirmed = adopted;
+}
+
+void display_font_context_close(DisplayFontContext *context)
+{
+    display_font_release(context->confirmed);
+    display_font_release(context->pending);
+    *context = (DisplayFontContext){0};
+}
+
 struct DisplayFontUse {
     DisplayFontUse *next;
     DisplayFontFace *face;
@@ -123,8 +152,7 @@ const AstraRenderFont *display_font_set_resolve(void *context,
     if (set == NULL || set->registry == NULL || !valid_id(id, id_length))
         return NULL;
     for (use = set->uses; use != NULL; use = use->next)
-        if (strlen(use->face->id) == id_length &&
-            memcmp(use->face->id, id, id_length) == 0) {
+        if (face_matches(use->face, id, id_length)) {
             use->used = 1u;
             return &use->face->render;
         }

@@ -52,7 +52,8 @@ $(AFNT_CODEC) $(HOST_AFNT_CODEC):
 	$(MAKE) -C $(ASTRA_COMMON) $(@:$(ASTRA_COMMON)/%=%)
 
 $(HOST_TEST): main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
-		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/include/astra/ui_font.h \
+		../../../include/astra/gui.h \
+		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/src/font_context.h $(GRAPHICS)/include/astra/ui_font.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c $(GRAPHICS)/src/render_builder.c \
 		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c \
@@ -70,7 +71,8 @@ test: $(HOST_TEST)
 	./$(HOST_TEST)
 
 $(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
-		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/include/astra/ui_font.h \
+		../../../include/astra/gui.h \
+		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/src/font_context.h $(GRAPHICS)/include/astra/ui_font.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c $(GRAPHICS)/src/render_builder.c \
 		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c \

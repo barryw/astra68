@@ -600,12 +600,32 @@ their existing storage lifetime protects submitted bytes, so the FPGA never
 retains an AFNT pointer. This ownership checkpoint prepares live switching;
 selection notifications, client reflow and designed family-style resolution
 remain open.
-Before enabling live changes, context replacement must distinguish delivery
-from client adoption: mapping or validation can fail after a reply arrives.
-The current fixed startup default cannot change under that failure; live
-notification work must preserve the client's previous context until adoption
-is known. Host, sanitizer, MC68040/analyzer and native GUI
+Host, sanitizer, MC68040/analyzer and native GUI
 import/detail/choice/restart/uninstall checks pass for this ownership checkpoint.
+
+GUI protocol 23 now distinguishes context delivery from adoption. Font Kit
+includes its actually adopted face ID in each context request, read through
+the same private mutex-protected state used by measurement and text commands.
+Each Display session retains at most two snapshots: confirmed and pending.
+The next request confirms the adopted one and retires the unused one before
+preparing a new pending reply. A client that cannot map or validate a reply
+reports its previous ID on retry; no confirmed reference is lost. Recovery's
+empty ID follows the same rule. This needs no acknowledgement race, new
+kernel mechanism or unbounded history. Session close releases both slots.
+The old header-only request is removed; every GUI producer and consumer uses
+the new protocol version. Host and sanitizer checks cover retry after failed
+mapping/validation, stable reference counts, malformed IDs, old request/version
+rejection, recovery adoption and final session cleanup. Public Font Kit ABI
+stays 3.1; the changed wire contract is versioned by GUI protocol 23.
+Contexts belong to their GUI session. Supervisor already retains an
+application's `gui_session` in its process record until process retirement;
+Font Kit does not duplicate a nondelegable GUI capability or invent another
+lease. Owners of manually created sessions must keep them alive while using
+their system context. The coherent GUI 23 ROM, full userspace build/tests,
+NDK contract/docs/installed example checks and native GUI workflow pass on
+Beast. GUI-header dependencies now also invalidate System window/graphics,
+Supervisor loader-recovery and Display host tests; forced-header dry runs and
+their host/sanitizer checks verify that boundary.
 
 The shared renderer also makes AFNT a dependency of HPS display helpers.
 `fpga/arty/linux/Makefile` now includes the existing AFNT, CRC32, and UTF-8

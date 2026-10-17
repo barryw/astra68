@@ -153,7 +153,7 @@ LOADER_RECOVERY_SOURCES := tests/test_loader_recovery.c \
 		$(SYSTEM)/src/manifest.c $(ASTRA_COMMON)/utf8.c \
 		$(SYSTEM)/src/service_definition.c $(RUNTIME)/src/string.c
 
-$(LOADER_RECOVERY_TEST): $(LOADER_RECOVERY_SOURCES) src/loader.c
+$(LOADER_RECOVERY_TEST): $(LOADER_RECOVERY_SOURCES) src/loader.c ../../include/astra/gui.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		-ffunction-sections -fdata-sections $(LOADER_RECOVERY_SOURCES) \

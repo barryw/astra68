@@ -28,6 +28,8 @@ ASTRA_EXTERN_C_BEGIN
  * Call on the UI thread between frames, before laying out native controls.
  * Failed snapshot validation preserves the previous context. Independent fonts
  * and monospaced text are unaffected.
+ * The next request reports the context actually adopted, so Display keeps the
+ * previous snapshot alive if mapping or validation of a delivered reply fails.
  * @param gui Borrowed GUI startup/session capability.
  * @return ::ASTRA_OK or a negative ::AstraResult. */
 ASTRA_NODISCARD AstraResult astra_fonts_use_system(AstraHandle gui);

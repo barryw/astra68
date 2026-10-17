@@ -171,7 +171,7 @@ typedef struct DisplayLaunch {
 typedef struct DisplaySession {
     uint32_t receive;
     uint32_t id;
-    DisplayFontFace *font;
+    DisplayFontContext fonts;
 } DisplaySession;
 
 typedef struct DisplayState {
@@ -270,7 +270,7 @@ typedef struct DisplayState {
     /* Open GUI sessions, waited on after the windows. Every session and
        window is one wait handle, so the kernel's wait bound is theirs. */
     DisplaySession sessions[ASTRA_WAIT_MULTIPLE_MAX];
-    DisplayFontFace *shared_font_context;
+    DisplayFontContext shared_font_context;
     uint32_t session_count;
     uint32_t next_session;
 } DisplayState;
@@ -4318,18 +4318,16 @@ static void close_window(DisplayWindow *window)
     *window = (DisplayWindow){0};
 }
 
-static int valid_session_request(const AstraGuiSessionRequest *request,
-                                 uint32_t size, uint32_t operation)
+static int valid_session_request(const AstraMessageHeader *header,
+                                 uint32_t size, uint32_t expected,
+                                 uint32_t operation)
 {
-    return size == sizeof(*request) &&
-           request->header.total_size == sizeof(*request) &&
-           request->header.header_size == ASTRA_MESSAGE_HEADER_SIZE &&
-           request->header.flags == 0u &&
-           request->header.protocol == ASTRA_GUI_PROTOCOL &&
-           request->header.protocol_version == ASTRA_GUI_VERSION &&
-           request->header.reserved == 0u &&
-           request->header.transaction_id != 0u &&
-           request->header.operation == operation;
+    return size == expected && header->total_size == expected &&
+           header->header_size == ASTRA_MESSAGE_HEADER_SIZE &&
+           header->flags == 0u && header->protocol == ASTRA_GUI_PROTOCOL &&
+           header->protocol_version == ASTRA_GUI_VERSION &&
+           header->reserved == 0u && header->transaction_id != 0u &&
+           header->operation == operation;
 }
 
 static int valid_open_session(const AstraGuiOpenSession *request,
@@ -4351,18 +4349,18 @@ static int valid_open_session(const AstraGuiOpenSession *request,
 }
 
 static void font_context_reply(DisplayState *state, uint32_t session,
-                                const AstraGuiSessionRequest *request,
+                                const AstraGuiFontContextRequest *request,
                                 uint32_t reply)
 {
     AstraGuiFontContext message = {0};
-    DisplayFontFace **context_font = session == 0u ?
+    DisplayFontContext *context_font = session == 0u ?
         &state->shared_font_context : NULL;
     DisplayFontFace *next = NULL;
     uint32_t area = 0u;
 
     for (uint32_t at = 0u; at < state->session_count; ++at)
         if (state->sessions[at].id == session) {
-            context_font = &state->sessions[at].font;
+            context_font = &state->sessions[at].fonts;
             break;
         }
 
@@ -4370,6 +4368,11 @@ static void font_context_reply(DisplayState *state, uint32_t session,
         ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT_REPLY,
         request->header.transaction_id);
     message.status = context_font == NULL ? ASTRA_STATUS_BAD_HANDLE : ASTRA_STATUS_OK;
+    const char *end = memchr(request->adopted_id, '\0', sizeof(request->adopted_id));
+    if (end == NULL) message.status = ASTRA_STATUS_PROTOCOL;
+    if (message.status == ASTRA_STATUS_OK)
+        display_font_context_confirm(context_font, request->adopted_id,
+                                      (uint32_t)(end - request->adopted_id));
     if (message.status == ASTRA_STATUS_OK && state->ui_font != NULL) {
         if (display_font_retain(state->ui_font)) next = state->ui_font;
         else message.status = ASTRA_STATUS_LIMIT;
@@ -4388,8 +4391,7 @@ static void font_context_reply(DisplayState *state, uint32_t session,
     if (astra_port_send(reply, &message, sizeof(message),
         area == 0u ? NULL : &area, area == 0u ? 0u : 1u) == ASTRA_SYSCALL_OK) {
         if (message.status == ASTRA_STATUS_OK) {
-            display_font_release(*context_font);
-            *context_font = next;
+            context_font->pending = next;
             next = NULL;
         }
     } else if (area != 0u) (void)astra_close(area);
@@ -4482,7 +4484,7 @@ static void close_session(DisplayState *state, uint32_t index)
     if (state->sessions[index].id == state->launch.session)
         end_launch(state);
     (void)astra_close(state->sessions[index].receive);
-    display_font_release(state->sessions[index].font);
+    display_font_context_close(&state->sessions[index].fonts);
     for (uint32_t at = index; at + 1u < state->session_count; ++at)
         state->sessions[at] = state->sessions[at + 1u];
     --state->session_count;
@@ -4604,15 +4606,21 @@ static void receive_open(uint32_t device, uint32_t irq,
                 (void)astra_close(handles[index]);
         return;
     }
+    if (size == sizeof(AstraGuiFontContextRequest)) {
+        const AstraGuiFontContextRequest *message =
+            (const AstraGuiFontContextRequest *)(const void *)&request;
+        if (handle_count == 1u && valid_session_request(&message->header,
+                size, sizeof(*message), ASTRA_GUI_FONT_CONTEXT))
+            font_context_reply(state, session, message, handles[0]);
+        for (uint32_t index = 0u; index < handle_count; ++index)
+            if (handles[index] != 0u) (void)astra_close(handles[index]);
+        return;
+    }
     if (size == sizeof(AstraGuiSessionRequest)) {
         const AstraGuiSessionRequest *message =
             (const AstraGuiSessionRequest *)(const void *)&request;
-
-        if (handle_count == 1u &&
-            valid_session_request(message, size, ASTRA_GUI_FONT_CONTEXT))
-            font_context_reply(state, session, message, handles[0]);
-        else if (handle_count == 0u && session != 0u &&
-            valid_session_request(message, size,
+        if (handle_count == 0u && session != 0u &&
+            valid_session_request(&message->header, size, sizeof(*message),
                                   ASTRA_GUI_SESSION_ACTIVATE))
             activate_session(device, irq, framebuffer, pointer_buffer,
                              state, session, next_fence, cursor_fence,

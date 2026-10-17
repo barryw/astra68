@@ -32,6 +32,15 @@ AstraResult display_font_acquire(DisplayFontRegistry *registry,
 int display_font_retain(DisplayFontFace *face);
 void display_font_release(DisplayFontFace *face);
 
+typedef struct DisplayFontContext {
+    DisplayFontFace *confirmed;
+    DisplayFontFace *pending;
+} DisplayFontContext;
+
+void display_font_context_confirm(DisplayFontContext *context,
+    const char *id, uint32_t id_length);
+void display_font_context_close(DisplayFontContext *context);
+
 typedef struct DisplayFontUse DisplayFontUse;
 typedef struct DisplayFontSet {
     DisplayFontRegistry *registry;
