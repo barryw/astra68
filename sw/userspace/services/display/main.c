@@ -2,6 +2,7 @@
 #include <astra/bytes.h>
 #include <astra/display.h>
 #include <astra/endian.h>
+#include <astra/fonts.h>
 #include <astra/gui.h>
 #include <astra/input_service.h>
 #include <astra/menu.h>
@@ -167,6 +168,7 @@ typedef struct DisplayLaunch {
 
 typedef struct DisplayState {
     DisplayWindow *windows;
+    const AstraRenderFont *ui_font;
     uint32_t windows_area;
     uint32_t capacity;
     DamageRect damage[2];
@@ -2472,6 +2474,8 @@ static uint32_t compose(void *storage, uint32_t fence,
                               status != ASTRA_STATUS_OK ? status :
                                                          ASTRA_STATUS_INVALID);
     }
+    if (!astra_render_builder_use_font(&builder, state->ui_font))
+        return compose_failed(&builder, error, failure, ASTRA_STATUS_INVALID);
     if (!build_system_surfaces(&builder, state, &theme))
         return compose_failed(&builder, error, failure,
                               ASTRA_STATUS_LIMIT);
@@ -5348,10 +5352,12 @@ static void serve_windows(uint32_t device, uint32_t irq,
                           AstraDmaBufferInfo *framebuffer,
                           AstraDmaBufferInfo *pointer_buffer,
                           uint32_t gui_receive, uint32_t input_receive,
-                          const volatile AstraInputPointerState *pointer)
+                          const volatile AstraInputPointerState *pointer,
+                          const AstraRenderFont *ui_font)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     DisplayState state = {
+        .ui_font = ui_font,
         .damage = {
             { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u },
             { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u }
@@ -5510,6 +5516,13 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *irq;
     const AstraStartupCapability *vblank_irq;
     const AstraStartupCapability *input_service;
+    const AstraStartupCapability *fonts;
+    const AstraStartupCapability *fonts_render;
+    AstraFontsCatalog font_catalog = ASTRA_FONTS_CATALOG_INIT;
+    AstraArea font_area = ASTRA_AREA_INIT;
+    AstraRenderFont system_font = {0};
+    const AstraRenderFont *active_font = NULL;
+    uint32_t font_bytes = 0u;
     uint32_t gui_receive = 0u;
     uint32_t gui_send = 0u;
     uint32_t input_receive = 0u;
@@ -5528,6 +5541,9 @@ int astra_main(const AstraStartupInfo *startup)
         startup, ASTRA_CAPABILITY_DISPLAY_VBLANK_IRQ);
     input_service = astra_startup_capability(
         startup, ASTRA_CAPABILITY_INPUT_SERVICE);
+    fonts = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS);
+    fonts_render = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_FONTS_RENDER);
     if (bootstrap == NULL || device == NULL || irq == NULL ||
         vblank_irq == NULL ||
         input_service == NULL)
@@ -5565,8 +5581,29 @@ int astra_main(const AstraStartupInfo *startup)
         (void)astra_device_reset(device->handle);
         return (int)status;
     }
+    if (fonts != NULL && fonts_render != NULL &&
+        astra_fonts_catalog_open(fonts->handle, &font_catalog) == ASTRA_OK) {
+        if (font_catalog.selected_id[0] != '\0' &&
+            astra_fonts_face_open(fonts_render->handle,
+                font_catalog.selected_id,
+                (uint32_t)strlen(font_catalog.selected_id),
+                &font_area, &font_bytes) == ASTRA_OK &&
+            astra_render_font_init(&system_font, font_area.address,
+                                   font_bytes))
+            active_font = &system_font;
+        else if (font_area.handle != ASTRA_INVALID_HANDLE) {
+            AstraResult ignored = astra_area_close(&font_area);
+            (void)ignored;
+        }
+        AstraResult ignored = astra_fonts_catalog_close(&font_catalog);
+        (void)ignored;
+    }
     serve_windows(device->handle, irq->handle, vblank_irq->handle,
                   framebuffer, &pointer_buffer, gui_receive, input_receive,
-                  shared_pointer);
+                  shared_pointer, active_font);
+    if (font_area.handle != ASTRA_INVALID_HANDLE) {
+        AstraResult ignored = astra_area_close(&font_area);
+        (void)ignored;
+    }
     return ASTRA_STATUS_OK;
 }

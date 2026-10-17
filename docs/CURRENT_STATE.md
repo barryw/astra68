@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-16
+Status: active continuation map, 2026-10-17
 
 Latest work covers native font management, scoped settings, and migration of
 native UI pixel rendering to Astraea. The fixed/removable filesystem remains
@@ -184,8 +184,18 @@ MC68040 builds, focused service/client tests, sanitizer and analyzer, full
 userspace `all test`, and NDK `dist-check` pass on Beast.
 The disposable QEMU probe checks exact built-in and imported AFNT bytes
 through this port, including after restart and damaged-inventory fallback.
-Display does not yet consume these areas; saved choice still does not change
-visible text.
+Display now opens the selected, validated AFNT area at startup and passes it
+to the shared render builder. Available regular proportional strikes become
+Astraea glyph-run commands; missing strikes and mono text retain built-in
+fallbacks. Beast graphics pixel-oracle, sanitizer, display
+build/test/analyzer, full userspace `all test`, and a disposable QEMU Fonts
+autostart/hardware-glyph gate pass. The gate now installs current services and
+fonts into its cloned image before boot; an older image lacked both and caused
+a false required-service failure. The native AFNT import probe also passes
+selection, restart persistence, and damaged-inventory fallback on the current
+ROM. Live selection updates, designed style resolution, client-side text
+metrics, non-AFNT runtime conversion, and DE25 visual gates
+remain open. This font change is not in the selected production release.
 
 Current production checkpoint: graphics release
 `57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`,

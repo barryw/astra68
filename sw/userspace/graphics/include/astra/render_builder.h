@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <astra/draw_list.h>
+#include <astra/afnt.h>
 #include <astra/render_batch.h>
 
 #define ASTRA_RENDER_BUILDER_BYTES ASTRA_RENDER_BATCH_BUFFER_BYTES
@@ -35,6 +36,11 @@ typedef enum AstraRenderReplayResult {
 
 typedef struct AstraRenderBuilder AstraRenderBuilder;
 
+/* Borrowed validated AFNT. Keep source bytes mapped while drawing. */
+typedef struct AstraRenderFont {
+    AstraAfntView view;
+} AstraRenderFont;
+
 /* Maps a draw-list source surface id to a descriptor in the current batch,
    or returns zero to reject it. Called once per BLIT; must not cache
    descriptors, because a full batch rolls its data back. */
@@ -55,10 +61,15 @@ struct AstraRenderBuilder {
     uint32_t scene_layer_count;
     uint32_t scene_output_capacity;
     uint32_t failed; /* AstraRenderBuilderFailure */
+    const AstraRenderFont *ui_font;
 };
 
+int astra_render_font_init(AstraRenderFont *font, const void *bytes,
+                           uint32_t length);
 int astra_render_builder_init(AstraRenderBuilder *builder, void *storage,
                               uint32_t bytes, uint32_t generation);
+int astra_render_builder_use_font(AstraRenderBuilder *builder,
+                                  const AstraRenderFont *font);
 uint32_t astra_render_builder_frame(const AstraRenderBuilder *builder);
 int astra_render_builder_window_scene(AstraRenderBuilder *builder,
                                       uint32_t output_offset,

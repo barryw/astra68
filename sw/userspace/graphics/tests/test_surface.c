@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #pragma GCC diagnostic push
@@ -682,6 +683,55 @@ static void test_font_advance_and_baseline(void)
            3 + strike->ascent / 64);
     assert(low_s16(second_position) + second->bearing_y / 64 ==
            3 + strike->ascent / 64);
+}
+
+static void test_installed_afnt_reaches_hardware_glyph_run(void)
+{
+    static uint8_t batch[ASTRA_RENDER_BUILDER_BYTES];
+    FILE *file = fopen("fonts/astra-mono.afnt", "rb");
+    AstraRenderFont font;
+    AstraRenderBuilder builder;
+    AstraAfntGlyphInfo first, second;
+    AstraAfntStrikeInfo strike;
+    uint8_t *bytes;
+    long length;
+    uint32_t strike_index = 0u;
+    uint32_t destination;
+    const uint8_t *command, *records, *source_descriptor, *source;
+
+    assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+    length = ftell(file);
+    assert(length > 0 && length <= 32L * 1024L * 1024L);
+    assert(fseek(file, 0, SEEK_SET) == 0);
+    bytes = malloc((size_t)length);
+    assert(bytes != NULL && fread(bytes, 1u, (size_t)length, file) ==
+                            (size_t)length);
+    assert(fclose(file) == 0);
+    assert(astra_render_font_init(&font, bytes, (uint32_t)length));
+    assert(astra_afnt_strike_info(&font.view, strike_index, &strike));
+    assert(astra_afnt_glyph_info(&font.view, strike_index, 'I', &first));
+    assert(astra_afnt_glyph_info(&font.view, strike_index, 'W', &second));
+    assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
+    assert(astra_render_builder_use_font(&builder, &font));
+    destination = astra_render_builder_surface(&builder, 160u, 80u);
+    assert(destination != 0u && astra_render_builder_text(
+        &builder, destination, 5, 7, "IW", 2u, strike.pixel_height,
+        0xffffu));
+    command = batch_command(batch, 0u);
+    records = batch_record(batch, be32(command + 40u));
+    source_descriptor = batch_record(batch, be32(command + 36u));
+    source = batch_record(batch, be32(source_descriptor + 8u));
+    assert(source_descriptor[24u] == ASTRA_RENDER_FORMAT_A8);
+    assert(high_s16(be32(records + 8u)) ==
+           astra_ui_fixed_floor(5 * 64 + first.bearing_x));
+    assert(high_s16(be32(records + ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES + 8u)) ==
+           astra_ui_fixed_floor(5 * 64 + first.advance_x + second.bearing_x));
+    for (uint32_t row = 0u; row < first.height; ++row)
+        assert(memcmp(source + row * be32(source_descriptor + 16u),
+                      first.bitmap + row * first.pitch, first.pitch) == 0);
+    bytes[0] ^= 1u;
+    assert(!astra_render_font_init(&font, bytes, (uint32_t)length));
+    free(bytes);
 }
 
 static void test_a8_software_oracle_blends_native_rgb565_channels(void)
@@ -2902,6 +2952,7 @@ int main(void)
     test_proportional_utf8_text();
     test_missing_mono_glyph_uses_replacement();
     test_font_advance_and_baseline();
+    test_installed_afnt_reaches_hardware_glyph_run();
     test_a8_software_oracle_blends_native_rgb565_channels();
     test_builder_chunks_the_hardware_glyph_limit();
     test_hardware_draw_list_batch();

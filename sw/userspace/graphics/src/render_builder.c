@@ -231,6 +231,24 @@ int astra_render_builder_init(AstraRenderBuilder *builder, void *storage,
     return frame == ASTRA_RENDER_BATCH_RESOURCE_OFFSET;
 }
 
+int astra_render_font_init(AstraRenderFont *font, const void *bytes,
+                           uint32_t length)
+{
+    if (font == NULL) return 0;
+    memset(font, 0, sizeof(*font));
+    return astra_afnt_validate(bytes, length, &font->view);
+}
+
+int astra_render_builder_use_font(AstraRenderBuilder *builder,
+                                  const AstraRenderFont *font)
+{
+    if (builder == NULL || builder->bytes == NULL ||
+        (font != NULL && font->view.strike_count == 0u))
+        return 0;
+    builder->ui_font = font;
+    return 1;
+}
+
 uint32_t astra_render_builder_frame(const AstraRenderBuilder *builder)
 {
     return builder == NULL || builder->failed != 0u ? 0u :
@@ -701,6 +719,83 @@ static uint32_t glyph_table_capacity(uint32_t count)
     return capacity;
 }
 
+static const AstraUiStrike *text_strike(const AstraRenderBuilder *builder,
+                                        uint16_t pixel_height,
+                                        uint16_t cell_width,
+                                        uint32_t style_flags,
+                                        AstraUiStrike *selected,
+                                        uint32_t *selected_index)
+{
+    *selected_index = UINT32_MAX;
+    if (builder == NULL) return NULL;
+    /* shortcut: designed bold/italic faces need catalog resolution. */
+    if (cell_width == 0u && builder->ui_font != NULL &&
+        (style_flags & (ASTRA_TEXT_STYLE_BOLD | ASTRA_TEXT_STYLE_ITALIC)) == 0u)
+        for (uint32_t at = 0u; at < builder->ui_font->view.strike_count; ++at) {
+            AstraAfntStrikeInfo info;
+
+            if (!astra_afnt_strike_info(&builder->ui_font->view, at, &info) ||
+                info.pixel_height != pixel_height ||
+                strike_render_format(info.bitmap_format) == UINT8_MAX)
+                continue;
+            *selected = (AstraUiStrike){
+                .pixel_width = info.pixel_width,
+                .pixel_height = info.pixel_height,
+                .bitmap_format = info.bitmap_format,
+                .ascent = info.ascent,
+                .descent = info.descent,
+                .line_gap = info.line_gap,
+                .cap_height = info.cap_height,
+                .x_height = info.x_height,
+                .max_advance = info.max_advance,
+                .underline_position = info.underline_position,
+                .underline_thickness = info.underline_thickness,
+                .strikeout_position = info.strikeout_position,
+                .strikeout_thickness = info.strikeout_thickness,
+            };
+            *selected_index = at;
+            return selected;
+        }
+    return cell_width != 0u ?
+        astra_mono_font_strike_styled(pixel_height, style_flags) :
+        astra_ui_font_strike_styled(pixel_height, style_flags);
+}
+
+static const AstraUiGlyph *text_glyph(const AstraRenderBuilder *builder,
+                                      const AstraUiStrike *strike,
+                                      uint32_t selected_index,
+                                      uint32_t scalar, uint16_t cell_width,
+                                      AstraUiGlyph *selected,
+                                      const uint8_t **bitmap)
+{
+    if (selected_index != UINT32_MAX) {
+        AstraAfntGlyphInfo info;
+
+        if (!astra_afnt_glyph_info(&builder->ui_font->view, selected_index,
+                                   scalar, &info))
+            return NULL;
+        *selected = (AstraUiGlyph){
+            .bitmap_offset = (uint32_t)(info.bitmap -
+                                        builder->ui_font->view.bitmap.bytes),
+            .bitmap_length = info.bitmap_length,
+            .width = info.width,
+            .height = info.height,
+            .pitch = info.pitch,
+            .bearing_x = info.bearing_x,
+            .bearing_y = info.bearing_y,
+            .advance_x = info.advance_x,
+        };
+        *bitmap = info.bitmap;
+        return selected;
+    }
+    const AstraUiGlyph *glyph = cell_width != 0u ?
+        astra_mono_font_glyph(strike, scalar) :
+        astra_ui_font_glyph(strike, scalar);
+    *bitmap = cell_width != 0u ?
+        astra_mono_font_bitmap(glyph) : astra_ui_font_bitmap(glyph);
+    return glyph;
+}
+
 static int builder_text_run(AstraRenderBuilder *builder,
                             uint32_t destination, int32_t y,
                             const char *utf8, uint32_t length,
@@ -710,9 +805,10 @@ static int builder_text_run(AstraRenderBuilder *builder,
                             int32_t clip_bottom, uint32_t style_flags,
                             int32_t *pen_26_6)
 {
-    const AstraUiStrike *strike = cell_width != 0u ?
-        astra_mono_font_strike_styled(pixel_height, style_flags) :
-        astra_ui_font_strike_styled(pixel_height, style_flags);
+    AstraUiStrike selected_strike;
+    uint32_t selected_index;
+    const AstraUiStrike *strike = text_strike(builder, pixel_height,
+        cell_width, style_flags, &selected_strike, &selected_index);
     uint32_t count = 0u;
     uint32_t max_width = 0u;
     uint32_t max_height = 0u;
@@ -747,9 +843,12 @@ static int builder_text_run(AstraRenderBuilder *builder,
         uint32_t consumed;
         uint32_t scalar = astra_ui_font_scalar(
             utf8 + at, length - at, &consumed);
-        const AstraUiGlyph *glyph = cell_width != 0u ?
-            astra_mono_font_glyph(strike, scalar) :
-            astra_ui_font_glyph(strike, scalar);
+        AstraUiGlyph selected_glyph;
+        const uint8_t *bitmap;
+        const AstraUiGlyph *glyph = text_glyph(builder, strike,
+            selected_index, scalar, cell_width, &selected_glyph, &bitmap);
+
+        if (glyph == NULL) return 0;
 
         if (glyph->width > max_width)
             max_width = glyph->width;
@@ -760,7 +859,8 @@ static int builder_text_run(AstraRenderBuilder *builder,
     }
     if (count == 0u)
         return 1;
-    if (max_width > UINT16_MAX)
+    if (max_width == 0u || max_height == 0u || max_width > UINT16_MAX ||
+        max_height > UINT16_MAX)
         return 0;
     cell_pitch = strike_pitch(strike->bitmap_format, max_width);
     if (cell_pitch > UINT32_MAX / max_height)
@@ -790,14 +890,14 @@ static int builder_text_run(AstraRenderBuilder *builder,
         uint32_t consumed;
         uint32_t scalar = astra_ui_font_scalar(
             utf8 + at, length - at, &consumed);
-        const AstraUiGlyph *glyph = cell_width != 0u ?
-            astra_mono_font_glyph(strike, scalar) :
-            astra_ui_font_glyph(strike, scalar);
-        const uint8_t *bitmap = cell_width != 0u ?
-            astra_mono_font_bitmap(glyph) : astra_ui_font_bitmap(glyph);
+        AstraUiGlyph selected_glyph;
+        const uint8_t *bitmap;
+        const AstraUiGlyph *glyph = text_glyph(builder, strike,
+            selected_index, scalar, cell_width, &selected_glyph, &bitmap);
         uint8_t *glyph_record = glyph_records +
             index * ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES;
 
+        if (glyph == NULL) return 0;
         uint32_t table_index =
             (glyph->bitmap_offset * UINT32_C(2654435761)) &
             (table_capacity - 1u);
@@ -860,9 +960,10 @@ static int builder_text(AstraRenderBuilder *builder, uint32_t destination,
                         int32_t clip_right, int32_t clip_bottom,
                         uint32_t style_flags)
 {
-    const AstraUiStrike *strike = cell_width != 0u ?
-        astra_mono_font_strike_styled(pixel_height, style_flags) :
-        astra_ui_font_strike_styled(pixel_height, style_flags);
+    AstraUiStrike selected_strike;
+    uint32_t selected_index;
+    const AstraUiStrike *strike = text_strike(builder, pixel_height,
+        cell_width, style_flags, &selected_strike, &selected_index);
     int32_t pen_26_6 = x * 64;
     uint32_t at = 0u;
 

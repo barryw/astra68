@@ -263,11 +263,12 @@ $(HOST_TEST): src/surface.c src/render_builder.c src/texture_reference.c \
 		tests/test_surface.c \
 		../../../ndk/include/astra/surface.h include/astra/render_builder.h \
 		../../include/astra/rounded.h ../../include/astra/window_scene.h \
-		$(FONT_HEADER) ../../../fpga/arty/linux/astra_render_protocol.h
+		$(FONT_HEADER) ../../../fpga/arty/linux/astra_render_protocol.h \
+		$(HOST_AFNT_LIBRARY)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/surface.c src/render_builder.c src/texture_reference.c \
-		tests/test_surface.c -o $@
+		tests/test_surface.c $(HOST_AFNT_LIBRARY) -o $@
 
 $(HOST_TEST): $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 
@@ -318,7 +319,8 @@ sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
 		src/surface.c src/render_builder.c src/texture_reference.c \
-		tests/test_surface.c -o build/host/test_surface_sanitize
+		tests/test_surface.c ../../common/afnt.c ../../common/crc32.c \
+		../../common/utf8.c -o build/host/test_surface_sanitize
 	./build/host/test_surface_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
 		-ffunction-sections -fdata-sections $(AICON_TEST_SOURCES) \

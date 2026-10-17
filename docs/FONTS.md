@@ -579,11 +579,19 @@ content token for user faces, and transfers an immutable area. Font Kit 2.6
 maps that area read-only. A native QEMU probe compares delivered bytes with
 the built-in and newly imported source, including after restart and damaged
 inventory fallback. Normal startup grants this port only to display. Display
-does not yet consume it. Only AFNT is accepted at runtime; the HPS converter
-is not wired to the service. System choice is not consumed by the live render
-path, so changing it does not yet alter system typography. Production DE25
-still uses the previous selected release. Converter, render path, and
-interactive gates must land before enabling this draft in production.
+now opens the selected AFNT area at startup and feeds its validated view into
+the shared render builder. Available regular proportional strikes become
+Astraea glyph-run commands; the host pixel-oracle checks exact AFNT bitmaps
+and positions. The disposable QEMU Fonts autostart gate passes with current
+services installed and submits hardware glyph commands. Missing strikes and
+styled requests still use the built-in UI face, while monospaced text keeps its
+independent font. The current-ROM native AFNT import probe also passes
+selection, restart, and damaged-inventory fallback. Display does not yet watch
+for selection changes, and clients still lay out text with built-in
+metrics. Only AFNT is accepted at runtime; the HPS converter is not wired to
+the service. Production DE25 still uses the previous selected release. Live
+updates, coherent metrics and styles, converter integration, interactive UI,
+and physical gates remain open.
 
 Haiku reference for this catalog boundary: `src/servers/app/font/FontManager.cpp`
 groups families and styles, `src/servers/app/font/FontFamily.cpp` keeps designed
@@ -591,7 +599,10 @@ styles distinct, `src/servers/app/font/GlobalFontManager.cpp` owns installed
 font discovery and default fallback, and `src/preferences/appearance/FontView.cpp`
 keeps user preference controls separate from inventory. Astra follows that
 ownership split while deriving its user-visible strike list from validated
-AFNT rather than exposing source-format records.
+AFNT rather than exposing source-format records. Also reviewed
+`src/servers/app/drawing/DrawingEngine.cpp`: Haiku resolves the font centrally
+and passes it to its drawing engine; Astra passes the selected AFNT view to
+its shared Astraea command builder.
 
 Beast format checks on 2026-10-15: Adobe Source Sans 3 static OTF validated
 with 1,615 cmap entries; its variable TTF and OTF each validated with 1,616

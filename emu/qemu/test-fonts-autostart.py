@@ -4,6 +4,7 @@
 import argparse
 import importlib.util
 from pathlib import Path
+import queue
 import shutil
 import tempfile
 import time
@@ -30,6 +31,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="astra-fonts-gate-") as work:
         image = str(Path(work) / "system.img")
         shutil.copyfile(args.image, image)
+        astra_image.install(image)
         # Make readiness include Fonts' catalog, controls, surface, and window.
         startup = Path(work) / "startup"
         startup.write_text(astra_image.DISPLAY_STARTUP_MANIFEST +
@@ -38,8 +40,25 @@ def main():
         astra_image._replace_volume_file(image, str(startup), "/startup/system")
         machine = terminal.Machine(args.qemu, args.rom, image, work)
         try:
-            if not machine.wait_for_serial(terminal.BOOT_MARKER, 120):
-                raise RuntimeError("system did not reach stage 8")
+            booted = False
+            end = time.monotonic() + 120
+            while time.monotonic() < end:
+                try:
+                    line = machine.serial.get(timeout=.2)
+                except queue.Empty:
+                    continue
+                if line is None:
+                    break
+                machine.log.append(line)
+                if terminal.BOOT_MARKER in line:
+                    booted = True
+                    break
+                if "Initial image" in line and "EXITED" in line:
+                    break
+            if not booted:
+                raise RuntimeError("system did not reach stage 8: serial=%s trace=%s" %
+                                   (machine.recent_serial(35),
+                                    machine.said()[0][-35:]))
             end = time.monotonic() + 20
             while time.monotonic() < end:
                 if any("launch /apps/Fonts.app" in line and "status=0" in line

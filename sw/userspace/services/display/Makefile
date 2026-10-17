@@ -24,6 +24,8 @@ OBJECT := build/m68k/main.o
 OBJECTS := build/m68k/window_graphics.o
 GRAPHICS_RENDERER_LIB := \
 	$(GRAPHICS)/build/m68k/libastragraphics-renderer.a
+AFNT_CODEC := $(ASTRA_COMMON)/build/m68k/libastraafnt.a
+HOST_AFNT_CODEC := $(ASTRA_COMMON)/build/host/libastraafnt.a
 GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
 	$(GRAPHICS)/build/generated/astra_ui_font.inc \
 	$(GRAPHICS)/build/generated/astra_mono_font.inc
@@ -35,7 +37,7 @@ HOST_TEST_SANITIZE := build/host/test_display_sanitize
 LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_FONT_LIBRARY) \
 	$(ASTRA_SYSTEM_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) \
 	$(ASTRA_COMPILER_LIBRARY)
-ASTRA_PROGRAM_PRIVATE_INPUTS := $(GRAPHICS_RENDERER_LIB)
+ASTRA_PROGRAM_PRIVATE_INPUTS := $(GRAPHICS_RENDERER_LIB) $(AFNT_CODEC)
 ASTRA_PROGRAM_PRIVATE_OWNER_TARGETS := $(GRAPHICS):renderer
 include ../../dynamic-program.mk
 
@@ -46,11 +48,14 @@ build/m68k/%.o: %.c
 $(GRAPHICS_FONT_HEADERS): $(GRAPHICS_FONT_INPUTS)
 	$(MAKE) -C $(GRAPHICS) $(@:$(GRAPHICS)/%=%)
 
+$(AFNT_CODEC) $(HOST_AFNT_CODEC):
+	$(MAKE) -C $(ASTRA_COMMON) $(@:$(ASTRA_COMMON)/%=%)
+
 $(HOST_TEST): main.c window_graphics.c window_graphics.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c \
 		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c \
-		$(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c
+		$(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c $(HOST_AFNT_CODEC)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
@@ -58,7 +63,7 @@ $(HOST_TEST): main.c window_graphics.c window_graphics.h \
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
 		$(ASTRA_COMMON)/utf8.c $(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c \
-		window_graphics.c tests/test_display.c -o $@
+		window_graphics.c tests/test_display.c $(HOST_AFNT_CODEC) -o $@
 
 test: $(HOST_TEST)
 	./$(HOST_TEST)
@@ -76,7 +81,8 @@ $(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h \
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
 		$(ASTRA_COMMON)/utf8.c $(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c \
-		window_graphics.c tests/test_display.c -o $@
+		window_graphics.c tests/test_display.c \
+		$(ASTRA_COMMON)/afnt.c $(ASTRA_COMMON)/crc32.c -o $@
 
 sanitize: $(HOST_TEST_SANITIZE)
 	./$(HOST_TEST_SANITIZE)
