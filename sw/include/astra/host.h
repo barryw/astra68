@@ -70,6 +70,8 @@
 #define ASTRA_HOST_CAP_FS_PATHS (1u << 15)
 /** Public volume metadata does not confer a rooted file or control grant. */
 #define ASTRA_HOST_CAP_VOLUME_CATALOG (1u << 16)
+/** Host converts a bounded outline source into validated AFNT for Fonts. */
+#define ASTRA_HOST_CAP_FONT_CONVERT (1u << 17)
 /** Channel configuration: the scope words name a scope. Kernel-written. */
 #define ASTRA_HOST_SCOPE_BOUND     (1u << 0)
 /** The scope refuses every mutation (ASTRA_STATUS_READ_ONLY). */
@@ -95,6 +97,20 @@
 #define ASTRA_HOST_SERVICE_AUDIO UINT16_C(5)
 /** Native volume metadata and lifecycle transport. */
 #define ASTRA_HOST_SERVICE_VOLUMES UINT16_C(6)
+/** Private conversion transport for the resident Fonts service. */
+#define ASTRA_HOST_SERVICE_FONTS UINT16_C(7)
+/** One source per channel. BEGIN carries source size in value_lo, name and
+ * license byte lengths in offset_lo/offset_hi, and concatenated text in data.
+ * DATA carries source bytes at offset_lo; CONVERT takes face index in value_lo
+ * and answers AFNT size in result_value and collection face count in value_hi.
+ * READ returns AFNT bytes at offset_lo; CLOSE discards all session state. */
+enum {
+    ASTRA_HOST_FONT_BEGIN = 1u,
+    ASTRA_HOST_FONT_DATA,
+    ASTRA_HOST_FONT_CONVERT,
+    ASTRA_HOST_FONT_READ,
+    ASTRA_HOST_FONT_CLOSE
+};
 /** Query a coherent AstraVolumeCatalogPage using an AstraVolumeCatalogQuery. */
 #define ASTRA_HOST_VOLUME_CATALOG UINT16_C(1)
 /** Submit a typed AstraHostVolumeControl through the claimed provider. */

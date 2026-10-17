@@ -481,7 +481,8 @@ handle or an MC68040 bitmap-scaling fallback.
 The first Fonts tool import scope is native AFNT, static TrueType (`.ttf`),
 OpenType (`.otf`), TrueType/OpenType collections (`.ttc`), variable TrueType and
 OpenType at their default axis coordinates, and classic monochrome Amiga disk
-fonts.
+fonts. Current native runtime supports AFNT and static TTF/OTF/TTC; variable
+outlines and Amiga disk fonts remain open work.
 This covers the common current macOS outline containers listed by
 [Apple Font Book](https://support.apple.com/en-gb/guide/font-book/fntbk1000/mac)
 and Amiga bitmap fonts. A collection is one input but contributes all its
@@ -503,12 +504,14 @@ path:
   variation axes, selected strike sizes, converter versions, license, and
   source character mapping.
 
-The current build-time tool supports one TTF, OTF, or selected TTC face per
-invocation, plus monochrome Amiga disk strikes. It writes AFNT 0.2 and passes
-the shared AFNT validator. Variable outlines produce their default instance
-and record those axis coordinates; custom coordinates and additional named
-instances are later work. The managed worker and all-face collection expansion
-are not yet implemented.
+The build-time development tool supports one TTF, OTF, or selected TTC face per
+invocation, plus monochrome Amiga disk strikes. The native HPS worker converts
+one static outline face per request; the resident Fonts service streams every
+TTC face through that worker and commits one validated inventory update.
+Variable outlines currently return unsupported until axis provenance is
+represented in native AFNT metadata. The current installation limit is 32 MiB
+per source and per resulting AFNT face; larger valid faces return a capacity
+error without publishing a partial catalog.
 
 `sw/common/Makefile` builds host, MC68040, and AArch64 `libastraafnt.a`
 variants for shared C validation and canonical packing of AFNT 0.2
@@ -516,10 +519,9 @@ at the native import boundary; host and sanitizer tests run it against shipped
 faces, Iosevka and Amiga spike output, and malformed records. The HPS C
 outline converter in `fpga/de25/linux/astra_font_convert.c` reuses that codec,
 FreeType, UTF-8 validation, CRC32 and SHA-256; static Iosevka TTF and Source
-Sans OTF conversion tests pass. It is a worker component, not yet a running
-service. Build-time Python remains a development asset pipeline and oracle.
-It is not an Astra user-facing importer or a runtime dependency. Users will
-import from the native Fonts UI through the managed service transaction.
+Sans OTF conversion tests pass. Build-time Python remains a development asset
+pipeline and oracle. It is not an Astra user-facing importer or a runtime
+dependency. Users import through the native Fonts UI and resident service.
 
 The first internal HPS worker executable now wraps that converter with a
 versioned, bounded `FNTC`/`FNTR` byte protocol. One child handles one face and
@@ -529,8 +531,17 @@ collection face count. Beast host, ASan/UBSan, AArch64 QEMU-user, and physical
 DE25 conversion of Atkinson Hyperlegible Next Regular pass, including malformed
 outline and oversized-request checks. The physical test ran from
 `/var/tmp/astra-font-worker-20261017` without installing or selecting a new
-production release. This worker is not yet connected to the Astra host
-transport, Fonts service, or UI; selecting TTF/OTF/TTC still returns unsupported.
+production release. The QEMU host transport now invokes this worker for native
+Fonts imports. Disposable QEMU gates pass TTF, OTF and two-face TTC conversion,
+catalog publication, system selection and restart persistence; the AFNT import
+and damaged-inventory gate still passes. A later-face TTC failure rolls back
+newly created AFNT objects before the inventory commit; disposable QEMU checks
+the unchanged catalog and empty installed-object directory. If Config Kit
+reports a failed commit, objects remain because its durable outcome may be
+ambiguous. The native UI uses its existing file
+browser and Import action. Interactive UI import and a complete DE25 release
+have not been qualified. Saved system-face choice is loaded by Display at
+startup; live change notification and render-context refresh remain open.
 
 The shared C codec now exposes validated AFNT family/style strings and strike
 metrics for the future service catalog and Fonts detail view. Its NAME reader
@@ -565,13 +576,13 @@ control. A disposable QEMU autostart confirms bundle launch and hardware glyph
 submissions; family-detail interaction still needs a focused GUI gate.
 The draft installed-font store now assigns every AFNT object its full SHA-256
 digest in canonical base32. Config Kit's single `installed` string lists those
-tokens, so a future multi-face importer can publish one complete inventory
+tokens, so the multi-face TTC importer publishes one complete inventory
 with one atomic settings commit after writing its objects. Service startup
 accepts only referenced objects whose bytes match their names and whose AFNT
 metadata validates. It bounds each read to 32 MiB. A damaged or unavailable
 user inventory remains on disk and falls back to built-in fonts without
-blocking system startup. Font Kit 2.5 and the native Fonts UI can import one
-AFNT file from DH0. The admin-only service validates it, writes and syncs a
+blocking system startup. The native Fonts UI can select AFNT, TTF, OTF, or TTC
+files from DH0. The admin-only service validates converted AFNT, writes and syncs a
 content-addressed object, commits its token through Config Kit, and publishes
 a new catalog generation. Duplicate imports return the existing ID; loose
 files in the protected directory are not installed. The UI also sends a
@@ -599,10 +610,10 @@ styled requests still use the built-in UI face, while monospaced text keeps its
 independent font. The current-ROM native AFNT import probe also passes
 selection, restart, and damaged-inventory fallback. Display does not yet watch
 for selection changes, and clients still lay out text with built-in
-metrics. Only AFNT is accepted at runtime; the HPS converter is not wired to
-the service. Production DE25 still uses the previous selected release. Live
-updates, coherent metrics and styles, converter integration, interactive UI,
-and physical gates remain open.
+metrics. Static TTF/OTF/TTC now enter through the HPS worker and native Fonts
+service; a disposable two-face TTC import/restart gate passes. Production DE25
+still uses the previous selected release. Live updates, coherent metrics and
+styles, variable/Amiga import, interactive UI, and physical gates remain open.
 
 Haiku reference for this catalog boundary: `src/servers/app/font/FontManager.cpp`
 groups families and styles, `src/servers/app/font/FontFamily.cpp` keeps designed

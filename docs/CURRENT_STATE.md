@@ -90,10 +90,10 @@ launches for Interface Gallery, Atlas, and SDL TestDraw2, plus context-menu
 pointer and keyboard interaction. A separate disposable SDL render-probe image
 passes four hardware triangle commands, three surface reads, and 65/65 display
 submissions. Native display and Doom input/rendering passed the isolated DE25
-candidate gate. Build-time
-AFNT conversion now covers TTF, OTF, selected TTC faces, variable default
-instances, and monochrome Amiga disk
-fonts. Shared C AFNT 0.2 validation and packing round-trip shipped fonts plus
+candidate gate. Build-time AFNT conversion covers TTF, OTF, selected TTC faces,
+variable default instances, and monochrome Amiga disk fonts. Native runtime
+import currently covers AFNT and static TTF/OTF/TTC; variable and Amiga runtime
+import remain open. Shared C AFNT 0.2 validation and packing round-trip shipped fonts plus
 Iosevka, Source Sans, and Amiga spike AFNT on Beast. A reusable HPS C outline
 converter turns static Iosevka TTF and Source Sans OTF into validated A8 AFNT;
 host/sanitizer and AArch64 compile checks pass. Shared AFNT C metadata readers
@@ -101,14 +101,16 @@ now expose family, designed style, strike metrics, and validated glyph lookup
 without passing disk records to UI clients. Beast host, sanitizer, MC68040,
 and AArch64 codec gates pass. The HPS converter prepares 11, 13, 16, and 20-pixel
 strikes, covering current proportional theme roles; Beast host, sanitizer,
-MC68040/AArch64 codec, and outline-conversion gates pass. It is not connected to a host
-worker or Fonts UI yet. Interface Kit bundle metadata now
+MC68040/AArch64 codec, and outline-conversion gates pass. The HPS worker is
+connected to the native Fonts service through the versioned QEMU host channel;
+the Fonts UI sends selected files through that service. Interface Kit bundle metadata now
 provides 6.0.0, matching its current ABI. [Font scope and runtime gaps](FONTS.md#7-import-and-style-compatibility)
 and the [Iosevka evaluation](IOSEVKA_EVALUATION.md) record details. Config Kit
 1.1 now opens a separate `CONFIG_SYSTEM` grant for resident services, rooted at
 `/config/system/<service>`; apps retain private `CONFIG` and cannot receive
 the system grant. [Settings ownership](SETTINGS.md) fixes the system/app split
-and default-on-damage policy. Saved font choice is not consumed by display. Direct
+and default-on-damage policy. Display consumes saved font choice at startup;
+live selection refresh remains open. Direct
 RGB565 software surfaces still have CPU glyph loops; native draw-list text uses
 Astraea. Font Kit 2.3 prepares built-in bold/italic AFNT-derived strikes at
 build time, removing per-frame style bitmap synthesis. Beast pixel-oracle,
@@ -148,16 +150,15 @@ qualification remains open: the confined `astra-qemu-root` fixture keeps its
 WORK/SOUND exports root-only by design, so the existing icon-position gate
 cannot read Desktop's per-process syslog and loses placement lines from the
 finite kernel trace ring. Do not infer Fonts application launch from that gate.
-Font Kit 2.5 now exposes an admin-only AFNT import call. The resident service
+Font Kit exposes an admin-only font import call. The resident service
 writes a validated content-addressed object, syncs it, commits its full SHA-256
 token through Config Kit, and publishes the new catalog generation. The native
 Fonts UI has composed List/button views for a DH0 file browser and system-face
 choice. A disposable QEMU image with current bundles passes Fonts autostart and
-Astraea glyph submissions; full userspace `all test`, focused service/client
-tests, sanitizer, analyzer and boundary checks pass on Beast. Interactive
-Fonts UI import, TTF/OTF/TTC
-and Amiga conversion-worker integration, consumption of saved choice by the
-render path, removable-volume browsing, and physical release gates remain open.
+Astraea glyph submissions; focused service/client and boundary checks pass on
+Beast. Interactive Fonts UI import, native variable/Amiga import, live
+render-context refresh, removable-volume browsing, and physical release gates
+remain open.
 An isolated native QEMU probe imports shipped AFNT through the same admin-only
 API, checks catalog publication and idempotence, selects the imported face,
 then reboots the disposable image and verifies persisted catalog and choice.
@@ -167,11 +168,12 @@ It exposed and fixed a port-call handle-order defect: the source area precedes
 the reply capability in an import request. This does not qualify Fonts UI
 interaction or a physical DE25 release.
 Build-time Python conversion is a development oracle, not a user import path.
-Draft installed-font storage now uses full SHA-256 content tokens and a single
-validated Config Kit inventory value as its future atomic publication point.
+Installed-font storage uses full SHA-256 content tokens and a single
+validated Config Kit inventory value as its atomic publication point.
 The service caps AFNT reads, verifies referenced objects, and falls back to
-built-in faces without editing damaged user settings. Runtime import currently
-accepts only AFNT and is not production-qualified.
+built-in faces without editing damaged user settings. Runtime import accepts
+AFNT and static TTF/OTF/TTC in disposable QEMU, not the selected production
+release.
 Beast MC68040 font-service build, focused tests, sanitizer and analyzer pass;
 full userspace `all test` passed before the final logging-only change. A fresh
 disposable image with the final service passes the Fonts native autostart and
@@ -194,7 +196,7 @@ fonts into its cloned image before boot; an older image lacked both and caused
 a false required-service failure. The native AFNT import probe also passes
 selection, restart persistence, and damaged-inventory fallback on the current
 ROM. Live selection updates, designed style resolution, client-side text
-metrics, non-AFNT runtime conversion, and DE25 visual gates
+metrics, variable/Amiga runtime import, interactive Fonts UI import, and DE25 visual gates
 remain open. This font change is not in the selected production release.
 Selecting a different system face now advances the catalog generation;
 selecting the current face leaves it unchanged. The native import/restart
@@ -203,8 +205,13 @@ An internal HPS C worker now accepts one bounded, versioned source request and
 returns validated AFNT; host, sanitizer, AArch64 QEMU-user, and physical DE25
 conversion gates pass. The board test used an isolated `/var/tmp` executable
 and did not modify the selected release or production settings. Native
-TTF/OTF/TTC import remains unavailable until the host channel and Fonts
-service call this worker and publish all collection faces atomically.
+TTF, OTF and two-face TTC imports now pass disposable QEMU gates through the
+Fonts service, including AFNT catalog publication, system selection, and
+restart persistence. The service runs conversion on a separate native thread
+because VFS holds the caller thread's one host channel. A valid 16.8 MiB
+three-face CJK TTC produces about 43 MiB of AFNT per face; the current
+32 MiB installed-face limit rejects it as capacity, with no partial catalog
+publication. The production DE25 release has not changed.
 
 Current production checkpoint: graphics release
 `57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`,

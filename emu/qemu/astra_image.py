@@ -179,7 +179,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/input grants INPUT INPUT_IRQ "
     "serves INPUT_SERVICE required priority=20\n"
     "service /services/clipboard grants serves CLIPBOARD required priority=20\n"
-    "service /services/fonts grants CONFIG_SYSTEM:rw SYSTEM:r LIBS:r "
+    "service /services/fonts grants HOST_DEVICE CONFIG_SYSTEM:rw SYSTEM:r LIBS:r "
     "serves FONTS FONTS_ADMIN FONTS_RENDER required priority=20\n"
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
     "INPUT_SERVICE FONTS FONTS_RENDER serves GUI critical priority=20\n"

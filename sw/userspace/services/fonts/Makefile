@@ -16,7 +16,7 @@ FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic \
 	-ffunction-sections -fdata-sections -fPIC $(ASTRA_DEBUG_FLAGS)
 TARGET := build/m68k/fonts.elf
 IMAGE := build/m68k/fonts
-OBJECTS := build/m68k/main.o build/m68k/policy.o
+OBJECTS := build/m68k/main.o build/m68k/policy.o build/m68k/host.o
 ASTRA_PROGRAM_PRIVATE_INPUTS := $(COMMON)
 LIBRARIES := $(ASTRA_CONFIG_LIBRARY) $(ASTRA_LIBC_LIBRARY) \
 	$(ASTRA_RUNTIME_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) \
@@ -39,6 +39,11 @@ build/m68k/main.o: main.c policy.h ../../../include/astra/font_service.h \
 	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
 
 build/m68k/policy.o: policy.c policy.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/host.o: host.c host.h ../../../include/astra/host.h \
+		../../../include/astra/font_worker.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
 
@@ -66,6 +71,8 @@ analyze: $(TARGET)
 		-o build/analyzer/main.o
 	$(CC) $(CPPFLAGS) $(FLAGS) -fanalyzer -c policy.c \
 		-o build/analyzer/policy.o
+	$(CC) $(CPPFLAGS) $(FLAGS) -fanalyzer -c host.c \
+		-o build/analyzer/host.o
 
 clean:
 	rm -rf build

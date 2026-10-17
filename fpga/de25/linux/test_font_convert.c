@@ -1,6 +1,7 @@
 #include "astra_font_convert.h"
 
 #include <astra/afnt.h>
+#include <astra/font_catalog.h>
 #include <astra/theme.h>
 
 #include <assert.h>
@@ -13,6 +14,7 @@ int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] :
         "../../../sw/userspace/graphics/fonts/atkinson-hyperlegible-next/AtkinsonHyperlegibleNext-Regular.ttf";
+    uint32_t face = argc > 2 ? (uint32_t)strtoul(argv[2], NULL, 10) : 0u;
     FILE *file = fopen(path, "rb");
     long size;
     uint8_t *source, *converted;
@@ -24,13 +26,22 @@ int main(int argc, char **argv)
     source = malloc((size_t)size);
     assert(source != NULL && fread(source, 1u, (size_t)size, file) == (size_t)size);
     assert(fclose(file) == 0);
-    int result = astra_font_convert_outline(source, (uint32_t)size, 0u,
+    int result = astra_font_convert_outline(source, (uint32_t)size, face,
         "test.ttf", "OFL-1.1", &converted, &converted_length, &faces);
     if (result != ASTRA_FONT_CONVERT_OK)
         fprintf(stderr, "conversion status %d, faces %u\n", result, faces);
     assert(result == ASTRA_FONT_CONVERT_OK);
     assert(faces >= 1u && converted_length > 128u &&
            astra_afnt_validate(converted, converted_length, &view));
+    AstraFontCatalogFace catalog_face;
+    AstraFontCatalogStrike catalog_strikes[32];
+    char catalog_family[256], catalog_style[128];
+    assert(astra_font_catalog_face_from_afnt(converted, converted_length,
+        "user:test", 9u, 0u, catalog_family, sizeof(catalog_family),
+        catalog_style, sizeof(catalog_style), catalog_strikes, 32u,
+        &catalog_face));
+    fprintf(stderr, "face %u/%u AFNT %u bytes %s %s\n", face, faces,
+            converted_length, catalog_family, catalog_style);
     assert(view.strike_count == 4u && view.face_glyphs > 100u);
     const uint16_t expected_sizes[] = {
         ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT,
@@ -54,7 +65,7 @@ int main(int argc, char **argv)
     assert(found_license);
     free(converted);
     memset(source, 0, (size_t)size < 16u ? (size_t)size : 16u);
-    assert(astra_font_convert_outline(source, (uint32_t)size, 0u,
+    assert(astra_font_convert_outline(source, (uint32_t)size, face,
         "test.ttf", "OFL-1.1", &converted, &converted_length, &faces) !=
         ASTRA_FONT_CONVERT_OK);
     free(source);

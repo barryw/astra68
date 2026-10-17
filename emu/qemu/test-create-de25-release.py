@@ -23,6 +23,8 @@ for required in (
     'make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux"',
     "bin/astra-remote-desktop=",
     "bin/astra-audio-host=",
+    "bin/astra-font-worker=",
+    "font-worker-target",
     "bin/fs-baseline.py=",
     "systemd/astra-remote-desktop.service=",
     "systemd/astra-audio-host.service=",
@@ -106,6 +108,8 @@ out = next((pathlib.Path(arg[4:]) for arg in args if arg.startswith("OUT=")),
            tree / "build/de25-capture")
 if "storage-provider-target" in args:
     products = [out / "astra-storage-aarch64"]
+elif "font-worker-target" in args:
+    products = [out / "astra-font-worker-aarch64"]
 elif "remote-desktop" in args:
     products = [out / "astra-remote-desktop"]
 else:
@@ -125,6 +129,11 @@ for product in products:
                      "libblkid.so.1", "libmount.so.1", "libudev.so.1",
                      "libselinux.so.1", "libpcre2-8.so.0"):
             (libraries / name).write_text("fixture " + name)
+        font_libraries = sysroot / "lib/aarch64-linux-gnu"
+        font_libraries.mkdir(parents=True)
+        for name in ("libfreetype.so.6", "libpng16.so.16",
+                     "libbrotlidec.so.1", "libbrotlicommon.so.1", "libz.so.1"):
+            (font_libraries / name).write_text("fixture " + name)
         package = fixture / "kernel-package"
         kernel_release = "6.12.11-astra-fixture"
         package_files = {
@@ -164,6 +173,8 @@ for product in products:
             assert selector.read_text() == "fixture emu/qemu/storage_image.py\n"
             assert selector.stat().st_mode & 0o111 == 0
             assert provider.read_bytes() == (output / "bin/astra-storage").read_bytes()
+            assert (output / "bin/astra-font-worker").read_bytes() == \
+                b"fresh astra-font-worker-aarch64\n"
             subprocess.run(["python3", str(tree / "tools/astra_release.py"),
                             "verify", str(output)], check=True, stdout=subprocess.DEVNULL)
         finally:

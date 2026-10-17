@@ -47,6 +47,8 @@
 #include "hw/m68k/astra_render_protocol.h"
 #include "astra68-resolve.h"
 #include "astra_storage_transport.h"
+#include "astra_font_host.h"
+#include "astra_font_convert.h"
 #include "astra/block.h"
 #include "astra/boot.h"
 #include "astra/audio_host.h"
@@ -55,6 +57,7 @@
 #include "astra/copy_engine.h"
 #include "astra/display.h"
 #include "astra/host.h"
+#include "astra/font_worker.h"
 #include "astra/process.h"
 #include "astra/network.h"
 #include "astra/status.h"
@@ -637,6 +640,18 @@ typedef struct AstraHostChannel {
     AstraHostChannelScope scopes[ASTRA_HOST_CHANNEL_SCOPE_MAX];
 } AstraHostChannel;
 
+typedef struct AstraHostFontSession {
+    AstraHostChannel *owner;
+    uint8_t *source;
+    uint32_t source_size;
+    uint32_t received;
+    char name[ASTRA_FONT_WORKER_TEXT_MAX + 1u];
+    char license[ASTRA_FONT_WORKER_TEXT_MAX + 1u];
+    uint32_t name_size;
+    uint32_t license_size;
+    AstraFontHostResult result;
+} AstraHostFontSession;
+
 typedef struct AstraHostState {
     GHashTable *files;
     GHashTable *lost_handles; /* disconnected handle -> AstraHostFile identity */
@@ -691,6 +706,8 @@ typedef struct AstraHostState {
     bool completion_pending;
     AstraHostChannel channels[ASTRA_HOST_CHANNEL_COUNT];
     QemuMutex channel_socket_locks[ASTRA_HOST_CHANNEL_COUNT];
+    QemuMutex font_lock;
+    AstraHostFontSession font;
 } AstraHostState;
 
 struct Astra68State {
@@ -3279,6 +3296,13 @@ static void astra_host_release_sessions(Astra68State *s, uint32_t owner)
     astra_host_free_sessions(s, stolen);
 }
 
+static void astra_host_font_clear(AstraHostFontSession *font)
+{
+    g_free(font->source);
+    free(font->result.afnt);
+    memset(font, 0, sizeof(*font));
+}
+
 static void astra_host_channel_drain(Astra68State *s, AstraHostChannel *channel)
 {
     qemu_mutex_lock(&s->host.files_lock);
@@ -3288,6 +3312,10 @@ static void astra_host_channel_drain(Astra68State *s, AstraHostChannel *channel)
     while (channel->jobs != 0) {
         aio_poll(qemu_get_aio_context(), true);
     }
+    qemu_mutex_lock(&s->host.font_lock);
+    if (s->host.font.owner == channel)
+        astra_host_font_clear(&s->host.font);
+    qemu_mutex_unlock(&s->host.font_lock);
     if (channel->remote_desktop_fd >= 0)
         close(channel->remote_desktop_fd);
     if (channel->audio_fd >= 0)
@@ -4255,6 +4283,144 @@ done:
     stl_be_p(command + HOST_FIELD(status), status);
 }
 
+static const char *astra_host_font_worker_path(void)
+{
+    const char *path = g_getenv("ASTRA_FONT_WORKER_PATH");
+    return path != NULL && path[0] != '\0' ? path :
+        "/usr/local/libexec/astra-font-worker";
+}
+
+static void astra_host_execute_fonts(Astra68State *s,
+    AstraHostChannel *channel, uint8_t *command, uint32_t physical,
+    uint32_t bytes, uint32_t command_bytes, uint32_t generation)
+{
+    AstraHostFontSession *font = &s->host.font;
+    uint32_t operation = lduw_be_p(command + HOST_FIELD(operation));
+    uint32_t length = ldl_be_p(command + HOST_FIELD(data_length));
+    uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
+    uint32_t offset = ldl_be_p(command + HOST_FIELD(offset_lo));
+    uint32_t extra = ldl_be_p(command + HOST_FIELD(offset_hi));
+    uint32_t value = ldl_be_p(command + HOST_FIELD(value_lo));
+    uint32_t status = ASTRA_STATUS_INVALID;
+    uint8_t *data = NULL;
+
+    stl_be_p(command + HOST_FIELD(status), 0u);
+    stl_be_p(command + HOST_FIELD(result_length), 0u);
+    stl_be_p(command + HOST_FIELD(result_value), 0u);
+    if (channel == NULL ||
+        ldl_be_p(command + HOST_FIELD(size)) != ASTRA_HOST_COMMAND_SIZE ||
+        lduw_be_p(command + HOST_FIELD(version)) != ASTRA_HOST_COMMAND_VERSION ||
+        lduw_be_p(command + HOST_FIELD(flags)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(generation)) != generation ||
+        ldl_be_p(command + HOST_FIELD(handle)) != 0u ||
+        (operation != ASTRA_HOST_FONT_BEGIN &&
+         operation != ASTRA_HOST_FONT_DATA &&
+         operation != ASTRA_HOST_FONT_CONVERT &&
+         operation != ASTRA_HOST_FONT_READ &&
+         operation != ASTRA_HOST_FONT_CLOSE))
+        goto done;
+    for (size_t index = HOST_FIELD(session); index < ASTRA_HOST_COMMAND_SIZE;
+         ++index)
+        if (command[index] != 0u) goto done;
+    if (access(astra_host_font_worker_path(), X_OK) != 0) {
+        status = ASTRA_STATUS_UNSUPPORTED;
+        goto done;
+    }
+    if (length != 0u || capacity != 0u) {
+        data = astra_host_command_data(s, physical, bytes, command_bytes,
+                                       command, MAX(length, capacity));
+        if (data == NULL) goto done;
+    }
+
+    qemu_mutex_lock(&s->host.font_lock);
+    if (operation == ASTRA_HOST_FONT_BEGIN) {
+        if (font->owner != NULL && font->owner != channel) {
+            status = ASTRA_STATUS_BUSY;
+        } else if (value == 0u || value > ASTRA_FONT_WORKER_SOURCE_MAX ||
+                   offset == 0u || offset > ASTRA_FONT_WORKER_TEXT_MAX ||
+                   extra > ASTRA_FONT_WORKER_TEXT_MAX ||
+                   length != offset + extra || capacity != 0u ||
+                   ldl_be_p(command + HOST_FIELD(value_hi)) != 0u ||
+                   memchr(data, '\0', length) != NULL) {
+            status = ASTRA_STATUS_INVALID;
+        } else {
+            astra_host_font_clear(font);
+            font->source = g_try_malloc(value);
+            if (font->source == NULL) status = ASTRA_STATUS_LIMIT;
+            else {
+                font->owner = channel;
+                font->source_size = value;
+                font->name_size = offset;
+                font->license_size = extra;
+                memcpy(font->name, data, offset);
+                memcpy(font->license, data + offset, extra);
+                status = ASTRA_STATUS_OK;
+            }
+        }
+    } else if (font->owner != channel) {
+        status = ASTRA_STATUS_BAD_HANDLE;
+    } else if (operation == ASTRA_HOST_FONT_CLOSE) {
+        if (length == 0u && capacity == 0u && offset == 0u && extra == 0u &&
+            value == 0u && ldl_be_p(command + HOST_FIELD(value_hi)) == 0u) {
+            astra_host_font_clear(font);
+            status = ASTRA_STATUS_OK;
+        }
+    } else if (operation == ASTRA_HOST_FONT_DATA) {
+        if (length != 0u && capacity == 0u && extra == 0u && value == 0u &&
+            ldl_be_p(command + HOST_FIELD(value_hi)) == 0u &&
+            offset == font->received &&
+            length <= font->source_size - font->received) {
+            memcpy(font->source + font->received, data, length);
+            font->received += length;
+            stl_be_p(command + HOST_FIELD(result_value), font->received);
+            status = ASTRA_STATUS_OK;
+        }
+    } else if (operation == ASTRA_HOST_FONT_CONVERT) {
+        if (length == 0u && capacity == 0u && offset == 0u && extra == 0u &&
+            ldl_be_p(command + HOST_FIELD(value_hi)) == 0u &&
+            value < ASTRA_FONT_WORKER_FACES_MAX &&
+            font->received == font->source_size) {
+            int error;
+            free(font->result.afnt);
+            font->result = (AstraFontHostResult){0};
+            error = astra_font_host_convert(astra_host_font_worker_path(),
+                font->source, font->source_size, value,
+                font->name, font->name_size, font->license,
+                font->license_size, &font->result);
+            if (error == 0) {
+                switch (font->result.status) {
+                case ASTRA_FONT_CONVERT_OK: status = ASTRA_STATUS_OK; break;
+                case ASTRA_FONT_CONVERT_INVALID: status = ASTRA_STATUS_INVALID; break;
+                case ASTRA_FONT_CONVERT_UNSUPPORTED:
+                    status = ASTRA_STATUS_UNSUPPORTED; break;
+                default: status = ASTRA_STATUS_LIMIT; break;
+                }
+                stl_be_p(command + HOST_FIELD(value_hi), font->result.faces);
+                stl_be_p(command + HOST_FIELD(result_value),
+                         font->result.afnt_size);
+            } else {
+                error_report("astra font worker transport failed: %s",
+                             strerror(-error));
+                status = error == -ENOMEM ? ASTRA_STATUS_LIMIT :
+                                            ASTRA_STATUS_IO;
+            }
+        }
+    } else if (operation == ASTRA_HOST_FONT_READ) {
+        if (length == 0u && capacity != 0u && extra == 0u && value == 0u &&
+            ldl_be_p(command + HOST_FIELD(value_hi)) == 0u &&
+            font->result.afnt != NULL &&
+            offset <= font->result.afnt_size) {
+            uint32_t count = MIN(capacity, font->result.afnt_size - offset);
+            memcpy(data, font->result.afnt + offset, count);
+            stl_be_p(command + HOST_FIELD(result_length), count);
+            status = ASTRA_STATUS_OK;
+        }
+    }
+    qemu_mutex_unlock(&s->host.font_lock);
+done:
+    stl_be_p(command + HOST_FIELD(status), status);
+}
+
 /* The audio operations whose reply carries data back into the area. */
 static bool astra_host_audio_answers(uint32_t operation)
 {
@@ -4862,7 +5028,8 @@ static void astra_host_execute_command(Astra68State *s, uint32_t owner,
     bool non_fs = service == ASTRA_HOST_SERVICE_METRICS ||
         service == ASTRA_HOST_SERVICE_REMOTE_DESKTOP ||
         service == ASTRA_HOST_SERVICE_ENTROPY ||
-        service == ASTRA_HOST_SERVICE_VOLUMES || service == ASTRA_HOST_SERVICE_AUDIO;
+        service == ASTRA_HOST_SERVICE_VOLUMES || service == ASTRA_HOST_SERVICE_AUDIO ||
+        service == ASTRA_HOST_SERVICE_FONTS;
     int64_t started = non_fs ? qemu_clock_get_ns(QEMU_CLOCK_REALTIME) : 0;
     if (channel != NULL && channel->bound &&
         lduw_be_p(command + HOST_FIELD(service)) !=
@@ -4889,6 +5056,10 @@ static void astra_host_execute_command(Astra68State *s, uint32_t owner,
     else if (lduw_be_p(command + HOST_FIELD(service)) ==
                  ASTRA_HOST_SERVICE_AUDIO)
         astra_host_execute_audio(s, channel, command, physical, bytes,
+                                 command_bytes, expected_generation);
+    else if (lduw_be_p(command + HOST_FIELD(service)) ==
+                 ASTRA_HOST_SERVICE_FONTS)
+        astra_host_execute_fonts(s, channel, command, physical, bytes,
                                  command_bytes, expected_generation);
     else
         astra_host_execute_fs(s, owner, channel, command, physical, bytes,
@@ -7857,6 +8028,8 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
                 ASTRA_HOST_CAP_FS_DESCRIPTIONS |
                 ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS |
                 ASTRA_HOST_CAP_VOLUME_CATALOG |
+                (access(astra_host_font_worker_path(), X_OK) == 0 ?
+                    ASTRA_HOST_CAP_FONT_CONVERT : 0u) |
 #endif
                 (s->audio.enabled ? ASTRA_HOST_CAP_AUDIO_STREAM : 0u) : 0u;
     case 0x88c:
@@ -8785,6 +8958,7 @@ static void astra68_init(MachineState *machine)
     qemu_mutex_init(&s->host.provider_path_lock);
     qemu_mutex_init(&s->host.files_lock);
     qemu_mutex_init(&s->host.namespace_lock);
+    qemu_mutex_init(&s->host.font_lock);
     for (uint32_t slot = 0; slot < ASTRA_HOST_CHANNEL_COUNT; ++slot) {
         qemu_mutex_init(&s->host.channel_socket_locks[slot]);
         s->host.channels[slot].remote_desktop_fd = -1;

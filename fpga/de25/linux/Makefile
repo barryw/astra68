@@ -69,7 +69,7 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 	storage-probe-target-test storage-mount-test storage-path-test storage-provider-test
 .PHONY: storage-provider-sanitize
 .PHONY: font-convert-test font-convert-sanitize
-.PHONY: font-worker-test font-worker-sanitize font-worker-target
+.PHONY: font-worker-test font-worker-sanitize font-worker-target font-host-test font-host-sanitize
 .PHONY: storage-cleanup-test storage-cleanup-sanitize
 .PHONY: storage-provider storage-provider-target
 .PHONY: storage-launcher-test
@@ -154,12 +154,33 @@ $(OUT)/astra-font-worker-aarch64: $(FONT_WORKER_SOURCES) astra_font_worker_main.
 		$(FONT_CODEC_AARCH64) -o $@ \
 		-L$(DE25_SYSROOT)/lib/aarch64-linux-gnu \
 		-Wl,-rpath-link,$(DE25_SYSROOT)/lib/aarch64-linux-gnu \
+		-Wl,-rpath,'$$ORIGIN/../qemu/lib' \
 		-l:libfreetype.so.6
 
 font-worker-target: $(OUT)/astra-font-worker-aarch64 $(OUT)/test-font-worker
 	cd $(CURDIR) && $(abspath $(OUT)/test-font-worker) \
 		$(QEMU_USER) -L $(abspath $(DE25_SYSROOT)) \
 		$(abspath $(OUT)/astra-font-worker-aarch64)
+
+$(OUT)/test-font-host: astra_font_host.c astra_font_host.h test_font_host.c \
+		astra_font_convert.h $(ROOT)/sw/include/astra/font_worker.h \
+		$(FONT_CODEC) Makefile
+	mkdir -p $(OUT)
+	$(HOST_CC) $(FONT_CONVERT_FLAGS) astra_font_host.c test_font_host.c \
+		$(FONT_CODEC) -o $@
+
+font-host-test: $(OUT)/test-font-host $(OUT)/astra-font-worker
+	cd $(CURDIR) && $(abspath $(OUT)/test-font-host) \
+		$(abspath $(OUT)/astra-font-worker)
+
+font-host-sanitize: $(OUT)/astra-font-worker
+	mkdir -p $(OUT)
+	$(HOST_CC) $(FONT_CONVERT_FLAGS) -fsanitize=address,undefined \
+		-fno-omit-frame-pointer astra_font_host.c test_font_host.c \
+		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/common/sha256.c -o $(OUT)/test-font-host-sanitize
+	cd $(CURDIR) && $(abspath $(OUT)/test-font-host-sanitize) \
+		$(abspath $(OUT)/astra-font-worker)
 
 font-worker-sanitize:
 	mkdir -p $(OUT)

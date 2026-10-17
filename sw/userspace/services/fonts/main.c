@@ -13,6 +13,7 @@
 #include <astra/vfs_service.h>
 
 #include "policy.h"
+#include "host.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -46,6 +47,7 @@ static char inventory_tokens[FONT_FACE_MAX][ASTRA_FONT_OBJECT_TOKEN_SIZE];
 static uint32_t inventory_count;
 static uint32_t inventory_ready;
 static uint32_t config_ready;
+static uint32_t font_device;
 
 static FontEntry *find_face(const char *id)
 {
@@ -208,17 +210,41 @@ static uint32_t load_inventory(void)
     return ASTRA_VFS_OK;
 }
 
+static uint32_t sync_object_directory(void)
+{
+    AstraFile directory = ASTRA_FILE_INIT;
+    uint32_t status = astra_filesystem_open(
+        &files.filesystem, "/CONFIG_SYSTEM/installed",
+        ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY, &directory);
+    if (status != ASTRA_VFS_OK) return status;
+    status = astra_filesystem_sync(&directory);
+    uint32_t closed = astra_filesystem_close(&directory);
+    return status == ASTRA_VFS_OK ? closed : status;
+}
+
+static uint32_t remove_object(const char *token)
+{
+    char path[ASTRA_VFS_PATH_MAX];
+    if (snprintf(path, sizeof(path),
+                 "/CONFIG_SYSTEM/installed/%s.afnt", token) >=
+            (int)sizeof(path))
+        return ASTRA_VFS_ERR_LIMIT;
+    uint32_t status = astra_filesystem_unlink(&files.filesystem, path, 0u);
+    if (status != ASTRA_VFS_OK) return status;
+    return sync_object_directory();
+}
+
 static uint32_t store_object(const char *token, const void *bytes,
-                             uint32_t length)
+                             uint32_t length, uint32_t *created)
 {
     char path[ASTRA_VFS_PATH_MAX], temporary[ASTRA_VFS_PATH_MAX];
     AstraFile file = ASTRA_FILE_INIT;
-    AstraFile directory = ASTRA_FILE_INIT;
     void *existing = NULL;
     uint32_t existing_length = 0u, used = 0u;
     uint32_t status;
     uint32_t opened;
 
+    *created = 0u;
     if (snprintf(path, sizeof(path),
                  "/CONFIG_SYSTEM/installed/%s.afnt", token) >=
             (int)sizeof(path) ||
@@ -264,95 +290,249 @@ static uint32_t store_object(const char *token, const void *bytes,
         (void)astra_filesystem_unlink(&files.filesystem, temporary, 0u);
         return status;
     }
-    status = astra_filesystem_open(
-        &files.filesystem, "/CONFIG_SYSTEM/installed",
-        ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY, &directory);
-    opened = status == ASTRA_VFS_OK;
-    if (status == ASTRA_VFS_OK) status = astra_filesystem_sync(&directory);
-    if (opened) {
-        uint32_t closed = astra_filesystem_close(&directory);
-        if (status == ASTRA_VFS_OK) status = closed;
+    status = sync_object_directory();
+    if (status != ASTRA_VFS_OK) {
+        (void)remove_object(token);
+        return status;
+    }
+    *created = 1u;
+    return status;
+}
+
+typedef struct FontImportStage {
+    char manifest[FONT_INVENTORY_MAX];
+    char tokens[FONT_FACE_MAX][ASTRA_FONT_OBJECT_TOKEN_SIZE];
+    uint8_t created[FONT_FACE_MAX];
+    uint32_t count;
+} FontImportStage;
+
+static uint32_t rollback_import(const FontImportStage *stage)
+{
+    uint32_t status = ASTRA_VFS_OK;
+    for (uint32_t at = 0u; at < stage->count; ++at) {
+        if (!stage->created[at]) continue;
+        uint32_t removed = remove_object(stage->tokens[at]);
+        if (removed != ASTRA_VFS_OK) status = removed;
     }
     return status;
 }
 
-static uint32_t import_afnt(uint32_t area,
+static uint32_t stage_afnt(FontImportStage *stage, const void *bytes,
+                           uint32_t length,
+                           char imported[ASTRA_FONT_FACE_ID_MAX])
+{
+    char token[ASTRA_FONT_OBJECT_TOKEN_SIZE];
+    FontEntry *entry;
+    uint32_t status;
+    uint32_t created;
+    size_t used;
+
+    if (length > FONT_FILE_MAX) return ASTRA_STATUS_LIMIT;
+    if (length < 4u || memcmp(bytes, "AFNT", 4u) != 0)
+        return ASTRA_STATUS_INVALID;
+    astra_font_object_token(bytes, length, token);
+    if (snprintf(imported, ASTRA_FONT_FACE_ID_MAX, "user:%s", token) >=
+            (int)ASTRA_FONT_FACE_ID_MAX)
+        return ASTRA_STATUS_LIMIT;
+    if (find_face(imported) != NULL) return ASTRA_STATUS_OK;
+    for (uint32_t at = 0u; at < stage->count; ++at)
+        if (strcmp(stage->tokens[at], token) == 0)
+            return ASTRA_STATUS_OK;
+    if (installed_count + stage->count >= FONT_FACE_MAX ||
+        inventory_count + stage->count >= FONT_FACE_MAX)
+        return ASTRA_STATUS_LIMIT;
+    entry = &installed[installed_count + stage->count];
+    strcpy(entry->id, imported);
+    if (!astra_font_catalog_face_from_afnt(
+            bytes, length, entry->id,
+            (uint32_t)strlen(entry->id), 0u,
+            entry->family, sizeof(entry->family), entry->style,
+            sizeof(entry->style), entry->strikes, FONT_STRIKE_MAX,
+            &entry->face))
+        return ASTRA_STATUS_INVALID;
+    used = strlen(stage->manifest);
+    if (used + (used != 0u ? 1u : 0u) +
+        ASTRA_FONT_OBJECT_TOKEN_LENGTH + 1u > sizeof(stage->manifest))
+        return ASTRA_STATUS_LIMIT;
+    status = store_object(token, bytes, length, &created);
+    if (status != ASTRA_VFS_OK) return status;
+    if (used != 0u) stage->manifest[used++] = ' ';
+    memcpy(stage->manifest + used, token, ASTRA_FONT_OBJECT_TOKEN_SIZE);
+    memcpy(stage->tokens[stage->count++], token,
+           ASTRA_FONT_OBJECT_TOKEN_SIZE);
+    stage->created[stage->count - 1u] = (uint8_t)created;
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t commit_import(FontImportStage *stage)
+{
+    if (stage->count == 0u) return ASTRA_STATUS_OK;
+    if (astra_config_set_string(&config, "installed", 0u,
+                                stage->manifest) != ASTRA_CONFIG_OK)
+        return ASTRA_STATUS_IO;
+    strcpy(inventory_text, stage->manifest);
+    for (uint32_t at = 0u; at < stage->count; ++at)
+        memcpy(inventory_tokens[inventory_count + at], stage->tokens[at],
+               ASTRA_FONT_OBJECT_TOKEN_SIZE);
+    inventory_count += stage->count;
+    installed_count += stage->count;
+    if (++generation == 0u) generation = 1u;
+    return ASTRA_STATUS_OK;
+}
+
+typedef struct FontConvertJob {
+    const void *source;
+    uint32_t source_size;
+    const char *name;
+    uint32_t name_size;
+    uint32_t ready;
+    uint32_t resume;
+    uint32_t cancel;
+    uint32_t status;
+    uint32_t faces;
+    uint32_t afnt_size;
+    void *afnt;
+} FontConvertJob;
+
+static void convert_outline(uint32_t argument)
+{
+    FontConvertJob *job = (FontConvertJob *)(uintptr_t)argument;
+    FontsHost host = {0};
+    uint32_t faces = 0u;
+
+    job->status = fonts_host_begin(&host, font_device, job->source,
+        job->source_size, job->name, job->name_size);
+    if (job->status != ASTRA_STATUS_OK) {
+        (void)astra_rt_signal(job->ready, 1u, NULL);
+        return;
+    }
+    for (uint32_t face = 0u; face == 0u || face < faces; ++face) {
+        job->status = fonts_host_convert(&host, face, &job->afnt,
+                                          &job->afnt_size, &job->faces);
+        if (job->status == ASTRA_STATUS_OK &&
+            faces != 0u && faces != job->faces)
+            job->status = ASTRA_STATUS_PROTOCOL;
+        if (job->status == ASTRA_STATUS_OK) faces = job->faces;
+        if (astra_rt_signal(job->ready, 1u, NULL) != ASTRA_SYSCALL_OK ||
+            job->status != ASTRA_STATUS_OK)
+            break;
+        if (astra_wait_one(job->resume, ASTRA_DEADLINE_FOREVER, NULL) !=
+                ASTRA_SYSCALL_OK || job->cancel)
+            break;
+    }
+    fonts_host_close(&host);
+}
+
+static uint32_t import_outline(FontImportStage *stage, const void *source,
+                               uint32_t size, const char *name,
+                               char imported[ASTRA_FONT_FACE_ID_MAX])
+{
+    FontConvertJob job = { .source = source, .source_size = size,
+        .name = name, .name_size = (uint32_t)strlen(name) };
+    AstraThreadStart start = {convert_outline, (uint32_t)(uintptr_t)&job};
+    uint32_t worker = 0u, status = ASTRA_STATUS_LIMIT, faces = 0u;
+
+    if (astra_rt_semaphore_create(0u, 1u,
+            ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL, &job.ready) !=
+            ASTRA_SYSCALL_OK)
+        return status;
+    if (astra_rt_semaphore_create(0u, 1u,
+            ASTRA_RIGHT_WAIT | ASTRA_RIGHT_SIGNAL, &job.resume) !=
+            ASTRA_SYSCALL_OK)
+        goto done;
+    if (astra_rt_thread_create(&start, ASTRA_PROCESS_PRIORITY_NORMAL,
+            ASTRA_RIGHT_WAIT | ASTRA_RIGHT_READ, &worker, NULL) !=
+            ASTRA_SYSCALL_OK)
+        goto done;
+    status = ASTRA_STATUS_OK;
+    for (uint32_t face = 0u; status == ASTRA_STATUS_OK &&
+         (face == 0u || face < faces); ++face) {
+        uint32_t handles[2] = {job.ready, worker}, index = UINT32_MAX;
+        if (astra_wait_multiple(handles, 2u, ASTRA_DEADLINE_FOREVER,
+                                &index, NULL) != ASTRA_SYSCALL_OK ||
+            index != 0u) {
+            status = ASTRA_STATUS_IO;
+            break;
+        }
+        status = job.status;
+        if (status != ASTRA_STATUS_OK) break;
+        faces = job.faces;
+        status = stage_afnt(stage, job.afnt, job.afnt_size, imported);
+        astra_runtime_deallocate(job.afnt);
+        job.afnt = NULL;
+        job.cancel = status != ASTRA_STATUS_OK;
+        if (astra_rt_signal(job.resume, 1u, NULL) != ASTRA_SYSCALL_OK) {
+            status = ASTRA_STATUS_IO;
+            break;
+        }
+    }
+    job.cancel = status != ASTRA_STATUS_OK;
+    if (job.cancel) (void)astra_rt_signal(job.resume, 1u, NULL);
+    if (astra_wait_one(worker, ASTRA_DEADLINE_FOREVER, NULL) !=
+            ASTRA_SYSCALL_OK && status == ASTRA_STATUS_OK)
+        status = ASTRA_STATUS_IO;
+done:
+    astra_runtime_deallocate(job.afnt);
+    if (worker != 0u) (void)astra_close(worker);
+    if (job.resume != 0u) (void)astra_close(job.resume);
+    (void)astra_close(job.ready);
+    return status;
+}
+
+static uint32_t import_font(uint32_t area,
                             const AstraFontServiceRequest *request,
                             char imported[ASTRA_FONT_FACE_ID_MAX])
 {
+    FontImportStage stage = {0};
     void *mapping = NULL;
-    uint32_t mapped_size = 0u;
-    uint32_t status;
-    char token[ASTRA_FONT_OBJECT_TOKEN_SIZE];
-    char manifest[FONT_INVENTORY_MAX];
-    FontEntry *entry;
+    uint32_t mapped_size = 0u, status;
+    uint32_t commit_started = 0u;
 
-    if (!inventory_ready || !config_ready)
+    if (!inventory_ready || !config_ready) {
+        (void)astra_log_debug("fonts inventory unavailable", 27u);
         return ASTRA_STATUS_IO;
+    }
+    strcpy(stage.manifest, inventory_text);
     status = astra_rt_area_map(area, ASTRA_AREA_MAP_READ,
                                &mapping, &mapped_size);
     if (status != ASTRA_SYSCALL_OK) return ASTRA_STATUS_BAD_HANDLE;
     if (mapped_size < request->source_size) {
         status = ASTRA_STATUS_PROTOCOL;
-        goto done;
-    }
-    if (request->source_size < 4u ||
-        memcmp(mapping, "AFNT", 4u) != 0) {
+    } else if (request->source_size >= 4u &&
+               memcmp(mapping, "AFNT", 4u) == 0) {
+        status = stage_afnt(&stage, mapping, request->source_size, imported);
+        if (status != ASTRA_STATUS_OK)
+            (void)astra_log_debug("fonts AFNT stage failed", 23u);
+    } else if (font_device == 0u) {
         status = ASTRA_STATUS_UNSUPPORTED;
-        goto done;
+    } else {
+        status = import_outline(&stage, mapping, request->source_size,
+                                request->source_name, imported);
+        if (status != ASTRA_STATUS_OK)
+            (void)astra_log_failure("fonts outline import", status);
     }
-    astra_font_object_token(mapping, request->source_size, token);
-    if (snprintf(imported, ASTRA_FONT_FACE_ID_MAX, "user:%s", token) >=
-            (int)ASTRA_FONT_FACE_ID_MAX) {
-        status = ASTRA_STATUS_LIMIT;
-        goto done;
-    }
-    if (find_face(imported) != NULL) {
-        status = ASTRA_STATUS_OK;
-        goto done;
-    }
-    if (installed_count == FONT_FACE_MAX ||
-        inventory_count >= FONT_FACE_MAX) {
-        status = ASTRA_STATUS_LIMIT;
-        goto done;
-    }
-    entry = &installed[installed_count];
-    strcpy(entry->id, imported);
-    if (!astra_font_catalog_face_from_afnt(
-            mapping, request->source_size, entry->id,
-            (uint32_t)strlen(entry->id), 0u,
-            entry->family, sizeof(entry->family), entry->style,
-            sizeof(entry->style), entry->strikes, FONT_STRIKE_MAX,
-            &entry->face)) {
-        status = ASTRA_STATUS_INVALID;
-        goto done;
-    }
-    int size = snprintf(manifest, sizeof(manifest), "%s%s%s",
-                        inventory_text, inventory_count == 0u ? "" : " ",
-                        token);
-    if (size <= 0 || (size_t)size >= sizeof(manifest)) {
-        status = ASTRA_STATUS_LIMIT;
-        goto done;
-    }
-    status = store_object(token, mapping, request->source_size);
-    if (status != ASTRA_VFS_OK) goto done;
-    if (astra_config_set_string(&config, "installed", 0u, manifest) !=
-        ASTRA_CONFIG_OK) {
-        status = ASTRA_STATUS_IO;
-        goto done;
-    }
-    memcpy(inventory_text, manifest, (size_t)size + 1u);
-    memcpy(inventory_tokens[inventory_count], token,
-           ASTRA_FONT_OBJECT_TOKEN_SIZE);
-    ++inventory_count;
-    ++installed_count;
-    if (++generation == 0u) generation = 1u;
-    status = ASTRA_STATUS_OK;
-done:
     if (astra_rt_area_unmap(mapping) != ASTRA_SYSCALL_OK &&
         status == ASTRA_STATUS_OK)
         status = ASTRA_STATUS_IO;
-    if (status != ASTRA_STATUS_OK) imported[0] = '\0';
+    if (status == ASTRA_STATUS_OK) {
+        commit_started = 1u;
+        status = commit_import(&stage);
+        if (status != ASTRA_STATUS_OK) {
+            (void)astra_log_failure("fonts publish", status);
+            (void)astra_log_debug("fonts publish failed", 20u);
+        }
+    }
+    if (status != ASTRA_STATUS_OK) {
+        /* A failed commit reply cannot prove its inventory rename did not land. */
+        if (!commit_started) {
+            uint32_t removed = rollback_import(&stage);
+            if (removed != ASTRA_VFS_OK) {
+                (void)astra_log_failure("fonts rollback", removed);
+                status = ASTRA_STATUS_IO;
+            }
+        }
+        imported[0] = '\0';
+    }
     return status;
 }
 
@@ -473,6 +653,8 @@ static void serve(uint32_t port, uint32_t role)
                                                     ASTRA_STATUS_PROTOCOL;
     if (count != (request.header.operation == ASTRA_FONT_SERVICE_IMPORT ?
                   2u : 1u)) status = ASTRA_STATUS_PROTOCOL;
+    if (status != ASTRA_STATUS_OK)
+        (void)astra_log_debug("fonts request invalid", 21u);
     if (status == ASTRA_STATUS_OK &&
         request.header.operation == ASTRA_FONT_SERVICE_CATALOG) {
         if (request.face_id[0] != '\0') status = ASTRA_STATUS_PROTOCOL;
@@ -480,7 +662,7 @@ static void serve(uint32_t port, uint32_t role)
     } else if (status == ASTRA_STATUS_OK &&
                request.header.operation == ASTRA_FONT_SERVICE_IMPORT) {
         /* Port-call appends the reply capability after the source area. */
-        status = import_afnt(handles[0], &request, reply.imported_id);
+        status = import_font(handles[0], &request, reply.imported_id);
     } else if (status == ASTRA_STATUS_OK &&
                request.header.operation == ASTRA_FONT_SERVICE_OPEN_FACE) {
         status = face_area(request.face_id, &area, &area_size);
@@ -520,6 +702,7 @@ static void serve(uint32_t port, uint32_t role)
 int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *bootstrap;
+    const AstraStartupCapability *device;
     AstraConfigError error = {0};
     uint32_t receive[3] = {0};
     uint32_t published[3] = {0};
@@ -528,6 +711,8 @@ int astra_main(const AstraStartupInfo *startup)
     if (!astra_startup_validate(startup)) return ASTRA_STATUS_INVALID;
     bootstrap = astra_startup_capability(startup,
                                          ASTRA_CAPABILITY_SERVICE_READY);
+    device = astra_startup_capability(startup, ASTRA_CAPABILITY_HOST_DEVICE);
+    font_device = device == NULL ? 0u : device->handle;
     if (bootstrap == NULL) return ASTRA_STATUS_BAD_HANDLE;
     if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
         return ASTRA_STATUS_NOT_FOUND;
