@@ -76,6 +76,19 @@ Full font correctness still requires live refresh, matching client measurement
 and compositor metrics, coherent designed-style resolution, and a newly built
 immutable software release with repeat physical import/select/remove gates.
 
+Display's shared `CONTENT_SURFACE` builder now inherits the configured UI face,
+closing a gap where Desktop/Atlas content still used the built-in face while
+chrome used the saved AFNT. The real-AFNT regression fails before propagation
+and passes afterward, checking glyph advances, submitted bitmap rows and null
+font recovery. Display host, sanitizer, MC68040 and analyzer gates pass on Beast.
+The native GUI gate also passes TTF import, family details, saved choice,
+restart and uninstall with current QEMU source identity `0c20ae9150c2`.
+The first run mistakenly used the older panic-soak QEMU, which lacks the font
+channel; that failed run is retained in
+`/var/tmp/astra-font-content-face-ui-20261017.log`. The corrected passing run is
+`/var/tmp/astra-font-content-face-ui-current-20261017.log`. These software changes
+are not installed in the retained DE25 font candidate or production selector.
+
 Latest work covers native font management, scoped settings, and migration of
 native UI pixel rendering to Astraea. The fixed/removable filesystem remains
 in scope; network mounts remain excluded. Correctness remains ahead of

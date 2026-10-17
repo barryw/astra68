@@ -516,6 +516,20 @@ afterward. Haiku's `FontSelectionView.cpp:UpdateFontsMenu` passes complete
 style names to owned `BMenuItem` labels; Astra retains its List/AstraString
 controls and sizes their backing storage from the validated catalog.
 
+Display passes its selected UI font into the shared `CONTENT_SURFACE` render
+builder, so ordinary Desktop/Atlas draw-list text inherits the same face as
+window chrome. Named application faces still use the existing resolver. A
+regression using the real Astra Mono AFNT failed before propagation: glyph
+advances still came from the built-in proportional face. It now checks both
+the selected advances and submitted bitmap rows, plus built-in recovery when
+the selected font is absent. Display host, ASan/UBSan, MC68040 and analyzer
+gates pass on Beast. The current-build native QEMU GUI gate also passes TTF
+import, family details, saved choice, restart and uninstall. Haiku reference:
+`src/servers/app/drawing/DrawingEngine.cpp:SetFont` applies the current
+`ServerFont`/`DrawState` to its painter; Astra applies its validated AFNT context
+to the existing hardware render builder. Live refresh, coherent client
+measurement, and designed-style resolution remain open.
+
 The shared renderer also makes AFNT a dependency of HPS display helpers.
 `fpga/arty/linux/Makefile` now includes the existing AFNT, CRC32, and UTF-8
 sources for every renderer consumer. Host and AArch64 display self-tests and
@@ -798,9 +812,9 @@ Imported glyphs receive Unicode mappings through that explicit choice. Unknown
 encodings do not silently become Unicode. System-choice eligibility requires
 11-, 13-, and 16-pixel strikes; fixed-size Amiga fonts remain installed and
 catalog-visible when they lack those sizes. The catalog carries the service's
-eligibility decision, and Fonts labels each style accordingly. A named-face
-application draw-list command is still needed before applications can render
-an imported Amiga font independently of the system face.
+eligibility decision, and Fonts labels each style accordingly. Applications
+can use `astra_draw_font_text` to draw an imported Amiga face independently
+of the system face through display's validated resolver and Astraea.
 
 Read-only implementation references: Haiku
 `src/servers/app/font/FontManager.cpp` for catalog/style ownership and

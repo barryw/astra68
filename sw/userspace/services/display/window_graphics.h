@@ -88,6 +88,7 @@ typedef struct DisplayGraphicsHost {
     uint32_t (*storage)(void *context, void **storage);
     const AstraRenderFont *(*resolve_font)(void *context, const char *id,
                                            uint32_t id_length);
+    const AstraRenderFont *ui_font;
     /* The content bank the client draws into now. */
     uint32_t content_offset;
     uint32_t content_bytes;

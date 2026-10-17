@@ -225,7 +225,8 @@ static uint32_t builder_begin(AstraRenderBuilder *builder,
     if (++generation == 0u)
         generation = 1u;
     return astra_render_builder_init(builder, storage,
-                                     ASTRA_RENDER_BUILDER_BYTES, generation) ?
+                                     ASTRA_RENDER_BUILDER_BYTES, generation) &&
+           astra_render_builder_use_font(builder, host->ui_font) ?
         ASTRA_STATUS_OK : ASTRA_STATUS_INVALID;
 }
 

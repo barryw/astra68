@@ -10,6 +10,7 @@
 #include <astra/display_mailbox.h>
 #include <astra/render_batch.h>
 #include <astra/runtime.h>
+#include <astra/ui_font.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
@@ -1366,6 +1367,78 @@ static void test_window_graphics(void)
                        .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
                        &reply) == ASTRA_STATUS_OK);
             list->command_count = 1u;
+        }
+        /* Ordinary client text inherits the same selected face as chrome. */
+        {
+            FILE *file = fopen("../../graphics/fonts/astra-mono.afnt", "rb");
+            AstraDrawListCommand blit = *draw;
+            AstraRenderFont font;
+            AstraAfntGlyphInfo first, second;
+            AstraAfntStrikeInfo strike;
+            const uint8_t *source;
+            uint8_t *bytes;
+            long length;
+            uint32_t payload =
+                astra_draw_list_payload_offset(list->command_capacity);
+
+            assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+            length = ftell(file);
+            assert(length > 0 && length <= 32L * 1024L * 1024L);
+            assert(fseek(file, 0, SEEK_SET) == 0);
+            bytes = malloc((size_t)length);
+            assert(bytes != NULL && fread(bytes, 1u, (size_t)length, file) ==
+                                    (size_t)length);
+            assert(fclose(file) == 0);
+            assert(astra_render_font_init(&font, bytes, (uint32_t)length));
+            assert(astra_afnt_strike_info(&font.view, 0u, &strike));
+            assert(astra_afnt_glyph_info(&font.view, 0u, 'I', &first));
+            assert(astra_afnt_glyph_info(&font.view, 0u, 'W', &second));
+            host.ui_font = &font;
+            memcpy((uint8_t *)list + payload, "IW", 2u);
+            list->payload_bytes = 2u;
+            *draw = (AstraDrawListCommand){
+                .operation = ASTRA_DRAW_LIST_TEXT,
+                .x = 5, .y = 7, .color = 0xffffffffu,
+                .font_height = strike.pixel_height,
+                .payload_offset = payload, .payload_bytes = 2u,
+                .clip_right = 320u, .clip_bottom = 200u,
+            };
+            assert(graphics_run(window.graphics, &host,
+                                (AstraGuiGraphicsCommand){
+                       .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                       .object = list_id,
+                       .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                       &reply) == ASTRA_STATUS_OK &&
+                   graphics_batch_count == 1u);
+            command = recorded_command(0u, 0u);
+            assert(read_be32(command + 4u) >> 16 == ASTRA_RENDER_OP_GLYPH_RUN);
+            record = recorded_record(0u, read_be32(command + 40u));
+            int16_t second_x = (int16_t)(read_be32(
+                record + ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES + 8u) >> 16);
+            assert(second_x == astra_ui_fixed_floor(
+                5 * 64 + first.advance_x + second.bearing_x));
+            record = recorded_record(0u, read_be32(command + 36u));
+            source = recorded_record(0u, read_be32(record + 8u));
+            assert(record[24u] == ASTRA_RENDER_FORMAT_A8);
+            for (uint32_t row = 0u; row < first.height; ++row)
+                assert(memcmp(source + row * read_be32(record + 16u),
+                              first.bitmap + row * first.pitch,
+                              first.pitch) == 0);
+            host.ui_font = NULL;
+            assert(graphics_run(window.graphics, &host,
+                                (AstraGuiGraphicsCommand){
+                       .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                       .object = list_id,
+                       .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                       &reply) == ASTRA_STATUS_OK);
+            command = recorded_command(0u, 0u);
+            record = recorded_record(0u, read_be32(command + 40u));
+            assert((int16_t)(read_be32(
+                record + ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES + 8u) >> 16) !=
+                   second_x);
+            free(bytes);
+            *draw = blit;
+            list->payload_bytes = 0u;
         }
         /* The sprite is not a draw target; a surface without SOURCE is
            not a source. */
