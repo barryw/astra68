@@ -32,11 +32,15 @@ def display_count(machine, name):
 
 def open_fonts(machine):
     before = display_count(machine, "glyph-commands")
+    trace_before = machine.sequence()
+    syslog_before = len(machine.syslog_lines())
     machine.qmp.double_click(*machine.desktop_icon("/apps/Fonts.app"))
     end = time.monotonic() + 30
     while time.monotonic() < end:
+        # Retained host logs include earlier boots and window activations.
+        lines = machine.said(trace_before)[0] + machine.syslog_lines()[syslog_before:]
         if any("launch /apps/Fonts.app" in line and "status=0" in line
-               for line in machine.said_with_syslog()[0]) and \
+               for line in lines) and \
                 display_count(machine, "glyph-commands") > before:
             return
         time.sleep(.1)

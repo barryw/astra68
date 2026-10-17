@@ -2,6 +2,80 @@
 
 Status: active continuation map, 2026-10-17
 
+The blend-isolation FPGA shell is now installed on DE25: RBF
+`9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`.
+U-Boot reconfiguration and exact-SOF JTAG verification pass. The existing
+`6.12.11-astra-storage1-gd7d192a9ddd9` kernel/package `ab511cc1`, versioned boot
+script, and software selector `57078599` remain selected. The first fresh
+production desktop capture is byte-identical to the previously qualified good
+frame (`37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`),
+with 49/49 submissions/completions. Production storage was backed up and
+compared before and after fabric installation while stopped; no user image was
+replaced. Runtime/audio/remote services are active with zero automatic restarts
+after reboot. Following a native Fonts removal workflow, the fully started
+production desktop again matches that frame byte for byte (49/49 commands).
+An earlier warm capture taken at only 2/2 commands showed the initial empty
+workspace; it was rejected as startup evidence. No complete font-release
+certification is claimed.
+
+The 2026-10-17 native Fonts physical candidate remains withheld. Beast clean-built
+immutable release
+`394c118927c981dddadf77533b43b606928779a6e53a56a9928b6dce21305e42`
+from source manifest
+`a12218e4d367e3440eb308afef9424e8110b0c685926c29096390888bf7b55e5`;
+ROM SHA-256 is
+`c9f02cea1edc6aa44bfa0c26aa528a6f8f898ad75a36e9e96c2bfd3745187585`.
+An isolated DE25 image imported a TTF and persisted its selected system face.
+Initial removal trials failed, leaving both inventory and choice intact, and
+showed pale desktop content, missing strokes and overlapping text. The shared
+blend-state fix below corrected the visual defect. A further removal retry
+then exposed test readiness accepting a Fonts launch from retained older logs.
+`open_fonts` now requires a fresh launch since the click, using existing trace
+and syslog baselines. Its regression fails before the fix and passes afterward.
+The physical retry passes without changing the font-service runtime: built-in
+choice `system:astra-workbench` persists, installed inventory is empty, the
+imported AFNT object is absent, no trial panic occurs, and the trial provider
+retires. Captures show readable eligibility labels, confirmation and removal.
+Beast evidence is under `/var/tmp/astra-font-fpga-evidence-20261017/`, including
+`remove-after-readiness-fix/` and `warm-production/`; failed attempts remain
+retained in `attempt-before-blend-fix/` and `remove-after-blend-fix/`.
+Production selector remains `57078599`; trial storage was disposable.
+
+Subsequent RTL review found a shared render-state leak:
+`astra_render_command_processor.sv` passed the last `FILL_RECTS` blend flag
+to ordinary `FILL` commands. After a blended list, RGB565 clear colors were
+treated as transparent ARGB colors. The existing slow-write ordering bench,
+extended with ordinary fills after blended lists, fails before the one-line
+opcode qualification and passes afterward (175 commands). This explains why
+a runtime restart without FPGA reset cannot restore correct clearing. The full
+graphics suite, clean route, exact-shell check, and initial plus post-Fonts
+production desktop captures now pass. No software workaround was added.
+
+The clean full-feature replacement shell now routes successfully on Beast:
+RBF `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`,
+40,754/46,800 ALMs, unchanged memory/RAM/DSP usage, all clocks constrained,
+graphics setup +0.259 ns, worst setup +0.007 ns, worst hold +0.000 ns.
+Its complete artifact manifest verifies; that shell is installed as above.
+DE25's actual current boot script and retained RBF have a verified rollback
+bundle under `/var/tmp/astra-font-fpga-20261017/rollback`.
+Preflight also caught generic fabric installation replacing the storage
+kernel's versioned boot recipe. Fabric packages now contain no kernel boot
+selector; fabric installation preserves the existing script. The behavioral
+regression fails before the fix and passes afterward, along with complete
+kernel install/arm/rollback and the real FIT/full-package staging gate.
+
+Production image backup is retained on Beast at
+`/var/tmp/astra-font-fpga-evidence-20261017/storage-before.img` (SHA-256
+`e23d0700fa45d29d0cada665ef67b9c800a901bb00a8af1ecdd7645c3b75c55d`).
+The failed font archive and three old DE25 panic-trial archives were transferred
+to Beast with complete SHA-256 verification before removing those diagnostic
+copies from DE25; panic archives are under
+`/var/tmp/astra-de25-diagnostics-20261017/`. Production images and mounted
+provider data were not removed. DE25 has 1.9 GiB available after cleanup.
+Full font correctness still requires live refresh, matching client measurement
+and compositor metrics, coherent designed-style resolution, and a newly built
+immutable software release with repeat physical import/select/remove gates.
+
 Latest work covers native font management, scoped settings, and migration of
 native UI pixel rendering to Astraea. The fixed/removable filesystem remains
 in scope; network mounts remain excluded. Correctness remains ahead of

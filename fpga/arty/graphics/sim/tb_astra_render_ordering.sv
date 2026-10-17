@@ -474,6 +474,22 @@ module tb_astra_render_ordering;
                        n, memory_i.read_byte(DST_DATA + 260 * W * 2 + n),
                        memory_i.read_byte(DST_DATA + 300 * W * 2 + n));
 
+        // 7. A later ordinary FILL must not inherit the last record list's
+        //    blend mode. RGB565 colors have no alpha byte to blend with.
+        expect_pixel(DST_DATA + 350 * W * 2 + 4, 16'h1687);
+        fill(2, 350, 32, 2, 16'h1687);
+        run_all;
+        for (row = 350; row < 352; row = row + 1)
+            for (col = 2; col < 34; col = col + 1)
+                if ({memory_i.read_byte(DST_DATA + row * W * 2 + col * 2),
+                     memory_i.read_byte(DST_DATA + row * W * 2 + col * 2 + 1)}
+                        !== 16'h1687)
+                    $fatal(1, "ordinary fill inherited record blend at %0d,%0d",
+                           col, row);
+        expect_pixel(DST_DATA + 353 * W * 2 + 6, 16'hef7e);
+        fill(3, 353, 1, 1, 16'hef7e);
+        run_all;
+
         $display("ASTRA RENDER ORDERING PASS commands=%0d", sub);
         $finish;
     end

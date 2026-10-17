@@ -1,5 +1,139 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-17: blend-isolation shell booted, initial production pixels match
+
+- Installed RBF
+  `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`
+  through the corrected fabric-only installer. U-Boot serial capture reports
+  successful FPGA reconfiguration and boots the existing versioned
+  `ab511cc12039f8bd0cb0d75b78295ef9513c9f40b90d6f52b07eadb1dc51844d`
+  kernel package. The canonical kernel verifier passes before and after reboot:
+  Linux `6.12.11-astra-storage1-gd7d192a9ddd9`, actual selected Image SHA-256
+  `088aaa922db3c2a214ad9be5c394a613af32b23ef81b046caedd1e510a088af0`.
+  Boot script SHA-256 stays
+  `5a317831e6a7ed63bb0b54a067a1303d2f7eae3952cb2b899ad5a4d2582eeb9a`.
+- Beast `verify_running_shell.sh` linked the exact new `golden_top_hps.sof`
+  through JTAG and exited zero. Fresh 1920x1080 HDMI DMA capture passes and is
+  byte-identical to the prior good production desktop:
+  `37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`.
+  Counters: 49/49 submissions/completions, 25 glyph commands. Runtime, audio,
+  and remote services are active with zero automatic restarts after reboot.
+- Production software selector remains `57078599`; its user image was copied
+  and compared while stopped before/after fabric installation (both SHA-256
+  `e23d0700fa45d29d0cada665ef67b9c800a901bb00a8af1ecdd7645c3b75c55d`).
+  Original boot files and fabric rollback installer are retained under
+  `/var/tmp/astra-font-fpga-20261017/` on DE25. The verified image backup now
+  resides on Beast at
+  `/var/tmp/astra-font-fpga-evidence-20261017/storage-before.img`.
+  No QSPI was programmed.
+- This is the same complete routed source/manifest measured below: command
+  processor `64c7ef30`, manifest `ba841e0f`, Quartus Pro 26.1.1 Build 130 on
+  Beast; 40,754/46,800 ALMs, 3,640,768/7,331,840 memory bits, 317/358 RAM,
+  67/376 DSPs, all production clocks constrained, graphics setup +0.259 ns,
+  worst setup +0.007 ns, worst hold +0.000 ns. No new route or failing timing
+  cone was measured during installation.
+- Evidence on Beast: `/var/tmp/astra-font-fpga-20261017-serial.log`,
+  `/var/tmp/astra-font-fill-blend-running-shell-20261017.log`, and
+  `/var/tmp/astra-font-fpga-evidence-20261017/production-blend-fixed.*`.
+  Native Fonts removal then passed: built-in choice saved, imported inventory
+  and AFNT object removed, no trial panic, provider retired. Captures show clean
+  controls and eligibility text. A test readiness bug had accepted an old launch
+  log; requiring a fresh launch fixed the failed interaction without a runtime
+  workaround. Evidence: `remove-after-readiness-fix/` under the same Beast root.
+  An immediate production capture at only 2/2 commands was rejected as startup
+  evidence. The subsequent fully started warm desktop is byte-identical to
+  `37d1bbfe` again, with 49/49 commands and 25 glyph commands; retained under
+  `warm-production/`. Disposition: initial POST/kernel/desktop and post-Fonts
+  warm visuals pass. Complete software font-release qualification remains open.
+
+## 2026-10-17: blend-state isolation fully routed, physical gate pending
+
+- Beast Quartus Pro 26.1.1 Build 130 completed the clean full-feature shell
+  build under `build/de25-font-blend-20261017/astra-shell`. The only RTL
+  difference from the installed `rtl-fifo` source is the blend-input opcode
+  qualification below. Command-processor source SHA-256 is
+  `64c7ef30801827cba2a8ea3fd1f2d29c5623b09d9c55db7710da6bbf4322c8a1`;
+  full `BUILD_SHA256SUMS` SHA-256 is
+  `ba841e0f0a1d9024ed2d94126ea917fce2d4e497aadb86a7b133b70d472d8e26`.
+  The build session exited zero and a separate complete manifest check passed.
+- RBF SHA-256:
+  `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`.
+  Resources: **40,754/46,800 ALMs**, 3,640,768/7,331,840 memory bits,
+  317/358 RAM blocks, 67/376 DSP blocks. All production clocks are fully
+  constrained and meet timing at all reported corners; graphics setup
+  +0.259 ns, worst setup +0.007 ns (`ASTRA_HDMI_PIXEL_CLOCK`), worst hold
+  +0.000 ns (`ASTRA_HDMI_PIXEL_CLOCK`). High-severity signoff DRC gate passed.
+  No failing timing cone was measured in this build.
+- Log: `/var/tmp/astra-font-fill-blend-route-20261017.log` on Beast.
+  The full graphics suite exited zero, including the 175-command ordering
+  regression; log `/var/tmp/astra-font-fill-blend-graphics-20261017.log`.
+  Physical FPGA installation and repeated POST, storage,
+  desktop/Fonts and HDMI gates remain pending. No certification is claimed.
+- DE25 rollback preflight copied and verified the actual current RBF and boot
+  script under `/var/tmp/astra-font-fpga-20261017/rollback`. Existing boot
+  root-level vendor Image SHA-256 is
+  `874f75d81f6452406f0f0ea5e0849ea269e92599fe728eb02b1bdbb56ada1aa8`;
+  DTB remains the qualified `d9bd893f` value. No board boot files, software
+  selector, production data, or QSPI contents have changed at this checkpoint.
+- Pre-install comparison found the generic fabric bundle installer would
+  overwrite the versioned storage-kernel boot recipe with the root-level
+  vendor Image/DTB recipe. Fabric packaging and installation now leave kernel
+  selection to the existing kernel installer. The behavioral boot fixture
+  fails before this fix and passes afterward, including absent template and
+  rejection before replacement when the selected script or qualified DTB is
+  missing. Complete kernel install/arm/rollback and the real FIT/full-package
+  stage gates also pass (1,344 modules, package `ab511cc1`). Haiku reference:
+  `src/system/boot/loader/main.cpp` selects one `BootVolume` and loads its
+  kernel and settings together; Astra preserves its canonical versioned Linux
+  package selection when replacing only FPGA fabric.
+
+## 2026-10-17: rectangle-list blend-state isolation, simulation checkpoint
+
+- The retained route's command processor feeds `rects_blend_q` to ordinary
+  fills after blended `FILL_RECTS`, interpreting RGB565 clears as transparent
+  ARGB. Qualifying that input with `command_is_fill_rects_q` fixes dispatch
+  without changing the protocol, software renderer, or feature set.
+- Beast's existing slow/reorderable-write ordering bench was extended with
+  ordinary RGB565 fills after blended rectangle lists. Before the fix it fails
+  at completion 173/pixel `0016d604`; after the fix all 175 commands pass.
+  Logs: `/var/tmp/astra-font-fill-blend-{red,green}-20261017.log` on Beast.
+  Full graphics regression and a clean production route have been started;
+  neither is acceptance evidence until its session and output are verified.
+- Haiku read-only reference: `src/servers/app/ServerWindow.cpp`'s
+  `_UpdateDrawState` reapplies the current drawing state through
+  `DrawingEngine::SetDrawState`. Astra keeps its hardware command protocol and
+  qualifies command-local blend state by the opcode that owns it.
+- No new route, resource result, constrained-clock result, or failed timing
+  cone is available at this checkpoint. The installed `b61dbda8` route remains
+  unchanged; its prior resource/timing results below are retained evidence.
+
+## 2026-10-17: native Fonts trial fails visual acceptance on retained route
+
+- Beast clean-built immutable release
+  `394c118927c981dddadf77533b43b606928779a6e53a56a9928b6dce21305e42`
+  from source manifest
+  `a12218e4d367e3440eb308afef9424e8110b0c685926c29096390888bf7b55e5`.
+  ROM SHA-256:
+  `c9f02cea1edc6aa44bfa0c26aa528a6f8f898ad75a36e9e96c2bfd3745187585`.
+  Isolated DE25 storage passed TTF import and persisted system-face selection;
+  removal did not clear the saved choice or installed inventory. Captures
+  reached 110/110 submissions/completions with zero access/commit faults, but
+  visual inspection found corrupted desktop/window content. Restoring the
+  previously qualified production release also reproduced corrupted content;
+  its prior retained capture is correct. Read-only scene observation found
+  pale `ef7e` in the desktop source surface. Root cause is open.
+- Evidence: Beast `/var/tmp/astra-font-physical-evidence-20261017/`, DE25
+  `/var/tmp/astra-font-physical-20261017/`. Candidate is not activated or
+  certified. Production selector and user data remain unchanged; runtime,
+  audio, and remote services were restored. Balanced command counters alone
+  do not establish visual correctness.
+- No RTL, constraints, synthesis, placement, route, or bitstream changed.
+  Retained `b61dbda8` full-feature route remains 40,854/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM blocks, 67/376 DSPs;
+  prior measured graphics setup +0.262 ns, worst setup +0.130 ns, worst hold
+  +0.001 ns, all production clocks constrained. No new route or failed timing
+  cone was measured. Disposition: reject visual acceptance pending diagnosis.
+
 ## 2026-10-16: kernel panic diagnostic trials on retained route
 
 - Source: uncommitted kernel diagnostic worktree based on

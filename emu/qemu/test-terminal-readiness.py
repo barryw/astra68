@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The terminal gate must wait for command completion, not output silence."""
+"""Native gates must wait for current launch and command completion."""
 
 import importlib.util
 import contextlib
@@ -120,4 +120,50 @@ with tempfile.TemporaryDirectory() as directory:
         terminal.ROOT, "sw", "userspace", "commands")]
     assert "could not build integration test commands" in failure.getvalue()
 
-print("terminal command readiness test: PASS")
+font_spec = importlib.util.spec_from_file_location(
+    "astra_fonts_gate", HERE / "test-fonts-ui.py")
+fonts = importlib.util.module_from_spec(font_spec)
+font_spec.loader.exec_module(fonts)
+
+
+class FontsMachine:
+    def __init__(self):
+        self.clicked = False
+        self.polls = 0
+        self.qmp = SimpleNamespace(execute=self.display_count, double_click=self.click)
+
+    def display_count(self, *_args):
+        return int(self.clicked)
+
+    def click(self, *_args):
+        self.clicked = True
+
+    def desktop_icon(self, *_args):
+        return 1, 2
+
+    def sequence(self):
+        return 7
+
+    def said(self, after):
+        assert after == 7
+        return [], 7
+
+    def said_with_syslog(self):
+        self.polls += 1
+        return ["old launch /apps/Fonts.app status=0"], 7
+
+    def syslog_lines(self):
+        lines = ["old launch /apps/Fonts.app status=0"]
+        if self.clicked:
+            self.polls += 1
+            if self.polls >= 2:
+                lines.append("new launch /apps/Fonts.app status=0")
+        return lines
+
+
+machine = FontsMachine()
+with patch.object(fonts.time, "sleep"):
+    fonts.open_fonts(machine)
+assert machine.polls == 2, "old launch log satisfied new Fonts launch"
+
+print("native launch and terminal command readiness test: PASS")

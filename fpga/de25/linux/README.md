@@ -1,5 +1,20 @@
 # DE25 Linux capture boundary
 
+## Fabric and kernel boot ownership
+
+`../build_boot_bundle.sh` packages the routed FPGA shell and its verified
+source manifest. `install_boot_bundle.sh` replaces only `astra68.core.rbf`
+on the SD boot partition and verifies that the selected `boot.scr.uimg`
+remains unchanged. It does not select a Linux kernel or program QSPI.
+Keep a verified copy of the current RBF before installing a replacement.
+
+`kernel/install-production-storage.py` is the sole owner of kernel boot
+selection. The immutable software release carries its versioned Image, DTB,
+module tree, and generated boot script. Stage and arm that complete package
+through the kernel installer; a fabric update must not restore the generic
+vendor Image/DTB recipe. `../boot.cmd` and `../boot.its` are templates used
+by the software release publisher to generate the kernel package's script.
+
 `astra_display_capture.ko` is the host-facing boundary for remote display. It
 captures the final physical RGB888 stream, after framebuffer/window, tile,
 sprite, Copper, boot-overlay, scanline-replay, and native-pointer composition.
