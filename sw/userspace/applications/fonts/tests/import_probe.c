@@ -172,7 +172,9 @@ int astra_main(const AstraStartupInfo *startup)
     if (astra_fonts_catalog_open(read->handle, &selected) != ASTRA_OK)
         goto done;
     status = PROBE_FAIL_SELECTED;
-    if (strcmp(selected.selected_id, id) != 0) goto done;
+    if (strcmp(selected.selected_id, id) != 0 ||
+        selected.generation != after.generation + (resumed ? 0u : 1u))
+        goto done;
     status = PROBE_FAIL_DUPLICATE;
     if (astra_fonts_import(admin->handle, source, source_size,
                            SOURCE_NAME, sizeof(SOURCE_NAME) - 1u,

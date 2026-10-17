@@ -492,7 +492,10 @@ static void serve(uint32_t port, uint32_t role)
                  astra_config_set_string(&config, "system_font", 0u,
                                          face->id) != ASTRA_CONFIG_OK)
             status = ASTRA_STATUS_IO;
-        else memcpy(selected, face->id, sizeof(selected));
+        else if (strcmp(selected, face->id) != 0) {
+            memcpy(selected, face->id, sizeof(selected));
+            if (++generation == 0u) generation = 1u;
+        }
     }
     astra_message_header_set(&reply.header, sizeof(reply),
                              ASTRA_FONT_SERVICE_PROTOCOL,

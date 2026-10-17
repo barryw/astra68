@@ -196,6 +196,9 @@ selection, restart persistence, and damaged-inventory fallback on the current
 ROM. Live selection updates, designed style resolution, client-side text
 metrics, non-AFNT runtime conversion, and DE25 visual gates
 remain open. This font change is not in the selected production release.
+Selecting a different system face now advances the catalog generation;
+selecting the current face leaves it unchanged. The native import/restart
+probe passes both cases on a disposable Beast QEMU image.
 
 Current production checkpoint: graphics release
 `57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`,
