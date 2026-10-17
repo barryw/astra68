@@ -417,7 +417,8 @@ static void serve(uint32_t port, uint32_t admin)
         else status = catalog_area(&area, &area_size);
     } else if (status == ASTRA_STATUS_OK &&
                request.header.operation == ASTRA_FONT_SERVICE_IMPORT) {
-        status = import_afnt(handles[1], &request, reply.imported_id);
+        /* Port-call appends the reply capability after the source area. */
+        status = import_afnt(handles[0], &request, reply.imported_id);
     } else if (status == ASTRA_STATUS_OK) {
         FontEntry *face = find_face(request.face_id);
         if (face == NULL) status = ASTRA_STATUS_NOT_FOUND;
@@ -438,7 +439,7 @@ static void serve(uint32_t port, uint32_t admin)
     reply.catalog_size = status == ASTRA_STATUS_OK ? area_size : 0u;
     memcpy(reply.selected_id, selected, sizeof(selected));
     if (count != 0u &&
-        astra_port_send(handles[0], &reply, sizeof(reply),
+        astra_port_send(handles[count - 1u], &reply, sizeof(reply),
                         area == 0u ? NULL : &area, area == 0u ? 0u : 1u) !=
             ASTRA_SYSCALL_OK && area != 0u)
         (void)astra_close(area);

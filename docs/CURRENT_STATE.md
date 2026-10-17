@@ -154,9 +154,15 @@ Fonts UI has composed List/button views for a DH0 file browser and system-face
 choice. A disposable QEMU image with current bundles passes Fonts autostart and
 Astraea glyph submissions; full userspace `all test`, focused service/client
 tests, sanitizer, analyzer and boundary checks pass on Beast. Interactive
-import, persistence across restart, corrupt-inventory recovery, TTF/OTF/TTC
+Fonts UI import, corrupt-inventory recovery, TTF/OTF/TTC
 and Amiga conversion-worker integration, consumption of saved choice by the
 render path, removable-volume browsing, and physical release gates remain open.
+An isolated native QEMU probe imports shipped AFNT through the same admin-only
+API, checks catalog publication and idempotence, selects the imported face,
+then reboots the disposable image and verifies persisted catalog and choice.
+It exposed and fixed a port-call handle-order defect: the source area precedes
+the reply capability in an import request. This does not qualify Fonts UI
+interaction or a physical DE25 release.
 Build-time Python conversion is a development oracle, not a user import path.
 Draft installed-font storage now uses full SHA-256 content tokens and a single
 validated Config Kit inventory value as its future atomic publication point.

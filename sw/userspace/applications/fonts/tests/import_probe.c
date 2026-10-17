@@ -1,0 +1,156 @@
+#include <astra/fonts.h>
+#include <astra/filesystem_library.h>
+#include <astra/program.h>
+#include <astra/runtime.h>
+#include <astra/service.h>
+#include <astra/status.h>
+#include <astra/vfs_process.h>
+
+#include <stdint.h>
+#include <string.h>
+
+ASTRA_PROGRAM("font-import-probe", 0, 1, 0, "Astra68 contributors",
+              "Astra native test");
+
+#define SOURCE "/SYSTEM/fonts/astra-workbench.afnt"
+#define SOURCE_NAME "astra-workbench.afnt"
+
+enum {
+    PROBE_FAIL_FILES = ASTRA_STATUS_PROGRAM_FIRST,
+    PROBE_FAIL_SOURCE,
+    PROBE_FAIL_SIZE,
+    PROBE_FAIL_CATALOG_BEFORE,
+    PROBE_FAIL_IMPORT,
+    PROBE_FAIL_CATALOG_AFTER,
+    PROBE_FAIL_MATCH,
+    PROBE_FAIL_COUNT,
+    PROBE_FAIL_SELECT,
+    PROBE_FAIL_CATALOG_SELECTED,
+    PROBE_FAIL_SELECTED,
+    PROBE_FAIL_DUPLICATE,
+    PROBE_FAIL_DUPLICATE_ID,
+    PROBE_FAIL_RESTART
+};
+
+static uint32_t matches(const AstraFontsCatalog *catalog, const char *id)
+{
+    uint32_t count = 0u;
+    for (uint32_t at = 0u; at < catalog->face_count; ++at) {
+        AstraInstalledFont face;
+        if (astra_fonts_catalog_face(catalog, at, &face) != ASTRA_OK)
+            return UINT32_MAX;
+        if (face.id_length == strlen(id) &&
+            memcmp(face.id, id, face.id_length) == 0)
+            ++count;
+    }
+    return count;
+}
+
+int astra_main(const AstraStartupInfo *startup)
+{
+    const AstraStartupCapability *read, *admin, *bootstrap;
+    AstraProcessFilesystem files = ASTRA_PROCESS_FILESYSTEM_INIT;
+    AstraFile expectation = ASTRA_FILE_INIT;
+    AstraFontsCatalog before = ASTRA_FONTS_CATALOG_INIT;
+    AstraFontsCatalog after = ASTRA_FONTS_CATALOG_INIT;
+    AstraFontsCatalog selected = ASTRA_FONTS_CATALOG_INIT;
+    void *source = NULL;
+    uint32_t source_size = 0u;
+    uint32_t receive = 0u, send = 0u, index = 0u;
+    uint32_t status = PROBE_FAIL_FILES;
+    char id[ASTRA_FONT_ID_MAX] = {0};
+    char duplicate[ASTRA_FONT_ID_MAX] = {0};
+    uint32_t resumed = 0u;
+    uint32_t expect_again = 0u;
+    AstraResult result;
+
+    if (!astra_startup_validate(startup)) return ASTRA_STATUS_INVALID;
+    read = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS);
+    admin = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_ADMIN);
+    bootstrap = astra_startup_capability(startup,
+                                         ASTRA_CAPABILITY_SERVICE_READY);
+    if (read == NULL || admin == NULL || bootstrap == NULL)
+        return ASTRA_STATUS_BAD_HANDLE;
+    if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
+        goto done;
+    status = PROBE_FAIL_SOURCE;
+    if (astra_process_read_file_alloc(&files, SOURCE, &source,
+                                      &source_size) != ASTRA_VFS_OK)
+        goto done;
+    status = PROBE_FAIL_SIZE;
+    if (source_size == 0u || source_size > ASTRA_FONT_IMPORT_MAX) goto done;
+    status = PROBE_FAIL_CATALOG_BEFORE;
+    if (astra_fonts_catalog_open(read->handle, &before) != ASTRA_OK)
+        goto done;
+    uint32_t opened = astra_filesystem_open(
+        &files.filesystem, "/SYSTEM/expect-font-import-again",
+        ASTRA_VFS_OPEN_READ, &expectation);
+    if (opened == ASTRA_VFS_OK) {
+        expect_again = 1u;
+        if (astra_filesystem_close(&expectation) != ASTRA_VFS_OK)
+            goto done;
+    } else if (opened != ASTRA_VFS_ERR_NOT_FOUND)
+        goto done;
+    resumed = strncmp(before.selected_id, "user:", 5u) == 0;
+    status = PROBE_FAIL_RESTART;
+    if (resumed != expect_again) goto done;
+    status = PROBE_FAIL_IMPORT;
+    result = astra_fonts_import(admin->handle, source, source_size,
+                                SOURCE_NAME, sizeof(SOURCE_NAME) - 1u, id);
+    if (result != ASTRA_OK) {
+        status = 50u + (uint32_t)-result;
+        goto done;
+    }
+    status = PROBE_FAIL_CATALOG_AFTER;
+    if (astra_fonts_catalog_open(read->handle, &after) != ASTRA_OK) goto done;
+    status = PROBE_FAIL_MATCH;
+    if (matches(&after, id) != 1u) goto done;
+    status = PROBE_FAIL_COUNT;
+    if (after.face_count != before.face_count + (resumed ? 0u : 1u))
+        goto done;
+    status = PROBE_FAIL_SELECT;
+    if (astra_fonts_select(admin->handle, id,
+                           (uint32_t)strlen(id)) != ASTRA_OK) goto done;
+    status = PROBE_FAIL_CATALOG_SELECTED;
+    if (astra_fonts_catalog_open(read->handle, &selected) != ASTRA_OK)
+        goto done;
+    status = PROBE_FAIL_SELECTED;
+    if (strcmp(selected.selected_id, id) != 0) goto done;
+    status = PROBE_FAIL_DUPLICATE;
+    if (astra_fonts_import(admin->handle, source, source_size,
+                           SOURCE_NAME, sizeof(SOURCE_NAME) - 1u,
+                           duplicate) != ASTRA_OK) goto done;
+    status = PROBE_FAIL_DUPLICATE_ID;
+    if (strcmp(duplicate, id) != 0) goto done;
+    status = ASTRA_STATUS_OK;
+done:
+    if (selected.generation != 0u) {
+        AstraResult ignored = astra_fonts_catalog_close(&selected);
+        (void)ignored;
+    }
+    if (after.generation != 0u) {
+        AstraResult ignored = astra_fonts_catalog_close(&after);
+        (void)ignored;
+    }
+    if (before.generation != 0u) {
+        AstraResult ignored = astra_fonts_catalog_close(&before);
+        (void)ignored;
+    }
+    astra_runtime_deallocate(source);
+    astra_process_filesystem_close(&files);
+    if (status == ASTRA_STATUS_OK &&
+        astra_rt_port_create(1u, 256u, &receive, &send) != ASTRA_SYSCALL_OK)
+        status = ASTRA_STATUS_LIMIT;
+    (void)astra_service_ready(bootstrap->handle, status, NULL, 0u);
+    (void)astra_close(bootstrap->handle);
+    if (status != ASTRA_STATUS_OK) {
+        (void)astra_log_failure("font import probe", status);
+        return (int)status;
+    }
+    (void)astra_log(resumed ? "FONT_IMPORT_AGAIN_PASS" :
+                             "FONT_IMPORT_FIRST_PASS");
+    for (;;)
+        if (astra_wait_multiple(&receive, 1u, ASTRA_DEADLINE_FOREVER,
+                                &index, NULL) != ASTRA_SYSCALL_OK)
+            return ASTRA_STATUS_PEER_DEAD;
+}

@@ -563,8 +563,11 @@ a new catalog generation. Duplicate imports return the existing ID; loose
 files in the protected directory are not installed. The UI also sends a
 system-face choice through the admin port, which persists in Config Kit.
 MC68040 builds, host policy/client tests, full userspace tests, static analysis,
-and a disposable QEMU Fonts autostart pass. Interactive import, persistence
-across restart, and corrupt-inventory recovery still need runtime gates.
+and a disposable QEMU Fonts autostart pass. A test-only native Astra probe
+passes AFNT import, catalog publication, duplicate-idempotence, selected-face
+save, and catalog/choice reload after reboot on a disposable QEMU image. It
+found and fixed an import port-call handle-order bug. Interactive Fonts UI
+import and corrupt-inventory recovery still need runtime gates.
 Only AFNT is accepted at runtime; the HPS converter is not wired to the
 service. System choice is not consumed by the live render path, so changing it
 does not yet alter system typography. Production DE25 still uses the previous
