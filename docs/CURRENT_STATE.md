@@ -131,7 +131,9 @@ QEMU and DE25 candidate visual gates pass.
 There is now a native validated AFNT catalog snapshot and a draft resident
 `fonts` service with separate read/admin ports. Its MC68040 build, focused
 policy tests, sanitizer, and analyzer pass; an isolated disposable QEMU boot
-launched it with status zero. Standard startup does not publish it yet. Native
+launched it with status zero. Font Kit 2.4 adds a client for read-only catalog
+snapshots and admin-only choice, with malformed-reply/catalog tests and an
+MC68040 library contract pass. Standard startup does not publish it yet. Native
 import transaction, Fonts UI, renderer consumption of saved choice, and their
 release gates remain open. Build-time Python conversion is a development oracle,
 not a user import path.

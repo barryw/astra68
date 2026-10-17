@@ -40,6 +40,7 @@ HOST_TEST := build/host/test_surface
 HOST_AICON_TEST := build/host/test_aicon_surface
 HOST_AFNT_TEST := build/host/test_afnt
 HOST_CATALOG_TEST := build/host/test_font_catalog
+HOST_FONTS_CLIENT_TEST := build/host/test_fonts_client
 HOST_AFNT_LIBRARY := ../../common/build/host/libastraafnt.a
 AICON_TEST_SOURCES := src/aicon_surface.c tests/test_aicon_surface.c \
 	$(SYSTEM)/src/bundle.c
@@ -54,7 +55,9 @@ GRAPHICS_LIBRARY_OBJECTS := build/m68k/library/graphics_library.o \
 	build/m68k/library/graphics_surface.o \
 	build/m68k/library/graphics_shared_surface.o
 FONT_LIBRARY_OBJECTS := build/m68k/library/font_library.o \
-	build/m68k/library/font_surface.o
+	build/m68k/library/font_surface.o \
+	build/m68k/library/fonts_client.o \
+	build/m68k/library/font_catalog.o
 SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
@@ -152,6 +155,19 @@ build/m68k/library/font_library.o: src/font_library.c \
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) -Ibuild/generated \
 		$(DEPFLAGS) -c $< -o $@
 
+build/m68k/library/fonts_client.o: src/fonts_client.c \
+		$(NDK)/include/astra/fonts.h ../../include/astra/font_catalog.h \
+		../../include/astra/font_service.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
+build/m68k/library/font_catalog.o: ../../common/font_catalog.c \
+		../../include/astra/font_catalog.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
+		-c $< -o $@
+
 build/m68k/library/graphics_surface.o: src/surface.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(LIBRARY_FLAGS) \
@@ -194,9 +210,11 @@ $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) \
 	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
 		-Wl,-soname,font.library.2 -o $@ $(FONT_LIBRARY_OBJECTS) \
 		-Wl,--version-script=$(FONT_LIBRARY_MAP) \
-		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
+		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(SYSTEM_LIBRARY)) \
+		-L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:graphics.library.3 -Wl,-l:runtime.library.1 \
+		-Wl,-l:graphics.library.3 -Wl,-l:system.library.4 \
+		-Wl,-l:runtime.library.1 \
 		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
@@ -208,18 +226,19 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 		$(GRAPHICS_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) \
 		$(COMPILER_LIBRARY)
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
-		$(FONT_LIBRARY) $(GRAPHICS_LIBRARY) $(RUNTIME_LIBRARY) \
+		$(FONT_LIBRARY) $(GRAPHICS_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) \
 		$(COMPILER_LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(GRAPHICS_LIBRARY_MAP) $(GRAPHICS_LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(FONT_LIBRARY_MAP) $(FONT_LIBRARY)
 	@python3 ../../../tools/check_library_exports.py $(FONT_LIBRARY_MAP) \
-		$(NDK)/include/astra/font_library.h $(NDK)/include/astra/surface.h
+		$(NDK)/include/astra/font_library.h $(NDK)/include/astra/fonts.h \
+		$(NDK)/include/astra/surface.h
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
 		grep -q '^graphics.library.3 3.0.0 ABI 3.0$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
-		grep -q '^font.library.2 2.3.0 ABI 2.3$$'
+		grep -q '^font.library.2 2.4.0 ABI 2.4$$'
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
@@ -231,11 +250,13 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
 		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
+		grep -Fc 'Shared library: [system.library.4]')" = 1
+	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
 		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
-		awk '/NEEDED/{n++} END{print n+0}')" = 3
+		awk '/NEEDED/{n++} END{print n+0}')" = 4
 	$(call ASTRA_CHECK_DSO,$(GRAPHICS_LIBRARY) $(FONT_LIBRARY))
 
 $(HOST_TEST): src/surface.c src/render_builder.c src/texture_reference.c \
@@ -276,12 +297,21 @@ $(HOST_CATALOG_TEST): $(HOST_AFNT_LIBRARY) tests/test_font_catalog.c \
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		tests/test_font_catalog.c $(HOST_AFNT_LIBRARY) -o $@
 
+$(HOST_FONTS_CLIENT_TEST): src/fonts_client.c tests/test_fonts_client.c \
+		$(HOST_AFNT_LIBRARY) $(NDK)/include/astra/fonts.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/fonts_client.c tests/test_fonts_client.c \
+		$(HOST_AFNT_LIBRARY) -o $@
+
 test: $(HOST_TEST) $(HOST_AICON_TEST) $(HOST_AFNT_TEST) \
-	$(HOST_CATALOG_TEST) build/host/test-drawer.aicon
+	$(HOST_CATALOG_TEST) $(HOST_FONTS_CLIENT_TEST) \
+	build/host/test-drawer.aicon
 	./$(HOST_TEST)
 	./$(HOST_AICON_TEST) build/host/test-drawer.aicon
 	./$(HOST_AFNT_TEST)
 	./$(HOST_CATALOG_TEST)
+	./$(HOST_FONTS_CLIENT_TEST)
 
 sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	../../../fpga/arty/linux/astra_render_protocol.h build/host/test-drawer.aicon
@@ -303,6 +333,11 @@ sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 		../../common/crc32.c ../../common/utf8.c \
 		tests/test_font_catalog.c -o build/host/test_font_catalog_sanitize
 	./build/host/test_font_catalog_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
+		src/fonts_client.c ../../common/font_catalog.c \
+		../../common/afnt.c ../../common/crc32.c ../../common/utf8.c \
+		tests/test_fonts_client.c -o build/host/test_fonts_client_sanitize
+	./build/host/test_fonts_client_sanitize
 
 analyze: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	../../../fpga/arty/linux/astra_render_protocol.h
@@ -317,6 +352,8 @@ analyze: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 		-c src/graphics_library.c -o build/analyzer/graphics_library.o
 	$(ANALYZER_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/font_library.c -o build/analyzer/font_library.o
+	$(ANALYZER_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/fonts_client.c -o build/analyzer/fonts_client.o
 
 clean:
 	rm -rf build

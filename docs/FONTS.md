@@ -463,10 +463,10 @@ layout, but retained UI text should use an explicit reusable layout.
 
 The NDK 0.1 header and symbols must be published with ABI-size assertions,
 argument-validation tests, automatic-cleanup tests, and a checked example.
-The OS implementation, live handle/stale-handle tests, service protocol, and
-draw-list bridge must land together before the service advertises itself as
-present. None of these APIs is shipped yet; current `font.library.2` exposes
-resident bitmap strikes only.
+The draw-ready object graph, live handle/stale-handle tests, and draw-list
+bridge must land together before the service advertises drawable imported
+faces. Font Kit 2.4 now exposes the separate installed-font catalog and
+selection client API; its catalog view does not claim a drawable face handle.
 
 TextSurface is a consumer of this object graph, not another font system. Grid,
 code, and flow modes must take resolved fonts/layouts and returned metrics;
@@ -508,7 +508,7 @@ invocation, plus monochrome Amiga disk strikes. It writes AFNT 0.2 and passes
 the shared AFNT validator. Variable outlines produce their default instance
 and record those axis coordinates; custom coordinates and additional named
 instances are later work. The managed worker, all-face collection expansion,
-catalog, and Fonts UI import transaction are not yet implemented.
+and Fonts UI import transaction are not yet implemented.
 
 `sw/common/Makefile` builds host, MC68040, and AArch64 `libastraafnt.a`
 variants for shared C validation and canonical packing of AFNT 0.2
@@ -539,15 +539,22 @@ AFNT and its protected `CONFIG_SYSTEM/installed` directory, keeps read and
 administrative request ports separate, and validates theme role sizes before
 persisting a choice through Config Kit. Its service/policy build and focused
 tests pass. An isolated disposable QEMU boot launched the service with status
-zero. Standard startup does not yet publish the service: there is no native
+zero. Font Kit 2.4 now opens a validated, immutable catalog snapshot through
+the FONTS capability, exposes counted family/style names and strike sizes,
+and sends selection through the separate FONTS_ADMIN capability. MC68040
+library/link contracts and host malformed-reply/catalog tests pass. This is
+client infrastructure, not a Fonts application or live typography change.
+Standard startup does not yet publish the service: there is no native
 import transaction, Fonts UI, or renderer consumer, so a saved choice would
 not change text. Those are required before enabling it in a release.
 
 Haiku reference for this catalog boundary: `src/servers/app/font/FontManager.cpp`
 groups families and styles, `src/servers/app/font/FontFamily.cpp` keeps designed
-styles distinct, and `src/servers/app/font/GlobalFontManager.cpp` owns installed
-font discovery. Astra follows that ownership split while deriving its user-visible
-strike list from validated AFNT rather than exposing source-format records.
+styles distinct, `src/servers/app/font/GlobalFontManager.cpp` owns installed
+font discovery and default fallback, and `src/preferences/appearance/FontView.cpp`
+keeps user preference controls separate from inventory. Astra follows that
+ownership split while deriving its user-visible strike list from validated
+AFNT rather than exposing source-format records.
 
 Beast format checks on 2026-10-15: Adobe Source Sans 3 static OTF validated
 with 1,615 cmap entries; its variable TTF and OTF each validated with 1,616

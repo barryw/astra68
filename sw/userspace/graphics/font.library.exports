@@ -31,3 +31,12 @@ ASTRA_FONT_2.3 {
         astra_mono_font_strike_styled;
         astra_ui_font_strike_styled;
 } ASTRA_FONT_2.2;
+
+ASTRA_FONT_2.4 {
+    global:
+        astra_fonts_catalog_open;
+        astra_fonts_catalog_face;
+        astra_fonts_catalog_strike;
+        astra_fonts_catalog_close;
+        astra_fonts_select;
+} ASTRA_FONT_2.3;
