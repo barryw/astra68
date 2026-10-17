@@ -5,7 +5,7 @@ TARGET_CC ?= m68k-astra-gcc
 TARGET_AR ?= m68k-astra-ar
 AARCH64_CC ?= aarch64-linux-gnu-gcc
 AARCH64_AR ?= aarch64-linux-gnu-ar
-CPPFLAGS := -I$(ROOT)/sw/include
+CPPFLAGS := -I$(ROOT)/sw/include -I$(ROOT)/ndk/include
 CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -pedantic
 SOURCES := afnt.c crc32.c
 HOST_OBJECTS := $(patsubst %.c,build/host/%.o,$(SOURCES))

@@ -1,6 +1,7 @@
 #include "astra_font_convert.h"
 
 #include <astra/afnt.h>
+#include <astra/theme.h>
 #include <astra/utf8.h>
 
 #include "../../arty/linux/astra_sha256.h"
@@ -18,6 +19,15 @@
 #define FONT_OUTPUT_LIMIT (128u * 1024u * 1024u)
 #define FONT_GLYPH_LIMIT 131072u
 #define FONT_CMAP_LIMIT 131072u
+
+/* System roles request their own sizes; keep import strikes in that contract. */
+static const uint16_t system_sizes[] = {
+    ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT,
+    ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT,
+    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
+    20u
+};
+#define SYSTEM_STRIKES ((uint32_t)(sizeof(system_sizes) / sizeof(system_sizes[0])))
 
 typedef struct Bytes {
     uint8_t *data;
@@ -127,8 +137,17 @@ static int metadata(Bytes *name, FT_Face face, const char *source_name,
     char suffix[192];
     int length = snprintf(suffix, sizeof(suffix),
         "\"}],\"source_face_index\":%u,\"converter\":\"astra-font-worker/0.1\","
-        "\"outline_ppem\":[13,16,20],\"glyphs_per_strike\":%u}",
-        face_index, glyphs);
+        "\"outline_ppem\":[", face_index);
+    if (length <= 0 || (size_t)length >= sizeof(suffix) ||
+        !append(name, suffix, (uint32_t)length)) return 0;
+    for (uint32_t at = 0u; at < SYSTEM_STRIKES; ++at) {
+        length = snprintf(suffix, sizeof(suffix), "%s%u",
+                          at == 0u ? "" : ",", (unsigned)system_sizes[at]);
+        if (length <= 0 || (size_t)length >= sizeof(suffix) ||
+            !append(name, suffix, (uint32_t)length)) return 0;
+    }
+    length = snprintf(suffix, sizeof(suffix),
+                      "],\"glyphs_per_strike\":%u}", glyphs);
     return length > 0 && (size_t)length < sizeof(suffix) &&
            append(name, suffix, (uint32_t)length);
 }
@@ -306,12 +325,12 @@ int astra_font_convert_outline(const void *source, uint32_t source_length,
         if (!u32(&cmap, entries[at].scalar) || !u32(&cmap, entries[at].glyph)) {
             result = ASTRA_FONT_CONVERT_NOMEM; goto done;
         }
-    if (!u32(&strikes, 3u) || !u32(&glyphs, count * 3u)) {
+    if (!u32(&strikes, SYSTEM_STRIKES) ||
+        !u32(&glyphs, count * SYSTEM_STRIKES)) {
         result = ASTRA_FONT_CONVERT_NOMEM; goto done;
     }
-    const uint16_t sizes[] = {13u, 16u, 20u};
-    for (uint16_t at = 0u; at < 3u; ++at) {
-        result = make_strike(&strikes, &glyphs, &bitmap, face, sizes[at],
+    for (uint16_t at = 0u; at < SYSTEM_STRIKES; ++at) {
+        result = make_strike(&strikes, &glyphs, &bitmap, face, system_sizes[at],
                              at, source_glyphs, count, fallback_dense);
         if (result != ASTRA_FONT_CONVERT_OK) goto done;
     }

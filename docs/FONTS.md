@@ -521,6 +521,21 @@ service. Build-time Python remains a development asset pipeline and oracle.
 It is not an Astra user-facing importer or a runtime dependency. Users will
 import from the native Fonts UI through the managed service transaction.
 
+The shared C codec now exposes validated AFNT family/style strings and strike
+metrics for the future service catalog and Fonts detail view. Its NAME reader
+decodes JSON escapes, rejects malformed Unicode and duplicate requested fields,
+and leaves source buffers owned by the caller. The HPS C converter now prepares
+11, 13, 16, and 20-pixel A8 strikes, including every current proportional UI
+role size from `astra/theme.h`. Beast host, sanitizer, MC68040, AArch64, and
+outline-conversion checks pass. This does not install fonts or change the active
+system font.
+
+Haiku reference for this catalog boundary: `src/servers/app/font/FontManager.cpp`
+groups families and styles, `src/servers/app/font/FontFamily.cpp` keeps designed
+styles distinct, and `src/servers/app/font/GlobalFontManager.cpp` owns installed
+font discovery. Astra follows that ownership split while deriving its user-visible
+strike list from validated AFNT rather than exposing source-format records.
+
 Beast format checks on 2026-10-15: Adobe Source Sans 3 static OTF validated
 with 1,615 cmap entries; its variable TTF and OTF each validated with 1,616
 entries and recorded default `wght=200`; a two-face test TTC imported its

@@ -1,5 +1,6 @@
 #include <astra/afnt.h>
 #include <astra/crc32.h>
+#include <astra/utf8.h>
 
 #include <stddef.h>
 #include <string.h>
@@ -210,5 +211,219 @@ int astra_afnt_validate(const void *source, uint32_t length, AstraAfntView *view
     if (expected_first != glyph_count) return 0;
     *view = (AstraAfntView){chunks[0], chunks[1], chunks[2], chunks[3],
                             chunks[4], face_glyphs, strike_count};
+    return 1;
+}
+
+static void json_space(const uint8_t *bytes, uint32_t length, uint32_t *at)
+{
+    while (*at < length && (bytes[*at] == ' ' || bytes[*at] == '\n' ||
+                            bytes[*at] == '\r' || bytes[*at] == '\t'))
+        ++*at;
+}
+
+static int hex(uint8_t value)
+{
+    if (value >= '0' && value <= '9') return value - '0';
+    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
+    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
+    return -1;
+}
+
+static int json_string(const uint8_t *bytes, uint32_t length, uint32_t *at,
+                       uint32_t *first, uint32_t *last)
+{
+    if (*at >= length || bytes[*at] != '"') return 0;
+    *first = ++*at;
+    while (*at < length) {
+        uint8_t value = bytes[(*at)++];
+        if (value == '"') {
+            *last = *at - 1u;
+            return 1;
+        }
+        if (value < 0x20u) return 0;
+        if (value == '\\') {
+            if (*at >= length) return 0;
+            value = bytes[(*at)++];
+            if (value == 'u') {
+                if (length - *at < 4u) return 0;
+                for (uint32_t digit = 0u; digit < 4u; ++digit)
+                    if (hex(bytes[(*at)++]) < 0) return 0;
+            } else if (value != '"' && value != '\\' && value != '/' &&
+                       value != 'b' && value != 'f' && value != 'n' &&
+                       value != 'r' && value != 't') return 0;
+        }
+    }
+    return 0;
+}
+
+static int json_value(const uint8_t *bytes, uint32_t length, uint32_t *at)
+{
+    uint8_t stack[32];
+    uint32_t depth = 0u, first, last;
+
+    if (*at >= length) return 0;
+    if (bytes[*at] == '"')
+        return json_string(bytes, length, at, &first, &last);
+    if (bytes[*at] != '{' && bytes[*at] != '[') {
+        first = *at;
+        while (*at < length && bytes[*at] != ',' && bytes[*at] != '}' &&
+               bytes[*at] != ']') ++*at;
+        return *at > first;
+    }
+    stack[depth++] = bytes[(*at)++];
+    while (*at < length) {
+        uint8_t value = bytes[(*at)++];
+        if (value == '"') {
+            --*at;
+            if (!json_string(bytes, length, at, &first, &last)) return 0;
+        } else if (value == '{' || value == '[') {
+            if (depth == sizeof(stack)) return 0;
+            stack[depth++] = value;
+        } else if (value == '}' || value == ']') {
+            if (depth == 0u || (stack[depth - 1u] == '{' ? '}' : ']') != value)
+                return 0;
+            if (--depth == 0u) return 1;
+        }
+    }
+    return 0;
+}
+
+static int json_unicode(const uint8_t *bytes, uint32_t length,
+                        uint32_t *at, uint32_t *scalar)
+{
+    uint32_t value = 0u;
+    if (length - *at < 4u) return 0;
+    for (uint32_t digit = 0u; digit < 4u; ++digit) {
+        int nibble = hex(bytes[(*at)++]);
+        if (nibble < 0) return 0;
+        value = (value << 4u) | (uint32_t)nibble;
+    }
+    *scalar = value;
+    return 1;
+}
+
+static int json_name_decode(const uint8_t *bytes, uint32_t first,
+                            uint32_t last, char *output, uint32_t capacity)
+{
+    uint32_t used = 0u;
+    if (output == NULL || capacity == 0u) return 0;
+    for (uint32_t at = first; at < last;) {
+        uint8_t value = bytes[at++];
+        if (value == '\\') {
+            uint32_t scalar;
+            uint8_t encoded[4];
+            uint32_t count;
+            if (at >= last) return 0;
+            value = bytes[at++];
+            if (value == 'u') {
+                if (!json_unicode(bytes, last, &at, &scalar)) return 0;
+                if (scalar >= 0xd800u && scalar <= 0xdbffu) {
+                    uint32_t low;
+                    if (last - at < 6u || bytes[at] != '\\' ||
+                        bytes[at + 1u] != 'u') return 0;
+                    at += 2u;
+                    if (!json_unicode(bytes, last, &at, &low) ||
+                        low < 0xdc00u || low > 0xdfffu) return 0;
+                    scalar = 0x10000u + ((scalar - 0xd800u) << 10u) +
+                             low - 0xdc00u;
+                }
+                if (!astra_unicode_scalar_valid(scalar) || scalar < 0x20u ||
+                    scalar == 0x7fu) return 0;
+                count = astra_utf8_encode(scalar, encoded);
+                if (count > capacity - used - 1u) return 0;
+                memcpy(output + used, encoded, count);
+                used += count;
+                continue;
+            }
+            if (value != '"' && value != '\\' && value != '/') return 0;
+        }
+        if (value < 0x20u || value == 0x7fu || used >= capacity - 1u)
+            return 0;
+        output[used++] = (char)value;
+    }
+    if (used == 0u) return 0;
+    output[used] = '\0';
+    for (uint32_t at = 0u; at < used;) {
+        uint32_t consumed = 0u;
+        uint32_t scalar = astra_utf8_decode(output + at, used - at,
+                                             &consumed);
+        if (consumed == 0u || (scalar == ASTRA_UTF8_REPLACEMENT &&
+            !(consumed == 3u && (uint8_t)output[at] == 0xefu &&
+              (uint8_t)output[at + 1u] == 0xbfu &&
+              (uint8_t)output[at + 2u] == 0xbdu))) return 0;
+        at += consumed;
+    }
+    return 1;
+}
+
+int astra_afnt_name_string(const AstraAfntView *view, const char *key,
+                           char *output, uint32_t capacity)
+{
+    const uint8_t *bytes;
+    uint32_t length, at = 0u, first, last;
+    int found = 0;
+
+    if (view == NULL || view->name.bytes == NULL || key == NULL ||
+        key[0] == '\0' || output == NULL || capacity == 0u) return 0;
+    output[0] = '\0';
+    bytes = view->name.bytes;
+    length = view->name.length;
+    json_space(bytes, length, &at);
+    if (at >= length || bytes[at++] != '{') return 0;
+    for (;;) {
+        json_space(bytes, length, &at);
+        if (at >= length) return 0;
+        if (bytes[at] == '}') {
+            ++at;
+            json_space(bytes, length, &at);
+            return found && at == length;
+        }
+        if (!json_string(bytes, length, &at, &first, &last)) return 0;
+        if (memchr(bytes + first, '\\', last - first) != NULL) return 0;
+        json_space(bytes, length, &at);
+        if (at >= length || bytes[at++] != ':') return 0;
+        json_space(bytes, length, &at);
+        if (last - first == strlen(key) &&
+            memcmp(bytes + first, key, last - first) == 0) {
+            if (found || !json_string(bytes, length, &at, &first, &last) ||
+                !json_name_decode(bytes, first, last, output, capacity))
+                return 0;
+            found = 1;
+        } else if (!json_value(bytes, length, &at)) return 0;
+        json_space(bytes, length, &at);
+        if (at >= length) return 0;
+        if (bytes[at] == ',') {
+            ++at;
+            json_space(bytes, length, &at);
+            if (at >= length || bytes[at] == '}') return 0;
+            continue;
+        }
+        if (bytes[at] != '}') return 0;
+    }
+}
+
+int astra_afnt_strike_info(const AstraAfntView *view, uint32_t index,
+                           AstraAfntStrikeInfo *info)
+{
+    const uint8_t *strike;
+    if (view == NULL || info == NULL || view->strikes.bytes == NULL ||
+        index >= view->strike_count || view->strikes.length < 4u ||
+        index >= (view->strikes.length - 4u) / STRIKE_SIZE) return 0;
+    strike = view->strikes.bytes + 4u + index * STRIKE_SIZE;
+    *info = (AstraAfntStrikeInfo){
+        .pixel_width = be16(strike + 4u),
+        .pixel_height = be16(strike + 6u),
+        .bitmap_format = be16(strike + 2u),
+        .ascent = signed32(strike + 8u),
+        .descent = signed32(strike + 12u),
+        .line_gap = signed32(strike + 16u),
+        .cap_height = signed32(strike + 20u),
+        .x_height = signed32(strike + 24u),
+        .max_advance = signed32(strike + 28u),
+        .underline_position = signed32(strike + 32u),
+        .underline_thickness = signed32(strike + 36u),
+        .strikeout_position = signed32(strike + 40u),
+        .strikeout_thickness = signed32(strike + 44u)
+    };
     return 1;
 }

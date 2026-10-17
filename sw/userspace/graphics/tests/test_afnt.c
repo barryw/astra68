@@ -68,6 +68,19 @@ int main(int argc, char **argv)
         AstraAfntView view;
         assert(astra_afnt_validate(bytes, length, &view));
         assert(view.strike_count > 0u && view.face_glyphs > 0u);
+        char family[256], style[256];
+        AstraAfntStrikeInfo strike;
+        assert(astra_afnt_name_string(&view, "family", family, sizeof(family)));
+        assert(astra_afnt_name_string(&view, "style", style, sizeof(style)));
+        assert(family[0] != '\0' && style[0] != '\0');
+        assert(!astra_afnt_name_string(&view, "missing", style, sizeof(style)));
+        assert(!astra_afnt_name_string(&view, "family", family, 2u));
+        for (uint32_t index = 0u; index < view.strike_count; ++index) {
+            assert(astra_afnt_strike_info(&view, index, &strike));
+            assert(strike.pixel_height > 0u && strike.ascent >= 0 &&
+                   strike.max_advance > 0);
+        }
+        assert(!astra_afnt_strike_info(&view, view.strike_count, &strike));
         AstraAfntChunk chunks[] = {
             view.name, view.cmap, view.strikes, view.glyphs, view.bitmap
         };
@@ -98,6 +111,44 @@ int main(int argc, char **argv)
     record[12u] = record[13u] = 0u;
     seal(bytes, glyph);
     assert(!astra_afnt_validate(bytes, length, &(AstraAfntView){0}));
+    free(bytes);
+    bytes = read_file(argc > 1 ? argv[1] : defaults[0], &length);
+    AstraAfntView original;
+    assert(astra_afnt_validate(bytes, length, &original));
+    const char name[] = "{\"family\":\"Test\\u0020Face\",\"style\":\"Bold\"}";
+    AstraAfntChunk chunks[ASTRA_AFNT_CHUNK_COUNT] = {
+        {(const uint8_t *)name, sizeof(name) - 1u}, original.cmap,
+        original.strikes, original.glyphs, original.bitmap
+    };
+    uint32_t packed_length;
+    assert(astra_afnt_pack(chunks, NULL, 0u, &packed_length));
+    uint8_t *packed = malloc(packed_length);
+    assert(packed != NULL &&
+           astra_afnt_pack(chunks, packed, packed_length, &packed_length));
+    AstraAfntView test;
+    char decoded[32];
+    assert(astra_afnt_validate(packed, packed_length, &test));
+    assert(astra_afnt_name_string(&test, "family", decoded, sizeof(decoded)));
+    assert(strcmp(decoded, "Test Face") == 0);
+    free(packed);
+    chunks[ASTRA_AFNT_NAME] = (AstraAfntChunk){
+        (const uint8_t *)"{\"family\":\"A\",\"family\":\"B\"}",
+        sizeof("{\"family\":\"A\",\"family\":\"B\"}") - 1u
+    };
+    assert(!astra_afnt_name_string(&(AstraAfntView){.name = chunks[0]},
+                                   "family", decoded, sizeof(decoded)));
+    chunks[ASTRA_AFNT_NAME] = (AstraAfntChunk){
+        (const uint8_t *)"{\"family\":\"\\uD800\"}",
+        sizeof("{\"family\":\"\\uD800\"}") - 1u
+    };
+    assert(!astra_afnt_name_string(&(AstraAfntView){.name = chunks[0]},
+                                   "family", decoded, sizeof(decoded)));
+    chunks[ASTRA_AFNT_NAME] = (AstraAfntChunk){
+        (const uint8_t *)"{\"family\":\"A\",}",
+        sizeof("{\"family\":\"A\",}") - 1u
+    };
+    assert(!astra_afnt_name_string(&(AstraAfntView){.name = chunks[0]},
+                                   "family", decoded, sizeof(decoded)));
     free(bytes);
     puts("AFNT native validation passed");
     return 0;

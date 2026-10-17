@@ -96,7 +96,11 @@ instances, and monochrome Amiga disk
 fonts. Shared C AFNT 0.2 validation and packing round-trip shipped fonts plus
 Iosevka, Source Sans, and Amiga spike AFNT on Beast. A reusable HPS C outline
 converter turns static Iosevka TTF and Source Sans OTF into validated A8 AFNT;
-host/sanitizer and AArch64 compile checks pass. It is not connected to a host
+host/sanitizer and AArch64 compile checks pass. Shared AFNT C metadata readers
+now expose family, designed style, and strike metrics without passing disk
+records to UI clients. The HPS converter prepares 11, 13, 16, and 20-pixel
+strikes, covering current proportional theme roles; Beast host, sanitizer,
+MC68040/AArch64 codec, and outline-conversion gates pass. It is not connected to a host
 worker, native font service, or Fonts UI yet. Interface Kit bundle metadata now
 provides 6.0.0, matching its current ABI. [Font scope and runtime gaps](FONTS.md#7-import-and-style-compatibility)
 and the [Iosevka evaluation](IOSEVKA_EVALUATION.md) record details. Config Kit
