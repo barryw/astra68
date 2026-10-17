@@ -691,6 +691,20 @@ The final full userspace test suite and refreshed NDK distribution with
 installed example links and HTML/PDF manuals also pass on Beast in
 `/var/tmp/astra-font-live-map-sdk-final-20261017.log`.
 
+Retained reflow now refreshes intrinsic measurements as well as positions.
+Initialization and font changes share one measurement pass, followed by the
+existing layout. A wider-font regression fails before the correction and
+passes afterward, including scrolled List focus/offset preservation. This
+adapts Haiku's `src/kits/interface/View.cpp:InvalidateLayout` invalidation of
+cached size constraints and child layouts. Interface/Display host, sanitizer,
+MC68040 and coherent build gates pass; the native Iosevka Regular import,
+live Desktop/Fonts adoption, Config Kit persistence, restart and uninstall gate
+passes in `/var/tmp/astra-font-live-remeasure-iosevka-ui-20261017.log`.
+The earlier clean release is withheld pending replacement with this correction
+and complete physical qualification.
+Full userspace tests and updated NDK distribution/examples pass in
+`/var/tmp/astra-font-live-remeasure-sdk-20261017.log`.
+
 The shared renderer also makes AFNT a dependency of HPS display helpers.
 `fpga/arty/linux/Makefile` now includes the existing AFNT, CRC32, and UTF-8
 sources for every renderer consumer. Host and AArch64 display self-tests and

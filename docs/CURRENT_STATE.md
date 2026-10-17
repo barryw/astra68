@@ -224,6 +224,37 @@ exported borrowed-snapshot API, installed example links and HTML/PDF manuals,
 pass in `/var/tmp/astra-font-live-map-sdk-final-20261017.log`. Complete
 physical qualification remains pending. Production remains unchanged.
 
+The clean `cae119b7` software release was staged and verified as
+`ce8f5e87f6f56f5ae3ae907aad51fecca8058f06268be0a2c02403a91e2ca038`,
+ROM `30a3d0c96087be76361067b2d1f8b306ee002cf4662a2bfdc63a5c55568c6fc3`,
+source manifest `316148bad238164e052e8b591a4cc755745bf06580e41874dbb17287b7e2c702`.
+It remains withheld: subsequent review found retained-control font refresh
+reused cached intrinsic widths. The new wider-font regression fails against
+that code in `/var/tmp/astra-font-live-remeasure-red-20261017.log`.
+Initialization and font changes now reuse one measurement pass before retained
+layout. Labels move their siblings correctly; a scrolled List remeasures while
+preserving focus and scroll offset. The first extended List fixture stayed
+below its existing minimum width; it now uses a longer family label to exercise
+actual width growth. Interface/Display host and sanitizer checks, MC68040
+builds and coherent userspace/ROM pass in
+`/var/tmp/astra-font-live-remeasure-green-final-20261017.log`.
+The native Iosevka Regular 34.9.0 import/live-choice/restart/uninstall gate passes
+in `/var/tmp/astra-font-live-remeasure-iosevka-ui-20261017.log`, adopting
+`user:iojgz2r5qqd4swiwlocn2qcmfzeqkprz7q57rinn5g32y2af2qhq` in both Desktop
+and Fonts. The test ROM is
+`ef8e87f21c0c1adf2c2150e75efed50015cb4af2389888e9e34ba7dfc18cc95f`.
+Haiku reference: `src/kits/interface/View.cpp:InvalidateLayout` invalidates
+cached size constraints as well as layout and propagates to children.
+Beast publication requires `FLUIDSYNTH_ROOT=/home/barry/Git/fluidsynth` (clean
+pinned `71e85b2c`); the first attempt's missing default path is retained in
+`/var/tmp/astra-font-live-release-20261017-cae119b7.log`, and the passing retry
+in the corresponding `-retry1.log`. Set both ROM/kernel Git revision variables
+explicitly because the mirrored Beast tree has no `.git`. A replacement
+immutable release and complete physical font qualification remain pending.
+No new font software or trial data has reached DE25.
+The final full userspace test suite and updated NDK distribution/examples pass
+in `/var/tmp/astra-font-live-remeasure-sdk-20261017.log`.
+
 Latest work covers native font management, scoped settings, and migration of
 native UI pixel rendering to Astraea. The fixed/removable filesystem remains
 in scope; network mounts remain excluded. Correctness remains ahead of

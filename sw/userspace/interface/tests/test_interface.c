@@ -325,12 +325,13 @@ void astra_surface_fill_round(AstraSurfaceView *surface, int32_t x, int32_t y,
     ++fill_calls;
 }
 
+static uint32_t font_advance = 1u;
 uint32_t astra_surface_ui_text_width(const char *text, uint32_t length,
                                      uint16_t height)
 {
     (void)text;
     (void)height;
-    return length;
+    return length * font_advance;
 }
 
 uint32_t astra_surface_ui_text_fit(const char *text, uint32_t length,
@@ -1032,6 +1033,14 @@ static void test_control_text_update(void)
     assert(astra_interface_control_set_text(&context, &controls[0],
                                             NULL, 0u) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
+    AstraWindowEvent changed = {.size = sizeof(changed),
+        .version = ASTRA_WINDOW_EVENT_VERSION, .type = ASTRA_WINDOW_EVENT_FONT_CHANGED};
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    font_advance = 3u;
+    assert(astra_interface_ui_handle_event(&context, &changed, &action) == ASTRA_OK);
+    assert(controls[0]._private_measured_width == 12u &&
+           controls[1]._private_frame.x == 12);
+    font_advance = 1u;
 }
 
 static void test_slider_control(void)
@@ -1542,6 +1551,7 @@ static void test_list_control(void)
 
 static void test_scrolled_list_control(void)
 {
+    static const char family[] = "A deliberately wide installed font family name";
     AstraChoiceItem items[100];
     AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
     AstraScrollModel model = ASTRA_SCROLL_MODEL_INIT;
@@ -1568,7 +1578,7 @@ static void test_scrolled_list_control(void)
         240u, 80u, ASTRA_SURFACE_VIEW_DRAW_LIST, 0u, 0u, 240u, 80u};
 
     for (uint32_t at = 0u; at < 100u; ++at) {
-        items[at] = (AstraChoiceItem){"Font", 4u, {0u, 0u}};
+        items[at] = (AstraChoiceItem){family, sizeof(family) - 1u, {0u, 0u}};
     }
     model_info.line_height = theme.control_height;
     assert(astra_scroll_init(&model, &model_info) == ASTRA_OK);
@@ -1616,15 +1626,20 @@ static void test_scrolled_list_control(void)
            state.offset_y == state.maximum_y);
     {
         uint64_t offset = state.offset_y;
+        uint32_t width = controls[1]._private_measured_width;
         AstraControlFrame damage;
         astra_interface_ui_damage_clear(&context);
         event = (AstraWindowEvent){.size = sizeof(event),
             .version = ASTRA_WINDOW_EVENT_VERSION, .type = ASTRA_WINDOW_EVENT_FONT_CHANGED};
         event.data.font_changed.generation = 7u;
+        font_advance = 3u;
         assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+        assert(controls[1]._private_measured_width > width);
         assert(astra_scroll_get_state(&model, &state) == ASTRA_OK && state.offset_y == offset);
         assert(astra_interface_ui_damage(&context, &damage) == ASTRA_OK &&
                damage.width == 240u && damage.height == 80u);
+        font_advance = 1u;
+        assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
     }
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);

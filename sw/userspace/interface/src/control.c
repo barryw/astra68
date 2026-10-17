@@ -1243,6 +1243,22 @@ AstraResult astra_interface_control_set_text(AstraUIContext *context,
     return ASTRA_OK;
 }
 
+static AstraResult measure_controls(AstraUIContext *context)
+{
+    for (uint32_t count = context->_private_control_count; count != 0u; --count) {
+        uint32_t at = count - 1u;
+        AstraControl *control = &context->_private_controls[at];
+        AstraControlSize measured;
+        AstraResult result = control->_private_control_kind == ASTRA_CONTROL_CONTAINER ?
+            measure_container(context, at, &measured) : measure_control(control, &measured);
+
+        if (result != ASTRA_OK) return result;
+        control->_private_measured_width = measured.width;
+        control->_private_measured_height = measured.height;
+    }
+    return ASTRA_OK;
+}
+
 AstraResult astra_interface_ui_init(AstraUIContext *context,
                                     AstraControl *controls,
                                     uint32_t control_count,
@@ -1334,19 +1350,8 @@ AstraResult astra_interface_ui_init(AstraUIContext *context,
                     controls[at]._private_parent)
                 return ASTRA_ERROR_INVALID_ARGUMENT;
         }
-    for (uint32_t count = control_count; count != 0u; --count) {
-        uint32_t at = count - 1u;
-        AstraControlSize measured;
-        AstraResult result = controls[at]._private_control_kind ==
-                ASTRA_CONTROL_CONTAINER ?
-            measure_container(context, at, &measured) :
-            measure_control(&controls[at], &measured);
-
-        if (result != ASTRA_OK)
-            return ASTRA_ERROR_INVALID_ARGUMENT;
-        controls[at]._private_measured_width = measured.width;
-        controls[at]._private_measured_height = measured.height;
-    }
+    if (measure_controls(context) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = 0u; at < control_count; ++at)
         animation_sync(context, at);
     return ASTRA_OK;
@@ -5604,6 +5609,8 @@ AstraResult astra_interface_ui_handle_event(AstraUIContext *context,
         if (event->type != ASTRA_WINDOW_EVENT_FONT_CHANGED) return ASTRA_OK;
     }
     if (event->type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+        AstraResult result = measure_controls(context);
+        if (result != ASTRA_OK) return result;
         context->_private_damage = (AstraControlFrame){
             0, 0, context->_private_width, context->_private_height};
         context->_private_has_damage = 1u;
