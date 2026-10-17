@@ -72,8 +72,8 @@ to Beast with complete SHA-256 verification before removing those diagnostic
 copies from DE25; panic archives are under
 `/var/tmp/astra-de25-diagnostics-20261017/`. Production images and mounted
 provider data were not removed. DE25 has 1.9 GiB available after cleanup.
-Full font correctness still requires live refresh, matching client measurement
-and compositor metrics, coherent designed-style resolution, and a newly built
+Full font correctness still requires live refresh, coherent designed-style
+resolution, and a newly built
 immutable software release with repeat physical import/select/remove gates.
 
 Display's shared `CONTENT_SURFACE` builder now inherits the configured UI face,
@@ -98,9 +98,33 @@ coverage. Graphics and Display host/sanitizer gates and Display MC68040/analyzer
 gates pass on Beast. The current-QEMU native GUI gate also passes import,
 family details, saved choice, restart and uninstall; log
 `/var/tmp/astra-font-metrics-ui-20261017.log` on Beast.
-Application-side Font Kit/Interface Kit measurements,
-coherent live refresh and designed-style resolution remain open; this is not
-full font-release qualification.
+The following client-context checkpoint closes the application measurement gap;
+coherent live refresh and designed-style resolution remain open.
+
+Font Kit 3.1 and GUI protocol 22 now give native UI clients an immutable
+read-only snapshot of Display's active AFNT and its catalog ID. Desktop, Atlas,
+Fonts, Interface Gallery and Terminal initialize this context before layout.
+Common width/fitting calls use its glyph advances, and proportional surface
+text emits the existing named-face command with the same ID. Monospaced text
+remains independent. Display's own controls use a duplicate mapping of the
+same area; popup-menu replay also resolves named fonts. Snapshot validation
+and adoption use the existing native mutex, explicitly aligned for MC68040.
+Host checks cover exact selected advances, UTF-8 fitting, named submissions,
+read-only ownership, invalid AFNT, malformed replies and recovery. Designed
+weight/slant remains the selected face; semantic bold/italic family-variant
+resolution is still unfinished, without falling back to an unrelated family.
+
+Built-in glyph tables and lookup code moved unchanged into `font_data.c`.
+HPS renderer helpers link that pure data module, rather than client surface
+state or software pixel helpers. Graphics/Display/Interface/Desktop host and
+sanitizer gates, full userspace `all test`, Display MC68040/analyzer, NDK
+`dist-check` with installed example links, HPS display self-test and AArch64
+display/host-read helper links pass on Beast. A fresh coherent ROM (GUI 22,
+Startup ABI 8) has SHA-256
+`4ad7a25e4539117c893093075bd212bfc61d91c6867d6f6c6fd74f727509c1f2`.
+The native GUI import/details/selection/restart/uninstall gate passes with it;
+log `/var/tmp/astra-font-client-ui-20261017.log` on Beast. No new font software
+was deployed to DE25; production selector, fabric and user data remain intact.
 
 Latest work covers native font management, scoped settings, and migration of
 native UI pixel rendering to Astraea. The fixed/removable filesystem remains

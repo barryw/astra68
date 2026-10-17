@@ -753,6 +753,8 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_BAD_HANDLE;
     fonts_read = fonts->handle;
     fonts_admin = admin->handle;
+    if (astra_fonts_use_system(gui->handle) != ASTRA_OK)
+        return FONTS_FAIL_CATALOG;
     if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
         status = FONTS_FAIL_FILESYSTEM;
     if (status == ASTRA_STATUS_OK &&

@@ -1,4 +1,5 @@
 #include <astra/application.h>
+#include <astra/fonts.h>
 #include <astra/application_catalog.h>
 #include <astra/area.h>
 #include <astra/bundle.h>
@@ -718,6 +719,8 @@ int astra_main(const AstraStartupInfo *startup)
         manager == NULL || metadata == NULL || administrator == NULL || inspector == NULL ||
         (manager->rights & ASTRA_RIGHT_SIGNAL) == 0u)
         return ASTRA_STATUS_BAD_HANDLE;
+    if (astra_fonts_use_system(gui->handle) != ASTRA_OK)
+        return ASTRA_STATUS_IO;
     busy_dialog = astra_runtime_callocate(1u, sizeof(*busy_dialog));
     if (busy_dialog == NULL) return ASTRA_STATUS_LIMIT;
     command_context.usage = busy_dialog;

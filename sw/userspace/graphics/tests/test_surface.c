@@ -8,12 +8,22 @@
 #include <astra/texture_reference.h>
 #include <astra/theme.h>
 #include <astra/ui_font.h>
+#include <astra/fonts.h>
 
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static uint32_t closed_font_snapshots;
+AstraResult astra_area_close(AstraArea *area)
+{
+    assert(area->handle == 77u);
+    *area = (AstraArea)ASTRA_AREA_INIT;
+    ++closed_font_snapshots;
+    return ASTRA_OK;
+}
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
@@ -746,6 +756,60 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
         strike.pixel_height, astra_render_builder_text_width(
             &builder, "\xc4\x84", 2u, strike.pixel_height, 0u), 0u) == 2u);
     assert(astra_render_builder_text_width(&builder, "IW", 2u, 15u, 0u) == 0u);
+    {
+        char id[ASTRA_FONT_ID_MAX] = "user:fixture";
+        AstraArea snapshot = {.handle = 77u, .address = bytes,
+            .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
+        AstraSurfaceView surface;
+        assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length, id) == ASTRA_OK);
+        assert(snapshot.handle == ASTRA_INVALID_HANDLE);
+        assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) ==
+               expected_width);
+        assert(astra_surface_ui_text_fit("IIW", 3u, strike.pixel_height,
+            ((uint32_t)first.advance_x + 63u) / 64u) == 1u);
+        assert(astra_draw_list_view_init(&surface, list_area, sizeof(list_area),
+            160u, 80u));
+        astra_surface_ui_text(&surface, 5, 7, "IIW", 3u, strike.pixel_height,
+            0xffffu);
+        assert(named->operation == ASTRA_DRAW_LIST_NAMED_TEXT &&
+               named->source == strlen(id) &&
+               memcmp(list_area + named->payload_offset, "user:fixtureIIW",
+                   named->payload_bytes) == 0);
+        {
+            static uint8_t context_batch[ASTRA_RENDER_BUILDER_BYTES];
+            AstraRenderBuilder replay;
+            assert(astra_draw_list_view_init(&surface, list_area,
+                sizeof(list_area), 160u, 80u));
+            assert(astra_surface_ui_text_styled(&surface, 5, 7, "IIW", 3u,
+                strike.pixel_height, 0xffffu, ASTRA_TEXT_STYLE_BOLD |
+                    ASTRA_TEXT_STYLE_ITALIC | ASTRA_TEXT_STYLE_UNDERLINE));
+            assert(named->flags == ASTRA_TEXT_STYLE_UNDERLINE);
+            assert(astra_render_builder_init(&replay, context_batch,
+                sizeof(context_batch), 1u));
+            uint32_t target = astra_render_builder_surface(&replay, 160u, 80u);
+            assert(target != 0u && astra_render_builder_replay_resolved(
+                &replay, target, list, &resolver));
+            assert(replay.glyph_count == 3u);
+        }
+        id[0] = '\0';
+        assert(astra_fonts_use_snapshot(&snapshot, 0u, id) == ASTRA_OK);
+        assert(closed_font_snapshots == 1u);
+        assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) !=
+               expected_width);
+        snapshot = (AstraArea){.handle = 77u, .address = bytes,
+            .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
+        bytes[0] ^= 1u;
+        assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length,
+            "user:fixture") == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(snapshot.handle == 77u &&
+            astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) !=
+                expected_width);
+        bytes[0] ^= 1u;
+        snapshot.map_flags |= ASTRA_AREA_MAP_WRITE;
+        assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length,
+            "user:fixture") == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_area_close(&snapshot) == ASTRA_OK);
+    }
     destination = astra_render_builder_surface(&builder, 160u, 80u);
     assert(destination != 0u && astra_render_builder_text(
         &builder, destination, 5, 7, "IW", 2u, strike.pixel_height,

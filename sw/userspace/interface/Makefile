@@ -37,8 +37,10 @@ TEXT_MODEL_HOST_TEST := build/host/test_text_model
 SCROLL_HOST_TEST := build/host/test_scroll
 COMMAND_HOST_TEST := build/host/test_command
 MENU_HOST_TEST := build/host/test_menu
-GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o
-GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o
+GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o $(GRAPHICS)/build/host/font_data.o
+GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o $(GRAPHICS)/build/host/font_data_sanitize.o
+FONT_HOST_INPUTS := $(RUNTIME)/tests/uncontended_mutex.c \
+	../../common/afnt.c ../../common/crc32.c
 GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
 	$(GRAPHICS)/build/generated/astra_ui_font.inc \
 	$(GRAPHICS)/build/generated/astra_mono_font.inc
@@ -183,10 +185,10 @@ MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/command.c src/control.c \
 $(GRAPHICS_HOST_SURFACE) $(GRAPHICS_HOST_SURFACE_SANITIZE): FORCE
 	$(MAKE) -C $(GRAPHICS) $(patsubst $(GRAPHICS)/%,%,$@)
 
-$(MENU_HOST_TEST): $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE)
+$(MENU_HOST_TEST): $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE) $(FONT_HOST_INPUTS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
-		-ffunction-sections -Wl,--gc-sections $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_HOST_SURFACE) -o $@
+		-ffunction-sections -Wl,--gc-sections $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_HOST_SURFACE) $(FONT_HOST_INPUTS) -o $@
 
 $(NDK_HOST_UTF8):
 	$(MAKE) -C $(SYSTEM) build/host/utf8.o
@@ -235,7 +237,7 @@ sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANI
 
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -ffunction-sections -Wl,--gc-sections \
-		$(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_HOST_SURFACE_SANITIZE) -o build/host/test_menu_sanitize
+		$(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_HOST_SURFACE_SANITIZE) $(FONT_HOST_INPUTS) -o build/host/test_menu_sanitize
 
 	./build/host/test_menu_sanitize
 

@@ -24,9 +24,11 @@ OBJECT := build/m68k/main.o
 OBJECTS := build/m68k/crc32.o
 HOST_TEST := build/host/test_desktop_layout
 HOST_TEST_SANITIZE := build/host/test_desktop_layout_sanitize
-GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o
-GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o
+GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o $(GRAPHICS)/build/host/font_data.o
+GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o $(GRAPHICS)/build/host/font_data_sanitize.o
 SYSTEM_HOST_UTF8 := ../../system/build/host/utf8.o
+FONT_HOST_INPUTS := $(RUNTIME)/tests/uncontended_mutex.c \
+	../../../common/afnt.c ../../../common/crc32.c
 SOUND_SOURCE := assets/AstraStartup.wav
 SOUND_RENDERER := render_startup_sound.py
 SOUND_ASSET := build/m68k/startup.pcm
@@ -58,20 +60,20 @@ $(GRAPHICS_HOST_SURFACE) $(GRAPHICS_HOST_SURFACE_SANITIZE): FORCE
 $(SYSTEM_HOST_UTF8): FORCE
 	$(MAKE) -C ../../system build/host/utf8.o
 
-$(HOST_TEST): tests/test_desktop_layout.c desktop_layout.h desktop_usage_layout.h $(GRAPHICS_HOST_SURFACE) $(SYSTEM_HOST_UTF8)
+$(HOST_TEST): tests/test_desktop_layout.c desktop_layout.h desktop_usage_layout.h $(GRAPHICS_HOST_SURFACE) $(SYSTEM_HOST_UTF8) $(FONT_HOST_INPUTS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -ffunction-sections -Wl,--gc-sections \
-		$< $(GRAPHICS_HOST_SURFACE) $(SYSTEM_HOST_UTF8) -o $@
+		$< $(GRAPHICS_HOST_SURFACE) $(SYSTEM_HOST_UTF8) $(FONT_HOST_INPUTS) -o $@
 
 test: $(HOST_TEST) $(SOUND_ASSET)
 	./$(HOST_TEST)
 	python3 tests/test_startup_sound.py $(SOUND_SOURCE) $(SOUND_ASSET)
 
-$(HOST_TEST_SANITIZE): tests/test_desktop_layout.c desktop_layout.h desktop_usage_layout.h $(GRAPHICS_HOST_SURFACE_SANITIZE) $(SYSTEM_HOST_UTF8)
+$(HOST_TEST_SANITIZE): tests/test_desktop_layout.c desktop_layout.h desktop_usage_layout.h $(GRAPHICS_HOST_SURFACE_SANITIZE) $(SYSTEM_HOST_UTF8) $(FONT_HOST_INPUTS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O1 \
 		-fsanitize=address,undefined -fno-omit-frame-pointer -ffunction-sections -Wl,--gc-sections \
-		$< $(GRAPHICS_HOST_SURFACE_SANITIZE) $(SYSTEM_HOST_UTF8) -o $@
+		$< $(GRAPHICS_HOST_SURFACE_SANITIZE) $(SYSTEM_HOST_UTF8) $(FONT_HOST_INPUTS) -o $@
 
 sanitize: $(HOST_TEST_SANITIZE) $(SOUND_ASSET)
 	./$(HOST_TEST_SANITIZE)

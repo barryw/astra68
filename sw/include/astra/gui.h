@@ -14,7 +14,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 21u
+#define ASTRA_GUI_VERSION 22u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -361,6 +361,20 @@ _Static_assert(sizeof(AstraWindowEvent) == 52u,
 #define ASTRA_GUI_OPEN_SESSION     8u
 #define ASTRA_GUI_SESSION_OPENED   9u
 #define ASTRA_GUI_SESSION_ACTIVATE 10u
+/* Session request with one reply capability. Returns a read-only shared AFNT
+   snapshot for Font Kit measurement; pixels are still drawn by Display. */
+#define ASTRA_GUI_FONT_CONTEXT 11u
+#define ASTRA_GUI_FONT_CONTEXT_REPLY 12u
+
+typedef struct AstraGuiFontContext {
+    AstraMessageHeader header;
+    uint32_t status;
+    uint32_t area_size;
+    char face_id[64];
+} AstraGuiFontContext;
+
+_Static_assert(sizeof(AstraGuiFontContext) == ASTRA_MESSAGE_HEADER_SIZE + 72u,
+               "font context ABI");
 
 /* Window-scoped GPU objects; see docs/MANAGED_GRAPHICS.md. */
 enum {

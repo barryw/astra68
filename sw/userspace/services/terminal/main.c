@@ -5,6 +5,7 @@
 
 #include <astra/bytes.h>
 #include <astra/area.h>
+#include <astra/fonts.h>
 #include <astra/bundle.h>
 #include <astra/clipboard_service.h>
 #include <astra/event_control.h>
@@ -842,6 +843,8 @@ int astra_main(const AstraStartupInfo *startup)
         clipboard == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
 
+    if (astra_fonts_use_system(gui->handle) != ASTRA_OK)
+        return TERMINAL_FAIL_FONT;
     status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status == ASTRA_STATUS_OK)
         status = load_title_icon(&title_icon, &title_icon_length);

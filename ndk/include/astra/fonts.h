@@ -23,6 +23,27 @@ ASTRA_EXTERN_C_BEGIN
 /** Maximum source name bytes, including its terminator. */
 #define ASTRA_FONT_IMPORT_NAME_MAX 128u
 
+/** Adopt Display's immutable system-face snapshot for this process's UI.
+ * Common text measurement and draw-list text then use the same face ID.
+ * Call on the UI thread between frames, before laying out native controls.
+ * Failed snapshot validation preserves the previous context. Independent fonts
+ * and monospaced text are unaffected.
+ * @param gui Borrowed GUI startup/session capability.
+ * @return ::ASTRA_OK or a negative ::AstraResult. */
+ASTRA_NODISCARD AstraResult astra_fonts_use_system(AstraHandle gui);
+
+/** Adopt a mapped, read-only AFNT snapshot and its installed catalog ID.
+ * The caller must keep all aliases immutable and ensure the ID identifies
+ * these exact bytes. Call on the UI thread between frames. Adoption consumes
+ * @p area; validation failure leaves it owned by the caller. An empty area,
+ * zero length and empty ID select the built-in recovery face.
+ * @param area Owned mapped immutable area.
+ * @param length Valid AFNT bytes, excluding page padding.
+ * @param id NUL-terminated installed face ID, fewer than ASTRA_FONT_ID_MAX bytes.
+ * @return ::ASTRA_OK or a negative ::AstraResult. */
+ASTRA_NODISCARD AstraResult astra_fonts_use_snapshot(
+    AstraArea *area, uint32_t length, const char *id);
+
 /** One borrowed face; strings are counted and live until catalog close. */
 typedef struct AstraInstalledFont {
     /** Counted stable catalog ID, borrowed from the snapshot. */

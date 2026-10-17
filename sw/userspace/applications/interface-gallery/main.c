@@ -1,4 +1,5 @@
 #include <astra/control.h>
+#include <astra/fonts.h>
 #include <astra/clipboard_service.h>
 #include <astra/graphics_kit.h>
 #include <astra/graphics_library.h>
@@ -1845,6 +1846,8 @@ int astra_main(const AstraStartupInfo *startup)
                                          ASTRA_CAPABILITY_CLIPBOARD);
     if (gui == NULL || clipboard == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
+    if (astra_fonts_use_system(gui->handle) != ASTRA_OK)
+        return ASTRA_STATUS_IO;
     argument = astra_startup_argument(startup, 1u);
     benchmarks = argument != NULL &&
         astra_string_compare_ascii_nocase(argument, "--benchmark") == 0;

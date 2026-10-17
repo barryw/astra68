@@ -1,4 +1,5 @@
 #include <astra/area.h>
+#include <astra/fonts.h>
 #include <astra/graphics_library.h>
 #include <astra/input.h>
 #include <astra/interface_library.h>
@@ -493,6 +494,8 @@ int astra_main(const AstraStartupInfo *startup)
     ready = astra_startup_capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
     if (gui == NULL || ready == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
+    if (astra_fonts_use_system(gui->handle) != ASTRA_OK)
+        return ASTRA_STATUS_IO;
     const char *first_argument = startup->argc > 1u ? astra_startup_argument(startup, 1u) : NULL;
     int exact_volume = startup->argc == 5u && first_argument != NULL && strcmp(first_argument, "--volume") == 0;
     root = exact_volume ? "/dh0" : startup->argc > 1u ? astra_startup_argument(startup, 1u) : "/dh0";

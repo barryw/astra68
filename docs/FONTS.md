@@ -549,6 +549,38 @@ QEMU GUI import/detail/choice/restart/uninstall gates pass on Beast. This change
 does not alter a public ABI or the FPGA protocol and is not yet qualified on
 DE25 as a complete font release.
 
+Font Kit 3.1 and GUI protocol 22 now close the native client measurement gap.
+`astra_fonts_use_system` obtains the active immutable AFNT snapshot and its
+catalog ID from Display, without a filesystem grant. Common width/fitting
+calls read that snapshot, and surface-view UI text uses the existing named-face
+command with its exact ID. `astra_fonts_use_snapshot` supplies the shared
+adoption path for Display and advanced consumers. Updates happen on the UI
+thread between frames; read/adopt operations use the existing native mutex.
+Native Desktop, Atlas, Fonts, Gallery and Terminal initialize before layout.
+Terminal's monospaced text remains independent. Popup menus resolve the same
+named faces, and Display reuses its active area for current-face commands.
+
+Haiku read-only references: `src/kits/interface/Font.cpp:_init_global_fonts_`
+initializes process-wide plain/bold/fixed identities, and `GetStringWidths`
+measures the specified family/style/size. Astra retains fixed theme role sizes,
+shares validated passive AFNT bytes for local metrics and binds text to the
+same ID. Pixel rendering remains in Astraea. Selected designed weight/slant
+now stays in its family; resolving semantic emphasis to other installed family
+styles remains unfinished. The API does not claim live refresh yet.
+
+Built-in tables and lookup code moved unchanged to `graphics/src/font_data.c`.
+This keeps HPS command-renderer helpers independent of native client locking,
+area ownership and software surface drawing. Existing mutex tests own sleeping
+lock behavior; a small shared host stub asserts that single-threaded graphics
+tests never enter a futex wait. No new mutex mechanism was introduced.
+Snapshot ownership, malformed replies, invalid AFNT/read-write mappings,
+selected advances, UTF-8 fitting and named command checks pass, as do
+Graphics/Display/Interface/Desktop host/sanitizer, full userspace `all test`,
+MC68040/analyzer, NDK `dist-check`, HPS display self-test and AArch64 helper
+links. The fresh coherent-ROM native GUI gate passes import, family details,
+saved system choice, restart and uninstall. Physical release qualification,
+live refresh and designed family-style resolution remain open.
+
 The shared renderer also makes AFNT a dependency of HPS display helpers.
 `fpga/arty/linux/Makefile` now includes the existing AFNT, CRC32, and UTF-8
 sources for every renderer consumer. Host and AArch64 display self-tests and

@@ -4,6 +4,7 @@
 #include <astra/port.h>
 #include <astra/resource.h>
 #include <astra/status.h>
+#include <astra/gui.h>
 
 #include <assert.h>
 #include <string.h>
@@ -15,6 +16,17 @@ static uint32_t bad_reply;
 static uint32_t closed_handles;
 static uint8_t imported_bytes[16];
 static uint32_t imported_length;
+static uint32_t installed_contexts;
+
+AstraResult astra_fonts_use_snapshot(AstraArea *area, uint32_t length, const char *id)
+{
+    assert(length == 128u && strcmp(id, "system:test") == 0);
+    assert(area->handle == 2u && area->address == document &&
+        area->map_flags == ASTRA_AREA_MAP_READ);
+    *area = (AstraArea)ASTRA_AREA_INIT;
+    ++installed_contexts;
+    return ASTRA_OK;
+}
 
 AstraResult astra_message_header_init(AstraMessageHeader *header,
                                       uint32_t total_size, uint32_t protocol,
@@ -34,6 +46,22 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
 
     (void)deadline;
     assert(service == 1u);
+    if (request->header.protocol == ASTRA_GUI_PROTOCOL) {
+        AstraGuiFontContext *context = call->reply;
+        assert(call->request_size == sizeof(AstraGuiSessionRequest) &&
+            request->header.operation == ASTRA_GUI_FONT_CONTEXT);
+        assert(call->reply_capacity == sizeof(*context));
+        astra_message_header_set(&context->header, sizeof(*context),
+            ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+            ASTRA_GUI_FONT_CONTEXT_REPLY, request->header.transaction_id);
+        context->area_size = 128u;
+        memcpy(context->face_id, "system:test", sizeof("system:test"));
+        call->reply_size = bad_reply == 1u ? sizeof(*context) - 1u : sizeof(*context);
+        call->reply_handle_count = 1u;
+        *call->reply_handles = 2u;
+        if (bad_reply == 2u) context->header.protocol_version = 99u;
+        return ASTRA_OK;
+    }
     assert(call->request_size == sizeof(*request));
     assert(call->reply_capacity == sizeof(*reply));
     if (request->header.operation == ASTRA_FONT_SERVICE_IMPORT) {
@@ -202,5 +230,13 @@ int main(void)
     assert(astra_fonts_face_open(1u, "system:test", 11u, &rendered,
                                  &face_bytes) == ASTRA_ERROR_IO);
     assert(closed_handles == 9u);
+    bad_reply = 0u;
+    assert(astra_fonts_use_system(1u) == ASTRA_OK && installed_contexts == 1u);
+    assert(astra_fonts_use_system(ASTRA_INVALID_HANDLE) == ASTRA_ERROR_INVALID_ARGUMENT);
+    bad_reply = 1u;
+    assert(astra_fonts_use_system(1u) == ASTRA_ERROR_IO && installed_contexts == 1u);
+    bad_reply = 2u;
+    assert(astra_fonts_use_system(1u) == ASTRA_ERROR_IO && installed_contexts == 1u);
+    assert(closed_handles == 11u);
     return 0;
 }

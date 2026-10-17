@@ -729,9 +729,9 @@ static const AstraUiStrike *text_strike(const AstraRenderBuilder *builder,
 {
     *selected_index = UINT32_MAX;
     if (builder == NULL) return NULL;
-    /* shortcut: designed bold/italic faces need catalog resolution. */
-    if (cell_width == 0u && builder->ui_font != NULL &&
-        (style_flags & (ASTRA_TEXT_STYLE_BOLD | ASTRA_TEXT_STYLE_ITALIC)) == 0u)
+    /* shortcut: retain the selected designed face for styled text until
+       family-style resolution supplies its bold/italic counterparts. */
+    if (cell_width == 0u && builder->ui_font != NULL)
         for (uint32_t at = 0u; at < builder->ui_font->view.strike_count; ++at) {
             AstraAfntStrikeInfo info;
 

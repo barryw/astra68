@@ -26,7 +26,7 @@ by the blitter.
 GPU objects belong to a window. A window opened with
 `ASTRA_WINDOW_CONTENT_SURFACE` has a GPU content surface in Media RAM instead
 of an RGB565 area to copy. Its control port is the session: graphics commands
-(`ASTRA_GUI_GRAPHICS_COMMAND`, GUI protocol 21) travel on it. The owner
+(`ASTRA_GUI_GRAPHICS_COMMAND`, GUI protocol 22) travel on it. The owner
 dying closes the port, the service closes the window, and every surface,
 list and staging area the window owned is released
 (`display_window_graphics_close`).

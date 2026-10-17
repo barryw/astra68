@@ -48,7 +48,7 @@ GRAPHICS := ../../../sw/userspace/graphics
 GRAPHICS_INCLUDE := $(GRAPHICS)/include
 GRAPHICS_GENERATED := $(GRAPHICS)/build/generated
 TEXTURE_REFERENCE_SOURCE := $(GRAPHICS)/src/texture_reference.c
-GRAPHICS_SOURCES := $(GRAPHICS)/src/surface.c \
+GRAPHICS_SOURCES := $(GRAPHICS)/src/font_data.c \
 	$(GRAPHICS)/src/render_builder.c \
 	../../../sw/common/afnt.c ../../../sw/common/crc32.c \
 	../../../sw/common/utf8.c

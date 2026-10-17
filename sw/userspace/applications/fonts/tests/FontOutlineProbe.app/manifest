@@ -11,7 +11,7 @@ capability FONTS_RENDER
 capability SYSTEM:r
 capability LIBS:r
 requires compiler.library 2 2.0.0
-requires font.library 3 3.0.0
+requires font.library 3 3.1.0
 requires filesystem.library 14 14.0.0
 requires runtime.library 1 1.5.0
 requires system.library 4 4.0.0

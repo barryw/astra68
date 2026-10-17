@@ -20,7 +20,7 @@ enum {
 /** Breaking Font Kit ABI generation carried by font.library.3. */
 #define ASTRA_FONT_LIBRARY_ABI_MAJOR 3u
 /** Current backward-compatible Font Kit revision. */
-#define ASTRA_FONT_LIBRARY_ABI_MINOR 0u
+#define ASTRA_FONT_LIBRARY_ABI_MINOR 1u
 
 /**
  * Immutable metrics and glyph range for one built-in bitmap-font strike.

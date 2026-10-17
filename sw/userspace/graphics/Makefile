@@ -27,14 +27,14 @@ FONT_ABI := $(NDK)/include/astra/font_library.h
 UI_FONT_HEADER := build/generated/astra_ui_font.inc
 MONO_FONT_SOURCE := fonts/astra-mono.afnt
 MONO_FONT_HEADER := build/generated/astra_mono_font.inc
-SOURCES := src/surface.c src/shared_surface.c src/render_builder.c
+SOURCES := src/surface.c src/font_data.c src/shared_surface.c src/render_builder.c
 TARGET := build/m68k/libastragraphics.a
 RENDERER_TARGET := build/m68k/libastragraphics-renderer.a
-TARGET_OBJECTS := build/m68k/surface.o build/m68k/shared_surface.o \
+TARGET_OBJECTS := build/m68k/surface.o build/m68k/font_data.o build/m68k/shared_surface.o \
 	build/m68k/render_builder.o
 RENDERER_OBJECTS := build/m68k/pic/render_builder.o
 PIC_TARGET := build/m68k/libastragraphics-pic.a
-PIC_OBJECTS := build/m68k/pic/surface.o build/m68k/pic/shared_surface.o \
+PIC_OBJECTS := build/m68k/pic/surface.o build/m68k/pic/font_data.o build/m68k/pic/shared_surface.o \
 	build/m68k/pic/render_builder.o
 HOST_TEST := build/host/test_surface
 HOST_AICON_TEST := build/host/test_aicon_surface
@@ -42,6 +42,8 @@ HOST_AFNT_TEST := build/host/test_afnt
 HOST_CATALOG_TEST := build/host/test_font_catalog
 HOST_FONTS_CLIENT_TEST := build/host/test_fonts_client
 HOST_AFNT_LIBRARY := ../../common/build/host/libastraafnt.a
+AFNT_LIBRARY := ../../common/build/m68k/libastraafnt.a
+HOST_MUTEX := $(RUNTIME)/tests/uncontended_mutex.c
 AICON_TEST_SOURCES := src/aicon_surface.c tests/test_aicon_surface.c \
 	$(SYSTEM)/src/bundle.c
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
@@ -56,6 +58,7 @@ GRAPHICS_LIBRARY_OBJECTS := build/m68k/library/graphics_library.o \
 	build/m68k/library/graphics_shared_surface.o
 FONT_LIBRARY_OBJECTS := build/m68k/library/font_library.o \
 	build/m68k/library/font_surface.o \
+	build/m68k/library/font_data.o \
 	build/m68k/library/fonts_client.o \
 	build/m68k/library/font_catalog.o
 SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
@@ -76,14 +79,24 @@ renderer: $(RENDERER_TARGET)
 
 # Other owners' host tests link these products instead of compiling Graphics
 # source with their private flags.
-build/host/surface.o: src/surface.c $(NDK)/include/astra/surface.h \
+build/host/surface.o: src/surface.c src/font_data.h $(NDK)/include/astra/fonts.h $(NDK)/include/astra/surface.h \
         $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
 		-ffunction-sections -fdata-sections -c $< -o $@
 
-build/host/surface_sanitize.o: src/surface.c $(NDK)/include/astra/surface.h \
+build/host/surface_sanitize.o: src/surface.c src/font_data.h $(NDK)/include/astra/fonts.h $(NDK)/include/astra/surface.h \
         $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) -ffunction-sections -fdata-sections -c $< -o $@
+
+build/host/font_data.o: src/font_data.c src/font_data.h $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
+		-ffunction-sections -fdata-sections -c $< -o $@
+
+build/host/font_data_sanitize.o: src/font_data.c src/font_data.h $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -ffunction-sections -fdata-sections -c $< -o $@
@@ -135,6 +148,7 @@ build/m68k/render_builder.o: $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 build/m68k/pic/surface.o: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 build/m68k/pic/render_builder.o: $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	../../../fpga/arty/linux/astra_render_protocol.h
+build/m68k/font_data.o build/m68k/pic/font_data.o: $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 
 build/m68k/library/graphics_library.o: src/graphics_library.c \
 		../../../ndk/include/astra/graphics_library.h \
@@ -167,6 +181,11 @@ build/m68k/library/font_catalog.o: ../../common/font_catalog.c \
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
+
+build/m68k/library/font_data.o: src/font_data.c src/font_data.h $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(LIBRARY_FLAGS) \
+		$(DEPFLAGS) -c $< -o $@
 
 build/m68k/library/graphics_surface.o: src/surface.c
 	@mkdir -p $(@D)
@@ -203,7 +222,7 @@ $(GRAPHICS_LIBRARY): $(GRAPHICS_LIBRARY_OBJECTS) $(GRAPHICS_LIBRARY_MAP) \
 		-Wl,-l:system.library.4 -Wl,-l:runtime.library.1 \
 		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
-$(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) \
+$(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) $(AFNT_LIBRARY) \
 		$(GRAPHICS_LIBRARY) \
 		$(ASTRA_SHARED_LINK_INPUTS) | shared-libraries-ready
 	@mkdir -p $(@D)
@@ -215,7 +234,7 @@ $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
 		-Wl,-l:graphics.library.3 -Wl,-l:system.library.4 \
 		-Wl,-l:runtime.library.1 \
-		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
+		-Wl,-l:compiler.library.2 $(AFNT_LIBRARY) $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py \
@@ -238,7 +257,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
 		grep -q '^graphics.library.3 3.0.0 ABI 3.0$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
-		grep -q '^font.library.3 3.0.0 ABI 3.0$$'
+		grep -q '^font.library.3 3.1.0 ABI 3.1$$'
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
@@ -259,7 +278,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 		awk '/NEEDED/{n++} END{print n+0}')" = 4
 	$(call ASTRA_CHECK_DSO,$(GRAPHICS_LIBRARY) $(FONT_LIBRARY))
 
-$(HOST_TEST): src/surface.c src/render_builder.c src/texture_reference.c \
+$(HOST_TEST): src/surface.c src/font_data.c src/font_data.h src/render_builder.c src/texture_reference.c \
 		tests/test_surface.c \
 		../../../ndk/include/astra/surface.h include/astra/render_builder.h \
 		../../include/astra/rounded.h ../../include/astra/window_scene.h \
@@ -267,10 +286,11 @@ $(HOST_TEST): src/surface.c src/render_builder.c src/texture_reference.c \
 		$(HOST_AFNT_LIBRARY)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/surface.c src/render_builder.c src/texture_reference.c \
-		tests/test_surface.c $(HOST_AFNT_LIBRARY) -o $@
+		src/surface.c src/font_data.c src/render_builder.c src/texture_reference.c \
+		tests/test_surface.c $(HOST_MUTEX) $(HOST_AFNT_LIBRARY) -o $@
 
-$(HOST_TEST): $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
+$(HOST_TEST): $(UI_FONT_HEADER) $(MONO_FONT_HEADER) $(HOST_MUTEX) \
+	$(NDK)/include/astra/fonts.h
 
 build/host/test-drawer.aicon: ../../../tools/aicon.py
 	@mkdir -p $(@D)
@@ -283,8 +303,13 @@ $(HOST_AICON_TEST): $(AICON_TEST_SOURCES)
 		-Wl,--gc-sections -o $@
 
 $(HOST_AFNT_LIBRARY): ../../common/afnt.c ../../common/crc32.c \
-		../../common/utf8.c ../../common/font_catalog.c ../../common/Makefile
+		../../common/utf8.c ../../common/font_catalog.c ../../common/Makefile \
+		../../include/astra/afnt.h
 	$(MAKE) -C ../../common host
+
+$(AFNT_LIBRARY): ../../common/afnt.c ../../common/crc32.c \
+		../../common/utf8.c ../../include/astra/afnt.h
+	$(MAKE) -C ../../common m68k
 
 $(HOST_AFNT_TEST): $(HOST_AFNT_LIBRARY) tests/test_afnt.c \
 		../../include/astra/afnt.h ../../include/astra/crc32.h
@@ -299,7 +324,7 @@ $(HOST_CATALOG_TEST): $(HOST_AFNT_LIBRARY) tests/test_font_catalog.c \
 		tests/test_font_catalog.c $(HOST_AFNT_LIBRARY) -o $@
 
 $(HOST_FONTS_CLIENT_TEST): src/fonts_client.c tests/test_fonts_client.c \
-		$(HOST_AFNT_LIBRARY) $(NDK)/include/astra/fonts.h
+		$(HOST_AFNT_LIBRARY) $(NDK)/include/astra/fonts.h ../../include/astra/gui.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/fonts_client.c tests/test_fonts_client.c \
@@ -318,9 +343,9 @@ sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	../../../fpga/arty/linux/astra_render_protocol.h build/host/test-drawer.aicon
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
-		src/surface.c src/render_builder.c src/texture_reference.c \
+		src/surface.c src/font_data.c src/render_builder.c src/texture_reference.c \
 		tests/test_surface.c ../../common/afnt.c ../../common/crc32.c \
-		../../common/utf8.c -o build/host/test_surface_sanitize
+		../../common/utf8.c $(HOST_MUTEX) -o build/host/test_surface_sanitize
 	./build/host/test_surface_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
 		-ffunction-sections -fdata-sections $(AICON_TEST_SOURCES) \

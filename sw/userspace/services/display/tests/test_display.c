@@ -18,6 +18,8 @@
 #pragma GCC diagnostic pop
 
 static uint32_t menu_allocations;
+static AstraGuiFontContext delivered_font_context;
+static uint32_t delivered_font_handles;
 
 AstraResult astra_fonts_face_open(AstraHandle render, const char *id,
                                    uint32_t id_length, AstraArea *face,
@@ -96,6 +98,11 @@ uint32_t astra_rt_area_create(uint32_t byte_size, uint32_t rights,
 uint32_t astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
                                    uint32_t *duplicate)
 {
+    if (handle == 0xa00u) {
+        assert(rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER));
+        *duplicate = 0xa01u;
+        return ASTRA_SYSCALL_OK;
+    }
     (void)handle;
     (void)rights;
     (void)duplicate;
@@ -170,6 +177,13 @@ uint32_t astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
                          const uint32_t *handles, uint32_t handle_count)
 {
+    if (handle == 0x501u) {
+        assert(size == sizeof(delivered_font_context));
+        assert(handle_count == 0u || (handle_count == 1u && handles[0] == 0xa01u));
+        memcpy(&delivered_font_context, message, size);
+        delivered_font_handles = handle_count;
+        return ASTRA_SYSCALL_OK;
+    }
     (void)handles;
     assert(handle == 0x500u && size == sizeof(delivered) &&
            handle_count == 0u);
@@ -1390,6 +1404,27 @@ static void test_window_graphics(void)
                                     (size_t)length);
             assert(fclose(file) == 0);
             assert(astra_render_font_init(&font, bytes, (uint32_t)length));
+            {
+                AstraArea face = {.handle = 0xa00u};
+                AstraGuiSessionRequest request = {0};
+                DisplayState fonts = {.ui_font = &font, .ui_font_area = &face,
+                    .ui_font_bytes = (uint32_t)length, .ui_font_id = "user:fixture"};
+                astra_message_header_set(&request.header, sizeof(request),
+                    ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT, 9u);
+                font_context_reply(&fonts, &request, 0x501u);
+                assert(delivered_font_context.status == ASTRA_STATUS_OK &&
+                    delivered_font_context.area_size == (uint32_t)length &&
+                    delivered_font_context.header.transaction_id == 9u &&
+                    delivered_font_handles == 1u &&
+                    strcmp(delivered_font_context.face_id, "user:fixture") == 0);
+                assert(display_named_font(&fonts, "user:fixture", 12u) == &font);
+                fonts.ui_font = NULL;
+                font_context_reply(&fonts, &request, 0x501u);
+                assert(delivered_font_context.status == ASTRA_STATUS_OK &&
+                    delivered_font_context.area_size == 0u &&
+                    delivered_font_context.face_id[0] == '\0' &&
+                    delivered_font_handles == 0u);
+            }
             assert(astra_afnt_strike_info(&font.view, 0u, &strike));
             assert(astra_afnt_glyph_info(&font.view, 0u, 'I', &first));
             assert(astra_afnt_glyph_info(&font.view, 0u, 'W', &second));

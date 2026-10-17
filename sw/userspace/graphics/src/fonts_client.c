@@ -2,6 +2,7 @@
 
 #include <astra/font_catalog.h>
 #include <astra/font_service.h>
+#include <astra/gui.h>
 #include <astra/port.h>
 #include <astra/resource.h>
 #include <astra/result.h>
@@ -20,6 +21,62 @@ _Static_assert(ASTRA_FONT_IMPORT_MAX == ASTRA_FONT_SOURCE_MAX,
                "font import size drift");
 _Static_assert(ASTRA_FONT_IMPORT_NAME_MAX == ASTRA_FONT_SOURCE_NAME_MAX,
                "font source name drift");
+
+AstraResult astra_fonts_use_system(AstraHandle gui)
+{
+    AstraGuiSessionRequest request = {0};
+    AstraGuiFontContext reply = {0};
+    AstraArea area = ASTRA_AREA_INIT;
+    AstraCall call = {0};
+    AstraResult result;
+
+    if (gui == ASTRA_INVALID_HANDLE) return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_message_header_init(&request.header, sizeof(request),
+        ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT, 1u);
+    if (result != ASTRA_OK) return result;
+    call.request = &request;
+    call.request_size = sizeof(request);
+    call.reply = &reply;
+    call.reply_capacity = sizeof(reply);
+    call.reply_handles = &area.handle;
+    call.reply_handle_capacity = 1u;
+    result = astra_port_call(gui, &call, ASTRA_DEADLINE_INFINITE);
+    if (result != ASTRA_OK) goto done;
+    if (call.reply_size != sizeof(reply) ||
+        reply.header.total_size != sizeof(reply) ||
+        reply.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
+        reply.header.protocol != ASTRA_GUI_PROTOCOL ||
+        reply.header.protocol_version != ASTRA_GUI_VERSION ||
+        reply.header.operation != ASTRA_GUI_FONT_CONTEXT_REPLY ||
+        reply.header.transaction_id != request.header.transaction_id ||
+        reply.header.flags != 0u || reply.header.reserved != 0u ||
+        memchr(reply.face_id, '\0', sizeof(reply.face_id)) == NULL ||
+        call.reply_handle_count > 1u ||
+        reply.area_size > ASTRA_FONT_IMPORT_MAX ||
+        (reply.area_size != 0u) != (call.reply_handle_count == 1u) ||
+        (reply.area_size != 0u) != (reply.face_id[0] != '\0') ||
+        (reply.status != ASTRA_STATUS_OK && reply.area_size != 0u)) {
+        result = ASTRA_ERROR_IO;
+        goto done;
+    }
+    result = astra_result_from_service(reply.status);
+    if (result != ASTRA_OK) goto done;
+    if (reply.area_size != 0u) {
+        result = astra_area_map(&area, ASTRA_AREA_MAP_READ);
+        if (result != ASTRA_OK) goto done;
+        if (area.size < reply.area_size) {
+            result = ASTRA_ERROR_IO;
+            goto done;
+        }
+    }
+    result = astra_fonts_use_snapshot(&area, reply.area_size, reply.face_id);
+done:
+    if (area.handle != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_area_close(&area);
+        if (result == ASTRA_OK) result = closed;
+    }
+    return result;
+}
 
 static AstraResult exchange(AstraHandle service, uint32_t operation,
                             const char *id, uint32_t id_length,

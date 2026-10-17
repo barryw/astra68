@@ -28,6 +28,8 @@ ASTRA_FONT_3.0 {
         astra_fonts_import;
         astra_fonts_face_open;
         astra_fonts_uninstall;
+        astra_fonts_use_system;
+        astra_fonts_use_snapshot;
     local:
         *;
 };
