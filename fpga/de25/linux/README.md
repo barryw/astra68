@@ -173,3 +173,15 @@ need a rebuilt Image. `../check_fs_drivers.sh` reports what the board has.
 
 The board's `udisks2.service` is masked: it is a second mount authority, and
 nothing here uses it.
+
+# Font conversion worker
+
+`make font-worker-test font-worker-sanitize font-worker-target` builds and
+checks the internal C worker. `font-worker-target` needs the selected DE25
+rootfs runtime FreeType library (`libfreetype.so.6`) and its PNG/Brotli
+dependencies in `DE25_SYSROOT/lib/aarch64-linux-gnu`; Beast's FreeType
+development headers provide the stable public API at cross-compile time. The
+2026-10-17 physical checkpoint used DE25 FreeType library SHA-256
+`a76d4ea1578e709deb81edcb297fbf4b570b19212a58388b86d36db2766ae215`.
+The executable is an internal provider, not a font-import command. It is not
+yet part of a release or connected to the guest Fonts service.

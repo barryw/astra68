@@ -40,7 +40,13 @@ STORAGE_PROVIDER_SOURCES := astra_storage_provider.c astra_storage_discovery.c a
 	$(STORAGE_RESOLVER)/astra68-resolve.c $(ROOT)/sw/common/utf8.c
 FONT_CONVERT_SOURCES := astra_font_convert.c test_font_convert.c \
 	$(ROOT)/sw/common/utf8.c
+FONT_WORKER_SOURCES := astra_font_convert.c astra_font_worker.c \
+	$(ROOT)/sw/common/utf8.c
 FONT_CODEC := $(ROOT)/sw/common/build/host/libastraafnt.a
+FONT_CODEC_AARCH64 := $(ROOT)/sw/common/build/aarch64/libastraafnt.a
+DE25_FREETYPE := $(DE25_SYSROOT)/lib/aarch64-linux-gnu/libfreetype.so.6
+FONT_AARCH64_CC := aarch64-linux-gnu-gcc
+FONT_AARCH64_INCLUDE := $(shell $(FONT_AARCH64_CC) -print-file-name=include)
 FONT_CONVERT_FLAGS = -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
 	-I$(ROOT)/sw/include -I$(ROOT)/ndk/include \
 	$(shell pkg-config --cflags freetype2)
@@ -63,6 +69,7 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 	storage-probe-target-test storage-mount-test storage-path-test storage-provider-test
 .PHONY: storage-provider-sanitize
 .PHONY: font-convert-test font-convert-sanitize
+.PHONY: font-worker-test font-worker-sanitize font-worker-target
 .PHONY: storage-cleanup-test storage-cleanup-sanitize
 .PHONY: storage-provider storage-provider-target
 .PHONY: storage-launcher-test
@@ -102,6 +109,10 @@ $(FONT_CODEC): $(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
 		$(ROOT)/sw/common/Makefile
 	$(MAKE) -C $(ROOT)/sw/common host
 
+$(FONT_CODEC_AARCH64): $(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/common/sha256.c $(ROOT)/sw/common/Makefile
+	$(MAKE) -C $(ROOT)/sw/common aarch64
+
 $(OUT)/test-font-convert: $(FONT_CONVERT_SOURCES) $(FONT_CODEC) astra_font_convert.h Makefile
 	mkdir -p $(OUT)
 	$(HOST_CC) $(FONT_CONVERT_FLAGS) $(FONT_CONVERT_SOURCES) $(FONT_CODEC) \
@@ -109,6 +120,56 @@ $(OUT)/test-font-convert: $(FONT_CONVERT_SOURCES) $(FONT_CODEC) astra_font_conve
 
 font-convert-test: $(OUT)/test-font-convert
 	cd $(CURDIR) && $(abspath $<)
+
+$(OUT)/astra-font-worker: $(FONT_WORKER_SOURCES) astra_font_worker_main.c \
+		$(FONT_CODEC) astra_font_worker.h astra_font_convert.h \
+		$(ROOT)/sw/include/astra/font_worker.h Makefile
+	mkdir -p $(OUT)
+	$(HOST_CC) $(FONT_CONVERT_FLAGS) $(FONT_WORKER_SOURCES) \
+		astra_font_worker_main.c $(FONT_CODEC) -o $@ \
+		$(shell pkg-config --libs freetype2)
+
+$(OUT)/test-font-worker: $(FONT_WORKER_SOURCES) test_font_worker.c \
+		$(FONT_CODEC) astra_font_worker.h astra_font_convert.h \
+		$(ROOT)/sw/include/astra/font_worker.h Makefile
+	mkdir -p $(OUT)
+	$(HOST_CC) $(FONT_CONVERT_FLAGS) $(FONT_WORKER_SOURCES) \
+		test_font_worker.c $(FONT_CODEC) -o $@ \
+		$(shell pkg-config --libs freetype2)
+
+font-worker-test: $(OUT)/test-font-worker $(OUT)/astra-font-worker
+	cd $(CURDIR) && $(abspath $(OUT)/test-font-worker)
+
+$(OUT)/astra-font-worker-aarch64: $(FONT_WORKER_SOURCES) astra_font_worker_main.c \
+		$(FONT_CODEC_AARCH64) $(DE25_FREETYPE) astra_font_worker.h \
+		astra_font_convert.h $(ROOT)/sw/include/astra/font_worker.h Makefile
+	mkdir -p $(OUT)
+	$(FONT_AARCH64_CC) $(CFLAGS) -std=c11 \
+		-I$(ROOT)/ndk/include --sysroot=$(DE25_SYSROOT) \
+		-nostdinc -I$(FONT_AARCH64_INCLUDE) \
+		-isystem $(DE25_SYSROOT)/usr/include/aarch64-linux-gnu \
+		-isystem $(DE25_SYSROOT)/usr/include \
+		-I/usr/include/freetype2 \
+		$(FONT_WORKER_SOURCES) astra_font_worker_main.c \
+		$(FONT_CODEC_AARCH64) -o $@ \
+		-L$(DE25_SYSROOT)/lib/aarch64-linux-gnu \
+		-Wl,-rpath-link,$(DE25_SYSROOT)/lib/aarch64-linux-gnu \
+		-l:libfreetype.so.6
+
+font-worker-target: $(OUT)/astra-font-worker-aarch64 $(OUT)/test-font-worker
+	cd $(CURDIR) && $(abspath $(OUT)/test-font-worker) \
+		$(QEMU_USER) -L $(abspath $(DE25_SYSROOT)) \
+		$(abspath $(OUT)/astra-font-worker-aarch64)
+
+font-worker-sanitize:
+	mkdir -p $(OUT)
+	$(HOST_CC) $(FONT_CONVERT_FLAGS) -fsanitize=address,undefined \
+		-fno-omit-frame-pointer $(FONT_WORKER_SOURCES) test_font_worker.c \
+		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/common/sha256.c \
+		-o $(OUT)/test-font-worker-sanitize \
+		$(shell pkg-config --libs freetype2)
+	cd $(CURDIR) && $(abspath $(OUT)/test-font-worker-sanitize)
 
 font-convert-sanitize:
 	mkdir -p $(OUT)

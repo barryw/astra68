@@ -521,6 +521,17 @@ service. Build-time Python remains a development asset pipeline and oracle.
 It is not an Astra user-facing importer or a runtime dependency. Users will
 import from the native Fonts UI through the managed service transaction.
 
+The first internal HPS worker executable now wraps that converter with a
+versioned, bounded `FNTC`/`FNTR` byte protocol. One child handles one face and
+exits; requests carry source bytes, display name, license, and collection face
+index, never a host path. The worker only returns validated AFNT bytes and the
+collection face count. Beast host, ASan/UBSan, AArch64 QEMU-user, and physical
+DE25 conversion of Atkinson Hyperlegible Next Regular pass, including malformed
+outline and oversized-request checks. The physical test ran from
+`/var/tmp/astra-font-worker-20261017` without installing or selecting a new
+production release. This worker is not yet connected to the Astra host
+transport, Fonts service, or UI; selecting TTF/OTF/TTC still returns unsupported.
+
 The shared C codec now exposes validated AFNT family/style strings and strike
 metrics for the future service catalog and Fonts detail view. Its NAME reader
 decodes JSON escapes, rejects malformed Unicode and duplicate requested fields,

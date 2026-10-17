@@ -199,6 +199,12 @@ remain open. This font change is not in the selected production release.
 Selecting a different system face now advances the catalog generation;
 selecting the current face leaves it unchanged. The native import/restart
 probe passes both cases on a disposable Beast QEMU image.
+An internal HPS C worker now accepts one bounded, versioned source request and
+returns validated AFNT; host, sanitizer, AArch64 QEMU-user, and physical DE25
+conversion gates pass. The board test used an isolated `/var/tmp` executable
+and did not modify the selected release or production settings. Native
+TTF/OTF/TTC import remains unavailable until the host channel and Fonts
+service call this worker and publish all collection faces atomically.
 
 Current production checkpoint: graphics release
 `57078599bcd151e88eb01c3767635875d89e154cebf6183fb69d41b6b1286421`,
