@@ -89,16 +89,52 @@ AstraResult astra_font_context_id(char id[ASTRA_FONT_ID_MAX])
     return ASTRA_OK;
 }
 
+static AstraResult adopt_font_context(AstraArea *area,
+                                      const AstraAfntView *view, const char *id)
+{
+    AstraArea previous;
+    uint32_t id_length = 0u;
+    if (id == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    while (id_length < sizeof(system_font_id) && id[id_length] != '\0')
+        ++id_length;
+    if (id_length == sizeof(system_font_id)) return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (astra_mutex_lock(&system_font_lock) != ASTRA_SYSCALL_OK)
+        return ASTRA_ERROR_IO;
+    if (area == NULL && system_font_area.handle != ASTRA_INVALID_HANDLE) {
+        (void)astra_mutex_unlock(&system_font_lock);
+        return ASTRA_ERROR_BUSY;
+    }
+    previous = system_font_area;
+    system_font_area = area == NULL ? (AstraArea)ASTRA_AREA_INIT : *area;
+    if (area != NULL) *area = (AstraArea)ASTRA_AREA_INIT;
+    system_font_view = *view;
+    memcpy(system_font_id, id, id_length + 1u);
+    /* Duplicate handles share one process mapping, without map references. */
+    if (previous.address == system_font_area.address) {
+        previous.address = NULL;
+        previous.size = previous.map_flags = 0u;
+    }
+    (void)astra_mutex_unlock(&system_font_lock);
+    return previous.handle == ASTRA_INVALID_HANDLE ? ASTRA_OK :
+           astra_area_close(&previous);
+}
+
+AstraResult astra_fonts_use_borrowed(const void *bytes, uint32_t length,
+                                    const char *id)
+{
+    AstraAfntView view;
+    if (bytes == NULL || length == 0u || length > ASTRA_FONT_IMPORT_MAX ||
+        id == NULL || id[0] == '\0' || !astra_afnt_validate(bytes, length, &view))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return adopt_font_context(NULL, &view, id);
+}
+
 AstraResult astra_fonts_use_snapshot(AstraArea *area, uint32_t length,
                                    const char *id)
 {
     AstraAfntView view = {0};
-    AstraArea previous;
-    uint32_t id_length = 0u;
     if (area == NULL || id == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
-    while (id_length < sizeof(system_font_id) && id[id_length] != '\0')
-        ++id_length;
-    if (id_length == sizeof(system_font_id) || length > ASTRA_FONT_IMPORT_MAX ||
+    if (length > ASTRA_FONT_IMPORT_MAX ||
         ((length != 0u) != (id[0] != '\0')) ||
         (length == 0u && (area->handle != ASTRA_INVALID_HANDLE ||
             area->address != NULL || area->size != 0u || area->map_flags != 0u)) ||
@@ -108,16 +144,7 @@ AstraResult astra_fonts_use_snapshot(AstraArea *area, uint32_t length,
           area->address == NULL || area->size < length ||
           !astra_afnt_validate(area->address, length, &view))))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    if (astra_mutex_lock(&system_font_lock) != ASTRA_SYSCALL_OK)
-        return ASTRA_ERROR_IO;
-    previous = system_font_area;
-    system_font_area = *area;
-    *area = (AstraArea)ASTRA_AREA_INIT;
-    system_font_view = view;
-    memcpy(system_font_id, id, id_length + 1u);
-    (void)astra_mutex_unlock(&system_font_lock);
-    return previous.handle == ASTRA_INVALID_HANDLE ? ASTRA_OK :
-           astra_area_close(&previous);
+    return adopt_font_context(area, &view, id);
 }
 #endif
 

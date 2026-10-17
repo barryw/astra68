@@ -52,8 +52,15 @@ build/host/test_policy: policy.c policy.h tests/test_policy.c $(HOST_COMMON)
 	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic \
 		-O2 policy.c tests/test_policy.c $(HOST_COMMON) -o $@
 
-test: $(TARGET) build/host/test_policy
+build/host/test_selection: tests/test_selection.c main.c policy.c policy.h $(HOST_COMMON)
+	@mkdir -p $(@D)
+	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
+		-ffunction-sections -fdata-sections tests/test_selection.c policy.c \
+		-Wl,--gc-sections $(HOST_COMMON) -o $@
+
+test: $(TARGET) build/host/test_policy build/host/test_selection
 	./build/host/test_policy
+	./build/host/test_selection
 
 sanitize: test
 	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic \
@@ -64,6 +71,11 @@ sanitize: test
 		tests/test_policy.c \
 		-o build/host/test_policy_sanitize
 	./build/host/test_policy_sanitize
+	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-ffunction-sections -fdata-sections tests/test_selection.c policy.c \
+		-Wl,--gc-sections $(HOST_COMMON) -o build/host/test_selection_sanitize
+	./build/host/test_selection_sanitize
 
 analyze: $(TARGET)
 	@mkdir -p build/analyzer

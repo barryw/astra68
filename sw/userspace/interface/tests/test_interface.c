@@ -1,5 +1,6 @@
 #include <astra/interface.h>
 #include <astra/interface_library.h>
+#include <astra/fonts.h>
 #include <astra/control.h>
 #include <astra/display.h>
 #include <astra/draw_list.h>
@@ -68,6 +69,21 @@ static uint32_t alert_create_calls;
 static uint32_t alert_name_calls;
 static uint32_t alert_activate_calls;
 static uint32_t alert_close_calls;
+static uint32_t alert_font_events;
+static uint32_t alert_font_refreshes;
+
+AstraResult astra_fonts_use_system(AstraHandle gui, const AstraWindowEvent *change)
+{
+    assert(gui == 1u && (change == NULL || change->type == ASTRA_WINDOW_EVENT_FONT_CHANGED));
+    ++alert_font_refreshes;
+    return ASTRA_OK;
+}
+
+uint32_t astra_log_failure(const char *operation, uint32_t status)
+{
+    (void)operation; (void)status;
+    return ASTRA_SYSCALL_OK;
+}
 static AstraResult alert_name_result = ASTRA_OK;
 
 int astra_draw_list_view_init(AstraSurfaceView *surface, void *storage,
@@ -142,6 +158,14 @@ AstraResult astra_window_event_wait(AstraWindow *window,
 {
     assert(window != NULL && event != NULL &&
            deadline == ASTRA_DEADLINE_INFINITE);
+    if (alert_font_events != 0u) {
+        --alert_font_events;
+        *event = (AstraWindowEvent){.size = sizeof(*event),
+            .version = ASTRA_WINDOW_EVENT_VERSION, .type = ASTRA_WINDOW_EVENT_FONT_CHANGED};
+        event->data.font_changed.generation = 7u;
+        event->data.font_changed.window = 7u;
+        return ASTRA_OK;
+    }
     event->type = ASTRA_WINDOW_EVENT_CLOSE_REQUEST;
     return ASTRA_OK;
 }
@@ -1590,6 +1614,18 @@ static void test_scrolled_list_control(void)
            action.value == 99);
     assert(astra_scroll_get_state(&model, &state) == ASTRA_OK &&
            state.offset_y == state.maximum_y);
+    {
+        uint64_t offset = state.offset_y;
+        AstraControlFrame damage;
+        astra_interface_ui_damage_clear(&context);
+        event = (AstraWindowEvent){.size = sizeof(event),
+            .version = ASTRA_WINDOW_EVENT_VERSION, .type = ASTRA_WINDOW_EVENT_FONT_CHANGED};
+        event.data.font_changed.generation = 7u;
+        assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+        assert(astra_scroll_get_state(&model, &state) == ASTRA_OK && state.offset_y == offset);
+        assert(astra_interface_ui_damage(&context, &damage) == ASTRA_OK &&
+               damage.width == 240u && damage.height == 80u);
+    }
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     assert(text_calls <= 4u && text_calls >= 3u);
@@ -2511,6 +2547,7 @@ static void test_scroll_view_rejects_non_single_child(void)
 
 static void test_splitter_composition(void)
 {
+    pointer_shape_calls = 0u;
     AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
     AstraSplitterInfo splitter = ASTRA_SPLITTER_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
@@ -2934,6 +2971,7 @@ int main(void)
     info.message = "Could not launch application.";
     info.message_length = 29u;
     {
+        alert_font_events = 1u;
         AstraResult result = astra_interface_show_alert(1u, &info);
 
         if (result != ASTRA_OK)
@@ -2942,6 +2980,7 @@ int main(void)
     }
     assert(alert_create_calls == 1u && alert_name_calls == 1u &&
            alert_activate_calls == 1u && alert_close_calls == 1u);
+    assert(alert_font_refreshes == 2u);
     alert_name_result = ASTRA_ERROR_IO;
     assert(astra_interface_show_alert(1u, &info) == ASTRA_ERROR_IO);
     assert(alert_create_calls == 2u && alert_name_calls == 2u &&

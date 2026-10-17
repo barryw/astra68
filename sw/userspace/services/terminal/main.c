@@ -63,6 +63,7 @@ typedef struct WindowTerminal {
     AstraTextGridSelection selection;
     AstraClipboardItem paste;
     AstraHandle clipboard;
+    AstraHandle gui;
     const uint8_t *paste_text;
     uint32_t paste_length;
     uint32_t paste_offset;
@@ -687,6 +688,13 @@ static int window_next_key(void *context, uint32_t *key)
             (void)console_session_request_close();
             continue;
         }
+        if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+            AstraResult refreshed = astra_fonts_use_system(window->gui, &event);
+            if (refreshed != ASTRA_OK)
+                (void)astra_log_failure("terminal UI font refresh", (uint32_t)refreshed);
+            window->force_present = 1u;
+            continue;
+        }
         if (event.type == ASTRA_WINDOW_EVENT_RESIZE) {
             uint16_t width = (uint16_t)event.data.resize.width;
             uint16_t height = (uint16_t)event.data.resize.height;
@@ -843,7 +851,7 @@ int astra_main(const AstraStartupInfo *startup)
         clipboard == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
 
-    if (astra_fonts_use_system(gui->handle) != ASTRA_OK)
+    if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
         return TERMINAL_FAIL_FONT;
     status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status == ASTRA_STATUS_OK)
@@ -857,6 +865,7 @@ int astra_main(const AstraStartupInfo *startup)
         (AstraTextGridSelection)ASTRA_TEXT_GRID_SELECTION_INIT;
     window_terminal.paste = (AstraClipboardItem)ASTRA_CLIPBOARD_ITEM_INIT;
     window_terminal.clipboard = clipboard->handle;
+    window_terminal.gui = gui->handle;
     window_terminal.width = 840u;
     window_terminal.height = 460u;
     window_terminal.cell_width = ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH;

@@ -1719,7 +1719,7 @@ static uint32_t handle_action(AstraHandle clipboard,
     return ASTRA_STATUS_OK;
 }
 
-static uint32_t run(AstraHandle clipboard)
+static uint32_t run(AstraHandle clipboard, AstraHandle gui)
 {
     uint32_t vblank_subscribed = 1u;
     uint32_t applied_pointer_shape = UINT32_MAX;
@@ -1776,6 +1776,11 @@ static uint32_t run(AstraHandle clipboard)
             action = (AstraUIAction)ASTRA_UI_ACTION_INIT;
             if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
                 return ASTRA_STATUS_OK;
+            if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+                AstraResult refreshed = astra_fonts_use_system(gui, &event);
+                if (refreshed != ASTRA_OK)
+                    (void)astra_log_failure("gallery font refresh", (uint32_t)refreshed);
+            }
             if (astra_interface_ui_handle_event(
                     &ui, &event, &action) != ASTRA_OK)
                 return GALLERY_FAIL_CONTROL;
@@ -1846,7 +1851,7 @@ int astra_main(const AstraStartupInfo *startup)
                                          ASTRA_CAPABILITY_CLIPBOARD);
     if (gui == NULL || clipboard == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
-    if (astra_fonts_use_system(gui->handle) != ASTRA_OK)
+    if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
         return ASTRA_STATUS_IO;
     argument = astra_startup_argument(startup, 1u);
     benchmarks = argument != NULL &&
@@ -1890,7 +1895,7 @@ int astra_main(const AstraStartupInfo *startup)
         (void)astra_close(bootstrap->handle);
     }
     if (status == ASTRA_STATUS_OK)
-        status = run(clipboard->handle);
+        status = run(clipboard->handle, gui->handle);
     if (window._private_control != ASTRA_INVALID_HANDLE) {
         AstraResult close_result = astra_window_close(&window);
         (void)close_result;

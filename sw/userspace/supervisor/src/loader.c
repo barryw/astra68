@@ -815,7 +815,8 @@ static uint32_t open_gui_session(uint32_t gui, const char *bundle_path,
     status = astra_rt_port_create(1u, sizeof(reply), &receive, &send[0]);
     if (status != ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_LIMIT;
-    name_gui_session(bundle_path, &request, &send[1]);
+    if (strncmp(bundle_path, "/apps/", 6u) == 0)
+        name_gui_session(bundle_path, &request, &send[1]);
     astra_message_header_set(&request.header, sizeof(request),
                              ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
                              ASTRA_GUI_OPEN_SESSION, 1u);
@@ -1077,16 +1078,15 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 if (published != 0u && provider_enforced(published))
                     return ASTRA_STATUS_ACCESS;
 
-                /* An application gets its own GUI session; a service keeps
-                   the shared port. */
+                /* Every GUI client has its own font context and window owner.
+                   Services use an unnamed session, without a launch panel. */
                 if (published != 0u &&
                     strcmp(wanted->name, ASTRA_CAPABILITY_GUI) == 0 &&
-                    strncmp(entry->path, "/apps/", 6u) == 0 &&
-                    launch_session == 0u &&
-                    open_gui_session(published, entry->path,
-                                     &launch_session) ==
-                        ASTRA_STATUS_OK)
+                    launch_session == 0u) {
+                    status = open_gui_session(published, entry->path, &launch_session);
+                    if (status != ASTRA_STATUS_OK) return status;
                     published = launch_session;
+                }
                 if (published != 0u) {
                     status = add_grant(out, count, wanted->name, published,
                                        ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT | delegated,

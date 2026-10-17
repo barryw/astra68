@@ -111,6 +111,7 @@ void display_font_context_confirm(DisplayFontContext *context,
     const char *id, uint32_t id_length)
 {
     DisplayFontFace *adopted = NULL;
+    uint8_t active = context->active;
     if (face_matches(context->pending, id, id_length)) {
         adopted = context->pending;
         context->pending = NULL;
@@ -120,6 +121,7 @@ void display_font_context_confirm(DisplayFontContext *context,
     }
     display_font_context_close(context);
     context->confirmed = adopted;
+    context->active = active;
 }
 
 void display_font_context_close(DisplayFontContext *context)

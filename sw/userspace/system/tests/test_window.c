@@ -32,6 +32,8 @@ static uint32_t next_state = ASTRA_WINDOW_STATE_NORMAL;
 static uint32_t next_state_flags = ASTRA_WINDOW_ACTIVE;
 static uint32_t next_resize_width = 500u;
 static uint32_t next_resize_height = 240u;
+static uint32_t next_font_generation = 7u;
+static uint32_t next_font_window = 7u;
 static uint32_t next_system_action = ASTRA_SYSTEM_ACTION_ABOUT;
 static AstraGuiWindowCommand last_command;
 static uint8_t *pointer_area;
@@ -206,6 +208,9 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             message->event.data.menu_result.request = next_menu_request;
             message->event.data.menu_result.selection = 3u;
             message->event.data.menu_result.reserved[0] = next_menu_reserved;
+        } else if (next_event_type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+            message->event.data.font_changed.generation = next_font_generation;
+            message->event.data.font_changed.window = next_font_window;
         } else if (next_event_type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION) {
             message->event.data.system_action.action = next_system_action;
         } else {
@@ -450,6 +455,15 @@ int main(void)
         next_menu_reserved = 1u;
         assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
         next_menu_reserved = 0u;
+        next_event_type = ASTRA_WINDOW_EVENT_FONT_CHANGED;
+        assert(astra_window_event_try(&window, &event) == ASTRA_OK &&
+               event.data.font_changed.generation == 7u);
+        next_font_generation = 0u;
+        assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
+        next_font_generation = 7u;
+        next_font_window = 8u;
+        assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
+        next_font_window = 7u;
         next_event_type = ASTRA_WINDOW_EVENT_TEXT;
         next_text_codepoint = 0xd800u;
         before = call_count;

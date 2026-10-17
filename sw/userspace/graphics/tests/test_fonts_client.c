@@ -21,6 +21,7 @@ static uint32_t installed_contexts;
 static char adopted_id[ASTRA_FONT_ID_MAX];
 static uint32_t fail_snapshot;
 static uint32_t fail_context_map;
+static uint32_t requested_window;
 
 AstraResult astra_font_context_id(char id[ASTRA_FONT_ID_MAX])
 {
@@ -64,6 +65,7 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
         assert(call->request_size == sizeof(*query) &&
             request->header.operation == ASTRA_GUI_FONT_CONTEXT);
         assert(strcmp(query->adopted_id, adopted_id) == 0);
+        assert(query->window == requested_window);
         assert(call->reply_capacity == sizeof(*context));
         astra_message_header_set(&context->header, sizeof(*context),
             ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
@@ -246,23 +248,40 @@ int main(void)
                                  &face_bytes) == ASTRA_ERROR_IO);
     assert(closed_handles == 9u);
     bad_reply = 0u;
-    assert(astra_fonts_use_system(1u) == ASTRA_OK && installed_contexts == 1u);
-    assert(astra_fonts_use_system(ASTRA_INVALID_HANDLE) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_fonts_use_system(1u, NULL) == ASTRA_OK && installed_contexts == 1u);
+    assert(astra_fonts_use_system(ASTRA_INVALID_HANDLE, NULL) == ASTRA_ERROR_INVALID_ARGUMENT);
     bad_reply = 1u;
-    assert(astra_fonts_use_system(1u) == ASTRA_ERROR_IO && installed_contexts == 1u);
+    assert(astra_fonts_use_system(1u, NULL) == ASTRA_ERROR_IO && installed_contexts == 1u);
     bad_reply = 2u;
-    assert(astra_fonts_use_system(1u) == ASTRA_ERROR_IO && installed_contexts == 1u);
+    assert(astra_fonts_use_system(1u, NULL) == ASTRA_ERROR_IO && installed_contexts == 1u);
     assert(closed_handles == 11u);
     bad_reply = 0u;
+    strcpy(adopted_id, "system:prior");
     fail_context_map = 1u;
-    assert(astra_fonts_use_system(1u) == ASTRA_ERROR_OUT_OF_MEMORY &&
-           installed_contexts == 1u && strcmp(adopted_id, "system:test") == 0);
+    assert(astra_fonts_use_system(1u, NULL) == ASTRA_ERROR_OUT_OF_MEMORY &&
+           installed_contexts == 1u && strcmp(adopted_id, "system:prior") == 0);
     fail_context_map = 0u;
     fail_snapshot = 1u;
-    assert(astra_fonts_use_system(1u) == ASTRA_ERROR_INVALID_ARGUMENT &&
-           installed_contexts == 1u && strcmp(adopted_id, "system:test") == 0);
+    assert(astra_fonts_use_system(1u, NULL) == ASTRA_ERROR_INVALID_ARGUMENT &&
+           installed_contexts == 1u && strcmp(adopted_id, "system:prior") == 0);
     fail_snapshot = 0u;
-    assert(astra_fonts_use_system(1u) == ASTRA_OK && installed_contexts == 2u);
+    assert(astra_fonts_use_system(1u, NULL) == ASTRA_OK && installed_contexts == 2u);
     assert(closed_handles == 13u);
+    AstraWindowEvent change = {.size = sizeof(change), .version = ASTRA_WINDOW_EVENT_VERSION,
+        .type = ASTRA_WINDOW_EVENT_FONT_CHANGED};
+    change.data.font_changed.generation = 7u;
+    change.data.font_changed.window = requested_window = 42u;
+    fail_context_map = 1u;
+    assert(astra_fonts_use_system(1u, &change) == ASTRA_OK && installed_contexts == 2u &&
+           closed_handles == 14u);
+    fail_context_map = 0u;
+    change.data.font_changed.window = 0u;
+    assert(astra_fonts_use_system(1u, &change) == ASTRA_ERROR_INVALID_ARGUMENT);
+    change.data.font_changed.window = 42u;
+    change.data.font_changed.generation = 0u;
+    assert(astra_fonts_use_system(1u, &change) == ASTRA_ERROR_INVALID_ARGUMENT);
+    change.data.font_changed.generation = 7u;
+    --change.version;
+    assert(astra_fonts_use_system(1u, &change) == ASTRA_ERROR_INVALID_ARGUMENT);
     return 0;
 }

@@ -106,8 +106,8 @@ read-only snapshot of Display's active AFNT and its catalog ID. Desktop, Atlas,
 Fonts, Interface Gallery and Terminal initialize this context before layout.
 Common width/fitting calls use its glyph advances, and proportional surface
 text emits the existing named-face command with the same ID. Monospaced text
-remains independent. Display's own controls use a duplicate mapping of the
-same area; popup-menu replay also resolves named fonts. Snapshot validation
+remains independent. Display's own controls borrow the retained renderer's
+validated view; popup-menu replay also resolves named fonts. Snapshot validation
 and adoption use the existing native mutex, explicitly aligned for MC68040.
 Host checks cover exact selected advances, UTF-8 fitting, named submissions,
 read-only ownership, invalid AFNT, malformed replies and recovery. Designed
@@ -172,6 +172,57 @@ DE25. Live notifications/reflow and complete physical qualification remain open.
 Final Graphics host/sanitizer/build/contract checks pass in
 `/var/tmp/astra-font-adoption-final-20261017.log`; the Font Kit binary matches
 the one used by the passing native GUI gate byte for byte.
+
+Font Kit ABI 4.0 / GUI 24 / window-event version 9 / Fonts service protocol 6
+now implement live system-font changes. Selection prepares and retains an
+immutable snapshot before Config Kit persistence, preserving the old choice
+on preparation/write failure. The native `FONTS_CHANGED` event wakes Display,
+which refreshes from the authoritative catalog and retries failures while
+keeping its prior context. Window notifications retry until that window
+reports the adopted ID; the context request carries an explicit window ID
+checked against its session. One window cannot prematurely acknowledge a
+sibling's reflow. The superseded Font Kit 3 contract is removed from all
+in-tree producers, consumers, manifests, exports and package inputs.
+
+All supervised GUI clients now have private sessions: application sessions
+retain launch names, service sessions are unnamed. This prevents GUI services
+from sharing independent per-process font state. Common Interface Kit controls
+reuse their retained layout and full-view damage for font changes; modal alerts
+and the existing Desktop safe-removal canvas also refresh and reflow. Terminal
+monospaced content stays independent. Haiku references are recorded in
+`docs/FONTS.md`. Fonts selection host/ASan/UBSan/native/analyzer gates pass;
+`/var/tmp/astra-font-live-focused-20261017.log` retains the initial later
+Display compile failure (wrong menu-cancel argument count). Corrected UI and
+native gates pass in `/var/tmp/astra-font-live-abi4-ui-final-20261017.log`.
+The first modal-alert extension exposed a test's stale global pointer-call
+counter; its own setup now resets that counter. Coherent build, NDK and native
+live GUI qualification are running. Production software/user data remain
+untouched; complete physical font qualification remains open.
+
+The coherent userspace/ROM and NDK `dist-check` now pass, including installed
+example links and HTML/PDF generation. Doxygen could not resolve the anonymous
+font-event payload; it now uses a named payload, like the other window events,
+without changing wire layout. The first live GUI run then exposed a real
+mapping-lifetime defect: duplicate area handles map to the same process
+address, and refreshing the unchanged face unmapped its active font. The
+diagnostic run records Fonts' user fault at `0x40000d38` in
+`/var/tmp/astra-font-live-abi4-ui-diagnostic-20261017.log`.
+Clients now retain an unchanged immutable context without remapping. The
+shared snapshot adoption path also closes duplicate handles without unmapping
+their common address. Display borrows the validated view owned by its retained
+font registry instead of creating a second mapping owner. Host checks cover
+alias adoption and borrowed-context retirement. Corrected Graphics/Display
+host, ASan/UBSan, MC68040, analyzer and export-contract checks, full userspace
+build and coherent ROM pass in
+`/var/tmp/astra-font-live-map-borrowed-20261017.log`. The strengthened native
+GUI gate passes live Desktop/Fonts adoption of the imported face, exact Config
+Kit persistence, restart, restoration of the built-in face and uninstall;
+log `/var/tmp/astra-font-live-map-ui-20261017.log`. Its ROM SHA-256 is
+`b84744560902eb92bbcb2f00b15363bf9587a40ea01442345bef5542224cf574`.
+The final userspace test suite and refreshed NDK `dist-check`, including
+exported borrowed-snapshot API, installed example links and HTML/PDF manuals,
+pass in `/var/tmp/astra-font-live-map-sdk-final-20261017.log`. Complete
+physical qualification remains pending. Production remains unchanged.
 
 Latest work covers native font management, scoped settings, and migration of
 native UI pixel rendering to Astraea. The fixed/removable filesystem remains

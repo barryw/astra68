@@ -24,7 +24,7 @@ _Static_assert(ASTRA_FONT_IMPORT_MAX == ASTRA_FONT_SOURCE_MAX,
 _Static_assert(ASTRA_FONT_IMPORT_NAME_MAX == ASTRA_FONT_SOURCE_NAME_MAX,
                "font source name drift");
 
-AstraResult astra_fonts_use_system(AstraHandle gui)
+AstraResult astra_fonts_use_system(AstraHandle gui, const AstraWindowEvent *change)
 {
     AstraGuiFontContextRequest request = {0};
     AstraGuiFontContext reply = {0};
@@ -33,6 +33,13 @@ AstraResult astra_fonts_use_system(AstraHandle gui)
     AstraResult result;
 
     if (gui == ASTRA_INVALID_HANDLE) return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (change != NULL) {
+        if (change->size < sizeof(*change) || change->version != ASTRA_WINDOW_EVENT_VERSION ||
+            change->type != ASTRA_WINDOW_EVENT_FONT_CHANGED ||
+            change->data.font_changed.generation == 0u || change->data.font_changed.window == 0u)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        request.window = change->data.font_changed.window;
+    }
     result = astra_font_context_id(request.adopted_id);
     if (result != ASTRA_OK) return result;
     result = astra_message_header_init(&request.header, sizeof(request),
@@ -65,6 +72,8 @@ AstraResult astra_fonts_use_system(AstraHandle gui)
     }
     result = astra_result_from_service(reply.status);
     if (result != ASTRA_OK) goto done;
+    /* Immutable IDs need no remap; aliases share the active process mapping. */
+    if (strcmp(reply.face_id, request.adopted_id) == 0) goto done;
     if (reply.area_size != 0u) {
         result = astra_area_map(&area, ASTRA_AREA_MAP_READ);
         if (result != ASTRA_OK) goto done;

@@ -6,6 +6,7 @@
 #include <astra/area.h>
 #include <astra/attributes.h>
 #include <astra/font_encoding.h>
+#include <astra/gui.h>
 #include <astra/types.h>
 
 ASTRA_EXTERN_C_BEGIN
@@ -31,8 +32,13 @@ ASTRA_EXTERN_C_BEGIN
  * The next request reports the context actually adopted, so Display keeps the
  * previous snapshot alive if mapping or validation of a delivered reply fails.
  * @param gui Borrowed GUI startup/session capability.
+ * @param change Delivered FONT_CHANGED event for this window, or NULL during
+ * initial process setup. After this call, dispatch the event to the retained
+ * controls even on failure; their layout must match the actually active context.
+ * Window-specific acknowledgement permits reliable retries for other windows.
  * @return ::ASTRA_OK or a negative ::AstraResult. */
-ASTRA_NODISCARD AstraResult astra_fonts_use_system(AstraHandle gui);
+ASTRA_NODISCARD AstraResult astra_fonts_use_system(
+    AstraHandle gui, const AstraWindowEvent *change);
 
 /** Adopt a mapped, read-only AFNT snapshot and its installed catalog ID.
  * The caller must keep all aliases immutable and ensure the ID identifies
@@ -45,6 +51,19 @@ ASTRA_NODISCARD AstraResult astra_fonts_use_system(AstraHandle gui);
  * @return ::ASTRA_OK or a negative ::AstraResult. */
 ASTRA_NODISCARD AstraResult astra_fonts_use_snapshot(
     AstraArea *area, uint32_t length, const char *id);
+
+/** Borrow immutable AFNT bytes for this process's UI metrics and draw lists.
+ * The caller retains the mapping and must keep it valid until replacing this
+ * context. This avoids a second mapping owner when the renderer already owns
+ * the face. Call on the UI thread between frames. Borrowed contexts may replace
+ * built-in or borrowed contexts; replacing an owned snapshot returns
+ * ::ASTRA_ERROR_BUSY. Failed validation preserves the current context.
+ * @param bytes Borrowed immutable AFNT bytes.
+ * @param length Valid AFNT byte count, from 1 through ASTRA_FONT_IMPORT_MAX.
+ * @param id Nonempty installed catalog ID, fewer than ASTRA_FONT_ID_MAX bytes.
+ * @return ::ASTRA_OK or a negative ::AstraResult. */
+ASTRA_NODISCARD AstraResult astra_fonts_use_borrowed(
+    const void *bytes, uint32_t length, const char *id);
 
 /** One borrowed face; strings are counted and live until catalog close. */
 typedef struct AstraInstalledFont {

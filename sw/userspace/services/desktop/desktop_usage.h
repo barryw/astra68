@@ -51,6 +51,31 @@ static void usage_escape(AstraString *out, const char *bytes, uint32_t length)
     }
 }
 
+static AstraResult usage_layout_rows(DesktopUsage *usage)
+{
+    uint64_t y = 0u;
+    for (uint32_t at = 0u; at < usage->count; ++at) {
+        DesktopUsageRow *text = &usage->rows[at];
+        uint32_t offset = 0u, lines = 0u;
+        text->y = (uint32_t)y;
+        while (offset < text->length) {
+            uint32_t advance;
+            (void)usage_line(text->text + offset, text->length - offset, &advance);
+            if (advance == 0u) return ASTRA_ERROR_IO;
+            offset += advance; ++lines;
+        }
+        uint64_t height = (uint64_t)lines * DESKTOP_USAGE_LINE_HEIGHT + 12u;
+        y += height;
+        if (y > INT32_MAX) return ASTRA_ERROR_NO_RESOURCES;
+        text->height = (uint32_t)height;
+    }
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = 2u;
+    item.minimum_width = item.maximum_width = DESKTOP_USAGE_VIEW_WIDTH;
+    item.minimum_height = item.maximum_height = y == 0u ? DESKTOP_USAGE_LINE_HEIGHT : (uint32_t)y;
+    return astra_interface_control_set_flex(&usage->controls[2], &item);
+}
+
 /* Return one complete UTF-8 line; measuring and painting use the same font
  * primitive. Newlines separate metadata from the complete escaped pathname. */
 static AstraResult usage_rows(DesktopUsage *usage, const AstraVolumeUsageSnapshot *snapshot,
@@ -60,7 +85,6 @@ static AstraResult usage_rows(DesktopUsage *usage, const AstraVolumeUsageSnapsho
     if (snapshot->count > UINT32_MAX / sizeof(*usage->rows)) return ASTRA_ERROR_OUT_OF_MEMORY;
     usage->rows = astra_runtime_callocate(snapshot->count == 0u ? 1u : snapshot->count, sizeof(*usage->rows));
     if (usage->rows == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
-    uint64_t y = 0u;
     uint32_t crc = UINT32_MAX;
     for (uint32_t at = 0u; at < snapshot->count; ++at) {
         const AstraVolumeUsageRecord *row = &snapshot->records[at];
@@ -93,18 +117,8 @@ static AstraResult usage_rows(DesktopUsage *usage, const AstraVolumeUsageSnapsho
             (row->flags & ASTRA_VOLUME_USAGE_INVALID_NAME) != 0u ? "[Retained object: name cannot be represented]" : "[Unnamed retained object]");
         else usage_escape(&out, row->path, row->path_length);
         if (out.truncated) return ASTRA_ERROR_IO;
-        text->length = out.length; text->y = (uint32_t)y;
+        text->length = out.length;
         crc = astra_crc32_update(crc, text->text, text->length + 1u);
-        uint32_t offset = 0u, lines = 0u;
-        while (offset < text->length) {
-            uint32_t advance;
-            (void)usage_line(text->text + offset, text->length - offset, &advance);
-            if (advance == 0u) return ASTRA_ERROR_IO;
-            offset += advance; ++lines;
-        }
-        text->height = lines * DESKTOP_USAGE_LINE_HEIGHT + 12u;
-        y += text->height;
-        if (y > INT32_MAX) return ASTRA_ERROR_NO_RESOURCES;
     }
     usage->crc = ~crc;
     AstraScrollModelInfo model = ASTRA_SCROLL_MODEL_INFO_INIT;
@@ -126,10 +140,7 @@ static AstraResult usage_rows(DesktopUsage *usage, const AstraVolumeUsageSnapsho
     if (result == ASTRA_OK) result = astra_interface_control_set_flex(&usage->controls[1], &item);
     canvas.id = 3u;
     if (result == ASTRA_OK) result = astra_interface_container_init(&usage->controls[2], &canvas);
-    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT; item.parent_id = 2u;
-    item.minimum_width = item.maximum_width = DESKTOP_USAGE_VIEW_WIDTH;
-    item.minimum_height = item.maximum_height = y == 0u ? DESKTOP_USAGE_LINE_HEIGHT : (uint32_t)y;
-    if (result == ASTRA_OK) result = astra_interface_control_set_flex(&usage->controls[2], &item);
+    if (result == ASTRA_OK) result = usage_layout_rows(usage);
     bar.id = 4u; bar.model = &usage->scroll;
     if (result == ASTRA_OK) result = astra_interface_scrollbar_init(&usage->controls[3], &bar);
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT; item.parent_id = 1u;
@@ -234,11 +245,17 @@ static AstraResult usage_open(DesktopUsage *usage, AstraHandle gui, AstraHandle 
     return result;
 }
 
-static AstraResult usage_event(DesktopUsage *usage)
+static AstraResult usage_event(DesktopUsage *usage, AstraHandle gui)
 {
     AstraWindowEvent event = {0};
     AstraResult result = astra_window_event_try(&usage->window, &event);
     if (result == ASTRA_ERROR_WOULD_BLOCK) return ASTRA_OK;
+    if (result == ASTRA_OK && event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+        AstraResult refreshed = astra_fonts_use_system(gui, &event);
+        if (refreshed != ASTRA_OK)
+            (void)astra_log_failure("desktop usage font refresh", (uint32_t)refreshed);
+        result = usage_layout_rows(usage);
+    }
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
     int close = event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST || (event.type == ASTRA_WINDOW_EVENT_KEY &&
         (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u && event.data.key.usage == 0x29u);

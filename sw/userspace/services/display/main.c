@@ -3,6 +3,7 @@
 #include <astra/display.h>
 #include <astra/endian.h>
 #include <astra/fonts.h>
+#include <astra/font_service.h>
 #include <astra/gui.h>
 #include <astra/input_service.h>
 #include <astra/menu.h>
@@ -13,6 +14,7 @@
 #include <astra/runtime.h>
 #include <astra/service.h>
 #include <astra/status.h>
+#include <astra/string.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
 #include <astra/utf8.h>
@@ -139,6 +141,7 @@ typedef struct DisplayWindow {
     uint8_t pending_close;
     uint32_t pending_close_timestamp_ms;
     AstraWindowEvent pending_menu;
+    uint32_t pending_font;
     uint32_t pointer_shape;
     uint32_t pointer_image_area;
     const AstraColorRGBA8 *pointer_image;
@@ -179,6 +182,12 @@ typedef struct DisplayState {
     DisplayFontFace *ui_font;
     DisplayFontRegistry *fonts;
     DisplayFontSet overlay_fonts;
+    AstraHandle font_catalog;
+    uint32_t font_generation;
+    uint8_t font_notifications;
+    uint8_t font_refresh_pending;
+    uint64_t font_notify_at;
+    uint64_t font_retry_at;
     uint32_t windows_area;
     uint32_t capacity;
     DamageRect damage[2];
@@ -4348,31 +4357,60 @@ static int valid_open_session(const AstraGuiOpenSession *request,
            request->icon_length <= ASTRA_WINDOW_TITLE_ICON_BYTES_MAX;
 }
 
+static DisplayFontContext *session_font_context(DisplayState *state,
+                                                uint32_t session)
+{
+    if (session == 0u) return &state->shared_font_context;
+    for (uint32_t at = 0u; at < state->session_count; ++at)
+        if (state->sessions[at].id == session) return &state->sessions[at].fonts;
+    return NULL;
+}
+
 static void font_context_reply(DisplayState *state, uint32_t session,
                                 const AstraGuiFontContextRequest *request,
                                 uint32_t reply)
 {
     AstraGuiFontContext message = {0};
-    DisplayFontContext *context_font = session == 0u ?
-        &state->shared_font_context : NULL;
+    DisplayFontContext *context_font = session_font_context(state, session);
     DisplayFontFace *next = NULL;
     uint32_t area = 0u;
-
-    for (uint32_t at = 0u; at < state->session_count; ++at)
-        if (state->sessions[at].id == session) {
-            context_font = &state->sessions[at].fonts;
-            break;
-        }
 
     astra_message_header_set(&message.header, sizeof(message),
         ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT_REPLY,
         request->header.transaction_id);
     message.status = context_font == NULL ? ASTRA_STATUS_BAD_HANDLE : ASTRA_STATUS_OK;
+    if (message.status == ASTRA_STATUS_OK && request->window != 0u) {
+        uint32_t at = find_id(state, request->window);
+        if (at == state->count || state->windows[at].session != session)
+            message.status = ASTRA_STATUS_BAD_HANDLE;
+    }
     const char *end = memchr(request->adopted_id, '\0', sizeof(request->adopted_id));
     if (end == NULL) message.status = ASTRA_STATUS_PROTOCOL;
-    if (message.status == ASTRA_STATUS_OK)
+    if (message.status == ASTRA_STATUS_OK) {
         display_font_context_confirm(context_font, request->adopted_id,
                                       (uint32_t)(end - request->adopted_id));
+        const char *active_id = state->ui_font == NULL ? "" : state->ui_font->id;
+        if (strcmp(request->adopted_id, active_id) == 0)
+            for (uint32_t at = 0u; at < state->count; ++at) {
+                DisplayWindow *window = &state->windows[at];
+                if (window->session != session || window->id != request->window ||
+                    window->pending_font == 0u) continue;
+                window->pending_font = 0u;
+                char storage[192];
+                AstraString line;
+                astra_string_init(&line, storage, sizeof(storage));
+                if (astra_string_append(&line, "display font adopted: ") &&
+                    (window->request.type == ASTRA_WINDOW_DESKTOP ?
+                        astra_string_append(&line, "Desktop") :
+                        window->application_name_length != 0u ?
+                            astra_string_append_bytes(&line, window->application_name,
+                                window->application_name_length) :
+                            astra_string_append(&line, "Window")) &&
+                    astra_string_append(&line, " -> ") &&
+                    astra_string_append(&line, active_id))
+                    (void)astra_log(line.text);
+            }
+    }
     if (message.status == ASTRA_STATUS_OK && state->ui_font != NULL) {
         if (display_font_retain(state->ui_font)) next = state->ui_font;
         else message.status = ASTRA_STATUS_LIMIT;
@@ -4392,10 +4430,67 @@ static void font_context_reply(DisplayState *state, uint32_t session,
         area == 0u ? NULL : &area, area == 0u ? 0u : 1u) == ASTRA_SYSCALL_OK) {
         if (message.status == ASTRA_STATUS_OK) {
             context_font->pending = next;
+            context_font->active = 1u;
             next = NULL;
         }
     } else if (area != 0u) (void)astra_close(area);
     display_font_release(next);
+}
+
+static AstraResult use_display_font(DisplayFontFace *font)
+{
+    return astra_fonts_use_borrowed(font->area.address, font->bytes, font->id);
+}
+
+static void notify_font_changes(DisplayState *state)
+{
+    state->font_notifications = 0u;
+    for (uint32_t at = 0u; at < state->count; ++at) {
+        DisplayWindow *window = &state->windows[at];
+        if (window->pending_font == 0u) continue;
+        AstraWindowEvent event = {.type = ASTRA_WINDOW_EVENT_FONT_CHANGED};
+        event.data.font_changed.generation = window->pending_font;
+        event.data.font_changed.window = window->id;
+        (void)send_event(window, &event);
+        state->font_notifications = 1u;
+    }
+    state->font_notify_at = astra_clock_monotonic() + UINT64_C(250000000);
+}
+
+static AstraResult refresh_system_font(DisplayState *state)
+{
+    AstraFontsCatalog catalog = ASTRA_FONTS_CATALOG_INIT;
+    DisplayFontFace *next = NULL;
+    AstraResult result = astra_fonts_catalog_open(state->font_catalog, &catalog);
+    if (result != ASTRA_OK) return result;
+    uint32_t generation = catalog.generation;
+    result = display_font_acquire(state->fonts, catalog.selected_id,
+        (uint32_t)strlen(catalog.selected_id), &next);
+    AstraResult closed = astra_fonts_catalog_close(&catalog);
+    if (closed != ASTRA_OK)
+        (void)astra_log_failure("display font catalog close", (uint32_t)closed);
+    if (result != ASTRA_OK) return result;
+    if (next != state->ui_font) result = use_display_font(next);
+    if (result != ASTRA_OK) {
+        display_font_release(next);
+        return result;
+    }
+    DisplayFontFace *previous = state->ui_font;
+    state->ui_font = next;
+    state->font_generation = generation;
+    display_font_release(previous);
+    menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+    state->launch_drawn = 0u;
+    for (uint32_t at = 0u; at < state->count; ++at) {
+        DisplayWindow *window = &state->windows[at];
+        DisplayFontContext *context = session_font_context(state, window->session);
+        dirty_cache(window);
+        if (context != NULL && context->active)
+            window->pending_font = generation;
+    }
+    damage_both(state, (DamageRect){0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u});
+    notify_font_changes(state);
+    return ASTRA_OK;
 }
 
 /* A named session is an application being launched: it takes the launch
@@ -4443,7 +4538,7 @@ static void open_session(DisplayState *state,
     uint32_t receive = 0u;
     uint32_t send = 0u;
     uint32_t status = state->count + state->session_count >=
-                              ASTRA_WAIT_MULTIPLE_MAX - 3u ?
+                              ASTRA_WAIT_MULTIPLE_MAX - 4u ?
         ASTRA_STATUS_LIMIT : ASTRA_STATUS_OK;
 
     if (status == ASTRA_STATUS_OK)
@@ -4634,7 +4729,7 @@ static void receive_open(uint32_t device, uint32_t irq,
              (request.type != ASTRA_WINDOW_DESKTOP || state->count == 0u) ?
         ASTRA_STATUS_OK : DISPLAY_FAIL_PROTOCOL;
     if (status == ASTRA_STATUS_OK &&
-        state->count + state->session_count >= ASTRA_WAIT_MULTIPLE_MAX - 3u)
+        state->count + state->session_count >= ASTRA_WAIT_MULTIPLE_MAX - 4u)
         status = ASTRA_STATUS_LIMIT;
     if (status == ASTRA_STATUS_OK)
         status = display_windows_reserve(state, state->count + 1u);
@@ -4704,6 +4799,12 @@ static void receive_open(uint32_t device, uint32_t irq,
         candidate.id = allocate_id(state);
         candidate.generation = 1u;
         candidate.session = session;
+        DisplayFontContext *context = session_font_context(state, session);
+        if (context != NULL && context->active) {
+            candidate.pending_font = state->font_generation;
+            state->font_notifications = 1u;
+            state->font_notify_at = 0u;
+        }
         candidate.event_send = handles[1];
         handles[1] = 0u;
         init_content_banks(&candidate);
@@ -5338,6 +5439,7 @@ static uint32_t display_wait_handles(const DisplayState *state,
                                      uint32_t gui_receive,
                                      uint32_t input_receive,
                                      uint32_t vblank_irq,
+                                     uint32_t font_changed,
                                      uint32_t first,
                                      uint32_t *waits,
                                      uint32_t *sources)
@@ -5347,10 +5449,10 @@ static uint32_t display_wait_handles(const DisplayState *state,
         find_id(state, state->pending_input_window) : 0u;
 
     if (state == NULL || waits == NULL || sources == NULL ||
-        state->count > ASTRA_WAIT_MULTIPLE_MAX - 3u ||
-        state->session_count > ASTRA_WAIT_MULTIPLE_MAX - 3u - state->count)
+        state->count > ASTRA_WAIT_MULTIPLE_MAX - 4u ||
+        state->session_count > ASTRA_WAIT_MULTIPLE_MAX - 4u - state->count)
         return 0u;
-    count = state->count + state->session_count + 3u;
+    count = state->count + state->session_count + 4u;
 
     first %= count;
     for (uint32_t slot = 0u; slot < count; ++slot) {
@@ -5359,7 +5461,8 @@ static uint32_t display_wait_handles(const DisplayState *state,
         if (source >= count)
             source -= count;
         sources[slot] = source;
-        waits[slot] = source == 0u ? gui_receive :
+        waits[slot] = source == count - 1u ? font_changed :
+                      source == 0u ? gui_receive :
                       source == 1u && state->pending_input_valid != 0u &&
                                       pending != state->count ?
                           state->windows[pending].event_send :
@@ -5391,12 +5494,14 @@ static int display_wait_client_ended(const DisplayState *state,
 {
     if (status != ASTRA_SYSCALL_PEER_DEAD)
         return 0;
-    return source >= 3u ||
+    return (source >= 3u && source < state->count + state->session_count + 3u) ||
            (source == 1u && state->pending_input_valid != 0u);
 }
 
 static uint32_t signal_vblank(DisplayState *state)
 {
+    if (state->font_notifications && astra_clock_monotonic() >= state->font_notify_at)
+        notify_font_changes(state);
     for (uint32_t index = 0u; index < state->count; ++index) {
         if (state->windows[index].pending_close != 0u) {
             AstraWindowEvent event = {
@@ -5443,12 +5548,16 @@ static void serve_windows(uint32_t device, uint32_t irq,
                           uint32_t gui_receive, uint32_t input_receive,
                           const volatile AstraInputPointerState *pointer,
                           DisplayFontFace *ui_font,
-                          DisplayFontRegistry *fonts)
+                          DisplayFontRegistry *fonts, AstraHandle font_catalog,
+                          uint32_t font_generation, uint32_t font_changed)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     DisplayState state = {
         .ui_font = ui_font,
         .fonts = fonts,
+        .font_catalog = font_catalog,
+        .font_generation = font_generation,
+        .font_refresh_pending = ui_font == NULL && font_catalog != ASTRA_INVALID_HANDLE,
         .damage = {
             { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u },
             { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u }
@@ -5494,7 +5603,7 @@ static void serve_windows(uint32_t device, uint32_t irq,
             pointer_shape_presented(&state, &theme);
         }
         wait_count = display_wait_handles(
-            &state, gui_receive, input_receive, vblank_irq, first_wait,
+            &state, gui_receive, input_receive, vblank_irq, font_changed, first_wait,
             waits, sources);
         uint32_t selected = 0u;
         uint32_t status;
@@ -5524,6 +5633,24 @@ static void serve_windows(uint32_t device, uint32_t irq,
         }
         selected = sources[selected];
         first_wait = (selected + 1u) % wait_count;
+        if (selected == wait_count - 1u) {
+            state.font_refresh_pending = 1u;
+            state.font_retry_at = 0u;
+        }
+        if (state.font_refresh_pending &&
+            (selected == wait_count - 1u ||
+             (selected == 2u && astra_clock_monotonic() >= state.font_retry_at))) {
+            AstraResult refreshed = refresh_system_font(&state);
+            if (refreshed == ASTRA_OK) {
+                state.font_refresh_pending = 0u;
+                state.compose_deferred = 1u;
+            } else {
+                if (state.font_retry_at == 0u)
+                    (void)astra_log_failure("display system font refresh", (uint32_t)refreshed);
+                state.font_retry_at = astra_clock_monotonic() + UINT64_C(250000000);
+            }
+        }
+        if (selected == wait_count - 1u) continue;
         if (selected == 0u)
             receive_open(device, irq, framebuffer, pointer_buffer,
                          &state, gui_receive, 0u, &next_fence,
@@ -5609,9 +5736,11 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *input_service;
     const AstraStartupCapability *fonts;
     const AstraStartupCapability *fonts_render;
+    const AstraStartupCapability *fonts_changed;
     AstraFontsCatalog font_catalog = ASTRA_FONTS_CATALOG_INIT;
     DisplayFontRegistry font_registry = {0};
     DisplayFontFace *active_font = NULL;
+    uint32_t font_generation = 1u;
     uint32_t gui_receive = 0u;
     uint32_t gui_send = 0u;
     uint32_t input_receive = 0u;
@@ -5633,9 +5762,10 @@ int astra_main(const AstraStartupInfo *startup)
     fonts = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS);
     fonts_render = astra_startup_capability(
         startup, ASTRA_CAPABILITY_FONTS_RENDER);
+    fonts_changed = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_CHANGED);
     if (bootstrap == NULL || device == NULL || irq == NULL ||
         vblank_irq == NULL ||
-        input_service == NULL)
+        input_service == NULL || fonts_changed == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     status = ASTRA_SYSCALL_OK;
     for (uint32_t buffer = 0u;
@@ -5674,6 +5804,7 @@ int astra_main(const AstraStartupInfo *startup)
                                                    fonts_render->handle;
     if (fonts != NULL && fonts_render != NULL &&
         astra_fonts_catalog_open(fonts->handle, &font_catalog) == ASTRA_OK) {
+        font_generation = font_catalog.generation;
         if (font_catalog.selected_id[0] != '\0') {
             AstraResult opened = display_font_acquire(&font_registry,
                 font_catalog.selected_id,
@@ -5686,18 +5817,7 @@ int astra_main(const AstraStartupInfo *startup)
         (void)ignored;
     }
     if (active_font != NULL) {
-        AstraArea metrics = ASTRA_AREA_INIT;
-        AstraResult result = astra_handle_duplicate(active_font->area.handle,
-            ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
-            &metrics.handle);
-        if (result == ASTRA_OK) result = astra_area_map(&metrics, ASTRA_AREA_MAP_READ);
-        if (result == ASTRA_OK)
-            result = astra_fonts_use_snapshot(&metrics, active_font->bytes,
-                                              active_font->id);
-        if (metrics.handle != ASTRA_INVALID_HANDLE) {
-            AstraResult ignored = astra_area_close(&metrics);
-            (void)ignored;
-        }
+        AstraResult result = use_display_font(active_font);
         if (result != ASTRA_OK) {
             (void)astra_log_failure("display font context", (uint32_t)result);
             display_font_release(active_font);
@@ -5706,7 +5826,8 @@ int astra_main(const AstraStartupInfo *startup)
     }
     serve_windows(device->handle, irq->handle, vblank_irq->handle,
                   framebuffer, &pointer_buffer, gui_receive, input_receive,
-                  shared_pointer, active_font, &font_registry);
-    display_font_release(active_font);
+                  shared_pointer, active_font, &font_registry,
+                  fonts == NULL ? ASTRA_INVALID_HANDLE : fonts->handle,
+                  font_generation, fonts_changed->handle);
     return ASTRA_STATUS_OK;
 }

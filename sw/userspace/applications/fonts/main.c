@@ -700,7 +700,7 @@ static uint32_t action(const AstraUIAction *event)
     return ASTRA_STATUS_OK;
 }
 
-static uint32_t run(void)
+static uint32_t run(AstraHandle gui)
 {
     for (;;) {
         AstraWindowEvent event = {0};
@@ -713,6 +713,11 @@ static uint32_t run(void)
 
             if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
                 return ASTRA_STATUS_OK;
+            if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+                AstraResult refreshed = astra_fonts_use_system(gui, &event);
+                if (refreshed != ASTRA_OK)
+                    (void)astra_log_failure("fonts UI font refresh", (uint32_t)refreshed);
+            }
             if (astra_interface_ui_handle_event(&ui, &event, &reply) != ASTRA_OK)
                 return FONTS_FAIL_CONTROL;
             if (event.type == ASTRA_WINDOW_EVENT_RESIZE &&
@@ -753,7 +758,7 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_BAD_HANDLE;
     fonts_read = fonts->handle;
     fonts_admin = admin->handle;
-    if (astra_fonts_use_system(gui->handle) != ASTRA_OK)
+    if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
         return FONTS_FAIL_CATALOG;
     if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
         status = FONTS_FAIL_FILESYSTEM;
@@ -796,7 +801,7 @@ int astra_main(const AstraStartupInfo *startup)
         (void)astra_service_ready(bootstrap->handle, status, NULL, 0u);
         (void)astra_close(bootstrap->handle);
     }
-    if (status == ASTRA_STATUS_OK) status = run();
+    if (status == ASTRA_STATUS_OK) status = run(gui->handle);
     if (window._private_control != ASTRA_INVALID_HANDLE &&
         astra_window_close(&window) != ASTRA_OK &&
         status == ASTRA_STATUS_OK)

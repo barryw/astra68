@@ -18,9 +18,11 @@
 #include <string.h>
 
 static uint32_t closed_font_snapshots;
+static uint32_t unmapped_font_snapshots;
 AstraResult astra_area_close(AstraArea *area)
 {
     assert(area->handle == 77u);
+    if (area->address != NULL) ++unmapped_font_snapshots;
     *area = (AstraArea)ASTRA_AREA_INIT;
     ++closed_font_snapshots;
     return ASTRA_OK;
@@ -766,6 +768,12 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
         char adopted[ASTRA_FONT_ID_MAX];
         assert(astra_font_context_id(adopted) == ASTRA_OK && strcmp(adopted, id) == 0);
         assert(snapshot.handle == ASTRA_INVALID_HANDLE);
+        snapshot = (AstraArea){.handle = 77u, .address = bytes,
+            .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
+        assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length, id) == ASTRA_OK);
+        assert(snapshot.handle == ASTRA_INVALID_HANDLE &&
+               closed_font_snapshots == 1u && unmapped_font_snapshots == 0u);
+        assert(astra_fonts_use_borrowed(bytes, (uint32_t)length, id) == ASTRA_ERROR_BUSY);
         assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) ==
                expected_width);
         assert(astra_surface_ui_text_fit("IIW", 3u, strike.pixel_height,
@@ -797,9 +805,15 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
         id[0] = '\0';
         assert(astra_fonts_use_snapshot(&snapshot, 0u, id) == ASTRA_OK);
         assert(astra_font_context_id(adopted) == ASTRA_OK && adopted[0] == '\0');
-        assert(closed_font_snapshots == 1u);
+        assert(closed_font_snapshots == 2u && unmapped_font_snapshots == 1u);
         assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) !=
                expected_width);
+        assert(astra_fonts_use_borrowed(bytes, (uint32_t)length, "user:borrowed") == ASTRA_OK);
+        assert(astra_fonts_use_borrowed("bad", 3u, "user:bad") == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_fonts_use_borrowed(bytes, (uint32_t)length, "") == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) == expected_width);
+        assert(astra_fonts_use_snapshot(&snapshot, 0u, id) == ASTRA_OK &&
+               closed_font_snapshots == 2u && unmapped_font_snapshots == 1u);
         snapshot = (AstraArea){.handle = 77u, .address = bytes,
             .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
         bytes[0] ^= 1u;

@@ -379,7 +379,7 @@ static void log_root(void)
     astra_runtime_deallocate(bytes);
 }
 
-static AstraResult run(void)
+static AstraResult run(AstraHandle gui)
 {
     for (;;) {
         uint32_t waits[3] = {astra_window_event_wait_handle(&window)};
@@ -447,6 +447,11 @@ static AstraResult run(void)
             AstraUIAction action = ASTRA_UI_ACTION_INIT;
             if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
                 return ASTRA_OK;
+            if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+                AstraResult refreshed = astra_fonts_use_system(gui, &event);
+                if (refreshed != ASTRA_OK)
+                    (void)astra_log_failure("atlas font refresh", (uint32_t)refreshed);
+            }
             if (event.type == ASTRA_WINDOW_EVENT_RESIZE &&
                 event.data.resize.width != 0u && event.data.resize.height != 0u &&
                 (width != event.data.resize.width || height != event.data.resize.height)) {
@@ -494,7 +499,7 @@ int astra_main(const AstraStartupInfo *startup)
     ready = astra_startup_capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
     if (gui == NULL || ready == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
-    if (astra_fonts_use_system(gui->handle) != ASTRA_OK)
+    if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
         return ASTRA_STATUS_IO;
     const char *first_argument = startup->argc > 1u ? astra_startup_argument(startup, 1u) : NULL;
     int exact_volume = startup->argc == 5u && first_argument != NULL && strcmp(first_argument, "--volume") == 0;
@@ -587,7 +592,7 @@ int astra_main(const AstraStartupInfo *startup)
         NULL, 0u);
     (void)astra_close(ready->handle);
     if (result == ASTRA_OK)
-        result = run();
+        result = run(gui->handle);
     __atomic_store_n(&cancelled, 1u, __ATOMIC_RELEASE);
     if (astra_window_event_wait_handle(&window) != ASTRA_INVALID_HANDLE) {
         AstraResult ignored = astra_window_close(&window);

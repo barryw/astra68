@@ -1,4 +1,4 @@
-ASTRA_FONT_3.0 {
+ASTRA_FONT_4.0 {
     global:
         astra_draw_list_mono_text;
         astra_draw_list_mono_text_styled;
@@ -30,6 +30,7 @@ ASTRA_FONT_3.0 {
         astra_fonts_uninstall;
         astra_fonts_use_system;
         astra_fonts_use_snapshot;
+        astra_fonts_use_borrowed;
     local:
         *;
 };

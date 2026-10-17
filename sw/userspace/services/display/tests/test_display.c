@@ -1433,6 +1433,8 @@ static void test_window_graphics(void)
                 assert(display_font_adopt(&registry, &face, (uint32_t)length,
                     "user:fixture", 12u, &owned) == ASTRA_OK);
                 assert(face.handle == ASTRA_INVALID_HANDLE && owned->references == 1u);
+                assert(use_display_font(owned) == ASTRA_OK &&
+                       font_snapshot_closes == closes);
                 DisplayState fonts = {.ui_font = owned, .fonts = &registry};
                 astra_message_header_set(&request.header, sizeof(request),
                     ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT, 9u);
@@ -1505,6 +1507,8 @@ static void test_window_graphics(void)
                     .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
                 assert(display_font_adopt(&registry, &face, (uint32_t)length,
                     "user:other", 10u, &second_face) == ASTRA_OK);
+                assert(use_display_font(second_face) == ASTRA_OK &&
+                       font_snapshot_closes == closes);
                 {
                     DisplayState switching = {.ui_font = owned, .fonts = &registry};
                     AstraGuiFontContextRequest query = {0};
@@ -1556,6 +1560,9 @@ static void test_window_graphics(void)
                 display_font_set_end(&retained, 1);
                 assert(font_snapshot_closes == closes + 1u &&
                        registry.faces == second_face && second_face->next == NULL);
+                AstraArea recovery = ASTRA_AREA_INIT;
+                assert(astra_fonts_use_snapshot(&recovery, 0u, "") == ASTRA_OK &&
+                       font_snapshot_closes == closes + 1u);
                 display_font_release(second_face);
                 display_font_set_close(&retained);
                 assert(registry.faces == NULL && retained.uses == NULL &&
@@ -3274,13 +3281,14 @@ int main(void)
 
         fair.windows[0].control_receive = 0x30u;
         fair.windows[1].control_receive = 0x40u;
-        assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 3u,
-                                    waits, sources) == 5u);
+        assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0x28u, 3u,
+                                    waits, sources) == 6u);
         assert(waits[0] == 0x30u && sources[0] == 3u);
         assert(waits[1] == 0x40u && sources[1] == 4u);
-        assert(waits[2] == 0x10u && sources[2] == 0u);
-        assert(waits[3] == 0x20u && sources[3] == 1u);
-        assert(waits[4] == 0x25u && sources[4] == 2u);
+        assert(waits[2] == 0x28u && sources[2] == 5u);
+        assert(waits[3] == 0x10u && sources[3] == 0u);
+        assert(waits[4] == 0x20u && sources[4] == 1u);
+        assert(waits[5] == 0x25u && sources[5] == 2u);
         assert(display_window_wait_index(0u, fair.count) == fair.count);
         assert(display_window_wait_index(1u, fair.count) == fair.count);
         assert(display_window_wait_index(2u, fair.count) == fair.count);
@@ -3314,11 +3322,13 @@ int main(void)
         fair.sessions[0].id = 7u;
         fair.sessions[1].id = 9u;
         fair.session_count = 2u;
-        assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0u,
-                                    waits, sources) == 7u);
+        assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0x28u, 0u,
+                                    waits, sources) == 8u);
         assert(waits[3] == 0x30u && waits[4] == 0x40u &&
                waits[5] == fair.sessions[0].receive && sources[5] == 5u &&
                waits[6] == fair.sessions[1].receive && sources[6] == 6u);
+        assert(waits[7] == 0x28u && sources[7] == 7u);
+        assert(!display_wait_client_ended(&fair, 7u, ASTRA_SYSCALL_PEER_DEAD));
         assert(display_window_wait_index(5u, fair.count) == fair.count);
         assert(display_wait_client_ended(&fair, 6u, ASTRA_SYSCALL_PEER_DEAD));
         {
@@ -3332,12 +3342,47 @@ int main(void)
             assert(fair.session_count == 0u);
         }
         fair.session_count = ASTRA_WAIT_MULTIPLE_MAX - 4u;
-        assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0u,
+        assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0x28u, 0u,
                                     waits, sources) == 0u);
         fair.session_count = 0u;
         fair.count = ASTRA_WAIT_MULTIPLE_MAX - 2u;
-        assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0u,
+        assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0x28u, 0u,
                                     waits, sources) == 0u);
+    }
+
+    {
+        DisplayWindow waiting[2] = {
+            {.id = 42u, .session = 7u, .event_send = 0x500u, .pending_font = 9u},
+            {.id = 43u, .session = 7u, .event_send = 0x500u, .pending_font = 9u}};
+        DisplayState notify = {.windows = waiting, .count = 2u, .session_count = 1u};
+        notify.sessions[0].id = 7u;
+        send_would_block = 1u;
+        notify_font_changes(&notify);
+        assert(waiting[0].pending_font == 9u && waiting[0].event_lost && notify.font_notifications);
+        notify_font_changes(&notify);
+        assert(waiting[0].pending_font == 9u && !waiting[0].event_lost &&
+               delivered.event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED &&
+               delivered.event.data.font_changed.generation == 9u &&
+               delivered.event.data.font_changed.window == 43u);
+        uint32_t sent = delivered_count;
+        assert(signal_vblank(&notify) == ASTRA_STATUS_OK && delivered_count == sent);
+        AstraGuiFontContextRequest adopted = {0};
+        astra_message_header_set(&adopted.header, sizeof(adopted),
+            ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT, 1u);
+        adopted.window = 42u;
+        font_context_reply(&notify, 7u, &adopted, 0x501u);
+        assert(waiting[0].pending_font == 0u && waiting[1].pending_font == 9u &&
+               notify.sessions[0].fonts.active);
+        adopted.window = 43u;
+        waiting[1].session = 8u;
+        font_context_reply(&notify, 7u, &adopted, 0x501u);
+        assert(delivered_font_context.status == ASTRA_STATUS_BAD_HANDLE &&
+               waiting[1].pending_font == 9u);
+        waiting[1].session = 7u;
+        font_context_reply(&notify, 7u, &adopted, 0x501u);
+        assert(waiting[1].pending_font == 0u);
+        notify_font_changes(&notify);
+        assert(!notify.font_notifications && delivered_count == sent);
     }
 
     add_window(&state, 0u, ASTRA_WINDOW_POPOVER, 300u, 380u,
@@ -4346,8 +4391,8 @@ int main(void)
             assert(batch_blit_from_surface(
                        many.windows[index].content_offset[
                            many.windows[index].content_back]) != 0u);
-        assert(display_wait_handles(&many, 0x10u, 0x20u, 0x25u, 0u,
-                                    waits, sources) == 8u);
+        assert(display_wait_handles(&many, 0x10u, 0x20u, 0x25u, 0x28u, 0u,
+                                    waits, sources) == 9u);
     }
     {
         static uint16_t pixels[100u * 80u];

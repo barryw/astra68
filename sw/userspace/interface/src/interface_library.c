@@ -2,6 +2,7 @@
 
 #include <astra/bytes.h>
 #include <astra/display.h>
+#include <astra/fonts.h>
 #include <astra/library.h>
 #include <astra/result.h>
 #include <astra/runtime.h>
@@ -130,6 +131,8 @@ AstraResult astra_interface_show_alert(AstraHandle gui,
 
     if (gui == ASTRA_INVALID_HANDLE || !valid(info))
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_fonts_use_system(gui, NULL);
+    if (result != ASTRA_OK) return result;
     status = astra_shared_draw_list_create(&surface, ALERT_WIDTH, ALERT_HEIGHT);
     if (status != ASTRA_SYSCALL_OK)
         return astra_result_from_syscall(status);
@@ -172,6 +175,11 @@ AstraResult astra_interface_show_alert(AstraHandle gui,
             if (result != ASTRA_OK ||
                 event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
                 break;
+            if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+                AstraResult refreshed = astra_fonts_use_system(gui, &event);
+                if (refreshed != ASTRA_OK)
+                    (void)astra_log_failure("alert font refresh", (uint32_t)refreshed);
+            }
             result = astra_interface_ui_handle_event(
                 &context, &event, &action);
             if (result == ASTRA_OK)

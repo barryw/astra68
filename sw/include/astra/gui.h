@@ -14,7 +14,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 23u
+#define ASTRA_GUI_VERSION 24u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -112,7 +112,7 @@ typedef struct AstraWindowFrame {
 } AstraWindowFrame;
 
 /** Current serialized window-event version. */
-#define ASTRA_WINDOW_EVENT_VERSION 8u
+#define ASTRA_WINDOW_EVENT_VERSION 9u
 
 /** Window event kinds. */
 enum {
@@ -130,7 +130,9 @@ enum {
     /** An action selected from the display-owned system menu. */
     ASTRA_WINDOW_EVENT_SYSTEM_ACTION = 10,
     /** Terminal result for a window-owned transient menu. */
-    ASTRA_WINDOW_EVENT_MENU_RESULT = 11
+    ASTRA_WINDOW_EVENT_MENU_RESULT = 11,
+    /** Refresh Font Kit's system context and reflow native controls. */
+    ASTRA_WINDOW_EVENT_FONT_CHANGED = 12
 };
 
 enum {
@@ -293,8 +295,16 @@ typedef struct AstraWindowMenuResultEvent {
     uint32_t reserved[4]; /**< Must be zero. */
 } AstraWindowMenuResultEvent;
 
+/** Selected system-font catalog revision; notification may be retried. */
+typedef struct AstraWindowFontChangedEvent {
+    uint32_t generation; /**< Nonzero font catalog revision. */
+    uint32_t window; /**< Receiving window's nonzero server ID. */
+} AstraWindowFontChangedEvent;
+
 /** Event-kind-specific payload preserving the public wire extent. */
 typedef union AstraWindowEventData {
+    /** Selected system-font catalog revision; notification may be retried. */
+    AstraWindowFontChangedEvent font_changed;
     /** Pointer motion or button data. */
     AstraWindowPointerEvent pointer;
     /** Pointer motion data, with the device's motion totals. */
@@ -370,9 +380,10 @@ _Static_assert(sizeof(AstraWindowEvent) == 52u,
 typedef struct AstraGuiFontContextRequest {
     AstraMessageHeader header;
     char adopted_id[64];
+    uint32_t window;
 } AstraGuiFontContextRequest;
 
-_Static_assert(sizeof(AstraGuiFontContextRequest) == ASTRA_MESSAGE_HEADER_SIZE + 64u,
+_Static_assert(sizeof(AstraGuiFontContextRequest) == ASTRA_MESSAGE_HEADER_SIZE + 68u,
                "font context request ABI");
 
 typedef struct AstraGuiFontContext {

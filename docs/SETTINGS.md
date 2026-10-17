@@ -45,14 +45,14 @@ use their own Config Kit handle directly for private preferences.
 
 ## Font preferences
 
-Font service will own `/config/system/fonts/settings.conf`. Its system-font
-setting will identify one installed face, including designed weight, through a
+Font service owns `/config/system/fonts/settings.conf`. Its system-font
+setting identifies one installed face, including designed weight, through a
 single catalog identity. One Config Kit write changes that choice atomically.
 The service validates the face and all required strikes before activating it.
 Deleting that font, a damaged preference, or an unavailable generated strike
 selects built-in UI face; recovery text always uses its built-in rescue face.
-Fonts UI will import/manage faces and request the system-font change through
-font service. It will not contain its own font renderer.
+Fonts UI imports/manages faces and requests system-font changes through the
+font service. It contains no separate font renderer.
 
 Theme and common controls own semantic pixel sizes: menu bar, window title,
 body/control text, desktop labels, and other roles may differ. The system font
@@ -61,20 +61,22 @@ strike. Terminal's font choice belongs to Terminal's application settings and
 does not change system font. Terminal may own its size choice too. Target
 rendering sends validated AFNT strikes through Astraea's glyph engine;
 host-side outline conversion produces strikes, not an application drawing path.
-Today draw-list text reaches Astraea, but direct RGB565 surface text still has
-CPU pixel loops in `sw/userspace/graphics/src/surface.c`. Production Desktop's
-scrollbar now uses the shared Interface Kit draw-list renderer through System
-Kit's checked list append, not a CPU-painted pixel buffer. Remaining direct
-RGB565 rendering APIs must be retired from production UI use before
-system-wide installed-font selection can be called complete.
+Native production UI submits draw lists to Astraea. Direct RGB565 helpers
+remain for software surfaces and host oracles; they do not define the native
+UI rendering path. Desktop's scrollbar uses the shared Interface Kit renderer.
 
 Current implementation provides scoped Config Kit grants and document storage.
 The resident font service catalogs AFNT and persists validated choice. The
 native Fonts UI imports an outline font and saves that imported face as system
 choice in a disposable QEMU gate. It offers a confirmation flow for removing
-imported faces after changing away from the active choice. Display reads the
-choice at startup; live updates and client-side metrics remain open. The
-selected DE25 release does not yet include this font work.
+imported faces after changing away from the active choice. Font Kit 4 and GUI
+protocol 24 bind client metrics and rendering to the same immutable snapshot.
+The service prepares that snapshot before the settings write, then signals
+Display through a native change event. Window-specific notices drive live
+context refresh and common-control reflow, retaining previous snapshots across
+failures. Focused host/sanitizer/native checks pass; coherent native GUI and
+physical release qualification remain open. The selected DE25 release does not
+yet include this font work.
 Config Kit currently assumes one writer per settings document; multiple app
 instances need an owner-mediated write path before concurrent editing is safe.
 

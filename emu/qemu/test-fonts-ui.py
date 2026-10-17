@@ -47,6 +47,23 @@ def open_fonts(machine):
     raise RuntimeError("Fonts window did not open")
 
 
+def wait_live_font(machine, prefix, trace_before, syslog_before, glyphs_before):
+    end = time.monotonic() + 15
+    while time.monotonic() < end:
+        lines = machine.said(trace_before)[0] + machine.syslog_lines()[syslog_before:]
+        adopted = {}
+        for line in lines:
+            match = re.search(r"display font adopted: (Desktop|Fonts) -> ([A-Za-z0-9:._-]+)", line)
+            if match is not None and match[2].startswith(prefix):
+                adopted[match[1]] = match[2]
+        if adopted.get("Desktop") == adopted.get("Fonts") and "Fonts" in adopted and \
+                display_count(machine, "glyph-commands") > glyphs_before:
+            print("Fonts live adoption Desktop/Fonts=" + adopted["Fonts"], flush=True)
+            return adopted["Fonts"]
+        time.sleep(.1)
+    raise RuntimeError("live system font did not reach Desktop and Fonts: " + repr(lines[-50:]))
+
+
 def state_on_disk(image, work):
     offset, length = astra_image.ext4_partition(image)
     volume = str(Path(work) / "inspect-volume.ext4")
@@ -164,7 +181,8 @@ def main():
             machine.qmp.double_click(520, 330)
             time.sleep(.3)
             if display_count(machine, "glyph-commands") <= before:
-                raise RuntimeError("family double-click rendered no details")
+                raise RuntimeError("family double-click rendered no details; recent=" +
+                                   repr(machine.said_with_syslog()[0][-100:]))
             # Return to families, then activate the newly imported last family.
             for _ in range(3):
                 machine.qmp.key("tab")
@@ -176,8 +194,12 @@ def main():
             # Selection must preserve List focus before tabbing to Back/Use.
             for key in ("tab", "tab", "down", "up", "tab", "tab"):
                 machine.qmp.key(key)
+            trace_before = machine.sequence()
+            syslog_before = len(machine.syslog_lines())
+            glyphs_before = display_count(machine, "glyph-commands")
             machine.qmp.key("ret")
-            time.sleep(.5)
+            live_selected = wait_live_font(machine, "user:", trace_before,
+                                           syslog_before, glyphs_before)
             after = display_count(machine, "glyph-commands")
             recent = [line for line in machine.said_with_syslog()[0]
                       if "font" in line.lower() or "exit" in line.lower()][-100:]
@@ -197,6 +219,8 @@ def main():
         if selected != "user:" + token:
             raise RuntimeError("UI did not select imported face: %r != user:%s" %
                                (selected, token))
+        if live_selected != selected:
+            raise RuntimeError("live font differs from saved Config Kit choice")
         volume = str(Path(work) / "inspect-volume.ext4")
         result = subprocess.run([
             "debugfs", "-R", "stat /config/system/fonts/installed/" +
@@ -217,7 +241,11 @@ def main():
             machine.qmp.key("ret")
             for _ in range(4):
                 machine.qmp.key("tab")
+            trace_before = machine.sequence()
+            syslog_before = len(machine.syslog_lines())
+            glyphs_before = display_count(machine, "glyph-commands")
             machine.qmp.key("ret")
+            wait_live_font(machine, "system:", trace_before, syslog_before, glyphs_before)
             for _ in range(3):
                 machine.qmp.key("tab")
             machine.qmp.key("ret")

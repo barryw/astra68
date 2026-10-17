@@ -627,7 +627,10 @@ static AstraResult receive_event(AstraWindow *window, AstraWindowEvent *event,
         message.event.size != sizeof(message.event) ||
         message.event.version != ASTRA_WINDOW_EVENT_VERSION ||
         message.event.type < ASTRA_WINDOW_EVENT_POINTER_MOTION ||
-        message.event.type > ASTRA_WINDOW_EVENT_MENU_RESULT ||
+        message.event.type > ASTRA_WINDOW_EVENT_FONT_CHANGED ||
+        (message.event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED &&
+         (message.event.data.font_changed.generation == 0u ||
+          message.event.data.font_changed.window != window->_private_id)) ||
         (message.event.type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
          (message.event.data.menu_result.request == 0u ||
           !astra_words_zero(message.event.data.menu_result.reserved, 4u) ||

@@ -35,6 +35,7 @@ void display_font_release(DisplayFontFace *face);
 typedef struct DisplayFontContext {
     DisplayFontFace *confirmed;
     DisplayFontFace *pending;
+    uint8_t active;
 } DisplayFontContext;
 
 void display_font_context_confirm(DisplayFontContext *context,

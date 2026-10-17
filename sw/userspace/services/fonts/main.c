@@ -42,7 +42,13 @@ static AstraProcessFilesystem files = ASTRA_PROCESS_FILESYSTEM_INIT;
 static AstraConfig config = ASTRA_CONFIG_INIT;
 static uint32_t installed_count;
 static uint32_t generation = 1u;
-static char selected[ASTRA_FONT_FACE_ID_MAX];
+typedef struct FontSelection {
+    char id[ASTRA_FONT_FACE_ID_MAX];
+    uint32_t area;
+    uint32_t bytes;
+} FontSelection;
+static FontSelection selection;
+static uint32_t font_changed_signal;
 static char inventory_text[FONT_INVENTORY_MAX];
 static char inventory_tokens[FONT_FACE_MAX][ASTRA_FONT_OBJECT_TOKEN_SIZE];
 static uint32_t inventory_count;
@@ -396,7 +402,7 @@ static uint32_t uninstall_face(const char *id)
                                        ASTRA_FONT_OBJECT_TOKEN_LENGTH))
         return ASTRA_STATUS_INVALID;
     if (!inventory_ready || !config_ready) return ASTRA_STATUS_IO;
-    if (strcmp(selected, id) == 0) return ASTRA_STATUS_BUSY;
+    if (strcmp(selection.id, id) == 0) return ASTRA_STATUS_BUSY;
     for (uint32_t at = 0u; at < installed_count; ++at)
         if (strcmp(installed[at].id, id) == 0) { face_at = at; break; }
     for (uint32_t at = 0u; at < inventory_count; ++at)
@@ -649,7 +655,7 @@ static uint32_t catalog_area(uint32_t *area, uint32_t *size)
     return ASTRA_STATUS_OK;
 }
 
-static uint32_t face_area(const char *id, uint32_t *area, uint32_t *size)
+static uint32_t load_face_area(const char *id, uint32_t *area, uint32_t *size)
 {
     char path[ASTRA_VFS_PATH_MAX];
     char token[ASTRA_FONT_OBJECT_TOKEN_SIZE];
@@ -711,6 +717,57 @@ done:
     return status;
 }
 
+static uint32_t face_area(const char *id, uint32_t *area, uint32_t *size)
+{
+    if (selection.area == 0u || strcmp(selection.id, id) != 0)
+        return load_face_area(id, area, size);
+    uint32_t status = astra_rt_handle_duplicate(selection.area,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, area);
+    if (status != ASTRA_SYSCALL_OK) return ASTRA_STATUS_IO;
+    *size = selection.bytes;
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t prepare_selection(const char *id, FontSelection *next)
+{
+    FontEntry *face = find_face(id);
+    if (face == NULL) return ASTRA_STATUS_NOT_FOUND;
+    if (!fonts_face_selectable(&face->face)) return ASTRA_STATUS_UNSUPPORTED;
+    uint32_t status = load_face_area(id, &next->area, &next->bytes);
+    if (status == ASTRA_STATUS_OK) memcpy(next->id, face->id, sizeof(next->id));
+    return status;
+}
+
+static void adopt_selection(FontSelection *next)
+{
+    uint32_t previous = selection.area;
+    selection = *next;
+    *next = (FontSelection){0};
+    if (previous != 0u && astra_close(previous) != ASTRA_SYSCALL_OK)
+        (void)astra_log_failure("fonts previous selection close", ASTRA_STATUS_IO);
+    if (++generation == 0u) generation = 1u;
+}
+
+static uint32_t select_face(const char *id)
+{
+    FontSelection next = {0};
+    uint32_t status;
+    if (!config_ready) return ASTRA_STATUS_IO;
+    if (strcmp(selection.id, id) != 0) {
+        status = prepare_selection(id, &next);
+        if (status != ASTRA_STATUS_OK) return status;
+    }
+    if (astra_config_set_string(&config, "system_font", 0u,
+            next.area != 0u ? next.id : selection.id) != ASTRA_CONFIG_OK) {
+        if (next.area != 0u) (void)astra_close(next.area);
+        return ASTRA_STATUS_IO;
+    }
+    if (next.area != 0u) adopt_selection(&next);
+    /* Re-selecting the current face also retries notification. */
+    return astra_rt_signal(font_changed_signal, 1u, NULL) == ASTRA_SYSCALL_OK ?
+        ASTRA_STATUS_OK : ASTRA_STATUS_IO;
+}
+
 static void serve(uint32_t port, uint32_t role)
 {
     AstraFontServiceRequest request = {0};
@@ -744,17 +801,7 @@ static void serve(uint32_t port, uint32_t role)
                request.header.operation == ASTRA_FONT_SERVICE_UNINSTALL) {
         status = uninstall_face(request.face_id);
     } else if (status == ASTRA_STATUS_OK) {
-        FontEntry *face = find_face(request.face_id);
-        if (face == NULL) status = ASTRA_STATUS_NOT_FOUND;
-        else if (!fonts_face_selectable(&face->face)) status = ASTRA_STATUS_UNSUPPORTED;
-        else if (!config_ready ||
-                 astra_config_set_string(&config, "system_font", 0u,
-                                         face->id) != ASTRA_CONFIG_OK)
-            status = ASTRA_STATUS_IO;
-        else if (strcmp(selected, face->id) != 0) {
-            memcpy(selected, face->id, sizeof(selected));
-            if (++generation == 0u) generation = 1u;
-        }
+        status = select_face(request.face_id);
     }
     astra_message_header_set(&reply.header, sizeof(reply),
                              ASTRA_FONT_SERVICE_PROTOCOL,
@@ -764,7 +811,7 @@ static void serve(uint32_t port, uint32_t role)
     reply.status = status;
     reply.generation = generation;
     reply.area_size = status == ASTRA_STATUS_OK ? area_size : 0u;
-    memcpy(reply.selected_id, selected, sizeof(selected));
+    memcpy(reply.selected_id, selection.id, sizeof(selection.id));
     if (count != 0u &&
         astra_port_send(handles[count - 1u], &reply, sizeof(reply),
                         area == 0u ? NULL : &area, area == 0u ? 0u : 1u) !=
@@ -782,7 +829,7 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *device;
     AstraConfigError error = {0};
     uint32_t receive[3] = {0};
-    uint32_t published[3] = {0};
+    uint32_t published[4] = {0};
     uint32_t status;
 
     if (!astra_startup_validate(startup)) return ASTRA_STATUS_INVALID;
@@ -820,24 +867,36 @@ int astra_main(const AstraStartupInfo *startup)
             &config, "system_font", 0u, wanted, sizeof(wanted), &length);
         if (choice_status == ASTRA_CONFIG_OK) {
             FontEntry *face = find_face(wanted);
-            if (face != NULL && fonts_face_selectable(&face->face))
-                memcpy(selected, wanted, sizeof(selected));
+            if (face != NULL && fonts_face_selectable(&face->face)) {
+                FontSelection next = {0};
+                if (prepare_selection(wanted, &next) == ASTRA_STATUS_OK)
+                    adopt_selection(&next);
+                else (void)astra_log("fonts system_font unreadable");
+            }
             else (void)astra_log("fonts system_font unavailable");
         } else if (choice_status != ASTRA_CONFIG_NOT_FOUND)
             (void)astra_log_failure("fonts system_font", choice_status);
     } else
         (void)astra_log_failure("fonts system settings", config_status);
-    if (selected[0] == '\0') {
-        FontEntry *fallback = find_face("system:astra-workbench");
-        if (fallback != NULL && fonts_face_selectable(&fallback->face))
-            memcpy(selected, fallback->id, sizeof(selected));
+    if (selection.area == 0u) {
+        FontSelection next = {0};
+        status = prepare_selection("system:astra-workbench", &next);
+        if (status != ASTRA_STATUS_OK) return status;
+        adopt_selection(&next);
     }
     for (uint32_t at = 0u; at < 3u; ++at)
         if (astra_rt_port_create(16u, 16u * sizeof(AstraFontServiceRequest),
                                  &receive[at], &published[at]) !=
             ASTRA_SYSCALL_OK) return ASTRA_STATUS_LIMIT;
+    const uint32_t notification_rights =
+        ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT | ASTRA_RIGHT_TRANSFER;
+    status = astra_rt_event_create(0u, notification_rights, &font_changed_signal);
+    if (status == ASTRA_SYSCALL_OK)
+        status = astra_rt_handle_duplicate(font_changed_signal,
+            notification_rights, &published[3]);
+    if (status != ASTRA_SYSCALL_OK) return ASTRA_STATUS_LIMIT;
     status = astra_service_ready(bootstrap->handle, ASTRA_STATUS_OK,
-                                 published, 3u);
+                                 published, 4u);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_SYSCALL_OK) return ASTRA_STATUS_PEER_DEAD;
     for (;;) {

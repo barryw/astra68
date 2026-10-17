@@ -5601,7 +5601,14 @@ AstraResult astra_interface_ui_handle_event(AstraUIContext *context,
     if ((event->flags & ASTRA_WINDOW_EVENT_LOSS) != 0u ||
         event->type == ASTRA_WINDOW_EVENT_STATE_RESET) {
         reset_interaction(context, 1);
-        return ASTRA_OK;
+        if (event->type != ASTRA_WINDOW_EVENT_FONT_CHANGED) return ASTRA_OK;
+    }
+    if (event->type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+        context->_private_damage = (AstraControlFrame){
+            0, 0, context->_private_width, context->_private_height};
+        context->_private_has_damage = 1u;
+        return context->_private_has_layout != 0u ?
+            astra_interface_ui_layout(context, &context->_private_layout) : ASTRA_OK;
     }
     if (event->type == ASTRA_WINDOW_EVENT_KEY &&
         (event->flags & (ASTRA_WINDOW_EVENT_DOWN | ASTRA_WINDOW_EVENT_REPEAT |

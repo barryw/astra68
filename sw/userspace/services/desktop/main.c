@@ -719,7 +719,7 @@ int astra_main(const AstraStartupInfo *startup)
         manager == NULL || metadata == NULL || administrator == NULL || inspector == NULL ||
         (manager->rights & ASTRA_RIGHT_SIGNAL) == 0u)
         return ASTRA_STATUS_BAD_HANDLE;
-    if (astra_fonts_use_system(gui->handle) != ASTRA_OK)
+    if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
         return ASTRA_STATUS_IO;
     busy_dialog = astra_runtime_callocate(1u, sizeof(*busy_dialog));
     if (busy_dialog == NULL) return ASTRA_STATUS_LIMIT;
@@ -888,7 +888,7 @@ int astra_main(const AstraStartupInfo *startup)
             }
         }
         if (waited == ASTRA_SYSCALL_OK && selected == busy_index) {
-            result = usage_event(busy_dialog);
+            result = usage_event(busy_dialog, gui->handle);
             if (result != ASTRA_OK) (void)astra_log_failure("desktop busy dialog", (uint32_t)(-result));
             continue;
         }
@@ -896,6 +896,17 @@ int astra_main(const AstraStartupInfo *startup)
         if (result == ASTRA_ERROR_WOULD_BLOCK) continue;
 
         if (result != ASTRA_OK) return (int)(-result);
+        if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+            AstraUIAction action = ASTRA_UI_ACTION_INIT;
+            AstraResult refreshed = astra_fonts_use_system(gui->handle, &event);
+            if (refreshed != ASTRA_OK)
+                (void)astra_log_failure("desktop font refresh", (uint32_t)refreshed);
+            if (astra_interface_ui_handle_event(&icon_ui, &event, &action) != ASTRA_OK ||
+                astra_interface_ui_handle_event(&bar_ui, &event, &action) != ASTRA_OK)
+                return DESKTOP_FAIL_INTERFACE;
+            if (paint(&content, &apps) != ASTRA_OK) return DESKTOP_FAIL_GRAPHICS;
+            continue;
+        }
         {
             AstraUIAction action = ASTRA_UI_ACTION_INIT;
             int handled = 0;

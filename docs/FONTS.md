@@ -627,6 +627,70 @@ Beast. GUI-header dependencies now also invalidate System window/graphics,
 Supervisor loader-recovery and Display host tests; forced-header dry runs and
 their host/sanitizer checks verify that boundary.
 
+The live-update implementation advances Font Kit to ABI 4.0, GUI to protocol
+24, window events to version 9 and the Fonts service to protocol 6. The old
+one-argument `astra_fonts_use_system` and Font Kit 3 artifacts are superseded.
+Initial setup passes a null event; refresh passes the delivered
+`FONT_CHANGED` event. Its explicit window ID is carried in the context query,
+validated against the GUI session and acknowledged independently. A shared
+process context cannot acknowledge a sibling window whose controls have not
+handled the notice. Confirmed/pending face ownership still follows the same
+bounded adoption rule.
+
+Fonts prepares a validated read-only selected snapshot before the Config Kit
+write. Failed preparation or persistence retains the old choice. The service
+keeps the selected snapshot and serves read-only duplicates without reopening
+its file. Existing areas survive retirement of that selection. A native
+auto-reset `FONTS_CHANGED` event is a wake hint; Display queries the catalog
+for authoritative state. Refresh failures retain the previous rendering
+context and retry. Window notices retry every 250 ms until the actual adopted
+ID is reported for that window, including after queue backpressure or failed
+client mapping. Startup recovery likewise retries the selected context.
+
+Supervisor now grants a private GUI session to every GUI client. Applications
+retain their named launch panel; services use unnamed sessions. Shared GUI
+service contexts must not let Desktop and Terminal overwrite each other's
+adoption state. Session-creation failure is reported rather than falling back
+to the shared endpoint. Supervisor retains those sessions for process lifetime.
+
+Clients fetch the context before passing a font-change event to Interface Kit.
+The common retained-control handler reuses its saved layout, marks the entire
+view damaged, and preserves focus/scroll state. Common modal alerts initialize
+and refresh the same way. Desktop's existing safe-removal canvas reuses one
+row-measurement path for initial layout and font changes, updating wrapping
+and scroll extent without rereading privileged holder data. Monospaced
+Terminal content remains independent. Read-only Haiku references:
+`src/servers/app/DesktopSettings.cpp` broadcasts system-font changes,
+`src/kits/interface/Window.cpp` dispatches `B_FONTS_UPDATED`, and
+`src/kits/interface/View.cpp:_FontsUpdated` propagates to retained children.
+Astra adapts this pattern to its versioned capabilities and common controls.
+
+Selection failure/retirement host and sanitizer tests, window-event validation,
+per-window acknowledgement/authentication and backpressure retry tests,
+retained-control focus/scroll and modal-alert tests, MC68040 builds and Display
+analyzer pass on Beast. Coherent build and strengthened native GUI live-update
+qualification are in progress; no new font software is deployed to DE25 yet.
+
+The first live GUI qualification exposed an area-ownership error: Astra's
+identical area maps are idempotent, not independently reference counted.
+Closing a previous duplicate mapping therefore invalidated the newly adopted
+one. Client refresh now reuses an unchanged immutable ID without remapping;
+direct snapshot adoption preserves a common mapping while closing the old
+handle. Display's common-control metrics borrow its retained registry face's
+validated view. Its active default owns that view until replacement, and
+retained documents keep older registry mappings alive independently. No extra
+AFNT copy or kernel mapping mechanism is introduced. The borrowed-context
+API rejects replacing an owned snapshot, keeping ownership explicit.
+Alias/borrowed retirement checks extend the existing real-AFNT host tests.
+The corrected coherent build and native GUI gate pass: Desktop and Fonts
+adopt the same imported ID live, Config Kit saves that exact ID, restart
+restores it, and switching back to the built-in face permits uninstall.
+Beast log: `/var/tmp/astra-font-live-map-ui-20261017.log`. Complete physical
+qualification remains open.
+The final full userspace test suite and refreshed NDK distribution with
+installed example links and HTML/PDF manuals also pass on Beast in
+`/var/tmp/astra-font-live-map-sdk-final-20261017.log`.
+
 The shared renderer also makes AFNT a dependency of HPS display helpers.
 `fpga/arty/linux/Makefile` now includes the existing AFNT, CRC32, and UTF-8
 sources for every renderer consumer. Host and AArch64 display self-tests and
