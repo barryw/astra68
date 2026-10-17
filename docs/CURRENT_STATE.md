@@ -157,8 +157,9 @@ choice. A disposable QEMU image with current bundles passes Fonts autostart and
 Astraea glyph submissions; focused service/client and boundary checks pass on
 Beast. A fresh disposable QEMU image now passes a full GUI path: Fonts imports a
 TTF from DH0 through its file browser, publishes a content-addressed AFNT
-object and Config Kit inventory, opens family details, and saves the system
-choice. A stray Flex break flag had placed the List outside the client area;
+object and Config Kit inventory, opens family details, then chooses that
+imported face as the system font. The saved `user:<token>` matches the AFNT
+object token. A stray Flex break flag had placed the List outside the client area;
 removing it restored pointer and keyboard interaction. Native variable/Amiga
 import, live render-context refresh, removable-volume browsing, and physical
 release gates remain open.
@@ -198,7 +199,7 @@ fonts into its cloned image before boot; an older image lacked both and caused
 a false required-service failure. The native AFNT import probe also passes
 selection, restart persistence, and damaged-inventory fallback on the current
 ROM. Live selection updates, designed style resolution, client-side text
-metrics, variable/Amiga runtime import, interactive Fonts UI import, and DE25 visual gates
+metrics, variable/Amiga runtime import, and DE25 visual gates
 remain open. This font change is not in the selected production release.
 Selecting a different system face now advances the catalog generation;
 selecting the current face leaves it unchanged. The native import/restart

@@ -69,9 +69,11 @@ RGB565 rendering APIs must be retired from production UI use before
 system-wide installed-font selection can be called complete.
 
 Current implementation provides scoped Config Kit grants and document storage.
-An isolated font-service draft can catalog AFNT and persist a validated face
-choice; standard startup does not publish it because Fonts UI and runtime font
-selection remain unimplemented. Hard-coded resident fonts remain active.
+The resident font service catalogs AFNT and persists validated choice. The
+native Fonts UI imports an outline font and saves that imported face as system
+choice in a disposable QEMU gate. Display reads this choice at startup, while
+live updates and client-side metrics remain open. The selected DE25 release
+does not yet include this font work.
 Config Kit currently assumes one writer per settings document; multiple app
 instances need an owner-mediated write path before concurrent editing is safe.
 

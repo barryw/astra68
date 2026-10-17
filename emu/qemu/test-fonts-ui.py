@@ -35,7 +35,7 @@ def state_on_disk(image, work):
         raise RuntimeError("cannot inspect Fonts settings: " + result.stdout)
     match = re.search(r"^system_font\s*=\s*(\S+)\s*$", result.stdout,
                       re.MULTILINE)
-    choice = None if match is None else match.group(1)
+    choice = None if match is None else match.group(1).strip('"')
     inventory = re.search(r"^installed\s*=\s*(\S+)\s*$", result.stdout,
                           re.MULTILINE)
     return choice, None if inventory is None else inventory.group(1).strip('"')
@@ -88,6 +88,14 @@ def main():
             time.sleep(.3)
             if display_count(machine, "glyph-commands") <= before:
                 raise RuntimeError("family double-click rendered no details")
+            # Return to families, then activate the newly imported last family.
+            for _ in range(3):
+                machine.qmp.key("tab")
+            machine.qmp.key("ret")
+            for _ in range(2):
+                machine.qmp.key("tab")
+            machine.qmp.key("end")
+            machine.qmp.key("ret")
             # Rebuilt detail view starts with no focus: Scroll, List, Back, Use.
             for _ in range(4):
                 machine.qmp.key("tab")
@@ -109,6 +117,9 @@ def main():
         token = inventory.split(",")[-1]
         if re.fullmatch(r"[a-z2-7]{52}", token) is None:
             raise RuntimeError("invalid AFNT inventory token: " + token)
+        if selected != "user:" + token:
+            raise RuntimeError("UI did not select imported face: %r != user:%s" %
+                               (selected, token))
         volume = str(Path(work) / "inspect-volume.ext4")
         result = subprocess.run([
             "debugfs", "-R", "stat /config/system/fonts/installed/" +
@@ -116,7 +127,7 @@ def main():
             stderr=subprocess.STDOUT, text=True)
         if result.returncode != 0 or "Inode:" not in result.stdout:
             raise RuntimeError("UI import AFNT object missing: " + result.stdout)
-    print("ASTRA FONTS UI PASS TTF import, AFNT object, family detail, system choice")
+    print("ASTRA FONTS UI PASS TTF import, AFNT object, family detail, imported system choice")
     return 0
 
 

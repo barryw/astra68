@@ -541,7 +541,8 @@ reports a failed commit, objects remain because its durable outcome may be
 ambiguous. The native UI uses its existing file
 browser and Import action. A fresh disposable QEMU gate now drives the desktop
 icon, imports a TTF through that browser, checks the AFNT object and Config Kit
-inventory, opens family details, and saves system choice. The gate found a Flex
+inventory, opens family details, and saves that imported face as system choice.
+The saved `user:<token>` matches the published AFNT object. The gate found a Flex
 break flag that moved the List outside the client area; the flag was removed.
 A complete DE25 release has not been qualified. Display loads the saved
 system-face choice at startup; live change notification and render-context
