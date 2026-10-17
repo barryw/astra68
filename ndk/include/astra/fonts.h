@@ -45,7 +45,9 @@ typedef struct AstraInstalledFont {
 
 enum {
     ASTRA_INSTALLED_FONT_SYSTEM = 1u << 0,
-    ASTRA_INSTALLED_FONT_SELECTABLE = 1u << 1
+    ASTRA_INSTALLED_FONT_SELECTABLE = 1u << 1,
+    /** Every printable ASCII scalar has an exact character-map entry. */
+    ASTRA_INSTALLED_FONT_BASIC_TEXT = 1u << 2
 };
 
 /** One installed bitmap size. */

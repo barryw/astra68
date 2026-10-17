@@ -490,6 +490,24 @@ an installed face by catalog ID and exact strike size using
 Fonts capability and submits glyph masks to Astraea. The disposable Amiga
 probe draws through ordinary GUI capability without raw-font access. Physical
 release gate remains open.
+
+Fonts marks each installed style as able or unable to serve as the system
+font. Catalog v3 derives `BASIC_TEXT` from exact CMAP entries for printable
+ASCII (U+0020 through U+007E); the service also requires every fixed UI-role
+size before advertising `SELECTABLE` or accepting a saved choice. A symbol
+font remains installable for applications but cannot replace system text.
+The shared AFNT exact-coverage query reuses its existing CMAP lookup and never
+counts U+FFFD fallback as coverage. Haiku reference:
+`~/Git/haiku/src/servers/app/ServerFont.cpp:GetHasGlyphs` distinguishes exact
+coverage from optional fallback; Astra applies that distinction to its passive
+AFNT data. Changing style/size selection updates existing Interface Kit
+controls in place, preserving keyboard focus and scroll position, following
+the retained-control pattern in Haiku's `FontSelectionView.cpp`.
+Coverage/policy host and sanitizer tests and the full userspace suite pass on
+Beast. The disposable native GUI gate also passes TTF import, family details,
+keyboard style selection, saved system choice, restart, and uninstall with
+catalog v3. These checks do not replace the open physical release gate.
+
 This covers the common current macOS outline containers listed by
 [Apple Font Book](https://support.apple.com/en-gb/guide/font-book/fntbk1000/mac)
 and Amiga bitmap fonts. A collection is one input but contributes all its

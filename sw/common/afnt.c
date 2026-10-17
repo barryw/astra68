@@ -446,6 +446,18 @@ static int cmap_glyph(const AstraAfntView *view, uint32_t count,
     return 1;
 }
 
+int astra_afnt_has_scalar(const AstraAfntView *view, uint32_t scalar)
+{
+    uint32_t count, id;
+
+    if (view == NULL || view->cmap.bytes == NULL || view->cmap.length < 4u ||
+        !astra_unicode_scalar_valid(scalar))
+        return 0;
+    count = be32(view->cmap.bytes);
+    return count != 0u && count <= (view->cmap.length - 4u) / 8u &&
+           cmap_glyph(view, count, scalar, &id);
+}
+
 int astra_afnt_glyph_info(const AstraAfntView *view, uint32_t strike_index,
                           uint32_t scalar, AstraAfntGlyphInfo *info)
 {

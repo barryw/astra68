@@ -63,6 +63,8 @@ int astra_afnt_name_string(const AstraAfntView *view, const char *key,
 /* Read one validated strike without exposing disk record layout to clients. */
 int astra_afnt_strike_info(const AstraAfntView *view, uint32_t index,
                            AstraAfntStrikeInfo *info);
+/* Exact CMAP coverage; never treats the replacement glyph as a match. */
+int astra_afnt_has_scalar(const AstraAfntView *view, uint32_t scalar);
 /* Resolve a Unicode scalar in one validated strike, using U+FFFD if absent. */
 int astra_afnt_glyph_info(const AstraAfntView *view, uint32_t strike_index,
                           uint32_t scalar, AstraAfntGlyphInfo *info);

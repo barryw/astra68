@@ -101,9 +101,16 @@ Native named-face application drawing through display's validated AFNT resolver
 and Astraea glyph engine passes the disposable Amiga QEMU gate without granting
 raw-font access to the application. Physical release gates remain open.
 Fonts labels each style as able or unable to serve as a system font and disables
-system selection for ineligible styles, using the service's catalog decision;
-fixed-size Amiga faces without all
-three UI sizes cannot become system fonts. Custom variable coordinates remain
+system selection for ineligible styles, using the service's catalog decision.
+Catalog v3 requires exact printable-ASCII coverage as well as all three UI
+sizes; replacement-glyph fallback cannot qualify symbol fonts for system use.
+Style selection preserves List focus and scroll via existing control setters.
+Beast host and sanitizer coverage/policy tests, full userspace `all test`,
+and NDK `dist-check` pass. The normal root-observed disposable QEMU GUI gate passes native TTF
+import, family details, keyboard selection, saved system choice, restart,
+and uninstall with catalog v3; QEMU remains unprivileged.
+Fixed-size Amiga faces without all three UI sizes cannot become system fonts.
+Custom variable coordinates remain
 open. Shared C AFNT 0.2 validation and packing round-trip shipped fonts,
 Iosevka, Source Sans, and Amiga spike AFNT on Beast. A reusable HPS C outline
 converter turns static Iosevka TTF and Source Sans OTF into validated A8 AFNT;

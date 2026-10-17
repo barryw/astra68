@@ -13,7 +13,8 @@ int fonts_face_selectable(const AstraFontCatalogFace *face)
         ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT,
         ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT
     };
-    if (face == NULL || face->strikes == NULL) return 0;
+    if (face == NULL || face->strikes == NULL ||
+        (face->flags & ASTRA_FONT_CATALOG_BASIC_TEXT) == 0u) return 0;
     for (uint32_t role = 0u; role < 3u; ++role) {
         uint32_t found = 0u;
         for (uint32_t at = 0u; at < face->strike_count; ++at)

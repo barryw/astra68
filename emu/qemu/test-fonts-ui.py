@@ -3,6 +3,8 @@
 
 import argparse
 import importlib.util
+import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -17,6 +19,10 @@ spec = importlib.util.spec_from_file_location("font_ui_terminal",
                                               HERE / "test-terminal.py")
 terminal = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(terminal)
+font_spec = importlib.util.spec_from_file_location(
+    "font_fixture_format", HERE.parents[1] / "tools/fonts/afnt.py")
+font_format = importlib.util.module_from_spec(font_spec)
+font_spec.loader.exec_module(font_format)
 
 
 def display_count(machine, name):
@@ -54,6 +60,49 @@ def state_on_disk(image, work):
     return choice, None if inventory is None else inventory.group(1).strip('"')
 
 
+def native_directory_names(machine, path):
+    before = machine.sequence()
+    machine.qmp.type_line("ls -1fiF %s; print FONT-BROWSER-LIST-DONE" % path)
+    lines, _ = machine.wait_for_text("FONT-BROWSER-LIST-DONE", 30, before,
+                                      exact=True)
+    if lines is None or not machine.wait_for_ready(30, before):
+        raise RuntimeError("native root listing did not complete")
+    ordered = []
+    for line in lines:
+        match = re.fullmatch(r"\s*[0-9]+\s+(.+)", line)
+        if match is None or match[1].endswith(("@", "|", "=")):
+            continue
+        candidate = match[1].rstrip("/*")
+        if candidate not in (".", ".."):
+            ordered.append(candidate)
+    return ordered
+
+
+def native_fixture_rows(machine, name):
+    if not terminal.open_terminal_window(machine, 30):
+        raise RuntimeError("cannot query native font fixture directory")
+    ordered = native_directory_names(machine, "/dh0")
+    if ordered.count(name) != 1:
+        raise RuntimeError("native root listing lacks font: %r; logs=%r" %
+                           (ordered, machine.said()[0][-40:]))
+    shipped = [entry for entry in native_directory_names(machine, "/dh0/fonts")
+               if entry.endswith(".afnt")]
+    if shipped.count("astra-workbench.afnt") != 1:
+        raise RuntimeError("shipped system face absent: %r" % shipped)
+    families = []
+    default_family = None
+    for entry in shipped:
+        path = HERE.parents[1] / "sw/userspace/graphics/fonts" / entry
+        family = json.loads(font_format.parse_afnt(path.read_bytes())[b"NAME"])["family"]
+        if family not in families:
+            families.append(family)
+        if entry == "astra-workbench.afnt":
+            default_family = family
+    machine.qmp.type_line("exit")
+    time.sleep(.5)
+    return ordered.index(name), families.index(default_family)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("qemu")
@@ -61,6 +110,8 @@ def main():
     parser.add_argument("image")
     parser.add_argument("font", help="TTF to import through Fonts from DH0")
     args = parser.parse_args()
+    if os.geteuid() != 0:
+        parser.error("run as root observer with ASTRA_TEST_QEMU_UID/GID set to a non-root account")
     with tempfile.TemporaryDirectory(prefix="astra-fonts-ui-") as work:
         image = str(Path(work) / "system.img")
         shutil.copyfile(args.image, image)
@@ -72,16 +123,17 @@ def main():
         try:
             if not machine.wait_for_serial(terminal.BOOT_MARKER, 120):
                 raise RuntimeError("Astra did not reach stage 8")
+            row, system_family = native_fixture_rows(machine, "zz-astra-font.ttf")
+            print("Fonts native source row=%u" % row, flush=True)
             open_fonts(machine)
-            # Fixture root enumerates the injected font at row 2.
             for _ in range(3):
                 machine.qmp.key("tab")
             machine.qmp.key("ret")
             for _ in range(2):
                 machine.qmp.key("tab")
             machine.qmp.key("home")
-            machine.qmp.key("down")
-            machine.qmp.key("down")
+            for _ in range(row):
+                machine.qmp.key("down")
             machine.qmp.key("ret")
             time.sleep(8)
             before = display_count(machine, "glyph-commands")
@@ -98,9 +150,9 @@ def main():
                 machine.qmp.key("tab")
             machine.qmp.key("end")
             machine.qmp.key("ret")
-            # Rebuilt detail view starts with no focus: Scroll, List, Back, Use.
-            for _ in range(4):
-                machine.qmp.key("tab")
+            # Selection must preserve List focus before tabbing to Back/Use.
+            for key in ("tab", "tab", "down", "up", "tab", "tab"):
+                machine.qmp.key(key)
             machine.qmp.key("ret")
             time.sleep(.5)
             after = display_count(machine, "glyph-commands")
@@ -135,8 +187,11 @@ def main():
                 raise RuntimeError("Astra did not restart after font selection")
             open_fonts(machine)
             # Choose shipped face before removing current imported system face.
-            for key in ("tab", "tab", "home", "ret"):
+            for key in ("tab", "tab", "home"):
                 machine.qmp.key(key)
+            for _ in range(system_family):
+                machine.qmp.key("down")
+            machine.qmp.key("ret")
             for _ in range(4):
                 machine.qmp.key("tab")
             machine.qmp.key("ret")

@@ -1,4 +1,6 @@
 #include <astra/font_catalog.h>
+#include <astra/afnt.h>
+#include <astra/endian.h>
 
 #include <assert.h>
 #include <stdint.h>
@@ -74,7 +76,7 @@ int main(void)
     bytes[saved] = 0xffu;
     assert(!astra_font_catalog_validate(bytes, length));
     bytes[saved] = 'A';
-    record->flags = 4u;
+    record->flags = 8u;
     assert(!astra_font_catalog_validate(bytes, length));
     free(bytes);
 
@@ -97,7 +99,8 @@ int main(void)
             family, sizeof(family), style, sizeof(style), strikes, 64u,
             &imported));
         assert(imported.family_length != 0u &&
-               imported.style_length != 0u && imported.strike_count != 0u);
+               imported.style_length != 0u && imported.strike_count != 0u &&
+               (imported.flags & ASTRA_FONT_CATALOG_BASIC_TEXT) != 0u);
         uint32_t packed_size = 0u;
         assert(astra_font_catalog_pack(&imported, 1u, 1u, NULL, 0u,
                                        &packed_size));
@@ -106,6 +109,41 @@ int main(void)
             &imported, 1u, 1u, packed, packed_size, &packed_size));
         assert(astra_font_catalog_validate(packed, packed_size));
         free(packed);
+        if (at == 0u) {
+            AstraAfntView view;
+            assert(astra_afnt_validate(afnt, length, &view));
+            assert(astra_afnt_has_scalar(&view, 'A') &&
+                   !astra_afnt_has_scalar(&view, 0x10ffffu));
+            uint8_t *map = malloc(view.cmap.length);
+            assert(map != NULL);
+            memcpy(map, view.cmap.bytes, view.cmap.length);
+            uint32_t count = astra_load_be32(map), index = 0u;
+            while (index < count && astra_load_be32(map + 4u + index * 8u) != 'A')
+                ++index;
+            assert(index < count);
+            memmove(map + 4u + index * 8u, map + 4u + (index + 1u) * 8u,
+                    (count - index - 1u) * 8u);
+            astra_store_be32(map, count - 1u);
+            AstraAfntChunk chunks[] = {view.name,
+                {map, view.cmap.length - 8u}, view.strikes, view.glyphs,
+                view.bitmap};
+            uint32_t changed_length = 0u;
+            assert(astra_afnt_pack(chunks, NULL, 0u, &changed_length));
+            uint8_t *changed = malloc(changed_length);
+            assert(changed != NULL && astra_afnt_pack(chunks, changed,
+                changed_length, &changed_length));
+            assert(astra_afnt_validate(changed, changed_length, &view));
+            AstraAfntGlyphInfo fallback;
+            assert(!astra_afnt_has_scalar(&view, 'A') &&
+                   astra_afnt_glyph_info(&view, 0u, 'A', &fallback));
+            assert(astra_font_catalog_face_from_afnt(changed, changed_length,
+                "user:missing-ascii", 18u, 0u,
+                family, sizeof(family), style, sizeof(style), strikes, 64u,
+                &imported));
+            assert((imported.flags & ASTRA_FONT_CATALOG_BASIC_TEXT) == 0u);
+            free(changed);
+            free(map);
+        }
         assert(!astra_font_catalog_face_from_afnt(
             afnt, length - 1u, "system:test", 11u,
             ASTRA_FONT_CATALOG_SYSTEM, family, sizeof(family), style,

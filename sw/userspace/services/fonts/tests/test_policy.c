@@ -15,9 +15,13 @@ int main(void)
     };
     AstraFontCatalogFace face = {
         .strikes = strikes,
-        .strike_count = 3u
+        .strike_count = 3u,
+        .flags = ASTRA_FONT_CATALOG_BASIC_TEXT
     };
     assert(fonts_face_selectable(&face));
+    face.flags = 0u;
+    assert(!fonts_face_selectable(&face));
+    face.flags = ASTRA_FONT_CATALOG_BASIC_TEXT;
     strikes[1].bitmap_format = 4u;
     assert(!fonts_face_selectable(&face));
     strikes[1].bitmap_format = 5u;

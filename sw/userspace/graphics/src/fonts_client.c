@@ -14,6 +14,8 @@ _Static_assert(ASTRA_INSTALLED_FONT_SYSTEM == ASTRA_FONT_CATALOG_SYSTEM,
                "font system flag drift");
 _Static_assert(ASTRA_INSTALLED_FONT_SELECTABLE == ASTRA_FONT_CATALOG_SELECTABLE,
                "font selectability flag drift");
+_Static_assert(ASTRA_INSTALLED_FONT_BASIC_TEXT == ASTRA_FONT_CATALOG_BASIC_TEXT,
+               "font text coverage flag drift");
 _Static_assert(ASTRA_FONT_IMPORT_MAX == ASTRA_FONT_SOURCE_MAX,
                "font import size drift");
 _Static_assert(ASTRA_FONT_IMPORT_NAME_MAX == ASTRA_FONT_SOURCE_NAME_MAX,

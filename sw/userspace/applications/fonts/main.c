@@ -51,6 +51,8 @@ ASTRA_PROGRAM("fonts", 0, 1, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
 static AstraFontsCatalog catalog = ASTRA_FONTS_CATALOG_INIT;
+static const char system_font_requirements[] =
+    "System fonts need all UI sizes and basic text characters";
 static AstraChoiceItem families[FONTS_FACE_MAX];
 static uint32_t family_count;
 static AstraChoiceItem *details;
@@ -351,7 +353,7 @@ static uint32_t build_controls(void)
                   "Double-click a family to see installed styles and sizes") :
                  system_ready ?
                  "Select a style, then use it for system text" :
-                 "System text requires 11, 13, and 16 px strikes";
+                 system_font_requirements;
     label.text_length = (uint32_t)strlen(label.text);
     label.text_role = ASTRA_TEXT_CLIENT_SECONDARY;
     if (astra_interface_label_init(CONTROL(FONTS_HINT), &label) != ASTRA_OK)
@@ -621,8 +623,22 @@ static uint32_t action(const AstraUIAction *event)
         event->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
         active_family != UINT32_MAX && event->value >= 0 &&
         (uint64_t)event->value < detail_count) {
+        AstraInstalledFont face;
+        const char *hint;
+
         detail_selection = (uint32_t)event->value;
-        if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+        if (astra_fonts_catalog_face(&catalog,
+            detail_faces[detail_selection], &face) != ASTRA_OK)
+            return FONTS_FAIL_CATALOG;
+        uint32_t ready = (face.flags & ASTRA_INSTALLED_FONT_SELECTABLE) != 0u;
+        hint = ready ? "Select a style, then use it for system text" :
+                       system_font_requirements;
+        message = NULL;
+        if (astra_interface_ui_set_state(&ui, CONTROL(FONTS_USE),
+                ready ? 0u : ASTRA_CONTROL_DISABLED) != ASTRA_OK ||
+            astra_interface_control_set_text(&ui, CONTROL(FONTS_HINT), hint,
+                (uint32_t)strlen(hint)) != ASTRA_OK)
+            return FONTS_FAIL_CONTROL;
         return present();
     }
     if (event->control_id == FONTS_LIST &&
@@ -666,7 +682,7 @@ static uint32_t action(const AstraUIAction *event)
         result = astra_fonts_select(fonts_admin, face.id, face.id_length);
         message = result == ASTRA_OK ? "System font choice saved" :
                   result == ASTRA_ERROR_UNSUPPORTED ?
-                  "Font lacks required system text sizes" :
+                  "Font lacks required system sizes or text characters" :
                   "Could not save system font choice";
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
         return present();
