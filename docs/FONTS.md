@@ -581,6 +581,32 @@ links. The fresh coherent-ROM native GUI gate passes import, family details,
 saved system choice, restart and uninstall. Physical release qualification,
 live refresh and designed family-style resolution remain open.
 
+Display now retains immutable named faces through its private `font_face`
+module. Its registry has weak membership: the active default, delivered GUI
+session contexts, retained window documents, attached graphics lists and popup
+menus own references. Looking up an already retained ID does not reopen its
+catalog source. A successful document replacement releases unused faces;
+rejected replay drops only references acquired by that attempt. Closing a
+window, graphics list, menu or session releases its references. A failed GUI
+context reply leaves the previous session context intact. The last owner
+closes the existing read-only area and removes the registry entry. No new
+kernel lifetime mechanism or public font-object API was added.
+
+Read-only Haiku references: `src/servers/app/font/FontManager.cpp:_RemoveFont`
+delists a style separately from its lifetime, and `FontStyle.cpp:~FontStyle`
+releases the face data at final destruction. Astra adapts that separation to
+its shared AFNT areas. Hardware batches copy glyph masks during lowering;
+their existing storage lifetime protects submitted bytes, so the FPGA never
+retains an AFNT pointer. This ownership checkpoint prepares live switching;
+selection notifications, client reflow and designed family-style resolution
+remain open.
+Before enabling live changes, context replacement must distinguish delivery
+from client adoption: mapping or validation can fail after a reply arrives.
+The current fixed startup default cannot change under that failure; live
+notification work must preserve the client's previous context until adoption
+is known. Host, sanitizer, MC68040/analyzer and native GUI
+import/detail/choice/restart/uninstall checks pass for this ownership checkpoint.
+
 The shared renderer also makes AFNT a dependency of HPS display helpers.
 `fpga/arty/linux/Makefile` now includes the existing AFNT, CRC32, and UTF-8
 sources for every renderer consumer. Host and AArch64 display self-tests and

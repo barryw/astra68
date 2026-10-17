@@ -20,17 +20,24 @@
 static uint32_t menu_allocations;
 static AstraGuiFontContext delivered_font_context;
 static uint32_t delivered_font_handles;
+static uint32_t font_open_calls;
+static uint32_t font_snapshot_closes;
+static uint32_t font_reply_status;
+static uint32_t font_duplicate_status;
+static uint32_t font_duplicate_closes;
 
 AstraResult astra_fonts_face_open(AstraHandle render, const char *id,
                                    uint32_t id_length, AstraArea *face,
                                    uint32_t *length)
 {
     (void)render; (void)id; (void)id_length; (void)face; (void)length;
+    ++font_open_calls;
     return ASTRA_ERROR_NOT_PRESENT;
 }
 
 AstraResult astra_area_close(AstraArea *area)
 {
+    ++font_snapshot_closes;
     area->handle = ASTRA_INVALID_HANDLE;
     return ASTRA_OK;
 }
@@ -100,6 +107,7 @@ uint32_t astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
 {
     if (handle == 0xa00u) {
         assert(rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER));
+        if (font_duplicate_status != ASTRA_SYSCALL_OK) return font_duplicate_status;
         *duplicate = 0xa01u;
         return ASTRA_SYSCALL_OK;
     }
@@ -140,6 +148,7 @@ uint32_t astra_close(uint32_t handle)
 {
     uint32_t index = handle - 0x800u;
 
+    if (handle == 0xa01u) { ++font_duplicate_closes; return ASTRA_SYSCALL_OK; }
     if (handle >= TEST_RELEASE_EVENT && handle < 0x800u) {
         ++release_closes;
         return ASTRA_SYSCALL_OK;
@@ -182,7 +191,7 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
         assert(handle_count == 0u || (handle_count == 1u && handles[0] == 0xa01u));
         memcpy(&delivered_font_context, message, size);
         delivered_font_handles = handle_count;
-        return ASTRA_SYSCALL_OK;
+        return font_reply_status;
     }
     (void)handles;
     assert(handle == 0x500u && size == sizeof(delivered) &&
@@ -1405,25 +1414,106 @@ static void test_window_graphics(void)
             assert(fclose(file) == 0);
             assert(astra_render_font_init(&font, bytes, (uint32_t)length));
             {
-                AstraArea face = {.handle = 0xa00u};
+                AstraArea face = {.handle = 0xa00u, .address = bytes,
+                    .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
                 AstraGuiSessionRequest request = {0};
-                DisplayState fonts = {.ui_font = &font, .ui_font_area = &face,
-                    .ui_font_bytes = (uint32_t)length, .ui_font_id = "user:fixture"};
+                DisplayFontRegistry registry = {0};
+                DisplayFontFace *owned = NULL, *second_face = NULL;
+                DisplayFontSet retained = {.registry = &registry};
+                uint32_t allocations = menu_allocations;
+                uint32_t closes = font_snapshot_closes;
+                uint32_t opens = font_open_calls;
+                /* Invalid and failed admission leave the caller's area owned. */
+                assert(display_font_adopt(&registry, &face, (uint32_t)length,
+                    "bad\0id", 6u, &owned) == ASTRA_ERROR_INVALID_ARGUMENT);
+                fail_menu_allocate = 1u;
+                assert(display_font_adopt(&registry, &face, (uint32_t)length,
+                    "user:fixture", 12u, &owned) == ASTRA_ERROR_OUT_OF_MEMORY);
+                assert(face.handle == 0xa00u && owned == NULL && registry.faces == NULL);
+                assert(display_font_adopt(&registry, &face, (uint32_t)length,
+                    "user:fixture", 12u, &owned) == ASTRA_OK);
+                assert(face.handle == ASTRA_INVALID_HANDLE && owned->references == 1u);
+                DisplayState fonts = {.ui_font = owned, .fonts = &registry};
                 astra_message_header_set(&request.header, sizeof(request),
                     ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT, 9u);
-                font_context_reply(&fonts, &request, 0x501u);
+                font_context_reply(&fonts, 0u, &request, 0x501u);
                 assert(delivered_font_context.status == ASTRA_STATUS_OK &&
                     delivered_font_context.area_size == (uint32_t)length &&
                     delivered_font_context.header.transaction_id == 9u &&
                     delivered_font_handles == 1u &&
                     strcmp(delivered_font_context.face_id, "user:fixture") == 0);
-                assert(display_named_font(&fonts, "user:fixture", 12u) == &font);
+                assert(owned->references == 2u);
+                font_reply_status = ASTRA_SYSCALL_WOULD_BLOCK;
+                uint32_t duplicate_closes = font_duplicate_closes;
+                font_context_reply(&fonts, 0u, &request, 0x501u);
+                assert(owned->references == 2u &&
+                       font_duplicate_closes == duplicate_closes + 1u);
+                font_reply_status = ASTRA_SYSCALL_OK;
+                font_duplicate_status = ASTRA_SYSCALL_OUT_OF_MEMORY;
+                font_context_reply(&fonts, 0u, &request, 0x501u);
+                assert(delivered_font_context.status != ASTRA_STATUS_OK &&
+                       delivered_font_handles == 0u && owned->references == 2u);
+                font_duplicate_status = ASTRA_SYSCALL_OK;
+                font_context_reply(&fonts, 99u, &request, 0x501u);
+                assert(delivered_font_context.status == ASTRA_STATUS_BAD_HANDLE &&
+                       delivered_font_handles == 0u && owned->references == 2u);
+                fonts.session_count = 1u;
+                fonts.sessions[0].id = 7u;
+                assert(astra_rt_area_create(4096u,
+                    ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP,
+                    &fonts.sessions[0].receive) == ASTRA_SYSCALL_OK);
+                font_context_reply(&fonts, 7u, &request, 0x501u);
+                assert(owned->references == 3u && fonts.sessions[0].font == owned);
+                close_session(&fonts, 0u);
+                assert(fonts.session_count == 0u && owned->references == 2u &&
+                       fonts.sessions[0].font == NULL);
+                display_font_set_begin(&retained);
+                assert(display_font_set_resolve(&retained, "user:fixture", 12u) ==
+                       &owned->render);
+                assert(owned->references == 3u && font_open_calls == opens);
+                display_font_set_end(&retained, 1);
                 fonts.ui_font = NULL;
-                font_context_reply(&fonts, &request, 0x501u);
+                font_context_reply(&fonts, 0u, &request, 0x501u);
                 assert(delivered_font_context.status == ASTRA_STATUS_OK &&
                     delivered_font_context.area_size == 0u &&
                     delivered_font_context.face_id[0] == '\0' &&
                     delivered_font_handles == 0u);
+                /* The catalog source is unavailable, but a retained document
+                   still owns its immutable bytes after the default changes. */
+                display_font_release(owned);
+                owned = registry.faces;
+                assert(owned->references == 1u && font_snapshot_closes == closes);
+                display_font_set_begin(&retained);
+                assert(display_font_set_resolve(&retained, "user:fixture", 12u) ==
+                       &owned->render);
+                display_font_set_end(&retained, 1);
+                face = (AstraArea){.handle = 0xa00u, .address = bytes,
+                    .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
+                assert(display_font_adopt(&registry, &face, (uint32_t)length,
+                    "user:other", 10u, &second_face) == ASTRA_OK);
+                /* Rollback drops new references, preserving old document. */
+                display_font_set_begin(&retained);
+                assert(display_font_set_resolve(&retained, "user:other", 10u) ==
+                       &second_face->render);
+                assert(second_face->references == 2u);
+                display_font_set_end(&retained, 0);
+                assert(second_face->references == 1u && owned->references == 1u);
+                display_font_set_begin(&retained);
+                fail_menu_allocate = 1u;
+                assert(display_font_set_resolve(&retained, "user:other", 10u) == NULL);
+                display_font_set_end(&retained, 0);
+                assert(owned->references == 1u);
+                /* A successful replacement releases the old snapshot. */
+                display_font_set_begin(&retained);
+                assert(display_font_set_resolve(&retained, "user:other", 10u) ==
+                       &second_face->render);
+                display_font_set_end(&retained, 1);
+                assert(font_snapshot_closes == closes + 1u &&
+                       registry.faces == second_face && second_face->next == NULL);
+                display_font_release(second_face);
+                display_font_set_close(&retained);
+                assert(registry.faces == NULL && retained.uses == NULL &&
+                       menu_allocations == allocations && font_snapshot_closes == closes + 2u);
             }
             assert(astra_afnt_strike_info(&font.view, 0u, &strike));
             assert(astra_afnt_glyph_info(&font.view, 0u, 'I', &first));
@@ -1486,6 +1576,57 @@ static void test_window_graphics(void)
                 assert(cache != 0u && launch_text(&builder, cache, 5,
                     text, sizeof(text), strike.pixel_height, 0xffffu, 0u));
                 assert(builder.glyph_count == fitting);
+            }
+            {
+                DisplayFontRegistry registry = {0};
+                DisplayFontFace *owned = NULL;
+                AstraArea area = {.handle = 0xa00u, .address = bytes,
+                    .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
+                uint32_t allocations = menu_allocations;
+                uint32_t closes = font_snapshot_closes;
+                assert(display_font_adopt(&registry, &area, (uint32_t)length,
+                    "user:fixture", 12u, &owned) == ASTRA_OK);
+                host.fonts = &registry;
+                memcpy((uint8_t *)list + payload, "user:fixtureIW", 14u);
+                list->payload_bytes = 14u;
+                draw->operation = ASTRA_DRAW_LIST_NAMED_TEXT;
+                draw->source = 12u;
+                draw->payload_bytes = 14u;
+                assert(graphics_run(window.graphics, &host,
+                    (AstraGuiGraphicsCommand){
+                        .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                        .object = list_id,
+                        .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                    &reply) == ASTRA_STATUS_OK);
+                display_font_release(owned);
+                assert(registry.faces != NULL && font_snapshot_closes == closes);
+                /* Replay survives catalog removal and default replacement. */
+                assert(graphics_run(window.graphics, &host,
+                    (AstraGuiGraphicsCommand){
+                        .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                        .object = list_id,
+                        .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                    &reply) == ASTRA_STATUS_OK);
+                /* A rejected replacement cannot retire the old document. */
+                draw->operation = UINT16_MAX;
+                assert(graphics_run(window.graphics, &host,
+                    (AstraGuiGraphicsCommand){
+                        .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                        .object = list_id,
+                        .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                    &reply) == ASTRA_STATUS_INVALID);
+                assert(registry.faces != NULL);
+                *draw = blit;
+                list->payload_bytes = 0u;
+                assert(graphics_run(window.graphics, &host,
+                    (AstraGuiGraphicsCommand){
+                        .action = ASTRA_GUI_GRAPHICS_LIST_SUBMIT,
+                        .object = list_id,
+                        .target = ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID}, 0u,
+                    &reply) == ASTRA_STATUS_OK);
+                assert(registry.faces == NULL && font_snapshot_closes == closes + 1u &&
+                       menu_allocations == allocations);
+                host.fonts = NULL;
             }
             free(bytes);
             *draw = blit;
@@ -1981,9 +2122,9 @@ static void test_launch_panel(void)
     assert(state.launch.session == 9u && state.launch.icon_bytes == NULL);
     compose_commit(&state, 4u);
     assert(state.launch_drawn == 9u);
-    assert(astra_rt_area_create(4096u, rights, &state.session_receive[0]) ==
+    assert(astra_rt_area_create(4096u, rights, &state.sessions[0].receive) ==
            ASTRA_SYSCALL_OK);
-    state.session_id[0] = 9u;
+    state.sessions[0].id = 9u;
     state.session_count = 1u;
     close_session(&state, 0u);
     assert(state.session_count == 0u && state.launch.session == 0u);
@@ -3119,28 +3260,28 @@ int main(void)
             ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP;
 
         assert(astra_rt_area_create(4096u, rights,
-                                    &fair.session_receive[0]) ==
+                                    &fair.sessions[0].receive) ==
                    ASTRA_SYSCALL_OK &&
                astra_rt_area_create(4096u, rights,
-                                    &fair.session_receive[1]) ==
+                                    &fair.sessions[1].receive) ==
                    ASTRA_SYSCALL_OK);
-        fair.session_id[0] = 7u;
-        fair.session_id[1] = 9u;
+        fair.sessions[0].id = 7u;
+        fair.sessions[1].id = 9u;
         fair.session_count = 2u;
         assert(display_wait_handles(&fair, 0x10u, 0x20u, 0x25u, 0u,
                                     waits, sources) == 7u);
         assert(waits[3] == 0x30u && waits[4] == 0x40u &&
-               waits[5] == fair.session_receive[0] && sources[5] == 5u &&
-               waits[6] == fair.session_receive[1] && sources[6] == 6u);
+               waits[5] == fair.sessions[0].receive && sources[5] == 5u &&
+               waits[6] == fair.sessions[1].receive && sources[6] == 6u);
         assert(display_window_wait_index(5u, fair.count) == fair.count);
         assert(display_wait_client_ended(&fair, 6u, ASTRA_SYSCALL_PEER_DEAD));
         {
-            uint32_t second = fair.session_receive[1];
+            uint32_t second = fair.sessions[1].receive;
 
             close_session(&fair, 0u);
             assert(fair.session_count == 1u &&
-                   fair.session_receive[0] == second &&
-                   fair.session_id[0] == 9u);
+                   fair.sessions[0].receive == second &&
+                   fair.sessions[0].id == 9u);
             close_session(&fair, 0u);
             assert(fair.session_count == 0u);
         }

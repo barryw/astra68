@@ -21,7 +21,7 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 TARGET := build/m68k/display.elf
 IMAGE := build/m68k/display
 OBJECT := build/m68k/main.o
-OBJECTS := build/m68k/window_graphics.o
+OBJECTS := build/m68k/window_graphics.o build/m68k/font_face.o
 GRAPHICS_RENDERER_LIB := \
 	$(GRAPHICS)/build/m68k/libastragraphics-renderer.a
 AFNT_CODEC := $(ASTRA_COMMON)/build/m68k/libastraafnt.a
@@ -51,7 +51,7 @@ $(GRAPHICS_FONT_HEADERS): $(GRAPHICS_FONT_INPUTS)
 $(AFNT_CODEC) $(HOST_AFNT_CODEC):
 	$(MAKE) -C $(ASTRA_COMMON) $(@:$(ASTRA_COMMON)/%=%)
 
-$(HOST_TEST): main.c window_graphics.c window_graphics.h $(RUNTIME)/tests/uncontended_mutex.c \
+$(HOST_TEST): main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
 		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/include/astra/ui_font.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c $(GRAPHICS)/src/render_builder.c \
@@ -64,12 +64,12 @@ $(HOST_TEST): main.c window_graphics.c window_graphics.h $(RUNTIME)/tests/uncont
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
 		$(ASTRA_COMMON)/utf8.c $(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c \
-		window_graphics.c tests/test_display.c $(RUNTIME)/tests/uncontended_mutex.c $(HOST_AFNT_CODEC) -o $@
+		window_graphics.c font_face.c tests/test_display.c $(RUNTIME)/tests/uncontended_mutex.c $(HOST_AFNT_CODEC) -o $@
 
 test: $(HOST_TEST)
 	./$(HOST_TEST)
 
-$(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h $(RUNTIME)/tests/uncontended_mutex.c \
+$(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
 		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/include/astra/ui_font.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c $(GRAPHICS)/src/render_builder.c \
@@ -83,7 +83,7 @@ $(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h $(RUNTIME)/tes
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
 		$(ASTRA_COMMON)/utf8.c $(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c \
-		window_graphics.c tests/test_display.c \
+		window_graphics.c font_face.c tests/test_display.c \
 		$(ASTRA_COMMON)/afnt.c $(ASTRA_COMMON)/crc32.c $(RUNTIME)/tests/uncontended_mutex.c -o $@
 
 sanitize: $(HOST_TEST_SANITIZE)
@@ -95,6 +95,8 @@ analyze:
 		-c main.c -o build/analyzer/main.o
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
 		-c window_graphics.c -o build/analyzer/window_graphics.o
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c font_face.c -o build/analyzer/font_face.o
 
 clean:
 	rm -rf build

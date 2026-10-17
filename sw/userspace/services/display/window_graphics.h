@@ -13,6 +13,8 @@
 #include <astra/gui.h>
 #include <astra/render_builder.h>
 
+#include "font_face.h"
+
 #define DISPLAY_GRAPHICS_LIST_MAX 8u
 #define DISPLAY_GRAPHICS_SURFACE_MAX 4096u
 /* ponytail: one fixed per-window share of Media RAM; replace with a
@@ -39,6 +41,7 @@ typedef struct DisplayGraphicsList {
     uint32_t bytes;
     /* Signaled each time a FRAME of the list has been read. */
     uint32_t release;
+    DisplayFontSet fonts;
 } DisplayGraphicsList;
 
 typedef struct DisplayWindowGraphics {
@@ -86,8 +89,7 @@ typedef struct DisplayGraphicsHost {
     /* The batch storage, once no request still running uses it; a failure
        of that request is returned here. */
     uint32_t (*storage)(void *context, void **storage);
-    const AstraRenderFont *(*resolve_font)(void *context, const char *id,
-                                           uint32_t id_length);
+    DisplayFontRegistry *fonts;
     const AstraRenderFont *ui_font;
     /* The content bank the client draws into now. */
     uint32_t content_offset;

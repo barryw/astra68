@@ -101,6 +101,7 @@ uint32_t display_window_graphics_open(DisplayWindowGraphics **graphics,
 
 static void list_release(DisplayGraphicsList *list)
 {
+    display_font_set_close(&list->fonts);
     if (list->mapping != NULL)
         (void)astra_rt_area_unmap((void *)(uintptr_t)list->mapping);
     if (list->area != 0u)
@@ -643,6 +644,7 @@ static uint32_t list_attach(DisplayWindowGraphics *graphics,
 typedef struct ResolveContext {
     DisplayWindowGraphics *graphics;
     const DisplayGraphicsHost *host;
+    DisplayFontSet *fonts;
 } ResolveContext;
 
 static uint32_t resolve_source(void *context, AstraRenderBuilder *builder,
@@ -668,8 +670,7 @@ static const AstraRenderFont *resolve_font(void *context, const char *id,
 {
     const ResolveContext *resolve = context;
 
-    return resolve->host->resolve_font == NULL ? NULL :
-           resolve->host->resolve_font(resolve->host->context, id, id_length);
+    return display_font_set_resolve(resolve->fonts, id, id_length);
 }
 
 /* An UPLOAD of @p list at command @p index, which replay_range validated:
@@ -709,12 +710,12 @@ static uint32_t list_upload(DisplayWindowGraphics *graphics,
  * the device runs them in order, so the draws before it read the surface
  * as it was and the draws after it as it becomes.
  */
-static uint32_t list_replay(DisplayWindowGraphics *graphics,
+static uint32_t list_replay_commands(DisplayWindowGraphics *graphics,
                             const DisplayGraphicsHost *host,
-                            const DisplayGraphicsList *list,
+                            DisplayGraphicsList *list,
                             uint32_t first_target)
 {
-    ResolveContext context = { graphics, host };
+    ResolveContext context = { graphics, host, &list->fonts };
     AstraRenderSourceResolver resolver = {
         .resolve = resolve_source, .context = &context,
         .resolve_font = resolve_font
@@ -783,6 +784,19 @@ static uint32_t list_replay(DisplayWindowGraphics *graphics,
         }
     }
     return ASTRA_STATUS_OK;
+}
+
+static uint32_t list_replay(DisplayWindowGraphics *graphics,
+                            const DisplayGraphicsHost *host,
+                            DisplayGraphicsList *list, uint32_t first_target)
+{
+    list->fonts.registry = host->fonts;
+    display_font_set_begin(&list->fonts);
+    uint32_t status = list_replay_commands(graphics, host, list, first_target);
+    /* Glyph bitmaps are copied into the batch during lowering. GPU requests
+       retain their batch storage, not pointers into these AFNT mappings. */
+    display_font_set_end(&list->fonts, status == ASTRA_STATUS_OK);
+    return status;
 }
 
 static uint32_t list_submit(DisplayWindowGraphics *graphics,

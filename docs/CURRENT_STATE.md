@@ -126,6 +126,26 @@ The native GUI import/details/selection/restart/uninstall gate passes with it;
 log `/var/tmp/astra-font-client-ui-20261017.log` on Beast. No new font software
 was deployed to DE25; production selector, fabric and user data remain intact.
 
+The next Display ownership checkpoint replaces its one temporary named-face
+mapping with reference-counted immutable AFNT snapshots. Active default,
+delivered GUI session contexts, retained window documents, graphics lists and
+popup menus own their references; the registry itself is weak. Successful
+replay retires unused faces, failed replay preserves the previous document,
+and closing an owner releases its references. The last owner closes the
+read-only area, independently of catalog/file removal. Existing hardware
+batches copy glyph masks during lowering and retain their own batch storage.
+This follows Haiku's `FontManager.cpp:_RemoveFont` / `FontStyle.cpp` separation
+of delisting from final data destruction. It adds no kernel or public ABI.
+Display host, ASan/UBSan, MC68040 and analyzer gates pass on Beast; log
+`/var/tmp/astra-font-lifetime-session-20261017.log`. Tests cover source absence,
+replacement rollback, final release, allocation failure and failed GUI context
+delivery. The native GUI import/detail/choice/restart/uninstall gate also passes;
+log `/var/tmp/astra-font-lifetime-ui-20261017.log`. Live switching still needs
+explicit client-adoption handling: a delivered snapshot is not proof that the
+client mapped/adopted it, so notification work must preserve the previous
+context across client-side failure. Live notifications/client reflow,
+designed-style resolution and complete physical font qualification remain open.
+
 Latest work covers native font management, scoped settings, and migration of
 native UI pixel rendering to Astraea. The fixed/removable filesystem remains
 in scope; network mounts remain excluded. Correctness remains ahead of
