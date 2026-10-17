@@ -1436,6 +1436,22 @@ static void test_window_graphics(void)
             assert((int16_t)(read_be32(
                 record + ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES + 8u) >> 16) !=
                    second_x);
+            {
+                AstraRenderBuilder builder;
+                char text[DISPLAY_LAUNCH_WIDTH];
+                uint32_t fitting =
+                    (DISPLAY_LAUNCH_WIDTH - 32u) * 64u / (uint32_t)first.advance_x;
+
+                memset(text, 'I', sizeof(text));
+                assert(fitting > 0u && fitting < sizeof(text));
+                assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
+                assert(astra_render_builder_use_font(&builder, &font));
+                uint32_t cache = astra_render_builder_surface(&builder,
+                    DISPLAY_LAUNCH_WIDTH, DISPLAY_LAUNCH_HEIGHT);
+                assert(cache != 0u && launch_text(&builder, cache, 5,
+                    text, sizeof(text), strike.pixel_height, 0xffffu, 0u));
+                assert(builder.glyph_count == fitting);
+            }
             free(bytes);
             *draw = blit;
             list->payload_bytes = 0u;

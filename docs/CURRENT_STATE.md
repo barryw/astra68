@@ -89,6 +89,19 @@ channel; that failed run is retained in
 `/var/tmp/astra-font-content-face-ui-current-20261017.log`. These software changes
 are not installed in the retained DE25 font candidate or production selector.
 
+Compositor width and fitting now use the renderer's existing selected
+strike/glyph lookup. Window titles, menu-bar headings and launch text therefore
+measure the face/style they draw, rather than always measuring the built-in
+face. The selected-mono `IIW` regression fails with the old measurement; the
+shared measurement and launch clipping checks pass with UTF-8 and fallback
+coverage. Graphics and Display host/sanitizer gates and Display MC68040/analyzer
+gates pass on Beast. The current-QEMU native GUI gate also passes import,
+family details, saved choice, restart and uninstall; log
+`/var/tmp/astra-font-metrics-ui-20261017.log` on Beast.
+Application-side Font Kit/Interface Kit measurements,
+coherent live refresh and designed-style resolution remain open; this is not
+full font-release qualification.
+
 Latest work covers native font management, scoped settings, and migration of
 native UI pixel rendering to Astraea. The fixed/removable filesystem remains
 in scope; network mounts remain excluded. Correctness remains ahead of

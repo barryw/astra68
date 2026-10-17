@@ -530,6 +530,25 @@ import, family details, saved choice, restart and uninstall. Haiku reference:
 to the existing hardware render builder. Live refresh, coherent client
 measurement, and designed-style resolution remain open.
 
+Compositor text layout now queries that same render context for width and
+scalar-safe fitting. Window titles, system-bar title/menu-heading placement and
+launch text use the existing renderer's strike/glyph resolution, including its
+AFNT lookup, style selection and fallback. No second face parser or renderer
+was added. A selected-mono `IIW` regression fails when measurement uses the
+built-in proportional face; AFNT advances, UTF-8 prefix boundaries, replacement
+glyphs, unsupported sizes and invalid style checks now pass. The compositor's
+long launch-text test also checks clipping against the selected glyph advance.
+Haiku reference: `src/kits/interface/Font.cpp:BFont::GetStringWidths` sends the
+font's family, style and size with measurement, rather than measuring a separate
+default font. Astra retains fixed UI-role sizes and measures through its
+existing validated hardware command builder. This fixes compositor layout;
+application-side Font Kit/Interface Kit measurement still needs the matching
+selected context before live switching can be accepted.
+Graphics and Display host/sanitizer, Display MC68040/analyzer, and the native
+QEMU GUI import/detail/choice/restart/uninstall gates pass on Beast. This change
+does not alter a public ABI or the FPGA protocol and is not yet qualified on
+DE25 as a complete font release.
+
 The shared renderer also makes AFNT a dependency of HPS display helpers.
 `fpga/arty/linux/Makefile` now includes the existing AFNT, CRC32, and UTF-8
 sources for every renderer consumer. Host and AArch64 display self-tests and

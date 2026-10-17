@@ -2015,9 +2015,9 @@ static int build_cache(AstraRenderBuilder *builder, uint32_t cache,
         }
         text_capacity = request->width > text_capacity ?
                         request->width - text_capacity : 0u;
-        text_length = astra_surface_ui_text_fit(
-            request->title, request->title_length,
-            ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT, text_capacity);
+        text_length = astra_render_builder_text_fit(
+            builder, request->title, request->title_length,
+            ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT, text_capacity, 0u);
         (void)astra_render_builder_text(
             builder, cache, text_x,
             client_y + ((int32_t)title -
@@ -2079,13 +2079,13 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
     int32_t heading_x;
 
     system_bar_title(state, &active_title, &active_title_length);
-    active_title_length = astra_surface_ui_text_fit(
-        active_title, active_title_length,
+    active_title_length = astra_render_builder_text_fit(
+        builder, active_title, active_title_length,
         ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
-        ASTRA_DISPLAY_WIDTH - 320u);
-    active_title_width = astra_surface_ui_text_width(
-        active_title, active_title_length,
-        ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT);
+        ASTRA_DISPLAY_WIDTH - 320u, ASTRA_TEXT_STYLE_BOLD);
+    active_title_width = astra_render_builder_text_width(
+        builder, active_title, active_title_length,
+        ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, ASTRA_TEXT_STYLE_BOLD);
     state->system_resource[0] = astra_render_builder_surface_at(
         builder, state->system_offset[0], state->system_capacity[0],
         ASTRA_DISPLAY_WIDTH, DISPLAY_WORK_TOP);
@@ -2141,9 +2141,9 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
                 ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
                 color(theme->text_muted)))
             return 0;
-        heading_x += (int32_t)astra_surface_ui_text_width(
-            headings[index], heading_lengths[index],
-            ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT) + 24;
+        heading_x += (int32_t)astra_render_builder_text_width(
+            builder, headings[index], heading_lengths[index],
+            ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, 0u) + 24;
     }
     return 1;
 }
@@ -2186,9 +2186,9 @@ static int launch_text(AstraRenderBuilder *builder, uint32_t destination,
 {
     uint32_t width;
 
-    length = astra_surface_ui_text_fit(text, length, height,
-                                       DISPLAY_LAUNCH_WIDTH - 32u);
-    width = astra_surface_ui_text_width(text, length, height);
+    length = astra_render_builder_text_fit(builder, text, length, height,
+        DISPLAY_LAUNCH_WIDTH - 32u, style);
+    width = astra_render_builder_text_width(builder, text, length, height, style);
     return astra_render_builder_text_styled(
         builder, destination,
         (int32_t)(DISPLAY_LAUNCH_WIDTH - width) / 2, y, text, length,

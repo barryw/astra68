@@ -797,6 +797,67 @@ static const AstraUiGlyph *text_glyph(const AstraRenderBuilder *builder,
     return glyph;
 }
 
+static uint32_t text_measure(const AstraRenderBuilder *builder,
+                             const char *utf8, uint32_t length,
+                             uint16_t pixel_height, uint32_t style_flags,
+                             uint64_t maximum_26_6, uint32_t *width)
+{
+    AstraUiStrike selected_strike;
+    uint32_t selected_index;
+    const AstraUiStrike *strike = text_strike(builder, pixel_height, 0u,
+        style_flags, &selected_strike, &selected_index);
+    uint64_t advance = 0u;
+    uint32_t at = 0u;
+
+    *width = 0u;
+    if (utf8 == NULL || strike == NULL ||
+        (style_flags & ~ASTRA_TEXT_RENDER_STYLE_MASK) != 0u)
+        return 0u;
+    while (at < length) {
+        uint32_t consumed;
+        uint32_t scalar = astra_ui_font_scalar(utf8 + at, length - at,
+                                               &consumed);
+        AstraUiGlyph selected_glyph;
+        const uint8_t *bitmap;
+        const AstraUiGlyph *glyph = text_glyph(builder, strike,
+            selected_index, scalar, 0u, &selected_glyph, &bitmap);
+
+        if (glyph == NULL || glyph->advance_x < 0)
+            return 0u;
+        if (advance + (uint32_t)glyph->advance_x > maximum_26_6)
+            break;
+        advance += (uint32_t)glyph->advance_x;
+        at += consumed;
+    }
+    advance = (advance + 63u) / 64u;
+    *width = advance > UINT32_MAX ? UINT32_MAX : (uint32_t)advance;
+    return at;
+}
+
+uint32_t astra_render_builder_text_width(const AstraRenderBuilder *builder,
+                                          const char *utf8, uint32_t length,
+                                          uint16_t pixel_height,
+                                          uint32_t style_flags)
+{
+    uint32_t width;
+
+    (void)text_measure(builder, utf8, length, pixel_height, style_flags,
+                       UINT64_MAX, &width);
+    return width;
+}
+
+uint32_t astra_render_builder_text_fit(const AstraRenderBuilder *builder,
+                                        const char *utf8, uint32_t length,
+                                        uint16_t pixel_height,
+                                        uint32_t maximum_width,
+                                        uint32_t style_flags)
+{
+    uint32_t width;
+
+    return text_measure(builder, utf8, length, pixel_height, style_flags,
+                         (uint64_t)maximum_width * 64u, &width);
+}
+
 static int builder_text_run(AstraRenderBuilder *builder,
                             uint32_t destination, int32_t y,
                             const char *utf8, uint32_t length,

@@ -728,6 +728,24 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
     assert(astra_afnt_glyph_info(&font.view, strike_index, 'W', &second));
     assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
     assert(astra_render_builder_use_font(&builder, &font));
+    uint32_t expected_width =
+        (2u * (uint32_t)first.advance_x + (uint32_t)second.advance_x + 63u) / 64u;
+    assert(astra_render_builder_text_width(&builder, "IIW", 3u,
+        strike.pixel_height, 0u) == expected_width);
+    assert(astra_render_builder_text_fit(&builder, "IIW", 3u,
+        strike.pixel_height, expected_width, 0u) == 3u);
+    assert(astra_render_builder_text_fit(&builder, "IIW", 3u,
+        strike.pixel_height, ((uint32_t)first.advance_x + 63u) / 64u,
+        0u) == 1u);
+    assert(astra_render_builder_text_fit(&builder, "IW", 2u,
+        strike.pixel_height, 0u, 0u) == 0u);
+    assert(astra_render_builder_text_width(&builder, "\xff", 1u,
+        strike.pixel_height, 0u) == astra_render_builder_text_width(
+        &builder, "\xef\xbf\xbd", 3u, strike.pixel_height, 0u));
+    assert(astra_render_builder_text_fit(&builder, "\xc4\x84" "W", 3u,
+        strike.pixel_height, astra_render_builder_text_width(
+            &builder, "\xc4\x84", 2u, strike.pixel_height, 0u), 0u) == 2u);
+    assert(astra_render_builder_text_width(&builder, "IW", 2u, 15u, 0u) == 0u);
     destination = astra_render_builder_surface(&builder, 160u, 80u);
     assert(destination != 0u && astra_render_builder_text(
         &builder, destination, 5, 7, "IW", 2u, strike.pixel_height,
@@ -1179,6 +1197,14 @@ static void test_direct_styled_text(void)
 
     assert(astra_render_builder_init(&builder, batch_storage,
                                      sizeof(batch_storage), 7u));
+    assert(astra_render_builder_text_width(&builder, "A\xc4\x84" "B", 4u,
+        13u, 0u) == astra_surface_ui_text_width("A\xc4\x84" "B", 4u, 13u));
+    assert(astra_render_builder_text_fit(&builder, "A\xc4\x84" "B", 4u,
+        13u, astra_surface_ui_text_width("A\xc4\x84", 3u, 13u), 0u) == 3u);
+    assert(astra_render_builder_text_width(NULL, "A", 1u, 13u, 0u) == 0u);
+    assert(astra_render_builder_text_width(&builder, NULL, 1u, 13u, 0u) == 0u);
+    assert(astra_render_builder_text_fit(&builder, "A", 1u,
+        13u, 100u, ASTRA_TEXT_STYLE_HIDDEN) == 0u);
     destination = astra_render_builder_surface(&builder, 80u, 24u);
     assert(destination != 0u);
     assert(astra_render_builder_text_styled(
