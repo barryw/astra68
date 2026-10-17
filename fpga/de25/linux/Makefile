@@ -196,7 +196,8 @@ font-convert-sanitize:
 	mkdir -p $(OUT)
 	$(HOST_CC) $(FONT_CONVERT_FLAGS) -fsanitize=address,undefined \
 		-fno-omit-frame-pointer $(FONT_CONVERT_SOURCES) \
-		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/font_catalog.c \
+		$(ROOT)/sw/common/crc32.c \
 		$(ROOT)/sw/common/sha256.c \
 		-o $(OUT)/test-font-convert-sanitize \
 		$(shell pkg-config --libs freetype2)

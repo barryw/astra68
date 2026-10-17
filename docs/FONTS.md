@@ -480,9 +480,11 @@ handle or an MC68040 bitmap-scaling fallback.
 
 The first Fonts tool import scope is native AFNT, static TrueType (`.ttf`),
 OpenType (`.otf`), TrueType/OpenType collections (`.ttc`), variable TrueType and
-OpenType at their default axis coordinates, and classic monochrome Amiga disk
-fonts. Current native runtime supports AFNT and static TTF/OTF/TTC; variable
-outlines and Amiga disk fonts remain open work.
+OpenType at default and named-instance axis coordinates, and classic
+monochrome Amiga disk fonts. Current native runtime supports AFNT, static
+TTF/OTF/TTC, and default plus distinct named instances from variable outlines.
+Amiga disk fonts remain
+open runtime work.
 This covers the common current macOS outline containers listed by
 [Apple Font Book](https://support.apple.com/en-gb/guide/font-book/fntbk1000/mac)
 and Amiga bitmap fonts. A collection is one input but contributes all its
@@ -506,10 +508,12 @@ path:
 
 The build-time development tool supports one TTF, OTF, or selected TTC face per
 invocation, plus monochrome Amiga disk strikes. The native HPS worker converts
-one static outline face per request; the resident Fonts service streams every
-TTC face through that worker and commits one validated inventory update.
-Variable outlines currently return unsupported until axis provenance is
-represented in native AFNT metadata. The current installation limit is 32 MiB
+one outline face per request; the resident Fonts service streams every
+collection face and distinct named variable instance through that worker and
+commits one validated inventory update. It skips named instances whose
+coordinates duplicate the default or an earlier instance and records exact
+16.16 design-axis coordinates and source instance index in AFNT metadata.
+Custom axis coordinates are not yet selectable in Fonts. The current limit is 32 MiB
 per source and per resulting AFNT face; larger valid faces return a capacity
 error without publishing a partial catalog.
 
@@ -532,7 +536,8 @@ DE25 conversion of Atkinson Hyperlegible Next Regular pass, including malformed
 outline and oversized-request checks. The physical test ran from
 `/var/tmp/astra-font-worker-20261017` without installing or selecting a new
 production release. The QEMU host transport now invokes this worker for native
-Fonts imports. Disposable QEMU gates pass TTF, OTF and two-face TTC conversion,
+Fonts imports. Disposable QEMU gates pass TTF, OTF, two-face TTC, and four-style
+STIX Two Text variable conversion,
 catalog publication, system selection and restart persistence; the AFNT import
 and damaged-inventory gate still passes. A later-face TTC failure rolls back
 newly created AFNT objects before the inventory commit; disposable QEMU checks
@@ -547,6 +552,13 @@ break flag that moved the List outside the client area; the flag was removed.
 A complete DE25 release has not been qualified. Display loads the saved
 system-face choice at startup; live change notification and render-context
 refresh remain open.
+The variable fixture is unmodified STIX Two Text 2.13 under OFL 1.1. Host and
+AArch64 worker tests verify default/Medium/SemiBold/Bold conversion, reject a
+fifth face, and check source-instance provenance. ASan/UBSan and native QEMU
+import/restart gates pass. Haiku's
+`~/Git/haiku/src/servers/app/font/FontManager.cpp:306-352` keeps designed
+styles within a family and advances catalog revision; Astra applies that catalog
+pattern after converting FreeType named instances into immutable AFNT faces.
 
 The shared C codec now exposes validated AFNT family/style strings and strike
 metrics for the future service catalog and Fonts detail view. Its NAME reader
@@ -630,7 +642,7 @@ This follows Haiku's delist-and-revision pattern in
 `~/Git/haiku/src/servers/app/font/FontManager.cpp:354-370`, adapted to Astra's
 content-addressed store and Config Kit transaction. Production DE25 still
 uses the previous selected release. Live updates, coherent metrics and
-styles, variable/Amiga import, removable-volume browsing, and physical gates
+styles, Amiga runtime import, removable-volume browsing, and physical gates
 remain open.
 
 Haiku reference for this catalog boundary: `src/servers/app/font/FontManager.cpp`

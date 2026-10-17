@@ -40,7 +40,9 @@ available AFNT sizes. Close the snapshot after use; its names are borrowed.
 `astra_fonts_uninstall`. Import accepts native AFNT and static TTF, OTF, or TTC
 sources up to 32 MiB. The resident service converts outlines through the
 host worker, validates every resulting AFNT face, and returns a stable ID.
-Variable outlines and Amiga disk fonts are not yet accepted at runtime.
+Variable outlines install their default and distinct named styles as separate
+AFNT faces. Custom axis coordinates and Amiga disk fonts are not yet accepted
+at runtime.
 Uninstall accepts only imported faces; select another system face first if the
 face is active. Shipped faces cannot be uninstalled. The service commits the
 new Config Kit inventory before retiring a face from the catalog, then removes

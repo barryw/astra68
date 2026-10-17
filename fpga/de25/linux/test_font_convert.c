@@ -10,6 +10,52 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void test_variable(void)
+{
+    static const char *styles[] = {"Regular", "Medium", "SemiBold", "Bold"};
+    static const uint32_t instances[] = {0u, 2u, 3u, 4u};
+    FILE *file = fopen("tests/fonts/STIXTwoText.ttf", "rb");
+    uint8_t *source;
+    long size;
+
+    assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+    size = ftell(file);
+    assert(size > 0 && size <= 32L * 1024L * 1024L &&
+           fseek(file, 0, SEEK_SET) == 0);
+    source = malloc((size_t)size);
+    assert(source != NULL &&
+           fread(source, 1u, (size_t)size, file) == (size_t)size);
+    assert(fclose(file) == 0);
+    for (uint32_t at = 0u; at < 4u; ++at) {
+        uint8_t *converted = NULL;
+        uint32_t length = 0u, faces = 0u;
+        AstraAfntView view;
+        char style[64], marker[64];
+        int found = 0;
+        int result = astra_font_convert_outline(source, (uint32_t)size, at,
+            "STIXTwoText.ttf", "OFL-1.1", &converted, &length, &faces);
+        assert(result == ASTRA_FONT_CONVERT_OK && faces == 4u &&
+               astra_afnt_validate(converted, length, &view) &&
+               astra_afnt_name_string(&view, "style", style, sizeof(style)) &&
+               strcmp(style, styles[at]) == 0);
+        int marker_length = snprintf(marker, sizeof(marker),
+            "\"source_instance_index\":%u", instances[at]);
+        assert(marker_length > 0 && (uint32_t)marker_length <= view.name.length);
+        for (uint32_t offset = 0u;
+             offset <= view.name.length - (uint32_t)marker_length; ++offset)
+            found |= memcmp(view.name.bytes + offset, marker,
+                            (size_t)marker_length) == 0;
+        assert(found);
+        free(converted);
+    }
+    uint8_t *converted = NULL;
+    uint32_t length = 0u, faces = 0u;
+    assert(astra_font_convert_outline(source, (uint32_t)size, 4u,
+        "STIXTwoText.ttf", "OFL-1.1", &converted, &length, &faces) ==
+        ASTRA_FONT_CONVERT_INVALID && converted == NULL && faces == 4u);
+    free(source);
+}
+
 int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] :
@@ -69,6 +115,7 @@ int main(int argc, char **argv)
         "test.ttf", "OFL-1.1", &converted, &converted_length, &faces) !=
         ASTRA_FONT_CONVERT_OK);
     free(source);
+    if (argc == 1) test_variable();
     puts("native outline-to-AFNT conversion passed");
     return 0;
 }

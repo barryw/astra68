@@ -39,7 +39,9 @@ static void transfer(int fd, void *buffer, size_t size, int output)
     }
 }
 
-static void check(const uint8_t *source, uint32_t source_size, int valid)
+static void check(const uint8_t *source, uint32_t source_size,
+                  uint32_t face_index, uint32_t expected_faces,
+                  const char *expected_style, int valid)
 {
     int request_pipe[2], reply_pipe[2], child_status;
     uint8_t request[ASTRA_FONT_WORKER_REQUEST_SIZE] = {0};
@@ -70,7 +72,7 @@ static void check(const uint8_t *source, uint32_t source_size, int valid)
     close(reply_pipe[1]);
     memcpy(request, ASTRA_FONT_WORKER_REQUEST_MAGIC, 4u);
     encode32(request + 4u, ASTRA_FONT_WORKER_VERSION);
-    encode32(request + 8u, 0u);
+    encode32(request + 8u, face_index);
     encode32(request + 12u, source_size);
     encode32(request + 16u, 8u);
     encode32(request + 20u, 7u);
@@ -88,13 +90,19 @@ static void check(const uint8_t *source, uint32_t source_size, int valid)
     if (valid) {
         uint32_t length = decode32(reply + 16u);
         AstraAfntView view;
-        assert(decode32(reply + 12u) >= 1u && length > 128u &&
+        assert(decode32(reply + 12u) == expected_faces && length > 128u &&
                length <= ASTRA_FONT_WORKER_OUTPUT_MAX);
         afnt = malloc(length);
         assert(afnt != NULL);
         transfer(reply_pipe[0], afnt, length, 0);
         assert(astra_afnt_validate(afnt, length, &view));
         assert(view.strike_count == 4u);
+        if (expected_style != NULL) {
+            char style[64];
+            assert(astra_afnt_name_string(&view, "style", style,
+                                          sizeof(style)) &&
+                   strcmp(style, expected_style) == 0);
+        }
     } else assert(decode32(reply + 16u) == 0u);
     free(afnt);
     close(reply_pipe[0]);
@@ -119,10 +127,24 @@ int main(int argc, char **argv)
     assert(source != NULL &&
            fread(source, 1u, (size_t)size, file) == (size_t)size &&
            fclose(file) == 0);
-    check(source, (uint32_t)size, 1);
+    check(source, (uint32_t)size, 0u, 1u, NULL, 1);
     memset(source, 0, 16u);
-    check(source, (uint32_t)size, 0);
-    check(NULL, ASTRA_FONT_WORKER_SOURCE_MAX + 1u, 0);
+    check(source, (uint32_t)size, 0u, 0u, NULL, 0);
+    check(NULL, ASTRA_FONT_WORKER_SOURCE_MAX + 1u, 0u, 0u, NULL, 0);
+    free(source);
+    file = fopen("tests/fonts/STIXTwoText.ttf", "rb");
+    assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+    size = ftell(file);
+    assert(size > 0 && size <= ASTRA_FONT_WORKER_SOURCE_MAX &&
+           fseek(file, 0, SEEK_SET) == 0);
+    source = malloc((size_t)size);
+    assert(source != NULL &&
+           fread(source, 1u, (size_t)size, file) == (size_t)size &&
+           fclose(file) == 0);
+    static const char *styles[] = {"Regular", "Medium", "SemiBold", "Bold"};
+    for (uint32_t at = 0u; at < 4u; ++at)
+        check(source, (uint32_t)size, at, 4u, styles[at], 1);
+    check(source, (uint32_t)size, 4u, 0u, NULL, 0);
     free(source);
     puts("versioned HPS font worker passed");
     return 0;

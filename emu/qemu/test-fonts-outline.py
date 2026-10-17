@@ -101,6 +101,7 @@ def main():
     parser.add_argument("source")
     parser.add_argument("--expect-limit", action="store_true")
     parser.add_argument("--expect-later-failure", action="store_true")
+    parser.add_argument("--expect-variable", action="store_true")
     args = parser.parse_args()
     if not Path("/usr/local/libexec/astra-font-worker").is_file():
         raise RuntimeError("installed Astra font worker required")
@@ -125,6 +126,11 @@ def main():
             marker.write_text("later-failure\n", encoding="ascii")
             astra_image._replace_volume_file(
                 image, str(marker), "/expect-outline-later-failure")
+        if args.expect_variable:
+            marker = Path(work) / "expect-variable"
+            marker.write_text("variable\n", encoding="ascii")
+            astra_image._replace_volume_file(
+                image, str(marker), "/expect-outline-variable")
         startup = Path(work) / "startup"
         startup.write_text(
             astra_image.DISPLAY_STARTUP_MANIFEST +
@@ -147,7 +153,10 @@ def main():
         astra_image._replace_volume_file(
             image, str(marker), "/expect-outline-again")
         boot(args.qemu, args.rom, image, work, "restart")
-    print("ASTRA FONT OUTLINE PASS native outline->AFNT, render, selection, restart")
+    if args.expect_variable:
+        print("ASTRA FONT OUTLINE PASS variable styles, AFNT, selection, restart")
+    else:
+        print("ASTRA FONT OUTLINE PASS native outline->AFNT, render, selection, restart")
     return 0
 
 

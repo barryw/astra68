@@ -1,6 +1,7 @@
 #include "astra_font_convert.h"
 
 #include <astra/afnt.h>
+#include <astra/font_worker.h>
 #include <astra/theme.h>
 #include <astra/utf8.h>
 
@@ -8,6 +9,7 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_MULTIPLE_MASTERS_H
 
 #include <limits.h>
 #include <stdint.h>
@@ -119,7 +121,9 @@ static int map_compare(const void *left, const void *right)
 
 static int metadata(Bytes *name, FT_Face face, const char *source_name,
                     const char *license, const uint8_t digest[32],
-                    uint32_t glyphs, uint32_t face_index)
+                    uint32_t glyphs, uint32_t face_index,
+                    uint32_t instance_index, const FT_MM_Var *variation,
+                    const FT_Fixed *coordinates)
 {
     static const char digits[] = "0123456789abcdef";
     const char *family = face->family_name != NULL ? face->family_name : "Imported Font";
@@ -136,10 +140,25 @@ static int metadata(Bytes *name, FT_Face face, const char *source_name,
     }
     char suffix[192];
     int length = snprintf(suffix, sizeof(suffix),
-        "\"}],\"source_face_index\":%u,\"converter\":\"astra-font-worker/0.1\","
-        "\"outline_ppem\":[", face_index);
+        "\"}],\"source_face_index\":%u,\"source_instance_index\":%u,"
+        "\"variation_axes\":[", face_index, instance_index);
     if (length <= 0 || (size_t)length >= sizeof(suffix) ||
         !append(name, suffix, (uint32_t)length)) return 0;
+    if (variation != NULL) {
+        for (FT_UInt at = 0u; at < variation->num_axis; ++at) {
+            FT_ULong value = variation->axis[at].tag;
+            char tag[5] = {(char)(value >> 24), (char)(value >> 16),
+                           (char)(value >> 8), (char)value, '\0'};
+            if (!literal(name, at == 0u ? "{\"tag\":" : ",{\"tag\":") ||
+                !json_string(name, tag)) return 0;
+            length = snprintf(suffix, sizeof(suffix),
+                ",\"design_16_16\":%ld}", (long)coordinates[at]);
+            if (length <= 0 || (size_t)length >= sizeof(suffix) ||
+                !append(name, suffix, (uint32_t)length)) return 0;
+        }
+    }
+    if (!literal(name, "],\"converter\":\"astra-font-worker/0.2\","
+                       "\"outline_ppem\":[")) return 0;
     for (uint32_t at = 0u; at < SYSTEM_STRIKES; ++at) {
         length = snprintf(suffix, sizeof(suffix), "%s%u",
                           at == 0u ? "" : ",", (unsigned)system_sizes[at]);
@@ -150,6 +169,95 @@ static int metadata(Bytes *name, FT_Face face, const char *source_name,
                       "],\"glyphs_per_strike\":%u}", glyphs);
     return length > 0 && (size_t)length < sizeof(suffix) &&
            append(name, suffix, (uint32_t)length);
+}
+
+static int open_face(FT_Library library, const void *source,
+                     uint32_t source_length, uint32_t selected,
+                     FT_Face *selected_face, uint32_t *face_count,
+                     uint32_t *file_index, uint32_t *instance_index)
+{
+    FT_Face face = NULL;
+    FT_Long files;
+    uint32_t total = 0u, target_file = UINT32_MAX, target_instance = 0u;
+    int result = ASTRA_FONT_CONVERT_INVALID;
+
+    if (FT_New_Memory_Face(library, source, (FT_Long)source_length,
+                           0, &face) != 0) return result;
+    files = face->num_faces;
+    FT_Done_Face(face);
+    face = NULL;
+    if (files <= 0 || files > ASTRA_FONT_WORKER_FACES_MAX)
+        return ASTRA_FONT_CONVERT_LIMIT;
+    for (FT_Long file = 0; file < files; ++file) {
+        FT_MM_Var *variation = NULL;
+        uint32_t instances = 1u;
+        if (FT_New_Memory_Face(library, source, (FT_Long)source_length,
+                               file, &face) != 0) goto done;
+        if (selected == total) {
+            target_file = (uint32_t)file;
+            target_instance = 0u;
+        }
+        if ((face->face_flags & FT_FACE_FLAG_MULTIPLE_MASTERS) != 0) {
+            if (FT_Get_MM_Var(face, &variation) != 0 ||
+                variation == NULL || variation->num_axis == 0u ||
+                variation->num_axis > 32u || variation->axis == NULL ||
+                variation->num_namedstyles >= ASTRA_FONT_WORKER_FACES_MAX ||
+                (variation->num_namedstyles != 0u &&
+                 variation->namedstyle == NULL)) {
+                result = ASTRA_FONT_CONVERT_UNSUPPORTED;
+                if (variation != NULL) FT_Done_MM_Var(library, variation);
+                goto done;
+            }
+            for (FT_UInt at = 0u; at < variation->num_namedstyles; ++at) {
+                const FT_Fixed *coords = variation->namedstyle[at].coords;
+                int duplicate = 1;
+                if (coords == NULL) {
+                    result = ASTRA_FONT_CONVERT_UNSUPPORTED;
+                    FT_Done_MM_Var(library, variation);
+                    goto done;
+                }
+                for (FT_UInt axis = 0u; axis < variation->num_axis; ++axis)
+                    if (coords[axis] != variation->axis[axis].def)
+                        duplicate = 0;
+                for (FT_UInt prior = 0u; !duplicate && prior < at; ++prior) {
+                    int same = 1;
+                    const FT_Fixed *old = variation->namedstyle[prior].coords;
+                    if (old == NULL) continue;
+                    for (FT_UInt axis = 0u; axis < variation->num_axis; ++axis)
+                        if (coords[axis] != old[axis]) same = 0;
+                    if (same) duplicate = 1;
+                }
+                if (duplicate) continue;
+                if (selected == total + instances) {
+                    target_file = (uint32_t)file;
+                    target_instance = at + 1u;
+                }
+                ++instances;
+            }
+        }
+        if (instances > ASTRA_FONT_WORKER_FACES_MAX - total) {
+            result = ASTRA_FONT_CONVERT_LIMIT;
+            if (variation != NULL) FT_Done_MM_Var(library, variation);
+            goto done;
+        }
+        total += instances;
+        if (variation != NULL) FT_Done_MM_Var(library, variation);
+        FT_Done_Face(face);
+        face = NULL;
+    }
+    *face_count = total;
+    if (target_file == UINT32_MAX) goto done;
+    if (FT_New_Memory_Face(library, source, (FT_Long)source_length,
+        (FT_Long)((target_instance << 16) | target_file), &face) != 0)
+        goto done;
+    *selected_face = face;
+    *file_index = target_file;
+    *instance_index = target_instance;
+    face = NULL;
+    result = ASTRA_FONT_CONVERT_OK;
+done:
+    if (face != NULL) FT_Done_Face(face);
+    return result;
 }
 
 static int glyph_bitmap(Bytes *glyphs, Bytes *bitmap, FT_Face face,
@@ -255,10 +363,13 @@ int astra_font_convert_outline(const void *source, uint32_t source_length,
 {
     FT_Library library = NULL;
     FT_Face face = NULL;
+    FT_MM_Var *variation = NULL;
+    FT_Fixed coordinates[32] = {0};
     Bytes name = {0}, cmap = {0}, strikes = {0}, glyphs = {0}, bitmap = {0};
     uint32_t *dense_map = NULL, *source_glyphs = NULL;
     MapEntry *entries = NULL;
     uint32_t count = 0u, map_count = 0u, fallback_dense = UINT32_MAX;
+    uint32_t file_index = 0u, instance_index = 0u;
     uint8_t digest[32], *packed = NULL;
     uint32_t packed_length = 0u;
     int result = ASTRA_FONT_CONVERT_INVALID;
@@ -273,15 +384,22 @@ int astra_font_convert_outline(const void *source, uint32_t source_length,
         !astra_utf8_validate(license, (uint32_t)strlen(license), 0u))
         return ASTRA_FONT_CONVERT_INVALID;
     if (FT_Init_FreeType(&library) != 0) return ASTRA_FONT_CONVERT_UNSUPPORTED;
-    if (FT_New_Memory_Face(library, source, (FT_Long)source_length,
-                           (FT_Long)face_index, &face) != 0) goto done;
-    if (face->num_faces <= 0 || face->num_faces > 64 ||
-        face->num_glyphs <= 0 || face->num_glyphs > FONT_GLYPH_LIMIT ||
-        face->num_faces > UINT32_MAX) { result = ASTRA_FONT_CONVERT_LIMIT; goto done; }
-    *face_count = (uint32_t)face->num_faces;
-    /* shortcut: variable axes need provenance, add FT_Get_MM_Var before enabling. */
-    if ((face->face_flags & FT_FACE_FLAG_MULTIPLE_MASTERS) != 0 ||
-        (face->face_flags & FT_FACE_FLAG_COLOR) != 0 ||
+    result = open_face(library, source, source_length, face_index,
+                       &face, face_count, &file_index, &instance_index);
+    if (result != ASTRA_FONT_CONVERT_OK) goto done;
+    if (face->num_glyphs <= 0 || face->num_glyphs > FONT_GLYPH_LIMIT) {
+        result = ASTRA_FONT_CONVERT_LIMIT; goto done;
+    }
+    if ((face->face_flags & FT_FACE_FLAG_MULTIPLE_MASTERS) != 0) {
+        if (FT_Get_MM_Var(face, &variation) != 0 || variation == NULL ||
+            variation->num_axis == 0u || variation->num_axis > 32u ||
+            FT_Get_Var_Design_Coordinates(face, variation->num_axis,
+                                           coordinates) != 0) {
+            result = ASTRA_FONT_CONVERT_UNSUPPORTED;
+            goto done;
+        }
+    }
+    if ((face->face_flags & FT_FACE_FLAG_COLOR) != 0 ||
         FT_Select_Charmap(face, FT_ENCODING_UNICODE) != 0) {
         result = ASTRA_FONT_CONVERT_UNSUPPORTED;
         goto done;
@@ -338,7 +456,8 @@ int astra_font_convert_outline(const void *source, uint32_t source_length,
     astra_sha256_init(&hash);
     astra_sha256_update(&hash, source, source_length);
     astra_sha256_final(&hash, digest);
-    if (!metadata(&name, face, source_name, license, digest, count, face_index)) {
+    if (!metadata(&name, face, source_name, license, digest, count,
+                  file_index, instance_index, variation, coordinates)) {
         result = ASTRA_FONT_CONVERT_NOMEM; goto done;
     }
     AstraAfntChunk chunks[ASTRA_AFNT_CHUNK_COUNT] = {
@@ -367,6 +486,7 @@ done:
     free(dense_map);
     free(source_glyphs);
     free(entries);
+    if (variation != NULL) FT_Done_MM_Var(library, variation);
     if (face != NULL) FT_Done_Face(face);
     FT_Done_FreeType(library);
     return result;

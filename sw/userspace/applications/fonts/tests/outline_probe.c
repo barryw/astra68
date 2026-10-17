@@ -41,6 +41,23 @@ static int has_face(const AstraFontsCatalog *catalog, const char *id)
     return 0;
 }
 
+static int has_imported_style(const AstraFontsCatalog *catalog,
+                              const char *style)
+{
+    for (uint32_t at = 0u; at < catalog->face_count; ++at) {
+        AstraInstalledFont face;
+        if (astra_fonts_catalog_face(catalog, at, &face) != ASTRA_OK)
+            return 0;
+        if ((face.flags & ASTRA_INSTALLED_FONT_SYSTEM) == 0u &&
+            face.family_length == sizeof("STIX Two Text") - 1u &&
+            memcmp(face.family, "STIX Two Text", face.family_length) == 0 &&
+            face.style_length == strlen(style) &&
+            memcmp(face.style, style, face.style_length) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *read, *admin, *render, *bootstrap;
@@ -56,6 +73,7 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t receive = 0u, send = 0u, index = 0u;
     uint32_t status = FAIL_FILES;
     int resumed = 0, expect_limit = 0, expect_later_failure = 0;
+    int expect_variable = 0;
     AstraResult result;
     char id[ASTRA_FONT_ID_MAX] = {0};
     char again[ASTRA_FONT_ID_MAX] = {0};
@@ -95,6 +113,12 @@ int astra_main(const AstraStartupInfo *startup)
     if (expect_later_failure &&
         astra_filesystem_close(&marker) != ASTRA_VFS_OK)
         goto done;
+    expect_variable = astra_filesystem_open(&files.filesystem,
+        "/SYSTEM/expect-outline-variable", ASTRA_VFS_OPEN_READ,
+        &marker) == ASTRA_VFS_OK;
+    if (expect_variable && astra_filesystem_close(&marker) != ASTRA_VFS_OK)
+        goto done;
+    if (expect_variable) expected_faces = 4u;
     status = FAIL_SOURCE;
     if (astra_process_read_file_alloc(&files, SOURCE, &source,
                                       &source_size) != ASTRA_VFS_OK ||
@@ -142,6 +166,12 @@ int astra_main(const AstraStartupInfo *startup)
     if (after.face_count != before.face_count +
                             (resumed ? 0u : expected_faces) ||
         !has_face(&after, id))
+        goto done;
+    if (expect_variable &&
+        (!has_imported_style(&after, "Regular") ||
+         !has_imported_style(&after, "Medium") ||
+         !has_imported_style(&after, "SemiBold") ||
+         !has_imported_style(&after, "Bold")))
         goto done;
     status = FAIL_FACE;
     if (astra_fonts_face_open(render->handle, id,

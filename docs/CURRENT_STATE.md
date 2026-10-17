@@ -92,8 +92,9 @@ passes four hardware triangle commands, three surface reads, and 65/65 display
 submissions. Native display and Doom input/rendering passed the isolated DE25
 candidate gate. Build-time AFNT conversion covers TTF, OTF, selected TTC faces,
 variable default instances, and monochrome Amiga disk fonts. Native runtime
-import currently covers AFNT and static TTF/OTF/TTC; variable and Amiga runtime
-import remain open. Shared C AFNT 0.2 validation and packing round-trip shipped fonts plus
+import covers AFNT, static TTF/OTF/TTC, and default plus distinct named
+variable instances. Custom variable coordinates and Amiga runtime import
+remain open. Shared C AFNT 0.2 validation and packing round-trip shipped fonts,
 Iosevka, Source Sans, and Amiga spike AFNT on Beast. A reusable HPS C outline
 converter turns static Iosevka TTF and Source Sans OTF into validated A8 AFNT;
 host/sanitizer and AArch64 compile checks pass. Shared AFNT C metadata readers
@@ -160,9 +161,9 @@ TTF from DH0 through its file browser, publishes a content-addressed AFNT
 object and Config Kit inventory, opens family details, then chooses that
 imported face as the system font. The saved `user:<token>` matches the AFNT
 object token. A stray Flex break flag had placed the List outside the client area;
-removing it restored pointer and keyboard interaction. Native variable/Amiga
-import, live render-context refresh, removable-volume browsing, and physical
-release gates remain open.
+removing it restored pointer and keyboard interaction. Native Amiga import,
+custom variable coordinates, live render-context refresh, removable-volume
+browsing, and physical release gates remain open.
 Font service protocol 4 and Font Kit 2.7 add administrative uninstall for
 imported faces. The service refuses removal of shipped or active faces, commits
 the new Config Kit inventory before retiring the catalog entry, and then
@@ -210,8 +211,8 @@ fonts into its cloned image before boot; an older image lacked both and caused
 a false required-service failure. The native AFNT import probe also passes
 selection, restart persistence, and damaged-inventory fallback on the current
 ROM. Live selection updates, designed style resolution, client-side text
-metrics, variable/Amiga runtime import, and DE25 visual gates
-remain open. This font change is not in the selected production release.
+metrics, custom variable coordinates, Amiga runtime import, and DE25 visual
+gates remain open. This font change is not in the selected production release.
 Selecting a different system face now advances the catalog generation;
 selecting the current face leaves it unchanged. The native import/restart
 probe passes both cases on a disposable Beast QEMU image.
@@ -222,9 +223,18 @@ and did not modify the selected release or production settings. Native
 TTF, OTF and two-face TTC imports now pass disposable QEMU gates through the
 Fonts service, including AFNT catalog publication, system selection, and
 restart persistence. The service runs conversion on a separate native thread
-because VFS holds the caller thread's one host channel. A valid 16.8 MiB
-three-face CJK TTC produces about 43 MiB of AFNT per face; the current
-32 MiB installed-face limit rejects it as capacity, with no partial catalog
+because VFS holds the caller thread's one host channel.
+STIX Two Text 2.13 now passes the same native path as a variable-font fixture:
+FreeType's default and named styles produce four distinct AFNT faces (Regular,
+Medium, SemiBold, Bold), while the named Regular duplicate is skipped. Source
+face, instance, and 16.16 design-axis coordinates are recorded in AFNT metadata.
+Beast host, ASan/UBSan and AArch64 QEMU-user worker tests pass, as does a
+disposable two-boot MC68040 QEMU import, catalog, selection, and restart gate.
+Static two-face TTC conversion still passes after the index mapping change.
+The selected DE25 release and production font inventory were not changed.
+
+A valid 16.8 MiB three-face CJK TTC produces about 43 MiB of AFNT per face;
+the current 32 MiB installed-face limit rejects it as capacity, with no partial catalog
 publication. The production DE25 release has not changed.
 
 Current production checkpoint: graphics release
