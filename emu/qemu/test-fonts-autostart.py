@@ -33,7 +33,7 @@ def main():
         # Make readiness include Fonts' catalog, controls, surface, and window.
         startup = Path(work) / "startup"
         startup.write_text(astra_image.DISPLAY_STARTUP_MANIFEST +
-                           "service /apps/Fonts.app grants GUI FONTS LIBS:r "
+                           "service /apps/Fonts.app grants GUI FONTS FONTS_ADMIN DH0:r LIBS:r "
                            "required\n", encoding="ascii")
         astra_image._replace_volume_file(image, str(startup), "/startup/system")
         machine = terminal.Machine(args.qemu, args.rom, image, work)

@@ -1,6 +1,7 @@
 #include "policy.h"
 
 #include <astra/theme.h>
+#include <astra/utf8.h>
 
 #include <string.h>
 
@@ -29,7 +30,14 @@ int fonts_face_selectable(const AstraFontCatalogFace *face)
 int fonts_request_valid(const AstraFontServiceRequest *request,
                         uint32_t size, uint32_t admin)
 {
-    return request != NULL && size == sizeof(*request) &&
+    uint32_t import;
+    const char *name_end;
+
+    if (request == NULL || size != sizeof(*request)) return 0;
+    import = request->header.operation == ASTRA_FONT_SERVICE_IMPORT;
+    name_end = memchr(request->source_name, '\0',
+                      sizeof(request->source_name));
+    return
            request->header.total_size == sizeof(*request) &&
            request->header.header_size == ASTRA_MESSAGE_HEADER_SIZE &&
            request->header.flags == 0u &&
@@ -39,8 +47,18 @@ int fonts_request_valid(const AstraFontServiceRequest *request,
            request->header.transaction_id != 0u &&
            request->reserved[0] == 0u && request->reserved[1] == 0u &&
            (request->header.operation == ASTRA_FONT_SERVICE_CATALOG ||
-            (admin && request->header.operation == ASTRA_FONT_SERVICE_SELECT)) &&
-           memchr(request->face_id, '\0', sizeof(request->face_id)) != NULL;
+            (admin && (request->header.operation == ASTRA_FONT_SERVICE_SELECT ||
+                       import))) &&
+           memchr(request->face_id, '\0', sizeof(request->face_id)) != NULL &&
+           (import ?
+                request->face_id[0] == '\0' &&
+                request->source_size > 0u &&
+                request->source_size <= ASTRA_FONT_SOURCE_MAX &&
+                name_end != NULL && name_end != request->source_name &&
+                astra_utf8_validate(request->source_name,
+                    (uint32_t)(name_end - request->source_name), 0u) :
+                request->source_size == 0u &&
+                request->source_name[0] == '\0');
 }
 
 int fonts_inventory_parse(const char *text, uint32_t length,

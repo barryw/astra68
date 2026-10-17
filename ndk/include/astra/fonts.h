@@ -15,6 +15,10 @@ ASTRA_EXTERN_C_BEGIN
 #define ASTRA_CAPABILITY_FONTS_ADMIN "FONTS_ADMIN"
 /** Maximum bytes in a face ID, including its terminator. */
 #define ASTRA_FONT_ID_MAX 64u
+/** Largest source accepted by native font import. */
+#define ASTRA_FONT_IMPORT_MAX (32u * 1024u * 1024u)
+/** Maximum source name bytes, including its terminator. */
+#define ASTRA_FONT_IMPORT_NAME_MAX 128u
 
 /** One borrowed face; strings are counted and live until catalog close. */
 typedef struct AstraInstalledFont {
@@ -100,6 +104,20 @@ ASTRA_NODISCARD AstraResult astra_fonts_catalog_close(
  * @return ::ASTRA_OK or a negative ::AstraResult. */
 ASTRA_NODISCARD AstraResult astra_fonts_select(
     AstraHandle admin, const char *id, uint32_t id_length);
+/** Import one native AFNT source into protected installed-font storage.
+ * The service rejects unsupported source formats until its converter worker
+ * is available. Returned ID is NUL-terminated on success and empty on error.
+ * @param admin FONTS_ADMIN send capability.
+ * @param bytes Complete source bytes, up to 32 MiB.
+ * @param length Source byte count.
+ * @param source_name Counted UTF-8 display name of source file.
+ * @param name_length Bytes of @p source_name, without terminator.
+ * @param installed_id Receives stable face ID; at least ASTRA_FONT_ID_MAX bytes.
+ * @return ::ASTRA_OK or a negative ::AstraResult. */
+ASTRA_NODISCARD AstraResult astra_fonts_import(
+    AstraHandle admin, const void *bytes, uint32_t length,
+    const char *source_name, uint32_t name_length,
+    char installed_id[ASTRA_FONT_ID_MAX]);
 
 ASTRA_EXTERN_C_END
 #endif

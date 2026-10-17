@@ -147,14 +147,22 @@ qualification remains open: the confined `astra-qemu-root` fixture keeps its
 WORK/SOUND exports root-only by design, so the existing icon-position gate
 cannot read Desktop's per-process syslog and loses placement lines from the
 finite kernel trace ring. Do not infer Fonts application launch from that gate.
-Native import transaction, Fonts UI import/system-choice controls, renderer
-consumption of saved choice, and physical release gates remain open. Build-time
-Python conversion is a development oracle, not a user import path.
+Font Kit 2.5 now exposes an admin-only AFNT import call. The resident service
+writes a validated content-addressed object, syncs it, commits its full SHA-256
+token through Config Kit, and publishes the new catalog generation. The native
+Fonts UI has composed List/button views for a DH0 file browser and system-face
+choice. A disposable QEMU image with current bundles passes Fonts autostart and
+Astraea glyph submissions; full userspace `all test`, focused service/client
+tests, sanitizer, analyzer and boundary checks pass on Beast. Interactive
+import, persistence across restart, corrupt-inventory recovery, TTF/OTF/TTC
+and Amiga conversion-worker integration, consumption of saved choice by the
+render path, removable-volume browsing, and physical release gates remain open.
+Build-time Python conversion is a development oracle, not a user import path.
 Draft installed-font storage now uses full SHA-256 content tokens and a single
 validated Config Kit inventory value as its future atomic publication point.
 The service caps AFNT reads, verifies referenced objects, and falls back to
-built-in faces without editing damaged user settings. This is groundwork only:
-the native import operation, source conversion worker, and UI are still absent.
+built-in faces without editing damaged user settings. Runtime import currently
+accepts only AFNT and is not production-qualified.
 Beast MC68040 font-service build, focused tests, sanitizer and analyzer pass;
 full userspace `all test` passed before the final logging-only change. A fresh
 disposable image with the final service passes the Fonts native autostart and

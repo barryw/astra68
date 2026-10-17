@@ -1,5 +1,6 @@
 #include <astra/control.h>
 #include <astra/fonts.h>
+#include <astra/filesystem_library.h>
 #include <astra/graphics_kit.h>
 #include <astra/interface_library.h>
 #include <astra/program.h>
@@ -10,6 +11,8 @@
 #include <astra/string.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
+#include <astra/utf8.h>
+#include <astra/vfs_process.h>
 #include <astra/window.h>
 
 #include <stdint.h>
@@ -20,6 +23,8 @@
 #define FONTS_FACE_MAX 64u
 #define FONTS_STRIKE_MAX 32u
 #define FONTS_DETAIL_MAX (FONTS_FACE_MAX * FONTS_STRIKE_MAX)
+/* shortcut: fixed browser page; add paging before folders exceed 128 entries. */
+#define FONTS_BROWSER_MAX 128u
 
 enum {
     FONTS_TITLE = 1u,
@@ -27,14 +32,17 @@ enum {
     FONTS_SCROLL,
     FONTS_LIST,
     FONTS_BACK,
-    FONTS_CONTROL_COUNT = FONTS_BACK
+    FONTS_USE,
+    FONTS_IMPORT,
+    FONTS_CONTROL_COUNT = FONTS_IMPORT
 };
 
 enum {
     FONTS_FAIL_CATALOG = ASTRA_STATUS_PROGRAM_FIRST,
     FONTS_FAIL_CONTROL,
     FONTS_FAIL_SURFACE,
-    FONTS_FAIL_WINDOW
+    FONTS_FAIL_WINDOW,
+    FONTS_FAIL_FILESYSTEM
 };
 
 ASTRA_PROGRAM("fonts", 0, 1, 0, "Barry Walker",
@@ -45,10 +53,22 @@ static AstraChoiceItem families[FONTS_FACE_MAX];
 static uint32_t family_count;
 static AstraChoiceItem *details;
 static char (*detail_text)[160];
+static uint32_t *detail_faces;
 static uint32_t detail_capacity;
 static uint32_t detail_count;
 static uint32_t active_family = UINT32_MAX;
 static uint32_t main_selection;
+static uint32_t detail_selection;
+static AstraHandle fonts_read;
+static AstraHandle fonts_admin;
+static const char *message;
+static AstraProcessFilesystem files = ASTRA_PROCESS_FILESYSTEM_INIT;
+static AstraDirectoryEntry browser_nodes[FONTS_BROWSER_MAX];
+static AstraChoiceItem browser_items[FONTS_BROWSER_MAX];
+static uint32_t browser_count;
+static uint32_t browser_selection;
+static uint32_t browsing;
+static char browser_path[ASTRA_VFS_PATH_MAX] = "/dh0";
 static AstraControl controls[FONTS_CONTROL_COUNT];
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
@@ -109,7 +129,9 @@ static uint32_t collect_families(void)
             (size_t)strikes * sizeof(*details));
         detail_text = astra_runtime_allocate(
             (size_t)strikes * sizeof(*detail_text));
-        if (details == NULL || detail_text == NULL)
+        detail_faces = astra_runtime_allocate(
+            (size_t)strikes * sizeof(*detail_faces));
+        if (details == NULL || detail_text == NULL || detail_faces == NULL)
             return FONTS_FAIL_CATALOG;
     }
     detail_capacity = strikes;
@@ -150,10 +172,126 @@ static uint32_t collect_details(uint32_t family_index)
             details[detail_count] = (AstraChoiceItem){
                 text.text, text.length, {0u, 0u}
             };
+            detail_faces[detail_count] = at;
             ++detail_count;
         }
     }
     return ASTRA_STATUS_OK;
+}
+
+static uint32_t browser_load(void)
+{
+    AstraDirectory directory = ASTRA_DIRECTORY_INIT;
+    uint32_t status = astra_filesystem_directory_open(
+        &files.filesystem, browser_path, &directory);
+
+    browser_count = 0u;
+    browser_selection = 0u;
+    if (status != ASTRA_VFS_OK) return status;
+    while (status == ASTRA_VFS_OK) {
+        AstraDirectoryEntry node;
+        uint32_t count = 0u;
+
+        status = astra_filesystem_directory_read(&directory, &node, 1u,
+                                                 &count);
+        if (status != ASTRA_VFS_OK || count == 0u) break;
+        const char *end = memchr(node.name, '\0', sizeof(node.name));
+        if (end == NULL || end == node.name ||
+            !astra_utf8_validate(node.name,
+                (uint32_t)(end - node.name), 0u) ||
+            memchr(node.name, '/', (size_t)(end - node.name)) != NULL ||
+            strcmp(node.name, ".") == 0 || strcmp(node.name, "..") == 0 ||
+            (node.kind != ASTRA_VFS_KIND_FILE &&
+             node.kind != ASTRA_VFS_KIND_DIRECTORY))
+            continue;
+        if (browser_count == FONTS_BROWSER_MAX) {
+            status = ASTRA_VFS_ERR_LIMIT;
+            break;
+        }
+        browser_nodes[browser_count] = node;
+        browser_items[browser_count] = (AstraChoiceItem){
+            browser_nodes[browser_count].name,
+            (uint32_t)strlen(node.name), {0u, 0u}
+        };
+        ++browser_count;
+    }
+    astra_filesystem_directory_close(&directory);
+    if (status != ASTRA_VFS_OK) browser_count = 0u;
+    return status;
+}
+
+static uint32_t browser_enter(void)
+{
+    const AstraDirectoryEntry *node;
+    size_t length = strlen(browser_path);
+    size_t name_length;
+
+    if (browser_selection >= browser_count) return ASTRA_VFS_ERR_INVALID;
+    node = &browser_nodes[browser_selection];
+    if (node->kind != ASTRA_VFS_KIND_DIRECTORY)
+        return ASTRA_VFS_ERR_INVALID;
+    name_length = strlen(node->name);
+    if (length + name_length + 2u > sizeof(browser_path))
+        return ASTRA_VFS_ERR_LIMIT;
+    browser_path[length] = '/';
+    memcpy(browser_path + length + 1u, node->name, name_length + 1u);
+    uint32_t status = browser_load();
+    if (status != ASTRA_VFS_OK) {
+        browser_path[length] = '\0';
+        (void)browser_load();
+    }
+    return status;
+}
+
+static AstraResult browser_import(void)
+{
+    AstraFile file = ASTRA_FILE_INIT;
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    const AstraDirectoryEntry *node;
+    char path[ASTRA_VFS_PATH_MAX];
+    char id[ASTRA_FONT_ID_MAX];
+    void *bytes;
+    uint32_t length = 0u;
+    uint32_t status;
+    uint32_t opened;
+    size_t prefix_length;
+    AstraResult result;
+
+    if (browser_selection >= browser_count) return ASTRA_ERROR_INVALID_ARGUMENT;
+    node = &browser_nodes[browser_selection];
+    if (node->kind != ASTRA_VFS_KIND_FILE) return ASTRA_ERROR_INVALID_ARGUMENT;
+    length = (uint32_t)strlen(node->name);
+    if (length == 0u || length >= ASTRA_FONT_IMPORT_NAME_MAX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    prefix_length = strlen(browser_path);
+    if (prefix_length + length + 2u > sizeof(path))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    memcpy(path, browser_path, prefix_length);
+    path[prefix_length] = '/';
+    memcpy(path + prefix_length + 1u, node->name, length + 1u);
+    status = astra_filesystem_open(&files.filesystem, path,
+                                   ASTRA_VFS_OPEN_READ, &file);
+    opened = status == ASTRA_VFS_OK;
+    if (status == ASTRA_VFS_OK)
+        status = astra_filesystem_file_info(&file, &info);
+    if (opened) {
+        uint32_t closed = astra_filesystem_close(&file);
+        if (status == ASTRA_VFS_OK) status = closed;
+    }
+    if (status != ASTRA_VFS_OK) return ASTRA_ERROR_IO;
+    if (info.kind != ASTRA_VFS_KIND_FILE || info.byte_size == 0u ||
+        info.byte_size > ASTRA_FONT_IMPORT_MAX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    bytes = astra_runtime_allocate((size_t)info.byte_size);
+    if (bytes == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
+    status = astra_process_read_file(&files, path, bytes,
+                                     (uint32_t)info.byte_size, &length);
+    result = status == ASTRA_VFS_OK && length == info.byte_size ?
+             astra_fonts_import(fonts_admin, bytes, length, node->name,
+                                (uint32_t)strlen(node->name), id) :
+             ASTRA_ERROR_IO;
+    astra_runtime_deallocate(bytes);
+    return result;
 }
 
 static uint32_t build_controls(void)
@@ -162,21 +300,27 @@ static uint32_t build_controls(void)
     AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
     AstraChoiceInfo list = ASTRA_CHOICE_INFO_INIT;
     AstraButtonInfo back = ASTRA_BUTTON_INFO_INIT;
+    AstraButtonInfo use = ASTRA_BUTTON_INFO_INIT;
+    AstraButtonInfo import = ASTRA_BUTTON_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
     const AstraChoiceItem *title = active_family == UINT32_MAX ? NULL :
                                    &families[active_family];
 
     label.id = FONTS_TITLE;
-    label.text = title == NULL ? "Fonts" : title->text;
-    label.text_length = title == NULL ? 5u : title->text_length;
+    label.text = browsing ? browser_path : title == NULL ? "Fonts" :
+                 title->text;
+    label.text_length = browsing ? (uint32_t)strlen(browser_path) :
+                        title == NULL ? 5u : title->text_length;
     label.text_role = ASTRA_TEXT_CLIENT_PRIMARY;
     if (astra_interface_label_init(CONTROL(FONTS_TITLE), &label) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     label.id = FONTS_HINT;
-    label.text = active_family == UINT32_MAX ?
+    label.text = message != NULL ? message : browsing ?
+                 "Open a folder or select a font file to import" :
+                 active_family == UINT32_MAX ?
                  (family_count == 0u ? "No fonts installed" :
                   "Double-click a family to see installed styles and sizes") :
-                 "Installed styles and bitmap sizes";
+                 "Select a style, then use it for system text";
     label.text_length = (uint32_t)strlen(label.text);
     label.text_role = ASTRA_TEXT_CLIENT_SECONDARY;
     if (astra_interface_label_init(CONTROL(FONTS_HINT), &label) != ASTRA_OK)
@@ -188,17 +332,35 @@ static uint32_t build_controls(void)
     if (astra_interface_scroll_view_init(CONTROL(FONTS_SCROLL), &view) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     list.id = FONTS_LIST;
-    list.items = active_family == UINT32_MAX ? families : details;
-    list.item_count = active_family == UINT32_MAX ? family_count : detail_count;
+    list.items = browsing ? browser_items :
+                 active_family == UINT32_MAX ? families : details;
+    list.item_count = browsing ? browser_count :
+                      active_family == UINT32_MAX ? family_count : detail_count;
     list.selected = list.item_count == 0u ? UINT32_MAX :
-                    active_family == UINT32_MAX ? main_selection : 0u;
+                    browsing ? browser_selection :
+                    active_family == UINT32_MAX ? main_selection : detail_selection;
     if (astra_interface_list_init(CONTROL(FONTS_LIST), &list) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     back.id = FONTS_BACK;
-    back.text = "Back to families";
-    back.text_length = sizeof("Back to families") - 1u;
-    back.state = active_family == UINT32_MAX ? ASTRA_CONTROL_COLLAPSED : 0u;
+    back.text = browsing ? "Up" : "Back to families";
+    back.text_length = (uint32_t)strlen(back.text);
+    back.state = !browsing && active_family == UINT32_MAX ?
+                 ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_BACK), &back) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
+    use.id = FONTS_USE;
+    use.text = browsing ? "Import selected font" : "Use for system text";
+    use.text_length = (uint32_t)strlen(use.text);
+    use.state = !browsing && active_family == UINT32_MAX ?
+                ASTRA_CONTROL_COLLAPSED : 0u;
+    if (astra_interface_button_init(CONTROL(FONTS_USE), &use) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
+    import.id = FONTS_IMPORT;
+    import.text = "Import font…";
+    import.text_length = (uint32_t)strlen(import.text);
+    import.state = browsing || active_family != UINT32_MAX ?
+                   ASTRA_CONTROL_COLLAPSED : 0u;
+    if (astra_interface_button_init(CONTROL(FONTS_IMPORT), &import) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
 
     item.flags = ASTRA_FLEX_BREAK_AFTER;
@@ -216,6 +378,10 @@ static uint32_t build_controls(void)
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     if (astra_interface_control_set_flex(CONTROL(FONTS_BACK), &item) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
+    if (astra_interface_control_set_flex(CONTROL(FONTS_USE), &item) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
+    if (astra_interface_control_set_flex(CONTROL(FONTS_IMPORT), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     if (astra_interface_ui_init(&ui, controls, FONTS_CONTROL_COUNT,
                                 client_width, client_height) != ASTRA_OK)
@@ -251,8 +417,106 @@ static uint32_t present(void)
     return ASTRA_STATUS_OK;
 }
 
+static uint32_t reload_catalog(void)
+{
+    AstraFontsCatalog fresh = ASTRA_FONTS_CATALOG_INIT;
+
+    if (astra_fonts_catalog_open(fonts_read, &fresh) != ASTRA_OK)
+        return FONTS_FAIL_CATALOG;
+    if (astra_fonts_catalog_close(&catalog) != ASTRA_OK) {
+        AstraResult ignored = astra_fonts_catalog_close(&fresh);
+        (void)ignored;
+        return FONTS_FAIL_CATALOG;
+    }
+    astra_runtime_deallocate(details);
+    astra_runtime_deallocate(detail_text);
+    astra_runtime_deallocate(detail_faces);
+    details = NULL;
+    detail_text = NULL;
+    detail_faces = NULL;
+    detail_capacity = 0u;
+    detail_count = 0u;
+    family_count = 0u;
+    main_selection = 0u;
+    active_family = UINT32_MAX;
+    browsing = 0u;
+    catalog = fresh;
+    return collect_families();
+}
+
+static uint32_t import_selected(void)
+{
+    AstraResult result = browser_import();
+
+    if (result == ASTRA_OK) {
+        if (reload_catalog() != ASTRA_STATUS_OK) return FONTS_FAIL_CATALOG;
+        message = "Font imported";
+    } else {
+        message = result == ASTRA_ERROR_UNSUPPORTED ?
+                  "This font format is not supported yet" :
+                  result == ASTRA_ERROR_INVALID_ARGUMENT ?
+                  "Select a valid font file smaller than 32 MiB" :
+                  "Could not import font file";
+    }
+    if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+    return present();
+}
+
 static uint32_t action(const AstraUIAction *event)
 {
+    if (browsing) {
+        if (event->control_id == FONTS_LIST &&
+            (event->type == ASTRA_UI_ACTION_VALUE_CHANGED ||
+             event->type == ASTRA_UI_ACTION_ACTIVATE) &&
+            event->value >= 0 && (uint64_t)event->value < browser_count)
+            browser_selection = (uint32_t)event->value;
+        if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
+            event->control_id == FONTS_LIST &&
+            browser_selection < browser_count) {
+            if (event->value < 0 || (uint64_t)event->value >= browser_count)
+                return FONTS_FAIL_CONTROL;
+            if (browser_nodes[browser_selection].kind == ASTRA_VFS_KIND_FILE)
+                return import_selected();
+            message = browser_enter() == ASTRA_VFS_OK ? NULL :
+                      "Could not open folder";
+            if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+            return present();
+        }
+        if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
+            event->control_id == FONTS_USE)
+            return import_selected();
+        if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
+            event->control_id == FONTS_BACK) {
+            if (strcmp(browser_path, "/dh0") == 0) {
+                browsing = 0u;
+                message = NULL;
+            } else {
+                size_t at = strlen(browser_path);
+                while (at > 4u && browser_path[at] != '/') --at;
+                if (browser_path[at] != '/')
+                    return FONTS_FAIL_CONTROL;
+                browser_path[at] = '\0';
+                message = browser_load() == ASTRA_VFS_OK ? NULL :
+                          "Could not open parent folder";
+            }
+            if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+            return present();
+        }
+        return ASTRA_STATUS_OK;
+    }
+    if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
+        event->control_id == FONTS_IMPORT) {
+        browsing = 1u;
+        message = browser_load() == ASTRA_VFS_OK ? NULL :
+                  "Could not open DH0";
+        if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+        return present();
+    }
+    if (event->control_id == FONTS_LIST &&
+        event->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+        active_family != UINT32_MAX && event->value >= 0 &&
+        (uint64_t)event->value < detail_count)
+        detail_selection = (uint32_t)event->value;
     if (event->control_id == FONTS_LIST &&
         event->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
         active_family == UINT32_MAX && event->value >= 0 &&
@@ -266,12 +530,32 @@ static uint32_t action(const AstraUIAction *event)
         if (collect_details(main_selection) != ASTRA_STATUS_OK)
             return FONTS_FAIL_CATALOG;
         active_family = main_selection;
+        detail_selection = 0u;
+        message = NULL;
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
         return present();
     }
     if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
         event->control_id == FONTS_BACK) {
         active_family = UINT32_MAX;
+        message = NULL;
+        if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+        return present();
+    }
+    if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
+        event->control_id == FONTS_USE) {
+        AstraInstalledFont face;
+        AstraResult result;
+
+        if (detail_selection >= detail_count ||
+            astra_fonts_catalog_face(&catalog,
+                detail_faces[detail_selection], &face) != ASTRA_OK)
+            return FONTS_FAIL_CATALOG;
+        result = astra_fonts_select(fonts_admin, face.id, face.id_length);
+        message = result == ASTRA_OK ? "System font choice saved" :
+                  result == ASTRA_ERROR_UNSUPPORTED ?
+                  "Font lacks required system text sizes" :
+                  "Could not save system font choice";
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
         return present();
     }
@@ -314,6 +598,7 @@ int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *gui;
     const AstraStartupCapability *fonts;
+    const AstraStartupCapability *admin;
     const AstraStartupCapability *bootstrap;
     AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
     AstraWindowCreateInfo window_info = ASTRA_WINDOW_CREATE_INFO_INIT;
@@ -323,11 +608,18 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_INVALID;
     gui = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
     fonts = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS);
+    admin = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_ADMIN);
     bootstrap = astra_startup_capability(startup,
                                          ASTRA_CAPABILITY_SERVICE_READY);
-    if (gui == NULL || fonts == NULL) return ASTRA_STATUS_BAD_HANDLE;
-    if (astra_fonts_catalog_open(fonts->handle, &catalog) != ASTRA_OK ||
-        collect_families() != ASTRA_STATUS_OK)
+    if (gui == NULL || fonts == NULL || admin == NULL)
+        return ASTRA_STATUS_BAD_HANDLE;
+    fonts_read = fonts->handle;
+    fonts_admin = admin->handle;
+    if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
+        status = FONTS_FAIL_FILESYSTEM;
+    if (status == ASTRA_STATUS_OK &&
+        (astra_fonts_catalog_open(fonts_read, &catalog) != ASTRA_OK ||
+         collect_families() != ASTRA_STATUS_OK))
         status = FONTS_FAIL_CATALOG;
     scroll_info.line_height = 32u;
     if (status == ASTRA_STATUS_OK &&
@@ -378,6 +670,8 @@ int astra_main(const AstraStartupInfo *startup)
         status == ASTRA_STATUS_OK)
         status = FONTS_FAIL_CATALOG;
     astra_runtime_deallocate(detail_text);
+    astra_runtime_deallocate(detail_faces);
     astra_runtime_deallocate(details);
+    astra_process_filesystem_close(&files);
     return (int)status;
 }

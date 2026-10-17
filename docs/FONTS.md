@@ -507,8 +507,8 @@ The current build-time tool supports one TTF, OTF, or selected TTC face per
 invocation, plus monochrome Amiga disk strikes. It writes AFNT 0.2 and passes
 the shared AFNT validator. Variable outlines produce their default instance
 and record those axis coordinates; custom coordinates and additional named
-instances are later work. The managed worker, all-face collection expansion,
-and Fonts UI import transaction are not yet implemented.
+instances are later work. The managed worker and all-face collection expansion
+are not yet implemented.
 
 `sw/common/Makefile` builds host, MC68040, and AArch64 `libastraafnt.a`
 variants for shared C validation and canonical packing of AFNT 0.2
@@ -554,14 +554,22 @@ digest in canonical base32. Config Kit's single `installed` string lists those
 tokens, so a future multi-face importer can publish one complete inventory
 with one atomic settings commit after writing its objects. Service startup
 accepts only referenced objects whose bytes match their names and whose AFNT
-metadata validates. It bounds each read to 4 MiB. A damaged or unavailable
+metadata validates. It bounds each read to 32 MiB. A damaged or unavailable
 user inventory remains on disk and falls back to built-in fonts without
-blocking system startup. No import operation publishes that inventory yet;
-loose files in the protected directory are not installed.
-System-font selection, import, and renderer consumption are absent, so the app
-does not claim to change typography yet. Production DE25 still uses the
-previous selected release. The native import transaction and render path must
-land before enabling system font selection in a release.
+blocking system startup. Font Kit 2.5 and the native Fonts UI can import one
+AFNT file from DH0. The admin-only service validates it, writes and syncs a
+content-addressed object, commits its token through Config Kit, and publishes
+a new catalog generation. Duplicate imports return the existing ID; loose
+files in the protected directory are not installed. The UI also sends a
+system-face choice through the admin port, which persists in Config Kit.
+MC68040 builds, host policy/client tests, full userspace tests, static analysis,
+and a disposable QEMU Fonts autostart pass. Interactive import, persistence
+across restart, and corrupt-inventory recovery still need runtime gates.
+Only AFNT is accepted at runtime; the HPS converter is not wired to the
+service. System choice is not consumed by the live render path, so changing it
+does not yet alter system typography. Production DE25 still uses the previous
+selected release. Converter, render path, and interactive gates must land
+before enabling this draft in a production release.
 
 Haiku reference for this catalog boundary: `src/servers/app/font/FontManager.cpp`
 groups families and styles, `src/servers/app/font/FontFamily.cpp` keeps designed

@@ -39,6 +39,19 @@ int main(void)
     request.face_id[0] = '\0';
     request.header.flags = 1u;
     assert(!fonts_request_valid(&request, sizeof(request), 1u));
+    request.header.flags = 0u;
+    request.header.operation = ASTRA_FONT_SERVICE_IMPORT;
+    request.source_size = 3u;
+    memcpy(request.source_name, "abc.afnt", sizeof("abc.afnt"));
+    assert(!fonts_request_valid(&request, sizeof(request), 0u));
+    assert(fonts_request_valid(&request, sizeof(request), 1u));
+    request.source_name[0] = '\0';
+    assert(!fonts_request_valid(&request, sizeof(request), 1u));
+    request.source_name[0] = (char)0xff;
+    assert(!fonts_request_valid(&request, sizeof(request), 1u));
+    request.source_name[0] = 'a';
+    request.source_size = ASTRA_FONT_SOURCE_MAX + 1u;
+    assert(!fonts_request_valid(&request, sizeof(request), 1u));
 
     char token[ASTRA_FONT_OBJECT_TOKEN_SIZE];
     char inventory[2u * ASTRA_FONT_OBJECT_TOKEN_LENGTH + 1u];

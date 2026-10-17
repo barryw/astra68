@@ -40,3 +40,8 @@ ASTRA_FONT_2.4 {
         astra_fonts_catalog_close;
         astra_fonts_select;
 } ASTRA_FONT_2.3;
+
+ASTRA_FONT_2.5 {
+    global:
+        astra_fonts_import;
+} ASTRA_FONT_2.4;

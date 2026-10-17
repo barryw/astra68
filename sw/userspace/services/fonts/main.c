@@ -24,7 +24,7 @@ ASTRA_PROGRAM("fonts", 0, 1, 0, "Barry Walker",
 /* shortcut: 64 faces; grow inventory when native import can exceed this. */
 #define FONT_FACE_MAX 64u
 #define FONT_STRIKE_MAX 32u
-#define FONT_FILE_MAX (4u * 1024u * 1024u)
+#define FONT_FILE_MAX ASTRA_FONT_SOURCE_MAX
 #define FONT_INVENTORY_MAX (FONT_FACE_MAX * ASTRA_FONT_OBJECT_TOKEN_SIZE)
 
 typedef struct FontEntry {
@@ -43,6 +43,9 @@ static uint32_t generation = 1u;
 static char selected[ASTRA_FONT_FACE_ID_MAX];
 static char inventory_text[FONT_INVENTORY_MAX];
 static char inventory_tokens[FONT_FACE_MAX][ASTRA_FONT_OBJECT_TOKEN_SIZE];
+static uint32_t inventory_count;
+static uint32_t inventory_ready;
+static uint32_t config_ready;
 
 static FontEntry *find_face(const char *id)
 {
@@ -175,7 +178,10 @@ static uint32_t load_inventory(void)
     uint32_t result = astra_config_count(&config, "installed", &values);
     if (result != ASTRA_CONFIG_OK || values > 1u)
         return ASTRA_VFS_ERR_INVALID;
-    if (values == 0u) return ASTRA_VFS_OK;
+    if (values == 0u) {
+        inventory_ready = 1u;
+        return ASTRA_VFS_OK;
+    }
     result = astra_config_get_string(&config, "installed", 0u,
                                      inventory_text, sizeof(inventory_text),
                                      &length);
@@ -197,7 +203,157 @@ static uint32_t load_inventory(void)
         uint32_t status = load_face(path, id, 0u, inventory_tokens[at]);
         if (status != ASTRA_VFS_OK) return status;
     }
+    inventory_count = count;
+    inventory_ready = 1u;
     return ASTRA_VFS_OK;
+}
+
+static uint32_t store_object(const char *token, const void *bytes,
+                             uint32_t length)
+{
+    char path[ASTRA_VFS_PATH_MAX], temporary[ASTRA_VFS_PATH_MAX];
+    AstraFile file = ASTRA_FILE_INIT;
+    AstraFile directory = ASTRA_FILE_INIT;
+    void *existing = NULL;
+    uint32_t existing_length = 0u, used = 0u;
+    uint32_t status;
+    uint32_t opened;
+
+    if (snprintf(path, sizeof(path),
+                 "/CONFIG_SYSTEM/installed/%s.afnt", token) >=
+            (int)sizeof(path) ||
+        snprintf(temporary, sizeof(temporary),
+                 "/CONFIG_SYSTEM/installed/%s.tmp", token) >=
+            (int)sizeof(temporary))
+        return ASTRA_VFS_ERR_LIMIT;
+    status = read_afnt(path, &existing, &existing_length);
+    if (status == ASTRA_VFS_OK) {
+        char actual[ASTRA_FONT_OBJECT_TOKEN_SIZE];
+        astra_font_object_token(existing, existing_length, actual);
+        astra_runtime_deallocate(existing);
+        return strcmp(actual, token) == 0 ? ASTRA_VFS_OK :
+                                           ASTRA_VFS_ERR_INVALID;
+    }
+    if (status != ASTRA_VFS_ERR_NOT_FOUND) return status;
+    status = astra_filesystem_unlink(&files.filesystem, temporary, 0u);
+    if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_NOT_FOUND)
+        return status;
+    status = astra_filesystem_open_mode(
+        &files.filesystem, temporary,
+        ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+            ASTRA_VFS_OPEN_EXCLUSIVE,
+        0600u, &file);
+    opened = status == ASTRA_VFS_OK;
+    while (status == ASTRA_VFS_OK && used < length) {
+        uint32_t moved = 0u;
+        status = astra_filesystem_write(
+            &file, length, (const uint8_t *)bytes + used,
+            length - used, &moved);
+        if (status == ASTRA_VFS_OK && moved == 0u)
+            status = ASTRA_VFS_ERR_IO;
+        used += moved;
+    }
+    if (status == ASTRA_VFS_OK) status = astra_filesystem_sync(&file);
+    if (opened) {
+        uint32_t closed = astra_filesystem_close(&file);
+        if (status == ASTRA_VFS_OK) status = closed;
+    }
+    if (status == ASTRA_VFS_OK)
+        status = astra_filesystem_rename(&files.filesystem, temporary, path);
+    if (status != ASTRA_VFS_OK) {
+        (void)astra_filesystem_unlink(&files.filesystem, temporary, 0u);
+        return status;
+    }
+    status = astra_filesystem_open(
+        &files.filesystem, "/CONFIG_SYSTEM/installed",
+        ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY, &directory);
+    opened = status == ASTRA_VFS_OK;
+    if (status == ASTRA_VFS_OK) status = astra_filesystem_sync(&directory);
+    if (opened) {
+        uint32_t closed = astra_filesystem_close(&directory);
+        if (status == ASTRA_VFS_OK) status = closed;
+    }
+    return status;
+}
+
+static uint32_t import_afnt(uint32_t area,
+                            const AstraFontServiceRequest *request,
+                            char imported[ASTRA_FONT_FACE_ID_MAX])
+{
+    void *mapping = NULL;
+    uint32_t mapped_size = 0u;
+    uint32_t status;
+    char token[ASTRA_FONT_OBJECT_TOKEN_SIZE];
+    char manifest[FONT_INVENTORY_MAX];
+    FontEntry *entry;
+
+    if (!inventory_ready || !config_ready)
+        return ASTRA_STATUS_IO;
+    status = astra_rt_area_map(area, ASTRA_AREA_MAP_READ,
+                               &mapping, &mapped_size);
+    if (status != ASTRA_SYSCALL_OK) return ASTRA_STATUS_BAD_HANDLE;
+    if (mapped_size < request->source_size) {
+        status = ASTRA_STATUS_PROTOCOL;
+        goto done;
+    }
+    if (request->source_size < 4u ||
+        memcmp(mapping, "AFNT", 4u) != 0) {
+        status = ASTRA_STATUS_UNSUPPORTED;
+        goto done;
+    }
+    astra_font_object_token(mapping, request->source_size, token);
+    if (snprintf(imported, ASTRA_FONT_FACE_ID_MAX, "user:%s", token) >=
+            (int)ASTRA_FONT_FACE_ID_MAX) {
+        status = ASTRA_STATUS_LIMIT;
+        goto done;
+    }
+    if (find_face(imported) != NULL) {
+        status = ASTRA_STATUS_OK;
+        goto done;
+    }
+    if (installed_count == FONT_FACE_MAX ||
+        inventory_count >= FONT_FACE_MAX) {
+        status = ASTRA_STATUS_LIMIT;
+        goto done;
+    }
+    entry = &installed[installed_count];
+    strcpy(entry->id, imported);
+    if (!astra_font_catalog_face_from_afnt(
+            mapping, request->source_size, entry->id,
+            (uint32_t)strlen(entry->id), 0u,
+            entry->family, sizeof(entry->family), entry->style,
+            sizeof(entry->style), entry->strikes, FONT_STRIKE_MAX,
+            &entry->face)) {
+        status = ASTRA_STATUS_INVALID;
+        goto done;
+    }
+    int size = snprintf(manifest, sizeof(manifest), "%s%s%s",
+                        inventory_text, inventory_count == 0u ? "" : " ",
+                        token);
+    if (size <= 0 || (size_t)size >= sizeof(manifest)) {
+        status = ASTRA_STATUS_LIMIT;
+        goto done;
+    }
+    status = store_object(token, mapping, request->source_size);
+    if (status != ASTRA_VFS_OK) goto done;
+    if (astra_config_set_string(&config, "installed", 0u, manifest) !=
+        ASTRA_CONFIG_OK) {
+        status = ASTRA_STATUS_IO;
+        goto done;
+    }
+    memcpy(inventory_text, manifest, (size_t)size + 1u);
+    memcpy(inventory_tokens[inventory_count], token,
+           ASTRA_FONT_OBJECT_TOKEN_SIZE);
+    ++inventory_count;
+    ++installed_count;
+    if (++generation == 0u) generation = 1u;
+    status = ASTRA_STATUS_OK;
+done:
+    if (astra_rt_area_unmap(mapping) != ASTRA_SYSCALL_OK &&
+        status == ASTRA_STATUS_OK)
+        status = ASTRA_STATUS_IO;
+    if (status != ASTRA_STATUS_OK) imported[0] = '\0';
+    return status;
 }
 
 static uint32_t catalog_area(uint32_t *area, uint32_t *size)
@@ -243,27 +399,30 @@ static void serve(uint32_t port, uint32_t admin)
 {
     AstraFontServiceRequest request = {0};
     AstraFontServiceReply reply = {0};
-    uint32_t handles[2] = {0};
+    uint8_t packet[ASTRA_MESSAGE_SIZE_MAX];
+    uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX] = {0};
     uint32_t bytes = 0u, count = 0u, area = 0u, area_size = 0u;
-    uint32_t status = astra_port_receive(port, &request, sizeof(request),
-                                          handles, 2u, &bytes, &count);
+    uint32_t status = astra_port_receive(
+        port, packet, sizeof(packet), handles,
+        ASTRA_MESSAGE_HANDLES_MAX, &bytes, &count);
     if (status != ASTRA_SYSCALL_OK) return;
-    if (count != 1u) {
-        for (uint32_t at = 0u; at < count; ++at)
-            (void)astra_close(handles[at]);
-        return;
-    }
+    if (bytes == sizeof(request)) memcpy(&request, packet, sizeof(request));
     status = fonts_request_valid(&request, bytes, admin) ? ASTRA_STATUS_OK :
                                                     ASTRA_STATUS_PROTOCOL;
+    if (count != (request.header.operation == ASTRA_FONT_SERVICE_IMPORT ?
+                  2u : 1u)) status = ASTRA_STATUS_PROTOCOL;
     if (status == ASTRA_STATUS_OK &&
         request.header.operation == ASTRA_FONT_SERVICE_CATALOG) {
         if (request.face_id[0] != '\0') status = ASTRA_STATUS_PROTOCOL;
         else status = catalog_area(&area, &area_size);
+    } else if (status == ASTRA_STATUS_OK &&
+               request.header.operation == ASTRA_FONT_SERVICE_IMPORT) {
+        status = import_afnt(handles[1], &request, reply.imported_id);
     } else if (status == ASTRA_STATUS_OK) {
         FontEntry *face = find_face(request.face_id);
         if (face == NULL) status = ASTRA_STATUS_NOT_FOUND;
         else if (!fonts_face_selectable(&face->face)) status = ASTRA_STATUS_UNSUPPORTED;
-        else if (config._private_state == NULL ||
+        else if (!config_ready ||
                  astra_config_set_string(&config, "system_font", 0u,
                                          face->id) != ASTRA_CONFIG_OK)
             status = ASTRA_STATUS_IO;
@@ -278,11 +437,15 @@ static void serve(uint32_t port, uint32_t admin)
     reply.generation = generation;
     reply.catalog_size = status == ASTRA_STATUS_OK ? area_size : 0u;
     memcpy(reply.selected_id, selected, sizeof(selected));
-    if (astra_port_send(handles[0], &reply, sizeof(reply),
+    if (count != 0u &&
+        astra_port_send(handles[0], &reply, sizeof(reply),
                         area == 0u ? NULL : &area, area == 0u ? 0u : 1u) !=
             ASTRA_SYSCALL_OK && area != 0u)
         (void)astra_close(area);
-    (void)astra_close(handles[0]);
+    else if (count == 0u && area != 0u)
+        (void)astra_close(area);
+    for (uint32_t at = 0u; at < count; ++at)
+        (void)astra_close(handles[at]);
 }
 
 int astra_main(const AstraStartupInfo *startup)
@@ -313,6 +476,7 @@ int astra_main(const AstraStartupInfo *startup)
                                  ASTRA_CONFIG_OPEN_WRITE, &config,
                                  &error) : ASTRA_CONFIG_IO;
     if (config_status == ASTRA_CONFIG_OK) {
+        config_ready = 1u;
         char wanted[ASTRA_FONT_FACE_ID_MAX] = {0};
         uint32_t length = 0u;
         /* Damaged inventory stays untouched; built-ins still boot. */

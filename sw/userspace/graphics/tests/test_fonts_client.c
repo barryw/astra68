@@ -13,6 +13,8 @@ static uint32_t document_size;
 static uint32_t document_generation = 7u;
 static uint32_t bad_reply;
 static uint32_t closed_handles;
+static uint8_t imported_bytes[16];
+static uint32_t imported_length;
 
 AstraResult astra_message_header_init(AstraMessageHeader *header,
                                       uint32_t total_size, uint32_t protocol,
@@ -34,6 +36,14 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
     assert(service == 1u);
     assert(call->request_size == sizeof(*request));
     assert(call->reply_capacity == sizeof(*reply));
+    if (request->header.operation == ASTRA_FONT_SERVICE_IMPORT) {
+        assert(call->handle_count == 1u && call->reply_index == 1u);
+        assert(call->handles[0] == 4u);
+        assert(request->source_size == imported_length);
+        assert(strcmp(request->source_name, "test.afnt") == 0);
+        call->handles[0] = ASTRA_INVALID_HANDLE;
+    } else
+        assert(call->handle_count == 0u && call->reply_index == 0u);
     astra_message_header_set(&reply->header, sizeof(*reply),
                              ASTRA_FONT_SERVICE_PROTOCOL,
                              ASTRA_FONT_SERVICE_VERSION,
@@ -44,6 +54,9 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
     reply->catalog_size = request->header.operation ==
         ASTRA_FONT_SERVICE_CATALOG ? document_size : 0u;
     memcpy(reply->selected_id, "system:test", sizeof("system:test"));
+    if (request->header.operation == ASTRA_FONT_SERVICE_IMPORT &&
+        bad_reply != 3u)
+        memcpy(reply->imported_id, "user:test", sizeof("user:test"));
     call->reply_size = bad_reply == 1u ? sizeof(*reply) - 1u : sizeof(*reply);
     call->reply_handle_count = request->header.operation ==
         ASTRA_FONT_SERVICE_CATALOG ? 1u : 0u;
@@ -54,17 +67,46 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
 
 AstraResult astra_area_map(AstraArea *area, uint32_t flags)
 {
-    assert(area->handle == 2u);
-    assert(flags == ASTRA_AREA_MAP_READ);
-    area->address = document;
-    area->size = sizeof(document);
+    assert(area->handle == 2u || area->handle == 3u);
+    assert(flags == (area->handle == 2u ? ASTRA_AREA_MAP_READ :
+                     ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE));
+    area->address = area->handle == 2u ? document : imported_bytes;
+    area->size = area->handle == 2u ? sizeof(document) :
+                                        sizeof(imported_bytes);
     area->map_flags = flags;
+    return ASTRA_OK;
+}
+
+AstraResult astra_area_create(uint32_t size, uint32_t rights, AstraArea *area)
+{
+    assert(size == imported_length && rights ==
+        (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+         ASTRA_RIGHT_TRANSFER));
+    area->handle = 3u;
+    return ASTRA_OK;
+}
+
+AstraResult astra_area_unmap(AstraArea *area)
+{
+    assert(area->handle == 3u && area->address == imported_bytes);
+    area->address = NULL;
+    area->size = 0u;
+    area->map_flags = 0u;
+    return ASTRA_OK;
+}
+
+AstraResult astra_handle_duplicate(AstraHandle source, uint32_t rights,
+                                    AstraHandle *duplicate)
+{
+    assert(source == 3u && rights ==
+        (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER));
+    *duplicate = 4u;
     return ASTRA_OK;
 }
 
 AstraResult astra_area_close(AstraArea *area)
 {
-    assert(area->handle == 2u);
+    assert(area->handle == 2u || area->handle == 3u);
     area->handle = ASTRA_INVALID_HANDLE;
     area->address = NULL;
     area->size = 0u;
@@ -75,7 +117,7 @@ AstraResult astra_area_close(AstraArea *area)
 
 AstraResult astra_handle_close(AstraHandle *handle)
 {
-    assert(*handle == 2u);
+    assert(*handle == 2u || *handle == 4u);
     *handle = ASTRA_INVALID_HANDLE;
     ++closed_handles;
     return ASTRA_OK;
@@ -122,5 +164,21 @@ int main(void)
     assert(astra_fonts_catalog_open(1u, &catalog) == ASTRA_ERROR_IO);
     assert(closed_handles == 5u);
     assert(catalog.generation == 0u);
+    char installed_id[ASTRA_FONT_ID_MAX];
+    const char source_bytes[] = "AFNT";
+    imported_length = sizeof(source_bytes) - 1u;
+    bad_reply = 0u;
+    assert(astra_fonts_import(1u, source_bytes, imported_length,
+                              "test.afnt", 9u, installed_id) == ASTRA_OK);
+    assert(strcmp(installed_id, "user:test") == 0);
+    assert(memcmp(imported_bytes, source_bytes, imported_length) == 0);
+    assert(closed_handles == 6u);
+    bad_reply = 3u;
+    assert(astra_fonts_import(1u, source_bytes, imported_length,
+                              "test.afnt", 9u, installed_id) ==
+           ASTRA_ERROR_IO);
+    assert(installed_id[0] == '\0' && closed_handles == 7u);
+    assert(astra_fonts_import(1u, source_bytes, 0u, "test.afnt", 9u,
+                              installed_id) == ASTRA_ERROR_INVALID_ARGUMENT);
     return 0;
 }
