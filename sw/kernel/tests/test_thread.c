@@ -967,6 +967,19 @@ static void test_wait_registration_allocation_failure_is_atomic(void)
         &allocation_stats));
     assert(allocation_stats.current_units == 0u);
     assert(allocation_stats.injected_failures == 1u);
+    kernel_allocation_test_clear_failure();
+    uint32_t call = 0u;
+    assert(kernel_thread_call_begin(thread, &call) == KERNEL_THREAD_OK);
+    uint16_t capacity = thread->wait_registrations_capacity;
+    --thread->wait_registrations_capacity;
+    assert(kernel_thread_block_wait_set(
+               thread, &spec, 1u, 0u, KERNEL_THREAD_DEADLINE_NEVER,
+               ASTRA_SYSCALL_TIMED_OUT) == KERNEL_THREAD_CORRUPT);
+    assert(kernel_thread_call_begin(thread, &call) == KERNEL_THREAD_CORRUPT);
+    assert(thread->state == KERNEL_THREAD_RUNNING &&
+           thread->wait_registration_count == 0u &&
+           kernel_thread_wait_queue_count(&queue) == 0u);
+    thread->wait_registrations_capacity = capacity;
     assert(kernel_thread_pool_valid());
     assert(kernel_allocation_valid());
 }

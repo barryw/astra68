@@ -8725,25 +8725,35 @@ static void test_host_admission(void)
         host_channel_complete_on_kick = 0u;
         host_channel_states[slot].consumer_position = 20u;
         registers[2] = 21u;
+        kernel_allocation_test_fail_site(
+            KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS, 1u);
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next != NULL && next->data[0] == ASTRA_SYSCALL_OUT_OF_MEMORY);
+        kernel_allocation_test_clear_failure();
+        assert(kernel_thread_snapshot(slot, &thread));
+        assert(thread.state == KERNEL_THREAD_RUNNING);
+        assert(host_channel_kick_calls == 2u && host_channel_arm_calls == 2u &&
+               host_channel_disarm_calls == 2u);
         assert(kernel_process_on_syscall(registers, user_stack, frame,
                                          &next) ==
                KERNEL_PROCESS_NO_RUNNABLE);
         assert(next == NULL);
         assert(kernel_thread_snapshot(slot, &thread));
         assert(thread.state == KERNEL_THREAD_BLOCKED);
-        assert(host_channel_kick_calls == 2u &&
+        assert(host_channel_kick_calls == 3u &&
                host_channel_kick_slot == slot &&
                host_channel_kick_producer == 21u);
-        assert(host_channel_arm_calls == 2u &&
+        assert(host_channel_arm_calls == 3u &&
                host_channel_arm_consumer == 21u &&
-               host_channel_disarm_calls == 1u);
+               host_channel_disarm_calls == 2u);
 
         host_channel_states[slot].consumer_position = 21u;
         assert(kernel_process_host_channel_irq_service(
             IRQ_SRC_HOST, 0u, NULL, &woken));
         assert(woken == 1u);
         assert(host_channel_ack_calls == 2u);
-        assert(host_channel_disarm_calls == 1u);
+        assert(host_channel_disarm_calls == 2u);
         next = kernel_process_resume_idle();
         assert(next != NULL && next->data[0] == ASTRA_SYSCALL_OK);
         assert(kernel_thread_snapshot(slot, &thread));
@@ -8951,11 +8961,23 @@ static void test_audio_stream(void)
                                 &next) == ASTRA_SYSCALL_INVALID_ARGUMENT);
     /* Full: the caller sleeps until the host frees one. */
     audio_stream_states[slot].queued = 3u;
+    kernel_allocation_test_fail_site(
+        KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS, 1u);
+    assert(audio_stream_syscall(ASTRA_SYSCALL_AUDIO_STREAM_WAIT, stream,
+                                0x7fffffffu, 0xffffffffu, KERNEL_PROCESS_OK,
+                                &next) == ASTRA_SYSCALL_OUT_OF_MEMORY);
+    kernel_allocation_test_clear_failure();
+    assert(kernel_thread_snapshot(0u, &thread));
+    assert(thread.state == KERNEL_THREAD_RUNNING);
+    assert(audio_stream_arm_calls == 1u);
+    assert(kernel_process_host_channel_irq_service(IRQ_SRC_HOST, 0u, NULL,
+                                                   &woken));
+    assert(woken == 0u);
     assert(audio_stream_syscall(ASTRA_SYSCALL_AUDIO_STREAM_WAIT, stream,
                                 0x7fffffffu, 0xffffffffu,
                                 KERNEL_PROCESS_NO_RUNNABLE, &next) ==
            UINT32_MAX);
-    assert(audio_stream_arm_calls == 1u);
+    assert(audio_stream_arm_calls == 2u);
     assert(kernel_thread_snapshot(0u, &thread));
     assert(thread.state == KERNEL_THREAD_BLOCKED);
     /* An interrupt that frees nothing wakes no one. */

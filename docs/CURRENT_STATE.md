@@ -33,6 +33,33 @@ and prepare/block ordering are the comparison points, not an assumed cause.
 The existing Astra host-channel, wait-registration and scheduling mechanisms
 remain the sole implementation. Full failure archive is checksum-verified.
 
+Fault injection independently reproduces the dispatch contract failure:
+HOST_CHANNEL_WAIT treats wait-registration allocation exhaustion as CORRUPT
+instead of returning OUT_OF_MEMORY. Before-fix failure is retained in
+`/var/tmp/astra-host-wait-allocation-red-20261018.log`. Shared native wait error
+translation now owns deadline/resource-limit/allocation results for ordinary
+handle waits, host channels and audio streams. Audio admission failure also
+retires its pending-wait bit. Existing registration allocation now returns
+the precise thread status: bad retained capacity or inaccessible successfully
+allocated storage remains CORRUPT, never an ordinary resource error. Both
+existing callers preserve that result. No new wait mechanism or masked panic.
+This consolidates three copies of status policy; existing allocation-failure
+test hooks and wait tests are extended, with no new test helper.
+
+Host/audio exhaustion, unchanged running state, cleanup/retry and registration
+corruption checks pass with the full kernel host suite in
+`/var/tmp/astra-wait-resource-green-20261018.log`. Before changing the shared
+wait path, the target-representative K1/K10 gate passes all twelve markers and
+existing cycle budgets at 16 ns/instruction in
+`/var/tmp/astra-wait-registration-baseline-20261018.log`; baseline ROM, ELF and
+disassembly are retained separately. After-change target/budget checks remain
+pending. This resource-error defect is proven, but its responsibility for the
+observed physical panic is not established; diagnostic repeated boots continue
+using the unchanged `b83b2f3b` diagnostic ROM. One initial boot passes before a
+stale retained panic report trips the observer. That original report was
+identity-checked and rotated without losing it; new phases boot11–boot20 use
+distinct logs. Do not substitute these diagnostic boots for final acceptance.
+
 Final corrected source `446948863f72b31af2b62dc04ab71805a4ba5357`
 passes Display host/sanitizer/MC68040/analyzer gates in
 `/var/tmp/astra-font-state-focus-edge-green-20261018.log`. Clean publisher

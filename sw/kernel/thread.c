@@ -977,13 +977,14 @@ static void reset_wait_row(KernelThread *thread)
     }
 }
 
-static bool ensure_wait_registrations(KernelThread *thread)
+static KernelThreadStatus ensure_wait_registrations(KernelThread *thread)
 {
     KernelThreadWaitRegistration *registrations;
 
     if (thread->wait_registrations != NULL)
         return thread->wait_registrations_capacity ==
-               KERNEL_THREAD_WAIT_MEMBER_MAX;
+               KERNEL_THREAD_WAIT_MEMBER_MAX ? KERNEL_THREAD_OK :
+                                               KERNEL_THREAD_CORRUPT;
 #if defined(KERNEL_THREAD_STANDALONE_HOST)
     uint32_t bytes = KERNEL_THREAD_WAIT_MEMBER_MAX *
                      sizeof(*registrations);
@@ -991,20 +992,20 @@ static bool ensure_wait_registrations(KernelThread *thread)
     if (!kernel_allocation_attempt(
             KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS,
             thread->resource_owner))
-        return false;
+        return KERNEL_THREAD_OUT_OF_MEMORY;
     registrations = calloc(KERNEL_THREAD_WAIT_MEMBER_MAX,
                            sizeof(*registrations));
     if (registrations == NULL) {
         kernel_allocation_fail(
             KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS,
             thread->resource_owner);
-        return false;
+        return KERNEL_THREAD_OUT_OF_MEMORY;
     }
     if (!kernel_allocation_commit(
             KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS, 1u, bytes,
             thread->resource_owner)) {
         free(registrations);
-        return false;
+        return KERNEL_THREAD_OUT_OF_MEMORY;
     }
     thread->wait_registrations_physical = 0u;
     thread->wait_registrations_frames = 0u;
@@ -1013,18 +1014,20 @@ static bool ensure_wait_registrations(KernelThread *thread)
                      sizeof(*registrations);
     uint32_t frames = (bytes + KERNEL_PAGE_SIZE - 1u) / KERNEL_PAGE_SIZE;
     uint32_t physical;
+    KernelMemoryStatus status;
 
-    if (kernel_memory_alloc_zeroed_tagged(
-            KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS, frames, 1u,
-            KERNEL_FRAME_KERNEL, thread->resource_owner, &physical) !=
-        KERNEL_MEMORY_OK)
-        return false;
+    status = kernel_memory_alloc_zeroed_tagged(
+        KERNEL_ALLOCATION_SITE_THREAD_WAIT_REGISTRATIONS, frames, 1u,
+        KERNEL_FRAME_KERNEL, thread->resource_owner, &physical);
+    if (status != KERNEL_MEMORY_OK)
+        return status == KERNEL_MEMORY_OUT_OF_MEMORY ?
+            KERNEL_THREAD_OUT_OF_MEMORY : KERNEL_THREAD_CORRUPT;
     registrations = kernel_memory_access(physical,
                                          frames * KERNEL_PAGE_SIZE);
     if (registrations == NULL) {
         (void)kernel_memory_release(physical, frames,
                                     thread->resource_owner);
-        return false;
+        return KERNEL_THREAD_CORRUPT;
     }
     thread->wait_registrations_physical = physical;
     thread->wait_registrations_frames = (uint16_t)frames;
@@ -1032,7 +1035,7 @@ static bool ensure_wait_registrations(KernelThread *thread)
     thread->wait_registrations = registrations;
     thread->wait_registrations_capacity = KERNEL_THREAD_WAIT_MEMBER_MAX;
     reset_wait_row(thread);
-    return true;
+    return KERNEL_THREAD_OK;
 }
 
 static KernelThreadStatus enqueue_wait_registration(
@@ -1961,8 +1964,9 @@ KernelThreadStatus block_wait_set_fast(
         if (specs[member].queue->count > UINT32_MAX - additions)
             return KERNEL_THREAD_NO_SLOT;
     }
-    if (!ensure_wait_registrations(thread))
-        return KERNEL_THREAD_OUT_OF_MEMORY;
+    status = ensure_wait_registrations(thread);
+    if (status != KERNEL_THREAD_OK)
+        return status;
     thread->state = KERNEL_THREAD_BLOCKED;
     thread->wait_member_count = (uint8_t)member_count;
     thread->wait_mode = (uint8_t)mode;
@@ -2237,11 +2241,14 @@ KernelThreadStatus kernel_thread_cancel_wait(KernelThread *thread,
 KernelThreadStatus kernel_thread_call_begin(KernelThread *thread,
                                             uint32_t *call)
 {
+    KernelThreadStatus status;
+
     if (!valid_thread(thread) || call == NULL ||
         thread->state != KERNEL_THREAD_RUNNING)
         return KERNEL_THREAD_INVALID_ARGUMENT;
-    if (!ensure_wait_registrations(thread))
-        return KERNEL_THREAD_OUT_OF_MEMORY;
+    status = ensure_wait_registrations(thread);
+    if (status != KERNEL_THREAD_OK)
+        return status;
     if (++next_call == 0u)
         next_call = 1u;
     thread->call = next_call;

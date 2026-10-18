@@ -2977,6 +2977,23 @@ static bool host_channel_result(const KernelHostChannel *channel,
     return false;
 }
 
+static bool wait_failure_to_syscall(KernelThreadStatus status, uint32_t *result)
+{
+    switch (status) {
+    case KERNEL_THREAD_DEADLINE_EXPIRED:
+        *result = ASTRA_SYSCALL_TIMED_OUT;
+        return true;
+    case KERNEL_THREAD_NO_SLOT:
+        *result = ASTRA_SYSCALL_RESOURCE_LIMIT;
+        return true;
+    case KERNEL_THREAD_OUT_OF_MEMORY:
+        *result = ASTRA_SYSCALL_OUT_OF_MEMORY;
+        return true;
+    default:
+        return false;
+    }
+}
+
 static KernelProcessStatus host_channel_wait(
     KernelProcess *process, KernelThread *thread, uint32_t consumer_position,
     uint64_t now, uint64_t deadline, bool *blocked, uint32_t *result)
@@ -3043,10 +3060,8 @@ static KernelProcessStatus host_channel_wait(
     if (wait_status == KERNEL_THREAD_CONDITION_CHANGED &&
         host_channel_result(channel, consumer_position, result))
         return KERNEL_PROCESS_OK;
-    if (wait_status == KERNEL_THREAD_DEADLINE_EXPIRED) {
-        *result = ASTRA_SYSCALL_TIMED_OUT;
+    if (wait_failure_to_syscall(wait_status, result))
         return KERNEL_PROCESS_OK;
-    }
     (void)kernel_trace_write(KERNEL_TRACE_EVENT_WAIT_FAILURE,
                              KERNEL_TRACE_LEVEL_ERROR, __LINE__, channel_slot,
                              (uint32_t)wait_status, thread->id);
@@ -3292,13 +3307,12 @@ static KernelProcessStatus audio_stream_wait(
         *blocked = true;
         return KERNEL_PROCESS_OK;
     }
+    audio_stream_waiting &= ~(1u << slot);
     if (wait_status == KERNEL_THREAD_CONDITION_CHANGED &&
         audio_stream_result(stream, result))
         return KERNEL_PROCESS_OK;
-    if (wait_status == KERNEL_THREAD_DEADLINE_EXPIRED) {
-        *result = ASTRA_SYSCALL_TIMED_OUT;
+    if (wait_failure_to_syscall(wait_status, result))
         return KERNEL_PROCESS_OK;
-    }
     return wait_status == KERNEL_THREAD_INVALID_ARGUMENT ||
                    wait_status == KERNEL_THREAD_INVALID_STATE ?
         KERNEL_PROCESS_INVALID_ARGUMENT : KERNEL_PROCESS_CORRUPT;
@@ -9652,18 +9666,8 @@ static KernelProcessStatus wait_handle_set(
             thread, specs[0].queue, specs[0].sequence, now, deadline,
             ASTRA_SYSCALL_TIMED_OUT);
 
-    if (thread_status == KERNEL_THREAD_DEADLINE_EXPIRED) {
-        *syscall_result = ASTRA_SYSCALL_TIMED_OUT;
+    if (wait_failure_to_syscall(thread_status, syscall_result))
         return KERNEL_PROCESS_OK;
-    }
-    if (thread_status == KERNEL_THREAD_NO_SLOT) {
-        *syscall_result = ASTRA_SYSCALL_RESOURCE_LIMIT;
-        return KERNEL_PROCESS_OK;
-    }
-    if (thread_status == KERNEL_THREAD_OUT_OF_MEMORY) {
-        *syscall_result = ASTRA_SYSCALL_OUT_OF_MEMORY;
-        return KERNEL_PROCESS_OK;
-    }
     if (thread_status != KERNEL_THREAD_OK)
         return thread_status == KERNEL_THREAD_INVALID_ARGUMENT ||
                        thread_status == KERNEL_THREAD_INVALID_STATE ||
