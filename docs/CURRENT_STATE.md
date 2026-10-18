@@ -2,6 +2,52 @@
 
 Status: active continuation map, 2026-10-18
 
+Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
+phase passes, but the second boot panics before the import workflow completes.
+Reason `syscall dispatch contract failed`; trace records syscall 80
+(HOST_CHANNEL_WAIT), process status 9 (CORRUPT), next context NULL and runtime
+active. Exact failing branch is not established. This is a current-kernel
+failure, distinct from the old production deferred-worker report. Do not
+accept a clean retry or activate this release. Full panic report SHA-256
+`5d31188c9aed07d6eac80b9e44ad640c7517a516f902a3c9e06fa0458dee15e9`
+and matching kernel ELF SHA-256
+`ef43fec669d3dc7c9a36941274cc890a4a6b68196297870e2a9b83766e82bac1`
+are retained on Beast under
+`/var/tmp/astra-font-state-final-evidence-20261018/panic/`; complete failed
+state archival is in progress under `attempt1/`. Trial log:
+`/var/tmp/astra-font-state-final-physical-cycle1-20261018.log`.
+Production restored through stage 8 and completed desktop, all three units
+active/NRestarts=0; stopped image and selector compare equal before/after.
+The planned upgrade backup did not start: its private-process precondition
+failed after the panic. Its partial directory contains only an empty preflight
+file, not a usable backup. No production data or selector was changed.
+
+Plane ASTRA68-61 tracks this current-kernel blocker under Fonts ASTRA68-36.
+Failure-only diagnostics extend existing WAIT_FAILURE records to distinguish
+entry capture, host wait, blocked scheduling and pending preemption, including
+the raw thread wait result. No scheduler/wait behavior or panic invariant is
+changed. Haiku read-only reference reviewed before diagnosis:
+`src/system/kernel/condition_variable.cpp`, `ConditionVariableEntry::Wait`
+and registration/removal paths; its scheduler-lock-protected condition recheck
+and prepare/block ordering are the comparison points, not an assumed cause.
+The existing Astra host-channel, wait-registration and scheduling mechanisms
+remain the sole implementation. Full failure archive is checksum-verified.
+
+Final corrected source `446948863f72b31af2b62dc04ab71805a4ba5357`
+passes Display host/sanitizer/MC68040/analyzer gates in
+`/var/tmp/astra-font-state-focus-edge-green-20261018.log`. Clean publisher
+passes and verifies private release
+`0f3e63093c512bc71cfcea00ebfe462d6649a998578ea3554b3ec51f0f2257eb`, ROM
+`20b80b29b649f278ece1fcde07a7949593a398aabdcbbf0824ba697bf90ed329`, source
+manifest `3d83c4cddd69688295b8aea844457bba30dc9235f4b1dfa980cc8d5050b727ca`.
+Both revision headers match, nonzero identity `44694886`, build UTC
+2026-10-18T22:11:08Z; kernel release mode, qualification/self-tests disabled.
+Publisher log `/var/tmp/astra-font-state-final-release-20261018.log`.
+Exact private four-boot DE25 staging is in progress; physical acceptance and
+data-preserving production cutover remain open. Superseded `f885a4c1` was
+never booted or activated and its disposable board staging was retired under
+selector/service/process guards. Immutable package remains on Beast.
+
 Window-state backpressure fix `05b85dd6` passes the native end-to-end Fonts
 gate and all twenty consecutive DE25 information/scroll/select/copy/Back
 roundtrips on the previously failing retained state. One-shot malformed-frame

@@ -1,5 +1,39 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-18: corrected Fonts release rejected by current-kernel panic
+
+- Exact source `446948863f72b31af2b62dc04ab71805a4ba5357`, private release
+  `0f3e63093c512bc71cfcea00ebfe462d6649a998578ea3554b3ec51f0f2257eb`, ROM
+  `20b80b29b649f278ece1fcde07a7949593a398aabdcbbf0824ba697bf90ed329`, source
+  manifest `3d83c4cddd69688295b8aea844457bba30dc9235f4b1dfa980cc8d5050b727ca`.
+  Both revision headers agree, UTC 22:11:08Z, nonzero identity `44694886`;
+  release kernel, qualification/self-tests disabled. Publisher and installed
+  package verification pass before the fresh four-boot trial.
+- Cancellation/progress/retirement and empty inventory pass on first boot;
+  finite malformed-frame probe launches once. Second boot panics with
+  `syscall dispatch contract failed`. Trace reports syscall 80
+  (HOST_CHANNEL_WAIT), process status 9 (CORRUPT), next context NULL, active
+  runtime. Worker/deferred IRQ counts are drained. Exact failing branch is
+  unknown. Import/20-cycle/removal/long-notice acceptance did not complete.
+- Panic report SHA-256
+  `5d31188c9aed07d6eac80b9e44ad640c7517a516f902a3c9e06fa0458dee15e9`,
+  matching kernel ELF SHA-256
+  `ef43fec669d3dc7c9a36941274cc890a4a6b68196297870e2a9b83766e82bac1`
+  retained on Beast under
+  `/var/tmp/astra-font-state-final-evidence-20261018/panic/`; full failed state
+  archival under `attempt1/`. Trial log
+  `/var/tmp/astra-font-state-final-physical-cycle1-20261018.log`.
+  Production restores through stage 8 and completed desktop; all three units
+  active, NRestarts=0, stopped image and selector unchanged. Backup preflight
+  refused after private QEMU exited: no usable upgrade backup was created.
+- Same Beast Quartus Pro 26.1.1 Build 130 qualified RBF
+  `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`,
+  40,754/46,800 ALMs, 3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376
+  DSPs; all clocks constrained, graphics setup +0.259 ns, worst setup
+  +0.007 ns, worst hold +0.000 ns. No RTL/constraints/build-flow change,
+  new timing measurement or failing cone. Disposition: REJECT release;
+  preserve failure and diagnose current kernel. No activation or acceptance.
+
 ## 2026-10-18: state-notification fix passes twenty retained-state DE25 cycles
 
 - Source `05b85dd6ffc80ce85082e6c0e29add7b0da3f65f`: Display retains and

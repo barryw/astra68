@@ -3047,6 +3047,9 @@ static KernelProcessStatus host_channel_wait(
         *result = ASTRA_SYSCALL_TIMED_OUT;
         return KERNEL_PROCESS_OK;
     }
+    (void)kernel_trace_write(KERNEL_TRACE_EVENT_WAIT_FAILURE,
+                             KERNEL_TRACE_LEVEL_ERROR, __LINE__, channel_slot,
+                             (uint32_t)wait_status, thread->id);
     return wait_status == KERNEL_THREAD_INVALID_ARGUMENT ||
                    wait_status == KERNEL_THREAD_INVALID_STATE ?
         KERNEL_PROCESS_INVALID_ARGUMENT : KERNEL_PROCESS_CORRUPT;
@@ -10851,7 +10854,9 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
     status = capture_current(registers, user_stack, raw_frame,
                              ASTRA_SYSCALL_VECTOR, &current, &thread);
     if (status != KERNEL_PROCESS_OK) {
-        if (registers != NULL && registers[0] == ASTRA_SYSCALL_WAIT_MULTIPLE)
+        if (registers != NULL &&
+            (registers[0] == ASTRA_SYSCALL_WAIT_MULTIPLE ||
+             registers[0] == ASTRA_SYSCALL_HOST_CHANNEL_WAIT))
             trace_wait_failure(__LINE__, ASTRA_WAIT_INDEX_NONE,
                                (uint32_t)status);
         return status;
@@ -13619,15 +13624,21 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         status = host_channel_wait(
             current, thread, thread->context.data[2], scheduler_cycles(),
             deadline_cycles, &blocked, &result);
-        if (status != KERNEL_PROCESS_OK)
+        if (status != KERNEL_PROCESS_OK) {
+            trace_wait_failure(__LINE__, thread->context.data[2],
+                               (uint32_t)status);
             return status;
+        }
         if (!blocked)
             break;
         ++scheduler_stats.wait_blocks;
         status = schedule_next(SWITCH_BLOCK, next_context);
         if (status != KERNEL_PROCESS_OK &&
-            status != KERNEL_PROCESS_NO_RUNNABLE)
+            status != KERNEL_PROCESS_NO_RUNNABLE) {
+            trace_wait_failure(__LINE__, thread->context.data[2],
+                               (uint32_t)status);
             return status;
+        }
         check_milestone();
         return status;
     }
@@ -14612,7 +14623,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
         ready_thread_outranks(thread)) {
         status = schedule_pending(next_context, false);
         if (status != KERNEL_PROCESS_OK) {
-            if (syscall == ASTRA_SYSCALL_WAIT_MULTIPLE)
+            if (syscall == ASTRA_SYSCALL_WAIT_MULTIPLE ||
+                syscall == ASTRA_SYSCALL_HOST_CHANNEL_WAIT)
                 trace_wait_failure(__LINE__, ASTRA_WAIT_INDEX_NONE,
                                    (uint32_t)status);
             return status;
