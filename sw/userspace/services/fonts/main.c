@@ -456,7 +456,7 @@ static uint32_t uninstall_face(const char *id)
 }
 
 static void send_reply(uint32_t port, uint32_t transaction, uint32_t status,
-                        uint32_t area, uint32_t area_size, const char *imported)
+                        uint32_t area, uint32_t area_size)
 {
     AstraFontServiceReply reply = {0};
     astra_message_header_set(&reply.header, sizeof(reply),
@@ -466,8 +466,6 @@ static void send_reply(uint32_t port, uint32_t transaction, uint32_t status,
     reply.generation = generation;
     reply.area_size = status == ASTRA_STATUS_OK ? area_size : 0u;
     memcpy(reply.selected_id, selection.id, sizeof(selection.id));
-    if (status == ASTRA_STATUS_OK && imported != NULL)
-        memcpy(reply.imported_id, imported, sizeof(reply.imported_id));
     if (port == 0u || astra_port_send(port, &reply, sizeof(reply),
         area == 0u ? NULL : &area, area == 0u ? 0u : 1u) != ASTRA_SYSCALL_OK) {
         if (area != 0u) (void)astra_close(area);
@@ -488,16 +486,58 @@ typedef struct FontImportJob {
     uint32_t afnt_size;
     void *afnt;
     uint32_t worker;
-    uint32_t reply;
-    uint32_t transaction;
+    uint32_t receive;
+    uint32_t changed;
+    uint32_t state;
+    uint32_t abandoned;
     uint32_t result;
     uint32_t completed;
+    uint32_t total;
     char imported[ASTRA_FONT_FACE_ID_MAX];
     FontImportStage stage;
 } FontImportJob;
 
 /* One inventory writer; readers and system-font selection remain available. */
 static FontImportJob importing;
+
+static void close_import(void)
+{
+    if (importing.receive != 0u) (void)astra_close(importing.receive);
+    if (importing.changed != 0u) (void)astra_close(importing.changed);
+    importing = (FontImportJob){0};
+}
+
+static void import_changed(void)
+{
+    AstraMessageHeader hint;
+    astra_message_header_set(&hint, sizeof(hint), ASTRA_FONT_SERVICE_PROTOCOL,
+        ASTRA_FONT_SERVICE_VERSION, ASTRA_FONT_SERVICE_IMPORT_CHANGED, 0u);
+    uint32_t status = astra_port_send(importing.changed, &hint, sizeof(hint), NULL, 0u);
+    if (status != ASTRA_SYSCALL_OK && status != ASTRA_SYSCALL_WOULD_BLOCK &&
+        status != ASTRA_SYSCALL_PEER_DEAD) {
+        (void)astra_log_failure("fonts import notification", ASTRA_STATUS_IO);
+    }
+}
+
+static void import_reply(uint32_t port, uint32_t transaction,
+                          const uint32_t *handles, uint32_t count)
+{
+    AstraFontServiceReply reply = {0};
+    astra_message_header_set(&reply.header, sizeof(reply),
+        ASTRA_FONT_SERVICE_PROTOCOL, ASTRA_FONT_SERVICE_VERSION,
+        ASTRA_FONT_SERVICE_REPLY, transaction);
+    reply.generation = generation;
+    memcpy(reply.selected_id, selection.id, sizeof(reply.selected_id));
+    reply.import_state = importing.state;
+    reply.completed_faces = importing.completed;
+    reply.total_faces = importing.total;
+    if (importing.state == ASTRA_FONT_IMPORT_FAILED)
+        reply.import_status = importing.result;
+    if (importing.state == ASTRA_FONT_IMPORT_SUCCEEDED)
+        memcpy(reply.imported_id, importing.imported, sizeof(reply.imported_id));
+    if (astra_port_send(port, &reply, sizeof(reply), handles, count) != ASTRA_SYSCALL_OK)
+        for (uint32_t at = 0u; at < count; ++at) (void)astra_close(handles[at]);
+}
 
 static void convert_outline(uint32_t argument)
 {
@@ -532,13 +572,14 @@ static void convert_outline(uint32_t argument)
 static void finish_import(void)
 {
     uint32_t status = importing.result;
-    if (status == ASTRA_STATUS_OK) {
+    uint32_t cancelled = importing.state == ASTRA_FONT_IMPORT_CANCELLING;
+    if (status == ASTRA_STATUS_OK && !cancelled) {
         /* A failed commit reply does not prove its rename did not land. */
         status = commit_import(&importing.stage);
         if (status != ASTRA_STATUS_OK)
             (void)astra_log_failure("fonts publish", status);
     } else {
-        (void)astra_log_failure("fonts import", status);
+        if (status != ASTRA_STATUS_OK) (void)astra_log_failure("fonts import", status);
         if (rollback_import(&importing.stage) != ASTRA_VFS_OK) {
             (void)astra_log_failure("fonts rollback", ASTRA_STATUS_IO);
             status = ASTRA_STATUS_IO;
@@ -549,34 +590,43 @@ static void finish_import(void)
     if (importing.worker != 0u) (void)astra_close(importing.worker);
     if (importing.resume != 0u) (void)astra_close(importing.resume);
     if (importing.ready != 0u) (void)astra_close(importing.ready);
-    send_reply(importing.reply, importing.transaction, status, 0u, 0u,
-                 importing.imported);
-    (void)astra_close(importing.reply);
-    importing = (FontImportJob){0};
+    importing.afnt = importing.source = NULL;
+    importing.worker = importing.resume = importing.ready = 0u;
+    importing.result = status;
+    importing.state = status != ASTRA_STATUS_OK ? ASTRA_FONT_IMPORT_FAILED :
+        cancelled ? ASTRA_FONT_IMPORT_CANCELLED : ASTRA_FONT_IMPORT_SUCCEEDED;
+    if (importing.abandoned) close_import();
+    else import_changed();
 }
 
 static void import_face_ready(void)
 {
-    if (importing.result == ASTRA_STATUS_OK)
+    if (importing.status == ASTRA_STATUS_OK) importing.total = importing.faces;
+    if (importing.result == ASTRA_STATUS_OK &&
+        importing.state != ASTRA_FONT_IMPORT_CANCELLING)
         importing.result = importing.status;
-    if (importing.result == ASTRA_STATUS_OK) {
+    if (importing.result == ASTRA_STATUS_OK &&
+        importing.state != ASTRA_FONT_IMPORT_CANCELLING) {
         importing.result = stage_afnt(&importing.stage, importing.afnt,
                                        importing.afnt_size, importing.imported);
         if (importing.result == ASTRA_STATUS_OK) ++importing.completed;
     }
     astra_runtime_deallocate(importing.afnt);
     importing.afnt = NULL;
-    importing.cancel = importing.result != ASTRA_STATUS_OK;
+    importing.cancel = importing.result != ASTRA_STATUS_OK ||
+                       importing.state == ASTRA_FONT_IMPORT_CANCELLING;
     if (astra_rt_signal(importing.resume, 1u, NULL) != ASTRA_SYSCALL_OK) {
         /* A private live semaphore must be signalable; never strand its worker. */
         (void)astra_log_failure("fonts converter resume", ASTRA_STATUS_IO);
         astra_process_exit(ASTRA_STATUS_IO);
     }
+    if (!importing.abandoned) import_changed();
 }
 
 static void import_worker_ended(void)
 {
-    if (importing.result == ASTRA_STATUS_OK &&
+    if (importing.state != ASTRA_FONT_IMPORT_CANCELLING &&
+        importing.result == ASTRA_STATUS_OK &&
         (importing.status != ASTRA_STATUS_OK || importing.faces == 0u ||
          importing.completed != importing.faces))
         importing.result = importing.status != ASTRA_STATUS_OK ?
@@ -584,15 +634,16 @@ static void import_worker_ended(void)
     finish_import();
 }
 
-/* Success takes both received capabilities and sends the final reply later. */
-static uint32_t begin_import(uint32_t area, uint32_t reply,
+/* Success takes source and notification capabilities; caller owns the reply. */
+static uint32_t begin_import(uint32_t area, uint32_t notification, uint32_t reply,
                               const AstraFontServiceRequest *request)
 {
     void *mapping = NULL;
     uint32_t mapped_size = 0u;
+    uint32_t control = 0u;
     uint32_t status;
 
-    if (importing.reply != 0u) return ASTRA_STATUS_BUSY;
+    if (importing.state != 0u) return ASTRA_STATUS_BUSY;
     if (!inventory_ready || !config_ready) {
         (void)astra_log_debug("fonts inventory unavailable", 27u);
         return ASTRA_STATUS_IO;
@@ -617,14 +668,21 @@ static uint32_t begin_import(uint32_t area, uint32_t reply,
     importing.encoding = request->source_encoding;
     memcpy(importing.name, request->source_name, sizeof(importing.name));
     importing.name_size = (uint32_t)strlen(importing.name);
+    status = ASTRA_STATUS_LIMIT;
+    if (astra_rt_port_create(4u, 4u * sizeof(AstraFontServiceRequest),
+            &importing.receive, &control) != ASTRA_SYSCALL_OK)
+        goto failed;
+    importing.state = ASTRA_FONT_IMPORT_RUNNING;
     if (request->source_size >= 4u && memcmp(importing.source, "AFNT", 4u) == 0) {
-        importing.reply = reply;
-        importing.transaction = request->header.transaction_id;
         (void)astra_close(area);
+        importing.changed = notification;
+        importing.total = 1u;
         importing.result = request->source_encoding == ASTRA_FONT_ENCODING_AUTO ?
             stage_afnt(&importing.stage, importing.source, request->source_size,
                          importing.imported) : ASTRA_STATUS_INVALID;
+        importing.completed = importing.result == ASTRA_STATUS_OK ? 1u : 0u;
         finish_import();
+        import_reply(reply, request->header.transaction_id, &control, 1u);
         return ASTRA_STATUS_OK;
     }
     if (font_device == 0u) { status = ASTRA_STATUS_UNSUPPORTED; goto failed; }
@@ -645,17 +703,58 @@ static uint32_t begin_import(uint32_t area, uint32_t reply,
     if (astra_rt_thread_create(&start, ASTRA_PROCESS_PRIORITY_NORMAL,
         ASTRA_RIGHT_WAIT | ASTRA_RIGHT_READ, &importing.worker, NULL) != ASTRA_SYSCALL_OK)
         goto failed;
-    importing.reply = reply;
-    importing.transaction = request->header.transaction_id;
     (void)astra_close(area);
+    importing.changed = notification;
+    import_reply(reply, request->header.transaction_id, &control, 1u);
     return ASTRA_STATUS_OK;
 failed:
     (void)astra_log_failure("fonts import setup", status);
     astra_runtime_deallocate(importing.source);
     if (importing.resume != 0u) (void)astra_close(importing.resume);
     if (importing.ready != 0u) (void)astra_close(importing.ready);
-    importing = (FontImportJob){0};
+    if (control != 0u) (void)astra_close(control);
+    close_import();
     return status;
+}
+
+static void abandon_import(void)
+{
+    importing.abandoned = 1u;
+    if (importing.worker == 0u) close_import();
+    else {
+        (void)astra_close(importing.receive);
+        importing.receive = 0u;
+        importing.state = ASTRA_FONT_IMPORT_CANCELLING;
+    }
+}
+
+static void serve_import(void)
+{
+    uint8_t packet[ASTRA_MESSAGE_SIZE_MAX];
+    AstraFontServiceRequest request = {0};
+    uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX] = {0};
+    uint32_t bytes = 0u, count = 0u;
+    uint32_t status = astra_port_receive(importing.receive, packet, sizeof(packet),
+        handles, ASTRA_MESSAGE_HANDLES_MAX, &bytes, &count);
+    if (status == ASTRA_SYSCALL_PEER_DEAD) {
+        abandon_import();
+        return;
+    }
+    if (status != ASTRA_SYSCALL_OK) return;
+    if (bytes == sizeof(request)) memcpy(&request, packet, bytes);
+    if (count == 1u && fonts_request_valid(&request, bytes, FONTS_PORT_IMPORT)) {
+        if (request.header.operation == ASTRA_FONT_SERVICE_IMPORT_CANCEL &&
+            importing.state == ASTRA_FONT_IMPORT_RUNNING) {
+            importing.state = ASTRA_FONT_IMPORT_CANCELLING;
+            import_changed();
+        }
+        import_reply(handles[0], request.header.transaction_id, NULL, 0u);
+        if (request.header.operation == ASTRA_FONT_SERVICE_IMPORT_RELEASE)
+            abandon_import();
+    } else
+        send_reply(count != 0u ? handles[count - 1u] : 0u,
+            request.header.transaction_id, ASTRA_STATUS_PROTOCOL, 0u, 0u);
+    for (uint32_t at = 0u; at < count; ++at) (void)astra_close(handles[at]);
 }
 
 static uint32_t catalog_area(uint32_t *area, uint32_t *size)
@@ -830,8 +929,8 @@ static void serve(uint32_t port, uint32_t role)
     if (bytes == sizeof(request)) memcpy(&request, packet, sizeof(request));
     status = fonts_request_valid(&request, bytes, role) ? ASTRA_STATUS_OK :
                                                     ASTRA_STATUS_PROTOCOL;
-    if (count != (request.header.operation == ASTRA_FONT_SERVICE_IMPORT ?
-                  2u : 1u)) status = ASTRA_STATUS_PROTOCOL;
+    if (count != (request.header.operation == ASTRA_FONT_SERVICE_IMPORT_BEGIN ?
+                  3u : 1u)) status = ASTRA_STATUS_PROTOCOL;
     if (status != ASTRA_STATUS_OK)
         (void)astra_log_debug("fonts request invalid", 21u);
     if (status == ASTRA_STATUS_OK &&
@@ -842,22 +941,25 @@ static void serve(uint32_t port, uint32_t role)
                request.header.operation == ASTRA_FONT_SERVICE_INFORMATION) {
         status = load_face_area(request.face_id, 1u, &area, &area_size);
     } else if (status == ASTRA_STATUS_OK &&
-               request.header.operation == ASTRA_FONT_SERVICE_IMPORT) {
-        /* Port-call appends the reply capability after the source area. */
-        status = begin_import(handles[0], handles[1], &request);
-        if (status == ASTRA_STATUS_OK) return;
+               request.header.operation == ASTRA_FONT_SERVICE_IMPORT_BEGIN) {
+        /* Port-call appends its reply after source and notification. */
+        status = begin_import(handles[0], handles[1], handles[2], &request);
+        if (status == ASTRA_STATUS_OK) {
+            (void)astra_close(handles[2]);
+            return;
+        }
     } else if (status == ASTRA_STATUS_OK &&
                request.header.operation == ASTRA_FONT_SERVICE_OPEN_FACE) {
         status = face_area(request.face_id, &area, &area_size);
     } else if (status == ASTRA_STATUS_OK &&
                request.header.operation == ASTRA_FONT_SERVICE_UNINSTALL) {
-        status = importing.reply != 0u ? ASTRA_STATUS_BUSY :
+        status = importing.worker != 0u ? ASTRA_STATUS_BUSY :
                  uninstall_face(request.face_id);
     } else if (status == ASTRA_STATUS_OK) {
         status = select_face(request.face_id);
     }
     send_reply(count != 0u ? handles[count - 1u] : 0u,
-                 request.header.transaction_id, status, area, area_size, NULL);
+                 request.header.transaction_id, status, area, area_size);
     for (uint32_t at = 0u; at < count; ++at)
         (void)astra_close(handles[at]);
 }
@@ -867,7 +969,7 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *device;
     AstraConfigError error = {0};
-    uint32_t receive[5] = {0};
+    uint32_t receive[6] = {0};
     uint32_t published[4] = {0};
     uint32_t status;
 
@@ -940,20 +1042,26 @@ int astra_main(const AstraStartupInfo *startup)
     if (status != ASTRA_SYSCALL_OK) return ASTRA_STATUS_PEER_DEAD;
     uint32_t first_wait = 0u;
     for (;;) {
-        uint32_t index = 0u, waits[5];
-        uint32_t count = importing.worker != 0u ? 5u : 3u;
+        uint32_t index = 0u, waits[6], sources[6], count = 0u;
         receive[3] = importing.ready;
         receive[4] = importing.worker;
-        for (uint32_t at = 0u; at < count; ++at)
-            waits[at] = receive[(first_wait + at) % count];
+        receive[5] = importing.receive;
+        for (uint32_t at = 0u; at < 6u; ++at) {
+            uint32_t source = (first_wait + at) % 6u;
+            if (receive[source] == 0u) continue;
+            sources[count] = source;
+            waits[count++] = receive[source];
+        }
         status = astra_wait_multiple(waits, count, ASTRA_DEADLINE_FOREVER,
                                      &index, NULL);
-        if (status != ASTRA_SYSCALL_OK || index >= count)
+        if (index >= count || (status != ASTRA_SYSCALL_OK &&
+            !(status == ASTRA_SYSCALL_PEER_DEAD && sources[index] == 5u)))
             return ASTRA_STATUS_PEER_DEAD;
-        index = (first_wait + index) % count;
-        first_wait = (index + 1u) % count;
+        index = sources[index];
+        first_wait = (index + 1u) % 6u;
         if (index == 3u) import_face_ready();
         else if (index == 4u) import_worker_ended();
+        else if (index == 5u) serve_import();
         else serve(receive[index], index);
     }
 }

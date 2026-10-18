@@ -53,7 +53,7 @@ def font_syslog(machine):
     result = subprocess.run(
         ["sudo", "-n", "find", root, "-type", "f", "-name", "syslog*",
          "-exec", "grep", "-iE",
-         "fonts host|fonts stage|fonts publish|fonts import|font worker|font concurrent", "{}", "+"],
+         "fonts host|fonts stage|fonts publish|fonts import|font worker|font concurrent|font cancel", "{}", "+"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return result.stdout[-4000:] if result.returncode in (0, 1) else result.stderr[-1000:]
 
@@ -116,9 +116,14 @@ def main():
     parser.add_argument("--expect-variable", action="store_true")
     parser.add_argument("--concurrent", action="store_true",
                         help="verify catalog access while a real converter is delayed")
+    parser.add_argument("--cancel", action="store_true",
+                        help="cancel a pending real converter and verify retirement and rollback")
     parser.add_argument("--amiga", action="store_true",
                         help="run fixed-strike Amiga import probe")
     args = parser.parse_args()
+    if args.cancel and (args.concurrent or args.expect_limit or args.expect_later_failure or
+                        args.expect_variable or args.amiga):
+        parser.error("--cancel is a separate outline lifecycle case")
     global PROBE
     if args.amiga:
         if args.expect_limit or args.expect_later_failure or args.expect_variable:
@@ -134,7 +139,7 @@ def main():
         astra_image.install(image, vim_runtime=None)
         astra_image.install_test_app(image, args.bundle)
         environment = None
-        if args.concurrent:
+        if args.concurrent or args.cancel:
             os.chmod(work, 0o755)
             wrapper = Path(work) / "delayed-font-worker"
             wrapper.write_text("#!/bin/sh\nsleep 5\nexec " +
@@ -144,8 +149,8 @@ def main():
             environment["ASTRA_FONT_WORKER_PATH"] = str(wrapper)
             marker = Path(work) / "expect-concurrent"
             marker.write_text("concurrent\n", encoding="ascii")
-            astra_image._replace_volume_file(
-                image, str(marker), "/expect-outline-concurrent")
+            astra_image._replace_volume_file(image, str(marker),
+                "/expect-outline-cancel" if args.cancel else "/expect-outline-concurrent")
         source = args.source
         if args.expect_later_failure:
             source = str(Path(work) / "bad-second-face.ttc")
@@ -177,6 +182,14 @@ def main():
             encoding="ascii")
         astra_image._replace_volume_file(image, str(startup), "/startup/system")
         boot(args.qemu, args.rom, image, work, "first boot", environment, args.concurrent)
+        if args.cancel:
+            if stored_objects(image, work):
+                raise RuntimeError("cancelled import left font objects")
+            boot(args.qemu, args.rom, image, work, "cancel restart", environment)
+            if stored_objects(image, work):
+                raise RuntimeError("cancelled import left font objects after restart")
+            print("ASTRA FONT CANCEL PASS responsive catalog, retirement, empty store, restart")
+            return 0
         if args.expect_later_failure:
             objects = stored_objects(image, work)
             if objects:

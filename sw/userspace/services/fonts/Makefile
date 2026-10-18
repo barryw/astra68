@@ -18,6 +18,7 @@ TARGET := build/m68k/fonts.elf
 IMAGE := build/m68k/fonts
 OBJECTS := build/m68k/main.o build/m68k/policy.o build/m68k/host.o
 ASTRA_PROGRAM_PRIVATE_INPUTS := $(COMMON)
+FONT_HEADERS := $(NDK)/include/astra/font_import.h ../../../include/astra/font_service.h
 LIBRARIES := $(ASTRA_CONFIG_LIBRARY) $(ASTRA_LIBC_LIBRARY) \
 	$(ASTRA_RUNTIME_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) \
 	$(ASTRA_COMPILER_LIBRARY)
@@ -49,18 +50,18 @@ build/m68k/host.o: host.c host.h ../../../include/astra/host.h \
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
 
-build/host/test_policy: policy.c policy.h tests/test_policy.c $(HOST_COMMON)
+build/host/test_policy: policy.c policy.h tests/test_policy.c $(HOST_COMMON) $(FONT_HEADERS)
 	@mkdir -p $(@D)
 	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic \
 		-O2 policy.c tests/test_policy.c $(HOST_COMMON) -o $@
 
-build/host/test_selection: tests/test_selection.c main.c policy.c policy.h $(HOST_COMMON)
+build/host/test_selection: tests/test_selection.c main.c policy.c policy.h $(HOST_COMMON) $(FONT_HEADERS)
 	@mkdir -p $(@D)
 	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
 		-ffunction-sections -fdata-sections tests/test_selection.c policy.c \
 		-Wl,--gc-sections $(HOST_COMMON) -o $@
 
-build/host/test_import: tests/test_import.c main.c policy.c policy.h $(HOST_COMMON)
+build/host/test_import: tests/test_import.c main.c policy.c policy.h $(HOST_COMMON) $(FONT_HEADERS)
 	@mkdir -p $(@D)
 	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
 		-ffunction-sections -fdata-sections tests/test_import.c policy.c \

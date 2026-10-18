@@ -23,6 +23,27 @@ static uint32_t fail_snapshot;
 static uint32_t fail_context_map;
 static uint32_t requested_window;
 static uint32_t measure_calls;
+static uint32_t job_state = ASTRA_FONT_IMPORT_SUCCEEDED;
+static AstraResult hint_result = ASTRA_ERROR_WOULD_BLOCK;
+
+AstraResult astra_port_create(uint32_t messages, uint32_t bytes, AstraPort *port)
+{
+    assert(messages == 1u && bytes == sizeof(AstraMessageHeader));
+    port->receive = 6u; port->send = 7u;
+    return ASTRA_OK;
+}
+AstraResult astra_port_close(AstraPort *port)
+{
+    assert(port->receive == ASTRA_INVALID_HANDLE && port->send == ASTRA_INVALID_HANDLE);
+    return ASTRA_ERROR_INVALID_HANDLE;
+}
+AstraResult astra_port_receive_try(AstraHandle receive, void *data, uint32_t capacity,
+    AstraHandle *handles, uint32_t maximum, uint32_t *bytes, uint32_t *count)
+{
+    assert(receive == 6u && capacity == sizeof(AstraMessageHeader) && maximum == ASTRA_MESSAGE_HANDLES_MAX);
+    (void)data; (void)handles; (void)bytes; (void)count;
+    return hint_result;
+}
 
 AstraResult astra_fonts_context_id(char id[ASTRA_FONT_ID_MAX])
 {
@@ -59,7 +80,7 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
     AstraFontServiceReply *reply = call->reply;
 
     (void)deadline;
-    assert(service == 1u);
+    assert(service == 1u || service == 5u);
     if (request->header.protocol == ASTRA_GUI_PROTOCOL &&
         request->header.operation == ASTRA_GUI_FONT_MEASURE) {
         const AstraGuiFontMeasureRequest *query = call->request;
@@ -116,13 +137,14 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
     }
     assert(call->request_size == sizeof(*request));
     assert(call->reply_capacity == sizeof(*reply));
-    if (request->header.operation == ASTRA_FONT_SERVICE_IMPORT) {
-        assert(call->handle_count == 1u && call->reply_index == 1u);
-        assert(call->handles[0] == 4u);
+    if (request->header.operation == ASTRA_FONT_SERVICE_IMPORT_BEGIN) {
+        assert(call->handle_count == 2u && call->reply_index == 2u);
+        assert(call->handles[0] == 4u && call->handles[1] == 7u);
         assert(request->source_size == imported_length);
         assert(strcmp(request->source_name, "test.afnt") == 0);
         assert(request->source_encoding == ASTRA_FONT_ENCODING_AUTO);
         call->handles[0] = ASTRA_INVALID_HANDLE;
+        call->handles[1] = ASTRA_INVALID_HANDLE;
     } else
         assert(call->handle_count == 0u && call->reply_index == 0u);
     astra_message_header_set(&reply->header, sizeof(*reply),
@@ -137,15 +159,28 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
         request->header.operation == ASTRA_FONT_SERVICE_INFORMATION ? document_size :
         request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE ? 128u : 0u;
     memcpy(reply->selected_id, "system:test", sizeof("system:test"));
-    if (request->header.operation == ASTRA_FONT_SERVICE_IMPORT &&
-        bad_reply != 3u)
-        memcpy(reply->imported_id, "user:test", sizeof("user:test"));
+    uint32_t job = request->header.operation == ASTRA_FONT_SERVICE_IMPORT_BEGIN ||
+        request->header.operation == ASTRA_FONT_SERVICE_IMPORT_STATE ||
+        request->header.operation == ASTRA_FONT_SERVICE_IMPORT_CANCEL ||
+        request->header.operation == ASTRA_FONT_SERVICE_IMPORT_RELEASE;
+    if (job) {
+        reply->import_state = job_state;
+        reply->total_faces = 1u;
+        reply->completed_faces = job_state == ASTRA_FONT_IMPORT_SUCCEEDED ? 1u : 0u;
+        reply->import_status = job_state == ASTRA_FONT_IMPORT_FAILED ? ASTRA_STATUS_UNSUPPORTED : 0u;
+        if (job_state == ASTRA_FONT_IMPORT_SUCCEEDED && bad_reply != 3u)
+            memcpy(reply->imported_id, "user:test", sizeof("user:test"));
+        if (bad_reply == 4u) reply->completed_faces = 2u;
+        if (bad_reply == 5u) reply->import_state = 99u;
+    }
     call->reply_size = bad_reply == 1u ? sizeof(*reply) - 1u : sizeof(*reply);
     call->reply_handle_count =
         request->header.operation == ASTRA_FONT_SERVICE_CATALOG ||
         request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE ||
-        request->header.operation == ASTRA_FONT_SERVICE_INFORMATION ? 1u : 0u;
-    if (call->reply_handle_count != 0u) *call->reply_handles = 2u;
+        request->header.operation == ASTRA_FONT_SERVICE_INFORMATION ? 1u :
+        request->header.operation == ASTRA_FONT_SERVICE_IMPORT_BEGIN ? 1u : 0u;
+    if (call->reply_handle_count == 1u) *call->reply_handles =
+        request->header.operation == ASTRA_FONT_SERVICE_IMPORT_BEGIN ? 5u : 2u;
     if (bad_reply == 2u) reply->header.protocol_version = 99u;
     return ASTRA_OK;
 }
@@ -203,7 +238,7 @@ AstraResult astra_area_close(AstraArea *area)
 
 AstraResult astra_handle_close(AstraHandle *handle)
 {
-    assert(*handle == 2u || *handle == 4u);
+    assert(*handle == 2u || *handle == 4u || *handle == 5u || *handle == 6u || *handle == 7u);
     *handle = ASTRA_INVALID_HANDLE;
     ++closed_handles;
     return ASTRA_OK;
@@ -348,38 +383,43 @@ int main(void)
     assert(astra_fonts_catalog_open(1u, &catalog) == ASTRA_ERROR_IO);
     assert(closed_handles == 5u);
     assert(catalog.generation == 0u);
-    char installed_id[ASTRA_FONT_ID_MAX];
+    AstraFontImport job = ASTRA_FONT_IMPORT_INIT;
+    AstraFontImportProgress progress = ASTRA_FONT_IMPORT_PROGRESS_INIT;
     const char source_bytes[] = "AFNT";
     imported_length = sizeof(source_bytes) - 1u;
     bad_reply = 0u;
-    assert(astra_fonts_import(1u, source_bytes, imported_length,
+    assert(astra_fonts_import_begin(1u, source_bytes, imported_length,
                               "test.afnt", 9u, ASTRA_FONT_ENCODING_AUTO,
-                              installed_id) == ASTRA_OK);
-    assert(strcmp(installed_id, "user:test") == 0);
+                              &job) == ASTRA_OK);
+    assert(astra_fonts_import_wait_handle(&job) == 6u);
+    assert(astra_fonts_import_state(&job, &progress) == ASTRA_OK &&
+           progress.state == ASTRA_FONT_IMPORT_SUCCEEDED && progress.result == ASTRA_OK);
+    assert(strcmp(progress.installed_id, "user:test") == 0);
     assert(memcmp(imported_bytes, source_bytes, imported_length) == 0);
     assert(closed_handles == 6u);
+    assert(astra_fonts_import_close(&job) == ASTRA_OK && closed_handles == 8u);
     bad_reply = 3u;
-    assert(astra_fonts_import(1u, source_bytes, imported_length,
+    assert(astra_fonts_import_begin(1u, source_bytes, imported_length,
                               "test.afnt", 9u, ASTRA_FONT_ENCODING_AUTO,
-                              installed_id) ==
+                              &job) ==
            ASTRA_ERROR_IO);
-    assert(installed_id[0] == '\0' && closed_handles == 7u);
-    assert(astra_fonts_import(1u, source_bytes, 0u, "test.afnt", 9u,
+    assert(job._private_control == ASTRA_INVALID_HANDLE && closed_handles == 11u);
+    assert(astra_fonts_import_begin(1u, source_bytes, 0u, "test.afnt", 9u,
                               ASTRA_FONT_ENCODING_AUTO,
-                              installed_id) == ASTRA_ERROR_INVALID_ARGUMENT);
+                              &job) == ASTRA_ERROR_INVALID_ARGUMENT);
     AstraArea rendered = ASTRA_AREA_INIT;
     uint32_t face_bytes = 0u;
     bad_reply = 0u;
     assert(astra_fonts_face_open(1u, "system:test", 11u, &rendered,
                                  &face_bytes) == ASTRA_OK);
     assert(face_bytes == 128u && rendered.address == document);
-    assert(astra_area_close(&rendered) == ASTRA_OK && closed_handles == 8u);
+    assert(astra_area_close(&rendered) == ASTRA_OK && closed_handles == 12u);
     assert(astra_fonts_face_open(1u, "", 0u, &rendered,
                                  &face_bytes) == ASTRA_ERROR_INVALID_ARGUMENT);
     bad_reply = 2u;
     assert(astra_fonts_face_open(1u, "system:test", 11u, &rendered,
                                  &face_bytes) == ASTRA_ERROR_IO);
-    assert(closed_handles == 9u);
+    assert(closed_handles == 13u);
     bad_reply = 0u;
     assert(astra_fonts_use_system(1u, NULL) == ASTRA_OK && installed_contexts == 1u);
     assert(astra_fonts_use_system(ASTRA_INVALID_HANDLE, NULL) == ASTRA_ERROR_INVALID_ARGUMENT);
@@ -387,7 +427,7 @@ int main(void)
     assert(astra_fonts_use_system(1u, NULL) == ASTRA_ERROR_IO && installed_contexts == 1u);
     bad_reply = 2u;
     assert(astra_fonts_use_system(1u, NULL) == ASTRA_ERROR_IO && installed_contexts == 1u);
-    assert(closed_handles == 11u);
+    assert(closed_handles == 15u);
     bad_reply = 0u;
     strcpy(adopted_id, "system:prior");
     fail_context_map = 1u;
@@ -399,14 +439,14 @@ int main(void)
            installed_contexts == 1u && strcmp(adopted_id, "system:prior") == 0);
     fail_snapshot = 0u;
     assert(astra_fonts_use_system(1u, NULL) == ASTRA_OK && installed_contexts == 2u);
-    assert(closed_handles == 13u);
+    assert(closed_handles == 17u);
     AstraWindowEvent change = {.size = sizeof(change), .version = ASTRA_WINDOW_EVENT_VERSION,
         .type = ASTRA_WINDOW_EVENT_FONT_CHANGED};
     change.data.font_changed.generation = 7u;
     change.data.font_changed.window = requested_window = 42u;
     fail_context_map = 1u;
     assert(astra_fonts_use_system(1u, &change) == ASTRA_OK && installed_contexts == 2u &&
-           closed_handles == 14u);
+           closed_handles == 18u);
     fail_context_map = 0u;
     change.data.font_changed.window = 0u;
     assert(astra_fonts_use_system(1u, &change) == ASTRA_ERROR_INVALID_ARGUMENT);
@@ -417,5 +457,39 @@ int main(void)
     --change.version;
     assert(astra_fonts_use_system(1u, &change) == ASTRA_ERROR_INVALID_ARGUMENT);
     information_tests();
+    bad_reply = 0u;
+    job_state = ASTRA_FONT_IMPORT_RUNNING;
+    assert(astra_fonts_import_begin(1u, source_bytes, imported_length, "test.afnt", 9u,
+        ASTRA_FONT_ENCODING_AUTO, &job) == ASTRA_OK);
+    assert(astra_fonts_import_state(&job, &progress) == ASTRA_OK &&
+        progress.state == ASTRA_FONT_IMPORT_RUNNING && progress.result == ASTRA_OK &&
+        progress.installed_id[0] == '\0');
+    assert(astra_fonts_import_begin(1u, source_bytes, imported_length, "test.afnt", 9u,
+        ASTRA_FONT_ENCODING_AUTO, &job) == ASTRA_ERROR_INVALID_ARGUMENT);
+    job_state = ASTRA_FONT_IMPORT_CANCELLING;
+    assert(astra_fonts_import_cancel(&job) == ASTRA_OK);
+    job_state = ASTRA_FONT_IMPORT_CANCELLED;
+    assert(astra_fonts_import_state(&job, &progress) == ASTRA_OK &&
+        progress.result == ASTRA_ERROR_CANCELLED && !progress.installed_id[0]);
+    job_state = ASTRA_FONT_IMPORT_FAILED;
+    assert(astra_fonts_import_state(&job, &progress) == ASTRA_OK &&
+        progress.result == ASTRA_ERROR_UNSUPPORTED);
+    for (bad_reply = 4u; bad_reply <= 5u; ++bad_reply)
+        assert(astra_fonts_import_state(&job, &progress) == ASTRA_ERROR_IO);
+    bad_reply = 0u;
+    hint_result = ASTRA_ERROR_PEER_DEAD;
+    assert(astra_fonts_import_state(&job, &progress) == ASTRA_ERROR_PEER_DEAD);
+    hint_result = ASTRA_ERROR_WOULD_BLOCK;
+    assert(astra_fonts_import_close(&job) == ASTRA_OK);
+    assert(astra_fonts_import_wait_handle(&job) == ASTRA_INVALID_HANDLE);
+    assert(astra_fonts_import_close(&job) == ASTRA_OK);
+    assert(astra_fonts_import_state(&job, &progress) == ASTRA_ERROR_INVALID_ARGUMENT);
+    fail_context_map = 1u;
+    uint32_t before_failed_begin = closed_handles;
+    assert(astra_fonts_import_begin(1u, source_bytes, imported_length, "test.afnt", 9u,
+        ASTRA_FONT_ENCODING_AUTO, &job) == ASTRA_ERROR_OUT_OF_MEMORY);
+    assert(closed_handles == before_failed_begin + 3u &&
+        job._private_control == ASTRA_INVALID_HANDLE && job._private_changed == ASTRA_INVALID_HANDLE);
+    fail_context_map = 0u;
     return 0;
 }

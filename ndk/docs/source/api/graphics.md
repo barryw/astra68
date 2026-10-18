@@ -30,6 +30,10 @@ Window display surfaces, draw lists, software surfaces, fonts, and the system th
 :project: astra-ndk
 ```
 
+```{doxygenfile} font_import.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} text_style.h
 :project: astra-ndk
 ```

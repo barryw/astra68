@@ -12,6 +12,55 @@ must not draw bitmap glyphs with CPU pixel loops.
 
 ### Active import coordination work (2026-10-18)
 
+The coherent contract is Font Kit 5.0 and FONTS protocol 8: imports are
+owned capability-scoped sessions, with begin/state/cancel/wait-handle/close APIs.
+The previous blocking import API is removed; every in-tree program, Kit,
+manifest, export and probe moves together. Existing native ports carry control
+and coalesced change hints. The client owns a one-message notification receiver;
+the service owns its sole send capability. Service death therefore wakes the
+client with PEER_DEAD. A shared event alone would not provide that lifetime
+guarantee. State queries drain hints before reading authoritative progress;
+progress counts staged faces and never pretends to estimate conversion time.
+The service keeps its only converter/store/publication path.
+
+Cancellation acknowledges CANCELLING while an existing converter call retires
+(its existing timeout is 60 seconds). CANCELLED is terminal only after worker
+retirement and rollback. Cancel after publication leaves success unchanged.
+Explicit release retires terminal sessions before admitting the next import;
+last-control-capability peer death uses the same abandonment cleanup if a client
+exits. No source or worker memory is released while the worker can still use it.
+The native UI composes existing Progress and Button controls, waits on its window
+and import notification together, and returns to the source browser after
+cancellation so the same file can be retried. No application-specific control
+or synchronous UI converter thread is added.
+
+Read-only Haiku references remain `headers/os/support/Job.h` lifecycle states
+and `src/kits/support/Job.cpp:BJob::Run` cleanup-before-terminal-notification.
+Astra reuses Display's capability-scoped session peer-death handling in
+`sw/userspace/services/display/main.c:receive_open` and native round-robin waits.
+Focused tests, sanitizers, MC68040 analyzers, the coherent userspace build and
+NDK header/documentation gates pass. Native cancellation and restart, responsive
+catalog reads, collection success, later-face rollback and AFNT lifecycle gates
+also pass. The complete native UI passes visible progress, cancellation,
+retirement, same-source retry, import, information scrolling/copy, live system
+choice, persisted restart, restoration and uninstall. Source browser selection
+and viewport survive cancellation. Evidence is
+`/var/tmp/astra-font-import-ports-ui-native-20261018.log`; sibling cancel,
+concurrent, collection, rollback and AFNT logs retain the native service gates.
+This is not DE25 release acceptance. Shared Settings shell and overall release
+qualification remain open.
+
+The packaged NDK validates the new major, archive contents, standalone links and
+all installed examples in `/var/tmp/astra-font-import-ports-sdk-20261018.log`.
+
+Native testing exposed an empty-port cleanup error after notification endpoints
+had moved. The actual `astra_port_close` contract returns INVALID_HANDLE for an
+empty pair; the initial host mock had returned success. Matching that contract
+reproduces the failure in
+`/var/tmp/astra-font-import-empty-port-red-20261018.log`. The importer now closes
+only still-owned endpoints, with source-map failure cleanup covered too; tests,
+sanitizers, analyzers and native cancellation pass after the fix.
+
 The existing native converter job is now retained by the Fonts service event
 loop instead of being awaited inside one request handler. A private copy of
 source bytes and name remains valid after request dispatch; a transferred
@@ -32,8 +81,8 @@ before terminal state/notification. Astra adapts that ordering to existing
 native waitable thread/semaphore objects and its single Config Kit publication
 point. Display's existing round-robin wait-source ordering informs the Fonts
 service's expanded wait set. No generic job registry or second converter/store
-is added. This is backend work; the synchronous public API remains current
-until native progress/cancellation clients are built coherently.
+is added. Commit `92706287` qualified the coordinator with the then-current
+synchronous API; the session contract above supersedes that API coherently.
 
 ### Active font-information work (2026-10-18)
 

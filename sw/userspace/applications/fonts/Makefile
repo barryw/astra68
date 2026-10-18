@@ -30,7 +30,7 @@ PROBE_LIBRARIES := $(ASTRA_FONT_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) \
 	$(ASTRA_SYSTEM_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) \
 	$(ASTRA_COMPILER_LIBRARY)
 
-build/m68k/import_probe.o: tests/import_probe.c
+build/m68k/import_probe.o: tests/import_probe.c tests/import_support.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
 
@@ -45,7 +45,7 @@ build/m68k/import_probe.elf: build/m68k/import_probe.o $(PROBE_LIBRARIES) \
 build/m68k/import_probe: build/m68k/import_probe.elf
 	$(OBJCOPY) $(ASTRA_PROGRAM_STRIP_FLAGS) $< $@
 
-build/m68k/outline_probe.o: tests/outline_probe.c
+build/m68k/outline_probe.o: tests/outline_probe.c tests/import_support.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
 
@@ -96,7 +96,7 @@ outline-probe: all build/FontOutlineProbe.app/manifest \
 		build/FontOutlineProbe.app/resources/FontOutlineProbe.aicon
 	../../../../tools/build/astra-bundle check build/FontOutlineProbe.app
 
-build/m68k/amiga_probe.o: tests/outline_probe.c
+build/m68k/amiga_probe.o: tests/outline_probe.c tests/import_support.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(FLAGS) -DASTRA_FONT_PROBE_AMIGA -MMD -MP -c $< -o $@
 

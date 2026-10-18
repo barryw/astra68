@@ -49,7 +49,7 @@ AICON_TEST_SOURCES := src/aicon_surface.c tests/test_aicon_surface.c \
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
 GRAPHICS_LIBRARY := build/m68k/libraries/graphics.library.3
-FONT_LIBRARY := build/m68k/libraries/font.library.4
+FONT_LIBRARY := build/m68k/libraries/font.library.5
 GRAPHICS_LIBRARY_MAP := graphics.library.exports
 FONT_LIBRARY_MAP := font.library.exports
 GRAPHICS_LIBRARY_OBJECTS := build/m68k/library/graphics_library.o \
@@ -227,7 +227,7 @@ $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) $(AFNT_LIBRARY) \
 		$(ASTRA_SHARED_LINK_INPUTS) | shared-libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,font.library.4 -o $@ $(FONT_LIBRARY_OBJECTS) \
+		-Wl,-soname,font.library.5 -o $@ $(FONT_LIBRARY_OBJECTS) \
 		-Wl,--version-script=$(FONT_LIBRARY_MAP) \
 		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(SYSTEM_LIBRARY)) \
 		-L$(dir $(RUNTIME_LIBRARY)) \
@@ -257,7 +257,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
 		grep -q '^graphics.library.3 3.0.0 ABI 3.0$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
-		grep -q '^font.library.4 4.2.0 ABI 4.2$$'
+		grep -q '^font.library.5 5.0.0 ABI 5.0$$'
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
@@ -324,7 +324,9 @@ $(HOST_CATALOG_TEST): $(HOST_AFNT_LIBRARY) tests/test_font_catalog.c \
 		tests/test_font_catalog.c $(HOST_AFNT_LIBRARY) -o $@
 
 $(HOST_FONTS_CLIENT_TEST): src/fonts_client.c tests/test_fonts_client.c \
-		$(HOST_AFNT_LIBRARY) $(NDK)/include/astra/fonts.h ../../include/astra/gui.h
+		$(HOST_AFNT_LIBRARY) $(NDK)/include/astra/fonts.h \
+		$(NDK)/include/astra/font_import.h ../../include/astra/font_service.h \
+		../../include/astra/gui.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/fonts_client.c tests/test_fonts_client.c \

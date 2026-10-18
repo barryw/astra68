@@ -6,6 +6,7 @@
 #include <astra/area.h>
 #include <astra/attributes.h>
 #include <astra/font_encoding.h>
+#include <astra/font_import.h>
 #include <astra/gui.h>
 #include <astra/surface.h>
 #include <astra/types.h>
@@ -296,21 +297,63 @@ ASTRA_NODISCARD AstraResult astra_fonts_select(
 ASTRA_NODISCARD AstraResult astra_fonts_face_open(
     AstraHandle render, const char *id, uint32_t id_length,
     AstraArea *face, uint32_t *length);
-/** Import one native AFNT source into protected installed-font storage.
- * The service rejects unsupported source formats until its converter worker
- * is available. Returned ID is NUL-terminated on success and empty on error.
+/** Owned import session. Closing its last control capability cancels unfinished
+ * work. Keep it open until terminal state if cleanup confirmation is needed. */
+typedef struct AstraFontImport {
+    /** @cond ASTRA_INTERNAL */
+    AstraHandle _private_control;
+    AstraHandle _private_changed;
+    /** @endcond */
+} AstraFontImport;
+/** Empty owned import session. */
+#define ASTRA_FONT_IMPORT_INIT { ASTRA_INVALID_HANDLE, ASTRA_INVALID_HANDLE }
+
+/** Authoritative import state. Progress counts complete staged faces, not an
+ * estimate of conversion time. Zero total means source discovery is pending. */
+typedef struct AstraFontImportProgress {
+    uint32_t state; /**< ASTRA_FONT_IMPORT_* lifecycle state. */
+    uint32_t completed_faces; /**< Faces staged successfully. */
+    uint32_t total_faces; /**< Source faces, when known. */
+    AstraResult result; /**< Terminal outcome; OK while running/cancelling. */
+    char installed_id[ASTRA_FONT_ID_MAX]; /**< First face ID on success only. */
+} AstraFontImportProgress;
+/** Empty progress value; query before inspecting. */
+#define ASTRA_FONT_IMPORT_PROGRESS_INIT { 0u, 0u, 0u, ASTRA_OK, {0} }
+
+/** Begin native AFNT/outline/Amiga import into protected installed storage.
+ * Copies source before returning; caller may release it. Conversion continues
+ * in the service. A successful begin admits a job, not a completed import.
  * @param admin FONTS_ADMIN send capability.
  * @param bytes Complete source bytes, up to 32 MiB.
  * @param length Source byte count.
  * @param source_name Counted UTF-8 display name of source file.
  * @param name_length Bytes of @p source_name, without terminator.
  * @param encoding AUTO for AFNT/outline, explicit ISO-8859 codepage for Amiga.
- * @param installed_id Receives stable face ID; at least ASTRA_FONT_ID_MAX bytes.
- * @return ::ASTRA_OK or a negative ::AstraResult. */
-ASTRA_NODISCARD AstraResult astra_fonts_import(
+ * @param import Empty owned session.
+ * @return OK, BUSY when another session owns import, or a negative result. */
+ASTRA_NODISCARD AstraResult astra_fonts_import_begin(
     AstraHandle admin, const void *bytes, uint32_t length,
     const char *source_name, uint32_t name_length, uint32_t encoding,
-    char installed_id[ASTRA_FONT_ID_MAX]);
+    AstraFontImport *import);
+/** Read authoritative progress, including terminal outcome after cleanup.
+ * @param import Open session. @param progress Receives complete state.
+ * @return Query transport/protocol result; job outcome is progress.result. */
+ASTRA_NODISCARD AstraResult astra_fonts_import_state(
+    const AstraFontImport *import, AstraFontImportProgress *progress);
+/** Request cancellation. An in-flight converter call may take up to its existing
+ * 60-second timeout to retire. Continue waiting for CANCELLED or FAILED before
+ * claiming cleanup. Already terminal jobs remain unchanged.
+ * @param import Open session. @return Request result, not cleanup completion. */
+ASTRA_NODISCARD AstraResult astra_fonts_import_cancel(const AstraFontImport *import);
+/** Borrow notification receive endpoint for a native wait set. Query state
+ * before each wait to drain coalesced hints. Service death wakes PEER_DEAD;
+ * hints carry no progress data. Do not close the borrowed handle.
+ * @param import Open session. @return Wait handle, or INVALID_HANDLE. */
+ASTRA_NODISCARD AstraHandle astra_fonts_import_wait_handle(const AstraFontImport *import);
+/** Close session. Unfinished work is cancelled by peer-death; no thread or
+ * source storage is freed while conversion can still use it.
+ * @param import Owned session. @return First close error after both closes. */
+ASTRA_NODISCARD AstraResult astra_fonts_import_close(AstraFontImport *import);
 /** Uninstall one user-imported face after choosing a different system face.
  * Shipped faces cannot be removed. The catalog stops exposing a successfully
  * uninstalled face even if cleanup of its now-unreferenced AFNT file fails.

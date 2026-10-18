@@ -1,4 +1,5 @@
 #include <astra/fonts.h>
+#include "import_support.h"
 #include <astra/filesystem_library.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
@@ -149,7 +150,7 @@ int astra_main(const AstraStartupInfo *startup)
         if (strcmp(before.selected_id, "system:astra-workbench") != 0)
             goto done;
         status = PROBE_FAIL_CORRUPT_WRITE;
-        if (astra_fonts_import(admin->handle, source, source_size,
+        if (import_font(admin->handle, source, source_size,
                                SOURCE_NAME, sizeof(SOURCE_NAME) - 1u,
                                ASTRA_FONT_ENCODING_AUTO, id) != ASTRA_ERROR_IO)
             goto done;
@@ -173,7 +174,7 @@ int astra_main(const AstraStartupInfo *startup)
     status = PROBE_FAIL_RESTART;
     if (resumed != expect_again) goto done;
     status = PROBE_FAIL_IMPORT;
-    result = astra_fonts_import(admin->handle, source, source_size,
+    result = import_font(admin->handle, source, source_size,
                                 SOURCE_NAME, sizeof(SOURCE_NAME) - 1u,
                                 ASTRA_FONT_ENCODING_AUTO, id);
     if (result != ASTRA_OK) {
@@ -208,7 +209,7 @@ int astra_main(const AstraStartupInfo *startup)
         selected.generation != after.generation + (resumed ? 0u : 1u))
         goto done;
     status = PROBE_FAIL_DUPLICATE;
-    if (astra_fonts_import(admin->handle, source, source_size,
+    if (import_font(admin->handle, source, source_size,
                            SOURCE_NAME, sizeof(SOURCE_NAME) - 1u,
                            ASTRA_FONT_ENCODING_AUTO, duplicate) != ASTRA_OK) goto done;
     status = PROBE_FAIL_DUPLICATE_ID;
@@ -218,7 +219,7 @@ int astra_main(const AstraStartupInfo *startup)
         if (astra_process_read_file_alloc(&files, SECOND_SOURCE,
                                           &second_source, &second_size) !=
                 ASTRA_VFS_OK || second_size == 0u ||
-            astra_fonts_import(admin->handle, second_source, second_size,
+            import_font(admin->handle, second_source, second_size,
                                "astra-mono.afnt", 15u,
                                ASTRA_FONT_ENCODING_AUTO,
                                second_id) != ASTRA_OK)

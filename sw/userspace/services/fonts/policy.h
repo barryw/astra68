@@ -9,7 +9,8 @@ int fonts_face_selectable(const AstraFontCatalogFace *face);
 enum {
     FONTS_PORT_CATALOG = 0u,
     FONTS_PORT_ADMIN = 1u,
-    FONTS_PORT_RENDER = 2u
+    FONTS_PORT_RENDER = 2u,
+    FONTS_PORT_IMPORT = 3u
 };
 int fonts_request_valid(const AstraFontServiceRequest *request,
                         uint32_t size, uint32_t port_role);

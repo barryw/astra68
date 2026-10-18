@@ -32,7 +32,7 @@ ASTRA_NTP_LIBRARY := \
 ASTRA_GRAPHICS_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/graphics/build/m68k/libraries/graphics.library.3
 ASTRA_FONT_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/graphics/build/m68k/libraries/font.library.4
+	$(ASTRA_USERSPACE_ROOT)/graphics/build/m68k/libraries/font.library.5
 ASTRA_INTERFACE_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/interface/build/m68k/libraries/interface.library.7
 ASTRA_NETWORK_LIBRARY := \

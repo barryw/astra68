@@ -36,7 +36,7 @@ int fonts_request_valid(const AstraFontServiceRequest *request,
     const char *name_end;
 
     if (request == NULL || size != sizeof(*request)) return 0;
-    import = request->header.operation == ASTRA_FONT_SERVICE_IMPORT;
+    import = request->header.operation == ASTRA_FONT_SERVICE_IMPORT_BEGIN;
     name_end = memchr(request->source_name, '\0',
                       sizeof(request->source_name));
     return
@@ -58,8 +58,13 @@ int fonts_request_valid(const AstraFontServiceRequest *request,
               request->header.operation == ASTRA_FONT_SERVICE_UNINSTALL ||
               import)) ||
             (port_role == FONTS_PORT_RENDER &&
-             request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE)) &&
+             request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE) ||
+            (port_role == FONTS_PORT_IMPORT &&
+             (request->header.operation == ASTRA_FONT_SERVICE_IMPORT_STATE ||
+              request->header.operation == ASTRA_FONT_SERVICE_IMPORT_CANCEL ||
+              request->header.operation == ASTRA_FONT_SERVICE_IMPORT_RELEASE))) &&
            memchr(request->face_id, '\0', sizeof(request->face_id)) != NULL &&
+           (port_role != FONTS_PORT_IMPORT || request->face_id[0] == '\0') &&
            ((request->header.operation != ASTRA_FONT_SERVICE_OPEN_FACE &&
              request->header.operation != ASTRA_FONT_SERVICE_INFORMATION) ||
             request->face_id[0] != '\0') &&

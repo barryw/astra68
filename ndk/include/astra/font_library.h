@@ -17,10 +17,10 @@ enum {
     ASTRA_FONT_BITMAP_A8 = 5
 };
 
-/** Breaking Font Kit ABI generation carried by font.library.4. */
-#define ASTRA_FONT_LIBRARY_ABI_MAJOR 4u
+/** Breaking Font Kit ABI generation carried by font.library.5. */
+#define ASTRA_FONT_LIBRARY_ABI_MAJOR 5u
 /** Current backward-compatible Font Kit revision. */
-#define ASTRA_FONT_LIBRARY_ABI_MINOR 2u
+#define ASTRA_FONT_LIBRARY_ABI_MINOR 0u
 
 /**
  * Immutable metrics and glyph range for one built-in bitmap-font strike.

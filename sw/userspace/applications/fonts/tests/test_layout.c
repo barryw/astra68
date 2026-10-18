@@ -163,6 +163,19 @@ int main(void)
     confirm_uninstall = 0u;
     browsing = 1u;
     check_layout();
+    showing_import = 1u;
+    import_progress.state = ASTRA_FONT_IMPORT_RUNNING;
+    message = "Converting font; installed fonts remain unchanged";
+    check_layout(); check_render();
+    assert(CONTROL(FONTS_PROGRESS)->_private_control_kind == ASTRA_CONTROL_PROGRESS &&
+        (CONTROL(FONTS_PROGRESS)->_private_state & ASTRA_CONTROL_COLLAPSED) == 0u);
+    assert((CONTROL(FONTS_LIST)->_private_state & ASTRA_CONTROL_COLLAPSED) != 0u);
+    import_progress.state = ASTRA_FONT_IMPORT_CANCELLING;
+    import_progress.completed_faces = 1u; import_progress.total_faces = 2u;
+    message = "Cancelling; waiting for converter and cleanup";
+    check_layout(); check_render();
+    assert((CONTROL(FONTS_BACK)->_private_state & ASTRA_CONTROL_DISABLED) != 0u);
+    showing_import = 0u; message = NULL;
     client_width = 650u;
     client_height = 640u;
     check_layout();

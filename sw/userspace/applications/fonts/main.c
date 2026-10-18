@@ -33,6 +33,7 @@ enum {
     FONTS_PREVIEW,
     FONTS_SCROLL,
     FONTS_LIST,
+    FONTS_PROGRESS,
     FONTS_BACK,
     FONTS_USE,
     FONTS_IMPORT,
@@ -81,6 +82,11 @@ static uint32_t browsing;
 static uint32_t amiga_encoding;
 static uint32_t confirm_uninstall;
 static uint32_t showing_information;
+static uint32_t showing_import;
+static AstraFontImport import_job = ASTRA_FONT_IMPORT_INIT;
+static AstraFontImportProgress import_progress = ASTRA_FONT_IMPORT_PROGRESS_INIT;
+static char import_message[160];
+static AstraScrollState import_source_scroll = ASTRA_SCROLL_STATE_INIT;
 static AstraHandle fonts_clipboard;
 typedef struct FontDocument {
     AstraTextModel model;
@@ -420,7 +426,6 @@ static AstraResult browser_import(void)
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     const AstraDirectoryEntry *node;
     char path[ASTRA_VFS_PATH_MAX];
-    char id[ASTRA_FONT_ID_MAX];
     void *bytes;
     uint32_t length = 0u;
     uint32_t status;
@@ -466,8 +471,8 @@ static AstraResult browser_import(void)
         uint32_t encoding = length >= 4u &&
             memcmp(bytes, "\0\0\3\363", 4u) == 0 ? amiga_encoding :
             ASTRA_FONT_ENCODING_AUTO;
-        result = astra_fonts_import(fonts_admin, bytes, length, node->name,
-                                    (uint32_t)strlen(node->name), encoding, id);
+        result = astra_fonts_import_begin(fonts_admin, bytes, length, node->name,
+            (uint32_t)strlen(node->name), encoding, &import_job);
     } else result = ASTRA_ERROR_IO;
     astra_runtime_deallocate(bytes);
     return result;
@@ -498,7 +503,7 @@ static uint32_t update_preview(void)
     AstraLabelFont font = ASTRA_LABEL_FONT_INIT;
     const char *text = "The quick brown fox jumps over the lazy dog. 0123456789";
 
-    if (browsing || showing_information || active_family == UINT32_MAX)
+    if (browsing || showing_import || showing_information || active_family == UINT32_MAX)
         return ASTRA_STATUS_OK;
     if (selected_preview_font(&font) != ASTRA_STATUS_OK)
         return FONTS_FAIL_CATALOG;
@@ -524,6 +529,7 @@ static uint32_t build_controls(void)
     AstraButtonInfo encoding = ASTRA_BUTTON_INFO_INIT;
     AstraButtonInfo uninstall = ASTRA_BUTTON_INFO_INIT;
     AstraButtonInfo information = ASTRA_BUTTON_INFO_INIT;
+    AstraProgressInfo progress = ASTRA_PROGRESS_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
     const AstraChoiceItem *title = active_family == UINT32_MAX ? NULL :
                                    &families[active_family];
@@ -540,10 +546,10 @@ static uint32_t build_controls(void)
     }
 
     label.id = FONTS_TITLE;
-    label.text = browsing ? browser_path : title == NULL ? "Fonts" :
+    label.text = showing_import ? "Import font" : browsing ? browser_path : title == NULL ? "Fonts" :
                  title->text;
-    label.text_length = browsing ? (uint32_t)strlen(browser_path) :
-                        title == NULL ? 5u : title->text_length;
+    label.text_length = showing_import ? sizeof("Import font") - 1u :
+        browsing ? (uint32_t)strlen(browser_path) : title == NULL ? 5u : title->text_length;
     label.text_role = ASTRA_TEXT_CLIENT_PRIMARY;
     if (astra_interface_label_init(CONTROL(FONTS_TITLE), &label) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
@@ -567,7 +573,7 @@ static uint32_t build_controls(void)
         preview.id = FONTS_PREVIEW;
         preview.text = "Preview unavailable for this font";
         preview.text_length = (uint32_t)strlen(preview.text);
-        preview.state = browsing || showing_information || active_family == UINT32_MAX ?
+        preview.state = showing_import || browsing || showing_information || active_family == UINT32_MAX ?
                         ASTRA_CONTROL_COLLAPSED : 0u;
         if (astra_interface_label_init(CONTROL(FONTS_PREVIEW), &preview) != ASTRA_OK)
             return FONTS_FAIL_CONTROL;
@@ -576,7 +582,7 @@ static uint32_t build_controls(void)
     view.model = &scroll;
     view.preferred_width = client_width > 48u ? client_width - 48u : 1u;
     view.preferred_height = 120u;
-    view.state = confirm_uninstall ? ASTRA_CONTROL_COLLAPSED : 0u;
+    view.state = showing_import || confirm_uninstall ? ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_scroll_view_init(CONTROL(FONTS_SCROLL), &view) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     list.id = FONTS_LIST;
@@ -587,7 +593,7 @@ static uint32_t build_controls(void)
     list.selected = list.item_count == 0u ? UINT32_MAX :
                     browsing ? browser_selection :
                     active_family == UINT32_MAX ? main_selection : detail_selection;
-    list.state = confirm_uninstall ? ASTRA_CONTROL_COLLAPSED : 0u;
+    list.state = showing_import || confirm_uninstall ? ASTRA_CONTROL_COLLAPSED : 0u;
     if (showing_information) {
         AstraTextViewInfo text = ASTRA_TEXT_VIEW_INFO_INIT;
         text.id = FONTS_LIST;
@@ -596,18 +602,26 @@ static uint32_t build_controls(void)
             return FONTS_FAIL_CONTROL;
     } else if (astra_interface_list_init(CONTROL(FONTS_LIST), &list) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
+    progress.id = FONTS_PROGRESS;
+    progress.value = import_progress.completed_faces;
+    progress.maximum = import_progress.total_faces;
+    progress.state = showing_import ? 0u : ASTRA_CONTROL_COLLAPSED;
+    if (astra_interface_progress_init(CONTROL(FONTS_PROGRESS), &progress) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
     back.id = FONTS_BACK;
-    back.text = showing_information ? "Back to styles and sizes" : confirm_uninstall ? "Cancel" :
+    back.text = showing_import ? "Cancel import" : showing_information ? "Back to styles and sizes" : confirm_uninstall ? "Cancel" :
                 browsing ? "Up" : "Back to families";
     back.text_length = (uint32_t)strlen(back.text);
-    back.state = !browsing && active_family == UINT32_MAX ?
+    back.state = showing_import ?
+        (import_progress.state == ASTRA_FONT_IMPORT_CANCELLING ? ASTRA_CONTROL_DISABLED : 0u) :
+        !browsing && active_family == UINT32_MAX ?
                  ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_BACK), &back) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     use.id = FONTS_USE;
     use.text = browsing ? "Import selected font" : "Use as system font";
     use.text_length = (uint32_t)strlen(use.text);
-    use.state = showing_information || confirm_uninstall ||
+    use.state = showing_import || showing_information || confirm_uninstall ||
                 (!browsing && active_family == UINT32_MAX) ?
                 ASTRA_CONTROL_COLLAPSED :
                 !browsing && !system_ready ? ASTRA_CONTROL_DISABLED : 0u;
@@ -616,7 +630,7 @@ static uint32_t build_controls(void)
     import.id = FONTS_IMPORT;
     import.text = "Import font…";
     import.text_length = (uint32_t)strlen(import.text);
-    import.state = browsing || active_family != UINT32_MAX ?
+    import.state = showing_import || browsing || active_family != UINT32_MAX ?
                    ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_IMPORT), &import) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
@@ -626,20 +640,20 @@ static uint32_t build_controls(void)
         amiga_encoding == ASTRA_FONT_ENCODING_ISO_8859_2 ?
         "Amiga encoding: ISO-8859-2" : "Choose Amiga encoding";
     encoding.text_length = (uint32_t)strlen(encoding.text);
-    encoding.state = browsing ? 0u : ASTRA_CONTROL_COLLAPSED;
+    encoding.state = browsing && !showing_import ? 0u : ASTRA_CONTROL_COLLAPSED;
     if (astra_interface_button_init(CONTROL(FONTS_ENCODING), &encoding) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     uninstall.id = FONTS_UNINSTALL;
     uninstall.text = confirm_uninstall ? "Remove font" : "Uninstall…";
     uninstall.text_length = (uint32_t)strlen(uninstall.text);
-    uninstall.state = showing_information || browsing || active_family == UINT32_MAX ?
+    uninstall.state = showing_import || showing_information || browsing || active_family == UINT32_MAX ?
                       ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_UNINSTALL), &uninstall) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     information.id = FONTS_INFORMATION;
     information.text = "Source and license…";
     information.text_length = sizeof("Source and license…") - 1u;
-    information.state = showing_information || browsing || confirm_uninstall ||
+    information.state = showing_import || showing_information || browsing || confirm_uninstall ||
         active_family == UINT32_MAX || detail_count == 0u ? ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_INFORMATION), &information) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
@@ -657,6 +671,10 @@ static uint32_t build_controls(void)
     item.minimum_width = view.preferred_width;
     if (astra_interface_control_set_flex(CONTROL(FONTS_LIST), &item) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.minimum_width = view.preferred_width;
+    if (astra_interface_control_set_flex(CONTROL(FONTS_PROGRESS), &item) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     if (astra_interface_control_set_flex(CONTROL(FONTS_BACK), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
@@ -734,27 +752,95 @@ static uint32_t reload_catalog(void)
     return collect_families();
 }
 
+static const char *import_error(AstraResult result)
+{
+    return result == ASTRA_ERROR_UNSUPPORTED ? "This font format is not supported yet" :
+        result == ASTRA_ERROR_INVALID_ARGUMENT ? "Choose a valid font file, up to 32 MiB" :
+        result == ASTRA_ERROR_BUSY ? "Another import is active; finish it before trying again" :
+        result == ASTRA_ERROR_NO_RESOURCES || result == ASTRA_ERROR_OUT_OF_MEMORY ?
+            "Not enough memory or installed-font capacity; remove unused fonts and retry" :
+        result == ASTRA_ERROR_CANCELLED ? "Import cancelled; installed fonts unchanged" :
+        result == ASTRA_ERROR_PEER_DEAD ? "Fonts service stopped; reopen Fonts after it restarts" :
+        "Could not read or save font; check source file and system storage";
+}
+
+static uint32_t update_import(void)
+{
+    if (!showing_import) return ASTRA_STATUS_OK;
+    AstraFontImportProgress progress = ASTRA_FONT_IMPORT_PROGRESS_INIT;
+    AstraResult result = astra_fonts_import_state(&import_job, &progress);
+    if (result == ASTRA_OK && (progress.state == ASTRA_FONT_IMPORT_RUNNING ||
+                              progress.state == ASTRA_FONT_IMPORT_CANCELLING)) {
+        if (memcmp(&progress, &import_progress, sizeof(progress)) == 0)
+            return ASTRA_STATUS_OK;
+        import_progress = progress;
+        AstraString text;
+        astra_string_init(&text, import_message, sizeof(import_message));
+        if (!astra_string_append(&text, progress.state == ASTRA_FONT_IMPORT_CANCELLING ?
+                "Cancelling; waiting for converter and cleanup" :
+                "Converting font; installed fonts remain unchanged"))
+            return FONTS_FAIL_CONTROL;
+        if (progress.total_faces != 0u &&
+            (!astra_string_append(&text, " · ") ||
+             !astra_string_append_u64(&text, progress.completed_faces) ||
+             !astra_string_append(&text, "/") ||
+             !astra_string_append_u64(&text, progress.total_faces) ||
+             !astra_string_append(&text, " faces staged"))) return FONTS_FAIL_CONTROL;
+        message = import_message;
+        if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+        return present(progress.state == ASTRA_FONT_IMPORT_CANCELLING ?
+            "fonts UI import cancelling" : "fonts UI import progress");
+    }
+    if (result == ASTRA_OK) result = progress.result;
+    AstraResult closed = astra_fonts_import_close(&import_job);
+    showing_import = 0u;
+    import_progress = (AstraFontImportProgress)ASTRA_FONT_IMPORT_PROGRESS_INIT;
+    if (result == ASTRA_OK) {
+        if (reload_catalog() != ASTRA_STATUS_OK) return FONTS_FAIL_CATALOG;
+        message = closed == ASTRA_OK ? "Font imported" :
+            "Font imported; could not confirm session release";
+    } else message = import_error(result);
+    if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+    if (browsing &&
+        (astra_scroll_set_offset(&scroll, import_source_scroll.offset_x,
+                                 import_source_scroll.offset_y) != ASTRA_OK ||
+         layout_controls() != ASTRA_STATUS_OK)) return FONTS_FAIL_CONTROL;
+    return present(result == ASTRA_OK ? "fonts UI import complete" :
+        result == ASTRA_ERROR_CANCELLED ? "fonts UI import cancelled" : "fonts UI import failed");
+}
+
 static uint32_t import_selected(void)
 {
+    if (astra_scroll_get_state(&scroll, &import_source_scroll) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
     message = NULL;
     AstraResult result = browser_import();
 
     if (result == ASTRA_OK) {
-        if (reload_catalog() != ASTRA_STATUS_OK) return FONTS_FAIL_CATALOG;
-        message = "Font imported";
+        showing_import = 1u;
+        import_progress = (AstraFontImportProgress)ASTRA_FONT_IMPORT_PROGRESS_INIT;
+        message = "Converting font; installed fonts remain unchanged";
     } else if (message == NULL) {
-        message = result == ASTRA_ERROR_UNSUPPORTED ?
-                  "This font format is not supported yet" :
-                  result == ASTRA_ERROR_INVALID_ARGUMENT ?
-                  "Select a valid font file smaller than 32 MiB" :
-                  "Could not import font file";
+        message = import_error(result);
     }
     if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-    return present(result == ASTRA_OK ? "fonts UI import complete" : NULL);
+    return present(result == ASTRA_OK ? "fonts UI import started" : NULL);
 }
 
 static uint32_t action(const AstraUIAction *event)
 {
+    if (showing_import) {
+        if (event->type == ASTRA_UI_ACTION_ACTIVATE && event->control_id == FONTS_BACK) {
+            AstraResult result = astra_fonts_import_cancel(&import_job);
+            if (result != ASTRA_OK) {
+                message = import_error(result);
+                if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+                return present(NULL);
+            }
+            return update_import();
+        }
+        return ASTRA_STATUS_OK;
+    }
     if (showing_information) {
         if (event->type == ASTRA_UI_ACTION_ACTIVATE && event->control_id == FONTS_BACK) {
             showing_information = 0u;
@@ -999,8 +1085,18 @@ static uint32_t run(AstraHandle gui)
 {
     for (;;) {
         AstraWindowEvent event = {0};
-        AstraResult result = astra_window_event_wait(
-            &window, &event, ASTRA_DEADLINE_INFINITE);
+        if (update_import() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+        if (showing_import) {
+            uint32_t waits[2] = {astra_window_event_wait_handle(&window),
+                astra_fonts_import_wait_handle(&import_job)}, index = 0u;
+            uint32_t waited = astra_wait_multiple(waits, 2u, ASTRA_DEADLINE_FOREVER,
+                                                  &index, NULL);
+            if (waited == ASTRA_SYSCALL_PEER_DEAD && index == 1u) continue;
+            if (waited != ASTRA_SYSCALL_OK) return FONTS_FAIL_WINDOW;
+            if (index == 1u) continue;
+        }
+        AstraResult result = showing_import ? astra_window_event_try(&window, &event) :
+            astra_window_event_wait(&window, &event, ASTRA_DEADLINE_INFINITE);
 
         if (result != ASTRA_OK) return FONTS_FAIL_WINDOW;
         do {
@@ -1101,6 +1197,10 @@ int astra_main(const AstraStartupInfo *startup)
         (void)astra_close(bootstrap->handle);
     }
     if (status == ASTRA_STATUS_OK) status = run(gui->handle);
+    if (showing_import) {
+        AstraResult closed = astra_fonts_import_close(&import_job);
+        if (status == ASTRA_STATUS_OK && closed != ASTRA_OK) status = FONTS_FAIL_CATALOG;
+    }
     if (window._private_control != ASTRA_INVALID_HANDLE &&
         astra_window_close(&window) != ASTRA_OK &&
         status == ASTRA_STATUS_OK)

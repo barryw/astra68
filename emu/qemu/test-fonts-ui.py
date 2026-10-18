@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -60,6 +61,16 @@ def wait_ui(machine, operation, trace_before, syslog_before):
             return
         time.sleep(.1)
     raise RuntimeError("Fonts " + operation + " UI did not complete: " + repr(lines[-30:]))
+
+
+def wait_import_state(machine, state, trace_before, syslog_before):
+    end = time.monotonic() + 90
+    while time.monotonic() < end:
+        lines = fresh_lines(machine, trace_before, syslog_before)
+        if any("fonts UI import " + state in line for line in lines):
+            return
+        time.sleep(.1)
+    raise RuntimeError("Fonts import state absent: " + state + "; " + repr(lines[-30:]))
 
 
 def uninstall_current(machine):
@@ -185,6 +196,8 @@ def main():
     parser.add_argument("image")
     parser.add_argument("font", nargs="?",
                         help="font to import through Fonts from DH0")
+    parser.add_argument("--cancel-first", action="store_true",
+                        help="cancel a delayed real import through native controls before retry")
     fixture = parser.add_mutually_exclusive_group()
     fixture.add_argument("--long-style", action="store_true",
                         help="exercise the longest accepted AFNT style name")
@@ -193,6 +206,9 @@ def main():
     fixture.add_argument("--long-notice", action="store_true",
                         help="read and copy a complete 32 KiB multilingual license")
     args = parser.parse_args()
+    if args.cancel_first and (args.font is None or args.long_style or
+                              args.unsupported_preview or args.long_notice):
+        parser.error("--cancel-first requires an outline font")
     if args.font is None and not (args.long_style or args.unsupported_preview or args.long_notice):
         parser.error("font is required unless a fixture is selected")
     if os.geteuid() != 0:
@@ -236,7 +252,20 @@ def main():
                 parts[b"BITM"]))
         astra_image._replace_volume_file(image, source,
                                          "/zz-astra-font.ttf")
-        machine = terminal.Machine(args.qemu, args.rom, image, work)
+        environment = None
+        if args.cancel_first:
+            worker = Path(os.environ.get("ASTRA_FONT_WORKER_PATH",
+                                         "/usr/local/libexec/astra-font-worker"))
+            if not worker.is_file():
+                raise RuntimeError("native font worker required")
+            os.chmod(work, 0o755)
+            wrapper = Path(work) / "delayed-font-worker"
+            wrapper.write_text("#!/bin/sh\nsleep 5\nexec " +
+                               shlex.quote(str(worker.resolve())) + ' "$@"\n')
+            wrapper.chmod(0o755)
+            environment = os.environ.copy()
+            environment["ASTRA_FONT_WORKER_PATH"] = str(wrapper)
+        machine = terminal.Machine(args.qemu, args.rom, image, work, environment=environment)
         try:
             if not machine.wait_for_serial(terminal.BOOT_MARKER, 120):
                 raise RuntimeError("Astra did not reach stage 8")
@@ -254,6 +283,21 @@ def main():
             trace_before = machine.sequence()
             syslog_before = len(machine.syslog_lines())
             machine.qmp.key("ret")
+            if args.cancel_first:
+                wait_import_state(machine, "started", trace_before, syslog_before)
+                wait_import_state(machine, "progress", trace_before, syslog_before)
+                # Only interactive control in the progress pane is shared Cancel.
+                machine.qmp.key("tab")
+                cancel_trace, cancel_log = machine.sequence(), len(machine.syslog_lines())
+                machine.qmp.key("ret")
+                wait_import_state(machine, "cancelling", cancel_trace, cancel_log)
+                wait_import_state(machine, "cancelled", cancel_trace, cancel_log)
+                print("Fonts native cancellation: progress, Cancel, retirement and retry passed", flush=True)
+                # Cancellation returns to browser, retaining selected source row.
+                for _ in range(2):
+                    machine.qmp.key("tab")
+                trace_before, syslog_before = machine.sequence(), len(machine.syslog_lines())
+                machine.qmp.key("ret")
             wait_ui(machine, "import", trace_before, syslog_before)
             before = display_count(machine, "glyph-commands")
             trace_before = machine.sequence()

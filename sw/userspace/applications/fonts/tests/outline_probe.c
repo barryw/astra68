@@ -1,4 +1,5 @@
 #include <astra/fonts.h>
+#include "import_support.h"
 #ifdef ASTRA_FONT_PROBE_AMIGA
 #include <astra/graphics.h>
 #include <astra/window.h>
@@ -42,69 +43,100 @@ enum {
     FAIL_RESTART
 };
 
-static struct {
-    AstraHandle admin;
-    const void *source;
-    uint32_t size;
-    AstraResult result;
-    char id[ASTRA_FONT_ID_MAX];
-} concurrent_import;
-
-static void import_thread(uint32_t unused)
-{
-    (void)unused;
-    concurrent_import.result = astra_fonts_import(concurrent_import.admin,
-        concurrent_import.source, concurrent_import.size, NAME, sizeof(NAME) - 1u,
-        PROBE_ENCODING, concurrent_import.id);
-}
-
 static AstraResult import_while_reading(AstraHandle admin, AstraHandle read,
     const void *source, uint32_t size, const AstraFontsCatalog *before,
     char id[ASTRA_FONT_ID_MAX])
 {
-    uint32_t thread = 0u, observed_busy = 0u, verified = 0u;
-    AstraThreadStart start = {import_thread, 0u};
-    concurrent_import.admin = admin;
-    concurrent_import.source = source;
-    concurrent_import.size = size;
-    if (astra_rt_thread_create(&start, ASTRA_PROCESS_PRIORITY_NORMAL,
-        ASTRA_RIGHT_WAIT | ASTRA_RIGHT_READ, &thread, NULL) != ASTRA_SYSCALL_OK)
-        return ASTRA_ERROR_NO_RESOURCES;
-    /* A delayed real converter holds the first import open in this fixture. */
-    for (uint32_t attempt = 0u; attempt < 64u && !observed_busy; ++attempt) {
-        char ignored[ASTRA_FONT_ID_MAX];
-        AstraResult result = astra_fonts_import(admin, "AFNT", 4u,
-            "invalid.afnt", sizeof("invalid.afnt") - 1u,
-            ASTRA_FONT_ENCODING_AUTO, ignored);
-        if (result == ASTRA_ERROR_BUSY) observed_busy = 1u;
-        else if (result != ASTRA_ERROR_INVALID_ARGUMENT) {
-            (void)astra_log_failure("font concurrent contender", (uint32_t)-result);
-            break;
-        }
-        if (astra_wait_one(thread, 0u, NULL) == ASTRA_SYSCALL_OK) break;
-    }
-    if (observed_busy) {
+    uint32_t verified = 0u;
+    AstraFontImport job = ASTRA_FONT_IMPORT_INIT;
+    AstraFontImport contender = ASTRA_FONT_IMPORT_INIT;
+    AstraFontImportProgress progress = ASTRA_FONT_IMPORT_PROGRESS_INIT;
+    AstraResult result = astra_fonts_import_begin(admin, source, size, NAME,
+        sizeof(NAME) - 1u, PROBE_ENCODING, &job);
+    if (result != ASTRA_OK) return result;
+    result = astra_fonts_import_begin(admin, "AFNT", 4u, "invalid.afnt",
+        sizeof("invalid.afnt") - 1u, ASTRA_FONT_ENCODING_AUTO, &contender);
+    if (result == ASTRA_ERROR_BUSY) {
         AstraFontsCatalog during = ASTRA_FONTS_CATALOG_INIT;
         if (astra_fonts_catalog_open(read, &during) == ASTRA_OK) {
             verified = 1u |
                 (during.generation == before->generation ? 2u : 0u) |
                 (during.face_count == before->face_count ? 4u : 0u) |
                 (strcmp(during.selected_id, before->selected_id) == 0 ? 8u : 0u) |
-                (astra_wait_one(thread, 0u, NULL) == ASTRA_SYSCALL_TIMED_OUT ? 16u : 0u);
+                (astra_fonts_import_state(&job, &progress) == ASTRA_OK &&
+                 progress.state == ASTRA_FONT_IMPORT_RUNNING ? 16u : 0u);
             AstraResult closed = astra_fonts_catalog_close(&during);
             if (closed == ASTRA_OK) verified |= 32u;
         }
     }
-    if (!observed_busy)
-        (void)astra_log_debug("font concurrent busy absent", 27u);
+    if (result == ASTRA_OK) {
+        AstraResult closed = astra_fonts_import_close(&contender);
+        (void)closed;
+    }
     if (verified != 63u)
         (void)astra_log_failure("font concurrent snapshot", verified);
-    uint32_t waited = astra_wait_one(thread, ASTRA_DEADLINE_FOREVER, NULL);
-    (void)astra_close(thread);
-    if (verified != 63u || waited != ASTRA_SYSCALL_OK) return ASTRA_ERROR_IO;
-    memcpy(id, concurrent_import.id, sizeof(concurrent_import.id));
+    if (verified != 63u) {
+        AstraResult cancelled = astra_fonts_import_cancel(&job);
+        (void)cancelled;
+    }
+    result = finish_font_import(&job, id);
+    if (verified != 63u) return ASTRA_ERROR_IO;
     (void)astra_log("ASTRA FONT CONCURRENT CATALOG PASS unchanged during conversion");
-    return concurrent_import.result;
+    return result;
+}
+
+static uint32_t cancel_while_reading(AstraHandle admin, AstraHandle read,
+    const void *source, uint32_t size, const AstraFontsCatalog *before)
+{
+    AstraFontImport job = ASTRA_FONT_IMPORT_INIT;
+    AstraFontImportProgress progress = ASTRA_FONT_IMPORT_PROGRESS_INIT;
+    AstraFontsCatalog during = ASTRA_FONTS_CATALOG_INIT;
+    uint32_t checked = 0u, gates = 0u;
+    AstraResult result = astra_fonts_import_begin(admin, source, size, NAME,
+        sizeof(NAME) - 1u, PROBE_ENCODING, &job);
+    if (result == ASTRA_OK) gates |= 1u;
+    if (result == ASTRA_OK) result = astra_fonts_import_state(&job, &progress);
+    if (result == ASTRA_OK && progress.state == ASTRA_FONT_IMPORT_RUNNING) gates |= 2u;
+    if (result == ASTRA_OK && progress.state == ASTRA_FONT_IMPORT_RUNNING &&
+        astra_fonts_catalog_open(read, &during) == ASTRA_OK) {
+        checked = during.face_count == before->face_count &&
+            during.generation == before->generation &&
+            strcmp(during.selected_id, before->selected_id) == 0;
+        if (astra_fonts_catalog_close(&during) != ASTRA_OK) checked = 0u;
+        if (checked) gates |= 4u;
+    }
+    if (result == ASTRA_OK && checked) result = astra_fonts_import_cancel(&job);
+    if (result == ASTRA_OK && checked) gates |= 8u;
+    if (result == ASTRA_OK) result = astra_fonts_import_state(&job, &progress);
+    checked = checked && result == ASTRA_OK &&
+              progress.state == ASTRA_FONT_IMPORT_CANCELLING;
+    if (checked) gates |= 16u;
+    while (result == ASTRA_OK && progress.state == ASTRA_FONT_IMPORT_CANCELLING) {
+        result = astra_result_from_syscall(astra_wait_one(
+            astra_fonts_import_wait_handle(&job), ASTRA_DEADLINE_FOREVER, NULL));
+        if (result == ASTRA_OK) result = astra_fonts_import_state(&job, &progress);
+    }
+    checked = checked && result == ASTRA_OK &&
+        progress.state == ASTRA_FONT_IMPORT_CANCELLED &&
+        progress.result == ASTRA_ERROR_CANCELLED && !progress.installed_id[0];
+    if (checked) gates |= 32u;
+    if (astra_fonts_import_close(&job) != ASTRA_OK) checked = 0u;
+    if (checked) gates |= 64u;
+    if (checked && astra_fonts_catalog_open(read, &during) == ASTRA_OK) {
+        checked = during.face_count == before->face_count &&
+            during.generation == before->generation &&
+            strcmp(during.selected_id, before->selected_id) == 0;
+        if (astra_fonts_catalog_close(&during) != ASTRA_OK) checked = 0u;
+    } else checked = 0u;
+    if (checked) (void)astra_log("ASTRA FONT CANCEL PASS worker retired, inventory unchanged");
+    else {
+        (void)astra_log_failure("font cancel gates", gates);
+        (void)astra_log_failure("font cancel state", progress.state);
+        (void)astra_log_failure("font cancel query", (uint32_t)-result);
+    }
+    return checked ? ASTRA_STATUS_OK : result != ASTRA_OK ? 100u + (uint32_t)-result :
+        progress.state == ASTRA_FONT_IMPORT_FAILED ? 400u + (uint32_t)-progress.result :
+        200u + gates;
 }
 
 #ifdef ASTRA_FONT_PROBE_AMIGA
@@ -294,6 +326,13 @@ int astra_main(const AstraStartupInfo *startup)
         if (expected_faces == 0u || expected_faces > 64u) goto done;
     }
     status = FAIL_IMPORT;
+    uint32_t cancel = astra_filesystem_open(&files.filesystem,
+        "/SYSTEM/expect-outline-cancel", ASTRA_VFS_OPEN_READ, &marker) == ASTRA_VFS_OK;
+    if (cancel) {
+        if (astra_filesystem_close(&marker) == ASTRA_VFS_OK)
+            status = cancel_while_reading(admin->handle, read->handle, source, source_size, &before);
+        goto done;
+    }
     uint32_t concurrent = astra_filesystem_open(&files.filesystem,
         "/SYSTEM/expect-outline-concurrent", ASTRA_VFS_OPEN_READ,
         &marker) == ASTRA_VFS_OK;
@@ -301,7 +340,7 @@ int astra_main(const AstraStartupInfo *startup)
         goto done;
     result = concurrent ? import_while_reading(admin->handle, read->handle,
         source, source_size, &before, id) :
-        astra_fonts_import(admin->handle, source, source_size,
+        import_font(admin->handle, source, source_size,
             NAME, sizeof(NAME) - 1u, PROBE_ENCODING, id);
     if (expect_limit) {
         if (result != ASTRA_ERROR_NO_RESOURCES ||
@@ -365,7 +404,7 @@ int astra_main(const AstraStartupInfo *startup)
                id : before.selected_id) != 0)
         goto done;
     status = FAIL_REPEAT;
-    if (astra_fonts_import(admin->handle, source, source_size,
+    if (import_font(admin->handle, source, source_size,
                            NAME, sizeof(NAME) - 1u,
                            PROBE_ENCODING, again) != ASTRA_OK ||
         strcmp(again, id) != 0)

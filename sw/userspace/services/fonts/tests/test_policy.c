@@ -58,7 +58,7 @@ int main(void)
     request.header.flags = 1u;
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
     request.header.flags = 0u;
-    request.header.operation = ASTRA_FONT_SERVICE_IMPORT;
+    request.header.operation = ASTRA_FONT_SERVICE_IMPORT_BEGIN;
     request.source_size = 3u;
     memcpy(request.source_name, "abc.afnt", sizeof("abc.afnt"));
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
@@ -97,6 +97,17 @@ int main(void)
     request.source_size = 1u;
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
     request.source_size = 0u;
+
+    for (uint32_t operation = ASTRA_FONT_SERVICE_IMPORT_STATE;
+         operation <= ASTRA_FONT_SERVICE_IMPORT_RELEASE; ++operation) {
+        request.header.operation = operation;
+        request.face_id[0] = '\0';
+        assert(fonts_request_valid(&request, sizeof(request), FONTS_PORT_IMPORT));
+        assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
+        assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
+        strcpy(request.face_id, "user:not-a-job-authority");
+        assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_IMPORT));
+    }
 
     char token[ASTRA_FONT_OBJECT_TOKEN_SIZE];
     char inventory[2u * ASTRA_FONT_OBJECT_TOKEN_LENGTH + 1u];

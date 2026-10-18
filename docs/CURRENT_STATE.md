@@ -2,14 +2,54 @@
 
 Status: active continuation map, 2026-10-18
 
+Native import sessions are integrated coherently as Font Kit 5.0 / FONTS
+protocol 8. The blocking import API is removed from all in-tree callers and
+exports. Session capabilities expose state, staged-face progress, cancellation,
+wait hints and explicit release; client death abandons through the existing
+port peer-death mechanism. Terminal cancellation follows converter retirement
+and rollback. The Fonts UI composes existing Progress/Button controls and waits
+on window and import notifications together. A client-owned bounded notification
+port makes service death observable, unlike an event with surviving wait owners.
+Service/UI tests, sanitizers and MC68040 analyzers pass in
+`/var/tmp/astra-font-import-ports-{service,ui}-final-20261018.log`; Font Kit's final
+checks pass in `/var/tmp/astra-font-import-empty-port-green-20261018.log`.
+Coherent userspace and probe builds pass in
+`/var/tmp/astra-font-import-ports-{coherent,probes}-fixed-20261018.log`. NDK standalone
+C/C++ headers, documentation coverage and HTML/PDF checks pass in
+`/var/tmp/astra-font-import-ports-ndk-20261018.log`.
+Packaged NDK archive integrity, standalone linking and every installed example
+also pass in `/var/tmp/astra-font-import-ports-sdk-20261018.log`.
+
+Native admission exposed an ownership cleanup bug: after moving both notification
+endpoints, the importer closed the empty port and misreported INVALID_HANDLE.
+The real port contract reproduces this in the focused host regression
+`/var/tmp/astra-font-import-empty-port-red-20261018.log`; cleanup now closes only
+still-owned endpoints. The original native failure is retained in
+`/var/tmp/astra-font-import-ports-cancel-native-20261018b.log`.
+Native cancellation/retirement/empty-store/restart, catalog reads during pending
+conversion, valid multi-face publication/restart and failed-collection rollback
+now pass in `/var/tmp/astra-font-import-ports-{cancel,concurrent,collection,rollback}-native-20261018.log`.
+The concurrent gate uses direct session admission; its older thread/invalid-source
+contender could acquire the sole retained session before the intended actor.
+AFNT import/idempotence/selection/uninstall/restart/damaged-inventory fallback
+also passes in `/var/tmp/astra-font-import-ports-afnt-native-20261018.log`.
+The native UI passes progress, Cancel, converter retirement, same-source retry,
+import, source/license scrolling/selection/copy, live Desktop/Fonts adoption,
+saved restart, built-in restoration and uninstall in
+`/var/tmp/astra-font-import-ports-ui-native-20261018.log`. The saved original
+source hash and six complete notices are verified. Cancellation preserves the
+source browser's selected row and viewport. All native session/software gates
+pass; broader shared Settings shell and DE25 release acceptance remain open.
+No new DE25 release claim or production activation.
+
 Native font import coordination now runs in the Fonts service's existing
 wait loop. The converter still uses the existing native worker thread and
 ready/resume semaphores; the coordinator owns a private source/name snapshot,
 stages faces through the existing store, and publishes through Config Kit only
 after successful worker retirement. Catalog/metadata/render reads and system
 selection remain available; competing inventory writers receive BUSY. The
-public synchronous Font Kit 4.2 API and FONTS 7 wire format are unchanged at
-this step. UI progress/cancellation is not yet exposed.
+coordinator checkpoint `92706287` retained Font Kit 4.2 / FONTS 7; the session
+integration above replaces that contract and supplies native UI progress/cancel.
 
 Focused coordinator ownership/publication/rollback tests, service regression
 tests, sanitizers and MC68040 analyzers pass in
