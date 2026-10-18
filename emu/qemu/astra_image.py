@@ -191,7 +191,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "LIBS:r SYSTEM:r DH0:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
     "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r APPS:r LIBS:r LOG\n"
-    "trusted /apps/Fonts.app grants GUI FONTS FONTS_ADMIN DH0:r LIBS:r\n")
+    "trusted /apps/Fonts.app grants GUI FONTS FONTS_ADMIN CLIPBOARD DH0:r LIBS:r\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",
                     "input", "clipboard", "fonts", "display", "media", "sampler",

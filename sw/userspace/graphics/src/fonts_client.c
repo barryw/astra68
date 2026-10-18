@@ -1,4 +1,6 @@
 #include <astra/fonts.h>
+#include <astra/afnt.h>
+#include <astra/json.h>
 
 #include <astra/font_catalog.h>
 #include <astra/font_service.h>
@@ -213,12 +215,14 @@ static AstraResult exchange(AstraHandle service, uint32_t operation,
         memchr(reply->imported_id, '\0', sizeof(reply->imported_id)) == NULL ||
         (reply->status == ASTRA_STATUS_OK &&
          ((operation == ASTRA_FONT_SERVICE_CATALOG ||
-           operation == ASTRA_FONT_SERVICE_OPEN_FACE) !=
+           operation == ASTRA_FONT_SERVICE_OPEN_FACE ||
+           operation == ASTRA_FONT_SERVICE_INFORMATION) !=
           (call.reply_handle_count == 1u))) ||
         (reply->status != ASTRA_STATUS_OK &&
          call.reply_handle_count != 0u) ||
         (operation != ASTRA_FONT_SERVICE_CATALOG &&
          operation != ASTRA_FONT_SERVICE_OPEN_FACE &&
+         operation != ASTRA_FONT_SERVICE_INFORMATION &&
          reply->area_size != 0u) ||
         (reply->status != ASTRA_STATUS_OK && reply->area_size != 0u) ||
         (reply->status == ASTRA_STATUS_OK &&
@@ -385,26 +389,27 @@ AstraResult astra_fonts_uninstall(AstraHandle admin, const char *id,
                     &reply, &ignored);
 }
 
-AstraResult astra_fonts_face_open(AstraHandle render, const char *id,
-                                  uint32_t id_length, AstraArea *face,
-                                  uint32_t *length)
+static AstraResult snapshot_open(AstraHandle service, uint32_t operation,
+                                  const char *id, uint32_t id_length,
+                                  AstraArea *face, uint32_t minimum,
+                                  uint32_t maximum, uint32_t *length)
 {
     AstraFontServiceReply reply = {0};
     AstraHandle handle = ASTRA_INVALID_HANDLE;
     AstraResult result;
 
-    if (render == ASTRA_INVALID_HANDLE || id == NULL || id_length == 0u ||
+    if (service == ASTRA_INVALID_HANDLE || id == NULL || id_length == 0u ||
         id_length >= ASTRA_FONT_ID_MAX ||
         memchr(id, '\0', id_length) != NULL || face == NULL ||
         face->handle != ASTRA_INVALID_HANDLE || face->address != NULL ||
         face->size != 0u || face->map_flags != 0u || length == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *length = 0u;
-    result = exchange(render, ASTRA_FONT_SERVICE_OPEN_FACE,
+    result = exchange(service, operation,
                       id, id_length, ASTRA_INVALID_HANDLE, 0u, NULL, 0u, 0u,
                       &reply, &handle);
     if (result != ASTRA_OK) return result;
-    if (reply.area_size < 128u || reply.area_size > ASTRA_FONT_IMPORT_MAX) {
+    if (reply.area_size < minimum || reply.area_size > maximum) {
         result = ASTRA_ERROR_IO;
         goto failed;
     }
@@ -425,6 +430,125 @@ failed:
     if (face->handle != ASTRA_INVALID_HANDLE) {
         AstraResult ignored = astra_area_close(face);
         (void)ignored;
+    }
+    return result;
+}
+
+AstraResult astra_fonts_face_open(AstraHandle render, const char *id,
+                                  uint32_t id_length, AstraArea *face,
+                                  uint32_t *length)
+{
+    return snapshot_open(render, ASTRA_FONT_SERVICE_OPEN_FACE, id, id_length,
+                         face, 128u, ASTRA_FONT_IMPORT_MAX, length);
+}
+
+static int information_count(AstraJsonValue root, const char *key, uint32_t *count)
+{
+    AstraJsonValue array;
+    int found = astra_json_member(root, key, &array);
+    *count = 0u;
+    return found == ASTRA_JSON_MISSING ||
+        (found == ASTRA_JSON_FOUND && astra_json_array_count(array, count));
+}
+
+AstraResult astra_fonts_information_open(AstraHandle service, const char *id,
+                                         uint32_t id_length,
+                                         AstraFontInformation *information)
+{
+    if (information == NULL || information->_private_bytes != 0u ||
+        information->source_count != 0u || information->notice_count != 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint32_t length = 0u, sources = 0u, notices = 0u;
+    AstraResult result = snapshot_open(service, ASTRA_FONT_SERVICE_INFORMATION,
+        id, id_length, &information->_private_area, 2u, ASTRA_AFNT_NAME_MAX, &length);
+    if (result != ASTRA_OK) return result;
+    AstraJsonValue root = {information->_private_area.address, length};
+    if (!information_count(root, "source_files", &sources) ||
+        !information_count(root, "notices", &notices)) {
+        AstraResult ignored = astra_area_close(&information->_private_area);
+        (void)ignored;
+        return ASTRA_ERROR_IO;
+    }
+    information->_private_bytes = length;
+    information->source_count = sources;
+    information->notice_count = notices;
+    return ASTRA_OK;
+}
+
+static AstraResult information_object(const AstraFontInformation *information,
+                                      const char *array_name, uint32_t index,
+                                      AstraJsonValue *object)
+{
+    if (information == NULL || information->_private_bytes == 0u ||
+        information->_private_area.address == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *object = (AstraJsonValue){information->_private_area.address,
+                                information->_private_bytes};
+    if (array_name == NULL)
+        return index == 0u ? ASTRA_OK : ASTRA_ERROR_INVALID_ARGUMENT;
+    uint32_t count = strcmp(array_name, "source_files") == 0 ?
+        information->source_count : information->notice_count;
+    if (index >= count) return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraJsonValue array;
+    if (astra_json_member(*object, array_name, &array) != ASTRA_JSON_FOUND ||
+        astra_json_element(array, index, object) != ASTRA_JSON_FOUND)
+        return ASTRA_ERROR_IO;
+    return ASTRA_OK;
+}
+
+AstraResult astra_fonts_information_string(const AstraFontInformation *information,
+    uint32_t field, uint32_t index, char *text, uint32_t capacity, uint32_t *length)
+{
+    static const char *const keys[] = {"family", "style", "author", "license",
+        "converter", "source_encoding", "name", "sha256", "text", "raw_hex",
+        "language_tag", "language_tag_raw_hex"};
+    if (length == NULL || (text == NULL && capacity != 0u) ||
+        field < ASTRA_FONT_INFORMATION_FAMILY ||
+        field > ASTRA_FONT_INFORMATION_NOTICE_LANGUAGE_RAW_HEX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *length = 0u;
+    AstraJsonValue object, value;
+    const char *array = field >= ASTRA_FONT_INFORMATION_NOTICE_TEXT ? "notices" :
+        field >= ASTRA_FONT_INFORMATION_SOURCE_NAME ? "source_files" : NULL;
+    AstraResult result = information_object(information, array, index, &object);
+    if (result != ASTRA_OK) return result;
+    int found = astra_json_member(object, keys[field - 1u], &value);
+    if (found == ASTRA_JSON_MISSING) return ASTRA_ERROR_NOT_PRESENT;
+    if (found != ASTRA_JSON_FOUND || !astra_json_string(value, NULL, 0u, length))
+        return ASTRA_ERROR_IO;
+    if (text != NULL && !astra_json_string(value, text, capacity, length))
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    return ASTRA_OK;
+}
+
+AstraResult astra_fonts_information_notice(const AstraFontInformation *information,
+                                          uint32_t index, AstraFontNotice *notice)
+{
+    AstraJsonValue object, value;
+    AstraFontNotice parsed = {0};
+    if (notice == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    *notice = parsed;
+    AstraResult result = information_object(information, "notices", index, &object);
+    if (result != ASTRA_OK) return result;
+    const char *keys[] = {"name_id", "platform_id", "encoding_id", "language_id"};
+    uint32_t *fields[] = {&parsed.name_id, &parsed.platform_id,
+                          &parsed.encoding_id, &parsed.language_id};
+    for (uint32_t at = 0u; at < 4u; ++at)
+        if (astra_json_member(object, keys[at], &value) != ASTRA_JSON_FOUND ||
+            !astra_json_u32(value, fields[at]) || *fields[at] > UINT16_MAX)
+            return ASTRA_ERROR_IO;
+    *notice = parsed;
+    return ASTRA_OK;
+}
+
+AstraResult astra_fonts_information_close(AstraFontInformation *information)
+{
+    if (information == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraResult result = astra_area_close(&information->_private_area);
+    if (result == ASTRA_OK) {
+        information->_private_bytes = 0u;
+        information->source_count = 0u;
+        information->notice_count = 0u;
     }
     return result;
 }

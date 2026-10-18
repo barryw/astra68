@@ -257,7 +257,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
 		grep -q '^graphics.library.3 3.0.0 ABI 3.0$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
-		grep -q '^font.library.4 4.1.0 ABI 4.1$$'
+		grep -q '^font.library.4 4.2.0 ABI 4.2$$'
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
@@ -302,17 +302,17 @@ $(HOST_AICON_TEST): $(AICON_TEST_SOURCES)
 		-ffunction-sections -fdata-sections $(AICON_TEST_SOURCES) \
 		-Wl,--gc-sections -o $@
 
-$(HOST_AFNT_LIBRARY): ../../common/afnt.c ../../common/crc32.c \
+$(HOST_AFNT_LIBRARY): ../../common/afnt.c ../../common/json.c ../../common/crc32.c \
 		../../common/utf8.c ../../common/font_catalog.c ../../common/Makefile \
-		../../include/astra/afnt.h
+		../../include/astra/afnt.h ../../include/astra/json.h
 	$(MAKE) -C ../../common host
 
-$(AFNT_LIBRARY): ../../common/afnt.c ../../common/crc32.c \
-		../../common/utf8.c ../../include/astra/afnt.h
+$(AFNT_LIBRARY): ../../common/afnt.c ../../common/json.c ../../common/crc32.c \
+		../../common/utf8.c ../../include/astra/afnt.h ../../include/astra/json.h
 	$(MAKE) -C ../../common m68k
 
 $(HOST_AFNT_TEST): $(HOST_AFNT_LIBRARY) tests/test_afnt.c \
-		../../include/astra/afnt.h ../../include/astra/crc32.h
+		../../include/astra/afnt.h ../../include/astra/json.h ../../include/astra/crc32.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		tests/test_afnt.c $(HOST_AFNT_LIBRARY) -o $@
@@ -344,7 +344,7 @@ sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
 		src/surface.c src/font_data.c src/render_builder.c src/texture_reference.c \
-		tests/test_surface.c ../../common/afnt.c ../../common/crc32.c \
+		tests/test_surface.c ../../common/afnt.c ../../common/json.c ../../common/crc32.c \
 		../../common/utf8.c $(HOST_MUTEX) -o build/host/test_surface_sanitize
 	./build/host/test_surface_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
@@ -352,17 +352,17 @@ sanitize: $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER) \
 		-Wl,--gc-sections -o build/host/test_aicon_surface_sanitize
 	./build/host/test_aicon_surface_sanitize build/host/test-drawer.aicon
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
-		../../common/afnt.c ../../common/crc32.c tests/test_afnt.c \
+		../../common/afnt.c ../../common/json.c ../../common/crc32.c ../../common/utf8.c tests/test_afnt.c \
 		-o build/host/test_afnt_sanitize
 	./build/host/test_afnt_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
-		../../common/font_catalog.c ../../common/afnt.c \
+		../../common/font_catalog.c ../../common/afnt.c ../../common/json.c \
 		../../common/crc32.c ../../common/utf8.c \
 		tests/test_font_catalog.c -o build/host/test_font_catalog_sanitize
 	./build/host/test_font_catalog_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
 		src/fonts_client.c ../../common/font_catalog.c \
-		../../common/afnt.c ../../common/crc32.c ../../common/utf8.c \
+		../../common/afnt.c ../../common/json.c ../../common/crc32.c ../../common/utf8.c \
 		tests/test_fonts_client.c -o build/host/test_fonts_client_sanitize
 	./build/host/test_fonts_client_sanitize
 

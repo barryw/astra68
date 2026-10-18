@@ -132,9 +132,12 @@ amiga-probe: all build/FontAmigaProbe.app/manifest \
 UI_HOST_SOURCES := tests/test_layout.c ../../interface/src/control.c \
 	../../interface/src/text_model.c ../../interface/src/text_surface.c ../../interface/src/scroll.c \
 	../../graphics/src/surface.c ../../graphics/src/font_data.c \
-	../../../common/utf8.c ../../../common/afnt.c ../../../common/crc32.c \
+	../../graphics/src/render_builder.c \
+	../../../common/utf8.c ../../../common/afnt.c ../../../common/json.c ../../../common/crc32.c \
+	$(RUNTIME)/src/string.c \
 	$(RUNTIME)/tests/uncontended_mutex.c
 UI_HOST_FLAGS := $(CPPFLAGS) -I../../graphics/include -I../../graphics/build/generated \
+	-I../../../../fpga/arty/linux \
 	-std=c11 -Wall -Wextra -Werror -pedantic -O2 \
 	-ffunction-sections -fdata-sections -Wl,--gc-sections
 UI_FONT_HEADERS := ../../graphics/build/generated/astra_font8x8.inc \

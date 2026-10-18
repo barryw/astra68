@@ -655,13 +655,14 @@ static uint32_t catalog_area(uint32_t *area, uint32_t *size)
     return ASTRA_STATUS_OK;
 }
 
-static uint32_t load_face_area(const char *id, uint32_t *area, uint32_t *size)
+static uint32_t load_face_area(const char *id, uint32_t information,
+                               uint32_t *area, uint32_t *size)
 {
     char path[ASTRA_VFS_PATH_MAX];
     char token[ASTRA_FONT_OBJECT_TOKEN_SIZE];
     AstraAfntView view;
     void *bytes = NULL, *mapping = NULL;
-    uint32_t length = 0u, mapped_size = 0u, writable = 0u;
+    uint32_t length = 0u, mapped_size = 0u, writable = 0u, payload_length;
     uint32_t status;
     int path_length;
 
@@ -684,8 +685,9 @@ static uint32_t load_face_area(const char *id, uint32_t *area, uint32_t *size)
         if (strcmp(token, id + 5u) != 0) status = ASTRA_STATUS_INVALID;
     }
     if (status != ASTRA_STATUS_OK) goto done;
+    payload_length = information ? view.name.length : length;
     status = astra_rt_area_create(
-        length, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        payload_length, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
                     ASTRA_RIGHT_TRANSFER, &writable);
     if (status != ASTRA_SYSCALL_OK) {
         status = ASTRA_STATUS_LIMIT;
@@ -694,11 +696,11 @@ static uint32_t load_face_area(const char *id, uint32_t *area, uint32_t *size)
     status = astra_rt_area_map(writable,
                                ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
                                &mapping, &mapped_size);
-    if (status != ASTRA_SYSCALL_OK || mapped_size < length) {
+    if (status != ASTRA_SYSCALL_OK || mapped_size < payload_length) {
         status = ASTRA_STATUS_IO;
         goto done;
     }
-    memcpy(mapping, bytes, length);
+    memcpy(mapping, information ? view.name.bytes : bytes, payload_length);
     status = astra_rt_area_unmap(mapping);
     mapping = NULL;
     if (status != ASTRA_SYSCALL_OK) {
@@ -708,7 +710,8 @@ static uint32_t load_face_area(const char *id, uint32_t *area, uint32_t *size)
     status = astra_rt_handle_duplicate(
         writable, ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
         area);
-    if (status == ASTRA_SYSCALL_OK) *size = length;
+    if (status == ASTRA_SYSCALL_OK)
+        *size = payload_length;
     else status = ASTRA_STATUS_IO;
 done:
     if (mapping != NULL) (void)astra_rt_area_unmap(mapping);
@@ -720,7 +723,7 @@ done:
 static uint32_t face_area(const char *id, uint32_t *area, uint32_t *size)
 {
     if (selection.area == 0u || strcmp(selection.id, id) != 0)
-        return load_face_area(id, area, size);
+        return load_face_area(id, 0u, area, size);
     uint32_t status = astra_rt_handle_duplicate(selection.area,
         ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, area);
     if (status != ASTRA_SYSCALL_OK) return ASTRA_STATUS_IO;
@@ -733,7 +736,7 @@ static uint32_t prepare_selection(const char *id, FontSelection *next)
     FontEntry *face = find_face(id);
     if (face == NULL) return ASTRA_STATUS_NOT_FOUND;
     if (!fonts_face_selectable(&face->face)) return ASTRA_STATUS_UNSUPPORTED;
-    uint32_t status = load_face_area(id, &next->area, &next->bytes);
+    uint32_t status = load_face_area(id, 0u, &next->area, &next->bytes);
     if (status == ASTRA_STATUS_OK) memcpy(next->id, face->id, sizeof(next->id));
     return status;
 }
@@ -790,6 +793,9 @@ static void serve(uint32_t port, uint32_t role)
         request.header.operation == ASTRA_FONT_SERVICE_CATALOG) {
         if (request.face_id[0] != '\0') status = ASTRA_STATUS_PROTOCOL;
         else status = catalog_area(&area, &area_size);
+    } else if (status == ASTRA_STATUS_OK &&
+               request.header.operation == ASTRA_FONT_SERVICE_INFORMATION) {
+        status = load_face_area(request.face_id, 1u, &area, &area_size);
     } else if (status == ASTRA_STATUS_OK &&
                request.header.operation == ASTRA_FONT_SERVICE_IMPORT) {
         /* Port-call appends the reply capability after the source area. */

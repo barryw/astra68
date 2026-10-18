@@ -5,6 +5,30 @@ Astraea renders native UI glyphs; the MC68040 reads metrics and submits drawing
 commands. The system theme fixes sizes by UI role. Selection chooses a designed
 face and weight, independently of application-specific fonts.
 
+## Source and license information
+
+Font Kit 4.2 provides `astra_fonts_information_open()` through the read-only
+`FONTS` capability. Initialize `AstraFontInformation` with
+`ASTRA_FONT_INFORMATION_INIT`, open it with a counted installed face ID, then
+use `astra_fonts_information_string()` for family/style, source names and hashes,
+converter, encoding and complete copyright/license/URL records. Root fields use
+index zero; source and notice fields use their corresponding record index.
+`source_count` and `notice_count` report available records.
+
+Pass NULL and zero capacity to measure a string, then provide the measured byte
+count plus one for the terminator. Strings are counted UTF-8 and may contain
+line breaks or embedded NUL; never infer their length with `strlen()`.
+An absent optional field returns `ASTRA_ERROR_NOT_PRESENT`. Insufficient space
+returns `ASTRA_ERROR_BUFFER_TOO_SMALL` without changing output; malformed
+metadata returns `ASTRA_ERROR_IO`. No text is silently shortened.
+
+`astra_fonts_information_notice()` supplies original SFNT name, platform,
+encoding and language IDs. Unsupported source encodings can omit decoded text;
+the raw hexadecimal fields retain exact original bytes. Missing notices do not
+mean that a font is unrestricted. Close the owned snapshot with
+`astra_fonts_information_close()`. It remains stable across uninstall and
+catalog changes and exposes no font raster data or writable storage.
+
 ## Initialize native UI text
 
 Before laying out controls, call {c:func}`astra_fonts_use_system` with the

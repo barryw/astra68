@@ -28,7 +28,7 @@ GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o $(GRAPHICS)/build/host
 GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o $(GRAPHICS)/build/host/font_data_sanitize.o
 SYSTEM_HOST_UTF8 := ../../system/build/host/utf8.o
 FONT_HOST_INPUTS := $(RUNTIME)/tests/uncontended_mutex.c \
-	../../../common/afnt.c ../../../common/crc32.c
+	../../../common/afnt.c ../../../common/json.c ../../../common/crc32.c
 SOUND_SOURCE := assets/AstraStartup.wav
 SOUND_RENDERER := render_startup_sound.py
 SOUND_ASSET := build/m68k/startup.pcm
@@ -86,6 +86,8 @@ analyze:
 
 clean:
 	rm -rf build
+
+$(HOST_TEST) $(HOST_TEST_SANITIZE): ../../../include/astra/json.h
 
 -include $(wildcard build/m68k/*.d)
 

@@ -105,12 +105,14 @@ $(OUT)/astra-storage-aarch64: $(STORAGE_PROVIDER_SOURCES) astra_storage_main.c $
 
 all: $(CERTIFIER) $(BANDWIDTH)
 
-$(FONT_CODEC): $(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
+$(FONT_CODEC): $(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/json.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/include/astra/afnt.h $(ROOT)/sw/include/astra/json.h \
 		$(ROOT)/sw/common/sha256.c $(ROOT)/sw/include/astra/sha256.h \
 		$(ROOT)/sw/common/Makefile
 	$(MAKE) -C $(ROOT)/sw/common host
 
-$(FONT_CODEC_AARCH64): $(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
+$(FONT_CODEC_AARCH64): $(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/json.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/include/astra/afnt.h $(ROOT)/sw/include/astra/json.h \
 		$(ROOT)/sw/common/sha256.c $(ROOT)/sw/common/Makefile
 	$(MAKE) -C $(ROOT)/sw/common aarch64
 
@@ -204,8 +206,8 @@ font-host-sanitize: $(OUT)/astra-font-worker
 	mkdir -p $(OUT)
 	$(HOST_CC) $(FONT_CONVERT_FLAGS) -fsanitize=address,undefined \
 		-fno-omit-frame-pointer astra_font_host.c test_font_host.c \
-		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
-		$(ROOT)/sw/common/sha256.c -o $(OUT)/test-font-host-sanitize
+		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/json.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/common/utf8.c $(ROOT)/sw/common/sha256.c -o $(OUT)/test-font-host-sanitize
 	cd $(CURDIR) && $(abspath $(OUT)/test-font-host-sanitize) \
 		$(abspath $(OUT)/astra-font-worker)
 
@@ -213,7 +215,7 @@ font-worker-sanitize:
 	mkdir -p $(OUT)
 	$(HOST_CC) $(FONT_CONVERT_FLAGS) -fsanitize=address,undefined \
 		-fno-omit-frame-pointer $(FONT_WORKER_SOURCES) test_font_worker.c \
-		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/json.c $(ROOT)/sw/common/crc32.c \
 		$(ROOT)/sw/common/sha256.c \
 		-o $(OUT)/test-font-worker-sanitize \
 		$(shell pkg-config --libs freetype2)
@@ -223,7 +225,7 @@ font-convert-sanitize:
 	mkdir -p $(OUT)
 	$(HOST_CC) $(FONT_CONVERT_FLAGS) -fsanitize=address,undefined \
 		-fno-omit-frame-pointer $(FONT_CONVERT_SOURCES) \
-		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/font_catalog.c \
+		$(ROOT)/sw/common/afnt.c $(ROOT)/sw/common/json.c $(ROOT)/sw/common/font_catalog.c \
 		$(ROOT)/sw/common/crc32.c \
 		$(ROOT)/sw/common/sha256.c \
 		-o $(OUT)/test-font-convert-sanitize \

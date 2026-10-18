@@ -51,7 +51,8 @@ int fonts_request_valid(const AstraFontServiceRequest *request,
            request->source_encoding <= ASTRA_FONT_ENCODING_ISO_8859_2 &&
            (import || request->source_encoding == ASTRA_FONT_ENCODING_AUTO) &&
            ((port_role == FONTS_PORT_CATALOG &&
-             request->header.operation == ASTRA_FONT_SERVICE_CATALOG) ||
+             (request->header.operation == ASTRA_FONT_SERVICE_CATALOG ||
+              request->header.operation == ASTRA_FONT_SERVICE_INFORMATION)) ||
             (port_role == FONTS_PORT_ADMIN &&
              (request->header.operation == ASTRA_FONT_SERVICE_SELECT ||
               request->header.operation == ASTRA_FONT_SERVICE_UNINSTALL ||
@@ -59,7 +60,8 @@ int fonts_request_valid(const AstraFontServiceRequest *request,
             (port_role == FONTS_PORT_RENDER &&
              request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE)) &&
            memchr(request->face_id, '\0', sizeof(request->face_id)) != NULL &&
-           (request->header.operation != ASTRA_FONT_SERVICE_OPEN_FACE ||
+           ((request->header.operation != ASTRA_FONT_SERVICE_OPEN_FACE &&
+             request->header.operation != ASTRA_FONT_SERVICE_INFORMATION) ||
             request->face_id[0] != '\0') &&
            (import ?
                 request->face_id[0] == '\0' &&

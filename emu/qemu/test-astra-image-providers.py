@@ -93,7 +93,7 @@ assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
         if line.startswith("trusted ")] == [
     "trusted /apps/Terminal.app grants " + astra_image.TERMINAL_CEILING,
     "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r APPS:r LIBS:r LOG",
-    "trusted /apps/Fonts.app grants GUI FONTS FONTS_ADMIN DH0:r LIBS:r"]
+    "trusted /apps/Fonts.app grants GUI FONTS FONTS_ADMIN CLIPBOARD DH0:r LIBS:r"]
 for grant, admitted in (("GUI", True), ("APPS:r", True), ("APPS:rw", False),
                         ("GUI:r", False), ("STORE", False), ("DISPLAY", False),
                         ("HOME:x", False), ("STORE:rw", True)):
@@ -112,7 +112,7 @@ with tempfile.TemporaryDirectory() as directory:
     greedy = bundle("Greedy.app", ["GUI", "DISPLAY"])
     shell = bundle("Terminal.app", ["GUI", "SERVICE_MANAGER", "SYSTEM:r"])
     atlas = bundle("Atlas.app", ["GUI", "VOLUMES", "VOLUME_READ", "DH0:r", "APPS:r", "LIBS:r", "LOG"])
-    fonts = bundle("Fonts.app", ["GUI", "FONTS", "FONTS_ADMIN", "DH0:r", "LIBS:r"])
+    fonts = bundle("Fonts.app", ["GUI", "FONTS", "FONTS_ADMIN", "CLIPBOARD", "DH0:r", "LIBS:r"])
     disk = bundle("Disk.app", ["GUI", "DH0:r"])
     astra_image.check_application_policy(
         [ordinary, shell, atlas, fonts],

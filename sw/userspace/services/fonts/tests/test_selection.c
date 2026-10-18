@@ -127,6 +127,15 @@ int main(void)
     assert(fclose(file) == 0);
     assert(load_face("fixture", "system:astra-workbench", ASTRA_FONT_CATALOG_SYSTEM, NULL) == ASTRA_VFS_OK);
     assert(load_face("fixture", "system:other", ASTRA_FONT_CATALOG_SYSTEM, NULL) == ASTRA_VFS_OK);
+    AstraAfntView view;
+    uint32_t metadata = 0u, metadata_size = 0u;
+    assert(astra_afnt_validate(fixture, fixture_size, &view));
+    assert(load_face_area("system:astra-workbench", 1u, &metadata, &metadata_size) == ASTRA_STATUS_OK);
+    assert(metadata_size == view.name.length && metadata_size < fixture_size &&
+        areas[metadata - 1u].size == metadata_size &&
+        memcmp(areas[metadata - 1u].data, view.name.bytes, metadata_size) == 0);
+    assert(astra_close(metadata) == ASTRA_SYSCALL_OK);
+    assert(load_face_area("system:missing", 1u, &metadata, &metadata_size) == ASTRA_STATUS_NOT_FOUND);
     FontSelection initial = {0};
     assert(prepare_selection("system:astra-workbench", &initial) == ASTRA_STATUS_OK);
     adopt_selection(&initial);

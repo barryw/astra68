@@ -1872,6 +1872,69 @@ static void compose_commit(DisplayState *state, uint32_t fence)
     commit_render_state(state);
 }
 
+static void test_malformed_retained_frame(void)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayWindow windows[TEST_WINDOW_COUNT] = {0};
+    DisplayState state = { .windows = windows, .capacity = TEST_WINDOW_COUNT };
+    add_window(&state, 0u, ASTRA_WINDOW_STANDARD, 100u, 90u, 300u, 200u, 0u, 0u);
+    add_window(&state, 1u, ASTRA_WINDOW_STANDARD, 450u, 90u, 300u, 200u, 0u, 0u);
+    windows[0].request.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
+    windows[1].request.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
+    damage_window(&state, &theme, &windows[0]);
+    damage_window(&state, &theme, &windows[1]);
+    compose_commit(&state, 1u);
+    uint8_t first_front = windows[0].content_front;
+    uint8_t other_front = windows[1].content_front;
+    AstraDrawListHeader *list = (void *)lists[0];
+    AstraDrawListCommand *draw = (void *)(list + 1);
+    AstraDrawListCommand saved = draw[0];
+    draw[0].width = UINT32_MAX;
+    uint32_t error = 0u, failure = UINT32_MAX;
+    assert(present_content(&state, 0u, 0u, 0u, 0u, 0u, 0u) == ASTRA_STATUS_OK);
+    assert(compose(batch, 2u, &state, &error, &failure) == 0u);
+    assert(error == DISPLAY_REQUEST_REFUSED && failure == ASTRA_RENDER_BUILDER_FAILURE_NONE);
+    assert(windows[0].content_dirty == 0u && windows[0].content_front == first_front &&
+        state.compose_deferred != 0u);
+    assert(present_content(&state, 1u, 0u, 0u, 0u, 0u, 0u) == ASTRA_STATUS_OK);
+    compose_commit(&state, 3u);
+    assert(windows[0].content_front == first_front && windows[1].content_front != other_front);
+    draw[0] = saved;
+    assert(present_content(&state, 0u, 0u, 0u, 0u, 0u, 0u) == ASTRA_STATUS_OK);
+    compose_commit(&state, 4u);
+    assert(windows[0].content_front != first_front);
+}
+
+static void test_client_frame_capacity_refusal(void)
+{
+    static uint16_t pixels[ASTRA_DISPLAY_WIDTH * ASTRA_DISPLAY_HEIGHT];
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayWindow windows[TEST_WINDOW_COUNT] = {0};
+    DisplayState state = { .windows = windows, .capacity = TEST_WINDOW_COUNT };
+    for (uint32_t at = 0u; at < 2u; ++at) {
+        add_window(&state, at, ASTRA_WINDOW_FULLSCREEN, 0u, 0u,
+            ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 0u, 0u);
+        windows[at].request.content_format = ASTRA_WINDOW_CONTENT_SURFACE;
+        damage_window(&state, &theme, &windows[at]);
+    }
+    compose_commit(&state, 1u);
+    uint8_t front[2] = {windows[0].content_front, windows[1].content_front};
+    for (uint32_t at = 0u; at < 2u; ++at) {
+        windows[at].request.content_format = ASTRA_WINDOW_CONTENT_RGB565;
+        windows[at].request.pitch = ASTRA_DISPLAY_WIDTH * 2u;
+        assert(astra_surface_view_init(&windows[at].surface.view, pixels, sizeof(pixels),
+            ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, ASTRA_DISPLAY_WIDTH * 2u));
+        assert(present_content(&state, at, 0u, 0u, 0u, 0u, 0u) == ASTRA_STATUS_OK);
+    }
+    uint32_t error = 0u, failure = 0u;
+    assert(compose(batch, 2u, &state, &error, &failure) == 0u);
+    assert(error == DISPLAY_REQUEST_REFUSED && failure == ASTRA_RENDER_BUILDER_FAILURE_DATA);
+    assert(windows[0].content_dirty != 0u && windows[1].content_dirty == 0u &&
+        windows[0].content_front == front[0] && windows[1].content_front == front[1]);
+    compose_commit(&state, 3u);
+    assert(windows[0].content_front != front[0] && windows[1].content_front == front[1]);
+}
+
 static void test_content_banks(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -2678,6 +2741,8 @@ int main(void)
     test_dense_menu_render();
     test_context_menu_transport();
     test_content_banks();
+    test_malformed_retained_frame();
+    test_client_frame_capacity_refusal();
 
     {
         DisplayWindow fullscreen = {0};

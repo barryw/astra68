@@ -12,7 +12,55 @@ must not draw bitmap glyphs with CPU pixel loops.
 
 ### Active font-information work (2026-10-18)
 
-The next Fonts pane needs shared multiline text, not an application painter.
+Font Kit 4.2 adds owned immutable information snapshots through FONTS protocol
+7. The service reuses installed-face lookup, AFNT validation and user-object
+content-identity verification, but copies only NAME metadata into an exactly
+sized read-only area. Direct Fonts-service AFNT delivery remains restricted to
+FONTS_RENDER; GUI context separately supplies the active font for client metrics.
+Applications use typed string fields and original SFNT notice identifiers;
+Font Kit owns JSON decoding, including complete multiline strings, missing
+optional fields and exact original byte records. No JSON parser lives in Fonts.
+
+The existing AFNT name decoder is replaced by the common counted JSON parser.
+It rejects malformed unknown values, invalid separators/numbers, invalid UTF-8,
+unpaired UTF-16 escapes and nesting beyond its explicit 32-container bound.
+AFNT NAME remains format 0.2, an object bounded to 1 MiB. Single-line family and
+style extraction retains its stricter control-character policy. Standalone
+strings preserve counted embedded NUL; copies measure first and never truncate.
+
+Read-only Haiku references: `src/kits/shared/Json.cpp` (`ParseObject`,
+`ParseArray`, `ParseStringEscapeSequence`, `ParseString`, `ParseNumber`) for
+grammar-aware parsing and escape validation; `src/kits/interface/Font.cpp`
+(`GetFamilyAndStyle`, `GetTunedInfo`) for service-owned font queries. Astra
+adapts these patterns to bounded allocation-free C spans and capability-scoped
+immutable snapshots. No Haiku source was changed.
+
+Long-notice qualification also exposed oversized logical background fills:
+the virtual Text View can exceed 65,535 pixels while its viewport stays small.
+Shared Surface fill now clips logical bounds before queuing a hardware command;
+text and metadata remain complete. Haiku read-only references are
+`src/servers/app/drawing/DrawingEngine.cpp:FillRect` (clip before drawing) and
+`src/servers/app/ServerWindow.cpp:AS_DRAW_STRING` (bad input/allocation failure
+ends that drawing request). Astra uses its existing GPU command path and
+committed content banks. A malformed retained client list now follows existing
+frame refusal rather than terminating Display; its previous content stays
+visible and other windows continue. Native malformed geometry/header/opcode
+refusal and repair pass, as does the formerly panicking long-license workflow.
+Batch-resource refusal also covers RGB content; focused tests, sanitizers and
+analyzers pass. Final DE25 release gates remain open (Plane ASTRA-60).
+
+Fonts' Source and license action switches the existing ScrollView's single
+content slot from List to shared Text View. Back preserves the selected style;
+Meta+C copies selected text through Clipboard Kit. TextModel computes exact
+arena requirements; Fonts supplies its document-owned allocations and retains
+no independent text, layout or rendering implementation. Allocation or metadata
+failure leaves font management available. Coherent userspace/ROM, packaged NDK
+and native Iosevka information/copy/select/restart/uninstall checks pass for
+this checkpoint. Native long-text, long-style and unavailable-preview gates also
+pass. Final DE25 release qualification remains open;
+production remains unchanged.
+
+The Fonts pane uses shared multiline text.
 Interface Kit 7.1 adds a read-only Text View composed from TextModel,
 TextSurface and ScrollView. Its first presentation is fixed-grid with horizontal
 overflow; original UTF-8, tabs and CRLF survive selection/copy. Pointer and
@@ -27,9 +75,8 @@ Haiku references: `headers/os/interface/TextView.h` and
 `SetWordWrap`). Adopt independent selectability for read-only text, visible-line
 drawing and ordinary scrolling composition. Adapt to Astra's caller-owned
 piece table and hardware draw lists rather than copying Haiku's view hierarchy
-or CPU drawing. Haiku `src/kits/interface/Font.cpp` service queries remain the reference for
-keeping font metadata behind Font Kit; the Fonts information query/pane is
-still pending.
+or CPU drawing. Haiku `src/kits/interface/Font.cpp` service queries also inform
+the Font Kit metadata query above.
 
 TextSurface owns both glyph emission and exact command/payload accounting.
 Text View uses that shared run walk for draw-list preflight, including selection
@@ -76,7 +123,7 @@ While stopped, the installed AFNT validates against its original source hash
 and six complete notices, including exact original bytes and decoded Unicode
 text. No production image or board selector is changed. Plane ASTRA-56 tracks
 Text View, ASTRA-57 tracks notice retention, and ASTRA-36 remains in progress
-for the Font Kit information query and native information pane.
+for the remaining Settings shell, import workflow and release acceptance.
 
 - The native font container is **AFNT** (Astra Font), a passive, versioned,
   big-endian bitmap-font format.

@@ -43,6 +43,20 @@ ASTRA_PROGRAM_PRIVATE_INPUTS := $(GRAPHICS_RENDERER_LIB) $(AFNT_CODEC)
 ASTRA_PROGRAM_PRIVATE_OWNER_TARGETS := $(GRAPHICS):renderer
 include ../../dynamic-program.mk
 
+PROBE_LIBRARIES := $(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_SYSTEM_LIBRARY) \
+	$(ASTRA_RUNTIME_LIBRARY) $(ASTRA_COMPILER_LIBRARY)
+build/m68k/frame_probe.o: tests/frame_probe.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/frame-probe.elf: build/m68k/frame_probe.o $(PROBE_LIBRARIES) $(ASTRA_PROGRAM_CRT0)
+	$(CC) $(TARGET_FLAGS) $(ASTRA_PROGRAM_LINK_FLAGS) -o $@ $(ASTRA_PROGRAM_CRT0) \
+		build/m68k/frame_probe.o $(foreach library,$(PROBE_LIBRARIES),-Wl,-l:$(notdir $(library)))
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(PROBE_LIBRARIES),--needed $(notdir $(library))) $@
+
+frame-probe: all build/m68k/frame-probe.elf
+
 build/m68k/%.o: %.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
@@ -72,7 +86,7 @@ $(HOST_TEST): main.c window_graphics.c window_graphics.h font_face.c font_face.h
 test: $(HOST_TEST)
 	./$(HOST_TEST)
 
-$(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
+$(HOST_TEST_SANITIZE): ../../../include/astra/json.h $(ASTRA_COMMON)/afnt.c $(ASTRA_COMMON)/json.c $(ASTRA_COMMON)/crc32.c main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
 		../../../include/astra/gui.h \
 		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/include/astra/ui_font.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
@@ -88,7 +102,7 @@ $(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h font_face.c fo
 		$(RUNTIME)/src/string.c \
 		$(ASTRA_COMMON)/utf8.c $(INTERFACE_HOST_SOURCES) \
 		window_graphics.c font_face.c tests/test_display.c \
-		$(ASTRA_COMMON)/afnt.c $(ASTRA_COMMON)/crc32.c $(RUNTIME)/tests/uncontended_mutex.c -o $@
+		$(ASTRA_COMMON)/afnt.c $(ASTRA_COMMON)/json.c $(ASTRA_COMMON)/crc32.c $(RUNTIME)/tests/uncontended_mutex.c -o $@
 
 sanitize: $(HOST_TEST_SANITIZE)
 	./$(HOST_TEST_SANITIZE)
@@ -101,10 +115,12 @@ analyze:
 		-c window_graphics.c -o build/analyzer/window_graphics.o
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
 		-c font_face.c -o build/analyzer/font_face.o
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c tests/frame_probe.c -o build/analyzer/frame_probe.o
 
 clean:
 	rm -rf build
 
 -include $(wildcard build/m68k/*.d)
 
-.PHONY: all size test sanitize analyze clean
+.PHONY: all size test sanitize analyze clean frame-probe

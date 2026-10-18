@@ -6,6 +6,7 @@ import importlib.util
 from pathlib import Path
 import queue
 import shutil
+import subprocess
 import tempfile
 import time
 
@@ -27,15 +28,26 @@ def main():
     parser.add_argument("qemu")
     parser.add_argument("rom")
     parser.add_argument("image")
+    parser.add_argument("--frame-refusal", action="store_true",
+                        help="first exercise malformed retained-frame refusal and recovery")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="astra-fonts-gate-") as work:
         image = str(Path(work) / "system.img")
         shutil.copyfile(args.image, image)
         astra_image.install(image)
+        probe = ""
+        if args.frame_refusal:
+            owner = HERE.parents[1] / "sw/userspace/services/display"
+            subprocess.run(astra_image._build_invocation(
+                ["make", "-C", str(owner), "frame-probe"]), check=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            astra_image._replace_volume_file(image, str(owner / "build/m68k/frame-probe.elf"),
+                                             "/services/display-frame-probe")
+            probe = "service /services/display-frame-probe grants GUI LIBS:r required\n"
         # Make readiness include Fonts' catalog, controls, surface, and window.
         startup = Path(work) / "startup"
-        startup.write_text(astra_image.DISPLAY_STARTUP_MANIFEST +
-                           "service /apps/Fonts.app grants GUI FONTS FONTS_ADMIN DH0:r LIBS:r "
+        startup.write_text(astra_image.DISPLAY_STARTUP_MANIFEST + probe +
+                           "service /apps/Fonts.app grants GUI FONTS FONTS_ADMIN CLIPBOARD DH0:r LIBS:r "
                            "required\n", encoding="ascii")
         astra_image._replace_volume_file(image, str(startup), "/startup/system")
         machine = terminal.Machine(args.qemu, args.rom, image, work)
@@ -73,6 +85,12 @@ def main():
                 raise RuntimeError("Fonts opened no hardware-rendered text")
             if machine.process.poll() is not None:
                 raise RuntimeError("QEMU exited after Fonts launch")
+            if args.frame_refusal:
+                lines = machine.said_with_syslog()[0]
+                if not any("launch /services/display-frame-probe" in line and
+                           "status=0" in line for line in lines):
+                    raise RuntimeError("native retained-frame refusal/recovery did not pass")
+                print("ASTRA DISPLAY FRAME REFUSAL PASS native malformed geometry/header/opcode, repaired frames")
             print("ASTRA FONTS GUI PASS native autostart, hardware text")
         finally:
             machine.close()

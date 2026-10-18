@@ -10,7 +10,7 @@
 #include <assert.h>
 #include <string.h>
 
-static uint8_t document[512];
+static uint8_t document[65536];
 static uint32_t document_size;
 static uint32_t document_generation = 7u;
 static uint32_t bad_reply;
@@ -134,6 +134,7 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
     reply->generation = document_generation;
     reply->area_size = request->header.operation ==
         ASTRA_FONT_SERVICE_CATALOG ? document_size :
+        request->header.operation == ASTRA_FONT_SERVICE_INFORMATION ? document_size :
         request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE ? 128u : 0u;
     memcpy(reply->selected_id, "system:test", sizeof("system:test"));
     if (request->header.operation == ASTRA_FONT_SERVICE_IMPORT &&
@@ -142,7 +143,8 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
     call->reply_size = bad_reply == 1u ? sizeof(*reply) - 1u : sizeof(*reply);
     call->reply_handle_count =
         request->header.operation == ASTRA_FONT_SERVICE_CATALOG ||
-        request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE ? 1u : 0u;
+        request->header.operation == ASTRA_FONT_SERVICE_OPEN_FACE ||
+        request->header.operation == ASTRA_FONT_SERVICE_INFORMATION ? 1u : 0u;
     if (call->reply_handle_count != 0u) *call->reply_handles = 2u;
     if (bad_reply == 2u) reply->header.protocol_version = 99u;
     return ASTRA_OK;
@@ -205,6 +207,71 @@ AstraResult astra_handle_close(AstraHandle *handle)
     *handle = ASTRA_INVALID_HANDLE;
     ++closed_handles;
     return ASTRA_OK;
+}
+
+static void information_tests(void)
+{
+    const char prefix[] = "{\"family\":\"Test\",\"license\":\"";
+    const char suffix[] = "\\r\\n\\t\\u03a9\",\"source_files\":[{\"name\":\"source.ttf\","
+        "\"sha256\":\"abc\"}],\"notices\":[{\"name_id\":13,\"platform_id\":3,"
+        "\"encoding_id\":1,\"language_id\":1033,\"raw_hex\":\"0041\",\"text\":\"A\"},"
+        "{\"name_id\":14,\"platform_id\":42,\"encoding_id\":99,\"language_id\":0,"
+        "\"raw_hex\":\"ff00\"}]}";
+    memcpy(document, prefix, sizeof(prefix) - 1u);
+    memset(document + sizeof(prefix) - 1u, 'L', 32768u);
+    memcpy(document + sizeof(prefix) - 1u + 32768u, suffix, sizeof(suffix) - 1u);
+    document_size = sizeof(prefix) - 1u + 32768u + sizeof(suffix) - 1u;
+    AstraFontInformation info = ASTRA_FONT_INFORMATION_INIT;
+    AstraFontNotice notice;
+    uint32_t bytes = 0u;
+    char output[32774];
+    assert(astra_fonts_information_open(1u, "system:test", 11u, &info) == ASTRA_OK);
+    assert(info.source_count == 1u && info.notice_count == 2u);
+    assert(astra_fonts_information_open(1u, "system:test", 11u, &info) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_fonts_information_string(&info, ASTRA_FONT_INFORMATION_LICENSE, 0u,
+        NULL, 0u, &bytes) == ASTRA_OK && bytes == 32773u);
+    memset(output, 'Z', sizeof(output));
+    assert(astra_fonts_information_string(&info, ASTRA_FONT_INFORMATION_LICENSE, 0u,
+        output, bytes, &bytes) == ASTRA_ERROR_BUFFER_TOO_SMALL && output[0] == 'Z');
+    assert(astra_fonts_information_string(&info, ASTRA_FONT_INFORMATION_LICENSE, 0u,
+        output, sizeof(output), &bytes) == ASTRA_OK &&
+        memcmp(output + 32768u, "\r\n\t\xce\xa9", 6u) == 0);
+    assert(astra_fonts_information_string(&info, ASTRA_FONT_INFORMATION_SOURCE_NAME, 0u,
+        output, sizeof(output), &bytes) == ASTRA_OK && strcmp(output, "source.ttf") == 0);
+    assert(astra_fonts_information_string(&info, ASTRA_FONT_INFORMATION_SOURCE_SHA256, 0u,
+        output, sizeof(output), &bytes) == ASTRA_OK && strcmp(output, "abc") == 0);
+    assert(astra_fonts_information_notice(&info, 0u, &notice) == ASTRA_OK &&
+        notice.name_id == 13u && notice.platform_id == 3u &&
+        notice.encoding_id == 1u && notice.language_id == 1033u);
+    assert(astra_fonts_information_notice(&info, 1u, &notice) == ASTRA_OK &&
+        notice.platform_id == 42u);
+    assert(astra_fonts_information_string(&info, ASTRA_FONT_INFORMATION_NOTICE_TEXT, 1u,
+        output, sizeof(output), &bytes) == ASTRA_ERROR_NOT_PRESENT && bytes == 0u);
+    assert(astra_fonts_information_string(&info, ASTRA_FONT_INFORMATION_NOTICE_RAW_HEX, 1u,
+        output, sizeof(output), &bytes) == ASTRA_OK && strcmp(output, "ff00") == 0);
+    assert(astra_fonts_information_string(&info, ASTRA_FONT_INFORMATION_FAMILY, 1u,
+        NULL, 0u, &bytes) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_fonts_information_notice(&info, 2u, &notice) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_fonts_information_close(&info) == ASTRA_OK && info._private_bytes == 0u);
+    uint32_t before = closed_handles;
+    document_size = 1048577u;
+    assert(astra_fonts_information_open(1u, "system:test", 11u, &info) == ASTRA_ERROR_IO);
+    assert(closed_handles == before + 1u);
+    const char *invalid[] = {"{\"x\":[,]}", "{\"notices\":false}",
+        "{\"notices\":[],\"notices\":[]}", "[]"};
+    for (uint32_t at = 0u; at < sizeof(invalid) / sizeof(invalid[0]); ++at) {
+        document_size = (uint32_t)strlen(invalid[at]);
+        memcpy(document, invalid[at], document_size);
+        assert(astra_fonts_information_open(1u, "system:test", 11u, &info) == ASTRA_ERROR_IO &&
+            info._private_area.handle == ASTRA_INVALID_HANDLE && info._private_bytes == 0u);
+    }
+    memcpy(document, "{}", 2u); document_size = 2u;
+    fail_context_map = 1u;
+    assert(astra_fonts_information_open(1u, "system:test", 11u, &info) == ASTRA_ERROR_OUT_OF_MEMORY);
+    fail_context_map = 0u;
+    assert(astra_fonts_information_open(1u, "system:test", 11u, &info) == ASTRA_OK);
+    assert(info.source_count == 0u && info.notice_count == 0u);
+    assert(astra_fonts_information_close(&info) == ASTRA_OK);
 }
 
 int main(void)
@@ -349,5 +416,6 @@ int main(void)
     change.data.font_changed.generation = 7u;
     --change.version;
     assert(astra_fonts_use_system(1u, &change) == ASTRA_ERROR_INVALID_ARGUMENT);
+    information_tests();
     return 0;
 }

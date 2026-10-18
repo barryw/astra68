@@ -1,4 +1,5 @@
 #include <astra/control.h>
+#include <astra/clipboard.h>
 #include <astra/fonts.h>
 #include <astra/filesystem_library.h>
 #include <astra/graphics_kit.h>
@@ -36,6 +37,7 @@ enum {
     FONTS_USE,
     FONTS_IMPORT,
     FONTS_ENCODING,
+    FONTS_INFORMATION,
     FONTS_UNINSTALL,
     FONTS_CONTROL_COUNT = FONTS_UNINSTALL
 };
@@ -78,6 +80,14 @@ static uint32_t browser_selection;
 static uint32_t browsing;
 static uint32_t amiga_encoding;
 static uint32_t confirm_uninstall;
+static uint32_t showing_information;
+static AstraHandle fonts_clipboard;
+typedef struct FontDocument {
+    AstraTextModel model;
+    void *content;
+    void *metadata;
+} FontDocument;
+static FontDocument information_document = { .model = ASTRA_TEXT_MODEL_INIT };
 static char browser_path[ASTRA_VFS_PATH_MAX] = "/dh0";
 static AstraControl controls[FONTS_CONTROL_COUNT];
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
@@ -88,6 +98,145 @@ static uint16_t client_width = FONTS_WIDTH;
 static uint16_t client_height = FONTS_HEIGHT;
 
 #define CONTROL(id) (&controls[(id) - 1u])
+
+static void document_dispose(FontDocument *document)
+{
+    if (document->metadata != NULL) astra_text_model_dispose(&document->model);
+    astra_runtime_deallocate(document->content);
+    astra_runtime_deallocate(document->metadata);
+    *document = (FontDocument){ .model = ASTRA_TEXT_MODEL_INIT };
+}
+
+static AstraResult document_append(FontDocument *document, const char *text,
+                                    uint32_t length)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    AstraTextModelRequirements need = ASTRA_TEXT_MODEL_REQUIREMENTS_INIT;
+    if (document->metadata == NULL) {
+        AstraTextModelInfo info = ASTRA_TEXT_MODEL_INFO_INIT;
+        document->metadata = astra_runtime_allocate(sizeof(uint32_t));
+        if (document->metadata == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
+        info.metadata_arena = document->metadata;
+        info.metadata_arena_bytes = sizeof(uint32_t);
+        AstraResult result = astra_text_model_init(&document->model, &info);
+        if (result != ASTRA_OK) return result;
+    }
+    AstraResult result = astra_text_model_get_state(&document->model, &state);
+    if (result != ASTRA_OK) return result;
+    result = astra_text_model_replace_requirements(&document->model,
+        state.text_bytes, state.text_bytes, text, length, &need);
+    if (result != ASTRA_OK) return result;
+    if (need.content_arena_bytes > state.content_arena_bytes ||
+        need.metadata_arena_bytes > state.metadata_arena_bytes) {
+        void *content = need.content_arena_bytes == 0u ? NULL :
+            astra_runtime_allocate(need.content_arena_bytes);
+        void *metadata = astra_runtime_allocate(need.metadata_arena_bytes);
+        if ((need.content_arena_bytes != 0u && content == NULL) || metadata == NULL)
+            result = ASTRA_ERROR_OUT_OF_MEMORY;
+        else result = astra_text_model_move_arenas(&document->model, content,
+            need.content_arena_bytes, metadata, need.metadata_arena_bytes);
+        if (result != ASTRA_OK) {
+            astra_runtime_deallocate(content);
+            astra_runtime_deallocate(metadata);
+            return result;
+        }
+        astra_runtime_deallocate(document->content);
+        astra_runtime_deallocate(document->metadata);
+        document->content = content;
+        document->metadata = metadata;
+    }
+    return astra_text_model_replace(&document->model, state.text_bytes,
+                                     state.text_bytes, text, length);
+}
+
+static AstraResult document_field(FontDocument *document,
+    const AstraFontInformation *information, uint32_t field, uint32_t index,
+    const char *heading)
+{
+    uint32_t length = 0u;
+    AstraResult result = astra_fonts_information_string(information, field,
+        index, NULL, 0u, &length);
+    if (result == ASTRA_ERROR_NOT_PRESENT) return ASTRA_OK;
+    if (result != ASTRA_OK) return result;
+    if (length == UINT32_MAX) return ASTRA_ERROR_NO_RESOURCES;
+    char *text = astra_runtime_allocate((size_t)length + 1u);
+    if (text == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
+    result = astra_fonts_information_string(information, field, index,
+        text, length + 1u, &length);
+    if (result == ASTRA_OK)
+        result = document_append(document, heading, (uint32_t)strlen(heading));
+    if (result == ASTRA_OK) result = document_append(document, text, length);
+    if (result == ASTRA_OK) result = document_append(document, "\n\n", 2u);
+    astra_runtime_deallocate(text);
+    return result;
+}
+
+static AstraResult collect_information(const AstraFontInformation *information,
+                                        FontDocument *document)
+{
+    static const char *const headings[] = {
+        "Family: ", "Style: ", "Author: ", "License summary:\n",
+        "Converter: ", "Source encoding: "
+    };
+    AstraResult result = ASTRA_OK;
+    for (uint32_t at = 0u; at < sizeof(headings) / sizeof(headings[0]) &&
+         result == ASTRA_OK; ++at)
+        result = document_field(document, information,
+            ASTRA_FONT_INFORMATION_FAMILY + at, 0u, headings[at]);
+    for (uint32_t at = 0u; at < information->source_count && result == ASTRA_OK; ++at) {
+        result = document_field(document, information,
+            ASTRA_FONT_INFORMATION_SOURCE_NAME, at, "Original source: ");
+        if (result == ASTRA_OK) result = document_field(document, information,
+            ASTRA_FONT_INFORMATION_SOURCE_SHA256, at, "SHA-256: ");
+    }
+    for (uint32_t at = 0u; at < information->notice_count && result == ASTRA_OK; ++at) {
+        AstraFontNotice notice;
+        char label[128];
+        AstraString text;
+        result = astra_fonts_information_notice(information, at, &notice);
+        if (result != ASTRA_OK) break;
+        astra_string_init(&text, label, sizeof(label));
+        if (!astra_string_append(&text, notice.name_id == 0u ? "Copyright" :
+                notice.name_id == 13u ? "License" : notice.name_id == 14u ?
+                "License URL" : "Notice") ||
+            !astra_string_append(&text, " (name ") ||
+            !astra_string_append_u64(&text, notice.name_id) ||
+            !astra_string_append(&text, ", platform ") ||
+            !astra_string_append_u64(&text, notice.platform_id) ||
+            !astra_string_append(&text, ", encoding ") ||
+            !astra_string_append_u64(&text, notice.encoding_id) ||
+            !astra_string_append(&text, ", language ") ||
+            !astra_string_append_u64(&text, notice.language_id) ||
+            !astra_string_append(&text, ")\n")) return ASTRA_ERROR_NO_RESOURCES;
+        result = document_append(document, text.text, text.length);
+        uint32_t length = 0u;
+        if (result == ASTRA_OK) {
+            result = astra_fonts_information_string(information,
+                ASTRA_FONT_INFORMATION_NOTICE_TEXT, at, NULL, 0u, &length);
+            if (result == ASTRA_ERROR_NOT_PRESENT)
+                result = document_append(document,
+                    "Text encoding unavailable; original bytes below.\n\n",
+                    sizeof("Text encoding unavailable; original bytes below.\n\n") - 1u);
+            else if (result == ASTRA_OK)
+                result = document_field(document, information,
+                    ASTRA_FONT_INFORMATION_NOTICE_TEXT, at, "");
+        }
+        if (result == ASTRA_OK) result = document_field(document, information,
+            ASTRA_FONT_INFORMATION_NOTICE_LANGUAGE, at, "Language tag: ");
+        if (result == ASTRA_OK) result = document_field(document, information,
+            ASTRA_FONT_INFORMATION_NOTICE_RAW_HEX, at, "Original bytes (hex): ");
+        if (result == ASTRA_OK) result = document_field(document, information,
+            ASTRA_FONT_INFORMATION_NOTICE_LANGUAGE_RAW_HEX, at, "Language tag bytes (hex): ");
+    }
+    if (result == ASTRA_OK && information->notice_count == 0u)
+        result = document_append(document, "No embedded notices supplied.\n",
+            sizeof("No embedded notices supplied.\n") - 1u);
+    if (result == ASTRA_OK) {
+        AstraTextSelection selection = ASTRA_TEXT_SELECTION_INIT;
+        result = astra_text_model_set_selection(&document->model, &selection);
+    }
+    return result;
+}
 
 static uint32_t layout_controls(void)
 {
@@ -349,7 +498,8 @@ static uint32_t update_preview(void)
     AstraLabelFont font = ASTRA_LABEL_FONT_INIT;
     const char *text = "The quick brown fox jumps over the lazy dog. 0123456789";
 
-    if (browsing || active_family == UINT32_MAX) return ASTRA_STATUS_OK;
+    if (browsing || showing_information || active_family == UINT32_MAX)
+        return ASTRA_STATUS_OK;
     if (selected_preview_font(&font) != ASTRA_STATUS_OK)
         return FONTS_FAIL_CATALOG;
     if (astra_interface_label_set_font(&ui, CONTROL(FONTS_PREVIEW), &font) != ASTRA_OK) {
@@ -373,6 +523,7 @@ static uint32_t build_controls(void)
     AstraButtonInfo import = ASTRA_BUTTON_INFO_INIT;
     AstraButtonInfo encoding = ASTRA_BUTTON_INFO_INIT;
     AstraButtonInfo uninstall = ASTRA_BUTTON_INFO_INIT;
+    AstraButtonInfo information = ASTRA_BUTTON_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
     const AstraChoiceItem *title = active_family == UINT32_MAX ? NULL :
                                    &families[active_family];
@@ -397,7 +548,8 @@ static uint32_t build_controls(void)
     if (astra_interface_label_init(CONTROL(FONTS_TITLE), &label) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     label.id = FONTS_HINT;
-    label.text = message != NULL ? message : confirm_uninstall ?
+    label.text = message != NULL ? message : showing_information ?
+                 "Source and license information · Select text and copy with Meta+C" : confirm_uninstall ?
                  "Remove this imported style and all its sizes? Source file remains." : browsing ?
                  "Open a folder or select a font file to import" :
                  active_family == UINT32_MAX ?
@@ -415,7 +567,7 @@ static uint32_t build_controls(void)
         preview.id = FONTS_PREVIEW;
         preview.text = "Preview unavailable for this font";
         preview.text_length = (uint32_t)strlen(preview.text);
-        preview.state = browsing || active_family == UINT32_MAX ?
+        preview.state = browsing || showing_information || active_family == UINT32_MAX ?
                         ASTRA_CONTROL_COLLAPSED : 0u;
         if (astra_interface_label_init(CONTROL(FONTS_PREVIEW), &preview) != ASTRA_OK)
             return FONTS_FAIL_CONTROL;
@@ -436,10 +588,16 @@ static uint32_t build_controls(void)
                     browsing ? browser_selection :
                     active_family == UINT32_MAX ? main_selection : detail_selection;
     list.state = confirm_uninstall ? ASTRA_CONTROL_COLLAPSED : 0u;
-    if (astra_interface_list_init(CONTROL(FONTS_LIST), &list) != ASTRA_OK)
+    if (showing_information) {
+        AstraTextViewInfo text = ASTRA_TEXT_VIEW_INFO_INIT;
+        text.id = FONTS_LIST;
+        text.model = &information_document.model;
+        if (astra_interface_text_view_init(CONTROL(FONTS_LIST), &text) != ASTRA_OK)
+            return FONTS_FAIL_CONTROL;
+    } else if (astra_interface_list_init(CONTROL(FONTS_LIST), &list) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     back.id = FONTS_BACK;
-    back.text = confirm_uninstall ? "Cancel" :
+    back.text = showing_information ? "Back to styles and sizes" : confirm_uninstall ? "Cancel" :
                 browsing ? "Up" : "Back to families";
     back.text_length = (uint32_t)strlen(back.text);
     back.state = !browsing && active_family == UINT32_MAX ?
@@ -449,7 +607,7 @@ static uint32_t build_controls(void)
     use.id = FONTS_USE;
     use.text = browsing ? "Import selected font" : "Use as system font";
     use.text_length = (uint32_t)strlen(use.text);
-    use.state = confirm_uninstall ||
+    use.state = showing_information || confirm_uninstall ||
                 (!browsing && active_family == UINT32_MAX) ?
                 ASTRA_CONTROL_COLLAPSED :
                 !browsing && !system_ready ? ASTRA_CONTROL_DISABLED : 0u;
@@ -474,10 +632,17 @@ static uint32_t build_controls(void)
     uninstall.id = FONTS_UNINSTALL;
     uninstall.text = confirm_uninstall ? "Remove font" : "Uninstall…";
     uninstall.text_length = (uint32_t)strlen(uninstall.text);
-    uninstall.state = browsing || active_family == UINT32_MAX ?
+    uninstall.state = showing_information || browsing || active_family == UINT32_MAX ?
                       ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_UNINSTALL), &uninstall) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
+    information.id = FONTS_INFORMATION;
+    information.text = "Source and license…";
+    information.text_length = sizeof("Source and license…") - 1u;
+    information.state = showing_information || browsing || confirm_uninstall ||
+        active_family == UINT32_MAX || detail_count == 0u ? ASTRA_CONTROL_COLLAPSED : 0u;
+    if (astra_interface_button_init(CONTROL(FONTS_INFORMATION), &information) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
 
     if (astra_interface_control_set_flex(CONTROL(FONTS_TITLE), &item) != ASTRA_OK ||
         astra_interface_control_set_flex(CONTROL(FONTS_HINT), &item) != ASTRA_OK ||
@@ -502,6 +667,8 @@ static uint32_t build_controls(void)
     if (astra_interface_control_set_flex(CONTROL(FONTS_ENCODING), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     if (astra_interface_control_set_flex(CONTROL(FONTS_UNINSTALL), &item) !=
+        ASTRA_OK) return FONTS_FAIL_CONTROL;
+    if (astra_interface_control_set_flex(CONTROL(FONTS_INFORMATION), &item) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     if (astra_interface_ui_init(&ui, controls, FONTS_CONTROL_COUNT,
                                 client_width, client_height) != ASTRA_OK)
@@ -588,6 +755,75 @@ static uint32_t import_selected(void)
 
 static uint32_t action(const AstraUIAction *event)
 {
+    if (showing_information) {
+        if (event->type == ASTRA_UI_ACTION_ACTIVATE && event->control_id == FONTS_BACK) {
+            showing_information = 0u;
+            message = NULL;
+            if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+            document_dispose(&information_document);
+            return present("fonts UI information close complete");
+        }
+        if (event->type == ASTRA_UI_ACTION_COPY && event->control_id == FONTS_LIST) {
+            AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+            AstraClipboardRepresentation representation = ASTRA_CLIPBOARD_REPRESENTATION_INIT;
+            if (astra_text_model_get_state(&information_document.model, &state) != ASTRA_OK)
+                return FONTS_FAIL_CONTROL;
+            uint32_t start = state.selection.anchor < state.selection.focus ?
+                state.selection.anchor : state.selection.focus;
+            uint32_t end = state.selection.anchor > state.selection.focus ?
+                state.selection.anchor : state.selection.focus;
+            if (start == end) return ASTRA_STATUS_OK;
+            char *text = astra_runtime_allocate(end - start);
+            uint32_t copied = 0u;
+            AstraResult result = text == NULL ? ASTRA_ERROR_OUT_OF_MEMORY :
+                astra_text_model_copy(&information_document.model, start, end,
+                                      text, end - start, &copied);
+            if (result == ASTRA_OK) {
+                representation.type = ASTRA_CLIPBOARD_TYPE_UTF8;
+                representation.type_length = sizeof(ASTRA_CLIPBOARD_TYPE_UTF8) - 1u;
+                representation.data = text;
+                representation.data_length = copied;
+                result = astra_clipboard_write(fonts_clipboard, &representation, 1u, NULL);
+            }
+            astra_runtime_deallocate(text);
+            message = result == ASTRA_OK ? "Information copied" :
+                "Could not copy information; select less text and try again";
+            if (astra_interface_control_set_text(&ui, CONTROL(FONTS_HINT), message,
+                (uint32_t)strlen(message)) != ASTRA_OK) return FONTS_FAIL_CONTROL;
+            return present(result == ASTRA_OK ? "fonts UI information copy complete" : NULL);
+        }
+        return ASTRA_STATUS_OK;
+    }
+    if (event->type == ASTRA_UI_ACTION_ACTIVATE && event->control_id == FONTS_INFORMATION) {
+        AstraFontInformation information = ASTRA_FONT_INFORMATION_INIT;
+        FontDocument document = { .model = ASTRA_TEXT_MODEL_INIT };
+        AstraInstalledFont face;
+        if (browsing || confirm_uninstall || active_family == UINT32_MAX ||
+            detail_selection >= detail_count) return ASTRA_STATUS_OK;
+        if (astra_fonts_catalog_face(&catalog,
+            detail_sources[detail_selection].face, &face) != ASTRA_OK)
+            return FONTS_FAIL_CATALOG;
+        AstraResult result = astra_fonts_information_open(fonts_read, face.id,
+            face.id_length, &information);
+        if (result == ASTRA_OK) {
+            result = collect_information(&information, &document);
+            AstraResult closed = astra_fonts_information_close(&information);
+            if (result == ASTRA_OK) result = closed;
+        }
+        if (result == ASTRA_OK) {
+            document_dispose(&information_document);
+            information_document = document;
+            showing_information = 1u;
+            message = NULL;
+        } else {
+            document_dispose(&document);
+            message = result == ASTRA_ERROR_OUT_OF_MEMORY ?
+                "Not enough memory to show font information" :
+                "Could not read font information; font management remains available";
+        }
+        if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+        return present(result == ASTRA_OK ? "fonts UI information complete" : NULL);
+    }
     if (browsing) {
         if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
             event->control_id == FONTS_ENCODING) {
@@ -802,6 +1038,7 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *fonts;
     const AstraStartupCapability *admin;
     const AstraStartupCapability *bootstrap;
+    const AstraStartupCapability *clipboard;
     AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
     AstraWindowCreateInfo window_info = ASTRA_WINDOW_CREATE_INFO_INIT;
     uint32_t status = ASTRA_STATUS_OK;
@@ -811,13 +1048,15 @@ int astra_main(const AstraStartupInfo *startup)
     gui = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
     fonts = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS);
     admin = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_ADMIN);
+    clipboard = astra_startup_capability(startup, ASTRA_CAPABILITY_CLIPBOARD);
     bootstrap = astra_startup_capability(startup,
                                          ASTRA_CAPABILITY_SERVICE_READY);
-    if (gui == NULL || fonts == NULL || admin == NULL)
+    if (gui == NULL || fonts == NULL || admin == NULL || clipboard == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     fonts_read = fonts->handle;
     fonts_admin = admin->handle;
     fonts_gui = gui->handle;
+    fonts_clipboard = clipboard->handle;
     if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
         return FONTS_FAIL_CATALOG;
     if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
@@ -877,6 +1116,7 @@ int astra_main(const AstraStartupInfo *startup)
     astra_runtime_deallocate(detail_text);
     astra_runtime_deallocate(detail_sources);
     astra_runtime_deallocate(details);
+    document_dispose(&information_document);
     astra_process_filesystem_close(&files);
     return (int)status;
 }

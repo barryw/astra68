@@ -2,6 +2,46 @@
 
 Status: active continuation map, 2026-10-18
 
+Font information integration is implemented: Font Kit 4.2, FONTS protocol 7,
+read-only NAME-only snapshots, shared counted JSON validation and Fonts' native
+Source and license Text View with selection/copy/Back. Coherent userspace/ROM
+and packaged NDK checks pass in
+`/var/tmp/astra-font-information-coherent-final-20261018.log`. Native Iosevka import,
+information/copy, live selection, restart, restoration and uninstall pass in
+`/var/tmp/astra-font-information-iosevka-final-20261018.log`.
+
+The larger legal-text gate exposed a real panic, reproduced in
+`/var/tmp/astra-font-information-long-notice-20261018{b,c}.log`:
+`critical service display exited: status 36`. Retained fatal diagnostics identify
+a rejected draw list (status 1, builder failure 0). Surface fill queued the full
+virtual document bounds, exceeding draw-command geometry limits despite a small
+viewport. A representative host replay now fails before the fix in
+`/var/tmp/astra-font-information-render-red-20261018b.log`; shared Surface fill
+now clips before hardware submission using the same bounds calculation as its
+software oracle. The document is not truncated. The host/sanitizer gate passes
+in `/var/tmp/astra-font-information-render-green-20261018.log`.
+
+Display also wrongly treated malformed client content as a fatal service error.
+Its existing per-frame refusal path now discards the unrenderable update,
+retains the committed front bank and schedules remaining damage for composition.
+Host checks prove other-window progress and repair/retry; original failure is
+`/var/tmp/astra-font-frame-containment-red-20261018.log`, focused final checks
+pass in `/var/tmp/astra-font-frame-containment-final-20261018.log`.
+The final resource-capacity checks also cover RGB frames, preserving committed
+content and other-window progress when a client exhausts the batch; tests,
+sanitizers and analyzers pass in
+`/var/tmp/astra-font-frame-capacity-final-20261018.log`. The formerly panicking
+long-document workflow now passes in
+`/var/tmp/astra-font-information-long-notice-final-20261018.log`. A native
+client submits malformed geometry, headers and opcodes, then repairs each
+frame; Display refusal, recovery and Fonts readiness pass in
+`/var/tmp/astra-font-frame-refusal-native-20261018.log`. Unsupported-preview and
+long-style native gates pass in
+`/var/tmp/astra-font-information-{unsupported-preview,long-style}-final-20261018.log`.
+Final integrated DE25/release gates remain the active blocker. No release
+certification is claimed. Production remains `57078599`, with user data and
+board selector unchanged.
+
 Font-information groundwork passes its software gates. Interface Kit 7.1 adds
 shared read-only Text View from TextModel, TextSurface and ScrollView, with a
 native Interface Gallery example. Existing control/context layouts stay
@@ -28,7 +68,8 @@ notices; live switching, restart, restoration and uninstall pass in
 Plane ASTRA-56/57 track these components. Native qualification also exposed
 separate Terminal paste and native/POSIX stdout-redirection defects, retained
 as ASTRA-58/59 with original failure logs. Font Kit metadata query and Fonts
-information pane remain to be built under ASTRA-36; final integrated DE25
+information pane are implemented under ASTRA-36; ASTRA-60 tracks the Display
+panic and rejected-frame containment. Final integrated DE25
 qualification and release acceptance remain open. Production stays
 `57078599`, untouched. No candidate activation or user-data replacement.
 

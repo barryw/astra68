@@ -40,7 +40,7 @@ MENU_HOST_TEST := build/host/test_menu
 GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o $(GRAPHICS)/build/host/font_data.o
 GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o $(GRAPHICS)/build/host/font_data_sanitize.o
 FONT_HOST_INPUTS := $(RUNTIME)/tests/uncontended_mutex.c \
-	../../common/afnt.c ../../common/crc32.c
+	../../common/afnt.c ../../common/json.c ../../common/crc32.c
 GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
 	$(GRAPHICS)/build/generated/astra_ui_font.inc \
 	$(GRAPHICS)/build/generated/astra_mono_font.inc
@@ -269,6 +269,8 @@ analyze:
 
 clean:
 	rm -rf build
+
+$(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST): ../../include/astra/json.h
 
 -include $(wildcard build/m68k/*.d)
 

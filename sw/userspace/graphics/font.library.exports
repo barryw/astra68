@@ -42,3 +42,11 @@ ASTRA_FONT_4.1 {
         astra_surface_ui_text_height;
         astra_fonts_context_id;
 } ASTRA_FONT_4.0;
+
+ASTRA_FONT_4.2 {
+    global:
+        astra_fonts_information_open;
+        astra_fonts_information_string;
+        astra_fonts_information_notice;
+        astra_fonts_information_close;
+} ASTRA_FONT_4.1;

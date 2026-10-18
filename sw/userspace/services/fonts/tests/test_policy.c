@@ -85,6 +85,18 @@ int main(void)
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
     request.face_id[0] = '\0';
     assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_RENDER));
+    request.header.operation = ASTRA_FONT_SERVICE_INFORMATION;
+    assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
+    strcpy(request.face_id, "system:astra-workbench");
+    assert(fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
+    assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_ADMIN));
+    assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_RENDER));
+    request.header.protocol_version = ASTRA_FONT_SERVICE_VERSION - 1u;
+    assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
+    request.header.protocol_version = ASTRA_FONT_SERVICE_VERSION;
+    request.source_size = 1u;
+    assert(!fonts_request_valid(&request, sizeof(request), FONTS_PORT_CATALOG));
+    request.source_size = 0u;
 
     char token[ASTRA_FONT_OBJECT_TOKEN_SIZE];
     char inventory[2u * ASTRA_FONT_OBJECT_TOKEN_LENGTH + 1u];

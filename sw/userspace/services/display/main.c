@@ -315,9 +315,8 @@ enum {
     DISPLAY_FAIL_IRQ,
     DISPLAY_FAIL_COMPLETION,
     DISPLAY_FAIL_PROTOCOL,
-    /* The device answered and refused this one request (a malformed batch,
-       a command over its deadline). The device and the display are fine:
-       it is that request's failure, never the machine's. */
+    /* One frame was refused (invalid client commands or a device deadline).
+       The device and display remain usable; the failure belongs to the frame. */
     DISPLAY_REQUEST_REFUSED,
 };
 
@@ -2589,6 +2588,22 @@ static uint32_t compose(void *storage, uint32_t fence,
                 display_font_set_end(&window->fonts, content_ok);
         }
         if (window->content_resource == 0u || !content_ok) {
+            if (window->content_resource != 0u && !content_ok &&
+                ((window->request.content_format == ASTRA_WINDOW_CONTENT_DRAW_LIST &&
+                  builder.failed == ASTRA_RENDER_BUILDER_FAILURE_NONE) ||
+                 builder.failed == ASTRA_RENDER_BUILDER_FAILURE_DATA ||
+                 builder.failed == ASTRA_RENDER_BUILDER_FAILURE_DESCRIPTOR ||
+                 builder.failed == ASTRA_RENDER_BUILDER_FAILURE_COMMAND_CAPACITY)) {
+                /* No batch was submitted. Keep the committed front bank and
+                   discard only this client's unrenderable update. */
+                window->content_dirty = 0u;
+                window->content_pending = 0u;
+                window->content_damage = (DamageRect){0};
+                window->content_discard = 0u;
+                state->compose_deferred = 1u;
+                (void)astra_log("display refused window frame; retained previous content");
+                return compose_failed(&builder, error, failure, DISPLAY_REQUEST_REFUSED);
+            }
             return compose_failed(
                 &builder, error, failure,
                 builder.failed != 0u ? ASTRA_STATUS_LIMIT :
@@ -3142,6 +3157,8 @@ static void log_render_failure(const char *phase, uint32_t status)
         (void)astra_log("display rejected a window draw list");
     else if (status == ASTRA_STATUS_INVALID)
         (void)astra_log("display render had no valid damage or batch");
+    else if (status == DISPLAY_REQUEST_REFUSED)
+        (void)astra_log("display frame refused; committed content remains available");
     else
         (void)astra_log_failure("display hardware render", status);
 }
@@ -3152,8 +3169,19 @@ static void log_render_failure(const char *phase, uint32_t status)
 static void render_failure(const char *phase, uint32_t status)
 {
     log_render_failure(phase, status);
-    if (status != DISPLAY_REQUEST_REFUSED)
+    if (status != DISPLAY_REQUEST_REFUSED) {
+        char storage[96];
+        AstraString line;
+        astra_string_init(&line, storage, sizeof(storage));
+        (void)astra_string_append(&line, "display fatal render status=");
+        (void)astra_string_append_u64(&line, status);
+        (void)astra_string_append(&line, " builder=");
+        (void)astra_string_append_u64(&line, last_builder_failure);
+        /* The process log may not drain before the critical-service halt. */
+        (void)astra_log_debug(line.text, line.length);
+        (void)astra_log_debug(phase, (uint32_t)strlen(phase));
         astra_process_exit(DISPLAY_FAIL_COMPLETION);
+    }
 }
 
 static uint32_t window_gadgets(uint8_t type)

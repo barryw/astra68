@@ -355,20 +355,6 @@ void astra_surface_fill(AstraSurfaceView *surface, int32_t x, int32_t y,
     uint32_t last_x;
     uint32_t last_y;
 
-    if (surface != NULL && surface->kind == ASTRA_SURFACE_VIEW_DRAW_LIST) {
-        if (!clip_valid(surface) || clip_empty(surface) ||
-            width == 0u || height == 0u)
-            return;
-        command = append_command(surface, ASTRA_DRAW_LIST_FILL);
-        if (command != NULL) {
-            command->x = x;
-            command->y = y;
-            command->width = width;
-            command->height = height;
-            command->color = draw_color(color);
-        }
-        return;
-    }
     if (!clip_valid(surface) || width == 0u ||
         height == 0u)
         return;
@@ -383,6 +369,18 @@ void astra_surface_fill(AstraSurfaceView *surface, int32_t x, int32_t y,
                                                 (uint32_t)right;
     last_y = bottom > surface->clip_bottom ? surface->clip_bottom :
                                                   (uint32_t)bottom;
+    if (surface->kind == ASTRA_SURFACE_VIEW_DRAW_LIST) {
+        if (first_x >= last_x || first_y >= last_y) return;
+        command = append_command(surface, ASTRA_DRAW_LIST_FILL);
+        if (command != NULL) {
+            command->x = (int32_t)first_x;
+            command->y = (int32_t)first_y;
+            command->width = last_x - first_x;
+            command->height = last_y - first_y;
+            command->color = draw_color(color);
+        }
+        return;
+    }
     for (uint32_t at_y = first_y; at_y < last_y; ++at_y) {
         uint16_t *pixels = row(surface, at_y);
 

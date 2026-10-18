@@ -23,12 +23,14 @@ LIBRARIES := $(ASTRA_CONFIG_LIBRARY) $(ASTRA_LIBC_LIBRARY) \
 	$(ASTRA_COMPILER_LIBRARY)
 include ../../dynamic-program.mk
 
-$(COMMON): ../../../common/font_catalog.c ../../../common/afnt.c \
+$(COMMON): ../../../common/font_catalog.c ../../../common/afnt.c ../../../common/json.c \
+		../../../include/astra/afnt.h ../../../include/astra/json.h ../../../common/Makefile \
 		../../../common/crc32.c ../../../common/utf8.c \
 		../../../common/sha256.c ../../../common/font_store.c
 	$(MAKE) -C ../../../common m68k
 
-$(HOST_COMMON): ../../../common/font_catalog.c ../../../common/afnt.c \
+$(HOST_COMMON): ../../../common/font_catalog.c ../../../common/afnt.c ../../../common/json.c \
+		../../../include/astra/afnt.h ../../../include/astra/json.h ../../../common/Makefile \
 		../../../common/crc32.c ../../../common/utf8.c \
 		../../../common/sha256.c ../../../common/font_store.c
 	$(MAKE) -C ../../../common host
@@ -65,7 +67,7 @@ test: $(TARGET) build/host/test_policy build/host/test_selection
 sanitize: test
 	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
-		policy.c ../../../common/font_catalog.c ../../../common/afnt.c \
+		policy.c ../../../common/font_catalog.c ../../../common/afnt.c ../../../common/json.c \
 		../../../common/crc32.c ../../../common/utf8.c \
 		../../../common/sha256.c ../../../common/font_store.c \
 		tests/test_policy.c \

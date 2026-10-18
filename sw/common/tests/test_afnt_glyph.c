@@ -6,6 +6,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void test_metadata(const AstraAfntView *view, const char *metadata,
+                           int expected)
+{
+    AstraAfntChunk chunks[ASTRA_AFNT_CHUNK_COUNT] = {
+        {(const uint8_t *)metadata, (uint32_t)strlen(metadata)}, view->cmap,
+        view->strikes, view->glyphs, view->bitmap};
+    uint32_t size;
+    AstraAfntView parsed;
+    assert(astra_afnt_pack(chunks, NULL, 0u, &size));
+    uint8_t *packed = malloc(size);
+    assert(packed != NULL && astra_afnt_pack(chunks, packed, size, &size));
+    assert(astra_afnt_validate(packed, size, &parsed) == expected);
+    free(packed);
+}
+
 int main(void)
 {
     static const uint8_t letter_a[16] = {
@@ -35,6 +50,14 @@ int main(void)
     assert(absent.bitmap == replacement.bitmap &&
            absent.bitmap_length == replacement.bitmap_length);
     assert(!astra_afnt_glyph_info(&view, 1u, 'A', &glyph));
+    test_metadata(&view, "{\"family\":\"X\",\"license\":\"First\\nSecond\"}", 1);
+    test_metadata(&view, " \n {\"family\":\"X\"}", 1);
+    test_metadata(&view, "[]", 0);
+    test_metadata(&view, "null", 0);
+    test_metadata(&view, "{\"family\":\"X\",\"ignored\":[,]}", 0);
+    test_metadata(&view, "{\"family\":\"X\",\"ignored\":broken}", 0);
+    test_metadata(&view, "{\"family\":\"X\",\"ignored\":01}", 0);
+    test_metadata(&view, "{\"family\":\"X\",\"ignored\":\"\\ud800\"}", 0);
     {
         uint8_t *metadata = malloc(ASTRA_AFNT_NAME_MAX + 1u);
         AstraAfntChunk chunks[ASTRA_AFNT_CHUNK_COUNT] = {

@@ -533,6 +533,24 @@ static void test_draw_list_clip_reaches_hardware(void)
     destination = astra_render_builder_surface(&builder, 20u, 10u);
     assert(destination != 0u &&
            !astra_render_builder_replay(&builder, destination, header));
+    const struct { int32_t x, y; uint32_t width, height; } large[] = {
+        {0, 0, 131072u, 131072u},
+        {-70000, -70000, 140000u, 140000u},
+        {INT32_MIN, INT32_MIN, UINT32_MAX, UINT32_MAX},
+    };
+    for (uint32_t at = 0u; at < sizeof(large) / sizeof(large[0]); ++at) {
+        assert(astra_draw_list_view_init(&surface, draw_storage, sizeof(draw_storage), 20u, 10u));
+        assert(astra_surface_clip(&surface, 4, 3, 8u, 5u));
+        astra_surface_fill(&surface, large[at].x, large[at].y,
+            large[at].width, large[at].height, 0x1234u);
+        assert(header->command_count == 1u && draw->x == 4 && draw->y == 3 &&
+            draw->width == 8u && draw->height == 5u);
+        astra_surface_fill(&surface, INT32_MAX, 0, UINT32_MAX, UINT32_MAX, 0xffffu);
+        assert(header->command_count == 1u);
+        assert(astra_render_builder_init(&builder, batch_storage, sizeof(batch_storage), at + 3u));
+        destination = astra_render_builder_surface(&builder, 20u, 10u);
+        assert(destination != 0u && astra_render_builder_replay(&builder, destination, header));
+    }
 }
 
 static void test_color_and_glyph(void)

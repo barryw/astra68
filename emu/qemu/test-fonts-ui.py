@@ -78,6 +78,29 @@ def uninstall_current(machine):
     wait_ui(machine, "removal", trace_before, syslog_before)
 
 
+def information_pane(machine):
+    # Fresh details focus order: viewport, List, Back, Use, Information.
+    for _ in range(5):
+        machine.qmp.key("tab")
+    trace_before, syslog_before = machine.sequence(), len(machine.syslog_lines())
+    machine.qmp.key("ret")
+    wait_ui(machine, "information", trace_before, syslog_before)
+    for _ in range(2):
+        machine.qmp.key("tab")
+    machine.qmp.chord("ctrl", "end")
+    machine.qmp.key("pgup")
+    machine.qmp.chord("alt", "a")
+    trace_before, syslog_before = machine.sequence(), len(machine.syslog_lines())
+    machine.qmp.chord("alt", "c")
+    wait_ui(machine, "information copy", trace_before, syslog_before)
+    # Back returns to the selected style, with ordinary detail focus reset.
+    machine.qmp.key("tab")
+    trace_before, syslog_before = machine.sequence(), len(machine.syslog_lines())
+    machine.qmp.key("ret")
+    wait_ui(machine, "information close", trace_before, syslog_before)
+    print("Fonts information pane: native Text View, scroll, select, copy and Back passed", flush=True)
+
+
 def wait_live_font(machine, prefix, trace_before, syslog_before, glyphs_before):
     end = time.monotonic() + 15
     while time.monotonic() < end:
@@ -167,8 +190,10 @@ def main():
                         help="exercise the longest accepted AFNT style name")
     fixture.add_argument("--unsupported-preview", action="store_true",
                         help="manage a valid AFNT whose bitmap format cannot be previewed")
+    fixture.add_argument("--long-notice", action="store_true",
+                        help="read and copy a complete 32 KiB multilingual license")
     args = parser.parse_args()
-    if args.font is None and not (args.long_style or args.unsupported_preview):
+    if args.font is None and not (args.long_style or args.unsupported_preview or args.long_notice):
         parser.error("font is required unless a fixture is selected")
     if os.geteuid() != 0:
         parser.error("run as root observer with ASTRA_TEST_QEMU_UID/GID set to a non-root account")
@@ -178,13 +203,22 @@ def main():
         astra_image.install(image, vim_runtime=None)
         previous, old_inventory = state_on_disk(image, work)
         source = args.font
-        if args.long_style or args.unsupported_preview:
+        if args.long_style or args.unsupported_preview or args.long_notice:
             parts = font_format.parse_afnt((HERE.parents[1] /
                 "sw/userspace/graphics/fonts/astra-workbench.afnt").read_bytes())
             metadata = json.loads(parts[b"NAME"])
             metadata.update(family="Preview Fixture" if args.unsupported_preview else
-                            "Long Style Fixture", style="Regular" if
-                            args.unsupported_preview else "S" * 127)
+                            "Long Notice Fixture" if args.long_notice else "Long Style Fixture",
+                            style="S" * 127 if args.long_style else "Regular")
+            if args.long_notice:
+                notice = ("License Ω 世界\tcomplete original line\r\n" * 1024)[:32768]
+                metadata["license"] = notice
+                metadata["notices"] = [
+                    {"name_id": 13, "platform_id": 3, "encoding_id": 1,
+                     "language_id": 1033, "text": notice,
+                     "raw_hex": notice.encode("utf-16-be").hex()},
+                    {"name_id": 14, "platform_id": 42, "encoding_id": 99,
+                     "language_id": 0, "raw_hex": "ff00"}]
             strikes = [parts[b"STRK"][at:at + font_format.STRIKE.size]
                        for at in range(4, len(parts[b"STRK"]), font_format.STRIKE.size)]
             if args.unsupported_preview:
@@ -254,6 +288,7 @@ def main():
                                        (choice, inventory))
                 print("ASTRA FONTS UI PASS unsupported preview, family detail, uninstall")
                 return 0
+            information_pane(machine)
             # Selection must preserve List focus before tabbing to Back/Use.
             for key in ("tab", "tab"):
                 machine.qmp.key(key)
@@ -271,8 +306,23 @@ def main():
             live_selected = wait_live_font(machine, "user:", trace_before,
                                            syslog_before, glyphs_before)
             after = display_count(machine, "glyph-commands")
+            faults = [line for line in machine.said_with_syslog()[0]
+                      if "process_fault" in line or "user fault:" in line.lower() or
+                      "panic" in line.lower()]
+            if faults:
+                raise RuntimeError("native font faults: " + repr(faults))
             recent = [line for line in machine.said_with_syslog()[0]
                       if "font" in line.lower() or "exit" in line.lower()][-100:]
+        except Exception:
+            if machine is not None:
+                print("Fonts native failure: launcher exit=%r serial=%r" %
+                      (machine.process.poll(), machine.recent_serial(100)), flush=True)
+                try:
+                    print("Fonts native failure syslog=" +
+                          repr(machine.syslog_lines()[-100:]), flush=True)
+                except OSError as error:
+                    print("Fonts native failure syslog unavailable: " + repr(error), flush=True)
+            raise
         finally:
             if machine is not None:
                 machine.close()
@@ -372,7 +422,8 @@ def main():
         if "Inode:" in result.stdout:
             raise RuntimeError("UI uninstall left AFNT object on disk")
     print("ASTRA FONTS UI PASS %s, AFNT object, family detail, system choice, uninstall" %
-          ("long AFNT style" if args.long_style else "font import"))
+          ("long AFNT style" if args.long_style else
+           "long multiline license" if args.long_notice else "font import"))
     return 0
 
 

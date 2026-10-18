@@ -201,6 +201,80 @@ ASTRA_NODISCARD AstraResult astra_fonts_catalog_strike(
  * @return ::ASTRA_OK or a negative ::AstraResult. */
 ASTRA_NODISCARD AstraResult astra_fonts_catalog_close(
     AstraFontsCatalog *catalog);
+
+/** Owned read-only source and license metadata. Strings are copied on demand;
+ * no glyph data or writable font storage is exposed through FONTS. */
+typedef struct AstraFontInformation {
+    /** @cond ASTRA_INTERNAL */
+    AstraArea _private_area;
+    uint32_t _private_bytes;
+    /** @endcond */
+    uint32_t source_count; /**< Original source records, possibly zero. */
+    uint32_t notice_count; /**< Embedded copyright/license/URL records. */
+} AstraFontInformation;
+/** Empty initializer; close before reusing an opened information snapshot. */
+#define ASTRA_FONT_INFORMATION_INIT { ASTRA_AREA_INIT, 0u, 0u, 0u }
+
+/** Text fields in font information. Root fields require index zero; source
+ * and notice fields use their corresponding zero-based record index. */
+enum {
+    ASTRA_FONT_INFORMATION_FAMILY = 1u, /**< Family name. */
+    ASTRA_FONT_INFORMATION_STYLE, /**< Designed style. */
+    ASTRA_FONT_INFORMATION_AUTHOR, /**< Author, when supplied. */
+    ASTRA_FONT_INFORMATION_LICENSE, /**< License summary, when supplied. */
+    ASTRA_FONT_INFORMATION_CONVERTER, /**< Converter identity. */
+    ASTRA_FONT_INFORMATION_ENCODING, /**< Original source character encoding. */
+    ASTRA_FONT_INFORMATION_SOURCE_NAME, /**< Original source name. */
+    ASTRA_FONT_INFORMATION_SOURCE_SHA256, /**< Original source SHA-256. */
+    ASTRA_FONT_INFORMATION_NOTICE_TEXT, /**< Complete decoded notice. */
+    ASTRA_FONT_INFORMATION_NOTICE_RAW_HEX, /**< Exact original notice bytes. */
+    ASTRA_FONT_INFORMATION_NOTICE_LANGUAGE, /**< Decoded language tag. */
+    ASTRA_FONT_INFORMATION_NOTICE_LANGUAGE_RAW_HEX /**< Original language tag. */
+};
+
+/** Original SFNT notice identifiers; interpreted together, not as Unicode. */
+typedef struct AstraFontNotice {
+    uint32_t name_id; /**< SFNT name ID (copyright 0, license 13, URL 14). */
+    uint32_t platform_id; /**< Original platform ID. */
+    uint32_t encoding_id; /**< Original platform encoding ID. */
+    uint32_t language_id; /**< Original platform language ID. */
+} AstraFontNotice;
+
+/** Open immutable metadata through FONTS; uninstall does not invalidate it.
+ * @param service FONTS capability.
+ * @param id Counted installed face ID.
+ * @param id_length ID bytes, excluding terminator.
+ * @param information Empty owned snapshot.
+ * @return ASTRA_OK or a negative AstraResult. */
+ASTRA_NODISCARD AstraResult astra_fonts_information_open(
+    AstraHandle service, const char *id, uint32_t id_length,
+    AstraFontInformation *information);
+/** Copy a counted UTF-8 metadata string, preserving multiline text.
+ * @param information Open snapshot.
+ * @param field ASTRA_FONT_INFORMATION_* field.
+ * @param index Zero for root fields; source/notice index otherwise.
+ * @param text Output buffer, or NULL with zero capacity to measure.
+ * @param capacity Output bytes, including room for final NUL.
+ * @param length Receives decoded byte count, excluding final NUL. Embedded
+ * NUL is counted data. On BUFFER_TOO_SMALL, output is unchanged.
+ * @return ASTRA_OK, NOT_PRESENT for an absent optional field, or a negative
+ * AstraResult. Invalid metadata returns IO; text is never truncated. */
+ASTRA_NODISCARD AstraResult astra_fonts_information_string(
+    const AstraFontInformation *information, uint32_t field, uint32_t index,
+    char *text, uint32_t capacity, uint32_t *length);
+/** Read original notice IDs.
+ * @param information Open snapshot.
+ * @param index Notice index.
+ * @param notice Receives copied IDs.
+ * @return ASTRA_OK or a negative AstraResult. */
+ASTRA_NODISCARD AstraResult astra_fonts_information_notice(
+    const AstraFontInformation *information, uint32_t index,
+    AstraFontNotice *notice);
+/** Release information mapping and capability.
+ * @param information Owned snapshot.
+ * @return ASTRA_OK or a negative AstraResult. */
+ASTRA_NODISCARD AstraResult astra_fonts_information_close(
+    AstraFontInformation *information);
 /** Persist selected face via Fonts service and Config Kit.
  * @param admin FONTS_ADMIN send capability.
  * @param id Counted catalog face ID.
