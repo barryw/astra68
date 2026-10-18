@@ -16,7 +16,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.7. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 7u
 /** Current backward-compatible Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 1u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 2u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -58,6 +58,17 @@ AstraResult astra_interface_disclosure_init(
  */
 AstraResult astra_interface_container_init(AstraControl *control,
                                            const AstraContainerInfo *info);
+/** Compose a shared settings shell from four existing controls.
+ * Place these controls and the application's BODY/ACTIONS children in one UI
+ * array, then use ordinary ui_init/layout/render/event APIs with
+ * ASTRA_SETTINGS_PANE_LAYOUT_INIT. The shell adds no event loop or renderer.
+ * @param controls Four caller-owned slots, indexed by ASTRA_SETTINGS_PANE_*.
+ * @param info Pane text and reserved consecutive IDs.
+ * @return ASTRA_OK or a validation error. Discard controls after failure.
+ * @since Interface Kit 7.2.
+ */
+AstraResult astra_interface_settings_pane_init(AstraControl *controls,
+                                               const AstraSettingsPaneInfo *info);
 /** Initialize a scroll viewport.
  * @param control Caller-owned control to initialize.
  * @param info View description; its scroll model remains caller-owned.

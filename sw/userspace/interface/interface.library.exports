@@ -95,3 +95,8 @@ ASTRA_INTERFACE_7.1 {
         astra_interface_text_view_init;
         astra_interface_text_view_refresh;
 } ASTRA_INTERFACE_7.0;
+
+ASTRA_INTERFACE_7.2 {
+    global:
+        astra_interface_settings_pane_init;
+} ASTRA_INTERFACE_7.1;

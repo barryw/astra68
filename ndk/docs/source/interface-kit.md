@@ -6,6 +6,26 @@ per-document undo histories. Applications call its versioned ELF symbols
 directly; they do not compile private Interface Kit sources or speak directly
 to the display and clipboard services.
 
+## Shared settings panes
+
+Interface Kit 7.2 adds `astra_interface_settings_pane_init`, a composition of
+two ordinary Labels and two Containers. It reserves four consecutive IDs
+starting at `AstraSettingsPaneInfo.first_id`. The `ASTRA_SETTINGS_PANE_*`
+constants are both array indices and offsets from that first ID.
+
+Put those four controls and your application controls in one retained UI array.
+Assign content controls' flex `parent_id` to `first_id + ASTRA_SETTINGS_PANE_BODY`
+and action buttons to `first_id + ASTRA_SETTINGS_PANE_ACTIONS`. Then initialize
+the UI and apply `ASTRA_SETTINGS_PANE_LAYOUT_INIT`. The shell supplies
+24-pixel insets and 12-pixel gaps, grows its body and stacks measured actions.
+Title and description are nonempty and remain caller-owned. Ordinary event,
+focus, rendering, font-change and resize behavior comes from existing controls.
+
+Fonts uses this shell for browsing, import, preview, information and removal.
+See `examples/settings_pane.c` for another composition. Settings policy stays
+with its owner: system panes call a typed service API; applications use their
+private Config Kit grant. The shell owns no settings, converter or renderer.
+
 ## Label font previews
 
 Ordinary Labels keep their theme font and fixed role size. To preview an

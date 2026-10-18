@@ -69,7 +69,7 @@ Current implementation provides scoped Config Kit grants and document storage.
 The resident font service catalogs AFNT and persists validated choice. The
 native Fonts UI imports an outline font and saves that imported face as system
 choice in a disposable QEMU gate. It offers a confirmation flow for removing
-imported faces after changing away from the active choice. Font Kit 4 and GUI
+imported faces after changing away from the active choice. Font Kit 5 and GUI
 protocol 24 bind client metrics and rendering to the same immutable snapshot.
 The service prepares that snapshot before the settings write, then signals
 Display through a native change event. Window-specific notices drive live
@@ -77,6 +77,12 @@ context refresh and common-control reflow, retaining previous snapshots across
 failures. Focused host/sanitizer/native checks pass; coherent native GUI and
 physical release qualification remain open. The selected DE25 release does not
 yet include this font work.
+
+Interface Kit 7.2 supplies the shared settings pane composition used by Fonts:
+Label title/description, a growing Container body and a Container of stacked
+actions. Its common layout owns window insets and spacing. Application controls
+and ordinary Interface Kit focus, layout and drawing remain shared; the shell
+adds no settings backend. See the NDK's `settings_pane.c` example.
 Config Kit currently assumes one writer per settings document; multiple app
 instances need an owner-mediated write path before concurrent editing is safe.
 

@@ -202,6 +202,43 @@ typedef struct AstraContainerInfo {
     sizeof(AstraContainerInfo), 0, ASTRA_FLEX_LAYOUT_INIT, 0, { 0, 0, 0 } \
 }
 
+/** Offsets from a settings pane's first ID, also indices in its control array. */
+enum {
+    ASTRA_SETTINGS_PANE_TITLE = 0u,
+    ASTRA_SETTINGS_PANE_DESCRIPTION,
+    ASTRA_SETTINGS_PANE_BODY,
+    ASTRA_SETTINGS_PANE_ACTIONS,
+    ASTRA_SETTINGS_PANE_CONTROL_COUNT
+};
+
+/** Common settings shell composed from ordinary Labels and Containers.
+ * Attach application controls to BODY or ACTIONS using their flex parent IDs.
+ * BODY grows; ACTIONS stacks measured buttons; the shell supplies standard
+ * spacing. Text remains caller-owned. Policy and persistence remain with the
+ * application or owning system service.
+ */
+typedef struct AstraSettingsPaneInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t first_id; /**< Nonzero first ID; reserves four consecutive IDs. */
+    const char *title; /**< Borrowed UTF-8 title. */
+    uint32_t title_length; /**< Title bytes excluding terminator. */
+    const char *description; /**< Borrowed nonempty UTF-8 description. */
+    uint32_t description_length; /**< Description bytes excluding terminator. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraSettingsPaneInfo;
+
+/** Empty settings pane description. */
+#define ASTRA_SETTINGS_PANE_INFO_INIT { \
+    sizeof(AstraSettingsPaneInfo), 0, 0, 0, 0, 0, { 0, 0, 0, 0 } \
+}
+
+/** Root layout for a settings pane: standard window insets and vertical flow. */
+#define ASTRA_SETTINGS_PANE_LAYOUT_INIT { \
+    sizeof(AstraFlexLayout), ASTRA_FLEX_COLUMN, 0, \
+    ASTRA_FLEX_JUSTIFY_START, ASTRA_FLEX_ALIGN_STRETCH, \
+    24, 24, 24, 24, 12, 0, { 0, 0, 0, 0 } \
+}
+
 /** Creation data for a viewport that clips and translates one direct child. */
 typedef struct AstraScrollViewInfo {
     uint32_t size; /**< Structure size for source-compatible extension. */

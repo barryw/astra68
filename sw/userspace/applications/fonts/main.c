@@ -30,6 +30,8 @@
 enum {
     FONTS_TITLE = 1u,
     FONTS_HINT,
+    FONTS_BODY,
+    FONTS_ACTIONS,
     FONTS_PREVIEW,
     FONTS_SCROLL,
     FONTS_LIST,
@@ -42,6 +44,11 @@ enum {
     FONTS_UNINSTALL,
     FONTS_CONTROL_COUNT = FONTS_UNINSTALL
 };
+
+_Static_assert(FONTS_HINT == FONTS_TITLE + ASTRA_SETTINGS_PANE_DESCRIPTION &&
+    FONTS_BODY == FONTS_TITLE + ASTRA_SETTINGS_PANE_BODY &&
+    FONTS_ACTIONS == FONTS_TITLE + ASTRA_SETTINGS_PANE_ACTIONS,
+    "Fonts shell IDs must match the shared settings composition");
 
 enum {
     FONTS_FAIL_CATALOG = ASTRA_STATUS_PROGRAM_FIRST,
@@ -246,15 +253,7 @@ static AstraResult collect_information(const AstraFontInformation *information,
 
 static uint32_t layout_controls(void)
 {
-    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
-
-    layout.direction = ASTRA_FLEX_COLUMN;
-    layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
-    layout.padding_left = 24u;
-    layout.padding_top = 24u;
-    layout.padding_right = 24u;
-    layout.padding_bottom = 24u;
-    layout.main_gap = 12u;
+    AstraFlexLayout layout = ASTRA_SETTINGS_PANE_LAYOUT_INIT;
     return astra_interface_ui_layout(&ui, &layout) == ASTRA_OK ?
            ASTRA_STATUS_OK : FONTS_FAIL_CONTROL;
 }
@@ -520,7 +519,7 @@ static uint32_t update_preview(void)
 
 static uint32_t build_controls(void)
 {
-    AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
+    AstraSettingsPaneInfo pane = ASTRA_SETTINGS_PANE_INFO_INIT;
     AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
     AstraChoiceInfo list = ASTRA_CHOICE_INFO_INIT;
     AstraButtonInfo back = ASTRA_BUTTON_INFO_INIT;
@@ -545,16 +544,12 @@ static uint32_t build_controls(void)
                         ASTRA_INSTALLED_FONT_SELECTABLE) != 0u;
     }
 
-    label.id = FONTS_TITLE;
-    label.text = showing_import ? "Import font" : browsing ? browser_path : title == NULL ? "Fonts" :
+    pane.first_id = FONTS_TITLE;
+    pane.title = showing_import ? "Import font" : browsing ? browser_path : title == NULL ? "Fonts" :
                  title->text;
-    label.text_length = showing_import ? sizeof("Import font") - 1u :
+    pane.title_length = showing_import ? sizeof("Import font") - 1u :
         browsing ? (uint32_t)strlen(browser_path) : title == NULL ? 5u : title->text_length;
-    label.text_role = ASTRA_TEXT_CLIENT_PRIMARY;
-    if (astra_interface_label_init(CONTROL(FONTS_TITLE), &label) != ASTRA_OK)
-        return FONTS_FAIL_CONTROL;
-    label.id = FONTS_HINT;
-    label.text = message != NULL ? message : showing_information ?
+    pane.description = message != NULL ? message : showing_information ?
                  "Source and license information · Select text and copy with Meta+C" : confirm_uninstall ?
                  "Remove this imported style and all its sizes? Source file remains." : browsing ?
                  "Open a folder or select a font file to import" :
@@ -564,9 +559,8 @@ static uint32_t build_controls(void)
                  system_ready ?
                  "Select a style, then use it for system text" :
                  system_font_requirements;
-    label.text_length = (uint32_t)strlen(label.text);
-    label.text_role = ASTRA_TEXT_CLIENT_SECONDARY;
-    if (astra_interface_label_init(CONTROL(FONTS_HINT), &label) != ASTRA_OK)
+    pane.description_length = (uint32_t)strlen(pane.description);
+    if (astra_interface_settings_pane_init(controls, &pane) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     {
         AstraLabelInfo preview = ASTRA_LABEL_INFO_INIT;
@@ -658,9 +652,8 @@ static uint32_t build_controls(void)
     if (astra_interface_button_init(CONTROL(FONTS_INFORMATION), &information) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
 
-    if (astra_interface_control_set_flex(CONTROL(FONTS_TITLE), &item) != ASTRA_OK ||
-        astra_interface_control_set_flex(CONTROL(FONTS_HINT), &item) != ASTRA_OK ||
-        astra_interface_control_set_flex(CONTROL(FONTS_PREVIEW), &item) != ASTRA_OK)
+    item.parent_id = FONTS_BODY;
+    if (astra_interface_control_set_flex(CONTROL(FONTS_PREVIEW), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     item.grow = 1u;
     item.minimum_height = view.preferred_height;
@@ -672,10 +665,12 @@ static uint32_t build_controls(void)
     if (astra_interface_control_set_flex(CONTROL(FONTS_LIST), &item) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = FONTS_BODY;
     item.minimum_width = view.preferred_width;
     if (astra_interface_control_set_flex(CONTROL(FONTS_PROGRESS), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = FONTS_ACTIONS;
     if (astra_interface_control_set_flex(CONTROL(FONTS_BACK), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     if (astra_interface_control_set_flex(CONTROL(FONTS_USE), &item) != ASTRA_OK)
@@ -903,6 +898,7 @@ static uint32_t action(const AstraUIAction *event)
             message = NULL;
         } else {
             document_dispose(&document);
+            (void)astra_log_failure("fonts UI information", (uint32_t)result);
             message = result == ASTRA_ERROR_OUT_OF_MEMORY ?
                 "Not enough memory to show font information" :
                 "Could not read font information; font management remains available";
@@ -1218,5 +1214,6 @@ int astra_main(const AstraStartupInfo *startup)
     astra_runtime_deallocate(details);
     document_dispose(&information_document);
     astra_process_filesystem_close(&files);
+    if (status != ASTRA_STATUS_OK) (void)astra_log_failure("fonts UI exit", status);
     return (int)status;
 }

@@ -83,6 +83,27 @@ the DE25 without weakening the existing frame or layout budgets.
   depends on it.
 - No benchmark result from the Mac or Beast substitutes for a DE25 result.
 
+## Shared settings composition
+
+Interface Kit 7.2 introduces a settings pane shell composed exclusively from
+existing Label and Container controls. Fonts supplies content and actions as
+ordinary children. The public composition centralizes spacing, the growing
+body and stacked actions; normal retained layout, focus, input and hardware
+drawing remain the existing implementation. `ndk/examples/settings_pane.c`
+documents a second consumer without adding a second settings backend.
+
+Read-only Haiku review: `src/preferences/appearance/AppearanceWindow.cpp`
+composes shared views and action buttons using BLayoutBuilder; `FontView.cpp`
+composes common font-selection views with standard window spacing. Astra
+adopts composition and shared spacing, using caller-owned controls and typed
+service operations. It keeps system face/weight separate from fixed role sizes.
+Host tests, sanitizer checks, analyzers, MC68040 library/export checks and NDK
+header/documentation gates pass in
+`/var/tmp/astra-settings-pane-checks-20261018.log`. DE25 qualification remains
+in progress. Fonts' four native shared-shell cases pass in
+`/var/tmp/astra-settings-pane-{iosevka,long-notice,unsupported,long-style}-native-20261018.log`,
+including repeated information views, live font adoption, restart and removal.
+
 ## Shared transient menus
 
 Interface 5.4 owns one `AstraMenu` model and painter for compositor-owned

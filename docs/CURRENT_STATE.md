@@ -2,6 +2,91 @@
 
 Status: active continuation map, 2026-10-18
 
+Post-trial observation found one automatic restart of selected production
+`57078599`: its October 16 ROM panicked during the first restoration boot at
+20:08:38 UTC, before the warm HDMI capture. Reason is `deferred worker service
+failed`; the old ROM has no branch-level worker diagnostic. Original report
+and journal are retained on Beast under
+`/var/tmp/astra-font-import-evidence-20261018/production-restart/`; report
+SHA-256 is `42be9e55fa8ef8ff15cdbfd05f84b0c9966a7988ec7894f4431f87d83950c576`.
+The private font candidate did not panic. Production is active with runtime
+NRestarts=1, other two services zero; selector and test-time stopped storage
+identity remain unchanged. Cleanup refused its zero-restart guard and deleted
+nothing. The first restoration check below was an immediate snapshot, not a
+boot-settled stability result. Future trial restoration must wait for stage 8
+and check the final restart count before reporting success.
+
+The fixed kernel's earlier 24-hour Beast soak has now completed successfully:
+`ASTRA PANIC SOAK PASS seconds=86400 remote-failures=8613` in
+`/var/tmp/astra-panic-fixed-24h.log`; user-unit Result=success, ExecMainStatus=0.
+Current kernel implementation is still the `5730bb4b` reaper fix and diagnostic
+checkpoint. The old production panic lacks enough evidence to tie it to that
+reaper defect. Preserve the report and qualify the final candidate; do not
+claim that historical cause is established or that old production is stable.
+
+Interface Kit 7.2 now supplies Fonts' shared Settings shell: two existing
+Labels and two Containers, common spacing, growing content and stacked
+actions. Ordinary controls retain layout, focus, input and hardware drawing.
+There is no new painter, event loop or settings backend. Focused Interface/
+Fonts tests, sanitizers, analyzers, MC68040 library/export checks and NDK
+header/documentation checks pass in
+`/var/tmp/astra-settings-pane-checks-20261018.log`. Coherent userspace passes in
+`/var/tmp/astra-settings-pane-coherent-sdk-20261018.log`; the corrected packaged
+SDK, standalone links and every installed example pass in
+`/var/tmp/astra-settings-pane-sdk-final-20261018.log`. Final exact-release
+DE25 gates remain in progress. The first native UI run used
+Beast's older installed converter 0.2: UI/cancellation/three information cycles
+and live choice passed, then the required 0.3 provenance check rejected it.
+Retry explicitly selects the current built 0.3 worker; DE25 release packaging
+already uses that version. The captured first-run output is retained as a
+transcription in `/var/tmp/astra-settings-pane-old-worker-failure.txt`; the
+original per-case filename was reused by the retry. No product fallback.
+
+With the current worker, all four native shared-shell cases pass in
+`/var/tmp/astra-settings-pane-{iosevka,long-notice,unsupported,long-style}-native-20261018.log`:
+cancel/retirement/retry, family/style/size preview, three consecutive
+information/scroll/select/copy/Back cycles, live Desktop/Fonts choice,
+persisted restart, built-in restoration and removal. The Iosevka case verifies
+its original source hash and all six complete embedded notices. The shared
+shell's software gates pass; exact final DE25 qualification remains open.
+
+The import-session candidate below passes both paced and original-burst
+information workflows after restart, then a fresh four-boot DE25 cycle:
+cancellation/retirement/empty inventory, Iosevka import/information/copy/live
+choice, persisted restart/built-in restoration/uninstall, and the long-notice
+Text View/copy/removal case. Log:
+`/var/tmp/astra-font-import-physical-cycle2-20261018.log`; complete evidence is
+checksum-verified on Beast under
+`/var/tmp/astra-font-import-evidence-20261018/cycle2/`. Production storage
+before/after SHA-256 remains
+`a5726fa33cc14faf0f7ff12879d1b674349f87aa83287c77cf24108a932aac14`;
+selector stays `57078599`, all three services active, zero automatic restarts.
+Warm production matches known-good HDMI SHA-256
+`37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`,
+25 glyph commands and 49/49 submissions/completions; verified evidence is in
+`warm-production/` under the same Beast root. The initial timeout is not
+reproduced and has no established root cause. Keep its failure evidence and
+retain failure capture plus repeated information workflows in final gates.
+
+Font import session source `a30a8d2dc8a95da33ea3f38dfeae71c4c2f0dce1`
+clean-builds as private release
+`f59511300027b5f546e49fbfcd513c334265e65cf1e501b074f614026ee9e96f`.
+The first DE25 attempt passes import progress, cancellation, converter
+retirement, empty-store checks, Iosevka import and independent-size preview.
+Opening source/license information then times out; no panic is recorded.
+This is an unresolved physical gate, not release acceptance. The trial log is
+`/var/tmp/astra-font-import-physical-cycle1-20261018.log`; failed storage,
+logs, trace and HDMI frames are retained on Beast under
+`/var/tmp/astra-font-import-evidence-20261018/attempt1/`.
+Production selector remains `57078599`; stopped production storage before
+and after remains SHA-256
+`fa74893ab2579a0f3bab7de83c68b7e7d729e735422f080575a0b12b08b440b4`.
+All three production services restore active with zero automatic restarts.
+A separate disposable harness predicate falsely rejected blank separators in
+systemctl output; it now checks each of the three recorded service states.
+Information-pane diagnosis, shared Settings shell and overall release gates
+remain open. Candidate is not activated.
+
 Native import sessions are integrated coherently as Font Kit 5.0 / FONTS
 protocol 8. The blocking import API is removed from all in-tree callers and
 exports. Session capabilities expose state, staged-face progress, cancellation,

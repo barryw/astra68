@@ -26,6 +26,7 @@ interface_tabs_LIBS := $(STREAMS) $(INTERFACE)
 interface_scroll_LIBS := $(STREAMS) $(INTERFACE)
 interface_splitter_LIBS := $(STREAMS) $(INTERFACE)
 interface_disclosure_LIBS := $(STREAMS) $(INTERFACE)
+settings_pane_LIBS := $(STREAMS) $(INTERFACE)
 pcm_tone_LIBS := $(STREAMS) $(PCM)
 midi_notes_LIBS := $(STREAMS) $(PCM)
 

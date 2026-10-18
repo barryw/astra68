@@ -130,6 +130,7 @@ amiga-probe: all build/FontAmigaProbe.app/manifest \
 	../../../../tools/build/astra-bundle check build/FontAmigaProbe.app
 
 UI_HOST_SOURCES := tests/test_layout.c ../../interface/src/control.c \
+	../../interface/src/settings_pane.c \
 	../../interface/src/text_model.c ../../interface/src/text_surface.c ../../interface/src/scroll.c \
 	../../graphics/src/surface.c ../../graphics/src/font_data.c \
 	../../graphics/src/render_builder.c \

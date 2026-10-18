@@ -332,7 +332,8 @@ def main():
                                        (choice, inventory))
                 print("ASTRA FONTS UI PASS unsupported preview, family detail, uninstall")
                 return 0
-            information_pane(machine)
+            for _ in range(3):
+                information_pane(machine)
             # Selection must preserve List focus before tabbing to Back/Use.
             for key in ("tab", "tab"):
                 machine.qmp.key(key)

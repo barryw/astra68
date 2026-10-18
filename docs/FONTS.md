@@ -47,8 +47,18 @@ choice, persisted restart, restoration and uninstall. Source browser selection
 and viewport survive cancellation. Evidence is
 `/var/tmp/astra-font-import-ports-ui-native-20261018.log`; sibling cancel,
 concurrent, collection, rollback and AFNT logs retain the native service gates.
-This is not DE25 release acceptance. Shared Settings shell and overall release
-qualification remain open.
+This is not DE25 release acceptance. Interface Kit 7.2 now supplies Fonts'
+shared Settings shell from existing Labels and Containers. Host, sanitizer,
+analyzer, target library/export and NDK header/documentation gates pass in
+`/var/tmp/astra-settings-pane-checks-20261018.log`. Coherent userspace and the
+corrected packaged SDK, standalone links and every installed example also pass
+in `/var/tmp/astra-settings-pane-coherent-sdk-20261018.log` and
+`/var/tmp/astra-settings-pane-sdk-final-20261018.log`. Overall release
+qualification remains open. All four native shared-shell cases now pass
+in `/var/tmp/astra-settings-pane-{iosevka,long-notice,unsupported,long-style}-native-20261018.log`.
+These cover cancellation/retry, three consecutive information/scroll/copy/Back
+cycles, live system choice, persisted restart, restoration and removal. The
+Iosevka source hash and six complete embedded notices are verified.
 
 The packaged NDK validates the new major, archive contents, standalone links and
 all installed examples in `/var/tmp/astra-font-import-ports-sdk-20261018.log`.

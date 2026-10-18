@@ -1,5 +1,107 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-18: old production panics during restoration; candidate stays clean
+
+- After the fresh font-session cycle below, selected production `57078599`
+  starts at 20:08:01 UTC, reaches guest boot and panics at 20:08:38 with
+  `deferred worker service failed`. Automatic restart begins at 20:08:40.
+  Its October 16 ROM SHA-256 is
+  `b28cc515d4fc9c25bb79001a84f0a6169b8c3b8b765d98515b283d4e841b599d`,
+  hardware identity `0x18EBE2E1`; its kernel predates worker branch diagnostics
+  and the `5730bb4b` reaper fix. Report/journal are retained on Beast under
+  `/var/tmp/astra-font-import-evidence-20261018/production-restart/`; report
+  SHA-256 `42be9e55fa8ef8ff15cdbfd05f84b0c9966a7988ec7894f4431f87d83950c576`.
+- Trial's immediate service-state snapshot was active/zero, before guest
+  startup completed. Runtime is now active with NRestarts=1, other services
+  zero. Warm HDMI capture belongs to the second boot and still matches the
+  known-good frame below. No private candidate panic occurred. Cleanup guard
+  refused and removed nothing. Restoration acceptance must include settled
+  guest stage 8 and final restart accounting, not systemd ActiveState alone.
+- Current fixed kernel's earlier Beast QEMU soak completed: 86,400 seconds,
+  8,613 remote-service failures, no panic, unit Result=success/ExecMainStatus=0;
+  `/var/tmp/astra-panic-fixed-24h.log`. Current kernel implementation remains
+  the reaper/diagnostic checkpoint; the old report cannot establish which
+  internal worker class failed or prove that reaper defect caused this panic.
+- Same RBF `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`,
+  prior Beast Quartus Pro 26.1.1 Build 130 full route, 40,754/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376 DSPs; all clocks
+  constrained, graphics setup +0.259 ns, worst setup +0.007 ns, worst hold
+  +0.000 ns. No RTL, route, fabric or kernel selection change; no new timing
+  measurement or failing cone. Disposition: final Fonts release and settled
+  restoration/stability gates remain open; production selector is unchanged.
+
+## 2026-10-18: import sessions pass a fresh four-boot DE25 cycle
+
+- Same source `a30a8d2dc8a95da33ea3f38dfeae71c4c2f0dce1`, private release
+  `f59511300027b5f546e49fbfcd513c334265e65cf1e501b074f614026ee9e96f`,
+  ROM `b7785dc7451fa10406bc245ff6e8b29de91b0869beb64634f0daa13b8e9ff259`,
+  source manifest `a5185341860de4cea602d7ad2023077adaa3111c7d47e41a9611bfba7d471821`.
+  On retained failed storage, both separately paced and original-burst
+  information/copy/Back workflows pass after restart. Complete diagnostic
+  evidence is checksum-verified under `info-paced/` and `info-burst/` in
+  `/var/tmp/astra-font-import-evidence-20261018/` on Beast. The initial timeout
+  below is not reproduced; no root cause is established.
+- Fresh generated trial storage then passes four DE25 boots in
+  `/var/tmp/astra-font-import-physical-cycle2-20261018.log`: cancellation,
+  converter retirement and empty store; real Iosevka import, information,
+  scrolling/copy, independent preview sizes and live system choice; saved
+  restart, built-in restoration and uninstall; long-license information,
+  scrolling/copy/Back and removal. Each boot passes malformed retained-frame
+  refusal/repair with exactly one finite probe launch. No panic or retained
+  provider remains. Full evidence is checksum-verified under `cycle2/`.
+- Actual HDMI captures are 6,220,800 RGB bytes each. Iosevka choice has 493
+  glyph commands, 147/147 submissions/completions; long-notice copied has 306,
+  129/129; removed has 348, 135/135. Production storage before/after SHA-256
+  remains `a5726fa33cc14faf0f7ff12879d1b674349f87aa83287c77cf24108a932aac14`.
+  Selector stays `57078599`; all three production services restore active
+  with zero automatic restarts. Warm production matches known-good HDMI
+  SHA-256 `37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`,
+  25 glyph commands and 49/49 submissions/completions. Verified evidence is
+  under `warm-production/` in the same Beast root.
+- Same RBF `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`
+  and prior Beast Quartus Pro 26.1.1 Build 130 full-feature route: 40,754/46,800
+  ALMs, 3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376 DSPs. All clocks
+  constrained; graphics setup +0.259 ns, worst setup +0.007 ns, worst hold
+  +0.000 ns. No RTL, constraints, route, fabric or kernel selection change;
+  no new timing measurement or failing cone. Disposition: this session
+  candidate passes the fresh cycle; final shared Settings shell release and
+  repeated information qualification remain open. No production activation.
+
+## 2026-10-18: native import sessions, first DE25 attempt incomplete
+
+- Beast clean-built source `a30a8d2dc8a95da33ea3f38dfeae71c4c2f0dce1`;
+  private release `f59511300027b5f546e49fbfcd513c334265e65cf1e501b074f614026ee9e96f`,
+  ROM `b7785dc7451fa10406bc245ff6e8b29de91b0869beb64634f0daa13b8e9ff259`,
+  source manifest `a5185341860de4cea602d7ad2023077adaa3111c7d47e41a9611bfba7d471821`.
+  Both revision headers match. Publisher passes in
+  `/var/tmp/astra-font-import-release-20261018.log`; software/session, native
+  UI and packaged NDK gates pass as recorded in CURRENT_STATE.
+- Private DE25 cancellation passes progress, cancellation, converter
+  retirement and empty-store verification. HDMI captures contain 6,220,800
+  RGB bytes each; cancelling has 259 glyph commands and 128/128 display
+  submissions/completions; cancelled has 278 and 130/130. Next boot imports
+  Iosevka and renders its independent preview: 284 glyph commands, 129/129.
+  The source/license information step then times out without a recorded
+  panic. Root cause remains under investigation. Trial log:
+  `/var/tmp/astra-font-import-physical-cycle1-20261018.log`; retained failed
+  storage, trace, logs and captures:
+  `/var/tmp/astra-font-import-evidence-20261018/attempt1/` on Beast.
+- Production storage before/after SHA-256 remains
+  `fa74893ab2579a0f3bab7de83c68b7e7d729e735422f080575a0b12b08b440b4`;
+  selector remains `57078599`. All three runtime/audio/remote services
+  restore active with zero automatic restarts. A separate disposable
+  harness health predicate misread systemctl's blank separators; the next
+  diagnostic uses explicit three-service state/restart accounting.
+- Same installed RBF
+  `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`;
+  previously qualified Beast Quartus Pro 26.1.1 Build 130 route, 40,754/46,800
+  ALMs, 3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376 DSPs. All
+  production clocks constrained; graphics setup +0.259 ns, worst setup
+  +0.007 ns, worst hold +0.000 ns. No RTL, constraints, route, fabric or
+  kernel selection change; no new timing measurement or failing cone.
+  Disposition: cancellation/import/preview pass this attempt; information
+  and remaining release gates remain open. No production activation.
+
 ## 2026-10-18: native font information passes corrected DE25 qualification
 
 - Beast clean-built source `f4fb7263bea50dea60ec620c99774c3830e8842f`;
