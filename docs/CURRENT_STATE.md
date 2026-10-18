@@ -2,6 +2,59 @@
 
 Status: active continuation map, 2026-10-18
 
+Font information source `f4fb7263bea50dea60ec620c99774c3830e8842f` clean-builds
+as private release
+`ecd9020a954d0b9f7d5ca935f5c109f30b74c73ae6408922555078a55d941b83`, ROM
+`47adcafd98486fffbb4e508e0182f1a1ea43801620629a13df302b2229a09c30`, source
+manifest `daa9045b1a61b5998cdcf455093901054c5cbf7ced853133de6e44ad536b7fc4`.
+Both revision headers match. Publisher passes in
+`/var/tmp/astra-font-information-release-20261018b.log`; the first attempt
+stopped on the mirror's missing default FluidSynth path. The retry explicitly
+uses the existing pinned `FLUIDSYNTH_ROOT=/home/barry/Git/fluidsynth` checkout.
+
+The first complete DE25 cycle passes three boots: native malformed
+geometry/header/opcode refusal and repair on every boot; Iosevka import,
+source/license scrolling and copy, live selection, persisted restart,
+built-in restoration and uninstall; then the formerly panicking long-license
+information/copy/Back/removal workflow. Inspected HDMI frames show clipped
+text/selection, original-source hash, readable license URL, explicit raw-byte
+fallback and visible Back action. Complete trial evidence is checksum-verified
+on Beast under `/var/tmp/astra-font-information-evidence-20261018/cycle1/`;
+trial log is `/var/tmp/astra-font-information-physical-cycle1-20261018.log`.
+Stopped production storage remains byte-identical, SHA-256
+`1cb708822a46a1e84e80aad8a0a44c665004d00ef60948a2cac649f78882bbd2`.
+Production selector stays `57078599`; runtime/audio/remote services restore
+active with zero automatic restarts. A second fresh-storage cycle also passes,
+with stopped production SHA-256
+`d15f2e21ce25036772f63d813690afe7f9253c85d83ebda564ca5017b2c5036a`.
+Its evidence and warm-production capture are checksum-verified under `cycle2/`
+and `warm-production/` in the same Beast root. Restored production matches
+known-good HDMI SHA-256
+`37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`,
+25 glyph commands and 49/49 submissions/completions.
+
+Fourteen of fifteen corresponding candidate HDMI frames are byte-identical.
+The remaining frame shows a new frame-probe window: the disposable harness
+incorrectly marked this successful finite probe `required`, which correctly
+makes Supervisor restart it forever. Archived syslog confirms repeated new
+probe PIDs and successful launches, not resurrection of a closed window.
+The test now uses existing `restart=never` policy and checks exactly one launch;
+the native gate passes in
+`/var/tmp/astra-font-frame-refusal-one-shot-native-20261018.log`. The physical
+harness isolates and retains each boot's syslog. Corrected qualification passes
+all three boots, with exactly one probe launch per boot, in
+`/var/tmp/astra-font-information-physical-one-shot-20261018.log`.
+All fifteen HDMI frames are byte-identical to the clean second-cycle frames.
+Corrected trial and final warm-production evidence are checksum-verified under
+`one-shot/` and `warm-one-shot-production/` in the same Beast root. Stopped
+production storage SHA-256 remains
+`4b8810950b8c5a0237dd70e554ba7e6cf6784f7f46f0e4fc3375260886299906`;
+warm production again matches its known-good HDMI frame, with active services
+and zero automatic restarts. No Display teardown change is warranted by this
+observation. Source/license information and rejected-frame correctness gates
+pass. Candidate is not activated; broader
+Fonts Settings shell/import workflow and release acceptance remain open.
+
 Font information integration is implemented: Font Kit 4.2, FONTS protocol 7,
 read-only NAME-only snapshots, shared counted JSON validation and Fonts' native
 Source and license Text View with selection/copy/Back. Coherent userspace/ROM
@@ -38,8 +91,10 @@ frame; Display refusal, recovery and Fonts readiness pass in
 `/var/tmp/astra-font-frame-refusal-native-20261018.log`. Unsupported-preview and
 long-style native gates pass in
 `/var/tmp/astra-font-information-{unsupported-preview,long-style}-final-20261018.log`.
-Final integrated DE25/release gates remain the active blocker. No release
-certification is claimed. Production remains `57078599`, with user data and
+Font-information component gates now pass, including corrected one-shot DE25
+qualification above. Remaining Settings shell, responsive import/progress/
+cancellation and overall Fonts release acceptance are the active work. No
+overall release certification is claimed. Production remains `57078599`, with user data and
 board selector unchanged.
 
 Font-information groundwork passes its software gates. Interface Kit 7.1 adds
@@ -69,8 +124,8 @@ Plane ASTRA-56/57 track these components. Native qualification also exposed
 separate Terminal paste and native/POSIX stdout-redirection defects, retained
 as ASTRA-58/59 with original failure logs. Font Kit metadata query and Fonts
 information pane are implemented under ASTRA-36; ASTRA-60 tracks the Display
-panic and rejected-frame containment. Final integrated DE25
-qualification and release acceptance remain open. Production stays
+panic and rejected-frame containment. Overall Fonts qualification and release
+acceptance remain open. Production stays
 `57078599`, untouched. No candidate activation or user-data replacement.
 
 Corrected preview source `616129a2de9e9d9aebffcb90aeeea4e9a80e18c4`

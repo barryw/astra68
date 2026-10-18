@@ -43,7 +43,7 @@ def main():
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             astra_image._replace_volume_file(image, str(owner / "build/m68k/frame-probe.elf"),
                                              "/services/display-frame-probe")
-            probe = "service /services/display-frame-probe grants GUI LIBS:r required\n"
+            probe = "service /services/display-frame-probe grants GUI LIBS:r restart=never\n"
         # Make readiness include Fonts' catalog, controls, surface, and window.
         startup = Path(work) / "startup"
         startup.write_text(astra_image.DISPLAY_STARTUP_MANIFEST + probe +
@@ -90,6 +90,17 @@ def main():
                 if not any("launch /services/display-frame-probe" in line and
                            "status=0" in line for line in lines):
                     raise RuntimeError("native retained-frame refusal/recovery did not pass")
+                launches = []
+                end = time.monotonic() + 20
+                while time.monotonic() < end:
+                    launches = [line for line in machine.syslog_lines()
+                                if "launch /services/display-frame-probe" in line and
+                                "status=0" in line]
+                    if launches:
+                        break
+                    time.sleep(.05)
+                if len(launches) != 1:
+                    raise RuntimeError("one-shot frame probe launch count: %u" % len(launches))
                 print("ASTRA DISPLAY FRAME REFUSAL PASS native malformed geometry/header/opcode, repaired frames")
             print("ASTRA FONTS GUI PASS native autostart, hardware text")
         finally:

@@ -1,5 +1,71 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-18: native font information passes corrected DE25 qualification
+
+- Beast clean-built source `f4fb7263bea50dea60ec620c99774c3830e8842f`;
+  private release `ecd9020a954d0b9f7d5ca935f5c109f30b74c73ae6408922555078a55d941b83`,
+  ROM `47adcafd98486fffbb4e508e0182f1a1ea43801620629a13df302b2229a09c30`,
+  source manifest `daa9045b1a61b5998cdcf455093901054c5cbf7ced853133de6e44ad536b7fc4`.
+  Both revision headers identify that commit. Publisher passes in
+  `/var/tmp/astra-font-information-release-20261018b.log` after explicitly
+  selecting the existing pinned FluidSynth checkout. Native software gates,
+  coherent userspace/ROM and packaged NDK checks pass.
+- Three DE25 boots pass native malformed retained-frame geometry/header/opcode
+  refusal and valid repair. Iosevka import, source/license selection/copy/Back,
+  live choice, persisted restart, built-in restoration and removal pass. The
+  long-license document that previously panicked Display now opens, scrolls,
+  selects, copies and uninstalls without a panic or retained provider.
+- Actual 1920x1080 HDMI DMA captures contain 6,220,800 RGB bytes each. Iosevka
+  information top: 351 glyph commands, 198/198 submissions/completions;
+  copied: 411, 204/204. Long-license copied: 418, 226/226; removed: 460,
+  232/232. Inspected frames confirm clipped text/selection, complete visible
+  source/hash, readable license URL, explicit original-byte fallback and Back
+  inside the window. Evidence is checksum-verified on Beast under
+  `/var/tmp/astra-font-information-evidence-20261018/cycle1/`; trial log is
+  `/var/tmp/astra-font-information-physical-cycle1-20261018.log`.
+- Stopped production image before/after SHA-256 stays
+  `1cb708822a46a1e84e80aad8a0a44c665004d00ef60948a2cac649f78882bbd2`.
+  Selector remains `57078599`; runtime/audio/remote services restore active
+  with zero automatic restarts. Second fresh-storage cycle also passes;
+  stopped production SHA-256 is
+  `d15f2e21ce25036772f63d813690afe7f9253c85d83ebda564ca5017b2c5036a`.
+  Its complete evidence is checksum-verified under `cycle2/` in the same root.
+  Warm production again matches known-good HDMI SHA-256
+  `37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`,
+  25 glyph commands, 49/49 submissions/completions; verified evidence is under
+  `warm-production/`.
+- Fourteen of fifteen corresponding candidate HDMI captures are identical.
+  One restoration frame includes a freshly restarted test-probe window.
+  The harness incorrectly declared that successful finite probe `required`;
+  Supervisor correctly restarts this service tier. Archived syslog records
+  repeated new PIDs and successful launches. No closed-window resurrection or
+  Display teardown defect is established. Harness now uses `restart=never`
+  and asserts exactly one launch against isolated per-boot syslogs. Corrected
+  native software gate passes in
+  `/var/tmp/astra-font-frame-refusal-one-shot-native-20261018.log`.
+- Corrected one-shot three-boot cycle passes in
+  `/var/tmp/astra-font-information-physical-one-shot-20261018.log`, exactly one
+  probe launch per boot. All fifteen corresponding HDMI frames are identical
+  to the clean second-cycle captures. Full evidence is checksum-verified under
+  `one-shot/` in the same Beast root; final restored-production evidence is
+  verified under `warm-one-shot-production/`. Long-license copied: 393 glyph
+  commands, 140/140 submissions/completions; removed: 445, 147/147. Stopped
+  production storage before/after SHA-256 remains
+  `4b8810950b8c5a0237dd70e554ba7e6cf6784f7f46f0e4fc3375260886299906`.
+  Warm production again matches the known-good HDMI frame above, 25 glyph
+  commands and 49/49 submissions/completions. Services are active with zero
+  automatic restarts; selector remains `57078599`. Candidate is not activated.
+- Same installed RBF
+  `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`;
+  previously qualified Beast Quartus Pro 26.1.1 Build 130 route, 40,754/46,800
+  ALMs, 3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376 DSPs. All
+  production clocks constrained; graphics setup +0.259 ns, worst setup +0.007
+  ns, worst hold +0.000 ns. No RTL, constraints, route, fabric or kernel
+  selection change; no new timing measurement or failing cone. Disposition:
+  font information, viewport clipping and refused-frame recovery component
+  gates pass with the corrected one-shot harness. Remaining Fonts Settings
+  shell/import workflow and overall release acceptance remain open.
+
 ## 2026-10-18: corrected shared Label passes repeated physical qualification
 
 - Beast clean-built source `616129a2de9e9d9aebffcb90aeeea4e9a80e18c4`;

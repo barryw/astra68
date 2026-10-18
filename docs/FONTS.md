@@ -12,6 +12,30 @@ must not draw bitmap glyphs with CPU pixel loops.
 
 ### Active font-information work (2026-10-18)
 
+Source `f4fb7263bea50dea60ec620c99774c3830e8842f` clean-builds as private
+release `ecd9020a954d0b9f7d5ca935f5c109f30b74c73ae6408922555078a55d941b83`.
+Its first full DE25 cycle passes native malformed-frame refusal and repair on
+three boots, Iosevka import/information/copy/live selection/saved restart/
+restoration/uninstall, and the previously panicking long-license workflow.
+Actual HDMI inspection confirms viewport clipping, selection, source/hash,
+license URL, original-byte fallback and reachable Back action. Evidence is
+checksum-verified on Beast under
+`/var/tmp/astra-font-information-evidence-20261018/cycle1/`. Production selector
+and stopped storage bytes remain unchanged; all services restore active with
+zero restarts. A second full functional cycle also passes, and restored
+production HDMI exactly matches its known-good frame. Fourteen of fifteen
+candidate captures match across cycles. The differing frame contains another
+test-probe instance: `required` correctly restarts that finite probe, so the
+harness now selects existing `restart=never` policy and checks one launch per
+boot. Corrected one-shot qualification passes all three boots, and all fifteen
+HDMI frames match the clean second-cycle frames exactly. Corrected evidence is
+checksum-verified under `one-shot/` and `warm-one-shot-production/` in the same
+Beast root. Final production storage remains byte-identical; warm HDMI again
+matches its known-good frame, with services active and zero automatic restarts.
+No Display teardown change is indicated. This component passes its correctness
+gates; the candidate is not activated and broader Fonts workflow/release work
+remains open.
+
 Font Kit 4.2 adds owned immutable information snapshots through FONTS protocol
 7. The service reuses installed-face lookup, AFNT validation and user-object
 content-identity verification, but copies only NAME metadata into an exactly
@@ -46,8 +70,9 @@ committed content banks. A malformed retained client list now follows existing
 frame refusal rather than terminating Display; its previous content stays
 visible and other windows continue. Native malformed geometry/header/opcode
 refusal and repair pass, as does the formerly panicking long-license workflow.
-Batch-resource refusal also covers RGB content; focused tests, sanitizers and
-analyzers pass. Final DE25 release gates remain open (Plane ASTRA-60).
+Batch-resource refusal also covers RGB content; focused tests, sanitizers,
+analyzers and corrected DE25 component gates pass (Plane ASTRA-60). Overall
+Fonts release acceptance remains open.
 
 Fonts' Source and license action switches the existing ScrollView's single
 content slot from List to shared Text View. Back preserves the selected style;
@@ -57,7 +82,8 @@ no independent text, layout or rendering implementation. Allocation or metadata
 failure leaves font management available. Coherent userspace/ROM, packaged NDK
 and native Iosevka information/copy/select/restart/uninstall checks pass for
 this checkpoint. Native long-text, long-style and unavailable-preview gates also
-pass. Final DE25 release qualification remains open;
+pass. Corrected DE25 component qualification also passes; overall Fonts release
+acceptance remains open;
 production remains unchanged.
 
 The Fonts pane uses shared multiline text.
