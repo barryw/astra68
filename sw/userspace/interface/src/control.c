@@ -2,6 +2,7 @@
 
 #include <astra/bytes.h>
 #include <astra/draw_list.h>
+#include <astra/fonts.h>
 #include <astra/input.h>
 #include <astra/input_modifiers.h>
 #include <astra/surface.h>
@@ -768,6 +769,17 @@ static uint32_t next_focus(const AstraUIContext *context, int backwards)
     return CONTROL_NONE;
 }
 
+static int label_font_valid(const AstraLabelFont *font)
+{
+    if (font == NULL || font->size < sizeof(*font) || font->reserved16 != 0u ||
+        !astra_words_zero(font->reserved, 2u)) return 0;
+    if (font->gui == ASTRA_INVALID_HANDLE)
+        return font->id == NULL && font->id_length == 0u && font->pixel_height == 0u;
+    return font->id != NULL && font->id_length != 0u &&
+        font->id_length < ASTRA_FONT_ID_MAX && font->pixel_height != 0u &&
+        memchr(font->id, '\0', font->id_length) == NULL;
+}
+
 AstraResult astra_interface_label_init(AstraControl *control,
                                        const AstraLabelInfo *info)
 {
@@ -778,7 +790,7 @@ AstraResult astra_interface_label_init(AstraControl *control,
         info->text_role > ASTRA_TEXT_CLIENT_FAULT ||
         (info->state & ~(ASTRA_CONTROL_DISABLED |
                          ASTRA_CONTROL_COLLAPSED)) != 0u ||
-        !astra_words_zero(info->reserved, 3u))
+        !astra_words_zero(info->reserved, 3u) || !label_font_valid(&info->font))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *control = (AstraControl)ASTRA_CONTROL_INIT;
     control->_private_control_kind = ASTRA_CONTROL_LABEL;
@@ -787,6 +799,7 @@ AstraResult astra_interface_label_init(AstraControl *control,
     control->_private_style = info->text_role;
     control->_private_text = info->text;
     control->_private_text_length = info->text_length;
+    control->_private_label_font = info->font;
     return ASTRA_OK;
 }
 
@@ -1195,35 +1208,23 @@ AstraResult astra_interface_control_set_flex(AstraControl *control,
     return ASTRA_OK;
 }
 
-AstraResult astra_interface_control_set_text(AstraUIContext *context,
-                                             AstraControl *control,
-                                             const char *text,
-                                             uint32_t text_length)
+static AstraResult replace_measured_control(AstraUIContext *context,
+    AstraControl *control, const AstraControl *replacement)
 {
     uint32_t index = control_index(context, control);
     AstraControl before;
-    AstraControl measured;
     AstraControlSize size;
     AstraResult result;
 
-    if (index == CONTROL_NONE || text_length == 0u ||
-        !astra_utf8_validate(text, text_length, 0u) ||
-        (control->_private_control_kind != ASTRA_CONTROL_LABEL &&
-         control->_private_control_kind != ASTRA_CONTROL_BUTTON &&
-         control->_private_control_kind != ASTRA_CONTROL_DISCLOSURE &&
-         !TOGGLE_KINDS(control->_private_control_kind)))
+    if (index == CONTROL_NONE)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     before = *control;
-    measured = before;
-    measured._private_text = text;
-    measured._private_text_length = text_length;
-    result = measure_control(&measured, &size);
+    result = measure_control(replacement, &size);
     if (result != ASTRA_OK)
         return result;
 
     control_damage(context, index);
-    control->_private_text = text;
-    control->_private_text_length = text_length;
+    *control = *replacement;
     control->_private_measured_width = size.width;
     control->_private_measured_height = size.height;
     if ((size.width != before._private_measured_width ||
@@ -1241,6 +1242,35 @@ AstraResult astra_interface_control_set_text(AstraUIContext *context,
         control_damage(context, index);
     }
     return ASTRA_OK;
+}
+
+AstraResult astra_interface_control_set_text(AstraUIContext *context,
+    AstraControl *control, const char *text, uint32_t text_length)
+{
+    AstraControl next;
+    if (control_index(context, control) == CONTROL_NONE || text_length == 0u ||
+        !astra_utf8_validate(text, text_length, 0u) ||
+        (control->_private_control_kind != ASTRA_CONTROL_LABEL &&
+         control->_private_control_kind != ASTRA_CONTROL_BUTTON &&
+         control->_private_control_kind != ASTRA_CONTROL_DISCLOSURE &&
+         !TOGGLE_KINDS(control->_private_control_kind)))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    next = *control;
+    next._private_text = text;
+    next._private_text_length = text_length;
+    return replace_measured_control(context, control, &next);
+}
+
+AstraResult astra_interface_label_set_font(AstraUIContext *context,
+    AstraControl *control, const AstraLabelFont *font)
+{
+    AstraControl next;
+    if (control_index(context, control) == CONTROL_NONE ||
+        control->_private_control_kind != ASTRA_CONTROL_LABEL ||
+        !label_font_valid(font)) return ASTRA_ERROR_INVALID_ARGUMENT;
+    next = *control;
+    next._private_label_font = *font;
+    return replace_measured_control(context, control, &next);
 }
 
 static AstraResult measure_controls(AstraUIContext *context)
@@ -1366,11 +1396,21 @@ static AstraResult measure_control(const AstraControl *control,
     if (size == NULL || !control_valid(control))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (control->_private_control_kind == ASTRA_CONTROL_LABEL) {
+        const AstraLabelFont *font = &control->_private_label_font;
+        if (font->gui != ASTRA_INVALID_HANDLE) {
+            AstraFontTextMetrics metrics = ASTRA_FONT_TEXT_METRICS_INIT;
+            AstraResult result = astra_fonts_text_measure(font->gui, font->id,
+                font->id_length, font->pixel_height, control->_private_text,
+                control->_private_text_length, UINT32_MAX, &metrics);
+            size->width = metrics.width;
+            size->height = metrics.height;
+            return result;
+        }
         size->width = astra_surface_ui_text_width(
             control->_private_text, control->_private_text_length,
             theme.body_font_height);
-        size->height = theme.body_font_height;
-        return ASTRA_OK;
+        size->height = astra_surface_ui_text_height(theme.body_font_height);
+        return size->height != 0u ? ASTRA_OK : ASTRA_ERROR_UNSUPPORTED;
     }
     if (control->_private_control_kind == ASTRA_CONTROL_SCROLL_VIEW) {
         size->width = control->_private_text_length;
@@ -2789,9 +2829,13 @@ static int render_requirements(const AstraUIContext *context,
                                uint64_t *commands, uint64_t *payload)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    char font_id[ASTRA_FONT_ID_MAX];
+    uint32_t id_length;
 
     *commands = 0u;
     *payload = 0u;
+    if (astra_fonts_context_id(font_id) != ASTRA_OK) return 0;
+    id_length = (uint32_t)strlen(font_id);
     for (uint32_t at = 0u; at < context->_private_control_count; ++at) {
         const AstraControl *control = &context->_private_controls[at];
         uint32_t state;
@@ -2820,7 +2864,7 @@ static int render_requirements(const AstraUIContext *context,
             list_visible_range(control, theme.control_height, &first, &end);
             *commands += 5u + (uint64_t)(end - first) * 2u;
             for (uint32_t item = first; item < end; ++item)
-                *payload += items[item].text_length;
+                *payload += (uint64_t)items[item].text_length + id_length;
             continue;
         }
         if (control->_private_control_kind == ASTRA_CONTROL_SCROLLBAR) {
@@ -2860,7 +2904,7 @@ static int render_requirements(const AstraUIContext *context,
             }
             for (uint32_t item = 0u;
                  item < control->_private_text_length; ++item)
-                *payload += items[item].text_length;
+                *payload += (uint64_t)items[item].text_length + id_length;
             continue;
         }
         if (control->_private_control_kind == ASTRA_CONTROL_LABEL)
@@ -2914,8 +2958,13 @@ static int render_requirements(const AstraUIContext *context,
         if (control->_private_control_kind == ASTRA_CONTROL_SLIDER &&
             (state & CONTROL_FOCUS_VISIBLE) != 0u)
             ++*commands;
-        if (control->_private_control_kind != ASTRA_CONTROL_STEPPER)
+        if (control->_private_control_kind != ASTRA_CONTROL_STEPPER) {
             *payload += control->_private_text_length;
+            if (control->_private_text_length != 0u)
+                *payload += control->_private_control_kind == ASTRA_CONTROL_LABEL &&
+                    control->_private_label_font.gui != ASTRA_INVALID_HANDLE ?
+                    control->_private_label_font.id_length : id_length;
+        }
     }
     return 1;
 }
@@ -2934,20 +2983,34 @@ int astra_interface_draw_list_has_room(const AstraSurfaceView *surface,
            payload <= ASTRA_DRAW_LIST_PAYLOAD_BYTES - header->payload_bytes;
 }
 
-static void render_label(const AstraTheme *theme,
+static AstraResult render_label(const AstraTheme *theme,
                          const AstraControl *control,
                          AstraSurfaceView *surface)
 {
     const AstraControlFrame *frame = &control->_private_frame;
+    const AstraLabelFont *font = &control->_private_label_font;
+    if (font->gui != ASTRA_INVALID_HANDLE) {
+        AstraFontTextMetrics metrics = ASTRA_FONT_TEXT_METRICS_INIT;
+        AstraResult result = astra_fonts_text_measure(font->gui, font->id,
+            font->id_length, font->pixel_height, control->_private_text,
+            control->_private_text_length, frame->width, &metrics);
+        int32_t y = frame->y +
+            ((int32_t)frame->height - (int32_t)metrics.height) / 2;
+        if (result != ASTRA_OK) return result;
+        return astra_surface_font_text(surface, font->id, font->id_length,
+            frame->x, y, control->_private_text, metrics.fitted_bytes, font->pixel_height,
+            color(label_color(theme, control))) ? ASTRA_OK : ASTRA_ERROR_NO_RESOURCES;
+    }
     uint32_t length = astra_surface_ui_text_fit(
         control->_private_text, control->_private_text_length,
         theme->body_font_height, frame->width);
-    int32_t y = frame->y +
-        (int32_t)(frame->height - theme->body_font_height) / 2;
+    int32_t y = frame->y + ((int32_t)frame->height -
+        (int32_t)astra_surface_ui_text_height(theme->body_font_height)) / 2;
 
     astra_surface_ui_text(surface, frame->x, y, control->_private_text,
                           length, theme->body_font_height,
                           color(label_color(theme, control)));
+    return ASTRA_OK;
 }
 
 static void render_button(const AstraTheme *theme,
@@ -4743,7 +4806,7 @@ static AstraResult render_one_control(const AstraUIContext *context,
     if (control->_private_control_kind == ASTRA_CONTROL_FIELD)
         return render_field(context, theme, control, surface);
     if (control->_private_control_kind == ASTRA_CONTROL_LABEL)
-        render_label(theme, control, surface);
+        return render_label(theme, control, surface);
     else if (control->_private_control_kind == ASTRA_CONTROL_BUTTON)
         render_button(theme, control, surface);
     else if (control->_private_control_kind == ASTRA_CONTROL_DISCLOSURE)

@@ -34,3 +34,11 @@ ASTRA_FONT_4.0 {
     local:
         *;
 };
+
+ASTRA_FONT_4.1 {
+    global:
+        astra_fonts_text_measure;
+        astra_surface_font_text;
+        astra_surface_ui_text_height;
+        astra_fonts_context_id;
+} ASTRA_FONT_4.0;

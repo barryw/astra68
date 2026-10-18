@@ -10,7 +10,7 @@ include $(ASTRA_NDK_ROOT)/make/astra-native.mk
 comma := ,
 STREAMS := -Wl,-l:streams.library.1
 SYSTEM := -Wl,-l:system.library.4
-INTERFACE := -Wl,-l:interface.library.6
+INTERFACE := -Wl,-l:interface.library.7
 PCM := -Wl,-l:pcm.library.3
 
 hello_LIBS := $(STREAMS)

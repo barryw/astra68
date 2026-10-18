@@ -6,6 +6,7 @@
 
 #include <astra/gui.h>
 #include <astra/fonts.h>
+#include <astra/interface_library.h>
 #include <astra/input_service.h>
 #include <astra/display_mailbox.h>
 #include <astra/render_batch.h>
@@ -19,6 +20,7 @@
 
 static uint32_t menu_allocations;
 static AstraGuiFontContext delivered_font_context;
+static AstraGuiFontMeasureReply delivered_font_measure;
 static uint32_t delivered_font_handles;
 static uint32_t font_open_calls;
 static uint32_t font_snapshot_closes;
@@ -26,6 +28,16 @@ static uint32_t font_reply_status;
 static uint32_t font_duplicate_status;
 static uint32_t font_duplicate_closes;
 static const char *font_catalog_selected;
+
+AstraResult astra_fonts_text_measure(AstraHandle gui, const char *id,
+    uint32_t id_length, uint16_t height, const char *text, uint32_t length,
+    uint32_t maximum_width, AstraFontTextMetrics *metrics)
+{
+    (void)gui; (void)id; (void)id_length; (void)height;
+    (void)text; (void)length; (void)maximum_width;
+    *metrics = (AstraFontTextMetrics)ASTRA_FONT_TEXT_METRICS_INIT;
+    return ASTRA_ERROR_UNSUPPORTED;
+}
 
 AstraResult astra_fonts_catalog_open(AstraHandle service, AstraFontsCatalog *catalog)
 {
@@ -201,6 +213,11 @@ uint32_t astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
                          const uint32_t *handles, uint32_t handle_count)
 {
+    if (handle == 0x502u) {
+        assert(size == sizeof(delivered_font_measure) && handle_count == 0u);
+        memcpy(&delivered_font_measure, message, size);
+        return ASTRA_SYSCALL_OK;
+    }
     if (handle == 0x501u) {
         assert(size == sizeof(delivered_font_context));
         assert(handle_count == 0u || (handle_count == 1u && handles[0] == 0xa01u));
@@ -1458,6 +1475,39 @@ static void test_window_graphics(void)
                 assert(fonts.system_initialized == 0u && fonts.font_generation == 9u &&
                        owned->references == 1u);
                 font_catalog_selected = NULL;
+                {
+                    AstraGuiFontMeasureRequest query = {0};
+                    AstraAfntStrikeInfo metrics;
+                    AstraAfntGlyphInfo glyph;
+                    assert(astra_afnt_strike_info(&font.view, 0u, &metrics));
+                    assert(astra_afnt_glyph_info(&font.view, 0u, 'I', &glyph));
+                    query.header.transaction_id = 42u;
+                    memcpy(query.face_id, "user:fixture", 13u);
+                    memcpy(query.text, "II", 2u);
+                    query.text_length = 2u;
+                    query.pixel_height = metrics.pixel_height;
+                    query.maximum_advance = UINT64_MAX;
+                    font_measure_reply(&fonts, &query, 0x502u);
+                    assert(delivered_font_measure.status == ASTRA_STATUS_OK &&
+                        delivered_font_measure.header.transaction_id == 42u &&
+                        delivered_font_measure.advance == 2u * (uint32_t)glyph.advance_x &&
+                        delivered_font_measure.fitted_bytes == 2u);
+                    assert(fonts.ui_font == owned && owned->references == 1u);
+                    query.pixel_height = 15u;
+                    font_measure_reply(&fonts, &query, 0x502u);
+                    assert(delivered_font_measure.status == ASTRA_STATUS_UNSUPPORTED &&
+                        delivered_font_measure.advance == 0u &&
+                        delivered_font_measure.fitted_bytes == 0u);
+                    query.pixel_height = metrics.pixel_height;
+                    query.maximum_advance = (uint32_t)glyph.advance_x;
+                    font_measure_reply(&fonts, &query, 0x502u);
+                    assert(delivered_font_measure.status == ASTRA_STATUS_OK &&
+                        delivered_font_measure.fitted_bytes == 1u);
+                    query.text[0] = (char)0xff;
+                    font_measure_reply(&fonts, &query, 0x502u);
+                    assert(delivered_font_measure.status == ASTRA_STATUS_INVALID);
+                    assert(fonts.ui_font == owned && owned->references == 1u);
+                }
                 astra_message_header_set(&request.header, sizeof(request),
                     ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT, 9u);
                 assert(valid_session_request(&request.header, sizeof(request),
@@ -3374,18 +3424,51 @@ int main(void)
 
     {
         DisplayWindow waiting[2] = {
-            {.id = 42u, .session = 7u, .event_send = 0x500u, .pending_font = 9u},
-            {.id = 43u, .session = 7u, .event_send = 0x500u, .pending_font = 9u}};
+            {.id = 42u, .generation = 1u, .session = 7u, .event_send = 0x500u, .pending_font = 9u},
+            {.id = 43u, .generation = 1u, .session = 7u, .event_send = 0x500u, .pending_font = 9u}};
         DisplayState notify = {.windows = waiting, .count = 2u, .session_count = 1u};
         notify.sessions[0].id = 7u;
+        AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+        AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
+        AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+        AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+        AstraUIAction action = ASTRA_UI_ACTION_INIT;
+        AstraWindowEvent key = {.size = sizeof(key), .version = ASTRA_WINDOW_EVENT_VERSION,
+            .generation = 1u, .type = ASTRA_WINDOW_EVENT_KEY, .flags = ASTRA_WINDOW_EVENT_DOWN};
+        button.text = "Use";
+        button.text_length = 3u;
+        for (uint32_t at = 0u; at < 2u; ++at) {
+            button.id = at + 1u;
+            assert(astra_interface_button_init(&controls[at], &button) == ASTRA_OK);
+        }
+        assert(astra_interface_ui_init(&ui, controls, 2u, 320u, 80u) == ASTRA_OK);
+        assert(astra_interface_ui_layout(&ui, &layout) == ASTRA_OK);
+        key.data.key.usage = 0x2bu;
+        assert(astra_interface_ui_handle_event(&ui, &key, &action) == ASTRA_OK);
+        assert(astra_interface_ui_handle_event(&ui, &key, &action) == ASTRA_OK);
+        assert(ui._private_focus == 1u);
         send_would_block = 1u;
         notify_font_changes(&notify);
-        assert(waiting[0].pending_font == 9u && waiting[0].event_lost && notify.font_notifications);
+        assert(waiting[0].pending_font == 9u && notify.font_notifications);
         notify_font_changes(&notify);
         assert(waiting[0].pending_font == 9u && !waiting[0].event_lost &&
                delivered.event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED &&
                delivered.event.data.font_changed.generation == 9u &&
                delivered.event.data.font_changed.window == 43u);
+        assert(previous_delivered.event.data.font_changed.window == 42u);
+        assert(astra_interface_ui_handle_event(&ui, &previous_delivered.event, &action) == ASTRA_OK);
+        assert(ui._private_focus == 1u);
+        key.data.key.usage = 0x28u;
+        assert(astra_interface_ui_handle_event(&ui, &key, &action) == ASTRA_OK);
+        key.flags = 0u;
+        assert(astra_interface_ui_handle_event(&ui, &key, &action) == ASTRA_OK);
+        assert(action.type == ASTRA_UI_ACTION_ACTIVATE && action.control_id == 2u);
+        /* Retrying a font notice must still report an independently lost input. */
+        waiting[0].event_lost = 1u;
+        notify_font_changes(&notify);
+        assert((previous_delivered.event.flags & ASTRA_WINDOW_EVENT_LOSS) != 0u);
+        assert(astra_interface_ui_handle_event(&ui, &previous_delivered.event, &action) == ASTRA_OK);
+        assert(ui._private_focus == UINT32_MAX);
         uint32_t sent = delivered_count;
         assert(signal_vblank(&notify) == ASTRA_STATUS_OK && delivered_count == sent);
         AstraGuiFontContextRequest adopted = {0};

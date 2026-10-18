@@ -757,6 +757,8 @@ static const AstraUiStrike *text_strike(const AstraRenderBuilder *builder,
             *selected_index = at;
             return selected;
         }
+    if (cell_width == 0u && builder->ui_font != NULL)
+        return NULL;
     return cell_width != 0u ?
         astra_mono_font_strike_styled(pixel_height, style_flags) :
         astra_ui_font_strike_styled(pixel_height, style_flags);
@@ -797,10 +799,11 @@ static const AstraUiGlyph *text_glyph(const AstraRenderBuilder *builder,
     return glyph;
 }
 
-static uint32_t text_measure(const AstraRenderBuilder *builder,
+int astra_render_builder_text_measure(const AstraRenderBuilder *builder,
                              const char *utf8, uint32_t length,
                              uint16_t pixel_height, uint32_t style_flags,
-                             uint64_t maximum_26_6, uint32_t *width)
+                             uint64_t maximum_26_6, uint64_t *width,
+                             uint32_t *fitted_bytes, uint32_t *line_height)
 {
     AstraUiStrike selected_strike;
     uint32_t selected_index;
@@ -809,7 +812,10 @@ static uint32_t text_measure(const AstraRenderBuilder *builder,
     uint64_t advance = 0u;
     uint32_t at = 0u;
 
+    if (width == NULL || fitted_bytes == NULL || line_height == NULL) return 0;
     *width = 0u;
+    *fitted_bytes = 0u;
+    *line_height = 0u;
     if (utf8 == NULL || strike == NULL ||
         (style_flags & ~ASTRA_TEXT_RENDER_STYLE_MASK) != 0u)
         return 0u;
@@ -829,9 +835,11 @@ static uint32_t text_measure(const AstraRenderBuilder *builder,
         advance += (uint32_t)glyph->advance_x;
         at += consumed;
     }
-    advance = (advance + 63u) / 64u;
-    *width = advance > UINT32_MAX ? UINT32_MAX : (uint32_t)advance;
-    return at;
+    *width = advance;
+    *fitted_bytes = at;
+    *line_height = astra_ui_line_height(strike->pixel_height,
+        strike->ascent, strike->descent, strike->line_gap);
+    return 1;
 }
 
 uint32_t astra_render_builder_text_width(const AstraRenderBuilder *builder,
@@ -839,11 +847,13 @@ uint32_t astra_render_builder_text_width(const AstraRenderBuilder *builder,
                                           uint16_t pixel_height,
                                           uint32_t style_flags)
 {
-    uint32_t width;
+    uint64_t width;
+    uint32_t fitted, height;
 
-    (void)text_measure(builder, utf8, length, pixel_height, style_flags,
-                       UINT64_MAX, &width);
-    return width;
+    (void)astra_render_builder_text_measure(builder, utf8, length,
+        pixel_height, style_flags, UINT64_MAX, &width, &fitted, &height);
+    width = (width + 63u) / 64u;
+    return width > UINT32_MAX ? UINT32_MAX : (uint32_t)width;
 }
 
 uint32_t astra_render_builder_text_fit(const AstraRenderBuilder *builder,
@@ -852,10 +862,13 @@ uint32_t astra_render_builder_text_fit(const AstraRenderBuilder *builder,
                                         uint32_t maximum_width,
                                         uint32_t style_flags)
 {
-    uint32_t width;
+    uint64_t width;
+    uint32_t fitted, height;
 
-    return text_measure(builder, utf8, length, pixel_height, style_flags,
-                         (uint64_t)maximum_width * 64u, &width);
+    (void)astra_render_builder_text_measure(builder, utf8, length,
+        pixel_height, style_flags, (uint64_t)maximum_width * 64u,
+        &width, &fitted, &height);
+    return fitted;
 }
 
 static int builder_text_run(AstraRenderBuilder *builder,
@@ -1975,7 +1988,6 @@ static int replay_command(AstraRenderBuilder *builder, uint32_t destination,
         char id[ASTRA_FONT_ID_MAX];
         const AstraRenderFont *font;
         const AstraRenderFont *previous = builder->ui_font;
-        int found = 0;
         int ok;
 
         if (!text_format(format) || resolver == NULL ||
@@ -1987,17 +1999,6 @@ static int replay_command(AstraRenderBuilder *builder, uint32_t destination,
         if (memchr(id, '\0', item->source) != NULL) return 0;
         font = resolver->resolve_font(resolver->context, id, item->source);
         if (font == NULL) return 0;
-        for (uint32_t at = 0u; at < font->view.strike_count; ++at) {
-            AstraAfntStrikeInfo strike;
-
-            if (astra_afnt_strike_info(&font->view, at, &strike) &&
-                strike.pixel_height == item->font_height &&
-                strike_render_format(strike.bitmap_format) != UINT8_MAX) {
-                found = 1;
-                break;
-            }
-        }
-        if (!found) return 0;
         builder->ui_font = font;
         ok = builder_text(builder, destination, item->x, item->y,
                           (const char *)header + item->payload_offset +

@@ -4,10 +4,10 @@
 #include <astra/font_service.h>
 #include <astra/gui.h>
 
-#include "font_context.h"
 #include <astra/port.h>
 #include <astra/resource.h>
 #include <astra/result.h>
+#include <astra/utf8.h>
 
 #include <string.h>
 
@@ -23,6 +23,80 @@ _Static_assert(ASTRA_FONT_IMPORT_MAX == ASTRA_FONT_SOURCE_MAX,
                "font import size drift");
 _Static_assert(ASTRA_FONT_IMPORT_NAME_MAX == ASTRA_FONT_SOURCE_NAME_MAX,
                "font source name drift");
+
+AstraResult astra_fonts_text_measure(
+    AstraHandle gui, const char *id, uint32_t id_length,
+    uint16_t pixel_height, const char *text, uint32_t length,
+    uint32_t maximum_width, AstraFontTextMetrics *metrics)
+{
+    uint32_t at = 0u;
+    uint64_t advance = 0u;
+    uint64_t maximum = (uint64_t)maximum_width * 64u;
+    uint32_t line_height = 0u;
+
+    if (metrics == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *metrics = (AstraFontTextMetrics)ASTRA_FONT_TEXT_METRICS_INIT;
+    if (gui == ASTRA_INVALID_HANDLE || id == NULL || id_length == 0u ||
+        id_length >= ASTRA_FONT_ID_MAX || pixel_height == 0u ||
+        memchr(id, '\0', id_length) != NULL ||
+        (length != 0u && !astra_utf8_validate(text, length, 0u)))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    do {
+        AstraGuiFontMeasureRequest request = {0};
+        AstraGuiFontMeasureReply reply = {0};
+        AstraCall call = {0};
+        uint32_t take = length - at;
+        AstraResult result;
+
+        if (take > sizeof(request.text)) take = sizeof(request.text);
+        while (take < length - at &&
+               ((uint8_t)text[at + take] & 0xc0u) == 0x80u) --take;
+        astra_message_header_set(&request.header, sizeof(request),
+            ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_MEASURE, 1u);
+        memcpy(request.face_id, id, id_length);
+        request.pixel_height = pixel_height;
+        request.text_length = take;
+        request.maximum_advance = maximum - advance;
+        if (take != 0u) memcpy(request.text, text + at, take);
+        call.request = &request;
+        call.request_size = sizeof(request);
+        call.reply = &reply;
+        call.reply_capacity = sizeof(reply);
+        result = astra_port_call(gui, &call, ASTRA_DEADLINE_INFINITE);
+        if (result != ASTRA_OK) return result;
+        if (call.reply_size != sizeof(reply) || call.reply_handle_count != 0u ||
+            reply.header.total_size != sizeof(reply) ||
+            reply.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
+            reply.header.protocol != ASTRA_GUI_PROTOCOL ||
+            reply.header.protocol_version != ASTRA_GUI_VERSION ||
+            reply.header.operation != ASTRA_GUI_FONT_MEASURE_REPLY ||
+            reply.header.transaction_id != request.header.transaction_id ||
+            reply.header.flags != 0u || reply.header.reserved != 0u ||
+            reply.reserved != 0u ||
+            reply.fitted_bytes > take ||
+            (reply.fitted_bytes < take &&
+             ((uint8_t)request.text[reply.fitted_bytes] & 0xc0u) == 0x80u) ||
+            reply.advance > request.maximum_advance ||
+            (reply.fitted_bytes == 0u && reply.advance != 0u) ||
+            (reply.status == ASTRA_STATUS_OK &&
+             (reply.line_height == 0u ||
+              (line_height != 0u && line_height != reply.line_height))) ||
+            (reply.status != ASTRA_STATUS_OK &&
+             (reply.fitted_bytes != 0u || reply.advance != 0u || reply.line_height != 0u)))
+            return ASTRA_ERROR_IO;
+        result = astra_result_from_service(reply.status);
+        if (result != ASTRA_OK) return result;
+        advance += reply.advance;
+        line_height = reply.line_height;
+        at += reply.fitted_bytes;
+        if (reply.fitted_bytes != take) break;
+    } while (at < length);
+    metrics->width = (uint32_t)((advance + 63u) / 64u);
+    metrics->fitted_bytes = at;
+    metrics->height = line_height;
+    return ASTRA_OK;
+}
 
 AstraResult astra_fonts_use_system(AstraHandle gui, const AstraWindowEvent *change)
 {
@@ -40,7 +114,7 @@ AstraResult astra_fonts_use_system(AstraHandle gui, const AstraWindowEvent *chan
             return ASTRA_ERROR_INVALID_ARGUMENT;
         request.window = change->data.font_changed.window;
     }
-    result = astra_font_context_id(request.adopted_id);
+    result = astra_fonts_context_id(request.adopted_id);
     if (result != ASTRA_OK) return result;
     result = astra_message_header_init(&request.header, sizeof(request),
         ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT, 1u);

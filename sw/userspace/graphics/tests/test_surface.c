@@ -9,7 +9,6 @@
 #include <astra/theme.h>
 #include <astra/ui_font.h>
 #include <astra/fonts.h>
-#include "../src/font_context.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -709,6 +708,9 @@ static const AstraRenderFont *resolve_installed_font(void *context,
 
 static void test_installed_afnt_reaches_hardware_glyph_run(void)
 {
+    assert(astra_fonts_context_id(NULL) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_ui_line_height(11u, 10 * 64, 3 * 64, 64) == 14u);
+    assert(astra_ui_line_height(11u, 7 * 64, 2 * 64, -64) == 11u);
     static uint8_t batch[ASTRA_RENDER_BUILDER_BYTES];
     static uint8_t list_area[ASTRA_DRAW_LIST_AREA_BYTES];
     FILE *file = fopen("fonts/astra-mono.afnt", "rb");
@@ -743,6 +745,15 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
     assert(astra_render_builder_use_font(&builder, &font));
     uint32_t expected_width =
         (2u * (uint32_t)first.advance_x + (uint32_t)second.advance_x + 63u) / 64u;
+    uint64_t exact_advance;
+    uint32_t fitted, line_height;
+    assert(astra_render_builder_text_measure(&builder, "IIW", 3u,
+        strike.pixel_height, 0u, UINT64_MAX, &exact_advance, &fitted, &line_height));
+    assert(fitted == 3u && exact_advance ==
+        2u * (uint32_t)first.advance_x + (uint32_t)second.advance_x);
+    assert(!astra_render_builder_text_measure(&builder, "IIW", 3u,
+        15u, 0u, UINT64_MAX, &exact_advance, &fitted, &line_height));
+    assert(exact_advance == 0u && fitted == 0u);
     assert(astra_render_builder_text_width(&builder, "IIW", 3u,
         strike.pixel_height, 0u) == expected_width);
     assert(astra_render_builder_text_fit(&builder, "IIW", 3u,
@@ -766,7 +777,7 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
         AstraSurfaceView surface;
         assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length, id) == ASTRA_OK);
         char adopted[ASTRA_FONT_ID_MAX];
-        assert(astra_font_context_id(adopted) == ASTRA_OK && strcmp(adopted, id) == 0);
+        assert(astra_fonts_context_id(adopted) == ASTRA_OK && strcmp(adopted, id) == 0);
         assert(snapshot.handle == ASTRA_INVALID_HANDLE);
         snapshot = (AstraArea){.handle = 77u, .address = bytes,
             .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
@@ -776,8 +787,26 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
         assert(astra_fonts_use_borrowed(bytes, (uint32_t)length, id) == ASTRA_ERROR_BUSY);
         assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) ==
                expected_width);
+        assert(astra_surface_ui_text_height(strike.pixel_height) ==
+            astra_ui_line_height(strike.pixel_height, strike.ascent,
+                                 strike.descent, strike.line_gap));
         assert(astra_surface_ui_text_fit("IIW", 3u, strike.pixel_height,
             ((uint32_t)first.advance_x + 63u) / 64u) == 1u);
+        assert(astra_draw_list_view_init(&surface, list_area, sizeof(list_area),
+            160u, 80u));
+        assert(astra_surface_font_text(&surface, "user:other", 10u,
+            5, 7, "IIW", 3u, strike.pixel_height, 0xffffu));
+        assert(named->operation == ASTRA_DRAW_LIST_NAMED_TEXT &&
+            named->font_height == strike.pixel_height && named->source == 10u &&
+            memcmp(list_area + named->payload_offset, "user:otherIIW", 13u) == 0);
+        assert(astra_fonts_context_id(adopted) == ASTRA_OK && strcmp(adopted, id) == 0);
+        assert(!astra_surface_font_text(&surface, "", 0u,
+            5, 7, "IIW", 3u, strike.pixel_height, 0xffffu));
+        assert(!astra_surface_font_text(&surface, "user:other", 10u,
+            5, 7, "\xff", 1u, strike.pixel_height, 0xffffu));
+        surface.kind = ASTRA_SURFACE_VIEW_RGB565;
+        assert(!astra_surface_font_text(&surface, "user:other", 10u,
+            5, 7, "IIW", 3u, strike.pixel_height, 0xffffu));
         assert(astra_draw_list_view_init(&surface, list_area, sizeof(list_area),
             160u, 80u));
         astra_surface_ui_text(&surface, 5, 7, "IIW", 3u, strike.pixel_height,
@@ -804,7 +833,7 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
         }
         id[0] = '\0';
         assert(astra_fonts_use_snapshot(&snapshot, 0u, id) == ASTRA_OK);
-        assert(astra_font_context_id(adopted) == ASTRA_OK && adopted[0] == '\0');
+        assert(astra_fonts_context_id(adopted) == ASTRA_OK && adopted[0] == '\0');
         assert(closed_font_snapshots == 2u && unmapped_font_snapshots == 1u);
         assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) !=
                expected_width);
@@ -819,7 +848,7 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
         bytes[0] ^= 1u;
         assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length,
             "user:fixture") == ASTRA_ERROR_INVALID_ARGUMENT);
-        assert(astra_font_context_id(adopted) == ASTRA_OK && adopted[0] == '\0');
+        assert(astra_fonts_context_id(adopted) == ASTRA_OK && adopted[0] == '\0');
         assert(snapshot.handle == 77u &&
             astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) !=
                 expected_width);

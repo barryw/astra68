@@ -5,7 +5,7 @@
 #include <astra/resource.h>
 #include <astra/status.h>
 #include <astra/gui.h>
-#include "../src/font_context.h"
+#include <astra/utf8.h>
 
 #include <assert.h>
 #include <string.h>
@@ -22,8 +22,9 @@ static char adopted_id[ASTRA_FONT_ID_MAX];
 static uint32_t fail_snapshot;
 static uint32_t fail_context_map;
 static uint32_t requested_window;
+static uint32_t measure_calls;
 
-AstraResult astra_font_context_id(char id[ASTRA_FONT_ID_MAX])
+AstraResult astra_fonts_context_id(char id[ASTRA_FONT_ID_MAX])
 {
     memcpy(id, adopted_id, sizeof(adopted_id));
     return ASTRA_OK;
@@ -59,6 +60,41 @@ AstraResult astra_port_call(AstraHandle service, AstraCall *call,
 
     (void)deadline;
     assert(service == 1u);
+    if (request->header.protocol == ASTRA_GUI_PROTOCOL &&
+        request->header.operation == ASTRA_GUI_FONT_MEASURE) {
+        const AstraGuiFontMeasureRequest *query = call->request;
+        AstraGuiFontMeasureReply *metrics = call->reply;
+        uint32_t at = 0u;
+        ++measure_calls;
+        assert(call->request_size == sizeof(*query) &&
+               call->reply_capacity == sizeof(*metrics));
+        assert(strcmp(query->face_id, "user:test") == 0 &&
+               query->pixel_height == 13u && query->reserved16 == 0u);
+        assert(query->text_length <= ASTRA_GUI_FONT_MEASURE_TEXT_MAX &&
+               astra_utf8_validate(query->text, query->text_length, 0u));
+        astra_message_header_set(&metrics->header, sizeof(*metrics),
+            ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+            ASTRA_GUI_FONT_MEASURE_REPLY, query->header.transaction_id);
+        while (at < query->text_length &&
+               metrics->advance + 65u <= query->maximum_advance) {
+            assert(astra_utf8_scalar_advance(query->text, query->text_length, &at));
+            metrics->advance += 65u;
+        }
+        metrics->fitted_bytes = at;
+        metrics->line_height = 16u;
+        call->reply_size = sizeof(*metrics);
+        if (bad_reply == 1u) --call->reply_size;
+        if (bad_reply == 2u) ++metrics->header.protocol_version;
+        if (bad_reply == 3u) metrics->advance = query->maximum_advance + 1u;
+        if (bad_reply == 4u) metrics->fitted_bytes = 1u;
+        if (bad_reply == 5u) metrics->fitted_bytes = query->text_length + 1u;
+        if (bad_reply == 6u) {
+            metrics->status = ASTRA_STATUS_UNSUPPORTED;
+            metrics->advance = metrics->fitted_bytes = 0u;
+            metrics->line_height = 0u;
+        }
+        return ASTRA_OK;
+    }
     if (request->header.protocol == ASTRA_GUI_PROTOCOL) {
         const AstraGuiFontContextRequest *query = call->request;
         AstraGuiFontContext *context = call->reply;
@@ -173,6 +209,36 @@ AstraResult astra_handle_close(AstraHandle *handle)
 
 int main(void)
 {
+    AstraFontTextMetrics metrics = ASTRA_FONT_TEXT_METRICS_INIT;
+    char text[520];
+    memset(text, 'A', sizeof(text));
+    assert(astra_fonts_text_measure(1u, "user:test", 9u, 13u,
+        text, sizeof(text), UINT32_MAX, &metrics) == ASTRA_OK);
+    assert(measure_calls == 3u && metrics.width == 529u && metrics.fitted_bytes == sizeof(text));
+    assert(astra_fonts_text_measure(1u, "user:test", 9u, 13u,
+        text, sizeof(text), 260u, &metrics) == ASTRA_OK);
+    assert(metrics.width == 260u && metrics.fitted_bytes == 256u);
+    text[255] = (char)0xc4;
+    text[256] = (char)0x84;
+    assert(astra_fonts_text_measure(1u, "user:test", 9u, 13u,
+        text, sizeof(text), UINT32_MAX, &metrics) == ASTRA_OK);
+    assert(metrics.width == 528u && metrics.fitted_bytes == sizeof(text));
+    assert(astra_fonts_text_measure(1u, "user:test", 9u, 13u,
+        "\xc4\x84", 2u, 1u, &metrics) == ASTRA_OK);
+    assert(metrics.width == 0u && metrics.fitted_bytes == 0u);
+    for (bad_reply = 1u; bad_reply <= 5u; ++bad_reply) {
+        assert(astra_fonts_text_measure(1u, "user:test", 9u, 13u,
+            "\xc4\x84", 2u, UINT32_MAX, &metrics) == ASTRA_ERROR_IO);
+        assert(metrics.width == 0u && metrics.fitted_bytes == 0u);
+    }
+    assert(astra_fonts_text_measure(1u, "user:test", 9u, 13u,
+        "A", 1u, UINT32_MAX, &metrics) == ASTRA_ERROR_UNSUPPORTED);
+    bad_reply = 0u;
+    assert(astra_fonts_text_measure(1u, "user:test", 9u, 13u,
+        "\xff", 1u, UINT32_MAX, &metrics) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_fonts_text_measure(1u, "user:test", 9u, 13u,
+        NULL, 0u, UINT32_MAX, &metrics) == ASTRA_OK);
+    assert(metrics.width == 0u && metrics.fitted_bytes == 0u && metrics.height == 16u);
     const AstraFontCatalogStrike strike = {8u, 16u, 5u, 0u};
     const AstraFontCatalogFace source = {
         "system:test", 11u, "Test", 4u, "Regular", 7u,

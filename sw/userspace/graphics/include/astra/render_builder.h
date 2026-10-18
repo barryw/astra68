@@ -147,6 +147,10 @@ int astra_render_builder_rounded(AstraRenderBuilder *builder,
                                  uint32_t width, uint32_t height,
                                  uint16_t radius, uint16_t color);
 /* Measure with the same face, strike, style and fallback as text rendering. */
+int astra_render_builder_text_measure(const AstraRenderBuilder *builder,
+    const char *utf8, uint32_t length, uint16_t pixel_height,
+    uint32_t style_flags, uint64_t maximum_advance,
+    uint64_t *advance, uint32_t *fitted_bytes, uint32_t *line_height);
 uint32_t astra_render_builder_text_width(const AstraRenderBuilder *builder,
                                           const char *utf8, uint32_t length,
                                           uint16_t pixel_height,

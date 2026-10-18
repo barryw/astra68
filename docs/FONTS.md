@@ -740,11 +740,80 @@ retained under `restore-attempt1/`. Release remains withheld until that
 interaction failure is explained or resolved. Passing replay alone does not
 establish repeatable acceptance.
 
-Font previews will extend the shared Label control with an explicit installed
-face and size. Ordinary system labels retain their fixed role sizes. This
-follows Haiku's `src/preferences/appearance/FontSelectionView.cpp`, which uses
-an ordinary text control with a chosen font for its preview, rather than a
-preferences-only text renderer. This extension is not implemented yet.
+Font previews now extend the shared Label control with an explicit installed
+face and size. Ordinary system labels retain their fixed nominal role sizes;
+their line boxes use actual ascent/descent/gap metrics. The Fonts detail view
+composes that Label with its existing List and ScrollView. Changing a row
+updates the preview font in place, preserving List focus and scroll state.
+Face and strike indices share one detail-source record rather than parallel
+mapping arrays. No preferences-only text renderer is introduced.
+
+Font Kit 4.1 / GUI 25 add bounded installed-face measurement through Display's
+existing immutable font registry and renderer metric loop. UTF-8 spans use
+256-byte chunks without splitting scalars; fractional advances remain 26.6
+across chunks and round only at the final client boundary. Reply validation
+rejects malformed prefixes, out-of-range advances, inconsistent line heights
+and unexpected handles. Measurement never changes the active system context
+or gives clients raw AFNT/glyph memory. Named-face surface text reuses the
+existing ADLT emitter and refuses CPU pixel views. A missing strike returns an
+error rather than drawing another face. The retained draw document owns its
+existing font references independently of each metric query.
+
+Interface Kit 7 replaces the control ABI coherently across all in-tree clients,
+manifests, exports and NDK examples. Label text/font updates share one measured
+replacement and layout-rollback path. Draw-list budgets account for each text
+command's actual font-ID prefix. The existing context-ID reader moved to the
+public Font Kit header; its private header/API spelling was removed. An initial
+overly conservative prefix estimate rejected a valid dense menu; that failed
+check remains in `/var/tmp/astra-font-label-preview-focused-20261017.log`.
+Corrected focused host, ASan/UBSan, MC68040 and analyzer gates pass in
+`/var/tmp/astra-font-label-preview-focused-final-20261017.log` on Beast.
+Tests cover UTF-8/fractional chunking, real AFNT advances, absent strikes,
+preview/default Label layout, failure rollback, named submission, unchanged
+system context and capacity rejection before drawing. The first metrics draft
+also passes native Amiga import/measurement/hardware draw/restart in
+`/var/tmp/astra-font-independent-metrics-amiga-20261017.log`; current coherent
+UI gates now pass Iosevka import/live choice/restoration/removal, long AFNT
+styles, and native Amiga import/exact measurement/hardware draw/restart in
+`/var/tmp/astra-font-label-preview-{iosevka-ui,long-style-ui,amiga-native}-20261017.log`.
+Full userspace/ROM and NDK distribution gates pass in
+`/var/tmp/astra-font-notice-focus-green-20261017.log`. Complete physical preview
+qualification remains pending.
+
+A valid AFNT with an unsupported bitmap format remains manageable: Fonts
+shows an explicit unavailable caption using its ordinary Label, rather than
+drawing a misleading sample in another font or exiting. Selection and initial
+detail layout share this same update path. The native regression fails before
+the fix in `/var/tmp/astra-font-preview-unsupported-red-20261017.log` and passes
+in `/var/tmp/astra-font-preview-unsupported-final-20261017.log`. The first fixed
+run successfully removed the font but exposed a test assertion distinguishing
+absent from empty inventory; the final gate normalizes those equivalent states.
+
+Read-only Haiku references: `src/preferences/appearance/FontSelectionView.cpp`
+uses a standard text control with a chosen font; `src/kits/interface/Font.cpp`
+obtains string metrics from app_server; `src/kits/interface/StringView.cpp`
+invalidates preferred size/layout on font changes and measures font height.
+Astra adapts these patterns to counted IDs, exact AFNT strikes, native
+capabilities and hardware draw lists.
+
+The restoration investigation also reproduces a real notification defect:
+backpressured `FONT_CHANGED` delivery used the generic lossy-event path even
+though the generation remains pending and is retried. A later event therefore
+reset the common controls' focus and cancelled button activation. Font notices
+now reuse `prepare_event`/`deliver_event` without declaring a retry to be lost
+input. A genuinely recorded earlier loss is still delivered and resets focus.
+The Display host fixture dispatches the retried notice through real Interface
+Kit controls, proving that focus and Return activation survive; it also checks
+genuine-loss recovery. The old code fails the focus assertion in
+`/var/tmp/astra-font-notice-focus-red-linked-20261017.log`. Initial attempts
+needed the public Interface header and its existing TextModel/Scroll sources
+to link the real event handler; their compiler/linker failures remain in the
+earlier `-red`/`-red-behavior` logs. No fake UI policy was introduced.
+Read-only Haiku references: `src/servers/app/ServerWindow.cpp` forwards
+`B_FONTS_UPDATED` as a state notice; `RequestRedraw` retains its state counter
+independently of notification queue pressure. Corrected host/sanitizer gates
+pass in `/var/tmp/astra-font-notice-focus-green-20261017.log`; physical
+qualification remains required before claiming the restoration gate closed.
 
 The shared renderer also makes AFNT a dependency of HPS display helpers.
 `fpga/arty/linux/Makefile` now includes the existing AFNT, CRC32, and UTF-8

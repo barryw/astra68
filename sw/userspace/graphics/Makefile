@@ -79,13 +79,13 @@ renderer: $(RENDERER_TARGET)
 
 # Other owners' host tests link these products instead of compiling Graphics
 # source with their private flags.
-build/host/surface.o: src/surface.c src/font_data.h src/font_context.h $(NDK)/include/astra/fonts.h $(NDK)/include/astra/surface.h \
+build/host/surface.o: src/surface.c src/font_data.h $(NDK)/include/astra/fonts.h $(NDK)/include/astra/surface.h \
         $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
 		-ffunction-sections -fdata-sections -c $< -o $@
 
-build/host/surface_sanitize.o: src/surface.c src/font_data.h src/font_context.h $(NDK)/include/astra/fonts.h $(NDK)/include/astra/surface.h \
+build/host/surface_sanitize.o: src/surface.c src/font_data.h $(NDK)/include/astra/fonts.h $(NDK)/include/astra/surface.h \
         $(FONT_HEADER) $(UI_FONT_HEADER) $(MONO_FONT_HEADER)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -Ibuild/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
@@ -257,7 +257,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@python3 ../../../tools/library_info.py $(GRAPHICS_LIBRARY) | \
 		grep -q '^graphics.library.3 3.0.0 ABI 3.0$$'
 	@python3 ../../../tools/library_info.py $(FONT_LIBRARY) | \
-		grep -q '^font.library.4 4.0.0 ABI 4.0$$'
+		grep -q '^font.library.4 4.1.0 ABI 4.1$$'
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
@@ -278,7 +278,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 		awk '/NEEDED/{n++} END{print n+0}')" = 4
 	$(call ASTRA_CHECK_DSO,$(GRAPHICS_LIBRARY) $(FONT_LIBRARY))
 
-$(HOST_TEST): src/surface.c src/font_data.c src/font_data.h src/font_context.h src/render_builder.c src/texture_reference.c \
+$(HOST_TEST): src/surface.c src/font_data.c src/font_data.h src/render_builder.c src/texture_reference.c \
 		tests/test_surface.c \
 		../../../ndk/include/astra/surface.h include/astra/render_builder.h \
 		../../include/astra/rounded.h ../../include/astra/window_scene.h \
@@ -323,7 +323,7 @@ $(HOST_CATALOG_TEST): $(HOST_AFNT_LIBRARY) tests/test_font_catalog.c \
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		tests/test_font_catalog.c $(HOST_AFNT_LIBRARY) -o $@
 
-$(HOST_FONTS_CLIENT_TEST): src/fonts_client.c src/font_context.h tests/test_fonts_client.c \
+$(HOST_FONTS_CLIENT_TEST): src/fonts_client.c tests/test_fonts_client.c \
 		$(HOST_AFNT_LIBRARY) $(NDK)/include/astra/fonts.h ../../include/astra/gui.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \

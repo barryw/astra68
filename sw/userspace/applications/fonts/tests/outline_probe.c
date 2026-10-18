@@ -57,9 +57,23 @@ static int probe_named_draw(const AstraStartupInfo *startup, const char *id)
     AstraFence fence = ASTRA_FENCE_INIT;
     AstraResult completion = ASTRA_OK;
     AstraResult result;
+    AstraFontTextMetrics metrics = ASTRA_FONT_TEXT_METRICS_INIT;
 
-    if (gui == NULL ||
-        astra_area_create(4096u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+    if (gui == NULL) return 0;
+    result = astra_fonts_text_measure(gui->handle, id, (uint32_t)strlen(id),
+        11u, "Amiga font", 10u, UINT32_MAX, &metrics);
+    if (result != ASTRA_OK || metrics.width == 0u || metrics.height < 11u ||
+        metrics.fitted_bytes != 10u) return 0;
+    result = astra_fonts_text_measure(gui->handle, id, (uint32_t)strlen(id),
+        11u, "Amiga font", 10u, metrics.width - 1u, &metrics);
+    if (result != ASTRA_OK || metrics.fitted_bytes >= 10u) return 0;
+    result = astra_fonts_text_measure(gui->handle, id, (uint32_t)strlen(id),
+        UINT16_MAX, "Amiga font", 10u, UINT32_MAX, &metrics);
+    if (result != ASTRA_ERROR_UNSUPPORTED || metrics.width != 0u ||
+        metrics.height != 0u || metrics.fitted_bytes != 0u)
+        return 0;
+    (void)astra_log("ASTRA FONT MEASURE PASS");
+    if (astra_area_create(4096u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
             ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &placeholder) != ASTRA_OK)
         return 0;
     info.x = 360u;

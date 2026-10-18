@@ -40,7 +40,7 @@ requires compiler.library 2 2.0.0
 requires filesystem.library 14 14.0.0
 requires graphics.library 3 3.0.0
 requires font.library 4 4.0.0
-requires interface.library 6 6.0.0
+requires interface.library 7 7.0.0
 requires runtime.library 1 1.6.0
 requires streams.library 1 1.1.0
 requires system.library 4 4.0.0

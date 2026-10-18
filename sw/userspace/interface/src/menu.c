@@ -1,11 +1,13 @@
 #include <astra/menu.h>
 #include <astra/input.h>
+#include <astra/fonts.h>
 #include <astra/theme.h>
 
 #include "control_internal.h"
 
 #include <limits.h>
 #include <stddef.h>
+#include <string.h>
 
 #define NONE UINT32_MAX
 #define OPEN_PRESS (UINT32_MAX - 1u)
@@ -270,6 +272,8 @@ AstraResult astra_interface_menu_render(const AstraMenu *menu, AstraSurfaceView 
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraSurfaceView target;
     uint64_t commands = 8u, payload = 0u;
+    char font_id[ASTRA_FONT_ID_MAX];
+    uint32_t id_length;
     int64_t top;
 
     if (!valid(menu) || surface == NULL || surface->pixels == NULL ||
@@ -284,14 +288,16 @@ AstraResult astra_interface_menu_render(const AstraMenu *menu, AstraSurfaceView 
                                     surface->byte_size, surface->width,
                                     surface->height))
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (astra_fonts_context_id(font_id) != ASTRA_OK) return ASTRA_ERROR_IO;
+    id_length = (uint32_t)strlen(font_id);
     top = (int64_t)PAD - menu->_private_scroll;
     for (uint32_t at = 0u; at < menu->_private_count; ++at) {
         const AstraMenuItem *item = &menu->_private_items[at];
         if (top < surface->height - PAD && top + pitch(item) > PAD) {
             commands += 4u;
             if (item->label_length != 0u)
-                payload += astra_surface_ui_text_fit(item->label, item->label_length,
-                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, surface->width - 40u);
+                payload += (uint64_t)astra_surface_ui_text_fit(item->label, item->label_length,
+                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, surface->width - 40u) + id_length;
         }
         top += pitch(item);
     }

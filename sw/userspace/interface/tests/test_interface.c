@@ -19,11 +19,11 @@ void astra_interface_test_paint(AstraSurfaceView *surface,
                                 const AstraAlertInfo *info);
 void astra_interface_test_layout(void);
 
-_Static_assert(sizeof(AstraControl) == (sizeof(void *) == 4u ? 252u : 264u),
-               "AstraControl ABI 6 layout changed; bump the ABI major");
+_Static_assert(sizeof(AstraControl) == (sizeof(void *) == 4u ? 280u : 296u),
+               "AstraControl ABI 7 layout changed; bump the ABI major");
 _Static_assert(sizeof(AstraUIContext) ==
                    (sizeof(void *) == 4u ? 168u : 176u),
-               "AstraUIContext ABI 6 layout changed; bump the ABI major");
+               "AstraUIContext ABI 7 layout changed; bump the ABI major");
 
 static uint16_t first_text_color;
 static uint16_t last_text_color;
@@ -326,12 +326,56 @@ void astra_surface_fill_round(AstraSurfaceView *surface, int32_t x, int32_t y,
 }
 
 static uint32_t font_advance = 1u;
+static const char *context_font_id = "";
+AstraResult astra_fonts_context_id(char id[ASTRA_FONT_ID_MAX])
+{
+    strcpy(id, context_font_id);
+    return ASTRA_OK;
+}
+static AstraResult preview_result = ASTRA_OK;
+static uint32_t preview_draws;
+static uint16_t preview_height;
+
+AstraResult astra_fonts_text_measure(AstraHandle gui,
+    const char *id, uint32_t id_length, uint16_t height,
+    const char *text, uint32_t length, uint32_t maximum_width,
+    AstraFontTextMetrics *metrics)
+{
+    (void)text;
+    assert(gui == 1u && id_length == 12u &&
+           memcmp(id, "user:preview", 12u) == 0);
+    *metrics = (AstraFontTextMetrics)ASTRA_FONT_TEXT_METRICS_INIT;
+    if (preview_result != ASTRA_OK) return preview_result;
+    metrics->fitted_bytes = maximum_width / height;
+    if (metrics->fitted_bytes > length) metrics->fitted_bytes = length;
+    metrics->width = metrics->fitted_bytes * height;
+    metrics->height = height + 3u;
+    return ASTRA_OK;
+}
+
+int astra_surface_font_text(AstraSurfaceView *surface,
+    const char *id, uint32_t id_length, int32_t x, int32_t y,
+    const char *text, uint32_t length, uint16_t height, uint16_t color)
+{
+    (void)x; (void)y; (void)text; (void)color;
+    assert(surface->kind == ASTRA_SURFACE_VIEW_DRAW_LIST &&
+        id_length == 12u && memcmp(id, "user:preview", 12u) == 0 && length != 0u);
+    ++preview_draws;
+    preview_height = height;
+    return 1;
+}
+
 uint32_t astra_surface_ui_text_width(const char *text, uint32_t length,
                                      uint16_t height)
 {
     (void)text;
     (void)height;
     return length * font_advance;
+}
+
+uint32_t astra_surface_ui_text_height(uint16_t pixel_height)
+{
+    return pixel_height;
 }
 
 uint32_t astra_surface_ui_text_fit(const char *text, uint32_t length,
@@ -685,6 +729,62 @@ static void test_fault_label(void)
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     assert(text_calls == 1u && first_text_color == theme_color(theme.fault));
+}
+
+static void test_label_installed_font(void)
+{
+    AstraLabelInfo info = ASTRA_LABEL_INFO_INIT;
+    AstraControl label = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraLabelFont font = ASTRA_LABEL_FONT_INIT;
+    AstraSurfaceView surface = render_view(200u, 80u);
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    font_advance = 1u;
+    info.id = 1u;
+    info.text = "ABC";
+    info.text_length = 3u;
+    font.gui = 1u;
+    font.id = "user:preview";
+    font.id_length = 12u;
+    font.pixel_height = 20u;
+    info.font = font;
+    assert(astra_interface_label_init(&label, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &label, 1u, 200u, 80u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(label._private_measured_width == 60u && label._private_measured_height == 23u);
+    reset_render_calls();
+    AstraDrawListHeader *header = (void *)surface.pixels;
+    header->payload_bytes = ASTRA_DRAW_LIST_PAYLOAD_BYTES - 14u;
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_ERROR_NO_RESOURCES);
+    assert(preview_draws == 0u);
+    header->payload_bytes = 0u;
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(preview_draws == 1u && preview_height == 20u && text_calls == 0u);
+    font.pixel_height = 13u;
+    assert(astra_interface_label_set_font(&context, &label, &font) == ASTRA_OK);
+    assert(label._private_measured_width == 39u && label._private_measured_height == 16u);
+    uint32_t focus = context._private_focus;
+    preview_result = ASTRA_ERROR_UNSUPPORTED;
+    font.pixel_height = 99u;
+    assert(astra_interface_label_set_font(&context, &label, &font) == ASTRA_ERROR_UNSUPPORTED);
+    assert(label._private_label_font.pixel_height == 13u && label._private_measured_width == 39u &&
+           context._private_focus == focus);
+    preview_result = ASTRA_OK;
+    assert(astra_interface_control_set_text(&context, &label, "ABCD", 4u) == ASTRA_OK);
+    assert(label._private_measured_width == 52u);
+    font = (AstraLabelFont)ASTRA_LABEL_FONT_INIT;
+    assert(astra_interface_label_set_font(&context, &label, &font) == ASTRA_OK);
+    assert(label._private_measured_width == 4u &&
+        label._private_measured_height == theme.body_font_height);
+    font.gui = 1u;
+    assert(astra_interface_label_set_font(&context, &label, &font) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(label._private_label_font.gui == ASTRA_INVALID_HANDLE && context._private_focus == focus);
+    context_font_id = "user:preview";
+    header->payload_bytes = ASTRA_DRAW_LIST_PAYLOAD_BYTES - 15u;
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_ERROR_NO_RESOURCES);
+    header->payload_bytes = 0u;
+    context_font_id = "";
 }
 
 static void test_button_preview_states(void)
@@ -3017,6 +3117,7 @@ int main(void)
     test_context_request();
     test_controls();
     test_fault_label();
+    test_label_installed_font();
     test_button_preview_states();
     test_flex_growth();
     test_control_rejections();

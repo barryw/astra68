@@ -13,8 +13,8 @@
 #include <astra/undo.h>
 #include <astra/window.h>
 
-/** Breaking Interface Kit ABI generation carried by interface.library.6. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 6u
+/** Breaking Interface Kit ABI generation carried by interface.library.7. */
+#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 7u
 /** Current backward-compatible Interface Kit revision. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 0u
 
@@ -29,6 +29,14 @@ AstraResult astra_interface_show_alert(AstraHandle gui,
  */
 AstraResult astra_interface_label_init(AstraControl *control,
                                        const AstraLabelInfo *info);
+/** Change a Label's installed face/size, preserving focus and retained layout.
+ * Failure keeps its previous font. Ordinary theme labels use the empty font.
+ * @param context Owning UI context.
+ * @param control Label to update.
+ * @param font Copied descriptor; referenced ID remains caller-owned.
+ * @return ASTRA_OK or a validation, metric or layout error. */
+AstraResult astra_interface_label_set_font(AstraUIContext *context,
+    AstraControl *control, const AstraLabelFont *font);
 /** Initialize a retained button.
  * @param control Caller-owned control to initialize.
  * @param info Button description whose referenced text remains caller-owned.

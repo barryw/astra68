@@ -145,11 +145,14 @@ def main():
     parser.add_argument("image")
     parser.add_argument("font", nargs="?",
                         help="font to import through Fonts from DH0")
-    parser.add_argument("--long-style", action="store_true",
+    fixture = parser.add_mutually_exclusive_group()
+    fixture.add_argument("--long-style", action="store_true",
                         help="exercise the longest accepted AFNT style name")
+    fixture.add_argument("--unsupported-preview", action="store_true",
+                        help="manage a valid AFNT whose bitmap format cannot be previewed")
     args = parser.parse_args()
-    if args.font is None and not args.long_style:
-        parser.error("font is required unless --long-style is selected")
+    if args.font is None and not (args.long_style or args.unsupported_preview):
+        parser.error("font is required unless a fixture is selected")
     if os.geteuid() != 0:
         parser.error("run as root observer with ASTRA_TEST_QEMU_UID/GID set to a non-root account")
     with tempfile.TemporaryDirectory(prefix="astra-fonts-ui-") as work:
@@ -158,16 +161,25 @@ def main():
         astra_image.install(image, vim_runtime=None)
         previous, old_inventory = state_on_disk(image, work)
         source = args.font
-        if args.long_style:
+        if args.long_style or args.unsupported_preview:
             parts = font_format.parse_afnt((HERE.parents[1] /
                 "sw/userspace/graphics/fonts/astra-workbench.afnt").read_bytes())
             metadata = json.loads(parts[b"NAME"])
-            metadata.update(family="Long Style Fixture", style="S" * 127)
-            source = str(Path(work) / "long-style.afnt")
+            metadata.update(family="Preview Fixture" if args.unsupported_preview else
+                            "Long Style Fixture", style="Regular" if
+                            args.unsupported_preview else "S" * 127)
+            strikes = [parts[b"STRK"][at:at + font_format.STRIKE.size]
+                       for at in range(4, len(parts[b"STRK"]), font_format.STRIKE.size)]
+            if args.unsupported_preview:
+                for at, record in enumerate(strikes):
+                    fields = list(font_format.STRIKE.unpack(record))
+                    assert fields[1] == font_format.A8
+                    fields[1] = font_format.INDEX8
+                    strikes[at] = font_format.STRIKE.pack(*fields)
+            source = str(Path(work) / "fixture.afnt")
             Path(source).write_bytes(font_format.serialize_afnt(
                 metadata, parts[b"CMAP"],
-                [parts[b"STRK"][at:at + font_format.STRIKE.size]
-                 for at in range(4, len(parts[b"STRK"]), font_format.STRIKE.size)],
+                strikes,
                 [parts[b"GLYP"][at:at + font_format.GLYPH.size]
                  for at in range(4, len(parts[b"GLYP"]), font_format.GLYPH.size)],
                 parts[b"BITM"]))
@@ -207,6 +219,25 @@ def main():
                 machine.qmp.key("tab")
             machine.qmp.key("end")
             machine.qmp.key("ret")
+            if args.unsupported_preview:
+                # Details remain usable even when the renderer rejects this strike.
+                for _ in range(4):
+                    machine.qmp.key("tab")
+                machine.qmp.key("ret")
+                machine.qmp.key("tab")
+                machine.qmp.key("tab")
+                machine.qmp.key("ret")
+                time.sleep(.5)
+                machine.close()
+                machine = None
+                choice, inventory = state_on_disk(image, work)
+                default = "system:astra-workbench"
+                if (choice or default) != (previous or default) or \
+                        (inventory or "") != (old_inventory or ""):
+                    raise RuntimeError("unsupported preview blocked removal: %r, %r" %
+                                       (choice, inventory))
+                print("ASTRA FONTS UI PASS unsupported preview, family detail, uninstall")
+                return 0
             # Selection must preserve List focus before tabbing to Back/Use.
             for key in ("tab", "tab", "down", "up", "tab", "tab"):
                 machine.qmp.key(key)
@@ -220,7 +251,8 @@ def main():
             recent = [line for line in machine.said_with_syslog()[0]
                       if "font" in line.lower() or "exit" in line.lower()][-100:]
         finally:
-            machine.close()
+            if machine is not None:
+                machine.close()
         selected, inventory = state_on_disk(image, work)
         if inventory is None or inventory == old_inventory:
             raise RuntimeError("UI import did not publish AFNT inventory: %r -> %r; choice=%r; recent=%s" %

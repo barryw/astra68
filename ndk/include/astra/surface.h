@@ -113,6 +113,10 @@ void astra_surface_text8x8(AstraSurfaceView *surface, int32_t x, int32_t y,
 /** Measure proportional UTF-8 text. @param utf8 UTF-8 bytes. @param length Byte count. @param pixel_height Font height. @return Advance width in pixels. */
 uint32_t astra_surface_ui_text_width(const char *utf8, uint32_t length,
                                      uint16_t pixel_height);
+/** Return the adopted UI face's line-box height for one exact strike.
+ * @param pixel_height Nominal UI strike height.
+ * @return Logical pixels including ascent/descent/gap, or zero if unavailable. */
+uint32_t astra_surface_ui_text_height(uint16_t pixel_height);
 /** Find the scalar-safe prefix fitting a width. @param utf8 UTF-8 bytes. @param length Byte count. @param pixel_height Font height. @param maximum_width Available pixels. @return Fitting byte count. */
 uint32_t astra_surface_ui_text_fit(const char *utf8, uint32_t length,
                                    uint16_t pixel_height,

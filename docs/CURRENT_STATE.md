@@ -2,6 +2,39 @@
 
 Status: active continuation map, 2026-10-17
 
+The Fonts preview checkpoint uses shared Label, not an application
+renderer: Interface Kit 7, Font Kit 4.1, GUI 25. Detail selection carries the
+catalog face and strike together and updates the common Label's explicit font
+in place. Display measures through the existing AFNT registry/render loop;
+bounded UTF-8 chunks retain fractional advance, and actual line height prevents
+descender clipping. Ordinary Labels retain fixed nominal theme sizes. Exact
+font-ID prefix accounting also closes the common control/menu capacity gap.
+Focused host/sanitizer/MC68040/analyzer checks pass on Beast in
+`/var/tmp/astra-font-label-preview-focused-final-20261017.log`. The first metrics
+draft passes native Amiga import, measurement, hardware drawing and restart.
+The first full userspace/ROM/NDK distribution gate passes in
+`/var/tmp/astra-font-label-preview-coherent-20261017.log`. A matching cause for
+the failed restoration interaction is now reproduced: a font notice that could
+retry after queue backpressure incorrectly marked input as lost. Common
+controls then reset focus and Return did not activate the intended button.
+The real-control regression fails before the fix in
+`/var/tmp/astra-font-notice-focus-red-linked-20261017.log`. Delivery now reuses
+the existing non-loss retry path; genuine earlier input loss still propagates.
+Final focused/coherent checks pass in
+`/var/tmp/astra-font-notice-focus-green-20261017.log`, including the full
+userspace/ROM and NDK distribution checks. Native Iosevka, Amiga and long-style
+gates pass in `/var/tmp/astra-font-label-preview-{iosevka-ui,amiga-native,long-style-ui}-20261017.log`.
+A valid AFNT with an unsupported preview bitmap format exposed an application
+exit that blocked removal; its native failure is retained in
+`/var/tmp/astra-font-preview-unsupported-red-20261017.log`. Fonts now uses the
+same Label update path to show an explicit unavailable caption while keeping
+management usable. The final native check passes in
+`/var/tmp/astra-font-preview-unsupported-final-20261017.log`; its first fixed
+run removed the font but exposed an absent-versus-empty inventory assertion
+in the test, corrected in the final run. Physical preview/
+restoration gates remain pending. Production remains on `57078599`,
+with its data unchanged; no preview software has been deployed to DE25.
+
 The `31b709ec` Fonts candidate passed native adoption/persistence checks but
 failed physical live-pixel acceptance. Release
 `0824c4104c68a0f870cb1f67f1df09c71b1722a6b6b5474ccd3dced04578de84`

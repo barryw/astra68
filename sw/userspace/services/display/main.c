@@ -4366,6 +4366,38 @@ static DisplayFontContext *session_font_context(DisplayState *state,
     return NULL;
 }
 
+static void font_measure_reply(DisplayState *state,
+    const AstraGuiFontMeasureRequest *request, uint32_t reply)
+{
+    AstraGuiFontMeasureReply message = {0};
+    DisplayFontFace *face = NULL;
+    const char *end = memchr(request->face_id, '\0', sizeof(request->face_id));
+
+    astra_message_header_set(&message.header, sizeof(message),
+        ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_MEASURE_REPLY,
+        request->header.transaction_id);
+    message.status = ASTRA_STATUS_INVALID;
+    if (end != NULL && end != request->face_id &&
+        request->reserved16 == 0u && request->pixel_height != 0u &&
+        request->text_length <= sizeof(request->text) &&
+        astra_utf8_validate(request->text, request->text_length, 0u)) {
+        message.status = astra_status_from_result(display_font_acquire(
+            state->fonts, request->face_id,
+            (uint32_t)(end - request->face_id), &face));
+        if (message.status == ASTRA_STATUS_OK) {
+            AstraRenderBuilder builder = {.ui_font = &face->render};
+
+            if (!astra_render_builder_text_measure(&builder, request->text,
+                    request->text_length, request->pixel_height, 0u,
+                    request->maximum_advance, &message.advance,
+                    &message.fitted_bytes, &message.line_height))
+                message.status = ASTRA_STATUS_UNSUPPORTED;
+        }
+    }
+    display_font_release(face);
+    (void)astra_port_send(reply, &message, sizeof(message), NULL, 0u);
+}
+
 static void font_context_reply(DisplayState *state, uint32_t session,
                                 const AstraGuiFontContextRequest *request,
                                 uint32_t reply)
@@ -4449,9 +4481,12 @@ static void notify_font_changes(DisplayState *state)
         DisplayWindow *window = &state->windows[at];
         if (window->pending_font == 0u) continue;
         AstraWindowEvent event = {.type = ASTRA_WINDOW_EVENT_FONT_CHANGED};
+        AstraGuiWindowEvent message;
         event.data.font_changed.generation = window->pending_font;
         event.data.font_changed.window = window->id;
-        (void)send_event(window, &event);
+        /* A retained state notice can retry without declaring input lost. */
+        if (prepare_event(window, &event, &message))
+            (void)deliver_event(window, &message, 0);
         state->font_notifications = 1u;
     }
     state->font_notify_at = astra_clock_monotonic() + UINT64_C(250000000);
@@ -4649,6 +4684,10 @@ static void receive_open(uint32_t device, uint32_t irq,
                          uint32_t *armed)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    union {
+        AstraGuiOpenWindow open;
+        AstraGuiFontMeasureRequest measure;
+    } packet = {0};
     AstraGuiOpenWindow request = {0};
     DisplayWindow candidate = {0};
     uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX] = {0};
@@ -4657,7 +4696,7 @@ static void receive_open(uint32_t device, uint32_t irq,
     uint32_t control_send = 0u;
     uint32_t vblank_wait = 0u;
     uint32_t status = astra_port_receive(
-        gui_receive, &request, sizeof(request), handles,
+        gui_receive, &packet, sizeof(packet), handles,
         ASTRA_MESSAGE_HANDLES_MAX, &size, &handle_count);
     int added = 0;
 
@@ -4681,6 +4720,15 @@ static void receive_open(uint32_t device, uint32_t irq,
     }
     if (status != ASTRA_SYSCALL_OK)
         return;
+    if (size == sizeof(AstraGuiFontMeasureRequest)) {
+        if (handle_count == 1u && valid_session_request(&packet.measure.header,
+                size, sizeof(packet.measure), ASTRA_GUI_FONT_MEASURE))
+            font_measure_reply(state, &packet.measure, handles[0]);
+        for (uint32_t index = 0u; index < handle_count; ++index)
+            if (handles[index] != 0u) (void)astra_close(handles[index]);
+        return;
+    }
+    memcpy(&request, &packet.open, sizeof(request));
     if (size == sizeof(AstraGuiOpenSession)) {
         const AstraGuiOpenSession *message =
             (const AstraGuiOpenSession *)(const void *)&request;

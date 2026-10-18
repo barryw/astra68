@@ -12,6 +12,8 @@ GRAPHICS := ../../graphics
 NDK := ../../../../ndk
 SYSTEM := ../../system
 INTERFACE := ../../interface
+INTERFACE_HOST_SOURCES := $(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c \
+	$(INTERFACE)/src/text_model.c $(INTERFACE)/src/scroll.c
 ASTRA_COMMON := ../../../common
 CPPFLAGS := -I../../../../ndk/include -I../../../include -I$(RUNTIME)/include \
 	-I$(GRAPHICS)/include -I../../../../fpga/arty/linux
@@ -53,18 +55,18 @@ $(AFNT_CODEC) $(HOST_AFNT_CODEC):
 
 $(HOST_TEST): main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
 		../../../include/astra/gui.h \
-		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/src/font_context.h $(GRAPHICS)/include/astra/ui_font.h \
+		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/include/astra/ui_font.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c $(GRAPHICS)/src/render_builder.c \
 		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c \
-		$(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c $(HOST_AFNT_CODEC)
+		$(INTERFACE_HOST_SOURCES) $(HOST_AFNT_CODEC)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
 		-Wl,--gc-sections $(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c \
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
-		$(ASTRA_COMMON)/utf8.c $(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c \
+		$(ASTRA_COMMON)/utf8.c $(INTERFACE_HOST_SOURCES) \
 		window_graphics.c font_face.c tests/test_display.c $(RUNTIME)/tests/uncontended_mutex.c $(HOST_AFNT_CODEC) -o $@
 
 test: $(HOST_TEST)
@@ -72,11 +74,11 @@ test: $(HOST_TEST)
 
 $(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
 		../../../include/astra/gui.h \
-		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/src/font_context.h $(GRAPHICS)/include/astra/ui_font.h \
+		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/include/astra/ui_font.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c $(GRAPHICS)/src/render_builder.c \
 		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c \
-		$(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c
+		$(INTERFACE_HOST_SOURCES)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O1 -fsanitize=address,undefined \
@@ -84,7 +86,7 @@ $(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h font_face.c fo
 		-Wl,--gc-sections $(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c \
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
-		$(ASTRA_COMMON)/utf8.c $(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c \
+		$(ASTRA_COMMON)/utf8.c $(INTERFACE_HOST_SOURCES) \
 		window_graphics.c font_face.c tests/test_display.c \
 		$(ASTRA_COMMON)/afnt.c $(ASTRA_COMMON)/crc32.c $(RUNTIME)/tests/uncontended_mutex.c -o $@
 

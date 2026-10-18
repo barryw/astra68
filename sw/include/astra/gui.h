@@ -14,7 +14,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 24u
+#define ASTRA_GUI_VERSION 25u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -376,6 +376,34 @@ _Static_assert(sizeof(AstraWindowEvent) == 52u,
    separately; delivery alone does not retire the client's previous font. */
 #define ASTRA_GUI_FONT_CONTEXT 11u
 #define ASTRA_GUI_FONT_CONTEXT_REPLY 12u
+/* One reply capability; bounded UTF-8 chunks keep measurement work bounded. */
+#define ASTRA_GUI_FONT_MEASURE 13u
+#define ASTRA_GUI_FONT_MEASURE_REPLY 14u
+#define ASTRA_GUI_FONT_MEASURE_TEXT_MAX 256u
+
+typedef struct AstraGuiFontMeasureRequest {
+    AstraMessageHeader header;
+    char face_id[64];
+    uint32_t text_length;
+    uint16_t pixel_height;
+    uint16_t reserved16;
+    uint64_t maximum_advance;
+    char text[ASTRA_GUI_FONT_MEASURE_TEXT_MAX];
+} AstraGuiFontMeasureRequest;
+
+typedef struct AstraGuiFontMeasureReply {
+    AstraMessageHeader header;
+    uint32_t status;
+    uint32_t fitted_bytes;
+    uint64_t advance;
+    uint32_t line_height;
+    uint32_t reserved;
+} AstraGuiFontMeasureReply;
+
+_Static_assert(sizeof(AstraGuiFontMeasureRequest) == 360u,
+               "font measure request ABI");
+_Static_assert(sizeof(AstraGuiFontMeasureReply) == 48u,
+               "font measure reply ABI");
 
 typedef struct AstraGuiFontContextRequest {
     AstraMessageHeader header;

@@ -9,6 +9,8 @@ int astra_interface_draw_list_has_room(const AstraSurfaceView *surface,
 
 AstraResult astra_interface_label_init(AstraControl *control,
                                        const AstraLabelInfo *info);
+AstraResult astra_interface_label_set_font(AstraUIContext *context,
+    AstraControl *control, const AstraLabelFont *font);
 AstraResult astra_interface_button_init(AstraControl *control,
                                         const AstraButtonInfo *info);
 AstraResult astra_interface_container_init(AstraControl *control,

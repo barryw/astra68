@@ -29,6 +29,7 @@
 enum {
     FONTS_TITLE = 1u,
     FONTS_HINT,
+    FONTS_PREVIEW,
     FONTS_SCROLL,
     FONTS_LIST,
     FONTS_BACK,
@@ -58,7 +59,8 @@ static uint32_t family_count;
 static AstraChoiceItem *details;
 static char *detail_text;
 static uint32_t detail_text_stride;
-static uint32_t *detail_faces;
+typedef struct FontDetail { uint32_t face; uint32_t strike; } FontDetail;
+static FontDetail *detail_sources;
 static uint32_t detail_capacity;
 static uint32_t detail_count;
 static uint32_t active_family = UINT32_MAX;
@@ -66,6 +68,7 @@ static uint32_t main_selection;
 static uint32_t detail_selection;
 static AstraHandle fonts_read;
 static AstraHandle fonts_admin;
+static AstraHandle fonts_gui;
 static const char *message;
 static AstraProcessFilesystem files = ASTRA_PROCESS_FILESYSTEM_INIT;
 static AstraDirectoryEntry browser_nodes[FONTS_BROWSER_MAX];
@@ -144,9 +147,9 @@ static uint32_t collect_families(void)
             (size_t)strikes * sizeof(*details));
         detail_text = astra_runtime_allocate(
             (size_t)strikes * detail_text_stride);
-        detail_faces = astra_runtime_allocate(
-            (size_t)strikes * sizeof(*detail_faces));
-        if (details == NULL || detail_text == NULL || detail_faces == NULL)
+        detail_sources = astra_runtime_allocate(
+            (size_t)strikes * sizeof(*detail_sources));
+        if (details == NULL || detail_text == NULL || detail_sources == NULL)
             return FONTS_FAIL_CATALOG;
     }
     detail_capacity = strikes;
@@ -191,7 +194,7 @@ static uint32_t collect_details(uint32_t family_index)
             details[detail_count] = (AstraChoiceItem){
                 text.text, text.length, {0u, 0u}
             };
-            detail_faces[detail_count] = at;
+            detail_sources[detail_count] = (FontDetail){at, strike_at};
             ++detail_count;
         }
     }
@@ -321,6 +324,45 @@ static AstraResult browser_import(void)
     return result;
 }
 
+static uint32_t selected_preview_font(AstraLabelFont *font)
+{
+    AstraInstalledFont face;
+    AstraInstalledFontStrike strike;
+    *font = (AstraLabelFont)ASTRA_LABEL_FONT_INIT;
+    if (active_family == UINT32_MAX) return ASTRA_STATUS_OK;
+    if (detail_selection >= detail_count ||
+        astra_fonts_catalog_face(&catalog,
+            detail_sources[detail_selection].face, &face) != ASTRA_OK ||
+        astra_fonts_catalog_strike(&catalog,
+            detail_sources[detail_selection].face,
+            detail_sources[detail_selection].strike, &strike) != ASTRA_OK)
+        return FONTS_FAIL_CATALOG;
+    font->gui = fonts_gui;
+    font->id = face.id;
+    font->id_length = face.id_length;
+    font->pixel_height = strike.pixel_height;
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t update_preview(void)
+{
+    AstraLabelFont font = ASTRA_LABEL_FONT_INIT;
+    const char *text = "The quick brown fox jumps over the lazy dog. 0123456789";
+
+    if (browsing || active_family == UINT32_MAX) return ASTRA_STATUS_OK;
+    if (selected_preview_font(&font) != ASTRA_STATUS_OK)
+        return FONTS_FAIL_CATALOG;
+    if (astra_interface_label_set_font(&ui, CONTROL(FONTS_PREVIEW), &font) != ASTRA_OK) {
+        font = (AstraLabelFont)ASTRA_LABEL_FONT_INIT;
+        if (astra_interface_label_set_font(&ui, CONTROL(FONTS_PREVIEW), &font) != ASTRA_OK)
+            return FONTS_FAIL_CONTROL;
+        text = "Preview unavailable for this font";
+    }
+    return astra_interface_control_set_text(&ui, CONTROL(FONTS_PREVIEW),
+        text, (uint32_t)strlen(text)) == ASTRA_OK ?
+        ASTRA_STATUS_OK : FONTS_FAIL_CONTROL;
+}
+
 static uint32_t build_controls(void)
 {
     AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
@@ -340,7 +382,7 @@ static uint32_t build_controls(void)
     if (!browsing && active_family != UINT32_MAX &&
         detail_selection < detail_count) {
         if (astra_fonts_catalog_face(&catalog,
-            detail_faces[detail_selection], &selected_face) != ASTRA_OK)
+            detail_sources[detail_selection].face, &selected_face) != ASTRA_OK)
             return FONTS_FAIL_CATALOG;
         system_ready = (selected_face.flags &
                         ASTRA_INSTALLED_FONT_SELECTABLE) != 0u;
@@ -368,6 +410,16 @@ static uint32_t build_controls(void)
     label.text_role = ASTRA_TEXT_CLIENT_SECONDARY;
     if (astra_interface_label_init(CONTROL(FONTS_HINT), &label) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
+    {
+        AstraLabelInfo preview = ASTRA_LABEL_INFO_INIT;
+        preview.id = FONTS_PREVIEW;
+        preview.text = "Preview unavailable for this font";
+        preview.text_length = (uint32_t)strlen(preview.text);
+        preview.state = browsing || active_family == UINT32_MAX ?
+                        ASTRA_CONTROL_COLLAPSED : 0u;
+        if (astra_interface_label_init(CONTROL(FONTS_PREVIEW), &preview) != ASTRA_OK)
+            return FONTS_FAIL_CONTROL;
+    }
     view.id = FONTS_SCROLL;
     view.model = &scroll;
     view.preferred_width = FONTS_WIDTH - 48u;
@@ -428,7 +480,8 @@ static uint32_t build_controls(void)
         ASTRA_OK) return FONTS_FAIL_CONTROL;
 
     if (astra_interface_control_set_flex(CONTROL(FONTS_TITLE), &item) != ASTRA_OK ||
-        astra_interface_control_set_flex(CONTROL(FONTS_HINT), &item) != ASTRA_OK)
+        astra_interface_control_set_flex(CONTROL(FONTS_HINT), &item) != ASTRA_OK ||
+        astra_interface_control_set_flex(CONTROL(FONTS_PREVIEW), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     item.grow = 1u;
     item.minimum_height = 120u;
@@ -453,6 +506,7 @@ static uint32_t build_controls(void)
     if (astra_interface_ui_init(&ui, controls, FONTS_CONTROL_COUNT,
                                 client_width, client_height) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
+    if (update_preview() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
     if (astra_scroll_set_offset(&scroll, 0u, 0u) != ASTRA_OK ||
         layout_controls() != ASTRA_STATUS_OK)
         return FONTS_FAIL_CONTROL;
@@ -497,10 +551,10 @@ static uint32_t reload_catalog(void)
     }
     astra_runtime_deallocate(details);
     astra_runtime_deallocate(detail_text);
-    astra_runtime_deallocate(detail_faces);
+    astra_runtime_deallocate(detail_sources);
     details = NULL;
     detail_text = NULL;
-    detail_faces = NULL;
+    detail_sources = NULL;
     detail_capacity = 0u;
     detail_count = 0u;
     family_count = 0u;
@@ -606,7 +660,7 @@ static uint32_t action(const AstraUIAction *event)
 
         if (detail_selection >= detail_count ||
             astra_fonts_catalog_face(&catalog,
-                detail_faces[detail_selection], &face) != ASTRA_OK)
+                detail_sources[detail_selection].face, &face) != ASTRA_OK)
             return FONTS_FAIL_CATALOG;
         if ((face.flags & ASTRA_INSTALLED_FONT_SYSTEM) != 0u) {
             message = "Built-in fonts cannot be removed";
@@ -641,7 +695,7 @@ static uint32_t action(const AstraUIAction *event)
 
         detail_selection = (uint32_t)event->value;
         if (astra_fonts_catalog_face(&catalog,
-            detail_faces[detail_selection], &face) != ASTRA_OK)
+            detail_sources[detail_selection].face, &face) != ASTRA_OK)
             return FONTS_FAIL_CATALOG;
         uint32_t ready = (face.flags & ASTRA_INSTALLED_FONT_SELECTABLE) != 0u;
         hint = ready ? "Select a style, then use it for system text" :
@@ -649,6 +703,7 @@ static uint32_t action(const AstraUIAction *event)
         message = NULL;
         if (astra_interface_ui_set_state(&ui, CONTROL(FONTS_USE),
                 ready ? 0u : ASTRA_CONTROL_DISABLED) != ASTRA_OK ||
+            update_preview() != ASTRA_STATUS_OK ||
             astra_interface_control_set_text(&ui, CONTROL(FONTS_HINT), hint,
                 (uint32_t)strlen(hint)) != ASTRA_OK)
             return FONTS_FAIL_CONTROL;
@@ -688,7 +743,7 @@ static uint32_t action(const AstraUIAction *event)
 
         if (detail_selection >= detail_count ||
             astra_fonts_catalog_face(&catalog,
-                detail_faces[detail_selection], &face) != ASTRA_OK)
+                detail_sources[detail_selection].face, &face) != ASTRA_OK)
             return FONTS_FAIL_CATALOG;
         if ((face.flags & ASTRA_INSTALLED_FONT_SELECTABLE) == 0u)
             return ASTRA_STATUS_OK;
@@ -761,6 +816,7 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_BAD_HANDLE;
     fonts_read = fonts->handle;
     fonts_admin = admin->handle;
+    fonts_gui = gui->handle;
     if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
         return FONTS_FAIL_CATALOG;
     if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
@@ -818,7 +874,7 @@ int astra_main(const AstraStartupInfo *startup)
         status == ASTRA_STATUS_OK)
         status = FONTS_FAIL_CATALOG;
     astra_runtime_deallocate(detail_text);
-    astra_runtime_deallocate(detail_faces);
+    astra_runtime_deallocate(detail_sources);
     astra_runtime_deallocate(details);
     astra_process_filesystem_close(&files);
     return (int)status;

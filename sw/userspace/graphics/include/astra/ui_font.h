@@ -6,6 +6,15 @@
 #include <astra/font_library.h>
 #include <astra/text_style.h>
 
+static inline uint32_t astra_ui_line_height(uint16_t nominal_height,
+    int32_t ascent, int32_t descent, int32_t line_gap)
+{
+    int64_t extent = (int64_t)ascent + descent;
+    if (line_gap > 0) extent += line_gap;
+    return extent > (int64_t)nominal_height * 64 ?
+        (uint32_t)((extent + 63) / 64) : nominal_height;
+}
+
 static inline int32_t astra_ui_fixed_floor(int32_t value)
 {
     int32_t pixels = value / 64;

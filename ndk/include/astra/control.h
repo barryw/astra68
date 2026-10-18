@@ -22,7 +22,7 @@ ASTRA_EXTERN_C_BEGIN
 /** Display refresh used to derive deterministic animation phases. */
 #define ASTRA_UI_VBLANK_HZ 60u
 
-/** Control kinds implemented by Interface Kit ABI 6.0. */
+/** Control kinds implemented by Interface Kit ABI 7.0. */
 enum {
     ASTRA_CONTROL_LABEL = 1u,
     ASTRA_CONTROL_BUTTON = 2u,
@@ -236,6 +236,23 @@ typedef struct AstraControlSize {
     uint32_t height;
 } AstraControlSize;
 
+/** Optional installed face and exact strike for a Label.
+ * The descriptor is copied; the counted ID remains caller-owned. A zero GUI
+ * capability with an empty ID/height keeps the theme's fixed text-role size.
+ */
+typedef struct AstraLabelFont {
+    uint32_t size; /**< Structure size. */
+    AstraHandle gui; /**< Borrowed GUI session used for font metrics. */
+    const char *id; /**< Borrowed counted installed face ID, or NULL. */
+    uint32_t id_length; /**< ID bytes excluding any terminator. */
+    uint16_t pixel_height; /**< Exact installed strike height. */
+    uint16_t reserved16; /**< Must be zero. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraLabelFont;
+
+/** Keep the theme's ordinary Label font and role size. */
+#define ASTRA_LABEL_FONT_INIT { sizeof(AstraLabelFont), 0, 0, 0, 0, 0, { 0, 0 } }
+
 /** Label creation data; the retained UTF-8 text span remains caller-owned. */
 typedef struct AstraLabelInfo {
     /** Structure size for source-compatible extension. */
@@ -252,12 +269,14 @@ typedef struct AstraLabelInfo {
     uint32_t state;
     /** Must be zero. */
     uint32_t reserved[3];
+    /** Optional installed-font override, copied by value. */
+    AstraLabelFont font;
 } AstraLabelInfo;
 
 /** Empty primary-label creation data. */
 #define ASTRA_LABEL_INFO_INIT { \
     sizeof(AstraLabelInfo), 0, 0, 0, ASTRA_TEXT_CLIENT_PRIMARY, 0, \
-    { 0, 0, 0 } \
+    { 0, 0, 0 }, ASTRA_LABEL_FONT_INIT \
 }
 
 /** Button creation data; the retained UTF-8 text span remains caller-owned. */
@@ -583,6 +602,7 @@ typedef struct AstraControl {
     AstraFlexLayout _private_child_layout;
     uint32_t _private_animation_next;
     uint32_t _private_animation_phase;
+    AstraLabelFont _private_label_font;
     /** @endcond */
 } AstraControl;
 
@@ -592,7 +612,8 @@ typedef struct AstraControl {
     { 0, 0, 0, 0 }, 0, 0, 0, 0, 1, ASTRA_FLEX_AUTO, 0, 0, \
     UINT32_MAX, UINT32_MAX, ASTRA_FLEX_ALIGN_AUTO, 0, 0, \
     0, 0, 0, 0, 0, 0, 0, UINT32_MAX, UINT32_MAX, UINT32_MAX, \
-    UINT32_MAX, { 0, 0, 0, 0 }, ASTRA_FLEX_LAYOUT_INIT, UINT32_MAX, 0 \
+    UINT32_MAX, { 0, 0, 0, 0 }, ASTRA_FLEX_LAYOUT_INIT, UINT32_MAX, 0, \
+    ASTRA_LABEL_FONT_INIT \
 }
 
 /** Caller-owned retained interaction and damage state. */

@@ -169,7 +169,7 @@ def main():
             image, str(marker), "/expect-outline-again")
         boot(args.qemu, args.rom, image, work, "restart")
     if args.amiga:
-        print("ASTRA FONT AMIGA PASS native import, named hardware draw, restart")
+        print("ASTRA FONT AMIGA PASS native import, exact metrics, named hardware draw, restart")
     elif args.expect_variable:
         print("ASTRA FONT OUTLINE PASS variable styles, AFNT, selection, restart")
     else:

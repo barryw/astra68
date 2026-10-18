@@ -7,6 +7,7 @@
 #include <astra/attributes.h>
 #include <astra/font_encoding.h>
 #include <astra/gui.h>
+#include <astra/surface.h>
 #include <astra/types.h>
 
 ASTRA_EXTERN_C_BEGIN
@@ -23,6 +24,59 @@ ASTRA_EXTERN_C_BEGIN
 #define ASTRA_FONT_IMPORT_MAX (32u * 1024u * 1024u)
 /** Maximum source name bytes, including its terminator. */
 #define ASTRA_FONT_IMPORT_NAME_MAX 128u
+
+/** Copy this process's actually adopted system-font ID.
+ * This reads the rendering context, independently of a newer saved choice.
+ * Call between frames on the UI thread, like context adoption.
+ * @param id Output buffer of at least ASTRA_FONT_ID_MAX bytes; empty selects
+ * the built-in recovery face and is also returned on error.
+ * @return ASTRA_OK or a negative AstraResult. */
+ASTRA_NODISCARD AstraResult astra_fonts_context_id(char id[ASTRA_FONT_ID_MAX]);
+
+/** Measured installed text; dimensions are rounded-up logical pixels. */
+typedef struct AstraFontTextMetrics {
+    uint32_t width; /**< Advance of the fitting UTF-8 prefix. */
+    uint32_t height; /**< Line box including ascent, descent and line gap. */
+    uint32_t fitted_bytes; /**< Complete UTF-8 bytes fitting the width limit. */
+} AstraFontTextMetrics;
+
+/** Empty text metrics. */
+#define ASTRA_FONT_TEXT_METRICS_INIT { 0u, 0u, 0u }
+
+/** Measure installed-face text without changing the process's system font.
+ * Display uses the same exact strike and glyph advances as named-face drawing.
+ * Long UTF-8 spans are transported in bounded chunks, preserving fractional
+ * advances across chunks. No font bytes or bitmap addresses reach the client.
+ * @param gui Borrowed GUI session capability.
+ * @param id Counted installed face ID.
+ * @param id_length ID bytes, excluding any terminator.
+ * @param pixel_height Exact installed strike height.
+ * @param text Valid UTF-8 bytes, or NULL for an empty span.
+ * @param length Number of bytes at @p text.
+ * @param maximum_width Inclusive horizontal advance limit in pixels.
+ * @param metrics Receives the fitted advance, line height and complete prefix.
+ * @return ::ASTRA_OK, ::ASTRA_ERROR_UNSUPPORTED for an absent strike, or a
+ * negative ::AstraResult. Metrics are zero on failure. */
+ASTRA_NODISCARD AstraResult astra_fonts_text_measure(
+    AstraHandle gui, const char *id, uint32_t id_length,
+    uint16_t pixel_height, const char *text, uint32_t length,
+    uint32_t maximum_width, AstraFontTextMetrics *metrics);
+
+/** Append installed-face text to a hardware draw-list view.
+ * This does not change the process's system font or rasterize on the CPU.
+ * @param surface Hardware draw-list destination with its existing clip.
+ * @param id Counted installed face ID.
+ * @param id_length ID bytes, excluding any terminator.
+ * @param x Left text origin in pixels.
+ * @param y Top text origin in pixels.
+ * @param text Valid UTF-8 span.
+ * @param length Bytes in @p text.
+ * @param pixel_height Exact installed strike height.
+ * @param color RGB565 foreground color.
+ * @return Nonzero on success; zero for invalid arguments or insufficient room. */
+int astra_surface_font_text(AstraSurfaceView *surface,
+    const char *id, uint32_t id_length, int32_t x, int32_t y,
+    const char *text, uint32_t length, uint16_t pixel_height, uint16_t color);
 
 /** Adopt Display's immutable system-face snapshot for this process's UI.
  * Common text measurement and draw-list text then use the same face ID.
