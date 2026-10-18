@@ -2,6 +2,53 @@
 
 Status: active continuation map, 2026-10-18
 
+Latest exact-release DE25 gate is FAILED, not accepted: source `a55c6395`,
+private release `c392a4f17a2c81096fbc5145b13d53af99c11408424d38bb966808767b20aeb5`.
+Cancellation, converter retirement, empty inventory, Iosevka import and
+preview, and one full information/scroll/select/copy/Back workflow pass.
+The first of twenty additional information roundtrips times out. Failure
+HDMI shows the details pane with focus cleared, no information-read error;
+glyph commands 456, submissions/completions 153/153. Cause remains unknown.
+Diagnostic-only Display logging now distinguishes failed window event delivery
+from upstream input-state reset. Do not infer a font-service failure or accept
+an unreproduced retry as a fix. Complete failed state, scripts, trace and RGB
+evidence are checksum-verified on Beast under
+`/var/tmp/astra-font-settings-evidence-20261018/attempt1/`; gate log is
+`/var/tmp/astra-font-settings-physical-cycle1-20261018.log`.
+Production selector remains `57078599`; stopped storage before/after SHA-256
+is `88b54608daac800b21ea40e30b9863d2670e346c84ab8927cc40591e041e322d`.
+Restoration waits for guest stage 8 and completed desktop; all three services
+restore active with zero automatic restarts. Historical panic evidence below
+remains retained. Shared input diagnosis and final Fonts release remain open.
+
+Retained-state DE25 diagnosis reproduces after two successful repeated
+information cycles. At 21:34:32.836 UTC, Display records window 3, event type 4
+(STATE), sequence 173, status 6 (WOULD_BLOCK). No upstream input reset is
+recorded. Its generic failure path marked input lost; Interface Kit then
+cleared focus/armed interaction on the next event. Diagnostic failure state
+is retained separately under `display-diagnostic/` in the same Beast evidence
+root. Production again restores through completed stage 8 with all three
+services active, zero restarts.
+
+Display now retains the latest window-state snapshot on WOULD_BLOCK and
+retries in its existing per-window vblank loop, like retained close/menu and
+font notifications. It reconstructs current geometry, flags, generation and
+z-order; unsubscribing retires the notice. It does not declare keyboard input
+lost for a state snapshot. Actual lost-input handling is unchanged. Focused
+regression fails before the fix in
+`/var/tmp/astra-font-state-notice-red-20261018.log`; host, sanitizer, target
+and analyzer checks pass in
+`/var/tmp/astra-font-state-notice-green-20261018.log`. Physical requalification
+is pending. No new queue, thread, ABI or client workaround.
+
+Haiku review for this mechanism: `src/servers/app/EventDispatcher.cpp`
+`_SendMessage` and `_AddTokens`, and
+`src/servers/app/ServerWindow.cpp` `SendMessageToClient`/notification methods.
+Adopt distinct window notifications and coalescible latest-state treatment;
+adapt to Astra's existing bounded ports and retained-notification loop.
+Haiku's unimplemented failed-message queue TODO is not copied. Existing Astra
+keyboard retention and genuine input-reset semantics remain authoritative.
+
 Post-trial observation found one automatic restart of selected production
 `57078599`: its October 16 ROM panicked during the first restoration boot at
 20:08:38 UTC, before the warm HDMI capture. Reason is `deferred worker service

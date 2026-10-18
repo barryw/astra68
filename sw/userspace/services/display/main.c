@@ -138,7 +138,9 @@ typedef struct DisplayWindow {
     /* The last PRESENT promised to redraw every pixel of the next frame. */
     uint8_t content_discard;
     uint8_t event_lost;
+    uint8_t pending_state;
     uint8_t pending_close;
+    uint32_t pending_state_timestamp_ms;
     uint32_t pending_close_timestamp_ms;
     AstraWindowEvent pending_menu;
     uint32_t pending_font;
@@ -899,6 +901,7 @@ static void state_event(DisplayWindow *window, uint32_t timestamp_ms,
         .type = ASTRA_WINDOW_EVENT_STATE,
         .timestamp_ms = timestamp_ms,
     };
+    AstraGuiWindowEvent message;
 
     event.data.state.frame = (AstraWindowFrame){
         window->request.x, window->request.y,
@@ -907,7 +910,13 @@ static void state_event(DisplayWindow *window, uint32_t timestamp_ms,
     event.data.state.state = window->state;
     event.data.state.flags = window->request.flags;
     event.data.state.z_order = z_order;
-    (void)send_event(window, &event);
+    /* Retain the latest snapshot; a full client queue is not lost input. */
+    window->pending_state = 0u;
+    if (prepare_event(window, &event, &message) &&
+        deliver_event(window, &message, 0) == ASTRA_SYSCALL_WOULD_BLOCK) {
+        window->pending_state = 1u;
+        window->pending_state_timestamp_ms = timestamp_ms;
+    }
 }
 
 static void resize_event(DisplayWindow *window, uint32_t timestamp_ms)
@@ -5580,6 +5589,9 @@ static uint32_t signal_vblank(DisplayState *state)
     if (state->font_notifications && astra_clock_monotonic() >= state->font_notify_at)
         notify_font_changes(state);
     for (uint32_t index = 0u; index < state->count; ++index) {
+        if (state->windows[index].pending_state != 0u)
+            state_event(&state->windows[index],
+                        state->windows[index].pending_state_timestamp_ms, index);
         if (state->windows[index].pending_close != 0u) {
             AstraWindowEvent event = {
                 .type = ASTRA_WINDOW_EVENT_CLOSE_REQUEST,

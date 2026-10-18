@@ -1,5 +1,34 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-18: shared Settings shell release fails repeated information gate
+
+- Source `a55c6395c9e6b2b5d1103cc32ced3c344e72c301`, clean private release
+  `c392a4f17a2c81096fbc5145b13d53af99c11408424d38bb966808767b20aeb5`, ROM
+  `0f254e9eb33a2276ffab21eab0ce23f52370189a6eaffa9e7973a0f927d4aa95`,
+  source manifest `38f89244153291c458104e91fb1e43350ea428aedaedc548537da89726c8853a`.
+  Beast publisher succeeds; software/native/NDK gates pass. Both revision
+  headers match, build identity is nonzero `a55c6395`.
+- Physical cancellation/retirement/empty inventory, Iosevka import/preview,
+  and one full information/scroll/select/copy/Back workflow pass. First of
+  twenty extra information roundtrips times out; details pane has no focus,
+  no information-read error or application exit. Failure capture has 456
+  hardware glyph commands, 153/153 submitted/completed batches. No candidate
+  panic. Removal and long-notice phases did not run. Root cause is open.
+- Complete failed state, scripts, trace and RGB frames checksum-verified on
+  Beast under `/var/tmp/astra-font-settings-evidence-20261018/attempt1/`;
+  log `/var/tmp/astra-font-settings-physical-cycle1-20261018.log`. Diagnostic
+  Display logging and retained-state reproduction are separate from release
+  acceptance. No activation. Selector `57078599` and stopped production image
+  SHA-256 `88b54608daac800b21ea40e30b9863d2670e346c84ab8927cc40591e041e322d`
+  match before/after. Settled restoration reaches guest stage 8 and completed
+  desktop; all three services active, NRestarts=0.
+- Same RBF `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`,
+  prior Beast Quartus Pro 26.1.1 Build 130 full route, 40,754/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376 DSPs; all clocks
+  constrained, graphics setup +0.259 ns, worst setup +0.007 ns, worst hold
+  +0.000 ns. No RTL/constraints/build-flow change, new timing measurement or
+  failing cone. Disposition: failed software interaction gate; do not certify.
+
 ## 2026-10-18: old production panics during restoration; candidate stays clean
 
 - After the fresh font-session cycle below, selected production `57078599`

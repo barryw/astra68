@@ -3553,6 +3553,46 @@ int main(void)
         assert(waiting[1].pending_font == 0u);
         notify_font_changes(&notify);
         assert(!notify.font_notifications && delivered_count == sent);
+
+        /* A queued state snapshot must not cancel an armed control. */
+        waiting[0].request.event_mask = ASTRA_WINDOW_SUBSCRIBE_STATE;
+        waiting[0].request.flags = ASTRA_WINDOW_ACTIVE;
+        key.flags = ASTRA_WINDOW_EVENT_DOWN;
+        key.data.key.usage = 0x2bu;
+        assert(astra_interface_ui_handle_event(&ui, &key, &action) == ASTRA_OK);
+        key.data.key.usage = 0x28u;
+        assert(astra_interface_ui_handle_event(&ui, &key, &action) == ASTRA_OK);
+        send_would_block = 1u;
+        state_event(&waiting[0], 17u, 0u);
+        assert(!waiting[0].event_lost && delivered_count == sent);
+        waiting[0].request.x = 80u;
+        waiting[0].generation = 2u;
+        send_would_block = 1u;
+        state_event(&waiting[0], 18u, 0u);
+        assert(!waiting[0].event_lost && delivered_count == sent);
+        waiting[1].request.event_mask = ASTRA_WINDOW_SUBSCRIBE_STATE;
+        state_event(&waiting[1], 19u, 1u);
+        assert(delivered_count == sent + 1u);
+        assert(signal_vblank(&notify) == ASTRA_STATUS_OK);
+        assert(delivered_count == sent + 2u &&
+               delivered.event.type == ASTRA_WINDOW_EVENT_STATE &&
+               delivered.event.generation == 2u &&
+               delivered.event.timestamp_ms == 18u &&
+               delivered.event.data.state.frame.x == 80u &&
+               delivered.event.data.state.z_order == 0u &&
+               (delivered.event.flags & ASTRA_WINDOW_EVENT_LOSS) == 0u);
+        assert(astra_interface_ui_handle_event(&ui, &delivered.event, &action) == ASTRA_OK);
+        key.flags = 0u;
+        assert(astra_interface_ui_handle_event(&ui, &key, &action) == ASTRA_OK);
+        assert(action.type == ASTRA_UI_ACTION_ACTIVATE && action.control_id == 1u);
+        assert(signal_vblank(&notify) == ASTRA_STATUS_OK &&
+               delivered_count == sent + 2u);
+        /* Dropping a subscription also retires its retained notice. */
+        send_would_block = 1u;
+        state_event(&waiting[0], 20u, 0u);
+        waiting[0].request.event_mask = 0u;
+        assert(signal_vblank(&notify) == ASTRA_STATUS_OK &&
+               delivered_count == sent + 2u);
     }
 
     add_window(&state, 0u, ASTRA_WINDOW_POPOVER, 300u, 380u,
