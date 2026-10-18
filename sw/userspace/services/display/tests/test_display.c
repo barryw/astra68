@@ -3593,6 +3593,22 @@ int main(void)
         waiting[0].request.event_mask = 0u;
         assert(signal_vblank(&notify) == ASTRA_STATUS_OK &&
                delivered_count == sent + 2u);
+        /* Coalescing must retain a real intervening focus loss. */
+        key.flags = ASTRA_WINDOW_EVENT_DOWN;
+        assert(astra_interface_ui_handle_event(&ui, &key, &action) == ASTRA_OK);
+        waiting[0].request.event_mask = ASTRA_WINDOW_SUBSCRIBE_STATE;
+        waiting[0].request.flags = 0u;
+        send_would_block = 1u;
+        state_event(&waiting[0], 21u, 0u);
+        waiting[0].request.flags = ASTRA_WINDOW_ACTIVE;
+        send_would_block = 1u;
+        state_event(&waiting[0], 22u, 0u);
+        assert(signal_vblank(&notify) == ASTRA_STATUS_OK &&
+               delivered.event.data.state.flags == ASTRA_WINDOW_ACTIVE);
+        assert(astra_interface_ui_handle_event(&ui, &delivered.event, &action) == ASTRA_OK);
+        key.flags = 0u;
+        assert(astra_interface_ui_handle_event(&ui, &key, &action) == ASTRA_OK);
+        assert(action.type == ASTRA_UI_ACTION_NONE && ui._private_focus == UINT32_MAX);
     }
 
     add_window(&state, 0u, ASTRA_WINDOW_POPOVER, 300u, 380u,

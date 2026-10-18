@@ -1,5 +1,43 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-18: state-notification fix passes twenty retained-state DE25 cycles
+
+- Source `05b85dd6ffc80ce85082e6c0e29add7b0da3f65f`: Display retains and
+  retries the latest state snapshot in its existing vblank loop, without
+  flagging keyboard input lost. Diagnostic reproduction below identified
+  STATE/sequence 173/WOULD_BLOCK at 21:34:32.836 UTC; no upstream input reset.
+  Before-fix regression fails; host/sanitizer/MC68040/analyzer gates pass.
+- Fixed Display overlaid into a copy of failed private state passes all
+  twenty consecutive information/scroll/select/copy/Back workflows on DE25.
+  Malformed-frame probe runs exactly once. No panic. Controlled shutdown and
+  settled production restoration reach stage 8 and completed desktop, all
+  three units active/NRestarts=0, selector and stopped image identity unchanged.
+  Log `/var/tmp/astra-font-state-notice-physical-20261018.log`; full evidence
+  checksum-verified on Beast under
+  `/var/tmp/astra-font-settings-evidence-20261018/state-fixed/`. Original
+  failure and diagnostic evidence remain. Only archived private board files
+  are retired to make room for the final release.
+- Clean publisher verifies new private release
+  `f885a4c137e7248aae705a0a009e8a764aaa4defea2e36d1dabb05e8c79d80f7`, ROM
+  `1db09fd7e4b207477f4ea6e01567949114c28f9f129328e89483c0019a5a51e6`, source
+  manifest `f3aa224db4ba08e557765e0a115d084fd5d988240aef3630ee19ca92e09c2950`.
+  Both revision headers match source; nonzero identity `05b85dd6`.
+  Final exact-release four-boot gates remain open; no activation yet.
+- Before release gates, an additional focused regression exposes loss of an
+  intervening deactivation when snapshots coalesce. A blocked inactive state
+  must retain the existing reset marker through reactivation; ordinary active
+  snapshot pressure must preserve focus. The three-line correction supersedes
+  `f885a4c1` before acceptance or activation. Before-fix failure is retained in
+  `/var/tmp/astra-font-state-focus-edge-red-20261018.log`; final rebuild and
+  fresh physical release gates remain required.
+- Same qualified Beast Quartus Pro 26.1.1 Build 130 RBF
+  `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`:
+  40,754/46,800 ALMs, 3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376
+  DSPs; all clocks constrained, graphics setup +0.259 ns, worst setup
+  +0.007 ns, worst hold +0.000 ns. No RTL/constraints/build-flow change,
+  new timing measurement or failing cone. Disposition: shared input regression
+  passes; final immutable-release acceptance and preserved-data cutover pending.
+
 ## 2026-10-18: shared Settings shell release fails repeated information gate
 
 - Source `a55c6395c9e6b2b5d1103cc32ced3c344e72c301`, clean private release

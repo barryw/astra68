@@ -2,6 +2,36 @@
 
 Status: active continuation map, 2026-10-18
 
+Window-state backpressure fix `05b85dd6` passes the native end-to-end Fonts
+gate and all twenty consecutive DE25 information/scroll/select/copy/Back
+roundtrips on the previously failing retained state. One-shot malformed-frame
+probe launch count is exactly one. Controlled shutdown and settled production
+restoration pass: stage 8, completed desktop, all three services active,
+NRestarts=0, selector and stopped production image unchanged. Logs:
+`/var/tmp/astra-font-state-notice-{native,physical}-20261018.log`.
+Complete regression evidence is checksum-verified on Beast under
+`/var/tmp/astra-font-settings-evidence-20261018/state-fixed/`, alongside both
+failed attempts. Only the archived disposable board directory is retired.
+
+Clean publisher from exact source
+`05b85dd6ffc80ce85082e6c0e29add7b0da3f65f` passes and verifies as private
+release `f885a4c137e7248aae705a0a009e8a764aaa4defea2e36d1dabb05e8c79d80f7`,
+ROM `1db09fd7e4b207477f4ea6e01567949114c28f9f129328e89483c0019a5a51e6`,
+source manifest `f3aa224db4ba08e557765e0a115d084fd5d988240aef3630ee19ca92e09c2950`.
+Both revision headers match, nonzero build identity `05b85dd6`. Publisher log
+`/var/tmp/astra-font-state-release-20261018.log`. Fresh exact-release DE25
+cancellation/import/twenty-cycle/saved-choice/removal/long-notice gates and
+data-preserving production cutover remain open. The passing retained-state
+overlay is regression evidence, not acceptance of this new immutable release.
+
+Additional focus-edge regression rejects coalescing a blocked deactivation
+and subsequent reactivation into an ordinary active-state snapshot: an armed
+button could otherwise survive the intervening focus loss. Display preserves
+the existing loss/reset marker only when the retained snapshot is inactive;
+ordinary active-state backpressure still preserves focus. The edge fails in
+`/var/tmp/astra-font-state-focus-edge-red-20261018.log`. `f885a4c1` is superseded
+before physical release gates or activation; rebuild includes this correction.
+
 Latest exact-release DE25 gate is FAILED, not accepted: source `a55c6395`,
 private release `c392a4f17a2c81096fbc5145b13d53af99c11408424d38bb966808767b20aeb5`.
 Cancellation, converter retirement, empty inventory, Iosevka import and

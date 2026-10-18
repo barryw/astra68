@@ -910,12 +910,15 @@ static void state_event(DisplayWindow *window, uint32_t timestamp_ms,
     event.data.state.state = window->state;
     event.data.state.flags = window->request.flags;
     event.data.state.z_order = z_order;
-    /* Retain the latest snapshot; a full client queue is not lost input. */
+    /* Retain current state without invalidating an active interaction. */
     window->pending_state = 0u;
     if (prepare_event(window, &event, &message) &&
         deliver_event(window, &message, 0) == ASTRA_SYSCALL_WOULD_BLOCK) {
         window->pending_state = 1u;
         window->pending_state_timestamp_ms = timestamp_ms;
+        /* A coalesced deactivation must still cancel the old interaction. */
+        if ((window->request.flags & ASTRA_WINDOW_ACTIVE) == 0u)
+            window->event_lost = 1u;
     }
 }
 
