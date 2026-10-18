@@ -820,6 +820,29 @@ completion notices share the existing application presentation function and
 emit only after success, including confirmation and removal; observers no
 longer assume a fixed removal delay. Freshness tests cover all five notices.
 
+Corrected source `616129a2` clean-builds as release `c06c1a34`, ROM
+`d48a988f65445011b145502a9cb28f4f784bb7b43a8362214f2f485b44c52529`.
+Final current-release native Iosevka, unsupported-preview, long-style and
+readiness gates all pass in the `astra-font-preview-final-*-20261017.log`
+files on Beast. The first corrected physical cycle passes as well. Inspected
+1920x1080 HDMI captures prove 11- and 13-pixel Iosevka previews before changing
+the system face, all action buttons visible, live system adoption, persistence
+after restart, built-in restoration and removal. Complete checksum-compared
+evidence is `/var/tmp/astra-font-preview-evidence-20261017-layout/cycle1/`.
+Production image SHA-256 remains
+`96fcad0293f7994584fe19cd9e6a6a4d4f6265a9ba67934483b2d063630163c4`
+before/after; services restore active with zero automatic restarts. A second
+full disposable-image cycle passes with production image before/after SHA-256
+`b18658e0174cd11220d96c779089a69d6fbdf38d471a0bcc622d94e6ccb39e4e`;
+its evidence is under `cycle2/` in the same Beast root. All eight corresponding
+HDMI captures are byte-identical between cycles. The final warm production
+frame again matches
+`37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`,
+at 25 glyph commands and 49/49 submissions/completions, with all three services
+active and zero automatic restarts. Shared Label preview and repeated
+restoration/removal correctness pass; this does not close the remaining Fonts
+program or release gates. Production remains on `57078599`.
+
 The restoration investigation also reproduces a real notification defect:
 backpressured `FONT_CHANGED` delivery used the generic lossy-event path even
 though the generation remains pending and is retried. A later event therefore

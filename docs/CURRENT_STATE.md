@@ -1,6 +1,37 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-17
+Status: active continuation map, 2026-10-18
+
+Corrected preview source `616129a2de9e9d9aebffcb90aeeea4e9a80e18c4`
+clean-builds as release
+`c06c1a344ee0e0d100ff6e18f7ab41ee767efc6cd3cf60fd6b5a79c69d2da18e`, ROM
+`d48a988f65445011b145502a9cb28f4f784bb7b43a8362214f2f485b44c52529`, source
+manifest `3454c61d1ffe6cff99a36f5091795bf3c08fb995333e96fb08d9ed06d1e5b681`.
+All final native UI gates pass, including fresh completion notices, pointer
+removal, long styles and unsupported previews; logs are
+`/var/tmp/astra-font-preview-final-{readiness,iosevka,unsupported,long-style}-20261017.log`.
+The first corrected DE25 cycle also passes import, selection, restart,
+restoration and removal. Inspected HDMI captures show independent Iosevka
+11/13-pixel previews while system text retains its default face, all action
+buttons inside the window, live changes across Desktop/menu/Fonts, restored
+built-in pixels, and the removed family absent. Complete evidence is
+checksum-compared on Beast under
+`/var/tmp/astra-font-preview-evidence-20261017-layout/cycle1/`.
+The stopped production image stays byte-identical across this trial, SHA-256
+`96fcad0293f7994584fe19cd9e6a6a4d4f6265a9ba67934483b2d063630163c4`;
+services restore active with zero automatic restarts. The second complete
+cycle also passes, with evidence under `cycle2/` in the same Beast root and
+production image before/after SHA-256
+`b18658e0174cd11220d96c779089a69d6fbdf38d471a0bcc622d94e6ccb39e4e`.
+All eight corresponding HDMI captures from the two cycles are byte-identical.
+After the second cycle, fully started production again matches known-good
+HDMI SHA-256 `37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`,
+25 glyph commands and 49/49 submissions/completions; evidence is under
+`warm-production/`. Runtime/audio/remote services remain active with zero
+automatic restarts. Shared Label previews, action visibility and repeated
+restoration/removal now pass their correctness gates. Remaining Fonts program
+and release work stays open; production remains `57078599`, with no candidate
+activation or user-data replacement.
 
 The `4a0925b7` shared Label candidate clean-builds and verifies as release
 `77115da14f297d0442784a5a62df31f4067531bfa8d3776c97e39af2a241a072`, ROM

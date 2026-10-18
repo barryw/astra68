@@ -1,5 +1,53 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-18: corrected shared Label passes repeated physical qualification
+
+- Beast clean-built source `616129a2de9e9d9aebffcb90aeeea4e9a80e18c4`;
+  release `c06c1a344ee0e0d100ff6e18f7ab41ee767efc6cd3cf60fd6b5a79c69d2da18e`,
+  ROM `d48a988f65445011b145502a9cb28f4f784bb7b43a8362214f2f485b44c52529`,
+  source manifest `3454c61d1ffe6cff99a36f5091795bf3c08fb995333e96fb08d9ed06d1e5b681`.
+  Both revision headers match. Final native UI and readiness gates all pass.
+- Corrected DE25 import, live selection, saved restart, built-in restoration
+  and pointer uninstall pass, with no panic or retained provider. Inspected
+  HDMI captures show real independent Iosevka 11/13-pixel previews while
+  system text stays unchanged, readable ineligible-font restrictions, and all
+  actions inside the window. Choice and restoration update Desktop, menu and
+  Fonts together; removal returns to the family list with no imported family.
+- Captures use existing 1920x1080 HDMI DMA, 6,220,800 RGB bytes. Independent
+  previews: 298 glyphs/128 completed commands at 11 px, 328/131 at 13 px.
+  Live choice: 422 glyphs, 141/141 submissions/completions. Restoration:
+  243 glyphs, 79/79 commands; removed: 279 glyphs, 85/85 commands.
+- Full evidence checksum comparison passes at Beast
+  `/var/tmp/astra-font-preview-evidence-20261017-layout/cycle1/`; trial log is
+  `/var/tmp/astra-font-preview-physical-layout-cycle1-20261017.log`.
+  Stopped production image before/after SHA-256 remains
+  `96fcad0293f7994584fe19cd9e6a6a4d4f6265a9ba67934483b2d063630163c4`.
+  Selector stays `57078599`; runtime/audio/remote services restore active,
+  zero automatic restarts.
+- A second full cycle from fresh storage passes. Its complete evidence is
+  under `cycle2/` in the same Beast root; trial log is
+  `/var/tmp/astra-font-preview-physical-layout-cycle2-20261017.log`. Production
+  image before/after SHA-256 is
+  `b18658e0174cd11220d96c779089a69d6fbdf38d471a0bcc622d94e6ccb39e4e`.
+  All eight corresponding HDMI frames are byte-identical across both cycles,
+  despite different redundant-presentation counts. Second-cycle choice:
+  377 glyphs, 123/123 commands; removed: 230 glyphs, 79/79 commands.
+- Final fully started production matches known-good HDMI SHA-256
+  `37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`,
+  25 glyphs and 49/49 submissions/completions. Evidence is retained under
+  `warm-production/`. Runtime/audio/remote services are active with zero
+  automatic restarts; production selector remains `57078599`.
+- Same installed RBF
+  `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`;
+  Beast Quartus Pro 26.1.1 Build 130, 40,754/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376 DSPs. All production
+  clocks constrained; graphics setup +0.259 ns, worst setup +0.007 ns, worst
+  hold +0.000 ns. No RTL, constraints, route, fabric or kernel selection change;
+  no new timing measurement or failing cone.
+  Disposition: shared Label preview, visible actions, repeated restoration/
+  removal and warm production restoration gates pass. Remaining Fonts program
+  and release gates remain open; candidate is not activated.
+
 ## 2026-10-17: shared Label trial passes workflow, rejected for clipped actions
 
 - Beast clean-built commit `4a0925b75ea20b2f67091b4bee84375c69c5e204`;
