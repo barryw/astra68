@@ -35,6 +35,27 @@ int main(void)
     assert(absent.bitmap == replacement.bitmap &&
            absent.bitmap_length == replacement.bitmap_length);
     assert(!astra_afnt_glyph_info(&view, 1u, 'A', &glyph));
+    {
+        uint8_t *metadata = malloc(ASTRA_AFNT_NAME_MAX + 1u);
+        AstraAfntChunk chunks[ASTRA_AFNT_CHUNK_COUNT] = {
+            {metadata, ASTRA_AFNT_NAME_MAX}, view.cmap, view.strikes,
+            view.glyphs, view.bitmap};
+        uint32_t packed_size;
+        assert(metadata != NULL);
+        memset(metadata, ' ', ASTRA_AFNT_NAME_MAX + 1u);
+        memcpy(metadata, view.name.bytes, view.name.length);
+        for (uint32_t extra = 0u; extra < 2u; ++extra) {
+            AstraAfntView large;
+            chunks[0].length = ASTRA_AFNT_NAME_MAX + extra;
+            assert(astra_afnt_pack(chunks, NULL, 0u, &packed_size));
+            uint8_t *packed = malloc(packed_size);
+            assert(packed != NULL &&
+                   astra_afnt_pack(chunks, packed, packed_size, &packed_size));
+            assert(astra_afnt_validate(packed, packed_size, &large) == (extra == 0u));
+            free(packed);
+        }
+        free(metadata);
+    }
     view.cmap.length = 3u;
     assert(!astra_afnt_glyph_info(&view, 0u, 'A', &glyph));
     free(bytes);

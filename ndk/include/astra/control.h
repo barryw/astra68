@@ -22,7 +22,7 @@ ASTRA_EXTERN_C_BEGIN
 /** Display refresh used to derive deterministic animation phases. */
 #define ASTRA_UI_VBLANK_HZ 60u
 
-/** Control kinds implemented by Interface Kit ABI 7.0. */
+/** Control kinds implemented by Interface Kit ABI 7.1. */
 enum {
     ASTRA_CONTROL_LABEL = 1u,
     ASTRA_CONTROL_BUTTON = 2u,
@@ -42,7 +42,9 @@ enum {
     ASTRA_CONTROL_DIAL = 16u,
     ASTRA_CONTROL_DISCLOSURE = 17u,
     /** Single-selection vertical list; compose with ScrollView for overflow. */
-    ASTRA_CONTROL_LIST = 18u
+    ASTRA_CONTROL_LIST = 18u,
+    /** Selectable, read-only multiline text; compose with ScrollView. */
+    ASTRA_CONTROL_TEXT_VIEW = 19u
 };
 
 /** Semantic state owned by an application. */
@@ -560,6 +562,19 @@ typedef struct AstraFieldInfo {
     sizeof(AstraFieldInfo), 0u, 0, 20u, 0u, 0u,                          \
     { 0u, 0u, 0u, 0u }                                                   \
 }
+
+/** Read-only multiline model presented by TextSurface in a ScrollView. */
+typedef struct AstraTextViewInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t id; /**< Nonzero control ID. */
+    AstraTextModel *model; /**< Borrowed model; caller retains its arenas. */
+    uint32_t state; /**< Disabled, error, or collapsed semantic state. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraTextViewInfo;
+
+/** Empty Text View construction data. */
+#define ASTRA_TEXT_VIEW_INFO_INIT \
+    { sizeof(AstraTextViewInfo), 0u, 0, 0u, { 0u, 0u, 0u, 0u } }
 
 /** Caller-owned retained control.  Private fields must not be modified. */
 typedef struct AstraControl {

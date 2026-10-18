@@ -1,10 +1,16 @@
 #include <astra/text_surface.h>
+#include "text_surface_internal.h"
 #include <astra/utf8.h>
 
 #include <astra/bytes.h>
 
 #include <limits.h>
 #include <stddef.h>
+
+typedef struct TextRequirements {
+    uint64_t commands;
+    uint64_t payload;
+} TextRequirements;
 
 static int valid(const AstraTextSurface *text)
 {
@@ -138,7 +144,8 @@ static AstraResult render_run(const AstraTextSurface *text,
                               AstraSurfaceView *target,
                               int32_t x, int32_t y,
                               const AstraTextCell *cells, uint32_t count,
-                              uint16_t foreground, uint32_t style)
+                              uint16_t foreground, uint32_t style,
+                              TextRequirements *requirements)
 {
     uint32_t first = 0u;
 
@@ -155,8 +162,11 @@ static AstraResult render_run(const AstraTextSurface *text,
             bytes += encoded;
             ++at;
         }
-        if (at == first ||
-            !astra_surface_mono_text_styled(
+        if (at == first) return ASTRA_ERROR_IO;
+        if (requirements != NULL) {
+            ++requirements->commands;
+            requirements->payload += bytes;
+        } else if (!astra_surface_mono_text_styled(
                 target,
                 x + (int32_t)((uint64_t)first *
                               text->_private_cell_width),
@@ -173,7 +183,7 @@ static AstraResult render_cells(
     const AstraTextSurface *text, AstraSurfaceView *target,
     int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,
     const AstraTextCell *cells, uint32_t count,
-    const AstraTextGridSelection *selection)
+    const AstraTextGridSelection *selection, TextRequirements *requirements)
 {
     uint64_t x64;
     uint64_t y64;
@@ -186,7 +196,9 @@ static AstraResult render_cells(
     int selection_on_row;
     int selection_colors_valid = 1;
 
-    if (!valid(text) || target == NULL || (count != 0u && cells == NULL) ||
+    if (!valid(text) || (target == NULL && requirements == NULL) ||
+        (target != NULL && requirements != NULL) ||
+        (count != 0u && cells == NULL) ||
         (selection != NULL &&
          (selection->size < sizeof(*selection) ||
           !astra_words_zero(selection->reserved, 4u) ||
@@ -270,7 +282,8 @@ static AstraResult render_cells(
             foreground = background;
         else if ((attributes & ASTRA_TEXT_STYLE_FAINT) != 0u)
             foreground = dim(foreground, background);
-        astra_surface_fill(target, origin_x + (int32_t)run_x64,
+        if (requirements != NULL) ++requirements->commands;
+        else astra_surface_fill(target, origin_x + (int32_t)run_x64,
                            origin_y + (int32_t)y64,
                            (uint32_t)run_width64,
                            text->_private_line_height, background);
@@ -292,7 +305,7 @@ static AstraResult render_cells(
                     (int32_t)((uint64_t)visible_first *
                               text->_private_cell_width),
                 origin_y + (int32_t)y64, cells + visible_first,
-                visible_last - visible_first, foreground, style);
+                visible_last - visible_first, foreground, style, requirements);
 
             if (result != ASTRA_OK)
                 return result;
@@ -308,7 +321,24 @@ AstraResult astra_text_surface_render_cells(
     const AstraTextCell *cells, uint32_t count)
 {
     return render_cells(text, target, origin_x, origin_y, row, column,
-                        cells, count, NULL);
+                        cells, count, NULL, NULL);
+}
+
+AstraResult astra_text_surface_cells_requirements(const AstraTextSurface *text,
+    const AstraTextCell *cells, uint32_t count, uint64_t *commands,
+    uint64_t *payload)
+{
+    TextRequirements requirements = {0u, 0u};
+    if (commands == NULL || payload == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraResult result = render_cells(text, NULL, 0, 0, 0u, 0u, cells, count,
+                                      NULL, &requirements);
+    if (result != ASTRA_OK) return result;
+    if (requirements.commands > UINT64_MAX - *commands ||
+        requirements.payload > UINT64_MAX - *payload)
+        return ASTRA_ERROR_NO_RESOURCES;
+    *commands += requirements.commands;
+    *payload += requirements.payload;
+    return ASTRA_OK;
 }
 
 AstraResult astra_text_surface_render_grid(
@@ -318,7 +348,7 @@ AstraResult astra_text_surface_render_grid(
     const AstraTextGridSelection *selection)
 {
     return render_cells(text, target, origin_x, origin_y, row, column,
-                        cells, count, selection);
+                        cells, count, selection, NULL);
 }
 
 AstraResult astra_text_surface_grid_hit_test(

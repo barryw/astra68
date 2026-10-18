@@ -146,7 +146,7 @@ int astra_afnt_validate(const void *source, uint32_t length, AstraAfntView *view
         present |= (uint8_t)(1u << index);
     }
     if (present != (1u << CHUNK_COUNT) - 1u || chunks[0].length == 0u ||
-        chunks[0].length > 65536u ||
+        chunks[0].length > ASTRA_AFNT_NAME_MAX ||
         memchr(chunks[0].bytes, 0, chunks[0].length) != NULL ||
         chunks[1].length < 4u || chunks[2].length < 4u ||
         chunks[3].length < 4u)

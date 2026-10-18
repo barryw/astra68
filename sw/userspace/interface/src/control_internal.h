@@ -51,6 +51,10 @@ AstraResult astra_interface_field_init(AstraControl *control,
                                        const AstraFieldInfo *info);
 AstraResult astra_interface_field_refresh(AstraUIContext *context,
                                           AstraControl *control);
+AstraResult astra_interface_text_view_init(AstraControl *control,
+                                          const AstraTextViewInfo *info);
+AstraResult astra_interface_text_view_refresh(AstraUIContext *context,
+                                             AstraControl *control);
 AstraResult astra_interface_field_replace_selection(
     AstraUIContext *context, AstraControl *control,
     const char *replacement, uint32_t replacement_bytes);

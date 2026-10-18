@@ -17,6 +17,7 @@
 
 #define GALLERY_WIDTH 1120u
 #define GALLERY_HEIGHT 800u
+#define GALLERY_TEXT_VIEW_HEIGHT 420u
 #define GALLERY_BENCHMARK_CONTROL_MAX 256u
 #define GALLERY_UNDO_BENCHMARK_OPERATIONS 10000u
 #define GALLERY_UNDO_ARENA_BYTES (1024u * 1024u)
@@ -92,7 +93,10 @@ enum {
     GALLERY_DISCLOSURE_OPTION_B,
     GALLERY_LIST_LABEL,
     GALLERY_LIST,
-    GALLERY_CONTROL_COUNT = GALLERY_LIST
+    GALLERY_TEXT_VIEW_SCROLL,
+    GALLERY_TEXT_VIEW,
+    GALLERY_TEXT_VIEW_BAR,
+    GALLERY_CONTROL_COUNT = GALLERY_TEXT_VIEW_BAR
 };
 
 enum {
@@ -128,6 +132,29 @@ static uint8_t read_only_field_content[4096];
 static _Alignas(4) uint8_t read_only_field_metadata[8192];
 static AstraTextModel read_only_field_model = ASTRA_TEXT_MODEL_INIT;
 static AstraScrollModel gallery_scroll_model = ASTRA_SCROLL_MODEL_INIT;
+static AstraTextModel text_view_model = ASTRA_TEXT_MODEL_INIT;
+static AstraScrollModel text_view_scroll = ASTRA_SCROLL_MODEL_INIT;
+static uint8_t text_view_content[2048];
+static _Alignas(4) uint8_t text_view_metadata[2048];
+static const char text_view_example[] =
+    "Shared Text View\n"
+    "\n"
+    "Read-only text remains selectable and copyable.\n"
+    "TextModel owns UTF-8, lines and selection.\n"
+    "TextSurface emits hardware glyph commands.\n"
+    "ScrollView owns clipping and scrolling.\n"
+    "\n"
+    "Keyboard\tAction\r\n"
+    "Arrows\tMove selection\n"
+    "Shift\tExtend selection\n"
+    "Home / End\tStart / end of line\n"
+    "Ctrl+Home / End\tStart / end of document\n"
+    "Page Up / Down\tMove through visible lines\n"
+    "Meta+A / C\tSelect all / Copy\n"
+    "\n"
+    "Unicode: \xce\xa9 \xe4\xb8\x96\xe7\x95\x8c\n"
+    "Long lines keep their original bytes; horizontal scrolling reveals text beyond the viewport.\n"
+    "End of shared control example.";
 static char clipboard_scratch[4096];
 static uint32_t active_page = GALLERY_PAGE_INPUT;
 static const AstraChoiceItem gallery_tabs[] = {
@@ -501,6 +528,7 @@ static AstraControl *field_control(uint32_t id)
         return GALLERY_CONTROL(GALLERY_FIELD_ERROR);
     if (id == GALLERY_FIELD_READ_ONLY)
         return GALLERY_CONTROL(GALLERY_FIELD_READ_ONLY);
+    if (id == GALLERY_TEXT_VIEW) return GALLERY_CONTROL(GALLERY_TEXT_VIEW);
     return NULL;
 }
 
@@ -509,6 +537,7 @@ static AstraTextModel *field_model_for_id(uint32_t id)
     if (id == GALLERY_FIELD) return &field_model;
     if (id == GALLERY_FIELD_ERROR) return &error_field_model;
     if (id == GALLERY_FIELD_READ_ONLY) return &read_only_field_model;
+    if (id == GALLERY_TEXT_VIEW) return &text_view_model;
     return NULL;
 }
 
@@ -585,8 +614,12 @@ static uint32_t handle_field_action(AstraHandle clipboard,
     AstraTextModel *model = field_model_for_id(action->control_id);
 
     if (control == NULL || model == NULL) return ASTRA_STATUS_OK;
-    if (action->type == ASTRA_UI_ACTION_COPY)
-        return copy_field(clipboard, control, model, 0);
+    if (action->type == ASTRA_UI_ACTION_COPY) {
+        uint32_t status = copy_field(clipboard, control, model, 0);
+        if (status == ASTRA_STATUS_OK)
+            (void)astra_log("gallery clipboard copy complete");
+        return status;
+    }
     if (action->type == ASTRA_UI_ACTION_CUT)
         return copy_field(clipboard, control, model, 1);
     if (action->type == ASTRA_UI_ACTION_PASTE)
@@ -648,6 +681,7 @@ static uint32_t build_controls(void)
 {
     uint32_t status = add_tabs(GALLERY_TABS - 1u, GALLERY_TABS);
     AstraScrollModelInfo scroll = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
 
     scroll.line_width = 8u;
     scroll.line_height = 16u;
@@ -827,6 +861,26 @@ static uint32_t build_controls(void)
                            &read_only_field_model, 18u,
                            ASTRA_FIELD_READ_ONLY, 0u);
     if (status == ASTRA_STATUS_OK)
+        status = init_field_model(&text_view_model, text_view_example,
+            sizeof(text_view_example) - 1u, text_view_content,
+            sizeof(text_view_content), text_view_metadata, sizeof(text_view_metadata));
+    if (status == ASTRA_STATUS_OK) {
+        AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
+        AstraTextViewInfo text = ASTRA_TEXT_VIEW_INFO_INIT;
+        AstraScrollbarInfo bar = ASTRA_SCROLLBAR_INFO_INIT;
+        scroll.line_height = theme.control_height;
+        view.id = GALLERY_TEXT_VIEW_SCROLL; view.model = &text_view_scroll;
+        view.preferred_width = 640u; view.preferred_height = GALLERY_TEXT_VIEW_HEIGHT;
+        text.id = GALLERY_TEXT_VIEW; text.model = &text_view_model;
+        bar.id = GALLERY_TEXT_VIEW_BAR; bar.model = &text_view_scroll;
+        bar.orientation = ASTRA_ORIENTATION_VERTICAL;
+        if (astra_scroll_init(&text_view_scroll, &scroll) != ASTRA_OK ||
+            astra_interface_scroll_view_init(GALLERY_CONTROL(view.id), &view) != ASTRA_OK ||
+            astra_interface_text_view_init(GALLERY_CONTROL(text.id), &text) != ASTRA_OK ||
+            astra_interface_scrollbar_init(GALLERY_CONTROL(bar.id), &bar) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
+    if (status == ASTRA_STATUS_OK)
         status = add_label(GALLERY_SEGMENTED_LABEL - 1u,
                            GALLERY_SEGMENTED_LABEL,
                            "SEGMENTED SELECTOR",
@@ -980,6 +1034,9 @@ static uint32_t build_controls(void)
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_FIELD_READ_ONLY, GALLERY_PAGE_TEXT,
               ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_TEXT_VIEW_SCROLL, GALLERY_PAGE_TEXT, 0u);
+    PAGE_ITEM(GALLERY_TEXT_VIEW, GALLERY_TEXT_VIEW_SCROLL, 0u);
+    PAGE_ITEM(GALLERY_TEXT_VIEW_BAR, GALLERY_PAGE_TEXT, ASTRA_FLEX_BREAK_AFTER);
 
     PAGE_ITEM(GALLERY_LAYOUT_LABEL, GALLERY_PAGE_LAYOUT,
               ASTRA_FLEX_BREAK_AFTER);
@@ -1008,6 +1065,14 @@ static uint32_t build_controls(void)
     if (status == ASTRA_STATUS_OK) {
         AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
 
+        item.parent_id = GALLERY_PAGE_TEXT;
+        item.minimum_width = 10u; item.maximum_width = 10u;
+        item.minimum_height = GALLERY_TEXT_VIEW_HEIGHT;
+        item.maximum_height = GALLERY_TEXT_VIEW_HEIGHT;
+        status = astra_interface_control_set_flex(
+            GALLERY_CONTROL(GALLERY_TEXT_VIEW_BAR), &item) == ASTRA_OK ?
+            ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+        item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
         item.parent_id = GALLERY_SCROLL_VIEW;
         item.minimum_width = 260u;
         item.minimum_height = 320u;

@@ -130,7 +130,7 @@ amiga-probe: all build/FontAmigaProbe.app/manifest \
 	../../../../tools/build/astra-bundle check build/FontAmigaProbe.app
 
 UI_HOST_SOURCES := tests/test_layout.c ../../interface/src/control.c \
-	../../interface/src/text_model.c ../../interface/src/scroll.c \
+	../../interface/src/text_model.c ../../interface/src/text_surface.c ../../interface/src/scroll.c \
 	../../graphics/src/surface.c ../../graphics/src/font_data.c \
 	../../../common/utf8.c ../../../common/afnt.c ../../../common/crc32.c \
 	$(RUNTIME)/tests/uncontended_mutex.c

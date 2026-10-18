@@ -3,6 +3,9 @@
 
 #include <stdint.h>
 
+/* Includes multilingual source notices and their exact encoded bytes. */
+#define ASTRA_AFNT_NAME_MAX (1024u * 1024u)
+
 /* AFNT 0.2 is a passive file format. Views borrow the caller's byte buffer. */
 typedef struct AstraAfntChunk {
     const uint8_t *bytes;

@@ -16,7 +16,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.7. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 7u
 /** Current backward-compatible Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 0u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 1u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -164,6 +164,24 @@ AstraResult astra_interface_field_init(AstraControl *control,
  */
 AstraResult astra_interface_field_refresh(AstraUIContext *context,
                                           AstraControl *control);
+/** Initialize selectable, read-only multiline text. Compose with ScrollView
+ * and Scrollbar controls for overflow. TextModel retains original UTF-8;
+ * tabs use eight-cell stops and CRLF draws as one line break.
+ * @param control Caller-owned control to initialize.
+ * @param info Description retaining the caller-owned TextModel.
+ * @return ASTRA_OK or a validation/resource error; failure leaves control intact.
+ * @since Interface Kit 7.1.
+ */
+AstraResult astra_interface_text_view_init(AstraControl *control,
+                                          const AstraTextViewInfo *info);
+/** Remeasure, relayout and damage Text View after its model changes.
+ * @param context UI context owning the control.
+ * @param control Text View whose caller-owned model changed.
+ * @return ASTRA_OK or a validation/resource error.
+ * @since Interface Kit 7.1.
+ */
+AstraResult astra_interface_text_view_refresh(AstraUIContext *context,
+                                             AstraControl *control);
 /** Replace the current field selection.
  * @param context UI context owning @p control.
  * @param control Field to edit.

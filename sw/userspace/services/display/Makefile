@@ -13,7 +13,7 @@ NDK := ../../../../ndk
 SYSTEM := ../../system
 INTERFACE := ../../interface
 INTERFACE_HOST_SOURCES := $(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c \
-	$(INTERFACE)/src/text_model.c $(INTERFACE)/src/scroll.c
+	$(INTERFACE)/src/text_model.c $(INTERFACE)/src/text_surface.c $(INTERFACE)/src/scroll.c
 ASTRA_COMMON := ../../../common
 CPPFLAGS := -I../../../../ndk/include -I../../../include -I$(RUNTIME)/include \
 	-I$(GRAPHICS)/include -I../../../../fpga/arty/linux
@@ -59,7 +59,7 @@ $(HOST_TEST): main.c window_graphics.c window_graphics.h font_face.c font_face.h
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
 		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c $(GRAPHICS)/src/render_builder.c \
 		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c \
-		$(INTERFACE_HOST_SOURCES) $(HOST_AFNT_CODEC)
+		$(INTERFACE_HOST_SOURCES) $(INTERFACE)/src/text_surface_internal.h $(HOST_AFNT_CODEC)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \

@@ -2,6 +2,36 @@
 
 Status: active continuation map, 2026-10-18
 
+Font-information groundwork passes its software gates. Interface Kit 7.1 adds
+shared read-only Text View from TextModel, TextSurface and ScrollView, with a
+native Interface Gallery example. Existing control/context layouts stay
+unchanged. TextSurface now owns exact command/payload accounting as well as
+rendering: the 30-line, 80-column regression fails before this fix in
+`/var/tmp/astra-text-view-capacity-red-20261018.log`. Focused control, sanitizer,
+analyzer, MC68040 library/export, Fonts layout and Display checks pass in
+`/var/tmp/astra-text-view-capacity-green-20261018.log`. The larger native
+420-pixel viewport, scrolling, hardware glyph submissions and exact multiline
+UTF-8 clipboard bytes pass in
+`/var/tmp/astra-text-view-capacity-native-final-20261018.log`; packaged NDK
+documentation and examples pass in
+`/var/tmp/astra-text-view-capacity-ndk-final-20261018.log`.
+
+Worker metadata 0.3 retains complete embedded copyright/license/URL records,
+encoding/language IDs and language tags; unsupported or malformed encodings
+retain exact source bytes. Long-notice, sanitizer, host-channel and AArch64
+gates pass in `/var/tmp/astra-font-notices-final-20261018d.log`. The shared
+AFNT metadata bound is explicitly 1 MiB, with exact-bound/one-byte-over checks.
+Native Iosevka import persists its original source hash and six complete
+notices; live switching, restart, restoration and uninstall pass in
+`/var/tmp/astra-font-notices-native-ui-final-20261018.log`.
+
+Plane ASTRA-56/57 track these components. Native qualification also exposed
+separate Terminal paste and native/POSIX stdout-redirection defects, retained
+as ASTRA-58/59 with original failure logs. Font Kit metadata query and Fonts
+information pane remain to be built under ASTRA-36; final integrated DE25
+qualification and release acceptance remain open. Production stays
+`57078599`, untouched. No candidate activation or user-data replacement.
+
 Corrected preview source `616129a2de9e9d9aebffcb90aeeea4e9a80e18c4`
 clean-builds as release
 `c06c1a344ee0e0d100ff6e18f7ab41ee767efc6cd3cf60fd6b5a79c69d2da18e`, ROM

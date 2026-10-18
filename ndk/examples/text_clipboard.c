@@ -3,6 +3,7 @@
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/stream.h>
+#include <astra/string.h>
 
 /* Copy a TextSurface grid selection as the system's canonical UTF-8 type. */
 AstraResult astra_example_copy_text(
@@ -72,6 +73,31 @@ static void fill_row(AstraTextCell *row, const char *text)
     }
 }
 
+static int inspect_clipboard(AstraHandle clipboard, AstraHandle output)
+{
+    AstraClipboardItem item = ASTRA_CLIPBOARD_ITEM_INIT;
+    const void *data;
+    uint32_t bytes;
+    AstraResult result = astra_clipboard_read(clipboard, &item);
+    if (result != ASTRA_OK) return 3;
+    result = astra_clipboard_item_find(&item, ASTRA_CLIPBOARD_TYPE_UTF8,
+        sizeof(ASTRA_CLIPBOARD_TYPE_UTF8) - 1u, &data, &bytes);
+    for (uint32_t at = 0u; result == ASTRA_OK && at < bytes;) {
+        char line[80];
+        AstraString text;
+        uint32_t count = bytes - at < 32u ? bytes - at : 32u;
+        astra_string_init(&text, line, sizeof(line));
+        (void)astra_string_append(&text, "clipboard:");
+        for (uint32_t byte = 0u; byte < count; ++byte)
+            (void)astra_string_append_hex(&text, ((const uint8_t *)data)[at++], 2u);
+        (void)astra_string_append_char(&text, '\n');
+        if (astra_stream_write_all(output, line, text.length) != ASTRA_SYSCALL_OK)
+            result = ASTRA_ERROR_IO;
+    }
+    AstraResult closed = astra_clipboard_item_close(&item);
+    return result == ASTRA_OK && closed == ASTRA_OK ? 0 : 3;
+}
+
 /* Copy the first word of a two-row grid to the system clipboard, then read
    it back the way any other application would. */
 int astra_main(const AstraStartupInfo *startup)
@@ -91,6 +117,13 @@ int astra_main(const AstraStartupInfo *startup)
 
     if (output == 0 || clipboard == 0)
         return 1;
+    if (startup->argc > 1u) {
+        const char *argument = astra_startup_argument(startup, 1u);
+        if (startup->argc != 2u || argument == NULL ||
+            astra_string_compare_ascii_nocase(argument, "--inspect") != 0)
+            return 1;
+        return inspect_clipboard(clipboard->handle, output->handle);
+    }
     info.font_height = 16u;
     info.cell_width = 8u;
     info.line_height = 20u;

@@ -2274,6 +2274,157 @@ static void test_text_field_rejections(void)
                &context, &field, "x", 1u) == ASTRA_ERROR_PERMISSION);
 }
 
+static void test_text_view(void)
+{
+    static const char source[] = "A\t\xce\xa9\r\nSecond line\nThird\nLast";
+    uint8_t content[256];
+    _Alignas(4) uint8_t metadata[512];
+    AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo model_info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextModelState model_state = ASTRA_TEXT_MODEL_STATE_INIT;
+    AstraTextViewInfo text_info = ASTRA_TEXT_VIEW_INFO_INIT;
+    AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraScrollState scroll_state = ASTRA_SCROLL_STATE_INIT;
+    AstraScrollViewInfo view_info = ASTRA_SCROLL_VIEW_INFO_INIT;
+    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraSurfaceView surface = render_view(64u, 56u);
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraControlSize measured;
+    AstraWindowEvent event;
+    uint32_t bytes;
+    char copied[sizeof(source)];
+
+    model_info.text = source; model_info.text_bytes = sizeof(source) - 1u;
+    model_info.content_arena = content;
+    model_info.content_arena_bytes = sizeof(content);
+    model_info.metadata_arena = metadata;
+    model_info.metadata_arena_bytes = sizeof(metadata);
+    assert(astra_text_model_init(&model, &model_info) == ASTRA_OK);
+    assert(astra_scroll_init(&scroll, &scroll_info) == ASTRA_OK);
+    view_info.id = 1u; view_info.model = &scroll;
+    view_info.preferred_width = 64u; view_info.preferred_height = 56u;
+    assert(astra_interface_scroll_view_init(&controls[0], &view_info) == ASTRA_OK);
+    text_info.id = 2u; text_info.model = &model;
+    assert(astra_interface_text_view_init(&controls[1], &text_info) == ASTRA_OK);
+    item.parent_id = 1u;
+    assert(astra_interface_control_set_flex(&controls[1], &item) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls, 2u, 64u, 56u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &controls[1], &measured) == ASTRA_OK);
+    assert(measured.width == 11u * theme.mono_cell_width &&
+           measured.height == 4u * theme.control_height);
+    assert(astra_scroll_get_state(&scroll, &scroll_state) == ASTRA_OK &&
+           scroll_state.maximum_x > 0u && scroll_state.maximum_y > 0u);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(mono_text_calls == 2u);
+    ((AstraDrawListHeader *)(void *)surface.pixels)->command_count =
+        ASTRA_DRAW_LIST_COMMAND_MAX - 1u;
+    uint32_t before_fills = fill_calls, before_text = mono_text_calls;
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_ERROR_NO_RESOURCES &&
+           fill_calls == before_fills && mono_text_calls == before_text);
+    surface = render_view(64u, 56u);
+
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, 8, 4);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 1u);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_MOTION, 0u, 24, 32);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.anchor == 1u && model_state.selection.focus == 9u);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON, 0u, 24, 32);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x04u, ASTRA_INPUT_MOD_META);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x06u, ASTRA_INPUT_MOD_META);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK &&
+           action.type == ASTRA_UI_ACTION_COPY && action.control_id == 2u);
+    assert(astra_text_model_copy(&model, 0u, sizeof(source) - 1u, copied,
+        sizeof(copied), &bytes) == ASTRA_OK && bytes == sizeof(source) - 1u &&
+        memcmp(copied, source, bytes) == 0);
+    event = text_event('x');
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK &&
+           action.type == ASTRA_UI_ACTION_NONE);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x2au, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK &&
+           action.type == ASTRA_UI_ACTION_NONE);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.text_bytes == sizeof(source) - 1u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4au, ASTRA_INPUT_MOD_CTRL);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_scroll_get_state(&scroll, &scroll_state) == ASTRA_OK &&
+           scroll_state.offset_x == 0u && scroll_state.offset_y == 0u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x51u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 6u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4eu, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 24u);
+    assert(astra_scroll_get_state(&scroll, &scroll_state) == ASTRA_OK &&
+           scroll_state.offset_y > 0u);
+    assert(astra_text_model_replace(&model, 0u, sizeof(source) - 1u, "short", 5u) == ASTRA_OK);
+    assert(astra_interface_text_view_refresh(&context, &controls[1]) == ASTRA_OK);
+    assert(astra_scroll_get_state(&scroll, &scroll_state) == ASTRA_OK &&
+           scroll_state.maximum_x == 0u && scroll_state.maximum_y == 0u);
+    text_info.reserved[0] = 1u;
+    assert(astra_interface_text_view_init(&controls[1], &text_info) == ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
+static void test_text_view_document_capacity(void)
+{
+    char source[30u * 81u];
+    uint8_t content[4096];
+    _Alignas(4) uint8_t metadata[4096];
+    AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo model_info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextViewInfo text_info = ASTRA_TEXT_VIEW_INFO_INIT;
+    AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraScrollViewInfo view_info = ASTRA_SCROLL_VIEW_INFO_INIT;
+    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraSurfaceView surface = render_view(700u, 500u);
+    for (uint32_t row = 0u; row < 30u; ++row) {
+        memset(source + row * 81u, 'L', 80u); source[row * 81u + 80u] = '\n';
+    }
+    model_info.text = source; model_info.text_bytes = sizeof(source);
+    model_info.content_arena = content; model_info.content_arena_bytes = sizeof(content);
+    model_info.metadata_arena = metadata; model_info.metadata_arena_bytes = sizeof(metadata);
+    assert(astra_text_model_init(&model, &model_info) == ASTRA_OK);
+    assert(astra_scroll_init(&scroll, &scroll_info) == ASTRA_OK);
+    view_info.id = 1u; view_info.model = &scroll;
+    view_info.preferred_width = 700u; view_info.preferred_height = 500u;
+    assert(astra_interface_scroll_view_init(&controls[0], &view_info) == ASTRA_OK);
+    text_info.id = 2u; text_info.model = &model;
+    assert(astra_interface_text_view_init(&controls[1], &text_info) == ASTRA_OK);
+    item.parent_id = 1u;
+    assert(astra_interface_control_set_flex(&controls[1], &item) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls, 2u, 700u, 500u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(mono_text_calls == 18u);
+    AstraTextSelection selection = ASTRA_TEXT_SELECTION_INIT;
+    selection.anchor = 10u; selection.focus = 17u * 81u + 40u;
+    assert(astra_text_model_set_selection(&model, &selection) == ASTRA_OK);
+    assert(astra_interface_text_view_refresh(&context, &controls[1]) == ASTRA_OK);
+    surface = render_view(700u, 500u);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(mono_text_calls == 20u);
+}
+
 static void test_scroll_view_layout_and_wheel(void)
 {
     static const char content[] =
@@ -3136,6 +3287,8 @@ int main(void)
     test_animation_ownership();
     test_text_field();
     test_text_field_rejections();
+    test_text_view();
+    test_text_view_document_capacity();
     test_scroll_view_layout_and_wheel();
     test_scroll_view_keyboard_listener();
     test_nested_scroll_chaining();

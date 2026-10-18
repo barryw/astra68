@@ -10,6 +10,74 @@ must not draw bitmap glyphs with CPU pixel loops.
 
 ## 1. Locked architecture
 
+### Active font-information work (2026-10-18)
+
+The next Fonts pane needs shared multiline text, not an application painter.
+Interface Kit 7.1 adds a read-only Text View composed from TextModel,
+TextSurface and ScrollView. Its first presentation is fixed-grid with horizontal
+overflow; original UTF-8, tabs and CRLF survive selection/copy. Pointer and
+keyboard selection share the existing Field machinery. List and Text View
+also share rectangle reveal through the existing scroll model. Interface
+Gallery's Text page hosts the new control. Existing public control/context
+layouts are unchanged; the Kit minor and its two new symbol versions advance
+together.
+
+Haiku references: `headers/os/interface/TextView.h` and
+`src/kits/interface/TextView.cpp` (`Draw`, `MouseDown`, `MakeEditable`,
+`SetWordWrap`). Adopt independent selectability for read-only text, visible-line
+drawing and ordinary scrolling composition. Adapt to Astra's caller-owned
+piece table and hardware draw lists rather than copying Haiku's view hierarchy
+or CPU drawing. Haiku `src/kits/interface/Font.cpp` service queries remain the reference for
+keeping font metadata behind Font Kit; the Fonts information query/pane is
+still pending.
+
+TextSurface owns both glyph emission and exact command/payload accounting.
+Text View uses that shared run walk for draw-list preflight, including selection
+runs, UTF-8 chunking and trimmed spaces. A 30-line, 80-column document exposed
+over-reservation against the retained window's 128-command limit; the regression
+fails in `/var/tmp/astra-text-view-capacity-red-20261018.log` and passes with
+ordinary and cross-line selections in
+`/var/tmp/astra-text-view-capacity-green-20261018.log`. This fixes capacity
+correctness without changing the draw protocol or adding application budgeting.
+The native Gallery example now uses a 420-pixel viewport to exercise a realistic
+document. The Clipboard Kit snapshot is inspected byte-for-byte by the existing
+native NDK `text_clipboard --inspect` example, using shared AstraString hex
+formatting. Interactive Terminal paste and native stdout redirection were
+separately found unsuitable as oracles; the observed product defects are Plane
+ASTRA-58 and ASTRA-59. Ordinary handled PMMU faults are not mistaken for crashes.
+
+Native worker metadata advances to `astra-font-worker/0.3`. Outline imports
+retain every SFNT copyright, license and license-URL record in `NAME.notices`,
+including duplicates and languages. Each record carries name/platform/
+encoding/language IDs and exact `raw_hex`; supported UTF-16BE and Macintosh
+Roman records additionally carry complete UTF-8 `text`. Invalid, embedded-NUL
+and unsupported encodings retain original bytes without guessed text. Format-1
+language tags retain original bytes and decoded text when valid. FreeType's
+public language-tag accessor rejects valid first tag ID `0x8000`; the importer
+uses bounded `FT_Load_Sfnt_Table` reads for all language tags instead.
+The counted-string contract is documented in the
+[FreeType SFNT names API](https://freetype.org/freetype2/docs/reference/ft2-sfnt_names.html);
+the accessor's exclusion is visible in
+[`ftsnames.c`](https://github.com/freetype/freetype/blob/VER-2-13-3/src/base/ftsnames.c#L110).
+
+The shared AFNT validator now names its metadata resource bound explicitly:
+`ASTRA_AFNT_NAME_MAX`, 1 MiB. Complete notices plus encoded originals can exceed
+the previous 64 KiB bound. Other file/glyph bounds remain enforced; imports
+that exceed them fail instead of truncating legal text. AFNT stays format 0.2;
+checked-in font objects are unchanged. Converter regression compares every
+original notice byte and tests a 32 KiB source record, Unicode, newlines, tabs,
+Mac Roman, malformed UTF-16, embedded NUL, unknown encoding and first language
+tag. The common codec separately checks the exact metadata bound and one byte
+beyond it.
+
+Native Iosevka import, live switching, restart, built-in restoration and
+uninstall pass in `/var/tmp/astra-font-notices-native-ui-final-20261018.log`.
+While stopped, the installed AFNT validates against its original source hash
+and six complete notices, including exact original bytes and decoded Unicode
+text. No production image or board selector is changed. Plane ASTRA-56 tracks
+Text View, ASTRA-57 tracks notice retention, and ASTRA-36 remains in progress
+for the Font Kit information query and native information pane.
+
 - The native font container is **AFNT** (Astra Font), a passive, versioned,
   big-endian bitmap-font format.
 - AFNT contains one or more designed bitmap strikes and may retain a sanitized

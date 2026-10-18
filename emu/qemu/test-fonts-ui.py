@@ -2,6 +2,7 @@
 """Drive Fonts import, family activation and system choice through native UI."""
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -298,6 +299,38 @@ def main():
             stderr=subprocess.STDOUT, text=True)
         if result.returncode != 0 or "Inode:" not in result.stdout:
             raise RuntimeError("UI import AFNT object missing: " + result.stdout)
+        installed = Path(work) / "installed.afnt"
+        subprocess.run(["debugfs", "-R", "dump /config/system/fonts/installed/" +
+            token + ".afnt " + str(installed), volume], check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        metadata = json.loads(font_format.parse_afnt(installed.read_bytes())[b"NAME"])
+        original = Path(source).read_bytes()
+        if original.startswith(b"AFNT"):
+            if metadata != json.loads(font_format.parse_afnt(original)[b"NAME"]):
+                raise RuntimeError("native AFNT import changed source metadata")
+        else:
+            if metadata.get("converter") != "astra-font-worker/0.3" or \
+                    metadata.get("source_files", [{}])[0].get("sha256") != \
+                    hashlib.sha256(original).hexdigest() or \
+                    not isinstance(metadata.get("notices"), list):
+                raise RuntimeError("native import lost converter/source/notice metadata")
+            for notice in metadata["notices"]:
+                raw = bytes.fromhex(notice["raw_hex"])
+                sfnt = original[:4] in (b"\0\1\0\0", b"OTTO", b"ttcf", b"true")
+                if (sfnt and raw not in original) or not all(key in notice for key in (
+                        "name_id", "platform_id", "encoding_id", "language_id")):
+                    raise RuntimeError("native import lost original notice bytes/identity")
+                if notice["platform_id"] == 0 or (notice["platform_id"] == 3 and
+                        notice["encoding_id"] in (0, 1, 10)):
+                    try:
+                        decoded = raw.decode("utf-16-be")
+                    except UnicodeDecodeError:
+                        decoded = None
+                    if decoded is not None and "\0" not in decoded and \
+                            notice.get("text") != decoded:
+                        raise RuntimeError("native import changed decoded notice text")
+            print("Fonts persisted native source hash and %u complete notices" %
+                  len(metadata["notices"]), flush=True)
         machine = terminal.Machine(args.qemu, args.rom, image, work)
         try:
             if not machine.wait_for_serial(terminal.BOOT_MARKER, 120):

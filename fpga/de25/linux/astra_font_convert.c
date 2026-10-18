@@ -7,10 +7,14 @@
 #include <astra/utf8.h>
 
 #include <astra/sha256.h>
+#include <astra/endian.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_MULTIPLE_MASTERS_H
+#include FT_SFNT_NAMES_H
+#include FT_TRUETYPE_IDS_H
+#include FT_TRUETYPE_TABLES_H
 
 #include <limits.h>
 #include <iconv.h>
@@ -93,13 +97,10 @@ static int u16(Bytes *bytes, uint16_t value)
     return append(bytes, encoded, 2u);
 }
 
-static int json_string(Bytes *bytes, const char *text)
+static int json_text(Bytes *bytes, const char *text, uint32_t length)
 {
     static const char digits[] = "0123456789abcdef";
-    size_t length;
-    if (text == NULL) text = "";
-    length = strlen(text);
-    if (length > 255u || !astra_utf8_validate(text, (uint32_t)length, 0u) ||
+    if (!astra_utf8_validate(text, length, 0u) ||
         !literal(bytes, "\"")) return 0;
     for (size_t at = 0; at < length; ++at) {
         unsigned char character = (unsigned char)text[at];
@@ -113,6 +114,125 @@ static int json_string(Bytes *bytes, const char *text)
         } else if (!append(bytes, &character, 1u)) return 0;
     }
     return literal(bytes, "\"");
+}
+
+static int json_string(Bytes *bytes, const char *text)
+{
+    size_t length = text == NULL ? 0u : strlen(text);
+    return length <= 255u && json_text(bytes, text, (uint32_t)length);
+}
+
+static int json_hex(Bytes *bytes, const uint8_t *data, uint32_t length)
+{
+    static const char digits[] = "0123456789abcdef";
+    if (!literal(bytes, "\"")) return 0;
+    for (uint32_t at = 0u; at < length; ++at) {
+        char hex[] = {digits[data[at] >> 4], digits[data[at] & 15u]};
+        if (!append(bytes, hex, 2u)) return 0;
+    }
+    return literal(bytes, "\"");
+}
+
+/* Keep original bytes even when a source encoding cannot be decoded. */
+static int notice_text(Bytes *bytes, const uint8_t *data, uint32_t length,
+                       const char *encoding, const char *key)
+{
+    iconv_t converter;
+    char *output, *write_at, *read_at = (char *)data;
+    size_t available, remaining = length;
+    int result = 1;
+    if (encoding == NULL) return 1;
+    if (length > (FONT_OUTPUT_LIMIT - 1u) / 4u) return 0;
+    available = (size_t)length * 4u + 1u;
+    output = malloc(available);
+    if (output == NULL) return 0;
+    write_at = output;
+    converter = iconv_open("UTF-8", encoding);
+    if (converter == (iconv_t)-1) { free(output); return 0; }
+    if (iconv(converter, &read_at, &remaining, &write_at, &available) != (size_t)-1 &&
+        remaining == 0u &&
+        astra_utf8_validate(output, (uint32_t)(write_at - output), 0u))
+        result = literal(bytes, key) &&
+                 json_text(bytes, output, (uint32_t)(write_at - output));
+    iconv_close(converter);
+    free(output);
+    return result;
+}
+
+static int notice_language(Bytes *bytes, FT_Face face, uint16_t language)
+{
+    uint8_t header[6], record[4];
+    FT_ULong size = sizeof(header);
+    FT_ULong tag = FT_MAKE_TAG('n', 'a', 'm', 'e');
+    uint32_t offset, count, expected;
+    uint8_t *text;
+    int result;
+
+    /* Public language-tag accessor rejects valid first ID 0x8000. */
+    if (FT_Load_Sfnt_Table(face, tag, 0, header, &size) != 0 ||
+        size != sizeof(header) || astra_load_be16(header) != 1u) return 1;
+    offset = 6u + (uint32_t)astra_load_be16(header + 2u) * 12u;
+    size = 2u;
+    if (FT_Load_Sfnt_Table(face, tag, offset, record, &size) != 0 ||
+        size != 2u) return 1;
+    count = astra_load_be16(record);
+    if ((uint32_t)language - 0x8000u >= count) return 1;
+    offset += 2u + ((uint32_t)language - 0x8000u) * 4u;
+    size = sizeof(record);
+    if (FT_Load_Sfnt_Table(face, tag, offset, record, &size) != 0 ||
+        size != sizeof(record)) return 1;
+    size = astra_load_be16(record);
+    expected = (uint32_t)size;
+    offset = (uint32_t)astra_load_be16(header + 4u) +
+             astra_load_be16(record + 2u);
+    text = malloc(size == 0u ? 1u : size);
+    if (text == NULL) return 0;
+    result = 1;
+    if ((size == 0u || FT_Load_Sfnt_Table(face, tag, offset, text, &size) == 0) &&
+        size == expected)
+        result = literal(bytes, ",\"language_tag_raw_hex\":") &&
+            json_hex(bytes, text, (uint32_t)size) &&
+            notice_text(bytes, text, (uint32_t)size, "UTF-16BE",
+                        ",\"language_tag\":");
+    free(text);
+    return result;
+}
+
+static int notices(Bytes *bytes, FT_Face face)
+{
+    uint32_t count = 0u;
+    if (!literal(bytes, ",\"notices\":[")) return 0;
+    for (FT_UInt at = 0u; at < FT_Get_Sfnt_Name_Count(face); ++at) {
+        FT_SfntName record;
+        const char *encoding = NULL;
+        char prefix[192];
+        int length;
+        if (FT_Get_Sfnt_Name(face, at, &record) != 0) return 0;
+        if (record.name_id != TT_NAME_ID_COPYRIGHT &&
+            record.name_id != TT_NAME_ID_LICENSE &&
+            record.name_id != TT_NAME_ID_LICENSE_URL) continue;
+        length = snprintf(prefix, sizeof(prefix),
+            "%s{\"name_id\":%u,\"platform_id\":%u,\"encoding_id\":%u,"
+            "\"language_id\":%u,\"raw_hex\":", count++ == 0u ? "" : ",",
+            record.name_id, record.platform_id, record.encoding_id,
+            record.language_id);
+        if (length <= 0 || (size_t)length >= sizeof(prefix) ||
+            !append(bytes, prefix, (uint32_t)length) ||
+            !json_hex(bytes, record.string, record.string_len)) return 0;
+        if (record.platform_id == TT_PLATFORM_APPLE_UNICODE ||
+            (record.platform_id == TT_PLATFORM_MICROSOFT &&
+             (record.encoding_id == TT_MS_ID_SYMBOL_CS ||
+              record.encoding_id == TT_MS_ID_UNICODE_CS ||
+              record.encoding_id == TT_MS_ID_UCS_4))) encoding = "UTF-16BE";
+        else if (record.platform_id == TT_PLATFORM_MACINTOSH &&
+                 record.encoding_id == TT_MAC_ID_ROMAN) encoding = "MACINTOSH";
+        if (!notice_text(bytes, record.string, record.string_len, encoding,
+                         ",\"text\":")) return 0;
+        if (record.language_id >= 0x8000u &&
+            !notice_language(bytes, face, record.language_id)) return 0;
+        if (!literal(bytes, "}")) return 0;
+    }
+    return literal(bytes, "]");
 }
 
 static int map_compare(const void *left, const void *right)
@@ -133,6 +253,7 @@ static int metadata(Bytes *name, FT_Face face, const char *source_name,
     if (!literal(name, "{\"family\":") || !json_string(name, family) ||
         !literal(name, ",\"style\":") || !json_string(name, style) ||
         !literal(name, ",\"license\":") || !json_string(name, license) ||
+        !notices(name, face) ||
         !literal(name, ",\"source_encoding\":\"unicode\",\"source_files\":[{\"name\":") ||
         !json_string(name, source_name) || !literal(name, ",\"sha256\":\""))
         return 0;
@@ -159,7 +280,7 @@ static int metadata(Bytes *name, FT_Face face, const char *source_name,
                 !append(name, suffix, (uint32_t)length)) return 0;
         }
     }
-    if (!literal(name, "],\"converter\":\"astra-font-worker/0.2\","
+    if (!literal(name, "],\"converter\":\"astra-font-worker/0.3\","
                        "\"outline_ppem\":[")) return 0;
     for (uint32_t at = 0u; at < SYSTEM_STRIKES; ++at) {
         length = snprintf(suffix, sizeof(suffix), "%s%u",
@@ -535,7 +656,7 @@ static int amiga_metadata(Bytes *name, const AstraAmigaFont *font,
         if (!append(name, hex, 2u)) return 0;
     }
     length = snprintf(suffix, sizeof(suffix),
-        "\"}],\"source_face_index\":0,\"converter\":\"astra-font-worker/0.2\","
+        "\"}],\"source_face_index\":0,\"converter\":\"astra-font-worker/0.3\","
         "\"outline_ppem\":[%u],\"glyphs_per_strike\":%u}",
         (unsigned)font->height, (unsigned)font->glyph_count);
     return length > 0 && (size_t)length < sizeof(suffix) &&

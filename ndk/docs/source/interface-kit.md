@@ -308,8 +308,8 @@ Pointer-image APIs and automatic Interface Kit selection require
 
 ## Text models and fields
 
-{c:type}`AstraTextModel` is the shared UTF-8 document core used by fields and
-future editors. It is an allocation-free piece table with an indexed line map;
+{c:type}`AstraTextModel` is the shared UTF-8 document core used by fields,
+Text View and future editors. It is an allocation-free piece table with an indexed line map;
 the caller owns its content and four-byte-aligned metadata arenas. Those arenas
 are capacity, not document-format limits. When an edit returns
 `ASTRA_ERROR_BUFFER_TOO_SMALL`, query `text_model_replace_requirements`, move
@@ -340,6 +340,27 @@ respectively.
 ```
 
 ## Text selection and clipboard
+
+Interface Kit 7.1 adds selectable, read-only multiline Text View. Initialize
+`AstraTextViewInfo` with a caller-owned `AstraTextModel`, then call
+`astra_interface_text_view_init`. Place the control as a ScrollView's single
+child; bind ordinary scrollbars to that view's existing scroll model when
+visible bars are needed. Interface Gallery's Text page demonstrates this
+composition and native clipboard integration.
+
+Text View uses TextSurface's fixed-grid hardware glyph path. It draws only
+visible lines and columns, expands tabs to eight-cell stops, and displays CRLF
+as one line break while preserving original bytes for copying. Long lines
+scroll horizontally. Pointer drag, arrows, Shift selection, Home/End,
+Ctrl+Home/End, Page Up/Down and Meta+A/C use the same TextModel selection as
+single-line fields. Editing, cut and paste are rejected. A keyboard focus
+border remains visible at the viewport. Copy actions carry the control ID;
+applications copy that model's selected byte range through Clipboard Kit.
+
+After an external document change, call `astra_interface_text_view_refresh`
+to remeasure content, update scroll extents and repaint. Existing Field APIs
+remain single-line. Text View adds no fields to existing public control/context
+structures, so this is Interface Kit 7.1, with two new versioned symbols.
 
 {c:type}`AstraTextSurface` owns presentation policy and caller-provided scratch
 storage, not the document. Grid cells, selection, and scrollback remain in the
