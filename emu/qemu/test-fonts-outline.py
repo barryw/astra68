@@ -3,8 +3,10 @@
 
 import argparse
 import importlib.util
+import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -51,13 +53,13 @@ def font_syslog(machine):
     result = subprocess.run(
         ["sudo", "-n", "find", root, "-type", "f", "-name", "syslog*",
          "-exec", "grep", "-iE",
-         "fonts host|fonts stage|fonts publish|font worker", "{}", "+"],
+         "fonts host|fonts stage|fonts publish|fonts import|font worker|font concurrent", "{}", "+"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return result.stdout[-4000:] if result.returncode in (0, 1) else result.stderr[-1000:]
 
 
-def boot(qemu, rom, image, work, phase):
-    machine = terminal.Machine(qemu, rom, image, work)
+def boot(qemu, rom, image, work, phase, environment=None, concurrent=False):
+    machine = terminal.Machine(qemu, rom, image, work, environment=environment)
     try:
         deadline = time.monotonic() + 120
         reached = False
@@ -79,6 +81,10 @@ def boot(qemu, rom, image, work, phase):
             lines = machine.said()[0]
             if any("launch " + PROBE in line and "status=0" in line
                    for line in lines):
+                if concurrent and not any("ASTRA FONT CONCURRENT CATALOG PASS" in line
+                                          for line in machine.said_with_syslog()[0]):
+                    time.sleep(.1)
+                    continue
                 if PROBE.endswith("FontAmigaProbe.app") and \
                         machine.qmp.execute("qom-get", {
                             "path": "/machine",
@@ -88,7 +94,8 @@ def boot(qemu, rom, image, work, phase):
             if any("launch-failed " + PROBE in line for line in lines):
                 raise RuntimeError("%s: %s" %
                                    (phase, [line for line in lines
-                                            if PROBE in line][-10:]))
+                                            if PROBE in line or "font concurrent" in line][-10:]) +
+                                   "; syslog=" + font_syslog(machine))
             time.sleep(.1)
         raise RuntimeError("%s readiness absent: %s" %
                            (phase, [line for line in machine.said()[0]
@@ -107,6 +114,8 @@ def main():
     parser.add_argument("--expect-limit", action="store_true")
     parser.add_argument("--expect-later-failure", action="store_true")
     parser.add_argument("--expect-variable", action="store_true")
+    parser.add_argument("--concurrent", action="store_true",
+                        help="verify catalog access while a real converter is delayed")
     parser.add_argument("--amiga", action="store_true",
                         help="run fixed-strike Amiga import probe")
     args = parser.parse_args()
@@ -115,13 +124,28 @@ def main():
         if args.expect_limit or args.expect_later_failure or args.expect_variable:
             parser.error("--amiga cannot combine with outline-only cases")
         PROBE = "/apps/FontAmigaProbe.app"
-    if not Path("/usr/local/libexec/astra-font-worker").is_file():
+    worker = Path(os.environ.get("ASTRA_FONT_WORKER_PATH",
+                                 "/usr/local/libexec/astra-font-worker"))
+    if not worker.is_file():
         raise RuntimeError("installed Astra font worker required")
     with tempfile.TemporaryDirectory(prefix="astra-font-outline-") as work:
         image = str(Path(work) / "system.img")
         shutil.copyfile(args.image, image)
         astra_image.install(image, vim_runtime=None)
         astra_image.install_test_app(image, args.bundle)
+        environment = None
+        if args.concurrent:
+            os.chmod(work, 0o755)
+            wrapper = Path(work) / "delayed-font-worker"
+            wrapper.write_text("#!/bin/sh\nsleep 5\nexec " +
+                               shlex.quote(str(worker.resolve())) + ' "$@"\n')
+            wrapper.chmod(0o755)
+            environment = os.environ.copy()
+            environment["ASTRA_FONT_WORKER_PATH"] = str(wrapper)
+            marker = Path(work) / "expect-concurrent"
+            marker.write_text("concurrent\n", encoding="ascii")
+            astra_image._replace_volume_file(
+                image, str(marker), "/expect-outline-concurrent")
         source = args.source
         if args.expect_later_failure:
             source = str(Path(work) / "bad-second-face.ttc")
@@ -149,10 +173,10 @@ def main():
                   "FONTS FONTS_ADMIN FONTS_RENDER SYSTEM:r LIBS:r")
         startup.write_text(
             astra_image.DISPLAY_STARTUP_MANIFEST +
-            "service %s grants %s required priority=20\n" % (PROBE, grants),
+            "service %s grants %s restart=never\n" % (PROBE, grants),
             encoding="ascii")
         astra_image._replace_volume_file(image, str(startup), "/startup/system")
-        boot(args.qemu, args.rom, image, work, "first boot")
+        boot(args.qemu, args.rom, image, work, "first boot", environment, args.concurrent)
         if args.expect_later_failure:
             objects = stored_objects(image, work)
             if objects:
@@ -167,13 +191,15 @@ def main():
         marker.write_text("again\n", encoding="ascii")
         astra_image._replace_volume_file(
             image, str(marker), "/expect-outline-again")
-        boot(args.qemu, args.rom, image, work, "restart")
+        boot(args.qemu, args.rom, image, work, "restart", environment, args.concurrent)
     if args.amiga:
         print("ASTRA FONT AMIGA PASS native import, exact metrics, named hardware draw, restart")
     elif args.expect_variable:
         print("ASTRA FONT OUTLINE PASS variable styles, AFNT, selection, restart")
     else:
         print("ASTRA FONT OUTLINE PASS native outline->AFNT, render, selection, restart")
+    if args.concurrent:
+        print("ASTRA FONT CONCURRENT PASS catalog available during pending import, restart")
     return 0
 
 

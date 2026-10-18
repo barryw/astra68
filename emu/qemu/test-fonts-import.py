@@ -74,7 +74,7 @@ def main():
         startup.write_text(
             astra_image.DISPLAY_STARTUP_MANIFEST +
             "service %s grants FONTS FONTS_ADMIN FONTS_RENDER SYSTEM:r LIBS:r "
-            "required priority=20\n" % PROBE, encoding="ascii")
+            "restart=never priority=20\n" % PROBE, encoding="ascii")
         astra_image._replace_volume_file(image, str(startup), "/startup/system")
         boot(args.qemu, args.rom, image, work, "first boot")
         expectation = Path(work) / "expect-again"

@@ -142,6 +142,8 @@ int main(void)
     uint32_t initial_generation = generation;
     config_ready = 1u;
     font_changed_signal = 99u;
+    assert(select_face("user:unconfirmed") == ASTRA_STATUS_IO && writes == 0u);
+    inventory_ready = 1u;
     assert(select_face(selection.id) == ASTRA_STATUS_OK && writes == 1u && signals == 1u);
     assert(strcmp(saved, selection.id) == 0);
     uint32_t held = 0u, bytes = 0u, previous_opens = opens;

@@ -60,9 +60,16 @@ build/host/test_selection: tests/test_selection.c main.c policy.c policy.h $(HOS
 		-ffunction-sections -fdata-sections tests/test_selection.c policy.c \
 		-Wl,--gc-sections $(HOST_COMMON) -o $@
 
-test: $(TARGET) build/host/test_policy build/host/test_selection
+build/host/test_import: tests/test_import.c main.c policy.c policy.h $(HOST_COMMON)
+	@mkdir -p $(@D)
+	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic -O2 \
+		-ffunction-sections -fdata-sections tests/test_import.c policy.c \
+		-Wl,--gc-sections $(HOST_COMMON) -o $@
+
+test: $(TARGET) build/host/test_policy build/host/test_selection build/host/test_import
 	./build/host/test_policy
 	./build/host/test_selection
+	./build/host/test_import
 
 sanitize: test
 	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic \
@@ -78,6 +85,11 @@ sanitize: test
 		-ffunction-sections -fdata-sections tests/test_selection.c policy.c \
 		-Wl,--gc-sections $(HOST_COMMON) -o build/host/test_selection_sanitize
 	./build/host/test_selection_sanitize
+	cc $(CPPFLAGS) -std=c11 -Wall -Wextra -Werror -pedantic \
+		-fsanitize=address,undefined -fno-omit-frame-pointer \
+		-ffunction-sections -fdata-sections tests/test_import.c policy.c \
+		-Wl,--gc-sections $(HOST_COMMON) -o build/host/test_import_sanitize
+	./build/host/test_import_sanitize
 
 analyze: $(TARGET)
 	@mkdir -p build/analyzer

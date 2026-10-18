@@ -42,6 +42,71 @@ enum {
     FAIL_RESTART
 };
 
+static struct {
+    AstraHandle admin;
+    const void *source;
+    uint32_t size;
+    AstraResult result;
+    char id[ASTRA_FONT_ID_MAX];
+} concurrent_import;
+
+static void import_thread(uint32_t unused)
+{
+    (void)unused;
+    concurrent_import.result = astra_fonts_import(concurrent_import.admin,
+        concurrent_import.source, concurrent_import.size, NAME, sizeof(NAME) - 1u,
+        PROBE_ENCODING, concurrent_import.id);
+}
+
+static AstraResult import_while_reading(AstraHandle admin, AstraHandle read,
+    const void *source, uint32_t size, const AstraFontsCatalog *before,
+    char id[ASTRA_FONT_ID_MAX])
+{
+    uint32_t thread = 0u, observed_busy = 0u, verified = 0u;
+    AstraThreadStart start = {import_thread, 0u};
+    concurrent_import.admin = admin;
+    concurrent_import.source = source;
+    concurrent_import.size = size;
+    if (astra_rt_thread_create(&start, ASTRA_PROCESS_PRIORITY_NORMAL,
+        ASTRA_RIGHT_WAIT | ASTRA_RIGHT_READ, &thread, NULL) != ASTRA_SYSCALL_OK)
+        return ASTRA_ERROR_NO_RESOURCES;
+    /* A delayed real converter holds the first import open in this fixture. */
+    for (uint32_t attempt = 0u; attempt < 64u && !observed_busy; ++attempt) {
+        char ignored[ASTRA_FONT_ID_MAX];
+        AstraResult result = astra_fonts_import(admin, "AFNT", 4u,
+            "invalid.afnt", sizeof("invalid.afnt") - 1u,
+            ASTRA_FONT_ENCODING_AUTO, ignored);
+        if (result == ASTRA_ERROR_BUSY) observed_busy = 1u;
+        else if (result != ASTRA_ERROR_INVALID_ARGUMENT) {
+            (void)astra_log_failure("font concurrent contender", (uint32_t)-result);
+            break;
+        }
+        if (astra_wait_one(thread, 0u, NULL) == ASTRA_SYSCALL_OK) break;
+    }
+    if (observed_busy) {
+        AstraFontsCatalog during = ASTRA_FONTS_CATALOG_INIT;
+        if (astra_fonts_catalog_open(read, &during) == ASTRA_OK) {
+            verified = 1u |
+                (during.generation == before->generation ? 2u : 0u) |
+                (during.face_count == before->face_count ? 4u : 0u) |
+                (strcmp(during.selected_id, before->selected_id) == 0 ? 8u : 0u) |
+                (astra_wait_one(thread, 0u, NULL) == ASTRA_SYSCALL_TIMED_OUT ? 16u : 0u);
+            AstraResult closed = astra_fonts_catalog_close(&during);
+            if (closed == ASTRA_OK) verified |= 32u;
+        }
+    }
+    if (!observed_busy)
+        (void)astra_log_debug("font concurrent busy absent", 27u);
+    if (verified != 63u)
+        (void)astra_log_failure("font concurrent snapshot", verified);
+    uint32_t waited = astra_wait_one(thread, ASTRA_DEADLINE_FOREVER, NULL);
+    (void)astra_close(thread);
+    if (verified != 63u || waited != ASTRA_SYSCALL_OK) return ASTRA_ERROR_IO;
+    memcpy(id, concurrent_import.id, sizeof(concurrent_import.id));
+    (void)astra_log("ASTRA FONT CONCURRENT CATALOG PASS unchanged during conversion");
+    return concurrent_import.result;
+}
+
 #ifdef ASTRA_FONT_PROBE_AMIGA
 static AstraWindow probe_window = ASTRA_WINDOW_INIT;
 static AstraDisplay probe_display = ASTRA_DISPLAY_INIT;
@@ -229,9 +294,15 @@ int astra_main(const AstraStartupInfo *startup)
         if (expected_faces == 0u || expected_faces > 64u) goto done;
     }
     status = FAIL_IMPORT;
-    result = astra_fonts_import(admin->handle, source, source_size,
-                                NAME, sizeof(NAME) - 1u,
-                                PROBE_ENCODING, id);
+    uint32_t concurrent = astra_filesystem_open(&files.filesystem,
+        "/SYSTEM/expect-outline-concurrent", ASTRA_VFS_OPEN_READ,
+        &marker) == ASTRA_VFS_OK;
+    if (concurrent && astra_filesystem_close(&marker) != ASTRA_VFS_OK)
+        goto done;
+    result = concurrent ? import_while_reading(admin->handle, read->handle,
+        source, source_size, &before, id) :
+        astra_fonts_import(admin->handle, source, source_size,
+            NAME, sizeof(NAME) - 1u, PROBE_ENCODING, id);
     if (expect_limit) {
         if (result != ASTRA_ERROR_NO_RESOURCES ||
             astra_fonts_catalog_open(read->handle, &after) != ASTRA_OK ||

@@ -10,6 +10,31 @@ must not draw bitmap glyphs with CPU pixel loops.
 
 ## 1. Locked architecture
 
+### Active import coordination work (2026-10-18)
+
+The existing native converter job is now retained by the Fonts service event
+loop instead of being awaited inside one request handler. A private copy of
+source bytes and name remains valid after request dispatch; a transferred
+read-only area alone does not remove the sender's original write authority.
+The coordinator reuses `stage_afnt`, `commit_import` and `rollback_import`.
+Only one inventory writer runs at a time; reads and system-font selection can
+continue while conversion is pending. Completion is reported after the worker
+has exited and inventory publication or rollback has finished. An ambiguous
+Config Kit commit failure retains objects, as before, rather than deleting an
+object that may already be published. The shared inventory setter also marks
+the cached inventory unconfirmed: subsequent inventory mutations and new
+user-font choices fail closed until service reload, avoiding a stale manifest
+overwriting a possibly successful commit. Built-in recovery choices remain
+available.
+
+Read-only Haiku reference: `src/kits/support/Job.cpp:BJob::Run` performs cleanup
+before terminal state/notification. Astra adapts that ordering to existing
+native waitable thread/semaphore objects and its single Config Kit publication
+point. Display's existing round-robin wait-source ordering informs the Fonts
+service's expanded wait set. No generic job registry or second converter/store
+is added. This is backend work; the synchronous public API remains current
+until native progress/cancellation clients are built coherently.
+
 ### Active font-information work (2026-10-18)
 
 Source `f4fb7263bea50dea60ec620c99774c3830e8842f` clean-builds as private

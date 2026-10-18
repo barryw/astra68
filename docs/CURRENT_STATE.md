@@ -2,6 +2,36 @@
 
 Status: active continuation map, 2026-10-18
 
+Native font import coordination now runs in the Fonts service's existing
+wait loop. The converter still uses the existing native worker thread and
+ready/resume semaphores; the coordinator owns a private source/name snapshot,
+stages faces through the existing store, and publishes through Config Kit only
+after successful worker retirement. Catalog/metadata/render reads and system
+selection remain available; competing inventory writers receive BUSY. The
+public synchronous Font Kit 4.2 API and FONTS 7 wire format are unchanged at
+this step. UI progress/cancellation is not yet exposed.
+
+Focused coordinator ownership/publication/rollback tests, service regression
+tests, sanitizers and MC68040 analyzers pass in
+`/var/tmp/astra-font-import-coordinator-final-20261018b.log`. Ambiguous inventory
+commit failures retain objects and disable further inventory writes and new
+user-font choices until service reload; built-in recovery selection remains
+available. This prevents a stale cached manifest from overwriting a commit
+whose reply was lost.
+
+Native AFNT import/idempotence/selection/uninstall/restart/damaged-inventory
+fallback, failed-collection rollback with an empty object store, and valid
+multi-face collection publication/restart pass in
+`/var/tmp/astra-font-import-coordinator-{afnt,rollback,collection}-native-20261018.log`.
+The final concurrent catalog/import and restart gate passes in
+`/var/tmp/astra-font-import-coordinator-concurrent-final-native-20261018.log`.
+The same gate rejects the archived blocking Fonts
+service in `/var/tmp/astra-font-import-blocking-native-red-20261018.log`.
+Initial probe failures exposed test assumptions: zero-deadline native thread
+waits return TIMED_OUT, and an elevated test parent can starve its normal-priority
+actor. The corrected probe uses ordinary application priority and a delayed
+real converter. No new kernel or host-converter mechanism is introduced.
+
 Font information source `f4fb7263bea50dea60ec620c99774c3830e8842f` clean-builds
 as private release
 `ecd9020a954d0b9f7d5ca935f5c109f30b74c73ae6408922555078a55d941b83`, ROM
