@@ -27,6 +27,44 @@ delay captured the source browser before conversion finished. Shared Label
 preview extension is agreed but still pending, along with designed-style
 resolution and the remaining Fonts acceptance work.
 
+The corrected `c6cd2e7a95c2a631479adb3d6151d6ae67de5350` clean release
+`927399cff10d009880914c5326b526afce465289b253b5a6fdc0721f8586781b`
+verifies, with ROM
+`c738b06c3db27c4376ed6830556308b334821f5e21bc1a56f35669c23f019406`
+and source manifest
+`5a8a2ec8ca847de2cae2b9678cecb66e6c27e424938ec8b52f53c9f1e1b577fa`.
+Both ROM/kernel revision headers identify that commit. It has not been
+activated. Physical captures now show immediate Iosevka changes in Desktop,
+menu bar and Fonts. Ineligible Astra Mono rows show the explicit label,
+requirements hint and disabled system-selection button. Restart restores
+Iosevka. The first built-in restoration interaction timed out with no new
+adoption records; disk inspection confirmed the choice remained Iosevka. A
+diagnostic replay, with only failure-capture handling added to the driver,
+passes restoration and uninstall. Captures show built-in text restored across
+Desktop/menu/Fonts, inventory is empty, the imported AFNT object is absent,
+and the trial provider retires. The first failure remains unexplained: a
+passing replay does not close interaction reliability or release acceptance.
+Beast evidence is `/var/tmp/astra-font-live-evidence-20261017b/`, including
+`restore-attempt1/`; logs are
+`/var/tmp/astra-font-live-physical-trial-20261017b.log` and
+`/var/tmp/astra-font-live-physical-restore-retry-20261017b.log`.
+The successful replay preserves the stopped production-image SHA-256
+`3850f7eab69b430c5efced226e5e1beb73789934c57f2b3414b0e0e235aedc38`
+before/after; runtime/audio/remote services restore active with zero restarts.
+The fully started production HDMI frame after this replay again matches
+`37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`;
+capture and counters are retained in the new evidence root's `warm-production/`.
+Fully started
+production after the earlier trial again matches the known-good HDMI RGB hash
+`37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`
+at 49/49 submissions/completions and 25 glyph commands. Evidence is under
+`/var/tmp/astra-font-live-evidence-20261017/warm-production/` on Beast.
+The old trial's data was archived and checksum-compared on Beast at
+`/var/tmp/astra-font-live-archive-20261017/`; its original immutable release
+also verifies independently on Beast and DE25. Only redundant disposable board
+images and the old trial release were removed, restoring 1.8 GiB of headroom.
+Logs and captures remain on DE25; production data was not removed.
+
 The blend-isolation FPGA shell is now installed on DE25: RBF
 `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`.
 U-Boot reconfiguration and exact-SOF JTAG verification pass. The existing

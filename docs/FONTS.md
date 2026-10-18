@@ -727,6 +727,19 @@ persisted choice, restart, built-in restoration and uninstall in
 `/var/tmp/astra-font-live-present-ui-20261017.log`. Physical replacement
 qualification remains required.
 
+The corrected `c6cd2e7` DE25 candidate now visibly switches Desktop labels,
+menu headings and Fonts to Iosevka without restart. The ineligible Astra Mono
+detail view shows "Cannot be system font", a requirements hint and a disabled
+selection button. The first restoration interaction timed out without changing
+the saved Iosevka choice. An unchanged-runtime diagnostic replay passes built-in
+restoration and uninstall, with correct pixels throughout, empty inventory,
+no imported AFNT object, no trial panic and no retained provider. Its stopped
+production image hashes match before/after. Evidence on Beast:
+`/var/tmp/astra-font-live-evidence-20261017b/`; the failed first restoration is
+retained under `restore-attempt1/`. Release remains withheld until that
+interaction failure is explained or resolved. Passing replay alone does not
+establish repeatable acceptance.
+
 Font previews will extend the shared Label control with an explicit installed
 face and size. Ordinary system labels retain their fixed role sizes. This
 follows Haiku's `src/preferences/appearance/FontSelectionView.cpp`, which uses

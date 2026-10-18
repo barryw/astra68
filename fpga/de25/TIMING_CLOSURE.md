@@ -1,5 +1,44 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-17: corrected Fonts live pixels pass; interaction gate remains open
+
+- Beast clean-built source `c6cd2e7a95c2a631479adb3d6151d6ae67de5350`;
+  release `927399cff10d009880914c5326b526afce465289b253b5a6fdc0721f8586781b`,
+  ROM `c738b06c3db27c4376ed6830556308b334821f5e21bc1a56f35669c23f019406`,
+  source manifest `5a8a2ec8ca847de2cae2b9678cecb66e6c27e424938ec8b52f53c9f1e1b577fa`.
+  Both revision headers match that commit. The release verifies and is installed
+  only in the disposable trial store, without activation.
+- Physical captures show immediate Iosevka updates in Desktop labels, menu
+  headings and Fonts, followed by correct selected-face rendering after restart.
+  Ineligible-font detail rows and disabled selection are readable. Live-choice
+  capture: 348 glyph commands, 127/127 submissions/completions. All captures
+  use the existing 1920x1080 HDMI DMA path, 6,220,800 RGB bytes.
+- The first built-in restoration action timed out without changing the saved
+  Iosevka choice. An unchanged-runtime replay, with failure-only capture added
+  to the driver, passes restoration and uninstall: built-in pixels restored,
+  inventory/object removed, no panic, provider retired. Uninstalled capture:
+  323 glyph commands, 91/91 submissions/completions. The original failure is
+  unexplained and retained, not erased by the passing replay.
+- Evidence on Beast: `/var/tmp/astra-font-live-evidence-20261017b/`, including
+  `restore-attempt1/`; original trial and restoration retry logs are
+  `/var/tmp/astra-font-live-physical-trial-20261017b.log` and
+  `/var/tmp/astra-font-live-physical-restore-retry-20261017b.log`.
+  Successful replay preserves stopped production-image SHA-256
+  `3850f7eab69b430c5efced226e5e1beb73789934c57f2b3414b0e0e235aedc38`.
+  Production selector stays `57078599`; runtime/audio/remote services restore
+  active with zero automatic restarts.
+  Fully started production HDMI DMA capture after replay is byte-identical to
+  `37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`;
+  evidence is under `warm-production/` in the same Beast root.
+- No RTL, route, constraints, kernel selection or fabric installation changed.
+  Same installed RBF `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`,
+  Beast Quartus Pro 26.1.1 Build 130: 40,754/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376 DSPs. All clocks
+  constrained; graphics setup +0.259 ns, worst setup +0.007 ns, worst hold
+  +0.000 ns. No new timing result or failing cone.
+  Disposition: live-pixel corrections pass; software release remains withheld
+  pending repeatable interaction qualification and remaining Fonts work.
+
 ## 2026-10-17: live Fonts software trial rejected for stale pixels
 
 - Beast clean-built source `31b709ecdcdae3c24e071332e56cbc0883b764a1`;
