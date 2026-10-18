@@ -51,14 +51,30 @@ def open_fonts(machine):
     raise RuntimeError("Fonts window did not open")
 
 
-def wait_import(machine, trace_before, syslog_before):
+def wait_ui(machine, operation, trace_before, syslog_before):
     end = time.monotonic() + 90
     while time.monotonic() < end:
         lines = fresh_lines(machine, trace_before, syslog_before)
-        if any("fonts UI import complete" in line for line in lines):
+        if any("fonts UI " + operation + " complete" in line for line in lines):
             return
         time.sleep(.1)
-    raise RuntimeError("Fonts import UI did not complete: " + repr(lines[-30:]))
+    raise RuntimeError("Fonts " + operation + " UI did not complete: " + repr(lines[-30:]))
+
+
+def uninstall_current(machine):
+    trace_before = machine.sequence()
+    syslog_before = len(machine.syslog_lines())
+    # Last action must be reachable inside the default window.
+    machine.qmp.point(800, 720)
+    machine.qmp.button(True)
+    machine.qmp.button(False)
+    wait_ui(machine, "confirmation", trace_before, syslog_before)
+    machine.qmp.key("tab")
+    machine.qmp.key("tab")
+    trace_before = machine.sequence()
+    syslog_before = len(machine.syslog_lines())
+    machine.qmp.key("ret")
+    wait_ui(machine, "removal", trace_before, syslog_before)
 
 
 def wait_live_font(machine, prefix, trace_before, syslog_before, glyphs_before):
@@ -203,11 +219,13 @@ def main():
             trace_before = machine.sequence()
             syslog_before = len(machine.syslog_lines())
             machine.qmp.key("ret")
-            wait_import(machine, trace_before, syslog_before)
+            wait_ui(machine, "import", trace_before, syslog_before)
             before = display_count(machine, "glyph-commands")
+            trace_before = machine.sequence()
+            syslog_before = len(machine.syslog_lines())
             # First family row: client List begins at (24, 70).
             machine.qmp.double_click(520, 330)
-            time.sleep(.3)
+            wait_ui(machine, "details", trace_before, syslog_before)
             if display_count(machine, "glyph-commands") <= before:
                 raise RuntimeError("family double-click rendered no details; recent=" +
                                    repr(machine.said_with_syslog()[0][-100:]))
@@ -218,16 +236,13 @@ def main():
             for _ in range(2):
                 machine.qmp.key("tab")
             machine.qmp.key("end")
+            trace_before = machine.sequence()
+            syslog_before = len(machine.syslog_lines())
             machine.qmp.key("ret")
+            wait_ui(machine, "details", trace_before, syslog_before)
             if args.unsupported_preview:
                 # Details remain usable even when the renderer rejects this strike.
-                for _ in range(4):
-                    machine.qmp.key("tab")
-                machine.qmp.key("ret")
-                machine.qmp.key("tab")
-                machine.qmp.key("tab")
-                machine.qmp.key("ret")
-                time.sleep(.5)
+                uninstall_current(machine)
                 machine.close()
                 machine = None
                 choice, inventory = state_on_disk(image, work)
@@ -239,8 +254,15 @@ def main():
                 print("ASTRA FONTS UI PASS unsupported preview, family detail, uninstall")
                 return 0
             # Selection must preserve List focus before tabbing to Back/Use.
-            for key in ("tab", "tab", "down", "up", "tab", "tab"):
+            for key in ("tab", "tab"):
                 machine.qmp.key(key)
+            for key in ("down", "up"):
+                trace_before = machine.sequence()
+                syslog_before = len(machine.syslog_lines())
+                machine.qmp.key(key)
+                wait_ui(machine, "preview", trace_before, syslog_before)
+            for _ in range(2):
+                machine.qmp.key("tab")
             trace_before = machine.sequence()
             syslog_before = len(machine.syslog_lines())
             glyphs_before = display_count(machine, "glyph-commands")
@@ -297,16 +319,13 @@ def main():
             for _ in range(3):
                 machine.qmp.key("tab")
             machine.qmp.key("ret")
-            for key in ("tab", "tab", "end", "ret"):
+            for key in ("tab", "tab", "end"):
                 machine.qmp.key(key)
-            for _ in range(5):
-                machine.qmp.key("tab")
+            trace_before = machine.sequence()
+            syslog_before = len(machine.syslog_lines())
             machine.qmp.key("ret")
-            # Confirmation view contains Cancel and Remove font.
-            machine.qmp.key("tab")
-            machine.qmp.key("tab")
-            machine.qmp.key("ret")
-            time.sleep(.5)
+            wait_ui(machine, "details", trace_before, syslog_before)
+            uninstall_current(machine)
         finally:
             machine.close()
         selected, inventory = state_on_disk(image, work)

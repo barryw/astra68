@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-10-17
 
+The `4a0925b7` shared Label candidate clean-builds and verifies as release
+`77115da14f297d0442784a5a62df31f4067531bfa8d3776c97e39af2a241a072`, ROM
+`166fda32c1539fecb3a440aa763338f20abc17b204f6acae6a3810499f67d9fd`, source
+manifest `67fbecfaed5a639ea3712c2ef043b4fae51eb3a4114aa2f3fe6c6e521cf53c6b`.
+Its first DE25 workflow passes import, live switching, restart, restoration and
+uninstall, but visual acceptance is rejected: bottom action buttons extend
+beyond the default window. The supposed pre-selection preview captures also
+preceded detail completion and still show families; they do not prove preview
+size changes. Complete failed evidence is checksum-compared on Beast at
+`/var/tmp/astra-font-preview-evidence-20261017/cycle1/`.
+The stopped production image stays byte-identical across the trial, SHA-256
+`c31dcb28e0799276ec614791897d42c55adecee0726f0c6d7840df69e450c214`;
+runtime/audio/remote services restore active with zero automatic restarts.
+The release remains withheld. Fonts now gives its existing ScrollView a
+minimum intrinsic height plus flex growth rather than an oversized fixed
+intrinsic height. A real controller/common-control regression fails before
+the fix in `/var/tmp/astra-font-preview-layout-red-20261017.log`; final host,
+sanitizer, MC68040 analyzer and readiness checks pass in
+`/var/tmp/astra-font-preview-layout-final-focused-20261017.log`. Initial
+corrected native Iosevka, long-style and unavailable-preview gates pass.
+Native gates now wait for successful detail/preview/confirmation/removal
+presentation and exercise pointer removal inside the window. Final native and
+corrected physical gates remain pending; production remains `57078599`.
+
 The Fonts preview checkpoint uses shared Label, not an application
 renderer: Interface Kit 7, Font Kit 4.1, GUI 25. Detail selection carries the
 catalog face and strike together and updates the common Label's explicit font

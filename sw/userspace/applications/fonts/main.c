@@ -422,8 +422,8 @@ static uint32_t build_controls(void)
     }
     view.id = FONTS_SCROLL;
     view.model = &scroll;
-    view.preferred_width = FONTS_WIDTH - 48u;
-    view.preferred_height = FONTS_HEIGHT - 160u;
+    view.preferred_width = client_width > 48u ? client_width - 48u : 1u;
+    view.preferred_height = 120u;
     view.state = confirm_uninstall ? ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_scroll_view_init(CONTROL(FONTS_SCROLL), &view) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
@@ -484,12 +484,12 @@ static uint32_t build_controls(void)
         astra_interface_control_set_flex(CONTROL(FONTS_PREVIEW), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     item.grow = 1u;
-    item.minimum_height = 120u;
+    item.minimum_height = view.preferred_height;
     if (astra_interface_control_set_flex(CONTROL(FONTS_SCROLL), &item) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     item.parent_id = FONTS_SCROLL;
-    item.minimum_width = FONTS_WIDTH - 48u;
+    item.minimum_width = view.preferred_width;
     if (astra_interface_control_set_flex(CONTROL(FONTS_LIST), &item) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
@@ -527,7 +527,7 @@ static uint32_t paint(void)
            ASTRA_STATUS_OK : FONTS_FAIL_CONTROL;
 }
 
-static uint32_t present(void)
+static uint32_t present(const char *completion)
 {
     AstraWindowFrame frame = {0u, 0u, client_width, client_height};
 
@@ -535,6 +535,7 @@ static uint32_t present(void)
         astra_window_present_region(&window, &frame) != ASTRA_OK)
         return FONTS_FAIL_WINDOW;
     astra_interface_ui_damage_clear(&ui);
+    if (completion != NULL) (void)astra_log(completion);
     return ASTRA_STATUS_OK;
 }
 
@@ -582,10 +583,7 @@ static uint32_t import_selected(void)
                   "Could not import font file";
     }
     if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-    uint32_t status = present();
-    if (status == ASTRA_STATUS_OK && result == ASTRA_OK)
-        (void)astra_log("fonts UI import complete");
-    return status;
+    return present(result == ASTRA_OK ? "fonts UI import complete" : NULL);
 }
 
 static uint32_t action(const AstraUIAction *event)
@@ -598,7 +596,7 @@ static uint32_t action(const AstraUIAction *event)
                 ASTRA_FONT_ENCODING_ISO_8859_1;
             message = NULL;
             if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-            return present();
+            return present(NULL);
         }
         if (event->control_id == FONTS_LIST &&
             (event->type == ASTRA_UI_ACTION_VALUE_CHANGED ||
@@ -615,7 +613,7 @@ static uint32_t action(const AstraUIAction *event)
             message = browser_enter() == ASTRA_VFS_OK ? NULL :
                       "Could not open folder";
             if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-            return present();
+            return present(NULL);
         }
         if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
             event->control_id == FONTS_USE)
@@ -635,7 +633,7 @@ static uint32_t action(const AstraUIAction *event)
                           "Could not open parent folder";
             }
             if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-            return present();
+            return present(NULL);
         }
         return ASTRA_STATUS_OK;
     }
@@ -645,18 +643,19 @@ static uint32_t action(const AstraUIAction *event)
         message = browser_load() == ASTRA_VFS_OK ? NULL :
                   "Could not open DH0";
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-        return present();
+        return present(NULL);
     }
     if (confirm_uninstall && event->type == ASTRA_UI_ACTION_ACTIVATE &&
         event->control_id == FONTS_BACK) {
         confirm_uninstall = 0u;
         message = NULL;
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-        return present();
+        return present(NULL);
     }
     if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
         event->control_id == FONTS_UNINSTALL) {
         AstraInstalledFont face;
+        const char *completion = NULL;
 
         if (detail_selection >= detail_count ||
             astra_fonts_catalog_face(&catalog,
@@ -665,11 +664,12 @@ static uint32_t action(const AstraUIAction *event)
         if ((face.flags & ASTRA_INSTALLED_FONT_SYSTEM) != 0u) {
             message = "Built-in fonts cannot be removed";
             if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-            return present();
+            return present(NULL);
         }
         if (!confirm_uninstall) {
             confirm_uninstall = 1u;
             message = NULL;
+            completion = "fonts UI confirmation complete";
         } else {
             AstraResult result = astra_fonts_uninstall(
                 fonts_admin, face.id, face.id_length);
@@ -678,13 +678,14 @@ static uint32_t action(const AstraUIAction *event)
                 if (reload_catalog() != ASTRA_STATUS_OK)
                     return FONTS_FAIL_CATALOG;
                 message = "Font removed";
+                completion = "fonts UI removal complete";
             } else
                 message = result == ASTRA_ERROR_BUSY ?
                     "Choose another system font before removing this one" :
                     "Could not remove font";
         }
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-        return present();
+        return present(completion);
     }
     if (event->control_id == FONTS_LIST &&
         event->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
@@ -707,7 +708,7 @@ static uint32_t action(const AstraUIAction *event)
             astra_interface_control_set_text(&ui, CONTROL(FONTS_HINT), hint,
                 (uint32_t)strlen(hint)) != ASTRA_OK)
             return FONTS_FAIL_CONTROL;
-        return present();
+        return present("fonts UI preview complete");
     }
     if (event->control_id == FONTS_LIST &&
         event->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
@@ -726,7 +727,7 @@ static uint32_t action(const AstraUIAction *event)
         confirm_uninstall = 0u;
         message = NULL;
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-        return present();
+        return present("fonts UI details complete");
     }
     if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
         event->control_id == FONTS_BACK) {
@@ -734,7 +735,7 @@ static uint32_t action(const AstraUIAction *event)
         confirm_uninstall = 0u;
         message = NULL;
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-        return present();
+        return present(NULL);
     }
     if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
         event->control_id == FONTS_USE) {
@@ -753,7 +754,7 @@ static uint32_t action(const AstraUIAction *event)
                   "Font lacks required system sizes or text characters" :
                   "Could not save system font choice";
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-        return present();
+        return present(NULL);
     }
     return ASTRA_STATUS_OK;
 }
@@ -791,7 +792,7 @@ static uint32_t run(AstraHandle gui)
         } while (result == ASTRA_OK);
         if (result != ASTRA_ERROR_WOULD_BLOCK) return FONTS_FAIL_WINDOW;
         if (astra_interface_ui_damage(&ui, &(AstraControlFrame){0}) == ASTRA_OK &&
-            present() != ASTRA_STATUS_OK) return FONTS_FAIL_WINDOW;
+            present(NULL) != ASTRA_STATUS_OK) return FONTS_FAIL_WINDOW;
     }
 }
 

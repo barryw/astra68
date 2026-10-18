@@ -1,5 +1,40 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-17: shared Label trial passes workflow, rejected for clipped actions
+
+- Beast clean-built commit `4a0925b75ea20b2f67091b4bee84375c69c5e204`;
+  release `77115da14f297d0442784a5a62df31f4067531bfa8d3776c97e39af2a241a072`,
+  ROM `166fda32c1539fecb3a440aa763338f20abc17b204f6acae6a3810499f67d9fd`,
+  source manifest `67fbecfaed5a639ea3712c2ef043b4fae51eb3a4114aa2f3fe6c6e521cf53c6b`.
+  Both revision headers identify that commit. Installed only in a disposable
+  trial store; production software selector remains `57078599`.
+- Native import, live Iosevka choice, persisted restart, built-in restoration
+  and uninstall pass with no panic or retained trial provider. Actual selected
+  face preview appears in the choice capture, 357 glyph commands and 126/126
+  submissions/completions. Uninstalled capture: 260 glyphs, 82/82 commands.
+  All captures use existing 1920x1080 HDMI DMA, 6,220,800 RGB bytes.
+- Visual acceptance fails: the oversized intrinsic ScrollView plus the added
+  preview places bottom actions below the default window. Pre-choice and
+  alternate-size captures still show the family list; a fixed delay did not
+  wait for detail completion, so they provide no independent-preview evidence.
+  The corrected controller uses existing minimum viewport/flex growth; native
+  test readiness now waits for fresh application presentation notices. A real
+  controller/common-control host test reproduces the clipping before the fix.
+- Complete failed evidence is checksum-compared on Beast under
+  `/var/tmp/astra-font-preview-evidence-20261017/cycle1/`; trial log is
+  `/var/tmp/astra-font-preview-physical-trial-1-20261017.log`. Production image
+  before/after SHA-256 stays
+  `c31dcb28e0799276ec614791897d42c55adecee0726f0c6d7840df69e450c214`.
+  Runtime/audio/remote services restore active, zero automatic restarts.
+- No RTL, constraints, route, kernel selection or fabric installation changed.
+  Installed RBF remains
+  `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`;
+  Beast Quartus Pro 26.1.1 Build 130, 40,754/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376 DSPs. All production
+  clocks constrained; graphics setup +0.259 ns, worst setup +0.007 ns, worst
+  hold +0.000 ns. No new timing result or failing cone.
+  Disposition: software release withheld for corrected native/physical gates.
+
 ## 2026-10-17: corrected Fonts live pixels pass; interaction gate remains open
 
 - Beast clean-built source `c6cd2e7a95c2a631479adb3d6151d6ae67de5350`;

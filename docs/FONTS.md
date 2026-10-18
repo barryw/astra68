@@ -796,6 +796,30 @@ invalidates preferred size/layout on font changes and measures font height.
 Astra adapts these patterns to counted IDs, exact AFNT strikes, native
 capabilities and hardware draw lists.
 
+The `4a0925b7` clean release `77115da1` passes its first DE25 import/live
+choice/restart/restoration/removal workflow, but remains withheld. Visual
+inspection finds action buttons clipped below the default window. Captures
+nominally taken before selecting Iosevka still show the family list: fixed
+delays stopped the guest before detail initialization finished. Failed evidence
+is retained and checksum-compared at
+`/var/tmp/astra-font-preview-evidence-20261017/cycle1/` on Beast. The real
+Fonts controller linked to common controls reproduces the layout failure in
+`/var/tmp/astra-font-preview-layout-red-20261017.log`. The existing ScrollView
+now starts at its minimum viewport height and uses existing flex growth for
+remaining room; its width follows the current window. No layout/control
+mechanism changed. Host/sanitizer checks cover family, eligible/ineligible
+details, another strike, unavailable previews, confirmation and source browsing,
+including a narrower, taller window. Native UI gates wait for fresh details
+and preview completion notices and use the visible last button for removal.
+Read-only Haiku reference: `FontSelectionView.cpp` composes a measured preview
+with standard layout space/glue; Astra similarly leaves remaining room to its
+existing flexible viewport. Corrected native and physical gates remain pending.
+Final focused host/sanitizer/MC68040 analyzer and readiness checks pass in
+`/var/tmp/astra-font-preview-layout-final-focused-20261017.log`. Presentation
+completion notices share the existing application presentation function and
+emit only after success, including confirmation and removal; observers no
+longer assume a fixed removal delay. Freshness tests cover all five notices.
+
 The restoration investigation also reproduces a real notification defect:
 backpressured `FONT_CHANGED` delivery used the generic lossy-event path even
 though the generation remains pending and is retried. A later event therefore

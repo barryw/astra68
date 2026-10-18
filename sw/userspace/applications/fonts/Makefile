@@ -1,6 +1,7 @@
 include ../../../../mk/m68k-cross.mk
 
 CC := $(CROSS)gcc
+HOST_CC ?= cc
 SIZE := $(CROSS)size
 OBJCOPY := $(CROSS)objcopy
 READELF := $(CROSS)readelf
@@ -128,8 +129,39 @@ amiga-probe: all build/FontAmigaProbe.app/manifest \
 		build/FontAmigaProbe.app/resources/FontAmigaProbe.aicon
 	../../../../tools/build/astra-bundle check build/FontAmigaProbe.app
 
-test sanitize:
-	@true
+UI_HOST_SOURCES := tests/test_layout.c ../../interface/src/control.c \
+	../../interface/src/text_model.c ../../interface/src/scroll.c \
+	../../graphics/src/surface.c ../../graphics/src/font_data.c \
+	../../../common/utf8.c ../../../common/afnt.c ../../../common/crc32.c \
+	$(RUNTIME)/tests/uncontended_mutex.c
+UI_HOST_FLAGS := $(CPPFLAGS) -I../../graphics/include -I../../graphics/build/generated \
+	-std=c11 -Wall -Wextra -Werror -pedantic -O2 \
+	-ffunction-sections -fdata-sections -Wl,--gc-sections
+UI_FONT_HEADERS := ../../graphics/build/generated/astra_font8x8.inc \
+	../../graphics/build/generated/astra_ui_font.inc \
+	../../graphics/build/generated/astra_mono_font.inc
+UI_HOST_HEADERS := $(wildcard $(NDK)/include/astra/*.h ../../../include/astra/*.h \
+	$(RUNTIME)/include/astra/*.h ../../interface/src/*.h \
+	../../graphics/include/astra/*.h ../../graphics/src/*.h)
+UI_FONT_INPUTS := ../../graphics/fonts/astra-workbench.afnt \
+	../../graphics/fonts/astra-mono.afnt ../../../../assets/fonts/astra_8x16.hex \
+	../../../../tools/fonts/afnt.py $(NDK)/include/astra/font_library.h
+
+$(UI_FONT_HEADERS): $(UI_FONT_INPUTS)
+	$(MAKE) -C ../../graphics $(@:../../graphics/%=%)
+
+build/host/test_layout: main.c $(UI_HOST_SOURCES) $(UI_HOST_HEADERS) $(UI_FONT_HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(UI_HOST_FLAGS) $(UI_HOST_SOURCES) -o $@
+
+test: build/host/test_layout
+	./build/host/test_layout
+
+sanitize: $(UI_FONT_HEADERS)
+	@mkdir -p build/host
+	$(HOST_CC) $(UI_HOST_FLAGS) -O1 -fsanitize=address,undefined \
+		-fno-omit-frame-pointer $(UI_HOST_SOURCES) -o build/host/test_layout_sanitize
+	./build/host/test_layout_sanitize
 
 analyze:
 	@mkdir -p build/analyzer
