@@ -460,6 +460,7 @@ static void halt_forever(void)
 static void panic_worker_state(void)
 {
     KernelInterruptStats interrupt_stats;
+    KernelIrqCorruption irq_corruption;
     KernelIrqPoolStats irq_stats;
     KernelProcessMaintenanceDiagnostics maintenance;
     KernelWorkerStats stats;
@@ -491,6 +492,17 @@ static void panic_worker_state(void)
         console_puts(" masked=");
         console_dec32(irq_stats.masked_interrupts);
         console_putc('\n');
+    }
+    console_printf("IRQ healthy=%u\n", kernel_irq_pool_healthy());
+    if (kernel_irq_first_corruption(&irq_corruption)) {
+        console_printf("IRQ first corruption: site=%u slot=%u source=%u "
+                       "state=%u refs=%u owner=0x%08X generation=%u "
+                       "cache=%u\n",
+                       irq_corruption.site, irq_corruption.slot,
+                       irq_corruption.source, irq_corruption.state,
+                       irq_corruption.references, irq_corruption.owner,
+                       irq_corruption.generation,
+                       irq_corruption.cache_corrupt);
     }
     if (!kernel_process_maintenance_diagnostics(&maintenance) ||
         maintenance.failure == KERNEL_PROCESS_MAINTENANCE_NONE)

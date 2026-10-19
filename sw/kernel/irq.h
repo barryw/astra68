@@ -147,6 +147,17 @@ typedef struct KernelIrqSnapshot {
     uint8_t consecutive;
 } KernelIrqSnapshot;
 
+typedef struct KernelIrqCorruption {
+    uint32_t site;
+    uint32_t slot;
+    uint32_t owner;
+    uint32_t generation;
+    uint32_t source;
+    uint32_t state;
+    uint32_t references;
+    uint32_t cache_corrupt;
+} KernelIrqCorruption;
+
 typedef struct KernelIrqPoolStats {
     uint32_t created_endpoints;
     uint32_t live_endpoints;
@@ -228,6 +239,7 @@ bool kernel_irq_snapshot(uint32_t slot, KernelIrqSnapshot *snapshot);
  */
 bool kernel_irq_endpoint_info(uint32_t slot, AstraIrqEndpointInfo *info);
 bool kernel_irq_pool_stats(KernelIrqPoolStats *stats);
+bool kernel_irq_first_corruption(KernelIrqCorruption *corruption);
 bool kernel_irq_pool_healthy(void);
 bool kernel_irq_pool_valid(void);
 
