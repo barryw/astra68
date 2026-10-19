@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-18
+Status: active continuation map, 2026-10-19
 
 Certification resumed by user request with a stop-on-panic rule. The exact
 private `bf8445bb` release panicked on DE25 during native Fonts information
@@ -39,7 +39,7 @@ journal is retained in the upgrade evidence; no live-image reads remain in
 the corrected procedure. Production recovered to stage 8, and the later
 private panic trial restored with zero restarts.
 
-Failure-only deferred-IRQ attribution is being added to existing IRQ trace:
+Failure-only deferred-IRQ attribution is present in existing IRQ trace:
 retain source, vector, raw dispatch status and wake count before the fatal
 worker return. Haiku reference reviewed read-only:
 `src/system/kernel/interrupts.cpp` `io_interrupt_handler`, which preserves
@@ -51,6 +51,26 @@ in `/var/tmp/astra-irq-fatal-trace-{host-final,k1}-20261019.log`. A focused
 test forces the existing IRQ pool-corruption path and verifies exact fatal
 source/status trace arguments. The failure-only diagnostic is not a fix and
 does not qualify a release.
+
+Private diagnostic release `eb7aa80d4b57b4401030396e238bd70fa1422680cab9e2ba7af21275a06dc84c`
+contains committed source `b9ef1daaa0f0accaededa6d8a9fd81c161db4a48`;
+its DE25 ROM SHA-256 is
+`80bb949abb27806505baf16c6c9fc816b8a65b132e9ca2dfb28c1e2d44260864`.
+The first private trial was invalid: copied panic-capture/QEMU fixture paths
+still named a retired trial root, so QEMU exited before the Fonts gate.
+A second trial completed all 20 information-pane roundtrips, then failed a
+test-only display-probe launch assertion absent from the production profile.
+After correcting those private fixture paths and removing only that
+test-only assertion, four independent DE25 boots from the verified
+preserved-state clone completed 20 information-pane roundtrips each, 80
+total, without a panic. Each trial restored production release `57078599`
+to stage 8 and desktop; all three services were active with zero restarts,
+and stopped production image hashes and selector matched before/after.
+Checksum-verified per-cycle logs and hashes are on Beast under
+`/var/tmp/astra-irq-fatal-diagnostic-evidence-20261019/`. These clean
+repetitions do not explain or negate the observed deferred-IRQ panic.
+Plane ASTRA68-55 tracks this deferred-worker failure. Production cutover
+remains PAUSED pending root-cause evidence and a fix.
 
 Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
 phase passes, but the second boot panics before the import workflow completes.
