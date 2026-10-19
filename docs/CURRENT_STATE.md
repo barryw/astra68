@@ -77,6 +77,30 @@ repetitions do not explain or negate the observed deferred-IRQ panic.
 Plane ASTRA68-55 tracks this deferred-worker failure. Production cutover
 remains PAUSED pending root-cause evidence and a fix.
 
+Overnight IRQ-origin diagnosis is active on DE25 as transient unit
+`astra-irq-origin-overnight.service`, started 2026-10-19 04:17 UTC. It runs
+for up to eight hours or 128 independent boots from the verified private
+production-state clone, stops on first failed cycle, retains checksummed
+per-cycle logs and the stopped private state under
+`/var/tmp/astra-irq-origin-physical-20261019/overnight/`, and restores
+production between cycles. This is diagnostic work, not certification or
+cutover. Source `4ecf1a519f52f9893fa69e2b25943bd1b9f12ca7` records the
+first IRQ pool-corruption site in `sw/kernel/irq.c` plus endpoint slot, owner,
+generation, source, state, references, and cache-corrupt flag. Panic report
+prints this sticky first record and IRQ pool health; normal IRQ dispatch
+behavior is unchanged. Haiku reference reviewed read-only:
+`src/system/kernel/interrupts.cpp`, `io_interrupt_handler`, including handler
+result and handled/unhandled accounting. Full Beast kernel host suite, MC68040
+`all verify`, and K1/K10 qualification passed; logs are
+`/var/tmp/astra-irq-origin-{kernel-gates,k1}-20261019.log`. Immutable private
+release `4a3019a7a9e6bd38d0f18078626264280e3db5339a7307c780bf8516718f4f30`
+has ROM SHA-256
+`a3ec45dd5c87d6b719ef08b7e4dfb93947624f1c3c7d28ee465af78dd83fc492`.
+One watched DE25 smoke boot passed 20 Fonts information roundtrips, restored
+production to stage 8/desktop, three units active with zero restarts, and
+matched stopped production image and selector before/after; evidence is on
+Beast under `/var/tmp/astra-irq-origin-evidence-20261019/smoke/`.
+
 Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
 phase passes, but the second boot panics before the import workflow completes.
 Reason `syscall dispatch contract failed`; trace records syscall 80
