@@ -153,6 +153,28 @@ QEMU trials cannot overlap. These runtime-only test units do not alter the
 production release selector or storage image. Production cutover remains
 paused pending both run results and remaining release gates.
 
+First soak stopped at cycle 75, not its eight-hour deadline. Cycles 1-74
+passed; cycle 75 completed all 20 private Fonts information roundtrips with no
+captured deferred-worker panic. Production restore then panicked in the older
+production release at 2026-10-19 18:23:17 UTC with `syscall dispatch contract
+failed`; its QMP socket broke and the harness returned 1. This is a production
+guest panic, not evidence of the private candidate's original deferred-IRQ
+failure. The `OnSuccess=` guard correctly left the second soak inactive.
+Cycle-75 `SHA256SUMS` verifies on board and Beast; stopped production image
+hashes and selector match before/after. Evidence is preserved on Beast under
+`/var/tmp/astra-host-irq-cycle75-evidence-20261019/`, including production
+panic report SHA-256
+`11ba456b3b80e1b1fcce18277a95b2956e84f0c4b8e3e0907bf17d4894b81050`
+and journal SHA-256
+`207a8e2f2f832e3f76f096d4157f1c9dd5cd0c575296b791083f4ba2d22b19ae`.
+Production restarted to stage 8; all three services are active, with
+`astra.service` NRestarts=1 after that panic. Board Linux also logged repeated
+ext4 block-path warnings for inode 112146, identified as
+`/var/lib/astra/log/qemu-console.log`; keep this separate storage-health issue
+visible. Neither soak is a completed qualification. Do not restart the same
+cross-release cycle harness until the production panic and host filesystem
+warning are accounted for. Production cutover remains paused.
+
 Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
 phase passes, but the second boot panics before the import workflow completes.
 Reason `syscall dispatch contract failed`; trace records syscall 80
