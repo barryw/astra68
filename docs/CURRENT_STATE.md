@@ -2,6 +2,56 @@
 
 Status: active continuation map, 2026-10-18
 
+Certification resumed by user request with a stop-on-panic rule. The exact
+private `bf8445bb` release panicked on DE25 during native Fonts information
+roundtrip 18 of a preserved-production-state trial. This is a new observed
+failure, `deferred worker service failed`, not the earlier syscall-dispatch
+panic. The worker failure record says work `0x20` (deferred IRQ dispatch),
+class `5`, service result `2` (FATAL), worker state `3` (RUNNING); the release
+trace does not retain the IRQ source or dispatch status. Nearby user events
+show `/services/media` launch failure `ASTRA_STATUS_PEER_DEAD`, but causation
+is not established. Panic report SHA-256
+`99ac6506c1a0e6aea698df14ca9a51b804487cf32d3751d03464867032be1f21`,
+matching source `26f9902c0d1331561060f807d61ea6e87298c2c6`, kernel ELF
+SHA-256 `fbff7cc2b1ccdfe861c1bf41a0faf33e5ca1364259e10c0163f45f4ddbe9f118`.
+Full private console, panic, trace ring, frame captures, postpanic state,
+ROM, ELF and SHA verification are retained on Beast under
+`/var/tmp/astra-font-preserved-panic-evidence-20261019/`. Production cutover
+is PAUSED. Harness restored production release `57078599` to stage 8 and
+completed desktop, all three services active/NRestarts=0, selector and
+stopped production image unchanged. No user data was upgraded or overwritten.
+
+Stopped production image and WORK/SOUND backup on Beast under
+`/var/tmp/astra-font-production-backup-20261019/` passed before/after stopped
+hash checks and archive verification: image
+`9f1faf7eb70ae96b33bd248c330259a971083ca5c744f96e64124642bf3324b6`,
+exports archive
+`3cf5171647a34ce4668b8bc38895983614658e058059e5119add81d69cc25433`.
+An isolated candidate clone passed strict preservation of all 25 existing
+`/home`, `/local`, `/config` entries, content and inode metadata; its preboot
+SHA-256 was `e24c47577f80149983d1a2eedf41414f83cf1e2f0c7027f1f937eeda6591eda8`.
+A first private preserved-state test used a fixture-only malformed-frame probe
+assertion on production profile, so it stopped without product failure. A
+separate backup restore check opened the live production image for hashing,
+breaking storage provider's exclusive lease; provider exited `ENODEV` and
+systemd restarted once. This was an observer error, not a kernel panic. Its
+journal is retained in the upgrade evidence; no live-image reads remain in
+the corrected procedure. Production recovered to stage 8, and the later
+private panic trial restored with zero restarts.
+
+Failure-only deferred-IRQ attribution is being added to existing IRQ trace:
+retain source, vector, raw dispatch status and wake count before the fatal
+worker return. Haiku reference reviewed read-only:
+`src/system/kernel/interrupts.cpp` `io_interrupt_handler`, which preserves
+individual handler results and handled/unhandled accounting. Astra retains
+its native deferred IRQ worker and strict panic invariant. Existing K1/K10
+baseline at source `3851eaa0` passed twelve markers; after diagnostic change,
+full kernel host tests and K1/K10 still pass all twelve markers and budgets
+in `/var/tmp/astra-irq-fatal-trace-{host-final,k1}-20261019.log`. A focused
+test forces the existing IRQ pool-corruption path and verifies exact fatal
+source/status trace arguments. The failure-only diagnostic is not a fix and
+does not qualify a release.
+
 Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
 phase passes, but the second boot panics before the import workflow completes.
 Reason `syscall dispatch contract failed`; trace records syscall 80
@@ -113,8 +163,9 @@ Both archives under `/var/tmp/astra-font-wait-resource-evidence-20261018/`
 observed. Exact candidate ROM and storage image also pass a 600-second Beast
 QEMU panic soak with 65 remote retry failures and clean exit; log:
 `/var/tmp/astra-font-wait-resource-panic-soak-600-corrected-20261018.log`.
-The original panic's internal branch remains unidentified, so
-`bf8445bb` remains PRIVATE and production cutover is still gated.
+The original panic's internal branch remains unidentified. Subsequent
+preserved-state physical qualification exposed the deferred-IRQ panic above;
+`bf8445bb` is REJECTED for production cutover.
 
 Earlier focus-edge-corrected source `446948863f72b31af2b62dc04ab71805a4ba5357`
 passes Display host/sanitizer/MC68040/analyzer gates in

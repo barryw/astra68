@@ -156,12 +156,22 @@ static KernelWorkerServiceResult service_deferred_interrupts(
             event.elapsed_cycles);
         if (!write_dispatch_trace(event.source, event.vector, status, result,
                                   woken_threads, timestamp, &trace))
-            return KERNEL_WORKER_SERVICE_FATAL;
+            goto fatal;
         deferred_read_sequence = read_sequence + 1u;
         astra_u32_increment_saturating(&deferred_dispatched);
         ++completed;
         if (result == KERNEL_INTERRUPT_FATAL)
-            return KERNEL_WORKER_SERVICE_FATAL;
+            goto fatal;
+        continue;
+fatal:
+        /* Release builds omit routine IRQs; retain source and status on fatal. */
+        (void)kernel_trace_write_at(
+            KERNEL_TRACE_EVENT_IRQ_EXIT,
+            (uint16_t)((event.source & KERNEL_IRQ_TRACE_SOURCE_MASK) |
+                       ((uint16_t)result << 8)),
+            timestamp, event.source, event.vector, (uint32_t)status,
+            woken_threads);
+        return KERNEL_WORKER_SERVICE_FATAL;
     }
     if (deferred_read_sequence != deferred_write_sequence &&
         kernel_worker_signal(KERNEL_WORKER_IRQ_DISPATCH) != KERNEL_WORKER_OK)

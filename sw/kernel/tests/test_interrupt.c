@@ -19,6 +19,7 @@
                            (priority), (result))
 
 static uint32_t trace_event_count[KERNEL_TRACE_EVENT_COUNT];
+static uint32_t last_irq_failure[4];
 static uint32_t monitor_irq_services;
 static uint32_t monitor_spi_irq_services;
 static uint32_t host_irq_services;
@@ -145,6 +146,12 @@ bool kernel_trace_write_at(KernelTraceEvent event, uint16_t flags,
                            uint32_t argument3)
 {
     (void)timestamp;
+    if (event == KERNEL_TRACE_EVENT_IRQ_EXIT) {
+        last_irq_failure[0] = argument0;
+        last_irq_failure[1] = argument1;
+        last_irq_failure[2] = argument2;
+        last_irq_failure[3] = argument3;
+    }
     return kernel_trace_write(event, flags, argument0, argument1,
                               argument2, argument3);
 }
@@ -775,6 +782,29 @@ static void test_device_service_death_quiesces_source(void)
     assert(kernel_irq_pool_valid());
 }
 
+static void test_fatal_deferred_irq_retains_source_and_status(void)
+{
+    VestaRegs *registers = kernel_platform_test_registers();
+    uint32_t woken;
+
+    assert(registers != NULL);
+    clear_registers(registers);
+    clear_trace();
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    assert(kernel_interrupt_init(KERNEL_PLATFORM_CPU_HZ));
+    kernel_irq_handle_release(NULL, NULL); /* Existing API marks pool corrupt. */
+    select_interrupt(registers, IRQ_SRC_USB);
+    assert(kernel_interrupt_dispatch(&woken) == KERNEL_INTERRUPT_DEVICE);
+    assert(irq_worker_service(KERNEL_WORKER_IRQ_DISPATCH_BATCH,
+                              irq_worker_context) == KERNEL_WORKER_SERVICE_FATAL);
+    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_EXIT] == 1u);
+    assert(last_irq_failure[0] == IRQ_SRC_USB);
+    assert(last_irq_failure[1] == KERNEL_IRQ_COMMON_VECTOR);
+    assert(last_irq_failure[2] == KERNEL_IRQ_CORRUPT);
+    assert(last_irq_failure[3] == 0u);
+}
+
 int main(void)
 {
     test_init_profiles_optional_spi();
@@ -783,6 +813,7 @@ int main(void)
     test_timer_and_quarantine_use_common_dispatch();
     test_device_endpoints_use_common_dispatch();
     test_device_service_death_quiesces_source();
+    test_fatal_deferred_irq_retains_source_and_status();
     puts("common interrupt tests passed");
     return 0;
 }
