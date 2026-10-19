@@ -10,7 +10,12 @@ panic. The worker failure record says work `0x20` (deferred IRQ dispatch),
 class `5`, service result `2` (FATAL), worker state `3` (RUNNING); the release
 trace does not retain the IRQ source or dispatch status. Nearby user events
 show `/services/media` launch failure `ASTRA_STATUS_PEER_DEAD`, but causation
-is not established. Panic report SHA-256
+is not established. Deferred IRQ counters at panic were queued=dispatched=1950,
+pending=0, dropped=0. In `service_deferred_interrupts`, the read sequence and
+dispatched counter advance after trace write but before a fatal dispatch
+classification; a trace-write failure would leave an IRQ pending. The
+observed worker failure therefore points to a fatal IRQ dispatch status,
+whose source and value the old release did not retain. Panic report SHA-256
 `99ac6506c1a0e6aea698df14ca9a51b804487cf32d3751d03464867032be1f21`,
 matching source `26f9902c0d1331561060f807d61ea6e87298c2c6`, kernel ELF
 SHA-256 `fbff7cc2b1ccdfe861c1bf41a0faf33e5ca1364259e10c0163f45f4ddbe9f118`.
