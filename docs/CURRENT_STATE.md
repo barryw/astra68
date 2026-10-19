@@ -141,6 +141,18 @@ stop-on-first-failure private repetition started at 2026-10-19 13:24 UTC as
 the long run clears the prior 23-cycle failure window and the exact release
 passes remaining gates.
 
+At 2026-10-19 13:46 UTC, the first private run had passed five cycles and
+started cycle six. A second eight-hour run is queued on DE25 as
+`astra-host-irq-soak2.service` through the first unit's `OnSuccess=` trigger.
+It uses the same immutable private release and preserved-state base image,
+but writes separate checksummed cycle evidence under
+`/var/tmp/astra-irq-origin-physical-20261019/overnight-second/`. Its start
+guard requires the first unit's `OVERNIGHT COMPLETE` journal record; a panic,
+failed run, or premature clean stop cannot start it. The first and second
+QEMU trials cannot overlap. These runtime-only test units do not alter the
+production release selector or storage image. Production cutover remains
+paused pending both run results and remaining release gates.
+
 Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
 phase passes, but the second boot panics before the import workflow completes.
 Reason `syscall dispatch contract failed`; trace records syscall 80
