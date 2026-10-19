@@ -484,6 +484,7 @@ static void test_wait_queue_priority_fifo_and_stale_sequence(void)
 static void test_wait_queue_rejects_corrupt_header(void)
 {
     KernelThreadWaitQueue queue;
+    KernelThreadWakeFailure failure;
     KernelThread *selected = (KernelThread *)(uintptr_t)1u;
 
     kernel_performance_init();
@@ -495,6 +496,17 @@ static void test_wait_queue_rejects_corrupt_header(void)
     assert(kernel_thread_wait_queue_count(&queue) == UINT32_MAX);
     assert(kernel_thread_wake_one(&queue, ASTRA_SYSCALL_OK, &selected) ==
            KERNEL_THREAD_INVALID_ARGUMENT);
+    assert(!kernel_thread_first_wake_failure(&failure));
+    assert(kernel_thread_wake_all_irq(&queue, ASTRA_SYSCALL_OK, NULL) ==
+           KERNEL_THREAD_INVALID_ARGUMENT);
+    assert(kernel_thread_first_wake_failure(&failure));
+    assert(failure.site != 0u &&
+           failure.status == KERNEL_THREAD_INVALID_ARGUMENT &&
+           failure.member == UINT32_MAX &&
+           failure.queue_count == UINT32_MAX &&
+           failure.wait_registration_count == 0u);
+    kernel_thread_pool_init();
+    assert(!kernel_thread_first_wake_failure(&failure));
     assert(selected == (KernelThread *)(uintptr_t)1u);
 
     kernel_thread_wait_queue_init(&queue);
@@ -509,6 +521,40 @@ static void test_wait_queue_rejects_corrupt_header(void)
     queue.head = (KernelThreadWaitRegistration *)(uintptr_t)4u;
     assert(kernel_thread_wait_queue_sequence(&queue) == 0u);
     assert(kernel_thread_wait_queue_count(&queue) == UINT32_MAX);
+}
+
+static void test_irq_wake_records_blocked_thread_failure(void)
+{
+    KernelThreadWaitQueue queue;
+    KernelThreadWakeFailure failure;
+    KernelThread *thread;
+    KernelThread *selected;
+
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    kernel_thread_wait_queue_init(&queue);
+    assert(kernel_thread_allocate(1u, 0x10000001u, 0u, 0x00100000u,
+                                  0x70001000u, 0u,
+                                  KERNEL_THREAD_PRIORITY_NORMAL,
+                                  &thread) == KERNEL_THREAD_OK);
+    publish_thread(thread);
+    assert(kernel_thread_take_next(&selected) == KERNEL_THREAD_OK);
+    assert(selected == thread);
+    assert(kernel_thread_block(thread, &queue,
+                               kernel_thread_wait_queue_sequence(&queue)) ==
+           KERNEL_THREAD_OK);
+    thread->state = KERNEL_THREAD_READY;
+    assert(kernel_thread_wake_all_irq(&queue, ASTRA_SYSCALL_OK, NULL) ==
+           KERNEL_THREAD_CORRUPT);
+    assert(kernel_thread_first_wake_failure(&failure));
+    assert(failure.status == KERNEL_THREAD_INVALID_STATE &&
+           failure.thread_slot == thread->slot &&
+           failure.thread_state == KERNEL_THREAD_READY &&
+           failure.thread_wait_members == 1u &&
+           failure.thread_wait_registrations == 1u &&
+           failure.queue_count == 1u);
+    kernel_thread_pool_init();
+    assert(!kernel_thread_first_wake_failure(&failure));
 }
 
 static void test_bounded_deadline_order_expiry_and_signal_race(void)
@@ -1236,6 +1282,7 @@ int main(void)
     test_guarded_kernel_stack_accounting();
     test_wait_queue_priority_fifo_and_stale_sequence();
     test_wait_queue_rejects_corrupt_header();
+    test_irq_wake_records_blocked_thread_failure();
     test_bounded_deadline_order_expiry_and_signal_race();
     test_deadline_capacity_matches_thread_capacity();
     test_waitable_death_status_and_deferred_reap();

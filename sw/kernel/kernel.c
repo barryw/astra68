@@ -463,6 +463,7 @@ static void panic_worker_state(void)
     KernelIrqCorruption irq_corruption;
     KernelIrqPoolStats irq_stats;
     KernelProcessMaintenanceDiagnostics maintenance;
+    KernelThreadWakeFailure wake_failure;
     KernelWorkerStats stats;
 
     if (!kernel_worker_stats(&stats))
@@ -503,6 +504,26 @@ static void panic_worker_state(void)
                        irq_corruption.references, irq_corruption.owner,
                        irq_corruption.generation,
                        irq_corruption.cache_corrupt);
+    }
+    if (kernel_thread_first_wake_failure(&wake_failure)) {
+        console_printf("Thread wake failure: site=%u status=%u member=%u "
+                       "queue=%u/%u head=0x%08X tail=0x%08X\n",
+                       wake_failure.site, wake_failure.status,
+                       wake_failure.member, wake_failure.queue_count,
+                       wake_failure.wait_registration_count,
+                       (uint32_t)wake_failure.queue_head,
+                       (uint32_t)wake_failure.queue_tail);
+        console_printf("  thread slot=%u state=%u members=%u regs=%u "
+                       "deadline=%u/%u heap-slot=%u\n",
+                       wake_failure.thread_slot, wake_failure.thread_state,
+                       wake_failure.thread_wait_members,
+                       wake_failure.thread_wait_registrations,
+                       wake_failure.deadline_position,
+                       wake_failure.deadline_count,
+                       wake_failure.deadline_slot);
+        console_printf("  ready prev=%u next=%u head=%u tail=%u\n",
+                       wake_failure.ready_previous, wake_failure.ready_next,
+                       wake_failure.ready_head, wake_failure.ready_tail);
     }
     if (!kernel_process_maintenance_diagnostics(&maintenance) ||
         maintenance.failure == KERNEL_PROCESS_MAINTENANCE_NONE)

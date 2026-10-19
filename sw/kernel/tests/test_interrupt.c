@@ -241,8 +241,9 @@ static void advertise_host(VestaRegs *registers)
 }
 
 static void select_interrupt(VestaRegs *registers, uint8_t source);
+static void service_deferred_irq(void);
 
-static void test_host_completion_dispatches_without_worker_handoff(void)
+static void test_host_completion_wakes_only_after_worker_handoff(void)
 {
     VestaRegs *registers = kernel_platform_test_registers();
     uint32_t woken;
@@ -260,9 +261,12 @@ static void test_host_completion_dispatches_without_worker_handoff(void)
 
     select_interrupt(registers, IRQ_SRC_HOST);
     assert(kernel_interrupt_dispatch(&woken) == KERNEL_INTERRUPT_DEVICE);
-    assert(woken == 1u);
+    assert(woken == 0u);
+    assert(host_irq_services == 0u);
+    assert(irq_worker_signals == 1u);
+    assert((registers->IRQ_ENABLE & IRQ_BIT(IRQ_SRC_HOST)) == 0u);
+    service_deferred_irq();
     assert(host_irq_services == 1u);
-    assert(irq_worker_signals == 0u);
     assert((registers->IRQ_ENABLE & IRQ_BIT(IRQ_SRC_HOST)) != 0u);
     monitor_ready = true;
 }
@@ -809,7 +813,7 @@ int main(void)
 {
     test_init_profiles_optional_spi();
     test_init_without_monitor();
-    test_host_completion_dispatches_without_worker_handoff();
+    test_host_completion_wakes_only_after_worker_handoff();
     test_timer_and_quarantine_use_common_dispatch();
     test_device_endpoints_use_common_dispatch();
     test_device_service_death_quiesces_source();
