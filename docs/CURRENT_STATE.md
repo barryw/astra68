@@ -77,15 +77,25 @@ repetitions do not explain or negate the observed deferred-IRQ panic.
 Plane ASTRA68-55 tracks this deferred-worker failure. Production cutover
 remains PAUSED pending root-cause evidence and a fix.
 
-Overnight IRQ-origin diagnosis is active on DE25 as transient unit
-`astra-irq-origin-overnight.service`, started 2026-10-19 04:17 UTC. It runs
-for up to eight hours or 128 independent boots from the verified private
-production-state clone, stops on first failed cycle, retains checksummed
-per-cycle logs and the stopped private state under
-`/var/tmp/astra-irq-origin-physical-20261019/overnight/`, and restores
-production between cycles. This is diagnostic work, not certification or
-cutover. Source `4ecf1a519f52f9893fa69e2b25943bd1b9f12ca7` records the
-first IRQ pool-corruption site in `sw/kernel/irq.c` plus endpoint slot, owner,
+Overnight IRQ-origin diagnosis stopped on first failure at cycle 23, during
+Fonts information roundtrip 6. Cycles 1-22 passed. The private DE25 guest
+panicked with `deferred worker service failed`; first IRQ corruption record
+identifies `sw/kernel/irq.c:948`, where `kernel_thread_wake_all_irq` failed
+while delivering Vega graphics IRQ source 8 (endpoint slot 2, owner 1,
+generation 1, state 3, references 2). IRQ dispatch reported FATAL, with no
+pending or dropped deferred IRQs. The wake failure's internal cause remains
+unidentified; the endpoint record identifies the failing call, not whether
+its wait queue, registration, deadline, or ready queue broke first. Unit
+`astra-irq-origin-overnight.service` is stopped/failed as intended. Checksummed
+per-cycle evidence is retained on DE25 under
+`/var/tmp/astra-irq-origin-physical-20261019/overnight/` and copied to Beast
+under `/var/tmp/astra-irq-origin-evidence-20261019/overnight/`; cycle-023
+`SHA256SUMS` verifies there. The private trial restored production to stage 8
+and desktop; production selector and stopped image hashes match before/after,
+and all three production services are active with zero restarts. Production
+cutover remains PAUSED. Source `4ecf1a519f52f9893fa69e2b25943bd1b9f12ca7`
+records the first IRQ pool-corruption site in `sw/kernel/irq.c` plus endpoint
+slot, owner,
 generation, source, state, references, and cache-corrupt flag. Panic report
 prints this sticky first record and IRQ pool health; normal IRQ dispatch
 behavior is unchanged. Haiku reference reviewed read-only:
