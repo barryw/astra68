@@ -111,6 +111,36 @@ production to stage 8/desktop, three units active with zero restarts, and
 matched stopped production image and selector before/after; evidence is on
 Beast under `/var/tmp/astra-irq-origin-evidence-20261019/smoke/`.
 
+Host IRQ code audit found a shared wait-set race: source 12 handled host-channel
+and audio completions inside hard IRQ, waking threads while interrupted kernel
+code could be linking or withdrawing registrations. Timer IRQ already defers
+scheduler mutation for the same reason. Haiku references reviewed read-only:
+`src/system/kernel/interrupts.cpp` holds its per-vector lock while calling
+handlers, and `src/system/kernel/events/wait_for_objects.cpp` advances the
+notification list before a wake can change it. Astra's native single-CPU
+contract now routes host completion through its existing deferred IRQ worker:
+hard IRQ masks the level source and queues it; worker ACKs before scanning
+waiters, then rearms the source. No second completion or wait mechanism was
+added. Source `fbf87fa4d56c31471624e60b44613c5483c193e1` also retains
+failure-only thread-wake branch and queue/registration/ready/deadline state in
+panic reports if the hypothesis is incomplete. Beast `make test all verify`
+passes, including hard-versus-worker host IRQ and deep wake-failure tests;
+K1/K10 QEMU qualification passes all 12 markers. Logs are
+`/var/tmp/astra-host-irq-deferred-kernel-gates-20261019.log` and
+`/var/tmp/astra-host-irq-k1-20261019.log`. Private
+DE25 release `6dae3fe550e5e8c7fe43b1d12d91d6c531c31c3253ae058fb51641b0607d7c34`
+has ROM SHA-256
+`f8bdc9f9d0e3c54e7abf4ab0774f190961365503292c06ae92af4b857e6db70a`.
+One preserved-state DE25 boot passed 20 Fonts information roundtrips without
+panic, then restored production stage 8/desktop, three services with zero
+restarts and identical stopped-image hash/selector. Smoke log and hashes are
+on Beast under `/var/tmp/astra-host-irq-evidence-20261019/smoke/`. An eight-hour
+stop-on-first-failure private repetition started at 2026-10-19 13:24 UTC as
+`astra-host-irq-overnight.service`; results are under the board trial root's
+`overnight/`. Do not claim panic resolved or resume production cutover until
+the long run clears the prior 23-cycle failure window and the exact release
+passes remaining gates.
+
 Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
 phase passes, but the second boot panics before the import workflow completes.
 Reason `syscall dispatch contract failed`; trace records syscall 80
