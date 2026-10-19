@@ -86,7 +86,37 @@ and unchanged selector and stopped image. The first failing attempt remains
 authoritative proof of intermittent `HOST_CHANNEL_WAIT` corruption; two clean
 four-phase retries do not clear it. Precise failing branch remains unknown.
 
-Final corrected source `446948863f72b31af2b62dc04ab71805a4ba5357`
+The independently proven native wait-resource fix is privately published
+from `26f9902c0d1331561060f807d61ea6e87298c2c6` as DE25 release
+`bf8445bbba949182c40ef8811e21f4ac169d9bde1813a6b7a4fa0cf6ba33e682`.
+ROM SHA-256 is `50e7ed5f0a3e213959bc7520428ec9c4146cd5674ba5e9d871d57865999e14d5`;
+source manifest SHA-256 is
+`1f259c0bf58cf9642163b101e86400b0fc872793ae02040541198f1912714875`.
+Both build headers name that full source SHA and UTC
+`2026-10-19T00:03:31Z`; kernel is release mode with panic, soak, and K1
+qualification selftests disabled. The complete pinned DE25 Linux kernel
+package remains SHA-verified. Publisher log:
+`/var/tmp/astra-font-wait-resource-publish-pinned-20261018.log`. A prior
+publisher invocation failed before package creation because it lacked the
+existing pinned `FLUIDSYNTH_ROOT=/home/barry/Git/fluidsynth`; successful clean
+publisher used the clean v2.6.1 pinned commit.
+
+Two complete fresh four-boot physical cycles of that exact package pass
+cancel/retirement, Iosevka import, twenty information-pane roundtrips, live
+system-face adoption and persistence, built-in restoration and uninstall,
+and long-license scroll/copy/uninstall. Each boot reached stage 8, passed the
+one-shot malformed-frame probe, and completed hardware display submissions.
+Both cycles restored production to stage 8 with completed desktop, all three
+units active/NRestarts=0, and unchanged selector and stopped image hash.
+Both archives under `/var/tmp/astra-font-wait-resource-evidence-20261018/`
+(`attempt1/` and `attempt2/`) are checksum-verified. No candidate panic was
+observed. Exact candidate ROM and storage image also pass a 600-second Beast
+QEMU panic soak with 65 remote retry failures and clean exit; log:
+`/var/tmp/astra-font-wait-resource-panic-soak-600-corrected-20261018.log`.
+The original panic's internal branch remains unidentified, so
+`bf8445bb` remains PRIVATE and production cutover is still gated.
+
+Earlier focus-edge-corrected source `446948863f72b31af2b62dc04ab71805a4ba5357`
 passes Display host/sanitizer/MC68040/analyzer gates in
 `/var/tmp/astra-font-state-focus-edge-green-20261018.log`. Clean publisher
 passes and verifies private release
