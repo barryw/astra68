@@ -14,7 +14,7 @@ and matching kernel ELF SHA-256
 `ef43fec669d3dc7c9a36941274cc890a4a6b68196297870e2a9b83766e82bac1`
 are retained on Beast under
 `/var/tmp/astra-font-state-final-evidence-20261018/panic/`; complete failed
-state archival is in progress under `attempt1/`. Trial log:
+state archival under `attempt1/` is checksum-verified. Trial log:
 `/var/tmp/astra-font-state-final-physical-cycle1-20261018.log`.
 Production restored through stage 8 and completed desktop, all three units
 active/NRestarts=0; stopped image and selector compare equal before/after.
@@ -52,13 +52,39 @@ corruption checks pass with the full kernel host suite in
 wait path, the target-representative K1/K10 gate passes all twelve markers and
 existing cycle budgets at 16 ns/instruction in
 `/var/tmp/astra-wait-registration-baseline-20261018.log`; baseline ROM, ELF and
-disassembly are retained separately. After-change target/budget checks remain
-pending. This resource-error defect is proven, but its responsibility for the
-observed physical panic is not established; diagnostic repeated boots continue
-using the unchanged `b83b2f3b` diagnostic ROM. One initial boot passes before a
-stale retained panic report trips the observer. That original report was
-identity-checked and rotated without losing it; new phases boot11–boot20 use
-distinct logs. Do not substitute these diagnostic boots for final acceptance.
+disassembly are retained separately. After-change target/budget checks pass
+the same twelve markers and cycle budgets in
+`/var/tmp/astra-wait-registration-candidate-20261018.log`. Host suite and
+K1 target verification pass at pushed source
+`3851eaa0c36f9fd5f66402dedd9ee10ccd6cf103`. K1 ROM is diagnostic
+qualification output and must never become a release ROM. This resource-error
+defect is proven, but its responsibility for the observed physical panic is not
+established. Ten fresh diagnostic `b83b2f3b` DE25 boots (boot11–boot20) pass
+with stage-8 desktop and malformed-frame probe; evidence under
+`/var/tmp/astra-font-state-final-evidence-20261018/diagnostic-cycle2/` is
+checksum-verified. An earlier observer stopped on a stale retained panic
+report, since runtime-supervisor copies the console to panic-latest only after
+QEMU exits. That original report was identity-checked and rotated. Exact
+CANCEL→SELECT→REMOVE→LONG reproduction with the unchanged diagnostic ROM
+passes all four DE25 boots. It covers cancellation/retirement, Iosevka import,
+twenty information-pane roundtrips, persistent choice, uninstall, and long
+license scroll/copy. A private QEMU monitor was armed to pause and capture any
+new panic before shutdown; none occurred. The complete result is checksum-
+verified under
+`/var/tmp/astra-font-state-final-evidence-20261018/diagnostic-full/`;
+Beast log `/var/tmp/astra-host-wait-full-physical-20261018.log` reports PASS.
+Production was restored to stage 8 with completed desktop and all three units
+active/NRestarts=0; selector and stopped image compare equal. This clean retry
+does not identify the cause of the original panic or qualify a release.
+The exact rejected `44694886` ROM then passed the same four-phase DE25 retry,
+including all twenty information rounds, with panic capture armed. Its complete
+retry is checksum-verified under
+`/var/tmp/astra-font-state-final-evidence-20261018/original-retry/`;
+Beast log `/var/tmp/astra-original-full-physical-20261018.log` reports PASS.
+Production again restored with stage-8 desktop, three active/NRestarts=0 units,
+and unchanged selector and stopped image. The first failing attempt remains
+authoritative proof of intermittent `HOST_CHANNEL_WAIT` corruption; two clean
+four-phase retries do not clear it. Precise failing branch remains unknown.
 
 Final corrected source `446948863f72b31af2b62dc04ab71805a4ba5357`
 passes Display host/sanitizer/MC68040/analyzer gates in
@@ -70,8 +96,8 @@ manifest `3d83c4cddd69688295b8aea844457bba30dc9235f4b1dfa980cc8d5050b727ca`.
 Both revision headers match, nonzero identity `44694886`, build UTC
 2026-10-18T22:11:08Z; kernel release mode, qualification/self-tests disabled.
 Publisher log `/var/tmp/astra-font-state-final-release-20261018.log`.
-Exact private four-boot DE25 staging is in progress; physical acceptance and
-data-preserving production cutover remain open. Superseded `f885a4c1` was
+Exact private four-boot DE25 staging rejected on the second boot; physical
+acceptance and data-preserving production cutover remain open. Superseded `f885a4c1` was
 never booted or activated and its disposable board staging was retired under
 selector/service/process guards. Immutable package remains on Beast.
 
