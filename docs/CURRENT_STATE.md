@@ -175,6 +175,31 @@ visible. Neither soak is a completed qualification. Do not restart the same
 cross-release cycle harness until the production panic and host filesystem
 warning are accounted for. Production cutover remains paused.
 
+The repeated Linux ext4 warning is the same inode/logical-block warning
+already diagnosed after the offline root repair below: inode 112146 is
+`qemu-console.log`, and the requested logical block is one past legacy
+triple-indirect range, not an on-disk block reference. It has recurred since
+2026-10-18; it does not by itself establish new root corruption. The separate
+production `WAIT_ONE` syscall returned `KERNEL_PROCESS_CORRUPT` in the old
+release, which predates the current host-IRQ deferral; the exact internal
+branch is not present in that release's failure report.
+
+To qualify the candidate without repeatedly booting the old production
+kernel, a private-only harness keeps production stopped across candidate
+cycles and restores it once on exit. It still hashes the stopped production
+image and checks the selector before restore; candidate and production QEMU
+cannot overlap. One physical smoke cycle passed 20 Fonts information
+roundtrips with no candidate panic; all evidence checksums and before/after
+production image/selector comparisons passed; checksummed smoke evidence is
+copied to Beast under `/var/tmp/astra-host-irq-private-smoke-evidence-20261019/`.
+Production returned to stage 8 and completed desktop with all three services
+active and zero restarts. An eight-hour, stop-on-first-failure run started at
+2026-10-19 23:53 UTC as
+`astra-host-irq-private-soak.service`. Evidence is under board trial root
+`overnight-private-only/`; its exit trap must restore production once and
+verify the same invariants. Production desktop is intentionally unavailable
+during this run. No completed eight-hour qualification or cutover claim yet.
+
 Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
 phase passes, but the second boot panics before the import workflow completes.
 Reason `syscall dispatch contract failed`; trace records syscall 80
