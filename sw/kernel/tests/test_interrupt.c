@@ -23,6 +23,7 @@ static uint32_t last_irq_failure[4];
 static uint32_t monitor_irq_services;
 static uint32_t monitor_spi_irq_services;
 static uint32_t host_irq_services;
+static KernelThreadWaitQueue *host_irq_waiters;
 static bool monitor_spi_binding_available = true;
 static bool monitor_ready = true;
 static bool staged_trace_pending;
@@ -45,8 +46,11 @@ bool kernel_process_host_channel_irq_service(uint8_t source,
     assert(woken_threads != NULL);
     (void)timestamp;
     (void)context;
-    *woken_threads = 1u;
     ++host_irq_services;
+    if (host_irq_waiters != NULL)
+        return kernel_thread_wake_all_irq(host_irq_waiters, 0u,
+                                          woken_threads) == KERNEL_THREAD_OK;
+    *woken_threads = 1u;
     return true;
 }
 
@@ -246,6 +250,8 @@ static void service_deferred_irq(void);
 static void test_host_completion_wakes_only_after_worker_handoff(void)
 {
     VestaRegs *registers = kernel_platform_test_registers();
+    KernelThreadWaitQueue waiters;
+    KernelThreadWaitRegistration registration = {0};
     uint32_t woken;
 
     assert(registers != NULL);
@@ -259,15 +265,24 @@ static void test_host_completion_wakes_only_after_worker_handoff(void)
     kernel_thread_pool_init();
     assert(kernel_interrupt_init(KERNEL_PLATFORM_CPU_HZ));
 
+    /* enqueue_wait_registration exposes links before publishing queue count. */
+    kernel_thread_wait_queue_init(&waiters);
+    waiters.head = &registration;
+    waiters.tail = &registration;
+    host_irq_waiters = &waiters;
+
     select_interrupt(registers, IRQ_SRC_HOST);
     assert(kernel_interrupt_dispatch(&woken) == KERNEL_INTERRUPT_DEVICE);
     assert(woken == 0u);
     assert(host_irq_services == 0u);
     assert(irq_worker_signals == 1u);
     assert((registers->IRQ_ENABLE & IRQ_BIT(IRQ_SRC_HOST)) == 0u);
+    waiters.head = NULL;
+    waiters.tail = NULL;
     service_deferred_irq();
     assert(host_irq_services == 1u);
     assert((registers->IRQ_ENABLE & IRQ_BIT(IRQ_SRC_HOST)) != 0u);
+    host_irq_waiters = NULL;
     monitor_ready = true;
 }
 

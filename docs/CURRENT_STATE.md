@@ -270,6 +270,21 @@ Fonts information roundtrip 6. This crosses that specific first-failure
 window once; it does not establish a deterministic fix or complete either
 long soak. The candidate has not been installed as production.
 
+A focused host regression now stages the exact half-linked wait queue that
+`enqueue_wait_registration` exposes before publishing its count, then raises
+the host IRQ. Current deferred source leaves that queue untouched in hard
+IRQ and services the host completion after the test finishes publication;
+`build/test_interrupt` passes on Beast. A separately compiled negative
+control using the pre-`fbf87fa4` `interrupt.c` fails at the host dispatch
+assertion because its hard IRQ service observes the half-linked queue.
+This proves the forbidden reentrancy and verifies the boundary change, but
+the old physical panic did not retain enough wait-row state to prove it
+occurred at that exact instruction. Haiku read-only reference:
+`src/system/kernel/interrupts.cpp` guards vector dispatch with a spinlock;
+`src/system/kernel/events/wait_for_objects.cpp` saves the next notifier
+before invoking a callback. Astra uses its existing deferred worker instead
+of copying Haiku's lock scheme. No release binary changed for this test.
+
 Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
 phase passes, but the second boot panics before the import workflow completes.
 Reason `syscall dispatch contract failed`; trace records syscall 80
