@@ -205,7 +205,9 @@ A second independent eight-hour candidate-only run is staged as
 `astra-host-irq-private-soak-second.service`: first unit's `OnSuccess=` starts
 it only after a successful production restoration, verified restoration
 manifest, and `OVERNIGHT COMPLETE` journal record. It writes separate evidence
-under `overnight-private-only-second/`; failures leave it inactive. Exact
+under `overnight-private-only-second/`; failures leave it inactive. First run
+caps at 128 cycles and may finish before eight hours if cycles are short;
+second caps at 256, so its eight-hour deadline controls. Exact
 harness scripts and unit files, with SHA-256 manifest, are archived on Beast
 under `/var/tmp/astra-host-irq-private-soak-evidence-20261019/`.
 
