@@ -199,6 +199,15 @@ active and zero restarts. An eight-hour, stop-on-first-failure run started at
 `overnight-private-only/`; its exit trap must restore production once and
 verify the same invariants. Production desktop is intentionally unavailable
 during this run. No completed eight-hour qualification or cutover claim yet.
+First unattended candidate-only cycle passed with 20 roundtrips, checksummed
+evidence, matching stopped production hashes and selector, and no panic.
+A second independent eight-hour candidate-only run is staged as
+`astra-host-irq-private-soak-second.service`: first unit's `OnSuccess=` starts
+it only after a successful production restoration, verified restoration
+manifest, and `OVERNIGHT COMPLETE` journal record. It writes separate evidence
+under `overnight-private-only-second/`; failures leave it inactive. Exact
+harness scripts and unit files, with SHA-256 manifest, are archived on Beast
+under `/var/tmp/astra-host-irq-private-soak-evidence-20261019/`.
 
 Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
 phase passes, but the second boot panics before the import workflow completes.
