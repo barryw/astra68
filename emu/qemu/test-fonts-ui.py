@@ -50,7 +50,7 @@ def open_fonts(machine):
                 display_count(machine, "glyph-commands") > before:
             return
         time.sleep(.1)
-    raise RuntimeError("Fonts window did not open")
+    raise RuntimeError("Fonts window did not open: " + repr(lines[-30:]))
 
 
 def wait_ui(machine, operation, trace_before, syslog_before):

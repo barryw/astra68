@@ -211,6 +211,38 @@ second caps at 256, so its eight-hour deadline controls. Exact
 harness scripts and unit files, with SHA-256 manifest, are archived on Beast
 under `/var/tmp/astra-host-irq-private-soak-evidence-20261019/`.
 
+The first candidate-only soak stopped at cycle 3 on 2026-10-20 00:04 UTC.
+Cycles 1-2 passed 20 Fonts information roundtrips each; cycle 3 booted to
+stage 8 and logged the Fonts desktop icon, but the immediate injected double
+click did not launch Fonts within 30 seconds. No candidate panic was captured.
+The gate's `desktop_icon` observes a layout log emitted before the desktop's
+first frame completes; a click before presentation is a plausible test race,
+not a proven kernel failure. The private driver now waits for the same
+completed-desktop display counters used by the production-restore gate before
+clicking. The shared Fonts test reports fresh logs on open failure. A new
+physical smoke was run before another long run. Cycle-3 and restoration
+SHA256SUMS verify on Beast under
+`/var/tmp/astra-host-irq-private-failure-20261020/`. The harness restored
+production to stage 8 and completed desktop; selector and stopped production
+image hashes matched, and all three host services were active with zero
+restarts. The second soak did not start. Production cutover remains PAUSED.
+
+The completed-desktop gate passed a fresh DE25 smoke cycle at 2026-10-20
+00:12 UTC: 20 information roundtrips, no panic, cycle and restoration
+SHA256SUMS verified on board and Beast, and production returned to stage 8
+with unchanged stopped image/selector and all three host services active with
+zero restarts. Beast evidence is under
+`/var/tmp/astra-host-irq-private-ready-smoke-evidence-20261020/`. A new
+candidate-only long run started at 00:13 UTC as
+`astra-host-irq-private-ready-full.service`, writing separate evidence under
+`overnight-private-ready-full/`. Its `OnSuccess=` chain points to
+`astra-host-irq-private-ready-second.service`, which requires the first run's
+restoration manifest and `OVERNIGHT COMPLETE` record before starting. The
+second writes `overnight-private-ready-full-second/`. Both units are runtime
+only; first cap is 128 cycles, second cap is 256, and each has an eight-hour
+deadline. The first is running and the second inactive at this checkpoint.
+No long-run qualification has completed; production cutover stays PAUSED.
+
 Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
 phase passes, but the second boot panics before the import workflow completes.
 Reason `syscall dispatch contract failed`; trace records syscall 80
