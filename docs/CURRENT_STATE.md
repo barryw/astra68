@@ -243,6 +243,33 @@ only; first cap is 128 cycles, second cap is 256, and each has an eight-hour
 deadline. The first is running and the second inactive at this checkpoint.
 No long-run qualification has completed; production cutover stays PAUSED.
 
+At 2026-10-20 01:18 UTC, the candidate-only DE25 run had passed 21 cycles
+of 20 Fonts information roundtrips each and was executing cycle 22. A
+separate Beast boot using the release package's AArch64 QEMU executable
+failed before stage 8: `/services/posixd` launch returned I/O status 11.
+The same failure occurred with both the fresh packaged image and the
+checksummed preserved-state base image. Beast is x86-64, so these runs used
+Linux binfmt to emulate the AArch64 QEMU executable; neither is valid
+candidate-kernel panic evidence. The installed Beast storage provider
+matched a fresh build byte-for-byte, the packaged `posixd` matched its
+build output and the preserved image's copy, and offline `e2fsck -fn` found
+the packaged filesystem clean. The current native x86-64 QEMU build with
+the exact candidate ROM and fresh packaged image reached stage 8 and passed
+120 seconds with 17 remote-desktop retry events and no panic. Its user unit
+was `astra-host-irq-candidate-native-smoke.service`. A 24-hour native Beast
+soak of the same ROM and image began at 01:18 UTC as
+`astra-host-irq-candidate-native-24h.service`, with output in
+`/var/tmp/astra-host-irq-candidate-native-24h.log`. The double-emulated
+boot failure's exact I/O branch is still unproven; do not count those runs
+as native-host or DE25 acceptance evidence. No long-run conclusion is
+available yet.
+
+The physical candidate-only run passed cycle 23 at 2026-10-20 01:23:37 UTC
+and entered cycle 24. Its predecessor release first panicked at cycle 23,
+Fonts information roundtrip 6. This crosses that specific first-failure
+window once; it does not establish a deterministic fix or complete either
+long soak. The candidate has not been installed as production.
+
 Release `0f3e6309` is REJECTED: fresh DE25 cancellation/retirement/empty-store
 phase passes, but the second boot panics before the import workflow completes.
 Reason `syscall dispatch contract failed`; trace records syscall 80
