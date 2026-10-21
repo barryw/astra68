@@ -161,6 +161,8 @@ def native_directory_names(machine, path):
         candidate = match[1].rstrip("/*")
         if candidate not in (".", ".."):
             ordered.append(candidate)
+    if not ordered:
+        raise RuntimeError("native listing %s empty: %r" % (path, lines[-30:]))
     return ordered
 
 
@@ -171,7 +173,7 @@ def native_fixture_rows(machine, name):
     if ordered.count(name) != 1:
         raise RuntimeError("native root listing lacks font: %r; logs=%r" %
                            (ordered, machine.said()[0][-40:]))
-    shipped = [entry for entry in native_directory_names(machine, "/dh0/fonts")
+    shipped = [entry for entry in native_directory_names(machine, "/dh0/fonts/system")
                if entry.endswith(".afnt")]
     if shipped.count("astra-workbench.afnt") != 1:
         raise RuntimeError("shipped system face absent: %r" % shipped)
@@ -389,13 +391,13 @@ def main():
             raise RuntimeError("live font differs from saved Config Kit choice")
         volume = str(Path(work) / "inspect-volume.ext4")
         result = subprocess.run([
-            "debugfs", "-R", "stat /config/system/fonts/installed/" +
+            "debugfs", "-R", "stat /fonts/installed/" +
             token + ".afnt", volume], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True)
         if result.returncode != 0 or "Inode:" not in result.stdout:
             raise RuntimeError("UI import AFNT object missing: " + result.stdout)
         installed = Path(work) / "installed.afnt"
-        subprocess.run(["debugfs", "-R", "dump /config/system/fonts/installed/" +
+        subprocess.run(["debugfs", "-R", "dump /fonts/installed/" +
             token + ".afnt " + str(installed), volume], check=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         metadata = json.loads(font_format.parse_afnt(installed.read_bytes())[b"NAME"])
@@ -461,7 +463,7 @@ def main():
             raise RuntimeError("UI uninstall did not save built-in choice and empty inventory: %r, %r" %
                                (selected, inventory))
         result = subprocess.run([
-            "debugfs", "-R", "stat /config/system/fonts/installed/" +
+            "debugfs", "-R", "stat /fonts/installed/" +
             token + ".afnt", volume], stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True)
         if "Inode:" in result.stdout:

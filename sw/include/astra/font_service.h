@@ -6,8 +6,8 @@
 #include <astra/font_import.h>
 
 #define ASTRA_FONT_SERVICE_PROTOCOL UINT32_C(0x464f4e54) /* FONT */
-#define ASTRA_FONT_SERVICE_VERSION UINT16_C(8)
-#define ASTRA_CAPABILITY_FONTS "FONTS"
+#define ASTRA_FONT_SERVICE_VERSION UINT16_C(9)
+#define ASTRA_CAPABILITY_FONT_CATALOG "FONT_CATALOG"
 #define ASTRA_CAPABILITY_FONTS_ADMIN "FONTS_ADMIN"
 #define ASTRA_CAPABILITY_FONTS_RENDER "FONTS_RENDER"
 /* Single-consumer auto-reset wake hint for Display; the catalog is authoritative. */

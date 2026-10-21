@@ -122,7 +122,7 @@ DEFAULT_TERMINFO = os.path.join(
 # Terminal is the shell: it holds system authority no other application may
 # claim, so the startup manifest names its launch ceiling explicitly.
 TERMINAL_CEILING = (
-    "GUI CLIPBOARD VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE WORK:rw HOME:rw TMP:rw RAM_READ RAM_WRITE DH0:r SYSTEM:r LOCAL:rw "
+    "GUI CLIPBOARD VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE WORK:rw HOME:rw TMP:rw RAM_READ RAM_WRITE DH0:r SYSTEM:r FONTS:r LOCAL:rw "
     "COMMANDS:r APPS:r LIBS:r EVENTS:r PROC:rw METRICS:r CONFIG_COMMANDS:r "
     "EVENT_CONTROL NETWORK NETWORK_LISTEN NTP PCM POSIX_PROCESS APP_LAUNCH "
     "SERVICE_MANAGER ENTROPY LOG")
@@ -179,10 +179,10 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/input grants INPUT INPUT_IRQ "
     "serves INPUT_SERVICE required priority=20\n"
     "service /services/clipboard grants serves CLIPBOARD required priority=20\n"
-    "service /services/fonts grants HOST_DEVICE CONFIG_SYSTEM:rw SYSTEM:r LIBS:r "
-    "serves FONTS FONTS_ADMIN FONTS_RENDER FONTS_CHANGED required priority=20\n"
+    "service /services/fonts grants HOST_DEVICE CONFIG_SYSTEM:rw FONTS:rw LIBS:r "
+    "serves FONT_CATALOG FONTS_ADMIN FONTS_RENDER FONTS_CHANGED required priority=20\n"
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
-    "INPUT_SERVICE FONTS FONTS_RENDER FONTS_CHANGED serves GUI critical priority=20\n"
+    "INPUT_SERVICE FONT_CATALOG FONTS_RENDER FONTS_CHANGED serves GUI critical priority=20\n"
     "service /services/media grants HOST_DEVICE serves PCM priority=16\n"
     # The machine's accounting, copied to WORK:.astra/sample once a second
     # for the host's astra-top.
@@ -190,8 +190,8 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER VOLUMES VOLUME_ADMIN VOLUME_USAGE PROC:r APPS:r "
     "LIBS:r SYSTEM:r DH0:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
-    "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r APPS:r LIBS:r LOG\n"
-    "trusted /apps/Fonts.app grants GUI FONTS FONTS_ADMIN CLIPBOARD DH0:r LIBS:r\n")
+    "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r FONTS:r APPS:r LIBS:r LOG\n"
+    "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",
                     "input", "clipboard", "fonts", "display", "media", "sampler",
@@ -896,11 +896,13 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
                      "service " + name)
 
         if service_names is not None and "fonts" in service_names:
-            _mkdir(volume, "/fonts", "the system font directory")
+            _mkdir(volume, "/fonts", "the font directory")
+            _mkdir(volume, "/fonts/system", "protected system fonts")
+            _mkdir(volume, "/fonts/installed", "installed user fonts")
             for path in SYSTEM_FONTS:
                 if not os.path.isfile(path):
                     raise RuntimeError("system font asset is missing: " + path)
-                target = "/fonts/" + os.path.basename(path)
+                target = "/fonts/system/" + os.path.basename(path)
                 _debugfs(volume, "rm %s" % target, "an old system font",
                          optional=True)
                 _debugfs(volume, "write %s %s" % (path, target),

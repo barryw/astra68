@@ -202,7 +202,7 @@ static uint32_t load_inventory(void)
         char path[ASTRA_VFS_PATH_MAX];
         char id[ASTRA_FONT_FACE_ID_MAX];
         int path_length = snprintf(path, sizeof(path),
-                                   "/CONFIG_SYSTEM/installed/%s.afnt",
+                                   "/FONTS/installed/%s.afnt",
                                    inventory_tokens[at]);
         int id_length = snprintf(id, sizeof(id), "user:%.*s",
                                   (int)ASTRA_FONT_OBJECT_TOKEN_LENGTH,
@@ -222,7 +222,7 @@ static uint32_t sync_object_directory(void)
 {
     AstraFile directory = ASTRA_FILE_INIT;
     uint32_t status = astra_filesystem_open(
-        &files.filesystem, "/CONFIG_SYSTEM/installed",
+        &files.filesystem, "/FONTS/installed",
         ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY, &directory);
     if (status != ASTRA_VFS_OK) return status;
     status = astra_filesystem_sync(&directory);
@@ -234,7 +234,7 @@ static uint32_t remove_object(const char *token)
 {
     char path[ASTRA_VFS_PATH_MAX];
     if (snprintf(path, sizeof(path),
-                 "/CONFIG_SYSTEM/installed/%s.afnt", token) >=
+                 "/FONTS/installed/%s.afnt", token) >=
             (int)sizeof(path))
         return ASTRA_VFS_ERR_LIMIT;
     uint32_t status = astra_filesystem_unlink(&files.filesystem, path, 0u);
@@ -254,10 +254,10 @@ static uint32_t store_object(const char *token, const void *bytes,
 
     *created = 0u;
     if (snprintf(path, sizeof(path),
-                 "/CONFIG_SYSTEM/installed/%s.afnt", token) >=
+                 "/FONTS/installed/%s.afnt", token) >=
             (int)sizeof(path) ||
         snprintf(temporary, sizeof(temporary),
-                 "/CONFIG_SYSTEM/installed/%s.tmp", token) >=
+                 "/FONTS/installed/%s.tmp", token) >=
             (int)sizeof(temporary))
         return ASTRA_VFS_ERR_LIMIT;
     status = read_afnt(path, &existing, &existing_length);
@@ -812,11 +812,11 @@ static uint32_t load_face_area(const char *id, uint32_t information,
 
     if (find_face(id) == NULL) return ASTRA_STATUS_NOT_FOUND;
     if (strncmp(id, "system:", 7u) == 0)
-        path_length = snprintf(path, sizeof(path), "/SYSTEM/fonts/%s.afnt",
+        path_length = snprintf(path, sizeof(path), "/FONTS/system/%s.afnt",
                                id + 7u);
     else if (strncmp(id, "user:", 5u) == 0)
         path_length = snprintf(path, sizeof(path),
-                               "/CONFIG_SYSTEM/installed/%s.afnt", id + 5u);
+                               "/FONTS/installed/%s.afnt", id + 5u);
     else return ASTRA_STATUS_INVALID;
     if (path_length <= 0 || (size_t)path_length >= sizeof(path))
         return ASTRA_STATUS_LIMIT;
@@ -981,11 +981,11 @@ int astra_main(const AstraStartupInfo *startup)
     if (bootstrap == NULL) return ASTRA_STATUS_BAD_HANDLE;
     if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
         return ASTRA_STATUS_NOT_FOUND;
-    status = scan("/SYSTEM/fonts", "system:", ASTRA_FONT_CATALOG_SYSTEM);
+    status = scan("/FONTS/system", "system:", ASTRA_FONT_CATALOG_SYSTEM);
     if (status != ASTRA_VFS_OK) return status;
     uint32_t system_count = installed_count;
     status = astra_filesystem_mkdir(&files.filesystem,
-                                    "/CONFIG_SYSTEM/installed");
+                                    "/FONTS/installed");
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS)
         (void)astra_log_failure("fonts installed directory", status);
     uint32_t config_status =
@@ -1010,9 +1010,11 @@ int astra_main(const AstraStartupInfo *startup)
             FontEntry *face = find_face(wanted);
             if (face != NULL && fonts_face_selectable(&face->face)) {
                 FontSelection next = {0};
-                if (prepare_selection(wanted, &next) == ASTRA_STATUS_OK)
+                uint32_t selected_status = prepare_selection(wanted, &next);
+                if (selected_status == ASTRA_STATUS_OK)
                     adopt_selection(&next);
-                else (void)astra_log("fonts system_font unreadable");
+                else
+                    (void)astra_log_failure("fonts system_font unreadable", selected_status);
             }
             else (void)astra_log("fonts system_font unavailable");
         } else if (choice_status != ASTRA_CONFIG_NOT_FOUND)

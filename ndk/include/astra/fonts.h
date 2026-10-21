@@ -14,7 +14,7 @@
 ASTRA_EXTERN_C_BEGIN
 
 /** Read-only installed-font catalog startup capability. */
-#define ASTRA_CAPABILITY_FONTS "FONTS"
+#define ASTRA_CAPABILITY_FONT_CATALOG "FONT_CATALOG"
 /** Administrative font-choice startup capability. */
 #define ASTRA_CAPABILITY_FONTS_ADMIN "FONTS_ADMIN"
 /** Read-only AFNT face delivery to the privileged display renderer. */
@@ -174,8 +174,8 @@ typedef struct AstraFontsCatalog {
 /** Empty initializer for an owned catalog snapshot. */
 #define ASTRA_FONTS_CATALOG_INIT { ASTRA_AREA_INIT, 0u, 0u, 0u, {0} }
 
-/** Read and validate current catalog through FONTS capability.
- * @param service FONTS send capability.
+/** Read and validate current catalog through FONT_CATALOG capability.
+ * @param service FONT_CATALOG send capability.
  * @param catalog Empty caller-owned snapshot.
  * @return ::ASTRA_OK or a negative ::AstraResult. */
 ASTRA_NODISCARD AstraResult astra_fonts_catalog_open(
@@ -241,8 +241,8 @@ typedef struct AstraFontNotice {
     uint32_t language_id; /**< Original platform language ID. */
 } AstraFontNotice;
 
-/** Open immutable metadata through FONTS; uninstall does not invalidate it.
- * @param service FONTS capability.
+/** Open immutable metadata through FONT_CATALOG; uninstall does not invalidate it.
+ * @param service FONT_CATALOG capability.
  * @param id Counted installed face ID.
  * @param id_length ID bytes, excluding terminator.
  * @param information Empty owned snapshot.

@@ -48,6 +48,9 @@ use their own Config Kit handle directly for private preferences.
 Font service owns `/config/system/fonts/settings.conf`. Its system-font
 setting identifies one installed face, including designed weight, through a
 single catalog identity. One Config Kit write changes that choice atomically.
+This document stores preferences and inventory identities, not font files.
+All installed AFNT files live under `FONTS:`: protected shipped faces in
+`FONTS:system/` and service-managed imports in `FONTS:installed/`.
 The service validates the face and all required strikes before activating it.
 Deleting that font, a damaged preference, or an unavailable generated strike
 selects built-in UI face; recovery text always uses its built-in rescue face.

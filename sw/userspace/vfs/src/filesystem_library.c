@@ -44,7 +44,7 @@ static int root_link_target_for_assign(const AstraAssign *assign,
                                        char target[ASTRA_VFS_PATH_MAX])
 {
     static const char *const names[] = {
-        "APPS", "COMMANDS", "CONFIG", "CWD", "HOME", "LIBS", "LOCAL",
+        "APPS", "COMMANDS", "CONFIG", "CWD", "FONTS", "HOME", "LIBS", "LOCAL",
         "SERVICES", "STARTUP", "STORE", "TMP", "TRASH", "WORK"
     };
     size_t length;

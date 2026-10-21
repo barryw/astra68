@@ -25,11 +25,23 @@ def stored_objects(image, work):
     volume = str(Path(work) / "inspect-volume.ext4")
     astra_image._slice(image, offset, length, volume)
     result = subprocess.run(
-        ["debugfs", "-R", "ls -p /config/system/fonts/installed", volume],
+        ["debugfs", "-R", "ls -p /fonts/installed", volume],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0 or "while " in result.stdout:
         raise RuntimeError("cannot inspect font store: " + result.stdout)
     return re.findall(r"[a-z2-7]{52}\.(?:afnt|tmp)", result.stdout)
+
+
+def selected_setting(image, work):
+    offset, length = astra_image.ext4_partition(image)
+    volume = str(Path(work) / "inspect-volume.ext4")
+    astra_image._slice(image, offset, length, volume)
+    result = subprocess.run(
+        ["debugfs", "-R", "cat /config/system/fonts/settings.conf", volume],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if result.returncode != 0 or "while " in result.stdout:
+        raise RuntimeError("cannot inspect font choice: " + result.stdout)
+    return result.stdout
 
 
 def boot(qemu, rom, image, work, phase):
@@ -47,9 +59,10 @@ def boot(qemu, rom, image, work, phase):
                    for line in lines):
                 return
             if any("launch-failed " + PROBE in line for line in lines):
+                details = [line for line in lines + machine.syslog_lines()
+                           if PROBE in line or "fonts" in line.lower()]
                 raise RuntimeError("native import failed during %s: %s" %
-                                   (phase, [line for line in lines
-                                            if PROBE in line][-10:]))
+                                   (phase, details[-30:]))
             time.sleep(.1)
         raise RuntimeError("native import readiness absent during %s: %s" %
                            (phase, [line for line in machine.said()[0]
@@ -73,15 +86,26 @@ def main():
         startup = Path(work) / "startup"
         startup.write_text(
             astra_image.DISPLAY_STARTUP_MANIFEST +
-            "service %s grants FONTS FONTS_ADMIN FONTS_RENDER SYSTEM:r LIBS:r "
+            "service %s grants FONT_CATALOG FONTS_ADMIN FONTS_RENDER FONTS:r SYSTEM:r LIBS:r "
             "restart=never priority=20\n" % PROBE, encoding="ascii")
         astra_image._replace_volume_file(image, str(startup), "/startup/system")
         boot(args.qemu, args.rom, image, work, "first boot")
+        if not stored_objects(image, work):
+            raise RuntimeError("imported AFNT absent from persistent FONTS store")
+        settings = selected_setting(image, work)
+        if re.search(r"system_font\s*=\s*\"?user:", settings) is None or \
+                re.search(r"installed\s*=\s*\"?[a-z2-7]{52}", settings) is None:
+            raise RuntimeError("imported font choice absent from persistent settings")
         expectation = Path(work) / "expect-again"
         expectation.write_text("again\n", encoding="ascii")
         astra_image._replace_volume_file(
             image, str(expectation), "/expect-font-import-again")
-        boot(args.qemu, args.rom, image, work, "restart")
+        try:
+            boot(args.qemu, args.rom, image, work, "restart")
+        except RuntimeError as error:
+            raise RuntimeError("%s; settings=%r; objects=%r" %
+                               (error, selected_setting(image, work),
+                                stored_objects(image, work))) from error
         if stored_objects(image, work):
             raise RuntimeError("uninstalled AFNT object remains on disk")
         removed = Path(work) / "expect-uninstalled"

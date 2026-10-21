@@ -5851,7 +5851,7 @@ int astra_main(const AstraStartupInfo *startup)
         startup, ASTRA_CAPABILITY_DISPLAY_VBLANK_IRQ);
     input_service = astra_startup_capability(
         startup, ASTRA_CAPABILITY_INPUT_SERVICE);
-    fonts = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS);
+    fonts = astra_startup_capability(startup, ASTRA_CAPABILITY_FONT_CATALOG);
     fonts_render = astra_startup_capability(
         startup, ASTRA_CAPABILITY_FONTS_RENDER);
     fonts_changed = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_CHANGED);

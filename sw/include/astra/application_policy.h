@@ -23,11 +23,13 @@
     X("ENTROPY", RAW) \
     X("POSIX_PROCESS", RAW) \
     X("APP_LAUNCH", RAW) \
+    X("FONT_CATALOG", RAW) \
     X("LOG", RAW) \
     X("VOLUMES", RAW) \
     X("VOLUME_READ", RAW) \
     X("APPS", R) \
     X("LIBS", R) \
+    X("FONTS", R) \
     X("STORE", RW) \
     X("CONFIG", RW) \
     X("HOME", RW) \

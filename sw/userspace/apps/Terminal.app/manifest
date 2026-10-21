@@ -18,6 +18,7 @@ capability TMP:rw
 capability RAM_READ
 capability RAM_WRITE
 capability DH0:r
+capability FONTS:r
 capability SYSTEM:r
 capability LOCAL:rw
 capability COMMANDS:r

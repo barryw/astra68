@@ -638,10 +638,16 @@ static uint32_t build_controls(void)
     if (astra_interface_button_init(CONTROL(FONTS_ENCODING), &encoding) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     uninstall.id = FONTS_UNINSTALL;
-    uninstall.text = confirm_uninstall ? "Remove font" : "Uninstall…";
+    uninstall.text = (active_family != UINT32_MAX &&
+                      detail_selection < detail_count &&
+                      (selected_face.flags & ASTRA_INSTALLED_FONT_SYSTEM) != 0u) ?
+                     "Protected" : confirm_uninstall ? "Remove font" : "Uninstall…";
     uninstall.text_length = (uint32_t)strlen(uninstall.text);
-    uninstall.state = showing_import || showing_information || browsing || active_family == UINT32_MAX ?
-                      ASTRA_CONTROL_COLLAPSED : 0u;
+    uninstall.state = showing_import || showing_information || browsing ||
+                      active_family == UINT32_MAX || detail_selection >= detail_count ?
+                      ASTRA_CONTROL_COLLAPSED :
+                      (selected_face.flags & ASTRA_INSTALLED_FONT_SYSTEM) != 0u ?
+                      ASTRA_CONTROL_DISABLED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_UNINSTALL), &uninstall) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     information.id = FONTS_INFORMATION;
@@ -1138,7 +1144,7 @@ int astra_main(const AstraStartupInfo *startup)
     if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
     gui = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
-    fonts = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS);
+    fonts = astra_startup_capability(startup, ASTRA_CAPABILITY_FONT_CATALOG);
     admin = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_ADMIN);
     clipboard = astra_startup_capability(startup, ASTRA_CAPABILITY_CLIPBOARD);
     bootstrap = astra_startup_capability(startup,

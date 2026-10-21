@@ -39,7 +39,7 @@ def stored_objects(image, work):
     volume = str(Path(work) / "inspect-volume.ext4")
     astra_image._slice(image, offset, length, volume)
     result = subprocess.run(
-        ["debugfs", "-R", "ls -p /config/system/fonts/installed", volume],
+        ["debugfs", "-R", "ls -p /fonts/installed", volume],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.returncode != 0 or "while " in result.stdout:
         raise RuntimeError("cannot inspect font store: " + result.stdout)
@@ -174,8 +174,8 @@ def main():
             astra_image._replace_volume_file(
                 image, str(marker), "/expect-outline-variable")
         startup = Path(work) / "startup"
-        grants = ("FONTS FONTS_ADMIN GUI SYSTEM:r LIBS:r" if args.amiga else
-                  "FONTS FONTS_ADMIN FONTS_RENDER SYSTEM:r LIBS:r")
+        grants = ("FONT_CATALOG FONTS_ADMIN GUI SYSTEM:r LIBS:r" if args.amiga else
+                  "FONT_CATALOG FONTS_ADMIN FONTS_RENDER SYSTEM:r LIBS:r")
         startup.write_text(
             astra_image.DISPLAY_STARTUP_MANIFEST +
             "service %s grants %s restart=never\n" % (PROBE, grants),

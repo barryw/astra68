@@ -5,7 +5,8 @@ name "Font Import Probe"
 version 0.1.0
 executable bin/m68k-68040/FontImportProbe
 icon resources/FontImportProbe.aicon
-capability FONTS
+capability FONT_CATALOG
+capability FONTS:r
 capability FONTS_ADMIN
 capability FONTS_RENDER
 capability SYSTEM:r

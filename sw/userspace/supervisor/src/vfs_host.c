@@ -31,11 +31,16 @@ static void
 bind_standard_assigns(void)
 {
     uint32_t status;
+    uint16_t kind = 0u;
 
     (void)astra_assign_bind(&vfs_assigns, "DH0", vfs_handle,
                             ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "");
     (void)astra_assign_bind(&vfs_assigns, "SYSTEM", vfs_handle,
                             ASTRA_RIGHT_READ, "");
+    if (astra_vfs_stat(vfs_client, "/fonts", NULL, &kind) == ASTRA_VFS_OK &&
+        kind == ASTRA_VFS_KIND_DIRECTORY)
+        (void)astra_assign_bind(&vfs_assigns, "FONTS", vfs_handle,
+                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "fonts");
     (void)astra_assign_bind(&vfs_assigns, "SERVICES", vfs_handle,
                             ASTRA_RIGHT_READ, "services");
     (void)astra_assign_bind(&vfs_assigns, "STARTUP", vfs_handle,

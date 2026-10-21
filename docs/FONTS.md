@@ -10,9 +10,31 @@ must not draw bitmap glyphs with CPU pixel loops.
 
 ## 1. Locked architecture
 
+The installed-font filesystem root is `FONTS:` (`/fonts` on the system
+volume). It contains `system/` for shipped, protected AFNT and `installed/`
+for imported, content-addressed AFNT. Only the Fonts service receives a
+write grant; ordinary clients receive read-only access when needed. The
+service refuses uninstall of shipped faces. Config Kit stores inventory IDs
+and the selected face, never another copy of font bytes. The service catalog
+is the authoritative, generation-tagged view across both directories;
+Font Kit exposes family, style, strikes and eligibility without filename or
+AFNT parsing by applications. The rescue face remains available from ROM if
+storage or preference loading fails. Release upgrades replace `system/` and
+preserve `installed/` with user data and inode metadata. Haiku references reviewed read-only:
+`src/servers/app/font/GlobalFontManager.cpp` owns directory discovery and
+`src/servers/app/font/FontManager.cpp` owns family/style lookup. Astra uses
+one protected namespace and one native catalog rather than exposing directory
+layout as the application API.
+
+`FONTS:` names the native assign. Native Filesystem Kit paths spell it
+`/FONTS/system/...` or `/FONTS/installed/...`. POSIX shell tools use the
+underlying volume path `/dh0/fonts/...`; the POSIX layer treats `:` as an
+ordinary filename character. Font discovery and selection use Font Kit in
+either case.
+
 ### Active import coordination work (2026-10-18)
 
-The coherent contract is Font Kit 5.0 and FONTS protocol 8: imports are
+The coherent contract is Font Kit 5.0 and font-service protocol 9: imports are
 owned capability-scoped sessions, with begin/state/cancel/wait-handle/close APIs.
 The previous blocking import API is removed; every in-tree program, Kit,
 manifest, export and probe moves together. Existing native ports carry control
@@ -284,31 +306,32 @@ packaged again.
 The BRAM face is intentionally small and monochrome. It is an emergency output
 facility, not the normal desktop typography system.
 
-### 2.2 System faces in the ROM image
+### 2.2 Protected system faces on disk
 
-The immutable system ROM image contains AFNT resources for:
+`FONTS:system` contains shipped AFNT resources for:
 
 - **Astra Sans**, derived from Atkinson Hyperlegible Next, as the proportional
   UI and reading face.
 - **Astra Mono**, derived from JetBrains Mono, for code, terminals, tables, and
   diagnostics.
+- **Astra Rescue Mono**, shipped as a small AFNT fallback while storage works.
 
-Both upstream families use the SIL Open Font License 1.1. Rasterized AFNT data,
+The first two upstream families use the SIL Open Font License 1.1. Rasterized AFNT data,
 the copyright notices, license, source revision, conversion command, and build
 tool version ship together. The bundled faces use Astra names so the system is
 not presenting converted builds as untouched upstream font binaries.
 
-The first ROM set contains only measured, native-size strikes appropriate for
+The shipped set contains only measured, native-size strikes appropriate for
 1920x1080. At minimum it provides regular UI, emphasized UI, and regular mono
 text plus Basic Latin, Latin-1, common punctuation, arrows, box drawing, and a
 replacement glyph. Exact strike sizes are selected from HDMI specimens on the
-real panel, not from desktop preview alone. The ROM font payload has a separate
-size report and may not displace recovery code.
+real panel, not from desktop preview alone. The shipped font payload has a
+separate size report and may not displace recovery code.
 
-These faces require neither the writable filesystem nor package services. The
-font service can use their immutable SDRAM-backed ROM data directly when its
-alignment is DMA-safe, or create a protected runtime cache once during boot.
-Additional families and language coverage live in the normal filesystem.
+Only the small recovery face survives storage failure. The font service reads
+shipped AFNT from protected `FONTS:system`; additional families live in
+`FONTS:installed`. Applications discover both through Font Kit, without
+knowing their paths.
 
 Built-in faces are located through a versioned ROM resource directory, not
 fixed linker addresses exposed to applications. Each directory entry carries a
@@ -1185,12 +1208,12 @@ designed style, and available strikes. Shared C code extracts these fields from
 validated AFNT into caller-owned storage; shipped AFNT round trips through the
 catalog on Beast under host and sanitizer tests, and the codec builds for
 MC68040 and AArch64. A resident `fonts` service draft scans immutable system
-AFNT and its protected `CONFIG_SYSTEM/installed` directory, keeps read and
+AFNT and its protected `FONTS:installed/` directory, keeps read and
 administrative request ports separate, and validates theme role sizes before
 persisting a choice through Config Kit. Its service/policy build and focused
 tests pass. An isolated disposable QEMU boot launched the service with status
 zero. Font Kit 2.4 now opens a validated, immutable catalog snapshot through
-the FONTS capability, exposes counted family/style names and strike sizes,
+the `FONT_CATALOG` capability, exposes counted family/style names and strike sizes,
 and sends selection through the separate FONTS_ADMIN capability. MC68040
 library/link contracts and host malformed-reply/catalog tests pass. This is
 client infrastructure, not a Fonts application or live typography change.
@@ -1414,7 +1437,7 @@ three parallel coverage channels.
   remain a release gate.
 - Pixel output is compared exactly for `MASK1` and indexed formats and against
   the specified integer blend rule for `A4`.
-- ROM fonts render identically in the emulator and RTL at every bundled strike.
+- Shipped AFNT renders identically in the emulator and RTL at every bundled strike.
 - The rescue font remains readable during forced SDRAM and SD failure tests.
 - Real-HDMI specimens verify ambiguous pairs, punctuation, code, dense UI text,
   and the 8:9 pixel aspect before a bundled strike is frozen.

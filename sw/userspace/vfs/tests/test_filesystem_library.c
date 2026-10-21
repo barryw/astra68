@@ -370,7 +370,7 @@ uint32_t astra_vfs_stat(AstraVfsClient *value, const char *path,
                         uint64_t *size, uint16_t *kind)
 {
     static const char *const directories[] = {
-        "/", "/apps", "/commands", "/config", "/home", "/libs",
+        "/", "/apps", "/commands", "/config", "/fonts", "/home", "/libs",
         "/local", "/services", "/startup", "/services/events",
         "/tmp", "/trash"
     };
@@ -758,17 +758,17 @@ static void test_unlink_readonly_missing(void)
 static void test_protected_root_links(void)
 {
     static const char *const names[] = {
-        "SYSTEM", "APPS", "COMMANDS", "CONFIG", "CWD", "HOME", "LIBS",
+        "SYSTEM", "APPS", "COMMANDS", "CONFIG", "CWD", "FONTS", "HOME", "LIBS",
         "LOCAL", "SERVICES", "STARTUP", "STORE", "TMP", "TRASH", "WORK"
     };
     static const char *const roots[] = {
-        "", "apps", "commands", "config", "work", "home", "libs",
+        "", "apps", "commands", "config", "work", "fonts", "home", "libs",
         "local", "services", "startup", "services/events", "tmp",
         "trash", "work"
     };
     static const char *const targets[] = {
         "/dh0", "/system/apps", "/system/commands", "/system/config",
-        "/system/work", "/system/home", "/system/libs", "/system/local",
+        "/system/work", "/system/fonts", "/system/home", "/system/libs", "/system/local",
         "/system/services", "/system/startup", "/system/services/events",
         "/system/tmp", "/system/trash", "/system/work"
     };
@@ -777,7 +777,7 @@ static void test_protected_root_links(void)
     AstraFilesystem filesystem = ASTRA_FILESYSTEM_INIT;
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     AstraDirectory directory = ASTRA_DIRECTORY_INIT;
-    AstraDirectoryEntry entries[18];
+    AstraDirectoryEntry entries[19];
     char path[ASTRA_VFS_PATH_MAX];
     char target[ASTRA_VFS_PATH_MAX];
     uint32_t count;
@@ -802,8 +802,8 @@ static void test_protected_root_links(void)
            ASTRA_VFS_ERR_READ_ONLY);
     assert(astra_filesystem_directory_open(&filesystem, "/", &directory) ==
            ASTRA_VFS_OK);
-    assert(astra_filesystem_directory_read(&directory, entries, 18u, &count) ==
-           ASTRA_VFS_OK && count == 18u);
+    assert(astra_filesystem_directory_read(&directory, entries, 19u, &count) ==
+           ASTRA_VFS_OK && count == 19u);
     assert(same(entries[0].name, "dh0") &&
            entries[0].kind == ASTRA_VFS_KIND_DIRECTORY);
     for (uint32_t i = 0u; i < sizeof(names) / sizeof(names[0]); ++i) {
@@ -837,7 +837,7 @@ static void test_protected_root_links(void)
                ASTRA_VFS_ERR_EXISTS);
     }
     for (uint32_t i = 0u; i < 3u; ++i)
-        assert(entries[15u + i].kind == ASTRA_VFS_KIND_DIRECTORY);
+        assert(entries[16u + i].kind == ASTRA_VFS_KIND_DIRECTORY);
     astra_filesystem_directory_close(&directory);
     astra_filesystem_detach(&filesystem);
     astra_assign_table_destroy(&assigns);

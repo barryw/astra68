@@ -13,9 +13,9 @@
 ASTRA_PROGRAM("font-import-probe", 0, 1, 0, "Astra68 contributors",
               "Astra native test");
 
-#define SOURCE "/SYSTEM/fonts/astra-workbench.afnt"
+#define SOURCE "/FONTS/system/astra-workbench.afnt"
 #define SOURCE_NAME "astra-workbench.afnt"
-#define SECOND_SOURCE "/SYSTEM/fonts/astra-mono.afnt"
+#define SECOND_SOURCE "/FONTS/system/astra-mono.afnt"
 
 enum {
     PROBE_FAIL_FILES = ASTRA_STATUS_PROGRAM_FIRST,
@@ -102,7 +102,7 @@ int astra_main(const AstraStartupInfo *startup)
     AstraResult result;
 
     if (!astra_startup_validate(startup)) return ASTRA_STATUS_INVALID;
-    read = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS);
+    read = astra_startup_capability(startup, ASTRA_CAPABILITY_FONT_CATALOG);
     admin = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_ADMIN);
     render = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_RENDER);
     bootstrap = astra_startup_capability(startup,

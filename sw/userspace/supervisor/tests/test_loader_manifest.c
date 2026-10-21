@@ -286,8 +286,9 @@ static void trusted_entries_are_ceilings(void)
 static void default_application_ceiling(void)
 {
     static const char *admitted[] = {
-        "GUI", "CLIPBOARD", "PCM", "NETWORK", "APP_LAUNCH", "APPS:r",
-        "LIBS:r", "STORE:rw", "HOME:rw", "CONFIG:rw", "RAM_READ", "RAM_WRITE",
+        "GUI", "CLIPBOARD", "PCM", "NETWORK", "APP_LAUNCH", "FONT_CATALOG",
+        "APPS:r", "LIBS:r", "FONTS:r", "STORE:rw", "HOME:rw", "CONFIG:rw",
+        "RAM_READ", "RAM_WRITE",
     };
     static const char *refused[] = {
         "DISPLAY", "INPUT", "HOST_DEVICE", "HOST_FILESYSTEM", "BLOCK_DEVICE",
@@ -295,7 +296,7 @@ static void default_application_ceiling(void)
         "SERVICE_MANAGER", "EVENT_CONTROL", "PROCESS", "APPS:rw",
         "LIBS:rw", "SYSTEM:r", "PROC:r", "PROC:rw", "COMMANDS:r", "STORE",
         "GUI:r", "RAM_READ:r", "RAM_WRITE:rw", "RAM0:r", "UNKNOWN",
-        "CONFIG_SYSTEM:r", "CONFIG_SYSTEM:rw",
+        "CONFIG_SYSTEM:r", "CONFIG_SYSTEM:rw", "FONTS:rw", "FONTS_ADMIN",
     };
 
     for (uint32_t at = 0u; at < sizeof(admitted) / sizeof(admitted[0]);

@@ -1,6 +1,150 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-19
+Status: active continuation map, 2026-10-21
+
+Selected production is panic-fix/Fonts-namespace DE25 release
+`ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`,
+published on Beast from source revision `99f10831-dirty` with the pinned
+FluidSynth checkout and the existing production Linux kernel package. Its
+ROM SHA-256 is `ca408ae75ce49c1fee7ab73ece2784ba16a16e4e91fc4b1624ab24d31a6ee36a`;
+kernel/ROM build revision is nonzero `0x99f10831`. The exact package verifies
+on Beast and DE25. Beast kernel `test all verify`, 120-second native panic
+smoke, and the native Fonts UI long-style import/selection/uninstall gate pass.
+The read-only installed package passed a private DE25 stage-8 boot and 20
+native Fonts information roundtrips on 2026-10-21, with no panic. Its guarded
+restoration reached the old production desktop and verified identical stopped
+production-image hash and selector, with all three host services active and
+zero restarts. Evidence is under `/var/tmp/astra-panic-fix-physical-20261021/`
+on DE25 and `/var/tmp/astra-panic-fix-physical-info-retry-20261021.log` on
+Beast. First private attempt rejected a writable staging package before guest
+boot; its guarded restoration passed. A second exact-package private soak
+passed 32/32 DE25 cycles in 5,631 seconds, including 640 native Fonts
+information roundtrips, with zero candidate panics. It crossed the earlier
+cycle-23 failure window. Guarded restoration again matched stopped production
+image and selector and reached stage 8 with all three services active and zero
+restarts. Evidence is under `panic-fix-full/` in the same DE25 trial root;
+Beast log is `/var/tmp/astra-panic-fix-physical-soak-20261021.log`.
+
+During the private soak, stopped production image was copied read-only to
+Beast. Both hashes match `7c13d449dca3d9318b90f38a234b8d2ea2e7f0d625647cdcd0d916272c5ab647`.
+Journal-recovered copy has neither legacy `/config/system/fonts/installed` nor
+new `/fonts/installed`; no imported AFNT migration is required for this image.
+Current source was installed on a separate clone, and
+`verify-state-preservation.py` passed: 25 existing user-state entries retained,
+one missing default seeded, both observer input hashes unchanged. Clone is
+`/var/tmp/astra-production-upgrade-20261021.img` on Beast, SHA-256
+`6983be2276c8cd251484eac82434644c21de7a269a0eaeb17776991252800bcc`;
+production image has not been modified. Native exact-ROM panic smoke on this
+clone passed 120 seconds with no panic; log is
+`/var/tmp/astra-production-upgrade-native-smoke-20261021.log` on Beast. This
+clone also passed the native Fonts UI long-style import, information, system
+choice, and uninstall gate with the exact ROM; log is
+`/var/tmp/astra-production-upgrade-font-ui-20261021.log` on Beast. This
+clone was a rehearsal. After the soak restored the old production guest, its
+new stopped image was copied to Beast with matching SHA-256
+`a8e17e4f3a3045b86d863c7ca236abfc7e2f96aaea018f3284f2b578c41922fd`.
+Final image again had no legacy imported AFNT directory. The separate upgraded
+clone passed the same state-preservation gate: 25 existing entries retained,
+one default seeded, both input hashes unchanged. Its SHA-256 was
+`fc86f2557b66232acbbf724043f0e1792753e2945744ecc83686da967da8de73`;
+DE25 staged it as `root:astra 0600` under the new release identity before
+activation. Old image and release remain retained as `previous`.
+
+Standard deployment passed as
+`ASTRA_DE25_RELEASE PASS release=ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`
+in `/var/tmp/astra-panic-fix-production-deploy-20261021.log` on Beast. The
+deployer verified the packaged Linux kernel, installed release, live non-root
+QEMU path, audio and remote services. Production guest reached stage 8 and a
+completed desktop frame; all three host services remain active with zero
+restarts, no new panic report, and `previous` points to `57078599`. Physical
+1920×1080 HDMI DMA capture passed with four channels; frame SHA-256 is
+`a5808cd0d67ed6dbaf1252af07c761d264665962672b159991910d783f9da31e`.
+The RGB frame was inspected and shows the expected desktop/icons without
+visible corruption. Beast native QEMU against the exact ROM and final
+preserved-state clone passed the 10-second panic smoke, full Atlas DH0/RAM0
+root, 257-entry, UTF-8, empty/error and retirement gate, and Volume UI's
+33-holder busy dialog, modal scroll, safe unmount, disappearing icon and ISO
+source-retirement gate. Logs are
+`/var/tmp/astra-panic-fix-correct-native-smoke-20261021.log`,
+`/var/tmp/astra-panic-fix-atlas-native-correct-20261021.log`, and
+`/var/tmp/astra-panic-fix-volume-ui-native-correct-20261021.log` on Beast.
+These gates used the native x86-64 QEMU build and a privileged log observer;
+QEMU itself ran as UID 1000. Earlier attempts with the packaged AArch64 QEMU
+under Beast binfmt failed to load `posixd`, and unprivileged-observer runs
+could not read root-owned syslog exports. Neither is a candidate kernel panic
+or valid native gate result. Broader live monitoring remains open.
+
+Superseded production `57078599` panicked again at
+2026-10-21 08:52:18 UTC (board clock 16:52:18 +0800), reason `deferred worker
+service failed`. Systemd restarted `astra.service`; stage 8 returned at
+16:53:07 board time. All three host services are active; `astra.service`
+NRestarts=2 and the other two are zero. Report preserved on Beast at
+`/var/tmp/astra-production-panic-20261021/panic-latest.log`, SHA-256
+`a4d233fecb0e733f892eed67ca01dbc3e16fbdaad25c0e9fe0f70b3c896d0d56`.
+Old ROM lacks deferred-IRQ source/status attribution, so this panic does not
+establish failure of unselected candidate.
+
+Old production also panicked at 2026-10-20 16:54:45 UTC (board clock
+2026-10-21 00:54:45 +0800), reason `syscall dispatch contract failed`, then
+systemd restarted `astra.service`. The report is preserved
+on Beast at `/var/tmp/astra-production-panic-20261020/panic-latest.log`, SHA-256
+`30e9f700c2253f76c40cbf150cff4ba2a8bf1914056a4b616d073b0244820a96`.
+Its syscall-exit trace identifies syscall 14 (`WAIT_MULTIPLE`), status 9
+(`KERNEL_PROCESS_CORRUPT`), next context NULL while runtime remains active.
+This old ROM does not record the failing wait branch; the new candidate's
+wait-failure trace must be inspected if this recurs.
+This old-ROM panic does not establish failure of the unselected candidate.
+
+The exact `fbf87fa4` candidate completed two independent private DE25
+panic soaks on 2026-10-20. The first passed 128 cycles, the second 142;
+each cycle ran 20 native Fonts information roundtrips, 5,400 total. Both
+units exited successfully. Each restoration reached production stage 8 and
+completed desktop, with all three host services active and NRestarts=0.
+Stopped production image and selector hashes match their before/after
+manifests for each run. Beast native-QEMU 24-hour soak of the same ROM
+completed successfully: `ASTRA PANIC SOAK PASS seconds=86400
+remote-failures=8613` in `/var/tmp/astra-host-irq-candidate-native-24h.log`,
+user-unit Result=success and ExecMainStatus=0. `remote-failures` counts
+deliberate remote-desktop launch retries, not soak errors. Production cutover
+remains paused until the full exact-release workflow finishes; these long runs
+do not prove every historical panic shared the fixed host-IRQ cause. Board
+evidence remains under
+`/var/tmp/astra-irq-origin-physical-20261019/overnight-private-ready-full/`
+and `overnight-private-ready-full-second/`.
+
+Fonts namespace consolidation passed isolated Beast userspace build/tests,
+VFS and supervisor host suites, image/preservation checks, NDK dist-check,
+native QEMU AFNT import/restart/uninstall/corrupt-inventory gate, and the
+native Fonts UI long-style import, information, choice and uninstall gate.
+The UI gate runs QEMU unprivileged under a root observer. The initial native
+import probe failure was a test manifest missing `SYSTEM:r`; the service
+had loaded and adopted the saved face. The first UI gate used the retired
+shipped-font path; it now enumerates `/dh0/fonts/system` through POSIX. The
+native import probe exercises `/FONTS/system`. No product defect
+was found in these failures. Production remains unselected for this change.
+
+It gives `FONTS:` one disk root with protected shipped AFNT under `system/`
+and imported AFNT under `installed/`; Config Kit keeps inventory identities
+and preference only. The stopped-image preservation observer now includes
+`/fonts/installed`, so release upgrades must retain imported AFNT bytes and
+inode metadata. `FONT_CATALOG` is the read-only service capability,
+distinct from the filesystem assign. NDK catalog snapshot/face/strike calls
+continue to hide storage and AFNT parsing. No production image or selector
+has been changed for this work. The 2026-10-19 stopped production backup had
+no legacy `/config/system/fonts/installed` directory. Before any cutover,
+inspect the then-current stopped image again; images with legacy imports need
+a verified data migration before selection.
+
+While the native Beast soak ran, the current Fonts image publisher was
+dry-run on a clone of the stopped 2026-10-19 production backup. Its
+`verify-state-preservation.py` gate passed: 25 existing user-state entries
+retained with bytes and inode metadata, one missing default seeded, and both
+observer input hashes unchanged. Source backup SHA-256 remains
+`9f1faf7eb70ae96b33bd248c330259a971083ca5c744f96e64124642bf3324b6`;
+clone is `/var/tmp/astra-font-namespace-dryrun-20261020.img` on Beast,
+SHA-256 `67d24d701b5b863c132092a2310c4c914982e33a77d76e2db751f17791496b62`.
+This backup predates any possible later font imports; it does not replace the
+stopped-current-image preflight or qualify a legacy-import migration.
 
 Certification resumed by user request with a stop-on-panic rule. The exact
 private `bf8445bb` release panicked on DE25 during native Fonts information

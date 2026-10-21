@@ -7,8 +7,8 @@ face and weight, independently of application-specific fonts.
 
 ## Source and license information
 
-Font Kit 4.2 provides `astra_fonts_information_open()` through the read-only
-`FONTS` capability. Initialize `AstraFontInformation` with
+Font Kit provides `astra_fonts_information_open()` through the read-only
+`FONT_CATALOG` capability. Initialize `AstraFontInformation` with
 `ASTRA_FONT_INFORMATION_INIT`, open it with a counted installed face ID, then
 use `astra_fonts_information_string()` for family/style, source names and hashes,
 converter, encoding and complete copyright/license/URL records. Root fields use
@@ -98,12 +98,45 @@ itself. The system theme (`astra/theme.h`) names the heights the system uses.
 
 ## Installed fonts
 
-`astra/fonts.h` exposes an immutable catalog snapshot through the `FONTS`
-capability. `astra_fonts_catalog_open`, `astra_fonts_catalog_face`, and
-`astra_fonts_catalog_strike` return installed family, designed style, and
-available AFNT sizes. Close the snapshot after use; its names are borrowed.
+`FONTS:` names the one installed-font directory: protected shipped AFNT in
+`FONTS:system/` and service-managed imports in `FONTS:installed/`. It is
+read-only for ordinary applications. Font Kit is the normal discovery API;
+clients never need to inspect filenames or parse AFNT to list fonts.
+Native Filesystem Kit paths use `/FONTS/system/...` and
+`/FONTS/installed/...`; POSIX tools use `/dh0/fonts/...`.
 
-`FONTS_ADMIN` permits `astra_fonts_import`, `astra_fonts_select`, and
+Get the `FONT_CATALOG` capability from startup, initialize an
+`AstraFontsCatalog` with `ASTRA_FONTS_CATALOG_INIT`, then call
+`astra_fonts_catalog_open`. Iterate `face_count` with
+`astra_fonts_catalog_face` for counted family, designed style, stable ID,
+strike count, and system-choice eligibility flags. Iterate each face's strikes
+with `astra_fonts_catalog_strike` for pixel width, height, and bitmap format.
+Close the snapshot after use; names are borrowed until close. One snapshot is
+internally consistent even if another process imports or removes a font.
+
+```c
+const AstraStartupCapability *reader =
+    astra_startup_capability(startup, ASTRA_CAPABILITY_FONT_CATALOG);
+AstraFontsCatalog catalog = ASTRA_FONTS_CATALOG_INIT;
+if (reader != NULL &&
+    astra_fonts_catalog_open(reader->handle, &catalog) == ASTRA_OK) {
+    for (uint32_t i = 0; i < catalog.face_count; ++i) {
+        AstraInstalledFont face;
+        if (astra_fonts_catalog_face(&catalog, i, &face) != ASTRA_OK)
+            break;
+        /* face.family/style are counted; face.strike_count gives size count. */
+        for (uint32_t j = 0; j < face.strike_count; ++j) {
+            AstraInstalledFontStrike strike;
+            if (astra_fonts_catalog_strike(&catalog, i, j, &strike) != ASTRA_OK)
+                break;
+            /* Use strike.pixel_height and strike.bitmap_format here. */
+        }
+    }
+    (void)astra_fonts_catalog_close(&catalog);
+}
+```
+
+`FONTS_ADMIN` permits the import session API, `astra_fonts_select`, and
 `astra_fonts_uninstall`. Import accepts native AFNT and static TTF, OTF, or TTC
 sources up to 32 MiB. The resident service converts outlines through the
 host worker, validates every resulting AFNT face, and returns a stable ID.
@@ -116,8 +149,9 @@ faces remain installable and drawable through {c:func}`astra_draw_font_text`.
 Uninstall accepts only imported faces; select another system face first if the
 face is active. Shipped faces cannot be uninstalled. The service commits the
 new Config Kit inventory before retiring a face from the catalog, then removes
-its unreferenced AFNT object. A cleanup error leaves an unlisted object on
-disk and is logged; the removed font is not restored to the catalog.
+its unreferenced AFNT object from `FONTS:installed/`. A cleanup error leaves an
+unlisted object on disk and is logged; the removed font is not restored to the
+catalog.
 
 Selection prepares and validates an immutable AFNT snapshot before persisting
 the choice through Config Kit. A failed preparation or settings write leaves

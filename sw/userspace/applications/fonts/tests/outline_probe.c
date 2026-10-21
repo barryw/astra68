@@ -271,7 +271,7 @@ int astra_main(const AstraStartupInfo *startup)
     char again[ASTRA_FONT_ID_MAX] = {0};
 
     if (!astra_startup_validate(startup)) return ASTRA_STATUS_INVALID;
-    read = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS);
+    read = astra_startup_capability(startup, ASTRA_CAPABILITY_FONT_CATALOG);
     admin = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_ADMIN);
     render = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_RENDER);
     bootstrap = astra_startup_capability(startup,

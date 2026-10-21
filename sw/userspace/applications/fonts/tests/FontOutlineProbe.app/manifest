@@ -5,7 +5,7 @@ name "Font Outline Probe"
 version 0.1.0
 executable bin/m68k-68040/FontOutlineProbe
 icon resources/FontOutlineProbe.aicon
-capability FONTS
+capability FONT_CATALOG
 capability FONTS_ADMIN
 capability FONTS_RENDER
 capability SYSTEM:r

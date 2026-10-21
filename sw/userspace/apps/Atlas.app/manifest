@@ -9,6 +9,7 @@ capability GUI
 capability VOLUMES
 capability VOLUME_READ
 capability DH0:r
+capability FONTS:r
 capability APPS:r
 capability LIBS:r
 capability LOG

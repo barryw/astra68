@@ -92,9 +92,11 @@ assert ceiling["GUI"] == "" and ceiling["APPS"] == "r" and \
 assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
         if line.startswith("trusted ")] == [
     "trusted /apps/Terminal.app grants " + astra_image.TERMINAL_CEILING,
-    "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r APPS:r LIBS:r LOG",
-    "trusted /apps/Fonts.app grants GUI FONTS FONTS_ADMIN CLIPBOARD DH0:r LIBS:r"]
-for grant, admitted in (("GUI", True), ("APPS:r", True), ("APPS:rw", False),
+    "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r FONTS:r APPS:r LIBS:r LOG",
+    "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r"]
+for grant, admitted in (("GUI", True), ("FONTS:r", True),
+                        ("FONTS:rw", False), ("FONT_CATALOG", True),
+                        ("FONTS_ADMIN", False), ("APPS:r", True), ("APPS:rw", False),
                         ("GUI:r", False), ("STORE", False), ("DISPLAY", False),
                         ("HOME:x", False), ("STORE:rw", True)):
     assert astra_image._grant_admitted(grant, ceiling) == admitted, grant
@@ -111,8 +113,8 @@ with tempfile.TemporaryDirectory() as directory:
     ordinary = bundle("Game.app", ["GUI", "PCM", "STORE:rw"])
     greedy = bundle("Greedy.app", ["GUI", "DISPLAY"])
     shell = bundle("Terminal.app", ["GUI", "SERVICE_MANAGER", "SYSTEM:r"])
-    atlas = bundle("Atlas.app", ["GUI", "VOLUMES", "VOLUME_READ", "DH0:r", "APPS:r", "LIBS:r", "LOG"])
-    fonts = bundle("Fonts.app", ["GUI", "FONTS", "FONTS_ADMIN", "CLIPBOARD", "DH0:r", "LIBS:r"])
+    atlas = bundle("Atlas.app", ["GUI", "VOLUMES", "VOLUME_READ", "DH0:r", "FONTS:r", "APPS:r", "LIBS:r", "LOG"])
+    fonts = bundle("Fonts.app", ["GUI", "FONT_CATALOG", "FONTS:r", "FONTS_ADMIN", "CLIPBOARD", "DH0:r", "LIBS:r"])
     disk = bundle("Disk.app", ["GUI", "DH0:r"])
     astra_image.check_application_policy(
         [ordinary, shell, atlas, fonts],
@@ -251,7 +253,7 @@ display_startup = next(line for line in startup
                        if line.startswith("service /services/display "))
 fonts_startup = next(line for line in startup
                      if line.startswith("service /services/fonts "))
-assert "serves FONTS FONTS_ADMIN FONTS_RENDER FONTS_CHANGED" in fonts_startup
+assert "serves FONT_CATALOG FONTS_ADMIN FONTS_RENDER FONTS_CHANGED" in fonts_startup
 assert "FONTS_RENDER" in display_startup.split()
 assert "FONTS_CHANGED" in display_startup.split()
 assert "FONTS_ADMIN" not in display_startup.split()
@@ -704,11 +706,12 @@ with tempfile.TemporaryDirectory(prefix="astra-config-preservation-") as directo
     binary_target = b"absent\nGeneration: 99\n\xff\\target"
     os.symlink(binary_target, os.fsencode(os.path.join(tree, "home", "binary-link")))
     format_volume(volume, tree)
+    astra_image._mkdir(volume, "/fonts", "font store root")
     directories = (
         "/config", "/config/services", "/config/services/desktop",
         "/config/services/hostfs", "/config/services/remote-desktop",
         "/config/user", "/config/user/nested", "/home", "/local",
-        "/local/commands")
+        "/local/commands", "/fonts/installed")
     for path in directories:
         astra_image._mkdir(volume, path, "preserved directory")
     files = {
@@ -722,6 +725,7 @@ with tempfile.TemporaryDirectory(prefix="astra-config-preservation-") as directo
         "/config/user/nested/custom.bin": b"custom\x00configuration\xff\n",
         "/home/kept.txt": b"home retained\n",
         "/local/commands/kept.txt": b"local retained\n",
+        "/fonts/installed/user.afnt": b"installed font retained\n",
     }
     for path, data in files.items():
         write_file(path, data)
@@ -833,6 +837,7 @@ with tempfile.TemporaryDirectory(prefix="astra-config-preservation-") as directo
     reject_change('punch "/home/kept.txt" 0 0', "content")
     reject_change('set_inode_field "/config/user/nested/link" block[0] 0x74737558', "target")
     reject_change('rm "%s"' % hardlink, "disappeared")
+    reject_change('rm "/fonts/installed/user.afnt"', "disappeared")
     reject_change('write %s "/config/user/nested/unexpected.txt"' %
                   astra_image._debugfs_quote(attribute_seed), "unexpected state addition")
     reject_change('punch "/config/commands/zsh/motd" 0 0', "incorrect installer default contents")

@@ -13,7 +13,7 @@ import astra_image
 from storage_image import image_window
 
 
-ROOTS = ("/home", "/local", "/config")
+ROOTS = ("/home", "/local", "/config", "/fonts/installed")
 
 
 def digest(path):
@@ -214,6 +214,8 @@ def verify(reference, candidate):
                 if after[path].get(field) != value:
                     raise RuntimeError("preserved %s changed: %r" % (field, path))
         allowed = defaults()
+        if "/fonts/installed" in after and "/fonts/installed" not in before:
+            allowed["/fonts/installed"] = None
         for path in after.keys() - before.keys():
             if path not in allowed:
                 raise RuntimeError("unexpected state addition: %r" % path)
