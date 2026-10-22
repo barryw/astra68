@@ -106,6 +106,16 @@ tests pass, including same-device multi-partition catalog mounts; exact-kernel
 NTFS3 module builds with expected vermagic. Coherent QEMU/DE25 qualification
 and production deployment remain open. Other common formats remain unimplemented;
 [AstraFS](ASTRAFS.md) remains design-only.
+Whole userspace `all` passes on Beast; its first `test` run found an
+uninitialized Fonts selection record in a host layout test. Initializing that
+record passes the focused Fonts test and the complete userspace `test` gate,
+including m68k Fonts relink. Logs are
+`/var/tmp/astra-fs-formats-userspace-20261022.log` and
+`/var/tmp/astra-fs-formats-userspace-tests-20261022.log` on Beast. QEMU host
+and DE25 target builds against native catalog version 3 both exit zero; logs
+are `/var/tmp/astra-fs-formats-qemu-host-20261022.log` and
+`/var/tmp/astra-fs-formats-qemu-de25-20261022.log`. These are build gates,
+not a live guest or DE25 media test.
 
 Superseded production `57078599` panicked again at
 2026-10-21 08:52:18 UTC (board clock 16:52:18 +0800), reason `deferred worker

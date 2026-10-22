@@ -532,7 +532,7 @@ static uint32_t build_controls(void)
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
     const AstraChoiceItem *title = active_family == UINT32_MAX ? NULL :
                                    &families[active_family];
-    AstraInstalledFont selected_face;
+    AstraInstalledFont selected_face = {0};
     uint32_t system_ready = 0u;
 
     if (!browsing && active_family != UINT32_MAX &&
