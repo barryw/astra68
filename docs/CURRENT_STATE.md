@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-21
+Status: active continuation map, 2026-10-22
 
 Selected production is panic-fix/Fonts-namespace DE25 release
 `ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`,
@@ -73,6 +73,23 @@ QEMU itself ran as UID 1000. Earlier attempts with the packaged AArch64 QEMU
 under Beast binfmt failed to load `posixd`, and unprivileged-observer runs
 could not read root-owned syslog exports. Neither is a candidate kernel panic
 or valid native gate result. Broader live monitoring remains open.
+
+Physical USB hotplug passed on the selected DE25 release on 2026-10-22. A
+SanDisk Cruzer connected through the USB hub appeared as `/dev/sda` with an
+Ubuntu installer partition table. The provider discovered the partition
+sources and automatically mounted its 51.6 GiB ext4 `writable` partition
+read/write at `/usb0`; native `volumes --all` reported the exact mounted
+source. The desktop displayed its `writable` icon, and double-click opened
+Atlas on `/usb0` with five readable root folders and status 0. Native Terminal
+created a uniquely named 24-byte file on `/usb0`, read the exact bytes back
+through `/usb0`, then removed that file; a second native lookup confirmed its
+absence. The provider's private mount remained read/write, `astra.service`
+and remote desktop stayed active with zero restarts, and no new panic report
+appeared. Captured RFB frames, native command output, syslog snapshot and
+device inventory are on Beast at `/var/tmp/astra-physical-usb-20261022/`.
+This drive's EFI partition is FAT12, not FAT32, so FAT32 remains untested.
+Physical CD/DVD hotplug, disc automount, safe removal and eject remain open
+until a drive and disc are attached. The USB drive remains mounted for use.
 
 Superseded production `57078599` panicked again at
 2026-10-21 08:52:18 UTC (board clock 16:52:18 +0800), reason `deferred worker
