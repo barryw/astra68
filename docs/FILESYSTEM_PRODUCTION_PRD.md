@@ -142,9 +142,10 @@ detect/inventory, mount read-only, mount read/write, and create/format are
 separately qualified. A format never gains write or format access merely because
 Linux can identify or mount it. Current source mounts ext4, FAT32 and exFAT
 on eligible storage, FAT12/FAT16 read-only on USB, ISO9660/UDF read-only on
-optical or USB media, and tmpfs for RAM. FAT12/FAT16 and USB optical-format
-admission have focused software gates but no coherent guest release or physical
-gate; FAT32 has software gates but no physical FAT32 drive gate. The supported
+optical or USB media, NTFS read-only on fixed/USB data partitions, and tmpfs for
+RAM. FAT12/FAT16, USB optical-format and NTFS admission have focused software
+gates but no coherent guest release or physical gate; FAT32 has software gates
+but no physical FAT32 drive gate. The supported
 format/transport policy is extended in this order:
 
 | Priority | Formats | Intended capability and qualification |
@@ -164,6 +165,9 @@ FAT12, FAT16 and FAT32 as variants of one FAT implementation, while
 `src/kits/storage/disk_device/DiskDeviceTypes.cpp` retains distinct format
 identities. Astra follows that separation using Linux vfat behind distinct
 native format records, rather than adding three filesystem engines.
+Haiku's `src/add-ons/kernel/file_systems/ntfs/kernel_interface.cpp` mounts a
+hibernated NTFS volume read-only. Astra's initial NTFS policy is read-only for
+all volumes while using Linux ntfs3 as the single provider backend.
 
 The provider contract must also accommodate network filesystems and approved
 host-directory exports without inventing block devices for them. NFS and SMB
@@ -474,8 +478,8 @@ selected system volume is refused.
 FS31. Automatic removable mounting follows an explicit filesystem allowlist.
 The shipped trusted persisted policy mounts supported ext4, FAT32, and exFAT
 USB data volumes writable, as requested on 2026-10-12. Optical data volumes are
-read-only; FAT12/FAT16 and recognized ISO9660/UDF data volumes on USB are
-read-only until separate write gates qualify a FAT variant.
+read-only; FAT12/FAT16, NTFS and recognized ISO9660/UDF data volumes on USB are
+read-only until separate write gates qualify a writable variant.
 Configured rules and explicit mount actions may request read-only USB access.
 A requested writable mount that fails remains unmounted with a useful
 reason instead of silently changing mode. Inventory never formats or repairs

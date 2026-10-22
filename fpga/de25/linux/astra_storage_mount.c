@@ -147,6 +147,7 @@ static const char *fstype(uint32_t format)
     case ASTRA_VOLUME_FAT32: return "vfat";
     case ASTRA_VOLUME_FAT12: return "vfat";
     case ASTRA_VOLUME_FAT16: return "vfat";
+    case ASTRA_VOLUME_NTFS: return "ntfs3";
     case ASTRA_VOLUME_EXFAT: return "exfat";
     case ASTRA_VOLUME_ISO9660: return "iso9660";
     case ASTRA_VOLUME_UDF: return "udf";

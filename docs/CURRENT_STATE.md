@@ -100,10 +100,11 @@ for per-partition `NDOS` icons with clear open errors, read-only mounting of
 recognized optical filesystems on USB, and a native Disk Setup app reached
 from `Disk > Format...`; no destructive device action has been enabled. The
 post-release source now recognizes FAT12/FAT16 and admits their USB mounts
-read-only, plus ISO9660/UDF on USB read-only. Focused Beast catalog, probe,
-mount and native client tests pass, including same-device multi-partition
-catalog mounts; coherent QEMU/DE25 qualification and production deployment
-remain open. NTFS and other common formats remain unimplemented;
+read-only, plus ISO9660/UDF on USB read-only and NTFS on fixed/USB data
+partitions read-only. Focused Beast catalog, probe, mount and native client
+tests pass, including same-device multi-partition catalog mounts; exact-kernel
+NTFS3 module builds with expected vermagic. Coherent QEMU/DE25 qualification
+and production deployment remain open. Other common formats remain unimplemented;
 [AstraFS](ASTRAFS.md) remains design-only.
 
 Superseded production `57078599` panicked again at

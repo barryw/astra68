@@ -170,7 +170,7 @@ BLIT read from each, checked byte for byte. Run it with Astra stopped.
 
 The vendor Image lacks most of what `docs/FILESYSTEM_PRODUCTION_PRD.md`
 mounts. `kernel/astra-storage.config` adds exFAT, ISO9660 (Joliet, Rock
-Ridge, zisofs), UDF, `nls_utf8` and UAS as exact-source modules;
+Ridge, zisofs), UDF, NTFS3, `nls_utf8` and UAS as exact-source modules;
 `kernel/de25-6.12.11-gd7d192a9ddd9.config` is the board's own
 `/proc/config.gz`, the baseline the build refuses to drift from. On beast:
 

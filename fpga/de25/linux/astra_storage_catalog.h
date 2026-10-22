@@ -8,7 +8,8 @@
 static inline int astra_storage_format_read_only(uint32_t format)
 {
     return format == ASTRA_VOLUME_FAT12 || format == ASTRA_VOLUME_FAT16 ||
-           format == ASTRA_VOLUME_ISO9660 || format == ASTRA_VOLUME_UDF;
+           format == ASTRA_VOLUME_ISO9660 || format == ASTRA_VOLUME_UDF ||
+           format == ASTRA_VOLUME_NTFS;
 }
 
 /* Linux provider state, not an application ABI. The event loop owns mutations.

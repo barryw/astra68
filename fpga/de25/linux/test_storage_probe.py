@@ -37,6 +37,12 @@ def main():
                             f"ASTRA_FAT{bits}", fat], check=True,
                            stdout=subprocess.DEVNULL)
             cases.append((fat, f"ASTRA_FAT{bits}", format_id))
+        ntfs = str(Path(work) / "ntfs.img")
+        with open(ntfs, "wb") as handle:
+            handle.truncate(64 * 1024 * 1024)
+        subprocess.run(["/usr/sbin/mkfs.ntfs", "-F", "-Q", "-L", "ASTRA_NTFS", ntfs],
+                       check=True, stdout=subprocess.DEVNULL)
+        cases.append((ntfs, "ASTRA_NTFS", "9"))
         iso_seed = Path(work) / "iso-seed"
         iso_seed.mkdir()
         (iso_seed / "Folder").mkdir()

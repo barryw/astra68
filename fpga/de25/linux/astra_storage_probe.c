@@ -95,6 +95,8 @@ static void inspect(int fd, uint64_t offset, uint64_t length,
                     result->format = ASTRA_VOLUME_FAT32;
             } else if (strcmp(type, "exfat") == 0)
                 result->format = ASTRA_VOLUME_EXFAT;
+            else if (strcmp(type, "ntfs") == 0)
+                result->format = ASTRA_VOLUME_NTFS;
             else if (strcmp(type, "iso9660") == 0)
                 result->format = ASTRA_VOLUME_ISO9660;
             else if (strcmp(type, "udf") == 0)
@@ -224,7 +226,7 @@ int astra_storage_probe_poll(AstraStorageProbe *probe,
             received.source == probe->source &&
             received.generation == probe->generation &&
             received.completed_ns != 0u &&
-            received.error >= 0 && received.format <= ASTRA_VOLUME_FAT16 &&
+            received.error >= 0 && received.format <= ASTRA_VOLUME_NTFS &&
             received.ambiguous <= 1u &&
             memchr(received.uuid, '\0', sizeof(received.uuid)) != NULL &&
             memchr(received.label, '\0', sizeof(received.label)) != NULL)

@@ -175,6 +175,12 @@ static void policy_and_metadata(void)
                                      &mounted) == EROFS);
     assert(astra_storage_mount_begin(&catalog, usb_disc, 1u,
         ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
+    uint64_t ntfs = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_NTFS,
+                           "", "Windows Data");
+    assert(astra_storage_mount_begin(&catalog, ntfs, 1u, 0u, 0u, 0u,
+                                     &mounted) == EROFS);
+    assert(astra_storage_mount_begin(&catalog, ntfs, 1u,
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
     first = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_EXT4,
                     "", "broken\nlabel");
     assert(astra_storage_find(&catalog, first)->label[0] == '\0');
@@ -189,6 +195,12 @@ static void policy_and_metadata(void)
                                      0u, 0u, &mounted) == 0);
     assert(astra_storage_mount_result(&catalog, mounted, 1u, 12u, 0) == 0);
     assert(astra_storage_quiesce(&catalog, mounted, 1u) == EPERM);
+    uint64_t fixed_ntfs = source(&catalog, ASTRA_VOLUME_FIXED, ASTRA_VOLUME_NTFS,
+                                 "", "Other disk");
+    assert(astra_storage_mount_begin(&catalog, fixed_ntfs, 1u,
+        ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == EINVAL);
+    assert(astra_storage_mount_begin(&catalog, fixed_ntfs, 1u,
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
     assert(astra_storage_device(&catalog, ASTRA_VOLUME_RAM, &ram) == EINVAL);
     assert(astra_storage_ram_source(&catalog, 0u, &ram) == 0);
     assert(astra_storage_find(&catalog, ram)->parent == 0u);

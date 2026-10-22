@@ -60,9 +60,10 @@ exact-reference destructive-operation checks. The 2026-10-22 physical USB
 test qualified one ext4 partition, not multi-partition automount or editing.
 The provider currently accepts ext4, FAT32 and exFAT data volumes, ISO9660/UDF
 optical media and tmpfs. Current source also recognizes FAT12/FAT16 and mounts
-them read-only, and admits ISO9660/UDF on USB read-only. Those additions pass
-focused Beast software gates but have no coherent guest or physical gate.
-NTFS and other cross-platform formats need individual qualification.
+them read-only, admits ISO9660/UDF on USB read-only, and mounts NTFS on
+fixed/USB data partitions read-only. Those additions pass focused Beast
+software gates and an exact-kernel NTFS3 module build, but have no coherent
+guest or physical gate. Other cross-platform formats need individual qualification.
 [AstraFS](ASTRAFS.md) remains a design, not an available format.
 
 ## Acceptance limits

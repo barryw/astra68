@@ -20,8 +20,14 @@ static const char *kind(uint32_t value)
 }
 static const char *format(uint32_t value)
 {
-    static const char *const names[] = {"unknown", "ext4", "FAT32", "exFAT", "ISO9660", "UDF", "tmpfs", "FAT12", "FAT16"};
+    static const char *const names[] = {"unknown", "ext4", "FAT32", "exFAT", "ISO9660", "UDF", "tmpfs", "FAT12", "FAT16", "NTFS"};
     return value < sizeof(names) / sizeof(names[0]) ? names[value] : "?";
+}
+static const char *access_mode(const AstraVolumeRecord *record)
+{
+    if (record->kind != ASTRA_VOLUME_MOUNT && record->kind != ASTRA_VOLUME_BINDING)
+        return "-";
+    return (record->flags & ASTRA_VOLUME_READ_ONLY) != 0u ? "ro" : "rw";
 }
 static int label(const char *text)
 {
@@ -76,7 +82,7 @@ int main(int argc, char **argv)
         failed = printf("%-5llu %-8s %-11s %-10s %-8s %-7s ",
             (unsigned long long)record->id, kind(record->kind), state(record->state),
             record->name[0] != '\0' ? record->name : "-", format(record->format),
-            (record->flags & ASTRA_VOLUME_READ_ONLY) != 0u ? "ro" : "rw") < 0 ||
+            access_mode(record)) < 0 ||
             !label(record->label);
     }
     astra_volume_snapshot_close(&snapshot);

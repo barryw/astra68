@@ -41,6 +41,14 @@ def main():
                                check=True, stdout=subprocess.DEVNULL)
                 subprocess.run(["sudo", "-n", binary, image, format_id,
                                 str(os.getuid()), str(os.getgid())], check=True)
+            ntfs = str(Path(work) / "ntfs.img")
+            with open(ntfs, "wb") as handle:
+                handle.truncate(64 * 1024 * 1024)
+            subprocess.run(["/usr/sbin/mkfs.ntfs", "-F", "-Q", "-L",
+                            "ASTRA_NTFS", ntfs], check=True,
+                           stdout=subprocess.DEVNULL)
+            subprocess.run(["sudo", "-n", binary, ntfs, "9",
+                            str(os.getuid()), str(os.getgid())], check=True)
 
 
 if __name__ == "__main__":
