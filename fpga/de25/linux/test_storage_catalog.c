@@ -162,6 +162,19 @@ static void policy_and_metadata(void)
     assert(astra_storage_mount_result(&catalog, mounted, 1u, 23u, 0) == 0);
     assert((astra_storage_find(&catalog, mounted)->flags &
             ASTRA_VOLUME_READ_ONLY) != 0u);
+    for (uint32_t format = ASTRA_VOLUME_FAT12; format <= ASTRA_VOLUME_FAT16; ++format) {
+        uint64_t fat = source(&catalog, ASTRA_VOLUME_USB, format, "", "Legacy FAT");
+        assert(astra_storage_mount_begin(&catalog, fat, 1u, 0u, 0u, 0u,
+                                         &mounted) == EROFS);
+        assert(astra_storage_mount_begin(&catalog, fat, 1u,
+            ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
+    }
+    uint64_t usb_disc = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_ISO9660,
+                               "", "Installer");
+    assert(astra_storage_mount_begin(&catalog, usb_disc, 1u, 0u, 0u, 0u,
+                                     &mounted) == EROFS);
+    assert(astra_storage_mount_begin(&catalog, usb_disc, 1u,
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
     first = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_EXT4,
                     "", "broken\nlabel");
     assert(astra_storage_find(&catalog, first)->label[0] == '\0');
@@ -443,6 +456,31 @@ static void retained_release(void)
     astra_storage_catalog_destroy(&catalog);
 }
 
+static void multiple_partitions_one_device(void)
+{
+    AstraStorageCatalog catalog;
+    uint64_t device, medium, data, installer, first, second;
+    assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, &device) == 0);
+    assert(astra_storage_medium(&catalog, device, 1u, &medium) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u, &data) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u, &installer) == 0);
+    assert(astra_storage_probe_result(&catalog, data, 1u, ASTRA_VOLUME_EXT4,
+                                      "data", "Data", 0, 0) == 0);
+    assert(astra_storage_probe_result(&catalog, installer, 1u,
+                                      ASTRA_VOLUME_ISO9660, "", "Installer", 0, 0) == 0);
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, &first) == 0);
+    assert(astra_storage_mount_result(&catalog, first, 1u, 20u, 0) == 0);
+    assert(astra_storage_mount_begin(&catalog, installer, 1u,
+                                     ASTRA_VOLUME_READ_ONLY, 0u, 0u, &second) == 0);
+    assert(astra_storage_mount_result(&catalog, second, 1u, 21u, 0) == 0);
+    assert(strcmp(astra_storage_find(&catalog, first)->name, "/usb0") == 0);
+    assert(strcmp(astra_storage_find(&catalog, second)->name, "/usb1") == 0);
+    assert(astra_storage_find(&catalog, first)->parent == data);
+    assert(astra_storage_find(&catalog, second)->parent == installer);
+    astra_storage_catalog_destroy(&catalog);
+}
+
 int main(void)
 {
     lifecycle();
@@ -456,6 +494,7 @@ int main(void)
     reusable_mount_names();
     configured_ram_source();
     retained_release();
+    multiple_partitions_one_device();
     puts("storage catalog: lifecycle, loss, stale completion, metadata, snapshots, budget PASS");
     return 0;
 }

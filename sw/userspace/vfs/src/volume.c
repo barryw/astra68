@@ -93,7 +93,7 @@ int astra_volume_page_valid(const AstraVolumeCatalogQuery *query,
         if (row->id == 0u || row->generation == 0u || row->reserved != 0u ||
             row->kind < ASTRA_VOLUME_DEVICE || row->kind > ASTRA_VOLUME_BINDING ||
             row->state < ASTRA_VOLUME_DISCOVERED || row->state > ASTRA_VOLUME_FAILED ||
-            row->class_id > ASTRA_VOLUME_RAM || row->format > ASTRA_VOLUME_TMPFS ||
+            row->class_id > ASTRA_VOLUME_RAM || row->format > ASTRA_VOLUME_FAT16 ||
             row->origin > ASTRA_VOLUME_ORIGIN_SYSTEM_IMAGE ||
             (row->flags & ~(ASTRA_VOLUME_READ_ONLY | ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_VOLATILE |
                 ASTRA_VOLUME_DUPLICATE_UUID | ASTRA_VOLUME_AMBIGUOUS_FORMAT | ASTRA_VOLUME_LABEL_INVALID |

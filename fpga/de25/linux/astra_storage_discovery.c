@@ -366,7 +366,9 @@ int astra_storage_discovery_poll(AstraStorageDiscovery *discovery)
         }
         uint64_t mount = 0u;
         int error = astra_storage_provider_mount(discovery->provider, record->id, record->generation,
-            entry->class_id == ASTRA_VOLUME_OPTICAL || entry->read_only ? ASTRA_VOLUME_READ_ONLY : 0u,
+            entry->class_id == ASTRA_VOLUME_OPTICAL || entry->read_only ||
+            astra_storage_format_read_only(record->format) ?
+                ASTRA_VOLUME_READ_ONLY : 0u,
             0u, 0u, &mount);
         if (error == EAGAIN)
             continue; /* worker completion wakes the same owner */

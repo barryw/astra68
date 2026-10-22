@@ -32,6 +32,15 @@ def main():
             subprocess.run(["sudo", "-n", binary, image] +
                            ([] if args.provider else [format_id]) +
                            [str(os.getuid()), str(os.getgid())], check=True)
+        if not args.provider:
+            for bits, size, format_id in ((12, 4, "7"), (16, 32, "8")):
+                image = str(Path(work) / f"fat{bits}.img")
+                with open(image, "wb") as handle:
+                    handle.truncate(size * 1024 * 1024)
+                subprocess.run(["/usr/sbin/mkfs.vfat", "-F", str(bits), image],
+                               check=True, stdout=subprocess.DEVNULL)
+                subprocess.run(["sudo", "-n", binary, image, format_id,
+                                str(os.getuid()), str(os.getgid())], check=True)
 
 
 if __name__ == "__main__":

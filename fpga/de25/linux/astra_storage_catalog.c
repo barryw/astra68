@@ -300,7 +300,7 @@ int astra_storage_probe_result(AstraStorageCatalog *catalog, uint64_t source,
     size_t label_length;
 
     if (catalog == NULL || uuid == NULL || label == NULL || error < 0 ||
-        format > ASTRA_VOLUME_TMPFS || catalog->sequence == UINT64_MAX)
+        format > ASTRA_VOLUME_FAT16 || catalog->sequence == UINT64_MAX)
         return EINVAL;
     record = find(catalog, source);
     if (!live(record) || record->generation != generation)
@@ -334,7 +334,9 @@ static bool supported(uint32_t class_id, uint32_t format)
     case ASTRA_VOLUME_FIXED: return format == ASTRA_VOLUME_EXT4;
     case ASTRA_VOLUME_USB:
         return format == ASTRA_VOLUME_EXT4 || format == ASTRA_VOLUME_FAT32 ||
-               format == ASTRA_VOLUME_EXFAT;
+               format == ASTRA_VOLUME_EXFAT || format == ASTRA_VOLUME_FAT12 ||
+               format == ASTRA_VOLUME_FAT16 || format == ASTRA_VOLUME_ISO9660 ||
+               format == ASTRA_VOLUME_UDF;
     case ASTRA_VOLUME_OPTICAL:
         return format == ASTRA_VOLUME_ISO9660 || format == ASTRA_VOLUME_UDF;
     case ASTRA_VOLUME_RAM: return format == ASTRA_VOLUME_TMPFS;
@@ -397,7 +399,8 @@ int astra_storage_mount_begin(AstraStorageCatalog *catalog, uint64_t source,
     if (!supported(record->class_id, record->format) ||
         (record->flags & ASTRA_VOLUME_AMBIGUOUS_FORMAT) != 0u)
         return ENOTSUP;
-    if (record->class_id == ASTRA_VOLUME_OPTICAL &&
+    if ((record->class_id == ASTRA_VOLUME_OPTICAL ||
+         astra_storage_format_read_only(record->format)) &&
         (flags & ASTRA_VOLUME_READ_ONLY) == 0u)
         return EROFS;
     if ((flags & ASTRA_VOLUME_SYSTEM) != 0u &&

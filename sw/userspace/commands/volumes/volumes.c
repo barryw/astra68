@@ -20,7 +20,7 @@ static const char *kind(uint32_t value)
 }
 static const char *format(uint32_t value)
 {
-    static const char *const names[] = {"unknown", "ext4", "FAT32", "exFAT", "ISO9660", "UDF", "tmpfs"};
+    static const char *const names[] = {"unknown", "ext4", "FAT32", "exFAT", "ISO9660", "UDF", "tmpfs", "FAT12", "FAT16"};
     return value < sizeof(names) / sizeof(names[0]) ? names[value] : "?";
 }
 static int label(const char *text)

@@ -116,10 +116,14 @@ int main(int argc, char **argv)
     char bytes[64] = {0};
     char loop_path[64];
     uint64_t identity;
+    int fat;
 
     assert(argc == 5 && geteuid() == 0);
     domain_retirement((uid_t)strtoul(argv[3], NULL, 10), (gid_t)strtoul(argv[4], NULL, 10));
     record.format = (uint32_t)strtoul(argv[2], NULL, 10);
+    fat = record.format == ASTRA_VOLUME_FAT12 || record.format == ASTRA_VOLUME_FAT16;
+    if (fat)
+        record.class_id = ASTRA_VOLUME_USB;
     assert(astra_storage_domain_open(&domain,
         (uid_t)strtoul(argv[3], NULL, 10),
         (gid_t)strtoul(argv[4], NULL, 10)) == 0);
@@ -160,18 +164,24 @@ int main(int argc, char **argv)
         assert(setgroups(0u, NULL) == 0);
         assert(setresgid(domain.gid, domain.gid, domain.gid) == 0);
         assert(setresuid(domain.uid, domain.uid, domain.uid) == 0);
-        file = openat(mounted.root, "Folder/café.txt", O_RDONLY | O_CLOEXEC);
-        assert(file >= 0 && read(file, bytes, sizeof(bytes)) == 15);
-        assert(strcmp(bytes, "Astra ISO test\n") == 0);
+        file = openat(mounted.root, fat ? "." : "Folder/café.txt",
+                      O_RDONLY | O_CLOEXEC);
+        assert(file >= 0);
+        if (!fat) {
+            assert(read(file, bytes, sizeof(bytes)) == 15);
+            assert(strcmp(bytes, "Astra ISO test\n") == 0);
+        }
         close(file);
         _exit(0);
     }
     assert(waitpid(consumer, &result, 0) == consumer);
     assert(WIFEXITED(result) && WEXITSTATUS(result) == 0);
-    held = openat(mounted.root, "Folder/café.txt", O_RDONLY | O_CLOEXEC);
+    held = openat(mounted.root, fat ? "." : "Folder/café.txt", O_RDONLY | O_CLOEXEC);
     assert(held >= 0);
-    assert(read(held, bytes, sizeof(bytes)) == 15);
-    assert(strcmp(bytes, "Astra ISO test\n") == 0);
+    if (!fat) {
+        assert(read(held, bytes, sizeof(bytes)) == 15);
+        assert(strcmp(bytes, "Astra ISO test\n") == 0);
+    }
     errno = 0;
     assert(openat(mounted.root, "new-file", O_WRONLY | O_CREAT, 0600) < 0);
     assert(errno == EROFS);

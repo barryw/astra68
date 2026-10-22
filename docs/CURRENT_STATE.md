@@ -90,6 +90,21 @@ device inventory are on Beast at `/var/tmp/astra-physical-usb-20261022/`.
 This drive's EFI partition is FAT12, not FAT32, so FAT32 remains untested.
 Physical CD/DVD hotplug, disc automount, safe removal and eject remain open
 until a drive and disc are attached. The USB drive remains mounted for use.
+Partition discovery represents each Linux-reported partition as its own source,
+but native catalog records omit partition number/bounds. This drive's FAT12
+source remained unmounted and had no desktop icon; its recognized ISO9660
+source also remained unmounted because current USB policy permits only ext4,
+FAT32 and exFAT. Neither multiple supported-partition automount nor partition
+editing is physically qualified. New requirements in the production PRD call
+for per-partition `NDOS` icons with clear open errors, read-only mounting of
+recognized optical filesystems on USB, and a native Disk Setup app reached
+from `Disk > Format...`; no destructive device action has been enabled. The
+post-release source now recognizes FAT12/FAT16 and admits their USB mounts
+read-only, plus ISO9660/UDF on USB read-only. Focused Beast catalog, probe,
+mount and native client tests pass, including same-device multi-partition
+catalog mounts; coherent QEMU/DE25 qualification and production deployment
+remain open. NTFS and other common formats remain unimplemented;
+[AstraFS](ASTRAFS.md) remains design-only.
 
 Superseded production `57078599` panicked again at
 2026-10-21 08:52:18 UTC (board clock 16:52:18 +0800), reason `deferred worker

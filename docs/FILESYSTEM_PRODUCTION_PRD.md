@@ -108,7 +108,8 @@ Production qualification requires these user-visible outcomes:
    filesystem, and use it through the desktop, native applications, and POSIX
    tools without application-specific paths or backends.
 3. Two filesystems on one device become two volumes. An unformatted partition
-   remains visible in inventory without being presented as a usable volume.
+   remains visible in inventory and as an `NDOS` desktop source, without being
+   presented as a usable mounted volume.
 4. A supported USB optical drive exposes a data disc at `/cd0` or its next
    available optical name. Read-only status, insertion, removal, and eject are
    visible to clients. Audio-CD playback is a separate media feature.
@@ -136,11 +137,39 @@ Production qualification requires these user-visible outcomes:
 | USB data CD/DVD | ISO9660 including common extensions, and UDF. | Read-only; publish only after Linux has identified and mounted the inserted medium. |
 | RAM storage | Linux tmpfs. | Explicit byte and inode limits; production RAM storage must not use swap. |
 
+Filesystem support is a per-format capability, not a single "supported" bit:
+detect/inventory, mount read-only, mount read/write, and create/format are
+separately qualified. A format never gains write or format access merely because
+Linux can identify or mount it. Current source mounts ext4, FAT32 and exFAT
+on eligible storage, FAT12/FAT16 read-only on USB, ISO9660/UDF read-only on
+optical or USB media, and tmpfs for RAM. FAT12/FAT16 and USB optical-format
+admission have focused software gates but no coherent guest release or physical
+gate; FAT32 has software gates but no physical FAT32 drive gate. The supported
+format/transport policy is extended in this order:
+
+| Priority | Formats | Intended capability and qualification |
+|---|---|---|
+| First interoperability | FAT12/FAT16, FAT32, exFAT, ext4, ISO9660/UDF on USB as well as optical media | Detect every partition and mount each eligible filesystem independently. FAT-family and ext4 data partitions gain read/write only after disposable-media write, sync, unplug, and recovery gates. ISO9660/UDF remain read-only on every transport. Format only writable data formats with qualified provider tools. |
+| Next interoperability | NTFS | Detect and inventory first; add read-only mounts before considering writes. NTFS writes require separate feature, recovery, and physical-media gates. |
+| Further evaluation | APFS, HFS+, XFS, Btrfs, Amiga OFS/FFS | Assess actual demand, available trustworthy drivers, metadata semantics, and safe read-only support individually. Unknown or unsupported variants remain visible with an exact reason. No implied write or format promise. |
+| Native format | AstraFS | Remains a deferred design in [AstraFS](ASTRAFS.md); no implementation or disk format exists. Qualify on disposable images before exposing it as a format choice or system-data backend. |
+
+Partition-map support covers MBR and GPT, including several partitions per
+device. A filesystem may also occupy an unpartitioned device. CD/DVD media
+with multiple discoverable data sessions or partitions must expose each
+mountable filesystem as a separate source; media topology must be verified
+against actual drives before claiming general multisession support.
+Haiku's `src/add-ons/kernel/file_systems/fat/kernel_interface.cpp` handles
+FAT12, FAT16 and FAT32 as variants of one FAT implementation, while
+`src/kits/storage/disk_device/DiskDeviceTypes.cpp` retains distinct format
+identities. Astra follows that separation using Linux vfat behind distinct
+native format records, rather than adding three filesystem engines.
+
 The provider contract must also accommodate network filesystems and approved
 host-directory exports without inventing block devices for them. NFS and SMB
 enablement follow this contract when qualified; they are not required to delay
 the first local-storage release. Unknown or disabled formats remain visible in
-inventory and return a useful unsupported-format result.
+inventory and return a precise no-filesystem or unsupported-format result.
 
 Astra's synthetic process, event, metric, and service-control trees continue to
 describe Astra objects through the native VFS contract. They are not Linux
@@ -445,8 +474,10 @@ selected system volume is refused.
 FS31. Automatic removable mounting follows an explicit filesystem allowlist.
 The shipped trusted persisted policy mounts supported ext4, FAT32, and exFAT
 USB data volumes writable, as requested on 2026-10-12. Optical data volumes are
-read-only; configured rules and explicit mount actions may request read-only USB
-access. A requested writable mount that fails remains unmounted with a useful
+read-only; FAT12/FAT16 and recognized ISO9660/UDF data volumes on USB are
+read-only until separate write gates qualify a FAT variant.
+Configured rules and explicit mount actions may request read-only USB access.
+A requested writable mount that fails remains unmounted with a useful
 reason instead of silently changing mode. Inventory never formats or repairs
 media automatically. Mounts use restrictions suitable for data media, and labels
 cannot supply executable paths or shell commands.
@@ -522,13 +553,21 @@ Linux tool command lines, and raw transport details do not appear in ordinary
 user flows. Existing native apps, Vim, Lua, zsh, and shipped game ports require
 no filesystem-specific workaround.
 
-Use the nonempty volume label or uppercase canonical fallback (`DH0`, `USB0`,
+For mounted volumes, use the nonempty label or uppercase canonical fallback (`DH0`, `USB0`,
 `CD0`, `RAM0`). Duplicate labels remain separate generation-safe mount objects.
 Double-click opens Atlas at the selected volume's canonical root through the
 existing native launcher argument contract; labels are not launch paths.
 Successful unmount and media loss remove the icon; failed/busy unmount preserves
-it. Empty optical drives and unmounted/unsupported sources remain visible in
-device inventory without a mounted-volume desktop icon. Atlas and the desktop
+it. A present, unformatted partition or source with no recognized filesystem
+appears as `NDOS`, including each such partition of a multi-partition disk.
+`NDOS` is a display label for an exact source or empty medium, never a fake
+mount or filesystem name. Double-click reports that Astra cannot open it because
+no supported filesystem was found, without launching Atlas or guessing that
+the media are safe to erase. A recognized but unsupported format reports its
+detected type and the unavailable capability; it is not described as blank
+media. Probe I/O errors and ambiguous signatures report their own failure,
+not `NDOS`. Empty optical drives remain in device inventory
+without a desktop volume icon. Atlas and the desktop
 consume the same live native catalog as filesystem tools. Initial Atlas shows
 the selected root's real files and folders as named icons, with scrolling and
 truthful loading/empty/error/loss states. Subdirectory navigation, file actions,
@@ -536,11 +575,34 @@ sidebar/toolbar, and Atlas mount-management UI are deferred. The production
 volumes design records this minimum viewer scope; Atlas is not assumed to be an
 already implemented application.
 
-FS41. Later formatting, repair, and partition-edit operations require typed
-native administration requests naming an exact device/partition identity and
-generation. The provider checks in-use state and neighboring partition bounds;
-it never executes a shell command assembled from an application pathname. These
-operations require separate destructive-operation gates before being enabled.
+FS41. Selecting a physical disk or partition exposes `Disk > Format...` in the
+desktop menu bar. It launches the native Disk Setup application with the exact
+selected reference; it does not format from the desktop. Disk Setup shows the
+device, all its partitions, filesystem/partition-map identity, capacity,
+read-only state and mounted/busy state. It supports partition-map creation and
+partition create/delete before filesystem formatting, without assuming one
+volume per USB device or optical medium. Format choices are limited to
+qualified writable formats; AstraFS stays unavailable until its implementation
+and safety gates pass. Each recognized, mountable partition
+has its own catalog source and mount; read-only filesystems on USB are mounted
+read-only rather than hidden merely because their transport is USB. Optical
+media cannot be formatted through this path.
+
+Formatting and partition edits require typed native administration requests
+naming an exact device or partition identity and generation. The provider
+validates current identity, partition bounds, sibling mounts and users, system
+disk protection, write permission and format options immediately before the
+mutation. Disk Setup shows the exact target and data-loss consequence, then
+requires explicit confirmation; cancellation writes nothing. No application
+supplies a Linux path, assembles a host shell command, or bypasses native
+safe-removal/accounting. A completed change triggers fresh discovery/probe and
+catalog publication; a partial failure remains visible and cannot be reported
+as success. Destructive operations need separate disposable-media and physical
+gates before production enablement. Haiku's
+`src/apps/drivesetup/MainWindow.cpp` separates disk and partition actions,
+disables unsafe operations on mounted/read-only targets and validates before
+commit; Astra adapts those checks to exact native references and its one
+provider-owned lifecycle.
 
 ## Protocol and migration requirements
 
@@ -589,10 +651,13 @@ engine or automatic fallback remains in the release image.
 | 3 | Dynamic device/partition inventory and additional fixed/USB mounts. | Multiple devices/partitions, UUID conflicts, unsupported/unformatted media, mount rollback, busy unmount, real DE25 USB lifecycle. |
 | 4 | Optical media and desktop mount experience. | ISO9660/UDF data discs, media changes, busy eject, forced removal, notifications/rescan, DE25 optical drive evidence. |
 | 5 | Production cutover and removal of obsolete engines. | Exact-source release build, sustained load and fault gates, retained evidence, documentation/ABI reconciliation, old engines absent. |
+| 6 | First interoperability expansion, NDOS presentation and native Disk Setup. | FAT12/FAT16 and ISO9660/UDF on USB, multi-partition USB and optical fixtures, blank media, distinct probe faults, exact-reference menu handoff, system/read-only/busy refusals, canceled and failed format/partition edits leave data unchanged, successful edits rescan and publish correct mounts, physical read/write/recovery gates per writable format. |
+| 7 | Additional formats as individually qualified. | NTFS read-only and any later APFS/HFS+/XFS/Btrfs/Amiga support have their own format-specific semantic, failure, and physical-media evidence; unsupported variants keep clear inventory and open errors. |
 
-Network filesystem and destructive maintenance features enter this same
-contract after separate feature qualification. A phase cannot claim the whole
-PRD complete while its later required local-media gates remain outstanding.
+Network filesystem mounts remain outside this local-media contract. Destructive
+maintenance features enter only after their separate qualification. A phase
+cannot claim the whole PRD complete while its later required local-media gates
+remain outstanding.
 
 ## Storage inventory hotplug and mount control implementation plan
 

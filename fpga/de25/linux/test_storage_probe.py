@@ -29,6 +29,14 @@ def main():
             args.qemu_user, "-L", args.sysroot
         ]
         cases = [(image, label, "1")]
+        for bits, size, format_id in ((12, 4, "7"), (16, 32, "8")):
+            fat = str(Path(work) / f"fat{bits}.img")
+            with open(fat, "wb") as handle:
+                handle.truncate(size * 1024 * 1024)
+            subprocess.run(["/usr/sbin/mkfs.vfat", "-F", str(bits), "-n",
+                            f"ASTRA_FAT{bits}", fat], check=True,
+                           stdout=subprocess.DEVNULL)
+            cases.append((fat, f"ASTRA_FAT{bits}", format_id))
         iso_seed = Path(work) / "iso-seed"
         iso_seed.mkdir()
         (iso_seed / "Folder").mkdir()

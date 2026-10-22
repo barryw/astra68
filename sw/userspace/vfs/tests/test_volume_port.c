@@ -241,7 +241,9 @@ static void query_validation(void)
     assert(!astra_volume_page_valid(&query, &page));
     page.records[0].parent_generation = 2u;
     assert(astra_volume_page_valid(&query, &page));
-    page.records[0].format = ASTRA_VOLUME_TMPFS + 1u;
+    page.records[0].format = ASTRA_VOLUME_FAT12;
+    assert(astra_volume_page_valid(&query, &page));
+    page.records[0].format = ASTRA_VOLUME_FAT16 + 1u;
     assert(!astra_volume_page_valid(&query, &page));
 }
 int main(void)

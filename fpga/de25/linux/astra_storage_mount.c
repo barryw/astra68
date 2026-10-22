@@ -145,6 +145,8 @@ static const char *fstype(uint32_t format)
     switch (format) {
     case ASTRA_VOLUME_EXT4: return "ext4";
     case ASTRA_VOLUME_FAT32: return "vfat";
+    case ASTRA_VOLUME_FAT12: return "vfat";
+    case ASTRA_VOLUME_FAT16: return "vfat";
     case ASTRA_VOLUME_EXFAT: return "exfat";
     case ASTRA_VOLUME_ISO9660: return "iso9660";
     case ASTRA_VOLUME_UDF: return "udf";
@@ -412,7 +414,7 @@ int astra_storage_linux_prepare(AstraStorageDomain *domain,
         (type = fstype(record->format)) == NULL)
         return EINVAL;
     readonly = (record->flags & ASTRA_VOLUME_READ_ONLY) != 0u;
-    if (record->format == ASTRA_VOLUME_ISO9660 || record->format == ASTRA_VOLUME_UDF)
+    if (astra_storage_format_read_only(record->format))
         if (!readonly)
             return EROFS;
     if (record->format == ASTRA_VOLUME_TMPFS) {
@@ -495,7 +497,9 @@ int astra_storage_linux_attach(AstraStorageDomain *domain,
             (void)snprintf(options, sizeof(options), "utf8");
         if (record->format == ASTRA_VOLUME_UDF)
             (void)snprintf(options, sizeof(options), "iocharset=utf8");
-        if (record->format == ASTRA_VOLUME_FAT32 || record->format == ASTRA_VOLUME_EXFAT)
+        if (record->format == ASTRA_VOLUME_FAT12 ||
+            record->format == ASTRA_VOLUME_FAT16 ||
+            record->format == ASTRA_VOLUME_FAT32 || record->format == ASTRA_VOLUME_EXFAT)
             (void)snprintf(options, sizeof(options), "uid=%u,gid=%u,%s",
                 (unsigned)domain->uid, (unsigned)domain->gid,
                 record->format == ASTRA_VOLUME_EXFAT ? "iocharset=utf8" : "utf8=1");

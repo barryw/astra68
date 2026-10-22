@@ -76,7 +76,9 @@ enum AstraVolumeFormat {
     ASTRA_VOLUME_EXFAT,
     ASTRA_VOLUME_ISO9660,
     ASTRA_VOLUME_UDF,
-    ASTRA_VOLUME_TMPFS
+    ASTRA_VOLUME_TMPFS,
+    ASTRA_VOLUME_FAT12,
+    ASTRA_VOLUME_FAT16
 };
 
 /** Sources retain their actual origin instead of fabricating physical devices. */
@@ -126,7 +128,7 @@ typedef struct AstraVolumeRecord {
 /** Number of rows per catalog page; use next/sequence to reach every row. */
 #define ASTRA_VOLUME_PAGE_RECORDS 16u
 /** Native volume catalog wire version. */
-#define ASTRA_VOLUME_CATALOG_VERSION 1u
+#define ASTRA_VOLUME_CATALOG_VERSION 2u
 
 /** Sequence zero begins a new snapshot. Epoch zero is allowed only on that first page. */
 typedef struct AstraVolumeCatalogQuery {
