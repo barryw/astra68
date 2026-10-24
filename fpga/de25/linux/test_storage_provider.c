@@ -151,6 +151,11 @@ static void discovered_media(AstraStorageProvider *provider, const char *image)
     assert(openat(root, "forbidden", O_CREAT | O_WRONLY, 0600) == -1 && errno == EROFS);
     close(root);
     assert(unmount_wait(provider, replacement_mount, 1u) == 0);
+    assert(astra_storage_provider_eject(provider, replacement, 1u) == 0);
+    wait_work(provider);
+    const AstraStorageRecord *failed_eject = astra_storage_find(&provider->catalog, replacement);
+    assert(failed_eject != NULL && failed_eject->state == ASTRA_VOLUME_UNMOUNTED &&
+        failed_eject->error == EINVAL);
     ++observation.sequence;
     observation.action = ASTRA_STORAGE_OBSERVE_REMOVE;
     assert(astra_storage_discovery_observe(&discovery, &observation) == 0);

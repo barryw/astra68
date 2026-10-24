@@ -60,8 +60,10 @@ medium while a root directory handle retains the old Linux mount. The new
 medium gets a distinct source but cannot mount over the retained old bytes.
 After the handle closes and the old mount reaps, automount admits the new
 read-only source; root access and safe unmount pass. The same image/UUID is
-intentional, exercising generation fencing. Beast provider test passes both
-normally and under ASan/UBSan. Haiku reference:
+intentional, exercising generation fencing. The provider's actual eject
+worker then receives Linux `EINVAL` for `CDROMEJECT` on this loop device and
+leaves the source present, unmounted and carrying that error. Beast provider
+test passes both normally and under ASan/UBSan. Haiku reference:
 `src/system/kernel/disk_device_manager/KDiskDeviceManager.cpp` uninitializes
 old media before rescan, and `src/add-ons/kernel/drivers/disk/scsi/scsi_cd/scsi_cd.cpp`
 invalidates its I/O scheduler on media change; Astra retains its native
