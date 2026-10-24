@@ -24,7 +24,7 @@ spec.loader.exec_module(terminal_gate)
 
 # Bundles the system image ships, other than Terminal (the terminal gate's).
 APPLICATIONS = ("/apps/InterfaceGallery.app", "/apps/Fonts.app",
-                "/apps/Atlas.app",
+                "/apps/Atlas.app", "/apps/DiskSetup.app",
                 "/apps/SDLTestDraw2.app")
 
 
@@ -147,7 +147,9 @@ def main():
                                         work)
         try:
             if not machine.wait_for_serial(terminal_gate.BOOT_MARKER, 120):
-                raise RuntimeError("Astra did not finish booting")
+                raise RuntimeError("Astra did not finish booting: %s; serial=%s" %
+                                   (machine.said_with_syslog()[0][-40:],
+                                    machine.recent_serial(80)))
             for bundle in APPLICATIONS:
                 deadline = min(arguments.deadline, 1.0) if bundle == \
                     "/apps/InterfaceGallery.app" else arguments.deadline

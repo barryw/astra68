@@ -97,6 +97,13 @@ int main(int argc, char **argv)
     assert(pwrite(file, "Astra", 5u, 12) == 5 && fsync(file) == 0);
     close(file);
     close(root);
+    request = (AstraStorageControlRequest){.version = ASTRA_STORAGE_PROVIDER_VERSION,
+        .operation = ASTRA_STORAGE_CONTROL_PARTITION, .serial = 3u,
+        .epoch = reply.epoch, .target = system, .generation = generation,
+        .edit = {.operation = ASTRA_VOLUME_PARTITION_INITIALIZE,
+            .map = ASTRA_VOLUME_PARTITION_MAP_MBR}};
+    assert(astra_storage_control_call(3, &request, -1, &reply, &root) == 0 &&
+        reply.error == ENOTSUP && root == -1);
     puts("storage launcher client: exact volumes, root-owned data, zero privilege, FD confinement PASS");
     fflush(stdout);
     if (argc == 4) {

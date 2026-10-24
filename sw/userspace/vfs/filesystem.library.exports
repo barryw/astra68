@@ -1,5 +1,5 @@
 /* Tracked ABI source; generated linker maps remain ignored build products. */
-ASTRA_FILESYSTEM_14.0 {
+ASTRA_FILESYSTEM_15.0 {
     global:
         astra_volume_catalog;
         astra_volume_broker_info;
@@ -8,12 +8,15 @@ ASTRA_FILESYSTEM_14.0 {
         astra_volume_usage_snapshot_close;
         astra_volume_snapshot_open;
         astra_volume_snapshot_close;
+        astra_volume_snapshot_find;
+        astra_volume_snapshot_ancestor;
         astra_volume_root;
         astra_volume_control;
         astra_volume_image;
         astra_volume_watch_open;
         astra_volume_watch_receive;
         astra_volume_watch_close;
+        astra_volume_removal_advance;
         astra_assign_bind;
         astra_assign_bind_volume;
         astra_assign_join;
@@ -173,7 +176,15 @@ ASTRA_FILESYSTEM_14.0 {
         *;
 };
 
-ASTRA_FILESYSTEM_14.1 {
+ASTRA_FILESYSTEM_15.1 {
     global:
-        astra_volume_removal_advance;
-} ASTRA_FILESYSTEM_14.0;
+        astra_volume_format;
+        astra_volume_format_status;
+} ASTRA_FILESYSTEM_15.0;
+
+ASTRA_FILESYSTEM_15.2 {
+    global:
+        astra_volume_partition;
+        astra_volume_partition_status;
+        astra_volume_partition_find_free;
+} ASTRA_FILESYSTEM_15.1;

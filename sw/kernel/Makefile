@@ -277,7 +277,7 @@ $(BUILD_DIR)/utf8.o: ../common/utf8.c \
                          ../../ndk/include/astra/utf8.h | $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-$(BUILD_DIR)/process.o: process.c process.h format.h thread.h sync.h port.h area.h ring.h context.h handle.h block.h device.h interrupt.h \
+$(BUILD_DIR)/process.o: process.c process.h format.h thread.h sync.h port.h area.h ring.h context.h handle.h block.h device.h interrupt.h worker.h \
                         bytes.h \
                         generation.h \
                         object_cache.h allocation.h \

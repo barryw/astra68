@@ -1,0 +1,104 @@
+--- a/include/libexfat.h
++++ b/include/libexfat.h
+@@ -125,6 +125,7 @@
+ 
+ struct exfat_user_input {
+ 	const char *dev_name;
++	int inherited_fd;
+ 	const char *guid;
+ 	unsigned char *fat_table_buff;
+ 	unsigned int sector_size;
+--- a/lib/libexfat.c
++++ b/lib/libexfat.c
+@@ -211,6 +211,7 @@
+ void exfat_init_user_input(struct exfat_user_input *ui)
+ {
+ 	memset(ui, 0, sizeof(struct exfat_user_input));
++	ui->inherited_fd = -1;
+ 	ui->writeable = true;
+ 	ui->quick = true;
+ 	ui->discard = true;
+@@ -426,7 +427,8 @@
+ 		return -1;
+ 	}
+ 
+-	fd = open(ui->dev_name, ui->writeable ? O_RDWR|O_EXCL : O_RDONLY);
++	fd = ui->inherited_fd >= 3 ? dup(ui->inherited_fd) :
++		open(ui->dev_name, ui->writeable ? O_RDWR|O_EXCL : O_RDONLY);
+ 	if (fd < 0) {
+ 		exfat_err("open failed : %s, %s\n", ui->dev_name,
+ 			strerror(errno));
+--- a/mkfs/mkfs.c
++++ b/mkfs/mkfs.c
+@@ -873,6 +873,7 @@
+ #define PACK_BITMAP	(CHAR_MAX + 1)
+ #define UPCASE_FILE	(CHAR_MAX + 2)
+ #define BOOTCODE_MSG	(CHAR_MAX + 3)
++#define ASTRA_FD	(CHAR_MAX + 4)
+ 
+ static const struct option opts[] = {
+ 	{"volume-label",	required_argument,	NULL,	'L' },
+@@ -882,6 +883,7 @@
+ 	{"boundary-align",	required_argument,	NULL,	'b' },
+ 	{"upcase",		required_argument,	NULL,	UPCASE_FILE },
+ 	{"bootcode-msg",	required_argument,	NULL,	BOOTCODE_MSG },
++	{"astra-fd",		required_argument,	NULL,	ASTRA_FD },
+ 	{"pack-bitmap",		no_argument,		NULL,	PACK_BITMAP },
+ 	{"full-format",		no_argument,		NULL,	'f' },
+ 	{"force",		no_argument,		NULL,	'F' },
+@@ -1522,6 +1524,19 @@
+ 			ui.bootcode_msg = optarg;
+ 			/* A long message will just get truncated silently. */
+ 			break;
++		case ASTRA_FD:
++		{
++			char *end;
++			long descriptor;
++			errno = 0;
++			descriptor = strtol(optarg, &end, 10);
++			if (!*optarg || *end || errno || descriptor < 3 || descriptor > INT_MAX) {
++				ret = -EINVAL;
++				goto out;
++			}
++			ui.inherited_fd = (int)descriptor;
++			break;
++		}
+ 		case 'f':
+ 			ui.quick = false;
+ 			break;
+@@ -1574,7 +1589,7 @@
+ 		show_libblkid_version();
+ 	}
+ 
+-	if (argc - optind != 1) {
++	if (argc - optind != (ui.inherited_fd >= 3 ? 0 : 1)) {
+ 		usage();
+ 	}
+ 
+@@ -1585,7 +1600,16 @@
+ 		goto out;
+ 	}
+ 
+-	ui.dev_name = argv[optind];
++	ui.dev_name = ui.inherited_fd >= 3 ? "inherited block device" : argv[optind];
++	if (ui.inherited_fd >= 3) {
++		struct stat info;
++		int mode = fcntl(ui.inherited_fd, F_GETFL);
++		if (fstat(ui.inherited_fd, &info) != 0 || !S_ISBLK(info.st_mode) ||
++		    mode < 0 || (mode & O_ACCMODE) != O_RDWR) {
++			ret = -EINVAL;
++			goto out;
++		}
++	}
+ 
+ 	exfat_open_fd_devzero();
+ 
+@@ -1597,7 +1621,7 @@
+ 	if (ret < 0)
+ 		goto out;
+ 
+-	ret = check_existing_filesystem(&ui, quiet);
++	ret = ui.inherited_fd >= 3 ? 0 : check_existing_filesystem(&ui, quiet);
+ 	if (ret < 0)
+ 		goto out;
+ 

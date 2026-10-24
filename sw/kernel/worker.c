@@ -285,6 +285,11 @@ bool kernel_worker_work_pending(void)
     return worker_state == KERNEL_WORKER_READY && pending_work != 0u;
 }
 
+bool kernel_worker_servicing(void)
+{
+    return worker_state == KERNEL_WORKER_RUNNING;
+}
+
 static KernelWorkerStatus worker_service_failed(uint32_t work,
                                                  uint32_t class_index,
                                                  uint32_t status,

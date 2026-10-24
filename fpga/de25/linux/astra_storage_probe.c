@@ -2,13 +2,16 @@
 #include "astra_storage_probe.h"
 
 #include <blkid/blkid.h>
+#include <endian.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
 #include <limits.h>
+#include <linux/fs.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -47,6 +50,39 @@ static int value(blkid_probe probe, const char *name, char *text, size_t capacit
     return 0;
 }
 
+static int filesystem_extent(int fd, uint64_t offset, uint64_t length,
+                             uint32_t format)
+{
+    if (format != ASTRA_VOLUME_FAT12 && format != ASTRA_VOLUME_FAT16 &&
+        format != ASTRA_VOLUME_FAT32 && format != ASTRA_VOLUME_EXFAT)
+        return 0;
+    if (length < 512u) return EUCLEAN;
+    uint8_t boot[512];
+    ssize_t got;
+    do got = pread(fd, boot, sizeof(boot), (off_t)offset);
+    while (got < 0 && errno == EINTR);
+    if (got != (ssize_t)sizeof(boot)) return got < 0 ? errno : EIO;
+    if (format == ASTRA_VOLUME_EXFAT) {
+        uint64_t sectors;
+        memcpy(&sectors, boot + 72u, sizeof(sectors));
+        sectors = le64toh(sectors);
+        uint8_t shift = boot[108u];
+        return shift < 9u || shift > 12u || sectors == 0u ||
+            sectors > (length >> shift) ? EUCLEAN : 0;
+    }
+    uint16_t bytes_per_sector, sectors16;
+    uint32_t sectors32;
+    memcpy(&bytes_per_sector, boot + 11u, sizeof(bytes_per_sector));
+    memcpy(&sectors16, boot + 19u, sizeof(sectors16));
+    memcpy(&sectors32, boot + 32u, sizeof(sectors32));
+    bytes_per_sector = le16toh(bytes_per_sector);
+    uint64_t sectors = le16toh(sectors16);
+    if (sectors == 0u) sectors = le32toh(sectors32);
+    return bytes_per_sector < 512u || bytes_per_sector > 4096u ||
+        (bytes_per_sector & (bytes_per_sector - 1u)) != 0u ||
+        sectors == 0u || sectors > length / bytes_per_sector ? EUCLEAN : 0;
+}
+
 static void inspect(int fd, uint64_t offset, uint64_t length,
                       AstraStorageProbeResult *result)
 {
@@ -76,6 +112,8 @@ static void inspect(int fd, uint64_t offset, uint64_t length,
         result->error = errno == 0 ? EIO : errno;
     } else if (status == 0) {
         int error = value(probe, "TYPE", type, sizeof(type));
+        if (error == 0 && type[0] != '\0')
+            memcpy(result->detected_type, type, strlen(type) + 1u);
         if (error == 0)
             error = value(probe, "VERSION", version, sizeof(version));
         if (error == 0)
@@ -93,6 +131,8 @@ static void inspect(int fd, uint64_t offset, uint64_t length,
                     result->format = ASTRA_VOLUME_FAT16;
                 else if (strcmp(version, "FAT32") == 0)
                     result->format = ASTRA_VOLUME_FAT32;
+                else
+                    result->format = ASTRA_VOLUME_UNSUPPORTED;
             } else if (strcmp(type, "exfat") == 0)
                 result->format = ASTRA_VOLUME_EXFAT;
             else if (strcmp(type, "ntfs") == 0)
@@ -101,7 +141,11 @@ static void inspect(int fd, uint64_t offset, uint64_t length,
                 result->format = ASTRA_VOLUME_ISO9660;
             else if (strcmp(type, "udf") == 0)
                 result->format = ASTRA_VOLUME_UDF;
+            else if (type[0] != '\0')
+                result->format = ASTRA_VOLUME_UNSUPPORTED;
         }
+        if (result->error == 0)
+            result->error = filesystem_extent(fd, offset, length, result->format);
     }
     blkid_free_probe(probe);
 }
@@ -164,6 +208,16 @@ int astra_storage_probe_start(AstraStorageProbe *probe, int source_fd,
             offset > (uint64_t)info.st_size ||
             length > (uint64_t)info.st_size - offset)))
         return EINVAL;
+    if (length == 0u) {
+        uint64_t capacity = 0u;
+        if (S_ISREG(info.st_mode))
+            capacity = (uint64_t)info.st_size;
+        else if (ioctl(source_fd, BLKGETSIZE64, &capacity) != 0)
+            return errno;
+        if (capacity <= offset || capacity - offset > INT64_MAX)
+            return EINVAL;
+        length = capacity - offset;
+    }
     if (geteuid() != 0 && (uid != geteuid() || gid != getegid()))
         return EACCES;
     now = now_ns();
@@ -226,10 +280,11 @@ int astra_storage_probe_poll(AstraStorageProbe *probe,
             received.source == probe->source &&
             received.generation == probe->generation &&
             received.completed_ns != 0u &&
-            received.error >= 0 && received.format <= ASTRA_VOLUME_NTFS &&
+            received.error >= 0 && received.format <= ASTRA_VOLUME_UNSUPPORTED &&
             received.ambiguous <= 1u &&
             memchr(received.uuid, '\0', sizeof(received.uuid)) != NULL &&
-            memchr(received.label, '\0', sizeof(received.label)) != NULL)
+            memchr(received.label, '\0', sizeof(received.label)) != NULL &&
+            memchr(received.detected_type, '\0', sizeof(received.detected_type)) != NULL)
             *result = received;
         else
             result->error = EPROTO;

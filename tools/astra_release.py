@@ -146,6 +146,9 @@ def create(destination, specifications):
 
 def _readonly(root):
     files, directories = _tree(root)
+    if os.geteuid() == 0:
+        for path in [root] + [root / name for name in files + directories]:
+            os.chown(path, 0, 0)
     for name in files:
         path = root / name
         path.chmod(0o555 if path.stat().st_mode & 0o111 else 0o444)

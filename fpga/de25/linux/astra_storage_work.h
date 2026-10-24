@@ -8,7 +8,9 @@ enum AstraStorageWorkOperation {
     ASTRA_STORAGE_WORK_ATTACH = 1,
     ASTRA_STORAGE_WORK_DETACH,
     ASTRA_STORAGE_WORK_PATH,
-    ASTRA_STORAGE_WORK_EJECT
+    ASTRA_STORAGE_WORK_EJECT,
+    ASTRA_STORAGE_WORK_FORMAT,
+    ASTRA_STORAGE_WORK_PARTITION
 };
 
 typedef struct AstraStorageWork {
@@ -21,6 +23,7 @@ typedef struct AstraStorageWork {
     uint64_t serial;
     uint64_t epoch;
     uint32_t path_operation;
+    uint64_t deadline_ns;
 } AstraStorageWork;
 
 typedef struct AstraStorageWorkReply {
@@ -41,9 +44,21 @@ int astra_storage_work_start(AstraStorageWork *work, const AstraStorageDomain *d
 int astra_storage_work_path_start(AstraStorageWork *work, const AstraStorageRecord *record,
                                    int allowed_root, const AstraStoragePathRequest *request,
                                    const int fds[ASTRA_STORAGE_PROVIDER_FDS]);
+/* Formatter executable and exact exclusive block FD are opened by provider.
+ * Child drops to provider user before exec and receives no device path. */
+int astra_storage_work_format_start(AstraStorageWork *work,
+    const AstraStorageRecord *record, int device, int executable,
+    uint32_t format, const char *label, uid_t uid, gid_t gid);
+/* Fixed-command disk edit. Provider validates all sibling usage and holds the
+ * exact exclusive parent-disk FD. The child runs the verified partition tool
+ * as root because stock sfdisk reopens /proc/self/fd/3 after exec. */
+int astra_storage_work_partition_start(AstraStorageWork *work,
+    const AstraStorageRecord *record, int device, int executable,
+    const AstraVolumePartitionEdit *edit);
 void astra_storage_work_cancel(AstraStorageWork *work);
 /* 0 pending; 1 reaped (reply.error may be nonzero); negative invalid job. */
 int astra_storage_work_poll(AstraStorageWork *work, AstraStorageWorkReply *reply, int *root);
 int astra_storage_work_path_poll(AstraStorageWork *work, AstraStoragePathReply *reply, int *result);
+int astra_storage_work_edit_poll(AstraStorageWork *work, int *error);
 
 #endif

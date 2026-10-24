@@ -75,6 +75,21 @@ int astra_storage_provider_unmount(AstraStorageProvider *provider, uint64_t moun
                                     uint64_t generation);
 int astra_storage_provider_eject(AstraStorageProvider *provider, uint64_t source,
     uint64_t generation);
+/* Only provider's QEMU peer may request a format, after native admin checks.
+ * Admission is asynchronous; query the exact prior generation for result. */
+int astra_storage_provider_format(AstraStorageProvider *provider, uint64_t source,
+    uint64_t generation, uint32_t format, const char *label);
+int astra_storage_provider_format_status(AstraStorageProvider *provider,
+    uint64_t source, uint64_t generation, int *result);
+/* Provider resource half of parent-disk edit admission. Catalog checks
+ * mounts and policy; this checks children that have not finished work yet. */
+int astra_storage_provider_device_idle(AstraStorageProvider *provider, uint64_t device);
+/* Exact-device partition edit; catalog and live-resource admission fence all
+ * descendants before the worker changes the retained physical disk. */
+int astra_storage_provider_partition(AstraStorageProvider *provider,
+    uint64_t device, uint64_t generation, const AstraVolumePartitionEdit *edit);
+int astra_storage_provider_partition_status(AstraStorageProvider *provider,
+    uint64_t device, uint64_t generation, int *result);
 /* Retire an admitted ISO/UDF image source only after dependent mounts are gone.
  * Cancellation remains charged until its actual child and lease retire. */
 int astra_storage_provider_release_image(AstraStorageProvider *provider, uint64_t source,

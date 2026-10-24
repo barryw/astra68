@@ -37,7 +37,7 @@ LIBRARY_FLAGS := $(filter-out -flto,$(TARGET_FLAGS)) \
 CXX_TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -flto \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 
-SOURCES := src/startup.c src/console.c src/poll.c src/socket.c src/socket_interface.c src/inet.c src/netdb_compat.c src/terminal.c src/file.c src/heap.c src/alloc.c src/time.c src/pthread.c \
+SOURCES := src/startup.c src/console.c src/poll.c src/socket.c src/socket_interface.c src/inet.c src/netdb_compat.c src/terminal.c src/file.c src/heap.c src/alloc.c src/time.c src/pthread.c src/semaphore.c \
 	src/system.c src/scheduling.c src/signal.c \
 	src/identity.c src/process.c src/proc_control.c src/resource.c src/strftime_format.c src/path.c \
 	src/unistd_compat.c src/exec_compat.c src/dirent_compat.c \
@@ -70,7 +70,7 @@ PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 STREAMS_LIBRARY := $(STREAMS)/build/m68k/libraries/streams.library.1
-FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.14
+FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.15
 NETWORK_LIBRARY := $(NETWORK)/build/m68k/libraries/network.library.1
 NETWORK_LIB := $(NETWORK)/build/m68k/libastranetwork.a
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
@@ -91,6 +91,7 @@ SOCKET_ADDRESS_TEST := build/host/test_socket_address
 HOST_LOOKUP_TEST := build/host/test_host_lookup
 INTERFACE_TEST := build/host/test_socket_interface
 PTHREAD_TEST := build/host/test_pthread
+SEMAPHORE_TEST := build/host/test_semaphore
 RESOURCE_TEST := build/host/test_resource
 SCHEDULING_TEST := build/host/test_scheduling
 HEAP_TEST := build/host/test_heap
@@ -207,7 +208,7 @@ $(LIBC_LIBRARY): $(LIBC_IDENTITY) $(LIBRARY_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
 		-L$(dir $(NETWORK_LIBRARY)) \
 		-Wl,--no-as-needed \
-		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.14 \
+		-Wl,-l:streams.library.1 -Wl,-l:filesystem.library.15 \
 		-Wl,-l:network.library.1 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		-Wl,--start-group $(PICOLIBC_LIB) $(PICOLIBC_MATH) \
@@ -232,7 +233,7 @@ libc-library-contract: $(LIBC_LIBRARY)
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [streams.library.1]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
-		grep -Fc 'Shared library: [filesystem.library.14]')" = 1
+		grep -Fc 'Shared library: [filesystem.library.15]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
 		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $(LIBC_LIBRARY) | \
@@ -341,6 +342,11 @@ $(PTHREAD_TEST): src/pthread.c tests/test_pthread.c
 		-D_BITS_PTHREADTYPES_COMMON_H=1 \
 		-D__have_pthread_attr_t=1 \
 		-DASTRA_PTHREAD_NO_LIBC_LOCKS=1 $^ -o $@
+
+$(SEMAPHORE_TEST): src/semaphore.c tests/test_semaphore.c
+	@mkdir -p $(@D)
+	$(HOST_CC) -Iinclude -I../../include -I$(NDK)/include \
+		$(COMMON_FLAGS) -O2 $^ -o $@
 
 $(RESOURCE_TEST): src/resource.c tests/test_resource.c
 	@mkdir -p $(@D)
@@ -489,7 +495,7 @@ $(LINK_CONTRACT): tests/link_standard_main.c kit/program.c $(LIBC_LIBRARY) \
 		--needed compiler.library.2 $@
 	@echo "astra posix dynamic standard main link: PASS"
 
-test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SIGNAL_TEST) $(SOCKET_ADDRESS_TEST) $(HOST_LOOKUP_TEST) $(INTERFACE_TEST) $(PTHREAD_TEST) $(RESOURCE_TEST) $(SCHEDULING_TEST) $(HEAP_TEST) $(ALLOC_TEST) $(UNISTD_COMPAT_TEST) $(ENTROPY_TEST) $(EXEC_COMPAT_TEST) $(DIRENT_COMPAT_TEST) $(TIME_COMPAT_TEST) $(TEMP_COMPAT_TEST) $(LIMITS_CONTRACT) $(SYSMACROS_CONTRACT) $(CXX_HEADERS_CONTRACT) $(LINK_CONTRACT) $(CXX_LINK_CONTRACT)
+test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) $(IDENTITY_TEST) $(PROCESS_TEST) $(SIGNAL_TEST) $(SOCKET_ADDRESS_TEST) $(HOST_LOOKUP_TEST) $(INTERFACE_TEST) $(PTHREAD_TEST) $(SEMAPHORE_TEST) $(RESOURCE_TEST) $(SCHEDULING_TEST) $(HEAP_TEST) $(ALLOC_TEST) $(UNISTD_COMPAT_TEST) $(ENTROPY_TEST) $(EXEC_COMPAT_TEST) $(DIRENT_COMPAT_TEST) $(TIME_COMPAT_TEST) $(TEMP_COMPAT_TEST) $(LIMITS_CONTRACT) $(SYSMACROS_CONTRACT) $(CXX_HEADERS_CONTRACT) $(LINK_CONTRACT) $(CXX_LINK_CONTRACT)
 	./$(HOST_TEST)
 	./$(PATH_TEST)
 	./$(DESCRIPTOR_TEST)
@@ -502,6 +508,7 @@ test: $(HOST_TEST) $(PATH_TEST) $(DESCRIPTOR_TEST) $(STARTUP_TEST) $(POLL_TEST) 
 	./$(HOST_LOOKUP_TEST)
 	./$(INTERFACE_TEST)
 	./$(PTHREAD_TEST)
+	./$(SEMAPHORE_TEST)
 	./$(RESOURCE_TEST)
 	./$(SCHEDULING_TEST)
 	./$(HEAP_TEST)

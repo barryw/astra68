@@ -36,7 +36,10 @@ for required in (
     "source/SOURCE_SHA256SUMS=",
     "storage-provider-target",
     "bin/astra-storage=",
-    "bin/astra-storage-image.py=",
+    "bin/astra-mkfs.fat=",
+    "bin/astra-mkfs.exfat=",
+    "bin/storage_image.py=",
+    "bin/astra-system-image-migrate.py=",
     "kernel/package/$relative=",
     "kernel/package/SHA256SUMS=",
     "bin/astra-kernel-install.py=",
@@ -84,7 +87,8 @@ for stale_provider in (False, True):
             "fpga/de25/astra.service", "fpga/de25/astra-audio-host.service",
             "fpga/de25/astra-remote-desktop.service", "fpga/de25/99-astra-qemu.rules",
             "fpga/de25/linux/kernel/install-production-storage.py",
-            "emu/qemu/storage_image.py", "emu/qemu/astra-input-hotplug.py",
+            "emu/qemu/storage_image.py", "emu/qemu/migrate-system-image.py",
+            "emu/qemu/astra-input-hotplug.py",
             "emu/qemu/run-arty.sh", "emu/qemu/runtime-supervisor.py",
             "emu/qemu/astra-top.py", "emu/qemu/de25-ab.sh", "emu/qemu/de25-rfb.py",
             "emu/qemu/fs-baseline.py",
@@ -96,6 +100,17 @@ for stale_provider in (False, True):
             target.write_text("fixture " + name + "\n")
         (tree / "fpga/arty/linux").mkdir(parents=True)
         (tree / "fpga/de25/linux").mkdir(exist_ok=True)
+        formatter_build = tree / "third_party/storage-format/build.sh"
+        formatter_build.parent.mkdir(parents=True)
+        formatter_build.write_text('''#!/bin/sh
+set -eu
+test "$1" = de25
+directory=$(dirname "$0")/../../build/storage-format/de25
+mkdir -p "$directory"
+printf 'fresh fat formatter\\n' > "$directory/astra-mkfs.fat"
+printf 'fresh exfat formatter\\n' > "$directory/astra-mkfs.exfat"
+chmod 755 "$directory/astra-mkfs.fat" "$directory/astra-mkfs.exfat"
+''')
         fake_bin = fixture / "bin"
         fake_bin.mkdir()
         make = fake_bin / "make"
@@ -169,9 +184,13 @@ for product in products:
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             assert result.returncode == 0, result.stdout
             assert (output / "bin/astra-storage").read_bytes() == b"fresh astra-storage-aarch64\n"
-            selector = output / "bin/astra-storage-image.py"
+            assert (output / "bin/astra-mkfs.fat").read_bytes() == b"fresh fat formatter\n"
+            assert (output / "bin/astra-mkfs.exfat").read_bytes() == b"fresh exfat formatter\n"
+            selector = output / "bin/storage_image.py"
             assert selector.read_text() == "fixture emu/qemu/storage_image.py\n"
             assert selector.stat().st_mode & 0o111 == 0
+            assert (output / "bin/astra-system-image-migrate.py").read_text() == \
+                "fixture emu/qemu/migrate-system-image.py\n"
             assert provider.read_bytes() == (output / "bin/astra-storage").read_bytes()
             assert (output / "bin/astra-font-worker").read_bytes() == \
                 b"fresh astra-font-worker-aarch64\n"

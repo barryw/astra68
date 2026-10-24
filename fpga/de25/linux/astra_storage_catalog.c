@@ -151,12 +151,20 @@ int astra_storage_binding(AstraStorageCatalog *catalog, uint64_t mount,
 }
 
 int astra_storage_device(AstraStorageCatalog *catalog, uint32_t class_id,
+                         uint32_t partition_map, uint64_t capacity_bytes,
                          uint64_t *id)
 {
-    if (class_id < ASTRA_VOLUME_FIXED || class_id > ASTRA_VOLUME_OPTICAL)
+    if (class_id < ASTRA_VOLUME_FIXED || class_id > ASTRA_VOLUME_OPTICAL ||
+        partition_map > ASTRA_VOLUME_PARTITION_MAP_OTHER)
         return EINVAL;
-    return add(catalog, ASTRA_VOLUME_DEVICE, NULL, class_id,
-               ASTRA_VOLUME_DISCOVERED, id);
+    int error = add(catalog, ASTRA_VOLUME_DEVICE, NULL, class_id,
+                    ASTRA_VOLUME_DISCOVERED, id);
+    if (error == 0) {
+        AstraStorageRecord *record = find(catalog, *id);
+        record->partition_map = partition_map;
+        record->capacity_bytes = capacity_bytes;
+    }
+    return error;
 }
 
 static int child(AstraStorageCatalog *catalog, uint64_t parent_id,
@@ -173,6 +181,9 @@ static int child(AstraStorageCatalog *catalog, uint64_t parent_id,
         return ESTALE;
     if (parent->kind != parent_kind)
         return EINVAL;
+    if (kind == ASTRA_VOLUME_MEDIUM &&
+        parent->state == ASTRA_VOLUME_PARTITIONING)
+        return EBUSY;
     if (kind == ASTRA_VOLUME_MEDIUM)
         for (AstraStorageEntry *entry = catalog->entries; entry != NULL;
              entry = entry->next)
@@ -190,10 +201,90 @@ int astra_storage_medium(AstraStorageCatalog *catalog, uint64_t device,
 }
 
 int astra_storage_source(AstraStorageCatalog *catalog, uint64_t medium,
-                         uint64_t generation, uint64_t *id)
+                         uint64_t generation, uint32_t partition_map,
+                         uint32_t partition_number, uint64_t offset_bytes,
+                         uint64_t capacity_bytes, uint64_t *id)
 {
-    return child(catalog, medium, generation, ASTRA_VOLUME_MEDIUM,
-                 ASTRA_VOLUME_SOURCE, ASTRA_VOLUME_PROBING, id);
+    if (partition_map > ASTRA_VOLUME_PARTITION_MAP_OTHER ||
+        (partition_number == 0u && offset_bytes != 0u) ||
+        (partition_number != 0u && (capacity_bytes == 0u ||
+            offset_bytes > UINT64_MAX - capacity_bytes)))
+        return EINVAL;
+    if (catalog != NULL) {
+        const AstraStorageRecord *parent = find(catalog, medium);
+        if (live(parent) && parent->generation == generation &&
+            parent->kind == ASTRA_VOLUME_MEDIUM) {
+            const AstraStorageRecord *device = find(catalog, parent->parent);
+            if (!live(device) || device->generation != parent->parent_generation ||
+                device->kind != ASTRA_VOLUME_DEVICE)
+                return ESTALE;
+            if (device->state == ASTRA_VOLUME_PARTITIONING)
+                return EBUSY;
+            if (partition_number != 0u && device->capacity_bytes != 0u &&
+                (offset_bytes > device->capacity_bytes ||
+                 capacity_bytes > device->capacity_bytes - offset_bytes))
+                return EINVAL;
+        }
+    }
+    int error = child(catalog, medium, generation, ASTRA_VOLUME_MEDIUM,
+                      ASTRA_VOLUME_SOURCE, ASTRA_VOLUME_PROBING, id);
+    if (error == 0) {
+        AstraStorageRecord *record = find(catalog, *id);
+        record->partition_map = partition_map;
+        record->partition_number = partition_number;
+        record->offset_bytes = offset_bytes;
+        record->capacity_bytes = capacity_bytes;
+    }
+    return error;
+}
+
+int astra_storage_device_geometry(AstraStorageCatalog *catalog, uint64_t id,
+                                  uint64_t generation, uint32_t partition_map,
+                                  uint64_t capacity_bytes)
+{
+    if (catalog == NULL)
+        return EINVAL;
+    AstraStorageRecord *record = find(catalog, id);
+    if (!live(record) || record->generation != generation)
+        return ESTALE;
+    if (catalog->sequence == UINT64_MAX ||
+        partition_map > ASTRA_VOLUME_PARTITION_MAP_OTHER ||
+        record->kind != ASTRA_VOLUME_DEVICE)
+        return EINVAL;
+    if (record->state == ASTRA_VOLUME_PARTITIONING)
+        return EBUSY;
+    if (record->partition_map == partition_map &&
+        record->capacity_bytes == capacity_bytes)
+        return 0;
+    record->partition_map = partition_map;
+    record->capacity_bytes = capacity_bytes;
+    return changed(catalog);
+}
+
+int astra_storage_physical_read_only(AstraStorageCatalog *catalog, uint64_t id,
+                                     uint64_t generation, int read_only)
+{
+    if (catalog == NULL || (read_only != 0 && read_only != 1))
+        return EINVAL;
+    AstraStorageRecord *record = find(catalog, id);
+    if (!live(record) || record->generation != generation)
+        return ESTALE;
+    if ((record->kind != ASTRA_VOLUME_DEVICE && record->kind != ASTRA_VOLUME_SOURCE) ||
+        (record->kind == ASTRA_VOLUME_SOURCE &&
+            record->origin != ASTRA_VOLUME_ORIGIN_DEVICE))
+        return EINVAL;
+    uint32_t flags = read_only ?
+        record->flags | ASTRA_VOLUME_READ_ONLY | ASTRA_VOLUME_PHYSICAL_READ_ONLY :
+        record->flags & ~ASTRA_VOLUME_PHYSICAL_READ_ONLY;
+    if (!read_only && record->class_id != ASTRA_VOLUME_OPTICAL &&
+        !astra_storage_format_read_only(record->format))
+        flags &= ~ASTRA_VOLUME_READ_ONLY;
+    if (record->flags == flags)
+        return 0;
+    if (catalog->sequence == UINT64_MAX)
+        return EOVERFLOW;
+    record->flags = flags;
+    return changed(catalog);
 }
 
 int astra_storage_ram_source(AstraStorageCatalog *catalog, uint32_t flags, uint64_t *id)
@@ -293,14 +384,16 @@ static bool display_label(const char *label, size_t length)
 int astra_storage_probe_result(AstraStorageCatalog *catalog, uint64_t source,
                                uint64_t generation, uint32_t format,
                                const char *uuid, const char *label,
+                               const char *detected_type,
                                int ambiguous, int error)
 {
     AstraStorageRecord *record;
     size_t uuid_length;
     size_t label_length;
+    size_t type_length;
 
-    if (catalog == NULL || uuid == NULL || label == NULL || error < 0 ||
-        format > ASTRA_VOLUME_NTFS || catalog->sequence == UINT64_MAX)
+    if (catalog == NULL || uuid == NULL || label == NULL || detected_type == NULL || error < 0 ||
+        format > ASTRA_VOLUME_UNSUPPORTED || catalog->sequence == UINT64_MAX)
         return EINVAL;
     record = find(catalog, source);
     if (!live(record) || record->generation != generation)
@@ -310,17 +403,28 @@ int astra_storage_probe_result(AstraStorageCatalog *catalog, uint64_t source,
         return EINVAL;
     uuid_length = strnlen(uuid, sizeof(record->uuid));
     label_length = strnlen(label, sizeof(record->label));
+    type_length = strnlen(detected_type, sizeof(record->detected_type));
     if (uuid_length == sizeof(record->uuid) ||
-        label_length == sizeof(record->label))
+        label_length == sizeof(record->label) ||
+        type_length == sizeof(record->detected_type))
         return ENAMETOOLONG;
-    if (!display_label(uuid, uuid_length))
+    if (!display_label(uuid, uuid_length) || !display_label(detected_type, type_length) ||
+        (format == ASTRA_VOLUME_UNSUPPORTED && type_length == 0u))
         return EILSEQ;
+    record->flags &= ~(ASTRA_VOLUME_AMBIGUOUS_FORMAT | ASTRA_VOLUME_LABEL_INVALID |
+                       ASTRA_VOLUME_READ_ONLY);
+    record->label[0] = '\0';
     memcpy(record->uuid, uuid, uuid_length + 1u);
+    memcpy(record->detected_type, detected_type, type_length + 1u);
     if (display_label(label, label_length))
         memcpy(record->label, label, label_length + 1u);
     else
         record->flags |= ASTRA_VOLUME_LABEL_INVALID;
-    record->flags |= ambiguous ? ASTRA_VOLUME_AMBIGUOUS_FORMAT : 0u;
+    if (ambiguous) record->flags |= ASTRA_VOLUME_AMBIGUOUS_FORMAT;
+    if (record->class_id == ASTRA_VOLUME_OPTICAL ||
+        astra_storage_format_read_only(format) ||
+        (record->flags & ASTRA_VOLUME_PHYSICAL_READ_ONLY) != 0u)
+        record->flags |= ASTRA_VOLUME_READ_ONLY;
     record->format = format;
     record->error = error;
     record->state = error == 0 ? ASTRA_VOLUME_UNMOUNTED : ASTRA_VOLUME_FAILED;
@@ -332,7 +436,6 @@ static bool supported(uint32_t class_id, uint32_t format)
 {
     switch (class_id) {
     case ASTRA_VOLUME_FIXED:
-        return format == ASTRA_VOLUME_EXT4 || format == ASTRA_VOLUME_NTFS;
     case ASTRA_VOLUME_USB:
         return format == ASTRA_VOLUME_EXT4 || format == ASTRA_VOLUME_FAT32 ||
                format == ASTRA_VOLUME_EXFAT || format == ASTRA_VOLUME_FAT12 ||
@@ -395,13 +498,19 @@ int astra_storage_mount_begin(AstraStorageCatalog *catalog, uint64_t source,
         return ESTALE;
     if (record->kind != ASTRA_VOLUME_SOURCE)
         return EINVAL;
+    if (record->origin == ASTRA_VOLUME_ORIGIN_DEVICE) {
+        const AstraStorageRecord *medium = find(catalog, record->parent);
+        const AstraStorageRecord *device = medium == NULL ? NULL : find(catalog, medium->parent);
+        if (device != NULL && device->state == ASTRA_VOLUME_PARTITIONING)
+            return EBUSY;
+    }
     if (record->state != ASTRA_VOLUME_UNMOUNTED)
-        return record->state == ASTRA_VOLUME_PROBING ? EAGAIN : EINVAL;
+        return record->state == ASTRA_VOLUME_PROBING ? EAGAIN :
+            record->state == ASTRA_VOLUME_FORMATTING ? EBUSY : EINVAL;
     if (!supported(record->class_id, record->format) ||
         (record->flags & ASTRA_VOLUME_AMBIGUOUS_FORMAT) != 0u)
         return ENOTSUP;
-    if ((record->class_id == ASTRA_VOLUME_OPTICAL ||
-         astra_storage_format_read_only(record->format)) &&
+    if ((record->flags & ASTRA_VOLUME_READ_ONLY) != 0u &&
         (flags & ASTRA_VOLUME_READ_ONLY) == 0u)
         return EROFS;
     if ((flags & ASTRA_VOLUME_SYSTEM) != 0u &&
@@ -415,6 +524,30 @@ int astra_storage_mount_begin(AstraStorageCatalog *catalog, uint64_t source,
         return EINVAL;
     error = astra_storage_no_mounted_children(catalog, source);
     if (error != 0) return error;
+    if (record->origin == ASTRA_VOLUME_ORIGIN_DEVICE) {
+        const AstraStorageRecord *medium = find(catalog, record->parent);
+        if (medium == NULL || medium->kind != ASTRA_VOLUME_MEDIUM)
+            return ESTALE;
+        for (AstraStorageEntry *entry = catalog->entries; entry != NULL;
+             entry = entry->next) {
+            const AstraStorageRecord *sibling = &entry->record;
+            if (sibling->id == source || sibling->kind != ASTRA_VOLUME_SOURCE ||
+                sibling->origin != ASTRA_VOLUME_ORIGIN_DEVICE)
+                continue;
+            const AstraStorageRecord *sibling_medium = find(catalog, sibling->parent);
+            if (sibling_medium == NULL || sibling_medium->kind != ASTRA_VOLUME_MEDIUM ||
+                sibling_medium->parent != medium->parent)
+                continue;
+            if (sibling->state == ASTRA_VOLUME_FORMATTING)
+                return EBUSY;
+            if (record->capacity_bytes == 0u || sibling->capacity_bytes == 0u ||
+                (record->offset_bytes < sibling->offset_bytes + sibling->capacity_bytes &&
+                 sibling->offset_bytes < record->offset_bytes + record->capacity_bytes)) {
+                error = astra_storage_no_mounted_children(catalog, sibling->id);
+                if (error != 0) return error;
+            }
+        }
+    }
     for (AstraStorageEntry *entry = catalog->entries; entry != NULL;
          entry = entry->next)
         if ((flags & ASTRA_VOLUME_TEMPORARY) != 0u &&
@@ -605,13 +738,170 @@ int astra_storage_no_mounted_children(const AstraStorageCatalog *catalog, uint64
 {
     if (catalog == NULL) return EINVAL;
     if (astra_storage_find(catalog, source) == NULL) return ESTALE;
-    for (AstraStorageEntry *entry = catalog->entries; entry != NULL; entry = entry->next)
-        if (entry->record.parent == source && (entry->record.linux_mount_id != 0u ||
+    for (AstraStorageEntry *entry = catalog->entries; entry != NULL; entry = entry->next) {
+        const AstraStorageRecord *ancestor = &entry->record;
+        while (ancestor != NULL && ancestor->parent != 0u && ancestor->parent != source)
+            ancestor = astra_storage_find(catalog, ancestor->parent);
+        if (ancestor != NULL && ancestor->parent == source &&
+            (entry->record.linux_mount_id != 0u ||
             entry->record.state == ASTRA_VOLUME_MOUNTING || entry->record.state == ASTRA_VOLUME_MOUNTED ||
             entry->record.state == ASTRA_VOLUME_QUIESCING || entry->mounting_generation != 0u ||
             (entry->record.flags & ASTRA_VOLUME_CLEANUP_PENDING) != 0u))
             return EBUSY;
+    }
     return 0;
+}
+
+int astra_storage_partition_can_edit(const AstraStorageCatalog *catalog,
+    uint64_t device, uint64_t generation)
+{
+    if (catalog == NULL) return EINVAL;
+    const AstraStorageRecord *record = astra_storage_find(catalog, device);
+    if (!live(record) || record->generation != generation)
+        return ESTALE;
+    if (record->kind != ASTRA_VOLUME_DEVICE ||
+        (record->class_id != ASTRA_VOLUME_FIXED &&
+         record->class_id != ASTRA_VOLUME_USB))
+        return ENOTSUP;
+    if ((record->flags & ASTRA_VOLUME_SYSTEM) != 0u) return EACCES;
+    if ((record->flags & ASTRA_VOLUME_PHYSICAL_READ_ONLY) != 0u) return EROFS;
+    if (record->state != ASTRA_VOLUME_DISCOVERED || record->capacity_bytes == 0u)
+        return EBUSY;
+    int error = astra_storage_no_mounted_children(catalog, device);
+    if (error != 0) return error;
+    for (AstraStorageEntry *entry = catalog->entries; entry != NULL;
+         entry = entry->next) {
+        const AstraStorageRecord *child = &entry->record;
+        if (child->kind != ASTRA_VOLUME_SOURCE ||
+            child->state != ASTRA_VOLUME_FORMATTING)
+            continue;
+        const AstraStorageRecord *medium = astra_storage_find(catalog, child->parent);
+        if (medium != NULL && medium->parent == device)
+            return EBUSY;
+    }
+    return 0;
+}
+
+int astra_storage_partition_begin(AstraStorageCatalog *catalog,
+    uint64_t device, uint64_t generation)
+{
+    int error = astra_storage_partition_can_edit(catalog, device, generation);
+    if (error != 0) return error;
+    AstraStorageRecord *record = find(catalog, device);
+    if (catalog->sequence == UINT64_MAX || record->generation == UINT64_MAX)
+        return EOVERFLOW;
+    record->state = ASTRA_VOLUME_PARTITIONING;
+    record->error = 0;
+    return changed(catalog);
+}
+
+int astra_storage_partition_abort(AstraStorageCatalog *catalog,
+    uint64_t device, uint64_t generation)
+{
+    if (catalog == NULL || catalog->sequence == UINT64_MAX) return EINVAL;
+    AstraStorageRecord *record = find(catalog, device);
+    if (!live(record) || record->generation != generation) return ESTALE;
+    if (record->kind != ASTRA_VOLUME_DEVICE ||
+        record->state != ASTRA_VOLUME_PARTITIONING) return EINVAL;
+    record->state = ASTRA_VOLUME_DISCOVERED;
+    return changed(catalog);
+}
+
+int astra_storage_partition_complete(AstraStorageCatalog *catalog,
+    uint64_t device, uint64_t generation, int result)
+{
+    if (catalog == NULL || result < 0 || result > 4095 ||
+        catalog->sequence == UINT64_MAX) return EINVAL;
+    AstraStorageRecord *record = find(catalog, device);
+    if (!live(record) || record->generation != generation) return ESTALE;
+    if (record->kind != ASTRA_VOLUME_DEVICE ||
+        record->state != ASTRA_VOLUME_PARTITIONING) return EINVAL;
+    for (AstraStorageEntry *entry = catalog->entries; entry != NULL;
+         entry = entry->next)
+        if (entry->record.generation == UINT64_MAX)
+            return EOVERFLOW;
+    int error = astra_storage_no_mounted_children(catalog, device);
+    if (error != 0) return error;
+    lose_children(catalog, device);
+    ++record->generation;
+    record->state = ASTRA_VOLUME_DISCOVERED;
+    record->partition_map = ASTRA_VOLUME_PARTITION_MAP_OTHER;
+    record->error = result;
+    duplicate_uuids(catalog);
+    return changed(catalog);
+}
+
+int astra_storage_format_begin(AstraStorageCatalog *catalog, uint64_t source,
+    uint64_t generation)
+{
+    if (catalog == NULL || catalog->sequence == UINT64_MAX) return EINVAL;
+    AstraStorageRecord *record = find(catalog, source);
+    if (!live(record) || record->generation != generation) return ESTALE;
+    if (record->kind != ASTRA_VOLUME_SOURCE ||
+        record->origin != ASTRA_VOLUME_ORIGIN_DEVICE ||
+        (record->class_id != ASTRA_VOLUME_USB && record->class_id != ASTRA_VOLUME_FIXED))
+        return ENOTSUP;
+    if (record->generation == UINT64_MAX) return EOVERFLOW;
+    if (record->state != ASTRA_VOLUME_UNMOUNTED &&
+        record->state != ASTRA_VOLUME_FAILED) return EBUSY;
+    const AstraStorageRecord *medium = find(catalog, record->parent);
+    const AstraStorageRecord *device = medium == NULL ? NULL : find(catalog, medium->parent);
+    if (!live(medium) || medium->kind != ASTRA_VOLUME_MEDIUM ||
+        medium->generation != record->parent_generation ||
+        !live(device) || device->kind != ASTRA_VOLUME_DEVICE ||
+        device->generation != medium->parent_generation)
+        return ESTALE;
+    if (device->state == ASTRA_VOLUME_PARTITIONING)
+        return EBUSY;
+    if ((record->flags | device->flags) & ASTRA_VOLUME_PHYSICAL_READ_ONLY)
+        return EROFS;
+    if ((record->flags | device->flags) & ASTRA_VOLUME_SYSTEM)
+        return EACCES;
+    int error = astra_storage_no_mounted_children(catalog, device->id);
+    if (error != 0) return error;
+    for (AstraStorageEntry *entry = catalog->entries; entry != NULL; entry = entry->next) {
+        const AstraStorageRecord *sibling = &entry->record;
+        if (sibling->state != ASTRA_VOLUME_FORMATTING) continue;
+        const AstraStorageRecord *parent = find(catalog, sibling->parent);
+        if (parent != NULL && parent->parent == device->id) return EBUSY;
+    }
+    record->state = ASTRA_VOLUME_FORMATTING;
+    record->error = 0;
+    return changed(catalog);
+}
+
+int astra_storage_format_complete(AstraStorageCatalog *catalog, uint64_t source,
+    uint64_t generation)
+{
+    if (catalog == NULL || catalog->sequence == UINT64_MAX) return EINVAL;
+    AstraStorageRecord *record = find(catalog, source);
+    if (!live(record) || record->generation != generation) return ESTALE;
+    if (record->kind != ASTRA_VOLUME_SOURCE || record->state != ASTRA_VOLUME_FORMATTING)
+        return EINVAL;
+    if (record->generation == UINT64_MAX) return EOVERFLOW;
+    ++record->generation;
+    record->state = ASTRA_VOLUME_PROBING;
+    record->format = ASTRA_VOLUME_FORMAT_UNKNOWN;
+    record->error = 0;
+    record->uuid[0] = record->label[0] = record->detected_type[0] = '\0';
+    record->flags &= ~(ASTRA_VOLUME_AMBIGUOUS_FORMAT | ASTRA_VOLUME_LABEL_INVALID |
+                       ASTRA_VOLUME_DUPLICATE_UUID);
+    if ((record->flags & ASTRA_VOLUME_PHYSICAL_READ_ONLY) == 0u)
+        record->flags &= ~ASTRA_VOLUME_READ_ONLY;
+    duplicate_uuids(catalog);
+    return changed(catalog);
+}
+
+int astra_storage_format_abort(AstraStorageCatalog *catalog, uint64_t source,
+    uint64_t generation)
+{
+    if (catalog == NULL || catalog->sequence == UINT64_MAX) return EINVAL;
+    AstraStorageRecord *record = find(catalog, source);
+    if (!live(record) || record->generation != generation) return ESTALE;
+    if (record->kind != ASTRA_VOLUME_SOURCE || record->state != ASTRA_VOLUME_FORMATTING)
+        return EINVAL;
+    record->state = ASTRA_VOLUME_UNMOUNTED;
+    return changed(catalog);
 }
 
 int astra_storage_eject_begin(AstraStorageCatalog *catalog, uint64_t source,

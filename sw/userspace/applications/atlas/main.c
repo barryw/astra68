@@ -54,19 +54,6 @@ static uint32_t volume_connected, volume_lost, volume_refresh;
 static uint64_t volume_retry;
 static char volume_path[32], volume_title[ASTRA_WINDOW_TITLE_MAX + 1u];
 
-static int reference_number(const char *text, uint64_t *out)
-{
-    uint64_t value = 0u;
-    if (text == NULL || *text == '\0') return 0;
-    for (; *text != '\0'; ++text) {
-        if (*text < '0' || *text > '9' || value > (UINT64_MAX - (uint32_t)(*text - '0')) / 10u)
-            return 0;
-        value = value * 10u + (uint32_t)(*text - '0');
-    }
-    *out = value;
-    return value != 0u;
-}
-
 static AstraVfsClient *volume_client_for(const AstraAssign *assign, void *context)
 {
     (void)context;
@@ -507,9 +494,10 @@ int astra_main(const AstraStartupInfo *startup)
     if (root == NULL || root[0] != '/' || (!exact_volume && startup->argc > 2u) ||
         strlen(root) >= ASTRA_VFS_PATH_MAX)
         return ASTRA_STATUS_INVALID;
-    if (exact_volume && (!reference_number(astra_startup_argument(startup, 2u), &viewed_volume.epoch) ||
-        !reference_number(astra_startup_argument(startup, 3u), &viewed_volume.id) ||
-        !reference_number(astra_startup_argument(startup, 4u), &viewed_volume.generation)))
+    if (exact_volume && !astra_volume_reference_parse(
+        astra_startup_argument(startup, 2u),
+        astra_startup_argument(startup, 3u),
+        astra_startup_argument(startup, 4u), &viewed_volume))
         return ASTRA_STATUS_INVALID;
     status = astra_process_filesystem_open(&filesystem, startup);
     if (status == ASTRA_VFS_OK && exact_volume && volume_open(startup) != ASTRA_OK)

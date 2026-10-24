@@ -93,10 +93,18 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
     assert(endpoint == 77u && deadline == ASTRA_DEADLINE_INFINITE);
     const AstraVolumeRequest *request = call->request;
     int control = request->header.operation == ASTRA_VOLUME_CONTROL;
+    int format = request->header.operation == ASTRA_VOLUME_FORMAT ||
+        request->header.operation == ASTRA_VOLUME_FORMAT_STATUS;
+    int partition = request->header.operation == ASTRA_VOLUME_PARTITION ||
+        request->header.operation == ASTRA_VOLUME_PARTITION_STATUS;
     int broker_info = request->header.operation == ASTRA_VOLUME_BROKER_INFO;
-    uint32_t reply_size = control ? sizeof(AstraVolumeControlReply) : broker_info ?
-        sizeof(AstraVolumeBrokerInfoReply) : sizeof(AstraVolumeReply);
+    uint32_t reply_size = control ? sizeof(AstraVolumeControlReply) : format ?
+        sizeof(AstraVolumeFormatReply) : broker_info ?
+        sizeof(AstraVolumeBrokerInfoReply) : partition ?
+        sizeof(AstraVolumePartitionReply) : sizeof(AstraVolumeReply);
     assert(call->request_size == (control ? sizeof(AstraVolumeControlRequest) :
+        format ? sizeof(AstraVolumeFormatRequest) :
+        partition ? sizeof(AstraVolumePartitionRequest) :
         request->header.operation == ASTRA_VOLUME_ROOT ? sizeof(AstraVolumeRootRequest) :
         request->header.operation == ASTRA_VOLUME_USAGE ? sizeof(AstraVolumeUsageRequest) :
         broker_info ? sizeof(AstraMessageHeader) : sizeof(*request)) &&
@@ -115,6 +123,21 @@ AstraResult astra_port_call(AstraHandle endpoint, AstraCall *call, AstraMonotoni
         AstraVolumeBrokerInfo *info = &((AstraVolumeBrokerInfoReply *)reply)->info;
         info->source = (AstraVolumeReference){25u, 3u, 1u}; info->rights = ASTRA_RIGHT_READ;
         if (corrupt_page) info->source.generation = 0u;
+    } else if (format && reply->status == 0u) {
+        const AstraVolumeFormatRequest *wanted = call->request;
+        assert(call->handle_count == 0u && astra_volume_format_valid(wanted) &&
+            wanted->source.epoch == 25u && wanted->source.id == 5u &&
+            wanted->source.generation == 1u);
+        ((AstraVolumeFormatReply *)reply)->outcome =
+            wanted->header.operation == ASTRA_VOLUME_FORMAT_STATUS ? ASTRA_STATUS_BUSY : ASTRA_STATUS_OK;
+    } else if (partition && reply->status == 0u) {
+        const AstraVolumePartitionRequest *wanted = call->request;
+        assert(call->handle_count == 0u && astra_volume_partition_valid(wanted) &&
+            wanted->device.epoch == 25u && wanted->device.id == 5u &&
+            wanted->device.generation == 1u);
+        ((AstraVolumePartitionReply *)reply)->outcome =
+            wanted->header.operation == ASTRA_VOLUME_PARTITION_STATUS ?
+            ASTRA_STATUS_BUSY : ASTRA_STATUS_OK;
     } else if (control && reply->status == 0u) {
         const AstraVolumeControlRequest *wanted = call->request;
         assert(astra_volume_control_valid(&wanted->control) && call->handle_count == 0u);
@@ -236,7 +259,6 @@ static void removal_lifecycle(void)
     assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
     assert(removal.state == ASTRA_VOLUME_REMOVAL_PENDING && removal.source_admitted == 0u);
     service_failure = 0u;
-
     records[0].state = ASTRA_VOLUME_MOUNTED;
     records[0].status = ASTRA_STATUS_BUSY;
     assert(astra_volume_removal_advance(77u, &snapshot, &removal) == ASTRA_OK);
@@ -263,8 +285,76 @@ static void removal_lifecycle(void)
     balanced();
 }
 
+static void exact_graph(void)
+{
+    AstraVolumeRecord records[4] = {
+        {.id = 5u, .generation = 1u, .kind = ASTRA_VOLUME_DEVICE},
+        {.id = 7u, .generation = 3u, .parent = 5u, .parent_generation = 1u,
+            .kind = ASTRA_VOLUME_MEDIUM},
+        {.id = 9u, .generation = 2u, .parent = 7u, .parent_generation = 3u,
+            .kind = ASTRA_VOLUME_SOURCE, .partition_number = 4u},
+        {.id = 11u, .generation = 1u, .parent = 9u, .parent_generation = 2u,
+            .kind = ASTRA_VOLUME_MOUNT}
+    };
+    AstraVolumeSnapshot snapshot = {.epoch = 25u, .sequence = 1u,
+        .records = records, .count = 4u};
+    AstraVolumeReference mount = {25u, 11u, 1u};
+    assert(astra_volume_snapshot_find(&snapshot, &mount) == &records[3]);
+    assert(astra_volume_snapshot_ancestor(&snapshot, &mount,
+        ASTRA_VOLUME_DEVICE) == &records[0]);
+    assert(astra_volume_snapshot_ancestor(&snapshot, &mount,
+        ASTRA_VOLUME_SOURCE) == &records[2]);
+    mount.generation = 2u;
+    assert(astra_volume_snapshot_find(&snapshot, &mount) == NULL);
+    assert(astra_volume_snapshot_ancestor(&snapshot, &mount,
+        ASTRA_VOLUME_DEVICE) == NULL);
+    mount.generation = 1u; mount.epoch = 26u;
+    assert(astra_volume_snapshot_find(&snapshot, &mount) == NULL);
+    mount.epoch = 25u;
+    records[2].parent_generation = 4u;
+    assert(astra_volume_snapshot_ancestor(&snapshot, &mount,
+        ASTRA_VOLUME_DEVICE) == NULL);
+    records[2].parent = 7u; records[2].parent_generation = 3u;
+    records[1].parent = 9u; records[1].parent_generation = 2u;
+    assert(astra_volume_snapshot_ancestor(&snapshot, &mount,
+        ASTRA_VOLUME_DEVICE) == NULL);
+}
+
+static void reference_parse_test(void)
+{
+    AstraVolumeReference reference = {7u, 8u, 9u};
+    assert(astra_volume_reference_parse("25", "3", "11", &reference));
+    assert(reference.epoch == 25u && reference.id == 3u && reference.generation == 11u);
+    assert(astra_volume_reference_parse("18446744073709551615", "1", "2", &reference));
+    assert(reference.epoch == UINT64_MAX && reference.id == 1u && reference.generation == 2u);
+    const AstraVolumeReference saved = reference;
+    assert(!astra_volume_reference_parse("18446744073709551616", "1", "2", &reference));
+    assert(!astra_volume_reference_parse("25", "0", "2", &reference));
+    assert(!astra_volume_reference_parse("25", "+1", "2", &reference));
+    assert(!astra_volume_reference_parse("25", "1 ", "2", &reference));
+    assert(!astra_volume_reference_parse(NULL, "1", "2", &reference));
+    assert(!astra_volume_reference_parse("25", "1", "2", NULL));
+    assert(memcmp(&reference, &saved, sizeof(reference)) == 0);
+}
+
 int main(void)
 {
+    reference_parse_test();
+    exact_graph();
+    AstraVolumeRecord disk = {.kind = ASTRA_VOLUME_SOURCE,
+        .origin = ASTRA_VOLUME_ORIGIN_DEVICE, .state = ASTRA_VOLUME_UNMOUNTED};
+    assert(astra_volume_source_issue(&disk) == ASTRA_VOLUME_SOURCE_NDOS);
+    disk.format = ASTRA_VOLUME_UNSUPPORTED;
+    strcpy(disk.detected_type, "btrfs");
+    assert(astra_volume_source_issue(&disk) == ASTRA_VOLUME_SOURCE_UNSUPPORTED);
+    disk.flags = ASTRA_VOLUME_AMBIGUOUS_FORMAT;
+    assert(astra_volume_source_issue(&disk) == ASTRA_VOLUME_SOURCE_AMBIGUOUS);
+    disk.flags = 0u;
+    disk.status = ASTRA_STATUS_IO;
+    assert(astra_volume_source_issue(&disk) == ASTRA_VOLUME_SOURCE_PROBE_ERROR);
+    disk.status = 0u;
+    disk.kind = ASTRA_VOLUME_DEVICE;
+    assert(astra_volume_source_issue(&disk) == ASTRA_VOLUME_SOURCE_READY);
     removal_lifecycle();
     AstraVolumeControl control = {.reference = {25u, 5u, 1u}, .operation = ASTRA_VOLUME_UNMOUNT};
     AstraVolumeReference admitted;
@@ -275,6 +365,49 @@ int main(void)
     service_failure = ASTRA_STATUS_BUSY;
     assert(astra_volume_control(77u, &control, &admitted) == ASTRA_ERROR_BUSY && admitted.id == 0u);
     service_failure = 0u;
+    const AstraVolumeReference format_source = {25u, 5u, 1u};
+    AstraResult format_outcome = ASTRA_OK;
+    assert(astra_volume_format(77u, &format_source, ASTRA_VOLUME_FAT32, "TEST") == ASTRA_OK);
+    assert(astra_volume_format(77u, &format_source, ASTRA_VOLUME_FAT32, "BAD-NAME") ==
+        ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_volume_format_status(77u, &format_source, &format_outcome) == ASTRA_OK &&
+        format_outcome == ASTRA_ERROR_BUSY);
+    const AstraVolumePartitionEdit partition_edit = {
+        .operation = ASTRA_VOLUME_PARTITION_INITIALIZE,
+        .map = ASTRA_VOLUME_PARTITION_MAP_MBR};
+    AstraResult partition_outcome = ASTRA_OK;
+    assert(astra_volume_partition(77u, &format_source, &partition_edit) == ASTRA_OK);
+    assert(astra_volume_partition_status(77u, &format_source, &partition_outcome) == ASTRA_OK &&
+        partition_outcome == ASTRA_ERROR_BUSY);
+    AstraVolumePartitionEdit invalid_edit = partition_edit;
+    invalid_edit.number = 1u;
+    assert(astra_volume_partition(77u, &format_source, &invalid_edit) ==
+        ASTRA_ERROR_INVALID_ARGUMENT);
+    AstraVolumeRecord free_rows[] = {
+        {.id = 1u, .generation = 1u, .kind = ASTRA_VOLUME_DEVICE,
+            .state = ASTRA_VOLUME_DISCOVERED, .capacity_bytes = 10u << 20},
+        {.id = 2u, .generation = 1u, .parent = 1u, .parent_generation = 1u,
+            .kind = ASTRA_VOLUME_MEDIUM},
+        {.id = 3u, .generation = 1u, .parent = 2u, .parent_generation = 1u,
+            .kind = ASTRA_VOLUME_SOURCE, .origin = ASTRA_VOLUME_ORIGIN_DEVICE,
+            .partition_number = 1u, .offset_bytes = 1u << 20,
+            .capacity_bytes = 3u << 20},
+        {.id = 4u, .generation = 1u, .parent = 2u, .parent_generation = 1u,
+            .kind = ASTRA_VOLUME_SOURCE, .origin = ASTRA_VOLUME_ORIGIN_DEVICE,
+            .partition_number = 2u, .offset_bytes = 6u << 20,
+            .capacity_bytes = 2u << 20}
+    };
+    AstraVolumeSnapshot free_snapshot = {.epoch = 25u, .records = free_rows,
+        .count = sizeof(free_rows) / sizeof(free_rows[0])};
+    AstraVolumeReference free_device = {25u, 1u, 1u};
+    uint64_t free_offset = 0u;
+    assert(astra_volume_partition_find_free(&free_snapshot, &free_device,
+        2u << 20, &free_offset) == ASTRA_OK && free_offset == (4u << 20));
+    assert(astra_volume_partition_find_free(&free_snapshot, &free_device,
+        3u << 20, &free_offset) == ASTRA_ERROR_NO_RESOURCES && free_offset == 0u);
+    free_rows[2].state = ASTRA_VOLUME_LOST;
+    assert(astra_volume_partition_find_free(&free_snapshot, &free_device,
+        4u << 20, &free_offset) == ASTRA_OK && free_offset == (1u << 20));
     AstraVfsClient client = {0};
     AstraFile image = ASTRA_FILE_INIT;
     image._private_client = &client; image._private_file = 9u;

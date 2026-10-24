@@ -4619,6 +4619,89 @@ done:
 }
 
 static void astra_host_reconcile_mounts(Astra68State *s);
+static int astra_host_storage_control(Astra68State *s, AstraStorageControlRequest *request,
+    int input, AstraStorageControlReply *reply, int *output);
+static uint32_t astra_host_volume_format(Astra68State *s, uint32_t owner,
+    AstraHostChannel *channel, uint8_t *data)
+{
+    if (channel == NULL || !channel->provider || channel->bound || owner == 0u ||
+        owner != qatomic_read(&s->host.fs_owner)) return ASTRA_STATUS_ACCESS;
+    uint32_t operation = ldl_be_p(data + 24u);
+    uint32_t format = ldl_be_p(data + 28u);
+    if (ldq_be_p(data) == 0u || ldq_be_p(data + 8u) == 0u ||
+        ldq_be_p(data + 16u) == 0u || ldl_be_p(data + 44u) == 0u ||
+        ldl_be_p(data + 48u) != 0u || ldl_be_p(data + 52u) != 0u)
+        return ASTRA_STATUS_INVALID;
+    if (operation == ASTRA_HOST_VOLUME_FORMAT_START) {
+        const uint8_t *end = memchr(data + 32u, '\0', 12u);
+        if ((format != ASTRA_VOLUME_FAT32 && format != ASTRA_VOLUME_EXFAT) ||
+            end == NULL || end == data + 32u) return ASTRA_STATUS_INVALID;
+        for (size_t at = 32u; at < 44u; ++at) {
+            uint8_t c = data[at];
+            if (data + at >= end) { if (c != 0u) return ASTRA_STATUS_INVALID; }
+            else if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                       (c >= '0' && c <= '9') || c == '_' || c == ' '))
+                return ASTRA_STATUS_INVALID;
+        }
+    } else if (operation != ASTRA_HOST_VOLUME_FORMAT_STATUS || format != 0u ||
+               memcmp(data + 32u, (uint8_t[12]){0}, 12u) != 0)
+        return ASTRA_STATUS_INVALID;
+    AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+        .operation = operation == ASTRA_HOST_VOLUME_FORMAT_START ? ASTRA_STORAGE_CONTROL_FORMAT :
+            ASTRA_STORAGE_CONTROL_FORMAT_STATUS,
+        .epoch = ldq_be_p(data), .target = ldq_be_p(data + 8u),
+        .generation = ldq_be_p(data + 16u), .format = format};
+    if (operation == ASTRA_HOST_VOLUME_FORMAT_START) memcpy(request.label, data + 32u, 12u);
+    AstraStorageControlReply reply;
+    int output = -1;
+    qemu_mutex_lock(&s->host.namespace_lock);
+    int error = astra_host_storage_control(s, &request, -1, &reply, &output);
+    qemu_mutex_unlock(&s->host.namespace_lock);
+    if (output >= 0) close(output);
+    if (error != 0) return astra_host_status_from_errno(error);
+    stl_be_p(data, operation == ASTRA_HOST_VOLUME_FORMAT_START ? ASTRA_STATUS_OK :
+        astra_host_status_from_errno(reply.operation_error));
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t astra_host_volume_partition(Astra68State *s, uint32_t owner,
+    AstraHostChannel *channel, uint8_t *data)
+{
+    if (channel == NULL || !channel->provider || channel->bound || owner == 0u ||
+        owner != qatomic_read(&s->host.fs_owner)) return ASTRA_STATUS_ACCESS;
+    uint32_t mode = ldl_be_p(data + 24u);
+    if (ldq_be_p(data) == 0u || ldq_be_p(data + 8u) == 0u ||
+        ldq_be_p(data + 16u) == 0u || ldl_be_p(data + 28u) == 0u ||
+        ldl_be_p(data + 64u) != 0u || ldl_be_p(data + 68u) != 0u ||
+        (mode != ASTRA_HOST_VOLUME_PARTITION_START &&
+         mode != ASTRA_HOST_VOLUME_PARTITION_STATUS)) return ASTRA_STATUS_INVALID;
+    AstraVolumePartitionEdit edit = {0};
+    if (mode == ASTRA_HOST_VOLUME_PARTITION_START) {
+        edit.operation = ldl_be_p(data + 32u);
+        edit.map = ldl_be_p(data + 36u);
+        edit.format = ldl_be_p(data + 40u);
+        edit.number = ldl_be_p(data + 44u);
+        edit.offset_bytes = ldq_be_p(data + 48u);
+        edit.length_bytes = ldq_be_p(data + 56u);
+    } else if (memcmp(data + 32u, (uint8_t[32]){0}, 32u) != 0)
+        return ASTRA_STATUS_INVALID;
+    AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+        .operation = mode == ASTRA_HOST_VOLUME_PARTITION_START ?
+            ASTRA_STORAGE_CONTROL_PARTITION : ASTRA_STORAGE_CONTROL_PARTITION_STATUS,
+        .epoch = ldq_be_p(data), .target = ldq_be_p(data + 8u),
+        .generation = ldq_be_p(data + 16u), .edit = edit};
+    AstraStorageControlReply reply;
+    int output = -1;
+    qemu_mutex_lock(&s->host.namespace_lock);
+    int error = astra_host_storage_control(s, &request, -1, &reply, &output);
+    qemu_mutex_unlock(&s->host.namespace_lock);
+    if (output >= 0) close(output);
+    if (error != 0) return astra_host_status_from_errno(error);
+    stl_be_p(data, mode == ASTRA_HOST_VOLUME_PARTITION_START ? ASTRA_STATUS_OK :
+        astra_host_status_from_errno(reply.operation_error));
+    return ASTRA_STATUS_OK;
+}
+
 static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
     AstraHostChannel *channel, uint8_t *data);
 
@@ -4920,6 +5003,8 @@ static void astra_host_execute_volumes(Astra68State *s, uint32_t owner,
         ldl_be_p(command + HOST_FIELD(generation)) != generation ||
         (lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_CATALOG &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_CONTROL &&
+         lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_FORMAT &&
+         lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_PARTITION &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_USAGE &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_HOLDERS_CHANGED) ||
         lduw_be_p(command + HOST_FIELD(flags)) != 0u ||
@@ -4967,6 +5052,28 @@ static void astra_host_execute_volumes(Astra68State *s, uint32_t owner,
             stl_be_p(command + HOST_FIELD(result_length), sizeof(AstraVolumeReference));
         goto done;
     }
+    if (lduw_be_p(command + HOST_FIELD(operation)) == ASTRA_HOST_VOLUME_FORMAT) {
+        if (ldl_be_p(command + HOST_FIELD(data_length)) != sizeof(AstraHostVolumeFormat) ||
+            ldl_be_p(command + HOST_FIELD(data_capacity)) < sizeof(uint32_t)) goto done;
+        uint8_t *data = astra_host_command_data(s, physical, bytes, command_bytes,
+            command, sizeof(AstraHostVolumeFormat));
+        if (data == NULL) goto done;
+        status = astra_host_volume_format(s, owner, channel, data);
+        if (status == ASTRA_STATUS_OK)
+            stl_be_p(command + HOST_FIELD(result_length), sizeof(uint32_t));
+        goto done;
+    }
+    if (lduw_be_p(command + HOST_FIELD(operation)) == ASTRA_HOST_VOLUME_PARTITION) {
+        if (ldl_be_p(command + HOST_FIELD(data_length)) != sizeof(AstraHostVolumePartition) ||
+            ldl_be_p(command + HOST_FIELD(data_capacity)) < sizeof(uint32_t)) goto done;
+        uint8_t *data = astra_host_command_data(s, physical, bytes, command_bytes,
+            command, sizeof(AstraHostVolumePartition));
+        if (data == NULL) goto done;
+        status = astra_host_volume_partition(s, owner, channel, data);
+        if (status == ASTRA_STATUS_OK)
+            stl_be_p(command + HOST_FIELD(result_length), sizeof(uint32_t));
+        goto done;
+    }
     if (ldl_be_p(command + HOST_FIELD(data_length)) != sizeof(AstraVolumeCatalogQuery) ||
         ldl_be_p(command + HOST_FIELD(data_capacity)) < sizeof(AstraVolumeCatalogPage)) goto done;
     uint8_t *data = astra_host_command_data(s, physical, bytes, command_bytes,
@@ -5004,14 +5111,17 @@ static void astra_host_execute_volumes(Astra68State *s, uint32_t owner,
 #define VOLUME32(field) stl_be_p(row + offsetof(AstraVolumeRecord, field), record->field)
         VOLUME64(id); VOLUME64(generation); VOLUME64(parent); VOLUME64(parent_generation);
         VOLUME64(byte_limit); VOLUME64(inode_limit); VOLUME64(backing_object);
+        VOLUME64(capacity_bytes); VOLUME64(offset_bytes);
         VOLUME32(kind); VOLUME32(class_id); VOLUME32(state); VOLUME32(format);
-        VOLUME32(origin); VOLUME32(flags);
+        VOLUME32(origin); VOLUME32(flags); VOLUME32(partition_number); VOLUME32(partition_map);
 #undef VOLUME64
 #undef VOLUME32
         stl_be_p(row + offsetof(AstraVolumeRecord, status), astra_host_status_from_errno(record->error));
         memcpy(row + offsetof(AstraVolumeRecord, name), record->name, sizeof(record->name));
         memcpy(row + offsetof(AstraVolumeRecord, uuid), record->uuid, sizeof(record->uuid));
         memcpy(row + offsetof(AstraVolumeRecord, label), record->label, sizeof(record->label));
+        memcpy(row + offsetof(AstraVolumeRecord, detected_type), record->detected_type,
+            sizeof(record->detected_type));
     }
     stl_be_p(command + HOST_FIELD(result_length), sizeof(AstraVolumeCatalogPage));
     status = ASTRA_STATUS_OK;

@@ -68,11 +68,12 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 	storage-catalog-sanitize storage-catalog-target-test storage-probe-test \
 	storage-probe-target-test storage-mount-test storage-path-test storage-provider-test
 .PHONY: storage-provider-sanitize
+.PHONY: storage-provider-format-test
 .PHONY: font-convert-test font-convert-sanitize
 .PHONY: font-amiga-test font-amiga-sanitize font-amiga-convert-test
 .PHONY: font-worker-test font-worker-sanitize font-worker-target font-host-test font-host-sanitize
 .PHONY: storage-cleanup-test storage-cleanup-sanitize
-.PHONY: storage-provider storage-provider-target
+.PHONY: storage-provider storage-provider-target storage-partition-worker-target
 .PHONY: storage-launcher-test
 
 $(OUT)/test-storage-client: astra_storage_transport.c test_storage_client.c $(STORAGE_HEADERS) Makefile
@@ -90,7 +91,24 @@ storage-launcher-test: $(OUT)/astra-storage $(OUT)/test-storage-client
 
 storage-provider: $(OUT)/astra-storage
 
+storage-provider-format-test: $(OUT)/test-storage-provider
+	bash $(ROOT)/third_party/storage-format/build.sh host
+	python3 test_storage_mount.py $(OUT)/test-storage-provider --provider \
+		--formatter-fat $(ROOT)/build/storage-format/host/astra-mkfs.fat \
+		--formatter-exfat $(ROOT)/build/storage-format/host/astra-mkfs.exfat
+
 storage-provider-target: $(OUT)/astra-storage-aarch64
+
+storage-partition-worker-target: $(OUT)/test-partition-worker-aarch64
+
+$(OUT)/test-partition-worker-aarch64: $(STORAGE_PROVIDER_SOURCES) \
+	$(ROOT)/third_party/storage-format/tests/test_partition_worker.c $(STORAGE_HEADERS) Makefile
+	mkdir -p $(OUT)
+	$(CC) $(REMOTE_CFLAGS) -std=gnu11 -I. -I$(STORAGE_RESOLVER) \
+		$(STORAGE_PROVIDER_SOURCES) \
+		$(ROOT)/third_party/storage-format/tests/test_partition_worker.c -o $@ \
+		-Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu \
+		-lblkid -lmount -ludev
 
 $(OUT)/astra-storage: $(STORAGE_PROVIDER_SOURCES) astra_storage_main.c $(STORAGE_HEADERS) Makefile
 	mkdir -p $(OUT)
@@ -323,11 +341,15 @@ storage-catalog-target-test: $(OUT)/test-storage-catalog-aarch64
 	$(QEMU_USER) -L $(DE25_SYSROOT) $<
 
 storage-probe-test: $(OUT)/test-storage-probe
-	python3 test_storage_probe.py $<
+	bash $(ROOT)/third_party/storage-format/build.sh host
+	python3 test_storage_probe.py $< --exfat-tool \
+		$(ROOT)/build/storage-format/host/astra-mkfs.exfat
 
 storage-probe-target-test: $(OUT)/test-storage-probe-aarch64
+	bash $(ROOT)/third_party/storage-format/build.sh host
 	python3 test_storage_probe.py $< \
-		--qemu-user $(QEMU_USER) --sysroot $(DE25_SYSROOT)
+		--qemu-user $(QEMU_USER) --sysroot $(DE25_SYSROOT) \
+		--exfat-tool $(ROOT)/build/storage-format/host/astra-mkfs.exfat
 
 storage-mount-test: $(OUT)/test-storage-mount
 	python3 test_storage_mount.py $<
@@ -360,6 +382,11 @@ $(OUT)/test-storage-provider-aarch64: $(STORAGE_PROVIDER_SOURCES) test_storage_p
 
 storage-provider-test: $(OUT)/test-storage-provider
 	python3 test_storage_mount.py $< --provider
+
+EXFAT_MKFS ?= /usr/sbin/mkfs.exfat
+.PHONY: storage-provider-exfat-test
+storage-provider-exfat-test: $(OUT)/test-storage-provider
+	python3 test_storage_mount.py $< --provider --exfat-tool $(EXFAT_MKFS)
 
 $(OUT)/test-storage-provider-sanitize: $(STORAGE_PROVIDER_SOURCES) test_storage_provider.c \
 		$(STORAGE_HEADERS) Makefile

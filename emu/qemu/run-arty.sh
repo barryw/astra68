@@ -36,7 +36,7 @@ BASE_STORAGE=${ASTRA_BASE_STORAGE:-$ASTRA_ROOT/storage-terminal.img}
 LIBDIR=${LIBDIR:-$ASTRA_ROOT/qemu/lib}
 TERMINAL_DISPLAY=${ASTRA_TERMINAL_DISPLAY:-$ASTRA_ROOT/bin/astra-terminal-display}
 INPUT_HOTPLUG=${ASTRA_INPUT_HOTPLUG:-$ASTRA_ROOT/bin/astra-input-hotplug.py}
-STATE_ROOT=${ASTRA_STATE_ROOT:-$ASTRA_STORE/state/$RELEASE_ID}
+STATE_ROOT=${ASTRA_STATE_ROOT:-$ASTRA_STORE/state/system}
 RUN_ROOT=${ASTRA_RUN_ROOT:-/run/astra}
 LOG_ROOT=${ASTRA_LOG_ROOT:-$ASTRA_STORE/log}
 TEXT_PLANE=${ASTRA_TEXT_PLANE_PATH:-$RUN_ROOT/post-text.bin}
@@ -53,7 +53,7 @@ else
 fi
 EXPORTS_ROOT=${ASTRA_EXPORTS_ROOT:-$ASTRA_STORE/hostfs}
 STORAGE_PROVIDER=$ASTRA_ROOT/bin/astra-storage
-IMAGE_SELECTOR=$ASTRA_ROOT/bin/astra-storage-image.py
+IMAGE_SELECTOR=$ASTRA_ROOT/bin/storage_image.py
 if [ -n "${ASTRA_HOSTFS_ROOT+x}" ]; then
     echo "ASTRA_HOSTFS_ROOT retired; configure ASTRA_EXPORTS_ROOT" >&2
     exit 1

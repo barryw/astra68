@@ -44,8 +44,12 @@ typedef struct AstraStorageObservation {
     dev_t disk_devnum;
     uint64_t sequence;
     uint64_t disk_sequence;
+    uint64_t capacity_bytes;
+    uint64_t offset_bytes;
     uint32_t action;
     uint32_t class_id;
+    uint32_t partition_number;
+    uint32_t partition_map;
     int partition;
     int media;
     int partition_table;
@@ -64,5 +68,23 @@ int astra_storage_discovery_observe(AstraStorageDiscovery *discovery,
                                     const AstraStorageObservation *observation);
 int astra_storage_discovery_reserve(AstraStorageDiscovery *discovery,
                                     dev_t devnum);
+/* Provider-only exact physical source opener. Caller owns the returned
+ * exclusive descriptor and must pair it with catalog format admission. */
+int astra_storage_discovery_format_fd(AstraStorageDiscovery *discovery,
+    uint64_t source, uint64_t generation, int *fd);
+/* Provider-only exact parent-disk opener for partition edits. Sibling usage
+ * admission still belongs to the provider before this exclusive open. */
+int astra_storage_discovery_device_fd(AstraStorageDiscovery *discovery,
+    uint64_t device, uint64_t generation, int *fd);
+/* After an edit worker has actually exited, retire stale media descriptions.
+ * Provider reaps their Linux resources before rereading the kernel table. */
+int astra_storage_discovery_partition_retire(AstraStorageDiscovery *discovery,
+    uint64_t device);
+int astra_storage_discovery_partition_reread(AstraStorageDiscovery *discovery,
+    uint64_t device, uint64_t generation);
+/* Successful format may be auto-mounted after its new probe; failure stays
+ * unmounted for explicit user inspection. */
+void astra_storage_discovery_format_result(AstraStorageDiscovery *discovery,
+    uint64_t source, int success);
 
 #endif

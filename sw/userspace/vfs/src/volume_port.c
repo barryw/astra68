@@ -133,6 +133,8 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
     union { AstraMessageHeader header; AstraVolumeRequest request;
         AstraVolumeRootRequest root;
         AstraVolumeControlRequest control;
+        AstraVolumeFormatRequest format;
+        AstraVolumePartitionRequest partition;
         AstraVolumeUsageRequest usage;
         uint8_t bytes[ASTRA_MESSAGE_SIZE_MAX]; } incoming;
     uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX];
@@ -143,11 +145,18 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
             handles, ASTRA_MESSAGE_HANDLES_MAX, &size, &count, &owner);
         if (result != ASTRA_SYSCALL_OK) break;
         ++served;
-        union { AstraVolumeControlReply control; AstraVolumeBrokerInfoReply broker; } response = {0};
+        union { AstraVolumeControlReply control; AstraVolumeBrokerInfoReply broker;
+            AstraVolumeFormatReply format; AstraVolumePartitionReply partition; } response = {0};
         AstraVolumeReply reply = {0};
         uint32_t reply_size = incoming.header.operation == ASTRA_VOLUME_CONTROL ?
             sizeof(response.control) : incoming.header.operation == ASTRA_VOLUME_BROKER_INFO ?
-            sizeof(response.broker) : sizeof(reply);
+            sizeof(response.broker) :
+            (incoming.header.operation == ASTRA_VOLUME_FORMAT ||
+             incoming.header.operation == ASTRA_VOLUME_FORMAT_STATUS) ?
+            sizeof(response.format) :
+            (incoming.header.operation == ASTRA_VOLUME_PARTITION ||
+             incoming.header.operation == ASTRA_VOLUME_PARTITION_STATUS) ?
+            sizeof(response.partition) : sizeof(reply);
         astra_message_header_set(&reply.header, sizeof(reply), ASTRA_VOLUME_PROTOCOL,
             ASTRA_VOLUME_PROTOCOL_VERSION, ASTRA_VOLUME_REPLY, incoming.header.transaction_id);
         reply.status = ASTRA_STATUS_PROTOCOL;
@@ -166,6 +175,30 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
                 else if (response.control.reference.epoch == 0u || response.control.reference.id == 0u ||
                          response.control.reference.generation == 0u)
                     reply.status = ASTRA_STATUS_PROTOCOL;
+            } else if ((incoming.header.operation == ASTRA_VOLUME_FORMAT ||
+                        incoming.header.operation == ASTRA_VOLUME_FORMAT_STATUS) &&
+                       size == sizeof(incoming.format) && count == 1u) {
+                if (!astra_volume_format_valid(&incoming.format))
+                    reply.status = ASTRA_STATUS_INVALID;
+                else if (role != 3 || port->format == NULL)
+                    reply.status = ASTRA_STATUS_ACCESS;
+                else
+                    reply.status = port->format(port->context, owner,
+                        &incoming.format, &response.format.outcome);
+                if (reply.status != ASTRA_STATUS_OK)
+                    response.format.outcome = 0u;
+            } else if ((incoming.header.operation == ASTRA_VOLUME_PARTITION ||
+                        incoming.header.operation == ASTRA_VOLUME_PARTITION_STATUS) &&
+                       size == sizeof(incoming.partition) && count == 1u) {
+                if (!astra_volume_partition_valid(&incoming.partition))
+                    reply.status = ASTRA_STATUS_INVALID;
+                else if (role != 3 || port->partition == NULL)
+                    reply.status = ASTRA_STATUS_ACCESS;
+                else
+                    reply.status = port->partition(port->context, owner,
+                        &incoming.partition, &response.partition.outcome);
+                if (reply.status != ASTRA_STATUS_OK)
+                    response.partition.outcome = 0u;
             } else if (incoming.header.operation == ASTRA_VOLUME_USAGE &&
                 size == sizeof(incoming.usage) && count == 2u) {
                 if (!astra_volume_usage_query_valid(&incoming.usage.query))
@@ -273,6 +306,9 @@ uint32_t astra_volume_port_control_pump(AstraVolumePort *port, uint32_t receive,
 
 uint32_t astra_volume_port_usage_pump(AstraVolumePort *port, uint32_t receive, uint32_t budget)
 { return pump(port, receive, 0u, NULL, 2, budget); }
+
+uint32_t astra_volume_port_format_pump(AstraVolumePort *port, uint32_t receive, uint32_t budget)
+{ return pump(port, receive, 0u, NULL, 3, budget); }
 
 void astra_volume_port_destroy(AstraVolumePort *port)
 {

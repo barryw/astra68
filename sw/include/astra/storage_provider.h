@@ -15,6 +15,10 @@ typedef struct AstraStorageRecord {
     uint64_t byte_limit;
     uint64_t inode_limit;
     uint64_t backing_object;
+    uint64_t capacity_bytes;
+    uint64_t offset_bytes;
+    uint32_t partition_number;
+    uint32_t partition_map;
     uint32_t kind;
     uint32_t class_id;
     uint32_t state;
@@ -25,11 +29,12 @@ typedef struct AstraStorageRecord {
     char name[32];
     char uuid[128];
     char label[256];
+    char detected_type[64];
 } AstraStorageRecord;
 
 /* Private Linux protocol. Only the launched QEMU peer receives its socket;
  * application authority remains in the native rooted scopes. */
-#define ASTRA_STORAGE_PROVIDER_VERSION 2u
+#define ASTRA_STORAGE_PROVIDER_VERSION 6u
 #define ASTRA_STORAGE_PROVIDER_PATH_MAX 4096u
 #define ASTRA_STORAGE_PROVIDER_FDS 3u
 #define ASTRA_STORAGE_PROVIDER_PAGE 16u
@@ -44,7 +49,11 @@ enum AstraStorageControlOperation {
     ASTRA_STORAGE_CONTROL_IMAGE,
     ASTRA_STORAGE_CONTROL_EJECT,
     ASTRA_STORAGE_CONTROL_RELEASE_IMAGE_SOURCE,
-    ASTRA_STORAGE_CONTROL_BACKING
+    ASTRA_STORAGE_CONTROL_BACKING,
+    ASTRA_STORAGE_CONTROL_FORMAT,
+    ASTRA_STORAGE_CONTROL_FORMAT_STATUS,
+    ASTRA_STORAGE_CONTROL_PARTITION,
+    ASTRA_STORAGE_CONTROL_PARTITION_STATUS
 };
 
 typedef struct AstraStorageControlRequest {
@@ -61,6 +70,9 @@ typedef struct AstraStorageControlRequest {
     uint64_t backing_object;
     uint32_t flags;
     uint32_t reserved;
+    uint32_t format;
+    char label[12];
+    AstraVolumePartitionEdit edit;
 } AstraStorageControlRequest;
 
 typedef struct AstraStorageControlReply {
@@ -73,6 +85,8 @@ typedef struct AstraStorageControlReply {
     uint64_t object;
     uint32_t count;
     uint32_t reserved;
+    int32_t operation_error;
+    uint32_t reserved2;
     AstraStorageRecord records[ASTRA_STORAGE_PROVIDER_PAGE];
 } AstraStorageControlReply;
 

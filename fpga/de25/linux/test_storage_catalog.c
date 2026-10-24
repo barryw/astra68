@@ -11,11 +11,11 @@ static uint64_t source(AstraStorageCatalog *catalog, uint32_t class_id,
     uint64_t device;
     uint64_t medium;
     uint64_t result;
-    assert(astra_storage_device(catalog, class_id, &device) == 0);
+    assert(astra_storage_device(catalog, class_id, 0u, 0u, &device) == 0);
     assert(astra_storage_medium(catalog, device, 1u, &medium) == 0);
-    assert(astra_storage_source(catalog, medium, 1u, &result) == 0);
+    assert(astra_storage_source(catalog, medium, 1u, 0u, 0u, 0u, 0u, &result) == 0);
     assert(astra_storage_probe_result(catalog, result, 1u, format,
-                                      uuid, label, 0, 0) == 0);
+                                      uuid, label, "", 0, 0) == 0);
     return result;
 }
 
@@ -92,20 +92,20 @@ static void loss_and_stale_completion(void)
     uint64_t replacement;
     size_t charge;
     assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
-    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, &device) == 0);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, 0u, 0u, &device) == 0);
     charge = catalog.bytes;
     assert(astra_storage_medium(&catalog, device, 1u, &medium) == 0);
     assert(astra_storage_medium(&catalog, device, 1u, &replacement) == EBUSY);
-    assert(astra_storage_source(&catalog, medium, 1u, &data) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u, 0u, 0u, 0u, 0u, &data) == 0);
     assert(astra_storage_probe_result(&catalog, data, 1u, ASTRA_VOLUME_EXT4,
-                                      "uuid", "Original", 0, 0) == 0);
+                                      "uuid", "Original", "", 0, 0) == 0);
     assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u,
                                      &mounted) == 0);
     assert(astra_storage_loss(&catalog, medium, 1u) == 0);
     assert(astra_storage_find(&catalog, data)->generation == 2u);
     assert(astra_storage_find(&catalog, mounted)->generation == 2u);
     assert(astra_storage_probe_result(&catalog, data, 1u, ASTRA_VOLUME_EXT4,
-                                      "uuid", "Late", 0, 0) == ESTALE);
+                                      "uuid", "Late", "", 0, 0) == ESTALE);
     assert(astra_storage_forget(&catalog, mounted) == EBUSY);
     /* Linux success after removal stays charged for actual rollback. */
     assert(astra_storage_mount_result(&catalog, mounted, 1u, 99u, 0) == ENODEV);
@@ -127,7 +127,7 @@ static void loss_and_stale_completion(void)
     assert(catalog.bytes == charge);
     assert(astra_storage_medium(&catalog, device, 1u, &replacement) == 0);
     assert(replacement > mounted);
-    assert(astra_storage_source(&catalog, medium, 1u, &data) == ESTALE);
+    assert(astra_storage_source(&catalog, medium, 1u, 0u, 0u, 0u, 0u, &data) == ESTALE);
     assert(astra_storage_loss(&catalog, device, 1u) == 0);
     assert(astra_storage_medium(&catalog, device, 1u, &medium) == ESTALE);
     astra_storage_catalog_destroy(&catalog);
@@ -155,6 +155,7 @@ static void policy_and_metadata(void)
             ASTRA_VOLUME_DUPLICATE_UUID) == 0u);
     optical = source(&catalog, ASTRA_VOLUME_OPTICAL, ASTRA_VOLUME_ISO9660,
                       "", "Disc");
+    assert((astra_storage_find(&catalog, optical)->flags & ASTRA_VOLUME_READ_ONLY) != 0u);
     assert(astra_storage_mount_begin(&catalog, optical, 1u, 0u, 0u, 0u,
                                      &mounted) == EROFS);
     assert(astra_storage_mount_begin(&catalog, optical, 1u,
@@ -171,6 +172,7 @@ static void policy_and_metadata(void)
     }
     uint64_t usb_disc = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_ISO9660,
                                "", "Installer");
+    assert((astra_storage_find(&catalog, usb_disc)->flags & ASTRA_VOLUME_READ_ONLY) != 0u);
     assert(astra_storage_mount_begin(&catalog, usb_disc, 1u, 0u, 0u, 0u,
                                      &mounted) == EROFS);
     assert(astra_storage_mount_begin(&catalog, usb_disc, 1u,
@@ -181,6 +183,31 @@ static void policy_and_metadata(void)
                                      &mounted) == EROFS);
     assert(astra_storage_mount_begin(&catalog, ntfs, 1u,
         ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
+    uint64_t unsupported_device, unsupported_medium, unsupported_source;
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, UINT64_C(16) << 30, &unsupported_device) == 0);
+    assert(astra_storage_medium(&catalog, unsupported_device, 1u, &unsupported_medium) == 0);
+    assert(astra_storage_source(&catalog, unsupported_medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, 1u, UINT64_MAX, 4096u,
+        &unsupported_source) == EINVAL);
+    uint64_t before_geometry = catalog.sequence;
+    assert(astra_storage_source(&catalog, unsupported_medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, 1u, (UINT64_C(16) << 30) - 4096u,
+        8192u, &unsupported_source) == EINVAL);
+    assert(catalog.sequence == before_geometry);
+    assert(astra_storage_source(&catalog, unsupported_medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, 1u, (UINT64_C(16) << 30) - 4096u,
+        4096u, &unsupported_source) == 0);
+    assert(astra_storage_source(&catalog, unsupported_medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, 1u, 1048576u, 4096u,
+        &unsupported_source) == 0);
+    assert(astra_storage_device_geometry(&catalog, unsupported_device, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, UINT64_C(16) << 30) == 0);
+    assert(astra_storage_probe_result(&catalog, unsupported_source, 1u,
+        ASTRA_VOLUME_UNSUPPORTED, "", "Archive", "btrfs", 0, 0) == 0);
+    assert(strcmp(astra_storage_find(&catalog, unsupported_source)->detected_type, "btrfs") == 0);
+    assert(astra_storage_mount_begin(&catalog, unsupported_source, 1u,
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == ENOTSUP);
     first = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_EXT4,
                     "", "broken\nlabel");
     assert(astra_storage_find(&catalog, first)->label[0] == '\0');
@@ -201,7 +228,7 @@ static void policy_and_metadata(void)
         ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == EINVAL);
     assert(astra_storage_mount_begin(&catalog, fixed_ntfs, 1u,
         ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
-    assert(astra_storage_device(&catalog, ASTRA_VOLUME_RAM, &ram) == EINVAL);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_RAM, 0u, 0u, &ram) == EINVAL);
     assert(astra_storage_ram_source(&catalog, 0u, &ram) == 0);
     assert(astra_storage_find(&catalog, ram)->parent == 0u);
     assert(astra_storage_mount_begin(&catalog, ram, 1u, 0u, 0u, 0u,
@@ -233,18 +260,18 @@ static void snapshots_and_budget(void)
     assert(astra_storage_snapshot(&catalog, sequence, next, records, 2u,
                                    &count, &next, &current) == 0);
     assert(count == 1u && next == 0u && current == sequence);
-    assert(astra_storage_device(&catalog, ASTRA_VOLUME_FIXED, &id) == 0);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_FIXED, 0u, 0u, &id) == 0);
     assert(astra_storage_snapshot(&catalog, sequence, 2u, records, 2u,
                                    &count, &next, &current) == EAGAIN);
     assert(count == 0u && next == 0u);
     catalog.byte_limit = catalog.bytes;
-    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, &next) == ENOSPC);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, 0u, 0u, &next) == ENOSPC);
     assert(astra_storage_loss(&catalog, id, 1u) == 0);
     assert(astra_storage_forget(&catalog, id) == 0);
-    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, &next) == 0);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, 0u, 0u, &next) == 0);
     assert(next > id);
     catalog.next_id = UINT64_MAX;
-    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, &next) == ENOSPC);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, 0u, 0u, &next) == ENOSPC);
     astra_storage_catalog_destroy(&catalog);
 }
 
@@ -266,7 +293,7 @@ static void image_dependencies(void)
     assert(astra_storage_find(&catalog, image)->origin == ASTRA_VOLUME_ORIGIN_IMAGE);
     assert(astra_storage_find(&catalog, image)->backing_object == 812u);
     assert(astra_storage_probe_result(&catalog, image, 1u,
-                                      ASTRA_VOLUME_ISO9660, "", "Install", 0, 0) == 0);
+                                      ASTRA_VOLUME_ISO9660, "", "Install", "iso9660", 0, 0) == 0);
     assert(astra_storage_mount_begin(&catalog, image, 1u, 0u, 0u, 0u,
                                      &image_mount) == EROFS);
     assert(astra_storage_mount_begin(&catalog, image, 1u, ASTRA_VOLUME_READ_ONLY,
@@ -274,7 +301,7 @@ static void image_dependencies(void)
     assert(astra_storage_mount_result(&catalog, image_mount, 1u, 501u, 0) == 0);
     assert(astra_storage_image_source(&catalog, image_mount, 1u, 813u, &nested) == 0);
     assert(astra_storage_probe_result(&catalog, nested, 1u,
-                                      ASTRA_VOLUME_UDF, "", "Nested", 0, 0) == 0);
+                                      ASTRA_VOLUME_UDF, "", "Nested", "udf", 0, 0) == 0);
     assert(astra_storage_mount_begin(&catalog, nested, 1u, ASTRA_VOLUME_READ_ONLY,
                                      0u, 0u, &nested_mount) == 0);
     assert(astra_storage_mount_result(&catalog, nested_mount, 1u, 502u, 0) == 0);
@@ -471,17 +498,35 @@ static void retained_release(void)
 static void multiple_partitions_one_device(void)
 {
     AstraStorageCatalog catalog;
-    uint64_t device, medium, data, installer, first, second;
+    uint64_t device, medium, data, installer, overlap, unknown, first, second, blocked;
     assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
-    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, &device) == 0);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, UINT64_C(64) << 30, &device) == 0);
     assert(astra_storage_medium(&catalog, device, 1u, &medium) == 0);
-    assert(astra_storage_source(&catalog, medium, 1u, &data) == 0);
-    assert(astra_storage_source(&catalog, medium, 1u, &installer) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, 1u, UINT64_C(1) << 20,
+        UINT64_C(1) << 30, &data) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, 2u, UINT64_C(2) << 30,
+        UINT64_C(1) << 30, &installer) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, 3u, UINT64_C(1) << 30,
+        UINT64_C(1) << 30, &overlap) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, 0u, 0u, 0u, &unknown) == 0);
     assert(astra_storage_probe_result(&catalog, data, 1u, ASTRA_VOLUME_EXT4,
-                                      "data", "Data", 0, 0) == 0);
+                                      "data", "Data", "ext4", 0, 0) == 0);
     assert(astra_storage_probe_result(&catalog, installer, 1u,
-                                      ASTRA_VOLUME_ISO9660, "", "Installer", 0, 0) == 0);
+                                      ASTRA_VOLUME_ISO9660, "", "Installer", "iso9660", 0, 0) == 0);
+    assert(astra_storage_probe_result(&catalog, overlap, 1u,
+                                      ASTRA_VOLUME_EXT4, "", "Overlap", "ext4", 0, 0) == 0);
+    assert(astra_storage_probe_result(&catalog, unknown, 1u,
+                                      ASTRA_VOLUME_EXT4, "", "Unknown", "ext4", 0, 0) == 0);
     assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, &first) == 0);
+    blocked = 99u;
+    assert(astra_storage_mount_begin(&catalog, overlap, 1u, 0u, 0u, 0u, &blocked) == EBUSY);
+    assert(blocked == 0u);
+    assert(astra_storage_mount_begin(&catalog, unknown, 1u, 0u, 0u, 0u, &blocked) == EBUSY);
     assert(astra_storage_mount_result(&catalog, first, 1u, 20u, 0) == 0);
     assert(astra_storage_mount_begin(&catalog, installer, 1u,
                                      ASTRA_VOLUME_READ_ONLY, 0u, 0u, &second) == 0);
@@ -490,6 +535,187 @@ static void multiple_partitions_one_device(void)
     assert(strcmp(astra_storage_find(&catalog, second)->name, "/usb1") == 0);
     assert(astra_storage_find(&catalog, first)->parent == data);
     assert(astra_storage_find(&catalog, second)->parent == installer);
+    assert(astra_storage_quiesce(&catalog, first, 1u) == 0);
+    assert(astra_storage_unmount_result(&catalog, first, 1u, 0, 0, 0) == 0);
+    assert(astra_storage_mount_begin(&catalog, overlap, 1u, 0u, 0u, 0u, &blocked) == 0);
+    assert(blocked != 0u);
+    astra_storage_catalog_destroy(&catalog);
+}
+
+static void physical_write_protection(void)
+{
+    AstraStorageCatalog catalog;
+    uint64_t device, medium, data, mount = 99u;
+    assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, 0u, 0u, &device) == 0);
+    assert(astra_storage_physical_read_only(&catalog, device, 1u, 1) == 0);
+    assert((astra_storage_find(&catalog, device)->flags & ASTRA_VOLUME_READ_ONLY) != 0u);
+    assert(astra_storage_medium(&catalog, device, 1u, &medium) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u, 0u, 0u, 0u, 0u, &data) == 0);
+    assert(astra_storage_physical_read_only(&catalog, data, 1u, 1) == 0);
+    assert(astra_storage_probe_result(&catalog, data, 1u, ASTRA_VOLUME_EXT4,
+        "", "Protected", "ext4", 0, 0) == 0);
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, &mount) == EROFS);
+    assert(mount == 0u);
+    assert(astra_storage_mount_begin(&catalog, data, 1u,
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mount) == 0);
+    assert(astra_storage_physical_read_only(&catalog, medium, 1u, 1) == EINVAL);
+    assert(astra_storage_physical_read_only(&catalog, data, 2u, 1) == ESTALE);
+    assert(astra_storage_physical_read_only(&catalog, device, 1u, 2) == EINVAL);
+    catalog.sequence = UINT64_MAX;
+    assert(astra_storage_physical_read_only(&catalog, data, 1u, 0) == EOVERFLOW);
+    assert((astra_storage_find(&catalog, data)->flags & ASTRA_VOLUME_READ_ONLY) != 0u);
+    astra_storage_catalog_destroy(&catalog);
+}
+
+static void retained_mount_blocks_new_medium(void)
+{
+    AstraStorageCatalog catalog;
+    uint64_t device, old_medium, old_source, old_mount, new_medium, new_source, admitted;
+    assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, UINT64_C(8) << 30, &device) == 0);
+    assert(astra_storage_medium(&catalog, device, 1u, &old_medium) == 0);
+    assert(astra_storage_source(&catalog, old_medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, 1u, UINT64_C(1) << 20,
+        UINT64_C(1) << 30, &old_source) == 0);
+    assert(astra_storage_probe_result(&catalog, old_source, 1u,
+        ASTRA_VOLUME_EXT4, "", "Old", "ext4", 0, 0) == 0);
+    assert(astra_storage_mount_begin(&catalog, old_source, 1u, 0u, 0u, 0u,
+        &old_mount) == 0);
+    assert(astra_storage_mount_result(&catalog, old_mount, 1u, 77u, 0) == 0);
+    assert(astra_storage_loss(&catalog, old_medium, 1u) == 0);
+    assert(astra_storage_medium(&catalog, device, 1u, &new_medium) == 0);
+    assert(astra_storage_source(&catalog, new_medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, 1u, UINT64_C(1) << 20,
+        UINT64_C(1) << 30, &new_source) == 0);
+    assert(astra_storage_probe_result(&catalog, new_source, 1u,
+        ASTRA_VOLUME_EXT4, "", "New", "ext4", 0, 0) == 0);
+    admitted = 99u;
+    assert(astra_storage_mount_begin(&catalog, new_source, 1u, 0u, 0u, 0u,
+        &admitted) == EBUSY);
+    assert(admitted == 0u);
+    assert(astra_storage_unmount_result(&catalog, old_mount, 2u, 0, 0, 0) == 0);
+    assert(astra_storage_mount_begin(&catalog, new_source, 1u, 0u, 0u, 0u,
+        &admitted) == 0);
+    astra_storage_catalog_destroy(&catalog);
+}
+
+static void format_lifecycle(void)
+{
+    AstraStorageCatalog catalog;
+    uint64_t disk, medium, legacy, other, mounted, fixed, candidate;
+    assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_PARTITION_MAP_MBR,
+        1024u * 1024u * 1024u, &disk) == 0);
+    assert(astra_storage_medium(&catalog, disk, 1u, &medium) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u, ASTRA_VOLUME_PARTITION_MAP_MBR,
+        1u, 1024u * 1024u, 128u * 1024u * 1024u, &legacy) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u, ASTRA_VOLUME_PARTITION_MAP_MBR,
+        2u, 129u * 1024u * 1024u, 128u * 1024u * 1024u, &other) == 0);
+    assert(astra_storage_probe_result(&catalog, legacy, 1u, ASTRA_VOLUME_FAT16,
+        "old-id", "Old", "", 0, 0) == 0);
+    assert(astra_storage_probe_result(&catalog, other, 1u, ASTRA_VOLUME_EXFAT,
+        "other-id", "Other", "", 0, 0) == 0);
+    assert((astra_storage_find(&catalog, legacy)->flags & ASTRA_VOLUME_READ_ONLY) != 0u);
+    assert((astra_storage_find(&catalog, legacy)->flags & ASTRA_VOLUME_PHYSICAL_READ_ONLY) == 0u);
+    assert(astra_storage_mount_begin(&catalog, other, 1u, 0u, 0u, 0u, &mounted) == 0);
+    assert(astra_storage_mount_result(&catalog, mounted, 1u, 501u, 0) == 0);
+    assert(astra_storage_no_mounted_children(&catalog, disk) == EBUSY);
+    assert(astra_storage_partition_can_edit(&catalog, disk, 1u) == EBUSY);
+    assert(astra_storage_format_begin(&catalog, legacy, 1u) == EBUSY);
+    assert(astra_storage_quiesce(&catalog, mounted, 1u) == 0);
+    assert(astra_storage_unmount_result(&catalog, mounted, 1u, 0, 0, 0) == 0);
+    assert(astra_storage_forget(&catalog, mounted) == 0);
+    assert(astra_storage_partition_can_edit(&catalog, disk, 2u) == ESTALE);
+    assert(astra_storage_partition_can_edit(&catalog, disk, 1u) == 0);
+    assert(astra_storage_format_begin(&catalog, legacy, 1u) == 0);
+    assert(astra_storage_partition_can_edit(&catalog, disk, 1u) == EBUSY);
+    assert(astra_storage_find(&catalog, legacy)->state == ASTRA_VOLUME_FORMATTING);
+    assert(astra_storage_format_begin(&catalog, other, 1u) == EBUSY);
+    assert(astra_storage_mount_begin(&catalog, other, 1u, 0u, 0u, 0u, &candidate) == EBUSY);
+    assert(astra_storage_format_abort(&catalog, legacy, 2u) == ESTALE);
+    assert(astra_storage_format_abort(&catalog, legacy, 1u) == 0);
+    assert(astra_storage_partition_can_edit(&catalog, disk, 1u) == 0);
+    assert(astra_storage_find(&catalog, legacy)->state == ASTRA_VOLUME_UNMOUNTED);
+    assert(strcmp(astra_storage_find(&catalog, legacy)->label, "Old") == 0);
+    assert(astra_storage_format_begin(&catalog, legacy, 1u) == 0);
+    assert(astra_storage_mount_begin(&catalog, legacy, 1u, ASTRA_VOLUME_READ_ONLY,
+        0u, 0u, &candidate) == EBUSY);
+    assert(astra_storage_format_complete(&catalog, legacy, 2u) == ESTALE);
+    assert(astra_storage_format_complete(&catalog, legacy, 1u) == 0);
+    const AstraStorageRecord *record = astra_storage_find(&catalog, legacy);
+    assert(record->generation == 2u && record->state == ASTRA_VOLUME_PROBING);
+    assert(record->format == ASTRA_VOLUME_FORMAT_UNKNOWN && record->uuid[0] == '\0' &&
+        record->label[0] == '\0' && (record->flags & ASTRA_VOLUME_READ_ONLY) == 0u);
+    assert(astra_storage_probe_result(&catalog, legacy, 1u, ASTRA_VOLUME_FAT32,
+        "new-id", "New", "", 0, 0) == ESTALE);
+    assert(astra_storage_probe_result(&catalog, legacy, 2u, ASTRA_VOLUME_FAT32,
+        "new-id", "New", "", 0, 0) == 0);
+    assert(astra_storage_physical_read_only(&catalog, legacy, 2u, 1) == 0);
+    assert((astra_storage_find(&catalog, legacy)->flags &
+        (ASTRA_VOLUME_READ_ONLY | ASTRA_VOLUME_PHYSICAL_READ_ONLY)) ==
+        (ASTRA_VOLUME_READ_ONLY | ASTRA_VOLUME_PHYSICAL_READ_ONLY));
+    assert(astra_storage_format_begin(&catalog, legacy, 2u) == EROFS);
+    assert(astra_storage_physical_read_only(&catalog, legacy, 2u, 0) == 0);
+    assert((astra_storage_find(&catalog, legacy)->flags & ASTRA_VOLUME_READ_ONLY) == 0u);
+    assert(astra_storage_physical_read_only(&catalog, disk, 1u, 1) == 0);
+    assert(astra_storage_partition_can_edit(&catalog, disk, 1u) == EROFS);
+    assert(astra_storage_format_begin(&catalog, legacy, 2u) == EROFS);
+    assert(astra_storage_physical_read_only(&catalog, disk, 1u, 0) == 0);
+    assert(astra_storage_partition_can_edit(&catalog, disk, 1u) == 0);
+    assert(astra_storage_format_begin(&catalog, legacy, 2u) == 0);
+    assert(astra_storage_format_complete(&catalog, legacy, 2u) == 0);
+    fixed = source(&catalog, ASTRA_VOLUME_FIXED, ASTRA_VOLUME_FAT32, "fixed-id", "Fixed");
+    assert(astra_storage_mount_begin(&catalog, fixed, 1u, 0u, 0u, 0u, &mounted) == 0);
+    uint64_t damaged;
+    assert(astra_storage_source(&catalog, medium, 1u, ASTRA_VOLUME_PARTITION_MAP_MBR,
+        3u, 257u * 1024u * 1024u, 128u * 1024u * 1024u, &damaged) == 0);
+    assert(astra_storage_probe_result(&catalog, damaged, 1u, ASTRA_VOLUME_EXFAT,
+        "bad-id", "Bad", "exfat", 0, EUCLEAN) == 0);
+    assert(astra_storage_find(&catalog, damaged)->state == ASTRA_VOLUME_FAILED);
+    assert(astra_storage_format_begin(&catalog, damaged, 1u) == 0);
+    assert(astra_storage_format_complete(&catalog, damaged, 1u) == 0);
+    astra_storage_catalog_destroy(&catalog);
+}
+
+static void partition_lifecycle(void)
+{
+    AstraStorageCatalog catalog;
+    uint64_t disk, medium, source, rejected = 99u;
+    assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
+    assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB,
+        ASTRA_VOLUME_PARTITION_MAP_MBR, UINT64_C(128) << 20, &disk) == 0);
+    assert(astra_storage_medium(&catalog, disk, 1u, &medium) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_MBR, 1u, UINT64_C(1) << 20,
+        UINT64_C(32) << 20, &source) == 0);
+    assert(astra_storage_probe_result(&catalog, source, 1u,
+        ASTRA_VOLUME_FAT32, "", "Old", "vfat", 0, 0) == 0);
+    assert(astra_storage_partition_begin(&catalog, disk, 2u) == ESTALE);
+    assert(astra_storage_partition_begin(&catalog, disk, 1u) == 0);
+    assert(astra_storage_find(&catalog, disk)->state == ASTRA_VOLUME_PARTITIONING);
+    assert(astra_storage_partition_can_edit(&catalog, disk, 1u) == EBUSY);
+    assert(astra_storage_medium(&catalog, disk, 1u, &rejected) == EBUSY);
+    assert(rejected == 0u);
+    assert(astra_storage_mount_begin(&catalog, source, 1u, 0u, 0u, 0u,
+        &rejected) == EBUSY);
+    assert(astra_storage_format_begin(&catalog, source, 1u) == EBUSY);
+    assert(astra_storage_partition_abort(&catalog, disk, 2u) == ESTALE);
+    assert(astra_storage_partition_abort(&catalog, disk, 1u) == 0);
+    assert(astra_storage_find(&catalog, disk)->state == ASTRA_VOLUME_DISCOVERED);
+    assert(astra_storage_find(&catalog, source)->state == ASTRA_VOLUME_UNMOUNTED);
+    assert(astra_storage_partition_begin(&catalog, disk, 1u) == 0);
+    assert(astra_storage_partition_complete(&catalog, disk, 2u, EIO) == ESTALE);
+    assert(astra_storage_partition_complete(&catalog, disk, 1u, EIO) == 0);
+    const AstraStorageRecord *record = astra_storage_find(&catalog, disk);
+    assert(record->generation == 2u && record->state == ASTRA_VOLUME_DISCOVERED &&
+        record->partition_map == ASTRA_VOLUME_PARTITION_MAP_OTHER && record->error == EIO);
+    assert(astra_storage_find(&catalog, medium)->state == ASTRA_VOLUME_LOST);
+    assert(astra_storage_find(&catalog, source)->state == ASTRA_VOLUME_LOST);
+    assert(astra_storage_mount_begin(&catalog, source, 1u, 0u, 0u, 0u,
+        &rejected) == ESTALE);
+    assert(astra_storage_medium(&catalog, disk, 2u, &rejected) == 0);
     astra_storage_catalog_destroy(&catalog);
 }
 
@@ -507,6 +733,10 @@ int main(void)
     configured_ram_source();
     retained_release();
     multiple_partitions_one_device();
+    retained_mount_blocks_new_medium();
+    physical_write_protection();
+    format_lifecycle();
+    partition_lifecycle();
     puts("storage catalog: lifecycle, loss, stale completion, metadata, snapshots, budget PASS");
     return 0;
 }

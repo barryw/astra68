@@ -52,7 +52,17 @@ static void window_probe(const char *path, const AstraStorageProbeResult *expect
         getuid(), getgid(), 5000u, offset, (uint64_t)info.st_size) == 0);
     AstraStorageProbeResult result = finish(&job);
     assert(result.error == 0 && result.format == expected->format &&
-        strcmp(result.uuid, expected->uuid) == 0 && strcmp(result.label, expected->label) == 0);
+        strcmp(result.uuid, expected->uuid) == 0 && strcmp(result.label, expected->label) == 0 &&
+        strcmp(result.detected_type, expected->detected_type) == 0);
+    if (expected->format == ASTRA_VOLUME_FAT12 ||
+        expected->format == ASTRA_VOLUME_FAT16 ||
+        expected->format == ASTRA_VOLUME_FAT32 ||
+        expected->format == ASTRA_VOLUME_EXFAT) {
+        assert(astra_storage_probe_start(&job, target, 18u, 10u,
+            getuid(), getgid(), 5000u, offset, (uint64_t)info.st_size / 2u) == 0);
+        result = finish(&job);
+        assert(result.error == EUCLEAN && result.format == expected->format);
+    }
     assert(astra_storage_probe_start(&job, target, 17u, 9u, getuid(), getgid(),
         5000u, offset + (uint64_t)info.st_size + 4096u, 1u) == EINVAL);
     close(target);
@@ -65,7 +75,7 @@ int main(int argc, char **argv)
     AstraStorageProbeResult result;
     int fd;
     int writable;
-    assert(argc == 5);
+    assert(argc == 6);
     fd = open(argv[1], O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     assert(fd >= 0);
     assert(astra_storage_probe_start(&job, fd, 1u, 1u, 0u, getgid(), 1000u, 0u, 0u) == EINVAL);
@@ -83,6 +93,7 @@ int main(int argc, char **argv)
     assert(result.format == strtoul(argv[4], NULL, 10));
     assert(strcmp(result.label, argv[2]) == 0);
     assert(strcmp(result.uuid, argv[3]) == 0);
+    assert(strcmp(result.detected_type, argv[5]) == 0);
     window_probe(argv[1], &result);
     assert(astra_storage_probe_poll(&job, &result) == -EINVAL);
 

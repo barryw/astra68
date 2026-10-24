@@ -1,6 +1,6 @@
 # Filesystem Kit
 
-Status: `filesystem.library` ABI 14.1 is the shared, backend-neutral client layer
+Status: `filesystem.library` ABI 15.0 is the shared, backend-neutral client layer
 over Astra's VFS protocol, assign namespaces, and union policy. It does not
 create a second filesystem stack.
 
@@ -34,6 +34,18 @@ with no partial result on failure; close it with `astra_volume_snapshot_close`.
 The `volumes` command lists mounted volumes; `volumes --all` displays their
 device/medium/source graph and `volumes --references` reports exact native
 references for diagnostics. Metadata does not authorize operations on those IDs.
+Physical device/source rows include partition map, partition number, byte offset
+and capacity. Probe type distinguishes unsupported filesystems from blank
+sources. `astra_volume_source_issue` gives clients the shared NDOS, unsupported,
+ambiguous and probe-error classification. These are inventory metadata, not
+permission to edit a disk.
+`DISK_ADMIN` grants separate asynchronous format and partition-map operations.
+ABI 15.2 accepts exact device references and byte geometry for MBR/GPT
+initialize, partition create and delete. `astra_volume_partition_find_free`
+plans a MiB-aligned extent from one coherent snapshot. Poll the original
+device generation until worker completion, source retirement and kernel reread
+publish the new map. Disk Setup composes these operations from shared controls;
+physical DE25 edit acceptance remains open.
 Combine `volumes --all --references` to include source identities, exact parent
 incarnations and flags. `ASTRA_VOLUME_CONFIGURED_RAM` identifies the configured
 RAM source independently of whether it currently has a mounted child.
@@ -91,7 +103,7 @@ their nondelegable policy.
 ## Native application contract
 
 Applications link the direct symbols declared by the NDK. Their executable has
-an eager `DT_NEEDED` dependency on `filesystem.library.14`; launch fails before
+an eager `DT_NEEDED` dependency on `filesystem.library.15`; launch fails before
 `main()` with a precise diagnostic when the required ABI is unavailable. An
 `AstraFilesystem` attaches to the process namespace already built from its
 startup grants; it borrows those assign and client objects and cannot expand

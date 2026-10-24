@@ -5,6 +5,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,10 +14,13 @@
 #include <sys/signalfd.h>
 #include <sys/random.h>
 #include <sys/syscall.h>
+#include <linux/openat2.h>
 #include <poll.h>
 #include <limits.h>
 #include <time.h>
 #include <unistd.h>
+
+enum { PARTITION_IDLE, PARTITION_RETIRE, PARTITION_REREAD };
 
 /* Provider-only Linux resources. Native descriptions/owners stay in QEMU. */
 struct AstraStorageResource {
@@ -27,6 +31,15 @@ struct AstraStorageResource {
     uint64_t charged_bytes;
     uint64_t charged_inodes;
     int source;
+    int format_fd;
+    uint64_t format_generation;
+    int format_error;
+    int partition_fd;
+    uint64_t partition_generation;
+    int partition_error;
+    int partition_tool_error;
+    int partition_stage;
+    uint64_t partition_deadline_ns;
     int selection_backing;
     int selection_leased;
     int path_socket;
@@ -44,6 +57,36 @@ static AstraStorageResource *resource(AstraStorageProvider *provider, uint64_t i
     return NULL;
 }
 
+static int under_device(const AstraStorageCatalog *catalog,
+    uint64_t id, uint64_t device)
+{
+    const AstraStorageRecord *record = astra_storage_find(catalog, id);
+    while (record != NULL && record->id != device && record->parent != 0u)
+        record = astra_storage_find(catalog, record->parent);
+    return record != NULL && record->id == device;
+}
+
+int astra_storage_provider_device_idle(AstraStorageProvider *provider, uint64_t device)
+{
+    if (provider == NULL || astra_storage_find(&provider->catalog, device) == NULL)
+        return EINVAL;
+    for (AstraStorageResource *entry = provider->resources; entry != NULL;
+         entry = entry->next) {
+        const AstraStorageRecord *record = astra_storage_find(&provider->catalog, entry->id);
+        if (entry->probe.pid == 0 && entry->work.pid == 0 &&
+            entry->format_fd < 0 && entry->path_socket < 0 &&
+            !entry->mounted.attached && !entry->mounted.directory &&
+            entry->mounted.root < 0 &&
+            entry->mounted.loop < 0 && entry->mounted.backing < 0 &&
+            !(entry->source >= 0 && record != NULL &&
+              record->state == ASTRA_VOLUME_PROBING))
+            continue;
+        if (under_device(&provider->catalog, entry->id, device))
+            return EBUSY;
+    }
+    return 0;
+}
+
 static AstraStorageResource *reserve(AstraStorageProvider *provider, uint64_t id,
                                        uint64_t generation)
 {
@@ -55,6 +98,7 @@ static AstraStorageResource *reserve(AstraStorageProvider *provider, uint64_t id
     if (entry == NULL)
         return NULL;
     *entry = (AstraStorageResource){.id = id, .generation = generation, .source = -1,
+        .format_fd = -1, .partition_fd = -1,
         .selection_backing = -1,
         .path_socket = -1,
         .probe = {.result_fd = -1}, .mounted = {.root = -1, .loop = -1, .backing = -1},
@@ -79,7 +123,9 @@ static void remove_resource(AstraStorageProvider *provider, AstraStorageResource
 
 static void release_ram_charge(AstraStorageProvider *provider, AstraStorageResource *entry)
 {
-    if (entry->mounted.attached || entry->mounted.root >= 0 || entry->mounted.directory || entry->mounted.loop >= 0 ||
+    if (entry->format_fd >= 0 || entry->partition_fd >= 0 ||
+        entry->partition_stage != PARTITION_IDLE || entry->mounted.attached ||
+        entry->mounted.root >= 0 || entry->mounted.directory || entry->mounted.loop >= 0 ||
         entry->mounted.backing >= 0 || entry->work.pid != 0) return;
     provider->ram_bytes -= entry->charged_bytes;
     provider->ram_inodes -= entry->charged_inodes;
@@ -275,7 +321,7 @@ int astra_storage_provider_source(AstraStorageProvider *provider, uint64_t sourc
     return 0;
 failed:
     (void)astra_storage_probe_result(&provider->catalog, source, generation,
-        ASTRA_VOLUME_FORMAT_UNKNOWN, "", "", 0, error);
+        ASTRA_VOLUME_FORMAT_UNKNOWN, "", "", "", 0, error);
     return error;
 }
 
@@ -284,9 +330,22 @@ int astra_storage_provider_poll(AstraStorageProvider *provider)
     int completed = 0;
     struct signalfd_siginfo signal;
     while (read(provider->lease_signal, &signal, sizeof(signal)) == sizeof(signal)) {}
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -errno;
+    uint64_t current_ns = (uint64_t)now.tv_sec * UINT64_C(1000000000) +
+        (uint64_t)now.tv_nsec;
+    for (AstraStorageResource *entry = provider->resources; entry != NULL;
+         entry = entry->next)
+        if (entry->work.pid != 0 &&
+            (entry->work.operation == ASTRA_STORAGE_WORK_FORMAT ||
+             entry->work.operation == ASTRA_STORAGE_WORK_PARTITION) &&
+            entry->work.cancelled == 0 && current_ns >= entry->work.deadline_ns) {
+            astra_storage_work_cancel(&entry->work);
+            entry->work.cancelled = ETIMEDOUT;
+        }
     for (AstraStorageResource *entry = provider->resources; entry != NULL; entry = entry->next) {
         const AstraStorageRecord *record = astra_storage_find(&provider->catalog, entry->id);
-        if (record->kind == ASTRA_VOLUME_SOURCE &&
+        if (record != NULL && record->kind == ASTRA_VOLUME_SOURCE &&
             (record->origin == ASTRA_VOLUME_ORIGIN_IMAGE || record->origin == ASTRA_VOLUME_ORIGIN_SYSTEM_IMAGE) &&
             record->state != ASTRA_VOLUME_LOST && entry->source >= 0 &&
             fcntl(entry->selection_backing >= 0 ? entry->selection_backing : entry->source, F_GETLEASE) !=
@@ -300,6 +359,49 @@ int astra_storage_provider_poll(AstraStorageProvider *provider)
     for (AstraStorageResource *entry = provider->resources; entry != NULL; entry = entry->next) {
         if (entry->work.pid == 0)
             continue;
+        if (entry->work.operation == ASTRA_STORAGE_WORK_FORMAT) {
+            uint64_t generation = entry->work.generation;
+            int result = 0;
+            int ready = astra_storage_work_edit_poll(&entry->work, &result);
+            if (ready < 0) return ready;
+            if (ready == 0) continue;
+            --provider->workers;
+            close(entry->format_fd);
+            entry->format_fd = -1;
+            entry->format_generation = generation;
+            entry->format_error = result;
+            const AstraStorageRecord *source = astra_storage_find(&provider->catalog, entry->id);
+            if (source != NULL && source->generation == generation &&
+                source->state == ASTRA_VOLUME_FORMATTING) {
+                int error = astra_storage_format_complete(&provider->catalog,
+                    entry->id, generation);
+                if (error != 0) return -error;
+                entry->generation = generation + 1u;
+                astra_storage_discovery_format_result(provider->discovery,
+                    entry->id, result == 0);
+            } else if (result == 0)
+                entry->format_error = ESTALE;
+            ++completed;
+            continue;
+        }
+        if (entry->work.operation == ASTRA_STORAGE_WORK_PARTITION) {
+            int result = 0;
+            int ready = astra_storage_work_edit_poll(&entry->work, &result);
+            if (ready < 0) return ready;
+            if (ready == 0) continue;
+            --provider->workers;
+            close(entry->partition_fd);
+            entry->partition_fd = -1;
+            entry->partition_tool_error = result;
+            if (result != 0)
+                fprintf(stderr, "astra-storage partition worker id=%" PRIu64
+                    " generation=%" PRIu64 " error=%d\n",
+                    entry->id, entry->partition_generation, result);
+            entry->partition_stage = PARTITION_RETIRE;
+            entry->partition_deadline_ns = current_ns + UINT64_C(5000000000);
+            ++completed;
+            continue;
+        }
         if (entry->work.operation == ASTRA_STORAGE_WORK_PATH) {
             AstraStoragePathReply result;
             int fd = -1;
@@ -374,7 +476,7 @@ int astra_storage_provider_poll(AstraStorageProvider *provider)
                 int error = start_probe(provider, entry);
                 if (error != 0) {
                     (void)astra_storage_probe_result(&provider->catalog, entry->id, entry->generation,
-                        ASTRA_VOLUME_FORMAT_UNKNOWN, "", "", 0, error);
+                        ASTRA_VOLUME_FORMAT_UNKNOWN, "", "", "", 0, error);
                     ++completed;
                 }
             }
@@ -388,9 +490,90 @@ int astra_storage_provider_poll(AstraStorageProvider *provider)
         --provider->probes;
         int error = astra_storage_probe_result(&provider->catalog, result.source,
             result.generation, result.format, result.uuid, result.label,
+            result.detected_type,
             result.ambiguous, result.error);
         if (error != 0 && error != ESTALE)
             return -error;
+        ++completed;
+    }
+    for (AstraStorageResource *entry = provider->resources; entry != NULL;
+         entry = entry->next) {
+        if (entry->partition_stage == PARTITION_IDLE)
+            continue;
+        const AstraStorageRecord *device = astra_storage_find(&provider->catalog, entry->id);
+        if (device == NULL || device->generation != entry->partition_generation ||
+            device->state == ASTRA_VOLUME_LOST) {
+            entry->partition_error = ESTALE;
+            entry->partition_stage = PARTITION_IDLE;
+            ++completed;
+            continue;
+        }
+        if (entry->partition_stage == PARTITION_RETIRE) {
+            int error = astra_storage_discovery_partition_retire(provider->discovery,
+                entry->id);
+            if (error != 0) {
+                if (current_ns >= entry->partition_deadline_ns)
+                    entry->partition_error = error;
+                continue;
+            }
+            entry->partition_stage = PARTITION_REREAD;
+            entry->partition_deadline_ns = current_ns + UINT64_C(5000000000);
+            ++completed;
+        }
+        int pending = 0;
+        for (AstraStorageResource *child = provider->resources; child != NULL;
+             child = child->next)
+            if (child != entry && under_device(&provider->catalog, child->id, entry->id)) {
+                pending = 1;
+                break;
+            }
+        if (pending)
+            continue; /* Reaper closes old partition descriptions next. */
+        int error = astra_storage_discovery_partition_reread(provider->discovery,
+            entry->id, entry->partition_generation);
+        if (error == EBUSY || error == EAGAIN) {
+            if (current_ns >= entry->partition_deadline_ns &&
+                entry->partition_error == EAGAIN) {
+                fprintf(stderr, "astra-storage partition reread id=%" PRIu64
+                    " generation=%" PRIu64 " error=%d\n",
+                    entry->id, entry->partition_generation, error);
+                entry->partition_error = error;
+            }
+            continue;
+        }
+        if (error == ESTALE || error == ENODEV) {
+            (void)astra_storage_provider_loss(provider, entry->id,
+                entry->partition_generation);
+            entry->partition_error = error;
+            entry->partition_stage = PARTITION_IDLE;
+            ++completed;
+            continue;
+        }
+        if (error != 0) {
+            /* Keep status pending while the retained reread fence retries. */
+            if (current_ns >= entry->partition_deadline_ns &&
+                entry->partition_error == EAGAIN) {
+                fprintf(stderr, "astra-storage partition reread id=%" PRIu64
+                    " generation=%" PRIu64 " error=%d\n",
+                    entry->id, entry->partition_generation, error);
+                entry->partition_error = error;
+            }
+            continue; /* Retain fence; a later reread may recover. */
+        }
+        error = astra_storage_partition_complete(&provider->catalog, entry->id,
+            entry->partition_generation, entry->partition_tool_error);
+        if (error != 0) {
+            const AstraStorageRecord *failed = astra_storage_find(&provider->catalog, entry->id);
+            fprintf(stderr, "astra-storage partition completion id=%" PRIu64
+                " generation=%" PRIu64 " state=%u tool=%d error=%d\n",
+                entry->id, entry->partition_generation,
+                failed == NULL ? 0u : failed->state,
+                entry->partition_tool_error, error);
+            return -error;
+        }
+        entry->generation = entry->partition_generation + 1u;
+        entry->partition_error = entry->partition_tool_error;
+        entry->partition_stage = PARTITION_IDLE;
         ++completed;
     }
     return completed;
@@ -496,7 +679,7 @@ int astra_storage_provider_system(AstraStorageProvider *provider, int file,
     return 0;
 failed:
     (void)astra_storage_probe_result(&provider->catalog, *source, 1u,
-        ASTRA_VOLUME_FORMAT_UNKNOWN, "", "", 0, error);
+        ASTRA_VOLUME_FORMAT_UNKNOWN, "", "", "", 0, error);
     return error;
 }
 
@@ -684,6 +867,15 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
                  request.version != ASTRA_STORAGE_PROVIDER_VERSION ||
                  request.serial == 0u || request.reserved != 0u)
             error = EPROTO;
+        else if (request.operation != ASTRA_STORAGE_CONTROL_FORMAT &&
+                 (request.format != 0u ||
+                  memcmp(request.label, (char[sizeof(request.label)]){0},
+                         sizeof(request.label)) != 0))
+            error = EPROTO;
+        else if (request.operation != ASTRA_STORAGE_CONTROL_PARTITION &&
+                 memcmp(&request.edit, (AstraVolumePartitionEdit[1]){{0}},
+                        sizeof(request.edit)) != 0)
+            error = EPROTO;
     }
     if (error == 0) {
         const AstraStorageRecord *record;
@@ -776,6 +968,43 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
             else
                 error = astra_storage_provider_backing(provider, request.target, request.generation, &root);
             break;
+        case ASTRA_STORAGE_CONTROL_FORMAT: {
+            const char *end = memchr(request.label, '\0', sizeof(request.label));
+            if (request.flags || request.byte_limit || request.inode_limit ||
+                request.sequence || request.after || request.backing_object ||
+                end == NULL ||
+                memcmp(end, (char[sizeof(request.label)]){0},
+                       sizeof(request.label) - (size_t)(end - request.label)) != 0)
+                error = EINVAL;
+            else
+                error = astra_storage_provider_format(provider, request.target,
+                    request.generation, request.format, request.label);
+            break;
+        }
+        case ASTRA_STORAGE_CONTROL_FORMAT_STATUS:
+            if (request.flags || request.byte_limit || request.inode_limit ||
+                request.sequence || request.after || request.backing_object)
+                error = EINVAL;
+            else
+                error = astra_storage_provider_format_status(provider, request.target,
+                    request.generation, &reply.operation_error);
+            break;
+        case ASTRA_STORAGE_CONTROL_PARTITION:
+            if (request.flags || request.byte_limit || request.inode_limit ||
+                request.sequence || request.after || request.backing_object)
+                error = EINVAL;
+            else
+                error = astra_storage_provider_partition(provider, request.target,
+                    request.generation, &request.edit);
+            break;
+        case ASTRA_STORAGE_CONTROL_PARTITION_STATUS:
+            if (request.flags || request.byte_limit || request.inode_limit ||
+                request.sequence || request.after || request.backing_object)
+                error = EINVAL;
+            else
+                error = astra_storage_provider_partition_status(provider, request.target,
+                    request.generation, &reply.operation_error);
+            break;
         default:
             error = ENOTSUP;
             break;
@@ -798,21 +1027,33 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
     return error;
 }
 
-static int next_probe_timeout(AstraStorageProvider *provider)
+static int next_storage_timeout(AstraStorageProvider *provider)
 {
     uint64_t deadline = UINT64_MAX;
     struct timespec now;
     for (AstraStorageResource *entry = provider->resources; entry != NULL; entry = entry->next)
         if (entry->probe.pid != 0 && entry->probe.cancelled == 0 && entry->probe.deadline_ns < deadline)
             deadline = entry->probe.deadline_ns;
+    for (AstraStorageResource *entry = provider->resources; entry != NULL; entry = entry->next)
+        if (entry->work.pid != 0 &&
+            (entry->work.operation == ASTRA_STORAGE_WORK_FORMAT ||
+             entry->work.operation == ASTRA_STORAGE_WORK_PARTITION) &&
+            entry->work.cancelled == 0 && entry->work.deadline_ns < deadline)
+            deadline = entry->work.deadline_ns;
+    int partition_pending = 0;
+    for (AstraStorageResource *entry = provider->resources; entry != NULL; entry = entry->next)
+        if (entry->partition_stage != PARTITION_IDLE)
+            partition_pending = 1;
     if (deadline == UINT64_MAX)
-        return -1;
+        return partition_pending ? 100 : -1;
     if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
         return 0; /* poll reports the clock error and retires the probe. */
     uint64_t current = (uint64_t)now.tv_sec * UINT64_C(1000000000) + (uint64_t)now.tv_nsec;
     if (deadline <= current)
         return 0;
     uint64_t milliseconds = (deadline - current + 999999u) / 1000000u;
+    if (partition_pending && milliseconds > 100u)
+        return 100;
     return milliseconds > INT_MAX ? INT_MAX : (int)milliseconds;
 }
 
@@ -870,7 +1111,7 @@ int astra_storage_provider_wait(AstraStorageProvider *provider, int timeout_ms)
 {
     if (provider == NULL || provider->lease_signal < 0 || timeout_ms < 0)
         return EINVAL;
-    int deadline = next_probe_timeout(provider);
+    int deadline = next_storage_timeout(provider);
     if (deadline >= 0 && deadline < timeout_ms)
         timeout_ms = deadline;
     struct pollfd event = {provider->lease_signal, POLLIN, 0};
@@ -904,18 +1145,22 @@ int astra_storage_provider_serve(AstraStorageProvider *provider, int control, in
                             {provider->lease_signal, POLLIN, 0}, {process, POLLIN, 0},
                             {provider->discovery == NULL ? -1 : provider->discovery->fd, POLLIN, 0}};
     int error = 0;
+    const char *phase = "provider poll";
     while (error == 0) {
+        phase = "provider poll";
         int changed = astra_storage_provider_poll(provider);
         if (changed < 0) {
             error = -changed;
             break;
         }
+        phase = "resource reap";
         int pending = astra_storage_provider_reap(provider);
         if (pending != 0 && pending != EAGAIN) {
             error = pending;
             break;
         }
         if (provider->discovery != NULL) {
+            phase = "discovery poll";
             error = astra_storage_discovery_poll(provider->discovery);
             if (error != 0)
                 break;
@@ -928,9 +1173,10 @@ int astra_storage_provider_serve(AstraStorageProvider *provider, int control, in
                 break;
             }
         }
-        int timeout = next_probe_timeout(provider);
+        int timeout = next_storage_timeout(provider);
         if (pending == EAGAIN && (timeout < 0 || timeout > 100))
             timeout = 100; /* real retained cleanup, never a zero-time spin */
+        phase = "event wait";
         int ready = poll(waits, sizeof(waits) / sizeof(waits[0]), timeout);
         if (ready < 0) {
             if (errno == EINTR)
@@ -940,21 +1186,29 @@ int astra_storage_provider_serve(AstraStorageProvider *provider, int control, in
         }
         if (waits[3].revents != 0)
             break;
-        if (waits[4].revents & POLLIN)
+        if (waits[4].revents & POLLIN) {
+            phase = "discovery event";
             error = astra_storage_discovery_receive(provider->discovery);
+        }
         if (error == 0 && (waits[4].revents & (POLLERR | POLLHUP | POLLNVAL)))
             error = EIO;
-        if (error == 0 && (waits[0].revents & POLLIN))
+        if (error == 0 && (waits[0].revents & POLLIN)) {
+            phase = "control request";
             error = astra_storage_provider_control(provider, control, peer,
                 provider->domain.uid, provider->domain.gid);
-        if (error == 0 && (waits[1].revents & POLLIN))
+        }
+        if (error == 0 && (waits[1].revents & POLLIN)) {
+            phase = "path request";
             error = astra_storage_provider_path(provider, path, peer,
                 provider->domain.uid, provider->domain.gid);
+        }
         if (error == 0 && ((waits[0].revents | waits[1].revents) & (POLLERR | POLLHUP | POLLNVAL)))
             error = EPIPE;
         if (error == 0 && (waits[2].revents & (POLLERR | POLLHUP | POLLNVAL)))
             error = EIO;
     }
+    if (error != 0)
+        fprintf(stderr, "astra-storage %s failed: %s\n", phase, strerror(error));
     close(process);
     return error;
 }
@@ -1055,6 +1309,170 @@ int astra_storage_provider_eject(AstraStorageProvider *provider, uint64_t source
     return 0;
 }
 
+static int verified_executable(const char *path, int *executable)
+{
+    struct open_how how = {.flags = O_RDONLY | O_CLOEXEC,
+        .resolve = RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS};
+    int fd = (int)syscall(SYS_openat2, AT_FDCWD, path, &how, sizeof(how));
+    if (fd < 0) return errno;
+    struct stat info;
+    int error = fstat(fd, &info) != 0 ? errno :
+        !S_ISREG(info.st_mode) || info.st_uid != 0u ||
+        (info.st_mode & 0022u) != 0u ||
+        (info.st_mode & 0111u) == 0u ? EACCES : 0;
+    if (error != 0) { close(fd); return error; }
+    *executable = fd;
+    return 0;
+}
+
+static int formatter_executable(uint32_t format, int *executable)
+{
+    char path[PATH_MAX];
+    ssize_t length = readlink("/proc/self/exe", path, sizeof(path) - 1u);
+    if (length <= 0 || length >= (ssize_t)sizeof(path) - 1)
+        return length < 0 ? errno : ENAMETOOLONG;
+    path[length] = '\0';
+    char *slash = strrchr(path, '/');
+    if (slash == NULL) return EINVAL;
+    const char *name = format == ASTRA_VOLUME_FAT32 ?
+        "/astra-mkfs.fat" : "/astra-mkfs.exfat";
+    if ((size_t)(slash - path) + strlen(name) >= sizeof(path))
+        return ENAMETOOLONG;
+    strcpy(slash, name);
+    return verified_executable(path, executable);
+}
+
+int astra_storage_provider_partition(AstraStorageProvider *provider,
+    uint64_t device, uint64_t generation, const AstraVolumePartitionEdit *edit)
+{
+    if (provider == NULL || edit == NULL) return EINVAL;
+    const AstraStorageRecord *record = astra_storage_find(&provider->catalog, device);
+    if (record == NULL || record->generation != generation ||
+        record->state == ASTRA_VOLUME_LOST)
+        return ESTALE;
+    if (provider->discovery == NULL) return ENOTSUP;
+    if (provider->workers >= provider->worker_limit) return EAGAIN;
+    AstraStorageResource *entry = resource(provider, device);
+    if (entry != NULL && (entry->work.pid != 0 ||
+        entry->partition_stage != PARTITION_IDLE || entry->partition_fd >= 0))
+        return EBUSY;
+    int exclusive = -1, executable = -1;
+    int error = astra_storage_discovery_device_fd(provider->discovery,
+        device, generation, &exclusive);
+    if (error != 0) return error;
+    error = verified_executable("/usr/sbin/sfdisk", &executable);
+    if (error != 0) { close(exclusive); return error; }
+    int added = entry == NULL;
+    if (added) {
+        entry = reserve(provider, device, generation);
+        if (entry == NULL) error = ENOSPC;
+    }
+    if (error == 0)
+        error = astra_storage_partition_begin(&provider->catalog, device, generation);
+    if (error == 0) {
+        record = astra_storage_find(&provider->catalog, device);
+        error = astra_storage_work_partition_start(&entry->work, record,
+            exclusive, executable, edit);
+        if (error != 0)
+            (void)astra_storage_partition_abort(&provider->catalog, device, generation);
+    }
+    close(executable);
+    if (error != 0) {
+        close(exclusive);
+        if (added && entry != NULL) remove_resource(provider, entry);
+        return error;
+    }
+    entry->partition_fd = exclusive;
+    entry->partition_generation = generation;
+    entry->partition_error = EAGAIN;
+    entry->partition_tool_error = EAGAIN;
+    entry->partition_stage = PARTITION_IDLE;
+    ++provider->workers;
+    return 0;
+}
+
+int astra_storage_provider_partition_status(AstraStorageProvider *provider,
+    uint64_t device, uint64_t generation, int *result)
+{
+    if (provider == NULL || result == NULL) return EINVAL;
+    AstraStorageResource *entry = resource(provider, device);
+    if (entry == NULL || entry->partition_generation != generation)
+        return ESTALE;
+    *result = entry->partition_error;
+    if (*result != 0 && *result != EAGAIN)
+        fprintf(stderr, "astra-storage partition status id=%" PRIu64
+            " generation=%" PRIu64 " stage=%d error=%d tool=%d\n",
+            device, generation, entry->partition_stage, *result,
+            entry->partition_tool_error);
+    return 0;
+}
+
+int astra_storage_provider_format(AstraStorageProvider *provider, uint64_t source,
+    uint64_t generation, uint32_t format, const char *label)
+{
+    if (provider == NULL || label == NULL ||
+        (format != ASTRA_VOLUME_FAT32 && format != ASTRA_VOLUME_EXFAT))
+        return EINVAL;
+    const AstraStorageRecord *record = astra_storage_find(&provider->catalog, source);
+    AstraStorageResource *entry = resource(provider, source);
+    if (record == NULL || record->generation != generation ||
+        record->state == ASTRA_VOLUME_LOST)
+        return ESTALE;
+    if (entry == NULL || entry->source < 0 || provider->discovery == NULL)
+        return ENOTSUP;
+    if (entry->work.pid != 0 || entry->probe.pid != 0 ||
+        entry->format_fd >= 0 || provider->workers >= provider->worker_limit)
+        return EAGAIN;
+    int exclusive = -1, executable = -1;
+    int error = astra_storage_discovery_format_fd(provider->discovery,
+        source, generation, &exclusive);
+    if (error != 0) {
+        fprintf(stderr, "astra-storage format source=%" PRIu64
+            " generation=%" PRIu64 " phase=open error=%d flags=%u\n",
+            source, generation, error, record->flags);
+        return error;
+    }
+    const char *phase = "formatter";
+    error = formatter_executable(format, &executable);
+    if (error == 0) {
+        phase = "catalog";
+        error = astra_storage_format_begin(&provider->catalog, source, generation);
+    }
+    if (error == 0) {
+        phase = "worker";
+        record = astra_storage_find(&provider->catalog, source);
+        error = astra_storage_work_format_start(&entry->work, record,
+            exclusive, executable, format, label,
+            provider->domain.uid, provider->domain.gid);
+        if (error != 0)
+            (void)astra_storage_format_abort(&provider->catalog, source, generation);
+    }
+    if (executable >= 0) close(executable);
+    if (error != 0) {
+        fprintf(stderr, "astra-storage format source=%" PRIu64
+            " generation=%" PRIu64 " phase=%s error=%d\n",
+            source, generation, phase, error);
+        close(exclusive);
+        return error;
+    }
+    entry->format_fd = exclusive;
+    entry->format_generation = generation;
+    entry->format_error = EAGAIN;
+    ++provider->workers;
+    return 0;
+}
+
+int astra_storage_provider_format_status(AstraStorageProvider *provider,
+    uint64_t source, uint64_t generation, int *result)
+{
+    if (provider == NULL || result == NULL) return EINVAL;
+    AstraStorageResource *entry = resource(provider, source);
+    if (entry == NULL || entry->format_generation != generation)
+        return ESTALE;
+    *result = entry->format_error;
+    return 0;
+}
+
 int astra_storage_provider_release_image(AstraStorageProvider *provider, uint64_t source,
     uint64_t generation)
 {
@@ -1099,7 +1517,10 @@ int astra_storage_provider_release(AstraStorageProvider *provider, uint64_t id)
         if (error == 0) error = astra_storage_release_result(&provider->catalog, id, record->generation, 0);
         return error == 0 ? astra_storage_forget(&provider->catalog, id) : error;
     }
-    if (entry->probe.pid != 0 || entry->work.pid != 0 || entry->mounted.root >= 0 || entry->mounted.attached || entry->mounted.directory || entry->mounted.loop >= 0 ||
+    if (entry->probe.pid != 0 || entry->work.pid != 0 ||
+        entry->format_fd >= 0 || entry->partition_fd >= 0 ||
+        entry->partition_stage != PARTITION_IDLE ||
+        entry->mounted.root >= 0 || entry->mounted.attached || entry->mounted.directory || entry->mounted.loop >= 0 ||
         entry->mounted.backing >= 0)
         error = EBUSY;
     else

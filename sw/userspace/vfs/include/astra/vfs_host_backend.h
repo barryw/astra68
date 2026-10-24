@@ -4,6 +4,7 @@
 #include <astra/host.h>
 #include <astra/vfs_backend.h>
 #include <astra/volume.h>
+#include <astra/volume_service.h>
 
 typedef struct AstraVfsHostRequest {
     AstraHostCommand *command;
@@ -65,5 +66,11 @@ uint32_t astra_vfs_host_catalog(AstraVfsHostTransport *transport, uint32_t gener
 uint32_t astra_vfs_host_volume_control(AstraVfsHostTransport *transport,
     uint32_t generation, uint32_t requester, const AstraVolumeControl *control,
     AstraVolumeReference *reference);
+uint32_t astra_vfs_host_volume_format(AstraVfsHostTransport *transport,
+    uint32_t generation, uint32_t requester, const AstraVolumeFormatRequest *format,
+    uint32_t *outcome);
+uint32_t astra_vfs_host_volume_partition(AstraVfsHostTransport *transport,
+    uint32_t generation, uint32_t requester, const AstraVolumePartitionRequest *partition,
+    uint32_t *outcome);
 
 #endif

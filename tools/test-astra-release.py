@@ -70,6 +70,8 @@ with tempfile.TemporaryDirectory() as temporary_text:
     assert (installed.stat().st_mode & 0o222) == 0
     assert ((installed / "storage.img").stat().st_mode & 0o222) == 0
     assert (installed / "bin/qemu").stat().st_mode & 0o111
+    assert all(path.stat().st_uid == os.geteuid()
+               for path in [installed] + list(installed.rglob("*")))
     (installed / "storage.img").chmod(0o644)
     rejected(lambda: release.verify(installed, installed=True),
              "installed release is writable")
@@ -123,7 +125,10 @@ with tempfile.TemporaryDirectory() as temporary_text:
                              third_identity):
         (state / release_identity).mkdir(parents=True)
         (state / release_identity / "storage.img").write_bytes(b"state")
+    (state / "system").mkdir()
+    (state / "system/storage.img").write_bytes(b"user data")
     assert release.prune(store) == (1, 1)
+    assert (state / "system/storage.img").read_bytes() == b"user data"
     assert not (store / "releases" / old_identity).exists()
     assert not (state / old_identity).exists()
     for retained in (identity, second_identity, third_identity):

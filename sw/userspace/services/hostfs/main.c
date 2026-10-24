@@ -147,7 +147,7 @@ static HostfsGrant **grants;
 static uint32_t grant_count;       /* live records, packed at the front */
 static uint32_t grant_capacity;    /* slots in grants, wait_* */
 static uint32_t next_grant_id = 1u;
-static uint32_t *wait_handles;     /* grant_capacity + 9 */
+static uint32_t *wait_handles;     /* grant_capacity + 10 */
 static uint32_t *wait_owners;      /* what each handle is */
 static uint32_t wait_rotation;     /* first grant served this pass (M6) */
 static uint32_t usage_holders_changed;
@@ -167,6 +167,7 @@ static void hostfs_sessions_changed(void *context)
 #define WAIT_VOLUME_WRITE (UINT32_MAX - 4u)
 #define WAIT_VOLUME_ADMIN (UINT32_MAX - 5u)
 #define WAIT_VOLUME_USAGE (UINT32_MAX - 6u)
+#define WAIT_DISK_ADMIN (UINT32_MAX - 9u)
 #define WAIT_RAM_READ (UINT32_MAX - 7u)
 #define WAIT_RAM_WRITE (UINT32_MAX - 8u)
 #define WAIT_SHUTDOWN UINT32_MAX
@@ -423,9 +424,9 @@ static uint32_t grow_grants(void)
     uint32_t *handles;
     uint32_t *owners;
 
-    /* Grants and the nine canonical control endpoints. */
-    if (capacity + 9u > ASTRA_WAIT_MULTIPLE_MAX)
-        capacity = ASTRA_WAIT_MULTIPLE_MAX - 9u;
+    /* Grants and the ten canonical control endpoints. */
+    if (capacity + 10u > ASTRA_WAIT_MULTIPLE_MAX)
+        capacity = ASTRA_WAIT_MULTIPLE_MAX - 10u;
     if (capacity <= grant_capacity)
         return ASTRA_VFS_ERR_LIMIT;
     table = astra_runtime_reallocate(grants, capacity * sizeof(*grants));
@@ -433,12 +434,12 @@ static uint32_t grow_grants(void)
         return ASTRA_VFS_ERR_LIMIT;
     grants = table;
     handles = astra_runtime_reallocate(wait_handles,
-                                       (capacity + 9u) * sizeof(*handles));
+                                       (capacity + 10u) * sizeof(*handles));
     if (handles == NULL)
         return ASTRA_VFS_ERR_LIMIT;
     wait_handles = handles;
     owners = astra_runtime_reallocate(wait_owners,
-                                      (capacity + 9u) * sizeof(*owners));
+                                      (capacity + 10u) * sizeof(*owners));
     if (owners == NULL)
         return ASTRA_VFS_ERR_LIMIT;
     wait_owners = owners;
@@ -1024,6 +1025,28 @@ static uint32_t hostfs_volume_control(void *context, uint32_t requester,
         requester, control, reference);
 }
 
+static uint32_t hostfs_volume_format(void *context, uint32_t requester,
+    const AstraVolumeFormatRequest *request, uint32_t *outcome)
+{
+    (void)context;
+    uint32_t status = hostfs_check_provider();
+    if (status != ASTRA_STATUS_OK) return status;
+    retire_orphans();
+    return astra_vfs_host_volume_format(&transport, transport.generation,
+        requester, request, outcome);
+}
+
+static uint32_t hostfs_volume_partition(void *context, uint32_t requester,
+    const AstraVolumePartitionRequest *request, uint32_t *outcome)
+{
+    (void)context;
+    uint32_t status = hostfs_check_provider();
+    if (status != ASTRA_STATUS_OK) return status;
+    retire_orphans();
+    return astra_vfs_host_volume_partition(&transport, transport.generation,
+        requester, request, outcome);
+}
+
 /* Shared directory roots may have several authenticated application holders.
  * Derivation's requester is provenance; HELLO's existing native sessions name
  * actual holders. No separate holder table or last-writer ownership exists. */
@@ -1171,12 +1194,13 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t volume_write_receive = 0u, volume_write_send = 0u;
     uint32_t volume_admin_receive = 0u, volume_admin_send = 0u;
     uint32_t volume_usage_receive = 0u, volume_usage_send = 0u;
+    uint32_t volume_disk_receive = 0u, volume_disk_send = 0u;
     uint32_t ram_read_receive = 0u, ram_read_send = 0u;
     uint32_t ram_write_receive = 0u, ram_write_send = 0u;
     AstraVolumeReference ram_source = {0};
     uint32_t status = ASTRA_STATUS_OK;
     const char *const names[] = {"/dh0", "/work", "/sound", "/tmp"};
-    uint32_t published[12] = {0};
+    uint32_t published[13] = {0};
     AstraVolumeReference system;
     AstraVfsHostBackend system_backend;
     uint32_t config_session = 0u;
@@ -1251,12 +1275,16 @@ int astra_main(const AstraStartupInfo *startup)
          astra_rt_port_create(queue_messages, queue_messages * ASTRA_MESSAGE_SIZE_MAX,
             &volume_usage_receive, &volume_usage_send) != ASTRA_SYSCALL_OK ||
          astra_rt_port_create(queue_messages, queue_messages * ASTRA_MESSAGE_SIZE_MAX,
+            &volume_disk_receive, &volume_disk_send) != ASTRA_SYSCALL_OK ||
+         astra_rt_port_create(queue_messages, queue_messages * ASTRA_MESSAGE_SIZE_MAX,
             &ram_read_receive, &ram_read_send) != ASTRA_SYSCALL_OK ||
          astra_rt_port_create(queue_messages, queue_messages * ASTRA_MESSAGE_SIZE_MAX,
             &ram_write_receive, &ram_write_send) != ASTRA_SYSCALL_OK))
         status = ASTRA_STATUS_LIMIT;
     volume_port.root = hostfs_volume_root;
     volume_port.control = hostfs_volume_control;
+    volume_port.format = hostfs_volume_format;
+    volume_port.partition = hostfs_volume_partition;
     volume_port.usage = hostfs_volume_usage;
     published[4] = metrics_send;
     published[5] = volume_send;
@@ -1264,9 +1292,10 @@ int astra_main(const AstraStartupInfo *startup)
     published[7] = volume_write_send;
     published[8] = volume_admin_send;
     published[9] = volume_usage_send;
-    published[10] = ram_read_send;
-    published[11] = ram_write_send;
-    uint32_t ready = astra_service_ready_managed(bootstrap->handle, status, published, 12u, shutdown_send);
+    published[10] = volume_disk_send;
+    published[11] = ram_read_send;
+    published[12] = ram_write_send;
+    uint32_t ready = astra_service_ready_managed(bootstrap->handle, status, published, 13u, shutdown_send);
     if (ready != ASTRA_SYSCALL_OK && status == ASTRA_STATUS_OK)
         status = HOSTFS_FAIL_READY;
     if (shutdown_send != 0u)
@@ -1302,6 +1331,8 @@ int astra_main(const AstraStartupInfo *startup)
         wait_owners[count++] = WAIT_VOLUME_ADMIN;
         wait_handles[count] = volume_usage_receive;
         wait_owners[count++] = WAIT_VOLUME_USAGE;
+        wait_handles[count] = volume_disk_receive;
+        wait_owners[count++] = WAIT_DISK_ADMIN;
         wait_handles[count] = ram_read_receive;
         wait_owners[count++] = WAIT_RAM_READ;
         wait_handles[count] = ram_write_receive;
@@ -1375,6 +1406,11 @@ int astra_main(const AstraStartupInfo *startup)
         if (wait_owners[selected] == WAIT_VOLUME_USAGE) {
             if (status != ASTRA_SYSCALL_OK) return (int)status;
             (void)astra_volume_port_usage_pump(&volume_port, wait_handles[selected], 1u);
+            continue;
+        }
+        if (wait_owners[selected] == WAIT_DISK_ADMIN) {
+            if (status != ASTRA_SYSCALL_OK) return (int)status;
+            (void)astra_volume_port_format_pump(&volume_port, wait_handles[selected], 1u);
             continue;
         }
         /* A grant's receive port with no sender left and nothing queued:

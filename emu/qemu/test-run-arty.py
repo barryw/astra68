@@ -46,6 +46,7 @@ exit "${{ASTRA_TEST_POWER_STATUS:-0}}"
 """)
     (root / "qemu/bin").mkdir(parents=True)
     (root / "bin").mkdir()
+    write_executable(root / "bin/astra-font-worker", "#!/bin/sh\nexit 0\n")
     (root / "rom").mkdir()
     (root / "rom/astra_boot.bin").write_bytes(b"rom")
     (root / "storage-terminal.img").write_bytes(b"disk")
@@ -82,7 +83,7 @@ printf '%s' {output!r}
 exit {status}
 """)
     # Published selector is read-only data for python3, not an executable.
-    (root / "bin/astra-storage-image.py").write_text(
+    (root / "bin/storage_image.py").write_text(
         "#!/usr/bin/env python3\nprint('0 4096 fixture-uuid')\n")
     write_executable(root / "bin/astra-storage", f"""#!/usr/bin/env python3
 import os, pathlib, sys
@@ -170,6 +171,7 @@ def root_privilege_boundary():
                                 env=launch_environment, text=True,
                                 capture_output=True, check=False)
         assert result.returncode == 1, result.stderr
+        assert (observed / "qemu.uid").exists(), (result.stdout, result.stderr)
         assert int((observed / "qemu.uid").read_text()) == guest.pw_uid, \
             "QEMU executable started as root"
         assert int((observed / "qemu.gid").read_text()) == guest.pw_gid
@@ -253,6 +255,15 @@ def main():
         assert provider_args[provider_args.index("--seed-sound") + 1] == str(root / "soundfonts")
         assert (observed / "hostfs.budgets").read_text().splitlines() == ["2048", "1024"]
         assert (root / "storage-terminal.img").read_bytes() == b"disk"
+
+        default_state = dict(launch_environment)
+        default_state.pop("ASTRA_STATE_ROOT")
+        result = subprocess.run([str(RUN_ARTY)], env=default_state,
+                                text=True, capture_output=True, check=False)
+        assert result.returncode == 1, result.stderr
+        provider_args = (observed / "provider.args").read_text().splitlines()
+        assert provider_args[provider_args.index("--system") + 1] == \
+            str(observed / "store/state/system/storage-terminal.img")
 
         (observed / "display.exit-once").touch()
         launch_environment.update(ASTRA_HOSTFS_MAX_DESCRIPTORS="512",

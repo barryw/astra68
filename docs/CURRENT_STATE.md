@@ -1,6 +1,348 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-22
+Status: active continuation map, 2026-10-24
+
+Latest production filesystem checkpoint, 2026-10-24: coherent release
+`04aa23c8dd06eeba18f8c972cb27dc4ad360de59b96e67a2140eda0de2dde5d8`
+is selected and running on DE25. The stopped legacy `/dh0` image was copied,
+verified, and refreshed with release-owned commands, services, Kits, apps,
+system fonts, startup manifest, sound and event catalog before atomic
+publication at `/var/lib/astra/state/system/storage-terminal.img`. `/config`,
+`/home`, `/local`, installed fonts and other user paths remain in that image;
+the old release-keyed image remains intact for rollback. Private boot of the
+migrated copy reached Desktop, read system configuration, wrote/read `/home`,
+and mounted the disposable USB FAT32 and exFAT partitions read/write. The
+private guard reported `TRIAL_RESTORED result=0` with no panic. Production
+deploy reported `ASTRA_DE25_RELEASE PASS`; QEMU runs unprivileged, its loop
+device backs the stable image, all three services stay active with zero
+restarts, and native `volumes --all` plus read/write probes passed on both USB
+formats. The 11:46 panic log belongs to the failed earlier cutover; no new
+panic has appeared since the 12:39 production boot. Physical CD media/eject
+and full performance qualification remain open.
+Beast evidence logs are `/var/tmp/astra-fs-private-trial-migration11-20261024.log`
+and `/var/tmp/astra-fs-migration-deploy11-20261024.log`.
+
+The first production cutover attempt (`f7a65563...`) exposed a real release
+migration defect: copying the old image without refreshing its OS files made
+the new HostFS exit with status 8 and caused a boot panic. Production was
+stopped and rolled back to its original image. A second inactive candidate
+(`0e74524d...`) exposed Python bytecode written into a sealed release during
+migration; its package was pruned before activation. The final migration uses
+content checksums, rejects redirected managed directories, refreshes only
+release-owned paths, and suppresses Python bytecode. Deployment now restores
+prior service units and stable-state backup on failure, and waits for HostFS
+startup before reporting success. Haiku reference:
+`src/add-ons/kernel/file_systems/packagefs/volume/Volume.cpp` keeps packaged
+system content separate from writable shine-through directories; Astra adapts
+that ownership split within its existing system image.
+
+Latest physical filesystem gate, 2026-10-24: coherent candidate
+`92ec0d3406fcec38eee09d8b84dc2e01810e9b1eb286e11b4c57e055d0dd4785`
+verified and booted privately on DE25. On the user-authorized disposable SanDisk
+Cruzer serial `FC006A81F5493213`, native Disk Setup created a 4 GiB GPT exFAT
+partition and reported success. Native Disk Setup formatted that partition as
+exFAT, then FAT32; both auto-mounted writable. Native create/read/delete passed
+on each, and a file survived unmount and remount in each format. Native delete
+removed the partition and retired its mount. No provider error or panic appeared.
+The trial guard reported `TRIAL_RESTORED result=0`: production selector
+`ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`,
+production image hash and all three services were restored. The USB now has its
+two earlier 4 GiB FAT32/exFAT partitions. Physical CD media remains unavailable.
+
+Two causes were fixed before this gate. Installed formatter binaries inherited
+`terasic` ownership from transfer, while the provider correctly required trusted
+root ownership; root installation now seals every release path as root-owned.
+The partition worker copied its script pipe onto fd 0 before duplicating
+`/dev/null` from fd 0 to stdout, so `sfdisk` changed GPT then exited with a
+write error. Descriptor setup now preserves `/dev/null` first and retains
+provider stderr for diagnostics. Host provider/discovery, AArch64 provider,
+release integrity and private physical gates passed.
+
+The cutover risk found before this physical gate was the old launcher's
+release-keyed mutable `/dh0` path. The completed production migration above
+uses a release-independent state path and refreshes system files while retaining
+user data. Haiku reference:
+`src/system/kernel/fs/vfs_boot.cpp` mounts the persistent boot volume at
+`/boot`, while `src/add-ons/kernel/file_systems/packagefs/packagefs.cpp`
+manages packaged system content separately; Astra adapts this separation to
+its single Linux-owned system image and immutable runtime releases.
+
+Latest physical gate, 2026-10-24: candidate
+`4954053aec412226fc07905622a55d7908aff0ceb970464ef69de1e797cbf53c`
+verified and booted privately on DE25. Native removal of the remaining FAT32
+partition left a GPT disk with no partitions; provider and QEMU survived.
+Desktop published `NDOS`; double-click displayed "Astra cannot open this disk:
+no supported filesystem was found." Native Disk Setup then recreated a 4 GiB
+FAT32 partition, but still displayed "Disk edit failed" after the physical
+map and catalog changed. Its native FAT32 format of the unmounted writable
+source returned "Protected or write-protected disk; format refused". No panic
+appeared; private trial guard restored the production selector, stopped-image
+hash and all three services (`TRIAL_RESTORED result=0`). Candidate remains
+inactive. Provider phase/error and worker-exit diagnostics are being added
+before the next coherent release to isolate both failures. Haiku's
+`src/kits/storage/disk_device/DiskDeviceJobQueue.cpp` reports a disk job's
+status after `Do()` finishes; Astra retains the same terminal-status contract
+across its asynchronous provider fence.
+
+Current physical gate, 2026-10-24: candidate
+`839934eddabff5c189076c8b2856fedb37ead4554f90454b729b91c0d9f64583`
+verified and booted privately on DE25; production selector stayed
+`ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`.
+Native Disk Setup created 4 GiB FAT32 and 4 GiB exFAT partitions on the
+disposable SanDisk Cruzer. Both mounted writable; native file create/read/delete
+passed on both. Unmount and native deletion of exFAT removed `/dev/sda2`,
+retired its source and icon, and left provider and QEMU alive. Guard reported
+`TRIAL_RESTORED result=0`, no panic, and all production services active. The
+USB now has a single FAT32 partition. Creation exposed an asynchronous status
+bug: Disk Setup displayed a failure while the map edit and rediscovery
+completed. Provider published transient partition-retire/reread errors before
+its retained operation finished. Status now stays busy until completion or
+its five-second failure deadline; provider test checks this contract. The
+empty-disk Desktop path now admits a physical device with no live source as
+`NDOS`, opens a clear error, and offers Disk Setup. This and the status fix
+need a fresh DE25 release and physical retest before production activation.
+Haiku reference for Desktop behavior: `src/kits/tracker/Tracker.cpp` requests
+mountable devices separately from mounted volumes, while
+`src/kits/tracker/IconCache.cpp` falls back to a generic device icon. Astra
+adapts that to its native device/source/mount graph and existing volume icon.
+
+Physical delete failure, 2026-10-24: candidate
+`756da8522d0fc6ef8ed4bc03928361a276fc47f732f38f9e29f6a94b31b52300`
+verified on Beast and installed **inactive** on DE25. Its private boot
+correctly left the stale 4 GiB exFAT signature in the 4 MiB `/dev/sda2`
+partition in FAILED state, with no writable mount. Native Disk Setup kept
+4096 MiB in its shared Stepper and enabled format recovery on the failed
+source. Deleting that source removed `/dev/sda2` from the physical GPT map,
+then the storage provider exited `EINVAL`, killing the private QEMU. The trial
+guard restored production services and checked the stopped production image
+and release selector; no candidate panic report appeared. USB now contains
+only the 4 GiB FAT32 `/dev/sda1` and unallocated remainder. Provider phase,
+partition-completion and udev-event diagnostics are being built to isolate
+the fatal error before any further physical edit. Production is still
+`ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`.
+The second guarded trial reproduced deletion on `/dev/sda1` and isolated the
+error: Linux delivered a partition `change` event after that sysfs node had
+disappeared; its geometry was zero, and discovery returned fatal `EINVAL`.
+Discovery now normalizes that exact observation to removal while retaining
+sequence and disk-incarnation checks; incomplete observations for still-live
+sysfs nodes leave known geometry intact. A focused discovery regression and
+the host provider, AArch64 provider and MC68040 Desktop build gates pass.
+The USB is now a GPT disk with no partitions. Physical retest remains open.
+Haiku reference: `src/kits/storage/disk_device/DiskDeviceList.cpp` handles
+partition deletion separately from ordinary device changes, and
+`src/system/kernel/disk_device_manager/KDiskDeviceManager.cpp` emits explicit
+removal notices. Astra adapts this to Linux udev's less specific `change`
+event by checking the actual sysfs node before retiring its exact observation.
+
+Physical partition-edit checkpoint, 2026-10-24: the user authorized erasing
+the complete 57.7 GiB SanDisk Cruzer serial `FC006A81F5493213`, observed as
+DE25 `/dev/sda`; the internal SD remains protected. Candidate
+`9c1dbfa3b844c3099f0525ae0d0e8c3a9ec6f16d4205ef8250603f8b1cc07cb8`
+booted in a guarded private trial. Native Terminal unmounted all four former
+USB partitions. Native Disk Setup then initialized a GPT map, created a 4 GiB
+FAT32 partition and a 4 MiB exFAT partition; Linux `sfdisk` and the native
+catalog confirmed post-edit rediscovery. Disk Setup lost device selection
+after edits, and rebuilding its shared Stepper after each keypress reduced an
+entered `4096` to `4`. Those UI paths now preserve the live device identity
+and in-progress numeric input. The 4 MiB partition reused an old 4 GiB exFAT
+boot sector and was incorrectly auto-mounted writable. The provider probe now
+checks FAT and exFAT declared extent against the admitted source window,
+leaving oversized signatures in FAILED state; Disk Setup and catalog permit
+safe formatting of a FAILED physical source. Host and DE25 AArch64 probe,
+catalog and provider gates pass. Physical retest and production release gates
+remain open; do not write to the current malformed `/dev/sda2` until a fixed
+candidate has rejected it. Trial reported `TRIAL_RESTORED result=0`; production
+selector, stopped production-image hash and all three production services
+were restored. Haiku references for this repair:
+`src/add-ons/kernel/file_systems/exfat/exfat.h` and `Volume.cpp` describe the
+boot-sector block count and sector shift; `src/add-ons/kernel/file_systems/fat/support.cpp`
+reads FAT BPB sector geometry. Astra adapts those checks at its existing
+bounded, read-only provider probe before auto-mount admission.
+
+Native partition-control checkpoint, 2026-10-23: Filesystem Kit ABI 15.2,
+native Volume protocol 4, provider protocol 6 and Host command 6 now carry
+one typed initialize/create/delete request with exact device reference and
+byte geometry. Disk Setup uses shared Interface Kit tabs, fields, stepper and
+buttons; destructive operations require `ERASE`. The provider holds an
+exclusive observed parent-disk descriptor, fences mounted descendants and
+in-flight probes/work, runs fixed `sfdisk` commands, retires old sources,
+then rereads the kernel map before incrementing the device generation. A
+Beast real-loop regression covered MBR initialize, FAT32 partition create,
+discovered source retirement and delete. Full provider format/mount gate,
+host partition worker, AArch64 provider build, QEMU DE25 build, native VFS,
+NDK, HostFS and Disk Setup build gates passed. A coherent release is being
+staged; guest runtime, DE25 physical map editing, post-edit rediscovery and
+production deployment are **not yet certified**. The authorized disposable
+SanDisk Cruzer serial `FC006A81F5493213` remains unchanged by this new path;
+internal SD and selected production release remain untouched. Haiku reference:
+`src/apps/drivesetup/MainWindow.cpp` validates and commits explicit disk
+modifications; `src/kits/storage/disk_device/Partition.cpp` keeps partition
+identity and geometry distinct from filesystem content. Astra adapts these
+patterns to exact native generations and a single provider lifecycle.
+
+Earlier partition-worker and admission checkpoints below describe their state
+at the time; the native-control checkpoint above supersedes their open items.
+
+Partition worker checkpoint, 2026-10-23: a typed provider-only worker now
+executes fixed `sfdisk` initialize/create/delete commands on a retained
+exclusive parent-disk descriptor. It validates device kind, capacity, logical
+sector size, partition map, filesystem type, bounds and action-specific fields;
+the client cannot pass an executable path, command or script. A disposable
+128 MiB Beast loop gate passed MBR and GPT initialize, create and delete via
+the actual worker, with kernel partition reread only after its descriptor was
+closed. Both host and DE25 AArch64 FAT32/exFAT exclusive-FD gates, full
+provider/discovery gates and DE25 AArch64 provider build pass on Beast. This
+worker is not yet connected to native
+Disk Setup or provider admission: device-wide sibling/holder fencing, bounded
+completion, kernel reread and rediscovery still need implementation. No
+partition edit is enabled in a guest, and no physical disk was repartitioned
+by this checkpoint.
+
+Partition admission checkpoint, 2026-10-23: the exact parent-disk opener now
+uses catalog-wide edit admission. It rejects active descendant Linux mounts,
+pending mount cleanup, concurrent sibling format, stale device generations,
+system disks and physical write protection before opening the observed device.
+The provider resource gate also rejects queued and running probes, live workers,
+retained format descriptors and pending mount resources for that device.
+Focused catalog and real-loop tests cover busy, queued probe, stale, format
+and read-only refusal; full provider/discovery gates and the DE25 AArch64
+provider build pass on Beast. Device state fencing, source retirement,
+kernel reread and native edit lifecycle remain open.
+The exact AArch64 partition worker also passed MBR/GPT initialize, create,
+delete and post-close kernel reread on a disposable DE25 `/dev/shm` loop,
+using the board's installed `sfdisk`. Gate log is
+`/var/tmp/astra-partition-de25-worker-20261023.log` on Beast. Its temporary
+loop and binaries were removed; only production `/dev/loop0` remains and all
+three production host services are active. The USB `/dev/sda` was not edited.
+DE25 root had only 199 MiB free. The inactive 2026-10-19 IRQ trial tree was
+copied to Beast at `/var/tmp/astra-board-archive-20261023/irq-origin-physical-20261019/`;
+a checksum dry run verified 13,245 entries and zero changed or missing files.
+After confirming no mount or live process used that tree, its board copy was
+removed. Board root now has 1.8 GiB free (94% used), with unchanged USB and
+internal SD partition inventories, production `/dev/loop0` alone, and all
+three production host services active. `/dev/shm` served only the small
+disposable block test; it cannot host a production HostFS backing image.
+
+Partition-edit groundwork, 2026-10-23: discovery now has one exact
+parent-disk `O_RDWR|O_EXCL` opener for the future native edit path. It
+revalidates current catalog generation, disk geometry, Linux disk sequence,
+reserved system ancestry, physical write protection and block-device
+capacity. The existing real-loop provider gate now tests stale generation,
+exclusive ownership and refusal while the device is mounted. Beast's full
+format/provider and discovery gates pass, and the DE25 AArch64 provider
+build passes with `CROSS_COMPILE=aarch64-linux-gnu-`. No guest-facing
+partition edit is enabled yet. A separate Beast probe showed stock `sfdisk`
+cannot reopen the inherited exclusive descriptor after dropping to the
+provider user (`Permission denied`). See `docs/DEVICE_AND_VOLUME_PLAN.md`
+for the remaining safe worker/native ABI seam. The inactive physical candidate
+below predates this provider change and must not be used to claim a partition
+edit gate.
+
+Filesystem simultaneous-partition and safe-removal checkpoint, 2026-10-23:
+the same inactive candidate
+`e8a19a632becd5449e9f741fedf3dbdb009f48f1f85aa5fd35b93560c965139d`
+passed another guarded private DE25 boot. SanDisk Cruzer serial
+`FC006A81F5493213` exposed four MBR partitions at once: FAT32 `/usb0`
+and exFAT `/usb1`, `/usb2`, `/usb3`, all mounted writable. Native Terminal
+created, read and removed a distinct file through every mount. Desktop
+displayed all four volume labels. With shell CWD on `/usb0`, native `lsof`
+identified its directory handle and `unmount /usb0` refused removal with
+both actual process/handle records, inode and path. After CWD moved to
+`/work`, `lsof` showed no holders, unmount removed only `/usb0`, and an
+exact-source native mount restored `/usb0` while the other three stayed
+mounted. Disk Setup selected mounted partition 3, displayed four device
+mounts and disabled both format actions. Guard reported
+`TRIAL_RESTORED result=0`, no candidate panic, unchanged selected production
+release and stopped production-image SHA-256
+`f1689b87db68a49505f3d9e5e712a9fd9123e821fadbea0410ea998cfb29cbdd`;
+all three production host services are active. Evidence is under
+`/var/tmp/astra-fs-private-trial-multipart-20261023/` on DE25; HDMI frames
+are `/private/tmp/multipart-busy.png`, `/private/tmp/multipart-desktop.png`
+and `/private/tmp/multipart-disksetup-busy.png` locally. Partition-map
+editing, physical data-CD and optical media-change/eject gates, and full
+production deployment remain open.
+
+Filesystem post-format checkpoint, 2026-10-23: candidate
+`e8a19a632becd5449e9f741fedf3dbdb009f48f1f85aa5fd35b93560c965139d`
+passed a guarded private DE25 boot with a matching image. Native Disk Setup
+reformatted only user-authorized disposable SanDisk `/dev/sda3` (1 GiB at byte
+offset 8,590,983,168), first as FAT32 and then exFAT. After each format the
+new source automatically mounted writable at `/usb0`, with label `ASTRA`,
+without manual mount or host udev trigger. Native Terminal created, read and
+removed a file on each filesystem. Desktop showed the named `ASTRA` icon;
+double-click opened Atlas on the empty exFAT root. The provider regression
+gate failed before the fix when a sibling source temporarily held format
+exclusivity, then passed with retryable `EBUSY` and `FORMATTING` handling;
+the full real loop provider gate and discovery unit gate passed on Beast.
+The private trial completed without a panic and reported
+`TRIAL_RESTORED result=0`; selected production release
+`ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`
+and its stopped image SHA-256
+`4f2497801acd8dd182127ae69175775e717a3cbaffb2cdd719624f09eca99d5b`
+were unchanged. All three host services restarted active. Evidence is under
+`/var/tmp/astra-fs-private-trial-format-fix2-20261023/` on DE25; Atlas HDMI
+capture is `/private/tmp/format-fix2-atlas.png` locally. Candidate remains
+inactive. Native partition-map editing, physical data-CD and optical
+media-change/eject gates, and full production deployment remain open.
+
+Filesystem physical checkpoint, 2026-10-23: candidate
+`724ae9e632647ccdf8afac3652bbe8cbfc802b04414aa83a0ef11fcfcff2266f`
+passed a guarded private DE25 boot with its own matching state image. User
+authorized erasing SanDisk Cruzer serial `FC006A81F5493213`; only its disposable
+`/dev/sda3` and `/dev/sda4` partitions were reformatted. Native Disk Setup
+converted FAT16 to FAT32 (`ASTRA32T`) and NTFS to exFAT (`ASTRAEX`) through
+the provider's held exclusive descriptor. Both probed with their new labels,
+mounted writable, and passed native Terminal create/read/remove. exFAT mounted
+automatically; FAT32 required an explicit native mount after format, so the
+post-format automatic-mount gate remains open. Desktop showed both named
+icons, and double-clicking `ASTRAEX` opened Atlas with the empty root and
+status zero. Stopped-media `fsck.vfat -n /dev/sda3` and the pinned
+exfatprogs 1.4.3 `fsck.exfat -n /dev/sda4` passed clean. Evidence is under
+`/var/tmp/astra-fs-private-trial-format-coherent-20261023/` on DE25; captured
+Atlas frame is `/private/tmp/astra-fs-atlas0.png` locally. The guarded trial
+reported `TRIAL_RESTORED result=0`, matching production-image hash and
+unchanged selected release `ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`.
+`astra.service`, `astra-audio-host.service`, and
+`astra-remote-desktop.service` are active with zero restarts. That candidate
+remained inactive; its post-format FAT32 automount gap was resolved in the
+later checkpoint above.
+
+HDMI DVD playback certification is deferred. The first native SDL presentation
+trials showed up to 3.875-second video gaps and 3.2 seconds of audible-path
+silence despite zero host audio underrun counters. A later trial caused a
+kernel panic in deadline removal; a worker-service timer deferral fix passes
+host kernel/boot tests and a 20-second native QEMU smoke on a coherent current
+image, but has not passed physical regression. A private DE25 trial with
+matching ROM, userspace, storage provider and QEMU launched services, then
+board SSH stopped completing banner exchange while ICMP stayed alive. The
+trial service's journal subsequently reported an out-of-memory kill; its
+guard restored production. The stopped production image SHA-256 before and
+after was
+`971106b2159133b9a7359659fe74625fe5d4386df4515e2c79913ff613957ff4`;
+the selected release before and after was
+`ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`.
+All three host services are active with zero restarts. The 138 MiB video
+fixture was in host tmpfs on a board with no swap; do not repeat that staging
+method. Filesystem work is the current priority. See `docs/VLC_DVD_SPIKE.md`
+for playback evidence and deferred gates.
+
+DVD playback/VLC probe on 2026-10-22: DE25 mounted physical CSS-protected
+`DVD_VIDEO` at `/cd0`. Static VideoLAN DVD libraries and FFmpeg 9.0.2
+decrypted and navigated title 1 on physical `/dev/sr0`. Software decode of
+30.03 seconds delivered 900 MPEG-2 frames converted to RGB565 and English
+AC-3 converted to 48-kHz stereo PCM in 6.958 seconds wall, 4.903 seconds
+user CPU, 10,544 KiB peak RSS. A paced 30-second run delivered 29–34 frames
+per full second after startup, with no later decode stall, but opening disc
+caused an initial 3.864-second read lag. Both tests used null output: native
+Astra video/audio presentation and HDMI stutter certification remain open.
+Production host services stayed active with zero restarts. Beast
+cross-configuration of VLC 3.0.24 passed; static core compilation exposes
+missing POSIX networking and pthread cleanup/cancellation APIs. Native-backed
+process-private POSIX semaphores pass target and host gates. Qualified FPGA
+shell has 6,046 ALMs free but +0.007 ns worst setup slack; software DVD decode
+and conversion have measured headroom, so FPGA decoding is not justified now.
+Exact evidence and next gates:
+`docs/VLC_DVD_SPIKE.md`.
 
 Selected production is panic-fix/Fonts-namespace DE25 release
 `ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`,
@@ -87,15 +429,20 @@ absence. The provider's private mount remained read/write, `astra.service`
 and remote desktop stayed active with zero restarts, and no new panic report
 appeared. Captured RFB frames, native command output, syslog snapshot and
 device inventory are on Beast at `/var/tmp/astra-physical-usb-20261022/`.
-This drive's EFI partition is FAT12, not FAT32, so FAT32 remains untested.
-Physical CD/DVD hotplug, disc automount, safe removal and eject remain open
-until a drive and disc are attached. The USB drive remains mounted for use.
+This drive's EFI partition was FAT12, not FAT32, so FAT32 was untested at
+that checkpoint.
+Physical USB DVD discovery and read-only UDF automount passed with a Pioneer
+BDR-XD08 and a `DVD_VIDEO` disc: `/cd0` exposed `VIDEO_TS`, IFO/BUP files and
+VOB segments through native directory enumeration. Physical data-CD ISO9660,
+optical media change, safe removal and eject remain unqualified. The USB drive
+was mounted during its 2026-10-22 test; current physical attachment varies.
 Partition discovery represents each Linux-reported partition as its own source,
 but native catalog records omit partition number/bounds. This drive's FAT12
 source remained unmounted and had no desktop icon; its recognized ISO9660
-source also remained unmounted because current USB policy permits only ext4,
+source also remained unmounted because that USB policy permitted only ext4,
 FAT32 and exFAT. Neither multiple supported-partition automount nor partition
-editing is physically qualified. New requirements in the production PRD call
+editing was physically qualified at that checkpoint. New requirements in the
+production PRD call
 for per-partition `NDOS` icons with clear open errors, read-only mounting of
 recognized optical filesystems on USB, and a native Disk Setup app reached
 from `Disk > Format...`; no destructive device action has been enabled. The
@@ -116,6 +463,389 @@ and DE25 target builds against native catalog version 3 both exit zero; logs
 are `/var/tmp/astra-fs-formats-qemu-host-20261022.log` and
 `/var/tmp/astra-fs-formats-qemu-de25-20261022.log`. These are build gates,
 not a live guest or DE25 media test.
+
+The 2026-10-23 in-progress filesystem candidate publishes physical device
+capacity and partition map, and source partition number, byte offset and size
+through Volume catalog 4 / Filesystem Kit ABI 15 / Linux provider protocol 3.
+Probe results distinguish blank `NDOS` sources from recognized but unsupported
+formats and retain the detected type for clear UI/CLI errors. Desktop now
+presents nonmountable physical source icons and refuses to launch Atlas on
+them. Focused Beast storage catalog, discovery, provider and probe gates pass,
+including partition geometry changes, removal with unavailable sysfs geometry,
+and an unsupported swap signature; the AArch64 provider builds. Full userspace
+`all test` and native-host and DE25 QEMU builds pass. Logs are
+`/var/tmp/astra-partition-provider-final-20261023.log`,
+`/var/tmp/astra-partition-userspace-final2-20261023.log`,
+`/var/tmp/astra-partition-qemu-host-20261023.log` and
+`/var/tmp/astra-partition-qemu-de25-20261023.log` on Beast. Beast kernel
+`test all verify` and ROM `all verify` pass against this candidate. The
+coherent native QEMU Volume UI gate passes on a separate clone with a
+privileged log observer and QEMU running as UID 1000: Desktop icons, 33 exact
+busy holders, modal diagnostics, safe unmount and ISO source retirement. Log:
+`/var/tmp/astra-partition-volume-ui-root-observer-20261023.log`. The matching
+native Atlas gate also passes DH0/RAM0 roots, 257 entries, UTF-8, empty/error
+states, reflow and stale-incarnation refusal; log:
+`/var/tmp/astra-partition-atlas-root-observer-20261023.log`. Earlier
+unprivileged-observer runs could not read root-owned icon logs and are invalid
+UI verdicts; a stale installed host provider also caused the first startup
+attempt to fail before QMP. Beast's test provider now matches protocol 3;
+the previous installed binary is saved at
+`/var/tmp/astra-storage-before-catalog4-20261023`. DE25 media and release
+gates remain open. No production image or selector was
+changed for this candidate. Haiku review and adapted source paths are recorded
+in `docs/DEVICE_AND_VOLUME_PLAN.md`.
+
+Fresh complete DE25 kernel package built on Beast for the existing running
+`6.12.11-astra-storage1-gd7d192a9ddd9` kernel; package checksum passes and
+contains `sr_mod`, ISO9660, UDF, exFAT and NTFS3 modules. Clean publisher
+staged and verified candidate release
+`65518857cb5e3f9dd250b0a4ae14132a47865f14d11ceda3b7b37e79767f60a0`
+with catalog 4 / Filesystem Kit ABI 15 / provider protocol 3. Board installed
+it without activation. Its isolated DE25 boot on 2026-10-23 showed four GPT
+USB partition sources: ISO9660, FAT12, blank NDOS and ext4. Desktop showed
+NDOS and three USB mount icons. Native `volumes --all` reported exact partition
+geometry and FAT12/ISO9660 read-only versus ext4 writable. Guest `ls`
+enumerated all three roots. Ext4 write/read/remove passed; double-clicking the
+ISO9660 icon opened Atlas with nine entries and status zero. Evidence and
+checksums are on Beast at `/var/tmp/astra-partition4-physical-20261023/`.
+No candidate panic. Private run stopped production audio/remote hosts, so
+their guest service retries are not a complete release gate. Production
+selector stayed `ccf82877...`; stopped production image SHA-256 stayed
+`43b65a5fb6db078ee5af29413d4f6b6217a76c9351037dd345a99204e4f8b`.
+Restored production reached stage 8; all three host services active with
+NRestarts=0. Native Disk Setup and safe edit controls, FAT32/exFAT physical
+media, data-CD ISO9660, optical change/eject and full release acceptance remain
+open. Same installed RBF and timing capacity are recorded in
+`fpga/de25/TIMING_CLOSURE.md`.
+
+After that private gate, Filesystem Kit's export map was corrected to match
+its ABI 15 library identity. A clean Beast userspace rebuild followed by
+complete `all test` passed; the resulting `filesystem.library.15` exports one
+`ASTRA_FILESYSTEM_15.0` namespace, and rebuilt `config.library.1` imports
+15.0 symbols. Log: `/var/tmp/astra-filesystem-abi15-full-pass-20261023.log`.
+The shared Volume client now provides exact snapshot record and ancestor
+lookups with focused graph tests. An unshipped native Disk Setup inventory
+prototype compiles and links against those interfaces; it lists physical
+devices, partitions and whole-disk sources using shared Interface Kit controls
+and retries catalog snapshots during hotplug. It has no edit controls or
+partition/format operations yet. Source changed after release
+`65518857...` was staged, so that candidate does not represent this gate.
+Clean publication staged and verified matching release
+`c0d905b4c68e705872d28cbca64c4b24eba67da101226e0c3738513f73e6fc94`
+on Beast; log is `/var/tmp/astra-fs-abi15-publish-20261023.log`.
+Its ROM checksum `008898b4c4250f41ae91d51b7786a830fc4c48559d90005b54f2312012dcd6e3`
+matches the tested ROM. Matching native host QEMU and host storage provider
+ran root-observed guest gates with QEMU as UID 1000 against disposable clones.
+Volume UI passed exact 33-holder diagnostics, safe unmount, disappearing icon
+and retained ISO source release; Atlas passed DH0/RAM0 exact roots, 257
+entries, UTF-8, empty/error cases, reflow and stale-incarnation refusal.
+Logs: `/var/tmp/astra-fs-abi15-volume-ui-native-20261023.log` and
+`/var/tmp/astra-fs-abi15-atlas-native-20261023.log`. New release remains staged
+on Beast; it has not been selected on DE25 or tested there. Native Disk Setup
+still lacks format/partition operations and its application bundle.
+Board read-only inventory after these gates still shows the 57.7 GiB SanDisk
+Ubuntu installer at `/dev/sda` (ISO9660, FAT EFI, blank, ext4 partitions),
+and the selected release remains `ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`.
+The attached installer has not been reformatted. No data CD is attached.
+
+The next 2026-10-23 filesystem candidate ships native Disk Setup as a
+read-only inventory application. Desktop offers `Disk Setup...` on physical
+source and mounted physical-volume context menus, passing the exact catalog
+reference; the application groups physical devices and sources with shared
+Settings pane, List and Scroll View controls. It deliberately has no
+partition or format edit authority until provider-side safety and disposable
+media gates exist. Desktop now retains the complete catalog graph and keeps
+only icon indices, so mounted-volume ancestry survives filtering. The Linux
+provider publishes observed write protection for devices and sources, including
+partition inheritance from the parent disk, and rejects writable mounts of
+read-only sources. Native catalog/discovery/provider/probe gates pass on Beast;
+log: `/var/tmp/astra-fs-disk-setup-provider-final-20261023.log`. Full userspace
+`all test`, ROM `all verify`, provider-index image tests, and native QEMU
+desktop launch of five application bundles including Disk Setup pass;
+logs: `/var/tmp/astra-fs-disk-setup-userspace-20261023.log`,
+`/var/tmp/astra-fs-disk-setup-rom-20261023.log`, and
+`/var/tmp/astra-fs-disk-setup-desktop-apps-20261023.log`. The native Volume UI
+gate also passes exact 33-holder diagnostics, safe unmount, icon removal and
+retained ISO source release; log:
+`/var/tmp/astra-fs-disk-setup-volume-ui-20261023.log`. NDK `dist-check`
+passes after documenting new exact-reference helpers; log:
+`/var/tmp/astra-fs-disk-setup-ndk-final-20261023.log`. Current board
+read-only inventory still sees only the 57.7 GiB SanDisk Ubuntu installer
+(ISO9660, FAT EFI, blank and ext4 partitions); no data CD is attached. This
+candidate is not deployed or selected on DE25. Partition creation/deletion,
+formatting, FAT32/exFAT physical writes, optical change/eject and final
+release gates remain open.
+
+Clean publisher staged and verified the final inventory candidate on Beast as
+`1b4f085c95b5d88fb5bdfa0bc023e6a72a8fe1094ca18757069b37333c618107`.
+Its source manifest SHA-256 is
+`bf167a48fbe50fff1d75c044663f84497a34347ae8ee806e21dd623048691407`;
+ROM SHA-256 is
+`81357bd80b8a095115dec0e0c301e6534468b8e3609202df5a79dff1e2e95df4`,
+identical to rebuilt ROM. The first staged candidate `468cba94...` is
+superseded by this one after a catalog sequence-overflow mutation fix and
+regression. Matching native QEMU release-image gates pass: five desktop
+application launches including Disk Setup, and complete Volume UI busy,
+unmount, icon-retirement and ISO-source cleanup. Logs:
+`/var/tmp/astra-fs-disk-setup-final-publish-20261023.log`,
+`/var/tmp/astra-fs-disk-setup-final-desktop-apps-20261023.log`, and
+`/var/tmp/astra-fs-disk-setup-final-volume-ui-20261023.log` on Beast.
+Production DE25 remains on `ccf82877...`; this release has not been installed
+or selected there. The 57.7 GiB Ubuntu installer remains intact; no data CD
+or disposable FAT32/exFAT drive is attached. Board root had 1.4 GiB free at
+this checkpoint; any future private candidate transfer must budget both its
+incoming and installed copies before consuming that space.
+
+Post-candidate source now rejects a partition extent beyond its parent's
+known device capacity before catalog admission. Discovery ignores that invalid
+partition without terminating the provider and can admit a later corrected
+observation. Focused catalog tests pass on Beast host and AArch64 QEMU;
+discovery and provider tests plus the AArch64 provider build pass. The staged
+`1b4f085c...` package predates this guard. DE25 still sees only the SanDisk
+Ubuntu installer and internal SD, so no destructive FAT32/exFAT test has run.
+Partition write protection now inherits optical class from the parent device,
+even when an inconsistent partition observation reports another transport
+class. A focused discovery regression passes; no writable optical partition
+is published by that path.
+Beast and DE25 both provide `sfdisk`, `mkfs.fat`, `mkfs.ext4` and `wipefs`;
+neither currently provides `mkfs.exfat`. Those host utilities are not a native
+Disk Setup administration API and have not been wired to guest requests.
+The root-observed native QEMU optical-image gate now passes ISO9660 and UDF
+root reads, desktop icon appearance/disappearance, write refusal, busy-holder
+diagnostics and image-source retirement using the matching release ROM and
+current host provider. Beast log:
+`/var/tmp/astra-fs-optical-guest-20261023.log`. Image sources retain their
+optical contract and deliberately refuse FAT12/FAT16/NTFS image mounts; those
+formats still need block-device guest/physical gates. The first expanded full
+lifecycle trial failed at its later HostFS-restart Terminal click after the
+new Desktop reported ready. The gate now waits for a complete current Desktop
+icon inventory and a quiet display frame before that click. Two consecutive
+full lifecycle retries pass ISO/UDF, RAM remounts, HostFS restart, fresh
+Terminal, stale-reference refusal and durable shutdown with a clean `e2fsck`.
+Failure log: `/var/tmp/astra-fs-udf-guest-20261023.log`; passing logs:
+`/var/tmp/astra-fs-udf-lifecycle-retry-20261023.log` and
+`/var/tmp/astra-fs-udf-lifecycle-repeat-20261023.log`. The first failure is
+consistent with a test click before the new frame settled; no panic was
+reported. Physical media gates remain separate.
+
+Post-candidate catalog admission now also refuses a mount when another live
+physical source on the same medium generation has an overlapping byte range
+and a mounting, mounted, quiescing or retained mount. Unknown source bounds are
+treated as overlapping. Disjoint partitions still mount concurrently. Beast
+host and AArch64 QEMU catalog tests pass, alongside discovery and provider
+tests and the AArch64 provider build. Automount now treats overlap `EBUSY` as
+a per-source refusal, leaving the source visible without stopping discovery.
+This invariant is newer than the staged
+`1b4f085c...` release and has not been deployed to DE25.
+The overlap fence also follows retained physical sources through a retired
+medium on the same device. A newly observed medium cannot mount the same bytes
+until the old Linux mount is actually detached. Beast host, AArch64 QEMU and
+sanitizer catalog tests pass this media-change case.
+Discovery also retires a disk's current medium and partition sources when its
+reported capacity, partition map or write protection changes, even if the
+observation is PRESENT rather than CHANGE. This forces every partition through
+fresh bounds and read-only checks; stale geometry cannot remain mountable.
+Per-partition write-protection changes retire and reprobe that source.
+The real Linux provider now has disposable block-image tests for USB-class
+ISO9660/UDF, FAT12/FAT16 and NTFS read-only mounts. They check detected label
+and format, reject writable admission, open the mounted root, reject file
+creation, then unmount and release the loop/device lineage. Beast provider
+gate passes normally and with ASan/UBSan; the mount-seam gate passes normally,
+and the AArch64 provider builds.
+The same provider fixture now passes FAT32 and exFAT writable creation, exact
+readback after unmount/remount, deletion and cleanup. The exFAT gate uses an
+isolated Ubuntu `exfatprogs` 1.2.2 package extraction at
+`/var/tmp/astra-exfat-test/pkg/usr/sbin/mkfs.exfat` on Beast; nothing was
+installed on DE25. `storage-provider-exfat-test` passes with that path as
+`EXFAT_MKFS`, and the exFAT branch also passes under ASan/UBSan. The ordinary
+provider test includes FAT32; exFAT needs the explicit formatter argument.
+These are provider gates, not MC68040 guest or physical DE25 qualification.
+
+Coherent filesystem release `79b5dc6057401bb17a152abbd3df423cf017595ca24791f0cda9078de5a9eefe`
+was staged and verified on Beast from the current source; ROM SHA-256 is
+`e4ce70bd9be912b76b119fb6d1c0f4eed419aa064921a6f489160ec196972348`.
+Matching native QEMU/provider and disposable image passed the full Linux-first
+lifecycle gate (ISO/UDF, busy holders, Atlas, RAM remount, HostFS restart,
+stale references and clean e2fsck), all five desktop application launches,
+and the Volume UI's 33-holder/unmount/retirement gate. QEMU ran unprivileged
+under a root observer. This release was never selected for production.
+
+The user authorized erasing USB serial `FC006A81F5493213` only. DE25's
+57.7 GiB SanDisk Cruzer was repartitioned as MBR with a 4 GiB FAT32
+`ASTRA_FAT`, 4 GiB exFAT `ASTRA_EXFAT`, and 1 GiB blank NDOS partition.
+Internal `/dev/mmcblk0` and the production Astra image were not formatted.
+The exFAT formatter was extracted from Ubuntu arm64 `exfatprogs` 1.1.3 into
+`/var/tmp` for this fixture, not installed system-wide. Host FAT32/exFAT
+fsck passed after format. A private DE25 candidate boot showed all three exact
+partition sources, simultaneous writable `/usb0` and `/usb1`, and NDOS on
+Desktop. Native Terminal created and read exact files on both supported
+volumes. Guarded teardown detached provider mounts; offline read-only Linux
+mounts recovered the same bytes and both filesystems passed fsck. A second
+private trial safely unmounted both volumes, observed both Desktop icons
+disappear, remounted source IDs 11 and 12 writable, read both files back,
+observed icons return, and opened each root in Atlas with one file and status
+zero. Trial logs and readback artifacts are under
+`/var/tmp/astra-fs-private-trial-fat-exfat-20261023/`,
+`/var/tmp/astra-fs-private-trial-removal-20261023/`,
+`/var/tmp/astra-disposable-cruzer-format-20261023/`, and
+`/var/tmp/astra-disposable-cruzer-verify-20261023/` on DE25.
+
+First private trial failed because staged release root was mode 0500 and the
+unprivileged input helper could not traverse it; the staged root was changed
+to 0555. Second trial's guard incorrectly watched serial for `desktop ready`;
+Desktop had reached stage 8 and published its viewport in syslog. That guard
+timed out and restored production; one production runtime restart followed a
+transient provider `ENODEV`. Later corrected FAT32/exFAT and removal trials
+completed with guard result zero, matching stopped production-image hashes,
+unchanged release selector, active host services and no candidate panic.
+Production remains release `ccf82877...`. Disposable private image and board
+candidate stage were removed after evidence capture; board free space returned
+to about 1.3 GiB. Native Disk Setup still has no partition/format authority.
+At that checkpoint, FAT16 and NTFS guest/physical gates, optical
+data-CD/media-change/eject gates, and full release qualification remained open.
+
+The same disposable Cruzer now has a 1 GiB FAT16 `ASTRA_FAT16` third
+partition and a 1 GiB NTFS `ASTRA_NTFS` fourth partition; the FAT32 and
+exFAT extents and data remain intact. Host readback confirms `LEGACY.TXT`
+on FAT16 and NTFS; NTFS seeding used the board's existing `ntfs-3g` tool.
+A guarded NTFS3 trial found a kernel identity collision: the running DE25
+`6.12.11-astra-storage1-gd7d192a9ddd9` Image differs from Beast's package
+of that same release, and the board has no matching `ntfs3.ko`. No module
+from the different Image was installed. A new complete Beast package with
+unique release `6.12.11-astra-storage2-gd7d192a9ddd9` built and passed its
+manifest and module-vermagic checks. Board production was restored after
+each guarded host mutation. Evidence is on DE25 under
+`/var/tmp/astra-legacy-partitions-20261023/` and
+`/var/tmp/astra-ntfs-seed-20261023/`.
+
+Coherent release `b2ef5a6834b5fb91de66dbba278e85554724a17e4adf57c73e58109aee693f84`
+includes that complete package. Beast real FIT/full-kernel stage passed with
+1,345 modules; native QEMU Linux-first lifecycle and clean e2fsck passed.
+The exact new ROM also passed the native Volume UI gate with 33 named busy
+holders, modal scrolling, safe unmount, disappearing icon and ISO retirement;
+Beast log is `/var/tmp/astra-fs-correctness-gate2-volume-ui-20261023.log`.
+DE25 staged and armed the package, rebooted into `storage2`, and exact
+installer verification passed for the running Image, DTB, modules and boot
+script. The original production runtime selector remains `ccf82877...`;
+its services returned active, guest reached stage 8, and no new panic report
+appeared. The kernel transaction remains rollback-capable and unconfirmed.
+The private DE25 candidate mounted all four Cruzer partitions simultaneously:
+FAT32 `/usb0` read/write, FAT16 `/usb1` read-only, exFAT `/usb2` read/write,
+and NTFS3 `/usb3` read-only. Native `volumes --all` reported exact partition
+numbers, offsets, sizes, labels and access modes. Native Terminal read seeded
+FAT16 and NTFS files byte-for-byte, attempted writes produced no new file,
+and the provider's Linux namespace confirmed `vfat` and `ntfs3` mounts were
+read-only. Double-clicking each read-only desktop icon opened Atlas with one
+root entry and status zero. Guarded teardown restored all three original
+services, identical stopped production-image hash and unchanged selector;
+candidate panic report was absent. Evidence is under
+`/var/tmp/astra-fs-private-trial-fat16-ntfs-20261023/` on DE25.
+
+The running `storage2` package also passed two 1920×1080 HDMI DMA captures
+with four channels and identical frame hash
+`6a3a5d2fb2d44ea2c1f3dd11bd1c2c636509c462d0f8f1b6ca383d02e0d69141`;
+the frame was visually inspected and shows the production desktop without
+corruption. Remote desktop was restarted after the exclusive captures; all
+three host services remain active with zero restarts in this boot. A repeat
+kernel arm revealed that deployment left a 497 MiB duplicate incoming release
+after an already-installed release was reused; the verified temporary copy
+was removed and `deploy-de25-release.sh` now retains `INCOMING` for its exit
+cleanup. This fix is not in the staged `b2ef5a68` source snapshot. Native
+Disk Setup partition/format authority, physical data-CD/media-change/eject,
+full release gates and production runtime activation remain open.
+
+Disk Setup now reads the native usage inventory as well as the volume catalog.
+It accepts a view only when both have the same catalog sequence, and shows the
+number of mounted volumes and retained resources for the selected physical
+disk or partition. The app has `VOLUME_USAGE` inspection authority, not
+destructive administration authority. The MC68040 app build and image-policy
+test pass. Coherent release snapshot
+`922a064ae25cb53126eb06e17d73923e3ef0b589917dc17ed04ed0fa93c6423d`
+is staged on Beast at `/var/tmp/astra-fs-correctness-gate3-20261023`. Its native
+Beast QEMU/provider desktop gate launched all five applications, including
+Disk Setup, and passed 5,801 completed frames in two seconds. This gate used
+the native x86-64 QEMU/provider from the same sources; the packaged AArch64
+DE25 executables are not a valid Beast throughput or boot-time test. The
+post-publication test-harness diagnostic change is not in this release source
+manifest. Partition-map edits, filesystem formatting, physical data-CD and
+media-change/eject tests, and production runtime activation remain open.
+The 2026-10-23 exclusive-descriptor loop gate found that stock `mkfs.fat`
+reopens `/proc/self/fd/N` and fails `EBUSY` while the verified block device is
+held with `O_EXCL`. Native formatting therefore needs a formatter that writes
+through the admitted descriptor; dropping exclusivity at execution is not an
+acceptable production admission contract. See `docs/DEVICE_AND_VOLUME_PLAN.md`.
+Pinned dosfstools 4.2 and exfatprogs 1.4.3 sources plus narrow inherited-FD
+patches now live in `third_party/storage-format/`. Beast host loop gates format
+FAT32 and exFAT while retaining `O_RDWR|O_EXCL`, reject regular files and a
+mounted target, identify both new volumes, and pass their fsck checks. A
+disposable loop MBR edit through `sfdisk`'s inherited FD also publishes its
+partition after close. Exact archive-hash builds produce host and DE25
+AArch64 binaries. The first AArch64 build accidentally linked host glibc 2.38
+symbols and failed under the DE25 sysroot; explicit target headers and sysroot
+fixed that. Both AArch64 formatters then passed the same exclusive-descriptor
+loop test under Beast QEMU user mode as the non-root caller against the DE25
+sysroot, with host fsck checking their output. These formatters are not in the
+selected production release and no native Disk Setup administration path
+exists yet.
+
+Unshipped source candidate after the exclusive-descriptor work bumps the
+native volume catalog to version 5 and the private storage-provider protocol
+to version 4. Catalog records now distinguish physical write protection from
+filesystem read-only policy, and a format admission state fences sibling mounts
+across a device. Format completion invalidates the old source generation and
+requires a fresh probe. Beast catalog host/AArch64-QEMU tests, catalog
+ASan/UBSan, discovery and provider tests, and the full VFS host suite pass;
+the MC68040 Disk Setup object builds. This is lifecycle groundwork only:
+there is no guest format/partition request, provider formatter execution,
+physical native administration gate or production deployment for this source.
+The next unshipped storage slice shares exact Linux block-device verification
+between probes and an exclusive `O_RDWR|O_EXCL` format opener. A real disposable
+loop gate confirms exact device identity and retained exclusivity; fake/stale/
+reserved devices refuse. An existing provider worker now executes the pinned
+FAT32/exFAT formatters as the non-root provider user through only that held FD.
+Beast's disposable host loop gate passes both formats and fsck; catalog abort
+restores original metadata if worker admission fails before writes. Provider
+control, native Disk Setup, operation-result reporting and production packaging
+remain unconnected, so this does not enable formatting on Astra yet.
+
+The next provider slice bumps its private protocol to version 5. Its control
+socket starts FAT32/exFAT formatting against the exact source generation and
+reports the result separately, retaining the exclusive block FD until worker
+exit. Same-identity udev CHANGE events during formatting do not retire the
+source; REMOVE and changed physical identity still do. Completion increments
+source generation and reprobes before automount. The worker has a 300-second
+deadline. Beast's disposable loop provider gate passes both formats, fresh
+labels/probes, generation changes, control-wire validation and pinned exFAT
+fsck. The DE25 AArch64 provider builds with protocol v5. The release
+constructor builds and packages pinned AArch64 formatters next to
+`astra-storage`; its fresh-output fixture passes. Native Disk Setup capability,
+guest request, partition editing, physical format gates and production release
+remain open.
+
+Unshipped native format path adds Filesystem Kit 15.1 exports and uses a
+separate `DISK_ADMIN` grant for
+Disk Setup; Desktop and Terminal retain lifecycle authority only. VOL protocol
+3 carries exact-source FAT32/exFAT admission and prior-generation result
+polling through HostFS and QEMU to private provider protocol 5. Disk Setup uses
+shared Field, Label and Button controls for volume name, format choice and
+typed `ERASE` confirmation; it checks a fresh catalog/usage snapshot before
+admission and polls asynchronous completion. Beast host VFS validation and
+role-isolation tests, MC68040 HostFS/Disk Setup links, and host/DE25 QEMU builds
+pass. The first fresh native guest image stopped before stage 8 with supervisor
+manifest status `0x20`: the new `VOLUME_DISK_ADMIN` name exceeded Astra's
+15-character capability field. Authority is now `DISK_ADMIN`, with an NDK
+compile-time length gate; Filesystem Kit provider and consumer manifests all
+declare library 15.1. NDK `test` also caught and fixed a C++-incompatible
+compound literal in the shared volume-reference parser. A fresh 256 MiB image
+then passed the matching ROM/QEMU/provider desktop gate: five app bundles,
+including Disk Setup, launched and completed 5,862 frames in two seconds.
+The native Volume UI regression passed 33 exact busy holders, modal catalog
+changes, safe unmount, disappearing icon and ISO source retirement. Logs on
+Beast: `/var/tmp/astra-fs-format-desktop-cap-native-20261023.log` and
+`/var/tmp/astra-fs-format-volume-ui-native-20261023.log`. The failed boot is
+retained as `/var/tmp/astra-fs-format-desktop-native-diagnostic-20261023.log`.
+Actual guest formatting, physical USB qualification, native partition-map
+edits and production activation remain open.
 
 Superseded production `57078599` panicked again at
 2026-10-21 08:52:18 UTC (board clock 16:52:18 +0800), reason `deferred worker

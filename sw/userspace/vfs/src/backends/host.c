@@ -1027,8 +1027,10 @@ uint32_t astra_vfs_host_catalog(AstraVfsHostTransport *transport, uint32_t gener
 #define VOLUME32(field) row->field = astra_load_be32(wire + offsetof(AstraVolumeRecord, field))
         VOLUME64(id); VOLUME64(generation); VOLUME64(parent); VOLUME64(parent_generation);
         VOLUME64(byte_limit); VOLUME64(inode_limit); VOLUME64(backing_object);
+        VOLUME64(capacity_bytes); VOLUME64(offset_bytes);
         VOLUME32(kind); VOLUME32(class_id); VOLUME32(state); VOLUME32(format);
-        VOLUME32(origin); VOLUME32(flags); VOLUME32(status); VOLUME32(reserved);
+        VOLUME32(origin); VOLUME32(flags); VOLUME32(partition_number);
+        VOLUME32(partition_map); VOLUME32(status); VOLUME32(reserved);
 #undef VOLUME64
 #undef VOLUME32
     }
@@ -1070,6 +1072,76 @@ uint32_t astra_vfs_host_volume_control(AstraVfsHostTransport *transport,
         astra_load_be64(output + 16u)};
     if (reference->epoch == 0u || reference->id == 0u || reference->generation == 0u)
         return ASTRA_VFS_ERR_PROTOCOL;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_vfs_host_volume_format(AstraVfsHostTransport *transport,
+    uint32_t generation, uint32_t requester, const AstraVolumeFormatRequest *format,
+    uint32_t *outcome)
+{
+    uint8_t input[sizeof(AstraHostVolumeFormat)] = {0};
+    uint8_t output[sizeof(uint32_t)] = {0};
+    AstraVfsHostRequest request;
+    if (transport == NULL || requester == 0u || outcome == NULL ||
+        !astra_volume_format_valid(format)) return ASTRA_VFS_ERR_INVALID;
+    *outcome = 0u;
+    astra_store_be64(input, format->source.epoch);
+    astra_store_be64(input + 8u, format->source.id);
+    astra_store_be64(input + 16u, format->source.generation);
+    astra_store_be32(input + 24u, format->header.operation == ASTRA_VOLUME_FORMAT ?
+        ASTRA_HOST_VOLUME_FORMAT_START : ASTRA_HOST_VOLUME_FORMAT_STATUS);
+    astra_store_be32(input + 28u, format->format);
+    memcpy(input + 32u, format->label, sizeof(format->label));
+    astra_store_be32(input + 44u, requester);
+    uint32_t status = astra_vfs_host_transport_begin(transport, 0u, sizeof(input), &request);
+    if (status != ASTRA_VFS_OK) return status;
+    AstraHostCommand *command = request.command;
+    memset(command, 0, sizeof(*command));
+    command->size = sizeof(*command); command->version = ASTRA_HOST_COMMAND_VERSION;
+    command->service = ASTRA_HOST_SERVICE_VOLUMES; command->operation = ASTRA_HOST_VOLUME_FORMAT;
+    command->generation = generation;
+    status = astra_vfs_host_transport_submit(transport, &request, input, sizeof(input),
+        output, sizeof(output));
+    if (status != ASTRA_VFS_OK) return status;
+    if (command->result_length != sizeof(output)) return ASTRA_VFS_ERR_PROTOCOL;
+    *outcome = astra_load_be32(output);
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_vfs_host_volume_partition(AstraVfsHostTransport *transport,
+    uint32_t generation, uint32_t requester, const AstraVolumePartitionRequest *partition,
+    uint32_t *outcome)
+{
+    uint8_t input[sizeof(AstraHostVolumePartition)] = {0};
+    uint8_t output[sizeof(uint32_t)] = {0};
+    AstraVfsHostRequest request;
+    if (transport == NULL || requester == 0u || outcome == NULL ||
+        !astra_volume_partition_valid(partition)) return ASTRA_VFS_ERR_INVALID;
+    *outcome = 0u;
+    astra_store_be64(input, partition->device.epoch);
+    astra_store_be64(input + 8u, partition->device.id);
+    astra_store_be64(input + 16u, partition->device.generation);
+    astra_store_be32(input + 24u, partition->header.operation == ASTRA_VOLUME_PARTITION ?
+        ASTRA_HOST_VOLUME_PARTITION_START : ASTRA_HOST_VOLUME_PARTITION_STATUS);
+    astra_store_be32(input + 28u, requester);
+    astra_store_be32(input + 32u, partition->edit.operation);
+    astra_store_be32(input + 36u, partition->edit.map);
+    astra_store_be32(input + 40u, partition->edit.format);
+    astra_store_be32(input + 44u, partition->edit.number);
+    astra_store_be64(input + 48u, partition->edit.offset_bytes);
+    astra_store_be64(input + 56u, partition->edit.length_bytes);
+    uint32_t status = astra_vfs_host_transport_begin(transport, 0u, sizeof(input), &request);
+    if (status != ASTRA_VFS_OK) return status;
+    AstraHostCommand *command = request.command;
+    memset(command, 0, sizeof(*command));
+    command->size = sizeof(*command); command->version = ASTRA_HOST_COMMAND_VERSION;
+    command->service = ASTRA_HOST_SERVICE_VOLUMES; command->operation = ASTRA_HOST_VOLUME_PARTITION;
+    command->generation = generation;
+    status = astra_vfs_host_transport_submit(transport, &request, input, sizeof(input),
+        output, sizeof(output));
+    if (status != ASTRA_VFS_OK) return status;
+    if (command->result_length != sizeof(output)) return ASTRA_VFS_ERR_PROTOCOL;
+    *outcome = astra_load_be32(output);
     return ASTRA_VFS_OK;
 }
 

@@ -835,14 +835,19 @@ class Machine:
             if abs(((high << 32) | low) - time.time_ns()) > 600_000_000_000:
                 raise RuntimeError(
                     "Astra machine started with the wrong host wall clock")
-        except Exception:
+        except Exception as error:
             self.process.terminate()
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
+            self._pump_thread.join(timeout=1)
+            recent_output = "\n".join(line for _, line in self.serial_times[-20:])
             shutil.rmtree(self.runtime_directory)
+            if recent_output:
+                raise RuntimeError("QEMU startup failed: %s\n%s" %
+                                   (error, recent_output)) from error
             raise
     def _pump(self):
         for line in self.process.stdout:

@@ -158,6 +158,7 @@ static void test_bounded_worker_state_machine(void)
     assert(kernel_worker_schedule(KERNEL_WORKER_PROCESS_REAP) ==
            KERNEL_WORKER_INVALID_STATE);
     assert(kernel_worker_init() == KERNEL_WORKER_OK);
+    assert(!kernel_worker_servicing());
     assert(kernel_worker_init() == KERNEL_WORKER_INVALID_STATE);
     stats = worker_stats();
     assert(stats.state == KERNEL_WORKER_BLOCKED);
@@ -175,6 +176,7 @@ static void test_bounded_worker_state_machine(void)
     assert(stats.signals == 2u);
 
     assert(kernel_worker_try_select());
+    assert(kernel_worker_servicing());
     assert(!kernel_worker_try_select());
 
     maintenance_result = KERNEL_PROCESS_DEFERRED;
@@ -186,6 +188,7 @@ static void test_bounded_worker_state_machine(void)
     assert(stats.service_passes == 1u);
     assert(stats.deferred_passes == 1u);
     assert(kernel_worker_test_block_if_idle());
+    assert(!kernel_worker_servicing());
     assert(worker_stats().state == KERNEL_WORKER_BLOCKED);
 
     assert(kernel_worker_on_timer() == KERNEL_WORKER_OK);

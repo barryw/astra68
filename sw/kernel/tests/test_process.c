@@ -103,6 +103,7 @@ static uint32_t interrupt_disable_count;
 static uint32_t disable_hook_process_slot;
 static uint32_t disable_hook_thread_count;
 static bool interrupts_enabled;
+static bool worker_servicing_test;
 static bool timer_on_disable_armed;
 static bool timer_on_disable_fired;
 static uint32_t irq_configure_count;
@@ -553,6 +554,11 @@ uint16_t kernel_interrupt_save_disable(void)
 void kernel_interrupt_restore(uint16_t status_register)
 {
     interrupts_enabled = (status_register & 0x0700u) != 0x0700u;
+}
+
+bool kernel_worker_servicing(void)
+{
+    return worker_servicing_test;
 }
 
 void kernel_platform_cpu_cycles(KernelPlatformCycleCount *cycles)
@@ -1585,6 +1591,7 @@ static void initialize_test(void)
     disable_hook_process_slot = 0u;
     disable_hook_thread_count = 0u;
     interrupts_enabled = false;
+    worker_servicing_test = false;
     timer_on_disable_armed = false;
     timer_on_disable_fired = false;
     kernel_process_init();
@@ -4326,7 +4333,8 @@ static void test_thread_stack_address_space_is_exhausted_and_reclaimable(void)
     assert(final.free_frames == baseline.free_frames);
 }
 
-static void test_last_runnable_timed_wait_wakes_from_supervisor_idle(void)
+static void test_last_runnable_timed_wait_wakes_from_supervisor_idle(
+    bool worker_service)
 {
     static const uint8_t image[] = {0x4eu, 0x71u};
     KernelCpuContext *next;
@@ -4370,9 +4378,23 @@ static void test_last_runnable_timed_wait_wakes_from_supervisor_idle(void)
     assert(timer_last_load == 2500u);
     assert(pmmu_crp_load_count == crp_loads_after_start);
 
+    if (worker_service) {
+        assert(kernel_process_worker_enter());
+        worker_servicing_test = true;
+    }
     scheduler_test_cycles += 2500u;
+    if (worker_service) {
+        assert(kernel_process_on_supervisor_timer() == KERNEL_PROCESS_OK);
+        assert(!kernel_process_active());
+        assert(kernel_process_stats(&stats));
+        assert(stats.deadline_depth == 1u);
+        assert(stats.supervisor_timer_deferrals == 1u);
+        worker_servicing_test = false;
+    }
     assert(kernel_process_on_supervisor_timer() == KERNEL_PROCESS_OK);
     assert(kernel_process_active());
+    if (worker_service)
+        assert(kernel_process_worker_resume() != NULL);
     next = kernel_process_current_context();
     assert(next != NULL);
     assert(pmmu_crp_load_count == crp_loads_after_start);
@@ -16436,7 +16458,8 @@ int main(void)
     test_priority_selection_and_equal_priority_rotation();
     test_interrupt_wakeup_preserves_equal_priority_quantum();
     test_thread_stack_address_space_is_exhausted_and_reclaimable();
-    test_last_runnable_timed_wait_wakes_from_supervisor_idle();
+    test_last_runnable_timed_wait_wakes_from_supervisor_idle(false);
+    test_last_runnable_timed_wait_wakes_from_supervisor_idle(true);
     test_prestart_timer_cannot_consume_published_thread();
     test_normal_syscalls_do_not_renew_quantum();
     test_worker_time_does_not_consume_user_quantum();

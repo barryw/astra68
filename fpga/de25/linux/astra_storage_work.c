@@ -4,15 +4,20 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <limits.h>
 #include <signal.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/syscall.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <linux/cdrom.h>
+#include <linux/fs.h>
 #include <unistd.h>
 
 static void retain(const int *originals, unsigned count, pid_t parent)
@@ -148,6 +153,213 @@ int astra_storage_work_path_start(AstraStorageWork *work, const AstraStorageReco
         .generation = record->generation, .operation = ASTRA_STORAGE_WORK_PATH,
         .serial = request->serial, .epoch = request->epoch, .path_operation = request->operation};
     return 0;
+}
+
+int astra_storage_work_format_start(AstraStorageWork *work,
+    const AstraStorageRecord *record, int device, int executable,
+    uint32_t format, const char *label, uid_t uid, gid_t gid)
+{
+    if (work == NULL || record == NULL || label == NULL || work->pid != 0 ||
+        device < 0 || executable < 0 || uid == 0u || gid == 0u ||
+        record->kind != ASTRA_VOLUME_SOURCE ||
+        record->origin != ASTRA_VOLUME_ORIGIN_DEVICE ||
+        record->state != ASTRA_VOLUME_FORMATTING ||
+        (format != ASTRA_VOLUME_FAT32 && format != ASTRA_VOLUME_EXFAT))
+        return EINVAL;
+    size_t length = strnlen(label, 12u);
+    if (length == 12u) return EINVAL;
+    for (size_t at = 0u; at < length; ++at)
+        if ((label[at] < 'A' || label[at] > 'Z') &&
+            (label[at] < 'a' || label[at] > 'z') &&
+            (label[at] < '0' || label[at] > '9') &&
+            label[at] != '_' && label[at] != ' ')
+            return EINVAL;
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return errno;
+    uint64_t deadline = (uint64_t)now.tv_sec * UINT64_C(1000000000) +
+        (uint64_t)now.tv_nsec + UINT64_C(300000000000);
+    pid_t parent = getpid();
+    pid_t pid = fork();
+    if (pid < 0) return errno;
+    if (pid == 0) {
+        const int originals[] = {device, executable};
+        retain(originals, 2u, parent);
+        int null = open("/dev/null", O_RDWR | O_CLOEXEC);
+        if (null < 0 || dup2(null, 0) < 0 || dup2(null, 1) < 0 ||
+            dup2(null, 2) < 0)
+            _exit(125);
+        if (null > 2) close(null);
+        if (setgroups(0u, NULL) != 0 || setresgid(gid, gid, gid) != 0 ||
+            setresuid(uid, uid, uid) != 0)
+            _exit(125);
+        char *fat[] = {"astra-mkfs.fat", "-F", "32", "--astra-fd", "3", NULL,
+                       NULL, NULL};
+        char *exfat[] = {"astra-mkfs.exfat", "-P", "none", "--astra-fd", "3",
+                         NULL, NULL, NULL};
+        char **args = format == ASTRA_VOLUME_FAT32 ? fat : exfat;
+        if (length != 0u) {
+            args[5] = format == ASTRA_VOLUME_FAT32 ? "-n" : "-L";
+            args[6] = (char *)label;
+        }
+        char *environment[] = {"LC_ALL=C", NULL};
+        (void)syscall(SYS_execveat, 4, "", args, environment, AT_EMPTY_PATH);
+        _exit(127);
+    }
+    *work = (AstraStorageWork){.pid = pid, .result = -1,
+        .id = record->id, .generation = record->generation,
+        .operation = ASTRA_STORAGE_WORK_FORMAT, .deadline_ns = deadline};
+    return 0;
+}
+
+int astra_storage_work_partition_start(AstraStorageWork *work,
+    const AstraStorageRecord *record, int device, int executable,
+    const AstraVolumePartitionEdit *edit)
+{
+    if (work == NULL || record == NULL || edit == NULL || work->pid != 0 ||
+        device < 0 || executable < 0 || record->kind != ASTRA_VOLUME_DEVICE ||
+        record->state != ASTRA_VOLUME_PARTITIONING ||
+        record->origin != ASTRA_VOLUME_ORIGIN_DEVICE ||
+        (record->class_id != ASTRA_VOLUME_USB &&
+         record->class_id != ASTRA_VOLUME_FIXED) ||
+        (record->flags & (ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_PHYSICAL_READ_ONLY)) != 0u ||
+        (edit->operation != ASTRA_VOLUME_PARTITION_INITIALIZE &&
+         edit->operation != ASTRA_VOLUME_PARTITION_CREATE &&
+         edit->operation != ASTRA_VOLUME_PARTITION_DELETE))
+        return EINVAL;
+    uint64_t bytes = 0;
+    int sector_size = 0;
+    struct stat info;
+    if (fstat(device, &info) != 0 || !S_ISBLK(info.st_mode) ||
+        ioctl(device, BLKGETSIZE64, &bytes) != 0 ||
+        ioctl(device, BLKSSZGET, &sector_size) != 0 ||
+        sector_size < 512 || bytes != record->capacity_bytes)
+        return EINVAL;
+    if (edit->operation == ASTRA_VOLUME_PARTITION_INITIALIZE) {
+        if ((edit->map != ASTRA_VOLUME_PARTITION_MAP_MBR &&
+             edit->map != ASTRA_VOLUME_PARTITION_MAP_GPT) ||
+            edit->format != 0u || edit->number != 0u ||
+            edit->offset_bytes != 0u || edit->length_bytes != 0u)
+            return EINVAL;
+    } else if (edit->map != record->partition_map ||
+               (edit->map != ASTRA_VOLUME_PARTITION_MAP_MBR &&
+                edit->map != ASTRA_VOLUME_PARTITION_MAP_GPT))
+        return EINVAL;
+    if (edit->operation == ASTRA_VOLUME_PARTITION_CREATE &&
+        (edit->number != 0u ||
+         (edit->format != ASTRA_VOLUME_FAT32 &&
+          edit->format != ASTRA_VOLUME_EXFAT &&
+          edit->format != ASTRA_VOLUME_EXT4) ||
+         edit->offset_bytes < UINT64_C(1048576) ||
+         edit->length_bytes == 0u ||
+         edit->offset_bytes % (uint64_t)sector_size != 0u ||
+         edit->length_bytes % (uint64_t)sector_size != 0u ||
+         edit->offset_bytes >= bytes ||
+         edit->length_bytes > bytes - edit->offset_bytes ||
+         (edit->map == ASTRA_VOLUME_PARTITION_MAP_MBR &&
+          (edit->offset_bytes / (uint64_t)sector_size > UINT32_MAX ||
+           edit->length_bytes / (uint64_t)sector_size > UINT32_MAX ||
+           (edit->offset_bytes + edit->length_bytes) /
+               (uint64_t)sector_size > UINT32_MAX))))
+        return EINVAL;
+    if (edit->operation == ASTRA_VOLUME_PARTITION_DELETE &&
+        (edit->format != 0u || edit->number == 0u || edit->number > 128u ||
+         edit->offset_bytes != 0u || edit->length_bytes != 0u))
+        return EINVAL;
+    char script[160] = {0};
+    const char *type = NULL;
+    if (edit->operation == ASTRA_VOLUME_PARTITION_INITIALIZE)
+        (void)snprintf(script, sizeof(script), "label: %s\n",
+            edit->map == ASTRA_VOLUME_PARTITION_MAP_MBR ? "dos" : "gpt");
+    else if (edit->operation == ASTRA_VOLUME_PARTITION_CREATE) {
+        if (edit->map == ASTRA_VOLUME_PARTITION_MAP_MBR)
+            type = edit->format == ASTRA_VOLUME_FAT32 ? "c" :
+                   edit->format == ASTRA_VOLUME_EXFAT ? "7" : "83";
+        else
+            type = edit->format == ASTRA_VOLUME_EXT4 ?
+                "0FC63DAF-8483-4772-8E79-3D69D8477DE4" :
+                "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7";
+        int size = snprintf(script, sizeof(script), "start=%llu,size=%llu,type=%s\n",
+            (unsigned long long)(edit->offset_bytes / (uint64_t)sector_size),
+            (unsigned long long)(edit->length_bytes / (uint64_t)sector_size), type);
+        if (size < 0 || (size_t)size >= sizeof(script)) return EINVAL;
+    }
+    int input[2] = {-1, -1};
+    if (pipe2(input, O_CLOEXEC) != 0) return errno;
+    size_t length = strlen(script);
+    if (length != 0u && write(input[1], script, length) != (ssize_t)length) {
+        int error = errno != 0 ? errno : EIO;
+        close(input[0]); close(input[1]);
+        return error;
+    }
+    close(input[1]);
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        int error = errno;
+        close(input[0]);
+        return error;
+    }
+    uint64_t deadline = (uint64_t)now.tv_sec * UINT64_C(1000000000) +
+        (uint64_t)now.tv_nsec + UINT64_C(300000000000);
+    pid_t parent = getpid();
+    pid_t pid = fork();
+    if (pid < 0) {
+        int error = errno;
+        close(input[0]);
+        return error;
+    }
+    if (pid == 0) {
+        const int originals[] = {device, executable, input[0], STDERR_FILENO};
+        retain(originals, 4u, parent);
+        int null = open("/dev/null", O_RDWR | O_CLOEXEC);
+        /* /dev/null can be fd 0; copy it before replacing stdin. */
+        if (null < 0 || dup2(null, 1) < 0 || dup2(6, 2) < 0 ||
+            dup2(5, 0) < 0)
+            _exit(125);
+        if (null > 6) close(null);
+        close(5);
+        close(6);
+        char number[12];
+        (void)snprintf(number, sizeof(number), "%u", edit->number);
+        char *initialize[] = {"sfdisk", "--no-reread", "--no-tell-kernel",
+            "--wipe", "always", "/proc/self/fd/3", NULL};
+        char *create[] = {"sfdisk", "--append", "--no-reread", "--no-tell-kernel",
+            "--wipe", "never", "--wipe-partitions", "never", "/proc/self/fd/3", NULL};
+        char *remove[] = {"sfdisk", "--delete", "--no-reread", "--no-tell-kernel",
+            "/proc/self/fd/3", number, NULL};
+        char **args = edit->operation == ASTRA_VOLUME_PARTITION_INITIALIZE ? initialize :
+                      edit->operation == ASTRA_VOLUME_PARTITION_CREATE ? create : remove;
+        char *environment[] = {"LC_ALL=C", NULL};
+        (void)syscall(SYS_execveat, 4, "", args, environment, AT_EMPTY_PATH);
+        _exit(127);
+    }
+    close(input[0]);
+    *work = (AstraStorageWork){.pid = pid, .result = -1,
+        .id = record->id, .generation = record->generation,
+        .operation = ASTRA_STORAGE_WORK_PARTITION, .deadline_ns = deadline};
+    return 0;
+}
+
+int astra_storage_work_edit_poll(AstraStorageWork *work, int *error)
+{
+    if (work == NULL || error == NULL || work->pid <= 0 ||
+        (work->operation != ASTRA_STORAGE_WORK_FORMAT &&
+         work->operation != ASTRA_STORAGE_WORK_PARTITION))
+        return -EINVAL;
+    int status = 0;
+    pid_t done = waitpid(work->pid, &status, WNOHANG);
+    if (done == 0 || (done < 0 && errno == EINTR)) return 0;
+    *error = work->cancelled != 0 ? work->cancelled :
+        done != work->pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0 ? EIO : 0;
+    if (*error != 0)
+        fprintf(stderr, "astra-storage edit worker operation=%u id=%llu pid=%ld "
+            "wait=%ld exited=%d code=%d signal=%d cancelled=%d error=%d\n",
+            work->operation, (unsigned long long)work->id, (long)work->pid,
+            (long)done, done == work->pid && WIFEXITED(status),
+            done == work->pid && WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+            done == work->pid && WIFSIGNALED(status) ? WTERMSIG(status) : 0,
+            work->cancelled, *error);
+    *work = (AstraStorageWork){.result = -1};
+    return 1;
 }
 
 void astra_storage_work_cancel(AstraStorageWork *work)

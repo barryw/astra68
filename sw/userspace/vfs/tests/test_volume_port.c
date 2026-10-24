@@ -8,7 +8,9 @@
 
 static AstraVolumePort port;
 static union { AstraVolumeRequest metadata; AstraVolumeRootRequest root;
-    AstraVolumeControlRequest control; AstraVolumeUsageRequest usage; } incoming_request;
+    AstraVolumeControlRequest control; AstraVolumeFormatRequest format;
+    AstraVolumePartitionRequest partition;
+    AstraVolumeUsageRequest usage; } incoming_request;
 #define request incoming_request.metadata
 static AstraVolumeReply reply;
 static AstraVolumeNotification notifications[8];
@@ -23,6 +25,7 @@ static union { AstraVolumeCatalogPage catalog; AstraVolumeUsagePage usage; } out
 static uint32_t area_bytes = sizeof(output), area_rights = 1u;
 static uint32_t root_calls, root_sent, root_send_failure;
 static uint32_t control_calls;
+static uint32_t format_calls, partition_calls, format_outcome;
 static AstraVolumeReference admitted;
 static AstraVolumeBrokerInfo broker_info;
 static const AstraVolumeReference *expected_source;
@@ -42,12 +45,15 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
 {
     assert(handles == NULL && count == 0u);
     if (handle == 2u) {
-        assert(size == sizeof(reply) || size == sizeof(AstraVolumeControlReply) || size == sizeof(AstraVolumeBrokerInfoReply));
+        assert(size == sizeof(reply) || size == sizeof(AstraVolumeControlReply) ||
+            size == sizeof(AstraVolumeBrokerInfoReply) || size == sizeof(AstraVolumeFormatReply));
         memcpy(&reply, message, sizeof(reply));
         if (size == sizeof(AstraVolumeControlReply))
             admitted = ((const AstraVolumeControlReply *)message)->reference;
         if (size == sizeof(AstraVolumeBrokerInfoReply))
             broker_info = ((const AstraVolumeBrokerInfoReply *)message)->info;
+        if (size == sizeof(AstraVolumeFormatReply))
+            format_outcome = ((const AstraVolumeFormatReply *)message)->outcome;
         return ASTRA_SYSCALL_OK;
     }
     if (handle < 10u || handle >= 18u) return ASTRA_SYSCALL_INVALID_HANDLE;
@@ -124,7 +130,7 @@ static uint32_t usage(void *context, const AstraVolumeUsageQuery *query, AstraVo
 }
 static void enqueue(uint32_t operation, uint32_t second)
 {
-    memset(&request, 0, sizeof(request));
+    memset(&incoming_request, 0, sizeof(incoming_request));
     astra_message_header_set(&request.header, sizeof(request), ASTRA_VOLUME_PROTOCOL,
         ASTRA_VOLUME_PROTOCOL_VERSION, operation, 21u);
     sent_handles[0] = 2u; sent_count = 1u;
@@ -176,6 +182,47 @@ static void control_request(void)
     incoming_size = sizeof(AstraVolumeControlRequest); request.header.total_size = incoming_size;
     incoming_request.control.control = (AstraVolumeControl){.reference = {epoch, 5u, 1u},
         .operation = ASTRA_VOLUME_UNMOUNT};
+}
+static uint32_t apply_format(void *context, uint32_t owner,
+    const AstraVolumeFormatRequest *format, uint32_t *outcome)
+{
+    assert(context == &epoch && owner == sender && astra_volume_format_valid(format));
+    ++format_calls;
+    *outcome = format->header.operation == ASTRA_VOLUME_FORMAT_STATUS ?
+        ASTRA_STATUS_BUSY : ASTRA_STATUS_OK;
+    return ASTRA_STATUS_OK;
+}
+static uint32_t apply_partition(void *context, uint32_t owner,
+    const AstraVolumePartitionRequest *partition, uint32_t *outcome)
+{
+    assert(context == &epoch && owner == sender &&
+        astra_volume_partition_valid(partition));
+    ++partition_calls;
+    *outcome = partition->header.operation == ASTRA_VOLUME_PARTITION_STATUS ?
+        ASTRA_STATUS_BUSY : ASTRA_STATUS_OK;
+    return ASTRA_STATUS_OK;
+}
+static void format_request(uint32_t operation)
+{
+    enqueue(operation, 0u);
+    incoming_size = sizeof(AstraVolumeFormatRequest);
+    request.header.total_size = incoming_size;
+    incoming_request.format.source = (AstraVolumeReference){epoch, 5u, 1u};
+    if (operation == ASTRA_VOLUME_FORMAT) {
+        incoming_request.format.format = ASTRA_VOLUME_FAT32;
+        strcpy(incoming_request.format.label, "TEST");
+    }
+}
+static void partition_request(uint32_t operation)
+{
+    enqueue(operation, 0u);
+    incoming_size = sizeof(AstraVolumePartitionRequest);
+    request.header.total_size = incoming_size;
+    incoming_request.partition.device = (AstraVolumeReference){epoch, 5u, 1u};
+    if (operation == ASTRA_VOLUME_PARTITION)
+        incoming_request.partition.edit = (AstraVolumePartitionEdit){
+            .operation = ASTRA_VOLUME_PARTITION_INITIALIZE,
+            .map = ASTRA_VOLUME_PARTITION_MAP_MBR};
 }
 static void usage_request(void)
 {
@@ -245,7 +292,32 @@ static void query_validation(void)
     assert(astra_volume_page_valid(&query, &page));
     page.records[0].format = ASTRA_VOLUME_NTFS;
     assert(astra_volume_page_valid(&query, &page));
-    page.records[0].format = ASTRA_VOLUME_NTFS + 1u;
+    page.records[0].format = ASTRA_VOLUME_UNSUPPORTED;
+    assert(!astra_volume_page_valid(&query, &page));
+    strcpy(page.records[0].detected_type, "btrfs");
+    assert(astra_volume_page_valid(&query, &page));
+    page.records[0].format = ASTRA_VOLUME_UNSUPPORTED + 1u;
+    assert(!astra_volume_page_valid(&query, &page));
+    page.records[0].format = ASTRA_VOLUME_FAT32;
+    page.records[0].kind = ASTRA_VOLUME_DEVICE;
+    page.records[0].class_id = ASTRA_VOLUME_USB;
+    page.records[0].state = ASTRA_VOLUME_DISCOVERED;
+    page.records[0].origin = ASTRA_VOLUME_ORIGIN_DEVICE;
+    page.records[0].flags = ASTRA_VOLUME_PHYSICAL_READ_ONLY | ASTRA_VOLUME_READ_ONLY;
+    assert(astra_volume_page_valid(&query, &page));
+    page.records[0].flags = ASTRA_VOLUME_PHYSICAL_READ_ONLY;
+    assert(!astra_volume_page_valid(&query, &page));
+    page.records[0].flags = 0u;
+    page.records[0].state = ASTRA_VOLUME_PARTITIONING;
+    assert(astra_volume_page_valid(&query, &page));
+    page.records[0].class_id = ASTRA_VOLUME_OPTICAL;
+    assert(!astra_volume_page_valid(&query, &page));
+    page.records[0].class_id = ASTRA_VOLUME_USB;
+    page.records[0].kind = ASTRA_VOLUME_SOURCE;
+    assert(!astra_volume_page_valid(&query, &page));
+    page.records[0].state = ASTRA_VOLUME_FORMATTING;
+    assert(astra_volume_page_valid(&query, &page));
+    page.records[0].origin = ASTRA_VOLUME_ORIGIN_RAM;
     assert(!astra_volume_page_valid(&query, &page));
 }
 int main(void)
@@ -254,6 +326,8 @@ int main(void)
     assert(astra_volume_port_init(&port, 1u, 2u, catalog, &epoch));
     port.root = root_grant;
     port.control = apply_control;
+    port.format = apply_format;
+    port.partition = apply_partition;
     port.usage = usage;
     usage_request(); pump(ASTRA_STATUS_ACCESS);
     usage_request();
@@ -278,6 +352,38 @@ int main(void)
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u && reply.status == ASTRA_STATUS_LOST && admitted.id == 0u);
     control_request(); incoming_request.control.control.flags = 1u;
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u && reply.status == ASTRA_STATUS_INVALID);
+    format_request(ASTRA_VOLUME_FORMAT);
+    assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_ACCESS && format_calls == 0u);
+    format_request(ASTRA_VOLUME_FORMAT);
+    assert(astra_volume_port_format_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_OK && format_calls == 1u &&
+        format_outcome == ASTRA_STATUS_OK);
+    format_request(ASTRA_VOLUME_FORMAT_STATUS);
+    assert(astra_volume_port_format_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_OK && format_calls == 2u &&
+        format_outcome == ASTRA_STATUS_BUSY);
+    format_request(ASTRA_VOLUME_FORMAT); incoming_request.format.label[5] = 'X';
+    assert(astra_volume_port_format_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_INVALID && format_calls == 2u);
+    partition_request(ASTRA_VOLUME_PARTITION);
+    assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_ACCESS && partition_calls == 0u);
+    partition_request(ASTRA_VOLUME_PARTITION);
+    assert(astra_volume_port_format_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_OK && partition_calls == 1u &&
+        format_outcome == ASTRA_STATUS_OK);
+    partition_request(ASTRA_VOLUME_PARTITION_STATUS);
+    assert(astra_volume_port_format_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_OK && partition_calls == 2u &&
+        format_outcome == ASTRA_STATUS_BUSY);
+    partition_request(ASTRA_VOLUME_PARTITION);
+    incoming_request.partition.edit.number = 1u;
+    assert(astra_volume_port_format_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_INVALID && partition_calls == 2u);
+    control_request();
+    assert(astra_volume_port_format_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_ACCESS && control_calls == 2u);
     root_request(ASTRA_RIGHT_READ);
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u && reply.status == ASTRA_STATUS_ACCESS);
     root_request(ASTRA_RIGHT_READ); pump(ASTRA_STATUS_ACCESS); assert(root_calls == 0u);

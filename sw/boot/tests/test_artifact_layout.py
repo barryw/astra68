@@ -33,7 +33,7 @@ def test_product_artifacts_stay_in_sync_excluded_build_directories():
     assert 'else "build/astra_boot.bin"' in converter
     assert "SPLASH_SOURCE := ../../../sw/boot/assets/" \
            "astra_boot_splash_1920x1080_blank.png" in arty
-    assert "GRAPHICS_SOURCES := $(GRAPHICS)/src/surface.c" in arty
+    assert "GRAPHICS_SOURCES := $(GRAPHICS)/src/font_data.c" in arty
     assert "$(GRAPHICS)/src/render_builder.c" in arty
     assert "$(GRAPHICS_GENERATED)/astra_mono_font.inc" in arty
     assert "astra_terminal_font.inc" not in arty

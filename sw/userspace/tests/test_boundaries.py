@@ -684,7 +684,7 @@ def test_library_contracts_match_exact_readelf_fields():
     config = (USERSPACE / "config" / "Makefile").read_text()
     required = (
         "grep -Fc 'Shared library: [system.library.4]'",
-        "grep -Fc 'Shared library: [filesystem.library.14]'",
+        "grep -Fc 'Shared library: [filesystem.library.15]'",
     )
     for contract in required:
         if contract not in config:

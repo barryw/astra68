@@ -157,8 +157,8 @@ CHECKS["lane"] = check_lane
 
 # Fault injection needs a user-controllable HostFS, with normal restart policy.
 MANIFEST = astra_image.STARTUP_MANIFEST.replace(
-    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE RAM_READ RAM_WRITE critical priority=20",
-    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE RAM_READ RAM_WRITE priority=20")
+    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE critical priority=20",
+    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE priority=20")
 HOSTFS_KILL = ("ps | while read -r id rest; do "
                "[[ $rest == *' /services/hostfs' ]] && "
                "print kill > /proc/$id/ctl; done")

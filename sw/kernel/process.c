@@ -44,6 +44,7 @@
 #include "trace.h"
 #include "user_copy.h"
 #include "vm.h"
+#include "worker.h"
 
 #include <stddef.h>
 #if !defined(__m68k__)
@@ -9136,10 +9137,11 @@ KernelProcessStatus kernel_process_on_supervisor_timer(void)
      * its maximum dispatch latency; re-arm that tick and let the next user
      * timer process every due deadline from a stable boundary.
      *
-     * With no current thread the kernel is genuinely idle, not nested inside
-     * one, and expiration is what makes the last sleeping thread runnable.
+     * The worker can also run while no user thread exists. Its services edit
+     * wait queues with interrupts enabled, so defer expiration until it blocks.
+     * Only then is the kernel genuinely idle and safe to wake a sleeper.
      */
-    if (current_thread != NULL) {
+    if (current_thread != NULL || kernel_worker_servicing()) {
         ++scheduler_stats.supervisor_timer_deferrals;
         kernel_platform_timer_arm(scheduler_quantum_cycles);
         ++scheduler_stats.timer_rearms;

@@ -17,8 +17,10 @@ HostFS stamps the requester from the kernel's sender identity; service roots
 use zero. Fixed numeric selectors and older records are refused.
 
 The provider catalog projects the shared native records in
-`ndk/include/astra/volume.h`: version 1, a 32-byte query and an 8104-byte
-page containing at most sixteen 504-byte records. Epoch and sequence checks
+`ndk/include/astra/volume.h`: version 5, a 32-byte query and a 9512-byte
+page containing at most sixteen 592-byte records. Physical device and source
+records report partition map, number, offset, capacity and detected filesystem
+type, including formats Astra cannot mount. Epoch and sequence checks
 protect keyset pagination. Metadata grants no filesystem claim, rooted session
 or mount-control authority. Linux paths, descriptors and private mount IDs do
 not cross this interface.
@@ -34,14 +36,33 @@ only; subdirectory sessions and open directories retain their exact objects.
 Filesystem library ABI 14.1 (`filesystem.library.14`, kit 11.1.0) adds native
 removal observation. Clients wait for actual image-source disappearance after
 unmount; a LOST catalog row never certifies backing retirement.
+Filesystem library ABI 15.0 (`filesystem.library.15`) introduced volume catalog
+version 5 and replaced the previous record layout across all in-tree clients.
+Version 5 distinguished physical write protection from a filesystem's
+read-only mount policy and reports physical source formatting as its own state.
+Existing catalog exports use `ASTRA_FILESYSTEM_15.0`; old 14.x symbol
+versions are retired. The shared snapshot graph helpers resolve an exact
+record or ancestor by epoch, ID and generation, refusing replaced parents and
+cycles for Disk Setup's device/partition inventory.
+Filesystem library ABI 15.1 adds `astra_volume_format` and
+`astra_volume_format_status` under `ASTRA_FILESYSTEM_15.1`. ABI 15.2 adds
+`astra_volume_partition`, prior-generation status and aligned free-extent
+planning under `ASTRA_FILESYSTEM_15.2`; Disk Setup requires 15.2 while older
+clients retain their earlier minimum. Catalog version 6 adds the physical
+`PARTITIONING` lifecycle state. Native VOL protocol 4 and the separate
+`DISK_ADMIN` capability carry destructive authority.
 STOR requests remain 256 bytes. Complete pathname operands use validated
 offset/length descriptors in the session's existing transfer area; providers
 snapshot them before dispatch. Components support 255 bytes and complete paths
 4095 bytes, excluding NUL. There is no short inline-path or extended rename
 format. Continuation/readlink/path results use caller-owned transfer storage.
 Native status 23 reports NAME_TOO_LONG; POSIX translates it to ENAMETOOLONG.
-VOLUME_ADMIN and VOLUME_USAGE remain distinct from metadata and data brokers.
-Native VOL protocol 2 / usage format 2 pages are 8392 bytes and contain two
+VOLUME_ADMIN, VOLUME_USAGE and the destructive DISK_ADMIN authority
+remain distinct from metadata and data brokers. Native VOL protocol 4 carries
+exact-source asynchronous FAT32/exFAT format and exact-device partition-map
+admission, each with prior-generation result polling. Disk Setup alone receives
+this authority; lifecycle administrators cannot invoke it. Usage format 2
+pages are 8392 bytes and contain two
 complete 4160-byte records. Their cursor orders kind, full native handle and
 holder PID, so shared retained roots identify every authenticated process.
 HostFS projects holders from canonical native control sessions; admitted HELLO

@@ -18,6 +18,56 @@ int astra_volume_control_valid(const AstraVolumeControl *control)
 #include <astra/utf8.h>
 #include <string.h>
 
+int astra_volume_format_valid(const AstraVolumeFormatRequest *request)
+{
+    if (request == NULL || request->source.epoch == 0u ||
+        request->source.id == 0u || request->source.generation == 0u ||
+        request->reserved != 0u || request->reserved2 != 0u) return 0;
+    if (request->header.operation == ASTRA_VOLUME_FORMAT_STATUS)
+        return request->format == 0u &&
+            memcmp(request->label, (char[sizeof(request->label)]){0},
+                   sizeof(request->label)) == 0;
+    if (request->header.operation != ASTRA_VOLUME_FORMAT ||
+        (request->format != ASTRA_VOLUME_FAT32 && request->format != ASTRA_VOLUME_EXFAT))
+        return 0;
+    const char *end = memchr(request->label, '\0', sizeof(request->label));
+    if (end == NULL || end == request->label) return 0;
+    size_t length = (size_t)(end - request->label);
+    for (size_t at = 0u; at < sizeof(request->label); ++at) {
+        unsigned char c = (unsigned char)request->label[at];
+        if (at >= length) { if (c != 0u) return 0; }
+        else if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                   (c >= '0' && c <= '9') || c == '_' || c == ' ')) return 0;
+    }
+    return 1;
+}
+
+int astra_volume_partition_valid(const AstraVolumePartitionRequest *request)
+{
+    if (request == NULL || request->device.epoch == 0u ||
+        request->device.id == 0u || request->device.generation == 0u)
+        return 0;
+    const AstraVolumePartitionEdit *edit = &request->edit;
+    if (request->header.operation == ASTRA_VOLUME_PARTITION_STATUS)
+        return memcmp(edit, (AstraVolumePartitionEdit[1]){{0}}, sizeof(*edit)) == 0;
+    if (request->header.operation != ASTRA_VOLUME_PARTITION ||
+        (edit->map != ASTRA_VOLUME_PARTITION_MAP_MBR &&
+         edit->map != ASTRA_VOLUME_PARTITION_MAP_GPT)) return 0;
+    if (edit->operation == ASTRA_VOLUME_PARTITION_INITIALIZE)
+        return edit->format == 0u && edit->number == 0u &&
+            edit->offset_bytes == 0u && edit->length_bytes == 0u;
+    if (edit->operation == ASTRA_VOLUME_PARTITION_CREATE)
+        return (edit->format == ASTRA_VOLUME_FAT32 ||
+                edit->format == ASTRA_VOLUME_EXFAT ||
+                edit->format == ASTRA_VOLUME_EXT4) &&
+            edit->number == 0u && edit->offset_bytes != 0u &&
+            edit->length_bytes != 0u &&
+            edit->offset_bytes <= UINT64_MAX - edit->length_bytes;
+    return edit->operation == ASTRA_VOLUME_PARTITION_DELETE &&
+        edit->format == 0u && edit->number != 0u && edit->number <= 128u &&
+        edit->offset_bytes == 0u && edit->length_bytes == 0u;
+}
+
 int astra_volume_usage_query_valid(const AstraVolumeUsageQuery *query)
 {
     return query != NULL && query->version == ASTRA_VOLUME_USAGE_VERSION &&
@@ -92,12 +142,30 @@ int astra_volume_page_valid(const AstraVolumeCatalogQuery *query,
         const AstraVolumeRecord *row = &page->records[at];
         if (row->id == 0u || row->generation == 0u || row->reserved != 0u ||
             row->kind < ASTRA_VOLUME_DEVICE || row->kind > ASTRA_VOLUME_BINDING ||
-            row->state < ASTRA_VOLUME_DISCOVERED || row->state > ASTRA_VOLUME_FAILED ||
-            row->class_id > ASTRA_VOLUME_RAM || row->format > ASTRA_VOLUME_NTFS ||
+            row->state < ASTRA_VOLUME_DISCOVERED || row->state > ASTRA_VOLUME_PARTITIONING ||
+            row->class_id > ASTRA_VOLUME_RAM || row->format > ASTRA_VOLUME_UNSUPPORTED ||
+            (row->format == ASTRA_VOLUME_UNSUPPORTED && row->detected_type[0] == '\0') ||
+            row->partition_map > ASTRA_VOLUME_PARTITION_MAP_OTHER ||
+            (row->partition_number == 0u && row->offset_bytes != 0u) ||
+            (row->partition_number != 0u &&
+                (row->kind != ASTRA_VOLUME_SOURCE || row->capacity_bytes == 0u ||
+                 row->offset_bytes > UINT64_MAX - row->capacity_bytes)) ||
             row->origin > ASTRA_VOLUME_ORIGIN_SYSTEM_IMAGE ||
             (row->flags & ~(ASTRA_VOLUME_READ_ONLY | ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_VOLATILE |
                 ASTRA_VOLUME_DUPLICATE_UUID | ASTRA_VOLUME_AMBIGUOUS_FORMAT | ASTRA_VOLUME_LABEL_INVALID |
-                ASTRA_VOLUME_TEMPORARY | ASTRA_VOLUME_CLEANUP_PENDING | ASTRA_VOLUME_CONFIGURED_RAM)) != 0u ||
+                ASTRA_VOLUME_TEMPORARY | ASTRA_VOLUME_CLEANUP_PENDING | ASTRA_VOLUME_CONFIGURED_RAM |
+                ASTRA_VOLUME_PHYSICAL_READ_ONLY)) != 0u ||
+            ((row->flags & ASTRA_VOLUME_PHYSICAL_READ_ONLY) != 0u &&
+                ((row->flags & ASTRA_VOLUME_READ_ONLY) == 0u ||
+                 (row->kind != ASTRA_VOLUME_DEVICE && row->kind != ASTRA_VOLUME_SOURCE) ||
+                 row->origin != ASTRA_VOLUME_ORIGIN_DEVICE)) ||
+            (row->state == ASTRA_VOLUME_FORMATTING &&
+                (row->kind != ASTRA_VOLUME_SOURCE ||
+                 row->origin != ASTRA_VOLUME_ORIGIN_DEVICE)) ||
+            (row->state == ASTRA_VOLUME_PARTITIONING &&
+                (row->kind != ASTRA_VOLUME_DEVICE ||
+                 (row->class_id != ASTRA_VOLUME_FIXED &&
+                  row->class_id != ASTRA_VOLUME_USB))) ||
             ((row->flags & ASTRA_VOLUME_CONFIGURED_RAM) != 0u &&
                 (row->kind != ASTRA_VOLUME_SOURCE || row->class_id != ASTRA_VOLUME_RAM ||
                     row->origin != ASTRA_VOLUME_ORIGIN_RAM)) ||
@@ -105,11 +173,14 @@ int astra_volume_page_valid(const AstraVolumeCatalogQuery *query,
             memchr(row->name, '\0', sizeof(row->name)) == NULL ||
             memchr(row->uuid, '\0', sizeof(row->uuid)) == NULL ||
             memchr(row->label, '\0', sizeof(row->label)) == NULL ||
+            memchr(row->detected_type, '\0', sizeof(row->detected_type)) == NULL ||
             row->id <= (at == 0u ? query->after : page->records[at - 1u].id))
             return 0;
         if (!astra_utf8_validate(row->name, (uint32_t)strlen(row->name), 0u) ||
             !astra_utf8_validate(row->uuid, (uint32_t)strlen(row->uuid), 0u) ||
-            !astra_utf8_validate(row->label, (uint32_t)strlen(row->label), 0u))
+            !astra_utf8_validate(row->label, (uint32_t)strlen(row->label), 0u) ||
+            !astra_utf8_validate(row->detected_type,
+                (uint32_t)strlen(row->detected_type), 0u))
             return 0;
     }
     return page->next == 0u || (page->count != 0u &&

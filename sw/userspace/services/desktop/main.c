@@ -61,8 +61,14 @@ typedef struct DesktopApps {
     uint32_t shown; /* entries available in the scrollable grid */
     AstraSurface volume_icon;
     uint32_t volume_visible;
+    uint32_t *volume_indices; /* icon order into complete volume graph */
     AstraVolumeSnapshot volumes;
 } DesktopApps;
+
+static const AstraVolumeRecord *visible_volume(const DesktopApps *apps, uint32_t cell)
+{
+    return &apps->volumes.records[apps->volume_indices[cell]];
+}
 
 static AstraHandle volume_metadata;
 static AstraHandle volume_administrator;
@@ -155,18 +161,42 @@ static AstraResult create_icon_controls(AstraDisplay *display)
     return result;
 }
 
-static AstraResult read_volumes(AstraVolumeSnapshot *snapshot, uint32_t *count)
+static AstraResult read_volumes(AstraVolumeSnapshot *snapshot, uint32_t *count,
+                                 uint32_t **indices)
 {
     AstraResult result = astra_volume_snapshot_open(volume_metadata, snapshot);
     *count = 0u;
+    *indices = NULL;
     if (result != ASTRA_OK) return result;
     removal_complete(snapshot);
+    if (snapshot->count > SIZE_MAX / sizeof(**indices))
+        return ASTRA_ERROR_NO_RESOURCES;
+    if (snapshot->count != 0u) {
+        *indices = astra_runtime_allocate((size_t)snapshot->count * sizeof(**indices));
+        if (*indices == NULL) return ASTRA_ERROR_NO_RESOURCES;
+    }
     for (uint32_t at = 0u; at < snapshot->count; ++at) {
         const AstraVolumeRecord *record = &snapshot->records[at];
-        if (record->kind == ASTRA_VOLUME_MOUNT &&
+        int empty_disk = record->kind == ASTRA_VOLUME_DEVICE &&
+            record->state == ASTRA_VOLUME_DISCOVERED &&
+            (record->class_id == ASTRA_VOLUME_USB ||
+             record->class_id == ASTRA_VOLUME_FIXED) &&
+            (record->flags & ASTRA_VOLUME_SYSTEM) == 0u;
+        for (uint32_t source = 0u; empty_disk && source < snapshot->count; ++source) {
+            const AstraVolumeRecord *child = &snapshot->records[source];
+            if (child->kind != ASTRA_VOLUME_SOURCE ||
+                child->origin != ASTRA_VOLUME_ORIGIN_DEVICE ||
+                child->state == ASTRA_VOLUME_LOST) continue;
+            const AstraVolumeReference reference = {snapshot->epoch,
+                child->id, child->generation};
+            if (astra_volume_snapshot_ancestor(snapshot, &reference,
+                ASTRA_VOLUME_DEVICE) == record) empty_disk = 0;
+        }
+        if ((record->kind == ASTRA_VOLUME_MOUNT &&
             (record->state == ASTRA_VOLUME_MOUNTED || record->state == ASTRA_VOLUME_QUIESCING) &&
-            (record->flags & ASTRA_VOLUME_TEMPORARY) == 0u)
-            snapshot->records[(*count)++] = *record;
+            (record->flags & ASTRA_VOLUME_TEMPORARY) == 0u) ||
+            astra_volume_source_issue(record) != ASTRA_VOLUME_SOURCE_READY || empty_disk)
+            (*indices)[(*count)++] = at;
     }
     return ASTRA_OK;
 }
@@ -283,7 +313,7 @@ typedef struct DesktopCommands {
 static int can_unmount(const DesktopApps *apps, uint32_t cell)
 {
     if (cell >= apps->volume_visible) return 0;
-    const AstraVolumeRecord *record = &apps->volumes.records[cell];
+    const AstraVolumeRecord *record = visible_volume(apps, cell);
     if (record->kind != ASTRA_VOLUME_MOUNT || record->state != ASTRA_VOLUME_MOUNTED ||
         (record->flags & (ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_TEMPORARY)) != 0u) return 0;
     for (DesktopRemoval *at = removals; at != NULL; at = at->next)
@@ -291,6 +321,31 @@ static int can_unmount(const DesktopApps *apps, uint32_t cell)
             at->operation.mount.id == record->id &&
             at->operation.mount.generation == record->generation) return 0;
     return 1;
+}
+
+static int can_disk_setup(const DesktopApps *apps, uint32_t cell)
+{
+    if (cell >= apps->volume_visible) return 0;
+    const AstraVolumeRecord *record = visible_volume(apps, cell);
+    if (record->kind == ASTRA_VOLUME_DEVICE)
+        return record->class_id == ASTRA_VOLUME_USB ||
+            record->class_id == ASTRA_VOLUME_FIXED;
+    if (record->kind == ASTRA_VOLUME_SOURCE)
+        return record->origin == ASTRA_VOLUME_ORIGIN_DEVICE;
+    if (record->kind != ASTRA_VOLUME_MOUNT) return 0;
+    const AstraVolumeReference reference = {apps->volumes.epoch,
+        record->id, record->generation};
+    const AstraVolumeRecord *source = astra_volume_snapshot_ancestor(
+        &apps->volumes, &reference, ASTRA_VOLUME_SOURCE);
+    return source != NULL && source->origin == ASTRA_VOLUME_ORIGIN_DEVICE;
+}
+
+static AstraResult disk_setup_query(void *opaque, AstraCommandState *state)
+{
+    const DesktopCommands *context = opaque;
+    *state = (AstraCommandState){"Disk Setup...", 13u,
+        can_disk_setup(context->apps, *context->selection), 0u};
+    return ASTRA_OK;
 }
 
 static AstraResult unmount_query(void *opaque, AstraCommandState *state)
@@ -351,7 +406,7 @@ static AstraResult unmount_icon(void *opaque, const AstraCommandArguments *args)
     if (args == NULL || args->length != sizeof(cell)) return ASTRA_ERROR_INVALID_ARGUMENT;
     memcpy(&cell, args->bytes, sizeof(cell));
     if (!can_unmount(context->apps, cell)) return ASTRA_ERROR_INVALID_HANDLE;
-    const AstraVolumeRecord *record = &context->apps->volumes.records[cell];
+    const AstraVolumeRecord *record = visible_volume(context->apps, cell);
     DesktopRemoval *pending = astra_runtime_callocate(1u, sizeof(*pending));
     if (pending == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
     pending->operation.mount = (AstraVolumeReference){context->apps->volumes.epoch,
@@ -388,6 +443,75 @@ static AstraResult open_query(void *opaque, AstraCommandState *state)
     return ASTRA_OK;
 }
 
+static void source_open_error(uint32_t gui, const AstraVolumeRecord *record,
+                              uint32_t issue)
+{
+    if (issue == ASTRA_VOLUME_SOURCE_PROBE_ERROR) {
+        volume_error(gui, "Astra could not inspect this disk", (AstraResult)record->status);
+        return;
+    }
+    char text[256];
+    AstraString message;
+    astra_string_init(&message, text, sizeof(text));
+    if (issue == ASTRA_VOLUME_SOURCE_NDOS)
+        (void)astra_string_append(&message,
+            "Astra cannot open this disk: no supported filesystem was found.");
+    else if (issue == ASTRA_VOLUME_SOURCE_AMBIGUOUS)
+        (void)astra_string_append(&message,
+            "Astra found conflicting filesystem signatures on this disk.");
+    else {
+        (void)astra_string_append(&message, "Astra recognized ");
+        (void)astra_string_append(&message, record->detected_type);
+        (void)astra_string_append(&message,
+            ", but this filesystem is not available for mounting.");
+    }
+    AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
+    info.kind = ASTRA_ALERT_ERROR;
+    info.title = "Disk unavailable";
+    info.title_length = 16u;
+    info.message = text;
+    info.message_length = (uint16_t)message.length;
+    info.button = "Close";
+    info.button_length = 5u;
+    (void)astra_interface_show_alert(gui, &info);
+}
+
+static AstraResult launch_volume_application(const DesktopCommands *context,
+    const AstraVolumeRecord *record, const char *bundle, const char *name,
+    const char *option)
+{
+    char epoch[24], id[24], generation[24];
+    AstraString number;
+    uint32_t process_id;
+    astra_string_init(&number, epoch, sizeof(epoch));
+    (void)astra_string_append_u64(&number, context->apps->volumes.epoch);
+    astra_string_init(&number, id, sizeof(id));
+    (void)astra_string_append_u64(&number, record->id);
+    astra_string_init(&number, generation, sizeof(generation));
+    (void)astra_string_append_u64(&number, record->generation);
+    const char *arguments[] = {option, epoch, id, generation};
+    AstraResult result = astra_application_launch_with_arguments(
+        context->launcher, bundle, (uint16_t)strlen(bundle),
+        ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 4u, &process_id);
+    if (result != ASTRA_OK)
+        launch_error(context->gui, name, bundle, result);
+    return result;
+}
+
+static AstraResult disk_setup_icon(void *opaque, const AstraCommandArguments *args)
+{
+    const DesktopCommands *context = opaque;
+    uint32_t cell;
+    if (args == NULL || args->length != sizeof(cell))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    memcpy(&cell, args->bytes, sizeof(cell));
+    if (!can_disk_setup(context->apps, cell))
+        return ASTRA_ERROR_INVALID_HANDLE;
+    return launch_volume_application(context,
+        visible_volume(context->apps, cell), "/apps/DiskSetup.app",
+        "Disk Setup", "--target");
+}
+
 static AstraResult open_icon(void *opaque, const AstraCommandArguments *args)
 {
     const DesktopCommands *context = opaque;
@@ -399,21 +523,18 @@ static AstraResult open_icon(void *opaque, const AstraCommandArguments *args)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     memcpy(&cell, args->bytes, sizeof(cell));
     if (cell < apps->volume_visible) {
-        const AstraVolumeRecord *record = &apps->volumes.records[cell];
-        char epoch[24], id[24], generation[24];
-        AstraString number;
-        astra_string_init(&number, epoch, sizeof(epoch));
-        (void)astra_string_append_u64(&number, apps->volumes.epoch);
-        astra_string_init(&number, id, sizeof(id));
-        (void)astra_string_append_u64(&number, record->id);
-        astra_string_init(&number, generation, sizeof(generation));
-        (void)astra_string_append_u64(&number, record->generation);
-        const char *arguments[] = {"--volume", epoch, id, generation};
-        result = astra_application_launch_with_arguments(context->launcher,
-            "/apps/Atlas.app", sizeof("/apps/Atlas.app") - 1u,
-            ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 4u, &process_id);
-        if (result != ASTRA_OK)
-            launch_error(context->gui, "Atlas", "/apps/Atlas.app", result);
+        const AstraVolumeRecord *record = visible_volume(apps, cell);
+        if (record->kind == ASTRA_VOLUME_DEVICE) {
+            source_open_error(context->gui, record, ASTRA_VOLUME_SOURCE_NDOS);
+            return ASTRA_OK;
+        }
+        uint32_t issue = astra_volume_source_issue(record);
+        if (issue != ASTRA_VOLUME_SOURCE_READY) {
+            source_open_error(context->gui, record, issue);
+            return ASTRA_OK;
+        }
+        result = launch_volume_application(context, record, "/apps/Atlas.app",
+            "Atlas", "--volume");
     } else if (cell >= apps->volume_visible && cell - apps->volume_visible < apps->shown) {
         const AstraApplicationEntry *entry = &apps->catalog.entries[cell - apps->volume_visible];
         result = astra_application_launch(context->launcher, entry->bundle,
@@ -503,7 +624,14 @@ static void load_apps(AstraDisplay *display, DesktopApps *apps)
     uint32_t status = astra_application_catalog_load(
         &process_filesystem, APPLICATIONS_DIRECTORY, &apps->catalog);
     apps->volume_icon = (AstraSurface)ASTRA_SURFACE_INIT;
-    AstraResult observed = read_volumes(&apps->volumes, &apps->volume_visible);
+    AstraResult observed = read_volumes(&apps->volumes, &apps->volume_visible,
+        &apps->volume_indices);
+    ASTRA_EVENT3(ASTRA_EVENT_SUBSYSTEM_DISPLAY, ASTRA_EVENT_LEVEL_INFO,
+                 "desktop inventory applications=%u volumes=%u catalog_status=%u",
+                 apps->catalog.count, apps->volume_visible, status);
+    if (observed != ASTRA_OK)
+        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_DISPLAY, ASTRA_EVENT_LEVEL_WARNING,
+                     "desktop volume snapshot failed status=%d", observed);
     if (observed != ASTRA_OK) {
         (void)astra_log_failure("desktop volume catalog", (uint32_t)(-observed));
         volume_refresh = 1u;
@@ -535,6 +663,16 @@ static void load_apps(AstraDisplay *display, DesktopApps *apps)
     }
 }
 
+static const char *source_icon_name(const AstraVolumeRecord *record)
+{
+    uint32_t issue = astra_volume_source_issue(record);
+    if (issue == ASTRA_VOLUME_SOURCE_NDOS) return "NDOS";
+    if (issue == ASTRA_VOLUME_SOURCE_UNSUPPORTED)
+        return record->detected_type[0] != '\0' ? record->detected_type : "Unsupported";
+    if (issue == ASTRA_VOLUME_SOURCE_AMBIGUOUS) return "Ambiguous";
+    return "Disk error";
+}
+
 static void log_visible_icons(const DesktopApps *apps)
 {
     AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
@@ -556,8 +694,13 @@ static void log_visible_icons(const DesktopApps *apps)
         int64_t top = (int64_t)ASTRA_DESKTOP_GRID_TOP + dy - state.offset_y;
         /* Only complete hit targets get published, never offscreen positions. */
         if (top < 0 || top + ASTRA_DESKTOP_CELL_HEIGHT > DESKTOP_HEIGHT) continue;
-        log_icon(at < apps->volume_visible ? apps->volumes.records[at].name :
-            apps->catalog.entries[at - apps->volume_visible].bundle,
+        const char *name = at < apps->volume_visible ?
+            (visible_volume(apps, at)->kind == ASTRA_VOLUME_DEVICE ? "NDOS" :
+             visible_volume(apps, at)->kind == ASTRA_VOLUME_SOURCE ?
+                source_icon_name(visible_volume(apps, at)) :
+                visible_volume(apps, at)->name) :
+            apps->catalog.entries[at - apps->volume_visible].bundle;
+        log_icon(name,
             dx, (int32_t)dy - (int32_t)state.offset_y);
     }
 }
@@ -589,14 +732,21 @@ static AstraResult paint(AstraSurface *content,
         uint32_t is_volume = at < apps->volume_visible;
         char fallback[32];
         if (is_volume) {
-            const char *name = apps->volumes.records[at].name + 1u;
+            const AstraVolumeRecord *record = visible_volume(apps, at);
+            const char *name = record->kind == ASTRA_VOLUME_DEVICE ? "NDOS" :
+                record->kind == ASTRA_VOLUME_SOURCE ?
+                source_icon_name(record) : record->name + 1u;
             uint32_t byte = 0u;
             for (; name[byte] != '\0' && byte + 1u < sizeof(fallback); ++byte)
                 fallback[byte] = astra_ascii_upper(name[byte]);
             fallback[byte] = '\0';
         }
         const char *label = is_volume != 0u ?
-            (apps->volumes.records[at].label[0] != '\0' ? apps->volumes.records[at].label : fallback) :
+            (visible_volume(apps, at)->kind == ASTRA_VOLUME_DEVICE ||
+             (visible_volume(apps, at)->kind == ASTRA_VOLUME_SOURCE &&
+              astra_volume_source_issue(visible_volume(apps, at)) != ASTRA_VOLUME_SOURCE_READY) ?
+                fallback : visible_volume(apps, at)->label[0] != '\0' ?
+                visible_volume(apps, at)->label : fallback) :
             apps->catalog.entries[at - apps->volume_visible].name;
         const AstraSurface *icon = is_volume != 0u ? &apps->volume_icon :
             &apps->icons[at - apps->volume_visible];
@@ -689,12 +839,12 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t clicked_cell = UINT32_MAX;
     DesktopUsage *busy_dialog = NULL;
     AstraCommandArguments menu_arguments = {1u, 1u, &menu_cell, sizeof(menu_cell)};
-    const AstraContextMenuItem menu_items[] = {{"desktop.open", 12u, &menu_arguments},
-        {"desktop.unmount", 15u, &menu_arguments}};
+    AstraContextMenuItem menu_items[3] = {{"desktop.open", 12u, &menu_arguments}};
     DesktopCommands command_context = {&apps, 0u, 0u, &menu_cell, NULL};
     const AstraCommand commands[] = {{"desktop.open", 12u, 1u, 1u, open_query, open_icon, &command_context},
+        {"desktop.disk-setup", 18u, 1u, 1u, disk_setup_query, disk_setup_icon, &command_context},
         {"desktop.unmount", 15u, 1u, 1u, unmount_query, unmount_icon, &command_context}};
-    const AstraCommandScope command_scope = {NULL, commands, 2u};
+    const AstraCommandScope command_scope = {NULL, commands, 3u};
 
     if (!astra_startup_validate(startup) || startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
@@ -829,7 +979,9 @@ int astra_main(const AstraStartupInfo *startup)
         if (volume_refresh && astra_clock_monotonic() >= volume_retry) {
             AstraVolumeSnapshot replacement = ASTRA_VOLUME_SNAPSHOT_INIT;
             uint32_t count = 0u;
-            result = volume_watch.receive == ASTRA_INVALID_HANDLE ? ASTRA_ERROR_PEER_DEAD : read_volumes(&replacement, &count);
+            uint32_t *indices = NULL;
+            result = volume_watch.receive == ASTRA_INVALID_HANDLE ? ASTRA_ERROR_PEER_DEAD :
+                read_volumes(&replacement, &count, &indices);
             if (result != ASTRA_OK && volume_watch.receive != ASTRA_INVALID_HANDLE) {
                 volume_retry = astra_clock_monotonic() + UINT64_C(50000000);
                 if (removals != NULL) removal_retry = volume_retry;
@@ -837,16 +989,23 @@ int astra_main(const AstraStartupInfo *startup)
                 volume_refresh = 0u;
                 if (volume_watch.receive == ASTRA_INVALID_HANDLE && removals != NULL)
                     removal_retry = astra_clock_monotonic() + UINT64_C(1000000000);
-                int changed = count != apps.volume_visible || replacement.epoch != apps.volumes.epoch ||
-                    (count != 0u && memcmp(replacement.records, apps.volumes.records, count * sizeof(*replacement.records)) != 0);
+                int changed = count != apps.volume_visible ||
+                    replacement.epoch != apps.volumes.epoch ||
+                    replacement.count != apps.volumes.count ||
+                    (replacement.count != 0u && memcmp(replacement.records,
+                        apps.volumes.records,
+                        (size_t)replacement.count * sizeof(*replacement.records)) != 0);
                 if (changed) {
                     result = astra_interface_context_menu_close(&context_menu);
                     if (result != ASTRA_OK) return DESKTOP_FAIL_INTERFACE;
                     menu_cell = UINT32_MAX;
                     clicked_cell = UINT32_MAX;
                     astra_volume_snapshot_close(&apps.volumes);
+                    astra_runtime_deallocate(apps.volume_indices);
                     apps.volumes = replacement;
                     replacement = (AstraVolumeSnapshot)ASTRA_VOLUME_SNAPSHOT_INIT;
+                    apps.volume_indices = indices;
+                    indices = NULL;
                     apps.volume_visible = count;
                     if ((uint64_t)count + apps.shown > UINT32_MAX ||
                         layout_icons(count + apps.shown) != ASTRA_OK) return DESKTOP_FAIL_INTERFACE;
@@ -855,6 +1014,7 @@ int astra_main(const AstraStartupInfo *startup)
                 }
             }
             astra_volume_snapshot_close(&replacement);
+            astra_runtime_deallocate(indices);
         }
         /* Admission can still fail asynchronously in the provider. Preserve
          * mounted authority, report its exact status and permit a fresh retry. */
@@ -929,8 +1089,15 @@ int astra_main(const AstraStartupInfo *startup)
                     DESKTOP_GRID_WIDTH, DESKTOP_HEIGHT, state.offset_y);
                 if (cell < apps.volume_visible + apps.shown) {
                     menu_cell = cell;
+                    uint32_t menu_count = 1u;
+                    if (can_disk_setup(&apps, cell))
+                        menu_items[menu_count++] = (AstraContextMenuItem){
+                            "desktop.disk-setup", 18u, &menu_arguments};
+                    if (can_unmount(&apps, cell))
+                        menu_items[menu_count++] = (AstraContextMenuItem){
+                            "desktop.unmount", 15u, &menu_arguments};
                     result = astra_interface_context_menu_open(&context_menu, &window,
-                        &command_scope, menu_items, can_unmount(&apps, cell) ? 2u : 1u,
+                        &command_scope, menu_items, menu_count,
                         event.data.pointer.x, event.data.pointer.y);
                     if (result != ASTRA_OK) {
                         menu_cell = UINT32_MAX;

@@ -90,7 +90,7 @@ LOADER_PIC_OBJECTS := $(patsubst %,build/m68k/loader/%.o,$(LOADER_PIC_SOURCES)) 
 	build/m68k/loader/backends/host.o \
 	build/m68k/loader/system_manifest.o build/m68k/loader/system_bundle.o \
 	build/m68k/loader/system_utf8.o
-FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library.14
+FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library.15
 FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/filesystem_library_identity.o \
 	build/m68k/library/filesystem_library.o \
@@ -260,7 +260,7 @@ $(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) \
 		| libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,filesystem.library.14 \
+		-Wl,-soname,filesystem.library.15 \
 		-Wl,--version-script=$(FILESYSTEM_LIBRARY_MAP) -o $@ \
 		$(FILESYSTEM_LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
@@ -284,9 +284,9 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.14 14.1.0 ABI 14.1$$'
+		grep -q '^filesystem.library.15 15.2.0 ABI 15.2$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
-	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.14]' >/dev/null
+	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.15]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
 		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $< | \
@@ -295,11 +295,13 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null
 	@test "$$($(READELF) -dW $< | awk '/TEXTREL/{n++} END{print n+0}')" = 0
 	@$(READELF) -lW $< | grep ' GNU_RELRO ' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_FILESYSTEM_14.0' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_FILESYSTEM_15.0' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_FILESYSTEM_15.1' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_FILESYSTEM_15.2' >/dev/null
 	@$(READELF) --dyn-syms -W $< | \
-		grep -Eq ' astra_volume_removal_advance@@ASTRA_FILESYSTEM_14\.1$$'
+		grep -Eq ' astra_volume_removal_advance@@ASTRA_FILESYSTEM_15\.0$$'
 	@$(READELF) --dyn-syms -W $< | \
-		grep -Eq ' astra_application_catalog_load@@ASTRA_FILESYSTEM_14\.0$$'
+		grep -Eq ' astra_application_catalog_load@@ASTRA_FILESYSTEM_15\.0$$'
 	@ASTRA_LIBRARY_FIXTURE=$(abspath $<) $(KERNEL_ELF_TEST) >/dev/null
 	@echo "astra filesystem shared library: PASS"
 

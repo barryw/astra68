@@ -82,6 +82,10 @@ def verified_package(kernel):
     required = ("boot/Image", "boot/dtbs/" + DTB,
                 "lib/modules/%s/kernel/drivers/scsi/sr_mod.ko" % release,
                 "lib/modules/%s/kernel/drivers/cdrom/cdrom.ko" % release,
+                "lib/modules/%s/kernel/fs/isofs/isofs.ko" % release,
+                "lib/modules/%s/kernel/fs/udf/udf.ko" % release,
+                "lib/modules/%s/kernel/fs/exfat/exfat.ko" % release,
+                "lib/modules/%s/kernel/fs/ntfs3/ntfs3.ko" % release,
                 "lib/modules/%s/extra/astra/astra_graphics_arena.ko" % release,
                 "lib/modules/%s/extra/astra/astra_display_capture.ko" % release,
                 "lib/modules/%s/modules.dep" % release)

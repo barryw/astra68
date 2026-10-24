@@ -164,7 +164,7 @@ PROVIDER_INDEX_MAX = (PROVIDER_INDEX_HEADER.size + VFS_PATH_MAX -
 # application, and anything unmarked at 16 (sw/include/astra/process.h).
 DISPLAY_STARTUP_MANIFEST = (
     "service /services/hostfs grants HOST_FILESYSTEM "
-    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE RAM_READ RAM_WRITE critical priority=20\n"
+    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE critical priority=20\n"
     "service /services/posixd grants serves POSIX_PROCESS required priority=20\n"
     "service /services/entropy grants HOST_DEVICE "
     "serves ENTROPY required priority=20\n"
@@ -191,7 +191,8 @@ DISPLAY_STARTUP_MANIFEST = (
     "LIBS:r SYSTEM:r DH0:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
     "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r FONTS:r APPS:r LIBS:r LOG\n"
-    "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r\n")
+    "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r\n"
+    "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",
                     "input", "clipboard", "fonts", "display", "media", "sampler",

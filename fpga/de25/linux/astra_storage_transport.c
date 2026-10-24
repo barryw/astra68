@@ -154,7 +154,8 @@ int astra_storage_control_call(int socket, const AstraStorageControlRequest *req
     if (error != 0)
         return error;
     if (reply->version != ASTRA_STORAGE_PROVIDER_VERSION || reply->error < 0 ||
-        reply->error > 4095 || reply->serial != request->serial || reply->reserved != 0u ||
+        reply->error > 4095 || reply->serial != request->serial ||
+        reply->reserved != 0u || reply->reserved2 != 0u ||
         reply->epoch == 0u || (request->epoch != 0u && reply->epoch != request->epoch &&
                                reply->error != ESTALE) ||
         reply->count > ASTRA_STORAGE_PROVIDER_PAGE ||

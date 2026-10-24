@@ -18,11 +18,6 @@ static const char *kind(uint32_t value)
     static const char *const names[] = {"?", "device", "medium", "source", "mount", "binding"};
     return value < sizeof(names) / sizeof(names[0]) ? names[value] : "?";
 }
-static const char *format(uint32_t value)
-{
-    static const char *const names[] = {"unknown", "ext4", "FAT32", "exFAT", "ISO9660", "UDF", "tmpfs", "FAT12", "FAT16", "NTFS"};
-    return value < sizeof(names) / sizeof(names[0]) ? names[value] : "?";
-}
 static const char *access_mode(const AstraVolumeRecord *record)
 {
     if (record->kind != ASTRA_VOLUME_MOUNT && record->kind != ASTRA_VOLUME_BINDING)
@@ -63,7 +58,8 @@ int main(int argc, char **argv)
         return 1;
     }
     int failed = printf(references ? all ? "EPOCH ID GENERATION KIND PARENT PARENT_GENERATION FLAGS NAME\n" : "EPOCH ID GENERATION NAME\n" :
-        "ID    KIND     STATE       NAME       FORMAT   ACCESS  LABEL\n") < 0;
+        all ? "ID    KIND     STATE       NAME       FORMAT   ACCESS  PART MAP START_BYTES SIZE_BYTES LABEL\n" :
+              "ID    KIND     STATE       NAME       FORMAT   ACCESS  LABEL\n") < 0;
     for (uint32_t at = 0u; at < snapshot.count && !failed; ++at) {
         const AstraVolumeRecord *record = &snapshot.records[at];
         if (!all && (record->kind != ASTRA_VOLUME_MOUNT ||
@@ -81,9 +77,17 @@ int main(int argc, char **argv)
         }
         failed = printf("%-5llu %-8s %-11s %-10s %-8s %-7s ",
             (unsigned long long)record->id, kind(record->kind), state(record->state),
-            record->name[0] != '\0' ? record->name : "-", format(record->format),
-            access_mode(record)) < 0 ||
-            !label(record->label);
+            record->name[0] != '\0' ? record->name : "-",
+            record->format == ASTRA_VOLUME_UNSUPPORTED ? record->detected_type :
+                astra_volume_source_issue(record) == ASTRA_VOLUME_SOURCE_NDOS ?
+                    "NDOS" : astra_volume_format_name(record->format),
+            access_mode(record)) < 0;
+        if (all)
+            failed |= printf("%-4u %-5s %-11llu %-11llu ",
+                record->partition_number, astra_volume_partition_map_name(record->partition_map),
+                (unsigned long long)record->offset_bytes,
+                (unsigned long long)record->capacity_bytes) < 0;
+        failed |= !label(record->label);
     }
     astra_volume_snapshot_close(&snapshot);
     return failed || fflush(stdout) != 0 ? 1 : 0;

@@ -3,13 +3,16 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 REPOSITORY=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
+JOBS=${ASTRA_DE25_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')}
+case "$JOBS" in
+    ''|0*|*[!0-9]*) echo "ASTRA_DE25_BUILD_JOBS must be a positive integer" >&2; exit 2 ;;
+esac
 WORKSPACE=$(mktemp -d "${TMPDIR:-/tmp}/astra-de25-release.XXXXXX")
 RELEASE=${ASTRA_DE25_RELEASE_OUTPUT:-$WORKSPACE/release}
 STORAGE=$WORKSPACE/storage-terminal.img
 SOURCE_BEFORE=$WORKSPACE/source-before.sha256
 SOURCE_AFTER=$WORKSPACE/source-after.sha256
 SOURCE_GIT=$WORKSPACE/source.git
-JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')
 DE25_SYSROOT=${DE25_SYSROOT:-${XDG_CACHE_HOME:-"$HOME/.cache"}/astra68/de25-jammy-arm64}
 DE25_KERNEL_PACKAGE=${DE25_KERNEL_PACKAGE:?set DE25_KERNEL_PACKAGE to the complete qualified kernel package}
 PYTHONPYCACHEPREFIX=$WORKSPACE/pycache

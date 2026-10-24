@@ -32,14 +32,18 @@ def lifecycle_fixture(image, work):
     iso = work / "disc.iso"
     subprocess.run(["genisoimage", "-quiet", "-input-charset", "utf-8", "-R", "-J",
         "-V", "ASTRA_DISC", "-o", str(iso), str(tree)], check=True)
+    udf = work / "disc.udf"
+    subprocess.run(["genisoimage", "-quiet", "-udf", "-input-charset", "utf-8",
+        "-R", "-J", "-V", "ASTRA_UDF", "-o", str(udf), str(tree)], check=True)
     offset, size = astra_image.ext4_partition(image)
     volume = work / "fixture.ext4"
     astra_image._slice(image, offset, size, volume)
     astra_image._debugfs(volume, "write %s /home/disc.iso" % iso, "native ISO fixture")
+    astra_image._debugfs(volume, "write %s /home/disc.udf" % udf, "native UDF fixture")
     astra_image._splice(image, offset, volume)
 
 
-def lifecycle_gate(machine):
+def lifecycle_gate(machine, optical_only=False):
     spec = importlib.util.spec_from_file_location("atlas", Path(__file__).with_name("test-atlas.py"))
     atlas = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(atlas)
@@ -109,6 +113,22 @@ def lifecycle_gate(machine):
         desktop_has("/cd0", False)
         graph = command("volumes --all")
         assert not any(" ISO9660 " in line for line in graph), graph
+    assert any("mounted /cd0" in line for line in command("mount --image /home/disc.udf"))
+    desktop_has("/cd0", True)
+    graph = command("volumes --all")
+    assert any("mount" in line and "mounted" in line and "/cd0" in line and
+        "UDF" in line and "ro" in line for line in graph), graph
+    assert "Astra ISO test" in command("cat /cd0/Folder/caf*.txt")
+    lines = command("{ print forbidden > /cd0/new; print READONLY-STATUS-$?; } 2>&1")
+    assert "READONLY-STATUS-1" in lines, lines
+    assert any("unmounted" in line for line in command("unmount /cd0"))
+    desktop_has("/cd0", False)
+    graph = command("volumes --all")
+    assert not any(" UDF " in line for line in graph), graph
+    if optical_only:
+        print("NATIVE OPTICAL IMAGE PASS: ISO9660 and UDF root reads, desktop, "
+              "read-only refusal, busy holders and image retirement", flush=True)
+        return
     lines = command("{ unmount /dh0; print SYSTEM-STATUS-$?; } 2>&1")
     assert "SYSTEM-STATUS-1" in lines and any("running system" in line for line in lines), lines
     lines = command("{ unmount /tmp; print TMP-STATUS-$?; } 2>&1")
@@ -129,6 +149,8 @@ def lifecycle_gate(machine):
             machine.qmp.type_line("ps | while read -r id rest; do "
                 "[[ $rest == *' /services/hostfs' ]] && print kill > /proc/$id/ctl; done")
             assert machine.wait_for_trace_text("desktop ready", 90, before), "HostFS restart failed with RAM unmounted"
+            desktop_has("/apps/Terminal.app", True)
+            atlas.desktop.wait_quiet(machine, "desktop after HostFS restart")
             assert terminal.open_terminal_window(machine, 90), "fresh Terminal failed after HostFS restart"
             desktop_has("/ram0", False)
         assert any("mounted /ram0" in line for line in command("mount --ram %s 16777216 1024" % source))
@@ -143,7 +165,7 @@ def lifecycle_gate(machine):
         if line.strip().startswith("OLD-RAM-STATUS-")]
     assert statuses and all(value != "0" for value in statuses), statuses
     atlas.check_retired(machine, 90)
-    print("NATIVE LIFECYCLE PASS: late ISO, file/CWD busy/lsof, readonly, desktop/Atlas, image retirement, "
+    print("NATIVE LIFECYCLE PASS: late ISO/UDF, file/CWD busy/lsof, readonly, desktop/Atlas, image retirement, "
           "RAM remounts, HostFS restart while RAM absent, existing shell refresh and stale incarnation refusal", flush=True)
 
 
@@ -154,6 +176,7 @@ def main():
     parser.add_argument("--uid", type=int, required=True)
     parser.add_argument("--gid", type=int, required=True)
     parser.add_argument("--lifecycle", action="store_true")
+    parser.add_argument("--optical-only", action="store_true")
     args = parser.parse_args()
     if os.geteuid() != 0 or args.uid <= 0 or args.gid <= 0:
         parser.error("root observer and explicit non-root QEMU UID/GID required")
@@ -172,7 +195,7 @@ def main():
             lines[0] = lines[0].replace(" critical priority=20", " priority=20")
             manifest = "\n".join(lines) + "\n"
         astra_image.install(image, manifest_text=manifest)
-        if args.lifecycle:
+        if args.lifecycle or args.optical_only:
             lifecycle_fixture(image, work)
         offset, length = astra_image.ext4_partition(image)
         exports = work / "exports"
@@ -223,8 +246,8 @@ def main():
                 assert terminal.wait_for_command(machine, "ASTRA-NATIVE-EXIT-0", 45, before) is not None, command
                 assert machine.settle(), command
                 print("PASS: " + command, flush=True)
-            if args.lifecycle:
-                lifecycle_gate(machine)
+            if args.lifecycle or args.optical_only:
+                lifecycle_gate(machine, args.optical_only)
             lines = "\n".join(machine.said_with_syslog()[0])
             assert "/services/storage" not in lines and "/services/ramfs" not in lines
             assert "store defaults:" not in lines, lines

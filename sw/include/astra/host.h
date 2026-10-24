@@ -121,6 +121,14 @@ enum {
  * holders changed. All operands and payload lengths are zero. It advances the
  * same usage mutation sequence as description/session changes. */
 #define ASTRA_HOST_VOLUME_HOLDERS_CHANGED UINT16_C(4)
+/** Provider-only exact physical-source format or prior-generation status. */
+#define ASTRA_HOST_VOLUME_FORMAT UINT16_C(5)
+#define ASTRA_HOST_VOLUME_FORMAT_START UINT32_C(1)
+#define ASTRA_HOST_VOLUME_FORMAT_STATUS UINT32_C(2)
+/** Provider-only exact physical-device partition-map edit or status. */
+#define ASTRA_HOST_VOLUME_PARTITION UINT16_C(6)
+#define ASTRA_HOST_VOLUME_PARTITION_START UINT32_C(1)
+#define ASTRA_HOST_VOLUME_PARTITION_STATUS UINT32_C(2)
 /** Provider-only lifecycle request. requester is kernel-stamped by HostFS's
  * receive endpoint, never accepted from an application payload. */
 typedef struct AstraHostVolumeControl {
@@ -130,6 +138,24 @@ typedef struct AstraHostVolumeControl {
 } AstraHostVolumeControl;
 /** @cond ASTRA_INTERNAL */
 _Static_assert(sizeof(AstraHostVolumeControl) == 64u, "host volume control ABI");
+typedef struct AstraHostVolumeFormat {
+    AstraVolumeReference source;
+    uint32_t operation;
+    uint32_t format;
+    char label[12];
+    uint32_t requester;
+    uint32_t reserved;
+    uint32_t reserved2;
+} AstraHostVolumeFormat;
+_Static_assert(sizeof(AstraHostVolumeFormat) == 56u, "host volume format ABI");
+typedef struct AstraHostVolumePartition {
+    AstraVolumeReference device;
+    uint32_t mode;
+    uint32_t requester;
+    AstraVolumePartitionEdit edit;
+    uint32_t reserved[2];
+} AstraHostVolumePartition;
+_Static_assert(sizeof(AstraHostVolumePartition) == 72u, "host volume partition ABI");
 /** @endcond */
 /** Every SESSION_OPEN supplies this typed provider-only payload. Parent
  * sessions use a zero reference; requester is authenticated by HostFS IPC. */
@@ -566,7 +592,7 @@ _Static_assert(sizeof(AstraHostNode) == 112u, "host node ABI changed");
 /** @endcond */
 
 /** Wire-format version of ::AstraHostCommand. */
-#define ASTRA_HOST_COMMAND_VERSION 5u
+#define ASTRA_HOST_COMMAND_VERSION 6u
 /** Fixed byte size of ::AstraHostCommand. */
 #define ASTRA_HOST_COMMAND_SIZE 512u
 

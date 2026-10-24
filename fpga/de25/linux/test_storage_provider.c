@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <grp.h>
 #include <linux/fs.h>
+#include <linux/loop.h>
 #include <libudev.h>
 #include <poll.h>
 #include <signal.h>
@@ -129,6 +130,306 @@ static void discovered_media(AstraStorageProvider *provider, const char *image)
     }
     if (released != 0) fprintf(stderr, "discovered loop release error: %d\n", released);
     assert(released == 0);
+}
+
+static void exclusive_format_target(AstraStorageProvider *provider, const char *image,
+    int format_gate)
+{
+    int file = open(image, O_RDWR | O_CLOEXEC);
+    struct stat info;
+    assert(file >= 0 && fstat(file, &info) == 0);
+    uint64_t capacity = (uint64_t)info.st_size;
+    int loop = astra_storage_linux_loop(file, 0u, capacity, 0);
+    close(file);
+    assert(loop >= 0 && fstat(loop, &info) == 0);
+    uint64_t disk_sequence = 0u;
+    assert(ioctl(loop, BLKGETDISKSEQ, &disk_sequence) == 0);
+    char node[64];
+    snprintf(node, sizeof(node), "/dev/loop%u", minor(info.st_rdev));
+    AstraStorageDiscovery discovery = {.provider = provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageObservation observation = {.syspath = "/sys/devices/test/format-loop",
+        .disk_syspath = "/sys/devices/test/format-loop", .devnode = node,
+        .devnum = info.st_rdev, .disk_devnum = info.st_rdev,
+        .sequence = 1u, .disk_sequence = disk_sequence,
+        .action = ASTRA_STORAGE_OBSERVE_PRESENT, .class_id = ASTRA_VOLUME_USB,
+        .media = 1, .capacity_bytes = capacity};
+    assert(astra_storage_discovery_observe(&discovery, &observation) == 0);
+    AstraStorageRecord rows[ASTRA_STORAGE_PROVIDER_PAGE];
+    size_t count = 0u;
+    uint64_t next = 0u, sequence = 0u, source = 0u;
+    assert(astra_storage_snapshot(&provider->catalog, 0u, 0u, rows,
+        ASTRA_STORAGE_PROVIDER_PAGE, &count, &next, &sequence) == 0 && next == 0u);
+    for (size_t at = 0u; at < count; ++at)
+        if (rows[at].kind == ASTRA_VOLUME_SOURCE && rows[at].origin == ASTRA_VOLUME_ORIGIN_DEVICE)
+            source = rows[at].id;
+    assert(source != 0u);
+    const AstraStorageRecord *source_record = astra_storage_find(&provider->catalog, source);
+    const AstraStorageRecord *medium = astra_storage_find(&provider->catalog,
+        source_record->parent);
+    assert(medium != NULL && medium->kind == ASTRA_VOLUME_MEDIUM);
+    uint64_t device = medium->parent;
+    int exclusive = -1;
+    assert(astra_storage_discovery_device_fd(&discovery, device, 2u, &exclusive) == ESTALE &&
+        exclusive == -1);
+    assert(astra_storage_discovery_device_fd(&discovery, device, 1u, &exclusive) == EBUSY &&
+        exclusive == -1);
+    poll_probes(provider);
+    assert(astra_storage_discovery_device_fd(&discovery, device, 1u, &exclusive) == 0);
+    assert(exclusive >= 0 && fstat(exclusive, &info) == 0 && info.st_rdev == observation.devnum);
+    assert((fcntl(exclusive, F_GETFL) & O_ACCMODE) == O_RDWR);
+    int competing = open(node, O_RDWR | O_EXCL | O_CLOEXEC);
+    assert(competing < 0 && errno == EBUSY);
+    close(exclusive);
+    exclusive = -1;
+    assert(astra_storage_discovery_format_fd(&discovery, source, 1u, &exclusive) == 0);
+    assert(exclusive >= 0 && fstat(exclusive, &info) == 0 && info.st_rdev == observation.devnum);
+    assert((fcntl(exclusive, F_GETFL) & O_ACCMODE) == O_RDWR);
+    competing = open(node, O_RDWR | O_EXCL | O_CLOEXEC);
+    assert(competing < 0 && errno == EBUSY);
+    close(exclusive);
+    if (format_gate) {
+        provider->discovery = &discovery;
+        poll_probes(provider);
+        assert(astra_storage_find(&provider->catalog, source)->state == ASTRA_VOLUME_UNMOUNTED);
+        assert(astra_storage_discovery_poll(&discovery) == 0);
+        wait_work(provider);
+        assert(astra_storage_snapshot(&provider->catalog, 0u, 0u, rows,
+            ASTRA_STORAGE_PROVIDER_PAGE, &count, &next, &sequence) == 0 && next == 0u);
+        uint64_t initial_mount = 0u;
+        for (size_t row = 0u; row < count; ++row)
+            if (rows[row].kind == ASTRA_VOLUME_MOUNT && rows[row].parent == source &&
+                rows[row].state == ASTRA_VOLUME_MOUNTED) initial_mount = rows[row].id;
+        assert(initial_mount != 0u);
+        assert(astra_storage_discovery_device_fd(&discovery, device, 1u, &exclusive) == EBUSY &&
+            exclusive == -1);
+        assert(unmount_wait(provider, initial_mount, 1u) == 0);
+        const uint32_t formats[] = {ASTRA_VOLUME_EXFAT, ASTRA_VOLUME_FAT32};
+        for (unsigned at = 0u; at < 2u; ++at) {
+            const AstraStorageRecord *before = astra_storage_find(&provider->catalog, source);
+            uint64_t generation = before->generation;
+            assert(astra_storage_provider_format(provider, source, generation,
+                formats[at], "ASTRA_TEST") == 0);
+            int outcome = 0;
+            assert(astra_storage_provider_format_status(provider, source, generation,
+                &outcome) == 0 && outcome == EAGAIN);
+            ++observation.sequence;
+            observation.action = ASTRA_STORAGE_OBSERVE_CHANGE;
+            assert(astra_storage_discovery_observe(&discovery, &observation) == 0);
+            assert(astra_storage_find(&provider->catalog, source)->state == ASTRA_VOLUME_FORMATTING);
+            wait_work(provider);
+            poll_probes(provider);
+            const AstraStorageRecord *formatted = astra_storage_find(&provider->catalog, source);
+            assert(formatted != NULL && formatted->generation == generation + 1u &&
+                formatted->state == ASTRA_VOLUME_UNMOUNTED &&
+                formatted->format == formats[at] &&
+                strcmp(formatted->label, "ASTRA_TEST") == 0);
+            assert(astra_storage_provider_format_status(provider, source, generation,
+                &outcome) == 0 && outcome == 0);
+            if (at == 1u) {
+                uint64_t retired = source;
+                ++observation.sequence;
+                assert(astra_storage_discovery_observe(&discovery, &observation) == 0);
+                assert(astra_storage_find(&provider->catalog, retired)->state == ASTRA_VOLUME_LOST);
+                poll_probes(provider);
+                assert(astra_storage_snapshot(&provider->catalog, 0u, 0u, rows,
+                    ASTRA_STORAGE_PROVIDER_PAGE, &count, &next, &sequence) == 0 && next == 0u);
+                for (size_t row = 0u; row < count; ++row)
+                    if (rows[row].kind == ASTRA_VOLUME_SOURCE &&
+                        rows[row].origin == ASTRA_VOLUME_ORIGIN_DEVICE &&
+                        rows[row].state == ASTRA_VOLUME_UNMOUNTED) source = rows[row].id;
+                assert(source != retired);
+                const AstraStorageRecord *target = astra_storage_find(&provider->catalog, source);
+                uint64_t sibling = 0u;
+                assert(astra_storage_source(&provider->catalog, target->parent,
+                    target->parent_generation, 0u, 1u, 1u << 20, 8u << 20, &sibling) == 0);
+                assert(astra_storage_probe_result(&provider->catalog, sibling, 1u,
+                    ASTRA_VOLUME_FAT32, "", "OBSTACLE", "vfat", 0, 0) == 0);
+                assert(astra_storage_format_begin(&provider->catalog, sibling, 1u) == 0);
+                assert(astra_storage_discovery_poll(&discovery) == 0);
+                assert(astra_storage_format_abort(&provider->catalog, sibling, 1u) == 0);
+                assert(astra_storage_loss(&provider->catalog, sibling, 1u) == 0);
+                assert(astra_storage_provider_reap(provider) == 0);
+                assert(astra_storage_discovery_poll(&discovery) == 0);
+                wait_work(provider);
+                assert(astra_storage_snapshot(&provider->catalog, 0u, 0u, rows,
+                    ASTRA_STORAGE_PROVIDER_PAGE, &count, &next, &sequence) == 0 && next == 0u);
+                uint64_t mounted = 0u;
+                for (size_t row = 0u; row < count; ++row)
+                    if (rows[row].kind == ASTRA_VOLUME_MOUNT && rows[row].parent == source &&
+                        rows[row].state == ASTRA_VOLUME_MOUNTED) mounted = rows[row].id;
+                assert(mounted != 0u);
+                assert(unmount_wait(provider, mounted, 1u) == 0);
+            }
+        }
+        provider->discovery = NULL;
+    }
+    observation.action = ASTRA_STORAGE_OBSERVE_REMOVE;
+    ++observation.sequence;
+    assert(astra_storage_discovery_observe(&discovery, &observation) == 0);
+    for (unsigned at = 0u; astra_storage_find(&provider->catalog, source) != NULL &&
+         at < 10000u; ++at) {
+        int error = astra_storage_provider_reap(provider);
+        assert(error == 0 || error == EAGAIN);
+        usleep(1000);
+    }
+    assert(astra_storage_find(&provider->catalog, source) == NULL);
+    astra_storage_discovery_close(&discovery);
+    int released;
+    for (unsigned attempt = 0u;; ++attempt) {
+        released = astra_storage_linux_loop_release(&loop);
+        if (released != EAGAIN) break;
+        assert(attempt < 10000u);
+        usleep(1000);
+    }
+    assert(released == 0);
+}
+
+static void partition_wait(AstraStorageProvider *provider,
+    uint64_t device, uint64_t generation)
+{
+    int last_result = EAGAIN;
+    for (unsigned at = 0u; at < 10000u; ++at) {
+        assert(astra_storage_provider_poll(provider) >= 0);
+        int cleanup = astra_storage_provider_reap(provider);
+        assert(cleanup == 0 || cleanup == EAGAIN);
+        int result = EAGAIN;
+        assert(astra_storage_provider_partition_status(provider, device,
+            generation, &result) == 0);
+        last_result = result;
+        const AstraStorageRecord *record = astra_storage_find(&provider->catalog, device);
+        if (record != NULL && record->state == ASTRA_VOLUME_DISCOVERED &&
+            record->generation == generation + 1u) {
+            assert(result == 0 && provider->workers == 0u);
+            return;
+        }
+        assert(result == EAGAIN);
+        usleep(1000);
+    }
+    const AstraStorageRecord *record = astra_storage_find(&provider->catalog, device);
+    fprintf(stderr, "partition_wait: expected=%llu actual=%llu state=%u result=%d workers=%u\n",
+        (unsigned long long)(generation + 1u),
+        (unsigned long long)(record == NULL ? 0u : record->generation),
+        record == NULL ? 0u : record->state, last_result, provider->workers);
+    assert(0 && "partition worker did not complete kernel reread");
+}
+
+static void exclusive_partition_target(AstraStorageProvider *provider)
+{
+    char image[] = "/var/tmp/astra-partition-provider.XXXXXX";
+    int file = mkstemp(image);
+    assert(file >= 0 && ftruncate(file, 128u << 20) == 0);
+    int loop = astra_storage_linux_loop(file, 0u, 128u << 20, 0);
+    close(file);
+    assert(loop >= 0);
+    struct loop_info64 loop_info;
+    assert(ioctl(loop, LOOP_GET_STATUS64, &loop_info) == 0);
+    loop_info.lo_flags |= LO_FLAGS_PARTSCAN;
+    assert(ioctl(loop, LOOP_SET_STATUS64, &loop_info) == 0);
+    struct stat info;
+    assert(fstat(loop, &info) == 0);
+    uint64_t disk_sequence = 0u;
+    assert(ioctl(loop, BLKGETDISKSEQ, &disk_sequence) == 0);
+    char node[64];
+    snprintf(node, sizeof(node), "/dev/loop%u", minor(info.st_rdev));
+    AstraStorageDiscovery discovery = {.provider = provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageObservation observation = {.syspath = "/sys/devices/test/partition-loop",
+        .disk_syspath = "/sys/devices/test/partition-loop", .devnode = node,
+        .devnum = info.st_rdev, .disk_devnum = info.st_rdev,
+        .sequence = 1u, .disk_sequence = disk_sequence,
+        .action = ASTRA_STORAGE_OBSERVE_PRESENT, .class_id = ASTRA_VOLUME_USB,
+        .media = 1, .capacity_bytes = 128u << 20};
+    assert(astra_storage_discovery_observe(&discovery, &observation) == 0);
+    AstraStorageRecord rows[ASTRA_STORAGE_PROVIDER_PAGE];
+    size_t count = 0u;
+    uint64_t next = 0u, sequence = 0u, device = 0u;
+    assert(astra_storage_snapshot(&provider->catalog, 0u, 0u, rows,
+        ASTRA_STORAGE_PROVIDER_PAGE, &count, &next, &sequence) == 0 && next == 0u);
+    for (size_t at = 0u; at < count; ++at)
+        if (rows[at].kind == ASTRA_VOLUME_DEVICE &&
+            rows[at].capacity_bytes == (128u << 20)) device = rows[at].id;
+    assert(device != 0u);
+    provider->discovery = &discovery;
+    AstraVolumePartitionEdit edit = {.operation = ASTRA_VOLUME_PARTITION_INITIALIZE,
+        .map = ASTRA_VOLUME_PARTITION_MAP_MBR};
+    assert(astra_storage_provider_partition(provider, device, 1u, &edit) == EBUSY);
+    poll_probes(provider);
+    assert(astra_storage_provider_partition(provider, device, 1u, &edit) == 0);
+    partition_wait(provider, device, 1u);
+    ++observation.sequence;
+    observation.action = ASTRA_STORAGE_OBSERVE_CHANGE;
+    observation.partition_table = 1;
+    observation.partition_map = ASTRA_VOLUME_PARTITION_MAP_MBR;
+    assert(astra_storage_discovery_observe(&discovery, &observation) == 0);
+    edit = (AstraVolumePartitionEdit){.operation = ASTRA_VOLUME_PARTITION_CREATE,
+        .map = ASTRA_VOLUME_PARTITION_MAP_MBR, .format = ASTRA_VOLUME_FAT32,
+        .offset_bytes = 2048u << 9, .length_bytes = 65536u << 9};
+    assert(astra_storage_provider_partition(provider, device, 2u, &edit) == 0);
+    partition_wait(provider, device, 2u);
+    unsigned char sector[512];
+    assert(pread(loop, sector, sizeof(sector), 0) == sizeof(sector));
+    assert(sector[510] == 0x55u && sector[511] == 0xaau && sector[450] == 0x0cu);
+    char partition_node[80];
+    snprintf(partition_node, sizeof(partition_node), "%sp1", node);
+    struct stat partition_info;
+    for (unsigned at = 0u; stat(partition_node, &partition_info) != 0 &&
+         at < 10000u; ++at)
+        usleep(1000);
+    assert(stat(partition_node, &partition_info) == 0 &&
+        S_ISBLK(partition_info.st_mode));
+    ++observation.sequence;
+    assert(astra_storage_discovery_observe(&discovery, &observation) == 0);
+    AstraStorageObservation partition = {.syspath = "/sys/devices/test/partition-loop/part1",
+        .disk_syspath = observation.syspath, .devnode = partition_node,
+        .devnum = partition_info.st_rdev, .disk_devnum = info.st_rdev,
+        .sequence = 1u, .disk_sequence = disk_sequence,
+        .action = ASTRA_STORAGE_OBSERVE_PRESENT, .class_id = ASTRA_VOLUME_USB,
+        .media = 1, .partition = 1, .partition_number = 1u,
+        .partition_map = ASTRA_VOLUME_PARTITION_MAP_MBR,
+        .offset_bytes = 2048u << 9, .capacity_bytes = 65536u << 9};
+    assert(astra_storage_discovery_observe(&discovery, &partition) == 0);
+    poll_probes(provider);
+    uint64_t retired_source = 0u;
+    uint64_t after = 0u;
+    sequence = 0u;
+    do {
+        assert(astra_storage_snapshot(&provider->catalog, sequence, after, rows,
+            ASTRA_STORAGE_PROVIDER_PAGE, &count, &next, &sequence) == 0);
+        for (size_t at = 0u; at < count; ++at)
+            if (rows[at].kind == ASTRA_VOLUME_SOURCE &&
+                rows[at].capacity_bytes == partition.capacity_bytes &&
+                rows[at].offset_bytes == partition.offset_bytes)
+                retired_source = rows[at].id;
+        after = next;
+    } while (next != 0u);
+    assert(retired_source != 0u);
+    edit = (AstraVolumePartitionEdit){.operation = ASTRA_VOLUME_PARTITION_DELETE,
+        .map = ASTRA_VOLUME_PARTITION_MAP_MBR, .number = 1u};
+    assert(astra_storage_provider_partition(provider, device, 3u, &edit) == 0);
+    partition_wait(provider, device, 3u);
+    assert(astra_storage_find(&provider->catalog, retired_source) == NULL);
+    assert(pread(loop, sector, sizeof(sector), 0) == sizeof(sector));
+    assert(sector[450] == 0u);
+    ++observation.sequence;
+    observation.action = ASTRA_STORAGE_OBSERVE_REMOVE;
+    assert(astra_storage_discovery_observe(&discovery, &observation) == 0);
+    for (unsigned at = 0u; at < 10000u &&
+         astra_storage_find(&provider->catalog, device) != NULL; ++at) {
+        int cleanup = astra_storage_provider_reap(provider);
+        assert(cleanup == 0 || cleanup == EAGAIN);
+        usleep(1000);
+    }
+    assert(astra_storage_find(&provider->catalog, device) == NULL);
+    provider->discovery = NULL;
+    astra_storage_discovery_close(&discovery);
+    int released;
+    for (unsigned attempt = 0u;; ++attempt) {
+        released = astra_storage_linux_loop_release(&loop);
+        if (released != EAGAIN) break;
+        assert(attempt < 10000u);
+        usleep(1000);
+    }
+    assert(released == 0);
+    assert(unlink(image) == 0);
 }
 
 static void processed_inventory(AstraStorageProvider *provider)
@@ -267,9 +568,10 @@ static void queued_probes(AstraStorageProvider *provider, const char *path)
     assert(fd >= 0 && fstat(fd, &info) == 0);
     for (unsigned at = 0u; at < 3u; ++at) {
         uint64_t device, medium;
-        assert(astra_storage_device(&provider->catalog, ASTRA_VOLUME_OPTICAL, &device) == 0);
+        assert(astra_storage_device(&provider->catalog, ASTRA_VOLUME_OPTICAL, 0u, 0u, &device) == 0);
         assert(astra_storage_medium(&provider->catalog, device, 1u, &medium) == 0);
-        assert(astra_storage_source(&provider->catalog, medium, 1u, &sources[at]) == 0);
+        assert(astra_storage_source(&provider->catalog, medium, 1u,
+            0u, 0u, 0u, 0u, &sources[at]) == 0);
         assert(astra_storage_provider_source(provider, sources[at], 1u,
                                                 fd, 0u, (uint64_t)info.st_size) == 0);
     }
@@ -286,6 +588,86 @@ static void queued_probes(AstraStorageProvider *provider, const char *path)
         if (at != 1u)
             assert(astra_storage_provider_loss(provider, sources[at], 1u) == 0);
         assert(astra_storage_provider_release(provider, sources[at]) == 0);
+    }
+}
+
+static void usb_format(AstraStorageProvider *provider, const char *path,
+                       uint32_t format, const char *label)
+{
+    int writable = format == ASTRA_VOLUME_FAT32 || format == ASTRA_VOLUME_EXFAT;
+    int file = open(path, (writable ? O_RDWR : O_RDONLY) | O_CLOEXEC);
+    struct stat info;
+    assert(file >= 0 && fstat(file, &info) == 0);
+    int block = astra_storage_linux_loop(file, 0u, (uint64_t)info.st_size,
+        !writable);
+    assert(block >= 0);
+    close(file);
+    uint64_t device, medium, source, mount;
+    assert(astra_storage_device(&provider->catalog, ASTRA_VOLUME_USB,
+        ASTRA_VOLUME_PARTITION_MAP_NONE, (uint64_t)info.st_size, &device) == 0);
+    assert(astra_storage_medium(&provider->catalog, device, 1u, &medium) == 0);
+    assert(astra_storage_source(&provider->catalog, medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_NONE, 0u, 0u,
+        (uint64_t)info.st_size, &source) == 0);
+    assert(astra_storage_provider_source(provider, source, 1u,
+        block, 0u, 0u) == 0);
+    poll_probes(provider);
+    const AstraStorageRecord *record = astra_storage_find(&provider->catalog, source);
+    assert(record != NULL && record->state == ASTRA_VOLUME_UNMOUNTED &&
+        record->format == format && strcmp(record->label, label) == 0 &&
+        ((record->flags & ASTRA_VOLUME_READ_ONLY) != 0u) == !writable);
+    if (!writable) {
+        assert(astra_storage_provider_mount(provider, source, 1u, 0u,
+            0u, 0u, &mount) == EROFS);
+        assert(mount == 0u);
+    }
+    int error = mount_wait(provider, source, 1u,
+        writable ? 0u : ASTRA_VOLUME_READ_ONLY,
+        0u, 0u, &mount);
+    if (error != 0)
+        fprintf(stderr, "USB fixture %s mount failed: %d (%s)\n",
+            path, error, strerror(error));
+    assert(error == 0);
+    int root;
+    assert(astra_storage_provider_root(provider, mount, 1u, &root) == 0);
+    if (writable) {
+        int created = openat(root, "astra-rw-test", O_CREAT | O_EXCL | O_RDWR, 0600);
+        assert(created >= 0 && write(created, "fat32 durable\n", 14u) == 14);
+        assert(fsync(created) == 0);
+        close(created);
+    } else
+        assert(openat(root, "forbidden", O_CREAT | O_WRONLY, 0600) == -1 && errno == EROFS);
+    if (format == ASTRA_VOLUME_ISO9660 || format == ASTRA_VOLUME_UDF)
+        assert(faccessat(root, "Folder/café.txt", R_OK, 0) == 0);
+    close(root);
+    assert(unmount_wait(provider, mount, 1u) == 0);
+    if (writable) {
+        assert(astra_storage_provider_release(provider, mount) == 0);
+        assert(mount_wait(provider, source, 1u, 0u, 0u, 0u, &mount) == 0);
+        assert(astra_storage_provider_root(provider, mount, 1u, &root) == 0);
+        int opened = openat(root, "astra-rw-test", O_RDONLY);
+        char bytes[15] = {0};
+        assert(opened >= 0 && read(opened, bytes, 14u) == 14 &&
+            strcmp(bytes, "fat32 durable\n") == 0);
+        close(opened);
+        assert(unlinkat(root, "astra-rw-test", 0) == 0);
+        close(root);
+        assert(unmount_wait(provider, mount, 1u) == 0);
+    }
+    assert(astra_storage_provider_loss(provider, device, 1u) == 0);
+    for (unsigned at = 0u; at < 10000u &&
+        astra_storage_find(&provider->catalog, device) != NULL; ++at) {
+        int reaped = astra_storage_provider_reap(provider);
+        assert(reaped == 0 || reaped == EAGAIN);
+        assert(astra_storage_provider_poll(provider) >= 0);
+        usleep(1000);
+    }
+    assert(astra_storage_find(&provider->catalog, device) == NULL);
+    for (unsigned at = 0u; at < 10000u; ++at) {
+        int released = astra_storage_linux_loop_release(&block);
+        if (released == 0) break;
+        assert(released == EAGAIN && at + 1u < 10000u);
+        usleep(1000);
     }
 }
 
@@ -490,6 +872,23 @@ static void peer(AstraStorageProvider *provider, uid_t uid, gid_t gid, uint64_t 
         ++request.serial;
         assert(astra_storage_control_call(controls[1], &request, -1, &reply, &root) == 0);
         assert(reply.error == 0 && root >= 0);
+        int unused_root;
+        request = (AstraStorageControlRequest){.version = ASTRA_STORAGE_PROVIDER_VERSION,
+            .operation = ASTRA_STORAGE_CONTROL_FORMAT, .serial = 6,
+            .epoch = epoch, .target = binding, .generation = 1,
+            .format = ASTRA_VOLUME_FAT32};
+        strcpy(request.label, "TEST");
+        assert(astra_storage_control_call(controls[1], &request, -1, &reply, &unused_root) == 0);
+        assert(reply.error == ENOTSUP);
+        request.label[5] = 'X';
+        ++request.serial;
+        assert(astra_storage_control_call(controls[1], &request, -1, &reply, &unused_root) == 0);
+        assert(reply.error == EINVAL);
+        request = (AstraStorageControlRequest){.version = ASTRA_STORAGE_PROVIDER_VERSION,
+            .operation = ASTRA_STORAGE_CONTROL_FORMAT_STATUS, .serial = 8,
+            .epoch = epoch, .target = binding, .generation = 1};
+        assert(astra_storage_control_call(controls[1], &request, -1, &reply, &unused_root) == 0);
+        assert(reply.error == ESTALE);
         AstraStoragePathRequest path = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
             .operation = ASTRA_STORAGE_PATH_OPEN, .serial = 1,
             .epoch = epoch, .mount = binding, .generation = 1, .fd_mask = 1,
@@ -540,7 +939,8 @@ int main(int argc, char **argv)
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     uint64_t bindings[18], image_binding;
     char path[] = "/var/tmp/astra-storage-provider-test.XXXXXX";
-    assert(argc == 4 && geteuid() == 0);
+    int format_gate = argc >= 10 && strcmp(argv[argc - 1], "--format-gate") == 0;
+    assert((argc == 9 || argc == 10 || (argc == 11 && format_gate)) && geteuid() == 0);
     uid_t uid = (uid_t)strtoul(argv[2], NULL, 10);
     gid_t gid = (gid_t)strtoul(argv[3], NULL, 10);
     AstraStorageDomain domain = {.directory = -1};
@@ -594,9 +994,19 @@ int main(int argc, char **argv)
     assert(astra_storage_provider_root(&provider, image_binding, 1u, &root) == 0);
     image(&provider, root, image_binding, argv[1]);
     queued_probes(&provider, argv[1]);
+    usb_format(&provider, argv[1], ASTRA_VOLUME_ISO9660, "ASTRA_DISC");
+    usb_format(&provider, argv[4], ASTRA_VOLUME_FAT12, "ASTRA_FAT12");
+    usb_format(&provider, argv[5], ASTRA_VOLUME_FAT16, "ASTRA_FAT16");
+    usb_format(&provider, argv[6], ASTRA_VOLUME_FAT32, "ASTRA_FAT32");
+    usb_format(&provider, argv[7], ASTRA_VOLUME_NTFS, "ASTRA_NTFS");
+    usb_format(&provider, argv[8], ASTRA_VOLUME_UDF, "ASTRA_DISC");
+    if (argc == 11 || (argc == 10 && !format_gate))
+        usb_format(&provider, argv[9], ASTRA_VOLUME_EXFAT, "ASTRA_EXFAT");
     loss_during_mount(&provider);
     lost_worker_reply(&provider);
     discovered_media(&provider, argv[1]);
+    exclusive_format_target(&provider, argv[6], format_gate);
+    exclusive_partition_target(&provider);
     /* Retire source-only observations after failed RAM admission. */
     AstraStorageRecord page[16];
     uint64_t sequence, next;
@@ -611,6 +1021,8 @@ int main(int argc, char **argv)
     }
     assert(provider.resource_bytes == 0u && provider.catalog.bytes == 0u && provider.probes == 0u);
     assert(astra_storage_provider_close(&provider) == 0);
-    puts("storage provider: authenticated catalog/root/path, preserved data, RAM limits, image pins/loss/cleanup PASS");
+    puts(argc == 10 ?
+        "storage provider: USB FAT12/16 ISO/UDF NTFS read-only, FAT32/exFAT durable read/write, catalog/root/path and cleanup PASS" :
+        "storage provider: USB FAT12/16 ISO/UDF NTFS read-only, FAT32 durable read/write, catalog/root/path and cleanup PASS");
     return 0;
 }

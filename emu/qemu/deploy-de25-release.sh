@@ -48,10 +48,32 @@ IDENTITY=$(PYTHONDONTWRITEBYTECODE=1 \
     python3 "$RELEASE_TOOL" verify "$RELEASE")
 INCOMING=$($SSH "$BOARD" \
     "mkdir -p '$STORE/incoming' && mktemp -d '$STORE/incoming/release.XXXXXX'")
+PREVIOUS_ID=
+CUTOVER_STARTED=0
+ROLLBACK_STATE=$STORE/state/system/.storage-terminal.rollback.$IDENTITY.img
 
 cleanup() {
     status=$?
+    trap - EXIT
+    if [ "$status" -ne 0 ] && [ "$CUTOVER_STARTED" = 1 ]; then
+        $SSH "$BOARD" "
+set -eu
+systemctl stop astra-remote-desktop.service astra-audio-host.service '$SERVICE' || true
+if [ -f '$ROLLBACK_STATE' ]; then
+    mv -f '$ROLLBACK_STATE' '$STORE/state/system/storage-terminal.img'
+    sync -f '$STORE/state/system'
+fi
+python3 '$STORE/releases/$PREVIOUS_ID/bin/astra-release.py' \
+    select '$STORE' current '$PREVIOUS_ID' >/dev/null
+for unit in astra.service astra-audio-host.service astra-remote-desktop.service; do
+    install -m 0644 '$STORE/current/systemd/'\"\$unit\" /etc/systemd/system/\"\$unit\"
+done
+systemctl daemon-reload
+systemctl start '$SERVICE' astra-audio-host.service astra-remote-desktop.service
+" || echo "Astra rollback failed; inspect board services and selector" >&2
+    fi
     if [ -n "$INCOMING" ]; then
+        # An already-installed release leaves its duplicate transfer here.
         $SSH "$BOARD" "rm -rf '$INCOMING'" >/dev/null 2>&1 || true
     fi
     exit "$status"
@@ -97,7 +119,6 @@ install --no-activate '$INCOMING' '$STORE'")
     $SSH "$BOARD" "PYTHONDONTWRITEBYTECODE=1 python3 \
 '$CANDIDATE/bin/astra-release.py' select '$STORE' by-boot/kernel-stage '$IDENTITY'" >/dev/null
     kernel_action "$MODE" "$CANDIDATE"
-    INCOMING=
     echo "ASTRA_DE25_KERNEL_$MODE PASS release=$IDENTITY runtime_selector_unchanged=1"
     exit 0
 fi
@@ -112,6 +133,45 @@ kernel_release=\$(cat \"\$package/metadata/kernel.release\")
 test \"\$(uname -r)\" = \"\$kernel_release\" || {
     echo 'Boot the complete packaged kernel before activating this runtime' >&2; exit 1;
 }
+"
+PREVIOUS_ID=$($SSH "$BOARD" "python3 '$STORE/current/bin/astra-release.py' \
+verify '$STORE/current' --installed")
+test "${#PREVIOUS_ID}" -eq 64
+CUTOVER_STARTED=1
+$SSH "$BOARD" "
+set -eu
+state_dir='$STORE/state/system'
+stable=\"\$state_dir/storage-terminal.img\"
+old='$STORE/state/$PREVIOUS_ID/storage-terminal.img'
+rollback='$ROLLBACK_STATE'
+legacy=1
+if grep -Fqx \"Environment=ASTRA_STATE_ROOT=\$state_dir\" \
+    /etc/systemd/system/astra.service; then legacy=0; fi
+systemctl stop astra-remote-desktop.service '$SERVICE'
+test ! -L '$STORE/state' && test ! -L \"\$state_dir\"
+mkdir -p \"\$state_dir\"
+if [ \"\$legacy\" = 1 ]; then
+    test -f \"\$old\" && test ! -L \"\$old\"
+    source=\$old
+else
+    test -f \"\$stable\" && test ! -L \"\$stable\"
+    source=\$stable
+    cp --sparse=always \"\$stable\" \"\$rollback\"
+    cmp -s \"\$stable\" \"\$rollback\"
+    chmod 0600 \"\$rollback\"
+    sync -f \"\$rollback\"
+fi
+temporary=\$(mktemp \"\$state_dir/.storage-terminal.XXXXXX\")
+trap 'rm -f \"\$temporary\"' EXIT
+cp --sparse=always \"\$source\" \"\$temporary\"
+cmp -s \"\$source\" \"\$temporary\"
+chmod 0600 \"\$temporary\"
+PYTHONDONTWRITEBYTECODE=1 python3 '$INCOMING/bin/astra-system-image-migrate.py' \
+    '$INCOMING/storage-terminal.img' \"\$temporary\"
+sync -f \"\$temporary\"
+mv -f \"\$temporary\" \"\$stable\"
+trap - EXIT
+sync -f \"\$state_dir\"
 "
 INSTALLED=$($SSH "$BOARD" \
     "PYTHONDONTWRITEBYTECODE=1 python3 '$INCOMING/bin/astra-release.py' \
@@ -215,6 +275,22 @@ if [ "$LIVE" != "$IDENTITY" ]; then
 fi
 $SSH "$BOARD" "
 set -eu
+pid=\$(systemctl show --property MainPID --value '$SERVICE')
+attempt=0
+while [ \"\$attempt\" -lt 300 ]; do
+    test \"\$(systemctl show --property MainPID --value '$SERVICE')\" = \"\$pid\"
+    if grep -Eq 'launch /services/hostfs .* status=0$' '$STORE/log/qemu-console.log'; then
+        break
+    fi
+    sleep 0.1
+    attempt=\$((attempt + 1))
+done
+test \"\$attempt\" -lt 300
+test \"\$(systemctl show --property MainPID --value '$SERVICE')\" = \"\$pid\"
+! grep -q 'KERNEL PANIC' '$STORE/log/qemu-console.log'
+"
+$SSH "$BOARD" "
+set -eu
 expected='$STORE/releases/$IDENTITY/bin/astra-audio-host'
 test -S /run/astra/audio.sock
 systemctl is-active --quiet astra-audio-host.service
@@ -245,5 +321,5 @@ exit 1
 kernel_action confirm "$STORE/releases/$IDENTITY"
 $SSH "$BOARD" "PYTHONDONTWRITEBYTECODE=1 python3 \
 '$STORE/current/bin/astra-release.py' prune '$STORE'"
-INCOMING=
+$SSH "$BOARD" "rm -f '$ROLLBACK_STATE'"
 echo "ASTRA_DE25_RELEASE PASS release=$IDENTITY"

@@ -148,6 +148,12 @@ def main():
         atlas.image_tools.install_test_command(str(image), "sbase-sleep")
         fixture(image, work)
         machine = terminal.Machine(args.qemu, args.rom, str(image), temporary)
+        early_lines = []
+        boot_deadline = time.monotonic() + 15.0
+        while time.monotonic() < boot_deadline and not any(
+                "desktop ready" in line for _, line in machine.serial_times):
+            time.sleep(.1)
+        early_lines = machine.said_with_syslog()[0]
         step = 0
 
         def command(text):
@@ -246,7 +252,13 @@ def main():
             print("VOLUME UI context Unmount actual retirement, disappearing icon and retained ISO source release PASS", flush=True)
         except Exception:
             print("Volume UI diagnostics:", flush=True)
-            for line in machine.said_with_syslog()[0][-100:]:
+            print("Early guest event log:", flush=True)
+            for line in early_lines:
+                print(line, flush=True)
+            print("Early guest serial:", flush=True)
+            for _, line in machine.serial_times[:500]:
+                print(line, flush=True)
+            for line in machine.said_with_syslog()[0]:
                 print(line, flush=True)
             print("\n".join(machine.recent_faults() + machine.recent_trace(40) + machine.recent_serial(40)), flush=True)
             raise

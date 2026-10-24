@@ -14,6 +14,7 @@ typedef struct AstraStorageProbeResult {
     uint32_t ambiguous;
     char uuid[128];
     char label[256];
+    char detected_type[64];
 } AstraStorageProbeResult;
 
 /* Single event-loop owner. The caller bounds admitted jobs; a timed-out child

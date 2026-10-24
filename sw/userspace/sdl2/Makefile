@@ -511,6 +511,7 @@ build/m68k/sdlprobe: SDL_EXAMPLE_SOURCE = tests/probe.c
 build/m68k/sdlvideoprobe: SDL_EXAMPLE_SOURCE = tests/video_probe.c
 build/m68k/sdlrenderprobe: SDL_EXAMPLE_SOURCE = tests/render_probe.c
 build/m68k/sdlframebench: SDL_EXAMPLE_SOURCE = tests/frame_bench.c
+build/m68k/sdlmediaplayback: SDL_EXAMPLE_SOURCE = tests/media_playback.c
 build/m68k/testaudioinfo: $(SDL2_ROOT)/test/testaudioinfo.c
 build/m68k/testver: $(SDL2_ROOT)/test/testver.c
 build/m68k/testdraw2: $(SDL2_ROOT)/test/testdraw2.c
@@ -518,9 +519,11 @@ build/m68k/sdlprobe: tests/probe.c
 build/m68k/sdlvideoprobe: tests/video_probe.c
 build/m68k/sdlrenderprobe: tests/render_probe.c
 build/m68k/sdlframebench: tests/frame_bench.c
+build/m68k/sdlmediaplayback: tests/media_playback.c
 build/m68k/testaudioinfo build/m68k/testver build/m68k/testdraw2 \
 build/m68k/sdlprobe build/m68k/sdlvideoprobe build/m68k/sdlrenderprobe \
-build/m68k/sdlframebench $(addprefix build/m68k/,$(SDL_DEMOS)): \
+	build/m68k/sdlframebench build/m68k/sdlmediaplayback \
+	$(addprefix build/m68k/,$(SDL_DEMOS)): \
 		$(SDL2_SHARED) $(ASTRA_LIBC_LIBRARY)
 	@mkdir -p $(@D)
 	$(TARGET_CC) $(ASTRA_POSIX_CPPFLAGS) -Ibuild/vendor/SDL2/include \
@@ -603,6 +606,9 @@ render-probe-bundle: build/.SDLRenderProbe.app.stamp
 
 $(eval $(call astra_app_bundle,build,SDLFrameBench,build/m68k/sdlframebench,apps/SDLFrameBench.app/manifest,framebench,))
 frame-bench-bundle: build/.SDLFrameBench.app.stamp
+
+$(eval $(call astra_app_bundle,build,SDLMediaPlayback,build/m68k/sdlmediaplayback,tests/SDLMediaPlayback.app/manifest,terminal,))
+media-playback-bundle: build/.SDLMediaPlayback.app.stamp
 
 $(eval $(call astra_app_bundle,build,SDLTestDraw2,build/m68k/testdraw2,apps/SDLTestDraw2.app/manifest,draw,))
 testdraw2-bundle: build/.SDLTestDraw2.app.stamp
@@ -689,5 +695,6 @@ clean:
 	image-library-contract mixer-library-contract ttf-library-contract \
 	target-check test \
 	video-probe-bundle render-probe-bundle frame-bench-bundle testdraw2-bundle \
+	media-playback-bundle \
 	demo-bundles net-probe-bundle image-probe-bundle mixer-probe-bundle ttf-probe-bundle \
 	sanitize analyze clean

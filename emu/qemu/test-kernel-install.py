@@ -31,6 +31,8 @@ def fixture(root, edition="1"):
         "lib/modules/%s/modules.dep" % release: b"complete depmod output\n",
     }
     for name in ("kernel/drivers/scsi/sr_mod.ko", "kernel/drivers/cdrom/cdrom.ko",
+                 "kernel/fs/isofs/isofs.ko", "kernel/fs/udf/udf.ko",
+                 "kernel/fs/exfat/exfat.ko", "kernel/fs/ntfs3/ntfs3.ko",
                  "extra/astra/astra_graphics_arena.ko",
                  "extra/astra/astra_display_capture.ko", "kernel/other.ko"):
         content["lib/modules/%s/%s" % (release, name)] = name.encode()
@@ -81,6 +83,13 @@ with tempfile.TemporaryDirectory() as directory:
     refused(lambda: installer.rollback(boot, state))
     refused(lambda: installer.verify_running(kernel, root, boot, release))
     assert state.exists()
+
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    kernel, package, release, identity, boot = fixture(root)
+    (package / "lib/modules" / release / "kernel/fs/ntfs3/ntfs3.ko").unlink()
+    refused(lambda: installer.stage(kernel, root, boot))
+    assert not (root / "lib/modules" / release).exists()
 
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)

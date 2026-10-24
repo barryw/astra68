@@ -8,6 +8,7 @@ ConditionKernelCommandLine=astra.fabric=ready
 [Service]
 Type=simple
 Environment=ASTRA_STORE=/var/lib/astra
+Environment=ASTRA_STATE_ROOT=/var/lib/astra/state/system
 Environment=ASTRA_QEMU_USER=astra
 Environment=ASTRA_MEMORY=512M
 # Where QEMU copies application audio streams for astra-audio-host

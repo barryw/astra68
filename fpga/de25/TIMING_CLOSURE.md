@@ -1,5 +1,46 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-23: catalog-4 private physical USB gate; fabric unchanged
+
+- Source Git HEAD `cc9f33d6986df846f4c27dcb384f2aa1e520868f` plus the
+  exact staged source manifest SHA-256
+  `c7082945d4411bb12d89d6b4334be3269cb81db70df25d37760104c7fc6f1fa3`.
+  Beast built and verified immutable release
+  `65518857cb5e3f9dd250b0a4ae14132a47865f14d11ceda3b7b37e79767f60a0`,
+  ROM `ab99c6eef9828d4f3c0d70257a83ce935b3baf2373578aa11ab807a1d42a85c9`,
+  and complete Linux package manifest
+  `6bd1a639bd8cea96699891d5de1cc5d6277a9a61d9dc3776931ac92beb8de19a`
+  for `6.12.11-astra-storage1-gd7d192a9ddd9`. Package contains matching
+  `sr_mod`, ISO9660, UDF, exFAT and NTFS3 modules. It was installed on DE25
+  without changing the selected runtime or boot kernel.
+- DE25 private-state boot reached desktop. One SanDisk GPT USB stick exposed
+  four catalog sources with exact offsets/sizes: ISO9660, FAT12, blank NDOS
+  and ext4. Desktop showed NDOS plus three independent USB mount icons.
+  Guest `volumes --all` showed FAT12 and ISO9660 mounted read-only, ext4
+  mounted writable. Native `ls` enumerated all three roots. A temporary ext4
+  probe file was written, read back and removed. Double-clicking the ISO9660
+  USB icon opened Atlas and enumerated nine root entries, six directories,
+  status zero. No candidate panic. The private run intentionally stopped
+  production audio and remote-desktop hosts; their guest service retries are
+  outside this filesystem gate.
+- Production selector remained
+  `ccf82877667a74461e8824c4dbcbe2ead56548cd19bfd18b50b80fd2ba295a30`;
+  stopped production image SHA-256 matched before/after at
+  `43b65a5fb6db078ee5af29413d4f6b6217a76c9351037dd3dd345a99204e4f8b`.
+  Restoration reached stage 8; runtime, audio and remote desktop were active
+  with zero automatic restarts. Beast evidence and checksums:
+  `/var/tmp/astra-partition4-physical-20261023/`; board private trial:
+  `/var/tmp/astra-graphics-trial.SZlOxt/`.
+- Same installed RBF `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`,
+  previously fully routed on Beast Quartus Pro 26.1.1 Build 130:
+  40,754/46,800 ALMs, 3,640,768/7,331,840 memory bits, 317/358 RAM,
+  67/376 DSPs; all production clocks constrained, graphics setup +0.259 ns,
+  worst setup +0.007 ns and hold +0.000 ns. No RTL, constraint or route
+  change; no new timing result or failing cone. Disposition: private USB
+  filesystem gate passes; candidate is not a production release. Disk Setup,
+  FAT32/exFAT physical media, optical media change/eject and full release
+  gates remain open.
+
 ## 2026-10-18: corrected Fonts release rejected by current-kernel panic
 
 - Exact source `446948863f72b31af2b62dc04ab71805a4ba5357`, private release

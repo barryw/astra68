@@ -62,6 +62,50 @@ uint32_t astra_vfs_host_transport_submit(
     assert(command->size == ASTRA_HOST_COMMAND_SIZE);
     assert(command->version == ASTRA_HOST_COMMAND_VERSION);
     if (command->service == ASTRA_HOST_SERVICE_VOLUMES) {
+        if (command->operation == ASTRA_HOST_VOLUME_PARTITION) {
+            assert(command->generation == 9u && command->session == 0u &&
+                input_size == sizeof(AstraHostVolumePartition) &&
+                output_capacity == sizeof(uint32_t));
+            const uint8_t *wire = input;
+            assert(astra_load_be64(wire) == 7u && astra_load_be64(wire + 8u) == 8u &&
+                astra_load_be64(wire + 16u) == 9u && astra_load_be32(wire + 28u) == 17u &&
+                astra_load_be32(wire + 64u) == 0u && astra_load_be32(wire + 68u) == 0u);
+            uint32_t mode = astra_load_be32(wire + 24u);
+            if (mode == ASTRA_HOST_VOLUME_PARTITION_START) {
+                assert(astra_load_be32(wire + 32u) == ASTRA_VOLUME_PARTITION_INITIALIZE &&
+                    astra_load_be32(wire + 36u) == ASTRA_VOLUME_PARTITION_MAP_MBR &&
+                    astra_load_be32(wire + 40u) == 0u);
+            } else {
+                assert(mode == ASTRA_HOST_VOLUME_PARTITION_STATUS);
+                for (size_t at = 32u; at < 64u; ++at) assert(wire[at] == 0u);
+            }
+            if (host->failure != 0u) return host->failure;
+            astra_store_be32(output, mode == ASTRA_HOST_VOLUME_PARTITION_START ?
+                ASTRA_STATUS_OK : ASTRA_STATUS_BUSY);
+            command->result_length = sizeof(uint32_t);
+            return ASTRA_VFS_OK;
+        }
+        if (command->operation == ASTRA_HOST_VOLUME_FORMAT) {
+            assert(command->generation == 9u && command->session == 0u &&
+                input_size == sizeof(AstraHostVolumeFormat) && output_capacity == sizeof(uint32_t));
+            const uint8_t *wire = input;
+            assert(astra_load_be64(wire) == 7u && astra_load_be64(wire + 8u) == 8u &&
+                astra_load_be64(wire + 16u) == 9u && astra_load_be32(wire + 44u) == 17u &&
+                astra_load_be32(wire + 48u) == 0u && astra_load_be32(wire + 52u) == 0u);
+            uint32_t operation = astra_load_be32(wire + 24u);
+            if (operation == ASTRA_HOST_VOLUME_FORMAT_START)
+                assert(astra_load_be32(wire + 28u) == ASTRA_VOLUME_FAT32 &&
+                    strcmp((const char *)wire + 32u, "TEST") == 0);
+            else {
+                assert(operation == ASTRA_HOST_VOLUME_FORMAT_STATUS &&
+                    astra_load_be32(wire + 28u) == 0u && wire[32] == 0u);
+            }
+            if (host->failure != 0u) return host->failure;
+            astra_store_be32(output, operation == ASTRA_HOST_VOLUME_FORMAT_START ?
+                ASTRA_STATUS_OK : ASTRA_STATUS_BUSY);
+            command->result_length = sizeof(uint32_t);
+            return ASTRA_VFS_OK;
+        }
         if (command->operation == ASTRA_HOST_VOLUME_HOLDERS_CHANGED) {
             assert(command->generation == 9u && command->session == 0u && command->handle == 0u && command->flags == 0u);
             assert(input == NULL && input_size == 0u && output == NULL && output_capacity == 0u);
@@ -125,6 +169,8 @@ uint32_t astra_vfs_host_transport_submit(
         uint8_t *row = page + offsetof(AstraVolumeCatalogPage, records);
         astra_store_be64(row + offsetof(AstraVolumeRecord, id), UINT64_C(0x100000003));
         astra_store_be64(row + offsetof(AstraVolumeRecord, generation), 9u);
+        astra_store_be64(row + offsetof(AstraVolumeRecord, capacity_bytes), UINT64_C(4700000000));
+        astra_store_be32(row + offsetof(AstraVolumeRecord, partition_map), ASTRA_VOLUME_PARTITION_MAP_GPT);
         astra_store_be32(row + offsetof(AstraVolumeRecord, kind), ASTRA_VOLUME_MOUNT);
         astra_store_be32(row + offsetof(AstraVolumeRecord, state), ASTRA_VOLUME_MOUNTED);
         astra_store_be32(row + offsetof(AstraVolumeRecord, class_id), ASTRA_VOLUME_OPTICAL);
@@ -138,6 +184,10 @@ uint32_t astra_vfs_host_transport_submit(
             command->result_length = sizeof(AstraVolumeCatalogPage) - 1u;
         if (host->catalog_corrupt == 3u)
             astra_store_be64(page + 24u, 123u);
+        if (host->catalog_corrupt == 4u)
+            astra_store_be32(row + offsetof(AstraVolumeRecord, partition_number), 1u);
+        if (host->catalog_corrupt == 5u)
+            astra_store_be32(row + offsetof(AstraVolumeRecord, format), ASTRA_VOLUME_UNSUPPORTED);
         ++host->calls;
         return ASTRA_VFS_OK;
     }
@@ -396,6 +446,35 @@ uint32_t astra_vfs_host_transport_submit(
 int main(void)
 {
     FakeHost catalog_host = {0};
+    AstraVolumeFormatRequest format = {0};
+    format.source = (AstraVolumeReference){7u, 8u, 9u};
+    format.header.operation = ASTRA_VOLUME_FORMAT;
+    format.format = ASTRA_VOLUME_FAT32;
+    strcpy(format.label, "TEST");
+    uint32_t format_outcome = UINT32_MAX;
+    assert(astra_vfs_host_volume_format((AstraVfsHostTransport *)&catalog_host,
+        9u, 17u, &format, &format_outcome) == ASTRA_VFS_OK &&
+        format_outcome == ASTRA_STATUS_OK);
+    format.header.operation = ASTRA_VOLUME_FORMAT_STATUS;
+    format.format = 0u;
+    memset(format.label, 0, sizeof(format.label));
+    assert(astra_vfs_host_volume_format((AstraVfsHostTransport *)&catalog_host,
+        9u, 17u, &format, &format_outcome) == ASTRA_VFS_OK &&
+        format_outcome == ASTRA_STATUS_BUSY);
+    AstraVolumePartitionRequest partition = {0};
+    partition.header.operation = ASTRA_VOLUME_PARTITION;
+    partition.device = (AstraVolumeReference){7u, 8u, 9u};
+    partition.edit = (AstraVolumePartitionEdit){ASTRA_VOLUME_PARTITION_INITIALIZE,
+        ASTRA_VOLUME_PARTITION_MAP_MBR, 0u, 0u, 0u, 0u};
+    uint32_t partition_outcome = UINT32_MAX;
+    assert(astra_vfs_host_volume_partition((AstraVfsHostTransport *)&catalog_host,
+        9u, 17u, &partition, &partition_outcome) == ASTRA_VFS_OK &&
+        partition_outcome == ASTRA_STATUS_OK);
+    partition.header.operation = ASTRA_VOLUME_PARTITION_STATUS;
+    partition.edit = (AstraVolumePartitionEdit){0};
+    assert(astra_vfs_host_volume_partition((AstraVfsHostTransport *)&catalog_host,
+        9u, 17u, &partition, &partition_outcome) == ASTRA_VFS_OK &&
+        partition_outcome == ASTRA_STATUS_BUSY);
     AstraVolumeUsageQuery usage_query = {.version = ASTRA_VOLUME_USAGE_VERSION, .size = sizeof(usage_query)};
     AstraVolumeUsagePage usage_page;
     assert(astra_vfs_host_usage((AstraVfsHostTransport *)&catalog_host, 9u, &usage_query, &usage_page) == ASTRA_VFS_OK);
@@ -427,7 +506,9 @@ int main(void)
     assert(page.epoch == UINT64_C(0xabcdef0100000002) && page.sequence == 17u && page.count == 1u);
     assert(page.records[0].id == UINT64_C(0x100000003) && page.records[0].generation == 9u);
     assert(page.records[0].flags == ASTRA_VOLUME_READ_ONLY && strcmp(page.records[0].name, "/cd0") == 0);
-    for (uint32_t corrupt = 1u; corrupt <= 3u; ++corrupt) {
+    assert(page.records[0].capacity_bytes == UINT64_C(4700000000) &&
+        page.records[0].partition_map == ASTRA_VOLUME_PARTITION_MAP_GPT);
+    for (uint32_t corrupt = 1u; corrupt <= 5u; ++corrupt) {
         catalog_host.catalog_corrupt = corrupt;
         assert(astra_vfs_host_catalog((AstraVfsHostTransport *)&catalog_host, 9u, &query, &page) == ASTRA_VFS_ERR_PROTOCOL);
     }

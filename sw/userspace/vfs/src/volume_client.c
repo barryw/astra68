@@ -278,6 +278,86 @@ AstraResult astra_volume_control(AstraHandle administrator, const AstraVolumeCon
     return control_call(administrator, control, reference);
 }
 
+AstraResult astra_volume_format(AstraHandle administrator,
+    const AstraVolumeReference *source, uint32_t format, const char *label)
+{
+    if (source == NULL || label == NULL || administrator == ASTRA_INVALID_HANDLE)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraVolumeFormatRequest request = {0};
+    AstraVolumeFormatReply reply = {0};
+    astra_message_header_set(&request.header, sizeof(request), ASTRA_VOLUME_PROTOCOL,
+        ASTRA_VOLUME_PROTOCOL_VERSION, ASTRA_VOLUME_FORMAT, 1u);
+    request.source = *source;
+    request.format = format;
+    const char *end = memchr(label, '\0', sizeof(request.label));
+    if (end == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    size_t length = (size_t)(end - label);
+    memcpy(request.label, label, length);
+    if (!astra_volume_format_valid(&request)) return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraResult result = exchange(administrator, &request, sizeof(request), NULL,
+        &reply.reply, sizeof(reply), NULL);
+    return result == ASTRA_OK && (reply.reserved != 0u || reply.outcome != ASTRA_STATUS_OK) ?
+        ASTRA_ERROR_IO : result;
+}
+
+AstraResult astra_volume_format_status(AstraHandle administrator,
+    const AstraVolumeReference *source, AstraResult *outcome)
+{
+    if (outcome == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    *outcome = ASTRA_ERROR_IO;
+    if (source == NULL || administrator == ASTRA_INVALID_HANDLE)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraVolumeFormatRequest request = {0};
+    AstraVolumeFormatReply reply = {0};
+    astra_message_header_set(&request.header, sizeof(request), ASTRA_VOLUME_PROTOCOL,
+        ASTRA_VOLUME_PROTOCOL_VERSION, ASTRA_VOLUME_FORMAT_STATUS, 1u);
+    request.source = *source;
+    if (!astra_volume_format_valid(&request)) return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraResult result = exchange(administrator, &request, sizeof(request), NULL,
+        &reply.reply, sizeof(reply), NULL);
+    if (result == ASTRA_OK && reply.reserved != 0u) return ASTRA_ERROR_IO;
+    if (result == ASTRA_OK) *outcome = astra_result_from_service(reply.outcome);
+    return result;
+}
+
+AstraResult astra_volume_partition(AstraHandle administrator,
+    const AstraVolumeReference *device, const AstraVolumePartitionEdit *edit)
+{
+    if (device == NULL || edit == NULL || administrator == ASTRA_INVALID_HANDLE)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraVolumePartitionRequest request = {0};
+    AstraVolumePartitionReply reply = {0};
+    astra_message_header_set(&request.header, sizeof(request), ASTRA_VOLUME_PROTOCOL,
+        ASTRA_VOLUME_PROTOCOL_VERSION, ASTRA_VOLUME_PARTITION, 1u);
+    request.device = *device;
+    request.edit = *edit;
+    if (!astra_volume_partition_valid(&request)) return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraResult result = exchange(administrator, &request, sizeof(request), NULL,
+        &reply.reply, sizeof(reply), NULL);
+    return result == ASTRA_OK && (reply.reserved != 0u || reply.outcome != ASTRA_STATUS_OK) ?
+        ASTRA_ERROR_IO : result;
+}
+
+AstraResult astra_volume_partition_status(AstraHandle administrator,
+    const AstraVolumeReference *device, AstraResult *outcome)
+{
+    if (outcome == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    *outcome = ASTRA_ERROR_IO;
+    if (device == NULL || administrator == ASTRA_INVALID_HANDLE)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraVolumePartitionRequest request = {0};
+    AstraVolumePartitionReply reply = {0};
+    astra_message_header_set(&request.header, sizeof(request), ASTRA_VOLUME_PROTOCOL,
+        ASTRA_VOLUME_PROTOCOL_VERSION, ASTRA_VOLUME_PARTITION_STATUS, 1u);
+    request.device = *device;
+    if (!astra_volume_partition_valid(&request)) return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraResult result = exchange(administrator, &request, sizeof(request), NULL,
+        &reply.reply, sizeof(reply), NULL);
+    if (result == ASTRA_OK && reply.reserved != 0u) return ASTRA_ERROR_IO;
+    if (result == ASTRA_OK) *outcome = astra_result_from_service(reply.outcome);
+    return result;
+}
+
 AstraResult astra_volume_image(AstraHandle administrator, AstraFile *file,
     AstraVolumeReference *reference)
 {
@@ -309,6 +389,105 @@ void astra_volume_snapshot_close(AstraVolumeSnapshot *snapshot)
     if (snapshot == NULL) return;
     astra_runtime_deallocate(snapshot->records);
     *snapshot = (AstraVolumeSnapshot)ASTRA_VOLUME_SNAPSHOT_INIT;
+}
+
+const AstraVolumeRecord *astra_volume_snapshot_find(
+    const AstraVolumeSnapshot *snapshot, const AstraVolumeReference *reference)
+{
+    if (snapshot == NULL || reference == NULL || snapshot->epoch == 0u ||
+        snapshot->epoch != reference->epoch || reference->id == 0u ||
+        reference->generation == 0u ||
+        (snapshot->count != 0u && snapshot->records == NULL))
+        return NULL;
+    for (uint32_t at = 0u; at < snapshot->count; ++at) {
+        const AstraVolumeRecord *row = &snapshot->records[at];
+        if (row->id == reference->id)
+            return row->generation == reference->generation ? row : NULL;
+    }
+    return NULL;
+}
+
+const AstraVolumeRecord *astra_volume_snapshot_ancestor(
+    const AstraVolumeSnapshot *snapshot, const AstraVolumeReference *reference,
+    uint32_t kind)
+{
+    if (kind < ASTRA_VOLUME_DEVICE || kind > ASTRA_VOLUME_BINDING)
+        return NULL;
+    const AstraVolumeRecord *row = astra_volume_snapshot_find(snapshot, reference);
+    for (uint32_t depth = 0u; row != NULL && depth < snapshot->count; ++depth) {
+        if (row->kind == kind) return row;
+        const AstraVolumeReference parent = {reference->epoch, row->parent,
+            row->parent_generation};
+        row = astra_volume_snapshot_find(snapshot, &parent);
+    }
+    return NULL;
+}
+
+AstraResult astra_volume_partition_find_free(
+    const AstraVolumeSnapshot *snapshot, const AstraVolumeReference *device,
+    uint64_t length_bytes, uint64_t *offset_bytes)
+{
+    const uint64_t align = UINT64_C(1048576);
+    if (offset_bytes == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    *offset_bytes = 0u;
+    const AstraVolumeRecord *disk = astra_volume_snapshot_find(snapshot, device);
+    if (disk == NULL || disk->kind != ASTRA_VOLUME_DEVICE ||
+        disk->state != ASTRA_VOLUME_DISCOVERED ||
+        disk->capacity_bytes < 2u * align || length_bytes == 0u ||
+        length_bytes % align != 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint64_t limit = disk->capacity_bytes - align;
+    uint64_t cursor = align;
+    for (uint64_t pass = 0u; pass <= snapshot->count && cursor < limit; ++pass) {
+        uint64_t next = limit, occupied_end = 0u;
+        for (uint32_t at = 0u; at < snapshot->count; ++at) {
+            const AstraVolumeRecord *row = &snapshot->records[at];
+            if (row->kind != ASTRA_VOLUME_SOURCE ||
+                row->origin != ASTRA_VOLUME_ORIGIN_DEVICE ||
+                row->partition_number == 0u || row->state == ASTRA_VOLUME_LOST ||
+                row->capacity_bytes == 0u ||
+                row->offset_bytes > UINT64_MAX - row->capacity_bytes)
+                continue;
+            const AstraVolumeReference source = {snapshot->epoch, row->id,
+                row->generation};
+            if (astra_volume_snapshot_ancestor(snapshot, &source,
+                ASTRA_VOLUME_DEVICE) != disk) continue;
+            uint64_t end = row->offset_bytes + row->capacity_bytes;
+            if (end <= cursor) continue;
+            if (row->offset_bytes <= cursor) {
+                if (end > occupied_end) occupied_end = end;
+            } else if (row->offset_bytes < next)
+                next = row->offset_bytes;
+        }
+        if (occupied_end != 0u) {
+            if (occupied_end > UINT64_MAX - (align - 1u)) break;
+            cursor = (occupied_end + align - 1u) & ~(align - 1u);
+            continue;
+        }
+        if (next >= cursor && length_bytes <= next - cursor) {
+            *offset_bytes = cursor;
+            return ASTRA_OK;
+        }
+        cursor = next;
+        if (cursor == limit) break;
+        for (uint32_t at = 0u; at < snapshot->count; ++at) {
+            const AstraVolumeRecord *row = &snapshot->records[at];
+            if (row->kind != ASTRA_VOLUME_SOURCE ||
+                row->origin != ASTRA_VOLUME_ORIGIN_DEVICE ||
+                row->partition_number == 0u || row->state == ASTRA_VOLUME_LOST ||
+                row->offset_bytes != cursor ||
+                row->capacity_bytes > UINT64_MAX - cursor) continue;
+            const AstraVolumeReference source = {snapshot->epoch, row->id,
+                row->generation};
+            if (astra_volume_snapshot_ancestor(snapshot, &source,
+                ASTRA_VOLUME_DEVICE) != disk) continue;
+            uint64_t end = cursor + row->capacity_bytes;
+            if (end > UINT64_MAX - (align - 1u)) return ASTRA_ERROR_NO_RESOURCES;
+            cursor = (end + align - 1u) & ~(align - 1u);
+            break;
+        }
+    }
+    return ASTRA_ERROR_NO_RESOURCES;
 }
 
 AstraResult astra_volume_removal_advance(AstraHandle administrator,

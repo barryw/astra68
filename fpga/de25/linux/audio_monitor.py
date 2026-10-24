@@ -15,8 +15,10 @@ import struct
 import sys
 import time
 
-MAGIC, VERSION, STATUS, MONITOR = 0x41554431, 3, 4, 0x80000001
+MAGIC, VERSION, STATUS, MONITOR = 0x41554431, 6, 4, 0x80000001
 HEADER = struct.Struct("<3I")
+REQUEST = struct.Struct("<8I")
+REPLY = struct.Struct("<10I")
 MONITOR_FRAMES = 480
 
 
@@ -25,10 +27,12 @@ def counters(path):
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
     connection.settimeout(1.0)
     connection.connect(path)
-    connection.send(struct.pack("<7I", MAGIC, VERSION, STATUS, 0, 0, 0, 0))
-    reply = struct.unpack("<9I", connection.recv(36))
+    connection.send(REQUEST.pack(MAGIC, VERSION, STATUS, 0, 0, 0, 0, 0))
+    reply = REPLY.unpack(connection.recv(REPLY.size))
     connection.close()
-    return reply[5:]
+    if reply[:2] != (MAGIC, 0):
+        raise RuntimeError("audio status refused: %r" % (reply,))
+    return reply[6:9]
 
 
 def main():
@@ -39,8 +43,8 @@ def main():
     connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
     connection.settimeout(1.0)
     connection.connect(path)
-    connection.send(struct.pack("<7I", MAGIC, VERSION, MONITOR, 0, 0, 0, 0))
-    reply = struct.unpack("<9I", connection.recv(36))
+    connection.send(REQUEST.pack(MAGIC, VERSION, MONITOR, 0, 0, 0, 0, 0))
+    reply = REPLY.unpack(connection.recv(REPLY.size))
     if reply[:2] != (MAGIC, 0):
         raise SystemExit("monitor refused: %r" % (reply,))
     frames = 0

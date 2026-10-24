@@ -93,7 +93,8 @@ assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
         if line.startswith("trusted ")] == [
     "trusted /apps/Terminal.app grants " + astra_image.TERMINAL_CEILING,
     "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r FONTS:r APPS:r LIBS:r LOG",
-    "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r"]
+    "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r",
+    "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG"]
 for grant, admitted in (("GUI", True), ("FONTS:r", True),
                         ("FONTS:rw", False), ("FONT_CATALOG", True),
                         ("FONTS_ADMIN", False), ("APPS:r", True), ("APPS:rw", False),
@@ -115,9 +116,10 @@ with tempfile.TemporaryDirectory() as directory:
     shell = bundle("Terminal.app", ["GUI", "SERVICE_MANAGER", "SYSTEM:r"])
     atlas = bundle("Atlas.app", ["GUI", "VOLUMES", "VOLUME_READ", "DH0:r", "FONTS:r", "APPS:r", "LIBS:r", "LOG"])
     fonts = bundle("Fonts.app", ["GUI", "FONT_CATALOG", "FONTS:r", "FONTS_ADMIN", "CLIPBOARD", "DH0:r", "LIBS:r"])
+    disk_setup = bundle("DiskSetup.app", ["GUI", "VOLUMES", "VOLUME_USAGE", "LIBS:r", "LOG"])
     disk = bundle("Disk.app", ["GUI", "DH0:r"])
     astra_image.check_application_policy(
-        [ordinary, shell, atlas, fonts],
+        [ordinary, shell, atlas, fonts, disk_setup],
         astra_image.DISPLAY_STARTUP_MANIFEST)
     bundle("Atlas.app", ["GUI", "DH0:rw"])
     for bundles, manifest in (([greedy], astra_image.DISPLAY_STARTUP_MANIFEST),
@@ -266,7 +268,7 @@ assert startup[1] == \
     "service /services/posixd grants serves POSIX_PROCESS required priority=20"
 assert startup[0] == \
     "service /services/hostfs grants HOST_FILESYSTEM " \
-    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE RAM_READ RAM_WRITE critical priority=20"
+    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE critical priority=20"
 assert startup[2] == \
     "service /services/entropy grants HOST_DEVICE serves ENTROPY required priority=20"
 

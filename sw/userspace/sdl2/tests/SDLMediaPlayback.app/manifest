@@ -1,0 +1,15 @@
+astra-bundle 1
+kind application
+id org.astra.sdl-media-playback
+name "SDL Media Playback Gate"
+version 0.1.0
+executable bin/m68k-68040/SDLMediaPlayback
+icon resources/SDLMediaPlayback.aicon
+capability GUI
+capability PCM
+capability WORK:r
+capability LIBS:r
+requires SDL2.library 3 2.32.10
+requires libc.library 4 4.0.0
+requires runtime.library 1 1.6.0
+requires compiler.library 2 2.0.0

@@ -4,8 +4,10 @@ Status: active implementation PRD. The architectural direction was agreed on
 2026-10-06. Current candidate uses Filesystem ABI 14 / Kit 11.0.0, STOR 38
 and the Linux-owned fixed/removable/optical/ISO/RAM provider. Native lifecycle,
 exact file/CWD busy removal, recovery, durability and Atlas overflow pass their
-current gates. Complete GUI/semantics qualification and production migration
-remain required; [Current state](CURRENT_STATE.md) records exact evidence.
+current gates. Coherent release `04aa23c8` runs on DE25 after stopped-state
+migration; native USB FAT32/exFAT mounts and read/write passed in private and
+production boots. Physical optical/eject and complete performance qualification
+remain open; [Current state](CURRENT_STATE.md) records exact evidence.
 Network mounts are excluded from this completion task. Performance acceptance
 follows correctness.
 
@@ -28,8 +30,8 @@ supported USB filesystems, labeled desktop volume icons, and double-click into
 Atlas, and authorizes the Linux kernel work needed for CD-ROM support. The
 [production volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md)
 records the implementation boundaries and migration/acceptance requirements.
-Completed source and focused gates do not establish physical-drive acceptance
-or production cutover.
+Physical USB qualification and production cutover are recorded below; physical
+data-CD qualification still requires attached media.
 
 Initial Atlas scope is a single root-directory window with named file/folder
 icons, proving native open and enumeration of the selected mounted volume.
@@ -68,17 +70,16 @@ versioned Astra protocols; applications gain no alternate Linux API.
 
 ## Current implementation and gaps
 
-The table describes candidate source; it does not claim deployment or physical
-drive qualification.
+The table describes the deployed DE25 release and remaining qualification.
 
 | Area | Existing implementation | Production gap |
 |---|---|---|
-| System storage | The canonical image selector validates one exact system partition. Supervisor bootstrap and HostFS access the same Linux-owned provider; guest ext4/storage services are absent from the production release. | Final coherent release and stopped-state migration with preserved user data. |
-| Linux-backed files | HostFS owns `HOST_FILESYSTEM` and mints rooted, rights-bounded sessions/scopes. Clients drive kernel-bound host channels; QEMU enforces scope, ancestry, read-only rights, ownership and object tags for every command. Current storage protocol is 38. The Linux provider owns fixed, removable, optical, image and RAM backing instances; WORK and SOUND remain explicit exports. | Coherent dynamic-volume lifecycle qualification and production cutover; full performance acceptance. |
-| RAM storage | Configured Linux tmpfs has explicit limits and source identity independent of its current mount. Native scoped brokers preserve rights across remounts. | Final coherent release/board qualification. |
-| Namespace | Canonical volume snapshots update native process assigns; exact incarnation checks prevent old grants from targeting replacement mounts. Ordered traversal confines rooted grants. | Final coherent lifecycle qualification and production cutover. |
+| System storage | The canonical image selector validates one exact system partition. Supervisor bootstrap and HostFS access the same Linux-owned provider; guest ext4/storage services are absent from the production release. Mutable `/dh0` state has one release-independent path, `/var/lib/astra/state/system/storage-terminal.img`; release-owned files were refreshed from the verified image during stopped-state migration while user files and the old image were retained. | A later different-release upgrade and rollback still need a physical cutover gate. |
+| Linux-backed files | HostFS owns `HOST_FILESYSTEM` and mints rooted, rights-bounded sessions/scopes. Clients drive kernel-bound host channels; QEMU enforces scope, ancestry, read-only rights, ownership and object tags for every command. Current storage protocol is 38. The Linux provider owns fixed, removable, optical, image and RAM backing instances; WORK and SOUND remain explicit exports. | Full performance acceptance and physical optical qualification. |
+| RAM storage | Configured Linux tmpfs has explicit limits and source identity independent of its current mount. Native scoped brokers preserve rights across remounts. | Additional configured RAM volumes need physical lifecycle qualification. |
+| Namespace | Canonical volume snapshots update native process assigns; exact incarnation checks prevent old grants from targeting replacement mounts. Ordered traversal confines rooted grants. | Physical CD insertion/removal remains unqualified. |
 | File objects | Stable volume/node identities, retained objects/cwd, shared descriptions/offsets, fork/exec inheritance and ordered symlink behavior pass current correctness gates. | Production lifecycle across dynamic media and final performance acceptance. |
-| Devices and mounts | Linux discovery subscribes before scanning; the provider implements device/source/mount identity, supported-media policy, safe unmount/eject, ISO admission and canonical notifications. | Real USB/optical discovery/eject qualification and final production cutover. |
+| Devices and mounts | Linux discovery subscribes before scanning; the provider implements device/source/mount identity, supported-media policy, safe unmount/eject, ISO admission and canonical notifications. Disposable USB FAT32/exFAT partitions passed native format, mount, read/write, unmount and private/production boot gates. | Physical optical discovery, disc change and eject remain unqualified. |
 
 Implementation anchors are [supervisor bootstrap](../sw/userspace/supervisor/src/volume.c),
 [Linux storage provider](../fpga/de25/linux/astra_storage_provider.c),
@@ -143,9 +144,10 @@ separately qualified. A format never gains write or format access merely because
 Linux can identify or mount it. Current source mounts ext4, FAT32 and exFAT
 on eligible storage, FAT12/FAT16 read-only on USB, ISO9660/UDF read-only on
 optical or USB media, NTFS read-only on fixed/USB data partitions, and tmpfs for
-RAM. FAT12/FAT16, USB optical-format and NTFS admission have focused software
-gates but no coherent guest release or physical gate; FAT32 has software gates
-but no physical FAT32 drive gate. The supported
+RAM. FAT12/FAT16, USB ISO9660, NTFS, FAT32 and exFAT have passed guarded
+physical DE25 trials; FAT32 and exFAT also passed native Disk Setup formatting
+and automatic remount on disposable media. Physical data-CD, optical media
+change and eject still need qualification. The supported
 format/transport policy is extended in this order:
 
 | Priority | Formats | Intended capability and qualification |
@@ -181,9 +183,9 @@ describe Astra objects through the native VFS contract. They are not Linux
 Astra namespace.
 
 Building AstraFS, maintaining guest filesystem-format engines, alternate boot
-selection, audio-CD playback, a general raw-device interface for every peripheral,
-and destructive partition/format tools are outside the first release. The mount
-control contract must support adding authorized maintenance operations later.
+selection, audio-CD playback, and a general raw-device interface for every
+peripheral are outside the first release. Native Disk Setup provides the
+authorized partition/format operations specified in FS41.
 
 ## Ownership and integration
 

@@ -22,9 +22,13 @@ REMOTE_DESKTOP_UNIT=$REPOSITORY/fpga/de25/astra-remote-desktop.service
 DE25_SYSROOT=${ASTRA_DE25_SYSROOT:?set ASTRA_DE25_SYSROOT}
 KERNEL_PACKAGE=${ASTRA_DE25_KERNEL_PACKAGE:?set ASTRA_DE25_KERNEL_PACKAGE to the complete qualified kernel package}
 PROVIDER=$REPOSITORY/build/de25-linux/astra-storage-aarch64
+FORMATTERS=$REPOSITORY/build/storage-format/de25
 FONT_WORKER=$REPOSITORY/build/de25-capture/astra-font-worker-aarch64
 RELEASE_TOOL=$REPOSITORY/tools/astra_release.py
-JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')
+JOBS=${ASTRA_DE25_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')}
+case "$JOBS" in
+    ''|0*|*[!0-9]*) echo "ASTRA_DE25_BUILD_JOBS must be a positive integer" >&2; exit 2 ;;
+esac
 
 # POST and panic are rendered by this small host binary. Always rebuild it
 # from the mirrored tree so a prior release cannot silently supply its font
@@ -43,6 +47,7 @@ make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
     CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
     OUT="$REPOSITORY/build/de25-linux" \
     storage-provider-target
+DE25_SYSROOT="$DE25_SYSROOT" bash "$REPOSITORY/third_party/storage-format/build.sh" de25
 
 # Image, DTBs, all standard modules and Astra modules form one immutable input.
 # Never package an isolated module for a different running kernel.
@@ -109,7 +114,10 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "bin/astra-audio-host=$AUDIO" \
     "bin/astra-font-worker=$FONT_WORKER" \
     "bin/astra-storage=$PROVIDER" \
-    "bin/astra-storage-image.py=$SCRIPT_DIR/storage_image.py" \
+    "bin/astra-mkfs.fat=$FORMATTERS/astra-mkfs.fat" \
+    "bin/astra-mkfs.exfat=$FORMATTERS/astra-mkfs.exfat" \
+    "bin/storage_image.py=$SCRIPT_DIR/storage_image.py" \
+    "bin/astra-system-image-migrate.py=$SCRIPT_DIR/migrate-system-image.py" \
     "bin/astra-kernel-install.py=$REPOSITORY/fpga/de25/linux/kernel/install-production-storage.py" \
     "kernel/boot.scr.uimg=$BOOT_WORKSPACE/boot.scr.uimg" \
     "kernel/boot.identity=$BOOT_WORKSPACE/boot.identity" \

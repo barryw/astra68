@@ -1,7 +1,7 @@
 # Filesystem Kit
 
 Include `astra/filesystem_kit.h` for the complete API. Link against
-`filesystem.library.14` and declare the minimum compatible version in the
+`filesystem.library.15` and declare the minimum compatible version in the
 bundle manifest. The process loader resolves that dependency before `main`;
 applications call the declared `astra_filesystem_*` functions directly.
 
@@ -42,8 +42,8 @@ Components accept 255 UTF-8 bytes and native paths accept 4095 bytes, excluding
 the terminating zero. Longer components or paths return
 `ASTRA_VFS_ERR_NAME_TOO_LONG` (native status 23); POSIX maps it to
 `ENAMETOOLONG`. Metadata and continuation payloads retain full-width volume
-references. Existing consumers require Filesystem ABI 14.0; removal clients
-require 14.1.
+references. Existing clients retain their ABI 15.0 or 15.1 minimum; Disk Setup
+requires 15.2.
 
 ABI 14.0 adds the native volume catalog, complete owned snapshots, subscriptions
 and exact-incarnation root grants. `VOLUMES` conveys metadata only; distinct
@@ -57,6 +57,42 @@ admitted unmount. It separates pending cleanup, refusal, retained lost objects,
 provider retirement and actual completion, and releases an image source only
 after its mount retires. `LOST` does not prove that retained backing is gone;
 completion waits for the source record to disappear.
+
+ABI 15.0 publishes catalog version 5. Physical device and source records
+include partition map, number, byte offset, capacity and detected type; the new record size
+requires every producer and consumer to use the new library and headers.
+`ASTRA_VOLUME_PHYSICAL_READ_ONLY` reports hardware/media protection separately
+from effective `ASTRA_VOLUME_READ_ONLY`; `ASTRA_VOLUME_FORMATTING` prevents
+mount admission while an authorized disk edit owns a source.
+`astra_volume_snapshot_find` resolves one exact epoch/ID/generation;
+`astra_volume_snapshot_ancestor` follows exact parent generations to a
+requested kind. Missing, replaced and cyclic chains return `NULL`. Keep the
+snapshot open while using returned record pointers. Existing catalog symbols
+use `ASTRA_FILESYSTEM_15.0`.
+
+ABI 15.1 exports the following two operations under `ASTRA_FILESYSTEM_15.1`.
+Disk Setup alone receives
+`DISK_ADMIN`. `astra_volume_format` admits
+FAT32 or exFAT formatting for an exact unmounted physical source, with an
+ASCII label of 1–11 characters. The call is asynchronous; keep the original
+source reference and poll `astra_volume_format_status` until its outcome stops
+returning `ASTRA_ERROR_BUSY`. The source generation changes at completion and
+the catalog reprobes it before the new filesystem becomes available. System,
+write-protected, mounted and stale sources are refused. `VOLUME_ADMIN` cannot
+format disks.
+
+ABI 15.2 exports `astra_volume_partition`,
+`astra_volume_partition_status` and `astra_volume_partition_find_free` under
+`ASTRA_FILESYSTEM_15.2`. Catalog version 6 reports
+`ASTRA_VOLUME_PARTITIONING`. Select an exact physical device; initialize an
+MBR/GPT map, create a FAT32/exFAT/ext4 partition in a byte-aligned extent, or
+delete an exact partition number. A creation only sets the partition type;
+format the resulting source separately. `find_free` uses a coherent snapshot
+and reserves one MiB at each disk edge. Unmount every sibling partition before
+editing. Keep the original device reference and poll status until it stops
+returning `ASTRA_ERROR_BUSY`; successful reread publishes a new generation.
+Only `DISK_ADMIN` admits map edits. Physical DE25 edit and rediscovery gates
+remain open in the current engineering state.
 
 HostFS keeps the position, directory cursor, append and nonblocking flags in
 one shared provider description. Sequential I/O advances its position;

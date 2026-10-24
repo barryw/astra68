@@ -24,12 +24,16 @@ struct AstraStorageObservationEntry {
     dev_t devnum;
     dev_t disk_devnum;
     uint64_t disk_sequence;
+    uint64_t capacity_bytes;
+    uint64_t offset_bytes;
     uint64_t device;
     uint64_t medium;
     uint64_t source;
     uint64_t mount;
     size_t bytes;
     uint32_t class_id;
+    uint32_t partition_number;
+    uint32_t partition_map;
     int partition;
     int read_only;
     int auto_attempted;
@@ -117,6 +121,203 @@ static AstraStorageObservationEntry *find(AstraStorageDiscovery *discovery, cons
     return NULL;
 }
 
+static int physical_read_only(AstraStorageDiscovery *discovery,
+                              const AstraStorageObservationEntry *entry)
+{
+    if (entry->read_only || entry->class_id == ASTRA_VOLUME_OPTICAL)
+        return 1;
+    if (!entry->partition)
+        return 0;
+    const AstraStorageObservationEntry *disk = find(discovery, entry->disk_syspath);
+    return disk != NULL &&
+        (disk->read_only || disk->class_id == ASTRA_VOLUME_OPTICAL);
+}
+
+static int open_observed(const char *path, dev_t devnum, uint64_t disk_sequence,
+                         int access, int *result)
+{
+    struct stat info;
+    uint64_t current_sequence = 0u;
+    int fd = open(path, access | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    int error = fd < 0 ? errno : 0;
+    if (error == 0 && fstat(fd, &info) != 0)
+        error = errno;
+    if (error == 0 && (!S_ISBLK(info.st_mode) || info.st_rdev != devnum))
+        error = ENODEV;
+    if (error == 0 && disk_sequence != 0u &&
+        (ioctl(fd, BLKGETDISKSEQ, &current_sequence) != 0 ||
+         current_sequence != disk_sequence))
+        error = ESTALE;
+    if (error != 0) {
+        if (fd >= 0) close(fd);
+        return error;
+    }
+    *result = fd;
+    return 0;
+}
+
+static int open_writable_observed(const AstraStorageObservationEntry *entry,
+    int *fd)
+{
+    int error = open_observed(entry->devnode, entry->devnum,
+        entry->disk_sequence, O_RDWR | O_EXCL, fd);
+    if (error != 0) return error;
+    int read_only = 0;
+    uint64_t capacity = 0u;
+    if (ioctl(*fd, BLKROGET, &read_only) != 0)
+        error = errno;
+    else if (read_only != 0)
+        error = EROFS;
+    else if (ioctl(*fd, BLKGETSIZE64, &capacity) != 0)
+        error = errno;
+    else if (capacity != entry->capacity_bytes)
+        error = ESTALE;
+    if (error != 0) {
+        close(*fd);
+        *fd = -1;
+    }
+    return error;
+}
+
+static int lose(AstraStorageDiscovery *discovery, uint64_t id);
+
+int astra_storage_discovery_device_fd(AstraStorageDiscovery *discovery,
+    uint64_t device, uint64_t generation, int *fd)
+{
+    if (discovery == NULL || discovery->provider == NULL || fd == NULL)
+        return EINVAL;
+    *fd = -1;
+    const AstraStorageRecord *record = astra_storage_find(&discovery->provider->catalog,
+        device);
+    if (record == NULL || record->generation != generation)
+        return ESTALE;
+    int admission = astra_storage_partition_can_edit(
+        &discovery->provider->catalog, device, generation);
+    if (admission != 0) return admission;
+    admission = astra_storage_provider_device_idle(discovery->provider, device);
+    if (admission != 0) return admission;
+    AstraStorageObservationEntry *entry = discovery->entries;
+    while (entry != NULL && (entry->partition || entry->device != device))
+        entry = entry->next;
+    if (entry == NULL || entry->devnum != entry->disk_devnum ||
+        entry->class_id != record->class_id ||
+        entry->capacity_bytes != record->capacity_bytes ||
+        entry->partition_map != record->partition_map ||
+        strcmp(entry->syspath, entry->disk_syspath) != 0)
+        return ESTALE;
+    if (reserved(discovery, entry->devnum) ||
+        (record->flags & ASTRA_VOLUME_SYSTEM) != 0u)
+        return EACCES;
+    if (physical_read_only(discovery, entry) ||
+        (record->flags & ASTRA_VOLUME_PHYSICAL_READ_ONLY) != 0u)
+        return EROFS;
+    return open_writable_observed(entry, fd);
+}
+
+int astra_storage_discovery_partition_retire(AstraStorageDiscovery *discovery,
+    uint64_t device)
+{
+    if (discovery == NULL || discovery->provider == NULL) return EINVAL;
+    AstraStorageObservationEntry *disk = discovery->entries;
+    while (disk != NULL && (disk->partition || disk->device != device))
+        disk = disk->next;
+    if (disk == NULL) return ESTALE;
+    const AstraStorageRecord *record = astra_storage_find(&discovery->provider->catalog,
+        device);
+    if (record == NULL || record->state != ASTRA_VOLUME_PARTITIONING)
+        return ESTALE;
+    int error = lose(discovery, disk->medium);
+    if (error != 0) return error;
+    disk->medium = disk->source = disk->mount = 0u;
+    disk->auto_attempted = 0;
+    for (AstraStorageObservationEntry *entry = discovery->entries; entry != NULL;
+         entry = entry->next)
+        if (entry->partition && entry->device == device) {
+            entry->medium = entry->source = entry->mount = 0u;
+            entry->auto_attempted = 0;
+        }
+    return 0;
+}
+
+int astra_storage_discovery_partition_reread(AstraStorageDiscovery *discovery,
+    uint64_t device, uint64_t generation)
+{
+    if (discovery == NULL || discovery->provider == NULL) return EINVAL;
+    const AstraStorageRecord *record = astra_storage_find(&discovery->provider->catalog,
+        device);
+    if (record == NULL || record->generation != generation ||
+        record->state != ASTRA_VOLUME_PARTITIONING)
+        return ESTALE;
+    AstraStorageObservationEntry *disk = discovery->entries;
+    while (disk != NULL && (disk->partition || disk->device != device))
+        disk = disk->next;
+    if (disk == NULL || disk->capacity_bytes != record->capacity_bytes)
+        return ESTALE;
+    int fd = -1;
+    int error = open_observed(disk->devnode, disk->devnum,
+        disk->disk_sequence, O_RDONLY, &fd);
+    uint64_t capacity = 0u;
+    if (error == 0 && ioctl(fd, BLKGETSIZE64, &capacity) != 0)
+        error = errno;
+    if (error == 0 && capacity != record->capacity_bytes)
+        error = ESTALE;
+    if (error == 0 && ioctl(fd, BLKRRPART, 0) != 0)
+        error = errno;
+    if (fd >= 0) close(fd);
+    return error;
+}
+
+int astra_storage_discovery_format_fd(AstraStorageDiscovery *discovery,
+    uint64_t source, uint64_t generation, int *fd)
+{
+    if (discovery == NULL || discovery->provider == NULL || fd == NULL)
+        return EINVAL;
+    *fd = -1;
+    const AstraStorageRecord *record = astra_storage_find(&discovery->provider->catalog,
+        source);
+    if (record == NULL || record->generation != generation ||
+        record->state == ASTRA_VOLUME_LOST)
+        return ESTALE;
+    if (record->kind != ASTRA_VOLUME_SOURCE ||
+        record->origin != ASTRA_VOLUME_ORIGIN_DEVICE ||
+        (record->class_id != ASTRA_VOLUME_USB &&
+         record->class_id != ASTRA_VOLUME_FIXED))
+        return ENOTSUP;
+    AstraStorageObservationEntry *entry = discovery->entries;
+    while (entry != NULL && entry->source != source)
+        entry = entry->next;
+    if (entry == NULL || entry->class_id != record->class_id ||
+        entry->capacity_bytes != record->capacity_bytes ||
+        entry->partition_number != record->partition_number ||
+        entry->offset_bytes != record->offset_bytes)
+        return ESTALE;
+    const AstraStorageObservationEntry *disk = find(discovery, entry->disk_syspath);
+    if (disk == NULL || disk->partition || disk->device == 0u ||
+        entry->device != disk->device ||
+        disk->devnum != entry->disk_devnum ||
+        disk->disk_sequence != entry->disk_sequence)
+        return ESTALE;
+    if (reserved(discovery, entry->devnum) || reserved(discovery, entry->disk_devnum) ||
+        (record->flags & ASTRA_VOLUME_SYSTEM) != 0u)
+        return EACCES;
+    if (physical_read_only(discovery, entry) ||
+        (record->flags & ASTRA_VOLUME_PHYSICAL_READ_ONLY) != 0u)
+        return EROFS;
+    return open_writable_observed(entry, fd);
+}
+
+void astra_storage_discovery_format_result(AstraStorageDiscovery *discovery,
+    uint64_t source, int success)
+{
+    if (discovery == NULL || !success) return;
+    for (AstraStorageObservationEntry *entry = discovery->entries;
+         entry != NULL; entry = entry->next)
+        if (entry->source == source) {
+            entry->auto_attempted = 0;
+            return;
+        }
+}
+
 static int lose(AstraStorageDiscovery *discovery, uint64_t id)
 {
     const AstraStorageRecord *record = astra_storage_find(&discovery->provider->catalog, id);
@@ -177,7 +378,11 @@ static AstraStorageObservationEntry *add(AstraStorageDiscovery *discovery,
     entry->devnum = observation->devnum;
     entry->disk_devnum = observation->disk_devnum;
     entry->disk_sequence = observation->disk_sequence;
+    entry->capacity_bytes = observation->capacity_bytes;
+    entry->offset_bytes = observation->offset_bytes;
     entry->class_id = observation->class_id;
+    entry->partition_number = observation->partition_number;
+    entry->partition_map = observation->partition_map;
     entry->partition = observation->partition;
     entry->read_only = observation->read_only;
     entry->next = discovery->entries;
@@ -192,31 +397,36 @@ static int source(AstraStorageDiscovery *discovery, AstraStorageObservationEntry
     const AstraStorageRecord *medium = astra_storage_find(catalog, entry->medium);
     if (medium == NULL)
         return ESTALE;
-    return astra_storage_source(catalog, medium->id, medium->generation, &entry->source);
+    return astra_storage_source(catalog, medium->id, medium->generation,
+        entry->partition_map, entry->partition_number, entry->offset_bytes,
+        entry->capacity_bytes, &entry->source);
 }
 
 static int admit(AstraStorageDiscovery *discovery, AstraStorageObservationEntry *entry,
                    const AstraStorageObservation *observation)
 {
-    struct stat info;
     int error = source(discovery, entry);
+    /* A corrupt partition extent must not take down discovery of other media.
+     * A later corrected geometry gets a new observation and source. */
+    if (error == EINVAL && entry->partition)
+        return 0;
+    if (error != 0)
+        return error;
+    AstraStorageCatalog *catalog = &discovery->provider->catalog;
+    const AstraStorageRecord *source_record = astra_storage_find(catalog, entry->source);
+    if (source_record == NULL)
+        return ESTALE;
+    error = astra_storage_physical_read_only(catalog, source_record->id,
+        source_record->generation, physical_read_only(discovery, entry));
     if (error != 0)
         return error;
     /* Never follow a udev spelling blindly. The open object must be the exact
      * observed block device. O_NONBLOCK admits empty optical drives without
      * blocking the owner; all filesystem inspection runs in bounded workers. */
-    int fd = open(observation->devnode, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
-    uint64_t disk_sequence = 0u;
-    if (fd < 0)
-        error = errno;
-    else if (fstat(fd, &info) != 0)
-        error = errno;
-    else if (!S_ISBLK(info.st_mode) || info.st_rdev != observation->devnum)
-        error = ENODEV;
-    else if (observation->disk_sequence != 0u &&
-        (ioctl(fd, BLKGETDISKSEQ, &disk_sequence) != 0 || disk_sequence != observation->disk_sequence))
-        error = ESTALE;
-    else
+    int fd = -1;
+    error = open_observed(observation->devnode, observation->devnum,
+        observation->disk_sequence, O_RDONLY, &fd);
+    if (error == 0)
         error = astra_storage_provider_source(discovery->provider, entry->source, 1u, fd, 0u, 0u);
     if (fd >= 0)
         close(fd);
@@ -224,7 +434,7 @@ static int admit(AstraStorageDiscovery *discovery, AstraStorageObservationEntry 
         const AstraStorageRecord *record = astra_storage_find(&discovery->provider->catalog, entry->source);
         if (record != NULL && record->state == ASTRA_VOLUME_PROBING)
             (void)astra_storage_probe_result(&discovery->provider->catalog, record->id,
-                record->generation, ASTRA_VOLUME_FORMAT_UNKNOWN, "", "", 0, error);
+                record->generation, ASTRA_VOLUME_FORMAT_UNKNOWN, "", "", "", 0, error);
         /* Device failure is visible catalog state, not daemon failure. */
     }
     return 0;
@@ -254,9 +464,22 @@ int astra_storage_discovery_observe(AstraStorageDiscovery *discovery,
         strnlen(observation->devnode, PATH_MAX) == PATH_MAX ||
         observation->action < ASTRA_STORAGE_OBSERVE_PRESENT || observation->action > ASTRA_STORAGE_OBSERVE_REMOVE ||
         observation->class_id < ASTRA_VOLUME_FIXED || observation->class_id > ASTRA_VOLUME_OPTICAL ||
+        observation->partition_map > ASTRA_VOLUME_PARTITION_MAP_OTHER ||
+        (!observation->partition && (observation->partition_number != 0u ||
+            observation->offset_bytes != 0u)) ||
+        observation->offset_bytes > UINT64_MAX - observation->capacity_bytes ||
         observation->devnum == 0 || observation->disk_devnum == 0 ||
         (observation->sequence == 0u && observation->action != ASTRA_STORAGE_OBSERVE_PRESENT))
         return EINVAL;
+    AstraStorageObservation normalized = *observation;
+    if (normalized.partition && normalized.action != ASTRA_STORAGE_OBSERVE_REMOVE &&
+        (normalized.partition_number == 0u || normalized.capacity_bytes == 0u)) {
+        if (normalized.action != ASTRA_STORAGE_OBSERVE_CHANGE ||
+            access(normalized.syspath, F_OK) == 0 || errno != ENOENT)
+            return 0; /* Incomplete live observation cannot replace known geometry. */
+        normalized.action = ASTRA_STORAGE_OBSERVE_REMOVE;
+    }
+    observation = &normalized;
     int accepted;
     int sequence_error = accept_sequence(discovery, observation->devnum, observation->sequence, &accepted);
     if (sequence_error != 0 || !accepted)
@@ -271,15 +494,49 @@ int astra_storage_discovery_observe(AstraStorageDiscovery *discovery,
         return entry == NULL ? 0 : retire(discovery, entry);
     if (entry != NULL && (entry->devnum != observation->devnum ||
         entry->disk_sequence != observation->disk_sequence || entry->class_id != observation->class_id ||
-        entry->partition != observation->partition)) {
+        entry->partition != observation->partition ||
+        (entry->partition && (entry->partition_number != observation->partition_number ||
+            entry->partition_map != observation->partition_map ||
+            entry->offset_bytes != observation->offset_bytes ||
+            entry->capacity_bytes != observation->capacity_bytes)))) {
         int error = retire(discovery, entry);
         if (error != 0)
             return error;
         entry = NULL;
     }
+    AstraStorageObservationEntry *disk = observation->partition ?
+        find(discovery, observation->disk_syspath) : entry;
+    const AstraStorageRecord *editing = disk == NULL ? NULL :
+        astra_storage_find(&discovery->provider->catalog, disk->device);
+    if (editing != NULL && editing->state == ASTRA_VOLUME_PARTITIONING)
+        return 0; /* Reobserve after worker and kernel reread, not mid-edit. */
     if (entry != NULL && observation->sequence == 0u)
         return 0; /* enumeration cannot overwrite a processed event */
-    if (entry != NULL && observation->action == ASTRA_STORAGE_OBSERVE_CHANGE && !entry->partition) {
+    if (entry != NULL && observation->action == ASTRA_STORAGE_OBSERVE_CHANGE &&
+        entry->devnum == observation->devnum &&
+        entry->disk_sequence == observation->disk_sequence &&
+        entry->class_id == observation->class_id &&
+        entry->partition == observation->partition &&
+        entry->read_only == observation->read_only &&
+        entry->capacity_bytes == observation->capacity_bytes &&
+        entry->offset_bytes == observation->offset_bytes &&
+        entry->partition_map == observation->partition_map &&
+        entry->partition_number == observation->partition_number) {
+        for (AstraStorageObservationEntry *part = discovery->entries;
+             part != NULL; part = part->next) {
+            const AstraStorageRecord *source = astra_storage_find(
+                &discovery->provider->catalog, part->source);
+            if (part->disk_devnum == entry->disk_devnum &&
+                part->disk_sequence == entry->disk_sequence &&
+                source != NULL && source->state == ASTRA_VOLUME_FORMATTING)
+                return 0;
+        }
+    }
+    if (entry != NULL && !entry->partition &&
+        (observation->action == ASTRA_STORAGE_OBSERVE_CHANGE ||
+         entry->capacity_bytes != observation->capacity_bytes ||
+         entry->partition_map != observation->partition_map ||
+         entry->read_only != observation->read_only)) {
         int error = lose(discovery, entry->medium);
         if (error != 0)
             return error;
@@ -291,7 +548,9 @@ int astra_storage_discovery_observe(AstraStorageDiscovery *discovery,
                 partition->auto_attempted = 0;
             }
     }
-    if (entry != NULL && observation->action == ASTRA_STORAGE_OBSERVE_CHANGE && entry->partition) {
+    if (entry != NULL && entry->partition &&
+        (observation->action == ASTRA_STORAGE_OBSERVE_CHANGE ||
+         entry->read_only != observation->read_only)) {
         int error = lose(discovery, entry->source);
         if (error != 0)
             return error;
@@ -306,8 +565,13 @@ int astra_storage_discovery_observe(AstraStorageDiscovery *discovery,
         entry->source = entry->mount = 0u;
         entry->auto_attempted = 0;
     }
-    if (entry != NULL)
+    if (entry != NULL) {
         entry->read_only = observation->read_only;
+        entry->capacity_bytes = observation->capacity_bytes;
+        entry->offset_bytes = observation->offset_bytes;
+        entry->partition_number = observation->partition_number;
+        entry->partition_map = observation->partition_map;
+    }
     if (entry != NULL && entry->partition && entry->medium == 0u && attach_partition(discovery, entry) == EAGAIN)
         return 0;
     if (entry == NULL) {
@@ -322,11 +586,25 @@ int astra_storage_discovery_observe(AstraStorageDiscovery *discovery,
             }
             error = 0;
         } else
-            error = astra_storage_device(&discovery->provider->catalog, entry->class_id, &entry->device);
+            error = astra_storage_device(&discovery->provider->catalog, entry->class_id,
+                entry->partition_map, entry->capacity_bytes, &entry->device);
         if (error != 0) {
             remove_entry(discovery, entry);
             return error;
         }
+    }
+    if (!entry->partition) {
+        const AstraStorageRecord *device = astra_storage_find(&discovery->provider->catalog, entry->device);
+        int error = device == NULL ? ESTALE : astra_storage_device_geometry(&discovery->provider->catalog,
+            device->id, device->generation, entry->partition_map,
+            entry->capacity_bytes);
+        if (error != 0)
+            return error;
+        error = astra_storage_physical_read_only(&discovery->provider->catalog,
+            device->id, device->generation,
+            entry->read_only || entry->class_id == ASTRA_VOLUME_OPTICAL);
+        if (error != 0)
+            return error;
     }
     if (!observation->media)
         return 0; /* a real empty drive remains a visible device */
@@ -347,17 +625,25 @@ int astra_storage_discovery_poll(AstraStorageDiscovery *discovery)
     if (discovery == NULL || discovery->provider == NULL)
         return EINVAL;
     for (AstraStorageObservationEntry *entry = discovery->entries; entry != NULL; entry = entry->next) {
+        const AstraStorageRecord *device = astra_storage_find(
+            &discovery->provider->catalog, entry->device);
+        if (device != NULL && device->state == ASTRA_VOLUME_PARTITIONING)
+            continue;
         if (entry->partition && entry->medium == 0u) {
             if (attach_partition(discovery, entry) == EAGAIN)
                 continue;
             AstraStorageObservation observation = {.devnode = entry->devnode,
                 .devnum = entry->devnum, .disk_sequence = entry->disk_sequence};
             int error = admit(discovery, entry, &observation);
-            if (error != 0)
+            if (error != 0) {
+                fprintf(stderr, "astra-storage rediscover path=%s error=%d\n",
+                    entry->syspath, error);
                 return error;
+            }
         }
         const AstraStorageRecord *record = astra_storage_find(&discovery->provider->catalog, entry->source);
         if (entry->auto_attempted || record == NULL || record->state == ASTRA_VOLUME_PROBING ||
+            record->state == ASTRA_VOLUME_FORMATTING ||
             entry->class_id == ASTRA_VOLUME_FIXED)
             continue;
         if (record->state != ASTRA_VOLUME_UNMOUNTED) {
@@ -366,15 +652,16 @@ int astra_storage_discovery_poll(AstraStorageDiscovery *discovery)
         }
         uint64_t mount = 0u;
         int error = astra_storage_provider_mount(discovery->provider, record->id, record->generation,
-            entry->class_id == ASTRA_VOLUME_OPTICAL || entry->read_only ||
+            physical_read_only(discovery, entry) ||
             astra_storage_format_read_only(record->format) ?
                 ASTRA_VOLUME_READ_ONLY : 0u,
             0u, 0u, &mount);
-        if (error == EAGAIN)
-            continue; /* worker completion wakes the same owner */
+        if (error == EAGAIN || error == EBUSY)
+            continue; /* sibling format or retained cleanup may complete */
         entry->mount = mount;
         entry->auto_attempted = 1; /* manual unmount must stay unmounted */
-        if (error != 0 && error != ENOTSUP && error != EROFS && error != ENOSPC)
+        if (error != 0 && error != ENOTSUP && error != EROFS &&
+            error != ENOSPC && error != EBUSY)
             return error;
     }
     return 0;
@@ -462,6 +749,14 @@ static uint64_t decimal(const char *text)
     return errno != 0 || *end != '\0' ? 0u : value;
 }
 
+static uint32_t partition_map(const char *type)
+{
+    if (type == NULL) return ASTRA_VOLUME_PARTITION_MAP_NONE;
+    if (strcmp(type, "dos") == 0) return ASTRA_VOLUME_PARTITION_MAP_MBR;
+    if (strcmp(type, "gpt") == 0) return ASTRA_VOLUME_PARTITION_MAP_GPT;
+    return ASTRA_VOLUME_PARTITION_MAP_OTHER;
+}
+
 static int one(struct udev_device *device, const char *name)
 {
     const char *value = udev_device_get_property_value(device, name);
@@ -481,7 +776,7 @@ static int observe_device(AstraStorageDiscovery *discovery, struct udev_device *
     /* Loop images belong only to explicit trusted/native image admission.
      * They must never be rediscovered as physical fixed/USB disks. */
     const char *sysname = udev_device_get_sysname(disk);
-    if (number == 0 || disk_number == 0 || sysname == NULL ||
+    if (sysname == NULL ||
         strncmp(sysname, "loop", 4u) == 0 || strncmp(sysname, "ram", 3u) == 0)
         return 0;
     if (enumeration && !udev_device_get_is_initialized(device))
@@ -498,23 +793,46 @@ static int observe_device(AstraStorageDiscovery *discovery, struct udev_device *
     const char *bus = udev_device_get_property_value(disk, "ID_BUS");
     int optical = one(disk, "ID_CDROM");
     const char *node = udev_device_get_devnode(device);
+    const char *syspath = udev_device_get_syspath(device);
+    AstraStorageObservationEntry *known = syspath == NULL ? NULL : find(discovery, syspath);
+    const char *disk_syspath = udev_device_get_syspath(disk);
     const char *ro = udev_device_get_sysattr_value(device, "ro");
+    uint64_t sectors = decimal(udev_device_get_sysattr_value(device, "size"));
+    uint64_t start = strcmp(type, "partition") == 0 ?
+        decimal(udev_device_get_sysattr_value(device, "start")) : 0u;
+    uint64_t partition_index = strcmp(type, "partition") == 0 ?
+        decimal(udev_device_get_sysattr_value(device, "partition")) : 0u;
+    if (sectors > UINT64_MAX / 512u || start > UINT64_MAX / 512u ||
+        partition_index > UINT32_MAX)
+        return EINVAL;
+    if (known != NULL && (operation == ASTRA_STORAGE_OBSERVE_REMOVE ||
+        (operation == ASTRA_STORAGE_OBSERVE_CHANGE &&
+         strcmp(type, "partition") == 0 && (sectors == 0u || partition_index == 0u)))) {
+        if (node == NULL) node = known->devnode;
+        if (number == 0) number = known->devnum;
+        if (disk_number == 0) disk_number = known->disk_devnum;
+        if (disk_syspath == NULL) disk_syspath = known->disk_syspath;
+    }
+    if (number == 0 || disk_number == 0 || syspath == NULL ||
+        disk_syspath == NULL || node == NULL)
+        return 0; /* An unidentified event cannot replace a known device. */
     AstraStorageObservation observation = {
-        .syspath = udev_device_get_syspath(device), .disk_syspath = udev_device_get_syspath(disk),
+        .syspath = syspath, .disk_syspath = disk_syspath,
         .devnode = node, .devnum = number, .disk_devnum = disk_number,
         .sequence = enumeration ? 0u : udev_device_get_seqnum(device),
         .disk_sequence = decimal(udev_device_get_property_value(device, "DISKSEQ")),
+        .capacity_bytes = sectors * 512u, .offset_bytes = start * 512u,
         .action = operation, .class_id = optical ? ASTRA_VOLUME_OPTICAL :
             bus != NULL && strcmp(bus, "usb") == 0 ? ASTRA_VOLUME_USB : ASTRA_VOLUME_FIXED,
         .partition = strcmp(type, "partition") == 0,
+        .partition_number = (uint32_t)partition_index,
+        .partition_map = partition_map(udev_device_get_property_value(disk, "ID_PART_TABLE_TYPE")),
         .media = optical ? one(disk, "ID_CDROM_MEDIA") : 1,
         .partition_table = udev_device_get_property_value(disk, "ID_PART_TABLE_TYPE") != NULL,
         .read_only = ro != NULL && strcmp(ro, "1") == 0
     };
     if (observation.disk_sequence == 0u)
         observation.disk_sequence = decimal(udev_device_get_sysattr_value(disk, "diskseq"));
-    if (node == NULL)
-        return ENODEV; /* processed block events must identify their devnode */
     return astra_storage_discovery_observe(discovery, &observation);
 }
 
@@ -528,6 +846,12 @@ int astra_storage_discovery_receive(AstraStorageDiscovery *discovery)
         if (device == NULL)
             return errno == 0 || errno == EAGAIN || errno == EWOULDBLOCK ? 0 : errno;
         int error = observe_device(discovery, device, 0);
+        if (error != 0)
+            fprintf(stderr, "astra-storage block event action=%s type=%s path=%s error=%d\n",
+                udev_device_get_action(device) == NULL ? "?" : udev_device_get_action(device),
+                udev_device_get_devtype(device) == NULL ? "?" : udev_device_get_devtype(device),
+                udev_device_get_syspath(device) == NULL ? "?" : udev_device_get_syspath(device),
+                error);
         udev_device_unref(device);
         if (error != 0)
             return error;

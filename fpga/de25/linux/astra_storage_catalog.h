@@ -32,11 +32,23 @@ int astra_storage_binding(AstraStorageCatalog *catalog, uint64_t mount,
                           uint64_t generation, uint64_t linux_mount_id,
                           const char *name, uint32_t flags, uint64_t *id);
 int astra_storage_device(AstraStorageCatalog *catalog, uint32_t class_id,
+                         uint32_t partition_map, uint64_t capacity_bytes,
                          uint64_t *id);
 int astra_storage_medium(AstraStorageCatalog *catalog, uint64_t device,
                          uint64_t generation, uint64_t *id);
 int astra_storage_source(AstraStorageCatalog *catalog, uint64_t medium,
-                         uint64_t generation, uint64_t *id);
+                         uint64_t generation, uint32_t partition_map,
+                         uint32_t partition_number, uint64_t offset_bytes,
+                         uint64_t capacity_bytes, uint64_t *id);
+/* Only device size/map may refresh in place. A changed partition incarnation
+ * gets a new source instead of repurposing its published bounds. */
+int astra_storage_device_geometry(AstraStorageCatalog *catalog, uint64_t id,
+                                  uint64_t generation, uint32_t partition_map,
+                                  uint64_t capacity_bytes);
+/* Physical media policy from the observed block device. Format policy is
+ * added by probe_result; neither caller may silently authorize writes. */
+int astra_storage_physical_read_only(AstraStorageCatalog *catalog, uint64_t id,
+                                     uint64_t generation, int read_only);
 /* Configured tmpfs is a source, not a fabricated physical disk or medium. */
 int astra_storage_ram_source(AstraStorageCatalog *catalog, uint32_t flags, uint64_t *id);
 /* Trusted launcher selection, not a fabricated physical device/medium. */
@@ -48,6 +60,7 @@ int astra_storage_image_source(AstraStorageCatalog *catalog, uint64_t mount,
 int astra_storage_probe_result(AstraStorageCatalog *catalog, uint64_t source,
                                uint64_t generation, uint32_t format,
                                const char *uuid, const char *label,
+                               const char *detected_type,
                                int ambiguous, int error);
 int astra_storage_mount_begin(AstraStorageCatalog *catalog, uint64_t source,
                               uint64_t generation, uint32_t flags,
@@ -66,9 +79,32 @@ int astra_storage_eject_begin(AstraStorageCatalog *catalog, uint64_t source,
     uint64_t generation);
 int astra_storage_eject_result(AstraStorageCatalog *catalog, uint64_t source,
     uint64_t generation, int error);
-/* Includes an admitted mount worker and retained real cleanup, not just
- * publicly usable mounts. Used by source release and optical eject. */
+/* Includes descendant mount workers and retained real cleanup, not just
+ * publicly usable mounts. Used by source release, optical eject and disk edit. */
 int astra_storage_no_mounted_children(const AstraStorageCatalog *catalog, uint64_t source);
+/* Device-wide edit admission before opening the exact parent block device.
+ * Provider must also check live probe/work resources before worker start. */
+int astra_storage_partition_can_edit(const AstraStorageCatalog *catalog,
+    uint64_t device, uint64_t generation);
+int astra_storage_partition_begin(AstraStorageCatalog *catalog,
+    uint64_t device, uint64_t generation);
+/* Abort is valid only before the worker writes; after a worker attempt the
+ * provider must reread the kernel table and complete, even on tool failure. */
+int astra_storage_partition_abort(AstraStorageCatalog *catalog,
+    uint64_t device, uint64_t generation);
+/* Caller has retired child resources and completed the kernel reread. Old
+ * descendant references become stale; discovery publishes fresh media. */
+int astra_storage_partition_complete(AstraStorageCatalog *catalog,
+    uint64_t device, uint64_t generation, int result);
+/* An exclusive physical format fences all sibling mounts and source admissions.
+ * Completion always enters a fresh probe; job outcome is retained separately. */
+int astra_storage_format_begin(AstraStorageCatalog *catalog, uint64_t source,
+    uint64_t generation);
+/* Admission failed before worker start: original media and probe stay valid. */
+int astra_storage_format_abort(AstraStorageCatalog *catalog, uint64_t source,
+    uint64_t generation);
+int astra_storage_format_complete(AstraStorageCatalog *catalog, uint64_t source,
+    uint64_t generation);
 /* Called after real Linux unmount or refusal, never for a lazy detach. */
 int astra_storage_unmount_result(AstraStorageCatalog *catalog, uint64_t mount,
                                  uint64_t generation, int error,
