@@ -20,11 +20,18 @@ SHA-256 `566efe82ff7efb0f1fcb4f892b4dced089c4b710c17535d494882928bbb0ae80`.
 Desktop showed every volume icon and Atlas opened `/cd0` with three entries,
 one folder and status zero. Beast gates passed: storage name persistence,
 catalog, discovery, provider, launcher, runtime launcher and service contract.
+Native `unmount --eject /cd0` then ejected this ISO9660 DVD-R: Terminal
+reported `ejected`, Linux removed its media identity, native inventory dropped
+`/cd0` while preserving `/usb0` through `/usb2`, and the Desktop icon vanished
+in a captured remote-desktop frame. Astra stayed active with zero restarts.
+This drive cannot close its tray by command; physical reinsertion and automatic
+remount of this data disc await the user.
 Evidence: Beast `/var/tmp/astra-stable-usb-publish-20261024.log` and
 `/var/tmp/astra-stable-usb-deploy-20261024.log`; board WORK
 `stable-before-volumes.txt`, `stable-after-volumes.txt`,
-`stable-cd-read.txt`, `stable-udf-read.txt`, `stablefat.txt` and
-`stableexfat.txt`. Haiku's `src/servers/mount/AutoMounter.cpp` restores prior
+`stable-cd-read.txt`, `stable-udf-read.txt`, `stablefat.txt`,
+`stableexfat.txt`, and `cd-eject-after.txt`; local remote-desktop capture is
+`/private/tmp/astra-cd-ejected.png`. Haiku's `src/servers/mount/AutoMounter.cpp` restores prior
 partition mount settings by saved device/partition identity; Astra adapts that
 pattern to native path reservations and exact mount generations. Physical
 CD-R remains unqualified because only DVD-R media is available. Board host
@@ -36,7 +43,9 @@ was saved in WORK `inspect-ramfs-service.txt`, then disabled through native
 `service disable ramfs`, preserving the file for recovery. After clean
 stop/start, service inspection showed `boot: no`, the latest boot had no
 `ramfs:2: failed`, `/ram0` appeared on Desktop, and `astra.service` stayed
-active with `Result=success NRestarts=0`. Performance qualification remains
+active with `Result=success NRestarts=0`. Native Terminal also created, read,
+and removed `/ram0/ramgate.txt` successfully; WORK `ram-gate-read.txt` holds
+the readback. Performance qualification remains
 deferred.
 
 Latest physical optical checkpoint, 2026-10-24: a Pioneer BDR-XD08
@@ -132,7 +141,8 @@ auto-mounted it read-only at `/cd0`, showed `ASTRA_CD` on Desktop, and Atlas
 opened its root with three entries and one folder. Native Terminal listed root
 and `FOLDER`; all three native file reads matched source SHA-256, including
 `SECTORS.TXT` across multiple sectors. Physical CD-R medium and this disc's
-eject/reinsertion lifecycle remain separate gates. During `wodim`/`growisofs`
+reinsertion lifecycle remain separate gates; native eject passed above. During
+`wodim`/`growisofs`
 package installation, Linux OOM killed QEMU; systemd restarted Astra once.
 This was host memory exhaustion, not a guest kernel panic. Resource policy for
 package maintenance under the 512 MiB guest requires investigation.
