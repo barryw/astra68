@@ -24,14 +24,32 @@ Native `unmount --eject /cd0` then ejected this ISO9660 DVD-R: Terminal
 reported `ejected`, Linux removed its media identity, native inventory dropped
 `/cd0` while preserving `/usb0` through `/usb2`, and the Desktop icon vanished
 in a captured remote-desktop frame. Astra stayed active with zero restarts.
-This drive cannot close its tray by command; physical reinsertion and automatic
-remount of this data disc await the user.
+This drive cannot close its tray by command. After manual reinsertion, Linux
+reported `ID_FS_TYPE=iso9660` and `ID_FS_LABEL=ASTRA_CD`; Astra discovered new
+optical device/medium/source/mount IDs 22–25 and automatically remounted `/cd0`
+read-only. Native `README.TXT` readback matched the source SHA-256 above;
+Desktop restored `ASTRA_CD`, and Atlas opened its root with three entries,
+one folder and status zero. The service remained active with zero restarts.
+Native safe removal also refused `unmount /usb1` while Terminal held
+`/usb1/Folder`, naming PID 17's directory handle and the exact path. After
+Terminal left that directory, unmount removed `/usb1` and its Desktop icon
+while preserving `/usb0`, `/usb2` and `/cd0`. Native `mount --read-only 16`
+restored the same UDF partition at `/usb1` (new mount ID 26); Desktop restored
+its icon, and `Folder/README.TXT` read back
+`Astra USB UDF gate 2026-10-24`. The service remained active with
+`Result=success NRestarts=0`.
 Evidence: Beast `/var/tmp/astra-stable-usb-publish-20261024.log` and
 `/var/tmp/astra-stable-usb-deploy-20261024.log`; board WORK
 `stable-before-volumes.txt`, `stable-after-volumes.txt`,
 `stable-cd-read.txt`, `stable-udf-read.txt`, `stablefat.txt`,
-`stableexfat.txt`, and `cd-eject-after.txt`; local remote-desktop capture is
-`/private/tmp/astra-cd-ejected.png`. Haiku's `src/servers/mount/AutoMounter.cpp` restores prior
+`stableexfat.txt`, `cd-eject-after.txt`, `cd-reinsert-volumes.txt`,
+`cd-reinsert-read.txt`, `udf-holder-cwd.txt`, `udf-holder-lsof.txt`,
+`udf-busy-volumes.txt`, `udf-unmounted-volumes.txt`,
+`udf-remounted-volumes.txt` and `udf-remount-read.txt`; local remote-desktop
+captures are `/private/tmp/astra-cd-ejected.png` and
+`/private/tmp/astra-udf-busy.png`. Desktop syslog at 18:38:28 and 18:38:39 UTC
+records `/usb1` icon withdrawal and restoration. Haiku's
+`src/servers/mount/AutoMounter.cpp` restores prior
 partition mount settings by saved device/partition identity; Astra adapts that
 pattern to native path reservations and exact mount generations. Physical
 CD-R remains unqualified because only DVD-R media is available. Board host
@@ -140,8 +158,9 @@ Production release `0828d7670691c135f6745d003332d45361f893fff564dc18d9d28225640f
 auto-mounted it read-only at `/cd0`, showed `ASTRA_CD` on Desktop, and Atlas
 opened its root with three entries and one folder. Native Terminal listed root
 and `FOLDER`; all three native file reads matched source SHA-256, including
-`SECTORS.TXT` across multiple sectors. Physical CD-R medium and this disc's
-reinsertion lifecycle remain separate gates; native eject passed above. During
+`SECTORS.TXT` across multiple sectors. Physical CD-R medium remains a separate
+gate; native eject and automatic reinsertion remount of this DVD-R passed
+above. During
 `wodim`/`growisofs`
 package installation, Linux OOM killed QEMU; systemd restarted Astra once.
 This was host memory exhaustion, not a guest kernel panic. Resource policy for
