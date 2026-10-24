@@ -68,8 +68,9 @@ byte geometry using the observed disk's logical sector size. All edits
 require `ERASE` and refuse mounted siblings. The provider retains
 `PARTITIONING` through worker completion, source retirement and Linux map
 reread. Native GPT edits, post-edit rediscovery and FAT32/exFAT formatting
-passed private DE25 physical gates; the MBR edit worker passed disposable
-Beast loop gates. The
+passed private DE25 physical gates. Native MBR initialize, FAT32 create,
+format, access and delete passed a later physical DE25 gate on the disposable
+SanDisk; the restored GPT fixtures passed native access checks. The
 [production PRD](FILESYSTEM_PRODUCTION_PRD.md) requires exact-reference
 destructive-operation checks. The 2026-10-22 physical USB
 test qualified one ext4 partition. A 2026-10-23 private DE25 run qualified

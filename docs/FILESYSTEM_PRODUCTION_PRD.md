@@ -149,8 +149,10 @@ on eligible storage, FAT12/FAT16 read-only on USB, ISO9660/UDF read-only on
 optical or USB media, NTFS read-only on fixed/USB data partitions, and tmpfs for
 RAM. FAT12/FAT16, USB ISO9660, NTFS, FAT32 and exFAT have passed guarded
 physical DE25 trials; FAT32 and exFAT also passed native Disk Setup formatting
-and automatic remount on disposable media. Physical data-CD, optical media
-change and eject still need qualification. The supported
+and automatic remount on disposable media. Native MBR initialize, FAT32
+create/format and delete also passed a physical DE25 gate. Physical ISO9660
+data-CD insertion and read remain unqualified; a UDF DVD passed physical media
+change and eject. The supported
 format/transport policy is extended in this order:
 
 | Priority | Formats | Intended capability and qualification |

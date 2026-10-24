@@ -48,6 +48,39 @@ one. It read the UDF fixture and refused a write with status one; the attempted
 file was absent. `astra.service NRestarts=0`. Board evidence:
 `/var/lib/astra/hostfs/work/final-usb-*.txt` and matching status files.
 
+Physical MBR gate, 2026-10-24: on that same selected release and the
+user-authorized disposable SanDisk Cruzer (`FC006A81F5493213`), native Terminal
+unmounted all three GPT partitions. Disk Setup initialized an MBR map, created a
+256 MiB FAT32 partition, formatted it as `ASTRAMBR`, and deleted it after a
+native `/usb0` create/read/remove test. The shorter partition initially
+retained the old 4 GiB FAT boot sector; the provider correctly reported its
+source `FAILED` and did not mount it until native formatting completed. Disk
+Setup then initialized GPT. With Astra stopped, the exact prior three-entry
+GPT table was restored; FAT32 was reformatted at its original 4 GiB extent,
+while exFAT and UDF content remained intact. The UDF partition's full 64 MiB
+SHA-256 matched its pretest backup
+(`8b0a7e0b14fc260713244855fca73dc5e02fc96e5f750c816b7bd7871c7f5414`).
+After restart, all three services were active, `astra.service NRestarts=0`,
+and native FAT32/exFAT write-read-remove and UDF read passed. The active-slot
+`/usbN` assignments changed across restart: UDF `/usb0`, exFAT `/usb1`,
+FAT32 `/usb2`. The current PRD permits dynamic slots; stable assignments for
+the same medium are under product review. Board evidence:
+`/var/tmp/astra-mbr-physical-20261024/` and
+`/var/lib/astra/hostfs/work/mbr-*.txt`. Stopping `astra.service` returned
+`exit-code` after its provider sent QEMU SIGTERM and the launcher saw a broken
+pipe; `reset-failed` plus a fresh start succeeded. This shutdown status needs
+separate investigation before calling stop/restart clean.
+
+Physical ISO9660 data-CD fixture, 2026-10-24: Beast generated a 410 KiB
+ISO9660/Joliet/Rock Ridge image named `ASTRA_CD`, with root `README.TXT`,
+`SECTORS.TXT` (2,048 generated lines spanning sectors), and
+`FOLDER/NESTED.TXT`. `isoinfo` verified the image structure and extracted all
+three files byte-for-byte against their source checksums. Local burn image:
+`build/data-cd-fixture/Astra68-Data-CD.iso`, SHA-256
+`0a20bd5c15a66b2eafd2c18cd284a62e2c5a1a8c41486adf2b4d2ef935fed11c`.
+It must be burned as an image to CD-R or CD-RW; physical insertion and native
+read/eject remain unqualified until that disc is available.
+
 Previous production filesystem checkpoint, 2026-10-24: coherent release
 `2fd5a272d3f75564800f0b41a398739551ee61cc4d61e5907f1636c0db617b31`
 was selected and running on DE25. Optical eject now refuses while **any**
