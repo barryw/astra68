@@ -6,9 +6,11 @@ and the Linux-owned fixed/removable/optical/ISO/RAM provider. Native lifecycle,
 exact file/CWD busy removal, recovery, durability and Atlas overflow pass their
 current gates. Coherent release `2fd5a272` runs on DE25 after stopped-state
 migration; native USB FAT32/exFAT mounts and read/write passed in private and
-production boots. Optical sibling-mount eject safety and Desktop Eject passed
-software gates; physical data-CD/media-change/eject and complete performance
-qualification remain open. [Current state](CURRENT_STATE.md) records evidence.
+production boots. Physical USB UDF also passed read-only guest, Atlas,
+unmount and remount gates. Optical sibling-mount eject safety and Desktop
+Eject passed software gates; physical data-CD/media-change/eject and complete
+performance qualification remain open. [Current state](CURRENT_STATE.md)
+records evidence.
 Network mounts are excluded from this completion task. Performance acceptance
 follows correctness.
 

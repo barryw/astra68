@@ -35,6 +35,25 @@ Physical data CD, optical media change and physical eject remain unqualified
 because no optical drive/disc is attached. Performance qualification remains
 deferred until correctness gates finish.
 
+Latest physical USB UDF gate, 2026-10-24: on the user-authorized disposable
+SanDisk Cruzer serial `FC006A81F5493213`, a 64 MiB GPT third partition was
+added after the existing 4 GiB FAT32 and exFAT partitions without changing
+their extents. A `genisoimage -udf` fixture was verified as UDF on Beast and
+as a read-only Linux mount on DE25 before Astra started. The selected
+production release discovered all three partitions simultaneously and
+auto-mounted UDF `ASTRA_UDF` at `/usb2` read-only. Native `volumes --all`
+reported source 13, partition 3 and exact geometry. Guest `cat` read the
+fixture bytes; a guest write returned status 1 and no file appeared in the
+provider mount. Double-click opened Atlas on `/usb2` with one root folder.
+After closing Atlas, native `unmount /usb2` succeeded and its Desktop icon
+disappeared; `mount --read-only 13` restored the icon and exact file contents.
+Provider mountinfo showed `udf` with `ro`, and all three host services are
+active with `astra.service NRestarts=0`. The panic report predates this boot.
+Board evidence: `/var/tmp/astra-usb-udf-gate-20261024/` (fixture, partition
+tables and QMP gate script), `/var/lib/astra/hostfs/work/udf-20261024-*.txt`
+(guest command outputs), and `.astra/syslog` in that WORK export (Desktop and
+Atlas logs). Physical data-CD/media-change/eject gates remain open.
+
 Previous production filesystem checkpoint, 2026-10-24: coherent release
 `04aa23c8dd06eeba18f8c972cb27dc4ad360de59b96e67a2140eda0de2dde5d8`
 was selected and ran on DE25. The stopped legacy `/dh0` image was copied,
