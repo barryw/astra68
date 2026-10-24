@@ -54,10 +54,13 @@ def main():
         "--ambient-caps=-all", "taskset", "-c", args.aux_cpu, "python3", args.input,
         "--qmp", args.qmp]
     stopping = threading.Event()
+    service_stop = threading.Event()
     def request_stop(number, frame):
-        del number, frame
+        del frame
+        if number == signal.SIGUSR1:
+            service_stop.set()
         stopping.set()
-    for number in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    for number in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGUSR1):
         signal.signal(number, request_stop)
     display = input_child = provider = reader = None
     console_error = []
@@ -114,10 +117,11 @@ def main():
             reader.join()
     for path in (args.qmp, args.remote_qmp):
         Path(path).unlink(missing_ok=True)
-    if args.console.exists() and b"*** AXIOM KERNEL PANIC ***" in args.console.read_bytes():
+    panicked = args.console.exists() and b"*** AXIOM KERNEL PANIC ***" in args.console.read_bytes()
+    if panicked:
         shutil.copyfile(args.console, args.panic)
     if stopping.is_set() or console_error:
-        return 1
+        return 0 if service_stop.is_set() and status == 0 and not console_error and not panicked else 1
     if status in (88, 89):
         action = "poweroff" if status == 88 else "reboot"
         if subprocess.run(["systemctl", action, "--no-block"], check=False).returncode == 0:

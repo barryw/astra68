@@ -715,8 +715,15 @@ int astra_storage_provider_mount(AstraStorageProvider *provider, uint64_t source
             if (error != 0) return error;
         }
     }
+    uint32_t usb_slot = UINT32_MAX;
+    if (record->class_id == ASTRA_VOLUME_USB && provider->discovery != NULL) {
+        error = astra_storage_names_select(&provider->discovery->names,
+            astra_storage_discovery_key(provider->discovery, source),
+            &provider->catalog, &usb_slot);
+        if (error != 0) return error;
+    }
     error = astra_storage_mount_begin(&provider->catalog, source, generation,
-                                       flags, bytes, inodes, mount);
+                                       flags, bytes, inodes, usb_slot, mount);
     if (error != 0)
         return error;
     entry = reserve(provider, *mount, 1u);

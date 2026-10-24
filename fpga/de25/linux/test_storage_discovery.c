@@ -42,7 +42,8 @@ static void optical(void)
 {
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     assert(astra_storage_catalog_init(&provider.catalog, 1u << 20) == 0);
-    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20,
+        .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
     AstraStorageObservation observation = {.syspath = "/sys/devices/test/sr0", .disk_syspath = "/sys/devices/test/sr0",
         .devnode = "/dev/null", .devnum = makedev(11u, 0u), .disk_devnum = makedev(11u, 0u),
         .sequence = 100u, .disk_sequence = 9u, .action = ASTRA_STORAGE_OBSERVE_PRESENT,
@@ -111,7 +112,7 @@ static void partitions_and_reserved(void)
 {
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     assert(astra_storage_catalog_init(&provider.catalog, 1u << 20) == 0);
-    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
     AstraStorageObservation disk = {.syspath = "/sys/devices/test/sda", .disk_syspath = "/sys/devices/test/sda",
         .devnode = "/dev/null", .devnum = makedev(8u, 0u), .disk_devnum = makedev(8u, 0u),
         .sequence = 200u, .disk_sequence = 10u, .action = ASTRA_STORAGE_OBSERVE_PRESENT,
@@ -165,7 +166,7 @@ static void optical_partition_inherits_protection(void)
 {
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     assert(astra_storage_catalog_init(&provider.catalog, 1u << 20) == 0);
-    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
     AstraStorageObservation disk = {.syspath = "/sys/devices/test/sr1",
         .disk_syspath = "/sys/devices/test/sr1", .devnode = "/dev/null",
         .devnum = makedev(11u, 1u), .disk_devnum = makedev(11u, 1u),
@@ -193,7 +194,7 @@ static void parent_order(void)
 {
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     assert(astra_storage_catalog_init(&provider.catalog, 1u << 20) == 0);
-    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
     AstraStorageObservation disk = {.syspath = "/sys/devices/test/sdb", .disk_syspath = "/sys/devices/test/sdb",
         .devnode = "/dev/null", .devnum = makedev(8u, 16u), .disk_devnum = makedev(8u, 16u),
         .sequence = 10u, .disk_sequence = 22u, .action = ASTRA_STORAGE_OBSERVE_PRESENT,
@@ -231,7 +232,7 @@ static void independent_partition_geometry(void)
 {
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     assert(astra_storage_catalog_init(&provider.catalog, 1u << 20) == 0);
-    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
     AstraStorageObservation disk = {.syspath = "/sys/devices/test/sdc",
         .disk_syspath = "/sys/devices/test/sdc", .devnode = "/dev/null",
         .devnum = makedev(8u, 32u), .disk_devnum = makedev(8u, 32u),
@@ -319,7 +320,7 @@ static void budget(void)
 {
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     assert(astra_storage_catalog_init(&provider.catalog, 1u << 20) == 0);
-    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u, .fd = -1};
+    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u, .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
     AstraStorageObservation observation = {.syspath = "/sys/devices/test/sda", .disk_syspath = "/sys/devices/test/sda",
         .devnode = "/dev/null", .devnum = makedev(8u, 0u), .disk_devnum = makedev(8u, 0u),
         .sequence = 1u, .action = ASTRA_STORAGE_OBSERVE_PRESENT, .class_id = ASTRA_VOLUME_USB};
@@ -333,7 +334,7 @@ static void format_target_identity(void)
 {
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     assert(astra_storage_catalog_init(&provider.catalog, 1u << 20) == 0);
-    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
     AstraStorageObservation disk = {.syspath = "/sys/devices/test/format",
         .disk_syspath = "/sys/devices/test/format", .devnode = "/dev/null",
         .devnum = makedev(8u, 224u), .disk_devnum = makedev(8u, 224u),
@@ -366,7 +367,7 @@ static void partition_edit_fence(void)
 {
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     assert(astra_storage_catalog_init(&provider.catalog, 1u << 20) == 0);
-    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageDiscovery discovery = {.provider = &provider, .byte_limit = 1u << 20, .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
     AstraStorageObservation disk = {.syspath = "/sys/devices/test/edit-disk",
         .disk_syspath = "/sys/devices/test/edit-disk", .devnode = "/dev/null",
         .devnum = makedev(8u, 225u), .disk_devnum = makedev(8u, 225u),

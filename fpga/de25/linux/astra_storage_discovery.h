@@ -2,6 +2,7 @@
 #define ASTRA_STORAGE_DISCOVERY_H
 
 #include "astra_storage_provider.h"
+#include "astra_storage_names.h"
 #include <sys/types.h>
 
 struct udev;
@@ -19,12 +20,13 @@ typedef struct AstraStorageDiscovery {
     AstraStorageObservationEntry *entries;
     AstraStorageReservedDevice *reserved;
     AstraStorageDeviceSequence *sequences;
+    AstraStorageNames names;
     size_t bytes;
     size_t byte_limit;
     int fd;
 } AstraStorageDiscovery;
 
-#define ASTRA_STORAGE_DISCOVERY_INIT { .fd = -1 }
+#define ASTRA_STORAGE_DISCOVERY_INIT { .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1 }
 
 enum AstraStorageObservationAction {
     ASTRA_STORAGE_OBSERVE_PRESENT = 1,
@@ -54,12 +56,16 @@ typedef struct AstraStorageObservation {
     int media;
     int partition_table;
     int read_only;
+    const char *stable_key;
 } AstraStorageObservation;
 
 /* Subscribe to processed udev before enumerating. Reserve all existing Linux
  * mounted devices, their containing disks and recursively their slaves. */
 int astra_storage_discovery_open(AstraStorageDiscovery *discovery,
-                                  AstraStorageProvider *provider, size_t bytes);
+                                  AstraStorageProvider *provider, size_t bytes,
+                                  const char *name_state_directory);
+const char *astra_storage_discovery_key(const AstraStorageDiscovery *discovery,
+                                        uint64_t source);
 void astra_storage_discovery_close(AstraStorageDiscovery *discovery);
 int astra_storage_discovery_receive(AstraStorageDiscovery *discovery);
 int astra_storage_discovery_poll(AstraStorageDiscovery *discovery);

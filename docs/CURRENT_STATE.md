@@ -2,6 +2,36 @@
 
 Status: active continuation map, 2026-10-24
 
+Current DE25 filesystem release, 2026-10-24: coherent release
+`60a20f99ae0a385ec246ac58f057a0a12839f6b01e334fe913227e085229bcf6`
+passed package verification and normal deployment (`ASTRA_DE25_RELEASE PASS`),
+with kernel identity `cbb18f706daf0daeb4c74260a321a2cb9d63c3d758eb655b21bba77c7f4bbdb6`.
+All three services are active; `astra.service Result=success NRestarts=0`.
+The provider now persists USB `/usbN` reservations in root-owned, checksummed
+state by USB serial plus partition number, falling back to partition UUID.
+Before and after an explicit clean `systemctl stop`/`start`, native
+`volumes --all` showed FAT32 `ASTRA_FAT` read/write at `/usb0`, UDF
+`ASTRA_UDF` read-only at `/usb1`, exFAT `ASTRA_EXFAT` read/write at `/usb2`,
+and ISO9660 `ASTRA_CD` read-only at `/cd0`. Stop returned `Result=success`,
+`ExecMainStatus=0` and no QEMU process; restart kept all four paths. Native
+FAT32 and exFAT write/read/remove passed after restart; UDF
+`Folder/README.TXT` read succeeded; ISO9660 `README.TXT` matched source
+SHA-256 `566efe82ff7efb0f1fcb4f892b4dced089c4b710c17535d494882928bbb0ae80`.
+Desktop showed every volume icon and Atlas opened `/cd0` with three entries,
+one folder and status zero. Beast gates passed: storage name persistence,
+catalog, discovery, provider, launcher, runtime launcher and service contract.
+Evidence: Beast `/var/tmp/astra-stable-usb-publish-20261024.log` and
+`/var/tmp/astra-stable-usb-deploy-20261024.log`; board WORK
+`stable-before-volumes.txt`, `stable-after-volumes.txt`,
+`stable-cd-read.txt`, `stable-udf-read.txt`, `stablefat.txt` and
+`stableexfat.txt`. Haiku's `src/servers/mount/AutoMounter.cpp` restores prior
+partition mount settings by saved device/partition identity; Astra adapts that
+pattern to native path reservations and exact mount generations. Physical
+CD-R remains unqualified because only DVD-R media is available. Board host
+OOM during package installation and recurring historical `ramfs:2: failed`
+supervisor log need separate diagnosis; neither occurred as a guest panic in
+this release gate. Performance qualification remains deferred.
+
 Latest physical optical checkpoint, 2026-10-24: a Pioneer BDR-XD08
 (`08e4:017a`, serial `1854081922802053`) with the SpongeBob `DVD_VIDEO`
 UDF DVD auto-mounted read-only at `/cd0` on the production DE25. The Desktop
@@ -25,7 +55,8 @@ all three services were active with `astra.service NRestarts=0`. After the
 user reinserted the DVD, the final release auto-mounted `/cd0`, showed its
 Desktop icon, and Atlas enumerated one root folder. Desktop context Eject
 then withdrew the icon, removed the disc and logged `desktop volume ejected`
-without a service restart. A physical ISO9660 data CD remains unqualified.
+without a service restart. ISO9660 on recordable DVD is now qualified below;
+CD-R media remains unqualified.
 Haiku reference: `src/add-ons/kernel/drivers/disk/scsi/scsi_cd/scsi_cd.cpp`
 uses a SCSI start/stop eject operation; Astra retains the Linux optical ioctl
 path behind its native volume lifecycle. Beast evidence:
@@ -63,13 +94,21 @@ SHA-256 matched its pretest backup
 After restart, all three services were active, `astra.service NRestarts=0`,
 and native FAT32/exFAT write-read-remove and UDF read passed. The active-slot
 `/usbN` assignments changed across restart: UDF `/usb0`, exFAT `/usb1`,
-FAT32 `/usb2`. The current PRD permits dynamic slots; stable assignments for
-the same medium are under product review. Board evidence:
+FAT32 `/usb2`. The user now requires stable `/usbN` assignments for the same
+physical drive across reboot; current dynamic policy must be replaced. Board evidence:
 `/var/tmp/astra-mbr-physical-20261024/` and
 `/var/lib/astra/hostfs/work/mbr-*.txt`. Stopping `astra.service` returned
 `exit-code` after its provider sent QEMU SIGTERM and the launcher saw a broken
-pipe; `reset-failed` plus a fresh start succeeded. This shutdown status needs
-separate investigation before calling stop/restart clean.
+pipe; `reset-failed` plus a fresh start succeeded. The source now distinguishes
+an explicit systemd SIGUSR1 stop from unexpected TERM, and reports a clean
+provider stop only after QEMU exits and storage cleanup succeeds. Beast's
+storage-launcher, runtime-supervisor and service-contract tests pass. The first
+DE25 trial still marked stop failed because QEMU handles SIGTERM and exits 0;
+the provider accepted only direct SIGTERM death. That condition and its
+QEMU-style launcher test are corrected in source; the clean DE25 stop/restart
+gate passed in the current release above. Haiku reference:
+`src/servers/launch/LaunchDaemon.cpp` handles explicit target stop separately
+from job failure, requesting graceful quit before falling back to SIGTERM.
 
 Physical ISO9660 data-CD fixture, 2026-10-24: Beast generated a 410 KiB
 ISO9660/Joliet/Rock Ridge image named `ASTRA_CD`, with root `README.TXT`,
@@ -78,8 +117,18 @@ ISO9660/Joliet/Rock Ridge image named `ASTRA_CD`, with root `README.TXT`,
 three files byte-for-byte against their source checksums. Local burn image:
 `build/data-cd-fixture/Astra68-Data-CD.iso`, SHA-256
 `0a20bd5c15a66b2eafd2c18cd284a62e2c5a1a8c41486adf2b4d2ef935fed11c`.
-It must be burned as an image to CD-R or CD-RW; physical insertion and native
-read/eject remain unqualified until that disc is available.
+The user supplied blank DVD-R. Pioneer BDR-XD08 burned and finalized this image;
+after reinsertion, `/dev/sr0` reported `iso9660 ASTRA_CD` and its first 205
+2048-byte sectors matched the image SHA-256 exactly (three trailing pad sectors).
+Production release `0828d7670691c135f6745d003332d45361f893fff564dc18d9d28225640f29c3`
+auto-mounted it read-only at `/cd0`, showed `ASTRA_CD` on Desktop, and Atlas
+opened its root with three entries and one folder. Native Terminal listed root
+and `FOLDER`; all three native file reads matched source SHA-256, including
+`SECTORS.TXT` across multiple sectors. Physical CD-R medium and this disc's
+eject/reinsertion lifecycle remain separate gates. During `wodim`/`growisofs`
+package installation, Linux OOM killed QEMU; systemd restarted Astra once.
+This was host memory exhaustion, not a guest kernel panic. Resource policy for
+package maintenance under the 512 MiB guest requires investigation.
 
 Previous production filesystem checkpoint, 2026-10-24: coherent release
 `2fd5a272d3f75564800f0b41a398739551ee61cc4d61e5907f1636c0db617b31`

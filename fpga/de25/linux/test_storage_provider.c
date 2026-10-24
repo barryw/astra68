@@ -75,7 +75,8 @@ static void discovered_media(AstraStorageProvider *provider, const char *image)
     assert(ioctl(loop, BLKGETDISKSEQ, &disk_sequence) == 0);
     char node[64];
     snprintf(node, sizeof(node), "/dev/loop%u", minor(info.st_rdev));
-    AstraStorageDiscovery discovery = {.provider = provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageDiscovery discovery = {.provider = provider, .byte_limit = 1u << 20,
+        .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
     AstraStorageObservation observation = {.syspath = "/sys/devices/test/optical", .disk_syspath = "/sys/devices/test/optical",
         .devnode = node, .devnum = info.st_rdev, .disk_devnum = info.st_rdev,
         .sequence = 1u, .disk_sequence = disk_sequence,
@@ -186,7 +187,8 @@ static void exclusive_format_target(AstraStorageProvider *provider, const char *
     assert(ioctl(loop, BLKGETDISKSEQ, &disk_sequence) == 0);
     char node[64];
     snprintf(node, sizeof(node), "/dev/loop%u", minor(info.st_rdev));
-    AstraStorageDiscovery discovery = {.provider = provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageDiscovery discovery = {.provider = provider, .byte_limit = 1u << 20,
+        .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
     AstraStorageObservation observation = {.syspath = "/sys/devices/test/format-loop",
         .disk_syspath = "/sys/devices/test/format-loop", .devnode = node,
         .devnum = info.st_rdev, .disk_devnum = info.st_rdev,
@@ -371,7 +373,8 @@ static void exclusive_partition_target(AstraStorageProvider *provider)
     assert(ioctl(loop, BLKGETDISKSEQ, &disk_sequence) == 0);
     char node[64];
     snprintf(node, sizeof(node), "/dev/loop%u", minor(info.st_rdev));
-    AstraStorageDiscovery discovery = {.provider = provider, .byte_limit = 1u << 20, .fd = -1};
+    AstraStorageDiscovery discovery = {.provider = provider, .byte_limit = 1u << 20,
+        .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
     AstraStorageObservation observation = {.syspath = "/sys/devices/test/partition-loop",
         .disk_syspath = "/sys/devices/test/partition-loop", .devnode = node,
         .devnum = info.st_rdev, .disk_devnum = info.st_rdev,
@@ -475,7 +478,7 @@ static void exclusive_partition_target(AstraStorageProvider *provider)
 static void processed_inventory(AstraStorageProvider *provider)
 {
     AstraStorageDiscovery discovery = ASTRA_STORAGE_DISCOVERY_INIT;
-    assert(astra_storage_discovery_open(&discovery, provider, 1u << 20) == 0);
+    assert(astra_storage_discovery_open(&discovery, provider, 1u << 20, NULL) == 0);
     assert(discovery.fd >= 0 && discovery.udev != NULL && discovery.monitor != NULL);
     struct stat info;
     assert(stat("/", &info) == 0);
@@ -746,7 +749,7 @@ static void lost_worker_reply(AstraStorageProvider *provider)
     AstraStorageWork work = {.result = -1};
     assert(astra_storage_ram_source(&provider->catalog, 0u, &source) == 0);
     assert(astra_storage_mount_begin(&provider->catalog, source, 1u, 0u,
-                                      1024u * 1024u, 16u, &mount) == 0);
+                                      1024u * 1024u, 16u, UINT32_MAX, &mount) == 0);
     const AstraStorageRecord *record = astra_storage_find(&provider->catalog, mount);
     assert(astra_storage_linux_prepare(&provider->domain, record, -1, 0u, 0u, &mounted) == 0);
     assert(astra_storage_work_start(&work, &provider->domain, record, -1,

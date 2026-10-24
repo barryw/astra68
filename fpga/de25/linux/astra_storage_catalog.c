@@ -448,31 +448,44 @@ static bool supported(uint32_t class_id, uint32_t format)
     }
 }
 
-/* Namespace slots may be reused after actual retirement; object identities
- * never are. A lost mount still reserves its name while Linux or an admitted
- * worker retains it. Choose the lowest free slot without a second slot table. */
+/* A lost mount still reserves its name while Linux or an admitted worker
+ * retains it. Persisted USB reservations live in the provider name map. */
+static int name_reserved(const AstraStorageCatalog *catalog, const char *name)
+{
+    for (const AstraStorageEntry *entry = catalog->entries; entry != NULL; entry = entry->next)
+        if (strcmp(entry->record.name, name) == 0 &&
+            (entry->record.linux_mount_id != 0u || entry->mounting_generation != 0u ||
+             entry->record.state == ASTRA_VOLUME_MOUNTING ||
+             entry->record.state == ASTRA_VOLUME_MOUNTED ||
+             entry->record.state == ASTRA_VOLUME_QUIESCING ||
+             (entry->record.flags & ASTRA_VOLUME_CLEANUP_PENDING) != 0u))
+            return 1;
+    return 0;
+}
+
+int astra_storage_usb_slot_reserved(const AstraStorageCatalog *catalog, uint32_t slot)
+{
+    if (catalog == NULL || slot == UINT32_MAX) return 1;
+    char name[32];
+    int length = snprintf(name, sizeof(name), "/usb%" PRIu32, slot);
+    return length < 0 || (size_t)length >= sizeof(name) || name_reserved(catalog, name);
+}
+
 static int mount_name(const AstraStorageCatalog *catalog, uint32_t class_id,
-    uint32_t flags, char name[32])
+    uint32_t flags, uint32_t usb_slot, char name[32])
 {
     if (flags & ASTRA_VOLUME_SYSTEM) { strcpy(name, "/dh0"); return 0; }
     if (flags & ASTRA_VOLUME_TEMPORARY) { strcpy(name, "/tmp"); return 0; }
     static const char *const prefixes[] = {"dh", "usb", "cd", "ram"};
     if (class_id < ASTRA_VOLUME_FIXED || class_id > ASTRA_VOLUME_RAM) return EINVAL;
-    uint64_t number = class_id == ASTRA_VOLUME_FIXED ? 1u : 0u;
+    if (class_id != ASTRA_VOLUME_USB && usb_slot != UINT32_MAX) return EINVAL;
+    uint64_t number = usb_slot != UINT32_MAX ? usb_slot :
+        class_id == ASTRA_VOLUME_FIXED ? 1u : 0u;
     for (;;) {
         int length = snprintf(name, 32u, "/%s%" PRIu64, prefixes[class_id - 1u], number);
         if (length < 0 || length >= 32) return EOVERFLOW;
-        int reserved = 0;
-        for (const AstraStorageEntry *entry = catalog->entries; entry != NULL; entry = entry->next)
-            if (strcmp(entry->record.name, name) == 0 &&
-                (entry->record.linux_mount_id != 0u || entry->mounting_generation != 0u ||
-                 entry->record.state == ASTRA_VOLUME_MOUNTING || entry->record.state == ASTRA_VOLUME_MOUNTED ||
-                 entry->record.state == ASTRA_VOLUME_QUIESCING ||
-                 (entry->record.flags & ASTRA_VOLUME_CLEANUP_PENDING) != 0u)) {
-                reserved = 1;
-                break;
-            }
-        if (!reserved) return 0;
+        if (!name_reserved(catalog, name)) return 0;
+        if (usb_slot != UINT32_MAX) return EBUSY;
         if (number == UINT64_MAX) return EOVERFLOW;
         ++number;
     }
@@ -481,7 +494,7 @@ static int mount_name(const AstraStorageCatalog *catalog, uint32_t class_id,
 int astra_storage_mount_begin(AstraStorageCatalog *catalog, uint64_t source,
                               uint64_t generation, uint32_t flags,
                               uint64_t byte_limit, uint64_t inode_limit,
-                              uint64_t *mount)
+                              uint32_t usb_slot, uint64_t *mount)
 {
     const AstraStorageRecord *record;
     AstraStorageRecord *mounted;
@@ -568,7 +581,7 @@ int astra_storage_mount_begin(AstraStorageCatalog *catalog, uint64_t source,
                entry->mounting_generation != 0u ||
                (entry->record.flags & ASTRA_VOLUME_CLEANUP_PENDING) != 0u)))
             return EBUSY;
-    error = mount_name(catalog, record->class_id, flags, name);
+    error = mount_name(catalog, record->class_id, flags, usb_slot, name);
     if (error != 0) return error;
     error = add(catalog, ASTRA_VOLUME_MOUNT, record, record->class_id,
                  ASTRA_VOLUME_MOUNTING, mount);

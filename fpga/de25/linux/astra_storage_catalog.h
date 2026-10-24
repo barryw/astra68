@@ -65,7 +65,10 @@ int astra_storage_probe_result(AstraStorageCatalog *catalog, uint64_t source,
 int astra_storage_mount_begin(AstraStorageCatalog *catalog, uint64_t source,
                               uint64_t generation, uint32_t flags,
                               uint64_t byte_limit, uint64_t inode_limit,
-                              uint64_t *mount);
+                              uint32_t usb_slot, uint64_t *mount);
+/* Includes lost mounts until their Linux resources and cleanup retire. */
+int astra_storage_usb_slot_reserved(const AstraStorageCatalog *catalog,
+                                   uint32_t slot);
 /* A nonzero Linux mount ID is retained even when publication is refused:
  * the caller must roll that real mount back before discarding its record. */
 int astra_storage_mount_result(AstraStorageCatalog *catalog, uint64_t mount,

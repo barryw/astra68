@@ -135,10 +135,10 @@ def main():
                 held.terminate()
                 held.wait(timeout=30)
 
-        def start_held():
+        def start_held(mode="hold"):
             reset()
             owned = subprocess.Popen(command(provider, image, work, uid, gid,
-                consumer=(client, uid, gid, "hold")), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                consumer=(client, uid, gid, mode)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             service = peer = None
             domain = None
             deadline = time.monotonic() + 15
@@ -178,6 +178,32 @@ def main():
             finally:
                 if owned.poll() is None:
                     owned.terminate(); owned.wait(timeout=30)
+
+        owned, service, peer, domain = start_held()
+        try:
+            owned.terminate()
+            assert owned.wait(timeout=20) == 0, "clean owner stop failed"
+            assert not domain.exists()
+            assert not Path(f"/proc/{peer}").exists()
+            assert not subprocess.run(privileged("losetup", "-j", str(image)),
+                check=True, capture_output=True, text=True).stdout.strip()
+            verify_acknowledged_data()
+        finally:
+            if owned.poll() is None:
+                owned.terminate(); owned.wait(timeout=30)
+
+        owned, service, peer, domain = start_held("hold-zero")
+        try:
+            owned.terminate()
+            assert owned.wait(timeout=20) == 0, "QEMU-style clean stop failed"
+            assert not domain.exists()
+            assert not Path(f"/proc/{peer}").exists()
+            assert not subprocess.run(privileged("losetup", "-j", str(image)),
+                check=True, capture_output=True, text=True).stdout.strip()
+            verify_acknowledged_data()
+        finally:
+            if owned.poll() is None:
+                owned.terminate(); owned.wait(timeout=30)
 
         # A real outside loop opener must keep the original provider cleanup
         # owner alive. The guardian does no loop release or premature directory

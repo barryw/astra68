@@ -251,7 +251,9 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
         error = provision(&provider, &settings);
     }
     if (error == 0 && settings.discovery) {
-        error = astra_storage_discovery_open(&discovery, &provider, settings.metadata);
+        const char *name_state = getenv("ASTRA_STORAGE_NAME_STATE");
+        error = name_state == NULL ? EINVAL :
+            astra_storage_discovery_open(&discovery, &provider, settings.metadata, name_state);
         if (error == 0)
             provider.discovery = &discovery;
     }
@@ -316,8 +318,13 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
             return 1;
         }
     }
-    if (error != 0 || interrupted)
+    if (error != 0)
         return 1;
+    if (interrupted)
+        /* QEMU handles TERM and exits 0; simple peers may die by TERM. */
+        return interrupted == SIGTERM &&
+            ((WIFEXITED(status) && WEXITSTATUS(status) == 0) ||
+             (WIFSIGNALED(status) && WTERMSIG(status) == SIGTERM)) ? 0 : 1;
     return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 
@@ -395,6 +402,9 @@ int main(int argc, char **argv)
         }
     }
     if (error != 0) fprintf(stderr, "astra-storage owner: %s\n", strerror(error));
-    if (error != 0 || interrupted || !child_seen) return 1;
+    if (error != 0 || !child_seen) return 1;
+    if (interrupted)
+        return interrupted == SIGTERM && WIFEXITED(child_status) &&
+            WEXITSTATUS(child_status) == 0 ? 0 : 1;
     return WIFEXITED(child_status) ? WEXITSTATUS(child_status) : 128 + WTERMSIG(child_status);
 }

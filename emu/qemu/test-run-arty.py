@@ -6,6 +6,7 @@ import os
 import pathlib
 import pwd
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -97,6 +98,12 @@ assert args[args.index('--system') + 4] == 'fixture-uuid'
 assert args[args.index('--work') + 1] == {str(observed / 'exports/work')!r}
 assert args[args.index('--sound') + 1] == {str(observed / 'exports/sound')!r}
 assert args[args.index('--seed-sound') + 1] == {str(root / 'soundfonts')!r}
+assert os.environ['ASTRA_STORAGE_NAME_STATE'] == {str(observed / 'state')!r}
+if os.getenv('ASTRA_TEST_PROVIDER_CLEAN_STOP'):
+    import signal
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(int(os.getenv('ASTRA_TEST_PROVIDER_STOP_CODE', '0'))))
+    pathlib.Path({str(observed / 'provider.ready')!r}).write_text('ready')
+    while True: signal.pause()
 os.environ['ASTRA_STORAGE_CONTROL_FD'] = '3'
 os.environ['ASTRA_STORAGE_PATH_FD'] = '4'
 os.execvp('setpriv', ['setpriv', '--reuid', uid, '--regid', gid,
@@ -299,6 +306,32 @@ def main():
         assert "release verification failed" in result.stderr
         writable(root)
 
+    with tempfile.TemporaryDirectory() as directory:
+        root, observed = fixture(directory, 0)
+        launch_environment = environment(root, observed)
+        launch_environment["ASTRA_TEST_PROVIDER_CLEAN_STOP"] = "1"
+        ready = observed / "provider.ready"
+        for number, provider_status, expected in (
+            (signal.SIGUSR1, "0", 0),
+            (signal.SIGTERM, "0", 1),
+            (signal.SIGUSR1, "1", 1),
+        ):
+            ready.unlink(missing_ok=True)
+            launch_environment["ASTRA_TEST_PROVIDER_STOP_CODE"] = provider_status
+            running = subprocess.Popen([str(RUN_ARTY)], env=launch_environment,
+                                       stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+            try:
+                deadline = time.monotonic() + 5
+                while not ready.exists():
+                    assert running.poll() is None and time.monotonic() < deadline
+                    time.sleep(0.01)
+                running.send_signal(number)
+                assert running.wait(timeout=5) == expected, (number, provider_status)
+            finally:
+                if running.poll() is None:
+                    running.terminate(); running.wait(timeout=5)
+        writable(root)
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 1.0)
         launch_environment = environment(root, observed)

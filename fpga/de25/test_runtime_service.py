@@ -19,6 +19,7 @@ for required in (
     "Environment=ASTRA_FRONT_PANEL_MMIO_OFFSET=0",
     "ExecStart=/var/lib/astra/current/bin/run-arty.sh",
     "Restart=on-failure",
+    "KillSignal=SIGUSR1",
     "StandardOutput=journal",
     "StandardError=journal",
     "Nice=-10",

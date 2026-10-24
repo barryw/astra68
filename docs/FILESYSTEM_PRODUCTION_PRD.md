@@ -34,7 +34,7 @@ Atlas, and authorizes the Linux kernel work needed for CD-ROM support. The
 [production volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md)
 records the implementation boundaries and migration/acceptance requirements.
 Physical USB qualification and production cutover are recorded below; physical
-data-CD qualification still requires attached media.
+ISO9660 on DVD-R is qualified, while CD-R media awaits a disc.
 
 Initial Atlas scope is a single root-directory window with named file/folder
 icons, proving native open and enumeration of the selected mounted volume.
@@ -78,11 +78,11 @@ The table describes the deployed DE25 release and remaining qualification.
 | Area | Existing implementation | Production gap |
 |---|---|---|
 | System storage | The canonical image selector validates one exact system partition. Supervisor bootstrap and HostFS access the same Linux-owned provider; guest ext4/storage services are absent from the production release. Mutable `/dh0` state has one release-independent path, `/var/lib/astra/state/system/storage-terminal.img`; release-owned files were refreshed from the verified image during stopped-state migration while user files and the old image were retained. | A deliberate rollback of the currently selected release remains to be qualified. |
-| Linux-backed files | HostFS owns `HOST_FILESYSTEM` and mints rooted, rights-bounded sessions/scopes. Clients drive kernel-bound host channels; QEMU enforces scope, ancestry, read-only rights, ownership and object tags for every command. Current storage protocol is 38. The Linux provider owns fixed, removable, optical, image and RAM backing instances; WORK and SOUND remain explicit exports. | Full performance acceptance and physical ISO9660 data-CD qualification. |
+| Linux-backed files | HostFS owns `HOST_FILESYSTEM` and mints rooted, rights-bounded sessions/scopes. Clients drive kernel-bound host channels; QEMU enforces scope, ancestry, read-only rights, ownership and object tags for every command. Current storage protocol is 38. The Linux provider owns fixed, removable, optical, image and RAM backing instances; WORK and SOUND remain explicit exports. | Full performance acceptance and CD-R media qualification; physical ISO9660 DVD-R passed. |
 | RAM storage | Configured Linux tmpfs has explicit limits and source identity independent of its current mount. Native scoped brokers preserve rights across remounts. | Additional configured RAM volumes need physical lifecycle qualification. |
-| Namespace | Canonical volume snapshots update native process assigns; exact incarnation checks prevent old grants from targeting replacement mounts. Ordered traversal confines rooted grants. | Physical ISO9660 data-CD insertion/removal remains unqualified. |
-| File objects | Stable volume/node identities, retained objects/cwd, shared descriptions/offsets, fork/exec inheritance and ordered symlink behavior pass current correctness gates. | Physical data-CD replacement and final performance acceptance. |
-| Devices and mounts | Linux discovery subscribes before scanning; the provider implements device/source/mount identity, supported-media policy, safe unmount/eject, ISO admission and canonical notifications. Disposable USB FAT32/exFAT/UDF partitions passed native mount and access gates; a Pioneer UDF DVD passed physical discovery, media change, Atlas and eject. | Physical ISO9660 data-CD qualification. |
+| Namespace | Canonical volume snapshots update native process assigns; exact incarnation checks prevent old grants from targeting replacement mounts. Ordered traversal confines rooted grants. Persistent USB identity reservations kept three `/usbN` paths fixed across DE25 stop/restart. | CD-R insertion/removal remains unqualified. |
+| File objects | Stable volume/node identities, retained objects/cwd, shared descriptions/offsets, fork/exec inheritance and ordered symlink behavior pass current correctness gates. | Physical CD-R replacement and final performance acceptance. |
+| Devices and mounts | Linux discovery subscribes before scanning; the provider implements device/source/mount identity, supported-media policy, safe unmount/eject, ISO admission and canonical notifications. Disposable USB FAT32/exFAT/UDF partitions passed native mount and access gates with stable paths across restart; Pioneer UDF DVD and physical ISO9660 DVD-R passed native access and Atlas gates. | Physical CD-R qualification. |
 
 Implementation anchors are [supervisor bootstrap](../sw/userspace/supervisor/src/volume.c),
 [Linux storage provider](../fpga/de25/linux/astra_storage_provider.c),
@@ -250,10 +250,19 @@ alone does not grant raw access or manufacture nodes for unrelated peripherals.
 
 FS03. Device identities and mounted-instance IDs are never recycled within a
 provider epoch. Automatic volume names identify active namespace slots, not
-mounted-instance identity. A name may be reused only after the previous Linux
-mount, worker and retained cleanup resources have actually retired; lost or
-cleanup-pending instances still reserve their names. A reinserted medium obtains
-a fresh mounted-instance ID and the lowest available name for its class.
+mounted-instance identity. Physical USB partitions with a durable device and
+partition key keep their assigned `/usbN` across reboot and reattachment;
+persisted assignments reserve their names while the drive is absent. A name
+may be rebound to that same key only after the previous Linux mount, worker
+and retained cleanup resources have actually retired; lost or cleanup-pending
+instances still reserve their names. A reinserted medium obtains a fresh
+mounted-instance ID. Sources without a durable identity receive temporary
+slots outside persisted reservations and must not claim stable paths. Other
+classes use the lowest available name for their class.
+The Linux discovery adapter uses USB serial plus partition number as durable
+key, falling back to partition UUID when serial is absent. A root-owned,
+checksummed state map commits each reservation before mount publication;
+invalid state fences USB admission instead of changing existing assignments.
 Persistently configured mountpoints may be rebound only through an explicit
 mount transaction after old bindings are withdrawn. Retained files, directories,
 roots and cwd remain tied to their exact epoch/ID/generation and never resolve
@@ -832,7 +841,8 @@ process, a shell, and the desktop before attaching/mounting media. Each must
 observe `/usb0` through fresh root enumeration and queries, and eligible
 processes must open it without restarting. Include a command whose first
 filesystem call occurs after publication, missed notifications, fork/exec,
-unmount, and reinsertion under a different automatic name. The old cwd and open
+unmount, reinsertion under the same stable USB name after cleanup, and a second
+device with a different identity. The old cwd and open
 descriptions must never change identity during these tests.
 
 ### Hotplug and policy execution

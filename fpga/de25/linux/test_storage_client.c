@@ -17,6 +17,12 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+static void clean_stop(int number)
+{
+    (void)number;
+    _exit(0);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 3 || argc == 4);
@@ -108,6 +114,8 @@ int main(int argc, char **argv)
     fflush(stdout);
     if (argc == 4) {
         /* Parent test breaks the backing lease or stops the launcher. */
+        if (strcmp(argv[3], "hold-zero") == 0)
+            assert(signal(SIGTERM, clean_stop) != SIG_ERR);
         for (;;) pause();
     }
     return 0;

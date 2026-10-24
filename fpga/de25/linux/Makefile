@@ -35,9 +35,9 @@ STORAGE_MOUNT_SOURCES := astra_storage_mount.c test_storage_mount.c \
 STORAGE_PATH_SOURCES := astra_storage_path.c astra_storage_transport.c test_storage_path.c \
 	$(STORAGE_RESOLVER)/astra68-resolve.c
 STORAGE_PROVIDER_SOURCES := astra_storage_provider.c astra_storage_discovery.c astra_storage_catalog.c \
-	astra_storage_mount.c astra_storage_probe.c astra_storage_path.c astra_storage_work.c \
+	astra_storage_names.c astra_storage_mount.c astra_storage_probe.c astra_storage_path.c astra_storage_work.c \
 	astra_storage_transport.c \
-	$(STORAGE_RESOLVER)/astra68-resolve.c $(ROOT)/sw/common/utf8.c
+	$(STORAGE_RESOLVER)/astra68-resolve.c $(ROOT)/sw/common/utf8.c $(ROOT)/sw/common/crc32.c
 FONT_CONVERT_SOURCES := astra_font_convert.c astra_amiga_font.c test_font_convert.c \
 	$(ROOT)/sw/common/utf8.c
 FONT_WORKER_SOURCES := astra_font_convert.c astra_amiga_font.c astra_font_worker.c \
@@ -51,9 +51,10 @@ FONT_CONVERT_FLAGS = -std=c11 -O2 -Wall -Wextra -Werror -pedantic \
 	-I$(ROOT)/sw/include -I$(ROOT)/ndk/include \
 	$(shell pkg-config --cflags freetype2)
 STORAGE_HEADERS := astra_storage_catalog.h astra_storage_discovery.h astra_storage_probe.h \
-	astra_storage_mount.h astra_storage_path.h astra_storage_provider.h \
+	astra_storage_names.h astra_storage_mount.h astra_storage_path.h astra_storage_provider.h \
 	astra_storage_work.h astra_storage_transport.h \
 	$(ROOT)/sw/include/astra/storage_provider.h $(ROOT)/sw/include/astra/volume_abi.h \
+	$(ROOT)/sw/include/astra/crc32.h \
 	$(STORAGE_RESOLVER)/astra68-resolve.h
 COMPILER_INCLUDE := $(shell $(CC) -print-file-name=include)
 REMOTE_CFLAGS := $(CFLAGS) -I$(ROOT)/ndk/include --sysroot=$(DE25_SYSROOT) -nostdinc \
@@ -75,6 +76,7 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 .PHONY: storage-cleanup-test storage-cleanup-sanitize
 .PHONY: storage-provider storage-provider-target storage-partition-worker-target
 .PHONY: storage-launcher-test
+.PHONY: storage-names-test
 
 $(OUT)/test-storage-client: astra_storage_transport.c test_storage_client.c $(STORAGE_HEADERS) Makefile
 	mkdir -p $(OUT)
@@ -332,6 +334,17 @@ $(OUT)/test-storage-mount-aarch64: $(STORAGE_MOUNT_SOURCES) \
 		-o $@ -Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu -lmount
 
 storage-catalog-test: $(OUT)/test-storage-catalog
+	$<
+
+$(OUT)/test-storage-names: astra_storage_names.c astra_storage_catalog.c \
+		test_storage_names.c $(ROOT)/sw/common/crc32.c \
+		$(ROOT)/sw/common/utf8.c $(STORAGE_HEADERS) Makefile
+	mkdir -p $(OUT)
+	$(HOST_CC) $(STORAGE_CATALOG_FLAGS) astra_storage_names.c \
+		astra_storage_catalog.c test_storage_names.c \
+		$(ROOT)/sw/common/crc32.c $(ROOT)/sw/common/utf8.c -o $@
+
+storage-names-test: $(OUT)/test-storage-names
 	$<
 
 storage-catalog-sanitize: $(OUT)/test-storage-catalog-sanitize

@@ -28,9 +28,9 @@ static void lifecycle(void)
     assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
     data = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_EXT4,
                    "data-uuid", "Files");
-    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, UINT32_MAX,
                                      &mounted) == 0);
-    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, UINT32_MAX,
                                      &other) == EBUSY && other == 0u);
     assert(astra_storage_quiesce(&catalog, mounted, 1u) == EBUSY);
     assert(astra_storage_mount_result(&catalog, mounted, 1u, 0u, 0) == EINVAL);
@@ -47,7 +47,7 @@ static void lifecycle(void)
     assert(astra_storage_unmount_result(&catalog, mounted, 1u, 0, 0, 0) == 0);
     assert((astra_storage_find(&catalog, mounted)->flags & ASTRA_VOLUME_CLEANUP_PENDING) == 0u);
     assert(astra_storage_forget(&catalog, mounted) == 0);
-    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, &mounted) == 0);
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, UINT32_MAX, &mounted) == 0);
     assert(astra_storage_mount_result(&catalog, mounted, 1u, 321u, 0) == 0);
     assert(astra_storage_quiesce(&catalog, mounted, 1u) == 0);
     assert(astra_storage_quiesce(&catalog, mounted, 1u) == EBUSY);
@@ -64,12 +64,12 @@ static void lifecycle(void)
     assert(astra_storage_find(&catalog, mounted)->state == ASTRA_VOLUME_UNMOUNTED);
     assert(astra_storage_find(&catalog, mounted)->linux_mount_id == 0u);
     assert(astra_storage_forget(&catalog, mounted) == 0);
-    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, UINT32_MAX,
                                      &other) == 0 && other > mounted);
     assert(astra_storage_mount_result(&catalog, other, 1u, 0u, EIO) == EIO);
     assert(astra_storage_find(&catalog, other)->state == ASTRA_VOLUME_FAILED);
     assert(astra_storage_forget(&catalog, other) == 0);
-    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, UINT32_MAX,
                                      &other) == 0);
     assert(astra_storage_mount_result(&catalog, other, 1u, 322u, EIO) == EIO);
     assert((astra_storage_find(&catalog, other)->flags & ASTRA_VOLUME_CLEANUP_PENDING) != 0u);
@@ -99,7 +99,7 @@ static void loss_and_stale_completion(void)
     assert(astra_storage_source(&catalog, medium, 1u, 0u, 0u, 0u, 0u, &data) == 0);
     assert(astra_storage_probe_result(&catalog, data, 1u, ASTRA_VOLUME_EXT4,
                                       "uuid", "Original", "", 0, 0) == 0);
-    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, UINT32_MAX,
                                      &mounted) == 0);
     assert(astra_storage_loss(&catalog, medium, 1u) == 0);
     assert(astra_storage_find(&catalog, data)->generation == 2u);
@@ -156,33 +156,33 @@ static void policy_and_metadata(void)
     optical = source(&catalog, ASTRA_VOLUME_OPTICAL, ASTRA_VOLUME_ISO9660,
                       "", "Disc");
     assert((astra_storage_find(&catalog, optical)->flags & ASTRA_VOLUME_READ_ONLY) != 0u);
-    assert(astra_storage_mount_begin(&catalog, optical, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, optical, 1u, 0u, 0u, 0u, UINT32_MAX,
                                      &mounted) == EROFS);
     assert(astra_storage_mount_begin(&catalog, optical, 1u,
-        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &mounted) == 0);
     assert(astra_storage_mount_result(&catalog, mounted, 1u, 23u, 0) == 0);
     assert((astra_storage_find(&catalog, mounted)->flags &
             ASTRA_VOLUME_READ_ONLY) != 0u);
     for (uint32_t format = ASTRA_VOLUME_FAT12; format <= ASTRA_VOLUME_FAT16; ++format) {
         uint64_t fat = source(&catalog, ASTRA_VOLUME_USB, format, "", "Legacy FAT");
-        assert(astra_storage_mount_begin(&catalog, fat, 1u, 0u, 0u, 0u,
+        assert(astra_storage_mount_begin(&catalog, fat, 1u, 0u, 0u, 0u, UINT32_MAX,
                                          &mounted) == EROFS);
         assert(astra_storage_mount_begin(&catalog, fat, 1u,
-            ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
+            ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &mounted) == 0);
     }
     uint64_t usb_disc = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_ISO9660,
                                "", "Installer");
     assert((astra_storage_find(&catalog, usb_disc)->flags & ASTRA_VOLUME_READ_ONLY) != 0u);
-    assert(astra_storage_mount_begin(&catalog, usb_disc, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, usb_disc, 1u, 0u, 0u, 0u, UINT32_MAX,
                                      &mounted) == EROFS);
     assert(astra_storage_mount_begin(&catalog, usb_disc, 1u,
-        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &mounted) == 0);
     uint64_t ntfs = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_NTFS,
                            "", "Windows Data");
-    assert(astra_storage_mount_begin(&catalog, ntfs, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, ntfs, 1u, 0u, 0u, 0u, UINT32_MAX,
                                      &mounted) == EROFS);
     assert(astra_storage_mount_begin(&catalog, ntfs, 1u,
-        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &mounted) == 0);
     uint64_t unsupported_device, unsupported_medium, unsupported_source;
     assert(astra_storage_device(&catalog, ASTRA_VOLUME_USB,
         ASTRA_VOLUME_PARTITION_MAP_GPT, UINT64_C(16) << 30, &unsupported_device) == 0);
@@ -207,7 +207,7 @@ static void policy_and_metadata(void)
         ASTRA_VOLUME_UNSUPPORTED, "", "Archive", "btrfs", 0, 0) == 0);
     assert(strcmp(astra_storage_find(&catalog, unsupported_source)->detected_type, "btrfs") == 0);
     assert(astra_storage_mount_begin(&catalog, unsupported_source, 1u,
-        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == ENOTSUP);
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &mounted) == ENOTSUP);
     first = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_EXT4,
                     "", "broken\nlabel");
     assert(astra_storage_find(&catalog, first)->label[0] == '\0');
@@ -219,22 +219,22 @@ static void policy_and_metadata(void)
                    "\xf0\x9f\x93\x81 Documents") == 0);
     first = source(&catalog, ASTRA_VOLUME_FIXED, ASTRA_VOLUME_EXT4, "sys", "DH0");
     assert(astra_storage_mount_begin(&catalog, first, 1u, ASTRA_VOLUME_SYSTEM,
-                                     0u, 0u, &mounted) == 0);
+                                     0u, 0u, UINT32_MAX, &mounted) == 0);
     assert(astra_storage_mount_result(&catalog, mounted, 1u, 12u, 0) == 0);
     assert(astra_storage_quiesce(&catalog, mounted, 1u) == EPERM);
     uint64_t fixed_ntfs = source(&catalog, ASTRA_VOLUME_FIXED, ASTRA_VOLUME_NTFS,
                                  "", "Other disk");
     assert(astra_storage_mount_begin(&catalog, fixed_ntfs, 1u,
-        ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == EINVAL);
+        ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &mounted) == EINVAL);
     assert(astra_storage_mount_begin(&catalog, fixed_ntfs, 1u,
-        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mounted) == 0);
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &mounted) == 0);
     assert(astra_storage_device(&catalog, ASTRA_VOLUME_RAM, 0u, 0u, &ram) == EINVAL);
     assert(astra_storage_ram_source(&catalog, 0u, &ram) == 0);
     assert(astra_storage_find(&catalog, ram)->parent == 0u);
-    assert(astra_storage_mount_begin(&catalog, ram, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, ram, 1u, 0u, 0u, 0u, UINT32_MAX,
                                      &mounted) == EINVAL);
     assert(astra_storage_mount_begin(&catalog, ram, 1u, 0u,
-                                     4096u, 1u, &mounted) == 0);
+                                     4096u, 1u, UINT32_MAX, &mounted) == 0);
     assert(astra_storage_find(&catalog, mounted)->byte_limit == 4096u);
     assert(astra_storage_find(&catalog, mounted)->inode_limit == 1u);
     assert((astra_storage_find(&catalog, mounted)->flags &
@@ -286,7 +286,7 @@ static void image_dependencies(void)
     uint64_t nested_mount;
     assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
     data = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_EXT4, "usb", "Files");
-    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, &backing) == 0);
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, UINT32_MAX, &backing) == 0);
     assert(astra_storage_mount_result(&catalog, backing, 1u, 500u, 0) == 0);
     assert(astra_storage_image_source(&catalog, backing, 1u, 0u, &image) == EINVAL);
     assert(astra_storage_image_source(&catalog, backing, 1u, 812u, &image) == 0);
@@ -294,16 +294,16 @@ static void image_dependencies(void)
     assert(astra_storage_find(&catalog, image)->backing_object == 812u);
     assert(astra_storage_probe_result(&catalog, image, 1u,
                                       ASTRA_VOLUME_ISO9660, "", "Install", "iso9660", 0, 0) == 0);
-    assert(astra_storage_mount_begin(&catalog, image, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, image, 1u, 0u, 0u, 0u, UINT32_MAX,
                                      &image_mount) == EROFS);
     assert(astra_storage_mount_begin(&catalog, image, 1u, ASTRA_VOLUME_READ_ONLY,
-                                     0u, 0u, &image_mount) == 0);
+                                     0u, 0u, UINT32_MAX, &image_mount) == 0);
     assert(astra_storage_mount_result(&catalog, image_mount, 1u, 501u, 0) == 0);
     assert(astra_storage_image_source(&catalog, image_mount, 1u, 813u, &nested) == 0);
     assert(astra_storage_probe_result(&catalog, nested, 1u,
                                       ASTRA_VOLUME_UDF, "", "Nested", "udf", 0, 0) == 0);
     assert(astra_storage_mount_begin(&catalog, nested, 1u, ASTRA_VOLUME_READ_ONLY,
-                                     0u, 0u, &nested_mount) == 0);
+                                     0u, 0u, UINT32_MAX, &nested_mount) == 0);
     assert(astra_storage_mount_result(&catalog, nested_mount, 1u, 502u, 0) == 0);
     assert(astra_storage_quiesce(&catalog, backing, 1u) == 0);
     assert(astra_storage_image_source(&catalog, backing, 1u, 814u, &data) == EBUSY);
@@ -325,7 +325,7 @@ static void names_and_bindings(void)
     assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
     fixed = source(&catalog, ASTRA_VOLUME_FIXED, ASTRA_VOLUME_EXT4, "system", "Astra");
     assert(astra_storage_mount_begin(&catalog, fixed, 1u, ASTRA_VOLUME_SYSTEM,
-                                     0u, 0u, &mounted) == 0);
+                                     0u, 0u, UINT32_MAX, &mounted) == 0);
     assert(strcmp(astra_storage_find(&catalog, mounted)->name, "/dh0") == 0);
     assert(astra_storage_mount_result(&catalog, mounted, 1u, 100u, 0) == 0);
     assert(astra_storage_binding(&catalog, mounted, 1u, 100u,
@@ -339,20 +339,20 @@ static void names_and_bindings(void)
                                   "/dh0", 0u, &ram) == EINVAL);
     assert(astra_storage_ram_source(&catalog, 0u, &ram) == 0);
     assert(astra_storage_mount_begin(&catalog, ram, 1u, 0u,
-                                     4096u, 16u, &ram_mount) == 0);
+                                     4096u, 16u, UINT32_MAX, &ram_mount) == 0);
     assert(strcmp(astra_storage_find(&catalog, ram_mount)->name, "/ram0") == 0);
     assert(astra_storage_mount_result(&catalog, ram_mount, 1u, 101u, 0) == 0);
     assert(astra_storage_ram_source(&catalog, 0u, &ram) == 0);
     assert(astra_storage_mount_begin(&catalog, ram, 1u, ASTRA_VOLUME_TEMPORARY,
-                                     4096u, 16u, &temporary) == 0);
+                                     4096u, 16u, UINT32_MAX, &temporary) == 0);
     assert(strcmp(astra_storage_find(&catalog, temporary)->name, "/tmp") == 0);
     assert(astra_storage_mount_result(&catalog, temporary, 1u, 102u, 0) == 0);
     assert(astra_storage_quiesce(&catalog, temporary, 1u) == EPERM);
     assert(astra_storage_ram_source(&catalog, 0u, &ram) == 0);
     assert(astra_storage_mount_begin(&catalog, ram, 1u, ASTRA_VOLUME_TEMPORARY,
-                                     4096u, 16u, &temporary) == EBUSY);
+                                     4096u, 16u, UINT32_MAX, &temporary) == EBUSY);
     assert(astra_storage_mount_begin(&catalog, ram, 1u, 0u,
-                                     4096u, 16u, &temporary) == 0);
+                                     4096u, 16u, UINT32_MAX, &temporary) == 0);
     assert(strcmp(astra_storage_find(&catalog, temporary)->name, "/ram1") == 0);
     assert(astra_storage_loss(&catalog, mounted, 1u) == 0);
     assert(astra_storage_find(&catalog, binding)->state == ASTRA_VOLUME_LOST);
@@ -368,7 +368,7 @@ static void refused_authority_restore(void)
     uint64_t data, mounted;
     assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
     data = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_EXT4, "data", "Files");
-    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, &mounted) == 0);
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, UINT32_MAX, &mounted) == 0);
     assert(astra_storage_mount_result(&catalog, mounted, 1u, 101u, 0) == 0);
     assert(astra_storage_quiesce(&catalog, mounted, 1u) == 0);
     assert(astra_storage_unmount_result(&catalog, mounted, 1u, EIO, 1, 0) == EIO);
@@ -392,7 +392,7 @@ static void optical_eject(void)
     optical = source(&catalog, ASTRA_VOLUME_OPTICAL, ASTRA_VOLUME_ISO9660, "disc", "Disc");
     uint64_t medium = astra_storage_find(&catalog, optical)->parent;
     assert(astra_storage_eject_begin(&catalog, optical, 2u) == ESTALE);
-    assert(astra_storage_mount_begin(&catalog, optical, 1u, ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mount) == 0);
+    assert(astra_storage_mount_begin(&catalog, optical, 1u, ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &mount) == 0);
     assert(astra_storage_eject_begin(&catalog, optical, 1u) == EBUSY);
     assert(astra_storage_mount_result(&catalog, mount, 1u, 72u, 0) == 0);
     assert(astra_storage_eject_begin(&catalog, optical, 1u) == EBUSY);
@@ -404,7 +404,7 @@ static void optical_eject(void)
     assert(astra_storage_probe_result(&catalog, sibling, 1u,
         ASTRA_VOLUME_ISO9660, "sibling", "Other Disc", "", 0, 0) == 0);
     assert(astra_storage_mount_begin(&catalog, sibling, 1u,
-        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &sibling_mount) == 0);
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &sibling_mount) == 0);
     assert(astra_storage_mount_result(&catalog, sibling_mount, 1u, 73u, 0) == 0);
     assert(astra_storage_eject_begin(&catalog, optical, 1u) == EBUSY);
     assert(astra_storage_find(&catalog, optical)->state == ASTRA_VOLUME_UNMOUNTED);
@@ -434,18 +434,18 @@ static void reusable_mount_names(void)
     uint64_t source_id, first, next;
     assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
     source_id = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_EXT4, "usb", "Files");
-    assert(astra_storage_mount_begin(&catalog, source_id, 1u, 0u, 0u, 0u, &first) == 0);
+    assert(astra_storage_mount_begin(&catalog, source_id, 1u, 0u, 0u, 0u, UINT32_MAX, &first) == 0);
     assert(strcmp(astra_storage_find(&catalog, first)->name, "/usb0") == 0);
     assert(astra_storage_mount_result(&catalog, first, 1u, 82u, 0) == 0);
     assert(astra_storage_quiesce(&catalog, first, 1u) == 0);
     assert(astra_storage_unmount_result(&catalog, first, 1u, 0, 0, 0) == 0);
-    assert(astra_storage_mount_begin(&catalog, source_id, 1u, 0u, 0u, 0u, &next) == 0);
+    assert(astra_storage_mount_begin(&catalog, source_id, 1u, 0u, 0u, 0u, UINT32_MAX, &next) == 0);
     assert(next != first && strcmp(astra_storage_find(&catalog, next)->name, "/usb0") == 0);
     assert(astra_storage_mount_result(&catalog, next, 1u, 83u, 0) == 0);
     uint64_t another = source(&catalog, ASTRA_VOLUME_USB, ASTRA_VOLUME_EXT4, "other", "Other");
     assert(astra_storage_loss(&catalog, next, 1u) == 0);
     uint64_t second;
-    assert(astra_storage_mount_begin(&catalog, another, 1u, 0u, 0u, 0u, &second) == 0);
+    assert(astra_storage_mount_begin(&catalog, another, 1u, 0u, 0u, 0u, UINT32_MAX, &second) == 0);
     assert(strcmp(astra_storage_find(&catalog, second)->name, "/usb1") == 0);
     assert(astra_storage_unmount_result(&catalog, next, 2u, 0, 0, 0) == 0);
     assert(astra_storage_mount_result(&catalog, second, 1u, 84u, 0) == 0);
@@ -453,7 +453,7 @@ static void reusable_mount_names(void)
     assert(astra_storage_unmount_result(&catalog, second, 1u, 0, 0, 0) == 0);
     for (unsigned repeat = 0u; repeat < 100u; ++repeat) {
         uint64_t mount;
-        assert(astra_storage_mount_begin(&catalog, another, 1u, 0u, 0u, 0u, &mount) == 0);
+        assert(astra_storage_mount_begin(&catalog, another, 1u, 0u, 0u, 0u, UINT32_MAX, &mount) == 0);
         assert(strcmp(astra_storage_find(&catalog, mount)->name, "/usb0") == 0);
         assert(astra_storage_mount_result(&catalog, mount, 1u, 100u + repeat, 0) == 0);
         assert(astra_storage_quiesce(&catalog, mount, 1u) == 0);
@@ -473,7 +473,7 @@ static void configured_ram_source(void)
     assert(astra_storage_ram_source(&catalog, ASTRA_VOLUME_SYSTEM, &other) == EINVAL);
     assert(astra_storage_ram_source(&catalog, 0u, &other) == 0);
     assert(astra_storage_find(&catalog, other)->flags == 0u);
-    assert(astra_storage_mount_begin(&catalog, configured, 1u, 0u, 1024u, 16u, &mount) == 0);
+    assert(astra_storage_mount_begin(&catalog, configured, 1u, 0u, 1024u, 16u, UINT32_MAX, &mount) == 0);
     assert(astra_storage_mount_result(&catalog, mount, 1u, 85u, 0) == 0);
     assert(astra_storage_quiesce(&catalog, mount, 1u) == 0);
     assert(astra_storage_unmount_result(&catalog, mount, 1u, 0, 0, 0) == 0);
@@ -534,14 +534,14 @@ static void multiple_partitions_one_device(void)
                                       ASTRA_VOLUME_EXT4, "", "Overlap", "ext4", 0, 0) == 0);
     assert(astra_storage_probe_result(&catalog, unknown, 1u,
                                       ASTRA_VOLUME_EXT4, "", "Unknown", "ext4", 0, 0) == 0);
-    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, &first) == 0);
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, UINT32_MAX, &first) == 0);
     blocked = 99u;
-    assert(astra_storage_mount_begin(&catalog, overlap, 1u, 0u, 0u, 0u, &blocked) == EBUSY);
+    assert(astra_storage_mount_begin(&catalog, overlap, 1u, 0u, 0u, 0u, UINT32_MAX, &blocked) == EBUSY);
     assert(blocked == 0u);
-    assert(astra_storage_mount_begin(&catalog, unknown, 1u, 0u, 0u, 0u, &blocked) == EBUSY);
+    assert(astra_storage_mount_begin(&catalog, unknown, 1u, 0u, 0u, 0u, UINT32_MAX, &blocked) == EBUSY);
     assert(astra_storage_mount_result(&catalog, first, 1u, 20u, 0) == 0);
     assert(astra_storage_mount_begin(&catalog, installer, 1u,
-                                     ASTRA_VOLUME_READ_ONLY, 0u, 0u, &second) == 0);
+                                     ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &second) == 0);
     assert(astra_storage_mount_result(&catalog, second, 1u, 21u, 0) == 0);
     assert(strcmp(astra_storage_find(&catalog, first)->name, "/usb0") == 0);
     assert(strcmp(astra_storage_find(&catalog, second)->name, "/usb1") == 0);
@@ -549,7 +549,7 @@ static void multiple_partitions_one_device(void)
     assert(astra_storage_find(&catalog, second)->parent == installer);
     assert(astra_storage_quiesce(&catalog, first, 1u) == 0);
     assert(astra_storage_unmount_result(&catalog, first, 1u, 0, 0, 0) == 0);
-    assert(astra_storage_mount_begin(&catalog, overlap, 1u, 0u, 0u, 0u, &blocked) == 0);
+    assert(astra_storage_mount_begin(&catalog, overlap, 1u, 0u, 0u, 0u, UINT32_MAX, &blocked) == 0);
     assert(blocked != 0u);
     astra_storage_catalog_destroy(&catalog);
 }
@@ -567,10 +567,10 @@ static void physical_write_protection(void)
     assert(astra_storage_physical_read_only(&catalog, data, 1u, 1) == 0);
     assert(astra_storage_probe_result(&catalog, data, 1u, ASTRA_VOLUME_EXT4,
         "", "Protected", "ext4", 0, 0) == 0);
-    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, &mount) == EROFS);
+    assert(astra_storage_mount_begin(&catalog, data, 1u, 0u, 0u, 0u, UINT32_MAX, &mount) == EROFS);
     assert(mount == 0u);
     assert(astra_storage_mount_begin(&catalog, data, 1u,
-        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &mount) == 0);
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, UINT32_MAX, &mount) == 0);
     assert(astra_storage_physical_read_only(&catalog, medium, 1u, 1) == EINVAL);
     assert(astra_storage_physical_read_only(&catalog, data, 2u, 1) == ESTALE);
     assert(astra_storage_physical_read_only(&catalog, device, 1u, 2) == EINVAL);
@@ -593,7 +593,7 @@ static void retained_mount_blocks_new_medium(void)
         UINT64_C(1) << 30, &old_source) == 0);
     assert(astra_storage_probe_result(&catalog, old_source, 1u,
         ASTRA_VOLUME_EXT4, "", "Old", "ext4", 0, 0) == 0);
-    assert(astra_storage_mount_begin(&catalog, old_source, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, old_source, 1u, 0u, 0u, 0u, UINT32_MAX,
         &old_mount) == 0);
     assert(astra_storage_mount_result(&catalog, old_mount, 1u, 77u, 0) == 0);
     assert(astra_storage_loss(&catalog, old_medium, 1u) == 0);
@@ -604,11 +604,11 @@ static void retained_mount_blocks_new_medium(void)
     assert(astra_storage_probe_result(&catalog, new_source, 1u,
         ASTRA_VOLUME_EXT4, "", "New", "ext4", 0, 0) == 0);
     admitted = 99u;
-    assert(astra_storage_mount_begin(&catalog, new_source, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, new_source, 1u, 0u, 0u, 0u, UINT32_MAX,
         &admitted) == EBUSY);
     assert(admitted == 0u);
     assert(astra_storage_unmount_result(&catalog, old_mount, 2u, 0, 0, 0) == 0);
-    assert(astra_storage_mount_begin(&catalog, new_source, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, new_source, 1u, 0u, 0u, 0u, UINT32_MAX,
         &admitted) == 0);
     astra_storage_catalog_destroy(&catalog);
 }
@@ -631,7 +631,7 @@ static void format_lifecycle(void)
         "other-id", "Other", "", 0, 0) == 0);
     assert((astra_storage_find(&catalog, legacy)->flags & ASTRA_VOLUME_READ_ONLY) != 0u);
     assert((astra_storage_find(&catalog, legacy)->flags & ASTRA_VOLUME_PHYSICAL_READ_ONLY) == 0u);
-    assert(astra_storage_mount_begin(&catalog, other, 1u, 0u, 0u, 0u, &mounted) == 0);
+    assert(astra_storage_mount_begin(&catalog, other, 1u, 0u, 0u, 0u, UINT32_MAX, &mounted) == 0);
     assert(astra_storage_mount_result(&catalog, mounted, 1u, 501u, 0) == 0);
     assert(astra_storage_no_mounted_children(&catalog, disk) == EBUSY);
     assert(astra_storage_partition_can_edit(&catalog, disk, 1u) == EBUSY);
@@ -645,7 +645,7 @@ static void format_lifecycle(void)
     assert(astra_storage_partition_can_edit(&catalog, disk, 1u) == EBUSY);
     assert(astra_storage_find(&catalog, legacy)->state == ASTRA_VOLUME_FORMATTING);
     assert(astra_storage_format_begin(&catalog, other, 1u) == EBUSY);
-    assert(astra_storage_mount_begin(&catalog, other, 1u, 0u, 0u, 0u, &candidate) == EBUSY);
+    assert(astra_storage_mount_begin(&catalog, other, 1u, 0u, 0u, 0u, UINT32_MAX, &candidate) == EBUSY);
     assert(astra_storage_format_abort(&catalog, legacy, 2u) == ESTALE);
     assert(astra_storage_format_abort(&catalog, legacy, 1u) == 0);
     assert(astra_storage_partition_can_edit(&catalog, disk, 1u) == 0);
@@ -653,7 +653,7 @@ static void format_lifecycle(void)
     assert(strcmp(astra_storage_find(&catalog, legacy)->label, "Old") == 0);
     assert(astra_storage_format_begin(&catalog, legacy, 1u) == 0);
     assert(astra_storage_mount_begin(&catalog, legacy, 1u, ASTRA_VOLUME_READ_ONLY,
-        0u, 0u, &candidate) == EBUSY);
+        0u, 0u, UINT32_MAX, &candidate) == EBUSY);
     assert(astra_storage_format_complete(&catalog, legacy, 2u) == ESTALE);
     assert(astra_storage_format_complete(&catalog, legacy, 1u) == 0);
     const AstraStorageRecord *record = astra_storage_find(&catalog, legacy);
@@ -679,7 +679,7 @@ static void format_lifecycle(void)
     assert(astra_storage_format_begin(&catalog, legacy, 2u) == 0);
     assert(astra_storage_format_complete(&catalog, legacy, 2u) == 0);
     fixed = source(&catalog, ASTRA_VOLUME_FIXED, ASTRA_VOLUME_FAT32, "fixed-id", "Fixed");
-    assert(astra_storage_mount_begin(&catalog, fixed, 1u, 0u, 0u, 0u, &mounted) == 0);
+    assert(astra_storage_mount_begin(&catalog, fixed, 1u, 0u, 0u, 0u, UINT32_MAX, &mounted) == 0);
     uint64_t damaged;
     assert(astra_storage_source(&catalog, medium, 1u, ASTRA_VOLUME_PARTITION_MAP_MBR,
         3u, 257u * 1024u * 1024u, 128u * 1024u * 1024u, &damaged) == 0);
@@ -710,7 +710,7 @@ static void partition_lifecycle(void)
     assert(astra_storage_partition_can_edit(&catalog, disk, 1u) == EBUSY);
     assert(astra_storage_medium(&catalog, disk, 1u, &rejected) == EBUSY);
     assert(rejected == 0u);
-    assert(astra_storage_mount_begin(&catalog, source, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, source, 1u, 0u, 0u, 0u, UINT32_MAX,
         &rejected) == EBUSY);
     assert(astra_storage_format_begin(&catalog, source, 1u) == EBUSY);
     assert(astra_storage_partition_abort(&catalog, disk, 2u) == ESTALE);
@@ -725,7 +725,7 @@ static void partition_lifecycle(void)
         record->partition_map == ASTRA_VOLUME_PARTITION_MAP_OTHER && record->error == EIO);
     assert(astra_storage_find(&catalog, medium)->state == ASTRA_VOLUME_LOST);
     assert(astra_storage_find(&catalog, source)->state == ASTRA_VOLUME_LOST);
-    assert(astra_storage_mount_begin(&catalog, source, 1u, 0u, 0u, 0u,
+    assert(astra_storage_mount_begin(&catalog, source, 1u, 0u, 0u, 0u, UINT32_MAX,
         &rejected) == ESTALE);
     assert(astra_storage_medium(&catalog, disk, 2u, &rejected) == 0);
     astra_storage_catalog_destroy(&catalog);

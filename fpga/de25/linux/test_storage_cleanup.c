@@ -24,7 +24,7 @@ static void failed_rollback(int failed_cleanup)
     uint64_t source, mount;
     assert(astra_storage_catalog_init(&provider.catalog, 1024u * 1024u) == 0);
     assert(astra_storage_ram_source(&provider.catalog, 0u, &source) == 0);
-    assert(astra_storage_mount_begin(&provider.catalog, source, 1u, 0u, 1024u, 16u, &mount) == 0);
+    assert(astra_storage_mount_begin(&provider.catalog, source, 1u, 0u, 1024u, 16u, UINT32_MAX, &mount) == 0);
     assert(astra_storage_mount_result(&provider.catalog, mount, 1u, 0u, EIO) == EIO);
     AstraStorageResource entry = {.id = mount, .generation = 1u,
         .charged_bytes = 1024u, .charged_inodes = 16u,
@@ -43,7 +43,7 @@ static void failed_rollback(int failed_cleanup)
         assert(astra_storage_can_forget(&provider.catalog, mount) == EBUSY);
         assert(astra_storage_no_mounted_children(&provider.catalog, source) == EBUSY);
         uint64_t refused;
-        assert(astra_storage_mount_begin(&provider.catalog, source, 1u, 0u, 1024u, 16u, &refused) == EBUSY);
+        assert(astra_storage_mount_begin(&provider.catalog, source, 1u, 0u, 1024u, 16u, UINT32_MAX, &refused) == EBUSY);
         cleanup_error = 0;
         assert(cleanup_mount_resource(&provider, &entry, 0) == 0);
         record = astra_storage_find(&provider.catalog, mount);
@@ -68,7 +68,7 @@ static void detached_cleanup_retry(void)
     uint64_t source, mount;
     assert(astra_storage_catalog_init(&provider.catalog, 1024u * 1024u) == 0);
     assert(astra_storage_ram_source(&provider.catalog, 0u, &source) == 0);
-    assert(astra_storage_mount_begin(&provider.catalog, source, 1u, 0u, 1024u, 16u, &mount) == 0);
+    assert(astra_storage_mount_begin(&provider.catalog, source, 1u, 0u, 1024u, 16u, UINT32_MAX, &mount) == 0);
     assert(astra_storage_mount_result(&provider.catalog, mount, 1u, 123u, 0) == 0);
     assert(astra_storage_quiesce(&provider.catalog, mount, 1u) == 0);
     AstraStorageResource *entry = reserve(&provider, mount, 1u);

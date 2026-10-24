@@ -4,6 +4,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <libmount/libmount.h>
 #include <libudev.h>
 #include <linux/fs.h>
@@ -21,6 +22,7 @@ struct AstraStorageObservationEntry {
     char *syspath;
     char *disk_syspath;
     char *devnode;
+    char *stable_key;
     dev_t devnum;
     dev_t disk_devnum;
     uint64_t disk_sequence;
@@ -362,7 +364,9 @@ static AstraStorageObservationEntry *add(AstraStorageDiscovery *discovery,
     size_t length = strlen(observation->syspath) + 1u;
     size_t disk_length = strlen(observation->disk_syspath) + 1u;
     size_t node_length = strlen(observation->devnode) + 1u;
-    size_t bytes = sizeof(AstraStorageObservationEntry) + length + disk_length + node_length;
+    size_t key_length = observation->stable_key == NULL ? 1u :
+        strlen(observation->stable_key) + 1u;
+    size_t bytes = sizeof(AstraStorageObservationEntry) + length + disk_length + node_length + key_length;
     if (charge(discovery, bytes) != 0)
         return NULL;
     AstraStorageObservationEntry *entry = calloc(1u, bytes);
@@ -374,6 +378,9 @@ static AstraStorageObservationEntry *add(AstraStorageDiscovery *discovery,
     memcpy(entry->disk_syspath, observation->disk_syspath, disk_length);
     entry->devnode = entry->disk_syspath + disk_length;
     memcpy(entry->devnode, observation->devnode, node_length);
+    entry->stable_key = entry->devnode + node_length;
+    if (observation->stable_key != NULL)
+        memcpy(entry->stable_key, observation->stable_key, key_length);
     entry->bytes = bytes;
     entry->devnum = observation->devnum;
     entry->disk_devnum = observation->disk_devnum;
@@ -462,6 +469,9 @@ int astra_storage_discovery_observe(AstraStorageDiscovery *discovery,
         strnlen(observation->syspath, PATH_MAX) == PATH_MAX ||
         strnlen(observation->disk_syspath, PATH_MAX) == PATH_MAX ||
         strnlen(observation->devnode, PATH_MAX) == PATH_MAX ||
+        (observation->stable_key != NULL &&
+         strnlen(observation->stable_key, ASTRA_STORAGE_NAME_KEY_BYTES) ==
+             ASTRA_STORAGE_NAME_KEY_BYTES) ||
         observation->action < ASTRA_STORAGE_OBSERVE_PRESENT || observation->action > ASTRA_STORAGE_OBSERVE_REMOVE ||
         observation->class_id < ASTRA_VOLUME_FIXED || observation->class_id > ASTRA_VOLUME_OPTICAL ||
         observation->partition_map > ASTRA_VOLUME_PARTITION_MAP_OTHER ||
@@ -495,6 +505,7 @@ int astra_storage_discovery_observe(AstraStorageDiscovery *discovery,
     if (entry != NULL && (entry->devnum != observation->devnum ||
         entry->disk_sequence != observation->disk_sequence || entry->class_id != observation->class_id ||
         entry->partition != observation->partition ||
+        strcmp(entry->stable_key, observation->stable_key == NULL ? "" : observation->stable_key) != 0 ||
         (entry->partition && (entry->partition_number != observation->partition_number ||
             entry->partition_map != observation->partition_map ||
             entry->offset_bytes != observation->offset_bytes ||
@@ -578,7 +589,8 @@ int astra_storage_discovery_observe(AstraStorageDiscovery *discovery,
         entry = add(discovery, observation);
         if (entry == NULL)
             return charge(discovery, sizeof(*entry) + strlen(observation->syspath) +
-                strlen(observation->disk_syspath) + strlen(observation->devnode) + 3u) != 0 ? ENOSPC : ENOMEM;
+                strlen(observation->disk_syspath) + strlen(observation->devnode) +
+                (observation->stable_key == NULL ? 0u : strlen(observation->stable_key)) + 4u) != 0 ? ENOSPC : ENOMEM;
         int error;
         if (entry->partition) {
             if (attach_partition(discovery, entry) == EAGAIN) {
@@ -661,10 +673,22 @@ int astra_storage_discovery_poll(AstraStorageDiscovery *discovery)
         entry->mount = mount;
         entry->auto_attempted = 1; /* manual unmount must stay unmounted */
         if (error != 0 && error != ENOTSUP && error != EROFS &&
-            error != ENOSPC && error != EBUSY)
+            error != ENOSPC && error != EBUSY &&
+            error != discovery->names.error)
             return error;
     }
     return 0;
+}
+
+const char *astra_storage_discovery_key(const AstraStorageDiscovery *discovery,
+                                        uint64_t source)
+{
+    if (discovery == NULL || source == 0u) return NULL;
+    for (const AstraStorageObservationEntry *entry = discovery->entries;
+         entry != NULL; entry = entry->next)
+        if (entry->source == source && entry->stable_key[0] != '\0')
+            return entry->stable_key;
+    return NULL;
 }
 
 static struct udev_device *disk_of(struct udev_device *device)
@@ -816,6 +840,20 @@ static int observe_device(AstraStorageDiscovery *discovery, struct udev_device *
     if (number == 0 || disk_number == 0 || syspath == NULL ||
         disk_syspath == NULL || node == NULL)
         return 0; /* An unidentified event cannot replace a known device. */
+    char stable_key[ASTRA_STORAGE_NAME_KEY_BYTES] = {0};
+    if (!optical && bus != NULL && strcmp(bus, "usb") == 0) {
+        const char *serial = udev_device_get_property_value(disk, "ID_SERIAL");
+        const char *partition_uuid = udev_device_get_property_value(device, "ID_PART_ENTRY_UUID");
+        int length = serial == NULL || serial[0] == '\0' ? -1 :
+            snprintf(stable_key, sizeof(stable_key), "s:%s:%" PRIu64,
+                serial, partition_index);
+        if (length < 0 || (size_t)length >= sizeof(stable_key)) {
+            length = partition_uuid == NULL || partition_uuid[0] == '\0' ? -1 :
+                snprintf(stable_key, sizeof(stable_key), "p:%s", partition_uuid);
+            if (length < 0 || (size_t)length >= sizeof(stable_key))
+                stable_key[0] = '\0';
+        }
+    }
     AstraStorageObservation observation = {
         .syspath = syspath, .disk_syspath = disk_syspath,
         .devnode = node, .devnum = number, .disk_devnum = disk_number,
@@ -829,7 +867,8 @@ static int observe_device(AstraStorageDiscovery *discovery, struct udev_device *
         .partition_map = partition_map(udev_device_get_property_value(disk, "ID_PART_TABLE_TYPE")),
         .media = optical ? one(disk, "ID_CDROM_MEDIA") : 1,
         .partition_table = udev_device_get_property_value(disk, "ID_PART_TABLE_TYPE") != NULL,
-        .read_only = ro != NULL && strcmp(ro, "1") == 0
+        .read_only = ro != NULL && strcmp(ro, "1") == 0,
+        .stable_key = stable_key[0] == '\0' ? NULL : stable_key
     };
     if (observation.disk_sequence == 0u)
         observation.disk_sequence = decimal(udev_device_get_sysattr_value(disk, "diskseq"));
@@ -860,12 +899,16 @@ int astra_storage_discovery_receive(AstraStorageDiscovery *discovery)
 }
 
 int astra_storage_discovery_open(AstraStorageDiscovery *discovery,
-                                  AstraStorageProvider *provider, size_t bytes)
+                                  AstraStorageProvider *provider, size_t bytes,
+                                  const char *name_state_directory)
 {
     if (discovery == NULL || provider == NULL || bytes == 0u || discovery->udev != NULL ||
         discovery->entries != NULL || discovery->reserved != NULL)
         return EINVAL;
-    *discovery = (AstraStorageDiscovery){.provider = provider, .byte_limit = bytes, .fd = -1};
+    *discovery = (AstraStorageDiscovery){.provider = provider, .byte_limit = bytes,
+        .names = ASTRA_STORAGE_NAMES_INIT, .fd = -1};
+    if (name_state_directory != NULL)
+        (void)astra_storage_names_open(&discovery->names, name_state_directory);
     discovery->udev = udev_new();
     if (discovery->udev == NULL)
         return ENOMEM;
@@ -936,5 +979,6 @@ void astra_storage_discovery_close(AstraStorageDiscovery *discovery)
         udev_monitor_unref(discovery->monitor);
     if (discovery->udev != NULL)
         udev_unref(discovery->udev);
+    astra_storage_names_close(&discovery->names);
     *discovery = (AstraStorageDiscovery)ASTRA_STORAGE_DISCOVERY_INIT;
 }

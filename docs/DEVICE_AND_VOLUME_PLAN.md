@@ -92,7 +92,8 @@ readback after unmount/remount, deletion and cleanup. FAT32/exFAT also pass
 physical DE25 native guest and offline durability gates. FAT16/NTFS now pass
 private DE25 native read, read-only mount and Atlas root gates under the
 verified `storage2` kernel. The selected production release includes these
-formats; a physical ISO9660 data CD remains unqualified.
+formats; ISO9660 on physical DVD-R passed native read and Atlas gates. CD-R
+media remains unqualified.
 
 Before this inventory change, Haiku's
 `src/kits/storage/disk_device/Partition.cpp` and
@@ -119,6 +120,12 @@ bounds conservatively overlap; disjoint partition mounts remain concurrent.
 The fence spans retired media on the same physical device until their Linux
 mounts detach, so a new media generation cannot overlap retained old mounts.
 Automount leaves a conflicting source unmounted and visible after `EBUSY`.
+Persistent USB name reservations use verified device serial and partition
+number, or partition UUID when serial is unavailable. Mount publication waits
+for atomic state-map commit; retained mounts continue reserving their active
+names until cleanup. Haiku's `src/servers/mount/AutoMounter.cpp` restores prior
+partition mount settings from saved device/partition identity. Astra adapts
+that restoration to native `/usbN` paths and exact mount generations.
 Disk capacity, partition-map and write-protection changes retire the current
 medium and require new partition admission. Per-partition write-protection
 changes retire that source before it can mount again.
@@ -255,8 +262,10 @@ icon opened Atlas with one root entry. The original runtime and user-data
 image remained selected and were restored after the private trial.
 Physical USB DVD discovery, read-only UDF automount and native root enumeration
 passed on DE25 with a `DVD_VIDEO` disc. Later physical media change and eject
-passed on the selected release; physical ISO9660 data-CD access remains
-unqualified. Image mounts do not qualify it.
+passed on the selected release. A burned physical ISO9660 DVD-R then passed
+`/cd0` read-only automount, Desktop and Atlas root, nested directory and
+multi-sector file reads with exact image/file hashes. CD-R media remains
+unqualified. Image mounts do not qualify these physical gates.
 The inactive `e8a19a63` candidate also passed a guarded physical four-partition
 trial on the SanDisk Cruzer: FAT32 plus three exFAT partitions mounted
 concurrently writable, with native create/read/remove on every mount and four

@@ -26,6 +26,7 @@ Nice=-10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=0
 KillMode=mixed
+KillSignal=SIGUSR1
 NoNewPrivileges=true
 # Storage cleanup retains mounts/loops until Linux confirms real retirement.
 TimeoutStopSec=infinity
