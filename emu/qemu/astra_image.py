@@ -122,7 +122,7 @@ DEFAULT_TERMINFO = os.path.join(
 # Terminal is the shell: it holds system authority no other application may
 # claim, so the startup manifest names its launch ceiling explicitly.
 TERMINAL_CEILING = (
-    "GUI CLIPBOARD VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE WORK:rw HOME:rw TMP:rw RAM_READ RAM_WRITE DH0:r SYSTEM:r FONTS:r LOCAL:rw "
+    "GUI CLIPBOARD VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN WORK:rw HOME:rw TMP:rw RAM_READ RAM_WRITE DH0:r SYSTEM:r FONTS:r LOCAL:rw "
     "COMMANDS:r APPS:r LIBS:r EVENTS:r PROC:rw METRICS:r CONFIG_COMMANDS:r "
     "EVENT_CONTROL NETWORK NETWORK_LISTEN NTP PCM POSIX_PROCESS APP_LAUNCH "
     "SERVICE_MANAGER ENTROPY LOG")
@@ -187,7 +187,7 @@ DISPLAY_STARTUP_MANIFEST = (
     # The machine's accounting, copied to WORK:.astra/sample once a second
     # for the host's astra-top.
     "service /services/sampler grants PROC:r WORK:rw\n"
-    "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER VOLUMES VOLUME_ADMIN VOLUME_USAGE PROC:r APPS:r "
+    "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER VOLUMES VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN PROC:r APPS:r "
     "LIBS:r SYSTEM:r DH0:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
     "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r FONTS:r APPS:r LIBS:r LOG\n"

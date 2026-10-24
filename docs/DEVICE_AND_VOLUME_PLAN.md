@@ -110,6 +110,14 @@ mounted or read-only targets, and validation before commit are adopted. Astra
 must additionally revalidate an exact native device/partition reference and
 generation inside its one provider immediately before any host mutation;
 desktop labels and Linux path strings must never become authority.
+For the native disk CLI and shared DOS API, Haiku's read-only
+`src/kits/storage/disk_device/DiskDevice.cpp` (`PrepareModifications()` and
+`CommitModifications()`) and `src/apps/drivesetup/DiskView.cpp` were also
+reviewed. Astra retains one authoritative provider edit path in
+`filesystem.library`; `dos.library` combines coherent catalog and usage
+snapshots, applies the same GUI/CLI selection policy, and dispatches those
+existing exact-reference format and partition calls. Both clients poll one
+asynchronous job contract, then refresh catalog identities after completion.
 Catalog partition admission also checks each extent against its parent's known
 device capacity. Discovery keeps the device alive when a malformed partition
 exceeds that capacity and accepts a later corrected observation; it never

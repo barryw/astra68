@@ -243,7 +243,7 @@ assert "\\e]133;A" in zshrc and "\\e]133;B" in zshrc
 startup = astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
 desktop_startup = next(line for line in startup
                        if line.startswith("service /services/desktop "))
-assert " grants GUI APP_LAUNCH SERVICE_MANAGER VOLUMES VOLUME_ADMIN VOLUME_USAGE PROC:r APPS:r LIBS:r " in desktop_startup
+assert " grants GUI APP_LAUNCH SERVICE_MANAGER VOLUMES VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN PROC:r APPS:r LIBS:r " in desktop_startup
 assert "DH0:r" in desktop_startup.split()
 assert "/apps/r" not in desktop_startup
 assert startup[0].startswith("service /services/hostfs ")

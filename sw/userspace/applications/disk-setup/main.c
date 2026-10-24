@@ -1,4 +1,5 @@
 #include <astra/control.h>
+#include <astra/dos_library.h>
 #include <astra/fonts.h>
 #include <astra/graphics_kit.h>
 #include <astra/interface_library.h>
@@ -66,6 +67,7 @@ static AstraHandle disk_admin;
 static AstraVolumeWatch watch = ASTRA_VOLUME_WATCH_INIT;
 static AstraVolumeSnapshot snapshot = ASTRA_VOLUME_SNAPSHOT_INIT;
 static AstraVolumeUsageSnapshot usage = ASTRA_VOLUME_USAGE_SNAPSHOT_INIT;
+static AstraDosDiskJob active_job = {0};
 static AstraVolumeReference selected = {0};
 static AstraChoiceItem *items;
 static uint32_t *indices;
@@ -138,42 +140,29 @@ static AstraResult field_text(AstraTextModel *model, char *text, uint32_t capaci
 static const AstraVolumeRecord *editable_device(const AstraVolumeRecord *record)
 {
     if (record == NULL) return NULL;
-    const AstraVolumeRecord *device = record;
-    if (record->kind == ASTRA_VOLUME_SOURCE &&
-        record->origin == ASTRA_VOLUME_ORIGIN_DEVICE) {
-        const AstraVolumeReference reference = {snapshot.epoch, record->id,
-            record->generation};
-        device = astra_volume_snapshot_ancestor(&snapshot, &reference,
-            ASTRA_VOLUME_DEVICE);
-    }
-    if (device == NULL || device->kind != ASTRA_VOLUME_DEVICE ||
-        device->state != ASTRA_VOLUME_DISCOVERED ||
-        (device->class_id != ASTRA_VOLUME_USB &&
-         device->class_id != ASTRA_VOLUME_FIXED) ||
-        (device->flags & (ASTRA_VOLUME_SYSTEM |
-            ASTRA_VOLUME_PHYSICAL_READ_ONLY)) != 0u) return NULL;
-    for (uint32_t at = 0u; at < snapshot.count; ++at) {
-        const AstraVolumeRecord *mount = &snapshot.records[at];
-        if (mount->kind != ASTRA_VOLUME_MOUNT ||
-            (mount->state != ASTRA_VOLUME_MOUNTED &&
-             mount->state != ASTRA_VOLUME_MOUNTING &&
-             mount->state != ASTRA_VOLUME_QUIESCING)) continue;
-        const AstraVolumeReference current = {snapshot.epoch, mount->id, mount->generation};
-        if (astra_volume_snapshot_ancestor(&snapshot, &current,
-            ASTRA_VOLUME_DEVICE) == device) return NULL;
-    }
-    return device;
+    if (record->kind == ASTRA_VOLUME_DEVICE) return record;
+    if (record->kind != ASTRA_VOLUME_SOURCE ||
+        record->origin != ASTRA_VOLUME_ORIGIN_DEVICE) return NULL;
+    const AstraVolumeReference reference = {snapshot.epoch, record->id,
+        record->generation};
+    return astra_volume_snapshot_ancestor(&snapshot, &reference,
+        ASTRA_VOLUME_DEVICE);
 }
 
-static int formatable(const AstraVolumeRecord *record)
+static int allowed_size(const AstraVolumeRecord *record, uint32_t operation,
+    uint64_t size_bytes)
 {
-    return record != NULL && record->kind == ASTRA_VOLUME_SOURCE &&
-        record->origin == ASTRA_VOLUME_ORIGIN_DEVICE &&
-        (record->state == ASTRA_VOLUME_UNMOUNTED ||
-         record->state == ASTRA_VOLUME_FAILED) &&
-        (record->flags & (ASTRA_VOLUME_SYSTEM |
-            ASTRA_VOLUME_PHYSICAL_READ_ONLY)) == 0u &&
-        editable_device(record) != NULL;
+    if (record == NULL) return 0;
+    const AstraDosDiskSnapshot view = {snapshot, usage};
+    const AstraDosDiskRequest request = {
+        {snapshot.epoch, record->id, record->generation}, operation,
+        size_bytes, "ASTRA"};
+    return astra_dos_disk_check(&view, &request) == ASTRA_OK;
+}
+
+static int allowed(const AstraVolumeRecord *record, uint32_t operation)
+{
+    return allowed_size(record, operation, partition_mib * DISK_MIB);
 }
 
 static void dispose_rows(void)
@@ -446,20 +435,24 @@ static uint32_t build_controls(void)
     const AstraVolumeRecord *chosen = selected_row == UINT32_MAX ? NULL :
         &snapshot.records[indices[selected_row]];
     const AstraVolumeRecord *disk = editable_device(chosen);
+    uint64_t maximum = disk != NULL && disk->capacity_bytes > 2u * DISK_MIB ?
+        disk->capacity_bytes / DISK_MIB - 2u : partition_mib;
+    if (maximum < 2u) maximum = 2u;
+    if (maximum > INT64_MAX) maximum = INT64_MAX;
+    if (partition_mode && disk != NULL && partition_mib > maximum)
+        partition_mib = maximum;
     int idle = !formatting && !partitioning;
-    int allowed = idle && formatable(chosen);
-    int can_init = idle && disk != NULL && chosen == disk;
-    int can_create = idle && disk != NULL &&
-        (disk->partition_map == ASTRA_VOLUME_PARTITION_MAP_MBR ||
-         disk->partition_map == ASTRA_VOLUME_PARTITION_MAP_GPT);
-    int can_delete = can_create && chosen != NULL &&
-        chosen->kind == ASTRA_VOLUME_SOURCE && chosen->partition_number != 0u &&
-        (chosen->state == ASTRA_VOLUME_UNMOUNTED ||
-         chosen->state == ASTRA_VOLUME_FAILED);
+    int can_format = idle && allowed(chosen, ASTRA_DOS_DISK_FORMAT_FAT32);
+    int can_init = idle && allowed(chosen, ASTRA_DOS_DISK_INITIALIZE_MBR);
+    int can_create = idle && allowed_size(chosen,
+        ASTRA_DOS_DISK_CREATE_FAT32, DISK_MIB);
+    int can_create_selected = idle && allowed(chosen,
+        ASTRA_DOS_DISK_CREATE_FAT32);
+    int can_delete = idle && allowed(chosen, ASTRA_DOS_DISK_DELETE_PARTITION);
     action.id = DISK_FORMAT_FAT32;
     action.text = partition_mode ? "Initialize MBR map" : "Prepare FAT32 format";
     action.text_length = (uint32_t)strlen(action.text);
-    action.state = (partition_mode ? can_init : allowed) ? 0u : ASTRA_CONTROL_DISABLED;
+    action.state = (partition_mode ? can_init : can_format) ? 0u : ASTRA_CONTROL_DISABLED;
     if (astra_interface_button_init(CONTROL(DISK_FORMAT_FAT32), &action) != ASTRA_OK)
         return DISK_FAIL_CONTROL;
     action.id = DISK_FORMAT_EXFAT;
@@ -474,11 +467,6 @@ static uint32_t build_controls(void)
     if (astra_interface_label_init(CONTROL(DISK_CONFIRM_CAPTION), &caption) != ASTRA_OK)
         return DISK_FAIL_CONTROL;
     if (partition_mode) {
-        uint64_t maximum = disk != NULL && disk->capacity_bytes > 2u * DISK_MIB ?
-            disk->capacity_bytes / DISK_MIB - 2u : partition_mib;
-        if (maximum < 2u) maximum = 2u;
-        if (maximum > INT64_MAX) maximum = INT64_MAX;
-        if (disk != NULL && partition_mib > maximum) partition_mib = maximum;
         stepper.id = DISK_CONFIRM_FIELD;
         stepper.minimum = 1;
         stepper.maximum = (int64_t)maximum;
@@ -499,7 +487,7 @@ static uint32_t build_controls(void)
     action.text = partition_mode ? "Create FAT32 partition" :
         "Erase and format selected source";
     action.text_length = (uint32_t)strlen(action.text);
-    action.state = (partition_mode ? can_create :
+    action.state = (partition_mode ? can_create_selected :
         pending_format != 0u && idle) ? 0u : ASTRA_CONTROL_DISABLED;
     if (astra_interface_button_init(CONTROL(DISK_ERASE), &action) != ASTRA_OK)
         return DISK_FAIL_CONTROL;
@@ -507,7 +495,7 @@ static uint32_t build_controls(void)
         action.id = DISK_CREATE_EXFAT;
         action.text = "Create exFAT partition";
         action.text_length = (uint32_t)strlen(action.text);
-        action.state = can_create ? 0u : ASTRA_CONTROL_DISABLED;
+        action.state = can_create_selected ? 0u : ASTRA_CONTROL_DISABLED;
         if (astra_interface_button_init(CONTROL(DISK_CREATE_EXFAT),
             &action) != ASTRA_OK) return DISK_FAIL_CONTROL;
         action.id = DISK_DELETE_PARTITION;
@@ -563,23 +551,15 @@ static uint32_t present(void)
 
 static uint32_t reload(void)
 {
-    AstraVolumeSnapshot fresh = ASTRA_VOLUME_SNAPSHOT_INIT;
-    AstraVolumeUsageSnapshot held = ASTRA_VOLUME_USAGE_SNAPSHOT_INIT;
-    AstraResult result = astra_volume_snapshot_open(volumes, &fresh);
+    AstraDosDiskSnapshot fresh = ASTRA_DOS_DISK_SNAPSHOT_INIT;
+    AstraResult result = astra_dos_disk_snapshot_open(volumes, usage_service, &fresh);
     if (result == ASTRA_ERROR_BUSY) return ASTRA_STATUS_BUSY;
     if (result != ASTRA_OK) return DISK_FAIL_CATALOG;
-    result = astra_volume_usage_snapshot_open(usage_service, NULL, &held);
-    if (result != ASTRA_OK || held.catalog_sequence != fresh.sequence) {
-        astra_volume_snapshot_close(&fresh);
-        astra_volume_usage_snapshot_close(&held);
-        return result == ASTRA_ERROR_BUSY || result == ASTRA_OK ?
-            ASTRA_STATUS_BUSY : DISK_FAIL_CATALOG;
-    }
     dispose_rows();
-    astra_volume_snapshot_close(&snapshot);
-    astra_volume_usage_snapshot_close(&usage);
-    snapshot = fresh;
-    usage = held;
+    AstraDosDiskSnapshot old = {snapshot, usage};
+    astra_dos_disk_snapshot_close(&old);
+    snapshot = fresh.volumes;
+    usage = fresh.usage;
     uint32_t status = collect_rows();
     if (status == ASTRA_STATUS_OK) status = build_controls();
     if (status == ASTRA_STATUS_OK) status = present();
@@ -607,7 +587,7 @@ static void format_notice(AstraResult result)
 static uint32_t prepare_format(uint32_t format)
 {
     if (selected_row == UINT32_MAX ||
-        !formatable(&snapshot.records[indices[selected_row]])) {
+        !allowed(&snapshot.records[indices[selected_row]], format)) {
         (void)astra_string_copy(notice, sizeof(notice),
             "Source unavailable or in use; inspect mounted volumes");
         return reload();
@@ -637,14 +617,16 @@ static uint32_t start_format(void)
     if (status != ASTRA_STATUS_OK) return status;
     if (selected_row == UINT32_MAX || selected.epoch != format_source.epoch ||
         selected.id != format_source.id || selected.generation != format_source.generation ||
-        !formatable(&snapshot.records[indices[selected_row]])) {
+        !allowed(&snapshot.records[indices[selected_row]], pending_format)) {
         pending_format = 0u;
         (void)astra_string_copy(notice, sizeof(notice),
             "Selection changed or source is in use; format cancelled");
         return build_controls() == ASTRA_STATUS_OK ? present() : DISK_FAIL_CONTROL;
     }
-    AstraResult result = astra_volume_format(disk_admin, &format_source,
-        pending_format, label);
+    const AstraDosDiskSnapshot view = {snapshot, usage};
+    const AstraDosDiskRequest request = {format_source, pending_format, 0u, label};
+    AstraResult result = astra_dos_disk_submit(disk_admin, &view, &request,
+        &active_job);
     if (result != ASTRA_OK) {
         format_notice(result);
         pending_format = 0u;
@@ -689,48 +671,24 @@ static uint32_t start_partition(uint32_t action)
             "Selection changed; disk edit cancelled");
         return build_controls() == ASTRA_STATUS_OK ? present() : DISK_FAIL_CONTROL;
     }
-    const AstraVolumeRecord *chosen = &snapshot.records[indices[selected_row]];
-    const AstraVolumeRecord *disk = editable_device(chosen);
-    if (disk == NULL) {
-        (void)astra_string_copy(notice, sizeof(notice),
-            "Disk in use; unmount every partition before editing");
-        return build_controls() == ASTRA_STATUS_OK ? present() : DISK_FAIL_CONTROL;
-    }
-    AstraVolumeReference device = {snapshot.epoch, disk->id, disk->generation};
-    AstraVolumePartitionEdit edit = {0};
+    uint32_t operation;
     if (action == DISK_FORMAT_FAT32 || action == DISK_FORMAT_EXFAT) {
-        if (chosen != disk) return DISK_FAIL_CONTROL;
-        edit.operation = ASTRA_VOLUME_PARTITION_INITIALIZE;
-        edit.map = action == DISK_FORMAT_FAT32 ?
-            ASTRA_VOLUME_PARTITION_MAP_MBR : ASTRA_VOLUME_PARTITION_MAP_GPT;
+        operation = action == DISK_FORMAT_FAT32 ?
+            ASTRA_DOS_DISK_INITIALIZE_MBR : ASTRA_DOS_DISK_INITIALIZE_GPT;
     } else if (action == DISK_ERASE || action == DISK_CREATE_EXFAT) {
-        if (disk->partition_map != ASTRA_VOLUME_PARTITION_MAP_MBR &&
-            disk->partition_map != ASTRA_VOLUME_PARTITION_MAP_GPT)
-            return DISK_FAIL_CONTROL;
-        edit.operation = ASTRA_VOLUME_PARTITION_CREATE;
-        edit.map = disk->partition_map;
-        edit.format = action == DISK_ERASE ? ASTRA_VOLUME_FAT32 : ASTRA_VOLUME_EXFAT;
-        edit.length_bytes = partition_mib * DISK_MIB;
-        AstraResult found = astra_volume_partition_find_free(&snapshot,
-            &device, edit.length_bytes, &edit.offset_bytes);
-        if (found != ASTRA_OK) {
-            (void)astra_string_copy(notice, sizeof(notice),
-                "No free aligned extent of that size on selected disk");
-            return build_controls() == ASTRA_STATUS_OK ? present() : DISK_FAIL_CONTROL;
-        }
+        operation = action == DISK_ERASE ?
+            ASTRA_DOS_DISK_CREATE_FAT32 : ASTRA_DOS_DISK_CREATE_EXFAT;
     } else if (action == DISK_DELETE_PARTITION) {
-        if (chosen->kind != ASTRA_VOLUME_SOURCE ||
-            chosen->partition_number == 0u ||
-            (chosen->state != ASTRA_VOLUME_UNMOUNTED &&
-             chosen->state != ASTRA_VOLUME_FAILED)) return DISK_FAIL_CONTROL;
-        edit.operation = ASTRA_VOLUME_PARTITION_DELETE;
-        edit.map = disk->partition_map;
-        edit.number = chosen->partition_number;
+        operation = ASTRA_DOS_DISK_DELETE_PARTITION;
     } else return DISK_FAIL_CONTROL;
-    AstraResult result = astra_volume_partition(disk_admin, &device, &edit);
+    const AstraDosDiskSnapshot view = {snapshot, usage};
+    const AstraDosDiskRequest request = {selected, operation,
+        partition_mib * DISK_MIB, NULL};
+    AstraResult result = astra_dos_disk_submit(disk_admin, &view, &request,
+        &active_job);
     if (result != ASTRA_OK) partition_notice(result);
     else {
-        edit_device = device;
+        edit_device = active_job.reference;
         partitioning = 1u;
         (void)clear_confirmation();
         (void)astra_string_copy(notice, sizeof(notice),
@@ -775,9 +733,8 @@ static uint32_t run(AstraHandle gui)
         if ((formatting || partitioning) &&
             astra_clock_monotonic() >= work_poll_at) {
             AstraResult outcome = ASTRA_ERROR_BUSY;
-            AstraResult result = partitioning ?
-                astra_volume_partition_status(disk_admin, &edit_device, &outcome) :
-                astra_volume_format_status(disk_admin, &format_source, &outcome);
+            AstraResult result = astra_dos_disk_status(disk_admin,
+                &active_job, &outcome);
             if (result != ASTRA_OK || outcome != ASTRA_ERROR_BUSY) {
                 if (partitioning) {
                     partition_notice(result == ASTRA_OK ? outcome : result);
@@ -843,7 +800,7 @@ static uint32_t run(AstraHandle gui)
             (action.control_id == DISK_FORMAT_FAT32 || action.control_id == DISK_FORMAT_EXFAT)) {
             uint32_t status = partition_mode ? start_partition(action.control_id) :
                 prepare_format(action.control_id == DISK_FORMAT_FAT32 ?
-                    ASTRA_VOLUME_FAT32 : ASTRA_VOLUME_EXFAT);
+                    ASTRA_DOS_DISK_FORMAT_FAT32 : ASTRA_DOS_DISK_FORMAT_EXFAT);
             if (status != ASTRA_STATUS_OK && status != ASTRA_STATUS_BUSY) return status;
             if (partition_mode) work_poll_at = 0u;
             continue;

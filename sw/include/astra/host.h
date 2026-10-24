@@ -123,11 +123,15 @@ enum {
 #define ASTRA_HOST_VOLUME_HOLDERS_CHANGED UINT16_C(4)
 /** Provider-only exact physical-source format or prior-generation status. */
 #define ASTRA_HOST_VOLUME_FORMAT UINT16_C(5)
+/** Start provider format. */
 #define ASTRA_HOST_VOLUME_FORMAT_START UINT32_C(1)
+/** Query provider format status. */
 #define ASTRA_HOST_VOLUME_FORMAT_STATUS UINT32_C(2)
 /** Provider-only exact physical-device partition-map edit or status. */
 #define ASTRA_HOST_VOLUME_PARTITION UINT16_C(6)
+/** Start provider disk-map edit. */
 #define ASTRA_HOST_VOLUME_PARTITION_START UINT32_C(1)
+/** Query provider disk-map edit status. */
 #define ASTRA_HOST_VOLUME_PARTITION_STATUS UINT32_C(2)
 /** Provider-only lifecycle request. requester is kernel-stamped by HostFS's
  * receive endpoint, never accepted from an application payload. */

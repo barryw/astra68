@@ -204,25 +204,45 @@ ASTRA_NODISCARD AstraResult astra_volume_control(AstraHandle administrator,
  * @param source Exact physical source selected from a coherent catalog.
  * @param format ASTRA_VOLUME_FAT32 or ASTRA_VOLUME_EXFAT.
  * @param label Zero-terminated ASCII label of at most 11 characters.
+ * @return ASTRA_OK on admission, or error before formatting starts.
  */
 ASTRA_NODISCARD AstraResult astra_volume_format(AstraHandle administrator,
     const AstraVolumeReference *source, uint32_t format, const char *label);
 /** Poll one admitted format using the generation passed to astra_volume_format.
+ * @param administrator DISK_ADMIN capability.
+ * @param source Source incarnation passed at admission.
  * @param outcome Receives ASTRA_ERROR_BUSY while running, ASTRA_OK on success,
  * or the mapped failure. Cleared on query failure.
+ * @return ASTRA_OK on a valid query, or query error.
  */
 ASTRA_NODISCARD AstraResult astra_volume_format_status(AstraHandle administrator,
     const AstraVolumeReference *source, AstraResult *outcome);
 /** Admit an exact physical disk-map edit. All mounted descendants must be
  * unmounted first. Completion retires old partition sources and rereads the
- * kernel map before publishing a new device generation. */
+ * kernel map before publishing a new device generation.
+ * @param administrator DISK_ADMIN capability.
+ * @param device Exact physical device incarnation.
+ * @param edit Typed partition-map edit.
+ * @return ASTRA_OK on admission, or error before editing starts.
+ */
 ASTRA_NODISCARD AstraResult astra_volume_partition(AstraHandle administrator,
     const AstraVolumeReference *device, const AstraVolumePartitionEdit *edit);
-/** Poll an admitted edit using the device generation passed at admission. */
+/** Poll an admitted edit using the device generation passed at admission.
+ * @param administrator DISK_ADMIN capability.
+ * @param device Device incarnation passed at admission.
+ * @param outcome Receives ASTRA_ERROR_BUSY until terminal worker outcome.
+ * @return ASTRA_OK on a valid query, or query error.
+ */
 ASTRA_NODISCARD AstraResult astra_volume_partition_status(AstraHandle administrator,
     const AstraVolumeReference *device, AstraResult *outcome);
 /** Find first MiB-aligned free extent on one current physical device, keeping
- * one MiB clear at each edge for disk-map metadata. */
+ * one MiB clear at each edge for disk-map metadata.
+ * @param snapshot Coherent catalog containing device and partition sources.
+ * @param device Exact physical device incarnation.
+ * @param length_bytes Requested aligned partition length.
+ * @param offset_bytes Receives first free start offset.
+ * @return ASTRA_OK when extent fits, or error.
+ */
 ASTRA_NODISCARD AstraResult astra_volume_partition_find_free(
     const AstraVolumeSnapshot *snapshot, const AstraVolumeReference *device,
     uint64_t length_bytes, uint64_t *offset_bytes);

@@ -2,7 +2,41 @@
 
 Status: active continuation map, 2026-10-24
 
-Current DE25 filesystem release, 2026-10-24: coherent release
+Current DE25 filesystem release, 2026-10-24: release
+`16e82ed063b34a0b6c73b2383d1645b6b736bbcc1257e4e3d7e7754756d5a403`
+passed package verification and normal deployment (`ASTRA_DE25_RELEASE PASS`)
+with the unchanged qualified kernel identity
+`cbb18f706daf0daeb4c74260a321a2cb9d63c3d758eb655b21bba77c7f4bbdb6`.
+`dos.library.1` is now packaged in Filesystem Kit and its public NDK. It
+combines one coherent Volume catalog and usage snapshot, applies the same
+disk-edit selection policy for Disk Setup and the native `disk` command, and
+dispatches existing exact-reference format/partition operations from
+`filesystem.library.15`. The latter remains the sole owner of volume
+operations; the shared-symbol ownership and export gates pass with no
+duplicate definitions. `disk` supports list, info, MBR/GPT initialization,
+FAT32/exFAT partition creation and formatting, and partition deletion. Edits
+require an exact epoch:ID:generation and typed `ERASE`. Terminal's trusted
+launch ceiling and Desktop delegation now admit `DISK_ADMIN` for this command.
+Beast gates passed: DOS host policy test, ASan/UBSan and analyzer, Filesystem
+Kit manifest, NDK check and distribution, full userspace build/test, image
+policy, shared-library ownership, native QEMU `disk list` and stale-edit
+refusal. A native DE25 Terminal `disk list` shows FAT32 `ASTRA_FAT` mounted
+read/write at `/usb0`, exFAT `ASTRA_EXFAT` read/write at `/usb2`, UDF
+`ASTRA_UDF` read-only at `/usb1`, and ISO9660 `ASTRA_CD` read-only at `/cd0`.
+Native `disk info 14` on the prior candidate reported one mount and zero
+retained resources. No destructive CLI operation was run on physical media;
+Disk Setup and the command share the tested DOS dispatch path. All three
+services are active with `Result=success NRestarts=0`. The retained
+`panic-latest.log` is dated before this deployment; no new panic was observed.
+Evidence: Beast `/var/tmp/astra-dos-gate.log`,
+`/var/tmp/astra-dos-ndk-gate.log`, `/var/tmp/astra-dos-userspace-gate.log`,
+`/var/tmp/astra-dos-image-policy-test.log`,
+`/var/tmp/astra-dos-qemu-reject.log`, `/var/tmp/astra-dos-qemu-final.log`,
+`/var/tmp/astra-dos-publish2.log`, `/var/tmp/astra-dos-deploy2.log`, and
+`/var/tmp/astra-dos-de25-list.log`. Haiku comparison and adapted boundaries
+are recorded in `docs/DEVICE_AND_VOLUME_PLAN.md`.
+
+Previous DE25 filesystem release, 2026-10-24: coherent release
 `c041b26486b4d609cfecc526505595930710be0eb37e7b31ee565aa721fc2c65`
 passed package verification and normal deployment (`ASTRA_DE25_RELEASE PASS`),
 with kernel identity `cbb18f706daf0daeb4c74260a321a2cb9d63c3d758eb655b21bba77c7f4bbdb6`.

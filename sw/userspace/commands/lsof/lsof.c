@@ -10,21 +10,6 @@
 
 ASTRA_PROGRAM("lsof", 1, 0, 0, "Barry Walker", "Copyright 2026 Barry Walker");
 
-static int print_bytes(const char *text, uint32_t length)
-{
-    static const char hex[] = "0123456789abcdef";
-    for (uint32_t at = 0u; at < length; ++at) {
-        unsigned char byte = (unsigned char)text[at];
-        if (byte < 32u || byte == 127u) {
-            if (fputs("\\x", stdout) == EOF || putchar(hex[byte >> 4u]) == EOF ||
-                putchar(hex[byte & 15u]) == EOF) return 0;
-        } else if (byte == '\\') {
-            if (fputs("\\\\", stdout) == EOF) return 0;
-        } else if (putchar(byte) == EOF) return 0;
-    }
-    return 1;
-}
-
 int main(int argc, char **argv)
 {
     if (argc > 2) { fputs("usage: lsof [mounted-volume]\n", stderr); return 2; }
@@ -72,13 +57,13 @@ int main(int argc, char **argv)
                 processes[process].process.id == row->process &&
                 memchr(processes[process].name, '\0', sizeof(processes[process].name)) != NULL)
                 name = processes[process].name;
-        failed = printf("%lu ", (unsigned long)row->process) < 0 || !print_bytes(name, (uint32_t)strlen(name)) ||
+        failed = printf("%lu ", (unsigned long)row->process) < 0 || !volume_cli_print_bytes(name, (uint32_t)strlen(name)) ||
             printf(" %s %llu %s%s %llu %llu:%llu:%llu ", kinds[row->kind],
                 (unsigned long long)row->handle, (row->rights & ASTRA_RIGHT_READ) != 0u ? "r" : row->rights == 0u ? "-" : "",
                 (row->rights & ASTRA_RIGHT_WRITE) != 0u ? "w" : "",
                 (unsigned long long)row->inode, (unsigned long long)row->volume.epoch,
                 (unsigned long long)row->volume.id, (unsigned long long)row->volume.generation) < 0 ||
-            !print_bytes(row->path, row->path_length);
+            !volume_cli_print_bytes(row->path, row->path_length);
         if (row->flags & ASTRA_VOLUME_USAGE_UNNAMED) failed |= fputs("[unnamed retained object]", stdout) == EOF;
         if (row->flags & ASTRA_VOLUME_USAGE_LOST) failed |= fputs(" [lost]", stdout) == EOF;
         if (row->flags & ASTRA_VOLUME_USAGE_ACTIVE) failed |= fputs(" [operation active]", stdout) == EOF;

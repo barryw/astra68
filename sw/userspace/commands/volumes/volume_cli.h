@@ -12,6 +12,7 @@ typedef struct VolumeCli {
 int volume_cli_open(VolumeCli *cli, const char *command);
 void volume_cli_close(VolumeCli *cli);
 int volume_cli_number(const char *text, uint64_t *number);
+int volume_cli_print_bytes(const char *text, uint32_t length);
 int volume_cli_select(VolumeCli *cli, const char *selector, uint32_t kind,
     AstraVolumeRecord *record, AstraVolumeReference *reference,
     AstraVolumeReference *parent);

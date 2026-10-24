@@ -33,7 +33,7 @@ DIST_ARCHIVE := $(DIST_DIR)/$(DIST_NAME).tar.xz
 DOC_STAMP := build/docs/.complete
 DOC_INPUTS := $(shell find docs -type f) $(wildcard include/astra/*.h examples/*.c) \
 	$(KERNEL_ABI_HEADERS)
-OS_COMPONENTS := runtime system graphics vfs streams posix network events \
+OS_COMPONENTS := runtime system graphics vfs dos streams posix network events \
 	config interface audio
 NDK_EXTERNAL_LIBRARY_KEYS := $(ASTRA_LIBRARY_KEYS)
 NDK_SHARED_LIBRARY_CONTRACTS := $(call astra_library_contract_owner_targets,\

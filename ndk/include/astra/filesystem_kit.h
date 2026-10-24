@@ -8,5 +8,6 @@
 
 
 #include <astra/filesystem_library.h>
+#include <astra/dos_library.h>
 
 #endif

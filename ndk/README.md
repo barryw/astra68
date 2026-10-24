@@ -102,6 +102,10 @@ component; see the Layout section above.
 `astra/filesystem_kit.h` publishes the corresponding Filesystem Kit identity;
 its direct API provides high-level file/directory operations and the existing
 low-level VFS primitives without exposing storage-service internals.
+`astra/dos_library.h` exposes the Filesystem Kit's `dos.library` disk inventory
+and administration API. It shares exact selection and edit policy between
+Disk Setup and the native `disk` command; actual storage operations remain in
+`filesystem.library`.
 
 `astra/interface_kit.h` publishes the Interface Kit identity and direct API.
 Its controls, responsive layout, TextSurface, typed clipboard, and

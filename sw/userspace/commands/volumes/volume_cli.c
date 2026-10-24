@@ -46,6 +46,21 @@ int volume_cli_number(const char *text, uint64_t *number)
     return 1;
 }
 
+int volume_cli_print_bytes(const char *text, uint32_t length)
+{
+    static const char hex[] = "0123456789abcdef";
+    for (uint32_t at = 0u; at < length; ++at) {
+        unsigned char byte = (unsigned char)text[at];
+        if (byte < 32u || byte == 127u) {
+            if (fputs("\\x", stdout) == EOF || putchar(hex[byte >> 4u]) == EOF ||
+                putchar(hex[byte & 15u]) == EOF) return 0;
+        } else if (byte == '\\') {
+            if (fputs("\\\\", stdout) == EOF) return 0;
+        } else if (putchar(byte) == EOF) return 0;
+    }
+    return 1;
+}
+
 static int volume_name_equal(const char *selector, const char *name)
 {
     if (*selector == '/') ++selector;

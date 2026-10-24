@@ -13,6 +13,7 @@ capability LIBS:r
 capability LOG
 requires compiler.library 2 2.0.0
 requires filesystem.library 15 15.2.0
+requires dos.library 1 1.0.0
 requires font.library 5 5.0.0
 requires graphics.library 3 3.0.0
 requires interface.library 7 7.2.0

@@ -10,6 +10,7 @@ capability VOLUMES
 capability VOLUME_READ
 capability VOLUME_WRITE
 capability VOLUME_ADMIN
+capability DISK_ADMIN
 capability VOLUME_USAGE
 capability CLIPBOARD
 capability WORK:rw

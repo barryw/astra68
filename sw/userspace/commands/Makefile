@@ -71,7 +71,7 @@ TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 # port builds them (it owns SDL's headers and build rules); this directory
 # strips them and checks their libraries like every other command.
 SDL_COMMANDS := loopwave
-COMMANDS := status events log devices volumes mount unmount lsof df which open service shutdown restart ls ps metrics cat mkdir rm \
+COMMANDS := status events log devices volumes disk mount unmount lsof df which open service shutdown restart ls ps metrics cat mkdir rm \
 	    nice renice \
 	    heapbench fsstress fsbench date echo ntp ping lua vim zsh $(SDL_COMMANDS)
 TEST_COMMANDS := posix hello cxx fpucheck logburst fssem fsprobe
@@ -85,6 +85,7 @@ log_EXTRA_SOURCES := log/log_filter.c
 date_EXTRA_SOURCES := date/date_support.c
 ps_EXTRA_SOURCES := ps/ps_support.c
 mount_EXTRA_SOURCES := volumes/volume_cli.c
+disk_EXTRA_SOURCES := volumes/volume_cli.c
 unmount_EXTRA_SOURCES := volumes/volume_cli.c
 lsof_EXTRA_SOURCES := volumes/volume_cli.c
 
@@ -97,6 +98,7 @@ events_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 log_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 devices_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 volumes_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+disk_LIBRARIES := $(LIBC_LIBRARY) $(ASTRA_DOS_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 mount_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 unmount_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 lsof_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)

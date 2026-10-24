@@ -108,6 +108,7 @@ enum AstraVolumePartitionOperation {
     ASTRA_VOLUME_PARTITION_CREATE,
     ASTRA_VOLUME_PARTITION_DELETE
 };
+/** Exact provider disk-map request in bytes. */
 typedef struct AstraVolumePartitionEdit {
     uint32_t operation; /**< AstraVolumePartitionOperation. */
     uint32_t map; /**< AstraVolumePartitionMap. */
