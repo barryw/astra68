@@ -36,6 +36,18 @@ path behind its native volume lifecycle. Beast evidence:
 `/var/tmp/astra-optical-eject-trial-20261024/` and its WORK export, plus the
 production WORK `.astra/syslog`.
 
+Final-release USB regression, 2026-10-24: on the selected
+`8ccd548b5a0c9ec619c5f8dc98622ea13b7b015c348a2952aae8d91f82f97993`
+DE25 release, native `volumes --all` listed the user-authorized disposable
+SanDisk's three GPT partitions simultaneously: FAT32 `ASTRA_FAT` at `/usb0`
+read/write, exFAT `ASTRA_EXFAT` at `/usb1` read/write, and UDF `ASTRA_UDF` at
+`/usb2` read-only, with exact partition numbers and byte ranges. Native
+Terminal created, read back and removed a distinct file on each writable
+volume; all commands returned status zero and later lookups returned status
+one. It read the UDF fixture and refused a write with status one; the attempted
+file was absent. `astra.service NRestarts=0`. Board evidence:
+`/var/lib/astra/hostfs/work/final-usb-*.txt` and matching status files.
+
 Previous production filesystem checkpoint, 2026-10-24: coherent release
 `2fd5a272d3f75564800f0b41a398739551ee61cc4d61e5907f1636c0db617b31`
 was selected and running on DE25. Optical eject now refuses while **any**

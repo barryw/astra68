@@ -67,13 +67,15 @@ first aligned free extent from coherent inventory, and the provider converts
 byte geometry using the observed disk's logical sector size. All edits
 require `ERASE` and refuse mounted siblings. The provider retains
 `PARTITIONING` through worker completion, source retirement and Linux map
-reread. Physical DE25 partition-map editing and post-edit rediscovery remain
-release gates. FAT32/exFAT formatting passes private DE25 physical gates. The
+reread. Native GPT edits, post-edit rediscovery and FAT32/exFAT formatting
+passed private DE25 physical gates; the MBR edit worker passed disposable
+Beast loop gates. The
 [production PRD](FILESYSTEM_PRODUCTION_PRD.md) requires exact-reference
 destructive-operation checks. The 2026-10-22 physical USB
 test qualified one ext4 partition. A 2026-10-23 private DE25 run qualified
 concurrent ISO9660, FAT12 and ext4 partitions on the same GPT USB device;
-native partition editing still needs a physical gate.
+later native partition edits passed the physical gates recorded in
+[Current State](CURRENT_STATE.md).
 The provider currently accepts ext4, FAT32 and exFAT data volumes, ISO9660/UDF
 optical media and tmpfs. Current source also recognizes FAT12/FAT16 and mounts
 them read-only, admits ISO9660/UDF on USB read-only, and mounts NTFS on
@@ -88,7 +90,8 @@ access and cleanup. The same fixture tests FAT32/exFAT writable creation,
 readback after unmount/remount, deletion and cleanup. FAT32/exFAT also pass
 physical DE25 native guest and offline durability gates. FAT16/NTFS now pass
 private DE25 native read, read-only mount and Atlas root gates under the
-verified `storage2` kernel; full production activation remains open.
+verified `storage2` kernel. The selected production release includes these
+formats; a physical ISO9660 data CD remains unqualified.
 
 Before this inventory change, Haiku's
 `src/kits/storage/disk_device/Partition.cpp` and
@@ -130,6 +133,11 @@ its parent disk's write protection. Effective read-only filesystem policy is
 reported separately from physical write protection, so writable FAT16/NTFS
 media can still be considered for a qualified reformat after unmount. Disk
 Setup reports both states.
+
+### Historical implementation checkpoints
+
+The following design notes and trial results record how the native edit path
+was built. [Current State](CURRENT_STATE.md) owns current release status.
 
 Disk Setup must receive a separate destructive administration capability;
 Desktop and Terminal retain only their existing mount/unmount authority. Its
@@ -245,8 +253,9 @@ left no files, Linux mount namespace showed `ro` for both, and each desktop
 icon opened Atlas with one root entry. The original runtime and user-data
 image remained selected and were restored after the private trial.
 Physical USB DVD discovery, read-only UDF automount and native root enumeration
-passed on DE25 with a `DVD_VIDEO` disc. Physical ISO9660 data-CD access, optical
-media change and eject remain unqualified; image mounts do not qualify them.
+passed on DE25 with a `DVD_VIDEO` disc. Later physical media change and eject
+passed on the selected release; physical ISO9660 data-CD access remains
+unqualified. Image mounts do not qualify it.
 The inactive `e8a19a63` candidate also passed a guarded physical four-partition
 trial on the SanDisk Cruzer: FAT32 plus three exFAT partitions mounted
 concurrently writable, with native create/read/remove on every mount and four
@@ -255,8 +264,9 @@ blocked unmount, and leaving the directory allowed unmount and native
 exact-source remount without disturbing three sibling mounts. Disk Setup
 showed all four active mounts and disabled format controls for selected
 partition 3. Production image and selected release were unchanged after
-guarded restoration; no candidate panic appeared. Partition-map editing
-remains necessary for FS41.
+guarded restoration; no candidate panic appeared. Later native Disk Setup
+partition-map edits and post-edit rediscovery passed physical gates recorded
+in [Current State](CURRENT_STATE.md).
 The final kernel must ship the supported Linux drivers and pass together with
 the exact provider, QEMU, ROM, libraries, policy and preserved data image.
 
