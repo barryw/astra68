@@ -95,6 +95,7 @@ static void discovered_media(AstraStorageProvider *provider, const char *image)
             mounted = rows[at].id;
         }
     assert(mounted != 0u);
+    uint64_t old_source = astra_storage_find(&provider->catalog, mounted)->parent;
     int root;
     assert(astra_storage_provider_root(provider, mounted, 1u, &root) == 0);
     assert(openat(root, "forbidden", O_CREAT | O_WRONLY, 0600) == -1 && errno == EROFS);
@@ -108,6 +109,26 @@ static void discovered_media(AstraStorageProvider *provider, const char *image)
     assert(astra_storage_provider_reap(provider) == EAGAIN);
     wait_work(provider);
     assert(astra_storage_find(&provider->catalog, mounted) != NULL);
+    ++observation.sequence;
+    observation.media = 1;
+    assert(astra_storage_discovery_observe(&discovery, &observation) == 0);
+    poll_probes(provider);
+    assert(astra_storage_discovery_poll(&discovery) == 0);
+    assert(astra_storage_snapshot(&provider->catalog, 0u, 0u, rows,
+        ASTRA_STORAGE_PROVIDER_PAGE, &count, &next, &sequence) == 0 && next == 0u);
+    uint64_t replacement = 0u;
+    for (size_t at = 0u; at < count; ++at) {
+        if (rows[at].kind == ASTRA_VOLUME_SOURCE &&
+            rows[at].origin == ASTRA_VOLUME_ORIGIN_DEVICE &&
+            rows[at].id != old_source && rows[at].state != ASTRA_VOLUME_LOST)
+            replacement = rows[at].id;
+        if (rows[at].kind == ASTRA_VOLUME_MOUNT &&
+            rows[at].origin == ASTRA_VOLUME_ORIGIN_DEVICE &&
+            rows[at].id != mounted)
+            assert(rows[at].state != ASTRA_VOLUME_MOUNTING &&
+                rows[at].state != ASTRA_VOLUME_MOUNTED);
+    }
+    assert(replacement != 0u); /* old held Linux mount fences replacement */
     close(root);
     for (unsigned at = 0u; at < 10000u && astra_storage_find(&provider->catalog, mounted) != NULL; ++at) {
         int reaped = astra_storage_provider_reap(provider);
@@ -116,6 +137,20 @@ static void discovered_media(AstraStorageProvider *provider, const char *image)
         usleep(1000);
     }
     assert(astra_storage_find(&provider->catalog, mounted) == NULL);
+    assert(astra_storage_discovery_poll(&discovery) == 0);
+    wait_work(provider);
+    assert(astra_storage_snapshot(&provider->catalog, 0u, 0u, rows,
+        ASTRA_STORAGE_PROVIDER_PAGE, &count, &next, &sequence) == 0 && next == 0u);
+    uint64_t replacement_mount = 0u;
+    for (size_t at = 0u; at < count; ++at)
+        if (rows[at].kind == ASTRA_VOLUME_MOUNT && rows[at].parent == replacement &&
+            rows[at].state == ASTRA_VOLUME_MOUNTED)
+            replacement_mount = rows[at].id;
+    assert(replacement_mount != 0u && replacement_mount != mounted);
+    assert(astra_storage_provider_root(provider, replacement_mount, 1u, &root) == 0);
+    assert(openat(root, "forbidden", O_CREAT | O_WRONLY, 0600) == -1 && errno == EROFS);
+    close(root);
+    assert(unmount_wait(provider, replacement_mount, 1u) == 0);
     ++observation.sequence;
     observation.action = ASTRA_STORAGE_OBSERVE_REMOVE;
     assert(astra_storage_discovery_observe(&discovery, &observation) == 0);

@@ -54,6 +54,20 @@ tables and QMP gate script), `/var/lib/astra/hostfs/work/udf-20261024-*.txt`
 (guest command outputs), and `.astra/syslog` in that WORK export (Desktop and
 Atlas logs). Physical data-CD/media-change/eject gates remain open.
 
+Optical replacement software checkpoint, 2026-10-24: the real Linux provider
+loop-device fixture now simulates removal and reinsertion of the same ISO9660
+medium while a root directory handle retains the old Linux mount. The new
+medium gets a distinct source but cannot mount over the retained old bytes.
+After the handle closes and the old mount reaps, automount admits the new
+read-only source; root access and safe unmount pass. The same image/UUID is
+intentional, exercising generation fencing. Beast provider test passes both
+normally and under ASan/UBSan. Haiku reference:
+`src/system/kernel/disk_device_manager/KDiskDeviceManager.cpp` uninitializes
+old media before rescan, and `src/add-ons/kernel/drivers/disk/scsi/scsi_cd/scsi_cd.cpp`
+invalidates its I/O scheduler on media change; Astra retains its native
+medium generations and Linux mount cleanup fence. This software gate does
+not qualify a physical optical drive, disc replacement, or eject.
+
 Previous production filesystem checkpoint, 2026-10-24: coherent release
 `04aa23c8dd06eeba18f8c972cb27dc4ad360de59b96e67a2140eda0de2dde5d8`
 was selected and ran on DE25. The stopped legacy `/dh0` image was copied,
