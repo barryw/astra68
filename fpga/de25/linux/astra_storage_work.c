@@ -56,8 +56,13 @@ static void child(AstraStorageDomain domain, AstraStorageRecord record,
     mounted.backing = -1; /* Parent retains backing and performs final cleanup. */
     mounted.root = -1;
     int error;
-    if (operation == ASTRA_STORAGE_WORK_EJECT)
-        error = ioctl(4, CDROMEJECT, 0) == 0 ? 0 : errno;
+    if (operation == ASTRA_STORAGE_WORK_EJECT) {
+        /* Explicit unlock matches Linux eject and clears drive media removal. */
+        if (ioctl(4, CDROM_LOCKDOOR, 0) != 0 && errno != EOPNOTSUPP)
+            error = errno;
+        else
+            error = ioctl(4, CDROMEJECT, 0) == 0 ? 0 : errno;
+    }
     else if (operation == ASTRA_STORAGE_WORK_ATTACH)
         error = astra_storage_linux_attach(&domain, &record, originals[1] < 0 ? -1 : 4, &mounted);
     else

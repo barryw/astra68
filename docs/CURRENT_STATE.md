@@ -2,9 +2,43 @@
 
 Status: active continuation map, 2026-10-24
 
-Latest production filesystem checkpoint, 2026-10-24: coherent release
+Latest physical optical checkpoint, 2026-10-24: a Pioneer BDR-XD08
+(`08e4:017a`, serial `1854081922802053`) with the SpongeBob `DVD_VIDEO`
+UDF DVD auto-mounted read-only at `/cd0` on the production DE25. The Desktop
+showed its volume icon; Atlas opened `VIDEO_TS`; native root enumeration and
+`VIDEO_TS.IFO` read succeeded, with the 16,384-byte file matching the Linux
+provider mount by SHA-256. Native `unmount --eject /cd0` refused a held file
+and `lsof /cd0` named the Terminal process and exact IFO path. The first
+Desktop Eject safely unmounted but the drive refused tray release with SCSI
+`53/02`, and Astra showed "Eject failed; the disc remains in the drive".
+Linux `eject` succeeded with `CDROM_LOCKDOOR(0)` before `CDROMEJECT`; the
+shared provider worker now uses that sequence, allowing lockless drives to
+skip unsupported unlock. A coherent private DE25 candidate
+`3e2683c3c31538d55e722b4e14ee25d261d0fae1809b9cbcc21e00c274604d59`
+then returned native eject status zero and the disc left `/dev/sr0`. Its
+five-minute trial had no panic; guard restored the original production image
+SHA-256 `652855117dcac14bf2aa290ad810a0162c90f6d8a7fdd4ea104a4f7ddd40c0c8`,
+selector and three active services. The final lockless-drive refinement was
+released as `8ccd548b5a0c9ec619c5f8dc98622ea13b7b015c348a2952aae8d91f82f97993`:
+the normal deployment reported `ASTRA_DE25_RELEASE PASS`, POST passed, and
+all three services were active with `astra.service NRestarts=0`. After the
+user reinserted the DVD, the final release auto-mounted `/cd0`, showed its
+Desktop icon, and Atlas enumerated one root folder. Desktop context Eject
+then withdrew the icon, removed the disc and logged `desktop volume ejected`
+without a service restart. A physical ISO9660 data CD remains unqualified.
+Haiku reference: `src/add-ons/kernel/drivers/disk/scsi/scsi_cd/scsi_cd.cpp`
+uses a SCSI start/stop eject operation; Astra retains the Linux optical ioctl
+path behind its native volume lifecycle. Beast evidence:
+`/var/tmp/astra-optical-eject-build-20261024.log` and
+`/var/tmp/astra-optical-eject-provider-final-20261024.log`, plus
+`/var/tmp/astra-optical-eject-final-build-20261024.log` and
+`/var/tmp/astra-optical-eject-final-deploy-20261024.log`. Board evidence:
+`/var/tmp/astra-optical-eject-trial-20261024/` and its WORK export, plus the
+production WORK `.astra/syslog`.
+
+Previous production filesystem checkpoint, 2026-10-24: coherent release
 `2fd5a272d3f75564800f0b41a398739551ee61cc4d61e5907f1636c0db617b31`
-is selected and running on DE25. Optical eject now refuses while **any**
+was selected and running on DE25. Optical eject now refuses while **any**
 partition on the same disc remains mounted; the prior source-only guard could
 retire a sibling mount. Desktop exposes `Eject` for a mounted physical optical
 volume through its existing common command menu. It first performs the same
@@ -21,7 +55,7 @@ Desktop with `/dh0`, `/usb0`, `/usb1`; a USB0 right-click opened the shared
 context menu. Its guard restored the prior selector, identical stopped
 production-image SHA-256, and all three services (`TRIAL_RESTORED result=0`).
 The normal deployment migrated the stable image, verified running kernel and
-release, and reported `ASTRA_DE25_RELEASE PASS`. Current services are active,
+release, and reported `ASTRA_DE25_RELEASE PASS`. Its services were active,
 `astra.service NRestarts=0`, FAT32 and exFAT icons are visible, and the only
 panic report predates this release. Haiku reference:
 `src/kits/tracker/PoseView.cpp` and `src/kits/tracker/FSUtils.cpp` guard boot
@@ -31,9 +65,9 @@ native medium/partition graph and separate Eject operation. Beast evidence:
 `/var/tmp/astra-fs-eject-root-observed12-volume-ui.log`, and
 `/var/tmp/astra-fs-eject-deploy12-20261024.log`. Board evidence:
 `/var/tmp/astra-fs-private-trial-eject12-20261024.log` and its work directory.
-Physical data CD, optical media change and physical eject remain unqualified
-because no optical drive/disc is attached. Performance qualification remains
-deferred until correctness gates finish.
+At this release's qualification, no optical drive was attached. The later
+physical gate above supersedes its eject status. Performance qualification
+remains deferred until correctness gates finish.
 
 Latest physical USB UDF gate, 2026-10-24: on the user-authorized disposable
 SanDisk Cruzer serial `FC006A81F5493213`, a 64 MiB GPT third partition was
