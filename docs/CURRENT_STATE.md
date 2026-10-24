@@ -28,9 +28,16 @@ Evidence: Beast `/var/tmp/astra-stable-usb-publish-20261024.log` and
 partition mount settings by saved device/partition identity; Astra adapts that
 pattern to native path reservations and exact mount generations. Physical
 CD-R remains unqualified because only DVD-R media is available. Board host
-OOM during package installation and recurring historical `ramfs:2: failed`
-supervisor log need separate diagnosis; neither occurred as a guest panic in
-this release gate. Performance qualification remains deferred.
+OOM during package installation needs separate resource qualification. The
+recurring `ramfs:2: failed` boot log came from a persisted, user-tier service
+definition pointing to removed `/services/ramfs`; the current image no longer
+ships that service and `/ram0` uses the native tmpfs provider. Its definition
+was saved in WORK `inspect-ramfs-service.txt`, then disabled through native
+`service disable ramfs`, preserving the file for recovery. After clean
+stop/start, service inspection showed `boot: no`, the latest boot had no
+`ramfs:2: failed`, `/ram0` appeared on Desktop, and `astra.service` stayed
+active with `Result=success NRestarts=0`. Performance qualification remains
+deferred.
 
 Latest physical optical checkpoint, 2026-10-24: a Pioneer BDR-XD08
 (`08e4:017a`, serial `1854081922802053`) with the SpongeBob `DVD_VIDEO`
