@@ -387,7 +387,7 @@ static void refused_authority_restore(void)
 static void optical_eject(void)
 {
     AstraStorageCatalog catalog;
-    uint64_t optical, mount;
+    uint64_t optical, mount, sibling, sibling_mount;
     assert(astra_storage_catalog_init(&catalog, 1024u * 1024u) == 0);
     optical = source(&catalog, ASTRA_VOLUME_OPTICAL, ASTRA_VOLUME_ISO9660, "disc", "Disc");
     uint64_t medium = astra_storage_find(&catalog, optical)->parent;
@@ -399,6 +399,18 @@ static void optical_eject(void)
     assert(astra_storage_quiesce(&catalog, mount, 1u) == 0);
     assert(astra_storage_eject_begin(&catalog, optical, 1u) == EBUSY);
     assert(astra_storage_unmount_result(&catalog, mount, 1u, 0, 0, 0) == 0);
+    assert(astra_storage_source(&catalog, medium, 1u,
+        ASTRA_VOLUME_PARTITION_MAP_GPT, 2u, 1048576u, 1048576u, &sibling) == 0);
+    assert(astra_storage_probe_result(&catalog, sibling, 1u,
+        ASTRA_VOLUME_ISO9660, "sibling", "Other Disc", "", 0, 0) == 0);
+    assert(astra_storage_mount_begin(&catalog, sibling, 1u,
+        ASTRA_VOLUME_READ_ONLY, 0u, 0u, &sibling_mount) == 0);
+    assert(astra_storage_mount_result(&catalog, sibling_mount, 1u, 73u, 0) == 0);
+    assert(astra_storage_eject_begin(&catalog, optical, 1u) == EBUSY);
+    assert(astra_storage_find(&catalog, optical)->state == ASTRA_VOLUME_UNMOUNTED);
+    assert(astra_storage_find(&catalog, sibling_mount)->state == ASTRA_VOLUME_MOUNTED);
+    assert(astra_storage_quiesce(&catalog, sibling_mount, 1u) == 0);
+    assert(astra_storage_unmount_result(&catalog, sibling_mount, 1u, 0, 0, 0) == 0);
     assert(astra_storage_eject_begin(&catalog, optical, 1u) == 0);
     assert(astra_storage_find(&catalog, optical)->state == ASTRA_VOLUME_QUIESCING);
     assert(astra_storage_eject_result(&catalog, optical, 1u, ENOTTY) == 0);

@@ -914,7 +914,7 @@ int astra_storage_eject_begin(AstraStorageCatalog *catalog, uint64_t source,
     if (record->kind != ASTRA_VOLUME_SOURCE || record->class_id != ASTRA_VOLUME_OPTICAL ||
         record->origin != ASTRA_VOLUME_ORIGIN_DEVICE) return ENOTSUP;
     if (record->state != ASTRA_VOLUME_UNMOUNTED) return EBUSY;
-    int error = astra_storage_no_mounted_children(catalog, source);
+    int error = astra_storage_no_mounted_children(catalog, record->parent);
     if (error != 0) return error;
     record->state = ASTRA_VOLUME_QUIESCING;
     record->error = 0;

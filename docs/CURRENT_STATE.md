@@ -3,8 +3,41 @@
 Status: active continuation map, 2026-10-24
 
 Latest production filesystem checkpoint, 2026-10-24: coherent release
+`2fd5a272d3f75564800f0b41a398739551ee61cc4d61e5907f1636c0db617b31`
+is selected and running on DE25. Optical eject now refuses while **any**
+partition on the same disc remains mounted; the prior source-only guard could
+retire a sibling mount. Desktop exposes `Eject` for a mounted physical optical
+volume through its existing common command menu. It first performs the same
+safe unmount and exact busy-holder reporting as `Unmount`, then requests the
+native source eject and reports failure without claiming the disc left.
+Host catalog regression covers mounted optical siblings, unmount, eject
+failure and success. Beast storage provider suite and Desktop MC68040 build
+passed. A root-observed host-QEMU Volume UI gate passed its 33-holder modal,
+context Unmount, disappearing icon and ISO image-source retirement. The earlier
+user-observed Beast gates could not read root-owned desktop syslog; nested
+AArch64 QEMU also failed release 11's `posixd` launch under x86 emulation, so
+neither was used as candidate acceptance evidence. Private DE25 boot reached
+Desktop with `/dh0`, `/usb0`, `/usb1`; a USB0 right-click opened the shared
+context menu. Its guard restored the prior selector, identical stopped
+production-image SHA-256, and all three services (`TRIAL_RESTORED result=0`).
+The normal deployment migrated the stable image, verified running kernel and
+release, and reported `ASTRA_DE25_RELEASE PASS`. Current services are active,
+`astra.service NRestarts=0`, FAT32 and exFAT icons are visible, and the only
+panic report predates this release. Haiku reference:
+`src/kits/tracker/PoseView.cpp` and `src/kits/tracker/FSUtils.cpp` guard boot
+volume removal and dispatch selected-volume actions; Astra adapts this to its
+native medium/partition graph and separate Eject operation. Beast evidence:
+`/var/tmp/astra-fs-eject-release12-20261024.log`,
+`/var/tmp/astra-fs-eject-root-observed12-volume-ui.log`, and
+`/var/tmp/astra-fs-eject-deploy12-20261024.log`. Board evidence:
+`/var/tmp/astra-fs-private-trial-eject12-20261024.log` and its work directory.
+Physical data CD, optical media change and physical eject remain unqualified
+because no optical drive/disc is attached. Performance qualification remains
+deferred until correctness gates finish.
+
+Previous production filesystem checkpoint, 2026-10-24: coherent release
 `04aa23c8dd06eeba18f8c972cb27dc4ad360de59b96e67a2140eda0de2dde5d8`
-is selected and running on DE25. The stopped legacy `/dh0` image was copied,
+was selected and ran on DE25. The stopped legacy `/dh0` image was copied,
 verified, and refreshed with release-owned commands, services, Kits, apps,
 system fonts, startup manifest, sound and event catalog before atomic
 publication at `/var/lib/astra/state/system/storage-terminal.img`. `/config`,

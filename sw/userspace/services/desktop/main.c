@@ -88,8 +88,11 @@ static AstraSurface bar_surface = ASTRA_SURFACE_INIT;
 typedef struct DesktopRemoval {
     struct DesktopRemoval *next;
     AstraVolumeRemoval operation;
+    AstraVolumeReference eject_source;
     uint32_t failure;
     uint32_t reported;
+    uint32_t eject_admitted;
+    uint32_t eject_failed;
 } DesktopRemoval;
 static DesktopRemoval *removals;
 static uint64_t removal_retry;
@@ -323,6 +326,18 @@ static int can_unmount(const DesktopApps *apps, uint32_t cell)
     return 1;
 }
 
+static const AstraVolumeRecord *eject_source(const DesktopApps *apps, uint32_t cell)
+{
+    if (!can_unmount(apps, cell)) return NULL;
+    const AstraVolumeRecord *mount = visible_volume(apps, cell);
+    const AstraVolumeReference reference = {apps->volumes.epoch,
+        mount->id, mount->generation};
+    const AstraVolumeRecord *source = astra_volume_snapshot_ancestor(
+        &apps->volumes, &reference, ASTRA_VOLUME_SOURCE);
+    return source != NULL && source->origin == ASTRA_VOLUME_ORIGIN_DEVICE &&
+        source->class_id == ASTRA_VOLUME_OPTICAL ? source : NULL;
+}
+
 static int can_disk_setup(const DesktopApps *apps, uint32_t cell)
 {
     if (cell >= apps->volume_visible) return 0;
@@ -356,6 +371,15 @@ static AstraResult unmount_query(void *opaque, AstraCommandState *state)
     return ASTRA_OK;
 }
 
+static AstraResult eject_query(void *opaque, AstraCommandState *state)
+{
+    const DesktopCommands *context = opaque;
+    *state = (AstraCommandState){"Eject", 5u,
+        volume_administrator != 0u && volume_inspector != 0u &&
+        eject_source(context->apps, *context->selection) != NULL, 0u};
+    return ASTRA_OK;
+}
+
 static void volume_error(uint32_t gui, const char *message, AstraResult failure)
 {
     char text[256]; AstraString out;
@@ -373,6 +397,7 @@ static void removal_complete(const AstraVolumeSnapshot *catalog)
     DesktopRemoval **link = &removals;
     while (*link != NULL) {
         DesktopRemoval *pending = *link;
+        if (pending->eject_failed) { link = &pending->next; continue; }
         AstraResult result = astra_volume_removal_advance(
             volume_administrator, catalog, &pending->operation);
         if (result != ASTRA_OK) {
@@ -392,14 +417,50 @@ static void removal_complete(const AstraVolumeSnapshot *catalog)
             link = &pending->next;
             continue;
         }
+        if (pending->operation.state == ASTRA_VOLUME_REMOVAL_COMPLETE &&
+            pending->eject_source.id != 0u) {
+            const AstraVolumeReference source = pending->eject_source;
+            if (!pending->eject_admitted) {
+                AstraVolumeControl control = {.reference = source,
+                    .operation = ASTRA_VOLUME_EJECT};
+                AstraVolumeReference admitted = {0};
+                result = astra_volume_control(volume_administrator, &control, &admitted);
+                if (result == ASTRA_OK) pending->eject_admitted = 1u;
+                else {
+                    pending->failure = astra_status_from_result(result);
+                    pending->eject_failed = 1u;
+                }
+                link = &pending->next;
+                continue;
+            }
+            const AstraVolumeRecord *record = NULL;
+            if (catalog->epoch == source.epoch)
+                for (uint32_t at = 0u; at < catalog->count; ++at)
+                    if (catalog->records[at].id == source.id) {
+                        record = &catalog->records[at];
+                        break;
+                    }
+            if (record != NULL && record->generation == source.generation &&
+                record->state == ASTRA_VOLUME_UNMOUNTED && record->status != 0u) {
+                pending->failure = record->status;
+                pending->eject_failed = 1u;
+            }
+            if (record != NULL && record->generation == source.generation &&
+                record->state != ASTRA_VOLUME_LOST) {
+                link = &pending->next;
+                continue;
+            }
+        }
         int same_provider = pending->operation.state == ASTRA_VOLUME_REMOVAL_COMPLETE;
+        int ejected = pending->eject_source.id != 0u;
         *link = pending->next; astra_runtime_deallocate(pending);
-        (void)astra_log(same_provider ? "desktop volume unmounted" : "desktop volume provider retired");
+        (void)astra_log(!same_provider ? "desktop volume provider retired" :
+            ejected ? "desktop volume ejected" : "desktop volume unmounted");
     }
     removal_retry = astra_clock_monotonic() + UINT64_C(50000000);
 }
 
-static AstraResult unmount_icon(void *opaque, const AstraCommandArguments *args)
+static AstraResult remove_icon(void *opaque, const AstraCommandArguments *args, int eject)
 {
     const DesktopCommands *context = opaque;
     uint32_t cell;
@@ -407,10 +468,15 @@ static AstraResult unmount_icon(void *opaque, const AstraCommandArguments *args)
     memcpy(&cell, args->bytes, sizeof(cell));
     if (!can_unmount(context->apps, cell)) return ASTRA_ERROR_INVALID_HANDLE;
     const AstraVolumeRecord *record = visible_volume(context->apps, cell);
+    const AstraVolumeRecord *source = eject ? eject_source(context->apps, cell) : NULL;
+    if (eject && source == NULL) return ASTRA_ERROR_INVALID_HANDLE;
     DesktopRemoval *pending = astra_runtime_callocate(1u, sizeof(*pending));
     if (pending == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
     pending->operation.mount = (AstraVolumeReference){context->apps->volumes.epoch,
         record->id, record->generation};
+    if (source != NULL)
+        pending->eject_source = (AstraVolumeReference){context->apps->volumes.epoch,
+            source->id, source->generation};
     if (record->origin == ASTRA_VOLUME_ORIGIN_IMAGE)
         pending->operation.image_source = (AstraVolumeReference){
             pending->operation.mount.epoch, record->parent, record->parent_generation};
@@ -421,7 +487,7 @@ static AstraResult unmount_icon(void *opaque, const AstraCommandArguments *args)
     if (result == ASTRA_OK) {
         pending->next = removals; removals = pending;
         volume_refresh = 1u; volume_retry = 0u; removal_retry = 0u;
-        (void)astra_log("desktop volume unmount admitted");
+        (void)astra_log(eject ? "desktop volume eject admitted" : "desktop volume unmount admitted");
         return ASTRA_OK;
     }
     AstraVolumeReference reference = pending->operation.mount;
@@ -433,6 +499,16 @@ static AstraResult unmount_icon(void *opaque, const AstraCommandArguments *args)
             "The exact resource list could not be read", result);
     } else volume_error(context->gui, "Unmount was refused", result);
     return result;
+}
+
+static AstraResult unmount_icon(void *opaque, const AstraCommandArguments *args)
+{
+    return remove_icon(opaque, args, 0);
+}
+
+static AstraResult eject_icon(void *opaque, const AstraCommandArguments *args)
+{
+    return remove_icon(opaque, args, 1);
 }
 
 static AstraResult open_query(void *opaque, AstraCommandState *state)
@@ -839,12 +915,13 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t clicked_cell = UINT32_MAX;
     DesktopUsage *busy_dialog = NULL;
     AstraCommandArguments menu_arguments = {1u, 1u, &menu_cell, sizeof(menu_cell)};
-    AstraContextMenuItem menu_items[3] = {{"desktop.open", 12u, &menu_arguments}};
+    AstraContextMenuItem menu_items[4] = {{"desktop.open", 12u, &menu_arguments}};
     DesktopCommands command_context = {&apps, 0u, 0u, &menu_cell, NULL};
     const AstraCommand commands[] = {{"desktop.open", 12u, 1u, 1u, open_query, open_icon, &command_context},
         {"desktop.disk-setup", 18u, 1u, 1u, disk_setup_query, disk_setup_icon, &command_context},
-        {"desktop.unmount", 15u, 1u, 1u, unmount_query, unmount_icon, &command_context}};
-    const AstraCommandScope command_scope = {NULL, commands, 3u};
+        {"desktop.unmount", 15u, 1u, 1u, unmount_query, unmount_icon, &command_context},
+        {"desktop.eject", 13u, 1u, 1u, eject_query, eject_icon, &command_context}};
+    const AstraCommandScope command_scope = {NULL, commands, 4u};
 
     if (!astra_startup_validate(startup) || startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
@@ -1026,17 +1103,19 @@ int astra_main(const AstraStartupInfo *startup)
                 AstraVolumeReference reference = failed->operation.mount;
                 uint32_t failure = failed->failure;
                 int refused = failed->operation.state == ASTRA_VOLUME_REMOVAL_REFUSED;
-                if (refused) {
+                int eject_failed = failed->eject_failed;
+                if (refused || eject_failed) {
                     *link = failed->next;
                     astra_runtime_deallocate(failed);
                 } else {
                     failed->failure = 0u;
                     link = &failed->next;
                 }
-                result = failure == ASTRA_STATUS_BUSY ?
+                result = !eject_failed && failure == ASTRA_STATUS_BUSY ?
                     usage_open(busy_dialog, gui->handle, volume_inspector, &process_filesystem, &reference) :
                     astra_result_from_service(failure);
                 if (result != ASTRA_OK) volume_error(gui->handle,
+                    eject_failed ? "Eject failed; the disc remains in the drive" :
                     refused ? "The storage provider refused to unmount; the volume remains mounted" :
                         "The storage provider could not finish removal; storage resources remain retained", result);
                 break;
@@ -1096,6 +1175,9 @@ int astra_main(const AstraStartupInfo *startup)
                     if (can_unmount(&apps, cell))
                         menu_items[menu_count++] = (AstraContextMenuItem){
                             "desktop.unmount", 15u, &menu_arguments};
+                    if (eject_source(&apps, cell) != NULL)
+                        menu_items[menu_count++] = (AstraContextMenuItem){
+                            "desktop.eject", 13u, &menu_arguments};
                     result = astra_interface_context_menu_open(&context_menu, &window,
                         &command_scope, menu_items, menu_count,
                         event.data.pointer.x, event.data.pointer.y);
