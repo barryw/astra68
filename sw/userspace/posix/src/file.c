@@ -235,6 +235,7 @@ astra_posix_file_fork_prepare(AstraProcessFileShare **shares, uint32_t *count)
         status = astra_process_file_share(&file_slots[slot].file,
                                           &(*shares)[slot]);
         if (status != ASTRA_VFS_OK) {
+            (void)astra_log_failure("fork file share", status);
             astra_posix_file_fork_release(*shares, file_capacity);
             *shares = NULL;
             errno = status == ASTRA_VFS_ERR_UNSUPPORTED ? ENOTSUP :
@@ -245,6 +246,7 @@ astra_posix_file_fork_prepare(AstraProcessFileShare **shares, uint32_t *count)
     AstraProcessFileShare cwd_share = {0};
     uint32_t cwd_status = astra_process_vfs_share_current_directory(&cwd_share);
     if (cwd_status != ASTRA_VFS_OK) {
+        (void)astra_log_failure("fork current directory share", cwd_status);
         astra_posix_file_fork_release(*shares, *shares != NULL ? file_capacity : 0u);
         *shares = NULL;
         return fail(cwd_status);

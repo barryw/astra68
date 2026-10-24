@@ -43,6 +43,7 @@ static uint32_t mock_file_length = 5u;
 static const char *held_directory_path = "/before";
 static uint32_t held_directory_status;
 static uint32_t adopt_status;
+static uint32_t share_status;
 static AstraAssign mock_assigns[ASTRA_STARTUP_CAPABILITY_MAX + 16u];
 static int catalog_enabled;
 static uint32_t catalog_count;
@@ -616,6 +617,13 @@ uint32_t astra_vfs_adopt(AstraVfsClient *client, uint64_t token, AstraVfsFile *f
         return adopt_status;
     *file = 1000u;
     if (client->description_acquire != NULL) client->description_acquire(client);
+    return ASTRA_VFS_OK;
+}
+uint32_t astra_vfs_share(AstraVfsClient *client, AstraVfsFile file, uint64_t *token)
+{
+    assert(client != NULL && file == 1000u && token != NULL);
+    if (share_status != ASTRA_VFS_OK) return share_status;
+    *token = 1u;
     return ASTRA_VFS_OK;
 }
 static pthread_barrier_t cache_start;
@@ -1324,6 +1332,36 @@ int main(void)
         assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
         astra_process_vfs_namespace_release(owner);
         assert(root_closes == roots_before + 1u);
+        astra_process_vfs_close();
+        catalog_enabled = 0;
+    }
+    {
+        AstraStartupInfo startup = {.capabilities_address = 1u};
+        AstraProcessFileShare share;
+        catalog_enabled = 1; catalog_count = 1u;
+        catalog_records[0] = (AstraVolumeRecord){.id = 808u, .generation = 1u,
+            .kind = ASTRA_VOLUME_MOUNT, .state = ASTRA_VOLUME_MOUNTED,
+            .origin = ASTRA_VOLUME_ORIGIN_DEVICE, .name = "/usb0"};
+        assert(astra_process_vfs_init(&startup) == ASTRA_VFS_OK);
+        const AstraAssignTable *view;
+        void *owner;
+        assert(astra_process_vfs_namespace_acquire(&view, &owner) == ASTRA_VFS_OK);
+        AstraVfsClient *client = astra_process_vfs_client_for(astra_assign_lookup(view, "USB0"));
+        assert(client != NULL);
+        client->features |= ASTRA_VFS_FEATURE_DESCRIPTIONS | ASTRA_VFS_FEATURE_DIRECTORY_PATH;
+        astra_process_vfs_namespace_release(owner);
+        assert(astra_process_vfs_set_current_directory("/usb0") == ASTRA_VFS_OK);
+        share_status = ASTRA_VFS_ERR_IO;
+        assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_ERR_IO);
+        catalog_records[0].state = ASTRA_VOLUME_UNMOUNTED;
+        assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_ERR_LOST);
+        catalog_records[0].id = 809u;
+        catalog_records[0].state = ASTRA_VOLUME_MOUNTED;
+        share_status = ASTRA_VFS_ERR_INVALID;
+        assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_ERR_LOST);
+        catalog_failure = ASTRA_ERROR_BUSY;
+        assert(astra_process_vfs_share_current_directory(&share) == ASTRA_VFS_ERR_INVALID);
+        catalog_failure = ASTRA_OK; share_status = ASTRA_VFS_OK;
         astra_process_vfs_close();
         catalog_enabled = 0;
     }

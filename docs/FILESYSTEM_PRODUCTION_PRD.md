@@ -4,13 +4,13 @@ Status: active implementation PRD. The architectural direction was agreed on
 2026-10-06. Current release uses Filesystem ABI 15 / Kit 15.2.0, STOR 38
 and the Linux-owned fixed/removable/optical/ISO/RAM provider. Native lifecycle,
 exact file/CWD busy removal, recovery, durability and Atlas overflow pass their
-current gates. Coherent release `8ccd548b` runs on DE25 after stopped-state
+current gates. Coherent release `c041b264` runs on DE25 after stopped-state
 migration; simultaneous USB FAT32/exFAT read/write and UDF read-only passed
 on the selected release. Optical sibling-mount safety, retained-mount
 replacement fencing, physical UDF DVD media change and Desktop Eject passed.
-Physical ISO9660 data-CD access and complete performance qualification remain
-open. [Current state](CURRENT_STATE.md)
-records evidence.
+Physical ISO9660 data-disc access, eject and reinsertion passed on DVD-R;
+CD-R medium and complete performance qualification remain open.
+[Current state](CURRENT_STATE.md) records evidence.
 Network mounts are excluded from this completion task. Performance acceptance
 follows correctness.
 
@@ -80,8 +80,8 @@ The table describes the deployed DE25 release and remaining qualification.
 | System storage | The canonical image selector validates one exact system partition. Supervisor bootstrap and HostFS access the same Linux-owned provider; guest ext4/storage services are absent from the production release. Mutable `/dh0` state has one release-independent path, `/var/lib/astra/state/system/storage-terminal.img`; release-owned files were refreshed from the verified image during stopped-state migration while user files and the old image were retained. | A deliberate rollback of the currently selected release remains to be qualified. |
 | Linux-backed files | HostFS owns `HOST_FILESYSTEM` and mints rooted, rights-bounded sessions/scopes. Clients drive kernel-bound host channels; QEMU enforces scope, ancestry, read-only rights, ownership and object tags for every command. Current storage protocol is 38. The Linux provider owns fixed, removable, optical, image and RAM backing instances; WORK and SOUND remain explicit exports. | Full performance acceptance and CD-R media qualification; physical ISO9660 DVD-R passed. |
 | RAM storage | Configured Linux tmpfs has explicit limits and source identity independent of its current mount. Native scoped brokers preserve rights across remounts. | Additional configured RAM volumes need physical lifecycle qualification. |
-| Namespace | Canonical volume snapshots update native process assigns; exact incarnation checks prevent old grants from targeting replacement mounts. Ordered traversal confines rooted grants. Persistent USB identity reservations kept three `/usbN` paths fixed across DE25 stop/restart. | CD-R insertion/removal remains unqualified. |
-| File objects | Stable volume/node identities, retained objects/cwd, shared descriptions/offsets, fork/exec inheritance and ordered symlink behavior pass current correctness gates. | Physical CD-R replacement and final performance acceptance. |
+| Namespace | Canonical volume snapshots update native process assigns; exact incarnation checks prevent old grants from targeting replacement mounts. Ordered traversal confines rooted grants. Persistent USB identity reservations kept three `/usbN` paths fixed across DE25 stop/restart, storage-interface unbind/rebind, and literal hub cable unplug/replug. | CD-R insertion/removal remains unqualified. |
+| File objects | Stable volume/node identities, retained objects/cwd, shared descriptions/offsets, fork/exec inheritance and ordered symlink behavior pass current correctness gates. Exact catalog incarnation checks map failed sharing of a retired CWD mount to `LOST`; POSIX reports `ESTALE` with a clear shared-libc message. The coherent guest UI gate and private/live DE25 removal gates passed. | Physical CD-R replacement and final performance acceptance remain. |
 | Devices and mounts | Linux discovery subscribes before scanning; the provider implements device/source/mount identity, supported-media policy, safe unmount/eject, ISO admission and canonical notifications. Disposable USB FAT32/exFAT/UDF partitions passed native mount and access gates with stable paths across restart; Pioneer UDF DVD and physical ISO9660 DVD-R passed native access and Atlas gates. | Physical CD-R qualification. |
 
 Implementation anchors are [supervisor bootstrap](../sw/userspace/supervisor/src/volume.c),
@@ -151,9 +151,9 @@ RAM. FAT12/FAT16, USB ISO9660, NTFS, FAT32 and exFAT have passed guarded
 physical DE25 trials; FAT32 and exFAT also passed native Disk Setup formatting
 and automatic remount on disposable media. Native MBR initialize, FAT32
 create/format and delete also passed a physical DE25 gate. Physical ISO9660
-data-CD insertion and read remain unqualified; a UDF DVD passed physical media
-change and eject. The supported
-format/transport policy is extended in this order:
+data-disc insertion, read, eject and reinsertion passed on DVD-R; CD-R medium
+remains unqualified. A UDF DVD passed physical media change and eject. The
+supported format/transport policy is extended in this order:
 
 | Priority | Formats | Intended capability and qualification |
 |---|---|---|

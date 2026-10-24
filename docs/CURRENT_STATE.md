@@ -3,7 +3,7 @@
 Status: active continuation map, 2026-10-24
 
 Current DE25 filesystem release, 2026-10-24: coherent release
-`60a20f99ae0a385ec246ac58f057a0a12839f6b01e334fe913227e085229bcf6`
+`c041b26486b4d609cfecc526505595930710be0eb37e7b31ee565aa721fc2c65`
 passed package verification and normal deployment (`ASTRA_DE25_RELEASE PASS`),
 with kernel identity `cbb18f706daf0daeb4c74260a321a2cb9d63c3d758eb655b21bba77c7f4bbdb6`.
 All three services are active; `astra.service Result=success NRestarts=0`.
@@ -38,6 +38,46 @@ restored the same UDF partition at `/usb1` (new mount ID 26); Desktop restored
 its icon, and `Folder/README.TXT` read back
 `Astra USB UDF gate 2026-10-24`. The service remained active with
 `Result=success NRestarts=0`.
+USB reattachment without service restart also passed through a targeted Linux
+`usb-storage` interface unbind/rebind for disposable SanDisk serial
+`FC006A81F5493213`. Native `lsof` showed no holders before all three
+partitions were safely unmounted. Unbind removed only that USB device's
+catalog graph and Desktop icons; `/cd0` remained mounted. Rebind published
+fresh device/medium/source IDs 27–31 and mounts 32–34, preserving FAT32
+`/usb0` read/write, UDF `/usb1` read-only, and exFAT `/usb2` read/write.
+Native FAT32 and exFAT create/read/remove, UDF read, and unaffected `/cd0`
+read all passed. Desktop syslog shows the three USB icons return at
+18:41:53 UTC; Astra remained active with `Result=success NRestarts=0`.
+This checks Linux block-interface removal and reappearance; a literal cable
+unplug/replug then passed separately: after native safe unmount of all three
+partitions, the user unplugged and replugged the same SanDisk on the hub.
+Fresh device/medium/source IDs 43–47 and mount IDs 48–50 restored UDF
+`/usb1` read-only, exFAT `/usb2` read/write and FAT32 `/usb0` read/write.
+Native FAT32/exFAT create/read/remove and UDF read passed; Desktop restored
+all three icons at 18:47:31 UTC, while `/cd0` remained mounted. Astra stayed
+active with `Result=success NRestarts=0`.
+An additional surprise-removal probe found that a Terminal holding
+`/usb1/Folder` could not fork after interface withdrawal. The old release
+reported `unknown error`. Two private DE25 trials exposed the native failure:
+CWD sharing returned VFS I/O while the host channel closed, then VFS invalid
+after the old grant disappeared. POSIX mapped those statuses accurately, but
+neither told the user which volume was lost. The native CWD share now checks
+the Volume catalog's exact mount ID and generation only on a failed share;
+when that incarnation has retired, it returns `LOST`. POSIX maps `LOST` to
+`ESTALE`, and shared picolibc names that error. The final private trial of
+release `c041b264` produced twice: `zsh: fork failed: stale file or directory
+(volume removed or replaced)`. It had no panic; after USB rebind, `cd /work`
+released the old CWD and external commands worked. The trial restored the
+production image hash, selector and three active services. Normal deployment
+then reported `ASTRA_DE25_RELEASE PASS`. Live release verification passed;
+FAT32 `/usb0` and exFAT `/usb2` write/read/remove, UDF `/usb1` read, and
+ISO9660 `/cd0` README read matched its source SHA-256 above. All four Desktop
+icons were visible; services were active, `astra.service Result=success
+NRestarts=0`, and the panic log was empty. Haiku's
+`src/system/kernel/fs/vfs.cpp` disconnects removed mount vnodes from CWD and
+clones I/O contexts with retained vnode references. Astra retains its exact
+lost CWD identity until the application changes directory, rather than
+silently rebinding it to replacement media.
 Evidence: Beast `/var/tmp/astra-stable-usb-publish-20261024.log` and
 `/var/tmp/astra-stable-usb-deploy-20261024.log`; board WORK
 `stable-before-volumes.txt`, `stable-after-volumes.txt`,
@@ -45,9 +85,31 @@ Evidence: Beast `/var/tmp/astra-stable-usb-publish-20261024.log` and
 `stableexfat.txt`, `cd-eject-after.txt`, `cd-reinsert-volumes.txt`,
 `cd-reinsert-read.txt`, `udf-holder-cwd.txt`, `udf-holder-lsof.txt`,
 `udf-busy-volumes.txt`, `udf-unmounted-volumes.txt`,
-`udf-remounted-volumes.txt` and `udf-remount-read.txt`; local remote-desktop
-captures are `/private/tmp/astra-cd-ejected.png` and
-`/private/tmp/astra-udf-busy.png`. Desktop syslog at 18:38:28 and 18:38:39 UTC
+`udf-remounted-volumes.txt`, `udf-remount-read.txt`,
+`pre-replug-lsof0.txt` through `pre-replug-lsof2.txt`,
+`pre-replug-unmounted.txt`, `replug-detached-volumes.txt`,
+`replug-returned-volumes.txt`, `replugfat24.txt`,
+`replugexfat24.txt`, `replug-udf-read.txt` and `replug-cd-read.txt`;
+`loss-pre-volumes.txt`, `loss-holder-lsof.txt`,
+`loss-recovered-volumes.txt`, `physical-replug-safe.txt`,
+`physical-replug-returned.txt`, `cablefat24.txt`, `cableexfat24.txt` and
+`cable-udf-read.txt`; Beast candidate build logs
+`/var/tmp/astra-picolibc-estale-build.log` and
+`/var/tmp/astra-estale-userspace.log`; diagnostic evidence
+`/var/tmp/astra-stale-cwd-evidence-20261024/diagnostic-syslog` and
+`forkdiag.err`; final Beast logs `/var/tmp/astra-stalecwd-vfs-tests.log`,
+`/var/tmp/astra-stalecwd-userspace-build.log`,
+`/var/tmp/astra-stalecwd-publish.log`,
+`/var/tmp/astra-stalecwd-volume-ui-root.log`,
+`/var/tmp/astra-stalecwd-deploy.log`, and
+`/var/tmp/astra-stale-cwd-evidence-20261024/final-stale.err`;
+board WORK `stalecwd-release-volumes.txt`, `stalecwdfat.txt`,
+`stalecwdexfat.txt`, `stalecwd-udf-read.txt`, `stalecwd-cd-read.txt`,
+`stalecwd-cd-list.txt`; local post-release frame
+`/private/tmp/astra-post-frame.png`;
+local remote-desktop captures are `/private/tmp/astra-cd-ejected.png` and
+`/private/tmp/astra-udf-busy.png` and
+`/private/tmp/astra-loss-stale-cwd.png`. Desktop syslog at 18:38:28 and 18:38:39 UTC
 records `/usb1` icon withdrawal and restoration. Haiku's
 `src/servers/mount/AutoMounter.cpp` restores prior
 partition mount settings by saved device/partition identity; Astra adapts that

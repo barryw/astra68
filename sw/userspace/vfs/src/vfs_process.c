@@ -1295,6 +1295,31 @@ uint32_t astra_process_vfs_share_current_directory(AstraProcessFileShare *share)
     if (status == ASTRA_VFS_OK) {
         if (directory != NULL)
             status = astra_process_file_share(directory, share);
+        if (status != ASTRA_VFS_OK && current_file._private_client != NULL &&
+            namespace_catalog != ASTRA_INVALID_HANDLE) {
+            const ProcessVfsClient *entry =
+                (const ProcessVfsClient *)(const void *)current_file._private_client;
+            if (entry->owned && entry->volume.id != 0u) {
+                AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
+                if (astra_volume_snapshot_open(namespace_catalog, &catalog) == ASTRA_OK) {
+                    int live = 0;
+                    for (uint32_t at = 0u; at < catalog.count; ++at) {
+                        const AstraVolumeRecord *record = &catalog.records[at];
+                        if (catalog.epoch == entry->volume.epoch &&
+                            record->id == entry->volume.id &&
+                            record->generation == entry->volume.generation &&
+                            record->kind == ASTRA_VOLUME_MOUNT &&
+                            (record->state == ASTRA_VOLUME_MOUNTED ||
+                             record->state == ASTRA_VOLUME_QUIESCING)) {
+                            live = 1;
+                            break;
+                        }
+                    }
+                    astra_volume_snapshot_close(&catalog);
+                    if (!live) status = ASTRA_VFS_ERR_LOST;
+                }
+            }
+        }
         astra_process_vfs_current_release();
     }
     return status;
