@@ -16,14 +16,14 @@ cc -std=gnu11 -O2 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes \
     fpga/de25/linux/astra_storage_work.c fpga/de25/linux/astra_storage_mount.c \
     fpga/de25/linux/astra_storage_path.c fpga/de25/linux/astra_storage_transport.c \
     emu/qemu/qemu-9.2/hw/m68k/astra68-resolve.c \
-    -o build/storage-format/host/test-format-worker -lmount
+    -o build/storage-format/host/test-format-worker -lmount -lblkid
 cc -std=gnu11 -O2 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes \
     -Ifpga/de25/linux -Iemu/qemu/qemu-9.2/hw/m68k -Indk/include -Isw/include \
     third_party/storage-format/tests/test_partition_worker.c \
     fpga/de25/linux/astra_storage_work.c fpga/de25/linux/astra_storage_mount.c \
     fpga/de25/linux/astra_storage_path.c fpga/de25/linux/astra_storage_transport.c \
     emu/qemu/qemu-9.2/hw/m68k/astra68-resolve.c \
-    -o build/storage-format/host/test-partition-worker -lmount
+    -o build/storage-format/host/test-partition-worker -lmount -lblkid
 checks="$root/build/storage-format/host"
 tools="$root/build/storage-format/$target"
 formatter_probe="$checks/fd-format-probe"
@@ -113,6 +113,16 @@ for label in dos gpt; do
     sudo sfdisk --dump "$loop" | grep -Eq 'start= *2048'
     reread
     [[ -b "${loop}p1" ]]
+    sudo mkfs.fat -F 16 "${loop}p1" >/dev/null
+    [[ $(sudo blkid -p -s TYPE -o value "${loop}p1") == vfat ]]
+    sudo "$checks/test-partition-worker" delete "$map" "$loop" /usr/sbin/sfdisk
+    reread
+    sudo "$checks/test-partition-worker" create "$map" "$loop" /usr/sbin/sfdisk
+    reread
+    if [[ -n $(sudo blkid -p -s TYPE -o value "${loop}p1" || true) ]]; then
+        echo 'recreated partition retained stale filesystem signature' >&2
+        exit 1
+    fi
     sudo "$checks/test-partition-worker" delete "$map" "$loop" /usr/sbin/sfdisk
     reread
     [[ ! -b "${loop}p1" ]]

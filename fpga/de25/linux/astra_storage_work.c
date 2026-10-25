@@ -2,12 +2,14 @@
 #include "astra_storage_work.h"
 #include "astra_storage_path.h"
 
+#include <blkid/blkid.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
@@ -260,6 +262,7 @@ int astra_storage_work_partition_start(AstraStorageWork *work,
          edit->length_bytes % (uint64_t)sector_size != 0u ||
          edit->offset_bytes >= bytes ||
          edit->length_bytes > bytes - edit->offset_bytes ||
+         edit->offset_bytes > INT64_MAX - edit->length_bytes ||
          (edit->map == ASTRA_VOLUME_PARTITION_MAP_MBR &&
           (edit->offset_bytes / (uint64_t)sector_size > UINT32_MAX ||
            edit->length_bytes / (uint64_t)sector_size > UINT32_MAX ||
@@ -340,8 +343,68 @@ int astra_storage_work_partition_start(AstraStorageWork *work,
     close(input[0]);
     *work = (AstraStorageWork){.pid = pid, .result = -1,
         .id = record->id, .generation = record->generation,
-        .operation = ASTRA_STORAGE_WORK_PARTITION, .deadline_ns = deadline};
+        .operation = ASTRA_STORAGE_WORK_PARTITION, .deadline_ns = deadline,
+        .wipe_fd = device,
+        .wipe_offset = edit->operation == ASTRA_VOLUME_PARTITION_CREATE ?
+            edit->offset_bytes : 0u,
+        .wipe_length = edit->operation == ASTRA_VOLUME_PARTITION_CREATE ?
+            edit->length_bytes : 0u};
     return 0;
+}
+
+/* sfdisk cannot open partition subpaths of /proc/self/fd/3 to wipe old signatures. */
+static int wipe_partition_signatures(const AstraStorageWork *work)
+{
+    blkid_probe probe = blkid_new_probe();
+    if (probe == NULL) return ENOMEM;
+    int error = 0;
+    const uint8_t zeros[512] = {0};
+    for (unsigned attempt = 0u; attempt < 32u; ++attempt) {
+        if (blkid_probe_set_device(probe, work->wipe_fd,
+                (blkid_loff_t)work->wipe_offset,
+                (blkid_loff_t)work->wipe_length) != 0 ||
+            blkid_probe_enable_superblocks(probe, 1) != 0 ||
+            blkid_probe_set_superblocks_flags(probe,
+                BLKID_SUBLKS_TYPE | BLKID_SUBLKS_MAGIC) != 0 ||
+            blkid_probe_enable_partitions(probe, 1) != 0 ||
+            blkid_probe_set_partitions_flags(probe, BLKID_PARTS_MAGIC) != 0) {
+            error = errno != 0 ? errno : EIO;
+            break;
+        }
+        int found = blkid_do_fullprobe(probe);
+        if (found == 1) break;
+        if (found != 0) { error = errno != 0 ? errno : EIO; break; }
+        const char *position = NULL;
+        size_t length = 0u;
+        if (blkid_probe_lookup_value(probe, "SBMAGIC_OFFSET", &position, NULL) == 0)
+            (void)blkid_probe_lookup_value(probe, "SBMAGIC", NULL, &length);
+        if (length == 0u &&
+            blkid_probe_lookup_value(probe, "PTMAGIC_OFFSET", &position, NULL) == 0)
+            (void)blkid_probe_lookup_value(probe, "PTMAGIC", NULL, &length);
+        if (position == NULL || length == 0u) { error = EIO; break; }
+        errno = 0;
+        char *end = NULL;
+        unsigned long long relative = strtoull(position, &end, 10);
+        if (errno != 0 || end == position || *end != '\0' ||
+            relative >= work->wipe_length ||
+            length > work->wipe_length - relative) { error = EIO; break; }
+        uint64_t absolute = work->wipe_offset + relative;
+        for (size_t at = 0u; at < length; ) {
+            size_t bytes = length - at < sizeof(zeros) ? length - at : sizeof(zeros);
+            ssize_t written = pwrite(work->wipe_fd, zeros, bytes, (off_t)(absolute + at));
+            if (written < 0 && errno == EINTR) continue;
+            if (written <= 0) {
+                error = written < 0 ? errno : EIO;
+                break;
+            }
+            at += (size_t)written;
+        }
+        if (error != 0) break;
+        if (attempt == 31u) error = ELOOP;
+    }
+    blkid_free_probe(probe);
+    if (error == 0 && fsync(work->wipe_fd) != 0) error = errno;
+    return error;
 }
 
 int astra_storage_work_edit_poll(AstraStorageWork *work, int *error)
@@ -355,6 +418,9 @@ int astra_storage_work_edit_poll(AstraStorageWork *work, int *error)
     if (done == 0 || (done < 0 && errno == EINTR)) return 0;
     *error = work->cancelled != 0 ? work->cancelled :
         done != work->pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0 ? EIO : 0;
+    if (*error == 0 && work->operation == ASTRA_STORAGE_WORK_PARTITION &&
+        work->wipe_length != 0u)
+        *error = wipe_partition_signatures(work);
     if (*error != 0)
         fprintf(stderr, "astra-storage edit worker operation=%u id=%llu pid=%ld "
             "wait=%ld exited=%d code=%d signal=%d cancelled=%d error=%d\n",

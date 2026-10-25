@@ -40,6 +40,16 @@ for map in mbr gpt; do
     sfdisk --dump "$loop" | grep -Eq 'start= *2048'
     reread
     [[ -b "${loop}p1" ]]
+    mkfs.fat -F 16 "${loop}p1" >/dev/null
+    [[ $(blkid -p -s TYPE -o value "${loop}p1") == vfat ]]
+    "$worker" delete "$map" "$loop" /usr/sbin/sfdisk
+    reread
+    "$worker" create "$map" "$loop" /usr/sbin/sfdisk
+    reread
+    if [[ -n $(blkid -p -s TYPE -o value "${loop}p1" || true) ]]; then
+        echo 'recreated partition retained stale filesystem signature' >&2
+        exit 1
+    fi
     "$worker" delete "$map" "$loop" /usr/sbin/sfdisk
     reread
     [[ ! -b "${loop}p1" ]]

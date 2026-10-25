@@ -118,6 +118,14 @@ reviewed. Astra retains one authoritative provider edit path in
 snapshots, applies the same GUI/CLI selection policy, and dispatches those
 existing exact-reference format and partition calls. Both clients poll one
 asynchronous job contract, then refresh catalog identities after completion.
+Haiku's `src/system/kernel/disk_device_manager/KDiskDeviceManager.cpp`
+`_ScanPartition()` leaves newly created partitions unrecognized until their
+contents identify a filesystem. Astra adapts that rule for reused extents:
+partition creation clears old filesystem/partition signatures through the
+provider's held, exclusive disk descriptor before rediscovery. `sfdisk` cannot
+wipe a child partition through Astra's confined `/proc/self/fd/3` device path.
+Without this step, real USB media exposed a new exFAT partition as its old
+writable FAT32 filesystem before the requested format operation.
 Catalog partition admission also checks each extent against its parent's known
 device capacity. Discovery keeps the device alive when a malformed partition
 exceeds that capacity and accepts a later corrected observation; it never

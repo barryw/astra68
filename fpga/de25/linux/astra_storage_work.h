@@ -24,6 +24,9 @@ typedef struct AstraStorageWork {
     uint64_t epoch;
     uint32_t path_operation;
     uint64_t deadline_ns;
+    int wipe_fd;
+    uint64_t wipe_offset;
+    uint64_t wipe_length;
 } AstraStorageWork;
 
 typedef struct AstraStorageWorkReply {

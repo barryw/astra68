@@ -3,6 +3,41 @@
 Status: active continuation map, 2026-10-24
 
 Current DE25 filesystem release, 2026-10-24: release
+`cc88bb3df774196a55886324514453a1be19200558e3ab955d7ff35c02b3bf7d`
+passed package verification and normal deployment (`ASTRA_DE25_RELEASE PASS`)
+with the unchanged qualified kernel identity
+`cbb18f706daf0daeb4c74260a321a2cb9d63c3d758eb655b21bba77c7f4bbdb6`.
+The native `disk` CLI was exercised on the physical DE25 with the explicitly
+disposable 57.7 GiB SanDisk Cruzer, serial `FC006A81F5493213`. Its prior UDF
+partition was erased under user authorization. The initial physical campaign
+on release `16e82ed0` ran `disk init` (MBR and GPT),
+`disk create` (FAT32 and exFAT), `disk format` (both), and `disk delete`
+completed. Exact stale references and mounted-disk edits were refused; clean
+unmounts reported zero retained resources. Both filesystems mounted writable,
+passed native create/read/remove, and retained data across unmount/remount.
+The unchanged Pioneer optical drive remained `/cd0` read-only; native `ls`
+listed its ISO9660 root. Current disposable USB layout is GPT partition 1,
+512 MiB exFAT `CLIEXFAT` at `/usb0`, and partition 2, 512 MiB FAT32 `CLIFAT`
+at `/usb2`, both mounted writable. Linux `lsblk` agrees. All three production
+services are active with `Result=success NRestarts=0`; retained panic log
+timestamp predates this deployment.
+
+The first physical create at a reused USB extent exposed old FAT32 contents
+as a new writable exFAT partition before formatting. Provider partition-create
+now clears detected filesystem and nested partition signatures using its held
+exclusive disk descriptor before rediscovery. Host and AArch64 loop tests for
+MBR/GPT reused FAT16 signatures pass; provider unit and sanitizer gates pass.
+On current release `cc88bb3d`, delete/recreate of the physical FAT32 partition
+reported `NDOS`, remained unmounted, and Linux `blkid -p` reported no TYPE;
+native FAT32 format then mounted it writable. The final mounted-disk edit
+refusal left partition layout intact. Evidence: Beast
+`/var/tmp/astra-disk-cli-physical-publish.log`,
+`/var/tmp/astra-disk-cli-physical-deploy.log`,
+`/var/tmp/astra-disk-cli-final-list.log`; board AArch64
+`/var/tmp/test_de25_partition_worker.sh` gate and native Terminal/QMP
+physical command output.
+
+Previous DE25 filesystem release, 2026-10-24: release
 `16e82ed063b34a0b6c73b2383d1645b6b736bbcc1257e4e3d7e7754756d5a403`
 passed package verification and normal deployment (`ASTRA_DE25_RELEASE PASS`)
 with the unchanged qualified kernel identity
