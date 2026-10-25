@@ -37,3 +37,29 @@ Haiku reference reviewed before implementation:
   with child actions. Astra extends its existing shared Menu control and
   window-owned context menu wire contract rather than adding an app-local
   popup implementation.
+
+## Physical DE25 qualification
+
+On 2026-10-25, release
+`44c0675b54a2506a3a6f236938bbf9a6d5cf602195a9f55a9fb2adc7bf2cdd33`
+passed a physical RFB-driven UI gate. Blank Desktop right-click hovered
+`New > Folder`; `Folder1` appeared in inline edit mode. Enter committed
+`DE25VerifyStart`; its context menu renamed it `DE25VerifyFinal`. Double-click
+opened its empty Atlas root. Atlas created `InsideDE25` in inline edit mode;
+Enter committed it, and double-click opened its empty root. After a clean
+`astra.service` restart, Desktop still showed `DE25VerifyFinal` and Atlas
+still listed `InsideDE25`. Atlas deleted the child and Desktop deleted the
+parent. Both icons disappeared. Native Terminal confirmed the two expected
+Trash names, `InsideDE25-1` and `DE25VerifyFinal-1`; only those empty test
+directories were then removed through the existing storage-provider mount.
+Native Trash listing was empty, Desktop matched its original layout, release
+manifest verification passed, service was active with zero restarts, and the
+retained panic log did not change.
+
+The temporary RFB probe initially imported `de25-rfb.py` from the immutable
+release tree and Python wrote `bin/__pycache__/de25-rfb.cpython-310.pyc`.
+Release verification correctly refused startup on restart. We stopped the
+service, removed only that generated file and its empty directory, verified
+the release manifest, and set `sys.dont_write_bytecode` in the temporary probe
+before resuming. This was a test-probe artifact, not a kernel panic or a
+Desktop data failure. No product file was changed on the board.
