@@ -1,4 +1,6 @@
+#include <astra/application.h>
 #include <astra/area.h>
+#include <astra/draw_list.h>
 #include <astra/fonts.h>
 #include <astra/graphics_library.h>
 #include <astra/input.h>
@@ -15,7 +17,9 @@
 #include <astra/ascii.h>
 #include <astra/result.h>
 
-#include "directory.h"
+#include "../../common/directory_snapshot.h"
+#include "../../common/folder_ops.h"
+#include "../../common/name_edit.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -32,7 +36,7 @@
 ASTRA_PROGRAM("Atlas", 0, 1, 0, "Barry Walker", "Copyright 2026 Barry Walker");
 
 static AstraProcessFilesystem filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
-static AtlasDirectory directory = ATLAS_DIRECTORY_INIT;
+static AstraDirectorySnapshot directory = ASTRA_DIRECTORY_SNAPSHOT_INIT;
 static AstraWindow window = ASTRA_WINDOW_INIT;
 static AstraDisplay display = ASTRA_DISPLAY_INIT;
 static AstraSurface content = ASTRA_SURFACE_INIT;
@@ -53,6 +57,17 @@ static AstraFilesystem volume_filesystem = ASTRA_FILESYSTEM_INIT;
 static uint32_t volume_connected, volume_lost, volume_refresh;
 static uint64_t volume_retry;
 static char volume_path[32], volume_title[ASTRA_WINDOW_TITLE_MAX + 1u];
+static AstraHandle launcher;
+static AstraNameEdit name_edit = ASTRA_NAME_EDIT_INIT;
+static uint32_t edit_index = UINT32_MAX;
+static char edit_path[ASTRA_VFS_PATH_MAX];
+static uint32_t edit_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
+
+static int desktop_folder_root(void)
+{
+    return strncmp(root, "/home/Desktop", 13u) == 0 &&
+        (root[13] == '\0' || root[13] == '/');
+}
 
 static AstraVfsClient *volume_client_for(const AstraAssign *assign, void *context)
 {
@@ -142,7 +157,7 @@ static AstraResult volume_open(const AstraStartupInfo *startup)
 static void read_root(uint32_t argument)
 {
     (void)argument;
-    (void)atlas_directory_load(&directory,
+    (void)astra_directory_snapshot_load(&directory,
                                 volume_connected ? &volume_filesystem : &filesystem.filesystem, root,
                                 &cancelled);
     __atomic_store_n(&completed, 1u, __ATOMIC_RELEASE);
@@ -282,6 +297,11 @@ static AstraResult paint(void)
     AstraRectI32 whole = {0, 0, width, height};
     AstraResult result;
 
+    if (name_edit.active) {
+        result = astra_name_edit_render(&name_edit, edit_commands,
+            sizeof(edit_commands));
+        if (result != ASTRA_OK) return result;
+    }
     background.foreground = theme.client;
     blend.blend = ASTRA_BLEND_ALPHA;
     result = astra_draw_list_create(&content, &whole, &list);
@@ -317,7 +337,12 @@ static AstraResult paint(void)
                                frame.y + 8, ICON_SIZE, ICON_SIZE}, &blend);
         length = astra_surface_ui_text_fit(entry->name,
             (uint32_t)strlen(entry->name), theme.title_font_height, CELL_WIDTH - 8u);
-        if (result == ASTRA_OK && length != 0u) {
+        if (result == ASTRA_OK && name_edit.active && at == edit_index)
+            result = astra_draw_blit(&list, &name_edit.surface,
+                &(AstraRectI32){0, 0, ASTRA_NAME_EDIT_WIDTH, ASTRA_NAME_EDIT_HEIGHT},
+                &(AstraRectI32){frame.x + (int32_t)(CELL_WIDTH - ASTRA_NAME_EDIT_WIDTH) / 2,
+                    frame.y + 47, ASTRA_NAME_EDIT_WIDTH, ASTRA_NAME_EDIT_HEIGHT}, &blend);
+        else if (result == ASTRA_OK && length != 0u) {
             uint32_t text_width = astra_surface_ui_text_width(entry->name, length,
                                                              theme.title_font_height);
             result = astra_draw_ui_text(&list,
@@ -366,8 +391,262 @@ static void log_root(void)
     astra_runtime_deallocate(bytes);
 }
 
+static void log_icons(void)
+{
+    AstraWindowInfo info = ASTRA_WINDOW_INFO_INIT;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    if (astra_window_get_info(&window, &info) != ASTRA_OK) return;
+    int32_t origin_x = info.frame.x + theme.frame_width;
+    int32_t origin_y = info.frame.y + theme.frame_width +
+        theme.titlebar_height + theme.signal_height;
+    for (uint32_t at = 0u; at < directory.count; ++at) {
+        AstraControlFrame frame, clip;
+        char path[ASTRA_VFS_PATH_MAX], line[ASTRA_VFS_PATH_MAX + 96u];
+        if (astra_interface_ui_geometry(&ui, at + 2u, &frame, &clip) != ASTRA_OK ||
+            clip.width == 0u || clip.height == 0u ||
+            astra_folder_path(root, directory.entries[at].name,
+                path, sizeof(path)) != ASTRA_VFS_OK) continue;
+        AstraString out;
+        astra_string_init(&out, line, sizeof(line));
+        (void)astra_string_append(&out, "atlas icon ");
+        (void)astra_string_append(&out, path);
+        (void)astra_string_append_char(&out, ' ');
+        (void)astra_string_append_i64(&out, origin_x + frame.x);
+        (void)astra_string_append_char(&out, ' ');
+        (void)astra_string_append_i64(&out, origin_y + frame.y);
+        (void)astra_string_append_char(&out, ' ');
+        (void)astra_string_append_u64(&out, frame.width);
+        (void)astra_string_append_char(&out, ' ');
+        (void)astra_string_append_u64(&out, frame.height);
+        (void)astra_log(line);
+    }
+}
+
+typedef struct AtlasCommands {
+    AstraHandle gui;
+    uint32_t *selection;
+} AtlasCommands;
+
+static void folder_error(AstraHandle gui, const char *message, uint32_t status)
+{
+    char text[192];
+    AstraString out;
+    astra_string_init(&out, text, sizeof(text));
+    (void)astra_string_append(&out, message);
+    (void)astra_string_append(&out, ": ");
+    const char *reason = astra_vfs_status_text(status);
+    if (reason != NULL) (void)astra_string_append(&out, reason);
+    else (void)astra_string_append_u64(&out, status);
+    (void)astra_string_append_char(&out, '.');
+    AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
+    info.kind = ASTRA_ALERT_ERROR;
+    info.title = "Folder Error";
+    info.title_length = 12u;
+    info.message = text;
+    info.message_length = (uint16_t)out.length;
+    info.button = "Close";
+    info.button_length = 5u;
+    (void)astra_interface_show_alert(gui, &info);
+}
+
+static AstraResult reload_directory(void)
+{
+    uint32_t status = astra_directory_snapshot_load(&directory,
+        volume_connected ? &volume_filesystem : &filesystem.filesystem, root, NULL);
+    if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
+    log_root();
+    AstraResult result = build_view();
+    if (result == ASTRA_OK) log_icons();
+    if (result == ASTRA_OK) result = paint();
+    return result;
+}
+
+static uint32_t hit_entry(int32_t x, int32_t y)
+{
+    if (!visible_data || directory.status != ASTRA_VFS_OK) return UINT32_MAX;
+    for (uint32_t at = 0u; at < directory.count; ++at) {
+        AstraControlFrame frame, clip;
+        if (astra_interface_ui_geometry(&ui, at + 2u, &frame, &clip) != ASTRA_OK)
+            return UINT32_MAX;
+        if (x >= frame.x && y >= frame.y &&
+            (int64_t)x < (int64_t)frame.x + frame.width &&
+            (int64_t)y < (int64_t)frame.y + frame.height &&
+            x >= clip.x && y >= clip.y &&
+            (int64_t)x < (int64_t)clip.x + clip.width &&
+            (int64_t)y < (int64_t)clip.y + clip.height)
+            return at;
+    }
+    return UINT32_MAX;
+}
+
+static AstraResult open_entry(uint32_t index)
+{
+    if (index >= directory.count || directory.entries[index].kind != ASTRA_VFS_KIND_DIRECTORY)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    char path[ASTRA_VFS_PATH_MAX];
+    if (astra_folder_path(root, directory.entries[index].name,
+        path, sizeof(path)) != ASTRA_VFS_OK) return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint32_t pid;
+    if (strcmp(root, "/apps") == 0) {
+        size_t length = strlen(path);
+        if (length >= 4u && strcmp(path + length - 4u, ".app") == 0)
+            return astra_application_launch(launcher, path, (uint16_t)length, &pid);
+    }
+    const char *arguments[] = {path};
+    return astra_application_launch_with_arguments(launcher, "/apps/Atlas.app",
+        (uint16_t)strlen("/apps/Atlas.app"), ASTRA_LAUNCH_SOURCE_DESKTOP,
+        arguments, 1u, &pid);
+}
+
+static AstraResult start_edit(uint32_t index)
+{
+    if (!desktop_folder_root() || index >= directory.count ||
+        directory.entries[index].kind != ASTRA_VFS_KIND_DIRECTORY ||
+        astra_folder_path(root, directory.entries[index].name,
+            edit_path, sizeof(edit_path)) != ASTRA_VFS_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraResult result = astra_name_edit_start(&name_edit, &display,
+        directory.entries[index].name);
+    if (result != ASTRA_OK) return result;
+    edit_index = index;
+    return paint();
+}
+
+static AstraResult finish_edit(AstraHandle gui, int commit)
+{
+    if (!name_edit.active) return ASTRA_OK;
+    if (commit) {
+        char name[ASTRA_VFS_NAME_MAX], moved[ASTRA_VFS_PATH_MAX];
+        AstraResult result = astra_name_edit_text(&name_edit, name, sizeof(name));
+        if (result != ASTRA_OK || !astra_folder_name_valid(name)) {
+            folder_error(gui, "Choose a valid folder name", ASTRA_VFS_ERR_INVALID);
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        }
+        uint32_t status = astra_folder_rename_safe(&filesystem.filesystem,
+            edit_path, root, name, moved, sizeof(moved));
+        if (status != ASTRA_VFS_OK) {
+            folder_error(gui, "Folder could not be renamed", status);
+            return astra_result_from_service(status);
+        }
+    }
+    name_edit.active = 0u;
+    edit_index = UINT32_MAX;
+    return reload_directory();
+}
+
+static AstraResult menu_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"New", 3u, desktop_folder_root() &&
+        worker == 0u && directory.status == ASTRA_VFS_OK, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult folder_query(void *opaque, AstraCommandState *state)
+{
+    AstraResult result = menu_query(opaque, state);
+    state->label = "Folder";
+    state->label_length = 6u;
+    return result;
+}
+
+static AstraResult selected_query(void *opaque, AstraCommandState *state)
+{
+    const AtlasCommands *context = opaque;
+    uint32_t index = *context->selection;
+    *state = (AstraCommandState){"Open", 4u,
+        index < directory.count && directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult rename_query(void *opaque, AstraCommandState *state)
+{
+    AstraResult result = selected_query(opaque, state);
+    state->label = "Rename";
+    state->label_length = 6u;
+    state->enabled = state->enabled && desktop_folder_root();
+    return result;
+}
+
+static AstraResult delete_query(void *opaque, AstraCommandState *state)
+{
+    AstraResult result = rename_query(opaque, state);
+    state->label = "Delete";
+    state->label_length = 6u;
+    return result;
+}
+
+static AstraResult create_folder(void *opaque, const AstraCommandArguments *args)
+{
+    (void)args;
+    AtlasCommands *context = opaque;
+    if (!desktop_folder_root() || worker != 0u) return ASTRA_ERROR_PERMISSION;
+    char path[ASTRA_VFS_PATH_MAX];
+    uint32_t status = astra_folder_create_numbered(&filesystem.filesystem,
+        root, "Folder", path, sizeof(path));
+    if (status != ASTRA_VFS_OK) {
+        folder_error(context->gui, "Folder could not be created", status);
+        return astra_result_from_service(status);
+    }
+    AstraResult result = reload_directory();
+    if (result != ASTRA_OK) return result;
+    const char *name = astra_folder_leaf(path);
+    for (uint32_t at = 0u; at < directory.count; ++at)
+        if (strcmp(directory.entries[at].name, name) == 0)
+            return start_edit(at);
+    return ASTRA_ERROR_IO;
+}
+
+static AstraResult open_selected(void *opaque, const AstraCommandArguments *args)
+{
+    (void)args;
+    AtlasCommands *context = opaque;
+    return open_entry(*context->selection);
+}
+
+static AstraResult rename_selected(void *opaque, const AstraCommandArguments *args)
+{
+    (void)args;
+    AtlasCommands *context = opaque;
+    return start_edit(*context->selection);
+}
+
+static AstraResult delete_selected(void *opaque, const AstraCommandArguments *args)
+{
+    (void)args;
+    AtlasCommands *context = opaque;
+    uint32_t index = *context->selection;
+    if (!desktop_folder_root() || index >= directory.count ||
+        directory.entries[index].kind != ASTRA_VFS_KIND_DIRECTORY)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    char path[ASTRA_VFS_PATH_MAX], moved[ASTRA_VFS_PATH_MAX];
+    if (astra_folder_path(root, directory.entries[index].name,
+        path, sizeof(path)) != ASTRA_VFS_OK) return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint32_t status = astra_folder_move_to_trash(&filesystem.filesystem,
+        path, "/home/.Trash", moved, sizeof(moved));
+    if (status != ASTRA_VFS_OK) {
+        folder_error(context->gui, "Folder could not be deleted", status);
+        return astra_result_from_service(status);
+    }
+    name_edit.active = 0u;
+    edit_index = UINT32_MAX;
+    return reload_directory();
+}
+
 static AstraResult run(AstraHandle gui)
 {
+    AstraContextMenu context_menu = ASTRA_CONTEXT_MENU_INIT;
+    uint32_t menu_index = UINT32_MAX, clicked_index = UINT32_MAX;
+    AtlasCommands command_context = {gui, &menu_index};
+    AstraContextMenuItem menu_items[4];
+    uint16_t menu_parents[4] = {0u};
+    const AstraCommand commands[] = {
+        {"atlas.new", 9u, 0u, 0u, menu_query, create_folder, &command_context},
+        {"atlas.folder", 12u, 0u, 0u, folder_query, create_folder, &command_context},
+        {"atlas.open", 10u, 0u, 0u, selected_query, open_selected, &command_context},
+        {"atlas.rename", 12u, 0u, 0u, rename_query, rename_selected, &command_context},
+        {"atlas.delete", 12u, 0u, 0u, delete_query, delete_selected, &command_context}};
+    const AstraCommandScope command_scope = {NULL, commands, 5u};
     for (;;) {
         uint32_t waits[3] = {astra_window_event_wait_handle(&window)};
         uint32_t wait_count = 1u, worker_slot = UINT32_MAX, volume_slot = UINT32_MAX;
@@ -419,7 +698,7 @@ static AstraResult run(AstraHandle gui)
         }
         if (worker == 0u && (repaint || (waited == ASTRA_SYSCALL_OK && selected == worker_slot))) {
             if (volume_lost) {
-                atlas_directory_dispose(&directory);
+                astra_directory_snapshot_dispose(&directory);
                 directory.status = ASTRA_VFS_ERR_LOST;
                 visible_data = 1u;
             }
@@ -427,11 +706,21 @@ static AstraResult run(AstraHandle gui)
             result = build_view();
             if (result != ASTRA_OK)
                 return result;
+            log_icons();
             repaint = 1u;
         }
         result = astra_window_event_try(&window, &event);
         while (result == ASTRA_OK) {
             AstraUIAction action = ASTRA_UI_ACTION_INIT;
+            int handled = 0;
+            AstraResult menu_result = astra_interface_context_menu_handle_event(
+                &context_menu, &event, &handled);
+            if (handled) {
+                if (menu_result != ASTRA_OK)
+                    (void)astra_log_failure("atlas menu command", (uint32_t)(-menu_result));
+                result = astra_window_event_try(&window, &event);
+                continue;
+            }
             if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
                 return ASTRA_OK;
             if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
@@ -456,10 +745,61 @@ static AstraResult run(AstraHandle gui)
                 event.data.resize.width = width;
                 event.data.resize.height = height;
             }
+            if (name_edit.active && (event.type == ASTRA_WINDOW_EVENT_KEY ||
+                                     event.type == ASTRA_WINDOW_EVENT_TEXT)) {
+                AstraResult edit_result = astra_name_edit_event(&name_edit, &event, &action);
+                if (edit_result != ASTRA_OK) return edit_result;
+                if (action.type == ASTRA_UI_ACTION_ACTIVATE ||
+                    action.type == ASTRA_UI_ACTION_DISMISS)
+                    edit_result = finish_edit(gui, action.type == ASTRA_UI_ACTION_ACTIVATE);
+                else repaint = 1u;
+                if (edit_result != ASTRA_OK)
+                    (void)astra_log_failure("atlas folder edit", (uint32_t)(-edit_result));
+                result = astra_window_event_try(&window, &event);
+                continue;
+            }
             if (astra_interface_ui_handle_event(&ui, &event, &action) != ASTRA_OK)
                 return ASTRA_ERROR_INVALID_ARGUMENT;
             if (event.type == ASTRA_WINDOW_EVENT_RESIZE && layout() != ASTRA_OK)
                 return ASTRA_ERROR_IO;
+            if (event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
+                (action.type == ASTRA_UI_ACTION_CONTEXT_MENU ||
+                 (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u)) {
+                uint32_t index = hit_entry(event.data.pointer.x, event.data.pointer.y);
+                if (action.type == ASTRA_UI_ACTION_CONTEXT_MENU) {
+                    menu_index = index;
+                    uint32_t count = 0u;
+                    memset(menu_parents, 0, sizeof(menu_parents));
+                    if (index == UINT32_MAX && desktop_folder_root()) {
+                        menu_items[count++] = (AstraContextMenuItem){"atlas.new", 9u, NULL};
+                        menu_items[count++] = (AstraContextMenuItem){"atlas.folder", 12u, NULL};
+                        menu_parents[1] = 1u;
+                    } else if (index < directory.count &&
+                        directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY) {
+                        menu_items[count++] = (AstraContextMenuItem){"atlas.open", 10u, NULL};
+                        if (desktop_folder_root()) {
+                            menu_items[count++] = (AstraContextMenuItem){"atlas.rename", 12u, NULL};
+                            menu_items[count++] = (AstraContextMenuItem){"atlas.delete", 12u, NULL};
+                        }
+                    }
+                    if (count != 0u) {
+                        AstraResult opened = astra_interface_context_menu_open_tree(
+                            &context_menu, &window, &command_scope, menu_items,
+                            menu_parents, count, event.data.pointer.x,
+                            event.data.pointer.y);
+                        if (opened != ASTRA_OK)
+                            (void)astra_log_failure("atlas context menu", (uint32_t)(-opened));
+                    }
+                } else if (event.data.pointer.button == ASTRA_INPUT_BUTTON_LEFT) {
+                    if (event.data.pointer.click_count == 2u && index == clicked_index &&
+                        index < directory.count &&
+                        directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY) {
+                        AstraResult opened = open_entry(index);
+                        if (opened != ASTRA_OK)
+                            (void)astra_log_failure("atlas open", (uint32_t)(-opened));
+                    } else clicked_index = index;
+                }
+            }
             result = astra_window_event_try(&window, &event);
         }
         if (result != ASTRA_ERROR_WOULD_BLOCK)
@@ -473,7 +813,7 @@ static AstraResult run(AstraHandle gui)
 
 int astra_main(const AstraStartupInfo *startup)
 {
-    const AstraStartupCapability *gui, *ready;
+    const AstraStartupCapability *gui, *ready, *launch_capability;
     AstraArea placeholder = ASTRA_AREA_INIT;
     AstraWindowCreateInfo info = ASTRA_WINDOW_CREATE_INFO_INIT;
     AstraScrollModelInfo model = ASTRA_SCROLL_MODEL_INFO_INIT;
@@ -484,8 +824,10 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_INVALID;
     gui = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
     ready = astra_startup_capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
-    if (gui == NULL || ready == NULL)
+    launch_capability = astra_startup_capability(startup, ASTRA_CAPABILITY_APPLICATION_LAUNCH);
+    if (gui == NULL || ready == NULL || launch_capability == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
+    launcher = launch_capability->handle;
     if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
         return ASTRA_STATUS_IO;
     const char *first_argument = startup->argc > 1u ? astra_startup_argument(startup, 1u) : NULL;
@@ -523,7 +865,7 @@ int astra_main(const AstraStartupInfo *startup)
         info.title_length = (uint16_t)strlen(info.title);
         info.event_mask = ASTRA_WINDOW_SUBSCRIBE_DEFAULT |
             ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON | ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL |
-            ASTRA_WINDOW_SUBSCRIBE_KEY;
+            ASTRA_WINDOW_SUBSCRIBE_KEY | ASTRA_WINDOW_SUBSCRIBE_TEXT;
         result = astra_window_create(gui->handle, placeholder.handle, &info, &window);
     }
     if (placeholder.handle != ASTRA_INVALID_HANDLE) {
@@ -596,7 +938,7 @@ int astra_main(const AstraStartupInfo *startup)
     }
     /* Native process teardown owns a worker still retiring; never free its state. */
     if (worker == 0u) {
-        atlas_directory_dispose(&directory);
+        astra_directory_snapshot_dispose(&directory);
         astra_runtime_deallocate(controls);
         astra_process_filesystem_close(&filesystem);
         volume_close();

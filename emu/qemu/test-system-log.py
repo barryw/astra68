@@ -661,7 +661,7 @@ def main():
             if not terminal.open_terminal(machine, 120, 60):
                 fail("no terminal")
             # Now, while the desktop's layout lines are fresh.
-            doom_icon = machine.desktop_icon(DOOM_BUNDLE)
+            doom_icon = machine.application_icon(DOOM_BUNDLE)
             single = pid = earlier = 0
             if "cost" in wanted:
                 earlier = check_cost(machine)

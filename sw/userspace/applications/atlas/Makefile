@@ -17,7 +17,8 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 TARGET := build/m68k/atlas.elf
 IMAGE := build/m68k/atlas
 OBJECT := build/m68k/main.o
-OBJECTS := build/m68k/directory.o
+OBJECTS := build/m68k/directory_snapshot.o build/m68k/folder_ops.o \
+	build/m68k/name_edit.o
 LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) \
 	$(ASTRA_FONT_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) $(ASTRA_SYSTEM_LIBRARY) \
 	$(ASTRA_RUNTIME_LIBRARY) $(ASTRA_COMPILER_LIBRARY)
@@ -27,9 +28,21 @@ build/m68k/%.o: %.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
-build/host/test_directory: directory.c directory.h tests/test_directory.c
+build/m68k/directory_snapshot.o: ../../common/directory_snapshot.c ../../common/directory_snapshot.h
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 directory.c tests/test_directory.c -o $@
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/folder_ops.o: ../../common/folder_ops.c ../../common/folder_ops.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/name_edit.o: ../../common/name_edit.c ../../common/name_edit.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/host/test_directory: ../../common/directory_snapshot.c ../../common/directory_snapshot.h tests/test_directory.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 ../../common/directory_snapshot.c tests/test_directory.c -o $@
 
 test: build/host/test_directory
 	./$<
@@ -37,13 +50,13 @@ test: build/host/test_directory
 sanitize:
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O1 -fsanitize=address,undefined \
-		-fno-omit-frame-pointer directory.c tests/test_directory.c -o build/host/test_directory_sanitize
+		-fno-omit-frame-pointer ../../common/directory_snapshot.c tests/test_directory.c -o build/host/test_directory_sanitize
 	./build/host/test_directory_sanitize
 
 analyze:
 	@mkdir -p build/analyzer
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
-		-c directory.c -o build/analyzer/directory.o
+		-c ../../common/directory_snapshot.c -o build/analyzer/directory.o
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
 		-c main.c -o build/analyzer/main.o
 

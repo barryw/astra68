@@ -40,7 +40,7 @@ def open_fonts(machine):
     before = display_count(machine, "glyph-commands")
     trace_before = machine.sequence()
     syslog_before = len(machine.syslog_lines())
-    machine.qmp.double_click(*machine.desktop_icon("/apps/Fonts.app"))
+    machine.qmp.double_click(*machine.application_icon("/apps/Fonts.app"))
     end = time.monotonic() + 30
     while time.monotonic() < end:
         # Retained host logs include earlier boots and window activations.

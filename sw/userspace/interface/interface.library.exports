@@ -100,3 +100,9 @@ ASTRA_INTERFACE_7.2 {
     global:
         astra_interface_settings_pane_init;
 } ASTRA_INTERFACE_7.1;
+
+ASTRA_INTERFACE_7.3 {
+    global:
+        astra_interface_context_menu_open_tree;
+        astra_interface_menu_row_frame;
+} ASTRA_INTERFACE_7.2;

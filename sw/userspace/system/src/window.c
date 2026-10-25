@@ -421,6 +421,7 @@ AstraResult astra_window_menu_open(AstraWindow *window,
     AstraHandle immutable = ASTRA_INVALID_HANDLE;
     AstraWindowFrame anchor;
     AstraResult result;
+    uint32_t roots = 0u, last_parent = 0u;
     uint64_t length = ASTRA_GUI_MENU_HEADER_BYTES +
         (uint64_t)count * ASTRA_GUI_MENU_ROW_BYTES;
 
@@ -429,10 +430,21 @@ AstraResult astra_window_menu_open(AstraWindow *window,
         length > ASTRA_GUI_MENU_BYTES_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = 0u; at < count; ++at) {
+        uint32_t parent = (items[at].flags & ASTRA_MENU_PARENT_MASK) >>
+            ASTRA_MENU_PARENT_SHIFT;
         if ((items[at].flags & ~(ASTRA_MENU_DISABLED | ASTRA_MENU_CHECKED |
-                                ASTRA_MENU_SEPARATOR)) != 0u ||
+                                ASTRA_MENU_SEPARATOR | ASTRA_MENU_SUBMENU |
+                                ASTRA_MENU_PARENT_MASK)) != 0u ||
             !astra_utf8_validate(items[at].label, items[at].label_length, 0u))
             return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (parent == 0u) {
+            if (last_parent != 0u) return ASTRA_ERROR_INVALID_ARGUMENT;
+            ++roots;
+        } else {
+            if (parent > roots || parent < last_parent)
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+            last_parent = parent;
+        }
         length += items[at].label_length;
         if (length > ASTRA_GUI_MENU_BYTES_MAX) return ASTRA_ERROR_NO_RESOURCES;
     }

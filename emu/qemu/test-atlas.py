@@ -36,26 +36,12 @@ def fixture(image, work, overflow=False):
     image_tools._debugfs(volume, 'write %s "/atlas-many/café.txt"' % content,
                          "Atlas UTF-8 fixture")
     if overflow:
-        # Catalog entries use real manifests and the installed native icon.
-        # 160 additional entries exceed the established 152-cell desktop.
-        manifest_path = os.path.join(terminal.ROOT, "sw", "userspace", "apps",
-                                     "Atlas.app", "manifest")
-        with open(manifest_path, encoding="utf-8") as handle:
-            manifest = handle.read()
+        # 160 Desktop folders exceed the established 152-cell first page.
+        image_tools._mkdir(volume, "/home/Desktop", "Desktop overflow root")
         for at in range(160):
             name = "ZZOverflow%03d" % at
-            bundle = "/apps/%s.app" % name
-            image_tools._mkdir(volume, bundle, "desktop overflow bundle")
-            temporary = os.path.join(work, "overflow-manifest")
-            with open(temporary, "w", encoding="utf-8") as handle:
-                handle.write(manifest.replace("org.astra.atlas", "org.astra." + name.lower())
-                             .replace('name "Atlas"', 'name "%s"' % name)
-                             .replace("icon resources/Atlas.aicon", "icon icon.aicon"))
-            image_tools._debugfs(volume, "write %s %s/manifest" % (temporary, bundle),
-                                 "desktop overflow manifest")
-            image_tools._debugfs(volume,
-                "symlink %s/icon.aicon /apps/Atlas.app/resources/Atlas.aicon" % bundle,
-                "desktop overflow icon")
+            image_tools._mkdir(volume, "/home/Desktop/" + name,
+                               "desktop overflow folder")
     image_tools._splice(image, offset, volume)
 
 
@@ -128,10 +114,17 @@ def command_output(machine, command, name, timeout):
         return output.read().splitlines()
 
 
-def check_retired(machine, timeout):
+def atlas_processes(machine, timeout):
     lines = command_output(machine, "ps", "atlas-processes.txt", timeout)
-    if any("/apps/Atlas.app" in line for line in lines):
-        raise RuntimeError("Atlas process survived close: %s" % lines)
+    return {int(line.split()[0]) for line in lines
+            if line.strip().endswith("/apps/Atlas.app")}
+
+
+def check_retired(machine, timeout, allowed):
+    current = atlas_processes(machine, timeout)
+    if current != allowed:
+        raise RuntimeError("Atlas process set changed after close: %s != %s" %
+                           (current, allowed))
 
 
 def root_oracle(machine, timeout):
@@ -159,6 +152,7 @@ def main():
         try:
             if not terminal.open_terminal(machine, 120, args.deadline):
                 raise RuntimeError("Terminal could not open for native root oracle")
+            drawer = atlas_processes(machine, args.deadline)
             count, folders = root_oracle(machine, args.deadline)
             before = machine.sequence()
             submitted = desktop.display_count(machine, "submissions")
@@ -168,26 +162,26 @@ def main():
             if desktop.display_count(machine, "submissions") <= submitted:
                 raise RuntimeError("Atlas submitted no drawing")
             close_atlas(machine)
-            check_retired(machine, args.deadline)
+            check_retired(machine, args.deadline, drawer)
 
             command_output(machine, "mkdir /ram0/AtlasFolder; print atlas-volume > /ram0/atlas-file.txt; ls /ram0", "atlas-ram.txt", args.deadline)
             before = machine.sequence()
             machine.qmp.double_click(*machine.desktop_icon("/ram0"))
             wait_root(machine, "/ram0", 2, 1, 0, before, args.deadline)
             close_atlas(machine)
-            check_retired(machine, args.deadline)
+            check_retired(machine, args.deadline, drawer)
             print("ATLAS RAM0 exact native root grant PASS", flush=True)
 
             if args.overflow:
                 # Input uses the shared ScrollView policy. End exposes the
-                # last installed icon; Home restores DH0's exact native root.
+                # last Desktop folder; Home restores DH0's exact native root.
                 click(machine, 1800, 990)
                 machine.qmp.key("end")
                 _, maximum, icon_count = wait_desktop_offset(machine, lambda maximum: maximum, args.deadline)
                 if maximum == 0 or icon_count <= 152:
                     raise RuntimeError("overflow fixture did not create scrollable desktop")
                 desktop.wait_quiet(machine, "desktop overflow end")
-                x, y = machine.desktop_icon("/apps/ZZOverflow159.app", args.deadline)
+                x, y = machine.desktop_icon("/home/Desktop/ZZOverflow159", args.deadline)
                 if not (0 < x < 1908 and 34 < y < 1038):
                     raise RuntimeError("last overflow icon remained offscreen: %s" % ((x, y),))
                 # Last-page thumb lies in the lower half of the common bar.
@@ -213,7 +207,7 @@ def main():
                 machine.qmp.double_click(*machine.desktop_icon("/dh0"))
                 wait_root(machine, "/dh0", count, folders, 0, before, args.deadline)
                 close_atlas(machine)
-                check_retired(machine, args.deadline)
+                check_retired(machine, args.deadline, drawer)
                 print("DESKTOP overflow last icon, scrollbar drag, wheel, home, exact DH0 launch PASS", flush=True)
 
             for root, count, folders, status in (
@@ -247,7 +241,7 @@ def main():
                         desktop.wait_quiet(machine, "Atlas resize")
                         start = target
                 close_atlas(machine)
-                check_retired(machine, args.deadline)
+                check_retired(machine, args.deadline, drawer)
                 print("ATLAS %s PASS" % root, flush=True)
             references = command_output(machine, "volumes --references", "atlas-references.txt", args.deadline)
             rows = [line.split() for line in references if line.strip().endswith(" /ram0")]
@@ -264,7 +258,7 @@ def main():
                 line.strip()[len("ATLAS-STALE-"):].isdigit()]
             if len(statuses) != 1 or statuses[0] == "0":
                 raise RuntimeError("stale volume incarnation was admitted: %s" % lines)
-            check_retired(machine, args.deadline)
+            check_retired(machine, args.deadline, drawer)
             print("ATLAS stale incarnation refusal PASS", flush=True)
 
             desktop.require_pointer(machine, ((200, 200), (1500, 700)))

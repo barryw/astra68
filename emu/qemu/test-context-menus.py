@@ -69,6 +69,7 @@ def main():
         machine = terminal.Machine(args.qemu, args.rom, image, work)
         try:
             assert terminal.open_terminal(machine, 120, args.deadline), 'boot did not finish'
+            drawer = atlas.atlas_processes(machine, args.deadline)
             point = machine.desktop_icon('/dh0')
             before = len(machine.syslog_lines())
             open_popup(machine, point)
@@ -78,7 +79,7 @@ def main():
             open_popup(machine, point)
             # Clicking another icon with the secondary button dismisses this
             # popup; its release must not open a new popup under the old one.
-            other = machine.desktop_icon('/apps/Terminal.app')
+            other = machine.desktop_icon('/apps')
             machine.qmp.point(*other)
             desktop.wait_quiet(machine, 'outside menu motion', seconds=.2)
             batches = desktop.display_count(machine, 'render-batches')
@@ -133,7 +134,7 @@ def main():
             desktop.require_pointer(machine, ((200, 200), (1500, 700)))
             assert machine.process.poll() is None, 'QEMU exited'
             assert not any('PANIC' in line for line in machine.log), machine.recent_serial()
-            atlas.check_retired(machine, args.deadline)
+            atlas.check_retired(machine, args.deadline, drawer)
             print('ASTRA CONTEXT MENUS PASS right click, Escape/outside dismissal, release commit, '
                   'DH0 Open by pointer/keyboard, shared ASTRA keyboard menu', flush=True)
         finally:

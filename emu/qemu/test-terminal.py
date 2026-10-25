@@ -146,13 +146,13 @@ INTERFACE_SPLITTER_MAX_NS_PER_ACTION = 30_000
 # microseconds retains 36.7% scheduling headroom.
 INTERFACE_DISCLOSURE_MAX_NS_PER_ACTION = 60_000
 
-# The Terminal bundle. A double click on its desktop icon is what starts a
-# terminal; there is no manifest entry that starts one directly, because a
-# window client with no window server to ask is a program that exits before
-# it draws. Where the icon is comes from the desktop itself (desktop_icon).
+# Terminal launches from Atlas's Applications drawer. The Desktop exposes the
+# drawer; installed bundles do not automatically become Desktop icons.
 TERMINAL_BUNDLE = "/apps/Terminal.app"
 DESKTOP_ICON = re.compile(
     r"desktop icon (\S+) (\d+) (\d+) (\d+) (\d+)$")
+ATLAS_ICON = re.compile(
+    r"atlas icon (\S+) (\d+) (\d+) (\d+) (\d+)$")
 
 # The shipped plain MOTD is zsh's startup fallback. Seeing it proves the
 # terminal launched zsh and zsh read its system startup file.
@@ -742,7 +742,7 @@ class TraceReader:
             lines.append(pending)
         return lines, highest
 
-    def desktop_icon(self, bundle=TERMINAL_BUNDLE, deadline=30.0):
+    def desktop_icon(self, bundle="/apps", deadline=30.0):
         """The screen point at the centre of @p bundle's desktop icon.
 
         The desktop logs each icon's hit rectangle as it lays out the grid,
@@ -763,6 +763,21 @@ class TraceReader:
                 raise RuntimeError("the desktop never placed %s; recent logs:\n%s" %
                                    (bundle, "\n".join(lines[-30:])))
             time.sleep(0.25)
+
+    def application_icon(self, qmp, bundle, deadline=30.0):
+        """Open Applications drawer and return current Atlas entry center."""
+        before = len(read_host_syslog(self.hostfs_root).splitlines())
+        qmp.double_click(*self.desktop_icon("/apps", deadline))
+        end = time.monotonic() + deadline
+        while time.monotonic() < end:
+            lines = read_host_syslog(self.hostfs_root).splitlines()[before:]
+            for line in reversed(lines):
+                match = ATLAS_ICON.search(line)
+                if match is not None and match.group(1) == bundle:
+                    left, top, width, height = map(int, match.groups()[1:])
+                    return left + width // 2, top + height // 2
+            time.sleep(0.1)
+        raise RuntimeError("Atlas did not show %s: %s" % (bundle, lines[-25:]))
 
 
 class Machine:
@@ -921,8 +936,11 @@ class Machine:
     def sequence(self):
         return self.said()[1]
 
-    def desktop_icon(self, bundle=TERMINAL_BUNDLE, deadline=30.0):
+    def desktop_icon(self, bundle="/apps", deadline=30.0):
         return self.reader.desktop_icon(bundle, deadline)
+
+    def application_icon(self, bundle, deadline=30.0):
+        return self.reader.application_icon(self.qmp, bundle, deadline)
 
     def trace_sequence(self):
         highest = 0
@@ -1058,7 +1076,8 @@ def open_terminal_window(machine, command_deadline):
     # what says it painted is the launch report for the app it is running.
     time.sleep(2.0)
     before = machine.sequence()
-    machine.qmp.double_click(*machine.desktop_icon())
+    machine.qmp.double_click(*machine.application_icon(TERMINAL_BUNDLE,
+                                                      command_deadline))
     lines, _ = machine.wait_for_text(BANNER, command_deadline, before)
     if lines is None:
         print("FAIL: the terminal never drew its banner after a double click")
@@ -1343,7 +1362,7 @@ def vim_creates_and_runs_lua(machine, command_deadline, verbose=False):
     # file written by Vim's post-startup command, then move it aside and return
     # focus to the editor. This is a readiness handshake, not a guessed sleep.
     before = machine.sequence()
-    machine.qmp.double_click(*machine.desktop_icon())
+    machine.qmp.double_click(*machine.application_icon(TERMINAL_BUNDLE))
     if machine.wait_for_text(BANNER, command_deadline, before)[0] is None:
         print("FAIL: no observer terminal opened while Vim was running")
         return False
@@ -1720,7 +1739,7 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
                         try:
                             machine.qmp.execute("cont")
                             diagnostic_before = machine.sequence()
-                            machine.qmp.double_click(*machine.desktop_icon())
+                            machine.qmp.double_click(*machine.application_icon(TERMINAL_BUNDLE))
                             ready, _ = machine.wait_for_text(
                                 BANNER, command_deadline, diagnostic_before)
                             if ready is not None:

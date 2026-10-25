@@ -6,6 +6,17 @@ per-document undo histories. Applications call its versioned ELF symbols
 directly; they do not compile private Interface Kit sources or speak directly
 to the display and clipboard services.
 
+## Child context menus
+
+Interface Kit 7.3 adds `astra_interface_context_menu_open_tree` for one level
+of hover-activated child rows. Supply top-level command rows first, followed
+by child rows grouped by their one-based parent index; zero marks a top-level
+row. Command query labels and enabled state are copied when the menu opens.
+The display composes the child from the same shared Menu control and returns
+the selected child command to the caller's normal command scope. `New > Folder`
+on Desktop and in Atlas uses this contract. Existing flat context menus keep
+using `astra_interface_context_menu_open`.
+
 ## Shared settings panes
 
 Interface Kit 7.2 adds `astra_interface_settings_pane_init`, a composition of

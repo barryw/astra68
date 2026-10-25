@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-10-24
 
+Current DE25 Desktop folder release, 2026-10-24: release
+`44c0675b54a2506a3a6f236938bbf9a6d5cf602195a9f55a9fb2adc7bf2cdd33`
+passed package verification and normal deployment (`ASTRA_DE25_RELEASE PASS`)
+with unchanged qualified kernel identity
+`cbb18f706daf0daeb4c74260a321a2cb9d63c3d758eb655b21bba77c7f4bbdb6`.
+Desktop user folders persist under `HOME:Desktop` on DH0; mounted volumes
+remain virtual icons. Installed apps stay in `APPS:` and are reached through
+the Applications drawer. Shared Interface Kit menus now support hover child
+menus, used by Desktop's `New > Folder`; shared inline name editing serves
+Desktop and Atlas. Folder create, rename, nested browsing, and move-to-Trash
+delete passed the native QEMU reboot-persistence gate. Atlas, context-menu,
+and app-drawer QEMU gates passed; Atlas overflow also passed with 160 Desktop
+folders, scrolling, exact DH0 launch, 257 entries, and process retirement.
+Beast userspace build and tests passed.
+Physical DE25 remote-desktop capture confirmed the `New > Folder` hover
+submenu; production services remain active with `Result=success NRestarts=0`.
+Evidence: Beast `/var/tmp/astra-desktop-final-userspace.log`,
+`/var/tmp/astra-desktop-folders-publish.log`, and
+`/var/tmp/astra-desktop-folders-deploy.log`; local capture
+`/private/tmp/astra-desktop-menu-crop.png`. Desktop folder contract and Haiku
+comparison: `docs/DESKTOP_FOLDERS.md`.
+
 Current DE25 filesystem release, 2026-10-24: release
 `cc88bb3df774196a55886324514453a1be19200558e3ab955d7ff35c02b3bf7d`
 passed package verification and normal deployment (`ASTRA_DE25_RELEASE PASS`)

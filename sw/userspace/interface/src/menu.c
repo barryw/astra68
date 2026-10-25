@@ -74,7 +74,8 @@ AstraResult astra_interface_menu_init(AstraMenu *menu,
         const AstraMenuItem *item = &items[at];
 
         if ((item->flags & ~(ASTRA_MENU_DISABLED | ASTRA_MENU_CHECKED |
-                             ASTRA_MENU_SEPARATOR)) != 0u)
+                             ASTRA_MENU_SEPARATOR | ASTRA_MENU_SUBMENU |
+                             ASTRA_MENU_PARENT_MASK)) != 0u)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         if ((item->flags & ASTRA_MENU_SEPARATOR) != 0u) {
             if (item->flags != ASTRA_MENU_SEPARATOR || item->label != NULL ||
@@ -87,7 +88,8 @@ AstraResult astra_interface_menu_init(AstraMenu *menu,
                 !astra_interface_single_line_text_valid(item->label, item->label_length))
                 return ASTRA_ERROR_INVALID_ARGUMENT;
             preferred = (uint64_t)astra_surface_ui_text_width(item->label,
-                item->label_length, ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT) + 44u;
+                item->label_length, ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT) +
+                ((item->flags & ASTRA_MENU_SUBMENU) != 0u ? 58u : 44u);
             if (preferred > width) width = preferred;
             ++rows;
         }
@@ -139,6 +141,19 @@ uint32_t astra_interface_menu_hit(const AstraMenu *menu, int32_t x, int32_t y)
         top += pitch(item);
     }
     return 0u;
+}
+
+AstraResult astra_interface_menu_row_frame(const AstraMenu *menu,
+    uint32_t row, AstraControlFrame *frame)
+{
+    if (!valid(menu) || frame == NULL || row == 0u || row > menu->_private_count)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    int64_t top = (int64_t)menu->_private_frame.y + PAD - menu->_private_scroll;
+    for (uint32_t at = 0u; at + 1u < row; ++at)
+        top += pitch(&menu->_private_items[at]);
+    *frame = (AstraControlFrame){menu->_private_frame.x, (int32_t)top,
+        menu->_private_frame.width, ROW};
+    return ASTRA_OK;
 }
 
 static void revision(AstraMenu *menu)
@@ -295,9 +310,11 @@ AstraResult astra_interface_menu_render(const AstraMenu *menu, AstraSurfaceView 
         const AstraMenuItem *item = &menu->_private_items[at];
         if (top < surface->height - PAD && top + pitch(item) > PAD) {
             commands += 4u;
+            if ((item->flags & ASTRA_MENU_SUBMENU) != 0u) commands += 2u;
             if (item->label_length != 0u)
                 payload += (uint64_t)astra_surface_ui_text_fit(item->label, item->label_length,
-                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, surface->width - 40u) + id_length;
+                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, surface->width -
+                    ((item->flags & ASTRA_MENU_SUBMENU) != 0u ? 58u : 40u)) + id_length;
         }
         top += pitch(item);
     }
@@ -326,7 +343,8 @@ AstraResult astra_interface_menu_render(const AstraMenu *menu, AstraSurfaceView 
                 uint16_t ink = color((item->flags & ASTRA_MENU_DISABLED) != 0u ?
                     theme.text_muted : selected ? theme.accent_text : theme.text_primary);
                 uint32_t bytes = astra_surface_ui_text_fit(item->label, item->label_length,
-                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, target.width - 40u);
+                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, target.width -
+                    ((item->flags & ASTRA_MENU_SUBMENU) != 0u ? 58u : 40u));
                 if (selected)
                     astra_surface_fill_round(&target, PAD, y, target.width - 2u * PAD,
                                              ROW, theme.control_radius, color(theme.accent));
@@ -337,6 +355,12 @@ AstraResult astra_interface_menu_render(const AstraMenu *menu, AstraSurfaceView 
                 }
                 astra_surface_ui_text(&target, 28, y + 9, item->label, bytes,
                                       ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, ink);
+                if ((item->flags & ASTRA_MENU_SUBMENU) != 0u &&
+                    (!astra_surface_line(&target, target.width - 25u, y + 12,
+                        target.width - 19u, y + 16, ink) ||
+                     !astra_surface_line(&target, target.width - 19u, y + 16,
+                        target.width - 25u, y + 20, ink)))
+                    return ASTRA_ERROR_NO_RESOURCES;
             }
         }
         top += pitch(item);

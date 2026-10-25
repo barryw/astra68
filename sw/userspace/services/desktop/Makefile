@@ -21,9 +21,12 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 TARGET := build/m68k/desktop.elf
 IMAGE := build/m68k/desktop
 OBJECT := build/m68k/main.o
-OBJECTS := build/m68k/crc32.o
+OBJECTS := build/m68k/crc32.o build/m68k/directory_snapshot.o \
+	build/m68k/folder_ops.o build/m68k/name_edit.o
 HOST_TEST := build/host/test_desktop_layout
 HOST_TEST_SANITIZE := build/host/test_desktop_layout_sanitize
+FOLDER_TEST := build/host/test_folder_ops
+FOLDER_TEST_SANITIZE := build/host/test_folder_ops_sanitize
 GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o $(GRAPHICS)/build/host/font_data.o
 GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o $(GRAPHICS)/build/host/font_data_sanitize.o
 SYSTEM_HOST_UTF8 := ../../system/build/host/utf8.o
@@ -48,6 +51,18 @@ build/m68k/crc32.o: ../../../common/crc32.c ../../../include/astra/crc32.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
+build/m68k/directory_snapshot.o: ../../common/directory_snapshot.c ../../common/directory_snapshot.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/folder_ops.o: ../../common/folder_ops.c ../../common/folder_ops.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/name_edit.o: ../../common/name_edit.c ../../common/name_edit.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
 $(SOUND_ASSET): $(SOUND_SOURCE) $(SOUND_RENDERER)
 	@mkdir -p $(@D)
 	python3 $(SOUND_RENDERER) $(SOUND_SOURCE) $@
@@ -65,8 +80,14 @@ $(HOST_TEST): tests/test_desktop_layout.c desktop_layout.h desktop_usage_layout.
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -ffunction-sections -Wl,--gc-sections \
 		$< $(GRAPHICS_HOST_SURFACE) $(SYSTEM_HOST_UTF8) $(FONT_HOST_INPUTS) -o $@
 
-test: $(HOST_TEST) $(SOUND_ASSET)
+$(FOLDER_TEST): tests/test_folder_ops.c ../../common/folder_ops.c ../../common/folder_ops.h $(SYSTEM_HOST_UTF8)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $< ../../common/folder_ops.c \
+		../../runtime/src/string.c $(SYSTEM_HOST_UTF8) -o $@
+
+test: $(HOST_TEST) $(FOLDER_TEST) $(SOUND_ASSET)
 	./$(HOST_TEST)
+	./$(FOLDER_TEST)
 	python3 tests/test_startup_sound.py $(SOUND_SOURCE) $(SOUND_ASSET)
 
 $(HOST_TEST_SANITIZE): tests/test_desktop_layout.c desktop_layout.h desktop_usage_layout.h $(GRAPHICS_HOST_SURFACE_SANITIZE) $(SYSTEM_HOST_UTF8) $(FONT_HOST_INPUTS)
@@ -75,8 +96,15 @@ $(HOST_TEST_SANITIZE): tests/test_desktop_layout.c desktop_layout.h desktop_usag
 		-fsanitize=address,undefined -fno-omit-frame-pointer -ffunction-sections -Wl,--gc-sections \
 		$< $(GRAPHICS_HOST_SURFACE_SANITIZE) $(SYSTEM_HOST_UTF8) $(FONT_HOST_INPUTS) -o $@
 
-sanitize: $(HOST_TEST_SANITIZE) $(SOUND_ASSET)
+$(FOLDER_TEST_SANITIZE): tests/test_folder_ops.c ../../common/folder_ops.c ../../common/folder_ops.h $(SYSTEM_HOST_UTF8)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O1 \
+		-fsanitize=address,undefined -fno-omit-frame-pointer $< \
+		../../common/folder_ops.c ../../runtime/src/string.c $(SYSTEM_HOST_UTF8) -o $@
+
+sanitize: $(HOST_TEST_SANITIZE) $(FOLDER_TEST_SANITIZE) $(SOUND_ASSET)
 	./$(HOST_TEST_SANITIZE)
+	./$(FOLDER_TEST_SANITIZE)
 	python3 tests/test_startup_sound.py $(SOUND_SOURCE) $(SOUND_ASSET)
 
 analyze:

@@ -14,6 +14,7 @@ static uint8_t enabled = 1u;
 static char scratch[8];
 static const char *labels[] = {"First", "Second"};
 static uint32_t queries;
+static uint8_t tree_menu;
 
 void *astra_runtime_allocate(size_t size)
 {
@@ -33,7 +34,8 @@ AstraResult astra_window_menu_open(AstraWindow *window, const AstraMenuItem *row
     assert(rows[0].label_length == 5u && memcmp(rows[0].label, "First", 5u) == 0);
     assert(rows[1].label_length == 6u && memcmp(rows[1].label, "Second", 6u) == 0);
     assert(rows[0].flags == (enabled ? 0u : ASTRA_MENU_DISABLED));
-    assert(rows[1].flags == ASTRA_MENU_CHECKED);
+    assert(rows[1].flags == (ASTRA_MENU_CHECKED |
+        (tree_menu ? ASTRA_MENU_PARENT(1u) : 0u)));
     request = cookie;
     return open_result;
 }
@@ -53,7 +55,7 @@ static AstraResult query(void *context, AstraCommandState *state)
 }
 static AstraResult invoke(void *context, const AstraCommandArguments *args)
 {
-    assert(context == NULL && args == NULL);
+    assert((context == NULL || context == (void *)(uintptr_t)1u) && args == NULL);
     ++invocations;
     return ASTRA_OK;
 }
@@ -105,6 +107,9 @@ static void model(void)
     info = state(&menu);
     assert(info.frame.width == 160u && info.frame.height == 136u &&
            info.frame.x == 470 && info.frame.y == 294);
+    AstraControlFrame first_row;
+    assert(astra_interface_menu_row_frame(&menu, 1u, &first_row) == ASTRA_OK);
+    assert(first_row.x == 470 && first_row.y == 302 && first_row.height == 32u);
     assert(astra_interface_menu_hit(&menu, 478, 302) == 1u);
     assert(astra_interface_menu_hit(&menu, 477, 302) == 0u);
     assert(astra_interface_menu_hit(&menu, 478, 346) == 0u); /* separator */
@@ -245,6 +250,22 @@ static void context(void)
     assert(invocations == 1u);
     result.type = ASTRA_WINDOW_EVENT_KEY;
     assert(astra_interface_context_menu_handle_event(&menu, &result, &handled) == ASTRA_OK && !handled);
+    {
+        const uint16_t parents[] = {0u, 1u};
+        const uint16_t invalid[] = {1u, 0u};
+        tree_menu = 1u;
+        assert(astra_interface_context_menu_open_tree(&menu, &window, &scope,
+            items, invalid, 2u, 12, 24) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_interface_context_menu_open_tree(&menu, &window, &scope,
+            items, parents, 2u, 12, 24) == ASTRA_OK);
+        result.type = ASTRA_WINDOW_EVENT_MENU_RESULT;
+        result.data.menu_result.request = request;
+        result.data.menu_result.selection = 2u;
+        result.data.menu_result.status = ASTRA_STATUS_OK;
+        assert(astra_interface_context_menu_handle_event(&menu, &result, &handled) == ASTRA_OK);
+        assert(handled && invocations == 2u);
+        tree_menu = 0u;
+    }
 }
 int main(void)
 {

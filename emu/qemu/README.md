@@ -34,7 +34,7 @@ ring and byte-counter wrap, buffer reuse, invalid queue changes, and close.
 Copied buffers return only after the host mixer consumes them. SDL uses two
 buffers, so its application and mailbox queues do not add their depths.
 
-Interface Gallery opens directly from the desktop. Its retained benchmark
+Interface Gallery opens from the Applications drawer in Atlas. Its retained benchmark
 suites run only with `open /apps/InterfaceGallery.app --benchmark`; the Terminal
 gate's `--interface-layout-only` option invokes that path explicitly.
 
@@ -44,6 +44,11 @@ release-only activation, DH0 Open by pointer and keyboard, and ASTRA keyboard
 navigation/About. It uses the same native runtime and copied provider image as
 the desktop/Atlas gates. The Interface benchmark includes 10,000 menu actions
 under the existing 12.5-microsecond semantic-action gate.
+
+`test-desktop-folders.py QEMU ROM IMAGE` verifies Desktop `New > Folder`,
+inline naming, rename, nested Atlas creation/open, and folder deletion on a
+disposable image. Installed apps appear in Atlas's Applications drawer rather
+than on the Desktop automatically.
 
 ## AstraHost block service
 
