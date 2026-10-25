@@ -78,3 +78,13 @@ service, removed only that generated file and its empty directory, verified
 the release manifest, and set `sys.dont_write_bytecode` in the temporary probe
 before resuming. This was a test-probe artifact, not a kernel panic or a
 Desktop data failure. No product file was changed on the board.
+
+Interface Kit 7.4 release
+`1488fb36d28a081714c2a5366dea4c27e10d5b79959163c2de52b2c227a7c27e`
+repeated the physical gate after extracting the shared icon tile and editor.
+RFB captures show selected `Folder1` editor, committed `UIReuseGate`, renamed
+`UIReuseFinal`, its empty Atlas root, and restored Desktop after Delete. Native
+Terminal listed `UIReuseFinal-1` in Trash. Its empty test directory alone was
+removed through the existing storage-provider mount. Release verification
+passed afterward; all three production services remain active with zero
+restarts, and the retained panic log predates deployment.
