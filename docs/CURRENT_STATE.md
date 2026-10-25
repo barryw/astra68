@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-24
+Status: active continuation map, 2026-10-25
 
 Current DE25 Desktop folder release, 2026-10-24: release
 `44c0675b54a2506a3a6f236938bbf9a6d5cf602195a9f55a9fb2adc7bf2cdd33`
@@ -18,6 +18,24 @@ folders, scrolling, exact DH0 launch, 257 entries, and process retirement.
 Beast userspace build and tests passed.
 Physical DE25 remote-desktop capture confirmed the `New > Folder` hover
 submenu; production services remain active with `Result=success NRestarts=0`.
+Physical folder qualification on 2026-10-25 passed: Desktop created `Folder1`
+with inline editor, Enter committed `DE25VerifyStart`, Rename committed
+`DE25VerifyFinal`, Atlas opened that folder, created and opened nested
+`InsideDE25`, and both names survived a clean Astra service restart. Atlas
+and Desktop context menus deleted the child and parent to Trash; both icons
+disappeared. Native Terminal listed exactly those two Trash entries. Their
+empty directories were removed through the provider's existing mount; native
+Terminal then showed empty Trash and Desktop matched its pretest frame. The
+release manifest verified again, `astra.service` is active with
+`Result=success NRestarts=0`, and `panic-latest.log` remains unchanged.
+During the restart, the temporary RFB probe's Python import created one
+`__pycache__` file inside the release, so startup integrity checks refused
+several automatic starts. The service was stopped, that generated file alone
+was removed, and the temporary probe was changed to suppress bytecode writes.
+Release verification and restart then passed; no production user file was
+removed. Physical captures: `/private/tmp/astra-de25-folder-new-crop.png`,
+`/private/tmp/astra-de25-folder-persisted-child.png`, and
+`/private/tmp/astra-de25-folder-final-desktop.png`.
 Evidence: Beast `/var/tmp/astra-desktop-final-userspace.log`,
 `/var/tmp/astra-desktop-folders-publish.log`, and
 `/var/tmp/astra-desktop-folders-deploy.log`; local capture
