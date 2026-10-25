@@ -13,7 +13,9 @@ the Applications drawer. Shared Interface Kit menus now support hover child
 menus, used by Desktop's `New > Folder`; shared inline name editing serves
 Desktop and Atlas. Folder create, rename, nested browsing, and move-to-Trash
 delete passed the native QEMU reboot-persistence gate. Atlas, context-menu,
-and app-drawer QEMU gates passed; Beast userspace build and tests passed.
+and app-drawer QEMU gates passed; Atlas overflow also passed with 160 Desktop
+folders, scrolling, exact DH0 launch, 257 entries, and process retirement.
+Beast userspace build and tests passed.
 Physical DE25 remote-desktop capture confirmed the `New > Folder` hover
 submenu; production services remain active with `Result=success NRestarts=0`.
 Evidence: Beast `/var/tmp/astra-desktop-final-userspace.log`,
