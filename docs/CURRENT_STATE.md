@@ -2,6 +2,19 @@
 
 Status: active continuation map, 2026-10-25
 
+Interface Kit 7.4 UI reuse candidate, 2026-10-25: Desktop and Atlas now use
+one native icon tile painter/hit contract and one Field/TextModel inline editor
+owned by Interface Kit. Their application-specific folder commands and layout
+remain in their owners. Haiku Tracker comparison and control boundaries are
+recorded in `docs/DESKTOP_FOLDERS.md`. Beast full userspace build/test,
+Interface Kit sanitizer/analyzer, NDK header/documentation checks, native QEMU
+Desktop folder create/rename/nested open/delete/reboot gate, and Atlas DH0/RAM0,
+overflow, 257-entry, UTF-8 and process-retirement gate passed. Evidence:
+Beast `/var/tmp/astra-ui-reuse-userspace.log`,
+`/var/tmp/astra-ui-reuse-sanitize.log`, `/var/tmp/astra-ui-reuse-ndk.log`,
+`/var/tmp/astra-ui-reuse-folders.log`, and `/var/tmp/astra-ui-reuse-atlas.log`.
+Physical DE25 release gate remains pending.
+
 Current DE25 Desktop folder release, 2026-10-24: release
 `44c0675b54a2506a3a6f236938bbf9a6d5cf602195a9f55a9fb2adc7bf2cdd33`
 passed package verification and normal deployment (`ASTRA_DE25_RELEASE PASS`)

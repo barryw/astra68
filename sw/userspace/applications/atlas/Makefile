@@ -17,8 +17,7 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 TARGET := build/m68k/atlas.elf
 IMAGE := build/m68k/atlas
 OBJECT := build/m68k/main.o
-OBJECTS := build/m68k/directory_snapshot.o build/m68k/folder_ops.o \
-	build/m68k/name_edit.o
+OBJECTS := build/m68k/directory_snapshot.o build/m68k/folder_ops.o
 LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) \
 	$(ASTRA_FONT_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) $(ASTRA_SYSTEM_LIBRARY) \
 	$(ASTRA_RUNTIME_LIBRARY) $(ASTRA_COMPILER_LIBRARY)
@@ -33,10 +32,6 @@ build/m68k/directory_snapshot.o: ../../common/directory_snapshot.c ../../common/
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
 build/m68k/folder_ops.o: ../../common/folder_ops.c ../../common/folder_ops.h
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
-
-build/m68k/name_edit.o: ../../common/name_edit.c ../../common/name_edit.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 

@@ -101,8 +101,8 @@ cannot dismiss a newer popup and succeeds if that old request already ended.
 A terminal event with a rendering error clears the session and returns its
 translated result (for example `ASTRA_ERROR_NO_RESOURCES`).
 
-This first version has flat menus. Submenus and application menu-strip
-publication remain future work. The low-level `astra_window_menu_open/close`
+Interface Kit 7.3 adds one level of child rows to context menus. Application
+menu-strip publication remains future work. The low-level `astra_window_menu_open/close`
 transport and direct menu-control APIs are available to framework hosts;
 applications normally use the command-backed helper.
 
@@ -449,3 +449,22 @@ On the physical 69.874 MHz MC68040, the retained 10,000-group acceptance
 workload measured 7.546 microseconds to apply and record a group, 3.958
 microseconds to undo it, and 3.292 microseconds to redo it. The automated gate
 uses a measured 12.5-microsecond ceiling for each phase.
+
+## Icon tiles and inline editing
+
+Interface Kit 7.4 provides `AstraIconTileInfo` and
+`astra_interface_icon_tile_render` for themed icon-and-label tiles. Desktop
+and Atlas supply frames from their existing Container/ScrollView layout;
+the tile applies shared icon sizing, UTF-8 label fitting, clipping, colors,
+and placement. `astra_interface_icon_tile_hit` tests the same frame against
+its viewport clip. Tile style selects the desktop or client role; applications
+still own the item model, selection, commands, and navigation.
+
+`AstraInlineEdit` composes the existing Field, TextModel, and UIContext for a
+single-line overlay. Call `astra_interface_inline_edit_start` with initial
+text, send key and text events through `astra_interface_inline_edit_event`,
+render to its hardware surface, and use `astra_interface_inline_edit_text`
+on activation. Escape dismisses. The caller validates and saves the result;
+`astra_interface_inline_edit_stop` ends editing after commit or cancel.
+Desktop and Atlas use this same control for folder names. Both additions are
+exported by `interface.library.7` revision 7.4.0.

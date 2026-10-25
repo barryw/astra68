@@ -1,24 +1,25 @@
-#include "name_edit.h"
+#include <astra/inline_edit.h>
+#include <astra/interface_library.h>
 
 #include <astra/draw_list.h>
-#include <astra/filesystem_library.h>
 #include <astra/input.h>
 #include <astra/theme.h>
 
 #include <string.h>
 
-AstraResult astra_name_edit_start(AstraNameEdit *edit, AstraDisplay *display,
+AstraResult astra_interface_inline_edit_start(AstraInlineEdit *edit, AstraDisplay *display,
     const char *initial)
 {
     if (edit == NULL || display == NULL || initial == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    uint32_t length = (uint32_t)strlen(initial);
-    if (length >= ASTRA_VFS_NAME_MAX)
+    size_t length = strlen(initial);
+    if (length >= sizeof(edit->content))
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    edit->active = 0u;
     if (edit->surface._private_handle == ASTRA_INVALID_HANDLE) {
         AstraSurfaceCreateInfo info = ASTRA_SURFACE_CREATE_INFO_INIT;
-        info.width = ASTRA_NAME_EDIT_WIDTH;
-        info.height = ASTRA_NAME_EDIT_HEIGHT;
+        info.width = ASTRA_INLINE_EDIT_WIDTH;
+        info.height = ASTRA_INLINE_EDIT_HEIGHT;
         info.format = ASTRA_PIXEL_FORMAT_RGB565;
         info.flags = ASTRA_SURFACE_DRAW_TARGET | ASTRA_SURFACE_DRAW_SOURCE;
         AstraResult result = astra_surface_create(display, &info, &edit->surface);
@@ -27,13 +28,13 @@ AstraResult astra_name_edit_start(AstraNameEdit *edit, AstraDisplay *display,
     edit->model = (AstraTextModel)ASTRA_TEXT_MODEL_INIT;
     AstraTextModelInfo model = ASTRA_TEXT_MODEL_INFO_INIT;
     model.text = initial;
-    model.text_bytes = length;
+    model.text_bytes = (uint32_t)length;
     model.content_arena = edit->content;
     model.content_arena_bytes = sizeof(edit->content);
     model.metadata_arena = edit->metadata;
     model.metadata_arena_bytes = sizeof(edit->metadata);
     model.selection.anchor = 0u;
-    model.selection.focus = length;
+    model.selection.focus = (uint32_t)length;
     AstraResult result = astra_text_model_init(&edit->model, &model);
     if (result != ASTRA_OK) return result;
     edit->field = (AstraControl)ASTRA_CONTROL_INIT;
@@ -45,7 +46,7 @@ AstraResult astra_name_edit_start(AstraNameEdit *edit, AstraDisplay *display,
     if (result != ASTRA_OK) return result;
     edit->ui = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
     result = astra_interface_ui_init(&edit->ui, &edit->field, 1u,
-        ASTRA_NAME_EDIT_WIDTH, ASTRA_NAME_EDIT_HEIGHT);
+        ASTRA_INLINE_EDIT_WIDTH, ASTRA_INLINE_EDIT_HEIGHT);
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
     if (result == ASTRA_OK) result = astra_interface_ui_layout(&edit->ui, &layout);
     if (result != ASTRA_OK) return result;
@@ -59,7 +60,7 @@ AstraResult astra_name_edit_start(AstraNameEdit *edit, AstraDisplay *display,
     return result;
 }
 
-AstraResult astra_name_edit_event(AstraNameEdit *edit,
+AstraResult astra_interface_inline_edit_event(AstraInlineEdit *edit,
     const AstraWindowEvent *event, AstraUIAction *action)
 {
     if (edit == NULL || event == NULL || action == NULL || !edit->active)
@@ -74,19 +75,19 @@ AstraResult astra_name_edit_event(AstraNameEdit *edit,
     return astra_interface_ui_handle_event(&edit->ui, event, action);
 }
 
-AstraResult astra_name_edit_render(AstraNameEdit *edit, uint32_t *commands,
+AstraResult astra_interface_inline_edit_render(AstraInlineEdit *edit, uint32_t *commands,
     uint32_t command_bytes)
 {
     if (edit == NULL || !edit->active || commands == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     AstraSurfaceView view;
     if (!astra_draw_list_view_init(&view, commands, command_bytes,
-        ASTRA_NAME_EDIT_WIDTH, ASTRA_NAME_EDIT_HEIGHT))
+        ASTRA_INLINE_EDIT_WIDTH, ASTRA_INLINE_EDIT_HEIGHT))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     AstraResult result = astra_interface_ui_render(&edit->ui, &view);
     if (result != ASTRA_OK) return result;
     AstraDrawList list = ASTRA_DRAW_LIST_INIT;
-    AstraRectI32 whole = {0, 0, ASTRA_NAME_EDIT_WIDTH, ASTRA_NAME_EDIT_HEIGHT};
+    AstraRectI32 whole = {0, 0, ASTRA_INLINE_EDIT_WIDTH, ASTRA_INLINE_EDIT_HEIGHT};
     AstraDrawPaint paint = ASTRA_DRAW_PAINT_INIT;
     paint.foreground = ((AstraTheme)ASTRA_THEME_SYSTEM_INIT).canvas;
     result = astra_draw_list_create(&edit->surface, &whole, &list);
@@ -100,7 +101,7 @@ AstraResult astra_name_edit_render(AstraNameEdit *edit, uint32_t *commands,
     return result;
 }
 
-AstraResult astra_name_edit_text(const AstraNameEdit *edit,
+AstraResult astra_interface_inline_edit_text(const AstraInlineEdit *edit,
     char *text, uint32_t capacity)
 {
     if (edit == NULL || text == NULL || capacity == 0u || !edit->active)
@@ -114,4 +115,9 @@ AstraResult astra_name_edit_text(const AstraNameEdit *edit,
         text, capacity - 1u, &copied);
     if (result == ASTRA_OK) text[copied] = '\0';
     return result;
+}
+
+void astra_interface_inline_edit_stop(AstraInlineEdit *edit)
+{
+    if (edit != NULL) edit->active = 0u;
 }

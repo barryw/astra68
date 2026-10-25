@@ -22,7 +22,7 @@ TARGET := build/m68k/desktop.elf
 IMAGE := build/m68k/desktop
 OBJECT := build/m68k/main.o
 OBJECTS := build/m68k/crc32.o build/m68k/directory_snapshot.o \
-	build/m68k/folder_ops.o build/m68k/name_edit.o
+	build/m68k/folder_ops.o
 HOST_TEST := build/host/test_desktop_layout
 HOST_TEST_SANITIZE := build/host/test_desktop_layout_sanitize
 FOLDER_TEST := build/host/test_folder_ops
@@ -56,10 +56,6 @@ build/m68k/directory_snapshot.o: ../../common/directory_snapshot.c ../../common/
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
 build/m68k/folder_ops.o: ../../common/folder_ops.c ../../common/folder_ops.h
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
-
-build/m68k/name_edit.o: ../../common/name_edit.c ../../common/name_edit.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 

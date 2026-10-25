@@ -18,6 +18,14 @@ context menus provide Rename and Delete. Delete moves the folder and all its
 contents to `HOME:.Trash` under a unique name. Atlas offers the same actions
 inside Desktop folders, and opens a child folder in an Atlas window.
 
+Interface Kit 7.4 owns the inline editor's Field, TextModel, focus, event
+dispatch and hardware draw surface. It also owns icon tile painting, label
+fitting and viewport-aware hit testing for both Desktop and Atlas. Desktop
+and Atlas supply their existing grid/container geometry, icons, labels and
+folder commands; each retains its filesystem and selection policy. This keeps
+common interaction and visual metrics in one library without moving folder
+state into a generic control.
+
 The helper validates a single UTF-8 path component before creating or
 renaming. Destination reservation prevents ordinary rename collisions; native
 VFS rename remains the sole state-changing operation. Home permissions come
@@ -32,6 +40,13 @@ Haiku reference reviewed before implementation:
 - `~/Git/haiku/src/kits/tracker/PoseView.cpp`, `NewFolder`: create real folder,
   select it, then start inline name edit. Astra composes the existing Field and
   TextModel controls for that editor.
+- `~/Git/haiku/src/kits/tracker/TextWidget.cpp`, `StartEdit`/`StopEdit`:
+  place an inline editor over a selected item, select its initial text and
+  return focus to the item view when editing ends. Astra keeps this as an
+  Interface Kit composition and leaves persistence to the caller.
+- `~/Git/haiku/src/kits/tracker/Pose.cpp` and `PoseView.cpp`: item data stays
+  separate from rendering and pointer geometry. Astra's shared icon tile uses
+  application-supplied frames from the existing Desktop grid or Atlas controls.
 - `~/Git/haiku/src/kits/tracker/ContainerWindow.cpp`,
   `SetupNewTemplatesMenu`, and `TemplatesMenu.cpp`: use a parent `New` menu
   with child actions. Astra extends its existing shared Menu control and
