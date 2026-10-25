@@ -21,6 +21,7 @@ LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 INTERFACE_TARGET := build/m68k/libraries/interface.library.7
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/settings_pane.o \
+	build/m68k/icon_tile.o build/m68k/inline_edit.o \
 	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o \
 	build/m68k/scroll.o build/m68k/command.o build/m68k/menu.o build/m68k/menu_context.o
 INTERFACE_LIBRARY_MAP := interface.library.exports
@@ -38,6 +39,7 @@ TEXT_MODEL_HOST_TEST := build/host/test_text_model
 SCROLL_HOST_TEST := build/host/test_scroll
 COMMAND_HOST_TEST := build/host/test_command
 MENU_HOST_TEST := build/host/test_menu
+ICON_TILE_HOST_TEST := build/host/test_icon_tile
 GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o $(GRAPHICS)/build/host/font_data.o
 GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o $(GRAPHICS)/build/host/font_data_sanitize.o
 FONT_HOST_INPUTS := $(RUNTIME)/tests/uncontended_mutex.c \
@@ -67,6 +69,10 @@ build/m68k/control.o: src/control.c src/control_internal.h src/text_surface_inte
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 build/m68k/settings_pane.o: src/settings_pane.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/icon_tile.o build/m68k/inline_edit.o: build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
@@ -143,7 +149,7 @@ library-contract: $(INTERFACE_TARGET)
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.7 7.3.0 ABI 7.3$$'
+		grep -q '^interface.library.7 7.4.0 ABI 7.4$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
@@ -204,9 +210,14 @@ $(MENU_HOST_TEST): $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS
 $(NDK_HOST_UTF8):
 	$(MAKE) -C $(SYSTEM) build/host/utf8.o
 
+$(ICON_TILE_HOST_TEST): src/icon_tile.c tests/test_icon_tile.c $(NDK_HOST_UTF8)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$^ -o $@
+
 test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 		$(UNDO_HOST_TEST) $(TEXT_MODEL_HOST_TEST) $(SCROLL_HOST_TEST) \
-		$(COMMAND_HOST_TEST) $(MENU_HOST_TEST)
+		$(COMMAND_HOST_TEST) $(MENU_HOST_TEST) $(ICON_TILE_HOST_TEST)
 	./$(INTERFACE_HOST_TEST)
 	./$(TEXT_SURFACE_HOST_TEST)
 	./$(UNDO_HOST_TEST)
@@ -214,6 +225,7 @@ test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 	./$(SCROLL_HOST_TEST)
 	./$(COMMAND_HOST_TEST)
 	./$(MENU_HOST_TEST)
+	./$(ICON_TILE_HOST_TEST)
 
 sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANITIZE)
 	@mkdir -p build/host
@@ -251,6 +263,10 @@ sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANI
 		$(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_HOST_SURFACE_SANITIZE) $(FONT_HOST_INPUTS) -o build/host/test_menu_sanitize
 
 	./build/host/test_menu_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/icon_tile.c tests/test_icon_tile.c \
+		$(NDK_HOST_UTF8) -o build/host/test_icon_tile_sanitize
+	./build/host/test_icon_tile_sanitize
 
 analyze:
 	@mkdir -p build/analyzer
@@ -260,6 +276,10 @@ analyze:
 		-c src/control.c -o build/analyzer/control.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/settings_pane.c -o build/analyzer/settings_pane.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/icon_tile.c -o build/analyzer/icon_tile.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/inline_edit.c -o build/analyzer/inline_edit.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/text_surface.c -o build/analyzer/text_surface.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \

@@ -106,3 +106,14 @@ ASTRA_INTERFACE_7.3 {
         astra_interface_context_menu_open_tree;
         astra_interface_menu_row_frame;
 } ASTRA_INTERFACE_7.2;
+
+ASTRA_INTERFACE_7.4 {
+    global:
+        astra_interface_icon_tile_hit;
+        astra_interface_icon_tile_render;
+        astra_interface_inline_edit_event;
+        astra_interface_inline_edit_render;
+        astra_interface_inline_edit_start;
+        astra_interface_inline_edit_stop;
+        astra_interface_inline_edit_text;
+} ASTRA_INTERFACE_7.3;

@@ -36,6 +36,14 @@
 :project: astra-ndk
 ```
 
+```{doxygenfile} icon_tile.h
+:project: astra-ndk
+```
+
+```{doxygenfile} inline_edit.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} text_surface.h
 :project: astra-ndk
 ```

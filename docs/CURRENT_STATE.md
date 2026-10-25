@@ -2,6 +2,35 @@
 
 Status: active continuation map, 2026-10-25
 
+Interface Kit 7.4 UI reuse release, 2026-10-25: Desktop and Atlas now use
+one native icon tile painter/hit contract and one Field/TextModel inline editor
+owned by Interface Kit. Their application-specific folder commands and layout
+remain in their owners. Haiku Tracker comparison and control boundaries are
+recorded in `docs/DESKTOP_FOLDERS.md`. Beast full userspace build/test,
+Interface Kit sanitizer/analyzer, NDK header/documentation checks, native QEMU
+Desktop folder create/rename/nested open/delete/reboot gate, and Atlas DH0/RAM0,
+overflow, 257-entry, UTF-8 and process-retirement gate passed. Evidence:
+Beast `/var/tmp/astra-ui-reuse-userspace.log`,
+`/var/tmp/astra-ui-reuse-sanitize.log`, `/var/tmp/astra-ui-reuse-ndk.log`,
+`/var/tmp/astra-ui-reuse-folders.log`, and `/var/tmp/astra-ui-reuse-atlas.log`.
+DE25 release `1488fb36d28a081714c2a5366dea4c27e10d5b79959163c2de52b2c227a7c27e`
+passed package verification and normal preserved-state deployment, retaining
+qualified kernel identity
+`cbb18f706daf0daeb4c74260a321a2cb9d63c3d758eb655b21bba77c7f4bbdb6`.
+Physical RFB gate showed selected `Folder1` editor, committed `UIReuseGate`,
+renamed it `UIReuseFinal`, and opened its empty root in Atlas. Delete moved
+it to `HOME:.Trash`; native Terminal listed `UIReuseFinal-1`. That exact empty
+test directory was removed through the provider's mounted volume, and the
+Desktop returned to its original icon set. Installed release verified again.
+`astra.service`, audio host, and remote desktop all remain active with zero
+restarts; retained `panic-latest.log` is dated 2026-10-24, before this release.
+Evidence: Beast `/var/tmp/astra-ui-reuse-publish.log` and
+`/var/tmp/astra-ui-reuse-deploy.log`; local
+`/private/tmp/astra-ui-reuse-new.png`,
+`/private/tmp/astra-ui-reuse-after-rename.png`,
+`/private/tmp/astra-ui-reuse-open.png`, and
+`/private/tmp/astra-ui-reuse-final.png`.
+
 Current DE25 Desktop folder release, 2026-10-24: release
 `44c0675b54a2506a3a6f236938bbf9a6d5cf602195a9f55a9fb2adc7bf2cdd33`
 passed package verification and normal deployment (`ASTRA_DE25_RELEASE PASS`)

@@ -4,6 +4,8 @@
 #include <astra/fonts.h>
 #include <astra/graphics_library.h>
 #include <astra/input.h>
+#include <astra/icon_tile.h>
+#include <astra/inline_edit.h>
 #include <astra/interface_library.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
@@ -19,19 +21,17 @@
 
 #include "../../common/directory_snapshot.h"
 #include "../../common/folder_ops.h"
-#include "../../common/name_edit.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-#define CELL_WIDTH 104u
-#define CELL_HEIGHT 88u
+#define CELL_WIDTH ASTRA_ICON_TILE_CLIENT_WIDTH
+#define CELL_HEIGHT ASTRA_ICON_TILE_CLIENT_HEIGHT
 #define GRID_PADDING 16u
 #define GRID_GAP_X 8u
 #define GRID_GAP_Y 14u
-#define ICON_SIZE 40u
-#define ICON_SOURCE_SIZE 64u
+#define ICON_SOURCE_SIZE ASTRA_ICON_TILE_SOURCE_SIZE
 
 ASTRA_PROGRAM("Atlas", 0, 1, 0, "Barry Walker", "Copyright 2026 Barry Walker");
 
@@ -58,7 +58,7 @@ static uint32_t volume_connected, volume_lost, volume_refresh;
 static uint64_t volume_retry;
 static char volume_path[32], volume_title[ASTRA_WINDOW_TITLE_MAX + 1u];
 static AstraHandle launcher;
-static AstraNameEdit name_edit = ASTRA_NAME_EDIT_INIT;
+static AstraInlineEdit name_edit = ASTRA_INLINE_EDIT_INIT;
 static uint32_t edit_index = UINT32_MAX;
 static char edit_path[ASTRA_VFS_PATH_MAX];
 static uint32_t edit_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
@@ -293,17 +293,15 @@ static AstraResult paint(void)
     AstraDrawList list = ASTRA_DRAW_LIST_INIT;
     AstraFence fence = ASTRA_FENCE_INIT;
     AstraDrawPaint background = ASTRA_DRAW_PAINT_INIT;
-    AstraBlitOptions blend = ASTRA_BLIT_OPTIONS_INIT;
     AstraRectI32 whole = {0, 0, width, height};
     AstraResult result;
 
     if (name_edit.active) {
-        result = astra_name_edit_render(&name_edit, edit_commands,
+        result = astra_interface_inline_edit_render(&name_edit, edit_commands,
             sizeof(edit_commands));
         if (result != ASTRA_OK) return result;
     }
     background.foreground = theme.client;
-    blend.blend = ASTRA_BLEND_ALPHA;
     result = astra_draw_list_create(&content, &whole, &list);
     if (result == ASTRA_OK)
         result = astra_draw_rectangle(&list, &whole, 1, &background);
@@ -318,7 +316,7 @@ static AstraResult paint(void)
                            directory.status == ASTRA_VFS_OK && at < directory.count; ++at) {
         AstraControlFrame frame, clip;
         const AstraDirectoryEntry *entry = &directory.entries[at];
-        uint32_t length;
+        AstraIconTileInfo tile = ASTRA_ICON_TILE_INFO_INIT;
 
         result = astra_interface_ui_geometry(&ui, at + 2u, &frame, &clip);
         if (result != ASTRA_OK)
@@ -327,29 +325,13 @@ static AstraResult paint(void)
             (int64_t)frame.y + frame.height <= clip.y ||
             frame.y >= (int64_t)clip.y + clip.height)
             continue;
-        result = astra_draw_list_set_clip(&list,
-            &(AstraRectI32){clip.x, clip.y, clip.width, clip.height});
-        if (result == ASTRA_OK)
-            result = astra_draw_blit(&list,
-                entry->kind == ASTRA_VFS_KIND_DIRECTORY ? &folder_icon : &file_icon,
-                &(AstraRectI32){0, 0, ICON_SOURCE_SIZE, ICON_SOURCE_SIZE},
-                &(AstraRectI32){frame.x + (int32_t)(CELL_WIDTH - ICON_SIZE) / 2,
-                               frame.y + 8, ICON_SIZE, ICON_SIZE}, &blend);
-        length = astra_surface_ui_text_fit(entry->name,
-            (uint32_t)strlen(entry->name), theme.title_font_height, CELL_WIDTH - 8u);
-        if (result == ASTRA_OK && name_edit.active && at == edit_index)
-            result = astra_draw_blit(&list, &name_edit.surface,
-                &(AstraRectI32){0, 0, ASTRA_NAME_EDIT_WIDTH, ASTRA_NAME_EDIT_HEIGHT},
-                &(AstraRectI32){frame.x + (int32_t)(CELL_WIDTH - ASTRA_NAME_EDIT_WIDTH) / 2,
-                    frame.y + 47, ASTRA_NAME_EDIT_WIDTH, ASTRA_NAME_EDIT_HEIGHT}, &blend);
-        else if (result == ASTRA_OK && length != 0u) {
-            uint32_t text_width = astra_surface_ui_text_width(entry->name, length,
-                                                             theme.title_font_height);
-            result = astra_draw_ui_text(&list,
-                (AstraPointI32){frame.x + (int32_t)(CELL_WIDTH - text_width) / 2,
-                               frame.y + 56}, entry->name, length,
-                theme.title_font_height, 0u, theme.client_text);
-        }
+        tile.frame = (AstraRectI32){frame.x, frame.y, frame.width, frame.height};
+        tile.clip = (AstraRectI32){clip.x, clip.y, clip.width, clip.height};
+        tile.icon = entry->kind == ASTRA_VFS_KIND_DIRECTORY ? &folder_icon : &file_icon;
+        tile.label = entry->name;
+        tile.label_bytes = (uint32_t)strlen(entry->name);
+        tile.editor = name_edit.active && at == edit_index ? &name_edit.surface : NULL;
+        result = astra_interface_icon_tile_render(&list, &tile);
     }
     if (result == ASTRA_OK)
         result = astra_draw_submit(&list, &fence);
@@ -466,14 +448,12 @@ static uint32_t hit_entry(int32_t x, int32_t y)
     if (!visible_data || directory.status != ASTRA_VFS_OK) return UINT32_MAX;
     for (uint32_t at = 0u; at < directory.count; ++at) {
         AstraControlFrame frame, clip;
+        AstraIconTileInfo tile = ASTRA_ICON_TILE_INFO_INIT;
         if (astra_interface_ui_geometry(&ui, at + 2u, &frame, &clip) != ASTRA_OK)
             return UINT32_MAX;
-        if (x >= frame.x && y >= frame.y &&
-            (int64_t)x < (int64_t)frame.x + frame.width &&
-            (int64_t)y < (int64_t)frame.y + frame.height &&
-            x >= clip.x && y >= clip.y &&
-            (int64_t)x < (int64_t)clip.x + clip.width &&
-            (int64_t)y < (int64_t)clip.y + clip.height)
+        tile.frame = (AstraRectI32){frame.x, frame.y, frame.width, frame.height};
+        tile.clip = (AstraRectI32){clip.x, clip.y, clip.width, clip.height};
+        if (astra_interface_icon_tile_hit(&tile, x, y))
             return at;
     }
     return UINT32_MAX;
@@ -505,7 +485,7 @@ static AstraResult start_edit(uint32_t index)
         astra_folder_path(root, directory.entries[index].name,
             edit_path, sizeof(edit_path)) != ASTRA_VFS_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    AstraResult result = astra_name_edit_start(&name_edit, &display,
+    AstraResult result = astra_interface_inline_edit_start(&name_edit, &display,
         directory.entries[index].name);
     if (result != ASTRA_OK) return result;
     edit_index = index;
@@ -517,7 +497,7 @@ static AstraResult finish_edit(AstraHandle gui, int commit)
     if (!name_edit.active) return ASTRA_OK;
     if (commit) {
         char name[ASTRA_VFS_NAME_MAX], moved[ASTRA_VFS_PATH_MAX];
-        AstraResult result = astra_name_edit_text(&name_edit, name, sizeof(name));
+        AstraResult result = astra_interface_inline_edit_text(&name_edit, name, sizeof(name));
         if (result != ASTRA_OK || !astra_folder_name_valid(name)) {
             folder_error(gui, "Choose a valid folder name", ASTRA_VFS_ERR_INVALID);
             return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -529,7 +509,7 @@ static AstraResult finish_edit(AstraHandle gui, int commit)
             return astra_result_from_service(status);
         }
     }
-    name_edit.active = 0u;
+    astra_interface_inline_edit_stop(&name_edit);
     edit_index = UINT32_MAX;
     return reload_directory();
 }
@@ -628,7 +608,7 @@ static AstraResult delete_selected(void *opaque, const AstraCommandArguments *ar
         folder_error(context->gui, "Folder could not be deleted", status);
         return astra_result_from_service(status);
     }
-    name_edit.active = 0u;
+    astra_interface_inline_edit_stop(&name_edit);
     edit_index = UINT32_MAX;
     return reload_directory();
 }
@@ -747,7 +727,7 @@ static AstraResult run(AstraHandle gui)
             }
             if (name_edit.active && (event.type == ASTRA_WINDOW_EVENT_KEY ||
                                      event.type == ASTRA_WINDOW_EVENT_TEXT)) {
-                AstraResult edit_result = astra_name_edit_event(&name_edit, &event, &action);
+                AstraResult edit_result = astra_interface_inline_edit_event(&name_edit, &event, &action);
                 if (edit_result != ASTRA_OK) return edit_result;
                 if (action.type == ASTRA_UI_ACTION_ACTIVATE ||
                     action.type == ASTRA_UI_ACTION_DISMISS)

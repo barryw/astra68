@@ -13,6 +13,8 @@
 #include <astra/interface_kit.h>
 #include <astra/interface_library.h>
 #include <astra/input.h>
+#include <astra/icon_tile.h>
+#include <astra/inline_edit.h>
 #include <astra/pcm.h>
 #include <astra/pcm_format.h>
 #include <astra/program.h>
@@ -34,7 +36,6 @@
 #include "desktop_usage.h"
 #include "../../common/directory_snapshot.h"
 #include "../../common/folder_ops.h"
-#include "../../common/name_edit.h"
 
 #define DESKTOP_WIDTH ASTRA_DISPLAY_WIDTH
 #define DESKTOP_TOP 34u
@@ -69,7 +70,7 @@ typedef struct DesktopApps {
 } DesktopApps;
 
 static AstraProcessFilesystem process_filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
-static AstraNameEdit name_edit = ASTRA_NAME_EDIT_INIT;
+static AstraInlineEdit name_edit = ASTRA_INLINE_EDIT_INIT;
 static uint32_t name_edit_cell = UINT32_MAX;
 static char name_edit_path[ASTRA_VFS_PATH_MAX];
 static uint32_t name_edit_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
@@ -394,7 +395,7 @@ static AstraResult begin_folder_edit(DesktopCommands *context, uint32_t cell)
     if (folder == NULL || astra_folder_path(DESKTOP_DIRECTORY, folder->name,
         name_edit_path, sizeof(name_edit_path)) != ASTRA_VFS_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    AstraResult result = astra_name_edit_start(&name_edit, context->display, folder->name);
+    AstraResult result = astra_interface_inline_edit_start(&name_edit, context->display, folder->name);
     if (result != ASTRA_OK) {
         (void)astra_log_failure("desktop folder editor start", (uint32_t)(-result));
         return result;
@@ -486,7 +487,7 @@ static AstraResult delete_folder(void *opaque, const AstraCommandArguments *args
         folder_error(context->gui, "Folder could not be deleted", status);
         return astra_result_from_service(status);
     }
-    name_edit.active = 0u;
+    astra_interface_inline_edit_stop(&name_edit);
     name_edit_cell = UINT32_MAX;
     return refresh_folders(context);
 }
@@ -496,7 +497,7 @@ static AstraResult finish_folder_edit(DesktopCommands *context, int commit)
     if (!name_edit.active) return ASTRA_OK;
     if (commit) {
         char name[ASTRA_VFS_NAME_MAX], moved[ASTRA_VFS_PATH_MAX];
-        AstraResult result = astra_name_edit_text(&name_edit, name, sizeof(name));
+        AstraResult result = astra_interface_inline_edit_text(&name_edit, name, sizeof(name));
         if (result != ASTRA_OK || !astra_folder_name_valid(name)) {
             folder_error(context->gui, "Choose a valid folder name", ASTRA_VFS_ERR_INVALID);
             return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -508,7 +509,7 @@ static AstraResult finish_folder_edit(DesktopCommands *context, int commit)
             return astra_result_from_service(status);
         }
     }
-    name_edit.active = 0u;
+    astra_interface_inline_edit_stop(&name_edit);
     name_edit_cell = UINT32_MAX;
     return refresh_folders(context);
 }
@@ -1000,7 +1001,7 @@ static AstraResult paint(AstraSurface *content,
     result = astra_scroll_get_state(&icon_scroll, &state);
     if (result != ASTRA_OK) return result;
     if (name_edit.active) {
-        result = astra_name_edit_render(&name_edit, name_edit_commands,
+        result = astra_interface_inline_edit_render(&name_edit, name_edit_commands,
             sizeof(name_edit_commands));
         if (result != ASTRA_OK) return result;
     }
@@ -1037,11 +1038,6 @@ static AstraResult paint(AstraSurface *content,
         const AstraSurface *icon = is_volume != 0u ? &apps->volume_icon :
             at == apps->volume_visible ? &apps->applications_icon :
             &apps->folder_icon;
-        /* As window titles do, a label longer than its cell is clipped at
-           a whole scalar. */
-        uint32_t length = astra_surface_ui_text_fit(
-            label, (uint32_t)strlen(label), ASTRA_DESKTOP_LABEL_FONT_HEIGHT,
-            ASTRA_DESKTOP_ICON_CELL_WIDTH);
         uint32_t dx;
         uint32_t dy;
 
@@ -1049,34 +1045,19 @@ static AstraResult paint(AstraSurface *content,
         int32_t top = (int32_t)dy - (int32_t)state.offset_y;
         if ((int64_t)ASTRA_DESKTOP_GRID_TOP + top + ASTRA_DESKTOP_CELL_HEIGHT <= 0 ||
             (int64_t)ASTRA_DESKTOP_GRID_TOP + top >= DESKTOP_HEIGHT) continue;
-        if (icon->_private_handle != ASTRA_INVALID_HANDLE)
-            result = astra_draw_blit(
-                &list, icon,
-                &(AstraRectI32){ 0, 0, ASTRA_DESKTOP_ICON_SIZE,
-                                 ASTRA_DESKTOP_ICON_SIZE },
-                &(AstraRectI32){ (int32_t)(ASTRA_DESKTOP_ICON_X + dx),
-                                 (int32_t)ASTRA_DESKTOP_ICON_Y + top,
-                                 ASTRA_DESKTOP_ICON_SIZE,
-                                 ASTRA_DESKTOP_ICON_SIZE },
-                &blend);
-        if (result == ASTRA_OK && name_edit.active && at == name_edit_cell)
-            result = astra_draw_blit(&list, &name_edit.surface,
-                &(AstraRectI32){0, 0, ASTRA_NAME_EDIT_WIDTH, ASTRA_NAME_EDIT_HEIGHT},
-                &(AstraRectI32){(int32_t)(ASTRA_DESKTOP_ICON_CELL_LEFT + dx) - 22,
-                    (int32_t)ASTRA_DESKTOP_LABEL_Y + top - 5,
-                    ASTRA_NAME_EDIT_WIDTH, ASTRA_NAME_EDIT_HEIGHT}, &blend);
-        else if (result == ASTRA_OK && length != 0u)
-            result = astra_draw_ui_text(
-                &list,
-                (AstraPointI32){
-                    astra_desktop_centered_label_x(
-                        astra_surface_ui_text_width(
-                            label, length,
-                            ASTRA_DESKTOP_LABEL_FONT_HEIGHT)) +
-                        (int32_t)dx,
-                    (int32_t)ASTRA_DESKTOP_LABEL_Y + top },
-                label, length, ASTRA_DESKTOP_LABEL_FONT_HEIGHT, 0u,
-                theme.text_primary);
+        AstraIconTileInfo tile = ASTRA_ICON_TILE_INFO_INIT;
+        tile.style = ASTRA_ICON_TILE_DESKTOP;
+        tile.frame = (AstraRectI32){
+            (int32_t)(ASTRA_DESKTOP_ICON_CELL_LEFT + dx),
+            (int32_t)ASTRA_DESKTOP_GRID_TOP + top,
+            ASTRA_DESKTOP_ICON_CELL_WIDTH, ASTRA_DESKTOP_CELL_HEIGHT};
+        tile.clip = (AstraRectI32){0, 0, DESKTOP_GRID_WIDTH, DESKTOP_HEIGHT};
+        tile.icon = icon;
+        tile.label = label;
+        tile.label_bytes = (uint32_t)strlen(label);
+        tile.editor = name_edit.active && at == name_edit_cell ?
+            &name_edit.surface : NULL;
+        result = astra_interface_icon_tile_render(&list, &tile);
     }
     if (result == ASTRA_OK && state.maximum_y != 0u) {
         AstraSurfaceView commands;
@@ -1377,7 +1358,7 @@ int astra_main(const AstraStartupInfo *startup)
             }
             if (name_edit.active && (event.type == ASTRA_WINDOW_EVENT_KEY ||
                                      event.type == ASTRA_WINDOW_EVENT_TEXT)) {
-                result = astra_name_edit_event(&name_edit, &event, &action);
+                result = astra_interface_inline_edit_event(&name_edit, &event, &action);
                 if (result != ASTRA_OK) return DESKTOP_FAIL_INTERFACE;
                 if (action.type == ASTRA_UI_ACTION_ACTIVATE ||
                     action.type == ASTRA_UI_ACTION_DISMISS) {
