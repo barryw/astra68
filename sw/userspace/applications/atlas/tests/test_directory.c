@@ -1,4 +1,4 @@
-#include "../directory.h"
+#include "../../../common/directory_snapshot.h"
 #include <astra/status.h>
 
 #include <assert.h>
@@ -64,12 +64,12 @@ static void reset(uint32_t count)
 
 int main(void)
 {
-    AtlasDirectory model = ATLAS_DIRECTORY_INIT;
+    AstraDirectorySnapshot model = ASTRA_DIRECTORY_SNAPSHOT_INIT;
     AstraFilesystem filesystem = ASTRA_FILESYSTEM_INIT;
     uint32_t cancelled = 0u;
 
     reset(257u);
-    assert(atlas_directory_load(&model, &filesystem, "/dh0", &cancelled) == ASTRA_VFS_OK);
+    assert(astra_directory_snapshot_load(&model, &filesystem, "/dh0", &cancelled) == ASTRA_VFS_OK);
     assert(model.count == 257u && closes == 1u && allocations > 1u);
     assert(strcmp(model.entries[0].name, ".hidden") == 0);
     assert(strcmp(model.entries[1].name, "caf\xc3\xa9") == 0);
@@ -77,31 +77,31 @@ int main(void)
     assert(strcmp(model.entries[256].name, "file-256") == 0);
     assert(model.entries[256].byte_size == 256u &&
            model.entries[256].kind == ASTRA_VFS_KIND_DIRECTORY);
-    atlas_directory_dispose(&model);
+    astra_directory_snapshot_dispose(&model);
     reset(0u);
-    assert(atlas_directory_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_OK);
+    assert(astra_directory_snapshot_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_OK);
     assert(model.count == 0u && closes == 1u);
     reset(257u);
     fail_after = 1u;
-    assert(atlas_directory_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_ERR_LIMIT);
+    assert(astra_directory_snapshot_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_ERR_LIMIT);
     assert(model.count == 0u && model.entries == NULL && closes == 0u);
     reset(257u);
     fail_after = 2u;
-    assert(atlas_directory_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_ERR_LIMIT);
+    assert(astra_directory_snapshot_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_ERR_LIMIT);
     assert(model.count == 0u && model.entries == NULL && closes == 1u);
     reset(257u);
     read_error = ASTRA_VFS_ERR_IO;
-    assert(atlas_directory_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_ERR_IO);
+    assert(astra_directory_snapshot_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_ERR_IO);
     assert(model.count == 0u && closes == 1u);
     reset(1u);
     open_error = ASTRA_VFS_ERR_ACCESS;
-    assert(atlas_directory_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_ERR_ACCESS);
+    assert(astra_directory_snapshot_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_ERR_ACCESS);
     assert(closes == 0u);
     reset(1u);
     cancelled = 1u;
-    assert(atlas_directory_load(&model, &filesystem, "/dh0", &cancelled) == ATLAS_DIRECTORY_CANCELLED);
+    assert(astra_directory_snapshot_load(&model, &filesystem, "/dh0", &cancelled) == ASTRA_DIRECTORY_SNAPSHOT_CANCELLED);
     assert(model.count == 0u && closes == 1u);
-    atlas_directory_dispose(&model);
+    astra_directory_snapshot_dispose(&model);
     puts("ATLAS DIRECTORY PASS");
     return 0;
 }

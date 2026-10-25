@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Open every installed application from the running desktop.
+"""Open installed applications through Desktop's Applications drawer.
 
 Boots the full system image -- desktop, storage, network, audio, every
-service -- and double-clicks each application icon where the desktop says it
-put it. Each application must be launched by the supervisor under its launch
+service -- and double-clicks each application in Atlas. Each application must be launched by the supervisor under its launch
 ceiling, draw through the display, and leave the desktop and every other
 application running. Nothing here uses a test-only startup manifest.
 """
@@ -37,7 +36,7 @@ def open_application(machine, bundle, deadline):
     before = machine.sequence()
     submissions = display_count(machine, "submissions")
     palette_blits = display_count(machine, "palette-blit-commands")
-    machine.qmp.double_click(*machine.desktop_icon(bundle))
+    machine.qmp.double_click(*machine.application_icon(bundle, deadline))
     end = time.monotonic() + deadline
     while time.monotonic() < end:
         # desktop holds LOG (docs/SYSTEM_LOG.md section 7): its

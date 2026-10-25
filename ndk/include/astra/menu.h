@@ -13,7 +13,12 @@ enum {
     ASTRA_MENU_DISABLED = 1u << 0,
     ASTRA_MENU_CHECKED = 1u << 1,
     ASTRA_MENU_SEPARATOR = 1u << 2,
+    ASTRA_MENU_SUBMENU = 1u << 3,
 };
+/* One-based parent row for a child item. Zero means a top-level row. */
+#define ASTRA_MENU_PARENT_SHIFT 16u
+#define ASTRA_MENU_PARENT_MASK UINT32_C(0xffff0000)
+#define ASTRA_MENU_PARENT(row) ((uint32_t)(row) << ASTRA_MENU_PARENT_SHIFT)
 /** Menu placement/interaction policy. */
 enum {
     ASTRA_MENU_ATTACHED_TOP = 1u << 0,
@@ -23,7 +28,7 @@ enum {
 typedef struct AstraMenuItem {
     const char *label; /**< Counted single-line UTF-8; NULL for a separator. */
     uint32_t label_length; /**< Label byte count, excluding any terminator. */
-    uint32_t flags; /**< ASTRA_MENU_DISABLED/CHECKED/SEPARATOR. */
+    uint32_t flags; /**< ASTRA_MENU_* presentation and optional parent row. */
 } AstraMenuItem;
 
 /** Caller-owned menu control, independent of an ordinary client layout. */
@@ -71,6 +76,9 @@ typedef struct AstraMenuState {
 AstraResult astra_interface_menu_get_state(const AstraMenu *menu, AstraMenuState *state);
 /** Locate an enabled row at screen coordinates. @param menu Initialized control. @param x Screen x. @param y Screen y. @return One-based row index, or zero. */
 uint32_t astra_interface_menu_hit(const AstraMenu *menu, int32_t x, int32_t y);
+/** Screen bounds of a one-based row, including current scroll offset. */
+AstraResult astra_interface_menu_row_frame(const AstraMenu *menu,
+    uint32_t row, AstraControlFrame *frame);
 /** Handle one event using screen pointer coordinates.
  * @param menu Initialized control, updated in place.
  * @param event Pointer, wheel, key or state-reset event.
@@ -119,6 +127,14 @@ typedef struct AstraContextMenu {
 AstraResult astra_interface_context_menu_open(AstraContextMenu *menu,
     AstraWindow *window, const AstraCommandScope *scope,
     const AstraContextMenuItem *items, uint32_t count, int32_t x, int32_t y);
+/** Open a menu with one level of hover-activated child rows.
+ * @param parents Borrowed one-based top-level row indices; zero for top-level rows.
+ * Top-level rows precede children, and children for each parent are contiguous.
+ */
+AstraResult astra_interface_context_menu_open_tree(AstraContextMenu *menu,
+    AstraWindow *window, const AstraCommandScope *scope,
+    const AstraContextMenuItem *items, const uint16_t *parents,
+    uint32_t count, int32_t x, int32_t y);
 /** Consume a terminal menu event and invoke its still-enabled command.
  * @param menu Caller-owned session.
  * @param event Event from its window; stale results are consumed without invocation.

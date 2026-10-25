@@ -141,6 +141,9 @@ class FontsMachine:
     def desktop_icon(self, *_args):
         return 1, 2
 
+    def application_icon(self, *_args):
+        return 1, 2
+
     def sequence(self):
         return 7
 

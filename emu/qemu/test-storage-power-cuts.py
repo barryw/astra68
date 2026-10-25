@@ -86,7 +86,7 @@ def open_terminal(machine):
     if not wait_serial(machine, terminal.BOOT_MARKER):
         return False
     time.sleep(2.0)
-    machine.qmp.double_click(*machine.desktop_icon())
+    machine.qmp.double_click(*machine.application_icon(terminal.TERMINAL_BUNDLE))
     if wait_text(machine, terminal.BANNER, 0)[0] is None:
         return False
     settle(machine)

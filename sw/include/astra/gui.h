@@ -503,11 +503,12 @@ enum {
     ASTRA_GUI_WINDOW_MENU_CLOSE = 23u,
 };
 
-/* AMNU v1: all fields big-endian. Header: magic, version, total bytes, row
-   count. Each row: flags, label offset, label bytes, reserved zero. Labels
-   follow the row table contiguously. No pointers cross the GUI boundary. */
+/* AMNU v2: all fields big-endian. Header: magic, version, total bytes, row
+   count. Each row: flags (including one-based parent), label offset, label
+   bytes, reserved zero. Root rows precede grouped child rows. Labels follow
+   the row table contiguously. No pointers cross the GUI boundary. */
 #define ASTRA_GUI_MENU_MAGIC UINT32_C(0x414d4e55)
-#define ASTRA_GUI_MENU_VERSION 1u
+#define ASTRA_GUI_MENU_VERSION 2u
 #define ASTRA_GUI_MENU_HEADER_BYTES 16u
 #define ASTRA_GUI_MENU_ROW_BYTES 16u
 /* Same bounded document budget as submitted managed draw lists. */

@@ -2557,6 +2557,61 @@ static void test_context_menu_transport(void)
     assert(astra_close(area) == ASTRA_SYSCALL_OK);
 }
 
+static void test_context_submenu_hover(void)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayWindow window = {.id = 1u, .generation = 1u, .event_send = 0x500u,
+        .request = {.type = ASTRA_WINDOW_STANDARD, .flags = ASTRA_WINDOW_ACTIVE,
+                    .x = 100u, .y = 100u, .width = 320u, .height = 180u}};
+    DisplayState state = {.windows = &window, .count = 1u};
+    AstraGuiWindowCommand command = {.window = 1u, .generation = 1u,
+        .action = ASTRA_GUI_WINDOW_MENU_OPEN, .x = 12u, .y = 24u, .flags = 46u};
+    AstraLogicalInputEvent input = {0};
+    AstraMenuState root, child;
+    uint32_t area, mapped, effects = 0u;
+    uint8_t *bytes;
+
+    assert(astra_rt_area_create(4096u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+        ASTRA_RIGHT_MAP, &area) == ASTRA_SYSCALL_OK);
+    assert(astra_rt_area_map(area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+        (void **)&bytes, &mapped) == ASTRA_SYSCALL_OK);
+    astra_store_be32(bytes, ASTRA_GUI_MENU_MAGIC);
+    astra_store_be32(bytes + 4u, ASTRA_GUI_MENU_VERSION);
+    astra_store_be32(bytes + 8u, 57u);
+    astra_store_be32(bytes + 12u, 2u);
+    astra_store_be32(bytes + 16u, 0u);
+    astra_store_be32(bytes + 20u, 48u);
+    astra_store_be32(bytes + 24u, 3u);
+    astra_store_be32(bytes + 28u, 0u);
+    astra_store_be32(bytes + 32u, ASTRA_MENU_PARENT(1u));
+    astra_store_be32(bytes + 36u, 51u);
+    astra_store_be32(bytes + 40u, 6u);
+    astra_store_be32(bytes + 44u, 0u);
+    memcpy(bytes + 48u, "NewFolder", 9u);
+    assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_OK);
+    assert(state.menu._private_count == 1u && state.menu_row_count == 2u);
+    assert(astra_interface_menu_get_state(&state.menu, &root) == ASTRA_OK);
+    input.type = ASTRA_INPUT_EVENT_POINTER_MOTION;
+    input.value_x = root.frame.x + 32;
+    input.value_y = root.frame.y + 16;
+    assert(menu_input(&state, &input, &effects) == ASTRA_STATUS_OK);
+    assert(state.submenu_parent == 1u && state.submenu_count == 1u);
+    assert(astra_interface_menu_get_state(&state.submenu, &child) == ASTRA_OK);
+    input.value_x = child.frame.x + 32;
+    input.value_y = child.frame.y + 16;
+    assert(menu_input(&state, &input, &effects) == ASTRA_STATUS_OK);
+    input.type = ASTRA_INPUT_EVENT_POINTER_BUTTON;
+    input.code = ASTRA_INPUT_BUTTON_LEFT;
+    input.flags = ASTRA_INPUT_LOGICAL_DOWN;
+    assert(menu_input(&state, &input, &effects) == ASTRA_STATUS_OK);
+    input.flags = 0u;
+    assert(menu_input(&state, &input, &effects) == ASTRA_STATUS_OK);
+    assert(state.overlay == DISPLAY_OVERLAY_NONE && menu_allocations == 0u);
+    assert(delivered.event.type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
+        delivered.event.data.menu_result.selection == 2u);
+    assert(astra_close(area) == ASTRA_SYSCALL_OK);
+}
+
 static void test_modal_windows(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -2740,6 +2795,7 @@ int main(void)
     test_modal_windows();
     test_dense_menu_render();
     test_context_menu_transport();
+    test_context_submenu_hover();
     test_content_banks();
     test_malformed_retained_frame();
     test_client_frame_capacity_refusal();

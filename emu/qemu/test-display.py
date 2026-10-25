@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Boot a clear desktop, launch Terminal by double-click, and verify GUI I/O."""
+"""Boot a clear desktop, launch Terminal through Atlas, and verify GUI I/O."""
 
 import argparse
 import os
@@ -207,7 +207,8 @@ def run(qemu, rom, image, catalog, deadline, prepared_image=False):
             desktop_fills = fills
             desktop_blits = blits
             desktop_glyphs = glyphs
-            terminal_icon = reader.desktop_icon()
+            terminal_icon = reader.application_icon(qmp,
+                terminal_gate.TERMINAL_BUNDLE)
             desktop_batches = batches
             try:
                 qmp.point(*terminal_icon)

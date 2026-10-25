@@ -188,9 +188,9 @@ DISPLAY_STARTUP_MANIFEST = (
     # for the host's astra-top.
     "service /services/sampler grants PROC:r WORK:rw\n"
     "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER VOLUMES VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN PROC:r APPS:r "
-    "LIBS:r SYSTEM:r DH0:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
+    "LIBS:r SYSTEM:r DH0:r HOME:rw NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
-    "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r FONTS:r APPS:r LIBS:r LOG\n"
+    "trusted /apps/Atlas.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:rw FONTS:r APPS:r LIBS:r LOG\n"
     "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r\n"
     "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST

@@ -19,19 +19,31 @@ static void clear(AstraContextMenu *menu)
     menu->_private_serial = serial;
 }
 
-AstraResult astra_interface_context_menu_open(AstraContextMenu *menu,
+AstraResult astra_interface_context_menu_open_tree(AstraContextMenu *menu,
     AstraWindow *window, const AstraCommandScope *scope,
-    const AstraContextMenuItem *items, uint32_t count, int32_t x, int32_t y)
+    const AstraContextMenuItem *items, const uint16_t *parents,
+    uint32_t count, int32_t x, int32_t y)
 {
     AstraMenuItem *rows;
     AstraResult result = ASTRA_OK;
     uint32_t request;
+    uint32_t roots = 0u, last_parent = 0u;
     uint64_t length = ASTRA_GUI_MENU_HEADER_BYTES + (uint64_t)count * ASTRA_GUI_MENU_ROW_BYTES;
 
     if (!valid(menu) || window == NULL || scope == NULL || items == NULL ||
         count == 0u || length > ASTRA_GUI_MENU_BYTES_MAX || count > UINT32_MAX / sizeof(*rows) ||
         (menu->_private_request != 0u && menu->_private_window != window))
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    for (uint32_t at = 0u; at < count; ++at) {
+        uint32_t parent = parents == NULL ? 0u : parents[at];
+        if (parent == 0u) {
+            if (last_parent != 0u) return ASTRA_ERROR_INVALID_ARGUMENT;
+            ++roots;
+        } else if (parent > roots || parent < last_parent || items[at].command == NULL)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (parent != 0u) last_parent = parent;
+    }
+    if (roots == 0u) return ASTRA_ERROR_INVALID_ARGUMENT;
     rows = astra_runtime_allocate((size_t)count * sizeof(*rows));
     if (rows == NULL) return ASTRA_ERROR_NO_RESOURCES;
     memset(rows, 0, (size_t)count * sizeof(*rows));
@@ -67,7 +79,8 @@ AstraResult astra_interface_context_menu_open(AstraContextMenu *menu,
         memcpy((void *)rows[at].label, state.label, state.label_length);
         rows[at].label_length = state.label_length;
         rows[at].flags = (state.enabled ? 0u : ASTRA_MENU_DISABLED) |
-                         (state.checked ? ASTRA_MENU_CHECKED : 0u);
+                         (state.checked ? ASTRA_MENU_CHECKED : 0u) |
+                         ASTRA_MENU_PARENT(parents == NULL ? 0u : parents[at]);
     }
     request = menu->_private_serial + 1u;
     if (request == 0u) request = 1u;
@@ -84,6 +97,14 @@ AstraResult astra_interface_context_menu_open(AstraContextMenu *menu,
     menu->_private_items = items;
     menu->_private_count = count;
     return ASTRA_OK;
+}
+
+AstraResult astra_interface_context_menu_open(AstraContextMenu *menu,
+    AstraWindow *window, const AstraCommandScope *scope,
+    const AstraContextMenuItem *items, uint32_t count, int32_t x, int32_t y)
+{
+    return astra_interface_context_menu_open_tree(menu, window, scope,
+        items, NULL, count, x, y);
 }
 
 AstraResult astra_interface_context_menu_handle_event(AstraContextMenu *menu,

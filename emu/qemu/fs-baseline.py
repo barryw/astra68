@@ -6,8 +6,7 @@ usage: fs-baseline.py LABEL OUT.json [--restart] [--no-cold]
 
 Runs on the board, as root, from the release's bin directory:
   - with --restart, restarts astra.service and waits for the remote desktop;
-  - opens Terminal by double-clicking its icon (the desktop logs the icon's
-    rectangle as "desktop icon /apps/Terminal.app L T W H");
+  - opens Applications drawer, then Terminal in Atlas; both log icon bounds;
   - types `fsbench --label LABEL --cold-handshake`;
   - at the shared cold marker, drops the whole Linux page cache;
   - at held-miss's own marker (fsbench-LABEL.heldmiss.cold), evicts only
@@ -39,7 +38,8 @@ STORE = os.environ.get("ASTRA_STORE", "/var/lib/astra")
 WORK = os.path.join(STORE, "hostfs", "work")
 ASTRA = os.path.join(WORK, ".astra")
 PASSWORD = "/etc/astra/remote-desktop.password"
-ICON = re.compile(r"desktop icon /apps/Terminal\.app (\d+) (\d+) (\d+) (\d+)$")
+DRAWER_ICON = re.compile(r"desktop icon /apps (\d+) (\d+) (\d+) (\d+)$")
+TERMINAL_ICON = re.compile(r"atlas icon /apps/Terminal\.app (\d+) (\d+) (\d+) (\d+)$")
 QEMU_NAME = "qemu-system-m68k-astra"
 
 
@@ -61,16 +61,16 @@ def syslog():
     return text
 
 
-def terminal_icon(deadline):
+def icon(pattern, deadline, after=0):
     end = time.monotonic() + deadline
     while time.monotonic() < end:
-        for line in reversed(syslog().splitlines()):
-            match = ICON.search(line)
+        for line in reversed(syslog().splitlines()[after:]):
+            match = pattern.search(line)
             if match:
                 left, top, width, height = (int(v) for v in match.groups())
                 return left + width // 2, top + height // 2
         time.sleep(1.0)
-    raise SystemExit("fs-baseline: the desktop never logged Terminal's icon")
+    raise SystemExit("fs-baseline: expected icon was not logged")
 
 
 def qemu_pid():
@@ -223,7 +223,11 @@ def main():
         else:
             raise SystemExit("fs-baseline: the remote desktop never answered")
         time.sleep(20)
-    x, y = terminal_icon(60)
+    x, y = icon(DRAWER_ICON, 60)
+    before = len(syslog().splitlines())
+    if not rfb("--double-click", str(x), str(y)):
+        raise SystemExit("fs-baseline: Applications drawer did not open")
+    x, y = icon(TERMINAL_ICON, 60, before)
     if not rfb("--double-click", str(x), str(y)):
         raise SystemExit("fs-baseline: double click failed")
     time.sleep(15)

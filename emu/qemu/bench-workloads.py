@@ -171,8 +171,8 @@ def main():
                 print("boot ok", flush=True)
             # Read the icon layout now: under QEMU the remote desktop's
             # relaunches wrap the trace ring within seconds of boot.
-            terminal_icon = machine.desktop_icon()
-            doom_icon = machine.desktop_icon("/apps/ChocolateDoom.app")
+            terminal_icon = machine.application_icon(terminal_gate.TERMINAL_BUNDLE)
+            doom_icon = machine.application_icon("/apps/ChocolateDoom.app")
 
             # open_terminal() less its boot wait, which already happened.
             time.sleep(2.0)

@@ -1,13 +1,11 @@
-#include "directory.h"
+#include "directory_snapshot.h"
 
 #include <astra/runtime.h>
-#include <astra/status.h>
 
-#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
-static uint32_t append(AtlasDirectory *model, const AstraDirectoryEntry *entry)
+static uint32_t append(AstraDirectorySnapshot *model, const AstraDirectoryEntry *entry)
 {
     if (model->count == model->capacity) {
         uint32_t capacity = model->capacity == 0u ? 32u : model->capacity * 2u;
@@ -30,15 +28,15 @@ static uint32_t append(AtlasDirectory *model, const AstraDirectoryEntry *entry)
     return ASTRA_VFS_OK;
 }
 
-void atlas_directory_dispose(AtlasDirectory *model)
+void astra_directory_snapshot_dispose(AstraDirectorySnapshot *model)
 {
     if (model == NULL)
         return;
     astra_runtime_deallocate(model->entries);
-    *model = (AtlasDirectory)ATLAS_DIRECTORY_INIT;
+    *model = (AstraDirectorySnapshot)ASTRA_DIRECTORY_SNAPSHOT_INIT;
 }
 
-uint32_t atlas_directory_load(AtlasDirectory *model,
+uint32_t astra_directory_snapshot_load(AstraDirectorySnapshot *model,
     AstraFilesystem *filesystem, const char *path, const uint32_t *cancelled)
 {
     AstraDirectory directory = ASTRA_DIRECTORY_INIT;
@@ -47,7 +45,7 @@ uint32_t atlas_directory_load(AtlasDirectory *model,
 
     if (model == NULL || filesystem == NULL || path == NULL)
         return ASTRA_VFS_ERR_INVALID;
-    atlas_directory_dispose(model);
+    astra_directory_snapshot_dispose(model);
     batch = astra_runtime_allocate(8u * sizeof(*batch));
     if (batch == NULL) { model->status = ASTRA_VFS_ERR_LIMIT; return model->status; }
     status = astra_filesystem_directory_open(filesystem, path, &directory);
@@ -57,7 +55,7 @@ uint32_t atlas_directory_load(AtlasDirectory *model,
 
             if (cancelled != NULL &&
                 __atomic_load_n(cancelled, __ATOMIC_ACQUIRE) != 0u) {
-                status = ATLAS_DIRECTORY_CANCELLED;
+                status = ASTRA_DIRECTORY_SNAPSHOT_CANCELLED;
                 break;
             }
             status = astra_filesystem_directory_read(&directory, batch, 8u,
@@ -80,7 +78,7 @@ uint32_t atlas_directory_load(AtlasDirectory *model,
         astra_filesystem_directory_close(&directory);
     }
     if (status != ASTRA_VFS_OK)
-        atlas_directory_dispose(model);
+        astra_directory_snapshot_dispose(model);
     astra_runtime_deallocate(batch);
     model->status = status;
     return status;

@@ -88,11 +88,12 @@ def lifecycle_gate(machine, optical_only=False):
         assert "BUSY-STATUS-1" in lines and any("/cd0/Folder/café.txt" in line for line in lines), lines
         assert any("PID COMMAND KIND HANDLE ACCESS INODE VOLUME PATH" in line for line in lines), lines
         if cycle == 0:
+            drawer = atlas.atlas_processes(machine, 90)
             before = machine.sequence()
             machine.qmp.double_click(*machine.desktop_icon("/cd0"))
             atlas.wait_root(machine, "/cd0", 1, 1, 0, before, 90)
             atlas.close_atlas(machine)
-            atlas.check_retired(machine, 90)
+            atlas.check_retired(machine, 90, drawer)
             cwd = command("cd /cd0/Folder; print CWD-PID-$$")
             holders = [int(line.removeprefix("CWD-PID-")) for line in cwd
                 if line.startswith("CWD-PID-") and line.removeprefix("CWD-PID-").isdigit()]
@@ -149,7 +150,7 @@ def lifecycle_gate(machine, optical_only=False):
             machine.qmp.type_line("ps | while read -r id rest; do "
                 "[[ $rest == *' /services/hostfs' ]] && print kill > /proc/$id/ctl; done")
             assert machine.wait_for_trace_text("desktop ready", 90, before), "HostFS restart failed with RAM unmounted"
-            desktop_has("/apps/Terminal.app", True)
+            desktop_has("/apps", True)
             atlas.desktop.wait_quiet(machine, "desktop after HostFS restart")
             assert terminal.open_terminal_window(machine, 90), "fresh Terminal failed after HostFS restart"
             desktop_has("/ram0", False)
@@ -157,6 +158,7 @@ def lifecycle_gate(machine, optical_only=False):
         desktop_has("/ram0", True)
         lines = command("print fresh-ram > /ram0/remounted.txt; cat /ram0/remounted.txt")
         assert "fresh-ram" in lines, lines
+    drawer = atlas.atlas_processes(machine, 90)
     before = machine.sequence()
     machine.qmp.type_line("open /apps/Atlas.app --volume %s %s %s; print OLD-RAM-STATUS-$?" % tuple(old_ram))
     lines = terminal.wait_for_command(machine, "OLD-RAM-STATUS-", 90, before)
@@ -164,7 +166,7 @@ def lifecycle_gate(machine, optical_only=False):
     statuses = [line.strip().split("OLD-RAM-STATUS-", 1)[1] for line in machine.said(before)[0]
         if line.strip().startswith("OLD-RAM-STATUS-")]
     assert statuses and all(value != "0" for value in statuses), statuses
-    atlas.check_retired(machine, 90)
+    atlas.check_retired(machine, 90, drawer)
     print("NATIVE LIFECYCLE PASS: late ISO/UDF, file/CWD busy/lsof, readonly, desktop/Atlas, image retirement, "
           "RAM remounts, HostFS restart while RAM absent, existing shell refresh and stale incarnation refusal", flush=True)
 

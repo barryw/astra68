@@ -1,6 +1,5 @@
 #include <astra/application.h>
 #include <astra/fonts.h>
-#include <astra/application_catalog.h>
 #include <astra/area.h>
 #include <astra/bundle.h>
 #include <astra/bytes.h>
@@ -33,6 +32,9 @@
 
 #include "desktop_layout.h"
 #include "desktop_usage.h"
+#include "../../common/directory_snapshot.h"
+#include "../../common/folder_ops.h"
+#include "../../common/name_edit.h"
 
 #define DESKTOP_WIDTH ASTRA_DISPLAY_WIDTH
 #define DESKTOP_TOP 34u
@@ -40,7 +42,8 @@
 #define DESKTOP_HEIGHT (DESKTOP_BOTTOM - DESKTOP_TOP)
 #define DESKTOP_SCROLLBAR_WIDTH 12u
 #define DESKTOP_GRID_WIDTH (DESKTOP_WIDTH - DESKTOP_SCROLLBAR_WIDTH)
-#define APPLICATIONS_DIRECTORY "/apps"
+#define DESKTOP_DIRECTORY "/home/Desktop"
+#define DESKTOP_TRASH_DIRECTORY "/home/.Trash"
 
 enum {
     DESKTOP_FAIL_FILESYSTEM = ASTRA_STATUS_PROGRAM_FIRST,
@@ -54,20 +57,49 @@ enum {
     DESKTOP_FAIL_WINDOW
 };
 
-/* The installed applications and the icon surface each one shows. */
 typedef struct DesktopApps {
-    AstraApplicationCatalog catalog;
-    AstraSurface *icons; /* one per installed entry; unused when closed */
-    uint32_t shown; /* entries available in the scrollable grid */
+    AstraDirectorySnapshot folders;
+    AstraSurface folder_icon;
+    AstraSurface applications_icon;
+    uint32_t shown; /* Applications drawer plus Desktop folders. */
     AstraSurface volume_icon;
     uint32_t volume_visible;
     uint32_t *volume_indices; /* icon order into complete volume graph */
     AstraVolumeSnapshot volumes;
 } DesktopApps;
 
+static AstraProcessFilesystem process_filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
+static AstraNameEdit name_edit = ASTRA_NAME_EDIT_INIT;
+static uint32_t name_edit_cell = UINT32_MAX;
+static char name_edit_path[ASTRA_VFS_PATH_MAX];
+static uint32_t name_edit_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
+
 static const AstraVolumeRecord *visible_volume(const DesktopApps *apps, uint32_t cell)
 {
     return &apps->volumes.records[apps->volume_indices[cell]];
+}
+
+static const AstraDirectoryEntry *visible_folder(const DesktopApps *apps, uint32_t cell)
+{
+    uint32_t index = cell - apps->volume_visible - 1u;
+    return index < apps->folders.count ? &apps->folders.entries[index] : NULL;
+}
+
+static uint32_t read_folders(DesktopApps *apps)
+{
+    uint32_t status = astra_directory_snapshot_load(&apps->folders,
+        &process_filesystem.filesystem, DESKTOP_DIRECTORY, NULL);
+    if (status != ASTRA_VFS_OK) {
+        apps->shown = 1u;
+        return status;
+    }
+    uint32_t kept = 0u;
+    for (uint32_t at = 0u; at < apps->folders.count; ++at)
+        if (apps->folders.entries[at].kind == ASTRA_VFS_KIND_DIRECTORY)
+            apps->folders.entries[kept++] = apps->folders.entries[at];
+    apps->folders.count = kept;
+    apps->shown = 1u + kept;
+    return ASTRA_VFS_OK;
 }
 
 static AstraHandle volume_metadata;
@@ -207,9 +239,6 @@ static AstraResult read_volumes(AstraVolumeSnapshot *snapshot, uint32_t *count,
 ASTRA_PROGRAM("desktop", 0, 5, 0, "Barry Walker",
               "Copyright 2026 Barry Walker");
 
-static AstraProcessFilesystem process_filesystem =
-    ASTRA_PROCESS_FILESYSTEM_INIT;
-
 static void play_startup_sound(uint32_t pcm_service)
 {
     AstraPcmStream stream = ASTRA_PCM_STREAM_INIT;
@@ -306,12 +335,183 @@ static void launch_error(uint32_t gui, const char *name, const char *path,
 }
 
 typedef struct DesktopCommands {
-    const DesktopApps *apps;
+    DesktopApps *apps;
     uint32_t gui;
     uint32_t launcher;
     uint32_t *selection;
     DesktopUsage *usage;
+    AstraDisplay *display;
+    AstraSurface *content;
 } DesktopCommands;
+
+static AstraResult paint(AstraSurface *content, const DesktopApps *apps);
+static void log_visible_icons(const DesktopApps *apps);
+
+static void folder_error(uint32_t gui, const char *message, uint32_t status)
+{
+    char text[192];
+    AstraString out;
+    astra_string_init(&out, text, sizeof(text));
+    (void)astra_string_append(&out, message);
+    (void)astra_string_append(&out, ": ");
+    const char *reason = astra_vfs_status_text(status);
+    if (reason != NULL) (void)astra_string_append(&out, reason);
+    else (void)astra_string_append_u64(&out, status);
+    (void)astra_string_append_char(&out, '.');
+    AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
+    info.kind = ASTRA_ALERT_ERROR;
+    info.title = "Folder Error";
+    info.title_length = 12u;
+    info.message = text;
+    info.message_length = (uint16_t)out.length;
+    info.button = "Close";
+    info.button_length = 5u;
+    (void)astra_interface_show_alert(gui, &info);
+}
+
+static AstraResult refresh_folders(DesktopCommands *context)
+{
+    uint32_t status = read_folders(context->apps);
+    if (status != ASTRA_VFS_OK) {
+        (void)astra_log_failure("desktop folder reload", status);
+        return astra_result_from_service(status);
+    }
+    uint64_t count = (uint64_t)context->apps->volume_visible + context->apps->shown;
+    if (count > UINT32_MAX) return ASTRA_ERROR_NO_RESOURCES;
+    AstraResult result = layout_icons((uint32_t)count);
+    if (result != ASTRA_OK)
+        (void)astra_log_failure("desktop folder layout", (uint32_t)(-result));
+    if (result == ASTRA_OK) log_visible_icons(context->apps);
+    if (result == ASTRA_OK) result = paint(context->content, context->apps);
+    if (result != ASTRA_OK)
+        (void)astra_log_failure("desktop folder repaint", (uint32_t)(-result));
+    return result;
+}
+
+static AstraResult begin_folder_edit(DesktopCommands *context, uint32_t cell)
+{
+    const AstraDirectoryEntry *folder = visible_folder(context->apps, cell);
+    if (folder == NULL || astra_folder_path(DESKTOP_DIRECTORY, folder->name,
+        name_edit_path, sizeof(name_edit_path)) != ASTRA_VFS_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraResult result = astra_name_edit_start(&name_edit, context->display, folder->name);
+    if (result != ASTRA_OK) {
+        (void)astra_log_failure("desktop folder editor start", (uint32_t)(-result));
+        return result;
+    }
+    name_edit_cell = cell;
+    result = paint(context->content, context->apps);
+    if (result != ASTRA_OK)
+        (void)astra_log_failure("desktop folder editor paint", (uint32_t)(-result));
+    return result;
+}
+
+static AstraResult new_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"New", 3u, 1u, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult folder_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Folder", 6u, 1u, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult folder_action_query(void *opaque, AstraCommandState *state)
+{
+    const DesktopCommands *context = opaque;
+    *state = (AstraCommandState){"Rename", 6u,
+        *context->selection > context->apps->volume_visible &&
+        *context->selection < context->apps->volume_visible + context->apps->shown, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult folder_delete_query(void *opaque, AstraCommandState *state)
+{
+    AstraResult result = folder_action_query(opaque, state);
+    if (result == ASTRA_OK) {
+        state->label = "Delete";
+        state->label_length = 6u;
+    }
+    return result;
+}
+
+static AstraResult new_folder(void *opaque, const AstraCommandArguments *args)
+{
+    (void)args;
+    DesktopCommands *context = opaque;
+    char path[ASTRA_VFS_PATH_MAX];
+    uint32_t status = astra_folder_create_numbered(&process_filesystem.filesystem,
+        DESKTOP_DIRECTORY, "Folder", path, sizeof(path));
+    if (status != ASTRA_VFS_OK) {
+        (void)astra_log_failure("desktop folder create", status);
+        folder_error(context->gui, "Folder could not be created", status);
+        return astra_result_from_service(status);
+    }
+    AstraResult result = refresh_folders(context);
+    if (result != ASTRA_OK) return result;
+    const char *name = astra_folder_leaf(path);
+    for (uint32_t at = 0u; at < context->apps->folders.count; ++at)
+        if (strcmp(context->apps->folders.entries[at].name, name) == 0)
+            return begin_folder_edit(context,
+                context->apps->volume_visible + 1u + at);
+    return ASTRA_ERROR_IO;
+}
+
+static AstraResult rename_folder(void *opaque, const AstraCommandArguments *args)
+{
+    DesktopCommands *context = opaque;
+    uint32_t cell;
+    if (args == NULL || args->length != sizeof(cell)) return ASTRA_ERROR_INVALID_ARGUMENT;
+    memcpy(&cell, args->bytes, sizeof(cell));
+    return begin_folder_edit(context, cell);
+}
+
+static AstraResult delete_folder(void *opaque, const AstraCommandArguments *args)
+{
+    DesktopCommands *context = opaque;
+    uint32_t cell;
+    char source[ASTRA_VFS_PATH_MAX], moved[ASTRA_VFS_PATH_MAX];
+    if (args == NULL || args->length != sizeof(cell)) return ASTRA_ERROR_INVALID_ARGUMENT;
+    memcpy(&cell, args->bytes, sizeof(cell));
+    const AstraDirectoryEntry *folder = visible_folder(context->apps, cell);
+    if (folder == NULL || astra_folder_path(DESKTOP_DIRECTORY, folder->name,
+        source, sizeof(source)) != ASTRA_VFS_OK) return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint32_t status = astra_folder_move_to_trash(&process_filesystem.filesystem,
+        source, DESKTOP_TRASH_DIRECTORY, moved, sizeof(moved));
+    if (status != ASTRA_VFS_OK) {
+        folder_error(context->gui, "Folder could not be deleted", status);
+        return astra_result_from_service(status);
+    }
+    name_edit.active = 0u;
+    name_edit_cell = UINT32_MAX;
+    return refresh_folders(context);
+}
+
+static AstraResult finish_folder_edit(DesktopCommands *context, int commit)
+{
+    if (!name_edit.active) return ASTRA_OK;
+    if (commit) {
+        char name[ASTRA_VFS_NAME_MAX], moved[ASTRA_VFS_PATH_MAX];
+        AstraResult result = astra_name_edit_text(&name_edit, name, sizeof(name));
+        if (result != ASTRA_OK || !astra_folder_name_valid(name)) {
+            folder_error(context->gui, "Choose a valid folder name", ASTRA_VFS_ERR_INVALID);
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        }
+        uint32_t status = astra_folder_rename_safe(&process_filesystem.filesystem,
+            name_edit_path, DESKTOP_DIRECTORY, name, moved, sizeof(moved));
+        if (status != ASTRA_VFS_OK) {
+            folder_error(context->gui, "Folder could not be renamed", status);
+            return astra_result_from_service(status);
+        }
+    }
+    name_edit.active = 0u;
+    name_edit_cell = UINT32_MAX;
+    return refresh_folders(context);
+}
 
 static int can_unmount(const DesktopApps *apps, uint32_t cell)
 {
@@ -611,11 +811,21 @@ static AstraResult open_icon(void *opaque, const AstraCommandArguments *args)
         }
         result = launch_volume_application(context, record, "/apps/Atlas.app",
             "Atlas", "--volume");
-    } else if (cell >= apps->volume_visible && cell - apps->volume_visible < apps->shown) {
-        const AstraApplicationEntry *entry = &apps->catalog.entries[cell - apps->volume_visible];
-        result = astra_application_launch(context->launcher, entry->bundle,
-            (uint16_t)strlen(entry->bundle), &process_id);
-        if (result != ASTRA_OK) launch_error(context->gui, entry->name, entry->bundle, result);
+    } else if (cell < apps->volume_visible + apps->shown) {
+        char path[ASTRA_VFS_PATH_MAX];
+        const char *target = "/apps";
+        if (cell > apps->volume_visible) {
+            const AstraDirectoryEntry *folder = visible_folder(apps, cell);
+            if (folder == NULL || astra_folder_path(DESKTOP_DIRECTORY,
+                folder->name, path, sizeof(path)) != ASTRA_VFS_OK)
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+            target = path;
+        }
+        const char *arguments[] = {target};
+        result = astra_application_launch_with_arguments(context->launcher,
+            "/apps/Atlas.app", (uint16_t)strlen("/apps/Atlas.app"),
+            ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 1u, &process_id);
+        if (result != ASTRA_OK) launch_error(context->gui, "Atlas", target, result);
     } else return ASTRA_ERROR_INVALID_ARGUMENT;
     return result;
 }
@@ -695,16 +905,21 @@ static void log_icon(const char *path, uint32_t dx,
     astra_runtime_deallocate(storage);
 }
 
-static void load_apps(AstraDisplay *display, DesktopApps *apps)
+static void load_desktop(AstraDisplay *display, DesktopApps *apps)
 {
-    uint32_t status = astra_application_catalog_load(
-        &process_filesystem, APPLICATIONS_DIRECTORY, &apps->catalog);
     apps->volume_icon = (AstraSurface)ASTRA_SURFACE_INIT;
+    apps->folder_icon = (AstraSurface)ASTRA_SURFACE_INIT;
+    apps->applications_icon = (AstraSurface)ASTRA_SURFACE_INIT;
     AstraResult observed = read_volumes(&apps->volumes, &apps->volume_visible,
         &apps->volume_indices);
+    uint32_t folders = astra_filesystem_mkdir(&process_filesystem.filesystem,
+        DESKTOP_DIRECTORY);
+    if (folders == ASTRA_VFS_OK || folders == ASTRA_VFS_ERR_EXISTS)
+        folders = read_folders(apps);
+    else apps->shown = 1u;
     ASTRA_EVENT3(ASTRA_EVENT_SUBSYSTEM_DISPLAY, ASTRA_EVENT_LEVEL_INFO,
-                 "desktop inventory applications=%u volumes=%u catalog_status=%u",
-                 apps->catalog.count, apps->volume_visible, status);
+                 "desktop inventory folders=%u volumes=%u folder_status=%u",
+                 apps->folders.count, apps->volume_visible, folders);
     if (observed != ASTRA_OK)
         ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_DISPLAY, ASTRA_EVENT_LEVEL_WARNING,
                      "desktop volume snapshot failed status=%d", observed);
@@ -715,28 +930,12 @@ static void load_apps(AstraDisplay *display, DesktopApps *apps)
     }
     if (load_icon(display, "/apps/Atlas.app/resources/volume.aicon", &apps->volume_icon) != ASTRA_OK)
         (void)astra_log("desktop volume icon unavailable");
-
-    if (status != ASTRA_VFS_OK)
-        (void)astra_log_failure("desktop application catalog", status);
-    if (apps->catalog.skipped != 0u)
-        (void)astra_log_failure("desktop bundles skipped",
-                                apps->catalog.skipped);
-    apps->shown = apps->catalog.count;
-    if (apps->catalog.count == 0u)
-        return;
-    apps->icons = astra_runtime_allocate(
-        (size_t)apps->catalog.count * sizeof(*apps->icons));
-    if (apps->icons == NULL) {
-        (void)astra_log("desktop icons: no memory");
-        apps->shown = 0u;
-        return;
-    }
-    for (uint32_t at = 0u; at < apps->catalog.count; ++at) {
-        apps->icons[at] = (AstraSurface)ASTRA_SURFACE_INIT;
-        if (load_icon(display, apps->catalog.entries[at].icon,
-                      &apps->icons[at]) != ASTRA_OK)
-            (void)astra_log(apps->catalog.entries[at].icon);
-    }
+    if (load_icon(display, "/apps/Atlas.app/resources/drawer.aicon", &apps->folder_icon) != ASTRA_OK)
+        (void)astra_log("desktop folder icon unavailable");
+    if (load_icon(display, "/apps/Atlas.app/resources/Atlas.aicon", &apps->applications_icon) != ASTRA_OK)
+        (void)astra_log("desktop applications icon unavailable");
+    if (folders != ASTRA_VFS_OK)
+        (void)astra_log_failure("desktop folder inventory", folders);
 }
 
 static const char *source_icon_name(const AstraVolumeRecord *record)
@@ -770,12 +969,17 @@ static void log_visible_icons(const DesktopApps *apps)
         int64_t top = (int64_t)ASTRA_DESKTOP_GRID_TOP + dy - state.offset_y;
         /* Only complete hit targets get published, never offscreen positions. */
         if (top < 0 || top + ASTRA_DESKTOP_CELL_HEIGHT > DESKTOP_HEIGHT) continue;
+        char path[ASTRA_VFS_PATH_MAX];
         const char *name = at < apps->volume_visible ?
             (visible_volume(apps, at)->kind == ASTRA_VOLUME_DEVICE ? "NDOS" :
              visible_volume(apps, at)->kind == ASTRA_VOLUME_SOURCE ?
                 source_icon_name(visible_volume(apps, at)) :
                 visible_volume(apps, at)->name) :
-            apps->catalog.entries[at - apps->volume_visible].bundle;
+            at == apps->volume_visible ? "/apps" :
+            visible_folder(apps, at)->name;
+        if (at > apps->volume_visible &&
+            astra_folder_path(DESKTOP_DIRECTORY, name, path, sizeof(path)) == ASTRA_VFS_OK)
+            name = path;
         log_icon(name,
             dx, (int32_t)dy - (int32_t)state.offset_y);
     }
@@ -795,6 +999,11 @@ static AstraResult paint(AstraSurface *content,
 
     result = astra_scroll_get_state(&icon_scroll, &state);
     if (result != ASTRA_OK) return result;
+    if (name_edit.active) {
+        result = astra_name_edit_render(&name_edit, name_edit_commands,
+            sizeof(name_edit_commands));
+        if (result != ASTRA_OK) return result;
+    }
     canvas.foreground = theme.canvas;
     blend.blend = ASTRA_BLEND_ALPHA;
     result = astra_draw_list_create(content, &whole, &list);
@@ -823,9 +1032,11 @@ static AstraResult paint(AstraSurface *content,
               astra_volume_source_issue(visible_volume(apps, at)) != ASTRA_VOLUME_SOURCE_READY) ?
                 fallback : visible_volume(apps, at)->label[0] != '\0' ?
                 visible_volume(apps, at)->label : fallback) :
-            apps->catalog.entries[at - apps->volume_visible].name;
+            at == apps->volume_visible ? "Applications" :
+            visible_folder(apps, at)->name;
         const AstraSurface *icon = is_volume != 0u ? &apps->volume_icon :
-            &apps->icons[at - apps->volume_visible];
+            at == apps->volume_visible ? &apps->applications_icon :
+            &apps->folder_icon;
         /* As window titles do, a label longer than its cell is clipped at
            a whole scalar. */
         uint32_t length = astra_surface_ui_text_fit(
@@ -848,7 +1059,13 @@ static AstraResult paint(AstraSurface *content,
                                  ASTRA_DESKTOP_ICON_SIZE,
                                  ASTRA_DESKTOP_ICON_SIZE },
                 &blend);
-        if (result == ASTRA_OK && length != 0u)
+        if (result == ASTRA_OK && name_edit.active && at == name_edit_cell)
+            result = astra_draw_blit(&list, &name_edit.surface,
+                &(AstraRectI32){0, 0, ASTRA_NAME_EDIT_WIDTH, ASTRA_NAME_EDIT_HEIGHT},
+                &(AstraRectI32){(int32_t)(ASTRA_DESKTOP_ICON_CELL_LEFT + dx) - 22,
+                    (int32_t)ASTRA_DESKTOP_LABEL_Y + top - 5,
+                    ASTRA_NAME_EDIT_WIDTH, ASTRA_NAME_EDIT_HEIGHT}, &blend);
+        else if (result == ASTRA_OK && length != 0u)
             result = astra_draw_ui_text(
                 &list,
                 (AstraPointI32){
@@ -899,7 +1116,9 @@ int astra_main(const AstraStartupInfo *startup)
     AstraWindow window = ASTRA_WINDOW_INIT;
     AstraDisplay display = ASTRA_DISPLAY_INIT;
     AstraSurface content = ASTRA_SURFACE_INIT;
-    DesktopApps apps = {.catalog = ASTRA_APPLICATION_CATALOG_INIT,
+    DesktopApps apps = {.folders = ASTRA_DIRECTORY_SNAPSHOT_INIT,
+        .folder_icon = ASTRA_SURFACE_INIT,
+        .applications_icon = ASTRA_SURFACE_INIT,
         .volume_icon = ASTRA_SURFACE_INIT, .volumes = ASTRA_VOLUME_SNAPSHOT_INIT};
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *gui;
@@ -915,13 +1134,18 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t clicked_cell = UINT32_MAX;
     DesktopUsage *busy_dialog = NULL;
     AstraCommandArguments menu_arguments = {1u, 1u, &menu_cell, sizeof(menu_cell)};
-    AstraContextMenuItem menu_items[4] = {{"desktop.open", 12u, &menu_arguments}};
-    DesktopCommands command_context = {&apps, 0u, 0u, &menu_cell, NULL};
+    AstraContextMenuItem menu_items[5] = {{"desktop.open", 12u, &menu_arguments}};
+    uint16_t menu_parents[5] = {0u};
+    DesktopCommands command_context = {&apps, 0u, 0u, &menu_cell, NULL, &display, &content};
     const AstraCommand commands[] = {{"desktop.open", 12u, 1u, 1u, open_query, open_icon, &command_context},
         {"desktop.disk-setup", 18u, 1u, 1u, disk_setup_query, disk_setup_icon, &command_context},
         {"desktop.unmount", 15u, 1u, 1u, unmount_query, unmount_icon, &command_context},
-        {"desktop.eject", 13u, 1u, 1u, eject_query, eject_icon, &command_context}};
-    const AstraCommandScope command_scope = {NULL, commands, 4u};
+        {"desktop.eject", 13u, 1u, 1u, eject_query, eject_icon, &command_context},
+        {"desktop.new", 11u, 0u, 0u, new_query, new_folder, &command_context},
+        {"desktop.new-folder", 18u, 0u, 0u, folder_query, new_folder, &command_context},
+        {"desktop.rename-folder", 21u, 1u, 1u, folder_action_query, rename_folder, &command_context},
+        {"desktop.delete-folder", 21u, 1u, 1u, folder_delete_query, delete_folder, &command_context}};
+    const AstraCommandScope command_scope = {NULL, commands, 8u};
 
     if (!astra_startup_validate(startup) || startup->capabilities_address == 0u)
         return ASTRA_STATUS_INVALID;
@@ -977,6 +1201,7 @@ int astra_main(const AstraStartupInfo *startup)
                           ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION |
                           ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL |
                           ASTRA_WINDOW_SUBSCRIBE_KEY |
+                          ASTRA_WINDOW_SUBSCRIBE_TEXT |
                           ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION;
         result = astra_window_create(gui->handle, placeholder.handle, &info,
                                      &window);
@@ -997,7 +1222,7 @@ int astra_main(const AstraStartupInfo *startup)
 
         result = create_icon_controls(&display);
         if (result == ASTRA_OK) {
-            load_apps(&display, &apps);
+            load_desktop(&display, &apps);
             result = (uint64_t)apps.shown + apps.volume_visible > UINT32_MAX ?
                 ASTRA_ERROR_NO_RESOURCES : layout_icons(apps.shown + apps.volume_visible);
         }
@@ -1150,6 +1375,20 @@ int astra_main(const AstraStartupInfo *startup)
                     (void)astra_log_failure("desktop menu command", (uint32_t)(-result));
                 continue;
             }
+            if (name_edit.active && (event.type == ASTRA_WINDOW_EVENT_KEY ||
+                                     event.type == ASTRA_WINDOW_EVENT_TEXT)) {
+                result = astra_name_edit_event(&name_edit, &event, &action);
+                if (result != ASTRA_OK) return DESKTOP_FAIL_INTERFACE;
+                if (action.type == ASTRA_UI_ACTION_ACTIVATE ||
+                    action.type == ASTRA_UI_ACTION_DISMISS) {
+                    result = finish_folder_edit(&command_context,
+                        action.type == ASTRA_UI_ACTION_ACTIVATE);
+                    if (result != ASTRA_OK)
+                        (void)astra_log_failure("desktop folder edit", (uint32_t)(-result));
+                } else if (paint(&content, &apps) != ASTRA_OK)
+                    return DESKTOP_FAIL_GRAPHICS;
+                continue;
+            }
             result = astra_interface_ui_handle_event(&icon_ui, &event, &action);
             if (result != ASTRA_OK) return DESKTOP_FAIL_INTERFACE;
             if (action.type == ASTRA_UI_ACTION_SCROLL_CHANGED) {
@@ -1166,9 +1405,12 @@ int astra_main(const AstraStartupInfo *startup)
                 if (astra_scroll_get_state(&icon_scroll, &state) != ASTRA_OK) return DESKTOP_FAIL_INTERFACE;
                 uint32_t cell = astra_desktop_cell_at(event.data.pointer.x, event.data.pointer.y,
                     DESKTOP_GRID_WIDTH, DESKTOP_HEIGHT, state.offset_y);
+                menu_cell = cell;
+                uint32_t menu_count = 0u;
+                memset(menu_parents, 0, sizeof(menu_parents));
                 if (cell < apps.volume_visible + apps.shown) {
-                    menu_cell = cell;
-                    uint32_t menu_count = 1u;
+                    menu_items[menu_count++] = (AstraContextMenuItem){
+                        "desktop.open", 12u, &menu_arguments};
                     if (can_disk_setup(&apps, cell))
                         menu_items[menu_count++] = (AstraContextMenuItem){
                             "desktop.disk-setup", 18u, &menu_arguments};
@@ -1178,14 +1420,26 @@ int astra_main(const AstraStartupInfo *startup)
                     if (eject_source(&apps, cell) != NULL)
                         menu_items[menu_count++] = (AstraContextMenuItem){
                             "desktop.eject", 13u, &menu_arguments};
-                    result = astra_interface_context_menu_open(&context_menu, &window,
-                        &command_scope, menu_items, menu_count,
-                        event.data.pointer.x, event.data.pointer.y);
-                    if (result != ASTRA_OK) {
-                        menu_cell = UINT32_MAX;
-                        (void)astra_log_failure("desktop context menu", (uint32_t)(-result));
-                    } else (void)astra_log("desktop context menu opened");
+                    if (cell > apps.volume_visible) {
+                        menu_items[menu_count++] = (AstraContextMenuItem){
+                            "desktop.rename-folder", 21u, &menu_arguments};
+                        menu_items[menu_count++] = (AstraContextMenuItem){
+                            "desktop.delete-folder", 21u, &menu_arguments};
+                    }
+                } else {
+                    menu_items[menu_count++] = (AstraContextMenuItem){
+                        "desktop.new", 11u, NULL};
+                    menu_items[menu_count++] = (AstraContextMenuItem){
+                        "desktop.new-folder", 18u, NULL};
+                    menu_parents[1] = 1u;
                 }
+                result = astra_interface_context_menu_open_tree(&context_menu, &window,
+                    &command_scope, menu_items, menu_parents, menu_count,
+                    event.data.pointer.x, event.data.pointer.y);
+                if (result != ASTRA_OK) {
+                    menu_cell = UINT32_MAX;
+                    (void)astra_log_failure("desktop context menu", (uint32_t)(-result));
+                } else (void)astra_log("desktop context menu opened");
                 continue;
             }
         }
