@@ -348,7 +348,29 @@ typedef struct KernelThreadPoolStats {
     uint32_t irq_wake_to_run_max_cycles;
 } KernelThreadPoolStats;
 
+typedef struct KernelThreadWakeFailure {
+    uint32_t site;
+    uint32_t status;
+    uint32_t member;
+    uint32_t queue_count;
+    uint32_t wait_registration_count;
+    uint32_t thread_slot;
+    uint32_t thread_state;
+    uint32_t thread_wait_members;
+    uint32_t thread_wait_registrations;
+    uint32_t deadline_position;
+    uint32_t deadline_count;
+    uint32_t deadline_slot;
+    uint32_t ready_previous;
+    uint32_t ready_next;
+    uint32_t ready_head;
+    uint32_t ready_tail;
+    uintptr_t queue_head;
+    uintptr_t queue_tail;
+} KernelThreadWakeFailure;
+
 void kernel_thread_pool_init(void);
+bool kernel_thread_first_wake_failure(KernelThreadWakeFailure *failure);
 uint32_t kernel_thread_slot_limit(void);
 KernelThreadStatus kernel_thread_allocate(uint16_t process_slot,
                                           uint32_t process_id,

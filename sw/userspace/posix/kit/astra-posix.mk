@@ -7,6 +7,7 @@ ASTRA_POSIX_RUNTIME := $(ASTRA_ROOT)/sw/userspace/runtime
 ASTRA_POSIX_COMPILER := $(ASTRA_ROOT)/sw/userspace/compiler
 ASTRA_POSIX_STREAMS := $(ASTRA_ROOT)/sw/userspace/streams
 ASTRA_POSIX_VFS := $(ASTRA_ROOT)/sw/userspace/vfs
+ASTRA_POSIX_SYSTEM := $(ASTRA_ROOT)/sw/userspace/system
 ASTRA_POSIX_NETWORK := $(ASTRA_ROOT)/sw/userspace/network
 ASTRA_POSIX_LAYER := $(ASTRA_ROOT)/sw/userspace/posix
 ASTRA_POSIX_NDK := $(ASTRA_ROOT)/ndk
@@ -45,6 +46,7 @@ ASTRA_POSIX_STATIC_LIBS := -Wl,--start-group \
 	$(ASTRA_POSIX_LAYER)/build/m68k/libastraposix.a \
 	$(ASTRA_POSIX_STREAMS)/build/m68k/libastrastreams.a \
 	$(ASTRA_POSIX_VFS)/build/m68k/libastravfs.a \
+	$(ASTRA_POSIX_SYSTEM)/build/m68k/libastra.a \
 	$(ASTRA_POSIX_NETWORK)/build/m68k/libastranetwork.a \
 	$(ASTRA_POSIX_RUNTIME)/build/m68k/libastrart.a \
 	$(PICOLIBC)/lib/libc.a $(PICOLIBC)/lib/libm.a -lgcc \
@@ -53,6 +55,7 @@ ASTRA_POSIX_STATIC_CXX_LIBS := -Wl,--start-group -lstdc++ \
 	$(ASTRA_POSIX_LAYER)/build/m68k/libastraposix.a \
 	$(ASTRA_POSIX_STREAMS)/build/m68k/libastrastreams.a \
 	$(ASTRA_POSIX_VFS)/build/m68k/libastravfs.a \
+	$(ASTRA_POSIX_SYSTEM)/build/m68k/libastra.a \
 	$(ASTRA_POSIX_NETWORK)/build/m68k/libastranetwork.a \
 	$(ASTRA_POSIX_RUNTIME)/build/m68k/libastrart.a \
 	$(PICOLIBC)/lib/libc.a $(PICOLIBC)/lib/libm.a -lgcc \

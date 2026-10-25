@@ -19,11 +19,14 @@ would be a second answer to where these things live.
 """
 
 import os
+import pwd
+import re
 import shlex
 import struct
 import subprocess
 import sys
 import tempfile
+from storage_image import ext4_partition
 
 REPOSITORY = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -53,6 +56,12 @@ CONFIG_DIRECTORY = "config"
 HOME_DIRECTORY = "home"
 CONFIG_SCOPES = ("system", "services", "commands", "applications")
 CONFIGURATION = {
+    "services/hostfs/settings.conf": (
+        "astra-config 1\n"
+        "schema 1\n"
+        "owner_files 1024\n"
+        "owner_sessions 64\n"
+        "queue_messages 16\n"),
     "system/network/resolv.conf": (
         "# Astra delegates getaddrinfo(3) to the host resolver.\n"
         "# DNS server selection remains host policy.\n"),
@@ -60,24 +69,6 @@ CONFIGURATION = {
         "astra-config 1\n"
         "schema 1\n"
         "pool pool.ntp.org\n"),
-    "services/ramfs/settings.conf": (
-        "astra-config 1\n"
-        "schema 1\n"
-        "max_bytes 67108864\n"),
-    "services/ramfs/service.conf": (
-        "astra-config 1\n"
-        "schema 1\n"
-        "name \"ramfs\"\n"
-        "executable \"/services/ramfs\"\n"
-        "runs astra\n"
-        "enabled true\n"
-        "delegates false\n"
-        "start boot\n"
-        "restart on-fault\n"
-        "argument \"/services/ramfs\"\n"
-        "provides RAM:rw\n"
-        "grant CONFIG:r\n"
-        "needs SYSTEM\n"),
     "services/remote-desktop/service.conf": (
         "astra-config 1\n"
         "schema 1\n"
@@ -111,6 +102,11 @@ CONFIGURATION = {
 }
 DEFAULT_SERVICES = os.path.join(
     REPOSITORY, "sw/userspace/services")
+SYSTEM_FONTS = (
+    os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-workbench.afnt"),
+    os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-mono.afnt"),
+    os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-rescue-mono.afnt"),
+)
 DEFAULT_KITS = os.path.join(REPOSITORY, "sw/userspace/kits/build")
 # Every directory that ships applications; each names its shipped bundles in
 # a build-written `.apps` inventory (tools/astra-bundle.mk).
@@ -126,7 +122,7 @@ DEFAULT_TERMINFO = os.path.join(
 # Terminal is the shell: it holds system authority no other application may
 # claim, so the startup manifest names its launch ceiling explicitly.
 TERMINAL_CEILING = (
-    "GUI CLIPBOARD WORK:rw HOME:rw TMP:rw RAM:rw DH0:r SYSTEM:r LOCAL:rw "
+    "GUI CLIPBOARD VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN WORK:rw HOME:rw TMP:rw RAM_READ RAM_WRITE DH0:r SYSTEM:r FONTS:r LOCAL:rw "
     "COMMANDS:r APPS:r LIBS:r EVENTS:r PROC:rw METRICS:r CONFIG_COMMANDS:r "
     "EVENT_CONTROL NETWORK NETWORK_LISTEN NTP PCM POSIX_PROCESS APP_LAUNCH "
     "SERVICE_MANAGER ENTROPY LOG")
@@ -138,7 +134,13 @@ LIBRARY_RECORD_VERSION = 2
 LIBRARY_RECORD_SIZE = 128
 # The reader qualifies the payload through /libs into the VFS path buffer.
 # The serialized header is outside that path and must not consume its budget.
-VFS_PATH_MAX = 192
+with open(os.path.join(REPOSITORY, "sw/include/astra/vfs_service.h"),
+          encoding="ascii") as _vfs_header:
+    _vfs_path_limits = [line.split()[2].rstrip("uU") for line in _vfs_header
+                        if line.startswith("#define ASTRA_VFS_PATH_MAX ")]
+if len(_vfs_path_limits) != 1 or not _vfs_path_limits[0].isdigit():
+    raise RuntimeError("native VFS pathname bound is missing or malformed")
+VFS_PATH_MAX = int(_vfs_path_limits[0])
 PROVIDER_ASSIGN = "LIBS"
 PROVIDER_INDEX_MAX = (PROVIDER_INDEX_HEADER.size + VFS_PATH_MAX -
                       len(PROVIDER_ASSIGN) - 2)
@@ -161,11 +163,9 @@ PROVIDER_INDEX_MAX = (PROVIDER_INDEX_HEADER.size + VFS_PATH_MAX -
 # services run at 20, media at 24 so audio is not starved by a busy
 # application, and anything unmarked at 16 (sw/include/astra/process.h).
 DISPLAY_STARTUP_MANIFEST = (
-    "service /services/storage grants BLOCK_DEVICE BLOCK_IRQ "
-    "serves SYSTEM:r critical priority=20\n"
+    "service /services/hostfs grants HOST_FILESYSTEM "
+    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE critical priority=20\n"
     "service /services/posixd grants serves POSIX_PROCESS required priority=20\n"
-    "service /services/hostfs grants HOST_DEVICE "
-    "serves WORK:rw METRICS:r SOUND:rw required priority=20\n"
     "service /services/entropy grants HOST_DEVICE "
     "serves ENTROPY required priority=20\n"
     "service /services/network grants NETWORK_DEVICE NETWORK_IRQ "
@@ -179,18 +179,23 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/input grants INPUT INPUT_IRQ "
     "serves INPUT_SERVICE required priority=20\n"
     "service /services/clipboard grants serves CLIPBOARD required priority=20\n"
+    "service /services/fonts grants HOST_DEVICE CONFIG_SYSTEM:rw FONTS:rw LIBS:r "
+    "serves FONT_CATALOG FONTS_ADMIN FONTS_RENDER FONTS_CHANGED required priority=20\n"
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
-    "INPUT_SERVICE serves GUI critical priority=20\n"
+    "INPUT_SERVICE FONT_CATALOG FONTS_RENDER FONTS_CHANGED serves GUI critical priority=20\n"
     "service /services/media grants HOST_DEVICE serves PCM priority=16\n"
     # The machine's accounting, copied to WORK:.astra/sample once a second
     # for the host's astra-top.
     "service /services/sampler grants PROC:r WORK:rw\n"
-    "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER APPS:r "
-    "LIBS:r SYSTEM:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
-    "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n")
+    "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER VOLUMES VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN PROC:r APPS:r "
+    "LIBS:r SYSTEM:r DH0:r NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
+    "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
+    "trusted /apps/Atlas.app grants GUI VOLUMES VOLUME_READ DH0:r FONTS:r APPS:r LIBS:r LOG\n"
+    "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r\n"
+    "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
-DISPLAY_SERVICES = ("storage", "ramfs", "posixd", "hostfs", "entropy", "network", "ntpd", "events",
-                    "input", "clipboard", "display", "media", "sampler",
+DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",
+                    "input", "clipboard", "fonts", "display", "media", "sampler",
                     "desktop",
                     "remote-desktop")
 HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
@@ -207,8 +212,25 @@ PCM_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
 FAULT_PROBE_SERVICES = DISPLAY_SERVICES + ("fault-probe",)
 FAULT_CRITICAL_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "service /services/fault-probe grants critical\n")
-INTERFACE_GALLERY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
-    "application /apps/InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n")
+
+
+def _build_invocation(command):
+    """A privileged observer must not become the owner of build products.
+
+    Build accounts are explicit in the same fixture contract as QEMU accounts;
+    runuser selects that real account's home/dependency configuration. This is
+    a trusted test/build utility, not an installed privilege entry point.
+    """
+    if os.geteuid() != 0:
+        return command
+    uid = int(os.environ.get("ASTRA_TEST_QEMU_UID", "0"))
+    gid = int(os.environ.get("ASTRA_TEST_QEMU_GID", "0"))
+    if min(uid, gid) <= 0:
+        raise RuntimeError("root image observer needs explicit non-root build UID/GID")
+    account = pwd.getpwuid(uid)
+    if account.pw_gid != gid:
+        raise RuntimeError("build GID must match the selected account")
+    return ["runuser", "-u", account.pw_name, "--", *command]
 
 
 def _build_current_userspace():
@@ -216,29 +238,11 @@ def _build_current_userspace():
     directory = os.path.join(REPOSITORY, "sw/userspace")
     command = ["make", "-j", str(os.cpu_count() or 1),
                "-C", directory, "all"]
-    result = subprocess.run(command, stdout=subprocess.PIPE,
+    result = subprocess.run(_build_invocation(command), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
     if result.returncode != 0:
         raise RuntimeError("cannot build current userspace products: %s" %
                            result.stdout.decode("utf-8", "replace").strip())
-
-
-def ext4_partition(image):
-    """The (offset, length) of the Linux partition, from the partition table.
-
-    Read rather than assumed: an image built with a different layout would
-    otherwise have the catalog written into the middle of it, and that surfaces
-    as a filesystem which is subtly wrong rather than as a step that refused.
-    """
-    with open(image, "rb") as handle:
-        table = handle.read(512)[446:510]
-    for index in range(4):
-        entry = table[index * 16:(index + 1) * 16]
-        if entry[4] == 0x83:
-            start = int.from_bytes(entry[8:12], "little") * 512
-            length = int.from_bytes(entry[12:16], "little") * 512
-            return start, length
-    raise RuntimeError("%s has no Linux partition" % image)
 
 
 def _write_partitioned_image(image, volume, total_size):
@@ -326,13 +330,32 @@ def _debugfs(volume, request, what, optional=False):
         raise RuntimeError("debugfs refused %s: %s" % (what, output or request))
 
 
-def _mkdir(volume, path, what):
-    result = subprocess.run(["debugfs", "-R", "stat %s" % path, volume],
+def _inode_type(volume, path):
+    """Inspect the inode itself; configuration must not follow symlinks."""
+    result = subprocess.run(["debugfs", "-R",
+                             "stat %s" % _debugfs_quote(path), volume],
                             stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
-    if "Inode:" in result.stdout.decode("utf-8", "replace"):
+    output = result.stdout.decode("utf-8", "replace")
+    if result.returncode == 0:
+        match = re.search(r"^Inode:\s+\d+\s+Type:\s+(\S+)\s+Mode:",
+                          output, re.MULTILINE)
+        if match is not None:
+            return match.group(1)
+        if "File not found by ext2_lookup" in output:
+            return None
+    raise RuntimeError("cannot inspect image path %s: %s" %
+                       (path, output.strip()))
+
+
+def _mkdir(volume, path, what):
+    kind = _inode_type(volume, path)
+    if kind == "directory":
         return
-    _debugfs(volume, "mkdir %s" % path, what)
+    if kind is not None:
+        raise RuntimeError("image directory conflicts with %s: %s" %
+                           (kind, path))
+    _debugfs(volume, "mkdir %s" % _debugfs_quote(path), what)
 
 
 def _directory_entries(volume, path):
@@ -433,8 +456,8 @@ def _services(directory, names):
             raise RuntimeError("no service image at %s -- build services "
                                "first" % path)
         current = subprocess.run(
-            ["make", "-q", "-C", service,
-             "ASTRA_PROGRAM_OWNERS_READY=1", target],
+            _build_invocation(["make", "-q", "-C", service,
+             "ASTRA_PROGRAM_OWNERS_READY=1", target]),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         if current.returncode != 0:
             output = current.stdout.decode("utf-8", "replace").strip()
@@ -650,7 +673,7 @@ def _install_tree(volume, source, destination):
     target = ""
     for part in parts:
         target += "/" + part
-        _mkdir(volume, _debugfs_quote(target), "image tree directory")
+        _mkdir(volume, target, "image tree directory")
     for root, directories, files in os.walk(source):
         if any(os.path.islink(os.path.join(root, name))
                for name in directories + files):
@@ -659,7 +682,7 @@ def _install_tree(volume, source, destination):
         relative = os.path.relpath(root, source)
         target = destination if relative == "." else \
             destination + "/" + relative
-        _mkdir(volume, _debugfs_quote(target), "image tree directory")
+        _mkdir(volume, target, "image tree directory")
         for name in files:
             host = os.path.join(root, name)
             guest = target + "/" + name
@@ -712,7 +735,7 @@ def install_test_command(image, name, commands=DEFAULT_COMMANDS):
     if not os.path.isfile(path) or os.stat(path).st_mode & 0o111 == 0:
         raise RuntimeError("no executable test command at %s" % path)
     current = subprocess.run(
-        ["make", "-q", "-C", root, "ASTRA_PROGRAM_OWNERS_READY=1", target],
+        _build_invocation(["make", "-q", "-C", root, "ASTRA_PROGRAM_OWNERS_READY=1", target]),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT)
     if current.returncode != 0:
@@ -873,6 +896,19 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
             _debugfs(volume, "write %s %s" % (path, target),
                      "service " + name)
 
+        if service_names is not None and "fonts" in service_names:
+            _mkdir(volume, "/fonts", "the font directory")
+            _mkdir(volume, "/fonts/system", "protected system fonts")
+            _mkdir(volume, "/fonts/installed", "installed user fonts")
+            for path in SYSTEM_FONTS:
+                if not os.path.isfile(path):
+                    raise RuntimeError("system font asset is missing: " + path)
+                target = "/fonts/system/" + os.path.basename(path)
+                _debugfs(volume, "rm %s" % target, "an old system font",
+                         optional=True)
+                _debugfs(volume, "write %s %s" % (path, target),
+                         "system font " + os.path.basename(path))
+
         if service_names is not None and "desktop" in service_names:
             _mkdir(volume, "/media", "the system media directory")
             _debugfs(volume, "rm /media/startup.pcm", "the old startup sound",
@@ -942,7 +978,10 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
 
         _mkdir(volume, "/%s" % CONFIG_DIRECTORY,
                "the configuration directory")
-        _clear_directory(volume, "/%s" % CONFIG_DIRECTORY)
+        # Configuration belongs to the user. Retain settings, definitions and
+        # policy overlays with their inode metadata. Only absent defaults are
+        # seeded; conflicts refuse this temporary-volume installation before
+        # the original image is changed.
         for scope in CONFIG_SCOPES:
             _mkdir(volume, "/%s/%s" % (CONFIG_DIRECTORY, scope),
                    "configuration scope")
@@ -952,13 +991,18 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
                 directory = "/%s/%s" % (
                     CONFIG_DIRECTORY, "/".join(components[:count]))
                 _mkdir(volume, directory, "configuration directory")
+            target = "/%s/%s" % (CONFIG_DIRECTORY, path)
+            kind = _inode_type(volume, target)
+            if kind == "regular":
+                continue
+            if kind is not None:
+                raise RuntimeError("configuration default conflicts with %s: %s" %
+                                   (kind, target))
             host = os.path.join(temporary, path.replace("/", "-"))
             with open(host, "w", encoding="ascii", newline="\n") as handle:
                 handle.write(contents)
-            target = "/%s/%s" % (CONFIG_DIRECTORY, path)
-            _debugfs(volume, "rm %s" % target, "old configuration",
-                     optional=True)
-            _debugfs(volume, "write %s %s" % (host, target),
+            _debugfs(volume, "write %s %s" % (
+                _debugfs_quote(host), _debugfs_quote(target)),
                      "configuration " + path)
 
         # User-owned state is not replaced by publishing system products.
@@ -991,9 +1035,6 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3 and sys.argv[1] == "--fault-critical":
         install(sys.argv[2], service_names=FAULT_PROBE_SERVICES,
                 manifest_text=FAULT_CRITICAL_STARTUP_MANIFEST)
-    elif len(sys.argv) == 3 and sys.argv[1] == "--interface-gallery":
-        install(sys.argv[2], service_names=DISPLAY_SERVICES,
-                manifest_text=INTERFACE_GALLERY_STARTUP_MANIFEST)
     elif len(sys.argv) == 4 and sys.argv[1] == "--create":
         try:
             size_mib = int(sys.argv[3], 10)
@@ -1008,6 +1049,6 @@ if __name__ == "__main__":
         raise SystemExit(
             "usage: astra_image.py "
             "[--display|--hostbench|--audio-certify|--pcm-certify|"
-            "--fault-probe|--fault-critical|--interface-gallery] IMAGE | "
+            "--fault-probe|--fault-critical] IMAGE | "
             "--create IMAGE SIZE_MIB | --service NAME IMAGE | "
             "--test-app BUNDLE IMAGE")

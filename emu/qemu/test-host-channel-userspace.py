@@ -26,9 +26,6 @@ HOTPLUG_SPEC.loader.exec_module(hotplug)
 RESULT = re.compile(
     r"RAW USER depth=([0-9a-f]{8}) iterations=([0-9a-f]{8}) "
     r"elapsed-ns=([0-9a-f]{16})")
-LAYER_RESULT = re.compile(
-    r"LAYER name=([a-z0-9-]+) iterations=([0-9a-f]{8}) "
-    r"elapsed-ns=([0-9a-f]{16})")
 ADAPT_RESULT = re.compile(
     r"ADAPT polls=([0-9a-f]{8}) iterations=([0-9a-f]{8}) "
     r"misses=([0-9a-f]{8}) elapsed-ns=([0-9a-f]{16})")
@@ -43,31 +40,6 @@ PROPERTIES = (
     "astra-host-max-inflight",
 )
 
-LAYER_COMMANDS = (
-    ("transport-unsupported", 1, 1),
-    ("transport-stat", 1, 1),
-    ("backend-stat", 1, 1),
-    ("transport-write192-invalid-handle", 1, 1),
-    ("backend-write192-open-handle", 1, 2),
-    ("direct-vfs-stat", 1, 1),
-    ("path-normalise", 0, 0),
-    ("assign-member-hit", 0, 0),
-    ("assign-member-miss", 0, 0),
-    ("assign-resolve", 0, 0),
-    ("filesystem-stat", 1, 1),
-    ("direct-backend-open-close-paired", 2, 2),
-    ("direct-vfs-open-close-paired", 2, 2),
-    ("filesystem-direct-open-close-paired", 2, 2),
-    ("direct-backend-open-write192-close-no-truncate", 3, 0),
-    ("direct-backend-open-truncate-close", 2, 0),
-    ("direct-backend-open-write192-close-paired", 3, 0),
-    ("direct-vfs-open-write192-close-paired", 3, 0),
-    ("filesystem-direct-open-write192-close-paired", 3, 0),
-    ("direct-backend-open-write192-sync-close", 4, 0),
-    ("direct-vfs-open-write192-sync-close", 4, 0),
-    ("filesystem-direct-open-write192-sync-close", 4, 0),
-)
-
 
 def run(arguments):
     with tempfile.TemporaryDirectory(
@@ -80,7 +52,6 @@ def run(arguments):
                                    directory, hostfs_root=hostfs)
         output = []
         results = []
-        layers = []
         adaptive = []
         memory = []
         passed = False
@@ -103,6 +74,10 @@ def run(arguments):
                 lines, seen = logged[seen:], len(logged)
                 for line in lines:
                     output.append(line)
+                    if "ASTRA HOSTBENCH SCOPE MINT NOT REFUSED" in line:
+                        raise RuntimeError("hostbench minted a scope")
+                    if "ASTRA HOSTBENCH FS NOT REFUSED" in line:
+                        raise RuntimeError("hostbench drove files unclaimed")
                     if "ASTRA RAW USER FAIL" in line:
                         raise RuntimeError(
                             "userspace host benchmark failed\n%s" %
@@ -111,11 +86,6 @@ def run(arguments):
                     if match is not None:
                         results.append(tuple(int(value, 16)
                                              for value in match.groups()))
-                    match = LAYER_RESULT.search(line)
-                    if match is not None:
-                        layers.append((match.group(1),
-                                       int(match.group(2), 16),
-                                       int(match.group(3), 16)))
                     match = ADAPT_RESULT.search(line)
                     if match is not None:
                         adaptive.append(tuple(int(value, 16)
@@ -126,6 +96,15 @@ def run(arguments):
                                        int(match.group(2), 16),
                                        int(match.group(3), 16)))
                     if "ASTRA RAW USER PASS" in line:
+                        # HOST_DEVICE must arrive unable to mint a scope.
+                        if not any("ASTRA HOSTBENCH SCOPE MINT REFUSED" in
+                                   entry for entry in output):
+                            raise RuntimeError("hostbench minted a scope")
+                        # ... nor drive files: only the claimed owner may.
+                        if not any("ASTRA HOSTBENCH FS REFUSED" in entry
+                                   for entry in output):
+                            raise RuntimeError("hostbench filesystem check "
+                                               "did not run")
                         passed = True
                 if passed:
                     break
@@ -133,9 +112,7 @@ def run(arguments):
             if not passed:
                 raise RuntimeError("userspace host benchmark timed out\n%s" %
                                    "\n".join(output[-60:]))
-            values = {name: machine.qmp.execute("qom-get", {
-                "path": "/machine", "property": name,
-            }) for name in PROPERTIES}
+            values = machine.qmp.host_snapshot(PROPERTIES)
         except Exception as error:
             raise RuntimeError("host benchmark failed (%s)\n%s\n%s" %
                                (error, "\n".join(output[-60:]),
@@ -152,10 +129,6 @@ def run(arguments):
     if (not results or depths != expected_depths or
             any(iterations == 0 or elapsed == 0
                 for _, iterations, elapsed in results) or
-            [name for name, _, _ in layers] != [
-                name for name, _, _ in LAYER_COMMANDS] or
-            any(iterations == 0 or elapsed == 0
-                for _, iterations, elapsed in layers) or
             not adaptive or
             [polls for polls, _, _, _ in adaptive] != [
                 1 << shift for shift in range(17)] or
@@ -164,11 +137,10 @@ def run(arguments):
             [name for name, _, _ in memory] != ["memcpy", "memcmp"] or
             any(byte_count == 0 or elapsed == 0
                 for _, byte_count, elapsed in memory) or
-            values["astra-host-commands"] !=
+            # The counter is machine-wide: HostFS (the system log, the
+            # sampler), entropy and media use the host channel too.
+            values["astra-host-commands"] <
             sum(iterations for _, iterations, _ in results) +
-            sum(iterations * commands + warmup
-                for (_, iterations, _), (_, commands, warmup) in
-                zip(layers, LAYER_COMMANDS)) + 2 +
             sum(iterations for _, iterations, _, _ in adaptive) or
             values["astra-host-inflight"] != 0 or
             values["astra-host-max-inflight"] != depths[-1]):
@@ -182,11 +154,6 @@ def run(arguments):
         print("raw-user: depth=%d iterations=%d elapsed-ns=%d "
               "ns-per-request=%.1f requests-per-second=%.1f" % (
                   depth, iterations, elapsed, elapsed / iterations,
-                  iterations * 1_000_000_000 / elapsed), flush=True)
-    for name, iterations, elapsed in layers:
-        print("layer: name=%s iterations=%d elapsed-ns=%d "
-              "ns-per-operation=%.1f operations-per-second=%.1f" % (
-                  name, iterations, elapsed, elapsed / iterations,
                   iterations * 1_000_000_000 / elapsed), flush=True)
     for polls, iterations, misses, elapsed in adaptive:
         print("adaptive: polls=%d iterations=%d misses=%d hit-rate=%.1f%% "

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""The terminal gate must wait for command completion, not output silence."""
+"""Native gates must wait for current launch and command completion."""
 
 import importlib.util
 import contextlib
 import io
 from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 HERE = Path(__file__).resolve().parent
@@ -88,4 +91,91 @@ with contextlib.redirect_stdout(failure):
 assert "could not refresh the workspace boot ROM" in failure.getvalue()
 terminal.subprocess.run = original_run
 
-print("terminal command readiness test: PASS")
+with tempfile.TemporaryDirectory() as directory:
+    image = Path(directory) / "fixture.img"
+    image.write_bytes(b"fixture")
+    commands.clear()
+
+    def build_result(command, **_kwargs):
+        commands.append(command)
+        return Result(0 if command[-1] == "build/astra_boot.bin" else 2)
+
+    failure = io.StringIO()
+    with patch.object(terminal.astra_image.os, "geteuid", return_value=0), \
+            patch.dict(terminal.os.environ, {
+                "ASTRA_TEST_QEMU_UID": "1000", "ASTRA_TEST_QEMU_GID": "1000"}), \
+            patch.object(terminal.astra_image.pwd, "getpwuid", return_value=
+                         SimpleNamespace(pw_name="fixture-builder", pw_gid=1000)), \
+            patch.object(terminal.subprocess, "run", side_effect=build_result), \
+            patch.object(terminal.sys, "argv", ["test-terminal.py", "qemu", workspace_rom,
+                         "--image", str(image), "--prepared-image", "--sbase-only"]), \
+            contextlib.redirect_stdout(failure):
+        assert terminal.main() == 1
+    assert len(commands) == 2
+    assert all(command[:5] == ["runuser", "-u", "fixture-builder", "--", "make"]
+               for command in commands)
+    assert commands[0][5:] == ["-C", terminal.os.path.join(terminal.ROOT, "sw", "boot"),
+                               "build/astra_boot.bin"]
+    assert commands[1][5:7] == ["-C", terminal.os.path.join(
+        terminal.ROOT, "sw", "userspace", "commands")]
+    assert "could not build integration test commands" in failure.getvalue()
+
+font_spec = importlib.util.spec_from_file_location(
+    "astra_fonts_gate", HERE / "test-fonts-ui.py")
+fonts = importlib.util.module_from_spec(font_spec)
+font_spec.loader.exec_module(fonts)
+
+
+class FontsMachine:
+    def __init__(self):
+        self.clicked = False
+        self.polls = 0
+        self.qmp = SimpleNamespace(execute=self.display_count, double_click=self.click)
+
+    def display_count(self, *_args):
+        return int(self.clicked)
+
+    def click(self, *_args):
+        self.clicked = True
+
+    def desktop_icon(self, *_args):
+        return 1, 2
+
+    def sequence(self):
+        return 7
+
+    def said(self, after):
+        assert after == 7
+        return [], 7
+
+    def said_with_syslog(self):
+        self.polls += 1
+        return ["old launch /apps/Fonts.app status=0"], 7
+
+    def syslog_lines(self):
+        lines = ["old launch /apps/Fonts.app status=0"] + [
+            "old fonts UI " + operation + " complete"
+            for operation in ("import", "details", "preview", "confirmation", "removal")]
+        if self.clicked:
+            self.polls += 1
+            if self.polls >= 2:
+                lines.append("new launch /apps/Fonts.app status=0")
+                lines.extend("new fonts UI " + operation + " complete"
+                             for operation in ("import", "details", "preview", "confirmation", "removal"))
+        return lines
+
+
+machine = FontsMachine()
+with patch.object(fonts.time, "sleep"):
+    fonts.open_fonts(machine)
+assert machine.polls == 2, "old launch log satisfied new Fonts launch"
+
+for operation in ("import", "details", "preview", "confirmation", "removal"):
+    machine = FontsMachine()
+    syslog_before = len(machine.syslog_lines())
+    machine.clicked = True
+    with patch.object(fonts.time, "sleep"):
+        fonts.wait_ui(machine, operation, 7, syslog_before)
+    assert machine.polls == 2, "old log satisfied new Fonts " + operation
+
+print("native launch and terminal command readiness test: PASS")

@@ -1,3 +1,5 @@
+#include <astra/service_definition_payload.h>
+#include <astra/vfs_path_storage.h>
 #include <service_definition_store.h>
 
 #include <loader.h>
@@ -147,7 +149,7 @@ uint32_t supervisor_service_definition_parse(
 
     if (definition == NULL)
         return ASTRA_STATUS_INVALID;
-    (void)memset(definition, 0, sizeof(*definition));
+    astra_service_definition_destroy(definition);
     definition->structure_size = sizeof(*definition);
     if (error_line != NULL)
         *error_line = 0u;
@@ -158,13 +160,17 @@ uint32_t supervisor_service_definition_parse(
             *error_line = error.line;
         return ASTRA_STATUS_INVALID;
     }
+    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(1u);
+    if (paths.bytes == NULL) return ASTRA_STATUS_LIMIT;
+    char *executable = astra_vfs_path_storage_at(&paths, 0u);
     if (one_string(text, length, "name", definition->name,
                    sizeof(definition->name)) != ASTRA_STATUS_OK ||
-        one_string(text, length, "executable", definition->executable,
-                   sizeof(definition->executable)) != ASTRA_STATUS_OK ||
+        one_string(text, length, "executable", executable, ASTRA_VFS_PATH_MAX) != ASTRA_STATUS_OK ||
         one_string(text, length, "runs", policy, sizeof(policy)) !=
             ASTRA_STATUS_OK)
         return ASTRA_STATUS_INVALID;
+    AstraResult copied = astra_service_definition_path_set(definition, executable);
+    if (copied != ASTRA_OK) return copied == ASTRA_ERROR_OUT_OF_MEMORY ? ASTRA_STATUS_LIMIT : ASTRA_STATUS_INVALID;
     if (strcmp(policy, "astra") == 0)
         definition->flags |= ASTRA_SERVICE_RUNS_ASTRA;
     else if (strcmp(policy, "paired") == 0)
@@ -345,9 +351,12 @@ uint32_t supervisor_service_definition_serialize(
  * an absent key leaves the default. A protected service ignores the file
  * entirely: the caller never applies one to it.
  */
-uint32_t supervisor_service_policy_apply(const char *text, uint32_t length,
+uint32_t supervisor_service_policy_apply(uint32_t read_status, const char *text, uint32_t length,
                                          AstraServiceDefinition *definition)
 {
+    if (definition == NULL) return ASTRA_STATUS_INVALID;
+    if (read_status == ASTRA_STATUS_NOT_FOUND) return ASTRA_STATUS_OK;
+    if (read_status != ASTRA_STATUS_OK) return read_status;
     AstraConfigDocumentError error = {0};
     char word[16];
     uint32_t count = 0u;
@@ -424,7 +433,7 @@ uint32_t supervisor_service_definition_from_manifest(
 
     if (entry == NULL || definition == NULL || entry->resident == 0u)
         return ASTRA_STATUS_INVALID;
-    (void)memset(definition, 0, sizeof(*definition));
+    astra_service_definition_destroy(definition);
     definition->structure_size = sizeof(*definition);
     /*
      * Three tiers. A critical service is never restarted: its death halts
@@ -447,10 +456,11 @@ uint32_t supervisor_service_definition_from_manifest(
         entry->required != 0u ? ASTRA_SERVICE_RESTART_ALWAYS :
                                 entry->restart_policy;
     if (strlen(service_leaf(entry->path)) >= sizeof(definition->name) ||
-        strlen(entry->path) >= sizeof(definition->executable))
+        strlen(entry->path) >= ASTRA_VFS_PATH_MAX)
         return ASTRA_STATUS_LIMIT;
     (void)strcpy(definition->name, service_leaf(entry->path));
-    (void)strcpy(definition->executable, entry->path);
+    AstraResult copied = astra_service_definition_path_set(definition, entry->path);
+    if (copied != ASTRA_OK) return copied == ASTRA_ERROR_OUT_OF_MEMORY ? ASTRA_STATUS_LIMIT : ASTRA_STATUS_INVALID;
     length = (uint32_t)strlen(entry->path) + 1u;
     (void)memcpy(definition->arguments, entry->path, length);
     definition->argument_count = 1u;

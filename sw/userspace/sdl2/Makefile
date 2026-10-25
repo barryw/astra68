@@ -165,8 +165,8 @@ $(SDL2_SHARED): $(SDL2_IDENTITY) $(SDL2_ARCHIVE) \
 		-Wl,-soname,SDL2.library.3 -Wl,--version-script=$(SDL2_EXPORTS) \
 		-Wl,@$(SDL2_UNDEFINED) -o $@ $(SDL2_IDENTITY) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
-		-Wl,-l:pcm.library.2 -Wl,-l:graphics.library.2 \
-		-Wl,-l:system.library.3 -Wl,-l:libc.library.3 \
+		-Wl,-l:pcm.library.3 -Wl,-l:graphics.library.3 \
+		-Wl,-l:system.library.4 -Wl,-l:libc.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(SDL2_ARCHIVE) $(ASTRA_SHARED_LINK_END)
 
@@ -203,7 +203,7 @@ $(SDL_NET_SHARED): $(SDL_NET_IDENTITY) $(SDL_NET_OBJECTS) \
 		-Wl,@$(SDL_NET_UNDEFINED) -o $@ \
 		$(SDL_NET_IDENTITY) $(SDL_NET_OBJECTS) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
-		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.3 \
+		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
@@ -253,7 +253,7 @@ $(SDL_IMAGE_SHARED): $(SDL_IMAGE_IDENTITY) $(SDL_IMAGE_OBJECTS) \
 		-Wl,@$(SDL_IMAGE_UNDEFINED) -o $@ \
 		$(SDL_IMAGE_IDENTITY) $(SDL_IMAGE_OBJECTS) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
-		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.3 \
+		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
@@ -314,8 +314,8 @@ $(SDL_MIXER_SHARED): $(SDL_MIXER_IDENTITY) $(SDL_MIXER_OBJECTS) \
 		-Wl,@$(SDL_MIXER_UNDEFINED) -o $@ \
 		$(SDL_MIXER_IDENTITY) $(SDL_MIXER_OBJECTS) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
-		-Wl,-l:SDL2.library.3 -Wl,-l:pcm.library.2 \
-		-Wl,-l:libc.library.3 \
+		-Wl,-l:SDL2.library.3 -Wl,-l:pcm.library.3 \
+		-Wl,-l:libc.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
@@ -381,7 +381,7 @@ $(SDL_TTF_SHARED): $(SDL_TTF_IDENTITY) $(SDL_TTF_OBJECT) \
 		-Wl,@$(SDL_TTF_UNDEFINED) -o $@ \
 		$(SDL_TTF_IDENTITY) $(SDL_TTF_OBJECT) $(FREETYPE_ARCHIVE) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
-		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.3 \
+		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
@@ -411,11 +411,11 @@ build/m68k/sdlttfprobe: tests/ttf_probe.c $(SDL_TTF_SHARED) \
 		-L$(dir $(SDL_TTF_SHARED)) \
 		-Wl,-rpath-link,$(dir $(SDL_TTF_SHARED)) \
 		-Wl,-l:SDL2_ttf.library.2 -Wl,-l:SDL2.library.3 \
-		-Wl,-l:libc.library.3 -Wl,-l:runtime.library.1 \
+		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.1 \
 		-Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_ttf.library.2 --needed SDL2.library.3 \
-		--needed libc.library.3 --needed runtime.library.1 \
+		--needed libc.library.4 --needed runtime.library.1 \
 		--needed compiler.library.2 $@
 
 $(eval $(call astra_app_bundle,build,SDLTTFProbe,build/m68k/sdlttfprobe,tests/SDLTTFProbe.app/manifest,terminal,../graphics/fonts/atkinson-hyperlegible-next/AtkinsonHyperlegibleNext-Regular.ttf))
@@ -437,11 +437,11 @@ build/m68k/sdlmixerprobe: tests/mixer_probe.c $(SDL_MIXER_SHARED) \
 		-L$(dir $(SDL_MIXER_SHARED)) \
 		-Wl,-rpath-link,$(dir $(SDL_MIXER_SHARED)) \
 		-Wl,-l:SDL2_mixer.library.3 -Wl,-l:SDL2.library.3 \
-		-Wl,-l:libc.library.3 -Wl,-l:runtime.library.1 \
+		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.1 \
 		-Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_mixer.library.3 --needed SDL2.library.3 \
-		--needed libc.library.3 --needed runtime.library.1 \
+		--needed libc.library.4 --needed runtime.library.1 \
 		--needed compiler.library.2 $@
 
 build/mixer-fixtures/sample.mp3:
@@ -481,11 +481,11 @@ build/m68k/sdlimageprobe: tests/image_probe.c $(SDL_IMAGE_SHARED) \
 		-L$(dir $(SDL_IMAGE_SHARED)) \
 		-Wl,-rpath-link,$(dir $(SDL_IMAGE_SHARED)) \
 		-Wl,-l:SDL2_image.library.2 -Wl,-l:SDL2.library.3 \
-		-Wl,-l:libc.library.3 -Wl,-l:runtime.library.1 \
+		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.1 \
 		-Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_image.library.2 --needed SDL2.library.3 \
-		--needed libc.library.3 --needed runtime.library.1 \
+		--needed libc.library.4 --needed runtime.library.1 \
 		--needed compiler.library.2 $@
 
 # The image probe also opens a PNG under a .jpg name to test detection.
@@ -511,6 +511,7 @@ build/m68k/sdlprobe: SDL_EXAMPLE_SOURCE = tests/probe.c
 build/m68k/sdlvideoprobe: SDL_EXAMPLE_SOURCE = tests/video_probe.c
 build/m68k/sdlrenderprobe: SDL_EXAMPLE_SOURCE = tests/render_probe.c
 build/m68k/sdlframebench: SDL_EXAMPLE_SOURCE = tests/frame_bench.c
+build/m68k/sdlmediaplayback: SDL_EXAMPLE_SOURCE = tests/media_playback.c
 build/m68k/testaudioinfo: $(SDL2_ROOT)/test/testaudioinfo.c
 build/m68k/testver: $(SDL2_ROOT)/test/testver.c
 build/m68k/testdraw2: $(SDL2_ROOT)/test/testdraw2.c
@@ -518,9 +519,11 @@ build/m68k/sdlprobe: tests/probe.c
 build/m68k/sdlvideoprobe: tests/video_probe.c
 build/m68k/sdlrenderprobe: tests/render_probe.c
 build/m68k/sdlframebench: tests/frame_bench.c
+build/m68k/sdlmediaplayback: tests/media_playback.c
 build/m68k/testaudioinfo build/m68k/testver build/m68k/testdraw2 \
 build/m68k/sdlprobe build/m68k/sdlvideoprobe build/m68k/sdlrenderprobe \
-build/m68k/sdlframebench $(addprefix build/m68k/,$(SDL_DEMOS)): \
+	build/m68k/sdlframebench build/m68k/sdlmediaplayback \
+	$(addprefix build/m68k/,$(SDL_DEMOS)): \
 		$(SDL2_SHARED) $(ASTRA_LIBC_LIBRARY)
 	@mkdir -p $(@D)
 	$(TARGET_CC) $(ASTRA_POSIX_CPPFLAGS) -Ibuild/vendor/SDL2/include \
@@ -534,10 +537,10 @@ build/m68k/sdlframebench $(addprefix build/m68k/,$(SDL_DEMOS)): \
 		$(ASTRA_POSIX_PROGRAM_SOURCE) \
 		build/vendor/SDL2/libSDL2_test.a \
 		-L$(dir $(SDL2_SHARED)) -Wl,-rpath-link,$(dir $(SDL2_SHARED)) \
-		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.3 \
+		-Wl,-l:SDL2.library.3 -Wl,-l:libc.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
-		--needed SDL2.library.3 --needed libc.library.3 \
+		--needed SDL2.library.3 --needed libc.library.4 \
 		--needed runtime.library.1 --needed compiler.library.2 $@
 
 build/m68k/showinterfaces: SDL_NET_EXAMPLE_SOURCE = build/vendor/SDL2_net/examples/showinterfaces.c
@@ -562,11 +565,11 @@ build/m68k/showinterfaces build/m68k/chatd build/m68k/chat: \
 		-L$(dir $(SDL_NET_SHARED)) \
 		-Wl,-rpath-link,$(dir $(SDL_NET_SHARED)) \
 		-Wl,-l:SDL2_net.library.2 -Wl,-l:SDL2.library.3 \
-		-Wl,-l:libc.library.3 -Wl,-l:runtime.library.1 \
+		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.1 \
 		-Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_net.library.2 --needed SDL2.library.3 \
-		--needed libc.library.3 --needed runtime.library.1 \
+		--needed libc.library.4 --needed runtime.library.1 \
 		--needed compiler.library.2 $@
 
 build/m68k/sdlnetprobe: tests/net_probe.c $(SDL_NET_SHARED) \
@@ -585,11 +588,11 @@ build/m68k/sdlnetprobe: tests/net_probe.c $(SDL_NET_SHARED) \
 		-L$(dir $(SDL_NET_SHARED)) \
 		-Wl,-rpath-link,$(dir $(SDL_NET_SHARED)) \
 		-Wl,-l:SDL2_net.library.2 -Wl,-l:SDL2.library.3 \
-		-Wl,-l:libc.library.3 -Wl,-l:runtime.library.1 \
+		-Wl,-l:libc.library.4 -Wl,-l:runtime.library.1 \
 		-Wl,-l:compiler.library.2
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_net.library.2 --needed SDL2.library.3 \
-		--needed libc.library.3 --needed runtime.library.1 \
+		--needed libc.library.4 --needed runtime.library.1 \
 		--needed compiler.library.2 $@
 
 $(eval $(call astra_app_bundle,build,SDLNetProbe,build/m68k/sdlnetprobe,tests/SDLNetProbe.app/manifest,terminal,))
@@ -601,21 +604,24 @@ video-probe-bundle: build/.SDLVideoProbe.app.stamp
 $(eval $(call astra_app_bundle,build,SDLRenderProbe,build/m68k/sdlrenderprobe,tests/SDLRenderProbe.app/manifest,terminal,))
 render-probe-bundle: build/.SDLRenderProbe.app.stamp
 
-$(eval $(call astra_app_bundle,build,SDLFrameBench,build/m68k/sdlframebench,apps/SDLFrameBench.app/manifest,$(SDL2_ROOT)/test/icon.bmp,))
+$(eval $(call astra_app_bundle,build,SDLFrameBench,build/m68k/sdlframebench,apps/SDLFrameBench.app/manifest,framebench,))
 frame-bench-bundle: build/.SDLFrameBench.app.stamp
 
-$(eval $(call astra_app_bundle,build,SDLTestDraw2,build/m68k/testdraw2,apps/SDLTestDraw2.app/manifest,$(SDL2_ROOT)/test/icon.bmp,))
+$(eval $(call astra_app_bundle,build,SDLMediaPlayback,build/m68k/sdlmediaplayback,tests/SDLMediaPlayback.app/manifest,terminal,))
+media-playback-bundle: build/.SDLMediaPlayback.app.stamp
+
+$(eval $(call astra_app_bundle,build,SDLTestDraw2,build/m68k/testdraw2,apps/SDLTestDraw2.app/manifest,draw,))
 testdraw2-bundle: build/.SDLTestDraw2.app.stamp
 
-SDL_DEMO_ICON := $(SDL2_ROOT)/test/icon.bmp
-$(eval $(call astra_app_bundle,build,SDLTestSprite2,build/m68k/testsprite2,apps/SDLTestSprite2.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON)))
-$(eval $(call astra_app_bundle,build,SDLTestGeometry,build/m68k/testgeometry,apps/SDLTestGeometry.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON)))
-$(eval $(call astra_app_bundle,build,SDLTestRenderTarget,build/m68k/testrendertarget,apps/SDLTestRenderTarget.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON) $(SDL2_ROOT)/test/sample.bmp))
-$(eval $(call astra_app_bundle,build,SDLTestScale,build/m68k/testscale,apps/SDLTestScale.app/manifest,$(SDL_DEMO_ICON),$(SDL_DEMO_ICON) $(SDL2_ROOT)/test/sample.bmp))
-$(eval $(call astra_app_bundle,build,SDLTestKeys,build/m68k/testkeys,apps/SDLTestKeys.app/manifest,$(SDL_DEMO_ICON),))
-$(eval $(call astra_app_bundle,build,SDLTestMouse,build/m68k/testmouse,apps/SDLTestMouse.app/manifest,$(SDL_DEMO_ICON),))
-$(eval $(call astra_app_bundle,build,SDLTestTimer,build/m68k/testtimer,apps/SDLTestTimer.app/manifest,$(SDL_DEMO_ICON),))
-$(eval $(call astra_app_bundle,build,SDLTestThread,build/m68k/testthread,apps/SDLTestThread.app/manifest,$(SDL_DEMO_ICON),))
+SDL_DEMO_RESOURCE := $(SDL2_ROOT)/test/icon.bmp
+$(eval $(call astra_app_bundle,build,SDLTestSprite2,build/m68k/testsprite2,apps/SDLTestSprite2.app/manifest,sprite,$(SDL_DEMO_RESOURCE)))
+$(eval $(call astra_app_bundle,build,SDLTestGeometry,build/m68k/testgeometry,apps/SDLTestGeometry.app/manifest,geometry,$(SDL_DEMO_RESOURCE)))
+$(eval $(call astra_app_bundle,build,SDLTestRenderTarget,build/m68k/testrendertarget,apps/SDLTestRenderTarget.app/manifest,target,$(SDL_DEMO_RESOURCE) $(SDL2_ROOT)/test/sample.bmp))
+$(eval $(call astra_app_bundle,build,SDLTestScale,build/m68k/testscale,apps/SDLTestScale.app/manifest,scale,$(SDL_DEMO_RESOURCE) $(SDL2_ROOT)/test/sample.bmp))
+$(eval $(call astra_app_bundle,build,SDLTestKeys,build/m68k/testkeys,apps/SDLTestKeys.app/manifest,keys,))
+$(eval $(call astra_app_bundle,build,SDLTestMouse,build/m68k/testmouse,apps/SDLTestMouse.app/manifest,mouse,))
+$(eval $(call astra_app_bundle,build,SDLTestTimer,build/m68k/testtimer,apps/SDLTestTimer.app/manifest,timer,))
+$(eval $(call astra_app_bundle,build,SDLTestThread,build/m68k/testthread,apps/SDLTestThread.app/manifest,thread,))
 demo-bundles: $(foreach demo,SDLTestSprite2 SDLTestGeometry SDLTestRenderTarget SDLTestScale SDLTestKeys SDLTestMouse SDLTestTimer SDLTestThread,build/.$(demo).app.stamp)
 
 $(eval $(call astra_app_inventory,build,$(SHIPPED_APPS)))
@@ -689,5 +695,6 @@ clean:
 	image-library-contract mixer-library-contract ttf-library-contract \
 	target-check test \
 	video-probe-bundle render-probe-bundle frame-bench-bundle testdraw2-bundle \
+	media-playback-bundle \
 	demo-bundles net-probe-bundle image-probe-bundle mixer-probe-bundle ttf-probe-bundle \
 	sanitize analyze clean

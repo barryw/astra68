@@ -1,9 +1,45 @@
 # Astra filesystem production requirements
 
-Status: implementation PRD. The architectural direction was agreed on
-2026-10-06; implementation and production qualification remain outstanding.
-Phase 1 (baseline and trusted-boundary prototype) is next; no later phase has
-started.
+Status: active implementation PRD. The architectural direction was agreed on
+2026-10-06. Current release uses Filesystem ABI 15 / Kit 15.2.0, STOR 38
+and the Linux-owned fixed/removable/optical/ISO/RAM provider. Native lifecycle,
+exact file/CWD busy removal, recovery, durability and Atlas overflow pass their
+current gates. Coherent release `c041b264` runs on DE25 after stopped-state
+migration; simultaneous USB FAT32/exFAT read/write and UDF read-only passed
+on the selected release. Optical sibling-mount safety, retained-mount
+replacement fencing, physical UDF DVD media change and Desktop Eject passed.
+Physical ISO9660 data-disc access, eject and reinsertion passed on DVD-R;
+CD-R medium and complete performance qualification remain open.
+[Current state](CURRENT_STATE.md) records evidence.
+Network mounts are excluded from this completion task. Performance acceptance
+follows correctness.
+
+Historical qualification: Native-16, integration-1 and unprivileged DE25
+provider gates qualified the preceding ABI 11 source on 2026-10-11.
+Final-review fixes passed Filesystem ABI 12/Kit 9.0.0, STOR 36:
+all 26 semantics, stress, NDK/docs, all 31 integration gates and isolated
+unprivileged AArch64 provider checks. ABI 12 release `194b9202` is deployed
+with unprivileged QEMU and the canonical worker-only resolver optimization.
+Final five paired QEMU stat/read probes pass, but full workload budgets fail
+(spawn median 1.73× baseline, among other failures). Physical five pairs also
+fail unchanged budgets: warm-open median 3.51× and readdir median 2.59×,
+among other failures. Every workload executes successfully; provider memory
+and held-miss absolute floors pass. Performance acceptance remains open; those
+measurements do not qualify the current candidate.
+
+The 2026-10-12 user request makes the remaining production phases the active
+priority. The user specifies `/ram0` naming, writable automatic mounts for
+supported USB filesystems, labeled desktop volume icons, and double-click into
+Atlas, and authorizes the Linux kernel work needed for CD-ROM support. The
+[production volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md)
+records the implementation boundaries and migration/acceptance requirements.
+Physical USB qualification and production cutover are recorded below; physical
+ISO9660 on DVD-R is qualified, while CD-R media awaits a disc.
+
+Initial Atlas scope is a single root-directory window with named file/folder
+icons, proving native open and enumeration of the selected mounted volume.
+Broader browsing and Atlas management UI wait until storage works; native mount
+tools and desktop volume actions remain in the production filesystem scope.
 
 Linux owns filesystem machinery. Astra owns the client experience: its native
 API, process-visible namespace, named volumes, grants, mount policy, desktop
@@ -23,7 +59,7 @@ ownership assumptions in [Storage and VFS](STORAGE_AND_VFS.md),
 [Devices and volumes](DEVICE_AND_VOLUME_PLAN.md), and the storage sections of
 [Driver and service architecture](DRIVER_AND_SERVICE_ARCHITECTURE.md).
 It also replaces the assumption that guest ext4 and guest RAMFS remain production
-engines. Those documents must be reconciled as part of implementation.
+engines. Those documents now describe the Linux-owned production boundary.
 
 The useful device and mount rules from the existing plan are retained: fixed
 internal-SD system selection, separate device and volume identities, one native
@@ -37,22 +73,26 @@ versioned Astra protocols; applications gain no alternate Linux API.
 
 ## Current implementation and gaps
 
+The table describes the deployed DE25 release and remaining qualification.
+
 | Area | Existing implementation | Production gap |
 |---|---|---|
-| System storage | Guest lwext4 mounts the selected SD partition; supervisor bootstrap and storage service independently select the first MBR Linux-type partition. | One verified system-volume selection and one Linux filesystem owner, including bootstrap. |
-| Linux-backed files | HostFS carries native operations over the host transport. The host exposes fixed WORK and SOUND directory exports. | Dynamic volume inventory, rooted grants, complete semantics, and mount lifecycle. |
-| RAM storage | An optional guest RAMFS service enforces a configured allocation cap. | Linux tmpfs with explicit host-memory limits and the common volume lifecycle. |
-| Namespace | Assigns provide slash roots; `/dh0` and protected conveniences are exposed. Some conveniences report synthetic symlink metadata while operations use independent grants. | Honest binding semantics, trusted enforcement, and coherent traversal. |
-| File objects | Directory-relative operations and live-handle metadata exist. | Stable volume/node IDs, retained cwd, shared offsets and inheritance, complete symlink behavior. |
-| Devices and mounts | The device/volume document defines the desired model; storage services have shutdown hooks. | General storage inventory, mount policy execution, hotplug, unmount/eject, and client notifications. |
+| System storage | The canonical image selector validates one exact system partition. Supervisor bootstrap and HostFS access the same Linux-owned provider; guest ext4/storage services are absent from the production release. Mutable `/dh0` state has one release-independent path, `/var/lib/astra/state/system/storage-terminal.img`; release-owned files were refreshed from the verified image during stopped-state migration while user files and the old image were retained. | A deliberate rollback of the currently selected release remains to be qualified. |
+| Linux-backed files | HostFS owns `HOST_FILESYSTEM` and mints rooted, rights-bounded sessions/scopes. Clients drive kernel-bound host channels; QEMU enforces scope, ancestry, read-only rights, ownership and object tags for every command. Current storage protocol is 38. The Linux provider owns fixed, removable, optical, image and RAM backing instances; WORK and SOUND remain explicit exports. | Full performance acceptance and CD-R media qualification; physical ISO9660 DVD-R passed. |
+| RAM storage | Configured Linux tmpfs has explicit limits and source identity independent of its current mount. Native scoped brokers preserve rights across remounts. | Additional configured RAM volumes need physical lifecycle qualification. |
+| Namespace | Canonical volume snapshots update native process assigns; exact incarnation checks prevent old grants from targeting replacement mounts. Ordered traversal confines rooted grants. Persistent USB identity reservations kept three `/usbN` paths fixed across DE25 stop/restart, storage-interface unbind/rebind, and literal hub cable unplug/replug. | CD-R insertion/removal remains unqualified. |
+| File objects | Stable volume/node identities, retained objects/cwd, shared descriptions/offsets, fork/exec inheritance and ordered symlink behavior pass current correctness gates. Exact catalog incarnation checks map failed sharing of a retired CWD mount to `LOST`; POSIX reports `ESTALE` with a clear shared-libc message. The coherent guest UI gate and private/live DE25 removal gates passed. | Physical CD-R replacement and final performance acceptance remain. |
+| Devices and mounts | Linux discovery subscribes before scanning; the provider implements device/source/mount identity, supported-media policy, safe unmount/eject, ISO admission and canonical notifications. Disposable USB FAT32/exFAT/UDF partitions passed native mount and access gates with stable paths across restart; Pioneer UDF DVD and physical ISO9660 DVD-R passed native access and Atlas gates. | Physical CD-R qualification. |
 
 Implementation anchors are [supervisor bootstrap](../sw/userspace/supervisor/src/volume.c),
-[storage service](../sw/userspace/services/storage/main.c),
+[Linux storage provider](../fpga/de25/linux/astra_storage_provider.c),
+[device discovery](../fpga/de25/linux/astra_storage_discovery.c),
 [HostFS service](../sw/userspace/services/hostfs/main.c),
 [host backend](../sw/userspace/vfs/src/backends/host.c), and
-[host protocol](../sw/include/astra/host.h). The existing host protocol names two
-fixed exports; it is not a general device or mount inventory. Input hotplug does
-not establish storage hotplug. The current gaps are also recorded in
+[host protocol](../sw/include/astra/host.h). The native
+[volume contract](../sw/include/astra/volume_abi.h) supplies general device,
+source and mount inventory; WORK and SOUND remain explicit exports. Image
+qualification does not establish physical storage hotplug. Current gaps are recorded in
 [Current state](CURRENT_STATE.md).
 
 The filesystem review identified client-only grant enforcement, premature inode
@@ -72,11 +112,13 @@ Production qualification requires these user-visible outcomes:
    filesystem, and use it through the desktop, native applications, and POSIX
    tools without application-specific paths or backends.
 3. Two filesystems on one device become two volumes. An unformatted partition
-   remains visible in inventory without being presented as a usable volume.
+   remains visible in inventory and as an `NDOS` desktop source, without being
+   presented as a usable mounted volume.
 4. A supported USB optical drive exposes a data disc at `/cd0` or its next
    available optical name. Read-only status, insertion, removal, and eject are
    visible to clients. Audio-CD playback is a separate media feature.
-5. `/ram` is a bounded, volatile Linux tmpfs volume. `/tmp` uses a separate
+5. `/ram0` is a bounded, volatile Linux tmpfs volume. Additional configured RAM
+   volumes use `/ram1`, `/ram2`, and subsequent ordinals. `/tmp` uses a separate
    bounded tmpfs mount by default in the production profile; persistent temporary
    storage requires an explicit configuration choice.
 6. Removing a drive with live files produces a precise loss/error state. An
@@ -95,15 +137,50 @@ Production qualification requires these user-visible outcomes:
 |---|---|---|
 | Fixed internal SD | Linux ext4 for the selected system partition. | Mount after identity and recovery checks; never select by enumeration order alone. |
 | Additional fixed disk or partition | Linux ext4. | Explicit persistent mount policy or an authorized manual mount. |
-| USB mass storage | ext4, FAT32, and exFAT with drivers included in the release kernel/modules. | Recognized removable data media may mount read-only under Astra policy; writable access requires an explicit policy or mount action. |
+| USB mass storage | ext4, FAT32, and exFAT with drivers included in the release kernel/modules. | Supported data volumes automatically mount writable under the shipped trusted policy; requested writable mounts that fail remain unmounted with a reason. Explicit policy/actions may request read-only access. |
 | USB data CD/DVD | ISO9660 including common extensions, and UDF. | Read-only; publish only after Linux has identified and mounted the inserted medium. |
 | RAM storage | Linux tmpfs. | Explicit byte and inode limits; production RAM storage must not use swap. |
+
+Filesystem support is a per-format capability, not a single "supported" bit:
+detect/inventory, mount read-only, mount read/write, and create/format are
+separately qualified. A format never gains write or format access merely because
+Linux can identify or mount it. Current source mounts ext4, FAT32 and exFAT
+on eligible storage, FAT12/FAT16 read-only on USB, ISO9660/UDF read-only on
+optical or USB media, NTFS read-only on fixed/USB data partitions, and tmpfs for
+RAM. FAT12/FAT16, USB ISO9660, NTFS, FAT32 and exFAT have passed guarded
+physical DE25 trials; FAT32 and exFAT also passed native Disk Setup formatting
+and automatic remount on disposable media. Native MBR initialize, FAT32
+create/format and delete also passed a physical DE25 gate. Physical ISO9660
+data-disc insertion, read, eject and reinsertion passed on DVD-R; CD-R medium
+remains unqualified. A UDF DVD passed physical media change and eject. The
+supported format/transport policy is extended in this order:
+
+| Priority | Formats | Intended capability and qualification |
+|---|---|---|
+| First interoperability | FAT12/FAT16, FAT32, exFAT, ext4, ISO9660/UDF on USB as well as optical media | Detect every partition and mount each eligible filesystem independently. FAT-family and ext4 data partitions gain read/write only after disposable-media write, sync, unplug, and recovery gates. ISO9660/UDF remain read-only on every transport. Format only writable data formats with qualified provider tools. |
+| Next interoperability | NTFS | Detect and inventory first; add read-only mounts before considering writes. NTFS writes require separate feature, recovery, and physical-media gates. |
+| Further evaluation | APFS, HFS+, XFS, Btrfs, Amiga OFS/FFS | Assess actual demand, available trustworthy drivers, metadata semantics, and safe read-only support individually. Unknown or unsupported variants remain visible with an exact reason. No implied write or format promise. |
+| Native format | AstraFS | Remains a deferred design in [AstraFS](ASTRAFS.md); no implementation or disk format exists. Qualify on disposable images before exposing it as a format choice or system-data backend. |
+
+Partition-map support covers MBR and GPT, including several partitions per
+device. A filesystem may also occupy an unpartitioned device. CD/DVD media
+with multiple discoverable data sessions or partitions must expose each
+mountable filesystem as a separate source; media topology must be verified
+against actual drives before claiming general multisession support.
+Haiku's `src/add-ons/kernel/file_systems/fat/kernel_interface.cpp` handles
+FAT12, FAT16 and FAT32 as variants of one FAT implementation, while
+`src/kits/storage/disk_device/DiskDeviceTypes.cpp` retains distinct format
+identities. Astra follows that separation using Linux vfat behind distinct
+native format records, rather than adding three filesystem engines.
+Haiku's `src/add-ons/kernel/file_systems/ntfs/kernel_interface.cpp` mounts a
+hibernated NTFS volume read-only. Astra's initial NTFS policy is read-only for
+all volumes while using Linux ntfs3 as the single provider backend.
 
 The provider contract must also accommodate network filesystems and approved
 host-directory exports without inventing block devices for them. NFS and SMB
 enablement follow this contract when qualified; they are not required to delay
 the first local-storage release. Unknown or disabled formats remain visible in
-inventory and return a useful unsupported-format result.
+inventory and return a precise no-filesystem or unsupported-format result.
 
 Astra's synthetic process, event, metric, and service-control trees continue to
 describe Astra objects through the native VFS contract. They are not Linux
@@ -111,9 +188,9 @@ describe Astra objects through the native VFS contract. They are not Linux
 Astra namespace.
 
 Building AstraFS, maintaining guest filesystem-format engines, alternate boot
-selection, audio-CD playback, a general raw-device interface for every peripheral,
-and destructive partition/format tools are outside the first release. The mount
-control contract must support adding authorized maintenance operations later.
+selection, audio-CD playback, and a general raw-device interface for every
+peripheral are outside the first release. Native Disk Setup provides the
+authorized partition/format operations specified in FS41.
 
 ## Ownership and integration
 
@@ -143,6 +220,14 @@ namespace views must pass the Phase 1 prototype before the guest engines are
 removed. A separate Linux service is introduced only if required privilege or
 lifecycle isolation cannot be achieved in the existing provider.
 
+The current qualified runtime keeps QEMU unprivileged, with no capabilities
+and NoNewPrivs set. Dynamic source probing, mount/unmount, and optical eject
+require a confined privileged Linux control component. The production volumes
+design records this concrete isolation need: that component owns actual
+source/mount state, while QEMU retains its canonical scoped file-I/O path in
+the same runtime-private mount namespace. Applications still use only the
+versioned native contract; QEMU does not gain mount or raw-device privilege.
+
 ## Devices partitions volumes and identities
 
 FS01. Inventory separates a physical device, inserted medium, partition,
@@ -155,18 +240,33 @@ Axiom's boot device registry or granting an MMIO lease for each Linux disk.
 FS02. Preserve the planned names: internal storage starts at `/dev/disk0`, with
 partitions numbered from one such as `/dev/disk0p1`. Filesystems on unpartitioned
 media associate directly with the device. Volume conveniences include `/dh0`,
-`/dh1`, `/usb0`, `/cd0`, and `/ram`; `/df0` is reserved for an enabled floppy
+`/dh1`, `/usb0`, `/cd0`, and `/ram0`, with subsequent ordinals for each class;
+`/df0` is reserved for an enabled floppy
 provider. Ordinals count volumes of that class, not physical devices. Linux
 paths such as `/dev/sda` remain provider details.
 `/dev` is a rights-checked adapter over the same native storage/device objects.
 Publish only endpoints with defined device-file operations; inventory visibility
 alone does not grant raw access or manufacture nodes for unrelated peripherals.
 
-FS03. Device and automatically assigned removable-volume names are not recycled
-within an Astra boot. A reinserted medium obtains a new mount generation and
-next available automatic name. Persistently configured mountpoints may be
-rebound only through an explicit mount transaction after old bindings are
-withdrawn; retained handles still refer to the old generation.
+FS03. Device identities and mounted-instance IDs are never recycled within a
+provider epoch. Automatic volume names identify active namespace slots, not
+mounted-instance identity. Physical USB partitions with a durable device and
+partition key keep their assigned `/usbN` across reboot and reattachment;
+persisted assignments reserve their names while the drive is absent. A name
+may be rebound to that same key only after the previous Linux mount, worker
+and retained cleanup resources have actually retired; lost or cleanup-pending
+instances still reserve their names. A reinserted medium obtains a fresh
+mounted-instance ID. Sources without a durable identity receive temporary
+slots outside persisted reservations and must not claim stable paths. Other
+classes use the lowest available name for their class.
+The Linux discovery adapter uses USB serial plus partition number as durable
+key, falling back to partition UUID when serial is absent. A root-owned,
+checksummed state map commits each reservation before mount publication;
+invalid state fences USB admission instead of changing existing assignments.
+Persistently configured mountpoints may be rebound only through an explicit
+mount transaction after old bindings are withdrawn. Retained files, directories,
+roots and cwd remain tied to their exact epoch/ID/generation and never resolve
+to replacement media through a reused name.
 
 FS04. Stable policy selection uses verified filesystem UUID plus device and
 partition identity where needed. Formats without a sufficiently unique UUID
@@ -217,9 +317,15 @@ FS11. Linux is the sole writable filesystem owner. Release launchers and tools
 must not export the same live filesystem to a guest raw writer or open a second
 writable image mount. QEMU image-based qualification uses a Linux-mounted image
 or equivalent Linux filesystem provider, not the retired guest engine. QEMU
-gates on `beast` run the provider as root through a narrow sudo wrapper, so the
-gates exercise real Linux mounts, the same posture as the board, where
-`astra.service` runs QEMU as root.
+gates on `beast` run QEMU itself as the unprivileged caller -- never as root
+-- through a drop-privilege helper (`tools/astra-qemu-root`): root acts
+only inside its own `/var/tmp` directory (the image copy, the loop mount
+and its removal), the caller's image is read and written back with the
+caller's credentials, and the helper `setpriv`-drops to the caller before
+QEMU ever executes, so QEMU opens every file, including its own
+`-bios`/`-drive`/`-qmp` paths, with the caller's own permissions. The
+gates exercise a real Linux mount without widening what sudo access on
+`beast` can reach.
 
 ## Namespace grants and path behavior
 
@@ -229,12 +335,12 @@ including native directory-relative operations and POSIX `dirfd`/`openat`.
 Ordinary create/unlink/rename directly under `/` returns read-only. A separate
 authorized namespace operation publishes or removes bindings.
 
-FS13. `/system` is a directory binding to the selected system volume. `/home`,
-`/apps`, `/commands`, `/libs`, `/local`, `/config`, `/cwd`, and `/work` may be
-independently scoped directory bindings. Their own rights remain meaningful,
-and `lstat` reports directories rather than invented symlinks. A genuine symlink
-reports its stored target and actually traverses it under the namespace's
-authority rules. This deliberately replaces the current display-only root links.
+FS13. `/system` is a protected namespace alias for `/dh0` and exposes link
+metadata and its target. Independently granted roots such as `/home`, `/apps`,
+`/commands`, `/libs`, `/local`, `/config`, `/cwd`, and `/work` report directories
+and retain their own rights. Their backing location does not make them aliases.
+Explicit namespace aliases and filesystem symlinks report their targets and
+traverse them under the caller's authority rules.
 
 FS14. Astra defines the namespace view and provider routing; Linux performs
 storage pathname resolution and object operations within a confined view.
@@ -252,14 +358,22 @@ cannot escape the grant. A shared transport capability alone grants no volume
 or mutation authority. Mount/administer and raw maintenance rights are separate
 from ordinary file read/write rights; delegation cannot increase them.
 
-Enforcement runs in the guest HostFS service: every request carries a
-kernel-stamped sender owner, never a client-supplied one, and the service
-checks it against the grant before acting. On the Linux side, each rooted
-session is confined with `openat2` `RESOLVE_BENEATH`, so a confined session
-cannot resolve outside its root through `..` or a symlink target. QEMU never
-trusts a client-supplied owner field; the owner the provider acts on is the
-one the kernel stamped at submission or channel-open time, not one read from
-the wire command.
+Enforcement is split between an authority and a boundary, and neither is a
+server on the data path. HostFS is the authority: it alone holds the host
+device's scope right, opens a rooted provider session per grant and mints
+that grant's *scope*, a kernel object naming the session and its rights.
+A client receives the scope when it says HELLO on the grant's port; the
+kernel stamps the scope's session, rights and creator into every channel
+the client binds to it, and never a client-supplied owner. QEMU is the
+boundary: on a bound channel it runs only filesystem commands, resolves
+every path beneath the session's root with `openat2` `RESOLVE_BENEATH`,
+refuses mutations through a read-only scope and handles from another
+session, and accepts a scope only if the claimed filesystem owner created
+it. A scope travels further only when its grant is delegable, and a holder
+can narrow a grant only through HostFS (`GRANT_DERIVE`); a port derived
+from a non-delegable grant arrives without TRANSFER and cannot be moved on,
+and every derived grant ends with the session that derived it. Revocation goes
+through the kernel, which detaches the scope from every channel at once.
 
 FS16. Namespace changes are atomic publications tied to a sequence and object
 generation. Public mount names and metadata form a live catalog visible to every
@@ -377,10 +491,16 @@ Other media classes may support safe removal without a physical eject operation.
 Data volumes may be removed independently; ordinary runtime removal of the
 selected system volume is refused.
 
-FS31. Automatic removable mounting follows an explicit filesystem allowlist and
-read-only default. Writable defaults require trusted persisted policy. Inventory
-never formats or repairs media automatically. Mounts use restrictions suitable
-for data media, and labels cannot supply executable paths or shell commands.
+FS31. Automatic removable mounting follows an explicit filesystem allowlist.
+The shipped trusted persisted policy mounts supported ext4, FAT32, and exFAT
+USB data volumes writable, as requested on 2026-10-12. Optical data volumes are
+read-only; FAT12/FAT16, NTFS and recognized ISO9660/UDF data volumes on USB are
+read-only until separate write gates qualify a writable variant.
+Configured rules and explicit mount actions may request read-only USB access.
+A requested writable mount that fails remains unmounted with a useful
+reason instead of silently changing mode. Inventory never formats or repairs
+media automatically. Mounts use restrictions suitable for data media, and labels
+cannot supply executable paths or shell commands.
 
 ## Durability shutdown and provider failure
 
@@ -415,7 +535,8 @@ failure state rather than silently selecting another disk.
 
 ## RAM capacity and resource policy
 
-FS36. `/ram` and default volatile `/tmp` are Linux tmpfs mounts with explicit
+FS36. `/ram0`, additional configured numbered RAM volumes, and default volatile
+`/tmp` are Linux tmpfs mounts with explicit
 byte and inode limits, no swap use, and inspectable usage. Configuration is
 charged against host memory remaining after the reserved guest and other
 platform commitments. Missing/invalid limits refuse the mount; a required mount
@@ -452,11 +573,56 @@ Linux tool command lines, and raw transport details do not appear in ordinary
 user flows. Existing native apps, Vim, Lua, zsh, and shipped game ports require
 no filesystem-specific workaround.
 
-FS41. Later formatting, repair, and partition-edit operations require typed
-native administration requests naming an exact device/partition identity and
-generation. The provider checks in-use state and neighboring partition bounds;
-it never executes a shell command assembled from an application pathname. These
-operations require separate destructive-operation gates before being enabled.
+For mounted volumes, use the nonempty label or uppercase canonical fallback (`DH0`, `USB0`,
+`CD0`, `RAM0`). Duplicate labels remain separate generation-safe mount objects.
+Double-click opens Atlas at the selected volume's canonical root through the
+existing native launcher argument contract; labels are not launch paths.
+Successful unmount and media loss remove the icon; failed/busy unmount preserves
+it. A present, unformatted partition or source with no recognized filesystem
+appears as `NDOS`, including each such partition of a multi-partition disk.
+`NDOS` is a display label for an exact source or empty medium, never a fake
+mount or filesystem name. Double-click reports that Astra cannot open it because
+no supported filesystem was found, without launching Atlas or guessing that
+the media are safe to erase. A recognized but unsupported format reports its
+detected type and the unavailable capability; it is not described as blank
+media. Probe I/O errors and ambiguous signatures report their own failure,
+not `NDOS`. Empty optical drives remain in device inventory
+without a desktop volume icon. Atlas and the desktop
+consume the same live native catalog as filesystem tools. Initial Atlas shows
+the selected root's real files and folders as named icons, with scrolling and
+truthful loading/empty/error/loss states. Subdirectory navigation, file actions,
+sidebar/toolbar, and Atlas mount-management UI are deferred. The production
+volumes design records this minimum viewer scope; Atlas is not assumed to be an
+already implemented application.
+
+FS41. Selecting a physical disk or partition exposes `Disk > Format...` in the
+desktop menu bar. It launches the native Disk Setup application with the exact
+selected reference; it does not format from the desktop. Disk Setup shows the
+device, all its partitions, filesystem/partition-map identity, capacity,
+read-only state and mounted/busy state. It supports partition-map creation and
+partition create/delete before filesystem formatting, without assuming one
+volume per USB device or optical medium. Format choices are limited to
+qualified writable formats; AstraFS stays unavailable until its implementation
+and safety gates pass. Each recognized, mountable partition
+has its own catalog source and mount; read-only filesystems on USB are mounted
+read-only rather than hidden merely because their transport is USB. Optical
+media cannot be formatted through this path.
+
+Formatting and partition edits require typed native administration requests
+naming an exact device or partition identity and generation. The provider
+validates current identity, partition bounds, sibling mounts and users, system
+disk protection, write permission and format options immediately before the
+mutation. Disk Setup shows the exact target and data-loss consequence, then
+requires explicit confirmation; cancellation writes nothing. No application
+supplies a Linux path, assembles a host shell command, or bypasses native
+safe-removal/accounting. A completed change triggers fresh discovery/probe and
+catalog publication; a partial failure remains visible and cannot be reported
+as success. Destructive operations need separate disposable-media and physical
+gates before production enablement. Haiku's
+`src/apps/drivesetup/MainWindow.cpp` separates disk and partition actions,
+disables unsafe operations on mounted/read-only targets and validates before
+commit; Astra adapts those checks to exact native references and its one
+provider-owned lifecycle.
 
 ## Protocol and migration requirements
 
@@ -476,9 +642,11 @@ not introduce filesystem records by repurposing unrelated private fields.
 
 FS44. Existing ordinary and accelerated requests converge on the same trusted
 validation and Linux implementation. Accelerators carry scoped authority and
-generations; the current broad host-device handoff and hardcoded WORK path
-cannot survive as a grant bypass. Keep acceleration only where measurements
-justify it, with behavioral parity tests.
+generations. The broad host-device handoff was removed at storage protocol
+27. Protocol 28 hands a client a kernel-bound filesystem scope instead, which
+reaches only that scope's session; the device itself must not return as a
+grant bypass. Keep acceleration only where measurements justify it, with
+behavioral parity tests.
 
 FS45. Cut over the selected system volume, bootstrap loader, existing HostFS
 exports, RAM storage, and application bindings. Preserve existing files and
@@ -503,10 +671,13 @@ engine or automatic fallback remains in the release image.
 | 3 | Dynamic device/partition inventory and additional fixed/USB mounts. | Multiple devices/partitions, UUID conflicts, unsupported/unformatted media, mount rollback, busy unmount, real DE25 USB lifecycle. |
 | 4 | Optical media and desktop mount experience. | ISO9660/UDF data discs, media changes, busy eject, forced removal, notifications/rescan, DE25 optical drive evidence. |
 | 5 | Production cutover and removal of obsolete engines. | Exact-source release build, sustained load and fault gates, retained evidence, documentation/ABI reconciliation, old engines absent. |
+| 6 | First interoperability expansion, NDOS presentation and native Disk Setup. | FAT12/FAT16 and ISO9660/UDF on USB, multi-partition USB and optical fixtures, blank media, distinct probe faults, exact-reference menu handoff, system/read-only/busy refusals, canceled and failed format/partition edits leave data unchanged, successful edits rescan and publish correct mounts, physical read/write/recovery gates per writable format. |
+| 7 | Additional formats as individually qualified. | NTFS read-only and any later APFS/HFS+/XFS/Btrfs/Amiga support have their own format-specific semantic, failure, and physical-media evidence; unsupported variants keep clear inventory and open errors. |
 
-Network filesystem and destructive maintenance features enter this same
-contract after separate feature qualification. A phase cannot claim the whole
-PRD complete while its later required local-media gates remain outstanding.
+Network filesystem mounts remain outside this local-media contract. Destructive
+maintenance features enter only after their separate qualification. A phase
+cannot claim the whole PRD complete while its later required local-media gates
+remain outstanding.
 
 ## Storage inventory hotplug and mount control implementation plan
 
@@ -631,7 +802,7 @@ Serialize conflicting operations by source/mount while keeping unrelated
 inventory and volumes responsive. Cancellation that wins before publication
 requires rollback when late Linux work retires.
 
-Read-only automatic mounting must not secretly authorize recovery writes.
+A read-only mount request must not secretly authorize recovery writes.
 Linux ext4 can replay its journal even with `ro`; use a non-writing policy where
 consistent, otherwise refuse the mount with recovery-required status. Do not
 publish a dirty filesystem as healthy merely by skipping required replay.
@@ -670,7 +841,8 @@ process, a shell, and the desktop before attaching/mounting media. Each must
 observe `/usb0` through fresh root enumeration and queries, and eligible
 processes must open it without restarting. Include a command whose first
 filesystem call occurs after publication, missed notifications, fork/exec,
-unmount, and reinsertion under a different automatic name. The old cwd and open
+unmount, reinsertion under the same stable USB name after cleanup, and a second
+device with a different identity. The old cwd and open
 descriptions must never change identity during these tests.
 
 ### Hotplug and policy execution
@@ -691,17 +863,20 @@ receive errors/overflow and provider restart trigger an authoritative rescan.
 
 On attach, publish inventory first, finish generation-checked probing, then
 evaluate `/system/config/mounts.conf`. Reserve `/dh0` from the verified boot
-handoff, apply exact configured identity matches, and allocate monotonically
-increasing names for eligible removable volumes. Duplicate UUIDs, overlapping
+handoff, apply exact configured identity matches, and allocate the lowest free
+numbered name for eligible removable volumes. Duplicate UUIDs, overlapping
 rules, unsupported formats, or ambiguous media remain unmounted with a reason.
-The default removable rule is read-only data mounting from the allowlist;
-writable behavior requires explicit trusted policy.
+The shipped trusted removable rule mounts supported USB data volumes writable
+from the allowlist. Optical mounts and explicitly read-only rules remain
+read-only. A writable mount refusal leaves the source unmounted and inspectable;
+an explicit read-only request is a separate operation.
 
 On remove, mark the medium and dependent mount generations lost before accepting
 further requests, withdraw bindings, notify sessions, and retire work through
 the shared cancellation/lifetime machinery. Keep tombstones only as needed for
 stale-token refusal and diagnosis; reclaim detailed records under the resource
-budget without recycling names in the current boot.
+budget. Release a name only after its previous mount and all retained Linux
+resources have retired; object identities never recycle within an epoch.
 
 Qualify actual optical media-change notifications independently of drive attach.
 If the shipped drive/kernel does not reliably emit them, use bounded Linux-side
@@ -755,7 +930,7 @@ reconciliation share the shutdown implementation.
 | S2 Native catalog and tools | Supervisor authority, live namespace sessions, query/subscription operations, `lsblk`/`blkid`, and public/private visibility. | Existing processes and late first filesystem initialization see catalog updates; unauthorized queries/data access cannot escape their scope. |
 | S3 Manual mount | Typed mount request, name reservation, Linux mount object, rooted grants, atomic publication, and operation status/cancel. Requires Phase 2 ownership and sessions. | Mount a second disposable Linux-backed volume beside `/dh0`; failure/cancel at each transaction step leaves no usable half-mount or leaked Linux object. |
 | S4 Unmount and safe removal | Canonical busy-owner accounting, quiescence, sync, actual unmount, whole-device dependency checks, and shutdown integration. | Two mounted partitions, held cwd/files, stalled I/O, failed sync/unmount, cancel races, and surprise removal; no false safe-remove success. |
-| S5 Policy and USB hotplug | Load persisted rules, automatic read-only publication, non-reused names, overflow/rescan recovery, and current-session updates. Completes Phase 3. | Two real USB devices, multiple partitions, duplicate UUIDs, unplug/reinsert, missed events, and native/POSIX use without restarting clients on DE25. |
+| S5 Policy and USB hotplug | Load persisted rules, writable USB automount default, explicit read-only rules, names reserved through actual retirement, overflow/rescan recovery, and current-session updates. Completes Phase 3. | Two real USB devices, multiple partitions, duplicate UUIDs, unplug/reinsert, missed events, writable refusal, and native/POSIX use without restarting clients on DE25. |
 | S6 Optical and desktop controls | Drive/media separation, ISO9660/UDF mounting, eject, volume UI, progress, and owner/error presentation. Completes Phase 4. | Physical optical drive: insert, replace disc, busy eject, failed eject, and detach while mounted; pre-existing apps observe every transition. |
 | S7 Release reconciliation | Launcher/kernel/dependency packaging, restart recovery, budgets, documentation, and final legacy-engine removal. Completes Phase 5. | Exact-source QEMU and DE25 stress/fault/semantic gates under input, graphics, and audio load. |
 
@@ -773,10 +948,11 @@ by DE25 qualification through Beast. Test native calls first and the POSIX
 adapter over those same operations. Each acceptance family includes success,
 refusal, resource exhaustion, and cleanup where applicable.
 
-QEMU gates run the Linux filesystem provider as root on Beast through a
-narrow sudo wrapper rather than an unprivileged stand-in, matching
-`astra.service`'s own root QEMU on the board (FS11). A gate that passes under
-this posture has exercised a real Linux mount.
+QEMU gates run QEMU itself as the unprivileged caller on Beast, never as
+root, through a drop-privilege helper (`tools/astra-qemu-root`) whose root
+actions stay inside its own `/var/tmp` directory; QEMU `setpriv`-drops to
+the caller before it ever executes (FS11). A gate that passes under this posture has exercised a
+real Linux mount.
 
 | Acceptance family | Required evidence |
 |---|---|

@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include <astra/draw_list.h>
+#include <astra/afnt.h>
 #include <astra/render_batch.h>
 
 #define ASTRA_RENDER_BUILDER_BYTES ASTRA_RENDER_BATCH_BUFFER_BYTES
@@ -35,6 +36,11 @@ typedef enum AstraRenderReplayResult {
 
 typedef struct AstraRenderBuilder AstraRenderBuilder;
 
+/* Borrowed validated AFNT. Keep source bytes mapped while drawing. */
+typedef struct AstraRenderFont {
+    AstraAfntView view;
+} AstraRenderFont;
+
 /* Maps a draw-list source surface id to a descriptor in the current batch,
    or returns zero to reject it. Called once per BLIT; must not cache
    descriptors, because a full batch rolls its data back. */
@@ -42,6 +48,9 @@ typedef struct AstraRenderSourceResolver {
     uint32_t (*resolve)(void *context, AstraRenderBuilder *builder,
                         uint32_t surface_id);
     void *context;
+    /* Borrow a validated installed face for this command's replay only. */
+    const AstraRenderFont *(*resolve_font)(void *context, const char *id,
+                                           uint32_t id_length);
 } AstraRenderSourceResolver;
 
 struct AstraRenderBuilder {
@@ -55,10 +64,15 @@ struct AstraRenderBuilder {
     uint32_t scene_layer_count;
     uint32_t scene_output_capacity;
     uint32_t failed; /* AstraRenderBuilderFailure */
+    const AstraRenderFont *ui_font;
 };
 
+int astra_render_font_init(AstraRenderFont *font, const void *bytes,
+                           uint32_t length);
 int astra_render_builder_init(AstraRenderBuilder *builder, void *storage,
                               uint32_t bytes, uint32_t generation);
+int astra_render_builder_use_font(AstraRenderBuilder *builder,
+                                  const AstraRenderFont *font);
 uint32_t astra_render_builder_frame(const AstraRenderBuilder *builder);
 int astra_render_builder_window_scene(AstraRenderBuilder *builder,
                                       uint32_t output_offset,
@@ -83,6 +97,12 @@ uint32_t astra_render_builder_surface_format_at(
     AstraRenderBuilder *builder, uint32_t data_offset,
     uint32_t data_capacity, uint16_t width, uint16_t height, uint32_t pitch,
     uint8_t format, uint8_t access);
+/* INDEX8 source with a separate, 64-byte-aligned 256-entry ARGB palette in
+   Media RAM. The palette must not overlap the pixel range. */
+uint32_t astra_render_builder_surface_index8_at(
+    AstraRenderBuilder *builder, uint32_t data_offset,
+    uint32_t data_capacity, uint16_t width, uint16_t height, uint32_t pitch,
+    uint32_t palette_offset, uint8_t access);
 /* Row bytes for width pixels of format, or zero for an unknown format. */
 uint32_t astra_render_format_row_bytes(uint8_t format, uint32_t width);
 /* Rows of source pixels copied into the batch; returns a READ descriptor. */
@@ -112,6 +132,12 @@ uint32_t astra_render_builder_upload_rgb565(AstraRenderBuilder *builder,
                                              const void *pixels,
                                              uint32_t source_pitch,
                                              uint16_t width, uint16_t height);
+/* Upload indices with 256 ARGB palette entries; Astraea expands on blit. */
+uint32_t astra_render_builder_upload_index8(AstraRenderBuilder *builder,
+                                             const void *pixels,
+                                             uint32_t source_pitch,
+                                             uint16_t width, uint16_t height,
+                                             const uint32_t *palette_argb);
 int astra_render_builder_fill(AstraRenderBuilder *builder,
                               uint32_t destination, int32_t x, int32_t y,
                               uint32_t width, uint32_t height,
@@ -120,6 +146,20 @@ int astra_render_builder_rounded(AstraRenderBuilder *builder,
                                  uint32_t destination, int32_t x, int32_t y,
                                  uint32_t width, uint32_t height,
                                  uint16_t radius, uint16_t color);
+/* Measure with the same face, strike, style and fallback as text rendering. */
+int astra_render_builder_text_measure(const AstraRenderBuilder *builder,
+    const char *utf8, uint32_t length, uint16_t pixel_height,
+    uint32_t style_flags, uint64_t maximum_advance,
+    uint64_t *advance, uint32_t *fitted_bytes, uint32_t *line_height);
+uint32_t astra_render_builder_text_width(const AstraRenderBuilder *builder,
+                                          const char *utf8, uint32_t length,
+                                          uint16_t pixel_height,
+                                          uint32_t style_flags);
+uint32_t astra_render_builder_text_fit(const AstraRenderBuilder *builder,
+                                        const char *utf8, uint32_t length,
+                                        uint16_t pixel_height,
+                                        uint32_t maximum_width,
+                                        uint32_t style_flags);
 int astra_render_builder_text(AstraRenderBuilder *builder,
                               uint32_t destination, int32_t x, int32_t y,
                               const char *utf8, uint32_t length,
@@ -145,6 +185,10 @@ int astra_render_builder_replay_range(
 int astra_render_builder_replay(AstraRenderBuilder *builder,
                                 uint32_t destination,
                                 const AstraDrawListHeader *draw_list);
+int astra_render_builder_replay_resolved(
+    AstraRenderBuilder *builder, uint32_t destination,
+    const AstraDrawListHeader *draw_list,
+    const AstraRenderSourceResolver *resolver);
 int astra_render_builder_blit(AstraRenderBuilder *builder,
                               uint32_t destination, uint32_t source,
                               int32_t x, int32_t y, uint16_t width,

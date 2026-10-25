@@ -18,9 +18,9 @@
  * command, a log drain, and a test harness are all just readers walking this
  * registry. None of them is a special case wired into the modules themselves.
  *
- * Registration happens once during module initialisation and is never undone:
- * a group's storage must outlive the process, which in practice means static
- * storage.  The registry itself grows with the process heap, so observability
+ * Registered storage remains owned by its module until exact unregistration.
+ * Readers borrow registry entries only during a serialized sample. The registry
+ * itself grows with the process heap, so observability
  * does not impose a second module-count quota.
  */
 
@@ -80,6 +80,8 @@ typedef enum AstraMetricStatus {
 AstraMetricStatus astra_metric_register(const char *name,
                                         AstraMetricSampler sample,
                                         void *context);
+/* Remove only this exact registration, before releasing its borrowed storage. */
+int astra_metric_unregister(const char *name, AstraMetricSampler sample, void *context);
 uint32_t astra_metric_group_count(void);
 const AstraMetricGroup *astra_metric_group(uint32_t index);
 const AstraMetricGroup *astra_metric_find(const char *name);

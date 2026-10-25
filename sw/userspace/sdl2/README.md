@@ -71,9 +71,16 @@ SDL drawing now reaches the FPGA through Astra's managed graphics API; see
 `docs/MANAGED_GRAPHICS.md`.
 
 **Windows.** Every SDL window is an `ASTRA_WINDOW_CONTENT_SURFACE` window,
-and its content is a GPU surface. The window framebuffer path
-(`SDL_GetWindowSurface`) renders into the display's staging area and writes
-the damaged rectangle with one service copy.
+and its content is a GPU surface. `SDL_GetWindowSurface` uses Astra's direct
+framebuffer callback, including after an SDL renderer has been used. RGB565
+remains the default. Set a window's display mode to `SDL_PIXELFORMAT_INDEX8`
+before its first `SDL_GetWindowSurface` to request an indexed surface. Change
+its `SDL_Palette` with `SDL_SetPaletteColors`, then present with
+`SDL_UpdateWindowSurface` or `SDL_UpdateWindowSurfaceRects`. Astra uploads
+indices, sends 256 palette entries as metadata, and asks Astraea to expand
+and blit them into the window content. A palette-only change redraws the
+whole content without reuploading index pixels. Client staging remains in use
+until attachment DMA completes.
 
 **Renderer.** The `astra` render driver (`render/SDL_astrarender.c`) is
 registered ahead of the software renderer. Textures are Media RAM surfaces in
@@ -100,8 +107,12 @@ being distorted; triangles wholly outside the target are culled.
 The driver sets `SDL_HINT_RENDER_LINE_METHOD` to "2" at default priority, so
 SDL does not expand lines into points.
 
-Nothing falls back to MC68040 pixel work. Formats the driver does not list,
-including YUV, are converted by SDL on upload.
+The renderer does not rasterize its own draw commands on MC68040. Its writable
+window framebuffer and texture upload APIs still accept pixels produced by
+clients, and SDL converts unsupported upload formats, including YUV, on CPU.
+Those paths still consume CPU for pixel work. Clients should submit feasible
+drawing through general accelerated SDL operations; retain the writable path
+for work current hardware cannot perform correctly.
 
 **Tests.** Host tests `test_astravideo` and `test_astrarender` cover:
 
@@ -113,11 +124,12 @@ including YUV, are converted by SDL on upload.
 - blend-mode, modulation, and linear-filter routing
 - readback with and without conversion
 - texture locking and ARGB8888 targets
+- INDEX8 window surfaces, palette-only redraws, and direct framebuffer routing
 
 QEMU renders nothing, so the gates check submissions and command counters;
 pixels need the texture-engine RTL and the DE25.
 
-The audio backend runs over `pcm.library.2`. It
+The audio backend runs over `pcm.library.3`. It
 opens the app's native `PCM` capability and opens the device at the app's
 own sample format, channels and rate (the Linux host converts and
 resamples; SDL converts only more than two channels or a rate outside

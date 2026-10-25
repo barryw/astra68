@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <astra/address_space.h>
@@ -26,6 +27,30 @@ static uint8_t provider_record[] = {
 };
 static uint32_t library_mode;
 static uint32_t open_count;
+static uint32_t allocations;
+static uint32_t live_allocations;
+static uint32_t fail_allocation;
+
+void *astra_runtime_allocate(size_t size)
+{
+    void *pointer;
+
+    if (++allocations == fail_allocation)
+        return NULL;
+    pointer = malloc(size);
+    if (pointer != NULL)
+        ++live_allocations;
+    return pointer;
+}
+
+void astra_runtime_deallocate(void *pointer)
+{
+    if (pointer != NULL) {
+        assert(live_allocations != 0u);
+        --live_allocations;
+    }
+    free(pointer);
+}
 
 uint32_t astra_vfs_assign_open(
     const AstraAssignTable *table, const char *path, uint32_t rights,
@@ -151,8 +176,13 @@ int main(void)
     moved = UINT32_MAX;
     assert(astra_vfs_read_source_read_at(
                &source, 0u, ASTRA_MEMORY_PAGE_SIZE, &bytes, &moved) ==
-           ASTRA_VFS_ERR_IO);
-    assert(bytes == NULL && moved == 0u && read_count == 5u);
+           ASTRA_VFS_OK);
+    assert(bytes == read_bytes && moved == ASTRA_MEMORY_PAGE_SIZE - 1u && read_count == 5u);
+
+    read_moved = 0u;
+    assert(astra_vfs_read_source_read_at(
+               &source, 0u, ASTRA_MEMORY_PAGE_SIZE, &bytes, &moved) == ASTRA_VFS_ERR_IO);
+    assert(bytes == NULL && moved == 0u);
 
     assert(astra_vfs_read_source_read_at(
                &source, source.length - 1u, 2u, &bytes, &moved) ==
@@ -233,5 +263,17 @@ int main(void)
                &source, &table, "LIBS", "runtime.library.01", client_for,
                NULL, &reference) == ASTRA_VFS_ERR_INVALID);
     assert(open_count == 0u && reference.size == 0u);
+    assert(live_allocations == 0u);
+    for (uint32_t failure = 1u; failure <= 4u; ++failure) {
+        allocations = 0u;
+        fail_allocation = failure;
+        open_count = 0u;
+        assert(astra_vfs_library_source_open(
+                   &source, &table, "LIBS", "runtime.library.1", client_for,
+                   NULL, &reference) == ASTRA_VFS_ERR_LIMIT);
+        assert(source.file == ASTRA_VFS_FILE_INVALID && reference.size == 0u);
+        assert(live_allocations == 0u);
+    }
+    fail_allocation = 0u;
     return 0;
 }

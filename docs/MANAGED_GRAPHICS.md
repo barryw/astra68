@@ -26,7 +26,7 @@ by the blitter.
 GPU objects belong to a window. A window opened with
 `ASTRA_WINDOW_CONTENT_SURFACE` has a GPU content surface in Media RAM instead
 of an RGB565 area to copy. Its control port is the session: graphics commands
-(`ASTRA_GUI_GRAPHICS_COMMAND`, GUI protocol 15) travel on it. The owner
+(`ASTRA_GUI_GRAPHICS_COMMAND`, GUI protocol 22) travel on it. The owner
 dying closes the port, the service closes the window, and every surface,
 list and staging area the window owned is released
 (`display_window_graphics_close`).
@@ -65,15 +65,15 @@ Media RAM is reused across clients.
 | RGB565 | yes | yes | window content format |
 | XRGB8888 | yes | yes | SDL `RGB888` |
 | ARGB8888 | yes | yes | straight alpha; a new target is transparent black |
-| INDEX8 | yes | INDEX8 targets only | no blending or triangles; a palette path to direct color is not wired |
+| INDEX8 | yes | yes, with attached palette | INDEX8 targets take no blending or triangles; direct-color targets can sample, blend, and texture indexed sources |
 
 `ASTRA_SURFACE_CPU_WRITE` surfaces are written in either of two ways:
 
 - `astra_surface_write(display, surface, rect, pixels, pitch)` packs the rows
   into the display's staging area, then calls the next function.
 - `astra_surface_write_staged(surface, rect, offset, pitch)` uploads rows
-  straight from staging. A caller that renders directly into staging, as
-  SDL's window framebuffer does, skips the NDK copy.
+  straight from staging. A caller that produces indices or pixels directly in
+  staging, as SDL's window framebuffer does, skips the NDK copy.
 
 The service splits any write larger than one batch into bands.
 
@@ -92,8 +92,9 @@ nothing is pinned or copied for the reserved pixels.
 
 Measured on beast (`emu/qemu/bench-frame.py --fake-helper`, SDLFrameBench,
 640x480 ARGB8888 streaming): 519 fps with the service copy, 720 without it.
-`astra_surface_write` still copies the caller's pixels into staging once on
-the MC68040; only a kernel loan of the caller's own pages would remove it.
+`astra_surface_write` stages caller rows with the machine copy engine. Client
+staging remains reserved until attachment DMA completes, so a caller can
+reuse it when the write or posted list is returned.
 
 `ASTRA_SURFACE_CPU_READ` surfaces, and every window content surface, are
 read back with `astra_surface_read(display, surface, rect, pixels, pitch)`.
@@ -110,10 +111,10 @@ arena, returns zero rows.
 
 `ASTRA_SURFACE_SCANOUT` returns `UNSUPPORTED`.
 
-## 4. Draw lists (ADLT v1.7)
+## 4. Draw lists (ADLT v1.8)
 
 The retained window list and the session draw list share one wire format and
-one lowering (`astra_render_builder_replay`). ADLT v1.7 replaces v1.6; every
+one lowering (`astra_render_builder_replay`). ADLT v1.8 replaces v1.7; every
 in-tree writer and reader moves together.
 
 - The header records `total_bytes` (16 KiB for retained window lists, up to
@@ -132,9 +133,15 @@ in-tree writer and reader moves together.
   - `payload_offset` and `payload_bytes`
   - `font_height` and `radius`
   - a per-command clip in destination pixels
-- The operations are FILL, FILL_ROUNDED, TEXT, MONO_TEXT, LINE, BLIT,
+- The operations are FILL, FILL_ROUNDED, TEXT, MONO_TEXT, NAMED_TEXT, LINE, BLIT,
   TRIANGLES, FILL_RECTS, LINES, TARGET, and UPLOAD. COPY is removed: it is a BLIT
   whose source is the destination.
+- NAMED_TEXT (12, v1.8) carries a counted installed face ID in `source` bytes
+  at the start of its payload, followed by UTF-8 text. Display resolves the
+  validated AFNT through its `FONTS_RENDER` capability and requires the exact
+  strike height. Ordinary applications use `astra_draw_font_text` and the
+  read-only Fonts catalog; they receive no raw-font capability. Astraea draws
+  the glyph mask.
 - TARGET (10, v1.6) makes surface `source` (never 0) the destination of the
   commands after it; `width` and `height` are that surface's and its clip
   is all of it. So one session list carries a frame for several surfaces
@@ -207,8 +214,8 @@ in-tree writer and reader moves together.
   - TRIANGLES commands are split at 4096 triangles. Every vertex is copied
     once out of the client's list and validated on that copy: coordinates
     within +-32768 pixels, no texel coordinates when untextured.
-  - Triangles reject INDEX8 destinations and sources, and a source that is
-    the destination. Glyph runs reject ARGB8888 destinations.
+  - Triangles reject INDEX8 destinations and unpaletted INDEX8 sources, and a
+    source that is the destination. Glyph runs reject ARGB8888 destinations.
 
 ## 5. Submission and batching
 

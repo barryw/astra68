@@ -17,7 +17,11 @@ typedef struct AstraVfsHostLane {
     uint32_t channel_address;
     uint32_t producer_position;
     uint8_t active;
-    uint8_t reserved[3];
+    uint8_t scope_count;
+    uint8_t reserved[2];
+    /* The scope handles this lane's channel was opened on or has attached
+     * (ASTRA_SYSCALL_HOST_SCOPE_ATTACH). */
+    uint32_t scopes[ASTRA_HOST_CHANNEL_SCOPE_MAX];
 } AstraVfsHostLane;
 
 struct AstraVfsHostTransport {
@@ -41,17 +45,27 @@ typedef struct AstraVfsHostTransfer {
     uint32_t output_capacity;
 } AstraVfsHostTransfer;
 
+uint32_t astra_vfs_host_status_from_syscall(uint32_t status);
+
 int astra_vfs_host_transport_init(AstraVfsHostTransport *transport,
                                   uint32_t device,
                                   AstraVfsStateAcquire acquire,
                                   AstraVfsStateRelease release,
                                   void *lock_context);
 void astra_vfs_host_transport_destroy(AstraVfsHostTransport *transport);
+/* Largest payload that fits one command and page-rounded DMA in this lease. */
+uint32_t astra_vfs_host_transport_payload_limit(const AstraVfsHostTransport *transport);
 void astra_vfs_host_transport_after_fork(AstraVfsHostTransport *transport);
+/* A client closed `scope`: every lane forgets it, so a reused handle number
+ * is attached again rather than trusted as the old scope's binding. */
+void astra_vfs_host_transport_forget_scope(AstraVfsHostTransport *transport,
+                                           uint32_t scope);
 uint32_t astra_vfs_host_transport_execute(
     void *context, AstraHostCommand *command, const void *input,
     uint32_t input_size, void *output, uint32_t output_capacity);
-uint32_t astra_vfs_host_transport_begin(void *context,
+/* `scope` names the filesystem scope the command goes through, attached to
+ * this thread's lane on first use; 0 means the transport's own handle. */
+uint32_t astra_vfs_host_transport_begin(void *context, uint32_t scope,
                                         uint32_t data_capacity,
                                         AstraVfsHostRequest *request)
     __attribute__((noinline));

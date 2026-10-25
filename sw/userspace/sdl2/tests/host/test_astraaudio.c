@@ -286,7 +286,7 @@ int main(void)
     assert(driver.OpenDevice(&device, NULL) == 0);
     assert(device.spec.samples == ASTRA_AUDIO_STREAM_PERIOD_MIN);
     assert(group_period == ASTRA_AUDIO_STREAM_PERIOD_MIN &&
-           group_count == ASTRAAUDIO_BUFFERS &&
+           group_count == 2u &&
            group_format == ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_U8, 1u,
                                             22050u));
     assert(device.hidden->mixbuf == NULL);

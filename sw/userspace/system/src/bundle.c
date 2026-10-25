@@ -80,9 +80,13 @@ static int library_name(const char *text)
 static int relative_path(const char *path)
 {
     uint32_t at = 0u;
+    uint32_t component = 0u;
     if (path[0] == '\0' || path[0] == '/' || path[0] == '.') return 0;
     while (path[at] != '\0') {
+        if (at + 1u >= ASTRA_BUNDLE_PATH_MAX) return 0;
         if (path[at] == ':' || path[at] == '\\') return 0;
+        if (path[at] == '/') component = 0u;
+        else if (++component >= ASTRA_VFS_NAME_MAX) return 0;
         if ((at == 0u || path[at - 1u] == '/') && path[at] == '.' &&
             (path[at + 1u] == '/' || path[at + 1u] == '\0' ||
              (path[at + 1u] == '.' &&
@@ -90,6 +94,16 @@ static int relative_path(const char *path)
         ++at;
     }
     return at < ASTRA_BUNDLE_PATH_MAX;
+}
+
+static int path_field(char **out, const char *text)
+{
+    if (*out != NULL || !relative_path(text)) return 0;
+    size_t length = strlen(text) + 1u;
+    *out = astra_runtime_reallocate(NULL, length);
+    if (*out == NULL) return -1;
+    memcpy(*out, text, length);
+    return 1;
 }
 
 static int library(char **word, AstraBundleLibrary *out)
@@ -153,13 +167,9 @@ static int parse_line(char *line, AstraBundleManifest *manifest)
                manifest->version.minor == 0u && manifest->version.patch == 0u &&
                version(word[1], &manifest->version);
     if (strcmp(word[0], "executable") == 0)
-        return count == 2u && manifest->executable[0] == '\0' &&
-               relative_path(word[1]) &&
-               copy(manifest->executable, sizeof(manifest->executable), word[1]);
+        return count == 2u ? path_field(&manifest->executable, word[1]) : 0;
     if (strcmp(word[0], "icon") == 0)
-        return count == 2u && manifest->icon[0] == '\0' &&
-               relative_path(word[1]) &&
-               copy(manifest->icon, sizeof(manifest->icon), word[1]);
+        return count == 2u ? path_field(&manifest->icon, word[1]) : 0;
     if (strcmp(word[0], "single-instance") == 0) {
         if (count != 1u ||
             (manifest->flags & ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE) != 0u)
@@ -245,7 +255,7 @@ uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
         (manifest->version.major == 0u && manifest->version.minor == 0u &&
          manifest->version.patch == 0u) ||
         (manifest->kind == ASTRA_BUNDLE_APPLICATION &&
-         (manifest->executable[0] == '\0' || manifest->icon[0] == '\0')) ||
+         (manifest->executable == NULL || manifest->icon == NULL)) ||
         (manifest->kind == ASTRA_BUNDLE_KIT && manifest->provide_count == 0u))
     {
         astra_bundle_manifest_destroy(manifest);
@@ -265,6 +275,8 @@ void astra_bundle_manifest_destroy(AstraBundleManifest *manifest)
         return;
     astra_runtime_deallocate(manifest->requirements);
     astra_runtime_deallocate(manifest->provides);
+    astra_runtime_deallocate(manifest->executable);
+    astra_runtime_deallocate(manifest->icon);
     memset(manifest, 0, sizeof(*manifest));
 }
 

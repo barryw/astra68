@@ -17,10 +17,9 @@
  * Shared fonts live on the host and are read there in place; a program's
  * own font is sent, and the host keeps one copy of each.
  *
- * The functions live in pcm.library (the Audio Kit): 2.3 for songs and
- * fonts, 2.4 for the rest. They use the same PCM capability as
- * astra_pcm_open(). Calls on one AstraMidiSynth must be serialized by the
- * caller.
+ * The functions live in pcm.library 3.0 (the Audio Kit). They use the same
+ * PCM capability as astra_pcm_open(). Calls on one AstraMidiSynth must be
+ * serialized by the caller.
  */
 
 #include <astra/attributes.h>
@@ -37,10 +36,12 @@ extern "C" {
 typedef struct AstraMidiSynth {
     /** Private transport to the media service. */
     AstraPcmStream session;
+    /** Private outstanding activity query. */
+    uint32_t activity_pending;
 } AstraMidiSynth;
 
 /** Empty synth initializer. */
-#define ASTRA_MIDI_SYNTH_INIT {ASTRA_PCM_STREAM_INIT}
+#define ASTRA_MIDI_SYNTH_INIT {ASTRA_PCM_STREAM_INIT, 0u}
 
 /** astra_midi_play() count that repeats until stopped. */
 #define ASTRA_MIDI_FOREVER (-1)
@@ -264,10 +265,14 @@ ASTRA_NODISCARD AstraResult astra_midi_gain(AstraMidiSynth *synth,
 ASTRA_NODISCARD AstraResult astra_midi_status(AstraMidiSynth *synth,
                                               AstraMidiStatus *status);
 
-/** Ask whether the synth is still sounding.
+/** Query whether the synth is still sounding without blocking.
+ * The first call submits one query; subsequent calls collect its reply.
+ * Other synth operations complete an outstanding query before proceeding.
  * @param synth Open synth.
- * @param active Receives nonzero while a song plays or a note rings.
- * @return ASTRA_OK on success, otherwise an error.
+ * @param active Receives nonzero while a song plays or a note rings; unchanged
+ * while the query is pending.
+ * @return ASTRA_OK with a reply, ASTRA_ERROR_WOULD_BLOCK while pending, or an
+ * error.
  */
 ASTRA_NODISCARD AstraResult astra_midi_active(AstraMidiSynth *synth,
                                               int *active);

@@ -3,8 +3,9 @@ import importlib.util
 import os
 from pathlib import Path
 import tempfile
+from unittest.mock import patch
 
-from qemu_runtime import DEFAULT_MEMORY_BYTES, qemu_environment
+from qemu_runtime import DEFAULT_MEMORY_BYTES, qemu_environment, unprivileged_command
 
 
 HERE = Path(__file__).resolve().parent
@@ -32,15 +33,17 @@ with tempfile.TemporaryDirectory() as temporary:
     qemu = root / "qemu" / "bin" / "qemu-system-m68k-astra"
     library = root / "qemu" / "lib"
     library.mkdir(parents=True)
-    hostfs = root / "hostfs"
     environment = qemu_environment(
-        str(qemu), {"LD_LIBRARY_PATH": "/system/lib", "KEEP": "yes"},
-        str(hostfs))
+        str(qemu), {"LD_LIBRARY_PATH": "/system/lib", "KEEP": "yes"})
     assert environment["LD_LIBRARY_PATH"] == \
         "%s:/system/lib" % os.path.realpath(library)
     assert environment["KEEP"] == "yes"
-    assert environment["ASTRA_HOSTFS_ROOT"] == str(hostfs)
-    assert hostfs.is_dir()
+    assert "ASTRA_HOSTFS_ROOT" not in environment
+    try:
+        qemu_environment(str(qemu), {"ASTRA_HOSTFS_ROOT": str(root / "retired")})
+        raise AssertionError("retired root authority accepted")
+    except ValueError as error:
+        assert "confined storage provider" in str(error)
 
 
 class ExitedProcess:
@@ -60,3 +63,32 @@ except RuntimeError as error:
 
 
 print("QEMU private library environment: PASS")
+
+with tempfile.TemporaryDirectory() as temporary:
+    root = Path(temporary)
+    log = root / "export" / ".astra"
+    log.mkdir(parents=True)
+    outside = root / "outside"
+    outside.write_text("outside diagnostic authority\n")
+    (log / "syslog").symlink_to(outside)
+    assert terminal.read_host_syslog(str(root / "export")) == ""
+    (log / "syslog").unlink()
+    (log / "syslog").write_text("native-log\n")
+    (log / "syslog.1").write_text("older-log\n")
+    assert terminal.read_host_syslog(str(root / "export")) == "older-log\nnative-log\n"
+print("Root observer diagnostic symlink refusal: PASS")
+
+with patch("qemu_runtime.os.geteuid", return_value=0):
+    command = unprivileged_command(["qemu", "-S"], (1000, 1000))
+    assert command[0] == "setpriv" and command[-2:] == ["qemu", "-S"]
+    assert "--clear-groups" in command and "--bounding-set=-all" in command
+    assert "--no-new-privs" in command and "--ambient-caps=-all" in command
+    for credentials in ((0, 1000), (1000, 0)):
+        try:
+            unprivileged_command(["qemu"], credentials)
+            raise AssertionError("root QEMU credentials accepted")
+        except ValueError:
+            pass
+with patch("qemu_runtime.os.geteuid", return_value=1000):
+    assert unprivileged_command(["qemu", "-S"]) == ["qemu", "-S"]
+print("Device-only QEMU privilege separation: PASS")

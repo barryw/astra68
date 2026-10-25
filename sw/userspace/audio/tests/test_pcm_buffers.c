@@ -50,9 +50,10 @@ uint32_t astra_port_send(uint32_t handle, const void *message,
 AstraResult astra_pcm_reply_receive(uint32_t reply_port,
                                     uint32_t transaction,
                                     AstraPcmReply *reply,
-                                    uint32_t *received)
+                                    uint32_t *received, int wait)
 {
     assert(reply_port == 10u && transaction == 1u && received != NULL);
+    assert(wait == 1);
     memset(reply, 0, sizeof(*reply));
     *received = grant_status == ASTRA_STATUS_OK ? 40u : 0u;
     return astra_result_from_service(grant_status);

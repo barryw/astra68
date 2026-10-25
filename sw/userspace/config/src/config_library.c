@@ -8,10 +8,16 @@
 #include <stddef.h>
 #include <string.h>
 
-ASTRA_DYNAMIC_LIBRARY("config.library.1", 1, 0, 0,
+ASTRA_DYNAMIC_LIBRARY("config.library.1", 1, 1, 0,
               ASTRA_CONFIG_LIBRARY_ABI_MAJOR,
               ASTRA_CONFIG_LIBRARY_ABI_MINOR,
               "Astra68 contributors", "Copyright 2026 Astra68 contributors");
+
+/* CONFIG is already a provider-rooted startup grant. Its startup-relative
+ * prefix has the canonical capability bound; no full pathname scratch is
+ * needed for the two fixed document leaves. State lives in its owned area. */
+#define CONFIG_ROOT_CAPACITY (ASTRA_CAPABILITY_ROOT_MAX + 1u)
+#define CONFIG_PATH_CAPACITY (CONFIG_ROOT_CAPACITY + sizeof("settings.conf"))
 
 typedef struct ConfigState {
     AstraVfsClient client;
@@ -20,9 +26,9 @@ typedef struct ConfigState {
     uint32_t text_area;
     char *text;
     uint32_t length;
-    char root[ASTRA_VFS_PATH_MAX];
-    char path[ASTRA_VFS_PATH_MAX];
-    char temporary[ASTRA_VFS_PATH_MAX];
+    char root[CONFIG_ROOT_CAPACITY];
+    char path[CONFIG_PATH_CAPACITY];
+    char temporary[CONFIG_PATH_CAPACITY];
 } ConfigState;
 
 static uint32_t map_status(uint32_t status)
@@ -71,25 +77,25 @@ static void release_text(ConfigState *state)
     state->length = 0u;
 }
 
-static int path(char *out, const char *root, const char *leaf)
+static int path(char *out, uint32_t capacity, const char *root, const char *leaf)
 {
     uint32_t used = 0u;
 
-    while (used < ASTRA_CAPABILITY_ROOT_MAX && root[used] != '\0') {
-        if (used + 1u >= ASTRA_VFS_PATH_MAX)
+    while (used < CONFIG_ROOT_CAPACITY && root[used] != '\0') {
+        if (used + 1u >= capacity)
             return 0;
         out[used] = root[used];
         ++used;
     }
-    if (used == ASTRA_CAPABILITY_ROOT_MAX || used == 0u || out[0] != '/')
+    if (used == CONFIG_ROOT_CAPACITY || used == 0u || out[0] != '/')
         return 0;
     if (out[used - 1u] != '/') {
-        if (used + 1u >= ASTRA_VFS_PATH_MAX)
+        if (used + 1u >= capacity)
             return 0;
         out[used++] = '/';
     }
     while (*leaf != '\0') {
-        if (used + 1u >= ASTRA_VFS_PATH_MAX)
+        if (used + 1u >= capacity)
             return 0;
         out[used++] = *leaf++;
     }
@@ -102,12 +108,18 @@ static int root_copy(char *out, const char *root)
     uint32_t used = 0u;
     uint32_t source = 0u;
 
-    if (root == NULL || root[0] == '\0')
+    if (root == NULL)
         return 0;
+    /* An empty namespace root means the provider already rooted the grant. */
+    if (root[0] == '\0') {
+        out[0] = '/';
+        out[1] = '\0';
+        return 1;
+    }
     if (root[0] != '/')
         out[used++] = '/';
     while (source < ASTRA_CAPABILITY_ROOT_MAX && root[source] != '\0') {
-        if (used + 1u >= ASTRA_VFS_PATH_MAX)
+        if (used + 1u >= CONFIG_ROOT_CAPACITY)
             return 0;
         out[used++] = root[source++];
     }
@@ -227,9 +239,10 @@ static uint32_t load(ConfigState *state, AstraConfigError *error)
     return ASTRA_CONFIG_OK;
 }
 
-uint32_t astra_config_open(const AstraStartupInfo *startup,
-                            uint32_t schema_version, uint32_t flags,
-                            AstraConfig *config, AstraConfigError *error)
+static uint32_t open_capability(const AstraStartupInfo *startup,
+                                const char *capability_name,
+                                uint32_t schema_version, uint32_t flags,
+                                AstraConfig *config, AstraConfigError *error)
 {
     const AstraStartupCapability *capability;
     ConfigState *state = NULL;
@@ -240,7 +253,7 @@ uint32_t astra_config_open(const AstraStartupInfo *startup,
         schema_version == 0u || flags == 0u ||
         (flags & ~(ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE)) != 0u)
         return ASTRA_CONFIG_INVALID;
-    capability = astra_startup_capability(startup, ASTRA_CONFIG_CAPABILITY);
+    capability = astra_startup_capability(startup, capability_name);
     if (capability == NULL ||
         (capability->flags & ASTRA_CAPABILITY_FLAG_NAMESPACE) == 0u ||
         (capability->flags & ASTRA_CAPABILITY_FLAG_READ) == 0u ||
@@ -254,8 +267,8 @@ uint32_t astra_config_open(const AstraStartupInfo *startup,
     state->schema_version = schema_version;
     state->flags = flags;
     if (!root_copy(state->root, capability->root) ||
-        !path(state->path, state->root, "settings.conf") ||
-        !path(state->temporary, state->root, ".settings.tmp")) {
+        !path(state->path, sizeof(state->path), state->root, "settings.conf") ||
+        !path(state->temporary, sizeof(state->temporary), state->root, ".settings.tmp")) {
         status = ASTRA_CONFIG_INVALID;
         goto failed;
     }
@@ -286,6 +299,22 @@ failed:
     (void)astra_rt_area_unmap(state);
     (void)astra_close(state_area);
     return status;
+}
+
+uint32_t astra_config_open(const AstraStartupInfo *startup,
+                            uint32_t schema_version, uint32_t flags,
+                            AstraConfig *config, AstraConfigError *error)
+{
+    return open_capability(startup, ASTRA_CONFIG_CAPABILITY,
+                           schema_version, flags, config, error);
+}
+
+uint32_t astra_config_open_system(const AstraStartupInfo *startup,
+                                   uint32_t schema_version, uint32_t flags,
+                                   AstraConfig *config, AstraConfigError *error)
+{
+    return open_capability(startup, ASTRA_CONFIG_SYSTEM_CAPABILITY,
+                           schema_version, flags, config, error);
 }
 
 void astra_config_close(AstraConfig *config)
@@ -374,7 +403,7 @@ static uint32_t commit(ConfigState *state, uint32_t text_area, char *text,
 
     if ((state->flags & ASTRA_CONFIG_OPEN_WRITE) == 0u)
         goto denied;
-    status = astra_vfs_unlink(&state->client, state->temporary);
+    status = astra_vfs_unlink(&state->client, state->temporary, 0u);
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_NOT_FOUND)
         goto failed;
     status = astra_vfs_open_mode(
@@ -386,7 +415,7 @@ static uint32_t commit(ConfigState *state, uint32_t text_area, char *text,
         uint32_t moved = 0u;
 
         status = astra_vfs_write(
-            &state->client, file, used, text + used, length - used, &moved);
+            &state->client, file, used, UINT64_MAX, text + used, length - used, &moved);
         if (status == ASTRA_VFS_OK && moved == 0u)
             status = ASTRA_VFS_ERR_IO;
         used += moved;
@@ -413,7 +442,7 @@ static uint32_t commit(ConfigState *state, uint32_t text_area, char *text,
 failed:
     if (file != ASTRA_VFS_FILE_INVALID)
         (void)astra_vfs_close(&state->client, file);
-    (void)astra_vfs_unlink(&state->client, state->temporary);
+    (void)astra_vfs_unlink(&state->client, state->temporary, 0u);
     (void)astra_rt_area_unmap(text);
     (void)astra_close(text_area);
     return map_status(status);

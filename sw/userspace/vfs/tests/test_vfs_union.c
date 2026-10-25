@@ -28,6 +28,9 @@ typedef struct TestLink {
 } TestLink;
 static TestLink links[42];
 static uint32_t link_count;
+static int provider_fixture;
+static uint32_t provider_hops;
+static char provider_asked[ASTRA_VFS_PATH_MAX];
 
 /*
  * A second path this stand-in can be told to fail on, and the status to fail
@@ -49,6 +52,11 @@ static void reset_asked(void)
 void *astra_runtime_reallocate(void *pointer, size_t size)
 {
     return realloc(pointer, size);
+}
+
+void *astra_runtime_allocate(size_t size)
+{
+    return malloc(size);
 }
 
 void astra_runtime_deallocate(void *pointer)
@@ -73,6 +81,12 @@ astra_vfs_open(AstraVfsClient *client, const char *path, uint32_t flags,
     if (forced_error_path != NULL && strcmp(path, forced_error_path) == 0) {
         return forced_error_status;
     }
+    if (provider_fixture == 2 &&
+        (strcmp(path, "/lower/dangling") == 0 ||
+         strcmp(path, "/lower/bridge/child") == 0)) {
+        *file = 42u;
+        return ASTRA_VFS_OK;
+    }
     if ((answers == NULL || strcmp(path, answers) != 0) &&
         ((flags & ASTRA_VFS_OPEN_DIRECTORY) == 0u ||
          answers_also == NULL || strcmp(path, answers_also) != 0)) {
@@ -90,6 +104,87 @@ astra_vfs_open(AstraVfsClient *client, const char *path, uint32_t flags,
                     : ASTRA_VFS_KIND_FILE;
     }
     return ASTRA_VFS_OK;
+}
+
+uint32_t astra_vfs_lookup(AstraVfsClient *client, AstraVfsFile directory, const char *path,
+                           uint32_t flags, uint32_t links_left,
+                           AstraVfsDirEntry *meta, AstraVfsEscape *escape)
+{
+    (void)client;
+    (void)directory;
+    (void)flags;
+    uint8_t *path_buffer = escape->path;
+    uint32_t path_capacity = escape->capacity;
+    *escape = (AstraVfsEscape){.path = path_buffer, .capacity = path_capacity};
+    if (!provider_fixture)
+        return ASTRA_VFS_ERR_UNSUPPORTED;
+    if (provider_fixture == 3) {
+        if (strcmp(path, "/upper/race") != 0 && strcmp(path, "/lower/race") != 0)
+            return ASTRA_VFS_ERR_NOT_FOUND;
+        *meta = (AstraVfsDirEntry){.kind = ASTRA_VFS_KIND_FILE};
+        return ASTRA_VFS_OK;
+    }
+    if (provider_fixture == 2) {
+        *meta = (AstraVfsDirEntry){0};
+        if (strcmp(path, "/upper/dangling") == 0 ||
+            strcmp(path, "/upper/bridge") == 0) {
+            if (flags & ASTRA_VFS_LOOKUP_FOLLOW)
+                return ASTRA_VFS_ERR_NOT_FOUND;
+            meta->kind = ASTRA_VFS_KIND_SYMLINK;
+        } else if (strcmp(path, "/lower/dangling") == 0 ||
+                   strcmp(path, "/lower/bridge/child") == 0) {
+            meta->kind = ASTRA_VFS_KIND_FILE;
+        } else if (strcmp(path, "/upper") == 0 || strcmp(path, "/lower") == 0) {
+            meta->kind = ASTRA_VFS_KIND_DIRECTORY;
+        } else {
+            return ASTRA_VFS_ERR_NOT_FOUND;
+        }
+        return ASTRA_VFS_OK;
+    }
+    strcpy(provider_asked, path);
+    if (strcmp(path, "/a/../b") == 0) {
+        *meta = (AstraVfsDirEntry){0};
+        meta->kind = ASTRA_VFS_KIND_FILE;
+        return ASTRA_VFS_OK;
+    }
+    if (strcmp(path, "/nested/x") == 0 ||
+        (directory != ASTRA_VFS_FILE_INVALID && strcmp(path, "jump") == 0)) {
+        escape->kind = ASTRA_VFS_ESCAPE_SYMLINK;
+        escape->consumed = directory == ASTRA_VFS_FILE_INVALID ? 7u : 4u;
+        escape->links = 2u;
+        escape->length = sizeof("/dh0/x") - 1u;
+        memcpy(escape->path, "/dh0/x", escape->length);
+        return ASTRA_VFS_ERR_ESCAPED;
+    }
+    if (strcmp(path, "/../dh0/x") == 0 || strcmp(path, "/..") == 0) {
+        const char *next = strcmp(path, "/..") == 0 ? "/" : "/dh0/x";
+        escape->kind = ASTRA_VFS_ESCAPE_PARENT;
+        escape->consumed = 3u;
+        escape->length = (uint16_t)strlen(next);
+        memcpy(escape->path, next, escape->length);
+        return ASTRA_VFS_ERR_ESCAPED;
+    }
+    if (strcmp(path, "/x") == 0) {
+        if (provider_hops > links_left)
+            return ASTRA_VFS_ERR_LOOP;
+        *meta = (AstraVfsDirEntry){0};
+        meta->kind = ASTRA_VFS_KIND_FILE;
+        escape->links = provider_hops;
+        return ASTRA_VFS_OK;
+    }
+    return ASTRA_VFS_ERR_NOT_FOUND;
+}
+
+uint32_t astra_vfs_directory_path(AstraVfsClient *client, AstraVfsFile directory,
+    void *buffer, uint32_t capacity, uint32_t *length)
+{
+    (void)client;
+    (void)directory;
+    (void)buffer;
+    (void)capacity;
+    (void)length;
+    assert(!provider_fixture);
+    return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 
 uint32_t astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
@@ -114,6 +209,12 @@ uint32_t astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
             }
             return ASTRA_VFS_OK;
         }
+    }
+    if (strcmp(path, "/work/a") == 0 || strcmp(path, "/work/a/b") == 0 ||
+        strcmp(path, "/work") == 0) {
+        *entry = (AstraVfsDirEntry){0};
+        entry->kind = ASTRA_VFS_KIND_DIRECTORY;
+        return ASTRA_VFS_OK;
     }
     if ((answers == NULL || strcmp(path, answers) != 0) &&
         (answers_also == NULL || strcmp(path, answers_also) != 0))
@@ -251,9 +352,8 @@ test_a_member_that_does_not_have_it_is_skipped(void)
                                  sizeof(wire), &file, NULL, NULL, &client,
                                  &member) == ASTRA_VFS_OK);
     assert(member == 1u);
-    assert(asked_count == 2u);
-    assert(strcmp(asked[0], "/local/commands/status") == 0);
-    assert(strcmp(asked[1], "/commands/status") == 0);
+    assert(asked_count == 1u);
+    assert(strcmp(asked[0], "/commands/status") == 0);
     astra_assign_table_destroy(&table);
 }
 
@@ -274,7 +374,7 @@ test_no_member_has_it(void)
                                  ASTRA_VFS_OPEN_READ, client_for, NULL, wire,
                                  sizeof(wire), &file, NULL, NULL, &client,
                                  &member) == ASTRA_VFS_ERR_NOT_FOUND);
-    assert(asked_count == 2u);
+    assert(asked_count == 0u);
 
     /* A name nobody bound is refused without asking any disk anything. */
     reset_asked();
@@ -581,20 +681,26 @@ static void test_links_follow_without_crossing_authority(void)
     assert(entry.kind == ASTRA_VFS_KIND_FILE);
     assert(strcmp(wire, "/work/file") == 0);
 
-    for (uint32_t index = 0u; index < 41u; ++index) {
+    for (uint32_t index = 0u; index < 40u; ++index) {
         (void)snprintf(chain_path[index], sizeof(chain_path[index]),
                        "/work/link%u", index);
         (void)snprintf(chain_target[index], sizeof(chain_target[index]),
-                       index == 40u ? "file" : "link%u", index + 1u);
+                       index == 39u ? "file" : "link%u", index + 1u);
         links[index] = (TestLink){chain_path[index], chain_target[index]};
     }
-    link_count = 41u;
+    link_count = 40u;
     answers = "/work/file";
     assert(astra_vfs_assign_stat(
                &table, "/work/link0", ASTRA_RIGHT_READ, client_for, NULL,
                wire, sizeof(wire), &entry, NULL, NULL, NULL) ==
            ASTRA_VFS_OK);
     assert(strcmp(wire, "/work/file") == 0);
+
+    links[40] = (TestLink){"/work/too-many", "link0"};
+    link_count = 41u;
+    assert(astra_vfs_assign_stat(
+               &table, "/work/too-many", ASTRA_RIGHT_READ, client_for, NULL,
+               wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_ERR_LOOP);
 
     links[0] = (TestLink){"/work/link", "../secret"};
     link_count = 1u;
@@ -622,6 +728,114 @@ static void test_links_follow_without_crossing_authority(void)
     astra_assign_table_destroy(&table);
 }
 
+static void test_ordered_components_and_provider_continuations(void)
+{
+    AstraAssignTable table;
+    AstraVfsDirEntry entry;
+    AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
+    char wire[ASTRA_VFS_PATH_MAX], logical[ASTRA_VFS_PATH_MAX];
+    AstraVfsClient *serving = NULL;
+
+    astra_assign_table_init(&table);
+    assert(astra_assign_bind(&table, "WORK", 9u,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "work") == ASTRA_VFS_OK);
+    reset_asked();
+    answers = "/work/a/f";
+    answers_also = NULL;
+    links[0] = (TestLink){"/work/deep", "a/b"};
+    link_count = 1u;
+    assert(astra_vfs_assign_stat(&table, "/work/deep/../f", ASTRA_RIGHT_READ,
+        client_for, NULL, wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/work/a/f") == 0);
+    links[1] = (TestLink){"/work/dir-link", "a/b"};
+    link_count = 2u;
+    assert(astra_vfs_assign_lstat(&table, "/work/dir-link/", ASTRA_RIGHT_READ,
+        client_for, NULL, wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_OK);
+    assert(entry.kind == ASTRA_VFS_KIND_DIRECTORY);
+    assert(astra_vfs_assign_destination(&table, "/work/dir-link/", ASTRA_RIGHT_WRITE,
+        ASTRA_VFS_LOOKUP_ENTRY, client_for, NULL, logical, sizeof(logical),
+        wire, sizeof(wire), &serving, NULL) == ASTRA_VFS_ERR_NOT_DIR);
+    assert(astra_vfs_assign_stat(&table, "/work/missing/../a/f", ASTRA_RIGHT_READ,
+        client_for, NULL, wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_vfs_assign_destination(&table, "/work/missing/../new", ASTRA_RIGHT_WRITE,
+        ASTRA_VFS_LOOKUP_MISSING, client_for, NULL, logical, sizeof(logical), wire, sizeof(wire),
+        &serving, NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_vfs_assign_destination(&table, "/work/../stuff", ASTRA_RIGHT_WRITE,
+        ASTRA_VFS_LOOKUP_ENTRY | ASTRA_VFS_LOOKUP_MISSING, client_for, NULL, logical, sizeof(logical),
+        wire, sizeof(wire), &serving, NULL) == ASTRA_VFS_ERR_READ_ONLY);
+    assert(astra_vfs_assign_stat(&table, "/work/a/f/../f", ASTRA_RIGHT_READ,
+        client_for, NULL, wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_ERR_NOT_DIR);
+    astra_assign_table_destroy(&table);
+
+    astra_assign_table_init(&table);
+    assert(astra_assign_bind(&table, "WORK", 9u, ASTRA_RIGHT_READ, "") == ASTRA_VFS_OK);
+    assert(astra_assign_bind(&table, "DH0", 9u, ASTRA_RIGHT_READ, "") == ASTRA_VFS_OK);
+    provider_fixture = 1;
+    provider_hops = 0u;
+    assert(astra_vfs_assign_stat(&table, "/work/a/../b", ASTRA_RIGHT_READ,
+        client_for, NULL, wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_OK);
+    assert(strcmp(provider_asked, "/a/../b") == 0 && strcmp(wire, "/a/../b") == 0);
+    assert(astra_vfs_assign_stat(&table, "/work/../dh0/x", ASTRA_RIGHT_READ,
+        client_for, NULL, wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_OK);
+    assert(strcmp(wire, "/x") == 0);
+    assert(astra_vfs_assign_resolve_links(&table, "/work/..", ASTRA_RIGHT_READ,
+        1, 0, client_for, NULL, logical, sizeof(logical)) == ASTRA_VFS_ERR_ESCAPED);
+    assert(strcmp(logical, "/") == 0);
+    provider_hops = 38u;
+    assert(astra_vfs_assign_stat(&table, "/work/nested/x", ASTRA_RIGHT_READ,
+        client_for, NULL, wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_OK);
+    provider_hops = 39u;
+    assert(astra_vfs_assign_stat(&table, "/work/nested/x", ASTRA_RIGHT_READ,
+        client_for, NULL, wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_ERR_LOOP);
+    AstraVfsFile base = ASTRA_VFS_FILE_INVALID;
+    const AstraAssign *binding = NULL;
+    uint32_t member = 0u;
+    provider_hops = 38u;
+    assert(astra_vfs_assign_destination_at(&table, &standin, 42u, "jump", ASTRA_RIGHT_READ,
+        ASTRA_VFS_LOOKUP_FOLLOW, client_for, NULL, wire, sizeof(wire), &serving,
+        &base, &binding, &member, &entry) == ASTRA_VFS_OK);
+    assert(base == ASTRA_VFS_FILE_INVALID && strcmp(wire, "/x") == 0 && binding != NULL);
+    provider_hops = 39u;
+    assert(astra_vfs_assign_destination_at(&table, &standin, 42u, "jump", ASTRA_RIGHT_READ,
+        ASTRA_VFS_LOOKUP_FOLLOW, client_for, NULL, wire, sizeof(wire), &serving,
+        &base, &binding, &member, &entry) == ASTRA_VFS_ERR_LOOP);
+    provider_fixture = 0;
+    astra_assign_table_destroy(&table);
+
+    astra_assign_table_init(&table);
+    assert(astra_assign_bind(&table, "WORK", 9u, ASTRA_RIGHT_READ, "upper") == ASTRA_VFS_OK);
+    assert(astra_assign_join(&table, "WORK", 9u, ASTRA_RIGHT_READ, "lower") == ASTRA_VFS_OK);
+    provider_fixture = 2;
+    links[0] = (TestLink){"/upper/dangling", "absent"};
+    links[1] = (TestLink){"/upper/bridge", "absent"};
+    link_count = 2u;
+    assert(astra_vfs_assign_lstat(&table, "/work/dangling", ASTRA_RIGHT_READ,
+        client_for, NULL, wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_OK);
+    assert(entry.kind == ASTRA_VFS_KIND_SYMLINK);
+    assert(astra_vfs_assign_stat(&table, "/work/dangling", ASTRA_RIGHT_READ,
+        client_for, NULL, wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_vfs_assign_stat(&table, "/work/bridge/child", ASTRA_RIGHT_READ,
+        client_for, NULL, wire, sizeof(wire), &entry, NULL, NULL, NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_vfs_assign_open(&table, "/work/dangling", ASTRA_RIGHT_READ,
+        ASTRA_VFS_OPEN_READ, client_for, NULL, wire, sizeof(wire), &file,
+        NULL, NULL, NULL, NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_vfs_assign_open(&table, "/work/bridge/child", ASTRA_RIGHT_READ,
+        ASTRA_VFS_OPEN_READ, client_for, NULL, wire, sizeof(wire), &file,
+        NULL, NULL, NULL, NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    provider_fixture = 3;
+    answers = "/lower/race";
+    forced_error_path = "/upper/race";
+    forced_error_status = ASTRA_VFS_ERR_NOT_FOUND;
+    assert(astra_vfs_assign_open(&table, "/work/race", ASTRA_RIGHT_READ,
+        ASTRA_VFS_OPEN_READ, client_for, NULL, wire, sizeof(wire), &file,
+        NULL, NULL, NULL, NULL) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(strcmp(wire, "/upper/race") == 0);
+    forced_error_path = NULL;
+    provider_fixture = 0;
+    link_count = 0u;
+    astra_assign_table_destroy(&table);
+}
+
 int
 main(void)
 {
@@ -637,6 +851,7 @@ main(void)
     test_directory_skips_an_empty_member();
     test_directory_open_owns_the_whole_state();
     test_links_follow_without_crossing_authority();
+    test_ordered_components_and_provider_continuations();
     puts("ASTRA VFS UNION PASS");
     return 0;
 }

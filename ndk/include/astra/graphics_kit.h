@@ -7,6 +7,7 @@
  */
 
 #include <astra/font_library.h>
+#include <astra/fonts.h>
 #include <astra/graphics.h>
 #include <astra/graphics_library.h>
 #include <astra/surface.h>

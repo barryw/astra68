@@ -1,4 +1,5 @@
 #include <astra/control.h>
+#include <astra/fonts.h>
 #include <astra/clipboard_service.h>
 #include <astra/graphics_kit.h>
 #include <astra/graphics_library.h>
@@ -16,6 +17,7 @@
 
 #define GALLERY_WIDTH 1120u
 #define GALLERY_HEIGHT 800u
+#define GALLERY_TEXT_VIEW_HEIGHT 420u
 #define GALLERY_BENCHMARK_CONTROL_MAX 256u
 #define GALLERY_UNDO_BENCHMARK_OPERATIONS 10000u
 #define GALLERY_UNDO_ARENA_BYTES (1024u * 1024u)
@@ -89,7 +91,12 @@ enum {
     GALLERY_DISCLOSURE_BODY,
     GALLERY_DISCLOSURE_OPTION_A,
     GALLERY_DISCLOSURE_OPTION_B,
-    GALLERY_CONTROL_COUNT = GALLERY_DISCLOSURE_OPTION_B
+    GALLERY_LIST_LABEL,
+    GALLERY_LIST,
+    GALLERY_TEXT_VIEW_SCROLL,
+    GALLERY_TEXT_VIEW,
+    GALLERY_TEXT_VIEW_BAR,
+    GALLERY_CONTROL_COUNT = GALLERY_TEXT_VIEW_BAR
 };
 
 enum {
@@ -125,6 +132,29 @@ static uint8_t read_only_field_content[4096];
 static _Alignas(4) uint8_t read_only_field_metadata[8192];
 static AstraTextModel read_only_field_model = ASTRA_TEXT_MODEL_INIT;
 static AstraScrollModel gallery_scroll_model = ASTRA_SCROLL_MODEL_INIT;
+static AstraTextModel text_view_model = ASTRA_TEXT_MODEL_INIT;
+static AstraScrollModel text_view_scroll = ASTRA_SCROLL_MODEL_INIT;
+static uint8_t text_view_content[2048];
+static _Alignas(4) uint8_t text_view_metadata[2048];
+static const char text_view_example[] =
+    "Shared Text View\n"
+    "\n"
+    "Read-only text remains selectable and copyable.\n"
+    "TextModel owns UTF-8, lines and selection.\n"
+    "TextSurface emits hardware glyph commands.\n"
+    "ScrollView owns clipping and scrolling.\n"
+    "\n"
+    "Keyboard\tAction\r\n"
+    "Arrows\tMove selection\n"
+    "Shift\tExtend selection\n"
+    "Home / End\tStart / end of line\n"
+    "Ctrl+Home / End\tStart / end of document\n"
+    "Page Up / Down\tMove through visible lines\n"
+    "Meta+A / C\tSelect all / Copy\n"
+    "\n"
+    "Unicode: \xce\xa9 \xe4\xb8\x96\xe7\x95\x8c\n"
+    "Long lines keep their original bytes; horizontal scrolling reveals text beyond the viewport.\n"
+    "End of shared control example.";
 static char clipboard_scratch[4096];
 static uint32_t active_page = GALLERY_PAGE_INPUT;
 static const AstraChoiceItem gallery_tabs[] = {
@@ -139,6 +169,11 @@ static const AstraChoiceItem gallery_choices[] = {
     {"Windows", sizeof("Windows") - 1u, {0u, 0u}},
     {"Scenes", sizeof("Scenes") - 1u, {0u, 0u}},
     {"Ports", sizeof("Ports") - 1u, {0u, 0u}}
+};
+static const AstraChoiceItem gallery_fonts[] = {
+    {"Astra Sans", sizeof("Astra Sans") - 1u, {0u, 0u}},
+    {"Astra Mono", sizeof("Astra Mono") - 1u, {0u, 0u}},
+    {"Rescue Mono", sizeof("Rescue Mono") - 1u, {0u, 0u}}
 };
 
 #define GALLERY_CONTROL(id) (&controls[(id) - 1u])
@@ -349,6 +384,18 @@ static uint32_t add_segmented(uint32_t index, uint32_t id,
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
+static uint32_t add_list(uint32_t index, uint32_t id)
+{
+    AstraChoiceInfo info = ASTRA_CHOICE_INFO_INIT;
+
+    info.id = id;
+    info.items = gallery_fonts;
+    info.item_count = sizeof(gallery_fonts) / sizeof(gallery_fonts[0]);
+    info.selected = 0u;
+    return astra_interface_list_init(&controls[index], &info) == ASTRA_OK ?
+        ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+}
+
 static uint32_t add_tabs(uint32_t index, uint32_t id)
 {
     AstraChoiceInfo info = ASTRA_CHOICE_INFO_INIT;
@@ -481,6 +528,7 @@ static AstraControl *field_control(uint32_t id)
         return GALLERY_CONTROL(GALLERY_FIELD_ERROR);
     if (id == GALLERY_FIELD_READ_ONLY)
         return GALLERY_CONTROL(GALLERY_FIELD_READ_ONLY);
+    if (id == GALLERY_TEXT_VIEW) return GALLERY_CONTROL(GALLERY_TEXT_VIEW);
     return NULL;
 }
 
@@ -489,6 +537,7 @@ static AstraTextModel *field_model_for_id(uint32_t id)
     if (id == GALLERY_FIELD) return &field_model;
     if (id == GALLERY_FIELD_ERROR) return &error_field_model;
     if (id == GALLERY_FIELD_READ_ONLY) return &read_only_field_model;
+    if (id == GALLERY_TEXT_VIEW) return &text_view_model;
     return NULL;
 }
 
@@ -565,8 +614,12 @@ static uint32_t handle_field_action(AstraHandle clipboard,
     AstraTextModel *model = field_model_for_id(action->control_id);
 
     if (control == NULL || model == NULL) return ASTRA_STATUS_OK;
-    if (action->type == ASTRA_UI_ACTION_COPY)
-        return copy_field(clipboard, control, model, 0);
+    if (action->type == ASTRA_UI_ACTION_COPY) {
+        uint32_t status = copy_field(clipboard, control, model, 0);
+        if (status == ASTRA_STATUS_OK)
+            (void)astra_log("gallery clipboard copy complete");
+        return status;
+    }
     if (action->type == ASTRA_UI_ACTION_CUT)
         return copy_field(clipboard, control, model, 1);
     if (action->type == ASTRA_UI_ACTION_PASTE)
@@ -628,6 +681,7 @@ static uint32_t build_controls(void)
 {
     uint32_t status = add_tabs(GALLERY_TABS - 1u, GALLERY_TABS);
     AstraScrollModelInfo scroll = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
 
     scroll.line_width = 8u;
     scroll.line_height = 16u;
@@ -807,6 +861,26 @@ static uint32_t build_controls(void)
                            &read_only_field_model, 18u,
                            ASTRA_FIELD_READ_ONLY, 0u);
     if (status == ASTRA_STATUS_OK)
+        status = init_field_model(&text_view_model, text_view_example,
+            sizeof(text_view_example) - 1u, text_view_content,
+            sizeof(text_view_content), text_view_metadata, sizeof(text_view_metadata));
+    if (status == ASTRA_STATUS_OK) {
+        AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
+        AstraTextViewInfo text = ASTRA_TEXT_VIEW_INFO_INIT;
+        AstraScrollbarInfo bar = ASTRA_SCROLLBAR_INFO_INIT;
+        scroll.line_height = theme.control_height;
+        view.id = GALLERY_TEXT_VIEW_SCROLL; view.model = &text_view_scroll;
+        view.preferred_width = 640u; view.preferred_height = GALLERY_TEXT_VIEW_HEIGHT;
+        text.id = GALLERY_TEXT_VIEW; text.model = &text_view_model;
+        bar.id = GALLERY_TEXT_VIEW_BAR; bar.model = &text_view_scroll;
+        bar.orientation = ASTRA_ORIENTATION_VERTICAL;
+        if (astra_scroll_init(&text_view_scroll, &scroll) != ASTRA_OK ||
+            astra_interface_scroll_view_init(GALLERY_CONTROL(view.id), &view) != ASTRA_OK ||
+            astra_interface_text_view_init(GALLERY_CONTROL(text.id), &text) != ASTRA_OK ||
+            astra_interface_scrollbar_init(GALLERY_CONTROL(bar.id), &bar) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
+    if (status == ASTRA_STATUS_OK)
         status = add_label(GALLERY_SEGMENTED_LABEL - 1u,
                            GALLERY_SEGMENTED_LABEL,
                            "SEGMENTED SELECTOR",
@@ -815,6 +889,13 @@ static uint32_t build_controls(void)
     if (status == ASTRA_STATUS_OK)
         status = add_segmented(GALLERY_SEGMENTED - 1u,
                                GALLERY_SEGMENTED, 0u);
+    if (status == ASTRA_STATUS_OK)
+        status = add_label(GALLERY_LIST_LABEL - 1u, GALLERY_LIST_LABEL,
+                           "SINGLE-SELECTION LIST",
+                           sizeof("SINGLE-SELECTION LIST") - 1u,
+                           ASTRA_TEXT_CLIENT_SECONDARY);
+    if (status == ASTRA_STATUS_OK)
+        status = add_list(GALLERY_LIST - 1u, GALLERY_LIST);
     if (status == ASTRA_STATUS_OK)
         status = add_label(GALLERY_STEPPER_LABEL - 1u,
                            GALLERY_STEPPER_LABEL, "STEPPER · KB",
@@ -920,6 +1001,10 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_DISCLOSURE_OPTION_A, GALLERY_DISCLOSURE_BODY, 0u);
     PAGE_ITEM(GALLERY_DISCLOSURE_OPTION_B, GALLERY_DISCLOSURE_BODY,
               ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_LIST_LABEL, GALLERY_PAGE_CHOICE,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_LIST, GALLERY_PAGE_CHOICE,
+              ASTRA_FLEX_BREAK_AFTER);
 
     PAGE_ITEM(GALLERY_SLIDER_LABEL, GALLERY_PAGE_VALUE,
               ASTRA_FLEX_BREAK_AFTER);
@@ -949,6 +1034,9 @@ static uint32_t build_controls(void)
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_FIELD_READ_ONLY, GALLERY_PAGE_TEXT,
               ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_TEXT_VIEW_SCROLL, GALLERY_PAGE_TEXT, 0u);
+    PAGE_ITEM(GALLERY_TEXT_VIEW, GALLERY_TEXT_VIEW_SCROLL, 0u);
+    PAGE_ITEM(GALLERY_TEXT_VIEW_BAR, GALLERY_PAGE_TEXT, ASTRA_FLEX_BREAK_AFTER);
 
     PAGE_ITEM(GALLERY_LAYOUT_LABEL, GALLERY_PAGE_LAYOUT,
               ASTRA_FLEX_BREAK_AFTER);
@@ -977,6 +1065,14 @@ static uint32_t build_controls(void)
     if (status == ASTRA_STATUS_OK) {
         AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
 
+        item.parent_id = GALLERY_PAGE_TEXT;
+        item.minimum_width = 10u; item.maximum_width = 10u;
+        item.minimum_height = GALLERY_TEXT_VIEW_HEIGHT;
+        item.maximum_height = GALLERY_TEXT_VIEW_HEIGHT;
+        status = astra_interface_control_set_flex(
+            GALLERY_CONTROL(GALLERY_TEXT_VIEW_BAR), &item) == ASTRA_OK ?
+            ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+        item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
         item.parent_id = GALLERY_SCROLL_VIEW;
         item.minimum_width = 260u;
         item.minimum_height = 320u;
@@ -1117,6 +1213,33 @@ static uint32_t benchmark_layouts(void)
     if (status == ASTRA_STATUS_OK) status = benchmark_layout(64u, 1024u);
     if (status == ASTRA_STATUS_OK) status = benchmark_layout(256u, 256u);
     return status;
+}
+
+static uint32_t benchmark_menu(void)
+{
+    const AstraMenuItem rows[] = {{"Open", 4u, 0u}, {NULL, 0u, ASTRA_MENU_SEPARATOR},
+        {"Disabled", 8u, ASTRA_MENU_DISABLED}, {"Checked", 7u, ASTRA_MENU_CHECKED}};
+    const AstraControlFrame work = {0, 34, 1920, 1004};
+    AstraMenu menu = ASTRA_MENU_INIT;
+    AstraWindowEvent event = {.size = sizeof(event), .version = ASTRA_WINDOW_EVENT_VERSION,
+        .type = ASTRA_WINDOW_EVENT_KEY, .flags = ASTRA_WINDOW_EVENT_DOWN};
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraMenuState state;
+    uint64_t started;
+
+    if (astra_interface_menu_init(&menu, rows, 4u, &work, 24, 60, 160u, 0u) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    started = astra_clock_monotonic();
+    for (uint32_t at = 0u; at < 10000u; ++at) {
+        event.data.key.usage = (at & 1u) == 0u ? 0x51u : 0x52u;
+        if (astra_interface_menu_handle_event(&menu, &event, &action) != ASTRA_OK ||
+            action.type != ASTRA_UI_ACTION_NONE)
+            return GALLERY_FAIL_CONTROL;
+    }
+    report_control("MENU", 10000u, astra_clock_monotonic() - started);
+    if (astra_interface_menu_get_state(&menu, &state) != ASTRA_OK || state.selection != 4u)
+        return GALLERY_FAIL_CONTROL;
+    return ASTRA_STATUS_OK;
 }
 
 static uint32_t benchmark_segmented(void)
@@ -1661,7 +1784,7 @@ static uint32_t handle_action(AstraHandle clipboard,
     return ASTRA_STATUS_OK;
 }
 
-static uint32_t run(AstraHandle clipboard)
+static uint32_t run(AstraHandle clipboard, AstraHandle gui)
 {
     uint32_t vblank_subscribed = 1u;
     uint32_t applied_pointer_shape = UINT32_MAX;
@@ -1718,6 +1841,11 @@ static uint32_t run(AstraHandle clipboard)
             action = (AstraUIAction)ASTRA_UI_ACTION_INIT;
             if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
                 return ASTRA_STATUS_OK;
+            if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+                AstraResult refreshed = astra_fonts_use_system(gui, &event);
+                if (refreshed != ASTRA_OK)
+                    (void)astra_log_failure("gallery font refresh", (uint32_t)refreshed);
+            }
             if (astra_interface_ui_handle_event(
                     &ui, &event, &action) != ASTRA_OK)
                 return GALLERY_FAIL_CONTROL;
@@ -1775,6 +1903,8 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *gui;
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *clipboard;
+    const char *argument;
+    uint32_t benchmarks;
     uint32_t status;
 
     if (!astra_startup_validate(startup) || startup->capabilities_address == 0u)
@@ -1786,29 +1916,41 @@ int astra_main(const AstraStartupInfo *startup)
                                          ASTRA_CAPABILITY_CLIPBOARD);
     if (gui == NULL || clipboard == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
-    status = astra_process_filesystem_open(&process_filesystem, startup);
-    if (status != ASTRA_STATUS_OK)
-        status = GALLERY_FAIL_LIBRARY;
+    if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
+        return ASTRA_STATUS_IO;
+    argument = astra_startup_argument(startup, 1u);
+    benchmarks = argument != NULL &&
+        astra_string_compare_ascii_nocase(argument, "--benchmark") == 0;
+    status = startup->argc <= 1u || (startup->argc == 2u && benchmarks) ?
+        ASTRA_STATUS_OK : ASTRA_STATUS_INVALID;
+    if (status == ASTRA_STATUS_OK) {
+        status = astra_process_filesystem_open(&process_filesystem, startup);
+        if (status != ASTRA_STATUS_OK)
+            status = GALLERY_FAIL_LIBRARY;
+    }
     if (status == ASTRA_STATUS_OK)
         status = build_controls();
-    if (status == ASTRA_STATUS_OK)
+    if (status == ASTRA_STATUS_OK && benchmarks) {
         status = benchmark_layouts();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_undo();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_text_model();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_segmented();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_tab();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_stepper();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_dial();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_disclosure();
-    if (status == ASTRA_STATUS_OK)
-        status = benchmark_splitter();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_undo();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_text_model();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_segmented();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_tab();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_stepper();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_dial();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_disclosure();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_splitter();
+        if (status == ASTRA_STATUS_OK)
+            status = benchmark_menu();
+    }
     if (status == ASTRA_STATUS_OK)
         status = create_window(gui->handle);
     if (status == ASTRA_STATUS_OK)
@@ -1818,7 +1960,7 @@ int astra_main(const AstraStartupInfo *startup)
         (void)astra_close(bootstrap->handle);
     }
     if (status == ASTRA_STATUS_OK)
-        status = run(clipboard->handle);
+        status = run(clipboard->handle, gui->handle);
     if (window._private_control != ASTRA_INVALID_HANDLE) {
         AstraResult close_result = astra_window_close(&window);
         (void)close_result;

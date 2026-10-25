@@ -957,58 +957,76 @@ static void test_private_cow_mapping_requires_reservation(void)
 
 static void test_clone_is_lazy_and_write_fault_copies_one_page(void)
 {
-    KernelAddressSpace parent = {0};
-    KernelAddressSpace child = {0};
-    KernelFrameInfo frame;
-    uint32_t source_physical;
-    uint32_t child_physical;
-    uint32_t private_base;
-    uint32_t private_span;
-    uint32_t translated;
-    uint32_t *words;
+    for (unsigned parent_writes = 0u; parent_writes < 2u; ++parent_writes) {
+        KernelAddressSpace parent = {0};
+        KernelAddressSpace child = {0};
+        KernelFrameInfo frame;
+        KernelAddressSpace *writer;
+        KernelAddressSpace *reader;
+        KernelMemoryStats baseline, final;
+        uint32_t source_physical;
+        uint32_t writer_physical;
+        uint32_t private_base;
+        uint32_t private_span;
+        uint32_t translated;
+        uint32_t *words;
 
-    initialize_test();
-    assert(kernel_vm_enable() == KERNEL_VM_OK);
-    assert(kernel_vm_create_address_space(201u, &parent) == KERNEL_VM_OK);
-    assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 201u,
-                               &source_physical) == KERNEL_MEMORY_OK);
-    words = physical_words(source_physical);
-    words[0] = 0x12345678u;
-    words[1023] = 0xabcdef01u;
-    assert(kernel_vm_map_page(&parent, 0x18000000u, source_physical,
-                              KERNEL_VM_READ | KERNEL_VM_WRITE) ==
-           KERNEL_VM_OK);
-    assert(kernel_memory_release(source_physical, 1u, 201u) ==
-           KERNEL_MEMORY_OK);
-    assert(kernel_vm_private_reserve(&parent, KERNEL_VM_PRIVATE_SLOT_SIZE,
-                                     KERNEL_VM_READ | KERNEL_VM_WRITE,
-                                     &private_base, &private_span) ==
-           KERNEL_VM_OK);
-    assert(kernel_vm_private_fault(&parent, private_base, true) ==
-           KERNEL_VM_OK);
-    assert(kernel_vm_clone_address_space(&parent, 202u, &child) ==
-           KERNEL_VM_OK);
-    assert(child.private_reserved[0] == parent.private_reserved[0]);
-    assert(child.private_writable[0] == parent.private_writable[0]);
-    assert(kernel_memory_frame_info(source_physical, &frame));
-    assert(frame.state == KERNEL_FRAME_COW_WRITE && frame.references == 2u);
+        initialize_test();
+        assert(kernel_memory_stats(&baseline));
+        assert(kernel_vm_enable() == KERNEL_VM_OK);
+        assert(kernel_vm_create_address_space(201u, &parent) == KERNEL_VM_OK);
+        assert(kernel_memory_alloc(1u, 1u, KERNEL_FRAME_PROCESS, 201u,
+                                   &source_physical) == KERNEL_MEMORY_OK);
+        words = physical_words(source_physical);
+        words[0] = 0x12345678u;
+        words[1023] = 0xabcdef01u;
+        assert(kernel_vm_map_page(&parent, 0x18000000u, source_physical,
+                                  KERNEL_VM_READ | KERNEL_VM_WRITE) ==
+               KERNEL_VM_OK);
+        assert(kernel_memory_release(source_physical, 1u, 201u) ==
+               KERNEL_MEMORY_OK);
+        assert(kernel_vm_private_reserve(&parent, KERNEL_VM_PRIVATE_SLOT_SIZE,
+                                         KERNEL_VM_READ | KERNEL_VM_WRITE,
+                                         &private_base, &private_span) ==
+               KERNEL_VM_OK);
+        assert(kernel_vm_private_fault(&parent, private_base, true) ==
+               KERNEL_VM_OK);
+        assert(kernel_vm_clone_address_space(&parent, 202u, &child) ==
+               KERNEL_VM_OK);
+        assert(child.private_reserved[0] == parent.private_reserved[0]);
+        assert(child.private_writable[0] == parent.private_writable[0]);
+        assert(kernel_memory_frame_info(source_physical, &frame));
+        assert(frame.state == KERNEL_FRAME_COW_WRITE && frame.references == 2u);
 
-    assert(kernel_vm_cow_fault(&child, 0x18000003u) == KERNEL_VM_OK);
-    assert(kernel_vm_switch(&child) == KERNEL_VM_OK);
-    assert(kernel_vm_test_translate_current(0x18000000u, true,
-                                            &child_physical));
-    assert(child_physical != source_physical);
-    words = physical_words(child_physical);
-    assert(words[0] == 0x12345678u && words[1023] == 0xabcdef01u);
-    words[0] = 0xfeedfaceu;
-    assert(kernel_vm_switch(&parent) == KERNEL_VM_OK);
-    assert(kernel_vm_test_translate_current(0x18000000u, false,
-                                            &translated));
-    assert(translated == source_physical);
-    assert(physical_words(source_physical)[0] == 0x12345678u);
-    assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
-    assert(kernel_vm_destroy_address_space(&parent) == KERNEL_VM_OK);
-    assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);
+        writer = parent_writes ? &parent : &child;
+        reader = parent_writes ? &child : &parent;
+        assert(kernel_vm_cow_fault(writer, 0x18000003u) == KERNEL_VM_OK);
+        assert(kernel_vm_switch(writer) == KERNEL_VM_OK);
+        assert(kernel_vm_test_translate_current(0x18000000u, true,
+                                                &writer_physical));
+        assert(writer_physical != source_physical);
+        words = physical_words(writer_physical);
+        assert(words[0] == 0x12345678u && words[1023] == 0xabcdef01u);
+        words[0] = 0xfeedfaceu;
+        assert(kernel_vm_switch(reader) == KERNEL_VM_OK);
+        assert(kernel_vm_test_translate_current(0x18000000u, false,
+                                                &translated));
+        assert(translated == source_physical);
+        assert(physical_words(source_physical)[0] == 0x12345678u);
+        assert(kernel_memory_frame_info(source_physical, &frame));
+        assert(frame.owner == (parent_writes ? 202u : 201u) && frame.references == 1u);
+        assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+        assert(kernel_vm_destroy_address_space(&parent) == KERNEL_VM_OK);
+        assert(kernel_memory_release_owner(201u, NULL) == KERNEL_MEMORY_OK);
+        assert(kernel_vm_switch(&child) == KERNEL_VM_OK);
+        assert(kernel_vm_test_translate_current(0x18000000u, false, &translated));
+        assert(physical_words(translated)[0] ==
+               (parent_writes ? 0x12345678u : 0xfeedfaceu));
+        assert(kernel_vm_switch_to_empty() == KERNEL_VM_OK);
+        assert(kernel_vm_destroy_address_space(&child) == KERNEL_VM_OK);
+        assert(kernel_memory_release_owner(202u, NULL) == KERNEL_MEMORY_OK);
+        assert(kernel_memory_stats(&final) && final.free_frames == baseline.free_frames);
+    }
 }
 
 static void assert_shared_map_baseline(

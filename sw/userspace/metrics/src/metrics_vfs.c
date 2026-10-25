@@ -115,8 +115,7 @@ static uint32_t metrics_open(void *context, const char *path, uint32_t flags,
         *node = METRIC_NODE_ROOT;
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
-        info->mode = 0500u;
-        info->nlink = 2u;
+        astra_vfs_node_info_mode_links(info, 0500u, 2u);
         return ASTRA_VFS_OK;
     }
     if (!path_is(path, "snapshot"))
@@ -139,8 +138,7 @@ static uint32_t metrics_open(void *context, const char *path, uint32_t flags,
     }
     *node = METRIC_NODE_SNAPSHOT;
     info->kind = ASTRA_VFS_KIND_FILE;
-    info->mode = 0400u;
-    info->nlink = 1u;
+    astra_vfs_node_info_mode_links(info, 0400u, 1u);
     return ASTRA_VFS_OK;
 }
 
@@ -236,8 +234,7 @@ static uint32_t metrics_readdir(void *context, uintptr_t directory,
     memcpy(name, "snapshot", sizeof("snapshot"));
     info->size = 0u;
     info->kind = ASTRA_VFS_KIND_FILE;
-    info->mode = 0400u;
-    info->nlink = 1u;
+    astra_vfs_node_info_mode_links(info, 0400u, 1u);
     *next = 1u;
     return ASTRA_VFS_OK;
 }
@@ -265,6 +262,7 @@ static const AstraVfsBackendOps operations = {
     .filesystem_info = astra_vfs_backend_no_filesystem_info,
     .stat_at = astra_vfs_backend_no_stat_at,
     .stat_node = metrics_stat_node,
+    NULL,
 };
 
 int astra_metric_vfs_init(AstraMetricVfs *metrics,

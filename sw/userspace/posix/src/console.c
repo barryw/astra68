@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 /*
  * The descriptor table.
  *
@@ -80,7 +82,7 @@ typedef struct PosixDescriptor {
 } PosixDescriptor;
 
 #define POSIX_EXEC_MAGIC 0x50584543u
-#define POSIX_EXEC_VERSION 4u
+#define POSIX_EXEC_VERSION 5u
 
 typedef struct PosixExecHeader {
     uint32_t magic;
@@ -157,6 +159,27 @@ entry(int fd)
         descriptors[fd].description == NULL)
         return NULL;
     return descriptors[fd].description;
+}
+
+/* Descriptor access and zero-length buffers share one rule across all I/O. */
+static PosixOpenDescription *
+io_entry(int fd, const void *bytes, size_t length, int forbidden_access)
+{
+    PosixOpenDescription *slot = entry(fd);
+
+    if (slot == NULL || (slot->status_flags & O_ACCMODE) == forbidden_access) {
+        errno = EBADF;
+        return NULL;
+    }
+    if (length > (size_t)SSIZE_MAX || length > UINT32_MAX) {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (length != 0u && bytes == NULL) {
+        errno = EFAULT;
+        return NULL;
+    }
+    return slot;
 }
 
 static int
@@ -334,16 +357,18 @@ astra_posix_descriptor_file(uint32_t slot, int flags)
     }
     description->kind = POSIX_DESCRIPTOR_FILE;
     description->value = slot;
-    description->status_flags = flags;
+    description->status_flags = flags & ~(O_CREAT | O_EXCL | O_TRUNC | O_CLOEXEC);
     description->references = 1u;
     descriptors[fd].description = description;
+    descriptors[fd].descriptor_flags = flags & O_CLOEXEC ? FD_CLOEXEC : 0u;
     return fd;
 }
 
 int
 astra_posix_descriptor_socket(uint32_t slot, int flags)
 {
-    int fd = descriptor_native(POSIX_DESCRIPTOR_SOCKET, slot, flags);
+    int fd = descriptor_native(POSIX_DESCRIPTOR_SOCKET, slot,
+        (flags & ~O_ACCMODE) | O_RDWR);
 
     if (fd < 0)
         return -1;
@@ -491,7 +516,7 @@ astra_posix_descriptor_flags(int fd)
         errno = EBADF;
         return -1;
     }
-    return slot->status_flags;
+    return fcntl(fd, F_GETFL);
 }
 
 uint32_t
@@ -557,6 +582,7 @@ astra_posix_exec_export(void **state, uint32_t *size)
     PosixExecDescriptor *wire_descriptors = NULL;
     PosixExecDescription *wire_descriptions = NULL;
     uint32_t active = 0u;
+    uint32_t descriptions_capacity = 0u;
     uint32_t unique_count = 0u;
     uint32_t file_size;
     uint32_t socket_size = 0u;
@@ -578,10 +604,14 @@ astra_posix_exec_export(void **state, uint32_t *size)
     /* Exec discards this thread's buffers; what was written must not be. */
     astra_posix_log_flush();
     for (uint32_t fd = 0u; fd < descriptor_capacity; ++fd)
-        if (descriptors[fd].description != NULL &&
-            (descriptors[fd].descriptor_flags & FD_CLOEXEC) == 0u)
-            ++active;
-    unique = calloc(active == 0u ? 1u : active, sizeof(*unique));
+        if (descriptors[fd].description != NULL) {
+            ++descriptions_capacity;
+            if ((descriptors[fd].descriptor_flags & FD_CLOEXEC) == 0u) ++active;
+        }
+    /* Provider descriptions survive the image replacement. Carry excluded
+     * descriptions too: the new image closes zero-reference owners only
+     * after commit, while a failed exec keeps every original descriptor. */
+    unique = calloc(descriptions_capacity == 0u ? 1u : descriptions_capacity, sizeof(*unique));
     if (unique == NULL) {
         errno = ENOMEM;
         return -1;
@@ -590,8 +620,7 @@ astra_posix_exec_export(void **state, uint32_t *size)
         PosixOpenDescription *description = descriptors[fd].description;
         uint32_t index;
 
-        if (description == NULL ||
-            (descriptors[fd].descriptor_flags & FD_CLOEXEC) != 0u)
+        if (description == NULL)
             continue;
         for (index = 0u; index < unique_count; ++index)
             if (unique[index] == description)
@@ -992,9 +1021,11 @@ astra_posix_start(const AstraStartupInfo *startup)
     (void)memset(initial_descriptions, 0, sizeof(initial_descriptions));
     startup_block = startup;
     astra_posix_resource_reset();
+    environ = empty_environment;
+    if (!astra_startup_validate(startup))
+        return;
     astra_posix_heap_prepare(startup != NULL ?
                              startup->program_writable_bytes : 0u);
-    environ = empty_environment;
     if (startup != NULL && startup->environment_count != 0u &&
         startup->environment_address != 0u)
         environ = (char **)(uintptr_t)startup->environment_address;
@@ -1002,8 +1033,6 @@ astra_posix_start(const AstraStartupInfo *startup)
     if (restored < 0)
         (void)astra_log_failure("POSIX descriptor restore", (uint32_t)errno);
     if (restored != 0)
-        return;
-    if (!astra_startup_validate(startup))
         return;
     for (uint32_t fd = 0u; fd < 3u; ++fd) {
         const AstraStartupCapability *capability =
@@ -1139,20 +1168,15 @@ astra_posix_log_flush(void)
 ssize_t
 write(int fd, const void *bytes, size_t length)
 {
-    PosixOpenDescription *slot = entry(fd);
+    PosixOpenDescription *slot = io_entry(fd, bytes, length, O_RDONLY);
     uint32_t written = 0u;
     uint32_t status;
 
-    if (slot == NULL || bytes == NULL) {
-        errno = EBADF;
+    if (slot == NULL) {
         return -1;
     }
     if (length == 0u)
         return 0;
-    if (length > UINT32_MAX) {
-        errno = EINVAL;
-        return -1;
-    }
     if (slot->kind == POSIX_DESCRIPTOR_LOG)
         return log_write(slot->value, bytes, length);
     if (slot->kind == POSIX_DESCRIPTOR_FILE) {
@@ -1169,10 +1193,6 @@ write(int fd, const void *bytes, size_t length)
         }
         return socket_ops->write(slot->value, bytes, length,
                                  slot->status_flags);
-    }
-    if (slot->kind == POSIX_DESCRIPTOR_PIPE_READ) {
-        errno = EBADF;
-        return -1;
     }
     if (slot->kind == POSIX_DESCRIPTOR_PIPE_WRITE) {
         uint32_t request = (uint32_t)length;
@@ -1266,18 +1286,15 @@ astra_posix_write_all(int descriptor, const void *bytes, size_t length)
 ssize_t
 read(int fd, void *bytes, size_t length)
 {
-    PosixOpenDescription *slot = entry(fd);
+    PosixOpenDescription *slot = io_entry(fd, bytes, length, O_WRONLY);
     uint32_t taken = 0u;
     uint32_t status;
 
-    if (slot == NULL || bytes == NULL) {
-        errno = EBADF;
+    if (slot == NULL) {
         return -1;
     }
     if (length == 0u)
         return 0;
-    if (length > UINT32_MAX)
-        length = UINT32_MAX;
     if (slot->kind == POSIX_DESCRIPTOR_FILE) {
         if (file_ops == NULL) {
             errno = EBADF;
@@ -1292,10 +1309,6 @@ read(int fd, void *bytes, size_t length)
         }
         return socket_ops->read(slot->value, bytes, length,
                                 slot->status_flags);
-    }
-    if (slot->kind == POSIX_DESCRIPTOR_PIPE_WRITE) {
-        errno = EBADF;
-        return -1;
     }
     if (slot->kind == POSIX_DESCRIPTOR_PIPE_READ) {
         uint32_t request = (uint32_t)length;
@@ -1385,10 +1398,9 @@ read(int fd, void *bytes, size_t length)
 ssize_t
 pread(int fd, void *bytes, size_t length, off_t offset)
 {
-    PosixOpenDescription *slot = entry(fd);
+    PosixOpenDescription *slot = io_entry(fd, bytes, length, O_WRONLY);
 
     if (slot == NULL) {
-        errno = EBADF;
         return -1;
     }
     if (slot->kind != POSIX_DESCRIPTOR_FILE) {
@@ -1405,10 +1417,9 @@ pread(int fd, void *bytes, size_t length, off_t offset)
 ssize_t
 pwrite(int fd, const void *bytes, size_t length, off_t offset)
 {
-    PosixOpenDescription *slot = entry(fd);
+    PosixOpenDescription *slot = io_entry(fd, bytes, length, O_RDONLY);
 
     if (slot == NULL) {
-        errno = EBADF;
         return -1;
     }
     if (slot->kind != POSIX_DESCRIPTOR_FILE) {
@@ -1513,11 +1524,26 @@ fcntl(int fd, int command, ...)
         descriptors[fd].descriptor_flags = (uint8_t)value;
         return 0;
     case F_GETFL:
+        if (slot->kind == POSIX_DESCRIPTOR_FILE &&
+            file_ops != NULL && file_ops->flags != NULL) {
+            value = file_ops->flags(slot->value, 0u, 0);
+            if (value < 0)
+                return -1;
+            slot->status_flags = (slot->status_flags & ~(O_APPEND | O_NONBLOCK)) | value;
+        }
         return slot->status_flags;
     case F_SETFL:
         va_start(arguments, command);
         value = va_arg(arguments, int);
         va_end(arguments);
+        if (slot->kind == POSIX_DESCRIPTOR_FILE &&
+            file_ops != NULL && file_ops->flags != NULL) {
+            int append = file_ops->flags(slot->value, O_APPEND | O_NONBLOCK, value);
+
+            if (append < 0)
+                return -1;
+            slot->status_flags = (slot->status_flags & ~(O_APPEND | O_NONBLOCK)) | append;
+        }
         slot->status_flags = (slot->status_flags & ~O_NONBLOCK) |
                              (value & O_NONBLOCK);
         return 0;

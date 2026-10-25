@@ -13,8 +13,8 @@ Programs run on a Motorola MC68040 with its FPU: the `m68k-astra` compiler
 generates hard-float code by default and tags every object with its float
 ABI, so a soft-float object cannot be linked in by accident. A program is a
 position-independent executable that the system loader binds to versioned
-shared libraries (`runtime.library.1`, `system.library.3`,
-`graphics.library.2`, and so on) before it starts.
+shared libraries (`runtime.library.1`, `system.library.4`,
+`graphics.library.3`, and so on) before it starts.
 
 ## Building a program
 

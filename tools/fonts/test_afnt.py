@@ -42,4 +42,11 @@ assert rows[ord("A") * 16:(ord("A") + 1) * 16] == [
     "c6", "c6", "c6", "c6", "00", "00", "00", "00",
 ]
 assert rows[0xdb * 16:(0xdb + 1) * 16] == ["ff"] * 16
+empty = (0, 0, 0, 0, 0, 0, 0, 0, 0, 8 * 64)
+single = strikes[0][:14] + (0, 1) + strikes[0][16:]
+styled_strikes, styled_glyphs, styled_bitmap = afnt.prepared_styles(
+    [single], [empty], b"")
+assert len(styled_strikes) == len(styled_glyphs) == 4
+assert styled_bitmap == b""
+assert all(glyph[4] == 0 and glyph[2] == 0 for glyph in styled_glyphs)
 print("AFNT rescue-font contract: PASS")

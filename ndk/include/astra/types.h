@@ -78,7 +78,9 @@ enum {
     /** The local object or endpoint has been closed. */
     ASTRA_ERROR_CLOSED = -15,
     /** Committed memory is unavailable. */
-    ASTRA_ERROR_OUT_OF_MEMORY = -16
+    ASTRA_ERROR_OUT_OF_MEMORY = -16,
+    /** A complete pathname or filename exceeds the native naming limit. */
+    ASTRA_ERROR_NAME_TOO_LONG = -17
 };
 
 /** Absolute signed monotonic deadline in nanoseconds. @since 0.1.0 */

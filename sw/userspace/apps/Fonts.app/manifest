@@ -1,0 +1,21 @@
+astra-bundle 1
+kind application
+id org.astra.fonts
+name "Fonts"
+version 0.1.0
+executable bin/m68k-68040/Fonts
+icon resources/Fonts.aicon
+capability GUI
+capability FONT_CATALOG
+capability FONTS:r
+capability FONTS_ADMIN
+capability CLIPBOARD
+capability DH0:r
+capability LIBS:r
+requires compiler.library 2 2.0.0
+requires font.library 5 5.0.0
+requires filesystem.library 15 15.1.0
+requires graphics.library 3 3.0.0
+requires interface.library 7 7.2.0
+requires runtime.library 1 1.5.0
+requires system.library 4 4.0.0

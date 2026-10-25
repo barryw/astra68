@@ -311,9 +311,11 @@ constraint.
    `gfx_mode=normal`/scale 1 and let the renderer's nearest scaling enlarge
    (CD#4).
 
-   Long-term fixes, shared with DevilutionX:
-   - DX#5, the INDEX8 present path: palette expansion on the texture engine;
-   - a 68040 `Blit1to2` next to the existing `Blit1to4` asm.
+   Astra SDL now has an INDEX8 window path with hardware palette expansion,
+   physically tested in an isolated DE25 probe. ScummVM still expands indices
+   into its RGB565 streaming texture, so its port must adopt that path before
+   it saves this CPU work. A 68040 `Blit1to2` is a fallback performance option
+   only if the indexed route cannot preserve ScummVM presentation behavior.
 
    A native Astra graphics manager writing INDEX8 straight into managed
    graphics, as the Atari backend did to skip SDL, is a later option.
@@ -382,8 +384,9 @@ and M-L more for breadth (inferred, at the pace of the Doom port).
 ### Do these first in Astra's own layers (they also help DevilutionX)
 
 1. SDL Kit: `sdl2-config`/`.pc`, and the g++ driver dynamic link (CD#3).
-2. SDL video: the INDEX8 present path or a fast `Blit1to2` (DX#5). ScummVM,
-   DevilutionX and every palettised SDL game benefit.
+2. Port integration: use SDL's now-available INDEX8 present path where
+   ScummVM can preserve its scaler and cursor behavior (DX#5). Qualify a real
+   workload before claiming the CPU-copy saving.
 3. SDL joystick: dummy and virtual drivers (DX#1), which removes ScummVM's
    warning and is fatal for DevilutionX.
 4. Manifest `environment`, or an "app gets `HOME=/store`" rule (CD#2). With it,

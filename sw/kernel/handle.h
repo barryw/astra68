@@ -40,7 +40,8 @@ typedef enum KernelObjectType {
     KERNEL_OBJECT_PROCESS_LOAD = 13,
     KERNEL_OBJECT_LIBRARY_LOAD = 14,
     KERNEL_OBJECT_REPLY = 15,
-    KERNEL_OBJECT_AUDIO_STREAM = 16
+    KERNEL_OBJECT_AUDIO_STREAM = 16,
+    KERNEL_OBJECT_HOST_SCOPE = 17
 } KernelObjectType;
 
 typedef enum KernelHandleStatus {
@@ -166,6 +167,11 @@ uint32_t kernel_handle_close_type(KernelHandleTable *table,
 uint32_t kernel_handle_count(const KernelHandleTable *table);
 uint32_t kernel_handle_available(const KernelHandleTable *table);
 bool kernel_handle_table_valid(const KernelHandleTable *table);
+/* After validating the transfer pool, count committed exports still owning
+ * object references. Reservations alias table entries and are not counted.
+ * Invalid arguments or damaged backing return UINT32_MAX. */
+uint32_t kernel_handle_detached_reference_count(KernelObjectType type,
+                                                const void *object);
 KernelHandleStatus kernel_handle_transfer_validate(
     const KernelHandleTable *source_table,
     const KernelHandle *source_handles, uint32_t count,
@@ -174,10 +180,20 @@ KernelHandleStatus kernel_handle_transfer_prepare(
     const KernelHandleTable *source_table, const KernelHandle *source_handles,
     uint32_t count, uint32_t required_rights,
     KernelHandleTransferBatch *batch);
+/* Narrows each prepared handle's rights to its mask; refuses a result with
+ * no usable right after import filtering. Between prepare and commit_export. */
+KernelHandleStatus kernel_handle_transfer_narrow(
+    KernelHandleTransferBatch *batch, const uint32_t *masks);
 KernelHandleStatus kernel_handle_transfer_commit_export(
     KernelHandleTable *source_table, KernelHandleTransferBatch *batch);
 KernelHandleStatus kernel_handle_transfer_rollback(
     KernelHandleTransferBatch *batch);
+/* Rights an imported handle keeps, given the object's type and the rights it
+ * was sent with. NULL keeps them all. One hook, set once at boot: the handle
+ * layer stays type-blind. */
+typedef uint32_t (*KernelHandleImportRights)(KernelObjectType type,
+                                             void *object, uint32_t rights);
+void kernel_handle_set_import_rights(KernelHandleImportRights filter);
 KernelHandleStatus kernel_handle_import_reserve(
     KernelHandleTable *destination_table,
     const KernelDetachedHandle *detached, uint32_t count,

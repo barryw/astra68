@@ -44,7 +44,8 @@ PIC_OBJECTS := build/m68k/pic/startup.o build/m68k/pic/syscall.o build/m68k/pic/
 	build/m68k/pic/log.o build/m68k/pic/log_ring.o \
 	build/m68k/pic/time_page.o build/m68k/pic/assert.o \
 	build/m68k/pic/event_catalog.o \
-	build/m68k/pic/m68k/syscall.o build/m68k/pic/common_memory_m68k.o
+	build/m68k/pic/m68k/syscall.o build/m68k/pic/common_memory_m68k.o \
+	build/m68k/pic/common_utf8.o
 DYNAMIC_PIC_C_SOURCES := $(filter-out src/dynamic_process.c,\
 	$(TARGET_C_SOURCES))
 DYNAMIC_PIC_OBJECTS := \
@@ -115,6 +116,10 @@ build/m68k/pic/common_%.o: ../../common/%.S
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(ASTRA_TARGET_ABI_FLAGS) -fPIC $(DEPFLAGS) -c $< -o $@
 
+build/m68k/pic/common_%.o: ../../common/%.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(PIC_FLAGS) $(DEPFLAGS) -c $< -o $@
+
 build/m68k/dynamic/%.o: src/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(DYNAMIC_PIC_FLAGS) $(DEPFLAGS) \
@@ -165,11 +170,11 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@python3 ../../../tools/check_library_exports.py $(DYNAMIC_LIBRARY_MAP) \
 		$(DYNAMIC_PUBLIC_HEADERS) --allow __m68k_read_tp \
 		--allow astra_runtime_initialize --allow astra_runtime_finalize \
-		--allow memcmp --allow memcpy --allow memmove --allow memset \
+		--allow memchr --allow memcmp --allow memcpy --allow memmove --allow memset \
 		--allow strcmp --allow strcpy --allow strlen \
 		--allow strncmp --allow strncpy
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^runtime.library.1 1.13.0 ABI 1.13$$'
+		grep -q '^runtime.library.1 1.17.0 ABI 1.17$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [runtime.library.1]' >/dev/null
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null
@@ -190,6 +195,8 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.11' >/dev/null
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.12' >/dev/null
 	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.13' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.14' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.17' >/dev/null
 	@ASTRA_LIBRARY_FIXTURE=$(abspath $<) $(KERNEL_ELF_TEST) >/dev/null
 	@echo "astra runtime shared library: PASS"
 
@@ -242,7 +249,7 @@ $(HOST_TEST): $(HOST_TEST_SOURCES) tests/log_test_hooks.h
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_TEST_DEFINES) -no-pie $(HOST_TEST_SOURCES) -o $@
 
-$(STARTUP_SERVICE_TEST): src/startup.c src/service.c tests/test_startup_service.c
+$(STARTUP_SERVICE_TEST): src/startup.c src/service.c ../../common/utf8.c tests/test_startup_service.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -no-pie $^ -o $@
 

@@ -1,5 +1,13 @@
-ASTRA_INTERFACE_5.2 {
+ASTRA_INTERFACE_7.0 {
     global:
+        astra_interface_menu_init;
+        astra_interface_menu_get_state;
+        astra_interface_menu_hit;
+        astra_interface_menu_handle_event;
+        astra_interface_menu_render;
+        astra_interface_context_menu_open;
+        astra_interface_context_menu_handle_event;
+        astra_interface_context_menu_close;
         astra_interface_button_init;
         astra_interface_checkbox_init;
         astra_interface_command_invoke;
@@ -15,6 +23,8 @@ ASTRA_INTERFACE_5.2 {
         astra_interface_field_refresh;
         astra_interface_field_replace_selection;
         astra_interface_label_init;
+        astra_interface_label_set_font;
+        astra_interface_list_init;
         astra_interface_progress_init;
         astra_interface_progress_set;
         astra_interface_radio_init;
@@ -31,6 +41,7 @@ ASTRA_INTERFACE_5.2 {
         astra_interface_ui_damage;
         astra_interface_ui_damage_clear;
         astra_interface_ui_handle_event;
+        astra_interface_ui_geometry;
         astra_interface_ui_init;
         astra_interface_ui_layout;
         astra_interface_ui_measure;
@@ -78,3 +89,14 @@ ASTRA_INTERFACE_5.2 {
     local:
         *;
 };
+
+ASTRA_INTERFACE_7.1 {
+    global:
+        astra_interface_text_view_init;
+        astra_interface_text_view_refresh;
+} ASTRA_INTERFACE_7.0;
+
+ASTRA_INTERFACE_7.2 {
+    global:
+        astra_interface_settings_pane_init;
+} ASTRA_INTERFACE_7.1;

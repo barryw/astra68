@@ -1,124 +1,93 @@
 # Astra storage and VFS
 
-Status: superseded as the production design by
-[the filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md). Linux now owns
-filesystem machinery; this page summarizes what that means for the VFS layer
-and links to the PRD for the full contract (FS01–FS46) instead of repeating
-it. The ["Current implementation (to be replaced)"](#current-implementation-to-be-replaced)
-section below is the only part of this page describing what actually runs
-today.
+The [filesystem production PRD](FILESYSTEM_PRODUCTION_PRD.md) owns the production
+contract. [Current State](CURRENT_STATE.md) records accepted source identities,
+test evidence and remaining release gates; an implemented contract is not a
+claim that physical removable media have been qualified.
 
-## Architecture
+## One filesystem implementation
 
-Linux owns filesystem machinery: mounts, formats, partition probing, caching,
-and journaling. Astra owns the client experience: its native API,
-process-visible namespace, named volumes, grants, mount policy, desktop
-behavior, and diagnostics. Native and POSIX applications share one native
-client facility over that Linux-backed storage; there is no separate guest
-filesystem implementation to keep in sync with it.
+Linux owns filesystem mounts, format drivers, partition probing, caching and
+journaling. The Linux storage provider owns device, medium, source and mounted
+instance records. QEMU exposes that provider through versioned Astra protocols.
+HostFS publishes the native grants, inventory, notifications and control
+endpoints. Supervisor owns startup grants and service policy. Applications use
+`filesystem.library.15`; POSIX file descriptors adapt those same native objects.
 
-The trusted boundary, per the PRD's ownership table and FS15: grants bind
-authenticated owners to rooted directory objects and rights, and are enforced
-in the guest HostFS service using a kernel-stamped sender owner on every
-request, never one supplied by the client. On the Linux side, each rooted
-session is confined with `openat2` `RESOLVE_BENEATH`, so `..` and symlink
-traversal cannot walk a session out of its root. QEMU never trusts a
-client-supplied owner field.
+The production bootstrap opens the selected system volume read-only through
+the same provider, reads startup policy and closes its claim before HostFS
+starts. Recovery uses that bootstrap when the system publication is absent.
+Missing policy alone permits defaults; malformed policy, I/O, disabled policy
+and failed claim cleanup refuse launch. There is no independent guest format
+mount or alternate-media fallback.
 
-Kept from the earlier device/volume plan, per the PRD's architectural
-authority section: fixed internal-SD system selection, separate device and
-volume identities, one native mount authority, labels as mutable display
-metadata only, protected namespace publication, generation-safe removal, and
-no alternate-media boot fallback. See
-[Devices and volumes](DEVICE_AND_VOLUME_PLAN.md) for the namespace and naming
-rules built on those.
+The old guest ext4 and RAM backends remain test/development implementations,
+not production fallbacks. Production RAM storage is bounded Linux tmpfs;
+optical media and retained ISO files use Linux ISO9660/UDF support.
 
-## Superseded by the PRD
+## Authority and identity
 
-This document used to specify the production filesystem as guest code. That
-design is retired, not merely deferred:
+Storage protocol 38 is the minimum accepted version. Its fixed control record
+and bounded operand areas carry 255-byte UTF-8 names and 4095-byte paths.
+Filesystem Kit 11 exports Filesystem library ABI 14. HostChannel 5 carries the
+kernel-stamped native PID separately from the resource owner: usage attribution
+and mount requests use native process identity, while quotas and resource
+retirement use the exact owner. Neither field is inferred from the other.
 
-- **Guest lwext4 as the production writable engine.** Adopted 2026-08-05 and
-  measured extensively — see `third_party/lwext4/ASTRA_VENDOR.md` and
-  `sw/userspace/storage/lwext4-eval` for that record, and this document's git
-  history for the performance/memory baselines that used to live here. Linux
-  now mounts ext4 directly; the PRD's cutover (FS45–FS46) removes the guest
-  ext4 link entirely.
-- **Guest CDFS (optical media).** That work was removed from `main`; it is
-  archived on branch `feat/cdfs`. Optical media becomes a Linux ISO9660/UDF
-  mount, published the same way as any other Linux-mounted volume (PRD FS01,
-  scope table).
-- **Guest RAMFS as the production RAM engine.** `/ram` becomes a Linux tmpfs
-  mount with explicit byte/inode limits and no swap (PRD FS36–FS38), not a
-  guest-side allocator.
-- **Block-only Linux ownership.** The layering below — a synchronous block
-  facade, a lease-backed block device, an Arty bring-up image — was built on
-  the assumption that Astra parses the on-disk format and Linux only moves
-  blocks. Under the PRD, Linux performs the mount, cache, and journal; Astra's
-  job is the namespace, grants, and policy on top of it.
+Only HostFS holds `HOST_FILESYSTEM` with scope-creation authority. Ordinary
+`HOST_DEVICE` clients cannot create filesystem scopes. Each grant has a retained
+provider root, rights and exact volume incarnation. Kernel-bound channels and
+QEMU enforce those sessions and rights; client-side path checks are not the
+trust boundary. Ordered descriptor lookup and `openat2` confinement prevent host
+namespace traversal. Escape continuations return to the caller's native assign
+resolver, which retains the link budget and rechecks mount-crossing authority.
 
-## Filesystem handler contract (interface retained, implementations retiring)
+Inventory metadata grants neither file access nor mount authority. Separate
+read/write brokers admit exact public roots; administrator and usage
+capabilities authorize lifecycle control and diagnostics. Configured RAM
+brokers retain source identity while unmounted, so a new `/ram0` incarnation
+cannot retarget an old grant.
 
-VFS still owns path parsing, `.`/`..`, assign expansion, mount crossing,
-access policy, current directories, and process-visible handles; a handler
-still receives one validated, bounded path component at a time. Names remain
-UTF-8, case-sensitive, and byte-exact — a foreign filesystem's own
-case-folding behavior is a property it reports, never something the Kit
-normalizes. These rules carry forward unchanged. What changes under the PRD
-is what sits behind that contract: a Linux-backed HostFS session with dynamic
-volumes and rooted grants, rather than a guest-side format driver per media
-class.
+## Objects and failure
 
-## Current implementation (to be replaced)
+Provider descriptions own offsets, directory cursors and append state. Fork
+uses retained, single-use share/adopt receipts; it never reopens inherited files
+by pathname. Only a transport implementing retained descriptions advertises
+that feature. Epoch-checked local objects and pins prevent token reuse and
+concurrent close from targeting replacement descriptions.
 
-What actually runs today, verified against source:
+Unlink and rename preserve open-object identity. Current directories retain
+directory objects. Native and POSIX resolution share one namespace, including
+root dirfds, cross-volume links, trailing separators and no-follow operations.
+File and directory sync propagate errors. Durable atomic save requires file
+sync, rename and parent-directory sync; a successful write alone is not durable
+acknowledgement.
 
-- **Bootstrap mount.** `sw/userspace/supervisor/src/volume.c`
-  (`supervisor_verify_volume`) finds the MBR Linux-type partition on the
-  Axiom-leased block device, mounts it with guest lwext4 at a fixed internal
-  mountpoint, runs journal recovery, and keeps it mounted only long enough to
-  read the manifest and launch the storage service.
-- **Storage service.** `sw/userspace/services/storage/main.c` independently
-  re-finds and mounts that same partition with guest lwext4 over the Axiom
-  block lease, and serves the native VFS protocol from it. Bootstrap and the
-  storage service each select the partition on their own — the duplicate
-  selector the PRD's gap table calls out and FS07 retires.
-- **HostFS.** `sw/userspace/services/hostfs/main.c` runs two fixed
-  host-backed volumes, `ASTRA_HOST_FS_VOLUME_WORK` and
-  `ASTRA_HOST_FS_VOLUME_SOUND` (`sw/include/astra/host.h`), each its own VFS
-  service bound to one host directory export at startup. This is not a
-  dynamic volume inventory: the volume a session reaches is fixed at
-  compile/link time, not discovered or mounted.
-- **Grant enforcement is client-only, and the host device is handed to
-  clients.** Rights and assign roots are checked only in the client library
-  (`astra_assign_resolve`, `sw/userspace/vfs/src/vfs_assign.c`); the VFS
-  service binds a session to the kernel-stamped sender pid and checks
-  neither root nor rights. `..` is folded lexically before lookup
-  (`astra_path_normalise`). On HELLO the port service duplicates the
-  host-device capability (READ|WRITE|TRANSFER) to every client
-  (`vfs_port_transport.c`, HELLO version 18 and later), and the client then
-  sends raw host commands itself (`vfs_host_direct.c`, WORK hard-coded).
-  QEMU's per-handle owner stamp (`ASTRA_HOST_CAP_OWNER_SCOPED`) is the
-  kernel-authenticated owner of the process holding that device -- HostFS,
-  or any client that received the duplicate -- never the client
-  application, and QEMU takes the command's `volume` field as given. So a
-  client of one host volume can address the other, and can issue other
-  host services' commands. Host-root opens are confined with
-  `openat2(..., RESOLVE_BENEATH | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_SYMLINKS)`,
-  which keeps every request inside the two fixed exports but cannot
-  separate one client's grant from another's. This is the FS15/FS44 gap
-  Phase 1 closes.
-- **RAM storage.** `sw/userspace/services/ramfs/main.c` is a guest-side
-  allocator bounded by `max_bytes` read from
-  `/system/config/services/ramfs/settings.conf` (`astra_vfs_ram_init`) — not
-  Linux tmpfs.
-- **Namespace.** `sw/userspace/supervisor/src/vfs_host.c` binds root
-  conveniences (`DH0`, `SYSTEM`, `APPS`, `HOME`, `COMMANDS`, `CONFIG`,
-  `LIBS`, ...) as assigns into the one storage-service volume, not as
-  independent volumes or genuine symlinks. See
-  [Devices and volumes](DEVICE_AND_VOLUME_PLAN.md) for what that namespace
-  does and does not implement today.
+Unmount fences new admission and refuses retained files, directories, shares,
+active operations and image dependencies. The complete usage query powers both
+Desktop's detailed busy dialog and `lsof`. Failed cleanup stays visible and
+charged until the actual mount, descriptions and source lease retire. Names
+become reusable only after that retirement; identities never recycle within a
+provider epoch.
 
-Everything above is in scope for removal under PRD FS46 once Phase 2 and
-Phase 5 land: no legacy production engine or automatic fallback is meant to
-remain in the release image.
+Provider loss invalidates old descriptions and grants. Old handles and CWDs
+return lost/stale errors; they do not silently reconnect to replacement media.
+Fresh absolute opens may obtain a new exact root through surviving brokers.
+HostFS recovery restarts managed clients after its publications return. An
+outside provider guardian retains exact child/domain lifetimes and completes
+normal or fatal cleanup without scanning unrelated mounts or directories.
+
+## Qualification
+
+`emu/qemu/fs-gates.sh` runs resolver and hostile-caller checks, raw HostFS,
+native/POSIX semantics, resource recovery, stress, offline fsck and host-channel
+authority tests. `test-linux-first.py --lifecycle` covers real ISO mounts,
+readonly enforcement, busy reporting, Atlas, source retirement, RAM remount,
+HostFS recovery and durable shutdown. QEMU runs as the unprivileged caller;
+privileged observers mount only private disposable images.
+
+Physical USB discovery, optical media change/eject, device I/O faults and power
+loss require their own hardware evidence. Killing QEMU does not simulate loss
+of Linux's page cache. Performance qualification follows correctness; historical
+lane measurements remain in this document's Git history and the durable stores
+linked from Current State.

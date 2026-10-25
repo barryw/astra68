@@ -28,7 +28,7 @@
 #include <unistd.h>
 
 #define ASTRA_CAPTURE_DEVICE "/dev/astra-display-capture"
-#define ASTRA_QMP_DEFAULT "/run/astra/remote-desktop-qmp.sock"
+#define ASTRA_QMP_DEFAULT "/run/astra/qemu/remote-desktop-qmp.sock"
 #define ASTRA_CONTROL_DEFAULT "/run/astra/remote-desktop-control.sock"
 #define ASTRA_RFB_PORT 5900
 #define ASTRA_RFB_IDLE_US 100000L
@@ -1320,7 +1320,7 @@ static int astra_control_listen(const char *path)
         return -1;
     memcpy(address.sun_path, path, strlen(path) + 1u);
     if (bind(descriptor, (struct sockaddr *)&address, sizeof(address)) != 0 ||
-        chmod(path, 0600) != 0 || listen(descriptor, 1) != 0) {
+        chmod(path, 0660) != 0 || listen(descriptor, 1) != 0) {
         int saved = errno;
 
         (void)close(descriptor);

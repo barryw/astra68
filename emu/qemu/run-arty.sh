@@ -27,12 +27,16 @@ if [ "${#RELEASE_ID}" -ne 64 ]; then
     exit 1
 fi
 QEMU=${QEMU:-$ASTRA_ROOT/qemu/bin/qemu-system-m68k-astra}
+FONT_WORKER=$ASTRA_ROOT/bin/astra-font-worker
+if [ ! -x "$FONT_WORKER" ]; then
+    echo "Astra font worker is missing: $FONT_WORKER" >&2; exit 1
+fi
 ROM=${ROM:-$ASTRA_ROOT/rom/astra_boot.bin}
 BASE_STORAGE=${ASTRA_BASE_STORAGE:-$ASTRA_ROOT/storage-terminal.img}
 LIBDIR=${LIBDIR:-$ASTRA_ROOT/qemu/lib}
 TERMINAL_DISPLAY=${ASTRA_TERMINAL_DISPLAY:-$ASTRA_ROOT/bin/astra-terminal-display}
 INPUT_HOTPLUG=${ASTRA_INPUT_HOTPLUG:-$ASTRA_ROOT/bin/astra-input-hotplug.py}
-STATE_ROOT=${ASTRA_STATE_ROOT:-$ASTRA_STORE/state/$RELEASE_ID}
+STATE_ROOT=${ASTRA_STATE_ROOT:-$ASTRA_STORE/state/system}
 RUN_ROOT=${ASTRA_RUN_ROOT:-/run/astra}
 LOG_ROOT=${ASTRA_LOG_ROOT:-$ASTRA_STORE/log}
 TEXT_PLANE=${ASTRA_TEXT_PLANE_PATH:-$RUN_ROOT/post-text.bin}
@@ -47,9 +51,18 @@ elif [ -c "$HOST_ARENA" ]; then
 else
     DISPLAY_PAYLOAD=$RUN_ROOT/display-payload.bin
 fi
-HOSTFS_ROOT=${ASTRA_HOSTFS_ROOT:-$ASTRA_STORE/hostfs}
-QMP_SOCKET=${ASTRA_QMP_SOCKET:-$RUN_ROOT/qmp.sock}
-REMOTE_DESKTOP_QMP_SOCKET=${ASTRA_REMOTE_DESKTOP_QMP_SOCKET:-$RUN_ROOT/remote-desktop-qmp.sock}
+EXPORTS_ROOT=${ASTRA_EXPORTS_ROOT:-$ASTRA_STORE/hostfs}
+STORAGE_PROVIDER=$ASTRA_ROOT/bin/astra-storage
+IMAGE_SELECTOR=$ASTRA_ROOT/bin/storage_image.py
+if [ -n "${ASTRA_HOSTFS_ROOT+x}" ]; then
+    echo "ASTRA_HOSTFS_ROOT retired; configure ASTRA_EXPORTS_ROOT" >&2
+    exit 1
+fi
+# DE25: 8 KiB per description/object plus 40 KiB per DIR stays below 64 MiB.
+HOSTFS_MAX_DESCRIPTORS=${ASTRA_HOSTFS_MAX_DESCRIPTORS-2048}
+HOSTFS_MAX_DIRECTORIES=${ASTRA_HOSTFS_MAX_DIRECTORIES-1024}
+QMP_SOCKET=${ASTRA_QMP_SOCKET:-$RUN_ROOT/qemu/qmp.sock}
+REMOTE_DESKTOP_QMP_SOCKET=${ASTRA_REMOTE_DESKTOP_QMP_SOCKET:-$RUN_ROOT/qemu/remote-desktop-qmp.sock}
 CONSOLE_LOG=${ASTRA_CONSOLE_LOG:-$LOG_ROOT/qemu-console.log}
 PANIC_LOG=${ASTRA_PANIC_LOG:-$LOG_ROOT/panic-latest.log}
 MEMORY=${ASTRA_MEMORY:-512M}
@@ -120,61 +133,33 @@ if ! command -v taskset >/dev/null 2>&1; then
     exit 1
 fi
 
-start_helper()
-{
-    helper_cpu=$1
-    shift
-    taskset -c "$helper_cpu" "$@" &
-    started_pid=$!
+[ "$(id -u)" -eq 0 ] || {
+    echo "Astra runtime requires its root storage service launcher" >&2; exit 1;
 }
-
-# Fork-free: this runs for as long as Astra does, and a subshell and sed per
-# check cost about a fifth of the DE25's CPU at a 50 ms poll.
-process_alive()
-{
-    process_pid=$1
-    [ -n "$process_pid" ] && kill -0 "$process_pid" 2>/dev/null || return 1
-    # A zombie still answers kill -0.
-    while read -r process_key process_state process_rest; do
-        [ "$process_key" = "State:" ] || continue
-        [ "$process_state" != "Z" ]
-        return
-    done 2>/dev/null <"/proc/$process_pid/status"
-    return 1
+QEMU_UID=$(id -u "${ASTRA_QEMU_USER:-astra}")
+QEMU_GID=$(id -g "${ASTRA_QEMU_USER:-astra}")
+if [ "$QEMU_UID" -eq 0 ] || [ "$QEMU_GID" -eq 0 ]; then
+    echo "Astra QEMU requires an unprivileged user and group" >&2; exit 1
+fi
+[ -f "$STORAGE_PROVIDER" ] && [ -x "$STORAGE_PROVIDER" ] || {
+    echo "Astra storage component missing: $STORAGE_PROVIDER" >&2; exit 1;
 }
-
+[ -f "$IMAGE_SELECTOR" ] && [ -r "$IMAGE_SELECTOR" ] || {
+    echo "Astra storage component missing: $IMAGE_SELECTOR" >&2; exit 1;
+}
+for export in "$EXPORTS_ROOT/work" "$EXPORTS_ROOT/sound"; do
+    [ -d "$export" ] && [ ! -L "$export" ] || {
+        echo "Astra export must be provisioned: $export" >&2; exit 1;
+    }
+done
 mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")" \
     "$(dirname "$REMOTE_DESKTOP_QMP_SOCKET")" \
-    "$(dirname "$PANIC_LOG")" "$HOSTFS_ROOT" "$STATE_ROOT"
-exec 9>"$(dirname "$QMP_SOCKET")/runtime.lock"
+    "$(dirname "$PANIC_LOG")" "$STATE_ROOT"
+exec 9>"$RUN_ROOT/runtime.lock"
 if ! flock -n 9; then
     echo "Astra runtime is already active" >&2
     exit 1
 fi
-# HostFS keeps one directory per volume (work, sound). Before that, the
-# root was WORK itself: move what it held into work/ once. A move that was
-# interrupted resumes from the staging directory.
-if [ ! -d "$HOSTFS_ROOT/work" ]; then
-    staging=$HOSTFS_ROOT/.work-migrating
-    mkdir -p "$staging"
-    for entry in "$HOSTFS_ROOT"/* "$HOSTFS_ROOT"/.[!.]* "$HOSTFS_ROOT"/..?*; do
-        [ "$entry" = "$staging" ] && continue
-        [ -e "$entry" ] || [ -L "$entry" ] || continue
-        mv "$entry" "$staging/"
-    done
-    mv "$staging" "$HOSTFS_ROOT/work"
-fi
-# The release's shared SoundFonts, for any the SOUND volume lacks: a font
-# someone replaced or removed there stays as they left it.
-mkdir -p "$HOSTFS_ROOT/sound/soundfonts"
-for shipped in "$ASTRA_ROOT"/soundfonts/*; do
-    [ -f "$shipped" ] || continue
-    installed=$HOSTFS_ROOT/sound/soundfonts/${shipped##*/}
-    if [ ! -e "$installed" ] && [ ! -L "$installed" ]; then
-        cp "$shipped" "$installed.new" && chmod 0644 "$installed.new" &&
-            mv "$installed.new" "$installed"
-    fi
-done
 if [ -z "${STORAGE+x}" ]; then
     STORAGE=$STATE_ROOT/storage-terminal.img
     if [ ! -e "$STORAGE" ]; then
@@ -192,6 +177,17 @@ if [ ! -f "$STORAGE" ] || [ -L "$STORAGE" ] || [ ! -w "$STORAGE" ]; then
     echo "Astra runtime storage is not a writable regular file: $STORAGE" >&2
     exit 1
 fi
+if ! storage_selection=$(PYTHONDONTWRITEBYTECODE=1 python3 "$IMAGE_SELECTOR" "$STORAGE"); then
+    echo "Astra runtime image selection failed" >&2; exit 1
+fi
+read -r storage_offset storage_length storage_uuid storage_extra <<EOF
+$storage_selection
+EOF
+[ -z "$storage_extra" ] && [ -n "$storage_uuid" ] || {
+    echo "Astra runtime image selection malformed" >&2; exit 1;
+}
+sound_seed=none
+[ ! -d "$ASTRA_ROOT/soundfonts" ] || sound_seed=$ASTRA_ROOT/soundfonts
 rm -f "$QMP_SOCKET" "$REMOTE_DESKTOP_QMP_SOCKET"
 dd if=/dev/zero of="$TEXT_PLANE" bs=4096 count=1 2>/dev/null
 dd if=/dev/zero of="$DISPLAY_MAILBOX" bs="$DISPLAY_MAILBOX_STORAGE_BYTES" \
@@ -200,110 +196,39 @@ if [ ! -c "$DISPLAY_PAYLOAD" ]; then
     dd if=/dev/zero of="$DISPLAY_PAYLOAD" bs="$DISPLAY_PAYLOAD_BYTES" \
         count=1 2>/dev/null
 fi
-start_helper "$DISPLAY_CPU" "$TERMINAL_DISPLAY" "$TEXT_PLANE" \
-    "$DISPLAY_MAILBOX" "$DISPLAY_PAYLOAD"
-display_pid=$started_pid
-input_pid=
-qemu_pid=
-log_pid=
-console_pipe="$(dirname "$QMP_SOCKET")/qemu-console.pipe"
-stop_process()
-{
-    pid=$1
-    if [ -z "$pid" ]; then
-        return
+if [ "$(id -u)" -eq 0 ]; then
+    # Root owns the buffer names; QEMU can change their bytes, not replace them.
+    chmod 0700 "$STATE_ROOT"
+    chmod 0600 "$STORAGE"
+    chgrp "$QEMU_GID" "$TEXT_PLANE" "$DISPLAY_MAILBOX"
+    chmod 0660 "$TEXT_PLANE" "$DISPLAY_MAILBOX"
+    if [ ! -c "$DISPLAY_PAYLOAD" ]; then
+        chgrp "$QEMU_GID" "$DISPLAY_PAYLOAD"
+        chmod 0660 "$DISPLAY_PAYLOAD"
     fi
-    kill "$pid" 2>/dev/null || true
-    count=0
-    while process_alive "$pid" && [ "$count" -lt 10 ]; do
-        count=$((count + 1))
-        sleep 0.1
-    done
-    process_alive "$pid" && kill -KILL "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-}
-cleanup()
-{
-    stop_process "$input_pid"
-    input_pid=
-    stop_process "$qemu_pid"
-    qemu_pid=
-    stop_process "$log_pid"
-    log_pid=
-    stop_process "$display_pid"
-    display_pid=
-    rm -f "$QMP_SOCKET" "$REMOTE_DESKTOP_QMP_SOCKET" "$console_pipe"
-}
-trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
-
-rm -f "$console_pipe"
-mkfifo "$console_pipe"
-taskset -c "$AUX_CPU" tee "$CONSOLE_LOG" <"$console_pipe" &
-log_pid=$!
-env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
+    install -d -o "$QEMU_UID" -g "$QEMU_GID" -m 0700 \
+        "$(dirname "$QMP_SOCKET")" "$(dirname "$REMOTE_DESKTOP_QMP_SOCKET")"
+fi
+exec env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
+    ASTRA_STORAGE_NAME_STATE="$STATE_ROOT" \
+    ASTRA_FONT_WORKER_PATH="$FONT_WORKER" \
     ASTRA_DISPLAY_MAILBOX_PATH="$DISPLAY_MAILBOX" \
     ASTRA_DISPLAY_PAYLOAD_PATH="$DISPLAY_PAYLOAD" \
-    ASTRA_HOSTFS_ROOT="$HOSTFS_ROOT" \
-    LD_LIBRARY_PATH="$LIBDIR" "$QEMU" \
+    ASTRA_HOSTFS_MAX_DESCRIPTORS="$HOSTFS_MAX_DESCRIPTORS" \
+    ASTRA_HOSTFS_MAX_DIRECTORIES="$HOSTFS_MAX_DIRECTORIES" \
+    LD_LIBRARY_PATH="$LIBDIR" python3 "$ASTRA_ROOT/bin/runtime-supervisor.py" \
+    --display "$TERMINAL_DISPLAY" "$TEXT_PLANE" "$DISPLAY_MAILBOX" "$DISPLAY_PAYLOAD" \
+    --display-cpu "$DISPLAY_CPU" --input "$INPUT_HOTPLUG" --aux-cpu "$AUX_CPU" \
+    --qmp "$QMP_SOCKET" --remote-qmp "$REMOTE_DESKTOP_QMP_SOCKET" \
+    --uid "$QEMU_UID" --gid "$QEMU_GID" \
+    --console "$CONSOLE_LOG" --panic "$PANIC_LOG" -- \
+    "$STORAGE_PROVIDER" --uid "$QEMU_UID" --gid "$QEMU_GID" \
+    --system "$STORAGE" "$storage_offset" "$storage_length" "$storage_uuid" \
+    --work "$EXPORTS_ROOT/work" --sound "$EXPORTS_ROOT/sound" \
+    --limits 8388608 8388608 4 10000 4 100663296 8192 67108864 4096 33554432 4096 \
+    --discovery udev --seed-sound "$sound_seed" -- "$QEMU" \
     -object memory-backend-ram,id=astra-ram,size="$MEMORY",prealloc=on \
     -M astra68,memory-backend=astra-ram -m "$MEMORY" -bios "$ROM" \
-    -drive if=none,format=raw,file="$STORAGE" \
     -display none -monitor none -serial stdio \
     -qmp "unix:$QMP_SOCKET,server=on,wait=off" \
-    -qmp "unix:$REMOTE_DESKTOP_QMP_SOCKET,server=on,wait=off" "$@" \
-    >"$console_pipe" 2>&1 &
-qemu_pid=$!
-start_helper "$AUX_CPU" python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET"
-input_pid=$started_pid
-set +e
-while process_alive "$qemu_pid"; do
-    if ! process_alive "$display_pid"; then
-        wait "$display_pid"
-        helper_status=$?
-        echo "Astra display helper exited with status $helper_status; restarting" >&2
-        start_helper "$DISPLAY_CPU" "$TERMINAL_DISPLAY" "$TEXT_PLANE" \
-            "$DISPLAY_MAILBOX" "$DISPLAY_PAYLOAD"
-        display_pid=$started_pid
-    fi
-    if ! process_alive "$input_pid"; then
-        wait "$input_pid"
-        helper_status=$?
-        echo "Astra input helper exited with status $helper_status; restarting" >&2
-        start_helper "$AUX_CPU" python3 "$INPUT_HOTPLUG" --qmp "$QMP_SOCKET"
-        input_pid=$started_pid
-    fi
-    # Each pass forks only this sleep; a helper is restarted within 0.5 s.
-    sleep 0.5
-done
-wait "$qemu_pid"
-status=$?
-set -e
-qemu_pid=
-wait "$log_pid" 2>/dev/null || true
-log_pid=
-if grep -q "\*\*\* AXIOM KERNEL PANIC \*\*\*" "$CONSOLE_LOG"; then
-    cp "$CONSOLE_LOG" "$PANIC_LOG"
-    sleep 0.1
-fi
-trap - EXIT
-cleanup
-if [ "$status" -eq 88 ]; then
-    if systemctl poweroff --no-block; then
-        echo "Astra guest shut down cleanly; DE25 poweroff requested"
-        exit 0
-    fi
-    echo "Astra guest shut down, but DE25 poweroff failed" >&2
-fi
-if [ "$status" -eq 89 ]; then
-    if systemctl reboot --no-block; then
-        echo "Astra guest restarted cleanly; DE25 reboot requested"
-        exit 0
-    fi
-    echo "Astra guest restarted, but DE25 reboot failed" >&2
-fi
-# A QEMU exit without the dedicated clean-shutdown code is a runtime failure,
-# including exit 0; systemd must restart it rather than leave Astra absent.
-exit 1
+    -qmp "unix:$REMOTE_DESKTOP_QMP_SOCKET,server=on,wait=off" "$@"

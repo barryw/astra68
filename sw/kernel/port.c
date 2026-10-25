@@ -896,10 +896,10 @@ void kernel_port_handle_release(void *object, void *context)
         maybe_free_port(port);
 }
 
-KernelPortStatus kernel_port_send(
+KernelPortStatus kernel_port_send_narrowed(
     KernelPort *port, KernelHandleTable *source_table,
     const void *raw_message, uint32_t message_size,
-    const KernelHandle *handles, uint32_t handle_count,
+    const KernelHandle *handles, uint32_t handle_count, const uint32_t *masks,
     uint32_t *woken_threads)
 {
     KernelPortMessage *message;
@@ -963,6 +963,16 @@ KernelPortStatus kernel_port_send(
             free_message(message);
             return map_handle_status(handle_status);
         }
+        if (masks != NULL) {
+            handle_status = kernel_handle_transfer_narrow(&transfer, masks);
+            if (handle_status != KERNEL_HANDLE_OK) {
+                if (kernel_handle_transfer_rollback(&transfer) !=
+                    KERNEL_HANDLE_OK)
+                    pool_corrupt = 1u;
+                free_message(message);
+                return map_handle_status(handle_status);
+            }
+        }
         handle_status = kernel_handle_transfer_commit_export(
             source_table, &transfer);
         if (handle_status != KERNEL_HANDLE_OK) {
@@ -997,6 +1007,17 @@ KernelPortStatus kernel_port_send(
         return KERNEL_PORT_CORRUPT;
     }
     return KERNEL_PORT_OK;
+}
+
+KernelPortStatus kernel_port_send(
+    KernelPort *port, KernelHandleTable *source_table,
+    const void *raw_message, uint32_t message_size,
+    const KernelHandle *handles, uint32_t handle_count,
+    uint32_t *woken_threads)
+{
+    return kernel_port_send_narrowed(port, source_table, raw_message,
+                                     message_size, handles, handle_count,
+                                     NULL, woken_threads);
 }
 
 /*

@@ -86,6 +86,9 @@ static const KernelAllocationSiteInfo site_info[KERNEL_ALLOCATION_SITE_COUNT] = 
     [KERNEL_ALLOCATION_SITE_DEVICE_METADATA] = {
         "device-metadata", KERNEL_ALLOCATION_TAG_DEVICE, 0u, 1u, 0u
     },
+    [KERNEL_ALLOCATION_SITE_HOST_SCOPE_METADATA] = {
+        "host-scope-metadata", KERNEL_ALLOCATION_TAG_DEVICE, 0u, 1u, 0u
+    },
     [KERNEL_ALLOCATION_SITE_PORT_METADATA] = {
         "port-metadata", KERNEL_ALLOCATION_TAG_IPC, 0u, 1u, 0u
     },

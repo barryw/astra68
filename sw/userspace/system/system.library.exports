@@ -1,4 +1,4 @@
-ASTRA_SYSTEM_3.0 {
+ASTRA_SYSTEM_4.0 {
     global:
         astra_aicon_open;
         astra_aicon_palette;
@@ -41,11 +41,14 @@ ASTRA_SYSTEM_3.0 {
         astra_display_cleanup;
         astra_display_close;
         astra_display_layout_calculate;
+        astra_display_stage;
         astra_display_staging;
         astra_draw_blit;
+        astra_draw_font_text;
         astra_draw_line;
         astra_draw_lines;
         astra_draw_list_cleanup;
+        astra_draw_list_append_view;
         astra_draw_list_close;
         astra_draw_list_create;
         astra_draw_list_reset;
@@ -57,6 +60,7 @@ ASTRA_SYSTEM_3.0 {
         astra_draw_submit;
         astra_draw_triangles;
         astra_draw_ui_text;
+        astra_draw_upload;
         astra_fence_cleanup;
         astra_fence_close;
         astra_fence_poll;
@@ -97,6 +101,7 @@ ASTRA_SYSTEM_3.0 {
         astra_surface_close;
         astra_surface_create;
         astra_surface_get_info;
+        astra_surface_palette_write_staged;
         astra_surface_read;
         astra_surface_write;
         astra_surface_write_staged;
@@ -114,6 +119,8 @@ ASTRA_SYSTEM_3.0 {
         astra_window_get_info;
         astra_window_lower;
         astra_window_maximize;
+        astra_window_menu_close;
+        astra_window_menu_open;
         astra_window_minimize;
         astra_window_move;
         astra_window_present;
@@ -125,23 +132,14 @@ ASTRA_SYSTEM_3.0 {
         astra_window_set_application_name;
         astra_window_set_event_mask;
         astra_window_set_frame;
+        astra_window_set_pointer_grab;
         astra_window_set_pointer_image;
         astra_window_set_pointer_shape;
         astra_window_set_title;
         astra_window_surface;
         astra_window_vblank_wait_handle;
-    local:
-        *;
-};
-
-ASTRA_SYSTEM_3.1 {
-    global:
-        astra_display_stage;
-        astra_draw_upload;
-} ASTRA_SYSTEM_3.0;
-
-ASTRA_SYSTEM_3.2 {
-    global:
-        astra_window_set_pointer_grab;
         astra_window_warp_pointer;
-} ASTRA_SYSTEM_3.1;
+        astra_service_definition_destroy;
+        astra_service_info_destroy;
+    local: *;
+};

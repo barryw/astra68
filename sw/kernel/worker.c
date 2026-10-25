@@ -285,17 +285,39 @@ bool kernel_worker_work_pending(void)
     return worker_state == KERNEL_WORKER_READY && pending_work != 0u;
 }
 
+bool kernel_worker_servicing(void)
+{
+    return worker_state == KERNEL_WORKER_RUNNING;
+}
+
+static KernelWorkerStatus worker_service_failed(uint32_t work,
+                                                 uint32_t class_index,
+                                                 uint32_t status,
+                                                 KernelWorkerStatus result)
+{
+    (void)kernel_trace_write(KERNEL_TRACE_EVENT_WORKER_FAILURE,
+                             KERNEL_TRACE_LEVEL_ERROR, work, class_index,
+                             status, worker_state);
+    return result;
+}
+
 static KernelWorkerStatus service_once(void)
 {
     KernelProcessStatus process_status = KERNEL_PROCESS_OK;
     KernelWorkerStatus result = KERNEL_WORKER_OK;
+    uint32_t failure_class = UINT32_MAX;
+    uint32_t failure_status = 0u;
     uint32_t work;
 
     if (worker_state != KERNEL_WORKER_RUNNING || !stack_canary_valid())
-        return KERNEL_WORKER_CORRUPT;
+        return worker_service_failed(pending_work, UINT32_MAX,
+                                     (uint32_t)worker_state,
+                                     KERNEL_WORKER_CORRUPT);
     work = pending_work;
     if (work == 0u)
-        return KERNEL_WORKER_INVALID_STATE;
+        return worker_service_failed(0u, UINT32_MAX,
+                                     KERNEL_WORKER_INVALID_STATE,
+                                     KERNEL_WORKER_INVALID_STATE);
     pending_work = 0u;
 
     kernel_enable_interrupts();
@@ -322,6 +344,8 @@ static KernelWorkerStatus service_once(void)
         }
         if (class_service[index] == NULL) {
             result = KERNEL_WORKER_CORRUPT;
+            failure_class = index;
+            failure_status = UINT32_MAX;
             break;
         }
         if (bit >= KERNEL_WORKER_DEVICE_RESET)
@@ -337,6 +361,8 @@ static KernelWorkerStatus service_once(void)
             ++deferred_pass_count;
         } else if (service_result != KERNEL_WORKER_SERVICE_COMPLETE) {
             result = KERNEL_WORKER_CORRUPT;
+            failure_class = index;
+            failure_status = (uint32_t)service_result;
             break;
         }
     }
@@ -344,13 +370,15 @@ static KernelWorkerStatus service_once(void)
     ++service_pass_count;
 
     if (result != KERNEL_WORKER_OK)
-        return result;
+        return worker_service_failed(work, failure_class, failure_status,
+                                     result);
 
     if (process_status == KERNEL_PROCESS_DEFERRED) {
         retry_work |= KERNEL_WORKER_PROCESS_REAP;
         ++deferred_pass_count;
     } else if (process_status != KERNEL_PROCESS_OK) {
-        return KERNEL_WORKER_CORRUPT;
+        return worker_service_failed(work, 0u, (uint32_t)process_status,
+                                     KERNEL_WORKER_CORRUPT);
     }
     return KERNEL_WORKER_OK;
 }

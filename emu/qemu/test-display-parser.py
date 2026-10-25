@@ -30,15 +30,17 @@ class Cycles:
 def snapshot(submit, complete, collect, counts=(1, 1)):
     return Cycles({
         "astra-display-submissions": list(counts),
+        "astra-display-completions": counts[-1],
         "astra-display-submit-cycle": submit,
         "astra-display-completion-cycle": complete,
         "astra-display-collect-cycle": collect,
     })
 
 
-assert display.collected_cycle_span(snapshot(100, 150, 180)) == 80
-assert display.collected_cycle_span(snapshot(200, 150, 180)) is None
-assert display.collected_cycle_span(snapshot(100, 150, 180, (1, 2))) is None
+# Collection timing is deliberately irrelevant: the device finished at 150.
+assert display.completed_cycle_span(snapshot(100, 150, 180)) == 50
+assert display.completed_cycle_span(snapshot(200, 150, 180)) is None
+assert display.completed_cycle_span(snapshot(100, 150, 180, (1, 2))) is None
 
 assert display.pointer_route_settled(5, 76, 93, 9, 9, 4, 76, 93, 8)
 assert not display.pointer_route_settled(5, 76, 93, 9, 8, 4, 76, 93, 8)

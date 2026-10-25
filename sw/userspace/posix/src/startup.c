@@ -19,31 +19,30 @@ char **environ;
 static char **
 copy_startup_vectors(const AstraStartupInfo *startup, char ***environment)
 {
-    const char *const *source_arguments = (const char *const *)(uintptr_t)
-        startup->argv_address;
-    const char *const *source_environment = (const char *const *)(uintptr_t)
-        startup->environment_address;
+    const uint32_t *source_arguments;
+    const uint32_t *source_environment;
     size_t pointer_count;
     size_t total;
     char **arguments;
     char **environ_copy;
     char *text;
 
-    if (startup->argc > ASTRA_LAUNCH_ARGUMENT_MAX ||
-        startup->environment_count > ASTRA_LAUNCH_ENVIRONMENT_MAX)
+    if (!astra_startup_validate(startup))
         return NULL;
+    source_arguments = (const uint32_t *)(uintptr_t)startup->argv_address;
+    source_environment = (const uint32_t *)(uintptr_t)startup->environment_address;
     pointer_count = (size_t)startup->argc + 1u +
                     (size_t)startup->environment_count + 1u;
     total = pointer_count * sizeof(char *);
     for (uint32_t index = 0u; index < startup->argc; ++index) {
-        size_t length = strlen(source_arguments[index]) + 1u;
+        size_t length = strlen((const char *)(uintptr_t)source_arguments[index]) + 1u;
 
         if (length > SIZE_MAX - total)
             return NULL;
         total += length;
     }
     for (uint32_t index = 0u; index < startup->environment_count; ++index) {
-        size_t length = strlen(source_environment[index]) + 1u;
+        size_t length = strlen((const char *)(uintptr_t)source_environment[index]) + 1u;
 
         if (length > SIZE_MAX - total)
             return NULL;
@@ -55,18 +54,20 @@ copy_startup_vectors(const AstraStartupInfo *startup, char ***environment)
     environ_copy = arguments + startup->argc + 1u;
     text = (char *)(void *)(environ_copy + startup->environment_count + 1u);
     for (uint32_t index = 0u; index < startup->argc; ++index) {
-        size_t length = strlen(source_arguments[index]) + 1u;
+        const char *value = (const char *)(uintptr_t)source_arguments[index];
+        size_t length = strlen(value) + 1u;
 
         arguments[index] = text;
-        memcpy(text, source_arguments[index], length);
+        memcpy(text, value, length);
         text += length;
     }
     arguments[startup->argc] = NULL;
     for (uint32_t index = 0u; index < startup->environment_count; ++index) {
-        size_t length = strlen(source_environment[index]) + 1u;
+        const char *value = (const char *)(uintptr_t)source_environment[index];
+        size_t length = strlen(value) + 1u;
 
         environ_copy[index] = text;
-        memcpy(text, source_environment[index], length);
+        memcpy(text, value, length);
         text += length;
     }
     environ_copy[startup->environment_count] = NULL;

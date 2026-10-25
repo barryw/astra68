@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Chocolate Doom 3.1.1, unmodified, started as an application.
+"""Chocolate Doom 3.1.1 with Astra quit branding, started as an application.
 
 The image holds ChocolateDoom.app (the game, the shareware doom1.wad and
 nothing else Doom needs outside Astra's shared libraries) and starts it with
 no arguments, as the desktop does. Doom must find its IWAD from its bundle
 (the application's working directory), open a window through the hardware
-renderer, and play its title and demos: the stand-in display helper must
-receive render-only batches steadily, and the stand-in audio daemon a
-44.1 kHz stereo S16BE voice carrying sound. No process may fault.
+renderer, and display its title before starting gameplay: the stand-in display
+helper must receive render-only batches steadily during play, and the stand-in
+audio daemon a 44.1 kHz stereo S16BE voice carrying sound. No process may fault.
 
 Its frames take the posted path (docs/MEDIA_DATA_PLANE.md, Video): the
 display service logs a window's first posted frame; a frame is one
@@ -18,8 +18,8 @@ staging area and its upload travels in the frame: the service logs a
 window's first frame upload, and the copy engine -- which packed every
 frame of the old path into staging -- runs far less than once a frame.
 
-Then it is played from the keyboard, as a person would: Escape opens the
-menu over the demo, Enter starts a new game (episode, skill), Escape returns
+It is played from the keyboard, as a person would: Escape opens the
+menu over the title, Enter starts a new game (episode, skill), Escape returns
 to the menu from play, Up and Enter choose Quit Game and `y` confirms. Doom
 must then show ENDOOM and wait for a key, and that key must end it with
 status 0. Every step depends on the one before, so a key that is lost or
@@ -110,8 +110,8 @@ def faults(machine):
 
 
 # (qcode, seconds to let Doom act on it: menus wipe, a new game loads).
-PLAY = (("esc", 2), ("ret", 1.5), ("ret", 1.5), ("ret", 5),
-        ("esc", 2), ("up", 1), ("ret", 1.5), ("y", 4))
+START_GAME = (("esc", 2), ("ret", 1.5), ("ret", 1.5), ("ret", 5))
+QUIT_GAME = (("esc", 2), ("up", 1), ("ret", 1.5), ("y", 4))
 
 
 def wait_exit(log, after, seconds):
@@ -152,20 +152,23 @@ def check_locked_pointer(machine):
                            ((x, y), cursor(machine)[1:]))
 
 
-def play_and_quit(machine, log):
-    log.poll()
-    start = log.newest
-    for index, (qcode, settle) in enumerate(PLAY):
+def start_game(machine):
+    for qcode, settle in START_GAME:
         machine.qmp.key(qcode)
         time.sleep(settle)
-        if index == 3:
-            check_locked_pointer(machine)
-            # The lock is the display's, not SDL's warp-to-centre fallback,
-            # which hides the cursor and pulls the pointer back too.
-            if not any("display: a window locks the pointer" in line
-                       for line in machine.said_with_syslog(0)[0]):
-                raise RuntimeError("Doom's relative mode is not a pointer "
-                                   "lock")
+    check_locked_pointer(machine)
+    # The lock is the display's, not SDL's warp-to-centre fallback.
+    if not any("display: a window locks the pointer" in line
+               for line in machine.said_with_syslog(0)[0]):
+        raise RuntimeError("Doom's relative mode is not a pointer lock")
+
+
+def quit_game(machine, log):
+    log.poll()
+    start = log.newest
+    for qcode, settle in QUIT_GAME:
+        machine.qmp.key(qcode)
+        time.sleep(settle)
     # ENDOOM waits for a key: Doom is still alive.
     if wait_exit(log, start, 2) is not None:
         raise RuntimeError("Doom exited without showing ENDOOM: %r" %
@@ -215,8 +218,11 @@ def main():
             if not machine.wait_for_serial(terminal_gate.BOOT_MARKER, 120):
                 raise RuntimeError("Astra did not finish booting: %r" %
                                    machine.recent_serial(40))
+            before = len(batches.times)
+            machine.qmp.double_click(*machine.desktop_icon(
+                "/apps/ChocolateDoom.app"))
             deadline = time.monotonic() + 120
-            while len(batches.times) < 50:
+            while len(batches.times) < before + 50:
                 log.poll()
                 # Status 0x10 is the remote desktop's retry under QEMU.
                 if any(status not in (0, 0x10) and reason == 1
@@ -234,6 +240,7 @@ def main():
                 time.sleep(0.1)
             copies = machine.qmp.execute("qom-get", {
                 "path": "/machine", "property": "astra-copy-lists"})
+            start_game(machine)
             time.sleep(arguments.seconds)
             copies = machine.qmp.execute("qom-get", {
                 "path": "/machine", "property": "astra-copy-lists"}) - copies
@@ -305,7 +312,7 @@ def main():
                 raise RuntimeError("no MIDI music from the host synthesizer "
                                    "(%d songs, %d frames)" %
                                    (len(songs), music_frames))
-            play_and_quit(machine, log)
+            quit_game(machine, log)
             if faults(machine):
                 raise RuntimeError("a process faulted: %r" %
                                    machine.said(0)[0][-30:])

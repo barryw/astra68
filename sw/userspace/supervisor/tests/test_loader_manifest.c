@@ -26,7 +26,7 @@ static void valid_manifest(void)
         "# shipped startup\n"
             "service /services/storage grants BLOCK_DEVICE BLOCK_IRQ "
             "serves SYSTEM:r required\n"
-            "service /services/hostfs grants HOST_DEVICE "
+            "service /services/hostfs grants HOST_FILESYSTEM "
             "serves WORK:rw METRICS:r SOUND:rw required\n"
         "service /services/events grants SYSTEM:r STORE:rw serves EVENTS:r\n";
     SupervisorManifest manifest = SUPERVISOR_MANIFEST_INIT;
@@ -286,14 +286,17 @@ static void trusted_entries_are_ceilings(void)
 static void default_application_ceiling(void)
 {
     static const char *admitted[] = {
-        "GUI", "CLIPBOARD", "PCM", "NETWORK", "APP_LAUNCH", "APPS:r",
-        "LIBS:r", "STORE:rw", "HOME:rw", "CONFIG:rw", "RAM:r",
+        "GUI", "CLIPBOARD", "PCM", "NETWORK", "APP_LAUNCH", "FONT_CATALOG",
+        "APPS:r", "LIBS:r", "FONTS:r", "STORE:rw", "HOME:rw", "CONFIG:rw",
+        "RAM_READ", "RAM_WRITE",
     };
     static const char *refused[] = {
-        "DISPLAY", "INPUT", "HOST_DEVICE", "BLOCK_DEVICE", "CLOCK",
+        "DISPLAY", "INPUT", "HOST_DEVICE", "HOST_FILESYSTEM", "BLOCK_DEVICE",
+        "CLOCK",
         "SERVICE_MANAGER", "EVENT_CONTROL", "PROCESS", "APPS:rw",
         "LIBS:rw", "SYSTEM:r", "PROC:r", "PROC:rw", "COMMANDS:r", "STORE",
-        "GUI:r", "UNKNOWN",
+        "GUI:r", "RAM_READ:r", "RAM_WRITE:rw", "RAM0:r", "UNKNOWN",
+        "CONFIG_SYSTEM:r", "CONFIG_SYSTEM:rw", "FONTS:rw", "FONTS_ADMIN",
     };
 
     for (uint32_t at = 0u; at < sizeof(admitted) / sizeof(admitted[0]);

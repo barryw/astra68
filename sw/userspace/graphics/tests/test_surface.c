@@ -8,11 +8,24 @@
 #include <astra/texture_reference.h>
 #include <astra/theme.h>
 #include <astra/ui_font.h>
+#include <astra/fonts.h>
 
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+static uint32_t closed_font_snapshots;
+static uint32_t unmapped_font_snapshots;
+AstraResult astra_area_close(AstraArea *area)
+{
+    assert(area->handle == 77u);
+    if (area->address != NULL) ++unmapped_font_snapshots;
+    *area = (AstraArea)ASTRA_AREA_INIT;
+    ++closed_font_snapshots;
+    return ASTRA_OK;
+}
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
@@ -140,6 +153,75 @@ static void test_rgb565_upload_uses_hardware_blit(void)
     assert(astra_render_builder_upload_rgb565(
         &builder, pixels, 3u, 2u, 2u) == 0u);
     assert(builder.failed == ASTRA_RENDER_BUILDER_FAILURE_SURFACE);
+}
+
+static void test_index8_upload_uses_palette_blit(void)
+{
+    static uint8_t storage[ASTRA_RENDER_BUILDER_BYTES];
+    static const uint8_t pixels[] = {0u, 1u, 1u, 0u};
+    uint32_t palette[256] = {0u};
+    AstraRenderBuilder builder;
+    uint32_t source;
+    const uint8_t *descriptor;
+    const uint8_t *command;
+
+    palette[0] = UINT32_C(0x00000000);
+    palette[1] = UINT32_C(0x80ff4000);
+    assert(astra_render_builder_init(&builder, storage, sizeof(storage), 1u));
+    source = astra_render_builder_upload_index8(
+        &builder, pixels, 2u, 2u, 2u, palette);
+    assert(source != 0u);
+    descriptor = batch_record(storage, source);
+    assert((be32(descriptor + 24u) >> 24u) == ASTRA_RENDER_FORMAT_INDEX8);
+    assert(memcmp(batch_record(storage, be32(descriptor + 8u)),
+                  pixels, sizeof(pixels)) == 0);
+    assert(be32(batch_record(storage, be32(descriptor + 28u)) + 4u) ==
+           palette[1]);
+    assert(astra_render_builder_blit_region(
+        &builder, astra_render_builder_frame(&builder), source,
+        0, 0, 3, 4, 2u, 2u));
+    command = batch_command(storage, 0u);
+    assert((be32(command + 4u) &
+            (ASTRA_RENDER_FLAG_BLIT_PALETTE |
+             ASTRA_RENDER_FLAG_BLIT_ALPHA)) ==
+           (ASTRA_RENDER_FLAG_BLIT_PALETTE |
+            ASTRA_RENDER_FLAG_BLIT_ALPHA));
+    assert((be32(command + 60u) >>
+            ASTRA_RENDER_BLIT_OPTION_OPACITY_SHIFT) == 255u);
+    assert(finish_batch(&builder, storage) != 0u);
+
+    assert(astra_render_builder_init(&builder, storage, sizeof(storage), 2u));
+    assert(astra_render_builder_upload_index8(
+        &builder, pixels, 2u, 2u, 2u, NULL) == 0u);
+    assert(builder.failed == ASTRA_RENDER_BUILDER_FAILURE_SURFACE);
+}
+
+static void test_index8_upload_stays_indexed(void)
+{
+    static uint8_t storage[ASTRA_RENDER_BUILDER_BYTES];
+    AstraRenderBuilder builder;
+    uint32_t destination;
+    uint32_t source;
+    uint32_t attachment_offset;
+    const uint8_t *command;
+
+    assert(astra_render_builder_init(&builder, storage, sizeof(storage), 3u));
+    destination = astra_render_builder_surface_format_at(
+        &builder, UINT32_C(0x02000000), 4u, 2u, 2u, 2u,
+        ASTRA_RENDER_FORMAT_INDEX8,
+        ASTRA_RENDER_SURFACE_READ | ASTRA_RENDER_SURFACE_WRITE);
+    source = astra_render_builder_upload_reserve(
+        &builder, 2u, 2u, 2u, ASTRA_RENDER_FORMAT_INDEX8,
+        &attachment_offset);
+    assert(destination != 0u && source != 0u);
+    assert(astra_render_builder_blit_region(
+        &builder, destination, source, 0, 0, 0, 0, 2u, 2u));
+    command = batch_command(storage, 0u);
+    assert((be32(command + 4u) &
+            (ASTRA_RENDER_FLAG_BLIT_PALETTE |
+             ASTRA_RENDER_FLAG_BLIT_ALPHA)) == 0u);
+    assert(astra_render_builder_finish_render_only(&builder) >=
+           attachment_offset + 4u);
 }
 
 /* A reserved upload copies nothing: its descriptor keeps the staging pitch
@@ -429,7 +511,7 @@ static void test_draw_list_clip_reaches_hardware(void)
     astra_surface_fill(&surface, 0, 0, 20u, 10u, 0x1234u);
     header = (const AstraDrawListHeader *)(const void *)draw_storage;
     draw = (AstraDrawListCommand *)(void *)(header + 1);
-    assert(header->version == ASTRA_DRAW_LIST_VERSION_1_7);
+    assert(header->version == ASTRA_DRAW_LIST_VERSION_1_8);
     assert(draw->clip_left == 4u && draw->clip_top == 3u &&
            draw->clip_right == 12u && draw->clip_bottom == 8u);
     assert(!astra_draw_list_covers(header, 20u, 10u));
@@ -451,6 +533,24 @@ static void test_draw_list_clip_reaches_hardware(void)
     destination = astra_render_builder_surface(&builder, 20u, 10u);
     assert(destination != 0u &&
            !astra_render_builder_replay(&builder, destination, header));
+    const struct { int32_t x, y; uint32_t width, height; } large[] = {
+        {0, 0, 131072u, 131072u},
+        {-70000, -70000, 140000u, 140000u},
+        {INT32_MIN, INT32_MIN, UINT32_MAX, UINT32_MAX},
+    };
+    for (uint32_t at = 0u; at < sizeof(large) / sizeof(large[0]); ++at) {
+        assert(astra_draw_list_view_init(&surface, draw_storage, sizeof(draw_storage), 20u, 10u));
+        assert(astra_surface_clip(&surface, 4, 3, 8u, 5u));
+        astra_surface_fill(&surface, large[at].x, large[at].y,
+            large[at].width, large[at].height, 0x1234u);
+        assert(header->command_count == 1u && draw->x == 4 && draw->y == 3 &&
+            draw->width == 8u && draw->height == 5u);
+        astra_surface_fill(&surface, INT32_MAX, 0, UINT32_MAX, UINT32_MAX, 0xffffu);
+        assert(header->command_count == 1u);
+        assert(astra_render_builder_init(&builder, batch_storage, sizeof(batch_storage), at + 3u));
+        destination = astra_render_builder_surface(&builder, 20u, 10u);
+        assert(destination != 0u && astra_render_builder_replay(&builder, destination, header));
+    }
 }
 
 static void test_color_and_glyph(void)
@@ -613,6 +713,224 @@ static void test_font_advance_and_baseline(void)
            3 + strike->ascent / 64);
     assert(low_s16(second_position) + second->bearing_y / 64 ==
            3 + strike->ascent / 64);
+}
+
+static const AstraRenderFont *resolve_installed_font(void *context,
+                                                     const char *id,
+                                                     uint32_t id_length)
+{
+    assert(id_length == sizeof("user:fixture") - 1u &&
+           memcmp(id, "user:fixture", id_length) == 0);
+    return context;
+}
+
+static void test_installed_afnt_reaches_hardware_glyph_run(void)
+{
+    assert(astra_fonts_context_id(NULL) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_ui_line_height(11u, 10 * 64, 3 * 64, 64) == 14u);
+    assert(astra_ui_line_height(11u, 7 * 64, 2 * 64, -64) == 11u);
+    static uint8_t batch[ASTRA_RENDER_BUILDER_BYTES];
+    static uint8_t list_area[ASTRA_DRAW_LIST_AREA_BYTES];
+    FILE *file = fopen("fonts/astra-mono.afnt", "rb");
+    AstraRenderFont font;
+    AstraRenderBuilder builder;
+    AstraAfntGlyphInfo first, second;
+    AstraAfntStrikeInfo strike;
+    uint8_t *bytes;
+    long length;
+    uint32_t strike_index = 0u;
+    uint32_t destination;
+    AstraDrawListHeader *list = (AstraDrawListHeader *)(void *)list_area;
+    AstraDrawListCommand *named = (AstraDrawListCommand *)(void *)(list + 1);
+    AstraRenderSourceResolver resolver = {
+        .context = &font, .resolve_font = resolve_installed_font
+    };
+    const uint8_t *command, *records, *source_descriptor, *source;
+
+    assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+    length = ftell(file);
+    assert(length > 0 && length <= 32L * 1024L * 1024L);
+    assert(fseek(file, 0, SEEK_SET) == 0);
+    bytes = malloc((size_t)length);
+    assert(bytes != NULL && fread(bytes, 1u, (size_t)length, file) ==
+                            (size_t)length);
+    assert(fclose(file) == 0);
+    assert(astra_render_font_init(&font, bytes, (uint32_t)length));
+    assert(astra_afnt_strike_info(&font.view, strike_index, &strike));
+    assert(astra_afnt_glyph_info(&font.view, strike_index, 'I', &first));
+    assert(astra_afnt_glyph_info(&font.view, strike_index, 'W', &second));
+    assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
+    assert(astra_render_builder_use_font(&builder, &font));
+    uint32_t expected_width =
+        (2u * (uint32_t)first.advance_x + (uint32_t)second.advance_x + 63u) / 64u;
+    uint64_t exact_advance;
+    uint32_t fitted, line_height;
+    assert(astra_render_builder_text_measure(&builder, "IIW", 3u,
+        strike.pixel_height, 0u, UINT64_MAX, &exact_advance, &fitted, &line_height));
+    assert(fitted == 3u && exact_advance ==
+        2u * (uint32_t)first.advance_x + (uint32_t)second.advance_x);
+    assert(!astra_render_builder_text_measure(&builder, "IIW", 3u,
+        15u, 0u, UINT64_MAX, &exact_advance, &fitted, &line_height));
+    assert(exact_advance == 0u && fitted == 0u);
+    assert(astra_render_builder_text_width(&builder, "IIW", 3u,
+        strike.pixel_height, 0u) == expected_width);
+    assert(astra_render_builder_text_fit(&builder, "IIW", 3u,
+        strike.pixel_height, expected_width, 0u) == 3u);
+    assert(astra_render_builder_text_fit(&builder, "IIW", 3u,
+        strike.pixel_height, ((uint32_t)first.advance_x + 63u) / 64u,
+        0u) == 1u);
+    assert(astra_render_builder_text_fit(&builder, "IW", 2u,
+        strike.pixel_height, 0u, 0u) == 0u);
+    assert(astra_render_builder_text_width(&builder, "\xff", 1u,
+        strike.pixel_height, 0u) == astra_render_builder_text_width(
+        &builder, "\xef\xbf\xbd", 3u, strike.pixel_height, 0u));
+    assert(astra_render_builder_text_fit(&builder, "\xc4\x84" "W", 3u,
+        strike.pixel_height, astra_render_builder_text_width(
+            &builder, "\xc4\x84", 2u, strike.pixel_height, 0u), 0u) == 2u);
+    assert(astra_render_builder_text_width(&builder, "IW", 2u, 15u, 0u) == 0u);
+    {
+        char id[ASTRA_FONT_ID_MAX] = "user:fixture";
+        AstraArea snapshot = {.handle = 77u, .address = bytes,
+            .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
+        AstraSurfaceView surface;
+        assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length, id) == ASTRA_OK);
+        char adopted[ASTRA_FONT_ID_MAX];
+        assert(astra_fonts_context_id(adopted) == ASTRA_OK && strcmp(adopted, id) == 0);
+        assert(snapshot.handle == ASTRA_INVALID_HANDLE);
+        snapshot = (AstraArea){.handle = 77u, .address = bytes,
+            .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
+        assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length, id) == ASTRA_OK);
+        assert(snapshot.handle == ASTRA_INVALID_HANDLE &&
+               closed_font_snapshots == 1u && unmapped_font_snapshots == 0u);
+        assert(astra_fonts_use_borrowed(bytes, (uint32_t)length, id) == ASTRA_ERROR_BUSY);
+        assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) ==
+               expected_width);
+        assert(astra_surface_ui_text_height(strike.pixel_height) ==
+            astra_ui_line_height(strike.pixel_height, strike.ascent,
+                                 strike.descent, strike.line_gap));
+        assert(astra_surface_ui_text_fit("IIW", 3u, strike.pixel_height,
+            ((uint32_t)first.advance_x + 63u) / 64u) == 1u);
+        assert(astra_draw_list_view_init(&surface, list_area, sizeof(list_area),
+            160u, 80u));
+        assert(astra_surface_font_text(&surface, "user:other", 10u,
+            5, 7, "IIW", 3u, strike.pixel_height, 0xffffu));
+        assert(named->operation == ASTRA_DRAW_LIST_NAMED_TEXT &&
+            named->font_height == strike.pixel_height && named->source == 10u &&
+            memcmp(list_area + named->payload_offset, "user:otherIIW", 13u) == 0);
+        assert(astra_fonts_context_id(adopted) == ASTRA_OK && strcmp(adopted, id) == 0);
+        assert(!astra_surface_font_text(&surface, "", 0u,
+            5, 7, "IIW", 3u, strike.pixel_height, 0xffffu));
+        assert(!astra_surface_font_text(&surface, "user:other", 10u,
+            5, 7, "\xff", 1u, strike.pixel_height, 0xffffu));
+        surface.kind = ASTRA_SURFACE_VIEW_RGB565;
+        assert(!astra_surface_font_text(&surface, "user:other", 10u,
+            5, 7, "IIW", 3u, strike.pixel_height, 0xffffu));
+        assert(astra_draw_list_view_init(&surface, list_area, sizeof(list_area),
+            160u, 80u));
+        astra_surface_ui_text(&surface, 5, 7, "IIW", 3u, strike.pixel_height,
+            0xffffu);
+        assert(named->operation == ASTRA_DRAW_LIST_NAMED_TEXT &&
+               named->source == strlen(id) &&
+               memcmp(list_area + named->payload_offset, "user:fixtureIIW",
+                   named->payload_bytes) == 0);
+        {
+            static uint8_t context_batch[ASTRA_RENDER_BUILDER_BYTES];
+            AstraRenderBuilder replay;
+            assert(astra_draw_list_view_init(&surface, list_area,
+                sizeof(list_area), 160u, 80u));
+            assert(astra_surface_ui_text_styled(&surface, 5, 7, "IIW", 3u,
+                strike.pixel_height, 0xffffu, ASTRA_TEXT_STYLE_BOLD |
+                    ASTRA_TEXT_STYLE_ITALIC | ASTRA_TEXT_STYLE_UNDERLINE));
+            assert(named->flags == ASTRA_TEXT_STYLE_UNDERLINE);
+            assert(astra_render_builder_init(&replay, context_batch,
+                sizeof(context_batch), 1u));
+            uint32_t target = astra_render_builder_surface(&replay, 160u, 80u);
+            assert(target != 0u && astra_render_builder_replay_resolved(
+                &replay, target, list, &resolver));
+            assert(replay.glyph_count == 3u);
+        }
+        id[0] = '\0';
+        assert(astra_fonts_use_snapshot(&snapshot, 0u, id) == ASTRA_OK);
+        assert(astra_fonts_context_id(adopted) == ASTRA_OK && adopted[0] == '\0');
+        assert(closed_font_snapshots == 2u && unmapped_font_snapshots == 1u);
+        assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) !=
+               expected_width);
+        assert(astra_fonts_use_borrowed(bytes, (uint32_t)length, "user:borrowed") == ASTRA_OK);
+        assert(astra_fonts_use_borrowed("bad", 3u, "user:bad") == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_fonts_use_borrowed(bytes, (uint32_t)length, "") == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) == expected_width);
+        assert(astra_fonts_use_snapshot(&snapshot, 0u, id) == ASTRA_OK &&
+               closed_font_snapshots == 2u && unmapped_font_snapshots == 1u);
+        snapshot = (AstraArea){.handle = 77u, .address = bytes,
+            .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
+        bytes[0] ^= 1u;
+        assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length,
+            "user:fixture") == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_fonts_context_id(adopted) == ASTRA_OK && adopted[0] == '\0');
+        assert(snapshot.handle == 77u &&
+            astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) !=
+                expected_width);
+        bytes[0] ^= 1u;
+        snapshot.map_flags |= ASTRA_AREA_MAP_WRITE;
+        assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length,
+            "user:fixture") == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_area_close(&snapshot) == ASTRA_OK);
+    }
+    destination = astra_render_builder_surface(&builder, 160u, 80u);
+    assert(destination != 0u && astra_render_builder_text(
+        &builder, destination, 5, 7, "IW", 2u, strike.pixel_height,
+        0xffffu));
+    command = batch_command(batch, 0u);
+    records = batch_record(batch, be32(command + 40u));
+    source_descriptor = batch_record(batch, be32(command + 36u));
+    source = batch_record(batch, be32(source_descriptor + 8u));
+    assert(source_descriptor[24u] == ASTRA_RENDER_FORMAT_A8);
+    assert(high_s16(be32(records + 8u)) ==
+           astra_ui_fixed_floor(5 * 64 + first.bearing_x));
+    assert(high_s16(be32(records + ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES + 8u)) ==
+           astra_ui_fixed_floor(5 * 64 + first.advance_x + second.bearing_x));
+    for (uint32_t row = 0u; row < first.height; ++row)
+        assert(memcmp(source + row * be32(source_descriptor + 16u),
+                      first.bitmap + row * first.pitch, first.pitch) == 0);
+    *list = (AstraDrawListHeader){
+        .magic = ASTRA_DRAW_LIST_MAGIC,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
+        .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
+        .command_count = 1u,
+        .payload_bytes = sizeof("user:fixture") - 1u + 2u,
+        .width = 160u, .height = 80u,
+        .command_capacity = ASTRA_DRAW_LIST_COMMAND_MAX,
+    };
+    *named = (AstraDrawListCommand){
+        .operation = ASTRA_DRAW_LIST_NAMED_TEXT,
+        .x = 5, .y = 7, .color = 0xffffffffu,
+        .source = sizeof("user:fixture") - 1u,
+        .font_height = strike.pixel_height,
+        .payload_offset = ASTRA_DRAW_LIST_PAYLOAD_OFFSET,
+        .payload_bytes = sizeof("user:fixture") - 1u + 2u,
+        .clip_right = 160u, .clip_bottom = 80u,
+    };
+    memcpy(list_area + ASTRA_DRAW_LIST_PAYLOAD_OFFSET,
+           "user:fixtureIW", named->payload_bytes);
+    assert(astra_render_builder_init(&builder, batch, sizeof(batch), 2u));
+    destination = astra_render_builder_surface(&builder, 160u, 80u);
+    assert(astra_render_builder_replay_resolved(&builder, destination,
+                                                list, &resolver));
+    assert(batch_record(batch, be32(batch_command(batch, 0u) + 36u))[24u] ==
+           ASTRA_RENDER_FORMAT_A8);
+    assert(astra_render_builder_init(&builder, batch, sizeof(batch), 3u));
+    destination = astra_render_builder_surface(&builder, 160u, 80u);
+    named->font_height = 15u;
+    assert(!astra_render_builder_replay_resolved(&builder, destination,
+                                                 list, &resolver));
+    named->font_height = strike.pixel_height;
+    named->source = 0u;
+    assert(!astra_render_builder_replay_resolved(&builder, destination,
+                                                 list, &resolver));
+    named->source = sizeof("user:fixture") - 1u;
+    bytes[0] ^= 1u;
+    assert(!astra_render_font_init(&font, bytes, (uint32_t)length));
+    free(bytes);
 }
 
 static void test_a8_software_oracle_blends_native_rgb565_channels(void)
@@ -926,6 +1244,81 @@ static void test_styled_text_uses_one_glyph_source(void)
            !astra_render_builder_replay(&builder, destination, header));
 }
 
+static void test_prepared_style_strikes(void)
+{
+    const uint32_t styles[] = {
+        ASTRA_TEXT_STYLE_BOLD, ASTRA_TEXT_STYLE_ITALIC,
+        ASTRA_TEXT_STYLE_BOLD | ASTRA_TEXT_STYLE_ITALIC};
+    const uint32_t scalars[] = {'A', 'g', 'j', 0xfffdu};
+
+    for (uint32_t mono = 0u; mono < 2u; ++mono)
+        for (uint32_t size = 0u; size < (mono ? 1u : 3u); ++size) {
+            uint16_t height = mono ? 16u : (uint16_t)(11u + size * 2u +
+                                                       (size == 2u));
+            const AstraUiStrike *regular = mono ?
+                astra_mono_font_strike(height) : astra_ui_font_strike(height);
+
+            assert(regular != NULL &&
+                   regular->bitmap_format == ASTRA_FONT_BITMAP_A8);
+            for (uint32_t style = 0u; style < 3u; ++style) {
+                const AstraUiStrike *prepared = mono ?
+                    astra_mono_font_strike_styled(height, styles[style]) :
+                    astra_ui_font_strike_styled(height, styles[style]);
+
+                assert(prepared != NULL && prepared != regular);
+                assert(prepared->glyph_count == regular->glyph_count);
+                for (uint32_t index = 0u; index < 4u; ++index) {
+                    const AstraUiGlyph *source = mono ?
+                        astra_mono_font_glyph(regular, scalars[index]) :
+                        astra_ui_font_glyph(regular, scalars[index]);
+                    const AstraUiGlyph *target = mono ?
+                        astra_mono_font_glyph(prepared, scalars[index]) :
+                        astra_ui_font_glyph(prepared, scalars[index]);
+                    const uint8_t *source_bitmap = mono ?
+                        astra_mono_font_bitmap(source) :
+                        astra_ui_font_bitmap(source);
+                    const uint8_t *target_bitmap = mono ?
+                        astra_mono_font_bitmap(target) :
+                        astra_ui_font_bitmap(target);
+                    uint32_t bold = astra_ui_bold_strength(height,
+                                                           styles[style]);
+                    int32_t minimum;
+                    uint32_t width;
+
+                    astra_ui_style_extents(source, styles[style], bold,
+                                           &minimum, &width);
+                    assert(target->width == width &&
+                           target->bearing_x == source->bearing_x +
+                                                minimum * 64 &&
+                           target->advance_x == source->advance_x);
+                    for (uint32_t row = 0u; row < source->height; ++row)
+                        for (uint32_t column = 0u; column < width; ++column) {
+                            int32_t shift =
+                                (styles[style] & ASTRA_TEXT_STYLE_ITALIC) ?
+                                    astra_ui_italic_shift(source, row) : 0;
+                            uint8_t expected = 0u;
+
+                            for (uint32_t weight = 0u; weight <= bold;
+                                 ++weight) {
+                                int32_t from = (int32_t)column - shift +
+                                               minimum - (int32_t)weight;
+
+                                if (from >= 0 && from < source->width) {
+                                    uint8_t coverage = source_bitmap[
+                                        row * source->pitch + (uint32_t)from];
+
+                                    if (coverage > expected)
+                                        expected = coverage;
+                                }
+                            }
+                            assert(target_bitmap[row * target->pitch +
+                                                 column] == expected);
+                        }
+                }
+            }
+        }
+}
+
 static void test_direct_styled_text(void)
 {
     static uint8_t batch_storage[ASTRA_RENDER_BUILDER_BYTES];
@@ -934,6 +1327,14 @@ static void test_direct_styled_text(void)
 
     assert(astra_render_builder_init(&builder, batch_storage,
                                      sizeof(batch_storage), 7u));
+    assert(astra_render_builder_text_width(&builder, "A\xc4\x84" "B", 4u,
+        13u, 0u) == astra_surface_ui_text_width("A\xc4\x84" "B", 4u, 13u));
+    assert(astra_render_builder_text_fit(&builder, "A\xc4\x84" "B", 4u,
+        13u, astra_surface_ui_text_width("A\xc4\x84", 3u, 13u), 0u) == 3u);
+    assert(astra_render_builder_text_width(NULL, "A", 1u, 13u, 0u) == 0u);
+    assert(astra_render_builder_text_width(&builder, NULL, 1u, 13u, 0u) == 0u);
+    assert(astra_render_builder_text_fit(&builder, "A", 1u,
+        13u, 100u, ASTRA_TEXT_STYLE_HIDDEN) == 0u);
     destination = astra_render_builder_surface(&builder, 80u, 24u);
     assert(destination != 0u);
     assert(astra_render_builder_text_styled(
@@ -1077,7 +1478,7 @@ static AstraDrawListHeader *session_begin(uint16_t width, uint16_t height)
     memset(session_list, 0, sizeof(session_list));
     *header = (AstraDrawListHeader){
         .magic = ASTRA_DRAW_LIST_MAGIC,
-        .version = ASTRA_DRAW_LIST_VERSION_1_7,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
         .total_bytes = sizeof(session_list),
         .width = width,
         .height = height,
@@ -1124,6 +1525,11 @@ static uint32_t resolve_test_surface(void *context,
         return astra_render_builder_surface_format_at(
             builder, surfaces->index_offset, 16u * 16u, 16u, 16u, 16u,
             ASTRA_RENDER_FORMAT_INDEX8, ASTRA_RENDER_SURFACE_READ);
+    if (surface_id == 10u)
+        return astra_render_builder_surface_index8_at(
+            builder, surfaces->index_offset, 16u * 16u, 16u, 16u, 16u,
+            surfaces->index_offset + 0x1000u,
+            ASTRA_RENDER_SURFACE_READ);
     return 0u;
 }
 
@@ -1166,7 +1572,7 @@ static void test_session_blit_lowers_to_hardware(void)
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x80000u, 0u
     };
-    AstraRenderSourceResolver resolver = { resolve_test_surface, &surfaces };
+    AstraRenderSourceResolver resolver = { .resolve = resolve_test_surface, .context = &surfaces };
     AstraDrawListHeader *header = session_begin(320u, 200u);
     AstraDrawListCommand *blit = session_add(header, ASTRA_DRAW_LIST_BLIT);
     AstraRenderBuilder builder;
@@ -1230,6 +1636,34 @@ static void test_session_blit_lowers_to_hardware(void)
     blit->source = 9u; /* INDEX8 needs a palette to reach RGB565 */
     assert(replay_session(&builder, storage, 8u, &resolver, &destination) ==
            UINT32_MAX);
+    blit->source = 10u;
+    blit->source_x = 0;
+    blit->source_y = 0;
+    blit->source_width = 8u;
+    blit->source_height = 8u;
+    blit->width = 8u;
+    blit->height = 8u;
+    blit->flags = 0u;
+    assert(replay_session(&builder, storage, 8u, &resolver, &destination) ==
+           1u);
+    render = batch_command(storage, 0u);
+    source = batch_record(storage, be32(render + 36u));
+    assert((be32(render + 4u) & 0xffffu) ==
+           ASTRA_RENDER_FLAG_BLIT_PALETTE);
+    assert(be32(source + 28u) == surfaces.index_offset + 0x1000u);
+    blit->flags = BLEND_ALPHA;
+    assert(replay_session(&builder, storage, 8u, &resolver, &destination) ==
+           1u);
+    render = batch_command(storage, 0u);
+    assert((be32(render + 4u) & 0xffffu) ==
+           (ASTRA_RENDER_FLAG_BLIT_PALETTE |
+            ASTRA_RENDER_FLAG_BLIT_ALPHA));
+    blit->width = 64u;
+    blit->height = 32u;
+    blit->source_width = 32u;
+    blit->source_height = 16u;
+    blit->source_x = 16;
+    blit->source_y = 8;
     blit->source = 3u; /* unknown surface */
     assert(replay_session(&builder, storage, 9u, &resolver, &destination) ==
            UINT32_MAX);
@@ -1603,7 +2037,7 @@ static void test_session_triangles_encoding(void)
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x80000u, 0u
     };
-    AstraRenderSourceResolver resolver = { resolve_test_surface, &surfaces };
+    AstraRenderSourceResolver resolver = { .resolve = resolve_test_surface, .context = &surfaces };
     AstraDrawListHeader *header = session_begin(320u, 200u);
     AstraDrawListCommand *triangles =
         session_add(header, ASTRA_DRAW_LIST_TRIANGLES);
@@ -1674,7 +2108,7 @@ static void test_session_triangles_rejections(void)
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x80000u, 0u
     };
-    AstraRenderSourceResolver resolver = { resolve_test_surface, &surfaces };
+    AstraRenderSourceResolver resolver = { .resolve = resolve_test_surface, .context = &surfaces };
     AstraDrawListHeader *header = session_begin(320u, 200u);
     AstraDrawListCommand *triangles =
         session_add(header, ASTRA_DRAW_LIST_TRIANGLES);
@@ -1807,7 +2241,7 @@ static void test_session_engine_lowering(void)
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x80000u, 0u
     };
-    AstraRenderSourceResolver resolver = { resolve_test_surface, &surfaces };
+    AstraRenderSourceResolver resolver = { .resolve = resolve_test_surface, .context = &surfaces };
     AstraDrawListHeader *header = session_begin(320u, 200u);
     AstraDrawListCommand *blit = session_add(header, ASTRA_DRAW_LIST_BLIT);
     AstraRenderBuilder builder;
@@ -2113,7 +2547,7 @@ static void test_session_triangles_on_reference_model(void)
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x40000u,
         ASTRA_RENDER_BATCH_WORKSPACE_LIMIT + 0x80000u, 0u
     };
-    AstraRenderSourceResolver resolver = { resolve_test_surface, &surfaces };
+    AstraRenderSourceResolver resolver = { .resolve = resolve_test_surface, .context = &surfaces };
     AstraDrawListHeader *header;
     AstraDrawListCommand *blit;
     AstraRenderBuilder builder;
@@ -2711,6 +3145,8 @@ int main(void)
     test_session_lines();
     test_batch_header_reserves_presentation_words();
     test_rgb565_upload_uses_hardware_blit();
+    test_index8_upload_uses_palette_blit();
+    test_index8_upload_stays_indexed();
     test_upload_reserve_ends_the_batch_data();
     test_window_scene_batch();
     test_builder_uses_the_capacity_it_is_given();
@@ -2723,6 +3159,7 @@ int main(void)
     test_proportional_utf8_text();
     test_missing_mono_glyph_uses_replacement();
     test_font_advance_and_baseline();
+    test_installed_afnt_reaches_hardware_glyph_run();
     test_a8_software_oracle_blends_native_rgb565_channels();
     test_builder_chunks_the_hardware_glyph_limit();
     test_hardware_draw_list_batch();
@@ -2730,6 +3167,7 @@ int main(void)
     test_command_failure_reason();
     test_mono_draw_list();
     test_styled_text_uses_one_glyph_source();
+    test_prepared_style_strikes();
     test_direct_styled_text();
     test_draw_list_copy_is_a_hardware_self_blit();
     test_text_box_scroll_uses_overlap_safe_copy();

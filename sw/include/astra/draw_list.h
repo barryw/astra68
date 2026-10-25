@@ -13,7 +13,7 @@
    list carries a whole frame for several destinations. 1.7: UPLOAD writes
    rows the client left in its staging area into a surface, so a frame
    carries its texture uploads too. */
-#define ASTRA_DRAW_LIST_VERSION_1_7 UINT32_C(0x00010007)
+#define ASTRA_DRAW_LIST_VERSION_1_8 UINT32_C(0x00010008)
 #define ASTRA_DRAW_LIST_HEADER_BYTES 64u
 #define ASTRA_DRAW_LIST_COMMAND_BYTES 64u
 /* A retained window list is one fixed 16 KiB area of 128 commands. */
@@ -56,6 +56,9 @@ enum {
        list, so the client leaves them unchanged until it has the list
        back. */
     ASTRA_DRAW_LIST_UPLOAD = 11u,
+    /* payload: `source` bytes of installed face ID, then UTF-8 text.
+       Exact `font_height` strike required. */
+    ASTRA_DRAW_LIST_NAMED_TEXT = 12u,
 };
 
 /* Command flags. TEXT and MONO_TEXT use ASTRA_TEXT_RENDER_STYLE_*. */
@@ -146,7 +149,8 @@ typedef struct AstraDrawListCommand {
     uint32_t width;
     uint32_t height;
     uint32_t color;
-    /* BLIT source surface id; ASTRA_DRAW_LIST_SOURCE_DESTINATION or a
+    /* NAMED_TEXT: face ID byte count. BLIT source surface id;
+       ASTRA_DRAW_LIST_SOURCE_DESTINATION or a
        session surface. TRIANGLES: a session surface, or 0 for untextured.
        Zero for every other operation. */
     uint32_t source;

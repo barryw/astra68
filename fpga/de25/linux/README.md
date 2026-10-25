@@ -1,5 +1,20 @@
 # DE25 Linux capture boundary
 
+## Fabric and kernel boot ownership
+
+`../build_boot_bundle.sh` packages the routed FPGA shell and its verified
+source manifest. `install_boot_bundle.sh` replaces only `astra68.core.rbf`
+on the SD boot partition and verifies that the selected `boot.scr.uimg`
+remains unchanged. It does not select a Linux kernel or program QSPI.
+Keep a verified copy of the current RBF before installing a replacement.
+
+`kernel/install-production-storage.py` is the sole owner of kernel boot
+selection. The immutable software release carries its versioned Image, DTB,
+module tree, and generated boot script. Stage and arm that complete package
+through the kernel installer; a fabric update must not restore the generic
+vendor Image/DTB recipe. `../boot.cmd` and `../boot.its` are templates used
+by the software release publisher to generate the kernel package's script.
+
 `astra_display_capture.ko` is the host-facing boundary for remote display. It
 captures the final physical RGB888 stream, after framebuffer/window, tile,
 sprite, Copper, boot-overlay, scanline-replay, and native-pointer composition.
@@ -48,7 +63,7 @@ password; standard VNC authentication uses at most eight password characters.
 The broker refuses any non-loopback listener without a valid password file.
 It is demand-driven: with no viewer attached it performs no captures. Keyboard
 and pointer events use QEMU's dedicated
-`/run/astra/remote-desktop-qmp.sock` monitor and existing `input-send-event`
+`/run/astra/qemu/remote-desktop-qmp.sock` monitor and existing `input-send-event`
 path, leaving the diagnostics monitor available. Per-client reference tracking
 releases held keys and buttons when a viewer disconnects.
 
@@ -108,6 +123,29 @@ Install `astra_graphics_arena.ko` under the running kernel's module tree, run
 
 ## Host arena
 
+The production QEMU and input helper execute as `astra`, with cleared
+supplementary groups and capabilities. The root launcher owns runtime buffer
+names; QMP sockets live in the guest-owned `/run/astra/qemu` directory.
+`99-astra-qemu.rules` grants this group access to the host arena, the fixed
+4 KiB `/dev/astra-front-panel` page, and keyboard/mouse evdev devices. It does
+not grant `/dev/mem`, media RAM or capture access. Front-panel mmap requires
+offset zero and at most one page; host-arena bounds use `dma_mmap_coherent`.
+Audio and remote control sockets and the audio mailbox use root:astra 0660.
+
+Qualify the physical device boundary through Beast:
+
+```sh
+setpriv --reuid astra --regid astra --clear-groups --no-new-privs \
+  --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+  python3 test_qemu_devices.py
+```
+
+The release builder stages exact-kernel modules under `build/de25-linux/module`.
+Deployment stops all runtime users and calls `astra-terminal-display
+--stop-render` before unloading the arena module, so its shared DMA allocation
+cannot be freed while the FPGA still reads it. A failed render stop aborts
+replacement. Keep the original module and services for rollback.
+
 The same module also creates `/dev/astra-host-arena`: the display mailbox
 payload (`ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES`, 8 MiB), one physically
 contiguous block of HPS memory below 4 GiB allocated from CMA at load and
@@ -132,7 +170,7 @@ BLIT read from each, checked byte for byte. Run it with Astra stopped.
 
 The vendor Image lacks most of what `docs/FILESYSTEM_PRODUCTION_PRD.md`
 mounts. `kernel/astra-storage.config` adds exFAT, ISO9660 (Joliet, Rock
-Ridge, zisofs), UDF, `nls_utf8` and UAS as exact-source modules;
+Ridge, zisofs), UDF, NTFS3, `nls_utf8` and UAS as exact-source modules;
 `kernel/de25-6.12.11-gd7d192a9ddd9.config` is the board's own
 `/proc/config.gz`, the baseline the build refuses to drift from. On beast:
 
@@ -150,3 +188,15 @@ need a rebuilt Image. `../check_fs_drivers.sh` reports what the board has.
 
 The board's `udisks2.service` is masked: it is a second mount authority, and
 nothing here uses it.
+
+# Font conversion worker
+
+`make font-worker-test font-worker-sanitize font-worker-target` builds and
+checks the internal C worker. `font-worker-target` needs the selected DE25
+rootfs runtime FreeType library (`libfreetype.so.6`) and its PNG/Brotli
+dependencies in `DE25_SYSROOT/lib/aarch64-linux-gnu`; Beast's FreeType
+development headers provide the stable public API at cross-compile time. The
+2026-10-17 physical checkpoint used DE25 FreeType library SHA-256
+`a76d4ea1578e709deb81edcb297fbf4b570b19212a58388b86d36db2766ae215`.
+The executable is an internal provider, not a font-import command. It is not
+yet part of a release or connected to the guest Fonts service.

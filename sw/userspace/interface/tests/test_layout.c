@@ -1,5 +1,6 @@
 #include <astra/control.h>
 #include <astra/input.h>
+#include <astra/interface_library.h>
 
 #include <assert.h>
 #include <stddef.h>
@@ -521,6 +522,148 @@ static void test_deep_layout_has_no_stack_or_depth_limit(void)
            controls[255]._private_frame.y == 0);
 }
 
+static void test_public_geometry(void)
+{
+    AstraControl controls[2];
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlFrame frame = {7, 8, 9, 10};
+    AstraControlFrame clip = frame;
+
+    buttons(controls, 2u);
+    assert(astra_interface_ui_init(&context, controls, 2u, 100u, 20u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_geometry(&context, 0u, &frame, &clip) ==
+           ASTRA_ERROR_WOULD_BLOCK);
+    assert(frame.x == 7 && clip.height == 10u);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_geometry(&context, 0u, &frame, &clip) ==
+           ASTRA_OK);
+    assert(frame.x == controls[0]._private_frame.x &&
+           frame.height == controls[0]._private_frame.height &&
+           clip.height == 20u);
+    frame = (AstraControlFrame){7, 8, 9, 10};
+    assert(astra_interface_ui_geometry(&context, 2u, &frame, &clip) ==
+           ASTRA_ERROR_INVALID_ARGUMENT && frame.x == 7);
+    assert(astra_interface_ui_geometry(NULL, 0u, &frame, &clip) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_ui_geometry(&context, 0u, NULL, &clip) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_ui_set_state(&context, &controls[0],
+                                             ASTRA_CONTROL_COLLAPSED) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    clip = frame;
+    assert(astra_interface_ui_geometry(&context, 0u, &frame, &clip) ==
+           ASTRA_ERROR_WOULD_BLOCK && frame.x == 7 && clip.x == 7);
+}
+
+static void test_scroll_content_respects_maximum(void)
+{
+    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraScrollModel model = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo scroll = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
+    AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraFlexLayout root = ASTRA_FLEX_LAYOUT_INIT;
+    AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
+
+    assert(astra_scroll_init(&model, &scroll) == ASTRA_OK);
+    view.id = 1u;
+    view.model = &model;
+    view.preferred_width = 40u;
+    view.preferred_height = 20u;
+    assert(astra_interface_scroll_view_init(&controls[0], &view) == ASTRA_OK);
+    label.id = 2u;
+    label.text = "A VERY LONG DIRECTORY NAME";
+    label.text_length = sizeof("A VERY LONG DIRECTORY NAME") - 1u;
+    assert(astra_interface_label_init(&controls[1], &label) == ASTRA_OK);
+    item.parent_id = 1u;
+    item.minimum_width = item.maximum_width = 40u;
+    item.minimum_height = 80u;
+    assert(astra_interface_control_set_flex(&controls[1], &item) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls, 2u, 40u, 20u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &root) == ASTRA_OK);
+    assert(astra_scroll_get_state(&model, &state) == ASTRA_OK);
+    assert(state.content_width == 40u && state.maximum_x == 0u &&
+           state.content_height == 80u && state.maximum_y == 60u);
+}
+
+static void test_settings_pane(void)
+{
+    AstraControl controls[7];
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraSettingsPaneInfo pane = ASTRA_SETTINGS_PANE_INFO_INIT;
+    AstraFlexLayout root = ASTRA_SETTINGS_PANE_LAYOUT_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraToggleInfo option = ASTRA_TOGGLE_INFO_INIT;
+    AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
+    AstraControlFrame frame, clip;
+
+    pane.first_id = 10u;
+    pane.title = "Preferences";
+    pane.title_length = 11u;
+    pane.description = "Common controls";
+    pane.description_length = 15u;
+    assert(astra_interface_settings_pane_init(NULL, &pane) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_settings_pane_init(controls, NULL) == ASTRA_ERROR_INVALID_ARGUMENT);
+    pane.first_id = UINT32_MAX;
+    assert(astra_interface_settings_pane_init(controls, &pane) == ASTRA_ERROR_INVALID_ARGUMENT);
+    pane.first_id = 10u;
+    pane.reserved[2] = 1u;
+    assert(astra_interface_settings_pane_init(controls, &pane) == ASTRA_ERROR_INVALID_ARGUMENT);
+    pane.reserved[2] = 0u;
+    pane.title = "\xff";
+    pane.title_length = 1u;
+    assert(astra_interface_settings_pane_init(controls, &pane) == ASTRA_ERROR_INVALID_ARGUMENT);
+    pane.title = "Preferences";
+    pane.title_length = 11u;
+    assert(astra_interface_settings_pane_init(controls, &pane) == ASTRA_OK);
+    option.id = 20u;
+    option.text = "Enabled";
+    option.text_length = 7u;
+    item.parent_id = pane.first_id + ASTRA_SETTINGS_PANE_BODY;
+    assert(astra_interface_checkbox_init(&controls[4], &option) == ASTRA_OK);
+    assert(astra_interface_control_set_flex(&controls[4], &item) == ASTRA_OK);
+    button.text = "Apply settings";
+    button.text_length = 14u;
+    item.parent_id = pane.first_id + ASTRA_SETTINGS_PANE_ACTIONS;
+    item.minimum_width = 128u;
+    for (uint32_t at = 5u; at < 7u; ++at) {
+        button.id = 20u + at;
+        assert(astra_interface_button_init(&controls[at], &button) == ASTRA_OK);
+        assert(astra_interface_control_set_flex(&controls[at], &item) == ASTRA_OK);
+    }
+    assert(astra_interface_ui_init(&context, controls, 7u, 800u, 300u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &root) == ASTRA_OK);
+    assert(astra_interface_ui_geometry(&context, ASTRA_SETTINGS_PANE_TITLE, &frame, &clip) == ASTRA_OK);
+    assert(frame.x == 24 && frame.y == 24 && frame.width == 752u);
+    assert(controls[5]._private_frame.y < controls[6]._private_frame.y);
+    AstraWindowEvent resize = resize_event(200u, 300u);
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    assert(astra_interface_ui_handle_event(&context, &resize, &action) == ASTRA_OK);
+    assert(controls[5]._private_frame.y < controls[6]._private_frame.y);
+    for (uint32_t at = 4u; at < 7u; ++at) {
+        assert(astra_interface_ui_geometry(&context, at, &frame, &clip) == ASTRA_OK);
+        assert(frame.x >= 24 && frame.y >= 24 &&
+            (uint32_t)frame.x + frame.width <= 176u &&
+            (uint32_t)frame.y + frame.height <= 276u);
+    }
+    AstraWindowEvent key = {0};
+    key.size = sizeof(key); key.version = ASTRA_WINDOW_EVENT_VERSION;
+    key.type = ASTRA_WINDOW_EVENT_KEY; key.flags = ASTRA_WINDOW_EVENT_DOWN;
+    key.data.key.usage = 0x2bu;
+    assert(astra_interface_ui_handle_event(&context, &key, &action) == ASTRA_OK);
+    key.data.key.usage = 0x28u;
+    assert(astra_interface_ui_handle_event(&context, &key, &action) == ASTRA_OK);
+    key.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &key, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_VALUE_CHANGED && action.control_id == option.id);
+    pane.description = NULL; pane.description_length = 0u;
+    assert(astra_interface_settings_pane_init(controls, &pane) == ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
 void astra_interface_test_layout(void)
 {
     test_empty_and_invalid();
@@ -535,4 +678,7 @@ void astra_interface_test_layout(void)
     test_nested_layout_rejections();
     test_nested_clip_blocks_input();
     test_deep_layout_has_no_stack_or_depth_limit();
+    test_public_geometry();
+    test_scroll_content_respects_maximum();
+    test_settings_pane();
 }

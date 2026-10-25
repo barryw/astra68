@@ -7,34 +7,22 @@ HOST_CC ?= cc
 ANALYZER_CC ?= gcc
 RUNTIME := ../runtime
 include $(RUNTIME)/astra-link.mk
-STORAGE := ../storage
-ALLOC := ../alloc
 VFS := ../vfs
 CONFIG := ../config
 NDK := ../../../ndk
 SYSTEM := ../system
 ASTRA_COMMON := ../../common
 NDK_LIB := $(SYSTEM)/build/m68k/libastra.a
-LWEXT4 := ../../../third_party/lwext4
 CPPFLAGS := -Iinclude -I../../include -I$(RUNTIME)/include \
-	-I$(STORAGE)/include -I../metrics/include -I$(ALLOC)/include \
+	-I../metrics/include \
 	-I$(VFS)/include -I$(CONFIG)/include -I$(NDK)/include
-# The volume check speaks lwext4 as well as Astra and links freestanding, so it
-# needs the vendored headers, the build profile, and the libc shims.
-EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
-	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 DEPFLAGS := -MMD -MP
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS)
 HOST_FLAGS := -O2 -fno-builtin
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
-# --gc-sections is what makes the -ffunction-sections every module already
-# compiles with actually pay. Without it the sections were cut up and then all
-# linked in regardless: lwext4 alone contributes paths this service never
-# calls, and collecting them takes the image from 82,084 bytes of text to
-# 70,304 with BSS unchanged. It is the initial user image, so that is ROM the
-# firmware carries and pages the loader maps on every boot.
+# Bootstrap contains only canonical native libraries and the provider reader.
 LINK_FLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
 	-Wl,--build-id=none -Wl,--gc-sections \
 	$(ASTRA_STATIC_LINK_SCRIPT_FLAGS)
@@ -46,9 +34,6 @@ OBJECTS := $(patsubst src/%.c,build/m68k/%.o,$(SOURCES))
 CONFIG_OBJECT := build/m68k/config_document.o
 ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,$(SOURCES))
 RUNTIME_LIB := $(RUNTIME)/build/m68k/libastrart.a
-STORAGE_LIB := $(STORAGE)/build/m68k/libastrablock.a
-EXT4_LIB := $(STORAGE)/build/m68k/libastraext4.a
-ALLOC_LIB := $(ALLOC)/build/m68k/libastraalloc.a
 VFS_LIB := $(VFS)/build/m68k/libastravfs.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0.o
 TARGET := build/m68k/astra_supervisor.elf
@@ -69,9 +54,10 @@ SERVICE_DEFINITION_TEST := build/host/test_service_definition_store
 LOADER_STATUS_TEST := build/host/test_loader_status
 LAUNCH_REPORT_TEST := build/host/test_launch_report
 VOLUME_READ_TEST := build/host/test_volume_read
-TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c \
+LOADER_RECOVERY_TEST := build/host/test_loader_recovery
+TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c $(ASTRA_COMMON)/utf8.c \
 	tests/test_supervisor.c
-ASTRA_PROGRAM_OWNER_TARGETS := $(RUNTIME):all $(ALLOC):all $(STORAGE):all \
+ASTRA_PROGRAM_OWNER_TARGETS := $(RUNTIME):all \
 	$(VFS):all ../graphics:all $(SYSTEM):all
 ASTRA_PROGRAM_TARGETS := image
 include ../program.mk
@@ -81,13 +67,11 @@ image: $(IMAGE) $(CATALOG) size
 # The image is the deliverable, so the link contract is part of the build:
 # astra_user.ld produces exactly the shape kernel_elf_accept() takes. The
 # archives are named as prerequisites so a rebuilt library relinks the image.
-$(TARGET): $(OBJECTS) $(CONFIG_OBJECT) $(ASTRA_STATIC_USER_LD_INPUTS) $(RUNTIME_CRT0) $(EXT4_LIB) \
-		$(STORAGE_LIB) $(ALLOC_LIB) $(RUNTIME_LIB) $(VFS_LIB) $(NDK_LIB)
+$(TARGET): $(OBJECTS) $(CONFIG_OBJECT) $(ASTRA_STATIC_USER_LD_INPUTS) $(RUNTIME_CRT0) $(RUNTIME_LIB) $(VFS_LIB) $(NDK_LIB)
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(LINK_FLAGS) -o $@ $(RUNTIME_CRT0) $(OBJECTS) \
 		$(CONFIG_OBJECT) \
-		$(VFS_LIB) $(EXT4_LIB) \
-		$(STORAGE_LIB) $(ALLOC_LIB) \
+		$(VFS_LIB) \
 		$(NDK_LIB) $(RUNTIME_LIB) -lgcc
 
 # The catalog section goes the way DWARF does: read out at build time, never
@@ -116,11 +100,6 @@ $(CONFIG_OBJECT): $(CONFIG)/src/config_document.c \
 build/m68k/proc_tree.o: src/proc_tree.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) $(DEPFLAGS) -c $< -o $@
-
-build/m68k/volume.o: src/volume.c
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(EXT4_CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) \
-		$(DEPFLAGS) -c $< -o $@
 
 $(HOST_TEST): $(TEST_SOURCES)
 	@mkdir -p $(@D)
@@ -165,14 +144,24 @@ $(LAUNCH_REPORT_TEST): src/launch_report.c tests/test_launch_report.c \
 
 $(VOLUME_READ_TEST): src/volume.c tests/test_volume_read.c include/volume.h
 	@mkdir -p $(@D)
-	$(HOST_CC) $(CPPFLAGS) -I$(LWEXT4)/include -I$(STORAGE)/port/include \
-		-DCONFIG_USE_DEFAULT_CFG=0 $(COMMON_FLAGS) $(HOST_FLAGS) \
-		-DASTRA_SUPERVISOR_TEST -ffunction-sections -fdata-sections \
-		-Wl,--gc-sections src/volume.c tests/test_volume_read.c -o $@
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/volume.c tests/test_volume_read.c -o $@
+
+LOADER_RECOVERY_SOURCES := tests/test_loader_recovery.c \
+		src/service_definition_store.c src/loader_manifest.c \
+		$(CONFIG)/src/config_document.c $(SYSTEM)/src/config_scope.c \
+		$(SYSTEM)/src/manifest.c $(ASTRA_COMMON)/utf8.c \
+		$(SYSTEM)/src/service_definition.c $(RUNTIME)/src/string.c
+
+$(LOADER_RECOVERY_TEST): $(LOADER_RECOVERY_SOURCES) src/loader.c ../../include/astra/gui.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		-ffunction-sections -fdata-sections $(LOADER_RECOVERY_SOURCES) \
+		-Wl,--gc-sections -o $@
 
 test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST) \
 		$(SERVICE_DEFINITION_TEST) $(LOADER_STATUS_TEST) $(LAUNCH_REPORT_TEST) \
-		$(VOLUME_READ_TEST)
+		$(VOLUME_READ_TEST) $(LOADER_RECOVERY_TEST)
 	./$(HOST_TEST)
 	./$(LOADER_TEST)
 	./$(PROC_TREE_ROOT_TEST)
@@ -180,6 +169,7 @@ test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST) \
 	./$(LOADER_STATUS_TEST)
 	./$(LAUNCH_REPORT_TEST)
 	./$(VOLUME_READ_TEST)
+	./$(LOADER_RECOVERY_TEST)
 
 sanitize:
 	@mkdir -p build/host
@@ -193,16 +183,23 @@ sanitize:
 		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c \
 		tests/test_loader_manifest.c -o build/host/test_loader_manifest_sanitize
 	./build/host/test_loader_manifest_sanitize
-	$(HOST_CC) $(CPPFLAGS) -I$(LWEXT4)/include -I$(STORAGE)/port/include \
-		-DCONFIG_USE_DEFAULT_CFG=0 $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) -DASTRA_SUPERVISOR_TEST -ffunction-sections \
-		-fdata-sections -Wl,--gc-sections src/volume.c \
-		tests/test_volume_read.c -o build/host/test_volume_read_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/service_definition_store.c src/loader_manifest.c \
+		$(CONFIG)/src/config_document.c $(SYSTEM)/src/config_scope.c \
+		$(SYSTEM)/src/manifest.c $(ASTRA_COMMON)/utf8.c \
+		$(SYSTEM)/src/service_definition.c $(RUNTIME)/src/string.c \
+		tests/test_service_definition_store.c -o build/host/test_service_definition_store_sanitize
+	./build/host/test_service_definition_store_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/volume.c tests/test_volume_read.c \
+		-o build/host/test_volume_read_sanitize
 	./build/host/test_volume_read_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
+		-ffunction-sections -fdata-sections $(LOADER_RECOVERY_SOURCES) \
+		-Wl,--gc-sections -o build/host/test_loader_recovery_sanitize
+	./build/host/test_loader_recovery_sanitize
 
 analyze: $(ANALYZER_OBJECTS)
-
-build/analyzer/volume.o: ANALYZER_CPPFLAGS := $(EXT4_CPPFLAGS)
 
 build/analyzer/%.o: src/%.c
 	@mkdir -p $(@D)

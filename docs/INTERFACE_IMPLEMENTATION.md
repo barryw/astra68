@@ -4,7 +4,7 @@ Status: active implementation ledger for the design in
 `~/Downloads/Astra68 Desktop Design/Astra Desktop.dc.html`.
 
 The current source package has SHA-256
-`1005463fc51826aac33def242c70d9f4122a616352680e93ae44e58f10960603`.
+`836e4991ea8a79ab58769471e24749a064eddd93195552a017596cd0e97cbab9`.
 Its written control list is authoritative by name; the adjacent total is not,
 because Scrollbar is specified in the ScrollView section but omitted from that
 numbered list. Implementation status in the design file is illustrative only;
@@ -37,17 +37,27 @@ order needed to finish the complete design without application-private UI.
 | Theme, surfaces, font strikes | 1a-1d, 3b | semantic generation-5 tokens, integer UI scale, bitmap strikes | partial |
 | Retained layout | all | nested row/column/wrap containers, intrinsic measurement, reflow, clipping | complete; physical ABI-2 gate passed |
 | Primitive controls | 1d, 4a | label, button, field, check, radio, switch, slider, dial, stepper, popup, combo, segmented, tags, disclosure, progress | label/button/check/radio/switch/slider/progress/field and tabs accepted; segmented, stepper, dial, and disclosure host-certified in current source |
-| Collection controls | 1d, 2b, 4a | scroll model, ScrollView, scrollbar, splitter, list, tree, table, grid, columns, toolbar, status, pagination | scroll model/view/bar and splitter accepted; list, tree, table, grid, columns, toolbar, status, and pagination pending |
+| Collection controls | 1d, 2b, 4a | scroll model, ScrollView, scrollbar, splitter, list, tree, table, grid, columns, toolbar, status, pagination | scroll model/view/bar and splitter accepted; single-selection List host and target build pass in Interface 5.5, physical consumer pending; tree, table, grid, columns, toolbar, status, and pagination pending |
 | TextSurface | 7a-7b | shared UTF-8 model, grid/code/flow layout, runs, gutters, overlays, caret, selection, undo, find, clipboard, scrollback | grid renderer, selection paint/hit test/extraction, typed clipboard, Terminal copy/paste and resource-backed styled scrollback, shared undo/redo, piece-table model, and field accepted; find, wide cells, and code/flow layout pending |
 | Input vocabulary | 6a-6b | keymap-selected Meta labels and immutable system/workspace/app shortcut tiers | input service emits one normalized Meta bit; detection, override, labels, and shortcut tiers pending |
-| Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | caller-owned responder chain, state query and invocation accepted in ABI 5.2; desktop Terminal launch uses it; cross-process publication and menu/shortcut consumers pending |
-| Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | cyan orbit and tracked ASTRA wordmark, focus-aware bold application pill independent of the window title; hardware-composited ASTRA menu with functional About panel and 16 px labels; app-owned menu publication, palette, and shortcuts pending |
+| Command model | 1e, 2a, 6b | stable IDs, typed arguments, state, metadata, asynchronous invocation; shared by menus, palette, toolbar, scripting | caller-owned responder chain, state query and invocation; Desktop double-click/context Open share one command in Interface 5.4; cross-process publication and palette/shortcut consumers pending |
+| Menus and palette | 1e, 2a, 3a | persistent application strip, skeleton menus, command palette, system escape shortcuts | shared Interface 5.4 transient menu control drives ASTRA and command-backed context menus; DE25 functionality and 1.947 µs semantic-action gate pass on release `0aa2d713`; internal feedback timing, app menu-strip publication, submenus, palette and shortcuts pending |
 | Telescope | 2a, 3a | Cmd-Space search/launch surface, filesystem change index, ranked results, keyboard selection and open | pending |
 | System panels | 4b, 5a-5b | Open, Save, Fonts, and truthful pixel-format-aware Colour services | pending |
-| Atlas | 2b | shared sidebar and toolbar with grid, list, and columns views | pending |
+| Atlas | 2b | shared sidebar and toolbar with grid, list, and columns views | native DH0 root icon viewer accepted on DE25 release `5bc3bbea`; guest enumeration, scrolling, resize and retirement pass; broader browsing/management deferred; see [Atlas continuation](HANDOVER_2026-10-12_ATLAS.md) and the [volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md) |
 | Dock and window policy | 2c | pinned/running/minimized groups, instance state, hold menu, durable ordering | hardware overlap path started; policy UI pending |
 | Workspace finish | 1a-1c | volume objects, titlebar treatment B, designed icon strikes, status surfaces | partial |
 | Scenes | 3a | discoverable scene ledger and menu switching over fixed 1080p60 timing | hardware contract complete; UI pending |
+
+Interface 5.5 List reuses the existing choice item/state/action contract,
+semantic theme and text primitives, flex layout, and ScrollView/scroll model.
+Only vertical row geometry and row paint are new. Its keyboard reveal uses the
+same scroll transaction as wheel input. Interface Gallery is the first native
+consumer. Read-only Haiku references:
+`~/Git/haiku/src/kits/interface/ListView.cpp` for selection and keyboard
+behavior, plus `~/Git/haiku/src/preferences/appearance/FontSelectionView.cpp`
+for a settings pane composed from common controls. Astra retains its own
+explicit layout/borrowed-item ABI rather than copying Haiku's view ownership.
 
 "Complete" in this table means implemented through the public ABI with unit,
 sanitizer, malformed-input, and application-consumer coverage. A layer is not
@@ -63,6 +73,9 @@ the DE25 without weakening the existing frame or layout budgets.
 - Segmented selection and numeric stepping share a 12.5-microsecond semantic
   action gate. The physical 69.416 MHz baselines are 7.003 and 8.926
   microseconds per action respectively.
+- The four-row common menu's 10,000-action DE25 workload measures 1.947464
+  microseconds per action against the same 12.5-microsecond gate. Correctness
+  includes 200-row viewport rendering; long-menu timing remains unqualified.
 - Pointer presentation targets one frame; ordinary control, key, menu, and
   window feedback targets two frames.
 - Every new nested layout, text-layout, menu-search, and collection-view hot
@@ -70,19 +83,82 @@ the DE25 without weakening the existing frame or layout budgets.
   depends on it.
 - No benchmark result from the Mac or Beast substitutes for a DE25 result.
 
+## Shared settings composition
+
+Interface Kit 7.2 introduces a settings pane shell composed exclusively from
+existing Label and Container controls. Fonts supplies content and actions as
+ordinary children. The public composition centralizes spacing, the growing
+body and stacked actions; normal retained layout, focus, input and hardware
+drawing remain the existing implementation. `ndk/examples/settings_pane.c`
+documents a second consumer without adding a second settings backend.
+
+Read-only Haiku review: `src/preferences/appearance/AppearanceWindow.cpp`
+composes shared views and action buttons using BLayoutBuilder; `FontView.cpp`
+composes common font-selection views with standard window spacing. Astra
+adopts composition and shared spacing, using caller-owned controls and typed
+service operations. It keeps system face/weight separate from fixed role sizes.
+Host tests, sanitizer checks, analyzers, MC68040 library/export checks and NDK
+header/documentation gates pass in
+`/var/tmp/astra-settings-pane-checks-20261018.log`. DE25 qualification remains
+in progress. Fonts' four native shared-shell cases pass in
+`/var/tmp/astra-settings-pane-{iosevka,long-notice,unsupported,long-style}-native-20261018.log`,
+including repeated information views, live font adoption, restart and removal.
+
+## Shared transient menus
+
+Interface 5.4 owns one `AstraMenu` model and painter for compositor-owned
+ASTRA and application context menus. Rows support disabled/checked state,
+separators, fitted screen placement, scrolling, release-only pointer selection,
+Escape, arrow/Home/End/Page traversal and Enter/Space selection. Rendering uses
+the existing surface/draw-list compositor; event handling allocates no memory.
+
+The retained UI dispatcher emits `ASTRA_UI_ACTION_CONTEXT_MENU` on secondary
+release, Menu key or Shift-F10, identifying the most specific hit control or
+focused control. `AstraContextMenu` queries the existing command scope, copies
+presentation state through System 3.3's private window endpoint, and invokes
+the still-enabled command only on a matching terminal result. GUI wire 20 and
+event 8 carry counted immutable snapshots and correlated mandatory completions.
+Input loss, focus/geometry/owner changes, outside clicks and resource failure
+cancel safely; consumed presses retain ownership through their text and release.
+
+Desktop is the first consumer: DH0 and application icons offer Open through
+the same command used by double-click. Common retained controls expose the
+keyboard gesture; Desktop icon keyboard focus is not yet implemented. This
+slice supplies flat context menus, not app menu-strip publication or file
+management operations. Public usage is in `ndk/examples/interface_menu.c` and
+the [Interface Kit guide](../ndk/docs/source/interface-kit.md).
+
+Release `0aa2d713` passes host/sanitizer/analyzer/MC68040 and exact guest/NDK
+gates, plus physical DH0/app Open, ASTRA keyboard About, process retirement and
+identical restored pixels. Existing bitmap caching now compares a committed
+paint snapshot across popup lifetimes. Repeated identical menus need no new
+GPU painting; changed content and uncommitted work invalidate the cache. RFB
+timing diagnostics do not establish an end-to-end speedup or the internal
+two-frame budget. See [menu continuation](HANDOVER_2026-10-12_CONTEXT_MENUS.md).
+
 ## Image presentation boundary
 
-IconView and ImageView depend on one missing Graphics Kit foundation: draw
-lists must reference immutable protected image resources. The existing desktop
-AICON painter expands indexed pixels into coalesced rectangle fills, consumes
-the fixed draw-command budget, and is not a reusable control boundary. It must
-not be promoted into Interface Kit.
+IconView and ImageView need immutable protected image references in the shared
+Interface/window draw-list path. The existing Graphics Kit surface draw-list
+path already provides protected source-surface blits. Graphics library 2.2's
+`astra_surface_from_aicon` now centralizes strike validation, ARGB decoding and
+protected source-surface upload for Desktop and Atlas. Both use `astra_draw_blit`
+on repaint. Reuse that resource ownership and validation when integrating shared
+icon presentation; do not restore the obsolete rectangle-per-pixel painter or
+copy an icon backend into Atlas.
 
 Once the resource reference exists, IconView owns compact icon presentation
 (AICON strike selection, intrinsic size, tint/state, baseline, and adjacent
 text composition) while ImageView owns content presentation (fit, fill, crop,
 and integer zoom). Buttons, menu items, tabs, fields, and toolbars use the same
 icon descriptor and painter as IconView; no control gets a private icon path.
+
+The initial Atlas root-directory viewer requires only the icon presentation
+needed for named file/folder cells, existing retained wrap layout, and existing
+scroll support. General ImageView behavior and the pending list/tree/table/
+columns/toolbar collection suite are not prerequisites for that viewer.
+Interface library 5.3 exposes indexed retained frame/clip queries for this
+custom canvas and lets ScrollView itself take focus for passive content.
 
 ## Artifact-specific behavior still to preserve
 

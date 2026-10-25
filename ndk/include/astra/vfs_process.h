@@ -9,6 +9,7 @@
 #include <astra/filesystem_library.h>
 #include <astra/vfs_assign.h>
 #include <astra/vfs_client.h>
+#include <astra/vfs_reader.h>
 
 /** Process-global Filesystem Kit binding. */
 typedef struct AstraProcessFilesystem {
@@ -29,6 +30,36 @@ typedef struct AstraProcessFileState {
     uint16_t member; /**< Union-assign member index. */
 } AstraProcessFileState;
 
+/** One-use, session-bound receipt for inheriting an open description. */
+typedef struct AstraProcessFileShare {
+    AstraProcessFileState file; /**< Original service and file state. */
+    uint64_t token; /**< Provider-owned pending reference. */
+} AstraProcessFileShare;
+
+/**
+ * Retain an open description for one child adoption.
+ * @param file Open provider-backed file.
+ * @param share Receives a one-use receipt bound to the original grant.
+ * @return ASTRA_VFS_* status; UNSUPPORTED without shared descriptions.
+ */
+uint32_t astra_process_file_share(const AstraFile *file,
+                                  AstraProcessFileShare *share);
+/**
+ * Consume a receipt after rebinding the child's process VFS clients.
+ * @param share Receipt produced by astra_process_file_share().
+ * @param file Initialized closed file, or the inherited invalid owner to
+ * replace. Success consumes its inherited local pin exactly once.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_process_file_adopt(const AstraProcessFileShare *share,
+                                  AstraFile *file);
+/**
+ * Withdraw a pending receipt in the process that created it.
+ * @param share Receipt produced by astra_process_file_share().
+ * @return ASTRA_VFS_* status; BAD_HANDLE if already consumed or withdrawn.
+ */
+uint32_t astra_process_file_unshare(const AstraProcessFileShare *share);
+
 /** Serialized byte size of AstraProcessFileState. */
 #define ASTRA_PROCESS_FILE_STATE_SIZE 32u
 /** @cond ASTRA_INTERNAL */
@@ -43,31 +74,58 @@ _Static_assert(sizeof(AstraProcessFileState) ==
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_process_vfs_init(const AstraStartupInfo *startup);
-/** Close every current-process VFS client and clear its namespace. */
+/** Close every current-process VFS client and clear its namespace.
+ * Finish all filesystem calls and close borrowed files and sources first.
+ * This explicit process teardown must not run concurrently with filesystem use. */
 void astra_process_vfs_close(void);
 /**
  * Reinitialize process-local synchronization after fork in the child.
+ * Copied files, provider-backed directories and read sources stay LOST until
+ * closed or explicitly adopted. Their local client pins remain owned. Virtual
+ * namespace iterators retain their snapshots. Only single-thread clones are
+ * admitted by the kernel; finish all filesystem calls before cloning.
  * @param startup Child startup record.
+ * @param cwd Current-directory receipt; NULL only if no directory identity was
+ * retained. Omitting a receipt for a retained CWD returns INVALID.
  * @return ASTRA_VFS_* status.
  */
 uint32_t astra_process_vfs_after_fork_child(
-    const AstraStartupInfo *startup);
+    const AstraStartupInfo *startup, const AstraProcessFileShare *cwd);
 /**
  * Set the base used by bare paths without changing the assign table.
- * @param assign Current assign name.
- * @param path Mount-relative current directory.
+ * @param path Qualified or process-relative directory path.
  * @return ASTRA_VFS_* status.
  */
-uint32_t astra_process_vfs_set_current_directory(const char *assign,
-                                                 const char *path);
-/** @return Mutable process-global assign table. */
-AstraAssignTable *astra_process_vfs_assigns(void);
+uint32_t astra_process_vfs_set_current_directory(const char *path);
+/** Read the current directory spelling from its retained identity.
+ * @param path Receives an absolute native namespace path. @param capacity Bytes available.
+ * @return ASTRA_VFS_* status; NOT_FOUND for a removed directory. */
+uint32_t astra_process_vfs_current_directory(char *path, uint32_t capacity);
+/** Retain current directory identity for one child adoption.
+ * @param share Receives a receipt, or zero token for the virtual namespace root.
+ * @return ASTRA_VFS_* status. */
+uint32_t astra_process_vfs_share_current_directory(AstraProcessFileShare *share);
+/** Open a process-relative source for a native loader.
+ * @param path Qualified or relative path. @param source Receives an open file source.
+ * @return ASTRA_VFS_* status. */
+uint32_t astra_process_vfs_source_open(const char *path, AstraVfsReadSource *source);
+/** @cond ASTRA_INTERNAL */
+uint32_t astra_process_vfs_current_acquire(const AstraFile **directory);
+void astra_process_vfs_current_release(void);
+uint32_t astra_process_vfs_current_qualify(const char *path, char *out, uint32_t capacity);
+/** @endcond */
+/** @return Read-only explicit startup grants. Mounted-volume views are acquired by the process filesystem facade. */
+const AstraAssignTable *astra_process_vfs_assigns(void);
+/** @cond ASTRA_INTERNAL */
+uint32_t astra_process_vfs_namespace_acquire(const AstraAssignTable **table, void **owner);
+void astra_process_vfs_namespace_release(void *owner);
+/** @endcond */
 /** @return Borrowed primary process-global VFS client, or NULL. */
 AstraVfsClient *astra_process_vfs_client(void);
 /**
  * Resolve the process client serving an assign member.
  * @param assign Borrowed namespace member.
- * @return Borrowed connected client, or NULL.
+ * @return Borrowed connected client, or NULL. Keep the namespace view or an open description while borrowing a dynamic client.
  */
 AstraVfsClient *astra_process_vfs_client_for(const AstraAssign *assign);
 /**
@@ -94,7 +152,7 @@ uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
 /**
  * Qualify a user path against the current process directory.
  * @param typed Qualified or relative UTF-8 path.
- * @param out Receives an assign-qualified path.
+ * @param out Receives the path unchanged; the process facade resolves relative input.
  * @param capacity Bytes available in `out`.
  * @return ASTRA_VFS_* status.
  */
@@ -127,12 +185,14 @@ uint32_t astra_process_read_file_alloc(AstraProcessFilesystem *filesystem,
                                        const char *path, void **bytes,
                                        uint32_t *length);
 /**
- * Detach and close a process Filesystem Kit binding.
+ * Detach a process Filesystem Kit binding. Process clients and open files
+ * remain valid until process exit or explicit astra_process_vfs_close().
  * @param filesystem Open binding to close.
  */
 void astra_process_filesystem_close(AstraProcessFilesystem *filesystem);
 
-/** @return Bytes required to export opaque personality-exec VFS state. */
+/** @return Bytes required to export opaque personality-exec VFS state.
+ * Exec state sizing, export and import require quiesced filesystem callers. */
 uint32_t astra_process_vfs_state_size(void);
 /**
  * Export process VFS state for an in-place personality exec.

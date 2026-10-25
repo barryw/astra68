@@ -332,7 +332,6 @@ uint32_t RESERVED_110;        // 0x110
 
 // ---- Attached-host accelerator ----
 #define HOST_ACCEL_ID_MAGIC 0x48414343u // "HACC"
-#define HOST_ACCEL_VERSION_1_0 0x00010000u
 #define HOST_ACCEL_EXECUTE_BIT (1u << 0)
 #define HOST_ACCEL_RESET_BIT   (1u << 0)
 

@@ -3,9 +3,12 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/mman.h>
 
 #include <astra/gui.h>
+#include <astra/endian.h>
+#include <astra/menu.h>
 #include <astra/port.h>
 #include <astra/status.h>
 #include <astra/window.h>
@@ -29,9 +32,16 @@ static uint32_t next_state = ASTRA_WINDOW_STATE_NORMAL;
 static uint32_t next_state_flags = ASTRA_WINDOW_ACTIVE;
 static uint32_t next_resize_width = 500u;
 static uint32_t next_resize_height = 240u;
+static uint32_t next_font_generation = 7u;
+static uint32_t next_font_window = 7u;
 static uint32_t next_system_action = ASTRA_SYSTEM_ACTION_ABOUT;
 static AstraGuiWindowCommand last_command;
 static uint8_t *pointer_area;
+static uint32_t menu_area_mode;
+static uint32_t next_command_status;
+static uint32_t next_menu_request = 42u;
+static uint32_t next_menu_reserved;
+static uint32_t menu_area_closes;
 
 static void header(AstraMessageHeader *value, uint32_t size,
                    uint32_t operation, uint32_t transaction)
@@ -59,9 +69,8 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         *out_d1 = d1 == 2u ? 0x101u :
                   (d1 == 0x505u ? 0x103u : 0x102u);
     } else if (number == ASTRA_SYSCALL_AREA_CREATE) {
-        assert(d1 == ASTRA_HARDWARE_POINTER_WIDTH *
-                     ASTRA_HARDWARE_POINTER_HEIGHT *
-                     sizeof(AstraColorRGBA8));
+        assert(d1 == (menu_area_mode ? 72u : ASTRA_HARDWARE_POINTER_WIDTH *
+                     ASTRA_HARDWARE_POINTER_HEIGHT * sizeof(AstraColorRGBA8)));
         assert(d2 == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
                       ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER));
         *out_d1 = 0x505u;
@@ -123,17 +132,28 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             assert(port == 0x303u && call->request_size == sizeof(*request));
             assert(request->window == 7u && request->generation != 0u);
             assert(request->action >= ASTRA_GUI_WINDOW_QUERY &&
-                   request->action <= ASTRA_GUI_WINDOW_FULLSCREEN &&
+                   request->action <= ASTRA_GUI_WINDOW_MENU_CLOSE &&
                    request->action != ASTRA_GUI_WINDOW_CLOSE);
             assert(call->reply_index == 0u);
-            if (request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE)
+            if (request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ||
+                request->action == ASTRA_GUI_WINDOW_MENU_OPEN)
                 assert(call->handle_count == 1u &&
                        call->handles[0] == 0x103u);
             else
                 assert(call->handle_count == 0u);
             assert(call->reply_capacity == sizeof(*reply) &&
                    call->reply_handle_capacity == 0u);
+            if (request->action == ASTRA_GUI_WINDOW_MENU_OPEN) {
+                assert(astra_load_be32(pointer_area) == ASTRA_GUI_MENU_MAGIC);
+                assert(astra_load_be32(pointer_area + 4u) == ASTRA_GUI_MENU_VERSION);
+                assert(astra_load_be32(pointer_area + 8u) == 72u && astra_load_be32(pointer_area + 12u) == 3u);
+                assert(astra_load_be32(pointer_area + 20u) == 64u && astra_load_be32(pointer_area + 24u) == 4u);
+                assert(astra_load_be32(pointer_area + 32u) == ASTRA_MENU_SEPARATOR && astra_load_be32(pointer_area + 36u) == 68u);
+                assert(astra_load_be32(pointer_area + 48u) == (ASTRA_MENU_DISABLED | ASTRA_MENU_CHECKED));
+                assert(memcmp(pointer_area + 64u, "OpenFlag", 8u) == 0);
+            }
             last_command = *request;
+            reply->status = next_command_status;
             header(&reply->header, sizeof(*reply), ASTRA_GUI_WINDOW_STATE,
                    request->header.transaction_id);
             reply->window = 7u;
@@ -184,6 +204,13 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         } else if (next_event_type == ASTRA_WINDOW_EVENT_RESIZE) {
             message->event.data.resize.width = next_resize_width;
             message->event.data.resize.height = next_resize_height;
+        } else if (next_event_type == ASTRA_WINDOW_EVENT_MENU_RESULT) {
+            message->event.data.menu_result.request = next_menu_request;
+            message->event.data.menu_result.selection = 3u;
+            message->event.data.menu_result.reserved[0] = next_menu_reserved;
+        } else if (next_event_type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+            message->event.data.font_changed.generation = next_font_generation;
+            message->event.data.font_changed.window = next_font_window;
         } else if (next_event_type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION) {
             message->event.data.system_action.action = next_system_action;
         } else {
@@ -199,6 +226,7 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         assert(number == ASTRA_SYSCALL_CLOSE);
         assert(d1 == event_receive || d1 == 0x303u || d1 == 0x404u ||
                d1 == 0x505u);
+        if (d1 == 0x505u && menu_area_mode) ++menu_area_closes;
     }
     return ASTRA_SYSCALL_OK;
 }
@@ -357,6 +385,31 @@ int main(void)
     assert(pointer_area[0] == 255u && pointer_area[1] == 255u &&
            pointer_area[2] == 255u && pointer_area[3] == 255u &&
            pointer_area[4] == 0u);
+    {
+        AstraMenuItem rows[] = {{"Open", 4u, 0u}, {NULL, 0u, ASTRA_MENU_SEPARATOR},
+            {"Flag", 4u, ASTRA_MENU_DISABLED | ASTRA_MENU_CHECKED}};
+        menu_area_mode = 1u;
+        before = call_count;
+        assert(astra_window_menu_open(&window, rows, 3u, 12, 24, 42u) == ASTRA_OK);
+        assert(call_count == before + 6u && menu_area_closes == 1u &&
+            last_command.action == ASTRA_GUI_WINDOW_MENU_OPEN && last_command.flags == 42u &&
+            last_command.x == 12u && last_command.y == 24u);
+        next_command_status = ASTRA_STATUS_BUSY;
+        assert(astra_window_menu_open(&window, rows, 3u, 12, 24, 43u) == ASTRA_ERROR_BUSY);
+        assert(menu_area_closes == 2u);
+        next_command_status = ASTRA_STATUS_OK;
+        before = call_count;
+        assert(astra_window_menu_open(&window, rows, 3u, 12, 24, 0u) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_window_menu_open(&window, rows, 3u, -1, 24, 42u) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_window_menu_open(&window, NULL, 3u, 12, 24, 42u) == ASTRA_ERROR_INVALID_ARGUMENT);
+        rows[0].flags = 0x80000000u;
+        assert(astra_window_menu_open(&window, rows, 3u, 12, 24, 42u) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_window_menu_close(&window, 0u) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(call_count == before);
+        assert(astra_window_menu_close(&window, 42u) == ASTRA_OK);
+        assert(last_command.action == ASTRA_GUI_WINDOW_MENU_CLOSE && last_command.flags == 42u);
+        menu_area_mode = 0u;
+    }
     before = call_count;
     assert(astra_window_present(&window) == ASTRA_OK);
     expect_action(before, ASTRA_GUI_WINDOW_PRESENT);
@@ -393,6 +446,24 @@ int main(void)
                (ASTRA_INPUT_MOD_LEFT_SHIFT | ASTRA_INPUT_MOD_META));
         assert(window._private_generation == generation);
 
+        next_event_type = ASTRA_WINDOW_EVENT_MENU_RESULT;
+        assert(astra_window_event_try(&window, &event) == ASTRA_OK);
+        assert(event.data.menu_result.request == 42u && event.data.menu_result.selection == 3u);
+        next_menu_request = 0u;
+        assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
+        next_menu_request = 42u;
+        next_menu_reserved = 1u;
+        assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
+        next_menu_reserved = 0u;
+        next_event_type = ASTRA_WINDOW_EVENT_FONT_CHANGED;
+        assert(astra_window_event_try(&window, &event) == ASTRA_OK &&
+               event.data.font_changed.generation == 7u);
+        next_font_generation = 0u;
+        assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
+        next_font_generation = 7u;
+        next_font_window = 8u;
+        assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
+        next_font_window = 7u;
         next_event_type = ASTRA_WINDOW_EVENT_TEXT;
         next_text_codepoint = 0xd800u;
         before = call_count;

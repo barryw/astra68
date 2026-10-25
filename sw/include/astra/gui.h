@@ -14,7 +14,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 19u
+#define ASTRA_GUI_VERSION 25u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -53,6 +53,10 @@ enum {
 /** Window creation and state flags. */
 enum {
     ASTRA_WINDOW_RESIZABLE = 1u << 0,
+    /** While visible, blocks input and activation of other windows opened
+        through the same GUI session. The newest visible modal owns that
+        session's interaction; other applications remain usable. Windows on
+        the shared service GUI port belong to session zero. */
     ASTRA_WINDOW_MODAL = 1u << 1,
     ASTRA_WINDOW_ACTIVE = 1u << 2
 };
@@ -108,7 +112,7 @@ typedef struct AstraWindowFrame {
 } AstraWindowFrame;
 
 /** Current serialized window-event version. */
-#define ASTRA_WINDOW_EVENT_VERSION 7u
+#define ASTRA_WINDOW_EVENT_VERSION 9u
 
 /** Window event kinds. */
 enum {
@@ -124,7 +128,11 @@ enum {
     ASTRA_WINDOW_EVENT_KEY = 8,
     ASTRA_WINDOW_EVENT_TEXT = 9,
     /** An action selected from the display-owned system menu. */
-    ASTRA_WINDOW_EVENT_SYSTEM_ACTION = 10
+    ASTRA_WINDOW_EVENT_SYSTEM_ACTION = 10,
+    /** Terminal result for a window-owned transient menu. */
+    ASTRA_WINDOW_EVENT_MENU_RESULT = 11,
+    /** Refresh Font Kit's system context and reflow native controls. */
+    ASTRA_WINDOW_EVENT_FONT_CHANGED = 12
 };
 
 enum {
@@ -279,8 +287,24 @@ typedef struct AstraWindowSystemActionEvent {
     uint32_t reserved[6]; /**< Must be zero. */
 } AstraWindowSystemActionEvent;
 
+/** Menu result: selection is a one-based row, zero means cancellation. */
+typedef struct AstraWindowMenuResultEvent {
+    uint32_t request; /**< Nonzero caller correlation token. */
+    uint32_t selection; /**< Selected row, or zero when dismissed. */
+    uint32_t status; /**< Common service status; errors have selection zero. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraWindowMenuResultEvent;
+
+/** Selected system-font catalog revision; notification may be retried. */
+typedef struct AstraWindowFontChangedEvent {
+    uint32_t generation; /**< Nonzero font catalog revision. */
+    uint32_t window; /**< Receiving window's nonzero server ID. */
+} AstraWindowFontChangedEvent;
+
 /** Event-kind-specific payload preserving the public wire extent. */
 typedef union AstraWindowEventData {
+    /** Selected system-font catalog revision; notification may be retried. */
+    AstraWindowFontChangedEvent font_changed;
     /** Pointer motion or button data. */
     AstraWindowPointerEvent pointer;
     /** Pointer motion data, with the device's motion totals. */
@@ -297,6 +321,8 @@ typedef union AstraWindowEventData {
     AstraWindowTextEvent text;
     /** System menu command data. */
     AstraWindowSystemActionEvent system_action;
+    /** Correlated menu result. */
+    AstraWindowMenuResultEvent menu_result;
     /** Reserved wire storage. */
     uint32_t reserved[7];
 } AstraWindowEventData;
@@ -345,6 +371,58 @@ _Static_assert(sizeof(AstraWindowEvent) == 52u,
 #define ASTRA_GUI_OPEN_SESSION     8u
 #define ASTRA_GUI_SESSION_OPENED   9u
 #define ASTRA_GUI_SESSION_ACTIVATE 10u
+/* One reply capability. Report the actually adopted context, including after
+   a failed prior mapping. Display retains confirmed and pending snapshots
+   separately; delivery alone does not retire the client's previous font. */
+#define ASTRA_GUI_FONT_CONTEXT 11u
+#define ASTRA_GUI_FONT_CONTEXT_REPLY 12u
+/* One reply capability; bounded UTF-8 chunks keep measurement work bounded. */
+#define ASTRA_GUI_FONT_MEASURE 13u
+#define ASTRA_GUI_FONT_MEASURE_REPLY 14u
+#define ASTRA_GUI_FONT_MEASURE_TEXT_MAX 256u
+
+typedef struct AstraGuiFontMeasureRequest {
+    AstraMessageHeader header;
+    char face_id[64];
+    uint32_t text_length;
+    uint16_t pixel_height;
+    uint16_t reserved16;
+    uint64_t maximum_advance;
+    char text[ASTRA_GUI_FONT_MEASURE_TEXT_MAX];
+} AstraGuiFontMeasureRequest;
+
+typedef struct AstraGuiFontMeasureReply {
+    AstraMessageHeader header;
+    uint32_t status;
+    uint32_t fitted_bytes;
+    uint64_t advance;
+    uint32_t line_height;
+    uint32_t reserved;
+} AstraGuiFontMeasureReply;
+
+_Static_assert(sizeof(AstraGuiFontMeasureRequest) == 360u,
+               "font measure request ABI");
+_Static_assert(sizeof(AstraGuiFontMeasureReply) == 48u,
+               "font measure reply ABI");
+
+typedef struct AstraGuiFontContextRequest {
+    AstraMessageHeader header;
+    char adopted_id[64];
+    uint32_t window;
+} AstraGuiFontContextRequest;
+
+_Static_assert(sizeof(AstraGuiFontContextRequest) == ASTRA_MESSAGE_HEADER_SIZE + 68u,
+               "font context request ABI");
+
+typedef struct AstraGuiFontContext {
+    AstraMessageHeader header;
+    uint32_t status;
+    uint32_t area_size;
+    char face_id[64];
+} AstraGuiFontContext;
+
+_Static_assert(sizeof(AstraGuiFontContext) == ASTRA_MESSAGE_HEADER_SIZE + 72u,
+               "font context ABI");
 
 /* Window-scoped GPU objects; see docs/MANAGED_GRAPHICS.md. */
 enum {
@@ -374,6 +452,9 @@ enum {
        the window as WINDOW_PRESENT does, without a STATE event. A frame
        that fails is dropped and logged. */
     ASTRA_GUI_GRAPHICS_FRAME = 9u,
+    /* INDEX8 surface object; x = first palette entry, width = count,
+       offset = packed big-endian ARGB entries in the staging area. */
+    ASTRA_GUI_GRAPHICS_PALETTE_WRITE = 10u,
 };
 
 /** FRAME flags. */
@@ -415,7 +496,22 @@ enum {
     ASTRA_GUI_WINDOW_SET_POINTER_GRAB = 20u,
     /* x, y: the content position the pointer moves to. */
     ASTRA_GUI_WINDOW_WARP_POINTER = 21u,
+    /* flags: nonzero menu correlation token; x,y: client-local anchor.
+       One attached area contains the counted AMNU document below. */
+    ASTRA_GUI_WINDOW_MENU_OPEN = 22u,
+    /* flags: correlation token of this window's menu to dismiss. */
+    ASTRA_GUI_WINDOW_MENU_CLOSE = 23u,
 };
+
+/* AMNU v1: all fields big-endian. Header: magic, version, total bytes, row
+   count. Each row: flags, label offset, label bytes, reserved zero. Labels
+   follow the row table contiguously. No pointers cross the GUI boundary. */
+#define ASTRA_GUI_MENU_MAGIC UINT32_C(0x414d4e55)
+#define ASTRA_GUI_MENU_VERSION 1u
+#define ASTRA_GUI_MENU_HEADER_BYTES 16u
+#define ASTRA_GUI_MENU_ROW_BYTES 16u
+/* Same bounded document budget as submitted managed draw lists. */
+#define ASTRA_GUI_MENU_BYTES_MAX UINT32_C(0x00100000)
 
 typedef struct AstraGuiOpenWindow {
     AstraMessageHeader header;

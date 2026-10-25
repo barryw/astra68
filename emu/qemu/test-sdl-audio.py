@@ -7,7 +7,7 @@ it with Ctrl-C: SDL turns SIGINT into SDL_QUIT, so loopwave must close its
 PCM stream and exit 0.
 
 loopwave decodes test/sample.wav (MS-ADPCM, mono, 22050 Hz) in SDL and plays
-it in a loop through pcm.library.2, the media service and QEMU's host audio
+it in a loop through pcm.library.3, the media service and QEMU's host audio
 provider. The Linux audio host converts and resamples every stream, so
 SDL's device takes loopwave's own format (S16BE mono 22050 Hz) and the
 MC68040 converts nothing. The provider talks to the Linux daemon's socket,
@@ -51,6 +51,8 @@ import numpy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+from qemu_runtime import qemu_test_credentials
+
 spec = importlib.util.spec_from_file_location(
     "astra_terminal_gate", os.path.join(HERE, "test-terminal.py"))
 terminal_gate = importlib.util.module_from_spec(spec)
@@ -227,6 +229,12 @@ class AudioHost:
 
     def __init__(self, path, hostfs=None):
         work = os.path.dirname(path)
+        _, qemu_gid = qemu_test_credentials()
+        if os.geteuid() == 0:
+            # Each caller owns this fresh fixture directory. Keep its names
+            # root-controlled while allowing only QEMU's group to traverse it.
+            os.chown(work, -1, qemu_gid)
+            os.chmod(work, 0o710)
         self.convert = converter_library(work)
         self.synthesis = synth_library(work)
         self.font_directory = os.path.join(work, "fonts")
@@ -257,6 +265,9 @@ class AudioHost:
         self.clock = time.monotonic()
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         self.listener.bind(path)
+        if os.geteuid() == 0:
+            os.chown(path, -1, qemu_gid)
+            os.chmod(path, 0o660)
         self.listener.listen(8)
         self.stopping = False
         threading.Thread(target=self.accept, daemon=True).start()
@@ -264,6 +275,9 @@ class AudioHost:
         # the daemon's feed thread reads it: by the clock, 2 ms at a time.
         mailbox = os.path.join(work, "audio.mailbox")
         fd = os.open(mailbox, os.O_RDWR | os.O_CREAT, 0o600)
+        if os.geteuid() == 0:
+            os.fchown(fd, -1, qemu_gid)
+            os.fchmod(fd, 0o660)
         os.ftruncate(fd, MAILBOX_BYTES)
         self.mailbox = mmap.mmap(fd, MAILBOX_BYTES)
         os.close(fd)
@@ -325,7 +339,8 @@ class AudioHost:
                 continue
             struct.pack_into("=I", box, at + 20, voice.position)
             after = (written - voice.position) & 0xFFFFFFFF
-            if available > buffer_bytes >= after:
+            if (available + buffer_bytes - 1) // buffer_bytes != \
+                    (after + buffer_bytes - 1) // buffer_bytes:
                 room = True
         if room:
             sequence = struct.unpack_from("=I", box, MAILBOX_ROOM)[0]

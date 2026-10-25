@@ -36,7 +36,7 @@ HOST_TEST := build/host/test_terminal_cursor build/host/test_terminal_scrollback
 HOST_TEST_SANITIZE := build/host/test_terminal_cursor_sanitize \
 	build/host/test_terminal_scrollback_sanitize
 TERMINAL_LIB := $(TERMINAL)/build/m68k/libastraterminal.a
-LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) \
+LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_FONT_LIBRARY) \
 	$(ASTRA_STREAMS_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) \
 	$(ASTRA_SYSTEM_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) \
 	$(ASTRA_COMPILER_LIBRARY)

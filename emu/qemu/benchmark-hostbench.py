@@ -17,7 +17,7 @@ SPEC = importlib.util.spec_from_file_location(
 terminal = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(terminal)
 
-PREFIXES = ("RAW USER ", "ADAPT ", "LAYER ", "MEM ")
+PREFIXES = ("RAW USER ", "ADAPT ", "MEM ")
 PASS = "ASTRA RAW USER PASS"
 FAIL = "ASTRA RAW USER FAIL"
 

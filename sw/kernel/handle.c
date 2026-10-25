@@ -165,6 +165,14 @@ static uint32_t detached_directory_physical[DETACHED_LEAF_COUNT]
 static uint16_t detached_backed_limit;
 static uint16_t detached_next_slot;
 static KernelHandleTransferStats transfer_stats;
+static KernelHandleImportRights import_rights;
+/* ASTRA_RIGHT_TRANSFER: the handle layer stays free of the ABI headers. */
+#define KERNEL_HANDLE_RIGHT_TRANSFER (1u << 5)
+
+void kernel_handle_set_import_rights(KernelHandleImportRights filter)
+{
+    import_rights = filter;
+}
 
 #if defined(__m68k__)
 _Static_assert(sizeof(KernelHandleEntry) == 28u,
@@ -380,28 +388,6 @@ static KernelHandleStatus find_detached_entry(
         return KERNEL_HANDLE_INVALID_HANDLE;
     *entry = candidate;
     return KERNEL_HANDLE_OK;
-}
-
-static uint32_t detached_live_count(void)
-{
-    uint32_t count = 0u;
-
-    for (uint32_t index = 0u; index < detached_backed_limit; ++index) {
-        if (detached_entry_at(index)->state == KERNEL_DETACHED_LIVE)
-            ++count;
-    }
-    return count;
-}
-
-static uint32_t detached_reserved_count(void)
-{
-    uint32_t count = 0u;
-
-    for (uint32_t index = 0u; index < detached_backed_limit; ++index) {
-        if (detached_entry_at(index)->state == KERNEL_DETACHED_RESERVED)
-            ++count;
-    }
-    return count;
 }
 
 static KernelHandleStatus find_entry(const KernelHandleTable *table,
@@ -1031,6 +1017,17 @@ static void reset_transfer_batch(KernelHandleTransferBatch *batch)
     batch->reserved[1] = 0u;
 }
 
+/* What a moved handle may arrive with: some right besides TRANSFER, still
+ * there after the import filter. A handle that can only travel, or that
+ * would arrive with no rights at all, is refused before it moves. */
+static bool transferable_rights(uint16_t type, void *object, uint32_t rights)
+{
+    uint32_t imported = import_rights != NULL ?
+        import_rights((KernelObjectType)type, object, rights) : rights;
+
+    return (imported & ~(uint32_t)KERNEL_HANDLE_RIGHT_TRANSFER) != 0u;
+}
+
 static KernelHandleStatus validate_transfer_sources(
     const KernelHandleTable *source_table,
     const KernelHandle *source_handles, uint32_t count,
@@ -1051,6 +1048,9 @@ static KernelHandleStatus validate_transfer_sources(
         if (source->object == NULL || source->release == NULL ||
             source->type == KERNEL_OBJECT_NONE)
             return KERNEL_HANDLE_CORRUPT;
+        if (!transferable_rights(source->type, source->object,
+                                 source->rights))
+            return KERNEL_HANDLE_INVALID_ARGUMENT;
         for (uint32_t prior = 0u; prior < index; ++prior)
             if (source_handles[prior] == source_handles[index])
                 return KERNEL_HANDLE_DUPLICATE;
@@ -1151,6 +1151,50 @@ KernelHandleStatus kernel_handle_transfer_prepare(
     return KERNEL_HANDLE_OK;
 }
 
+/*
+ * The sender chooses what arrives: each prepared handle keeps only the
+ * rights in its mask (Zircon's zx_handle_disposition_t rights). A mask can
+ * only narrow, and one with no rights is refused, leaving the batch
+ * prepared and unchanged for the caller to roll back.
+ */
+KernelHandleStatus kernel_handle_transfer_narrow(
+    KernelHandleTransferBatch *batch, const uint32_t *masks)
+{
+    if (batch == NULL || masks == NULL ||
+        batch->state != KERNEL_HANDLE_BATCH_PREPARED || batch->count == 0u)
+        return KERNEL_HANDLE_INVALID_ARGUMENT;
+    /* Every entry is judged before any is changed: a narrowed handle must
+     * keep a right besides TRANSFER, and keep one after the import filter
+     * too, or it would arrive rightless -- which the pool audit rightly
+     * calls corruption (re-review K1). */
+    for (uint32_t index = 0u; index < batch->count; ++index) {
+        KernelDetachedEntry *entry = NULL;
+        uint32_t rights;
+
+        if (find_detached_entry(batch->detached[index],
+                                KERNEL_DETACHED_RESERVED, &entry) !=
+            KERNEL_HANDLE_OK) {
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
+        rights = entry->rights & masks[index];
+        if (!transferable_rights(entry->type, entry->object, rights))
+            return KERNEL_HANDLE_INVALID_ARGUMENT;
+    }
+    for (uint32_t index = 0u; index < batch->count; ++index) {
+        KernelDetachedEntry *entry = NULL;
+
+        if (find_detached_entry(batch->detached[index],
+                                KERNEL_DETACHED_RESERVED, &entry) !=
+            KERNEL_HANDLE_OK) {
+            transfer_pool_corrupt = 1u;
+            return KERNEL_HANDLE_CORRUPT;
+        }
+        entry->rights &= masks[index];
+    }
+    return KERNEL_HANDLE_OK;
+}
+
 KernelHandleStatus kernel_handle_transfer_commit_export(
     KernelHandleTable *source_table, KernelHandleTransferBatch *batch)
 {
@@ -1173,7 +1217,7 @@ KernelHandleStatus kernel_handle_transfer_commit_export(
             source->retain != destination->retain ||
             source->release != destination->release ||
             source->release_context != destination->release_context ||
-            source->rights != destination->rights ||
+            (destination->rights & ~source->rights) != 0u ||
             source->type != destination->type)
             return KERNEL_HANDLE_INVALID_STATE;
     }
@@ -1393,7 +1437,9 @@ KernelHandleStatus kernel_handle_import_commit(
         destination->retain = source->retain;
         destination->release = source->release;
         destination->release_context = source->release_context;
-        destination->rights = source->rights;
+        destination->rights = import_rights != NULL ?
+            import_rights(source->type, source->object, source->rights) :
+            source->rights;
         destination->type = source->type;
         destination->occupied = 1u;
         destination->reserved = 0u;
@@ -1504,8 +1550,8 @@ bool kernel_handle_transfer_pool_valid(void)
     KernelAllocationStats allocations;
     KernelAllocationStats metadata;
     uint32_t allocated_leaves = 0u;
-    uint32_t live;
-    uint32_t reserved;
+    uint32_t live = 0u;
+    uint32_t reserved = 0u;
 
     if (!kernel_handle_transfer_pool_healthy())
         return false;
@@ -1538,12 +1584,14 @@ bool kernel_handle_transfer_pool_valid(void)
             if (entry->object == NULL || entry->release == NULL ||
                 entry->rights == 0u || entry->type == KERNEL_OBJECT_NONE)
                 return false;
+            if (entry->state == KERNEL_DETACHED_LIVE)
+                ++live;
+            else
+                ++reserved;
         } else {
             return false;
         }
     }
-    live = detached_live_count();
-    reserved = detached_reserved_count();
     return kernel_allocation_site_stats(
                KERNEL_ALLOCATION_SITE_DETACHED_HANDLE, &allocations) &&
            allocations.current_units == live + reserved &&
@@ -1561,6 +1609,26 @@ bool kernel_handle_transfer_pool_valid(void)
            reserved <= KERNEL_HANDLE_DETACHED_MAX - live &&
            transfer_stats.max_live_detached >= live &&
            transfer_stats.max_live_detached <= KERNEL_HANDLE_DETACHED_MAX;
+}
+
+uint32_t kernel_handle_detached_reference_count(KernelObjectType type,
+                                                const void *object)
+{
+    uint32_t count = 0u;
+
+    if (type <= KERNEL_OBJECT_NONE || type > KERNEL_OBJECT_HOST_SCOPE ||
+        object == NULL || !kernel_handle_transfer_pool_healthy())
+        return UINT32_MAX;
+    for (uint32_t index = 0u; index < detached_backed_limit; ++index) {
+        const KernelDetachedEntry *entry = detached_entry_at(index);
+
+        if (entry == NULL)
+            return UINT32_MAX;
+        if (entry->state == KERNEL_DETACHED_LIVE && entry->type == type &&
+            entry->object == object)
+            ++count;
+    }
+    return count;
 }
 
 bool kernel_handle_transfer_stats(KernelHandleTransferStats *stats)

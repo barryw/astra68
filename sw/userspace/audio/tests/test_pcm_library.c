@@ -30,6 +30,8 @@ static int convert_ended;
 static int midi_mode;
 static uint32_t loads;
 static uint32_t conversions;
+static int forbid_wait;
+static int reply_withheld;
 
 /* astra_midi_presets() waits on the monotonic clock. */
 uint64_t astra_clock_monotonic(void)
@@ -144,6 +146,7 @@ uint32_t astra_wait_one(uint32_t handle, uint64_t deadline,
 {
     assert(handle == 10u && deadline == ASTRA_DEADLINE_FOREVER);
     assert(detail == NULL);
+    assert(!forbid_wait);
     return ASTRA_SYSCALL_OK;
 }
 
@@ -155,6 +158,8 @@ uint32_t astra_port_receive(uint32_t handle, void *message,
     AstraPcmReply *reply = message;
 
     assert(handle == 10u && capacity == sizeof(*reply));
+    if (reply_withheld)
+        return ASTRA_SYSCALL_WOULD_BLOCK;
     memset(reply, 0, sizeof(*reply));
     astra_message_header_set(&reply->header, sizeof(*reply),
                              ASTRA_PCM_PROTOCOL, ASTRA_PCM_PROTOCOL_VERSION,
@@ -345,7 +350,38 @@ int main(void)
         assert(astra_midi_play(&song, ASTRA_MIDI_FOREVER) == ASTRA_OK &&
                last_request.value == ASTRA_PCM_MIDI_FOREVER);
         assert(astra_midi_play(&song, 0) == ASTRA_ERROR_INVALID_ARGUMENT);
+        forbid_wait = 1;
+        reply_withheld = 1;
+        before = sends;
+        assert(astra_midi_active(&song, &active) == ASTRA_ERROR_WOULD_BLOCK);
+        assert(active == 0);
+        assert(astra_midi_active(&song, &active) == ASTRA_ERROR_WOULD_BLOCK);
+        assert(sends == before + 1u);
+        reply_withheld = 0;
         assert(astra_midi_active(&song, &active) == ASTRA_OK && active == 1);
+        forbid_wait = 0;
+        /* Controls finish the pending reply before sending a new nonce. */
+        reply_withheld = 1;
+        assert(astra_midi_active(&song, &active) == ASTRA_ERROR_WOULD_BLOCK);
+        reply_withheld = 0;
+        assert(astra_midi_gain(&song, 32768u) == ASTRA_OK);
+        assert(last_request.header.operation == ASTRA_PCM_GAIN);
+        /* A received BUSY is complete, not an outstanding transaction. */
+        reply_withheld = 1;
+        assert(astra_midi_active(&song, &active) == ASTRA_ERROR_WOULD_BLOCK);
+        reply_withheld = 0;
+        reply_status = ASTRA_STATUS_BUSY;
+        assert(astra_midi_active(&song, &active) == ASTRA_ERROR_BUSY);
+        assert(song.activity_pending == 0u);
+        /* Correlation is still validated on the nonblocking path. */
+        reply_withheld = 1;
+        assert(astra_midi_active(&song, &active) == ASTRA_ERROR_WOULD_BLOCK);
+        assert(active == 1);
+        reply_withheld = 0;
+        bad_transaction = 1;
+        assert(astra_midi_active(&song, &active) == ASTRA_ERROR_IO);
+        assert(song.activity_pending == 0u && active == 1);
+        bad_transaction = 0;
         assert(astra_midi_add_system_font(&song, "TimGM6mb") == ASTRA_OK &&
                last_request.frames == 8u &&
                memcmp(shared, "TimGM6mb", 8u) == 0);
@@ -363,8 +399,12 @@ int main(void)
                ASTRA_ERROR_INVALID_ARGUMENT);
         assert(astra_midi_status(&song, NULL) ==
                ASTRA_ERROR_INVALID_ARGUMENT);
+        reply_withheld = 1;
+        assert(astra_midi_active(&song, &active) == ASTRA_ERROR_WOULD_BLOCK);
+        reply_withheld = 0;
         assert(astra_midi_close(&song) == ASTRA_OK &&
                last_request.header.operation == ASTRA_PCM_CLOSE);
+        assert(song.activity_pending == 0u && song.session.control == 0u);
     }
     return 0;
 }

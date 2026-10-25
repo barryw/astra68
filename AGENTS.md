@@ -30,9 +30,38 @@
   session through completion. A wrapper returning without visible output is not
   proof that its remote child completed or failed; confirm both the session exit
   status and the expected artifact/log before starting a replacement run.
+- Filesystem gates mount the provider image as root, then drop privilege
+  and run QEMU as the caller -- QEMU never runs as root, on beast or on
+  the board: `tools/astra-qemu-root` (installed as
+  `/usr/local/sbin/astra-qemu-root`, allowed by
+  `/etc/sudoers.d/astra-qemu-root`) treats the caller as hostile. Root
+  opens, creates, mounts and unmounts only under its own
+  `mktemp -d /var/tmp/astra-qemu-root.XXXXXX` directory (root, group the
+  caller's, 0710), never in a directory the caller can modify. Images
+  over 4 GiB are refused; the copy is fallocated under a lock after the
+  free-space check, so concurrent runs cannot overcommit `/`. A caller-credential reader
+  (`setpriv --reuid/--regid --no-new-privs`) opens the image no-follow,
+  refuses anything but a regular file, and sends exactly its fstat size
+  into root's `R/img` (0600). The installed storage provider mounts that
+  copy in its private mount namespace, then launches QEMU as the caller;
+  QEMU never owns the mount. The helper announces only its root-owned
+  `R/exports` (`ASTRA-QEMU-ROOT-EXPORTS R/exports`) for WORK/SOUND observation,
+  not the mounted system volume, and records the provider PID in
+  `R/provider.pid`. Afterwards a caller-credential `tee` writes `R/img`
+  back to the image. Provider cleanup releases the loop device and `R`;
+  a retained backing reference leaves `R` for investigation. `R` is on
+  real disk, never tmpfs (`/run`): a loop-mounted image backed by a tmpfs
+  file breaks HostFS. Reinstall the helper with
+  `sudo install -o root -g root -m 0755 tools/astra-qemu-root
+  /usr/local/sbin/` after any change; gates refuse a stale copy.
 
 ## Kernel Development Discipline
 
+- Before implementing or changing an operating-system mechanism or common
+  control, review the corresponding implementation in `~/Git/haiku`. Record
+  the relevant source paths and the patterns adopted or deliberately adapted
+  to Astra's native contracts. Use Haiku as a read-only reference and respect
+  its repository contribution policy; do not modify that checkout.
 - Before adding a kernel function, type, module, state machine, or test helper,
   search the existing implementation and tests for the same responsibility.
   Extend or consolidate the existing mechanism when it can preserve the

@@ -39,6 +39,7 @@
 #include <astra/process.h>
 #include <astra/proc.h>
 #include <astra/runtime.h>
+#include <astra/vfs_path_storage.h>
 #include <astra/syscall.h>
 #include <astra/vfs_backend.h>
 #include <astra/vfs_port_transport.h>
@@ -320,13 +321,16 @@ provider_leaf(const char *leaf, char *name, uint16_t *abi)
 static uint32_t
 provider_size(const char *path, uint64_t *size)
 {
+    AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(1u);
+    if (path_storage.bytes == NULL) { return ASTRA_VFS_ERR_LIMIT; }
+
     AstraVfsClient *client = NULL;
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint16_t kind = ASTRA_VFS_KIND_UNKNOWN;
-    char wire[ASTRA_VFS_PATH_MAX];
+    char *wire = astra_vfs_path_storage_at(&path_storage, 0u);
     uint32_t status = astra_vfs_assign_open(
         supervisor_assigns(), path, ASTRA_RIGHT_READ, ASTRA_VFS_OPEN_READ,
-        supervisor_vfs_assign_client, NULL, wire, sizeof(wire), &file, size,
+        supervisor_vfs_assign_client, NULL, wire, ASTRA_VFS_PATH_MAX, &file, size,
         &kind, &client, NULL);
 
     if (status != ASTRA_VFS_OK)
@@ -366,6 +370,9 @@ render_disk_row(ProcText *text, const AstraLibraryReference *library,
 static uint32_t
 render_disk_libraries(ProcText *text)
 {
+    AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(3u);
+    if (path_storage.bytes == NULL) { return ASTRA_VFS_ERR_LIMIT; }
+
     static AstraVfsDirEntry entries[8];
     AstraAssignTable *assigns = supervisor_assigns();
     AstraVfsUnionDirectory directory = ASTRA_VFS_UNION_DIRECTORY_INIT;
@@ -383,7 +390,7 @@ render_disk_libraries(ProcText *text)
     for (;;) {
         const AstraAssign *assign = NULL;
         AstraVfsClient *client;
-        char wire[ASTRA_VFS_PATH_MAX];
+        char *wire = astra_vfs_path_storage_at(&path_storage, 0u);
         uint32_t count = 0u;
         uint32_t member = 0u;
 
@@ -396,7 +403,7 @@ render_disk_libraries(ProcText *text)
             break;
         failure = "PROC library member resolve";
         status = astra_assign_resolve(assigns, base, ASTRA_RIGHT_READ,
-                                      member, wire, sizeof(wire), &assign);
+                                      member, wire, ASTRA_VFS_PATH_MAX, &assign);
         if (status != ASTRA_VFS_OK)
             break;
         client = supervisor_vfs_client_for(assign);
@@ -412,8 +419,9 @@ render_disk_libraries(ProcText *text)
             uint64_t binary_size = 0u;
             uint16_t abi = 0u;
             char name[ASTRA_LIBRARY_NAME_MAX];
-            char index_path[ASTRA_VFS_PATH_MAX] = {0};
-            char target[ASTRA_VFS_PATH_MAX];
+            char *index_path = astra_vfs_path_storage_at(&path_storage, 1u);
+            index_path[0] = '\0';
+            char *target = astra_vfs_path_storage_at(&path_storage, 2u);
 
             if (entries[item].kind != ASTRA_VFS_KIND_FILE)
                 continue;
@@ -422,16 +430,16 @@ render_disk_libraries(ProcText *text)
                 status = ASTRA_VFS_ERR_PROTOCOL;
                 break;
             }
-            if (!path_append(index_path, sizeof(index_path), wire) ||
-                !path_append(index_path, sizeof(index_path), "/") ||
-                !path_append(index_path, sizeof(index_path),
+            if (!path_append(index_path, ASTRA_VFS_PATH_MAX, wire) ||
+                !path_append(index_path, ASTRA_VFS_PATH_MAX, "/") ||
+                !path_append(index_path, ASTRA_VFS_PATH_MAX,
                              entries[item].name)) {
                 failure = "PROC library provider path";
                 status = ASTRA_VFS_ERR_LIMIT;
                 break;
             }
             failure = "PROC library provider read";
-            status = astra_vfs_port_read_path_inline(
+            status = astra_vfs_port_read_path(
                 client, index_path, &bytes, &moved, &index_size);
             if (status != ASTRA_VFS_OK)
                 break;
@@ -441,7 +449,7 @@ render_disk_libraries(ProcText *text)
                 break;
             }
             if (!astra_vfs_provider_index_parse(
-                    bytes, moved, "LIBS", name, abi, target, sizeof(target),
+                    bytes, moved, "LIBS", name, abi, target, ASTRA_VFS_PATH_MAX,
                     &library)) {
                 failure = "PROC library provider parse";
                 status = ASTRA_VFS_ERR_PROTOCOL;
@@ -609,8 +617,7 @@ proc_open(void *context, const char *path, uint32_t flags,
         *node = PROC_NODE_ROOT;
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
-        info->mode = 0500u;
-        info->nlink = 2u;
+        astra_vfs_node_info_mode_links(info, 0500u, 2u);
         return ASTRA_VFS_OK;
     }
     if (supervisor_proc_path_is_snapshot(path)) {
@@ -619,8 +626,7 @@ proc_open(void *context, const char *path, uint32_t flags,
         *node = PROC_NODE_SNAPSHOT;
         info->size = (uint64_t)snapshot_count * sizeof(*snapshot);
         info->kind = ASTRA_VFS_KIND_FILE;
-        info->mode = 0400u;
-        info->nlink = 1u;
+        astra_vfs_node_info_mode_links(info, 0400u, 1u);
         return ASTRA_VFS_OK;
     }
     if (supervisor_proc_path_equal(path, "scheduler")) {
@@ -630,16 +636,14 @@ proc_open(void *context, const char *path, uint32_t flags,
         *node = PROC_NODE_SCHEDULER;
         info->size = sizeof(scheduler_record);
         info->kind = ASTRA_VFS_KIND_FILE;
-        info->mode = 0400u;
-        info->nlink = 1u;
+        astra_vfs_node_info_mode_links(info, 0400u, 1u);
         return ASTRA_VFS_OK;
     }
     if (supervisor_proc_path_is_libraries(path)) {
         *node = PROC_NODE_LIBRARIES;
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
-        info->mode = 0500u;
-        info->nlink = 2u;
+        astra_vfs_node_info_mode_links(info, 0500u, 2u);
         return ASTRA_VFS_OK;
     }
     if (supervisor_proc_path_is_library_memory(path)) {
@@ -650,8 +654,7 @@ proc_open(void *context, const char *path, uint32_t flags,
         *node = PROC_NODE_LIBRARY_MEMORY;
         info->size = text.length;
         info->kind = ASTRA_VFS_KIND_FILE;
-        info->mode = 0400u;
-        info->nlink = 1u;
+        astra_vfs_node_info_mode_links(info, 0400u, 1u);
         return ASTRA_VFS_OK;
     }
     if (supervisor_proc_path_is_library_disk(path)) {
@@ -663,8 +666,7 @@ proc_open(void *context, const char *path, uint32_t flags,
         *node = PROC_NODE_LIBRARY_DISK;
         info->size = text.length;
         info->kind = ASTRA_VFS_KIND_FILE;
-        info->mode = 0400u;
-        info->nlink = 1u;
+        astra_vfs_node_info_mode_links(info, 0400u, 1u);
         return ASTRA_VFS_OK;
     }
     if (refresh_snapshot() != ASTRA_VFS_OK)
@@ -705,9 +707,9 @@ proc_open(void *context, const char *path, uint32_t flags,
     info->size = length;
     info->kind = leaf == PROC_PROCESS_DIRECTORY ?
                  ASTRA_VFS_KIND_DIRECTORY : ASTRA_VFS_KIND_FILE;
-    info->mode = leaf == PROC_PROCESS_DIRECTORY ? 0500u :
-                 leaf == PROC_PROCESS_CONTROL ? 0200u : 0400u;
-    info->nlink = leaf == PROC_PROCESS_DIRECTORY ? 2u : 1u;
+    astra_vfs_node_info_mode_links(info, leaf == PROC_PROCESS_DIRECTORY ? 0500u :
+                 leaf == PROC_PROCESS_CONTROL ? 0200u : 0400u,
+                                   leaf == PROC_PROCESS_DIRECTORY ? 2u : 1u);
     return ASTRA_VFS_OK;
 }
 
@@ -843,8 +845,7 @@ proc_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
     if (node == PROC_NODE_ROOT || node == PROC_NODE_LIBRARIES) {
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
-        info->mode = 0500u;
-        info->nlink = 2u;
+        astra_vfs_node_info_mode_links(info, 0500u, 2u);
         return ASTRA_VFS_OK;
     }
     if (node == PROC_NODE_SNAPSHOT) {
@@ -881,8 +882,7 @@ proc_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
                 return ASTRA_VFS_ERR_NOT_FOUND;
             info->size = 0u;
             info->kind = ASTRA_VFS_KIND_DIRECTORY;
-            info->mode = 0500u;
-            info->nlink = 2u;
+            astra_vfs_node_info_mode_links(info, 0500u, 2u);
             return ASTRA_VFS_OK;
         }
         if (opened->leaf == PROC_PROCESS_CONTROL) {
@@ -890,8 +890,7 @@ proc_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
                 return ASTRA_VFS_ERR_NOT_FOUND;
             info->size = 0u;
             info->kind = ASTRA_VFS_KIND_FILE;
-            info->mode = 0200u;
-            info->nlink = 1u;
+            astra_vfs_node_info_mode_links(info, 0200u, 1u);
             return ASTRA_VFS_OK;
         }
         if (index != UINT32_MAX) {
@@ -904,8 +903,7 @@ proc_stat_node(void *context, uintptr_t node, AstraVfsNodeInfo *info)
     if (status != ASTRA_VFS_OK)
         return status;
     info->kind = ASTRA_VFS_KIND_FILE;
-    info->mode = 0400u;
-    info->nlink = 1u;
+    astra_vfs_node_info_mode_links(info, 0400u, 1u);
     return ASTRA_VFS_OK;
 }
 
@@ -958,8 +956,7 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
         }
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_FILE;
-        info->mode = 0400u;
-        info->nlink = 1u;
+        astra_vfs_node_info_mode_links(info, 0400u, 1u);
         *next = cookie + 1u;
         return ASTRA_VFS_OK;
     }
@@ -991,8 +988,8 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
         }
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_FILE;
-        info->mode = cookie == 2u ? 0200u : 0400u;
-        info->nlink = 1u;
+        astra_vfs_node_info_mode_links(info, cookie == 2u ? 0200u : 0400u,
+                                       1u);
         *next = cookie + 1u;
         return ASTRA_VFS_OK;
     }
@@ -1003,8 +1000,7 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
             name[at] = "snapshot"[at];
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_FILE;
-        info->mode = 0400u;
-        info->nlink = 1u;
+        astra_vfs_node_info_mode_links(info, 0400u, 1u);
         *next = 1u;
         return ASTRA_VFS_OK;
     }
@@ -1015,8 +1011,7 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
             name[at] = "libraries"[at];
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
-        info->mode = 0500u;
-        info->nlink = 2u;
+        astra_vfs_node_info_mode_links(info, 0500u, 2u);
         *next = 2u;
         return ASTRA_VFS_OK;
     }
@@ -1027,8 +1022,7 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
             name[at] = "scheduler"[at];
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_FILE;
-        info->mode = 0400u;
-        info->nlink = 1u;
+        astra_vfs_node_info_mode_links(info, 0400u, 1u);
         *next = 3u;
         return ASTRA_VFS_OK;
     }
@@ -1050,8 +1044,7 @@ proc_readdir(void *context, uintptr_t directory, const char *path,
         name[text.moved] = '\0';
         info->size = 0u;
         info->kind = ASTRA_VFS_KIND_DIRECTORY;
-        info->mode = 0500u;
-        info->nlink = 2u;
+        astra_vfs_node_info_mode_links(info, 0500u, 2u);
         *next = index + 4u;
         return ASTRA_VFS_OK;
     }
@@ -1139,7 +1132,7 @@ proc_control(const ProcOpenNode *opened, const SupervisorProcControl *control)
 
 static uint32_t
 proc_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags,
-           const void *buffer, uint32_t length, uint32_t *moved,
+           uint64_t max_end, const void *buffer, uint32_t length, uint32_t *moved,
            uint64_t *position)
 {
     const ProcOpenNode *opened = (const ProcOpenNode *)node;
@@ -1148,6 +1141,7 @@ proc_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags,
 
     (void)flags;
     *moved = 0u;
+    *position = offset;
     if (context == NULL || *(const int *)context == 0)
         return ASTRA_VFS_ERR_ACCESS;
     if (node <= PROC_NODE_LAST || opened->magic != PROC_OPEN_NODE_MAGIC)
@@ -1156,6 +1150,9 @@ proc_write(void *context, uintptr_t node, uint64_t offset, uint32_t flags,
         return ASTRA_VFS_ERR_ACCESS;
     if (!supervisor_proc_control_parse(buffer, length, &control))
         return ASTRA_VFS_ERR_INVALID;
+    /* Control requests are indivisible; a bound must not execute a prefix. */
+    if (offset > max_end || (uint64_t)length > max_end - offset)
+        return ASTRA_VFS_ERR_FILE_TOO_LARGE;
     status = proc_control(opened, &control);
     if (status != ASTRA_VFS_OK)
         return status;
@@ -1205,6 +1202,7 @@ static const AstraVfsBackendOps proc_ops = {
     .filesystem_info = astra_vfs_backend_no_filesystem_info,
     .stat_at = astra_vfs_backend_no_stat_at,
     .stat_node = proc_stat_node,
+    NULL,
 };
 
 const AstraVfsBackendOps *

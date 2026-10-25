@@ -75,6 +75,7 @@ KernelWorkerStatus kernel_worker_schedule(uint32_t work);
 KernelWorkerStatus kernel_worker_on_timer(void);
 bool kernel_worker_try_select(void);
 bool kernel_worker_work_pending(void);
+bool kernel_worker_servicing(void);
 bool kernel_worker_stats(KernelWorkerStats *stats);
 void kernel_worker_main(void) __attribute__((noreturn));
 

@@ -1052,6 +1052,43 @@ static void test_trace_covers_endpoint_lifecycle(void)
     assert(kernel_irq_pool_valid());
 }
 
+static void test_first_corruption_keeps_origin_and_endpoint(void)
+{
+    FakeController controller;
+    FakeDevice device;
+    KernelIrqEndpoint *endpoint;
+    KernelIrqCorruption first;
+    KernelIrqCorruption later;
+    uint32_t slot;
+    uint32_t woken;
+
+    initialize_test(&controller);
+    assert(!kernel_irq_first_corruption(&first));
+    endpoint = bind_endpoint(&controller, &device, 123u, 5u,
+                             KERNEL_IRQ_TRIGGER_LEVEL);
+    slot = find_endpoint_slot(123u, 5u);
+    assert(kernel_irq_arm(endpoint) == KERNEL_IRQ_OK);
+    assert(kernel_irq_dispatch(5u, KERNEL_IRQ_COMMON_VECTOR, 10u,
+                               &woken) == KERNEL_IRQ_OK);
+    kernel_irq_abandon_unpublished(endpoint); /* Pending record forbids it. */
+    assert(kernel_irq_first_corruption(&first));
+    assert(first.site != 0u && first.slot == slot);
+    assert(first.owner == 123u && first.generation != 0u);
+    assert(first.source == 5u && first.state == KERNEL_IRQ_PENDING);
+    assert(first.references == 1u && first.cache_corrupt == 0u);
+    assert(!kernel_irq_pool_healthy());
+    kernel_irq_handle_release(NULL, NULL);
+    assert(kernel_irq_first_corruption(&later));
+    assert(memcmp(&first, &later, sizeof(first)) == 0);
+
+    initialize_test(&controller);
+    assert(!kernel_irq_first_corruption(&later));
+    kernel_irq_handle_release(NULL, NULL);
+    assert(kernel_irq_first_corruption(&later));
+    assert(later.site != first.site && later.slot == UINT32_MAX);
+    assert(later.owner == 0u && later.generation == 0u);
+}
+
 int main(void)
 {
     test_edge_order_and_manual_mask();
@@ -1068,6 +1105,7 @@ int main(void)
     test_limits_failures_and_diagnostics();
     test_publication_rollback_and_generation_reuse();
     test_trace_covers_endpoint_lifecycle();
+    test_first_corruption_keeps_origin_and_endpoint();
     puts("kernel IRQ endpoint tests passed");
     return 0;
 }

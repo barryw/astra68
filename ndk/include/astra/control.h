@@ -22,7 +22,7 @@ ASTRA_EXTERN_C_BEGIN
 /** Display refresh used to derive deterministic animation phases. */
 #define ASTRA_UI_VBLANK_HZ 60u
 
-/** Control kinds implemented by Interface Kit ABI 5.2. */
+/** Control kinds implemented by Interface Kit ABI 7.1. */
 enum {
     ASTRA_CONTROL_LABEL = 1u,
     ASTRA_CONTROL_BUTTON = 2u,
@@ -40,7 +40,11 @@ enum {
     ASTRA_CONTROL_SCROLLBAR = 14u,
     ASTRA_CONTROL_SPLITTER = 15u,
     ASTRA_CONTROL_DIAL = 16u,
-    ASTRA_CONTROL_DISCLOSURE = 17u
+    ASTRA_CONTROL_DISCLOSURE = 17u,
+    /** Single-selection vertical list; compose with ScrollView for overflow. */
+    ASTRA_CONTROL_LIST = 18u,
+    /** Selectable, read-only multiline text; compose with ScrollView. */
+    ASTRA_CONTROL_TEXT_VIEW = 19u
 };
 
 /** Semantic state owned by an application. */
@@ -198,6 +202,43 @@ typedef struct AstraContainerInfo {
     sizeof(AstraContainerInfo), 0, ASTRA_FLEX_LAYOUT_INIT, 0, { 0, 0, 0 } \
 }
 
+/** Offsets from a settings pane's first ID, also indices in its control array. */
+enum {
+    ASTRA_SETTINGS_PANE_TITLE = 0u,
+    ASTRA_SETTINGS_PANE_DESCRIPTION,
+    ASTRA_SETTINGS_PANE_BODY,
+    ASTRA_SETTINGS_PANE_ACTIONS,
+    ASTRA_SETTINGS_PANE_CONTROL_COUNT
+};
+
+/** Common settings shell composed from ordinary Labels and Containers.
+ * Attach application controls to BODY or ACTIONS using their flex parent IDs.
+ * BODY grows; ACTIONS stacks measured buttons; the shell supplies standard
+ * spacing. Text remains caller-owned. Policy and persistence remain with the
+ * application or owning system service.
+ */
+typedef struct AstraSettingsPaneInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t first_id; /**< Nonzero first ID; reserves four consecutive IDs. */
+    const char *title; /**< Borrowed UTF-8 title. */
+    uint32_t title_length; /**< Title bytes excluding terminator. */
+    const char *description; /**< Borrowed nonempty UTF-8 description. */
+    uint32_t description_length; /**< Description bytes excluding terminator. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraSettingsPaneInfo;
+
+/** Empty settings pane description. */
+#define ASTRA_SETTINGS_PANE_INFO_INIT { \
+    sizeof(AstraSettingsPaneInfo), 0, 0, 0, 0, 0, { 0, 0, 0, 0 } \
+}
+
+/** Root layout for a settings pane: standard window insets and vertical flow. */
+#define ASTRA_SETTINGS_PANE_LAYOUT_INIT { \
+    sizeof(AstraFlexLayout), ASTRA_FLEX_COLUMN, 0, \
+    ASTRA_FLEX_JUSTIFY_START, ASTRA_FLEX_ALIGN_STRETCH, \
+    24, 24, 24, 24, 12, 0, { 0, 0, 0, 0 } \
+}
+
 /** Creation data for a viewport that clips and translates one direct child. */
 typedef struct AstraScrollViewInfo {
     uint32_t size; /**< Structure size for source-compatible extension. */
@@ -234,6 +275,23 @@ typedef struct AstraControlSize {
     uint32_t height;
 } AstraControlSize;
 
+/** Optional installed face and exact strike for a Label.
+ * The descriptor is copied; the counted ID remains caller-owned. A zero GUI
+ * capability with an empty ID/height keeps the theme's fixed text-role size.
+ */
+typedef struct AstraLabelFont {
+    uint32_t size; /**< Structure size. */
+    AstraHandle gui; /**< Borrowed GUI session used for font metrics. */
+    const char *id; /**< Borrowed counted installed face ID, or NULL. */
+    uint32_t id_length; /**< ID bytes excluding any terminator. */
+    uint16_t pixel_height; /**< Exact installed strike height. */
+    uint16_t reserved16; /**< Must be zero. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraLabelFont;
+
+/** Keep the theme's ordinary Label font and role size. */
+#define ASTRA_LABEL_FONT_INIT { sizeof(AstraLabelFont), 0, 0, 0, 0, 0, { 0, 0 } }
+
 /** Label creation data; the retained UTF-8 text span remains caller-owned. */
 typedef struct AstraLabelInfo {
     /** Structure size for source-compatible extension. */
@@ -250,12 +308,14 @@ typedef struct AstraLabelInfo {
     uint32_t state;
     /** Must be zero. */
     uint32_t reserved[3];
+    /** Optional installed-font override, copied by value. */
+    AstraLabelFont font;
 } AstraLabelInfo;
 
 /** Empty primary-label creation data. */
 #define ASTRA_LABEL_INFO_INIT { \
     sizeof(AstraLabelInfo), 0, 0, 0, ASTRA_TEXT_CLIENT_PRIMARY, 0, \
-    { 0, 0, 0 } \
+    { 0, 0, 0 }, ASTRA_LABEL_FONT_INIT \
 }
 
 /** Button creation data; the retained UTF-8 text span remains caller-owned. */
@@ -494,11 +554,11 @@ typedef struct AstraChoiceInfo {
     uint32_t size;
     /** Nonzero ID unique within the UI context. */
     uint32_t id;
-    /** Borrowed item array retained for the control lifetime. */
+    /** Borrowed item array; NULL permitted for an empty List. */
     const AstraChoiceItem *items;
     /** Number of items; storage capacity is the only ceiling. */
     uint32_t item_count;
-    /** Initially selected zero-based item. */
+    /** Initially selected zero-based item; UINT32_MAX means none for List. */
     uint32_t selected;
     /** Application-owned disabled or error semantic state. */
     uint32_t state;
@@ -539,6 +599,19 @@ typedef struct AstraFieldInfo {
     sizeof(AstraFieldInfo), 0u, 0, 20u, 0u, 0u,                          \
     { 0u, 0u, 0u, 0u }                                                   \
 }
+
+/** Read-only multiline model presented by TextSurface in a ScrollView. */
+typedef struct AstraTextViewInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t id; /**< Nonzero control ID. */
+    AstraTextModel *model; /**< Borrowed model; caller retains its arenas. */
+    uint32_t state; /**< Disabled, error, or collapsed semantic state. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraTextViewInfo;
+
+/** Empty Text View construction data. */
+#define ASTRA_TEXT_VIEW_INFO_INIT \
+    { sizeof(AstraTextViewInfo), 0u, 0, 0u, { 0u, 0u, 0u, 0u } }
 
 /** Caller-owned retained control.  Private fields must not be modified. */
 typedef struct AstraControl {
@@ -581,6 +654,7 @@ typedef struct AstraControl {
     AstraFlexLayout _private_child_layout;
     uint32_t _private_animation_next;
     uint32_t _private_animation_phase;
+    AstraLabelFont _private_label_font;
     /** @endcond */
 } AstraControl;
 
@@ -590,7 +664,8 @@ typedef struct AstraControl {
     { 0, 0, 0, 0 }, 0, 0, 0, 0, 1, ASTRA_FLEX_AUTO, 0, 0, \
     UINT32_MAX, UINT32_MAX, ASTRA_FLEX_ALIGN_AUTO, 0, 0, \
     0, 0, 0, 0, 0, 0, 0, UINT32_MAX, UINT32_MAX, UINT32_MAX, \
-    UINT32_MAX, { 0, 0, 0, 0 }, ASTRA_FLEX_LAYOUT_INIT, UINT32_MAX, 0 \
+    UINT32_MAX, { 0, 0, 0, 0 }, ASTRA_FLEX_LAYOUT_INIT, UINT32_MAX, 0, \
+    ASTRA_LABEL_FONT_INIT \
 }
 
 /** Caller-owned retained interaction and damage state. */
@@ -641,7 +716,11 @@ enum {
     ASTRA_UI_ACTION_COPY = 5u,
     ASTRA_UI_ACTION_CUT = 6u,
     ASTRA_UI_ACTION_PASTE = 7u,
-    ASTRA_UI_ACTION_SCROLL_CHANGED = 8u
+    ASTRA_UI_ACTION_SCROLL_CHANGED = 8u,
+    /** Secondary click or keyboard context gesture; control_id is its target. */
+    ASTRA_UI_ACTION_CONTEXT_MENU = 9u,
+    /** A transient control was dismissed without activation. */
+    ASTRA_UI_ACTION_DISMISS = 10u
 };
 
 /** Semantic result emitted by a handled window event. */
@@ -652,7 +731,7 @@ typedef struct AstraUIAction {
     uint32_t type;
     /** ID of the control that emitted the action. */
     uint32_t control_id;
-    /** Current value for `ASTRA_UI_ACTION_VALUE_CHANGED`. */
+    /** Current value for VALUE_CHANGED, or selected row for List ACTIVATE. */
     int64_t value;
     /** Decimal places for @ref value; zero for nonnumeric actions. */
     uint32_t decimal_places;

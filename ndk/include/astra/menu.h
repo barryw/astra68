@@ -1,0 +1,134 @@
+#ifndef ASTRA_MENU_H
+#define ASTRA_MENU_H
+
+/** @file menu.h @brief Shared transient menu control and command-backed context menus. */
+#include <astra/command.h>
+#include <astra/control.h>
+#include <astra/surface.h>
+
+ASTRA_EXTERN_C_BEGIN
+
+/** Presentation state for a menu row. */
+enum {
+    ASTRA_MENU_DISABLED = 1u << 0,
+    ASTRA_MENU_CHECKED = 1u << 1,
+    ASTRA_MENU_SEPARATOR = 1u << 2,
+};
+/** Menu placement/interaction policy. */
+enum {
+    ASTRA_MENU_ATTACHED_TOP = 1u << 0,
+    ASTRA_MENU_TRACK_OPEN_PRESS = 1u << 1,
+};
+/** Immutable presentation row, borrowed for the control's lifetime. */
+typedef struct AstraMenuItem {
+    const char *label; /**< Counted single-line UTF-8; NULL for a separator. */
+    uint32_t label_length; /**< Label byte count, excluding any terminator. */
+    uint32_t flags; /**< ASTRA_MENU_DISABLED/CHECKED/SEPARATOR. */
+} AstraMenuItem;
+
+/** Caller-owned menu control, independent of an ordinary client layout. */
+typedef struct AstraMenu {
+    /** @cond ASTRA_INTERNAL */
+    uint32_t _private_size;
+    const AstraMenuItem *_private_items;
+    uint32_t _private_count;
+    AstraControlFrame _private_frame;
+    uint32_t _private_content_height;
+    uint32_t _private_scroll;
+    uint32_t _private_selected;
+    uint32_t _private_pressed;
+    uint32_t _private_flags;
+    uint32_t _private_active;
+    uint32_t _private_revision;
+    /** @endcond */
+} AstraMenu;
+/** Empty caller-owned menu initializer. */
+#define ASTRA_MENU_INIT { sizeof(AstraMenu), 0, 0, {0,0,0,0}, 0,0, UINT32_MAX,UINT32_MAX,0,0,0 }
+
+/** Initialize a transient menu, fitted to the supplied work area.
+ * @param menu Caller-owned control.
+ * @param items Immutable rows retained until dismissal.
+ * @param count Number of rows; no fixed row-count ceiling.
+ * @param work Available screen rectangle.
+ * @param x Requested screen anchor x.
+ * @param y Requested screen anchor y.
+ * @param minimum_width Minimum preferred width, capped to @p work.
+ * @param flags ASTRA_MENU_ATTACHED_TOP/TRACK_OPEN_PRESS.
+ * @return ASTRA_OK or a validation/capacity error; output unchanged on error.
+ */
+AstraResult astra_interface_menu_init(AstraMenu *menu,
+    const AstraMenuItem *items, uint32_t count, const AstraControlFrame *work,
+    int32_t x, int32_t y, uint32_t minimum_width, uint32_t flags);
+/** Current geometry and interaction state of a transient menu. */
+typedef struct AstraMenuState {
+    AstraControlFrame frame; /**< Fitted screen bounds. */
+    uint32_t selection; /**< Highlighted one-based row, or zero. */
+    uint32_t scroll; /**< Content offset in pixels. */
+    uint32_t revision; /**< Changes whenever interaction changes presentation. */
+    uint32_t active; /**< Nonzero while the control is open. */
+} AstraMenuState;
+/** Read current menu state. @param menu Initialized control. @param state Receives geometry and state. @return ASTRA_OK or a validation error. */
+AstraResult astra_interface_menu_get_state(const AstraMenu *menu, AstraMenuState *state);
+/** Locate an enabled row at screen coordinates. @param menu Initialized control. @param x Screen x. @param y Screen y. @return One-based row index, or zero. */
+uint32_t astra_interface_menu_hit(const AstraMenu *menu, int32_t x, int32_t y);
+/** Handle one event using screen pointer coordinates.
+ * @param menu Initialized control, updated in place.
+ * @param event Pointer, wheel, key or state-reset event.
+ * @param action ACTIVATE with one-based row control_id, DISMISS, or NONE.
+ * @return ASTRA_OK or a validation error. Selection closes the control.
+ */
+AstraResult astra_interface_menu_handle_event(AstraMenu *menu,
+    const AstraWindowEvent *event, AstraUIAction *action);
+/** Paint through the common raster/draw-list surface framework.
+ * @param menu Initialized control.
+ * @param surface Destination matching fitted menu width/height.
+ * @return ASTRA_OK or a validation/capacity error.
+ */
+AstraResult astra_interface_menu_render(const AstraMenu *menu, AstraSurfaceView *surface);
+
+/** Command reference for a context row; a zero reference is a separator. */
+typedef struct AstraContextMenuItem {
+    const char *command; /**< Stable command identifier, borrowed. */
+    uint32_t command_length; /**< Counted command identifier bytes. */
+    const AstraCommandArguments *arguments; /**< Borrowed invocation arguments. */
+} AstraContextMenuItem;
+/** One command-backed popup session per window; references remain caller-owned. */
+typedef struct AstraContextMenu {
+    /** @cond ASTRA_INTERNAL */
+    uint32_t _private_size;
+    uint32_t _private_serial;
+    uint32_t _private_request;
+    AstraWindow *_private_window;
+    const AstraCommandScope *_private_scope;
+    const AstraContextMenuItem *_private_items;
+    uint32_t _private_count;
+    /** @endcond */
+} AstraContextMenu;
+/** Empty command-backed popup session initializer. */
+#define ASTRA_CONTEXT_MENU_INIT { sizeof(AstraContextMenu),0,0,0,0,0,0 }
+/** Resolve current command state and show a copied menu snapshot.
+ * @param menu Caller-owned session; one per window.
+ * @param window Owning live window.
+ * @param scope Responder chain retained until terminal menu event.
+ * @param items Command references retained until terminal menu event.
+ * @param count Number of references.
+ * @param x Client-local anchor x.
+ * @param y Client-local anchor y.
+ * @return ASTRA_OK or a specific error; existing session retained on refusal.
+ */
+AstraResult astra_interface_context_menu_open(AstraContextMenu *menu,
+    AstraWindow *window, const AstraCommandScope *scope,
+    const AstraContextMenuItem *items, uint32_t count, int32_t x, int32_t y);
+/** Consume a terminal menu event and invoke its still-enabled command.
+ * @param menu Caller-owned session.
+ * @param event Event from its window; stale results are consumed without invocation.
+ * @param handled Receives nonzero for a menu result, zero otherwise.
+ * @return ASTRA_OK, a command result, or a validation error.
+ */
+AstraResult astra_interface_context_menu_handle_event(AstraContextMenu *menu,
+    const AstraWindowEvent *event, int *handled);
+/** Dismiss only this session's current menu. @param menu Caller-owned session. @return ASTRA_OK or a window error. */
+AstraResult astra_interface_context_menu_close(AstraContextMenu *menu);
+
+ASTRA_EXTERN_C_END
+#endif

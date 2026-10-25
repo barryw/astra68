@@ -6,12 +6,20 @@ version 0.1.0
 executable bin/m68k-68040/Terminal
 icon resources/Terminal.aicon
 capability GUI
+capability VOLUMES
+capability VOLUME_READ
+capability VOLUME_WRITE
+capability VOLUME_ADMIN
+capability DISK_ADMIN
+capability VOLUME_USAGE
 capability CLIPBOARD
 capability WORK:rw
 capability HOME:rw
 capability TMP:rw
-capability RAM:rw
+capability RAM_READ
+capability RAM_WRITE
 capability DH0:r
+capability FONTS:r
 capability SYSTEM:r
 capability LOCAL:rw
 capability COMMANDS:r
@@ -31,9 +39,10 @@ capability APP_LAUNCH
 capability SERVICE_MANAGER
 capability ENTROPY
 requires compiler.library 2 2.0.0
-requires filesystem.library 4 4.0.0
-requires graphics.library 2 2.1.0
-requires interface.library 5 5.2.0
+requires filesystem.library 15 15.1.0
+requires graphics.library 3 3.0.0
+requires font.library 5 5.0.0
+requires interface.library 7 7.0.0
 requires runtime.library 1 1.6.0
 requires streams.library 1 1.1.0
-requires system.library 3 3.0.0
+requires system.library 4 4.0.0

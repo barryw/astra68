@@ -11,6 +11,7 @@ ASTRA_CONFIG_1.0 {
         astra_config_get_string;
         astra_config_get_u64;
         astra_config_open;
+        astra_config_open_system;
         astra_config_reload;
         astra_config_remove;
         astra_config_set_bool;

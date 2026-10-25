@@ -6,14 +6,15 @@
 #include <astra/command.h>
 #include <astra/control.h>
 #include <astra/interface.h>
+#include <astra/menu.h>
 #include <astra/scroll.h>
 #include <astra/text_model.h>
 #include <astra/text_surface.h>
 #include <astra/undo.h>
 #include <astra/window.h>
 
-/** Breaking Interface Kit ABI generation carried by interface.library.5. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 5u
+/** Breaking Interface Kit ABI generation carried by interface.library.7. */
+#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 7u
 /** Current backward-compatible Interface Kit revision. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 2u
 
@@ -28,6 +29,14 @@ AstraResult astra_interface_show_alert(AstraHandle gui,
  */
 AstraResult astra_interface_label_init(AstraControl *control,
                                        const AstraLabelInfo *info);
+/** Change a Label's installed face/size, preserving focus and retained layout.
+ * Failure keeps its previous font. Ordinary theme labels use the empty font.
+ * @param context Owning UI context.
+ * @param control Label to update.
+ * @param font Copied descriptor; referenced ID remains caller-owned.
+ * @return ASTRA_OK or a validation, metric or layout error. */
+AstraResult astra_interface_label_set_font(AstraUIContext *context,
+    AstraControl *control, const AstraLabelFont *font);
 /** Initialize a retained button.
  * @param control Caller-owned control to initialize.
  * @param info Button description whose referenced text remains caller-owned.
@@ -49,6 +58,17 @@ AstraResult astra_interface_disclosure_init(
  */
 AstraResult astra_interface_container_init(AstraControl *control,
                                            const AstraContainerInfo *info);
+/** Compose a shared settings shell from four existing controls.
+ * Place these controls and the application's BODY/ACTIONS children in one UI
+ * array, then use ordinary ui_init/layout/render/event APIs with
+ * ASTRA_SETTINGS_PANE_LAYOUT_INIT. The shell adds no event loop or renderer.
+ * @param controls Four caller-owned slots, indexed by ASTRA_SETTINGS_PANE_*.
+ * @param info Pane text and reserved consecutive IDs.
+ * @return ASTRA_OK or a validation error. Discard controls after failure.
+ * @since Interface Kit 7.2.
+ */
+AstraResult astra_interface_settings_pane_init(AstraControl *controls,
+                                               const AstraSettingsPaneInfo *info);
 /** Initialize a scroll viewport.
  * @param control Caller-owned control to initialize.
  * @param info View description; its scroll model remains caller-owned.
@@ -133,6 +153,14 @@ AstraResult astra_interface_segmented_init(AstraControl *control,
  */
 AstraResult astra_interface_tab_init(AstraControl *control,
                                      const AstraChoiceInfo *info);
+/** Initialize a single-selection vertical list. Empty lists and no selection are valid.
+ * Compose with ScrollView for overflow; item labels remain caller-owned.
+ * @param control Caller-owned control to initialize.
+ * @param info Choice description; UINT32_MAX selects no item.
+ * @return ASTRA_OK or a validation error.
+ */
+AstraResult astra_interface_list_init(AstraControl *control,
+                                      const AstraChoiceInfo *info);
 /** Initialize a single-line UTF-8 field.
  * @param control Caller-owned control to initialize.
  * @param info Field description; its text model remains caller-owned.
@@ -147,6 +175,24 @@ AstraResult astra_interface_field_init(AstraControl *control,
  */
 AstraResult astra_interface_field_refresh(AstraUIContext *context,
                                           AstraControl *control);
+/** Initialize selectable, read-only multiline text. Compose with ScrollView
+ * and Scrollbar controls for overflow. TextModel retains original UTF-8;
+ * tabs use eight-cell stops and CRLF draws as one line break.
+ * @param control Caller-owned control to initialize.
+ * @param info Description retaining the caller-owned TextModel.
+ * @return ASTRA_OK or a validation/resource error; failure leaves control intact.
+ * @since Interface Kit 7.1.
+ */
+AstraResult astra_interface_text_view_init(AstraControl *control,
+                                          const AstraTextViewInfo *info);
+/** Remeasure, relayout and damage Text View after its model changes.
+ * @param context UI context owning the control.
+ * @param control Text View whose caller-owned model changed.
+ * @return ASTRA_OK or a validation/resource error.
+ * @since Interface Kit 7.1.
+ */
+AstraResult astra_interface_text_view_refresh(AstraUIContext *context,
+                                             AstraControl *control);
 /** Replace the current field selection.
  * @param context UI context owning @p control.
  * @param control Field to edit.
@@ -227,6 +273,16 @@ AstraResult astra_interface_ui_measure(
  */
 AstraResult astra_interface_ui_layout(AstraUIContext *context,
                                       const AstraFlexLayout *layout);
+/** Read retained geometry for application content drawn through Graphics Kit.
+ * @param context Laid-out UI context.
+ * @param index Index in the caller-owned control array.
+ * @param frame Receives logical content bounds.
+ * @param clip Receives the visible clip inherited from parent viewports.
+ * @return ASTRA_OK, ASTRA_ERROR_WOULD_BLOCK for an unlaid-out/collapsed control,
+ * or a validation error. Outputs remain unchanged on error.
+ */
+AstraResult astra_interface_ui_geometry(const AstraUIContext *context,
+    uint32_t index, AstraControlFrame *frame, AstraControlFrame *clip);
 /** Replace application-owned semantic control state.
  * @param context UI context owning @p control.
  * @param control Control whose application-owned state is replaced.

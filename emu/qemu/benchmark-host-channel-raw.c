@@ -113,8 +113,6 @@ void kmain(void)
         commands[index].service = ASTRA_HOST_SERVICE_FILESYSTEM;
         commands[index].operation = RAW_OPERATION;
         commands[index].generation = host_generation;
-        if (RAW_OPERATION == ASTRA_HOST_FS_STAT)
-            commands[index].path[0] = '/';
     }
 #endif
 

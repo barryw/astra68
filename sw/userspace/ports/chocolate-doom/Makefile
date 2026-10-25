@@ -2,9 +2,9 @@ include ../../posix/kit/astra-posix.mk
 include ../../../../tools/astra-bundle.mk
 
 # Chocolate Doom 3.1.1, built from the pinned upstream tree with its own
-# configure and Makefiles, unmodified, and linked dynamically against the
+# configure and Makefiles, and linked dynamically against the
 # shared SDL, SDL_mixer, SDL_net, libc, runtime and compiler libraries.
-# Nothing here patches Doom: what it needs from the platform is implemented
+# Only the quit prompt is branded for Astra; platform capabilities belong
 # in the platform (docs/CHOCOLATE_DOOM_PORT.md).
 
 CHOCOLATE_DOOM_ROOT ?= ../../../../../chocolate-doom

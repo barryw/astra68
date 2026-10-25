@@ -27,6 +27,71 @@ GALLERY_PALETTE = (
     (177, 73, 73, 255),    # fault
 )
 
+INSTRUMENT_KINDS = ("framebench", "draw", "sprite", "geometry", "target",
+                    "scale", "keys", "mouse", "timer", "thread")
+OBJECT_KINDS = ("atlas", "volume", "drawer", "document", "fonts")
+OBJECT_PALETTE = ((0, 0, 0, 0), (247, 249, 249, 255),
+                  (223, 228, 230, 255), (92, 104, 112, 255),
+                  (107, 119, 128, 255), (43, 127, 134, 255),
+                  (236, 239, 240, 255), (25, 34, 42, 255))
+
+
+def object_strike(kind, size):
+    """Atlas object geometry from the supplied 40-unit desktop design grid."""
+    pixels = bytearray(size * size)
+    thick = max(1, size // 32)
+
+    def line(x0, y0, x1, y1, color):
+        x0, y0, x1, y1 = (round(v * size / 40) for v in (x0, y0, x1, y1))
+        steps = max(abs(x1 - x0), abs(y1 - y0), 1)
+        for step in range(steps + 1):
+            x = round(x0 + (x1 - x0) * step / steps)
+            y = round(y0 + (y1 - y0) * step / steps)
+            for dy in range(thick):
+                for dx in range(thick):
+                    if 0 <= x + dx < size and 0 <= y + dy < size:
+                        pixels[(y + dy) * size + x + dx] = color
+
+    def polygon(points, fill, stroke):
+        for y in range(size):
+            for x in range(size):
+                px, py = (x + .5) * 40 / size, (y + .5) * 40 / size
+                inside = False
+                for (x0, y0), (x1, y1) in zip(points, points[1:] + points[:1]):
+                    if (y0 > py) != (y1 > py) and \
+                            px < (x1 - x0) * (py - y0) / (y1 - y0) + x0:
+                        inside = not inside
+                if inside:
+                    pixels[y * size + x] = fill
+        for first, last in zip(points, points[1:] + points[:1]):
+            line(*first, *last, stroke)
+
+    if kind in ("drawer", "atlas"):
+        polygon(((5.5, 11.5), (16.5, 11.5), (20, 16), (34.5, 16),
+                 (34.5, 34), (5.5, 34)), 2, 3)
+        line(10, 22, 30, 22, 5)
+        if kind == "atlas":
+            line(20, 25, 20, 31, 5)
+            line(17, 28, 23, 28, 5)
+    elif kind == "document":
+        polygon(((8.5, 4.5), (31.5, 4.5), (31.5, 35.5), (8.5, 35.5)), 1, 3)
+        for y in (12, 17, 22):
+            line(13, y, 27, y, 4)
+        line(13, 27, 21, 27, 5)
+    elif kind == "fonts":
+        polygon(((8.5, 4.5), (31.5, 4.5), (31.5, 35.5), (8.5, 35.5)), 1, 3)
+        line(12, 29, 20, 11, 5)
+        line(20, 11, 28, 29, 5)
+        line(15, 23, 25, 23, 4)
+    elif kind == "volume":
+        polygon(((5, 10), (35, 10), (35, 31), (5, 31)), 7, 6)
+        polygon(((11, 15), (29, 15), (29, 21), (11, 21)), 7, 6)
+        line(19, 27, 29, 27, 6)
+        line(10, 27, 12, 27, 5)
+    else:
+        raise ValueError("unknown object icon: %s" % kind)
+    return bytes(pixels)
+
 
 def terminal_strike(size):
     """A simple terminal symbol with no window toolbar."""
@@ -129,6 +194,98 @@ def gallery_strike(size):
             for y in range(y0, y0 + control_height):
                 for x in range(x0, x0 + control_width):
                     pixels[y * size + x] = value
+    return bytes(pixels)
+
+
+def instrument_strike(kind, size):
+    """Lunar outlines and cyan signals, redrawn on each native pixel grid."""
+    pixels = bytearray(size * size)
+    thick = max(1, size // 32)
+
+    def line(x0, y0, x1, y1, color=5):
+        x0, y0, x1, y1 = (round(v * size / 32) for v in (x0, y0, x1, y1))
+        steps = max(abs(x1 - x0), abs(y1 - y0), 1)
+        for step in range(steps + 1):
+            x = round(x0 + (x1 - x0) * step / steps)
+            y = round(y0 + (y1 - y0) * step / steps)
+            for dy in range(thick):
+                for dx in range(thick):
+                    pixels[(y + dy) * size + x + dx] = color
+
+    def box(x0, y0, x1, y1, color=5):
+        line(x0, y0, x1, y0, color)
+        line(x1, y0, x1, y1, color)
+        line(x1, y1, x0, y1, color)
+        line(x0, y1, x0, y0, color)
+
+    if kind == "framebench":
+        box(4, 6, 28, 26)
+        line(7, 22, 25, 22, 6)
+        for x, top in ((9, 17), (15, 12), (21, 9)):
+            line(x, top, x, 21, 4)
+            line(x + 1, top, x + 1, 21, 4)
+    elif kind == "draw":
+        line(7, 24, 22, 9)
+        line(10, 27, 25, 12, 4)
+        line(22, 9, 25, 12)
+        line(7, 24, 6, 28)
+        line(6, 28, 10, 27)
+        line(6, 8, 11, 8, 6)
+        line(6, 8, 6, 13, 6)
+    elif kind == "sprite":
+        for cx, cy, color in ((10, 19, 6), (22, 19, 5), (16, 10, 4)):
+            line(cx, cy - 5, cx + 5, cy, color)
+            line(cx + 5, cy, cx, cy + 5, color)
+            line(cx, cy + 5, cx - 5, cy, color)
+            line(cx - 5, cy, cx, cy - 5, color)
+    elif kind == "geometry":
+        line(6, 25, 16, 7)
+        line(16, 7, 26, 25)
+        line(26, 25, 6, 25)
+        for x, y in ((6, 25), (16, 7), (26, 25)):
+            box(x - 1, y - 1, x + 1, y + 1, 4)
+    elif kind == "target":
+        box(11, 5, 27, 22, 6)
+        box(4, 11, 21, 28)
+        box(8, 16, 17, 24, 4)
+    elif kind == "scale":
+        box(4, 20, 12, 28, 6)
+        box(17, 4, 28, 15)
+        line(11, 21, 21, 11, 4)
+        line(16, 11, 21, 11, 4)
+        line(21, 11, 21, 16, 4)
+    elif kind == "keys":
+        box(3, 9, 29, 24)
+        for y in (12, 16):
+            for x in (6, 12, 18, 24):
+                line(x, y, x + 2, y, 4 if (x, y) == (12, 12) else 6)
+        line(10, 21, 23, 21, 4)
+    elif kind == "mouse":
+        outline = ((11, 5), (21, 5), (25, 9), (25, 23), (21, 27),
+                   (11, 27), (7, 23), (7, 9), (11, 5))
+        for first, last in zip(outline, outline[1:]):
+            line(*first, *last)
+        line(7, 14, 25, 14, 6)
+        line(16, 5, 16, 13, 4)
+    elif kind == "timer":
+        outline = ((16, 7), (24, 10), (27, 18), (24, 26), (16, 29),
+                   (8, 26), (5, 18), (8, 10), (16, 7))
+        for first, last in zip(outline, outline[1:]):
+            line(*first, *last)
+        line(13, 3, 19, 3, 6)
+        line(16, 3, 16, 6, 6)
+        line(16, 11, 16, 18, 4)
+        line(16, 18, 21, 21, 4)
+    elif kind == "thread":
+        line(8, 6, 8, 26, 6)
+        line(24, 6, 24, 26, 6)
+        line(8, 7, 24, 17, 4)
+        line(8, 17, 24, 27, 4)
+        for x in (8, 24):
+            for y in (6, 16, 26):
+                box(x - 2, y - 2, x + 2, y + 2)
+    else:
+        raise ValueError("unknown instrument icon: %s" % kind)
     return bytes(pixels)
 
 
@@ -422,6 +579,12 @@ def build(kind):
     }
     if kind in choices:
         palette, builder = choices[kind]
+    elif kind in INSTRUMENT_KINDS:
+        palette = TERMINAL_PALETTE
+        builder = lambda size: instrument_strike(kind, size)
+    elif kind in OBJECT_KINDS:
+        palette = OBJECT_PALETTE
+        builder = lambda size: object_strike(kind, size)
     elif kind.lower().endswith((".bmp", ".png")):
         palette, builder = image_icon(kind)
     elif kind.lower().endswith(".wad"):
@@ -449,7 +612,8 @@ def build(kind):
 
 def main():
     if len(sys.argv) != 3:
-        raise SystemExit("usage: aicon.py {terminal|gallery|IMAGE.bmp|"
+        raise SystemExit("usage: aicon.py {terminal|gallery|" +
+                         "|".join(INSTRUMENT_KINDS + OBJECT_KINDS) + "|IMAGE.bmp|"
                          "IMAGE.png|DOOM.wad} "
                          "OUTPUT.aicon")
     with open(sys.argv[2], "wb") as handle:

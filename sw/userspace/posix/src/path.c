@@ -2,8 +2,10 @@
 
 #include <astra/string.h>
 #include <astra/vfs_service.h>
+#include <astra/vfs_path.h>
 
 #include <stddef.h>
+#include <stdlib.h>
 
 int astra_posix_path_is_absolute(const char *path)
 {
@@ -69,28 +71,32 @@ int astra_posix_path_resolve(const char *cwd, const char *path,
                              char *normal, uint32_t normal_capacity,
                              char *native, uint32_t native_capacity)
 {
-    char input[ASTRA_VFS_PATH_MAX];
-
     if (cwd == NULL || path == NULL || path[0] == '\0' || normal == NULL ||
         native == NULL || cwd[0] != '/')
         return -1;
-    if (!input_path(cwd, path, input, sizeof(input)) ||
-        !normalise(input, normal, normal_capacity))
-        return -1;
-    if (!astra_string_copy(native, native_capacity, normal))
-        return -1;
-    return normal[1] == '\0' ? 0 : 1;
+    char *input = malloc(ASTRA_VFS_PATH_MAX);
+    if (input == NULL) return -1;
+    int result = -1;
+    if (input_path(cwd, path, input, ASTRA_VFS_PATH_MAX) &&
+        normalise(input, normal, normal_capacity) &&
+        astra_path_collapse(input, native, native_capacity) == ASTRA_VFS_OK)
+        result = native[1] == '\0' ? 0 : 1;
+    free(input);
+    return result;
 }
 
 int astra_posix_path_resolve_native(const char *cwd, const char *path,
                                     char *native, uint32_t native_capacity)
 {
-    char normal[ASTRA_VFS_PATH_MAX];
     if (cwd == NULL || path == NULL || path[0] == '\0' || native == NULL ||
         cwd[0] != '/')
         return -1;
-    return astra_posix_path_resolve(cwd, path, normal, sizeof(normal), native,
-                                    native_capacity);
+    char *normal = malloc(ASTRA_VFS_PATH_MAX);
+    if (normal == NULL) return -1;
+    int result = astra_posix_path_resolve(cwd, path, normal, ASTRA_VFS_PATH_MAX,
+        native, native_capacity);
+    free(normal);
+    return result;
 }
 
 int astra_posix_link_target_to_native(const char *target, char *native,

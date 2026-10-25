@@ -18,15 +18,16 @@ HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
-INTERFACE_TARGET := build/m68k/libraries/interface.library.5
+INTERFACE_TARGET := build/m68k/libraries/interface.library.7
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
+	build/m68k/settings_pane.o \
 	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o \
-	build/m68k/scroll.o build/m68k/command.o
+	build/m68k/scroll.o build/m68k/command.o build/m68k/menu.o build/m68k/menu_context.o
 INTERFACE_LIBRARY_MAP := interface.library.exports
 NDK_HOST_UTF8 := $(SYSTEM)/build/host/utf8.o
-GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.2
-FONT_LIBRARY := $(GRAPHICS)/build/m68k/libraries/font.library.2
-SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.3
+GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.3
+FONT_LIBRARY := $(GRAPHICS)/build/m68k/libraries/font.library.5
+SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
@@ -36,6 +37,11 @@ UNDO_HOST_TEST := build/host/test_undo
 TEXT_MODEL_HOST_TEST := build/host/test_text_model
 SCROLL_HOST_TEST := build/host/test_scroll
 COMMAND_HOST_TEST := build/host/test_command
+MENU_HOST_TEST := build/host/test_menu
+GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o $(GRAPHICS)/build/host/font_data.o
+GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o $(GRAPHICS)/build/host/font_data_sanitize.o
+FONT_HOST_INPUTS := $(RUNTIME)/tests/uncontended_mutex.c \
+	../../common/afnt.c ../../common/json.c ../../common/crc32.c
 GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
 	$(GRAPHICS)/build/generated/astra_ui_font.inc \
 	$(GRAPHICS)/build/generated/astra_mono_font.inc
@@ -55,12 +61,16 @@ build/m68k/interface_library.o: src/interface_library.c
 	$(CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) \
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
-build/m68k/control.o: src/control.c src/control_internal.h
+build/m68k/control.o: src/control.c src/control_internal.h src/text_surface_internal.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) \
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
-build/m68k/text_surface.o: src/text_surface.c
+build/m68k/settings_pane.o: src/settings_pane.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/text_surface.o: src/text_surface.c src/text_surface_internal.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) \
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
@@ -85,6 +95,10 @@ build/m68k/command.o: src/command.c $(NDK)/include/astra/command.h
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) \
 		-c $< -o $@
 
+build/m68k/menu.o build/m68k/menu_context.o: build/m68k/%.o: src/%.c $(NDK)/include/astra/menu.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+
 $(INTERFACE_OBJECTS): Makefile
 
 shared-libraries-ready:
@@ -97,13 +111,13 @@ $(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(INTERFACE_LIBRARY_MAP) \
 		| shared-libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,interface.library.5 \
+		-Wl,-soname,interface.library.7 \
 		-Wl,--version-script=$(INTERFACE_LIBRARY_MAP) \
 		-o $@ $(INTERFACE_OBJECTS) \
 		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(SYSTEM_LIBRARY)) \
 		-L$(dir $(RUNTIME_LIBRARY)) -L$(dir $(COMPILER_LIBRARY)) \
-		-Wl,--no-as-needed -Wl,-l:graphics.library.2 \
-		-Wl,-l:font.library.2 -Wl,-l:system.library.3 \
+		-Wl,--no-as-needed -Wl,-l:graphics.library.3 \
+		-Wl,-l:font.library.5 -Wl,-l:system.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)
 
@@ -112,22 +126,30 @@ library-contract: $(INTERFACE_TARGET)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(INTERFACE_LIBRARY_MAP) $(INTERFACE_TARGET)
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_button_init@@ASTRA_INTERFACE_5\.2$$'
+		grep -Eq ' astra_interface_button_init@@ASTRA_INTERFACE_7\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_command_invoke@@ASTRA_INTERFACE_5\.2$$'
+		grep -Eq ' astra_interface_command_invoke@@ASTRA_INTERFACE_7\.0$$'
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_list_init@@ASTRA_INTERFACE_7\.0$$'
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_text_view_init@@ASTRA_INTERFACE_7\.1$$'
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_text_view_refresh@@ASTRA_INTERFACE_7\.1$$'
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_settings_pane_init@@ASTRA_INTERFACE_7\.2$$'
 	@! $(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -q 'ASTRA_INTERFACE_5\.1'
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.5 5.2.0 ABI 5.2$$'
+		grep -q '^interface.library.7 7.2.0 ABI 7.2$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -Fc 'Shared library: [graphics.library.2]')" = 1
+		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -Fc 'Shared library: [font.library.2]')" = 1
+		grep -Fc 'Shared library: [font.library.5]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
-		grep -Fc 'Shared library: [system.library.3]')" = 1
+		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
@@ -136,16 +158,16 @@ library-contract: $(INTERFACE_TARGET)
 		awk '/NEEDED/{n++} END{print n+0}')" = 5
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET))
 
-$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/text_surface.c \
+$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/settings_pane.c src/menu.c src/text_surface.c \
 		src/text_model.c src/scroll.c $(NDK_HOST_UTF8) tests/test_interface.c \
-		tests/test_layout.c
+		tests/test_layout.c src/text_surface_internal.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -DASTRA_INTERFACE_TEST \
 		-DASTRA_SYSTEM_TEST \
-		-ffunction-sections -Wl,--gc-sections $^ -o $@
+		-ffunction-sections -Wl,--gc-sections $(filter %.c %.o,$^) -o $@
 
 $(TEXT_SURFACE_HOST_TEST): src/text_surface.c tests/test_text_surface.c \
-		$(NDK_HOST_UTF8)
+		$(NDK_HOST_UTF8) src/text_surface_internal.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/text_surface.c $(NDK_HOST_UTF8) tests/test_text_surface.c -o $@
@@ -169,25 +191,36 @@ $(COMMAND_HOST_TEST): src/command.c tests/test_command.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
+MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/command.c src/control.c src/text_surface.c \
+	tests/test_menu.c
+$(GRAPHICS_HOST_SURFACE) $(GRAPHICS_HOST_SURFACE_SANITIZE): FORCE
+	$(MAKE) -C $(GRAPHICS) $(patsubst $(GRAPHICS)/%,%,$@)
+
+$(MENU_HOST_TEST): $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE) $(FONT_HOST_INPUTS) src/text_surface_internal.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
+		-ffunction-sections -Wl,--gc-sections $(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_HOST_SURFACE) $(FONT_HOST_INPUTS) -o $@
+
 $(NDK_HOST_UTF8):
 	$(MAKE) -C $(SYSTEM) build/host/utf8.o
 
 test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 		$(UNDO_HOST_TEST) $(TEXT_MODEL_HOST_TEST) $(SCROLL_HOST_TEST) \
-		$(COMMAND_HOST_TEST)
+		$(COMMAND_HOST_TEST) $(MENU_HOST_TEST)
 	./$(INTERFACE_HOST_TEST)
 	./$(TEXT_SURFACE_HOST_TEST)
 	./$(UNDO_HOST_TEST)
 	./$(TEXT_MODEL_HOST_TEST)
 	./$(SCROLL_HOST_TEST)
 	./$(COMMAND_HOST_TEST)
+	./$(MENU_HOST_TEST)
 
-sanitize: $(NDK_HOST_UTF8)
+sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANITIZE)
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_SYSTEM_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
-		src/control.c src/text_surface.c src/text_model.c src/scroll.c \
+		src/control.c src/settings_pane.c src/menu.c src/text_surface.c src/text_model.c src/scroll.c \
 		$(NDK_HOST_UTF8) \
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize
@@ -213,12 +246,20 @@ sanitize: $(NDK_HOST_UTF8)
 		-o build/host/test_command_sanitize
 	./build/host/test_command_sanitize
 
+	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) -ffunction-sections -Wl,--gc-sections \
+		$(MENU_TEST_SOURCES) $(NDK_HOST_UTF8) $(GRAPHICS_HOST_SURFACE_SANITIZE) $(FONT_HOST_INPUTS) -o build/host/test_menu_sanitize
+
+	./build/host/test_menu_sanitize
+
 analyze:
 	@mkdir -p build/analyzer
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/interface_library.c -o build/analyzer/interface_library.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/control.c -o build/analyzer/control.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/settings_pane.c -o build/analyzer/settings_pane.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/text_surface.c -o build/analyzer/text_surface.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
@@ -230,10 +271,20 @@ analyze:
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/command.c -o build/analyzer/command.o
 
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/menu.c -o build/analyzer/menu.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/menu_context.c -o build/analyzer/menu_context.o
+
 clean:
 	rm -rf build
+
+$(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST): ../../include/astra/json.h
 
 -include $(wildcard build/m68k/*.d)
 
 .PHONY: all interface-library test sanitize analyze library-contract clean \
 	shared-libraries-ready
+
+FORCE:
+.PHONY: FORCE

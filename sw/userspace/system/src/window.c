@@ -3,6 +3,8 @@
 #include <astra/area.h>
 #include <astra/bytes.h>
 #include <astra/gui.h>
+#include <astra/menu.h>
+#include <astra/endian.h>
 #include <astra/port.h>
 #include <astra/resource.h>
 #include <astra/utf8.h>
@@ -51,7 +53,7 @@ static AstraResult command(AstraWindow *window, uint32_t action,
     AstraResult result;
 
     if (!window_live(window) || action < ASTRA_GUI_WINDOW_QUERY ||
-        action > ASTRA_GUI_WINDOW_WARP_POINTER ||
+        action > ASTRA_GUI_WINDOW_MENU_CLOSE ||
         (attachment != NULL && *attachment == ASTRA_INVALID_HANDLE) ||
         !astra_utf8_validate(title, title_length, 0u) ||
         title_length > ASTRA_WINDOW_TITLE_MAX)
@@ -411,6 +413,78 @@ AstraResult astra_window_warp_pointer(AstraWindow *window, int32_t x,
                    0u, 0u, NULL, NULL);
 }
 
+AstraResult astra_window_menu_open(AstraWindow *window,
+    const AstraMenuItem *items, uint32_t count, int32_t x, int32_t y,
+    uint32_t request)
+{
+    AstraArea area = ASTRA_AREA_INIT;
+    AstraHandle immutable = ASTRA_INVALID_HANDLE;
+    AstraWindowFrame anchor;
+    AstraResult result;
+    uint64_t length = ASTRA_GUI_MENU_HEADER_BYTES +
+        (uint64_t)count * ASTRA_GUI_MENU_ROW_BYTES;
+
+    if (!window_live(window) || items == NULL || count == 0u || request == 0u ||
+        x < 0 || y < 0 || x > UINT16_MAX || y > UINT16_MAX ||
+        length > ASTRA_GUI_MENU_BYTES_MAX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    for (uint32_t at = 0u; at < count; ++at) {
+        if ((items[at].flags & ~(ASTRA_MENU_DISABLED | ASTRA_MENU_CHECKED |
+                                ASTRA_MENU_SEPARATOR)) != 0u ||
+            !astra_utf8_validate(items[at].label, items[at].label_length, 0u))
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        length += items[at].label_length;
+        if (length > ASTRA_GUI_MENU_BYTES_MAX) return ASTRA_ERROR_NO_RESOURCES;
+    }
+    result = astra_area_create((uint32_t)length,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+            ASTRA_RIGHT_TRANSFER, &area);
+    if (result == ASTRA_OK)
+        result = astra_area_map(&area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
+    if (result == ASTRA_OK) {
+        uint8_t *bytes = area.address;
+        uint32_t offset = ASTRA_GUI_MENU_HEADER_BYTES + count * ASTRA_GUI_MENU_ROW_BYTES;
+        astra_store_be32(bytes, ASTRA_GUI_MENU_MAGIC);
+        astra_store_be32(bytes + 4u, ASTRA_GUI_MENU_VERSION);
+        astra_store_be32(bytes + 8u, (uint32_t)length);
+        astra_store_be32(bytes + 12u, count);
+        for (uint32_t at = 0u; at < count; ++at) {
+            uint8_t *row = bytes + ASTRA_GUI_MENU_HEADER_BYTES + at * ASTRA_GUI_MENU_ROW_BYTES;
+            astra_store_be32(row, items[at].flags);
+            astra_store_be32(row + 4u, offset);
+            astra_store_be32(row + 8u, items[at].label_length);
+            astra_store_be32(row + 12u, 0u);
+            if (items[at].label_length != 0u)
+                memcpy(bytes + offset, items[at].label, items[at].label_length);
+            offset += items[at].label_length;
+        }
+        result = astra_area_unmap(&area);
+    }
+    if (result == ASTRA_OK)
+        result = astra_handle_duplicate(area.handle,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &immutable);
+    anchor = (AstraWindowFrame){(uint16_t)x, (uint16_t)y, 0u, 0u};
+    if (result == ASTRA_OK)
+        result = command(window, ASTRA_GUI_WINDOW_MENU_OPEN, &anchor,
+                          NULL, 0u, request, NULL, &immutable);
+    if (immutable != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_handle_close(&immutable);
+        if (result == ASTRA_OK) result = closed;
+    }
+    {
+        AstraResult closed = astra_area_close(&area);
+        if (result == ASTRA_OK) result = closed;
+    }
+    return result;
+}
+
+AstraResult astra_window_menu_close(AstraWindow *window, uint32_t request)
+{
+    if (request == 0u) return ASTRA_ERROR_INVALID_ARGUMENT;
+    return command(window, ASTRA_GUI_WINDOW_MENU_CLOSE, NULL, NULL, 0u,
+                    request, NULL, NULL);
+}
+
 AstraResult astra_window_set_pointer_image(
     AstraWindow *window, const AstraHardwarePointerImage *image)
 {
@@ -553,7 +627,16 @@ static AstraResult receive_event(AstraWindow *window, AstraWindowEvent *event,
         message.event.size != sizeof(message.event) ||
         message.event.version != ASTRA_WINDOW_EVENT_VERSION ||
         message.event.type < ASTRA_WINDOW_EVENT_POINTER_MOTION ||
-        message.event.type > ASTRA_WINDOW_EVENT_SYSTEM_ACTION ||
+        message.event.type > ASTRA_WINDOW_EVENT_FONT_CHANGED ||
+        (message.event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED &&
+         (message.event.data.font_changed.generation == 0u ||
+          message.event.data.font_changed.window != window->_private_id)) ||
+        (message.event.type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
+         (message.event.data.menu_result.request == 0u ||
+          !astra_words_zero(message.event.data.menu_result.reserved, 4u) ||
+          message.event.data.menu_result.status >= ASTRA_STATUS_PROGRAM_FIRST ||
+          (message.event.data.menu_result.status != ASTRA_STATUS_OK &&
+           message.event.data.menu_result.selection != 0u))) ||
         (message.event.type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION &&
          (message.event.data.system_action.action <
               ASTRA_SYSTEM_ACTION_ABOUT ||

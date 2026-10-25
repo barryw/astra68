@@ -284,14 +284,14 @@ def wait_ready(qmp, _path, message, prior, deadline):
 
 
 def open_terminal(qmp, quiet, trace_path, ready_message,
-                  desktop_ready_message, deadline):
+                  desktop_ready_message, deadline, icon):
     end = time.monotonic() + deadline
     _ = desktop_ready_message
     wait_for_desktop(qmp, end)
     settled(qmp, quiet, end)
     prior_ready = trace_position(qmp) \
         if ready_message is not None else None
-    qmp.double_click(70, 90)
+    qmp.double_click(*icon)
     end = time.monotonic() + deadline
     if prior_ready is not None:
         wait_ready(qmp, trace_path, ready_message, prior_ready, end)
@@ -374,7 +374,7 @@ def enforce_latency(samples, maximum_milliseconds):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", nargs="*", default=["help"])
-    parser.add_argument("--qmp", default="/run/astra/qmp.sock")
+    parser.add_argument("--qmp", default="/run/astra/qemu/qmp.sock")
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--quiet", type=float, default=0.75)
@@ -384,6 +384,9 @@ def main():
     parser.add_argument("--desktop-ready-message",
                         type=lambda value: int(value, 0))
     parser.add_argument("--trace-ring")
+    parser.add_argument("--terminal-icon", nargs=2, type=int,
+                        metavar=("X", "Y"),
+                        help="Terminal icon centre from desktop placement log")
     parser.add_argument("--deadline", type=float, default=20.0)
     parser.add_argument("--cleanup")
     parser.add_argument("--max-batches", type=float)
@@ -421,6 +424,8 @@ def main():
     if arguments.max_milliseconds is not None and \
             arguments.max_milliseconds <= 0:
         raise SystemExit("maximum milliseconds must be positive")
+    if arguments.open_terminal and arguments.terminal_icon is None:
+        raise SystemExit("opening Terminal requires --terminal-icon X Y")
     qmp = Qmp(arguments.qmp, arguments.deadline)
     if arguments.quit:
         qmp.execute("quit")
@@ -445,7 +450,8 @@ def main():
     if arguments.open_terminal:
         open_terminal(qmp, arguments.quiet, arguments.trace_ring,
                       arguments.ready_message,
-                      arguments.desktop_ready_message, arguments.deadline)
+                      arguments.desktop_ready_message, arguments.deadline,
+                      arguments.terminal_icon)
     for _ in range(arguments.warmups):
         if arguments.ready_message is not None:
             run_ready(qmp, command, arguments.quiet, None, "warmup",

@@ -199,6 +199,10 @@ static void scopes_owners_without_leaking_them_to_programs(void)
                sizeof(root)) == ASTRA_CONFIG_OK);
     assert(strcmp(root, "config/applications/Terminal") == 0);
     assert(astra_config_capability_root(
+               "config", ASTRA_CONFIG_OWNER_SYSTEM, "appearance", root,
+               sizeof(root)) == ASTRA_CONFIG_OK);
+    assert(strcmp(root, "config/system/appearance") == 0);
+    assert(astra_config_capability_root(
                "config", ASTRA_CONFIG_OWNER_COMMAND, "../ping", root,
                sizeof(root)) == ASTRA_CONFIG_INVALID);
     assert(astra_config_capability_root(
@@ -211,6 +215,9 @@ static void scopes_owners_without_leaking_them_to_programs(void)
     assert(astra_config_owner_root("config/commands", "ping", root,
                                    sizeof(root)) == ASTRA_CONFIG_OK);
     assert(strcmp(root, "config/commands/ping") == 0);
+    assert(astra_config_owner_root("", "zsh", root, sizeof(root)) == ASTRA_CONFIG_OK);
+    assert(strcmp(root, "zsh") == 0);
+    assert(astra_config_owner_root("", NULL, root, sizeof(root)) == ASTRA_CONFIG_INVALID);
 }
 
 int main(void)

@@ -19,7 +19,7 @@
  *
  * Two monotonic counters carry the whole exchange:
  *  - `queued`, written only by the application: buffers handed to the host.
- *  - `consumed`, written only by the host: buffers it has finished with.
+ *  - `consumed`, written only by the host: buffers the mixer has consumed.
  * `queued - consumed` is never more than `buffer_count`, and a buffer whose
  * number is below `consumed + buffer_count` and at or above `queued` is the
  * application's to fill. The host plays silence for this stream while

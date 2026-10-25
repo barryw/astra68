@@ -404,6 +404,9 @@ int ext4_fread(ext4_file *file, void *buf, size_t size, size_t *rcnt);
  *
  * @return  Standard error code.*/
 int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt);
+/** Astra atomic positioned/append write with an exclusive maximum position. */
+int ext4_fwrite_at(ext4_file *file, uint64_t offset, bool append,
+                   uint64_t max_end, const void *buf, size_t size, size_t *wcnt);
 
 /**@brief   File seek operation.
  *

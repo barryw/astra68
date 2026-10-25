@@ -36,10 +36,7 @@ PROPERTIES = (
 def run(qemu, rom, expected_mode, deadline):
     with tempfile.TemporaryDirectory(prefix="astra-raw-host-") as directory:
         qmp_path = os.path.join(directory, "qmp.sock")
-        hostfs = os.path.join(directory, "hostfs")
-        os.mkdir(hostfs)
         environment = os.environ.copy()
-        environment["ASTRA_HOSTFS_ROOT"] = hostfs
         process = subprocess.Popen([
             qemu, "-M", "astra68", "-m", DEFAULT_MEMORY, "-bios", rom,
             "-display", "none", "-monitor", "none", "-serial", "stdio",

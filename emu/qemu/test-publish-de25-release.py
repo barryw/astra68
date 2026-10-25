@@ -16,7 +16,7 @@ def write_executable(path: Path, source: str) -> None:
 
 
 def run_case(deploy_status: int, mutate_source: bool = False,
-             stage_only: bool = False) -> None:
+             stage_only: bool = False, mutate_during_package: bool = False) -> None:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         repository = root / "repository"
@@ -51,6 +51,9 @@ mkdir -p "$1/rom"
 : > "$1/rom/astra_boot.bin"
 test -s "$ASTRA_DE25_SOURCE_MANIFEST"
 chmod -R a-w "$1"
+if [ "${FAKE_MUTATE_PACKAGE:-0}" = 1 ]; then
+  printf 'package-time mutation\\n' >> "$PWD/repository/source.c"
+fi
 """)
         write_executable(script_dir / "deploy-de25-release.sh", f"""#!/bin/sh
 test -f "$1/rom/astra_boot.bin"
@@ -76,18 +79,21 @@ esac
         environment["TMPDIR"] = str(workspace_parent)
         environment["PATH"] = str(fake_bin) + os.pathsep + environment["PATH"]
         environment["DE25_SYSROOT"] = str(root / "sysroot")
+        environment["DE25_KERNEL_PACKAGE"] = str(root / "kernel")
         environment["FAKE_QEMU"] = str(root / "qemu-system-m68k")
         environment["FAKE_MAKE_LOG"] = str(root / "make.log")
         environment["FAKE_MUTATE"] = "1" if mutate_source else "0"
+        environment["FAKE_MUTATE_PACKAGE"] = "1" if mutate_during_package else "0"
         environment["FAKE_DEPLOY_MARKER"] = str(root / "deployed")
         if stage_only:
             environment["ASTRA_DE25_RELEASE_OUTPUT"] = str(root / "staged")
         result = subprocess.run([str(publisher)], env=environment,
                                 check=False, cwd=root)
-        assert result.returncode == (1 if mutate_source else
+        rejected = mutate_source or mutate_during_package
+        assert result.returncode == (1 if rejected else
                                     0 if stage_only else deploy_status)
         assert (root / "deployed").exists() == (not stage_only and
-                                                 not mutate_source)
+                                                 not rejected)
         assert (root / "staged/rom/astra_boot.bin").exists() == (stage_only and
                                                                   not mutate_source)
         assert list(workspace_parent.iterdir()) == []
@@ -99,4 +105,5 @@ run_case(23)
 run_case(0, mutate_source=True)
 run_case(23, stage_only=True)
 run_case(0, mutate_source=True, stage_only=True)
+run_case(0, mutate_during_package=True)
 print("DE25 release publisher cleanup: PASS")

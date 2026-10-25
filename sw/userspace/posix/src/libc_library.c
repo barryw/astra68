@@ -10,5 +10,5 @@
 #include <astra/library.h>
 
 ASTRA_DYNAMIC_LIBRARY(
-    "libc.library.3", 3, 0, 0, 3, 0,
+    "libc.library.4", 4, 0, 0, 4, 0,
     "Astra68/picolibc", "Copyright 2026 Astra68/picolibc");

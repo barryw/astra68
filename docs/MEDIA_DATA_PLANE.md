@@ -150,8 +150,9 @@ media service: open/close, capability, policy, health -- not per buffer
 - **QEMU** (`astra68.c`, `astra_audio_stream_*`): STREAM_CONFIG writes the
   header; STREAM_KICK (vCPU thread) reads `queued` and copies each queued
   buffer that fits into the stream's ring in the **audio mailbox**, then
-  writes `consumed` -- the buffer is the application's again at once, as
-  Haiku's mixer recycles a buffer as soon as it has copied it. Only the
+  writes `consumed` after the daemon consumes a complete buffer. Copied
+  buffers still occupy the application's group, so copying ahead cannot
+  expand its playback queue. Only the
   kick reads `queued`, right after the guest's own stores: the main loop,
   refilling on a daemon wake, works from QEMU's copy, so a weakly ordered
   host (the DE25's A76) never sees the count before the samples.
@@ -159,7 +160,7 @@ media service: open/close, capability, policy, health -- not per buffer
   `ASTRA_AUDIO_MAILBOX_PATH`, `/run/astra/audio.mailbox` on the board): one
   shared file, a 64 KiB byte ring per stream slot holding at most two
   buffers. QEMU writes `written`; the daemon writes `read` and, when its
-  reading makes room for another buffer, bumps `room_sequence` and
+  reading consumes a complete buffer, bumps `room_sequence` and
   futex-wakes it. A QEMU thread sleeps on that word and hands the wake to
   the main loop. One wake per buffer each way, no reply.
 - **Daemon** (`astra_audio_host.c`, `pull_streams`): each open slot is a
@@ -167,13 +168,13 @@ media service: open/close, capability, policy, health -- not per buffer
   thread decodes from the ring just the source frames the next mix needs
   (the filter's wing plus the FIFO's room at the stream's rate), so the
   ring, not the voice queue, is where a stream waits and its latency stays
-  two buffers plus the application's.
-- **pcm.library 2.5** (`AstraPcmBuffers`, `pcm_buffers.c`): open asks the
+  bounded by the application's group, including the copied buffers.
+- **pcm.library 3.0** (`AstraPcmBuffers`, `pcm_buffers.c`): open asks the
   media service once for the grant (`ASTRA_PCM_STREAM_GRANT`), creates the
   DMA buffer, opens the stream and drops the grant. `get` names the next
   buffer, `queue` stores `queued` (no system call), `wait` is the one
   system call per buffer. The media service is not involved again.
-- **SDL** (`SDL_astraaudio.c`): three buffers of `spec.samples` frames;
+- **SDL** (`SDL_astraaudio.c`): two buffers of `spec.samples` frames;
   `GetDeviceBuf` is the shared buffer (SDL mixes in place), `PlayDevice`
   queues it, `WaitDevice` waits. Without streams (a host with no mailbox)
   SDL falls back to the media service's voice.
@@ -185,8 +186,9 @@ media service: open/close, capability, policy, health -- not per buffer
   which means nothing on Astra). The media service, off the data path,
   returns to 16.
 - **Left out, on purpose:** the clock record (the design's seqlock of
-  frames played) -- buffers return when copied, and no client asks where
-  the output is; per-stream gain and pause -- no client sets either; a
+  frames played) -- buffer completion already bounds queue depth, and no
+  client asks for the exact output frame; per-stream gain and pause -- no
+  client sets either; a
   SCHED_FIFO feed thread in the daemon -- motion gaps are already 0 on the
   board. Each is for when something needs it.
 

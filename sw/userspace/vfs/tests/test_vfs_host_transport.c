@@ -27,12 +27,16 @@ static uint32_t maximum_kick_batch;
 static uint32_t lock_depth;
 static uint32_t lock_acquires;
 static pthread_mutex_t transport_mutex = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t mock_command_status = ASTRA_VFS_OK;
 static pthread_mutex_t kick_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t kick_condition = PTHREAD_COND_INITIALIZER;
 static int require_two_in_flight;
 static int complete_on_wait_only;
 static uint32_t concurrent_kick_base;
 static uint64_t mock_metric_value = UINT64_C(0x123456789abcdef0);
+static uint32_t last_open_device;
+static uint32_t scope_attaches;
+static uint32_t last_attached;
 
 uint32_t astra_log_failure(const char *operation, uint32_t status)
 {
@@ -112,7 +116,8 @@ uint32_t astra_host_channel_open(uint32_t device,
     AstraHostChannelHeader *header =
         (AstraHostChannelHeader *)(void *)dma_storage[slot];
 
-    assert(device == 41u);
+    assert(device == 41u || (device >= 77u && device < 100u));
+    last_open_device = device;
     assert(channel->command_capacity != 0u &&
            (channel->command_capacity &
             (channel->command_capacity - 1u)) == 0u);
@@ -141,7 +146,7 @@ uint32_t astra_host_channel_open(uint32_t device,
 
 uint32_t astra_host_channel_close(uint32_t device)
 {
-    assert(device == 41u);
+    assert(device == 41u || (device >= 77u && device < 100u));
     for (uint32_t slot = 0u; slot < dma_slot_count; ++slot) {
         if (channel_opened[slot] == 0u ||
             channel_thread[slot] != current_thread)
@@ -153,6 +158,35 @@ uint32_t astra_host_channel_close(uint32_t device)
     }
     assert(0);
     return ASTRA_SYSCALL_INVALID_ARGUMENT;
+}
+
+/* Operands a command must carry, unterminated, at its path_offset. */
+static const char *expected_path;
+static const char *expected_path2;
+static uint32_t operand_checks;
+
+static void check_operands(uint32_t slot, const AstraHostCommand *command)
+{
+    const AstraHostChannelHeader *header =
+        (const AstraHostChannelHeader *)(const void *)dma_storage[slot];
+    size_t first = expected_path != NULL ? strlen(expected_path) : 0u;
+    size_t second = expected_path2 != NULL ? strlen(expected_path2) : 0u;
+
+    assert(command->path_length == first && command->path2_length == second);
+    if (first + second == 0u) {
+        assert(command->path_offset == 0u);
+        return;
+    }
+    /* The operands lead the data span; the data follows them. */
+    assert(command->path_offset == header->data_offset);
+    assert(memcmp(dma_storage[slot] + command->path_offset, expected_path,
+                  first) == 0);
+    assert(second == 0u ||
+           memcmp(dma_storage[slot] + command->path_offset + first,
+                  expected_path2, second) == 0);
+    assert(command->data_offset == 0u ||
+           command->data_offset == command->path_offset + first + second);
+    ++operand_checks;
 }
 
 static void complete_channel(uint32_t slot, uint32_t producer)
@@ -168,7 +202,8 @@ static void complete_channel(uint32_t slot, uint32_t producer)
             (position & (header->command_capacity - 1u)) *
                 ASTRA_HOST_COMMAND_SIZE);
 
-        command->status = ASTRA_VFS_OK;
+        check_operands(slot, command);
+        command->status = mock_command_status;
         command->handle = 0x5678u + position;
         if (command->service == ASTRA_HOST_SERVICE_METRICS) {
             AstraHostMetricsSnapshot *snapshot = (void *)(
@@ -283,6 +318,13 @@ uint32_t astra_close(uint32_t handle)
     return ASTRA_SYSCALL_OK;
 }
 
+uint32_t astra_host_scope_attach(uint32_t scope)
+{
+    ++scope_attaches;
+    last_attached = scope;
+    return ASTRA_SYSCALL_OK;
+}
+
 static int acquire(void *context)
 {
     assert(context == &lock_depth);
@@ -319,8 +361,123 @@ static void *execute_thread(void *opaque)
     return NULL;
 }
 
+/* One lane per thread carries every scope its process uses: the first
+ * opens the channel, the next attaches once, and device commands neither. */
+static void test_lane_carries_scopes(void)
+{
+    AstraVfsHostTransport transport;
+    AstraVfsHostRequest request;
+
+    capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
+                   ASTRA_HOST_CAP_FS_SCOPE | (ASTRA_HOST_CAP_FS_SESSIONS | ASTRA_HOST_CAP_FS_RESOLVES | ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS)) |
+                   ASTRA_HOST_CAP_CHANNEL | ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ;
+    assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                         &lock_depth));
+    assert(astra_vfs_host_transport_begin(&transport, 77u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(last_open_device == 77u && scope_attaches == 0u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    assert(astra_vfs_host_transport_begin(&transport, 78u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(scope_attaches == 1u && last_attached == 78u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    assert(astra_vfs_host_transport_begin(&transport, 78u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(scope_attaches == 1u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    astra_vfs_host_transport_destroy(&transport);
+}
+
+/*
+ * Two scopes on one channel (Task 3b review; controller addition 1 of
+ * Task 5): each operation goes through the scope it was issued under, and
+ * a scope the lane was told to forget -- its client closed the handle -- is
+ * attached afresh when the same handle number comes back naming another
+ * scope. Trusting the old number would leave the new scope unbound and its
+ * session refused, or reach the old scope's session.
+ */
+static void test_a_forgotten_scope_is_attached_again(void)
+{
+    AstraVfsHostTransport transport;
+    AstraVfsHostRequest request;
+    uint32_t attaches;
+
+    capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
+                   ASTRA_HOST_CAP_FS_SCOPE | (ASTRA_HOST_CAP_FS_SESSIONS | ASTRA_HOST_CAP_FS_RESOLVES | ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS)) |
+                   ASTRA_HOST_CAP_CHANNEL | ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ;
+    assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                         &lock_depth));
+    assert(astra_vfs_host_transport_begin(&transport, 77u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(last_open_device == 77u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    attaches = scope_attaches;
+    assert(astra_vfs_host_transport_begin(&transport, 78u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(scope_attaches == attaches + 1u && last_attached == 78u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    astra_vfs_host_transport_forget_scope(&transport, 77u);
+    assert(astra_vfs_host_transport_begin(&transport, 78u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(scope_attaches == attaches + 1u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    assert(astra_vfs_host_transport_begin(&transport, 77u, 0u, &request) ==
+           ASTRA_VFS_OK);
+    assert(scope_attaches == attaches + 2u && last_attached == 77u);
+    request.command->generation = transport.generation;
+    assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u,
+                                           NULL, 0u) == ASTRA_VFS_OK);
+    astra_vfs_host_transport_destroy(&transport);
+}
+
+static void test_scope_cache_rotation(void)
+{
+    AstraVfsHostTransport transport;
+    AstraVfsHostRequest request;
+    uint32_t opened = channel_opens;
+    uint32_t closed = channel_closes;
+    uint32_t previous_thread = current_thread;
+
+    /* The earlier fork fixture retains a simulated parent channel on 1. */
+    current_thread = 8u;
+    assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release, &lock_depth));
+    for (uint32_t index = 0u; index <= ASTRA_HOST_CHANNEL_SCOPE_MAX; ++index) {
+        assert(astra_vfs_host_transport_begin(&transport, 77u + index, 0u, &request) == ASTRA_VFS_OK);
+        request.command->generation = transport.generation;
+        assert(astra_vfs_host_transport_submit(&transport, &request, NULL, 0u, NULL, 0u) == ASTRA_VFS_OK);
+        /* Forgetting a numeric handle must not hide the still occupied
+         * kernel binding slot from the finite channel cache. */
+        astra_vfs_host_transport_forget_scope(&transport, 77u + index);
+    }
+    assert(channel_opens == opened + 2u && channel_closes == closed + 1u);
+    assert(last_open_device == 77u + ASTRA_HOST_CHANNEL_SCOPE_MAX);
+    astra_vfs_host_transport_destroy(&transport);
+    current_thread = previous_thread;
+}
+
 int main(void)
 {
+    {
+        AstraVfsHostTransport limits = {0};
+        assert(astra_vfs_host_transport_payload_limit(NULL) == 0u);
+        assert(astra_vfs_host_transport_payload_limit(&limits) == 0u);
+        limits.channel_supported = 1u;
+        limits.maximum_transfer = 8193u;
+        assert(astra_vfs_host_transport_payload_limit(&limits) ==
+            8192u - ASTRA_HOST_CHANNEL_HEADER_SIZE - ASTRA_HOST_COMMAND_SIZE);
+    }
     AstraVfsHostTransport transport;
     AstraHostCommand command;
     AstraHostCommand batch_commands[8];
@@ -331,10 +488,21 @@ int main(void)
     uint32_t wait_base;
     uint8_t output[4];
 
+    assert(astra_vfs_host_status_from_syscall(ASTRA_SYSCALL_CLOSED) == ASTRA_VFS_ERR_PEER);
+    assert(astra_vfs_host_status_from_syscall(ASTRA_SYSCALL_PEER_DEAD) == ASTRA_VFS_ERR_PEER);
+
     capabilities = ASTRA_HOST_CAP_FILESYSTEM;
     assert(!astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                           &lock_depth));
     capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED;
+    assert(!astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                          &lock_depth));
+    capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
+                   ASTRA_HOST_CAP_FS_SCOPE;
+    /* Record 3's provider is required: sessions and path operands. */
+    assert(!astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                          &lock_depth));
+    capabilities |= (ASTRA_HOST_CAP_FS_SESSIONS | ASTRA_HOST_CAP_FS_RESOLVES | ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS));
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                          &lock_depth));
     assert(transport.generation == 9u);
@@ -364,8 +532,8 @@ int main(void)
 
     memset(&transport, 0, sizeof(transport));
     capabilities = ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
-                   ASTRA_HOST_CAP_CHANNEL |
-                   ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ |
+                   ASTRA_HOST_CAP_FS_SCOPE | (ASTRA_HOST_CAP_FS_SESSIONS | ASTRA_HOST_CAP_FS_RESOLVES | ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS)) |
+                   ASTRA_HOST_CAP_CHANNEL | ASTRA_HOST_CAP_CHANNEL_ARMED_IRQ |
                    ASTRA_HOST_CAP_METRICS;
     assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
                                          &lock_depth));
@@ -390,7 +558,7 @@ int main(void)
     assert(command.handle == 0x5680u);
     assert(memcmp(output, "ring", sizeof(output)) == 0);
     assert(channel_opens == 1u && channel_kicks == 2u && executes == 2u);
-    assert(astra_vfs_host_transport_begin(&transport, sizeof(output),
+    assert(astra_vfs_host_transport_begin(&transport, 0u, sizeof(output),
                                           &request) == ASTRA_VFS_OK);
     assert((uint8_t *)(void *)request.command >= dma_storage[1] &&
            (uint8_t *)(void *)request.command <
@@ -406,7 +574,7 @@ int main(void)
     {
         uint32_t acquired = lock_acquires;
 
-        assert(astra_vfs_host_transport_begin(&transport, sizeof(output),
+        assert(astra_vfs_host_transport_begin(&transport, 0u, sizeof(output),
                                               &request) == ASTRA_VFS_OK);
         assert(lock_acquires == acquired);
         request.command->generation = transport.generation;
@@ -417,11 +585,55 @@ int main(void)
         assert(request.command->result_length == 4u);
     }
     assert(channel_kicks == 4u);
+    /* Path operands: laid out ahead of the data, unterminated, with the
+     * data after them; a write's input lands past both. */
+    {
+        uint32_t checks = operand_checks;
+
+        assert(astra_vfs_host_transport_begin(&transport, 0u, 4u + 9u,
+                                              &request) == ASTRA_VFS_OK);
+        request.command->generation = transport.generation;
+        request.command->operation = ASTRA_HOST_FS_WRITE;
+        request.path = "/from";
+        request.path_length = 5u;
+        request.path2 = "/to";
+        request.path2_length = 3u;
+        expected_path = "/from";
+        expected_path2 = "/to";
+        assert(astra_vfs_host_transport_submit(
+                   &transport, &request, "send", 4u, NULL, 0u) ==
+               ASTRA_VFS_OK);
+        assert(operand_checks == checks + 1u);
+        expected_path = NULL;
+        expected_path2 = NULL;
+        /* A path of ASTRA_HOST_FS_PATH_MAX bytes never reaches the wire,
+         * nor does a length without bytes. */
+        assert(astra_vfs_host_transport_begin(&transport, 0u, 0u,
+                                              &request) == ASTRA_VFS_OK);
+        request.path = "/x";
+        request.path_length = ASTRA_HOST_FS_PATH_MAX;
+        assert(astra_vfs_host_transport_submit(
+                   &transport, &request, NULL, 0u, NULL, 0u) ==
+               ASTRA_VFS_ERR_INVALID);
+        request.path = NULL;
+        request.path_length = 1u;
+        assert(astra_vfs_host_transport_submit(
+                   &transport, &request, NULL, 0u, NULL, 0u) ==
+               ASTRA_VFS_ERR_INVALID);
+        /* The batch path carries no operands. */
+        memset(&command, 0, sizeof(command));
+        command.generation = transport.generation;
+        command.path_length = 1u;
+        assert(astra_vfs_host_transport_execute(
+                   &transport, &command, NULL, 0u, NULL, 0u) ==
+               ASTRA_VFS_ERR_INVALID);
+    }
+    assert(channel_kicks == 5u);
     complete_on_wait_only = 1;
     {
         uint32_t waits = channel_waits;
 
-        assert(astra_vfs_host_transport_begin(&transport, 0u, &request) ==
+        assert(astra_vfs_host_transport_begin(&transport, 0u, 0u, &request) ==
                ASTRA_VFS_OK);
         request.command->generation = transport.generation;
         assert(astra_vfs_host_transport_submit(
@@ -430,7 +642,7 @@ int main(void)
         assert(channel_waits == waits + 1u);
     }
     complete_on_wait_only = 0;
-    assert(channel_kicks == 5u);
+    assert(channel_kicks == 6u);
     concurrent_kick_base = channel_kicks;
     wait_base = channel_waits;
     require_two_in_flight = 1;
@@ -444,7 +656,7 @@ int main(void)
     assert(pthread_join(threads[1], NULL) == 0);
     assert(calls[0].status == ASTRA_VFS_OK);
     assert(calls[1].status == ASTRA_VFS_OK);
-    assert(channel_kicks == 7u);
+    assert(channel_kicks == 8u);
     assert(channel_waits - wait_base <= 1u);
     require_two_in_flight = 0;
     {
@@ -490,5 +702,33 @@ int main(void)
                &transport, &command, NULL, 0u, NULL, 0u) ==
            ASTRA_VFS_ERR_LIMIT);
     astra_vfs_host_transport_destroy(&transport);
+    channel_open_status = ASTRA_SYSCALL_OK;
+    test_lane_carries_scopes();
+    test_a_forgotten_scope_is_attached_again();
+    test_scope_cache_rotation();
+    {
+        AstraVfsHostTransfer escaped[2] = {0};
+        AstraHostCommand commands[2] = {0};
+        uint8_t continuations[2][4] = {{0}};
+
+        memset(&transport, 0, sizeof(transport));
+        assert(astra_vfs_host_transport_init(&transport, 41u, acquire, release,
+                                             &lock_depth));
+        mock_command_status = ASTRA_VFS_ERR_ESCAPED;
+        for (uint32_t index = 0u; index < 2u; ++index) {
+            commands[index].generation = transport.generation;
+            escaped[index].command = &commands[index];
+            escaped[index].output = continuations[index];
+            escaped[index].output_capacity = sizeof(continuations[index]);
+        }
+        assert(astra_vfs_host_transport_execute_batch(&transport, escaped, 2u) ==
+               ASTRA_VFS_ERR_ESCAPED);
+        for (uint32_t index = 0u; index < 2u; ++index) {
+            assert(commands[index].status == ASTRA_VFS_ERR_ESCAPED);
+            assert(memcmp(continuations[index], "ring", 4u) == 0);
+        }
+        astra_vfs_host_transport_destroy(&transport);
+        mock_command_status = ASTRA_VFS_OK;
+    }
     return 0;
 }

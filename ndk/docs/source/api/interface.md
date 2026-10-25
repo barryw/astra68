@@ -51,3 +51,7 @@
 ```{doxygenfile} undo.h
 :project: astra-ndk
 ```
+
+```{doxygenfile} menu.h
+:project: astra-ndk
+```

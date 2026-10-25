@@ -52,7 +52,7 @@ static AstraResult stream_grant(AstraHandle service, uint32_t *device)
         (void)astra_close(reply_receive);
         return astra_result_from_syscall(status);
     }
-    result = astra_pcm_reply_receive(reply_receive, 1u, &reply, device);
+    result = astra_pcm_reply_receive(reply_receive, 1u, &reply, device, 1);
     (void)astra_close(reply_receive);
     return result;
 }

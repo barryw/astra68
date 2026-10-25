@@ -1,14 +1,20 @@
 #include <astra/bundle.h>
 #include <astra/bytes.h>
 #include <astra/display.h>
+#include <astra/endian.h>
+#include <astra/fonts.h>
+#include <astra/font_service.h>
 #include <astra/gui.h>
 #include <astra/input_service.h>
+#include <astra/menu.h>
 #include <astra/program.h>
 #include <astra/render_batch.h>
 #include <astra/render_builder.h>
+#include <astra/resource.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
 #include <astra/status.h>
+#include <astra/string.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
 #include <astra/utf8.h>
@@ -37,10 +43,6 @@
 #define DISPLAY_MENU_X 12
 #define DISPLAY_MENU_Y 34
 #define DISPLAY_MENU_WIDTH 320u
-#define DISPLAY_MENU_HEIGHT 128u
-#define DISPLAY_MENU_ROW_TOP 8
-#define DISPLAY_MENU_ROW_HEIGHT 32
-#define DISPLAY_MENU_ROW_PITCH 40
 #define DISPLAY_MENU_TRIGGER_RIGHT 104
 #define DISPLAY_APP_TITLE_X 116
 #define DISPLAY_LAUNCH_WIDTH 280u
@@ -78,16 +80,6 @@ typedef struct DamageRect {
     int32_t bottom;
     uint32_t valid;
 } DamageRect;
-
-typedef struct TitleIconRun {
-    uint16_t x;
-    uint16_t y;
-    uint16_t width;
-    uint16_t height;
-    uint8_t matched;
-} TitleIconRun;
-
-#define TITLE_ICON_RUN_MAX ((ASTRA_AICON_STRIKE_WIDTH_MAX + 1u) / 2u)
 
 typedef struct DisplayWindow {
     AstraGuiOpenWindow request;
@@ -146,8 +138,12 @@ typedef struct DisplayWindow {
     /* The last PRESENT promised to redraw every pixel of the next frame. */
     uint8_t content_discard;
     uint8_t event_lost;
+    uint8_t pending_state;
     uint8_t pending_close;
+    uint32_t pending_state_timestamp_ms;
     uint32_t pending_close_timestamp_ms;
+    AstraWindowEvent pending_menu;
+    uint32_t pending_font;
     uint32_t pointer_shape;
     uint32_t pointer_image_area;
     const AstraColorRGBA8 *pointer_image;
@@ -162,6 +158,7 @@ typedef struct DisplayWindow {
     DamageRect content_damage;
     /* Where each bank differs from content_front. */
     DamageRect content_stale[DISPLAY_CONTENT_BANKS];
+    DisplayFontSet fonts;
 } DisplayWindow;
 
 /* The launch panel: an application the supervisor is starting, shown from
@@ -176,8 +173,23 @@ typedef struct DisplayLaunch {
     char name[ASTRA_WINDOW_TITLE_MAX];
 } DisplayLaunch;
 
+typedef struct DisplaySession {
+    uint32_t receive;
+    uint32_t id;
+    DisplayFontContext fonts;
+} DisplaySession;
+
 typedef struct DisplayState {
     DisplayWindow *windows;
+    DisplayFontFace *ui_font;
+    DisplayFontRegistry *fonts;
+    DisplayFontSet overlay_fonts;
+    AstraHandle font_catalog;
+    uint32_t font_generation;
+    uint8_t font_notifications;
+    uint8_t font_refresh_pending;
+    uint64_t font_notify_at;
+    uint64_t font_retry_at;
     uint32_t windows_area;
     uint32_t capacity;
     DamageRect damage[2];
@@ -219,10 +231,14 @@ typedef struct DisplayState {
     uint8_t system_initialized;
     uint8_t system_pending;
     uint8_t overlay;
-    uint8_t overlay_hover;
+    AstraMenu menu;
+    AstraMenuItem *menu_rows;
+    void *menu_document;
+    uint32_t menu_owner;
+    uint32_t menu_request;
     /* What the overlay surface holds, and what this compose drew. */
     uint8_t overlay_drawn;
-    uint8_t overlay_drawn_hover;
+    uint32_t overlay_drawn_revision;
     uint8_t overlay_pending;
     /* ponytail: one panel, the newest launch's; a launch started while
        another loads takes the panel over. A stack of them if that matters. */
@@ -235,6 +251,9 @@ typedef struct DisplayState {
     uint32_t launch_drawn;
     uint8_t launch_pending;
     uint8_t swallow_pointer_up;
+    /* Popup-consumed HID presses keep their text/release after dismissal. */
+    uint32_t menu_keys[8];
+    uint8_t menu_text_owned;
     uint8_t pending_input_valid;
     /* The input service's shared pointer position (Haiku's shared cursor):
        motion is sampled from it once a frame and before every input event,
@@ -261,8 +280,8 @@ typedef struct DisplayState {
     AstraGuiWindowEvent pending_input;
     /* Open GUI sessions, waited on after the windows. Every session and
        window is one wait handle, so the kernel's wait bound is theirs. */
-    uint32_t session_receive[ASTRA_WAIT_MULTIPLE_MAX];
-    uint32_t session_id[ASTRA_WAIT_MULTIPLE_MAX];
+    DisplaySession sessions[ASTRA_WAIT_MULTIPLE_MAX];
+    DisplayFontContext shared_font_context;
     uint32_t session_count;
     uint32_t next_session;
 } DisplayState;
@@ -298,9 +317,8 @@ enum {
     DISPLAY_FAIL_IRQ,
     DISPLAY_FAIL_COMPLETION,
     DISPLAY_FAIL_PROTOCOL,
-    /* The device answered and refused this one request (a malformed batch,
-       a command over its deadline). The device and the display are fine:
-       it is that request's failure, never the machine's. */
+    /* One frame was refused (invalid client commands or a device deadline).
+       The device and display remain usable; the failure belongs to the frame. */
     DISPLAY_REQUEST_REFUSED,
 };
 
@@ -603,17 +621,6 @@ static uint32_t display_system_media_prepare(DisplayState *state)
             return ASTRA_STATUS_LIMIT;
         state->system_capacity[index] = bytes;
     }
-    if (state->overlay != DISPLAY_OVERLAY_NONE &&
-        state->overlay_capacity == 0u) {
-        uint32_t bytes = align_media_bytes(
-            DISPLAY_MENU_WIDTH * DISPLAY_MENU_HEIGHT * 2u);
-
-        state->overlay_offset = display_media_allocate(
-            state, NULL, UINT32_MAX, bytes);
-        if (state->overlay_offset == 0u)
-            return ASTRA_STATUS_LIMIT;
-        state->overlay_capacity = bytes;
-    }
     if (state->launch.session != 0u && state->launch_capacity == 0u) {
         uint32_t bytes = align_media_bytes(
             DISPLAY_LAUNCH_WIDTH * DISPLAY_LAUNCH_HEIGHT * 2u);
@@ -692,12 +699,22 @@ static void damage_active_title(DisplayState *state)
     });
 }
 
-static DamageRect overlay_bounds(uint8_t overlay)
+static uint32_t menu_draw_list[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
+static uint32_t menu_draw_list_committed[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
+
+static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp_ms, uint32_t status);
+static void set_overlay(DisplayState *state, uint8_t overlay);
+static uint32_t send_event(DisplayWindow *window, AstraWindowEvent *event);
+
+static DamageRect overlay_bounds(const DisplayState *state)
 {
-    if (overlay == DISPLAY_OVERLAY_MENU)
-        return (DamageRect){DISPLAY_MENU_X, DISPLAY_MENU_Y,
-                            DISPLAY_MENU_X + DISPLAY_MENU_WIDTH,
-                            DISPLAY_MENU_Y + DISPLAY_MENU_HEIGHT, 1u};
+    AstraMenuState menu;
+
+    if (state->overlay != DISPLAY_OVERLAY_NONE &&
+        astra_interface_menu_get_state(&state->menu, &menu) == ASTRA_OK)
+        return (DamageRect){menu.frame.x, menu.frame.y,
+            menu.frame.x + (int32_t)menu.frame.width,
+            menu.frame.y + (int32_t)menu.frame.height, 1u};
     return (DamageRect){0};
 }
 
@@ -705,35 +722,6 @@ static int point_in_bounds(int32_t x, int32_t y, DamageRect bounds)
 {
     return bounds.valid != 0u && x >= bounds.left && x < bounds.right &&
            y >= bounds.top && y < bounds.bottom;
-}
-
-static uint8_t menu_item_at(int32_t x, int32_t y)
-{
-    if (x < DISPLAY_MENU_X + 8 ||
-        x >= DISPLAY_MENU_X + (int32_t)DISPLAY_MENU_WIDTH - 8)
-        return 0u;
-    for (uint8_t index = 0u; index < 3u; ++index) {
-        int32_t top = DISPLAY_MENU_Y + DISPLAY_MENU_ROW_TOP +
-                      index * DISPLAY_MENU_ROW_PITCH;
-
-        if (y >= top && y < top + DISPLAY_MENU_ROW_HEIGHT)
-            return index + 1u;
-    }
-    return 0u;
-}
-
-static void set_overlay(DisplayState *state, uint8_t overlay)
-{
-    if (state->overlay == overlay)
-        return;
-    damage_both(state, overlay_bounds(state->overlay));
-    state->overlay = overlay;
-    state->overlay_hover = 0u;
-    damage_both(state, overlay_bounds(overlay));
-    state->system_initialized = 0u;
-    damage_both(state, (DamageRect){DISPLAY_MENU_X, 0,
-                                   DISPLAY_MENU_TRIGGER_RIGHT, DISPLAY_WORK_TOP,
-                                   1u});
 }
 
 static DamageRect launch_bounds(void)
@@ -880,12 +868,19 @@ static uint32_t deliver_event(DisplayWindow *window,
         window->event_lost = 0u;
         if (message->event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
             window->pending_close = 0u;
+        if (message->event.type == ASTRA_WINDOW_EVENT_MENU_RESULT)
+            window->pending_menu = (AstraWindowEvent){0};
     } else if (record_loss) {
         window->event_lost = 1u;
         if (message->event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) {
             window->pending_close = 1u;
             window->pending_close_timestamp_ms =
                 message->event.timestamp_ms;
+        }
+        if (message->event.type == ASTRA_WINDOW_EVENT_MENU_RESULT) {
+            window->pending_menu = message->event;
+            window->pending_menu.flags |= ASTRA_WINDOW_EVENT_LOSS;
+            window->pending_menu.data.menu_result.selection = 0u;
         }
     }
     return status;
@@ -906,6 +901,7 @@ static void state_event(DisplayWindow *window, uint32_t timestamp_ms,
         .type = ASTRA_WINDOW_EVENT_STATE,
         .timestamp_ms = timestamp_ms,
     };
+    AstraGuiWindowEvent message;
 
     event.data.state.frame = (AstraWindowFrame){
         window->request.x, window->request.y,
@@ -914,7 +910,16 @@ static void state_event(DisplayWindow *window, uint32_t timestamp_ms,
     event.data.state.state = window->state;
     event.data.state.flags = window->request.flags;
     event.data.state.z_order = z_order;
-    (void)send_event(window, &event);
+    /* Retain current state without invalidating an active interaction. */
+    window->pending_state = 0u;
+    if (prepare_event(window, &event, &message) &&
+        deliver_event(window, &message, 0) == ASTRA_SYSCALL_WOULD_BLOCK) {
+        window->pending_state = 1u;
+        window->pending_state_timestamp_ms = timestamp_ms;
+        /* A coalesced deactivation must still cancel the old interaction. */
+        if ((window->request.flags & ASTRA_WINDOW_ACTIVE) == 0u)
+            window->event_lost = 1u;
+    }
 }
 
 static void resize_event(DisplayWindow *window, uint32_t timestamp_ms)
@@ -937,6 +942,116 @@ static uint32_t find_id(const DisplayState *state, uint32_t id)
     return state->count;
 }
 
+static const AstraMenuItem system_menu_items[] = {
+    {"About This Astra", 16u, 0u},
+    {NULL, 0u, ASTRA_MENU_SEPARATOR},
+    {"Restart", 7u, 0u},
+    {"Shut Down", 9u, 0u},
+};
+
+static const AstraControlFrame menu_work = {
+    0, DISPLAY_WORK_TOP, ASTRA_DISPLAY_WIDTH, DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP
+};
+
+static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp_ms, uint32_t status)
+{
+    uint32_t owner = state->menu_owner;
+    uint32_t request = state->menu_request;
+
+    if (state->overlay == DISPLAY_OVERLAY_NONE) return;
+    damage_both(state, overlay_bounds(state));
+    state->overlay = DISPLAY_OVERLAY_NONE;
+    display_font_set_close(&state->overlay_fonts);
+    state->menu = (AstraMenu)ASTRA_MENU_INIT;
+    state->menu_owner = state->menu_request = 0u;
+    astra_runtime_deallocate(state->menu_rows);
+    astra_runtime_deallocate(state->menu_document);
+    state->menu_rows = NULL;
+    state->menu_document = NULL;
+    state->system_initialized = 0u;
+    damage_both(state, (DamageRect){DISPLAY_MENU_X, 0,
+        DISPLAY_MENU_TRIGGER_RIGHT, DISPLAY_WORK_TOP, 1u});
+    if (owner != 0u) {
+        uint32_t index = find_id(state, owner);
+        if (index != state->count) {
+            AstraWindowEvent event = {.type = ASTRA_WINDOW_EVENT_MENU_RESULT,
+                .timestamp_ms = timestamp_ms};
+            event.data.menu_result.request = request;
+            event.data.menu_result.selection = selection;
+            event.data.menu_result.status = status;
+            (void)send_event(&state->windows[index], &event);
+        }
+    } else if (selection == 1u || selection == 3u || selection == 4u) {
+        for (uint32_t at = 0u; at < state->count; ++at)
+            if (state->windows[at].request.type == ASTRA_WINDOW_DESKTOP) {
+                AstraWindowEvent event = {.type = ASTRA_WINDOW_EVENT_SYSTEM_ACTION,
+                    .timestamp_ms = timestamp_ms};
+                event.data.system_action.action = selection == 1u ? ASTRA_SYSTEM_ACTION_ABOUT :
+                    selection == 3u ? ASTRA_SYSTEM_ACTION_RESTART : ASTRA_SYSTEM_ACTION_SHUTDOWN;
+                (void)send_event(&state->windows[at], &event);
+                break;
+            }
+    }
+}
+
+static uint32_t menu_install(DisplayState *state, const AstraMenu *menu,
+    uint32_t owner, uint32_t request, AstraMenuItem *rows, void *document)
+{
+    AstraMenuState info;
+    AstraSurfaceView surface;
+    uint32_t bytes, offset;
+    int cached;
+
+    if (state->overlay != DISPLAY_OVERLAY_NONE)
+        return ASTRA_STATUS_BUSY;
+    if (astra_interface_menu_get_state(menu, &info) != ASTRA_OK ||
+        !astra_draw_list_view_init(&surface, menu_draw_list, sizeof(menu_draw_list),
+            (uint16_t)info.frame.width, (uint16_t)info.frame.height) ||
+        astra_interface_menu_render(menu, &surface) != ASTRA_OK)
+        return ASTRA_STATUS_LIMIT;
+    bytes = align_media_bytes(info.frame.width * info.frame.height * 2u);
+    offset = state->overlay_offset;
+    if (state->overlay_capacity < bytes) {
+        offset = display_media_allocate(state, NULL, UINT32_MAX, bytes);
+        if (offset == 0u) return ASTRA_STATUS_LIMIT;
+    }
+    /* Revisions restart for each popup; cached pixels need the complete paint snapshot. */
+    cached = state->overlay_drawn == DISPLAY_OVERLAY_MENU &&
+        offset == state->overlay_offset &&
+        memcmp(menu_draw_list, menu_draw_list_committed, sizeof(menu_draw_list)) == 0;
+    state->overlay_offset = offset;
+    if (state->overlay_capacity < bytes) state->overlay_capacity = bytes;
+    state->last_click_window = 0u;
+    state->menu = *menu;
+    state->menu_owner = owner;
+    state->menu_request = request;
+    state->menu_rows = rows;
+    state->menu_document = document;
+    state->overlay = DISPLAY_OVERLAY_MENU;
+    state->overlay_drawn = cached ? DISPLAY_OVERLAY_MENU : DISPLAY_OVERLAY_NONE;
+    state->overlay_drawn_revision = info.revision;
+    state->system_initialized = 0u;
+    damage_both(state, overlay_bounds(state));
+    damage_both(state, (DamageRect){DISPLAY_MENU_X, 0,
+        DISPLAY_MENU_TRIGGER_RIGHT, DISPLAY_WORK_TOP, 1u});
+    return ASTRA_STATUS_OK;
+}
+
+static void set_overlay(DisplayState *state, uint8_t overlay)
+{
+    AstraMenu menu = ASTRA_MENU_INIT;
+
+    if (overlay == DISPLAY_OVERLAY_NONE) {
+        menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+        return;
+    }
+    if (astra_interface_menu_init(&menu, system_menu_items,
+        sizeof(system_menu_items) / sizeof(system_menu_items[0]), &menu_work,
+        DISPLAY_MENU_X, DISPLAY_MENU_Y, DISPLAY_MENU_WIDTH,
+        ASTRA_MENU_ATTACHED_TOP | ASTRA_MENU_TRACK_OPEN_PRESS) == ASTRA_OK)
+        (void)menu_install(state, &menu, 0u, 0u, NULL, NULL);
+}
+
 static uint32_t top_visible(const DisplayState *state)
 {
     for (uint32_t index = state->count; index != 0u; --index)
@@ -945,6 +1060,28 @@ static uint32_t top_visible(const DisplayState *state)
             return state->windows[index - 1u].id;
     return 0u;
 }
+
+/* The ordered retained windows are also the modal owner contract. A GUI
+   session's newest visible modal blocks its other windows, while applications
+   in other sessions remain usable. Session zero is the shared service door. */
+static uint32_t modal_window(const DisplayState *state, uint32_t index)
+{
+    if (index >= state->count)
+        return index;
+    for (uint32_t at = state->count; at != 0u; --at) {
+        const DisplayWindow *window = &state->windows[at - 1u];
+
+        if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u &&
+            window->state != ASTRA_WINDOW_STATE_MINIMIZED &&
+            window->session == state->windows[index].session)
+            return at - 1u;
+    }
+    return index;
+}
+
+static int set_gadget_visual(DisplayState *state, const AstraTheme *theme,
+                             DisplayWindow *window, uint32_t region,
+                             uint8_t visual);
 
 static void reorder(DisplayState *state, const AstraTheme *theme,
                     uint32_t from, uint32_t to)
@@ -971,6 +1108,34 @@ static void reorder(DisplayState *state, const AstraTheme *theme,
     damage_scene(state, theme);
 }
 
+/* Revealing a modal admits it at the front of its owner's interaction order;
+   another modal may have moved in front while this one was minimized. */
+static DisplayWindow *raise_revealed_modal(DisplayState *state,
+                                          const AstraTheme *theme,
+                                          uint32_t index)
+{
+    DisplayWindow *window = &state->windows[index];
+
+    if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u) {
+        reorder(state, theme, index, state->count - 1u);
+        window = &state->windows[state->count - 1u];
+    }
+    return window;
+}
+
+static DisplayWindow *restore_minimized_window(DisplayState *state,
+                                               const AstraTheme *theme,
+                                               uint32_t index)
+{
+    DisplayWindow *window = &state->windows[index];
+
+    window->state = window->restore_state;
+    dirty_cache(window);
+    next_generation(window);
+    damage_window(state, theme, window);
+    return raise_revealed_modal(state, theme, index);
+}
+
 static int activate(DisplayState *state, const AstraTheme *theme,
                     uint32_t id, int raise, uint32_t timestamp_ms)
 {
@@ -979,15 +1144,51 @@ static int activate(DisplayState *state, const AstraTheme *theme,
 
     if (id != 0u && index == state->count)
         return 0;
+    if (id != 0u) {
+        index = modal_window(state, index);
+        id = state->windows[index].id;
+    }
     if (id != 0u &&
         state->windows[index].request.type == ASTRA_WINDOW_DESKTOP) {
         id = 0u;
         raise = 0;
     }
+    if (state->menu_owner != 0u) {
+        uint32_t owner = find_id(state, state->menu_owner);
+        uint32_t focused = owner != state->count &&
+            state->windows[owner].request.type == ASTRA_WINDOW_DESKTOP ? 0u : state->menu_owner;
+        if (focused != id) {
+            menu_end(state, 0u, timestamp_ms, ASTRA_STATUS_OK);
+            changed = 1;
+        }
+    }
     if (id != 0u && raise) {
         changed |= index != state->count - 1u;
         reorder(state, theme, index, state->count - 1u);
         index = state->count - 1u;
+    }
+    if (state->capture_window != 0u) {
+        uint32_t captured = find_id(state, state->capture_window);
+
+        if (captured != state->count && modal_window(state, captured) != captured) {
+            AstraWindowEvent reset = {.type = ASTRA_WINDOW_EVENT_STATE_RESET,
+                .flags = ASTRA_WINDOW_EVENT_LOSS, .timestamp_ms = timestamp_ms};
+
+            (void)set_gadget_visual(state, theme, &state->windows[captured],
+                                   state->capture_region, ASTRA_GADGET_NORMAL);
+            (void)send_event(&state->windows[captured], &reset);
+            state->capture_window = 0u;
+            state->capture_region = HIT_NONE;
+            changed = 1;
+        }
+    }
+    if (state->pending_input_valid != 0u) {
+        uint32_t pending = find_id(state, state->pending_input_window);
+
+        if (pending != state->count && modal_window(state, pending) != pending) {
+            state->windows[pending].event_lost = 1u;
+            state->pending_input_valid = 0u;
+        }
     }
     for (uint32_t at = 0u; at < state->count; ++at) {
         DisplayWindow *window = &state->windows[at];
@@ -1489,6 +1690,23 @@ static uint32_t active_window(const DisplayState *state)
     return state->count;
 }
 
+/* Desktop activation deliberately leaves the application focus empty. Its
+   subscribed keyboard controls still own input when no application is active;
+   derive that target from the existing window list, without changing stacking,
+   application activation, menus or pointer grabs. */
+static uint32_t keyboard_window(const DisplayState *state)
+{
+    uint32_t index = active_window(state);
+
+    if (index != state->count)
+        return modal_window(state, index);
+    for (uint32_t at = state->count; at != 0u; --at)
+        if (state->windows[at - 1u].request.type == ASTRA_WINDOW_DESKTOP &&
+            state->windows[at - 1u].state != ASTRA_WINDOW_STATE_MINIMIZED)
+            return modal_window(state, at - 1u);
+    return state->count;
+}
+
 /* @p value in [low, high); an empty range gives low. */
 static int32_t clamp_range(int32_t value, int32_t low, int32_t high)
 {
@@ -1624,8 +1842,7 @@ static uint32_t warp_pointer(DisplayState *state, const AstraTheme *theme,
     return ASTRA_STATUS_OK;
 }
 
-static void key_event(DisplayState *state, DisplayWindow *window,
-                      const AstraLogicalInputEvent *input)
+static AstraWindowEvent logical_key_event(const AstraLogicalInputEvent *input)
 {
     uint32_t flags =
         (input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u ?
@@ -1648,6 +1865,14 @@ static void key_event(DisplayState *state, DisplayWindow *window,
         event.data.text.codepoint = input->code;
         event.data.text.modifiers = input->modifiers;
     }
+    return event;
+}
+
+static void key_event(DisplayState *state, DisplayWindow *window,
+                      const AstraLogicalInputEvent *input)
+{
+    AstraWindowEvent event = logical_key_event(input);
+
     if (prepare_event(window, &event, &state->pending_input)) {
         uint32_t status = deliver_event(
             window, &state->pending_input, 0);
@@ -1724,83 +1949,38 @@ static void draw_gadget(AstraRenderBuilder *builder, uint32_t destination,
                  theme->gadget_glyph, gadget, color(glyph));
 }
 
+static uint32_t upload_icon_strike(AstraRenderBuilder *builder,
+                                   const AstraAicon *icon,
+                                   const AstraAiconStrike *strike)
+{
+    uint32_t palette[256] = {0u};
+
+    if (icon->palette_count == 0u || icon->palette_count > 256u ||
+        strike->width > ASTRA_AICON_STRIKE_WIDTH_MAX ||
+        strike->height > ASTRA_AICON_STRIKE_WIDTH_MAX)
+        return 0u;
+    for (uint16_t index = 0u; index < icon->palette_count; ++index) {
+        uint8_t rgba[4];
+
+        if (astra_aicon_palette(icon, index, rgba) != ASTRA_BUNDLE_OK)
+            return 0u;
+        palette[index] = ((uint32_t)rgba[3] << 24u) |
+                         ((uint32_t)rgba[0] << 16u) |
+                         ((uint32_t)rgba[1] << 8u) | rgba[2];
+    }
+    return astra_render_builder_upload_index8(builder, strike->pixels,
+        strike->width, strike->width, strike->height, palette);
+}
+
 static int draw_title_icon(AstraRenderBuilder *builder, uint32_t destination,
                            const DisplayWindow *window, int32_t x, int32_t y)
 {
-    const AstraAiconStrike *strike = &window->title_icon_strike;
+    uint32_t source = upload_icon_strike(
+        builder, &window->title_icon, &window->title_icon_strike);
 
-    if (strike->width > ASTRA_AICON_STRIKE_WIDTH_MAX)
-        return 0;
-    for (uint16_t color_index = 1u;
-         color_index < window->title_icon.palette_count; ++color_index) {
-        TitleIconRun active[TITLE_ICON_RUN_MAX];
-        uint32_t active_count = 0u;
-        uint8_t rgba[4];
-        uint16_t pixel;
-
-        if (astra_aicon_palette(&window->title_icon, color_index, rgba) !=
-                ASTRA_BUNDLE_OK || rgba[3] == 0u)
-            continue;
-        pixel = astra_surface_rgb565(rgba[0], rgba[1], rgba[2]);
-        for (uint16_t row = 0u; row < strike->height; ++row) {
-            TitleIconRun current[TITLE_ICON_RUN_MAX];
-            uint32_t current_count = 0u;
-            uint16_t column = 0u;
-
-            for (uint32_t at = 0u; at < active_count; ++at)
-                active[at].matched = 0u;
-            while (column < strike->width) {
-                uint16_t start;
-                uint32_t match = active_count;
-
-                while (column < strike->width && strike->pixels[
-                           (uint32_t)row * strike->width + column] !=
-                           color_index)
-                    ++column;
-                start = column;
-                while (column < strike->width && strike->pixels[
-                           (uint32_t)row * strike->width + column] ==
-                           color_index)
-                    ++column;
-                if (start == column)
-                    break;
-                for (uint32_t at = 0u; at < active_count; ++at)
-                    if (active[at].x == start &&
-                        active[at].width == column - start &&
-                        active[at].matched == 0u) {
-                        match = at;
-                        break;
-                    }
-                if (current_count == sizeof(current) / sizeof(current[0]))
-                    return 0;
-                if (match != active_count) {
-                    active[match].matched = 1u;
-                    ++active[match].height;
-                    current[current_count++] = active[match];
-                } else {
-                    current[current_count++] = (TitleIconRun){
-                        start, row, (uint16_t)(column - start), 1u, 1u};
-                }
-            }
-            for (uint32_t at = 0u; at < active_count; ++at)
-                if (active[at].matched == 0u &&
-                    !astra_render_builder_fill(
-                        builder, destination, x + active[at].x,
-                        y + active[at].y, active[at].width,
-                        active[at].height, pixel))
-                    return 0;
-            active_count = current_count;
-            for (uint32_t at = 0u; at < current_count; ++at)
-                active[at] = current[at];
-        }
-        for (uint32_t at = 0u; at < active_count; ++at)
-            if (!astra_render_builder_fill(
-                    builder, destination, x + active[at].x,
-                    y + active[at].y, active[at].width,
-                    active[at].height, pixel))
-                return 0;
-    }
-    return 1;
+    return source != 0u && astra_render_builder_blit_region(
+        builder, destination, source, 0, 0, x, y,
+        window->title_icon_strike.width, window->title_icon_strike.height);
 }
 
 /* A decorated window's frame and title bar. The client area is left in
@@ -1863,9 +2043,9 @@ static int build_cache(AstraRenderBuilder *builder, uint32_t cache,
         }
         text_capacity = request->width > text_capacity ?
                         request->width - text_capacity : 0u;
-        text_length = astra_surface_ui_text_fit(
-            request->title, request->title_length,
-            ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT, text_capacity);
+        text_length = astra_render_builder_text_fit(
+            builder, request->title, request->title_length,
+            ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT, text_capacity, 0u);
         (void)astra_render_builder_text(
             builder, cache, text_x,
             client_y + ((int32_t)title -
@@ -1927,13 +2107,13 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
     int32_t heading_x;
 
     system_bar_title(state, &active_title, &active_title_length);
-    active_title_length = astra_surface_ui_text_fit(
-        active_title, active_title_length,
+    active_title_length = astra_render_builder_text_fit(
+        builder, active_title, active_title_length,
         ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
-        ASTRA_DISPLAY_WIDTH - 320u);
-    active_title_width = astra_surface_ui_text_width(
-        active_title, active_title_length,
-        ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT);
+        ASTRA_DISPLAY_WIDTH - 320u, ASTRA_TEXT_STYLE_BOLD);
+    active_title_width = astra_render_builder_text_width(
+        builder, active_title, active_title_length,
+        ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, ASTRA_TEXT_STYLE_BOLD);
     state->system_resource[0] = astra_render_builder_surface_at(
         builder, state->system_offset[0], state->system_capacity[0],
         ASTRA_DISPLAY_WIDTH, DISPLAY_WORK_TOP);
@@ -1978,7 +2158,7 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
                 builder, state->system_resource[0],
                 40 + (int32_t)index * 11, 8, "ASTRA" + index, 1u,
                 ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
-                color(state->overlay == DISPLAY_OVERLAY_MENU ?
+                color(state->overlay == DISPLAY_OVERLAY_MENU && state->menu_owner == 0u ?
                       theme->accent : theme->text_primary)))
             return 0;
     heading_x = DISPLAY_APP_TITLE_X + (int32_t)active_title_width + 24;
@@ -1989,9 +2169,9 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
                 ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
                 color(theme->text_muted)))
             return 0;
-        heading_x += (int32_t)astra_surface_ui_text_width(
-            headings[index], heading_lengths[index],
-            ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT) + 24;
+        heading_x += (int32_t)astra_render_builder_text_width(
+            builder, headings[index], heading_lengths[index],
+            ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, 0u) + 24;
     }
     return 1;
 }
@@ -2000,93 +2180,38 @@ static int build_overlay_surface(AstraRenderBuilder *builder,
                                  DisplayState *state,
                                  const AstraTheme *theme)
 {
-    static const char * const labels[] = {
-        "About This Astra", "Restart", "Shut Down"
+    AstraMenuState menu;
+    AstraSurfaceView surface;
+    AstraRenderSourceResolver resolver = {
+        .context = &state->overlay_fonts, .resolve_font = display_font_set_resolve
     };
-    static const uint8_t lengths[] = {16u, 7u, 9u};
-    uint16_t width = DISPLAY_MENU_WIDTH;
-    uint16_t height = DISPLAY_MENU_HEIGHT;
 
+    (void)theme;
     state->overlay_pending = 0u;
     if (state->overlay == DISPLAY_OVERLAY_NONE)
         return 1;
+    if (astra_interface_menu_get_state(&state->menu, &menu) != ASTRA_OK)
+        return 0;
     state->overlay_resource = astra_render_builder_surface_at(
         builder, state->overlay_offset, state->overlay_capacity,
-        width, height);
+        (uint16_t)menu.frame.width, (uint16_t)menu.frame.height);
     if (state->overlay_resource == 0u)
         return 0;
-    /* The surface keeps its pixels: redraw only what it does not hold. */
     if (state->overlay_drawn == state->overlay &&
-        state->overlay_drawn_hover == state->overlay_hover)
+        state->overlay_drawn_revision == menu.revision)
         return 1;
+    state->overlay_drawn = DISPLAY_OVERLAY_NONE;
+    state->overlay_fonts.registry = state->fonts;
+    display_font_set_begin(&state->overlay_fonts);
+    int rendered = astra_draw_list_view_init(&surface, menu_draw_list, sizeof(menu_draw_list),
+            (uint16_t)menu.frame.width, (uint16_t)menu.frame.height) &&
+        astra_interface_menu_render(&state->menu, &surface) == ASTRA_OK &&
+        astra_render_builder_replay_resolved(builder, state->overlay_resource,
+            (const AstraDrawListHeader *)menu_draw_list, &resolver);
+    display_font_set_end(&state->overlay_fonts, rendered);
+    if (!rendered) return 0;
     state->overlay_pending = 1u;
-    if (!astra_render_builder_rounded(
-            builder, state->overlay_resource, 0, 0,
-            width, height, theme->window_radius, color(theme->frame)) ||
-        !astra_render_builder_rounded(
-            builder, state->overlay_resource, 2, 2,
-            width - 4u, height - 4u, theme->window_radius - 2u,
-            color(theme->title_inactive)) ||
-        !astra_render_builder_fill(
-            builder, state->overlay_resource, 0, 0,
-            width, theme->window_radius, color(theme->frame)) ||
-        !astra_render_builder_fill(
-            builder, state->overlay_resource, 2, 2,
-            width - 4u, theme->window_radius - 2u,
-            color(theme->title_inactive)))
-        return 0;
-    for (uint32_t index = 0u; index < 3u; ++index) {
-        int32_t top = DISPLAY_MENU_ROW_TOP +
-                      index * DISPLAY_MENU_ROW_PITCH;
-        int hovered = state->overlay_hover == index + 1u;
-
-        if (index == 1u && !astra_render_builder_fill(
-                builder, state->overlay_resource, 12, top - 4,
-                width - 24u, 1u, color(theme->border_soft)))
-            return 0;
-        if (hovered && !astra_render_builder_rounded(
-                builder, state->overlay_resource, 8, top,
-                width - 16u, DISPLAY_MENU_ROW_HEIGHT,
-                theme->control_radius, color(theme->accent)))
-            return 0;
-        if (!astra_render_builder_text(
-                builder, state->overlay_resource, 20, top + 9,
-                labels[index], lengths[index],
-                ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
-                color(hovered ? theme->accent_text : theme->text_primary)))
-            return 0;
-    }
     return 1;
-}
-
-static uint8_t launch_blend(uint8_t over, uint8_t under, uint8_t alpha)
-{
-    return (uint8_t)(((uint32_t)over * alpha +
-                      (uint32_t)under * (255u - alpha) + 127u) / 255u);
-}
-
-static uint16_t launch_icon_pixels[DISPLAY_LAUNCH_ICON * DISPLAY_LAUNCH_ICON];
-
-/* The icon's 64-pixel strike over the panel, blended by palette alpha:
-   one upload, however many colors the icon has. */
-static void launch_icon_compose(const DisplayLaunch *launch,
-                                AstraColorRGBA8 under)
-{
-    uint16_t palette[256];
-
-    for (uint16_t index = 0u; index < launch->icon.palette_count; ++index) {
-        uint8_t rgba[4] = {0u, 0u, 0u, 0u};
-
-        (void)astra_aicon_palette(&launch->icon, index, rgba);
-        palette[index] = astra_surface_rgb565(
-            launch_blend(rgba[0], under.red, rgba[3]),
-            launch_blend(rgba[1], under.green, rgba[3]),
-            launch_blend(rgba[2], under.blue, rgba[3]));
-    }
-    /* astra_aicon_open bounds every index by the palette. */
-    for (uint32_t at = 0u; at < DISPLAY_LAUNCH_ICON * DISPLAY_LAUNCH_ICON;
-         ++at)
-        launch_icon_pixels[at] = palette[launch->strike.pixels[at]];
 }
 
 static int launch_text(AstraRenderBuilder *builder, uint32_t destination,
@@ -2095,9 +2220,9 @@ static int launch_text(AstraRenderBuilder *builder, uint32_t destination,
 {
     uint32_t width;
 
-    length = astra_surface_ui_text_fit(text, length, height,
-                                       DISPLAY_LAUNCH_WIDTH - 32u);
-    width = astra_surface_ui_text_width(text, length, height);
+    length = astra_render_builder_text_fit(builder, text, length, height,
+        DISPLAY_LAUNCH_WIDTH - 32u, style);
+    width = astra_render_builder_text_width(builder, text, length, height, style);
     return astra_render_builder_text_styled(
         builder, destination,
         (int32_t)(DISPLAY_LAUNCH_WIDTH - width) / 2, y, text, length,
@@ -2132,12 +2257,8 @@ static int build_launch_surface(AstraRenderBuilder *builder,
             color(theme->title_inactive)))
         return 0;
     if (launch->icon_bytes != NULL) {
-        uint32_t source;
-
-        launch_icon_compose(launch, theme->title_inactive);
-        source = astra_render_builder_upload_rgb565(
-            builder, launch_icon_pixels, DISPLAY_LAUNCH_ICON * 2u,
-            DISPLAY_LAUNCH_ICON, DISPLAY_LAUNCH_ICON);
+        uint32_t source = upload_icon_strike(
+            builder, &launch->icon, &launch->strike);
         if (source == 0u || !astra_render_builder_blit_region(
                 builder, state->launch_resource, source, 0, 0,
                 (int32_t)(width - DISPLAY_LAUNCH_ICON) / 2,
@@ -2284,6 +2405,75 @@ static uint32_t compose_failed(const AstraRenderBuilder *builder,
     return 0u;
 }
 
+/* Copy before parsing: clients retain write authority to their attached area. */
+static uint32_t menu_open(DisplayState *state, const AstraTheme *theme,
+                          uint32_t index, const AstraGuiWindowCommand *command,
+                          uint32_t area)
+{
+    DisplayWindow *window = &state->windows[index];
+    uint32_t active = active_window(state);
+    void *mapping = NULL;
+    uint8_t *document = NULL;
+    AstraMenuItem *rows = NULL;
+    AstraMenu menu = ASTRA_MENU_INIT;
+    uint32_t mapped = 0u, size, count, offset;
+    int32_t x, y;
+    uint32_t status;
+
+    if (state->overlay != DISPLAY_OVERLAY_NONE || window->pending_menu.type != 0u ||
+        state->capture_window != 0u || grab_target(state) != state->count)
+        return ASTRA_STATUS_BUSY;
+    if (window->state == ASTRA_WINDOW_STATE_MINIMIZED || modal_window(state, index) != index ||
+        (active != index && !(window->request.type == ASTRA_WINDOW_DESKTOP && active == state->count)))
+        return ASTRA_STATUS_ACCESS;
+    status = service_status(astra_rt_area_map(area, ASTRA_AREA_MAP_READ, &mapping, &mapped));
+    if (status != ASTRA_STATUS_OK) return status;
+    if (mapped < ASTRA_GUI_MENU_HEADER_BYTES || mapped > ASTRA_GUI_MENU_BYTES_MAX) {
+        (void)astra_rt_area_unmap(mapping);
+        return ASTRA_STATUS_PROTOCOL;
+    }
+    document = astra_runtime_allocate(mapped);
+    if (document == NULL) {
+        (void)astra_rt_area_unmap(mapping);
+        return ASTRA_STATUS_LIMIT;
+    }
+    memcpy(document, mapping, mapped);
+    (void)astra_rt_area_unmap(mapping);
+    size = astra_load_be32(document + 8u);
+    count = astra_load_be32(document + 12u);
+    status = ASTRA_STATUS_PROTOCOL;
+    if (astra_load_be32(document) != ASTRA_GUI_MENU_MAGIC ||
+        astra_load_be32(document + 4u) != ASTRA_GUI_MENU_VERSION ||
+        size < ASTRA_GUI_MENU_HEADER_BYTES || size > mapped || count == 0u ||
+        count > (size - ASTRA_GUI_MENU_HEADER_BYTES) / ASTRA_GUI_MENU_ROW_BYTES ||
+        count > UINT32_MAX / sizeof(*rows))
+        goto done;
+    rows = astra_runtime_allocate((size_t)count * sizeof(*rows));
+    if (rows == NULL) { status = ASTRA_STATUS_LIMIT; goto done; }
+    offset = ASTRA_GUI_MENU_HEADER_BYTES + count * ASTRA_GUI_MENU_ROW_BYTES;
+    for (uint32_t at = 0u; at < count; ++at) {
+        const uint8_t *row = document + ASTRA_GUI_MENU_HEADER_BYTES + at * ASTRA_GUI_MENU_ROW_BYTES;
+        uint32_t length = astra_load_be32(row + 8u);
+        if (astra_load_be32(row + 4u) != offset || length > size - offset ||
+            astra_load_be32(row + 12u) != 0u)
+            goto done;
+        rows[at] = (AstraMenuItem){length != 0u ? (const char *)document + offset : NULL,
+                                  length, astra_load_be32(row)};
+        offset += length;
+    }
+    if (offset != size) goto done;
+    content_origin(theme, window, &x, &y);
+    if (astra_interface_menu_init(&menu, rows, count, &menu_work,
+        x + command->x, y + command->y, 160u, 0u) != ASTRA_OK)
+        goto done;
+    status = menu_install(state, &menu, window->id, command->flags, rows, document);
+    if (status == ASTRA_STATUS_OK) return status;
+done:
+    astra_runtime_deallocate(rows);
+    astra_runtime_deallocate(document);
+    return status;
+}
+
 static uint32_t display_pointer_shape(DisplayState *state,
                                       const AstraTheme *theme);
 
@@ -2321,6 +2511,9 @@ static uint32_t compose(void *storage, uint32_t fence,
                               status != ASTRA_STATUS_OK ? status :
                                                          ASTRA_STATUS_INVALID);
     }
+    if (!astra_render_builder_use_font(&builder,
+            state->ui_font == NULL ? NULL : &state->ui_font->render))
+        return compose_failed(&builder, error, failure, ASTRA_STATUS_INVALID);
     if (!build_system_surfaces(&builder, state, &theme))
         return compose_failed(&builder, error, failure,
                               ASTRA_STATUS_LIMIT);
@@ -2383,6 +2576,13 @@ static uint32_t compose(void *storage, uint32_t fence,
                     (uint16_t)(region.bottom - region.top));
             }
         } else {
+            AstraRenderSourceResolver font_resolver = {
+                .context = &window->fonts,
+                .resolve_font = display_font_set_resolve
+            };
+            window->fonts.registry = state->fonts;
+            if (window->content_dirty != 0u)
+                display_font_set_begin(&window->fonts);
             content_ok =
                 (window->content_initialized != 0u ||
                  (window->content_dirty != 0u &&
@@ -2393,10 +2593,29 @@ static uint32_t compose(void *storage, uint32_t fence,
                      window->request.width, window->request.height,
                      color(theme.client))) &&
                 (window->content_dirty == 0u ||
-                 astra_render_builder_replay(
-                     &builder, window->content_resource, list));
+                 astra_render_builder_replay_resolved(
+                     &builder, window->content_resource, list,
+                     &font_resolver));
+            if (window->content_dirty != 0u)
+                display_font_set_end(&window->fonts, content_ok);
         }
         if (window->content_resource == 0u || !content_ok) {
+            if (window->content_resource != 0u && !content_ok &&
+                ((window->request.content_format == ASTRA_WINDOW_CONTENT_DRAW_LIST &&
+                  builder.failed == ASTRA_RENDER_BUILDER_FAILURE_NONE) ||
+                 builder.failed == ASTRA_RENDER_BUILDER_FAILURE_DATA ||
+                 builder.failed == ASTRA_RENDER_BUILDER_FAILURE_DESCRIPTOR ||
+                 builder.failed == ASTRA_RENDER_BUILDER_FAILURE_COMMAND_CAPACITY)) {
+                /* No batch was submitted. Keep the committed front bank and
+                   discard only this client's unrenderable update. */
+                window->content_dirty = 0u;
+                window->content_pending = 0u;
+                window->content_damage = (DamageRect){0};
+                window->content_discard = 0u;
+                state->compose_deferred = 1u;
+                (void)astra_log("display refused window frame; retained previous content");
+                return compose_failed(&builder, error, failure, DISPLAY_REQUEST_REFUSED);
+            }
             return compose_failed(
                 &builder, error, failure,
                 builder.failed != 0u ? ASTRA_STATUS_LIMIT :
@@ -2477,7 +2696,7 @@ static uint32_t compose(void *storage, uint32_t fence,
                                   ASTRA_STATUS_LIMIT);
     }
     if (state->overlay != DISPLAY_OVERLAY_NONE) {
-        DamageRect bounds = overlay_bounds(state->overlay);
+        DamageRect bounds = overlay_bounds(state);
 
         if (!astra_render_builder_window_scene_layer(
                 &builder, state->overlay_resource,
@@ -2793,8 +3012,11 @@ static void commit_render_state(DisplayState *state)
     if (state->system_pending != 0u)
         state->system_initialized = 1u;
     if (state->overlay_pending != 0u) {
+        AstraMenuState menu;
+        memcpy(menu_draw_list_committed, menu_draw_list, sizeof(menu_draw_list));
         state->overlay_drawn = state->overlay;
-        state->overlay_drawn_hover = state->overlay_hover;
+        if (astra_interface_menu_get_state(&state->menu, &menu) == ASTRA_OK)
+            state->overlay_drawn_revision = menu.revision;
         state->overlay_pending = 0u;
     }
     if (state->launch_pending != 0u) {
@@ -2886,6 +3108,11 @@ static uint32_t render(uint32_t device, uint32_t irq,
     bytes = compose((void *)(uintptr_t)framebuffer[buffer].virtual_base,
                     *next_fence, state, &compose_status,
                     &last_builder_failure);
+    if (bytes == 0u && compose_status == ASTRA_STATUS_LIMIT && state->overlay != DISPLAY_OVERLAY_NONE) {
+        menu_end(state, 0u, 0u, ASTRA_STATUS_LIMIT);
+        bytes = compose((void *)(uintptr_t)framebuffer[buffer].virtual_base,
+                        *next_fence, state, &compose_status, &last_builder_failure);
+    }
     if (bytes == 0u)
         return compose_status;
     {
@@ -2942,6 +3169,8 @@ static void log_render_failure(const char *phase, uint32_t status)
         (void)astra_log("display rejected a window draw list");
     else if (status == ASTRA_STATUS_INVALID)
         (void)astra_log("display render had no valid damage or batch");
+    else if (status == DISPLAY_REQUEST_REFUSED)
+        (void)astra_log("display frame refused; committed content remains available");
     else
         (void)astra_log_failure("display hardware render", status);
 }
@@ -2952,8 +3181,19 @@ static void log_render_failure(const char *phase, uint32_t status)
 static void render_failure(const char *phase, uint32_t status)
 {
     log_render_failure(phase, status);
-    if (status != DISPLAY_REQUEST_REFUSED)
+    if (status != DISPLAY_REQUEST_REFUSED) {
+        char storage[96];
+        AstraString line;
+        astra_string_init(&line, storage, sizeof(storage));
+        (void)astra_string_append(&line, "display fatal render status=");
+        (void)astra_string_append_u64(&line, status);
+        (void)astra_string_append(&line, " builder=");
+        (void)astra_string_append_u64(&line, last_builder_failure);
+        /* The process log may not drain before the critical-service halt. */
+        (void)astra_log_debug(line.text, line.length);
+        (void)astra_log_debug(phase, (uint32_t)strlen(phase));
         astra_process_exit(DISPLAY_FAIL_COMPLETION);
+    }
 }
 
 static uint32_t window_gadgets(uint8_t type)
@@ -3028,8 +3268,8 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
 
     if (size != sizeof(*request) ||
         handles != (request->action == ASTRA_GUI_WINDOW_CLOSE ? 0u :
-                   request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ?
-                       2u : 1u) ||
+                   request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ||
+                   request->action == ASTRA_GUI_WINDOW_MENU_OPEN ? 2u : 1u) ||
         request->header.total_size != sizeof(*request) ||
         request->header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
         request->header.flags != 0u ||
@@ -3041,9 +3281,15 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
         request->generation == 0u ||
         request->reserved16 != 0u || request->reserved != 0u ||
         request->action < ASTRA_GUI_WINDOW_QUERY ||
-        request->action > ASTRA_GUI_WINDOW_WARP_POINTER ||
+        request->action > ASTRA_GUI_WINDOW_MENU_CLOSE ||
         request->title_length > ASTRA_WINDOW_TITLE_MAX)
         return 0;
+    if (request->action == ASTRA_GUI_WINDOW_MENU_OPEN)
+        return request->width == 0u && request->height == 0u &&
+               request->title_length == 0u && request->flags != 0u &&
+               request->x < content_width && request->y < content_height;
+    if (request->action == ASTRA_GUI_WINDOW_MENU_CLOSE)
+        return frame_zero && request->title_length == 0u && request->flags != 0u;
     if (request->action == ASTRA_GUI_WINDOW_SET_POINTER_GRAB)
         return request->title_length == 0u &&
                (request->flags & ~ASTRA_WINDOW_POINTER_GRAB_ALL) == 0u &&
@@ -3118,7 +3364,7 @@ static void state_reply(AstraGuiWindowState *reply, uint32_t transaction,
     reply->z_order = z_order;
 }
 
-static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
+static uint32_t apply_window_command(DisplayState *state, const AstraTheme *theme,
                               const AstraGuiWindowCommand *command,
                               DisplayWindow *closed, int *changed)
 {
@@ -3138,10 +3384,19 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
         command->action != ASTRA_GUI_WINDOW_SET_EVENT_MASK &&
         command->action != ASTRA_GUI_WINDOW_SET_POINTER_SHAPE &&
         command->action != ASTRA_GUI_WINDOW_SET_POINTER_IMAGE &&
+        command->action != ASTRA_GUI_WINDOW_MENU_OPEN &&
+        command->action != ASTRA_GUI_WINDOW_MENU_CLOSE &&
         command->action != ASTRA_GUI_WINDOW_CLOSE)
         return ASTRA_STATUS_UNSUPPORTED;
     switch (command->action) {
     case ASTRA_GUI_WINDOW_QUERY:
+    case ASTRA_GUI_WINDOW_MENU_OPEN:
+        return ASTRA_STATUS_OK;
+    case ASTRA_GUI_WINDOW_MENU_CLOSE:
+        if (state->menu_owner != window->id || state->menu_request != command->flags)
+            return ASTRA_STATUS_OK;
+        menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+        *changed = 1;
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_SET_FRAME:
         if (window->state == ASTRA_WINDOW_STATE_FULLSCREEN ||
@@ -3198,12 +3453,19 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
         *changed = 1;
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_RAISE:
+        index = modal_window(state, index);
         if (index != state->count - 1u) {
             reorder(state, theme, index, state->count - 1u);
             *changed = 1;
         }
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_LOWER:
+        if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u &&
+            window->state != ASTRA_WINDOW_STATE_MINIMIZED)
+            for (uint32_t at = 0u; at < state->count; ++at)
+                if (at != index && state->windows[at].session == window->session &&
+                    state->windows[at].state != ASTRA_WINDOW_STATE_MINIMIZED)
+                    return ASTRA_STATUS_BUSY;
         if (index != 0u) {
             uint32_t was_active = window->request.flags & ASTRA_WINDOW_ACTIVE;
 
@@ -3215,10 +3477,7 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_ACTIVATE:
         if (window->state == ASTRA_WINDOW_STATE_MINIMIZED) {
-            window->state = window->restore_state;
-            dirty_cache(window);
-            next_generation(window);
-            damage_window(state, theme, window);
+            window = restore_minimized_window(state, theme, index);
             *changed = 1;
         }
         *changed |= activate(state, theme, window->id, 1, 0u);
@@ -3247,6 +3506,7 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
         if ((window->request.flags & ASTRA_WINDOW_RESIZABLE) == 0u)
             return ASTRA_STATUS_UNSUPPORTED;
         {
+            int was_minimized = window->state == ASTRA_WINDOW_STATE_MINIMIZED;
             uint8_t restored_state =
                 window->state == ASTRA_WINDOW_STATE_MINIMIZED ?
                     window->restore_state : window->state;
@@ -3254,7 +3514,7 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
             uint16_t width;
             uint16_t height;
 
-            if (restored_state == ASTRA_WINDOW_STATE_MAXIMIZED)
+            if (restored_state == ASTRA_WINDOW_STATE_MAXIMIZED && !was_minimized)
                 return ASTRA_STATUS_OK;
             if (restored_state == ASTRA_WINDOW_STATE_FULLSCREEN)
                 return ASTRA_STATUS_INVALID;
@@ -3277,14 +3537,15 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
             next_generation(window);
             damage_window(state, theme, window);
             *changed = 1;
+            if (was_minimized)
+                window = raise_revealed_modal(state, theme, index);
         }
+        if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u)
+            *changed |= activate(state, theme, window->id, 1, 0u);
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_RESTORE:
         if (window->state == ASTRA_WINDOW_STATE_MINIMIZED) {
-            window->state = window->restore_state;
-            dirty_cache(window);
-            next_generation(window);
-            damage_window(state, theme, window);
+            window = restore_minimized_window(state, theme, index);
             *changed = 1;
         } else if (window->state == ASTRA_WINDOW_STATE_FULLSCREEN) {
             DisplayWindow source = *window;
@@ -3328,6 +3589,9 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
             damage_window(state, theme, window);
             *changed = 1;
         }
+        if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u &&
+            window->state != ASTRA_WINDOW_STATE_MINIMIZED)
+            *changed |= activate(state, theme, window->id, 1, 0u);
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_FULLSCREEN:
         /* Only an application's own window may take the whole display. */
@@ -3434,6 +3698,10 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
         if ((command->flags & ASTRA_WINDOW_POINTER_LOCK) != 0u &&
             state->pointer_locks++ == 0u)
             (void)astra_log("display: a window locks the pointer");
+        if (state->menu_owner == window->id && command->flags != 0u) {
+            menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+            *changed = 1;
+        }
         window->pointer_grab = command->flags;
         window->pointer_grab_rect = (AstraWindowFrame){
             command->x, command->y, command->width, command->height };
@@ -3467,26 +3735,55 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
     }
 }
 
-static uint32_t pointer_target(DisplayState *state, const AstraTheme *theme,
-                               uint32_t *region)
+static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
+                              const AstraGuiWindowCommand *command,
+                              DisplayWindow *closed, int *changed)
 {
-    uint32_t index;
+    uint32_t status = apply_window_command(state, theme, command, closed, changed);
+
+    if (status == ASTRA_STATUS_OK && *changed && state->menu_owner == command->window &&
+        command->action != ASTRA_GUI_WINDOW_PRESENT &&
+        command->action != ASTRA_GUI_WINDOW_SET_APPLICATION_NAME &&
+        command->action != ASTRA_GUI_WINDOW_SET_TITLE &&
+        command->action != ASTRA_GUI_WINDOW_MENU_OPEN &&
+        command->action != ASTRA_GUI_WINDOW_MENU_CLOSE)
+        menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+    return status;
+}
+
+static uint32_t pointer_target(DisplayState *state, const AstraTheme *theme,
+                               uint32_t *region, uint32_t *blocked)
+{
+    uint32_t index = state->count;
+
+    if (blocked != NULL) *blocked = state->count;
 
     if (state->capture_window != 0u) {
         index = find_id(state, state->capture_window);
         if (index != state->count) {
             *region = state->capture_region;
-            return index;
+        } else {
+            state->capture_window = 0u;
+            state->capture_region = HIT_NONE;
         }
-        state->capture_window = 0u;
-        state->capture_region = HIT_NONE;
     }
-    index = grab_target(state);
+    if (index == state->count) {
+        index = grab_target(state);
+        if (index != state->count)
+            *region = HIT_CONTENT;
+        else
+            index = hit_test(state, theme, state->pointer_x, state->pointer_y, region);
+    }
     if (index != state->count) {
-        *region = HIT_CONTENT;
-        return index;
+        uint32_t modal = modal_window(state, index);
+
+        if (modal != index) {
+            if (blocked != NULL) *blocked = modal;
+            *region = HIT_NONE;
+            return state->count;
+        }
     }
-    return hit_test(state, theme, state->pointer_x, state->pointer_y, region);
+    return index;
 }
 
 static uint32_t display_pointer_shape(DisplayState *state,
@@ -3495,10 +3792,9 @@ static uint32_t display_pointer_shape(DisplayState *state,
     uint32_t region = HIT_NONE;
     uint32_t index;
 
-    if (point_in_bounds(state->pointer_x, state->pointer_y,
-                        overlay_bounds(state->overlay)))
+    if (state->overlay != DISPLAY_OVERLAY_NONE)
         return ASTRA_POINTER_SHAPE_DEFAULT;
-    index = pointer_target(state, theme, &region);
+    index = pointer_target(state, theme, &region, NULL);
 
     if (index == state->count)
         return ASTRA_POINTER_SHAPE_DEFAULT;
@@ -3521,7 +3817,7 @@ static uint32_t prepare_pointer_image(
     uint32_t *armed)
 {
     uint32_t region = HIT_NONE;
-    uint32_t index = pointer_target(state, theme, &region);
+    uint32_t index = pointer_target(state, theme, &region, NULL);
     DisplayWindow *window;
 
     if (index == state->count || region != HIT_CONTENT ||
@@ -3629,6 +3925,63 @@ static void toggle_fullscreen(DisplayState *state, const AstraTheme *theme,
     *frame_timestamp = input->timestamp_ms;
 }
 
+static uint32_t menu_input(DisplayState *state, const AstraLogicalInputEvent *input,
+                            uint32_t *effects)
+{
+    AstraWindowEvent event = {.size = sizeof(event), .version = ASTRA_WINDOW_EVENT_VERSION,
+        .timestamp_ms = input->timestamp_ms};
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraMenuState before, after;
+
+    if (astra_interface_menu_get_state(&state->menu, &before) != ASTRA_OK)
+        return ASTRA_STATUS_INVALID;
+    if ((input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u) event.flags |= ASTRA_WINDOW_EVENT_DOWN;
+    if ((input->flags & ASTRA_INPUT_LOGICAL_REPEAT) != 0u) event.flags |= ASTRA_WINDOW_EVENT_REPEAT;
+    if ((input->flags & ASTRA_INPUT_LOGICAL_SYNTHETIC) != 0u) event.flags |= ASTRA_WINDOW_EVENT_SYNTHETIC;
+    if (input->type == ASTRA_INPUT_EVENT_KEY) {
+        event = logical_key_event(input);
+        event.size = sizeof(event);
+        event.version = ASTRA_WINDOW_EVENT_VERSION;
+    } else if (input->type == ASTRA_INPUT_EVENT_POINTER_MOTION) {
+        state->pointer_x = input->value_x;
+        state->pointer_y = input->value_y;
+        event.type = ASTRA_WINDOW_EVENT_POINTER_MOTION;
+        event.data.pointer.screen_x = state->pointer_x;
+        event.data.pointer.screen_y = state->pointer_y;
+        *effects |= DISPLAY_POINTER_CURSOR;
+    } else if (input->type == ASTRA_INPUT_EVENT_POINTER_BUTTON) {
+        if (input->code >= ASTRA_INPUT_BUTTON_WHEEL_UP && input->code <= ASTRA_INPUT_BUTTON_WHEEL_RIGHT) {
+            if ((event.flags & ASTRA_WINDOW_EVENT_DOWN) == 0u) return ASTRA_STATUS_OK;
+            event.type = ASTRA_WINDOW_EVENT_POINTER_WHEEL;
+            event.data.wheel.delta_y = input->code == ASTRA_INPUT_BUTTON_WHEEL_UP ? 1 :
+                                      input->code == ASTRA_INPUT_BUTTON_WHEEL_DOWN ? -1 : 0;
+        } else {
+            event.type = ASTRA_WINDOW_EVENT_POINTER_BUTTON;
+            event.data.pointer.screen_x = state->pointer_x;
+            event.data.pointer.screen_y = state->pointer_y;
+            event.data.pointer.button = input->code;
+        }
+    } else return ASTRA_STATUS_OK;
+    if (event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
+        input->code >= ASTRA_INPUT_BUTTON_LEFT && input->code <= ASTRA_INPUT_BUTTON_RIGHT) {
+        uint8_t bit = (uint8_t)(1u << (input->code - 1u));
+        if ((event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u) state->swallow_pointer_up |= bit;
+        else state->swallow_pointer_up &= (uint8_t)~bit;
+    }
+    if (astra_interface_menu_handle_event(&state->menu, &event, &action) != ASTRA_OK ||
+        astra_interface_menu_get_state(&state->menu, &after) != ASTRA_OK)
+        return ASTRA_STATUS_INVALID;
+    if (action.type == ASTRA_UI_ACTION_ACTIVATE || action.type == ASTRA_UI_ACTION_DISMISS) {
+        menu_end(state, action.type == ASTRA_UI_ACTION_ACTIVATE ? action.control_id : 0u,
+                 input->timestamp_ms, ASTRA_STATUS_OK);
+        *effects |= DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR;
+    } else if (after.revision != before.revision) {
+        damage_both(state, overlay_bounds(state));
+        *effects |= DISPLAY_POINTER_RENDER;
+    }
+    return ASTRA_STATUS_OK;
+}
+
 static uint32_t handle_pointer(DisplayState *state,
                                const AstraLogicalInputEvent *input,
                                uint32_t *effects, uint32_t *frame_window,
@@ -3644,34 +3997,55 @@ static uint32_t handle_pointer(DisplayState *state,
         if (input->type == ASTRA_INPUT_EVENT_TEXT &&
             !astra_unicode_scalar_valid(input->code))
             return ASTRA_STATUS_INVALID;
-        if (state->overlay != DISPLAY_OVERLAY_NONE) {
-            if (input->type == ASTRA_INPUT_EVENT_KEY &&
-                input->code == 0x29u && /* USB HID Escape */
-                (input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u) {
-                set_overlay(state, DISPLAY_OVERLAY_NONE);
-                *effects |= DISPLAY_POINTER_RENDER;
+        if (input->type == ASTRA_INPUT_EVENT_KEY && input->code < 256u) {
+            uint32_t word = input->code >> 5;
+            uint32_t bit = UINT32_C(1) << (input->code & 31u);
+            int owned = (state->menu_keys[word] & bit) != 0u;
+            if ((input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u) {
+                state->menu_text_owned = owned || state->overlay != DISPLAY_OVERLAY_NONE;
+                if (state->menu_text_owned) state->menu_keys[word] |= bit;
+            } else {
+                state->menu_keys[word] &= ~bit;
+                state->menu_text_owned = 0u;
+                /* A modifier pressed before opening still releases in its owner. */
+                if (!owned && state->overlay != DISPLAY_OVERLAY_NONE) {
+                    index = keyboard_window(state);
+                    if (index != state->count) {
+                        AstraWindowEvent release = logical_key_event(input);
+                        /* A full owner queue loses state; it cannot stall the popup. */
+                        (void)send_event(&state->windows[index], &release);
+                    }
+                    return ASTRA_STATUS_OK;
+                }
             }
-            return ASTRA_STATUS_OK;
+            if (owned && state->overlay == DISPLAY_OVERLAY_NONE) return ASTRA_STATUS_OK;
         }
+        /* The normalized emitter sends text immediately after its key down. */
+        if (input->type == ASTRA_INPUT_EVENT_TEXT && state->menu_text_owned != 0u)
+            return ASTRA_STATUS_OK;
+        if (state->overlay != DISPLAY_OVERLAY_NONE)
+            return menu_input(state, input, effects);
         if (fullscreen_chord(input)) {
             if ((input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u)
                 toggle_fullscreen(state, &theme, input, effects,
                                   frame_window, frame_timestamp);
             return ASTRA_STATUS_OK;
         }
-        index = active_window(state);
+        index = keyboard_window(state);
         if (index != state->count)
             key_event(state, &state->windows[index], input);
         return ASTRA_STATUS_OK;
     }
     if (input->type == ASTRA_INPUT_EVENT_STATE_RESET) {
         *effects |= DISPLAY_POINTER_CURSOR;
-        index = active_window(state);
+        index = keyboard_window(state);
         if (state->overlay != DISPLAY_OVERLAY_NONE) {
             set_overlay(state, DISPLAY_OVERLAY_NONE);
             *effects |= DISPLAY_POINTER_RENDER;
         }
         state->swallow_pointer_up = 0u;
+        memset(state->menu_keys, 0, sizeof(state->menu_keys));
+        state->menu_text_owned = 0u;
         state->capture_window = 0u;
         state->capture_region = HIT_NONE;
         changed = update_hover(state, &theme, 0u, HIT_NONE);
@@ -3692,28 +4066,9 @@ static uint32_t handle_pointer(DisplayState *state,
     if (input->type == ASTRA_INPUT_EVENT_POINTER_MOTION) {
         state->pointer_x = input->value_x;
         state->pointer_y = input->value_y;
-        if (point_in_bounds(state->pointer_x, state->pointer_y,
-                            overlay_bounds(state->overlay))) {
-            if (state->overlay == DISPLAY_OVERLAY_MENU) {
-                uint8_t hover = menu_item_at(state->pointer_x,
-                                               state->pointer_y);
-
-                if (state->overlay_hover != hover) {
-                    state->overlay_hover = hover;
-                    damage_both(state, overlay_bounds(state->overlay));
-                    *effects |= DISPLAY_POINTER_RENDER;
-                }
-            }
-            *effects |= DISPLAY_POINTER_CURSOR;
-            return ASTRA_STATUS_OK;
-        }
-        if (state->overlay == DISPLAY_OVERLAY_MENU &&
-            state->overlay_hover != 0u) {
-            state->overlay_hover = 0u;
-            damage_both(state, overlay_bounds(state->overlay));
-            *effects |= DISPLAY_POINTER_RENDER;
-        }
-        index = pointer_target(state, &theme, &region);
+        if (state->overlay != DISPLAY_OVERLAY_NONE)
+            return menu_input(state, input, effects);
+        index = pointer_target(state, &theme, &region, NULL);
         if (index != state->count) {
             DisplayWindow *window = &state->windows[index];
 
@@ -3763,62 +4118,43 @@ static uint32_t handle_pointer(DisplayState *state,
     if (input->type != ASTRA_INPUT_EVENT_POINTER_BUTTON)
         return ASTRA_STATUS_OK;
 
-    if (state->overlay != DISPLAY_OVERLAY_NONE &&
-        input->code >= ASTRA_INPUT_BUTTON_WHEEL_UP &&
-        input->code <= ASTRA_INPUT_BUTTON_WHEEL_RIGHT)
-        return ASTRA_STATUS_OK;
-    if (input->code == ASTRA_INPUT_BUTTON_LEFT &&
+    if (state->overlay == DISPLAY_OVERLAY_NONE &&
+        input->code >= ASTRA_INPUT_BUTTON_LEFT && input->code <= ASTRA_INPUT_BUTTON_RIGHT &&
         (input->flags & ASTRA_INPUT_LOGICAL_DOWN) == 0u &&
-        state->swallow_pointer_up != 0u) {
-        state->swallow_pointer_up = 0u;
+        (state->swallow_pointer_up & (1u << (input->code - 1u))) != 0u) {
+        state->swallow_pointer_up &= (uint8_t)~(1u << (input->code - 1u));
         return ASTRA_STATUS_OK;
     }
-    if (state->overlay != DISPLAY_OVERLAY_NONE &&
-        input->code != ASTRA_INPUT_BUTTON_LEFT)
-        return ASTRA_STATUS_OK;
     if (input->code == ASTRA_INPUT_BUTTON_LEFT &&
         (input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u &&
-        state->capture_window == 0u && grab_target(state) == state->count) {
-        uint8_t previous_overlay = state->overlay;
-
-        if (point_in_bounds(state->pointer_x, state->pointer_y,
-                            (DamageRect){DISPLAY_MENU_X, 5,
-                                         DISPLAY_MENU_TRIGGER_RIGHT, 29, 1u})) {
-            set_overlay(state, state->overlay == DISPLAY_OVERLAY_MENU ?
-                        DISPLAY_OVERLAY_NONE : DISPLAY_OVERLAY_MENU);
-        } else if (state->overlay == DISPLAY_OVERLAY_MENU) {
-            uint8_t menu_item = menu_item_at(state->pointer_x,
-                                              state->pointer_y);
-
-            if (menu_item != 0u) {
-                for (uint32_t at = 0u; at < state->count; ++at)
-                    if (state->windows[at].request.type ==
-                        ASTRA_WINDOW_DESKTOP) {
-                        AstraWindowEvent event = {
-                            .type = ASTRA_WINDOW_EVENT_SYSTEM_ACTION,
-                            .timestamp_ms = input->timestamp_ms,
-                        };
-
-                        event.data.system_action.action =
-                            menu_item == 1u ? ASTRA_SYSTEM_ACTION_ABOUT :
-                            menu_item == 2u ? ASTRA_SYSTEM_ACTION_RESTART :
-                                              ASTRA_SYSTEM_ACTION_SHUTDOWN;
-                        (void)send_event(&state->windows[at], &event);
-                        break;
-                    }
-            }
-            set_overlay(state, DISPLAY_OVERLAY_NONE);
+        state->capture_window == 0u && grab_target(state) == state->count &&
+        point_in_bounds(state->pointer_x, state->pointer_y,
+            (DamageRect){DISPLAY_MENU_X, 5, DISPLAY_MENU_TRIGGER_RIGHT, 29, 1u}) &&
+        (state->overlay == DISPLAY_OVERLAY_NONE || state->menu_owner == 0u)) {
+        if (state->overlay != DISPLAY_OVERLAY_NONE) {
+            menu_end(state, 0u, input->timestamp_ms, ASTRA_STATUS_OK);
+            state->swallow_pointer_up |= 1u;
         } else {
-            goto window_pointer_button;
+            set_overlay(state, DISPLAY_OVERLAY_MENU);
+            if (state->overlay != DISPLAY_OVERLAY_NONE) state->swallow_pointer_up |= 1u;
         }
-        state->swallow_pointer_up = 1u;
-        if (state->overlay != previous_overlay)
-            *effects |= DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR;
+        *effects |= DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR;
         return ASTRA_STATUS_OK;
     }
-window_pointer_button:
+    if (state->overlay != DISPLAY_OVERLAY_NONE)
+        return menu_input(state, input, effects);
 
-    index = pointer_target(state, &theme, &region);
+    uint32_t blocked = state->count;
+    index = pointer_target(state, &theme, &region, &blocked);
+    if (blocked != state->count) {
+        if ((input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u &&
+            input->code >= ASTRA_INPUT_BUTTON_LEFT && input->code <= ASTRA_INPUT_BUTTON_RIGHT) {
+            state->swallow_pointer_up |= (uint8_t)(1u << (input->code - 1u));
+            if (activate(state, &theme, state->windows[blocked].id, 1, input->timestamp_ms))
+                *effects |= DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR;
+        }
+        return ASTRA_STATUS_OK;
+    }
     if (input->code >= ASTRA_INPUT_BUTTON_WHEEL_UP &&
         input->code <= ASTRA_INPUT_BUTTON_WHEEL_RIGHT) {
         if ((input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u &&
@@ -3843,6 +4179,10 @@ window_pointer_button:
         id = state->windows[index].id;
         click_count = register_click(state, id, input->code,
                                      input->timestamp_ms);
+        if (input->code == ASTRA_INPUT_BUTTON_RIGHT && region == HIT_CONTENT) {
+            changed |= activate(state, &theme, id, 1, input->timestamp_ms);
+            index = find_id(state, id);
+        }
         if (input->code == ASTRA_INPUT_BUTTON_LEFT) {
             changed |= activate(state, &theme, id, 1,
                                 input->timestamp_ms);
@@ -4006,6 +4346,7 @@ static uint32_t reply_open(uint32_t handle, uint32_t transaction,
 
 static void close_window(DisplayWindow *window)
 {
+    display_font_set_close(&window->fonts);
     if (window->control_receive != 0u)
         (void)astra_close(window->control_receive);
     if (window->event_send != 0u)
@@ -4026,17 +4367,16 @@ static void close_window(DisplayWindow *window)
     *window = (DisplayWindow){0};
 }
 
-static int valid_session_request(const AstraGuiSessionRequest *request,
-                                 uint32_t size, uint32_t operation)
+static int valid_session_request(const AstraMessageHeader *header,
+                                 uint32_t size, uint32_t expected,
+                                 uint32_t operation)
 {
-    return size == sizeof(*request) &&
-           request->header.total_size == sizeof(*request) &&
-           request->header.header_size == ASTRA_MESSAGE_HEADER_SIZE &&
-           request->header.flags == 0u &&
-           request->header.protocol == ASTRA_GUI_PROTOCOL &&
-           request->header.protocol_version == ASTRA_GUI_VERSION &&
-           request->header.reserved == 0u &&
-           request->header.operation == operation;
+    return size == expected && header->total_size == expected &&
+           header->header_size == ASTRA_MESSAGE_HEADER_SIZE &&
+           header->flags == 0u && header->protocol == ASTRA_GUI_PROTOCOL &&
+           header->protocol_version == ASTRA_GUI_VERSION &&
+           header->reserved == 0u && header->transaction_id != 0u &&
+           header->operation == operation;
 }
 
 static int valid_open_session(const AstraGuiOpenSession *request,
@@ -4055,6 +4395,178 @@ static int valid_open_session(const AstraGuiOpenSession *request,
            request->name_length <= ASTRA_WINDOW_TITLE_MAX &&
            astra_utf8_validate(request->name, request->name_length, 0u) &&
            request->icon_length <= ASTRA_WINDOW_TITLE_ICON_BYTES_MAX;
+}
+
+static DisplayFontContext *session_font_context(DisplayState *state,
+                                                uint32_t session)
+{
+    if (session == 0u) return &state->shared_font_context;
+    for (uint32_t at = 0u; at < state->session_count; ++at)
+        if (state->sessions[at].id == session) return &state->sessions[at].fonts;
+    return NULL;
+}
+
+static void font_measure_reply(DisplayState *state,
+    const AstraGuiFontMeasureRequest *request, uint32_t reply)
+{
+    AstraGuiFontMeasureReply message = {0};
+    DisplayFontFace *face = NULL;
+    const char *end = memchr(request->face_id, '\0', sizeof(request->face_id));
+
+    astra_message_header_set(&message.header, sizeof(message),
+        ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_MEASURE_REPLY,
+        request->header.transaction_id);
+    message.status = ASTRA_STATUS_INVALID;
+    if (end != NULL && end != request->face_id &&
+        request->reserved16 == 0u && request->pixel_height != 0u &&
+        request->text_length <= sizeof(request->text) &&
+        astra_utf8_validate(request->text, request->text_length, 0u)) {
+        message.status = astra_status_from_result(display_font_acquire(
+            state->fonts, request->face_id,
+            (uint32_t)(end - request->face_id), &face));
+        if (message.status == ASTRA_STATUS_OK) {
+            AstraRenderBuilder builder = {.ui_font = &face->render};
+
+            if (!astra_render_builder_text_measure(&builder, request->text,
+                    request->text_length, request->pixel_height, 0u,
+                    request->maximum_advance, &message.advance,
+                    &message.fitted_bytes, &message.line_height))
+                message.status = ASTRA_STATUS_UNSUPPORTED;
+        }
+    }
+    display_font_release(face);
+    (void)astra_port_send(reply, &message, sizeof(message), NULL, 0u);
+}
+
+static void font_context_reply(DisplayState *state, uint32_t session,
+                                const AstraGuiFontContextRequest *request,
+                                uint32_t reply)
+{
+    AstraGuiFontContext message = {0};
+    DisplayFontContext *context_font = session_font_context(state, session);
+    DisplayFontFace *next = NULL;
+    uint32_t area = 0u;
+
+    astra_message_header_set(&message.header, sizeof(message),
+        ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_FONT_CONTEXT_REPLY,
+        request->header.transaction_id);
+    message.status = context_font == NULL ? ASTRA_STATUS_BAD_HANDLE : ASTRA_STATUS_OK;
+    if (message.status == ASTRA_STATUS_OK && request->window != 0u) {
+        uint32_t at = find_id(state, request->window);
+        if (at == state->count || state->windows[at].session != session)
+            message.status = ASTRA_STATUS_BAD_HANDLE;
+    }
+    const char *end = memchr(request->adopted_id, '\0', sizeof(request->adopted_id));
+    if (end == NULL) message.status = ASTRA_STATUS_PROTOCOL;
+    if (message.status == ASTRA_STATUS_OK) {
+        display_font_context_confirm(context_font, request->adopted_id,
+                                      (uint32_t)(end - request->adopted_id));
+        const char *active_id = state->ui_font == NULL ? "" : state->ui_font->id;
+        if (strcmp(request->adopted_id, active_id) == 0)
+            for (uint32_t at = 0u; at < state->count; ++at) {
+                DisplayWindow *window = &state->windows[at];
+                if (window->session != session || window->id != request->window ||
+                    window->pending_font == 0u) continue;
+                window->pending_font = 0u;
+                char storage[192];
+                AstraString line;
+                astra_string_init(&line, storage, sizeof(storage));
+                if (astra_string_append(&line, "display font adopted: ") &&
+                    (window->request.type == ASTRA_WINDOW_DESKTOP ?
+                        astra_string_append(&line, "Desktop") :
+                        window->application_name_length != 0u ?
+                            astra_string_append_bytes(&line, window->application_name,
+                                window->application_name_length) :
+                            astra_string_append(&line, "Window")) &&
+                    astra_string_append(&line, " -> ") &&
+                    astra_string_append(&line, active_id))
+                    (void)astra_log(line.text);
+            }
+    }
+    if (message.status == ASTRA_STATUS_OK && state->ui_font != NULL) {
+        if (display_font_retain(state->ui_font)) next = state->ui_font;
+        else message.status = ASTRA_STATUS_LIMIT;
+    }
+    if (next != NULL) {
+        message.status = service_status(
+                astra_rt_handle_duplicate(state->ui_font->area.handle,
+                    ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
+                    &area));
+        if (message.status == ASTRA_STATUS_OK) {
+            message.area_size = state->ui_font->bytes;
+            memcpy(message.face_id, state->ui_font->id,
+                   strlen(state->ui_font->id) + 1u);
+        }
+    }
+    if (astra_port_send(reply, &message, sizeof(message),
+        area == 0u ? NULL : &area, area == 0u ? 0u : 1u) == ASTRA_SYSCALL_OK) {
+        if (message.status == ASTRA_STATUS_OK) {
+            context_font->pending = next;
+            context_font->active = 1u;
+            next = NULL;
+        }
+    } else if (area != 0u) (void)astra_close(area);
+    display_font_release(next);
+}
+
+static AstraResult use_display_font(DisplayFontFace *font)
+{
+    return astra_fonts_use_borrowed(font->area.address, font->bytes, font->id);
+}
+
+static void notify_font_changes(DisplayState *state)
+{
+    state->font_notifications = 0u;
+    for (uint32_t at = 0u; at < state->count; ++at) {
+        DisplayWindow *window = &state->windows[at];
+        if (window->pending_font == 0u) continue;
+        AstraWindowEvent event = {.type = ASTRA_WINDOW_EVENT_FONT_CHANGED};
+        AstraGuiWindowEvent message;
+        event.data.font_changed.generation = window->pending_font;
+        event.data.font_changed.window = window->id;
+        /* A retained state notice can retry without declaring input lost. */
+        if (prepare_event(window, &event, &message))
+            (void)deliver_event(window, &message, 0);
+        state->font_notifications = 1u;
+    }
+    state->font_notify_at = astra_clock_monotonic() + UINT64_C(250000000);
+}
+
+static AstraResult refresh_system_font(DisplayState *state)
+{
+    AstraFontsCatalog catalog = ASTRA_FONTS_CATALOG_INIT;
+    DisplayFontFace *next = NULL;
+    AstraResult result = astra_fonts_catalog_open(state->font_catalog, &catalog);
+    if (result != ASTRA_OK) return result;
+    uint32_t generation = catalog.generation;
+    result = display_font_acquire(state->fonts, catalog.selected_id,
+        (uint32_t)strlen(catalog.selected_id), &next);
+    AstraResult closed = astra_fonts_catalog_close(&catalog);
+    if (closed != ASTRA_OK)
+        (void)astra_log_failure("display font catalog close", (uint32_t)closed);
+    if (result != ASTRA_OK) return result;
+    if (next != state->ui_font) result = use_display_font(next);
+    if (result != ASTRA_OK) {
+        display_font_release(next);
+        return result;
+    }
+    DisplayFontFace *previous = state->ui_font;
+    state->ui_font = next;
+    state->font_generation = generation;
+    display_font_release(previous);
+    menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+    state->system_initialized = 0u;
+    state->launch_drawn = 0u;
+    for (uint32_t at = 0u; at < state->count; ++at) {
+        DisplayWindow *window = &state->windows[at];
+        DisplayFontContext *context = session_font_context(state, window->session);
+        dirty_cache(window);
+        if (context != NULL && context->active)
+            window->pending_font = generation;
+    }
+    damage_both(state, (DamageRect){0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u});
+    notify_font_changes(state);
+    return ASTRA_OK;
 }
 
 /* A named session is an application being launched: it takes the launch
@@ -4102,7 +4614,7 @@ static void open_session(DisplayState *state,
     uint32_t receive = 0u;
     uint32_t send = 0u;
     uint32_t status = state->count + state->session_count >=
-                              ASTRA_WAIT_MULTIPLE_MAX - 3u ?
+                              ASTRA_WAIT_MULTIPLE_MAX - 4u ?
         ASTRA_STATUS_LIMIT : ASTRA_STATUS_OK;
 
     if (status == ASTRA_STATUS_OK)
@@ -4124,8 +4636,8 @@ static void open_session(DisplayState *state,
             ASTRA_SYSCALL_OK &&
         status == ASTRA_STATUS_OK) {
         send = 0u;
-        state->session_receive[state->session_count] = receive;
-        state->session_id[state->session_count++] = message.session;
+        state->sessions[state->session_count++] = (DisplaySession){
+            .receive = receive, .id = message.session};
         receive = 0u;
         if (request->name_length != 0u)
             begin_launch(state, request, message.session, icon_area);
@@ -4140,14 +4652,14 @@ static void open_session(DisplayState *state,
    ports; nothing here outlives them. */
 static void close_session(DisplayState *state, uint32_t index)
 {
-    if (state->session_id[index] == state->launch.session)
+    if (state->sessions[index].id == state->launch.session)
         end_launch(state);
-    (void)astra_close(state->session_receive[index]);
-    for (uint32_t at = index; at + 1u < state->session_count; ++at) {
-        state->session_receive[at] = state->session_receive[at + 1u];
-        state->session_id[at] = state->session_id[at + 1u];
-    }
+    (void)astra_close(state->sessions[index].receive);
+    display_font_context_close(&state->sessions[index].fonts);
+    for (uint32_t at = index; at + 1u < state->session_count; ++at)
+        state->sessions[at] = state->sessions[at + 1u];
     --state->session_count;
+    state->sessions[state->session_count] = (DisplaySession){0};
 }
 
 /* An application opened again while it runs: its windows come back and
@@ -4212,6 +4724,10 @@ static void receive_open(uint32_t device, uint32_t irq,
                          uint32_t *armed)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    union {
+        AstraGuiOpenWindow open;
+        AstraGuiFontMeasureRequest measure;
+    } packet = {0};
     AstraGuiOpenWindow request = {0};
     DisplayWindow candidate = {0};
     uint32_t handles[ASTRA_MESSAGE_HANDLES_MAX] = {0};
@@ -4220,7 +4736,7 @@ static void receive_open(uint32_t device, uint32_t irq,
     uint32_t control_send = 0u;
     uint32_t vblank_wait = 0u;
     uint32_t status = astra_port_receive(
-        gui_receive, &request, sizeof(request), handles,
+        gui_receive, &packet, sizeof(packet), handles,
         ASTRA_MESSAGE_HANDLES_MAX, &size, &handle_count);
     int added = 0;
 
@@ -4228,7 +4744,7 @@ static void receive_open(uint32_t device, uint32_t irq,
         int launching = session == state->launch.session;
 
         for (uint32_t index = 0u; index < state->session_count; ++index)
-            if (state->session_id[index] == session) {
+            if (state->sessions[index].id == session) {
                 close_session(state, index);
                 break;
             }
@@ -4244,6 +4760,15 @@ static void receive_open(uint32_t device, uint32_t irq,
     }
     if (status != ASTRA_SYSCALL_OK)
         return;
+    if (size == sizeof(AstraGuiFontMeasureRequest)) {
+        if (handle_count == 1u && valid_session_request(&packet.measure.header,
+                size, sizeof(packet.measure), ASTRA_GUI_FONT_MEASURE))
+            font_measure_reply(state, &packet.measure, handles[0]);
+        for (uint32_t index = 0u; index < handle_count; ++index)
+            if (handles[index] != 0u) (void)astra_close(handles[index]);
+        return;
+    }
+    memcpy(&request, &packet.open, sizeof(request));
     if (size == sizeof(AstraGuiOpenSession)) {
         const AstraGuiOpenSession *message =
             (const AstraGuiOpenSession *)(const void *)&request;
@@ -4265,12 +4790,21 @@ static void receive_open(uint32_t device, uint32_t irq,
                 (void)astra_close(handles[index]);
         return;
     }
+    if (size == sizeof(AstraGuiFontContextRequest)) {
+        const AstraGuiFontContextRequest *message =
+            (const AstraGuiFontContextRequest *)(const void *)&request;
+        if (handle_count == 1u && valid_session_request(&message->header,
+                size, sizeof(*message), ASTRA_GUI_FONT_CONTEXT))
+            font_context_reply(state, session, message, handles[0]);
+        for (uint32_t index = 0u; index < handle_count; ++index)
+            if (handles[index] != 0u) (void)astra_close(handles[index]);
+        return;
+    }
     if (size == sizeof(AstraGuiSessionRequest)) {
         const AstraGuiSessionRequest *message =
             (const AstraGuiSessionRequest *)(const void *)&request;
-
         if (handle_count == 0u && session != 0u &&
-            valid_session_request(message, size,
+            valid_session_request(&message->header, size, sizeof(*message),
                                   ASTRA_GUI_SESSION_ACTIVATE))
             activate_session(device, irq, framebuffer, pointer_buffer,
                              state, session, next_fence, cursor_fence,
@@ -4284,7 +4818,7 @@ static void receive_open(uint32_t device, uint32_t irq,
              (request.type != ASTRA_WINDOW_DESKTOP || state->count == 0u) ?
         ASTRA_STATUS_OK : DISPLAY_FAIL_PROTOCOL;
     if (status == ASTRA_STATUS_OK &&
-        state->count + state->session_count >= ASTRA_WAIT_MULTIPLE_MAX - 3u)
+        state->count + state->session_count >= ASTRA_WAIT_MULTIPLE_MAX - 4u)
         status = ASTRA_STATUS_LIMIT;
     if (status == ASTRA_STATUS_OK)
         status = display_windows_reserve(state, state->count + 1u);
@@ -4354,6 +4888,12 @@ static void receive_open(uint32_t device, uint32_t irq,
         candidate.id = allocate_id(state);
         candidate.generation = 1u;
         candidate.session = session;
+        DisplayFontContext *context = session_font_context(state, session);
+        if (context != NULL && context->active) {
+            candidate.pending_font = state->font_generation;
+            state->font_notifications = 1u;
+            state->font_notify_at = 0u;
+        }
         candidate.event_send = handles[1];
         handles[1] = 0u;
         init_content_banks(&candidate);
@@ -4363,7 +4903,7 @@ static void receive_open(uint32_t device, uint32_t irq,
         added = 1;
         candidate = (DisplayWindow){0};
         damage_window(state, &theme, &state->windows[state->count - 1u]);
-        if ((request.flags & ASTRA_WINDOW_ACTIVE) != 0u)
+        if ((request.flags & (ASTRA_WINDOW_ACTIVE | ASTRA_WINDOW_MODAL)) != 0u)
             activate(state, &theme, state->windows[state->count - 1u].id,
                      1, 0u);
         status = render_window_change(device, irq, framebuffer,
@@ -4451,8 +4991,9 @@ static uint32_t graphics_request(void *context, uint32_t operation,
 static uint32_t graphics_submit(void *context, uint32_t bytes,
                                 const DisplayGraphicsAttachment *attachment)
 {
+    /* Client staging may be rewritten as soon as its command returns. */
     return graphics_request(context, ASTRA_DISPLAY_FRAME_PRESENT_RENDER_BATCH,
-                            bytes, attachment, 0);
+                            bytes, attachment, attachment != NULL);
 }
 
 static uint32_t graphics_read(void *context, uint32_t bytes)
@@ -4489,6 +5030,8 @@ static uint32_t receive_graphics(uint32_t device, uint32_t irq,
         .submit = graphics_submit,
         .read = graphics_read,
         .storage = graphics_storage,
+        .fonts = state->fonts,
+        .ui_font = state->ui_font == NULL ? NULL : &state->ui_font->render,
         .content_offset = window->content_offset[window->content_back],
         .content_bytes = window->content_bytes,
         .content_pitch = window->content_pitch,
@@ -4648,6 +5191,10 @@ static void receive_command(uint32_t device, uint32_t irq,
     }
     if (status == ASTRA_STATUS_OK)
         status = apply_command(state, &theme, &command, &closed, &changed);
+    if (status == ASTRA_STATUS_OK && command.action == ASTRA_GUI_WINDOW_MENU_OPEN) {
+        status = menu_open(state, &theme, window_index, &command, handles[1]);
+        changed = status == ASTRA_STATUS_OK;
+    }
     if (status == ASTRA_STATUS_OK &&
         command.action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE) {
         DisplayWindow *window = &state->windows[window_index];
@@ -4717,7 +5264,9 @@ static void receive_command(uint32_t device, uint32_t irq,
             render_failure("display window-command render failed", status);
     }
     if (status == ASTRA_STATUS_OK && changed && closed.id == 0u &&
-        command.action != ASTRA_GUI_WINDOW_SET_APPLICATION_NAME) {
+        command.action != ASTRA_GUI_WINDOW_SET_APPLICATION_NAME &&
+        command.action != ASTRA_GUI_WINDOW_MENU_OPEN &&
+        command.action != ASTRA_GUI_WINDOW_MENU_CLOSE) {
         uint32_t current = find_id(state, id);
 
         if (current != state->count)
@@ -4979,6 +5528,7 @@ static uint32_t display_wait_handles(const DisplayState *state,
                                      uint32_t gui_receive,
                                      uint32_t input_receive,
                                      uint32_t vblank_irq,
+                                     uint32_t font_changed,
                                      uint32_t first,
                                      uint32_t *waits,
                                      uint32_t *sources)
@@ -4988,10 +5538,10 @@ static uint32_t display_wait_handles(const DisplayState *state,
         find_id(state, state->pending_input_window) : 0u;
 
     if (state == NULL || waits == NULL || sources == NULL ||
-        state->count > ASTRA_WAIT_MULTIPLE_MAX - 3u ||
-        state->session_count > ASTRA_WAIT_MULTIPLE_MAX - 3u - state->count)
+        state->count > ASTRA_WAIT_MULTIPLE_MAX - 4u ||
+        state->session_count > ASTRA_WAIT_MULTIPLE_MAX - 4u - state->count)
         return 0u;
-    count = state->count + state->session_count + 3u;
+    count = state->count + state->session_count + 4u;
 
     first %= count;
     for (uint32_t slot = 0u; slot < count; ++slot) {
@@ -5000,7 +5550,8 @@ static uint32_t display_wait_handles(const DisplayState *state,
         if (source >= count)
             source -= count;
         sources[slot] = source;
-        waits[slot] = source == 0u ? gui_receive :
+        waits[slot] = source == count - 1u ? font_changed :
+                      source == 0u ? gui_receive :
                       source == 1u && state->pending_input_valid != 0u &&
                                       pending != state->count ?
                           state->windows[pending].event_send :
@@ -5008,8 +5559,8 @@ static uint32_t display_wait_handles(const DisplayState *state,
                       source == 2u ? vblank_irq :
                       source - 3u < state->count ?
                           state->windows[source - 3u].control_receive :
-                          state->session_receive[source - 3u -
-                                                 state->count];
+                          state->sessions[source - 3u -
+                                          state->count].receive;
     }
     return count;
 }
@@ -5032,13 +5583,18 @@ static int display_wait_client_ended(const DisplayState *state,
 {
     if (status != ASTRA_SYSCALL_PEER_DEAD)
         return 0;
-    return source >= 3u ||
+    return (source >= 3u && source < state->count + state->session_count + 3u) ||
            (source == 1u && state->pending_input_valid != 0u);
 }
 
 static uint32_t signal_vblank(DisplayState *state)
 {
+    if (state->font_notifications && astra_clock_monotonic() >= state->font_notify_at)
+        notify_font_changes(state);
     for (uint32_t index = 0u; index < state->count; ++index) {
+        if (state->windows[index].pending_state != 0u)
+            state_event(&state->windows[index],
+                        state->windows[index].pending_state_timestamp_ms, index);
         if (state->windows[index].pending_close != 0u) {
             AstraWindowEvent event = {
                 .type = ASTRA_WINDOW_EVENT_CLOSE_REQUEST,
@@ -5046,6 +5602,10 @@ static uint32_t signal_vblank(DisplayState *state)
                     state->windows[index].pending_close_timestamp_ms,
             };
 
+            (void)send_event(&state->windows[index], &event);
+        }
+        if (state->windows[index].pending_menu.type != 0u) {
+            AstraWindowEvent event = state->windows[index].pending_menu;
             (void)send_event(&state->windows[index], &event);
         }
         if ((state->windows[index].request.event_mask &
@@ -5078,10 +5638,18 @@ static void serve_windows(uint32_t device, uint32_t irq,
                           AstraDmaBufferInfo *framebuffer,
                           AstraDmaBufferInfo *pointer_buffer,
                           uint32_t gui_receive, uint32_t input_receive,
-                          const volatile AstraInputPointerState *pointer)
+                          const volatile AstraInputPointerState *pointer,
+                          DisplayFontFace *ui_font,
+                          DisplayFontRegistry *fonts, AstraHandle font_catalog,
+                          uint32_t font_generation, uint32_t font_changed)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     DisplayState state = {
+        .ui_font = ui_font,
+        .fonts = fonts,
+        .font_catalog = font_catalog,
+        .font_generation = font_generation,
+        .font_refresh_pending = ui_font == NULL && font_catalog != ASTRA_INVALID_HANDLE,
         .damage = {
             { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u },
             { 0, 0, ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u }
@@ -5127,7 +5695,7 @@ static void serve_windows(uint32_t device, uint32_t irq,
             pointer_shape_presented(&state, &theme);
         }
         wait_count = display_wait_handles(
-            &state, gui_receive, input_receive, vblank_irq, first_wait,
+            &state, gui_receive, input_receive, vblank_irq, font_changed, first_wait,
             waits, sources);
         uint32_t selected = 0u;
         uint32_t status;
@@ -5157,6 +5725,24 @@ static void serve_windows(uint32_t device, uint32_t irq,
         }
         selected = sources[selected];
         first_wait = (selected + 1u) % wait_count;
+        if (selected == wait_count - 1u) {
+            state.font_refresh_pending = 1u;
+            state.font_retry_at = 0u;
+        }
+        if (state.font_refresh_pending &&
+            (selected == wait_count - 1u ||
+             (selected == 2u && astra_clock_monotonic() >= state.font_retry_at))) {
+            AstraResult refreshed = refresh_system_font(&state);
+            if (refreshed == ASTRA_OK) {
+                state.font_refresh_pending = 0u;
+                state.compose_deferred = 1u;
+            } else {
+                if (state.font_retry_at == 0u)
+                    (void)astra_log_failure("display system font refresh", (uint32_t)refreshed);
+                state.font_retry_at = astra_clock_monotonic() + UINT64_C(250000000);
+            }
+        }
+        if (selected == wait_count - 1u) continue;
         if (selected == 0u)
             receive_open(device, irq, framebuffer, pointer_buffer,
                          &state, gui_receive, 0u, &next_fence,
@@ -5223,8 +5809,8 @@ static void serve_windows(uint32_t device, uint32_t irq,
                 uint32_t session = selected - 3u - state.count;
 
                 receive_open(device, irq, framebuffer, pointer_buffer,
-                             &state, state.session_receive[session],
-                             state.session_id[session], &next_fence,
+                             &state, state.sessions[session].receive,
+                             state.sessions[session].id, &next_fence,
                              &cursor_fence, &armed);
             }
         }
@@ -5240,6 +5826,13 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *irq;
     const AstraStartupCapability *vblank_irq;
     const AstraStartupCapability *input_service;
+    const AstraStartupCapability *fonts;
+    const AstraStartupCapability *fonts_render;
+    const AstraStartupCapability *fonts_changed;
+    AstraFontsCatalog font_catalog = ASTRA_FONTS_CATALOG_INIT;
+    DisplayFontRegistry font_registry = {0};
+    DisplayFontFace *active_font = NULL;
+    uint32_t font_generation = 1u;
     uint32_t gui_receive = 0u;
     uint32_t gui_send = 0u;
     uint32_t input_receive = 0u;
@@ -5258,9 +5851,13 @@ int astra_main(const AstraStartupInfo *startup)
         startup, ASTRA_CAPABILITY_DISPLAY_VBLANK_IRQ);
     input_service = astra_startup_capability(
         startup, ASTRA_CAPABILITY_INPUT_SERVICE);
+    fonts = astra_startup_capability(startup, ASTRA_CAPABILITY_FONT_CATALOG);
+    fonts_render = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_FONTS_RENDER);
+    fonts_changed = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_CHANGED);
     if (bootstrap == NULL || device == NULL || irq == NULL ||
         vblank_irq == NULL ||
-        input_service == NULL)
+        input_service == NULL || fonts_changed == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     status = ASTRA_SYSCALL_OK;
     for (uint32_t buffer = 0u;
@@ -5295,8 +5892,34 @@ int astra_main(const AstraStartupInfo *startup)
         (void)astra_device_reset(device->handle);
         return (int)status;
     }
+    font_registry.service = fonts_render == NULL ? ASTRA_INVALID_HANDLE :
+                                                   fonts_render->handle;
+    if (fonts != NULL && fonts_render != NULL &&
+        astra_fonts_catalog_open(fonts->handle, &font_catalog) == ASTRA_OK) {
+        font_generation = font_catalog.generation;
+        if (font_catalog.selected_id[0] != '\0') {
+            AstraResult opened = display_font_acquire(&font_registry,
+                font_catalog.selected_id,
+                (uint32_t)strlen(font_catalog.selected_id),
+                &active_font);
+            if (opened != ASTRA_OK)
+                (void)astra_log_failure("display font open", (uint32_t)opened);
+        }
+        AstraResult ignored = astra_fonts_catalog_close(&font_catalog);
+        (void)ignored;
+    }
+    if (active_font != NULL) {
+        AstraResult result = use_display_font(active_font);
+        if (result != ASTRA_OK) {
+            (void)astra_log_failure("display font context", (uint32_t)result);
+            display_font_release(active_font);
+            active_font = NULL;
+        }
+    }
     serve_windows(device->handle, irq->handle, vblank_irq->handle,
                   framebuffer, &pointer_buffer, gui_receive, input_receive,
-                  shared_pointer);
+                  shared_pointer, active_font, &font_registry,
+                  fonts == NULL ? ASTRA_INVALID_HANDLE : fonts->handle,
+                  font_generation, fonts_changed->handle);
     return ASTRA_STATUS_OK;
 }

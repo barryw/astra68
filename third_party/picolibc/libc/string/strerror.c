@@ -329,6 +329,9 @@ static const char * const errnames[] = {
 #ifdef ETIMEDOUT
     [ETIMEDOUT] = "Connection timed out",
 #endif
+#ifdef ESTALE
+    [ESTALE] = "Stale file or directory (volume removed or replaced)",
+#endif
 };
 
 #define NERRNAMES (sizeof(errnames) / sizeof(errnames[0]))

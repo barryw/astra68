@@ -55,6 +55,8 @@ static AstraResult play(AstraHandle service)
          ++tries) {
         step = "active";
         result = astra_midi_active(&synth, &active);
+        if (result == ASTRA_ERROR_WOULD_BLOCK || result == ASTRA_ERROR_BUSY)
+            result = ASTRA_OK;
         if (result == ASTRA_OK && active)
             result = sleep_ns(NOTE_NS / 3u);
     }

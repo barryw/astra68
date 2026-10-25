@@ -21,7 +21,7 @@ $(BUILD_DIR)/sdl.elf: tests/distribution_sdl.c \
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		--needed SDL2_mixer.library.3 --needed SDL2_image.library.2 \
 		--needed SDL2_net.library.2 --needed SDL2_ttf.library.2 \
-		--needed SDL2.library.3 --needed libc.library.3 \
+		--needed SDL2.library.3 --needed libc.library.4 \
 		--needed runtime.library.1 --needed compiler.library.2 $@
 
 $(BUILD_DIR)/native.elf: tests/distribution_native.c
@@ -59,7 +59,7 @@ $(BUILD_DIR)/posix.elf: $(BUILD_DIR)/posix-main.o \
 	$(ASTRA_CC) $(ASTRA_POSIX_CFLAGS) $(ASTRA_POSIX_LDFLAGS) -o $@ \
 		$(ASTRA_POSIX_CRT0) $^ $(ASTRA_POSIX_LIBS)
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
-		--needed libc.library.3 --needed runtime.library.1 \
+		--needed libc.library.4 --needed runtime.library.1 \
 		--needed compiler.library.2 $@
 
 $(BUILD_DIR)/posix-static.elf: $(BUILD_DIR)/posix-main.o \
@@ -89,7 +89,7 @@ $(BUILD_DIR)/posix-cxx.elf: ../sw/userspace/posix/tests/cxx_runtime.cpp \
 		$(BUILD_DIR)/posix-cxx-program.o $(ASTRA_POSIX_CXX_LIBS) \
 		$(ASTRA_CXX_CRTEND)
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
-		--needed cxx.library.2 --needed libc.library.3 \
+		--needed cxx.library.2 --needed libc.library.4 \
 		--needed runtime.library.1 --needed unwind.library.1 \
 		--needed compiler.library.2 $@
 

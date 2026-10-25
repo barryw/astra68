@@ -66,46 +66,24 @@ static uint32_t channel_submit(AstraVfsHostLane *lane,
     return status;
 }
 
-static uint32_t publish_path(char destination[ASTRA_HOST_FS_PATH_MAX],
-                             const char source[ASTRA_HOST_FS_PATH_MAX])
-{
-    uint32_t length = 0u;
-
-    while (length < ASTRA_HOST_FS_PATH_MAX && source[length] != '\0') {
-        destination[length] = source[length];
-        ++length;
-    }
-    if (length == ASTRA_HOST_FS_PATH_MAX)
-        return ASTRA_VFS_ERR_INVALID;
-    destination[length] = '\0';
-    return ASTRA_VFS_OK;
-}
-
+/* The batch path carries no path operands: its commands are operand-free
+ * (metrics, handle operations), and every path operation goes through
+ * begin/submit, which lays its operands out in the lane's data span. */
 static uint32_t publish_command(AstraHostCommand *destination,
                                 const AstraHostCommand *source)
 {
+    if (source->path_length != 0u || source->path2_length != 0u ||
+        source->path_offset != 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    memset(destination, 0, sizeof(*destination));
     memcpy(destination, source, offsetof(AstraHostCommand, status));
     memcpy(&destination->handle, &source->handle,
            offsetof(AstraHostCommand, data_offset) -
                offsetof(AstraHostCommand, handle));
-    switch (source->operation) {
-    case ASTRA_HOST_FS_OPEN:
-    case ASTRA_HOST_FS_STAT:
-    case ASTRA_HOST_FS_READDIR:
-    case ASTRA_HOST_FS_MKDIR:
-    case ASTRA_HOST_FS_UNLINK:
-    case ASTRA_HOST_FS_CHMOD:
-    case ASTRA_HOST_FS_READLINK:
-        return publish_path(destination->path, source->path);
-    case ASTRA_HOST_FS_RENAME:
-    case ASTRA_HOST_FS_SYMLINK:
-    case ASTRA_HOST_FS_LINK:
-        if (publish_path(destination->path, source->path) != ASTRA_VFS_OK)
-            return ASTRA_VFS_ERR_INVALID;
-        return publish_path(destination->path2, source->path2);
-    default:
-        return ASTRA_VFS_OK;
-    }
+    memcpy(&destination->session, &source->session,
+           offsetof(AstraHostCommand, node) -
+               offsetof(AstraHostCommand, session));
+    return ASTRA_VFS_OK;
 }
 
 static void collect_command(AstraHostCommand *destination,
@@ -117,15 +95,7 @@ static void collect_command(AstraHostCommand *destination,
     destination->value_lo = source->value_lo;
     destination->result_length = source->result_length;
     destination->result_value = source->result_value;
-    destination->node_size_hi = source->node_size_hi;
-    destination->node_size_lo = source->node_size_lo;
-    destination->mtime_hi = source->mtime_hi;
-    destination->mtime_lo = source->mtime_lo;
-    destination->uid = source->uid;
-    destination->gid = source->gid;
-    destination->kind = source->kind;
-    destination->mode = source->mode;
-    destination->nlink = source->nlink;
+    destination->node = source->node;
 }
 
 uint32_t astra_vfs_host_status_from_syscall(uint32_t status)
@@ -140,6 +110,7 @@ uint32_t astra_vfs_host_status_from_syscall(uint32_t status)
     case ASTRA_SYSCALL_OUT_OF_MEMORY: return ASTRA_VFS_ERR_LIMIT;
     case ASTRA_SYSCALL_WOULD_BLOCK: return ASTRA_VFS_ERR_BUSY;
     case ASTRA_SYSCALL_PEER_DEAD:
+    case ASTRA_SYSCALL_CLOSED:
     case ASTRA_SYSCALL_UNSUPPORTED: return ASTRA_VFS_ERR_PEER;
     default: return ASTRA_VFS_ERR_IO;
     }
@@ -159,8 +130,14 @@ int astra_vfs_host_transport_init(AstraVfsHostTransport *transport,
     memset(&lease, 0, sizeof(lease));
     if (astra_host_lease_query(device, &lease) != ASTRA_SYSCALL_OK ||
         (lease.capabilities & (ASTRA_HOST_CAP_FILESYSTEM |
-                               ASTRA_HOST_CAP_OWNER_SCOPED)) !=
-            (ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED) ||
+                               ASTRA_HOST_CAP_OWNER_SCOPED |
+                               ASTRA_HOST_CAP_FS_SCOPE |
+                               ASTRA_HOST_CAP_FS_SESSIONS |
+                               ASTRA_HOST_CAP_FS_RESOLVES |
+                               ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS))) !=
+            (ASTRA_HOST_CAP_FILESYSTEM | ASTRA_HOST_CAP_OWNER_SCOPED |
+             ASTRA_HOST_CAP_FS_SCOPE | ASTRA_HOST_CAP_FS_SESSIONS |
+             ASTRA_HOST_CAP_FS_RESOLVES | ASTRA_HOST_CAP_FS_DESCRIPTIONS | (ASTRA_HOST_CAP_FS_DIRECTORY_BATCH | ASTRA_HOST_CAP_FS_PATHS)) ||
         (lease.state_flags & ASTRA_HOST_STATE_READY) == 0u ||
         lease.host_generation == 0u ||
         lease.maximum_transfer < ASTRA_HOST_COMMAND_SIZE ||
@@ -196,14 +173,49 @@ void astra_vfs_host_transport_destroy(AstraVfsHostTransport *transport)
     memset(transport, 0, sizeof(*transport));
 }
 
+/* A fork child holds neither the parent's channels nor its DMA handles. */
 void astra_vfs_host_transport_after_fork(AstraVfsHostTransport *transport)
 {
     if (lane_cache.transport == transport)
         memset(&lane_cache, 0, sizeof(lane_cache));
+    memset(transport->lanes, 0, sizeof(transport->lanes));
+}
+
+/* A client closed `scope`: no lane may trust that handle number again.
+ * Its kernel binding stays with the channel until the channel closes; the
+ * number, once reused for another scope, must be attached afresh. */
+void astra_vfs_host_transport_forget_scope(AstraVfsHostTransport *transport,
+                                           uint32_t scope)
+{
+    if (transport == NULL || scope == 0u)
+        return;
+    if (transport->acquire != NULL &&
+        !transport->acquire(transport->lock_context))
+        return;
+    for (uint32_t index = 0u; index < ASTRA_PROCESS_THREAD_SLOT_COUNT;
+         ++index) {
+        AstraVfsHostLane *lane = &transport->lanes[index];
+        for (uint32_t at = 0u; at < lane->scope_count; ++at)
+            if (lane->scopes[at] == scope)
+                lane->scopes[at] = 0u;
+    }
+    if (transport->release != NULL)
+        transport->release(transport->lock_context);
+}
+
+static int lane_carries(const AstraVfsHostLane *lane, uint32_t scope)
+{
+    if (scope == 0u)
+        return 1;
+    for (uint32_t at = 0u; at < lane->scope_count; ++at)
+        if (lane->scopes[at] == scope)
+            return 1;
+    return 0;
 }
 
 static uint32_t lane_open(AstraVfsHostTransport *transport,
-                          AstraVfsHostLane *lane, uint32_t thread)
+                          AstraVfsHostLane *lane, uint32_t thread,
+                          uint32_t scope)
 {
     AstraHostChannelOpen channel = {0};
     uint32_t status;
@@ -214,7 +226,8 @@ static uint32_t lane_open(AstraVfsHostTransport *transport,
     channel.command_capacity = lane->command_capacity;
     if (channel.byte_size > transport->maximum_transfer)
         return ASTRA_VFS_ERR_LIMIT;
-    status = astra_host_channel_open(transport->device, &channel);
+    status = astra_host_channel_open(scope != 0u ? scope : transport->device,
+                                     &channel);
     if (status != ASTRA_SYSCALL_OK) {
         (void)astra_log_failure("VFS host channel open", status);
         return astra_vfs_host_status_from_syscall(status);
@@ -227,12 +240,41 @@ static uint32_t lane_open(AstraVfsHostTransport *transport,
     lane->channel_address = channel.channel_address;
     lane->producer_position = 0u;
     lane->active = 1u;
+    lane->scope_count = 0u;
+    if (scope != 0u)
+        lane->scopes[lane->scope_count++] = scope;
+    return ASTRA_VFS_OK;
+}
+
+/* Channel bindings are a finite cache, not a volume limit. Closing a
+ * drained thread channel retires its bindings without closing filesystem
+ * sessions or descriptions. Forgotten numeric handles retain tombstones until
+ * that close: their kernel bindings otherwise still occupy real slots. */
+static uint32_t lane_attach(AstraVfsHostTransport *transport,
+    AstraVfsHostLane *lane, uint32_t scope)
+{
+    uint32_t status;
+
+    if (lane_carries(lane, scope))
+        return ASTRA_VFS_OK;
+    if (lane->scope_count == ASTRA_HOST_CHANNEL_SCOPE_MAX) {
+        status = astra_host_channel_close(scope);
+        if (status != ASTRA_SYSCALL_OK)
+            return astra_vfs_host_status_from_syscall(status);
+        lane->active = 0u;
+        return lane_open(transport, lane, lane->thread, scope);
+    }
+    status = astra_host_scope_attach(scope);
+    if (status != ASTRA_SYSCALL_OK)
+        return astra_vfs_host_status_from_syscall(status);
+    lane->scopes[lane->scope_count++] = scope;
     return ASTRA_VFS_OK;
 }
 
 static uint32_t lane_allocate(AstraVfsHostTransport *transport,
                               AstraVfsHostLane *lane, uint32_t thread,
-                              uint32_t needed, uint32_t command_capacity)
+                              uint32_t scope, uint32_t needed,
+                              uint32_t command_capacity)
 {
     AstraDmaBufferInfo dma = {0};
     uint32_t status;
@@ -258,7 +300,7 @@ static uint32_t lane_allocate(AstraVfsHostTransport *transport,
         lane->active = 1u;
         return ASTRA_VFS_OK;
     }
-    status = lane_open(transport, lane, thread);
+    status = lane_open(transport, lane, thread, scope);
     if (status != ASTRA_VFS_OK) {
         (void)astra_close(lane->dma);
         memset(lane, 0, sizeof(*lane));
@@ -283,9 +325,23 @@ static int lane_layout(const AstraVfsHostTransport *transport,
     return *needed <= transport->maximum_transfer;
 }
 
+uint32_t astra_vfs_host_transport_payload_limit(const AstraVfsHostTransport *transport)
+{
+    uint32_t overhead;
+    uint32_t available;
+
+    if (transport == NULL || !lane_layout(transport, 1u, 0u, &overhead))
+        return 0u;
+    available = transport->maximum_transfer & ~(ASTRA_MEMORY_PAGE_SIZE - 1u);
+    return available > overhead ? available - overhead : 0u;
+}
+
+/* A reopened channel carries only the scope it was opened on: lane_open
+ * resets the list, and the others attach again on use. */
 static uint32_t lane_resize(AstraVfsHostTransport *transport,
                             AstraVfsHostLane *lane, uint32_t thread,
-                            uint32_t data_bytes, uint32_t command_capacity)
+                            uint32_t scope, uint32_t data_bytes,
+                            uint32_t command_capacity)
 {
     uint32_t target_capacity = lane->command_capacity;
     uint32_t needed;
@@ -299,15 +355,18 @@ static uint32_t lane_resize(AstraVfsHostTransport *transport,
     if (lane->byte_size >= needed)
         return ASTRA_VFS_OK;
     if (transport->channel_supported != 0u)
-        (void)astra_host_channel_close(transport->device);
+        (void)astra_host_channel_close(scope != 0u ? scope :
+                                                     transport->device);
     if (lane->dma != 0u)
         (void)astra_close(lane->dma);
     memset(lane, 0, sizeof(*lane));
-    return lane_allocate(transport, lane, thread, needed, target_capacity);
+    return lane_allocate(transport, lane, thread, scope, needed,
+                         target_capacity);
 }
 
 static uint32_t ensure_lane(AstraVfsHostTransport *transport,
-                            uint32_t thread, uint32_t data_bytes,
+                            uint32_t thread, uint32_t scope,
+                            uint32_t data_bytes,
                             uint32_t command_capacity,
                             AstraVfsHostLane **result)
 {
@@ -322,8 +381,8 @@ static uint32_t ensure_lane(AstraVfsHostTransport *transport,
         AstraVfsHostLane *lane = &transport->lanes[index];
 
         if (lane->active != 0u && lane->thread == thread) {
-            uint32_t status = lane_resize(transport, lane, thread, data_bytes,
-                                          command_capacity);
+            uint32_t status = lane_resize(transport, lane, thread, scope,
+                                          data_bytes, command_capacity);
 
             if (status == ASTRA_VFS_OK)
                 *result = lane;
@@ -333,8 +392,8 @@ static uint32_t ensure_lane(AstraVfsHostTransport *transport,
             free_lane = lane;
     }
     if (free_lane != NULL) {
-        uint32_t status = lane_allocate(transport, free_lane, thread, needed,
-                                        command_capacity);
+        uint32_t status = lane_allocate(transport, free_lane, thread, scope,
+                                        needed, command_capacity);
 
         if (status == ASTRA_VFS_OK)
             *result = free_lane;
@@ -346,10 +405,10 @@ static uint32_t ensure_lane(AstraVfsHostTransport *transport,
              ++index) {
             AstraVfsHostLane *lane = &transport->lanes[index];
 
-            if (lane_open(transport, lane, thread) != ASTRA_VFS_OK)
+            if (lane_open(transport, lane, thread, scope) != ASTRA_VFS_OK)
                 continue;
             {
-                uint32_t status = lane_resize(transport, lane, thread,
+                uint32_t status = lane_resize(transport, lane, thread, scope,
                                               data_bytes,
                                               command_capacity);
 
@@ -386,8 +445,8 @@ static int lane_has_capacity(const AstraVfsHostLane *lane,
 }
 
 static uint32_t __attribute__((noinline, cold))
-lane_get_slow(AstraVfsHostTransport *transport, uint32_t data_capacity,
-              AstraVfsHostLane **result)
+lane_get_slow(AstraVfsHostTransport *transport, uint32_t scope,
+              uint32_t data_capacity, AstraVfsHostLane **result)
 {
     AstraVfsHostLane *lane = NULL;
     uint32_t thread;
@@ -401,7 +460,7 @@ lane_get_slow(AstraVfsHostTransport *transport, uint32_t data_capacity,
     if (transport->acquire != NULL &&
         !transport->acquire(transport->lock_context))
         return ASTRA_VFS_ERR_IO;
-    status = ensure_lane(transport, thread, data_capacity, 1u, &lane);
+    status = ensure_lane(transport, thread, scope, data_capacity, 1u, &lane);
     if (transport->release != NULL)
         transport->release(transport->lock_context);
     if (status != ASTRA_VFS_OK)
@@ -412,7 +471,7 @@ lane_get_slow(AstraVfsHostTransport *transport, uint32_t data_capacity,
     return ASTRA_VFS_OK;
 }
 
-uint32_t astra_vfs_host_transport_begin(void *context,
+uint32_t astra_vfs_host_transport_begin(void *context, uint32_t scope,
                                         uint32_t data_capacity,
                                         AstraVfsHostRequest *request)
 {
@@ -424,17 +483,25 @@ uint32_t astra_vfs_host_transport_begin(void *context,
         transport->channel_supported == 0u)
         return ASTRA_VFS_ERR_PEER;
     request->command = NULL;
+    request->path = NULL;
+    request->path_length = 0u;
+    request->path2 = NULL;
+    request->path2_length = 0u;
     request->private_lane = 0u;
     request->private_capacity = 0u;
     request->private_producer = 0u;
     if (lane_cache.transport == transport &&
-        lane_has_capacity(lane_cache.lane, data_capacity)) {
+        lane_has_capacity(lane_cache.lane, data_capacity) &&
+        lane_carries(lane_cache.lane, scope)) {
         lane = lane_cache.lane;
     } else {
-        status = lane_get_slow(transport, data_capacity, &lane);
+        status = lane_get_slow(transport, scope, data_capacity, &lane);
         if (status != ASTRA_VFS_OK)
             return status;
     }
+    status = lane_attach(transport, lane, scope);
+    if (status != ASTRA_VFS_OK)
+        return status;
     request->command = (AstraHostCommand *)(void *)(
         lane->bytes + ASTRA_HOST_CHANNEL_HEADER_SIZE +
         (lane->producer_position & (lane->command_capacity - 1u)) *
@@ -455,6 +522,7 @@ uint32_t astra_vfs_host_transport_submit(
     AstraHostCommand *command;
     uint32_t data_capacity = input_size > output_capacity ?
         input_size : output_capacity;
+    uint32_t operands;
     uint32_t data_offset;
     uint32_t status;
 
@@ -470,12 +538,31 @@ uint32_t astra_vfs_host_transport_submit(
                                   request->private_capacity ||
         request->private_producer != lane->producer_position + 1u)
         return ASTRA_VFS_ERR_INVALID;
+    /* The path operands lead the data span, unterminated; the data
+     * follows them. */
+    if (request->path_length >= ASTRA_HOST_FS_PATH_MAX ||
+        request->path2_length >= ASTRA_HOST_FS_PATH_MAX ||
+        (request->path_length != 0u && request->path == NULL) ||
+        (request->path2_length != 0u && request->path2 == NULL))
+        return ASTRA_VFS_ERR_INVALID;
+    operands = request->path_length + request->path2_length;
     data_offset = ASTRA_HOST_CHANNEL_HEADER_SIZE +
                   lane->command_capacity * ASTRA_HOST_COMMAND_SIZE;
     if (data_offset > lane->byte_size ||
-        data_capacity > lane->byte_size - data_offset)
+        operands > lane->byte_size - data_offset ||
+        data_capacity > lane->byte_size - data_offset - operands)
         return ASTRA_VFS_ERR_LIMIT;
     command = request->command;
+    command->path_offset = operands != 0u ? data_offset : 0u;
+    command->path_length = (uint16_t)request->path_length;
+    command->path2_length = (uint16_t)request->path2_length;
+    if (request->path_length != 0u)
+        memcpy(lane->bytes + data_offset, request->path,
+               request->path_length);
+    if (request->path2_length != 0u)
+        memcpy(lane->bytes + data_offset + request->path_length,
+               request->path2, request->path2_length);
+    data_offset += operands;
     command->data_offset = data_capacity != 0u ? data_offset : 0u;
     command->data_length = input_size;
     command->data_capacity = output_capacity;
@@ -494,14 +581,15 @@ uint32_t astra_vfs_host_transport_submit(
     if (status != ASTRA_SYSCALL_OK)
         return astra_vfs_host_status_from_syscall(status);
     lane->producer_position = request->private_producer;
-    if (command->status != ASTRA_VFS_OK)
+    if (command->status != ASTRA_VFS_OK &&
+        command->status != ASTRA_VFS_ERR_ESCAPED)
         return command->status;
     if (output_capacity != 0u &&
         command->result_length > output_capacity)
         return ASTRA_VFS_ERR_IO;
     if (output_capacity != 0u && command->result_length != 0u)
         memcpy(output, lane->bytes + data_offset, command->result_length);
-    return ASTRA_VFS_OK;
+    return command->status;
 }
 
 uint32_t astra_vfs_host_metrics(AstraVfsHostTransport *transport,
@@ -515,7 +603,7 @@ uint32_t astra_vfs_host_metrics(AstraVfsHostTransport *transport,
         transport->metrics_supported == 0u)
         return ASTRA_VFS_ERR_UNSUPPORTED;
     status = astra_vfs_host_transport_begin(
-        transport, sizeof(*snapshot), &request);
+        transport, 0u, sizeof(*snapshot), &request);
     if (status != ASTRA_VFS_OK)
         return status;
     command = request.command;
@@ -587,7 +675,7 @@ uint32_t astra_vfs_host_transport_execute_batch(
             return ASTRA_VFS_ERR_IO;
         locked = 1;
     }
-    status = ensure_lane(transport, thread, data_bytes, capacity, &lane);
+    status = ensure_lane(transport, thread, 0u, data_bytes, capacity, &lane);
     if (status != ASTRA_VFS_OK)
         goto done;
     if (transport->channel_supported != 0u && locked) {
@@ -666,7 +754,8 @@ uint32_t astra_vfs_host_transport_execute_batch(
             (position & (capacity - 1u)) * ASTRA_HOST_COMMAND_SIZE);
 
         collect_command(transfers[index].command, command);
-        if (command->status == ASTRA_VFS_OK &&
+        if ((command->status == ASTRA_VFS_OK ||
+             command->status == ASTRA_VFS_ERR_ESCAPED) &&
             transfers[index].output_capacity != 0u) {
             if (command->result_length >
                 transfers[index].output_capacity) {

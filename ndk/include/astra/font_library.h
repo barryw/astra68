@@ -17,10 +17,10 @@ enum {
     ASTRA_FONT_BITMAP_A8 = 5
 };
 
-/** Breaking Font Kit ABI generation carried by font.library.2. */
-#define ASTRA_FONT_LIBRARY_ABI_MAJOR 2u
+/** Breaking Font Kit ABI generation carried by font.library.5. */
+#define ASTRA_FONT_LIBRARY_ABI_MAJOR 5u
 /** Current backward-compatible Font Kit revision. */
-#define ASTRA_FONT_LIBRARY_ABI_MINOR 2u
+#define ASTRA_FONT_LIBRARY_ABI_MINOR 0u
 
 /**
  * Immutable metrics and glyph range for one built-in bitmap-font strike.
@@ -83,6 +83,9 @@ typedef struct AstraUiGlyph {
 
 /** Return the nearest built-in UI strike for a pixel height. @param pixel_height Requested pixel height. @return Immutable strike, or NULL when unavailable. */
 const AstraUiStrike *astra_ui_font_strike(uint16_t pixel_height);
+/** Return a pre-rasterized built-in UI strike. @param pixel_height Requested pixel height. @param style_flags Bold and italic flags; other text flags do not affect the strike. @return Immutable strike, or NULL when unavailable. */
+const AstraUiStrike *astra_ui_font_strike_styled(uint16_t pixel_height,
+                                                 uint32_t style_flags);
 /** Decode one scalar from a UTF-8 byte span. @param text UTF-8 bytes. @param length Available bytes. @param consumed Receives bytes consumed. @return Decoded scalar or U+FFFD. */
 uint32_t astra_ui_font_scalar(const char *text, uint32_t length,
                               uint32_t *consumed);
@@ -94,6 +97,9 @@ const uint8_t *astra_ui_font_bitmap(const AstraUiGlyph *glyph);
 
 /** Return the nearest built-in monospaced strike for a pixel height. @param pixel_height Requested pixel height. @return Immutable strike, or NULL when unavailable. */
 const AstraUiStrike *astra_mono_font_strike(uint16_t pixel_height);
+/** Return a pre-rasterized built-in monospaced strike. @param pixel_height Requested pixel height. @param style_flags Bold and italic flags; other text flags do not affect the strike. @return Immutable strike, or NULL when unavailable. */
+const AstraUiStrike *astra_mono_font_strike_styled(uint16_t pixel_height,
+                                                   uint32_t style_flags);
 /** Resolve a Unicode scalar in a built-in monospaced strike. @param strike Strike returned by astra_mono_font_strike(). @param scalar Unicode scalar. @return Immutable glyph, using the replacement glyph when absent. */
 const AstraUiGlyph *astra_mono_font_glyph(const AstraUiStrike *strike,
                                           uint32_t scalar);

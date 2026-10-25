@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include <astra/resource.h>
+#include <astra/surface.h>
 
 ASTRA_EXTERN_C_BEGIN
 
@@ -456,6 +457,23 @@ ASTRA_NODISCARD AstraResult astra_surface_write_staged(
     uint32_t offset, uint32_t pitch);
 
 /**
+ * Update entries of an INDEX8 surface's attached ARGB palette. Entries are
+ * four big-endian bytes each: alpha, red, green, blue. The caller first
+ * reserves and fills nonoverlapping display staging bytes; this call copies
+ * the small palette range into a render batch before returning. Hardware
+ * performs color expansion when the surface is drawn.
+ *
+ * @param[in] surface CPU-writable INDEX8 source surface.
+ * @param first First palette index, 0 through 255.
+ * @param count Number of entries, 1 through 256 - first.
+ * @param offset Staging byte offset of the first ARGB entry.
+ * @return ::ASTRA_OK on success or a negative ::AstraResult error.
+ */
+ASTRA_NODISCARD AstraResult astra_surface_palette_write_staged(
+    const AstraSurface *surface, uint16_t first, uint16_t count,
+    uint32_t offset);
+
+/**
  * Copy caller pixels into a surface through the display's staging area.
  *
  * @param[in,out] display Display that owns @p surface.
@@ -529,6 +547,9 @@ ASTRA_NODISCARD AstraResult astra_draw_list_create(
  */
 ASTRA_NODISCARD AstraResult astra_draw_list_set_target(
     AstraDrawList *draw_list, const AstraSurface *destination);
+/** Append checked Interface/Graphics draw-list view commands to current target. View dimensions must match target; source pixels are never copied. @param draw_list Mutable session list. @param view Caller-owned draw-list view. @return Astra status. */
+ASTRA_NODISCARD AstraResult astra_draw_list_append_view(
+    AstraDrawList *draw_list, const AstraSurfaceView *view);
 /**
  * Append an upload: rows of the display's staging area, the first at
  * @p staging_offset and each @p pitch bytes after the one before, written
@@ -603,7 +624,8 @@ ASTRA_NODISCARD AstraResult astra_draw_blit(
  *
  * @param[in,out] draw_list Mutable list with a direct-color destination.
  * @param[in] texture Draw-source surface of the same window in RGB565,
- *                    XRGB8888, or ARGB8888, other than the destination; or
+ *                    XRGB8888, ARGB8888, or palette-backed INDEX8, other than
+ *                    the destination; or
  *                    NULL for untextured triangles.
  * @param[in] vertices Three vertices per triangle.
  * @param vertex_count Nonzero multiple of three.
@@ -699,6 +721,26 @@ ASTRA_NODISCARD AstraResult astra_draw_ui_text(
     AstraDrawList *draw_list, AstraPointI32 origin, const char *utf8,
     uint32_t utf8_bytes, uint32_t pixel_height, uint32_t style_flags,
     AstraColorRGBA8 color);
+/** Append text in an installed AFNT face, drawn by the hardware glyph engine.
+ * Obtain a counted face ID and available strike height from the Fonts catalog.
+ * The named face must have the exact requested strike. Bold and italic are
+ * chosen as designed face styles; only underline and strikethrough flags apply.
+ * Missing or uninstalled faces fail when the list is submitted.
+ * @param[in,out] draw_list Mutable destination list.
+ * @param origin Left edge and top of text, in destination pixels.
+ * @param[in] face_id Counted installed face ID from Fonts catalog.
+ * @param id_bytes Byte count of @p face_id, excluding terminator.
+ * @param[in] utf8 Valid UTF-8 text without NUL bytes.
+ * @param utf8_bytes Text byte count, 1 through 4096.
+ * @param pixel_height Exact installed strike height.
+ * @param style_flags Underline or strikethrough style flags.
+ * @param color Opaque text color.
+ * @return ::ASTRA_OK on append, or a negative ::AstraResult error.
+ */
+ASTRA_NODISCARD AstraResult astra_draw_font_text(
+    AstraDrawList *draw_list, AstraPointI32 origin, const char *face_id,
+    uint32_t id_bytes, const char *utf8, uint32_t utf8_bytes,
+    uint32_t pixel_height, uint32_t style_flags, AstraColorRGBA8 color);
 
 /**
  * Seal and asynchronously submit a draw list.

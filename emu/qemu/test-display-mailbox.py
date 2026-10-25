@@ -15,13 +15,20 @@ import mmap
 import os
 import platform
 import statistics
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 
-from qemu_runtime import DEFAULT_MEMORY, qemu_environment
+from qemu_runtime import qemu_environment, unprivileged_command
+import importlib.util
+from pathlib import Path
+
+_SPEC = importlib.util.spec_from_file_location("terminal_gate", Path(__file__).with_name("test-terminal.py"))
+terminal_gate = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(terminal_gate)
 
 # Mailbox 1.8: a header file (the futex words) and a separate payload. The
 # helper sleeps on WAKE_SEQUENCE, which changes after every request and every
@@ -52,12 +59,12 @@ FASTEST_GAP_SECONDS = 0.0005
 
 
 def start(qemu, rom, mailbox, stderr):
-    environment = os.environ.copy()
+    environment = qemu_environment(qemu)
     environment["ASTRA_DISPLAY_MAILBOX_PATH"] = mailbox
     environment["ASTRA_DISPLAY_PAYLOAD_PATH"] = payload_path(mailbox)
     return subprocess.Popen(
-        [qemu, "-M", "astra68", "-m", "1M", "-bios", rom, "-S",
-         "-display", "none", "-monitor", "none", "-serial", "none"],
+        unprivileged_command([qemu, "-M", "astra68", "-m", "1M", "-bios", rom, "-S",
+         "-display", "none", "-monitor", "none", "-serial", "none"]),
         env=environment, stdout=subprocess.DEVNULL, stderr=stderr, text=True)
 
 
@@ -70,6 +77,14 @@ def create_mailbox(path):
         stream.truncate(HEADER_BYTES)
     with open(payload_path(path), "wb") as stream:
         stream.truncate(PAYLOAD_BYTES)
+    if os.geteuid() == 0:
+        uid = int(os.environ.get("ASTRA_TEST_QEMU_UID", "0"))
+        gid = int(os.environ.get("ASTRA_TEST_QEMU_GID", "0"))
+        if min(uid, gid) <= 0:
+            raise ValueError("root observer needs explicit non-root QEMU UID/GID")
+        os.chmod(os.path.dirname(path), 0o755)
+        for name in (path, payload_path(path)):
+            os.chown(name, uid, gid)
 
 
 def ownership(qemu, rom, root):
@@ -160,48 +175,36 @@ class Helper:
 def completion_wake(qemu, rom, image, root):
     mailbox = os.path.join(root, "wake.bin")
     create_mailbox(mailbox)
-    environment = qemu_environment(
-        qemu, hostfs_root=os.path.join(root, "hostfs"))
+    environment = qemu_environment(qemu)
     environment["ASTRA_DISPLAY_MAILBOX_PATH"] = mailbox
     environment["ASTRA_DISPLAY_PAYLOAD_PATH"] = payload_path(mailbox)
     with open(mailbox, "r+b") as stream:
         view = mmap.mmap(stream.fileno(), HEADER_BYTES)
     helper = Helper(view)
     helper.thread.start()
-    process = subprocess.Popen(
-        [qemu, "-M", "astra68", "-m", DEFAULT_MEMORY, "-bios", rom,
-         "-display", "none", "-monitor", "none", "-serial", "stdio",
-         "-no-reboot", "-drive", "if=none,format=raw,file=%s" % image],
-        env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT, text=True, bufsize=1)
+    scratch = os.path.join(root, "card.img")
+    shutil.copyfile(image, scratch)
+    machine = None
     log = []
     try:
-        booted = threading.Event()
-
-        def pump():
-            for line in process.stdout:
-                log.append(line.rstrip("\n"))
-                if BOOT_MARKER in line:
-                    booted.set()
-
-        threading.Thread(target=pump, daemon=True).start()
-        if not booted.wait(BOOT_SECONDS):
+        machine = terminal_gate.Machine(qemu, rom, scratch, root, environment=environment)
+        log = machine.log
+        if not machine.wait_for_serial(BOOT_MARKER, BOOT_SECONDS):
             raise RuntimeError("guest did not boot\n%s" % "\n".join(log[-40:]))
         time.sleep(RUN_SECONDS)
-        if process.poll() is not None:
+        machine.recent_serial()
+        if machine.process.poll() is not None:
             raise RuntimeError("QEMU exited %s\n%s" %
-                               (process.returncode, "\n".join(log[-40:])))
+                               (machine.process.returncode, "\n".join(log[-40:])))
     finally:
-        process.terminate()
         try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-        helper.stopping = True
-        helper.thread.join(timeout=1)
-        helper.release()
-        view.close()
+            if machine is not None:
+                machine.close()
+        finally:
+            helper.stopping = True
+            helper.thread.join(timeout=1)
+            helper.release()
+            view.close()
     if helper.completions < MINIMUM_COMPLETIONS or not helper.gaps:
         raise RuntimeError("only %d display requests completed; the guest "
                            "stalled waiting for a completion" %

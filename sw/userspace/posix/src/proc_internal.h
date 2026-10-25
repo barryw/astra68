@@ -3,6 +3,14 @@
 
 #include <stdint.h>
 #include <sys/types.h>
+#include <astra/message_abi.h>
+
+/* Private fork barrier uses the native message envelope like every port. */
+#define POSIX_FORK_READY_PROTOCOL UINT32_C(0x5046494f)
+typedef struct PosixForkReady {
+    AstraMessageHeader header;
+    uint32_t status;
+} PosixForkReady;
 
 /*
  * Another process is reached through PROC:, the supervisor's process view,

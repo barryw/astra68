@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -5,10 +6,13 @@ from unittest.mock import patch
 
 import prepare_source
 
+SOURCE = Path(os.environ.get(
+    "SDL2_ROOT", str(Path(__file__).resolve().parents[3] / "../SDL2")))
+
 
 class PrepareSourceTest(unittest.TestCase):
     def test_driver_registered_only_in_generated_copy(self):
-        source = Path(__file__).resolve().parents[3] / "../SDL2"
+        source = SOURCE
         before = (source / "src/audio/SDL_audio.c").read_bytes()
         video_before = (source / "src/video/SDL_video.c").read_bytes()
         render_before = (source / "src/render/SDL_render.c").read_bytes()
@@ -58,7 +62,7 @@ class PrepareSourceTest(unittest.TestCase):
                 with patch.object(prepare_source, "OUTPUT", Path(directory) / "SDL2"):
                     with self.assertRaisesRegex(ValueError, "integration point changed"):
                         prepare_source.prepare(
-                            Path(__file__).resolve().parents[3] / "../SDL2"
+                            SOURCE
                         )
 
     def test_changed_video_registration_anchor_is_rejected(self):
@@ -69,11 +73,11 @@ class PrepareSourceTest(unittest.TestCase):
                 with patch.object(prepare_source, "OUTPUT", Path(directory) / "SDL2"):
                     with self.assertRaisesRegex(ValueError, "integration point changed"):
                         prepare_source.prepare(
-                            Path(__file__).resolve().parents[3] / "../SDL2"
+                            SOURCE
                         )
 
     def test_build_contract_change_recreates_overlay(self):
-        source = Path(__file__).resolve().parents[3] / "../SDL2"
+        source = SOURCE
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(prepare_source, "OUTPUT", Path(directory) / "SDL2"):
                 output = prepare_source.prepare(source)
@@ -94,7 +98,7 @@ class PrepareSourceTest(unittest.TestCase):
                 self.assertFalse(marker.exists())
 
     def test_toolchain_change_recreates_overlay(self):
-        source = Path(__file__).resolve().parents[3] / "../SDL2"
+        source = SOURCE
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(prepare_source, "OUTPUT", Path(directory) / "SDL2"):
                 with patch.dict("os.environ", ASTRA_TOOLCHAIN_CONTENT_ID="old"):

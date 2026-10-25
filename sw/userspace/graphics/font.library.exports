@@ -1,4 +1,4 @@
-ASTRA_FONT_2.1 {
+ASTRA_FONT_5.0 {
     global:
         astra_draw_list_mono_text;
         astra_draw_list_mono_text_styled;
@@ -11,12 +11,6 @@ ASTRA_FONT_2.1 {
         astra_surface_ui_text_fit;
         astra_surface_ui_text_styled;
         astra_surface_ui_text_width;
-    local:
-        *;
-};
-
-ASTRA_FONT_2.2 {
-    global:
         astra_mono_font_bitmap;
         astra_mono_font_glyph;
         astra_mono_font_strike;
@@ -24,4 +18,31 @@ ASTRA_FONT_2.2 {
         astra_ui_font_glyph;
         astra_ui_font_scalar;
         astra_ui_font_strike;
-} ASTRA_FONT_2.1;
+        astra_mono_font_strike_styled;
+        astra_ui_font_strike_styled;
+        astra_fonts_catalog_open;
+        astra_fonts_catalog_face;
+        astra_fonts_catalog_strike;
+        astra_fonts_catalog_close;
+        astra_fonts_select;
+        astra_fonts_import_begin;
+        astra_fonts_import_state;
+        astra_fonts_import_cancel;
+        astra_fonts_import_wait_handle;
+        astra_fonts_import_close;
+        astra_fonts_face_open;
+        astra_fonts_uninstall;
+        astra_fonts_use_system;
+        astra_fonts_use_snapshot;
+        astra_fonts_use_borrowed;
+        astra_fonts_text_measure;
+        astra_surface_font_text;
+        astra_surface_ui_text_height;
+        astra_fonts_context_id;
+        astra_fonts_information_open;
+        astra_fonts_information_string;
+        astra_fonts_information_notice;
+        astra_fonts_information_close;
+    local:
+        *;
+};

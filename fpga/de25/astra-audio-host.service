@@ -5,6 +5,7 @@ PartOf=astra.service
 ConditionFileIsExecutable=/var/lib/astra/current/bin/astra-audio-host
 
 [Service]
+Group=astra
 Type=simple
 ExecStart=/var/lib/astra/current/bin/astra-audio-host
 Restart=on-failure

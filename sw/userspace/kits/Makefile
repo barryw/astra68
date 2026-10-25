@@ -13,6 +13,7 @@ NTP_LIBRARY := $(ASTRA_NTP_LIBRARY)
 GRAPHICS_LIBRARY := $(ASTRA_GRAPHICS_LIBRARY)
 FONT_LIBRARY := $(ASTRA_FONT_LIBRARY)
 FILESYSTEM_LIBRARY := $(ASTRA_FILESYSTEM_LIBRARY)
+DOS_LIBRARY := $(ASTRA_DOS_LIBRARY)
 INTERFACE_LIBRARY := $(ASTRA_INTERFACE_LIBRARY)
 NETWORK_LIBRARY := $(ASTRA_NETWORK_LIBRARY)
 CONFIG_LIBRARY := $(ASTRA_CONFIG_LIBRARY)
@@ -95,6 +96,10 @@ FILESYSTEM_LIBRARY_PROVIDES := $(shell sed -n \
 	's/^provides filesystem\.library //p' Filesystem.kit/manifest)
 FILESYSTEM_LIBRARY_ABI := $(word 1,$(FILESYSTEM_LIBRARY_PROVIDES))
 FILESYSTEM_LIBRARY_VERSION := $(word 2,$(FILESYSTEM_LIBRARY_PROVIDES))
+DOS_LIBRARY_PROVIDES := $(shell sed -n \
+'s/^provides dos\.library //p' Filesystem.kit/manifest)
+DOS_LIBRARY_ABI := $(word 1,$(DOS_LIBRARY_PROVIDES))
+DOS_LIBRARY_VERSION := $(word 2,$(DOS_LIBRARY_PROVIDES))
 INTERFACE_STAMP := build/.Interface.kit.stamp
 INTERFACE_LIBRARY_PROVIDES := $(shell sed -n \
 	's/^provides interface\.library //p' Interface.kit/manifest)
@@ -198,6 +203,9 @@ $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) &: FORCE
 $(FILESYSTEM_LIBRARY): FORCE
 	$(MAKE) -C ../vfs library-contract
 
+$(DOS_LIBRARY): FORCE
+	$(MAKE) -C ../dos library-contract
+
 $(INTERFACE_LIBRARY): FORCE
 	$(MAKE) -C ../interface library-contract
 
@@ -295,13 +303,16 @@ $(GRAPHICS_STAMP): Graphics.kit/manifest $(GRAPHICS_LIBRARY) \
 	$(BUNDLE_TOOL) check $(GRAPHICS)
 	@touch $@
 
-$(FILESYSTEM_STAMP): Filesystem.kit/manifest $(FILESYSTEM_LIBRARY) \
+$(FILESYSTEM_STAMP): Filesystem.kit/manifest $(FILESYSTEM_LIBRARY) $(DOS_LIBRARY) \
 		$(BUNDLE_TOOL)
 	rm -rf $(FILESYSTEM)
 	@mkdir -p $(FILESYSTEM)/libraries/filesystem.library/abi-$(FILESYSTEM_LIBRARY_ABI)/$(FILESYSTEM_LIBRARY_VERSION)/m68k-68040
+	@mkdir -p $(FILESYSTEM)/libraries/dos.library/abi-$(DOS_LIBRARY_ABI)/$(DOS_LIBRARY_VERSION)/m68k-68040
 	cp Filesystem.kit/manifest $(FILESYSTEM)/manifest
 	cp $(FILESYSTEM_LIBRARY) \
 		$(FILESYSTEM)/libraries/filesystem.library/abi-$(FILESYSTEM_LIBRARY_ABI)/$(FILESYSTEM_LIBRARY_VERSION)/m68k-68040/filesystem.library
+	cp $(DOS_LIBRARY) \
+		$(FILESYSTEM)/libraries/dos.library/abi-$(DOS_LIBRARY_ABI)/$(DOS_LIBRARY_VERSION)/m68k-68040/dos.library
 	$(BUNDLE_TOOL) check $(FILESYSTEM)
 	@touch $@
 

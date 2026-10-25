@@ -460,8 +460,10 @@ static void halt_forever(void)
 static void panic_worker_state(void)
 {
     KernelInterruptStats interrupt_stats;
+    KernelIrqCorruption irq_corruption;
     KernelIrqPoolStats irq_stats;
     KernelProcessMaintenanceDiagnostics maintenance;
+    KernelThreadWakeFailure wake_failure;
     KernelWorkerStats stats;
 
     if (!kernel_worker_stats(&stats))
@@ -491,6 +493,37 @@ static void panic_worker_state(void)
         console_puts(" masked=");
         console_dec32(irq_stats.masked_interrupts);
         console_putc('\n');
+    }
+    console_printf("IRQ healthy=%u\n", kernel_irq_pool_healthy());
+    if (kernel_irq_first_corruption(&irq_corruption)) {
+        console_printf("IRQ first corruption: site=%u slot=%u source=%u "
+                       "state=%u refs=%u owner=0x%08X generation=%u "
+                       "cache=%u\n",
+                       irq_corruption.site, irq_corruption.slot,
+                       irq_corruption.source, irq_corruption.state,
+                       irq_corruption.references, irq_corruption.owner,
+                       irq_corruption.generation,
+                       irq_corruption.cache_corrupt);
+    }
+    if (kernel_thread_first_wake_failure(&wake_failure)) {
+        console_printf("Thread wake failure: site=%u status=%u member=%u "
+                       "queue=%u/%u head=0x%08X tail=0x%08X\n",
+                       wake_failure.site, wake_failure.status,
+                       wake_failure.member, wake_failure.queue_count,
+                       wake_failure.wait_registration_count,
+                       (uint32_t)wake_failure.queue_head,
+                       (uint32_t)wake_failure.queue_tail);
+        console_printf("  thread slot=%u state=%u members=%u regs=%u "
+                       "deadline=%u/%u heap-slot=%u\n",
+                       wake_failure.thread_slot, wake_failure.thread_state,
+                       wake_failure.thread_wait_members,
+                       wake_failure.thread_wait_registrations,
+                       wake_failure.deadline_position,
+                       wake_failure.deadline_count,
+                       wake_failure.deadline_slot);
+        console_printf("  ready prev=%u next=%u head=%u tail=%u\n",
+                       wake_failure.ready_previous, wake_failure.ready_next,
+                       wake_failure.ready_head, wake_failure.ready_tail);
     }
     if (!kernel_process_maintenance_diagnostics(&maintenance) ||
         maintenance.failure == KERNEL_PROCESS_MAINTENANCE_NONE)
@@ -1171,15 +1204,6 @@ static void report_kernel_performance_failure(
  * the ELF acceptance profile the loader already enforces.
  */
 #if !ASTRA_KERNEL_K1_QUALIFICATION
-static bool block_service_available(void)
-{
-    if (!kernel_platform_block_present())
-        return false;
-    if ((kernel_platform_system_status() & SYS_ASTRA_HOST) == 0u)
-        return true;
-    return (kernel_platform_block_state_flags() & BLOCK_STATE_LINK_UP) != 0u;
-}
-
 static void start_initial_user_image(void)
 {
     KernelProcessBootstrapCapability capabilities[
@@ -1196,28 +1220,12 @@ static void start_initial_user_image(void)
         return;
     }
 
-    /*
-     * The initial image is the block service until there is a launch path for
-     * a separate one. It receives the device lease and the completion endpoint
-     * as part of the load, so a grant failure unwinds the whole launch.
-     */
+    /* Linux owns filesystem devices. Supervisor bootstraps through HOST_DEVICE
+     * and transfers rooted filesystem authority to HostFS; no block grant can
+     * authorize a second writer to the selected system image. */
     kernel_bytes_clear(capabilities, sizeof(capabilities));
-    if (block_service_available()) {
-        capabilities[capability_count].name = ASTRA_CAPABILITY_BLOCK_DEVICE;
-        capabilities[capability_count].kind =
-            KERNEL_PROCESS_BOOTSTRAP_DEVICE;
-        capabilities[capability_count].device_id = ASTRA_DEVICE_ID_BLOCK0;
-        capabilities[capability_count].rights = KERNEL_DEVICE_RIGHTS;
-        ++capability_count;
-        capabilities[capability_count].name = ASTRA_CAPABILITY_BLOCK_IRQ;
-        capabilities[capability_count].kind = KERNEL_PROCESS_BOOTSTRAP_IRQ;
-        capabilities[capability_count].irq_source = IRQ_SRC_STORAGE;
-        capabilities[capability_count].rights = KERNEL_IRQ_RIGHTS;
-        ++capability_count;
-    }
     /*
-     * The keyboard, for the same reason and on the same terms as the block
-     * device: a terminal cannot read a key without a lease on the device the
+     * The keyboard and its completion endpoint: a terminal cannot read a key without a lease on the device the
      * events come from. A machine with no input device boots without one.
      */
     if (kernel_platform_input_present()) {

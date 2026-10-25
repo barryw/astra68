@@ -39,6 +39,14 @@ EXT4_CPPFLAGS := -I$(LWEXT4)/include -I$(STORAGE)/port/include \
 	-DCONFIG_USE_DEFAULT_CFG=0 -I$(RUNTIME)/freestanding
 
 HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
+	include/astra/vfs_path_storage.h \
+	include/astra/vfs_call_storage.h \
+	include/astra/vfs_file_lifetime.h \
+	include/astra/vfs_reply.h \
+	include/astra/vfs_path_payload.h \
+	include/astra/volume_port.h $(NDK)/include/astra/volume.h \
+	../../include/astra/volume_abi.h \
+	../../include/astra/volume_service.h \
 	$(NDK)/include/astra/vfs_client.h include/astra/vfs_local_transport.h \
 	$(NDK)/include/astra/vfs_assign.h $(NDK)/include/astra/vfs_path.h \
 	include/astra/vfs_port_transport.h $(NDK)/include/astra/vfs_union.h \
@@ -55,7 +63,8 @@ SERVICE_TARGET := build/m68k/libastravfs-service.a
 SYSTEM_STATIC_OBJECTS := $(SYSTEM)/build/m68k/manifest.o $(SYSTEM)/build/m68k/bundle.o \
 	$(SYSTEM)/build/m68k/utf8.o
 TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
-	build/m68k/filesystem_library.o \
+	build/m68k/filesystem_library.o build/m68k/volume.o \
+	build/m68k/volume_client.o build/m68k/volume_port.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
 	build/m68k/backends/ext4.o build/m68k/backends/host.o \
@@ -67,6 +76,8 @@ TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/vfs_provider_index.o $(SYSTEM_STATIC_OBJECTS) \
 	build/m68k/vfs_status.o
 SERVICE_OBJECTS := build/m68k/library/vfs_service_core.o \
+	build/m68k/library/vfs_path.o \
+	build/m68k/library/volume.o build/m68k/library/volume_port.o \
 	build/m68k/library/vfs_port_transport.o \
 	build/m68k/library/backends/host.o \
 	build/m68k/library/vfs_host_transport.o \
@@ -74,15 +85,16 @@ SERVICE_OBJECTS := build/m68k/library/vfs_service_core.o \
 LOADER_PIC_TARGET := build/m68k/libastravfs-loader-pic.a
 LOADER_PIC_SOURCES := vfs_service_core vfs_client vfs_assign vfs_path vfs_local_transport \
 	vfs_port_transport vfs_host_transport vfs_host_direct vfs_union \
-	vfs_process vfs_reader vfs_provider_index vfs_status
+	vfs_process vfs_reader vfs_provider_index vfs_status volume volume_client
 LOADER_PIC_OBJECTS := $(patsubst %,build/m68k/loader/%.o,$(LOADER_PIC_SOURCES)) \
 	build/m68k/loader/backends/host.o \
 	build/m68k/loader/system_manifest.o build/m68k/loader/system_bundle.o \
 	build/m68k/loader/system_utf8.o
-FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library.4
+FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library.15
 FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/filesystem_library_identity.o \
 	build/m68k/library/filesystem_library.o \
+	build/m68k/library/volume.o build/m68k/library/volume_client.o \
 	build/m68k/library/vfs_service_core.o \
 	build/m68k/library/vfs_client.o build/m68k/library/vfs_assign.o \
 	build/m68k/library/vfs_path.o build/m68k/library/vfs_union.o \
@@ -97,11 +109,38 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/vfs_provider_index.o \
 	build/m68k/library/vfs_status.o
 FILESYSTEM_LIBRARY_MAP := filesystem.library.exports
-SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.3
+SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 KERNEL_ELF_TEST := ../../kernel/build/test_elf
 HOST_TEST := build/host/test_vfs_service_core
+VOLUME_TEST := build/host/test_volume_port
+VOLUME_CLIENT_TEST := build/host/test_volume_client
+
+$(VOLUME_TEST): src/volume.c src/volume_port.c tests/test_volume_port.c $(HEADERS) $(UTF8_OBJECT)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/volume.c src/volume_port.c tests/test_volume_port.c $(UTF8_OBJECT) -o $@
+
+$(VOLUME_CLIENT_TEST): src/volume.c src/volume_client.c tests/test_volume_client.c $(HEADERS) $(UTF8_OBJECT)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/volume.c src/volume_client.c tests/test_volume_client.c $(UTF8_OBJECT) -o $@
+
+test: $(VOLUME_TEST) $(VOLUME_CLIENT_TEST)
+
+sanitize-volume:
+	@mkdir -p build/host
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
+		src/volume.c src/volume_port.c tests/test_volume_port.c $(UTF8_OBJECT) -o build/host/test_volume_port_sanitize
+	./build/host/test_volume_port_sanitize
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
+		src/volume.c src/volume_client.c tests/test_volume_client.c $(UTF8_OBJECT) -o build/host/test_volume_client_sanitize
+	./build/host/test_volume_client_sanitize
+
+sanitize: sanitize-volume
+
+.PHONY: sanitize-volume
 
 all: $(TARGET) $(SERVICE_TARGET) $(LOADER_PIC_TARGET) \
 	$(FILESYSTEM_LIBRARY) library-contract
@@ -221,11 +260,11 @@ $(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) \
 		| libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,filesystem.library.4 \
+		-Wl,-soname,filesystem.library.15 \
 		-Wl,--version-script=$(FILESYSTEM_LIBRARY_MAP) -o $@ \
 		$(FILESYSTEM_LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
-		-Wl,--no-as-needed -Wl,-l:system.library.3 \
+		-Wl,--no-as-needed -Wl,-l:system.library.4 \
 		-Wl,-l:runtime.library.1 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
@@ -239,25 +278,30 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/vfs_path.h \
 		$(NDK)/include/astra/vfs_union.h \
 		$(NDK)/include/astra/filesystem_library.h \
+		$(NDK)/include/astra/volume.h \
 		$(NDK)/include/astra/vfs_process.h \
 		$(NDK)/include/astra/application_catalog.h \
 		$(NDK)/include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.4 4.1.0 ABI 4.1$$'
+		grep -q '^filesystem.library.15 15.2.0 ABI 15.2$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
-	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.4]' >/dev/null
+	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.15]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
-		grep -Fc 'Shared library: [system.library.3]')" = 1
+		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $< | \
 		grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 2
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null
 	@test "$$($(READELF) -dW $< | awk '/TEXTREL/{n++} END{print n+0}')" = 0
 	@$(READELF) -lW $< | grep ' GNU_RELRO ' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_FILESYSTEM_3.0' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_FILESYSTEM_15.0' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_FILESYSTEM_15.1' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_FILESYSTEM_15.2' >/dev/null
 	@$(READELF) --dyn-syms -W $< | \
-		grep -Eq ' astra_application_catalog_load@@ASTRA_FILESYSTEM_4\.1$$'
+		grep -Eq ' astra_volume_removal_advance@@ASTRA_FILESYSTEM_15\.0$$'
+	@$(READELF) --dyn-syms -W $< | \
+		grep -Eq ' astra_application_catalog_load@@ASTRA_FILESYSTEM_15\.0$$'
 	@ASTRA_LIBRARY_FIXTURE=$(abspath $<) $(KERNEL_ELF_TEST) >/dev/null
 	@echo "astra filesystem shared library: PASS"
 
@@ -273,7 +317,7 @@ $(HOST_TEST): $(CORE_SOURCES) $(UTF8_OBJECT) tests/test_vfs_service_core.c \
 	$(HOST_CC) $(CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) \
 		src/vfs_service_core.c src/vfs_client.c \
-        src/vfs_local_transport.c $(UTF8_OBJECT) \
+        src/vfs_local_transport.c src/vfs_path.c $(UTF8_OBJECT) \
 		tests/test_vfs_service_core.c -o $@
 
 ASSIGN_TEST := build/host/test_vfs_assign
@@ -308,7 +352,7 @@ $(PORT_TEST): src/vfs_port_transport.c src/vfs_service_core.c \
 		$(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) \
 		src/vfs_port_transport.c src/vfs_service_core.c src/vfs_client.c \
-		src/vfs_local_transport.c $(UTF8_OBJECT) tests/test_vfs_port.c -o $@
+		src/vfs_local_transport.c src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_port.c -o $@
 
 $(PORT_THREAD_TEST): src/vfs_port_transport.c \
 		$(UTF8_OBJECT) tests/test_vfs_port_threads.c $(HEADERS)
@@ -316,11 +360,12 @@ $(PORT_THREAD_TEST): src/vfs_port_transport.c \
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) -ffunction-sections -Wl,--gc-sections \
 		-DASTRA_VFS_EMBEDDED_THREAD_STATE=1 \
-		src/vfs_port_transport.c $(UTF8_OBJECT) \
+		src/vfs_port_transport.c src/vfs_path.c $(UTF8_OBJECT) \
 		tests/test_vfs_port_threads.c -o $@
 
 PATH_TEST := build/host/test_vfs_path
 PROCESS_TEST := build/host/test_vfs_process
+PROCESS_SANITIZE_TEST := build/host/test_vfs_process_sanitize
 READER_TEST := build/host/test_vfs_reader
 FILESYSTEM_LIBRARY_TEST := build/host/test_filesystem_library
 CATALOG_TEST := build/host/test_application_catalog
@@ -337,11 +382,20 @@ $(PROCESS_TEST): src/vfs_process.c src/process_filesystem.c \
 		src/vfs_provider_index.c src/vfs_path.c $(UTF8_OBJECT) \
 		tests/test_vfs_process.c $(HEADERS)
 	@mkdir -p $(@D)
-	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_THREAD_FLAGS) \
 		-DASTRA_VFS_PROCESS_TEST -ffunction-sections -Wl,--gc-sections \
 		src/vfs_process.c src/process_filesystem.c src/vfs_provider_index.c \
 		src/vfs_path.c $(UTF8_OBJECT) \
 		tests/test_vfs_process.c -o $@
+
+$(PROCESS_SANITIZE_TEST): src/vfs_process.c src/process_filesystem.c \
+		src/vfs_provider_index.c src/vfs_path.c $(UTF8_OBJECT) \
+		tests/test_vfs_process.c $(HEADERS)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_THREAD_FLAGS) \
+		$(SANITIZER_FLAGS) -DASTRA_VFS_PROCESS_TEST -ffunction-sections -Wl,--gc-sections \
+		src/vfs_process.c src/process_filesystem.c src/vfs_provider_index.c \
+		src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_process.c -o $@
 
 $(READER_TEST): src/vfs_reader.c src/vfs_provider_index.c \
 		tests/test_vfs_reader.c $(HEADERS) \
@@ -370,11 +424,11 @@ $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
 		src/filesystem_library.c src/vfs_union.c src/vfs_assign.c \
 		src/vfs_path.c $(UTF8_OBJECT) tests/test_filesystem_library.c -o $@
 
-$(HOST_BACKEND_TEST): src/backends/host.c \
+$(HOST_BACKEND_TEST): src/backends/host.c src/volume.c $(UTF8_OBJECT) \
 		tests/test_vfs_host_backend.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/backends/host.c tests/test_vfs_host_backend.c -o $@
+		src/backends/host.c src/volume.c $(UTF8_OBJECT) tests/test_vfs_host_backend.c -o $@
 
 $(RAM_BACKEND_TEST): src/backends/ram.c \
 		tests/test_vfs_ram_backend.c $(HEADERS)
@@ -407,15 +461,18 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 	./$(HOST_BACKEND_TEST)
 	./$(RAM_BACKEND_TEST)
 	./$(HOST_TRANSPORT_TEST)
+	./$(VOLUME_TEST)
+	./$(VOLUME_CLIENT_TEST)
 
 # The path parser is nothing but bounds arithmetic over caller buffers, so it
 # is the one piece here where a sanitizer earns its run.
-sanitize:
+sanitize: $(PROCESS_SANITIZE_TEST)
+	./$(PROCESS_SANITIZE_TEST)
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) $(SANITIZER_FLAGS) \
 		src/vfs_service_core.c src/vfs_client.c \
-		src/vfs_local_transport.c $(UTF8_OBJECT) \
+		src/vfs_local_transport.c src/vfs_path.c $(UTF8_OBJECT) \
 		tests/test_vfs_service_core.c \
 		-o build/host/test_vfs_service_core_sanitize
 	./build/host/test_vfs_service_core_sanitize
@@ -436,7 +493,7 @@ sanitize:
 	$(HOST_CC) $(PORT_CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) $(SANITIZER_FLAGS) \
 		src/vfs_port_transport.c src/vfs_service_core.c \
-		src/vfs_client.c src/vfs_local_transport.c $(UTF8_OBJECT) \
+		src/vfs_client.c src/vfs_local_transport.c src/vfs_path.c $(UTF8_OBJECT) \
 		tests/test_vfs_port.c \
 		-o build/host/test_vfs_port_sanitize
 	./build/host/test_vfs_port_sanitize
@@ -456,7 +513,7 @@ sanitize:
 		-o build/host/test_application_catalog_sanitize
 	./build/host/test_application_catalog_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		$(SANITIZER_FLAGS) src/backends/host.c \
+		$(SANITIZER_FLAGS) src/backends/host.c src/volume.c $(UTF8_OBJECT) \
 		tests/test_vfs_host_backend.c \
 		-o build/host/test_vfs_host_backend_sanitize
 	./build/host/test_vfs_host_backend_sanitize
@@ -476,7 +533,7 @@ tsan:
 	$(HOST_CC) $(CPPFLAGS) $(VFS_TEST_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(HOST_THREAD_FLAGS) $(THREAD_SANITIZER_FLAGS) \
 		src/vfs_service_core.c src/vfs_client.c \
-		src/vfs_local_transport.c $(UTF8_OBJECT) \
+		src/vfs_local_transport.c src/vfs_path.c $(UTF8_OBJECT) \
 		tests/test_vfs_service_core.c \
 		-o build/host/test_vfs_service_core_tsan
 	setarch x86_64 -R ./build/host/test_vfs_service_core_tsan
@@ -484,7 +541,7 @@ tsan:
 		$(COMMON_FLAGS) $(HOST_FLAGS) $(HOST_THREAD_FLAGS) \
 		$(THREAD_SANITIZER_FLAGS) src/vfs_port_transport.c \
 		src/vfs_service_core.c src/vfs_client.c src/vfs_local_transport.c \
-		$(UTF8_OBJECT) tests/test_vfs_port.c \
+		src/vfs_path.c $(UTF8_OBJECT) tests/test_vfs_port.c \
 		-o build/host/test_vfs_port_tsan
 	setarch x86_64 -R ./build/host/test_vfs_port_tsan
 

@@ -737,7 +737,7 @@ reg [31:0] completion_end_cycle_q;
         .start(blitter_start),
         .abort(blitter_abort),
         .is_fill(command_is_fill_q || command_is_fill_rects_q),
-        .fill_blend(rects_blend_q),
+        .fill_blend(command_is_fill_rects_q && rects_blend_q),
         .is_blit(command_is_blit_q),
         .arena_base(ARENA_BASE),
         .clip_left(command_clip_left_q),

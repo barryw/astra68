@@ -1,10 +1,104 @@
 # Interface Kit
 
-`interface.library.5` is the shared implementation for native window controls,
-integer flex layout, TextSurface presentation, the typed system clipboard, and
+`interface.library.7` is the shared implementation for native window controls,
+integer flex layout, shared transient menus, TextSurface presentation, the typed system clipboard, and
 per-document undo histories. Applications call its versioned ELF symbols
 directly; they do not compile private Interface Kit sources or speak directly
 to the display and clipboard services.
+
+## Shared settings panes
+
+Interface Kit 7.2 adds `astra_interface_settings_pane_init`, a composition of
+two ordinary Labels and two Containers. It reserves four consecutive IDs
+starting at `AstraSettingsPaneInfo.first_id`. The `ASTRA_SETTINGS_PANE_*`
+constants are both array indices and offsets from that first ID.
+
+Put those four controls and your application controls in one retained UI array.
+Assign content controls' flex `parent_id` to `first_id + ASTRA_SETTINGS_PANE_BODY`
+and action buttons to `first_id + ASTRA_SETTINGS_PANE_ACTIONS`. Then initialize
+the UI and apply `ASTRA_SETTINGS_PANE_LAYOUT_INIT`. The shell supplies
+24-pixel insets and 12-pixel gaps, grows its body and stacks measured actions.
+Title and description are nonempty and remain caller-owned. Ordinary event,
+focus, rendering, font-change and resize behavior comes from existing controls.
+
+Fonts uses this shell for browsing, import, preview, information and removal.
+See `examples/settings_pane.c` for another composition. Settings policy stays
+with its owner: system panes call a typed service API; applications use their
+private Config Kit grant. The shell owns no settings, converter or renderer.
+
+## Label font previews
+
+Ordinary Labels keep their theme font and fixed role size. To preview an
+installed face independently, initialize {c:type}`AstraLabelFont` with
+`ASTRA_LABEL_FONT_INIT`, set `gui`, the counted catalog `id`/`id_length`, and
+an exact installed `pixel_height`, then assign it to `AstraLabelInfo.font`.
+The descriptor is copied; its ID and the Label's text remain caller-owned.
+
+`astra_interface_label_set_font` updates that same shared Label in place.
+Measurement and fitting use Display's renderer metrics, and drawing emits
+the existing named-face hardware command. Missing strikes return an error;
+failed updates keep the previous font. Resetting to `ASTRA_LABEL_FONT_INIT`
+restores the theme font and role size. Previews do not change Config Kit's
+saved system choice or the process's adopted system-font context.
+
+## Context menus
+
+Interface 5.4 and System 3.3 provide window-owned context menus. The same
+{c:type}`AstraMenu` control paints and handles the compositor's ASTRA menu and
+application popups. It uses the existing surface and draw-list renderer.
+
+`astra_interface_ui_handle_event` emits `ASTRA_UI_ACTION_CONTEXT_MENU` on a
+secondary-button release, the Menu key, or Shift-F10. `control_id` identifies
+the deepest visible control under the pointer, including passive and disabled
+controls, or the focused control for keyboard input. Zero identifies the
+window background. These gestures never activate or toggle the control.
+An input-loss event clears pending pointer and keyboard interaction.
+
+Keep one {c:type}`AstraContextMenu` per window. Pass command references and the
+existing {c:type}`AstraCommandScope` to `astra_interface_context_menu_open`.
+Queries supply current labels, enabled and checked state. Labels are copied
+immediately; a zero command reference creates a separator. The compositor
+copies and validates the complete counted document before presenting it. The
+wire document has the same 1 MiB byte budget as managed draw-list submissions;
+rows are allocated on demand, with no separate item-count slab. Rendering uses
+the existing compositor replay and grouped glyph runs. A 200-row menu paints
+only its visible viewport.
+
+Feed every window event to `astra_interface_context_menu_handle_event` before
+ordinary control dispatch. It consumes correlated selection/cancellation
+results and invokes through the same command responder chain, which queries
+enabled state again. Keep the scope, command references and argument documents
+alive and unchanged until the terminal event or successful explicit close.
+Close the session before closing its window if it will be reused; otherwise
+discard the session together with the window.
+Stale results are consumed without invocation. Results are mandatory regardless
+of the window's event subscription mask. A full event queue retains a
+cancellation with `ASTRA_WINDOW_EVENT_LOSS`; the helper clears the session and
+returns `ASTRA_ERROR_IO`. The application may report that cancelled interaction
+without terminating its event loop.
+
+Anchors use client coordinates. For a keyboard request, use the focused
+control's retained geometry rather than the pointer position. Popup bounds
+flip and clamp into the display work area. Arrow, Home/End and Page keys skip
+disabled rows and separators; Enter/Space selects, Escape dismisses, and the
+wheel scrolls long menus. Outside clicks are consumed, including releases of
+buttons still held when a menu closes. Focus stays with the owning window.
+Owner loss, geometry/focus changes, pointer grabs and input reset dismiss it.
+One popup owns input at a time; another open request returns
+`ASTRA_ERROR_BUSY`. Explicit close names its request cookie, so an old close
+cannot dismiss a newer popup and succeeds if that old request already ended.
+A terminal event with a rendering error clears the session and returns its
+translated result (for example `ASTRA_ERROR_NO_RESOURCES`).
+
+This first version has flat menus. Submenus and application menu-strip
+publication remain future work. The low-level `astra_window_menu_open/close`
+transport and direct menu-control APIs are available to framework hosts;
+applications normally use the command-backed helper.
+
+```{literalinclude} ../../examples/interface_menu.c
+:language: c
+:linenos:
+```
 
 ## Opening a compatible library
 
@@ -14,7 +108,7 @@ fixes behavior without breaking the ABI. A consumer links directly and records
 the oldest compatible version in its bundle manifest:
 
 ```c
-requires interface.library 5 5.0.0
+requires interface.library 7 7.0.0
 ```
 
 The linker records the ABI-major SONAME and required symbol versions. The
@@ -54,7 +148,7 @@ state.
 
 Labels, buttons, checkboxes, radios, switches, sliders, dials, numeric steppers,
 segmented selectors, tab strips, disclosures, progress indicators, fields,
-and containers share this lifecycle. Label, button, toggle, disclosure, and
+lists, and containers share this lifecycle. Label, button, toggle, disclosure, and
 choice-item text spans are borrowed, not copied; keep
 their UTF-8 bytes alive for the control lifetime. Segmented selectors divide
 their frame evenly, change value on pointer release, and support
@@ -64,7 +158,15 @@ repeat after 400 ms; unavailable arrows remain visible but muted at a bound.
 All value changes return the same `ASTRA_UI_ACTION_VALUE_CHANGED` action.
 Numeric actions carry a signed 64-bit value; `decimal_places` is zero for
 integer controls and gives the Dial's fixed-point scale. The controls in the
-following example require `interface.library.5` version 5.0.0 or newer.
+following example require `interface.library.7` version 7.0.0 or newer.
+
+`astra_interface_list_init` (Interface Kit 6.0) creates a single-selection
+vertical list from borrowed `AstraChoiceItem` labels. An empty list is valid:
+set `items` to `NULL`, `item_count` to zero, and `selected` to `UINT32_MAX`.
+`UINT32_MAX` also means no selection for a populated list. Put the List inside
+a ScrollView when its rows exceed the viewport. Pointer release selects a row;
+Up/Down and Home/End change selection and reveal the selected row. List values
+use zero-based indexes, with `-1` for no selection.
 
 ```{literalinclude} ../../examples/interface_controls.c
 :language: c
@@ -83,7 +185,7 @@ of its descendants leave layout, rendering, hit testing, focus traversal, and
 animation together; applications do not maintain separate hidden states in
 each subsystem. `astra_interface_ui_set_state` reflows after a collapse change
 and clears any interaction owned by a descendant that left the active page. Tabs and
-collapsed containers require `interface.library.5` version 5.0.0 or newer.
+collapsed containers require `interface.library.7` version 7.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_tabs.c
 :language: c
@@ -103,8 +205,8 @@ Use a disclosure for optional settings that should reflow in place. The target
 must be an ordinary sibling container, which keeps the header reachable while
 its body is closed and prevents ambiguous ownership. State remains
 application-owned and can be restored by setting the target container before
-or after UI initialization. Disclosures require `interface.library.5` version
-5.2.0 or newer.
+or after UI initialization. Disclosures require `interface.library.7` version
+6.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_disclosure.c
 :language: c
@@ -119,6 +221,15 @@ clips and translates exactly one direct child; use a container as that child
 when the viewport contains multiple controls. Separate horizontal or vertical
 scrollbars bind to the same model and may live inside or outside the viewport.
 No scrollbar is required.
+
+ScrollView itself accepts focus, so a viewport containing only passive content
+can scroll by keyboard after a click or Tab. Focused descendants retain the
+same keyboard scrolling behavior. This requires version 5.3.0 or newer.
+
+For custom drawing, {c:func}`astra_interface_ui_geometry` returns the retained
+frame and effective clip for an indexed control after layout. Use the shared
+layout and scrolling geometry rather than duplicating placement or reading
+private fields. The query requires version 5.3.0 or newer.
 
 Wheel and keyboard input move in model line units. Nested views consume a
 gesture only while they can move in that direction, then chain to the parent.
@@ -135,7 +246,7 @@ the same transaction also selects the normal path. These are correctness
 fallbacks, not different application APIs.
 
 Scroll models, their bound views, and scrollbars require
-`interface.library.5` version 5.0.0 or newer.
+`interface.library.7` version 7.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_scroll.c
 :language: c
@@ -152,7 +263,7 @@ moves one logical pixel; Home and End move to the permitted extremes. The same
 live change is reported as `ASTRA_UI_ACTION_VALUE_CHANGED`, and
 `astra_interface_control_set_value` restores a saved first-pane extent.
 
-Splitters require `interface.library.5` version 5.0.0 or newer.
+Splitters require `interface.library.7` version 7.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_splitter.c
 :language: c
@@ -177,7 +288,7 @@ MC68040. The indicator's angular position is normalized internally; 0 through
 100 is not part of the public value contract. `astra_interface_control_get_value` and every
 value-change action return both the exact integer and its scale.
 
-Dials require `interface.library.5` version 5.0.0 or newer. Their indicator
+Dials require `interface.library.7` version 7.0.0 or newer. Their indicator
 uses Graphics Kit's shared
 clipped line primitive, which replays as a hardware line on draw-list surfaces.
 
@@ -213,12 +324,12 @@ together at vertical blank; the MC68040 does not paint or composite the
 pointer.
 
 Pointer-image APIs and automatic Interface Kit selection require
-`interface.library.5` version 5.0.0 or newer.
+`interface.library.7` version 7.0.0 or newer.
 
 ## Text models and fields
 
-{c:type}`AstraTextModel` is the shared UTF-8 document core used by fields and
-future editors. It is an allocation-free piece table with an indexed line map;
+{c:type}`AstraTextModel` is the shared UTF-8 document core used by fields,
+Text View and future editors. It is an allocation-free piece table with an indexed line map;
 the caller owns its content and four-byte-aligned metadata arenas. Those arenas
 are capacity, not document-format limits. When an edit returns
 `ASTRA_ERROR_BUFFER_TOO_SMALL`, query `text_model_replace_requirements`, move
@@ -249,6 +360,27 @@ respectively.
 ```
 
 ## Text selection and clipboard
+
+Interface Kit 7.1 adds selectable, read-only multiline Text View. Initialize
+`AstraTextViewInfo` with a caller-owned `AstraTextModel`, then call
+`astra_interface_text_view_init`. Place the control as a ScrollView's single
+child; bind ordinary scrollbars to that view's existing scroll model when
+visible bars are needed. Interface Gallery's Text page demonstrates this
+composition and native clipboard integration.
+
+Text View uses TextSurface's fixed-grid hardware glyph path. It draws only
+visible lines and columns, expands tabs to eight-cell stops, and displays CRLF
+as one line break while preserving original bytes for copying. Long lines
+scroll horizontally. Pointer drag, arrows, Shift selection, Home/End,
+Ctrl+Home/End, Page Up/Down and Meta+A/C use the same TextModel selection as
+single-line fields. Editing, cut and paste are rejected. A keyboard focus
+border remains visible at the viewport. Copy actions carry the control ID;
+applications copy that model's selected byte range through Clipboard Kit.
+
+After an external document change, call `astra_interface_text_view_refresh`
+to remeasure content, update scroll extents and repaint. Existing Field APIs
+remain single-line. Text View adds no fields to existing public control/context
+structures, so this is Interface Kit 7.1, with two new versioned symbols.
 
 {c:type}`AstraTextSurface` owns presentation policy and caller-provided scratch
 storage, not the document. Grid cells, selection, and scrollback remain in the

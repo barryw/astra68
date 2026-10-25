@@ -73,6 +73,9 @@ have meant committing to a Linux personality in the kernel.
   `putwchar.c` — provide the GNU unlocked wide-I/O entry points declared by
   picolibc's public `wchar.h`. Upstream emits only part of that surface when
   stdio locking is enabled, leaving the other declared aliases unresolved.
+* `libc/string/strerror.c` — names `ESTALE` as a removed or replaced volume.
+  Without this entry, a shell whose current directory was lost correctly gets
+  `ESTALE` from `fork()` but prints "Unknown error".
 
 A version bump is a re-vendor, not a merge. Retained source differences are
 listed above so they cannot disappear into an installed sysroot.

@@ -26,7 +26,11 @@ astra_posix_exec_export
 astra_posix_enter
 astra_posix_file_after_fork_child
 astra_posix_file_bind
-astra_posix_file_fork_ready
+astra_posix_file_fork_prepare
+astra_posix_file_fork_release
+astra_posix_process_state_size
+astra_posix_process_export
+astra_posix_process_import
 astra_posix_file_prepare
 astra_posix_process_service
 astra_posix_signal_generation
@@ -223,6 +227,11 @@ sched_setscheduler
 sched_yield
 secure_getenv
 select
+sem_destroy
+sem_init
+sem_post
+sem_trywait
+sem_wait
 send
 sendmsg
 sendto

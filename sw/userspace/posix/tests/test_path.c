@@ -55,26 +55,29 @@ int main(void)
     expect("/work/project", "notes.txt", 1,
            "/work/project/notes.txt", "/work/project/notes.txt");
     expect_invalid("/work", "");
+    expect("/work", "link/../file", 1, "/work/file", "/work/link/../file");
+    expect_native("/work", "missing/../file", 1, "/work/missing/../file");
+    expect_native("/work", "/work/file/", 1, "/work/file/");
     expect("/work/project", "../notes.txt", 1,
-           "/work/notes.txt", "/work/notes.txt");
+           "/work/notes.txt", "/work/project/../notes.txt");
     expect("/work", "/sys//lib/./../vim", 1,
-           "/sys/vim", "/sys/vim");
+           "/sys/vim", "/sys/lib/./../vim");
     expect("/work", "/dh0/docs/readme", 1,
            "/dh0/docs/readme", "/dh0/docs/readme");
     expect("/work", "commands:vim", 1,
            "/work/commands:vim", "/work/commands:vim");
     expect("/work", "commands/bin/../hello", 1,
-           "/work/commands/hello", "/work/commands/hello");
-    expect("/work", "../../..", 0, "/", "/");
+           "/work/commands/hello", "/work/commands/bin/../hello");
+    expect("/work", "../../..", 1, "/", "/work/../../..");
     expect("/", "work", 1, "/work", "/work");
-    expect("/a/b/c", "../../d", 1, "/a/d", "/a/d");
+    expect("/a/b/c", "../../d", 1, "/a/d", "/a/b/c/../../d");
     expect_native("/work/project", "notes.txt", 1,
                   "/work/project/notes.txt");
     /* PATH lookup and ordinary relative names use the same slash grammar. */
     expect_native("/work", "/commands/hello", 1, "/commands/hello");
     expect_native("/work", "commands/hello", 1, "/work/commands/hello");
     expect_native("/work", "commands:vim", 1, "/work/commands:vim");
-    expect_native("/work", "../../..", 0, "/");
+    expect_native("/work", "../../..", 1, "/work/../../..");
     assert(astra_posix_link_target_to_native("../note", target,
                                              sizeof(target)) == 0);
     assert(strcmp(target, "../note") == 0);

@@ -2308,7 +2308,9 @@ static int ext4_fwrite_block(struct ext4_blockdev *bdev, ext4_fsblk_t fblock,
 	return ext4_block_set(bdev, &block);
 }
 
-int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
+static int ext4_fwrite_from(ext4_file *file, const void *buf, size_t size,
+                           size_t *wcnt, uint64_t offset, bool positioned,
+                           bool append, uint64_t max_end)
 {
 	uint32_t unalg;
 	uint32_t iblk_idx;
@@ -2324,8 +2326,11 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
 	const uint8_t *u8_buf = buf;
 	int r, rr = EOK;
 	int put_status;
+	bool sparse;
 
 	ext4_assert(file && file->mp);
+	if (wcnt)
+		*wcnt = 0;
 
 	if (file->mp->fs.read_only)
 		return EROFS;
@@ -2342,9 +2347,6 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
 	struct ext4_fs *const fs = &file->mp->fs;
 	struct ext4_sblock *const sb = &file->mp->fs.sb;
 
-	if (wcnt)
-		*wcnt = 0;
-
 	r = ext4_fs_get_inode_ref(fs, file->inode, &ref);
 	if (r != EOK) {
 		ext4_trans_abort(file->mp);
@@ -2354,9 +2356,26 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
 
 	/*Sync file size*/
 	file->fsize = ext4_inode_get_size(sb, ref.inode);
-	if (file->flags & O_APPEND)
-		file->fpos = file->fsize;
+	uint64_t position = append ? file->fsize :
+		positioned ? offset : file->fpos;
 	block_size = ext4_sb_get_block_size(sb);
+	uint64_t file_limit = (ext4_inode_has_flag(ref.inode, EXT4_INODE_FLAG_EXTENTS) ?
+		(uint64_t)UINT32_MAX : fs->inode_block_limits[3]) * block_size;
+	if (max_end > file_limit)
+		max_end = file_limit;
+	if (position >= max_end) {
+		r = EFBIG;
+		goto Finish;
+	}
+	if (size > max_end - position)
+		size = max_end - position;
+	sparse = position > file->fsize;
+	if (sparse) {
+		r = ext4_fzero_tail(&ref, file->fsize, position);
+		if (r != EOK)
+			goto Finish;
+	}
+	file->fpos = position;
 
 	iblock_last = (uint32_t)((file->fpos + size) / block_size);
 	iblk_idx = (uint32_t)(file->fpos / block_size);
@@ -2398,7 +2417,7 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
 	while (size >= block_size) {
 
 		while (iblk_idx < iblock_last) {
-			if (iblk_idx < ifile_blocks) {
+			if (sparse || iblk_idx < ifile_blocks) {
 				r = ext4_fs_init_inode_dblk_idx(&ref, iblk_idx,
 								&fblk);
 				if (r != EOK)
@@ -2459,8 +2478,8 @@ int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
 		goto Finish;
 
 	if (size) {
-		bool preserve = iblk_idx < ifile_blocks;
-		if (iblk_idx < ifile_blocks) {
+		bool preserve = sparse || iblk_idx < ifile_blocks;
+		if (preserve) {
 			r = ext4_fs_init_inode_dblk_idx(&ref, iblk_idx, &fblk);
 			if (r != EOK)
 				goto Finish;
@@ -2519,6 +2538,18 @@ Finish:
 
 	EXT4_MP_UNLOCK(file->mp);
 	return r;
+}
+
+int ext4_fwrite(ext4_file *file, const void *buf, size_t size, size_t *wcnt)
+{
+	return ext4_fwrite_from(file, buf, size, wcnt, 0, false,
+	                       file->flags & O_APPEND, UINT64_MAX);
+}
+
+int ext4_fwrite_at(ext4_file *file, uint64_t offset, bool append,
+                   uint64_t max_end, const void *buf, size_t size, size_t *wcnt)
+{
+	return ext4_fwrite_from(file, buf, size, wcnt, offset, true, append, max_end);
 }
 
 int ext4_fseek(ext4_file *file, int64_t offset, uint32_t origin)

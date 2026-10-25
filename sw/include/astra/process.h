@@ -25,12 +25,12 @@
 /** Startup-block signature ("ASTR") identifying a valid ::AstraStartupInfo. */
 #define ASTRA_STARTUP_MAGIC 0x41535452u
 /** Current ::AstraStartupInfo ABI revision the kernel publishes and requires. */
-#define ASTRA_STARTUP_ABI_VERSION 7u
+#define ASTRA_STARTUP_ABI_VERSION 8u
 /** Fixed byte size of ::AstraStartupInfo. */
-#define ASTRA_STARTUP_INFO_SIZE 84u
+#define ASTRA_STARTUP_INFO_SIZE 92u
 /** Fixed byte size of one ::AstraStartupCapability entry. */
 #define ASTRA_STARTUP_CAPABILITY_SIZE 92u
-/** The kernel publishes startup state in the machine's one 4 KiB VM page. */
+/** The header and capability table occupy one read-only 4 KiB VM page. */
 #define ASTRA_STARTUP_BLOCK_SIZE 4096u
 /**
  * Maximum length of a capability's mount-relative root path, including the
@@ -155,25 +155,22 @@
  *
  * A child always spends two startup slots naming itself and its first
  * thread. Every remaining slot may be granted by its launcher; the startup
- * page's actual packing check decides how many fit beside argv and the
- * environment. There is no second deployment-sized ceiling to raise when a
+ * page's actual packing check decides how many records fit. Argument and
+ * environment vectors have their own owned payload. There is no second deployment-sized ceiling to raise when a
  * service gains a capability.
  */
 #define ASTRA_LAUNCH_GRANT_MAX (ASTRA_STARTUP_CAPABILITY_MAX - 2u)
 /**
- * Physical upper bound on launch argument count.
- *
- * Arguments share the startup page with its capability table and
- * environment. These are physical upper bounds only; the kernel accepts the
- * actual mixture when its pointer vector and strings fit the page. One
- * empty argument costs one byte and one four-byte pointer, so no valid page
- * can exceed this count.
+ * Combined byte budget for packed argument and environment strings,
+ * including every NUL terminator. The kernel publishes their pointer vectors
+ * and strings in separately owned read-only pages; capability count does not
+ * reduce this budget.
  */
-#define ASTRA_LAUNCH_ARGUMENT_BYTES ASTRA_STARTUP_BLOCK_SIZE
-/** Physical upper bound on launch argument count; one empty argument costs 5 bytes. */
-#define ASTRA_LAUNCH_ARGUMENT_MAX \
-    ((ASTRA_STARTUP_BLOCK_SIZE - ASTRA_STARTUP_INFO_SIZE - \
-      (2u * ASTRA_STARTUP_CAPABILITY_SIZE)) / 5u)
+#define ASTRA_LAUNCH_STRING_BYTES 4096u
+/** Maximum byte length of packed argv strings within the combined budget. */
+#define ASTRA_LAUNCH_ARGUMENT_BYTES ASTRA_LAUNCH_STRING_BYTES
+/** Natural maximum argv count: an empty argument occupies one NUL byte. */
+#define ASTRA_LAUNCH_ARGUMENT_MAX ASTRA_LAUNCH_STRING_BYTES
 /**
  * Launch flag: the child is essential and must not be refused.
  *
@@ -187,17 +184,15 @@
 /** Fixed ELF32 header; streaming loaders never need a larger initial window. */
 #define ASTRA_EXECUTABLE_HEADER_SIZE 52u
 /**
- * Byte size of the environment block's backing storage: the whole startup
- * page.
- *
- * Environment space is the startup page, not a smaller policy quota. The
- * kernel accepts the combination of capabilities, argv, pointers and strings
- * only when the actual packed block fits that page. Seven is the minimum
- * cost of one valid entry: "A=\0" plus its four-byte vector slot.
+ * Maximum environment-string bytes within the combined launch string budget.
+ * A valid entry needs at least three bytes, "A=\0". Pointer storage is derived
+ * from the admitted counts and does not consume the packed-string budget.
  */
-#define ASTRA_LAUNCH_ENVIRONMENT_BYTES ASTRA_STARTUP_BLOCK_SIZE
-/** Physical upper bound on environment entry count; one valid entry costs at least 7 bytes. */
-#define ASTRA_LAUNCH_ENVIRONMENT_MAX (ASTRA_STARTUP_BLOCK_SIZE / 7u)
+#define ASTRA_LAUNCH_ENVIRONMENT_BYTES ASTRA_LAUNCH_STRING_BYTES
+/** Natural maximum environment count: one valid entry needs three bytes. */
+#define ASTRA_LAUNCH_ENVIRONMENT_MAX (ASTRA_LAUNCH_STRING_BYTES / 3u)
+/** Maximum derived vector payload: one pointer per string plus both NULL slots. */
+#define ASTRA_STARTUP_VECTOR_DATA_MAX (5u * ASTRA_LAUNCH_STRING_BYTES + 8u)
 
 /** Where a launch request originated. */
 typedef enum AstraLaunchSource {
@@ -382,7 +377,7 @@ typedef struct AstraStartupInfo {
     uint16_t abi_version;
     /** ::ASTRA_STARTUP_INFO_SIZE. */
     uint16_t header_size;
-    /** Complete published byte count: this header, the capability table, argv and the environment. */
+    /** Exact byte count of this header and its capability table. */
     uint32_t total_size;
     /** The kernel's `ASTRA_SYSCALL_ABI_VERSION`, checked against the caller's own build. */
     uint32_t syscall_abi_version;
@@ -420,6 +415,10 @@ typedef struct AstraStartupInfo {
     uint32_t interpreter_entry;
     /** Exact PT_LOAD memory bytes writable by the original executable. */
     uint32_t program_writable_bytes;
+    /** Address of the separate read-only argv/environment pointer and string payload, or zero. */
+    uint32_t vector_data_address;
+    /** Exact payload bytes, excluding mapped-page padding; zero exactly when the payload is absent. */
+    uint32_t vector_data_size;
 } AstraStartupInfo;
 
 /**

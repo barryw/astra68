@@ -71,10 +71,10 @@ TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 # port builds them (it owns SDL's headers and build rules); this directory
 # strips them and checks their libraries like every other command.
 SDL_COMMANDS := loopwave
-COMMANDS := status events log devices which open service shutdown restart ls ps metrics cat mkdir rm \
+COMMANDS := status events log devices volumes disk mount unmount lsof df which open service shutdown restart ls ps metrics cat mkdir rm \
 	    nice renice \
-	    heapbench fsstress date echo ntp ping lua vim zsh $(SDL_COMMANDS)
-TEST_COMMANDS := posix hello cxx fpucheck logburst
+	    heapbench fsstress fsbench date echo ntp ping lua vim zsh $(SDL_COMMANDS)
+TEST_COMMANDS := posix hello cxx fpucheck logburst fssem fsprobe
 SBASE_PRIMARY := ls mkdir nice renice
 SOURCE_COMMANDS := $(filter-out lua cxx vim zsh $(SDL_COMMANDS) \
 	$(SBASE_PRIMARY),$(COMMANDS) $(TEST_COMMANDS))
@@ -84,6 +84,10 @@ events_EXTRA_SOURCES := events/events_support.c
 log_EXTRA_SOURCES := log/log_filter.c
 date_EXTRA_SOURCES := date/date_support.c
 ps_EXTRA_SOURCES := ps/ps_support.c
+mount_EXTRA_SOURCES := volumes/volume_cli.c
+disk_EXTRA_SOURCES := volumes/volume_cli.c
+unmount_EXTRA_SOURCES := volumes/volume_cli.c
+lsof_EXTRA_SOURCES := volumes/volume_cli.c
 
 # A command names only the libraries whose symbols it calls.  The executable
 # contract below compares this source-of-truth list with DT_NEEDED, so a new
@@ -93,6 +97,12 @@ status_LIBRARIES := $(LIBC_LIBRARY)
 events_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 log_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 devices_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+volumes_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+disk_LIBRARIES := $(LIBC_LIBRARY) $(ASTRA_DOS_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+mount_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+unmount_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+lsof_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+df_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 which_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 open_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)
 service_LIBRARIES := $(LIBC_LIBRARY) $(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY)
@@ -112,6 +122,9 @@ fpucheck_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 logburst_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 heapbench_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 fsstress_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+fsbench_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+fssem_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
+fsprobe_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 date_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 echo_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 ntp_LIBRARIES := $(LIBC_LIBRARY) $(NTP_LIBRARY) $(RUNTIME_LIBRARY)

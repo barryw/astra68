@@ -156,12 +156,22 @@ static KernelWorkerServiceResult service_deferred_interrupts(
             event.elapsed_cycles);
         if (!write_dispatch_trace(event.source, event.vector, status, result,
                                   woken_threads, timestamp, &trace))
-            return KERNEL_WORKER_SERVICE_FATAL;
+            goto fatal;
         deferred_read_sequence = read_sequence + 1u;
         astra_u32_increment_saturating(&deferred_dispatched);
         ++completed;
         if (result == KERNEL_INTERRUPT_FATAL)
-            return KERNEL_WORKER_SERVICE_FATAL;
+            goto fatal;
+        continue;
+fatal:
+        /* Release builds omit routine IRQs; retain source and status on fatal. */
+        (void)kernel_trace_write_at(
+            KERNEL_TRACE_EVENT_IRQ_EXIT,
+            (uint16_t)((event.source & KERNEL_IRQ_TRACE_SOURCE_MASK) |
+                       ((uint16_t)result << 8)),
+            timestamp, event.source, event.vector, (uint32_t)status,
+            woken_threads);
+        return KERNEL_WORKER_SERVICE_FATAL;
     }
     if (deferred_read_sequence != deferred_write_sequence &&
         kernel_worker_signal(KERNEL_WORKER_IRQ_DISPATCH) != KERNEL_WORKER_OK)
@@ -293,33 +303,6 @@ KernelInterruptDispatchResult dispatch_timer_interrupt(
     return KERNEL_INTERRUPT_FATAL;
 }
 
-static __attribute__((noinline))
-KernelInterruptDispatchResult dispatch_host_interrupt(
-    uint8_t vector, uint32_t *woken_threads)
-{
-    KernelPlatformCycleCount timestamp;
-    KernelInterruptDispatchResult result;
-    KernelIrqTrace trace;
-    KernelIrqStatus status;
-    uint64_t timestamp_value;
-    uint32_t elapsed;
-
-    kernel_platform_cpu_cycles(&timestamp);
-    timestamp_value = ((uint64_t)timestamp.high << 32) | timestamp.low;
-    status = kernel_irq_dispatch_claimed_traced(
-        IRQ_SRC_HOST, vector, timestamp_value, woken_threads, &trace);
-    elapsed = kernel_platform_cpu_cycles_low() - timestamp.low;
-    result = classify_device_status(status);
-    kernel_performance_record_call(
-        *woken_threads == 0u ? KERNEL_PERFORMANCE_HARD_IRQ :
-                              KERNEL_PERFORMANCE_HARD_IRQ_WAKE,
-        elapsed);
-    if (!write_dispatch_trace(IRQ_SRC_HOST, vector, status, result,
-                              *woken_threads, timestamp_value, &trace))
-        return KERNEL_INTERRUPT_FATAL;
-    return result;
-}
-
 static KernelInterruptDispatchResult classify_device_status(
     KernelIrqStatus status)
 {
@@ -382,8 +365,11 @@ KernelInterruptDispatchResult kernel_interrupt_dispatch(
         return KERNEL_INTERRUPT_NONE;
     if (source == IRQ_SRC_TIMER0)
         return dispatch_timer_interrupt(vector, woken_threads);
-    if (source == IRQ_SRC_HOST)
-        return dispatch_host_interrupt(vector, woken_threads);
+    /* Hard IRQs must not edit wait sets while another kernel path edits them.
+     * Keep this level source masked until its worker ACKs, scans, and rearms. */
+    if (source == IRQ_SRC_HOST &&
+        !kernel_platform_irq_mask(source, NULL))
+        return KERNEL_INTERRUPT_FATAL;
     return dispatch_device_interrupt(source, vector);
 }
 

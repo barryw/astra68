@@ -23,6 +23,28 @@ The certifier injects QEMU input events and verifies Astra's big-endian MMIO
 records, ordering, independent device sequences, queue bounds, sticky overflow,
 and input IRQ assertion/deassertion.
 
+Native audio buffer completion can also be checked without booting the guest:
+
+```sh
+python3 emu/qemu/test-audio-stream.py "$(./emu/qemu/build.sh host)"
+```
+
+The certifier checks playback backpressure, partial buffers, stale generations,
+ring and byte-counter wrap, buffer reuse, invalid queue changes, and close.
+Copied buffers return only after the host mixer consumes them. SDL uses two
+buffers, so its application and mailbox queues do not add their depths.
+
+Interface Gallery opens directly from the desktop. Its retained benchmark
+suites run only with `open /apps/InterfaceGallery.app --benchmark`; the Terminal
+gate's `--interface-layout-only` option invokes that path explicitly.
+
+`test-context-menus.py QEMU ROM IMAGE` exercises the common window-owned popup
+through real Desktop right-click input, Escape and outside-click cancellation,
+release-only activation, DH0 Open by pointer and keyboard, and ASTRA keyboard
+navigation/About. It uses the same native runtime and copied provider image as
+the desktop/Atlas gates. The Interface benchmark includes 10,000 menu actions
+under the existing 12.5-microsecond semantic-action gate.
+
 ## AstraHost block service
 
 The machine implements the Vesta block registers at `0x150..0x1b0` over a host

@@ -5,6 +5,7 @@ import argparse
 import errno
 import os
 from pathlib import Path
+import pwd
 import signal
 import socket
 import subprocess
@@ -35,10 +36,24 @@ def port_available(port):
         probe.close()
 
 
-def connect_control(path):
+def connect_control(path, credentials=None):
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
     connection.settimeout(5.0)
-    connection.connect(path)
+    if credentials is None:
+        connection.connect(path)
+    else:
+        uid, gid = credentials
+        previous_gid = os.getegid()
+        try:
+            os.setegid(gid)
+            os.seteuid(uid)
+            connection.connect(path)
+        except BaseException:
+            connection.close()
+            raise
+        finally:
+            os.seteuid(0)
+            os.setegid(previous_gid)
     return connection
 
 
@@ -47,9 +62,18 @@ def main():
     parser.add_argument("binary")
     parser.add_argument("--qemu-user")
     parser.add_argument("--sysroot")
+    parser.add_argument("--guest-user", help="root-only socket permission gate")
     arguments = parser.parse_args()
+    guest = None
+    if arguments.guest_user:
+        assert os.getuid() == 0
+        guest = pwd.getpwnam(arguments.guest_user)
+        assert guest.pw_uid != 0 and guest.pw_gid != 0
+        os.setgroups([])
 
     with tempfile.TemporaryDirectory(prefix="astra-remote-lifecycle-") as root:
+        if guest is not None:
+            os.chmod(root, 0o755)
         control_path = os.path.join(root, "control.sock")
         capture_path = os.path.join(root, "capture.bin")
         port_probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -69,12 +93,23 @@ def main():
                 runner.extend(("-L", arguments.sysroot))
         process = subprocess.Popen(
             runner + [arguments.binary], env=environment,
+            **({"group": guest.pw_gid} if guest is not None else {}),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         try:
             wait_for(lambda: Path(control_path).exists(), "control socket")
             assert port_available(port), "VNC listened without an Astra lease"
 
-            failed = connect_control(control_path)
+            if guest is not None:
+                try:
+                    unexpected = connect_control(control_path, (guest.pw_uid, 0))
+                except PermissionError:
+                    pass
+                else:
+                    unexpected.close()
+                    raise AssertionError("control socket accepted unrelated group")
+
+            failed = connect_control(control_path, None if guest is None else
+                                     (guest.pw_uid, guest.pw_gid))
             assert failed.recv(32).startswith(b"ERROR ")
             failed.close()
             assert process.poll() is None, "activation failure killed broker"

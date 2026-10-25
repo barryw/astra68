@@ -1,0 +1,10 @@
+ASTRA_DOS_1.0 {
+    global:
+        astra_dos_disk_check;
+        astra_dos_disk_snapshot_close;
+        astra_dos_disk_snapshot_open;
+        astra_dos_disk_status;
+        astra_dos_disk_submit;
+    local:
+        *;
+};

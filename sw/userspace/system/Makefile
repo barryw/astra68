@@ -30,10 +30,10 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIB := build/m68k/libastra.a
 PIC_LIB := build/m68k/libastra-pic.a
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
-SYSTEM_LIBRARY := build/m68k/libraries/system.library.3
+SYSTEM_LIBRARY := build/m68k/libraries/system.library.4
 SYSTEM_IDENTITY := build/m68k/dynamic/system_library.o
 SYSTEM_SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
-	src/application.c src/service_definition.c src/service_manager.c \
+	src/application.c src/application_payload.c src/service_payload.c src/service_definition.c src/service_manager.c \
 	src/manifest.c src/bundle.c src/config_scope.c src/window.c \
 	src/pointer.c src/graphics.c src/display_mode.c src/clipboard.c \
 	src/keymap.c src/datetime.c
@@ -59,7 +59,7 @@ HOST_TESTS := application area bulk_ring bundle clipboard datetime graphics \
 SANITIZER_TESTS := application area bulk_ring bundle clipboard graphics \
 	pointer port service_manager utf8 window
 
-TEST_SOURCES_application := src/resource.c src/port.c src/application.c \
+TEST_SOURCES_application := src/resource.c src/port.c src/application.c src/application_payload.c src/service_payload.c \
 	$(TEST_UTF8) $(RUNTIME)/src/arguments.c
 TEST_SOURCES_area := src/resource.c src/area.c
 TEST_SOURCES_bulk_ring := src/resource.c src/bulk_ring.c
@@ -73,8 +73,8 @@ TEST_SOURCES_graphics := src/graphics.c src/display_mode.c src/resource.c \
 	src/area.c src/port.c src/window.c $(TEST_UTF8)
 TEST_SOURCES_pointer := src/resource.c src/port.c src/pointer.c
 TEST_SOURCES_port := src/resource.c src/port.c
-TEST_SOURCES_service_manager := src/resource.c src/area.c src/port.c \
-	src/service_definition.c src/service_manager.c $(TEST_UTF8)
+TEST_SOURCES_service_manager := src/resource.c src/port.c \
+	src/service_definition.c src/service_manager.c src/service_payload.c $(TEST_UTF8)
 TEST_SOURCES_utf8 := $(TEST_UTF8)
 TEST_SOURCES_window := src/resource.c src/area.c src/port.c src/window.c \
 	$(TEST_UTF8)
@@ -123,7 +123,7 @@ $(SYSTEM_LIBRARY): $(SYSTEM_IDENTITY) $(SYSTEM_OBJECTS) $(SYSTEM_MAP) \
 		$(ASTRA_SHARED_LINK_INPUTS) | runtime-library-ready
 	@mkdir -p $(@D)
 	$(CC) $(CPU_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,system.library.3 \
+		-Wl,-soname,system.library.4 \
 		-Wl,--version-script=$(SYSTEM_MAP) -o $@ \
 		$(SYSTEM_IDENTITY) $(SYSTEM_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -Wl,--no-as-needed \
@@ -138,28 +138,30 @@ system-library-contract: $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(SYSTEM_MAP) $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^system.library.3 3.2.0 ABI 3.2$$'
+		grep -q '^system.library.4 4.2.0 ABI 4.2$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
-	@$(READELF) -dW $< | grep -Fq 'Library soname: [system.library.3]'
+	@$(READELF) -dW $< | grep -Fq 'Library soname: [system.library.4]'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 1
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
 	@$(READELF) -lW $< | grep -q ' GNU_RELRO '
-	@$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_3.0' && \
-		$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_3.2'
+	@$(READELF) -VW $< | grep -q 'ASTRA_SYSTEM_4.0'
 	@echo "astra system shared library: PASS"
 
 define system_host_test
 build/host/test_$(1): $$(TEST_SOURCES_$(1)) tests/test_$(1).c
 	@mkdir -p $$(@D)
-	$$(HOST_CC) $$(HOST_CFLAGS) $$^ -o $$@
+	$$(HOST_CC) $$(HOST_CFLAGS) $$(TEST_SOURCES_$(1)) tests/test_$(1).c -o $$@
 
 build/host/test_$(1)_sanitize: $$(TEST_SOURCES_$(1)) tests/test_$(1).c
 	@mkdir -p $$(@D)
-	$$(HOST_CC) $$(HOST_CFLAGS) $$(SANITIZER_FLAGS) $$^ -o $$@
+	$$(HOST_CC) $$(HOST_CFLAGS) $$(SANITIZER_FLAGS) $$(TEST_SOURCES_$(1)) tests/test_$(1).c -o $$@
 endef
 $(foreach test,$(HOST_TESTS),$(eval $(call system_host_test,$(test))))
+
+build/host/test_window build/host/test_window_sanitize \
+build/host/test_graphics build/host/test_graphics_sanitize: ../../include/astra/gui.h
 
 test: $(addprefix build/host/test_,$(HOST_TESTS))
 	@set -e; for test in $^; do ./$$test; done

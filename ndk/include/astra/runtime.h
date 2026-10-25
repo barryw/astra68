@@ -979,6 +979,41 @@ uint32_t astra_host_channel_open(uint32_t device,
  */
 uint32_t astra_host_channel_close(uint32_t device);
 /**
+ * Create a filesystem scope (::ASTRA_SYSCALL_HOST_SCOPE_CREATE): the
+ * authority to drive host channels bound to one provider session.
+ * @param device Host device handle carrying ::ASTRA_RIGHT_HOST_SCOPE.
+ * @param word The provider's word for the session (a volume under host
+ *        command record 2, a session id from record 4).
+ * @param flags ::ASTRA_HOST_SCOPE_READ_ONLY and/or ::ASTRA_HOST_SCOPE_DELEGATE.
+ * @param scope Receives a handle with READ (query), WRITE (open and attach
+ *        channels), TRANSFER and ADMINISTER (revoke).
+ * @return ASTRA_SYSCALL_*; UNSUPPORTED when the provider lacks
+ *         ::ASTRA_HOST_CAP_FS_SCOPE, ACCESS_DENIED without the right.
+ */
+uint32_t astra_host_scope_create(uint32_t device, uint32_t word,
+                                 uint32_t flags, uint32_t *scope);
+/**
+ * Revoke a scope (::ASTRA_SYSCALL_HOST_SCOPE_REVOKE): it is detached from
+ * every channel that carries it, which the provider honors before this
+ * returns, and every later open, attach or query on it answers PEER_DEAD.
+ * @param scope The scope, with ::ASTRA_RIGHT_ADMINISTER.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_host_scope_revoke(uint32_t scope);
+/**
+ * Bind one more scope to the calling thread's host channel
+ * (::ASTRA_SYSCALL_HOST_SCOPE_ATTACH), which must have been opened on a
+ * scope; at most ::ASTRA_HOST_CHANNEL_SCOPE_MAX. A scope already bound there
+ * is not bound twice.
+ * @param scope The scope, with ::ASTRA_RIGHT_WRITE.
+ * @return ASTRA_SYSCALL_* status.
+ */
+uint32_t astra_host_scope_attach(uint32_t scope);
+/** Set a scope's per-owner handles/share bound before binding it.
+ * @param scope Scope carrying ADMINISTER. @param files Bound, zero for unlimited.
+ * @return ASTRA_SYSCALL_* status; BUSY when bound to any channel. */
+uint32_t astra_host_scope_limit(uint32_t scope, uint32_t files);
+/**
  * Notify the host of a new producer position.
  * @param channel_address Valid shared channel address.
  * @param producer_position Monotonic producer byte position.
@@ -1603,9 +1638,30 @@ uint32_t astra_shutdown_receive_reply(uint32_t reply_receive,
  * @param handles Capabilities to transfer.
  * @param handle_count Number of transferred capabilities.
  * @return ASTRA_SYSCALL_* status, including WOULD_BLOCK for back pressure.
+ *         INVALID_ARGUMENT when a transferred handle retains no right
+ *         besides TRANSFER after import filtering; nothing moves.
  */
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
                          const uint32_t *handles, uint32_t handle_count);
+/**
+ * Send one message whose transferred capabilities arrive with the rights
+ * the sender chooses (runtime 1.15, syscall ABI 0x00010042): each handle
+ * keeps its own rights AND its disposition's mask, so a mask only narrows
+ * -- the way Zircon's zx_channel_write_etc takes zx_handle_disposition_t.
+ * Every handle is moved, so each needs ASTRA_RIGHT_TRANSFER, and a mask may
+ * strip TRANSFER so what arrives cannot travel further.
+ * @param handle Port send capability.
+ * @param message Message bytes.
+ * @param size Message byte count.
+ * @param dispositions Capabilities to transfer and the rights each keeps.
+ * @param count Number of dispositions, at least one.
+ * @return ASTRA_SYSCALL_* status; INVALID_ARGUMENT if a mask leaves no
+ *         right besides TRANSFER after import filtering; nothing moves.
+ */
+uint32_t astra_port_send_rights(uint32_t handle, const void *message,
+                                uint32_t size,
+                                const AstraHandleDisposition *dispositions,
+                                uint32_t count);
 /**
  * Receive one queued message without blocking.
  * @param handle Port receive capability.

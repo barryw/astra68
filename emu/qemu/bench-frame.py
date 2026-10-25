@@ -96,7 +96,8 @@ def main():
                                         work, extra_args=extra)
         try:
             if not machine.wait_for_serial(terminal_gate.BOOT_MARKER, 120):
-                raise RuntimeError("Astra did not finish booting")
+                raise RuntimeError("Astra did not finish booting (exit %s): %s" %
+                                   (machine.process.poll(), machine.log[-100:]))
             count = lambda name: machine.qmp.execute(
                 "qom-get", {"path": "/machine",
                             "property": "astra-display-" + name})

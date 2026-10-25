@@ -108,11 +108,12 @@ static uint32_t dependency_open(void *opaque, const char *identity,
     AstraSyscallResult result;
     const uint8_t *header = NULL;
     const char *soname = NULL;
-    char path[ASTRA_VFS_PATH_MAX];
+    char *path = NULL;
     uint32_t base = 0u;
     uint32_t span = 0u;
     uint32_t status;
     int resident = 0;
+    const char *failure_stage = "library resident attach";
 
     (void)opaque;
     *out_token = NULL;
@@ -126,37 +127,45 @@ static uint32_t dependency_open(void *opaque, const char *identity,
         resident = 1;
     if (status == ASTRA_SYSCALL_WOULD_BLOCK ||
         status == ASTRA_SYSCALL_BAD_SYSCALL) {
-        status = astra_vfs_library_resolve(
+        failure_stage = "library provider resolve";
+        path = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
+        if (path == NULL) status = ASTRA_SYSCALL_OUT_OF_MEMORY;
+        else status = astra_vfs_library_resolve(
             astra_process_vfs_assigns(), "LIBS", identity,
             astra_process_vfs_assign_client, NULL,
-            path, sizeof(path), &reference);
-        if (status != ASTRA_VFS_OK)
+            path, ASTRA_VFS_PATH_MAX, &reference);
+        if (path != NULL && status != ASTRA_VFS_OK)
             status = source_status(status);
-        if (status == ASTRA_SYSCALL_OK)
+        if (status == ASTRA_SYSCALL_OK) {
+            failure_stage = "library attach";
             status = astra_rt_library_attach(
                 &reference, &base, &span, &dependency->load_handle);
+        }
         if (status == ASTRA_SYSCALL_WOULD_BLOCK ||
             status == ASTRA_SYSCALL_BAD_SYSCALL) {
-            status = astra_vfs_read_source_open(
-                &dependency->source, astra_process_vfs_assigns(), path,
-                astra_process_vfs_assign_client, NULL);
+            failure_stage = "library source open";
+            status = astra_process_vfs_source_open(path, &dependency->source);
             if (status != ASTRA_VFS_OK)
                 status = source_status(status);
         }
     }
+    astra_runtime_deallocate(path);
     if (status == ASTRA_SYSCALL_OK &&
         dependency->source.file != ASTRA_VFS_FILE_INVALID) {
+        failure_stage = "library source header";
         status = astra_stream_read_exact(
             astra_vfs_read_source_read_at, &dependency->source,
             dependency->source.length, 0u, ASTRA_EXECUTABLE_HEADER_SIZE,
             &header, NULL);
         if (status == ASTRA_SYSCALL_OK) {
+            failure_stage = "library load begin";
             astra_syscall5(ASTRA_SYSCALL_LIBRARY_LOAD_BEGIN,
                            (uint32_t)(uintptr_t)header,
                            dependency->source.length, 0u, 0u, 0u, &result);
             status = result.status;
         }
         if (status == ASTRA_SYSCALL_OK) {
+            failure_stage = "library load feed";
             dependency->load_handle = result.value0;
             status = astra_stream_feed(
                 dependency->load_handle, dependency->source.length,
@@ -165,6 +174,7 @@ static uint32_t dependency_open(void *opaque, const char *identity,
                 result.value1, result.value2, NULL);
         }
         if (status == ASTRA_SYSCALL_OK) {
+            failure_stage = "library load map";
             astra_syscall5(ASTRA_SYSCALL_LIBRARY_LOAD_MAP,
                            dependency->load_handle, 0u, 0u, 0u, 0u,
                            &result);
@@ -200,6 +210,7 @@ static uint32_t dependency_open(void *opaque, const char *identity,
         uint32_t failure = status == ASTRA_SYSCALL_OUT_OF_MEMORY ? status :
                                                                   ASTRA_SYSCALL_INVALID_ARGUMENT;
 
+        (void)astra_log_failure(failure_stage, status);
         (void)astra_log_failure(identity, status | (resident != 0 ?
                                                     LOADER_REFUSED_RESIDENT :
                                                     0u));

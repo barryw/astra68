@@ -67,6 +67,7 @@ static uint32_t endpoint_cache_bitmap[
 static uint32_t revocation_pending_bitmap;
 static KernelIrqControllerOps controller;
 static KernelIrqPoolStats pool_stats;
+static KernelIrqCorruption first_corruption;
 static uint8_t pool_initialized;
 static uint8_t pool_corrupt;
 
@@ -160,6 +161,25 @@ static bool valid_endpoint_pointer(const KernelIrqEndpoint *endpoint)
 
     return endpoint != NULL && address >= first && address < limit &&
            (address - first) % sizeof(endpoints[0]) == 0u;
+}
+
+static void mark_pool_corrupt(uint32_t site,
+                              const KernelIrqEndpoint *endpoint)
+{
+    if (first_corruption.site == 0u) {
+        first_corruption.slot = UINT32_MAX;
+        if (valid_endpoint_pointer(endpoint)) {
+            first_corruption.slot = endpoint_slot(endpoint);
+            first_corruption.owner = endpoint->owner;
+            first_corruption.generation = endpoint->generation;
+            first_corruption.source = endpoint->source;
+            first_corruption.state = endpoint->state;
+            first_corruption.references = endpoint->references;
+        }
+        first_corruption.cache_corrupt = endpoint_cache.corrupt;
+        first_corruption.site = site;
+    }
+    pool_corrupt = 1u;
 }
 
 static bool active_state(uint8_t state)
@@ -332,7 +352,7 @@ static KernelIrqStatus finalize_if_possible(KernelIrqEndpoint *endpoint)
     if (!finish_quiesce(endpoint))
         return KERNEL_IRQ_DEVICE_ERROR;
     if (endpoint->references == 0u && !release_endpoint(endpoint)) {
-        pool_corrupt = 1u;
+        mark_pool_corrupt(__LINE__, endpoint);
         return KERNEL_IRQ_CORRUPT;
     }
     return KERNEL_IRQ_OK;
@@ -343,12 +363,14 @@ bool kernel_irq_pool_init(const KernelIrqControllerOps *ops)
     if (ops == NULL || ops->configure == NULL || ops->mask == NULL ||
         ops->enable == NULL || ops->acknowledge == NULL)
         return false;
+    kernel_bytes_clear(&first_corruption, sizeof(first_corruption));
+    pool_corrupt = 0u;
     if (!kernel_object_cache_init(
             &endpoint_cache, endpoints, sizeof(endpoints[0]),
             KERNEL_IRQ_ENDPOINT_MAX, endpoint_cache_bitmap,
             KERNEL_OBJECT_CACHE_BITMAP_WORDS(KERNEL_IRQ_ENDPOINT_MAX),
             KERNEL_ALLOCATION_SITE_IRQ_ENDPOINT)) {
-        pool_corrupt = 1u;
+        mark_pool_corrupt(__LINE__, NULL);
         return false;
     }
     for (uint32_t slot = 0u; slot < KERNEL_IRQ_ENDPOINT_MAX; ++slot) {
@@ -481,12 +503,12 @@ KernelIrqStatus kernel_irq_bind(uint32_t owner,
     }
     if (cache_status != KERNEL_OBJECT_CACHE_OK ||
         slot >= KERNEL_IRQ_ENDPOINT_MAX) {
-        pool_corrupt = 1u;
+        mark_pool_corrupt(__LINE__, NULL);
         return KERNEL_IRQ_CORRUPT;
     }
     candidate = raw_endpoint;
     if (candidate->state != KERNEL_IRQ_FREE) {
-        pool_corrupt = 1u;
+        mark_pool_corrupt(__LINE__, candidate);
         return KERNEL_IRQ_CORRUPT;
     }
     generation = kernel_generation_next(candidate->generation);
@@ -515,7 +537,7 @@ KernelIrqStatus kernel_irq_bind(uint32_t owner,
         candidate->state = KERNEL_IRQ_FREE;
         if (kernel_object_cache_release(&endpoint_cache, candidate) !=
             KERNEL_OBJECT_CACHE_OK)
-            pool_corrupt = 1u;
+            mark_pool_corrupt(__LINE__, candidate);
         return pool_corrupt != 0u ? KERNEL_IRQ_CORRUPT :
                                     KERNEL_IRQ_DEVICE_ERROR;
     }
@@ -559,7 +581,7 @@ void kernel_irq_handle_release(void *object, void *context)
     (void)context;
     if (!valid_endpoint_pointer(endpoint) ||
         endpoint->state == KERNEL_IRQ_FREE || endpoint->references == 0u) {
-        pool_corrupt = 1u;
+        mark_pool_corrupt(__LINE__, endpoint);
         return;
     }
     if (endpoint->references > 1u) {
@@ -570,14 +592,14 @@ void kernel_irq_handle_release(void *object, void *context)
         KernelIrqStatus status = kernel_irq_revoke(endpoint, &woken);
 
         if (status == KERNEL_IRQ_CORRUPT) {
-            pool_corrupt = 1u;
+            mark_pool_corrupt(__LINE__, endpoint);
             return;
         }
     }
     endpoint->references = 0u;
     if ((endpoint->flags & KERNEL_IRQ_FLAG_QUIESCED) != 0u &&
         !release_endpoint(endpoint))
-        pool_corrupt = 1u;
+        mark_pool_corrupt(__LINE__, endpoint);
 }
 
 void kernel_irq_abandon_unpublished(KernelIrqEndpoint *endpoint)
@@ -585,7 +607,7 @@ void kernel_irq_abandon_unpublished(KernelIrqEndpoint *endpoint)
     if (!valid_active_endpoint(endpoint) || endpoint->references != 1u ||
         endpoint->record_count != 0u ||
         kernel_thread_wait_queue_count(&endpoint->waiters) != 0u) {
-        pool_corrupt = 1u;
+        mark_pool_corrupt(__LINE__, endpoint);
         return;
     }
     astra_u32_increment_saturating(&pool_stats.publication_rollbacks);
@@ -777,7 +799,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_endpoint(
     if (!valid_active_endpoint(endpoint)) {
         if (endpoint->state == KERNEL_IRQ_REVOKING)
             return quarantine_masked(endpoint, true, trace);
-        pool_corrupt = 1u;
+        mark_pool_corrupt(__LINE__, endpoint);
         return KERNEL_IRQ_CORRUPT;
     }
     if (vector != endpoint->vector) {
@@ -890,7 +912,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_endpoint(
         (void)controller_mask(source);
         if (kernel_thread_wake_all(&endpoint->waiters, ASTRA_SYSCALL_OK,
                                    &woken) != KERNEL_THREAD_OK) {
-            pool_corrupt = 1u;
+            mark_pool_corrupt(__LINE__, endpoint);
             return KERNEL_IRQ_CORRUPT;
         }
         pool_stats.wait_wakeups += woken;
@@ -923,7 +945,7 @@ static __attribute__((noinline)) KernelIrqStatus dispatch_endpoint(
     }
     if (kernel_thread_wake_all_irq(&endpoint->waiters, ASTRA_SYSCALL_OK,
                                    &woken) != KERNEL_THREAD_OK) {
-        pool_corrupt = 1u;
+        mark_pool_corrupt(__LINE__, endpoint);
         return KERNEL_IRQ_CORRUPT;
     }
     pool_stats.wait_wakeups += woken;
@@ -1231,7 +1253,7 @@ KernelIrqStatus kernel_irq_revoke(KernelIrqEndpoint *endpoint,
         bool masked;
 
         if (!valid_active_endpoint(endpoint)) {
-            pool_corrupt = 1u;
+            mark_pool_corrupt(__LINE__, endpoint);
             return KERNEL_IRQ_CORRUPT;
         }
         endpoint->state = KERNEL_IRQ_REVOKING;
@@ -1247,7 +1269,7 @@ KernelIrqStatus kernel_irq_revoke(KernelIrqEndpoint *endpoint,
         if (kernel_thread_wake_all(&endpoint->waiters,
                                    ASTRA_SYSCALL_PEER_DEAD, &woken) !=
             KERNEL_THREAD_OK) {
-            pool_corrupt = 1u;
+            mark_pool_corrupt(__LINE__, endpoint);
             return KERNEL_IRQ_CORRUPT;
         }
         pool_stats.wait_wakeups += woken;
@@ -1427,6 +1449,14 @@ bool kernel_irq_pool_stats(KernelIrqPoolStats *stats)
     if (stats == NULL || pool_initialized == 0u)
         return false;
     kernel_bytes_copy(stats, &pool_stats, sizeof(*stats));
+    return true;
+}
+
+bool kernel_irq_first_corruption(KernelIrqCorruption *corruption)
+{
+    if (corruption == NULL || first_corruption.site == 0u)
+        return false;
+    kernel_bytes_copy(corruption, &first_corruption, sizeof(*corruption));
     return true;
 }
 

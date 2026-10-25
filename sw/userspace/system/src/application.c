@@ -1,8 +1,12 @@
 #include <astra/application.h>
+#include <astra/application_payload.h>
+#include <astra/area.h>
+#include <astra/service_payload.h>
 
 #include <astra/port.h>
 #include <astra/runtime.h>
 #include <astra/utf8.h>
+#include <string.h>
 
 #include "internal/status.h"
 
@@ -24,7 +28,8 @@ static AstraResult application_launch(
 {
     AstraApplicationLaunchRequest request = {0};
     AstraApplicationLaunchReply reply = {0};
-    char path[ASTRA_APPLICATION_PATH_MAX];
+    AstraArea area = ASTRA_AREA_INIT;
+    AstraHandle payload = ASTRA_INVALID_HANDLE;
     AstraHandle transferred = ASTRA_INVALID_HANDLE;
     AstraCall call = {0};
     AstraResult result;
@@ -33,51 +38,68 @@ static AstraResult application_launch(
         process_id == 0 ||
         (process_handle != 0 && *process_handle != ASTRA_INVALID_HANDLE) ||
         path_length == 0u ||
-        path_length >= ASTRA_APPLICATION_PATH_MAX ||
         argument_count + 1u > ASTRA_APPLICATION_ARGUMENT_MAX ||
         (argument_count != 0u && arguments == NULL) ||
         (source != ASTRA_LAUNCH_SOURCE_SHELL &&
          source != ASTRA_LAUNCH_SOURCE_DESKTOP))
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (path_length >= ASTRA_APPLICATION_PATH_MAX) return ASTRA_ERROR_NAME_TOO_LONG;
     if (!astra_utf8_validate(bundle_path, path_length, 0u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *process_id = 0u;
     if (process_handle != 0)
         *process_handle = ASTRA_INVALID_HANDLE;
-    for (uint32_t at = 0u; at < path_length; ++at)
-        path[at] = bundle_path[at];
-    path[path_length] = '\0';
     {
-        uint32_t length = 0u;
-
-        for (uint32_t index = 0u; index <= argument_count; ++index) {
-            const char *value = index == 0u ? path : arguments[index - 1u];
+        uint32_t length = (uint32_t)path_length + 1u;
+        for (uint32_t index = 0u; index < argument_count; ++index) {
+            const char *value = arguments[index];
             uint32_t at = 0u;
-
-            if (value == NULL)
-                return ASTRA_ERROR_INVALID_ARGUMENT;
+            if (value == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
             while (value[at] != '\0') {
-                if (length + 2u > sizeof(request.arguments.bytes))
+                if (length + 2u > ASTRA_APPLICATION_ARGUMENT_BYTES)
                     return ASTRA_ERROR_NO_RESOURCES;
-                request.arguments.bytes[length++] = value[at++];
+                ++length; ++at;
             }
             if (!astra_utf8_validate(value, at, 0u))
                 return ASTRA_ERROR_INVALID_ARGUMENT;
-            request.arguments.bytes[length++] = '\0';
+            ++length;
         }
+        if (length > ASTRA_APPLICATION_ARGUMENT_BYTES) return ASTRA_ERROR_NO_RESOURCES;
         request.arguments.count = argument_count + 1u;
         request.arguments.length = (uint16_t)length;
         request.arguments.source = (uint16_t)source;
+        result = astra_area_create(length, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+            ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &area);
+        if (result == ASTRA_OK) result = astra_area_map(&area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
+        if (result != ASTRA_OK) goto done;
+        char *bytes = area.address;
+        memcpy(bytes, bundle_path, path_length); bytes[path_length] = '\0';
+        uint32_t used = (uint32_t)path_length + 1u;
+        for (uint32_t index = 0u; index < argument_count; ++index) {
+            uint32_t at = 0u;
+            for (;;) {
+                if (used == length) { result = ASTRA_ERROR_INVALID_ARGUMENT; goto done; }
+                char value = arguments[index][at++]; bytes[used++] = value;
+                if (value == '\0') break;
+            }
+        }
+        result = used == length ? astra_application_arguments_validate(&request.arguments, bytes, length) :
+            ASTRA_ERROR_INVALID_ARGUMENT;
+        if (result == ASTRA_OK) result = astra_service_payload_finish(&area, &payload);
+        if (result != ASTRA_OK) goto done;
     }
     result = astra_message_header_init(
         &request.header, sizeof(request), ASTRA_APPLICATION_PROTOCOL,
         ASTRA_APPLICATION_VERSION, ASTRA_APPLICATION_LAUNCH, 1u);
     if (result != ASTRA_OK)
-        return result;
+        goto done;
     call.request = &request;
     call.request_size = sizeof(request);
     call.reply = &reply;
     call.reply_capacity = sizeof(reply);
+    call.handles = &payload;
+    call.handle_count = 1u;
+    call.reply_index = 1u;
     call.reply_handles = &transferred;
     call.reply_handle_capacity = 1u;
     result = astra_port_call(launcher, &call, ASTRA_DEADLINE_INFINITE);
@@ -118,6 +140,14 @@ done:
             close_result = astra_handle_close(&transferred);
             if (result == ASTRA_OK && close_result != ASTRA_OK)
                 result = close_result;
+        }
+        if (payload != ASTRA_INVALID_HANDLE) {
+            close_result = astra_handle_close(&payload);
+            if (result == ASTRA_OK && close_result != ASTRA_OK) result = close_result;
+        }
+        if (area.handle != ASTRA_INVALID_HANDLE || area.address != NULL) {
+            close_result = astra_area_close(&area);
+            if (result == ASTRA_OK && close_result != ASTRA_OK) result = close_result;
         }
     }
     return result;

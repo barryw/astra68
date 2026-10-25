@@ -167,6 +167,9 @@ KernelFutexStatus kernel_futex_wake_all_irq(uint32_t process_id,
                                             uint32_t address,
                                             uint32_t result,
                                             uint32_t *woken_threads);
+/* Reclaim queues emptied by thread exit/cancellation before owner memory is
+ * reclaimed. Caller excludes interrupts, as for futex wait/wake. */
+KernelFutexStatus kernel_futex_reap(void);
 uint32_t kernel_sync_terminal_result(const KernelSyncObject *object);
 bool kernel_sync_snapshot(uint32_t slot, KernelSyncSnapshot *snapshot);
 bool kernel_sync_pool_stats(KernelSyncPoolStats *stats);

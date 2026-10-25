@@ -20,7 +20,7 @@ FRAGMENT=$HERE/astra-storage.config
 BASELINE=$HERE/de25-$RELEASE.config
 OUT=${OUT:-$KERNEL_OUTPUT/astra-storage}
 REMOTE_DIR=/lib/modules/$RELEASE/updates/astra-storage
-MODULES="fs/isofs/isofs.ko fs/udf/udf.ko fs/exfat/exfat.ko fs/nls/nls_utf8.ko
+MODULES="fs/isofs/isofs.ko fs/udf/udf.ko fs/exfat/exfat.ko fs/ntfs3/ntfs3.ko fs/nls/nls_utf8.ko
 drivers/usb/storage/uas.ko"
 
 die() { echo "build-storage-modules: $*" >&2; exit 1; }

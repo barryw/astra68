@@ -78,7 +78,7 @@ uint32_t astra_process_read_file_alloc(AstraProcessFilesystem *filesystem,
 {
     (void)filesystem;
     for (uint32_t at = 0u; at < node_count; ++at) {
-        char expected[256];
+        char expected[ASTRA_VFS_PATH_MAX];
 
         snprintf(expected, sizeof(expected), "/apps/%s/manifest",
                  nodes[at].name);
@@ -169,6 +169,7 @@ static void catalog_failures(void)
 
     nodes = many;
     node_count = sizeof(many) / sizeof(many[0]);
+    allocations = 0u;
     /* More entries than one directory batch and one growth step. */
     assert(astra_application_catalog_load(&filesystem, "/apps", &catalog) ==
            ASTRA_VFS_OK && catalog.count == 10u);
@@ -176,7 +177,8 @@ static void catalog_failures(void)
         assert(strcmp(catalog.entries[at - 1u].name,
                       catalog.entries[at].name) < 0);
     /* Growth failing mid-scan fails the scan and leaves nothing. */
-    for (uint32_t limit = 0u; limit < 40u; ++limit) {
+    uint32_t needed_allocations = allocations;
+    for (uint32_t limit = 0u; limit <= needed_allocations; ++limit) {
         uint32_t status;
 
         allocations = 0u;
@@ -184,7 +186,7 @@ static void catalog_failures(void)
         status = astra_application_catalog_load(&filesystem, "/apps",
                                                 &catalog);
         fail_after_allocations = UINT32_MAX;
-        assert(status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_LIMIT);
+        assert(status == (limit < needed_allocations ? ASTRA_VFS_ERR_LIMIT : ASTRA_VFS_OK));
         assert(status == ASTRA_VFS_OK ?
                catalog.count + catalog.skipped == 10u :
                catalog.entries == NULL && catalog.count == 0u);
@@ -207,6 +209,19 @@ int main(void)
 {
     catalog_orders_and_skips();
     catalog_failures();
+    {
+        char name[ASTRA_VFS_NAME_MAX];
+        memset(name, 'p', sizeof(name) - 5u);
+        memcpy(name + sizeof(name) - 5u, ".app", 5u);
+        FakeNode node = {name, ASTRA_VFS_KIND_DIRECTORY, APP("org.astra.long", "Long", "i.aicon")};
+        AstraProcessFilesystem filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
+        AstraApplicationCatalog catalog = ASTRA_APPLICATION_CATALOG_INIT;
+        nodes = &node; node_count = 1u;
+        assert(astra_application_catalog_load(&filesystem, "/apps", &catalog) == ASTRA_VFS_OK);
+        assert(catalog.count == 1u && strlen(catalog.entries[0].bundle) == 6u + sizeof(name) - 1u);
+        assert(strstr(catalog.entries[0].icon, ".app/i.aicon") != NULL);
+        astra_application_catalog_destroy(&catalog);
+    }
     puts("application catalog tests passed");
     return 0;
 }

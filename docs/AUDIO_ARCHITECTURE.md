@@ -1,8 +1,12 @@
 # DE25 audio architecture
 
 Status: the fixed-format guest-to-HDMI PCM transport, media service, and
-`pcm.library.2` have passed physical release gates. The optional media service
-is in the default desktop image. The desktop's source asset is
+`pcm.library.3` have passed physical release gates. The optional media service
+is in the default desktop image. Native MIDI activity queries submit once and
+collect their correlated reply without blocking; SDL_mixer keeps its last
+answer while the query is pending. See
+`HANDOVER_2026-10-12_APP_LATENCY.md` for current latency evidence and limits.
+The desktop's source asset is
 `sw/userspace/services/desktop/assets/AstraStartup.wav`; the build validates
 and converts it to 48 kHz stereo S16BE PCM, then streams it from an
 automatically reaped desktop thread. The MC68040 does not synthesize it.
@@ -138,7 +142,7 @@ meet this gate, stop and measure the failure before changing hardware.
 
 ## Port adapters and public libraries
 
-The `pcm.library.2`/NDK slice takes a format word
+The `pcm.library.3`/NDK slice takes a format word
 (`sw/include/astra/pcm_format.h`, the one contract shared by the guest,
 QEMU and the Linux daemon) that names encoding, channels and rate: every
 SDL2 sample format plus packed 24-bit, mono or stereo, 8 to 192 kHz. The
@@ -155,7 +159,7 @@ being libgcc soft-float under SDL 2's float resampler.
 
 Each stream's host queue holds `ASTRA_PCM_QUEUE_FRAMES` (4096) source
 frames; a WRITE that does not fit returns BUSY with the prefix accepted.
-Clients wait for room with `astra_pcm_wait()` (pcm.library 2.1), which
+Clients wait for room with `astra_pcm_wait()` (pcm.library 3.0), which
 reads the queue once and sleeps for the time the host needs to play the
 frames in the way at the stream's own rate. Polling BUSY every 2 ms, as the
 SDL backend, the desktop and pcm-certify did, cost ~500 full round trips a
@@ -233,7 +237,7 @@ pause and close. The MC68040 sends a song once and nothing per note.
   `MIDI_PLAY`, `MIDI_STOP`), `MIDI_EVENTS` plays live channel messages,
   `MIDI_SET` changes reverb, chorus, polyphony, tempo and position,
   `MIDI_STATUS` reports the song's place, and `FONT_LIST` and
-  `MIDI_PRESETS` enumerate fonts and instruments. pcm.library 2.4's
+  `MIDI_PRESETS` enumerate fonts and instruments. pcm.library 3.0's
   `astra_midi_*` (`ndk/include/astra/midi.h`) is the public face.
 - **The feeder never waits on synthesis.** `astra_audio_synth.c` renders on
   its own thread into a lock-free ring; every control is a queued command

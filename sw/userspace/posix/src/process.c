@@ -31,6 +31,101 @@ static AstraPosixChild *children;
 static uint64_t children_runtime_ns;
 static uint32_t children_peak_resident_frames;
 
+typedef struct PosixProcessExecHeader {
+    uint64_t runtime_ns;
+    uint32_t peak_resident_frames;
+    uint32_t count;
+} PosixProcessExecHeader;
+
+typedef struct PosixProcessExecChild {
+    uint32_t handle;
+    int32_t pid;
+} PosixProcessExecChild;
+
+uint32_t
+astra_posix_process_state_size(void)
+{
+    uint32_t size = sizeof(PosixProcessExecHeader);
+
+    for (AstraPosixChild *child = children; child != NULL; child = child->next) {
+        if (size > UINT32_MAX - sizeof(PosixProcessExecChild))
+            return 0u;
+        size += sizeof(PosixProcessExecChild);
+    }
+    return size;
+}
+
+int
+astra_posix_process_export(void *state, uint32_t size)
+{
+    PosixProcessExecHeader *header = state;
+    PosixProcessExecChild *out;
+
+    if (state == NULL || size != astra_posix_process_state_size()) {
+        errno = EINVAL;
+        return -1;
+    }
+    *header = (PosixProcessExecHeader){children_runtime_ns,
+        children_peak_resident_frames, 0u};
+    out = (PosixProcessExecChild *)(header + 1);
+    for (AstraPosixChild *child = children; child != NULL; child = child->next)
+        out[header->count++] = (PosixProcessExecChild){child->handle, child->pid};
+    return 0;
+}
+
+int
+astra_posix_process_import(const void *state, uint32_t size)
+{
+    const PosixProcessExecHeader *header = state;
+    const PosixProcessExecChild *input;
+    AstraPosixChild *restored = NULL;
+
+    if (state == NULL || size < sizeof(*header) ||
+        header->count > (size - sizeof(*header)) / sizeof(*input) ||
+        sizeof(*header) + header->count * sizeof(*input) != size ||
+        children != NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    input = (const PosixProcessExecChild *)(header + 1);
+    for (uint32_t index = 0u; index < header->count; ++index) {
+        AstraPosixChild *child;
+
+        if (input[index].handle == 0u || input[index].pid <= 0) {
+            errno = EINVAL;
+            goto fail;
+        }
+        for (child = restored; child != NULL; child = child->next) {
+            if (child->handle == input[index].handle ||
+                child->pid == input[index].pid) {
+                errno = EINVAL;
+                goto fail;
+            }
+        }
+        child = malloc(sizeof(*child));
+        if (child == NULL) {
+            errno = ENOMEM;
+            goto fail;
+        }
+        *child = (AstraPosixChild){restored, input[index].handle,
+                                 (pid_t)input[index].pid};
+        restored = child;
+    }
+    children = restored;
+    children_runtime_ns = header->runtime_ns;
+    children_peak_resident_frames = header->peak_resident_frames;
+    return 0;
+
+fail:
+    while (restored != NULL) {
+        AstraPosixChild *child = restored;
+
+        restored = child->next;
+        free(child);
+    }
+    return -1;
+}
+
 #if defined(__GLIBC__)
 typedef __rusage_who_t AstraRusageWho;
 #else
@@ -91,6 +186,7 @@ discard_inherited_children(void)
         AstraPosixChild *child = children;
 
         children = child->next;
+        (void)astra_close(child->handle);
         free(child);
     }
     children_runtime_ns = 0u;
@@ -104,15 +200,28 @@ fork(void)
     uint32_t handle;
     uint32_t process_id;
     uint32_t result;
+    AstraProcessFileShare *shares = NULL;
+    uint32_t share_count = 0u;
+    uint32_t ready_receive = 0u;
+    uint32_t ready_send = 0u;
 
-    if (!astra_posix_file_fork_ready()) {
-        errno = ENOTSUP;
+    if (astra_posix_file_fork_prepare(&shares, &share_count) != 0)
         return (pid_t)-1;
+    if (share_count != 0u) {
+        result = astra_rt_port_create(1u, sizeof(PosixForkReady),
+                                       &ready_receive, &ready_send);
+        if (result != ASTRA_SYSCALL_OK) {
+            (void)astra_log_failure("fork adoption port", result);
+            astra_posix_file_fork_release(shares, share_count);
+            errno = result == ASTRA_SYSCALL_OUT_OF_MEMORY ||
+                    result == ASTRA_SYSCALL_RESOURCE_LIMIT ? ENOMEM : EIO;
+            return (pid_t)-1;
+        }
     }
     child = malloc(sizeof(*child));
     if (child == NULL) {
         errno = ENOMEM;
-        return (pid_t)-1;
+        goto fail_fork;
     }
     result = astra_process_clone(&handle, &process_id);
     if (result != ASTRA_SYSCALL_OK) {
@@ -121,19 +230,32 @@ fork(void)
         errno = result == ASTRA_SYSCALL_OUT_OF_MEMORY ||
                         result == ASTRA_SYSCALL_RESOURCE_LIMIT ? ENOMEM :
                 result == ASTRA_SYSCALL_INVALID_ARGUMENT ? ENOTSUP : EIO;
-        return (pid_t)-1;
+        goto fail_fork;
     }
     if (process_id == 0u) {
         astra_posix_thread_after_fork_child();
         discard_inherited_children();
         free(child);
-        if (astra_posix_file_after_fork_child() != 0 ||
-            astra_posix_socket_after_fork_child() != 0) {
+        result = astra_posix_file_after_fork_child(shares, share_count) != 0 ||
+            astra_posix_socket_after_fork_child() != 0 ? (uint32_t)errno : 0u;
+        free(shares);
+        if (ready_send != 0u) {
+            PosixForkReady ready = {.status = result};
+            astra_message_header_set(&ready.header, sizeof(ready),
+                POSIX_FORK_READY_PROTOCOL, 1u, 1u, 1u);
+            uint32_t sent = astra_port_send(ready_send, &ready,
+                                             sizeof(ready), NULL, 0u);
+
+            (void)astra_close(ready_send);
+            if (sent != ASTRA_SYSCALL_OK)
+                result = EIO;
+        }
+        if (result != 0u) {
             static const char message[] =
                 "fork: child I/O reinitialization failed\n";
 
             (void)astra_log_failure("fork filesystem reinitialization",
-                                    (uint32_t)errno);
+                                    result);
             ssize_t ignored = write(STDERR_FILENO, message,
                                     sizeof(message) - 1u);
             (void)ignored;
@@ -144,7 +266,7 @@ fork(void)
     if (handle == 0u) {
         free(child);
         errno = EIO;
-        return (pid_t)-1;
+        goto fail_fork;
     }
     {
         uint32_t service = astra_posix_process_service();
@@ -157,7 +279,7 @@ fork(void)
                 (void)astra_close(handle);
                 free(child);
                 (void)posix_process_error(result);
-                return (pid_t)-1;
+                goto fail_fork;
             }
         }
     }
@@ -167,25 +289,81 @@ fork(void)
         (void)astra_close(handle);
         free(child);
         errno = EIO;
-        return (pid_t)-1;
+        goto fail_fork;
     }
+    if (ready_receive != 0u) {
+        const uint32_t waits[2] = {ready_receive, handle};
+        uint32_t size = 0u;
+        uint32_t handles = 0u;
+        PosixForkReady adopted = {.status = EIO};
+        AstraMessageHeader expected;
+
+        astra_message_header_set(&expected, sizeof(adopted),
+            POSIX_FORK_READY_PROTOCOL, 1u, 1u, 1u);
+
+        /* The child must own its descriptions before the parent can exit. */
+        do {
+            result = astra_wait_multiple(waits, 2u, ASTRA_DEADLINE_FOREVER,
+                                          NULL, NULL);
+        } while (result == ASTRA_SYSCALL_CANCELLED);
+        if (result != ASTRA_SYSCALL_OK ||
+            astra_port_receive(ready_receive, &adopted, sizeof(adopted),
+                                NULL, 0u, &size, &handles) != ASTRA_SYSCALL_OK ||
+            size != sizeof(adopted) || handles != 0u ||
+            memcmp(&adopted.header, &expected, sizeof(expected)) != 0 ||
+            adopted.status != 0u) {
+            (void)astra_process_terminate(handle, SIGKILL);
+            (void)astra_close(handle);
+            free(child);
+            errno = size == sizeof(adopted) && handles == 0u &&
+                    memcmp(&adopted.header, &expected, sizeof(expected)) == 0 &&
+                    adopted.status != 0u && adopted.status <= INT_MAX ?
+                    (int)adopted.status : EIO;
+            goto fail_fork;
+        }
+    }
+    astra_posix_file_fork_release(shares, share_count);
+    if (ready_receive != 0u)
+        (void)astra_close(ready_receive);
+    if (ready_send != 0u)
+        (void)astra_close(ready_send);
     child->handle = handle;
     child->pid = (pid_t)process_id;
     child->next = children;
     children = child;
     return child->pid;
+
+fail_fork:
+    {
+        int saved = errno;
+
+        astra_posix_file_fork_release(shares, share_count);
+        if (ready_receive != 0u)
+            (void)astra_close(ready_receive);
+        if (ready_send != 0u)
+            (void)astra_close(ready_send);
+        errno = saved;
+        return (pid_t)-1;
+    }
 }
 
 pid_t
 getpid(void)
 {
-    AstraPosixProcessReply reply;
-    uint32_t service = astra_posix_process_service();
+    const AstraStartupInfo *startup = astra_posix_startup();
+    AstraProcessInfo info = {0};
 
-    if (service == 0u ||
-        astra_posix_process_query(service, 0, &reply) != ASTRA_STATUS_OK)
+    if (startup == NULL || startup->process_handle == 0u) {
+        errno = EIO;
         return (pid_t)-1;
-    return (pid_t)reply.process;
+    }
+    info.size = sizeof(info);
+    if (astra_process_info(startup->process_handle, &info) !=
+        ASTRA_SYSCALL_OK) {
+        errno = EIO;
+        return (pid_t)-1;
+    }
+    return (pid_t)info.id;
 }
 
 pid_t

@@ -2748,9 +2748,18 @@ int main(int argc, char **argv)
         printf("%u\n", ASTRA_DISPLAY_MAILBOX_PAYLOAD_BYTES);
         return EXIT_SUCCESS;
     }
+    if (argc == 2 && strcmp(argv[1], "--stop-render") == 0) {
+        astra_graphics_device_init(&device);
+        if (astra_graphics_device_open(&device, false) == 0 &&
+            astra_graphics_device_validate(&device, true) == 0 &&
+            astra_graphics_render_stop(&device, UINT64_C(2000000000)) == 0)
+            result = EXIT_SUCCESS;
+        astra_graphics_device_close(&device);
+        return result;
+    }
     if (argc != 4) {
         fprintf(stderr, "usage: %s "
-                "[--self-test|--mailbox-bytes|--payload-bytes] | "
+                "[--self-test|--mailbox-bytes|--payload-bytes|--stop-render] | "
                 "<shared-post-text-page> <shared-display-mailbox> "
                 "<shared-display-payload>\n",
                 argv[0]);

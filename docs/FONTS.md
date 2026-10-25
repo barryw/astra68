@@ -10,6 +10,253 @@ must not draw bitmap glyphs with CPU pixel loops.
 
 ## 1. Locked architecture
 
+The installed-font filesystem root is `FONTS:` (`/fonts` on the system
+volume). It contains `system/` for shipped, protected AFNT and `installed/`
+for imported, content-addressed AFNT. Only the Fonts service receives a
+write grant; ordinary clients receive read-only access when needed. The
+service refuses uninstall of shipped faces. Config Kit stores inventory IDs
+and the selected face, never another copy of font bytes. The service catalog
+is the authoritative, generation-tagged view across both directories;
+Font Kit exposes family, style, strikes and eligibility without filename or
+AFNT parsing by applications. The rescue face remains available from ROM if
+storage or preference loading fails. Release upgrades replace `system/` and
+preserve `installed/` with user data and inode metadata. Haiku references reviewed read-only:
+`src/servers/app/font/GlobalFontManager.cpp` owns directory discovery and
+`src/servers/app/font/FontManager.cpp` owns family/style lookup. Astra uses
+one protected namespace and one native catalog rather than exposing directory
+layout as the application API.
+
+`FONTS:` names the native assign. Native Filesystem Kit paths spell it
+`/FONTS/system/...` or `/FONTS/installed/...`. POSIX shell tools use the
+underlying volume path `/dh0/fonts/...`; the POSIX layer treats `:` as an
+ordinary filename character. Font discovery and selection use Font Kit in
+either case.
+
+### Active import coordination work (2026-10-18)
+
+The coherent contract is Font Kit 5.0 and font-service protocol 9: imports are
+owned capability-scoped sessions, with begin/state/cancel/wait-handle/close APIs.
+The previous blocking import API is removed; every in-tree program, Kit,
+manifest, export and probe moves together. Existing native ports carry control
+and coalesced change hints. The client owns a one-message notification receiver;
+the service owns its sole send capability. Service death therefore wakes the
+client with PEER_DEAD. A shared event alone would not provide that lifetime
+guarantee. State queries drain hints before reading authoritative progress;
+progress counts staged faces and never pretends to estimate conversion time.
+The service keeps its only converter/store/publication path.
+
+Cancellation acknowledges CANCELLING while an existing converter call retires
+(its existing timeout is 60 seconds). CANCELLED is terminal only after worker
+retirement and rollback. Cancel after publication leaves success unchanged.
+Explicit release retires terminal sessions before admitting the next import;
+last-control-capability peer death uses the same abandonment cleanup if a client
+exits. No source or worker memory is released while the worker can still use it.
+The native UI composes existing Progress and Button controls, waits on its window
+and import notification together, and returns to the source browser after
+cancellation so the same file can be retried. No application-specific control
+or synchronous UI converter thread is added.
+
+Read-only Haiku references remain `headers/os/support/Job.h` lifecycle states
+and `src/kits/support/Job.cpp:BJob::Run` cleanup-before-terminal-notification.
+Astra reuses Display's capability-scoped session peer-death handling in
+`sw/userspace/services/display/main.c:receive_open` and native round-robin waits.
+Focused tests, sanitizers, MC68040 analyzers, the coherent userspace build and
+NDK header/documentation gates pass. Native cancellation and restart, responsive
+catalog reads, collection success, later-face rollback and AFNT lifecycle gates
+also pass. The complete native UI passes visible progress, cancellation,
+retirement, same-source retry, import, information scrolling/copy, live system
+choice, persisted restart, restoration and uninstall. Source browser selection
+and viewport survive cancellation. Evidence is
+`/var/tmp/astra-font-import-ports-ui-native-20261018.log`; sibling cancel,
+concurrent, collection, rollback and AFNT logs retain the native service gates.
+This is not DE25 release acceptance. Interface Kit 7.2 now supplies Fonts'
+shared Settings shell from existing Labels and Containers. Host, sanitizer,
+analyzer, target library/export and NDK header/documentation gates pass in
+`/var/tmp/astra-settings-pane-checks-20261018.log`. Coherent userspace and the
+corrected packaged SDK, standalone links and every installed example also pass
+in `/var/tmp/astra-settings-pane-coherent-sdk-20261018.log` and
+`/var/tmp/astra-settings-pane-sdk-final-20261018.log`. Overall release
+qualification remains open. All four native shared-shell cases now pass
+in `/var/tmp/astra-settings-pane-{iosevka,long-notice,unsupported,long-style}-native-20261018.log`.
+These cover cancellation/retry, three consecutive information/scroll/copy/Back
+cycles, live system choice, persisted restart, restoration and removal. The
+Iosevka source hash and six complete embedded notices are verified.
+
+The packaged NDK validates the new major, archive contents, standalone links and
+all installed examples in `/var/tmp/astra-font-import-ports-sdk-20261018.log`.
+
+Native testing exposed an empty-port cleanup error after notification endpoints
+had moved. The actual `astra_port_close` contract returns INVALID_HANDLE for an
+empty pair; the initial host mock had returned success. Matching that contract
+reproduces the failure in
+`/var/tmp/astra-font-import-empty-port-red-20261018.log`. The importer now closes
+only still-owned endpoints, with source-map failure cleanup covered too; tests,
+sanitizers, analyzers and native cancellation pass after the fix.
+
+The existing native converter job is now retained by the Fonts service event
+loop instead of being awaited inside one request handler. A private copy of
+source bytes and name remains valid after request dispatch; a transferred
+read-only area alone does not remove the sender's original write authority.
+The coordinator reuses `stage_afnt`, `commit_import` and `rollback_import`.
+Only one inventory writer runs at a time; reads and system-font selection can
+continue while conversion is pending. Completion is reported after the worker
+has exited and inventory publication or rollback has finished. An ambiguous
+Config Kit commit failure retains objects, as before, rather than deleting an
+object that may already be published. The shared inventory setter also marks
+the cached inventory unconfirmed: subsequent inventory mutations and new
+user-font choices fail closed until service reload, avoiding a stale manifest
+overwriting a possibly successful commit. Built-in recovery choices remain
+available.
+
+Read-only Haiku reference: `src/kits/support/Job.cpp:BJob::Run` performs cleanup
+before terminal state/notification. Astra adapts that ordering to existing
+native waitable thread/semaphore objects and its single Config Kit publication
+point. Display's existing round-robin wait-source ordering informs the Fonts
+service's expanded wait set. No generic job registry or second converter/store
+is added. Commit `92706287` qualified the coordinator with the then-current
+synchronous API; the session contract above supersedes that API coherently.
+
+### Active font-information work (2026-10-18)
+
+Source `f4fb7263bea50dea60ec620c99774c3830e8842f` clean-builds as private
+release `ecd9020a954d0b9f7d5ca935f5c109f30b74c73ae6408922555078a55d941b83`.
+Its first full DE25 cycle passes native malformed-frame refusal and repair on
+three boots, Iosevka import/information/copy/live selection/saved restart/
+restoration/uninstall, and the previously panicking long-license workflow.
+Actual HDMI inspection confirms viewport clipping, selection, source/hash,
+license URL, original-byte fallback and reachable Back action. Evidence is
+checksum-verified on Beast under
+`/var/tmp/astra-font-information-evidence-20261018/cycle1/`. Production selector
+and stopped storage bytes remain unchanged; all services restore active with
+zero restarts. A second full functional cycle also passes, and restored
+production HDMI exactly matches its known-good frame. Fourteen of fifteen
+candidate captures match across cycles. The differing frame contains another
+test-probe instance: `required` correctly restarts that finite probe, so the
+harness now selects existing `restart=never` policy and checks one launch per
+boot. Corrected one-shot qualification passes all three boots, and all fifteen
+HDMI frames match the clean second-cycle frames exactly. Corrected evidence is
+checksum-verified under `one-shot/` and `warm-one-shot-production/` in the same
+Beast root. Final production storage remains byte-identical; warm HDMI again
+matches its known-good frame, with services active and zero automatic restarts.
+No Display teardown change is indicated. This component passes its correctness
+gates; the candidate is not activated and broader Fonts workflow/release work
+remains open.
+
+Font Kit 4.2 adds owned immutable information snapshots through FONTS protocol
+7. The service reuses installed-face lookup, AFNT validation and user-object
+content-identity verification, but copies only NAME metadata into an exactly
+sized read-only area. Direct Fonts-service AFNT delivery remains restricted to
+FONTS_RENDER; GUI context separately supplies the active font for client metrics.
+Applications use typed string fields and original SFNT notice identifiers;
+Font Kit owns JSON decoding, including complete multiline strings, missing
+optional fields and exact original byte records. No JSON parser lives in Fonts.
+
+The existing AFNT name decoder is replaced by the common counted JSON parser.
+It rejects malformed unknown values, invalid separators/numbers, invalid UTF-8,
+unpaired UTF-16 escapes and nesting beyond its explicit 32-container bound.
+AFNT NAME remains format 0.2, an object bounded to 1 MiB. Single-line family and
+style extraction retains its stricter control-character policy. Standalone
+strings preserve counted embedded NUL; copies measure first and never truncate.
+
+Read-only Haiku references: `src/kits/shared/Json.cpp` (`ParseObject`,
+`ParseArray`, `ParseStringEscapeSequence`, `ParseString`, `ParseNumber`) for
+grammar-aware parsing and escape validation; `src/kits/interface/Font.cpp`
+(`GetFamilyAndStyle`, `GetTunedInfo`) for service-owned font queries. Astra
+adapts these patterns to bounded allocation-free C spans and capability-scoped
+immutable snapshots. No Haiku source was changed.
+
+Long-notice qualification also exposed oversized logical background fills:
+the virtual Text View can exceed 65,535 pixels while its viewport stays small.
+Shared Surface fill now clips logical bounds before queuing a hardware command;
+text and metadata remain complete. Haiku read-only references are
+`src/servers/app/drawing/DrawingEngine.cpp:FillRect` (clip before drawing) and
+`src/servers/app/ServerWindow.cpp:AS_DRAW_STRING` (bad input/allocation failure
+ends that drawing request). Astra uses its existing GPU command path and
+committed content banks. A malformed retained client list now follows existing
+frame refusal rather than terminating Display; its previous content stays
+visible and other windows continue. Native malformed geometry/header/opcode
+refusal and repair pass, as does the formerly panicking long-license workflow.
+Batch-resource refusal also covers RGB content; focused tests, sanitizers,
+analyzers and corrected DE25 component gates pass (Plane ASTRA-60). Overall
+Fonts release acceptance remains open.
+
+Fonts' Source and license action switches the existing ScrollView's single
+content slot from List to shared Text View. Back preserves the selected style;
+Meta+C copies selected text through Clipboard Kit. TextModel computes exact
+arena requirements; Fonts supplies its document-owned allocations and retains
+no independent text, layout or rendering implementation. Allocation or metadata
+failure leaves font management available. Coherent userspace/ROM, packaged NDK
+and native Iosevka information/copy/select/restart/uninstall checks pass for
+this checkpoint. Native long-text, long-style and unavailable-preview gates also
+pass. Corrected DE25 component qualification also passes; overall Fonts release
+acceptance remains open;
+production remains unchanged.
+
+The Fonts pane uses shared multiline text.
+Interface Kit 7.1 adds a read-only Text View composed from TextModel,
+TextSurface and ScrollView. Its first presentation is fixed-grid with horizontal
+overflow; original UTF-8, tabs and CRLF survive selection/copy. Pointer and
+keyboard selection share the existing Field machinery. List and Text View
+also share rectangle reveal through the existing scroll model. Interface
+Gallery's Text page hosts the new control. Existing public control/context
+layouts are unchanged; the Kit minor and its two new symbol versions advance
+together.
+
+Haiku references: `headers/os/interface/TextView.h` and
+`src/kits/interface/TextView.cpp` (`Draw`, `MouseDown`, `MakeEditable`,
+`SetWordWrap`). Adopt independent selectability for read-only text, visible-line
+drawing and ordinary scrolling composition. Adapt to Astra's caller-owned
+piece table and hardware draw lists rather than copying Haiku's view hierarchy
+or CPU drawing. Haiku `src/kits/interface/Font.cpp` service queries also inform
+the Font Kit metadata query above.
+
+TextSurface owns both glyph emission and exact command/payload accounting.
+Text View uses that shared run walk for draw-list preflight, including selection
+runs, UTF-8 chunking and trimmed spaces. A 30-line, 80-column document exposed
+over-reservation against the retained window's 128-command limit; the regression
+fails in `/var/tmp/astra-text-view-capacity-red-20261018.log` and passes with
+ordinary and cross-line selections in
+`/var/tmp/astra-text-view-capacity-green-20261018.log`. This fixes capacity
+correctness without changing the draw protocol or adding application budgeting.
+The native Gallery example now uses a 420-pixel viewport to exercise a realistic
+document. The Clipboard Kit snapshot is inspected byte-for-byte by the existing
+native NDK `text_clipboard --inspect` example, using shared AstraString hex
+formatting. Interactive Terminal paste and native stdout redirection were
+separately found unsuitable as oracles; the observed product defects are Plane
+ASTRA-58 and ASTRA-59. Ordinary handled PMMU faults are not mistaken for crashes.
+
+Native worker metadata advances to `astra-font-worker/0.3`. Outline imports
+retain every SFNT copyright, license and license-URL record in `NAME.notices`,
+including duplicates and languages. Each record carries name/platform/
+encoding/language IDs and exact `raw_hex`; supported UTF-16BE and Macintosh
+Roman records additionally carry complete UTF-8 `text`. Invalid, embedded-NUL
+and unsupported encodings retain original bytes without guessed text. Format-1
+language tags retain original bytes and decoded text when valid. FreeType's
+public language-tag accessor rejects valid first tag ID `0x8000`; the importer
+uses bounded `FT_Load_Sfnt_Table` reads for all language tags instead.
+The counted-string contract is documented in the
+[FreeType SFNT names API](https://freetype.org/freetype2/docs/reference/ft2-sfnt_names.html);
+the accessor's exclusion is visible in
+[`ftsnames.c`](https://github.com/freetype/freetype/blob/VER-2-13-3/src/base/ftsnames.c#L110).
+
+The shared AFNT validator now names its metadata resource bound explicitly:
+`ASTRA_AFNT_NAME_MAX`, 1 MiB. Complete notices plus encoded originals can exceed
+the previous 64 KiB bound. Other file/glyph bounds remain enforced; imports
+that exceed them fail instead of truncating legal text. AFNT stays format 0.2;
+checked-in font objects are unchanged. Converter regression compares every
+original notice byte and tests a 32 KiB source record, Unicode, newlines, tabs,
+Mac Roman, malformed UTF-16, embedded NUL, unknown encoding and first language
+tag. The common codec separately checks the exact metadata bound and one byte
+beyond it.
+
+Native Iosevka import, live switching, restart, built-in restoration and
+uninstall pass in `/var/tmp/astra-font-notices-native-ui-final-20261018.log`.
+While stopped, the installed AFNT validates against its original source hash
+and six complete notices, including exact original bytes and decoded Unicode
+text. No production image or board selector is changed. Plane ASTRA-56 tracks
+Text View, ASTRA-57 tracks notice retention, and ASTRA-36 remains in progress
+for the remaining Settings shell, import workflow and release acceptance.
+
 - The native font container is **AFNT** (Astra Font), a passive, versioned,
   big-endian bitmap-font format.
 - AFNT contains one or more designed bitmap strikes and may retain a sanitized
@@ -59,31 +306,32 @@ packaged again.
 The BRAM face is intentionally small and monochrome. It is an emergency output
 facility, not the normal desktop typography system.
 
-### 2.2 System faces in the ROM image
+### 2.2 Protected system faces on disk
 
-The immutable system ROM image contains AFNT resources for:
+`FONTS:system` contains shipped AFNT resources for:
 
 - **Astra Sans**, derived from Atkinson Hyperlegible Next, as the proportional
   UI and reading face.
 - **Astra Mono**, derived from JetBrains Mono, for code, terminals, tables, and
   diagnostics.
+- **Astra Rescue Mono**, shipped as a small AFNT fallback while storage works.
 
-Both upstream families use the SIL Open Font License 1.1. Rasterized AFNT data,
+The first two upstream families use the SIL Open Font License 1.1. Rasterized AFNT data,
 the copyright notices, license, source revision, conversion command, and build
 tool version ship together. The bundled faces use Astra names so the system is
 not presenting converted builds as untouched upstream font binaries.
 
-The first ROM set contains only measured, native-size strikes appropriate for
+The shipped set contains only measured, native-size strikes appropriate for
 1920x1080. At minimum it provides regular UI, emphasized UI, and regular mono
 text plus Basic Latin, Latin-1, common punctuation, arrows, box drawing, and a
 replacement glyph. Exact strike sizes are selected from HDMI specimens on the
-real panel, not from desktop preview alone. The ROM font payload has a separate
-size report and may not displace recovery code.
+real panel, not from desktop preview alone. The shipped font payload has a
+separate size report and may not displace recovery code.
 
-These faces require neither the writable filesystem nor package services. The
-font service can use their immutable SDRAM-backed ROM data directly when its
-alignment is DMA-safe, or create a protected runtime cache once during boot.
-Additional families and language coverage live in the normal filesystem.
+Only the small recovery face survives storage failure. The font service reads
+shipped AFNT from protected `FONTS:system`; additional families live in
+`FONTS:installed`. Applications discover both through Font Kit, without
+knowing their paths.
 
 Built-in faces are located through a versioned ROM resource directory, not
 fixed linker addresses exposed to applications. Each directory entry carries a
@@ -388,8 +636,9 @@ typedef struct AstraTextLayoutOptions {
 } AstraTextLayoutOptions;
 ```
 
-The source-level 0.1 definitions are frozen in `ndk/include/astra/font.h`; that
-header is the normative field and initializer contract. Family names, UTF-8,
+These value layouts are proposed; `ndk/include/astra/font.h` does not exist yet.
+It becomes the normative field and initializer contract when the native font
+service lands. Family names, UTF-8,
 and language tags are passed as explicit pointer + byte-count arguments to the
 NDK library and marshalled into service messages; raw process pointers never
 appear in the wire protocol. Optional style-span arrays remain a compatible
@@ -440,6 +689,16 @@ Users may replace desktop defaults without changing software; recovery code can
 request the non-replaceable rescue role explicitly.
 
 The initial role identifiers are `UI`, `UI_EMPHASIS`, `MONO`, and `RESCUE`.
+The system font preference selects an installed face and its designed weight;
+component roles retain their own pixel sizes from the shared theme. Menu text,
+desktop labels, window titles, and controls need not share one size. Terminal
+may choose its own face in its private application settings. The scoped
+Config Kit ownership and failure rules are in [SETTINGS.md](SETTINGS.md).
+For the draw-command boundary, reviewed Haiku
+`src/servers/app/drawing/DrawingEngine.cpp` and
+`src/servers/app/drawing/interface/remote/RemoteDrawingEngine.cpp`: clients
+express drawing operations while a backend owns raster output. Astra adapts
+that separation with Astraea as its production UI pixel writer.
 Role matching returns an `AstraFontFace`; `AstraFontRequest` then resolves a
 draw-ready strike-backed `AstraFont`. A returned match reports the actual strike
 size and format so software never assumes that a bitmap was scaled.
@@ -450,13 +709,12 @@ IDs and metrics for editors or font tools, but rendering still enters through a
 validated draw list. A plain-text convenience function may create a temporary
 layout, but retained UI text should use an explicit reusable layout.
 
-The NDK 0.1 header and symbols are published with ABI-size assertions,
-argument-validation tests, automatic-cleanup tests, a checked example, and an
-explicit unavailable backend. That direct-MMIO backend returns
-`ASTRA_ERROR_NOT_PRESENT` when opening a face because it has no font service;
-it does not simulate successful font behavior. The OS implementation, live
-handle/stale-handle tests, service protocol, and draw-list bridge must land
-together before the service advertises itself as present.
+The NDK 0.1 header and symbols must be published with ABI-size assertions,
+argument-validation tests, automatic-cleanup tests, and a checked example.
+The draw-ready object graph, live handle/stale-handle tests, and draw-list
+bridge must land together before the service advertises drawable imported
+faces. Font Kit 2.4 now exposes the separate installed-font catalog and
+selection client API; its catalog view does not claim a drawable face handle.
 
 TextSurface is a consumer of this object graph, not another font system. Grid,
 code, and flow modes must take resolved fonts/layouts and returned metrics;
@@ -468,16 +726,574 @@ handle or an MC68040 bitmap-scaling fallback.
 
 ## 7. Import and style compatibility
 
-One shared host/native AFNT writer owns conversion and validation. Import is an
-installation/build operation, not an application rendering path:
+The first Fonts tool import scope is native AFNT, static TrueType (`.ttf`),
+OpenType (`.otf`), TrueType/OpenType collections (`.ttc`), variable TrueType and
+OpenType at default and named-instance axis coordinates, and classic
+monochrome Amiga disk fonts. Current native runtime supports AFNT, static
+TTF/OTF/TTC, default plus distinct named instances from variable outlines,
+and bounded monochrome Amiga disk-font conversion. Native service/QEMU import,
+AFNT validation, catalog reload, and restart gate pass. Applications can draw
+an installed face by catalog ID and exact strike size using
+`astra_draw_font_text`; display resolves validated AFNT through its privileged
+Fonts capability and submits glyph masks to Astraea. The disposable Amiga
+probe draws through ordinary GUI capability without raw-font access. Physical
+release gate remains open.
 
-- TTF, OTF, and TTC enter through FreeType plus the OpenType shaping tables;
-- WOFF and WOFF2 are decoded to their OpenType form before the same pipeline;
-- BDF, PCF, and other passive bitmap formats enter through the bitmap importer;
+Fonts marks each installed style as able or unable to serve as the system
+font. Catalog v3 derives `BASIC_TEXT` from exact CMAP entries for printable
+ASCII (U+0020 through U+007E); the service also requires every fixed UI-role
+size before advertising `SELECTABLE` or accepting a saved choice. A symbol
+font remains installable for applications but cannot replace system text.
+The shared AFNT exact-coverage query reuses its existing CMAP lookup and never
+counts U+FFFD fallback as coverage. Haiku reference:
+`~/Git/haiku/src/servers/app/ServerFont.cpp:GetHasGlyphs` distinguishes exact
+coverage from optional fallback; Astra applies that distinction to its passive
+AFNT data. Changing style/size selection updates existing Interface Kit
+controls in place, preserving keyboard focus and scroll position, following
+the retained-control pattern in Haiku's `FontSelectionView.cpp`.
+Coverage/policy host and sanitizer tests and the full userspace suite pass on
+Beast. The disposable native GUI gate also passes TTF import, family details,
+keyboard style selection, saved system choice, restart, and uninstall with
+catalog v3. These checks do not replace the open physical release gate.
+Detail rows allocate from catalog style lengths with checked size arithmetic,
+and place eligibility and size before the style name. A 127-byte valid style
+previously imported successfully but exceeded the row buffer when its family
+opened. `test-fonts-ui.py --long-style` now covers import, details, selection,
+restart, and uninstall for that case; the gate failed before the fix and passes
+afterward. Haiku's `FontSelectionView.cpp:UpdateFontsMenu` passes complete
+style names to owned `BMenuItem` labels; Astra retains its List/AstraString
+controls and sizes their backing storage from the validated catalog.
+
+Display passes its selected UI font into the shared `CONTENT_SURFACE` render
+builder, so ordinary Desktop/Atlas draw-list text inherits the same face as
+window chrome. Named application faces still use the existing resolver. A
+regression using the real Astra Mono AFNT failed before propagation: glyph
+advances still came from the built-in proportional face. It now checks both
+the selected advances and submitted bitmap rows, plus built-in recovery when
+the selected font is absent. Display host, ASan/UBSan, MC68040 and analyzer
+gates pass on Beast. The current-build native QEMU GUI gate also passes TTF
+import, family details, saved choice, restart and uninstall. Haiku reference:
+`src/servers/app/drawing/DrawingEngine.cpp:SetFont` applies the current
+`ServerFont`/`DrawState` to its painter; Astra applies its validated AFNT context
+to the existing hardware render builder. Live refresh, coherent client
+measurement, and designed-style resolution remain open.
+
+Compositor text layout now queries that same render context for width and
+scalar-safe fitting. Window titles, system-bar title/menu-heading placement and
+launch text use the existing renderer's strike/glyph resolution, including its
+AFNT lookup, style selection and fallback. No second face parser or renderer
+was added. A selected-mono `IIW` regression fails when measurement uses the
+built-in proportional face; AFNT advances, UTF-8 prefix boundaries, replacement
+glyphs, unsupported sizes and invalid style checks now pass. The compositor's
+long launch-text test also checks clipping against the selected glyph advance.
+Haiku reference: `src/kits/interface/Font.cpp:BFont::GetStringWidths` sends the
+font's family, style and size with measurement, rather than measuring a separate
+default font. Astra retains fixed UI-role sizes and measures through its
+existing validated hardware command builder. This fixes compositor layout;
+application-side Font Kit/Interface Kit measurement still needs the matching
+selected context before live switching can be accepted.
+Graphics and Display host/sanitizer, Display MC68040/analyzer, and the native
+QEMU GUI import/detail/choice/restart/uninstall gates pass on Beast. This change
+does not alter a public ABI or the FPGA protocol and is not yet qualified on
+DE25 as a complete font release.
+
+Font Kit 3.1 and GUI protocol 22 now close the native client measurement gap.
+`astra_fonts_use_system` obtains the active immutable AFNT snapshot and its
+catalog ID from Display, without a filesystem grant. Common width/fitting
+calls read that snapshot, and surface-view UI text uses the existing named-face
+command with its exact ID. `astra_fonts_use_snapshot` supplies the shared
+adoption path for Display and advanced consumers. Updates happen on the UI
+thread between frames; read/adopt operations use the existing native mutex.
+Native Desktop, Atlas, Fonts, Gallery and Terminal initialize before layout.
+Terminal's monospaced text remains independent. Popup menus resolve the same
+named faces, and Display reuses its active area for current-face commands.
+
+Haiku read-only references: `src/kits/interface/Font.cpp:_init_global_fonts_`
+initializes process-wide plain/bold/fixed identities, and `GetStringWidths`
+measures the specified family/style/size. Astra retains fixed theme role sizes,
+shares validated passive AFNT bytes for local metrics and binds text to the
+same ID. Pixel rendering remains in Astraea. Selected designed weight/slant
+now stays in its family; resolving semantic emphasis to other installed family
+styles remains unfinished. The API does not claim live refresh yet.
+
+Built-in tables and lookup code moved unchanged to `graphics/src/font_data.c`.
+This keeps HPS command-renderer helpers independent of native client locking,
+area ownership and software surface drawing. Existing mutex tests own sleeping
+lock behavior; a small shared host stub asserts that single-threaded graphics
+tests never enter a futex wait. No new mutex mechanism was introduced.
+Snapshot ownership, malformed replies, invalid AFNT/read-write mappings,
+selected advances, UTF-8 fitting and named command checks pass, as do
+Graphics/Display/Interface/Desktop host/sanitizer, full userspace `all test`,
+MC68040/analyzer, NDK `dist-check`, HPS display self-test and AArch64 helper
+links. The fresh coherent-ROM native GUI gate passes import, family details,
+saved system choice, restart and uninstall. Physical release qualification,
+live refresh and designed family-style resolution remain open.
+
+Display now retains immutable named faces through its private `font_face`
+module. Its registry has weak membership: the active default, delivered GUI
+session contexts, retained window documents, attached graphics lists and popup
+menus own references. Looking up an already retained ID does not reopen its
+catalog source. A successful document replacement releases unused faces;
+rejected replay drops only references acquired by that attempt. Closing a
+window, graphics list, menu or session releases its references. A failed GUI
+context reply leaves the previous session context intact. The last owner
+closes the existing read-only area and removes the registry entry. No new
+kernel lifetime mechanism or public font-object API was added.
+
+Read-only Haiku references: `src/servers/app/font/FontManager.cpp:_RemoveFont`
+delists a style separately from its lifetime, and `FontStyle.cpp:~FontStyle`
+releases the face data at final destruction. Astra adapts that separation to
+its shared AFNT areas. Hardware batches copy glyph masks during lowering;
+their existing storage lifetime protects submitted bytes, so the FPGA never
+retains an AFNT pointer. This ownership checkpoint prepares live switching;
+selection notifications, client reflow and designed family-style resolution
+remain open.
+Host, sanitizer, MC68040/analyzer and native GUI
+import/detail/choice/restart/uninstall checks pass for this ownership checkpoint.
+
+GUI protocol 23 now distinguishes context delivery from adoption. Font Kit
+includes its actually adopted face ID in each context request, read through
+the same private mutex-protected state used by measurement and text commands.
+Each Display session retains at most two snapshots: confirmed and pending.
+The next request confirms the adopted one and retires the unused one before
+preparing a new pending reply. A client that cannot map or validate a reply
+reports its previous ID on retry; no confirmed reference is lost. Recovery's
+empty ID follows the same rule. This needs no acknowledgement race, new
+kernel mechanism or unbounded history. Session close releases both slots.
+The old header-only request is removed; every GUI producer and consumer uses
+the new protocol version. Host and sanitizer checks cover retry after failed
+mapping/validation, stable reference counts, malformed IDs, old request/version
+rejection, recovery adoption and final session cleanup. Public Font Kit ABI
+stays 3.1; the changed wire contract is versioned by GUI protocol 23.
+Contexts belong to their GUI session. Supervisor already retains an
+application's `gui_session` in its process record until process retirement;
+Font Kit does not duplicate a nondelegable GUI capability or invent another
+lease. Owners of manually created sessions must keep them alive while using
+their system context. The coherent GUI 23 ROM, full userspace build/tests,
+NDK contract/docs/installed example checks and native GUI workflow pass on
+Beast. GUI-header dependencies now also invalidate System window/graphics,
+Supervisor loader-recovery and Display host tests; forced-header dry runs and
+their host/sanitizer checks verify that boundary.
+
+The live-update implementation advances Font Kit to ABI 4.0, GUI to protocol
+24, window events to version 9 and the Fonts service to protocol 6. The old
+one-argument `astra_fonts_use_system` and Font Kit 3 artifacts are superseded.
+Initial setup passes a null event; refresh passes the delivered
+`FONT_CHANGED` event. Its explicit window ID is carried in the context query,
+validated against the GUI session and acknowledged independently. A shared
+process context cannot acknowledge a sibling window whose controls have not
+handled the notice. Confirmed/pending face ownership still follows the same
+bounded adoption rule.
+
+Fonts prepares a validated read-only selected snapshot before the Config Kit
+write. Failed preparation or persistence retains the old choice. The service
+keeps the selected snapshot and serves read-only duplicates without reopening
+its file. Existing areas survive retirement of that selection. A native
+auto-reset `FONTS_CHANGED` event is a wake hint; Display queries the catalog
+for authoritative state. Refresh failures retain the previous rendering
+context and retry. Window notices retry every 250 ms until the actual adopted
+ID is reported for that window, including after queue backpressure or failed
+client mapping. Startup recovery likewise retries the selected context.
+
+Supervisor now grants a private GUI session to every GUI client. Applications
+retain their named launch panel; services use unnamed sessions. Shared GUI
+service contexts must not let Desktop and Terminal overwrite each other's
+adoption state. Session-creation failure is reported rather than falling back
+to the shared endpoint. Supervisor retains those sessions for process lifetime.
+
+Clients fetch the context before passing a font-change event to Interface Kit.
+The common retained-control handler reuses its saved layout, marks the entire
+view damaged, and preserves focus/scroll state. Common modal alerts initialize
+and refresh the same way. Desktop's existing safe-removal canvas reuses one
+row-measurement path for initial layout and font changes, updating wrapping
+and scroll extent without rereading privileged holder data. Monospaced
+Terminal content remains independent. Read-only Haiku references:
+`src/servers/app/DesktopSettings.cpp` broadcasts system-font changes,
+`src/kits/interface/Window.cpp` dispatches `B_FONTS_UPDATED`, and
+`src/kits/interface/View.cpp:_FontsUpdated` propagates to retained children.
+Astra adapts this pattern to its versioned capabilities and common controls.
+
+Selection failure/retirement host and sanitizer tests, window-event validation,
+per-window acknowledgement/authentication and backpressure retry tests,
+retained-control focus/scroll and modal-alert tests, MC68040 builds and Display
+analyzer pass on Beast. Coherent build and strengthened native GUI live-update
+qualification are in progress; no new font software is deployed to DE25 yet.
+
+The first live GUI qualification exposed an area-ownership error: Astra's
+identical area maps are idempotent, not independently reference counted.
+Closing a previous duplicate mapping therefore invalidated the newly adopted
+one. Client refresh now reuses an unchanged immutable ID without remapping;
+direct snapshot adoption preserves a common mapping while closing the old
+handle. Display's common-control metrics borrow its retained registry face's
+validated view. Its active default owns that view until replacement, and
+retained documents keep older registry mappings alive independently. No extra
+AFNT copy or kernel mapping mechanism is introduced. The borrowed-context
+API rejects replacing an owned snapshot, keeping ownership explicit.
+Alias/borrowed retirement checks extend the existing real-AFNT host tests.
+The corrected coherent build and native GUI gate pass: Desktop and Fonts
+adopt the same imported ID live, Config Kit saves that exact ID, restart
+restores it, and switching back to the built-in face permits uninstall.
+Beast log: `/var/tmp/astra-font-live-map-ui-20261017.log`. Complete physical
+qualification remains open.
+The final full userspace test suite and refreshed NDK distribution with
+installed example links and HTML/PDF manuals also pass on Beast in
+`/var/tmp/astra-font-live-map-sdk-final-20261017.log`.
+
+Retained reflow now refreshes intrinsic measurements as well as positions.
+Initialization and font changes share one measurement pass, followed by the
+existing layout. A wider-font regression fails before the correction and
+passes afterward, including scrolled List focus/offset preservation. This
+adapts Haiku's `src/kits/interface/View.cpp:InvalidateLayout` invalidation of
+cached size constraints and child layouts. Interface/Display host, sanitizer,
+MC68040 and coherent build gates pass; the native Iosevka Regular import,
+live Desktop/Fonts adoption, Config Kit persistence, restart and uninstall gate
+passes in `/var/tmp/astra-font-live-remeasure-iosevka-ui-20261017.log`.
+The earlier clean release is withheld pending replacement with this correction
+and complete physical qualification.
+Full userspace tests and updated NDK distribution/examples pass in
+`/var/tmp/astra-font-live-remeasure-sdk-20261017.log`.
+
+Physical Iosevka qualification found two further stale-pixel paths despite
+successful client adoption: Desktop submitted redraw commands without asking
+for presentation, and Display retained its menu-bar cache after font changes
+when no popup was open. Desktop now uses the existing posted-frame presentation
+contract for every paint; its initial synchronous presentation still supplies
+the startup visibility barrier. Display invalidates the system-surface cache
+alongside its window caches. The existing content-bank copy-forward mechanism
+preserves pixels across consecutive presentations. No new buffering path is
+introduced. Haiku's read-only references are
+`src/servers/app/Desktop.cpp:RebuildAndRedrawAfterWindowChange` (dirty pixels
+must reach screen redraw) and the font-change propagation references above.
+The real-AFNT cache regression fails before invalidation and passes afterward.
+Display/Desktop host and sanitizer gates, MC68040 builds, Display/Fonts
+analyzers and coherent userspace/ROM pass in
+`/var/tmp/astra-font-live-present-green-20261017.log` on Beast.
+The native import test now waits for a fresh successful UI import completion
+instead of sleeping eight seconds; a retained-log regression covers readiness.
+The native Iosevka GUI gate passes import, live Desktop/Fonts adoption,
+persisted choice, restart, built-in restoration and uninstall in
+`/var/tmp/astra-font-live-present-ui-20261017.log`. Physical replacement
+qualification remains required.
+
+The corrected `c6cd2e7` DE25 candidate now visibly switches Desktop labels,
+menu headings and Fonts to Iosevka without restart. The ineligible Astra Mono
+detail view shows "Cannot be system font", a requirements hint and a disabled
+selection button. The first restoration interaction timed out without changing
+the saved Iosevka choice. An unchanged-runtime diagnostic replay passes built-in
+restoration and uninstall, with correct pixels throughout, empty inventory,
+no imported AFNT object, no trial panic and no retained provider. Its stopped
+production image hashes match before/after. Evidence on Beast:
+`/var/tmp/astra-font-live-evidence-20261017b/`; the failed first restoration is
+retained under `restore-attempt1/`. Release remains withheld until that
+interaction failure is explained or resolved. Passing replay alone does not
+establish repeatable acceptance.
+
+Font previews now extend the shared Label control with an explicit installed
+face and size. Ordinary system labels retain their fixed nominal role sizes;
+their line boxes use actual ascent/descent/gap metrics. The Fonts detail view
+composes that Label with its existing List and ScrollView. Changing a row
+updates the preview font in place, preserving List focus and scroll state.
+Face and strike indices share one detail-source record rather than parallel
+mapping arrays. No preferences-only text renderer is introduced.
+
+Font Kit 4.1 / GUI 25 add bounded installed-face measurement through Display's
+existing immutable font registry and renderer metric loop. UTF-8 spans use
+256-byte chunks without splitting scalars; fractional advances remain 26.6
+across chunks and round only at the final client boundary. Reply validation
+rejects malformed prefixes, out-of-range advances, inconsistent line heights
+and unexpected handles. Measurement never changes the active system context
+or gives clients raw AFNT/glyph memory. Named-face surface text reuses the
+existing ADLT emitter and refuses CPU pixel views. A missing strike returns an
+error rather than drawing another face. The retained draw document owns its
+existing font references independently of each metric query.
+
+Interface Kit 7 replaces the control ABI coherently across all in-tree clients,
+manifests, exports and NDK examples. Label text/font updates share one measured
+replacement and layout-rollback path. Draw-list budgets account for each text
+command's actual font-ID prefix. The existing context-ID reader moved to the
+public Font Kit header; its private header/API spelling was removed. An initial
+overly conservative prefix estimate rejected a valid dense menu; that failed
+check remains in `/var/tmp/astra-font-label-preview-focused-20261017.log`.
+Corrected focused host, ASan/UBSan, MC68040 and analyzer gates pass in
+`/var/tmp/astra-font-label-preview-focused-final-20261017.log` on Beast.
+Tests cover UTF-8/fractional chunking, real AFNT advances, absent strikes,
+preview/default Label layout, failure rollback, named submission, unchanged
+system context and capacity rejection before drawing. The first metrics draft
+also passes native Amiga import/measurement/hardware draw/restart in
+`/var/tmp/astra-font-independent-metrics-amiga-20261017.log`; current coherent
+UI gates now pass Iosevka import/live choice/restoration/removal, long AFNT
+styles, and native Amiga import/exact measurement/hardware draw/restart in
+`/var/tmp/astra-font-label-preview-{iosevka-ui,long-style-ui,amiga-native}-20261017.log`.
+Full userspace/ROM and NDK distribution gates pass in
+`/var/tmp/astra-font-notice-focus-green-20261017.log`. Complete physical preview
+qualification remains pending.
+
+A valid AFNT with an unsupported bitmap format remains manageable: Fonts
+shows an explicit unavailable caption using its ordinary Label, rather than
+drawing a misleading sample in another font or exiting. Selection and initial
+detail layout share this same update path. The native regression fails before
+the fix in `/var/tmp/astra-font-preview-unsupported-red-20261017.log` and passes
+in `/var/tmp/astra-font-preview-unsupported-final-20261017.log`. The first fixed
+run successfully removed the font but exposed a test assertion distinguishing
+absent from empty inventory; the final gate normalizes those equivalent states.
+
+Read-only Haiku references: `src/preferences/appearance/FontSelectionView.cpp`
+uses a standard text control with a chosen font; `src/kits/interface/Font.cpp`
+obtains string metrics from app_server; `src/kits/interface/StringView.cpp`
+invalidates preferred size/layout on font changes and measures font height.
+Astra adapts these patterns to counted IDs, exact AFNT strikes, native
+capabilities and hardware draw lists.
+
+The `4a0925b7` clean release `77115da1` passes its first DE25 import/live
+choice/restart/restoration/removal workflow, but remains withheld. Visual
+inspection finds action buttons clipped below the default window. Captures
+nominally taken before selecting Iosevka still show the family list: fixed
+delays stopped the guest before detail initialization finished. Failed evidence
+is retained and checksum-compared at
+`/var/tmp/astra-font-preview-evidence-20261017/cycle1/` on Beast. The real
+Fonts controller linked to common controls reproduces the layout failure in
+`/var/tmp/astra-font-preview-layout-red-20261017.log`. The existing ScrollView
+now starts at its minimum viewport height and uses existing flex growth for
+remaining room; its width follows the current window. No layout/control
+mechanism changed. Host/sanitizer checks cover family, eligible/ineligible
+details, another strike, unavailable previews, confirmation and source browsing,
+including a narrower, taller window. Native UI gates wait for fresh details
+and preview completion notices and use the visible last button for removal.
+Read-only Haiku reference: `FontSelectionView.cpp` composes a measured preview
+with standard layout space/glue; Astra similarly leaves remaining room to its
+existing flexible viewport. Corrected native and physical gates remain pending.
+Final focused host/sanitizer/MC68040 analyzer and readiness checks pass in
+`/var/tmp/astra-font-preview-layout-final-focused-20261017.log`. Presentation
+completion notices share the existing application presentation function and
+emit only after success, including confirmation and removal; observers no
+longer assume a fixed removal delay. Freshness tests cover all five notices.
+
+Corrected source `616129a2` clean-builds as release `c06c1a34`, ROM
+`d48a988f65445011b145502a9cb28f4f784bb7b43a8362214f2f485b44c52529`.
+Final current-release native Iosevka, unsupported-preview, long-style and
+readiness gates all pass in the `astra-font-preview-final-*-20261017.log`
+files on Beast. The first corrected physical cycle passes as well. Inspected
+1920x1080 HDMI captures prove 11- and 13-pixel Iosevka previews before changing
+the system face, all action buttons visible, live system adoption, persistence
+after restart, built-in restoration and removal. Complete checksum-compared
+evidence is `/var/tmp/astra-font-preview-evidence-20261017-layout/cycle1/`.
+Production image SHA-256 remains
+`96fcad0293f7994584fe19cd9e6a6a4d4f6265a9ba67934483b2d063630163c4`
+before/after; services restore active with zero automatic restarts. A second
+full disposable-image cycle passes with production image before/after SHA-256
+`b18658e0174cd11220d96c779089a69d6fbdf38d471a0bcc622d94e6ccb39e4e`;
+its evidence is under `cycle2/` in the same Beast root. All eight corresponding
+HDMI captures are byte-identical between cycles. The final warm production
+frame again matches
+`37d1bbfe3df5fbb5b0c3a8d6b278724f1222aefd572bd6e52cd3aa1534b3b091`,
+at 25 glyph commands and 49/49 submissions/completions, with all three services
+active and zero automatic restarts. Shared Label preview and repeated
+restoration/removal correctness pass; this does not close the remaining Fonts
+program or release gates. Production remains on `57078599`.
+
+The restoration investigation also reproduces a real notification defect:
+backpressured `FONT_CHANGED` delivery used the generic lossy-event path even
+though the generation remains pending and is retried. A later event therefore
+reset the common controls' focus and cancelled button activation. Font notices
+now reuse `prepare_event`/`deliver_event` without declaring a retry to be lost
+input. A genuinely recorded earlier loss is still delivered and resets focus.
+The Display host fixture dispatches the retried notice through real Interface
+Kit controls, proving that focus and Return activation survive; it also checks
+genuine-loss recovery. The old code fails the focus assertion in
+`/var/tmp/astra-font-notice-focus-red-linked-20261017.log`. Initial attempts
+needed the public Interface header and its existing TextModel/Scroll sources
+to link the real event handler; their compiler/linker failures remain in the
+earlier `-red`/`-red-behavior` logs. No fake UI policy was introduced.
+Read-only Haiku references: `src/servers/app/ServerWindow.cpp` forwards
+`B_FONTS_UPDATED` as a state notice; `RequestRedraw` retains its state counter
+independently of notification queue pressure. Corrected host/sanitizer gates
+pass in `/var/tmp/astra-font-notice-focus-green-20261017.log`; physical
+qualification remains required before claiming the restoration gate closed.
+
+The shared renderer also makes AFNT a dependency of HPS display helpers.
+`fpga/arty/linux/Makefile` now includes the existing AFNT, CRC32, and UTF-8
+sources for every renderer consumer. Host and AArch64 display self-tests and
+the AArch64 host-read helper link pass; this repairs the clean publisher's
+previous unresolved `astra_afnt_*` references without a second font reader.
+
+This covers the common current macOS outline containers listed by
+[Apple Font Book](https://support.apple.com/en-gb/guide/font-book/fntbk1000/mac)
+and Amiga bitmap fonts. A collection is one input but contributes all its
+faces to the managed
+installation transaction. Every installed face becomes validated AFNT before
+the catalog exposes it; applications and Astraea never parse source formats.
+Color glyph formats, including OpenType-SVG, need a separate color-strike
+conversion path. The monochrome A8 outline importer rejects them rather than
+silently dropping color. Legacy Mac font suitcases, resource-fork `.dfont`,
+PostScript Type 1, WOFF/WOFF2, BDF, and PCF are outside this first scope.
+
+The target installation architecture uses one AFNT conversion and validation
+path. Import is an installation/build operation, not an application rendering
+path:
+
+- TTF, OTF, and TTC enter through the outline rasterizer and OpenType parser;
 - classic Amiga disk fonts enter through the bounded importer below;
 - every import records source hashes, source format, face/collection index,
   variation axes, selected strike sizes, converter versions, license, and
   source character mapping.
+
+The build-time development tool supports one TTF, OTF, or selected TTC face per
+invocation, plus monochrome Amiga disk strikes. The native HPS worker converts
+one outline face per request; the resident Fonts service streams every
+collection face and distinct named variable instance through that worker and
+commits one validated inventory update. It skips named instances whose
+coordinates duplicate the default or an earlier instance and records exact
+16.16 design-axis coordinates and source instance index in AFNT metadata.
+Custom axis coordinates are not yet selectable in Fonts. The current limit is 32 MiB
+per source and per resulting AFNT face; larger valid faces return a capacity
+error without publishing a partial catalog.
+
+`sw/common/Makefile` builds host, MC68040, and AArch64 `libastraafnt.a`
+variants for shared C validation and canonical packing of AFNT 0.2
+at the native import boundary; host and sanitizer tests run it against shipped
+faces, Iosevka and Amiga spike output, and malformed records. The HPS C
+outline converter in `fpga/de25/linux/astra_font_convert.c` reuses that codec,
+FreeType, UTF-8 validation, CRC32 and SHA-256; static Iosevka TTF and Source
+Sans OTF conversion tests pass. Build-time Python remains a development asset
+pipeline and oracle. It is not an Astra user-facing importer or a runtime
+dependency. Users import through the native Fonts UI and resident service.
+
+The first internal HPS worker executable now wraps that converter with a
+versioned, bounded `FNTC`/`FNTR` byte protocol. One child handles one face and
+exits; requests carry source bytes, display name, license, and collection face
+index, never a host path. The worker only returns validated AFNT bytes and the
+collection face count. Beast host, ASan/UBSan, AArch64 QEMU-user, and physical
+DE25 conversion of Atkinson Hyperlegible Next Regular pass, including malformed
+outline and oversized-request checks. The physical test ran from
+`/var/tmp/astra-font-worker-20261017` without installing or selecting a new
+production release. The QEMU host transport now invokes this worker for native
+Fonts imports. Disposable QEMU gates pass TTF, OTF, two-face TTC, and four-style
+STIX Two Text variable conversion,
+catalog publication, system selection and restart persistence; the AFNT import
+and damaged-inventory gate still passes. A later-face TTC failure rolls back
+newly created AFNT objects before the inventory commit; disposable QEMU checks
+the unchanged catalog and empty installed-object directory. If Config Kit
+reports a failed commit, objects remain because its durable outcome may be
+ambiguous. The native UI uses its existing file
+browser and Import action. A fresh disposable QEMU gate now drives the desktop
+icon, imports a TTF through that browser, checks the AFNT object and Config Kit
+inventory, opens family details, and saves that imported face as system choice.
+The saved `user:<token>` matches the published AFNT object. The gate found a Flex
+break flag that moved the List outside the client area; the flag was removed.
+A complete DE25 release has not been qualified. Display loads the saved
+system-face choice at startup; live change notification and render-context
+refresh remain open.
+The variable fixture is unmodified STIX Two Text 2.13 under OFL 1.1. Host and
+AArch64 worker tests verify default/Medium/SemiBold/Bold conversion, reject a
+fifth face, and check source-instance provenance. ASan/UBSan and native QEMU
+import/restart gates pass. Haiku's
+`~/Git/haiku/src/servers/app/font/FontManager.cpp:306-352` keeps designed
+styles within a family and advances catalog revision; Astra applies that catalog
+pattern after converting FreeType named instances into immutable AFNT faces.
+
+The shared C codec now exposes validated AFNT family/style strings and strike
+metrics for the future service catalog and Fonts detail view. Its NAME reader
+decodes JSON escapes, rejects malformed Unicode and duplicate requested fields,
+and leaves source buffers owned by the caller. It also resolves Unicode scalars
+to borrowed glyph rasters and metrics in validated strikes, falling back to
+U+FFFD without a second file parser. Beast host, sanitizer, MC68040, and
+AArch64 codec builds pass. The HPS C converter now prepares
+11, 13, 16, and 20-pixel A8 strikes, including every current proportional UI
+role size from `astra/theme.h`. Beast host, sanitizer, MC68040, AArch64, and
+outline-conversion checks pass. This does not install fonts or change the active
+system font.
+
+A bounded, versioned native catalog snapshot now serializes face IDs, family,
+designed style, and available strikes. Shared C code extracts these fields from
+validated AFNT into caller-owned storage; shipped AFNT round trips through the
+catalog on Beast under host and sanitizer tests, and the codec builds for
+MC68040 and AArch64. A resident `fonts` service draft scans immutable system
+AFNT and its protected `FONTS:installed/` directory, keeps read and
+administrative request ports separate, and validates theme role sizes before
+persisting a choice through Config Kit. Its service/policy build and focused
+tests pass. An isolated disposable QEMU boot launched the service with status
+zero. Font Kit 2.4 now opens a validated, immutable catalog snapshot through
+the `FONT_CATALOG` capability, exposes counted family/style names and strike sizes,
+and sends selection through the separate FONTS_ADMIN capability. MC68040
+library/link contracts and host malformed-reply/catalog tests pass. This is
+client infrastructure, not a Fonts application or live typography change.
+The disposable display image now starts the service and installs a native
+Fonts bundle. The first UI reads catalog snapshots, groups installed faces by
+family, and opens a style/bitmap-size detail view through the shared List
+control. A disposable QEMU autostart confirms bundle launch and hardware glyph
+submissions; a focused GUI gate covers family-detail interaction.
+The draft installed-font store now assigns every AFNT object its full SHA-256
+digest in canonical base32. Config Kit's single `installed` string lists those
+tokens, so the multi-face TTC importer publishes one complete inventory
+with one atomic settings commit after writing its objects. Service startup
+accepts only referenced objects whose bytes match their names and whose AFNT
+metadata validates. It bounds each read to 32 MiB. A damaged or unavailable
+user inventory remains on disk and falls back to built-in fonts without
+blocking system startup. The native Fonts UI can select AFNT, TTF, OTF, or TTC
+files from DH0. The admin-only service validates converted AFNT, writes and syncs a
+content-addressed object, commits its token through Config Kit, and publishes
+a new catalog generation. Duplicate imports return the existing ID; loose
+files in the protected directory are not installed. The UI also sends a
+system-face choice through the admin port, which persists in Config Kit.
+MC68040 builds, host policy/client tests, full userspace tests, static analysis,
+and a disposable QEMU Fonts autostart pass. A test-only native Astra probe
+passes AFNT import, catalog publication, duplicate-idempotence, selected-face
+save, and catalog/choice reload after reboot on a disposable QEMU image. A
+fourth boot with a valid Config Kit document containing a damaged installed-font
+inventory and unavailable saved choice confirms built-in fallback and refusal
+to overwrite the damaged inventory. It found and fixed an import port-call
+handle-order bug. A two-boot GUI gate imports a TTF, selects it, selects a
+shipped face again, confirms uninstall, and checks that the catalog and AFNT
+object are removed. A native probe checks active and shipped-face rejection,
+retained-face catalog integrity after compaction, and restart persistence.
+Physical DE25 qualification remains open.
+Font service protocol 4 publishes `FONTS_RENDER` separately from catalog and
+administration. It rereads and validates an installed AFNT, checks the full
+content token for user faces, and transfers an immutable area. Font Kit 2.7
+maps that area read-only. A native QEMU probe compares delivered bytes with
+the built-in and newly imported source, including after restart and damaged
+inventory fallback. Normal startup grants this port only to display. Display
+now opens the selected AFNT area at startup and feeds its validated view into
+the shared render builder. Available regular proportional strikes become
+Astraea glyph-run commands; the host pixel-oracle checks exact AFNT bitmaps
+and positions. The disposable QEMU Fonts autostart gate passes with current
+services installed and submits hardware glyph commands. Missing strikes and
+styled requests still use the built-in UI face, while monospaced text keeps its
+independent font. The current-ROM native AFNT import probe also passes
+selection, restart, and damaged-inventory fallback. Display does not yet watch
+for selection changes, and clients still lay out text with built-in
+metrics. Static TTF/OTF/TTC now enter through the HPS worker and native Fonts
+service; a disposable two-face TTC import/restart gate passes. Imported faces
+can be removed only after choosing another system face. Config Kit commits the
+inventory change before the service retires the catalog entry and unlinks its
+AFNT object. If unlink fails, the unlisted object remains on disk and the
+service logs the cleanup error; it does not restore a removed catalog entry.
+This follows Haiku's delist-and-revision pattern in
+`~/Git/haiku/src/servers/app/font/AppFontManager.cpp:101-106` and
+`~/Git/haiku/src/servers/app/font/FontManager.cpp:354-370`, adapted to Astra's
+content-addressed store and Config Kit transaction. Production DE25 still
+uses the previous selected release. Live updates, coherent metrics and
+styles, Amiga runtime import, removable-volume browsing, and physical gates
+remain open.
+
+Haiku reference for this catalog boundary: `src/servers/app/font/FontManager.cpp`
+groups families and styles, `src/servers/app/font/FontFamily.cpp` keeps designed
+styles distinct, `src/servers/app/font/GlobalFontManager.cpp` owns installed
+font discovery and default fallback, and `src/preferences/appearance/FontView.cpp`
+keeps user preference controls separate from inventory. Astra follows that
+ownership split while deriving its user-visible strike list from validated
+AFNT rather than exposing source-format records. Also reviewed
+`src/servers/app/drawing/DrawingEngine.cpp`: Haiku resolves the font centrally
+and passes it to its drawing engine; Astra passes the selected AFNT view to
+its shared Astraea command builder.
+
+Beast format checks on 2026-10-15: Adobe Source Sans 3 static OTF validated
+with 1,615 cmap entries; its variable TTF and OTF each validated with 1,616
+entries and recorded default `wght=200`; a two-face test TTC imported its
+second face; AROS ISOHelvetica 11- and 13-pixel Amiga strikes validated with
+225 cmap entries and two strikes. The official Adobe sources and results are
+isolated in `/home/barry/astra-font-spike-20261015/` on Beast. These prove
+build-time conversion, not installed-font runtime behavior.
 
 Importers render requested MASK1/A4/A8 or indexed strikes, then feed the same
 AFNT writer and validator. Common UI sizes can ship prebuilt. For a scalable
@@ -494,14 +1310,13 @@ drawn as decorations from the strike metrics and never alter or duplicate
 glyph bitmaps. The resolved `AstraFontInfo` reports synthetic weight/slant so a
 typographically exact application may refuse it.
 
-The current `font.library` 2.1 draw-list path implements the same fallback for
-resident MASK1 and A8 strikes: bold is a deterministic horizontal embolden,
-italic is
-a baseline-relative shear, and underline/strikeout use AFNT metrics. Plain and
-styled runs share one glyph source; styled command data is synthesized while
-the draw list is lowered, then glyph expansion remains hardware-rendered. A
-font-service cache is still required before scalable faces advertise synthetic
-matches through `AstraFontInfo`.
+The current `font.library` 2.3 draw-list path prepares built-in synthetic bold,
+italic, and combined strikes from resident AFNT during the build. Bold uses a
+deterministic horizontal embolden, italic a baseline-relative shear, and
+underline/strikeout use AFNT metrics. Runtime selects a prepared strike and
+submits glyph descriptors; Astraea expands glyph coverage. Installed scalable
+faces still need the font-service cache before advertising synthetic matches
+through `AstraFontInfo`.
 
 ### 7.1 Settings drag-import transaction
 
@@ -515,7 +1330,9 @@ One drop is one all-or-nothing transaction:
 1. identify each input by bounded content inspection rather than its suffix;
 2. expand collections into their individual faces and report the complete
    candidate list in a progress sheet;
-3. run the selected format handler in an unprivileged, restartable host worker;
+3. run the selected format handler in an unprivileged, restartable Astra C
+   worker on the DE25 HPS, reached only through the versioned native font
+   service protocol;
 4. convert every requested native strike and retain complete source provenance;
 5. validate every AFNT, name/style collision, bitmap range, and catalog entry;
 6. durably store immutable content-addressed font objects; and
@@ -540,16 +1357,16 @@ service transaction API. They do not parse formats, write AFNT files, or edit a
 private font registry. AFNT dropped directly follows the same full validator
 and transaction path without lossy reconversion.
 
-The build-time outline importer currently converts complete Unicode cmaps from
-TTF sources into A8 AFNT strikes using pinned fontTools and Pillow versions.
-It is the behavioral oracle for the service writer; wiring the host worker,
-collection/WOFF/bitmap handlers, progress protocol, and catalog publication is
-still required before Settings advertises drag installation.
+The build-time outline importer converts Unicode cmaps from TTF, OTF, and a
+selected TTC face into A8 AFNT strikes using pinned fontTools and Pillow
+versions. It is the behavioral oracle for the service writer; wiring the host
+worker, all-face collection expansion, progress protocol, and catalog
+publication is required before Settings advertises drag installation.
 
 ### 7.2 Amiga import compatibility
 
-Amiga fonts are useful content, not the Astra ABI. The importer accepts classic
-bitmap disk fonts without executing them and converts:
+Amiga fonts are useful content, not the Astra ABI. The production importer
+must accept classic bitmap disk fonts without executing them and convert:
 
 - the strike bitmap and per-character location/width table;
 - proportional spacing and kerning arrays when present;
@@ -557,14 +1374,34 @@ bitmap disk fonts without executing them and converts:
 - `ColorTextFont` bitplanes and palette into an AFNT indexed-color strike.
 
 Classic files are relocatable 68k load modules containing a `DiskFontHeader`
-and pointer-based `TextFont` or `ColorTextFont` data. The importer therefore
-uses a bounded hunk parser in a sandboxed user process. It does not call
+and pointer-based `TextFont` or `ColorTextFont` data. The production importer
+therefore needs a bounded hunk parser in a sandboxed user process. It must not call
 `LoadSeg`, run embedded return code, trust relocation addresses, or pass planar
 data to Astraea.
 
-Imported glyphs receive Unicode mappings through an explicit source-encoding
-choice such as Amiga Latin-1 or a supplied mapping table. Unknown encodings do
-not silently become Unicode.
+The build-time `import-amiga` uses pinned monobit 0.53 as a development oracle.
+Native HPS C code validates one monochrome HUNK_CODE/HUNK_DATA disk font without
+executing or relocating it, converts its fixed bitmap strike into MASK1 AFNT,
+and validates the packed AFNT. The checked-in AROS ISOHelvetica 11- and
+13-pixel fixtures pass bounded-parser, conversion, sanitizer, host-worker, and
+AArch64 worker checks. Color Amiga conversion remains pending; the first Fonts
+release accepts monochrome classic disk fonts only. The user-facing Fonts
+importer requires an explicit ISO-8859-1 or ISO-8859-2 choice for these files.
+
+Imported glyphs receive Unicode mappings through that explicit choice. Unknown
+encodings do not silently become Unicode. System-choice eligibility requires
+11-, 13-, and 16-pixel strikes; fixed-size Amiga fonts remain installed and
+catalog-visible when they lack those sizes. The catalog carries the service's
+eligibility decision, and Fonts labels each style accordingly. Applications
+can use `astra_draw_font_text` to draw an imported Amiga face independently
+of the system face through display's validated resolver and Astraea.
+
+Read-only implementation references: Haiku
+`src/servers/app/font/FontManager.cpp` for catalog/style ownership and
+`src/preferences/appearance/FontView.cpp` for preference presentation; Amiga
+NDK `graphics/text.h` and `libraries/diskfont.h` for source metrics and bit
+flags; monobit 0.53 `storage/fontformats/amiga.py` for disk-font layout.
+Astra retains its AFNT validator and catalog as the native contracts.
 
 Host and native tooling should share the same AFNT writer and golden files.
 Amiga import is tested with monochrome, proportional, kerning, missing-glyph,
@@ -600,7 +1437,7 @@ three parallel coverage channels.
   remain a release gate.
 - Pixel output is compared exactly for `MASK1` and indexed formats and against
   the specified integer blend rule for `A4`.
-- ROM fonts render identically in the emulator and RTL at every bundled strike.
+- Shipped AFNT renders identically in the emulator and RTL at every bundled strike.
 - The rescue font remains readable during forced SDRAM and SD failure tests.
 - Real-HDMI specimens verify ambiguous pairs, punctuation, code, dense UI text,
   and the 8:9 pixel aspect before a bundled strike is frozen.

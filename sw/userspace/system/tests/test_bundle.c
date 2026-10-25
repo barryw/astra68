@@ -186,6 +186,7 @@ static void manifest_test(void)
         char path_manifest[ASTRA_BUNDLE_PATH_MAX + 160u];
 
         memset(long_path, 'p', 180u);
+        for (uint32_t at = 31u; at < 180u; at += 32u) long_path[at] = '/';
         long_path[180] = '\0';
         (void)snprintf(path_manifest, sizeof(path_manifest),
                        "astra-bundle 1\nkind application\n"
@@ -195,6 +196,16 @@ static void manifest_test(void)
                    path_manifest, strlen(path_manifest), &manifest, &line) ==
                ASTRA_BUNDLE_OK);
         assert(strlen(manifest.executable) == 180u);
+        for (uint32_t at = 0u; at < ASTRA_BUNDLE_PATH_MAX - 1u; ++at)
+            long_path[at] = at % 32u == 31u && at + 1u < ASTRA_BUNDLE_PATH_MAX - 1u ? '/' : 'p';
+        long_path[ASTRA_BUNDLE_PATH_MAX - 1u] = '\0';
+        (void)snprintf(path_manifest, sizeof(path_manifest),
+            "astra-bundle 1\nkind application\nid org.astra.path\nname Path\nversion 1.0.0\n"
+            "executable %s\nicon icon.aicon\n", long_path);
+        assert(astra_bundle_manifest_parse(path_manifest, strlen(path_manifest), &manifest, &line) == ASTRA_BUNDLE_OK);
+        assert(strlen(manifest.executable) == ASTRA_BUNDLE_PATH_MAX - 1u);
+        memset(path_manifest, 'x', strlen(path_manifest));
+        assert(strlen(manifest.executable) == ASTRA_BUNDLE_PATH_MAX - 1u);
         memset(long_path, 'p', ASTRA_BUNDLE_PATH_MAX);
         long_path[ASTRA_BUNDLE_PATH_MAX] = '\0';
         (void)snprintf(path_manifest, sizeof(path_manifest),
@@ -204,6 +215,7 @@ static void manifest_test(void)
         assert(astra_bundle_manifest_parse(
                    path_manifest, strlen(path_manifest), &manifest, &line) ==
                ASTRA_BUNDLE_INVALID);
+        assert(manifest.executable == NULL && manifest.icon == NULL);
     }
     {
         char libraries[2048u] =

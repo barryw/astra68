@@ -23,7 +23,9 @@ terminal_gate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(terminal_gate)
 
 # Bundles the system image ships, other than Terminal (the terminal gate's).
-APPLICATIONS = ("/apps/InterfaceGallery.app", "/apps/SDLTestDraw2.app")
+APPLICATIONS = ("/apps/InterfaceGallery.app", "/apps/Fonts.app",
+                "/apps/Atlas.app", "/apps/DiskSetup.app",
+                "/apps/SDLTestDraw2.app")
 
 
 def display_count(machine, name):
@@ -34,6 +36,7 @@ def display_count(machine, name):
 def open_application(machine, bundle, deadline):
     before = machine.sequence()
     submissions = display_count(machine, "submissions")
+    palette_blits = display_count(machine, "palette-blit-commands")
     machine.qmp.double_click(*machine.desktop_icon(bundle))
     end = time.monotonic() + deadline
     while time.monotonic() < end:
@@ -42,16 +45,24 @@ def open_application(machine, bundle, deadline):
         # kernel ring for its own per-process ring and the host syslog, not
         # said()'s kernel-ring-only view. said_with_syslog() reads both.
         lines, _ = machine.said_with_syslog(before)
+        if bundle == "/apps/InterfaceGallery.app" and any(
+                "INTERFACE " in line for line in lines):
+            raise RuntimeError("Interface Gallery ran benchmarks during desktop launch")
         refused = [line for line in lines
                    if "application launch refused" in line or
                    "desktop launch" in line]
         if refused:
-            raise RuntimeError("%s did not launch: %s" % (bundle, refused))
+            details = [line for line in lines if "display" in line.lower() or
+                       "render" in line.lower()]
+            raise RuntimeError("%s did not launch: %s; recent=%s" %
+                               (bundle, details[-20:], lines[-10:]))
         launched = any(("launch " + bundle) in line for line in lines)
-        if launched and display_count(machine, "submissions") > submissions:
+        if (launched and display_count(machine, "submissions") > submissions
+                and display_count(machine, "palette-blit-commands") >
+                palette_blits):
             return
         time.sleep(0.25)
-    raise RuntimeError("%s launched no drawing within %.0fs: %s" %
+    raise RuntimeError("%s launched no drawing or indexed icon within %.0fs: %s" %
                        (bundle, deadline,
                         machine.said_with_syslog(before)[0][-20:]))
 
@@ -136,9 +147,13 @@ def main():
                                         work)
         try:
             if not machine.wait_for_serial(terminal_gate.BOOT_MARKER, 120):
-                raise RuntimeError("Astra did not finish booting")
+                raise RuntimeError("Astra did not finish booting: %s; serial=%s" %
+                                   (machine.said_with_syslog()[0][-40:],
+                                    machine.recent_serial(80)))
             for bundle in APPLICATIONS:
-                open_application(machine, bundle, arguments.deadline)
+                deadline = min(arguments.deadline, 1.0) if bundle == \
+                    "/apps/InterfaceGallery.app" else arguments.deadline
+                open_application(machine, bundle, deadline)
             # Everything opened is still running and the display kept up.
             if machine.process.poll() is not None:
                 raise RuntimeError("QEMU exited")

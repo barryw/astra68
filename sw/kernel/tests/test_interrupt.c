@@ -6,6 +6,7 @@
 #include "platform.h"
 #include "trace.h"
 #include "worker.h"
+#include <astra/host.h>
 
 #include <assert.h>
 #include <stdint.h>
@@ -18,9 +19,11 @@
                            (priority), (result))
 
 static uint32_t trace_event_count[KERNEL_TRACE_EVENT_COUNT];
+static uint32_t last_irq_failure[4];
 static uint32_t monitor_irq_services;
 static uint32_t monitor_spi_irq_services;
 static uint32_t host_irq_services;
+static KernelThreadWaitQueue *host_irq_waiters;
 static bool monitor_spi_binding_available = true;
 static bool monitor_ready = true;
 static bool staged_trace_pending;
@@ -43,8 +46,11 @@ bool kernel_process_host_channel_irq_service(uint8_t source,
     assert(woken_threads != NULL);
     (void)timestamp;
     (void)context;
-    *woken_threads = 1u;
     ++host_irq_services;
+    if (host_irq_waiters != NULL)
+        return kernel_thread_wake_all_irq(host_irq_waiters, 0u,
+                                          woken_threads) == KERNEL_THREAD_OK;
+    *woken_threads = 1u;
     return true;
 }
 
@@ -144,6 +150,12 @@ bool kernel_trace_write_at(KernelTraceEvent event, uint16_t flags,
                            uint32_t argument3)
 {
     (void)timestamp;
+    if (event == KERNEL_TRACE_EVENT_IRQ_EXIT) {
+        last_irq_failure[0] = argument0;
+        last_irq_failure[1] = argument1;
+        last_irq_failure[2] = argument2;
+        last_irq_failure[3] = argument3;
+    }
     return kernel_trace_write(event, flags, argument0, argument1,
                               argument2, argument3);
 }
@@ -229,14 +241,17 @@ static void advertise_monitor_spi(VestaRegs *registers)
 static void advertise_host(VestaRegs *registers)
 {
     registers->HOST_ACCEL_ID = HOST_ACCEL_ID_MAGIC;
-    registers->HOST_ACCEL_VERSION = HOST_ACCEL_VERSION_1_0;
+    registers->HOST_ACCEL_VERSION = ASTRA_HOST_VERSION;
 }
 
 static void select_interrupt(VestaRegs *registers, uint8_t source);
+static void service_deferred_irq(void);
 
-static void test_host_completion_dispatches_without_worker_handoff(void)
+static void test_host_completion_wakes_only_after_worker_handoff(void)
 {
     VestaRegs *registers = kernel_platform_test_registers();
+    KernelThreadWaitQueue waiters;
+    KernelThreadWaitRegistration registration = {0};
     uint32_t woken;
 
     assert(registers != NULL);
@@ -250,12 +265,24 @@ static void test_host_completion_dispatches_without_worker_handoff(void)
     kernel_thread_pool_init();
     assert(kernel_interrupt_init(KERNEL_PLATFORM_CPU_HZ));
 
+    /* enqueue_wait_registration exposes links before publishing queue count. */
+    kernel_thread_wait_queue_init(&waiters);
+    waiters.head = &registration;
+    waiters.tail = &registration;
+    host_irq_waiters = &waiters;
+
     select_interrupt(registers, IRQ_SRC_HOST);
     assert(kernel_interrupt_dispatch(&woken) == KERNEL_INTERRUPT_DEVICE);
-    assert(woken == 1u);
+    assert(woken == 0u);
+    assert(host_irq_services == 0u);
+    assert(irq_worker_signals == 1u);
+    assert((registers->IRQ_ENABLE & IRQ_BIT(IRQ_SRC_HOST)) == 0u);
+    waiters.head = NULL;
+    waiters.tail = NULL;
+    service_deferred_irq();
     assert(host_irq_services == 1u);
-    assert(irq_worker_signals == 0u);
     assert((registers->IRQ_ENABLE & IRQ_BIT(IRQ_SRC_HOST)) != 0u);
+    host_irq_waiters = NULL;
     monitor_ready = true;
 }
 
@@ -774,14 +801,38 @@ static void test_device_service_death_quiesces_source(void)
     assert(kernel_irq_pool_valid());
 }
 
+static void test_fatal_deferred_irq_retains_source_and_status(void)
+{
+    VestaRegs *registers = kernel_platform_test_registers();
+    uint32_t woken;
+
+    assert(registers != NULL);
+    clear_registers(registers);
+    clear_trace();
+    kernel_performance_init();
+    kernel_thread_pool_init();
+    assert(kernel_interrupt_init(KERNEL_PLATFORM_CPU_HZ));
+    kernel_irq_handle_release(NULL, NULL); /* Existing API marks pool corrupt. */
+    select_interrupt(registers, IRQ_SRC_USB);
+    assert(kernel_interrupt_dispatch(&woken) == KERNEL_INTERRUPT_DEVICE);
+    assert(irq_worker_service(KERNEL_WORKER_IRQ_DISPATCH_BATCH,
+                              irq_worker_context) == KERNEL_WORKER_SERVICE_FATAL);
+    assert(trace_event_count[KERNEL_TRACE_EVENT_IRQ_EXIT] == 1u);
+    assert(last_irq_failure[0] == IRQ_SRC_USB);
+    assert(last_irq_failure[1] == KERNEL_IRQ_COMMON_VECTOR);
+    assert(last_irq_failure[2] == KERNEL_IRQ_CORRUPT);
+    assert(last_irq_failure[3] == 0u);
+}
+
 int main(void)
 {
     test_init_profiles_optional_spi();
     test_init_without_monitor();
-    test_host_completion_dispatches_without_worker_handoff();
+    test_host_completion_wakes_only_after_worker_handoff();
     test_timer_and_quarantine_use_common_dispatch();
     test_device_endpoints_use_common_dispatch();
     test_device_service_death_quiesces_source();
+    test_fatal_deferred_irq_retains_source_and_status();
     puts("common interrupt tests passed");
     return 0;
 }

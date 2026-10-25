@@ -15,6 +15,7 @@
 #include <astra/ntp.h>
 #include <astra/pcm_format.h>
 #include <astra/runtime.h>
+#include <astra/volume.h>
 #include <astra/service_manager_abi.h>
 #include <astra/status.h>
 #include <astra/syscall.h>
@@ -43,6 +44,13 @@ typedef struct ConsoleSession {
     uint32_t shutdown_reply;
     uint32_t shutdown_transaction;
     uint64_t present_deadline;
+    /* The shell's CWD: a grant derived from WORK's (storage protocol 29),
+     * so the shell and every command it forks hold their working directory
+     * as a host client of its own beside WORK. It narrows nothing: the
+     * shell is also handed WORK itself, the delegable base grant. It is
+     * owned by the terminal's WORK session and kept for the session. */
+    uint32_t cwd_grant;
+    uint32_t config_grant;
     int running;
 } ConsoleSession;
 
@@ -100,7 +108,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
 {
     static const char *const stream_names[] = {"STDOUT", "STDERR", "STDIN"};
     static const char *const mount_names[] = {
-        "DH0", "SYSTEM", "WORK", "HOME", "TMP", "RAM", "LOCAL", "COMMANDS", "APPS",
+        "DH0", "SYSTEM", "WORK", "HOME", "TMP", "LOCAL", "COMMANDS", "APPS",
         "LIBS", "EVENTS", "PROC", "METRICS",
         ASTRA_CONFIG_COMMANDS_CAPABILITY
     };
@@ -114,6 +122,14 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
         ASTRA_CAPABILITY_APPLICATION_LAUNCH,
         ASTRA_CAPABILITY_SERVICE_MANAGER,
         ASTRA_CAPABILITY_ENTROPY,
+        ASTRA_CAPABILITY_VOLUMES,
+        ASTRA_CAPABILITY_VOLUME_READ,
+        ASTRA_CAPABILITY_VOLUME_WRITE,
+        ASTRA_CAPABILITY_VOLUME_ADMIN,
+        ASTRA_CAPABILITY_DISK_ADMIN,
+        ASTRA_CAPABILITY_VOLUME_USAGE,
+        ASTRA_CAPABILITY_RAM_READ,
+        ASTRA_CAPABILITY_RAM_WRITE,
         /* A command a person runs may play sound and open windows, as it
          * may use the network: SDL programs are commands too. */
         ASTRA_CAPABILITY_PCM,
@@ -169,7 +185,17 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
                 if (astra_config_owner_root(assign->root, "zsh", root,
                                             sizeof(root)) != ASTRA_CONFIG_OK)
                     return UINT32_MAX;
-                astra_capability_root_set(grants[count].root, root);
+                AstraVfsClient *client = astra_process_vfs_client_for(assign);
+                if (client == NULL)
+                    return UINT32_MAX;
+                if (session.config_grant == 0u &&
+                    astra_vfs_grant_derive(client, root,
+                        ASTRA_VFS_GRANT_READ |
+                            ((namespace_rights & ASTRA_RIGHT_WRITE) != 0u ? ASTRA_VFS_GRANT_WRITE : 0u),
+                        &session.config_grant) != ASTRA_VFS_OK)
+                    return UINT32_MAX;
+                grants[count].handle = session.config_grant;
+                astra_capability_root_set(grants[count].root, "");
             } else {
                 astra_capability_root_set(grants[count].root, assign->root);
             }
@@ -181,17 +207,32 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
             astra_process_vfs_assigns(), "WORK");
 
         if (work != NULL) {
+            AstraVfsClient *client = astra_process_vfs_client_for(work);
+
             if (count >= ASTRA_LAUNCH_GRANT_MAX)
                 return UINT32_MAX;
+            /* A provider-enforced WORK gives the shell a CWD grant of its
+             * own (no DELEGATE, though the shell's WORK has it); any other
+             * WORK is shared as it is. */
+            if (client == NULL)
+                return UINT32_MAX;
+            if (session.cwd_grant == 0u &&
+                astra_vfs_grant_derive(
+                    client, work->root,
+                    ASTRA_VFS_GRANT_READ |
+                        ((work->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                             ASTRA_VFS_GRANT_WRITE : 0u),
+                    &session.cwd_grant) != ASTRA_VFS_OK)
+                return UINT32_MAX;
             astra_capability_name_set(grants[count].name, "CWD");
-            grants[count].handle = work->handle;
+            grants[count].handle = session.cwd_grant;
             grants[count].rights = ASTRA_RIGHT_SIGNAL;
             grants[count].flags = ASTRA_CAPABILITY_FLAG_NAMESPACE |
                 ((work->rights & ASTRA_RIGHT_READ) != 0u ?
                      ASTRA_CAPABILITY_FLAG_READ : 0u) |
                 ((work->rights & ASTRA_RIGHT_WRITE) != 0u ?
                      ASTRA_CAPABILITY_FLAG_WRITE : 0u);
-            astra_capability_root_set(grants[count].root, work->root);
+            astra_capability_root_set(grants[count].root, "");
             ++count;
         }
     }
@@ -207,7 +248,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
             return UINT32_MAX;
         astra_capability_name_set(grants[count].name, authority_names[index]);
         grants[count].handle = held->handle;
-        grants[count].rights = ASTRA_RIGHT_SIGNAL;
+        grants[count].rights = held->rights & (ASTRA_RIGHT_SIGNAL | ASTRA_RIGHT_WAIT);
         ++count;
     }
     return count;

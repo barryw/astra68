@@ -1,0 +1,237 @@
+#!/bin/bash
+# astra-qemu-root -- bounded caller-image copy, then the installed confined
+# storage provider and caller's QEMU. QEMU never runs as root
+# (docs/FILESYSTEM_PRODUCTION_PRD.md FS11).
+#
+# usage: sudo -n astra-qemu-root --image IMAGE [--env TZ=VALUE] -- QEMU ARGS...
+#
+# The caller is untrusted. Root opens, creates, chmods, mounts and
+# unmounts paths only under R, a directory root makes with mktemp in
+# /var/tmp (root-owned and sticky, so the caller can neither rename nor
+# replace R) and keeps root:<caller's gid> 0710: the caller can reach a
+# name inside R only by knowing it and can change nothing in it, and
+# other users (outside the caller's group) cannot enter it. Every path the
+# caller names is touched solely by a process running with the caller's
+# own credentials (setpriv --reuid/--regid, --no-new-privs):
+#
+#   R/img      root's scratch copy of IMAGE, 0600. A caller-credential
+#              reader opens IMAGE (no-follow, non-blocking), refuses
+#              anything but a regular file, and sends its fstat size and
+#              exactly that many bytes. Root refuses a size over
+#              MAX_IMAGE_BYTES, and, under a lock, one larger than the
+#              free space under R, then fallocates the whole size before
+#              copying, so the space is reserved when it is checked.
+#   R/exports  disposable root-owned WORK/SOUND exports, observation only.
+#   R/provider.pid the installed provider launcher/guardian PID, 0644. Its peer PID is
+#              announced by the provider after the credential-safe fork.
+#
+# The helper's first stdout line, before QEMU starts, is
+#   ASTRA-QEMU-ROOT-EXPORTS R/exports
+# so an observer finds exports without gaining private mount authority.
+# After the write-back completes it prints `ASTRA-QEMU-ROOT-DONE STATUS`.
+#
+# R is on /var/tmp, real disk, never tmpfs: a loop-mounted ext4 image
+# backed by a tmpfs file breaks HostFS's write-back under QEMU (booting to
+# the desktop with the scratch copy on /tmp works; the identical setup on
+# /run, tmpfs, hangs before the desktop places an icon).
+#
+# Only the installed root-owned provider performs mounts in its private
+# namespace. No caller path or executable runs with privilege. Discovery is
+# disabled for this hostile-caller fixture; physical discovery is trusted
+# production service policy. Preserved filesystem metadata is never rewritten.
+# After actual provider cleanup, R/img is written back with caller credentials.
+# Retained Linux backing references retain R rather than being lazy-detached.
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+umask 077
+
+die() { echo "astra-qemu-root: $*" >&2; exit 64; }
+
+[ "$(id -u)" -eq 0 ] || die "run through sudo"
+[ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ] && [ -n "${SUDO_USER:-}" ] ||
+    die "run through sudo"
+[[ $SUDO_UID =~ ^[0-9]+$ && $SUDO_GID =~ ^[0-9]+$ ]] || die "run through sudo"
+[ "$SUDO_UID" -ne 0 ] && [ "$SUDO_GID" -ne 0 ] ||
+    die "non-root caller UID and GID required"
+
+IMAGE= TZ_OVERRIDE=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --image)
+            [ "$#" -ge 2 ] || die "--image needs a value"
+            IMAGE=$2; shift 2 ;;
+        --env)
+            [ "$#" -ge 2 ] || die "--env needs a value"
+            case "$2" in
+                TZ=*) TZ_OVERRIDE=${2#TZ=} ;;
+                *) die "environment $2 not allowed" ;;
+            esac
+            shift 2 ;;
+        --) shift; break ;;
+        *) die "unknown option $1" ;;
+    esac
+done
+[ -n "$IMAGE" ] && [ "$#" -ge 1 ] || die "usage"
+
+# Everything the caller names is opened only through this.
+CALLER=(setpriv --reuid="$SUDO_UID" --regid="$SUDO_GID" --init-groups
+        --no-new-privs --)
+
+# The largest image the helper copies. Its copy is fully allocated (the
+# loop device then writes only into reserved blocks), so this bounds what
+# one run can take from BASE.
+MAX_IMAGE_BYTES=$((4 << 30))
+# Where R is made: root-owned and sticky, on real disk.
+BASE=/var/tmp
+# Serialises the free-space check with the allocation that reserves it.
+# In /run (root-only), so no other user can squat the name.
+LOCKDIR=/run/astra-qemu-root.lock
+
+PROVIDER=/usr/local/libexec/astra-storage
+IMAGE_SELECTOR=/usr/local/libexec/astra-storage-image.py
+for directory in /usr /usr/local /usr/local/libexec; do
+    [ ! -L "$directory" ] && [ "$(stat -c %u -- "$directory")" = 0 ] ||
+        die "provider installation must be root-owned"
+    mode=$(stat -c %a -- "$directory")
+    [ "$((8#$mode & 022))" -eq 0 ] || die "provider installation must not be writable"
+done
+[ ! -L "$PROVIDER" ] && [ -f "$PROVIDER" ] && [ -x "$PROVIDER" ] &&
+    [ "$(stat -c %u -- "$PROVIDER")" = 0 ] || die "installed storage provider required"
+mode=$(stat -c %a -- "$PROVIDER")
+[ "$((8#$mode & 022))" -eq 0 ] || die "installed storage provider must not be writable"
+[ ! -L "$IMAGE_SELECTOR" ] && [ -f "$IMAGE_SELECTOR" ] &&
+    [ "$(stat -c %u -- "$IMAGE_SELECTOR")" = 0 ] || die "installed image selector required"
+mode=$(stat -c %a -- "$IMAGE_SELECTOR")
+[ "$((8#$mode & 022))" -eq 0 ] || die "installed image selector must not be writable"
+
+R= child=
+cleanup() {
+    local status=$?
+    set +e
+    trap - TERM INT HUP
+    [ -n "$R" ] || exit "$status"
+    if [ -n "$child" ] && kill -0 "$child" 2>/dev/null; then
+        kill -TERM "$child"
+        wait "$child"
+    fi
+    if [ -n "$(losetup -j "$R/img")" ]; then
+        echo "astra-qemu-root: backing reference retained; leaving $R" >&2
+    else
+        rm -rf --one-file-system -- "$R"
+    fi
+    exit "$status"
+}
+trap cleanup EXIT
+# Without a trap a signal kills bash before its EXIT trap runs.
+trap 'exit 143' TERM INT HUP
+
+[ ! -L "$BASE" ] && [ "$(stat -c '%u %a' -- "$BASE")" = "0 1777" ] ||
+    die "$BASE must be root-owned and sticky"
+R=$(mktemp -d "$BASE/astra-qemu-root.XXXXXX") || die "mktemp failed"
+# Only root and the caller's group may enter R: the mounted filesystem's
+# root carries whatever mode the caller gave it, and other users must not
+# reach it through R/mnt.
+chown "0:$SUDO_GID" -- "$R"
+chmod 0710 -- "$R"
+mkdir -m 0700 -- "$R/exports" "$R/exports/work" "$R/exports/sound"
+PIDFILE=$R/provider.pid
+
+# mkdir never follows a symlink; stat (no -L) answers for the entry
+# itself. /run is root's alone, so once this check passes so is the lock
+# file inside.
+mkdir -m 0700 -- "$LOCKDIR" 2>/dev/null || true
+[ "$(stat -c '%F %u %a' -- "$LOCKDIR")" = "directory 0 700" ] ||
+    die "$LOCKDIR must be a root-owned 0700 directory"
+
+# Root opens only R/img; the caller-credential reader opens IMAGE and
+# sends "SIZE\n" then exactly SIZE bytes.
+read_image_as_caller() {
+    "${CALLER[@]}" env -i PATH="$PATH" python3 -I -c '
+import errno, os, stat, sys
+try:
+    fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK |
+                 os.O_NOCTTY)
+except OSError as error:
+    if error.errno == errno.ELOOP:
+        sys.exit("astra-qemu-root: image must be a regular file, not a symlink")
+    sys.exit("astra-qemu-root: cannot open image: %s" % error.strerror)
+info = os.fstat(fd)
+if not stat.S_ISREG(info.st_mode):
+    sys.exit("astra-qemu-root: image must be a regular file, not a symlink")
+os.set_blocking(fd, True)
+out = sys.stdout.buffer
+out.write(b"%d\n" % info.st_size)
+left = info.st_size
+while left:
+    chunk = os.read(fd, min(left, 1 << 20))
+    if not chunk:
+        sys.exit("astra-qemu-root: image shrank while it was read")
+    out.write(chunk)
+    left -= len(chunk)
+out.flush()
+' "$IMAGE" < /dev/null
+}
+
+write_scratch() {
+    local size avail
+    IFS= read -r size || return 1
+    [[ $size =~ ^[0-9]{1,18}$ ]] || return 1
+    [ "$size" -le "$MAX_IMAGE_BYTES" ] || {
+        echo "astra-qemu-root: image of $size bytes exceeds the $MAX_IMAGE_BYTES-byte limit" >&2
+        return 1
+    }
+    (
+        flock 9
+        avail=$(( $(stat -f -c %a -- "$R") * $(stat -f -c %S -- "$R") ))
+        [ "$size" -le "$avail" ] || {
+            echo "astra-qemu-root: image of $size bytes exceeds the $avail free in $BASE" >&2
+            exit 1
+        }
+        : > "$R/img"
+        [ "$size" -eq 0 ] || fallocate -l "$size" -- "$R/img"
+    ) 9>> "$LOCKDIR/lock" || return 1
+    dd of="$R/img" bs=1M iflag=fullblock,count_bytes count="$size" \
+        conv=notrunc status=none || return 1
+    [ "$(stat -c %s -- "$R/img")" = "$size" ]
+}
+
+read_image_as_caller | write_scratch ||
+    die "could not read image as the caller"
+
+# Only the installed selector parses root's completed regular copy. Isolated
+# Python cannot import caller code. This is the same selector used by image
+# publication, trusted production launch and the root-observer gates.
+window=$(python3 -I "$IMAGE_SELECTOR" "$R/img") || die "invalid system image"
+read -r offset length uuid extra <<< "$window"
+[[ $offset =~ ^[0-9]+$ && $length =~ ^[0-9]+$ ]] && [ -z "$extra" ] || die "invalid system window"
+[[ $uuid =~ ^[a-fA-F0-9-]{36}$ ]] || die "invalid ext4 UUID"
+ENV_ARGS=(env -i "PATH=/usr/sbin:/usr/bin:/sbin:/bin")
+[ -n "$TZ_OVERRIDE" ] && ENV_ARGS+=("TZ=$TZ_OVERRIDE")
+
+echo "ASTRA-QEMU-ROOT-EXPORTS $R/exports"
+"${ENV_ARGS[@]}" "$PROVIDER" --uid "$SUDO_UID" --gid "$SUDO_GID" \
+    --system "$R/img" "$offset" "$length" "$uuid" \
+    --work "$R/exports/work" --sound "$R/exports/sound" \
+    --limits 8388608 8388608 4 10000 4 100663296 8192 67108864 4096 33554432 4096 \
+    --discovery none --seed-sound none -- "$@" &
+child=$!
+echo "$child" > "$PIDFILE"
+chmod 0644 -- "$PIDFILE"
+
+trap 'kill -TERM "$child" 2>/dev/null || true' TERM INT HUP
+set +e
+wait "$child"
+status=$?
+while kill -0 "$child" 2>/dev/null; do
+    wait "$child"
+    status=$?
+done
+set -e
+trap 'exit 143' TERM INT HUP
+child=
+
+[ -z "$(losetup -j "$R/img")" ] || die "provider backing reference retained"
+"${CALLER[@]}" tee -- "$IMAGE" < "$R/img" > /dev/null ||
+    die "could not write the image back to the caller"
+echo "ASTRA-QEMU-ROOT-DONE $status"
+exit "$status"

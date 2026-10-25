@@ -21,8 +21,8 @@
 
 /** One installed application. */
 typedef struct AstraApplicationEntry {
-    char bundle[ASTRA_APPLICATION_PATH_MAX]; /**< e.g. "/apps/Terminal.app". */
-    char icon[ASTRA_APPLICATION_PATH_MAX]; /**< The bundle's AICON path. */
+    char *bundle; /**< Owned path, e.g. "/apps/Terminal.app". */
+    char *icon; /**< Owned path to the bundle's AICON. */
     char id[ASTRA_BUNDLE_ID_MAX]; /**< Reverse-domain identifier. */
     char name[ASTRA_BUNDLE_NAME_MAX]; /**< UTF-8 display name. */
     AstraBundleVersion version; /**< Bundle version. */

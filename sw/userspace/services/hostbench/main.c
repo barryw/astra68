@@ -1,14 +1,9 @@
 #include <astra/host.h>
-#include <astra/filesystem_library.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
 #include <astra/status.h>
 #include <astra/syscall.h>
-#include <astra/vfs_host_backend.h>
-#include <astra/vfs_host_direct.h>
-#include <astra/vfs_host_transport.h>
-#include <astra/vfs_path.h>
 #include <astra/string.h>
 
 #include <stdint.h>
@@ -22,20 +17,10 @@ ASTRA_PROGRAM("hostbench", 1, 0, 0, "Barry Walker",
 #endif
 
 #define HOSTBENCH_DATA_BYTES 64u
-#define HOSTBENCH_LAYER_ITERATIONS UINT32_C(2048)
-#define HOSTBENCH_PAIR_BATCH UINT32_C(4)
 #define HOSTBENCH_ADAPTIVE_ITERATIONS UINT32_C(2048)
 #define HOSTBENCH_MAX_POLLS UINT32_C(65536)
 #define HOSTBENCH_MEMORY_BYTES UINT32_C(16384)
 #define HOSTBENCH_MEMORY_ITERATIONS UINT32_C(64)
-#define HOSTBENCH_WRITE_BYTES ASTRA_VFS_IO_MAX
-
-static AstraVfsHostTransport shared_transport;
-static AstraVfsHostBackend shared_backend;
-static AstraVfsClient shared_direct_client;
-static AstraAssignTable shared_assigns;
-static AstraFilesystem shared_filesystem = ASTRA_FILESYSTEM_INIT;
-static uint32_t filesystem_client_calls;
 
 static uint8_t memory_source[HOSTBENCH_MEMORY_BYTES + 8u]
     __attribute__((aligned(4)));
@@ -67,22 +52,6 @@ static void report(uint32_t depth, uint64_t elapsed)
     (void)astra_string_append_hex(&line, depth, 8u);
     (void)astra_string_append(&line, " iterations=");
     (void)astra_string_append_hex(&line, ASTRA_HOSTBENCH_ITERATIONS, 8u);
-    (void)astra_string_append(&line, " elapsed-ns=");
-    (void)astra_string_append_hex(&line, elapsed, 16u);
-    (void)astra_log(line_text);
-}
-
-static void report_layer(const char *name, uint64_t elapsed)
-{
-    char line_text[112];
-    AstraString line;
-
-    astra_string_init(&line, line_text, sizeof(line_text));
-
-    (void)astra_string_append(&line, "LAYER name=");
-    (void)astra_string_append(&line, name);
-    (void)astra_string_append(&line, " iterations=");
-    (void)astra_string_append_hex(&line, HOSTBENCH_LAYER_ITERATIONS, 8u);
     (void)astra_string_append(&line, " elapsed-ns=");
     (void)astra_string_append_hex(&line, elapsed, 16u);
     (void)astra_log(line_text);
@@ -291,566 +260,6 @@ static uint32_t largest_capacity(const AstraHostLeaseInfo *lease)
     return capacity <= layout_max ? capacity : 0u;
 }
 
-static uint32_t transport_loop(uint16_t operation, uint32_t expected,
-                               uint64_t *elapsed)
-{
-    AstraHostCommand command = {0};
-    uint64_t started;
-
-    command.size = sizeof(command);
-    command.version = ASTRA_HOST_COMMAND_VERSION;
-    command.service = ASTRA_HOST_SERVICE_FILESYSTEM;
-    command.operation = operation;
-    command.generation = shared_transport.generation;
-    if (operation == ASTRA_HOST_FS_STAT) {
-        command.path[0] = '/';
-        command.path[1] = '\0';
-    }
-    if (astra_vfs_host_transport_execute(
-            &shared_transport, &command, NULL, 0u, NULL, 0u) != expected)
-        return 0u;
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index)
-        if (astra_vfs_host_transport_execute(
-                &shared_transport, &command, NULL, 0u, NULL, 0u) != expected)
-            return 0u;
-    *elapsed = astra_clock_monotonic() - started;
-    return *elapsed != 0u;
-}
-
-static uint32_t transport_invalid_write_loop(uint64_t *elapsed)
-{
-    AstraHostCommand command = {0};
-    uint64_t started;
-
-    command.size = sizeof(command);
-    command.version = ASTRA_HOST_COMMAND_VERSION;
-    command.service = ASTRA_HOST_SERVICE_FILESYSTEM;
-    command.operation = ASTRA_HOST_FS_WRITE;
-    command.generation = shared_transport.generation;
-    command.handle = UINT32_MAX;
-    if (astra_vfs_host_transport_execute(
-            &shared_transport, &command, memory_source,
-            HOSTBENCH_WRITE_BYTES, NULL, 0u) != ASTRA_VFS_ERR_BAD_HANDLE)
-        return 0u;
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index)
-        if (astra_vfs_host_transport_execute(
-                &shared_transport, &command, memory_source,
-                HOSTBENCH_WRITE_BYTES, NULL, 0u) !=
-            ASTRA_VFS_ERR_BAD_HANDLE)
-            return 0u;
-    *elapsed = astra_clock_monotonic() - started;
-    return *elapsed != 0u;
-}
-
-static uint32_t backend_loop(uint64_t *elapsed)
-{
-    const AstraVfsBackendOps *ops = astra_vfs_host_ops();
-    AstraVfsNodeInfo info;
-    uint64_t started;
-
-    if (ops->stat(&shared_backend, "/", &info) != ASTRA_VFS_OK)
-        return 0u;
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index)
-        if (ops->stat(&shared_backend, "/", &info) != ASTRA_VFS_OK)
-            return 0u;
-    *elapsed = astra_clock_monotonic() - started;
-    return *elapsed != 0u;
-}
-
-static uint32_t backend_write_loop(uint64_t *elapsed)
-{
-    const AstraVfsBackendOps *ops = astra_vfs_host_ops();
-    const uint32_t flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
-                           ASTRA_VFS_OPEN_CREATE |
-                           ASTRA_VFS_OPEN_TRUNCATE;
-    AstraVfsNodeInfo info;
-    uintptr_t node;
-    uint64_t started;
-
-    if (ops->open(&shared_backend, "/hostbench", flags,
-                  ASTRA_VFS_MODE_DEFAULT, &node, &info) != ASTRA_VFS_OK)
-        return 0u;
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index) {
-        uint64_t position = 0u;
-        uint32_t moved = 0u;
-
-        if (ops->write(&shared_backend, node, 0u, 0u, memory_source,
-                       HOSTBENCH_WRITE_BYTES, &moved, &position) !=
-                ASTRA_VFS_OK ||
-            moved != HOSTBENCH_WRITE_BYTES ||
-            position != HOSTBENCH_WRITE_BYTES)
-            return 0u;
-    }
-    *elapsed = astra_clock_monotonic() - started;
-    return ops->close(&shared_backend, node) == ASTRA_VFS_OK &&
-           *elapsed != 0u;
-}
-
-static uint32_t backend_sequence_batch(uint32_t iterations, uint32_t flags,
-                                       uint32_t write_data,
-                                       uint32_t sync_data,
-                                       uint64_t *elapsed)
-{
-    const AstraVfsBackendOps *ops = shared_direct_client.direct_backend_ops;
-    void *context = shared_direct_client.direct_backend_context;
-    AstraVfsNodeInfo info;
-    uintptr_t node;
-    uint64_t started;
-
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < iterations; ++index) {
-        uint64_t position = 0u;
-        uint32_t moved = 0u;
-
-        if (ops->open(context, "/hostbench", flags,
-                      ASTRA_VFS_MODE_DEFAULT, &node, &info) != ASTRA_VFS_OK)
-            return 0u;
-        if (write_data != 0u &&
-            (ops->write(context, node, 0u, 0u, memory_source,
-                        HOSTBENCH_WRITE_BYTES, &moved, &position) !=
-                 ASTRA_VFS_OK ||
-             moved != HOSTBENCH_WRITE_BYTES ||
-             position != HOSTBENCH_WRITE_BYTES))
-            return 0u;
-        if (sync_data != 0u && ops->sync(context, node) != ASTRA_VFS_OK)
-            return 0u;
-        if (ops->close(context, node) != ASTRA_VFS_OK)
-            return 0u;
-    }
-    *elapsed += astra_clock_monotonic() - started;
-    return 1u;
-}
-
-static uint32_t backend_open_batch(uint32_t iterations, uint64_t *elapsed)
-{
-    return backend_sequence_batch(
-        iterations, ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE, 0u, 0u,
-        elapsed);
-}
-
-static uint32_t direct_vfs_loop(uint64_t *elapsed)
-{
-    uint64_t size;
-    uint16_t kind;
-    uint64_t started;
-
-    if (astra_vfs_stat(&shared_direct_client, "/", &size, &kind) !=
-        ASTRA_VFS_OK)
-        return 0u;
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index)
-        if (astra_vfs_stat(&shared_direct_client, "/", &size, &kind) !=
-            ASTRA_VFS_OK)
-            return 0u;
-    *elapsed = astra_clock_monotonic() - started;
-    return *elapsed != 0u;
-}
-
-static uint32_t direct_vfs_open_batch(uint32_t iterations, uint64_t *elapsed)
-{
-    const uint32_t flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE;
-    AstraVfsFile file;
-    uint64_t size;
-    uint16_t kind;
-    uint64_t started;
-
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < iterations; ++index) {
-        if (astra_vfs_open_mode(&shared_direct_client, "/hostbench", flags,
-                                ASTRA_VFS_MODE_DEFAULT, &file, &size, &kind) !=
-                ASTRA_VFS_OK ||
-            astra_vfs_close(&shared_direct_client, file) != ASTRA_VFS_OK)
-            return 0u;
-    }
-    *elapsed += astra_clock_monotonic() - started;
-    return 1u;
-}
-
-static AstraVfsClient *filesystem_client(const AstraAssign *assign,
-                                        void *context)
-{
-    (void)assign;
-    ++filesystem_client_calls;
-    return context;
-}
-
-static uint32_t filesystem_loop(uint64_t *elapsed)
-{
-    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
-    uint64_t started;
-
-    if (astra_filesystem_stat(&shared_filesystem, "/work", &info) !=
-            ASTRA_VFS_OK)
-        return 0u;
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index)
-        if (astra_filesystem_stat(&shared_filesystem, "/work", &info) !=
-                ASTRA_VFS_OK)
-            return 0u;
-    *elapsed = astra_clock_monotonic() - started;
-    return *elapsed != 0u;
-}
-
-static uint32_t path_normalise_loop(uint64_t *elapsed)
-{
-    char wire[ASTRA_VFS_PATH_MAX];
-    uint64_t started;
-
-    if (astra_path_normalise("hostbench", wire, sizeof(wire)) != ASTRA_VFS_OK)
-        return 0u;
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index)
-        if (astra_path_normalise("hostbench", wire, sizeof(wire)) !=
-                ASTRA_VFS_OK)
-            return 0u;
-    *elapsed = astra_clock_monotonic() - started;
-    return *elapsed != 0u;
-}
-
-static uint32_t assign_member_loop(uint32_t member, uint32_t expect_found,
-                                   uint64_t *elapsed)
-{
-    const AstraAssign *assign;
-    uint64_t started;
-
-    assign = astra_assign_member(&shared_assigns, "WORK", member);
-    if ((assign != NULL) != expect_found)
-        return 0u;
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index) {
-        assign = astra_assign_member(&shared_assigns, "WORK", member);
-        if ((assign != NULL) != expect_found)
-            return 0u;
-    }
-    *elapsed = astra_clock_monotonic() - started;
-    return *elapsed != 0u;
-}
-
-static uint32_t assign_resolve_loop(uint64_t *elapsed)
-{
-    const AstraAssign *assign;
-    char wire[ASTRA_VFS_PATH_MAX];
-    uint64_t started;
-
-    if (astra_assign_resolve(&shared_assigns, "/work/hostbench",
-                             ASTRA_RIGHT_READ, 0u, wire, sizeof(wire),
-                             &assign) != ASTRA_VFS_OK || assign == NULL)
-        return 0u;
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < HOSTBENCH_LAYER_ITERATIONS; ++index)
-        if (astra_assign_resolve(&shared_assigns, "/work/hostbench",
-                                 ASTRA_RIGHT_READ, 0u, wire, sizeof(wire),
-                                 &assign) != ASTRA_VFS_OK || assign == NULL)
-            return 0u;
-    *elapsed = astra_clock_monotonic() - started;
-    return *elapsed != 0u;
-}
-
-static uint32_t filesystem_open_batch(uint32_t iterations, uint64_t *elapsed)
-{
-    const uint32_t flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE;
-    AstraFile file = ASTRA_FILE_INIT;
-    uint64_t started;
-
-    started = astra_clock_monotonic();
-    for (uint32_t index = 0u; index < iterations; ++index) {
-        if (astra_filesystem_open_mode(&shared_filesystem, "/work/hostbench",
-                                       flags, ASTRA_VFS_MODE_DEFAULT,
-                                       &file) != ASTRA_VFS_OK ||
-            astra_filesystem_close(&file) != ASTRA_VFS_OK)
-            return 0u;
-    }
-    *elapsed += astra_clock_monotonic() - started;
-    return 1u;
-}
-
-static uint32_t paired_open_loops(uint64_t *backend_elapsed,
-                                  uint64_t *direct_elapsed,
-                                  uint64_t *filesystem_elapsed)
-{
-    const AstraVfsBackendOps *ops = shared_direct_client.direct_backend_ops;
-    void *context = shared_direct_client.direct_backend_context;
-    const uint32_t flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE;
-    AstraVfsNodeInfo info;
-    uintptr_t node;
-    AstraVfsFile local_file;
-    AstraFile filesystem_file = ASTRA_FILE_INIT;
-    uint64_t size;
-    uint16_t kind;
-
-    filesystem_client_calls = 0u;
-    if (ops->open(context, "/hostbench", flags,
-                  ASTRA_VFS_MODE_DEFAULT, &node, &info) != ASTRA_VFS_OK ||
-        ops->close(context, node) != ASTRA_VFS_OK ||
-        astra_vfs_open_mode(&shared_direct_client, "/hostbench", flags,
-                            ASTRA_VFS_MODE_DEFAULT, &local_file, &size,
-                            &kind) != ASTRA_VFS_OK ||
-        astra_vfs_close(&shared_direct_client, local_file) != ASTRA_VFS_OK ||
-        astra_filesystem_open_mode(&shared_filesystem, "/work/hostbench", flags,
-                                   ASTRA_VFS_MODE_DEFAULT,
-                                   &filesystem_file) != ASTRA_VFS_OK ||
-        astra_filesystem_close(&filesystem_file) != ASTRA_VFS_OK)
-        return 0u;
-    *backend_elapsed = 0u;
-    *direct_elapsed = 0u;
-    *filesystem_elapsed = 0u;
-    for (uint32_t at = 0u; at < HOSTBENCH_LAYER_ITERATIONS;
-         at += HOSTBENCH_PAIR_BATCH) {
-        uint32_t order = (at / HOSTBENCH_PAIR_BATCH) % 3u;
-
-        if (order == 0u) {
-            if (!backend_open_batch(HOSTBENCH_PAIR_BATCH, backend_elapsed) ||
-                !direct_vfs_open_batch(HOSTBENCH_PAIR_BATCH, direct_elapsed) ||
-                !filesystem_open_batch(HOSTBENCH_PAIR_BATCH,
-                                       filesystem_elapsed))
-                return 0u;
-        } else if (order == 1u) {
-            if (!direct_vfs_open_batch(HOSTBENCH_PAIR_BATCH, direct_elapsed) ||
-                !filesystem_open_batch(HOSTBENCH_PAIR_BATCH,
-                                       filesystem_elapsed) ||
-                !backend_open_batch(HOSTBENCH_PAIR_BATCH, backend_elapsed))
-                return 0u;
-        } else {
-            if (!filesystem_open_batch(HOSTBENCH_PAIR_BATCH,
-                                       filesystem_elapsed) ||
-                !backend_open_batch(HOSTBENCH_PAIR_BATCH, backend_elapsed) ||
-                !direct_vfs_open_batch(HOSTBENCH_PAIR_BATCH, direct_elapsed))
-                return 0u;
-        }
-    }
-    return *backend_elapsed != 0u && *direct_elapsed != 0u &&
-           *filesystem_elapsed != 0u &&
-           filesystem_client_calls == HOSTBENCH_LAYER_ITERATIONS + 1u;
-}
-
-static uint32_t backend_write_batch(uint32_t iterations, uint32_t sync_data,
-                                    uint64_t *elapsed)
-{
-    const uint32_t flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
-                           ASTRA_VFS_OPEN_CREATE |
-                           ASTRA_VFS_OPEN_TRUNCATE;
-
-    return backend_sequence_batch(iterations, flags, 1u, sync_data, elapsed);
-}
-
-static uint32_t direct_vfs_write_batch(uint32_t iterations,
-                                       uint32_t sync_data,
-                                       uint64_t *elapsed)
-{
-    const uint32_t flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
-                           ASTRA_VFS_OPEN_CREATE |
-                           ASTRA_VFS_OPEN_TRUNCATE;
-    uint64_t started = astra_clock_monotonic();
-
-    for (uint32_t index = 0u; index < iterations; ++index) {
-        AstraVfsFile file;
-        uint64_t size;
-        uint16_t kind;
-        uint32_t moved = 0u;
-
-        if (astra_vfs_open_mode(&shared_direct_client, "/hostbench", flags,
-                                ASTRA_VFS_MODE_DEFAULT, &file, &size, &kind) !=
-                ASTRA_VFS_OK ||
-            astra_vfs_write(&shared_direct_client, file, 0u, memory_source,
-                            HOSTBENCH_WRITE_BYTES, &moved) != ASTRA_VFS_OK ||
-            moved != HOSTBENCH_WRITE_BYTES ||
-            (sync_data != 0u &&
-             astra_vfs_sync(&shared_direct_client, file) != ASTRA_VFS_OK) ||
-            astra_vfs_close(&shared_direct_client, file) != ASTRA_VFS_OK)
-            return 0u;
-    }
-    *elapsed += astra_clock_monotonic() - started;
-    return 1u;
-}
-
-static uint32_t filesystem_write_batch(uint32_t iterations,
-                                       uint32_t sync_data,
-                                       uint64_t *elapsed)
-{
-    const uint32_t flags = ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
-                           ASTRA_VFS_OPEN_CREATE |
-                           ASTRA_VFS_OPEN_TRUNCATE;
-    uint64_t started = astra_clock_monotonic();
-
-    for (uint32_t index = 0u; index < iterations; ++index) {
-        AstraFile file = ASTRA_FILE_INIT;
-        uint32_t moved = 0u;
-
-        if (astra_filesystem_open_mode(&shared_filesystem, "/work/hostbench",
-                                       flags, ASTRA_VFS_MODE_DEFAULT,
-                                       &file) != ASTRA_VFS_OK ||
-            astra_filesystem_write(&file, memory_source,
-                                   HOSTBENCH_WRITE_BYTES, &moved) !=
-                ASTRA_VFS_OK ||
-            moved != HOSTBENCH_WRITE_BYTES ||
-            (sync_data != 0u &&
-             astra_filesystem_sync(&file) != ASTRA_VFS_OK) ||
-            astra_filesystem_close(&file) != ASTRA_VFS_OK)
-            return 0u;
-    }
-    *elapsed += astra_clock_monotonic() - started;
-    return 1u;
-}
-
-static uint32_t paired_write_loops(uint32_t sync_data,
-                                   uint64_t *backend_elapsed,
-                                   uint64_t *direct_elapsed,
-                                   uint64_t *filesystem_elapsed)
-{
-    *backend_elapsed = 0u;
-    *direct_elapsed = 0u;
-    *filesystem_elapsed = 0u;
-    for (uint32_t at = 0u; at < HOSTBENCH_LAYER_ITERATIONS;
-         at += HOSTBENCH_PAIR_BATCH) {
-        uint32_t order = (at / HOSTBENCH_PAIR_BATCH) % 3u;
-
-        if (order == 0u) {
-            if (!backend_write_batch(HOSTBENCH_PAIR_BATCH, sync_data,
-                                     backend_elapsed) ||
-                !direct_vfs_write_batch(HOSTBENCH_PAIR_BATCH,
-                                        sync_data,
-                                        direct_elapsed) ||
-                !filesystem_write_batch(HOSTBENCH_PAIR_BATCH,
-                                        sync_data,
-                                        filesystem_elapsed))
-                return 0u;
-        } else if (order == 1u) {
-            if (!direct_vfs_write_batch(HOSTBENCH_PAIR_BATCH,
-                                        sync_data,
-                                        direct_elapsed) ||
-                !filesystem_write_batch(HOSTBENCH_PAIR_BATCH,
-                                        sync_data,
-                                        filesystem_elapsed) ||
-                !backend_write_batch(HOSTBENCH_PAIR_BATCH, sync_data,
-                                     backend_elapsed))
-                return 0u;
-        } else {
-            if (!filesystem_write_batch(HOSTBENCH_PAIR_BATCH,
-                                        sync_data,
-                                        filesystem_elapsed) ||
-                !backend_write_batch(HOSTBENCH_PAIR_BATCH, sync_data,
-                                     backend_elapsed) ||
-                !direct_vfs_write_batch(HOSTBENCH_PAIR_BATCH,
-                                        sync_data,
-                                        direct_elapsed))
-                return 0u;
-        }
-    }
-    return *backend_elapsed != 0u && *direct_elapsed != 0u &&
-           *filesystem_elapsed != 0u;
-}
-
-static uint32_t run_layers(uint32_t device)
-{
-    const AstraVfsBackendOps *ops;
-    AstraVfsNodeInfo info;
-    uintptr_t node;
-    uint64_t elapsed;
-    uint64_t paired_elapsed;
-    uint64_t open_elapsed;
-
-    if (!astra_vfs_host_transport_init(&shared_transport, device, NULL, NULL,
-                                       NULL) ||
-        !astra_vfs_host_init(&shared_backend,
-                             &shared_transport,
-                             shared_transport.generation,
-                             ASTRA_HOST_FS_VOLUME_WORK))
-        return 0u;
-    ops = astra_vfs_host_ops();
-    if (ops->open(&shared_backend, "/hostbench",
-                  ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
-                      ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_TRUNCATE,
-                  ASTRA_VFS_MODE_DEFAULT, &node, &info) != ASTRA_VFS_OK ||
-        ops->close(&shared_backend, node) != ASTRA_VFS_OK)
-        return 0u;
-    if (!transport_loop(0u, ASTRA_VFS_ERR_UNSUPPORTED, &elapsed))
-        return 0u;
-    report_layer("transport-unsupported", elapsed);
-    if (!transport_loop(ASTRA_HOST_FS_STAT, ASTRA_VFS_OK, &elapsed))
-        return 0u;
-    report_layer("transport-stat", elapsed);
-    if (!backend_loop(&elapsed))
-        return 0u;
-    report_layer("backend-stat", elapsed);
-    if (!transport_invalid_write_loop(&elapsed))
-        return 0u;
-    report_layer("transport-write192-invalid-handle", elapsed);
-    if (!backend_write_loop(&elapsed))
-        return 0u;
-    report_layer("backend-write192-open-handle", elapsed);
-    astra_vfs_host_transport_destroy(&shared_transport);
-    (void)memset(&shared_direct_client, 0, sizeof(shared_direct_client));
-    shared_direct_client.session = 1u;
-    shared_direct_client.version = ASTRA_VFS_VERSION;
-    if (astra_vfs_host_direct_connect(&shared_direct_client, device) !=
-            ASTRA_VFS_OK ||
-        !direct_vfs_loop(&elapsed))
-        return 0u;
-    report_layer("direct-vfs-stat", elapsed);
-    astra_assign_table_init(&shared_assigns);
-    if (astra_assign_bind(&shared_assigns, "WORK", 1u,
-                          ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, "") !=
-            ASTRA_VFS_OK ||
-        astra_filesystem_attach(&shared_filesystem, &shared_assigns,
-                                filesystem_client, NULL,
-                                &shared_direct_client) !=
-            ASTRA_VFS_OK)
-        return 0u;
-    if (!path_normalise_loop(&elapsed))
-        return 0u;
-    report_layer("path-normalise", elapsed);
-    if (!assign_member_loop(0u, 1u, &elapsed))
-        return 0u;
-    report_layer("assign-member-hit", elapsed);
-    if (!assign_member_loop(1u, 0u, &elapsed))
-        return 0u;
-    report_layer("assign-member-miss", elapsed);
-    if (!assign_resolve_loop(&elapsed))
-        return 0u;
-    report_layer("assign-resolve", elapsed);
-    if (!filesystem_loop(&elapsed))
-        return 0u;
-    report_layer("filesystem-stat", elapsed);
-    if (!paired_open_loops(&elapsed, &paired_elapsed, &open_elapsed))
-        return 0u;
-    report_layer("direct-backend-open-close-paired", elapsed);
-    report_layer("direct-vfs-open-close-paired", paired_elapsed);
-    report_layer("filesystem-direct-open-close-paired", open_elapsed);
-    elapsed = 0u;
-    if (!backend_sequence_batch(
-            HOSTBENCH_LAYER_ITERATIONS,
-            ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
-                ASTRA_VFS_OPEN_CREATE,
-            1u, 0u, &elapsed))
-        return 0u;
-    report_layer("direct-backend-open-write192-close-no-truncate", elapsed);
-    elapsed = 0u;
-    if (!backend_sequence_batch(
-            HOSTBENCH_LAYER_ITERATIONS,
-            ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_WRITE |
-                ASTRA_VFS_OPEN_CREATE | ASTRA_VFS_OPEN_TRUNCATE,
-            0u, 0u, &elapsed))
-        return 0u;
-    report_layer("direct-backend-open-truncate-close", elapsed);
-    if (!paired_write_loops(0u, &elapsed, &paired_elapsed, &open_elapsed))
-        return 0u;
-    report_layer("direct-backend-open-write192-close-paired", elapsed);
-    report_layer("direct-vfs-open-write192-close-paired", paired_elapsed);
-    report_layer("filesystem-direct-open-write192-close-paired", open_elapsed);
-    if (!paired_write_loops(1u, &elapsed, &paired_elapsed, &open_elapsed))
-        return 0u;
-    report_layer("direct-backend-open-write192-sync-close", elapsed);
-    report_layer("direct-vfs-open-write192-sync-close", paired_elapsed);
-    report_layer("filesystem-direct-open-write192-sync-close", open_elapsed);
-    astra_filesystem_detach(&shared_filesystem);
-    astra_vfs_host_direct_disconnect(&shared_direct_client);
-    return 1u;
-}
-
 int astra_main(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *device;
@@ -870,6 +279,64 @@ int astra_main(const AstraStartupInfo *startup)
                                          ASTRA_CAPABILITY_SERVICE_READY);
     if (device == NULL)
         return fail(bootstrap, 1u);
+    /* HOST_DEVICE arrives without ASTRA_RIGHT_HOST_SCOPE: only the
+     * filesystem service mints scopes (decision 2026-10-08). */
+    {
+        uint32_t scope = 0u;
+        uint32_t minted = astra_host_scope_create(
+            device->handle, 1u, 0u, &scope);
+
+        if (minted != ASTRA_SYSCALL_ACCESS_DENIED) {
+            if (scope != 0u)
+                (void)astra_close(scope);
+            (void)astra_log("ASTRA HOSTBENCH SCOPE MINT NOT REFUSED");
+            return fail(bootstrap, 10u);
+        }
+        (void)astra_log("ASTRA HOSTBENCH SCOPE MINT REFUSED");
+    }
+    /* Nor can it drive files: the provider answers filesystem commands
+     * only to the claimed owner, HostFS, or through a bound scope (review
+     * M1). A STAT of WORK's root, naming the first session HostFS opens,
+     * then a CLAIM of its own. */
+    {
+        AstraHostChannelClient client;
+        AstraHostCommand *command;
+        uint32_t error;
+
+        memset(&client, 0, sizeof(client));
+        error = astra_host_client_open(device->handle,
+                                       ASTRA_HOST_CAP_FS_SESSIONS, 16u,
+                                       &client);
+        if (error != ASTRA_SYSCALL_OK)
+            return fail(bootstrap, 11u);
+        command = astra_host_client_prepare(
+            &client, ASTRA_HOST_SERVICE_FILESYSTEM, ASTRA_HOST_FS_STAT);
+        command->data_offset = 0u;
+        command->session = 1u;
+        command->path_offset = ASTRA_HOST_CHANNEL_HEADER_SIZE +
+                               ASTRA_HOST_COMMAND_SIZE;
+        command->path_length = 1u;
+        client.data[0] = '/';
+        error = astra_host_client_submit(&client);
+        if (error == ASTRA_SYSCALL_OK &&
+            command->status == ASTRA_STATUS_ACCESS) {
+            /* Nor claim the filesystem: the kernel names the provider, so
+             * this refusal holds whether or not HostFS holds the claim
+             * (review I1). */
+            command = astra_host_client_prepare(
+                &client, ASTRA_HOST_SERVICE_FILESYSTEM, ASTRA_HOST_FS_CLAIM);
+            command->data_offset = 0u;
+            error = astra_host_client_submit(&client);
+        }
+        if (error != ASTRA_SYSCALL_OK ||
+            command->status != ASTRA_STATUS_ACCESS) {
+            (void)astra_host_client_close(&client);
+            (void)astra_log("ASTRA HOSTBENCH FS NOT REFUSED");
+            return fail(bootstrap, 12u);
+        }
+        (void)astra_host_client_close(&client);
+        (void)astra_log("ASTRA HOSTBENCH FS REFUSED");
+    }
     if (!run_memory())
         return fail(bootstrap, 9u);
     if (astra_host_lease_query(device->handle, &lease) != ASTRA_SYSCALL_OK ||
@@ -959,8 +426,6 @@ int astra_main(const AstraStartupInfo *startup)
             break;
     }
     (void)astra_close(dma.handle);
-    if (!run_layers(device->handle))
-        return fail(bootstrap, 7u);
     (void)astra_log("ASTRA RAW USER PASS");
     if (bootstrap != NULL) {
         (void)astra_service_ready(bootstrap->handle, ASTRA_STATUS_OK, NULL,

@@ -71,6 +71,14 @@ void *memset(void *destination, int value, size_t count);
  */
 int memcmp(const void *left, const void *right, size_t count);
 
+/** Find the first byte equal to (unsigned char)value within count bytes.
+ * @param source Buffer to inspect.
+ * @param value Byte value to find.
+ * @param count Maximum bytes inspected; zero does not access source.
+ * @return Pointer to the first matching byte, or NULL.
+ */
+void *memchr(const void *source, int value, size_t count);
+
 /**
  * Compute the length of a NUL-terminated string.
  *

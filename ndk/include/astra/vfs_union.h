@@ -32,10 +32,11 @@ typedef struct AstraVfsUnionDirectory {
     const AstraAssignTable *table; /**< Borrowed process namespace. */
     AstraVfsAssignClientFn client_for; /**< Member-to-client resolver. */
     void *context; /**< Resolver context. */
-    char path[ASTRA_VFS_PATH_MAX]; /**< Assign-qualified UTF-8 path. */
+    char *path; /**< Owned assign-qualified UTF-8 path. */
     uint64_t cursor; /**< Current member's directory cursor. */
     AstraVfsClient *client; /**< Current member's borrowed client. */
     AstraVfsFile file; /**< Current open directory handle. */
+    uint32_t ownership_epoch; /**< Owner epoch of the retained directory token. */
     uint32_t member; /**< Current union member index. */
     uint32_t worst; /**< Most informative error seen while scanning. */
     uint8_t active; /**< Nonzero while one member is open. */
@@ -44,7 +45,7 @@ typedef struct AstraVfsUnionDirectory {
 
 /** Static initializer for an unopened union-directory traversal. */
 #define ASTRA_VFS_UNION_DIRECTORY_INIT \
-    { 0, 0, 0, { 0 }, 0, 0, ASTRA_VFS_FILE_INVALID, 0, \
+    { 0, 0, 0, 0, 0, 0, ASTRA_VFS_FILE_INVALID, 0, 0, \
       ASTRA_VFS_ERR_NOT_FOUND, 0, 0 }
 
 /**
@@ -112,7 +113,7 @@ uint32_t astra_vfs_assign_lstat(
  * @param table Process namespace.
  * @param path Assign-qualified path.
  * @param rights Required rights.
- * @param follow_final Nonzero to follow the final component.
+ * @param flags ASTRA_VFS_LOOKUP_FOLLOW or ASTRA_VFS_LOOKUP_ENTRY, or zero.
  * @param allow_missing_final Nonzero to permit a missing final component.
  * @param client_for Member-to-client resolver.
  * @param context Resolver context.
@@ -122,18 +123,18 @@ uint32_t astra_vfs_assign_lstat(
  */
 uint32_t astra_vfs_assign_resolve_links(
     const AstraAssignTable *table, const char *path, uint32_t rights,
-    int follow_final, int allow_missing_final,
+    uint32_t flags, int allow_missing_final,
     AstraVfsAssignClientFn client_for, void *context, char *logical,
     uint32_t capacity);
 
 /**
- * Resolve a create or rename destination exactly once.
- * An existing node returns its serving member; a missing final node returns
- * the writable primary.
+ * Resolve an entry exactly once.
+ * An existing node returns its serving member. ASTRA_VFS_LOOKUP_MISSING
+ * permits a missing final node and returns the writable primary.
  * @param table Process namespace.
  * @param path Assign-qualified destination.
  * @param rights Required rights.
- * @param follow_final Nonzero to follow an existing final link.
+ * @param flags Final-link policy, optionally ASTRA_VFS_LOOKUP_MISSING.
  * @param client_for Member-to-client resolver.
  * @param context Resolver context.
  * @param logical Receives the resolved assign-qualified path.
@@ -146,9 +147,28 @@ uint32_t astra_vfs_assign_resolve_links(
  */
 uint32_t astra_vfs_assign_destination(
     const AstraAssignTable *table, const char *path, uint32_t rights,
-    int follow_final, AstraVfsAssignClientFn client_for, void *context,
+    uint32_t flags, AstraVfsAssignClientFn client_for, void *context,
     char *logical, uint32_t logical_capacity, char *wire,
     uint32_t wire_capacity, AstraVfsClient **client, uint32_t *member);
+
+/** Resolve from a retained directory, continuing escapes through the namespace.
+ * @param table Process namespace. @param directory_client Directory's provider.
+ * @param directory Retained directory token. @param path Nonempty relative path.
+ * @param rights Required rights. @param flags Final-link and missing-node policy.
+ * @param client_for Namespace provider resolver. @param context Resolver context.
+ * @param wire Receives provider path. @param capacity Output capacity.
+ * @param client Receives destination provider. @param base Receives directory
+ * token for a local result, or zero for a namespace result.
+ * @param assign Receives NULL for a local result, otherwise destination binding.
+ * @param member Receives destination member for a namespace result.
+ * @param entry Optional metadata result; UNKNOWN kind denotes a missing final node.
+ * @return ASTRA_VFS_* status. ESCAPED with wire "/" names the virtual root. */
+uint32_t astra_vfs_assign_destination_at(const AstraAssignTable *table,
+    AstraVfsClient *directory_client, AstraVfsFile directory, const char *path,
+    uint32_t rights, uint32_t flags, AstraVfsAssignClientFn client_for,
+    void *context, char *wire, uint32_t capacity, AstraVfsClient **client,
+    AstraVfsFile *base, const AstraAssign **assign, uint32_t *member,
+    AstraVfsDirEntry *entry);
 
 /**
  * One directory walk for every caller. filesystem.library keeps its ABI by

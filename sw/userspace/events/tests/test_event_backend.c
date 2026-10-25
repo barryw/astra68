@@ -426,7 +426,7 @@ static void test_every_write_verb_is_refused(void)
     reset();
     assert(ops->mkdir(&backend, "/anything", ASTRA_VFS_MODE_DEFAULT) ==
            ASTRA_VFS_ERR_ACCESS);
-    assert(ops->unlink(&backend, "/boot/current/all") == ASTRA_VFS_ERR_ACCESS);
+    assert(ops->unlink(&backend, "/boot/current/all", 0u) == ASTRA_VFS_ERR_ACCESS);
     assert(ops->sync(&backend, 0u) == ASTRA_VFS_ERR_ACCESS);
     assert(ops->truncate(&backend, 0u, 0u) == ASTRA_VFS_ERR_ACCESS);
     assert(ops->rename(&backend, "/from", "/to") == ASTRA_VFS_ERR_ACCESS);
@@ -446,7 +446,7 @@ static void test_every_write_verb_is_refused(void)
     {
         uint64_t position = 0u;
 
-        assert(ops->write(&backend, node, 0u, 0u, "x", 1u, &moved,
+        assert(ops->write(&backend, node, 0u, 0u, UINT64_MAX, "x", 1u, &moved,
                           &position) == ASTRA_VFS_ERR_ACCESS);
     }
     assert(moved == 0u);

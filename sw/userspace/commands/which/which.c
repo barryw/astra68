@@ -25,8 +25,9 @@ int main(int argc, char **argv)
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     uint64_t size = 0u;
     uint16_t kind = 0u;
-    char typed[ASTRA_VFS_PATH_MAX];
-    char wire[ASTRA_VFS_PATH_MAX];
+    char *paths;
+    char *typed;
+    char *wire;
     uint32_t member = 0u;
     uint32_t status;
 
@@ -36,10 +37,14 @@ int main(int argc, char **argv)
         say("which: name it\n");
         return ASTRA_STATUS_INVALID;
     }
+    paths = astra_runtime_allocate(2u * ASTRA_VFS_PATH_MAX);
+    if (paths == NULL) { say("which: out of memory\n"); return ASTRA_STATUS_LIMIT; }
+    typed = paths; wire = paths + ASTRA_VFS_PATH_MAX;
     name = argv[1];
-    status = astra_path_qualify("COMMANDS", "", name, typed, sizeof(typed));
+    status = astra_path_qualify("COMMANDS", "", name, typed, ASTRA_VFS_PATH_MAX);
     if (status != ASTRA_VFS_OK) {
         say("which: name too long, refused rather than cut\n");
+        astra_runtime_deallocate(paths);
         return (int)status;
     }
     status = astra_process_vfs_init(startup);
@@ -47,17 +52,20 @@ int main(int argc, char **argv)
         status = astra_vfs_assign_open(
             astra_process_vfs_assigns(), typed, ASTRA_RIGHT_READ,
             ASTRA_VFS_OPEN_READ, astra_process_vfs_assign_client, NULL,
-            wire, sizeof(wire), &file, &size, &kind, &client, &member);
+            wire, ASTRA_VFS_PATH_MAX, &file, &size, &kind, &client, &member);
     if (status == ASTRA_VFS_OK)
         (void)astra_vfs_close(client, file);
     astra_process_vfs_close();
     if (status != ASTRA_VFS_OK) {
         say("which: not on any member\n");
+        astra_runtime_deallocate(paths);
         return (int)status;
     }
-    say(wire);
+    /* The answering provider path is relative to its scoped grant. */
+    say(typed);
     say(" [");
     (void)printf("%lu", (unsigned long)member);
     say("]\n");
+    astra_runtime_deallocate(paths);
     return ASTRA_STATUS_OK;
 }

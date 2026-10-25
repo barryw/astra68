@@ -6,22 +6,122 @@ The ABI is big-endian, 32-bit, naturally aligned, and independent of kernel C
 layouts. Only the user/kernel ABI and versioned service protocols are stable.
 Kernel-internal structures and function calls may change at any time.
 
-## Process startup ABI 7
+## Unreleased native volume migration
 
-`sw/include/astra/process.h` defines the 84-byte `AstraStartupInfo` and
-92-byte `AstraStartupCapability` records (`ASTRA_STARTUP_ABI_VERSION` 7). ABI
+Host transport is now `0x00030000`, command record 5. SESSION_OPEN takes a
+32-byte payload: the 24-byte big-endian `AstraVolumeReference` (provider epoch,
+object ID, generation), an authenticated requester PID and a zero reserved
+word. Root sessions carry the exact reference; derived sessions carry a zero
+reference and inherit the parent's exact identity and readonly policy.
+HostFS stamps the requester from the kernel's sender identity; service roots
+use zero. Fixed numeric selectors and older records are refused.
+
+The provider catalog projects the shared native records in
+`ndk/include/astra/volume.h`: version 5, a 32-byte query and a 9512-byte
+page containing at most sixteen 592-byte records. Physical device and source
+records report partition map, number, offset, capacity and detected filesystem
+type, including formats Astra cannot mount. Epoch and sequence checks
+protect keyset pagination. Metadata grants no filesystem claim, rooted session
+or mount-control authority. Linux paths, descriptors and private mount IDs do
+not cross this interface.
+
+STOR 38 and Filesystem Kit 14.0 (`filesystem.library.14`, kit 11.0.0) carry
+the full 64-bit native volume identity. `AstraVfsNodeMeta` is 80 bytes, with
+zero identity padding before the volume field; `AstraVfsReply` is 376 bytes.
+Host node device and mount fields carry native identity, not Linux device
+major/minor numbers or private namespace mount IDs. Native IDs are not recycled;
+exhaustion refuses new sessions. Whole-mount sessions retain logical authority
+only; subdirectory sessions and open directories retain their exact objects.
+
+Filesystem library ABI 14.1 (`filesystem.library.14`, kit 11.1.0) adds native
+removal observation. Clients wait for actual image-source disappearance after
+unmount; a LOST catalog row never certifies backing retirement.
+Filesystem library ABI 15.0 (`filesystem.library.15`) introduced volume catalog
+version 5 and replaced the previous record layout across all in-tree clients.
+Version 5 distinguished physical write protection from a filesystem's
+read-only mount policy and reports physical source formatting as its own state.
+Existing catalog exports use `ASTRA_FILESYSTEM_15.0`; old 14.x symbol
+versions are retired. The shared snapshot graph helpers resolve an exact
+record or ancestor by epoch, ID and generation, refusing replaced parents and
+cycles for Disk Setup's device/partition inventory.
+Filesystem library ABI 15.1 adds `astra_volume_format` and
+`astra_volume_format_status` under `ASTRA_FILESYSTEM_15.1`. ABI 15.2 adds
+`astra_volume_partition`, prior-generation status and aligned free-extent
+planning under `ASTRA_FILESYSTEM_15.2`; Disk Setup requires 15.2 while older
+clients retain their earlier minimum. Catalog version 6 adds the physical
+`PARTITIONING` lifecycle state. Native VOL protocol 4 and the separate
+`DISK_ADMIN` capability carry destructive authority.
+STOR requests remain 256 bytes. Complete pathname operands use validated
+offset/length descriptors in the session's existing transfer area; providers
+snapshot them before dispatch. Components support 255 bytes and complete paths
+4095 bytes, excluding NUL. There is no short inline-path or extended rename
+format. Continuation/readlink/path results use caller-owned transfer storage.
+Native status 23 reports NAME_TOO_LONG; POSIX translates it to ENAMETOOLONG.
+VOLUME_ADMIN, VOLUME_USAGE and the destructive DISK_ADMIN authority
+remain distinct from metadata and data brokers. Native VOL protocol 4 carries
+exact-source asynchronous FAT32/exFAT format and exact-device partition-map
+admission, each with prior-generation result polling. Disk Setup alone receives
+this authority; lifecycle administrators cannot invoke it. Usage format 2
+pages are 8392 bytes and contain two
+complete 4160-byte records. Their cursor orders kind, full native handle and
+holder PID, so shared retained roots identify every authenticated process.
+HostFS projects holders from canonical native control sessions; admitted HELLO
+and actual retirement invalidate the existing QEMU usage sequence. Derivation's
+creator does not replace actual holder ownership. Coherent owned snapshots
+include every page or return failure without partial output. PID, object kind,
+handle, inode, exact volume, access and complete native path come from canonical
+retained resources. RAM_READ/RAM_WRITE constrain root grants to the configured
+RAM source's exact incarnation; old grants never follow replacement mounts.
+Runtime 1.17 adds the canonical freestanding `memchr` needed by bounded catalog
+validation.
+
+System library ABI 4 (`system.library.4`, `ASTRA_SYSTEM_4.0`, Runtime.kit
+2.0.0) gives bundle executable/icon strings and application-catalog paths
+explicit heap ownership. Their existing destroy functions release these paths
+with all other owned metadata. APPL 5 replaces inline argv with a 40-byte
+control message and a transferred readonly shared area bounded by the native
+4096-byte argument maximum. The area is handle zero and the call's reply-send
+capability is handle one. Supervisor snapshots the declared byte span, closes
+the area, validates exact UTF-8 string count and byte consumption, then uses
+that owned snapshot through launch. There is no older inline wire format.
+
+SVCM 7 separates the 64-byte service-identifier domain from filesystem names.
+Its 120-byte request and 152-byte reply carry fixed control and runtime fields;
+executable strings and complete pointer-free definition records use transferred
+readonly areas. Public definitions and info objects own their executable paths.
+The same native area snapshot/seal/create primitive serves APPL and SVCM. Both
+validate a private byte copy after closing the transferred mapping/capability.
+Definition decoding commits only a fully validated object; read or malformed
+payload failures cannot become configuration defaults or partial output.
+
+This coordinated source migration is not a production release. Bootstrap,
+storage, live publication, usage/control, UI and launch/release integration are
+still required. The selected board release retains its qualified older ABI;
+never combine its launcher or kernel with this Host 3 QEMU.
+
+## Process startup ABI 8
+
+`sw/include/astra/process.h` defines the 92-byte `AstraStartupInfo` and
+92-byte `AstraStartupCapability` records (`ASTRA_STARTUP_ABI_VERSION` 8). ABI
 3 added the conventional null-terminated environment vector; ABI 4 replaces
 the final reserved words with an optional read-only personality handoff address
 and size used by atomic image replacement. The initial thread
 enters `_start` with the read-only startup-block logical address in `D2`, its
 process self handle in `D4`, and its thread self handle in `D5`. The block
 carries explicit bounded argument, environment, and initial-capability
-tables. Arguments, environment pointers, strings, and capabilities must fit
-the actual 4 KiB startup page; there is no smaller environment quota. Counts
-are independent of addresses. ABI 7 derives the maximum capability count from
-the records that actually fit in the 4 KiB page (43 currently), rather than an
-independent 32-entry ceiling. A handoff
+tables. The header and capability records occupy one 4 KiB page, with a
+43-record capacity derived from their actual sizes. ABI 8 gives argv and the
+environment an explicit `vector_data_address`/`vector_data_size` extent in
+separate owned read-only pages. Both aligned NULL-terminated pointer vectors
+precede their packed UTF-8 strings. The combined string budget remains 4,096
+bytes including NULs; pointer storage follows the admitted counts and never
+competes with capability records. Consumers validate every pointer and NUL
+against the payload extent before reading strings. The payload follows the
+rounded opaque exec handoff, with their combined rounded span admitted before
+the executable's first PT_LOAD. Launch/exec allocation failures roll back the
+new space; clone retains the payload through ordinary VM lifetime. A handoff
 is either absent or a complete mapped range; its bytes are opaque to Axiom.
+There is no ABI 7 startup format or fallback.
 `docs/USERSPACE_RUNTIME.md` defines
 validation, ownership, and exit.
 
@@ -29,9 +129,337 @@ The boot-supplied supervisor and every later protected loader use this same
 contract. General ELF parsing remains userspace policy; Axiom validates the
 final mappings, entry, stack, handles, and startup block before publication.
 
+## Filesystem scopes (storage protocol 28)
+
+A filesystem scope is the authority to drive host channels bound to one
+provider session (docs/FILESYSTEM_PRODUCTION_PRD.md FS15, FS44). The kernel
+object is `KERNEL_OBJECT_HOST_SCOPE` (17); only a host device handle carrying
+`ASTRA_RIGHT_HOST_SCOPE` (`1u << 9`, `sw/include/astra/object_abi.h`) creates
+one, and the supervisor grants that right only as `HOST_FILESYSTEM`, to
+HostFS. Every other `HOST_DEVICE` grant arrives without it.
+
+- `ASTRA_SYSCALL_HOST_SCOPE_CREATE` (109): `data[1]` the device,
+  `data[2]` the provider word (a session of the claimed filesystem owner
+  under host command record 3),
+  `data[3]` `ASTRA_HOST_SCOPE_READ_ONLY | ASTRA_HOST_SCOPE_DELEGATE`.
+  Answers a handle with READ, WRITE, TRANSFER and ADMINISTER; UNSUPPORTED
+  without `ASTRA_HOST_CAP_FS_SCOPE`.
+- `ASTRA_SYSCALL_HOST_SCOPE_REVOKE` (110): ADMINISTER; detaches the scope from
+  every channel, after which open, attach and query answer PEER_DEAD. The
+  creator's exit revokes every scope it created.
+- `ASTRA_SYSCALL_HOST_SCOPE_ATTACH` (111): WRITE; binds the scope to the
+  calling thread's channel, which must have been opened on a scope; at most
+  `ASTRA_HOST_CHANNEL_SCOPE_MAX` (8) per channel.
+- `HOST_QUERY`, `HOST_CHANNEL_OPEN` and `HOST_CHANNEL_CLOSE` take a scope
+  where they took a device; `HOST_EXECUTE` does not. `AstraHostLeaseInfo`
+  answers the scope's `scope` word and `scope_flags` (READ_ONLY only).
+- A scope without `ASTRA_HOST_SCOPE_DELEGATE` loses TRANSFER when it is
+  received: its holder may use it and fork with it, not hand it on.
+
+Host transport `0x0001000d` adds `ASTRA_HOST_CAP_FS_SCOPE` (bit 10). The
+kernel-to-provider channel configuration is version 2: `scope`,
+`scope_flags`, `scope_owner` and the operations ATTACH (3) and DETACH (4).
+On a bound channel the provider runs only filesystem commands whose session
+names an attached scope (else `ASTRA_STATUS_ACCESS`), refuses mutations
+under a read-only scope (`ASTRA_STATUS_READ_ONLY`), and answers a handle only
+in the session it was opened in. `runtime.library` 1.14 exports
+`astra_host_scope_create`, `astra_host_scope_revoke` and
+`astra_host_scope_attach`. ATTACH makes the checks OPEN makes: an inactive
+lease, a host that is not ready, or a channel of an earlier host generation
+answers PEER_DEAD.
+
+Host transport `0x0001000e` adds `ASTRA_HOST_CAP_FS_SESSIONS` (bit 11) and
+host command record 3 (`ASTRA_HOST_COMMAND_VERSION` 3):
+
+- **One claimed owner.** `ASTRA_HOST_FS_CLAIM` binds the filesystem service
+  to the submitting owner (HostFS); every other owner's filesystem command
+  on an unbound channel or `HOST_EXECUTE` answers `ASTRA_STATUS_ACCESS`.
+  The kernel authenticates the claim: a channel opened on a device handle
+  carrying `ASTRA_RIGHT_HOST_SCOPE` is configured with
+  `ASTRA_HOST_CHANNEL_PROVIDER` (channel configuration version 3), and the
+  provider takes CLAIM on no other channel, nor through `HOST_EXECUTE`.
+  The claim, with every session and handle of the owner, goes when the
+  owner releases it or dies.
+- **Rooted sessions.** Every command names `session`, a root directory
+  opened by `ASTRA_HOST_FS_SESSION_OPEN` beneath a volume (session 0,
+  `value_lo` the volume) or beneath another session; a read-only session,
+  and one derived from it, refuses every mutation. Session ids are never
+  reused. Closing a session closes every handle opened in it, whoever
+  opened them; a handle answers only in its own session.
+- **Scopes name sessions.** A bound OPEN or ATTACH is accepted only for a
+  live session of the claimed owner whose creator is that owner. A bound
+  channel cannot claim, open or close sessions.
+- **Path operands.** `path_offset`, `path_length` and `path2_length` place
+  the unterminated operands in the data span, ahead of the data; each is
+  under `ASTRA_HOST_FS_PATH_MAX` (4096) bytes and holds no NUL.
+- **Node record.** OPEN, STAT and READDIR answer an `AstraHostNode`
+  (statx: inode, device, blocks, nanosecond and birth times, mount id) with
+  a validity mask.
+- **Base handles.** Every path operation resolves beneath `handle`, an open
+  directory of the session, or beneath the session root when it is 0. The
+  operation table is renumbered densely (1..19); the former `*_AT`,
+  `STAT_FILE` and `CHMOD_FILE` are the plain operations with a handle.
+  `ASTRA_HOST_METRICS_VERSION` is 3 and the snapshot size follows the
+  operation count.
+
+Storage protocol 28: a HELLO on a port that serves a host volume attaches
+one handle, the grant's scope; such a port answers every other operation
+except BYE with `ASTRA_VFS_ERR_UNSUPPORTED`, runs no operation fused with a
+HELLO, and refuses a HELLO it cannot attach the scope to. At that checkpoint
+28 became `ASTRA_VFS_VERSION_MIN`: no earlier request layout is served, a HELLO below
+it is answered `ASTRA_VFS_ERR_PROTOCOL`, and every pre-28 compatibility path
+(per-request reply ports, unfused HELLO retry, two-message rename and
+symlink in the client, version-gated operations) is deleted. The server
+side of the two-message forms goes too: operations 17, 18, 23 and 24
+(RENAME_FROM/TO, SYMLINK_TARGET/TO) and their staged session state are
+gone, and the numbers are not reused.
+
+Storage protocol 29: a grant is a HostFS port
+(docs/FILESYSTEM_PRODUCTION_PRD.md FS15). A session is bound to the grant
+port it said HELLO on, and a request for it on any other port is refused
+unanswered. HELLO answers `AstraVfsReply.features` (which replaces
+`reserved2`; every other operation answers 0) with
+`ASTRA_VFS_FEATURE_GRANTS`, and attaches a duplicate of that grant's scope.
+`ASTRA_VFS_OP_GRANT_DERIVE` (36) takes `flags`, a subset of
+`ASTRA_VFS_GRANT_READ | WRITE | DELEGATE` that must include READ and may
+not exceed the grant's own, and `body.path`, the new root relative to the
+grant's root (`""` keeps it). Its reply carries one send handle, the derived
+grant's port; HELLO on that port hands out the derived grant's scope, which
+is read-only without WRITE and keeps TRANSFER only with DELEGATE. A port
+derived from a non-delegable grant arrives without TRANSFER (the reply uses
+the kernel's send dispositions, syscall ABI 0x00010042), so it cannot be
+moved on; a fork child keeps it as usual. A derived grant is retired when
+the session that derived it ends. A grant whose last holder closes its port is retired: HostFS revokes its scope
+through the kernel and closes its provider session. The grant port is
+control only (HELLO, BYE, GRANT_DERIVE); the client's lane carries every
+data operation.
+
+Storage protocol **36** is the current version and minimum. Host transport
+`0x00010015` retains `ASTRA_HOST_CAP_FS_RESOLVES` (bit 12). Filesystem Kit 12.0
+provides ordered `LOOKUP` (37), raw assign resolution, and explicit metadata
+validity and identity. `ASTRA_STATUS_ESCAPED` (20) carries a complete
+absolute Astra namespace continuation, original-request bytes consumed, the
+escape kind and links followed. The provider never follows that continuation
+in Linux. `LOOKUP` uses one 40-link budget across namespace hops and returns
+a validated `AstraVfsEscape` payload on OK or ESCAPED; the inline continuation
+limit is 191 bytes, covering every native pathname. Longer continuations
+return BUFFER_TOO_SMALL. Requests are 248 bytes, two-path requests 440 bytes,
+and replies 368 bytes with 208 inline payload bytes. The reply's separate
+72-byte `AstraVfsNodeMeta` preserves LOOKUP link accounting beside metadata.
+FOLLOW, MISSING and ENTRY select final-link following, a missing final leaf,
+and mutation of the final entry. FOLLOW and ENTRY are mutually exclusive.
+Host STAT carries the same policies plus an explicit remaining-link budget.
+UNLINK and UNLINK_AT require a non-directory with zero flags, or an empty
+directory with `ASTRA_VFS_UNLINK_DIRECTORY`. The provider enforces that kind
+during removal; Filesystem Kit 12.0 exposes the same flags on path removal.
+Host UNLINK has the same zero/file and DIRECTORY/empty-directory contract;
+the old automatic-kind policy and FILE flag are removed from the unreleased
+`0x0001000f` contract.
+`ASTRA_VFS_OPEN_NOFOLLOW` (bit 7) refuses a final symlink before truncation;
+exclusive creation also leaves a dangling link intact.
+
+
+## Atomic write bounds
+
+ABI 12 requires an exclusive `max_end` byte position on sequential and
+positioned writes, including their accelerated callbacks. `UINT64_MAX` means
+unbounded. Providers select the current position or append EOF and check the
+bound within the same transaction as the write. A request crossing the bound
+returns a short write; a nonempty request starting at or beyond it returns
+`ASTRA_VFS_ERR_FILE_TOO_LARGE` (status 22) without moving the position. Zero
+writes succeed without changing size or position. Positioned writes ignore
+the open description's APPEND flag.
+
+STOR 35 introduced `AstraVfsRequest.write_limit` for inline and shared-area
+writes; Host transport `0x00010015` carries the bound in WRITE's input value
+and returns the resulting position there. Configuration version 4 is unchanged.
+HostFS serializes writes and truncations with its existing namespace lock,
+including writes through independent descriptions. RAMFS uses its filesystem
+lock; ext4 selects position, clamps length and writes under its mount lock.
+The POSIX adapter supplies `RLIMIT_FSIZE`, maps status 22 to `EFBIG`, and sends
+`SIGXFSZ` only when a finite bound refuses all bytes. Limit and signal policy
+remain in POSIX; providers implement the generic bound once.
+
+STOR 36/minimum 36 makes ordered LOOKUP accept a retained directory token.
+Filesystem Kit ABI 12.0 adds the attached namespace as the first argument
+of path-based `astra_filesystem_*_at` APIs. Provider continuations retain
+the same 40-link budget and use the shared namespace resolver; POSIX adapters
+call that native contract. Joined-assign opens use the member selected by
+lookup, including dangling-link shadowing. Rename/link retain namespace
+escapes instead of conflating them with a cross-device operation.
+
+## Syscall ABI 0x00010043: filesystem admission
+
+Runtime 1.16 exports `astra_host_scope_limit`. Host transport 0x00010015
+binds the per-owner handle/token quota to each scope with `scope_files` at
+byte 48. Current channel configuration version 5 is 68 bytes: `process` at
+byte 52 carries the kernel-authenticated native PID independently of the
+resource owner. File, pending-share and active-operation usage records retain
+that PID. Image admission confirms the PID and full resource owner against
+current channels, so a recycled PID cannot claim an older retained token.
+OPEN reserves Linux
+descriptor and directory capacity before any create or truncate. SHARE and
+ADOPT account aliases and pending receipts without charging another Linux
+descriptor. Refusal returns LIMIT; an unsuccessful adoption keeps its token.
+Disconnected handle identities remain charged until acknowledged or owner
+death. Provider sessions, handles, lost identities and receipts also share
+the configured global object bound, preventing reset from bypassing admission.
+
+`ASTRA_HOSTFS_MAX_DESCRIPTORS` and `ASTRA_HOSTFS_MAX_DIRECTORIES` accept
+positive uint32 decimal values only. QEMU clamps descriptors to RLIMIT_NOFILE minus 256 and DIRs to descriptors,
+including explicit limits. The production launcher defaults to 2048 objects/
+descriptions and 1024 DIRs. Its conservative 8 KiB per object/description plus
+40 KiB per DIR budget totals 56 MiB; direct QEMU starts without those launcher
+values default to the available host descriptor allowance. QOM exposes filesystem descriptor,
+directory and object counts plus host RSS and descriptor count. HostFS reads
+positive `owner_files`, `owner_sessions` and `queue_messages` values from its
+CONFIG settings; the queue count cannot exceed ASTRA_PORT_MESSAGES_MAX.
+Control-session limits apply per owner to each native volume service.
+
+Scopes use reusable page-backed kernel metadata, not a fixed global pool.
+Each process can hold 16 DMA records, placed by page inside the unchanged
+32 MiB window; one buffer remains at most 8 MiB.
+
+## Syscall ABI 0x00010042: send dispositions
+
+`ASTRA_SYSCALL_PORT_SEND_TRY` takes `ASTRA_PORT_SEND_DISPOSITIONS` (bit 31)
+in data[5]. With it, data[4] points at `AstraHandleDisposition` records
+(`{handle, rights}`) instead of bare handles, and each handle arrives with
+its own rights AND the record's mask: the sender chooses what the receiver
+gets, and a mask only narrows. This is Zircon's `zx_channel_write_etc` with
+`zx_handle_disposition_t` (operation MOVE, a rights mask); Haiku has no
+capability handles to follow. Every handle is still moved and needs
+ASTRA_RIGHT_TRANSFER to be; a mask may strip TRANSFER, and then what
+arrives cannot move again. A zero mask is refused with
+`ASTRA_SYSCALL_INVALID_ARGUMENT` and nothing moves. Without the flag, D4
+continues to point at a plain handle array. A reply to `PORT_CALL` honours
+the same masks. The handles a `PORT_CALL` *request* carries take no
+dispositions and move with their own rights. A mask must leave the handle a
+right besides TRANSFER
+that survives the receiver's import filter (a non-delegable scope loses
+TRANSFER on import); otherwise the send is refused with INVALID_ARGUMENT and
+nothing moves. The same rule refuses an unmasked handle that would arrive
+with no usable right.
+`runtime.library` 1.15 adds `astra_port_send_rights`.
+
+## Filesystem Kit ABI 12.0
+
+STOR version/minimum 33 adds DIRECTORY_PATH (42) and anchored operands on
+MKDIR, RENAME, LINK, SYMLINK and READLINK. Existing STAT_AT gains an explicit
+ASTRA_VFS_STAT_FOLLOW flag; zero retains no-follow semantics. RENAME/LINK use
+file and offset for independent directory bases. Zero bases denote the grant
+root, and real bases require relative paths. Host version 0x00010012 adds
+PATH (24), FS_PATHS (bit 15), and metrics version 5.
+
+Process VFS owns current directory identity, including fork receipt adoption
+and exec export/import. Its current-directory setter now takes one path.
+AstraFilesystem's private layout includes native CWD acquisition callbacks,
+so the library identity is filesystem.library.12 and all exports use
+ASTRA_FILESYSTEM_12.0. Filesystem.kit 9.0.0 provides ABI 12.0; every in-tree
+consumer requests that identity. libc stays ABI 4.0. Native process VFS exec
+state is version 8; private POSIX file exec state is version 3 and contains no
+independent CWD spelling. There is no obsolete setter, stat callback, library
+identity or dual wire format.
+
+STOR 34 adds HELLO resumption: a nonzero session must already belong to the
+caller and grant. A resumed HELLO retains the control session and reply lane,
+and replaces only the scoped accelerator. This keeps derived grants alive
+across a provider reset without weakening the deriver-session ownership rule.
+Host transport 0x00010013 adds provider epochs and filesystem-only reset.
+ASTRA_STATUS_LOST (21) maps to ASTRA_VFS_ERR_LOST and POSIX ESTALE. A LOST
+reply with a nonzero result value identifies a lost scope/session; a lost
+individual handle has zero there and does not fail a healthy accelerator.
+The public library layouts remain ABI 12.0.
+
+Provider resets close Linux descriptors immediately and retain owner-bound
+disconnected handles until close or owner death. SHARE/ADOPT can inherit a
+disconnected description, but never reopen its old path. HostFS retains
+grant ports, reclaims the provider and remints scopes after checking the
+recorded root's volume, inode and generation. A replacement root is refused.
+HostFS death revokes those grants permanently. Supervisor restarts managed
+processes whose delivered namespace depended on a republished service;
+applications retain LOST on their old grants.
+
+## Filesystem Kit ABI 9.0 and libc ABI 4.0
+
+Host transport `0x00010011` adds `ASTRA_HOST_CAP_FS_DESCRIPTIONS` (bit 13)
+and `ASTRA_HOST_CAP_FS_DIRECTORY_BATCH` (bit 14),
+metrics version 4, and SEEK, SHARE, ADOPT and FILE_FLAGS. Storage protocol 32
+adds their native operations and `ASTRA_VFS_FEATURE_DESCRIPTIONS`. Its reply
+has separate 64-bit position and share-token fields and 32-bit open flags;
+`node_size` remains node metadata. The reply is 368 bytes; payload capacity
+remains 208 and extended metadata remains 72 bytes. NONBLOCK is open bit 8;
+FILE_FLAGS may update only APPEND/NONBLOCK.
+
+`filesystem.library.9` changes the I/O callback contract to carry sequential
+flags and a resulting position. The provider owns a shared description's
+position, directory cursor and mutable status flags. Sequential I/O is one
+transaction; positioned I/O preserves the position and positioned writes
+ignore append. A random one-use SHARE token retains a pending reference;
+ADOPT consumes it only through the same grant. DISCARD uses the original
+owner and works after that owner's file closes. Owner/session loss discards
+pending references; already adopted owners retain their descriptions.
+READDIR now returns only packed native directory records. One command holds
+the description lock for its complete batch, and a record that does not fit
+is rolled back before the lock is released. `ASTRA_VFS_CURSOR_CURRENT` reads
+the shared stream without replaying a caller's cached cookie. An explicit
+rewind uses SEEK, so every owner sees the rewind.
+
+All Filesystem exports use `ASTRA_FILESYSTEM_9.0`. Filesystem.kit 6.0.0 and
+every in-tree dependent manifest require major 9. The POSIX fork prepare/
+release contract and opaque file-exec state changed, so libc moves to 4.0,
+with `ASTRA_LIBC_4_0` exports and Posix.kit 2.0.0. The fork adoption barrier
+prevents parent exit from destroying pending shares. File-exec state version
+2 preserves process wait handles and accounting as well as file state.
+Older major binaries fail dependency resolution; no dual contract remains.
+
+## Filesystem Kit ABI 8.0
+
+`filesystem.library.8` adds `AstraVfsNodeMeta` to `AstraFileInfo` and
+`AstraVfsDirEntry`, and grows the client's embedded wire records. Unknown
+fields have clear validity bits; mode zero and full-width link counts are
+real values when marked valid. Host volumes use the device's 12-bit major
+and 20-bit minor as a stable volume identity across bindings. Inode numbers
+come from the provider; birth time distinguishes reused nodes where available.
+Allocation and nanosecond timestamps also come from the provider. Synthetic
+and bootstrap backends report unknown identity. Batched directory entries
+retain their existing compact wire record and report unknown extended metadata.
+All in-tree library dependencies require ABI 8; ABI 7 binaries do not load it.
+
+## Filesystem Kit ABI 7.0
+
+`filesystem.library.7` adds `AstraVfsClient.features` (what the client's
+HELLO answered) and `AstraVfsPortThreadState.received_handle`, so both
+layouts change and the major moves; and `astra_vfs_grant_derive(client,
+root, rights, &handle)`, which a client connected to a grant uses to make a
+narrower one. A lane client sends GRANT_DERIVE to the grant's port on the
+lane its HELLO bound, never to its lane. The process exec state carries
+`features` (exec state version 7). Kit 6 binaries do not load it.
+
+## Filesystem Kit ABI 6.0
+
+`filesystem.library.6` brings the lane back, scoped. `AstraVfsClient`
+regains `port_direct_address`, `port_direct_area`, `port_direct_scope` (the
+grant's scope handle), `port_direct_session`, `port_direct_detached`, the
+`direct_backend_*` fields and `port_accelerator_ops`; `port_direct_lock` is
+gone, because the lane's lock belongs to the process-wide transport.
+`AstraVfsPortLane` regains its direct area. `AstraVfsPortAcceleratorOps.connect`
+takes a scope. Kit 5 binaries do not load it.
+
+## Filesystem Kit ABI 5.0
+
+`filesystem.library.5` removes the host direct path. `AstraVfsClient` loses
+the `port_direct_*`, `direct_backend_*` and `port_accelerator_ops` fields and
+`AstraVfsPortLane` loses its direct area, so the layouts change and the major
+moves. Storage protocol 27 never attaches a capability to HELLO: every request
+for a host volume reaches the provider through HostFS, which enforces the
+grant (docs/FILESYSTEM_PRODUCTION_PRD.md FS44). Connect with
+`astra_vfs_port_connect` (eager) or `astra_vfs_client_connect_service` (HELLO
+fused with the first operation).
+
 ## Filesystem Kit ABI 3.0
 
-`filesystem.library.4` replaces the fixed startup-sized `AstraAssignTable`
+ABI 3 replaces the fixed startup-sized `AstraAssignTable`
 array with a growable pointer/count/capacity table and adds
 `astra_assign_table_destroy`. The startup page bounds only the namespace
 records delivered at launch; aliases, union members, and mounts added later
@@ -124,7 +552,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010036`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010043`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | K1 TEST ONLY | monotonic test progress, not a product ABI |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -143,7 +571,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 16 | `TIMER_SET` | CURRENT K6 | `D1=timer handle`, `D2:D3=absolute deadline`; returns woken waiter count in `D1` |
 | 17 | `TIMER_CANCEL` | CURRENT K6 | `D1=timer handle`; returns woken waiter count in `D1` |
 | 18 | `PORT_CREATE` | CURRENT K7 | `D1=max messages`, `D2=max queued bytes`; returns receive handle in `D1`, send handle in `D2` |
-| 19 | `PORT_SEND_TRY` | CURRENT K7 | `D1=send handle`, `D2=message pointer`, `D3=message bytes`, `D4=handle-array pointer`, `D5=handle count` |
+| 19 | `PORT_SEND_TRY` | CURRENT K7 | `D1=send handle`, `D2=message pointer`, `D3=message bytes`, `D4=handle-array pointer`, `D5=handle count`; bit 31 of D5 = `ASTRA_PORT_SEND_DISPOSITIONS`, and D4 then points at `AstraHandleDisposition` records |
 | 20 | `PORT_RECEIVE_TRY` | CURRENT K7 | `D1=receive handle`, `D2=message output`, `D3=message capacity`, `D4=handle output`, `D5=handle capacity`; returns actual/required message bytes in `D1` and handle count in `D2` |
 | 21 | `HANDLE_DUPLICATE` | CURRENT K8 | `D1=source handle`, `D2=requested rights`; returns duplicate handle in `D1` |
 | 22 | `AREA_CREATE` | CURRENT K8 | `D1=byte size`, `D2=rights`; returns area handle in `D1` |
@@ -196,6 +624,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 | 94 | `THREAD_INFO` | CURRENT CANDIDATE | `D1=thread handle with QUERY right`, `D2=AstraThreadInfo`; copies one 48-byte record including identity, scheduler state, activity, priorities, counters, and runtime nanoseconds |
 | 95 | `LIBRARY_ATTACH_RESIDENT` | CURRENT CANDIDATE | `D1=pointer to fixed-size zero-padded ABI identity`; maps the sole matching resident library, returning `WOULD_BLOCK` when absent or ambiguous so userspace resolves an exact provider and retries with `LIBRARY_ATTACH` |
 | 96 | `VM_PRIVATE_COMMIT` | CURRENT CANDIDATE | `D1=address`, `D2=length`; commits every touched page in an existing writable private reservation, with allocation bounded only by available charged frames |
+| 112 | `HOST_SCOPE_LIMIT` | CURRENT CANDIDATE | `D1=scope with ADMINISTER`, `D2=owner handle/token limit (0 unlimited)`; INVALID_ARGUMENT while any channel carries that scope |
 
 Areas are at most 4 MiB. This is an address-map allocation unit, not an
 application-size policy; the VM publishes and rolls back every MC68040 table
@@ -203,7 +632,7 @@ touched by the mapping as one transaction. VFS bulk transfers use this same
 bound instead of imposing a smaller protocol limit.
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010036`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x00010043`; a later revision may add
 feature bits before additional calls freeze.
 
 Process and thread priorities are one number, 1 through 27, with 16 as
@@ -821,3 +1250,11 @@ Every release generates and compares:
 - old-client/new-kernel and new-client/old-service negotiation tests.
 
 No provisional K1 test call is promoted into the stable ABI accidentally.
+
+STOR 36/minimum 36 makes ordered LOOKUP accept a retained directory token.
+Filesystem Kit ABI 12.0 adds the attached namespace as the first argument
+of path-based `astra_filesystem_*_at` APIs. Provider continuations retain
+the same 40-link budget and use the shared namespace resolver; POSIX adapters
+call that native contract. Joined-assign opens use the member selected by
+lookup, including dangling-link shadowing. Rename/link retain namespace
+escapes instead of conflating them with a cross-device operation.

@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -25,6 +27,8 @@ static uint32_t pipe_tail;
 static int pipe_producer_closed;
 static int pipe_consumer_closed;
 static uint32_t file_imports;
+static uint32_t excluded_file_closes;
+static uint32_t excluded_closes_before_import;
 static uint32_t socket_imports;
 static uint32_t restore_failures;
 static uint32_t restore_status;
@@ -74,22 +78,25 @@ static int file_exec_import(const AstraStartupInfo *startup,
 {
     assert(startup != NULL && size == sizeof(uint32_t));
     assert(*(const uint32_t *)state == 0x56465331u);
+    excluded_closes_before_import = excluded_file_closes;
     return 0;
 }
 static int file_state_export(uint32_t slot, void *state, uint32_t size)
 {
-    AstraPosixFileExecState *wire = state;
+    AstraPosixFileExecState wire = { .file = slot };
 
-    assert(slot == 99u && size == sizeof(*wire));
-    *wire = (AstraPosixFileExecState){ .file = slot };
+    assert((slot == 99u || slot == 100u) && size == sizeof(wire));
+    memcpy(state, &wire, sizeof(wire));
     return 0;
 }
 static int file_state_import(const void *state, uint32_t size, uint32_t *slot)
 {
-    const AstraPosixFileExecState *wire = state;
+    AstraPosixFileExecState wire;
 
-    assert(size == sizeof(*wire) && wire->file == 99u);
-    *slot = wire->file;
+    assert(size == sizeof(wire));
+    memcpy(&wire, state, sizeof(wire));
+    assert(wire.file == 99u || wire.file == 100u);
+    *slot = wire.file;
     ++file_imports;
     return 0;
 }
@@ -97,7 +104,8 @@ static int file_state_import(const void *state, uint32_t size, uint32_t *slot)
 static int
 file_close(uint32_t slot)
 {
-    assert(slot == 99u);
+    assert(slot == 99u || slot == 100u);
+    if (slot == 100u) ++excluded_file_closes;
     ++file_closes;
     return 0;
 }
@@ -363,6 +371,16 @@ test_log_descriptors_without_streams(void)
     };
 
     logged_count = 0u;
+    {
+        AstraStartupInfo malformed = startup;
+        uint32_t failures_before = restore_failures;
+
+        /* Validation must precede restoration of an opaque handoff. */
+        malformed.handoff_address = UINT32_MAX;
+        malformed.handoff_size = 2u;
+        astra_posix_start(&malformed);
+        assert(restore_failures == failures_before);
+    }
     astra_posix_start(&startup);
     assert(!isatty(1) && !isatty(2));
     /* stderr arrives a byte at a time from picolibc; one record per line. */
@@ -448,6 +466,12 @@ test_log_descriptors_survive_exec(void)
      * checks the complete exporter and owns/frees its result. */
     if ((uintptr_t)handoff <= UINT32_MAX) {
         AstraStartupInfo startup = {
+            .magic = ASTRA_STARTUP_MAGIC,
+            .abi_version = ASTRA_STARTUP_ABI_VERSION,
+            .program_entry = 0x00100000u,
+            .header_size = ASTRA_STARTUP_INFO_SIZE,
+            .total_size = ASTRA_STARTUP_INFO_SIZE,
+            .syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION,
             .handoff_address = (uint32_t)(uintptr_t)handoff,
             .handoff_size = handoff_size
         };
@@ -476,30 +500,37 @@ main(void)
     int duplicate;
     void *handoff;
     uint32_t handoff_size;
-    ssize_t (*read_call)(int, void *, size_t) = read;
-    ssize_t (*write_call)(int, const void *, size_t) = write;
+    /* Exercise Astra validation without glibc folding deliberate bad inputs. */
+    ssize_t (*volatile read_call)(int, void *, size_t) = read;
+    ssize_t (*volatile write_call)(int, const void *, size_t) = write;
 
     {
-        static const AstraStartupCapability capabilities[] = {
-            {.name = "STDIN", .handle = 10u},
-            {.name = "STDOUT", .handle = 11u},
-            {.name = "STDERR", .handle = 12u},
+        static struct {
+            AstraStartupInfo info;
+            AstraStartupCapability capabilities[3];
+        } startup_block = {
+            .capabilities = {
+                {.name = "STDIN", .handle = 10u},
+                {.name = "STDOUT", .handle = 11u},
+                {.name = "STDERR", .handle = 12u},
+            },
         };
-        AstraStartupInfo startup = {
+        startup_block.info = (AstraStartupInfo){
             .magic = ASTRA_STARTUP_MAGIC,
             .abi_version = ASTRA_STARTUP_ABI_VERSION,
             .program_entry = 0x00100000u,
             .header_size = ASTRA_STARTUP_INFO_SIZE,
-            .total_size = ASTRA_STARTUP_INFO_SIZE,
+            .total_size = ASTRA_STARTUP_INFO_SIZE + 3u * ASTRA_STARTUP_CAPABILITY_SIZE,
             .syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION,
             .capability_count = 3u,
-            .capabilities_address = (uint32_t)(uintptr_t)capabilities,
+            .capabilities_address =
+                (uint32_t)(uintptr_t)startup_block.capabilities,
         };
         int tty;
 
-        if ((uintptr_t)capabilities <= UINT32_MAX) {
+        if ((uintptr_t)startup_block.capabilities <= UINT32_MAX) {
             process_service = 9u;
-            astra_posix_start(&startup);
+            astra_posix_start(&startup_block.info);
             assert(isatty(0) && isatty(1) && isatty(2));
             tty = astra_posix_descriptor_controlling_terminal(
                 O_RDWR | O_NONBLOCK);
@@ -534,7 +565,11 @@ main(void)
     }
     astra_posix_start(NULL);
     astra_posix_file_bind(&file_ops);
-    assert(astra_posix_descriptor_file(99u, 0) == 0);
+    assert(astra_posix_descriptor_file(99u,
+           O_RDWR | O_CREAT | O_EXCL | O_TRUNC | O_CLOEXEC) == 0);
+    assert(fcntl(0, F_GETFL) == O_RDWR);
+    assert(fcntl(0, F_GETFD) == FD_CLOEXEC);
+    assert(fcntl(0, F_SETFD, 0) == 0);
     assert(pread(0, bytes, 1u, 37) == 1 && bytes[0] == 'R' &&
            positioned_offset == 37);
     assert(pwrite(0, "W", 1u, 41) == 1 && positioned_offset == 41);
@@ -560,6 +595,24 @@ main(void)
     assert(close(6) == 0 && file_closes == 1u);
     assert(pipe(fildes) == 0);
     assert(fildes[0] == 0 && fildes[1] == 1);
+    assert(read_call(fildes[0], NULL, 0u) == 0);
+    assert(write_call(fildes[1], NULL, 0u) == 0);
+    errno = 0;
+    assert(read_call(fildes[0], NULL, 1u) == -1 && errno == EFAULT);
+    errno = 0;
+    assert(write_call(fildes[1], NULL, 1u) == -1 && errno == EFAULT);
+    errno = 0;
+    assert(read_call(fildes[0], bytes, SIZE_MAX) == -1 && errno == EINVAL);
+    errno = 0;
+    assert(write_call(fildes[1], bytes, SIZE_MAX) == -1 && errno == EINVAL);
+    errno = 0;
+    assert(write_call(fildes[0], NULL, 0u) == -1 && errno == EBADF);
+    errno = 0;
+    assert(read_call(fildes[1], NULL, 0u) == -1 && errno == EBADF);
+    errno = 0;
+    assert(pwrite(fildes[0], "x", 1u, 0) == -1 && errno == EBADF);
+    errno = 0;
+    assert(pread(fildes[1], bytes, 1u, 0) == -1 && errno == EBADF);
     errno = 0;
     assert(!isatty(fildes[0]) && errno == ENOTTY);
     errno = 0;
@@ -584,22 +637,32 @@ main(void)
     assert(astra_posix_descriptor_file(99u, O_NONBLOCK) == 0);
     assert(dup(0) == 1 && dup(0) == 2);
     assert(fcntl(1, F_SETFD, FD_CLOEXEC) == 0);
+    assert(astra_posix_descriptor_file(100u, O_CLOEXEC) == 3);
     assert(astra_posix_exec_export(&handoff, &handoff_size) == 0);
+    /* Export/failed commit must leave close-on-exec files open. */
+    assert(astra_posix_descriptor_slot(3) == 100 && excluded_file_closes == 0u);
     /* ASan deliberately allocates above the target's 32-bit address space.
      * The ordinary non-PIE host gate exercises import; the sanitizer still
      * checks the complete exporter and owns/frees its result. */
     if ((uintptr_t)handoff <= UINT32_MAX) {
         AstraStartupInfo startup = {
+            .magic = ASTRA_STARTUP_MAGIC,
+            .abi_version = ASTRA_STARTUP_ABI_VERSION,
+            .program_entry = 0x00100000u,
+            .header_size = ASTRA_STARTUP_INFO_SIZE,
+            .total_size = ASTRA_STARTUP_INFO_SIZE,
+            .syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION,
             .handoff_address = (uint32_t)(uintptr_t)handoff,
             .handoff_size = handoff_size
         };
 
         astra_posix_start(&startup);
-        assert(file_imports == 1u);
+        assert(file_imports == 2u && excluded_file_closes == excluded_closes_before_import + 1u);
         assert(astra_posix_descriptor_slot(0) == 99);
         assert(astra_posix_descriptor_slot(2) == 99);
         errno = 0;
         assert(fcntl(1, F_GETFD) == -1 && errno == EBADF);
+        assert(fcntl(3, F_GETFD) == -1 && errno == EBADF);
         assert((fcntl(0, F_GETFL) & O_NONBLOCK) != 0);
         file_closes = 0u;
         assert(close(0) == 0 && file_closes == 0u);
@@ -611,11 +674,18 @@ main(void)
     astra_posix_file_bind(&file_ops);
     astra_posix_socket_bind(&socket_ops);
     assert(astra_posix_descriptor_socket(77u, O_NONBLOCK) == 0);
+    assert((fcntl(0, F_GETFL) & O_ACCMODE) == O_RDWR);
     assert(dup(0) == 1);
     assert(fcntl(1, F_SETFD, FD_CLOEXEC) == 0);
     assert(astra_posix_exec_export(&handoff, &handoff_size) == 0);
     if ((uintptr_t)handoff <= UINT32_MAX) {
         AstraStartupInfo startup = {
+            .magic = ASTRA_STARTUP_MAGIC,
+            .abi_version = ASTRA_STARTUP_ABI_VERSION,
+            .program_entry = 0x00100000u,
+            .header_size = ASTRA_STARTUP_INFO_SIZE,
+            .total_size = ASTRA_STARTUP_INFO_SIZE,
+            .syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION,
             .handoff_address = (uint32_t)(uintptr_t)handoff,
             .handoff_size = handoff_size
         };

@@ -11,6 +11,9 @@ include ../../libraries.mk
 GRAPHICS := ../../graphics
 NDK := ../../../../ndk
 SYSTEM := ../../system
+INTERFACE := ../../interface
+INTERFACE_HOST_SOURCES := $(INTERFACE)/src/control.c $(INTERFACE)/src/menu.c \
+	$(INTERFACE)/src/text_model.c $(INTERFACE)/src/text_surface.c $(INTERFACE)/src/scroll.c
 ASTRA_COMMON := ../../../common
 CPPFLAGS := -I../../../../ndk/include -I../../../include -I$(RUNTIME)/include \
 	-I$(GRAPHICS)/include -I../../../../fpga/arty/linux
@@ -20,9 +23,11 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 TARGET := build/m68k/display.elf
 IMAGE := build/m68k/display
 OBJECT := build/m68k/main.o
-OBJECTS := build/m68k/window_graphics.o
+OBJECTS := build/m68k/window_graphics.o build/m68k/font_face.o
 GRAPHICS_RENDERER_LIB := \
 	$(GRAPHICS)/build/m68k/libastragraphics-renderer.a
+AFNT_CODEC := $(ASTRA_COMMON)/build/m68k/libastraafnt.a
+HOST_AFNT_CODEC := $(ASTRA_COMMON)/build/host/libastraafnt.a
 GRAPHICS_FONT_HEADERS := $(GRAPHICS)/build/generated/astra_font8x8.inc \
 	$(GRAPHICS)/build/generated/astra_ui_font.inc \
 	$(GRAPHICS)/build/generated/astra_mono_font.inc
@@ -31,12 +36,26 @@ GRAPHICS_FONT_INPUTS := $(GRAPHICS)/fonts/astra-workbench.afnt \
 	../../../../tools/fonts/afnt.py $(NDK)/include/astra/font_library.h
 HOST_TEST := build/host/test_display
 HOST_TEST_SANITIZE := build/host/test_display_sanitize
-LIBRARIES := $(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_FONT_LIBRARY) \
+LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_FONT_LIBRARY) \
 	$(ASTRA_SYSTEM_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) \
 	$(ASTRA_COMPILER_LIBRARY)
-ASTRA_PROGRAM_PRIVATE_INPUTS := $(GRAPHICS_RENDERER_LIB)
+ASTRA_PROGRAM_PRIVATE_INPUTS := $(GRAPHICS_RENDERER_LIB) $(AFNT_CODEC)
 ASTRA_PROGRAM_PRIVATE_OWNER_TARGETS := $(GRAPHICS):renderer
 include ../../dynamic-program.mk
+
+PROBE_LIBRARIES := $(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_SYSTEM_LIBRARY) \
+	$(ASTRA_RUNTIME_LIBRARY) $(ASTRA_COMPILER_LIBRARY)
+build/m68k/frame_probe.o: tests/frame_probe.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/frame-probe.elf: build/m68k/frame_probe.o $(PROBE_LIBRARIES) $(ASTRA_PROGRAM_CRT0)
+	$(CC) $(TARGET_FLAGS) $(ASTRA_PROGRAM_LINK_FLAGS) -o $@ $(ASTRA_PROGRAM_CRT0) \
+		build/m68k/frame_probe.o $(foreach library,$(PROBE_LIBRARIES),-Wl,-l:$(notdir $(library)))
+	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(READELF) \
+		$(foreach library,$(PROBE_LIBRARIES),--needed $(notdir $(library))) $@
+
+frame-probe: all build/m68k/frame-probe.elf
 
 build/m68k/%.o: %.c
 	@mkdir -p $(@D)
@@ -45,33 +64,45 @@ build/m68k/%.o: %.c
 $(GRAPHICS_FONT_HEADERS): $(GRAPHICS_FONT_INPUTS)
 	$(MAKE) -C $(GRAPHICS) $(@:$(GRAPHICS)/%=%)
 
-$(HOST_TEST): main.c window_graphics.c window_graphics.h \
+$(AFNT_CODEC) $(HOST_AFNT_CODEC):
+	$(MAKE) -C $(ASTRA_COMMON) $(@:$(ASTRA_COMMON)/%=%)
+
+$(HOST_TEST): main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
+		../../../include/astra/gui.h \
+		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/include/astra/ui_font.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
-		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c \
-		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c
+		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c $(GRAPHICS)/src/render_builder.c \
+		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c \
+		$(INTERFACE_HOST_SOURCES) $(INTERFACE)/src/text_surface_internal.h $(HOST_AFNT_CODEC)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
-		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
+		-Wl,--gc-sections $(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c \
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
-		$(ASTRA_COMMON)/utf8.c window_graphics.c tests/test_display.c -o $@
+		$(ASTRA_COMMON)/utf8.c $(INTERFACE_HOST_SOURCES) \
+		window_graphics.c font_face.c tests/test_display.c $(RUNTIME)/tests/uncontended_mutex.c $(HOST_AFNT_CODEC) -o $@
 
 test: $(HOST_TEST)
 	./$(HOST_TEST)
 
-$(HOST_TEST_SANITIZE): main.c window_graphics.c window_graphics.h \
+$(HOST_TEST_SANITIZE): ../../../include/astra/json.h $(ASTRA_COMMON)/afnt.c $(ASTRA_COMMON)/json.c $(ASTRA_COMMON)/crc32.c main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
+		../../../include/astra/gui.h \
+		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/include/astra/ui_font.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
-		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/render_builder.c \
-		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c
+		$(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c $(GRAPHICS)/src/render_builder.c \
+		$(SYSTEM)/src/bundle.c $(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c \
+		$(INTERFACE_HOST_SOURCES)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated \
 		$(COMMON_FLAGS) -O1 -fsanitize=address,undefined \
 		-fno-omit-frame-pointer -ffunction-sections -fdata-sections \
-		-Wl,--gc-sections $(GRAPHICS)/src/surface.c \
+		-Wl,--gc-sections $(GRAPHICS)/src/surface.c $(GRAPHICS)/src/font_data.c \
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
-		$(ASTRA_COMMON)/utf8.c window_graphics.c tests/test_display.c -o $@
+		$(ASTRA_COMMON)/utf8.c $(INTERFACE_HOST_SOURCES) \
+		window_graphics.c font_face.c tests/test_display.c \
+		$(ASTRA_COMMON)/afnt.c $(ASTRA_COMMON)/json.c $(ASTRA_COMMON)/crc32.c $(RUNTIME)/tests/uncontended_mutex.c -o $@
 
 sanitize: $(HOST_TEST_SANITIZE)
 	./$(HOST_TEST_SANITIZE)
@@ -82,10 +113,14 @@ analyze:
 		-c main.c -o build/analyzer/main.o
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
 		-c window_graphics.c -o build/analyzer/window_graphics.o
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c font_face.c -o build/analyzer/font_face.o
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -fanalyzer \
+		-c tests/frame_probe.c -o build/analyzer/frame_probe.o
 
 clean:
 	rm -rf build
 
 -include $(wildcard build/m68k/*.d)
 
-.PHONY: all size test sanitize analyze clean
+.PHONY: all size test sanitize analyze clean frame-probe

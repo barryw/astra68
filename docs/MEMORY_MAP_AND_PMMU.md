@@ -54,8 +54,8 @@ covered by the kernel and machine qualification suites.
 | Start | End (exclusive) | Owner |
 |---|---|---|
 | `0x00000000` | `0x00010000` | Null guard |
-| `0x00010000` | `0x00011000` | Kernel startup block |
-| `0x00011000` | `0x20000000` | Main executable image |
+| `0x00010000` | `0x00011000` | Read-only startup header and capability records |
+| `0x00011000` | `0x20000000` | Main executable image; its prefix before the first PT_LOAD holds owned read-only startup vectors and opaque exec handoff |
 | `0x20000000` | `0x40000000` | Eager loader and shared-library images |
 | `0x40000000` | `0x48000000` | Kernel shared-area mappings |
 | `0x48000000` | `0x48001000` | Kernel time page (read-only) |

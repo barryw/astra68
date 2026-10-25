@@ -58,6 +58,24 @@ astra_port_send(uint32_t handle, const void *message, uint32_t size,
 }
 
 uint32_t
+astra_port_send_rights(uint32_t handle, const void *message, uint32_t size,
+                       const AstraHandleDisposition *dispositions,
+                       uint32_t count)
+{
+    AstraSyscallResult result;
+
+    if (message == NULL || size < ASTRA_MESSAGE_HEADER_SIZE ||
+        dispositions == NULL || count == 0u ||
+        (count & ASTRA_PORT_SEND_DISPOSITIONS) != 0u)
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    astra_syscall5(ASTRA_SYSCALL_PORT_SEND_TRY, handle,
+                   (uint32_t)(uintptr_t)message, size,
+                   (uint32_t)(uintptr_t)dispositions,
+                   count | ASTRA_PORT_SEND_DISPOSITIONS, &result);
+    return result.status;
+}
+
+uint32_t
 astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
                    uint32_t *handles, uint32_t handle_capacity,
                    uint32_t *size, uint32_t *handle_count)

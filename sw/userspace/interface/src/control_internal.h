@@ -3,8 +3,14 @@
 
 #include <astra/control.h>
 
+int astra_interface_single_line_text_valid(const char *text, uint32_t bytes);
+int astra_interface_draw_list_has_room(const AstraSurfaceView *surface,
+                                       uint64_t commands, uint64_t payload);
+
 AstraResult astra_interface_label_init(AstraControl *control,
                                        const AstraLabelInfo *info);
+AstraResult astra_interface_label_set_font(AstraUIContext *context,
+    AstraControl *control, const AstraLabelFont *font);
 AstraResult astra_interface_button_init(AstraControl *control,
                                         const AstraButtonInfo *info);
 AstraResult astra_interface_container_init(AstraControl *control,
@@ -45,6 +51,10 @@ AstraResult astra_interface_field_init(AstraControl *control,
                                        const AstraFieldInfo *info);
 AstraResult astra_interface_field_refresh(AstraUIContext *context,
                                           AstraControl *control);
+AstraResult astra_interface_text_view_init(AstraControl *control,
+                                          const AstraTextViewInfo *info);
+AstraResult astra_interface_text_view_refresh(AstraUIContext *context,
+                                             AstraControl *control);
 AstraResult astra_interface_field_replace_selection(
     AstraUIContext *context, AstraControl *control,
     const char *replacement, uint32_t replacement_bytes);

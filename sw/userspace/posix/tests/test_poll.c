@@ -39,7 +39,10 @@ static int write_ready;
 static int wake_read;
 static int wake_write;
 static int eof_next;
-static AstraStartupCapability capabilities[3];
+static struct {
+    AstraStartupInfo info;
+    AstraStartupCapability capabilities[3];
+} startup_block;
 
 uint32_t astra_posix_process_service(void) { return 0u; }
 uint32_t
@@ -214,25 +217,26 @@ capability(uint32_t index, const char *name, uint32_t handle)
     uint32_t at = 0u;
 
     while (name[at] != '\0') {
-        capabilities[index].name[at] = name[at];
+        startup_block.capabilities[index].name[at] = name[at];
         ++at;
     }
-    capabilities[index].name[at] = '\0';
-    capabilities[index].handle = handle;
+    startup_block.capabilities[index].name[at] = '\0';
+    startup_block.capabilities[index].handle = handle;
 }
 
 int
 main(void)
 {
-    AstraStartupInfo startup = {
+    startup_block.info = (AstraStartupInfo){
         .magic = ASTRA_STARTUP_MAGIC,
         .abi_version = ASTRA_STARTUP_ABI_VERSION,
         .program_entry = 0x00100000u,
         .header_size = ASTRA_STARTUP_INFO_SIZE,
-        .total_size = ASTRA_STARTUP_INFO_SIZE,
+        .total_size = sizeof(startup_block),
         .syscall_abi_version = ASTRA_SYSCALL_ABI_VERSION,
         .capability_count = 3u,
-        .capabilities_address = (uint32_t)(uintptr_t)capabilities
+        .capabilities_address =
+            (uint32_t)(uintptr_t)startup_block.capabilities
     };
     struct pollfd descriptor = { .fd = 0, .events = POLLIN };
     struct timeval zero = {0};
@@ -242,7 +246,7 @@ main(void)
     capability(0u, "STDIN", 10u);
     capability(1u, "STDOUT", 20u);
     capability(2u, "STDERR", 20u);
-    astra_posix_start(&startup);
+    astra_posix_start(&startup_block.info);
 
     assert(poll(&descriptor, 1u, 0) == 0 && descriptor.revents == 0);
     assert(fcntl(0, F_SETFL, O_NONBLOCK) == 0);

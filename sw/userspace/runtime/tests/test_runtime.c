@@ -53,12 +53,17 @@ static struct {
     volatile uint8_t *area;
 } fake;
 
-static struct {
+static _Alignas(ASTRA_STARTUP_BLOCK_SIZE) struct {
     AstraStartupInfo info;
     AstraStartupCapability capabilities[3];
+    uint8_t padding[ASTRA_STARTUP_BLOCK_SIZE - ASTRA_STARTUP_INFO_SIZE -
+                    3u * ASTRA_STARTUP_CAPABILITY_SIZE];
 } fake_startup;
-static uint32_t fake_argv[1];
 static const char fake_program[] = "/apps/ChocolateDoom.app/chocolate-doom";
+static _Alignas(ASTRA_STARTUP_BLOCK_SIZE) struct {
+    uint32_t words[2];
+    char text[sizeof(fake_program)];
+} fake_vectors;
 #define FAKE_IMAGE_BYTES 0x3000u
 static _Alignas(4) uint8_t fake_image[FAKE_IMAGE_BYTES];
 
@@ -92,9 +97,13 @@ astra_test_startup(void)
     astra_capability_name_set(fake_startup.capabilities[2].name,
                               ASTRA_CAPABILITY_LOG);
     fake_startup.capabilities[2].handle = FAKE_LOG_PORT;
-    fake_argv[0] = (uint32_t)(uintptr_t)fake_program;
+    fake_vectors.words[0] = (uint32_t)(uintptr_t)fake_vectors.text;
+    fake_vectors.words[1] = 0u;
+    memcpy(fake_vectors.text, fake_program, sizeof(fake_program));
     info->argc = 1u;
-    info->argv_address = (uint32_t)(uintptr_t)fake_argv;
+    info->argv_address = (uint32_t)(uintptr_t)fake_vectors.words;
+    info->vector_data_address = info->argv_address;
+    info->vector_data_size = sizeof(fake_vectors.words) + sizeof(fake_vectors.text);
     if (fake.startup_interpreted) {
         info->flags |= ASTRA_STARTUP_FLAG_INTERPRETED;
         /* Everything below the interpreter is the program's. */
@@ -293,6 +302,7 @@ static uint32_t mock_exec_request;
 static uint32_t mock_stream_closed_handle;
 static uint32_t mock_stream_dynamic;
 static uint32_t mock_stream_partial;
+static uint32_t mock_stream_long_segment;
 static uint32_t mock_thread_handle = 0x22222222u;
 static uint32_t mock_thread_rights;
 static void *mock_thread_start_copy;
@@ -494,6 +504,21 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         ++mock_stream_write_calls;
         result->value0 = 0u;
         result->value1 = 0u;
+        if (mock_stream_long_segment != 0u &&
+            argument1 >= MOCK_STREAM_FILE_OFFSET &&
+            argument1 < MOCK_STREAM_FILE_OFFSET + mock_stream_long_segment) {
+            uint32_t remaining = MOCK_STREAM_FILE_OFFSET +
+                mock_stream_long_segment - argument1;
+
+            assert(argument3 != 0u && argument3 <= remaining);
+            assert(argument3 == remaining ||
+                   argument3 % ASTRA_MEMORY_PAGE_SIZE == 0u);
+            if (argument3 < remaining) {
+                result->value0 = argument1 + argument3;
+                result->value1 = remaining - argument3;
+                result->value2 = ASTRA_PROCESS_LOAD_SOURCE_PROGRAM;
+            }
+        }
         if (mock_stream_partial != 0u && mock_stream_dynamic == 0u &&
             argument1 >= MOCK_STREAM_FILE_OFFSET &&
             argument1 + argument3 <
@@ -515,7 +540,8 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
     } else if (number == ASTRA_SYSCALL_PROCESS_LOAD_REPLACE) {
         ++mock_stream_replace_calls;
         result->value0 = MOCK_STREAM_FILE_OFFSET;
-        result->value1 = MOCK_STREAM_FILE_BYTES;
+        result->value1 = mock_stream_long_segment != 0u ?
+            mock_stream_long_segment : MOCK_STREAM_FILE_BYTES;
         result->value2 = ASTRA_PROCESS_LOAD_SOURCE_PROGRAM;
     } else if (number == ASTRA_SYSCALL_PROCESS_EXEC) {
         mock_exec_handle = argument0;
@@ -546,31 +572,104 @@ valid_startup(void)
 static void
 test_startup_contract(void)
 {
-    static const char *arguments[] = {"command", "value"};
+    static struct {
+        uint32_t words[2];
+        char text[8];
+    } payload = {.text = "command"};
     AstraStartupInfo startup = valid_startup();
 
     assert(astra_startup_validate(&startup));
     assert(!astra_startup_validate(NULL));
+    startup.capabilities_address = 1u;
+    assert(!astra_startup_validate(&startup));
+    startup = valid_startup();
+    startup.handoff_address = UINT32_MAX;
+    startup.handoff_size = 2u;
+    assert(!astra_startup_validate(&startup));
+    startup = valid_startup();
     startup.magic = 0u;
     assert(!astra_startup_validate(&startup));
     startup = valid_startup();
     startup.capability_count = ASTRA_STARTUP_CAPABILITY_MAX;
-    startup.capabilities_address = 1u;
+    startup.capabilities_address = (uint32_t)(uintptr_t)&startup + ASTRA_STARTUP_INFO_SIZE;
     startup.total_size = ASTRA_STARTUP_INFO_SIZE +
                          ASTRA_STARTUP_CAPABILITY_MAX *
                              ASTRA_STARTUP_CAPABILITY_SIZE;
     assert(startup.total_size <= ASTRA_STARTUP_BLOCK_SIZE);
     assert(astra_startup_validate(&startup));
+    ++startup.capabilities_address;
+    assert(!astra_startup_validate(&startup));
     startup = valid_startup();
     startup.capability_count = ASTRA_STARTUP_CAPABILITY_MAX + 1u;
     assert(!astra_startup_validate(&startup));
     startup = valid_startup();
     startup.argc = 1u;
     assert(!astra_startup_validate(&startup));
-    startup.argv_address = (uint32_t)(uintptr_t)arguments;
+    payload.words[0] = (uint32_t)(uintptr_t)payload.text;
+    payload.words[1] = 0u;
+    startup.argv_address = (uint32_t)(uintptr_t)payload.words;
+    startup.vector_data_address = startup.argv_address;
+    startup.vector_data_size = sizeof(payload);
     assert(astra_startup_validate(&startup));
-    assert(astra_startup_argument(&startup, 0u) == arguments[0]);
+    assert(astra_startup_argument(&startup, 0u) == payload.text);
     assert(astra_startup_argument(&startup, 1u) == NULL);
+    {
+        AstraStartupInfo malformed = startup;
+
+        malformed.abi_version = 7u;
+        assert(!astra_startup_validate(&malformed));
+        malformed = startup;
+        ++malformed.vector_data_address;
+        assert(!astra_startup_validate(&malformed));
+        malformed = startup;
+        --malformed.vector_data_size;
+        assert(!astra_startup_validate(&malformed));
+        malformed = startup;
+        malformed.vector_data_address =
+            (uint32_t)(uintptr_t)&malformed + 512u;
+        malformed.argv_address = malformed.vector_data_address;
+        assert(!astra_startup_validate(&malformed));
+        payload.words[0] = startup.vector_data_address + startup.vector_data_size;
+        assert(!astra_startup_validate(&startup));
+        payload.words[0] = (uint32_t)(uintptr_t)payload.text;
+        payload.words[1] = 1u;
+        assert(!astra_startup_validate(&startup));
+        payload.words[1] = 0u;
+        payload.text[0] = (char)0x80;
+        assert(!astra_startup_validate(&startup));
+        payload.text[0] = 'c';
+        malformed = startup;
+        malformed.capability_count = 1u;
+        malformed.total_size += ASTRA_STARTUP_CAPABILITY_SIZE;
+        malformed.capabilities_address = startup.vector_data_address;
+        assert(!astra_startup_validate(&malformed));
+        malformed = startup;
+        malformed.handoff_address = startup.vector_data_address;
+        malformed.handoff_size = 1u;
+        assert(!astra_startup_validate(&malformed));
+        malformed = startup;
+        malformed.handoff_address = UINT32_MAX;
+        malformed.handoff_size = 2u;
+        assert(!astra_startup_validate(&malformed));
+        assert(astra_startup_validate(&startup));
+    }
+    {
+        static struct {
+            uint32_t words[ASTRA_LAUNCH_ARGUMENT_MAX + 1u];
+            char text[ASTRA_LAUNCH_STRING_BYTES];
+        } empty;
+        AstraStartupInfo boundary = valid_startup();
+
+        for (uint32_t index = 0u; index < ASTRA_LAUNCH_ARGUMENT_MAX; ++index)
+            empty.words[index] = (uint32_t)(uintptr_t)&empty.text[index];
+        boundary.argc = ASTRA_LAUNCH_ARGUMENT_MAX;
+        boundary.argv_address = (uint32_t)(uintptr_t)empty.words;
+        boundary.vector_data_address = boundary.argv_address;
+        boundary.vector_data_size = sizeof(empty.words) + sizeof(empty.text);
+        assert(astra_startup_validate(&boundary));
+        ++boundary.argc;
+        assert(!astra_startup_validate(&boundary));
+    }
     startup.launch_source = ASTRA_LAUNCH_SOURCE_DESKTOP;
     assert(astra_startup_validate(&startup));
     assert(astra_startup_launch_source(&startup) ==
@@ -614,6 +713,11 @@ test_memory_primitives(void)
     assert(memmove(copy + 2, copy, 8u) == copy + 2);
     assert(copy[2] == 'x' && copy[5] == 'y');
     assert(strlen("astra") == 5u);
+    assert(memchr((const void *)(uintptr_t)1u, 0, 0u) == NULL);
+    assert(memchr(copy, 'y', 5u) == NULL);
+    assert(memchr(copy, 'y', sizeof(copy)) == copy + 5u);
+    assert(memchr(copy, 0x178, sizeof(copy)) == copy);
+    assert(memchr(copy, 'z', sizeof(copy)) == NULL);
 
     assert(strcmp("astra", "astra") == 0);
     assert(strcmp("astra", "astrb") < 0);
@@ -759,6 +863,7 @@ test_syscall_wrappers(void)
     uint32_t process;
     uint32_t thread;
     uint32_t calls;
+
     uint32_t span;
     uint32_t producer;
     uint32_t consumer;
@@ -1231,6 +1336,26 @@ static void test_launch(void)
     uint32_t calls;
 
     {
+        const char *empty[] = {"", ""};
+        char guarded[4] = {'L', 'a', 'b', 'R'};
+
+        assert(astra_launch_arguments_pack(
+            &arguments, guarded + 1u, 0u, ASTRA_LAUNCH_SOURCE_SHELL,
+            1u, empty) == ASTRA_SYSCALL_RESOURCE_LIMIT);
+        assert(guarded[1] == 'a' && guarded[0] == 'L' && guarded[3] == 'R');
+        assert(astra_launch_arguments_pack(
+            &arguments, guarded + 1u, 1u, ASTRA_LAUNCH_SOURCE_SHELL,
+            2u, empty) == ASTRA_SYSCALL_RESOURCE_LIMIT);
+        assert(guarded[1] == '\0' && guarded[2] == 'b' && guarded[3] == 'R');
+        assert(astra_launch_arguments_pack(
+            &arguments, guarded + 1u, 2u, ASTRA_LAUNCH_SOURCE_SHELL,
+            2u, empty) == ASTRA_SYSCALL_OK);
+        assert(arguments.count == 2u && arguments.length == 2u &&
+               guarded[1] == '\0' && guarded[2] == '\0' &&
+               guarded[0] == 'L' && guarded[3] == 'R');
+    }
+
+    {
         const char *many[40];
 
         for (uint32_t index = 0u; index < 40u; ++index)
@@ -1693,6 +1818,7 @@ typedef struct ExecutableLaunchReader {
     uint32_t calls;
     uint32_t maximum_length;
     uint32_t short_large;
+    uint32_t short_small;
 } ExecutableLaunchReader;
 
 typedef struct InterpreterResolver {
@@ -1718,13 +1844,18 @@ static uint32_t executable_launch_read(
     if (offset < sizeof(reader->header) &&
         length <= sizeof(reader->header) - offset)
         *bytes = reader->header + offset;
-    else if (length <= sizeof(reader->scratch))
+    else if (length <= sizeof(reader->scratch) ||
+             reader->short_large != 0u)
         *bytes = reader->scratch;
     else
         return ASTRA_SYSCALL_IO_ERROR;
-    *moved = length;
+    *moved = length > sizeof(reader->scratch) ?
+        (uint32_t)sizeof(reader->scratch) : length;
     if (reader->short_large != 0u && length > 4096u)
         --*moved;
+    if (reader->short_small != 0u &&
+        offset >= MOCK_STREAM_FILE_OFFSET && length > 1u)
+        *moved = (*moved + 1u) / 2u;
     return ASTRA_SYSCALL_OK;
 }
 
@@ -1878,6 +2009,7 @@ static void reset_exec_mocks(void)
     mock_stream_create_calls = 0u;
     mock_stream_commit_calls = 0u;
     mock_stream_partial = 0u;
+    mock_stream_long_segment = 0u;
     mock_stream_dynamic = 0u;
     mock_stream_closed_handle = 0u;
     mock_exec_handle = 0u;
@@ -1927,6 +2059,30 @@ static void test_executable_streamed_exec(void)
     assert(mock_exec_handle == MOCK_STREAM_LOAD_HANDLE);
     assert(mock_exec_request == (uint32_t)(uintptr_t)&request);
     assert(program.maximum_length <= ASTRA_EXECUTABLE_HEADER_SIZE);
+
+    /* A provider may stop below its bulk cap at a non-page boundary. Exec
+     * must feed the kernel complete intermediate pages and the final tail. */
+    executable_launch_fixture(&program, NULL);
+    program.short_large = 1u;
+    prepare.calls = 0u;
+    reset_exec_mocks();
+    mock_stream_long_segment = 2u * ASTRA_MEMORY_PAGE_SIZE + 17u;
+    assert(astra_exec_executable_stream(
+               &source, interpreter_open, &resolver, exec_prepare, &prepare,
+               &request) == ASTRA_SYSCALL_OK);
+    assert(program.releases == 1u && prepare.calls == 1u);
+    assert(program.maximum_length == mock_stream_long_segment);
+    assert(mock_stream_write_calls == 4u);
+
+    executable_launch_fixture(&program, NULL);
+    program.short_small = 1u;
+    prepare.calls = 0u;
+    reset_exec_mocks();
+    assert(astra_exec_executable_stream(
+               &source, interpreter_open, &resolver, exec_prepare, &prepare,
+               &request) == ASTRA_SYSCALL_OK);
+    assert(program.releases == 1u && prepare.calls == 1u);
+    assert(mock_stream_write_calls == 2u);
 
     executable_launch_fixture(&program, "loader.library.1");
     executable_launch_fixture(&interpreter, NULL);

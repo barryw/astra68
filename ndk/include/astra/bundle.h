@@ -54,8 +54,8 @@ typedef struct AstraBundleManifest {
     AstraBundleVersion version; /**< Bundle semantic version. */
     char id[ASTRA_BUNDLE_ID_MAX]; /**< Stable reverse-domain identifier. */
     char name[ASTRA_BUNDLE_NAME_MAX]; /**< Human-readable UTF-8 name. */
-    char executable[ASTRA_BUNDLE_PATH_MAX]; /**< Bundle-relative executable. */
-    char icon[ASTRA_BUNDLE_PATH_MAX]; /**< Bundle-relative AICON path. */
+    char *executable; /**< Owned bundle-relative executable, NULL when absent. */
+    char *icon; /**< Owned bundle-relative AICON path, NULL when absent. */
     AstraBundleLibrary *requirements; /**< Heap-owned required libraries. */
     AstraBundleLibrary *provides; /**< Heap-owned provided libraries. */
     char capabilities[ASTRA_BUNDLE_CAPABILITY_MAX]
@@ -93,7 +93,7 @@ enum {
 uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
                                      AstraBundleManifest *manifest,
                                      uint32_t *error_line);
-/** Release library arrays owned by a parsed manifest.
+/** Release paths and library arrays owned by a parsed manifest.
  * @param manifest Manifest to release; NULL is ignored.
  */
 void astra_bundle_manifest_destroy(AstraBundleManifest *manifest);

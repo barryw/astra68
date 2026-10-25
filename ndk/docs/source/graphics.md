@@ -36,13 +36,19 @@ post, such as {c:func}`astra_surface_write`, run after its commands.
 The frame carries its texture uploads too. Write the pixels straight into
 the display's staging area ({c:func}`astra_display_staging`), or copy them
 there with {c:func}`astra_display_stage`, and append
-{c:func}`astra_draw_upload`: it runs in order with the frame's draws, so
-nothing waits for the device and nothing is sent until the post. The rows
-belong to the service until the list is back -- changed again, or reset
-with {c:func}`astra_draw_list_reset`, after the post -- so a frame lays its
-uploads side by side and the next frame may reuse the area.
+{c:func}`astra_draw_upload`: it runs in order with the frame's draws and
+nothing is sent until the post. The service waits for attachment DMA before
+returning the list. Keep staging rows unchanged until the list is back --
+changed again, or reset with {c:func}`astra_draw_list_reset`, after the post.
 
 The screen is 1920x1080. A window's content is RGB565.
+
+Bundle icons use {c:func}`astra_surface_from_aicon` (Graphics library 3.0.0).
+Pass validated file bytes and an existing strike size (16, 32, or 64) to create
+an owned palette-backed INDEX8 source surface, then alpha-blit it at the
+required display size. Astraea expands and blends indices; the helper uploads
+indices and palette metadata through the protected display API. Close the
+returned surface when it is no longer needed.
 {c:func}`astra_display_layout_calculate` computes the exact crop and viewport
 the hardware scaler would use for a logical scene, without floating point.
 
@@ -67,6 +73,9 @@ read and written by the CPU. These are validation rights, not hints. The
 service chooses the pitch and reports it through
 {c:func}`astra_surface_get_info`. Draw targets are RGB565, XRGB8888,
 ARGB8888, or INDEX8 (INDEX8 takes no blending and no triangles).
+An INDEX8 source with its attached 256-entry palette may be blitted or used
+as a texture on a direct-color target. Palette updates use
+{c:func}`astra_surface_palette_write_staged` with ARGB bytes in display staging.
 
 ## The pointer
 

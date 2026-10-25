@@ -102,6 +102,10 @@ component; see the Layout section above.
 `astra/filesystem_kit.h` publishes the corresponding Filesystem Kit identity;
 its direct API provides high-level file/directory operations and the existing
 low-level VFS primitives without exposing storage-service internals.
+`astra/dos_library.h` exposes the Filesystem Kit's `dos.library` disk inventory
+and administration API. It shares exact selection and edit policy between
+Disk Setup and the native `disk` command; actual storage operations remain in
+`filesystem.library`.
 
 `astra/interface_kit.h` publishes the Interface Kit identity and direct API.
 Its controls, responsive layout, TextSurface, typed clipboard, and
@@ -163,7 +167,7 @@ link contract owned by the NDK and its OS-library implementations.
 - New hardware support lands with its public API, implementation, tests, and
   documentation in the same change.
 - Libraries are versioned by soname major and symbol versions (for example
-  `system.library.3` ABI 3.0, `runtime.library.1` ABI 1.10); a major bump
+  `system.library.4` ABI 4.0, `runtime.library.1` ABI 1.10); a major bump
   marks an incompatible change. A minor or patch bump is binary compatible.
 - Userspace is hard float: the MC68040 FPU, not a soft-float emulation
   library.

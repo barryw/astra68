@@ -1,0 +1,104 @@
+--- a/src/mkfs.fat.c
++++ b/src/mkfs.fat.c
+@@ -248,6 +248,8 @@
+ static int size_fat = 0;	/* Size in bits of FAT entries */
+ static int size_fat_by_user = 0;	/* 1 if FAT size user selected */
+ static int dev = -1;		/* FS block device file handle */
++static int astra_fd = -1;		/* Provider-verified exclusive descriptor. */
++static char astra_device_name[] = "inherited block device";
+ static off_t part_sector = 0; /* partition offset in sector */
+ static int ignore_safety_checks = 0;	/* Ignore safety checks */
+ static off_t currently_testing = 0;	/* Block currently being tested (if autodetect bad blocks) */
+@@ -1047,7 +1049,6 @@
+         uint8_t *disk_sig_ptr;
+         uint32_t disk_sig;
+         uint8_t buf[512];
+-        int fd;
+ 
+         if (verbose)
+             printf("Adding MBR table\n");
+@@ -1066,12 +1067,8 @@
+         memset(disk_sig_ptr, 0, 16*4 + 6);
+ 
+         /* Try to read existing 32 bit disk signature */
+-        fd = open(device_name, O_RDONLY);
+-        if (fd >= 0) {
+-            if (read(fd, buf, sizeof(buf)) == sizeof(buf) && buf[510] == 0x55 && buf[511] == 0xAA)
+-                disk_sig = (uint32_t)buf[440] | ((uint32_t)buf[441] << 8) | ((uint32_t)buf[442] << 16) | ((uint32_t)buf[443] << 24);
+-            close(fd);
+-        }
++        if (pread(dev, buf, sizeof(buf), 0) == sizeof(buf) && buf[510] == 0x55 && buf[511] == 0xAA)
++            disk_sig = (uint32_t)buf[440] | ((uint32_t)buf[441] << 8) | ((uint32_t)buf[442] << 16) | ((uint32_t)buf[443] << 24);
+ 
+         /* If is not available then generate random 32 bit disk signature */
+         if (invariant)
+@@ -1478,13 +1475,14 @@
+     struct timeval create_timeval;
+     long long conversion;
+ 
+-    enum {OPT_HELP=1000, OPT_INVARIANT, OPT_MBR, OPT_VARIANT, OPT_CODEPAGE, OPT_OFFSET};
++    enum {OPT_HELP=1000, OPT_INVARIANT, OPT_MBR, OPT_VARIANT, OPT_CODEPAGE, OPT_OFFSET, OPT_ASTRA_FD};
+     const struct option long_options[] = {
+ 	    {"codepage",  required_argument, NULL, OPT_CODEPAGE},
+ 	    {"invariant", no_argument,       NULL, OPT_INVARIANT},
+ 	    {"mbr",       optional_argument, NULL, OPT_MBR},
+ 	    {"variant",   required_argument, NULL, OPT_VARIANT},
+ 	    {"offset",    required_argument, NULL, OPT_OFFSET},
++	    {"astra-fd",  required_argument, NULL, OPT_ASTRA_FD},
+ 	    {"help",      no_argument,       NULL, OPT_HELP},
+ 	    {0,}
+     };
+@@ -1508,6 +1506,13 @@
+ 				    long_options, NULL)) != -1)
+ 	/* Scan the command line for options */
+ 	switch (c) {
++	case OPT_ASTRA_FD:
++	    errno = 0;
++	    conversion = strtol(optarg, &tmp, 10);
++	    if (!*optarg || *tmp || errno || conversion < 3 || conversion > INT_MAX)
++		die("invalid inherited descriptor");
++	    astra_fd = (int)conversion;
++	    break;
+ 	case 'A':		/* toggle Atari format */
+ 	    atari_format = !atari_format;
+ 	    break;
+@@ -1826,12 +1831,15 @@
+     if (!set_dos_codepage(-1))	/* set default codepage if none was given in command line */
+         exit(1);
+ 
+-    if (optind == argc || !argv[optind]) {
++    if (astra_fd < 0 && (optind == argc || !argv[optind])) {
+ 	printf("No device specified.\n");
+ 	usage(argv[0], 1);
+     }
+ 
+-    device_name = argv[optind++];
++    device_name = astra_fd >= 0 ? astra_device_name : argv[optind++];
++
++    if (astra_fd >= 0 && optind != argc)
++	die("inherited descriptor forbids device path and block count");
+ 
+     if (optind != argc) {
+ 	blocks_specified = 1;
+@@ -1854,11 +1862,20 @@
+ 
+     if (create && !blocks_specified)
+ 	die("Need intended size with -C.");
++    if (astra_fd >= 0 && create)
++	die("inherited descriptor cannot create a file");
+ 
+     if (check && listfile)	/* Auto and specified bad block handling are mutually */
+ 	die("-c and -l are incompatible");	/* exclusive of each other! */
+ 
+-    if (!create) {
++    if (astra_fd >= 0) {
++	struct stat info;
++	int mode = fcntl(astra_fd, F_GETFL);
++	if (fstat(astra_fd, &info) != 0 || !S_ISBLK(info.st_mode) ||
++	    mode < 0 || (mode & O_ACCMODE) != O_RDWR)
++	    die("inherited descriptor must be a writable block device");
++	dev = astra_fd;
++    } else if (!create) {
+ 	check_mount(device_name);	/* Is the device already mounted? */
+ 	dev = open(device_name, O_EXCL | O_RDWR);	/* Is it a suitable device to build the FS on? */
+ 	if (dev < 0) {

@@ -17,6 +17,7 @@
 
 #include <astra/message_abi.h>
 #include <astra/syscall.h>
+#include <astra/volume_abi.h>
 
 /** Native-big-endian `HACC` host device class, matched by device lookup. */
 #define ASTRA_DEVICE_CLASS_HOST UINT32_C(0x48414343) /* HACC */
@@ -24,21 +25,12 @@
 #define ASTRA_DEVICE_ID_HOST0   UINT32_C(0x48410001)
 /** Capability name under which the host device lease is granted. */
 #define ASTRA_CAPABILITY_HOST_DEVICE "HOST_DEVICE"
+/** The host device with ::ASTRA_RIGHT_HOST_SCOPE: the filesystem
+ * service's grant. Every other holder is granted HOST_DEVICE without it. */
+#define ASTRA_CAPABILITY_HOST_FILESYSTEM "HOST_FILESYSTEM"
 
-/** Host transport protocol revision 1.1, superseded by ::ASTRA_HOST_VERSION. */
-#define ASTRA_HOST_VERSION_1_1 UINT32_C(0x00010001)
-/** Host transport protocol revision 1.2, superseded by ::ASTRA_HOST_VERSION. */
-#define ASTRA_HOST_VERSION_1_2 UINT32_C(0x00010002)
-/** Host transport protocol revision 1.3, superseded by ::ASTRA_HOST_VERSION. */
-#define ASTRA_HOST_VERSION_1_3 UINT32_C(0x00010003)
-/** Host transport protocol revision 1.4, superseded by ::ASTRA_HOST_VERSION. */
-#define ASTRA_HOST_VERSION_1_4 UINT32_C(0x00010004)
-/** Host transport protocol revision 1.5, superseded by ::ASTRA_HOST_VERSION. */
-#define ASTRA_HOST_VERSION_1_5 UINT32_C(0x00010005)
-/** Host transport protocol revision 1.8, superseded by ::ASTRA_HOST_VERSION. */
-#define ASTRA_HOST_VERSION_1_8 UINT32_C(0x00010008)
 /** Current host transport protocol version, as reported by HOST_QUERY. */
-#define ASTRA_HOST_VERSION     UINT32_C(0x0001000c)
+#define ASTRA_HOST_VERSION     UINT32_C(0x00030000)
 /** The host exposes the filesystem service. */
 #define ASTRA_HOST_CAP_FILESYSTEM (1u << 0)
 /** Filesystem commands are scoped to the submitting process's authenticated owner. */
@@ -60,6 +52,36 @@
 /** Set in ::AstraHostLeaseInfo.capabilities when the host plays application
  * audio streams (%audio_stream.h, ::ASTRA_SYSCALL_AUDIO_STREAM_OPEN). */
 #define ASTRA_HOST_CAP_AUDIO_STREAM (1u << 9)
+/** Host channels may be bound to filesystem scopes
+ * (::ASTRA_SYSCALL_HOST_SCOPE_CREATE). On a bound channel the provider
+ * runs only filesystem commands, each through one scope the kernel
+ * attached: beneath its root, with its rights. */
+#define ASTRA_HOST_CAP_FS_SCOPE (1u << 10)
+/** Filesystem commands use ::ASTRA_HOST_COMMAND_VERSION: one claimed owner, rooted
+ * sessions, path operands in the data span and the AstraHostNode record. */
+#define ASTRA_HOST_CAP_FS_SESSIONS (1u << 11)
+/** Ordered dot and symlink resolution, with rooted namespace continuations. */
+#define ASTRA_HOST_CAP_FS_RESOLVES (1u << 12)
+/** Provider-owned position, status flags and shared open descriptions. */
+#define ASTRA_HOST_CAP_FS_DESCRIPTIONS (1u << 13)
+/** READDIR returns a bounded packed batch under one description lock. */
+#define ASTRA_HOST_CAP_FS_DIRECTORY_BATCH (1u << 14)
+/** Report the current confined path of a retained directory. */
+#define ASTRA_HOST_CAP_FS_PATHS (1u << 15)
+/** Public volume metadata does not confer a rooted file or control grant. */
+#define ASTRA_HOST_CAP_VOLUME_CATALOG (1u << 16)
+/** Host converts a bounded outline source into validated AFNT for Fonts. */
+#define ASTRA_HOST_CAP_FONT_CONVERT (1u << 17)
+/** Channel configuration: the scope words name a scope. Kernel-written. */
+#define ASTRA_HOST_SCOPE_BOUND     (1u << 0)
+/** The scope refuses every mutation (ASTRA_STATUS_READ_ONLY). */
+#define ASTRA_HOST_SCOPE_READ_ONLY (1u << 1)
+/** Kept by the kernel, never sent to the provider: the scope may be handed
+ * on, so it arrives with ::ASTRA_RIGHT_TRANSFER. Without it a scope
+ * arrives without TRANSFER: its holder may use it and fork with it. */
+#define ASTRA_HOST_SCOPE_DELEGATE  (1u << 2)
+/** Scopes one host channel carries at most. */
+#define ASTRA_HOST_CHANNEL_SCOPE_MAX 8u
 /** Set in ::AstraHostLeaseInfo.state_flags once the host lease is ready for commands. */
 #define ASTRA_HOST_STATE_READY    (1u << 0)
 
@@ -73,59 +95,164 @@
 #define ASTRA_HOST_SERVICE_ENTROPY UINT16_C(4)
 /** AstraHostCommand::service selecting the audio service. */
 #define ASTRA_HOST_SERVICE_AUDIO UINT16_C(5)
-/** Maximum bytes, including the terminating NUL, of one filesystem path. */
-#define ASTRA_HOST_FS_PATH_MAX 192u
-
-/** Filesystem operations carried in AstraHostCommand::operation when
- * AstraHostCommand::service is ::ASTRA_HOST_SERVICE_FILESYSTEM.
- */
+/** Native volume metadata and lifecycle transport. */
+#define ASTRA_HOST_SERVICE_VOLUMES UINT16_C(6)
+/** Private conversion transport for the resident Fonts service. */
+#define ASTRA_HOST_SERVICE_FONTS UINT16_C(7)
+/** One source per channel. BEGIN carries source size in value_lo, name and
+ * license byte lengths in offset_lo/offset_hi, and concatenated text in data.
+ * DATA carries source bytes at offset_lo; CONVERT takes face index in value_lo
+ * and answers AFNT size in result_value and collection face count in value_hi.
+ * READ returns AFNT bytes at offset_lo; CLOSE discards all session state. */
 enum {
-    ASTRA_HOST_FS_OPEN = 1u,        /**< Open a path, returning a host file handle. */
-    ASTRA_HOST_FS_CLOSE,            /**< Close a previously opened host file handle. */
-    ASTRA_HOST_FS_READ,             /**< Read bytes at AstraHostCommand::offset_hi/offset_lo. */
-    ASTRA_HOST_FS_WRITE,            /**< Write bytes at AstraHostCommand::offset_hi/offset_lo. */
-    ASTRA_HOST_FS_SYNC,             /**< Flush a host file handle's buffered data. */
-    ASTRA_HOST_FS_TRUNCATE,         /**< Set a host file handle's length. */
-    ASTRA_HOST_FS_STAT,             /**< Stat a path; results fill the command's stat fields. */
-    ASTRA_HOST_FS_READDIR,          /**< Read directory entries from a host file handle. */
-    ASTRA_HOST_FS_MKDIR,            /**< Create a directory at a path. */
-    ASTRA_HOST_FS_UNLINK,           /**< Remove a path. */
-    ASTRA_HOST_FS_RENAME,           /**< Rename AstraHostCommand::path to path2. */
-    ASTRA_HOST_FS_CHMOD,            /**< Change a path's permission bits. */
-    ASTRA_HOST_FS_READLINK,         /**< Read a symbolic link's target. */
-    ASTRA_HOST_FS_SYMLINK,          /**< Create a symbolic link from path to path2. */
-    ASTRA_HOST_FS_LINK,             /**< Create a hard link from path to path2. */
-    ASTRA_HOST_FS_OPEN_AT,          /**< Open a path relative to a directory handle. */
-    ASTRA_HOST_FS_UNLINK_AT,        /**< Remove a path relative to a directory handle. */
-    ASTRA_HOST_FS_CHMOD_FILE,       /**< Change an open host file handle's permission bits. */
-    ASTRA_HOST_FS_CHMOD_AT,         /**< Change a path's permission bits, relative to a directory handle. */
-    ASTRA_HOST_FS_FILESYSTEM_INFO,  /**< Fetch an ::AstraHostFilesystemInfo for the volume. */
-    ASTRA_HOST_FS_STAT_AT,          /**< Stat a path relative to a directory handle. */
-    ASTRA_HOST_FS_STAT_FILE         /**< Stat an open host file handle. */
+    ASTRA_HOST_FONT_BEGIN = 1u,
+    ASTRA_HOST_FONT_DATA,
+    ASTRA_HOST_FONT_CONVERT,
+    ASTRA_HOST_FONT_READ,
+    ASTRA_HOST_FONT_CLOSE
+};
+/** Query a coherent AstraVolumeCatalogPage using an AstraVolumeCatalogQuery. */
+#define ASTRA_HOST_VOLUME_CATALOG UINT16_C(1)
+/** Submit a typed AstraHostVolumeControl through the claimed provider. */
+#define ASTRA_HOST_VOLUME_CONTROL UINT16_C(2)
+/** Query a coherent AstraVolumeUsagePage using an AstraVolumeUsageQuery. */
+#define ASTRA_HOST_VOLUME_USAGE UINT16_C(3)
+/** Claimed-provider-only notification that canonical native control-session
+ * holders changed. All operands and payload lengths are zero. It advances the
+ * same usage mutation sequence as description/session changes. */
+#define ASTRA_HOST_VOLUME_HOLDERS_CHANGED UINT16_C(4)
+/** Provider-only exact physical-source format or prior-generation status. */
+#define ASTRA_HOST_VOLUME_FORMAT UINT16_C(5)
+/** Start provider format. */
+#define ASTRA_HOST_VOLUME_FORMAT_START UINT32_C(1)
+/** Query provider format status. */
+#define ASTRA_HOST_VOLUME_FORMAT_STATUS UINT32_C(2)
+/** Provider-only exact physical-device partition-map edit or status. */
+#define ASTRA_HOST_VOLUME_PARTITION UINT16_C(6)
+/** Start provider disk-map edit. */
+#define ASTRA_HOST_VOLUME_PARTITION_START UINT32_C(1)
+/** Query provider disk-map edit status. */
+#define ASTRA_HOST_VOLUME_PARTITION_STATUS UINT32_C(2)
+/** Provider-only lifecycle request. requester is kernel-stamped by HostFS's
+ * receive endpoint, never accepted from an application payload. */
+typedef struct AstraHostVolumeControl {
+    AstraVolumeControl control; /**< Exact incarnation, operation and resource limits. */
+    uint32_t requester; /**< Kernel-authenticated native requesting process. */
+    uint32_t reserved; /**< Zero. */
+} AstraHostVolumeControl;
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraHostVolumeControl) == 64u, "host volume control ABI");
+typedef struct AstraHostVolumeFormat {
+    AstraVolumeReference source;
+    uint32_t operation;
+    uint32_t format;
+    char label[12];
+    uint32_t requester;
+    uint32_t reserved;
+    uint32_t reserved2;
+} AstraHostVolumeFormat;
+_Static_assert(sizeof(AstraHostVolumeFormat) == 56u, "host volume format ABI");
+typedef struct AstraHostVolumePartition {
+    AstraVolumeReference device;
+    uint32_t mode;
+    uint32_t requester;
+    AstraVolumePartitionEdit edit;
+    uint32_t reserved[2];
+} AstraHostVolumePartition;
+_Static_assert(sizeof(AstraHostVolumePartition) == 72u, "host volume partition ABI");
+/** @endcond */
+/** Every SESSION_OPEN supplies this typed provider-only payload. Parent
+ * sessions use a zero reference; requester is authenticated by HostFS IPC. */
+typedef struct AstraHostSessionOpen {
+    AstraVolumeReference volume; /**< Exact root mount; zero when deriving from a session. */
+    uint32_t requester; /**< Kernel-authenticated native requesting process. */
+    uint32_t reserved; /**< Zero. */
+} AstraHostSessionOpen;
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraHostSessionOpen) == 32u, "host session open ABI");
+/** @endcond */
+/** Bytes of the largest path buffer, terminator included: a path operand
+ * on the wire is at most ASTRA_HOST_FS_PATH_MAX - 1 bytes, unterminated. */
+#define ASTRA_HOST_FS_PATH_MAX 4096u
+
+/** Filesystem operations, AstraHostCommand::operation when service is
+ * ::ASTRA_HOST_SERVICE_FILESYSTEM. Every path operation resolves its
+ * `path` beneath `handle`, an open directory, or beneath the session root
+ * when `handle` is 0; with `handle` 0 the path is absolute ("/" names the
+ * root), otherwise relative. */
+enum {
+    ASTRA_HOST_FS_OPEN = 1u,        /**< Open a path; `handle` answers the new handle. */
+    ASTRA_HOST_FS_CLOSE,            /**< Close `handle`. */
+    ASTRA_HOST_FS_READ,             /**< Read `handle` at offset_hi/offset_lo. */
+    ASTRA_HOST_FS_WRITE,            /**< Write at offset or append; value is exclusive maximum on input, resulting position on output. */
+    ASTRA_HOST_FS_SYNC,             /**< fsync(2) `handle`. */
+    ASTRA_HOST_FS_TRUNCATE,         /**< Set `handle`'s length to value_hi/value_lo. */
+    ASTRA_HOST_FS_STAT,             /**< No-follow metadata of a path, or of `handle` itself when the path is empty. */
+    ASTRA_HOST_FS_READDIR,          /**< Packed native dirents: value_lo bounds entries, result_length bytes, value answers next cookie. */
+    ASTRA_HOST_FS_MKDIR,            /**< Create a directory; value_lo is its mode. */
+    ASTRA_HOST_FS_UNLINK,           /**< Remove a path; ASTRA_HOST_FS_UNLINK_* in flags. */
+    ASTRA_HOST_FS_RENAME,           /**< Rename `path` (beneath `handle`) to `path2` (beneath directory handle value_lo). */
+    ASTRA_HOST_FS_CHMOD,            /**< Change a path's mode, or `handle`'s when the path is empty. */
+    ASTRA_HOST_FS_READLINK,         /**< Read a symbolic link's stored target into the data span. */
+    ASTRA_HOST_FS_SYMLINK,          /**< Create `path2` (beneath `handle`) holding the literal target `path`. */
+    ASTRA_HOST_FS_LINK,             /**< Hard-link `path` (beneath `handle`) as `path2` (beneath value_lo). */
+    ASTRA_HOST_FS_FILESYSTEM_INFO,  /**< ::AstraHostFilesystemInfo for a path or `handle`. */
+    ASTRA_HOST_FS_SESSION_OPEN,     /**< Open a rooted session; result_value answers its id. */
+    ASTRA_HOST_FS_SESSION_CLOSE,    /**< Close `session`. */
+    ASTRA_HOST_FS_CLAIM,            /**< Bind the filesystem service to the submitting owner, or release it. */
+    ASTRA_HOST_FS_SEEK,             /**< Signed offset, flags 0/1/2: begin/current/end; value answers position. */
+    ASTRA_HOST_FS_SHARE,            /**< Retain handle's description; value answers a one-use token. */
+    ASTRA_HOST_FS_ADOPT,            /**< Consume offset's token in this session; handle answers the new handle. */
+    ASTRA_HOST_FS_FILE_FLAGS,       /**< flags masks mutable status, value_lo supplies it; value_lo answers open flags. */
+    ASTRA_HOST_FS_PATH              /**< Current directory path beneath the session root, or NOT_FOUND when unnamed. */
 };
 /** Highest valid ASTRA_HOST_FS_* operation code. */
-#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_STAT_FILE
+#define ASTRA_HOST_FS_MAX ASTRA_HOST_FS_PATH
 
-/** HostFS volumes: one host directory, a subdirectory per volume. A path
- * resolves beneath its own volume's directory and never reaches another.
- */
-enum {
-    ASTRA_HOST_FS_VOLUME_WORK = 0u, /**< The general-purpose working volume. */
-    ASTRA_HOST_FS_VOLUME_SOUND,     /**< The volume holding shared SoundFonts. */
-    ASTRA_HOST_FS_VOLUME_COUNT      /**< Count of defined HostFS volumes. */
-};
-
-/** Flag carried in the command header's flags field, in addition to
- * ASTRA_VFS_OPEN_*: open the file for append rather than at offset zero.
- */
-#define ASTRA_HOST_FS_WRITE_APPEND (1u << 15)
+/** A root SESSION_OPEN carries an exact AstraVolumeReference in its input
+ * payload. Derived sessions carry no target payload and inherit their parent.
+ * The catalog supplies identity; it never supplies data authority. */
+/** WRITE flag: append at end of file, atomically, for this write. */
+#define ASTRA_HOST_FS_WRITE_APPEND      (1u << 15)
+/** READ/WRITE at the shared position; value answers the position after. */
+#define ASTRA_HOST_FS_IO_SEQUENTIAL     (1u << 14)
+/** ADOPT withdraws an unclaimed token; only its sharer may withdraw. */
+#define ASTRA_HOST_FS_ADOPT_DISCARD     (1u << 0)
+/** UNLINK flag: remove an empty directory; zero flags require a non-directory. */
+#define ASTRA_HOST_FS_UNLINK_DIRECTORY  (1u << 0)
+/** SESSION_OPEN flag: every mutation in the session is refused
+ * (ASTRA_STATUS_READ_ONLY); a session derived from a read-only one must
+ * carry it too. */
+#define ASTRA_HOST_FS_SESSION_READ_ONLY (1u << 0)
+/** STAT flag: follow the final symbolic link. */
+#define ASTRA_HOST_FS_STAT_FOLLOW (1u << 0)
+/** STAT flag: permit a missing final leaf, returning zero node metadata. */
+#define ASTRA_HOST_FS_STAT_MISSING (1u << 1)
+/** STAT flag: offset_lo carries the remaining link budget; value_hi answers
+ * the links followed. Without this flag the provider uses its 40-link limit. */
+#define ASTRA_HOST_FS_STAT_BUDGET (1u << 2)
+/** Resolve the final directory entry without following it, even with '/'. */
+#define ASTRA_HOST_FS_STAT_ENTRY (1u << 3)
+/** ESCAPED result: a parent component left the session root. */
+#define ASTRA_HOST_FS_ESCAPE_PARENT 1u
+/** ESCAPED result: a symbolic link left the session root. */
+#define ASTRA_HOST_FS_ESCAPE_SYMLINK 2u
+/** ESCAPED replies put the original byte position in result_value, the
+ * reason in value_lo, links followed in value_hi, and the complete absolute
+ * Astra namespace continuation in data (result_length bytes, no NUL).
+ * No outside host path is followed. SESSION_OPEN refuses escapes with ACCESS;
+ * RENAME and LINK refuse them with CROSS_DEVICE. */
+/** CLAIM flag: release the claim and close every session and handle of
+ * the owner. CLAIM is honoured only on a channel the kernel opened with
+ * ASTRA_HOST_CHANNEL_PROVIDER; anywhere else it answers ACCESS. */
+#define ASTRA_HOST_FS_CLAIM_RELEASE     (1u << 0)
 
 /** AstraHostCommand::operation: fetch an ::AstraHostMetricsSnapshot into the
  * command's data span; the metrics service's only operation.
  */
 #define ASTRA_HOST_METRICS_SNAPSHOT UINT16_C(1)
 /** Wire-format version the host stamps into AstraHostMetricsSnapshot::version. */
-#define ASTRA_HOST_METRICS_VERSION UINT16_C(2)
+#define ASTRA_HOST_METRICS_VERSION UINT16_C(5)
 
 /** AstraHostCommand::operation: connect to the remote-desktop session
  * (idempotent if already connected) and receive its next queued event.
@@ -326,14 +453,16 @@ enum {
         /**< Count of defined metric indices. */
 };
 
+/** Fixed byte size of ::AstraHostMetricsSnapshot for this version. */
+#define ASTRA_HOST_METRICS_SNAPSHOT_SIZE \
+    (16u + 8u * (uint32_t)ASTRA_HOST_METRIC_COUNT)
+
 /** One metric's value, as a 64-bit integer split into two big-endian halves. */
 typedef struct AstraHostMetricValue {
     uint32_t hi; /**< Upper 32 bits of the value. */
     uint32_t lo; /**< Lower 32 bits of the value. */
 } AstraHostMetricValue;
 
-/** Fixed byte size of ::AstraHostMetricsSnapshot. */
-#define ASTRA_HOST_METRICS_SNAPSHOT_SIZE 480u
 /** Snapshot of every metric, as returned by ASTRA_HOST_METRICS_SNAPSHOT. */
 typedef struct AstraHostMetricsSnapshot {
     _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size; /**< ::ASTRA_HOST_METRICS_SNAPSHOT_SIZE. */
@@ -409,8 +538,65 @@ astra_host_metric_set(AstraHostMetricsSnapshot *snapshot, uint32_t metric,
     snapshot->values[metric].lo = (uint32_t)value;
 }
 
+/** Seconds since the epoch, split, and nanoseconds within the second. */
+typedef struct AstraHostTime {
+    int32_t seconds_hi;     /**< Signed seconds, upper 32 bits. */
+    uint32_t seconds_lo;    /**< Seconds, lower 32 bits. */
+    uint32_t nanoseconds;   /**< 0..999999999. */
+} AstraHostTime;
+
+/** AstraHostNode::valid bits: which fields the provider filled. A field
+ * whose bit is clear is unknown, never zero-by-default. */
+enum {
+    ASTRA_HOST_NODE_TYPE = 1u << 0,
+    ASTRA_HOST_NODE_MODE = 1u << 1,
+    ASTRA_HOST_NODE_NLINK = 1u << 2,
+    ASTRA_HOST_NODE_UID = 1u << 3,
+    ASTRA_HOST_NODE_GID = 1u << 4,
+    ASTRA_HOST_NODE_SIZE = 1u << 5,
+    ASTRA_HOST_NODE_BLOCKS = 1u << 6,
+    ASTRA_HOST_NODE_ATIME = 1u << 7,
+    ASTRA_HOST_NODE_MTIME = 1u << 8,
+    ASTRA_HOST_NODE_CTIME = 1u << 9,
+    ASTRA_HOST_NODE_BTIME = 1u << 10,
+    ASTRA_HOST_NODE_INODE = 1u << 11,
+    ASTRA_HOST_NODE_DEVICE = 1u << 12,
+    ASTRA_HOST_NODE_MOUNT = 1u << 13,
+    ASTRA_HOST_NODE_BLOCK_SIZE = 1u << 14
+};
+
+/** One node's metadata, as statx(2) reports it (docs/FILESYSTEM_PRODUCTION_PRD.md FS22). */
+typedef struct AstraHostNode {
+    uint32_t valid;         /**< ASTRA_HOST_NODE_* bits. */
+    uint16_t kind;          /**< ASTRA_VFS_KIND_*. */
+    uint16_t mode;          /**< st_mode: type and permission bits. */
+    uint32_t nlink;         /**< Hard links. */
+    uint32_t uid;           /**< Owning user. */
+    uint32_t gid;           /**< Owning group. */
+    uint32_t block_size;    /**< Preferred I/O size. */
+    uint32_t device_hi;     /**< Native volume identity, upper 32 bits. */
+    uint32_t device_lo;     /**< Native volume identity, lower 32 bits. */
+    uint32_t inode_hi;      /**< Inode number, upper 32 bits. */
+    uint32_t inode_lo;      /**< Inode number, lower 32 bits. */
+    uint32_t size_hi;       /**< Bytes, upper 32 bits. */
+    uint32_t size_lo;       /**< Bytes, lower 32 bits. */
+    uint32_t blocks_hi;     /**< 512-byte blocks allocated, upper 32 bits. */
+    uint32_t blocks_lo;     /**< 512-byte blocks allocated, lower 32 bits. */
+    uint32_t mount_hi;      /**< Native mount identity, upper 32 bits. */
+    uint32_t mount_lo;      /**< Native mount identity, lower 32 bits. */
+    AstraHostTime atime;    /**< Last access. */
+    AstraHostTime mtime;    /**< Last modification. */
+    AstraHostTime ctime;    /**< Last status change. */
+    AstraHostTime btime;    /**< Creation: tells a reused inode number apart. */
+} AstraHostNode;
+
+/** @cond ASTRA_INTERNAL */
+_Static_assert(sizeof(AstraHostTime) == 12u, "host time ABI changed");
+_Static_assert(sizeof(AstraHostNode) == 112u, "host node ABI changed");
+/** @endcond */
+
 /** Wire-format version of ::AstraHostCommand. */
-#define ASTRA_HOST_COMMAND_VERSION 2u
+#define ASTRA_HOST_COMMAND_VERSION 6u
 /** Fixed byte size of ::AstraHostCommand. */
 #define ASTRA_HOST_COMMAND_SIZE 512u
 
@@ -418,8 +604,10 @@ astra_host_metric_set(AstraHostMetricsSnapshot *snapshot, uint32_t metric,
  * One host command, shared by every host service (filesystem, metrics,
  * remote desktop, entropy, audio); AstraHostCommand::service and
  * AstraHostCommand::operation select which service and operation interpret
- * the rest. Paths match the VFS wire limit exactly; data follows the command
- * array inside the same DMA buffer. Split 64-bit values keep the layout
+ * the rest. Paths are not fields of the record: a filesystem command's path
+ * operands are length-counted bytes in the data span (path_offset), so the
+ * record caps no path; data follows the command array inside the same DMA
+ * buffer. Split 64-bit values keep the layout
  * identical on MC68040, Linux and a future RTL engine.
  */
 typedef struct AstraHostCommand {
@@ -440,22 +628,18 @@ typedef struct AstraHostCommand {
     uint32_t data_capacity;/**< Maximum output bytes the host may write at data_offset. */
     uint32_t result_length;/**< Output bytes the host actually wrote. */
     uint32_t result_value; /**< Operation-specific scalar result. */
-    /** Filesystem commands: the volume, ASTRA_HOST_FS_VOLUME_*. Every other
-     * service: zero. */
-    uint32_t volume;
-    uint32_t node_size_hi;  /**< File size in bytes, upper 32 bits (STAT/STAT_AT/STAT_FILE). */
-    uint32_t node_size_lo;  /**< File size in bytes, lower 32 bits (STAT/STAT_AT/STAT_FILE). */
-    uint32_t mtime_hi;      /**< Modification time, upper 32 bits (STAT/STAT_AT/STAT_FILE). */
-    uint32_t mtime_lo;      /**< Modification time, lower 32 bits (STAT/STAT_AT/STAT_FILE). */
-    uint32_t uid;           /**< File owner user id (STAT/STAT_AT/STAT_FILE). */
-    uint32_t gid;           /**< File owner group id (STAT/STAT_AT/STAT_FILE). */
-    uint16_t kind;          /**< ASTRA_VFS_KIND_* file type (STAT/STAT_AT/STAT_FILE). */
-    uint16_t mode;          /**< Host stat mode bits (STAT/STAT_AT/STAT_FILE). */
-    uint16_t nlink;         /**< Hard link count (STAT/STAT_AT/STAT_FILE). */
-    uint16_t reserved1;     /**< Reserved; zero. */
-    char path[ASTRA_HOST_FS_PATH_MAX];  /**< NUL-terminated path operated on. */
-    char path2[ASTRA_HOST_FS_PATH_MAX]; /**< NUL-terminated second path (RENAME/SYMLINK/LINK target). */
-    uint32_t reserved[8];   /**< Reserved; zero. */
+    /** Filesystem: the session the operation acts in (0 only for CLAIM
+     * and a root SESSION_OPEN). Every other service: zero. */
+    uint32_t session;
+    /** Filesystem: DMA-buffer offset of the path operands -- path_length
+     * bytes of `path` then path2_length bytes of `path2`, unterminated;
+     * zero when both are empty. Every other service: zero. */
+    uint32_t path_offset;
+    uint16_t path_length;   /**< Bytes of the first path operand. */
+    uint16_t path2_length;  /**< Bytes of the second path operand. */
+    /** Filesystem: metadata answered by OPEN, STAT and READDIR. */
+    AstraHostNode node;
+    uint32_t reserved[82];  /**< Reserved; zero. */
 } AstraHostCommand;
 
 /** @cond ASTRA_INTERNAL */
@@ -473,7 +657,8 @@ typedef struct AstraHostLeaseInfo {
     uint32_t host_generation;/**< Current host generation. */
     uint32_t maximum_transfer; /**< Largest byte_size HOST_EXECUTE or HOST_CHANNEL_OPEN accepts. */
     uint32_t maximum_commands; /**< Largest command_count or command_capacity accepted. */
-    uint32_t reserved[2];    /**< Reserved; zero. */
+    uint32_t scope;          /**< HOST_QUERY on a scope: the provider word it binds; 0 on a device. */
+    uint32_t scope_flags;    /**< HOST_QUERY on a scope: ::ASTRA_HOST_SCOPE_READ_ONLY or 0. */
 } AstraHostLeaseInfo;
 
 /** Fixed byte size of ::AstraHostTransportRequest. */
@@ -615,10 +800,21 @@ _Static_assert(sizeof(AstraHostChannelOpen) == ASTRA_HOST_CHANNEL_OPEN_SIZE,
  * inside the kernel's platform layer; never constructed by user code.
  */
 /** @cond ASTRA_INTERNAL */
-#define ASTRA_HOST_CHANNEL_CONFIG_VERSION 1u
-#define ASTRA_HOST_CHANNEL_CONFIG_SIZE 64u
+/* Version 5: OPEN carries the native PID separately from resource ownership. */
+#define ASTRA_HOST_CHANNEL_CONFIG_VERSION 5u
+#define ASTRA_HOST_CHANNEL_CONFIG_SIZE 68u
 #define ASTRA_HOST_CHANNEL_CONFIG_OPEN  1u
 #define ASTRA_HOST_CHANNEL_CONFIG_CLOSE 2u
+/** Bind one more scope to an open bound channel. */
+#define ASTRA_HOST_CHANNEL_CONFIG_ATTACH 3u
+/** Unbind a scope (revocation): a command naming it that has not started
+ * is refused from the moment this configuration write returns. */
+#define ASTRA_HOST_CHANNEL_CONFIG_DETACH 4u
+/** scope_flags of an unbound OPEN: the opener's device handle carries
+ * ASTRA_RIGHT_HOST_SCOPE (the filesystem service's grant). Only such a
+ * channel may claim the filesystem (ASTRA_HOST_FS_CLAIM): the kernel, not
+ * the command, says who the provider is. */
+#define ASTRA_HOST_CHANNEL_PROVIDER (1u << 3)
 typedef struct AstraHostChannelConfig {
     _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
     uint16_t version;
@@ -630,7 +826,12 @@ typedef struct AstraHostChannelConfig {
     uint32_t physical_buffer;
     uint32_t byte_size;
     uint32_t command_capacity;
-    uint32_t reserved[7];
+    uint32_t scope;        /**< OPEN (bound), ATTACH, DETACH: the scope's provider word. */
+    uint32_t scope_flags;  /**< ASTRA_HOST_SCOPE_BOUND | READ_ONLY; an unbound OPEN 0 or ASTRA_HOST_CHANNEL_PROVIDER; 0 for CLOSE and DETACH. */
+    uint32_t scope_owner;  /**< OPEN (bound), ATTACH: owner of the process that created the scope. */
+    uint32_t scope_files;  /**< Per-owner handles and shares in this scope; zero for unlimited. */
+    uint32_t process;      /**< OPEN: kernel-authenticated native PID, independent of owner; zero for other operations. */
+    uint32_t reserved[3];  /**< Zero. */
 } AstraHostChannelConfig;
 
 _Static_assert(sizeof(AstraHostChannelConfig) ==

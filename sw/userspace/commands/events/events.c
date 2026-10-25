@@ -196,7 +196,7 @@ main(int argc, char **argv)
         "input", "display"
     };
     const AstraStartupCapability *capability;
-    char path[ASTRA_VFS_PATH_MAX];
+    char *path;
     char activity[9];
     const char *level = "notice";
     const char *subsystem = NULL;
@@ -344,14 +344,18 @@ main(int argc, char **argv)
         return (int)status;
     }
 
-    if (!events_build_path(path, sizeof(path), by_activity, activity,
+    path = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
+    if (path == NULL) { say("events: out of memory"); return close_with(ASTRA_STATUS_LIMIT); }
+    if (!events_build_path(path, ASTRA_VFS_PATH_MAX, by_activity, activity,
                            subsystem, level, previous_boot)) {
         say("events: requested view path is too long");
-        return close_with(ASTRA_STATUS_INVALID);
+        astra_runtime_deallocate(path);
+        return close_with(ASTRA_STATUS_NAME_TOO_LONG);
     }
 
     status = astra_filesystem_open(
         &process_filesystem.filesystem, path, ASTRA_VFS_OPEN_READ, &file);
+    astra_runtime_deallocate(path);
     if (status != ASTRA_VFS_OK) {
         say(previous_boot ? "events: no previous boot is stored" :
                             "events: no such view");

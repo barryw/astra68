@@ -5,6 +5,7 @@
 
 #include <astra/bytes.h>
 #include <astra/area.h>
+#include <astra/fonts.h>
 #include <astra/bundle.h>
 #include <astra/clipboard_service.h>
 #include <astra/event_control.h>
@@ -62,6 +63,7 @@ typedef struct WindowTerminal {
     AstraTextGridSelection selection;
     AstraClipboardItem paste;
     AstraHandle clipboard;
+    AstraHandle gui;
     const uint8_t *paste_text;
     uint32_t paste_length;
     uint32_t paste_offset;
@@ -98,7 +100,7 @@ static uint32_t load_title_icon(AstraArea *area, uint32_t *length)
     AstraAicon icon;
     char *bundle_manifest_text = NULL;
     void *icon_bytes = NULL;
-    char path[ASTRA_VFS_PATH_MAX];
+    char *path;
     uint32_t manifest_length = 0u;
     uint32_t line = 0u;
     uint32_t status;
@@ -119,8 +121,15 @@ static uint32_t load_title_icon(AstraArea *area, uint32_t *length)
         return TERMINAL_FAIL_ICON;
     }
     astra_runtime_deallocate(bundle_manifest_text);
+    path = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
+    if (path == NULL) {
+        astra_bundle_manifest_destroy(&manifest);
+        (void)astra_log("Terminal icon path allocation failed");
+        return ASTRA_STATUS_LIMIT;
+    }
     if (astra_path_qualify(
-            "APP", "", manifest.icon, path, sizeof(path)) != ASTRA_VFS_OK) {
+            "APP", "", manifest.icon, path, ASTRA_VFS_PATH_MAX) != ASTRA_VFS_OK) {
+        astra_runtime_deallocate(path);
         astra_bundle_manifest_destroy(&manifest);
         (void)astra_log("Terminal icon path failed");
         return TERMINAL_FAIL_ICON;
@@ -128,6 +137,7 @@ static uint32_t load_title_icon(AstraArea *area, uint32_t *length)
     astra_bundle_manifest_destroy(&manifest);
     status = astra_process_read_file_alloc(
         &process_filesystem, path, &icon_bytes, length);
+    astra_runtime_deallocate(path);
     if (status != ASTRA_VFS_OK || *length == 0u ||
         *length > ASTRA_WINDOW_TITLE_ICON_BYTES_MAX ||
         astra_aicon_open(icon_bytes, *length, &icon) != ASTRA_BUNDLE_OK) {
@@ -678,6 +688,13 @@ static int window_next_key(void *context, uint32_t *key)
             (void)console_session_request_close();
             continue;
         }
+        if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
+            AstraResult refreshed = astra_fonts_use_system(window->gui, &event);
+            if (refreshed != ASTRA_OK)
+                (void)astra_log_failure("terminal UI font refresh", (uint32_t)refreshed);
+            window->force_present = 1u;
+            continue;
+        }
         if (event.type == ASTRA_WINDOW_EVENT_RESIZE) {
             uint16_t width = (uint16_t)event.data.resize.width;
             uint16_t height = (uint16_t)event.data.resize.height;
@@ -834,6 +851,8 @@ int astra_main(const AstraStartupInfo *startup)
         clipboard == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
 
+    if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
+        return TERMINAL_FAIL_FONT;
     status = astra_process_filesystem_open(&process_filesystem, startup);
     if (status == ASTRA_STATUS_OK)
         status = load_title_icon(&title_icon, &title_icon_length);
@@ -846,6 +865,7 @@ int astra_main(const AstraStartupInfo *startup)
         (AstraTextGridSelection)ASTRA_TEXT_GRID_SELECTION_INIT;
     window_terminal.paste = (AstraClipboardItem)ASTRA_CLIPBOARD_ITEM_INIT;
     window_terminal.clipboard = clipboard->handle;
+    window_terminal.gui = gui->handle;
     window_terminal.width = 840u;
     window_terminal.height = 460u;
     window_terminal.cell_width = ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH;

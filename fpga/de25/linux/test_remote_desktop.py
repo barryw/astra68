@@ -203,7 +203,7 @@ def main():
                                 type=int)
     pointer_action.add_argument("--double-click", nargs=2,
                                 metavar=("X", "Y"), type=int)
-    parser.add_argument("--qmp", default="/run/astra/qmp.sock")
+    parser.add_argument("--qmp", default="/run/astra/qemu/qmp.sock")
     arguments = parser.parse_args()
     if arguments.verify_rfb_pointer and arguments.pointer is None:
         parser.error("--verify-rfb-pointer requires --pointer")

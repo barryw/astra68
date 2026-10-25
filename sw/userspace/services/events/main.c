@@ -244,7 +244,7 @@ snapshot_write(SnapshotFile *snapshot, const void *buffer, uint32_t length)
         uint32_t moved = 0u;
 
         if (astra_filesystem_write_at(
-                &snapshot->file, done, in + done, length - done, &moved) !=
+                &snapshot->file, done, UINT64_MAX, in + done, length - done, &moved) !=
                 ASTRA_VFS_OK || moved == 0u) {
             return 0;
         }
@@ -473,7 +473,7 @@ log_append(void *context, const char *name, const void *bytes,
     while (done < length) {
         uint32_t moved = 0u;
 
-        if (astra_filesystem_write(&file, in + done, length - done,
+        if (astra_filesystem_write(&file, UINT64_MAX, in + done, length - done,
                                    &moved) != ASTRA_VFS_OK || moved == 0u)
             break;
         done += moved;
@@ -704,7 +704,7 @@ log_state_save(void)
     while (done < length) {
         uint32_t moved = 0u;
 
-        if (astra_filesystem_write(&file, log_state_bytes + done,
+        if (astra_filesystem_write(&file, UINT64_MAX, log_state_bytes + done,
                                    length - done, &moved) != ASTRA_VFS_OK ||
             moved == 0u)
             break;
@@ -1139,14 +1139,14 @@ events_start(const AstraStartupInfo *startup)
         return EVENTS_FAIL_BACKEND;
     }
     {
-        void *file_storage = NULL;
+        static AstraArea file_storage = ASTRA_AREA_INIT;
         uint32_t file_capacity = 0u;
 
         if (!astra_vfs_port_quota_storage(sizeof(AstraVfsOpenFile),
                                            &file_storage, &file_capacity) ||
             !astra_vfs_service_init(
                 &service, astra_events_backend_ops(), &backend,
-                service_sessions, ASTRA_VFS_SESSION_MAX, file_storage,
+                service_sessions, ASTRA_VFS_SESSION_MAX, file_storage.address,
                 file_capacity)) {
             return EVENTS_FAIL_SERVICE;
         }
@@ -1158,7 +1158,7 @@ events_start(const AstraStartupInfo *startup)
      */
     if (astra_rt_port_create(EVENTS_PORT_MESSAGES,
                           EVENTS_PORT_MESSAGES *
-                          (uint32_t)sizeof(AstraVfsRenameRequestMessage),
+                          (uint32_t)sizeof(AstraVfsRequestMessage),
                           &events_receive, &events_handle) !=
         ASTRA_SYSCALL_OK) {
         return EVENTS_FAIL_PORT;

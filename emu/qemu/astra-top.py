@@ -187,7 +187,7 @@ def drive_pointer(hz, stop, sent):
     """QMP absolute motion in a circle, the way pointer-smooth measured it."""
     with socket.socket(socket.AF_UNIX) as qmp:
         qmp.settimeout(10)
-        qmp.connect("/run/astra/qmp.sock")
+        qmp.connect("/run/astra/qemu/qmp.sock")
         stream = qmp.makefile("rwb", buffering=0)
 
         def reply():

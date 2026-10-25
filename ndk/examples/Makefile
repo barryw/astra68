@@ -9,9 +9,9 @@ include $(ASTRA_NDK_ROOT)/make/astra-native.mk
 
 comma := ,
 STREAMS := -Wl,-l:streams.library.1
-SYSTEM := -Wl,-l:system.library.3
-INTERFACE := -Wl,-l:interface.library.5
-PCM := -Wl,-l:pcm.library.2
+SYSTEM := -Wl,-l:system.library.4
+INTERFACE := -Wl,-l:interface.library.7
+PCM := -Wl,-l:pcm.library.3
 
 hello_LIBS := $(STREAMS)
 timer_LIBS := $(STREAMS)
@@ -20,11 +20,13 @@ bulk_ring_LIBS := $(STREAMS) $(SYSTEM)
 undo_LIBS := $(STREAMS) $(INTERFACE)
 text_field_LIBS := $(STREAMS) $(INTERFACE)
 text_clipboard_LIBS := $(STREAMS) $(SYSTEM) $(INTERFACE)
+interface_menu_LIBS := $(STREAMS) $(SYSTEM) $(INTERFACE)
 interface_controls_LIBS := $(STREAMS) $(INTERFACE)
 interface_tabs_LIBS := $(STREAMS) $(INTERFACE)
 interface_scroll_LIBS := $(STREAMS) $(INTERFACE)
 interface_splitter_LIBS := $(STREAMS) $(INTERFACE)
 interface_disclosure_LIBS := $(STREAMS) $(INTERFACE)
+settings_pane_LIBS := $(STREAMS) $(INTERFACE)
 pcm_tone_LIBS := $(STREAMS) $(PCM)
 midi_notes_LIBS := $(STREAMS) $(PCM)
 

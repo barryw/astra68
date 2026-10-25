@@ -497,6 +497,8 @@ static int ASTRA_CreateWindow(_THIS, SDL_Window *window)
         return SDL_OutOfMemory();
     data->display = (AstraDisplay)ASTRA_DISPLAY_INIT;
     data->content = (AstraSurface)ASTRA_SURFACE_INIT;
+    data->indexed_framebuffer = (AstraSurface)ASTRA_SURFACE_INIT;
+    data->framebuffer_list = (AstraDrawList)ASTRA_DRAW_LIST_INIT;
     /* A surface window's shared area is only its first staging area; the
        display replaces it when a framebuffer or texture upload needs one. */
     result = astra_area_create(4096u,
@@ -541,6 +543,22 @@ static int ASTRA_CreateWindow(_THIS, SDL_Window *window)
     return 0;
 }
 
+static void ASTRA_CloseFramebuffer(ASTRA_WindowData *data)
+{
+    if (data->framebuffer_list._private_handle != ASTRA_INVALID_HANDLE)
+        ASTRA_Ignore(astra_draw_list_close(&data->framebuffer_list));
+    if (data->indexed_framebuffer._private_handle != ASTRA_INVALID_HANDLE)
+        ASTRA_Ignore(astra_surface_close(&data->indexed_framebuffer));
+    if (data->content._private_handle != ASTRA_INVALID_HANDLE)
+        ASTRA_Ignore(astra_surface_close(&data->content));
+    data->framebuffer = NULL;
+    data->framebuffer_pitch = 0u;
+    data->framebuffer_format = 0u;
+    data->palette_offset = 0u;
+    data->palette_ready = 0u;
+    data->palette_identity = NULL;
+}
+
 static void ASTRA_DestroyWindow(_THIS, SDL_Window *window)
 {
     ASTRA_WindowData *data = window->driverdata;
@@ -551,8 +569,7 @@ static void ASTRA_DestroyWindow(_THIS, SDL_Window *window)
         return;
     if (ASTRA_captured == window)
         ASTRA_captured = NULL;
-    if (data->content._private_handle != ASTRA_INVALID_HANDLE)
-        ASTRA_Ignore(astra_surface_close(&data->content));
+    ASTRA_CloseFramebuffer(data);
     ASTRA_Ignore(astra_display_close(&data->display));
     result = astra_window_close(&data->native);
     if (result != ASTRA_OK)
@@ -593,30 +610,105 @@ static int ASTRA_CreateWindowFramebuffer(_THIS, SDL_Window *window,
 {
     ASTRA_WindowData *data = window->driverdata;
     uint32_t bytes = 0u;
+    uint32_t required;
+    uint32_t surface_format;
+    uint64_t pixel_bytes;
     void *staging = NULL;
+    AstraSurfaceCreateInfo create = ASTRA_SURFACE_CREATE_INFO_INIT;
+    AstraRectI32 whole;
     AstraResult result;
 
     (void)_this;
     if (data == NULL || window->w <= 0 || window->h <= 0)
         return SDL_SetError("Astra window has no surface");
-    /* SDL recreates the framebuffer after a resize: refresh the content
-       surface so writes are checked against the current size. */
-    if (data->content._private_handle != ASTRA_INVALID_HANDLE)
-        ASTRA_Ignore(astra_surface_close(&data->content));
+    /* SDL_SetWindowDisplayMode(INDEX8) selects indexed window storage using
+       a standard SDL call; existing windows default to RGB565. */
+    surface_format = window->fullscreen_mode.format ==
+                     SDL_PIXELFORMAT_INDEX8 ? SDL_PIXELFORMAT_INDEX8 :
+                                              SDL_PIXELFORMAT_RGB565;
+    pixel_bytes = (uint64_t)(uint32_t)window->w * (uint32_t)window->h *
+                  (surface_format == SDL_PIXELFORMAT_INDEX8 ? 1u : 2u);
+    if (pixel_bytes > UINT32_MAX - 1027u)
+        return SDL_SetError("Astra framebuffer is too large");
+    required = (uint32_t)pixel_bytes;
+    if (surface_format == SDL_PIXELFORMAT_INDEX8)
+        required = ((required + 3u) & ~UINT32_C(3)) + 1024u;
+    ASTRA_CloseFramebuffer(data);
     result = astra_window_surface(&data->native, &data->content);
     if (result == ASTRA_OK)
-        result = astra_display_staging(
-            &data->display, (uint32_t)window->w * (uint32_t)window->h * 2u,
-            &staging, &bytes);
-    if (result != ASTRA_OK)
+        result = astra_display_staging(&data->display, required,
+                                       &staging, &bytes);
+    if (result != ASTRA_OK) {
+        ASTRA_CloseFramebuffer(data);
         return SDL_SetError("Astra framebuffer allocation failed (%d)",
                             result);
+    }
+    if (surface_format == SDL_PIXELFORMAT_INDEX8) {
+        create.width = (uint16_t)window->w;
+        create.height = (uint16_t)window->h;
+        create.format = ASTRA_PIXEL_FORMAT_INDEX8;
+        create.flags = ASTRA_SURFACE_DRAW_SOURCE |
+                       ASTRA_SURFACE_CPU_WRITE;
+        result = astra_surface_create(&data->display, &create,
+                                      &data->indexed_framebuffer);
+        whole = (AstraRectI32){ 0, 0, (uint32_t)window->w,
+                                (uint32_t)window->h };
+        if (result == ASTRA_OK)
+            result = astra_draw_list_create(&data->content, &whole,
+                                            &data->framebuffer_list);
+        if (result != ASTRA_OK) {
+            ASTRA_CloseFramebuffer(data);
+            return SDL_SetError("Astra indexed framebuffer failed (%d)",
+                                result);
+        }
+        data->palette_offset = ((uint32_t)pixel_bytes + 3u) & ~UINT32_C(3);
+    }
     data->framebuffer = staging;
-    data->framebuffer_pitch = (uint32_t)window->w * 2u;
-    *format = SDL_PIXELFORMAT_RGB565;
+    data->framebuffer_pitch = (uint32_t)window->w *
+        (surface_format == SDL_PIXELFORMAT_INDEX8 ? 1u : 2u);
+    data->framebuffer_format = surface_format;
+    *format = surface_format;
     *pixels = staging;
     *pitch = (int)data->framebuffer_pitch;
     return 0;
+}
+
+/* Palette entries are metadata; Astraea expands indices into destination
+   pixels. SDL_Palette::version changes through SDL_SetPaletteColors. */
+static int ASTRA_UpdateFramebufferPalette(ASTRA_WindowData *data,
+                                           const SDL_Window *window)
+{
+    const SDL_Palette *palette = window->surface != NULL &&
+                                 window->surface->format != NULL ?
+                                     window->surface->format->palette : NULL;
+    uint8_t *entries;
+    AstraResult result;
+
+    if (palette == NULL || palette->ncolors < 0 ||
+        palette->ncolors > 256 ||
+        (palette->ncolors != 0 && palette->colors == NULL))
+        return SDL_SetError("Astra indexed surface has no valid palette");
+    if (data->palette_ready && data->palette_identity == palette &&
+        data->palette_version == palette->version)
+        return 0;
+    entries = data->framebuffer + data->palette_offset;
+    for (uint32_t at = 0u; at < 256u; ++at) {
+        SDL_Color color = at < (uint32_t)palette->ncolors ?
+            palette->colors[at] : (SDL_Color){0};
+
+        entries[at * 4u] = color.a;
+        entries[at * 4u + 1u] = color.r;
+        entries[at * 4u + 2u] = color.g;
+        entries[at * 4u + 3u] = color.b;
+    }
+    result = astra_surface_palette_write_staged(
+        &data->indexed_framebuffer, 0u, 256u, data->palette_offset);
+    if (result != ASTRA_OK)
+        return SDL_SetError("Astra palette update failed (%d)", result);
+    data->palette_identity = palette;
+    data->palette_version = palette->version;
+    data->palette_ready = 1u;
+    return 1;
 }
 
 static int ASTRA_UpdateWindowFramebuffer(_THIS, SDL_Window *window,
@@ -629,7 +721,10 @@ static int ASTRA_UpdateWindowFramebuffer(_THIS, SDL_Window *window,
     int top = height;
     int right = 0;
     int bottom = 0;
+    int dirty;
+    int palette_changed = 0;
     AstraRectI32 rect;
+    AstraRectI32 upload_rect;
     AstraWindowFrame damage;
     AstraResult result;
 
@@ -653,10 +748,47 @@ static int ASTRA_UpdateWindowFramebuffer(_THIS, SDL_Window *window,
         right = SDL_max(right, x1);
         bottom = SDL_max(bottom, y1);
     }
-    if (left >= right || top >= bottom)
+    dirty = left < right && top < bottom;
+    if (data->framebuffer_format == SDL_PIXELFORMAT_INDEX8) {
+        palette_changed = ASTRA_UpdateFramebufferPalette(data, window);
+        if (palette_changed < 0)
+            return -1;
+    }
+    if (!dirty && !palette_changed)
         return 0;
+    upload_rect = dirty ?
+        (AstraRectI32){ left, top, (uint32_t)(right - left),
+                         (uint32_t)(bottom - top) } :
+        (AstraRectI32){0};
+    if (palette_changed) {
+        left = 0;
+        top = 0;
+        right = width;
+        bottom = height;
+    }
     rect = (AstraRectI32){ left, top, (uint32_t)(right - left),
                            (uint32_t)(bottom - top) };
+    if (data->framebuffer_format == SDL_PIXELFORMAT_INDEX8) {
+        result = astra_draw_list_reset(&data->framebuffer_list);
+        if (result == ASTRA_OK && dirty)
+            result = astra_draw_upload(
+                &data->framebuffer_list, &data->indexed_framebuffer,
+                &upload_rect,
+                (uint32_t)upload_rect.y * data->framebuffer_pitch +
+                    (uint32_t)upload_rect.x, data->framebuffer_pitch);
+        if (result == ASTRA_OK)
+            result = astra_draw_list_set_clip(&data->framebuffer_list,
+                                              &rect);
+        if (result == ASTRA_OK)
+            result = astra_draw_blit(&data->framebuffer_list,
+                                     &data->indexed_framebuffer,
+                                     &rect, &rect, NULL);
+        if (result == ASTRA_OK)
+            result = astra_draw_post(&data->framebuffer_list,
+                                     ASTRA_DRAW_POST_PRESENT);
+        return result == ASTRA_OK ? 0 :
+            SDL_SetError("Astra indexed present failed (%d)", result);
+    }
     result = astra_surface_write_staged(
         &data->content, &rect,
         (uint32_t)top * data->framebuffer_pitch + (uint32_t)left * 2u,
@@ -861,6 +993,8 @@ static SDL_VideoDevice *ASTRA_CreateDevice(void)
     device->DestroyWindow = ASTRA_DestroyWindow;
     device->ShowWindow = ASTRA_ShowWindow;
     device->HideWindow = ASTRA_HideWindow;
+    /* Keep SDL_GetWindowSurface on this driver's native framebuffer path. */
+    device->checked_texture_framebuffer = SDL_TRUE;
     device->CreateWindowFramebuffer = ASTRA_CreateWindowFramebuffer;
     device->UpdateWindowFramebuffer = ASTRA_UpdateWindowFramebuffer;
     device->SetWindowTitle = ASTRA_SetWindowTitle;
@@ -875,7 +1009,7 @@ static SDL_VideoDevice *ASTRA_CreateDevice(void)
 }
 
 VideoBootStrap ASTRA_bootstrap = {
-    "astra", "Astra native window and RGB565 video", ASTRA_CreateDevice, NULL
+    "astra", "Astra native window and indexed/RGB565 video", ASTRA_CreateDevice, NULL
 };
 
 #endif

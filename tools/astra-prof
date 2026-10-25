@@ -684,8 +684,8 @@ def command_de25_boot(args):
         if mode in ("command", "latency") else 0
     required = [qemu, rom, storage, kernel, rom_elf,
                 str(root / "tools/astra-prof-de25-boot.sh"),
-                str(root / "tools/measure-terminal-text.py"),
-                str(root / "tools/qemu-perf-wrapper.sh")]
+                str(root / "emu/qemu/fs-baseline.py"),
+                str(root / "tools/measure-terminal-text.py")]
     if profiling:
         required.append(plugin)
     if mode in ("command", "latency"):
@@ -694,13 +694,14 @@ def command_de25_boot(args):
     if missing:
         raise RuntimeError("missing artifact: " + ", ".join(missing))
 
-    remote = f"/var/tmp/astra-prof-{os.getpid()}"
     board = args.board
-    run_checked(["ssh", board, "mkdir", "-p", remote])
+    remote = run_checked(["ssh", board, "mktemp", "-d",
+                          "/var/tmp/astra-prof.XXXXXX"],
+                         text=True, capture_output=True).stdout.strip()
     filenames = [qemu, rom, storage,
                  str(root / "tools/astra-prof-de25-boot.sh"),
-                 str(root / "tools/measure-terminal-text.py"),
-                 str(root / "tools/qemu-perf-wrapper.sh")]
+                 str(root / "emu/qemu/fs-baseline.py"),
+                 str(root / "tools/measure-terminal-text.py")]
     if profiling:
         filenames.append(plugin)
     try:
@@ -729,7 +730,7 @@ def command_de25_boot(args):
         print(f"astra-prof: physical capture done in "
               f"{time.monotonic() - started:.1f}s",
               file=sys.stderr, flush=True)
-        artifacts = ["console.log", "metadata.txt", "trace.bin"]
+        artifacts = ["console.log", "runner.log", "metadata.txt", "trace.bin"]
         if profiling:
             artifacts.append("profile.aprof")
         if args.host_perf:

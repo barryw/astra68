@@ -23,13 +23,14 @@ say(const char *text)
 
 static int remove_name(AstraProcessFilesystem *filesystem, const char *name)
 {
-    char typed[ASTRA_VFS_PATH_MAX];
+    char *typed = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
     const char *text;
     uint32_t status;
 
-    status = astra_process_path(name, typed, sizeof(typed));
+    status = typed == NULL ? ASTRA_VFS_ERR_LIMIT : astra_process_path(name, typed, ASTRA_VFS_PATH_MAX);
     if (status == ASTRA_VFS_OK)
-        status = astra_filesystem_unlink(&filesystem->filesystem, typed);
+        status = astra_filesystem_unlink(&filesystem->filesystem, typed, 0u);
+    astra_runtime_deallocate(typed);
     if (status == ASTRA_VFS_OK)
         return 0;
     text = astra_vfs_status_text(status);
