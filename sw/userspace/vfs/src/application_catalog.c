@@ -140,34 +140,47 @@ void astra_application_catalog_destroy(AstraApplicationCatalog *catalog)
     *catalog = (AstraApplicationCatalog)ASTRA_APPLICATION_CATALOG_INIT;
 }
 
+static uint32_t bundle_manifest_text(AstraProcessFilesystem *filesystem,
+                                     const char *bundle, char **text,
+                                     uint32_t *length)
+{
+    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *path = astra_vfs_path_storage_at(&paths, 0u);
+    if (filesystem == NULL || bundle == NULL || bundle[0] != '/' ||
+        text == NULL || length == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    if (paths.bytes == NULL) return ASTRA_VFS_ERR_LIMIT;
+    if (!join(path, ASTRA_VFS_PATH_MAX, bundle, "/manifest", ""))
+        return ASTRA_VFS_ERR_INVALID;
+    return astra_process_read_file_alloc(filesystem, path,
+                                         (void **)text, length);
+}
+
+static uint32_t bundle_parse_status(uint32_t parsed)
+{
+    return parsed == ASTRA_BUNDLE_OK ? ASTRA_VFS_OK :
+           parsed == ASTRA_BUNDLE_LIMIT ? ASTRA_VFS_ERR_LIMIT :
+           ASTRA_VFS_ERR_INVALID;
+}
+
 uint32_t astra_application_supports_type(AstraProcessFilesystem *filesystem,
                                          const char *bundle,
                                          const char *content_type,
                                          uint32_t *supports)
 {
-    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE =
-        astra_vfs_path_storage_open(1u);
-    char *path = astra_vfs_path_storage_at(&paths, 0u);
     char *text = NULL;
     uint32_t length = 0u;
     uint32_t result;
-
-    if (supports == NULL || filesystem == NULL || bundle == NULL ||
-        content_type == NULL || bundle[0] != '/')
+    if (supports == NULL || content_type == NULL)
         return ASTRA_VFS_ERR_INVALID;
     *supports = 0u;
-    if (paths.bytes == NULL) return ASTRA_VFS_ERR_LIMIT;
-    if (!join(path, ASTRA_VFS_PATH_MAX, bundle, "/manifest", ""))
-        return ASTRA_VFS_ERR_INVALID;
-    result = astra_process_read_file_alloc(filesystem, path,
-                                           (void **)&text, &length);
+    result = bundle_manifest_text(filesystem, bundle, &text, &length);
     if (result != ASTRA_VFS_OK) return result;
     uint32_t parsed = astra_bundle_manifest_handles(text, length,
                                                      content_type, supports);
     astra_runtime_deallocate(text);
-    return parsed == ASTRA_BUNDLE_OK ? ASTRA_VFS_OK :
-           parsed == ASTRA_BUNDLE_LIMIT ? ASTRA_VFS_ERR_LIMIT :
-           ASTRA_VFS_ERR_INVALID;
+    return bundle_parse_status(parsed);
 }
 
 uint32_t astra_application_catalog_handlers(
@@ -191,6 +204,40 @@ uint32_t astra_application_catalog_handlers(
     }
     *count = found;
     return found > capacity ? ASTRA_VFS_ERR_LIMIT : ASTRA_VFS_OK;
+}
+
+uint32_t astra_application_catalog_extension_type(
+    AstraProcessFilesystem *filesystem, const AstraApplicationCatalog *catalog,
+    const char *extension, char *type, uint32_t capacity)
+{
+    int conflict = 0;
+    if (filesystem == NULL || catalog == NULL || extension == NULL ||
+        type == NULL || capacity == 0u || extension[0] != '.')
+        return ASTRA_VFS_ERR_INVALID;
+    type[0] = '\0';
+    for (uint32_t at = 0u; at < catalog->count; ++at) {
+        char *text = NULL;
+        char hint[ASTRA_BUNDLE_CONTENT_TYPE_MAX] = {0};
+        uint32_t length = 0u;
+        uint32_t result = bundle_manifest_text(filesystem,
+            catalog->entries[at].bundle, &text, &length);
+        if (result == ASTRA_VFS_ERR_LIMIT) return result;
+        if (result != ASTRA_VFS_OK) continue;
+        uint32_t parsed = astra_bundle_manifest_extension_type(text, length,
+            extension, hint, sizeof(hint));
+        astra_runtime_deallocate(text);
+        if (parsed == ASTRA_BUNDLE_LIMIT) return ASTRA_VFS_ERR_LIMIT;
+        if (parsed != ASTRA_BUNDLE_OK || hint[0] == '\0') continue;
+        if (conflict) continue;
+        if (type[0] != '\0' && strcmp(type, hint) != 0) {
+            type[0] = '\0';
+            conflict = 1;
+        } else if (!astra_string_copy(type, capacity, hint)) {
+            type[0] = '\0';
+            return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
+        }
+    }
+    return ASTRA_VFS_OK;
 }
 
 uint32_t astra_application_catalog_load(AstraProcessFilesystem *filesystem,

@@ -80,6 +80,18 @@ uint32_t astra_application_catalog_handlers(
     const char *content_type, uint32_t *indices, uint32_t capacity,
     uint32_t *count);
 
+/** Resolve one filename extension from current bundle manifests. If bundles
+ * disagree on its content type, output stays empty rather than picking an app.
+ * @param filesystem Open process filesystem.
+ * @param catalog Installed application snapshot.
+ * @param extension Lowercase ASCII extension including its leading dot.
+ * @param type Receives MIME-style type or empty string.
+ * @param capacity Bytes available in type.
+ * @return ASTRA_VFS_OK or a VFS status. */
+uint32_t astra_application_catalog_extension_type(
+    AstraProcessFilesystem *filesystem, const AstraApplicationCatalog *catalog,
+    const char *extension, char *type, uint32_t capacity);
+
 /** Release a catalog's storage and reset it to empty.
  * @param catalog Catalog to release; NULL is ignored.
  */

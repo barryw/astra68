@@ -1,13 +1,14 @@
 # File types and document opening
 
-Status: first native slice implemented. Filesystem Kit identifies bounded
-Z-machine and Blorb headers, with `.apkg` as an extension hint. Application
-manifests declare `handles` types; Open With discovers live bundles, offers a
-shared chooser, and stores type defaults with Config Kit. Atlas sends file
-double-clicks to Open With. VFS typed attributes and general format sniffer
-registration are still missing; content identity is derived on every open.
-Application-declared extension hints and per-file preferred applications are
-also design contracts below, not implemented behavior.
+Status: native content identification and application-declared extension hints
+implemented. Filesystem Kit identifies bounded Z-machine and Blorb headers,
+uses `.apkg` as a built-in hint, then consults installed application bundle
+`handles MIME-TYPE .extension` declarations if content remains unknown. Open
+With discovers live bundles, offers a shared chooser, and stores type defaults
+with Config Kit. Atlas sends file double-clicks to Open With. VFS typed
+attributes, general format sniffer registration, and per-file preferred
+applications remain design contracts below; content identity is derived on
+every open.
 
 ## Identity and ownership
 
@@ -20,9 +21,10 @@ preferred application does not change the content type or global default.
 
 Filesystem Kit provides one content-type query for every mounted backend.
 Atlas and other clients never examine bytes or filename suffixes to identify
-content. Resolution order is: explicit validated file attribute; bounded
-content recognition; extension hint only when content cannot identify the
-format; unknown. A hint is not silently written as a trusted attribute. A
+content. Current resolution order is bounded content recognition, built-in
+`.apkg` hint, application-declared extension hint, then unknown. Once typed
+attributes exist, explicit validated file attributes will precede content
+recognition. A hint is not silently written as a trusted attribute. A
 recognizer consumes one open file handle and has fixed read/CPU limits.
 
 Future writable backends with typed attributes persist `system.content_type` on the
@@ -36,7 +38,7 @@ an explicit type remains under user control until Identify is requested.
 ## Application discovery and preferences
 
 An application bundle declares stable types it can open and optional extension
-hints. A content-type definition may include declarative, bounded recognition
+hints. A future File Types revision may add declarative, bounded recognition
 rules. Copying a bundle into `APPS:` makes declarations discoverable; removal
 removes them. An APKG install uses the same discovery path. No installation
 script writes a global handler table and no application may seize a user's
@@ -56,6 +58,13 @@ the type default. For an unknown type, the dialog offers Open once; it does
 not assign one application to every unknown file. Per-file preference, when
 available, is a separate explicit action. Atlas calls the shared resolver and
 dialog; it contains no format-specific rules.
+
+When AstraZ is built, its application bundle should declare
+`handles application/x-zmachine-story` for `.z3`, `.z4`, `.z5`, `.z6`, and
+`.z8`, plus `handles application/x-blorb .blorb`. Filesystem Kit identifies
+valid story headers even after renaming; extension declarations let unknown
+bytes reach AstraZ for its own validation. The bundle ID becomes the stable
+target of a user default. See `docs/BUNDLE_FORMAT.md` for manifest syntax.
 
 ## Gates
 
@@ -89,3 +98,18 @@ that error. Selected RFB evidence is archived on Beast at
 `/var/tmp/astra-file-types-evidence-20261027/`. Known-type automatic launch,
 saved-default persistence, removable-volume opening, and the gates above remain
 to be certified on DE25.
+
+Extension-hint gate, 2026-10-27: synthetic AstraZ manifests declare `.z3`,
+`.z4`, `.z5`, `.z6`, `.z8`, and `.blorb`. Beast tests verify case-insensitive
+filename matching, content over hint, bundle removal, conflicting bundle
+declarations, and rejection of conflicting declarations in one manifest.
+This allows AstraZ to register its file types when its bundle exists; AstraZ
+is not installed yet. DE25 opened a real valid Z3 story from temporary WORK
+through native Open With. It showed `No installed application handles this
+file type.` with no file-identification or launch error. Trial exposed a
+missing `WORK:r` grant in both bundle and supervisor launch ceiling; both are
+fixed. Selected screenshot is archived on Beast at
+`/var/tmp/astra-file-types-extension-evidence-20261027/de25-z3-openwith.png`.
+Board trial story and RFB captures were removed after archiving; all three
+Astra services remained active with 8.3 GiB free. AstraZ launch and its saved
+default remain untested until AstraZ exists.

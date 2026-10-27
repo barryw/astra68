@@ -140,7 +140,7 @@ system-library-contract: $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(SYSTEM_MAP) $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^system.library.4 4.3.0 ABI 4.3$$'
+		grep -q '^system.library.4 4.4.0 ABI 4.4$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [system.library.4]'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1

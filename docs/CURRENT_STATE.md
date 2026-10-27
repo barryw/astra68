@@ -2,20 +2,22 @@
 
 Status: active continuation map, 2026-10-27
 
-File types, 2026-10-27: first Haiku-style native slice is installed on DE25.
-Filesystem Kit 15.3 identifies bounded Z-machine and Blorb content and uses an
-`.apkg` extension hint; application manifests declare handled MIME types.
-`OpenWith.app` resolves installed handlers and Config Kit defaults, and Atlas
-routes file double-clicks to it. DE25 opened an unknown `/dh0` file into the
-shared chooser with no preselection and disabled Open; Cancel returned to Atlas
-without an error after the app's service-ready handshake was fixed. Beast
-bundle, catalog, file-type, development-installer, and NDK dist checks passed.
-Board services remained active, root had 8.3 GiB free, and temporary RFB
-captures were removed after archiving selected evidence at
-`/var/tmp/astra-file-types-evidence-20261027/` on Beast. This is not yet a full
-file-type system: VFS typed attributes, generic content-rule registration,
-application-declared extension hints, and end-to-end known-type/default tests
-remain open. See `docs/FILE_TYPES.md`.
+File types, 2026-10-27: Haiku-style native slice is installed on DE25.
+Filesystem Kit 15.4 identifies bounded Z-machine and Blorb content, uses an
+`.apkg` built-in hint, then resolves unknown content using current bundle
+`handles MIME-TYPE .extension` declarations. System library 4.4 parses these
+declarations. Open With resolves installed handlers and Config Kit defaults;
+Atlas routes file double-clicks to it. Beast bundle, catalog, file-type,
+development-installer, and NDK dist checks passed. DE25 opened unknown
+`/dh0/astra_events.cat` in shared chooser; Cancel returned cleanly. A valid
+Z3 story in WORK opened Open With and showed no installed handler, as expected
+before AstraZ exists. Trial found that Open With needed `WORK:r` in both its
+bundle and supervisor ceiling; both are updated. Board services remain active,
+root has 8.3 GiB free, and trial files were removed after evidence archival
+at `/var/tmp/astra-file-types-evidence-20261027/` and
+`/var/tmp/astra-file-types-extension-evidence-20261027/` on Beast. VFS typed
+attributes, generic content-rule registration, and AstraZ launch/default
+tests remain open. See `docs/FILE_TYPES.md`.
 
 Development deployment, 2026-10-27: DE25 is an active development machine;
 the selected release below is a checkpoint, not a production constraint.

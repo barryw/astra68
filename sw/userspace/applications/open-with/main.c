@@ -116,8 +116,7 @@ static AstraResult launch(uint32_t index)
 
 static uint32_t load_candidates(void)
 {
-    uint32_t status = astra_application_catalog_load(&files, "/apps", &catalog);
-    if (status != ASTRA_VFS_OK) return status;
+    uint32_t status;
     if (catalog.count == 0u) return ASTRA_VFS_OK;
     indices = astra_runtime_allocate(catalog.count * sizeof(*indices));
     items = astra_runtime_allocate(catalog.count * sizeof(*items));
@@ -317,10 +316,12 @@ int astra_main(const AstraStartupInfo *startup)
     else if (astra_config_open(startup, 1u, ASTRA_CONFIG_OPEN_READ |
             ASTRA_CONFIG_OPEN_WRITE, &config, NULL) != ASTRA_CONFIG_OK)
         failure = "settings access";
-    else if (astra_file_type_identify(&files.filesystem, document, &type) != ASTRA_VFS_OK)
+    else if (astra_application_catalog_load(&files, "/apps", &catalog) != ASTRA_VFS_OK)
+        failure = "application discovery";
+    else if (astra_file_type_resolve(&files, &catalog, document, &type) != ASTRA_VFS_OK)
         failure = "file identification";
     else if (load_candidates() != ASTRA_VFS_OK)
-        failure = "application discovery";
+        failure = "handler discovery";
     if (failure != NULL) status = ASTRA_STATUS_IO;
     if (status == ASTRA_STATUS_OK && type.type[0] != '\0') {
         char id[ASTRA_BUNDLE_ID_MAX];

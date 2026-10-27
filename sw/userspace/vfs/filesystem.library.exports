@@ -196,3 +196,9 @@ ASTRA_FILESYSTEM_15.3 {
         astra_application_supports_type;
         astra_application_catalog_handlers;
 } ASTRA_FILESYSTEM_15.2;
+
+ASTRA_FILESYSTEM_15.4 {
+    global:
+        astra_application_catalog_extension_type;
+        astra_file_type_resolve;
+} ASTRA_FILESYSTEM_15.3;

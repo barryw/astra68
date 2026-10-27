@@ -96,6 +96,7 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/filesystem_library.o \
 	build/m68k/library/filesystem_copy.o \
 	build/m68k/library/file_type.o \
+	build/m68k/library/file_type_resolve.o \
 	build/m68k/library/volume.o build/m68k/library/volume_client.o \
 	build/m68k/library/vfs_service_core.o \
 	build/m68k/library/vfs_client.o build/m68k/library/vfs_assign.o \
@@ -287,7 +288,7 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.15 15.3.0 ABI 15.3$$'
+		grep -q '^filesystem.library.15 15.4.0 ABI 15.4$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.15]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
@@ -409,7 +410,8 @@ $(READER_TEST): src/vfs_reader.c src/vfs_provider_index.c \
 		src/vfs_reader.c src/vfs_provider_index.c \
 		tests/test_vfs_reader.c -o $@
 
-CATALOG_SOURCES := src/application_catalog.c $(SYSTEM)/src/bundle.c \
+CATALOG_SOURCES := src/application_catalog.c src/file_type_resolve.c \
+	$(SYSTEM)/src/bundle.c \
 	$(RUNTIME)/src/string.c \
 	$(SYSTEM)/src/manifest.c $(ASTRA_COMMON)/utf8.c tests/test_application_catalog.c
 

@@ -3,7 +3,7 @@
 
 /** @file file_type.h @brief Content type identification for open documents. */
 
-#include <astra/filesystem_library.h>
+#include <astra/application_catalog.h>
 
 /** Z-machine story content type; version is an attribute of content. */
 #define ASTRA_FILE_TYPE_ZMACHINE "application/x-zmachine-story"
@@ -12,7 +12,7 @@
 /** Astra application package content type. */
 #define ASTRA_FILE_TYPE_PACKAGE "application/x-astra-package"
 /** Maximum number of bytes in a content type, including NUL. */
-#define ASTRA_FILE_TYPE_MAX 128u
+#define ASTRA_FILE_TYPE_MAX ASTRA_BUNDLE_CONTENT_TYPE_MAX
 
 enum {
     ASTRA_FILE_TYPE_UNKNOWN = 0u,
@@ -39,5 +39,18 @@ typedef struct AstraFileTypeInfo {
  * @return ASTRA_VFS_OK or a VFS status; unknown content returns OK. */
 uint32_t astra_file_type_identify(AstraFilesystem *filesystem,
                                   const char *path, AstraFileTypeInfo *info);
+
+/** Identify content, then use installed bundle extension declarations only
+ * if content remains unknown. Conflicting declarations leave type unknown.
+ * No file metadata is written. The catalog is a snapshot; each manifest is
+ * checked again, so removal cannot yield a stale handler.
+ * @param filesystem Open process filesystem binding.
+ * @param catalog Installed application snapshot.
+ * @param path Absolute file path visible to filesystem.
+ * @param info Receives type, source, and optional story version.
+ * @return ASTRA_VFS_OK or a VFS status. */
+uint32_t astra_file_type_resolve(AstraProcessFilesystem *filesystem,
+    const AstraApplicationCatalog *catalog, const char *path,
+    AstraFileTypeInfo *info);
 
 #endif
