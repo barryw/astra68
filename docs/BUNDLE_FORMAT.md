@@ -11,7 +11,9 @@ may accelerate discovery, but it is disposable and must be reconstructible by
 scanning manifests.
 
 Installed applications live in `APPS:`. Shared Kits live in `LIBS:`. An
-application may carry private libraries in its own `libs/` directory. Desktop
+application may declare private `provides` entries and carry their exact
+libraries under `libs/` using the same canonical layout as a Kit.
+The loader resolves those declarations before `LIBS:`. Desktop
 pins are user preferences under `CONFIG:` and are not installation records;
 installing an application does not silently pin it.
 
@@ -34,7 +36,7 @@ LIBS:Graphics.kit/
 The suffix is part of the type: `.app` for applications and `.kit` for Kits.
 Names shown to a person come from the manifest, not the directory name.
 
-Every `provides NAME ABI VERSION` payload has one canonical location:
+Each Kit `provides NAME ABI VERSION` payload has one canonical location:
 
 ```
 libraries/NAME/abi-ABI/VERSION/m68k-68040/NAME
@@ -108,6 +110,10 @@ dot-separated components. Numeric version fields and ABI values are unsigned
 The launcher's `APP:` assign is a read-only binding to the launched bundle
 root. The executable is resolved under that root. Bundle identity, resources,
 and private libraries therefore move together without rewriting paths.
+For a private declaration `provides NAME ABI VERSION`, the payload lives at
+`libs/NAME/abi-ABI/VERSION/m68k-68040/NAME`. Its embedded library
+identity must match. A missing or damaged declared payload fails launch; the
+loader does not silently substitute `LIBS:`.
 
 ## 3. `.aicon` version 1
 

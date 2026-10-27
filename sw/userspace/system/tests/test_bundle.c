@@ -1,4 +1,5 @@
 #include <astra/bundle.h>
+#include <astra/bundle_internal.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -34,6 +35,51 @@ static void manifest_test(void)
     assert(strcmp(manifest.executable, "bin/m68k-68040/Terminal") == 0);
     assert(manifest.require_count == 2u);
     assert(manifest.capability_count == 1u);
+    {
+        const AstraBundleLibrary provider = {
+            .name = "graphics.library", .abi = 3u,
+            .version = {3u, 2u, 1u}
+        };
+        char path[160];
+
+        assert(astra_bundle_library_payload_path(
+            "/app/", ASTRA_BUNDLE_APPLICATION, &provider,
+            path, sizeof(path)));
+        assert(strcmp(path,
+            "/app/libs/graphics.library/abi-3/3.2.1/"
+            "m68k-68040/graphics.library") == 0);
+        assert(astra_bundle_library_payload_path(
+            "", ASTRA_BUNDLE_KIT, &provider, path, sizeof(path)));
+        assert(strcmp(path,
+            "libraries/graphics.library/abi-3/3.2.1/"
+            "m68k-68040/graphics.library") == 0);
+        assert(!astra_bundle_library_payload_path(
+            "/app/", ASTRA_BUNDLE_APPLICATION, &provider, path, 12u));
+        AstraBundleLibrary bad = provider;
+        strcpy(bad.name, "../escape");
+        assert(!astra_bundle_library_payload_path(
+            "/app/", ASTRA_BUNDLE_APPLICATION, &bad,
+            path, sizeof(path)));
+    }
+    {
+        AstraBundleLibrary providers[] = {
+            {.name = "graphics.library", .abi = 1u, .version = {1u, 2u, 0u}},
+            {.name = "graphics.library", .abi = 1u, .version = {2u, 0u, 0u}},
+            {.name = "graphics.library", .abi = 2u, .version = {3u, 0u, 0u}},
+        };
+        AstraBundleManifest owner = {.kind = ASTRA_BUNDLE_APPLICATION,
+            .provides = providers, .provide_count = 3u};
+        AstraBundleLibrary required = {.name = "graphics.library", .abi = 1u,
+            .version = {1u, 5u, 0u}};
+        assert(astra_bundle_private_provider(&owner, "graphics.library", 1u)
+               == &providers[1]);
+        assert(astra_bundle_library_satisfies(&required, &providers[1]));
+        assert(!astra_bundle_library_satisfies(&required, &providers[0]));
+        assert(!astra_bundle_library_satisfies(&required, &providers[2]));
+        owner.kind = ASTRA_BUNDLE_KIT;
+        assert(astra_bundle_private_provider(&owner, "graphics.library", 1u)
+               == NULL);
+    }
     {
         static const char exact_source[] =
             "astra-bundle 1\nkind application\nid org.astra.exactspan\n"

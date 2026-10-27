@@ -46,16 +46,26 @@ static void make_wave(void)
 static int check_music(const char *path, Mix_MusicType type)
 {
     Mix_Music *music = Mix_LoadMUS(path);
-    int valid;
+    int failure = 0;
 
     (void)astra_log("SDL_MIXER_LOADED");
-    valid = music != NULL && Mix_GetMusicType(music) == type;
-    if (valid)
-        valid = Mix_PlayMusic(music, 0) == 0;
+    if (music == NULL || Mix_GetMusicType(music) != type)
+        failure = 1;
+    if (failure == 0 && Mix_PlayMusic(music, 0) != 0)
+        failure = 2;
+    if (failure == 0 && type == MUS_OGG) {
+        SDL_Delay(100);
+        if (Mix_PlayingMusic() != 1) failure = 3;
+        Mix_PauseMusic();
+        if (Mix_PausedMusic() != 1 && failure == 0) failure = 4;
+        Mix_ResumeMusic();
+        if (Mix_SetMusicPosition(0.0) != 0 && failure == 0) failure = 5;
+        SDL_Delay(100);
+    }
 
     (void)astra_log("SDL_MIXER_PLAYED");
 
-    if (!valid)
+    if (failure != 0)
         (void)astra_log(SDL_GetError());
     if (music != NULL) {
         Mix_HaltMusic();
@@ -63,7 +73,7 @@ static int check_music(const char *path, Mix_MusicType type)
         Mix_FreeMusic(music);
         (void)astra_log("SDL_MIXER_FREED");
     }
-    return valid;
+    return failure;
 }
 
 int main(void)
@@ -85,16 +95,19 @@ int main(void)
         Mix_OpenAudio(48000, AUDIO_S16MSB, 2, 1024) != 0) {
         (void)astra_log(SDL_GetError());
         (void)astra_log("SDL_MIXER_OPEN_FAIL");
+        result = 20;
         goto done;
     }
     input = SDL_RWFromConstMem(invalid, sizeof(invalid) - 1u);
     if (input == NULL || (chunk = Mix_LoadWAV_RW(input, 1)) != NULL) {
         (void)astra_log("SDL_MIXER_BAD_WAV_FAIL");
+        result = 30;
         goto done;
     }
     input = SDL_RWFromConstMem(invalid, sizeof(invalid) - 1u);
     if (input == NULL || Mix_LoadMUS_RW(input, 1) != NULL) {
         (void)astra_log("SDL_MIXER_BAD_MUSIC_FAIL");
+        result = 31;
         goto done;
     }
     make_wave();
@@ -102,36 +115,46 @@ int main(void)
     if (input == NULL || (chunk = Mix_LoadWAV_RW(input, 1)) == NULL) {
         (void)astra_log(SDL_GetError());
         (void)astra_log("SDL_MIXER_WAV_FAIL");
+        result = 40;
         goto done;
     }
     if (Mix_AllocateChannels(16) < 16) {
         (void)astra_log("SDL_MIXER_CHANNELS_FAIL");
+        result = 41;
         goto done;
     }
     for (int index = 0; index < 16; ++index) {
         if (Mix_PlayChannel(index, chunk, 0) != index) {
             (void)astra_log("SDL_MIXER_PLAY_FAIL");
+            result = 42;
             goto done;
         }
     }
     if (Mix_Playing(-1) != 16 || Mix_HaltChannel(-1) != 0 ||
         Mix_Playing(-1) != 0) {
         (void)astra_log("SDL_MIXER_STATE_FAIL");
+        result = 43;
         goto done;
     }
     (void)astra_log("SDL_MIXER_OGG_START");
-    if (!check_music("/apps/SDLMixerProbe.app/resources/sample.ogg", MUS_OGG)) {
+    result = check_music("/apps/SDLMixerProbe.app/resources/sample.ogg", MUS_OGG);
+    if (result != 0) {
         (void)astra_log("SDL_MIXER_MUSIC_FAIL");
+        result += 50;
         goto done;
     }
     (void)astra_log("SDL_MIXER_MP3_START");
-    if (!check_music("/apps/SDLMixerProbe.app/resources/sample.mp3", MUS_MP3)) {
+    result = check_music("/apps/SDLMixerProbe.app/resources/sample.mp3", MUS_MP3);
+    if (result != 0) {
         (void)astra_log("SDL_MIXER_MUSIC_FAIL");
+        result += 60;
         goto done;
     }
     (void)astra_log("SDL_MIXER_FLAC_START");
-    if (!check_music("/apps/SDLMixerProbe.app/resources/sample.flac", MUS_FLAC)) {
+    result = check_music("/apps/SDLMixerProbe.app/resources/sample.flac", MUS_FLAC);
+    if (result != 0) {
         (void)astra_log("SDL_MIXER_MUSIC_FAIL");
+        result += 70;
         goto done;
     }
     (void)astra_log("SDL_MIXER_READY");

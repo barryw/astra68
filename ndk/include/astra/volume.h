@@ -307,7 +307,9 @@ const AstraVolumeRecord *astra_volume_snapshot_ancestor(
  * Metadata capability alone refuses this operation. System/private roots keep
  * their explicit startup grants. Global brokers return nondelegable grants;
  * scoped RAM brokers allow canonical subtree derivation and delegation.
- * @param broker VOLUME_READ/WRITE or RAM_READ/WRITE capability.
+ * The privileged VOLUME_DELEGATE broker lets the supervisor derive APP/CWD
+ * grants from an exact public mount; application ceilings exclude it.
+ * @param broker VOLUME_READ/WRITE, RAM_READ/WRITE, or VOLUME_DELEGATE capability.
  * @param reference Exact epoch/id/generation obtained from the catalog.
  * @param rights ASTRA_RIGHT_READ, optionally ASTRA_RIGHT_WRITE.
  * @param root Receives an owned VFS service send capability; close after use.

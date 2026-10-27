@@ -171,7 +171,8 @@ static void accept_client(
         (request.subscriptions &
          ~(ASTRA_INPUT_SUBSCRIBE_POINTER_MOTION |
            ASTRA_INPUT_SUBSCRIBE_POINTER_BUTTON |
-           ASTRA_INPUT_SUBSCRIBE_POINTER_WHEEL)) != 0u)
+           ASTRA_INPUT_SUBSCRIBE_POINTER_WHEEL |
+           ASTRA_INPUT_SUBSCRIBE_GAMEPAD)) != 0u)
         status = ASTRA_STATUS_ACCESS;
     detach_dead_clients(service, sinks);
     if (status == ASTRA_STATUS_OK &&

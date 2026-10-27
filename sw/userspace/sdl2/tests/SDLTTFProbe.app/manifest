@@ -8,7 +8,7 @@ icon resources/SDLTTFProbe.aicon
 capability APPS:r
 capability LIBS:r
 requires SDL2_ttf.library 2 2.24.0
-requires SDL2.library 3 2.32.10
+requires SDL2.library 3 2.32.11
 requires libc.library 4 4.0.0
 requires runtime.library 1 1.6.0
 requires compiler.library 2 2.0.0

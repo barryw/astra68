@@ -28,8 +28,12 @@ if [ "${#RELEASE_ID}" -ne 64 ]; then
 fi
 QEMU=${QEMU:-$ASTRA_ROOT/qemu/bin/qemu-system-m68k-astra}
 FONT_WORKER=$ASTRA_ROOT/bin/astra-font-worker
+CODEC_WORKER=$ASTRA_ROOT/bin/astra-codec-worker
 if [ ! -x "$FONT_WORKER" ]; then
     echo "Astra font worker is missing: $FONT_WORKER" >&2; exit 1
+fi
+if [ ! -x "$CODEC_WORKER" ]; then
+    echo "Astra codec worker is missing: $CODEC_WORKER" >&2; exit 1
 fi
 ROM=${ROM:-$ASTRA_ROOT/rom/astra_boot.bin}
 BASE_STORAGE=${ASTRA_BASE_STORAGE:-$ASTRA_ROOT/storage-terminal.img}
@@ -212,6 +216,7 @@ fi
 exec env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     ASTRA_STORAGE_NAME_STATE="$STATE_ROOT" \
     ASTRA_FONT_WORKER_PATH="$FONT_WORKER" \
+    ASTRA_CODEC_WORKER_PATH="$CODEC_WORKER" \
     ASTRA_DISPLAY_MAILBOX_PATH="$DISPLAY_MAILBOX" \
     ASTRA_DISPLAY_PAYLOAD_PATH="$DISPLAY_PAYLOAD" \
     ASTRA_HOSTFS_MAX_DESCRIPTORS="$HOSTFS_MAX_DESCRIPTORS" \

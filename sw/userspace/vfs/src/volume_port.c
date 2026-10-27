@@ -128,7 +128,8 @@ static uint32_t unsubscribe(AstraVolumePort *port, uint32_t owner, uint64_t id)
 }
 
 static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
-    const AstraVolumeReference *source, int role, uint32_t budget)
+    const AstraVolumeReference *source, int delegates, int role,
+    uint32_t budget)
 {
     union { AstraMessageHeader header; AstraVolumeRequest request;
         AstraVolumeRootRequest root;
@@ -240,7 +241,8 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
                 else if (port->root == NULL || (wanted->rights & rights) != wanted->rights)
                     reply.status = ASTRA_STATUS_ACCESS;
                 else
-                    reply.status = port->root(port->context, owner, &wanted->reference, wanted->rights, source, &root);
+                    reply.status = port->root(port->context, owner, &wanted->reference,
+                        wanted->rights, source, delegates, &root);
                 if (reply.status == ASTRA_STATUS_OK && root == 0u)
                     reply.status = ASTRA_STATUS_PROTOCOL;
             } else if (rights != 0u)
@@ -290,25 +292,26 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
 }
 
 uint32_t astra_volume_port_pump(AstraVolumePort *port, uint32_t budget)
-{ return pump(port, port->receive, 0u, NULL, 0, budget); }
+{ return pump(port, port->receive, 0u, NULL, 0, 0, budget); }
 
 uint32_t astra_volume_port_root_pump(AstraVolumePort *port, uint32_t receive,
-    uint32_t rights, const AstraVolumeReference *source, uint32_t budget)
+    uint32_t rights, const AstraVolumeReference *source, int delegates,
+    uint32_t budget)
 {
     if ((rights & ASTRA_RIGHT_READ) == 0u ||
         (rights & ~(ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE)) != 0u ||
         (source != NULL && (source->epoch == 0u || source->id == 0u || source->generation == 0u))) return 0u;
-    return pump(port, receive, rights, source, 0, budget);
+    return pump(port, receive, rights, source, delegates, 0, budget);
 }
 
 uint32_t astra_volume_port_control_pump(AstraVolumePort *port, uint32_t receive, uint32_t budget)
-{ return pump(port, receive, 0u, NULL, 1, budget); }
+{ return pump(port, receive, 0u, NULL, 0, 1, budget); }
 
 uint32_t astra_volume_port_usage_pump(AstraVolumePort *port, uint32_t receive, uint32_t budget)
-{ return pump(port, receive, 0u, NULL, 2, budget); }
+{ return pump(port, receive, 0u, NULL, 0, 2, budget); }
 
 uint32_t astra_volume_port_format_pump(AstraVolumePort *port, uint32_t receive, uint32_t budget)
-{ return pump(port, receive, 0u, NULL, 3, budget); }
+{ return pump(port, receive, 0u, NULL, 0, 3, budget); }
 
 void astra_volume_port_destroy(AstraVolumePort *port)
 {

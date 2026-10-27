@@ -21,6 +21,7 @@
 #endif
 #ifdef CONFIG_LINUX
 #include <sys/syscall.h>
+#include <linux/input.h>
 #endif
 #include "qemu/bswap.h"
 #include "qemu/datadir.h"
@@ -33,11 +34,13 @@
 #endif
 #include "qemu/iov.h"
 #include "qemu/main-loop.h"
+#include "qemu/module.h"
 #include "qemu/sockets.h"
 #include "qemu/timer.h"
 #include "qemu/units.h"
 #include "qapi/error.h"
 #include "qapi/visitor.h"
+#include "qom/object_interfaces.h"
 #include "cpu.h"
 #include "hw/boards.h"
 #include "hw/loader.h"
@@ -48,6 +51,7 @@
 #include "astra68-resolve.h"
 #include "astra_storage_transport.h"
 #include "astra_font_host.h"
+#include "astra_codec_host.h"
 #include "astra_font_convert.h"
 #include "astra/block.h"
 #include "astra/boot.h"
@@ -58,6 +62,7 @@
 #include "astra/display.h"
 #include "astra/host.h"
 #include "astra/font_worker.h"
+#include "astra/codec_worker.h"
 #include "astra/font_encoding.h"
 #include "astra/process.h"
 #include "astra/network.h"
@@ -230,7 +235,7 @@ _Static_assert((ASTRA_HOST_CHANNEL_COUNT &
                 (ASTRA_HOST_CHANNEL_COUNT - 1u)) == 0u,
                "host channel aperture must contain whole power-of-two pages");
 
-#define ASTRA_INPUT_QUEUE_SIZE   32u
+#define ASTRA_INPUT_QUEUE_SIZE   256u
 #define ASTRA_INPUT_QUEUE_MASK   (ASTRA_INPUT_QUEUE_SIZE - 1u)
 #define ASTRA_INPUT_DEVICE_KEYBOARD 1u
 #define ASTRA_INPUT_DEVICE_POINTER  2u
@@ -340,6 +345,7 @@ typedef struct AstraInputState {
     uint8_t tail;
     uint16_t keyboard_sequence;
     uint16_t pointer_sequence;
+    uint16_t gamepad_sequence[ASTRA_INPUT_GAMEPAD_LIMIT];
     uint32_t host_generation;
     uint32_t dropped;
     /* Motion records absorbed by an unread one on the same axis. */
@@ -627,6 +633,8 @@ typedef struct AstraHostChannel {
     uint8_t *completed;
     int remote_desktop_fd;
     int audio_fd;
+    GHashTable *codec_sessions;
+    uint32_t codec_next_handle;
     uint32_t remote_desktop_generation;
     bool active;
     bool interrupt_armed;
@@ -1414,7 +1422,8 @@ static uint32_t astra_input_level(const AstraInputState *input)
 static uint32_t astra_input_status(const AstraInputState *input)
 {
     uint32_t level = astra_input_level(input);
-    return level | (level != 0 ? ASTRA_INPUT_STATUS_VALID : 0) |
+    return MIN(level, ASTRA_INPUT_STATUS_LEVEL_MASK) |
+           (level != 0 ? ASTRA_INPUT_STATUS_VALID : 0) |
            (input->overflow ? ASTRA_INPUT_STATUS_OVERFLOW : 0);
 }
 
@@ -1431,9 +1440,11 @@ static bool astra_input_is_motion(uint32_t header)
 {
     uint32_t kind = (header >> 16) & 0xffu;
 
-    return (header >> 24) == ASTRA_INPUT_CLASS_POINTER &&
-           (kind == ASTRA_INPUT_POINTER_RELATIVE ||
-            kind == ASTRA_INPUT_POINTER_ABSOLUTE);
+    return ((header >> 24) == ASTRA_INPUT_CLASS_POINTER &&
+            (kind == ASTRA_INPUT_POINTER_RELATIVE ||
+             kind == ASTRA_INPUT_POINTER_ABSOLUTE)) ||
+           ((header >> 24) == ASTRA_INPUT_CLASS_GAMEPAD &&
+            kind == ASTRA_INPUT_GAMEPAD_AXIS);
 }
 
 /* The head record is never merged into: the guest may be reading it. */
@@ -1451,7 +1462,8 @@ static bool astra_input_coalesce(AstraInputState *input, uint32_t header,
             return false;
         if (event->header == header &&
             (event->device_sequence >> 16) == (device_sequence >> 16)) {
-            event->value = ((header >> 16) & 0xffu) ==
+            event->value = (header >> 24) == ASTRA_INPUT_CLASS_POINTER &&
+                           ((header >> 16) & 0xffu) ==
                                ASTRA_INPUT_POINTER_RELATIVE ?
                 (uint32_t)((int32_t)event->value + (int32_t)value) : value;
             event->timestamp_ms = qemu_clock_get_ms(QEMU_CLOCK_VIRTUAL);
@@ -1509,6 +1521,367 @@ static bool astra_input_push(Astra68State *s, uint8_t event_class,
     input->tail = next;
     return true;
 }
+
+#ifdef CONFIG_LINUX
+/* Linux evdev is a host provider. The guest sees only Astra input events. */
+typedef struct AstraEvdevGamepad {
+    Object parent_obj;
+    char *evdev;
+    uint32_t slot;
+    int fd;
+    uint16_t vendor;
+    uint16_t product;
+    uint16_t bus;
+    uint16_t version;
+    uint8_t axis_count;
+    uint8_t button_count;
+    uint8_t hat_count;
+    uint32_t down_buttons;
+    uint32_t axis_seen;
+    int8_t axis[ABS_CNT];
+    int8_t button[KEY_CNT];
+    struct input_absinfo abs[ABS_CNT];
+    int8_t hat_x;
+    int8_t hat_y;
+    bool connected;
+    bool resyncing;
+} AstraEvdevGamepad;
+
+#define TYPE_ASTRA_EVDEV_GAMEPAD "astra-evdev-gamepad"
+OBJECT_DECLARE_SIMPLE_TYPE(AstraEvdevGamepad, ASTRA_EVDEV_GAMEPAD)
+static AstraEvdevGamepad *astra_gamepads[ASTRA_INPUT_GAMEPAD_LIMIT];
+
+static bool astra_evdev_bit(const uint8_t *bits, unsigned code)
+{
+    return (bits[code / 8u] & (1u << (code % 8u))) != 0u;
+}
+
+static bool astra_evdev_digital_hat(int fd, const uint8_t *abs_bits)
+{
+    struct input_absinfo x = { 0 }, y = { 0 };
+    bool has_x = astra_evdev_bit(abs_bits, ABS_HAT0X);
+    bool has_y = astra_evdev_bit(abs_bits, ABS_HAT0Y);
+
+    if ((!has_x && !has_y) ||
+        (has_x && ioctl(fd, EVIOCGABS(ABS_HAT0X), &x) < 0) ||
+        (has_y && ioctl(fd, EVIOCGABS(ABS_HAT0Y), &y) < 0))
+        return false;
+    return ((!has_x || (x.minimum == -1 && x.maximum == 1)) &&
+            (!has_y || (y.minimum == -1 && y.maximum == 1))) ||
+           ((!has_x || (!x.fuzz && !x.flat && !x.resolution)) &&
+            (!has_y || (!y.fuzz && !y.flat && !y.resolution)));
+}
+
+static void astra_gamepad_emit(AstraEvdevGamepad *pad, uint8_t kind,
+                               uint16_t flags, uint32_t value)
+{
+    if (astra_input_machine == NULL)
+        return;
+    astra_input_push(astra_input_machine, ASTRA_INPUT_CLASS_GAMEPAD, kind,
+                     flags, value,
+                     ASTRA_INPUT_GAMEPAD_DEVICE_BASE + pad->slot,
+                     &astra_input_machine->input.gamepad_sequence[pad->slot]);
+    astra_update_irq(astra_input_machine);
+}
+
+static int16_t astra_gamepad_axis_value(const struct input_absinfo *abs,
+                                        int32_t value)
+{
+    int64_t range = (int64_t)abs->maximum - abs->minimum;
+    int64_t scaled;
+
+    if (range <= 0)
+        return 0;
+    if (value < abs->minimum)
+        value = abs->minimum;
+    if (value > abs->maximum)
+        value = abs->maximum;
+    scaled = ((int64_t)value - abs->minimum) * 65535 / range;
+    return scaled - 32768;
+}
+
+static void astra_gamepad_axis(AstraEvdevGamepad *pad, unsigned code,
+                               int32_t value)
+{
+    int index;
+
+    if (code >= ABS_CNT || (index = pad->axis[code]) < 0)
+        return;
+    astra_gamepad_emit(pad, ASTRA_INPUT_GAMEPAD_AXIS, index << 8,
+                       (uint32_t)(int32_t)astra_gamepad_axis_value(
+                           &pad->abs[code], value));
+}
+
+static uint8_t astra_gamepad_hat_value(const AstraEvdevGamepad *pad)
+{
+    return (pad->hat_y < 0 ? 1u : 0u) |
+           (pad->hat_x > 0 ? 2u : 0u) |
+           (pad->hat_y > 0 ? 4u : 0u) |
+           (pad->hat_x < 0 ? 8u : 0u);
+}
+
+static void astra_gamepad_hat(AstraEvdevGamepad *pad, unsigned code,
+                              int32_t value)
+{
+    uint8_t old = astra_gamepad_hat_value(pad);
+
+    if (code == ABS_HAT0X)
+        pad->hat_x = value < 0 ? -1 : value > 0 ? 1 : 0;
+    else
+        pad->hat_y = value < 0 ? -1 : value > 0 ? 1 : 0;
+    if (astra_gamepad_hat_value(pad) != old)
+        astra_gamepad_emit(pad, ASTRA_INPUT_GAMEPAD_HAT, 0u,
+                           astra_gamepad_hat_value(pad));
+}
+
+static void astra_gamepad_snapshot(AstraEvdevGamepad *pad, bool full)
+{
+    uint8_t keys[(KEY_CNT + 7u) / 8u] = { 0 };
+    uint32_t down = 0u;
+
+    if (!pad->connected)
+        return;
+    astra_gamepad_emit(pad, ASTRA_INPUT_GAMEPAD_ID, 0u,
+                       ((uint32_t)pad->bus << 16) | pad->version);
+    astra_gamepad_emit(pad, ASTRA_INPUT_GAMEPAD_CONFIG, 0u,
+                       pad->axis_count | (uint32_t)pad->button_count << 8 |
+                       (uint32_t)pad->hat_count << 16);
+    astra_gamepad_emit(pad, ASTRA_INPUT_GAMEPAD_DEVICE,
+                       ASTRA_INPUT_FLAG_DOWN,
+                       ((uint32_t)pad->vendor << 16) | pad->product);
+    for (unsigned code = 0; code < ABS_CNT; ++code) {
+        struct input_absinfo abs;
+
+        if (pad->axis[code] >= 0 &&
+            (pad->axis_seen & (UINT32_C(1) << pad->axis[code])) != 0u &&
+            ioctl(pad->fd, EVIOCGABS(code), &abs) == 0)
+            astra_gamepad_axis(pad, code, abs.value);
+    }
+    if (pad->hat_count != 0u) {
+        if (ioctl(pad->fd, EVIOCGABS(ABS_HAT0X),
+                  &pad->abs[ABS_HAT0X]) == 0)
+            pad->hat_x = pad->abs[ABS_HAT0X].value;
+        if (ioctl(pad->fd, EVIOCGABS(ABS_HAT0Y),
+                  &pad->abs[ABS_HAT0Y]) == 0)
+            pad->hat_y = pad->abs[ABS_HAT0Y].value;
+        astra_gamepad_emit(pad, ASTRA_INPUT_GAMEPAD_HAT, 0u,
+                           astra_gamepad_hat_value(pad));
+    }
+    if (ioctl(pad->fd, EVIOCGKEY(sizeof(keys)), keys) == 0) {
+        for (unsigned code = 0; code < KEY_CNT; ++code)
+            if (pad->button[code] >= 0 && astra_evdev_bit(keys, code))
+                down |= UINT32_C(1) << pad->button[code];
+        for (unsigned button = 0; button < pad->button_count; ++button)
+            if ((full && (down & (UINT32_C(1) << button)) != 0u) ||
+                (!full && ((down ^ pad->down_buttons) &
+                           (UINT32_C(1) << button)) != 0u))
+                astra_gamepad_emit(pad, ASTRA_INPUT_GAMEPAD_BUTTON,
+                    (down & (UINT32_C(1) << button)) != 0u ?
+                        ASTRA_INPUT_FLAG_DOWN : 0u, button);
+        pad->down_buttons = down;
+    }
+}
+
+static void astra_gamepad_event(void *opaque)
+{
+    AstraEvdevGamepad *pad = opaque;
+    struct input_event event;
+    ssize_t bytes;
+
+    while ((bytes = read(pad->fd, &event, sizeof(event))) == sizeof(event)) {
+        if (event.type == EV_SYN && event.code == SYN_DROPPED) {
+            pad->resyncing = true;
+            continue;
+        }
+        if (pad->resyncing) {
+            if (event.type == EV_SYN && event.code == SYN_REPORT) {
+                pad->resyncing = false;
+                pad->axis_seen = (UINT32_C(1) << pad->axis_count) - 1u;
+                astra_gamepad_snapshot(pad, false);
+            }
+            continue;
+        }
+        if (event.type == EV_ABS) {
+            if (pad->hat_count != 0u &&
+                (event.code == ABS_HAT0X || event.code == ABS_HAT0Y))
+                astra_gamepad_hat(pad, event.code, event.value);
+            else {
+                if (event.code < ABS_CNT && pad->axis[event.code] >= 0)
+                    pad->axis_seen |= UINT32_C(1) << pad->axis[event.code];
+                astra_gamepad_axis(pad, event.code, event.value);
+            }
+        } else if (event.type == EV_KEY && event.code < KEY_CNT &&
+                   pad->button[event.code] >= 0) {
+            uint32_t mask = UINT32_C(1) << pad->button[event.code];
+
+            if (event.value)
+                pad->down_buttons |= mask;
+            else
+                pad->down_buttons &= ~mask;
+            astra_gamepad_emit(pad, ASTRA_INPUT_GAMEPAD_BUTTON,
+                               event.value ? ASTRA_INPUT_FLAG_DOWN : 0u,
+                               pad->button[event.code]);
+        }
+    }
+    if (bytes == 0 || (bytes < 0 && errno != EAGAIN && errno != EINTR)) {
+        qemu_set_fd_handler(pad->fd, NULL, NULL, NULL);
+        close(pad->fd);
+        pad->fd = -1;
+        pad->connected = false;
+        astra_gamepad_emit(pad, ASTRA_INPUT_GAMEPAD_DEVICE, 0u, 0u);
+    }
+}
+
+static void astra_gamepad_complete(UserCreatable *uc, Error **errp)
+{
+    AstraEvdevGamepad *pad = ASTRA_EVDEV_GAMEPAD(uc);
+    uint8_t abs_bits[(ABS_CNT + 7u) / 8u] = { 0 };
+    uint8_t key_bits[(KEY_CNT + 7u) / 8u] = { 0 };
+    struct input_id id;
+
+    if (pad->evdev == NULL || pad->slot >= ASTRA_INPUT_GAMEPAD_LIMIT ||
+        astra_gamepads[pad->slot] != NULL || astra_input_machine == NULL) {
+        error_setg(errp, "invalid or occupied Astra gamepad slot");
+        return;
+    }
+    pad->fd = open(pad->evdev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (pad->fd < 0) {
+        error_setg_file_open(errp, errno, pad->evdev);
+        return;
+    }
+    if (ioctl(pad->fd, EVIOCGID, &id) < 0 ||
+        ioctl(pad->fd, EVIOCGBIT(EV_ABS, sizeof(abs_bits)), abs_bits) < 0 ||
+        ioctl(pad->fd, EVIOCGBIT(EV_KEY, sizeof(key_bits)), key_bits) < 0) {
+        error_setg(errp, "%s: cannot read evdev gamepad capabilities",
+                   pad->evdev);
+        goto failed;
+    }
+    pad->vendor = id.vendor;
+    pad->product = id.product;
+    pad->bus = id.bustype;
+    pad->version = id.version;
+    memset(pad->axis, -1, sizeof(pad->axis));
+    memset(pad->button, -1, sizeof(pad->button));
+    pad->hat_count = astra_evdev_digital_hat(pad->fd, abs_bits) ? 1u : 0u;
+    for (unsigned code = 0; code < ABS_CNT; ++code) {
+        if (!astra_evdev_bit(abs_bits, code) ||
+            (pad->hat_count != 0u &&
+             (code == ABS_HAT0X || code == ABS_HAT0Y)))
+            continue;
+        if (ioctl(pad->fd, EVIOCGABS(code), &pad->abs[code]) < 0)
+            continue;
+        if (pad->axis_count < 8u)
+            pad->axis[code] = pad->axis_count++;
+    }
+    /* Match SDL's Linux evdev button order so its GUID mappings apply. */
+    for (unsigned pass = 0; pass < 2u; ++pass) {
+        unsigned begin = pass == 0u ? BTN_JOYSTICK : BTN_MISC;
+        unsigned end = pass == 0u ? KEY_CNT : BTN_JOYSTICK;
+
+        for (unsigned code = begin; code < end; ++code)
+            if (astra_evdev_bit(key_bits, code) &&
+                pad->button_count < 32u)
+                pad->button[code] = pad->button_count++;
+    }
+    pad->connected = true;
+    astra_gamepads[pad->slot] = pad;
+    astra_gamepad_snapshot(pad, true);
+    qemu_set_fd_handler(pad->fd, astra_gamepad_event, NULL, pad);
+    return;
+
+failed:
+    close(pad->fd);
+    pad->fd = -1;
+}
+
+static void astra_gamepad_finalize(Object *obj)
+{
+    AstraEvdevGamepad *pad = ASTRA_EVDEV_GAMEPAD(obj);
+
+    if (pad->connected)
+        astra_gamepad_emit(pad, ASTRA_INPUT_GAMEPAD_DEVICE, 0u, 0u);
+    if (pad->fd >= 0) {
+        qemu_set_fd_handler(pad->fd, NULL, NULL, NULL);
+        close(pad->fd);
+    }
+    if (pad->slot < ASTRA_INPUT_GAMEPAD_LIMIT &&
+        astra_gamepads[pad->slot] == pad)
+        astra_gamepads[pad->slot] = NULL;
+    g_free(pad->evdev);
+}
+
+static void astra_gamepad_instance_init(Object *obj)
+{
+    ASTRA_EVDEV_GAMEPAD(obj)->fd = -1;
+}
+
+static char *astra_gamepad_get_evdev(Object *obj, Error **errp)
+{
+    return g_strdup(ASTRA_EVDEV_GAMEPAD(obj)->evdev);
+}
+
+static void astra_gamepad_set_evdev(Object *obj, const char *value,
+                                   Error **errp)
+{
+    AstraEvdevGamepad *pad = ASTRA_EVDEV_GAMEPAD(obj);
+
+    if (pad->evdev != NULL)
+        error_setg(errp, "evdev property already set");
+    else
+        pad->evdev = g_strdup(value);
+}
+
+static void astra_gamepad_get_slot(Object *obj, Visitor *v,
+                                   const char *name, void *opaque,
+                                   Error **errp)
+{
+    uint32_t slot = ASTRA_EVDEV_GAMEPAD(obj)->slot;
+
+    visit_type_uint32(v, name, &slot, errp);
+}
+
+static void astra_gamepad_set_slot(Object *obj, Visitor *v,
+                                   const char *name, void *opaque,
+                                   Error **errp)
+{
+    AstraEvdevGamepad *pad = ASTRA_EVDEV_GAMEPAD(obj);
+    uint32_t slot;
+
+    if (!visit_type_uint32(v, name, &slot, errp))
+        return;
+    if (slot >= ASTRA_INPUT_GAMEPAD_LIMIT)
+        error_setg(errp, "Astra gamepad slot must be below %u",
+                   ASTRA_INPUT_GAMEPAD_LIMIT);
+    else
+        pad->slot = slot;
+}
+
+static void astra_gamepad_class_init(ObjectClass *oc, void *data)
+{
+    USER_CREATABLE_CLASS(oc)->complete = astra_gamepad_complete;
+    object_class_property_add_str(oc, "evdev", astra_gamepad_get_evdev,
+                                  astra_gamepad_set_evdev);
+    object_class_property_add(oc, "slot", "uint32", astra_gamepad_get_slot,
+                              astra_gamepad_set_slot, NULL, NULL);
+}
+
+static const TypeInfo astra_gamepad_type = {
+    .name = TYPE_ASTRA_EVDEV_GAMEPAD,
+    .parent = TYPE_OBJECT,
+    .instance_size = sizeof(AstraEvdevGamepad),
+    .instance_init = astra_gamepad_instance_init,
+    .instance_finalize = astra_gamepad_finalize,
+    .class_init = astra_gamepad_class_init,
+    .interfaces = (InterfaceInfo[]) { { TYPE_USER_CREATABLE }, { } },
+};
+
+static void astra_gamepad_register(void)
+{
+    type_register_static(&astra_gamepad_type);
+}
+
+type_init(astra_gamepad_register);
+#endif
 
 static uint16_t astra_usb_usage_for_qcode(QKeyCode qcode)
 {
@@ -3321,6 +3694,8 @@ static void astra_host_channel_drain(Astra68State *s, AstraHostChannel *channel)
         close(channel->remote_desktop_fd);
     if (channel->audio_fd >= 0)
         close(channel->audio_fd);
+    if (channel->codec_sessions != NULL)
+        g_hash_table_destroy(channel->codec_sessions);
     g_free(channel->completed);
     qemu_mutex_lock(&s->host.files_lock);
     memset(channel, 0, sizeof(*channel));
@@ -4291,6 +4666,148 @@ static const char *astra_host_font_worker_path(void)
         "/usr/local/libexec/astra-font-worker";
 }
 
+static const char *astra_host_codec_worker_path(void)
+{
+    const char *path = g_getenv("ASTRA_CODEC_WORKER_PATH");
+    return path != NULL && path[0] != '\0' ? path :
+        "/usr/local/libexec/astra-codec-worker";
+}
+
+static void astra_host_codec_session_free(gpointer opaque)
+{
+    AstraCodecHostSession *session = opaque;
+
+    astra_codec_host_close(session);
+    g_free(session);
+}
+
+static void astra_host_execute_codec(Astra68State *s,
+    AstraHostChannel *channel, uint8_t *command, uint32_t physical,
+    uint32_t bytes, uint32_t command_bytes, uint32_t generation)
+{
+    uint32_t operation = lduw_be_p(command + HOST_FIELD(operation));
+    uint32_t handle = ldl_be_p(command + HOST_FIELD(handle));
+    uint32_t length = ldl_be_p(command + HOST_FIELD(data_length));
+    uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
+    uint64_t offset = ((uint64_t)ldl_be_p(command + HOST_FIELD(offset_hi)) << 32) |
+                      ldl_be_p(command + HOST_FIELD(offset_lo));
+    uint32_t status = ASTRA_STATUS_INVALID;
+    uint8_t *data = NULL;
+    AstraCodecWorkerMessage event = {0};
+    AstraCodecHostSession *session = NULL;
+    int error = 0;
+
+    stl_be_p(command + HOST_FIELD(status), 0u);
+    stl_be_p(command + HOST_FIELD(result_length), 0u);
+    stl_be_p(command + HOST_FIELD(result_value), 0u);
+    if (channel == NULL ||
+        ldl_be_p(command + HOST_FIELD(size)) != ASTRA_HOST_COMMAND_SIZE ||
+        lduw_be_p(command + HOST_FIELD(version)) != ASTRA_HOST_COMMAND_VERSION ||
+        lduw_be_p(command + HOST_FIELD(flags)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(generation)) != generation ||
+        ldl_be_p(command + HOST_FIELD(value_hi)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(value_lo)) != 0u ||
+        operation < ASTRA_HOST_CODEC_OPEN ||
+        operation > ASTRA_HOST_CODEC_CLOSE ||
+        length > ASTRA_CODEC_WORKER_LIMIT ||
+        capacity > ASTRA_CODEC_WORKER_LIMIT + ASTRA_HOST_CODEC_RESULT_BYTES ||
+        (operation != ASTRA_HOST_CODEC_CLOSE &&
+         capacity < ASTRA_HOST_CODEC_RESULT_BYTES))
+        goto done;
+    for (size_t index = HOST_FIELD(session); index < ASTRA_HOST_COMMAND_SIZE;
+         ++index)
+        if (command[index] != 0u) goto done;
+    if (access(astra_host_codec_worker_path(), X_OK) != 0) {
+        status = ASTRA_STATUS_UNSUPPORTED;
+        goto done;
+    }
+    if (capacity != 0u) {
+        data = astra_host_command_data(s, physical, bytes, command_bytes,
+                                       command, capacity);
+        if (data == NULL) goto done;
+    }
+    if (operation == ASTRA_HOST_CODEC_OPEN) {
+        if (length != 0u || handle != 0u) goto done;
+        if (channel->codec_sessions == NULL)
+            channel->codec_sessions = g_hash_table_new_full(g_direct_hash,
+                g_direct_equal, NULL, astra_host_codec_session_free);
+        if (g_hash_table_size(channel->codec_sessions) >= 32u) {
+            status = ASTRA_STATUS_LIMIT;
+            goto done;
+        }
+        session = g_try_new0(AstraCodecHostSession, 1);
+        if (session == NULL) {
+            status = ASTRA_STATUS_LIMIT;
+            goto done;
+        }
+        error = astra_codec_host_open(astra_host_codec_worker_path(), offset,
+                                      session, &event);
+        if (error == 0) {
+            do {
+                ++channel->codec_next_handle;
+            } while (channel->codec_next_handle == 0u ||
+                     g_hash_table_contains(channel->codec_sessions,
+                         GUINT_TO_POINTER(channel->codec_next_handle)));
+            handle = channel->codec_next_handle;
+            g_hash_table_insert(channel->codec_sessions,
+                                GUINT_TO_POINTER(handle), session);
+        } else {
+            astra_host_codec_session_free(session);
+        }
+    } else if (handle == 0u || channel->codec_sessions == NULL ||
+               (session = g_hash_table_lookup(channel->codec_sessions,
+                                              GUINT_TO_POINTER(handle))) == NULL) {
+        status = ASTRA_STATUS_BAD_HANDLE;
+        goto done;
+    } else if (operation == ASTRA_HOST_CODEC_CLOSE) {
+        if (length != 0u || capacity != 0u || offset != 0u) goto done;
+        g_hash_table_remove(channel->codec_sessions, GUINT_TO_POINTER(handle));
+        status = ASTRA_STATUS_OK;
+        goto done;
+    } else if (operation == ASTRA_HOST_CODEC_SOURCE) {
+        if (length > session->requested_capacity ||
+            length > capacity - ASTRA_HOST_CODEC_RESULT_BYTES ||
+            offset != session->requested_offset) goto done;
+        error = astra_codec_host_supply(session, offset,
+            data + ASTRA_HOST_CODEC_RESULT_BYTES, length, &event,
+            data + ASTRA_HOST_CODEC_RESULT_BYTES,
+            capacity - ASTRA_HOST_CODEC_RESULT_BYTES);
+    } else if (operation == ASTRA_HOST_CODEC_READ) {
+        if (length != 0u || offset != 0u ||
+            capacity == ASTRA_HOST_CODEC_RESULT_BYTES) goto done;
+        error = astra_codec_host_read(session,
+            capacity - ASTRA_HOST_CODEC_RESULT_BYTES, &event,
+            data + ASTRA_HOST_CODEC_RESULT_BYTES);
+    } else {
+        if (length != 0u) goto done;
+        error = astra_codec_host_seek(session, offset, &event);
+    }
+    if (error != 0) {
+        error_report("astra codec worker transport failed: %s",
+                     strerror(-error));
+        if (handle != 0u && channel->codec_sessions != NULL)
+            g_hash_table_remove(channel->codec_sessions,
+                                GUINT_TO_POINTER(handle));
+        status = error == -ENOMEM ? ASTRA_STATUS_LIMIT : ASTRA_STATUS_IO;
+        goto done;
+    }
+    if (event.length > capacity - ASTRA_HOST_CODEC_RESULT_BYTES) {
+        g_hash_table_remove(channel->codec_sessions, GUINT_TO_POINTER(handle));
+        status = ASTRA_STATUS_PROTOCOL;
+        goto done;
+    }
+    /* Worker wire is host native; HOST0 data is big-endian 68040 words. */
+    const uint32_t *words = (const uint32_t *)(const void *)&event;
+    for (size_t index = 0; index < sizeof(event) / sizeof(uint32_t); ++index)
+        stl_be_p(data + index * sizeof(uint32_t), words[index]);
+    stl_be_p(command + HOST_FIELD(result_length),
+             ASTRA_HOST_CODEC_RESULT_BYTES + event.length);
+    stl_be_p(command + HOST_FIELD(result_value), handle);
+    status = ASTRA_STATUS_OK;
+done:
+    stl_be_p(command + HOST_FIELD(status), status);
+}
+
 static void astra_host_execute_fonts(Astra68State *s,
     AstraHostChannel *channel, uint8_t *command, uint32_t physical,
     uint32_t bytes, uint32_t command_bytes, uint32_t generation)
@@ -5141,7 +5658,8 @@ static void astra_host_execute_command(Astra68State *s, uint32_t owner,
         service == ASTRA_HOST_SERVICE_REMOTE_DESKTOP ||
         service == ASTRA_HOST_SERVICE_ENTROPY ||
         service == ASTRA_HOST_SERVICE_VOLUMES || service == ASTRA_HOST_SERVICE_AUDIO ||
-        service == ASTRA_HOST_SERVICE_FONTS;
+        service == ASTRA_HOST_SERVICE_FONTS ||
+        service == ASTRA_HOST_SERVICE_CODEC;
     int64_t started = non_fs ? qemu_clock_get_ns(QEMU_CLOCK_REALTIME) : 0;
     if (channel != NULL && channel->bound &&
         lduw_be_p(command + HOST_FIELD(service)) !=
@@ -5172,6 +5690,10 @@ static void astra_host_execute_command(Astra68State *s, uint32_t owner,
     else if (lduw_be_p(command + HOST_FIELD(service)) ==
                  ASTRA_HOST_SERVICE_FONTS)
         astra_host_execute_fonts(s, channel, command, physical, bytes,
+                                 command_bytes, expected_generation);
+    else if (lduw_be_p(command + HOST_FIELD(service)) ==
+                 ASTRA_HOST_SERVICE_CODEC)
+        astra_host_execute_codec(s, channel, command, physical, bytes,
                                  command_bytes, expected_generation);
     else
         astra_host_execute_fs(s, owner, channel, command, physical, bytes,
@@ -8076,9 +8598,10 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
     case 0x310: return astra_irq_current(s);
     case 0x504: return 1;
     case 0x700: return ASTRA_DEVICE_CLASS_INPUT;
-    case 0x704: return ASTRA_INPUT_VERSION_1_1;
+    case 0x704: return ASTRA_INPUT_VERSION_1_2;
     case 0x708:
-        return ASTRA_INPUT_CAP_KEYBOARD | ASTRA_INPUT_CAP_POINTER;
+        return ASTRA_INPUT_CAP_KEYBOARD | ASTRA_INPUT_CAP_POINTER |
+               ASTRA_INPUT_CAP_GAMEPAD;
     case 0x70c: return astra_input_status(&s->input);
     case 0x710:
         return astra_input_level(&s->input) != 0 ?
@@ -8142,6 +8665,8 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
                 ASTRA_HOST_CAP_VOLUME_CATALOG |
                 (access(astra_host_font_worker_path(), X_OK) == 0 ?
                     ASTRA_HOST_CAP_FONT_CONVERT : 0u) |
+                (access(astra_host_codec_worker_path(), X_OK) == 0 ?
+                    ASTRA_HOST_CAP_CODEC : 0u) |
 #endif
                 (s->audio.enabled ? ASTRA_HOST_CAP_AUDIO_STREAM : 0u) : 0u;
     case 0x88c:
@@ -8325,6 +8850,13 @@ static void astra_vesta_write32(Astra68State *s, hwaddr offset,
         }
         if ((value & ASTRA_INPUT_ACK_OVERFLOW) != 0) {
             s->input.overflow = false;
+            s->input.head = s->input.tail;
+            s->input.motion_released = false;
+#ifdef CONFIG_LINUX
+            for (unsigned slot = 0; slot < ASTRA_INPUT_GAMEPAD_LIMIT; ++slot)
+                if (astra_gamepads[slot] != NULL)
+                    astra_gamepad_snapshot(astra_gamepads[slot], true);
+#endif
         }
         astra_update_irq(s);
         break;
@@ -8991,10 +9523,17 @@ static void astra_machine_reset(void *opaque)
     s->input.tail = 0;
     s->input.keyboard_sequence = 0;
     s->input.pointer_sequence = 0;
+    memset(s->input.gamepad_sequence, 0,
+           sizeof(s->input.gamepad_sequence));
     s->input.overflow = false;
     s->input.motion_released = false;
     s->input.dropped = 0;
     ++s->input.host_generation;
+#ifdef CONFIG_LINUX
+    for (unsigned slot = 0; slot < ASTRA_INPUT_GAMEPAD_LIMIT; ++slot)
+        if (astra_gamepads[slot] != NULL)
+            astra_gamepad_snapshot(astra_gamepads[slot], true);
+#endif
 
     astra_block_reset(s);
     astra_display_reset(s);

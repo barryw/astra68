@@ -24,6 +24,7 @@ for required in (
     "bin/astra-remote-desktop=",
     "bin/astra-audio-host=",
     "bin/astra-font-worker=",
+    "bin/astra-codec-worker=",
     "font-worker-target",
     "bin/fs-baseline.py=",
     "systemd/astra-remote-desktop.service=",
@@ -52,6 +53,10 @@ for required in (
     assert required in script, required
 assert "ASTRA_DE25_TERMINAL_DISPLAY" not in script
 assert '"kernel/astra_graphics_arena.ko=' not in script
+
+udev_rules = (Path(__file__).parents[2] /
+              "fpga/de25/99-astra-qemu.rules").read_text()
+assert 'ENV{ID_INPUT_JOYSTICK}=="1", GROUP="astra", MODE="0660"' in udev_rules
 
 graphics_makefile = (Path(__file__).parents[2] /
                      "fpga/arty/linux/Makefile").read_text()
@@ -125,6 +130,8 @@ if "storage-provider-target" in args:
     products = [out / "astra-storage-aarch64"]
 elif "font-worker-target" in args:
     products = [out / "astra-font-worker-aarch64"]
+elif "codec-worker-target" in args:
+    products = [out / "astra-codec-worker-aarch64"]
 elif "remote-desktop" in args:
     products = [out / "astra-remote-desktop"]
 else:
@@ -194,6 +201,8 @@ for product in products:
             assert provider.read_bytes() == (output / "bin/astra-storage").read_bytes()
             assert (output / "bin/astra-font-worker").read_bytes() == \
                 b"fresh astra-font-worker-aarch64\n"
+            assert (output / "bin/astra-codec-worker").read_bytes() == \
+                b"fresh astra-codec-worker-aarch64\n"
             subprocess.run(["python3", str(tree / "tools/astra_release.py"),
                             "verify", str(output)], check=True, stdout=subprocess.DEVNULL)
         finally:

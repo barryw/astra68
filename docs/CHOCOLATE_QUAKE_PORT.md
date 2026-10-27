@@ -1,12 +1,148 @@
 # Chocolate Quake on Astra: port plan
 
-Status: survey only (2026-10-03). Nothing has been built for Astra or run.
-The only build evidence is a trial compile on the Mac described under
-"Evidence method". Target: Chocolate Quake 2.1.0 (tag `chocolate-quake-2.1.0`,
-`8ee22175e3a5613e94ad2f9776aadc428b948cf3`, 2026-02-22). Upstream HEAD
-`edb82093` is 14 commits later. The model is `CHOCOLATE_DOOM_PORT.md`:
-upstream source is built unmodified, and every missing piece is implemented
-once, in the Astra layer that owns it.
+Status: asset-backed gameplay and effects ran on DE25; Ogg music uses Codec
+Kit's isolated AArch64 Vorbis worker. Guest music underflow telemetry found
+startup gaps; post-seek preroll eliminated them. Exact staged release passed
+DE25 music and native Codec Kit gates; production selection remains prior
+release (2026-10-27).
+Target: Chocolate Quake 2.1.0 (tag
+`chocolate-quake-2.1.0`, commit
+`8ee22175e3a5613e94ad2f9776aadc428b948cf3`).
+
+## Current checkpoint
+
+- Revised SDL_mixer Ogg adapter decodes ahead on a separate thread, then
+  feeds its existing output stream without blocking the audio callback.
+  A guarded 180-second DE25 trial measured 21.18 and 20.84 presents/s in
+  two 15-second gameplay windows, with zero software gaps and zero HDMI
+  underruns in both. Quake used 78.9% and 75.2% guest CPU and 17.4 and
+  18.6 MiB resident memory. A 20-second capture of final HDMI mix had no
+  silence lasting 5 ms at -90 dB. Three software gaps occurred across trial;
+  two were logged at startup/shutdown boundaries. Guest music telemetry later
+  found 59 callback underflows masked by effects. A 512 KiB queue reduced
+  these to one startup burst of two underflows. SDL_mixer's `Seek(0)` after
+  `Play` cleared the first preroll. Adapter now waits for 128 KiB of fresh
+  PCM after seek, with a three-second timeout. Its QEMU gate and guarded
+  180-second DE25 trial passed: zero guest Ogg underflows at track close,
+  zero HDMI gaps over 20 seconds, and zero host gaps in a 15-second gameplay
+  window. One host gap occurred during startup.
+  Production
+  release and storage were unchanged, and board services recovered. Evidence:
+  Beast `/var/tmp/astra-codec-voice-evidence-20261027/`.
+- Exact staged release
+  `036227968411287ff384cce78b66c0a24f5d520698dbdf7ca25ad814709885aa`
+  passed native Codec Kit and 180-second Quake DE25 trials. Its Ogg track
+  closed with zero guest underflows and 58 ms preroll wait. Two gameplay
+  windows had zero host gaps at 16.39 and 19.25 presents/s, with 81.4% and
+  80.6% Quake guest CPU and 18.6 MiB resident memory. A 20-second HDMI
+  capture had zero underruns, overflows, gaps, or silence of 5 ms at -90 dB;
+  mean level was -12.8 dB. User heard continuous music and effects. Both
+  trials restored prior production release and services.
+- A separate PCM voice design was rejected after it produced 349 software
+  gaps in one 15-second gameplay sample and 1,708 over a guarded trial.
+
+- First Codec Kit DE25 Quake trial used the same private asset-backed image
+  with a candidate release and isolated AArch64 Vorbis worker. Quake found
+  `track02.ogg` and played through SDL_mixer's native Codec Kit adapter.
+  Two 15-second samples measured 21.91 and 15.66 presents/s, 20 and 0
+  software audio gaps, zero hardware underruns, and 76.5% and 82.9% Quake
+  guest CPU. Its resident memory was 17.0 and 18.2 MiB. This is a large
+  improvement over STB decode's 242 gaps/15 seconds, but changing demo maps
+  and two windows cannot prove sustained smoothness. User acoustic report is
+  still pending. Production release and storage were not changed; board
+  services returned active. Evidence: Beast
+  `/var/tmp/astra-codec-board-evidence/`.
+- Final staged release `0170a92de17493885576ca6a79e34703f49cf47b7c2e506fc958c0a69f1a8be2`
+  passed a guarded DE25 Quake trial and restored production. Two gameplay
+  windows measured 22.80 and 18.25 presents/s, 20 and 18 software audio gaps,
+  zero hardware underruns, and 76.4% Quake guest CPU in the first window.
+  Host logged 107 source gaps from the 44.1 kHz audio stream during the trial.
+  Vorbis decode offload works, but smooth music playback remains unqualified.
+
+- `make -C sw/userspace/ports/chocolate-quake bundle` on Beast builds pinned
+  upstream through installed Astra NDK CMake toolchain, checks exact dynamic
+  dependencies, and creates `build/ChocolateQuake.app`. Its executable SHA-256
+  is `92044a1c52657895f9928d7918718aaf73749a4c24f219953bf1bc0618f44d56`.
+- Astra's standard SDL Kit already contains MP3, Ogg Vorbis, and FLAC decoders
+  in `SDL2_mixer.library.3`. NDK ships `SDL_mixer.h` and
+  `SDL2_mixer::SDL2_mixer`; Quake's prepared source uses that shared library
+  for external music tracks. No separate codec copy or libmad/libvorbis/libFLAC
+  package is needed. NDK `dist-check` builds a consumer that calls
+  `Mix_Init(MIX_INIT_MP3 | MIX_INIT_OGG | MIX_INIT_FLAC)`; existing
+  `SDLMixerProbe` tests decoding and playback of all three formats in QEMU.
+- Prepared source searches `/app/resources/id1` for bundled game data, then
+  `/store/id1` for user files, saves, and overrides. It creates the writable
+  store directory. `pak0.pak` is user supplied; put it in bundle's
+  `resources/id1/` or application's `/store/id1/`. No game data is bundled.
+- First guarded DE25 trial reached `Host_Init` and reported missing `gfx.wad`
+  without game data. User-supplied registered `pak0.pak` and `track02.ogg`
+  later ran in private copied-image trial; original assets and production
+  storage stayed unchanged. Two FPGA HDMI captures showed different gameplay
+  frames. Effects and SDL2_mixer Ogg music initialized, but later probes found
+  music paused after 0.3 seconds. No trial panic occurred;
+  release selector and production image hash stayed unchanged, and all three
+  services returned active. Evidence: Beast
+  `/var/tmp/astra-quake-board-evidence-20261026/`.
+- SDL Kit 2.32.11 fixes zero-sized fullscreen restore geometry and exposes
+  one physical audio output to multiple independent SDL streams. Quake requires
+  2.32.11. That SDL Kit requires system.library 4.3.0 for gamepad symbols.
+  Production still has SDL Kit 2.32.10, so normal Quake launch awaits a
+  coordinated Runtime and SDL Kit release.
+- Supervisor now completes boot services before startup applications, even
+  if an application precedes Desktop in the manifest. Desktop signals ready
+  after first frame and startup sound drain. DE25 deliberately used that
+  manifest order and logged sound completion before Quake launch. This follows
+  Haiku's launch target ordering in
+  `~/Git/haiku/src/servers/launch/LaunchDaemon.cpp:520-550`, adapted to
+  Astra's service-ready handshake. Fullscreen restore geometry follows
+  Haiku's saved window-frame behavior in
+  `~/Git/haiku/src/kits/interface/Window.cpp:1599-1700`, adapted to Astra's
+  SDL backend. Audio discovery follows
+  `SDL_haikuaudio.cc` in the pinned SDL source while using Astra's PCM streams.
+- A second guarded DE25 trial ran the installed-NDK CMake SDL consumer after
+  its `Mix_Init` call enabled MP3, Ogg Vorbis, and FLAC. It printed
+  `Astra CMake SDL2`, exited normally, and restored production services and
+  image hash. This checks codec availability through NDK on physical hardware;
+  at that checkpoint, asset-backed trials had not qualified smooth music.
+- First 60-second physical telemetry run measured about 7-14 presents/s
+  after initial startup, 63-86% Quake guest CPU in most five-second windows,
+  and 49 software audio source gaps with zero guest audio underruns. User saw
+  several multi-second pauses. Two more guarded DE25 runs collected 90 warm
+  and 60 cold one-second windows. Temporary generic SDL warnings at 500 ms
+  recorded no post-startup frame gap or blocked present. One warm
+  zero-present window occurred before the first gameplay frame, while Quake
+  loaded its first map. Cold run averaged 13 presents/s and recorded 42
+  software audio source gaps. Quake's demo loop changed maps during both
+  runs; whether that matches the user's perceived pauses is still unconfirmed.
+  At that checkpoint, smoothness, clean quit, acoustic audio, and production
+  release remained open. Later Codec Kit trials above qualified music and
+  acoustic playback on a staged release.
+- Same-image DE25 A/B trial changed only Quake's effects mix default from
+  44,100 to 11,025 Hz; SDL_mixer music stayed at 44,100 Hz. Twelve five-second
+  gameplay windows per build averaged 10.44 versus 19.58 presents/s (+88%).
+  Quake guest CPU share averaged 84% versus 79%; audio source gaps fell from
+  31 to 13, and guest underruns stayed zero. Both builds played the same first
+  demo, but the faster build advanced farther through it, so this is a strong
+  workload comparison rather than a fixed-frame timedemo. Acoustic effects
+  quality was later confirmed good by user. Both runs had music paused and
+  therefore measure effects-only behavior. Both restored production services and
+  preserved production storage.
+- Quake's music adapter rewrote an unchanged volume cvar on its first update,
+  then took its zero-volume pause branch. A native DE25 trace showed
+  `Mix_PausedMusic()=1` and only 0.18-0.25 seconds of music position after five
+  seconds. The adapter now updates the cvar only when clamping changed its
+  value and uses the integer SDL mixer level for pause/resume. After this fix,
+  STB Vorbis advanced 3.44 seconds in five but generated 242 software audio
+  gaps over 15 seconds. A fixed-point Tremor trial advanced 4.22 seconds in
+  five and reduced gaps to 15. Tremor was experimental and is not retained in
+  SDL Kit. Music is still below real-time speed, so Quake remains a private
+  trial. Evidence: Beast `/mnt/Documents/astra68/quake-audio-20261026/`.
+
+## Earlier survey and plan
+
+Following sections record original 2026-10-03 survey. Their build blockers,
+requirements matrix, and phases are historical where current checkpoint above
+supersedes them.
 
 Upstream paths below are relative to the Chocolate Quake tree. Astra paths are
 relative to this repository.
@@ -50,7 +186,7 @@ relative to this repository.
 
 | Area | Chocolate Quake uses | Astra | Verdict |
 |---|---|---|---|
-| Build | CMake config packages for SDL2 and SDL2_net; `find_library` for vorbis, vorbisfile, mad and FLAC | No Astra CMake toolchain file or SDL config packages (`CURRENT_STATE.md:198-204`, `DEVILUTIONX_PORT.md` item 2); none of the four codec libraries is ported. SDL_mixer uses stb_vorbis, minimp3 and dr_flac (`sw/userspace/sdl2/Makefile:276-277`) | MISSING |
+| Build | CMake config packages for SDL2 and SDL2_net; `find_library` for vorbis, vorbisfile, mad and FLAC | Installed NDK now supplies Astra CMake toolchain and SDL2/SDL2_net configs; native, POSIX, C++23 and SDL smoke ran on DE25. None of four codec libraries is ported. SDL_mixer uses stb_vorbis, minimp3 and dr_flac (`sw/userspace/sdl2/Makefile:276-277`) | CMake PRESENT; codecs MISSING |
 | libc via SDL.h | Upstream relies on `<SDL.h>` to pull in `<stdlib.h>`, `<math.h>` and `<string.h>`. The trial compile fails on `rand`, `exit`, `atof`, `sin` and `sqrtf` without them | Astra's public `SDL_config_minimal.h` defines only `HAVE_STDIO_H`, `HAVE_SIGNAL_H` and `HAVE_SIGACTION`. `HAVE_STDLIB_H` is passed only to SDL's own build (`sw/userspace/sdl2/Makefile:133`, `prepare_source.py:64-66,101-104`) | MISSING (SDL Kit header) |
 | errno | `<sys/errno.h>` for `errno` (`src/net/src/net_udp.c:33,168`) | picolibc's `sys/errno.h` defines the E* values but not `errno`. The trial compile fails there | MISSING (libc header) |
 | Video | Window `FULLSCREEN_DESKTOP` (`vid_window.c:88`). Renderer `TARGETTEXTURE` only (`:73`). 8-bit `SDL_Surface`, `SDL_LowerBlit` into a locked ARGB8888 streaming texture (`vid_buffers.c:28,241-242`), then `RenderCopy` under `SDL_RenderSetLogicalSize(320,240)` (`vid_window.c:51`). End screen asks for `PRESENTVSYNC` and sets linear scaling (`es_window.c:42`, `es_buffer.c:130`) | The same present path as Chocolate Doom: the 68040 `Blit1to4` (`a0c4e9b6`), the `astra` renderer, nearest BLIT to the window. Fullscreen (`SDL_astravideo.c:306-323`) and vsync (`SDL_astrarender.c:1184-1195`) are now present | PRESENT |
@@ -232,10 +368,10 @@ resamples it to 48 kHz at no guest cost.
    compiles.
 2. **picolibc `sys/errno.h`** declares `errno`, as glibc and BSD do, recorded
    in `ASTRA_VENDOR.md`.
-3. **CMake integration (toolchain + NDK).** Ship an Astra toolchain file,
-   `Platform/Astra.cmake`, and `SDL2Config.cmake`/`SDL2_netConfig.cmake` with
-   the SDL Kit, using the dynamic link that Chocolate Doom's Makefile builds
-   by hand. DevilutionX needs the same.
+3. **CMake integration (toolchain + NDK): DONE.** Installed NDK ships an Astra
+   toolchain file, `Platform/Astra.cmake`, SDL2/SDL2_net config packages and
+   the same exact dynamic link policy as Chocolate Doom's Makefile. Beast
+   archive gate and DE25 native/POSIX/C++23/SDL runtime smoke passed.
 4. **Music codecs.** libvorbis/vorbisfile, libmad and libFLAC are hard
    requirements (decision 2).
 5. **Application arguments (manifest + supervisor).** An `argument` key for

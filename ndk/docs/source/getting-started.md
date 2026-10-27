@@ -45,6 +45,30 @@ identity macros, together with `$(ASTRA_POSIX_LIBS)`.
 self-contained image instead; the system uses that only where the loader or
 the system volume may not be available yet.
 
+For new C/C++ ports, use CMake and Ninja with the extracted NDK toolchain:
+
+```sh
+cmake -S . -B build-astra -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=/path/to/ndk/cmake/m68k-astra-toolchain.cmake
+cmake --build build-astra
+```
+
+```cmake
+cmake_minimum_required(VERSION 3.21)
+project(hello C)
+find_package(Astra CONFIG REQUIRED)
+add_executable(hello hello.c)
+target_link_libraries(hello PRIVATE Astra::Native)
+```
+
+Native programs provide `astra_main` and identity through `ASTRA_PROGRAM`.
+POSIX programs retain `main` and call
+`astra_posix_program(hello NAME hello VERSION 1.0.0 AUTHOR "Author"
+COPYRIGHT "Copyright holder")`. Add `CXX` for C++ programs. SDL ports call
+`find_package(SDL2 CONFIG REQUIRED)` and link `SDL2::SDL2`; SDL2 addon
+packages expose matching imported targets. `tests/cmake-smoke/CMakeLists.txt`
+is the installed archive's checked example.
+
 ## Results
 
 Every function returning {c:type}`AstraResult` reports success as

@@ -36,13 +36,14 @@ remains responsible for cleanup after a crash or forced termination.
 include/astra/       public application API
 docs/                Doxygen/Sphinx sources for the generated guide
 make/                make fragments an application Makefile includes
+cmake/               CMake toolchain and installed Kit package configs
 tests/               distribution and header-contract tests
 examples/            small application-facing examples
 ```
 
-The NDK ships only public headers, documentation, examples, make fragments,
-and distribution tests. Implementations live with the components that own
-them under `sw/userspace`: `system.library` and `libastra.a` in
+The NDK ships only public headers, documentation, examples, Make fragments,
+CMake package configs, and distribution tests. Implementations live with the
+components that own them under `sw/userspace`: `system.library` and `libastra.a` in
 `sw/userspace/system`, UTF-8 in `sw/common/utf8.c`. The front-panel driver
 lives in the boot ROM (`sw/boot`, header `sw/include/astra/front_panel.h`) and
 is not part of the NDK.
@@ -52,7 +53,7 @@ hardware diagnostics. It is not an application API.
 
 ## Build
 
-The target library is freestanding. The cross compiler is selected by
+The native target library is freestanding. The cross compiler is selected by
 `mk/m68k-cross.mk`, which prefers `m68k-astra-gcc`, falls back to
 `m68k-linux-gnu-gcc`, then `m68k-elf-gcc`:
 
@@ -82,6 +83,35 @@ shares resident code and library updates; a developer may still choose static
 linking when self-containment is the stronger requirement. Astra's production
 tree uses that choice for Supervisor and Storage, which bootstrap the loader
 and system volume.
+
+CMake with Ninja is the standard build interface for new C/C++ application
+ports. Point CMake at the toolchain in the extracted NDK; its installed
+package configs supply native startup, POSIX/C++ entry contracts, versioned
+Kit libraries, and SDL2 targets:
+
+```sh
+cmake -S . -B build-astra -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=/path/to/ndk/cmake/m68k-astra-toolchain.cmake
+cmake --build build-astra
+```
+
+Use `find_package(Astra CONFIG REQUIRED)` and link native programs to
+`Astra::Native`. POSIX programs keep ordinary `main`; call
+`astra_posix_program(target NAME app-name VERSION 1.0.0 AUTHOR "Author"
+COPYRIGHT "Copyright holder")` after `add_executable`. Add `CXX` for C++
+programs. `find_package(SDL2 CONFIG REQUIRED)` supplies `SDL2::SDL2`;
+SDL2_net, SDL2_image, SDL2_mixer, and SDL2_ttf have matching package targets.
+The full checked example is `tests/cmake-smoke/CMakeLists.txt`. The installed
+NDK controls target include and library search, so host libraries cannot be
+mistaken for Astra Kits.
+
+MP3, Ogg Vorbis, and FLAC decoders ship inside standard `SDL2_mixer.library.3`.
+For SDL music playback, include `<SDL_mixer.h>`, call
+`Mix_Init(MIX_INIT_MP3 | MIX_INIT_OGG | MIX_INIT_FLAC)`, and link
+`SDL2_mixer::SDL2_mixer`. Bundle manifest must require
+`SDL2_mixer.library 3 2.8.2` and grant `PCM`. NDK `dist-check` compiles this
+call through installed headers and CMake target; `SDLMixerProbe` exercises
+all three decoders with real files in QEMU.
 
 Override `CROSS` or `CPU_FLAGS` for another compatible toolchain. Published
 components include message ports in `astra/port.h`, shared areas in
@@ -140,8 +170,9 @@ headers), `include/ncursesw` (terminfo headers), `include/SDL2`,
 access) alongside `include/astra` and the HTML/PDF guides. `make -C ndk
 dist-check` extracts that archive and, using only its contents and the
 installed `m68k-astra` compiler, dynamically links native C, POSIX C, and
-POSIX C++ programs, their static-linked variants, and an SDL program. Each
-smoke program also passes the packaged dynamic-executable contract checker.
+POSIX C++ programs, their static-linked variants, and an SDL program. It also
+builds native C, POSIX C, C++23, and SDL programs through CMake and Ninja.
+Each smoke program passes the packaged dynamic-executable contract checker.
 
 Documentation warnings are errors, including undocumented public structures,
 members, callbacks, declarations, parameters, return values, and unresolved

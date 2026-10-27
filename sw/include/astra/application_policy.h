@@ -17,6 +17,7 @@
     X("GUI", RAW) \
     X("CLIPBOARD", RAW) \
     X("PCM", RAW) \
+    X("CODEC", RAW) \
     X("NETWORK", RAW) \
     X("NETWORK_LISTEN", RAW) \
     X("NTP", RAW) \

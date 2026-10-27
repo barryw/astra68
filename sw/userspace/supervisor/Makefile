@@ -55,6 +55,7 @@ LOADER_STATUS_TEST := build/host/test_loader_status
 LAUNCH_REPORT_TEST := build/host/test_launch_report
 VOLUME_READ_TEST := build/host/test_volume_read
 LOADER_RECOVERY_TEST := build/host/test_loader_recovery
+LAUNCH_VOLUME_TEST := build/host/test_launch_volume
 TEST_SOURCES := src/supervisor.c $(RUNTIME)/src/startup.c $(ASTRA_COMMON)/utf8.c \
 	tests/test_supervisor.c
 ASTRA_PROGRAM_OWNER_TARGETS := $(RUNTIME):all \
@@ -159,9 +160,15 @@ $(LOADER_RECOVERY_TEST): $(LOADER_RECOVERY_SOURCES) src/loader.c ../../include/a
 		-ffunction-sections -fdata-sections $(LOADER_RECOVERY_SOURCES) \
 		-Wl,--gc-sections -o $@
 
+$(LAUNCH_VOLUME_TEST): tests/test_launch_volume.c src/loader.c include/loader.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		-ffunction-sections -fdata-sections $< \
+		-Wl,--gc-sections -o $@
+
 test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST) \
 		$(SERVICE_DEFINITION_TEST) $(LOADER_STATUS_TEST) $(LAUNCH_REPORT_TEST) \
-		$(VOLUME_READ_TEST) $(LOADER_RECOVERY_TEST)
+		$(VOLUME_READ_TEST) $(LOADER_RECOVERY_TEST) $(LAUNCH_VOLUME_TEST)
 	./$(HOST_TEST)
 	./$(LOADER_TEST)
 	./$(PROC_TREE_ROOT_TEST)
@@ -170,6 +177,7 @@ test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST) \
 	./$(LAUNCH_REPORT_TEST)
 	./$(VOLUME_READ_TEST)
 	./$(LOADER_RECOVERY_TEST)
+	./$(LAUNCH_VOLUME_TEST)
 
 sanitize:
 	@mkdir -p build/host
@@ -198,6 +206,10 @@ sanitize:
 		-ffunction-sections -fdata-sections $(LOADER_RECOVERY_SOURCES) \
 		-Wl,--gc-sections -o build/host/test_loader_recovery_sanitize
 	./build/host/test_loader_recovery_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
+		-ffunction-sections -fdata-sections tests/test_launch_volume.c \
+		-Wl,--gc-sections -o build/host/test_launch_volume_sanitize
+	./build/host/test_launch_volume_sanitize
 
 analyze: $(ANALYZER_OBJECTS)
 

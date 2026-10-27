@@ -62,6 +62,30 @@ PATCHES = {
 
 MORE_PATCHES = [
     ("include/SDL_config_minimal.h", (
+        "#define SDL_JOYSTICK_DISABLED   1",
+        "#define SDL_JOYSTICK_DUMMY 1\n#define SDL_JOYSTICK_VIRTUAL 1\n"
+        "#define SDL_JOYSTICK_ASTRA 1",
+    )),
+    ("Makefile.minimal", (
+        "\tsrc/joystick/dummy/*.c \\\n",
+        "\tsrc/joystick/dummy/*.c \\\n\tsrc/joystick/virtual/*.c \\\n"
+        "\tsrc/joystick/astra/*.c \\\n",
+    )),
+    ("src/joystick/SDL_joystick.c", (
+        "static SDL_JoystickDriver *SDL_joystick_drivers[] = {\n",
+        "static SDL_JoystickDriver *SDL_joystick_drivers[] = {\n"
+        "#ifdef SDL_JOYSTICK_ASTRA\n    &SDL_ASTRA_JoystickDriver,\n#endif\n",
+    )),
+    ("src/joystick/SDL_sysjoystick.h", (
+        "extern SDL_JoystickDriver SDL_DUMMY_JoystickDriver;\n",
+        "extern SDL_JoystickDriver SDL_ASTRA_JoystickDriver;\n"
+        "extern SDL_JoystickDriver SDL_DUMMY_JoystickDriver;\n",
+    )),
+    ("src/joystick/SDL_gamecontrollerdb.h", (
+        "#if defined(SDL_JOYSTICK_LINUX) || defined(__OpenBSD__)",
+        "#if defined(SDL_JOYSTICK_LINUX) || defined(SDL_JOYSTICK_ASTRA) || defined(__OpenBSD__)",
+    )),
+    ("include/SDL_config_minimal.h", (
         "#define HAVE_STDDEF_H   1",
         "#define HAVE_STDDEF_H   1\n#define HAVE_STDIO_H    1",
     )),
@@ -241,6 +265,7 @@ def prepare(source: Path) -> Path:
         + (PORT / "video" / "SDL_astravideo.c").read_bytes()
         + (PORT / "video" / "SDL_astravideo.h").read_bytes()
         + (PORT / "render" / "SDL_astrarender.c").read_bytes()
+        + (PORT / "joystick" / "SDL_astrajoystick.c").read_bytes()
         + (PORT / "filesystem" / "SDL_astrafilesystem.c").read_bytes()
         + (PORT / "Makefile").read_bytes()
     ).hexdigest()
@@ -265,6 +290,9 @@ def prepare(source: Path) -> Path:
     video.mkdir()
     shutil.copy2(PORT / "video" / "SDL_astravideo.c", video)
     shutil.copy2(PORT / "video" / "SDL_astravideo.h", video)
+    joystick = OUTPUT / "src" / "joystick" / "astra"
+    joystick.mkdir()
+    shutil.copy2(PORT / "joystick" / "SDL_astrajoystick.c", joystick)
     render = OUTPUT / "src" / "render" / "astra"
     render.mkdir()
     shutil.copy2(PORT / "render" / "SDL_astrarender.c", render)

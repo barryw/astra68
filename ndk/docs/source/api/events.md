@@ -41,3 +41,7 @@ The system event log, keyboard translation, modifiers, and terminals.
 ```{doxygenfile} input.h
 :project: astra-ndk
 ```
+
+```{doxygenfile} gamepad.h
+:project: astra-ndk
+```

@@ -35,13 +35,14 @@ SYSTEM_IDENTITY := build/m68k/dynamic/system_library.o
 SYSTEM_SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
 	src/application.c src/application_payload.c src/service_payload.c src/service_definition.c src/service_manager.c \
 	src/manifest.c src/bundle.c src/config_scope.c src/window.c \
-	src/pointer.c src/graphics.c src/display_mode.c src/clipboard.c \
+	src/input_observer.c src/pointer.c src/gamepad.c \
+	src/graphics.c src/display_mode.c src/clipboard.c \
 	src/keymap.c src/datetime.c
 SYSTEM_OBJECTS := $(patsubst src/%.c,build/m68k/dynamic/%.o,$(SYSTEM_SOURCES))
 SYSTEM_MAP := system.library.exports
 SYSTEM_HEADERS := $(addprefix $(NDK)/include/astra/,resource.h area.h \
 	port.h bulk_ring.h application.h service_manager.h manifest.h bundle.h \
-	config_library.h window.h pointer.h graphics.h clipboard.h keymap.h \
+	config_library.h window.h pointer.h gamepad.h graphics.h clipboard.h keymap.h \
 	datetime.h)
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 # The static archive also carries UTF-8, which the shared library takes from
@@ -55,9 +56,9 @@ ANALYZER_OBJECTS := $(patsubst src/%.c,build/analyzer/%.o,\
 
 TEST_UTF8 := $(ASTRA_COMMON)/utf8.c
 HOST_TESTS := application area bulk_ring bundle clipboard datetime graphics \
-	pointer port service_manager utf8 window
+	pointer gamepad port service_manager utf8 window
 SANITIZER_TESTS := application area bulk_ring bundle clipboard graphics \
-	pointer port service_manager utf8 window
+	pointer gamepad port service_manager utf8 window
 
 TEST_SOURCES_application := src/resource.c src/port.c src/application.c src/application_payload.c src/service_payload.c \
 	$(TEST_UTF8) $(RUNTIME)/src/arguments.c
@@ -71,7 +72,8 @@ TEST_SOURCES_datetime := src/datetime.c $(ASTRA_COMMON)/civil.c \
 	$(ASTRA_COMMON)/divide.c
 TEST_SOURCES_graphics := src/graphics.c src/display_mode.c src/resource.c \
 	src/area.c src/port.c src/window.c $(TEST_UTF8)
-TEST_SOURCES_pointer := src/resource.c src/port.c src/pointer.c
+TEST_SOURCES_pointer := src/resource.c src/port.c src/input_observer.c src/pointer.c
+TEST_SOURCES_gamepad := src/resource.c src/port.c src/input_observer.c src/gamepad.c
 TEST_SOURCES_port := src/resource.c src/port.c
 TEST_SOURCES_service_manager := src/resource.c src/port.c \
 	src/service_definition.c src/service_manager.c src/service_payload.c $(TEST_UTF8)
@@ -138,7 +140,7 @@ system-library-contract: $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(SYSTEM_MAP) $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^system.library.4 4.2.0 ABI 4.2$$'
+		grep -q '^system.library.4 4.3.0 ABI 4.3$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [system.library.4]'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1

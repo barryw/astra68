@@ -21,6 +21,10 @@ HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 SOURCE=${FLUIDSYNTH_ROOT:-$HERE/../../fluidsynth}
 REVISION=71e85b2ca6bf48641ba7e2261d8f2640ae473773 # v2.6.1
 DE25_SYSROOT=${DE25_SYSROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/astra68/de25-jammy-arm64}
+JOBS=${ASTRA_DE25_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')}
+case "$JOBS" in
+    ''|0*|*[!0-9]*) echo "ASTRA_DE25_BUILD_JOBS must be a positive integer" >&2; exit 2 ;;
+esac
 
 if [ "$(git -C "$SOURCE" rev-parse HEAD)" != "$REVISION" ]; then
     echo "FluidSynth at $SOURCE is not the pinned $REVISION" >&2
@@ -71,7 +75,7 @@ cmake -S "$SOURCE" -B "$OUT" -G Ninja $CROSS \
     -Denable-native-dls=off -Denable-signalsmith=off -Denable-systemd=off \
     -Denable-threads=on >"$OUT.configure.log" 2>&1 ||
     { cat "$OUT.configure.log" >&2; exit 1; }
-ninja -C "$OUT" libfluidsynth >"$OUT.build.log" 2>&1 ||
+ninja -j "$JOBS" -C "$OUT" libfluidsynth >"$OUT.build.log" 2>&1 ||
     { tail -40 "$OUT.build.log" >&2; exit 1; }
 test -f "$OUT/src/libfluidsynth.a"
 echo "$OUT/src/libfluidsynth.a"

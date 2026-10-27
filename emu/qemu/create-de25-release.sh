@@ -24,6 +24,7 @@ KERNEL_PACKAGE=${ASTRA_DE25_KERNEL_PACKAGE:?set ASTRA_DE25_KERNEL_PACKAGE to the
 PROVIDER=$REPOSITORY/build/de25-linux/astra-storage-aarch64
 FORMATTERS=$REPOSITORY/build/storage-format/de25
 FONT_WORKER=$REPOSITORY/build/de25-capture/astra-font-worker-aarch64
+CODEC_WORKER=$REPOSITORY/build/de25-capture/astra-codec-worker-aarch64
 RELEASE_TOOL=$REPOSITORY/tools/astra_release.py
 JOBS=${ASTRA_DE25_BUILD_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1\n')}
 case "$JOBS" in
@@ -43,6 +44,9 @@ make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
     CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
     font-worker-target
+make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
+    CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
+    codec-worker-target
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
     CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
     OUT="$REPOSITORY/build/de25-linux" \
@@ -113,6 +117,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "bin/astra-terminal-display=$DISPLAY" \
     "bin/astra-audio-host=$AUDIO" \
     "bin/astra-font-worker=$FONT_WORKER" \
+    "bin/astra-codec-worker=$CODEC_WORKER" \
     "bin/astra-storage=$PROVIDER" \
     "bin/astra-mkfs.fat=$FORMATTERS/astra-mkfs.fat" \
     "bin/astra-mkfs.exfat=$FORMATTERS/astra-mkfs.exfat" \

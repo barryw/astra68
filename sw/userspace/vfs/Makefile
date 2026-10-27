@@ -63,7 +63,7 @@ SERVICE_TARGET := build/m68k/libastravfs-service.a
 SYSTEM_STATIC_OBJECTS := $(SYSTEM)/build/m68k/manifest.o $(SYSTEM)/build/m68k/bundle.o \
 	$(SYSTEM)/build/m68k/utf8.o
 TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
-	build/m68k/filesystem_library.o build/m68k/volume.o \
+	build/m68k/filesystem_library.o build/m68k/filesystem_copy.o build/m68k/volume.o \
 	build/m68k/volume_client.o build/m68k/volume_port.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
@@ -94,6 +94,7 @@ FILESYSTEM_LIBRARY := build/m68k/libraries/filesystem.library.15
 FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/filesystem_library_identity.o \
 	build/m68k/library/filesystem_library.o \
+	build/m68k/library/filesystem_copy.o \
 	build/m68k/library/volume.o build/m68k/library/volume_client.o \
 	build/m68k/library/vfs_service_core.o \
 	build/m68k/library/vfs_client.o build/m68k/library/vfs_assign.o \

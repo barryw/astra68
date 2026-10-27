@@ -10,6 +10,7 @@ OUT="$BUILD_ROOT/vendor-ghrd"
 INCOMING="$BUILD_ROOT/vendor-ghrd.incoming"
 QUARTUS_BIN="$QUARTUS_ROOT/bin"
 . "$ROOT/fpga/de25/build_common.sh"
+scope_de25_build "$ROOT/fpga/de25/build_vendor_baseline.sh" "$@"
 
 python3 "$ROOT/fpga/de25/check_platform.py" \
     --quartus-root "$QUARTUS_ROOT" --ghrd "$GHRD" --license "$LICENSE"

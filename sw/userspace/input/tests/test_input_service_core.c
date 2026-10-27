@@ -71,6 +71,104 @@ static AstraInputEvent pointer(uint32_t kind, uint32_t flags, int32_t value,
     return event;
 }
 
+static AstraInputEvent gamepad(uint32_t kind, uint32_t flags, uint32_t value,
+                               uint32_t timestamp)
+{
+    return (AstraInputEvent){
+        .header = ASTRA_INPUT_HEADER(ASTRA_INPUT_CLASS_GAMEPAD, kind, flags),
+        .value = value,
+        .timestamp_ms = timestamp,
+        .device_sequence = (ASTRA_INPUT_GAMEPAD_DEVICE_BASE << 16) |
+                           timestamp,
+        .host_generation = 1u,
+    };
+}
+
+static void test_gamepad_autoconfiguration_and_hotplug(void)
+{
+    AstraInputService service = make_service();
+    TestSink first = { .limit = TEST_EVENT_CAPACITY };
+    TestSink late = { .limit = TEST_EVENT_CAPACITY };
+    TestSink legacy = { .limit = TEST_EVENT_CAPACITY };
+    AstraInputEvent event;
+    uint32_t legacy_count;
+
+    assert(ASTRA_INPUT_SERVICE_VERSION == 3u);
+    assert(ASTRA_INPUT_SUBSCRIBE_SEAT == 0x3fu);
+    assert(astra_input_service_attach(&service, 3u, sink_deliver, &legacy));
+    assert(astra_input_service_subscribe(&service, 3u,
+        ASTRA_INPUT_SUBSCRIBE_SEAT, 0u));
+    legacy_count = legacy.count;
+    assert(astra_input_service_attach(&service, 1u, sink_deliver, &first));
+    assert(astra_input_service_subscribe(&service, 1u,
+        ASTRA_INPUT_SUBSCRIBE_GAMEPAD, 0u));
+    event = gamepad(ASTRA_INPUT_GAMEPAD_ID, 0u, (3u << 16) | 0x0100u, 1u);
+    astra_input_service_ingest(&service, &event, false);
+    event = gamepad(ASTRA_INPUT_GAMEPAD_CONFIG, 0u,
+                    4u | (12u << 8) | (1u << 16), 2u);
+    astra_input_service_ingest(&service, &event, false);
+    event = gamepad(ASTRA_INPUT_GAMEPAD_DEVICE, ASTRA_INPUT_FLAG_DOWN,
+                    0x046dc216u, 3u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(first.count == 1u &&
+           first.events[0].type == ASTRA_INPUT_EVENT_GAMEPAD_DEVICE &&
+           first.events[0].value_x == (int32_t)0x046dc216u &&
+           first.events[0].value_y == (3 << 16 | 0x100) &&
+           first.events[0].total_x == (4 | 12 << 8 | 1 << 16));
+    event = gamepad(ASTRA_INPUT_GAMEPAD_AXIS, 2u << 8,
+                    (uint32_t)(int32_t)-12345, 4u);
+    astra_input_service_ingest(&service, &event, false);
+    event = gamepad(ASTRA_INPUT_GAMEPAD_BUTTON, ASTRA_INPUT_FLAG_DOWN,
+                    7u, 5u);
+    astra_input_service_ingest(&service, &event, false);
+    event = gamepad(ASTRA_INPUT_GAMEPAD_HAT, 0u, 2u, 6u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(first.count == 4u &&
+           first.events[1].code == 2u &&
+           first.events[1].value_x == -12345 &&
+           first.events[2].code == 7u &&
+           (first.events[2].flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u &&
+           first.events[3].value_x == 2);
+    assert(legacy.count == legacy_count);
+
+    assert(astra_input_service_attach(&service, 2u, sink_deliver, &late));
+    assert(astra_input_service_subscribe(&service, 2u,
+        ASTRA_INPUT_SUBSCRIBE_GAMEPAD, 7u));
+    assert(late.count == 7u &&
+           late.events[0].type == ASTRA_INPUT_EVENT_GAMEPAD_DEVICE &&
+           late.events[3].type == ASTRA_INPUT_EVENT_GAMEPAD_AXIS &&
+           late.events[3].value_x == -12345 &&
+           late.events[6].type == ASTRA_INPUT_EVENT_GAMEPAD_BUTTON);
+
+    event = gamepad(ASTRA_INPUT_GAMEPAD_DEVICE, 0u, 0u, 8u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(first.events[first.count - 1u].type ==
+           ASTRA_INPUT_EVENT_GAMEPAD_DEVICE &&
+           (first.events[first.count - 1u].flags &
+            ASTRA_INPUT_LOGICAL_DOWN) == 0u);
+    assert(late.events[late.count - 1u].type ==
+           ASTRA_INPUT_EVENT_GAMEPAD_DEVICE);
+    assert(legacy.count == legacy_count);
+
+    event = gamepad(ASTRA_INPUT_GAMEPAD_ID, 0u, (3u << 16) | 0x0100u, 9u);
+    astra_input_service_ingest(&service, &event, false);
+    event = gamepad(ASTRA_INPUT_GAMEPAD_CONFIG, 0u,
+                    4u | (12u << 8) | (1u << 16), 10u);
+    astra_input_service_ingest(&service, &event, false);
+    event = gamepad(ASTRA_INPUT_GAMEPAD_DEVICE, ASTRA_INPUT_FLAG_DOWN,
+                    0x046dc216u, 11u);
+    astra_input_service_ingest(&service, &event, false);
+    assert(first.events[first.count - 1u].type ==
+           ASTRA_INPUT_EVENT_GAMEPAD_DEVICE &&
+           (first.events[first.count - 1u].flags &
+            ASTRA_INPUT_LOGICAL_DOWN) != 0u);
+    assert(late.events[late.count - 1u].type ==
+           ASTRA_INPUT_EVENT_GAMEPAD_DEVICE &&
+           (late.events[late.count - 1u].flags &
+            ASTRA_INPUT_LOGICAL_DOWN) != 0u);
+    assert(legacy.count == legacy_count);
+}
+
 static void focus(AstraInputService *service, TestSink *sink)
 {
     sink->limit = TEST_EVENT_CAPACITY;
@@ -707,6 +805,7 @@ static void test_shared_pointer_sink(void)
 
 int main(void)
 {
+    test_gamepad_autoconfiguration_and_hotplug();
     test_keymap_modifiers_and_repeat();
     test_replaceable_keymap();
     test_meta_is_normalized_once();

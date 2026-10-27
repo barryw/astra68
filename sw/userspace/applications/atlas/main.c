@@ -467,11 +467,9 @@ static AstraResult open_entry(uint32_t index)
     if (astra_folder_path(root, directory.entries[index].name,
         path, sizeof(path)) != ASTRA_VFS_OK) return ASTRA_ERROR_INVALID_ARGUMENT;
     uint32_t pid;
-    if (strcmp(root, "/apps") == 0) {
-        size_t length = strlen(path);
-        if (length >= 4u && strcmp(path + length - 4u, ".app") == 0)
-            return astra_application_launch(launcher, path, (uint16_t)length, &pid);
-    }
+    size_t length = strlen(path);
+    if (length >= 4u && strcmp(path + length - 4u, ".app") == 0)
+        return astra_application_launch(launcher, path, (uint16_t)length, &pid);
     const char *arguments[] = {path};
     return astra_application_launch_with_arguments(launcher, "/apps/Atlas.app",
         (uint16_t)strlen("/apps/Atlas.app"), ASTRA_LAUNCH_SOURCE_DESKTOP,

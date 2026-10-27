@@ -305,15 +305,21 @@ static void ASTRAAUDIO_CloseDevice(_THIS)
     }
 }
 
+static void ASTRAAUDIO_DetectDevices(void)
+{
+    SDL_AddAudioDevice(SDL_FALSE, DEFAULT_OUTPUT_DEVNAME, NULL, (void *)1);
+}
+
 static SDL_bool ASTRAAUDIO_Init(SDL_AudioDriverImpl *impl)
 {
+    impl->DetectDevices = ASTRAAUDIO_DetectDevices;
     impl->OpenDevice = ASTRAAUDIO_OpenDevice;
     impl->ThreadInit = ASTRAAUDIO_ThreadInit;
     impl->WaitDevice = ASTRAAUDIO_WaitDevice;
     impl->GetDeviceBuf = ASTRAAUDIO_GetDeviceBuf;
     impl->PlayDevice = ASTRAAUDIO_PlayDevice;
     impl->CloseDevice = ASTRAAUDIO_CloseDevice;
-    impl->OnlyHasDefaultOutputDevice = SDL_TRUE;
+    impl->OnlyHasDefaultOutputDevice = SDL_FALSE;
     impl->SupportsNonPow2Samples = SDL_TRUE;
     return SDL_TRUE;
 }

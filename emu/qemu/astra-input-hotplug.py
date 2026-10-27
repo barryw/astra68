@@ -20,6 +20,7 @@ OBJECT_IDS = {
     "keyboard": "astra-keyboard",
     "pointer": "astra-pointer",
 }
+GAMEPAD_LIMIT = 4
 
 
 class QmpError(RuntimeError):
@@ -80,30 +81,66 @@ class QmpClient:
                 pass
 
 
-def discover(directory):
+def discover(directory, attached=None):
+    def identity(path):
+        try:
+            info = os.stat(path)
+        except OSError:
+            return None
+        if not stat.S_ISCHR(info.st_mode):
+            return None
+        sysfs = f"/sys/dev/char/{os.major(info.st_rdev)}:{os.minor(info.st_rdev)}"
+        return (path, info.st_dev, info.st_ino, info.st_rdev,
+                os.path.realpath(sysfs))
+
     devices = {}
     for role, pattern in DEVICE_PATTERNS.items():
         for path in sorted(glob.glob(os.path.join(directory, pattern))):
-            try:
-                info = os.stat(path)
-            except OSError:
-                continue
-            if stat.S_ISCHR(info.st_mode):
-                devices[role] = (path, info.st_dev, info.st_ino,
-                                 info.st_rdev)
+            found = identity(path)
+            if found is not None:
+                devices[role] = found
                 break
+    candidates = []
+    seen_devices = set()
+    patterns = (os.path.join(directory, "*-event-joystick"),
+                os.path.join(os.path.dirname(directory), "by-path",
+                             "*-event-joystick"))
+    for path in sorted(set(path for pattern in patterns
+                           for path in glob.glob(pattern))):
+        found = identity(path)
+        if found is not None and found[3] not in seen_devices:
+            seen_devices.add(found[3])
+            candidates.append(found)
+    attached = attached or {}
+    for slot in range(GAMEPAD_LIMIT):
+        current = attached.get(f"gamepad{slot}")
+        match = next((item for item in candidates if current is not None and
+                      item[0] == current[0]), None)
+        if match is not None:
+            devices[f"gamepad{slot}"] = match
+            candidates.remove(match)
+    for item in candidates:
+        for slot in range(GAMEPAD_LIMIT):
+            role = f"gamepad{slot}"
+            if role not in devices:
+                devices[role] = item
+                break
+        else:
+            break
     return devices
 
 
 def reconcile(qmp, attached, desired, report=print):
-    for role in DEVICE_PATTERNS:
+    for role in (*DEVICE_PATTERNS, *(f"gamepad{slot}"
+                                      for slot in range(GAMEPAD_LIMIT))):
         current = attached.get(role)
         wanted = desired.get(role)
         if current == wanted:
             continue
         if current is not None:
             try:
-                qmp.execute("object-del", {"id": OBJECT_IDS[role]})
+                qmp.execute("object-del", {"id": OBJECT_IDS.get(role,
+                                                      f"astra-{role}")})
             except QmpError as error:
                 report(f"Astra {role} detach failed: {error}", file=sys.stderr)
                 continue
@@ -111,12 +148,15 @@ def reconcile(qmp, attached, desired, report=print):
             report(f"Astra {role}: detached")
         if wanted is not None:
             try:
-                qmp.execute("object-add", {
-                    "qom-type": "input-linux",
-                    "id": OBJECT_IDS[role],
-                    "evdev": wanted[0],
-                    "repeat": False,
-                })
+                options = {"qom-type": "input-linux",
+                           "id": OBJECT_IDS.get(role, f"astra-{role}"),
+                           "evdev": wanted[0], "repeat": False}
+                if role.startswith("gamepad"):
+                    options = {"qom-type": "astra-evdev-gamepad",
+                               "id": f"astra-{role}",
+                               "evdev": wanted[0],
+                               "slot": int(role[len("gamepad"):])}
+                qmp.execute("object-add", options)
             except QmpError as error:
                 report(f"Astra {role} attach failed: {error}", file=sys.stderr)
                 continue
@@ -184,6 +224,7 @@ def synchronize_runtime(qmp_path, client=QmpClient, report=print):
 
 
 def run(qmp_path, device_directory, interval):
+    sys.stdout.reconfigure(line_buffering=True)
     running = True
 
     def stop(_signum, _frame):
@@ -198,7 +239,8 @@ def run(qmp_path, device_directory, interval):
         while running:
             if not tuned:
                 tuned = synchronize_runtime(qmp_path)
-            synchronize(qmp_path, attached, discover(device_directory))
+            synchronize(qmp_path, attached,
+                        discover(device_directory, attached))
             time.sleep(interval)
     finally:
         synchronize(qmp_path, attached, {})

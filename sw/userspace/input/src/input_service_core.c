@@ -178,12 +178,42 @@ static void deliver_pointer(AstraInputService *service,
     }
 }
 
+static void deliver_gamepad(AstraInputService *service,
+                            AstraLogicalInputEvent *event)
+{
+    for (uint32_t index = 0u; index < ASTRA_INPUT_CLIENT_MAX; ++index) {
+        AstraInputClient *client = &service->clients[index];
+
+        if (client->active != 0u &&
+            (client->subscriptions & ASTRA_INPUT_SUBSCRIBE_GAMEPAD) != 0u &&
+            deliver(service, client, event) == ASTRA_INPUT_DELIVERY_FULL)
+            client->desynchronized = 1u;
+    }
+}
+
+static AstraLogicalInputEvent gamepad_device_event(
+    AstraInputService *service, uint32_t slot,
+    const AstraInputGamepadState *pad, uint32_t timestamp_ms)
+{
+    AstraLogicalInputEvent event = make_event(
+        service, ASTRA_INPUT_EVENT_GAMEPAD_DEVICE,
+        pad->present ? ASTRA_INPUT_LOGICAL_DOWN : 0u, timestamp_ms);
+
+    event.code = slot;
+    event.value_x = (int32_t)pad->vendor_product;
+    event.value_y = (int32_t)pad->identity;
+    event.total_x = (int32_t)pad->configuration;
+    return event;
+}
+
 static void repair_state(AstraInputService *service, uint32_t timestamp_ms,
                          bool generation_change)
 {
     AstraLogicalInputEvent reset;
 
     clear_keys(service);
+    for (uint32_t slot = 0u; slot < ASTRA_INPUT_GAMEPAD_LIMIT; ++slot)
+        service->gamepads[slot] = (AstraInputGamepadState){0};
     reset = make_event(
         service, ASTRA_INPUT_EVENT_STATE_RESET,
         ASTRA_INPUT_LOGICAL_SYNTHETIC | ASTRA_INPUT_LOGICAL_LOSS,
@@ -463,6 +493,51 @@ bool astra_input_service_subscribe(AstraInputService *service,
             ++service->stats.coalesced_motion;
         }
     }
+    if ((subscriptions & ASTRA_INPUT_SUBSCRIBE_GAMEPAD) != 0u) {
+        for (uint32_t slot = 0u; slot < ASTRA_INPUT_GAMEPAD_LIMIT; ++slot) {
+            const AstraInputGamepadState *pad = &service->gamepads[slot];
+            AstraLogicalInputEvent event;
+
+            if (pad->present == 0u)
+                continue;
+            event = gamepad_device_event(service, slot, pad, timestamp_ms);
+            event.flags |= ASTRA_INPUT_LOGICAL_SYNTHETIC;
+            if (deliver(service, client, &event) != ASTRA_INPUT_DELIVERY_OK)
+                return false;
+            for (uint32_t axis = 0u; axis < (pad->configuration & 0xffu);
+                 ++axis) {
+                event = make_event(service, ASTRA_INPUT_EVENT_GAMEPAD_AXIS,
+                                   ASTRA_INPUT_LOGICAL_SYNTHETIC,
+                                   timestamp_ms);
+                event.code = (slot << 8) | axis;
+                event.value_x = pad->axes[axis];
+                if (deliver(service, client, &event) !=
+                    ASTRA_INPUT_DELIVERY_OK)
+                    return false;
+            }
+            if (((pad->configuration >> 16) & 0xffu) != 0u) {
+                event = make_event(service, ASTRA_INPUT_EVENT_GAMEPAD_HAT,
+                                   ASTRA_INPUT_LOGICAL_SYNTHETIC,
+                                   timestamp_ms);
+                event.code = slot << 8;
+                event.value_x = pad->hat;
+                if (deliver(service, client, &event) !=
+                    ASTRA_INPUT_DELIVERY_OK)
+                    return false;
+            }
+            for (uint32_t button = 0u; button < 32u; ++button) {
+                if ((pad->down_buttons & (UINT32_C(1) << button)) == 0u)
+                    continue;
+                event = make_event(service, ASTRA_INPUT_EVENT_GAMEPAD_BUTTON,
+                    ASTRA_INPUT_LOGICAL_SYNTHETIC | ASTRA_INPUT_LOGICAL_DOWN,
+                    timestamp_ms);
+                event.code = (slot << 8) | button;
+                if (deliver(service, client, &event) !=
+                    ASTRA_INPUT_DELIVERY_OK)
+                    return false;
+            }
+        }
+    }
     return true;
 }
 
@@ -535,6 +610,94 @@ static bool pointer_motion_event(const AstraInputEvent *event)
            kind == ASTRA_INPUT_POINTER_ABSOLUTE;
 }
 
+static void ingest_gamepad(AstraInputService *service,
+                           const AstraInputEvent *raw, uint32_t kind,
+                           uint32_t flags)
+{
+    uint32_t device = ASTRA_INPUT_EVENT_DEVICE(raw->device_sequence);
+    uint32_t slot;
+    AstraInputGamepadState *pad;
+    AstraLogicalInputEvent event;
+    uint32_t index;
+
+    if (device < ASTRA_INPUT_GAMEPAD_DEVICE_BASE ||
+        device >= ASTRA_INPUT_GAMEPAD_DEVICE_BASE +
+                  ASTRA_INPUT_GAMEPAD_LIMIT)
+        return;
+    slot = device - ASTRA_INPUT_GAMEPAD_DEVICE_BASE;
+    pad = &service->gamepads[slot];
+    if (kind == ASTRA_INPUT_GAMEPAD_ID) {
+        pad->identity = raw->value;
+        return;
+    }
+    if (kind == ASTRA_INPUT_GAMEPAD_CONFIG) {
+        if ((raw->value & 0xffu) <= 8u &&
+            ((raw->value >> 8) & 0xffu) <= 32u &&
+            ((raw->value >> 16) & 0xffu) <= 1u &&
+            (raw->value >> 24) == 0u)
+            pad->configuration = raw->value;
+        return;
+    }
+    if (kind == ASTRA_INPUT_GAMEPAD_DEVICE) {
+        bool connected = (flags & ASTRA_INPUT_FLAG_DOWN) != 0u;
+
+        if (connected && pad->present != 0u &&
+            pad->vendor_product == raw->value)
+            return;
+        if (!connected && pad->present == 0u)
+            return;
+        pad->present = connected;
+        if (connected)
+            pad->vendor_product = raw->value;
+        event = gamepad_device_event(service, slot, pad,
+                                     raw->timestamp_ms);
+        deliver_gamepad(service, &event);
+        if (!connected)
+            *pad = (AstraInputGamepadState){0};
+        return;
+    }
+    if (pad->present == 0u)
+        return;
+    if (kind == ASTRA_INPUT_GAMEPAD_AXIS) {
+        index = ASTRA_INPUT_GAMEPAD_AXIS_INDEX(flags);
+        if (index >= (pad->configuration & 0xffu))
+            return;
+        pad->axes[index] = (int16_t)raw->value;
+        event = make_event(service, ASTRA_INPUT_EVENT_GAMEPAD_AXIS, 0u,
+                           raw->timestamp_ms);
+        event.code = (slot << 8) | index;
+        event.value_x = pad->axes[index];
+    } else if (kind == ASTRA_INPUT_GAMEPAD_BUTTON) {
+        bool down = (flags & ASTRA_INPUT_FLAG_DOWN) != 0u;
+
+        index = raw->value;
+        if (index >= ((pad->configuration >> 8) & 0xffu))
+            return;
+        if (down == ((pad->down_buttons & (UINT32_C(1) << index)) != 0u))
+            return;
+        if (down)
+            pad->down_buttons |= UINT32_C(1) << index;
+        else
+            pad->down_buttons &= ~(UINT32_C(1) << index);
+        event = make_event(service, ASTRA_INPUT_EVENT_GAMEPAD_BUTTON,
+                           down ? ASTRA_INPUT_LOGICAL_DOWN : 0u,
+                           raw->timestamp_ms);
+        event.code = (slot << 8) | index;
+    } else if (kind == ASTRA_INPUT_GAMEPAD_HAT) {
+        if (((pad->configuration >> 16) & 0xffu) == 0u ||
+            (raw->value & ~0x0fu) != 0u || pad->hat == raw->value)
+            return;
+        pad->hat = raw->value;
+        event = make_event(service, ASTRA_INPUT_EVENT_GAMEPAD_HAT, 0u,
+                           raw->timestamp_ms);
+        event.code = slot << 8;
+        event.value_x = pad->hat;
+    } else {
+        return;
+    }
+    deliver_gamepad(service, &event);
+}
+
 static void ingest_one(AstraInputService *service,
                        const AstraInputEvent *event,
                        bool physical_overflow, bool emit_pointer_motion)
@@ -555,6 +718,10 @@ static void ingest_one(AstraInputService *service,
     event_class = ASTRA_INPUT_EVENT_CLASS(event->header);
     kind = ASTRA_INPUT_EVENT_KIND(event->header);
     flags = ASTRA_INPUT_EVENT_FLAGS(event->header);
+    if (event_class == ASTRA_INPUT_CLASS_GAMEPAD) {
+        ingest_gamepad(service, event, kind, flags);
+        return;
+    }
     if (event_class == ASTRA_INPUT_CLASS_KEYBOARD &&
         kind == ASTRA_INPUT_KEY_PHYSICAL && event->value < 256u) {
         uint32_t usage = event->value;

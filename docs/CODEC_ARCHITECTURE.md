@@ -1,8 +1,79 @@
 # Generic file codec architecture
 
-Status: design contract, not an implemented ABI. Define the wire and library
-ABI with the first real codec, then test it with at least two unrelated media
-families before declaring it stable.
+Status: native Codec Kit candidate tested on DE25, 2026-10-27. ABI 1 is a
+candidate, not yet frozen for third-party providers.
+
+The current `codec.library.1` and `CODEC` service use the existing bounded
+HOST0 channel and an isolated AArch64 worker. WAV PCM, Ogg Vorbis, and
+YUV4MPEG2 4:2:0 use the same content probe, open, read, seek, and close
+lifecycle. The native guest test checks decoded WAV bytes and video frame
+bytes, stride, timestamp, seek, and cleanup. SDL_mixer's Ogg adapter consumes
+the same library; MP3 and FLAC still use SDL_mixer's bundled decoders.
+QEMU tests and guarded DE25 native, SDL_mixer, and asset-backed Quake trials
+passed without a panic. Exact final staged release
+`0170a92de17493885576ca6a79e34703f49cf47b7c2e506fc958c0a69f1a8be2`
+passed native and Quake private-image trials. Its two measured Quake windows
+had 20 and 18 software audio gaps in 15 seconds, respectively, with zero
+hardware underruns. This did not qualify sustained smooth music. On
+2026-10-27, SDL_mixer moved Ogg decode ahead of its existing callback.
+The revised adapter passed QEMU and a guarded 180-second DE25 Quake trial:
+two 15-second gameplay windows had zero software gaps and zero HDMI
+underruns at 21.18 and 20.84 presents/s. A 20-second final-mix capture
+had no silence lasting 5 ms at -90 dB. The full trial counted three software
+gaps; two were logged at startup/shutdown boundaries. Guest telemetry then
+found 59 music callback underflows masked by effects in the final mix. A
+larger queue reduced these to one startup burst of two underflows; the final
+candidate waits for preroll after SDL_mixer's mandatory post-play seek. Its
+exact release `036227968411287ff384cce78b66c0a24f5d520698dbdf7ca25ad814709885aa`
+passed QEMU SDL_mixer and native WAV/video gates. Guarded DE25 trials passed
+native certifier and 180 seconds of Quake: zero guest music underflows at track
+close, zero HDMI underruns/gaps over 20 seconds, and zero host source gaps in
+two measured gameplay windows. User heard continuous music and effects.
+Production selection remains on prior release. A preceding
+separate-PCM-voice design was rejected after 1,708 source gaps over its trial.
+
+Current provider selection is a compiled-in table inside the isolated worker.
+Installable provider registration, independent provider crash isolation, and
+conflict policy described below remain design work. Current video output is
+timestamped YUV420P chunks; there is no Display-owned YUV surface handoff or
+video playback client yet. The guest certifier validates frame lifetime only
+through completion of one stream read and close, not Display surface lifetime.
+
+## Existing mechanisms to reuse
+
+- `host.h` and `host_channel_client.c` already supply capability-checked, bounded
+  host channels. Fonts uses them to send source bytes to an isolated HPS
+  worker. Codec Kit should use this transport, with its own service and
+  stream lifetime, rather than add another guest-to-host socket protocol.
+- `audio_stream.h`, `pcm.library`, and the HPS audio mixer already provide
+  buffered playback, multiple voices, format conversion, gain, and host
+  synthesis. SDL_mixer's native MIDI adapter proves that a game can control
+  host-rendered music while effects use its ordinary SDL audio stream. Codec
+  Kit offloads Vorbis decode; SDL_mixer consumes decoded PCM through its
+  existing stream so music and effects share one clock. A separate host PCM
+  voice caused 1,708 source gaps in a guarded trial and is not retained.
+- The Display service owns surfaces, uploads, presentation, and access to
+  Astraea. Video decode must hand timestamped frames to a Display-owned
+  surface path. A codec provider must not write arbitrary graphics RAM or
+  bypass Display's surface lifetime and presentation rules.
+- Haiku's `src/kits/media/MediaDecoder.cpp` selects a decoder, negotiates its
+  output and consumes chunks through one client interface. Its
+  `src/add-ons/media/plugins/ffmpeg/AVCodecDecoder.cpp` uses that same
+  interface for encoded audio and video. Astra adopts those boundaries, with
+  native service capabilities and host channels in place of Haiku add-ons.
+- Haiku's `src/add-ons/media/media-add-ons/mixer/MixerCore.cpp` runs a
+  scheduled mixer thread; `src/kits/media/SoundPlayer.cpp` fills missing
+  buffer bytes with silence. Astra adapts those patterns with a separate
+  decoder thread, bounded SDL audio stream, post-seek preroll, and explicit
+  underflow counters. Codec reads never block SDL_mixer's audio callback.
+
+Codec selection, stream lifecycle, seek/flush, progress, timestamps, and
+failure reporting are shared. PCM voices and video surfaces remain distinct
+typed sinks: forcing both through one raw-frame buffer would add copies and
+discard their existing clock and ownership contracts. The caller supplies
+compressed bytes from Astra's VFS; the HPS provider receives no host path or
+filesystem authority. Real-time streams use bounded, backpressured chunks;
+the font worker's whole-source upload is not a media-stream model.
 
 ## One mechanism for file formats
 
@@ -21,9 +92,11 @@ transfers chunks, and closes the stream. The Kit owns provider selection and
 translates these calls to one versioned provider protocol. A new codec package
 implements that protocol and declares its media kind, formats, directions, and
 typed output description; applications do not link to it or learn its private
-entry points. The SDL_image/SDL_mixer decoders remain upstream compatibility
-code for SDL applications, not Astra's native codec registry or a dependency of
-native applications.
+entry points. SDL_image and SDL_mixer remain compatibility APIs, but their
+Astra backends use Codec Kit for each format that has a native provider. Once
+a format is qualified through Codec Kit, remove its duplicate in-tree SDL
+decoder. Native applications never depend on SDL for codec selection or
+decoding.
 
 The client-facing shape is deliberately small: `probe(bytes, hint)` identifies
 supported content, `open(format, direction, media_kind)` starts a stream,
@@ -60,9 +133,9 @@ example, all image decoders return a negotiated pixel format, dimensions and
 row stride; all audio decoders return negotiated PCM format, rate, channels and
 frame count. A caller may know how to display pixels or play PCM, but never
 needs to know how PNG or MP3 was encoded. The generic byte-stream operations
-and error statuses are identical across kinds. This is also why SDL_image and
-SDL_mixer stay in the SDL compatibility Kit rather than becoming provider
-dependencies of native applications.
+and error statuses are identical across kinds. SDL_image and SDL_mixer adapt
+their public calls to those typed results; neither becomes a provider
+dependency of native applications.
 
 The provider contract has these operations:
 
@@ -102,11 +175,13 @@ multiple providers recognize a format, with installed provider policy visible
 to the user. Codec packages are versioned and registered/unregistered with
 the normal package mechanism; no kernel update is needed to learn a format.
 
-## First implementation gate
+## First implementation gate and remaining acceptance
 
 Build one small generic registry and streaming contract with the first WAV/PCM
-provider, then prove that a second, structurally different provider uses it
-without changing the registry. Test correct metadata and magic, missing and
+provider. Add Vorbis through the same contract and qualify it with SDL_mixer
+on DE25; then prove a video provider uses the same registry and lifecycle
+without changing them. A video frame's format, stride, timestamp, and surface
+lifetime must survive that test. Test correct metadata and magic, missing and
 misleading extensions, metadata/header conflicts, truncated and hostile
 headers, unknown formats, partial streams, provider failure, and cleanup.
 Keep format-specific rules inside providers; do not freeze a universal codec

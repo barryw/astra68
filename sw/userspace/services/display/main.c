@@ -5568,7 +5568,7 @@ static uint32_t connect_input(
                              ASTRA_INPUT_SERVICE_PROTOCOL,
                              ASTRA_INPUT_SERVICE_VERSION,
                              ASTRA_INPUT_OPERATION_CONNECT, 1u);
-    request.subscriptions = ASTRA_INPUT_SUBSCRIBE_ALL;
+    request.subscriptions = ASTRA_INPUT_SUBSCRIBE_SEAT;
     request.flags = ASTRA_INPUT_CONNECT_SEAT_OWNER |
                     ASTRA_INPUT_CONNECT_SHARED_POINTER;
     handles[0] = event_send;

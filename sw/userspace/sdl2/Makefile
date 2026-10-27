@@ -51,14 +51,15 @@ SDL_MIXER_SOURCES := src/codecs/load_aiff.c src/codecs/load_voc.c \
 	src/codecs/music_fluidsynth.c src/codecs/music_gme.c \
 	src/codecs/music_minimp3.c src/codecs/music_modplug.c \
 	src/codecs/music_mpg123.c src/codecs/music_nativemidi.c \
-	src/codecs/music_ogg.c src/codecs/music_ogg_stb.c \
+	src/codecs/music_ogg.c \
 	src/codecs/music_opus.c src/codecs/music_timidity.c \
 	src/codecs/music_wav.c src/codecs/music_wavpack.c \
 	src/codecs/music_xmp.c src/codecs/remap_channels.c \
 	src/effect_position.c src/effect_stereoreverse.c \
 	src/effects_internal.c src/mixer.c src/music.c src/utils.c
 SDL_MIXER_OBJECTS := $(patsubst %.c,build/m68k/mixer/%.o,$(SDL_MIXER_SOURCES)) \
-	build/m68k/mixer/astra/native_midi_astra.o
+	build/m68k/mixer/astra/native_midi_astra.o \
+	build/m68k/mixer/astra/music_ogg_astra.o
 SDL_MIXER_IDENTITY := build/m68k/library_identity_mixer.o
 SDL_MIXER_EXPORTS := build/m68k/SDL2_mixer.library.exports
 SDL_MIXER_UNDEFINED := build/m68k/SDL2_mixer.library.undefined
@@ -288,6 +289,16 @@ build/m68k/mixer/astra/native_midi_astra.o: mixer/native_midi_astra.c \
 		-std=c11 -Wall -Wextra -Werror $(ASTRA_POSIX_CFLAGS) \
 		-c $< -o $@
 
+build/m68k/mixer/astra/music_ogg_astra.o: mixer/music_ogg_astra.c \
+		$(SDL_MIXER_STAMP) Makefile
+	@mkdir -p $(@D)
+	$(TARGET_CC) $(ASTRA_POSIX_CPPFLAGS) \
+		-Ibuild/vendor/SDL2/include -Ibuild/vendor/SDL2_mixer/include \
+		-Ibuild/vendor/SDL2_mixer/src \
+		-Ibuild/vendor/SDL2_mixer/src/codecs \
+		-std=c11 -Wall -Wextra -Werror $(ASTRA_POSIX_CFLAGS) \
+		-c $< -o $@
+
 $(SDL_MIXER_IDENTITY): library_identity_mixer.c Makefile
 	@mkdir -p $(@D)
 	$(TARGET_CC) $(ASTRA_POSIX_CPPFLAGS) $(ASTRA_POSIX_CFLAGS) \
@@ -306,7 +317,7 @@ $(SDL_MIXER_EXPORTS) $(SDL_MIXER_UNDEFINED) &: $(SDL_MIXER_OBJECTS) \
 $(SDL_MIXER_SHARED): $(SDL_MIXER_IDENTITY) $(SDL_MIXER_OBJECTS) \
 		$(SDL_MIXER_EXPORTS) $(SDL_MIXER_UNDEFINED) $(SDL2_SHARED) \
 		$(ASTRA_SHARED_LINK_INPUTS) $(ASTRA_LIBC_LIBRARY) \
-		$(ASTRA_PCM_LIBRARY)
+		$(ASTRA_PCM_LIBRARY) $(ASTRA_CODEC_LIBRARY)
 	@mkdir -p $(@D)
 	$(TARGET_CC) $(ASTRA_ABI_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
 		-Wl,-soname,SDL2_mixer.library.3 \
@@ -315,6 +326,7 @@ $(SDL_MIXER_SHARED): $(SDL_MIXER_IDENTITY) $(SDL_MIXER_OBJECTS) \
 		$(SDL_MIXER_IDENTITY) $(SDL_MIXER_OBJECTS) \
 		$(ASTRA_SHARED_LIBRARY_SEARCH_FLAGS) -Wl,--no-as-needed \
 		-Wl,-l:SDL2.library.3 -Wl,-l:pcm.library.3 \
+		-Wl,-l:codec.library.1 \
 		-Wl,-l:libc.library.4 \
 		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
 		$(ASTRA_SHARED_LINK_END)

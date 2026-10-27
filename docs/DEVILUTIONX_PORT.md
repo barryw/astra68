@@ -1,7 +1,7 @@
 # DevilutionX on Astra: port audit
 
-Status: source audit plus C++23 header probe (2026-10-16); no game build or
-target workload yet. DevilutionX
+Status: source audit plus NDK CMake/C++23 DE25 smoke (2026-10-26); no game
+build or target workload yet. DevilutionX
 `1.5.1-1453-g4138a829e` (1.6.0-dev) at `~/Git/devilutionx`. Items that match
 the Chocolate Doom audit are cited as CD#n (`CHOCOLATE_DOOM_PORT.md`).
 Upstream already has an Amiga m68k CI job (68040, SDL 1.2, 8 bpp), so
@@ -10,9 +10,11 @@ big-endian m68k and 2-byte alignment are exercised upstream.
 The audited DevilutionX checkout remains clean at `4138a829e991`. On Beast,
 GCC 16.2 compiled an MC68040 C++23 probe using `std::format`,
 `std::expected`, and `std::filesystem` with `-O2 -Wall -Wextra -Werror`.
-This proves the cross-compiler headers and code generation for those uses;
-NDK dynamic linking, runtime execution, SDL discovery, and an actual
-DevilutionX workload still need qualification. No game performance conclusion
+The installed NDK now builds a C++23 smoke program with CMake/Ninja and
+dynamic Kit libraries; its `std::format`, `std::expected`, and
+`std::filesystem` path ran on DE25. SDL2 package discovery and a small SDL
+smoke executable also ran on DE25. An actual DevilutionX workload still needs
+qualification. No game performance conclusion
 can be drawn from the compile-only probe.
 
 ## Beyond what Chocolate Doom needs, by blocking severity
@@ -22,12 +24,11 @@ can be drawn from the compile-only probe.
    exits on failure (`utils/display.cpp:559-580`); Astra's SDL keeps
    `SDL_config_minimal.h`'s `SDL_JOYSTICK_DISABLED`. Enable the dummy and
    virtual joystick drivers now, a native gamepad driver later.
-2. **C++23 delivery (toolchain + NDK).** GCC 16.2 compiles C++23 and
-   `cxx.library.2`/`unwind.library.1` run exceptions, RTTI and threads in
-   QEMU, but the g++ driver links statically by default (CD#3), there is no
-   CMake toolchain file or `Platform/Astra.cmake`, and SDL.kit publishes no
-   `SDL2Config.cmake`/`sdl2-image` packages. Gate: a C++23 program using
-   `std::format`, `std::expected`, `std::filesystem` in QEMU.
+2. **C++23 delivery (toolchain + NDK): DONE for generic build/runtime.**
+   Installed NDK includes CMake toolchain, `Platform/Astra.cmake`, exact
+   dynamic startup/link targets, and SDL2/`sdl2-image` config packages.
+   C++23 `std::format`, `std::expected`, and `std::filesystem` smoke built
+   from extracted archive and ran on DE25. DevilutionX itself remains unbuilt.
 3. **Float in the audio path.** DevilutionX mixes through SDL_audiolib, a
    float pipeline (decode, gain, pan with `std::pow`, conversion) that
    cannot be configured away; under soft float it was likely the largest

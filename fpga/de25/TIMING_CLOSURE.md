@@ -1,5 +1,95 @@
 # DE25-Nano Timing Closure
 
+## 2026-10-25: ADV7513 audio candidate aborted by Beast global OOM
+
+- Source Git HEAD `6cd588e389f05fa55c511ae9c5d06a98a65e5615`, staged
+  HDMI patch SHA-256
+  `b353c575a4a52df9d46940439f1a71ccc2cedc47915ec997626b9a082a6721c1`.
+  `patch_vendor_hdmi.py` appends ADV7513 post-power-up writes `E0=D0` and
+  `F9=00` to the pinned vendor I2C LUT; its fixture passes. No RTL, clock,
+  constraint or other feature changed. Build host Beast, Quartus Pro 26.1.1
+  Build 130, tree
+  `/home/barry/Git/astra68/build/de25-audio-fixed/astra-shell.failed`;
+  log `/var/tmp/astra-hdmi-audio-fixed-20261025.log` (SHA-256
+  `dd5c2a5561e562135951b81dd5b2d6c3de45bb262dc8da65c9ccb110616fb8c0`).
+- The unsandboxed build entered Analysis & Synthesis. Quartus inherited SSH's
+  `oom_score_adj=-900`, exhausted Beast RAM and swap, and triggered global
+  OOM that killed Longhorn and other Kubernetes services. Targeted SIGTERM
+  ended Quartus; no fitter, full route, resource count, constrained-clock
+  result or failing cone exists for this candidate. Some Longhorn iSCSI
+  devices reported I/O and ext4 journal errors. Plane and basic-memory
+  recovered; the 500 GiB `immich-data` volume remained degraded at last check.
+  Beast's custom SSH drop-in now sets `OOMScoreAdjust=0`,
+  `MemoryMin=64M`, and `OOMPolicy=continue`; `system.slice` allocates the
+  matching parent protection. Socket activation and `Restart=on-failure`
+  remain.
+  Fresh SSH sessions confirm score 0, active socket/daemon and both kernel
+  `memory.min` values. This protects SSH itself without protecting jobs
+  launched through it from OOM selection.
+- Both DE25 build entry points now call `scope_de25_build` before Quartus.
+  On Beast it enters a systemd user scope with `MemoryHigh=10G`,
+  `MemoryMax=12G`, `MemorySwapMax=0`, `CPUQuota=800%`, `TasksMax=256`, and
+  `oom_score_adj=+1000`. Startup reads effective cgroup limits and fails if
+  they were not enforced. Script SHA-256: common
+  `b93fea9aca99ecef29c829f16599435e33bbd644a882e3369ed0c881de5575df`,
+  Astra shell
+  `ea99e2a58830dda6c85d92e9cce024175cb26324457896e71a1b6b4cfe85f8ad`,
+  vendor baseline
+  `38d66726e33c61d1b27e385a4061dd89b9314449c313949b16bc5d856077642e`.
+  Beast smoke checks reached platform validation through each scoped entry
+  point; an unenforced-scope check refused the build. No new synthesis has
+  run under these limits. Disposition: REJECT this incomplete candidate;
+  retain failed evidence, hold new synthesis until Longhorn is healthy, then
+  route and run full DE25 HDMI acoustic/release gates. Qualified production
+  RBF remains unchanged.
+
+## 2026-10-25: HDMI audio acoustic regression; fabric unchanged
+
+- Production release
+  `8b9c771f5bb9ee071306270565f40c007b5909bbd1fd9b19bf58b230f745d04e`
+  with existing RBF
+  `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`
+  had silent HDMI monitor speakers while Doom played. The daemon's 20-second
+  monitor tap held nonzero stereo PCM (mean -24.6 dB, peak -4.7 dB); short
+  audio counter windows had zero FIFO underruns and software gaps. Full board
+  reboot restored audible startup sound and Doom. A later warm Astra service
+  restart reached desktop stage 8 and direct HDMI tone remained audible.
+  Exact downstream transmitter/sink state causing silence is unknown.
+- No RTL, constraints, synthesis, placement, route, or clock result changed.
+  Prior Beast Quartus Pro 26.1.1 Build 130 route remains 40,754/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376 DSPs; graphics setup
+  +0.259 ns, worst setup +0.007 ns, hold +0.000 ns. Disposition: acoustic
+  HDMI audio gate reopened; software counters alone do not qualify release.
+
+## 2026-10-25: private application-library physical gate; fabric unchanged
+
+- Source Git HEAD `6cd588e389f05fa55c511ae9c5d06a98a65e5615` plus staged
+  source manifest SHA-256
+  `1a94e06c0d21a7783e672ed07db64e964d9ba33a765d21bc649018a262362cf6`.
+  Beast staged and verified immutable release
+  `0d02b81e143dcd2582a415cd1c335a048b75f0b4903ca6419b4424984616b0a5`,
+  ROM `9f1b806b843df5dc45e2052eb1b8e380db0ef15f91d8fe499897d23756db09c7`,
+  with the unchanged qualified Linux package for
+  `6.12.11-astra-storage2-gd7d192a9ddd9`.
+- DE25 private trial with that release reached Desktop stage 8. Atlas using
+  its private `graphics.library.3` launched with status zero and enumerated
+  `/apps` and `/dh0` with status zero. No candidate panic. Production selector
+  and stopped image were unchanged; production services restored. A later
+  observer read of the live production image broke the storage provider's
+  exclusive lease and caused one automatic restart; production recovered to
+  stage 8, all services active, no new panic. Board candidate and trial image
+  removed after Beast evidence archive. Twenty-one older private trial trees
+  were checksum-verified in a separate Beast archive and removed from DE25;
+  board free space rose from 1.7 to 8.6 GiB. No production release activation.
+- Same previously qualified DE25 RBF
+  `9a5531c3f98c0cb384fa35c5007574f85c4c9e15e3c72d0572f0d494ed8cadb3`,
+  routed on Beast Quartus Pro 26.1.1 Build 130: 40,754/46,800 ALMs,
+  3,640,768/7,331,840 memory bits, 317/358 RAM, 67/376 DSPs; all production
+  clocks constrained, graphics setup +0.259 ns, worst setup +0.007 ns and
+  hold +0.000 ns. No RTL, constraints, routing, timing cone, or build-flow
+  change. Disposition: software private-library gate passes on real DE25;
+  production release remains unselected.
+
 ## 2026-10-23: catalog-4 private physical USB gate; fabric unchanged
 
 - Source Git HEAD `cc9f33d6986df846f4c27dcb384f2aa1e520868f` plus the

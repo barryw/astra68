@@ -71,7 +71,7 @@ TERMINFO_LIBRARY := $(ASTRA_TERMINFO_LIBRARY)
 # port builds them (it owns SDL's headers and build rules); this directory
 # strips them and checks their libraries like every other command.
 SDL_COMMANDS := loopwave
-COMMANDS := status events log devices volumes disk mount unmount lsof df which open service shutdown restart ls ps metrics cat mkdir rm \
+COMMANDS := status events log devices volumes disk mount unmount lsof df which open service shutdown restart ls ps metrics cat cp mkdir rm \
 	    nice renice \
 	    heapbench fsstress fsbench date echo ntp ping lua vim zsh $(SDL_COMMANDS)
 TEST_COMMANDS := posix hello cxx fpucheck logburst fssem fsprobe
@@ -113,6 +113,7 @@ ls_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 ps_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 metrics_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 cat_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
+cp_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY) $(FILESYSTEM_LIBRARY)
 mkdir_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 nice_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)
 renice_LIBRARIES := $(LIBC_LIBRARY) $(RUNTIME_LIBRARY)

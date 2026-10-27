@@ -190,7 +190,7 @@ static bool register_physical_devices(void)
         NULL,
         ASTRA_DEVICE_ID_INPUT0,
         ASTRA_DEVICE_CLASS_INPUT,
-        INPUT_CAP_KEYBOARD | INPUT_CAP_POINTER
+        INPUT_CAP_KEYBOARD | INPUT_CAP_POINTER | INPUT_CAP_GAMEPAD
     };
 
     static const KernelDeviceDefinition block = {

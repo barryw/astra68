@@ -1,5 +1,5 @@
-SUBDIRS := hostfs hostbench entropy events network ntpd posixd clipboard fonts \
-	terminal input display desktop remote-desktop media audio-certify pcm-certify fault-probe sampler
+SUBDIRS := hostfs hostbench entropy events network ntpd posixd clipboard fonts codec \
+	terminal input display desktop remote-desktop media audio-certify pcm-certify codec-certify fault-probe sampler
 
 all test sanitize analyze clean:
 	@for dir in $(SUBDIRS); do $(MAKE) -C $$dir $@ || exit $$?; done

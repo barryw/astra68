@@ -227,7 +227,7 @@ class Voice:
 class AudioHost:
     """The Linux audio daemon's socket protocol, with a clock for a sink."""
 
-    def __init__(self, path, hostfs=None):
+    def __init__(self, path, hostfs=None, synthesis=True):
         work = os.path.dirname(path)
         _, qemu_gid = qemu_test_credentials()
         if os.geteuid() == 0:
@@ -236,7 +236,7 @@ class AudioHost:
             os.chown(work, -1, qemu_gid)
             os.chmod(work, 0o710)
         self.convert = converter_library(work)
-        self.synthesis = synth_library(work)
+        self.synthesis = synth_library(work) if synthesis else None
         self.font_directory = os.path.join(work, "fonts")
         os.makedirs(self.font_directory, exist_ok=True)
         # The SOUND volume of the machine's HostFS root (terminal_gate's
@@ -252,7 +252,8 @@ class AudioHost:
                             os.path.join(sound_fonts, name))
         self.sound_fonts = os.open(sound_fonts,
                                    os.O_RDONLY | os.O_DIRECTORY)
-        self.synthesis.astra_audio_synth_set_sound_fonts(self.sound_fonts)
+        if self.synthesis is not None:
+            self.synthesis.astra_audio_synth_set_sound_fonts(self.sound_fonts)
         self.uploads = {}
         self.midis = {}
         self.closed_midis = []

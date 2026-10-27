@@ -1,0 +1,22 @@
+astra-bundle 1
+kind application
+id org.chocolate-quake.quake
+name "Chocolate Quake"
+version 2.1.0
+executable bin/m68k-68040/ChocolateQuake
+icon resources/ChocolateQuake.aicon
+capability GUI
+capability PCM
+capability CODEC
+capability STORE:rw
+capability TMP:rw
+capability NETWORK
+capability NETWORK_LISTEN
+capability LIBS:r
+requires SDL2.library 3 2.32.11
+requires SDL2_mixer.library 3 2.8.2
+requires SDL2_net.library 2 2.4.0
+requires libc.library 4 4.0.0
+requires runtime.library 1 1.6.0
+requires compiler.library 2 2.0.0
+single-instance

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that bundle metadata matches the libraries it packages."""
+"""Verify shared Kit providers and app requirements; private app providers stay scoped."""
 
 import argparse
 import pathlib
@@ -17,21 +17,25 @@ def version(text):
 
 def manifest_records(path):
     records = []
+    bundle_kind = "kit"
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         fields = line.split()
+        if len(fields) == 2 and fields[0] == "kind":
+            bundle_kind = fields[1]
         if not fields or fields[0] not in ("provides", "requires"):
             continue
         if len(fields) != 4 or not fields[2].isdigit():
             raise ValueError("%s:%d: malformed %s" % (path, number, fields[0]))
         records.append((fields[0], fields[1], int(fields[2]),
                         version(fields[3]), path))
-    return records
+    return bundle_kind, records
 
 
 def validate(libraries, manifests):
     errors = []
     actual = {}
     providers = {}
+    private_providers = {}
     requirements = []
 
     for library, path in libraries:
@@ -44,13 +48,15 @@ def validate(libraries, manifests):
 
     for path in manifests:
         try:
-            records = manifest_records(path)
+            bundle_kind, records = manifest_records(path)
         except ValueError as error:
             errors.append(str(error))
             continue
         for kind, name, abi, item_version, source in records:
             if kind == "provides":
-                providers.setdefault((name, abi), []).append(
+                scope = private_providers.setdefault(source, {}) if \
+                    bundle_kind == "application" else providers
+                scope.setdefault((name, abi), []).append(
                     (item_version, source))
             else:
                 requirements.append((name, abi, item_version, source))
@@ -75,7 +81,8 @@ def validate(libraries, manifests):
                                ".".join(map(str, item_version))))
 
     for name, abi, minimum, source in requirements:
-        candidates = providers.get((name, abi), ())
+        private = private_providers.get(source, {}).get((name, abi), ())
+        candidates = private if private else providers.get((name, abi), ())
         if not any(item_version >= minimum for item_version, _ in candidates):
             errors.append("%s: requires unavailable %s ABI %d version %s" %
                           (source, name, abi, ".".join(map(str, minimum))))

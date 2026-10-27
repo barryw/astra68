@@ -12,6 +12,7 @@ INCOMING="$BUILD_ROOT/astra-shell.incoming"
 FAILED="$BUILD_ROOT/astra-shell.failed"
 QUARTUS_BIN="$QUARTUS_ROOT/bin"
 . "$ROOT/fpga/de25/build_common.sh"
+scope_de25_build "$ROOT/fpga/de25/build_astra_shell.sh" "$@"
 
 python3 "$ROOT/fpga/de25/check_platform.py" \
     --quartus-root "$QUARTUS_ROOT" --ghrd "$GHRD" --resource "$RESOURCE" \
