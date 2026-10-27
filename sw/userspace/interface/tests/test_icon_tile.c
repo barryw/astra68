@@ -67,9 +67,11 @@ int main(void)
     AstraDrawList list = ASTRA_DRAW_LIST_INIT;
     AstraSurface icon = ASTRA_SURFACE_INIT;
     AstraSurface editor = ASTRA_SURFACE_INIT;
+    AstraSurface badge = ASTRA_SURFACE_INIT;
     AstraIconTileInfo tile = ASTRA_ICON_TILE_INFO_INIT;
     icon._private_handle = 1u;
     editor._private_handle = 2u;
+    badge._private_handle = 3u;
     tile.icon = &icon;
     tile.label = "Folder1";
     tile.label_bytes = (uint32_t)strlen(tile.label);
@@ -84,6 +86,12 @@ int main(void)
     assert(destination_seen.width == ASTRA_ICON_TILE_DESKTOP_ICON_SIZE);
     assert(text_seen.x == 44 && text_seen.y == 106);
     assert(blits == 1u && texts == 1u);
+    tile.badge = &badge;
+    assert(astra_interface_icon_tile_render(&list, &tile) == ASTRA_OK);
+    assert(blits == 3u && texts == 2u);
+    assert(destination_seen.x == 72 && destination_seen.y == 66);
+    assert(destination_seen.width == 32u);
+    tile.badge = NULL;
     assert(astra_interface_icon_tile_hit(&tile, 32, 26));
     assert(astra_interface_icon_tile_hit(&tile, 111, 129));
     assert(!astra_interface_icon_tile_hit(&tile, 112, 129));

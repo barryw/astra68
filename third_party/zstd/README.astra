@@ -1,0 +1,10 @@
+Zstandard 1.5.7, BSD license. Source release:
+https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+SHA-256 eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+
+zstd.c was generated from upstream build/single_file_libs/zstd-in.c with:
+python3 combine.py -r ../../lib -x legacy/zstd_legacy.h -o zstd.c zstd-in.c
+
+Astra removes the generated ZSTD_MULTITHREAD definition and binds the
+allocator to runtime.library. Package operations use one compression stream
+per process and have no pthread or POSIX dependency.

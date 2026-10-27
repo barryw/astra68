@@ -29,7 +29,7 @@ GALLERY_PALETTE = (
 
 INSTRUMENT_KINDS = ("framebench", "draw", "sprite", "geometry", "target",
                     "scale", "keys", "mouse", "timer", "thread")
-OBJECT_KINDS = ("atlas", "volume", "drawer", "document", "fonts")
+OBJECT_KINDS = ("atlas", "volume", "drawer", "document", "fonts", "installer")
 OBJECT_PALETTE = ((0, 0, 0, 0), (247, 249, 249, 255),
                   (223, 228, 230, 255), (92, 104, 112, 255),
                   (107, 119, 128, 255), (43, 127, 134, 255),
@@ -88,6 +88,12 @@ def object_strike(kind, size):
         polygon(((11, 15), (29, 15), (29, 21), (11, 21)), 7, 6)
         line(19, 27, 29, 27, 6)
         line(10, 27, 12, 27, 5)
+    elif kind == "installer":
+        polygon(((3, 3), (37, 3), (37, 37), (3, 37)), 7, 6)
+        line(20, 8, 20, 25, 5)
+        line(12, 18, 20, 26, 5)
+        line(28, 18, 20, 26, 5)
+        line(10, 31, 30, 31, 6)
     else:
         raise ValueError("unknown object icon: %s" % kind)
     return bytes(pixels)

@@ -1,0 +1,7 @@
+ASTRA_PACKAGE_1.0 {
+    global:
+        astra_package_create_bundle;
+        astra_package_install_bundle;
+astra_package_read_icon;
+    local: *;
+};

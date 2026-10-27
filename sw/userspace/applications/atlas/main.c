@@ -1,4 +1,5 @@
 #include <astra/application.h>
+#include <astra/application_catalog.h>
 #include <astra/area.h>
 #include <astra/draw_list.h>
 #include <astra/fonts.h>
@@ -8,6 +9,7 @@
 #include <astra/inline_edit.h>
 #include <astra/interface_library.h>
 #include <astra/program.h>
+#include <astra/package_library.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
 #include <astra/status.h>
@@ -42,6 +44,9 @@ static AstraDisplay display = ASTRA_DISPLAY_INIT;
 static AstraSurface content = ASTRA_SURFACE_INIT;
 static AstraSurface folder_icon = ASTRA_SURFACE_INIT;
 static AstraSurface file_icon = ASTRA_SURFACE_INIT;
+static AstraSurface installer_icon = ASTRA_SURFACE_INIT;
+static AstraSurface *entry_icons;
+static uint32_t entry_icon_count;
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
 static AstraControl *controls;
@@ -176,6 +181,62 @@ static AstraResult load_icon(const char *path, AstraSurface *surface)
                                       ICON_SOURCE_SIZE, surface);
     astra_runtime_deallocate(bytes);
     return result;
+}
+
+static void clear_entry_icons(void)
+{
+    for (uint32_t at = 0u; at < entry_icon_count; ++at)
+        if (entry_icons[at]._private_handle != ASTRA_INVALID_HANDLE) {
+            AstraResult closed = astra_surface_close(&entry_icons[at]);
+            (void)closed;
+        }
+    astra_runtime_deallocate(entry_icons);
+    entry_icons = NULL;
+    entry_icon_count = 0u;
+}
+
+static void load_entry_icons(void)
+{
+    AstraApplicationCatalog catalog = ASTRA_APPLICATION_CATALOG_INIT;
+    clear_entry_icons();
+    if (directory.status != ASTRA_VFS_OK || directory.count == 0u ||
+        directory.count > SIZE_MAX / sizeof(*entry_icons)) return;
+    entry_icons = astra_runtime_allocate(directory.count * sizeof(*entry_icons));
+    if (entry_icons == NULL) return;
+    entry_icon_count = directory.count;
+    for (uint32_t at = 0u; at < entry_icon_count; ++at)
+        entry_icons[at] = (AstraSurface)ASTRA_SURFACE_INIT;
+    if (!volume_connected)
+        (void)astra_application_catalog_load(&filesystem, root, &catalog);
+    for (uint32_t at = 0u; at < directory.count; ++at) {
+        const AstraDirectoryEntry *entry = &directory.entries[at];
+        if (entry->kind == ASTRA_VFS_KIND_DIRECTORY &&
+            astra_string_has_suffix(entry->name, ".app")) {
+            for (uint32_t found = 0u; found < catalog.count; ++found) {
+                const char *leaf = astra_folder_leaf(catalog.entries[found].bundle);
+                if (strcmp(leaf, entry->name) == 0) {
+                    (void)load_icon(catalog.entries[found].icon,
+                                    &entry_icons[at]);
+                    break;
+                }
+            }
+        } else if (entry->kind == ASTRA_VFS_KIND_FILE &&
+                   astra_string_has_suffix(entry->name, ".apkg")) {
+            char path[ASTRA_VFS_PATH_MAX];
+            void *bytes = NULL;
+            uint32_t length = 0u;
+            AstraFilesystem *source = volume_connected ?
+                &volume_filesystem : &filesystem.filesystem;
+            if (astra_folder_path(root, entry->name, path,
+                    sizeof(path)) == ASTRA_VFS_OK &&
+                astra_package_read_icon(source, path, &bytes,
+                    &length) == ASTRA_OK)
+                (void)astra_surface_from_aicon(&display, bytes, length,
+                    ICON_SOURCE_SIZE, &entry_icons[at]);
+            astra_runtime_deallocate(bytes);
+        }
+    }
+    astra_application_catalog_destroy(&catalog);
 }
 
 static AstraResult layout(void)
@@ -327,7 +388,13 @@ static AstraResult paint(void)
             continue;
         tile.frame = (AstraRectI32){frame.x, frame.y, frame.width, frame.height};
         tile.clip = (AstraRectI32){clip.x, clip.y, clip.width, clip.height};
-        tile.icon = entry->kind == ASTRA_VFS_KIND_DIRECTORY ? &folder_icon : &file_icon;
+        tile.icon = at < entry_icon_count &&
+            entry_icons[at]._private_handle != ASTRA_INVALID_HANDLE ?
+            &entry_icons[at] : entry->kind == ASTRA_VFS_KIND_DIRECTORY ?
+            &folder_icon : &file_icon;
+        if (entry->kind == ASTRA_VFS_KIND_FILE &&
+            astra_string_has_suffix(entry->name, ".apkg"))
+            tile.badge = &installer_icon;
         tile.label = entry->name;
         tile.label_bytes = (uint32_t)strlen(entry->name);
         tile.editor = name_edit.active && at == edit_index ? &name_edit.surface : NULL;
@@ -436,6 +503,7 @@ static AstraResult reload_directory(void)
     uint32_t status = astra_directory_snapshot_load(&directory,
         volume_connected ? &volume_filesystem : &filesystem.filesystem, root, NULL);
     if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
+    load_entry_icons();
     log_root();
     AstraResult result = build_view();
     if (result == ASTRA_OK) log_icons();
@@ -461,13 +529,22 @@ static uint32_t hit_entry(int32_t x, int32_t y)
 
 static AstraResult open_entry(uint32_t index)
 {
-    if (index >= directory.count || directory.entries[index].kind != ASTRA_VFS_KIND_DIRECTORY)
+    if (index >= directory.count)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     char path[ASTRA_VFS_PATH_MAX];
     if (astra_folder_path(root, directory.entries[index].name,
         path, sizeof(path)) != ASTRA_VFS_OK) return ASTRA_ERROR_INVALID_ARGUMENT;
     uint32_t pid;
     size_t length = strlen(path);
+    if (directory.entries[index].kind == ASTRA_VFS_KIND_FILE &&
+        astra_string_has_suffix(path, ".apkg")) {
+        const char *arguments[] = {path};
+        return astra_application_launch_with_arguments(launcher,
+            "/apps/Installer.app", (uint16_t)strlen("/apps/Installer.app"),
+            ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 1u, &pid);
+    }
+    if (directory.entries[index].kind != ASTRA_VFS_KIND_DIRECTORY)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     if (length >= 4u && strcmp(path + length - 4u, ".app") == 0)
         return astra_application_launch(launcher, path, (uint16_t)length, &pid);
     const char *arguments[] = {path};
@@ -533,7 +610,10 @@ static AstraResult selected_query(void *opaque, AstraCommandState *state)
     const AtlasCommands *context = opaque;
     uint32_t index = *context->selection;
     *state = (AstraCommandState){"Open", 4u,
-        index < directory.count && directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY, 0u};
+        index < directory.count &&
+        (directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY ||
+         (directory.entries[index].kind == ASTRA_VFS_KIND_FILE &&
+          astra_string_has_suffix(directory.entries[index].name, ".apkg"))), 0u};
     return ASTRA_OK;
 }
 
@@ -552,6 +632,52 @@ static AstraResult delete_query(void *opaque, AstraCommandState *state)
     state->label = "Delete";
     state->label_length = 6u;
     return result;
+}
+
+static int selected_bundle(const AtlasCommands *context)
+{
+    uint32_t index = *context->selection;
+    return index < directory.count &&
+        directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY &&
+        astra_string_has_suffix(directory.entries[index].name, ".app") &&
+        !volume_connected;
+}
+
+static AstraResult package_query(void *opaque, AstraCommandState *state)
+{
+    const AtlasCommands *context = opaque;
+    *state = (AstraCommandState){"Create installer", 16u,
+        selected_bundle(context), 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult create_installer(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)args;
+    AtlasCommands *context = opaque;
+    uint32_t index = *context->selection;
+    char bundle[ASTRA_VFS_PATH_MAX], archive[ASTRA_VFS_PATH_MAX];
+    AstraString output;
+    if (!selected_bundle(context) ||
+        astra_folder_path(root, directory.entries[index].name,
+            bundle, sizeof(bundle)) != ASTRA_VFS_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    astra_string_init(&output, archive, sizeof(archive));
+    uint32_t length = (uint32_t)strlen(directory.entries[index].name);
+    if (!astra_string_append(&output, "/home/Desktop/") ||
+        !astra_string_append_bytes(&output, directory.entries[index].name,
+            length - 4u) || !astra_string_append(&output, ".apkg"))
+        return ASTRA_ERROR_NAME_TOO_LONG;
+    AstraResult result = astra_package_create_bundle(&filesystem.filesystem,
+        bundle, archive);
+    if (result != ASTRA_OK) {
+        folder_error(context->gui, "Installer could not be created",
+            astra_status_from_result(result));
+        return result;
+    }
+    if (strcmp(root, "/home/Desktop") == 0) return reload_directory();
+    return ASTRA_OK;
 }
 
 static AstraResult create_folder(void *opaque, const AstraCommandArguments *args)
@@ -616,15 +742,16 @@ static AstraResult run(AstraHandle gui)
     AstraContextMenu context_menu = ASTRA_CONTEXT_MENU_INIT;
     uint32_t menu_index = UINT32_MAX, clicked_index = UINT32_MAX;
     AtlasCommands command_context = {gui, &menu_index};
-    AstraContextMenuItem menu_items[4];
-    uint16_t menu_parents[4] = {0u};
+    AstraContextMenuItem menu_items[5];
+    uint16_t menu_parents[5] = {0u};
     const AstraCommand commands[] = {
         {"atlas.new", 9u, 0u, 0u, menu_query, create_folder, &command_context},
         {"atlas.folder", 12u, 0u, 0u, folder_query, create_folder, &command_context},
         {"atlas.open", 10u, 0u, 0u, selected_query, open_selected, &command_context},
         {"atlas.rename", 12u, 0u, 0u, rename_query, rename_selected, &command_context},
-        {"atlas.delete", 12u, 0u, 0u, delete_query, delete_selected, &command_context}};
-    const AstraCommandScope command_scope = {NULL, commands, 5u};
+        {"atlas.delete", 12u, 0u, 0u, delete_query, delete_selected, &command_context},
+        {"atlas.package", 13u, 0u, 0u, package_query, create_installer, &command_context}};
+    const AstraCommandScope command_scope = {NULL, commands, 6u};
     for (;;) {
         uint32_t waits[3] = {astra_window_event_wait_handle(&window)};
         uint32_t wait_count = 1u, worker_slot = UINT32_MAX, volume_slot = UINT32_MAX;
@@ -681,6 +808,7 @@ static AstraResult run(AstraHandle gui)
                 visible_data = 1u;
             }
             log_root();
+            load_entry_icons();
             result = build_view();
             if (result != ASTRA_OK)
                 return result;
@@ -753,8 +881,12 @@ static AstraResult run(AstraHandle gui)
                         menu_items[count++] = (AstraContextMenuItem){"atlas.folder", 12u, NULL};
                         menu_parents[1] = 1u;
                     } else if (index < directory.count &&
-                        directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY) {
+                        (directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY ||
+                         (directory.entries[index].kind == ASTRA_VFS_KIND_FILE &&
+                          astra_string_has_suffix(directory.entries[index].name, ".apkg")))) {
                         menu_items[count++] = (AstraContextMenuItem){"atlas.open", 10u, NULL};
+                        if (selected_bundle(&command_context))
+                            menu_items[count++] = (AstraContextMenuItem){"atlas.package", 13u, NULL};
                         if (desktop_folder_root()) {
                             menu_items[count++] = (AstraContextMenuItem){"atlas.rename", 12u, NULL};
                             menu_items[count++] = (AstraContextMenuItem){"atlas.delete", 12u, NULL};
@@ -771,7 +903,9 @@ static AstraResult run(AstraHandle gui)
                 } else if (event.data.pointer.button == ASTRA_INPUT_BUTTON_LEFT) {
                     if (event.data.pointer.click_count == 2u && index == clicked_index &&
                         index < directory.count &&
-                        directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY) {
+                        (directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY ||
+                         (directory.entries[index].kind == ASTRA_VFS_KIND_FILE &&
+                          astra_string_has_suffix(directory.entries[index].name, ".apkg")))) {
                         AstraResult opened = open_entry(index);
                         if (opened != ASTRA_OK)
                             (void)astra_log_failure("atlas open", (uint32_t)(-opened));
@@ -870,6 +1004,10 @@ int astra_main(const AstraStartupInfo *startup)
         step = "file icon";
         result = load_icon("/apps/Atlas.app/resources/document.aicon", &file_icon);
     }
+    if (result == ASTRA_OK) {
+        step = "installer icon";
+        result = load_icon("/apps/Atlas.app/resources/installer.aicon", &installer_icon);
+    }
     model.line_height = CELL_HEIGHT + GRID_GAP_Y;
     if (result == ASTRA_OK) {
         step = "scroll model";
@@ -916,6 +1054,7 @@ int astra_main(const AstraStartupInfo *startup)
     }
     /* Native process teardown owns a worker still retiring; never free its state. */
     if (worker == 0u) {
+        clear_entry_icons();
         astra_directory_snapshot_dispose(&directory);
         astra_runtime_deallocate(controls);
         astra_process_filesystem_close(&filesystem);

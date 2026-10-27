@@ -14,6 +14,7 @@ GRAPHICS_LIBRARY := $(ASTRA_GRAPHICS_LIBRARY)
 FONT_LIBRARY := $(ASTRA_FONT_LIBRARY)
 FILESYSTEM_LIBRARY := $(ASTRA_FILESYSTEM_LIBRARY)
 DOS_LIBRARY := $(ASTRA_DOS_LIBRARY)
+PACKAGE_LIBRARY := $(ASTRA_PACKAGE_LIBRARY)
 INTERFACE_LIBRARY := $(ASTRA_INTERFACE_LIBRARY)
 NETWORK_LIBRARY := $(ASTRA_NETWORK_LIBRARY)
 CONFIG_LIBRARY := $(ASTRA_CONFIG_LIBRARY)
@@ -31,6 +32,7 @@ STREAMS := build/Streams.kit
 POSIX := build/Posix.kit
 GRAPHICS := build/Graphics.kit
 FILESYSTEM := build/Filesystem.kit
+PACKAGE := build/Package.kit
 INTERFACE := build/Interface.kit
 NETWORK := build/Network.kit
 CONFIGURATION := build/Configuration.kit
@@ -94,6 +96,7 @@ FONT_LIBRARY_PROVIDES := $(shell sed -n \
 FONT_LIBRARY_ABI := $(word 1,$(FONT_LIBRARY_PROVIDES))
 FONT_LIBRARY_VERSION := $(word 2,$(FONT_LIBRARY_PROVIDES))
 FILESYSTEM_STAMP := build/.Filesystem.kit.stamp
+PACKAGE_STAMP := build/.Package.kit.stamp
 FILESYSTEM_LIBRARY_PROVIDES := $(shell sed -n \
 	's/^provides filesystem\.library //p' Filesystem.kit/manifest)
 FILESYSTEM_LIBRARY_ABI := $(word 1,$(FILESYSTEM_LIBRARY_PROVIDES))
@@ -102,6 +105,10 @@ DOS_LIBRARY_PROVIDES := $(shell sed -n \
 's/^provides dos\.library //p' Filesystem.kit/manifest)
 DOS_LIBRARY_ABI := $(word 1,$(DOS_LIBRARY_PROVIDES))
 DOS_LIBRARY_VERSION := $(word 2,$(DOS_LIBRARY_PROVIDES))
+PACKAGE_LIBRARY_PROVIDES := $(shell sed -n \
+	's/^provides package\.library //p' Package.kit/manifest)
+PACKAGE_LIBRARY_ABI := $(word 1,$(PACKAGE_LIBRARY_PROVIDES))
+PACKAGE_LIBRARY_VERSION := $(word 2,$(PACKAGE_LIBRARY_PROVIDES))
 INTERFACE_STAMP := build/.Interface.kit.stamp
 INTERFACE_LIBRARY_PROVIDES := $(shell sed -n \
 	's/^provides interface\.library //p' Interface.kit/manifest)
@@ -133,7 +140,7 @@ PCM_LIBRARY_ABI := $(word 1,$(PCM_LIBRARY_PROVIDES))
 PCM_LIBRARY_VERSION := $(word 2,$(PCM_LIBRARY_PROVIDES))
 SDL_STAMP := build/.SDL.kit.stamp
 KIT_STAMPS := $(RUNTIME_STAMP) $(STREAMS_STAMP) $(POSIX_STAMP) \
-	$(CXX_STAMP) $(LUA_STAMP) $(GRAPHICS_STAMP) $(FILESYSTEM_STAMP) \
+	$(CXX_STAMP) $(LUA_STAMP) $(GRAPHICS_STAMP) $(FILESYSTEM_STAMP) $(PACKAGE_STAMP) \
 	$(INTERFACE_STAMP) $(NETWORK_STAMP) $(CONFIGURATION_STAMP) \
 	$(PCM_STAMP) $(CODEC_STAMP) $(SDL_STAMP)
 SDL2_LIBRARY_PROVIDES := $(shell sed -n \
@@ -163,7 +170,7 @@ KIT_NAMES := $(sort $(patsubst %/manifest,%,$(PROVIDER_MANIFESTS)))
 KIT_INVENTORY := build/.kits
 
 all: $(RUNTIME_STAMP) $(STREAMS_STAMP) $(POSIX_STAMP) $(GRAPHICS_STAMP) \
-	$(FILESYSTEM_STAMP) $(INTERFACE_STAMP) \
+	$(FILESYSTEM_STAMP) $(PACKAGE_STAMP) $(INTERFACE_STAMP) \
 	$(NETWORK_STAMP) $(CONFIGURATION_STAMP) $(CXX_STAMP) $(LUA_STAMP) \
 	$(PCM_STAMP) $(CODEC_STAMP) $(SDL_STAMP) $(KIT_INVENTORY) provider-coverage
 
@@ -212,6 +219,9 @@ $(FILESYSTEM_LIBRARY): FORCE
 
 $(DOS_LIBRARY): FORCE
 	$(MAKE) -C ../dos library-contract
+
+$(PACKAGE_LIBRARY): FORCE
+	$(MAKE) -C ../package library-contract
 
 $(INTERFACE_LIBRARY): FORCE
 	$(MAKE) -C ../interface library-contract
@@ -324,6 +334,18 @@ $(FILESYSTEM_STAMP): Filesystem.kit/manifest $(FILESYSTEM_LIBRARY) $(DOS_LIBRARY
 	cp $(DOS_LIBRARY) \
 		$(FILESYSTEM)/libraries/dos.library/abi-$(DOS_LIBRARY_ABI)/$(DOS_LIBRARY_VERSION)/m68k-68040/dos.library
 	$(BUNDLE_TOOL) check $(FILESYSTEM)
+	@touch $@
+
+$(PACKAGE_STAMP): Package.kit/manifest $(PACKAGE_LIBRARY) $(BUNDLE_TOOL) \
+		../../../third_party/zstd/LICENSE
+	rm -rf $(PACKAGE)
+	@mkdir -p $(PACKAGE)/libraries/package.library/abi-$(PACKAGE_LIBRARY_ABI)/$(PACKAGE_LIBRARY_VERSION)/m68k-68040
+	@mkdir -p $(PACKAGE)/licenses
+	cp Package.kit/manifest $(PACKAGE)/manifest
+	cp $(PACKAGE_LIBRARY) \
+		$(PACKAGE)/libraries/package.library/abi-$(PACKAGE_LIBRARY_ABI)/$(PACKAGE_LIBRARY_VERSION)/m68k-68040/package.library
+	cp ../../../third_party/zstd/LICENSE $(PACKAGE)/licenses/Zstandard.txt
+	$(BUNDLE_TOOL) check $(PACKAGE)
 	@touch $@
 
 $(INTERFACE_STAMP): Interface.kit/manifest $(INTERFACE_LIBRARY) $(BUNDLE_TOOL)

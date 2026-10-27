@@ -19,7 +19,8 @@ typedef struct IconTileMetrics {
 
 static int metrics(const AstraIconTileInfo *info, IconTileMetrics *out)
 {
-    if (info == NULL || out == NULL || info->size < sizeof(*info) ||
+    if (info == NULL || out == NULL ||
+        info->size < offsetof(AstraIconTileInfo, badge) ||
         info->reserved[0] != 0u || info->reserved[1] != 0u ||
         (info->label_bytes != 0u && (info->label == NULL ||
             !astra_utf8_validate(info->label, info->label_bytes, 0u))))
@@ -87,6 +88,17 @@ AstraResult astra_interface_icon_tile_render(AstraDrawList *list,
                 ASTRA_ICON_TILE_SOURCE_SIZE},
             &(AstraRectI32){(int32_t)icon_x, (int32_t)icon_y,
                 style.icon_size, style.icon_size}, &blend);
+    if (result == ASTRA_OK && info->size >= sizeof(*info) &&
+        info->badge != NULL &&
+        info->badge->_private_handle != ASTRA_INVALID_HANDLE) {
+        uint32_t badge_size = style.icon_size / 2u;
+        result = astra_draw_blit(list, info->badge,
+            &(AstraRectI32){0, 0, ASTRA_ICON_TILE_SOURCE_SIZE,
+                ASTRA_ICON_TILE_SOURCE_SIZE},
+            &(AstraRectI32){(int32_t)(icon_x + style.icon_size - badge_size),
+                (int32_t)(icon_y + style.icon_size - badge_size),
+                badge_size, badge_size}, &blend);
+    }
     if (result != ASTRA_OK) return result;
     if (info->editor != NULL)
         return astra_draw_blit(list, info->editor,

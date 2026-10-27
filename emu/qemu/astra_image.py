@@ -193,7 +193,8 @@ DISPLAY_STARTUP_MANIFEST = (
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
     "trusted /apps/Atlas.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:rw FONTS:r APPS:r LIBS:r LOG\n"
     "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r\n"
-    "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG\n")
+    "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG\n"
+    "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",
                     "input", "clipboard", "fonts", "display", "media", "codec", "sampler",

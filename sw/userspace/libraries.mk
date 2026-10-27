@@ -21,6 +21,8 @@ ASTRA_FILESYSTEM_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/vfs/build/m68k/libraries/filesystem.library.15
 ASTRA_DOS_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/dos/build/m68k/libraries/dos.library.1
+ASTRA_PACKAGE_LIBRARY := \
+	$(ASTRA_USERSPACE_ROOT)/package/build/m68k/libraries/package.library.1
 ASTRA_LIBC_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/posix/build/m68k/libraries/libc.library.4
 ASTRA_TERMINFO_LIBRARY := \
@@ -68,6 +70,7 @@ ASTRA_SHARED_LIBRARIES := \
 	$(ASTRA_STREAMS_LIBRARY) \
 	$(ASTRA_FILESYSTEM_LIBRARY) \
 	$(ASTRA_DOS_LIBRARY) \
+	$(ASTRA_PACKAGE_LIBRARY) \
 	$(ASTRA_LIBC_LIBRARY) \
 	$(ASTRA_TERMINFO_LIBRARY) \
 	$(ASTRA_CXX_LIBRARY) \
@@ -96,7 +99,7 @@ ASTRA_SHARED_LIBRARY_SEARCH_FLAGS := \
 # outermost owners that must be validated before linking.  Adding a library is
 # therefore a single registration here, not another private dependency walker
 # in every native or POSIX application Makefile.
-ASTRA_LIBRARY_KEYS := system compiler unwind runtime streams filesystem dos libc \
+ASTRA_LIBRARY_KEYS := system compiler unwind runtime streams filesystem dos package libc \
 	terminfo cxx lua ntp graphics font interface \
 	network config pcm codec sdl2 sdl2net sdl2image sdl2mixer sdl2ttf
 
@@ -107,6 +110,7 @@ ASTRA_LIBRARY_FILE_runtime := $(ASTRA_RUNTIME_LIBRARY)
 ASTRA_LIBRARY_FILE_streams := $(ASTRA_STREAMS_LIBRARY)
 ASTRA_LIBRARY_FILE_filesystem := $(ASTRA_FILESYSTEM_LIBRARY)
 ASTRA_LIBRARY_FILE_dos := $(ASTRA_DOS_LIBRARY)
+ASTRA_LIBRARY_FILE_package := $(ASTRA_PACKAGE_LIBRARY)
 ASTRA_LIBRARY_FILE_libc := $(ASTRA_LIBC_LIBRARY)
 ASTRA_LIBRARY_FILE_terminfo := $(ASTRA_TERMINFO_LIBRARY)
 ASTRA_LIBRARY_FILE_cxx := $(ASTRA_CXX_LIBRARY)
@@ -132,6 +136,7 @@ ASTRA_LIBRARY_DEPS_runtime := compiler
 ASTRA_LIBRARY_DEPS_streams := runtime
 ASTRA_LIBRARY_DEPS_filesystem := system runtime
 ASTRA_LIBRARY_DEPS_dos := filesystem runtime compiler
+ASTRA_LIBRARY_DEPS_package := system filesystem runtime compiler
 ASTRA_LIBRARY_DEPS_libc := streams filesystem network runtime compiler
 ASTRA_LIBRARY_DEPS_terminfo := libc runtime compiler
 ASTRA_LIBRARY_DEPS_cxx := libc runtime compiler unwind
@@ -157,6 +162,7 @@ ASTRA_LIBRARY_OWNER_runtime := $(ASTRA_USERSPACE_ROOT)/runtime:library
 ASTRA_LIBRARY_OWNER_streams := $(ASTRA_USERSPACE_ROOT)/streams:library
 ASTRA_LIBRARY_OWNER_filesystem := $(ASTRA_USERSPACE_ROOT)/vfs:library
 ASTRA_LIBRARY_OWNER_dos := $(ASTRA_USERSPACE_ROOT)/dos:library
+ASTRA_LIBRARY_OWNER_package := $(ASTRA_USERSPACE_ROOT)/package:library
 ASTRA_LIBRARY_OWNER_libc := $(ASTRA_USERSPACE_ROOT)/posix:library
 ASTRA_LIBRARY_OWNER_terminfo := $(ASTRA_USERSPACE_ROOT)/terminfo:library
 ASTRA_LIBRARY_OWNER_cxx := $(ASTRA_USERSPACE_ROOT)/cxx:library
@@ -185,6 +191,7 @@ ASTRA_LIBRARY_CONTRACT_OWNER_runtime := $(ASTRA_USERSPACE_ROOT)/runtime:runtime-
 ASTRA_LIBRARY_CONTRACT_OWNER_streams := $(ASTRA_USERSPACE_ROOT)/streams:streams-library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_filesystem := $(ASTRA_USERSPACE_ROOT)/vfs:library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_dos := $(ASTRA_USERSPACE_ROOT)/dos:library-contract
+ASTRA_LIBRARY_CONTRACT_OWNER_package := $(ASTRA_USERSPACE_ROOT)/package:library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_libc := $(ASTRA_USERSPACE_ROOT)/posix:libc-library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_terminfo := $(ASTRA_USERSPACE_ROOT)/terminfo:library-contract
 ASTRA_LIBRARY_CONTRACT_OWNER_cxx := $(ASTRA_USERSPACE_ROOT)/cxx:cxx-library-contract

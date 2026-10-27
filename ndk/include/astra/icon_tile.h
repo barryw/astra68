@@ -55,12 +55,13 @@ typedef struct AstraIconTileInfo {
     uint32_t label_bytes; /**< Label byte count. */
     const AstraSurface *editor; /**< Optional borrowed inline editor surface. */
     uint32_t reserved[2]; /**< Reserved; set to zero. */
+    const AstraSurface *badge; /**< Optional 64x64 icon, shown at icon's lower right. */
 } AstraIconTileInfo;
 
 /** Empty tile initializer with client layout. */
 #define ASTRA_ICON_TILE_INFO_INIT { \
     sizeof(AstraIconTileInfo), ASTRA_ICON_TILE_CLIENT, \
-    {0, 0, 0, 0}, {0, 0, 0, 0}, NULL, NULL, 0u, NULL, {0u, 0u} \
+    {0, 0, 0, 0}, {0, 0, 0, 0}, NULL, NULL, 0u, NULL, {0u, 0u}, NULL \
 }
 
 /** Paint icon, fitted label or active inline editor through a hardware draw list.

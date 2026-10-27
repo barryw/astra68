@@ -1,0 +1,10 @@
+astra-bundle 1
+kind kit
+id org.astra.package
+name "Astra Package Kit"
+version 0.1.0
+provides package.library 1 1.0.0
+requires compiler.library 2 2.0.0
+requires filesystem.library 15 15.2.0
+requires runtime.library 1 1.16.0
+requires system.library 4 4.0.0

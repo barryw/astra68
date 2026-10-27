@@ -2,6 +2,25 @@
 
 **Status:** LOCKED for version 1.
 
+Current native implementation creates and installs single application bundles.
+Atlas offers **Create installer** on `.app` bundles and opens `.apkg` files in
+Installer. `package.library.1` writes and verifies the Zstandard pax payload,
+ledger, manifest, and icon preview; Installer stages a bundle and publishes it
+to `APPS:` only if the destination is absent. Installer reads packages from
+mounted removable volumes through the Filesystem Kit volume namespace. The
+package service, signatures, multi-bundle transactions, dependency solver,
+generations, rollback, and system package installation specified below remain
+future work. Unsigned application installers are accepted only through callers
+granted write access
+to the target volume; ordinary applications do not receive `APPS:rw`.
+
+Haiku references reviewed before implementation:
+`src/servers/package/PackageManager.cpp` and
+`src/kits/package/ActivationTransaction.cpp` informed staged validation before
+publication; `src/kits/tracker/ContainerWindow.cpp` informed the Atlas context
+menu placement. Astra uses its native bundle, Filesystem Kit, and control
+contracts rather than copying Haiku's package activation model.
+
 ## 1. Role
 
 `.apkg` is Astra's software transport and installation format. Packages are
@@ -22,8 +41,9 @@ An `.apkg` is a reproducible POSIX pax archive compressed with Zstandard. Its
 top-level layout is:
 
 ```text
-manifest
 files.sha256
+icon.aicon                    optional application preview
+manifest
 payload/
 signatures/ed25519/KEY-ID       optional for local development
 ```
@@ -41,6 +61,11 @@ where applicable. A signature covers the exact bytes of `manifest`, a single
 LF, and `files.sha256`. Repository packages require a signature from the
 selected trust policy. Unsigned packages require an explicit development
 installation capability.
+
+An application package may include `icon.aicon` ahead of `manifest` for fast
+file-browser preview. Before publication, the installer checks that its bytes
+match the application icon declared by the bundled manifest and verified by
+the payload ledger. Preview bytes grant no installation authority.
 
 ## 3. Manifest
 
