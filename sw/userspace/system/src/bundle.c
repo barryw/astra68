@@ -12,6 +12,23 @@
 
 static int library_name(const char *text);
 
+static int content_type(const char *text)
+{
+    uint32_t length = 0u;
+    uint32_t slash = 0u;
+    while (text[length] != '\0') {
+        char value = text[length];
+        if (value == '/') {
+            if (slash != 0u || length == 0u) return 0;
+            slash = length + 1u;
+        } else if (!((value >= 'a' && value <= 'z') ||
+                     (value >= '0' && value <= '9') || value == '.' ||
+                     value == '+' || value == '-')) return 0;
+        if (++length >= 128u) return 0;
+    }
+    return slash != 0u && slash < length;
+}
+
 static int version_at_least(AstraBundleVersion have, AstraBundleVersion need)
 {
     return have.major > need.major ||
@@ -210,7 +227,9 @@ static int library_append(AstraBundleLibrary **entries, uint32_t *count,
     return 1;
 }
 
-static int parse_line(char *line, AstraBundleManifest *manifest)
+static int parse_line(char *line, AstraBundleManifest *manifest,
+                      const char *wanted_type, uint32_t *handles,
+                      uint32_t *handled_count)
 {
     char *word[WORD_MAX];
     uint32_t count = astra_manifest_words(line, word, WORD_MAX);
@@ -250,6 +269,13 @@ static int parse_line(char *line, AstraBundleManifest *manifest)
         manifest->flags |= ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE;
         return 1;
     }
+    if (strcmp(word[0], "handles") == 0) {
+        if (count != 2u || !content_type(word[1]) ||
+            ++*handled_count > 64u) return 0;
+        if (wanted_type != NULL && strcmp(wanted_type, word[1]) == 0)
+            *handles = 1u;
+        return 1;
+    }
     if (strcmp(word[0], "capability") == 0) {
         if (count != 2u || manifest->capability_count == ASTRA_BUNDLE_CAPABILITY_MAX)
             return 0;
@@ -272,12 +298,14 @@ static int parse_line(char *line, AstraBundleManifest *manifest)
     return 0;
 }
 
-uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
-                                     AstraBundleManifest *manifest,
-                                     uint32_t *error_line)
+static uint32_t parse_manifest(char *text, uint32_t length,
+                               AstraBundleManifest *manifest,
+                               uint32_t *error_line,
+                               const char *wanted_type, uint32_t *handles)
 {
     uint32_t start = 0u;
     uint32_t line = 1u;
+    uint32_t handled_count = 0u;
     if (error_line != NULL) *error_line = 0u;
     if (manifest == NULL)
         return ASTRA_BUNDLE_INVALID;
@@ -313,7 +341,8 @@ uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
             owned[tail] = '\0';
             line_text = owned;
         }
-        parsed = parse_line(line_text, manifest);
+        parsed = parse_line(line_text, manifest, wanted_type, handles,
+                            &handled_count);
         astra_runtime_deallocate(owned);
         if (parsed <= 0) {
             if (error_line != NULL) *error_line = line;
@@ -335,11 +364,38 @@ uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
         return ASTRA_BUNDLE_MISSING;
     }
     /* Only an application has instances. */
-    if (manifest->kind == ASTRA_BUNDLE_KIT && manifest->flags != 0u) {
+    if (manifest->kind == ASTRA_BUNDLE_KIT &&
+        (manifest->flags != 0u || handled_count != 0u)) {
         astra_bundle_manifest_destroy(manifest);
         return ASTRA_BUNDLE_INVALID;
     }
     return ASTRA_BUNDLE_OK;
+}
+
+uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
+                                     AstraBundleManifest *manifest,
+                                     uint32_t *error_line)
+{
+    return parse_manifest(text, length, manifest, error_line, NULL, NULL);
+}
+
+uint32_t astra_bundle_manifest_handles(char *text, uint32_t length,
+                                       const char *wanted_type,
+                                       uint32_t *handles)
+{
+    AstraBundleManifest manifest = ASTRA_BUNDLE_MANIFEST_INIT;
+    uint32_t result;
+    if (handles == NULL || wanted_type == NULL || !content_type(wanted_type))
+        return ASTRA_BUNDLE_INVALID;
+    *handles = 0u;
+    result = parse_manifest(text, length, &manifest, NULL, wanted_type,
+                            handles);
+    if (result == ASTRA_BUNDLE_OK && manifest.kind != ASTRA_BUNDLE_APPLICATION)
+        *handles = 0u;
+    if (result != ASTRA_BUNDLE_OK)
+        *handles = 0u;
+    astra_bundle_manifest_destroy(&manifest);
+    return result;
 }
 
 void astra_bundle_manifest_destroy(AstraBundleManifest *manifest)

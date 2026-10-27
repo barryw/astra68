@@ -140,6 +140,59 @@ void astra_application_catalog_destroy(AstraApplicationCatalog *catalog)
     *catalog = (AstraApplicationCatalog)ASTRA_APPLICATION_CATALOG_INIT;
 }
 
+uint32_t astra_application_supports_type(AstraProcessFilesystem *filesystem,
+                                         const char *bundle,
+                                         const char *content_type,
+                                         uint32_t *supports)
+{
+    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    char *path = astra_vfs_path_storage_at(&paths, 0u);
+    char *text = NULL;
+    uint32_t length = 0u;
+    uint32_t result;
+
+    if (supports == NULL || filesystem == NULL || bundle == NULL ||
+        content_type == NULL || bundle[0] != '/')
+        return ASTRA_VFS_ERR_INVALID;
+    *supports = 0u;
+    if (paths.bytes == NULL) return ASTRA_VFS_ERR_LIMIT;
+    if (!join(path, ASTRA_VFS_PATH_MAX, bundle, "/manifest", ""))
+        return ASTRA_VFS_ERR_INVALID;
+    result = astra_process_read_file_alloc(filesystem, path,
+                                           (void **)&text, &length);
+    if (result != ASTRA_VFS_OK) return result;
+    uint32_t parsed = astra_bundle_manifest_handles(text, length,
+                                                     content_type, supports);
+    astra_runtime_deallocate(text);
+    return parsed == ASTRA_BUNDLE_OK ? ASTRA_VFS_OK :
+           parsed == ASTRA_BUNDLE_LIMIT ? ASTRA_VFS_ERR_LIMIT :
+           ASTRA_VFS_ERR_INVALID;
+}
+
+uint32_t astra_application_catalog_handlers(
+    AstraProcessFilesystem *filesystem, const AstraApplicationCatalog *catalog,
+    const char *content_type, uint32_t *indices, uint32_t capacity,
+    uint32_t *count)
+{
+    uint32_t found = 0u;
+    if (filesystem == NULL || catalog == NULL || content_type == NULL ||
+        count == NULL || (capacity != 0u && indices == NULL))
+        return ASTRA_VFS_ERR_INVALID;
+    *count = 0u;
+    for (uint32_t at = 0u; at < catalog->count; ++at) {
+        uint32_t supports = 0u;
+        uint32_t result = astra_application_supports_type(
+            filesystem, catalog->entries[at].bundle, content_type, &supports);
+        if (result == ASTRA_VFS_ERR_LIMIT) return result;
+        if (result != ASTRA_VFS_OK || supports == 0u) continue;
+        if (found < capacity) indices[found] = at;
+        ++found;
+    }
+    *count = found;
+    return found > capacity ? ASTRA_VFS_ERR_LIMIT : ASTRA_VFS_OK;
+}
+
 uint32_t astra_application_catalog_load(AstraProcessFilesystem *filesystem,
                                         const char *directory,
                                         AstraApplicationCatalog *catalog)

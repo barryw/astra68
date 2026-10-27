@@ -93,6 +93,17 @@ enum {
 uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
                                      AstraBundleManifest *manifest,
                                      uint32_t *error_line);
+/** Validate a manifest and report whether an application declares one content
+ * type. `text` is mutable, as for astra_bundle_manifest_parse. A Kit never
+ * handles documents.
+ * @param text Mutable manifest bytes.
+ * @param length Byte length of text.
+ * @param content_type MIME-style type to query.
+ * @param handles Receives zero or one on success.
+ * @return ASTRA_BUNDLE_OK or an ASTRA_BUNDLE_* error. */
+uint32_t astra_bundle_manifest_handles(char *text, uint32_t length,
+                                       const char *content_type,
+                                       uint32_t *handles);
 /** Release paths and library arrays owned by a parsed manifest.
  * @param manifest Manifest to release; NULL is ignored.
  */

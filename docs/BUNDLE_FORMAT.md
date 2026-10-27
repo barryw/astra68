@@ -76,6 +76,13 @@ executable relative/path/inside/bundle
 icon relative/path/to/icon.aicon
 ```
 
+An application may declare each content type it can open with a repeatable
+`handles MIME-TYPE` directive. MIME types use lowercase ASCII type/subtype
+identifiers, such as `handles application/x-zmachine-story`. These declarations
+describe capability; installation does not change an existing user default.
+Kits cannot declare document types. File extension hints and content recognition
+belong to File Types, not to the application launcher.
+
 Optional repeatable directives:
 
 ```

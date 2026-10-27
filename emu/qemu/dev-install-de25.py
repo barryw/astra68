@@ -5,6 +5,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
@@ -67,6 +68,9 @@ def guest_target(path):
             raise ValueError("not release-owned guest file: " + path)
     if components[0] == "fonts" and components[1] != "system":
         raise ValueError("font target must be under /fonts/system")
+    if components[0] == "libs" and len(components) == 2 and \
+            re.fullmatch(r"[A-Za-z0-9_.-]+\.library\.[0-9]+", components[1]):
+        raise ValueError("library must be installed inside its Kit")
     return components
 
 
@@ -114,6 +118,20 @@ def validate(stage, guest, host):
         seen.add((kind, destination))
         (validated_guest if kind == "guest" else validated_host).append(
             (source, destination, file_hash(source)))
+    for _, destination, _ in validated_guest:
+        components = parts(destination, absolute=True)
+        if len(components) != 7 or components[0] != "libs" or \
+                not components[1].endswith(".kit") or \
+                components[2] != "libraries" or \
+                not components[4].startswith("abi-") or \
+                components[5] != "m68k-68040" or \
+                components[3] != components[6]:
+            continue
+        provider = "/libs/.providers/%s.%s" % (
+            components[3], components[4])
+        manifest = "/libs/%s/manifest" % components[1]
+        if ("guest", provider) not in seen or ("guest", manifest) not in seen:
+            raise ValueError("Kit library update needs manifest and provider index: " + destination)
     state_info = regular(STATE)
     if state_info.st_uid != 0 or state_info.st_size > 4 << 30:
         raise ValueError("invalid persistent system image")

@@ -28,6 +28,39 @@ static void manifest_test(void)
     AstraBundleManifest manifest = ASTRA_BUNDLE_MANIFEST_INIT;
     uint32_t line = 0u;
 
+    {
+        char supported[] =
+            "astra-bundle 1\nkind application\nid org.astra.z\n"
+            "name AstraZ\nversion 1.0.0\nexecutable bin/z\n"
+            "icon resources/z.aicon\n"
+            "handles application/x-zmachine-story\n"
+            "handles application/x-zmachine-blorb\n";
+        char unmatched[sizeof(supported)];
+        uint32_t handles = 0u;
+
+        memcpy(unmatched, supported, sizeof(supported));
+        assert(astra_bundle_manifest_handles(
+            supported, sizeof(supported) - 1u,
+            "application/x-zmachine-story", &handles) == ASTRA_BUNDLE_OK);
+        assert(handles == 1u);
+        assert(astra_bundle_manifest_handles(
+            unmatched, sizeof(unmatched) - 1u,
+            "application/x-other", &handles) == ASTRA_BUNDLE_OK);
+        assert(handles == 0u);
+    }
+    {
+        char kit[] = "astra-bundle 1\nkind kit\nid org.astra.bad\n"
+            "name Bad\nversion 1.0.0\nprovides bad.library 1 1.0.0\n"
+            "handles application/x-zmachine-story\n";
+        char invalid[] = "astra-bundle 1\nkind application\nid org.astra.bad\n"
+            "name Bad\nversion 1.0.0\nexecutable bin/bad\n"
+            "icon resources/bad.aicon\nhandles application/Bad\n";
+        assert(astra_bundle_manifest_parse(kit, sizeof(kit) - 1u,
+                                          &manifest, &line) == ASTRA_BUNDLE_INVALID);
+        assert(astra_bundle_manifest_parse(invalid, sizeof(invalid) - 1u,
+                                          &manifest, &line) == ASTRA_BUNDLE_INVALID);
+    }
+
     assert(astra_bundle_manifest_parse(text, sizeof(text) - 1u, &manifest,
                                        &line) == ASTRA_BUNDLE_OK);
     assert(manifest.kind == ASTRA_BUNDLE_APPLICATION);

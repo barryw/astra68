@@ -11,6 +11,8 @@ import stat
 import subprocess
 import tempfile
 
+import astra_image
+
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 BOARD = "root@192.168.1.52"
@@ -27,6 +29,32 @@ def checked_source(name):
     if not stat.S_ISREG(info.st_mode) or info.st_size == 0:
         raise ValueError("artifact must be a nonempty regular file: " + name)
     return path
+
+
+def kit_companions(source, target):
+    """Keep a Kit's manifest and provider record with its changed library."""
+    components = source.relative_to(REPOSITORY).parts
+    if len(components) < 11 or components[:4] != (
+            "sw", "userspace", "kits", "build") or \
+            not components[4].endswith(".kit") or components[5] != "libraries":
+        return []
+    relative = Path(*components[5:]).as_posix()
+    expected = "/libs/%s/%s" % (components[4], relative)
+    if target != expected:
+        raise ValueError("Kit library target must be " + expected)
+    bundle = REPOSITORY.joinpath(*components[:5])
+    path = components[4] + "/" + relative
+    for (name, abi), (version, abi_minor, build_id, provider_path) in \
+            astra_image._providers([str(bundle)]).items():
+        if provider_path == path:
+            record = astra_image._provider_index_record(
+                path, version, abi, abi_minor, build_id)
+            return [
+                (checked_source(str(bundle.relative_to(REPOSITORY) / "manifest")),
+                 "/libs/%s/manifest" % components[4]),
+                (record, "/libs/.providers/%s.abi-%u" % (name, abi)),
+            ]
+    raise ValueError("Kit manifest does not provide changed library: " + str(source))
 
 
 def main():
@@ -59,16 +87,34 @@ def main():
         files = stage / "files"
         files.mkdir()
         mappings = []
-        for index, (kind, item) in enumerate(
+        targets = set()
+
+        def stage_mapping(kind, source, target):
+            key = kind, target
+            if key in targets:
+                raise ValueError("duplicate artifact target: " + target)
+            targets.add(key)
+            name = str(len(mappings))
+            staged = files / name
+            if isinstance(source, bytes):
+                staged.write_bytes(source)
+            else:
+                shutil.copy2(source, staged)
+            mappings.append((kind, {"source": "files/" + name,
+                                    "target": target}))
+
+        for kind, item in (
                 [("guest", value) for value in args.guest] +
                 [("host", value) for value in args.host]):
             source_name, separator, target = item.partition("=")
             if not separator:
                 parser.error("artifact mapping needs SOURCE=TARGET")
             source = checked_source(source_name)
-            name = str(index)
-            shutil.copy2(source, files / name)
-            mappings.append((kind, {"source": "files/" + name, "target": target}))
+            stage_mapping(kind, source, target)
+            if kind == "guest":
+                for companion, companion_target in kit_companions(source, target):
+                    if ("guest", companion_target) not in targets:
+                        stage_mapping("guest", companion, companion_target)
         shutil.copy2(REPOSITORY / "emu/qemu/dev-install-de25.py", stage)
         shutil.copy2(REPOSITORY / "emu/qemu/storage_image.py", stage)
         (stage / "manifest.json").write_text(json.dumps({

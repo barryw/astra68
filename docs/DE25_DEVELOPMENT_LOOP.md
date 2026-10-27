@@ -18,9 +18,14 @@ Use the narrowest Makefile target available. For SDL_mixer:
 
 ```sh
 rtk proxy python3 tools/de25-dev.py \
-  --make sw/userspace/sdl2:mixer-library-contract \
-  --guest sw/userspace/sdl2/build/m68k/libraries/SDL2_mixer.library.3=/libs/SDL2_mixer.library.3
+  --make sw/userspace/kits:build/SDL.kit \
+  --guest sw/userspace/kits/build/SDL.kit/libraries/SDL2_mixer.library/abi-3/2.8.2/m68k-68040/SDL2_mixer.library=/libs/SDL.kit/libraries/SDL2_mixer.library/abi-3/2.8.2/m68k-68040/SDL2_mixer.library
 ```
+
+For an application bundle, target its stamp (for example,
+`sw/userspace/apps:build/.OpenWith.app.stamp`). Targeting a copied file inside
+`build/OpenWith.app/` skips the source dependency rule and can install an old
+binary.
 
 Host components use the same command. This example builds and installs the
 AArch64 Codec worker without touching the guest image:
@@ -31,7 +36,10 @@ rtk proxy python3 tools/de25-dev.py \
   --host build/de25-capture/astra-codec-worker-aarch64=bin/astra-codec-worker
 ```
 
-Repeat `--guest` and `--host` to install coupled artifacts in one restart.
+For Kit libraries, the tool adds the owning Kit manifest and provider index
+record to the same install. A top-level `/libs/*.library.N` target is rejected:
+the loader resolves the library inside its Kit through `/libs/.providers`.
+Repeat `--guest` and `--host` to install other coupled artifacts in one restart.
 `--make DIR:TARGET` accepts a specific target; `--make DIR` uses `all`.
 Guest targets must be release-owned paths under `/commands`, `/services`,
 `/libs`, `/apps`, or `/fonts/system`, or the three named system files. User

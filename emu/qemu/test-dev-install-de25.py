@@ -14,12 +14,13 @@ spec = importlib.util.spec_from_file_location("astra_dev_install", source)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
-for target in ("/libs/SDL2_mixer.library.3", "/services/desktop",
+for target in ("/libs/SDL.kit/libraries/SDL2_mixer.library/abi-3/3.0.0/m68k-68040/SDL2_mixer.library", "/services/desktop",
                "/apps/Doom.app/Doom", "/fonts/system/Topaz.afnt",
                "/startup/system"):
     module.guest_target(target)
 
 for target in ("/home/save", "/config/system", "/fonts/installed/user.afnt",
+               "/libs/SDL2_mixer.library.3",
                "/libs/../home/private", "/apps//Doom.app", "libs/SDL2.library.3"):
     try:
         module.guest_target(target)
@@ -45,7 +46,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert target == root / "apps/Doom.app/Doom"
     (root / "libs").symlink_to(root / "apps")
     try:
-        module.checked_destination(root, "/libs/SDL2.library.3")
+        module.checked_destination(root, "/libs/SDL.kit/libraries/SDL2.library/abi-3/3.0.0/m68k-68040/SDL2.library")
     except ValueError:
         pass
     else:

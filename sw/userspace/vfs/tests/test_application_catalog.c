@@ -205,10 +205,57 @@ static void catalog_failures(void)
     astra_application_catalog_destroy(NULL);
 }
 
+static void declared_document_types(void)
+{
+    static const FakeNode apps[] = {
+        {"AstraZ.app", ASTRA_VFS_KIND_DIRECTORY,
+         APP("org.astra.z", "AstraZ", "z.aicon")
+         "handles application/x-zmachine-story\n"
+         "handles application/x-zmachine-blorb\n"},
+        {"Bad.app", ASTRA_VFS_KIND_DIRECTORY,
+         APP("org.astra.bad", "Bad", "bad.aicon")
+         "handles application/Bad\n"},
+    };
+    AstraProcessFilesystem filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
+    uint32_t supports = 9u;
+
+    nodes = apps;
+    node_count = sizeof(apps) / sizeof(apps[0]);
+    assert(astra_application_supports_type(&filesystem, "/apps/AstraZ.app",
+        "application/x-zmachine-story", &supports) == ASTRA_VFS_OK);
+    assert(supports == 1u);
+    assert(astra_application_supports_type(&filesystem, "/apps/AstraZ.app",
+        "application/x-other", &supports) == ASTRA_VFS_OK);
+    assert(supports == 0u);
+    assert(astra_application_supports_type(&filesystem, "/apps/Bad.app",
+        "application/x-zmachine-story", &supports) == ASTRA_VFS_ERR_INVALID);
+    assert(supports == 0u);
+    assert(astra_application_supports_type(&filesystem, "/apps/Missing.app",
+        "application/x-zmachine-story", &supports) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_application_supports_type(&filesystem, "/apps/AstraZ.app",
+        "not a type", &supports) == ASTRA_VFS_ERR_INVALID);
+    {
+        AstraApplicationCatalog catalog = ASTRA_APPLICATION_CATALOG_INIT;
+        uint32_t indices[2] = {UINT32_MAX, UINT32_MAX};
+        uint32_t count = 0u;
+        assert(astra_application_catalog_load(&filesystem, "/apps", &catalog) ==
+               ASTRA_VFS_OK);
+        assert(catalog.count == 1u && catalog.skipped == 1u);
+        assert(astra_application_catalog_handlers(&filesystem, &catalog,
+            "application/x-zmachine-story", indices, 2u, &count) ==
+            ASTRA_VFS_OK && count == 1u && indices[0] == 0u);
+        assert(astra_application_catalog_handlers(&filesystem, &catalog,
+            "application/x-zmachine-story", NULL, 0u, &count) ==
+            ASTRA_VFS_ERR_LIMIT && count == 1u);
+        astra_application_catalog_destroy(&catalog);
+    }
+}
+
 int main(void)
 {
     catalog_orders_and_skips();
     catalog_failures();
+    declared_document_types();
     {
         char name[ASTRA_VFS_NAME_MAX];
         memset(name, 'p', sizeof(name) - 5u);

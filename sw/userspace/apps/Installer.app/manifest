@@ -5,6 +5,7 @@ name "Installer"
 version 0.1.0
 executable bin/m68k-68040/Installer
 icon resources/Installer.aicon
+handles application/x-astra-package
 capability GUI
 capability VOLUMES
 capability VOLUME_READ
