@@ -3,8 +3,10 @@
 Status: asset-backed gameplay and effects ran on DE25; Ogg music uses Codec
 Kit's isolated AArch64 Vorbis worker. Guest music underflow telemetry found
 startup gaps; post-seek preroll eliminated them. Exact staged release passed
-DE25 music and native Codec Kit gates; production selection remains prior
-release (2026-10-27).
+DE25 music and native Codec Kit gates. Same software tree was rebuilt from
+merged `main` and promoted as production release
+`b46aaf2de9af55540162e42ac694cd04e96b48527f4d471201046c509bf98270`
+(2026-10-27).
 Target: Chocolate Quake 2.1.0 (tag
 `chocolate-quake-2.1.0`, commit
 `8ee22175e3a5613e94ad2f9776aadc428b948cf3`).
@@ -86,8 +88,8 @@ Target: Chocolate Quake 2.1.0 (tag
 - SDL Kit 2.32.11 fixes zero-sized fullscreen restore geometry and exposes
   one physical audio output to multiple independent SDL streams. Quake requires
   2.32.11. That SDL Kit requires system.library 4.3.0 for gamepad symbols.
-  Production still has SDL Kit 2.32.10, so normal Quake launch awaits a
-  coordinated Runtime and SDL Kit release.
+  Production now has SDL Kit 2.32.11 and system.library 4.3.0. Normal Quake
+  launch still requires user-supplied commercial game assets.
 - Supervisor now completes boot services before startup applications, even
   if an application precedes Desktop in the manifest. Desktop signals ready
   after first frame and startup sound drain. DE25 deliberately used that
