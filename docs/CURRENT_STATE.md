@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-10-27
 
+AstraZ first checkpoint, 2026-10-27: native Filesystem Kit 15.5 adds bounded
+`astra_story_inspect()` for bare Z-machine versions 1–8, bare Glulx, and
+Blorb executable payload selection. File Types uses same inspector, so
+content identification and interpreter dispatch share one answer. Frotz
+2.56pre source is pinned under `third_party/frotz`; common and Blorb cores
+build as MC68040 static archives through NDK CMake/Ninja. Test-only upstream
+CLI on DE25 ran Mini Zork Z3, displayed West of House, and executed `open
+mailbox` with expected leaflet output. Trial evidence is at Beast
+`/var/tmp/astra-astraz-evidence-20261027/de25-z3-first-move.png`; board
+scratch files were removed. Final Filesystem Kit 15.5 was installed through
+the development installer after Beast file-type, library-contract, and NDK
+`dist-check` passed. Astra, audio host, and remote desktop services remain
+active with 8.3 GiB free. No native AstraZ GUI, session adapter, or Glulx
+backend is installed yet. See `docs/ASTRAZ.md` for remaining gates.
+
 File types, 2026-10-27: Haiku-style native slice is installed on DE25.
 Filesystem Kit 15.4 identifies bounded Z-machine and Blorb content, uses an
 `.apkg` built-in hint, then resolves unknown content using current bundle

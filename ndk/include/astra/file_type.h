@@ -7,6 +7,8 @@
 
 /** Z-machine story content type; version is an attribute of content. */
 #define ASTRA_FILE_TYPE_ZMACHINE "application/x-zmachine-story"
+/** Glulx story content type; version comes from its header. */
+#define ASTRA_FILE_TYPE_GLULX "application/x-glulx-story"
 /** IFF Blorb resource container content type. */
 #define ASTRA_FILE_TYPE_BLORB "application/x-blorb"
 /** Astra application package content type. */

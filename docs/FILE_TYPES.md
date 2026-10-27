@@ -1,7 +1,7 @@
 # File types and document opening
 
 Status: native content identification and application-declared extension hints
-implemented. Filesystem Kit identifies bounded Z-machine and Blorb headers,
+implemented. Filesystem Kit identifies bounded Z-machine, Glulx, and Blorb headers,
 uses `.apkg` as a built-in hint, then consults installed application bundle
 `handles MIME-TYPE .extension` declarations if content remains unknown. Open
 With discovers live bundles, offers a shared chooser, and stores type defaults
@@ -15,8 +15,9 @@ every open.
 A file's content type and its preferred application are separate facts.
 Content types use stable MIME-style identifiers. `application/x-zmachine-story`
 identifies Z-machine versions 1–8; story version comes from the header, not
-from the identifier or filename. A Blorb containing Z-code has a distinct
-container type and may be opened by the same application. A file-specific
+from the identifier or filename. `application/x-glulx-story` identifies bare
+Glulx content. Blorb has a distinct container type; its `Exec` resource
+selects Z-code or Glulx. A file-specific
 preferred application does not change the content type or global default.
 
 Filesystem Kit provides one content-type query for every mounted backend.
@@ -60,8 +61,10 @@ available, is a separate explicit action. Atlas calls the shared resolver and
 dialog; it contains no format-specific rules.
 
 When AstraZ is built, its application bundle should declare
-`handles application/x-zmachine-story` for `.z3`, `.z4`, `.z5`, `.z6`, and
-`.z8`, plus `handles application/x-blorb .blorb`. Filesystem Kit identifies
+`handles application/x-zmachine-story` for `.z1` through `.z8`,
+`handles application/x-glulx-story .ulx`, and
+`handles application/x-blorb` for `.blorb`, `.zblorb`, and `.gblorb`.
+Filesystem Kit identifies
 valid story headers even after renaming; extension declarations let unknown
 bytes reach AstraZ for its own validation. The bundle ID becomes the stable
 target of a user default. See `docs/BUNDLE_FORMAT.md` for manifest syntax.

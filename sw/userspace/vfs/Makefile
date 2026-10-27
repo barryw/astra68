@@ -96,6 +96,7 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/filesystem_library.o \
 	build/m68k/library/filesystem_copy.o \
 	build/m68k/library/file_type.o \
+	build/m68k/library/story.o \
 	build/m68k/library/file_type_resolve.o \
 	build/m68k/library/volume.o build/m68k/library/volume_client.o \
 	build/m68k/library/vfs_service_core.o \
@@ -282,13 +283,14 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/vfs_union.h \
 		$(NDK)/include/astra/filesystem_library.h \
 		$(NDK)/include/astra/file_type.h \
+		$(NDK)/include/astra/story.h \
 		$(NDK)/include/astra/volume.h \
 		$(NDK)/include/astra/vfs_process.h \
 		$(NDK)/include/astra/application_catalog.h \
 		$(NDK)/include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.15 15.4.0 ABI 15.4$$'
+		grep -q '^filesystem.library.15 15.5.0 ABI 15.5$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.15]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
@@ -421,11 +423,13 @@ $(CATALOG_TEST): $(CATALOG_SOURCES) $(HEADERS) \
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(CATALOG_SOURCES) -o $@
 
-$(FILE_TYPE_TEST): src/file_type.c $(RUNTIME)/src/string.c \
-		tests/test_file_type.c $(NDK)/include/astra/file_type.h
+$(FILE_TYPE_TEST): src/file_type.c src/story.c $(RUNTIME)/src/string.c \
+		tests/test_file_type.c $(NDK)/include/astra/file_type.h \
+		$(NDK)/include/astra/story.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		src/file_type.c $(RUNTIME)/src/string.c tests/test_file_type.c -o $@
+		src/file_type.c src/story.c $(RUNTIME)/src/string.c \
+		tests/test_file_type.c -o $@
 
 $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
 		src/vfs_assign.c src/vfs_path.c $(UTF8_OBJECT) \

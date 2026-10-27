@@ -1,4 +1,5 @@
 #include <astra/file_type.h>
+#include <astra/story.h>
 
 #include <assert.h>
 #include <stdio.h>
@@ -8,6 +9,7 @@ static const uint8_t *contents;
 static uint32_t contents_length;
 static uint16_t contents_kind = ASTRA_VFS_KIND_FILE;
 static uint32_t fail_read;
+static uint32_t read_calls;
 
 uint32_t astra_filesystem_open(AstraFilesystem *filesystem, const char *path,
                                uint32_t flags, AstraFile *file)
@@ -15,6 +17,7 @@ uint32_t astra_filesystem_open(AstraFilesystem *filesystem, const char *path,
     (void)filesystem;
     (void)path;
     (void)file;
+    ++read_calls;
     assert(flags == ASTRA_VFS_OPEN_READ);
     return ASTRA_VFS_OK;
 }
@@ -32,10 +35,11 @@ uint32_t astra_filesystem_read_at(AstraFile *file, uint64_t offset,
                                   void *buffer, uint32_t length, uint32_t *moved)
 {
     (void)file;
-    assert(offset == 0u && length == 64u);
     if (fail_read) return ASTRA_VFS_ERR_LOST;
-    *moved = contents_length < length ? contents_length : length;
-    memcpy(buffer, contents, *moved);
+    *moved = offset >= contents_length ? 0u :
+        contents_length - (uint32_t)offset < length ?
+        contents_length - (uint32_t)offset : length;
+    if (*moved != 0u) memcpy(buffer, contents + offset, *moved);
     return ASTRA_VFS_OK;
 }
 
@@ -43,6 +47,14 @@ uint32_t astra_filesystem_close(AstraFile *file)
 {
     (void)file;
     return ASTRA_VFS_OK;
+}
+
+static void put32(uint8_t *bytes, uint32_t value)
+{
+    bytes[0] = (uint8_t)(value >> 24u);
+    bytes[1] = (uint8_t)(value >> 16u);
+    bytes[2] = (uint8_t)(value >> 8u);
+    bytes[3] = (uint8_t)value;
 }
 
 int main(void)
@@ -61,6 +73,11 @@ int main(void)
            ASTRA_VFS_OK);
     assert(strcmp(type.type, ASTRA_FILE_TYPE_ZMACHINE) == 0);
     assert(type.source == ASTRA_FILE_TYPE_CONTENT && type.story_version == 3u);
+    AstraStoryInfo inspected = ASTRA_STORY_INFO_INIT;
+    assert(astra_story_inspect(&filesystem, "/dh0/story", &inspected) ==
+           ASTRA_VFS_OK && inspected.vm == ASTRA_STORY_VM_ZMACHINE &&
+           inspected.z_version == 3u && inspected.executable_offset == 0u &&
+           inspected.executable_size == sizeof(story));
     story[0] = 8u;
     assert(astra_file_type_identify(&filesystem, "/dh0/story", &type) ==
            ASTRA_VFS_OK && type.story_version == 8u);
@@ -97,6 +114,100 @@ int main(void)
         blorb[12] = 'X';
         assert(astra_file_type_identify(&filesystem, "/dh0/game", &type) ==
                ASTRA_VFS_OK && type.source == ASTRA_FILE_TYPE_UNKNOWN);
+    }
+    {
+        uint8_t glulx[256] = {0};
+        memcpy(glulx, "Glul", 4u);
+        put32(glulx + 4u, 0x00030103u);
+        put32(glulx + 8u, 256u);
+        put32(glulx + 12u, sizeof(glulx));
+        put32(glulx + 16u, 512u);
+        put32(glulx + 20u, 256u);
+        put32(glulx + 24u, 36u);
+        contents = glulx;
+        contents_length = sizeof(glulx);
+        assert(astra_file_type_identify(&filesystem, "/dh0/game", &type) ==
+               ASTRA_VFS_OK && strcmp(type.type, ASTRA_FILE_TYPE_GLULX) == 0);
+        assert(astra_story_inspect(&filesystem, "/dh0/game", &inspected) ==
+               ASTRA_VFS_OK && inspected.vm == ASTRA_STORY_VM_GLULX &&
+               inspected.glulx_version == 0x00030103u);
+        glulx[10] = 0u;
+        assert(astra_file_type_identify(&filesystem, "/dh0/game", &type) ==
+               ASTRA_VFS_OK && type.type[0] == '\0');
+        put32(glulx + 8u, 256u);
+        {
+            uint8_t blorb[300] = {0};
+            memcpy(blorb, "FORM", 4u);
+            put32(blorb + 4u, sizeof(blorb) - 8u);
+            memcpy(blorb + 8u, "IFRSRIdx", 8u);
+            put32(blorb + 16u, 16u);
+            put32(blorb + 20u, 1u);
+            memcpy(blorb + 24u, "Exec", 4u);
+            put32(blorb + 32u, 36u);
+            memcpy(blorb + 36u, "GLUL", 4u);
+            put32(blorb + 40u, sizeof(glulx));
+            memcpy(blorb + 44u, glulx, sizeof(glulx));
+            contents = blorb;
+            contents_length = sizeof(blorb);
+            assert(astra_story_inspect(&filesystem, "/dh0/game", &inspected) ==
+                   ASTRA_VFS_OK &&
+                   inspected.container == ASTRA_STORY_CONTAINER_BLORB &&
+                   inspected.vm == ASTRA_STORY_VM_GLULX &&
+                   inspected.executable_offset == 44u &&
+                   inspected.executable_size == sizeof(glulx));
+            assert(astra_file_type_identify(&filesystem, "/dh0/game", &type) ==
+                   ASTRA_VFS_OK &&
+                   strcmp(type.type, ASTRA_FILE_TYPE_BLORB) == 0);
+            put32(blorb + 32u, sizeof(blorb));
+            assert(astra_story_inspect(&filesystem, "/dh0/game", &inspected) ==
+                   ASTRA_VFS_OK &&
+                   inspected.container == ASTRA_STORY_CONTAINER_BLORB &&
+                   inspected.vm == ASTRA_STORY_VM_NONE);
+        }
+    }
+    {
+        uint8_t blorb[172] = {0};
+        story[0x0fu] = 112u;
+        memcpy(blorb, "FORM", 4u);
+        put32(blorb + 4u, sizeof(blorb) - 8u);
+        memcpy(blorb + 8u, "IFRSRIdx", 8u);
+        put32(blorb + 16u, 16u);
+        put32(blorb + 20u, 1u);
+        memcpy(blorb + 24u, "Exec", 4u);
+        put32(blorb + 32u, 36u);
+        memcpy(blorb + 36u, "ZCOD", 4u);
+        put32(blorb + 40u, sizeof(story));
+        memcpy(blorb + 44u, story, sizeof(story));
+        contents = blorb;
+        contents_length = sizeof(blorb);
+        assert(astra_story_inspect(&filesystem, "/dh0/game", &inspected) ==
+               ASTRA_VFS_OK &&
+               inspected.container == ASTRA_STORY_CONTAINER_BLORB &&
+               inspected.vm == ASTRA_STORY_VM_ZMACHINE &&
+               inspected.z_version == 3u &&
+               inspected.executable_offset == 44u);
+        blorb[36] = 'G';
+        assert(astra_story_inspect(&filesystem, "/dh0/game", &inspected) ==
+               ASTRA_VFS_OK && inspected.vm == ASTRA_STORY_VM_NONE);
+    }
+    {
+        uint8_t blorb[1000] = {0};
+        memcpy(blorb, "FORM", 4u);
+        put32(blorb + 4u, sizeof(blorb) - 8u);
+        memcpy(blorb + 8u, "IFRSRIdx", 8u);
+        put32(blorb + 16u, 844u);
+        put32(blorb + 20u, 70u);
+        memcpy(blorb + 852u, "Exec", 4u);
+        put32(blorb + 860u, 864u);
+        memcpy(blorb + 864u, "ZCOD", 4u);
+        put32(blorb + 868u, sizeof(story));
+        memcpy(blorb + 872u, story, sizeof(story));
+        contents = blorb;
+        contents_length = sizeof(blorb);
+        read_calls = 0u;
+        assert(astra_story_inspect(&filesystem, "/dh0/game", &inspected) ==
+               ASTRA_VFS_OK && inspected.vm == ASTRA_STORY_VM_ZMACHINE &&
+               inspected.executable_offset == 872u && read_calls < 10u);
     }
     puts("file type tests passed");
     return 0;

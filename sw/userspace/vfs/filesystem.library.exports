@@ -202,3 +202,8 @@ ASTRA_FILESYSTEM_15.4 {
         astra_application_catalog_extension_type;
         astra_file_type_resolve;
 } ASTRA_FILESYSTEM_15.3;
+
+ASTRA_FILESYSTEM_15.5 {
+    global:
+        astra_story_inspect;
+} ASTRA_FILESYSTEM_15.4;
