@@ -37,6 +37,9 @@ assert "cgroup.procs" in script
 assert r'readlink -f \"/proc/\$process_id/exe\"' in script
 assert "[ -S '$QMP_SOCKET' ]" in script
 assert "prune '$STORE'" in script
+assert '90-astra-dev.conf' in script
+assert script.index('90-astra-dev.conf') < script.index("systemctl restart '$SERVICE'")
+assert script.index("prune '$STORE'") < script.index("rm -rf -- '$STORE/dev'")
 assert script.index("Boot the complete packaged kernel") < script.index("install '$INCOMING' '$STORE'")
 assert "chown -hR" not in script
 assert "module_source=" not in script

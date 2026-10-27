@@ -211,6 +211,10 @@ trap 'rm -f \"\$audio_unit_temporary\"' EXIT HUP INT TERM
 install -m 0644 \"\$audio_unit_source\" \"\$audio_unit_temporary\"
 mv -f \"\$audio_unit_temporary\" \"\$audio_unit_target\"
 trap - EXIT HUP INT TERM
+# Development overrides belong to the old iteration, not this promoted image.
+for unit in astra.service astra-audio-host.service astra-remote-desktop.service; do
+    rm -f /etc/systemd/system/\"\$unit\".d/90-astra-dev.conf
+done
 systemctl daemon-reload
 systemctl reenable astra-remote-desktop.service
 systemctl reenable astra-audio-host.service
@@ -322,4 +326,5 @@ kernel_action confirm "$STORE/releases/$IDENTITY"
 $SSH "$BOARD" "PYTHONDONTWRITEBYTECODE=1 python3 \
 '$STORE/current/bin/astra-release.py' prune '$STORE'"
 $SSH "$BOARD" "rm -f '$ROLLBACK_STATE'"
+$SSH "$BOARD" "rm -rf -- '$STORE/dev'"
 echo "ASTRA_DE25_RELEASE PASS release=$IDENTITY"

@@ -2,7 +2,18 @@
 
 Status: active continuation map, 2026-10-27
 
-Production promotion, 2026-10-27: PR #4 merged the certified Codec Kit,
+Development deployment, 2026-10-27: DE25 is an active development machine;
+the selected release below is a checkpoint, not a production constraint.
+`tools/de25-dev.py` now mirrors source, builds a selected target on Beast, and
+installs only named guest or host artifacts on DE25. Guest files update the
+persistent image after the storage provider stops; host files use a hard-linked
+development release. The installer keeps changed files installed and verifies
+a new QEMU process plus HOST0 boot. Desktop guest and Codec worker host probes
+completed in about 31 and 39 seconds respectively, with all three services
+active. See `docs/DE25_DEVELOPMENT_LOOP.md`. Complete images are checkpoints
+after fixes pass hardware trials.
+
+Board release checkpoint, 2026-10-27: PR #4 merged the certified Codec Kit,
 SDL_mixer Ogg preroll, and Chocolate Quake support into `main` at
 `d7cdc9164085a1a3aaa857e8dae0adf4ab628b18`. Beast rebuilt the full DE25
 software release from that merged tree; content identity
