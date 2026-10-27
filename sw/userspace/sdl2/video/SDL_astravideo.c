@@ -479,13 +479,20 @@ static int ASTRA_CreateWindow(_THIS, SDL_Window *window)
     AstraArea placeholder = ASTRA_AREA_INIT;
     const AstraStartupCapability *gui = astra_startup_capability(
         astra_posix_startup(), ASTRA_CAPABILITY_GUI);
-    /* SDL sizes a window created fullscreen to the display and asks for
-     * fullscreen only once it exists (SetWindowFullscreen); the native
-     * window starts at the frame it will return to. */
+    /* SDL creates the native window before entering fullscreen. Its zero-size
+     * fullscreen request becomes a 1x1 restore frame, which cannot be a
+     * decorated Astra window. Give that restore state usable geometry. */
     const SDL_Rect *frame = &window->windowed;
     AstraResult result;
 
     (void)_this;
+    if (window->fullscreen_mode.w != 0 &&
+        frame->w == 1 && frame->h == 1) {
+        window->windowed = (SDL_Rect){
+            ((int)ASTRA_DISPLAY_WIDTH - 640) / 2,
+            ((int)ASTRA_DISPLAY_HEIGHT - 480) / 2, 640, 480
+        };
+    }
     if (gui == NULL || frame->x < 0 || frame->y < 0 ||
         frame->x > UINT16_MAX || frame->y > UINT16_MAX ||
         frame->w <= 0 || frame->h <= 0 ||

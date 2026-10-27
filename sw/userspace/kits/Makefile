@@ -18,6 +18,7 @@ INTERFACE_LIBRARY := $(ASTRA_INTERFACE_LIBRARY)
 NETWORK_LIBRARY := $(ASTRA_NETWORK_LIBRARY)
 CONFIG_LIBRARY := $(ASTRA_CONFIG_LIBRARY)
 PCM_LIBRARY := $(ASTRA_PCM_LIBRARY)
+CODEC_LIBRARY := $(ASTRA_CODEC_LIBRARY)
 SDL2_LIBRARY := $(ASTRA_SDL2_LIBRARY)
 SDL2_NET_LIBRARY := $(ASTRA_SDL2_NET_LIBRARY)
 SDL2_IMAGE_LIBRARY := $(ASTRA_SDL2_IMAGE_LIBRARY)
@@ -34,6 +35,7 @@ INTERFACE := build/Interface.kit
 NETWORK := build/Network.kit
 CONFIGURATION := build/Configuration.kit
 AUDIO := build/Audio.kit
+CODEC := build/Codec.kit
 SDL := build/SDL.kit
 CXX := build/Cxx.kit
 LUA := build/Lua.kit
@@ -120,6 +122,11 @@ CONFIG_LIBRARY_PROVIDES := $(shell sed -n \
 CONFIG_LIBRARY_ABI := $(word 1,$(CONFIG_LIBRARY_PROVIDES))
 CONFIG_LIBRARY_VERSION := $(word 2,$(CONFIG_LIBRARY_PROVIDES))
 PCM_STAMP := build/.Audio.kit.stamp
+CODEC_STAMP := build/.Codec.kit.stamp
+CODEC_LIBRARY_PROVIDES := $(shell sed -n \
+	's/^provides codec\.library //p' Codec.kit/manifest)
+CODEC_LIBRARY_ABI := $(word 1,$(CODEC_LIBRARY_PROVIDES))
+CODEC_LIBRARY_VERSION := $(word 2,$(CODEC_LIBRARY_PROVIDES))
 PCM_LIBRARY_PROVIDES := $(shell sed -n \
 	's/^provides pcm\.library //p' Audio.kit/manifest)
 PCM_LIBRARY_ABI := $(word 1,$(PCM_LIBRARY_PROVIDES))
@@ -128,7 +135,7 @@ SDL_STAMP := build/.SDL.kit.stamp
 KIT_STAMPS := $(RUNTIME_STAMP) $(STREAMS_STAMP) $(POSIX_STAMP) \
 	$(CXX_STAMP) $(LUA_STAMP) $(GRAPHICS_STAMP) $(FILESYSTEM_STAMP) \
 	$(INTERFACE_STAMP) $(NETWORK_STAMP) $(CONFIGURATION_STAMP) \
-	$(PCM_STAMP) $(SDL_STAMP)
+	$(PCM_STAMP) $(CODEC_STAMP) $(SDL_STAMP)
 SDL2_LIBRARY_PROVIDES := $(shell sed -n \
 	's/^provides SDL2\.library //p' SDL.kit/manifest)
 SDL2_LIBRARY_ABI := $(word 1,$(SDL2_LIBRARY_PROVIDES))
@@ -158,7 +165,7 @@ KIT_INVENTORY := build/.kits
 all: $(RUNTIME_STAMP) $(STREAMS_STAMP) $(POSIX_STAMP) $(GRAPHICS_STAMP) \
 	$(FILESYSTEM_STAMP) $(INTERFACE_STAMP) \
 	$(NETWORK_STAMP) $(CONFIGURATION_STAMP) $(CXX_STAMP) $(LUA_STAMP) \
-	$(PCM_STAMP) $(SDL_STAMP) $(KIT_INVENTORY) provider-coverage
+	$(PCM_STAMP) $(CODEC_STAMP) $(SDL_STAMP) $(KIT_INVENTORY) provider-coverage
 
 # Kit recipes are part of the package content, not only build instructions.
 # A changed copy/install step must republish the corresponding bundle.
@@ -217,6 +224,9 @@ $(CONFIG_LIBRARY): FORCE
 
 $(PCM_LIBRARY): FORCE
 	$(MAKE) -C ../audio library-contract
+
+$(CODEC_LIBRARY): FORCE
+	$(MAKE) -C ../codec library-contract
 
 $(SDL2_LIBRARY) $(SDL2_NET_LIBRARY) $(SDL2_IMAGE_LIBRARY) \
 $(SDL2_MIXER_LIBRARY) $(SDL2_TTF_LIBRARY) &: FORCE
@@ -355,6 +365,15 @@ $(PCM_STAMP): Audio.kit/manifest $(PCM_LIBRARY) $(BUNDLE_TOOL)
 	cp $(PCM_LIBRARY) \
 		$(AUDIO)/libraries/pcm.library/abi-$(PCM_LIBRARY_ABI)/$(PCM_LIBRARY_VERSION)/m68k-68040/pcm.library
 	$(BUNDLE_TOOL) check $(AUDIO)
+	@touch $@
+
+$(CODEC_STAMP): Codec.kit/manifest $(CODEC_LIBRARY) $(BUNDLE_TOOL)
+	rm -rf $(CODEC)
+	@mkdir -p $(CODEC)/libraries/codec.library/abi-$(CODEC_LIBRARY_ABI)/$(CODEC_LIBRARY_VERSION)/m68k-68040
+	cp Codec.kit/manifest $(CODEC)/manifest
+	cp $(CODEC_LIBRARY) \
+		$(CODEC)/libraries/codec.library/abi-$(CODEC_LIBRARY_ABI)/$(CODEC_LIBRARY_VERSION)/m68k-68040/codec.library
+	$(BUNDLE_TOOL) check $(CODEC)
 	@touch $@
 
 $(SDL_STAMP): SDL.kit/manifest $(SDL2_LIBRARY) \

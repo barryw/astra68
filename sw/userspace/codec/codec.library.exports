@@ -1,0 +1,8 @@
+CODEC_1 {
+    global:
+        astra_codec_open;
+        astra_codec_read;
+        astra_codec_seek;
+        astra_codec_close;
+    local: *;
+};

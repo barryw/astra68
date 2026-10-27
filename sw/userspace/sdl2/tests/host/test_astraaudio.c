@@ -17,6 +17,7 @@ static uint32_t received_frames;
 static uint32_t wait_count;
 static uint32_t wait_frames;
 static uint32_t opened_format;
+static int detected_outputs;
 
 void *SDL_calloc(size_t count, size_t size) { return calloc(count, size); }
 void *SDL_malloc(size_t size) { return malloc(size); }
@@ -41,6 +42,14 @@ Uint8 SDL_SilenceValueForFormat(const SDL_AudioFormat format)
 void SDL_free(void *memory) { free(memory); }
 int SDL_Error(SDL_errorcode code) { (void)code; return -1; }
 int SDL_SetError(const char *format, ...) { (void)format; return -1; }
+void SDL_AddAudioDevice(SDL_bool iscapture, const char *name,
+                        SDL_AudioSpec *spec, void *handle)
+{
+    assert(iscapture == SDL_FALSE &&
+           strcmp(name, DEFAULT_OUTPUT_DEVNAME) == 0 &&
+           spec == NULL && handle == (void *)1);
+    ++detected_outputs;
+}
 int SDL_AtomicGet(SDL_atomic_t *value) { return value->value; }
 void SDL_OpenedAudioDeviceDisconnected(SDL_AudioDevice *device)
 {
@@ -211,6 +220,7 @@ AstraResult astra_pcm_wait(AstraPcmStream *stream, uint32_t frame_count)
 int main(void)
 {
     SDL_AudioDevice device;
+    SDL_AudioDevice second = {0};
     SDL_AudioDriverImpl driver = {0};
 
     memset(&device, 0, sizeof(device));
@@ -220,7 +230,9 @@ int main(void)
     device.spec.format = AUDIO_U8;
     device.spec.samples = 256u;
     assert(ASTRAAUDIO_Init(&driver) == SDL_TRUE);
-    assert(driver.OnlyHasDefaultOutputDevice == SDL_TRUE);
+    assert(driver.OnlyHasDefaultOutputDevice == SDL_FALSE);
+    driver.DetectDevices();
+    assert(detected_outputs == 1);
     assert(driver.HasCaptureSupport == SDL_FALSE);
     device.iscapture = SDL_TRUE;
     assert(driver.OpenDevice(&device, NULL) == -1); /* no capture backend */
@@ -240,6 +252,9 @@ int main(void)
     assert(device.spec.size == 256u);
     assert(opened_format ==
            ASTRA_PCM_FORMAT(ASTRA_PCM_ENCODING_U8, 1u, 22050u));
+    second.spec = device.spec;
+    assert(driver.OpenDevice(&second, NULL) == 0);
+    driver.CloseDevice(&second);
     assert(driver.GetDeviceBuf(&device) != NULL);
     write_busy_once = 1;
     driver.PlayDevice(&device);

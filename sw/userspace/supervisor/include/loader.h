@@ -10,6 +10,7 @@
 #include <astra/service_manager_abi.h>
 #include <astra/syscall.h>
 #include <astra/vfs_service.h>
+#include <astra/vfs_client.h>
 
 /* One reader at a time is the shape of `ps`; a queue of one is enough. */
 #define SUPERVISOR_PROC_PORT_MESSAGES 4u
@@ -74,6 +75,12 @@ typedef struct SupervisorManifest {
 
 #define SUPERVISOR_MANIFEST_INIT {0}
 
+typedef struct SupervisorVolumeLease {
+    AstraVfsClient *client;
+    uint32_t root;
+    uint32_t registered;
+} SupervisorVolumeLease;
+
 typedef struct SupervisorProcessRecord {
     uint32_t handle;
     uint32_t shutdown_send;
@@ -92,6 +99,8 @@ typedef struct SupervisorProcessRecord {
     /* The application's own GUI session (ASTRA_GUI_OPEN_SESSION), kept to
        bring it forward when it is opened again; zero when it has none. */
     uint32_t gui_session;
+    /* Parent session for provider-rooted APP/CWD grants on removable media. */
+    SupervisorVolumeLease volume;
     char (*namespace_names)[ASTRA_CAPABILITY_NAME_MAX];
     uint32_t namespace_count;
     uint32_t namespace_lost;

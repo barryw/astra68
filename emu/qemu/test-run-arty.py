@@ -48,6 +48,7 @@ exit "${{ASTRA_TEST_POWER_STATUS:-0}}"
     (root / "qemu/bin").mkdir(parents=True)
     (root / "bin").mkdir()
     write_executable(root / "bin/astra-font-worker", "#!/bin/sh\nexit 0\n")
+    write_executable(root / "bin/astra-codec-worker", "#!/bin/sh\nexit 0\n")
     (root / "rom").mkdir()
     (root / "rom/astra_boot.bin").write_bytes(b"rom")
     (root / "storage-terminal.img").write_bytes(b"disk")

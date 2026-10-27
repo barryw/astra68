@@ -1,6 +1,317 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-25
+Status: active continuation map, 2026-10-27
+
+Codec audio follow-up, 2026-10-27: SDL_mixer now requests HPS Ogg decode from
+a separate thread and feeds its existing audio stream, so its callback never
+waits for Codec Kit. A separate PCM voice trial was rejected: 349 software gaps in one
+15-second gameplay window and 1,708 over the trial. Revised adapter passed
+the QEMU SDL_mixer probe and guarded DE25 Quake trials. Initial 128 KiB queue
+had 59 music callback underflows despite two host-gap-free gameplay windows.
+With a 512 KiB queue, only one startup burst of two underflows remained;
+two later 15-second windows had zero host source gaps and zero HDMI underruns.
+SDL_mixer calls `Seek(0)` after `Play`; the adapter's first preroll was cleared
+by that seek. The adapter now waits for 128 KiB of fresh PCM after seek, with
+a 3-second failure limit. Exact release
+`036227968411287ff384cce78b66c0a24f5d520698dbdf7ca25ad814709885aa`
+passed QEMU SDL_mixer (with Beast's x86 worker) and native Codec Kit WAV/video
+gates. Guarded DE25 trials with that release passed native WAV bytes, YUV4MPEG2
+frame bytes/stride/timestamp, seek, and close, then 180 seconds of asset-backed
+Quake. Quake closed its Ogg track with zero guest music underflows and 58 ms
+preroll wait. A 20-second HDMI capture had zero underruns, overflows, or gaps,
+and no silence of 5 ms at -90 dB; mean level was -12.8 dB. Two 15-second
+gameplay windows had zero host gaps, 16.39 and 19.25 presents/s, 81.4% and
+80.6% Quake guest CPU, and 18.6 MiB resident memory. User heard continuous
+music and effects through HDMI speakers. An earlier candidate had one host
+gap in a startup window, so that transition is not yet established gap-free.
+Both exact-release trials restored selected production release
+`8b9c771f5bb9ee071306270565f40c007b5909bbd1fd9b19bf58b230f745d04e`
+and all three services; production storage was untouched. Evidence: Beast
+`/var/tmp/astra-codec-voice-evidence-20261027/`. Updated release is certified
+as a staged candidate; production selection has not changed.
+
+Codec Kit checkpoint, 2026-10-26: native `codec.library.1` and `CODEC`
+service route bounded source reads through existing HOST0 transport to a
+seccomp-isolated AArch64 worker. Content-selected WAV PCM, Ogg Vorbis, and
+YUV4MPEG2 video providers share open/read/seek/close; SDL_mixer's Ogg adapter
+uses Codec Kit. Beast host, AArch64, QEMU native, SDL_mixer, and NDK gates
+passed. Three initial guarded DE25 private-image trials passed: native certifier
+decoded WAV and video with frame metadata and seek; SDL_mixer played Ogg,
+MP3, and FLAC; asset-backed Quake ran with its music track found. Quake's two
+15-second windows measured 21.91 and 15.66 presents/s, 20 and 0 software
+audio gaps, and zero hardware underruns. Guest Quake CPU was 76.5% and 82.9%;
+resident memory was 17.0 and 18.2 MiB. Final clean staged release identity
+`0170a92de17493885576ca6a79e34703f49cf47b7c2e506fc958c0a69f1a8be2`
+contains the tested worker. The exact release passed a further guarded Quake
+trial and native WAV/video certifier trial. Quake's final two 15-second windows
+measured 22.80 and 18.25 presents/s, 20 and 18 software audio gaps, and zero
+hardware underruns. All 107 host source-gap reports in the final music trial
+were for the 44.1 kHz stream. This still fails smooth-music qualification.
+The final native certifier logged `ASTRA CODEC LIBRARY PASS` for WAV bytes,
+video frame bytes/stride/timestamp, seek, and close. Its one-shot exit races
+the supervisor startup handshake, which also logs `launch-failed status=16`;
+the certifier process exits successfully. No trial panic was logged. Candidate
+release was staged privately; selected production release remains
+`8b9c771f5bb9ee071306270565f40c007b5909bbd1fd9b19bf58b230f745d04e`
+and production services recovered. User acoustic confirmation, sustained
+smoothness, and production deployment remain open.
+Final board trial files were removed after evidence capture; `/var/tmp` has
+8.3 GiB free. The worker now enforces declared source length for every
+provider, and host sessions can reopen after close. Their regression tests
+passed on Beast, including AArch64 provider and sandbox checks.
+The video provider does not yet present to a Display-owned surface. Providers
+are compiled into the isolated worker; installable provider registration is
+still design work. Evidence: Beast `/var/tmp/astra-codec-board-evidence/`.
+See `docs/CODEC_ARCHITECTURE.md`.
+
+Chocolate Quake 2.1.0 checkpoint, 2026-10-26: pinned upstream builds through
+NDK CMake/Ninja into checked MC68040 executable and `ChocolateQuake.app`.
+Standard SDL Kit supplies MP3, Ogg Vorbis, FLAC and WAV through SDL2_mixer;
+NDK `dist-check` and DE25 CMake codec probe passed. Quake searches bundled
+`resources/id1` and writable `/store/id1`. A user-supplied registered
+`pak0.pak` plus `track02.ogg` were installed in a private copied-image trial,
+never in source or production storage. DE25 reached `Host_Init`, initialized
+effects and Ogg music, and showed changing Quake gameplay in two FPGA HDMI
+captures. Those early trials did not establish sustained music playback:
+Quake paused its mixer about 0.3 seconds after track start. No panic occurred.
+Quake's fullscreen request needed SDL2 2.32.11;
+its bundle now requires that version. SDL Kit also requires system.library
+4.3.0 for gamepad symbols, so both Kits must be released together.
+Startup services now complete before boot applications regardless of manifest
+line order. Desktop reports ready after its first frame and startup sound
+drain. DE25 trial deliberately listed Quake before Desktop yet logged sound
+completion before Quake launch. Production release and image hash remained
+unchanged; all three board services returned active. First 60-second telemetry
+run measured about 7-14 presents/s after initial startup, Quake 63-86% guest
+CPU in most windows, and 49 software audio source gaps despite zero guest
+underruns. User observed several multi-second pauses. Two follow-up trials
+sampled 90 warm and 60 cold one-second windows with temporary generic SDL
+frame timing.
+Neither logged a post-startup gap or present call over 500 ms; one warm
+zero-present window occurred during initial map loading before first frame.
+The cold run averaged 13 presents/s and recorded 42 software audio gaps.
+An A/B trial on the same private image and production ROM changed Quake's
+effects mix default from 44,100 to 11,025 Hz, leaving music at 44,100 Hz.
+Across 12 five-second gameplay windows each, mean presents rose from 10.44
+to 19.58/s (+88%); software audio gaps fell from 31 to 13, with zero guest
+underruns in both runs. These are effects-only measurements because music was
+paused. User confirmed effects sounded good at 11,025 Hz. Source change is in
+Quake's port adapter, not SDL or FPGA. Scene progression differed because the
+faster build advanced farther through the demo.
+Music root cause was Quake's volume adapter rewriting the already-valid 1.0
+cvar during first update, then taking a zero-volume pause branch despite
+mix volume 128. Adapter now writes the cvar only when clamping changed it and
+uses the calculated integer mixer level to decide pause/resume. A DE25 trial
+kept music unpaused; decoder position advanced 3.44 seconds in five seconds
+with SDL_mixer's STB Vorbis, but audio host reported 242 software gaps in 15
+seconds. A fixed-point Tremor experiment advanced 4.22 seconds in five and
+reduced gaps to 15, still short of clean playback. Neither decoder change is
+retained in the standard SDL Kit. At that checkpoint, music decode needed
+offload or a measured equivalent; Codec Kit now supplies it. All trials used
+private images and restored
+production services; production storage and release were unchanged.
+Demo transitions load new maps and may explain perceived pauses, but that
+remains an inference until user observation identifies loading versus frozen
+gameplay. Smooth playback and acoustic music were open at that checkpoint;
+the Codec Kit follow-up above qualified both on a staged release. Evidence: Beast
+`/var/tmp/astra-quake-board-evidence-20261026/` and
+`/var/tmp/astra-quake-perf-20261026/` and durable
+`/mnt/Documents/astra68/quake-audio-20261026/`. See
+`docs/CHOCOLATE_QUAKE_PORT.md`.
+
+NDK CMake standard checkpoint, 2026-10-26: extracted NDK archive now ships
+`cmake/m68k-astra-toolchain.cmake`, `Platform/Astra.cmake`, and versioned
+`find_package` configs for Astra, SDL2, SDL2_net, SDL2_image, SDL2_mixer,
+SDL2_ttf, and `sdl2-image`. `Astra::Native`, `astra_posix_program`, and
+Kit targets share existing exact-SONAME dynamic link policy. Native targets
+compile freestanding; POSIX C/C++ targets remain hosted. CMake plus Ninja is
+standard for new C/C++ application ports; existing Make builds remain valid.
+Beast `make -C ndk dist-check` passed archive inventory, documentation,
+native/POSIX/SDL/C++23 builds, and dynamic-executable contracts. A guarded
+DE25 trial launched all four CMake-built binaries with status zero and saw
+their native log and POSIX/C++23/SDL output. No trial panic report appeared; copied
+production storage and selected release stayed unchanged; all three production
+services returned active. Trial image was removed from board. Final evidence
+is on Beast under `/var/tmp/astra-ndk-cmake-board-evidence-20261026/final/`.
+The Beast QEMU run using an older board release image failed before NDK
+commands at `posixd` startup and is not runtime evidence. Quake's build and
+no-asset launch are recorded above; gameplay and DevilutionX remain port gates.
+
+Gamepad checkpoint, 2026-10-26: compatible InputService gamepad additions
+retain protocol 3, so installed Desktop/Display clients need no update.
+`system.library` remains ABI 4 and SDL2 remains ABI 3; new releases can live
+inside an application bundle. Beast targeted builds passed. A guarded DE25
+trial copied production storage and changed only InputService plus a private
+SDL probe bundle, with candidate QEMU/ROM as host overrides. Physical Logitech
+F310 attached and reached SDL with built-in controller mapping; probe reported
+`SDL_VIDEO_READY`. Physical buttons, D-pad, and both sticks delivered events.
+Cable unplug/replug produced host detach/attach, guest SDL remove/add/reopen,
+then new button and axis events. A probe loop bug that ended polling after
+removal was fixed by holding its duration constant. The host now tracks sysfs
+device incarnation so reattachment at the same evdev path is detected.
+QEMU QMP needed an ObjectType schema entry, SDL needed its Linux-compatible
+mapping database and a zero name CRC; all three source fixes are present.
+Trial rollback preserved production storage hash and release selector and
+restored services. Exact release build, full regression checks, and normal
+release deployment remain gates.
+See `docs/GAMEPAD_INPUT.md`.
+
+Beast FPGA build incident, 2026-10-25 (recovery in progress): an uncapped
+Quartus audio-fix route exhausted Beast's 61 GiB RAM and 8 GiB swap during
+Analysis & Synthesis. Quartus inherited SSH service `oom_score_adj=-900`;
+global OOM killed Longhorn and other Kubernetes services instead. Longhorn
+iSCSI volumes then reported I/O and ext4 journal errors. Targeted SIGTERM
+ended the Quartus process family. Beast SSH recovered; Plane and basic-memory
+pods are running, but the 500 GiB `immich-data` Longhorn volume remains
+degraded. Beast's SSH priority drop-in now sets `OOMScoreAdjust=0`,
+`MemoryMin=64M` and `OOMPolicy=continue`; the parent `system.slice` also
+allocates `MemoryMin=64M`. Socket activation and `Restart=on-failure` remain.
+Fresh SSH confirmed score 0, active socket/daemon and both effective cgroup
+reservations. No new
+FPGA build may start until storage is healthy and pressure has settled. Both
+DE25 Quartus entry points now require a Beast systemd scope with 10 GiB memory
+high, 12 GiB hard limit, zero swap, eight CPU equivalents, 256 tasks and
+`oom_score_adj=+1000`; startup refuses unenforced limits. Beast smoke checks
+reached platform validation inside each scoped entry point. This prevents an
+oversize build from consuming the host's memory, but 12 GiB may be insufficient
+for a full route. Failed build/log are retained on Beast; no new RBF exists.
+See `fpga/de25/TIMING_CLOSURE.md` for source identity and disposition.
+
+DE25 HDMI audio acoustic regression, 2026-10-25 (open): user reported all
+audio silent through unchanged HDMI monitor speakers, including Doom and
+startup sound, on production release
+`8b9c771f5bb9ee071306270565f40c007b5909bbd1fd9b19bf58b230f745d04e`.
+While Doom ran, the audio daemon's monitor produced nonzero stereo PCM
+(20-second capture: mean -24.6 dB, peak -4.7 dB); short live counter windows
+showed no FIFO underruns or software gaps. A full orderly DE25 reboot restored
+audible startup sound and Doom music/effects. One subsequent warm restart of
+`astra.service` and its audio/remote units reached stage 8, and a direct HDMI
+tone was audible. That Python tone generator produced 119 software gaps and
+cannot certify continuous playback. This matches the older boot-dependent
+HDMI sink behavior recorded in `docs/HANDOVER_2026-10-03_BOARD.md`. The exact
+ADV7513/link failure was not captured; acoustic audio remains an open release
+gate despite software counters passing. Production release, FPGA RBF and user
+data were unchanged. Temporary audio captures were removed from DE25.
+The candidate ADV7513 configuration adds mandatory post-power-up writes
+`E0=D0` and `F9=00`; its Python fixture passes, but the FPGA route and DE25
+acoustic gate have not run. Exact cause of the boot-dependent silence remains
+unproven.
+
+Bundle provider and removable-launch ownership checkpoint, 2026-10-25
+(production DE25 passed): runtime and bundle tooling share private-provider
+selection. Kit deletion counts only Kit alternatives; another application's
+private provider cannot satisfy a dependent bundle. Supervisor owns one
+explicit launch-volume lease and passes the bundle source through the loader
+call chain. Focused provider and lease tests, including failure rollback and
+ASan/UBSan, plus the full Beast userspace build/tests passed. Clean release
+`8b9c771f5bb9ee071306270565f40c007b5909bbd1fd9b19bf58b230f745d04e`
+passed package verification and guarded DE25 deployment. On production DE25,
+Desktop showed `/usb2`, Atlas enumerated `/usb2/ChocolateDoom.app`, and
+double-click launched the USB bundle with status zero. FPGA-backed RFB capture
+`/private/tmp/astra-final-doom-key.png` showed Doom gameplay after a fresh key
+event; the initial no-input capture had retained an earlier frame. `astra-top`
+measured 38.6 presents/s with zero audio underruns or software gaps. All three
+production services were active with zero restarts and no recent error journal;
+retained panic report remained dated 2026-10-24. Board root had 8.4 GiB free.
+The QEMU desktop app gate could not observe HostFS syslog or icon positions:
+its export reported zero syslog lines on both this candidate and the prior
+known-good release, so that gate remains an environment/harness limitation.
+
+USB application launch qualification, 2026-10-25 (production DE25 passed):
+native `cp -R /apps/ChocolateDoom.app /usb0/ChocolateDoom.app` copied the
+bundle to physical FAT32 `CLIFAT`, including `manifest`, `bin`, and
+`resources`. The first guarded release could not launch it: supervisor's
+static assigns could not resolve `/usb0` (`application launch:2: failed`).
+The follow-up source adds privileged HostFS `VOLUME_DELEGATE`. Supervisor
+finds the exact public mount incarnation from the coherent catalog, binds it
+while resolving/loading the bundle, derives scoped APP/CWD grants, and retains
+the parent grant session until the app exits. HostFS retires descendants when
+that session closes. Public VOLUME_READ/WRITE brokers remain nondelegable;
+the default app ceiling does not grant VOLUME_DELEGATE. Beast full userspace
+build/tests passed before the parent-lifetime correction; supervisor image/tests
+and volume-port test passed after. Exact clean release
+`362ed77b38730ae0a423ad738ea22f5d97a9139a9c180a70561065afcc7fcb9d`
+passed publication verification and separate-image DE25 trial, then normal
+preserved-state deployment reported `ASTRA_DE25_RELEASE PASS`. It is selected
+on production DE25. On the live release, Desktop showed CLIFAT as `/usb2`
+(its persistent slot), double-click opened Atlas, and Atlas enumerated
+`/usb2/ChocolateDoom.app`. Double-clicking that bundle launched with status
+zero; Chocolate Doom loaded `doom1.wad`, posted frames, locked the pointer,
+and displayed live gameplay in the FPGA-backed remote-desktop capture
+`/private/tmp/astra-usb-doom-game.png`. `astra-top` listed
+`/usb2/ChocolateDoom.app` with three threads and about 35 presents/s;
+audio reported zero underruns and software gaps. All three production services
+are active with zero restarts; no service errors appeared in the final hour,
+and the retained panic report is still dated 2026-10-24. Board root has 8.5
+GiB free. The physical USB copy remains. Separate-image trial evidence is on
+Beast under `/var/tmp/astra-usb-app-evidence-20261025/`; release remains staged
+at `/var/tmp/astra-usb-launch-release-20261025/`. Do not hash the live
+production image.
+
+Private application-library lookup work, 2026-10-25 (source checkpoint,
+not released): application `provides` declarations select canonical payloads
+under `APP:libs/NAME/abi-ABI/VERSION/m68k-68040/NAME` before shared `LIBS:`
+providers. Declared payloads
+must match their embedded name, ABI, and version; a missing or mismatched
+private payload fails rather than falling through. The loader resolves exact
+shared provider references before cache attachment; name-only resident
+attachment was removed because it could return an unrelated private copy.
+Private bytes pass through kernel content comparison before cache reuse.
+`astra-bundle check` validates private and Kit payload identities, and bundle
+dependency coverage scopes app providers to their own app. SDL Kit was already
+in the standard Kit inventory and default image. Haiku loader references and
+the adapted contract are in `docs/APPLICATION_AND_KIT_MODEL.md`.
+Beast `tools test`, loader MC68040 contract, userspace boundary check, and
+full userspace `all test` passed during this work; focused bundle-path,
+package-identity, and scoped-dependency tests passed after consolidation.
+Disposable beast QEMU image `/var/tmp/astra-private-atlas.img` carried an Atlas
+private `graphics.library.3`; manual Applications-icon double-click launched
+Atlas with status zero. Its clone
+`/var/tmp/astra-private-atlas-missing.img` had that declared private payload
+removed; the same click failed with status 34 instead of substituting the
+installed shared library. Both gates used exact-reference loader code before
+the final path-builder consolidation. The private payload path was shortened
+from `libs/libraries/` to `libs/`; focused host tests and MC68040 loader link
+passed with that change. The first QEMU retry used stale ROM/QEMU products and
+stopped before Desktop at supervisor status `0x53568000` during `/dh0` open.
+Fresh publication resolved that fixture mismatch. Source HEAD
+`6cd588e389f05fa55c511ae9c5d06a98a65e5615` plus source manifest SHA-256
+`1a94e06c0d21a7783e672ed07db64e964d9ba33a765d21bc649018a262362cf6`
+produced staged release
+`0d02b81e143dcd2582a415cd1c335a048b75f0b4903ca6419b4424984616b0a5`
+and ROM `9f1b806b843df5dc45e2052eb1b8e380db0ef15f91d8fe499897d23756db09c7`.
+Beast full userspace tests and the five-app Desktop QEMU gate passed. With
+the exact ROM and rebuilt host QEMU, disposable short-path Atlas launched
+with status zero; removing its declared private payload yielded status 34,
+without shared-library substitution.
+
+DE25 installed that release without selecting it, then ran its ROM/QEMU
+against a separate 256 MiB trial image. Desktop reached stage 8; Atlas
+launched from `/apps` with status zero and enumerated `/apps` (16 entries)
+and `/dh0` (14 entries), both status zero. No candidate panic appeared.
+Guard verified the stopped production image and selector unchanged, then
+restored all three production services. A later observer SHA-256 read of the
+live production image broke the existing storage provider's exclusive lease,
+causing one `ENODEV` provider exit and automatic service restart. This was a
+test-observer error, not a candidate or kernel panic; production reached stage
+8 again, all services are active, and retained panic report is still dated
+2026-10-24. Do not read the live image; hash only while service is stopped.
+Production selector remains release `1488fb36d28a081714c2a5366dea4c27e10d5b79959163c2de52b2c227a7c27e`.
+The unselected candidate and all trial files were removed from DE25 after
+archiving exact evidence on Beast under
+`/var/tmp/astra-private-lib-board-evidence-20261025/`; free board space
+returned to 1.7 GiB. The verified release remains staged on Beast at
+`/var/tmp/astra-private-lib-release-20261025/`. This is a private physical
+qualification, not a production activation.
+
+DE25 disk cleanup, 2026-10-25: 21 older, unmounted private trial trees
+totaling 7,549,935,844 bytes were copied to Beast under
+`/var/tmp/astra-board-cleanup-archive-20261025/`. Both rsync checksum dry runs
+reported zero differences across 17,122 source entries. Only those trial
+copies were then removed from the board; current/previous release selectors
+and production state were untouched. Board free space rose from 1.7 to
+8.6 GiB (69% used), and all three production services remained active. Trial
+cleanup and the live-image lease rule are now in `AGENTS.md`.
 
 Interface Kit 7.4 UI reuse release, 2026-10-25: Desktop and Atlas now use
 one native icon tile painter/hit contract and one Field/TextModel inline editor

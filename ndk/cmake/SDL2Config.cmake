@@ -1,0 +1,11 @@
+include(CMakeFindDependencyMacro)
+find_dependency(Astra CONFIG)
+if(NOT TARGET SDL2::SDL2)
+  add_library(SDL2::SDL2 INTERFACE IMPORTED)
+  set_target_properties(SDL2::SDL2 PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${_ASTRA_NDK_ROOT}/include/SDL2"
+    INTERFACE_LINK_LIBRARIES "Astra::SDL2;Astra::POSIX")
+endif()
+set(SDL2_VERSION @PACKAGE_VERSION@)
+set(SDL2_INCLUDE_DIRS "${_ASTRA_NDK_ROOT}/include/SDL2")
+set(SDL2_LIBRARIES SDL2::SDL2)

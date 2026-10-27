@@ -2,8 +2,8 @@
 
 Status: the protected-process loader, versioned shared Kit ABI, version-1
 bundle format, `Terminal.app`, and the Graphics, Filesystem, Interface, Events,
-and Messaging Kits are implemented. Private-library resolution and
-transactional installation remain design direction; discovery deliberately
+and Messaging Kits are implemented. Private-library resolution is implemented;
+transactional installation remains design direction. Discovery deliberately
 needs no registrar.
 
 The locked package transport and universal shared-library direction are in
@@ -58,6 +58,32 @@ Launch either publishes one valid process/application instance or returns a
 complete failure with no leaked mappings, handles, service registration, or
 desktop placeholder. Startup has a deadline. A slow application may continue
 starting in the background, but it cannot freeze the workspace.
+
+Launch accepts an absolute `.app` path on any mounted volume. `APP:` and the
+initial resource directory are rooted at that bundle's actual volume path;
+shared Kit lookup remains in `LIBS:` after private bundle providers. Process
+identity records the full bundle path, including volume, so single-instance
+launch applies to a copied app independently of its installed source. A native
+`cp -R` command uses Filesystem Kit's tree copy and publishes the destination
+bundle only after copied files have been synced. A failed or interrupted copy
+may leave a sibling ending in `.astra-copying`; it cannot launch as an app.
+
+Reference review: Haiku's `src/kits/app/Roster.cpp` launches an `entry_ref`
+without requiring a central application directory, and Tracker
+`src/kits/tracker/FSUtils.cpp` separates folder traversal from file copying.
+Astra adapts those patterns to explicit VFS paths, volume grants, and a shared
+Filesystem Kit copy operation. Haiku's `src/system/kernel/fs/vfs.cpp` keeps a
+mount's root stable while referenced and separates mount lifetime from path
+lookup. Astra uses an exact catalog epoch/id/generation to acquire a temporary
+supervisor grant, then derives APP/CWD under that provider root. The app never
+receives the supervisor's grant. Supervisor retains the parent session until
+app process exits, so provider retirement cannot revoke a running app's APP:
+tree. Supervisor's launch path now owns that exact-volume lease through
+acquisition, temporary namespace binding, process handoff, and rollback;
+process exit closes it. Bundle source authority is passed explicitly through
+grant construction. The focused host gate covers fixed volumes, removable
+handoff, stale media, and failed acquisition steps. Haiku checkout remained
+read-only.
 
 ## 3. Application protocol
 
@@ -201,20 +227,34 @@ by name, ABI major, exact version, target architecture, and content digest.
 Launch either maps that identity or fails with the missing identity; it never
 silently substitutes another version.
 
-Shared Kit bundles already live side by side beneath `LIBS:`. An application may eventually carry
-the exact Kit in its own `libs/` directory. Resolution checks the bundle first
-and then `LIBS:`; it never checks the working directory, an environment search
-path, or an unversioned global alias. Private bundle lookup is not implemented
-yet. A private Kit will affect only its bundle.
+Shared Kit bundles already live side by side beneath `LIBS:`. An application
+may declare private `provides` entries and carry their exact library files in
+its own `libs/` directory. The loader checks those declarations and
+payloads first, then resolves remaining identities through `LIBS:`. It never
+checks the working directory, an environment search path, or an unversioned
+global alias. A private library affects only its declaring bundle. The shared
+native bundle policy selects private providers and matches required versions
+for both runtime loader and host bundle tool. Removing a shared Kit counts
+only other shared Kits as alternatives; another app's private payload cannot
+satisfy its dependents. An app with its own private provider does not depend
+on that shared Kit. The host build checker verifies the same scope.
+The standard image installs `SDL.kit` in `LIBS:`. Applications linked against
+its SDL2 libraries use that shared Kit without carrying private copies.
+Haiku reference: `src/system/runtime_loader/runtime_loader.cpp`
+(`open_executable()` checks application locations before system paths) and
+`src/system/runtime_loader/elf_load_image.cpp` (loaded-image reuse). Astra
+adapts that order to declared private payloads and exact provider records.
 The system namespace owns `LIBS:` with read/write authority so an installer can
 publish and retire versions. Ordinary applications receive a read-only grant;
 installation is an explicit capability, not an ambient right of every process.
 
-The loader cache key is the complete resolved identity, including the content
-digest. The same immutable read-only pages may therefore be shared even when
-identical Kit bytes came from separate bundles, while different versions or
-different digests remain distinct. Reusing a name and version for different
-bytes is an installation conflict, not an update.
+The current loader cache key is name, release version, ABI, and build ID. A
+private payload is fed to the kernel before reuse; the kernel compares its
+pages with any cached entry of that identity and rejects conflicting bytes.
+Distinct builds must carry distinct build IDs. Identical read-only pages may
+therefore be shared across bundles, while different versions remain distinct.
+Reusing one exact identity for different bytes is an installation conflict,
+not an update.
 
 Updates install a new version beside the old one and atomically replace only
 the dependency records that opt into it. Running processes retain their old

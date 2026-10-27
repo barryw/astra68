@@ -352,6 +352,18 @@ uint32_t astra_filesystem_unlink_at(AstraFilesystem *filesystem, const AstraFile
 /** Atomically rename within one backing filesystem. @param filesystem Attached filesystem. @param from Existing path. @param to Destination path. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
                                  const char *from, const char *to);
+/** Copy a file or directory tree to a new name. Publish the destination only
+ * after its contents are durable; reject an existing destination at entry.
+ * Unsupported node types fail. An interrupted copy can leave a sibling with
+ * the suffix `.astra-copying` until removed by the caller.
+ * @param filesystem Attached filesystem.
+ * @param source Existing assign-qualified source path.
+ * @param destination New assign-qualified destination path.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_copy_tree(AstraFilesystem *filesystem,
+                                    const char *source,
+                                    const char *destination);
 /** Create a hard link within one backing filesystem. @param filesystem Attached filesystem. @param from Existing path. @param to New path. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_link(AstraFilesystem *filesystem,
                                const char *from, const char *to);

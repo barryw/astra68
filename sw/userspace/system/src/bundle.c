@@ -1,4 +1,5 @@
 #include <astra/bundle.h>
+#include <astra/bundle_internal.h>
 #include <astra/endian.h>
 #include <astra/manifest.h>
 #include <astra/runtime.h>
@@ -8,6 +9,78 @@
 #include <string.h>
 
 #define WORD_MAX 5u
+
+static int library_name(const char *text);
+
+static int version_at_least(AstraBundleVersion have, AstraBundleVersion need)
+{
+    return have.major > need.major ||
+        (have.major == need.major && have.minor > need.minor) ||
+        (have.major == need.major && have.minor == need.minor &&
+         have.patch >= need.patch);
+}
+
+int astra_bundle_library_satisfies(const AstraBundleLibrary *requirement,
+                                   const AstraBundleLibrary *provider)
+{
+    return requirement != NULL && provider != NULL &&
+        strcmp(requirement->name, provider->name) == 0 &&
+        requirement->abi == provider->abi &&
+        version_at_least(provider->version, requirement->version);
+}
+
+const AstraBundleLibrary *astra_bundle_private_provider(
+    const AstraBundleManifest *manifest, const char *name, uint16_t abi)
+{
+    const AstraBundleLibrary *selected = NULL;
+
+    if (manifest == NULL || manifest->kind != ASTRA_BUNDLE_APPLICATION ||
+        name == NULL || abi == 0u || (manifest->provide_count != 0u &&
+                                      manifest->provides == NULL))
+        return NULL;
+    for (uint32_t at = 0u; at < manifest->provide_count; ++at) {
+        const AstraBundleLibrary *candidate = &manifest->provides[at];
+
+        if (strcmp(candidate->name, name) != 0 || candidate->abi != abi)
+            continue;
+        if (selected == NULL || version_at_least(candidate->version,
+                                                 selected->version))
+            selected = candidate;
+    }
+    return selected;
+}
+
+int astra_bundle_library_payload_path(const char *root, uint16_t kind,
+                                      const AstraBundleLibrary *library,
+                                      char *out, uint32_t capacity)
+{
+    AstraString path;
+
+    if (out == NULL || capacity == 0u) return 0;
+    astra_string_init(&path, out, capacity);
+    if (root == NULL || library == NULL || library->abi == 0u ||
+        (kind != ASTRA_BUNDLE_APPLICATION && kind != ASTRA_BUNDLE_KIT) ||
+        memchr(library->name, '\0', sizeof(library->name)) == NULL ||
+        !library_name(library->name))
+        return 0;
+    if (!astra_string_append(&path, root) ||
+        !astra_string_append(&path,
+                             kind == ASTRA_BUNDLE_APPLICATION
+                                 ? "libs/" : "libraries/") ||
+        !astra_string_append(&path, library->name) ||
+        !astra_string_append(&path, "/abi-") ||
+        !astra_string_append_u64(&path, library->abi) ||
+        !astra_string_append_char(&path, '/') ||
+        !astra_string_append_u64(&path, library->version.major) ||
+        !astra_string_append_char(&path, '.') ||
+        !astra_string_append_u64(&path, library->version.minor) ||
+        !astra_string_append_char(&path, '.') ||
+        !astra_string_append_u64(&path, library->version.patch) ||
+        !astra_string_append(&path, "/m68k-68040/") ||
+        !astra_string_append(&path, library->name))
+        return 0;
+    return 1;
+}
 
 /* Manifest fields are never empty. */
 static int copy(char *out, uint32_t capacity, const char *text)

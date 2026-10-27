@@ -47,12 +47,28 @@ def test_stale_requirement_is_rejected(root):
                for error in errors)
 
 
+def test_private_provider_is_scoped_to_its_app(root):
+    shared = write(root / "shared", "kind kit\n"
+                   "provides graphics.library 3 3.0.0\n")
+    app = write(root / "private", "kind application\n"
+                "provides graphics.library 3 3.1.0\n"
+                "requires graphics.library 3 3.1.0\n")
+    other = write(root / "other", "kind application\n"
+                  "requires graphics.library 3 3.1.0\n")
+    libraries = [identity("graphics.library", 3, "3.0.0")]
+    assert dependencies.validate(libraries, [shared, app]) == []
+    errors = dependencies.validate(libraries, [shared, app, other])
+    assert any(str(other) in error and "requires unavailable" in error
+               for error in errors)
+
+
 def main():
     with tempfile.TemporaryDirectory() as temporary:
         root = pathlib.Path(temporary)
         test_matching_provider_and_compatible_requirement_pass(root)
         test_stale_provider_is_rejected(root)
         test_stale_requirement_is_rejected(root)
+        test_private_provider_is_scoped_to_its_app(root)
     print("bundle dependency coverage tests passed")
 
 

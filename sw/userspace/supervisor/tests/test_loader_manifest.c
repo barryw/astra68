@@ -286,7 +286,7 @@ static void trusted_entries_are_ceilings(void)
 static void default_application_ceiling(void)
 {
     static const char *admitted[] = {
-        "GUI", "CLIPBOARD", "PCM", "NETWORK", "APP_LAUNCH", "FONT_CATALOG",
+        "GUI", "CLIPBOARD", "PCM", "CODEC", "NETWORK", "APP_LAUNCH", "FONT_CATALOG",
         "APPS:r", "LIBS:r", "FONTS:r", "STORE:rw", "HOME:rw", "CONFIG:rw",
         "RAM_READ", "RAM_WRITE",
     };

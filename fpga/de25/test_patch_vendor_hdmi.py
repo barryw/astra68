@@ -9,10 +9,12 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 SOURCE = """\
+parameter LUT_SIZE = 33;// 31;
 05 : LUT_DATA <= 16'h0cbc; // four I2S lanes
 06 : LUT_DATA <= 16'h1472; // 16-bit, 8 channels
 16 : LUT_DATA <= 16'h7307; // eight-channel infoframe
 17 : LUT_DATA <= 16'h761f; // eight-channel speakers
+32 : LUT_DATA <= 16'hfa7d; // last vendor entry
 """
 
 with tempfile.TemporaryDirectory() as temporary:
@@ -25,8 +27,10 @@ with tempfile.TemporaryDirectory() as temporary:
     )
     assert result.returncode == 0, result.stderr
     patched = path.read_text(encoding="utf-8")
-    for value in ("16'h0c84", "16'h140b", "16'h7301", "16'h7600"):
+    for value in ("16'h0c84", "16'h140b", "16'h7301", "16'h7600",
+                  "LUT_SIZE = 35", "16'he0d0", "16'hf900"):
         assert value in patched, value
+    assert patched.index("16'he0d0") < patched.index("16'hf900")
 
     rejected = subprocess.run(
         [sys.executable, str(HERE / "patch_vendor_hdmi.py"), str(path)],

@@ -34,7 +34,7 @@ DOC_STAMP := build/docs/.complete
 DOC_INPUTS := $(shell find docs -type f) $(wildcard include/astra/*.h examples/*.c) \
 	$(KERNEL_ABI_HEADERS)
 OS_COMPONENTS := runtime system graphics vfs dos streams posix network events \
-	config interface audio
+	config interface audio codec
 NDK_EXTERNAL_LIBRARY_KEYS := $(ASTRA_LIBRARY_KEYS)
 NDK_SHARED_LIBRARY_CONTRACTS := $(call astra_library_contract_owner_targets,\
 	$(NDK_EXTERNAL_LIBRARY_KEYS))
@@ -132,6 +132,7 @@ $(DIST_ARCHIVE): developer-components $(DOC_STAMP)
 		$(TERMINFO_HEADERS)) $(DIST_STAGE)/include/ncursesw/
 	install -m 0644 README.md $(DIST_STAGE)/README.md
 	install -m 0644 make/*.mk $(DIST_STAGE)/make/
+	$(MAKE) install-cmake DESTDIR=$(abspath $(DIST_STAGE))
 	install -m 0644 ../sw/userspace/posix/kit/program.c \
 		$(DIST_STAGE)/src/astra-posix-program.c
 	install -m 0644 examples/*.c examples/Makefile $(DIST_STAGE)/examples/
@@ -177,13 +178,42 @@ $(DIST_ARCHIVE): developer-components $(DOC_STAMP)
 		-cJf $(DIST_ARCHIVE).tmp -C $(DIST_DIR)/stage $(DIST_NAME)
 	mv $(DIST_ARCHIVE).tmp $(DIST_ARCHIVE)
 
+install-cmake:
+	test -n "$(DESTDIR)"
+	install -d $(DESTDIR)/lib/cmake/Astra $(DESTDIR)/cmake/Platform \
+		$(addprefix $(DESTDIR)/lib/cmake/,SDL2 SDL2_net SDL2_image SDL2_mixer SDL2_ttf sdl2-image)
+	install -m 0644 cmake/m68k-astra-toolchain.cmake $(DESTDIR)/cmake/
+	install -m 0644 cmake/Platform/Astra.cmake $(DESTDIR)/cmake/Platform/
+	install -m 0644 cmake/AstraConfig.cmake $(DESTDIR)/lib/cmake/Astra/
+	sed 's/@PACKAGE_VERSION@/$(ASTRA_OS_VERSION)/g' \
+		cmake/AstraConfigVersion.cmake.in > \
+		$(DESTDIR)/lib/cmake/Astra/AstraConfigVersion.cmake
+	install -m 0644 cmake/sdl2-image-config.cmake \
+		$(DESTDIR)/lib/cmake/sdl2-image/
+	@set -eu; for package in SDL2 SDL2_net SDL2_image SDL2_mixer SDL2_ttf; do \
+		version=$$(sed -n "s/^provides $$package.library [0-9][0-9]* //p" \
+			../sw/userspace/kits/SDL.kit/manifest); \
+		test -n "$$version" || { echo "missing $$package Kit version" >&2; exit 1; }; \
+		sed "s/@PACKAGE_VERSION@/$$version/g" \
+			cmake/$${package}Config.cmake > \
+			$(DESTDIR)/lib/cmake/$$package/$${package}Config.cmake; \
+		sed "s/@PACKAGE_VERSION@/$$version/g" \
+			cmake/SDLConfigVersion.cmake.in > \
+			$(DESTDIR)/lib/cmake/$$package/$${package}ConfigVersion.cmake; \
+		if test "$$package" = SDL2_image; then \
+			cp $(DESTDIR)/lib/cmake/$$package/$${package}ConfigVersion.cmake \
+				$(DESTDIR)/lib/cmake/sdl2-image/sdl2-image-config-version.cmake; \
+		fi; \
+	done
+
 dist-check: $(DIST_ARCHIVE)
 	python3 tests/test_distribution.py $(DIST_ARCHIVE) $(ASTRA_OS_VERSION) \
 		$(foreach library,$(NDK_SHARED_LIBRARY_ARTIFACTS),\
 			--library $(notdir $(library)))
 	@# The archive's files are dated 1970 (--mtime=@0): products from an
 	@# earlier check would look newer than every source, so none survive.
-	rm -rf $(DIST_DIR)/check $(DIST_DIR)/smoke $(DIST_DIR)/examples
+	rm -rf $(DIST_DIR)/check $(DIST_DIR)/smoke $(DIST_DIR)/examples \
+		$(DIST_DIR)/cmake-smoke
 	install -d $(DIST_DIR)/check
 	tar -xJf $(DIST_ARCHIVE) -C $(DIST_DIR)/check
 	$(MAKE) -f tests/distribution_smoke.mk \
@@ -191,6 +221,27 @@ dist-check: $(DIST_ARCHIVE)
 		BUILD_DIR=$(abspath $(DIST_DIR)/smoke) all
 	$(MAKE) -C $(DIST_DIR)/check/$(DIST_NAME)/examples \
 		BUILD_DIR=$(abspath $(DIST_DIR)/examples) all
+	cmake -S tests/cmake-smoke -B $(DIST_DIR)/cmake-smoke \
+		-G Ninja \
+		-DCMAKE_TOOLCHAIN_FILE=$(abspath $(DIST_DIR)/check/$(DIST_NAME)/cmake/m68k-astra-toolchain.cmake)
+	cmake --build $(DIST_DIR)/cmake-smoke
+	@set -eu; checker=$(DIST_DIR)/check/$(DIST_NAME)/tools/check_dynamic_executable.py; \
+		build=$(DIST_DIR)/cmake-smoke; \
+		python3 $$checker --readelf $(CROSS)readelf \
+			--needed streams.library.1 --needed runtime.library.1 \
+			--needed compiler.library.2 $$build/native; \
+		python3 $$checker --readelf $(CROSS)readelf \
+			--needed runtime.library.1 --needed compiler.library.2 \
+			--needed libc.library.4 $$build/posix; \
+		python3 $$checker --readelf $(CROSS)readelf \
+			--needed runtime.library.1 --needed compiler.library.2 \
+			--needed libc.library.4 --needed cxx.library.2 \
+			--needed unwind.library.1 $$build/cxx; \
+		python3 $$checker --readelf $(CROSS)readelf \
+			--needed SDL2_net.library.2 --needed SDL2_image.library.2 \
+			--needed SDL2_mixer.library.3 --needed runtime.library.1 \
+			--needed compiler.library.2 --needed libc.library.4 \
+			--needed SDL2.library.3 --needed SDL2_ttf.library.2 $$build/sdl
 
 dist: dist-check
 	@echo "NDK: $(DIST_ARCHIVE)"
@@ -237,4 +288,4 @@ clean:
 .PHONY: all test check docs docs-html docs-pdf \
 	docs-check docs-clean loader-library-contract shared-library-contracts \
 	developer-components dist dist-check \
-	os-library-tests certify sdk header-contract install-headers clean
+	os-library-tests certify sdk header-contract install-headers install-cmake clean

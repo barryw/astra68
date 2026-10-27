@@ -11,6 +11,7 @@ static uint16_t backing[ASTRA_DISPLAY_WIDTH * ASTRA_DISPLAY_HEIGHT];
 static AstraStartupCapability gui_capability;
 static int has_gui;
 static int create_failure;
+static SDL_Rect expected_create_frame = { 200, 100, 320, 200 };
 static int activation_failure;
 static int errors;
 static int surface_closes;
@@ -254,8 +255,10 @@ AstraResult astra_window_create(uint32_t gui, uint32_t area,
 {
     assert(gui == 7u && area == 42u && info->pitch == 0u);
     assert(info->content_format == ASTRA_WINDOW_CONTENT_SURFACE);
-    assert(info->x == 200u && info->y == 100u &&
-           info->width == 320u && info->height == 200u);
+    assert(info->x == expected_create_frame.x &&
+           info->y == expected_create_frame.y &&
+           info->width == expected_create_frame.w &&
+           info->height == expected_create_frame.h);
     assert(info->type == ASTRA_WINDOW_STANDARD);
     if (create_failure)
         return ASTRA_ERROR_IO;
@@ -781,5 +784,26 @@ int main(void)
     ASTRA_DestroyWindow(&device, &window);
     assert(window.driverdata == NULL && window_closes == 1 &&
            surface_closes == 3 && display_closes == 1 && area_closes == 2);
+    /* SDL sets fullscreen_mode before backend creation; CREATE_FLAGS strips
+       SDL_WINDOW_FULLSCREEN until FinishWindowCreation. */
+    window.flags = SDL_WINDOW_HIDDEN;
+    window.x = 0;
+    window.y = 0;
+    window.w = (int)ASTRA_DISPLAY_WIDTH;
+    window.h = (int)ASTRA_DISPLAY_HEIGHT;
+    window.fullscreen_mode.w = (int)ASTRA_DISPLAY_WIDTH;
+    window.fullscreen_mode.h = (int)ASTRA_DISPLAY_HEIGHT;
+    window.windowed = (SDL_Rect){
+        ((int)ASTRA_DISPLAY_WIDTH - 1) / 2,
+        ((int)ASTRA_DISPLAY_HEIGHT - 1) / 2, 1, 1
+    };
+    expected_create_frame = (SDL_Rect){
+        ((int)ASTRA_DISPLAY_WIDTH - 640) / 2,
+        ((int)ASTRA_DISPLAY_HEIGHT - 480) / 2, 640, 480
+    };
+    assert(ASTRA_CreateWindow(&device, &window) == 0);
+    assert(memcmp(&window.windowed, &expected_create_frame,
+                  sizeof(window.windowed)) == 0);
+    ASTRA_DestroyWindow(&device, &window);
     return 0;
 }

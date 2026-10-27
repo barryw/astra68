@@ -6,7 +6,8 @@ all: build/astra-bundle
 
 build/astra-bundle: bundle_tool.c ../sw/userspace/system/src/manifest.c ../sw/userspace/system/src/bundle.c \
 		../sw/common/utf8.c ../sw/userspace/runtime/src/string.c \
-		../ndk/include/astra/bundle.h ../sw/include/astra/process.h
+		../ndk/include/astra/bundle.h ../sw/include/astra/bundle_internal.h \
+		../sw/include/astra/process.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(CFLAGS) bundle_tool.c ../sw/userspace/system/src/manifest.c \
 		../sw/userspace/system/src/bundle.c ../sw/common/utf8.c \

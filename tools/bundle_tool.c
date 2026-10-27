@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
 
 #include <astra/bundle.h>
+#include <astra/bundle_internal.h>
+#include <astra/endian.h>
 
 #include <dirent.h>
 #include <errno.h>
@@ -64,20 +66,41 @@ static int suffix(const char *path, const char *wanted)
     return length >= ending && memcmp(path + length - ending, wanted, ending) == 0;
 }
 
-static int kit_payload(const char *path, const AstraBundleLibrary *library)
+static int library_payload(const char *path, const AstraBundleLibrary *library,
+                           uint16_t kind)
 {
     char relative[PATH_MAX];
     char payload[PATH_MAX];
+    char identity_name[ASTRA_LIBRARY_NAME_MAX];
+    uint8_t identity[ASTRA_LIBRARY_SIZE];
     struct stat info;
-    int count = snprintf(relative, sizeof(relative),
-                         "libraries/%s/abi-%u/%u.%u.%u/m68k-68040/%s",
-                         library->name, library->abi, library->version.major,
-                         library->version.minor, library->version.patch,
-                         library->name);
-
-    return count > 0 && count < (int)sizeof(relative) &&
-           path_join(payload, path, relative) && stat(payload, &info) == 0 &&
-           S_ISREG(info.st_mode);
+    FILE *image;
+    if (!astra_bundle_library_payload_path(
+            "", kind, library, relative, sizeof(relative)) ||
+        !path_join(payload, path, relative) || stat(payload, &info) != 0 ||
+        !S_ISREG(info.st_mode) ||
+        info.st_size < ASTRA_LIBRARY_FILE_OFFSET + ASTRA_LIBRARY_SIZE ||
+        snprintf(identity_name, sizeof(identity_name), "%s.%u",
+                 library->name, library->abi) >= (int)sizeof(identity_name))
+        return 0;
+    image = fopen(payload, "rb");
+    if (image == NULL) return 0;
+    int valid = fseek(image, ASTRA_LIBRARY_FILE_OFFSET, SEEK_SET) == 0 &&
+        fread(identity, 1u, sizeof(identity), image) == sizeof(identity);
+    fclose(image);
+    return valid && astra_load_be32(identity) == ASTRA_LIBRARY_MAGIC &&
+        astra_load_be16(identity + 4u) == ASTRA_LIBRARY_RECORD_VERSION &&
+        astra_load_be16(identity + 6u) == ASTRA_LIBRARY_SIZE &&
+        astra_load_be16(identity + 8u) == library->version.major &&
+        astra_load_be16(identity + 10u) == library->version.minor &&
+        astra_load_be16(identity + 12u) == library->version.patch &&
+        astra_load_be16(identity + 14u) == library->abi &&
+        astra_load_be16(identity + 18u) == 0u &&
+        astra_load_be32(identity + 20u) == ASTRA_LIBRARY_TARGET_M68040 &&
+        astra_load_be32(identity + 28u) == 0u &&
+        strnlen((const char *)identity + 32u, ASTRA_LIBRARY_NAME_MAX) <
+            ASTRA_LIBRARY_NAME_MAX &&
+        strcmp((const char *)identity + 32u, identity_name) == 0;
 }
 
 static int validate(const char *path, AstraBundleManifest *manifest,
@@ -110,19 +133,19 @@ static int validate(const char *path, AstraBundleManifest *manifest,
         astra_bundle_manifest_destroy(manifest);
         return 0;
     }
+    for (uint32_t at = 0u; at < manifest->provide_count; ++at)
+        if (!library_payload(path, &manifest->provides[at], manifest->kind)) {
+            if (!quiet)
+                fprintf(stderr, "%s: missing or mismatched payload for %s ABI %u %u.%u.%u\n",
+                        path, manifest->provides[at].name,
+                        manifest->provides[at].abi,
+                        manifest->provides[at].version.major,
+                        manifest->provides[at].version.minor,
+                        manifest->provides[at].version.patch);
+            astra_bundle_manifest_destroy(manifest);
+            return 0;
+        }
     if (manifest->kind == ASTRA_BUNDLE_KIT) {
-        for (uint32_t at = 0u; at < manifest->provide_count; ++at)
-            if (!kit_payload(path, &manifest->provides[at])) {
-                if (!quiet)
-                    fprintf(stderr, "%s: missing payload for %s ABI %u %u.%u.%u\n",
-                            path, manifest->provides[at].name,
-                            manifest->provides[at].abi,
-                            manifest->provides[at].version.major,
-                            manifest->provides[at].version.minor,
-                            manifest->provides[at].version.patch);
-                astra_bundle_manifest_destroy(manifest);
-                return 0;
-            }
         return 1;
     }
     if (!path_join(child, path, manifest->executable) || stat(child, &info) != 0 ||
@@ -282,13 +305,6 @@ static void scanned_bundles_destroy(ScannedBundle *bundles, size_t count)
     free(bundles);
 }
 
-static int version_at_least(AstraBundleVersion have, AstraBundleVersion need)
-{
-    if (have.major != need.major) return have.major > need.major;
-    if (have.minor != need.minor) return have.minor > need.minor;
-    return have.patch >= need.patch;
-}
-
 static int same_file(const char *left, const char *right)
 {
     char a[PATH_MAX];
@@ -336,14 +352,6 @@ static int scan_roots(char **roots, int root_count, ScannedBundle **out,
     return 1;
 }
 
-static int requirement_matches(const AstraBundleLibrary *requirement,
-                               const AstraBundleLibrary *provider)
-{
-    return strcmp(requirement->name, provider->name) == 0 &&
-           requirement->abi == provider->abi &&
-           version_at_least(provider->version, requirement->version);
-}
-
 static int has_dependents(const char *target,
                           const AstraBundleManifest *target_manifest,
                           char **roots, int root_count)
@@ -360,21 +368,30 @@ static int has_dependents(const char *target,
         for (uint32_t need = 0u; need < consumer->require_count; ++need) {
             int supplied_by_target = 0;
             int alternative = 0;
+            const AstraBundleLibrary *required = &consumer->requirements[need];
+
+            /* Runtime selects this app's private provider before LIBS:,
+             * even when its version later fails the requirement. */
+            if (astra_bundle_private_provider(consumer, required->name,
+                                              required->abi) != NULL)
+                continue;
 
             for (uint32_t provide = 0u;
                  provide < target_manifest->provide_count; ++provide)
-                if (requirement_matches(&consumer->requirements[need],
-                                        &target_manifest->provides[provide]))
+                if (astra_bundle_library_satisfies(
+                        required, &target_manifest->provides[provide]))
                     supplied_by_target = 1;
             if (!supplied_by_target) continue;
             for (size_t candidate = 0u; candidate < count && !alternative;
                  ++candidate) {
-                if (same_file(target, bundles[candidate].path)) continue;
+                if (same_file(target, bundles[candidate].path) ||
+                    bundles[candidate].manifest.kind != ASTRA_BUNDLE_KIT)
+                    continue;
                 for (uint32_t provide = 0u;
                      provide < bundles[candidate].manifest.provide_count;
                      ++provide)
-                    if (requirement_matches(
-                            &consumer->requirements[need],
+                    if (astra_bundle_library_satisfies(
+                            required,
                             &bundles[candidate].manifest.provides[provide])) {
                         alternative = 1;
                         break;

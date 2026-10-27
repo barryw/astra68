@@ -16,7 +16,7 @@ typedef uint32_t (*AstraVolumeReadCatalog)(void *context,
     const AstraVolumeCatalogQuery *query, AstraVolumeCatalogPage *page);
 typedef uint32_t (*AstraVolumeGrantRoot)(void *context, uint32_t owner,
     const AstraVolumeReference *reference, uint32_t rights,
-    const AstraVolumeReference *source, uint32_t *root);
+    const AstraVolumeReference *source, int delegates, uint32_t *root);
 typedef uint32_t (*AstraVolumeApplyControl)(void *context, uint32_t owner,
     const AstraVolumeControl *control, AstraVolumeReference *reference);
 typedef uint32_t (*AstraVolumeApplyFormat)(void *context, uint32_t owner,
@@ -47,7 +47,8 @@ int astra_volume_port_init(AstraVolumePort *port, uint32_t receive,
 uint32_t astra_volume_port_pump(AstraVolumePort *port, uint32_t budget);
 /* Broker authority comes from the selected receive endpoint, not the packet. */
 uint32_t astra_volume_port_root_pump(AstraVolumePort *port, uint32_t receive,
-    uint32_t rights, const AstraVolumeReference *source, uint32_t budget);
+    uint32_t rights, const AstraVolumeReference *source, int delegates,
+    uint32_t budget);
 uint32_t astra_volume_port_control_pump(AstraVolumePort *port, uint32_t receive,
     uint32_t budget);
 uint32_t astra_volume_port_format_pump(AstraVolumePort *port, uint32_t receive,

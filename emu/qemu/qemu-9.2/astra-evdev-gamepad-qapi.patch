@@ -1,0 +1,36 @@
+--- a/qapi/qom.json
++++ b/qapi/qom.json
+@@ -522,4 +522,15 @@
+ ##
++# @AstraEvdevGamepadProperties:
++#
++# @evdev: path of the host evdev gamepad
++#
++# @slot: guest gamepad slot, starting at zero
++##
++{ 'struct': 'AstraEvdevGamepadProperties',
++  'data': { 'evdev': 'str', 'slot': 'uint32' },
++  'if': 'CONFIG_LINUX' }
++
++##
+ # @EventLoopBaseProperties:
+ #
+ # Common properties for event loops
+@@ -1082,6 +1093,8 @@
+ { 'enum': 'ObjectType',
+   'data': [
+     'acpi-generic-initiator',
++    { 'name': 'astra-evdev-gamepad',
++      'if': 'CONFIG_LINUX' },
+     'acpi-generic-port',
+     'authz-list',
+     'authz-listfile',
+@@ -1158,6 +1171,8 @@
+   'discriminator': 'qom-type',
+   'data': {
+       'acpi-generic-initiator':     'AcpiGenericInitiatorProperties',
++      'astra-evdev-gamepad':        { 'type': 'AstraEvdevGamepadProperties',
++                                      'if': 'CONFIG_LINUX' },
+       'acpi-generic-port':          'AcpiGenericPortProperties',
+       'authz-list':                 'AuthZListProperties',
+       'authz-listfile':             'AuthZListFileProperties',

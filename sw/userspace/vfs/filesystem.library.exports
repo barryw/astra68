@@ -188,3 +188,8 @@ ASTRA_FILESYSTEM_15.2 {
         astra_volume_partition_status;
         astra_volume_partition_find_free;
 } ASTRA_FILESYSTEM_15.1;
+
+ASTRA_FILESYSTEM_15.3 {
+    global:
+        astra_filesystem_copy_tree;
+} ASTRA_FILESYSTEM_15.2;

@@ -65,6 +65,10 @@ ASTRA_SYSTEM_4.0 {
         astra_fence_close;
         astra_fence_poll;
         astra_fence_wait;
+        astra_gamepad_event_try;
+        astra_gamepad_event_wait;
+        astra_gamepad_observer_close;
+        astra_gamepad_observer_open;
         astra_handle_close;
         astra_handle_duplicate;
         astra_keymap_apply_modifier;

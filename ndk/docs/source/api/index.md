@@ -16,6 +16,7 @@ graphics
 interface
 events
 pcm
+codec
 midi
 tasks
 kernel-abi

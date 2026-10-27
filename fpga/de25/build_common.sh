@@ -1,5 +1,33 @@
 #!/usr/bin/env bash
 
+scope_de25_build() {
+    local script=$1
+    shift
+    if [[ $(hostname -s) != beast ]]; then
+        return
+    fi
+
+    local hierarchy controllers path limit swap_limit score
+    IFS=: read -r hierarchy controllers path </proc/self/cgroup
+    limit=$(<"/sys/fs/cgroup$path/memory.max")
+    swap_limit=$(<"/sys/fs/cgroup$path/memory.swap.max")
+    score=$(</proc/self/oom_score_adj)
+    if [[ $limit =~ ^[0-9]+$ && $limit -le 12884901888 &&
+          $swap_limit == 0 && $score -eq 1000 ]]; then
+        return
+    fi
+    if [[ ${ASTRA_DE25_SCOPED:-} == 1 ]]; then
+        echo "DE25 build scope did not enforce memory, swap and OOM limits" >&2
+        exit 1
+    fi
+    # Failed synthesis must lose memory before Beast's live Longhorn volumes.
+    exec systemd-run --user --scope --collect --expand-environment=no \
+        -p MemoryHigh=10G -p MemoryMax=12G -p MemorySwapMax=0 \
+        -p CPUQuota=800% -p TasksMax=256 \
+        /bin/bash -c 'printf 1000 > /proc/self/oom_score_adj; export ASTRA_DE25_SCOPED=1; exec "$@"' \
+        bash "$script" "$@"
+}
+
 prepare_de25_tree() {
     local tree=$1
     rm -rf "$tree"

@@ -32,8 +32,11 @@ STORAGE_WIRE="$REPOSITORY/sw/include/astra/storage_provider.h"
 PUBLIC_VOLUME="$REPOSITORY/sw/include/astra/volume_abi.h"
 STORAGE_TRANSPORT="$REPOSITORY/fpga/de25/linux/astra_storage_transport"
 FONT_HOST="$REPOSITORY/fpga/de25/linux/astra_font_host"
+CODEC_HOST="$REPOSITORY/fpga/de25/linux/astra_codec_host"
+CODEC_WIRE="$REPOSITORY/fpga/de25/linux/astra_codec_wire"
 FONT_CONVERT="$REPOSITORY/fpga/de25/linux/astra_font_convert.h"
 PUBLIC_FONT_WORKER="$REPOSITORY/sw/include/astra/font_worker.h"
+PUBLIC_CODEC_WORKER="$REPOSITORY/sw/include/astra/codec_worker.h"
 PUBLIC_FONT_ENCODING="$REPOSITORY/ndk/include/astra/font_encoding.h"
 PUBLIC_AUDIO_HOST="$REPOSITORY/sw/include/astra/audio_host.h"
 PUBLIC_PCM_FORMAT="$REPOSITORY/sw/include/astra/pcm_format.h"
@@ -109,8 +112,13 @@ overlay_identity()
         printf '%s  %s\n' "$(sha256_file "$STORAGE_TRANSPORT.h")" "fpga/de25/linux/astra_storage_transport.h"
         printf '%s  %s\n' "$(sha256_file "$FONT_HOST.c")" "fpga/de25/linux/astra_font_host.c"
         printf '%s  %s\n' "$(sha256_file "$FONT_HOST.h")" "fpga/de25/linux/astra_font_host.h"
+        printf '%s  %s\n' "$(sha256_file "$CODEC_HOST.c")" "fpga/de25/linux/astra_codec_host.c"
+        printf '%s  %s\n' "$(sha256_file "$CODEC_HOST.h")" "fpga/de25/linux/astra_codec_host.h"
+        printf '%s  %s\n' "$(sha256_file "$CODEC_WIRE.c")" "fpga/de25/linux/astra_codec_wire.c"
+        printf '%s  %s\n' "$(sha256_file "$CODEC_WIRE.h")" "fpga/de25/linux/astra_codec_wire.h"
         printf '%s  %s\n' "$(sha256_file "$FONT_CONVERT")" "fpga/de25/linux/astra_font_convert.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_FONT_WORKER")" "sw/include/astra/font_worker.h"
+        printf '%s  %s\n' "$(sha256_file "$PUBLIC_CODEC_WORKER")" "sw/include/astra/codec_worker.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_FONT_ENCODING")" "ndk/include/astra/font_encoding.h"
         printf '%s  %s\n' "$(sha256_file "$PUBLIC_HOST")" \
             "sw/include/astra/host.h"
@@ -200,6 +208,8 @@ cp "$OVERLAY/hw/m68k/astra68-resolve.c" "$STAGED_SOURCE/hw/m68k/"
 cp "$OVERLAY/hw/m68k/astra68-resolve.h" "$STAGED_SOURCE/hw/m68k/"
 cp "$STORAGE_TRANSPORT.c" "$STORAGE_TRANSPORT.h" "$STAGED_SOURCE/hw/m68k/"
 cp "$FONT_HOST.c" "$FONT_HOST.h" "$FONT_CONVERT" "$STAGED_SOURCE/hw/m68k/"
+cp "$CODEC_HOST.c" "$CODEC_HOST.h" "$CODEC_WIRE.c" "$CODEC_WIRE.h" \
+    "$STAGED_SOURCE/hw/m68k/"
 cp "$OVERLAY/contrib/plugins/astra_profile.c" \
     "$STAGED_SOURCE/contrib/plugins/astra_profile.c"
 cp "$PUBLIC_INPUT" "$STAGED_SOURCE/include/hw/m68k/astra_input.h"
@@ -211,6 +221,7 @@ cp "$PUBLIC_RENDER_PROTOCOL" \
     "$STAGED_SOURCE/include/hw/m68k/astra_render_protocol.h"
 mkdir -p "$STAGED_SOURCE/include/astra"
 cp "$PUBLIC_FONT_WORKER" "$STAGED_SOURCE/include/astra/font_worker.h"
+cp "$PUBLIC_CODEC_WORKER" "$STAGED_SOURCE/include/astra/codec_worker.h"
 cp "$PUBLIC_FONT_ENCODING" "$STAGED_SOURCE/include/astra/font_encoding.h"
 cp "$PUBLIC_DISPLAY" "$STAGED_SOURCE/include/astra/display.h"
 cp "$PUBLIC_DISPLAY_CAPTURE" "$STAGED_SOURCE/include/astra/display_capture.h"
@@ -239,6 +250,8 @@ cp "$PUBLIC_COMPILER" "$STAGED_SOURCE/include/astra/compiler.h"
 cp "$PUBLIC_OBJECT_ABI" "$STAGED_SOURCE/include/astra/object_abi.h"
 ln -s include/astra "$STAGED_SOURCE/astra"
 patch -d "$STAGED_SOURCE" -p1 --forward < "$OVERLAY/meson.build.patch" >&2
+patch -d "$STAGED_SOURCE" -p1 --forward \
+    < "$OVERLAY/astra-evdev-gamepad-qapi.patch" >&2
 patch -d "$STAGED_SOURCE" -p1 --forward \
     < "$OVERLAY/target-m68k-pflush-global.patch" >&2
 patch -d "$STAGED_SOURCE" -p1 --forward \

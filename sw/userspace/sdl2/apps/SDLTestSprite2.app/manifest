@@ -2,12 +2,12 @@ astra-bundle 1
 kind application
 id org.astra.sdl-testsprite2
 name "SDL Sprites"
-version 2.32.10
+version 2.32.11
 executable bin/m68k-68040/SDLTestSprite2
 icon resources/SDLTestSprite2.aicon
 capability GUI
 capability LIBS:r
-requires SDL2.library 3 2.32.10
+requires SDL2.library 3 2.32.11
 requires libc.library 4 4.0.0
 requires runtime.library 1 1.6.0
 requires compiler.library 2 2.0.0

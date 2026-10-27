@@ -2,6 +2,8 @@
 
 #include <astra/dynamic_loader.h>
 #include <astra/dynamic_process.h>
+#include <astra/bundle.h>
+#include <astra/bundle_internal.h>
 #include <astra/endian.h>
 #include <astra/library.h>
 #include <astra/process.h>
@@ -10,9 +12,11 @@
 #include <astra/syscall.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_library_source.h>
+#include <astra/vfs_provider_index.h>
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "../runtime/src/stream_source.h"
 
@@ -38,8 +42,6 @@ enum LoaderFailure {
 #define LOADER_REFUSED_SONAME    0x1003u
 #define LOADER_REFUSED_SPAN      0x1004u
 #define LOADER_REFUSED_IDENTITY  0x1005u
-/* Or'd in when the copy came from the resident library cache. */
-#define LOADER_REFUSED_RESIDENT  0x10000u
 
 static int loader_failure(const char *operation, uint32_t status,
                           enum LoaderFailure failure)
@@ -52,6 +54,132 @@ typedef struct LoaderDependency {
     AstraVfsReadSource source;
     uint32_t load_handle;
 } LoaderDependency;
+
+static int identity_matches(const char *expected,
+                            const AstraLibrary *identity,
+                            const char *soname);
+
+static uint32_t private_manifest_open(AstraBundleManifest *manifest)
+{
+    AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
+    char *text = NULL;
+    uint32_t status = astra_process_vfs_source_open("/app/manifest", &source);
+
+    if (status != ASTRA_VFS_OK) return status;
+    if (source.length == 0u || source.length == UINT32_MAX) {
+        status = ASTRA_VFS_ERR_LIMIT;
+        goto done;
+    }
+    text = astra_runtime_allocate(source.length + 1u);
+    if (text == NULL) {
+        status = ASTRA_VFS_ERR_LIMIT;
+        goto done;
+    }
+    for (uint32_t at = 0u; at < source.length;) {
+        const uint8_t *bytes = NULL;
+        uint32_t moved = 0u;
+
+        status = astra_vfs_read_source_read_at(&source, at,
+            source.length - at, &bytes, &moved);
+        if (status != ASTRA_VFS_OK) goto done;
+        if (bytes == NULL || moved == 0u) {
+            status = ASTRA_VFS_ERR_IO;
+            goto done;
+        }
+        memcpy(text + at, bytes, moved);
+        at += moved;
+    }
+    text[source.length] = '\0';
+    uint32_t line = 0u;
+    status = astra_bundle_manifest_parse(text, source.length, manifest, &line);
+    if (status != ASTRA_BUNDLE_OK || manifest->kind != ASTRA_BUNDLE_APPLICATION) {
+        astra_bundle_manifest_destroy(manifest);
+        status = ASTRA_VFS_ERR_INVALID;
+    } else status = ASTRA_VFS_OK;
+done:
+    astra_runtime_deallocate(text);
+    if (astra_vfs_read_source_close(&source) != ASTRA_VFS_OK &&
+        status == ASTRA_VFS_OK) status = ASTRA_VFS_ERR_IO;
+    return status;
+}
+
+static const AstraBundleLibrary *private_library(const AstraBundleManifest *manifest,
+                                                  const char *identity)
+{
+    char name[ASTRA_LIBRARY_NAME_MAX];
+    uint16_t abi;
+
+    if (!astra_vfs_provider_identity_parse(
+            identity, name, sizeof(name), &abi)) return NULL;
+    return astra_bundle_private_provider(manifest, name, abi);
+}
+
+static int required_version_satisfied(const AstraBundleManifest *manifest,
+                                      const char *identity,
+                                      const AstraLibraryReference *reference)
+{
+    char name[ASTRA_LIBRARY_NAME_MAX];
+    uint16_t abi;
+
+    if (manifest == NULL || manifest->kind != ASTRA_BUNDLE_APPLICATION)
+        return 1;
+    if (!astra_vfs_provider_identity_parse(identity, name, sizeof(name), &abi))
+        return 0;
+    for (uint32_t at = 0u; at < manifest->require_count; ++at) {
+        const AstraBundleLibrary *required = &manifest->requirements[at];
+
+        if (strcmp(required->name, name) != 0 || required->abi != abi)
+            continue;
+        if (reference->major < required->version.major ||
+            (reference->major == required->version.major &&
+             reference->minor < required->version.minor) ||
+            (reference->major == required->version.major &&
+             reference->minor == required->version.minor &&
+             reference->patch < required->version.patch))
+            return 0;
+    }
+    return 1;
+}
+
+static uint32_t private_payload_source(const AstraBundleLibrary *library,
+                                       const char *identity, char *path,
+                                       AstraVfsReadSource *source,
+                                       AstraLibraryReference *reference)
+{
+    const uint8_t *bytes = NULL;
+    AstraLibrary record;
+    uint32_t status;
+    if (!astra_bundle_library_payload_path(
+            "/app/", ASTRA_BUNDLE_APPLICATION, library,
+            path, ASTRA_VFS_PATH_MAX))
+        return ASTRA_VFS_ERR_LIMIT;
+    status = astra_process_vfs_source_open(path, source);
+    if (status != ASTRA_VFS_OK) return status;
+    status = astra_stream_read_exact(astra_vfs_read_source_read_at, source,
+        source->length, ASTRA_LIBRARY_FILE_OFFSET, ASTRA_LIBRARY_SIZE,
+        &bytes, NULL);
+    if (status != ASTRA_SYSCALL_OK || bytes == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    memcpy(&record, bytes, sizeof(record));
+    if (!identity_matches(identity, &record, identity) ||
+        record.major != library->version.major ||
+        record.minor != library->version.minor ||
+        record.patch != library->version.patch ||
+        record.abi_major != library->abi ||
+        record.reserved_flags != 0u || record.reserved != 0u)
+        return ASTRA_VFS_ERR_INVALID;
+    *reference = (AstraLibraryReference){
+        .size = ASTRA_LIBRARY_REFERENCE_SIZE,
+        .build_id = record.build_id,
+        .major = record.major,
+        .minor = record.minor,
+        .patch = record.patch,
+        .abi_major = record.abi_major,
+        .abi_minor = record.abi_minor,
+    };
+    memcpy(reference->name, record.name, sizeof(reference->name));
+    return ASTRA_VFS_OK;
+}
 
 static int text_equal(const char *left, const char *right, uint32_t capacity)
 {
@@ -112,42 +240,42 @@ static uint32_t dependency_open(void *opaque, const char *identity,
     uint32_t base = 0u;
     uint32_t span = 0u;
     uint32_t status;
-    int resident = 0;
-    const char *failure_stage = "library resident attach";
+    const char *failure_stage = "library provider resolve";
 
-    (void)opaque;
+    const AstraBundleManifest *manifest = opaque;
+    const AstraBundleLibrary *private = private_library(manifest, identity);
     *out_token = NULL;
     dependency = astra_runtime_callocate(1u, sizeof(*dependency));
     if (dependency == NULL)
         return ASTRA_SYSCALL_OUT_OF_MEMORY;
     dependency->source = (AstraVfsReadSource)ASTRA_VFS_READ_SOURCE_INIT;
-    status = astra_rt_library_attach_resident(
-        identity, &base, &span, &dependency->load_handle);
-    if (status == ASTRA_SYSCALL_OK)
-        resident = 1;
-    if (status == ASTRA_SYSCALL_WOULD_BLOCK ||
+    path = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
+    if (path == NULL) status = ASTRA_SYSCALL_OUT_OF_MEMORY;
+    else if (private != NULL) status = private_payload_source(
+        private, identity, path, &dependency->source, &reference);
+    else status = astra_vfs_library_resolve(
+        astra_process_vfs_assigns(), "LIBS", identity,
+        astra_process_vfs_assign_client, NULL,
+        path, ASTRA_VFS_PATH_MAX, &reference);
+    if (status == ASTRA_VFS_OK &&
+        !required_version_satisfied(manifest, identity, &reference))
+        status = ASTRA_VFS_ERR_INVALID;
+    if (path != NULL && status != ASTRA_VFS_OK)
+        status = source_status(status);
+    if (status == ASTRA_SYSCALL_OK && private == NULL) {
+        failure_stage = "library attach";
+        status = astra_rt_library_attach(
+            &reference, &base, &span, &dependency->load_handle);
+    }
+    if ((private != NULL && status == ASTRA_SYSCALL_OK) ||
+        status == ASTRA_SYSCALL_WOULD_BLOCK ||
         status == ASTRA_SYSCALL_BAD_SYSCALL) {
-        failure_stage = "library provider resolve";
-        path = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
-        if (path == NULL) status = ASTRA_SYSCALL_OUT_OF_MEMORY;
-        else status = astra_vfs_library_resolve(
-            astra_process_vfs_assigns(), "LIBS", identity,
-            astra_process_vfs_assign_client, NULL,
-            path, ASTRA_VFS_PATH_MAX, &reference);
-        if (path != NULL && status != ASTRA_VFS_OK)
+        failure_stage = "library source open";
+        status = dependency->source.file != ASTRA_VFS_FILE_INVALID ?
+            ASTRA_VFS_OK :
+            astra_process_vfs_source_open(path, &dependency->source);
+        if (status != ASTRA_VFS_OK)
             status = source_status(status);
-        if (status == ASTRA_SYSCALL_OK) {
-            failure_stage = "library attach";
-            status = astra_rt_library_attach(
-                &reference, &base, &span, &dependency->load_handle);
-        }
-        if (status == ASTRA_SYSCALL_WOULD_BLOCK ||
-            status == ASTRA_SYSCALL_BAD_SYSCALL) {
-            failure_stage = "library source open";
-            status = astra_process_vfs_source_open(path, &dependency->source);
-            if (status != ASTRA_VFS_OK)
-                status = source_status(status);
-        }
     }
     astra_runtime_deallocate(path);
     if (status == ASTRA_SYSCALL_OK &&
@@ -202,8 +330,7 @@ static uint32_t dependency_open(void *opaque, const char *identity,
         const AstraLibrary *library = (const AstraLibrary *)(uintptr_t)
             (base + ASTRA_LIBRARY_FILE_OFFSET);
 
-        if (!(resident != 0 ? identity_matches(identity, library, soname) :
-                              reference_matches(&reference, library, soname)))
+        if (!reference_matches(&reference, library, soname))
             status = LOADER_REFUSED_IDENTITY;
     }
     if (status != ASTRA_SYSCALL_OK) {
@@ -211,11 +338,10 @@ static uint32_t dependency_open(void *opaque, const char *identity,
                                                                   ASTRA_SYSCALL_INVALID_ARGUMENT;
 
         (void)astra_log_failure(failure_stage, status);
-        (void)astra_log_failure(identity, status | (resident != 0 ?
-                                                    LOADER_REFUSED_RESIDENT :
-                                                    0u));
+        (void)astra_log_failure(identity, status);
         if (dependency->load_handle != 0u)
             (void)astra_close(dependency->load_handle);
+        (void)astra_vfs_read_source_close(&dependency->source);
         astra_runtime_deallocate(dependency);
         return failure;
     }
@@ -315,6 +441,7 @@ static void loader_trace(const char *stage)
 
 int astra_loader_main(const AstraStartupInfo *startup)
 {
+    AstraBundleManifest bundle = ASTRA_BUNDLE_MANIFEST_INIT;
     AstraDynamicImage program;
     AstraDynamicProcess *process = NULL;
     AstraDynamicTlsLayout tls;
@@ -340,8 +467,16 @@ int astra_loader_main(const AstraStartupInfo *startup)
     if (status != ASTRA_VFS_OK)
         return loader_failure("dynamic VFS", status, LOADER_FAILURE_VFS);
     loader_trace("dynamic loader VFS ready");
+    if (astra_assign_lookup(astra_process_vfs_assigns(), "APP") != NULL) {
+        status = private_manifest_open(&bundle);
+        if (status != ASTRA_VFS_OK) {
+            failure_operation = "application bundle manifest";
+            goto failed;
+        }
+    }
     status = astra_dynamic_process_prepare(
-        &program, dependency_open, dependency_finish, NULL, &process);
+        &program, dependency_open, dependency_finish, &bundle, &process);
+    astra_bundle_manifest_destroy(&bundle);
     if (status != ASTRA_SYSCALL_OK)
         goto failed;
     loader_trace("dynamic loader dependencies ready");
@@ -430,6 +565,7 @@ int astra_loader_main(const AstraStartupInfo *startup)
                        LOADER_FAILURE_PROGRAM_STATUS) : exit_status;
 
 failed:
+    astra_bundle_manifest_destroy(&bundle);
     astra_process_vfs_close();
     astra_runtime_deallocate(tls_template);
     astra_dynamic_process_discard(process);

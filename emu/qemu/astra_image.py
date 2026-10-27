@@ -124,7 +124,7 @@ DEFAULT_TERMINFO = os.path.join(
 TERMINAL_CEILING = (
     "GUI CLIPBOARD VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN WORK:rw HOME:rw TMP:rw RAM_READ RAM_WRITE DH0:r SYSTEM:r FONTS:r LOCAL:rw "
     "COMMANDS:r APPS:r LIBS:r EVENTS:r PROC:rw METRICS:r CONFIG_COMMANDS:r "
-    "EVENT_CONTROL NETWORK NETWORK_LISTEN NTP PCM POSIX_PROCESS APP_LAUNCH "
+    "EVENT_CONTROL NETWORK NETWORK_LISTEN NTP PCM CODEC POSIX_PROCESS APP_LAUNCH "
     "SERVICE_MANAGER ENTROPY LOG")
 PROVIDER_INDEX_MAGIC = 0x41505256  # "APRV"
 PROVIDER_INDEX_HEADER = struct.Struct(">IHHHHHHHHI")
@@ -164,7 +164,7 @@ PROVIDER_INDEX_MAX = (PROVIDER_INDEX_HEADER.size + VFS_PATH_MAX -
 # application, and anything unmarked at 16 (sw/include/astra/process.h).
 DISPLAY_STARTUP_MANIFEST = (
     "service /services/hostfs grants HOST_FILESYSTEM "
-    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE critical priority=20\n"
+    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE VOLUME_DELEGATE critical priority=20\n"
     "service /services/posixd grants serves POSIX_PROCESS required priority=20\n"
     "service /services/entropy grants HOST_DEVICE "
     "serves ENTROPY required priority=20\n"
@@ -184,18 +184,19 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
     "INPUT_SERVICE FONT_CATALOG FONTS_RENDER FONTS_CHANGED serves GUI critical priority=20\n"
     "service /services/media grants HOST_DEVICE serves PCM priority=16\n"
+    "service /services/codec grants HOST_DEVICE serves CODEC required priority=16\n"
     # The machine's accounting, copied to WORK:.astra/sample once a second
     # for the host's astra-top.
     "service /services/sampler grants PROC:r WORK:rw\n"
     "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER VOLUMES VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN PROC:r APPS:r "
-    "LIBS:r SYSTEM:r DH0:r HOME:rw NETWORK NETWORK_LISTEN NTP PCM required priority=20\n"
+    "LIBS:r SYSTEM:r DH0:r HOME:rw NETWORK NETWORK_LISTEN NTP PCM CODEC required priority=20\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
     "trusted /apps/Atlas.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:rw FONTS:r APPS:r LIBS:r LOG\n"
     "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r\n"
     "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",
-                    "input", "clipboard", "fonts", "display", "media", "sampler",
+                    "input", "clipboard", "fonts", "display", "media", "codec", "sampler",
                     "desktop",
                     "remote-desktop")
 HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
@@ -207,6 +208,9 @@ AUDIO_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
 PCM_CERTIFY_SERVICES = DISPLAY_SERVICES + ("pcm-certify",)
 PCM_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "application /services/pcm-certify grants PCM LIBS:r\n")
+CODEC_CERTIFY_SERVICES = DISPLAY_SERVICES + ("codec-certify",)
+CODEC_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
+    "application /services/codec-certify grants CODEC LIBS:r\n")
 # The fixture that dies: installed, not started, for a gate to add as a user
 # service; or started as a critical one, whose death must halt the machine.
 FAULT_PROBE_SERVICES = DISPLAY_SERVICES + ("fault-probe",)
@@ -236,7 +240,10 @@ def _build_invocation(command):
 def _build_current_userspace():
     """Publish every image input from the current source tree."""
     directory = os.path.join(REPOSITORY, "sw/userspace")
-    command = ["make", "-j", str(os.cpu_count() or 1),
+    jobs = os.environ.get("ASTRA_DE25_BUILD_JOBS", str(os.cpu_count() or 1))
+    if not jobs.isdecimal() or int(jobs) < 1:
+        raise RuntimeError("ASTRA_DE25_BUILD_JOBS must be a positive integer")
+    command = ["make", "-j", jobs,
                "-C", directory, "all"]
     result = subprocess.run(_build_invocation(command), stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT)
@@ -691,9 +698,13 @@ def _install_tree(volume, source, destination):
                 "image tree file")
 
 
-def _replace_volume_file(image, source, target):
-    """Replace one file without rebuilding or republishing unrelated products."""
-    if not os.path.isfile(source) or not target.startswith("/"):
+def _replace_volume_files(image, replacements):
+    """Replace files in one checked image transaction."""
+    replacements = tuple(replacements)
+    if (not replacements or
+            any(not os.path.isfile(source) or not target.startswith("/")
+                for source, target in replacements) or
+            len({target for _, target in replacements}) != len(replacements)):
         raise RuntimeError("invalid image file replacement")
     offset, length = ext4_partition(image)
     with tempfile.TemporaryDirectory(prefix="astra-volume-") as temporary:
@@ -706,12 +717,18 @@ def _replace_volume_file(image, source, target):
             raise RuntimeError("e2fsck refused the volume: %s" %
                                fsck.stdout.decode(
                                    "utf-8", "replace").strip())
-        _debugfs(volume, "rm %s" % target, "the old image file",
-                 optional=True)
-        _debugfs(volume, "write %s %s" % (source, target),
-                 "the replacement image file")
+        for source, target in replacements:
+            _debugfs(volume, "rm %s" % target, "the old image file",
+                     optional=True)
+            _debugfs(volume, "write %s %s" % (source, target),
+                     "the replacement image file")
         _reset_journal(volume)
         _splice(image, offset, volume)
+
+
+def _replace_volume_file(image, source, target):
+    """Replace one file without rebuilding or republishing unrelated products."""
+    _replace_volume_files(image, ((source, target),))
 
 
 def install_service(image, name, services=DEFAULT_SERVICES):
@@ -1029,6 +1046,9 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3 and sys.argv[1] == "--pcm-certify":
         install(sys.argv[2], service_names=PCM_CERTIFY_SERVICES,
                 manifest_text=PCM_CERTIFY_STARTUP_MANIFEST)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--codec-certify":
+        install(sys.argv[2], service_names=CODEC_CERTIFY_SERVICES,
+                manifest_text=CODEC_CERTIFY_STARTUP_MANIFEST)
     elif len(sys.argv) == 3 and sys.argv[1] == "--fault-probe":
         install(sys.argv[2], service_names=FAULT_PROBE_SERVICES,
                 manifest_text=DISPLAY_STARTUP_MANIFEST)
@@ -1048,7 +1068,7 @@ if __name__ == "__main__":
     else:
         raise SystemExit(
             "usage: astra_image.py "
-            "[--display|--hostbench|--audio-certify|--pcm-certify|"
+            "[--display|--hostbench|--audio-certify|--pcm-certify|--codec-certify|"
             "--fault-probe|--fault-critical] IMAGE | "
             "--create IMAGE SIZE_MIB | --service NAME IMAGE | "
             "--test-app BUNDLE IMAGE")

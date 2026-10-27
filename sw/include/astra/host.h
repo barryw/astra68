@@ -72,6 +72,8 @@
 #define ASTRA_HOST_CAP_VOLUME_CATALOG (1u << 16)
 /** Host converts a bounded outline source into validated AFNT for Fonts. */
 #define ASTRA_HOST_CAP_FONT_CONVERT (1u << 17)
+/** Host decodes bounded encoded media streams through isolated providers. */
+#define ASTRA_HOST_CAP_CODEC (1u << 18)
 /** Channel configuration: the scope words name a scope. Kernel-written. */
 #define ASTRA_HOST_SCOPE_BOUND     (1u << 0)
 /** The scope refuses every mutation (ASTRA_STATUS_READ_ONLY). */
@@ -99,6 +101,24 @@
 #define ASTRA_HOST_SERVICE_VOLUMES UINT16_C(6)
 /** Private conversion transport for the resident Fonts service. */
 #define ASTRA_HOST_SERVICE_FONTS UINT16_C(7)
+/** Generic encoded-media stream transport. */
+#define ASTRA_HOST_SERVICE_CODEC UINT16_C(8)
+/** Bytes in every CODEC result event before optional decoded output. */
+#define ASTRA_HOST_CODEC_RESULT_BYTES 100u
+/** CODEC uses one worker per stream. OPEN supplies source length in offset and
+ * returns a stream handle in result_value; later operations supply that handle.
+ * SOURCE supplies requested source bytes at offset; READ asks for one bounded
+ * output chunk; SEEK supplies a timestamp in nanoseconds; CLOSE retires the
+ * worker. Every operation except CLOSE returns an
+ * ASTRA_HOST_CODEC_RESULT_BYTES big-endian worker event followed by any
+ * decoded output bytes in the command data span. */
+enum {
+    ASTRA_HOST_CODEC_OPEN = 1u,
+    ASTRA_HOST_CODEC_SOURCE,
+    ASTRA_HOST_CODEC_READ,
+    ASTRA_HOST_CODEC_SEEK,
+    ASTRA_HOST_CODEC_CLOSE
+};
 /** One source per channel. BEGIN carries source size in value_lo, name and
  * license byte lengths in offset_lo/offset_hi, and concatenated text in data.
  * DATA carries source bytes at offset_lo; CONVERT takes face index in value_lo

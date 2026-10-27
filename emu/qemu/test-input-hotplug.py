@@ -3,6 +3,8 @@
 
 import importlib.util
 import pathlib
+import stat
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -34,7 +36,7 @@ class BrokenStream:
 
 
 def source(path, inode):
-    return (path, 1, inode, 2)
+    return (path, 1, inode, 2, "/sys/dev/char/0:2")
 
 
 def main():
@@ -53,6 +55,55 @@ def main():
         "evdev": keyboard[0], "repeat": False,
     }
     assert attached == {"keyboard": keyboard, "pointer": pointer}
+
+    gamepad = ("/dev/input/by-id/usb-controller-event-joystick", 1, 13, 3,
+               "/devices/pad1")
+    second = ("/dev/input/by-id/usb-other-event-joystick", 1, 14, 4,
+              "/devices/pad2")
+    devices = {gamepad[0]: (13, 3), second[0]: (14, 4),
+               "/dev/input/by-path/port-event-joystick": (13, 3)}
+    sysfs_paths = {"/sys/dev/char/0:3": "/devices/pad1",
+                   "/sys/dev/char/0:4": "/devices/pad2"}
+    def device_stat(path):
+        inode, rdev = devices[path]
+        return SimpleNamespace(st_mode=stat.S_IFCHR, st_dev=1,
+                               st_ino=inode, st_rdev=rdev)
+    with mock.patch.object(HOTPLUG.glob, "glob", side_effect=lambda pattern: [
+        path for path in devices if pathlib.PurePath(path).match(
+            pathlib.PurePath(pattern).name) and
+        pathlib.PurePath(path).parent == pathlib.PurePath(pattern).parent]), \
+         mock.patch.object(HOTPLUG.os, "stat", side_effect=device_stat), \
+         mock.patch.object(HOTPLUG.os.path, "realpath",
+                           side_effect=lambda path: sysfs_paths.get(path, path)):
+        found = HOTPLUG.discover("/dev/input/by-id")
+        assert found["gamepad0"] == gamepad
+        assert found["gamepad1"] == second
+        sysfs_paths["/sys/dev/char/0:3"] = "/devices/pad1-replugged"
+        found = HOTPLUG.discover("/dev/input/by-id", {"gamepad0": gamepad,
+                                                      "gamepad1": second})
+        assert found["gamepad0"] != gamepad
+        assert found["gamepad0"][:4] == gamepad[:4]
+        sysfs_paths["/sys/dev/char/0:3"] = "/devices/pad1"
+        del devices[gamepad[0]]
+        del devices["/dev/input/by-path/port-event-joystick"]
+        found = HOTPLUG.discover("/dev/input/by-id", {"gamepad0": gamepad,
+                                                      "gamepad1": second})
+        assert found == {"gamepad1": second}
+
+    qmp.calls.clear()
+    HOTPLUG.reconcile(qmp, attached,
+                      {"keyboard": keyboard, "pointer": pointer,
+                       "gamepad0": gamepad}, report)
+    assert qmp.calls == [("object-add", {
+        "qom-type": "astra-evdev-gamepad", "id": "astra-gamepad0",
+        "evdev": gamepad[0], "slot": 0,
+    })]
+    assert attached["gamepad0"] == gamepad
+
+    qmp.calls.clear()
+    HOTPLUG.reconcile(qmp, attached,
+                      {"keyboard": keyboard, "pointer": pointer}, report)
+    assert qmp.calls == [("object-del", {"id": "astra-gamepad0"})]
 
     qmp.calls.clear()
     HOTPLUG.reconcile(qmp, attached,

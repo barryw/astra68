@@ -8,6 +8,7 @@
  * service never reads authority or policy from those areas. */
 #define ASTRA_VOLUME_PROTOCOL UINT32_C(0x564f4c53)
 #define ASTRA_VOLUME_PROTOCOL_VERSION 4u
+#define ASTRA_CAPABILITY_VOLUME_DELEGATE "VOLUME_DELEGATE"
 enum {
     ASTRA_VOLUME_QUERY = 1u,
     ASTRA_VOLUME_SUBSCRIBE,

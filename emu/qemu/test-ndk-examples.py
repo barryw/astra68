@@ -70,8 +70,15 @@ EXPECTED = {
     "interface_splitter": "interface_splitter: Tab, Right moved the divider",
     "interface_disclosure":
         "interface_disclosure: Tab, Enter collapsed Advanced",
+    "settings_pane": "settings_pane: shared Labels, Containers and controls",
     "pcm_tone": "pcm_tone: 50 buffers of 480 frames, 440 Hz, played in place",
     "midi_notes": "midi_notes: C E G C on the host's wavetable",
+}
+CMAKE_EXPECTED = {
+    "native": "Astra CMake Native",
+    "posix": "Astra NDK",
+    "cxx": "Astra CMake C++23",
+    "sdl": "Astra CMake SDL2",
 }
 # The audio examples must also have been heard by the stand-in host
 # (test-sdl-audio.py's AudioHost): pcm_tone through its own audio stream,
@@ -102,8 +109,13 @@ def main():
     parser.add_argument("examples",
                         help="directory of example ELFs built from the "
                              "NDK archive (ndk/build/dist/examples)")
+    parser.add_argument("--cmake-smoke",
+                        help="directory of CMake smoke executables built "
+                             "from the extracted NDK")
     parser.add_argument("--image", required=True)
     parser.add_argument("--catalog", default=astra_image.DEFAULT_CATALOG)
+    parser.add_argument("--prepared-image", action="store_true",
+                        help="copy an already published image without reinstalling it")
     parser.add_argument("--boot-deadline", type=float, default=90.0)
     parser.add_argument("--command-deadline", type=float, default=60.0)
     args = parser.parse_args()
@@ -116,17 +128,33 @@ def main():
         print("FAIL: examples built %s; no ELF for %s; no expectation for %s"
               % (built, missing, unexpected))
         return 1
+    if args.cmake_smoke:
+        missing_cmake = sorted(name for name in CMAKE_EXPECTED
+                               if not os.path.isfile(os.path.join(
+                                   args.cmake_smoke, name)))
+        if missing_cmake:
+            print("FAIL: missing CMake smoke executables %s" % missing_cmake)
+            return 1
     if not terminal.refresh_workspace_rom(args.rom):
         return 1
     failures = []
     with tempfile.TemporaryDirectory(prefix="astra-ndk-examples-") as temporary:
         scratch = os.path.join(temporary, "card.img")
         shutil.copyfile(args.image, scratch)
-        astra_image.install(scratch, args.catalog, vim_runtime=None)
-        for name in built:
-            astra_image._replace_volume_file(
-                scratch, os.path.join(args.examples, name + ".elf"),
-                "/%s/ndk-%s" % (astra_image.LOCAL_COMMANDS_DIRECTORY, name))
+        if not args.prepared_image:
+            astra_image.install(scratch, args.catalog, vim_runtime=None)
+        replacements = [
+            (os.path.join(args.examples, name + ".elf"),
+             "/%s/ndk-%s" % (astra_image.LOCAL_COMMANDS_DIRECTORY, name))
+            for name in built
+        ]
+        if args.cmake_smoke:
+            replacements.extend(
+                (os.path.join(args.cmake_smoke, name),
+                 "/%s/ndk-cmake-%s" %
+                 (astra_image.LOCAL_COMMANDS_DIRECTORY, name))
+                for name in CMAKE_EXPECTED)
+        astra_image._replace_volume_files(scratch, replacements)
         run_dir = os.path.join(temporary, "run")
         os.mkdir(run_dir)
         host = audio_gate.AudioHost(os.path.join(temporary, "audio.sock"))
@@ -153,6 +181,18 @@ def main():
                 print("FAIL %s (exit %s)" % (name, status))
                 for line in said[-20:]:
                     print("    |%s|" % line)
+            if args.cmake_smoke:
+                for name, expected in CMAKE_EXPECTED.items():
+                    said, status = run_example(machine, "cmake-" + name,
+                                               args.command_deadline)
+                    if status == 0 and (expected is None or
+                                        any(expected in line for line in said)):
+                        print("PASS cmake-%s" % name)
+                    else:
+                        failures.append("cmake-" + name)
+                        print("FAIL cmake-%s (exit %s)" % (name, status))
+                        for line in said[-20:]:
+                            print("    |%s|" % line)
         finally:
             machine.close()
             host.close()

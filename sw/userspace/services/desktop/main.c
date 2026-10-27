@@ -1217,19 +1217,13 @@ int astra_main(const AstraStartupInfo *startup)
         if (result != ASTRA_OK)
             status = DESKTOP_FAIL_GRAPHICS + (uint32_t)(-result);
     }
+    if (status == ASTRA_STATUS_OK && pcm != NULL)
+        play_startup_sound(pcm->handle);
     (void)astra_service_ready(bootstrap->handle, status, NULL, 0u);
     (void)astra_close(bootstrap->handle);
     if (status != ASTRA_STATUS_OK) return (int)status;
     ASTRA_EVENT0(ASTRA_EVENT_SUBSYSTEM_DISPLAY, ASTRA_EVENT_LEVEL_INFO,
                  "desktop ready");
-    if (pcm != NULL) {
-        AstraThreadStart sound_start = {play_startup_sound, pcm->handle};
-
-        if (astra_rt_thread_start_detached(
-                &sound_start, ASTRA_PROCESS_PRIORITY_NORMAL - 4u) !=
-            ASTRA_SYSCALL_OK)
-            (void)astra_log("startup sound thread could not start");
-    }
     for (;;) {
         AstraWindowEvent event = {0};
         uint32_t waits[3] = {astra_window_event_wait_handle(&window), volume_watch.receive, 0u};

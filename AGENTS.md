@@ -30,6 +30,12 @@
   session through completion. A wrapper returning without visible output is not
   proof that its remote child completed or failed; confirm both the session exit
   status and the expected artifact/log before starting a replacement run.
+- After a DE25 private trial, archive evidence on `beast`, verify the copy,
+  then remove unselected release copies and disposable trial state from the
+  board. Check board free space and production services before leaving it.
+  Never open or hash the live production image: the storage provider owns an
+  exclusive lease, and an observer read can cause `ENODEV` and a restart.
+  Compare its checksum only while `astra.service` is stopped.
 - Filesystem gates mount the provider image as root, then drop privilege
   and run QEMU as the caller -- QEMU never runs as root, on beast or on
   the board: `tools/astra-qemu-root` (installed as
@@ -108,6 +114,15 @@
   never an alternate API directly visible to applications. Two API spellings
   are acceptable where compatibility requires them; two implementations are
   not.
+
+## Application Build Standard
+
+- Build new C/C++ application ports with CMake and Ninja using the installed
+  NDK's `cmake/m68k-astra-toolchain.cmake` and Kit `find_package` targets.
+  Use `Astra::Native` for native programs and `astra_posix_program` for POSIX
+  programs; the NDK owns startup, exact library ABI, and dynamic link policy.
+- Keep existing Make workflows for the OS substrate and current ports. NDK
+  CMake changes must pass `make -C ndk dist-check` and a DE25 runtime gate.
 
 ## FPGA Timing Closure
 

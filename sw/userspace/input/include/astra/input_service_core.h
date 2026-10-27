@@ -61,10 +61,21 @@ typedef struct AstraInputServiceStats {
     uint32_t coalesced_motion;
 } AstraInputServiceStats;
 
+typedef struct AstraInputGamepadState {
+    uint32_t identity;
+    uint32_t configuration;
+    uint32_t vendor_product;
+    uint32_t down_buttons;
+    int16_t axes[8];
+    uint8_t hat;
+    uint8_t present;
+} AstraInputGamepadState;
+
 typedef struct AstraInputService {
     AstraInputServiceConfig config;
     AstraInputClient clients[ASTRA_INPUT_CLIENT_MAX];
     AstraInputServiceStats stats;
+    AstraInputGamepadState gamepads[ASTRA_INPUT_GAMEPAD_LIMIT];
     uint32_t held[ASTRA_INPUT_HELD_WORDS];
     uint32_t modifiers;
     uint32_t physical_generation;

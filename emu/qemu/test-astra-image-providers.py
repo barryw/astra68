@@ -62,7 +62,7 @@ assert astra_image.PCM_CERTIFY_STARTUP_MANIFEST == \
 assert "media" in astra_image.DISPLAY_SERVICES
 assert "service /services/media grants HOST_DEVICE serves PCM priority=16\n" in \
     astra_image.DISPLAY_STARTUP_MANIFEST
-assert "NETWORK NETWORK_LISTEN NTP PCM required priority=20\n" in \
+assert "NETWORK NETWORK_LISTEN NTP PCM CODEC required priority=20\n" in \
     astra_image.DISPLAY_STARTUP_MANIFEST
 assert "APPS:r LIBS:r SYSTEM:r" in astra_image.DISPLAY_STARTUP_MANIFEST
 assert "service /services/media grants HOST_DEVICE serves PCM required" not in \
@@ -161,7 +161,7 @@ with open(os.path.join(astra_image.REPOSITORY,
     runtime_manifest = manifest.read()
     assert "version 2.1.0\n" in runtime_manifest
     assert "provides runtime.library 1 1.17.0\n" in runtime_manifest
-    assert "provides system.library 4 4.2.0\n" in runtime_manifest
+    assert "provides system.library 4 4.3.0\n" in runtime_manifest
     assert "version 1.6.0\n" not in runtime_manifest
     assert "provides runtime.library 1 1.6.0\n" not in runtime_manifest
 with open(os.path.join(astra_image.REPOSITORY,
@@ -268,7 +268,7 @@ assert startup[1] == \
     "service /services/posixd grants serves POSIX_PROCESS required priority=20"
 assert startup[0] == \
     "service /services/hostfs grants HOST_FILESYSTEM " \
-    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE critical priority=20"
+    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE VOLUME_DELEGATE critical priority=20"
 assert startup[2] == \
     "service /services/entropy grants HOST_DEVICE serves ENTROPY required priority=20"
 
@@ -308,6 +308,17 @@ astra_image.os.cpu_count = lambda: 32
 astra_image._build_current_userspace()
 userspace = os.path.join(astra_image.REPOSITORY, "sw/userspace")
 assert commands == [["make", "-j", "32", "-C", userspace, "all"]]
+commands.clear()
+os.environ["ASTRA_DE25_BUILD_JOBS"] = "4"
+astra_image._build_current_userspace()
+assert commands == [["make", "-j", "4", "-C", userspace, "all"]]
+os.environ["ASTRA_DE25_BUILD_JOBS"] = "0"
+try:
+    astra_image._build_current_userspace()
+    raise AssertionError("zero image build jobs accepted")
+except RuntimeError as error:
+    assert "positive integer" in str(error)
+os.environ.pop("ASTRA_DE25_BUILD_JOBS")
 astra_image.os.cpu_count = original_cpu_count
 
 astra_image.subprocess.run = lambda *_args, **_kwargs: Result(b"failed", 2)
@@ -572,6 +583,41 @@ with tempfile.TemporaryDirectory() as directory:
         assert "invalid test command name" in str(error)
 astra_image.subprocess.run = original_run
 astra_image._replace_volume_file = original_replace_volume_file
+
+with tempfile.TemporaryDirectory() as directory:
+    sources = [os.path.join(directory, name) for name in ("first", "second")]
+    for source in sources:
+        with open(source, "wb") as output:
+            output.write(b"test")
+    saved = (astra_image.ext4_partition, astra_image._slice,
+             astra_image.subprocess.run, astra_image._debugfs,
+             astra_image._reset_journal, astra_image._splice)
+    calls = []
+    try:
+        astra_image.ext4_partition = lambda image: (1, 2)
+        astra_image._slice = lambda image, offset, length, volume: \
+            calls.append("slice")
+        astra_image.subprocess.run = lambda command, **_kwargs: Result()
+        astra_image._debugfs = lambda volume, request, description, \
+            optional=False: calls.append((request, optional))
+        astra_image._reset_journal = lambda volume: calls.append("journal")
+        astra_image._splice = lambda image, offset, volume: \
+            calls.append("splice")
+        astra_image._replace_volume_files("image", zip(sources, ("/a", "/b")))
+        assert calls == ["slice", ("rm /a", True),
+                         ("write %s /a" % sources[0], False),
+                         ("rm /b", True),
+                         ("write %s /b" % sources[1], False),
+                         "journal", "splice"]
+        try:
+            astra_image._replace_volume_files("image", zip(sources, ("/a", "/a")))
+            raise AssertionError("duplicate image destination accepted")
+        except RuntimeError as error:
+            assert "invalid image file replacement" in str(error)
+    finally:
+        (astra_image.ext4_partition, astra_image._slice,
+         astra_image.subprocess.run, astra_image._debugfs,
+         astra_image._reset_journal, astra_image._splice) = saved
 
 with tempfile.TemporaryDirectory() as directory:
     for name in ("status", "stale-orphan"):

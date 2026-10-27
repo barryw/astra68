@@ -27,13 +27,15 @@
  *  @{
  */
 
-/** Input device ABI version 1.1 (major.minor packed 16.16); the Vesta input device currently advertises 1.0 only. */
-#define ASTRA_INPUT_VERSION_1_1 UINT32_C(0x00010001)
+/** Input device ABI version 1.2 (major.minor packed 16.16). */
+#define ASTRA_INPUT_VERSION_1_2 UINT32_C(0x00010002)
 
 /** Device capability bit: a keyboard is attached. */
 #define ASTRA_INPUT_CAP_KEYBOARD (UINT32_C(1) << 0)
 /** Device capability bit: a pointer is attached. */
 #define ASTRA_INPUT_CAP_POINTER  (UINT32_C(1) << 1)
+/** Device capability bit: host gamepads can be hotplugged. */
+#define ASTRA_INPUT_CAP_GAMEPAD  (UINT32_C(1) << 2)
 
 /** Device class id ("INPT") identifying the input device to `ASTRA_SYSCALL_INPUT_READ_TRY` and the device registry. */
 #define ASTRA_DEVICE_CLASS_INPUT UINT32_C(0x494e5054) /* INPT */
@@ -63,6 +65,28 @@
 #define ASTRA_INPUT_CLASS_KEYBOARD UINT32_C(1)
 /** `AstraInputEvent::header` event class: a pointer event. */
 #define ASTRA_INPUT_CLASS_POINTER  UINT32_C(2)
+/** `AstraInputEvent::header` event class: a gamepad event. */
+#define ASTRA_INPUT_CLASS_GAMEPAD  UINT32_C(3)
+
+/** Gamepad appeared/disappeared; value packs vendor:product IDs. */
+#define ASTRA_INPUT_GAMEPAD_DEVICE UINT32_C(1)
+/** Gamepad axis in evdev capability order; flags bits 15:8 select axis. */
+#define ASTRA_INPUT_GAMEPAD_AXIS   UINT32_C(2)
+/** Gamepad button in evdev capability order; DOWN selects press/release. */
+#define ASTRA_INPUT_GAMEPAD_BUTTON UINT32_C(3)
+/** Gamepad hat; value is standard 4-bit up/right/down/left mask. */
+#define ASTRA_INPUT_GAMEPAD_HAT    UINT32_C(4)
+/** Device bus and version, packed 16:16; precedes DEVICE attach. */
+#define ASTRA_INPUT_GAMEPAD_ID     UINT32_C(5)
+/** Axis, button, hat counts packed in low three bytes; precedes attach. */
+#define ASTRA_INPUT_GAMEPAD_CONFIG UINT32_C(6)
+
+/** Extract capability-order axis index from gamepad event flags. */
+#define ASTRA_INPUT_GAMEPAD_AXIS_INDEX(flags) (((flags) >> 8) & UINT32_C(0xff))
+/** Four stable gamepad slots in the input device's event stream. */
+#define ASTRA_INPUT_GAMEPAD_LIMIT UINT32_C(4)
+/** First event-stream device identifier reserved for gamepad slots. */
+#define ASTRA_INPUT_GAMEPAD_DEVICE_BASE UINT32_C(0x100)
 
 /** ::ASTRA_INPUT_CLASS_KEYBOARD kind: a physical key, identified by USB HID usage id in `AstraInputEvent::value`. */
 #define ASTRA_INPUT_KEY_PHYSICAL UINT32_C(1)

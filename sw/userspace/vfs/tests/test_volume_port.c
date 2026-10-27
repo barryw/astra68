@@ -29,6 +29,7 @@ static uint32_t format_calls, partition_calls, format_outcome;
 static AstraVolumeReference admitted;
 static AstraVolumeBrokerInfo broker_info;
 static const AstraVolumeReference *expected_source;
+static int expected_delegates;
 
 void *astra_runtime_callocate(size_t count, size_t size)
 { return allocation_failure ? NULL : calloc(count, size); }
@@ -149,9 +150,11 @@ static uint64_t watch(uint32_t second)
     assert(reply.subscription != 0u); return reply.subscription;
 }
 static uint32_t root_grant(void *context, uint32_t owner, const AstraVolumeReference *reference,
-    uint32_t rights, const AstraVolumeReference *source, uint32_t *root)
+    uint32_t rights, const AstraVolumeReference *source, int delegates,
+    uint32_t *root)
 {
     assert(source == expected_source);
+    assert(delegates == expected_delegates);
     assert(context == &epoch && owner == sender && rights == ASTRA_RIGHT_READ);
     ++root_calls;
     if (reference->epoch != epoch || reference->id != 5u || reference->generation != 1u)
@@ -331,7 +334,7 @@ int main(void)
     port.usage = usage;
     usage_request(); pump(ASTRA_STATUS_ACCESS);
     usage_request();
-    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, NULL, 1u) == 1u && reply.status == ASTRA_STATUS_ACCESS);
+    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE, NULL, 0, 1u) == 1u && reply.status == ASTRA_STATUS_ACCESS);
     usage_request();
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u && reply.status == ASTRA_STATUS_ACCESS);
     area_bytes = sizeof(output_storage.usage);
@@ -388,29 +391,36 @@ int main(void)
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u && reply.status == ASTRA_STATUS_ACCESS);
     root_request(ASTRA_RIGHT_READ); pump(ASTRA_STATUS_ACCESS); assert(root_calls == 0u);
     root_request(ASTRA_RIGHT_READ);
-    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, NULL, 1u) == 1u);
+    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, NULL, 0, 1u) == 1u);
     assert(reply.status == ASTRA_STATUS_OK && root_sent == 31u && root_calls == 1u);
     root_request(ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE);
-    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, NULL, 1u) == 1u);
+    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, NULL, 0, 1u) == 1u);
     assert(reply.status == ASTRA_STATUS_ACCESS && root_calls == 1u);
+    expected_delegates = 1;
+    root_request(ASTRA_RIGHT_READ);
+    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, NULL, 1, 1u) == 1u);
+    assert(reply.status == ASTRA_STATUS_OK && root_calls == 2u);
+    expected_delegates = 0;
     root_request(ASTRA_RIGHT_READ); incoming_request.root.reference.generation = 2u;
-    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, NULL, 1u) == 1u);
+    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, NULL, 0, 1u) == 1u);
     assert(reply.status == ASTRA_STATUS_LOST);
     root_request(ASTRA_RIGHT_READ); root_send_failure = 1u;
-    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, NULL, 1u) == 1u && closed[31] == 1u);
+    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, NULL, 0, 1u) == 1u && closed[31] == 1u);
     root_send_failure = 0u;
     const AstraVolumeReference ram_source = {epoch, 4u, 2u};
     expected_source = &ram_source;
+    expected_delegates = 1;
     root_request(ASTRA_RIGHT_READ);
-    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, &ram_source, 1u) == 1u);
+    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, &ram_source, 1, 1u) == 1u);
     assert(reply.status == ASTRA_STATUS_OK && root_sent == 31u);
     expected_source = NULL;
+    expected_delegates = 0;
     enqueue(ASTRA_VOLUME_BROKER_INFO, 0u);
     incoming_size = sizeof(AstraMessageHeader); request.header.total_size = incoming_size;
-    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, &ram_source, 1u) == 1u);
+    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, &ram_source, 1, 1u) == 1u);
     assert(reply.status == ASTRA_STATUS_OK && broker_info.source.id == 4u && broker_info.source.generation == 2u);
     pending = 1;
-    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, NULL, 1u) == 1u);
+    assert(astra_volume_port_root_pump(&port, 5u, ASTRA_RIGHT_READ, NULL, 0, 1u) == 1u);
     assert(reply.status == ASTRA_STATUS_OK && broker_info.source.id == 0u && broker_info.rights == ASTRA_RIGHT_READ);
     pending = 1; pump(ASTRA_STATUS_ACCESS);
     enqueue(ASTRA_VOLUME_QUERY, 3u);
