@@ -1,7 +1,7 @@
 # Generic file codec architecture
 
-Status: native Codec Kit candidate tested on DE25, 2026-10-27. ABI 1 is a
-candidate, not yet frozen for third-party providers.
+Status: native Codec Kit deployed on DE25, 2026-10-27. ABI 1 is not yet frozen
+for third-party providers.
 
 The current `codec.library.1` and `CODEC` service use the existing bounded
 HOST0 channel and an isolated AArch64 worker. WAV PCM, Ogg Vorbis, and
@@ -29,7 +29,9 @@ passed QEMU SDL_mixer and native WAV/video gates. Guarded DE25 trials passed
 native certifier and 180 seconds of Quake: zero guest music underflows at track
 close, zero HDMI underruns/gaps over 20 seconds, and zero host source gaps in
 two measured gameplay windows. User heard continuous music and effects.
-Production selection remains on prior release. A preceding
+The same software tree was rebuilt from merged `main` and promoted as
+production release `b46aaf2de9af55540162e42ac694cd04e96b48527f4d471201046c509bf98270`.
+A preceding
 separate-PCM-voice design was rejected after 1,708 source gaps over its trial.
 
 Current provider selection is a compiled-in table inside the isolated worker.

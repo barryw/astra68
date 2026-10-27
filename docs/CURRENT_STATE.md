@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-27
 
+Production promotion, 2026-10-27: PR #4 merged the certified Codec Kit,
+SDL_mixer Ogg preroll, and Chocolate Quake support into `main` at
+`d7cdc9164085a1a3aaa857e8dae0adf4ab628b18`. Beast rebuilt the full DE25
+software release from that merged tree; content identity
+`b46aaf2de9af55540162e42ac694cd04e96b48527f4d471201046c509bf98270`
+is now selected on DE25. Guarded deployment verified the running kernel
+package, migrated release-owned system files into the persistent volume while
+retaining user-owned paths, and passed QEMU, HOST0, audio host, remote desktop,
+and kernel confirmation gates. All three Astra services remained active after
+deployment; a 15-second production `astra-top` sample reported zero audio
+underruns or software gaps. Previous release
+`8b9c771f5bb9ee071306270565f40c007b5909bbd1fd9b19bf58b230f745d04e`
+remains selected as `previous`; board root has 8.4 GiB free. Beast evidence:
+`/var/tmp/astra-main-production-build.log` and
+`/var/tmp/astra-main-production-deploy.log`. Asset-backed Quake trial used the
+same software tree before promotion; commercial assets were not copied into
+production storage.
+
 Codec audio follow-up, 2026-10-27: SDL_mixer now requests HPS Ogg decode from
 a separate thread and feeds its existing audio stream, so its callback never
 waits for Codec Kit. A separate PCM voice trial was rejected: 349 software gaps in one
@@ -24,11 +42,11 @@ gameplay windows had zero host gaps, 16.39 and 19.25 presents/s, 81.4% and
 80.6% Quake guest CPU, and 18.6 MiB resident memory. User heard continuous
 music and effects through HDMI speakers. An earlier candidate had one host
 gap in a startup window, so that transition is not yet established gap-free.
-Both exact-release trials restored selected production release
+Both exact-release trials restored then-selected production release
 `8b9c771f5bb9ee071306270565f40c007b5909bbd1fd9b19bf58b230f745d04e`
 and all three services; production storage was untouched. Evidence: Beast
-`/var/tmp/astra-codec-voice-evidence-20261027/`. Updated release is certified
-as a staged candidate; production selection has not changed.
+`/var/tmp/astra-codec-voice-evidence-20261027/`. The candidate was later
+rebuilt from merged `main` and promoted as recorded above.
 
 Codec Kit checkpoint, 2026-10-26: native `codec.library.1` and `CODEC`
 service route bounded source reads through existing HOST0 transport to a
@@ -50,11 +68,12 @@ were for the 44.1 kHz stream. This still fails smooth-music qualification.
 The final native certifier logged `ASTRA CODEC LIBRARY PASS` for WAV bytes,
 video frame bytes/stride/timestamp, seek, and close. Its one-shot exit races
 the supervisor startup handshake, which also logs `launch-failed status=16`;
-the certifier process exits successfully. No trial panic was logged. Candidate
-release was staged privately; selected production release remains
+the certifier process exits successfully. No trial panic was logged. At this
+earlier checkpoint, candidate release was staged privately; selected production
+release was
 `8b9c771f5bb9ee071306270565f40c007b5909bbd1fd9b19bf58b230f745d04e`
-and production services recovered. User acoustic confirmation, sustained
-smoothness, and production deployment remain open.
+and production services recovered. The 2026-10-27 qualification and promotion
+above supersede these open gates.
 Final board trial files were removed after evidence capture; `/var/tmp` has
 8.3 GiB free. The worker now enforces declared source length for every
 provider, and host sessions can reopen after close. Their regression tests
