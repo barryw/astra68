@@ -16,8 +16,8 @@ A file's content type and its preferred application are separate facts.
 Content types use stable MIME-style identifiers. `application/x-zmachine-story`
 identifies Z-machine versions 1–8; story version comes from the header, not
 from the identifier or filename. `application/x-glulx-story` identifies bare
-Glulx content. Blorb has a distinct container type; its `Exec` resource
-selects Z-code or Glulx. A file-specific
+Glulx content. Blorb has a distinct container type. AstraZ will inspect its
+`Exec` resource to select Z-code or Glulx. A file-specific
 preferred application does not change the content type or global default.
 
 Filesystem Kit provides one content-type query for every mounted backend.

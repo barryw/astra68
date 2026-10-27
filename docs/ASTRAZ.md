@@ -1,6 +1,6 @@
 # AstraZ interpreter
 
-Status, 2026-10-27: story inspection API and pinned Frotz core build exist.
+Status, 2026-10-27: pinned Frotz core builds as one AstraZ-private archive.
 Frotz's test-only CLI played a Z3 story on DE25, reached the first prompt,
 and advanced a move after typed input.
 AstraZ GUI and playable native engine adapter do not exist yet. Do not list
@@ -8,11 +8,10 @@ AstraZ as installed or claim games are playable from its icon.
 
 ## Engine boundary
 
-Filesystem Kit owns content identification. `astra_story_inspect()` opens one
-file, identifies bare Z-machine versions 1–8 and Glulx by header, and finds
-the `Exec` payload in a Blorb resource index. It returns VM, version, container,
-and bounded payload offset/length. Filename does not choose engine. File Types
-uses same inspection, so Atlas and AstraZ cannot disagree on known content.
+Filesystem Kit owns shared file type identification for Atlas and Open With.
+It recognizes bare Z-machine and Glulx headers and Blorb container headers.
+It does not select an interpreter or parse Blorb executable resources. AstraZ
+owns those choices. No Z-machine engine API belongs in the NDK.
 
 AstraZ will use one app-private interpreter library with a small session API:
 open, run until input or output event, submit input, save, restore, and close.
@@ -23,7 +22,8 @@ will feed shared Interface Kit text, field, scroll, and menu controls; graphics
 and sound resources go through existing Graphics and Codec/Audio Kits.
 
 Frotz source is pinned in `third_party/frotz/ASTRA_IMPORT.md`. Its common core
-and Blorb library compile as MC68040 static archives with NDK CMake/Ninja.
+and Blorb support compile into one `astraz_engine` MC68040 static archive with
+NDK CMake/Ninja. Frotz headers stay private to that target and test frontend.
 CLI frontend builds only as internal smoke target; its Z3 execution is an
 engine gate, not the AstraZ user interface. Frotz is GPL-2.0-or-later;
 AstraZ distribution must comply with its terms. Glulxe upstream is MIT and
@@ -35,7 +35,8 @@ Frotz alone cannot execute Glulx.
 AstraZ bundle will declare `application/x-zmachine-story` for `.z1` through
 `.z8`, `application/x-glulx-story .ulx`, and `application/x-blorb` for `.blorb`,
 `.zblorb`, and `.gblorb`. Content always wins over extension hints. Blorb
-`Exec` chunk type selects Z-code (`ZCOD`) or Glulx (`GLUL`); resource-only or
+Inside AstraZ, Blorb `Exec` chunk type selects Z-code (`ZCOD`) or Glulx
+(`GLUL`); resource-only or
 other VM Blorbs receive clear unsupported-story errors. Current bundle
 registration and Open With use `handles` directives in `docs/BUNDLE_FORMAT.md`.
 

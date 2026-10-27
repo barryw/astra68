@@ -2,21 +2,25 @@
 
 Status: active continuation map, 2026-10-27
 
-AstraZ first checkpoint, 2026-10-27: native Filesystem Kit 15.5 adds bounded
-`astra_story_inspect()` for bare Z-machine versions 1–8, bare Glulx, and
-Blorb executable payload selection. File Types uses same inspector, so
-content identification and interpreter dispatch share one answer. Frotz
-2.56pre source is pinned under `third_party/frotz`; common and Blorb cores
-build as MC68040 static archives through NDK CMake/Ninja. Test-only upstream
+AstraZ first checkpoint, 2026-10-27: Filesystem Kit 15.5 identifies bare
+Z-machine, Glulx, and Blorb content for shared file associations. Interpreter
+dispatch and Blorb executable parsing belong to AstraZ, with no story engine
+NDK API. Frotz 2.56pre source is pinned under `third_party/frotz`; common and
+Blorb code build as one AstraZ-private MC68040 static archive through NDK
+CMake/Ninja. Test-only upstream
 CLI on DE25 ran Mini Zork Z3, displayed West of House, and executed `open
 mailbox` with expected leaflet output. Trial evidence is at Beast
-`/var/tmp/astra-astraz-evidence-20261027/de25-z3-first-move.png`; board
+`/var/tmp/astra-astraz-evidence-20261027/de25-z3-first-move.png` and
+`de25-z3-private-engine.png`; board
 scratch files and the test-only guest CLI were removed with the checksum-guarded
 development installer. Final Filesystem Kit 15.5 was installed through
 the development installer after Beast file-type, library-contract, and NDK
 `dist-check` passed. Astra, audio host, and remote desktop services remain
 active with 8.3 GiB free. No native AstraZ GUI, session adapter, or Glulx
 backend is installed yet. See `docs/ASTRAZ.md` for remaining gates.
+The corrected app-private archive and private File Types boundary passed a
+second DE25 Z3 input trial. NDK distribution contains no story header and
+Filesystem Kit exports no story inspector. Trial CLI was removed again.
 
 File types, 2026-10-27: Haiku-style native slice is installed on DE25.
 Filesystem Kit 15.4 identifies bounded Z-machine and Blorb content, uses an
