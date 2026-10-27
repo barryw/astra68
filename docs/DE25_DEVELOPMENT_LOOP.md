@@ -45,6 +45,11 @@ Guest targets must be release-owned paths under `/commands`, `/services`,
 `/libs`, `/apps`, or `/fonts/system`, or the three named system files. User
 settings and files are never installer targets.
 
+Remove a trial guest artifact with `--remove-guest SOURCE=/GUEST/PATH`. The
+source must still exist under the mirrored build tree and match the installed
+file byte for byte. Removal uses the same stopped-provider lease and refuses
+missing, changed, or symlink targets. It never removes user-owned paths.
+
 Guest updates stop Astra, wait for the storage provider's lease to retire,
 mount the **persistent** system image, replace only named files, unmount, and
 restart. No image copy, migration, release packaging, automatic rollback, or

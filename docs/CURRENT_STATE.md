@@ -11,7 +11,8 @@ build as MC68040 static archives through NDK CMake/Ninja. Test-only upstream
 CLI on DE25 ran Mini Zork Z3, displayed West of House, and executed `open
 mailbox` with expected leaflet output. Trial evidence is at Beast
 `/var/tmp/astra-astraz-evidence-20261027/de25-z3-first-move.png`; board
-scratch files were removed. Final Filesystem Kit 15.5 was installed through
+scratch files and the test-only guest CLI were removed with the checksum-guarded
+development installer. Final Filesystem Kit 15.5 was installed through
 the development installer after Beast file-type, library-contract, and NDK
 `dist-check` passed. Astra, audio host, and remote desktop services remain
 active with 8.3 GiB free. No native AstraZ GUI, session adapter, or Glulx
@@ -44,6 +45,8 @@ a new QEMU process plus HOST0 boot. Desktop guest and Codec worker host probes
 completed in about 31 and 39 seconds respectively, with all three services
 active. See `docs/DE25_DEVELOPMENT_LOOP.md`. Complete images are checkpoints
 after fixes pass hardware trials.
+Checksum-guarded removal of one test-only `/commands` artifact passed on DE25
+without touching user paths; the new boot and all three services passed.
 
 Board release checkpoint, 2026-10-27: PR #4 merged the certified Codec Kit,
 SDL_mixer Ogg preroll, and Chocolate Quake support into `main` at

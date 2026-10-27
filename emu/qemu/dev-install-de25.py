@@ -88,20 +88,24 @@ def regular(path):
     return info
 
 
-def validate(stage, guest, host):
+def validate(stage, guest, host, remove_guest):
     if stage.parent != Path("/var/tmp") or not stage.name.startswith("astra-dev."):
         raise ValueError("stage must be /var/tmp/astra-dev.*")
     info = stage.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
         raise ValueError("stage must be a private root-owned directory")
     if not isinstance(guest, list) or not isinstance(host, list) or \
-            not guest + host or len(guest) + len(host) > 64:
+            not isinstance(remove_guest, list) or \
+            not guest + host + remove_guest or \
+            len(guest) + len(host) + len(remove_guest) > 64:
         raise ValueError("expected 1-64 file mappings")
     seen = set()
     validated_guest = []
     validated_host = []
+    validated_remove = []
     for kind, mapping in [("guest", item) for item in guest] + \
-                         [("host", item) for item in host]:
+                         [("host", item) for item in host] + \
+                         [("remove_guest", item) for item in remove_guest]:
         if not isinstance(mapping, dict) or set(mapping) != {"source", "target"}:
             raise ValueError("invalid mapping")
         source_parts = parts(mapping["source"])
@@ -112,11 +116,13 @@ def validate(stage, guest, host):
         if source_info.st_uid != 0 or source_info.st_size == 0 or source_info.st_size > 128 << 20:
             raise ValueError("invalid staged artifact: " + str(source))
         destination = mapping["target"]
-        guest_target(destination) if kind == "guest" else host_target(destination)
-        if (kind, destination) in seen:
+        guest_target(destination) if kind != "host" else host_target(destination)
+        key = ("guest" if kind == "remove_guest" else kind, destination)
+        if key in seen:
             raise ValueError("duplicate target: " + destination)
-        seen.add((kind, destination))
-        (validated_guest if kind == "guest" else validated_host).append(
+        seen.add(key)
+        (validated_guest if kind == "guest" else validated_host
+         if kind == "host" else validated_remove).append(
             (source, destination, file_hash(source)))
     for _, destination, _ in validated_guest:
         components = parts(destination, absolute=True)
@@ -135,16 +141,18 @@ def validate(stage, guest, host):
     state_info = regular(STATE)
     if state_info.st_uid != 0 or state_info.st_size > 4 << 30:
         raise ValueError("invalid persistent system image")
-    return validated_guest, validated_host
+    return validated_guest, validated_host, validated_remove
 
 
-def checked_destination(root, name):
+def checked_destination(root, name, create=True):
     path = root
     for component in guest_target(name)[:-1]:
         path /= component
         try:
             mode = path.lstat().st_mode
         except FileNotFoundError:
+            if not create:
+                raise
             path.mkdir(mode=0o755)
             continue
         if not stat.S_ISDIR(mode):
@@ -153,8 +161,21 @@ def checked_destination(root, name):
     try:
         regular(target)
     except FileNotFoundError:
-        pass
+        if not create:
+            raise
     return target
+
+
+def remove_file(target, expected):
+    regular(target)
+    if file_hash(target) != expected:
+        raise RuntimeError("guest removal digest mismatch: " + str(target))
+    target.unlink()
+    directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def install_file(source, target, expected, readonly=False):
@@ -311,8 +332,8 @@ def prune_shadows():
             shutil.rmtree(child)
 
 
-def install(stage, guest, host):
-    files, host_files = validate(stage, guest, host)
+def install(stage, guest, host, remove_guest):
+    files, host_files, removals = validate(stage, guest, host, remove_guest)
     shadow = shadow_release(host_files) if host_files else None
     run("systemctl", "stop", *SERVICES)
     mounted = False
@@ -321,7 +342,7 @@ def install(stage, guest, host):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if run("losetup", "-j", str(STATE)):
             raise RuntimeError("system image still leased after service stop")
-        if files:
+        if files or removals:
             offset, length = ext4_partition(STATE)
             with tempfile.TemporaryDirectory(prefix="astra-dev-mount-", dir="/var/tmp") as mount:
                 root = Path(mount)
@@ -331,6 +352,9 @@ def install(stage, guest, host):
                 try:
                     for source, name, digest in files:
                         install_file(source, checked_destination(root, name), digest)
+                    for _source, name, digest in removals:
+                        remove_file(checked_destination(root, name, create=False),
+                                    digest)
                     run("sync", "-f", mount)
                 finally:
                     run("umount", mount)
@@ -345,8 +369,9 @@ def install(stage, guest, host):
             run("systemctl", "start", *SERVICES)
     wait_for_boot()
     prune_shadows()
-    print("ASTRA_DE25_DEV_INSTALL PASS guest=%d host=%d%s" %
-          (len(files), len(host_files), " shadow=" + shadow if shadow else ""))
+    print("ASTRA_DE25_DEV_INSTALL PASS guest=%d host=%d removed=%d%s" %
+          (len(files), len(host_files), len(removals),
+           " shadow=" + shadow if shadow else ""))
 
 
 if __name__ == "__main__":
@@ -354,6 +379,6 @@ if __name__ == "__main__":
         raise SystemExit("usage: dev-install-de25.py STAGE (root on DE25)")
     stage = Path(sys.argv[1])
     data = json.loads((stage / "manifest.json").read_text())
-    if not isinstance(data, dict) or set(data) != {"guest", "host"}:
+    if not isinstance(data, dict) or set(data) != {"guest", "host", "remove_guest"}:
         raise SystemExit("invalid development manifest")
-    install(stage, data["guest"], data["host"])
+    install(stage, data["guest"], data["host"], data["remove_guest"])

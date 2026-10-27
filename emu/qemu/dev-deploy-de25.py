@@ -62,12 +62,14 @@ def main():
     parser.add_argument("--make", action="append", default=[], metavar="DIR[:TARGET]")
     parser.add_argument("--guest", action="append", default=[],
                         metavar="SOURCE=/GUEST/PATH")
+    parser.add_argument("--remove-guest", action="append", default=[],
+                        metavar="SOURCE=/GUEST/PATH")
     parser.add_argument("--host", action="append", default=[],
                         metavar="SOURCE=RELEASE/PATH")
     parser.add_argument("--board", default=BOARD)
     args = parser.parse_args()
-    if not args.guest and not args.host:
-        parser.error("at least one --guest or --host artifact is required")
+    if not args.guest and not args.host and not args.remove_guest:
+        parser.error("at least one artifact or removal is required")
     if any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.@-"
            for character in args.board):
         parser.error("invalid board address")
@@ -90,7 +92,7 @@ def main():
         targets = set()
 
         def stage_mapping(kind, source, target):
-            key = kind, target
+            key = "guest" if kind == "remove_guest" else kind, target
             if key in targets:
                 raise ValueError("duplicate artifact target: " + target)
             targets.add(key)
@@ -105,6 +107,7 @@ def main():
 
         for kind, item in (
                 [("guest", value) for value in args.guest] +
+                [("remove_guest", value) for value in args.remove_guest] +
                 [("host", value) for value in args.host]):
             source_name, separator, target = item.partition("=")
             if not separator:
@@ -119,6 +122,8 @@ def main():
         shutil.copy2(REPOSITORY / "emu/qemu/storage_image.py", stage)
         (stage / "manifest.json").write_text(json.dumps({
             "guest": [value for kind, value in mappings if kind == "guest"],
+            "remove_guest": [value for kind, value in mappings
+                             if kind == "remove_guest"],
             "host": [value for kind, value in mappings if kind == "host"],
         }))
         board_stage = subprocess.check_output(

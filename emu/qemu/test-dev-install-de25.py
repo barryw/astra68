@@ -44,6 +44,30 @@ with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
     target = module.checked_destination(root, "/apps/Doom.app/Doom")
     assert target == root / "apps/Doom.app/Doom"
+    try:
+        module.checked_destination(root, "/commands/missing", create=False)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("missing removal target accepted")
+    (root / "commands").mkdir()
+    artifact = root / "commands/probe"
+    artifact.write_bytes(b"expected")
+    try:
+        module.remove_file(artifact, hashlib.sha256(b"other").hexdigest())
+    except RuntimeError:
+        assert artifact.read_bytes() == b"expected"
+    else:
+        raise AssertionError("mismatched guest artifact removed")
+    module.remove_file(artifact, hashlib.sha256(b"expected").hexdigest())
+    assert not artifact.exists()
+    (root / "commands/link").symlink_to(root / "apps/Doom.app/Doom")
+    try:
+        module.checked_destination(root, "/commands/link", create=False)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("symlink removal target accepted")
     (root / "libs").symlink_to(root / "apps")
     try:
         module.checked_destination(root, "/libs/SDL.kit/libraries/SDL2.library/abi-3/3.0.0/m68k-68040/SDL2.library")
