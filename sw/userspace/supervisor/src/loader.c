@@ -3117,6 +3117,9 @@ done:
 
 static void boot_plan_release(void)
 {
+    for (uint32_t index = 0u; index < boot_plan_count; ++index)
+        if (boot_plan[index].has_definition)
+            astra_service_definition_destroy(&boot_plan[index].definition);
     astra_runtime_deallocate(boot_plan);
     boot_plan = NULL;
     boot_plan_count = 0u;
@@ -3124,7 +3127,7 @@ static void boot_plan_release(void)
 }
 
 static uint32_t boot_plan_append(const SupervisorManifestEntry *entry,
-                                 const AstraServiceDefinition *definition)
+                                 AstraServiceDefinition *definition)
 {
     SupervisorBootLaunch *grown = boot_plan;
 
@@ -3141,8 +3144,11 @@ static uint32_t boot_plan_append(const SupervisorManifestEntry *entry,
     }
     grown[boot_plan_count].entry = entry;
     grown[boot_plan_count].has_definition = definition != NULL;
-    if (definition != NULL)
+    if (definition != NULL) {
         grown[boot_plan_count].definition = *definition;
+        /* Move the owned path before scratch is reused for the next service. */
+        definition->executable = NULL;
+    }
     ++boot_plan_count;
     return ASTRA_STATUS_OK;
 }
@@ -3158,7 +3164,7 @@ static uint32_t boot_plan_resolve(const AstraStartupInfo *startup,
     for (uint32_t index = 1u; index < manifest->count; ++index) {
         const SupervisorManifestEntry *entry = &manifest->entries[index];
         AstraServiceDefinition *service = &definition_scratch[0];
-        const AstraServiceDefinition *definition = NULL;
+        AstraServiceDefinition *definition = NULL;
 
         if (entry->trusted != 0u || entry->resident == 0u)
             continue;
