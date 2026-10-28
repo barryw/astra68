@@ -59,6 +59,7 @@ static AstraGridViewModel upper_model = ASTRA_GRID_VIEW_MODEL_INIT;
 static uint8_t upper_dirty;
 static uint8_t prompt_visible;
 static uint8_t transcript_dirty;
+static uint8_t transcript_rebuild;
 static uint8_t ui_ready;
 static uint8_t running = 1u;
 static uint8_t playing;
@@ -121,6 +122,7 @@ static void transcript_append(const char *bytes, uint32_t length)
         }
         memmove(transcript, transcript + cut, transcript_length - cut);
         transcript_length -= cut;
+        transcript_rebuild = 1u;
     }
     memcpy(transcript + transcript_length, bytes, length);
     transcript_length += length;
@@ -158,8 +160,6 @@ static AstraResult flush_transcript(void)
         return upper_dirty || status_dirty ? present() : ASTRA_OK;
     AstraTextModelInfo info = ASTRA_TEXT_MODEL_INFO_INIT;
     AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
-    astra_text_model_dispose(&transcript_model);
-    transcript_model = (AstraTextModel)ASTRA_TEXT_MODEL_INIT;
     info.text = transcript;
     info.text_bytes = transcript_length -
         (prompt_visible && transcript_length != 0u &&
@@ -168,12 +168,14 @@ static AstraResult flush_transcript(void)
     info.content_arena_bytes = sizeof(transcript_content);
     info.metadata_arena = transcript_metadata;
     info.metadata_arena_bytes = sizeof(transcript_metadata);
-    if (astra_text_model_init(&transcript_model, &info) != ASTRA_OK ||
+    if (astraz_transcript_model_sync(&transcript_model, &info,
+            transcript_rebuild) != ASTRA_OK ||
         astra_interface_text_view_refresh(&ui, CONTROL(TRANSCRIPT)) != ASTRA_OK ||
         astra_scroll_get_state(&scroll, &state) != ASTRA_OK ||
         astra_scroll_set_offset(&scroll, 0u, state.maximum_y) != ASTRA_OK)
         return ASTRA_ERROR_IO;
     transcript_dirty = 0u;
+    transcript_rebuild = 0u;
     return present();
 }
 
@@ -467,6 +469,7 @@ static int host_event(void *unused, const AstraZEvent *event)
         event->data.erase.window == -2) {
         transcript_length = 0u;
         transcript_dirty = 1u;
+        transcript_rebuild = 1u;
     }
     int line_break = astraz_transcript_flow_event(&transcript_flow, event);
     if (event->kind == ASTRAZ_EVENT_CHARACTER) {
@@ -552,6 +555,7 @@ static uint16_t host_read_line(void *unused, uint16_t *buffer, uint32_t max,
             transcript[transcript_length - 1u] == '>') {
             --transcript_length;
             transcript_dirty = 1u;
+            transcript_rebuild = 1u;
         }
         if (transcript_length != 0u &&
             transcript[transcript_length - 1u] != '\n')

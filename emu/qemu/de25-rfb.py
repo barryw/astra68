@@ -200,6 +200,7 @@ def main():
     parser.add_argument("--macos-format", action="store_true")
     parser.add_argument("--verify-rfb-pointer", action="store_true")
     parser.add_argument("--keys", help="type ASCII text after connecting")
+    parser.add_argument("--enter", action="store_true", help="press Enter after keys")
     pointer_action = parser.add_mutually_exclusive_group()
     pointer_action.add_argument("--pointer", nargs=2, metavar=("X", "Y"),
                                 type=int)
@@ -236,6 +237,8 @@ def main():
                 send_pointer(connection, x, y)
         if arguments.keys is not None:
             send_keys(connection, arguments.keys)
+        if arguments.enter:
+            send_keys(connection, "\n")
         frame, rfb_pointer = capture(
             connection, width, height, bytes_per_pixel, frame,
             frame is not None)

@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-28
 
+AstraZ transcript checkpoint, 2026-10-28: the app now appends output to its
+existing TextModel and rebuilds only after erasure, transcript rollover, or
+prompt-prefix edits. Its existing 33 ms flush gate still bounds display posts;
+full-window redraw at each post has not been performance-qualified. Haiku
+reference: `src/apps/terminal/TermView.cpp` uses `_InvalidateTextRange` for
+targeted updates; Astra currently retains shared Text View layout and draw-list
+rendering while reducing repeated transcript copies. The host transcript test
+was red before the sync function and passes on Mac and Beast. A focused AstraZ
+install on DE25 opened Zork I from WORK, displayed the complete opening, and
+advanced `open mailbox` to Moves 1 with the leaflet visible. Three board
+services are active with zero restarts; panic log timestamp did not change.
+Evidence: Beast `/home/barry/astra68/build/audit-de25-20261028/astraz-incremental-open.png`
+and `astraz-incremental-move.png`. Beast's ad hoc QEMU transcript baseline could
+not boot: unmodified prepared gate image also stopped at
+`launch-failed /services/posixd status=11`. That gate needs a coherent fixture
+before transcript performance qualification. Focused app update has not yet
+been captured in a clean selected release image.
+
 Selected release checkpoint, 2026-10-28: PR #7 merged to `main` at
 `3cea11f87ce62fdaf658b94b1043d9fba109af75`. Beast clean publisher staged
 content identity `68b963418420771d2315ff93db998812d7880241382bd041621148f06a724363`

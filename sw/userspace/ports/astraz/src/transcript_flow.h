@@ -2,6 +2,7 @@
 #define ASTRAZ_TRANSCRIPT_FLOW_H
 
 #include <astraz/engine.h>
+#include <astra/text_model.h>
 
 typedef struct AstraZTranscriptFlow {
     int32_t row;
@@ -18,5 +19,9 @@ int astraz_transcript_flow_flush_due(AstraZTranscriptFlow *flow,
                                     uint64_t now_ns);
 int astraz_input_copy(const char *text, uint32_t length,
                      uint16_t *buffer, uint32_t capacity);
+/* Keep visible transcript text in TextModel; rebuild after prefix changes. */
+AstraResult astraz_transcript_model_sync(AstraTextModel *model,
+                                        const AstraTextModelInfo *info,
+                                        uint32_t rebuild);
 
 #endif
