@@ -15,10 +15,28 @@ advanced `open mailbox` to Moves 1 with the leaflet visible. Three board
 services are active with zero restarts; panic log timestamp did not change.
 Evidence: Beast `/home/barry/astra68/build/audit-de25-20261028/astraz-incremental-open.png`
 and `astraz-incremental-move.png`. Beast's ad hoc QEMU transcript baseline could
-not boot: unmodified prepared gate image also stopped at
-`launch-failed /services/posixd status=11`. That gate needs a coherent fixture
-before transcript performance qualification. Focused app update has not yet
-been captured in a clean selected release image.
+not boot because the AArch64 DE25 QEMU executable was paired with Beast's x86-64
+storage provider. `O_DIRECTORY` differs across those Linux ABIs, so a scoped
+`LIBS` open returned `EINVAL`; host-native QEMU with the same ROM and image
+passed. The fixture now rejects mixed host ELF ABIs before boot. Transcript
+performance qualification remains separate from this correctness checkpoint.
+
+Selected AstraZ release checkpoint, 2026-10-28: PR #9 merged to `main` at
+`d7c162b3caed398b4acc5167a82fc1b2b442a063`. Beast's clean publisher
+staged identity `a3ff9dd7a307b37c7c903e4861d2e0b3b5a22c64a9d4f1ce2612e09ce64fbf50`.
+Its ROM and image passed the full 117-command Terminal gate with Beast-native
+x86-64 QEMU and storage provider. Guarded DE25 deployment selected that
+identity, confirmed the running packaged kernel, and pruned the prior release.
+Physical DE25 RFB showed the desktop, Atlas Applications drawer, and Zork I
+with full title, inverted status, and inline underline caret; `open mailbox`
+advanced Moves 0 to 1 and displayed the leaflet. All three services remain
+active with zero restarts, RFB binds only 127.0.0.1:5900, root has 8.2 GiB
+free, and `panic-latest.log` still dates 2026-10-28 09:38 +0800. No current
+boot panic appears in `qemu-console.log`; kernel journal showed no MMC or ext4
+I/O errors after deployment. Evidence: Beast
+`/home/barry/astra68/build/audit-de25-20261028/astraz-host-qemu-full.log`,
+`astraz-release-deploy.log`, `astraz-selected-story.png`, and
+`astraz-selected-move-ready.png`. Board capture scratch was removed.
 
 Selected release checkpoint, 2026-10-28: PR #7 merged to `main` at
 `3cea11f87ce62fdaf658b94b1043d9fba109af75`. Beast clean publisher staged

@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
-from qemu_runtime import DEFAULT_MEMORY_BYTES, qemu_environment, unprivileged_command
+from qemu_runtime import DEFAULT_MEMORY_BYTES, qemu_environment, require_provider_abi, unprivileged_command
 
 
 HERE = Path(__file__).resolve().parent
@@ -63,6 +63,25 @@ except RuntimeError as error:
 
 
 print("QEMU private library environment: PASS")
+
+with tempfile.TemporaryDirectory() as temporary:
+    qemu = Path(temporary) / "qemu"
+    provider = Path(temporary) / "provider"
+    header = bytearray(20)
+    header[:4] = b"\x7fELF"
+    header[4:6] = b"\x02\x01"
+    header[18:20] = b"\xb7\x00"  # AArch64
+    qemu.write_bytes(header)
+    header[18:20] = b"\x3e\x00"  # x86-64
+    provider.write_bytes(header)
+    try:
+        require_provider_abi(qemu, provider)
+        raise AssertionError("mixed QEMU/provider host ABIs accepted")
+    except ValueError as error:
+        assert "different host ELF ABIs" in str(error)
+    provider.write_bytes(qemu.read_bytes())
+    require_provider_abi(qemu, provider)
+print("QEMU/storage provider host ABI pairing: PASS")
 
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)

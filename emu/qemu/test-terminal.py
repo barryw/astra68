@@ -58,7 +58,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import astra_image
-from qemu_runtime import DEFAULT_MEMORY, LAUNCHER_EXPORTS, qemu_environment, storage_fixture
+from qemu_runtime import DEFAULT_MEMORY, LAUNCHER_EXPORTS, STORAGE_PROVIDER, qemu_environment, require_provider_abi, storage_fixture
 
 # RAM the gate boots with. A module global so --memory can prove that the
 # machine works at a size other than the one it was written against.
@@ -807,6 +807,8 @@ class Machine:
         # catalog must not leave a live emulator behind.  A launcher
         # A launcher announces observation exports before QEMU starts.
         if not launcher:
+            require_provider_abi(qemu, os.environ.get("ASTRA_TEST_STORAGE_PROVIDER",
+                                                  STORAGE_PROVIDER))
             launcher, socket_owner = storage_fixture(image, socket_directory,
                                                      hostfs_root, socket_owner)
         self.runtime_directory = tempfile.mkdtemp(prefix="astra-qmp-")
