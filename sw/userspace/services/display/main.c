@@ -159,6 +159,8 @@ typedef struct DisplayWindow {
        rectangle (all zero for the whole content). */
     uint32_t pointer_grab;
     AstraWindowFrame pointer_grab_rect;
+    /* System fullscreen exit gives the pointer back until content is clicked. */
+    uint8_t pointer_grab_suspended;
     DamageRect content_damage;
     /* Where each bank differs from content_front. */
     DamageRect content_stale[DISPLAY_CONTENT_BANKS];
@@ -1894,7 +1896,9 @@ static void update_pointer_grab(DisplayState *state, const AstraTheme *theme)
     uint32_t index = active_window(state);
     const DisplayWindow *window =
         index != state->count ? &state->windows[index] : NULL;
-    uint32_t flags = window != NULL ? window->pointer_grab : 0u;
+    uint32_t flags = window != NULL &&
+                     window->pointer_grab_suspended == 0u ?
+                         window->pointer_grab : 0u;
     int32_t left = 0;
     int32_t top = 0;
     int32_t right = ASTRA_DISPLAY_WIDTH;
@@ -3883,6 +3887,7 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
                 return status;
             prepared.fullscreen_restore_type = window->request.type;
             prepared.fullscreen_restore_state = window->state;
+            prepared.pointer_grab_suspended = 0u;
             if (window->state == ASTRA_WINDOW_STATE_NORMAL) {
                 prepared.restore_x = window->request.x;
                 prepared.restore_y = window->request.y;
@@ -3973,6 +3978,7 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
         window->pointer_grab = command->flags;
         window->pointer_grab_rect = (AstraWindowFrame){
             command->x, command->y, command->width, command->height };
+        window->pointer_grab_suspended = 0u;
         state->cursor_dirty = 1u;
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_WARP_POINTER:
@@ -4067,7 +4073,8 @@ static uint32_t display_pointer_shape(DisplayState *state,
     if (index == state->count)
         return ASTRA_POINTER_SHAPE_DEFAULT;
     if (region == HIT_CONTENT)
-        return state->windows[index].pointer_shape;
+        return state->windows[index].pointer_grab_suspended != 0u ?
+            ASTRA_POINTER_SHAPE_DEFAULT : state->windows[index].pointer_shape;
     if (region == HIT_RESIZE_E || region == HIT_RESIZE_W)
         return ASTRA_POINTER_SHAPE_RESIZE_HORIZONTAL;
     if (region == HIT_RESIZE_N || region == HIT_RESIZE_S)
@@ -4187,6 +4194,13 @@ static void toggle_fullscreen(DisplayState *state, const AstraTheme *theme,
     if (apply_command(state, theme, &command, &closed, &changed) !=
             ASTRA_STATUS_OK || !changed)
         return;
+    index = find_id(state, command.window);
+    if (index != state->count) {
+        state->windows[index].pointer_grab_suspended =
+            command.action == ASTRA_GUI_WINDOW_RESTORE &&
+            state->windows[index].pointer_grab != 0u;
+        state->cursor_dirty = 1u;
+    }
     *effects |= DISPLAY_POINTER_RENDER | DISPLAY_POINTER_FRAME |
                 DISPLAY_POINTER_RESIZE;
     *frame_window = command.window;
@@ -4539,6 +4553,11 @@ static uint32_t handle_pointer(DisplayState *state,
             region = grab_target(state) == index ? HIT_CONTENT :
                      hit_region(&theme, &state->windows[index],
                                 state->pointer_x, state->pointer_y);
+            if (region == HIT_CONTENT &&
+                state->windows[index].pointer_grab_suspended != 0u) {
+                state->windows[index].pointer_grab_suspended = 0u;
+                state->cursor_dirty = 1u;
+            }
             state->capture_window = id;
             state->capture_region = region;
             state->capture_x = state->windows[index].request.x;

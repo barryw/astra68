@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Install selected guest files into stopped DE25 state; keep changes for the next fix."""
 
+import errno
 import fcntl
 import hashlib
 import json
@@ -169,7 +170,9 @@ def checked_destination(root, name, create=True):
     return target
 
 
-def remove_file(target, expected):
+def remove_file(root, target, expected):
+    if len(target.relative_to(root).parts) < 2:
+        raise ValueError("guest removal must stay below a release-owned directory")
     regular(target)
     if file_hash(target) != expected:
         raise RuntimeError("guest removal digest mismatch: " + str(target))
@@ -179,6 +182,20 @@ def remove_file(target, expected):
         os.fsync(directory)
     finally:
         os.close(directory)
+    parent = target.parent
+    while parent.parent != root:
+        try:
+            parent.rmdir()
+        except OSError as error:
+            if error.errno in (errno.ENOTEMPTY, errno.EEXIST):
+                break
+            raise
+        directory = os.open(parent.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+        parent = parent.parent
 
 
 def install_file(source, target, expected, readonly=False):
@@ -360,7 +377,8 @@ def install(stage, guest, host, remove_guest):
                         for source, name, digest in files:
                             install_file(source, checked_destination(root, name), digest)
                         for _source, name, digest in removals:
-                            remove_file(checked_destination(root, name, create=False),
+                            remove_file(root,
+                                        checked_destination(root, name, create=False),
                                         digest)
                         run("sync", "-f", mount)
                     finally:

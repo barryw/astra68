@@ -57,13 +57,26 @@ with tempfile.TemporaryDirectory() as directory:
     artifact = root / "commands/probe"
     artifact.write_bytes(b"expected")
     try:
-        module.remove_file(artifact, hashlib.sha256(b"other").hexdigest())
+        module.remove_file(root, artifact, hashlib.sha256(b"other").hexdigest())
     except RuntimeError:
         assert artifact.read_bytes() == b"expected"
     else:
         raise AssertionError("mismatched guest artifact removed")
-    module.remove_file(artifact, hashlib.sha256(b"expected").hexdigest())
+    module.remove_file(root, artifact, hashlib.sha256(b"expected").hexdigest())
     assert not artifact.exists()
+    assert (root / "commands").is_dir()
+    bundle = root / "apps/Trial.app"
+    payload = bundle / "bin/m68k-68040/Trial"
+    payload.parent.mkdir(parents=True)
+    payload.write_bytes(b"trial")
+    module.remove_file(root, payload, hashlib.sha256(b"trial").hexdigest())
+    assert not bundle.exists() and (root / "apps").is_dir()
+    payload.parent.mkdir(parents=True)
+    payload.write_bytes(b"trial")
+    (bundle / "user-data").write_bytes(b"keep")
+    module.remove_file(root, payload, hashlib.sha256(b"trial").hexdigest())
+    assert (bundle / "user-data").read_bytes() == b"keep"
+    assert not (bundle / "bin").exists()
     (root / "commands/link").symlink_to(root / "apps/Doom.app/Doom")
     try:
         module.checked_destination(root, "/commands/link", create=False)
