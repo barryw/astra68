@@ -10,9 +10,18 @@ own each definition's executable path until release. Beast supervisor,
 kernel, ROM and display host tests; root launcher and release-packaging
 fixtures; full userspace/NDK build; and the root-observed QEMU normal,
 user-service-failure and required-service-failure progress gates pass.
-Gate log: `/var/tmp/astra-boot-progress-gate.log` on Beast. This source merge
-does not select a new DE25 release; physical splash presentation remains to
-be qualified on the exact packaged board build.
+Gate log: `/var/tmp/astra-boot-progress-gate.log` on Beast. A disposable DE25
+trial of packaged release `2ad5acbad71c2e426c6ed50bd5df41805101d3e2957f3ab4cc998b8c2e28855a`
+showed the splash on HDMI to the user and reached the desktop; restoring the
+older selected release showed its text boot again. Guarded deployment then
+selected the same package. Its splash asset matches the source SHA-256
+`b61e792ce65f76dd60343c48f2b94b2c43f28dcba187be1f090f2b56a7c349b7`;
+the running kernel, HostFS, audio, remote desktop, and stage-8 boot gates pass.
+All three board services are active with zero Astra restarts and 8.3 GiB free.
+Trial files were removed after archiving evidence on Beast at
+`/home/barry/astra68/build/boot-splash-candidate-20261028/`. Early splash
+frames were not captured by RFB, so physical progress-bar pixels remain
+unmeasured; QEMU progress-state gates passed.
 
 Branch consolidation, 2026-10-28: `feat/cdfs` (`9bfa517b`), its rebased
 merge checkpoint (`a50cfeb5`), and `fs-perf-proto` (`b179e45f`) are retained
