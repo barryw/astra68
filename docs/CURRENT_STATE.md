@@ -2,8 +2,9 @@
 
 Status: active continuation map, 2026-10-28
 
-Branch consolidation, 2026-10-28: `feat/cdfs` (`9bfa517b`) and
-`fs-perf-proto` (`b179e45f`) are retained as parents in main history but
+Branch consolidation, 2026-10-28: `feat/cdfs` (`9bfa517b`), its rebased
+merge checkpoint (`a50cfeb5`), and `fs-perf-proto` (`b179e45f`) are retained
+as parents in main history but
 their trees were not applied. CDFS used an older fixed `CD0` grant and
 separate guest mount service; current native Volume/provider path already
 qualifies ISO9660/UDF images and physical optical media, and reintroducing
