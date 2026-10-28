@@ -16,6 +16,8 @@ static const char *policy_text;
 static const AstraStartupInfo *expected_startup;
 static char created[2][ASTRA_VFS_PATH_MAX];
 static uint32_t creation_count;
+static uint32_t old_store_exists, new_store_exists, old_store_kind, new_store_kind;
+static char renamed_from[ASTRA_VFS_PATH_MAX], renamed_to[ASTRA_VFS_PATH_MAX];
 
 void *astra_runtime_allocate(size_t size)
 {
@@ -47,6 +49,32 @@ uint32_t astra_vfs_mkdir_mode(AstraVfsClient *client, const char *path,
     assert(client == &managed_client && mode == 0700u);
     assert(creation_count < 2u);
     strcpy(created[creation_count++], path);
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
+                             AstraVfsDirEntry *info)
+{
+    assert(client == &managed_client);
+    if (strncmp(path, "/home/Application Data/", 23u) == 0) {
+        if (!new_store_exists) return ASTRA_VFS_ERR_NOT_FOUND;
+        info->kind = (uint16_t)new_store_kind;
+    } else {
+        assert(path[0] == '/');
+        if (!old_store_exists) return ASTRA_VFS_ERR_NOT_FOUND;
+        info->kind = (uint16_t)old_store_kind;
+    }
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_vfs_rename(AstraVfsClient *client, const char *from,
+                           const char *to)
+{
+    assert(client == &managed_client && old_store_exists && !new_store_exists);
+    strcpy(renamed_from, from);
+    strcpy(renamed_to, to);
+    old_store_exists = 0u;
+    new_store_exists = 1u;
     return ASTRA_VFS_OK;
 }
 
@@ -106,6 +134,60 @@ int main(void)
     AstraStartupInfo startup = {0};
     AstraServiceDefinition definition = ASTRA_SERVICE_DEFINITION_INIT;
     expected_startup = &startup;
+    {
+        SupervisorManifestEntry entry = {0};
+        char root[ASTRA_VFS_PATH_MAX], path[ASTRA_VFS_PATH_MAX];
+        uint32_t created_store = 0u;
+
+        managed = 1;
+        strcpy(entry.path, "/apps/ChocolateDoom.app");
+        old_store_kind = new_store_kind = ASTRA_VFS_KIND_DIRECTORY;
+        assert(prepare_private_store(&entry, "org.chocolate-doom.doom",
+                                     root, path, &created_store) == ASTRA_STATUS_OK);
+        assert(strcmp(root, "home/Application Data/org.chocolate-doom.doom") == 0);
+        assert(strcmp(path, "/home/Application Data/org.chocolate-doom.doom") == 0);
+        assert(created_store == 1u && creation_count == 2u);
+        assert(strcmp(created[0], "/home/Application Data") == 0);
+        assert(strcmp(created[1], path) == 0);
+
+        creation_count = 0u;
+        old_store_exists = 1u;
+        strcpy(entry.path, "/usb0/ChocolateDoom.app");
+        assert(prepare_private_store(&entry, "org.chocolate-doom.doom",
+                                     root, path, &created_store) == ASTRA_STATUS_OK);
+        assert(created_store == 0u && creation_count == 1u);
+        assert(strcmp(renamed_from, "/ChocolateDoom.app") == 0);
+        assert(strcmp(renamed_to, path) == 0);
+
+        creation_count = 0u;
+        strcpy(entry.path, "/usb0/Renamed.app");
+        assert(prepare_private_store(&entry, "org.chocolate-doom.doom",
+                                     root, path, &created_store) == ASTRA_STATUS_OK);
+        assert(strcmp(root, "home/Application Data/org.chocolate-doom.doom") == 0);
+        assert(created_store == 0u && creation_count == 1u);
+
+        creation_count = 0u;
+        old_store_exists = 1u;
+        assert(prepare_private_store(&entry, "org.chocolate-doom.doom",
+                                     root, path, &created_store) == ASTRA_STATUS_BUSY);
+        assert(creation_count == 1u && old_store_exists && new_store_exists);
+
+        creation_count = 0u;
+        old_store_exists = 0u;
+        new_store_kind = ASTRA_VFS_KIND_FILE;
+        assert(prepare_private_store(&entry, "org.chocolate-doom.doom",
+                                     root, path, &created_store) == ASTRA_STATUS_NOT_DIR);
+
+        creation_count = 0u;
+        new_store_exists = 0u;
+        strcpy(entry.path, "/services/events");
+        assert(prepare_private_store(&entry, "", root, path,
+                                     &created_store) == ASTRA_STATUS_OK);
+        assert(strcmp(root, "events") == 0 && strcmp(path, "/events") == 0);
+        assert(created_store == 1u && creation_count == 1u);
+        creation_count = 0u;
+        managed = 0;
+    }
     {
         SupervisorManifestEntry entry = {0};
         char root[ASTRA_VFS_PATH_MAX];

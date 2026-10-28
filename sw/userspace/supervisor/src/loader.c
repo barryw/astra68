@@ -216,6 +216,84 @@ static const char *private_store_root(const SupervisorManifestEntry *entry)
     return *root == '/' ? root + 1 : "";
 }
 
+/* Bundle data follows its stable identity, not the volume or name of the
+ * installed bundle. Keep the old service store layout for non-bundle services. */
+static uint32_t prepare_private_store(const SupervisorManifestEntry *entry,
+                                      const char *bundle_id, char *root,
+                                      char *path, uint32_t *created)
+{
+    AstraVfsClient *client = supervisor_vfs_client();
+    AstraVfsDirEntry info = {0};
+    uint32_t status;
+
+    *created = 0u;
+    root[0] = '\0';
+    if (bundle_id != NULL && bundle_id[0] != '\0') {
+        if (!astra_string_concat(root, ASTRA_VFS_PATH_MAX,
+                                 "home/Application Data/") ||
+            !astra_string_concat(root, ASTRA_VFS_PATH_MAX, bundle_id))
+            return ASTRA_STATUS_LIMIT;
+        status = astra_vfs_mkdir_mode(client, "/home/Application Data", 0700u);
+        if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS)
+            return status;
+    } else if (private_store_root(entry)[0] == '\0' ||
+               !astra_string_concat(root, ASTRA_VFS_PATH_MAX,
+                                    private_store_root(entry))) {
+        return ASTRA_STATUS_INVALID;
+    }
+    path[0] = '/';
+    path[1] = '\0';
+    if (!astra_string_concat(path, ASTRA_VFS_PATH_MAX, root))
+        return ASTRA_STATUS_LIMIT;
+
+    status = astra_vfs_stat_meta(client, path, &info);
+    if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_NOT_FOUND)
+        return status;
+    if (status == ASTRA_VFS_OK && info.kind != ASTRA_VFS_KIND_DIRECTORY)
+        return ASTRA_STATUS_NOT_DIR;
+
+    if (bundle_id != NULL && bundle_id[0] != '\0') {
+        AstraVfsPathStorage legacy_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+            astra_vfs_path_storage_open(1u);
+        char *legacy;
+
+        if (legacy_storage.bytes == NULL)
+            return ASTRA_STATUS_LIMIT;
+        legacy = astra_vfs_path_storage_at(&legacy_storage, 0u);
+        (void)strcpy(legacy, "/");
+        if (private_store_root(entry)[0] == '\0' ||
+            !astra_string_concat(legacy, ASTRA_VFS_PATH_MAX,
+                                 private_store_root(entry)))
+            return ASTRA_STATUS_INVALID;
+        {
+            AstraVfsDirEntry old = {0};
+            uint32_t old_status = astra_vfs_stat_meta(client, legacy, &old);
+
+            if (old_status != ASTRA_VFS_OK &&
+                old_status != ASTRA_VFS_ERR_NOT_FOUND)
+                return old_status;
+            if (old_status == ASTRA_VFS_OK) {
+                if (old.kind != ASTRA_VFS_KIND_DIRECTORY)
+                    return ASTRA_STATUS_NOT_DIR;
+                /* Never overwrite either copy or silently hide old saves. */
+                if (status == ASTRA_VFS_OK)
+                    return ASTRA_STATUS_BUSY;
+                status = astra_vfs_rename(client, legacy, path);
+                if (status != ASTRA_VFS_OK)
+                    return status;
+                return ASTRA_STATUS_OK;
+            }
+        }
+    }
+    if (status == ASTRA_VFS_OK)
+        return ASTRA_STATUS_OK;
+    status = astra_vfs_mkdir_mode(client, path, 0700u);
+    if (status != ASTRA_VFS_OK)
+        return status;
+    *created = 1u;
+    return ASTRA_STATUS_OK;
+}
+
 static uint32_t private_config_root(const SupervisorManifestEntry *entry,
                                     const char *parent, uint32_t owner_kind,
                                     char *out, uint32_t capacity)
@@ -1133,6 +1211,7 @@ static uint32_t add_namespace_grant(AstraLaunchGrant *out, uint32_t *count,
 static uint32_t build_grants(const AstraStartupInfo *startup,
                              const SupervisorManifestEntry *entry,
                              const char *bundle_root,
+                             const char *bundle_id,
                              const AstraAssign *bundle_source,
                              uint32_t ready_send,
                              AstraLaunchGrant *out,
@@ -1236,24 +1315,21 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
         if (strcmp(wanted->name, "STORE") == 0) {
             AstraVfsDirEntry store_info = {0};
             char *store_path = astra_vfs_path_storage_at(&path_storage, 0u);
-            (void)strcpy(store_path, "/");
+            char *store_root = astra_vfs_path_storage_at(&path_storage, 2u);
+            uint32_t created = 0u;
 
             if (supervisor_vfs_port() == 0u)
                 continue;
             /* A namespace entry is not the backing directory. Provision
              * private storage before granting it to the child. */
-            if (private_store_root(entry)[0] == '\0' ||
-                !astra_string_concat(store_path, ASTRA_VFS_PATH_MAX,
-                        private_store_root(entry)))
-                return ASTRA_STATUS_INVALID;
-            status = astra_vfs_mkdir_mode(supervisor_vfs_client(), store_path,
-                                          0700u);
-            if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS)
+            status = prepare_private_store(entry, bundle_id, store_root,
+                                           store_path, &created);
+            if (status != ASTRA_STATUS_OK)
                 return status;
             /* Only a resolved application bundle owns resources/defaults.
              * A bare service executable has no resource tree beneath it.
              * Bundle seeding retains its actual I/O and type errors. */
-            if (status == ASTRA_VFS_OK && bundle_root != NULL &&
+            if (created != 0u && bundle_root != NULL &&
                 bundle_root[0] != '\0') {
                 uint32_t seeded = seed_store(entry, store_path);
 
@@ -1270,7 +1346,7 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
             store.handle = supervisor_vfs_port();
             store.rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE;
             status = add_namespace_grant(out, count, "STORE", &store,
-                private_store_root(entry), wanted->rights, entry->delegates != 0u);
+                store_root, wanted->rights, entry->delegates != 0u);
             if (status != ASTRA_STATUS_OK)
                 return status;
             continue;
@@ -1712,6 +1788,7 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
                                      const SupervisorManifestEntry *entry,
                                      const AstraServiceDefinition *service,
                                      const char *bundle_root,
+                                     const char *bundle_id,
                                      const AstraAssign *bundle_source,
                                      const AstraLaunchArguments *arguments,
                                      uint32_t image_length, uint32_t open_us,
@@ -1784,7 +1861,7 @@ static uint32_t launch_entry_attempt(const AstraStartupInfo *startup,
         (void)release(source);
         return ASTRA_STATUS_LIMIT;
     }
-    status = build_grants(startup, entry, bundle_root, bundle_source, send, grants,
+    status = build_grants(startup, entry, bundle_root, bundle_id, bundle_source, send, grants,
                           &grant_count);
     if (status == ASTRA_STATUS_OK && service != NULL && grant_count != 0u) {
         namespace_names = astra_runtime_callocate(grant_count,
@@ -1964,6 +2041,7 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
                              const SupervisorManifestEntry *entry,
                              const AstraServiceDefinition *service,
                              const char *bundle_root,
+                             const char *bundle_id,
                              const AstraAssign *bundle_source,
                              const AstraLaunchArguments *arguments,
                              uint32_t image_length, uint32_t open_us,
@@ -1977,7 +2055,7 @@ static uint32_t launch_entry(const AstraStartupInfo *startup,
 
     launch_session = 0u;
     status = launch_entry_attempt(
-        startup, entry, service, bundle_root, bundle_source, arguments, image_length,
+        startup, entry, service, bundle_root, bundle_id, bundle_source, arguments, image_length,
         open_us, read_at, release, source, process_id, process_wait_handle);
     /* A session the process record did not take belongs to no one. */
     if (launch_session != 0u) {
@@ -2011,7 +2089,7 @@ static uint32_t launch_bootstrap(const AstraStartupInfo *startup,
         (void)supervisor_volume_unmount();
         return launch_open_status(status);
     }
-    return launch_entry(startup, entry, definition, NULL, NULL, arguments, length,
+    return launch_entry(startup, entry, definition, NULL, NULL, NULL, arguments, length,
                          open_us, supervisor_volume_source_read_at,
                          release_bootstrap_source, NULL, NULL, NULL);
 }
@@ -2218,6 +2296,7 @@ static uint32_t launch_definition(const AstraStartupInfo *startup,
     if (path_storage.bytes == NULL) { return ASTRA_STATUS_LIMIT; }
 
     AstraLaunchArguments arguments = {0};
+    AstraBundleManifest bundle = ASTRA_BUNDLE_MANIFEST_INIT;
     SupervisorManifestEntry *entry ASTRA_CLEANUP(manifest_entry_cleanup) = astra_runtime_allocate(sizeof(*entry));
     AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
     char *path = astra_vfs_path_storage_at(&path_storage, 0u);
@@ -2236,7 +2315,7 @@ static uint32_t launch_definition(const AstraStartupInfo *startup,
         return status;
     reset_exclusive_devices(startup, entry);
     status = resolve_entry_image(entry, path, ASTRA_VFS_PATH_MAX, bundle_root,
-                                 ASTRA_VFS_PATH_MAX, NULL);
+                                 ASTRA_VFS_PATH_MAX, &bundle);
     if (status != ASTRA_STATUS_OK)
         return status;
     arguments.count = definition->argument_count;
@@ -2254,13 +2333,17 @@ static uint32_t launch_definition(const AstraStartupInfo *startup,
             &source, supervisor_assigns(), path,
             supervisor_vfs_assign_client, NULL);
         open_us = astra_elapsed_microseconds(start, astra_clock_monotonic());
-        if (status != ASTRA_VFS_OK)
+        if (status != ASTRA_VFS_OK) {
+            astra_bundle_manifest_destroy(&bundle);
             return launch_open_status(status);
-        status = launch_entry(startup, entry, definition, bundle_root, NULL,
+        }
+        status = launch_entry(startup, entry, definition, bundle_root,
+                              bundle.id, NULL,
                               &arguments, source.length, open_us,
                               astra_vfs_read_source_read_at,
                               astra_vfs_read_source_close, &source, NULL, NULL);
     }
+    astra_bundle_manifest_destroy(&bundle);
     if (status == ASTRA_STATUS_OK) {
         uint32_t paused = paused_service_slot(definition->name);
 
@@ -3089,6 +3172,7 @@ static void pump_launch(const AstraStartupInfo *startup)
             AstraAssign volume_source = {
                 .handle = volume.lease.root, .rights = ASTRA_RIGHT_READ};
             status = launch_entry(startup, entry, NULL, bundle_root,
+                                  bundle.id,
                                   volume.lease.root != 0u ? &volume_source : NULL,
                                   &launch_arguments, source.length, open_us,
                                   astra_vfs_read_source_read_at,
@@ -3231,10 +3315,11 @@ static uint32_t boot_manifest_launch(const AstraStartupInfo *startup,
 {
     char *entry_path = astra_vfs_path_storage_at(path_storage, 0u);
     char *bundle_root = astra_vfs_path_storage_at(path_storage, 1u);
+    AstraBundleManifest bundle = ASTRA_BUNDLE_MANIFEST_INIT;
     uint32_t open_us = 0u;
     uint32_t status = resolve_entry_image(entry, entry_path,
                                           ASTRA_VFS_PATH_MAX, bundle_root,
-                                          ASTRA_VFS_PATH_MAX, NULL);
+                                          ASTRA_VFS_PATH_MAX, &bundle);
 
     if (status == ASTRA_STATUS_OK) {
         AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
@@ -3246,7 +3331,8 @@ static uint32_t boot_manifest_launch(const AstraStartupInfo *startup,
         open_us = astra_elapsed_microseconds(read_start,
                                              astra_clock_monotonic());
         if (status == ASTRA_VFS_OK)
-            status = launch_entry(startup, entry, service, bundle_root, NULL,
+            status = launch_entry(startup, entry, service, bundle_root,
+                                  bundle.id, NULL,
                                   NULL, source.length, open_us,
                                   astra_vfs_read_source_read_at,
                                   astra_vfs_read_source_close, &source,
@@ -3254,6 +3340,7 @@ static uint32_t boot_manifest_launch(const AstraStartupInfo *startup,
         else
             status = launch_open_status(status);
     }
+    astra_bundle_manifest_destroy(&bundle);
     if (status != ASTRA_STATUS_OK && service != NULL)
         mark_service_failed(service->name, 1u, status);
     /* Reported before a critical failure halts, so it reports once. */

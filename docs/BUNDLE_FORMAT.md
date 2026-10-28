@@ -119,6 +119,19 @@ supervisor first creates the application's `STORE:`, it copies those files
 into it; from then on they are the application's own, and later launches
 never overwrite them. Removing the store resets it to the defaults.
 
+`STORE:` is private persistent application data at
+`HOME:/Application Data/<bundle id>/`, keyed by the manifest's stable `id`.
+Moving, renaming, or uninstalling an application bundle does not move or
+delete its data. On first launch after this layout change, the supervisor
+moves an existing bundle-name store into that directory without rewriting
+its contents. If both locations already contain data, launch fails rather
+than choosing one silently. SDL's `SDL_GetPrefPath()` returns `/store/`, so
+SDL games use this location without port-specific save-path code. Native apps
+use `STORE:` for private data; user documents belong in `HOME:` and should be
+chosen through a file dialog when one is available. Programs that write
+arbitrary paths cannot be redirected safely by the OS without changing their
+code or launch configuration.
+
 A Kit must provide at least one library. An application may request only
 capabilities named by its manifest. Paths are bundle-relative: assigns,
 absolute paths, backslashes, and `.` or `..` components are forbidden.

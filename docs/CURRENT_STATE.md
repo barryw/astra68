@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-10-28
 
+Application data checkpoint, 2026-10-28: supervisor now grants application
+`STORE:` from `HOME:/Application Data/<stable bundle id>/`; SDL preference
+paths remain `/store/`. First launch moves a legacy bundle-name directory
+into the new location, preserving its files; a conflicting old and new store
+refuses launch rather than hiding either copy. Service stores retain their
+existing paths. Haiku reference: `headers/os/storage/FindDirectory.h` and
+`src/system/libroot/os/find_directory.cpp` distinguish user data from
+installed apps. Beast supervisor host and sanitizer tests plus MC68040
+image/ROM build pass.
+Focused DE25 ROM install booted and launched Chocolate Doom. With Astra
+stopped and the image mounted read-only, its existing 71,034-byte
+`savegames/doom.wad/doomsav0.dsg` was present under
+`/home/Application Data/org.chocolate-doom.doom/`; the old
+`/ChocolateDoom.app` store was absent. Services restarted to stage 8 with
+zero restarts and 8.2 GiB free. Evidence:
+`/home/barry/astra68/build/store-home-20261028/` on Beast; focused ROM
+SHA-256 `72827c5f0f34b435ae8f186751bb990da9d52c9181824b18b345e913f1fb315b`.
+A new in-game save/load after migration and Quake install/uninstall
+persistence remain open.
+
 Boot splash integration, 2026-10-28: the older splash branch is reconciled
 with current HostFS bootstrap, service-before-application startup and
 root-owned runtime launcher. The progress fixed phase counts 10 ROM, four
