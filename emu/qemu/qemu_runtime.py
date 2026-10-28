@@ -47,6 +47,20 @@ def qemu_environment(qemu, environment=None):
     return environment
 
 
+def require_provider_abi(qemu, provider):
+    """QEMU and provider exchange native Linux open flags on one host ABI."""
+    def abi(path):
+        with open(path, "rb") as handle:
+            header = handle.read(20)
+        if len(header) != 20 or header[:4] != b"\x7fELF":
+            raise ValueError("not an ELF executable: %s" % path)
+        return header[4:6] + header[18:20]
+
+    if abi(qemu) != abi(provider):
+        raise ValueError("QEMU and storage provider have different host ELF ABIs: "
+                         "%s, %s" % (qemu, provider))
+
+
 def provider_command(provider, image, exports, uid, gid, discovery="none"):
     """Trusted root fixture/service configuration, never an untrusted sudo API."""
     if uid <= 0 or gid <= 0 or discovery not in ("none", "udev"):
