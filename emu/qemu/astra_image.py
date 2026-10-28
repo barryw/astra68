@@ -60,10 +60,6 @@ CONFIGURATION = {
         "astra-config 1\n"
         "schema 1\n"
         "pool pool.ntp.org\n"),
-    "services/hostfs/settings.conf": (
-        "astra-config 1\n"
-        "schema 1\n"
-        "workers 4\n"),
     "services/ramfs/settings.conf": (
         "astra-config 1\n"
         "schema 1\n"
@@ -168,7 +164,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/storage grants BLOCK_DEVICE BLOCK_IRQ "
     "serves SYSTEM:r critical priority=20\n"
     "service /services/posixd grants serves POSIX_PROCESS required priority=20\n"
-    "service /services/hostfs grants HOST_DEVICE CONFIG:r "
+    "service /services/hostfs grants HOST_DEVICE "
     "serves WORK:rw METRICS:r SOUND:rw required priority=20\n"
     "service /services/entropy grants HOST_DEVICE "
     "serves ENTROPY required priority=20\n"

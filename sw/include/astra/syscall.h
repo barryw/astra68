@@ -986,6 +986,21 @@
  * the host is gone.
  */
 #define ASTRA_SYSCALL_AUDIO_STREAM_WAIT 108
+/**
+ * PROTOTYPE (fs-perf-proto). Create a filesystem scope: a capability that
+ * opens host channels bound to one provider session. data[1] is a host
+ * device handle (::ASTRA_RIGHT_WRITE, i.e. execute); data[2] the provider
+ * session; data[3] ASTRA_HOST_SCOPE_READ_ONLY or 0. Returns a new handle in
+ * data[1] with READ (query), WRITE (open channels), TRANSFER and
+ * ADMINISTER (revoke). A holder passes a duplicate without ADMINISTER.
+ */
+#define ASTRA_SYSCALL_HOST_SCOPE_CREATE 109
+/**
+ * PROTOTYPE. Revoke a scope: every channel opened on it is closed (the
+ * provider drops its queued commands) and every handle to it stops
+ * working. data[1] is the scope handle with ::ASTRA_RIGHT_ADMINISTER.
+ */
+#define ASTRA_SYSCALL_HOST_SCOPE_REVOKE 110
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the main program image. */
 #define ASTRA_PROCESS_LOAD_SOURCE_PROGRAM     0u
 /** ASTRA_PROCESS_LOAD_SOURCE_* value: the next requested range belongs to the PT_INTERP image. */

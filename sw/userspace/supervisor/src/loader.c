@@ -25,6 +25,7 @@
 #include <astra/shutdown.h>
 #include <astra/status.h>
 #include <astra/vfs_path.h>
+#include <astra/vfs_host_direct.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_library_source.h>
 #include <astra/vfs_service_core.h>
@@ -1225,7 +1226,8 @@ static uint32_t publish(const SupervisorManifestPublication *publication,
         return ASTRA_STATUS_OK;
     }
     client = &service_clients[service_count];
-    if (astra_vfs_port_connect(client, service_handles[service_count]) !=
+    if (astra_vfs_host_port_connect(client,
+                                    service_handles[service_count]) !=
             ASTRA_VFS_OK ||
         supervisor_vfs_register(client, handle) == 0u ||
         astra_assign_bind(supervisor_assigns(), publication->name, handle,

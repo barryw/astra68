@@ -974,8 +974,12 @@ uint32_t kernel_platform_host_execute(uint32_t owner,
 uint32_t kernel_platform_host_channel_open(
     uint32_t owner, uint32_t host_generation, uint32_t channel_generation,
     uint32_t slot, uint32_t physical_buffer, uint32_t byte_size,
-    uint32_t command_capacity)
+    uint32_t command_capacity, uint32_t scope, uint32_t scope_flags,
+    uint32_t scope_owner)
 {
+    (void)scope;
+    (void)scope_flags;
+    (void)scope_owner;
     assert(owner != 0u && host_generation == host_state.host_generation);
     assert(channel_generation != 0u &&
            slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT);

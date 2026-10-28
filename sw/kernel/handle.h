@@ -40,7 +40,8 @@ typedef enum KernelObjectType {
     KERNEL_OBJECT_PROCESS_LOAD = 13,
     KERNEL_OBJECT_LIBRARY_LOAD = 14,
     KERNEL_OBJECT_REPLY = 15,
-    KERNEL_OBJECT_AUDIO_STREAM = 16
+    KERNEL_OBJECT_AUDIO_STREAM = 16,
+    KERNEL_OBJECT_HOST_SCOPE = 17
 } KernelObjectType;
 
 typedef enum KernelHandleStatus {

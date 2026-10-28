@@ -26,6 +26,9 @@ HOTPLUG_SPEC.loader.exec_module(hotplug)
 RESULT = re.compile(
     r"RAW USER depth=([0-9a-f]{8}) iterations=([0-9a-f]{8}) "
     r"elapsed-ns=([0-9a-f]{16})")
+LAYER_RESULT = re.compile(
+    r"LAYER name=([a-z0-9-]+) iterations=([0-9a-f]{8}) "
+    r"elapsed-ns=([0-9a-f]{16})")
 ADAPT_RESULT = re.compile(
     r"ADAPT polls=([0-9a-f]{8}) iterations=([0-9a-f]{8}) "
     r"misses=([0-9a-f]{8}) elapsed-ns=([0-9a-f]{16})")
@@ -40,6 +43,31 @@ PROPERTIES = (
     "astra-host-max-inflight",
 )
 
+LAYER_COMMANDS = (
+    ("transport-unsupported", 1, 1),
+    ("transport-stat", 1, 1),
+    ("backend-stat", 1, 1),
+    ("transport-write192-invalid-handle", 1, 1),
+    ("backend-write192-open-handle", 1, 2),
+    ("direct-vfs-stat", 1, 1),
+    ("path-normalise", 0, 0),
+    ("assign-member-hit", 0, 0),
+    ("assign-member-miss", 0, 0),
+    ("assign-resolve", 0, 0),
+    ("filesystem-stat", 1, 1),
+    ("direct-backend-open-close-paired", 2, 2),
+    ("direct-vfs-open-close-paired", 2, 2),
+    ("filesystem-direct-open-close-paired", 2, 2),
+    ("direct-backend-open-write192-close-no-truncate", 3, 0),
+    ("direct-backend-open-truncate-close", 2, 0),
+    ("direct-backend-open-write192-close-paired", 3, 0),
+    ("direct-vfs-open-write192-close-paired", 3, 0),
+    ("filesystem-direct-open-write192-close-paired", 3, 0),
+    ("direct-backend-open-write192-sync-close", 4, 0),
+    ("direct-vfs-open-write192-sync-close", 4, 0),
+    ("filesystem-direct-open-write192-sync-close", 4, 0),
+)
+
 
 def run(arguments):
     with tempfile.TemporaryDirectory(
@@ -52,6 +80,7 @@ def run(arguments):
                                    directory, hostfs_root=hostfs)
         output = []
         results = []
+        layers = []
         adaptive = []
         memory = []
         passed = False
@@ -62,36 +91,40 @@ def run(arguments):
                                            arguments.deadline):
                 raise RuntimeError("boot did not reach stage 8")
             end = time.monotonic() + arguments.deadline
-            # hostbench holds LOG, so its records leave the kernel ring for
-            # the system log on its first astra_log (docs/SYSTEM_LOG.md
-            # section 7). Re-read both views whole each poll: the syslog
-            # file only grows, and PASS is hostbench's last record.
+            after = 0
             while time.monotonic() < end:
                 if machine.process.poll() is not None:
                     break
-                output = machine.said_with_syslog(0)[0]
-                if any("ASTRA RAW USER FAIL" in line for line in output):
-                    raise RuntimeError(
-                        "userspace host benchmark failed\n%s" %
-                        "\n".join(output[-60:]))
-                if any("ASTRA RAW USER PASS" in line for line in output):
-                    passed = True
+                lines, after = machine.said(after)
+                for line in lines:
+                    output.append(line)
+                    if "ASTRA RAW USER FAIL" in line:
+                        raise RuntimeError(
+                            "userspace host benchmark failed\n%s" %
+                            "\n".join(output[-60:]))
+                    match = RESULT.search(line)
+                    if match is not None:
+                        results.append(tuple(int(value, 16)
+                                             for value in match.groups()))
+                    match = LAYER_RESULT.search(line)
+                    if match is not None:
+                        layers.append((match.group(1),
+                                       int(match.group(2), 16),
+                                       int(match.group(3), 16)))
+                    match = ADAPT_RESULT.search(line)
+                    if match is not None:
+                        adaptive.append(tuple(int(value, 16)
+                                              for value in match.groups()))
+                    match = MEMORY_RESULT.search(line)
+                    if match is not None:
+                        memory.append((match.group(1),
+                                       int(match.group(2), 16),
+                                       int(match.group(3), 16)))
+                    if "ASTRA RAW USER PASS" in line:
+                        passed = True
+                if passed:
                     break
-                time.sleep(1.0)
-            for line in output:
-                match = RESULT.search(line)
-                if match is not None:
-                    results.append(tuple(int(value, 16)
-                                         for value in match.groups()))
-                match = ADAPT_RESULT.search(line)
-                if match is not None:
-                    adaptive.append(tuple(int(value, 16)
-                                          for value in match.groups()))
-                match = MEMORY_RESULT.search(line)
-                if match is not None:
-                    memory.append((match.group(1),
-                                   int(match.group(2), 16),
-                                   int(match.group(3), 16)))
+                time.sleep(0.1)
             if not passed:
                 raise RuntimeError("userspace host benchmark timed out\n%s" %
                                    "\n".join(output[-60:]))
@@ -114,6 +147,10 @@ def run(arguments):
     if (not results or depths != expected_depths or
             any(iterations == 0 or elapsed == 0
                 for _, iterations, elapsed in results) or
+            [name for name, _, _ in layers] != [
+                name for name, _, _ in LAYER_COMMANDS] or
+            any(iterations == 0 or elapsed == 0
+                for _, iterations, elapsed in layers) or
             not adaptive or
             [polls for polls, _, _, _ in adaptive] != [
                 1 << shift for shift in range(17)] or
@@ -122,10 +159,11 @@ def run(arguments):
             [name for name, _, _ in memory] != ["memcpy", "memcmp"] or
             any(byte_count == 0 or elapsed == 0
                 for _, byte_count, elapsed in memory) or
-            # The counter is machine-wide: HostFS (the system log, the
-            # sampler), entropy and media use the host channel too.
-            values["astra-host-commands"] <
+            values["astra-host-commands"] !=
             sum(iterations for _, iterations, _ in results) +
+            sum(iterations * commands + warmup
+                for (_, iterations, _), (_, commands, warmup) in
+                zip(layers, LAYER_COMMANDS)) + 2 +
             sum(iterations for _, iterations, _, _ in adaptive) or
             values["astra-host-inflight"] != 0 or
             values["astra-host-max-inflight"] != depths[-1]):
@@ -139,6 +177,11 @@ def run(arguments):
         print("raw-user: depth=%d iterations=%d elapsed-ns=%d "
               "ns-per-request=%.1f requests-per-second=%.1f" % (
                   depth, iterations, elapsed, elapsed / iterations,
+                  iterations * 1_000_000_000 / elapsed), flush=True)
+    for name, iterations, elapsed in layers:
+        print("layer: name=%s iterations=%d elapsed-ns=%d "
+              "ns-per-operation=%.1f operations-per-second=%.1f" % (
+                  name, iterations, elapsed, elapsed / iterations,
                   iterations * 1_000_000_000 / elapsed), flush=True)
     for polls, iterations, misses, elapsed in adaptive:
         print("adaptive: polls=%d iterations=%d misses=%d hit-rate=%.1f%% "

@@ -7,16 +7,21 @@ READELF := $(CROSS)readelf
 RUNTIME := ../../runtime
 include $(RUNTIME)/astra-link.mk
 include ../../libraries.mk
+VFS := ../../vfs
 NDK := ../../../../ndk
 CPPFLAGS := -I../../include -I../../../include -I$(RUNTIME)/include \
-	-I$(NDK)/include
+	-I$(VFS)/include -I$(NDK)/include
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -O3 -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections -fPIC $(ASTRA_DEBUG_FLAGS)
 TARGET := build/m68k/hostbench.elf
 IMAGE := build/m68k/hostbench
 OBJECTS := build/m68k/main.o build/m68k/hot_loop.o
-LIBRARIES := $(ASTRA_RUNTIME_LIBRARY) $(ASTRA_COMPILER_LIBRARY)
+VFS_SERVICE_LIB := $(VFS)/build/m68k/libastravfs-service.a
+LIBRARIES := $(ASTRA_FILESYSTEM_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) \
+	$(ASTRA_COMPILER_LIBRARY)
+ASTRA_PROGRAM_PRIVATE_INPUTS := $(VFS_SERVICE_LIB)
+ASTRA_PROGRAM_PRIVATE_OWNER_TARGETS := $(VFS):service
 include ../../dynamic-program.mk
 
 build/m68k/%.o: %.c

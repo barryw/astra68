@@ -306,7 +306,8 @@ static void test_owner_scoped_host_transport(void)
     assert(registers->HOST_ACCEL_REQ_COUNT == 3u);
     registers->HOST_ACCEL_CHANNEL_RESULT = ASTRA_SYSCALL_OK;
     assert(kernel_platform_host_channel_open(
-               0x10000021u, 7u, 3u, 2u, 0x02010000u, 4096u, 1u) ==
+               0x10000021u, 7u, 3u, 2u, 0x02010000u, 4096u, 1u, 0u, 0u,
+               0u) ==
            ASTRA_SYSCALL_OK);
     assert(registers->HOST_ACCEL_CHANNEL_CONFIG != 0u &&
            (registers->HOST_ACCEL_CHANNEL_CONFIG & 63u) == 0u);

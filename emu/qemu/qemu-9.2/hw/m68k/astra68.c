@@ -547,6 +547,13 @@ typedef struct AstraHostJob {
 
 typedef struct AstraHostChannel {
     uint32_t owner;
+    /* PROTOTYPE (fs-perf-proto): kernel-stamped filesystem scope. When
+     * ASTRA_HOST_SCOPE_BOUND is set, the channel carries filesystem commands
+     * only, every path resolves beneath scope_volume's root whatever the
+     * command says, and READ_ONLY refuses mutations. */
+    uint32_t scope_volume;
+    uint32_t scope_flags;
+    uint32_t scope_owner;
     uint32_t host_generation;
     uint32_t channel_generation;
     uint32_t physical_buffer;
@@ -3304,6 +3311,7 @@ static uint8_t *astra_host_command_data(Astra68State *s, uint32_t physical,
 }
 
 static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
+                                  AstraHostChannel *channel,
                                   uint8_t *command, uint32_t physical,
                                   uint32_t bytes, uint32_t command_bytes,
                                   uint32_t expected_generation);
@@ -3833,6 +3841,13 @@ static void astra_host_execute_command(Astra68State *s, uint32_t owner,
                                        uint32_t command_bytes,
                                        uint32_t expected_generation)
 {
+    if (channel != NULL &&
+        (channel->scope_flags & ASTRA_HOST_SCOPE_BOUND) != 0 &&
+        lduw_be_p(command + HOST_FIELD(service)) !=
+            ASTRA_HOST_SERVICE_FILESYSTEM) {
+        stl_be_p(command + HOST_FIELD(status), ASTRA_STATUS_ACCESS);
+        return;
+    }
     if (lduw_be_p(command + HOST_FIELD(service)) ==
             ASTRA_HOST_SERVICE_METRICS)
         astra_host_execute_metrics(s, command, physical, bytes,
@@ -3850,7 +3865,7 @@ static void astra_host_execute_command(Astra68State *s, uint32_t owner,
         astra_host_execute_audio(s, channel, command, physical, bytes,
                                  command_bytes, expected_generation);
     else
-        astra_host_execute_fs(s, owner, command, physical, bytes,
+        astra_host_execute_fs(s, owner, channel, command, physical, bytes,
                               command_bytes, expected_generation);
 }
 
@@ -4056,12 +4071,39 @@ static void astra_host_publish_filesystem_info(
              (uint32_t)about->f_namemax);
 }
 
+static bool astra_host_fs_mutates(uint16_t operation, uint16_t flags)
+{
+    switch (operation) {
+    case ASTRA_HOST_FS_OPEN:
+    case ASTRA_HOST_FS_OPEN_AT:
+        return (flags & (ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+                         ASTRA_VFS_OPEN_TRUNCATE | ASTRA_VFS_OPEN_APPEND)) != 0;
+    case ASTRA_HOST_FS_WRITE:
+    case ASTRA_HOST_FS_TRUNCATE:
+    case ASTRA_HOST_FS_MKDIR:
+    case ASTRA_HOST_FS_UNLINK:
+    case ASTRA_HOST_FS_RENAME:
+    case ASTRA_HOST_FS_CHMOD:
+    case ASTRA_HOST_FS_SYMLINK:
+    case ASTRA_HOST_FS_LINK:
+    case ASTRA_HOST_FS_UNLINK_AT:
+    case ASTRA_HOST_FS_CHMOD_FILE:
+    case ASTRA_HOST_FS_CHMOD_AT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
+                                  AstraHostChannel *channel,
                                   uint8_t *command,
                                   uint32_t physical, uint32_t bytes,
                                   uint32_t command_bytes,
                                   uint32_t expected_generation)
 {
+    bool scoped = channel != NULL &&
+        (channel->scope_flags & ASTRA_HOST_SCOPE_BOUND) != 0;
     const char *path = (const char *)(command + HOST_FIELD(path));
     const char *path2 = (const char *)(command + HOST_FIELD(path2));
     uint16_t operation = lduw_be_p(command + HOST_FIELD(operation));
@@ -4075,6 +4117,9 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
     struct stat st;
     int root;
 
+    if (scoped) {
+        volume = channel->scope_volume;
+    }
     memset(command + HOST_FIELD(status), 0, sizeof(uint32_t));
     memset(command + HOST_FIELD(result_length), 0,
            HOST_FIELD(path) - HOST_FIELD(result_length));
@@ -4087,6 +4132,16 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         volume >= ASTRA_HOST_FS_VOLUME_COUNT) {
         qatomic_inc(&s->host.operation_counts[0]);
         goto done;
+    }
+    /* A scoped channel's volume is the kernel-stamped one; the command's
+     * field is not consulted, and a read-only scope mutates nothing. */
+    if (scoped) {
+        if ((channel->scope_flags & ASTRA_HOST_SCOPE_READ_ONLY) != 0 &&
+            astra_host_fs_mutates(operation, flags)) {
+            status = ASTRA_STATUS_READ_ONLY;
+            qatomic_inc(&s->host.operation_counts[0]);
+            goto done;
+        }
     }
     /* Paths resolve beneath this volume's directory; handles carry the
      * descriptor they were opened under, so they stay inside it too. */
@@ -4867,6 +4922,26 @@ static void astra_host_channel_configure(Astra68State *s, uint32_t physical)
              channel_generation);
     stl_be_p(header + HOST_CHANNEL_HEADER_FIELD(transport_status),
              ASTRA_SYSCALL_OK);
+    {
+        uint32_t scope = ldl_be_p(config + HOST_CHANNEL_CONFIG_FIELD(scope));
+        uint32_t scope_flags =
+            ldl_be_p(config + HOST_CHANNEL_CONFIG_FIELD(scope_flags));
+        uint32_t scope_owner =
+            ldl_be_p(config + HOST_CHANNEL_CONFIG_FIELD(scope_owner));
+
+        if ((scope_flags & ~(ASTRA_HOST_SCOPE_BOUND |
+                             ASTRA_HOST_SCOPE_READ_ONLY)) != 0 ||
+            ((scope_flags & ASTRA_HOST_SCOPE_BOUND) == 0 &&
+             (scope_flags != 0 || scope != 0 || scope_owner != 0)) ||
+            ((scope_flags & ASTRA_HOST_SCOPE_BOUND) != 0 &&
+             (scope >= ASTRA_HOST_FS_VOLUME_COUNT || scope_owner == 0 ||
+              s->host.volume_fds[scope] < 0))) {
+            return;
+        }
+        channel->scope_volume = scope;
+        channel->scope_flags = scope_flags;
+        channel->scope_owner = scope_owner;
+    }
     channel->owner = owner;
     channel->host_generation = host_generation;
     channel->channel_generation = channel_generation;
@@ -4939,6 +5014,13 @@ static int astra_host_channel_worker(void *opaque)
 
     if (base == NULL) {
         return -EFAULT;
+    }
+    /* A revoked (closed) channel runs nothing still queued: the close
+     * drains jobs, and a job that starts after it began is dropped. */
+    if (!qatomic_read(&s->host.channels[job->slot].active) ||
+        qatomic_read(&s->host.channels[job->slot].channel_generation) !=
+            job->channel_generation) {
+        return -ECANCELED;
     }
     astra_host_execute_command(
         s, job->owner, &s->host.channels[job->slot],
@@ -5150,6 +5232,18 @@ static bool astra_host_channel_data_safe(const AstraHostChannel *channel,
     return safe;
 }
 
+static bool astra_host_inline_scoped(void)
+{
+    static int cached = -1;
+
+    if (cached < 0) {
+        const char *value = getenv("ASTRA_HOST_INLINE_SCOPED");
+
+        cached = value != NULL && strcmp(value, "1") == 0;
+    }
+    return cached != 0;
+}
+
 static void astra_host_channel_kick(Astra68State *s, uint32_t slot,
                                     uint32_t producer)
 {
@@ -5221,6 +5315,16 @@ static void astra_host_channel_kick(Astra68State *s, uint32_t slot,
             qatomic_read(&s->host.max_inflight)) {
             qatomic_set(&s->host.max_inflight,
                         qatomic_read(&s->host.inflight));
+        }
+        /* EXPERIMENT (fs-perf-proto, ASTRA_HOST_INLINE_SCOPED=1): run a
+         * scoped channel's filesystem command on the vCPU thread, the way
+         * io_uring issues inline before punting to a worker. Valid only for
+         * a warm cache -- a real version must use RESOLVE_CACHED /
+         * RWF_NOWAIT and punt on EAGAIN. Measures the handoff's cost. */
+        if ((channel->scope_flags & ASTRA_HOST_SCOPE_BOUND) != 0 &&
+            astra_host_inline_scoped()) {
+            astra_host_channel_complete(job, astra_host_channel_worker(job));
+            continue;
         }
         thread_pool_submit_aio(astra_host_channel_worker, job,
                                astra_host_channel_complete, job);

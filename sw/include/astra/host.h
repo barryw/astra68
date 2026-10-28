@@ -60,6 +60,15 @@
 /** Set in ::AstraHostLeaseInfo.capabilities when the host plays application
  * audio streams (%audio_stream.h, ::ASTRA_SYSCALL_AUDIO_STREAM_OPEN). */
 #define ASTRA_HOST_CAP_AUDIO_STREAM (1u << 9)
+/** Channels may be opened on a filesystem scope (::ASTRA_SYSCALL_HOST_SCOPE_CREATE):
+ * the provider then accepts only filesystem commands on them, resolves every
+ * path beneath the scope's root, ignores the command's volume, and refuses
+ * mutations when the scope is read-only. PROTOTYPE (fs-perf-proto). */
+#define ASTRA_HOST_CAP_FS_SCOPE (1u << 10)
+/** ::AstraHostChannelConfig.scope_flags: the channel is bound to a scope. */
+#define ASTRA_HOST_SCOPE_BOUND (1u << 0)
+/** ::AstraHostChannelConfig.scope_flags: the scope refuses every mutation. */
+#define ASTRA_HOST_SCOPE_READ_ONLY (1u << 1)
 /** Set in ::AstraHostLeaseInfo.state_flags once the host lease is ready for commands. */
 #define ASTRA_HOST_STATE_READY    (1u << 0)
 
@@ -630,7 +639,10 @@ typedef struct AstraHostChannelConfig {
     uint32_t physical_buffer;
     uint32_t byte_size;
     uint32_t command_capacity;
-    uint32_t reserved[7];
+    uint32_t scope;        /* provider session (prototype: volume) */
+    uint32_t scope_flags;  /* ASTRA_HOST_SCOPE_*; 0 = unscoped */
+    uint32_t scope_owner;  /* owner of the process that created the scope */
+    uint32_t reserved[4];
 } AstraHostChannelConfig;
 
 _Static_assert(sizeof(AstraHostChannelConfig) ==

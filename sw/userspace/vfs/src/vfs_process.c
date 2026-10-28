@@ -2,6 +2,7 @@
 #include <astra/runtime.h>
 #include <astra/syscall.h>
 #include <astra/vfs_path.h>
+#include <astra/vfs_host_direct.h>
 #include <astra/vfs_port_transport.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_library_source.h>
@@ -66,7 +67,7 @@ static uint32_t reserve_clients(uint32_t minimum)
 }
 
 #define PROCESS_VFS_EXEC_MAGIC 0x56465345u
-#define PROCESS_VFS_EXEC_VERSION 5u
+#define PROCESS_VFS_EXEC_VERSION 4u
 
 typedef struct ProcessVfsExecHeader {
     uint32_t magic;
@@ -81,6 +82,9 @@ typedef struct ProcessVfsExecClient {
     uint32_t activity;
     uint32_t port_service;
     AstraVfsPortExecLane lane;
+    uint32_t port_direct_area;
+    uint32_t port_direct_device;
+    uint32_t port_direct_session;
     uint16_t version;
     uint8_t port_area_capable;
     uint8_t reserved;
@@ -141,6 +145,9 @@ uint32_t astra_process_vfs_export(void *state, uint32_t capacity,
         if (astra_vfs_port_exec_lane_export(client, &output[count].lane) !=
             ASTRA_VFS_OK)
             return ASTRA_VFS_ERR_IO;
+        output[count].port_direct_area = client->port_direct_area;
+        output[count].port_direct_device = client->port_direct_device;
+        output[count].port_direct_session = client->port_direct_session;
         output[count].version = client->version;
         output[count].port_area_capable = client->port_area_capable;
         ++count;
@@ -243,7 +250,12 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
             if (clients[slot].handle == input[index].service)
                 break;
         if (slot == client_count || input[index].port_service !=
-                                    input[index].service)
+                                    input[index].service ||
+            ((input[index].port_direct_area == 0u) !=
+                 (input[index].port_direct_device == 0u)) ||
+            ((input[index].port_direct_area == 0u) !=
+                 (input[index].port_direct_session ==
+                  ASTRA_VFS_SESSION_INVALID)))
             goto invalid;
         client = &clients[slot].client;
         memset(client, 0, sizeof(*client));
@@ -273,6 +285,15 @@ uint32_t astra_process_vfs_import(const AstraStartupInfo *startup,
             failure = status;
             goto invalid;
         }
+        if (input[index].port_direct_area != 0u &&
+            (status = astra_vfs_host_direct_resume(
+                client, input[index].port_direct_area,
+                input[index].port_direct_device,
+                input[index].port_direct_session)) != ASTRA_VFS_OK) {
+            failure_operation = "VFS exec direct restore";
+            failure = status;
+            goto invalid;
+        }
     }
     return ASTRA_VFS_OK;
 
@@ -293,7 +314,7 @@ static AstraVfsClient *client_ready(uint32_t slot)
     if (slot >= client_count)
         return NULL;
     if (clients[slot].connected == 0u) {
-        uint32_t status = astra_vfs_client_connect_service(
+        uint32_t status = astra_vfs_host_port_connect_lazy(
             &clients[slot].client, clients[slot].handle);
 
         if (status != ASTRA_VFS_OK) {
@@ -326,11 +347,20 @@ static uint32_t seed_process_vfs(const AstraStartupInfo *startup,
         return ASTRA_VFS_ERR_INVALID;
     if (fork_child) {
         for (uint32_t index = 0u; index < client_count; ++index) {
+            uint32_t status;
+
             if (clients[index].connected == 0u)
                 continue;
             astra_vfs_port_after_fork_child(&clients[index].client);
-            astra_vfs_port_abandon(&clients[index].client);
-            clients[index].connected = 0u;
+            if (clients[index].client.port_direct_address != NULL) {
+                status = astra_vfs_host_direct_after_fork(
+                    &clients[index].client);
+                if (status != ASTRA_VFS_OK)
+                    return status;
+            } else {
+                astra_vfs_port_abandon(&clients[index].client);
+                clients[index].connected = 0u;
+            }
         }
         /* Fork preserves the namespace and its handles exactly. */
         return vfs_initialized ? ASTRA_VFS_OK : ASTRA_VFS_ERR_NOT_FOUND;

@@ -41,7 +41,7 @@
 /** Native-big-endian `STOR` storage-protocol signature. */
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
 /** Current storage-protocol wire-format version. */
-#define ASTRA_VFS_VERSION  UINT16_C(27)
+#define ASTRA_VFS_VERSION  UINT16_C(26)
 
 /**
  * The oldest version this build can still speak. A client asks for a minimum
@@ -74,6 +74,9 @@
  * Version 16 carries both complete rename paths in one extended request. The
  * original 224-byte request remains the prefix and every older operation keeps
  * its wire size, so rolling updates still negotiate versions with old peers.
+ * Version 18 lets a service attach an owner-scoped host data-plane capability
+ * to HELLO. The port remains the authenticated control plane; subsequent VFS
+ * work can use the same service core locally without crossing address spaces.
  * Version 19 carries a symlink target and path in one extended request. This
  * removes the last session-staged transaction, so independent requests from
  * one process can safely remain in flight together.
@@ -95,9 +98,6 @@
  * Version 25 adds no-follow metadata lookup beneath an open directory. The
  * backend stays responsible only for its own namespace; the Filesystem Kit
  * remains the one authority for logical symbolic-link traversal.
- * Version 27 withdraws the version 18 attachment: HELLO answers with a session
- * and never a capability. Every request for a host volume reaches the provider
- * through the service that enforces its grant.
  */
 #define ASTRA_VFS_VERSION_MIN UINT16_C(2)
 

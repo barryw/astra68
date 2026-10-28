@@ -226,6 +226,70 @@ def configure_channel(qtest, generation, operation, slot=3, owner=0x1001,
     return qtest.read32(HACC_CHANNEL_RESULT)
 
 
+STATUS_READ_ONLY = 19
+SCOPE_BOUND = 1
+SCOPE_READ_ONLY = 2
+
+
+def configure_scoped(qtest, generation, operation, slot, channel_generation,
+                     scope, scope_flags, scope_owner, buffer=BUFFER):
+    """The kernel's channel config with the fs-perf-proto scope words."""
+    config = bytearray(64)
+    physical = buffer if operation == 1 else 0
+    struct.pack_into(">IHHIIIIIIIIII", config, 0, 64, 1, operation, slot,
+                     0x1001, generation, channel_generation, physical,
+                     4096 if operation == 1 else 0,
+                     1 if operation == 1 else 0,
+                     scope if operation == 1 else 0,
+                     scope_flags if operation == 1 else 0,
+                     scope_owner if operation == 1 else 0)
+    qtest.write(CHANNEL_CONFIG, config)
+    qtest.write32(HACC_CHANNEL_CONFIG, CHANNEL_CONFIG)
+    return qtest.read32(HACC_CHANNEL_RESULT)
+
+
+def scoped_submit(qtest, slot, producer, command, buffer=BUFFER):
+    qtest.write(buffer + CHANNEL_HEADER_SIZE, command)
+    qtest.write32(buffer + 36, producer)
+    qtest.write32(CHANNEL_APERTURE + slot * 4096 + 0x20, producer)
+    qtest.wait32(buffer + 48, producer)
+    return qtest.read(buffer + CHANNEL_HEADER_SIZE, COMMAND_SIZE)
+
+
+def scopes(qtest, root):
+    """A channel bound to a scope: the kernel-stamped volume wins over the
+    command's, other services are refused, a read-only scope mutates
+    nothing, and a malformed scope is refused at open (fs-perf-proto)."""
+    generation = qtest.read32(HACC_GENERATION)
+    # Unbound channels must carry no scope words.
+    assert configure_scoped(qtest, generation, 1, 7, 21, 1, 0, 0) != 0
+    assert configure_scoped(qtest, generation, 1, 7, 21, 9, SCOPE_BOUND,
+                            0x2002) != 0
+    assert configure_scoped(qtest, generation, 1, 7, 21, VOLUME_SOUND,
+                            SCOPE_BOUND, 0x2002) == 0
+    done = scoped_submit(qtest, 7, 1, make_command(
+        generation, FS_MKDIR, "/scoped-dir", value=0o755,
+        volume=VOLUME_WORK))
+    assert status(done) == STATUS_OK
+    assert os.path.isdir(os.path.join(root, "sound", "scoped-dir"))
+    assert not os.path.exists(os.path.join(root, "work", "scoped-dir"))
+    entropy = scoped_submit(qtest, 7, 2, make_command(
+        generation, ENTROPY_FILL, service=SERVICE_ENTROPY))
+    assert status(entropy) == STATUS_ACCESS
+    assert configure_scoped(qtest, generation, 2, 7, 21, 0, 0, 0) == 0
+    assert configure_scoped(qtest, generation, 1, 7, 22, VOLUME_WORK,
+                            SCOPE_BOUND | SCOPE_READ_ONLY, 0x2002) == 0
+    refused = scoped_submit(qtest, 7, 1, make_command(
+        generation, FS_MKDIR, "/ro-dir", value=0o755))
+    assert status(refused) == STATUS_READ_ONLY
+    assert not os.path.exists(os.path.join(root, "work", "ro-dir"))
+    allowed = scoped_submit(qtest, 7, 2, make_command(
+        generation, FS_STAT, "/"))
+    assert status(allowed) == STATUS_OK
+    assert configure_scoped(qtest, generation, 2, 7, 22, 0, 0, 0) == 0
+    print("ASTRA QEMU HOSTFS SCOPES PASS")
+
+
 def volumes(qtest, root):
     """One host root, a directory per volume: a path in one volume never
     reaches another, and a volume the machine does not have is refused."""
@@ -745,6 +809,7 @@ def main():
                 qtest = QTest(qtest_path)
                 run(qtest, os.path.join(root, "work"), outside)
                 volumes(qtest, root)
+                scopes(qtest, root)
                 print("ASTRA QEMU HOSTFS PASS")
             finally:
                 if qtest is not None:

@@ -70,6 +70,13 @@ int astra_vfs_port_set_thread_storage(
     AstraVfsClient *client, AstraVfsPortThreadState *states,
     uint32_t capacity);
 uint32_t astra_vfs_port_connect(AstraVfsClient *client, uint32_t service);
+uint32_t astra_vfs_port_connect_with_accelerator(
+    AstraVfsClient *client, uint32_t service,
+    const AstraVfsPortAcceleratorOps *accelerator);
+/* Version 8: defer HELLO and fuse it with the first path operation. */
+uint32_t astra_vfs_port_connect_lazy_with_accelerator(
+    AstraVfsClient *client, uint32_t service,
+    const AstraVfsPortAcceleratorOps *accelerator);
 /* Drop this process's transport handles without sending BYE.  A fork child
  * inherited the handles, but not ownership of the parent's service session. */
 void astra_vfs_port_abandon(AstraVfsClient *client);
@@ -170,6 +177,7 @@ typedef struct AstraVfsPortService {
      * calling -- which cost an afternoon telling those two apart.
      */
     uint32_t stalled;
+    uint32_t accelerator;
     uint32_t reply_sessions[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_lanes[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_handles[ASTRA_VFS_SESSION_MAX];
@@ -191,6 +199,8 @@ int astra_vfs_port_service_set_state_lock(AstraVfsPortService *host,
                                           AstraVfsStateAcquire acquire,
                                           AstraVfsStateRelease release,
                                           void *context);
+int astra_vfs_port_service_set_accelerator(AstraVfsPortService *host,
+                                           uint32_t accelerator);
 
 /* Handles at most `budget` requests and returns how many it answered. */
 uint32_t astra_vfs_port_service_pump(AstraVfsPortService *host,
