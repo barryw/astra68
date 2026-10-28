@@ -41,6 +41,7 @@ import sys
 import tempfile
 import threading
 import time
+from qemu_runtime import qemu_test_credentials
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -125,6 +126,9 @@ def boot(qemu, rom, image, services, skipped=None, stops_after=None):
     page_path = os.path.join(work, "post-text.bin")
     with open(page_path, "wb") as handle:
         handle.write(bytes(PAGE_BYTES))
+    uid, gid = qemu_test_credentials()
+    os.chown(work, uid, gid)
+    os.chown(page_path, uid, gid)
     os.environ["ASTRA_TEXT_PLANE_PATH"] = page_path
     machine = None
     sampler = None
@@ -224,6 +228,9 @@ def profile(base, scratch, name, option):
 
 
 def main():
+    if os.geteuid() != 0:
+        raise SystemExit("run as root observer with non-root ASTRA_TEST_QEMU_UID/GID")
+    qemu_test_credentials()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("qemu")
     parser.add_argument("rom")
