@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-28
 
+Selected release checkpoint, 2026-10-28: PR #7 merged to `main` at
+`3cea11f87ce62fdaf658b94b1043d9fba109af75`. Beast clean publisher staged
+content identity `68b963418420771d2315ff93db998812d7880241382bd041621148f06a724363`
+from source commit `d0dadd513257dea3e267389c34b27acec1046228`, using the clean pinned
+FluidSynth checkout at `/home/barry/Git/fluidsynth`. Candidate ROM and image
+passed the full 117-command Terminal gate under native QEMU. Guarded DE25
+release deployment migrated release-owned files into the persistent image,
+verified the installed release, confirmed the unchanged packaged kernel, and
+passed runtime/audio/remote-desktop gates. The board selector now points to
+that identity; all three services are active with zero restarts, RFB listens
+only on 127.0.0.1:5900, root has 8.3 GiB free, and the panic log timestamp
+remains 2026-10-28 09:38 +0800. AstraZ empty-state GUI screenshot from the
+selected release matches the focused-install capture byte-for-byte. Evidence:
+Beast `/home/barry/astra68/build/audit-de25-20261028/` and
+`/var/tmp/astra-audit-release-20261028/`. The first clean publisher attempt
+stopped before release packaging because `FLUIDSYNTH_ROOT` was omitted; the
+retry passed with the pinned checkout and explicit ROM/kernel source identity.
+
 Audit correctness checkpoint, 2026-10-28: nine Ponytail findings were fixed
 at existing native seams. Beast host tests, NDK `dist-check`, and the full
 native QEMU Terminal gate (`ASTRA TERMINAL PASS 117 commands`) passed. DE25
