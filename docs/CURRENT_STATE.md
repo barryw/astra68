@@ -2,6 +2,17 @@
 
 Status: active continuation map, 2026-10-28
 
+Branch consolidation, 2026-10-28: `feat/cdfs` (`9bfa517b`) and
+`fs-perf-proto` (`b179e45f`) are retained as parents in main history but
+their trees were not applied. CDFS used an older fixed `CD0` grant and
+separate guest mount service; current native Volume/provider path already
+qualifies ISO9660/UDF images and physical optical media, and reintroducing
+that path would duplicate mount authority. Its HFS reader remains historical
+work, not a shipped filesystem. The HostFS direct-path checkpoint is an
+unqualified performance experiment against an older ABI; correctness-first
+production keeps current VFS/HostFS code. Both commits remain recoverable for
+future targeted work without carrying obsolete runtime code into releases.
+
 SDL fullscreen checkpoint, 2026-10-28: the shared display service now
 suspends an application's pointer grab and shows the pointer when the system
 Ctrl+GUI+F shortcut restores a window. Entering fullscreen or clicking its
