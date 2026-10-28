@@ -44,6 +44,7 @@ static int wheels;
 static int keys;
 static int texts;
 static int closes;
+static int size_changed;
 static int focus_gains;
 static int focus_losses;
 static SDL_Window *keyboard_focus;
@@ -463,6 +464,9 @@ int SDL_SendWindowEvent(SDL_Window *window, Uint8 event, int x, int y)
         assert(x == 200 && y == 100);
     } else if (event == SDL_WINDOWEVENT_RESIZED) {
         assert(x == 320 && y == 200);
+    } else if (event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+        assert(x == 320 && y == 200);
+        ++size_changed;
     } else {
         assert((event == SDL_WINDOWEVENT_RESTORED ||
                 event == SDL_WINDOWEVENT_MINIMIZED) && x == 0 && y == 0);
@@ -765,6 +769,8 @@ int main(void)
            focus_gains == 1 && focus_losses == 1 && keyboard_focus == NULL);
     /* The display's fullscreen state, however it came about, is SDL's. */
     assert((window.flags & SDL_WINDOW_FULLSCREEN) == 0u);
+    window.w = 320;
+    window.h = 200;
     events[0] = (AstraWindowEvent){ .type = ASTRA_WINDOW_EVENT_STATE };
     events[0].data.state.state = ASTRA_WINDOW_STATE_FULLSCREEN;
     events[0].data.state.frame = (AstraWindowFrame){200, 100, 320, 200};
@@ -775,11 +781,14 @@ int main(void)
     ASTRA_PumpEvents(&device);
     assert((window.flags & SDL_WINDOW_FULLSCREEN_DESKTOP) ==
            SDL_WINDOW_FULLSCREEN_DESKTOP);
+    assert(size_changed == 2);
     events[0].data.state.state = ASTRA_WINDOW_STATE_NORMAL;
     event_count = 1u;
     event_next = 0u;
     ASTRA_PumpEvents(&device);
     assert((window.flags & SDL_WINDOW_FULLSCREEN) == 0u);
+    assert(size_changed == 3);
+    window.w = 300;
     test_mouse(&device, &window);
     ASTRA_DestroyWindow(&device, &window);
     assert(window.driverdata == NULL && window_closes == 1 &&

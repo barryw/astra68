@@ -2,6 +2,27 @@
 
 Status: active continuation map, 2026-10-28
 
+SDL fullscreen checkpoint, 2026-10-28: the shared display service now
+suspends an application's pointer grab and shows the pointer when the system
+Ctrl+GUI+F shortcut restores a window. Entering fullscreen or clicking its
+content restores the requested grab. The SDL video backend sends a size-change
+event when native window state replaces the content surface even if SDL already
+holds the requested dimensions; this repaired Doom's blank fullscreen frame.
+Haiku reference: `src/servers/app/Desktop.cpp` focus and window lock handling
+at the system boundary; Astra keeps the SDL API and native window state as its
+own contracts. Beast display compositor, SDL host/target, and focused installer
+tests pass. DE25 Quake and Doom both rendered fullscreen, restored to windows,
+released pointer motion outside the windows, and recaptured on content click.
+Quake reentered fullscreen with its requested grab intact. The focused
+installer now prunes only empty parents of digest-matched removed files, so
+removing a trial bundle also removes its Atlas icon without touching nonempty
+directories. Quake's isolated trial bundle and WORK assets were removed. Board
+services are active with zero restarts, root has 8.2 GiB free, and panic log
+timestamp remains 2026-10-28 09:38 +0800. Evidence: Beast
+`/home/barry/astra68/build/quake-window-20261028/`; selected release remains
+`a3ff9dd7a307b37c7c903e4861d2e0b3b5a22c64a9d4f1ce2612e09ce64fbf50`
+with focused guest updates in the persistent image.
+
 AstraZ transcript checkpoint, 2026-10-28: the app now appends output to its
 existing TextModel and rebuilds only after erasure, transcript rollover, or
 prompt-prefix edits. Its existing 33 ms flush gate still bounds display posts;

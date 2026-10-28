@@ -4505,6 +4505,19 @@ int main(void)
                 uint32_t chord_effects = 0u;
                 uint32_t chord_window = 0u;
                 uint32_t chord_time = 0u;
+                uint32_t previous_grab = current->pointer_grab;
+                uint32_t previous_shape = current->pointer_shape;
+
+                current->pointer_grab = ASTRA_WINDOW_POINTER_LOCK;
+                current->pointer_shape = ASTRA_POINTER_SHAPE_NONE;
+                content_origin(&theme, current, &state.pointer_x,
+                               &state.pointer_y);
+                state.pointer_x += 16;
+                state.pointer_y += 16;
+                update_pointer_grab(&state, &theme);
+                assert(state.grab_flags == ASTRA_WINDOW_POINTER_LOCK &&
+                       display_pointer_shape(&state, &theme) ==
+                           ASTRA_POINTER_SHAPE_NONE);
 
                 assert((current->request.flags & ASTRA_WINDOW_ACTIVE) != 0u);
                 assert(handle_pointer(&state, &chord, &chord_effects,
@@ -4514,6 +4527,8 @@ int main(void)
                 assert(current->state == ASTRA_WINDOW_STATE_FULLSCREEN &&
                        chord_window == id &&
                        (chord_effects & DISPLAY_POINTER_RESIZE) != 0u);
+                update_pointer_grab(&state, &theme);
+                assert(state.grab_flags == ASTRA_WINDOW_POINTER_LOCK);
                 chord.flags = 0u; /* release: nothing */
                 assert(handle_pointer(&state, &chord, &chord_effects,
                                       &chord_window, &chord_time) ==
@@ -4528,9 +4543,46 @@ int main(void)
                 assert(current->state == ASTRA_WINDOW_STATE_NORMAL &&
                        current->request.x == restore_x &&
                        current->request.width == restore_width);
+                update_pointer_grab(&state, &theme);
+                assert(current->pointer_grab == ASTRA_WINDOW_POINTER_LOCK &&
+                       state.grab_flags == 0u &&
+                       display_pointer_shape(&state, &theme) ==
+                           ASTRA_POINTER_SHAPE_DEFAULT);
+                assert(handle_pointer(&state, &chord, &chord_effects,
+                                      &chord_window, &chord_time) ==
+                       ASTRA_STATUS_OK);
+                update_pointer_grab(&state, &theme);
+                assert(state.grab_flags == ASTRA_WINDOW_POINTER_LOCK);
+                assert(handle_pointer(&state, &chord, &chord_effects,
+                                      &chord_window, &chord_time) ==
+                       ASTRA_STATUS_OK);
+                update_pointer_grab(&state, &theme);
+                assert(state.grab_flags == 0u);
+                {
+                    AstraLogicalInputEvent click = {
+                        .type = ASTRA_INPUT_EVENT_POINTER_BUTTON,
+                        .flags = ASTRA_INPUT_LOGICAL_DOWN,
+                        .code = ASTRA_INPUT_BUTTON_LEFT,
+                    };
+
+                    assert(handle_pointer(&state, &click, &chord_effects,
+                                          &chord_window, &chord_time) ==
+                           ASTRA_STATUS_OK);
+                    update_pointer_grab(&state, &theme);
+                    assert(state.grab_flags == ASTRA_WINDOW_POINTER_LOCK &&
+                           display_pointer_shape(&state, &theme) ==
+                               ASTRA_POINTER_SHAPE_NONE);
+                    click.flags = 0u;
+                    assert(handle_pointer(&state, &click, &chord_effects,
+                                          &chord_window, &chord_time) ==
+                           ASTRA_STATUS_OK);
+                }
                 /* Without GUI it is the program's own key. */
                 chord.modifiers = ASTRA_INPUT_MOD_LEFT_CTRL;
                 assert(!fullscreen_chord(&chord));
+                current->pointer_grab = previous_grab;
+                current->pointer_shape = previous_shape;
+                update_pointer_grab(&state, &theme);
             }
             window = current;
         }

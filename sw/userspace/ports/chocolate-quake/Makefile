@@ -2,7 +2,7 @@ include ../../../../mk/astra-version.mk
 include ../../../../tools/astra-bundle.mk
 
 ROOT := ../../../..
-SOURCE ?= ../../../../../chocolate-quake
+SOURCE ?= $(HOME)/Git/chocolate-quake
 VENDOR := build/vendor/chocolate-quake
 BUILD := build/cmake
 NDK := $(abspath $(ROOT)/ndk/build/dist/check/astra68-ndk-$(ASTRA_OS_VERSION))

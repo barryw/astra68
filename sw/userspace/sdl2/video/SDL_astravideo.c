@@ -879,6 +879,18 @@ static void ASTRA_SetWindowFullscreen(_THIS, SDL_Window *window,
         SDL_SetError("Astra window fullscreen failed (%d)", result);
 }
 
+static void ASTRA_ReportWindowSize(SDL_Window *window, int width, int height)
+{
+    SDL_bool unchanged = window->w == width && window->h == height;
+
+    SDL_SendWindowEvent(window, SDL_WINDOWEVENT_RESIZED, width, height);
+    /* SDL suppresses RESIZED when its requested size already matches.
+     * Native state changes still replace the content surface. */
+    if (unchanged)
+        SDL_SendWindowEvent(window, SDL_WINDOWEVENT_SIZE_CHANGED,
+                            width, height);
+}
+
 
 static void ASTRA_PumpEvents(_THIS)
 {
@@ -948,9 +960,9 @@ static void ASTRA_PumpEvents(_THIS)
                 SDL_SendWindowEvent(window, SDL_WINDOWEVENT_MOVED,
                                     event.data.state.frame.x,
                                     event.data.state.frame.y);
-                SDL_SendWindowEvent(window, SDL_WINDOWEVENT_RESIZED,
-                                    event.data.state.frame.width,
-                                    event.data.state.frame.height);
+                ASTRA_ReportWindowSize(window,
+                                       event.data.state.frame.width,
+                                       event.data.state.frame.height);
                 if ((event.data.state.flags & ASTRA_WINDOW_ACTIVE) != 0u)
                     SDL_SetKeyboardFocus(window);
                 else if (SDL_GetKeyboardFocus() == window)
@@ -963,9 +975,8 @@ static void ASTRA_PumpEvents(_THIS)
                     0, 0);
                 break;
             case ASTRA_WINDOW_EVENT_RESIZE:
-                SDL_SendWindowEvent(window, SDL_WINDOWEVENT_RESIZED,
-                                    event.data.resize.width,
-                                    event.data.resize.height);
+                ASTRA_ReportWindowSize(window, event.data.resize.width,
+                                       event.data.resize.height);
                 break;
             case ASTRA_WINDOW_EVENT_CLOSE_REQUEST:
                 SDL_SendWindowEvent(window, SDL_WINDOWEVENT_CLOSE, 0, 0);
