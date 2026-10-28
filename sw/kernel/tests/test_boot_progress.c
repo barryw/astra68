@@ -16,13 +16,23 @@
 #define FIXED ASTRA_BOOT_PROGRESS_FIXED_STEPS
 #define FILL astra_boot_progress_fill
 
+static const uint32_t boot_stages[] = {
+    ASTRA_SUPERVISOR_STAGE_SELF_VERIFIED,
+    ASTRA_SUPERVISOR_STAGE_VOLUME_FOUND,
+    ASTRA_SUPERVISOR_STAGE_VOLUME_MOUNTED,
+    ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED
+};
+_Static_assert(sizeof(boot_stages) / sizeof(boot_stages[0]) ==
+                   ASTRA_BOOT_PROGRESS_SUPERVISOR_STEPS,
+               "supervisor progress count");
+
 static void test_transitions(void)
 {
     uint32_t value = 0u;
     uint32_t next;
 
     /* The fields sit where the ABI says. */
-    assert(FIXED == 21u);
+    assert(FIXED == 18u);
     assert(PACK(FAILED, 1u, 0x15u, 0x3ffu, 0x155u) == 0x2aaffd55u);
     assert(astra_boot_progress_state(0x2aaffd55u) == FAILED);
     assert(astra_boot_progress_announced(0x2aaffd55u) == 1u);
@@ -30,14 +40,14 @@ static void test_transitions(void)
     assert(astra_boot_progress_count(0x2aaffd55u) == 0x3ffu);
     assert(astra_boot_progress_done(0x2aaffd55u) == 0x155u);
 
-    /* The fixed phase: 21 steps, each one larger. */
+    /* Every fixed step increases the record. */
     for (uint32_t step = 0u; step < FIXED; ++step) {
         next = astra_boot_progress_advance(value);
         assert(next > value);
         value = next;
     }
     assert(value == PACK(BOOTING, 0u, FIXED, 0u, 0u));
-    /* A 22nd fixed step is a miscount. */
+    /* One more fixed step is a miscount. */
     assert(astra_boot_progress_advance(value) ==
            PACK(FAILED, 0u, FIXED, 0u, 0u));
 
@@ -51,8 +61,8 @@ static void test_transitions(void)
     assert(astra_boot_progress_advance(value) ==
            PACK(FAILED, 1u, FIXED, 14u, 0u));
     /* Announced before the fixed phase is complete: counted, but FAILED. */
-    assert(astra_boot_progress_announce(PACK(BOOTING, 0u, 20u, 0u, 0u), 3u) ==
-           PACK(FAILED, 1u, 20u, 3u, 0u));
+    assert(astra_boot_progress_announce(PACK(BOOTING, 0u, FIXED - 1u, 0u, 0u), 3u) ==
+           PACK(FAILED, 1u, FIXED - 1u, 3u, 0u));
     assert(astra_boot_progress_state(astra_boot_progress_announce(
                PACK(BOOTING, 0u, FIXED, 0u, 0u),
                ASTRA_BOOT_PROGRESS_SERVICES_MAX + 1u)) == FAILED);
@@ -97,9 +107,9 @@ static void test_transitions(void)
 
 static void test_fill(void)
 {
-    /* 30% over 21 equal fixed steps, then 70% over N services. */
+    /* 30% over fixed steps, then 70% over N services. */
     assert(FILL(0u, 880u) == 0u);
-    assert(FILL(PACK(BOOTING, 0u, 7u, 0u, 0u), 880u) == 88u);
+    assert(FILL(PACK(BOOTING, 0u, 7u, 0u, 0u), 880u) == 102u);
     assert(FILL(PACK(BOOTING, 0u, FIXED, 0u, 0u), 880u) == 264u);
     assert(FILL(PACK(BOOTING, 1u, FIXED, 14u, 0u), 880u) == 264u);
     assert(FILL(PACK(BOOTING, 1u, FIXED, 14u, 7u), 880u) == 572u);
@@ -147,9 +157,9 @@ static void kernel_and_stages(void)
 {
     for (uint32_t step = 0u; step < ASTRA_BOOT_PROGRESS_KERNEL_STEPS; ++step)
         kernel_boot_progress_step();
-    for (uint32_t stage = ASTRA_SUPERVISOR_STAGE_SELF_VERIFIED;
-         stage <= ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED; ++stage)
-        kernel_boot_progress_stage(stage);
+    for (size_t index = 0u; index < sizeof(boot_stages) / sizeof(boot_stages[0]);
+         ++index)
+        kernel_boot_progress_stage(boot_stages[index]);
 }
 
 static void test_kernel(void)
@@ -182,10 +192,10 @@ static void test_kernel(void)
     assert(record() > last);
     for (uint32_t step = 1u; step < ASTRA_BOOT_PROGRESS_KERNEL_STEPS; ++step)
         kernel_boot_progress_step();
-    for (uint32_t stage = ASTRA_SUPERVISOR_STAGE_SELF_VERIFIED;
-         stage <= ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED; ++stage) {
+    for (size_t index = 0u; index < sizeof(boot_stages) / sizeof(boot_stages[0]);
+         ++index) {
         last = record();
-        kernel_boot_progress_stage(stage);
+        kernel_boot_progress_stage(boot_stages[index]);
         assert(record() > last);
     }
     assert(record() == PACK(BOOTING, 0u, FIXED, 0u, 0u));
