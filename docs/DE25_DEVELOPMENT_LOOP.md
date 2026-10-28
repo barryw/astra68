@@ -40,6 +40,12 @@ For Kit libraries, the tool adds the owning Kit manifest and provider index
 record to the same install. A top-level `/libs/*.library.N` target is rejected:
 the loader resolves the library inside its Kit through `/libs/.providers`.
 Repeat `--guest` and `--host` to install other coupled artifacts in one restart.
+When a host binary needs a changed systemd unit, include that unit as a host
+artifact, for example
+`--host fpga/de25/astra-remote-desktop.service=systemd/astra-remote-desktop.service`.
+The installer takes its own `/run/astra/dev-install.lock`, distinct from
+Astra's runtime lock, and holds it through boot verification. It validates
+staged units before switching the development release link.
 `--make DIR:TARGET` accepts a specific target; `--make DIR` uses `all`.
 Guest targets must be release-owned paths under `/commands`, `/services`,
 `/libs`, `/apps`, or `/fonts/system`, or the three named system files. User

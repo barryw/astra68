@@ -34,6 +34,57 @@ static uint32_t fill_width[32];
 static uint32_t fill_height[32];
 static _Alignas(4) uint16_t render_pixels[320u * 200u];
 
+static void test_toolbar_composition(void)
+{
+    static const AstraToolbarAction actions[] = {
+        {"Open", 4u, 0u}, {"Save", 4u, ASTRA_CONTROL_DISABLED}
+    };
+    AstraToolbarInfo info = ASTRA_TOOLBAR_INFO_INIT;
+    const uint32_t icons[2] = {
+        ASTRA_TOOLBAR_ICON_OPEN, ASTRA_TOOLBAR_ICON_TRASH
+    };
+    AstraControl controls[3] = {
+        ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT
+    };
+    info.first_id = 41u;
+    info.actions = actions;
+    info.action_count = 2u;
+    assert(astra_interface_toolbar_init(controls, &info) == ASTRA_OK);
+    assert(controls[0]._private_control_kind == ASTRA_CONTROL_CONTAINER);
+    assert(controls[0]._private_style == ASTRA_CONTAINER_STYLE_TOOLBAR);
+    assert(controls[1]._private_control_kind == ASTRA_CONTROL_BUTTON);
+    assert(controls[1]._private_style == ASTRA_BUTTON_TOOLBAR);
+    assert(controls[1]._private_parent_id == 41u);
+    assert(controls[2]._private_state == ASTRA_CONTROL_DISABLED);
+    assert(astra_interface_toolbar_set_icons(controls, icons, 2u) == ASTRA_OK);
+    assert(ASTRA_BUTTON_ICON(controls[1]._private_style) ==
+           ASTRA_TOOLBAR_ICON_OPEN);
+    {
+        const uint32_t invalid[2] = {
+            ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_SEARCH + 1u
+        };
+        assert(astra_interface_toolbar_set_icons(controls, invalid, 2u) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(ASTRA_BUTTON_ICON(controls[1]._private_style) ==
+               ASTRA_TOOLBAR_ICON_OPEN);
+    }
+    {
+        AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+        AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+        assert(astra_interface_ui_init(&ui, controls, 3u, 240u, 48u) == ASTRA_OK);
+        assert(astra_interface_ui_layout(&ui, &layout) == ASTRA_OK);
+        assert(controls[0]._private_frame.height == 36u);
+        assert(controls[1]._private_frame.height == 22u);
+        assert(astra_interface_ui_focus_control(&ui, 42u) == ASTRA_OK);
+        assert(ui._private_focus == 1u);
+        assert(astra_interface_ui_focus_control(&ui, 43u) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+    }
+    info.first_id = UINT32_MAX;
+    assert(astra_interface_toolbar_init(controls, &info) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
 static AstraSurfaceView render_view(uint16_t width, uint16_t height)
 {
     AstraDrawListHeader *header = (AstraDrawListHeader *)(void *)render_pixels;
@@ -49,7 +100,36 @@ static AstraSurfaceView render_view(uint16_t width, uint16_t height)
     return (AstraSurfaceView){render_pixels, sizeof(render_pixels), 0u,
         width, height, ASTRA_SURFACE_VIEW_DRAW_LIST, 0u, 0u, width, height};
 }
+
 static uint32_t fill_calls;
+static uint32_t line_calls;
+
+static void test_toolbar_render(void)
+{
+    static const AstraToolbarAction actions[] = {
+        {"Back", 4u, 0u}, {"Forward", 7u, 0u}
+    };
+    static const uint32_t icons[] = {
+        ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_FORWARD
+    };
+    AstraToolbarInfo info = ASTRA_TOOLBAR_INFO_INIT;
+    AstraControl controls[3] = {
+        ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT
+    };
+    AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraSurfaceView view = render_view(240u, 48u);
+    info.first_id = 1u;
+    info.actions = actions;
+    info.action_count = 2u;
+    assert(astra_interface_toolbar_init(controls, &info) == ASTRA_OK);
+    assert(astra_interface_toolbar_set_icons(controls, icons, 2u) == ASTRA_OK);
+    assert(astra_interface_ui_init(&ui, controls, 3u, 240u, 48u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&ui, &layout) == ASTRA_OK);
+    fill_calls = line_calls = 0u;
+    assert(astra_interface_ui_render(&ui, &view) == ASTRA_OK);
+    assert(fill_calls >= 2u && line_calls >= 6u);
+}
 static uint32_t text_calls;
 static uint16_t text_clip_top;
 static uint16_t text_clip_bottom;
@@ -61,7 +141,6 @@ static uint32_t copy_destination_x;
 static uint32_t copy_destination_y;
 static uint32_t copy_width;
 static uint32_t copy_height;
-static uint32_t line_calls;
 static uint32_t pointer_shape_calls;
 static uint32_t last_pointer_shape;
 static uint8_t alert_draw_storage[ASTRA_DRAW_LIST_AREA_BYTES];
@@ -2214,6 +2293,7 @@ static void test_text_field(void)
 
 static void test_text_field_rejections(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     uint8_t content[16] = {0};
     _Alignas(4) uint8_t metadata[64] = {0};
     AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
@@ -2272,6 +2352,28 @@ static void test_text_field_rejections(void)
            ASTRA_OK && action.type == ASTRA_UI_ACTION_NONE);
     assert(astra_interface_field_replace_selection(
                &context, &field, "x", 1u) == ASTRA_ERROR_PERMISSION);
+
+    info.flags = ASTRA_FIELD_INLINE;
+    field = (AstraControl)ASTRA_CONTROL_INIT;
+    context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
+    assert(astra_interface_field_init(&field, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &field, 1u, 80u, 32u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(field._private_frame.width == 160u);
+    AstraSurfaceView surface = render_view(80u, 32u);
+    fill_calls = 0u;
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(fill_calls == 0u);
+    assert(astra_interface_ui_focus_control(&context, 42u) == ASTRA_OK);
+    surface = render_view(80u, 32u);
+    fill_calls = 0u;
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(fill_calls == 1u && fill_width[0] == theme.mono_cell_width &&
+           fill_height[0] == 2u &&
+           fill_y[0] == field._private_frame.y + (int32_t)(
+               (field._private_frame.height - theme.mono_font_height) / 2u +
+               theme.mono_font_height - 2u));
 }
 
 static void test_text_view(void)
@@ -2323,6 +2425,22 @@ static void test_text_view(void)
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     assert(mono_text_calls == 2u);
+    assert(astra_interface_text_view_set_inverted(&context, &controls[0], 1u) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_text_view_set_inverted(&context, &controls[1], 2u) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_text_view_set_inverted(&context, &controls[1], 1u) ==
+           ASTRA_OK);
+    surface = render_view(64u, 56u);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    int found_inverted_background = 0;
+    for (uint32_t at = 0u; at < fill_calls && at < 32u; ++at)
+        if (fill_colors[at] == theme_color(theme.client_text))
+            found_inverted_background = 1;
+    assert(found_inverted_background);
+    assert(astra_interface_text_view_set_inverted(&context, &controls[1], 0u) ==
+           ASTRA_OK);
     ((AstraDrawListHeader *)(void *)surface.pixels)->command_count =
         ASTRA_DRAW_LIST_COMMAND_MAX - 1u;
     uint32_t before_fills = fill_calls, before_text = mono_text_calls;
@@ -3205,6 +3323,51 @@ static void test_context_request(void)
     assert(action.type == ASTRA_UI_ACTION_CONTEXT_MENU && action.control_id == 0u);
 }
 
+static void test_grid_view(void)
+{
+    AstraTextCell cells[160];
+    AstraGridViewModel model = ASTRA_GRID_VIEW_MODEL_INIT;
+    AstraGridViewInfo info = ASTRA_GRID_VIEW_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlSize size = {0};
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    for (uint32_t at = 0u; at < 160u; ++at)
+        cells[at] = (AstraTextCell){' ', ASTRA_TEXT_COLOR_DEFAULT,
+            ASTRA_TEXT_COLOR_DEFAULT, 0u, 1u, 0u};
+    cells[4] = (AstraTextCell){'X', 0xf800u, 0u,
+        ASTRA_TEXT_STYLE_BOLD | ASTRA_TEXT_STYLE_INVERSE, 1u, 0u};
+    model.cells = cells;
+    model.columns = 80u;
+    model.rows = 2u;
+    model.capacity_cells = 160u;
+    info.id = 1u;
+    info.model = &model;
+    assert(astra_interface_grid_view_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 800u, 80u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &control, &size) == ASTRA_OK);
+    assert(size.width == 80u * theme.mono_cell_width);
+    assert(size.height == 2u * theme.control_height);
+    AstraSurfaceView surface = render_view(800u, 80u);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(mono_text_calls != 0u);
+    model.rows = 1u;
+    assert(astra_interface_grid_view_refresh(&context, &control) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &control, &size) == ASTRA_OK);
+    assert(size.height == theme.control_height);
+    model.rows = 0u;
+    assert(astra_interface_grid_view_refresh(&context, &control) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &control, &size) == ASTRA_OK);
+    assert(size.height == 1u);
+    model.columns = 0u;
+    assert(astra_interface_grid_view_refresh(&context, &control) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
 int main(void)
 {
     static const char malformed_utf8[] = {(char)0xed, (char)0xa0, (char)0x80};
@@ -3289,6 +3452,7 @@ int main(void)
     test_text_field_rejections();
     test_text_view();
     test_text_view_document_capacity();
+    test_grid_view();
     test_scroll_view_layout_and_wheel();
     test_scroll_view_keyboard_listener();
     test_nested_scroll_chaining();
@@ -3297,6 +3461,8 @@ int main(void)
     test_splitter_rejects_invalid_composition();
     test_horizontal_splitter();
     test_disclosure_control();
+    test_toolbar_composition();
+    test_toolbar_render();
     astra_interface_test_layout();
     return 0;
 }

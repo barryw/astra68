@@ -27,5 +27,6 @@ forwards the final host mixer output; its Linux audio tap drops packets rather
 than blocking HDMI playback if a viewer is slow. Standard macOS Screen Sharing
 does not request this extension and therefore remains silent.
 
-The existing VNC server uses password authentication without transport
-encryption. Use only on a trusted network until TLS is available.
+The production VNC server binds loopback. Start an encrypted tunnel before
+connecting: `ssh -N -L 5901:127.0.0.1:5900 root@192.168.1.52`.
+Astra Remote defaults to `127.0.0.1:5901`; the VNC password remains required.

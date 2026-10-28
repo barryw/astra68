@@ -372,6 +372,7 @@ PROCESS_TEST := build/host/test_vfs_process
 PROCESS_SANITIZE_TEST := build/host/test_vfs_process_sanitize
 READER_TEST := build/host/test_vfs_reader
 FILESYSTEM_LIBRARY_TEST := build/host/test_filesystem_library
+FILESYSTEM_COPY_TEST := build/host/test_filesystem_copy
 CATALOG_TEST := build/host/test_application_catalog
 FILE_TYPE_TEST := build/host/test_file_type
 HOST_BACKEND_TEST := build/host/test_vfs_host_backend
@@ -436,6 +437,12 @@ $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
 		src/filesystem_library.c src/vfs_union.c src/vfs_assign.c \
 		src/vfs_path.c $(UTF8_OBJECT) tests/test_filesystem_library.c -o $@
 
+$(FILESYSTEM_COPY_TEST): src/filesystem_copy.c tests/test_filesystem_copy.c \
+		$(NDK)/include/astra/filesystem_library.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/filesystem_copy.c tests/test_filesystem_copy.c -o $@
+
 $(HOST_BACKEND_TEST): src/backends/host.c src/volume.c $(UTF8_OBJECT) \
 		tests/test_vfs_host_backend.c $(HEADERS)
 	@mkdir -p $(@D)
@@ -458,6 +465,7 @@ $(HOST_TRANSPORT_TEST): src/vfs_host_transport.c \
 test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 		$(PORT_THREAD_TEST) \
 		$(PROCESS_TEST) $(READER_TEST) $(FILESYSTEM_LIBRARY_TEST) \
+		$(FILESYSTEM_COPY_TEST) \
 		$(CATALOG_TEST) $(FILE_TYPE_TEST) \
 		$(HOST_BACKEND_TEST) $(RAM_BACKEND_TEST) $(HOST_TRANSPORT_TEST)
 	./$(HOST_TEST)
@@ -469,6 +477,7 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 	./$(PROCESS_TEST)
 	./$(READER_TEST)
 	./$(FILESYSTEM_LIBRARY_TEST)
+	./$(FILESYSTEM_COPY_TEST)
 	./$(CATALOG_TEST)
 	./$(FILE_TYPE_TEST)
 	./$(HOST_BACKEND_TEST)

@@ -1,6 +1,7 @@
 #include <astra/package_library.h>
 
 #include <astra/bundle.h>
+#include <astra/bytes.h>
 #include <astra/library.h>
 #include <astra/manifest.h>
 #include <astra/result.h>
@@ -263,18 +264,16 @@ static uint32_t collect(PackageList *list, const char *source,
     return status;
 }
 
+static int compare_entries(const void *left, const void *right)
+{
+    return strcmp(((const PackageEntry *)left)->path,
+                  ((const PackageEntry *)right)->path);
+}
+
 static void sort_entries(PackageList *list)
 {
-    for (uint32_t at = 1u; at < list->count; ++at) {
-        PackageEntry entry = list->entries[at];
-        uint32_t place = at;
-        while (place != 0u &&
-               strcmp(entry.path, list->entries[place - 1u].path) < 0) {
-            list->entries[place] = list->entries[place - 1u];
-            --place;
-        }
-        list->entries[place] = entry;
-    }
+    qsort(list->entries, list->count, sizeof(list->entries[0]),
+          compare_entries);
 }
 
 static uint32_t read_blob(AstraFilesystem *filesystem, const char *path,
@@ -284,12 +283,15 @@ static uint32_t read_blob(AstraFilesystem *filesystem, const char *path,
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     uint32_t status;
     uint8_t *data = NULL;
+    int opened = 0;
     *bytes = NULL;
     *length = 0u;
     status = astra_filesystem_open(filesystem, path,
         ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_NOFOLLOW, &file);
-    if (status == ASTRA_VFS_OK)
+    if (status == ASTRA_VFS_OK) {
+        opened = 1;
         status = astra_filesystem_file_info(&file, &info);
+    }
     if (status == ASTRA_VFS_OK &&
         (info.kind != ASTRA_VFS_KIND_FILE || info.byte_size >= UINT32_MAX))
         status = ASTRA_VFS_ERR_LIMIT;
@@ -304,7 +306,7 @@ static uint32_t read_blob(AstraFilesystem *filesystem, const char *path,
         if (status == ASTRA_VFS_OK && count == 0u) status = ASTRA_VFS_ERR_IO;
         *length += count;
     }
-    if (file._private_file != ASTRA_VFS_FILE_INVALID) {
+    if (opened) {
         uint32_t closed = astra_filesystem_close(&file);
         if (status == ASTRA_VFS_OK) status = closed;
     }
@@ -1253,6 +1255,7 @@ AstraResult astra_package_read_icon(AstraFilesystem *filesystem,
     char *ledger = NULL, *preview = NULL;
     uint32_t ledger_bytes = 0u, preview_bytes = 0u;
     uint32_t status;
+    int opened = 0;
     if (bytes == NULL || length == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
     *bytes = NULL;
     *length = 0u;
@@ -1262,6 +1265,7 @@ AstraResult astra_package_read_icon(AstraFilesystem *filesystem,
     status = astra_filesystem_open(filesystem, archive,
         ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_NOFOLLOW, &file);
     if (status != ASTRA_VFS_OK) goto done;
+    opened = 1;
     input.file = &file;
     input.codec = ZSTD_createDCtx();
     input.compressed = astra_runtime_allocate(PACKAGE_CHUNK);
@@ -1289,7 +1293,7 @@ done:
     if (input.codec != NULL) ZSTD_freeDCtx(input.codec);
     astra_runtime_deallocate(input.compressed);
     astra_runtime_deallocate(input.plain);
-    if (file._private_file != ASTRA_VFS_FILE_INVALID) {
+    if (opened) {
         uint32_t closed = astra_filesystem_close(&file);
         if (status == ASTRA_VFS_OK) status = closed;
     }
@@ -1315,7 +1319,8 @@ AstraResult astra_package_install_bundle(AstraFilesystem *filesystem,
     char *stage = NULL, *destination = NULL, *source = NULL;
     uint32_t ledger_bytes = 0u, manifest_bytes = 0u, preview_bytes = 0u;
     uint32_t status = ASTRA_VFS_OK;
-    int stage_created = 0, published = 0;
+    int stage_created = 0, published = 0, file_opened = 0;
+    int stage_opened = 0;
     if (filesystem == NULL || archive == NULL || apps_directory == NULL ||
         archive[0] != '/' || apps_directory[0] != '/' ||
         !astra_string_has_suffix(archive, ".apkg"))
@@ -1323,6 +1328,7 @@ AstraResult astra_package_install_bundle(AstraFilesystem *filesystem,
     status = astra_filesystem_open(filesystem, archive,
         ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_NOFOLLOW, &file);
     if (status != ASTRA_VFS_OK) goto done;
+    file_opened = 1;
     status = astra_filesystem_file_info(&file, &info);
     if (status != ASTRA_VFS_OK) goto done;
     if (info.kind != ASTRA_VFS_KIND_FILE || info.byte_size > UINT32_MAX) {
@@ -1377,6 +1383,7 @@ AstraResult astra_package_install_bundle(AstraFilesystem *filesystem,
         ASTRA_VFS_OPEN_READ | ASTRA_VFS_OPEN_DIRECTORY |
         ASTRA_VFS_OPEN_NOFOLLOW, &stage_directory);
     if (status != ASTRA_VFS_OK) goto done;
+    stage_opened = 1;
     TarEntry tar;
     int end = 0;
     status = next_entry(&input, &tar, &end);
@@ -1437,10 +1444,10 @@ AstraResult astra_package_install_bundle(AstraFilesystem *filesystem,
     status = astra_filesystem_rename(filesystem, source, destination);
     if (status == ASTRA_VFS_OK) published = 1;
 done:
-    if (stage_directory._private_file != ASTRA_VFS_FILE_INVALID)
+    if (stage_opened)
         (void)astra_filesystem_close(&stage_directory);
     if (stage_created) remove_stage(filesystem, stage, &list);
-    if (file._private_file != ASTRA_VFS_FILE_INVALID) {
+    if (file_opened) {
         uint32_t closed = astra_filesystem_close(&file);
         if (status == ASTRA_VFS_OK) status = closed;
     }
@@ -1548,7 +1555,7 @@ AstraResult astra_package_create_bundle(AstraFilesystem *filesystem,
         status = write_archive(&output, &list, manifest, manifest_length,
                                ledger, ledger_length, icon, icon_length);
     if (status == ASTRA_VFS_OK) status = astra_filesystem_sync(&file);
-    if (file._private_file != ASTRA_VFS_FILE_INVALID) {
+    if (staging_created) {
         uint32_t closed = astra_filesystem_close(&file);
         if (status == ASTRA_VFS_OK) status = closed;
     }

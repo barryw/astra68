@@ -21,7 +21,8 @@ STORE = Path("/var/lib/astra")
 STATE = STORE / "state/system/storage-terminal.img"
 CONSOLE = STORE / "log/qemu-console.log"
 QMP = Path("/run/astra/qemu/qmp.sock")
-LOCK = Path("/run/astra/runtime.lock")
+LOCK = Path("/run/astra/dev-install.lock")
+SYSTEMD = Path("/etc/systemd/system")
 SERVICES = ("astra.service", "astra-audio-host.service",
             "astra-remote-desktop.service")
 OWNED = ("commands", "services", "libs", "apps", "fonts")
@@ -76,8 +77,10 @@ def guest_target(path):
 
 def host_target(path):
     components = parts(path)
-    if len(components) < 2 or components[0] not in ("bin", "qemu", "rom"):
-        raise ValueError("host target must be a release binary: " + path)
+    if not (len(components) >= 2 and components[0] in ("bin", "qemu", "rom")) and \
+            not (len(components) == 2 and components[0] == "systemd" and
+                 components[1] in DROPINS):
+        raise ValueError("host target must be a release file: " + path)
     return components
 
 
@@ -260,15 +263,15 @@ def dev_unit(source, environment, executable, dev_root):
 
 def activate_shadow(identity):
     DEV.mkdir(parents=True, exist_ok=True)
+    units = {}
+    for unit, (environment, executable) in DROPINS.items():
+        source = DEV / "releases" / identity / "systemd" / unit
+        units[unit] = dev_unit(source.read_text(), environment, executable, DEV)
     link = DEV / (".current." + str(os.getpid()))
     link.symlink_to("releases/" + identity)
     link.replace(DEV / "current")
-    units = {}
-    for unit, (environment, executable) in DROPINS.items():
-        source = STORE / "current/systemd" / unit
-        units[unit] = dev_unit(source.read_text(), environment, executable, DEV)
     for unit, value in units.items():
-        directory = Path("/etc/systemd/system")
+        directory = SYSTEMD
         target = directory / unit
         with tempfile.NamedTemporaryFile(dir=directory, prefix=".astra-dev-",
                                          delete=False) as output:
@@ -301,7 +304,7 @@ def running_qemu():
     return False
 
 
-def wait_for_boot(timeout=90):
+def wait_for_boot(timeout=120):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if run("systemctl", "is-active", "astra.service") != "active":
@@ -311,15 +314,18 @@ def wait_for_boot(timeout=90):
                 data = CONSOLE.read_bytes()
                 if b"KERNEL PANIC" in data:
                     raise RuntimeError("kernel panic after development install")
-                if any(b"launch /services/hostfs " in line and
-                       line.endswith(b" status=0") for line in data.splitlines()):
+                if b"System degraded:" in data or b"Initial image ....... EXITED" in data:
+                    raise RuntimeError("Astra boot degraded after development install")
+                # Supervisor reports this only after required boot services
+                # (including Desktop) are ready; event logs can drain later.
+                if b"Initial image ....... stage 8\n" in data:
                     run("systemctl", "is-active", "astra-remote-desktop.service")
                     run("systemctl", "is-active", "astra-audio-host.service")
                     return
         except FileNotFoundError:
             pass
         time.sleep(0.5)
-    raise RuntimeError("Astra did not reach fresh HOST0 readiness")
+    raise RuntimeError("Astra did not reach required boot-service readiness")
 
 
 def prune_shadows():
@@ -334,44 +340,46 @@ def prune_shadows():
 
 def install(stage, guest, host, remove_guest):
     files, host_files, removals = validate(stage, guest, host, remove_guest)
-    shadow = shadow_release(host_files) if host_files else None
-    run("systemctl", "stop", *SERVICES)
-    mounted = False
     lock = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if run("losetup", "-j", str(STATE)):
-            raise RuntimeError("system image still leased after service stop")
-        if files or removals:
-            offset, length = ext4_partition(STATE)
-            with tempfile.TemporaryDirectory(prefix="astra-dev-mount-", dir="/var/tmp") as mount:
-                root = Path(mount)
-                run("mount", "-t", "ext4", "-o",
-                    f"loop,rw,offset={offset},sizelimit={length}", str(STATE), mount)
-                mounted = True
-                try:
-                    for source, name, digest in files:
-                        install_file(source, checked_destination(root, name), digest)
-                    for _source, name, digest in removals:
-                        remove_file(checked_destination(root, name, create=False),
-                                    digest)
-                    run("sync", "-f", mount)
-                finally:
-                    run("umount", mount)
-                    mounted = False
-            run("sync", "-f", str(STATE))
-        if shadow:
-            activate_shadow(shadow)
+        shadow = shadow_release(host_files) if host_files else None
+        run("systemctl", "stop", *SERVICES)
+        mounted = False
+        try:
+            if run("losetup", "-j", str(STATE)):
+                raise RuntimeError("system image still leased after service stop")
+            if files or removals:
+                offset, length = ext4_partition(STATE)
+                with tempfile.TemporaryDirectory(prefix="astra-dev-mount-", dir="/var/tmp") as mount:
+                    root = Path(mount)
+                    run("mount", "-t", "ext4", "-o",
+                        f"loop,rw,offset={offset},sizelimit={length}", str(STATE), mount)
+                    mounted = True
+                    try:
+                        for source, name, digest in files:
+                            install_file(source, checked_destination(root, name), digest)
+                        for _source, name, digest in removals:
+                            remove_file(checked_destination(root, name, create=False),
+                                        digest)
+                        run("sync", "-f", mount)
+                    finally:
+                        run("umount", mount)
+                        mounted = False
+                run("sync", "-f", str(STATE))
+            if shadow:
+                activate_shadow(shadow)
+        finally:
+            if not mounted:
+                run("systemctl", "start", *SERVICES)
+        wait_for_boot()
+        prune_shadows()
+        print("ASTRA_DE25_DEV_INSTALL PASS guest=%d host=%d removed=%d%s" %
+              (len(files), len(host_files), len(removals),
+               " shadow=" + shadow if shadow else ""))
     finally:
         fcntl.flock(lock, fcntl.LOCK_UN)
         os.close(lock)
-        if not mounted:
-            run("systemctl", "start", *SERVICES)
-    wait_for_boot()
-    prune_shadows()
-    print("ASTRA_DE25_DEV_INSTALL PASS guest=%d host=%d removed=%d%s" %
-          (len(files), len(host_files), len(removals),
-           " shadow=" + shadow if shadow else ""))
 
 
 if __name__ == "__main__":

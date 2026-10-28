@@ -18,7 +18,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.7. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 7u
 /** Current backward-compatible Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 4u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 9u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -71,6 +71,32 @@ AstraResult astra_interface_container_init(AstraControl *control,
  */
 AstraResult astra_interface_settings_pane_init(AstraControl *controls,
                                                const AstraSettingsPaneInfo *info);
+/** Compose a row toolbar from one Container and action_count Buttons.
+ * Controls occupy action_count + 1 consecutive slots and IDs. Caller owns
+ * labels and handles ordinary button activation.
+ * @param controls Caller-owned slots for the Container and Buttons.
+ * @param info Toolbar action descriptions.
+ * @return ASTRA_OK or a validation error.
+ * @since Interface Kit 7.5.
+ */
+AstraResult astra_interface_toolbar_init(AstraControl *controls,
+                                         const AstraToolbarInfo *info);
+/** Add shared glyphs to an initialized toolbar's action Buttons. Zero keeps
+ * an action text-only. Icons and labels remain independent for future display
+ * modes. @param controls Toolbar Container followed by action Buttons.
+ * @param icons One ASTRA_TOOLBAR_ICON_* value per action.
+ * @param count Number of action Buttons.
+ * @return ASTRA_OK or a validation error. @since Interface Kit 7.6. */
+AstraResult astra_interface_toolbar_set_icons(AstraControl *controls,
+    const uint32_t *icons, uint32_t count);
+/** Focus one enabled, visible control by ID after layout.
+ * @param context Initialized UI context.
+ * @param control_id Target control ID.
+ * @return ASTRA_OK or a validation error.
+ * @since Interface Kit 7.5.
+ */
+AstraResult astra_interface_ui_focus_control(AstraUIContext *context,
+                                             uint32_t control_id);
 /** Initialize a scroll viewport.
  * @param control Caller-owned control to initialize.
  * @param info View description; its scroll model remains caller-owned.
@@ -195,6 +221,31 @@ AstraResult astra_interface_text_view_init(AstraControl *control,
  */
 AstraResult astra_interface_text_view_refresh(AstraUIContext *context,
                                              AstraControl *control);
+/** Invert a Text View's theme foreground and background, for status lines.
+ * @param context UI context owning the control.
+ * @param control Text View to update.
+ * @param inverted Zero for normal colors, one for inverted colors.
+ * @return ASTRA_OK or a validation error.
+ * @since Interface Kit 7.8.
+ */
+AstraResult astra_interface_text_view_set_inverted(AstraUIContext *context,
+    AstraControl *control, uint32_t inverted);
+/** Initialize a read-only fixed cell grid from caller-owned storage.
+ * @param control Caller-owned empty control.
+ * @param info Validated grid model and control information.
+ * @return ASTRA_OK or a validation/resource error.
+ * @since Interface Kit 7.9.
+ */
+AstraResult astra_interface_grid_view_init(AstraControl *control,
+    const AstraGridViewInfo *info);
+/** Remeasure, relayout and damage a Grid View after model cells or rows change.
+ * @param context UI context owning the control.
+ * @param control Grid View whose caller-owned model changed.
+ * @return ASTRA_OK or a validation/resource error.
+ * @since Interface Kit 7.9.
+ */
+AstraResult astra_interface_grid_view_refresh(AstraUIContext *context,
+    AstraControl *control);
 /** Replace the current field selection.
  * @param context UI context owning @p control.
  * @param control Field to edit.

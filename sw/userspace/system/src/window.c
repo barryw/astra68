@@ -53,7 +53,7 @@ static AstraResult command(AstraWindow *window, uint32_t action,
     AstraResult result;
 
     if (!window_live(window) || action < ASTRA_GUI_WINDOW_QUERY ||
-        action > ASTRA_GUI_WINDOW_MENU_CLOSE ||
+        action > ASTRA_GUI_WINDOW_MENU_BAR_CLEAR ||
         (attachment != NULL && *attachment == ASTRA_INVALID_HANDLE) ||
         !astra_utf8_validate(title, title_length, 0u) ||
         title_length > ASTRA_WINDOW_TITLE_MAX)
@@ -413,9 +413,9 @@ AstraResult astra_window_warp_pointer(AstraWindow *window, int32_t x,
                    0u, 0u, NULL, NULL);
 }
 
-AstraResult astra_window_menu_open(AstraWindow *window,
+static AstraResult send_menu_document(AstraWindow *window,
     const AstraMenuItem *items, uint32_t count, int32_t x, int32_t y,
-    uint32_t request)
+    uint32_t request, uint32_t action)
 {
     AstraArea area = ASTRA_AREA_INIT;
     AstraHandle immutable = ASTRA_INVALID_HANDLE;
@@ -425,7 +425,8 @@ AstraResult astra_window_menu_open(AstraWindow *window,
     uint64_t length = ASTRA_GUI_MENU_HEADER_BYTES +
         (uint64_t)count * ASTRA_GUI_MENU_ROW_BYTES;
 
-    if (!window_live(window) || items == NULL || count == 0u || request == 0u ||
+    if (!window_live(window) || items == NULL || count == 0u ||
+        (action == ASTRA_GUI_WINDOW_MENU_OPEN && request == 0u) ||
         x < 0 || y < 0 || x > UINT16_MAX || y > UINT16_MAX ||
         length > ASTRA_GUI_MENU_BYTES_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -477,7 +478,7 @@ AstraResult astra_window_menu_open(AstraWindow *window,
             ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &immutable);
     anchor = (AstraWindowFrame){(uint16_t)x, (uint16_t)y, 0u, 0u};
     if (result == ASTRA_OK)
-        result = command(window, ASTRA_GUI_WINDOW_MENU_OPEN, &anchor,
+        result = command(window, action, &anchor,
                           NULL, 0u, request, NULL, &immutable);
     if (immutable != ASTRA_INVALID_HANDLE) {
         AstraResult closed = astra_handle_close(&immutable);
@@ -488,6 +489,27 @@ AstraResult astra_window_menu_open(AstraWindow *window,
         if (result == ASTRA_OK) result = closed;
     }
     return result;
+}
+
+AstraResult astra_window_menu_open(AstraWindow *window,
+    const AstraMenuItem *items, uint32_t count, int32_t x, int32_t y,
+    uint32_t request)
+{
+    return send_menu_document(window, items, count, x, y, request,
+                              ASTRA_GUI_WINDOW_MENU_OPEN);
+}
+
+AstraResult astra_window_menu_bar_set(AstraWindow *window,
+    const AstraMenuItem *items, uint32_t count)
+{
+    return send_menu_document(window, items, count, 0, 0, 0u,
+                              ASTRA_GUI_WINDOW_MENU_BAR_SET);
+}
+
+AstraResult astra_window_menu_bar_clear(AstraWindow *window)
+{
+    return command(window, ASTRA_GUI_WINDOW_MENU_BAR_CLEAR, NULL, NULL,
+                   0u, 0u, NULL, NULL);
 }
 
 AstraResult astra_window_menu_close(AstraWindow *window, uint32_t request)

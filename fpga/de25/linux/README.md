@@ -56,11 +56,14 @@ and writes exactly the meaningful RGB888 payload from the read-only mapping.
 
 `astra-remote-desktop` exposes that final frame through standard RFB/VNC. The
 server converts the RGB888 capture to the protocol's 32-bit BGRA pixel format.
-The production service listens on the Linux host's IPv4 interfaces at port 5900,
-so macOS Screen Sharing connects directly to `vnc://192.168.1.52:5900`. The
+The production service listens only on the Linux host's loopback address at
+port 5900. Start an encrypted SSH tunnel from the viewer machine with
+`ssh -N -L 5901:127.0.0.1:5900 root@192.168.1.52`, then connect Astra Remote
+or macOS Screen Sharing to `127.0.0.1:5901`. The
 required root-owned `/etc/astra/remote-desktop.password` contains the VNC
 password; standard VNC authentication uses at most eight password characters.
-The broker refuses any non-loopback listener without a valid password file.
+The password remains required inside the SSH tunnel. The broker refuses all
+non-loopback listeners.
 It is demand-driven: with no viewer attached it performs no captures. Keyboard
 and pointer events use QEMU's dedicated
 `/run/astra/qemu/remote-desktop-qmp.sock` monitor and existing `input-send-event`

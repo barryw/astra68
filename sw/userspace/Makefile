@@ -21,6 +21,8 @@ all:
 	@for dir in $(SUBDIRS); do $(MAKE) -C $$dir $@ || exit $$?; done
 	$(MAKE) system-catalog
 	$(MAKE) shared-library-ownership
+	$(MAKE) -C ../../ndk dist-check
+	$(MAKE) -C ports/astraz bundle
 
 # The process interpreter is intentionally absent: it is the bootstrap that
 # loads these DSOs and therefore owns a closed, static runtime/VFS subset.
@@ -52,6 +54,7 @@ sanitize analyze:
 
 clean:
 	@for dir in $(SUBDIRS); do $(MAKE) -C $$dir $@ || exit $$?; done
+	$(MAKE) -C ports/astraz clean
 	rm -rf build
 
 $(SUPERVISOR_ELF):
@@ -70,6 +73,7 @@ test:
 	python3 ../../tools/tests/test_system_event_catalog.py
 	python3 tests/test_boundaries.py
 	@for dir in $(SUBDIRS); do $(MAKE) -C $$dir test || exit $$?; done
+	$(MAKE) -C ports/astraz test
 
 .PHONY: all prune-shared-library-artifacts shared-library-ownership \
 	system-catalog test sanitize analyze clean

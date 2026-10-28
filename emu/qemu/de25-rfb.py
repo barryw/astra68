@@ -159,7 +159,9 @@ def double_click(connection, x, y):
     send_pointer(connection, x, y)
     for _ in range(2):
         send_pointer(connection, x, y, 1)
+        time.sleep(0.05)
         send_pointer(connection, x, y)
+        time.sleep(0.05)
 
 
 def qmp_execute(stream, command, arguments=None):

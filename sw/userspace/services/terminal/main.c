@@ -436,15 +436,14 @@ static int draw_cursor(WindowTerminal *window, uint32_t row, uint32_t column,
                        uint16_t color)
 {
     uint32_t x = TERMINAL_MARGIN_X + column * window->cell_width;
-    uint32_t y = TERMINAL_MARGIN_Y + row * TERMINAL_LINE_HEIGHT +
-                 TERMINAL_FONT_HEIGHT - 2u;
+    uint32_t y = TERMINAL_MARGIN_Y + row * TERMINAL_LINE_HEIGHT;
 
     if (astra_text_surface_draw_caret(
             &window->text_surface, &window->surface.view,
             TERMINAL_MARGIN_X, TERMINAL_MARGIN_Y, row, column,
-            ASTRA_TEXT_CARET_UNDERLINE, color) != ASTRA_OK)
+            ASTRA_TEXT_CARET_STANDARD, color) != ASTRA_OK)
         return 0;
-    window_damage(window, x, y, window->cell_width, 2u);
+    window_damage(window, x, y, window->cell_width, TERMINAL_LINE_HEIGHT);
     return 1;
 }
 

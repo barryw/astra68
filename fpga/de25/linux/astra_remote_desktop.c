@@ -952,7 +952,7 @@ static int astra_remote_network_config(const char *address_text,
         errno = EINVAL;
         return -1;
     }
-    if (address.s_addr != htonl(INADDR_LOOPBACK) && password_length == 0u) {
+    if (address.s_addr != htonl(INADDR_LOOPBACK)) {
         errno = EACCES;
         return -1;
     }
@@ -1130,8 +1130,7 @@ static int astra_remote_self_test(void)
         astra_remote_network_config(NULL, NULL, &listen_interface) != 0 ||
         listen_interface != htonl(INADDR_LOOPBACK) ||
         astra_remote_network_config("0.0.0.0", "Astra68!",
-                                    &listen_interface) != 0 ||
-        listen_interface != htonl(INADDR_ANY) ||
+                                    &listen_interface) == 0 ||
         astra_remote_network_config("0.0.0.0", NULL,
                                     &listen_interface) == 0 ||
         astra_remote_network_config("not-an-address", "Astra68!",

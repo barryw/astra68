@@ -36,8 +36,16 @@ target_include_directories(astraz_engine PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(astraz_engine PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(astraz_engine PRIVATE Astra::Native)
 set_target_properties(astraz_engine PROPERTIES
   C_STANDARD 99 POSITION_INDEPENDENT_CODE ON)
+
+add_executable(astraz src/main.c src/transcript_flow.c src/screen_grid.c)
+target_compile_options(astraz PRIVATE -Wall -Wextra -Werror -Wpedantic)
+target_link_libraries(astraz PRIVATE astraz_engine Astra::interface
+  Astra::graphics Astra::font Astra::system)
+astra_posix_program(astraz NAME "AstraZ" VERSION 0.1.0
+  AUTHOR "Astra 68 Project" COPYRIGHT "Copyright 2026 Astra 68 Project")
 
 option(ASTRAZ_BUILD_ENGINE_SMOKE "Build native CLI engine test" OFF)
 if(ASTRAZ_BUILD_ENGINE_SMOKE)

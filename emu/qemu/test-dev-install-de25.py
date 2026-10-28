@@ -2,10 +2,12 @@
 """Focused path-policy checks for fast DE25 guest installs."""
 
 import importlib.util
+import fcntl
 import hashlib
 import os
 from pathlib import Path
 import tempfile
+import threading
 from types import SimpleNamespace
 
 
@@ -30,7 +32,8 @@ for target in ("/home/save", "/config/system", "/fonts/installed/user.afnt",
         raise AssertionError("unsafe development target accepted: " + target)
 
 for target in ("bin/astra-codec-worker", "bin/astra-audio-host",
-               "qemu/bin/qemu-system-m68k-astra", "rom/astra_boot.bin"):
+               "qemu/bin/qemu-system-m68k-astra", "rom/astra_boot.bin",
+               "systemd/astra-remote-desktop.service"):
     module.host_target(target)
 for target in ("kernel/package/Image", "storage-terminal.img", "../libs/evil"):
     try:
@@ -99,6 +102,28 @@ with tempfile.TemporaryDirectory() as directory:
         raise AssertionError("stale console falsely certified a new boot")
 
 with tempfile.TemporaryDirectory() as directory:
+    module.CONSOLE = Path(directory) / "console.log"
+    module.QMP = SimpleNamespace(is_socket=lambda: True)
+    module.run = lambda *args: "active"
+    module.running_qemu = lambda: True
+    for payload, expected in (
+            (b"launch /services/hostfs status=0\n", "boot-service readiness"),
+            (b"launch /services/hostfs status=0\nSystem degraded:\n", "degraded")):
+        module.CONSOLE.write_bytes(payload)
+        clock = iter((0, 0, 1))
+        module.time = SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None)
+        try:
+            module.wait_for_boot(timeout=0.5)
+        except RuntimeError as error:
+            assert expected in str(error)
+        else:
+            raise AssertionError("failed boot falsely certified")
+    module.CONSOLE.write_bytes(b"Initial image ....... stage 8\n")
+    clock = iter((0, 0))
+    module.time = SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None)
+    module.wait_for_boot(timeout=0.5)
+
+with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
     base = root / "releases/base"
     (base / "bin").mkdir(parents=True)
@@ -122,5 +147,112 @@ with tempfile.TemporaryDirectory() as directory:
     assert (base / "bin/tool").read_bytes() == b"old"
     assert (module.DEV / "releases" / identity / "bin/tool").read_bytes() == b"new"
     assert identity != hashlib.sha256((base / "artifacts.sha256").read_bytes()).hexdigest()
+
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    base = root / "releases/base"
+    (base / "systemd").mkdir(parents=True)
+    old_unit = b"[Service]\nExecStart=/bin/old\nEnvironment=ASTRA_RFB_LISTEN_ADDRESS=0.0.0.0\n"
+    new_unit = old_unit.replace(b"0.0.0.0", b"127.0.0.1")
+    records = []
+    for unit in module.DROPINS:
+        name = "systemd/" + unit
+        (base / name).write_bytes(old_unit)
+        records.append(f"{hashlib.sha256(old_unit).hexdigest()}  -  {name}\n")
+    (base / "artifacts.sha256").write_text("".join(records))
+    (root / "current").symlink_to("releases/base")
+    artifact = root / "new-unit"
+    artifact.write_bytes(new_unit)
+    module.STORE = root
+    module.DEV = root / "dev"
+    module.SYSTEMD = root / "systemd"
+    module.SYSTEMD.mkdir()
+    module.run = lambda *_: ""
+    original_chown = os.fchown
+    os.fchown = lambda *_: None
+    try:
+        identity = module.shadow_release(
+            [(artifact, "systemd/astra-remote-desktop.service",
+              hashlib.sha256(new_unit).hexdigest())])
+    finally:
+        os.fchown = original_chown
+    module.activate_shadow(identity)
+    assert b"ASTRA_RFB_LISTEN_ADDRESS=127.0.0.1" in (
+        module.SYSTEMD / "astra-remote-desktop.service").read_bytes()
+    artifact.write_bytes(b"[Service]\nEnvironment=ASTRA_RFB_LISTEN_ADDRESS=127.0.0.1\n")
+    original_chown = os.fchown
+    os.fchown = lambda *_: None
+    try:
+        invalid = module.shadow_release(
+            [(artifact, "systemd/astra-remote-desktop.service",
+              hashlib.sha256(artifact.read_bytes()).hexdigest())])
+    finally:
+        os.fchown = original_chown
+    try:
+        module.activate_shadow(invalid)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("malformed unit activated")
+    assert (module.DEV / "current").resolve() == module.DEV / "releases" / identity
+
+with tempfile.TemporaryDirectory() as directory:
+    runtime = Path(directory) / "runtime.lock"
+    runtime_fd = os.open(runtime, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(runtime_fd, fcntl.LOCK_EX)
+    module.LOCK = Path(directory) / module.LOCK.name
+    module.validate = lambda *_: ([], [], [])
+    module.run = lambda *_: ""
+    module.wait_for_boot = lambda: None
+    module.prune_shadows = lambda: None
+    try:
+        module.install(Path(directory), [], [], [])
+    finally:
+        fcntl.flock(runtime_fd, fcntl.LOCK_UN)
+        os.close(runtime_fd)
+
+with tempfile.TemporaryDirectory() as directory:
+    first_stopped = threading.Event()
+    release_first = threading.Event()
+    calls = []
+    failures = []
+
+    def fake_run(*args):
+        if args[:2] == ("systemctl", "stop"):
+            calls.append(("stop", threading.current_thread().name))
+            if threading.current_thread().name == "first-install":
+                first_stopped.set()
+                assert release_first.wait(5), "first installer did not resume"
+        elif args[:2] == ("systemctl", "start"):
+            calls.append(("start", threading.current_thread().name))
+        return ""
+
+    module.LOCK = Path(directory) / "dev-install.lock"
+    module.validate = lambda *_: ([], [], [])
+    module.run = fake_run
+    module.wait_for_boot = lambda: None
+    module.prune_shadows = lambda: None
+
+    def first_install():
+        try:
+            module.install(Path(directory), [], [], [])
+        except Exception as error:
+            failures.append(error)
+
+    first = threading.Thread(target=first_install, name="first-install")
+    first.start()
+    assert first_stopped.wait(5), "first installer did not stop services"
+    try:
+        try:
+            module.install(Path(directory), [], [], [])
+        except BlockingIOError:
+            pass
+        else:
+            raise AssertionError("second installer entered active transaction")
+    finally:
+        release_first.set()
+        first.join(5)
+    assert not first.is_alive() and not failures
+    assert calls == [("stop", "first-install"), ("start", "first-install")], calls
 
 print("DE25 development installer tests: PASS")

@@ -149,3 +149,9 @@ ASTRA_SYSTEM_4.0 {
         astra_service_info_destroy;
     local: *;
 };
+
+ASTRA_SYSTEM_4.5 {
+    global:
+        astra_window_menu_bar_set;
+        astra_window_menu_bar_clear;
+} ASTRA_SYSTEM_4.0;

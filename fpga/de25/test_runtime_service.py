@@ -50,7 +50,7 @@ for required in (
     "Environment=ASTRA_QMP_SOCKET=/run/astra/qemu/remote-desktop-qmp.sock",
     "Environment=ASTRA_REMOTE_DESKTOP_CONTROL_SOCKET="
     "/run/astra/remote-desktop-control.sock",
-    "Environment=ASTRA_RFB_LISTEN_ADDRESS=0.0.0.0",
+    "Environment=ASTRA_RFB_LISTEN_ADDRESS=127.0.0.1",
     "Environment=ASTRA_RFB_PASSWORD_FILE=/etc/astra/remote-desktop.password",
     "Restart=always",
     "StandardOutput=journal",

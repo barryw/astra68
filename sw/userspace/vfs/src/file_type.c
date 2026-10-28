@@ -1,28 +1,18 @@
 #include <astra/file_type.h>
 #include <astra/string.h>
+#include <astra/endian.h>
 
 #include <string.h>
-
-static uint16_t be16(const uint8_t *bytes)
-{
-    return (uint16_t)(((uint16_t)bytes[0] << 8u) | bytes[1]);
-}
-
-static uint32_t be32(const uint8_t *bytes)
-{
-    return ((uint32_t)bytes[0] << 24u) | ((uint32_t)bytes[1] << 16u) |
-           ((uint32_t)bytes[2] << 8u) | bytes[3];
-}
 
 static int blorb_header(const uint8_t *bytes, uint32_t count, uint64_t size)
 {
     if (count < 24u || size < 24u ||
         memcmp(bytes, "FORM", 4u) != 0 ||
         memcmp(bytes + 8u, "IFRSRIdx", 8u) != 0 ||
-        (uint64_t)be32(bytes + 4u) + 8u != size)
+        (uint64_t)astra_load_be32(bytes + 4u) + 8u != size)
         return 0;
-    uint32_t index_size = be32(bytes + 16u);
-    uint32_t entries = be32(bytes + 20u);
+    uint32_t index_size = astra_load_be32(bytes + 16u);
+    uint32_t entries = astra_load_be32(bytes + 20u);
     return index_size >= 4u &&
            (uint64_t)index_size == 4u + (uint64_t)entries * 12u &&
            (uint64_t)index_size + 20u <= size;
@@ -33,10 +23,10 @@ static uint32_t zmachine_version(const uint8_t *bytes, uint32_t count,
 {
     if (count < 64u || bytes[0] < 1u || bytes[0] > 8u || size < 64u)
         return 0u;
-    uint16_t static_base = be16(bytes + 0x0eu);
-    uint16_t dictionary = be16(bytes + 0x08u);
-    uint16_t objects = be16(bytes + 0x0au);
-    uint16_t globals = be16(bytes + 0x0cu);
+    uint16_t static_base = astra_load_be16(bytes + 0x0eu);
+    uint16_t dictionary = astra_load_be16(bytes + 0x08u);
+    uint16_t objects = astra_load_be16(bytes + 0x0au);
+    uint16_t globals = astra_load_be16(bytes + 0x0cu);
     if (static_base < 64u || static_base > size ||
         dictionary < 64u || dictionary >= size ||
         objects < 64u || objects >= size ||
@@ -49,12 +39,12 @@ static int glulx_header(const uint8_t *bytes, uint32_t count, uint64_t size)
 {
     if (count < 36u || size < 256u || memcmp(bytes, "Glul", 4u) != 0)
         return 0;
-    uint32_t ram = be32(bytes + 8u);
-    uint32_t end_file = be32(bytes + 12u);
-    uint32_t end_mem = be32(bytes + 16u);
-    uint32_t stack = be32(bytes + 20u);
-    uint32_t start = be32(bytes + 24u);
-    return be32(bytes + 4u) != 0u && ram >= 256u &&
+    uint32_t ram = astra_load_be32(bytes + 8u);
+    uint32_t end_file = astra_load_be32(bytes + 12u);
+    uint32_t end_mem = astra_load_be32(bytes + 16u);
+    uint32_t stack = astra_load_be32(bytes + 20u);
+    uint32_t start = astra_load_be32(bytes + 24u);
+    return astra_load_be32(bytes + 4u) != 0u && ram >= 256u &&
            (ram & 255u) == 0u && ram <= end_file && end_file == size &&
            end_mem >= end_file && (end_mem & 255u) == 0u &&
            stack != 0u && (stack & 255u) == 0u &&

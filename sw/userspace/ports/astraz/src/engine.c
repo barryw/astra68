@@ -1,4 +1,5 @@
 #include <astraz/engine.h>
+#include <astra/endian.h>
 
 #include <limits.h>
 #include <setjmp.h>
@@ -26,6 +27,9 @@ typedef char AstraZDisplayContract[(REVERSE_STYLE == ASTRAZ_STYLE_REVERSE &&
     WHITE_COLOUR == ASTRAZ_COLOUR_WHITE &&
     TRANSPARENT_COLOUR == ASTRAZ_COLOUR_TRANSPARENT &&
     RESTART_WPROP_SET == ASTRAZ_RESTART_PROPERTIES) ? 1 : -1];
+typedef char AstraZHotkeyContract[(ZC_HKEY_UNDO == ASTRAZ_HOTKEY_UNDO &&
+    ZC_HKEY_RESTART == ASTRAZ_HOTKEY_RESTART &&
+    ZC_HKEY_QUIT == ASTRAZ_HOTKEY_QUIT) ? 1 : -1];
 
 extern int astraz_frotz_main(int argc, char **argv);
 extern void reset_memory(void);
@@ -44,17 +48,6 @@ typedef struct Engine {
 
 /* Frotz core owns process-global state. One interpreter thread per process. */
 static Engine *active;
-
-static uint16_t be16(const uint8_t *data)
-{
-    return (uint16_t)((data[0] << 8u) | data[1]);
-}
-
-static uint32_t be32(const uint8_t *data)
-{
-    return ((uint32_t)data[0] << 24u) | ((uint32_t)data[1] << 16u) |
-           ((uint32_t)data[2] << 8u) | data[3];
-}
 
 static void error_text(const char *message)
 {
@@ -77,7 +70,7 @@ static int inspect(FILE *file, AstraZStory *story, bb_map_t **map)
     if (count >= 24u && memcmp(head, "FORM", 4u) == 0 &&
         memcmp(head + 8u, "IFRS", 4u) == 0) {
         story->container = ASTRAZ_CONTAINER_BLORB;
-        if ((uint64_t)be32(head + 4u) + 8u != (uint64_t)size ||
+        if ((uint64_t)astra_load_be32(head + 4u) + 8u != (uint64_t)size ||
             fseek(file, 0, SEEK_SET) != 0 ||
             bb_create_map(file, map) != bb_err_None)
             return ASTRAZ_INVALID;
@@ -114,24 +107,32 @@ static int inspect(FILE *file, AstraZStory *story, bb_map_t **map)
     if (story->vm == ASTRAZ_VM_Z) {
         uint64_t length = story->payload_length;
         if (head[0] < 1u || head[0] > 8u ||
-            be16(head + 0x0eu) < 64u || be16(head + 0x0eu) > length ||
-            be16(head + 0x08u) < 64u || be16(head + 0x08u) >= length ||
-            be16(head + 0x0au) < 64u || be16(head + 0x0au) >= length ||
-            be16(head + 0x0cu) < 64u || be16(head + 0x0cu) >= length)
+            astra_load_be16(head + 0x0eu) < 64u ||
+            astra_load_be16(head + 0x0eu) > length ||
+            astra_load_be16(head + 0x08u) < 64u ||
+            astra_load_be16(head + 0x08u) >= length ||
+            astra_load_be16(head + 0x0au) < 64u ||
+            astra_load_be16(head + 0x0au) >= length ||
+            astra_load_be16(head + 0x0cu) < 64u ||
+            astra_load_be16(head + 0x0cu) >= length)
             return ASTRAZ_INVALID;
         story->version = head[0];
     } else {
-        uint32_t end_file = be32(head + 12u);
-        if (story->payload_length < 256u || be32(head + 4u) == 0u ||
-            be32(head + 8u) < 256u || (be32(head + 8u) & 255u) != 0u ||
-            be32(head + 8u) > end_file || end_file != story->payload_length ||
-            be32(head + 16u) < end_file ||
-            (be32(head + 16u) & 255u) != 0u ||
-            be32(head + 20u) == 0u ||
-            (be32(head + 20u) & 255u) != 0u ||
-            be32(head + 24u) < 36u || be32(head + 24u) >= end_file)
+        uint32_t end_file = astra_load_be32(head + 12u);
+        if (story->payload_length < 256u ||
+            astra_load_be32(head + 4u) == 0u ||
+            astra_load_be32(head + 8u) < 256u ||
+            (astra_load_be32(head + 8u) & 255u) != 0u ||
+            astra_load_be32(head + 8u) > end_file ||
+            end_file != story->payload_length ||
+            astra_load_be32(head + 16u) < end_file ||
+            (astra_load_be32(head + 16u) & 255u) != 0u ||
+            astra_load_be32(head + 20u) == 0u ||
+            (astra_load_be32(head + 20u) & 255u) != 0u ||
+            astra_load_be32(head + 24u) < 36u ||
+            astra_load_be32(head + 24u) >= end_file)
             return ASTRAZ_INVALID;
-        story->version = be32(head + 4u);
+        story->version = astra_load_be32(head + 4u);
     }
     if (story->payload_offset > LONG_MAX || story->payload_length > LONG_MAX)
         return ASTRAZ_INVALID;
@@ -377,6 +378,9 @@ zchar os_read_key(int timeout, bool show_cursor)
 {
     zchar key = active->request->host->read_key(active->request->host->context,
         timeout > 0 ? (uint32_t)timeout : 0u, show_cursor);
+    if (active->request->host->tick &&
+        !active->request->host->tick(active->request->host->context))
+        finish(ASTRAZ_CANCELLED);
     drain_sound();
     return key;
 }
@@ -389,6 +393,9 @@ zchar os_read_line(int max, zchar *buffer, int timeout, int width,
         buffer, (uint32_t)max,
         timeout > 0 ? (uint32_t)timeout : 0u,
         width > 0 ? (uint32_t)width : 0u, continued);
+    if (active->request->host->tick &&
+        !active->request->host->tick(active->request->host->context))
+        finish(ASTRAZ_CANCELLED);
     drain_sound();
     return key;
 }
@@ -453,21 +460,20 @@ void os_display_char(zchar character)
 {
     AstraZEvent item = {.kind = ASTRAZ_EVENT_CHARACTER};
     item.data.text.character = character;
+    item.data.text.window = cwin;
     event(&item);
 }
 
 void os_display_string(const zchar *string)
 {
-    while (*string) {
-        if (*string == ZC_NEW_STYLE) {
-            ++string;
-            if (*string) os_set_text_style(*string++);
-        } else if (*string == ZC_NEW_FONT) {
-            ++string;
-            if (*string) os_set_font(*string++);
-        } else {
-            os_display_char(*string++);
-        }
+    zchar character;
+    while ((character = *string++) != 0u) {
+        if (character == ZC_NEW_STYLE)
+            os_set_text_style(*string++);
+        else if (character == ZC_NEW_FONT)
+            os_set_font(*string++);
+        else
+            os_display_char(character);
     }
 }
 
@@ -476,6 +482,7 @@ void os_set_cursor(int row, int column)
     AstraZEvent item = {.kind = ASTRAZ_EVENT_CURSOR};
     item.data.cursor.row = row;
     item.data.cursor.column = column;
+    item.data.cursor.window = cwin;
     event(&item);
 }
 
@@ -519,6 +526,7 @@ void os_set_text_style(int style)
     active->text_style = style;
     AstraZEvent item = {.kind = ASTRAZ_EVENT_STYLE};
     item.data.style.style = style;
+    item.data.style.window = cwin;
     event(&item);
 }
 
@@ -558,13 +566,12 @@ int os_char_width(zchar character)
 int os_string_width(const zchar *string)
 {
     int width = 0;
-    while (*string) {
-        if (*string == ZC_NEW_STYLE || *string == ZC_NEW_FONT) {
+    zchar character;
+    while ((character = *string++) != 0u) {
+        if (character == ZC_NEW_STYLE || character == ZC_NEW_FONT)
             ++string;
-            if (*string) ++string;
-        } else {
-            width += os_char_width(*string++);
-        }
+        else
+            width += os_char_width(character);
     }
     return width;
 }
@@ -582,6 +589,7 @@ void os_set_colour(int foreground, int background)
     AstraZEvent item = {.kind = ASTRAZ_EVENT_COLOUR};
     item.data.colour.foreground = foreground;
     item.data.colour.background = background;
+    item.data.colour.window = cwin;
     event(&item);
 }
 
@@ -638,7 +646,7 @@ static int load_resource(uint32_t usage, int number, AstraZResource *resource,
         fseek(active->resources, (long)result.data.startpos - 8L,
               SEEK_SET) != 0 ||
         fread(tag, 1u, sizeof(tag), active->resources) != sizeof(tag) ||
-        be32(tag + 4u) != result.length)
+        astra_load_be32(tag + 4u) != result.length)
         return 0;
     uint8_t *bytes = malloc(result.length ? result.length : 1u);
     if (!bytes) return 0;
@@ -646,7 +654,7 @@ static int load_resource(uint32_t usage, int number, AstraZResource *resource,
         free(bytes);
         return 0;
     }
-    resource->format = be32(tag);
+    resource->format = astra_load_be32(tag);
     resource->bytes = bytes;
     resource->length = result.length;
     *owned = bytes;

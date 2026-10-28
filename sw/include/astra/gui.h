@@ -501,6 +501,9 @@ enum {
     ASTRA_GUI_WINDOW_MENU_OPEN = 22u,
     /* flags: correlation token of this window's menu to dismiss. */
     ASTRA_GUI_WINDOW_MENU_CLOSE = 23u,
+    /* One attached AMNU document defines active-window menu headings and items. */
+    ASTRA_GUI_WINDOW_MENU_BAR_SET = 24u,
+    ASTRA_GUI_WINDOW_MENU_BAR_CLEAR = 25u,
 };
 
 /* AMNU v2: all fields big-endian. Header: magic, version, total bytes, row

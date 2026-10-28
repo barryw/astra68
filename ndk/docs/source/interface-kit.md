@@ -135,6 +135,12 @@ initialize and lay out the complete array. IDs are nonzero and unique. A child
 names its container by `parent_id`; parents must precede descendants in the
 array.
 
+Editable Field controls and Terminal use `ASTRA_TEXT_CARET_STANDARD`, the
+platform underline caret drawn by TextSurface. Text View can invert its theme
+foreground and background with `astra_interface_text_view_set_inverted()`;
+status lines use this shared appearance rather than private drawing.
+TextSurface centers glyphs and the underline caret within each row height.
+
 The flex engine uses deterministic integer arithmetic and has no child-count or
 nesting-depth cap of its own. The caller's control array and memory are the
 resource limit. A window frame event passed to `astra_interface_ui_handle_event`
@@ -392,6 +398,16 @@ After an external document change, call `astra_interface_text_view_refresh`
 to remeasure content, update scroll extents and repaint. Existing Field APIs
 remain single-line. Text View adds no fields to existing public control/context
 structures, so this is Interface Kit 7.1, with two new versioned symbols.
+
+Interface Kit 7.9 adds read-only Grid View for applications with fixed cell
+layouts and per-cell styles or colors. Supply caller-owned `AstraTextCell`
+storage through `AstraGridViewModel`, set its visible rows and columns, then
+initialize `AstraGridViewInfo`. The control uses the same TextSurface hardware
+glyph path and theme metrics as Text View. Call
+`astra_interface_grid_view_refresh` after changing cells or visible rows;
+the control remeasures, relayouts, and damages itself. Grid View does not
+handle editing or selection. Compose it with Container and ScrollView when
+those behaviors are needed.
 
 {c:type}`AstraTextSurface` owns presentation policy and caller-provided scratch
 storage, not the document. Grid cells, selection, and scrollback remain in the

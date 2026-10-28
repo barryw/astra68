@@ -4,8 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Application-private API. Call run on a worker thread; callbacks execute on
- * that thread. Frotz has process-global state, so only one run may be active. */
+/* Application-private API. Callbacks execute on the run caller's thread.
+ * Frotz has process-global state, so only one run may be active. */
 
 enum {
     ASTRAZ_OK = 0,
@@ -51,6 +51,12 @@ enum {
     ASTRAZ_KEY_CLICK = 0x9b,
     ASTRAZ_KEY_DOUBLE_CLICK = 0x9c,
     ASTRAZ_KEY_MENU_CLICK = 0x9d
+};
+
+enum {
+    ASTRAZ_HOTKEY_UNDO = 0x11,
+    ASTRAZ_HOTKEY_RESTART = 0x12,
+    ASTRAZ_HOTKEY_QUIT = 0x13
 };
 
 enum {
@@ -132,12 +138,12 @@ typedef struct AstraZEvent {
     uint32_t kind;
     union {
         struct { uint32_t version; uint16_t width, height; } screen;
-        struct { uint16_t character; } text;
-        struct { int32_t row, column; } cursor;
+        struct { uint16_t character; int32_t window; } text;
+        struct { int32_t row, column, window; } cursor;
         struct { int32_t top, left, bottom, right, window; } erase;
         struct { int32_t top, left, bottom, right, units; } scroll;
-        struct { int32_t style; } style;
-        struct { int32_t foreground, background; } colour;
+        struct { int32_t style, window; } style;
+        struct { int32_t foreground, background, window; } colour;
         struct { int32_t font; } font;
         struct { int32_t number, row, column; AstraZResource resource; } picture;
         struct {

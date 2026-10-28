@@ -1,23 +1,10 @@
 #include <astraz/engine.h>
+#include <astra/endian.h>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-static void put16(unsigned char *data, unsigned offset, unsigned value)
-{
-    data[offset] = (unsigned char)(value >> 8);
-    data[offset + 1] = (unsigned char)value;
-}
-
-static void put32(unsigned char *data, unsigned offset, unsigned value)
-{
-    data[offset] = (unsigned char)(value >> 24);
-    data[offset + 1] = (unsigned char)(value >> 16);
-    data[offset + 2] = (unsigned char)(value >> 8);
-    data[offset + 3] = (unsigned char)value;
-}
 
 static int write_file(const char *path, const unsigned char *data, size_t size)
 {
@@ -89,10 +76,10 @@ int main(void)
     if (descriptor < 0) return 2;
     close(descriptor);
     unsigned char zcode[256] = {0};
-    put16(zcode, 0x08, 64);
-    put16(zcode, 0x0a, 80);
-    put16(zcode, 0x0c, 96);
-    put16(zcode, 0x0e, 128);
+    astra_store_be16(zcode + 0x08, 64);
+    astra_store_be16(zcode + 0x0a, 80);
+    astra_store_be16(zcode + 0x0c, 96);
+    astra_store_be16(zcode + 0x0e, 128);
     int ok = 1;
     for (unsigned version = 1; version <= 8; ++version) {
         zcode[0] = (unsigned char)version;
@@ -101,14 +88,14 @@ int main(void)
     }
     unsigned char blorb[300] = {0};
     memcpy(blorb, "FORM", 4);
-    put32(blorb, 4, sizeof(blorb) - 8);
+    astra_store_be32(blorb + 4, sizeof(blorb) - 8);
     memcpy(blorb + 8, "IFRSRIdx", 8);
-    put32(blorb, 16, 16);
-    put32(blorb, 20, 1);
+    astra_store_be32(blorb + 16, 16);
+    astra_store_be32(blorb + 20, 1);
     memcpy(blorb + 24, "Exec", 4);
-    put32(blorb, 32, 36);
+    astra_store_be32(blorb + 32, 36);
     memcpy(blorb + 36, "ZCOD", 4);
-    put32(blorb, 40, sizeof(zcode));
+    astra_store_be32(blorb + 40, sizeof(zcode));
     memcpy(blorb + 44, zcode, sizeof(zcode));
     ok &= check("Z Blorb", path, blorb, sizeof(blorb), ASTRAZ_OK,
                 ASTRAZ_VM_Z, 8, ASTRAZ_CONTAINER_BLORB);
@@ -118,12 +105,12 @@ int main(void)
     memcpy(blorb + 24, "Exec", 4);
     unsigned char glulx[256] = {0};
     memcpy(glulx, "Glul", 4);
-    put32(glulx, 4, 0x00030100);
-    put32(glulx, 8, 256);
-    put32(glulx, 12, 256);
-    put32(glulx, 16, 256);
-    put32(glulx, 20, 256);
-    put32(glulx, 24, 36);
+    astra_store_be32(glulx + 4, 0x00030100);
+    astra_store_be32(glulx + 8, 256);
+    astra_store_be32(glulx + 12, 256);
+    astra_store_be32(glulx + 16, 256);
+    astra_store_be32(glulx + 20, 256);
+    astra_store_be32(glulx + 24, 36);
     ok &= check("bare Glulx", path, glulx, sizeof(glulx), ASTRAZ_OK,
                 ASTRAZ_VM_GLULX, 0x00030100, ASTRAZ_CONTAINER_BARE);
     memcpy(blorb + 36, "GLUL", 4);

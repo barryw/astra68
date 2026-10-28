@@ -17,6 +17,7 @@ static uint16_t last_foreground;
 static uint16_t last_fill_color;
 static int32_t last_fill_x;
 static int32_t last_fill_y;
+static int32_t last_text_y;
 static uint32_t last_fill_width;
 static uint32_t last_fill_height;
 static uint32_t last_text_length;
@@ -46,7 +47,7 @@ int astra_surface_mono_text_styled(AstraSurfaceView *surface, int32_t x,
 {
     (void)surface;
     (void)x;
-    (void)y;
+    last_text_y = y;
     (void)pixel_height;
     (void)cell_width;
     ++text_count;
@@ -77,7 +78,7 @@ static void reset_calls(void)
     fill_count = text_count = scroll_count = 0u;
     last_style = last_text_length = 0u;
     last_foreground = last_fill_color = 0u;
-    last_fill_x = last_fill_y = 0;
+    last_fill_x = last_fill_y = last_text_y = 0;
     last_fill_width = last_fill_height = 0u;
     memset(last_text, 0, sizeof(last_text));
     memset(fill_colors, 0, sizeof(fill_colors));
@@ -114,6 +115,7 @@ int main(void)
     assert(last_style == ASTRA_TEXT_STYLE_UNDERLINE);
     assert(last_text_length == 1u && last_text[0] == ' ');
     assert(last_foreground == 0x1111u && last_fill_color == 0x2222u);
+    assert(last_text_y == 50);
 
     reset_calls();
     cells[0].attributes = ASTRA_TEXT_STYLE_INVERSE |
@@ -183,9 +185,9 @@ int main(void)
     reset_calls();
     assert(astra_text_surface_draw_caret(
                &text, &target, 10, 8, 1u, 2u,
-               ASTRA_TEXT_CARET_UNDERLINE, 0x1234u) == ASTRA_OK);
+               ASTRA_TEXT_CARET_STANDARD, 0x1234u) == ASTRA_OK);
     assert(fill_count == 1u && last_fill_color == 0x1234u);
-    assert(last_fill_x == 26 && last_fill_y == 42);
+    assert(last_fill_x == 26 && last_fill_y == 44);
     assert(last_fill_width == 8u && last_fill_height == 2u);
     assert(last_fill_y != 46); /* Never place it in the inter-line gap. */
     assert(astra_text_surface_scroll(&text, &target, 10u, 8u, 20u, 6u,

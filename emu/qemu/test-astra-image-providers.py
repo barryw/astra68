@@ -96,7 +96,8 @@ assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
     "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r",
     "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG",
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG",
-    "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r"]
+    "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
+    "trusted /apps/AstraZ.app grants GUI VOLUMES VOLUME_READ DH0:r HOME:rw WORK:r LIBS:r"]
 open_with_ceiling = next(line.split(" grants ", 1)[1].split()
     for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
     if line.startswith("trusted /apps/OpenWith.app grants "))
@@ -171,7 +172,7 @@ with open(os.path.join(astra_image.REPOSITORY,
     runtime_manifest = manifest.read()
     assert "version 2.1.0\n" in runtime_manifest
     assert "provides runtime.library 1 1.17.0\n" in runtime_manifest
-    assert "provides system.library 4 4.4.0\n" in runtime_manifest
+    assert "provides system.library 4 4.5.0\n" in runtime_manifest
     assert "version 1.6.0\n" not in runtime_manifest
     assert "provides runtime.library 1 1.6.0\n" not in runtime_manifest
 with open(os.path.join(astra_image.REPOSITORY,

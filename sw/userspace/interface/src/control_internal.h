@@ -3,6 +3,11 @@
 
 #include <astra/control.h>
 
+#define ASTRA_CONTAINER_STYLE_TOOLBAR 1u
+#define ASTRA_BUTTON_STYLE_MASK 0xffu
+#define ASTRA_BUTTON_ICON_SHIFT 8u
+#define ASTRA_BUTTON_ICON(style) ((style) >> ASTRA_BUTTON_ICON_SHIFT)
+
 int astra_interface_single_line_text_valid(const char *text, uint32_t bytes);
 int astra_interface_draw_list_has_room(const AstraSurfaceView *surface,
                                        uint64_t commands, uint64_t payload);
@@ -55,6 +60,10 @@ AstraResult astra_interface_text_view_init(AstraControl *control,
                                           const AstraTextViewInfo *info);
 AstraResult astra_interface_text_view_refresh(AstraUIContext *context,
                                              AstraControl *control);
+AstraResult astra_interface_grid_view_init(AstraControl *control,
+    const AstraGridViewInfo *info);
+AstraResult astra_interface_grid_view_refresh(AstraUIContext *context,
+    AstraControl *control);
 AstraResult astra_interface_field_replace_selection(
     AstraUIContext *context, AstraControl *control,
     const char *replacement, uint32_t replacement_bytes);
