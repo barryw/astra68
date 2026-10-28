@@ -30,11 +30,13 @@ $(eval $(call astra_app_inventory,build,AstraZ))
 bundle: build/.apps
 
 build/test_transcript_flow: src/transcript_flow.c src/transcript_flow.h \
-		tests/test_transcript_flow.c
+		tests/test_transcript_flow.c ../../interface/src/text_model.c \
+		../../../common/utf8.c
 	@mkdir -p $(@D)
 	cc -std=c99 -Wall -Wextra -Werror -Iinclude -Isrc \
-		-I$(ROOT)/ndk/include \
-		src/transcript_flow.c tests/test_transcript_flow.c \
+		-I$(ROOT)/ndk/include -I$(ROOT)/sw/include \
+		src/transcript_flow.c ../../interface/src/text_model.c \
+		../../../common/utf8.c tests/test_transcript_flow.c \
 		-o $@
 
 test: build/test_transcript_flow build/test_screen_grid

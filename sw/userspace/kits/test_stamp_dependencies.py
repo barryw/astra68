@@ -22,7 +22,7 @@ class StampDependencyTest(unittest.TestCase):
         self.assertFalse(package_recipe_tracked(
             source.replace("$(KIT_STAMPS): Makefile", "$(KIT_STAMPS):")))
         self.assertFalse(package_recipe_tracked(
-            source.replace("$(PCM_STAMP) $(SDL_STAMP)", "$(PCM_STAMP)")))
+            source.replace("$(SDL_STAMP)", "", 1)))
 
 
 if __name__ == "__main__":

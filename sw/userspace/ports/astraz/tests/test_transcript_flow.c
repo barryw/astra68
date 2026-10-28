@@ -1,6 +1,7 @@
 #include "transcript_flow.h"
 
 #include <assert.h>
+#include <string.h>
 
 int main(void)
 {
@@ -55,5 +56,46 @@ int main(void)
     event.kind = ASTRAZ_EVENT_CHARACTER;
     event.data.text.character = 'Y';
     assert(!astraz_transcript_flow_event(&flow, &event));
+
+    char transcript[64] = "First\n";
+    char content[64];
+    uint32_t metadata[64];
+    char copied[64];
+    uint32_t copied_bytes = 0u;
+    AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    info.text = transcript;
+    info.text_bytes = 6u;
+    info.content_arena = content;
+    info.content_arena_bytes = sizeof(content);
+    info.metadata_arena = metadata;
+    info.metadata_arena_bytes = sizeof(metadata);
+    assert(astra_text_model_init(&model, &info) == ASTRA_OK);
+    memcpy(transcript + 6u, "Second\n", 7u);
+    info.text_bytes = 13u;
+    assert(astraz_transcript_model_sync(&model, &info, 0u) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &state) == ASTRA_OK);
+    assert(state.generation == 2u && state.text_bytes == 13u &&
+           state.content_bytes_used == 13u && state.piece_count == 1u);
+    assert(astra_text_model_copy(&model, 0u, 13u, copied,
+                                 sizeof(copied), &copied_bytes) == ASTRA_OK);
+    assert(copied_bytes == 13u && memcmp(copied, "First\nSecond\n", 13u) == 0);
+
+    memcpy(transcript, "Third\nFourth\n", 13u);
+    info.text_bytes = 13u;
+    assert(astraz_transcript_model_sync(&model, &info, 1u) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &state) == ASTRA_OK);
+    assert(state.generation == 1u && state.text_bytes == 13u);
+    assert(astra_text_model_copy(&model, 0u, 13u, copied,
+                                 sizeof(copied), &copied_bytes) == ASTRA_OK);
+    assert(copied_bytes == 13u &&
+           memcmp(copied, "Third\nFourth\n", 13u) == 0);
+    memcpy(transcript, "Short\n", 6u);
+    info.text_bytes = 6u;
+    assert(astraz_transcript_model_sync(&model, &info, 0u) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &state) == ASTRA_OK);
+    assert(state.generation == 1u && state.text_bytes == 6u);
+    astra_text_model_dispose(&model);
     return 0;
 }

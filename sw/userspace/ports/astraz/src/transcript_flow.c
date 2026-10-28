@@ -24,6 +24,24 @@ int astraz_input_copy(const char *text, uint32_t length,
     return 1;
 }
 
+AstraResult astraz_transcript_model_sync(AstraTextModel *model,
+                                        const AstraTextModelInfo *info,
+                                        uint32_t rebuild)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    if (info == NULL || astra_text_model_get_state(model, &state) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (!rebuild && info->text_bytes >= state.text_bytes) {
+        if (info->text_bytes == state.text_bytes) return ASTRA_OK;
+        return astra_text_model_replace(model, state.text_bytes,
+            state.text_bytes, info->text + state.text_bytes,
+            info->text_bytes - state.text_bytes);
+    }
+    astra_text_model_dispose(model);
+    *model = (AstraTextModel)ASTRA_TEXT_MODEL_INIT;
+    return astra_text_model_init(model, info);
+}
+
 int astraz_transcript_flow_flush_due(AstraZTranscriptFlow *flow,
                                     uint64_t now_ns)
 {
