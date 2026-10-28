@@ -79,6 +79,15 @@ int memcmp(const void *left, const void *right, size_t count);
  */
 void *memchr(const void *source, int value, size_t count);
 
+/** In-place worst-case O(n log n) sort with constant stack usage.
+ * @param array Elements to sort.
+ * @param count Number of elements.
+ * @param size Bytes per element.
+ * @param compare Ordering function returning negative, zero, or positive.
+ */
+void qsort(void *array, size_t count, size_t size,
+           int (*compare)(const void *, const void *));
+
 /**
  * Compute the length of a NUL-terminated string.
  *

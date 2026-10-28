@@ -95,6 +95,8 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/filesystem_library_identity.o \
 	build/m68k/library/filesystem_library.o \
 	build/m68k/library/filesystem_copy.o \
+	build/m68k/library/file_type.o \
+	build/m68k/library/file_type_resolve.o \
 	build/m68k/library/volume.o build/m68k/library/volume_client.o \
 	build/m68k/library/vfs_service_core.o \
 	build/m68k/library/vfs_client.o build/m68k/library/vfs_assign.o \
@@ -279,13 +281,14 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/vfs_path.h \
 		$(NDK)/include/astra/vfs_union.h \
 		$(NDK)/include/astra/filesystem_library.h \
+		$(NDK)/include/astra/file_type.h \
 		$(NDK)/include/astra/volume.h \
 		$(NDK)/include/astra/vfs_process.h \
 		$(NDK)/include/astra/application_catalog.h \
 		$(NDK)/include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.15 15.2.0 ABI 15.2$$'
+		grep -q '^filesystem.library.15 15.5.0 ABI 15.5$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.15]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
@@ -369,7 +372,9 @@ PROCESS_TEST := build/host/test_vfs_process
 PROCESS_SANITIZE_TEST := build/host/test_vfs_process_sanitize
 READER_TEST := build/host/test_vfs_reader
 FILESYSTEM_LIBRARY_TEST := build/host/test_filesystem_library
+FILESYSTEM_COPY_TEST := build/host/test_filesystem_copy
 CATALOG_TEST := build/host/test_application_catalog
+FILE_TYPE_TEST := build/host/test_file_type
 HOST_BACKEND_TEST := build/host/test_vfs_host_backend
 RAM_BACKEND_TEST := build/host/test_vfs_ram_backend
 HOST_TRANSPORT_TEST := build/host/test_vfs_host_transport
@@ -406,7 +411,8 @@ $(READER_TEST): src/vfs_reader.c src/vfs_provider_index.c \
 		src/vfs_reader.c src/vfs_provider_index.c \
 		tests/test_vfs_reader.c -o $@
 
-CATALOG_SOURCES := src/application_catalog.c $(SYSTEM)/src/bundle.c \
+CATALOG_SOURCES := src/application_catalog.c src/file_type_resolve.c \
+	$(SYSTEM)/src/bundle.c \
 	$(RUNTIME)/src/string.c \
 	$(SYSTEM)/src/manifest.c $(ASTRA_COMMON)/utf8.c tests/test_application_catalog.c
 
@@ -416,6 +422,12 @@ $(CATALOG_TEST): $(CATALOG_SOURCES) $(HEADERS) \
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(CATALOG_SOURCES) -o $@
 
+$(FILE_TYPE_TEST): src/file_type.c $(RUNTIME)/src/string.c \
+		tests/test_file_type.c $(NDK)/include/astra/file_type.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/file_type.c $(RUNTIME)/src/string.c tests/test_file_type.c -o $@
+
 $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
 		src/vfs_assign.c src/vfs_path.c $(UTF8_OBJECT) \
 		tests/test_filesystem_library.c \
@@ -424,6 +436,12 @@ $(FILESYSTEM_LIBRARY_TEST): src/filesystem_library.c src/vfs_union.c \
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/filesystem_library.c src/vfs_union.c src/vfs_assign.c \
 		src/vfs_path.c $(UTF8_OBJECT) tests/test_filesystem_library.c -o $@
+
+$(FILESYSTEM_COPY_TEST): src/filesystem_copy.c tests/test_filesystem_copy.c \
+		$(NDK)/include/astra/filesystem_library.h
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/filesystem_copy.c tests/test_filesystem_copy.c -o $@
 
 $(HOST_BACKEND_TEST): src/backends/host.c src/volume.c $(UTF8_OBJECT) \
 		tests/test_vfs_host_backend.c $(HEADERS)
@@ -447,7 +465,8 @@ $(HOST_TRANSPORT_TEST): src/vfs_host_transport.c \
 test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 		$(PORT_THREAD_TEST) \
 		$(PROCESS_TEST) $(READER_TEST) $(FILESYSTEM_LIBRARY_TEST) \
-		$(CATALOG_TEST) \
+		$(FILESYSTEM_COPY_TEST) \
+		$(CATALOG_TEST) $(FILE_TYPE_TEST) \
 		$(HOST_BACKEND_TEST) $(RAM_BACKEND_TEST) $(HOST_TRANSPORT_TEST)
 	./$(HOST_TEST)
 	./$(ASSIGN_TEST)
@@ -458,7 +477,9 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 	./$(PROCESS_TEST)
 	./$(READER_TEST)
 	./$(FILESYSTEM_LIBRARY_TEST)
+	./$(FILESYSTEM_COPY_TEST)
 	./$(CATALOG_TEST)
+	./$(FILE_TYPE_TEST)
 	./$(HOST_BACKEND_TEST)
 	./$(RAM_BACKEND_TEST)
 	./$(HOST_TRANSPORT_TEST)

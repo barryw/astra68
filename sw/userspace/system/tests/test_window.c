@@ -69,7 +69,7 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         *out_d1 = d1 == 2u ? 0x101u :
                   (d1 == 0x505u ? 0x103u : 0x102u);
     } else if (number == ASTRA_SYSCALL_AREA_CREATE) {
-        assert(d1 == (menu_area_mode ? 72u : ASTRA_HARDWARE_POINTER_WIDTH *
+        assert(d1 == (menu_area_mode == 2u ? 57u : menu_area_mode ? 72u : ASTRA_HARDWARE_POINTER_WIDTH *
                      ASTRA_HARDWARE_POINTER_HEIGHT * sizeof(AstraColorRGBA8)));
         assert(d2 == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
                       ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER));
@@ -132,11 +132,12 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             assert(port == 0x303u && call->request_size == sizeof(*request));
             assert(request->window == 7u && request->generation != 0u);
             assert(request->action >= ASTRA_GUI_WINDOW_QUERY &&
-                   request->action <= ASTRA_GUI_WINDOW_MENU_CLOSE &&
+                   request->action <= ASTRA_GUI_WINDOW_MENU_BAR_CLEAR &&
                    request->action != ASTRA_GUI_WINDOW_CLOSE);
             assert(call->reply_index == 0u);
             if (request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ||
-                request->action == ASTRA_GUI_WINDOW_MENU_OPEN)
+                request->action == ASTRA_GUI_WINDOW_MENU_OPEN ||
+                request->action == ASTRA_GUI_WINDOW_MENU_BAR_SET)
                 assert(call->handle_count == 1u &&
                        call->handles[0] == 0x103u);
             else
@@ -408,6 +409,18 @@ int main(void)
         assert(call_count == before);
         assert(astra_window_menu_close(&window, 42u) == ASTRA_OK);
         assert(last_command.action == ASTRA_GUI_WINDOW_MENU_CLOSE && last_command.flags == 42u);
+        {
+            AstraMenuItem bar[] = {{"Story", 5u, 0u},
+                {"Quit", 4u, 1u << ASTRA_MENU_PARENT_SHIFT}};
+            before = call_count;
+            menu_area_mode = 2u;
+            assert(astra_window_menu_bar_set(&window, bar, 2u) == ASTRA_OK);
+            assert(call_count == before + 6u &&
+                last_command.action == ASTRA_GUI_WINDOW_MENU_BAR_SET &&
+                last_command.flags == 0u);
+            assert(astra_window_menu_bar_clear(&window) == ASTRA_OK);
+            assert(last_command.action == ASTRA_GUI_WINDOW_MENU_BAR_CLEAR);
+        }
         menu_area_mode = 0u;
     }
     before = call_count;

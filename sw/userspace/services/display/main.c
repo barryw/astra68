@@ -143,6 +143,10 @@ typedef struct DisplayWindow {
     uint32_t pending_state_timestamp_ms;
     uint32_t pending_close_timestamp_ms;
     AstraWindowEvent pending_menu;
+    AstraMenuItem *bar_rows;
+    void *bar_document;
+    uint32_t bar_row_count;
+    uint32_t bar_root_count;
     uint32_t pending_font;
     uint32_t pointer_shape;
     uint32_t pointer_image_area;
@@ -177,6 +181,8 @@ typedef struct DisplaySession {
     uint32_t receive;
     uint32_t id;
     DisplayFontContext fonts;
+    void *icon_bytes;
+    uint32_t icon_length;
 } DisplaySession;
 
 typedef struct DisplayState {
@@ -245,6 +251,11 @@ typedef struct DisplayState {
     void *menu_document;
     uint32_t menu_owner;
     uint32_t menu_request;
+    uint32_t menu_selection_offset;
+    uint32_t bar_heading_owner;
+    uint32_t bar_heading_count;
+    int32_t bar_heading_left[16];
+    int32_t bar_heading_right[16];
     /* What the overlay surface holds, and what this compose drew. */
     uint8_t overlay_drawn;
     uint32_t overlay_drawn_revision;
@@ -982,6 +993,7 @@ static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp
 {
     uint32_t owner = state->menu_owner;
     uint32_t request = state->menu_request;
+    uint32_t offset = state->menu_selection_offset;
 
     if (state->overlay == DISPLAY_OVERLAY_NONE) return;
     damage_both(state, overlay_bounds(state));
@@ -994,6 +1006,7 @@ static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp
     state->submenu_start = state->submenu_count = 0u;
     state->submenu_focus = 0u;
     state->menu_owner = state->menu_request = 0u;
+    state->menu_selection_offset = 0u;
     astra_runtime_deallocate(state->menu_rows);
     astra_runtime_deallocate(state->menu_document);
     state->menu_rows = NULL;
@@ -1007,7 +1020,7 @@ static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp
             AstraWindowEvent event = {.type = ASTRA_WINDOW_EVENT_MENU_RESULT,
                 .timestamp_ms = timestamp_ms};
             event.data.menu_result.request = request;
-            event.data.menu_result.selection = selection;
+            event.data.menu_result.selection = selection != 0u ? selection + offset : 0u;
             event.data.menu_result.status = status;
             (void)send_event(&state->windows[index], &event);
         }
@@ -1085,6 +1098,49 @@ static void set_overlay(DisplayState *state, uint8_t overlay)
         DISPLAY_MENU_X, DISPLAY_MENU_Y, DISPLAY_MENU_WIDTH,
         ASTRA_MENU_ATTACHED_TOP | ASTRA_MENU_TRACK_OPEN_PRESS) == ASTRA_OK)
         (void)menu_install(state, &menu, 0u, 0u, NULL, NULL);
+}
+
+static uint32_t menu_bar_open(DisplayState *state, uint32_t heading)
+{
+    uint32_t index = find_id(state, state->bar_heading_owner);
+    AstraMenu menu = ASTRA_MENU_INIT;
+    AstraMenuItem *items;
+    uint32_t start, end, count;
+    uint32_t status;
+
+    if (index == state->count ||
+        heading >= state->windows[index].bar_root_count)
+        return ASTRA_STATUS_NOT_FOUND;
+    DisplayWindow *window = &state->windows[index];
+    start = window->bar_root_count;
+    while (start < window->bar_row_count &&
+        ((window->bar_rows[start].flags & ASTRA_MENU_PARENT_MASK) >>
+         ASTRA_MENU_PARENT_SHIFT) < heading + 1u) ++start;
+    end = start;
+    while (end < window->bar_row_count &&
+        ((window->bar_rows[end].flags & ASTRA_MENU_PARENT_MASK) >>
+         ASTRA_MENU_PARENT_SHIFT) == heading + 1u) ++end;
+    count = end - start;
+    if (count == 0u) return ASTRA_STATUS_PROTOCOL;
+    items = astra_runtime_allocate(count * sizeof(*items));
+    if (items == NULL) return ASTRA_STATUS_LIMIT;
+    for (uint32_t at = 0u; at < count; ++at) {
+        items[at] = window->bar_rows[start + at];
+        items[at].flags &= ~ASTRA_MENU_PARENT_MASK;
+    }
+    if (astra_interface_menu_init(&menu, items, count, &menu_work,
+        state->bar_heading_left[heading], DISPLAY_MENU_Y, 160u,
+        ASTRA_MENU_ATTACHED_TOP | ASTRA_MENU_TRACK_OPEN_PRESS) != ASTRA_OK) {
+        astra_runtime_deallocate(items);
+        return ASTRA_STATUS_PROTOCOL;
+    }
+    status = menu_install(state, &menu, window->id,
+                          ASTRA_WINDOW_MENU_BAR_REQUEST, items, NULL);
+    if (status == ASTRA_STATUS_OK)
+        state->menu_selection_offset = start;
+    else
+        astra_runtime_deallocate(items);
+    return status;
 }
 
 /* Compose a child popup from the same shared Menu control as its parent. */
@@ -2131,7 +2187,7 @@ static int build_cache(AstraRenderBuilder *builder, uint32_t cache,
             ++gadget_count;
         text_capacity = theme->spacing_unit * 3u +
                         gadget_count * theme->gadget_extent;
-        if (window->title_icon_area != 0u) {
+    if (window->title_icon_bytes != NULL) {
             int32_t icon_x = client_x + theme->spacing_unit;
             int32_t icon_y = client_y + ((int32_t)title - 16) / 2;
 
@@ -2198,11 +2254,12 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
                                  DisplayState *state,
                                  const AstraTheme *theme)
 {
-    static const char *const headings[] = {"File", "Edit", "View"};
-    static const uint8_t heading_lengths[] = {4u, 4u, 4u};
     const char *active_title;
     uint32_t active_title_length;
     uint32_t active_title_width;
+    uint32_t active = active_window(state);
+    const DisplayWindow *bar_window = active < state->count ?
+        &state->windows[active] : NULL;
     int32_t heading_x;
 
     system_bar_title(state, &active_title, &active_title_length);
@@ -2260,17 +2317,27 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
                 color(state->overlay == DISPLAY_OVERLAY_MENU && state->menu_owner == 0u ?
                       theme->accent : theme->text_primary)))
             return 0;
+    state->bar_heading_owner = bar_window != NULL ? bar_window->id : 0u;
+    state->bar_heading_count = bar_window != NULL ? bar_window->bar_root_count : 0u;
     heading_x = DISPLAY_APP_TITLE_X + (int32_t)active_title_width + 24;
-    for (uint32_t index = 0u; index < 3u; ++index) {
+    for (uint32_t index = 0u; index < state->bar_heading_count; ++index) {
+        const AstraMenuItem *heading = &bar_window->bar_rows[index];
+        uint32_t width = astra_render_builder_text_width(builder,
+            heading->label, heading->label_length,
+            ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, 0u);
+        if (heading_x + (int32_t)width + 12 > (int32_t)ASTRA_DISPLAY_WIDTH - 160) {
+            state->bar_heading_count = index;
+            break;
+        }
+        state->bar_heading_left[index] = heading_x - 8;
+        state->bar_heading_right[index] = heading_x + (int32_t)width + 8;
         if (!astra_render_builder_text(
                 builder, state->system_resource[0], heading_x, 8,
-                headings[index], heading_lengths[index],
+                heading->label, heading->label_length,
                 ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
-                color(theme->text_muted)))
+                color(theme->text_primary)))
             return 0;
-        heading_x += (int32_t)astra_render_builder_text_width(
-            builder, headings[index], heading_lengths[index],
-            ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, 0u) + 24;
+        heading_x += (int32_t)width + 24;
     }
     return 1;
 }
@@ -2539,13 +2606,14 @@ static uint32_t menu_open(DisplayState *state, const AstraTheme *theme,
     uint32_t mapped = 0u, size, count, offset, roots = 0u, last_parent = 0u;
     int32_t x, y;
     uint32_t status;
+    int bar = command->action == ASTRA_GUI_WINDOW_MENU_BAR_SET;
 
-    if (state->overlay != DISPLAY_OVERLAY_NONE || window->pending_menu.type != 0u ||
+    if (!bar && (state->overlay != DISPLAY_OVERLAY_NONE || window->pending_menu.type != 0u ||
         state->capture_window != 0u || grab_target(state) != state->count)
-        return ASTRA_STATUS_BUSY;
-    if (window->state == ASTRA_WINDOW_STATE_MINIMIZED || modal_window(state, index) != index ||
+        ) return ASTRA_STATUS_BUSY;
+    if (!bar && (window->state == ASTRA_WINDOW_STATE_MINIMIZED || modal_window(state, index) != index ||
         (active != index && !(window->request.type == ASTRA_WINDOW_DESKTOP && active == state->count)))
-        return ASTRA_STATUS_ACCESS;
+        ) return ASTRA_STATUS_ACCESS;
     status = service_status(astra_rt_area_map(area, ASTRA_AREA_MAP_READ, &mapping, &mapped));
     if (status != ASTRA_STATUS_OK) return status;
     if (mapped < ASTRA_GUI_MENU_HEADER_BYTES || mapped > ASTRA_GUI_MENU_BYTES_MAX) {
@@ -2579,6 +2647,11 @@ static uint32_t menu_open(DisplayState *state, const AstraTheme *theme,
         if (astra_load_be32(row + 4u) != offset || length > size - offset ||
             astra_load_be32(row + 12u) != 0u)
             goto done;
+        if (bar && ((flags & ~(ASTRA_MENU_DISABLED | ASTRA_MENU_CHECKED |
+                              ASTRA_MENU_SEPARATOR | ASTRA_MENU_PARENT_MASK)) != 0u ||
+                    !astra_utf8_validate((const char *)document + offset,
+                                         length, 0u)))
+            goto done;
         if (parent == 0u) {
             if (last_parent != 0u) goto done;
             ++roots;
@@ -2592,6 +2665,30 @@ static uint32_t menu_open(DisplayState *state, const AstraTheme *theme,
         offset += length;
     }
     if (offset != size || roots == 0u) goto done;
+    if (bar) {
+        if (roots == count || roots > 16u) goto done;
+        for (uint32_t at = 0u; at < roots; ++at) {
+            int found = 0;
+            if (rows[at].label_length == 0u ||
+                (rows[at].flags & (ASTRA_MENU_DISABLED | ASTRA_MENU_SEPARATOR)) != 0u)
+                goto done;
+            for (uint32_t child = roots; child < count; ++child)
+                if (((rows[child].flags & ASTRA_MENU_PARENT_MASK) >>
+                     ASTRA_MENU_PARENT_SHIFT) == at + 1u) found = 1;
+            if (!found) goto done;
+        }
+        if (state->menu_owner == window->id &&
+            state->menu_request == ASTRA_WINDOW_MENU_BAR_REQUEST)
+            menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+        astra_runtime_deallocate(window->bar_rows);
+        astra_runtime_deallocate(window->bar_document);
+        window->bar_rows = rows;
+        window->bar_document = document;
+        window->bar_row_count = count;
+        window->bar_root_count = roots;
+        if (active == index) damage_active_title(state);
+        return ASTRA_STATUS_OK;
+    }
     content_origin(theme, window, &x, &y);
     if (astra_interface_menu_init(&menu, rows, roots, &menu_work,
         x + command->x, y + command->y, 160u, 0u) != ASTRA_OK)
@@ -3421,7 +3518,8 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
     if (size != sizeof(*request) ||
         handles != (request->action == ASTRA_GUI_WINDOW_CLOSE ? 0u :
                    request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ||
-                   request->action == ASTRA_GUI_WINDOW_MENU_OPEN ? 2u : 1u) ||
+                   request->action == ASTRA_GUI_WINDOW_MENU_OPEN ||
+                   request->action == ASTRA_GUI_WINDOW_MENU_BAR_SET ? 2u : 1u) ||
         request->header.total_size != sizeof(*request) ||
         request->header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
         request->header.flags != 0u ||
@@ -3433,7 +3531,7 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
         request->generation == 0u ||
         request->reserved16 != 0u || request->reserved != 0u ||
         request->action < ASTRA_GUI_WINDOW_QUERY ||
-        request->action > ASTRA_GUI_WINDOW_MENU_CLOSE ||
+        request->action > ASTRA_GUI_WINDOW_MENU_BAR_CLEAR ||
         request->title_length > ASTRA_WINDOW_TITLE_MAX)
         return 0;
     if (request->action == ASTRA_GUI_WINDOW_MENU_OPEN)
@@ -3442,6 +3540,9 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
                request->x < content_width && request->y < content_height;
     if (request->action == ASTRA_GUI_WINDOW_MENU_CLOSE)
         return frame_zero && request->title_length == 0u && request->flags != 0u;
+    if (request->action == ASTRA_GUI_WINDOW_MENU_BAR_SET ||
+        request->action == ASTRA_GUI_WINDOW_MENU_BAR_CLEAR)
+        return frame_zero && request->title_length == 0u && request->flags == 0u;
     if (request->action == ASTRA_GUI_WINDOW_SET_POINTER_GRAB)
         return request->title_length == 0u &&
                (request->flags & ~ASTRA_WINDOW_POINTER_GRAB_ALL) == 0u &&
@@ -3543,6 +3644,21 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
     switch (command->action) {
     case ASTRA_GUI_WINDOW_QUERY:
     case ASTRA_GUI_WINDOW_MENU_OPEN:
+    case ASTRA_GUI_WINDOW_MENU_BAR_SET:
+        return ASTRA_STATUS_OK;
+    case ASTRA_GUI_WINDOW_MENU_BAR_CLEAR:
+        if (state->menu_owner == window->id &&
+            state->menu_request == ASTRA_WINDOW_MENU_BAR_REQUEST)
+            menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+        astra_runtime_deallocate(window->bar_rows);
+        astra_runtime_deallocate(window->bar_document);
+        window->bar_rows = NULL;
+        window->bar_document = NULL;
+        window->bar_row_count = window->bar_root_count = 0u;
+        if ((window->request.flags & ASTRA_WINDOW_ACTIVE) != 0u) {
+            damage_active_title(state);
+            *changed = 1;
+        }
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_MENU_CLOSE:
         if (state->menu_owner != window->id || state->menu_request != command->flags)
@@ -4357,6 +4473,22 @@ static uint32_t handle_pointer(DisplayState *state,
         *effects |= DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR;
         return ASTRA_STATUS_OK;
     }
+    if (input->code == ASTRA_INPUT_BUTTON_LEFT &&
+        (input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u &&
+        state->capture_window == 0u && grab_target(state) == state->count &&
+        state->pointer_y >= 0 && state->pointer_y < (int32_t)DISPLAY_WORK_TOP) {
+        for (uint32_t heading = 0u; heading < state->bar_heading_count; ++heading)
+            if (state->pointer_x >= state->bar_heading_left[heading] &&
+                state->pointer_x < state->bar_heading_right[heading]) {
+                if (state->overlay != DISPLAY_OVERLAY_NONE)
+                    menu_end(state, 0u, input->timestamp_ms, ASTRA_STATUS_OK);
+                if (menu_bar_open(state, heading) == ASTRA_STATUS_OK) {
+                    state->swallow_pointer_up |= 1u;
+                    *effects |= DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR;
+                }
+                return ASTRA_STATUS_OK;
+            }
+    }
     if (state->overlay != DISPLAY_OVERLAY_NONE)
         return menu_input(state, input, effects);
 
@@ -4563,6 +4695,8 @@ static uint32_t reply_open(uint32_t handle, uint32_t transaction,
 static void close_window(DisplayWindow *window)
 {
     display_font_set_close(&window->fonts);
+    astra_runtime_deallocate(window->bar_rows);
+    astra_runtime_deallocate(window->bar_document);
     if (window->control_receive != 0u)
         (void)astra_close(window->control_receive);
     if (window->event_send != 0u)
@@ -4572,8 +4706,12 @@ static void close_window(DisplayWindow *window)
     if (window->surface.area != 0u)
         (void)astra_shared_surface_close(&window->surface);
     display_window_graphics_close(window->graphics);
-    if (window->title_icon_bytes != NULL)
-        (void)astra_rt_area_unmap(window->title_icon_bytes);
+    if (window->title_icon_bytes != NULL) {
+        if (window->title_icon_area != 0u)
+            (void)astra_rt_area_unmap(window->title_icon_bytes);
+        else
+            astra_runtime_deallocate(window->title_icon_bytes);
+    }
     if (window->title_icon_area != 0u)
         (void)astra_close(window->title_icon_area);
     if (window->pointer_image != NULL)
@@ -4820,6 +4958,37 @@ static void begin_launch(DisplayState *state,
     damage_both(state, launch_bounds());
 }
 
+static void keep_session_icon(DisplaySession *session,
+                              const DisplayLaunch *launch, uint32_t length)
+{
+    if (launch->icon_bytes == NULL || length == 0u)
+        return;
+    session->icon_bytes = astra_runtime_allocate(length);
+    if (session->icon_bytes == NULL)
+        return;
+    (void)memcpy(session->icon_bytes, launch->icon_bytes, length);
+    session->icon_length = length;
+}
+
+static void window_icon_from_session(const DisplaySession *session,
+                                     DisplayWindow *window)
+{
+    if (session->icon_bytes == NULL || session->icon_length == 0u)
+        return;
+    window->title_icon_bytes = astra_runtime_allocate(session->icon_length);
+    if (window->title_icon_bytes == NULL)
+        return;
+    (void)memcpy(window->title_icon_bytes, session->icon_bytes,
+                 session->icon_length);
+    if (astra_aicon_open(window->title_icon_bytes, session->icon_length,
+                         &window->title_icon) == ASTRA_BUNDLE_OK &&
+        astra_aicon_strike(&window->title_icon, 16u,
+                           &window->title_icon_strike) == ASTRA_BUNDLE_OK)
+        return;
+    astra_runtime_deallocate(window->title_icon_bytes);
+    window->title_icon_bytes = NULL;
+}
+
 /* A new session: its receive end joins the wait set, its send end goes to
    whoever asked -- the supervisor, for an application it is launching. */
 static void open_session(DisplayState *state,
@@ -4852,11 +5021,13 @@ static void open_session(DisplayState *state,
             ASTRA_SYSCALL_OK &&
         status == ASTRA_STATUS_OK) {
         send = 0u;
-        state->sessions[state->session_count++] = (DisplaySession){
-            .receive = receive, .id = message.session};
+        DisplaySession *opened = &state->sessions[state->session_count++];
+        *opened = (DisplaySession){.receive = receive, .id = message.session};
         receive = 0u;
-        if (request->name_length != 0u)
+        if (request->name_length != 0u) {
             begin_launch(state, request, message.session, icon_area);
+            keep_session_icon(opened, &state->launch, request->icon_length);
+        }
     }
     if (send != 0u)
         (void)astra_close(send);
@@ -4870,6 +5041,7 @@ static void close_session(DisplayState *state, uint32_t index)
 {
     if (state->sessions[index].id == state->launch.session)
         end_launch(state);
+    astra_runtime_deallocate(state->sessions[index].icon_bytes);
     (void)astra_close(state->sessions[index].receive);
     display_font_context_close(&state->sessions[index].fonts);
     for (uint32_t at = index; at + 1u < state->session_count; ++at)
@@ -5077,6 +5249,14 @@ static void receive_open(uint32_t device, uint32_t irq,
                                        &candidate.title_icon_strike) !=
                         ASTRA_BUNDLE_OK)
                     status = DISPLAY_FAIL_PROTOCOL;
+            }
+        } else if (session != 0u) {
+            for (uint32_t at = 0u; at < state->session_count; ++at) {
+                const DisplaySession *source = &state->sessions[at];
+                if (source->id != session || source->icon_bytes == NULL)
+                    continue;
+                window_icon_from_session(source, &candidate);
+                break;
             }
         }
     }
@@ -5407,7 +5587,9 @@ static void receive_command(uint32_t device, uint32_t irq,
     }
     if (status == ASTRA_STATUS_OK)
         status = apply_command(state, &theme, &command, &closed, &changed);
-    if (status == ASTRA_STATUS_OK && command.action == ASTRA_GUI_WINDOW_MENU_OPEN) {
+    if (status == ASTRA_STATUS_OK &&
+        (command.action == ASTRA_GUI_WINDOW_MENU_OPEN ||
+         command.action == ASTRA_GUI_WINDOW_MENU_BAR_SET)) {
         status = menu_open(state, &theme, window_index, &command, handles[1]);
         changed = status == ASTRA_STATUS_OK;
     }

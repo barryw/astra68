@@ -14,6 +14,7 @@
 #include <astra/surface.h>
 #include <astra/scroll.h>
 #include <astra/text_model.h>
+#include <astra/text_surface.h>
 #include <astra/types.h>
 #include <astra/window.h>
 
@@ -44,7 +45,9 @@ enum {
     /** Single-selection vertical list; compose with ScrollView for overflow. */
     ASTRA_CONTROL_LIST = 18u,
     /** Selectable, read-only multiline text; compose with ScrollView. */
-    ASTRA_CONTROL_TEXT_VIEW = 19u
+    ASTRA_CONTROL_TEXT_VIEW = 19u,
+    /** Read-only fixed cell grid with caller-owned colors and styles. */
+    ASTRA_CONTROL_GRID_VIEW = 20u
 };
 
 /** Semantic state owned by an application. */
@@ -68,7 +71,9 @@ enum {
     ASTRA_BUTTON_STANDARD = 0u,
     ASTRA_BUTTON_PRIMARY = 1u,
     ASTRA_BUTTON_WARNING = 2u,
-    ASTRA_BUTTON_DESTRUCTIVE = 3u
+    ASTRA_BUTTON_DESTRUCTIVE = 3u,
+    /** Flat button on a 36 px window toolbar; hover reveals its surface. */
+    ASTRA_BUTTON_TOOLBAR = 4u
 };
 
 /** Text hierarchy on a lunar client surface. */
@@ -238,6 +243,40 @@ typedef struct AstraSettingsPaneInfo {
     ASTRA_FLEX_JUSTIFY_START, ASTRA_FLEX_ALIGN_STRETCH, \
     24, 24, 24, 24, 12, 0, { 0, 0, 0, 0 } \
 }
+
+/** One button in a composed toolbar. */
+typedef struct AstraToolbarAction {
+    const char *label; /**< Borrowed single-line UTF-8. */
+    uint32_t label_length; /**< Label bytes excluding terminator. */
+    uint32_t state; /**< ASTRA_CONTROL_DISABLED or zero. */
+} AstraToolbarAction;
+
+/** One row Container followed by consecutively numbered Buttons. */
+typedef struct AstraToolbarInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t first_id; /**< Container ID; action IDs follow consecutively. */
+    const AstraToolbarAction *actions; /**< Borrowed action descriptions. */
+    uint32_t action_count; /**< Number of buttons after Container. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraToolbarInfo;
+/** Empty toolbar description. */
+#define ASTRA_TOOLBAR_INFO_INIT { sizeof(AstraToolbarInfo), 0, 0, 0, {0,0,0,0} }
+
+/** Shared 16 px toolbar glyphs, drawn by Astraea through the UI draw list. */
+enum {
+    ASTRA_TOOLBAR_ICON_NONE = 0u,
+    ASTRA_TOOLBAR_ICON_BACK,
+    ASTRA_TOOLBAR_ICON_FORWARD,
+    ASTRA_TOOLBAR_ICON_RESTART,
+    ASTRA_TOOLBAR_ICON_UNDO,
+    ASTRA_TOOLBAR_ICON_CLOSE,
+    ASTRA_TOOLBAR_ICON_OPEN,
+    ASTRA_TOOLBAR_ICON_TRASH,
+    ASTRA_TOOLBAR_ICON_GRID,
+    ASTRA_TOOLBAR_ICON_LIST,
+    ASTRA_TOOLBAR_ICON_COLUMNS,
+    ASTRA_TOOLBAR_ICON_SEARCH
+};
 
 /** Creation data for a viewport that clips and translates one direct child. */
 typedef struct AstraScrollViewInfo {
@@ -573,7 +612,9 @@ typedef struct AstraChoiceInfo {
 
 enum {
     /** Permit selection and copying but reject document mutations. */
-    ASTRA_FIELD_READ_ONLY = UINT32_C(1) << 0
+    ASTRA_FIELD_READ_ONLY = UINT32_C(1) << 0,
+    /** Draw text and caret without a field box or horizontal inset. */
+    ASTRA_FIELD_INLINE = UINT32_C(1) << 1
 };
 
 /** Creation data copied into a retained single-line UTF-8 field. */
@@ -612,6 +653,33 @@ typedef struct AstraTextViewInfo {
 /** Empty Text View construction data. */
 #define ASTRA_TEXT_VIEW_INFO_INIT \
     { sizeof(AstraTextViewInfo), 0u, 0, 0u, { 0u, 0u, 0u, 0u } }
+
+/** Caller-owned row-major cells used by Grid View. */
+typedef struct AstraGridViewModel {
+    uint32_t size; /**< Structure size. */
+    const AstraTextCell *cells; /**< Retained cell storage. */
+    uint32_t columns; /**< Cells in each row; must be nonzero. */
+    uint32_t rows; /**< Visible rows. */
+    uint32_t capacity_cells; /**< Available cells in storage. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraGridViewModel;
+
+/** Empty Grid View model; set storage and dimensions before use. */
+#define ASTRA_GRID_VIEW_MODEL_INIT \
+    { sizeof(AstraGridViewModel), 0, 0u, 0u, 0u, { 0u, 0u } }
+
+/** Construction data copied into a retained, noninteractive Grid View. */
+typedef struct AstraGridViewInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t id; /**< Nonzero ID unique within the UI context. */
+    AstraGridViewModel *model; /**< Caller-owned model retained by control. */
+    uint32_t state; /**< Application-owned disabled/collapsed state. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraGridViewInfo;
+
+/** Empty Grid View construction data. */
+#define ASTRA_GRID_VIEW_INFO_INIT \
+    { sizeof(AstraGridViewInfo), 0u, 0, 0u, { 0u, 0u, 0u, 0u } }
 
 /** Caller-owned retained control.  Private fields must not be modified. */
 typedef struct AstraControl {

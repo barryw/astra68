@@ -1,1 +1,2 @@
 third_party/lwext4/astra/patches/*.patch -whitespace
+third_party/frotz/** -whitespace

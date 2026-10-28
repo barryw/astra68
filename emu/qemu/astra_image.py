@@ -113,7 +113,8 @@ DEFAULT_KITS = os.path.join(REPOSITORY, "sw/userspace/kits/build")
 DEFAULT_APPS = (os.path.join(REPOSITORY, "sw/userspace/apps/build"),
                 os.path.join(REPOSITORY, "sw/userspace/sdl2/build"),
                 os.path.join(REPOSITORY,
-                             "sw/userspace/ports/chocolate-doom/build"))
+                             "sw/userspace/ports/chocolate-doom/build"),
+                os.path.join(REPOSITORY, "sw/userspace/ports/astraz/build"))
 APPLICATION_POLICY = os.path.join(
     REPOSITORY, "sw/include/astra/application_policy.h")
 DEFAULT_TERMINFO = os.path.join(
@@ -194,7 +195,9 @@ DISPLAY_STARTUP_MANIFEST = (
     "trusted /apps/Atlas.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:rw FONTS:r APPS:r LIBS:r LOG\n"
     "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r\n"
     "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG\n"
-    "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG\n")
+    "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG\n"
+    "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r\n"
+    "trusted /apps/AstraZ.app grants GUI VOLUMES VOLUME_READ DH0:r HOME:rw WORK:r LIBS:r\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",
                     "input", "clipboard", "fonts", "display", "media", "codec", "sampler",

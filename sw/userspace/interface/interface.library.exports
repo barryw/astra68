@@ -117,3 +117,25 @@ ASTRA_INTERFACE_7.4 {
         astra_interface_inline_edit_stop;
         astra_interface_inline_edit_text;
 } ASTRA_INTERFACE_7.3;
+
+ASTRA_INTERFACE_7.5 {
+    global:
+        astra_interface_toolbar_init;
+        astra_interface_ui_focus_control;
+} ASTRA_INTERFACE_7.4;
+
+ASTRA_INTERFACE_7.6 {
+    global:
+        astra_interface_toolbar_set_icons;
+} ASTRA_INTERFACE_7.5;
+
+ASTRA_INTERFACE_7.8 {
+    global:
+        astra_interface_text_view_set_inverted;
+} ASTRA_INTERFACE_7.6;
+
+ASTRA_INTERFACE_7.9 {
+    global:
+        astra_interface_grid_view_init;
+        astra_interface_grid_view_refresh;
+} ASTRA_INTERFACE_7.8;

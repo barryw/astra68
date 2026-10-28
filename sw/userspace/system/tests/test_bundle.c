@@ -28,6 +28,78 @@ static void manifest_test(void)
     AstraBundleManifest manifest = ASTRA_BUNDLE_MANIFEST_INIT;
     uint32_t line = 0u;
 
+    {
+        static const char declaration[] =
+            "astra-bundle 1\nkind application\nid org.astra.z\n"
+            "name AstraZ\nversion 1.0.0\nexecutable bin/z\n"
+            "icon resources/z.aicon\n"
+            "handles application/x-zmachine-story .z3\n"
+            "handles application/x-zmachine-story .z4\n"
+            "handles application/x-zmachine-story .z5\n"
+            "handles application/x-zmachine-story .z6\n"
+            "handles application/x-zmachine-story .z8\n"
+            "handles application/x-blorb .blorb\n";
+        char supported[sizeof(declaration)];
+        char unmatched[sizeof(declaration)];
+        char type[ASTRA_BUNDLE_CONTENT_TYPE_MAX];
+        uint32_t handles = 0u;
+
+        memcpy(supported, declaration, sizeof(declaration));
+        memcpy(unmatched, declaration, sizeof(declaration));
+        assert(astra_bundle_manifest_handles(
+            supported, sizeof(supported) - 1u,
+            "application/x-zmachine-story", &handles) == ASTRA_BUNDLE_OK);
+        assert(handles == 1u);
+        assert(astra_bundle_manifest_handles(
+            unmatched, sizeof(unmatched) - 1u,
+            "application/x-other", &handles) == ASTRA_BUNDLE_OK);
+        assert(handles == 0u);
+        for (uint32_t at = 3u; at <= 8u; ++at) {
+            char extension[] = ".z3";
+            if (at == 7u) continue;
+            extension[2] = (char)('0' + at);
+            memcpy(unmatched, declaration, sizeof(declaration));
+            assert(astra_bundle_manifest_extension_type(unmatched,
+                sizeof(unmatched) - 1u, extension, type, sizeof(type)) ==
+                ASTRA_BUNDLE_OK);
+            assert(strcmp(type, "application/x-zmachine-story") == 0);
+        }
+        memcpy(unmatched, declaration, sizeof(declaration));
+        assert(astra_bundle_manifest_extension_type(unmatched,
+            sizeof(unmatched) - 1u, ".z7", type, sizeof(type)) ==
+            ASTRA_BUNDLE_OK && type[0] == '\0');
+        memcpy(unmatched, declaration, sizeof(declaration));
+        assert(astra_bundle_manifest_extension_type(unmatched,
+            sizeof(unmatched) - 1u, ".blorb", type, sizeof(type)) ==
+            ASTRA_BUNDLE_OK && strcmp(type, "application/x-blorb") == 0);
+        memcpy(unmatched, declaration, sizeof(declaration));
+        assert(astra_bundle_manifest_extension_type(unmatched,
+            sizeof(unmatched) - 1u, ".Z3", type, sizeof(type)) ==
+            ASTRA_BUNDLE_INVALID);
+        {
+            char conflict[] = "astra-bundle 1\nkind application\n"
+                "id org.astra.conflict\nname Conflict\nversion 1.0.0\n"
+                "executable bin/app\nicon icon.aicon\n"
+                "handles application/x-zmachine-story .z3\n"
+                "handles application/x-other .z3\n";
+            assert(astra_bundle_manifest_extension_type(conflict,
+                sizeof(conflict) - 1u, ".z3", type, sizeof(type)) ==
+                ASTRA_BUNDLE_INVALID);
+        }
+    }
+    {
+        char kit[] = "astra-bundle 1\nkind kit\nid org.astra.bad\n"
+            "name Bad\nversion 1.0.0\nprovides bad.library 1 1.0.0\n"
+            "handles application/x-zmachine-story\n";
+        char invalid[] = "astra-bundle 1\nkind application\nid org.astra.bad\n"
+            "name Bad\nversion 1.0.0\nexecutable bin/bad\n"
+            "icon resources/bad.aicon\nhandles application/Bad\n";
+        assert(astra_bundle_manifest_parse(kit, sizeof(kit) - 1u,
+                                          &manifest, &line) == ASTRA_BUNDLE_INVALID);
+        assert(astra_bundle_manifest_parse(invalid, sizeof(invalid) - 1u,
+                                          &manifest, &line) == ASTRA_BUNDLE_INVALID);
+    }
+
     assert(astra_bundle_manifest_parse(text, sizeof(text) - 1u, &manifest,
                                        &line) == ASTRA_BUNDLE_OK);
     assert(manifest.kind == ASTRA_BUNDLE_APPLICATION);

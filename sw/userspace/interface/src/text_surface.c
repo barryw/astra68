@@ -187,6 +187,7 @@ static AstraResult render_cells(
 {
     uint64_t x64;
     uint64_t y64;
+    uint64_t text_y64;
     uint64_t last_x64;
     uint32_t first;
     uint16_t selection_foreground = 0u;
@@ -210,11 +211,14 @@ static AstraResult render_cells(
         return ASTRA_ERROR_INVALID_ARGUMENT;
     x64 = (uint64_t)column * text->_private_cell_width;
     y64 = (uint64_t)row * text->_private_line_height;
+    text_y64 = y64 + (text->_private_line_height -
+                      text->_private_font_height) / 2u;
     last_x64 = x64 + (count == 0u ? 0u :
                      (uint64_t)(count - 1u) * text->_private_cell_width);
-    if (x64 > INT32_MAX || y64 > INT32_MAX || last_x64 > INT32_MAX ||
+    if (x64 > INT32_MAX || text_y64 > INT32_MAX ||
+        last_x64 > INT32_MAX ||
         origin_x > INT32_MAX - (int32_t)last_x64 ||
-        origin_y > INT32_MAX - (int32_t)y64)
+        origin_y > INT32_MAX - (int32_t)text_y64)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t index = 0u; index < count; ++index)
         if (!astra_unicode_scalar_valid(cells[index].codepoint) ||
@@ -304,7 +308,7 @@ static AstraResult render_cells(
                 origin_x + (int32_t)x64 +
                     (int32_t)((uint64_t)visible_first *
                               text->_private_cell_width),
-                origin_y + (int32_t)y64, cells + visible_first,
+                origin_y + (int32_t)text_y64, cells + visible_first,
                 visible_last - visible_first, foreground, style, requirements);
 
             if (result != ASTRA_OK)
@@ -469,10 +473,6 @@ AstraResult astra_text_surface_draw_caret(
         return ASTRA_ERROR_INVALID_ARGUMENT;
     x = (uint64_t)column * text->_private_cell_width;
     y = (uint64_t)row * text->_private_line_height;
-    if (x > INT32_MAX || y > INT32_MAX ||
-        origin_x > INT32_MAX - (int32_t)x ||
-        origin_y > INT32_MAX - (int32_t)y)
-        return ASTRA_ERROR_INVALID_ARGUMENT;
     if (kind == ASTRA_TEXT_CARET_BLOCK) {
         width = text->_private_cell_width;
         height = text->_private_line_height;
@@ -482,8 +482,13 @@ AstraResult astra_text_surface_draw_caret(
     } else {
         width = text->_private_cell_width;
         height = text->_private_font_height < 2u ? 1u : 2u;
-        y += text->_private_font_height - height;
+        y += (text->_private_line_height - text->_private_font_height) / 2u +
+             text->_private_font_height - height;
     }
+    if (x > INT32_MAX || y > INT32_MAX ||
+        origin_x > INT32_MAX - (int32_t)x ||
+        origin_y > INT32_MAX - (int32_t)y)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     astra_surface_fill(target, origin_x + (int32_t)x,
                        origin_y + (int32_t)y, width, height, color_value);
     return ASTRA_OK;

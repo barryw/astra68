@@ -26,7 +26,8 @@
 #define CONTROL_FOCUS_VISIBLE (UINT32_C(1) << 31)
 #define CONTROL_DYNAMIC_STATES \
     (CONTROL_PREVIEW_STATES | CONTROL_FOCUS_VISIBLE)
-#define FIELD_FLAGS ASTRA_FIELD_READ_ONLY
+#define FIELD_FLAGS (ASTRA_FIELD_READ_ONLY | ASTRA_FIELD_INLINE)
+#define TEXT_VIEW_INVERTED UINT32_C(4)
 #define TEXT_MODEL_KINDS(kind) \
     ((kind) == ASTRA_CONTROL_FIELD || (kind) == ASTRA_CONTROL_TEXT_VIEW)
 #define FLEX_ITEM_FLAGS (ASTRA_FLEX_BREAK_BEFORE | ASTRA_FLEX_BREAK_AFTER)
@@ -86,6 +87,10 @@ static int splitter_neighbors(const AstraUIContext *context, uint32_t index,
                               uint32_t *before, uint32_t *after, int *row);
 static AstraResult text_view_measure(const AstraControl *control,
                                      AstraControlSize *size);
+static AstraResult grid_view_measure(const AstraControl *control,
+                                     AstraControlSize *size);
+static AstraResult grid_view_render(const AstraControl *control,
+    AstraSurfaceView *surface, uint64_t *commands, uint64_t *payload);
 static AstraResult replace_measured_control(AstraUIContext *context,
     AstraControl *control, const AstraControl *replacement);
 
@@ -97,6 +102,19 @@ static AstraTextModel *control_text_model(AstraControl *control)
 static const AstraTextModel *const_control_text_model(const AstraControl *control)
 {
     return (const AstraTextModel *)(const void *)control->_private_text;
+}
+
+static const AstraGridViewModel *grid_view_model(const AstraControl *control)
+{
+    return (const AstraGridViewModel *)(const void *)control->_private_text;
+}
+
+static int grid_view_model_valid(const AstraGridViewModel *model)
+{
+    return model != NULL && model->size == sizeof(*model) &&
+           model->cells != NULL && model->columns != 0u &&
+           (uint64_t)model->columns * model->rows <= model->capacity_cells &&
+           astra_words_zero(model->reserved, 2u);
 }
 
 static const AstraChoiceItem *choice_items(const AstraControl *control)
@@ -189,7 +207,7 @@ static int control_valid(const AstraControl *control)
                 ~ASTRA_CONTROL_COLLAPSED) == 0u &&
                control->_private_preview_state == 0u &&
                control->_private_dynamic_state == 0u &&
-               control->_private_style == 0u &&
+               control->_private_style <= ASTRA_CONTAINER_STYLE_TOOLBAR &&
                control->_private_value == 0 &&
                control->_private_minimum_value == 0 &&
                control->_private_maximum_value == 0 &&
@@ -246,7 +264,13 @@ static int control_valid(const AstraControl *control)
     if (control->_private_control_kind == ASTRA_CONTROL_BUTTON)
         return control->_private_text != NULL &&
                control->_private_text_length != 0u &&
-               control->_private_style <= ASTRA_BUTTON_DESTRUCTIVE &&
+               (control->_private_style & ASTRA_BUTTON_STYLE_MASK) <=
+                   ASTRA_BUTTON_TOOLBAR &&
+               ASTRA_BUTTON_ICON(control->_private_style) <=
+                   ASTRA_TOOLBAR_ICON_SEARCH &&
+               (ASTRA_BUTTON_ICON(control->_private_style) == 0u ||
+                (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+                    ASTRA_BUTTON_TOOLBAR) &&
                control->_private_value == 0 &&
                control->_private_minimum_value == 0 &&
                control->_private_maximum_value == 0 &&
@@ -372,6 +396,13 @@ static int control_valid(const AstraControl *control)
                control->_private_maximum_value ==
                    (int32_t)(control->_private_text_length - 1u) &&
                control->_private_value_step == 0;
+    if (control->_private_control_kind == ASTRA_CONTROL_GRID_VIEW)
+        return control->_private_text != NULL &&
+               control->_private_text_length == 0u &&
+               control->_private_style == 0u &&
+               (state & ~CONTROL_VALUE_STATES) == 0u &&
+               control->_private_preview_state == 0u &&
+               grid_view_model_valid(grid_view_model(control));
     if (TEXT_MODEL_KINDS(control->_private_control_kind)) {
         AstraTextModelState model_state = ASTRA_TEXT_MODEL_STATE_INIT;
 
@@ -379,7 +410,10 @@ static int control_valid(const AstraControl *control)
                (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW ?
                     control->_private_text_length == 0u :
                     control->_private_text_length != 0u) &&
-               (control->_private_style & ~FIELD_FLAGS) == 0u &&
+               (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW ?
+                    (control->_private_style &
+                     ~(ASTRA_FIELD_READ_ONLY | TEXT_VIEW_INVERTED)) == 0u :
+                    (control->_private_style & ~FIELD_FLAGS) == 0u) &&
                (state & ~CONTROL_VALUE_STATES) == 0u &&
                control->_private_preview_state == 0u &&
                control->_private_minimum_value == 0 &&
@@ -387,7 +421,7 @@ static int control_valid(const AstraControl *control)
                astra_text_model_get_state(
                    const_control_text_model(control), &model_state) == ASTRA_OK &&
                (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW ?
-                    control->_private_style == ASTRA_FIELD_READ_ONLY :
+                    (control->_private_style & ASTRA_FIELD_READ_ONLY) != 0u :
                     model_state.line_count == 1u);
     }
     return 0;
@@ -823,7 +857,7 @@ AstraResult astra_interface_button_init(AstraControl *control,
     if (control == NULL || info == NULL || info->size < sizeof(*info) ||
         info->id == 0u || info->text_length == 0u ||
         !astra_utf8_validate(info->text, info->text_length, 0u) ||
-        info->variant > ASTRA_BUTTON_DESTRUCTIVE ||
+        info->variant > ASTRA_BUTTON_TOOLBAR ||
         (info->state & ~CONTROL_SEMANTIC_STATES) != 0u ||
         (info->preview_state & ~CONTROL_PREVIEW_STATES) != 0u ||
         !astra_words_zero(info->reserved, 4u))
@@ -1166,7 +1200,8 @@ AstraResult astra_interface_field_init(AstraControl *control,
         state.line_count != 1u || !field_content_valid(info->model))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     width = (uint64_t)info->preferred_columns * theme.mono_cell_width +
-            (uint32_t)theme.control_padding_x * 2u;
+            ((info->flags & ASTRA_FIELD_INLINE) != 0u ? 0u :
+             (uint32_t)theme.control_padding_x * 2u);
     if (width > UINT32_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *control = (AstraControl)ASTRA_CONTROL_INIT;
@@ -1233,6 +1268,52 @@ AstraResult astra_interface_text_view_refresh(AstraUIContext *context,
     next = *control;
     private_u32_set(&next._private_maximum_value, state.generation);
     return replace_measured_control(context, control, &next);
+}
+
+AstraResult astra_interface_text_view_set_inverted(AstraUIContext *context,
+    AstraControl *control, uint32_t inverted)
+{
+    uint32_t index = control_index(context, control);
+    if (index == CONTROL_NONE ||
+        control->_private_control_kind != ASTRA_CONTROL_TEXT_VIEW ||
+        inverted > 1u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    control_damage(context, index);
+    if (inverted != 0u)
+        control->_private_style |= TEXT_VIEW_INVERTED;
+    else
+        control->_private_style &= ~TEXT_VIEW_INVERTED;
+    control_damage(context, index);
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_grid_view_init(AstraControl *control,
+    const AstraGridViewInfo *info)
+{
+    AstraControl next = ASTRA_CONTROL_INIT;
+    AstraControlSize size;
+    if (control == NULL || info == NULL || info->size != sizeof(*info) ||
+        info->id == 0u || (info->state & ~CONTROL_VALUE_STATES) != 0u ||
+        !astra_words_zero(info->reserved, 4u) ||
+        !grid_view_model_valid(info->model))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    next._private_control_kind = ASTRA_CONTROL_GRID_VIEW;
+    next._private_id = info->id;
+    next._private_state = info->state;
+    next._private_text = (const char *)(const void *)info->model;
+    AstraResult result = grid_view_measure(&next, &size);
+    if (result == ASTRA_OK) *control = next;
+    return result;
+}
+
+AstraResult astra_interface_grid_view_refresh(AstraUIContext *context,
+    AstraControl *control)
+{
+    if (control_index(context, control) == CONTROL_NONE ||
+        control->_private_control_kind != ASTRA_CONTROL_GRID_VIEW ||
+        !grid_view_model_valid(grid_view_model(control)))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return replace_measured_control(context, control, control);
 }
 
 AstraResult astra_interface_control_set_flex(AstraControl *control,
@@ -1437,6 +1518,22 @@ AstraResult astra_interface_ui_init(AstraUIContext *context,
     return ASTRA_OK;
 }
 
+/** Set keyboard focus after a UI layout, for document-first applications. */
+AstraResult astra_interface_ui_focus_control(AstraUIContext *context,
+                                             uint32_t control_id)
+{
+    uint32_t index;
+    if (context == NULL || context->_private_controls == NULL ||
+        control_id == 0u) return ASTRA_ERROR_INVALID_ARGUMENT;
+    index = control_id_index(context, control_id);
+    if (index == CONTROL_NONE || !focusable(&context->_private_controls[index]) ||
+        (context->_private_controls[index]._private_state &
+         (ASTRA_CONTROL_DISABLED | ASTRA_CONTROL_COLLAPSED)) != 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    set_focus(context, index, 1);
+    return ASTRA_OK;
+}
+
 static AstraResult measure_control(const AstraControl *control,
                                    AstraControlSize *size)
 {
@@ -1447,6 +1544,8 @@ static AstraResult measure_control(const AstraControl *control,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW)
         return text_view_measure(control, size);
+    if (control->_private_control_kind == ASTRA_CONTROL_GRID_VIEW)
+        return grid_view_measure(control, size);
     if (control->_private_control_kind == ASTRA_CONTROL_LABEL) {
         const AstraLabelFont *font = &control->_private_label_font;
         if (font->gui != ASTRA_INVALID_HANDLE) {
@@ -1615,7 +1714,8 @@ static AstraResult measure_control(const AstraControl *control,
     if (control->_private_control_kind == ASTRA_CONTROL_FIELD) {
         uint64_t field_width =
             (uint64_t)control->_private_text_length * theme.mono_cell_width +
-            (uint32_t)theme.control_padding_x * 2u;
+            ((control->_private_style & ASTRA_FIELD_INLINE) != 0u ? 0u :
+             (uint32_t)theme.control_padding_x * 2u);
 
         if (field_width > UINT32_MAX)
             return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -1626,6 +1726,17 @@ static AstraResult measure_control(const AstraControl *control,
     width = astra_surface_ui_text_width(
         control->_private_text, control->_private_text_length,
         theme.control_font_height);
+    if (control->_private_control_kind == ASTRA_CONTROL_BUTTON &&
+        (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+            ASTRA_BUTTON_TOOLBAR) {
+        uint32_t extra = 16u +
+            (ASTRA_BUTTON_ICON(control->_private_style) != 0u ? 22u : 0u);
+        if (width > UINT32_MAX - extra)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        size->width = width + extra;
+        size->height = 22u;
+        return ASTRA_OK;
+    }
     if (width > UINT32_MAX - (uint32_t)theme.control_padding_x * 2u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     size->width = width + (uint32_t)theme.control_padding_x * 2u;
@@ -2646,6 +2757,17 @@ static AstraColorRGBA8 button_fill(const AstraTheme *theme,
 {
     uint32_t state = effective_state(control);
 
+    if ((control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+            ASTRA_BUTTON_TOOLBAR) {
+        if ((state & ASTRA_CONTROL_SELECTED) != 0u)
+            return theme->control_selected;
+        if ((state & ASTRA_CONTROL_PRESSED) != 0u)
+            return theme->control_hover;
+        if ((state & ASTRA_CONTROL_HOVERED) != 0u)
+            return theme->surface_raised;
+        return theme->surface_inset;
+    }
+
     if ((state & ASTRA_CONTROL_DISABLED) != 0u)
         return theme->control_disabled;
     if ((state & ASTRA_CONTROL_PRESSED) != 0u)
@@ -2670,6 +2792,9 @@ static AstraColorRGBA8 button_text(const AstraTheme *theme,
 
     if ((state & ASTRA_CONTROL_DISABLED) != 0u)
         return theme->text_tertiary;
+    if ((control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+            ASTRA_BUTTON_TOOLBAR)
+        return theme->client_text;
     if ((state & ASTRA_CONTROL_PRESSED) != 0u)
         return theme->text_secondary;
     if ((state & ASTRA_CONTROL_SELECTED) != 0u ||
@@ -2812,6 +2937,23 @@ static AstraResult text_view_measure(const AstraControl *control,
     return ASTRA_OK;
 }
 
+static AstraResult grid_view_measure(const AstraControl *control,
+                                     AstraControlSize *size)
+{
+    const AstraGridViewModel *model = grid_view_model(control);
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    if (!grid_view_model_valid(model) || size == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint64_t width = (uint64_t)model->columns * theme.mono_cell_width;
+    /* Empty grids still need a positive measured size for flex layout. */
+    uint64_t height = model->rows ?
+        (uint64_t)model->rows * theme.control_height : 1u;
+    if (width > INT32_MAX || height > INT32_MAX)
+        return ASTRA_ERROR_NO_RESOURCES;
+    *size = (AstraControlSize){(uint32_t)width, (uint32_t)height};
+    return ASTRA_OK;
+}
+
 static AstraResult text_view_render(const AstraControl *control,
     AstraSurfaceView *surface, uint64_t *commands, uint64_t *payload)
 {
@@ -2824,6 +2966,7 @@ static AstraResult text_view_render(const AstraControl *control,
     AstraTextSurfaceInfo info = ASTRA_TEXT_SURFACE_INFO_INIT;
     char scratch[TEXT_VIEW_CELL_BATCH * 4u];
     AstraTextCell cells[TEXT_VIEW_CELL_BATCH];
+    int inverted = (control->_private_style & TEXT_VIEW_INVERTED) != 0u;
     uint32_t first_row, last_row, first_column, last_column;
     uint32_t selection_start, selection_end;
     int64_t left = clip->x > frame->x ? clip->x : frame->x;
@@ -2852,8 +2995,9 @@ static AstraResult text_view_render(const AstraControl *control,
     info.cell_width = theme.mono_cell_width;
     info.line_height = theme.control_height;
     info.default_foreground = color((effective_state(control) &
-        ASTRA_CONTROL_DISABLED) != 0u ? theme.text_tertiary : theme.client_text);
-    info.default_background = color(theme.client);
+        ASTRA_CONTROL_DISABLED) != 0u ? theme.text_tertiary :
+        inverted ? theme.client : theme.client_text);
+    info.default_background = color(inverted ? theme.client_text : theme.client);
     info.scratch = scratch; info.scratch_bytes = sizeof(scratch);
     if (astra_text_surface_init(&text, &info) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -2875,8 +3019,11 @@ static AstraResult text_view_render(const AstraControl *control,
             int selected = before >= selection_start && before < selection_end;
             while (column < end && column < last_column) {
                 if (column++ < first_column) continue;
-                cells[count++] = (AstraTextCell){scalar, info.default_foreground,
-                    selected ? color(theme.control_selected) :
+                cells[count++] = (AstraTextCell){scalar,
+                    selected && inverted ? color(theme.accent_text) :
+                                           info.default_foreground,
+                    selected ? color(inverted ? theme.accent :
+                                               theme.control_selected) :
                                info.default_background, 0u, 1u, 0u};
                 if (count == TEXT_VIEW_CELL_BATCH || column == last_column ||
                     (column == end && offset == line.content_end)) {
@@ -2922,6 +3069,65 @@ static AstraResult text_view_render(const AstraControl *control,
     return ASTRA_OK;
 }
 
+static AstraResult grid_view_render(const AstraControl *control,
+    AstraSurfaceView *surface, uint64_t *commands, uint64_t *payload)
+{
+    const AstraGridViewModel *model = grid_view_model(control);
+    const AstraControlFrame *frame = &control->_private_frame;
+    const AstraControlFrame *clip = &control->_private_clip;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraTextSurface text = ASTRA_TEXT_SURFACE_INIT;
+    AstraTextSurfaceInfo info = ASTRA_TEXT_SURFACE_INFO_INIT;
+    char scratch[TEXT_VIEW_CELL_BATCH * 4u];
+    int64_t left = clip->x > frame->x ? clip->x : frame->x;
+    int64_t top = clip->y > frame->y ? clip->y : frame->y;
+    int64_t right = (int64_t)clip->x + clip->width;
+    int64_t bottom = (int64_t)clip->y + clip->height;
+    if (right > (int64_t)frame->x + frame->width)
+        right = (int64_t)frame->x + frame->width;
+    if (bottom > (int64_t)frame->y + frame->height)
+        bottom = (int64_t)frame->y + frame->height;
+    if (right <= left || bottom <= top) return ASTRA_OK;
+    if (!grid_view_model_valid(model)) return ASTRA_ERROR_INVALID_ARGUMENT;
+    info.font_height = theme.mono_font_height;
+    info.cell_width = theme.mono_cell_width;
+    info.line_height = theme.control_height;
+    info.default_foreground = color(theme.client_text);
+    info.default_background = color(theme.client);
+    info.scratch = scratch;
+    info.scratch_bytes = sizeof(scratch);
+    if (astra_text_surface_init(&text, &info) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (surface != NULL)
+        astra_surface_fill(surface, frame->x, frame->y, frame->width,
+                           frame->height, info.default_background);
+    else ++*commands;
+    uint32_t first_row = (uint32_t)((top - frame->y) / theme.control_height);
+    uint32_t last_row = (uint32_t)((bottom - frame->y +
+        theme.control_height - 1u) / theme.control_height);
+    uint32_t first_column = (uint32_t)((left - frame->x) /
+        theme.mono_cell_width);
+    uint32_t last_column = (uint32_t)((right - frame->x +
+        theme.mono_cell_width - 1u) / theme.mono_cell_width);
+    if (last_row > model->rows) last_row = model->rows;
+    if (last_column > model->columns) last_column = model->columns;
+    for (uint32_t row = first_row; row < last_row; ++row)
+        for (uint32_t column = first_column; column < last_column;) {
+            uint32_t count = last_column - column;
+            if (count > TEXT_VIEW_CELL_BATCH) count = TEXT_VIEW_CELL_BATCH;
+            const AstraTextCell *cells = model->cells +
+                row * model->columns + column;
+            AstraResult result = surface != NULL ?
+                astra_text_surface_render_cells(&text, surface,
+                    frame->x, frame->y, row, column, cells, count) :
+                astra_text_surface_cells_requirements(&text, cells, count,
+                    commands, payload);
+            if (result != ASTRA_OK) return result;
+            column += count;
+        }
+    return ASTRA_OK;
+}
+
 static int field_view(const AstraControl *control, FieldView *view)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -2937,10 +3143,10 @@ static int field_view(const AstraControl *control, FieldView *view)
     *view = (FieldView){.state = ASTRA_TEXT_MODEL_STATE_INIT};
     if (astra_text_model_get_state(model, &view->state) != ASTRA_OK)
         return 0;
-    inner_width = control->_private_frame.width >
-                      (uint32_t)theme.control_padding_x * 2u ?
-        control->_private_frame.width -
-            (uint32_t)theme.control_padding_x * 2u : 0u;
+    uint32_t inset = (control->_private_style & ASTRA_FIELD_INLINE) != 0u ?
+        0u : theme.control_padding_x;
+    inner_width = control->_private_frame.width > inset * 2u ?
+        control->_private_frame.width - inset * 2u : 0u;
     view->columns = inner_width / theme.mono_cell_width;
     if (scroll > view->state.text_bytes ||
         astra_text_model_read(model, scroll, &ignored_text,
@@ -3066,14 +3272,23 @@ static int render_requirements(const AstraUIContext *context,
             return 0;
         if (control->_private_laid_out == 0u)
             continue;
-        if (CONTAINER_KINDS(control->_private_control_kind))
+        if (CONTAINER_KINDS(control->_private_control_kind)) {
+            if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
+                control->_private_style == ASTRA_CONTAINER_STYLE_TOOLBAR)
+                *commands += 2u;
             continue;
+        }
         if (control->_private_clip.width == 0u ||
             control->_private_clip.height == 0u)
             continue;
         state = effective_state(control);
         if (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW) {
             if (text_view_render(control, NULL, commands, payload) != ASTRA_OK)
+                return 0;
+            continue;
+        }
+        if (control->_private_control_kind == ASTRA_CONTROL_GRID_VIEW) {
+            if (grid_view_render(control, NULL, commands, payload) != ASTRA_OK)
                 return 0;
             continue;
         }
@@ -3137,7 +3352,8 @@ static int render_requirements(const AstraUIContext *context,
         if (control->_private_control_kind == ASTRA_CONTROL_LABEL)
             *commands += 1u;
         else if (control->_private_control_kind == ASTRA_CONTROL_BUTTON)
-            *commands += 2u;
+            *commands += 2u +
+                (ASTRA_BUTTON_ICON(control->_private_style) != 0u ? 16u : 0u);
         else if (control->_private_control_kind == ASTRA_CONTROL_DISCLOSURE)
             *commands += 7u;
         else if (control->_private_control_kind == ASTRA_CONTROL_CHECKBOX)
@@ -3240,6 +3456,83 @@ static AstraResult render_label(const AstraTheme *theme,
     return ASTRA_OK;
 }
 
+typedef struct ToolbarLine { int8_t x0, y0, x1, y1; } ToolbarLine;
+
+static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
+                                int32_t x, int32_t y, uint16_t ink)
+{
+    static const ToolbarLine back[] = {
+        {7, 2, 2, 8}, {2, 8, 7, 14}, {2, 8, 14, 8}
+    };
+    static const ToolbarLine forward[] = {
+        {8, 2, 13, 8}, {13, 8, 8, 14}, {2, 8, 13, 8}
+    };
+    static const ToolbarLine restart[] = {
+        {4, 4, 7, 2}, {7, 2, 12, 3}, {12, 3, 14, 7},
+        {14, 7, 13, 11}, {13, 11, 10, 14}, {10, 14, 5, 13},
+        {5, 13, 2, 10}, {2, 10, 2, 6}, {2, 6, 4, 4},
+        {2, 6, 2, 2}, {2, 6, 6, 6}
+    };
+    static const ToolbarLine undo[] = {
+        {5, 3, 2, 6}, {2, 6, 5, 9}, {2, 6, 9, 6},
+        {9, 6, 13, 8}, {13, 8, 14, 11}, {14, 11, 11, 14}
+    };
+    static const ToolbarLine close_icon[] = {
+        {3, 3, 13, 13}, {13, 3, 3, 13}
+    };
+    static const ToolbarLine open[] = {
+        {1, 5, 1, 13}, {1, 13, 14, 13}, {14, 13, 14, 5},
+        {14, 5, 7, 5}, {7, 5, 5, 3}, {5, 3, 1, 3}
+    };
+    static const ToolbarLine trash[] = {
+        {2, 4, 14, 4}, {5, 2, 11, 2}, {4, 5, 5, 14},
+        {5, 14, 11, 14}, {11, 14, 12, 5}, {7, 7, 7, 12},
+        {9, 7, 9, 12}
+    };
+    static const ToolbarLine grid[] = {
+        {2, 2, 6, 2}, {6, 2, 6, 6}, {6, 6, 2, 6}, {2, 6, 2, 2},
+        {10, 2, 14, 2}, {14, 2, 14, 6}, {14, 6, 10, 6}, {10, 6, 10, 2},
+        {2, 10, 6, 10}, {6, 10, 6, 14}, {6, 14, 2, 14}, {2, 14, 2, 10},
+        {10, 10, 14, 10}, {14, 10, 14, 14}, {14, 14, 10, 14},
+        {10, 14, 10, 10}
+    };
+    static const ToolbarLine list[] = {
+        {2, 3, 4, 3}, {6, 3, 14, 3}, {2, 8, 4, 8},
+        {6, 8, 14, 8}, {2, 13, 4, 13}, {6, 13, 14, 13}
+    };
+    static const ToolbarLine columns[] = {
+        {2, 2, 2, 14}, {2, 2, 14, 2}, {14, 2, 14, 14},
+        {2, 14, 14, 14}, {6, 2, 6, 14}, {10, 2, 10, 14}
+    };
+    static const ToolbarLine search[] = {
+        {6, 2, 10, 2}, {10, 2, 13, 5}, {13, 5, 13, 9},
+        {13, 9, 10, 12}, {10, 12, 6, 12}, {6, 12, 3, 9},
+        {3, 9, 3, 5}, {3, 5, 6, 2}, {11, 11, 15, 15}
+    };
+    const ToolbarLine *lines = NULL;
+    uint32_t count = 0u;
+#define PICK(name) do { lines = name; count = sizeof(name) / sizeof(name[0]); } while (0)
+    switch (icon) {
+    case ASTRA_TOOLBAR_ICON_BACK: PICK(back); break;
+    case ASTRA_TOOLBAR_ICON_FORWARD: PICK(forward); break;
+    case ASTRA_TOOLBAR_ICON_RESTART: PICK(restart); break;
+    case ASTRA_TOOLBAR_ICON_UNDO: PICK(undo); break;
+    case ASTRA_TOOLBAR_ICON_CLOSE: PICK(close_icon); break;
+    case ASTRA_TOOLBAR_ICON_OPEN: PICK(open); break;
+    case ASTRA_TOOLBAR_ICON_TRASH: PICK(trash); break;
+    case ASTRA_TOOLBAR_ICON_GRID: PICK(grid); break;
+    case ASTRA_TOOLBAR_ICON_LIST: PICK(list); break;
+    case ASTRA_TOOLBAR_ICON_COLUMNS: PICK(columns); break;
+    case ASTRA_TOOLBAR_ICON_SEARCH: PICK(search); break;
+    default: break;
+    }
+#undef PICK
+    for (uint32_t at = 0u; at < count; ++at)
+        (void)astra_surface_line(surface, x + lines[at].x0,
+            y + lines[at].y0, x + lines[at].x1,
+            y + lines[at].y1, ink);
+}
+
 static void render_button(const AstraTheme *theme,
                           const AstraControl *control,
                           AstraSurfaceView *surface)
@@ -3252,6 +3545,7 @@ static void render_button(const AstraTheme *theme,
     uint32_t height = frame->height;
     uint32_t inset = 0u;
     uint32_t text_width;
+    uint32_t icon = ASTRA_BUTTON_ICON(control->_private_style);
     int32_t text_x;
     int32_t text_y;
 
@@ -3277,7 +3571,13 @@ static void render_button(const AstraTheme *theme,
     text_width = astra_surface_ui_text_width(
         control->_private_text, control->_private_text_length,
         theme->control_font_height);
-    text_x = x + (int32_t)(width - text_width) / 2;
+    if (icon != 0u) {
+        render_toolbar_icon(surface, icon, x + 8,
+                            y + ((int32_t)height - 16) / 2,
+                            color(button_text(theme, control)));
+        text_x = x + 30;
+    } else
+        text_x = x + (int32_t)(width - text_width) / 2;
     text_y = y + (int32_t)(height - theme->control_font_height) / 2;
     astra_surface_ui_text(surface, text_x, text_y, control->_private_text,
                           control->_private_text_length,
@@ -3390,7 +3690,11 @@ static AstraResult render_field(const AstraUIContext *context,
 {
     const AstraControlFrame *frame = &control->_private_frame;
     uint32_t state = effective_state(control);
+    int inline_field = (control->_private_style & ASTRA_FIELD_INLINE) != 0u;
+    uint32_t inset = inline_field ? 0u : theme->control_padding_x;
+    uint32_t border_width = inline_field ? 0u : theme->control_border_width;
     AstraColorRGBA8 background =
+        inline_field ? theme->client :
         (state & ASTRA_CONTROL_DISABLED) != 0u ?
             theme->control_disabled :
             ((state & ASTRA_CONTROL_FOCUSED) != 0u ?
@@ -3401,7 +3705,7 @@ static AstraResult render_field(const AstraUIContext *context,
              theme->control_focus : theme->client_border);
     FieldView view;
     AstraSurfaceView clipped = *surface;
-    int32_t text_x = frame->x + theme->control_padding_x;
+    int32_t text_x = frame->x + (int32_t)inset;
     int32_t text_y = frame->y +
         (int32_t)(frame->height - theme->mono_font_height) / 2;
     uint32_t offset;
@@ -3409,7 +3713,7 @@ static AstraResult render_field(const AstraUIContext *context,
 
     if (!field_view(control, &view))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    if ((state & CONTROL_FOCUS_VISIBLE) != 0u)
+    if (!inline_field && (state & CONTROL_FOCUS_VISIBLE) != 0u)
         astra_surface_fill_round(
             surface, frame->x - theme->focus_width,
             frame->y - theme->focus_width,
@@ -3417,10 +3721,10 @@ static AstraResult render_field(const AstraUIContext *context,
             frame->height + (uint32_t)theme->focus_width * 2u,
             (uint16_t)(theme->control_radius + theme->focus_width),
             color(theme->control_focus));
-    astra_surface_fill_round(surface, frame->x, frame->y,
+    if (!inline_field) astra_surface_fill_round(surface, frame->x, frame->y,
                              frame->width, frame->height,
                              theme->control_radius, color(border));
-    astra_surface_fill_round(
+    if (!inline_field) astra_surface_fill_round(
         surface, frame->x + theme->control_border_width,
         frame->y + theme->control_border_width,
         frame->width - (uint32_t)theme->control_border_width * 2u,
@@ -3430,10 +3734,10 @@ static AstraResult render_field(const AstraUIContext *context,
                        theme->control_border_width) : 0u,
         color(background));
     if (!astra_surface_clip(
-            &clipped, text_x, frame->y + theme->control_border_width,
-            frame->width > (uint32_t)theme->control_padding_x * 2u ?
-                frame->width - (uint32_t)theme->control_padding_x * 2u : 0u,
-            frame->height - (uint32_t)theme->control_border_width * 2u))
+            &clipped, text_x, frame->y + (int32_t)border_width,
+            frame->width > inset * 2u ?
+                frame->width - inset * 2u : 0u,
+            frame->height - border_width * 2u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (view.selection_first < view.selection_last) {
         AstraColorRGBA8 selection = blend(background, theme->accent, 71u);
@@ -3472,12 +3776,22 @@ static AstraResult render_field(const AstraUIContext *context,
         offset += take;
     }
     if ((state & (ASTRA_CONTROL_FOCUSED | ASTRA_CONTROL_DISABLED)) ==
-            ASTRA_CONTROL_FOCUSED && field_caret_visible(context, control))
-        astra_surface_fill(
-            &clipped,
-            text_x + (int32_t)(view.caret_column *
-                               theme->mono_cell_width),
-            text_y, 2u, theme->mono_font_height, color(theme->accent));
+            ASTRA_CONTROL_FOCUSED && field_caret_visible(context, control)) {
+        AstraTextSurface text = ASTRA_TEXT_SURFACE_INIT;
+        AstraTextSurfaceInfo info = ASTRA_TEXT_SURFACE_INFO_INIT;
+        char scratch[4];
+
+        info.font_height = theme->mono_font_height;
+        info.cell_width = theme->mono_cell_width;
+        info.line_height = theme->mono_font_height;
+        info.scratch = scratch;
+        info.scratch_bytes = sizeof(scratch);
+        if (astra_text_surface_init(&text, &info) != ASTRA_OK)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        return astra_text_surface_draw_caret(&text, &clipped,
+            text_x, text_y, 0u, view.caret_column,
+            ASTRA_TEXT_CARET_STANDARD, color(theme->accent));
+    }
     return ASTRA_OK;
 }
 
@@ -5128,8 +5442,21 @@ static AstraResult render_one_control(const AstraUIContext *context,
                                       const AstraControl *control,
                                       AstraSurfaceView *surface)
 {
+    if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
+        control->_private_style == ASTRA_CONTAINER_STYLE_TOOLBAR) {
+        const AstraControlFrame *frame = &control->_private_frame;
+        astra_surface_fill(surface, frame->x, frame->y,
+                           frame->width, frame->height,
+                           color(theme->surface_inset));
+        astra_surface_fill(surface, frame->x,
+                           frame->y + (int32_t)frame->height - 1,
+                           frame->width, 1u, color(theme->client_border));
+        return ASTRA_OK;
+    }
     if (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW)
         return text_view_render(control, surface, NULL, NULL);
+    if (control->_private_control_kind == ASTRA_CONTROL_GRID_VIEW)
+        return grid_view_render(control, surface, NULL, NULL);
     if (control->_private_control_kind == ASTRA_CONTROL_FIELD)
         return render_field(context, theme, control, surface);
     if (control->_private_control_kind == ASTRA_CONTROL_LABEL)
@@ -5211,7 +5538,9 @@ AstraResult astra_interface_ui_render(AstraUIContext *context,
         AstraResult result;
 
         if (control->_private_laid_out == 0u ||
-            CONTAINER_KINDS(control->_private_control_kind) ||
+            (CONTAINER_KINDS(control->_private_control_kind) &&
+             !(control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
+               control->_private_style == ASTRA_CONTAINER_STYLE_TOOLBAR)) ||
             control->_private_clip.width == 0u ||
             control->_private_clip.height == 0u)
             continue;

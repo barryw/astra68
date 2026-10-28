@@ -35,6 +35,8 @@ enum {
     ASTRA_TEXT_CARET_BAR = 2u,
     ASTRA_TEXT_CARET_UNDERLINE = 3u
 };
+/** Platform caret for editable text controls and terminal sessions. */
+#define ASTRA_TEXT_CARET_STANDARD ASTRA_TEXT_CARET_UNDERLINE
 
 /** One fixed-grid scalar and its logical colors and styles. */
 typedef struct AstraTextCell {
@@ -102,7 +104,7 @@ typedef struct AstraTextSurfaceInfo {
     uint16_t font_height;
     /** Fixed grid cell advance in pixels. */
     uint16_t cell_width;
-    /** Baseline-to-baseline grid distance in pixels. */
+    /** Grid row height in pixels; glyphs and underline caret center within it. */
     uint16_t line_height;
     /** Default RGB565 foreground. */
     uint16_t default_foreground;

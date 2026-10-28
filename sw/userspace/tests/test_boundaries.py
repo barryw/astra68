@@ -1518,6 +1518,16 @@ def test_linker_uses_the_canonical_address_map():
         )
 
 
+def test_astraz_host_test_runs_from_userspace_test():
+    orchestrator = (USERSPACE / "Makefile").read_text()
+    astraz = (USERSPACE / "ports" / "astraz" / "Makefile").read_text()
+    test_recipe = orchestrator.split("\ntest:\n", 1)[1].split("\n.PHONY:", 1)[0]
+    if "$(MAKE) -C ports/astraz test" not in test_recipe:
+        raise AssertionError("userspace test skips AstraZ")
+    if re.search(r"^test:\s*bundle\b", astraz, re.MULTILINE):
+        raise AssertionError("AstraZ host test requires target bundle")
+
+
 def main():
     tests = (
         test_kernel_private_headers_do_not_cross_into_userspace,
@@ -1570,6 +1580,7 @@ def main():
         test_direct_parallel_build_cannot_observe_stale_owner_products,
         test_proc_text_views_are_streamed_without_aggregate_ceiling,
         test_linker_uses_the_canonical_address_map,
+        test_astraz_host_test_runs_from_userspace_test,
     )
     failures = []
     for test in tests:

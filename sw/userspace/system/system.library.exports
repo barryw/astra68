@@ -25,6 +25,8 @@ ASTRA_SYSTEM_4.0 {
         astra_bulk_ring_write_commit;
         astra_bulk_ring_write_reserve;
         astra_bundle_manifest_destroy;
+        astra_bundle_manifest_extension_type;
+        astra_bundle_manifest_handles;
         astra_bundle_manifest_parse;
         astra_clipboard_clear;
         astra_clipboard_document_validate;
@@ -147,3 +149,9 @@ ASTRA_SYSTEM_4.0 {
         astra_service_info_destroy;
     local: *;
 };
+
+ASTRA_SYSTEM_4.5 {
+    global:
+        astra_window_menu_bar_set;
+        astra_window_menu_bar_clear;
+} ASTRA_SYSTEM_4.0;

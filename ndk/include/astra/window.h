@@ -51,6 +51,24 @@ ASTRA_NODISCARD AstraResult astra_window_menu_open(AstraWindow *window,
 /** Dismiss this window's correlated menu. @param window Owning window. @param request Menu correlation token. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_window_menu_close(AstraWindow *window, uint32_t request);
 
+/** Correlation token in MENU_RESULT for a selection from the system menu bar.
+ * Selection is the one-based row index in the registered menu document. */
+#define ASTRA_WINDOW_MENU_BAR_REQUEST UINT32_C(0xffffffff)
+/** Publish headings (root rows) and their grouped child commands for the
+ * system menu bar. The display copies all labels. Replaces any prior bar.
+ * @param window Owning live window.
+ * @param items Root headings followed by grouped child commands.
+ * @param count Total number of rows.
+ * @return ASTRA_OK or a validation, permission or capacity error.
+ */
+ASTRA_NODISCARD AstraResult astra_window_menu_bar_set(AstraWindow *window,
+    const struct AstraMenuItem *items, uint32_t count);
+/** Remove this window's published menu headings.
+ * @param window Owning live window.
+ * @return ASTRA_OK or a validation or service error.
+ */
+ASTRA_NODISCARD AstraResult astra_window_menu_bar_clear(AstraWindow *window);
+
 /** Current server-owned placement and state. */
 typedef struct AstraWindowInfo {
     uint32_t size; /**< Caller-supplied structure size. */

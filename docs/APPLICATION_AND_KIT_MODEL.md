@@ -66,7 +66,9 @@ identity records the full bundle path, including volume, so single-instance
 launch applies to a copied app independently of its installed source. A native
 `cp -R` command uses Filesystem Kit's tree copy and publishes the destination
 bundle only after copied files have been synced. A failed or interrupted copy
-may leave a sibling ending in `.astra-copying`; it cannot launch as an app.
+attempts to remove its private `.astra-copying-HEX` sibling on failure.
+If media disappears during cleanup, a later copy uses a fresh sibling and
+can still publish the destination; the orphan cannot launch as an app.
 
 Reference review: Haiku's `src/kits/app/Roster.cpp` launches an `entry_ref`
 without requiring a central application directory, and Tracker

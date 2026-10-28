@@ -274,4 +274,5 @@ ASTRA_RUNTIME_1.16 {
 ASTRA_RUNTIME_1.17 {
     global:
         memchr;
+        qsort;
 } ASTRA_RUNTIME_1.16;

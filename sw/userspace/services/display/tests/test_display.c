@@ -81,6 +81,11 @@ void astra_runtime_deallocate(void *pointer)
     if (pointer != NULL) { assert(menu_allocations != 0u); --menu_allocations; }
     free(pointer);
 }
+uint32_t astra_shared_surface_close(AstraSharedSurface *surface)
+{
+    (void)surface;
+    return ASTRA_SYSCALL_OK;
+}
 
 static AstraGuiWindowEvent delivered;
 static AstraGuiWindowEvent previous_delivered;
@@ -106,6 +111,7 @@ static uint32_t last_signal;
 static _Alignas(8) uint8_t test_areas[TEST_AREA_COUNT][TEST_AREA_BYTES];
 static uint32_t test_area_sizes[TEST_AREA_COUNT];
 static uint32_t test_area_live[TEST_AREA_COUNT];
+static uint32_t test_area_rights[TEST_AREA_COUNT];
 static uint32_t test_area_creates;
 static uint32_t test_area_closes;
 
@@ -115,13 +121,16 @@ uint32_t astra_rt_area_create(uint32_t byte_size, uint32_t rights,
     uint32_t rounded = (byte_size + UINT32_C(4095)) & ~UINT32_C(4095);
 
     assert(byte_size != 0u && rounded <= TEST_AREA_BYTES &&
-           rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
-                      ASTRA_RIGHT_MAP) && handle != NULL);
+           (rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                      ASTRA_RIGHT_MAP) ||
+            rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                      ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER)) && handle != NULL);
     for (uint32_t index = 0u; index < TEST_AREA_COUNT; ++index)
         if (test_area_live[index] == 0u) {
             memset(test_areas[index], 0, rounded);
             test_area_sizes[index] = rounded;
             test_area_live[index] = 1u;
+            test_area_rights[index] = rights;
             *handle = 0x800u + index;
             ++test_area_creates;
             return ASTRA_SYSCALL_OK;
@@ -137,6 +146,28 @@ uint32_t astra_rt_handle_duplicate(uint32_t handle, uint32_t rights,
         if (font_duplicate_status != ASTRA_SYSCALL_OK) return font_duplicate_status;
         *duplicate = 0xa01u;
         return ASTRA_SYSCALL_OK;
+    }
+    if (handle >= 0x800u && handle < 0x800u + TEST_AREA_COUNT) {
+        uint32_t source = handle - 0x800u;
+        assert(test_area_live[source] != 0u &&
+               (rights & ~test_area_rights[source]) == 0u &&
+               (rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP) ||
+                rights == (ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP |
+                           ASTRA_RIGHT_TRANSFER)));
+        if ((test_area_rights[source] & ASTRA_RIGHT_TRANSFER) == 0u)
+            return ASTRA_SYSCALL_ACCESS_DENIED;
+        for (uint32_t index = 0u; index < TEST_AREA_COUNT; ++index)
+            if (test_area_live[index] == 0u) {
+                memcpy(test_areas[index], test_areas[source],
+                       test_area_sizes[source]);
+                test_area_sizes[index] = test_area_sizes[source];
+                test_area_live[index] = 1u;
+                test_area_rights[index] = rights;
+                *duplicate = 0x800u + index;
+                ++test_area_creates;
+                return ASTRA_SYSCALL_OK;
+            }
+        return ASTRA_SYSCALL_OUT_OF_MEMORY;
     }
     (void)handle;
     (void)rights;
@@ -182,6 +213,7 @@ uint32_t astra_close(uint32_t handle)
     }
     assert(index < TEST_AREA_COUNT && test_area_live[index] != 0u);
     test_area_live[index] = 0u;
+    test_area_rights[index] = 0u;
     ++test_area_closes;
     return ASTRA_SYSCALL_OK;
 }
@@ -2206,11 +2238,12 @@ static void test_launch_panel(void)
         .name_length = 4u,
         .name = "Doom",
     };
-    const uint32_t rights =
-        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP;
+    const uint32_t rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+                            ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER;
     uint32_t icon = 0u;
     uint32_t closes;
     uint32_t none = 0u;
+    DisplaySession remembered = {0};
 
     assert(valid_open_session(&named, sizeof(named), 1u));
     assert(!valid_open_session(&named, sizeof(named), 2u));
@@ -2232,6 +2265,10 @@ static void test_launch_panel(void)
     assert(icon == 0u && state.launch.session == 5u &&
            state.launch.icon_bytes != NULL &&
            state.launch.strike.width == DISPLAY_LAUNCH_ICON);
+    keep_session_icon(&remembered, &state.launch, named.icon_length);
+    assert(remembered.icon_bytes != NULL &&
+           remembered.icon_bytes != state.launch.icon_bytes &&
+           remembered.icon_length == named.icon_length);
     compose_commit(&state, 1u);
     /* The bars, then the panel; its icon blended over the panel. */
     assert(read_be32(batch_scene() + 20u) == 3u);
@@ -2299,6 +2336,19 @@ static void test_launch_panel(void)
            ASTRA_STATUS_OK);
     assert(state.launch.session == 0u && state.launch.icon_bytes == NULL &&
            test_area_closes == closes + 1u);
+    {
+        DisplayWindow decorated = {0};
+        window_icon_from_session(&remembered, &decorated);
+        assert(decorated.title_icon_bytes != NULL &&
+               decorated.title_icon_bytes != remembered.icon_bytes &&
+               decorated.title_icon_strike.width == 16u);
+        DisplayWindow fallback = {0};
+        fail_menu_allocate = 1u;
+        window_icon_from_session(&remembered, &fallback);
+        assert(fallback.title_icon_bytes == NULL);
+        close_window(&decorated);
+        astra_runtime_deallocate(remembered.icon_bytes);
+    }
     compose_commit(&state, 3u);
     assert(batch_scene_layer_source(read_be32(batch_scene() + 20u) - 1u) !=
            state.launch_offset);
@@ -2557,6 +2607,65 @@ static void test_context_menu_transport(void)
     assert(astra_close(area) == ASTRA_SYSCALL_OK);
 }
 
+static void test_menu_bar_transport(void)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayWindow window = {.id = 1u, .generation = 1u,
+        .event_send = 0x500u, .request = {.type = ASTRA_WINDOW_STANDARD,
+        .flags = ASTRA_WINDOW_ACTIVE, .width = 320u, .height = 180u}};
+    DisplayState state = {.windows = &window, .count = 1u};
+    AstraGuiWindowCommand command = {.window = 1u, .generation = 1u,
+        .action = ASTRA_GUI_WINDOW_MENU_BAR_SET};
+    DisplayWindow closed;
+    uint32_t area, mapped;
+    uint8_t *bytes;
+    int changed;
+    astra_message_header_set(&command.header, sizeof(command), ASTRA_GUI_PROTOCOL,
+        ASTRA_GUI_VERSION, ASTRA_GUI_WINDOW_COMMAND, 1u);
+    /* New action shares protocol with installed supervisor and GUI clients. */
+    command.header.protocol_version = 25u;
+    assert(valid_command(&command, sizeof(command), 2u, 1u, 320u, 180u));
+    assert(!valid_command(&command, sizeof(command), 1u, 1u, 320u, 180u));
+    assert(astra_rt_area_create(4096u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+        ASTRA_RIGHT_MAP, &area) == ASTRA_SYSCALL_OK);
+    assert(astra_rt_area_map(area, ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+        (void **)&bytes, &mapped) == ASTRA_SYSCALL_OK);
+    astra_store_be32(bytes, ASTRA_GUI_MENU_MAGIC);
+    astra_store_be32(bytes + 4u, ASTRA_GUI_MENU_VERSION);
+    astra_store_be32(bytes + 8u, 80u);
+    astra_store_be32(bytes + 12u, 3u);
+    for (uint32_t at = 0u; at < 3u; ++at) {
+        uint8_t *row = bytes + ASTRA_GUI_MENU_HEADER_BYTES +
+            at * ASTRA_GUI_MENU_ROW_BYTES;
+        astra_store_be32(row, at == 0u ? 0u : 1u << ASTRA_MENU_PARENT_SHIFT);
+        astra_store_be32(row + 4u, at == 0u ? 64u : at == 1u ? 69u : 76u);
+        astra_store_be32(row + 8u, at == 0u ? 5u : at == 1u ? 7u : 4u);
+        astra_store_be32(row + 12u, 0u);
+    }
+    memcpy(bytes + 64u, "StoryRestartQuit", 16u);
+    assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_OK);
+    assert(window.bar_root_count == 1u && window.bar_row_count == 3u);
+    memset(bytes + 64u, 'X', 5u);
+    assert(memcmp(window.bar_rows[0].label, "Story", 5u) == 0);
+    state.bar_heading_owner = 1u;
+    state.bar_heading_count = 1u;
+    state.bar_heading_left[0] = 140;
+    state.bar_heading_right[0] = 200;
+    assert(menu_bar_open(&state, 0u) == ASTRA_STATUS_OK);
+    assert(state.menu_owner == 1u &&
+        state.menu_request == ASTRA_WINDOW_MENU_BAR_REQUEST &&
+        state.menu_selection_offset == 1u);
+    menu_end(&state, 1u, 12u, ASTRA_STATUS_OK);
+    assert(delivered.event.type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
+        delivered.event.data.menu_result.request == ASTRA_WINDOW_MENU_BAR_REQUEST &&
+        delivered.event.data.menu_result.selection == 2u);
+    command.action = ASTRA_GUI_WINDOW_MENU_BAR_CLEAR;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) ==
+        ASTRA_STATUS_OK && changed);
+    assert(window.bar_rows == NULL && window.bar_document == NULL);
+    assert(astra_close(area) == ASTRA_SYSCALL_OK);
+}
+
 static void test_context_submenu_hover(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -2795,6 +2904,7 @@ int main(void)
     test_modal_windows();
     test_dense_menu_render();
     test_context_menu_transport();
+    test_menu_bar_transport();
     test_context_submenu_hover();
     test_content_banks();
     test_malformed_retained_frame();
@@ -3099,7 +3209,31 @@ int main(void)
         assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
         assert(build_system_surfaces(&builder, &bar, &bar_theme));
         assert(astra_render_builder_finish(&builder) != 0u);
-        assert(builder.glyph_count == 26u); /* ASTRA, Workspace, File/Edit/View */
+        assert(builder.glyph_count == 14u); /* ASTRA, Workspace */
+        {
+            AstraMenuItem headings[] = {
+                {"Story", 5u, 0u}, {"Help", 4u, 0u}
+            };
+            DisplayWindow active_bar = {0};
+            active_bar.id = 42u;
+            active_bar.request.flags = ASTRA_WINDOW_ACTIVE;
+            active_bar.application_name_length = 6u;
+            memcpy(active_bar.application_name, "AstraZ", 6u);
+            active_bar.bar_rows = headings;
+            active_bar.bar_root_count = 2u;
+            bar.windows = &active_bar;
+            bar.count = 1u;
+            bar.system_initialized = 0u;
+            assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
+            assert(build_system_surfaces(&builder, &bar, &bar_theme));
+            assert(astra_render_builder_finish(&builder) != 0u);
+            assert(bar.bar_heading_owner == 42u);
+            assert(bar.bar_heading_count == 2u);
+            assert(bar.bar_heading_left[0] < bar.bar_heading_right[0]);
+            assert(bar.bar_heading_right[0] < bar.bar_heading_left[1]);
+        }
+        bar.windows = NULL;
+        bar.count = 0u;
         assert(!batch_has_colored_fill_at(16, 17, color(bar_theme.accent)));
         assert(!batch_has_colored_fill_at(
             100, 14, color(bar_theme.title_inactive)));

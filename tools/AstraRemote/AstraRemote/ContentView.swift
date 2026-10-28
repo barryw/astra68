@@ -3,8 +3,8 @@ import Security
 
 struct ContentView: View {
     @ObservedObject var remote: RemoteModel
-    @AppStorage("astraRemoteHost") private var host = "192.168.1.52"
-    @AppStorage("astraRemotePort") private var port = "5900"
+    @AppStorage("astraRemoteHost") private var host = "127.0.0.1"
+    @AppStorage("astraRemotePort") private var port = "5901"
     @State private var password = ""
     @State private var keychainError: String?
     @FocusState private var focusedField: Field?
@@ -21,7 +21,13 @@ struct ContentView: View {
                 connectionForm
             }
         }
-        .onAppear(perform: loadPassword)
+        .onAppear {
+            if host == "192.168.1.52" && port == "5900" {
+                host = "127.0.0.1"
+                port = "5901"
+            }
+            loadPassword()
+        }
         .onChange(of: "\(host):\(port)") { _, _ in loadPassword() }
         .toolbar {
             ToolbarItem(placement: .principal) {
@@ -93,7 +99,7 @@ struct ContentView: View {
 
                 HStack {
                     Text(remote.status == "Disconnected" ?
-                         "VNC password authentication is not encrypted." : remote.status)
+                         "Connect through an SSH tunnel to Astra." : remote.status)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()

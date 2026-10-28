@@ -320,6 +320,24 @@ SCRIPT = [
      "ASTRA-HOME-MKDIR-0"),
     ("sbase-rmdir /home/root-contract; print ASTRA-HOME-RMDIR-$?",
      "ASTRA-HOME-RMDIR-0"),
+    ("apkg create /apps/Atlas.app /home/Atlas.apkg; "
+     "print ASTRA-APKG-CREATE-$?", "ASTRA-APKG-CREATE-0"),
+    ("apkg install /home/Atlas.apkg /home; "
+     "print ASTRA-APKG-INSTALL-$?", "ASTRA-APKG-INSTALL-0"),
+    ("sbase-cmp /apps/Atlas.app/manifest /home/Atlas.app/manifest; "
+     "print ASTRA-APKG-ROUNDTRIP-$?", "ASTRA-APKG-ROUNDTRIP-0"),
+    ("sbase-cmp /apps/Atlas.app/bin/m68k-68040/Atlas "
+     "/home/Atlas.app/bin/m68k-68040/Atlas; "
+     "print ASTRA-APKG-PAYLOAD-$?", "ASTRA-APKG-PAYLOAD-0"),
+    ("cp /home/Atlas.apkg /home/Atlas-bad.apkg; "
+     "size=$(sbase-wc -c < /home/Atlas-bad.apkg); "
+     "print -n -r -- CORRUPT | sbase-dd of=/home/Atlas-bad.apkg "
+     "bs=1 seek=$((size-32)) conv=notrunc; "
+     "apkg install /home/Atlas-bad.apkg /tmp; "
+     "print ASTRA-APKG-CORRUPT-$?", "ASTRA-APKG-CORRUPT-1"),
+    ("test ! -e /tmp/Atlas.app && "
+     "test -z \"$(sbase-find /tmp -name '.apkg-staging-*')\"; "
+     "print ASTRA-APKG-ROLLBACK-$?", "ASTRA-APKG-ROLLBACK-0"),
     ("mkdir proto; print ASTRA-MKDIR", "ASTRA-MKDIR"),
     ("print -r -- 'via the protocol' > hello.txt", "hello.txt"),
     ("ls -F", "proto/"),
@@ -1536,6 +1554,8 @@ def run(qemu, rom, image, catalog, boot_deadline, command_deadline, verbose,
             test_commands.append("hello")
         if full_gate:
             test_commands.extend(("sbase-ls", "sbase-mkdir", "sbase-rmdir"))
+            test_commands.extend(("sbase-cmp", "sbase-dd", "sbase-find",
+                                  "sbase-wc"))
         if cxx_only:
             test_commands.append("cxx")
         if sbase_only:

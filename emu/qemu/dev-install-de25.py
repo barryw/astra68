@@ -5,6 +5,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
@@ -20,7 +21,8 @@ STORE = Path("/var/lib/astra")
 STATE = STORE / "state/system/storage-terminal.img"
 CONSOLE = STORE / "log/qemu-console.log"
 QMP = Path("/run/astra/qemu/qmp.sock")
-LOCK = Path("/run/astra/runtime.lock")
+LOCK = Path("/run/astra/dev-install.lock")
+SYSTEMD = Path("/etc/systemd/system")
 SERVICES = ("astra.service", "astra-audio-host.service",
             "astra-remote-desktop.service")
 OWNED = ("commands", "services", "libs", "apps", "fonts")
@@ -67,13 +69,18 @@ def guest_target(path):
             raise ValueError("not release-owned guest file: " + path)
     if components[0] == "fonts" and components[1] != "system":
         raise ValueError("font target must be under /fonts/system")
+    if components[0] == "libs" and len(components) == 2 and \
+            re.fullmatch(r"[A-Za-z0-9_.-]+\.library\.[0-9]+", components[1]):
+        raise ValueError("library must be installed inside its Kit")
     return components
 
 
 def host_target(path):
     components = parts(path)
-    if len(components) < 2 or components[0] not in ("bin", "qemu", "rom"):
-        raise ValueError("host target must be a release binary: " + path)
+    if not (len(components) >= 2 and components[0] in ("bin", "qemu", "rom")) and \
+            not (len(components) == 2 and components[0] == "systemd" and
+                 components[1] in DROPINS):
+        raise ValueError("host target must be a release file: " + path)
     return components
 
 
@@ -84,20 +91,24 @@ def regular(path):
     return info
 
 
-def validate(stage, guest, host):
+def validate(stage, guest, host, remove_guest):
     if stage.parent != Path("/var/tmp") or not stage.name.startswith("astra-dev."):
         raise ValueError("stage must be /var/tmp/astra-dev.*")
     info = stage.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
         raise ValueError("stage must be a private root-owned directory")
     if not isinstance(guest, list) or not isinstance(host, list) or \
-            not guest + host or len(guest) + len(host) > 64:
+            not isinstance(remove_guest, list) or \
+            not guest + host + remove_guest or \
+            len(guest) + len(host) + len(remove_guest) > 64:
         raise ValueError("expected 1-64 file mappings")
     seen = set()
     validated_guest = []
     validated_host = []
+    validated_remove = []
     for kind, mapping in [("guest", item) for item in guest] + \
-                         [("host", item) for item in host]:
+                         [("host", item) for item in host] + \
+                         [("remove_guest", item) for item in remove_guest]:
         if not isinstance(mapping, dict) or set(mapping) != {"source", "target"}:
             raise ValueError("invalid mapping")
         source_parts = parts(mapping["source"])
@@ -108,25 +119,43 @@ def validate(stage, guest, host):
         if source_info.st_uid != 0 or source_info.st_size == 0 or source_info.st_size > 128 << 20:
             raise ValueError("invalid staged artifact: " + str(source))
         destination = mapping["target"]
-        guest_target(destination) if kind == "guest" else host_target(destination)
-        if (kind, destination) in seen:
+        guest_target(destination) if kind != "host" else host_target(destination)
+        key = ("guest" if kind == "remove_guest" else kind, destination)
+        if key in seen:
             raise ValueError("duplicate target: " + destination)
-        seen.add((kind, destination))
-        (validated_guest if kind == "guest" else validated_host).append(
+        seen.add(key)
+        (validated_guest if kind == "guest" else validated_host
+         if kind == "host" else validated_remove).append(
             (source, destination, file_hash(source)))
+    for _, destination, _ in validated_guest:
+        components = parts(destination, absolute=True)
+        if len(components) != 7 or components[0] != "libs" or \
+                not components[1].endswith(".kit") or \
+                components[2] != "libraries" or \
+                not components[4].startswith("abi-") or \
+                components[5] != "m68k-68040" or \
+                components[3] != components[6]:
+            continue
+        provider = "/libs/.providers/%s.%s" % (
+            components[3], components[4])
+        manifest = "/libs/%s/manifest" % components[1]
+        if ("guest", provider) not in seen or ("guest", manifest) not in seen:
+            raise ValueError("Kit library update needs manifest and provider index: " + destination)
     state_info = regular(STATE)
     if state_info.st_uid != 0 or state_info.st_size > 4 << 30:
         raise ValueError("invalid persistent system image")
-    return validated_guest, validated_host
+    return validated_guest, validated_host, validated_remove
 
 
-def checked_destination(root, name):
+def checked_destination(root, name, create=True):
     path = root
     for component in guest_target(name)[:-1]:
         path /= component
         try:
             mode = path.lstat().st_mode
         except FileNotFoundError:
+            if not create:
+                raise
             path.mkdir(mode=0o755)
             continue
         if not stat.S_ISDIR(mode):
@@ -135,8 +164,21 @@ def checked_destination(root, name):
     try:
         regular(target)
     except FileNotFoundError:
-        pass
+        if not create:
+            raise
     return target
+
+
+def remove_file(target, expected):
+    regular(target)
+    if file_hash(target) != expected:
+        raise RuntimeError("guest removal digest mismatch: " + str(target))
+    target.unlink()
+    directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def install_file(source, target, expected, readonly=False):
@@ -221,15 +263,15 @@ def dev_unit(source, environment, executable, dev_root):
 
 def activate_shadow(identity):
     DEV.mkdir(parents=True, exist_ok=True)
+    units = {}
+    for unit, (environment, executable) in DROPINS.items():
+        source = DEV / "releases" / identity / "systemd" / unit
+        units[unit] = dev_unit(source.read_text(), environment, executable, DEV)
     link = DEV / (".current." + str(os.getpid()))
     link.symlink_to("releases/" + identity)
     link.replace(DEV / "current")
-    units = {}
-    for unit, (environment, executable) in DROPINS.items():
-        source = STORE / "current/systemd" / unit
-        units[unit] = dev_unit(source.read_text(), environment, executable, DEV)
     for unit, value in units.items():
-        directory = Path("/etc/systemd/system")
+        directory = SYSTEMD
         target = directory / unit
         with tempfile.NamedTemporaryFile(dir=directory, prefix=".astra-dev-",
                                          delete=False) as output:
@@ -262,7 +304,7 @@ def running_qemu():
     return False
 
 
-def wait_for_boot(timeout=90):
+def wait_for_boot(timeout=120):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if run("systemctl", "is-active", "astra.service") != "active":
@@ -272,15 +314,18 @@ def wait_for_boot(timeout=90):
                 data = CONSOLE.read_bytes()
                 if b"KERNEL PANIC" in data:
                     raise RuntimeError("kernel panic after development install")
-                if any(b"launch /services/hostfs " in line and
-                       line.endswith(b" status=0") for line in data.splitlines()):
+                if b"System degraded:" in data or b"Initial image ....... EXITED" in data:
+                    raise RuntimeError("Astra boot degraded after development install")
+                # Supervisor reports this only after required boot services
+                # (including Desktop) are ready; event logs can drain later.
+                if b"Initial image ....... stage 8\n" in data:
                     run("systemctl", "is-active", "astra-remote-desktop.service")
                     run("systemctl", "is-active", "astra-audio-host.service")
                     return
         except FileNotFoundError:
             pass
         time.sleep(0.5)
-    raise RuntimeError("Astra did not reach fresh HOST0 readiness")
+    raise RuntimeError("Astra did not reach required boot-service readiness")
 
 
 def prune_shadows():
@@ -293,42 +338,48 @@ def prune_shadows():
             shutil.rmtree(child)
 
 
-def install(stage, guest, host):
-    files, host_files = validate(stage, guest, host)
-    shadow = shadow_release(host_files) if host_files else None
-    run("systemctl", "stop", *SERVICES)
-    mounted = False
+def install(stage, guest, host, remove_guest):
+    files, host_files, removals = validate(stage, guest, host, remove_guest)
     lock = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if run("losetup", "-j", str(STATE)):
-            raise RuntimeError("system image still leased after service stop")
-        if files:
-            offset, length = ext4_partition(STATE)
-            with tempfile.TemporaryDirectory(prefix="astra-dev-mount-", dir="/var/tmp") as mount:
-                root = Path(mount)
-                run("mount", "-t", "ext4", "-o",
-                    f"loop,rw,offset={offset},sizelimit={length}", str(STATE), mount)
-                mounted = True
-                try:
-                    for source, name, digest in files:
-                        install_file(source, checked_destination(root, name), digest)
-                    run("sync", "-f", mount)
-                finally:
-                    run("umount", mount)
-                    mounted = False
-            run("sync", "-f", str(STATE))
-        if shadow:
-            activate_shadow(shadow)
+        shadow = shadow_release(host_files) if host_files else None
+        run("systemctl", "stop", *SERVICES)
+        mounted = False
+        try:
+            if run("losetup", "-j", str(STATE)):
+                raise RuntimeError("system image still leased after service stop")
+            if files or removals:
+                offset, length = ext4_partition(STATE)
+                with tempfile.TemporaryDirectory(prefix="astra-dev-mount-", dir="/var/tmp") as mount:
+                    root = Path(mount)
+                    run("mount", "-t", "ext4", "-o",
+                        f"loop,rw,offset={offset},sizelimit={length}", str(STATE), mount)
+                    mounted = True
+                    try:
+                        for source, name, digest in files:
+                            install_file(source, checked_destination(root, name), digest)
+                        for _source, name, digest in removals:
+                            remove_file(checked_destination(root, name, create=False),
+                                        digest)
+                        run("sync", "-f", mount)
+                    finally:
+                        run("umount", mount)
+                        mounted = False
+                run("sync", "-f", str(STATE))
+            if shadow:
+                activate_shadow(shadow)
+        finally:
+            if not mounted:
+                run("systemctl", "start", *SERVICES)
+        wait_for_boot()
+        prune_shadows()
+        print("ASTRA_DE25_DEV_INSTALL PASS guest=%d host=%d removed=%d%s" %
+              (len(files), len(host_files), len(removals),
+               " shadow=" + shadow if shadow else ""))
     finally:
         fcntl.flock(lock, fcntl.LOCK_UN)
         os.close(lock)
-        if not mounted:
-            run("systemctl", "start", *SERVICES)
-    wait_for_boot()
-    prune_shadows()
-    print("ASTRA_DE25_DEV_INSTALL PASS guest=%d host=%d%s" %
-          (len(files), len(host_files), " shadow=" + shadow if shadow else ""))
 
 
 if __name__ == "__main__":
@@ -336,6 +387,6 @@ if __name__ == "__main__":
         raise SystemExit("usage: dev-install-de25.py STAGE (root on DE25)")
     stage = Path(sys.argv[1])
     data = json.loads((stage / "manifest.json").read_text())
-    if not isinstance(data, dict) or set(data) != {"guest", "host"}:
+    if not isinstance(data, dict) or set(data) != {"guest", "host", "remove_guest"}:
         raise SystemExit("invalid development manifest")
-    install(stage, data["guest"], data["host"])
+    install(stage, data["guest"], data["host"], data["remove_guest"])

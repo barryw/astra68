@@ -1,6 +1,112 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-27
+Status: active continuation map, 2026-10-28
+
+Audit correctness checkpoint, 2026-10-28: nine Ponytail findings were fixed
+at existing native seams. Beast host tests, NDK `dist-check`, and the full
+native QEMU Terminal gate (`ASTRA TERMINAL PASS 117 commands`) passed. DE25
+focused install passed with Interface Kit 7.9, AstraZ, Package/Filesystem/
+Runtime Kits, and the hardened remote desktop. An initial hardware trial
+found Grid View measured zero height for an empty upper window; a shared
+one-pixel minimum and a zero-row regression test fixed AstraZ startup. DE25
+then showed Zork I with full title, inverted status line, and inline caret,
+plus Beyond Zork Z5's colored Character Setup upper window. RFB binds only
+127.0.0.1:5900. Astra, audio, and remote desktop services are active with
+zero restarts and 8.3 GiB free; board trial files were removed. Evidence:
+Beast `/home/barry/astra68/build/audit-de25-20261028/`. Dev installer now
+holds a separate transaction lock through boot verification, and carries
+changed systemd units with matching host binaries. It validates unit content
+before changing the active release link. Performance qualification of AstraZ
+transcript redraw remains separate from this correctness gate.
+
+Interface Kit 7.8 cursor/status checkpoint, 2026-10-27: shared TextSurface
+defines underline as `ASTRA_TEXT_CARET_STANDARD`. Common Field and Terminal
+call that renderer; AstraZ's inline prompt inherits it. Shared Text View
+inversion renders AstraZ's Z1–3 status line with light text on dark ground.
+Haiku references: `src/kits/interface/TextControl.cpp` for common editing and
+`src/apps/terminal/TermView.cpp` for caret presentation. Beast Interface Kit
+tests, Terminal tests, AstraZ tests, and NDK `dist-check` passed. Selective
+DE25 update installed Interface Kit, Terminal, and AstraZ together. Physical
+RFB screen showed an underline caret after `>`, inverted West of House / Score
+/ Moves status line, and `open mailbox` changed Moves 0→1 while revealing the
+leaflet. Evidence: Beast
+`/home/barry/astra-evidence/astraz-platform-caret-20261027/`.
+Follow-up DE25 correction, 2026-10-28: shared TextSurface now centers glyphs
+within their line height and offsets the standard underline caret by the same
+amount. Inline Field and Text View use matching centered origins; this fixes
+status text pinned toward the top of its dark bar while retaining alignment
+of the caret with `>`. Earlier row-top alignment was a temporary checkpoint.
+Frotz's private `os_display_string` and `os_string_width` now consume a zero
+style/font argument instead of mistaking it for string end. DE25 native CLI
+probe and GUI both show full `ZORK I` title; GUI `open mailbox` advances Moves
+0→1. Beast Interface Kit and AstraZ tests/builds passed. Probe removed with
+digest guard; final GUI remains open. Board services active, zero restarts,
+8.3 GiB free, one development release. Evidence: Beast
+`/home/barry/astra-evidence/astraz-platform-caret-20261027/`.
+
+AstraZ GUI checkpoint, 2026-10-27: Interface Kit 7.7 adds a borderless inline
+Field using the existing Field editor and caret. AstraZ composes it with
+TextView, Container, ScrollView, and Toolbar, so input follows `>` in the
+scrolling transcript. Frotz window 7 drives a fixed Z1–3 status line. DE25
+ran real Zork I: opening room, `open mailbox`, leaflet output, and Moves 0→1;
+Deadline displayed the room/Time variant. Launch through Terminal's `open`
+returns focus to Terminal; clicking AstraZ then restores prompt focus on its
+active window state. Selective guest installs passed, and the previous
+display panic log timestamp did not advance. Evidence: Beast
+`/home/barry/astra-evidence/astraz-inline-status-20261027/`. V4+ upper-window
+layouts, Glulx, and Z6 picture/sound remain open; see `docs/ASTRAZ.md`.
+
+AstraZ private interface, 2026-10-27: `astraz_engine` now exposes only an
+app-private probe/run callback interface. It covers Frotz Z1–8 input,
+screen/window events, files, pictures, sound, mouse, and cancellation, with
+host capability checks. Frotz's unimplemented optional `make_menu` stays
+disabled. Native DE25 session client played Mini Zork Z3, saved at move 1,
+advanced to move 2, then restored move 1. Native DE25 contract test passed
+synthetic bare Z1–8 and Z-code/Glulx Blorb probes plus malformed cases.
+Native DE25 session client also played a Z5 Adventure story through a `look`
+turn after its title pagination. Test client now marks `More` pauses explicitly.
+Evidence: Beast `/var/tmp/astra-astraz-private-interface-evidence-20261027/`.
+Both test-only binaries and board scratch were removed with guarded removal;
+all three services active, board root 8.3 GiB free. At that checkpoint, real
+story execution for Z1–2, Z4, and Z6–8, V6 graphics/sound, Glulx backend,
+and native GUI remained open.
+
+AstraZ first checkpoint, 2026-10-27: Filesystem Kit 15.5 identifies bare
+Z-machine, Glulx, and Blorb content for shared file associations. Interpreter
+dispatch and Blorb executable parsing belong to AstraZ, with no story engine
+NDK API. Frotz 2.56pre source is pinned under `third_party/frotz`; common and
+Blorb code build as one AstraZ-private MC68040 static archive through NDK
+CMake/Ninja. Test-only upstream
+CLI on DE25 ran Mini Zork Z3, displayed West of House, and executed `open
+mailbox` with expected leaflet output. Trial evidence is at Beast
+`/var/tmp/astra-astraz-evidence-20261027/de25-z3-first-move.png` and
+`de25-z3-private-engine.png`; board
+scratch files and the test-only guest CLI were removed with the checksum-guarded
+development installer. Final Filesystem Kit 15.5 was installed through
+the development installer after Beast file-type, library-contract, and NDK
+`dist-check` passed. Astra, audio host, and remote desktop services remain
+active with 8.3 GiB free. At that checkpoint, no native AstraZ GUI, session
+adapter, or Glulx backend was installed. See `docs/ASTRAZ.md` for current gates.
+The corrected app-private archive and private File Types boundary passed a
+second DE25 Z3 input trial. NDK distribution contains no story header and
+Filesystem Kit exports no story inspector. Trial CLI was removed again.
+
+File types, 2026-10-27: Haiku-style native slice is installed on DE25.
+Filesystem Kit 15.4 identifies bounded Z-machine and Blorb content, uses an
+`.apkg` built-in hint, then resolves unknown content using current bundle
+`handles MIME-TYPE .extension` declarations. System library 4.4 parses these
+declarations. Open With resolves installed handlers and Config Kit defaults;
+Atlas routes file double-clicks to it. Beast bundle, catalog, file-type,
+development-installer, and NDK dist checks passed. DE25 opened unknown
+`/dh0/astra_events.cat` in shared chooser; Cancel returned cleanly. A valid
+Z3 story in WORK opened Open With and showed no installed handler, as expected
+before AstraZ exists. Trial found that Open With needed `WORK:r` in both its
+bundle and supervisor ceiling; both are updated. Board services remain active,
+root has 8.3 GiB free, and trial files were removed after evidence archival
+at `/var/tmp/astra-file-types-evidence-20261027/` and
+`/var/tmp/astra-file-types-extension-evidence-20261027/` on Beast. VFS typed
+attributes, generic content-rule registration, and AstraZ launch/default
+tests remain open. See `docs/FILE_TYPES.md`.
 
 Development deployment, 2026-10-27: DE25 is an active development machine;
 the selected release below is a checkpoint, not a production constraint.
@@ -12,6 +118,8 @@ a new QEMU process plus HOST0 boot. Desktop guest and Codec worker host probes
 completed in about 31 and 39 seconds respectively, with all three services
 active. See `docs/DE25_DEVELOPMENT_LOOP.md`. Complete images are checkpoints
 after fixes pass hardware trials.
+Checksum-guarded removal of one test-only `/commands` artifact passed on DE25
+without touching user paths; the new boot and all three services passed.
 
 Board release checkpoint, 2026-10-27: PR #4 merged the certified Codec Kit,
 SDL_mixer Ogg preroll, and Chocolate Quake support into `main` at

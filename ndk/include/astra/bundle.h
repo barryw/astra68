@@ -26,6 +26,10 @@
 #define ASTRA_BUNDLE_CAPABILITY_NAME_MAX (ASTRA_CAPABILITY_NAME_MAX + 3u)
 /** Maximum logical library-name bytes including NUL. */
 #define ASTRA_BUNDLE_LIBRARY_NAME_MAX ASTRA_LIBRARY_NAME_MAX
+/** Maximum ASCII file-extension bytes including NUL. */
+#define ASTRA_BUNDLE_EXTENSION_MAX 32u
+/** Maximum MIME-style content-type bytes including NUL. */
+#define ASTRA_BUNDLE_CONTENT_TYPE_MAX 128u
 
 enum {
     ASTRA_BUNDLE_APPLICATION = 1,
@@ -93,6 +97,27 @@ enum {
 uint32_t astra_bundle_manifest_parse(char *text, uint32_t length,
                                      AstraBundleManifest *manifest,
                                      uint32_t *error_line);
+/** Validate a manifest and report whether an application declares one content
+ * type. `text` is mutable, as for astra_bundle_manifest_parse. A Kit never
+ * handles documents.
+ * @param text Mutable manifest bytes.
+ * @param length Byte length of text.
+ * @param content_type MIME-style type to query.
+ * @param handles Receives zero or one on success.
+ * @return ASTRA_BUNDLE_OK or an ASTRA_BUNDLE_* error. */
+uint32_t astra_bundle_manifest_handles(char *text, uint32_t length,
+                                       const char *content_type,
+                                       uint32_t *handles);
+/** Query optional `handles TYPE .extension` declarations. Conflicting types
+ * for one extension make a manifest invalid. Empty output means no hint.
+ * @param text Mutable manifest bytes.
+ * @param length Byte length of text.
+ * @param extension Lowercase ASCII extension including its leading dot.
+ * @param type Receives a MIME-style type or empty string.
+ * @param capacity Bytes available in type.
+ * @return ASTRA_BUNDLE_OK or an ASTRA_BUNDLE_* error. */
+uint32_t astra_bundle_manifest_extension_type(char *text, uint32_t length,
+    const char *extension, char *type, uint32_t capacity);
 /** Release paths and library arrays owned by a parsed manifest.
  * @param manifest Manifest to release; NULL is ignored.
  */

@@ -76,6 +76,25 @@ executable relative/path/inside/bundle
 icon relative/path/to/icon.aicon
 ```
 
+An application may declare each content type it can open with a repeatable
+`handles MIME-TYPE [EXTENSION]` directive. MIME types use lowercase ASCII
+type/subtype identifiers. An optional lowercase extension starts with `.`;
+it is a hint for content that File Types cannot identify. For example:
+
+```
+handles application/x-zmachine-story .z3
+handles application/x-zmachine-story .z4
+handles application/x-zmachine-story .z5
+handles application/x-zmachine-story .z6
+handles application/x-zmachine-story .z8
+handles application/x-blorb .blorb
+```
+
+The same extension cannot map to two types within one bundle. If installed
+bundles disagree, File Types leaves that extension unknown. Content recognition
+always takes precedence. Declarations describe capability; installation does
+not change an existing user default. Kits cannot declare document types.
+
 Optional repeatable directives:
 
 ```

@@ -2,6 +2,7 @@
 // duplicates from union members, icon paths, and allocation failure.
 
 #include <astra/application_catalog.h>
+#include <astra/file_type.h>
 #include <astra/runtime.h>
 
 #include <assert.h>
@@ -21,6 +22,20 @@ static uint32_t cursor;
 static uint32_t fail_open;
 static uint32_t fail_after_allocations = UINT32_MAX;
 static uint32_t allocations;
+static const char *recognized_type;
+
+uint32_t astra_file_type_identify(AstraFilesystem *filesystem,
+    const char *path, AstraFileTypeInfo *info)
+{
+    (void)filesystem;
+    (void)path;
+    *info = (AstraFileTypeInfo)ASTRA_FILE_TYPE_INFO_INIT;
+    if (recognized_type != NULL) {
+        strcpy(info->type, recognized_type);
+        info->source = ASTRA_FILE_TYPE_CONTENT;
+    }
+    return ASTRA_VFS_OK;
+}
 
 void *astra_runtime_allocate(size_t size)
 {
@@ -205,10 +220,107 @@ static void catalog_failures(void)
     astra_application_catalog_destroy(NULL);
 }
 
+static void declared_document_types(void)
+{
+    static const FakeNode apps[] = {
+        {"AstraZ.app", ASTRA_VFS_KIND_DIRECTORY,
+         APP("org.astra.astraz", "AstraZ", "z.aicon")
+         "handles application/x-zmachine-story .z3\n"
+         "handles application/x-zmachine-story .z4\n"
+         "handles application/x-zmachine-story .z5\n"
+         "handles application/x-zmachine-story .z6\n"
+         "handles application/x-zmachine-story .z8\n"
+         "handles application/x-blorb .blorb\n"},
+        {"Bad.app", ASTRA_VFS_KIND_DIRECTORY,
+         APP("org.astra.bad", "Bad", "bad.aicon")
+         "handles application/Bad\n"},
+    };
+    AstraProcessFilesystem filesystem = ASTRA_PROCESS_FILESYSTEM_INIT;
+    uint32_t supports = 9u;
+
+    nodes = apps;
+    node_count = sizeof(apps) / sizeof(apps[0]);
+    assert(astra_application_supports_type(&filesystem, "/apps/AstraZ.app",
+        "application/x-zmachine-story", &supports) == ASTRA_VFS_OK);
+    assert(supports == 1u);
+    assert(astra_application_supports_type(&filesystem, "/apps/AstraZ.app",
+        "application/x-other", &supports) == ASTRA_VFS_OK);
+    assert(supports == 0u);
+    assert(astra_application_supports_type(&filesystem, "/apps/Bad.app",
+        "application/x-zmachine-story", &supports) == ASTRA_VFS_ERR_INVALID);
+    assert(supports == 0u);
+    assert(astra_application_supports_type(&filesystem, "/apps/Missing.app",
+        "application/x-zmachine-story", &supports) == ASTRA_VFS_ERR_NOT_FOUND);
+    assert(astra_application_supports_type(&filesystem, "/apps/AstraZ.app",
+        "not a type", &supports) == ASTRA_VFS_ERR_INVALID);
+    {
+        AstraApplicationCatalog catalog = ASTRA_APPLICATION_CATALOG_INIT;
+        uint32_t indices[2] = {UINT32_MAX, UINT32_MAX};
+        uint32_t count = 0u;
+        char type[ASTRA_BUNDLE_CONTENT_TYPE_MAX];
+        AstraFileTypeInfo resolved = ASTRA_FILE_TYPE_INFO_INIT;
+        assert(astra_application_catalog_load(&filesystem, "/apps", &catalog) ==
+               ASTRA_VFS_OK);
+        assert(catalog.count == 1u && catalog.skipped == 1u);
+        assert(astra_application_catalog_handlers(&filesystem, &catalog,
+            "application/x-zmachine-story", indices, 2u, &count) ==
+            ASTRA_VFS_OK && count == 1u && indices[0] == 0u);
+        assert(astra_application_catalog_handlers(&filesystem, &catalog,
+            "application/x-zmachine-story", NULL, 0u, &count) ==
+            ASTRA_VFS_ERR_LIMIT && count == 1u);
+        for (uint32_t version = 3u; version <= 8u; ++version) {
+            char path[] = "/dh0/story.Z3";
+            if (version == 7u) continue;
+            path[12] = (char)('0' + version);
+            assert(astra_file_type_resolve(&filesystem, &catalog, path,
+                &resolved) == ASTRA_VFS_OK);
+            assert(strcmp(resolved.type, ASTRA_FILE_TYPE_ZMACHINE) == 0 &&
+                   resolved.source == ASTRA_FILE_TYPE_EXTENSION_HINT);
+        }
+        assert(astra_file_type_resolve(&filesystem, &catalog,
+            "/dh0/story.z7", &resolved) == ASTRA_VFS_OK &&
+            resolved.type[0] == '\0');
+        recognized_type = ASTRA_FILE_TYPE_BLORB;
+        assert(astra_file_type_resolve(&filesystem, &catalog,
+            "/dh0/story.z3", &resolved) == ASTRA_VFS_OK &&
+            strcmp(resolved.type, ASTRA_FILE_TYPE_BLORB) == 0 &&
+            resolved.source == ASTRA_FILE_TYPE_CONTENT);
+        recognized_type = NULL;
+        assert(astra_application_catalog_extension_type(&filesystem, &catalog,
+            ".z3", type, sizeof(type)) == ASTRA_VFS_OK &&
+            strcmp(type, ASTRA_FILE_TYPE_ZMACHINE) == 0);
+        node_count = 0u;
+        assert(astra_application_catalog_extension_type(&filesystem, &catalog,
+            ".z3", type, sizeof(type)) == ASTRA_VFS_OK && type[0] == '\0');
+        node_count = sizeof(apps) / sizeof(apps[0]);
+        astra_application_catalog_destroy(&catalog);
+    }
+    {
+        static const FakeNode conflicting[] = {
+            {"AstraZ.app", ASTRA_VFS_KIND_DIRECTORY,
+             APP("org.astra.astraz", "AstraZ", "z.aicon")
+             "handles application/x-zmachine-story .z3\n"},
+            {"Other.app", ASTRA_VFS_KIND_DIRECTORY,
+             APP("org.astra.other", "Other", "other.aicon")
+             "handles application/x-other .z3\n"},
+        };
+        AstraApplicationCatalog catalog = ASTRA_APPLICATION_CATALOG_INIT;
+        char type[ASTRA_BUNDLE_CONTENT_TYPE_MAX];
+        nodes = conflicting;
+        node_count = sizeof(conflicting) / sizeof(conflicting[0]);
+        assert(astra_application_catalog_load(&filesystem, "/apps", &catalog) ==
+               ASTRA_VFS_OK);
+        assert(astra_application_catalog_extension_type(&filesystem, &catalog,
+            ".z3", type, sizeof(type)) == ASTRA_VFS_OK && type[0] == '\0');
+        astra_application_catalog_destroy(&catalog);
+    }
+}
+
 int main(void)
 {
     catalog_orders_and_skips();
     catalog_failures();
+    declared_document_types();
     {
         char name[ASTRA_VFS_NAME_MAX];
         memset(name, 'p', sizeof(name) - 5u);

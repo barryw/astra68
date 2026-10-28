@@ -94,7 +94,18 @@ assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
     "trusted /apps/Terminal.app grants " + astra_image.TERMINAL_CEILING,
     "trusted /apps/Atlas.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:rw FONTS:r APPS:r LIBS:r LOG",
     "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD DH0:r LIBS:r",
-    "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG"]
+    "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG",
+    "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG",
+    "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
+    "trusted /apps/AstraZ.app grants GUI VOLUMES VOLUME_READ DH0:r HOME:rw WORK:r LIBS:r"]
+open_with_ceiling = next(line.split(" grants ", 1)[1].split()
+    for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
+    if line.startswith("trusted /apps/OpenWith.app grants "))
+with open(os.path.join(os.path.dirname(__file__), "../../sw/userspace/apps/OpenWith.app/manifest"),
+          encoding="ascii") as handle:
+    open_with_capabilities = [line.split(" ", 1)[1].strip() for line in handle
+                              if line.startswith("capability ")]
+assert set(open_with_capabilities) <= set(open_with_ceiling)
 for grant, admitted in (("GUI", True), ("FONTS:r", True),
                         ("FONTS:rw", False), ("FONT_CATALOG", True),
                         ("FONTS_ADMIN", False), ("APPS:r", True), ("APPS:rw", False),
@@ -161,7 +172,7 @@ with open(os.path.join(astra_image.REPOSITORY,
     runtime_manifest = manifest.read()
     assert "version 2.1.0\n" in runtime_manifest
     assert "provides runtime.library 1 1.17.0\n" in runtime_manifest
-    assert "provides system.library 4 4.3.0\n" in runtime_manifest
+    assert "provides system.library 4 4.5.0\n" in runtime_manifest
     assert "version 1.6.0\n" not in runtime_manifest
     assert "provides runtime.library 1 1.6.0\n" not in runtime_manifest
 with open(os.path.join(astra_image.REPOSITORY,

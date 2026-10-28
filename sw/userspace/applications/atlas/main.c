@@ -498,6 +498,25 @@ static void folder_error(AstraHandle gui, const char *message, uint32_t status)
     (void)astra_interface_show_alert(gui, &info);
 }
 
+static void open_error(AstraHandle gui, AstraResult result)
+{
+    char text[96];
+    AstraString out;
+    astra_string_init(&out, text, sizeof(text));
+    (void)astra_string_append(&out, "Could not open item. Astra status ");
+    (void)astra_string_append_i64(&out, result);
+    (void)astra_string_append_char(&out, '.');
+    AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
+    info.kind = ASTRA_ALERT_ERROR;
+    info.title = "Open Error";
+    info.title_length = 10u;
+    info.message = text;
+    info.message_length = (uint16_t)out.length;
+    info.button = "Close";
+    info.button_length = 5u;
+    (void)astra_interface_show_alert(gui, &info);
+}
+
 static AstraResult reload_directory(void)
 {
     uint32_t status = astra_directory_snapshot_load(&directory,
@@ -536,11 +555,10 @@ static AstraResult open_entry(uint32_t index)
         path, sizeof(path)) != ASTRA_VFS_OK) return ASTRA_ERROR_INVALID_ARGUMENT;
     uint32_t pid;
     size_t length = strlen(path);
-    if (directory.entries[index].kind == ASTRA_VFS_KIND_FILE &&
-        astra_string_has_suffix(path, ".apkg")) {
+    if (directory.entries[index].kind == ASTRA_VFS_KIND_FILE) {
         const char *arguments[] = {path};
         return astra_application_launch_with_arguments(launcher,
-            "/apps/Installer.app", (uint16_t)strlen("/apps/Installer.app"),
+            "/apps/OpenWith.app", (uint16_t)strlen("/apps/OpenWith.app"),
             ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 1u, &pid);
     }
     if (directory.entries[index].kind != ASTRA_VFS_KIND_DIRECTORY)
@@ -882,8 +900,7 @@ static AstraResult run(AstraHandle gui)
                         menu_parents[1] = 1u;
                     } else if (index < directory.count &&
                         (directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY ||
-                         (directory.entries[index].kind == ASTRA_VFS_KIND_FILE &&
-                          astra_string_has_suffix(directory.entries[index].name, ".apkg")))) {
+                         directory.entries[index].kind == ASTRA_VFS_KIND_FILE)) {
                         menu_items[count++] = (AstraContextMenuItem){"atlas.open", 10u, NULL};
                         if (selected_bundle(&command_context))
                             menu_items[count++] = (AstraContextMenuItem){"atlas.package", 13u, NULL};
@@ -904,11 +921,12 @@ static AstraResult run(AstraHandle gui)
                     if (event.data.pointer.click_count == 2u && index == clicked_index &&
                         index < directory.count &&
                         (directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY ||
-                         (directory.entries[index].kind == ASTRA_VFS_KIND_FILE &&
-                          astra_string_has_suffix(directory.entries[index].name, ".apkg")))) {
+                         directory.entries[index].kind == ASTRA_VFS_KIND_FILE)) {
                         AstraResult opened = open_entry(index);
-                        if (opened != ASTRA_OK)
+                        if (opened != ASTRA_OK) {
                             (void)astra_log_failure("atlas open", (uint32_t)(-opened));
+                            open_error(gui, opened);
+                        }
                     } else clicked_index = index;
                 }
             }

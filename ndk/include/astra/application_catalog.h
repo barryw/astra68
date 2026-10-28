@@ -52,6 +52,46 @@ uint32_t astra_application_catalog_load(AstraProcessFilesystem *filesystem,
                                         const char *directory,
                                         AstraApplicationCatalog *catalog);
 
+/** Query a bundle's current manifest for a declared content type. A valid
+ * manifest returns OK with `supports` set to zero or one; malformed bundles
+ * return INVALID. The bundle path may name any mounted volume.
+ * @param filesystem Open process filesystem.
+ * @param bundle Absolute bundle path.
+ * @param content_type MIME-style content type.
+ * @param supports Receives zero or one.
+ * @return ASTRA_VFS_OK or a VFS status. */
+uint32_t astra_application_supports_type(AstraProcessFilesystem *filesystem,
+                                         const char *bundle,
+                                         const char *content_type,
+                                         uint32_t *supports);
+
+/** Return indices of currently installed applications declaring `content_type`.
+ * `count` receives total matches even when `capacity` is shorter; a short
+ * output buffer returns LIMIT without writing beyond it.
+ * @param filesystem Open process filesystem.
+ * @param catalog Application catalog snapshot.
+ * @param content_type MIME-style content type.
+ * @param indices Output array of matching catalog indices.
+ * @param capacity Number of elements available in indices.
+ * @param count Receives total matching application count.
+ * @return ASTRA_VFS_OK or a VFS status. */
+uint32_t astra_application_catalog_handlers(
+    AstraProcessFilesystem *filesystem, const AstraApplicationCatalog *catalog,
+    const char *content_type, uint32_t *indices, uint32_t capacity,
+    uint32_t *count);
+
+/** Resolve one filename extension from current bundle manifests. If bundles
+ * disagree on its content type, output stays empty rather than picking an app.
+ * @param filesystem Open process filesystem.
+ * @param catalog Installed application snapshot.
+ * @param extension Lowercase ASCII extension including its leading dot.
+ * @param type Receives MIME-style type or empty string.
+ * @param capacity Bytes available in type.
+ * @return ASTRA_VFS_OK or a VFS status. */
+uint32_t astra_application_catalog_extension_type(
+    AstraProcessFilesystem *filesystem, const AstraApplicationCatalog *catalog,
+    const char *extension, char *type, uint32_t capacity);
+
 /** Release a catalog's storage and reset it to empty.
  * @param catalog Catalog to release; NULL is ignored.
  */
