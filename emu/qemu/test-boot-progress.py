@@ -197,8 +197,11 @@ def boot(qemu, rom, image, services, skipped=None, stops_after=None):
         failed = {match.group(1) for match in
                   (LAUNCH_FAILED.search(line) for line in lines) if match}
         if failed != skipped:
+            related = [line for line in lines if
+                       "ready-fail" in line or "fault-probe" in line]
             raise RuntimeError("services that did not start: %s, expected "
-                               "%s" % (sorted(failed), sorted(skipped)))
+                               "%s; probe log: %s" %
+                               (sorted(failed), sorted(skipped), related))
         # Informational: compared by hand with the pre-change baseline.
         print("ASTRA BOOT LAUNCH ORDER: " + " | ".join(
             match.group(1) for match in

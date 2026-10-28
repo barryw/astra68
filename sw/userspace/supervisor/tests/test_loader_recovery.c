@@ -224,6 +224,19 @@ int main(void)
     assert(next_service_retry() == now + SERVICE_BACKOFF_MAX_NS && logged_status == 0u);
     clear_service_failure("hostfs");
     assert(failed_service_count == 0u && next_service_retry() == ASTRA_DEADLINE_FOREVER);
+    {
+        AstraServiceDefinition scratch = {0};
+
+        assert(astra_service_definition_path_set(&scratch, "/services/first") == ASTRA_OK);
+        assert(boot_plan_append(NULL, &scratch) == ASTRA_STATUS_OK);
+        assert(scratch.executable == NULL);
+        assert(astra_service_definition_path_set(&scratch, "/services/second") == ASTRA_OK);
+        assert(boot_plan_append(NULL, &scratch) == ASTRA_STATUS_OK);
+        assert(strcmp(boot_plan[0].definition.executable, "/services/first") == 0);
+        assert(strcmp(boot_plan[1].definition.executable, "/services/second") == 0);
+        boot_plan_release();
+        assert(boot_plan == NULL && boot_plan_count == 0u);
+    }
     free(failed_services.records);
     return 0;
 }
