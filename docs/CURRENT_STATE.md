@@ -22,6 +22,26 @@ SHA-256 `72827c5f0f34b435ae8f186751bb990da9d52c9181824b18b345e913f1fb315b`.
 A new in-game save/load after migration and Quake install/uninstall
 persistence remain open.
 
+Native game-save checkpoint, 2026-10-28: `STORE:` is the shared private data
+location for native applications; POSIX ports use `/store/`, and SDL's
+`SDL_GetPrefPath()` resolves there. AstraZ now uses `STORE:saves/` for Frotz
+save, restore, transcript, and recording files. Its former `HOME:/AstraZ/`
+directory moves into that store on first use; a conflict refuses to hide
+either copy. Haiku reference: `headers/os/storage/FindDirectory.h`,
+`src/system/libroot/os/find_directory.cpp`, `headers/os/storage/FilePanel.h`,
+and `src/kits/tracker/FilePanel.cpp` separate application data from user
+documents and let document applications choose save paths. Beast AstraZ
+target build and tests and image-manifest checks pass. Focused DE25 install
+opened Zork I, saved after Moves 0, advanced by `open mailbox`, and restored
+to Moves 0. With Astra stopped, read-only image inspection found a 332-byte
+`saves/Zork1z3-677fd028.qzl` in
+`HOME:/Application Data/org.astra.astraz/`; no legacy AstraZ directory was
+present. Services restarted with zero Astra restarts and 8.2 GiB free.
+Evidence: `/home/barry/astra68/build/astraz-saves-20261028/` on Beast.
+Legacy AstraZ save migration remains untested on DE25 because board had no
+old save directory. Doom's post-migration in-game save/load and Quake
+install/uninstall persistence remain open.
+
 Boot splash integration, 2026-10-28: the older splash branch is reconciled
 with current HostFS bootstrap, service-before-application startup and
 root-owned runtime launcher. The progress fixed phase counts 10 ROM, four

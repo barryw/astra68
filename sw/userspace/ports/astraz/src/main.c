@@ -651,8 +651,28 @@ static int host_choose_file(void *unused, int purpose, const char *suggested,
             (*at >= '0' && *at <= '9') || *at == '-') name[length++] = *at;
     if (length == 0u) name[length++] = 'z';
     name[length] = '\0';
-    if (mkdir("/home/AstraZ", 0700) != 0 && errno != EEXIST) return 0;
-    int needed = snprintf(path, capacity, "/home/AstraZ/%s-%08x%s",
+    struct stat current, legacy;
+    int current_found = stat("/store/saves", &current) == 0;
+    int current_error = errno;
+    int legacy_found = stat("/home/AstraZ", &legacy) == 0;
+    int legacy_error = errno;
+    if ((current_found && !S_ISDIR(current.st_mode)) ||
+        (legacy_found && !S_ISDIR(legacy.st_mode)) ||
+        (!current_found && current_error != ENOENT) ||
+        (!legacy_found && legacy_error != ENOENT))
+        return 0;
+    if (current_found && legacy_found) {
+        (void)astra_log("AstraZ saves exist in both HOME:AstraZ and STORE:saves");
+        return 0;
+    }
+    if (!current_found && legacy_found) {
+        if (rename("/home/AstraZ",
+                   "/home/Application Data/org.astra.astraz/saves") != 0)
+            return 0;
+    } else if (!current_found && mkdir("/store/saves", 0700) != 0) {
+        return 0;
+    }
+    int needed = snprintf(path, capacity, "/store/saves/%s-%08x%s",
                           name, (unsigned)hash, suffix);
     return needed > 0 && (size_t)needed < capacity;
 }

@@ -2,12 +2,13 @@ astra-bundle 1
 kind application
 id org.astra.astraz
 name "AstraZ"
-version 0.1.0
+version 0.1.1
 executable bin/m68k-68040/AstraZ
 icon resources/AstraZ.aicon
 capability GUI
 capability VOLUMES
 capability VOLUME_READ
+capability STORE:rw
 capability HOME:rw
 capability WORK:r
 capability DH0:r

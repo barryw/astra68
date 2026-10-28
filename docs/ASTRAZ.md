@@ -26,6 +26,11 @@ resource bytes only during their callback. Save, restore, undo, transcript,
 and recording remain Frotz operations; host file chooser chooses their paths.
 Private header defines file purposes, ZSCII keys, style bits, fonts, colours,
 and restart stages so GUI code never includes upstream Frotz headers.
+The GUI host file chooser stores save, restore, transcript, and recording
+files under `STORE:saves/`, inside `HOME:/Application Data/org.astra.astraz/`.
+It moves the former `HOME:/AstraZ/` directory on first use; if old and new
+directories both exist, it refuses to choose one silently. Frotz remains
+responsible for serialization and its story-specific filenames.
 Frotz's global state permits one active run per process. Blorb supplies an
 executable and optional resources, not a third VM. Glulx probe returns
 `ASTRAZ_VM_GLULX`; run returns `ASTRAZ_UNSUPPORTED_VM` until a private Glulxe

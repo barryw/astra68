@@ -132,6 +132,14 @@ chosen through a file dialog when one is available. Programs that write
 arbitrary paths cannot be redirected safely by the OS without changing their
 code or launch configuration.
 
+Game ports should make their existing save-directory selector use `STORE:`
+(or `/store/` in POSIX code). The engine keeps its own file format, slot names,
+and save/load logic. This is the one port boundary that may need adaptation;
+the OS cannot infer which arbitrary file write is a saved game. Port-specific
+subdirectories stay beneath the same application data root, so uninstall and
+moving the bundle leave saves in place. A shared Save dialog is for apps that
+let users choose document paths, not an alternate game-save backend.
+
 A Kit must provide at least one library. An application may request only
 capabilities named by its manifest. Paths are bundle-relative: assigns,
 absolute paths, backslashes, and `.` or `..` components are forbidden.
