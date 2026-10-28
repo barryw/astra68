@@ -36,7 +36,10 @@ opened Zork I, saved after Moves 0, advanced by `open mailbox`, and restored
 to Moves 0. With Astra stopped, read-only image inspection found a 332-byte
 `saves/Zork1z3-677fd028.qzl` in
 `HOME:/Application Data/org.astra.astraz/`; no legacy AstraZ directory was
-present. Services restarted with zero Astra restarts and 8.2 GiB free.
+present. Its bytes begin `FORM/IFZS` and include `IFhd`, `CMem`, and `Stks`:
+Frotz writes and reads Quetzal using its existing `save_quetzal` and
+`restore_quetzal` code. Services restarted with zero Astra restarts and
+8.2 GiB free.
 Evidence: `/home/barry/astra68/build/astraz-saves-20261028/` on Beast.
 Legacy AstraZ save migration remains untested on DE25 because board had no
 old save directory. Doom's post-migration in-game save/load and Quake

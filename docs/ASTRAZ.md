@@ -31,6 +31,12 @@ files under `STORE:saves/`, inside `HOME:/Application Data/org.astra.astraz/`.
 It moves the former `HOME:/AstraZ/` directory on first use; if old and new
 directories both exist, it refuses to choose one silently. Frotz remains
 responsible for serialization and its story-specific filenames.
+Z-machine `save` writes [Quetzal](https://www.inform-fiction.org/zmachine/standards/quetzal/)
+(`FORM/IFZS`) through Frotz's
+`save_quetzal`; `restore` reads it through `restore_quetzal` from the same
+`STORE:saves/` path. A DE25 Zork I save contained `IFhd`, `CMem`, and `Stks`
+chunks and restored the previous turn. Quetzal format does not apply to
+Glulx, whose execution backend remains unimplemented.
 Frotz's global state permits one active run per process. Blorb supplies an
 executable and optional resources, not a third VM. Glulx probe returns
 `ASTRAZ_VM_GLULX`; run returns `ASTRAZ_UNSUPPORTED_VM` until a private Glulxe
