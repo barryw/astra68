@@ -174,11 +174,11 @@ On the DE25 the display helper shows `share/astra_boot_splash.rgb565` with a
 bar from power-on to the guest's first frame. The bar is driven by the boot
 progress record (`sw/include/astra/boot_progress.h`): two big-endian words at
 text-page offset `0xFE0`, written by the ROM during POST and by the kernel
-after handoff. Two phases, as Haiku's boot_splash: the 21 fixed steps every
-boot takes (10 ROM, 4 kernel, supervisor stages 1-7) fill the first 30% in
+after handoff. Two phases, as Haiku's boot_splash: the 18 fixed steps every
+boot takes (10 ROM, 4 kernel, supervisor stages 1, 5, 6, 7) fill the first 30% in
 equal slices; the boot services fill the remaining 70% in N equal slices once
 the supervisor announces N (`Boot services ....... N to start` on serial);
-stage 8 is 100%. Stage 8 is DONE only if all 21 fixed steps and exactly N
+stage 8 is 100%. Stage 8 is DONE only if all 18 fixed steps and exactly N
 service reports arrived; anything else is FAILED.
 
 Service failure is tier-aware, as Haiku's launch_daemon only logs a job that

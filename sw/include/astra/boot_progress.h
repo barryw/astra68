@@ -44,9 +44,10 @@
 /* The fixed phase: every step a successful boot takes before services. */
 #define ASTRA_BOOT_PROGRESS_ROM_STEPS    10u /* 9 POST checks, kernel image */
 #define ASTRA_BOOT_PROGRESS_KERNEL_STEPS 4u
+#define ASTRA_BOOT_PROGRESS_SUPERVISOR_STEPS 4u /* stages 1, 5, 6, 7 */
 #define ASTRA_BOOT_PROGRESS_FIXED_STEPS \
     (ASTRA_BOOT_PROGRESS_ROM_STEPS + ASTRA_BOOT_PROGRESS_KERNEL_STEPS + \
-     ASTRA_SUPERVISOR_STAGE_VOLUME_VERIFIED)
+     ASTRA_BOOT_PROGRESS_SUPERVISOR_STEPS)
 #define ASTRA_BOOT_PROGRESS_SERVICES_MAX 1023u
 /* Bar shares in thousandths. */
 #define ASTRA_BOOT_PROGRESS_FIXED_SHARE  300u

@@ -14,7 +14,7 @@ Only a required or critical service fails the boot; a user service that does
 not start is skipped (supervisor_boot_service_result, loader.h).
 
 Normal boot (a copy of BASE_IMAGE):
-  - at stage 8 it is DONE: all 21 fixed steps, announced, done == count;
+  - at stage 8 it is DONE: all 18 fixed steps, announced, done == count;
   - the services that did not start are exactly media and remote-desktop,
     which have no host under headless QEMU.
 A user service that refuses READY (`astra_image.py --ready-fail`):
@@ -65,7 +65,7 @@ NO_HOST = {"/services/media", "/services/remote-desktop"}
 BOOT_DEADLINE = 240.0
 
 
-FIXED_STEPS = 21  # ASTRA_BOOT_PROGRESS_FIXED_STEPS (boot_progress.h)
+FIXED_STEPS = 18  # ASTRA_BOOT_PROGRESS_FIXED_STEPS (boot_progress.h)
 
 
 def fields(value):
