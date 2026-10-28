@@ -2,6 +2,18 @@
 
 Status: active continuation map, 2026-10-28
 
+Boot splash integration, 2026-10-28: the older splash branch is reconciled
+with current HostFS bootstrap, service-before-application startup and
+root-owned runtime launcher. The progress fixed phase counts 10 ROM, four
+kernel and four currently reported supervisor stages. Boot launch plans now
+own each definition's executable path until release. Beast supervisor,
+kernel, ROM and display host tests; root launcher and release-packaging
+fixtures; full userspace/NDK build; and the root-observed QEMU normal,
+user-service-failure and required-service-failure progress gates pass.
+Gate log: `/var/tmp/astra-boot-progress-gate.log` on Beast. This source merge
+does not select a new DE25 release; physical splash presentation remains to
+be qualified on the exact packaged board build.
+
 Branch consolidation, 2026-10-28: `feat/cdfs` (`9bfa517b`), its rebased
 merge checkpoint (`a50cfeb5`), and `fs-perf-proto` (`b179e45f`) are retained
 as parents in main history but
