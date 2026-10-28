@@ -2,6 +2,20 @@
 
 Status: active continuation map, 2026-10-27
 
+AstraZ private interface, 2026-10-27: `astraz_engine` now exposes only an
+app-private probe/run callback interface. It covers Frotz Z1–8 input,
+screen/window events, files, pictures, sound, mouse, and cancellation, with
+host capability checks. Frotz's unimplemented optional `make_menu` stays
+disabled. Native DE25 session client played Mini Zork Z3, saved at move 1,
+advanced to move 2, then restored move 1. Native DE25 contract test passed
+synthetic bare Z1–8 and Z-code/Glulx Blorb probes plus malformed cases.
+Native DE25 session client also played a Z5 Adventure story through a `look`
+turn after its title pagination. Test client now marks `More` pauses explicitly.
+Evidence: Beast `/var/tmp/astra-astraz-private-interface-evidence-20261027/`.
+Both test-only binaries and board scratch were removed with guarded removal;
+all three services active, board root 8.3 GiB free. Real story execution for
+Z1–2, Z4, and Z6–8, V6 graphics/sound, Glulx backend, and native GUI remain open.
+
 AstraZ first checkpoint, 2026-10-27: Filesystem Kit 15.5 identifies bare
 Z-machine, Glulx, and Blorb content for shared file associations. Interpreter
 dispatch and Blorb executable parsing belong to AstraZ, with no story engine
