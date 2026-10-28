@@ -7,7 +7,7 @@ and samples the record the splash helper reads
 stage 8.
 
 In every boot the 32-bit value never decreases, and the kernel's announced
-service count equals what the image says boots: the manifest minus storage
+service count equals what the image says boots: the manifest minus hostfs
 and `trusted`, plus the enabled start=boot definitions under /config/services.
 
 Only a required or critical service fails the boot; a user service that does
@@ -94,7 +94,7 @@ def expected_services(configuration,
     for line in manifest.splitlines():
         words = line.split()
         if (words and words[0] in ("service", "application") and
-                words[1] != "/services/storage"):
+                words[1] != "/services/hostfs"):
             count += 1
     for path, text in configuration.items():
         if (path.startswith("services/") and path.endswith("/service.conf")
