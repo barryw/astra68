@@ -8,6 +8,7 @@
 #include "astra_window_scene.h"
 
 #include <astra/display.h>
+#include <astra/boot_progress.h>
 #include <astra/display_mailbox.h>
 #include <astra/graphics.h>
 #include <astra/render_batch.h>
@@ -62,6 +63,26 @@ enum {
     DE25_FILL_CYCLES_PER_PIXEL = 3u,
     DE25_BLIT_CYCLES_PER_100_PIXELS = 152u,
 };
+
+/*
+ * The boot splash bar, inside the empty lower panel of
+ * astra_boot_splash_1920x1080_blank.png (x 360-1560, y 717-955), left of its
+ * emblem. ponytail: placement and colours are a calibration knob -- tune on
+ * the board, the art is the reference.
+ */
+enum {
+    SPLASH_BAR_X = 420u,
+    SPLASH_BAR_Y = 834u,
+    SPLASH_BAR_WIDTH = 880u,
+    SPLASH_BAR_HEIGHT = 6u,
+    SPLASH_BAR_TRACK = 0x1187u,
+    SPLASH_BAR_FILL = 0x4f3eu,
+};
+_Static_assert(SPLASH_BAR_X + SPLASH_BAR_WIDTH <= ASTRA_DISPLAY_WIDTH &&
+                   SPLASH_BAR_Y + SPLASH_BAR_HEIGHT <= ASTRA_DISPLAY_HEIGHT,
+               "the splash bar must fit the scanout");
+
+enum boot_scene { BOOT_SCENE_TEXT, BOOT_SCENE_SPLASH };
 
 _Static_assert(TEXT_PAGE_BYTES == ASTRA_TEXT_PLANE_BYTES,
                "guest and renderer text pages differ");
@@ -2021,6 +2042,138 @@ static int present_text_update(
     return 0;
 }
 
+/* One word of the text page as the m68k stored it: one load, never torn.
+   Relaxed: nothing else is read on the strength of it (boot_progress.h). */
+static uint32_t plane_load_be32(volatile const uint8_t *plane, uint32_t offset)
+{
+    uint32_t word = __atomic_load_n(
+        (volatile const uint32_t *)(volatile const void *)(plane + offset),
+        __ATOMIC_RELAXED);
+
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    word = __builtin_bswap32(word);
+#endif
+    return word;
+}
+
+/*
+ * Splash unless something is wrong. A zero header is a guest that has not
+ * started: the helper runs before QEMU. A header it cannot read is a guest
+ * it does not understand, and the text page is how such a guest explains
+ * itself.
+ */
+static enum boot_scene boot_scene(bool have_splash, bool panicked,
+                                  uint32_t header, uint32_t value)
+{
+    if (!have_splash || panicked)
+        return BOOT_SCENE_TEXT;
+    if (header == 0u)
+        return BOOT_SCENE_SPLASH;
+    if (header != ASTRA_BOOT_PROGRESS_HEADER)
+        return BOOT_SCENE_TEXT;
+    return astra_boot_progress_state(value) ==
+                   ASTRA_BOOT_PROGRESS_STATE_FAILED ?
+               BOOT_SCENE_TEXT : BOOT_SCENE_SPLASH;
+}
+
+/*
+ * The value never decreases within a boot (every legal transition is
+ * non-decreasing), and the ROM zeroes it before anything else. Any decrease
+ * under the header is therefore a new boot in the same QEMU (a QMP
+ * system_reset keeps the page): whatever the last boot left -- FAILED, a
+ * panic, the guest's frames -- is over. Not only a drop to 0: the 0 lasts
+ * milliseconds, and the helper may sample only every 500 ms while the guest
+ * owns the screen, so it usually sees the new boot's first steps instead.
+ */
+static bool boot_restarted(uint32_t header, uint32_t previous, uint32_t value)
+{
+    return header == ASTRA_BOOT_PROGRESS_HEADER && value < previous;
+}
+
+/* Haiku's slices (boot_splash.cpp:83), two phases: boot_progress.h. */
+static uint32_t splash_bar_fill(uint32_t value)
+{
+    return astra_boot_progress_fill(value, SPLASH_BAR_WIDTH);
+}
+
+/* The bar into a big-endian RGB565 frame; nothing else is touched. */
+static void splash_draw_bar(uint8_t *frame, uint32_t value)
+{
+    uint32_t fill = splash_bar_fill(value);
+
+    for (uint32_t y = 0u; y < SPLASH_BAR_HEIGHT; ++y) {
+        uint8_t *row = frame + (size_t)(SPLASH_BAR_Y + y) *
+                                   ASTRA_FRAMEBUFFER_PITCH +
+                       (size_t)SPLASH_BAR_X * 2u;
+
+        for (uint32_t x = 0u; x < SPLASH_BAR_WIDTH; ++x) {
+            uint16_t color = x < fill ? SPLASH_BAR_FILL : SPLASH_BAR_TRACK;
+
+            row[2u * x] = (uint8_t)(color >> 8);
+            row[2u * x + 1u] = (uint8_t)color;
+        }
+    }
+}
+
+/* The release's packed splash (pack_arty_splash.py), or NULL: text as before. */
+static uint8_t *splash_load(const char *path)
+{
+    struct stat info;
+    uint8_t *frame;
+    size_t loaded = 0u;
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+
+    if (fd < 0) {
+        perror("open boot splash");
+        return NULL;
+    }
+    if (fstat(fd, &info) != 0) {
+        perror("stat boot splash");
+        (void)close(fd);
+        return NULL;
+    }
+    if (info.st_size != (off_t)ASTRA_FRAMEBUFFER_BYTES) {
+        fprintf(stderr, "boot splash must be exactly %u bytes, not %lld\n",
+                ASTRA_FRAMEBUFFER_BYTES, (long long)info.st_size);
+        (void)close(fd);
+        return NULL;
+    }
+    frame = malloc(ASTRA_FRAMEBUFFER_BYTES);
+    if (frame == NULL)
+        fprintf(stderr, "boot splash: cannot allocate %u bytes\n",
+                ASTRA_FRAMEBUFFER_BYTES);
+    while (frame != NULL && loaded < ASTRA_FRAMEBUFFER_BYTES) {
+        ssize_t received = read(fd, frame + loaded,
+                                ASTRA_FRAMEBUFFER_BYTES - loaded);
+
+        if (received < 0 && errno == EINTR)
+            continue;
+        if (received <= 0) {
+            if (received < 0)
+                perror("read boot splash");
+            else
+                fprintf(stderr, "boot splash ended after %zu bytes\n",
+                        loaded);
+            free(frame);
+            frame = NULL;
+            break;
+        }
+        loaded += (size_t)received;
+    }
+    (void)close(fd);
+    return frame;
+}
+
+/* ponytail: a full 4 MB frame per step (~40 per boot); bar rows only if the
+   copy ever shows in astra-top. */
+static int present_splash(const struct astra_graphics_device *device,
+                          uint8_t *frame, uint32_t value,
+                          uint32_t *generation, uint32_t *active_scanout)
+{
+    splash_draw_bar(frame, value);
+    return present_rgb565_frame(device, frame, generation, active_scanout);
+}
+
 static int self_test(void)
 {
     AstraDisplayLayout layout;
@@ -2660,6 +2813,106 @@ static int self_test(void)
     }
 #endif
 
+    /* The boot splash: which scene, how much bar, which pixels. */
+    {
+        static uint8_t frame[ASTRA_FRAMEBUFFER_BYTES];
+        _Alignas(4) uint8_t page[TEXT_PAGE_BYTES] = {0};
+        const uint32_t fixed = ASTRA_BOOT_PROGRESS_FIXED_STEPS;
+        /* Half the services of 14 started: 30% + 35% of 880 = 572. */
+        const uint32_t booting = astra_boot_progress_pack(
+            ASTRA_BOOT_PROGRESS_STATE_BOOTING, 1u, fixed, 14u, 7u);
+        const uint32_t done = astra_boot_progress_pack(
+            ASTRA_BOOT_PROGRESS_STATE_DONE, 1u, fixed, 14u, 14u);
+        uint32_t value = 0u;
+        uint32_t last_fill = 0u;
+        const uint32_t failed = astra_boot_progress_fail(booting);
+        const uint32_t header = ASTRA_BOOT_PROGRESS_HEADER;
+        const uint8_t *pixel;
+
+        /* Before the guest writes anything, and through a clean boot. */
+        if (boot_scene(true, false, 0u, 0u) != BOOT_SCENE_SPLASH ||
+            boot_scene(true, false, header, booting) != BOOT_SCENE_SPLASH ||
+            /* A helper restarted after boot shows the splash, not text. */
+            boot_scene(true, false, header, done) != BOOT_SCENE_SPLASH ||
+            /* Failure, a panic, no splash, or an unknown record: text. */
+            boot_scene(true, false, header, failed) != BOOT_SCENE_TEXT ||
+            boot_scene(true, true, header, booting) != BOOT_SCENE_TEXT ||
+            boot_scene(false, false, header, booting) != BOOT_SCENE_TEXT ||
+            boot_scene(true, false, header + 1u, booting) != BOOT_SCENE_TEXT)
+            return EXIT_FAILURE;
+        /* A reset in the same QEMU: the value drops to 0 under the header.
+           That is a new boot, an empty bar on the splash, never text --
+           even after a FAILED or a panic. Not a drop to 0: no new boot. */
+        if (!boot_restarted(header, failed, 0u) ||
+            !boot_restarted(header, done, 0u) ||
+            boot_restarted(header, 0u, 0u) ||
+            boot_restarted(header, booting, done) ||
+            boot_restarted(0u, booting, 0u) ||
+            boot_restarted(header + 1u, booting, 0u) ||
+            /* Sampled late: the 0 was missed, the new boot has stepped. */
+            !boot_restarted(header, done, astra_boot_progress_advance(0u)) ||
+            !boot_restarted(header, failed, astra_boot_progress_advance(0u)) ||
+            boot_restarted(header, failed, failed) ||
+            boot_scene(true, false, header, 0u) != BOOT_SCENE_SPLASH)
+            return EXIT_FAILURE;
+        if (splash_bar_fill(0u) != 0u ||
+            splash_bar_fill(booting) != 572u ||
+            splash_bar_fill(done) != SPLASH_BAR_WIDTH)
+            return EXIT_FAILURE;
+        /* A whole boot, step by step: the bar never moves backwards, the
+           fixed phase ends at 30%, and DONE is the full bar. */
+        for (uint32_t step = 0u; step < fixed; ++step) {
+            value = astra_boot_progress_advance(value);
+            if (splash_bar_fill(value) < last_fill)
+                return EXIT_FAILURE;
+            last_fill = splash_bar_fill(value);
+        }
+        if (last_fill != SPLASH_BAR_WIDTH * 3u / 10u)
+            return EXIT_FAILURE;
+        value = astra_boot_progress_announce(value, 14u);
+        for (uint32_t service = 0u; service < 14u; ++service) {
+            value = astra_boot_progress_service(value, 0u);
+            if (splash_bar_fill(value) < last_fill)
+                return EXIT_FAILURE;
+            last_fill = splash_bar_fill(value);
+        }
+        if (splash_bar_fill(astra_boot_progress_finish(value)) !=
+            SPLASH_BAR_WIDTH)
+            return EXIT_FAILURE;
+        /* The guest stores big-endian; the helper reads one word. */
+        page[ASTRA_BOOT_PROGRESS_VALUE_OFFSET + 0u] = (uint8_t)(booting >> 24);
+        page[ASTRA_BOOT_PROGRESS_VALUE_OFFSET + 1u] = (uint8_t)(booting >> 16);
+        page[ASTRA_BOOT_PROGRESS_VALUE_OFFSET + 2u] = (uint8_t)(booting >> 8);
+        page[ASTRA_BOOT_PROGRESS_VALUE_OFFSET + 3u] = (uint8_t)booting;
+        if (plane_load_be32(page, ASTRA_BOOT_PROGRESS_VALUE_OFFSET) != booting)
+            return EXIT_FAILURE;
+        (void)memset(frame, 0x5a, sizeof(frame));
+        splash_draw_bar(frame, booting);
+#define SPLASH_PIXEL(x, y) \
+    (frame + (size_t)(y) * ASTRA_FRAMEBUFFER_PITCH + (size_t)(x) * 2u)
+        pixel = SPLASH_PIXEL(SPLASH_BAR_X, SPLASH_BAR_Y);
+        if (pixel[0] != (uint8_t)(SPLASH_BAR_FILL >> 8) ||
+            pixel[1] != (uint8_t)SPLASH_BAR_FILL)
+            return EXIT_FAILURE;
+        pixel = SPLASH_PIXEL(SPLASH_BAR_X + 571u,
+                             SPLASH_BAR_Y + SPLASH_BAR_HEIGHT - 1u);
+        if (pixel[0] != (uint8_t)(SPLASH_BAR_FILL >> 8))
+            return EXIT_FAILURE;
+        pixel = SPLASH_PIXEL(SPLASH_BAR_X + 572u, SPLASH_BAR_Y);
+        if (pixel[0] != (uint8_t)(SPLASH_BAR_TRACK >> 8) ||
+            pixel[1] != (uint8_t)SPLASH_BAR_TRACK)
+            return EXIT_FAILURE;
+        /* Nothing outside the bar is touched. */
+        if (*SPLASH_PIXEL(SPLASH_BAR_X - 1u, SPLASH_BAR_Y) != 0x5au ||
+            *SPLASH_PIXEL(SPLASH_BAR_X + SPLASH_BAR_WIDTH, SPLASH_BAR_Y) !=
+                0x5au ||
+            *SPLASH_PIXEL(SPLASH_BAR_X, SPLASH_BAR_Y - 1u) != 0x5au ||
+            *SPLASH_PIXEL(SPLASH_BAR_X, SPLASH_BAR_Y + SPLASH_BAR_HEIGHT) !=
+                0x5au)
+            return EXIT_FAILURE;
+#undef SPLASH_PIXEL
+    }
+
     puts("ASTRA_TERMINAL_DISPLAY_SELF_TEST PASS");
     return EXIT_SUCCESS;
 }
@@ -2737,6 +2990,11 @@ int main(int argc, char **argv)
     pthread_t cursor_thread;
     bool cursor_thread_started = false;
     bool display_owned = false;
+    uint8_t *splash = NULL;
+    bool panicked = false;
+    bool splash_shown = false;
+    uint32_t splash_value = 0u;
+    uint32_t record_value = 0u;
 
     if (argc == 2 && strcmp(argv[1], "--self-test") == 0)
         return self_test();
@@ -2757,11 +3015,11 @@ int main(int argc, char **argv)
         astra_graphics_device_close(&device);
         return result;
     }
-    if (argc != 4) {
+    if (argc != 4 && argc != 5) {
         fprintf(stderr, "usage: %s "
                 "[--self-test|--mailbox-bytes|--payload-bytes|--stop-render] | "
                 "<shared-post-text-page> <shared-display-mailbox> "
-                "<shared-display-payload>\n",
+                "<shared-display-payload> [<boot-splash.rgb565>]\n",
                 argv[0]);
         return EXIT_FAILURE;
     }
@@ -2808,6 +3066,8 @@ int main(int argc, char **argv)
     payload = display_payload_map(payload_fd);
     if (payload == MAP_FAILED)
         goto done;
+    if (argc == 5)
+        splash = splash_load(argv[4]);
     mailbox->magic = ASTRA_DISPLAY_MAILBOX_MAGIC;
     mailbox->version = ASTRA_DISPLAY_MAILBOX_VERSION_1_9;
     mailbox->completion_sequence = 0u;
@@ -2846,10 +3106,26 @@ int main(int argc, char **argv)
         goto done;
     (void)copy_cursor(&cursor, plane);
     active_scanout = current_scanout(&device);
-    if (present_text_on_both_scanouts(
-            &device, current, &cursor, cursor.visible, text_states,
-            &text_generation, &active_scanout) != 0)
-        goto done;
+    {
+        uint32_t header = plane_load_be32(plane,
+                                          ASTRA_BOOT_PROGRESS_HEADER_OFFSET);
+        uint32_t value = header == ASTRA_BOOT_PROGRESS_HEADER ?
+            plane_load_be32(plane, ASTRA_BOOT_PROGRESS_VALUE_OFFSET) : 0u;
+
+        record_value = value;
+        if (boot_scene(splash != NULL, false, header, value) ==
+            BOOT_SCENE_SPLASH) {
+            if (present_splash(&device, splash, value, &text_generation,
+                               &active_scanout) != 0)
+                goto done;
+            splash_shown = true;
+            splash_value = value;
+        } else if (present_text_on_both_scanouts(
+                       &device, current, &cursor, cursor.visible,
+                       text_states, &text_generation, &active_scanout) != 0) {
+            goto done;
+        }
+    }
     if (astra_boot_text_commit(&device, 0) != 0)
         goto done;
 
@@ -2877,6 +3153,8 @@ int main(int argc, char **argv)
         struct terminal_scanout_state *target_state;
         uint32_t target_index;
         uint32_t scroll_rows;
+        uint32_t record_header;
+        uint32_t record;
         bool cells_changed;
         bool cursor_drawn;
 
@@ -3085,6 +3363,8 @@ int main(int argc, char **argv)
                     active_window_scene_bytes = 0u;
                     status = ASTRA_DISPLAY_COMPLETION_OK;
                     display_owned = false;
+                    panicked = true;
+                    splash_shown = false;
                 } else {
                     status = ASTRA_DISPLAY_COMPLETION_IO_ERROR;
                 }
@@ -3092,10 +3372,57 @@ int main(int argc, char **argv)
             mailbox_complete(mailbox, &request, status, generation);
         }
         publish_scanout(&device, mailbox);
+        record_header = plane_load_be32(plane,
+                                        ASTRA_BOOT_PROGRESS_HEADER_OFFSET);
+        record = record_header == ASTRA_BOOT_PROGRESS_HEADER ?
+            plane_load_be32(plane, ASTRA_BOOT_PROGRESS_VALUE_OFFSET) : 0u;
+        if (boot_restarted(record_header, record_value, record)) {
+            /* A new boot in this QEMU: take the screen back from the last
+               one, as a panic does, and start over on the splash. */
+            panicked = false;
+            splash_shown = false;
+            (void)memset(text_states, 0, sizeof(text_states));
+            if (display_owned) {
+                int pointer_status;
+
+                (void)pthread_mutex_lock(&pointer_lock);
+                pointer_status = pointer_update(
+                    &device, ASTRA_DISPLAY_HOST_CURSOR_PACK(
+                                 0u, 0u, ASTRA_DISPLAY_CURSOR_SHAPE(
+                                             ASTRA_POINTER_SHAPE_DEFAULT)));
+                (void)pthread_mutex_unlock(&pointer_lock);
+                if (pointer_status != 0 ||
+                    finish_pending_present(&device) != 0)
+                    goto done;
+                active_window_scene_offset = 0u;
+                active_window_scene_bytes = 0u;
+                display_owned = false;
+            }
+        }
+        record_value = record;
         if (display_owned) {
             if (mailbox_wait(mailbox, mailbox_sequence) != 0)
                 goto done;
             continue;
+        }
+        if (boot_scene(splash != NULL, panicked, record_header, record) ==
+            BOOT_SCENE_SPLASH) {
+            if (!splash_shown || record != splash_value) {
+                if (present_splash(&device, splash, record, &text_generation,
+                                   &active_scanout) != 0)
+                    goto done;
+                splash_shown = true;
+                splash_value = record;
+            }
+            while (nanosleep(&poll_delay, NULL) != 0 && errno == EINTR &&
+                   running) {
+            }
+            continue;
+        }
+        if (splash_shown) {
+            /* Failure: the text page, redrawn whole on both scanouts. */
+            splash_shown = false;
+            (void)memset(text_states, 0, sizeof(text_states));
         }
         if (!copy_cells(current, plane)) {
             while (nanosleep(&poll_delay, NULL) != 0 && errno == EINTR &&
@@ -3153,6 +3480,7 @@ done:
         (void)pthread_join(cursor_thread, NULL);
     }
     astra_graphics_device_close(&device);
+    free(splash);
     if (plane != MAP_FAILED)
         (void)munmap((void *)plane, TEXT_PAGE_BYTES);
     if (mailbox != MAP_FAILED)

@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-10-28
 
+Boot splash integration, 2026-10-28: the older splash branch is reconciled
+with current HostFS bootstrap, service-before-application startup and
+root-owned runtime launcher. The progress fixed phase counts 10 ROM, four
+kernel and four currently reported supervisor stages. Boot launch plans now
+own each definition's executable path until release. Beast supervisor,
+kernel, ROM and display host tests; root launcher and release-packaging
+fixtures; full userspace/NDK build; and the root-observed QEMU normal,
+user-service-failure and required-service-failure progress gates pass.
+Gate log: `/var/tmp/astra-boot-progress-gate.log` on Beast. This source merge
+does not select a new DE25 release; physical splash presentation remains to
+be qualified on the exact packaged board build.
+
+Branch consolidation, 2026-10-28: `feat/cdfs` (`9bfa517b`), its rebased
+merge checkpoint (`a50cfeb5`), and `fs-perf-proto` (`b179e45f`) are retained
+as parents in main history but
+their trees were not applied. CDFS used an older fixed `CD0` grant and
+separate guest mount service; current native Volume/provider path already
+qualifies ISO9660/UDF images and physical optical media, and reintroducing
+that path would duplicate mount authority. Its HFS reader remains historical
+work, not a shipped filesystem. The HostFS direct-path checkpoint is an
+unqualified performance experiment against an older ABI; correctness-first
+production keeps current VFS/HostFS code. Both commits remain recoverable for
+future targeted work without carrying obsolete runtime code into releases.
+
 SDL fullscreen checkpoint, 2026-10-28: the shared display service now
 suspends an application's pointer grab and shows the pointer when the system
 Ctrl+GUI+F shortcut restores a window. Entering fullscreen or clicking its

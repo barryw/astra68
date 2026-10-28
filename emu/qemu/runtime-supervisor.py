@@ -30,6 +30,7 @@ def stop(child):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--display", nargs=4, required=True)
+    parser.add_argument("--display-splash", default="")
     parser.add_argument("--display-cpu", required=True)
     parser.add_argument("--input", required=True)
     parser.add_argument("--aux-cpu", required=True)
@@ -49,6 +50,8 @@ def main():
     if not command:
         parser.error("provider command required")
     display_command = ["taskset", "-c", args.display_cpu, *args.display]
+    if args.display_splash:
+        display_command.append(args.display_splash)
     input_command = ["setpriv", "--reuid", str(args.uid), "--regid", str(args.gid),
         "--clear-groups", "--no-new-privs", "--bounding-set=-all", "--inh-caps=-all",
         "--ambient-caps=-all", "taskset", "-c", args.aux_cpu, "python3", args.input,

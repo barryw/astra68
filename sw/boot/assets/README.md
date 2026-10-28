@@ -2,9 +2,12 @@
 
 ## DE25 1920x1080 source
 
-`astra_boot_splash_1920x1080_blank.png` is the canonical DE25 background. It is
-exactly 1920x1080 and deliberately contains no sample status text. The hardware
-boot plane writes real machine state into the lower panel at runtime. Source
+`astra_boot_splash_1920x1080_blank.png` is the DE25 boot splash. It is
+exactly 1920x1080 and deliberately contains no sample status text. The DE25
+release packs it with `pack_arty_splash.py` and ships it as
+`share/astra_boot_splash.rgb565`; the display helper shows it from power-on to
+the guest's first frame and draws the boot progress bar into its lower panel
+(`docs/DEBUGGING.md` section 6a). Source
 SHA-256 is
 `db26450ae49471e81d90d4fdf554f1dd7226cf85f402af09d3f9e7e28cd2b687`.
 

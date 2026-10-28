@@ -101,6 +101,27 @@ static uint32_t launch_send;
 static uint32_t manager_receive;
 static uint32_t manager_send;
 static AstraServiceDefinition definition_scratch[2];
+/*
+ * The boot launch list, resolved in full before the first launch so the
+ * kernel knows its length (astra/boot_progress.h): the manifest minus
+ * trusted ceilings and services the user set not to start at boot, then the
+ * enabled start=boot definitions under /config/services -- the same choices,
+ * in the same order, the launch loops always made one at a time.
+ * ponytail: one full definition per entry (11,128 bytes each) for the
+ * length of the boot loop, grown by doubling; index-only entries if a boot
+ * ever starts hundreds.
+ */
+typedef struct SupervisorBootLaunch {
+    /* The manifest line, or NULL for a /config/services definition. */
+    const SupervisorManifestEntry *entry;
+    /* 0 for a manifest line without a definition (an `application`). */
+    uint32_t has_definition;
+    AstraServiceDefinition definition;
+} SupervisorBootLaunch;
+
+static SupervisorBootLaunch *boot_plan;
+static uint32_t boot_plan_count;
+static uint32_t boot_plan_capacity;
 static SupervisorProcessTable paused_services;
 #define paused_service_count (paused_services.count)
 static SupervisorProcessTable failed_services;
@@ -3094,6 +3115,156 @@ done:
     astra_runtime_deallocate(argument_bytes);
 }
 
+static void boot_plan_release(void)
+{
+    for (uint32_t index = 0u; index < boot_plan_count; ++index)
+        if (boot_plan[index].has_definition)
+            astra_service_definition_destroy(&boot_plan[index].definition);
+    astra_runtime_deallocate(boot_plan);
+    boot_plan = NULL;
+    boot_plan_count = 0u;
+    boot_plan_capacity = 0u;
+}
+
+static uint32_t boot_plan_append(const SupervisorManifestEntry *entry,
+                                 AstraServiceDefinition *definition)
+{
+    SupervisorBootLaunch *grown = boot_plan;
+
+    if (boot_plan_count == boot_plan_capacity) {
+        uint32_t capacity = boot_plan_capacity != 0u ?
+                                boot_plan_capacity * 2u : 16u;
+
+        grown = astra_runtime_reallocate(
+            boot_plan, (size_t)capacity * sizeof(*boot_plan));
+        if (grown == NULL)
+            return ASTRA_STATUS_LIMIT;
+        boot_plan = grown;
+        boot_plan_capacity = capacity;
+    }
+    grown[boot_plan_count].entry = entry;
+    grown[boot_plan_count].has_definition = definition != NULL;
+    if (definition != NULL) {
+        grown[boot_plan_count].definition = *definition;
+        /* Move the owned path before scratch is reused for the next service. */
+        definition->executable = NULL;
+    }
+    ++boot_plan_count;
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t boot_plan_resolve(const AstraStartupInfo *startup,
+                                  const SupervisorManifest *manifest)
+{
+    AstraServiceListCursor cursor = {
+        0u, ASTRA_SERVICE_LIST_SOURCE_DYNAMIC, 0u
+    };
+    uint32_t status;
+
+    for (uint32_t index = 1u; index < manifest->count; ++index) {
+        const SupervisorManifestEntry *entry = &manifest->entries[index];
+        AstraServiceDefinition *service = &definition_scratch[0];
+        AstraServiceDefinition *definition = NULL;
+
+        if (entry->trusted != 0u || entry->resident == 0u)
+            continue;
+        status = supervisor_service_definition_from_manifest(entry, service);
+        if (status == ASTRA_STATUS_OK) {
+            /* The user may have chosen to start this one themselves. */
+            status = policy_apply(startup, service);
+            if (status != ASTRA_STATUS_OK) {
+                (void)astra_log_failure("service policy", status);
+                continue;
+            }
+            if (service->start_policy != ASTRA_SERVICE_START_BOOT)
+                continue;
+            definition = service;
+        } else
+            (void)astra_log_failure("service definition", status);
+        status = boot_plan_append(entry, definition);
+        if (status != ASTRA_STATUS_OK)
+            return status;
+    }
+    for (;;) {
+        AstraServiceListCursor next = ASTRA_SERVICE_LIST_CURSOR_INIT;
+        AstraServiceDefinition *service = &definition_scratch[0];
+
+        status = list_service(startup, &cursor, service, &next);
+        if (status == ASTRA_STATUS_NOT_FOUND)
+            break;
+        if (status != ASTRA_STATUS_OK) {
+            (void)astra_log_failure("service definition scan", status);
+            break;
+        }
+        if ((service->flags & ASTRA_SERVICE_ENABLED) != 0u &&
+            service->start_policy == ASTRA_SERVICE_START_BOOT) {
+            status = boot_plan_append(NULL, service);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+        }
+        if (next.source == ASTRA_SERVICE_LIST_SOURCE_DONE)
+            break;
+        cursor = next;
+    }
+    for (uint32_t index = 1u; index < manifest->count; ++index) {
+        const SupervisorManifestEntry *entry = &manifest->entries[index];
+
+        if (entry->trusted == 0u && entry->resident == 0u) {
+            status = boot_plan_append(entry, NULL);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+        }
+    }
+    return ASTRA_STATUS_OK;
+}
+
+static void boot_service_report(uint32_t result)
+{
+    (void)astra_progress(ASTRA_PROGRESS_BOOT_SERVICE | result);
+}
+
+/* The old manifest loop body, plus its one report: one manifest service. */
+static uint32_t boot_manifest_launch(const AstraStartupInfo *startup,
+                                     const SupervisorManifestEntry *entry,
+                                     const AstraServiceDefinition *service,
+                                     AstraVfsPathStorage *path_storage)
+{
+    char *entry_path = astra_vfs_path_storage_at(path_storage, 0u);
+    char *bundle_root = astra_vfs_path_storage_at(path_storage, 1u);
+    uint32_t open_us = 0u;
+    uint32_t status = resolve_entry_image(entry, entry_path,
+                                          ASTRA_VFS_PATH_MAX, bundle_root,
+                                          ASTRA_VFS_PATH_MAX, NULL);
+
+    if (status == ASTRA_STATUS_OK) {
+        AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
+        uint64_t read_start = astra_clock_monotonic();
+
+        status = astra_vfs_read_source_open(
+            &source, supervisor_assigns(), entry_path,
+            supervisor_vfs_assign_client, NULL);
+        open_us = astra_elapsed_microseconds(read_start,
+                                             astra_clock_monotonic());
+        if (status == ASTRA_VFS_OK)
+            status = launch_entry(startup, entry, service, bundle_root, NULL,
+                                  NULL, source.length, open_us,
+                                  astra_vfs_read_source_read_at,
+                                  astra_vfs_read_source_close, &source,
+                                  NULL, NULL);
+        else
+            status = launch_open_status(status);
+    }
+    if (status != ASTRA_STATUS_OK && service != NULL)
+        mark_service_failed(service->name, 1u, status);
+    /* Reported before a critical failure halts, so it reports once. */
+    boot_service_report(supervisor_boot_service_result(
+        status, entry->required != 0u || entry->critical != 0u));
+    if (status != ASTRA_STATUS_OK && entry->critical != 0u)
+        system_fail(service != NULL ? service->name : entry->path,
+                    "did not start", status);
+    return status;
+}
+
 uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
 {
     AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(2u);
@@ -3102,7 +3273,6 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
     SupervisorManifest *manifest = &startup_manifest;
     char *manifest_text = NULL;
     uint32_t manifest_length = 0u;
-    uint32_t open_us = 0u;
     uint32_t status;
 
     supervisor_process_handle = startup->process_handle;
@@ -3178,97 +3348,46 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
      * a read made during boot is answered once the watch loop runs.
      */
     proc_tree_start();
-    /* All boot services, including dynamic definitions, finish their ready
-       handshakes before any startup application runs. */
-    for (uint32_t phase = 0u; phase < 2u; ++phase) {
-        for (uint32_t index = 1u; index < manifest->count; ++index) {
-            const SupervisorManifestEntry *entry = &manifest->entries[index];
-            AstraServiceDefinition *service = &definition_scratch[0];
-            const AstraServiceDefinition *service_pointer = NULL;
-            char *entry_path = astra_vfs_path_storage_at(&path_storage, 0u);
-            char *bundle_root = astra_vfs_path_storage_at(&path_storage, 1u);
+    status = boot_plan_resolve(startup, manifest);
+    if (status != ASTRA_STATUS_OK) {
+        (void)astra_log_failure("boot launch list", status);
+        boot_plan_release();
+        return status;
+    }
+    if (boot_plan_count > ASTRA_BOOT_PROGRESS_SERVICES_MAX)
+        (void)astra_log_failure("boot launch list over the progress record",
+                                ASTRA_STATUS_LIMIT);
+    (void)astra_progress(supervisor_boot_services_command(boot_plan_count));
+    for (uint32_t index = 0u; index < boot_plan_count; ++index) {
+        SupervisorBootLaunch *launch = &boot_plan[index];
 
-            if (entry->trusted != 0u ||
-                (entry->resident != 0u) != (phase == 0u))
-                continue;
-            if (entry->resident != 0u) {
-                status = supervisor_service_definition_from_manifest(entry, service);
-                if (status != ASTRA_STATUS_OK) {
-                    (void)astra_log_failure("service definition", status);
-                    continue;
-                }
-                /* The user may have chosen to start this one themselves. */
-                status = policy_apply(startup, service);
-                if (status != ASTRA_STATUS_OK) {
-                    (void)astra_log_failure("service policy", status);
-                    continue;
-                }
-                if (service->start_policy != ASTRA_SERVICE_START_BOOT)
-                    continue;
-                service_pointer = service;
-            }
+        if (launch->entry == NULL) {
+            /* Dynamic services run after resident services, before apps. */
+            uint32_t running =
+                service_process_slot(launch->definition.name) != UINT32_MAX;
 
-            status = resolve_entry_image(entry, entry_path, ASTRA_VFS_PATH_MAX,
-                                         bundle_root, ASTRA_VFS_PATH_MAX, NULL);
-            if (status == ASTRA_STATUS_OK) {
-                AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
-
-                {
-                    uint64_t read_start = astra_clock_monotonic();
-
-                    status = astra_vfs_read_source_open(
-                        &source, supervisor_assigns(), entry_path,
-                        supervisor_vfs_assign_client, NULL);
-                    open_us = astra_elapsed_microseconds(
-                        read_start, astra_clock_monotonic());
-                }
-                if (status == ASTRA_VFS_OK) {
-                    status = launch_entry(startup, entry, service_pointer,
-                                          bundle_root, NULL, NULL, source.length,
-                                          open_us,
-                                          astra_vfs_read_source_read_at,
-                                          astra_vfs_read_source_close, &source,
-                                          NULL, NULL);
-                } else
-                    status = launch_open_status(status);
-            }
-            if (status != ASTRA_STATUS_OK && service_pointer != NULL)
-                mark_service_failed(service_pointer->name, 1u, status);
-            if (status != ASTRA_STATUS_OK && entry->critical != 0u)
-                system_fail(service_pointer != NULL ? service_pointer->name :
-                                                      entry->path,
-                            "did not start", status);
-            if (status != ASTRA_STATUS_OK && entry->required)
-                return status;
+            status = launch_definition(startup, &launch->definition, 0u);
+            if (status != ASTRA_STATUS_OK)
+                (void)astra_log_failure(launch->definition.name, status);
+            /* Always 0 today: the definition parser has no way to set
+               PROTECTED, so /config/services is user tier by construction.
+               Read anyway, so a protected one could never be SKIPPED. */
+            boot_service_report(running ? ASTRA_PROGRESS_SERVICE_SKIPPED :
+                supervisor_boot_service_result(
+                    status, (launch->definition.flags &
+                             ASTRA_SERVICE_PROTECTED) != 0u));
+            continue;
         }
-        if (phase == 0u) {
-            AstraServiceListCursor cursor = {
-                0u, ASTRA_SERVICE_LIST_SOURCE_DYNAMIC, 0u
-            };
-
-            for (;;) {
-                AstraServiceListCursor next = ASTRA_SERVICE_LIST_CURSOR_INIT;
-                AstraServiceDefinition *service = &definition_scratch[0];
-
-                status = list_service(startup, &cursor, service, &next);
-                if (status == ASTRA_STATUS_NOT_FOUND)
-                    break;
-                if (status != ASTRA_STATUS_OK) {
-                    (void)astra_log_failure("service definition scan", status);
-                    break;
-                }
-                if ((service->flags & ASTRA_SERVICE_ENABLED) != 0u &&
-                    service->start_policy == ASTRA_SERVICE_START_BOOT) {
-                    status = launch_definition(startup, service, 0u);
-                    if (status != ASTRA_STATUS_OK)
-                        (void)astra_log_failure(service->name, status);
-                }
-                if (next.source == ASTRA_SERVICE_LIST_SOURCE_DONE)
-                    break;
-                cursor = next;
-            }
+        status = boot_manifest_launch(
+            startup, launch->entry,
+            launch->has_definition != 0u ? &launch->definition : NULL,
+            &path_storage);
+        if (status != ASTRA_STATUS_OK && launch->entry->required) {
+            boot_plan_release();
+            return status;
         }
     }
+    boot_plan_release();
     /*
      * These receivers are services implemented by this process, so their
      * senders are provider-owned state.  Retaining them keeps idle services

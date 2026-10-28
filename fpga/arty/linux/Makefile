@@ -186,6 +186,7 @@ $(TERMINAL_TARGET): astra_terminal_display.c $(COMMON_SOURCES) \
 		$(DISPLAY_MODE_SOURCE) \
 		astra_window_scene.h $(GRAPHICS_FONT_HEADERS) \
 		astra_render_protocol.h \
+		$(ASTRA_INCLUDE)/astra/boot_progress.h \
 		$(ASTRA_INCLUDE)/astra/display.h \
 		$(ASTRA_INCLUDE)/astra/display_mailbox.h \
 		$(ASTRA_INCLUDE)/astra/render_batch.h \
@@ -254,6 +255,7 @@ $(OUT)/test-astra-terminal-display: astra_terminal_display.c \
 		$(WINDOW_SCENE_SOURCES) $(DISPLAY_MODE_SOURCE) astra_window_scene.h \
 		$(GRAPHICS_FONT_HEADERS) \
 		astra_render_protocol.h \
+		$(ASTRA_INCLUDE)/astra/boot_progress.h \
 		$(ASTRA_INCLUDE)/astra/display.h \
 		$(ASTRA_INCLUDE)/astra/display_mailbox.h \
 		$(ASTRA_INCLUDE)/astra/render_batch.h \

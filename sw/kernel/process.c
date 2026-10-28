@@ -75,6 +75,11 @@ _Static_assert(KERNEL_VM_DMA_SLOT_COUNT *
 _Static_assert(KERNEL_DEVICE_RIGHT_HOST_SCOPE == ASTRA_RIGHT_HOST_SCOPE,
                "device scope right");
 
+_Static_assert(((KERNEL_QUALIFICATION_COMMAND_PREFIX ^
+                 ASTRA_PROGRESS_BOOT_COMMAND_PREFIX) &
+                KERNEL_QUALIFICATION_COMMAND_MASK &
+                ASTRA_PROGRESS_BOOT_COMMAND_MASK) != 0u,
+               "boot and qualification PROGRESS commands overlap");
 _Static_assert(KERNEL_QUALIFICATION_SHARED_BASE == KERNEL_PROCESS_DATA_BASE,
                "the qualification image's shared block is the data page");
 _Static_assert(KERNEL_QUALIFICATION_OFFENDER_EXIT_STATUS ==
@@ -11986,6 +11991,20 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                 return status;
             if (qualification_handled) {
                 qualification_progress = true;
+                break;
+            }
+            /*
+             * A boot command is never a progress value: taken as one it
+             * would raise the counter past every stage still to come.
+             */
+            if ((thread->context.data[1] &
+                 ASTRA_PROGRESS_BOOT_COMMAND_MASK) ==
+                ASTRA_PROGRESS_BOOT_COMMAND_PREFIX) {
+                result = initial_image_process_id != 0u &&
+                         current->id == initial_image_process_id ?
+                    kernel_process_initial_image_boot_command(
+                        thread->context.data[1]) :
+                    ASTRA_SYSCALL_ACCESS_DENIED;
                 break;
             }
             if (thread->context.data[1] < current->progress)

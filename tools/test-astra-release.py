@@ -34,6 +34,9 @@ with tempfile.TemporaryDirectory() as temporary_text:
     qemu.chmod(0o755)
     image = sources / "image"
     image.write_bytes(b"current image")
+    # A private source (pack_arty_splash.py writes the splash 0600) must
+    # still be world-readable once released.
+    image.chmod(0o600)
 
     bundle = temporary / "bundle"
     identity = release.create(bundle, [
@@ -41,6 +44,7 @@ with tempfile.TemporaryDirectory() as temporary_text:
         "bin/qemu=%s" % qemu,
     ])
     assert release.verify(bundle) == identity
+    assert stat.S_IMODE((bundle / "storage.img").stat().st_mode) == 0o644
     assert (bundle / release.MANIFEST).read_text().splitlines()[0].endswith(
         "  x  bin/qemu")
 
@@ -68,7 +72,7 @@ with tempfile.TemporaryDirectory() as temporary_text:
     installed = store / "releases" / identity
     assert release.verify(store / "current", installed=True) == identity
     assert (installed.stat().st_mode & 0o222) == 0
-    assert ((installed / "storage.img").stat().st_mode & 0o222) == 0
+    assert stat.S_IMODE((installed / "storage.img").stat().st_mode) == 0o444
     assert (installed / "bin/qemu").stat().st_mode & 0o111
     assert all(path.stat().st_uid == os.geteuid()
                for path in [installed] + list(installed.rglob("*")))
