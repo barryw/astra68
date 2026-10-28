@@ -14,6 +14,7 @@ STORAGE=${ASTRA_DE25_STORAGE:?set ASTRA_DE25_STORAGE}
 LIBDIR=${ASTRA_DE25_QEMU_LIBDIR:?set ASTRA_DE25_QEMU_LIBDIR}
 SOURCE_MANIFEST=${ASTRA_DE25_SOURCE_MANIFEST:?set ASTRA_DE25_SOURCE_MANIFEST}
 DISPLAY=$REPOSITORY/build/de25-graphics/linux/astra-terminal-display
+SPLASH=$REPOSITORY/build/de25-graphics/linux/astra_boot_splash.rgb565
 AUDIO=$REPOSITORY/build/de25-graphics/linux/astra-audio-host
 AUDIO_UNIT=$REPOSITORY/fpga/de25/astra-audio-host.service
 RUNTIME_UNIT=$REPOSITORY/fpga/de25/astra.service
@@ -31,12 +32,15 @@ case "$JOBS" in
     ''|0*|*[!0-9]*) echo "ASTRA_DE25_BUILD_JOBS must be a positive integer" >&2; exit 2 ;;
 esac
 
-# POST and panic are rendered by this small host binary. Always rebuild it
-# from the mirrored tree so a prior release cannot silently supply its font
-# metrics or generated assets.
+# POST, panic and the boot splash are rendered by this small host binary.
+# Always rebuild it from the mirrored tree so a prior release cannot silently
+# supply its font metrics or generated assets. The splash is packed 0600;
+# astra_release.py stages every artifact 0644 or 0755 and installs it 0444
+# or 0555, so the helper reads it whatever user astra.service runs it as.
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/arty/linux" \
     PLATFORM=de25 CROSS_COMPILE=aarch64-linux-gnu- \
     ../../../build/de25-graphics/linux/astra-terminal-display \
+    ../../../build/de25-graphics/linux/astra_boot_splash.rgb565 \
     ../../../build/de25-graphics/linux/astra-audio-host
 make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux" \
     CROSS_COMPILE=aarch64-linux-gnu- DE25_SYSROOT="$DE25_SYSROOT" \
@@ -115,6 +119,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 "$RELEASE_TOOL" create "$OUTPUT" \
     "storage-terminal.img=$STORAGE" \
     "source/SOURCE_SHA256SUMS=$SOURCE_MANIFEST" \
     "bin/astra-terminal-display=$DISPLAY" \
+    "share/astra_boot_splash.rgb565=$SPLASH" \
     "bin/astra-audio-host=$AUDIO" \
     "bin/astra-font-worker=$FONT_WORKER" \
     "bin/astra-codec-worker=$CODEC_WORKER" \

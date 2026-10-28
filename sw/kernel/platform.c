@@ -415,6 +415,27 @@ bool kernel_platform_post_text_write(uint32_t cell, uint8_t value)
     return true;
 }
 
+static bool post_text_word_valid(uint32_t offset)
+{
+    return (offset & 3u) == 0u && offset <= ASTRA_TEXT_PLANE_BYTES - 4u;
+}
+
+bool kernel_platform_post_text_read32(uint32_t offset, uint32_t *value)
+{
+    if (value == NULL || !post_text_word_valid(offset))
+        return false;
+    *value = kernel_mmio_read32(VEGA_POST_TEXT_BASE + offset);
+    return true;
+}
+
+bool kernel_platform_post_text_write32(uint32_t offset, uint32_t value)
+{
+    if (!post_text_word_valid(offset))
+        return false;
+    kernel_mmio_write32(VEGA_POST_TEXT_BASE + offset, value);
+    return true;
+}
+
 void kernel_platform_post_text_update_begin(void)
 {
     ++post_text_sequence;

@@ -19,6 +19,8 @@ for required in (
     "ASTRA_DE25_SYSROOT",
     "ASTRA_DE25_KERNEL_PACKAGE",
     "build/de25-graphics/linux/astra-terminal-display",
+    "build/de25-graphics/linux/astra_boot_splash.rgb565",
+    "share/astra_boot_splash.rgb565=",
     'make -B -j "$JOBS" -C "$REPOSITORY/fpga/arty/linux"',
     'make -B -j "$JOBS" -C "$REPOSITORY/fpga/de25/linux"',
     "bin/astra-remote-desktop=",
@@ -57,6 +59,9 @@ assert '"kernel/astra_graphics_arena.ko=' not in script
 udev_rules = (Path(__file__).parents[2] /
               "fpga/de25/99-astra-qemu.rules").read_text()
 assert 'ENV{ID_INPUT_JOYSTICK}=="1", GROUP="astra", MODE="0660"' in udev_rules
+
+launcher = Path(__file__).with_name("run-arty.sh").read_text()
+assert "$ASTRA_ROOT/share/astra_boot_splash.rgb565" in launcher
 
 graphics_makefile = (Path(__file__).parents[2] /
                      "fpga/arty/linux/Makefile").read_text()

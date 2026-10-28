@@ -39,6 +39,8 @@ ROM=${ROM:-$ASTRA_ROOT/rom/astra_boot.bin}
 BASE_STORAGE=${ASTRA_BASE_STORAGE:-$ASTRA_ROOT/storage-terminal.img}
 LIBDIR=${LIBDIR:-$ASTRA_ROOT/qemu/lib}
 TERMINAL_DISPLAY=${ASTRA_TERMINAL_DISPLAY:-$ASTRA_ROOT/bin/astra-terminal-display}
+DISPLAY_SPLASH=${ASTRA_DISPLAY_SPLASH:-$ASTRA_ROOT/share/astra_boot_splash.rgb565}
+[ -r "$DISPLAY_SPLASH" ] || DISPLAY_SPLASH=
 INPUT_HOTPLUG=${ASTRA_INPUT_HOTPLUG:-$ASTRA_ROOT/bin/astra-input-hotplug.py}
 STATE_ROOT=${ASTRA_STATE_ROOT:-$ASTRA_STORE/state/system}
 RUN_ROOT=${ASTRA_RUN_ROOT:-/run/astra}
@@ -223,6 +225,7 @@ exec env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     ASTRA_HOSTFS_MAX_DIRECTORIES="$HOSTFS_MAX_DIRECTORIES" \
     LD_LIBRARY_PATH="$LIBDIR" python3 "$ASTRA_ROOT/bin/runtime-supervisor.py" \
     --display "$TERMINAL_DISPLAY" "$TEXT_PLANE" "$DISPLAY_MAILBOX" "$DISPLAY_PAYLOAD" \
+    --display-splash "$DISPLAY_SPLASH" \
     --display-cpu "$DISPLAY_CPU" --input "$INPUT_HOTPLUG" --aux-cpu "$AUX_CPU" \
     --qmp "$QMP_SOCKET" --remote-qmp "$REMOTE_DESKTOP_QMP_SOCKET" \
     --uid "$QEMU_UID" --gid "$QEMU_GID" \

@@ -168,6 +168,45 @@ Userspace programs share a virtual address range, so the matching program ELF
 matters. Do not symbolize a service fault against the supervisor ELF merely
 because both use addresses beginning at `0x00100000`.
 
+## 6a. Boot splash and the progress record
+
+On the DE25 the display helper shows `share/astra_boot_splash.rgb565` with a
+bar from power-on to the guest's first frame. The bar is driven by the boot
+progress record (`sw/include/astra/boot_progress.h`): two big-endian words at
+text-page offset `0xFE0`, written by the ROM during POST and by the kernel
+after handoff. Two phases, as Haiku's boot_splash: the 21 fixed steps every
+boot takes (10 ROM, 4 kernel, supervisor stages 1-7) fill the first 30% in
+equal slices; the boot services fill the remaining 70% in N equal slices once
+the supervisor announces N (`Boot services ....... N to start` on serial);
+stage 8 is 100%. Stage 8 is DONE only if all 21 fixed steps and exactly N
+service reports arrived; anything else is FAILED.
+
+Service failure is tier-aware, as Haiku's launch_daemon only logs a job that
+fails. A `required` or `critical` service that cannot start marks the record
+FAILED. An unmarked (user-tier) service that fails -- `media` and `sampler` in
+the manifest, and every `/config/services` definition such as `ramfs` and
+`remote-desktop` -- is reported SKIPPED: its slice still fills, the bar
+completes, the record ends DONE, and the failure is visible only in the system
+log (`launch-failed /services/...`) and on serial.
+
+The helper shows the text page instead when the record says FAILED (a POST
+failure or ROM miscount, a required or critical service that failed to start,
+a degraded or panicked kernel), after a panic, or when the record has a
+version it does not know.
+
+**A failure after the desktop has drawn is not on screen.** Once the guest
+presents its first frame the helper hands the display over, and only a panic
+takes it back. On the board the desktop presents before the last boot
+services report (`SPLASH-HANDOFF-NOTE`), so a FAILED that arrives after that
+stays in the record (state FAILED) and the system log. Check both when a
+service is missing. A display helper that restarts after the handoff draws the
+splash (or the text page, if the record says FAILED) over the desktop until
+the guest next presents.
+
+Read it on the board: `od -A n -t x1 -j 4064 -N 8 /run/astra/post-text.bin`
+(`42 50 00 01`, then state:4 announced:1 fixed:6 0:1 count:10 done:10).
+Under QEMU: `xp /2wx 0xFFF22FE0`. Gate: `emu/qemu/test-boot-progress.py`.
+
 ---
 
 ## 7. Where the time goes, on the board
@@ -223,6 +262,7 @@ baseline for the one after it.
 | Memory errors in userspace, on the host | `cd sw/userspace && make sanitize` |
 | The static analyzer (GCC only, so Beast) | `cd sw/userspace && make analyze` |
 | Reading the character plane from outside | `xp /2700xb 0xFFF22000` in the QEMU monitor |
+| Reading the boot progress record | `xp /2wx 0xFFF22FE0` in the QEMU monitor; `od -A n -t x1 -j 4064 -N 8 /run/astra/post-text.bin` on the board |
 
 ## Known gaps
 

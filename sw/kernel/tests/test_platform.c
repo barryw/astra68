@@ -175,6 +175,19 @@ static void test_typed_identity_console_and_device_queries(void)
     assert(!kernel_platform_post_text_read(0u, NULL));
     assert(!kernel_platform_post_text_write(
         VEGA_POST_COLS * VEGA_POST_ROWS, 0u));
+    {
+        uint32_t word = 0u;
+
+        assert(kernel_platform_post_text_write32(0xFE4u, 0x01400000u));
+        assert(kernel_platform_post_text_read32(0xFE4u, &word));
+        assert(word == 0x01400000u);
+        /* Unaligned, past the page, or no destination: refused. */
+        assert(!kernel_platform_post_text_write32(0xFE2u, 0u));
+        assert(!kernel_platform_post_text_write32(ASTRA_TEXT_PLANE_BYTES - 2u,
+                                                  0u));
+        assert(!kernel_platform_post_text_read32(ASTRA_TEXT_PLANE_BYTES, &word));
+        assert(!kernel_platform_post_text_read32(0xFE4u, NULL));
+    }
 
     kernel_platform_debug_marker(0x4b313054u);
     assert(registers->SCRATCH == 0x4b313054u);

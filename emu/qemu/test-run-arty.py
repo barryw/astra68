@@ -30,7 +30,7 @@ def writable(root):
 
 
 def fixture(directory, delay, output="", status=0, mailbox_bytes=8193,
-            payload_bytes=12345):
+            payload_bytes=12345, splash=False):
     container = pathlib.Path(directory)
     container.chmod(0o755)
     root = container / "release"
@@ -123,6 +123,9 @@ while True: time.sleep(0.05)
     (root / "soundfonts").mkdir()
     (root / "soundfonts/Shipped.sf2").write_bytes(b"sfbk")
     (root / "soundfonts/default").write_text("Shipped.sf2\n")
+    if splash:
+        (root / "share").mkdir()
+        (root / "share/astra_boot_splash.rgb565").write_bytes(b"splash")
     records = []
     for path in sorted(item for item in root.rglob("*") if item.is_file()):
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -136,6 +139,37 @@ while True: time.sleep(0.05)
         path.chmod(0o555)
     root.chmod(0o555)
     return root, observed
+
+
+def stop(process):
+    """Terminate a launcher; whatever it leaves behind dies with its group."""
+    process.terminate()
+    try:
+        process.wait(timeout=2.0)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
+def launch(env, timeout=30.0):
+    """Run the launcher to its end. A hang fails the suite instead of
+    blocking it, and nothing the launcher started outlives the call."""
+    process = subprocess.Popen([str(RUN_ARTY)], env=env, text=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+    return subprocess.CompletedProcess(process.args, process.returncode,
+                                       stdout, stderr)
 
 
 def environment(root, observed):
@@ -212,8 +246,7 @@ def main():
         invalid_environment = dict(launch_environment,
                                    ASTRA_AUX_CPU="%d:%d" %
                                    (aux_cpu, display_cpu))
-        result = subprocess.run([str(RUN_ARTY)], env=invalid_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(invalid_environment)
         assert result.returncode != 0
         assert "helper CPU assignments are invalid" in result.stderr
         private = observed / "exports/work/notes.txt"
@@ -289,20 +322,19 @@ def main():
         launch_environment["ASTRA_HOST_TIME_MIN"] = str(int(time.time()) + 60)
         waiting = subprocess.Popen([str(RUN_ARTY)], env=launch_environment,
                                    stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL)
+                                   stderr=subprocess.DEVNULL,
+                                   start_new_session=True)
         try:
             time.sleep(0.1)
             assert waiting.poll() is None
             assert not (observed / "qemu.args").exists()
         finally:
-            waiting.terminate()
-            waiting.wait(timeout=2.0)
+            stop(waiting)
         launch_environment.pop("ASTRA_HOST_TIME_MIN")
 
         (root / "storage-terminal.img").chmod(0o644)
         (root / "storage-terminal.img").write_bytes(b"stale")
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode != 0
         assert "release verification failed" in result.stderr
         writable(root)
@@ -338,15 +370,14 @@ def main():
         launch_environment = environment(root, observed)
         first = subprocess.Popen([str(RUN_ARTY)], env=launch_environment,
                                  stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.DEVNULL)
+                                 stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
         try:
             deadline = time.monotonic() + 2.0
             while not (observed / "qemu.args").exists():
                 assert time.monotonic() < deadline
                 time.sleep(0.01)
-            second = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                    text=True, capture_output=True,
-                                    check=False)
+            second = launch(launch_environment)
             assert second.returncode != 0
             assert "already active" in second.stderr
         finally:
@@ -357,30 +388,26 @@ def main():
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 0, status=88)
         launch_environment = environment(root, observed)
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 0, result.stderr
         assert (observed / "power.args").read_text().splitlines() == [
             "poweroff", "--no-block"]
         (observed / "power.args").unlink()
         launch_environment["ASTRA_TEST_POWER_STATUS"] = "1"
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 1, result.stderr
         assert (observed / "power.args").exists()
         writable(root)
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 0, status=89)
         launch_environment = environment(root, observed)
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 0, result.stderr
         assert (observed / "power.args").read_text().splitlines() == [
             "reboot", "--no-block"]
         (observed / "power.args").unlink()
         launch_environment["ASTRA_TEST_POWER_STATUS"] = "1"
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 1, result.stderr
         assert (observed / "power.args").read_text().splitlines() == [
             "reboot", "--no-block"]
@@ -388,9 +415,7 @@ def main():
     with tempfile.TemporaryDirectory() as directory:
         root, observed = fixture(directory, 0, "ASTRA68-QEMU SHUTDOWN\\n",
                                  status=1)
-        result = subprocess.run([str(RUN_ARTY)],
-                                env=environment(root, observed),
-                                text=True, capture_output=True, check=False)
+        result = launch(environment(root, observed))
         assert result.returncode == 1, result.stderr
         assert not (observed / "power.args").exists()
         writable(root)
@@ -398,13 +423,23 @@ def main():
         root, observed = fixture(directory, 0, "*** AXIOM KERNEL PANIC ***\n"
                                  "Fault:  0x40A00024\nSYSTEM HALTED\n", 1)
         launch_environment = environment(root, observed)
-        result = subprocess.run([str(RUN_ARTY)], env=launch_environment,
-                                text=True, capture_output=True, check=False)
+        result = launch(launch_environment)
         assert result.returncode == 1
         report = (observed / "log/panic-latest.log").read_text()
         assert "AXIOM KERNEL PANIC" in report
         assert "Fault:  0x40A00024" in report
         assert "SYSTEM HALTED" in report
+        writable(root)
+    # A DE25 release ships the boot splash: the helper gets it as a fourth
+    # argument. The first scenario proves a release without one gets three.
+    with tempfile.TemporaryDirectory() as directory:
+        root, observed = fixture(directory, 0.3, splash=True)
+        result = launch(environment(root, observed))
+        assert result.returncode == 1, result.stderr
+        arguments = (observed / "display.args").read_text().splitlines()
+        assert len(arguments) == 4, arguments
+        assert arguments[3] == os.path.realpath(
+            root / "share/astra_boot_splash.rgb565"), arguments
         writable(root)
     print("Astra Arty launcher tests passed")
 

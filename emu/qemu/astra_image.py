@@ -220,8 +220,6 @@ CODEC_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
 FAULT_PROBE_SERVICES = DISPLAY_SERVICES + ("fault-probe",)
 FAULT_CRITICAL_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "service /services/fault-probe grants critical\n")
-
-
 def _build_invocation(command):
     """A privileged observer must not become the owner of build products.
 
@@ -239,6 +237,32 @@ def _build_invocation(command):
     if account.pw_gid != gid:
         raise RuntimeError("build GID must match the selected account")
     return ["runuser", "-u", account.pw_name, "--", *command]
+
+
+# A user boot service that refuses READY, from /config/services so the
+# definition scan counts it: the boot completes, and the boot progress record
+# says DONE with it skipped (test-boot-progress.py).
+READY_FAIL_CONFIGURATION = dict(CONFIGURATION, **{
+    "services/ready-fail/service.conf": (
+        "astra-config 1\n"
+        "schema 1\n"
+        "name \"ready-fail\"\n"
+        "executable \"/services/fault-probe\"\n"
+        "runs astra\n"
+        "enabled true\n"
+        "delegates false\n"
+        "start boot\n"
+        "restart never\n"
+        "argument \"/services/fault-probe\"\n"
+        "argument \"--fail-ready\"\n"),
+})
+# A required boot service that cannot start -- its image is not on the
+# volume -- so the boot stops and the record says FAILED
+# (test-boot-progress.py).
+REQUIRED_FAIL_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
+    "service /services/required-absent grants required\n")
+INTERFACE_GALLERY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
+    "application /apps/InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n")
 
 
 def _build_current_userspace():
@@ -821,7 +845,8 @@ def install(image, catalog=DEFAULT_CATALOG, commands=DEFAULT_COMMANDS,
             apps=DEFAULT_APPS, terminfo=DEFAULT_TERMINFO,
             vim_runtime=DEFAULT_VIM_RUNTIME,
             service_names=DISPLAY_SERVICES,
-            manifest_text=STARTUP_MANIFEST):
+            manifest_text=STARTUP_MANIFEST,
+            configuration=CONFIGURATION):
     """Writes this build's catalog and commands into the image's volume.
 
     The volume is lifted out of the image, worked on, and put back. Two reasons
@@ -837,7 +862,8 @@ def install(image, catalog=DEFAULT_CATALOG, commands=DEFAULT_COMMANDS,
     """
     _build_current_userspace()
     _install_built(image, catalog, commands, services, kits, apps, terminfo,
-                   vim_runtime, service_names, manifest_text)
+                   vim_runtime, service_names, manifest_text,
+                   configuration)
 
 
 def _provider_index_record(path, version, abi, abi_minor, build_id):
@@ -858,7 +884,8 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
                    apps=DEFAULT_APPS, terminfo=DEFAULT_TERMINFO,
                    vim_runtime=DEFAULT_VIM_RUNTIME,
                    service_names=DISPLAY_SERVICES,
-                   manifest_text=STARTUP_MANIFEST):
+                   manifest_text=STARTUP_MANIFEST,
+                   configuration=CONFIGURATION):
     """Install built products; private seam for isolated host tests."""
     if not os.path.exists(catalog):
         raise RuntimeError("no catalog at %s -- build the supervisor first" %
@@ -1006,7 +1033,7 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
         for scope in CONFIG_SCOPES:
             _mkdir(volume, "/%s/%s" % (CONFIG_DIRECTORY, scope),
                    "configuration scope")
-        for path, contents in CONFIGURATION.items():
+        for path, contents in configuration.items():
             components = path.split("/")
             for count in range(1, len(components)):
                 directory = "/%s/%s" % (
@@ -1059,6 +1086,16 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3 and sys.argv[1] == "--fault-critical":
         install(sys.argv[2], service_names=FAULT_PROBE_SERVICES,
                 manifest_text=FAULT_CRITICAL_STARTUP_MANIFEST)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--ready-fail":
+        install(sys.argv[2], service_names=FAULT_PROBE_SERVICES,
+                manifest_text=DISPLAY_STARTUP_MANIFEST,
+                configuration=READY_FAIL_CONFIGURATION)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--required-fail":
+        install(sys.argv[2], service_names=DISPLAY_SERVICES,
+                manifest_text=REQUIRED_FAIL_STARTUP_MANIFEST)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--interface-gallery":
+        install(sys.argv[2], service_names=DISPLAY_SERVICES,
+                manifest_text=INTERFACE_GALLERY_STARTUP_MANIFEST)
     elif len(sys.argv) == 4 and sys.argv[1] == "--create":
         try:
             size_mib = int(sys.argv[3], 10)
@@ -1073,6 +1110,7 @@ if __name__ == "__main__":
         raise SystemExit(
             "usage: astra_image.py "
             "[--display|--hostbench|--audio-certify|--pcm-certify|--codec-certify|"
-            "--fault-probe|--fault-critical] IMAGE | "
+            "--fault-probe|--fault-critical|--ready-fail|--required-fail|"
+            "--interface-gallery] IMAGE | "
             "--create IMAGE SIZE_MIB | --service NAME IMAGE | "
             "--test-app BUNDLE IMAGE")
