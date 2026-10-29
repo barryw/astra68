@@ -1,7 +1,7 @@
 # C2 collection view notes
 
-Status: Columns, Table, and Tree implemented over C1; icon Grid and
-Pagination remain open.
+Status: Columns, Table, Tree, and Pagination implemented over C1; icon Grid
+remains open.
 
 ## Haiku read-only review
 
@@ -60,6 +60,20 @@ hierarchy and items together, preserving selection by stable ID and restoring
 the old state if validation or layout fails. Draw-list estimates and painting
 iterate only clipped visible rows.
 
+## Pagination contract
+
+`AstraPaginationModel` borrows the C1 collection and stores only page size and
+zero-based page index. `astra_interface_pagination_init` composes Container,
+Previous Button, Label, and Next Button in four slots with consecutive IDs.
+Applications handle button activation by calling
+`astra_interface_pagination_set_page`; the helper updates the label and
+disabled edges. `astra_interface_pagination_range` returns a half-open item
+range and recalculates page count from the collection's current item count.
+An empty collection has one empty page. Page changes do not alter C1 selected
+item ID. The label uses alternating caller-owned buffers so a length-changing
+update leaves the old text valid while layout runs. Beast host and MC68040
+library gates cover the composition and range behavior.
+
 ## Remaining contracts
 
 - Table sorting remains an application command: callers reorder C1 items and
@@ -70,6 +84,3 @@ iterate only clipped visible rows.
   selected-item hit testing and two-dimensional keyboard navigation. Current
   `ASTRA_CONTROL_GRID_VIEW` is a fixed-cell text surface and must remain
   distinct.
-- Pagination should be a composed group of existing Buttons/Label over a
-  C1 collection model, with a caller-owned page state and one shared visible
-  range helper. It must not introduce another selection store.
