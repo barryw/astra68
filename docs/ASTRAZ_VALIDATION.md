@@ -117,3 +117,8 @@ picture outside 320 × 200. Both repeatedly selected default color 1/1. One
 Journey window-0 cursor moved to row 201, the position immediately after the
 last row; the host must clip it. Evidence is archived as
 `journey-host-trace-3input.txt` and `shogun-host-trace-3input.txt`.
+
+The same private engine harness also reached first input on the representative
+Z3/Z4/Z5/Z8 stories without an engine error: Zork I (425 events), Trinity
+(187), Sherlock (233), and One Room (789). Those host traces establish engine
+progress only; the native GUI opening/input/exit gates still require DE25.

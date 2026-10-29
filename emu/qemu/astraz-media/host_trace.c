@@ -18,6 +18,8 @@ typedef struct Trace {
     unsigned cursor_oob;
     unsigned font3;
     unsigned stop_after;
+    unsigned width;
+    unsigned height;
 } Trace;
 
 static uint32_t be32(const uint8_t *p)
@@ -41,12 +43,15 @@ static int event(void *context, const AstraZEvent *item)
             int64_t bottom = item->data.picture.row +
                              (int64_t)be32(resource->bytes + 20) - 1;
             if (item->data.picture.column < 1 || item->data.picture.row < 1 ||
-                right > 320 || bottom > 200) trace->picture_oob++;
+                right > trace->width || bottom > trace->height)
+                trace->picture_oob++;
         }
     }
     if (item->kind == ASTRAZ_EVENT_CURSOR &&
-        (item->data.cursor.column < 1 || item->data.cursor.column > 320 ||
-         item->data.cursor.row < 1 || item->data.cursor.row > 200))
+        (item->data.cursor.column < 1 ||
+         item->data.cursor.column > trace->width ||
+         item->data.cursor.row < 1 ||
+         item->data.cursor.row > trace->height))
         trace->cursor_oob++;
     if (item->kind == ASTRAZ_EVENT_FONT && item->data.font.font == 3)
         trace->font3++;
@@ -183,7 +188,11 @@ int main(int argc, char **argv)
                 argv[0]);
         return 2;
     }
-    Trace trace = {.stop_after = 1};
+    AstraZStory story = {0};
+    if (astraz_engine_probe(argv[1], &story) != ASTRAZ_OK) return 1;
+    Trace trace = {.stop_after = 1,
+                   .width = story.version == 6 ? 320u : 80u,
+                   .height = story.version == 6 ? 200u : 24u};
     if (argc == 4) {
         char *end;
         unsigned long value = strtoul(argv[3], &end, 10);
@@ -192,7 +201,9 @@ int main(int argc, char **argv)
     }
     AstraZHost host = {
         .context = &trace, .capabilities = ASTRAZ_CAP_PICTURES | ASTRAZ_CAP_SOUND,
-        .width = 320, .height = 200, .cell_width = 8, .cell_height = 8,
+        .width = trace.width, .height = trace.height,
+        .cell_width = story.version == 6 ? 8u : 1u,
+        .cell_height = story.version == 6 ? 8u : 1u,
         .event = event, .read_key = read_key, .read_line = read_line,
         .choose_file = choose_file, .picture_info = picture_info,
         .tick = tick, .sound_finished = sound_finished
