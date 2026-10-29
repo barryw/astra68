@@ -1850,6 +1850,80 @@ static void test_list_control(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_table_control(void)
+{
+    static const AstraCollectionItem rows[] = {
+        {11u, "Doom", 4u, {0u, 0u}},
+        {12u, "Quake", 5u, {0u, 0u}},
+        {13u, "AstraZ", 6u, {0u, 0u}}
+    };
+    static const AstraCollectionItem reordered[] = {
+        {13u, "AstraZ", 6u, {0u, 0u}},
+        {12u, "Quake", 5u, {0u, 0u}},
+        {11u, "Doom", 4u, {0u, 0u}}
+    };
+    static const AstraTableColumn columns[] = {
+        {"Name", 4u, 180u, 0u},
+        {"Kind", 4u, 100u, 0u}
+    };
+    static const AstraTableCell cells[] = {
+        {"Game", 4u, 0u}, {"Game", 4u, 0u},
+        {"Story", 5u, 0u}
+    };
+    static const AstraTableCell reordered_cells[] = {
+        {"Story", 5u, 0u}, {"Game", 4u, 0u},
+        {"Game", 4u, 0u}
+    };
+    AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    AstraTableModel model = ASTRA_TABLE_MODEL_INIT;
+    AstraTableInfo info = ASTRA_TABLE_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraWindowEvent event;
+    AstraControlSize size = {0};
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraSurfaceView surface = render_view(400u, 200u);
+
+    assert(astra_interface_collection_init(&collection, rows, 3u, 0u) == ASTRA_OK);
+    model.collection = &collection;
+    model.columns = columns;
+    model.column_count = 2u;
+    model.cells = cells;
+    model.cell_count = 3u;
+    info.id = 91u;
+    info.model = &model;
+    assert(astra_interface_table_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 400u, 200u) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &control, &size) == ASTRA_OK);
+    assert(size.width == 280u && size.height == 4u * theme.control_height);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + 4);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(collection.selected_id == 0u);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + 2u * theme.control_height + 4u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+           action.control_id == 91u && action.value == 1);
+    assert(collection.selected_id == 12u);
+    assert(astra_interface_table_set_rows(&context, &control,
+        reordered, 3u, reordered_cells, 3u) == ASTRA_OK);
+    assert(collection.selected_id == 12u && control._private_value == 1);
+    assert(astra_interface_table_set_rows(&context, &control,
+        rows, 3u, cells, 2u) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(collection.items == reordered && model.cells == reordered_cells);
+}
+
 static void test_scrolled_list_control(void)
 {
     static const char family[] = "A deliberately wide installed font family name";
@@ -3847,6 +3921,7 @@ int main(void)
     test_list_control();
     test_popup_control();
     test_split_button();
+    test_table_control();
     test_scrolled_list_control();
     test_tab_control_and_collapsed_pages();
     test_stepper_control();

@@ -1,7 +1,7 @@
 # C2 collection view notes
 
-Status: Columns implemented over C1; Table, Tree, icon Grid, and Pagination
-remain open.
+Status: Columns and Table implemented over C1; Tree, icon Grid, and
+Pagination remain open.
 
 ## Haiku read-only review
 
@@ -32,11 +32,24 @@ Selection is preserved by C1's stable item ID. Each ScrollView clips its List
 and retains independent vertical position. The Interface Gallery shows a
 two-depth browser under the Layout tab.
 
+## Table contract
+
+`AstraTableModel` borrows a C1 collection for row identity and selected ID.
+Fixed-width `AstraTableColumn` headings and row-major trailing cells add
+presentation without another selection store. Column zero uses the C1 label.
+The retained Table uses the List's focus, pointer selection, activation,
+keyboard navigation, scroll reveal, and row surface policy. Header hit testing
+never selects a row. Only visible rows contribute draw-list commands. Changing
+rows and cells is transactional and preserves the selected stable ID. Gallery
+shows a two-column table beside the Columns browser; Beast tests cover header
+hit, selection, rendering, reorder and invalid update rollback.
+
 ## Remaining contracts
 
-- Table needs a typed column/cell descriptor over C1 item IDs, a shared row
-  header and sort command policy, and visible-row rendering. The existing List
-  stores one label per row and cannot represent additional cells correctly.
+- Table sorting remains an application command: callers reorder C1 items and
+  matching cells in one `astra_interface_table_set_rows` call. Resizable
+  columns, column-specific alignment, and secondary sort indicators remain
+  design gaps.
 - Tree needs parent identity, expansion state, visible-row mapping, and
   collapse/reveal semantics without dropping C1 selected IDs.
 - Icon Grid needs `AstraIconTileInfo` in the retained control pipeline with

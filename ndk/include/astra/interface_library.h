@@ -276,6 +276,28 @@ AstraResult astra_interface_split_button_init(AstraControl *primary,
  */
 AstraResult astra_interface_columns_init(AstraControl *controls,
     const AstraColumnsInfo *info);
+/** Initialize a retained Table over C1 item IDs and caller-owned columns.
+ * Column zero uses each CollectionItem label. The remaining cells are
+ * row-major. Compose with ScrollView for large tables.
+ * @param control Caller-owned retained control.
+ * @param info Table description with borrowed model.
+ * @return ASTRA_OK or validation error.
+ */
+AstraResult astra_interface_table_init(AstraControl *control,
+    const AstraTableInfo *info);
+/** Atomically replace Table rows and trailing cells, preserving selection by
+ * C1 stable ID. Failed updates keep the prior presentation and selection.
+ * @param context Owning UI context.
+ * @param control Table to update.
+ * @param items Borrowed new row identities and labels.
+ * @param count Number of rows.
+ * @param cells Borrowed trailing cells in row-major order.
+ * @param cell_count Number of trailing cells.
+ * @return ASTRA_OK or validation/layout error.
+ */
+AstraResult astra_interface_table_set_rows(AstraUIContext *context,
+    AstraControl *control, const AstraCollectionItem *items, uint32_t count,
+    const AstraTableCell *cells, uint32_t cell_count);
 /** Initialize a single-line UTF-8 field.
  * @param control Caller-owned control to initialize.
  * @param info Field description; its text model remains caller-owned.

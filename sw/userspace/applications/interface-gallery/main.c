@@ -115,7 +115,8 @@ enum {
     GALLERY_COLUMN_LEFT_LIST,
     GALLERY_COLUMN_RIGHT_SCROLL,
     GALLERY_COLUMN_RIGHT_LIST,
-    GALLERY_CONTROL_COUNT = GALLERY_COLUMN_RIGHT_LIST
+    GALLERY_TABLE,
+    GALLERY_CONTROL_COUNT = GALLERY_TABLE
 };
 
 enum {
@@ -167,6 +168,17 @@ static const AstraCollectionItem column_apps[] = {
     {11u, "Doom", 4u, {0u, 0u}},
     {12u, "Quake", 5u, {0u, 0u}},
     {13u, "AstraZ", 6u, {0u, 0u}}
+};
+static AstraCollectionModel gallery_table_collection = ASTRA_COLLECTION_MODEL_INIT;
+static AstraTableModel gallery_table_model = ASTRA_TABLE_MODEL_INIT;
+static const AstraTableColumn gallery_table_columns[] = {
+    {"Name", 4u, 220u, 0u},
+    {"Kind", 4u, 120u, 0u}
+};
+static const AstraTableCell gallery_table_cells[] = {
+    {"Game", 4u, 0u},
+    {"Game", 4u, 0u},
+    {"Story", 5u, 0u}
 };
 static uint32_t gallery_meter_values[2] = {62u, 71u};
 static uint32_t gallery_meter_peaks[2] = {78u, 88u};
@@ -1102,6 +1114,24 @@ static uint32_t build_controls(void)
                 &browser) != ASTRA_OK)
             status = GALLERY_FAIL_CONTROL;
     }
+    if (status == ASTRA_STATUS_OK) {
+        AstraTableInfo table = ASTRA_TABLE_INFO_INIT;
+
+        if (astra_interface_collection_init(&gallery_table_collection,
+            column_apps, 3u, 12u) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+        gallery_table_model.collection = &gallery_table_collection;
+        gallery_table_model.columns = gallery_table_columns;
+        gallery_table_model.column_count = 2u;
+        gallery_table_model.cells = gallery_table_cells;
+        gallery_table_model.cell_count = 3u;
+        table.id = GALLERY_TABLE;
+        table.model = &gallery_table_model;
+        if (status == ASTRA_STATUS_OK &&
+            astra_interface_table_init(GALLERY_CONTROL(GALLERY_TABLE),
+                &table) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
     if (status == ASTRA_STATUS_OK)
         status = set_item(GALLERY_TABS, 0u, 0u, 0u);
     for (uint32_t page = GALLERY_PAGE_INPUT;
@@ -1222,7 +1252,9 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_FORM_ROW, GALLERY_PAGE_LAYOUT,
               ASTRA_FLEX_BREAK_BEFORE | ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_COLUMNS, GALLERY_PAGE_LAYOUT,
-              ASTRA_FLEX_BREAK_BEFORE | ASTRA_FLEX_BREAK_AFTER);
+              ASTRA_FLEX_BREAK_BEFORE);
+    PAGE_ITEM(GALLERY_TABLE, GALLERY_PAGE_LAYOUT,
+              ASTRA_FLEX_BREAK_AFTER);
 #undef PAGE_ITEM
     if (status == ASTRA_STATUS_OK) {
         AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;

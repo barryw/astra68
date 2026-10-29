@@ -53,7 +53,9 @@ enum {
     /** Hardware-drawn per-sample bars. */
     ASTRA_CONTROL_SPARKLINE = 22u,
     /** Menu-backed, single-choice field. */
-    ASTRA_CONTROL_POPUP = 23u
+    ASTRA_CONTROL_POPUP = 23u,
+    /** Fixed-width columns and C1 stable row selection. */
+    ASTRA_CONTROL_TABLE = 24u
 };
 
 /** Semantic state owned by an application. */
@@ -708,6 +710,52 @@ typedef struct AstraColumnsInfo {
 /** Empty Columns construction data. */
 #define ASTRA_COLUMNS_INFO_INIT { \
     sizeof(AstraColumnsInfo), 0, 0, 0, 0, 0, {0, 0, 0} \
+}
+
+/** One fixed-width table column. Column zero displays CollectionItem.text;
+ * subsequent columns use row-major AstraTableCell entries. */
+typedef struct AstraTableColumn {
+    const char *heading; /**< Borrowed UTF-8 heading. */
+    uint32_t heading_length; /**< Heading byte count. */
+    uint32_t width; /**< Fixed width in client pixels. */
+    uint32_t reserved; /**< Must be zero. */
+} AstraTableColumn;
+
+/** One optional trailing cell; empty cells use zero length and null text. */
+typedef struct AstraTableCell {
+    const char *text; /**< Borrowed UTF-8 text. */
+    uint32_t text_length; /**< Text byte count; zero for blank. */
+    uint32_t reserved; /**< Must be zero. */
+} AstraTableCell;
+
+/** Caller-owned table presentation over one C1 collection model. */
+typedef struct AstraTableModel {
+    uint32_t size; /**< Structure size. */
+    AstraCollectionModel *collection; /**< Borrowed C1 identity/selection model. */
+    const AstraTableColumn *columns; /**< Borrowed column array. */
+    uint32_t column_count; /**< Number of columns, at least one. */
+    const AstraTableCell *cells; /**< Borrowed row-major trailing cells. */
+    uint32_t cell_count; /**< Item count times column count minus one. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraTableModel;
+
+/** Empty table presentation model. */
+#define ASTRA_TABLE_MODEL_INIT { \
+    sizeof(AstraTableModel), 0, 0, 0, 0, 0, {0, 0} \
+}
+
+/** Creation data for one retained Table control. */
+typedef struct AstraTableInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t id; /**< Nonzero control ID. */
+    AstraTableModel *model; /**< Borrowed table presentation model. */
+    uint32_t state; /**< Disabled, error, collapsed, or zero. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraTableInfo;
+
+/** Empty Table creation data. */
+#define ASTRA_TABLE_INFO_INIT { \
+    sizeof(AstraTableInfo), 0, 0, 0, {0, 0, 0, 0} \
 }
 
 enum {
