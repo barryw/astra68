@@ -73,6 +73,11 @@ typedef struct AstraIconTileInfo {
  */
 AstraResult astra_interface_icon_tile_render(AstraDrawList *list,
     const AstraIconTileInfo *info);
+/** Paint the same tile into a retained hardware draw-list view. Borrowed icon,
+ * badge, and editor surfaces must be approved at append time through
+ * astra_draw_list_append_view_with_sources. */
+AstraResult astra_interface_icon_tile_render_view(AstraSurfaceView *view,
+    const AstraIconTileInfo *info);
 
 /** Test pointer against tile frame intersected with viewport clip.
  * @param info Tile presentation data.
