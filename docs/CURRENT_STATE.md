@@ -2,6 +2,14 @@
 
 Status: active continuation map, 2026-10-29
 
+Control-set continuation, 2026-10-29: source-based audit of the standalone
+desktop design's 50 concepts finds 20 available, six partial, and 24 absent.
+The dependency-ordered packages, shared ownership boundaries, and Haiku
+references are in `docs/INTERFACE_CONTROL_WORKPLAN.md`. The older
+`docs/INTERFACE_IMPLEMENTATION.md` is historical; its milestone status table
+is not current ABI 8 coverage. No control implementation or board image
+changed during this inventory.
+
 Interface Kit design-alignment checkpoint, 2026-10-29: compared the standalone
 desktop design's Controls chapter with shared native controls and DE25
 Interface Gallery. Neutral client grays, field inset/fill, checkbox/radio

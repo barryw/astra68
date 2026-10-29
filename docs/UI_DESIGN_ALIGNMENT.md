@@ -21,12 +21,12 @@ Gallery on DE25 at 1920×1080. Captures are archived on Beast at
 | Scroll View, scrollbar, splitter, grid | `interface/src/control.c` | Neutral scrollbar track, clipped scrolling, shared splitter and grid drawing. |
 | Pull-down and context menus | `interface/src/menu.c` | Compact 28 px rows, 4 px frame inset, rounded selection and shared submenu/check marks. |
 
-The design catalogs 50 control and panel concepts. Current `AstraControlKind`
-has 20 native kinds; design-only concepts such as multi-select popup, colour
-well, table, tree and standard Open/Save panels are not implemented by this
-visual pass. The design's toolbar overflow and per-application presentation
-preferences are separate behavior work. Existing controls should stay in
-Interface Kit as those features arrive.
+The design catalogs 50 control and panel concepts. Current source-based
+inventory finds 20 available, six partial, and 24 absent; see
+[remaining control workplan](INTERFACE_CONTROL_WORKPLAN.md). The 20 values of
+`AstraControlKind` are not the same count: several design concepts compose
+existing kinds, while others use separate window or drawing APIs. Existing
+controls should stay in Interface Kit as missing behavior arrives.
 
 Haiku read-only references: `src/kits/interface/Button.cpp`, `CheckBox.cpp`,
 `RadioButton.cpp`, `Slider.cpp`, `ScrollBar.cpp`, `TextControl.cpp`,

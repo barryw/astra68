@@ -1,7 +1,12 @@
 # Astra interface implementation ledger
 
-Status: active implementation ledger for the design in
+Status: historical implementation ledger for the design in
 `~/Downloads/Astra68 Desktop Design/Astra Desktop.dc.html`.
+
+Current source-based inventory and work packages for the standalone design
+are in [INTERFACE_CONTROL_WORKPLAN.md](INTERFACE_CONTROL_WORKPLAN.md). The
+milestone statuses below describe their original checkpoints, not current
+Interface Kit ABI 8 coverage.
 
 The current source package has SHA-256
 `836e4991ea8a79ab58769471e24749a064eddd93195552a017596cd0e97cbab9`.
