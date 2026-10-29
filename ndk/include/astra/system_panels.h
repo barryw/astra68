@@ -171,6 +171,7 @@ enum {
 enum {
     ASTRA_FILE_PANEL_NONE = 0u,
     ASTRA_FILE_PANEL_NAVIGATE,
+    ASTRA_FILE_PANEL_LOAD_CHILD,
     ASTRA_FILE_PANEL_PICKED,
     ASTRA_FILE_PANEL_OVERWRITE,
     ASTRA_FILE_PANEL_CANCELLED
@@ -178,8 +179,26 @@ enum {
 
 enum {
     ASTRA_FILE_PANEL_VIEW_LIST = 0u,
-    ASTRA_FILE_PANEL_VIEW_GRID = 1u
+    ASTRA_FILE_PANEL_VIEW_GRID = 1u,
+    ASTRA_FILE_PANEL_VIEW_COLUMNS = 2u
 };
+
+/** Additional column controls follow the fixed panel block. The caller must
+ * reserve this many controls and IDs when column_count is nonzero. */
+#define ASTRA_FILE_PANEL_CONTROLS_FOR_COLUMNS(count) \
+    (ASTRA_FILE_PANEL_CONTROL_COUNT + 1u + 2u * (count))
+
+/** Borrowed snapshot for one visible depth of Columns. Slot zero mirrors the
+ * panel's current directory; later slots are filled by set_column. Child
+ * directory strings must remain stable and must not alias panel->target. */
+typedef struct AstraFilePanelColumnSnapshot {
+    const char *directory;
+    const AstraDirectoryEntry *entries;
+    uint32_t entry_count;
+    AstraCollectionItem *items;
+    uint32_t item_count;
+    uint32_t item_capacity;
+} AstraFilePanelColumnSnapshot;
 
 /** One caller-owned Places/Volumes sidebar entry. */
 typedef struct AstraFilePanelPlace {
@@ -221,6 +240,10 @@ typedef struct AstraFilePanelInfo {
     uint32_t type_filter_count;
     AstraFilePanelTypeAccept type_accept;
     void *type_context;
+    AstraColumnView *columns;
+    AstraFilePanelColumnSnapshot *column_snapshots;
+    uint32_t column_count;
+    uint32_t control_capacity;
     uint32_t reserved[4];
 } AstraFilePanelInfo;
 
@@ -266,6 +289,10 @@ typedef struct AstraFilePanel {
     void *type_context;
     uint32_t selected_filter;
     uint32_t view_mode;
+    AstraColumnView *columns;
+    AstraFilePanelColumnSnapshot *column_snapshots;
+    uint32_t column_count;
+    uint32_t selected_depth;
     AstraTextModel search_model;
     uint8_t search_content[4096];
     _Alignas(4) uint8_t search_metadata[4096];
@@ -301,6 +328,14 @@ AstraResult astra_interface_file_panel_set_places(AstraFilePanel *panel,
 AstraResult astra_interface_file_panel_set_icons(AstraFilePanel *panel,
     AstraUIContext *context, AstraControl *controls,
     const AstraSurface *const *entry_icons, uint32_t count);
+
+/** Fill a child depth after the panel reports ASTRA_FILE_PANEL_LOAD_CHILD.
+ * The caller owns the snapshot and item storage until replacement. Passing
+ * NULL directory clears that depth and every deeper column. */
+AstraResult astra_interface_file_panel_set_column(AstraFilePanel *panel,
+    AstraUIContext *context, AstraControl *controls, uint32_t depth,
+    const char *directory, const AstraDirectoryEntry *entries,
+    uint32_t entry_count, AstraCollectionItem *items, uint32_t capacity);
 
 /** Route one normal UI action. Save returns OVERWRITE for an existing regular
  * file, allowing the caller to present confirmation before creating it. */

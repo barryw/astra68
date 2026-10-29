@@ -55,8 +55,14 @@ by the caller's file-type service through a predicate; the panel does not
 guess from extensions. Directory icon surfaces can be attached in a separate
 parallel snapshot and stay aligned with search/filter results. List and Grid
 use separate collection models and preserve selected identity across mode
-changes. Column browsing still needs a caller-owned hierarchy snapshot
-contract; the panel exposes no false single-column mode in the meantime.
+changes. Columns mode composes the existing shared Columns control with a
+caller-chosen depth count. It reports `LOAD_CHILD` when a directory is selected,
+and the caller supplies that depth's Filesystem Kit snapshot through
+`astra_interface_file_panel_set_column`. Every depth keeps its own selection
+and scroll model; changing an ancestor clears stale descendants. The caller
+reserves `ASTRA_FILE_PANEL_CONTROLS_FOR_COLUMNS(depth_count)` slots and IDs.
+This keeps directory I/O and dynamically sized browser storage with the
+consumer, without inventing a second file selection engine.
 
 Haiku `src/kits/tracker/FilePanel.cpp` keeps directory, filter, save name,
 and panel outcome in the shared kit panel. Astra adopts that separation and
