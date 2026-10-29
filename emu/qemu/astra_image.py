@@ -199,7 +199,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG\n"
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG\n"
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r\n"
-    "trusted /apps/AstraZ.app grants GUI VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r\n")
+    "trusted /apps/AstraZ.app grants GUI PCM VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",
                     "input", "clipboard", "fonts", "display", "media", "codec", "sampler",

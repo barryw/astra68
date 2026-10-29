@@ -97,7 +97,7 @@ assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
     "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG",
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG",
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
-    "trusted /apps/AstraZ.app grants GUI VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r"]
+    "trusted /apps/AstraZ.app grants GUI PCM VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r"]
 with open(os.path.join(os.path.dirname(__file__),
                        "../../sw/userspace/ports/astraz/apps/AstraZ.app/manifest"),
           encoding="ascii") as handle:
