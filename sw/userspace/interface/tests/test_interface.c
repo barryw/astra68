@@ -445,6 +445,35 @@ AstraResult astra_fonts_context_id(char id[ASTRA_FONT_ID_MAX])
 static AstraResult preview_result = ASTRA_OK;
 static uint32_t preview_draws;
 static uint16_t preview_height;
+static const AstraFontsCatalog *panel_mock_catalog;
+
+AstraResult astra_fonts_catalog_face(const AstraFontsCatalog *catalog,
+    uint32_t index, AstraInstalledFont *face)
+{
+    static const AstraInstalledFont faces[2] = {
+        {"mock:system", 11u, "Astra Sans", 10u, "Regular", 7u, 2u,
+         ASTRA_INSTALLED_FONT_SELECTABLE | ASTRA_INSTALLED_FONT_BASIC_TEXT},
+        {"mock:game", 9u, "Game Art", 8u, "Outline", 7u, 1u, 0u}
+    };
+    if (catalog != panel_mock_catalog || index >= 2u || face == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *face = faces[index];
+    return ASTRA_OK;
+}
+
+AstraResult astra_fonts_catalog_strike(const AstraFontsCatalog *catalog,
+    uint32_t face_index, uint32_t strike_index,
+    AstraInstalledFontStrike *strike)
+{
+    if (catalog != panel_mock_catalog || strike == NULL ||
+        face_index >= 2u || strike_index >= (face_index == 0u ? 2u : 1u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *strike = (AstraInstalledFontStrike){
+        8u, face_index == 0u ? (strike_index == 0u ? 12u : 16u) : 20u,
+        0u
+    };
+    return ASTRA_OK;
+}
 
 AstraResult astra_fonts_text_measure(AstraHandle gui,
     const char *id, uint32_t id_length, uint16_t height,
@@ -452,8 +481,16 @@ AstraResult astra_fonts_text_measure(AstraHandle gui,
     AstraFontTextMetrics *metrics)
 {
     (void)text;
-    assert(gui == 1u && id_length == 12u &&
-           memcmp(id, "user:preview", 12u) == 0);
+    assert(gui == 1u);
+    if (id_length == 11u && memcmp(id, "mock:system", 11u) == 0) {
+        *metrics = (AstraFontTextMetrics){length * 8u, height, length};
+        return ASTRA_OK;
+    }
+    if (id_length == 9u && memcmp(id, "mock:game", 9u) == 0) {
+        *metrics = (AstraFontTextMetrics){length * 8u, height, length};
+        return ASTRA_OK;
+    }
+    assert(id_length == 12u && memcmp(id, "user:preview", 12u) == 0);
     *metrics = (AstraFontTextMetrics)ASTRA_FONT_TEXT_METRICS_INIT;
     if (preview_result != ASTRA_OK) return preview_result;
     metrics->fitted_bytes = maximum_width / height;
@@ -4455,9 +4492,111 @@ static void test_split_button(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_shared_font_panel(void)
+{
+    AstraFontsCatalog catalog = ASTRA_FONTS_CATALOG_INIT;
+    AstraFontPanelFaceRow face_rows[2];
+    AstraCollectionItem face_items[2], strike_items[2], strike_spare[2];
+    AstraFontPanelStrikeRow rows[2], rows_spare[2];
+    AstraCollectionModel faces = ASTRA_COLLECTION_MODEL_INIT;
+    AstraCollectionModel strikes = ASTRA_COLLECTION_MODEL_INIT;
+    AstraScrollModel face_scroll = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModel strike_scroll = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraFontPanelInfo info = ASTRA_FONT_PANEL_INFO_INIT;
+    AstraFontPanel panel = ASTRA_FONT_PANEL_INIT;
+    AstraControl controls[ASTRA_FONT_PANEL_CONTROL_COUNT];
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraInstalledFont face;
+    AstraInstalledFontStrike strike;
+    uint32_t outcome = 99u;
+
+    panel_mock_catalog = &catalog;
+    catalog.face_count = 2u;
+    strcpy(catalog.selected_id, "mock:system");
+    scroll_info.line_width = 8u;
+    scroll_info.line_height = 16u;
+    assert(astra_scroll_init(&face_scroll, &scroll_info) == ASTRA_OK);
+    assert(astra_scroll_init(&strike_scroll, &scroll_info) == ASTRA_OK);
+    info.first_id = 400u;
+    info.gui = 1u;
+    info.catalog = &catalog;
+    info.face_rows = face_rows;
+    info.face_items = face_items;
+    info.face_capacity = 2u;
+    info.strike_rows = rows;
+    info.strike_items = strike_items;
+    info.strike_rows_spare = rows_spare;
+    info.strike_items_spare = strike_spare;
+    info.strike_capacity = 2u;
+    info.face_collection = &faces;
+    info.strike_collection = &strikes;
+    info.face_scroll = &face_scroll;
+    info.strike_scroll = &strike_scroll;
+    info.system_only = 1u;
+    assert(astra_interface_font_panel_init(&panel, controls, &info) == ASTRA_OK);
+    assert(panel.selected_face == 0u && panel.selected_strike == 0u &&
+           faces.item_count == 2u && strikes.item_count == 2u &&
+           strcmp(face_rows[0].label, "Astra Sans · Regular") == 0 &&
+           strcmp(rows[1].label, "8x16 px") == 0);
+    assert(astra_interface_ui_init(&context, controls,
+        ASTRA_FONT_PANEL_CONTROL_COUNT, 560u, 460u) == ASTRA_OK);
+    layout.direction = ASTRA_FLEX_COLUMN;
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_font_panel_choice(&panel, &face, &strike) == ASTRA_OK &&
+           strike.pixel_height == 12u);
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 400u + ASTRA_FONT_PANEL_STRIKE_LIST;
+    action.value = 1;
+    assert(astra_interface_font_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FONT_PANEL_CHANGED &&
+        astra_interface_font_panel_choice(&panel, &face, &strike) == ASTRA_OK &&
+        strike.pixel_height == 16u);
+    action.control_id = 400u + ASTRA_FONT_PANEL_FACE_LIST;
+    action.value = 1;
+    assert(astra_interface_font_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        panel.selected_strike == 0u && strikes.item_count == 1u &&
+        (controls[ASTRA_FONT_PANEL_USE]._private_state &
+         ASTRA_CONTROL_DISABLED) != 0u);
+    action.type = ASTRA_UI_ACTION_ACTIVATE;
+    action.control_id = 400u + ASTRA_FONT_PANEL_USE;
+    assert(astra_interface_font_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_ERROR_INVALID_ARGUMENT);
+    action.control_id = 400u + ASTRA_FONT_PANEL_CANCEL;
+    assert(astra_interface_font_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FONT_PANEL_CANCELLED);
+    context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
+    info.system_only = 0u;
+    assert(astra_interface_font_panel_init(&panel, controls, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls,
+        ASTRA_FONT_PANEL_CONTROL_COUNT, 560u, 460u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 400u + ASTRA_FONT_PANEL_FACE_LIST;
+    action.value = 1;
+    assert(astra_interface_font_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        (controls[ASTRA_FONT_PANEL_USE]._private_state &
+         ASTRA_CONTROL_DISABLED) == 0u);
+    action.type = ASTRA_UI_ACTION_ACTIVATE;
+    action.control_id = 400u + ASTRA_FONT_PANEL_USE;
+    assert(astra_interface_font_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FONT_PANEL_ACCEPTED &&
+        astra_interface_font_panel_choice(&panel, &face, &strike) == ASTRA_OK &&
+        face.id_length == 9u && strike.pixel_height == 20u);
+    panel_mock_catalog = NULL;
+}
+
 static void test_shared_file_panel(void)
 {
-    AstraDirectoryEntry entries[2] = {
+    AstraDirectoryEntry entries[3] = {
+        { .name = ".", .kind = ASTRA_VFS_KIND_DIRECTORY },
         { .name = "Stories", .kind = ASTRA_VFS_KIND_DIRECTORY },
         { .name = "zork1.z3", .kind = ASTRA_VFS_KIND_FILE }
     };
@@ -4487,13 +4626,13 @@ static void test_shared_file_panel(void)
     info.mode = ASTRA_FILE_PANEL_OPEN;
     info.directory = "/dh0/Stories";
     info.entries = entries;
-    info.entry_count = 2u;
+    info.entry_count = 3u;
     info.item_storage = items;
     info.item_capacity = 2u;
     info.collection = &collection;
     info.scroll = &scroll;
     assert(astra_interface_file_panel_init(&panel, controls, &info) == ASTRA_OK);
-    assert(collection.item_count == 2u &&
+    assert(collection.item_count == 2u && items[0].id == 2u &&
            controls[ASTRA_FILE_PANEL_NAME]._private_state &
                ASTRA_CONTROL_COLLAPSED);
     assert(astra_interface_ui_init(&context, controls,
@@ -4512,11 +4651,24 @@ static void test_shared_file_panel(void)
         &action, &outcome) == ASTRA_OK &&
         outcome == ASTRA_FILE_PANEL_PICKED &&
         strcmp(panel.leaf, "zork1.z3") == 0);
+    assert(astra_interface_control_set_value(&context,
+        &controls[ASTRA_FILE_PANEL_LIST], 1) == ASTRA_OK);
+    action.control_id = 300u + ASTRA_FILE_PANEL_PRIMARY;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FILE_PANEL_PICKED &&
+        strcmp(panel.leaf, "zork1.z3") == 0);
     assert(astra_interface_file_panel_set_directory(&panel, &context,
         controls, "/dh0/Stories", next_entries, 1u, next_items, 2u) ==
         ASTRA_OK);
     assert(collection.item_count == 1u &&
            strcmp(panel.directory, "/dh0/Stories") == 0);
+    assert(astra_interface_file_panel_set_directory(&panel, &context,
+        controls, "/dh0/Empty", NULL, 0u, items, 2u) == ASTRA_OK &&
+        collection.item_count == 0u);
+    assert(astra_interface_file_panel_set_directory(&panel, &context,
+        controls, "/dh0/Stories", next_entries, 1u, items, 2u) == ASTRA_OK &&
+        collection.item_count == 1u);
     action.control_id = 300u + ASTRA_FILE_PANEL_CANCEL;
     assert(astra_interface_file_panel_action(&panel, &context, controls,
         &action, &outcome) == ASTRA_OK &&
@@ -4546,12 +4698,18 @@ static void test_shared_file_panel(void)
     assert(astra_text_model_replace(&name, 0u, 8u, "../oops", 7u) == ASTRA_OK);
     assert(astra_interface_file_panel_action(&panel, &context, controls,
         &action, &outcome) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_text_model_replace(&name, 0u, 7u, "new.z5", 6u) == ASTRA_OK);
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FILE_PANEL_PICKED &&
+        strcmp(panel.leaf, "new.z5") == 0);
 }
 
 static void test_shared_colour_panel(void)
 {
     AstraControl controls[ASTRA_COLOUR_PANEL_CONTROL_COUNT];
     AstraColourPanel panel = ASTRA_COLOUR_PANEL_INIT;
+    AstraColorRGBA8 resolved;
     AstraColorRGBA8 palette[2] = {
         { 4u, 8u, 12u, 255u }, { 220u, 30u, 60u, 255u }
     };
@@ -4577,6 +4735,9 @@ static void test_shared_colour_panel(void)
     assert(astra_interface_colour_panel_action(&panel, &context, controls,
         &action, &outcome) == ASTRA_OK);
     assert(outcome == ASTRA_COLOUR_PANEL_CHANGED && panel.packed == 0xffe0u);
+    assert(astra_interface_colour_panel_color(&panel, &resolved) == ASTRA_OK &&
+        resolved.red == 255u && resolved.green == 255u &&
+        resolved.blue == 0u && resolved.alpha == 255u);
     action.value = 64;
     assert(astra_interface_colour_panel_action(&panel, &context, controls,
         &action, &outcome) == ASTRA_ERROR_INVALID_ARGUMENT);
@@ -4714,6 +4875,7 @@ int main(void)
     test_composed_fields_and_colour_well();
     test_shared_colour_panel();
     test_shared_file_panel();
+    test_shared_font_panel();
     test_text_field_rejections();
     test_text_view();
     test_text_view_styles();

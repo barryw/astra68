@@ -5,6 +5,7 @@
 
 #include <astra/control.h>
 #include <astra/filesystem_library.h>
+#include <astra/fonts.h>
 
 ASTRA_EXTERN_C_BEGIN
 
@@ -126,10 +127,13 @@ typedef struct AstraFilePanel {
     uint32_t size;
     uint32_t first_id;
     uint32_t mode;
-    char directory[ASTRA_VFS_PATH_MAX];
+    const char *directory;
+    char directory_storage[2][ASTRA_VFS_PATH_MAX];
+    uint32_t active_directory;
     char leaf[ASTRA_VFS_NAME_MAX];
     const AstraDirectoryEntry *entries;
     uint32_t entry_count;
+    uint32_t item_count;
     AstraCollectionItem *items;
     uint32_t item_capacity;
     AstraCollectionModel *collection;
@@ -157,6 +161,109 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
 AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
     AstraUIContext *context, AstraControl *controls,
     const AstraUIAction *action, uint32_t *outcome);
+
+enum {
+    ASTRA_FONT_PANEL_ROOT = 0u,
+    ASTRA_FONT_PANEL_TITLE,
+    ASTRA_FONT_PANEL_BROWSERS,
+    ASTRA_FONT_PANEL_FACE_SCROLL,
+    ASTRA_FONT_PANEL_FACE_LIST,
+    ASTRA_FONT_PANEL_STRIKE_SCROLL,
+    ASTRA_FONT_PANEL_STRIKE_LIST,
+    ASTRA_FONT_PANEL_PREVIEW,
+    ASTRA_FONT_PANEL_ELIGIBILITY,
+    ASTRA_FONT_PANEL_ACTIONS,
+    ASTRA_FONT_PANEL_CANCEL,
+    ASTRA_FONT_PANEL_USE,
+    ASTRA_FONT_PANEL_CONTROL_COUNT
+};
+
+enum {
+    ASTRA_FONT_PANEL_NONE = 0u,
+    ASTRA_FONT_PANEL_CHANGED,
+    ASTRA_FONT_PANEL_CANCELLED,
+    ASTRA_FONT_PANEL_ACCEPTED
+};
+
+/** Label and exact size for one installed bitmap strike. */
+typedef struct AstraFontPanelStrikeRow {
+    char label[32];
+    uint16_t pixel_height;
+    uint16_t reserved;
+} AstraFontPanelStrikeRow;
+
+/** Caller storage for a friendly family/style row label. */
+typedef struct AstraFontPanelFaceRow {
+    char label[192];
+} AstraFontPanelFaceRow;
+
+/** A Font Kit catalog snapshot remains borrowed for the panel lifetime.
+ * The two List models, scroll models, and row storage are caller-owned. */
+typedef struct AstraFontPanelInfo {
+    uint32_t size;
+    uint32_t first_id;
+    AstraHandle gui;
+    const AstraFontsCatalog *catalog;
+    AstraFontPanelFaceRow *face_rows;
+    AstraCollectionItem *face_items;
+    uint32_t face_capacity;
+    AstraFontPanelStrikeRow *strike_rows;
+    AstraCollectionItem *strike_items;
+    AstraFontPanelStrikeRow *strike_rows_spare;
+    AstraCollectionItem *strike_items_spare;
+    uint32_t strike_capacity;
+    AstraCollectionModel *face_collection;
+    AstraCollectionModel *strike_collection;
+    AstraScrollModel *face_scroll;
+    AstraScrollModel *strike_scroll;
+    uint32_t system_only;
+    uint32_t reserved[4];
+} AstraFontPanelInfo;
+
+#define ASTRA_FONT_PANEL_INFO_INIT { \
+    sizeof(AstraFontPanelInfo), 0u, 0, 0, 0, 0, 0u, 0, 0, 0, 0, 0u, 0, 0, 0, 0, \
+    0u, { 0u, 0u, 0u, 0u } \
+}
+
+/** Selected face/strike state; use `astra_interface_font_panel_choice` after
+ * ACCEPTED. The chosen ID remains borrowed from the catalog snapshot. */
+typedef struct AstraFontPanel {
+    uint32_t size;
+    uint32_t first_id;
+    AstraHandle gui;
+    const AstraFontsCatalog *catalog;
+    AstraFontPanelFaceRow *face_rows;
+    AstraCollectionItem *face_items;
+    AstraFontPanelStrikeRow *strike_rows;
+    AstraCollectionItem *strike_items;
+    AstraFontPanelStrikeRow *strike_rows_spare;
+    AstraCollectionItem *strike_items_spare;
+    uint32_t strike_capacity;
+    uint32_t strike_count;
+    AstraCollectionModel *face_collection;
+    AstraCollectionModel *strike_collection;
+    uint32_t selected_face;
+    uint32_t selected_strike;
+    uint32_t system_only;
+    uint32_t reserved[4];
+} AstraFontPanel;
+
+#define ASTRA_FONT_PANEL_INIT { .size = sizeof(AstraFontPanel) }
+
+/** Compose a shared installed-font chooser from Font Kit and retained Lists,
+ * ScrollViews, Labels, and Buttons. system_only disables selection of faces
+ * without ASTRA_INSTALLED_FONT_SELECTABLE while keeping them visible. */
+AstraResult astra_interface_font_panel_init(AstraFontPanel *panel,
+    AstraControl *controls, const AstraFontPanelInfo *info);
+
+/** Route a normal action, updating strike choices and hardware-glyph preview. */
+AstraResult astra_interface_font_panel_action(AstraFontPanel *panel,
+    AstraUIContext *context, AstraControl *controls,
+    const AstraUIAction *action, uint32_t *outcome);
+
+/** Resolve the current installed face and exact strike for the caller. */
+AstraResult astra_interface_font_panel_choice(const AstraFontPanel *panel,
+    AstraInstalledFont *face, AstraInstalledFontStrike *strike);
 
 ASTRA_EXTERN_C_END
 
