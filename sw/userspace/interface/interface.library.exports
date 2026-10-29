@@ -29,6 +29,10 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_collection_init;
         astra_interface_progress_init;
         astra_interface_progress_set;
+        astra_interface_level_meter_init;
+        astra_interface_sparkline_init;
+        astra_interface_display_refresh;
+        astra_interface_status_bar_init;
         astra_interface_radio_init;
         astra_interface_scroll_view_init;
         astra_interface_scrollbar_init;

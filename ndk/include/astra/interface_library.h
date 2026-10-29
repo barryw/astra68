@@ -61,6 +61,18 @@ AstraResult astra_interface_disclosure_init(
  */
 AstraResult astra_interface_container_init(AstraControl *control,
                                            const AstraContainerInfo *info);
+/** Initialize a retained bottom-up channel meter; model storage stays caller-owned. */
+AstraResult astra_interface_level_meter_init(AstraControl *control,
+    const AstraDisplayInfo *info);
+/** Initialize a retained per-sample bar sparkline. */
+AstraResult astra_interface_sparkline_init(AstraControl *control,
+    const AstraDisplayInfo *info);
+/** Validate changed display model data and mark its frame damaged. */
+AstraResult astra_interface_display_refresh(AstraUIContext *context,
+    AstraControl *control);
+/** Compose a themed status strip from one Container and two Labels. */
+AstraResult astra_interface_status_bar_init(AstraControl *controls,
+    const AstraStatusBarInfo *info);
 /** Compose a shared settings shell from four existing controls.
  * Place these controls and the application's BODY/ACTIONS children in one UI
  * array, then use ordinary ui_init/layout/render/event APIs with

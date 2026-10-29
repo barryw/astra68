@@ -1,5 +1,6 @@
 #include "control_internal.h"
 #include "text_surface_internal.h"
+#include "display_widgets_internal.h"
 
 #include <astra/bytes.h>
 #include <astra/draw_list.h>
@@ -245,7 +246,7 @@ static int control_valid(const AstraControl *control)
                 ~ASTRA_CONTROL_COLLAPSED) == 0u &&
                control->_private_preview_state == 0u &&
                control->_private_dynamic_state == 0u &&
-               control->_private_style <= ASTRA_CONTAINER_STYLE_TOOLBAR &&
+               control->_private_style <= ASTRA_CONTAINER_STYLE_STATUS_BAR &&
                control->_private_value == 0 &&
                control->_private_minimum_value == 0 &&
                control->_private_maximum_value == 0 &&
@@ -404,6 +405,9 @@ static int control_valid(const AstraControl *control)
                control->_private_maximum_value >= 0 &&
                control->_private_value <= control->_private_maximum_value &&
                control->_private_value_step == 0;
+    if (control->_private_control_kind == ASTRA_CONTROL_LEVEL_METER ||
+        control->_private_control_kind == ASTRA_CONTROL_SPARKLINE)
+        return astra_interface_display_model_valid(control);
     if (control->_private_control_kind == ASTRA_CONTROL_LIST)
         return control->_private_text != NULL &&
                const_collection_model(control)->size ==
@@ -1699,6 +1703,9 @@ static AstraResult measure_control(const AstraControl *control,
         return text_view_measure(control, size);
     if (control->_private_control_kind == ASTRA_CONTROL_GRID_VIEW)
         return grid_view_measure(control, size);
+    if (control->_private_control_kind == ASTRA_CONTROL_LEVEL_METER ||
+        control->_private_control_kind == ASTRA_CONTROL_SPARKLINE)
+        return astra_interface_display_measure(control, size);
     if (control->_private_control_kind == ASTRA_CONTROL_LABEL) {
         const AstraLabelFont *font = &control->_private_label_font;
         if (font->gui != ASTRA_INVALID_HANDLE) {
@@ -2620,6 +2627,8 @@ AstraResult astra_interface_ui_set_state(AstraUIContext *context,
              control->_private_control_kind == ASTRA_CONTROL_DIAL ||
              control->_private_control_kind == ASTRA_CONTROL_STEPPER ||
              control->_private_control_kind == ASTRA_CONTROL_PROGRESS ||
+             control->_private_control_kind == ASTRA_CONTROL_LEVEL_METER ||
+             control->_private_control_kind == ASTRA_CONTROL_SPARKLINE ||
              CHOICE_KINDS(control->_private_control_kind) ||
              TEXT_MODEL_KINDS(control->_private_control_kind))
         allowed = CONTROL_VALUE_STATES;
@@ -2892,6 +2901,20 @@ AstraResult astra_interface_progress_set(AstraUIContext *context,
     control->_private_value = (int32_t)value;
     control->_private_maximum_value = (int32_t)maximum;
     animation_sync(context, index);
+    control_damage(context, index);
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_display_refresh(AstraUIContext *context,
+                                             AstraControl *control)
+{
+    uint32_t index = control_index(context, control);
+
+    if (index == CONTROL_NONE ||
+        (control->_private_control_kind != ASTRA_CONTROL_LEVEL_METER &&
+         control->_private_control_kind != ASTRA_CONTROL_SPARKLINE) ||
+        !astra_interface_display_model_valid(control))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     control_damage(context, index);
     return ASTRA_OK;
 }
@@ -3610,6 +3633,9 @@ static int render_requirements(const AstraUIContext *context,
             if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
                 control->_private_style == ASTRA_CONTAINER_STYLE_TOOLBAR)
                 *commands += 2u;
+            else if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
+                     control->_private_style == ASTRA_CONTAINER_STYLE_STATUS_BAR)
+                *commands += 2u;
             continue;
         }
         if (control->_private_clip.width == 0u ||
@@ -3623,6 +3649,13 @@ static int render_requirements(const AstraUIContext *context,
         }
         if (control->_private_control_kind == ASTRA_CONTROL_GRID_VIEW) {
             if (grid_view_render(control, NULL, commands, payload) != ASTRA_OK)
+                return 0;
+            continue;
+        }
+        if (control->_private_control_kind == ASTRA_CONTROL_LEVEL_METER ||
+            control->_private_control_kind == ASTRA_CONTROL_SPARKLINE) {
+            if (astra_interface_display_render(control, &theme, NULL,
+                                               commands) != ASTRA_OK)
                 return 0;
             continue;
         }
@@ -5862,10 +5895,25 @@ static AstraResult render_one_control(const AstraUIContext *context,
                            frame->width, 1u, color(theme->client_border));
         return ASTRA_OK;
     }
+    if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
+        control->_private_style == ASTRA_CONTAINER_STYLE_STATUS_BAR) {
+        const AstraControlFrame *frame = &control->_private_frame;
+
+        astra_surface_fill(surface, frame->x, frame->y,
+                           frame->width, frame->height,
+                           color(theme->surface_inset));
+        astra_surface_fill(surface, frame->x, frame->y,
+                           frame->width, 1u,
+                           color(theme->client_border));
+        return ASTRA_OK;
+    }
     if (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW)
         return text_view_render(control, surface, NULL, NULL);
     if (control->_private_control_kind == ASTRA_CONTROL_GRID_VIEW)
         return grid_view_render(control, surface, NULL, NULL);
+    if (control->_private_control_kind == ASTRA_CONTROL_LEVEL_METER ||
+        control->_private_control_kind == ASTRA_CONTROL_SPARKLINE)
+        return astra_interface_display_render(control, theme, surface, NULL);
     if (control->_private_control_kind == ASTRA_CONTROL_FIELD)
         return render_field(context, theme, control, surface);
     if (control->_private_control_kind == ASTRA_CONTROL_LABEL)
@@ -5949,7 +5997,8 @@ AstraResult astra_interface_ui_render(AstraUIContext *context,
         if (control->_private_laid_out == 0u ||
             (CONTAINER_KINDS(control->_private_control_kind) &&
              !(control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
-               control->_private_style == ASTRA_CONTAINER_STYLE_TOOLBAR)) ||
+               (control->_private_style == ASTRA_CONTAINER_STYLE_TOOLBAR ||
+                control->_private_style == ASTRA_CONTAINER_STYLE_STATUS_BAR))) ||
             control->_private_clip.width == 0u ||
             control->_private_clip.height == 0u)
             continue;

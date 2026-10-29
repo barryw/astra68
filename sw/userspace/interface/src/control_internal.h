@@ -4,6 +4,7 @@
 #include <astra/control.h>
 
 #define ASTRA_CONTAINER_STYLE_TOOLBAR 1u
+#define ASTRA_CONTAINER_STYLE_STATUS_BAR 2u
 #define ASTRA_BUTTON_STYLE_MASK 0xffu
 #define ASTRA_BUTTON_ICON_SHIFT 8u
 #define ASTRA_BUTTON_ICON(style) ((style) >> ASTRA_BUTTON_ICON_SHIFT)

@@ -47,7 +47,11 @@ enum {
     /** Selectable, read-only multiline text; compose with ScrollView. */
     ASTRA_CONTROL_TEXT_VIEW = 19u,
     /** Read-only fixed cell grid with caller-owned colors and styles. */
-    ASTRA_CONTROL_GRID_VIEW = 20u
+    ASTRA_CONTROL_GRID_VIEW = 20u,
+    /** Hardware-drawn bottom-up channels with held peak markers. */
+    ASTRA_CONTROL_LEVEL_METER = 21u,
+    /** Hardware-drawn per-sample bars. */
+    ASTRA_CONTROL_SPARKLINE = 22u
 };
 
 /** Semantic state owned by an application. */
@@ -725,6 +729,65 @@ typedef struct AstraGridViewInfo {
     uint32_t reserved[4]; /**< Must be zero. */
 } AstraGridViewInfo;
 
+/** Caller-owned channels; values and peaks use the same inclusive maximum. */
+typedef struct AstraLevelMeterModel {
+    uint32_t size;
+    const uint32_t *values;
+    const uint32_t *peaks;
+    uint32_t channels;
+    uint32_t maximum;
+    uint32_t reserved[2];
+} AstraLevelMeterModel;
+
+#define ASTRA_LEVEL_METER_MODEL_INIT \
+    { sizeof(AstraLevelMeterModel), 0, 0, 0u, 0u, { 0u, 0u } }
+
+/** Caller-owned chronological samples; the final sample is the newest. */
+typedef struct AstraSparklineModel {
+    uint32_t size;
+    const uint32_t *samples;
+    uint32_t sample_count;
+    uint32_t maximum;
+    uint32_t warning_threshold; /**< Values at or above turn fault-colored. */
+    uint32_t reserved[2];
+} AstraSparklineModel;
+
+#define ASTRA_SPARKLINE_MODEL_INIT \
+    { sizeof(AstraSparklineModel), 0, 0u, 0u, 0u, { 0u, 0u } }
+
+/** Shared construction data for noninteractive display models. */
+typedef struct AstraDisplayInfo {
+    uint32_t size;
+    uint32_t id;
+    const void *model; /**< Borrowed Level Meter or Sparkline model. */
+    uint32_t state; /**< Disabled, error, or collapsed. */
+    uint32_t reserved[4];
+} AstraDisplayInfo;
+
+#define ASTRA_DISPLAY_INFO_INIT \
+    { sizeof(AstraDisplayInfo), 0u, 0, 0u, { 0u, 0u, 0u, 0u } }
+
+enum {
+    ASTRA_STATUS_BAR_CONTAINER = 0u,
+    ASTRA_STATUS_BAR_LEFT = 1u,
+    ASTRA_STATUS_BAR_RIGHT = 2u,
+    ASTRA_STATUS_BAR_CONTROL_COUNT = 3u
+};
+
+/** Compose one themed strip and two ordinary labels in consecutive slots. */
+typedef struct AstraStatusBarInfo {
+    uint32_t size;
+    uint32_t first_id;
+    const char *left;
+    uint32_t left_length;
+    const char *right;
+    uint32_t right_length;
+    uint32_t reserved[4];
+} AstraStatusBarInfo;
+
+#define ASTRA_STATUS_BAR_INFO_INIT \
+    { sizeof(AstraStatusBarInfo), 0u, 0, 0u, 0, 0u, { 0u, 0u, 0u, 0u } }
+
 /** Empty Grid View construction data. */
 #define ASTRA_GRID_VIEW_INFO_INIT \
     { sizeof(AstraGridViewInfo), 0u, 0, 0u, { 0u, 0u, 0u, 0u } }
@@ -773,6 +836,7 @@ typedef struct AstraControl {
     AstraLabelFont _private_label_font;
     AstraTextViewStyleAt _private_text_style_at;
     void *_private_text_style_context;
+    const void *_private_display_model;
     /** @endcond */
 } AstraControl;
 
@@ -783,7 +847,7 @@ typedef struct AstraControl {
     UINT32_MAX, UINT32_MAX, ASTRA_FLEX_ALIGN_AUTO, 0, 0, \
     0, 0, 0, 0, 0, 0, 0, UINT32_MAX, UINT32_MAX, UINT32_MAX, \
     UINT32_MAX, { 0, 0, 0, 0 }, ASTRA_FLEX_LAYOUT_INIT, UINT32_MAX, 0, \
-    ASTRA_LABEL_FONT_INIT, 0, 0 \
+    ASTRA_LABEL_FONT_INIT, 0, 0, 0 \
 }
 
 /** Caller-owned retained interaction and damage state. */

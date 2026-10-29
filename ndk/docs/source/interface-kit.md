@@ -1,5 +1,23 @@
 # Interface Kit
 
+## Display widgets
+
+Use `astra_interface_level_meter_init` with a borrowed
+`AstraLevelMeterModel` containing one value and held peak per channel. Values
+and peaks share a nonzero maximum, with `value <= peak <= maximum`. Use
+`astra_interface_sparkline_init` with a borrowed `AstraSparklineModel` of
+chronological samples and an optional nonzero warning threshold. Both are
+noninteractive retained controls, so place them using ordinary flex items and
+render the UI context to a hardware draw list. After changing caller-owned
+arrays, call `astra_interface_display_refresh` to validate and damage the
+control. Keep model storage alive for the control's lifetime.
+
+`astra_interface_status_bar_init` fills three consecutive control slots:
+Container, left Label, and right Label. Attach its Container to the desired
+parent; the labels are already attached to it. Update either label with
+`astra_interface_control_set_text`. The bar's surface, text role, and layout
+come from the system theme and shared controls.
+
 `interface.library.9` is the shared implementation for native window controls,
 integer flex layout, shared transient menus, TextSurface presentation, the typed system clipboard, and
 per-document undo histories. Applications call its versioned ELF symbols

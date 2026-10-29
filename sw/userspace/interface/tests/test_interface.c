@@ -19,8 +19,8 @@ void astra_interface_test_paint(AstraSurfaceView *surface,
                                 const AstraAlertInfo *info);
 void astra_interface_test_layout(void);
 
-_Static_assert(sizeof(AstraControl) == (sizeof(void *) == 4u ? 288u : 312u),
-               "AstraControl ABI 8 layout changed; bump the ABI major");
+_Static_assert(sizeof(AstraControl) == (sizeof(void *) == 4u ? 292u : 320u),
+               "Display model slot must be included in Interface ABI 9");
 _Static_assert(sizeof(AstraUIContext) ==
                    (sizeof(void *) == 4u ? 168u : 176u),
                "AstraUIContext ABI 8 layout changed; bump the ABI major");
@@ -1518,6 +1518,97 @@ static void test_progress_control(void)
     info.maximum = UINT32_MAX;
     assert(astra_interface_progress_init(&control, &info) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
+static void test_display_widgets(void)
+{
+    uint32_t values[2] = {62u, 71u};
+    uint32_t peaks[2] = {78u, 88u};
+    uint32_t samples[4] = {30u, 100u, 32u, 34u};
+    AstraLevelMeterModel meter = ASTRA_LEVEL_METER_MODEL_INIT;
+    AstraSparklineModel spark = ASTRA_SPARKLINE_MODEL_INIT;
+    AstraDisplayInfo info = ASTRA_DISPLAY_INFO_INIT;
+    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlFrame damage;
+    AstraSurfaceView surface = render_view(160u, 100u);
+
+    meter.values = values;
+    meter.peaks = peaks;
+    meter.channels = 2u;
+    meter.maximum = 100u;
+    info.id = 1u;
+    info.model = &meter;
+    assert(astra_interface_level_meter_init(&controls[0], &info) == ASTRA_OK);
+    spark.samples = samples;
+    spark.sample_count = 4u;
+    spark.maximum = 100u;
+    spark.warning_threshold = 90u;
+    info.id = 2u;
+    info.model = &spark;
+    assert(astra_interface_sparkline_init(&controls[1], &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls, 2u, 160u, 100u) ==
+           ASTRA_OK);
+    layout.main_gap = 8u;
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(fill_calls == 11u);
+    assert(fill_height[1] == 49u);
+    assert(fill_y[2] == 18);
+    assert(fill_y[8] == controls[1]._private_frame.y);
+    {
+        AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+        assert(fill_colors[8] == astra_surface_rgb565(
+            theme.fault.red, theme.fault.green, theme.fault.blue));
+        assert(fill_colors[10] == astra_surface_rgb565(
+            theme.accent.red, theme.accent.green, theme.accent.blue));
+    }
+    astra_interface_ui_damage_clear(&context);
+    values[0] = 84u;
+    peaks[0] = 84u;
+    assert(astra_interface_display_refresh(&context, &controls[0]) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_damage(&context, &damage) == ASTRA_OK);
+    assert(damage.width != 0u && damage.height != 0u);
+    astra_interface_ui_damage_clear(&context);
+    values[0] = 101u;
+    assert(astra_interface_display_refresh(&context, &controls[0]) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    values[0] = 84u;
+    samples[1] = 101u;
+    assert(astra_interface_display_refresh(&context, &controls[1]) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    samples[1] = 100u;
+}
+
+static void test_status_bar(void)
+{
+    AstraControl controls[ASTRA_STATUS_BAR_CONTROL_COUNT] = {
+        ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT
+    };
+    AstraStatusBarInfo info = ASTRA_STATUS_BAR_INFO_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraSurfaceView surface = render_view(160u, 40u);
+
+    info.first_id = 11u;
+    info.left = "Ready";
+    info.left_length = 5u;
+    info.right = "14 files";
+    info.right_length = 8u;
+    assert(astra_interface_status_bar_init(controls, &info) == ASTRA_OK);
+    assert(controls[0]._private_style == ASTRA_CONTAINER_STYLE_STATUS_BAR);
+    assert(controls[1]._private_parent_id == 11u);
+    assert(controls[2]._private_parent_id == 11u);
+    assert(astra_interface_ui_init(&context, controls,
+        ASTRA_STATUS_BAR_CONTROL_COUNT, 160u, 40u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(fill_calls == 2u);
+    assert(text_calls == 2u);
 }
 
 static void test_segmented_control(void)
@@ -3666,6 +3757,8 @@ int main(void)
     test_slider_control();
     test_dial_control();
     test_progress_control();
+    test_display_widgets();
+    test_status_bar();
     test_segmented_control();
     test_list_control();
     test_scrolled_list_control();

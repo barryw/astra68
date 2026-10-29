@@ -20,6 +20,7 @@ LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
 INTERFACE_TARGET := build/m68k/libraries/interface.library.9
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
+	build/m68k/display_widgets.o \
 	build/m68k/settings_pane.o build/m68k/toolbar.o \
 	build/m68k/icon_tile.o build/m68k/image_view.o build/m68k/inline_edit.o \
 	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o \
@@ -64,12 +65,16 @@ build/m68k/interface_library.o: src/interface_library.c
 	$(CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) \
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
-build/m68k/control.o: src/control.c src/control_internal.h src/text_surface_internal.h
+build/m68k/control.o: src/control.c src/control_internal.h src/text_surface_internal.h src/display_widgets_internal.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) \
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 build/m68k/settings_pane.o: src/settings_pane.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/display_widgets.o: src/display_widgets.c src/display_widgets_internal.h src/control_internal.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
@@ -179,7 +184,7 @@ library-contract: $(INTERFACE_TARGET)
 		awk '/NEEDED/{n++} END{print n+0}')" = 5
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET))
 
-$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/settings_pane.c src/toolbar.c src/menu.c src/text_surface.c \
+$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/display_widgets.c src/settings_pane.c src/toolbar.c src/menu.c src/text_surface.c \
 		src/text_model.c src/scroll.c $(NDK_HOST_UTF8) tests/test_interface.c \
 		tests/test_layout.c src/text_surface_internal.h
 	@mkdir -p $(@D)
@@ -212,7 +217,7 @@ $(COMMAND_HOST_TEST): src/command.c tests/test_command.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/command.c src/control.c src/text_surface.c \
+MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/command.c src/control.c src/display_widgets.c src/text_surface.c \
 	tests/test_menu.c
 $(GRAPHICS_HOST_SURFACE) $(GRAPHICS_HOST_SURFACE_SANITIZE): FORCE
 	$(MAKE) -C $(GRAPHICS) $(patsubst $(GRAPHICS)/%,%,$@)
@@ -254,7 +259,7 @@ sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANI
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_SYSTEM_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
-		src/control.c src/settings_pane.c src/toolbar.c src/menu.c src/text_surface.c src/text_model.c src/scroll.c \
+		src/control.c src/display_widgets.c src/settings_pane.c src/toolbar.c src/menu.c src/text_surface.c src/text_model.c src/scroll.c \
 		$(NDK_HOST_UTF8) \
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize
@@ -300,6 +305,7 @@ analyze:
 		-c src/interface_library.c -o build/analyzer/interface_library.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/control.c -o build/analyzer/control.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) -fanalyzer -c src/display_widgets.c -o build/analyzer/display_widgets.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/settings_pane.c -o build/analyzer/settings_pane.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \

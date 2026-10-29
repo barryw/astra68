@@ -96,7 +96,13 @@ enum {
     GALLERY_TEXT_VIEW_SCROLL,
     GALLERY_TEXT_VIEW,
     GALLERY_TEXT_VIEW_BAR,
-    GALLERY_CONTROL_COUNT = GALLERY_TEXT_VIEW_BAR
+    GALLERY_DISPLAY_LABEL,
+    GALLERY_LEVEL_METER,
+    GALLERY_SPARKLINE,
+    GALLERY_STATUS_BAR,
+    GALLERY_STATUS_LEFT,
+    GALLERY_STATUS_RIGHT,
+    GALLERY_CONTROL_COUNT = GALLERY_STATUS_RIGHT
 };
 
 enum {
@@ -132,6 +138,14 @@ static uint8_t read_only_field_content[4096];
 static _Alignas(4) uint8_t read_only_field_metadata[8192];
 static AstraTextModel read_only_field_model = ASTRA_TEXT_MODEL_INIT;
 static AstraScrollModel gallery_scroll_model = ASTRA_SCROLL_MODEL_INIT;
+static uint32_t gallery_meter_values[2] = {62u, 71u};
+static uint32_t gallery_meter_peaks[2] = {78u, 88u};
+static AstraLevelMeterModel gallery_meter = ASTRA_LEVEL_METER_MODEL_INIT;
+static uint32_t gallery_spark_samples[] = {
+    30u, 34u, 31u, 60u, 72u, 36u, 30u,
+    33u, 29u, 31u, 100u, 32u, 30u, 34u
+};
+static AstraSparklineModel gallery_spark = ASTRA_SPARKLINE_MODEL_INIT;
 static AstraTextModel text_view_model = ASTRA_TEXT_MODEL_INIT;
 static AstraScrollModel text_view_scroll = ASTRA_SCROLL_MODEL_INIT;
 static uint8_t text_view_content[2048];
@@ -822,6 +836,48 @@ static uint32_t build_controls(void)
                            GALLERY_PROGRESS_UNKNOWN_VALUE, "Working", 7u,
                            ASTRA_TEXT_CLIENT_PRIMARY);
     if (status == ASTRA_STATUS_OK)
+        status = add_label(GALLERY_DISPLAY_LABEL - 1u,
+                           GALLERY_DISPLAY_LABEL,
+                           "LEVEL METER / SPARKLINE / STATUS BAR",
+                           sizeof("LEVEL METER / SPARKLINE / STATUS BAR") - 1u,
+                           ASTRA_TEXT_CLIENT_SECONDARY);
+    if (status == ASTRA_STATUS_OK) {
+        AstraDisplayInfo display = ASTRA_DISPLAY_INFO_INIT;
+
+        gallery_meter.values = gallery_meter_values;
+        gallery_meter.peaks = gallery_meter_peaks;
+        gallery_meter.channels = 2u;
+        gallery_meter.maximum = 100u;
+        display.id = GALLERY_LEVEL_METER;
+        display.model = &gallery_meter;
+        if (astra_interface_level_meter_init(
+                GALLERY_CONTROL(GALLERY_LEVEL_METER), &display) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+        gallery_spark.samples = gallery_spark_samples;
+        gallery_spark.sample_count = sizeof(gallery_spark_samples) /
+            sizeof(gallery_spark_samples[0]);
+        gallery_spark.maximum = 100u;
+        gallery_spark.warning_threshold = 90u;
+        display.id = GALLERY_SPARKLINE;
+        display.model = &gallery_spark;
+        if (status == ASTRA_STATUS_OK &&
+            astra_interface_sparkline_init(
+                GALLERY_CONTROL(GALLERY_SPARKLINE), &display) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
+    if (status == ASTRA_STATUS_OK) {
+        AstraStatusBarInfo bar = ASTRA_STATUS_BAR_INFO_INIT;
+
+        bar.first_id = GALLERY_STATUS_BAR;
+        bar.left = "14 samples";
+        bar.left_length = sizeof("14 samples") - 1u;
+        bar.right = "audio.mix L R";
+        bar.right_length = sizeof("audio.mix L R") - 1u;
+        if (astra_interface_status_bar_init(
+                GALLERY_CONTROL(GALLERY_STATUS_BAR), &bar) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
+    if (status == ASTRA_STATUS_OK)
         status = init_field_model(
             &field_model, "/home//projects/astra68",
             sizeof("/home//projects/astra68") - 1u,
@@ -1030,6 +1086,13 @@ static uint32_t build_controls(void)
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_PROGRESS_UNKNOWN, GALLERY_PAGE_PROGRESS, 0u);
     PAGE_ITEM(GALLERY_PROGRESS_UNKNOWN_VALUE, GALLERY_PAGE_PROGRESS,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_DISPLAY_LABEL, GALLERY_PAGE_PROGRESS,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_LEVEL_METER, GALLERY_PAGE_PROGRESS, 0u);
+    PAGE_ITEM(GALLERY_SPARKLINE, GALLERY_PAGE_PROGRESS,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_STATUS_BAR, GALLERY_PAGE_PROGRESS,
               ASTRA_FLEX_BREAK_AFTER);
 
     PAGE_ITEM(GALLERY_TEXT_LABEL, GALLERY_PAGE_TEXT,
