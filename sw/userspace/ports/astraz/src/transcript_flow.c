@@ -1,6 +1,22 @@
 #include "transcript_flow.h"
 #include <astra/utf8.h>
 
+uint32_t astraz_transcript_without_prompt(const char *text, uint32_t length)
+{
+    if (text == NULL) return length;
+    uint32_t end = length;
+    while (end > 0u && (text[end - 1u] == ' ' ||
+        text[end - 1u] == '\t' || text[end - 1u] == '\r' ||
+        text[end - 1u] == '\n')) --end;
+    if (end == 0u || text[end - 1u] != '>') return length;
+    uint32_t start = end - 1u;
+    while (start > 0u && (text[start - 1u] == ' ' ||
+        text[start - 1u] == '\t')) --start;
+    if (start > 0u && text[start - 1u] != '\n' &&
+        text[start - 1u] != '\r') return length;
+    return start;
+}
+
 int astraz_input_copy(const char *text, uint32_t length,
                      uint16_t *buffer, uint32_t capacity)
 {
@@ -52,43 +68,64 @@ int astraz_transcript_flow_flush_due(AstraZTranscriptFlow *flow,
     return 1;
 }
 
-int astraz_transcript_flow_event(AstraZTranscriptFlow *flow,
-                                const AstraZEvent *event)
+void astraz_transcript_flow_reset(AstraZTranscriptFlow *flow)
 {
-    if (!flow || !event) return 0;
-    switch (event->kind) {
-    case ASTRAZ_EVENT_SCREEN_BEGIN:
-        *flow = (AstraZTranscriptFlow){0};
-        break;
-    case ASTRAZ_EVENT_CURSOR:
-        if (event->data.cursor.window != 0) break;
-        if (flow->saw_text && flow->row != 0 &&
-            flow->row != event->data.cursor.row && !flow->last_newline)
-            flow->pending_break = 1u;
-        flow->row = event->data.cursor.row;
-        break;
-    case ASTRAZ_EVENT_SCROLL:
-        if (flow->saw_text && !flow->last_newline)
-            flow->pending_break = 1u;
-        break;
-    case ASTRAZ_EVENT_CHARACTER: {
-        if (event->data.text.window != 0) break;
-        uint32_t character = event->data.text.character;
-        if (character == '\n' || character == '\r') {
-            flow->last_newline = 1u;
-            flow->pending_break = 0u;
-            flow->saw_text = 1u;
-            break;
+    if (flow) *flow = (AstraZTranscriptFlow){.at_line_start = 1u};
+}
+
+void astraz_transcript_flow_new_line(AstraZTranscriptFlow *flow)
+{
+    if (!flow) return;
+    flow->at_line_start = 1u;
+    flow->skip_marker_argument = 0u;
+}
+
+AstraResult astraz_transcript_flow_text(AstraZTranscriptFlow *flow,
+    const uint16_t *characters, uint32_t length, char *output,
+    uint32_t capacity, uint32_t *output_bytes)
+{
+    if (!flow || (!characters && length) || !output || !output_bytes)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraZTranscriptFlow next = *flow;
+    uint32_t used = 0u;
+    for (uint32_t at = 0u; at < length; ++at) {
+        uint32_t scalar = characters[at];
+        if (next.skip_marker_argument) {
+            next.skip_marker_argument = 0u;
+            continue;
         }
-        int insert = flow->pending_break && flow->saw_text &&
-            !flow->last_newline;
-        flow->pending_break = 0u;
-        flow->last_newline = 0u;
-        flow->saw_text = 1u;
-        return insert;
+        if (scalar == 1u || scalar == 2u) {
+            next.skip_marker_argument = 1u;
+            continue;
+        }
+        if (scalar == 9u || scalar == 11u) {
+            uint32_t spaces = scalar == 9u && next.at_line_start ? 3u :
+                              scalar == 11u ? 2u : 1u;
+            if (spaces > capacity - used) return ASTRA_ERROR_BUFFER_TOO_SMALL;
+            for (uint32_t count = 0u; count < spaces; ++count)
+                output[used++] = ' ';
+            next.at_line_start = 0u;
+            continue;
+        }
+        if (scalar == '\n' || scalar == '\r') {
+            if (used == capacity) return ASTRA_ERROR_BUFFER_TOO_SMALL;
+            output[used++] = '\n';
+            next.at_line_start = 1u;
+            continue;
+        }
+        if (scalar < 32u) continue;
+        char bytes[4];
+        uint32_t count = astra_utf8_encode(scalar, bytes);
+        if (count == 0u) {
+            bytes[0] = '?';
+            count = 1u;
+        }
+        if (count > capacity - used) return ASTRA_ERROR_BUFFER_TOO_SMALL;
+        for (uint32_t byte = 0u; byte < count; ++byte)
+            output[used++] = bytes[byte];
+        next.at_line_start = 0u;
     }
-    default:
-        break;
-    }
-    return 0;
+    *flow = next;
+    *output_bytes = used;
+    return ASTRA_OK;
 }

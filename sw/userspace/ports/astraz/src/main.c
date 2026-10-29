@@ -1,6 +1,7 @@
 #include <astraz/engine.h>
 #include "audio.h"
 #include "canvas.h"
+#include "line_input.h"
 #include "picture.h"
 #include "screen_grid.h"
 #include "transcript_flow.h"
@@ -40,10 +41,13 @@ static AstraDisplay display = ASTRA_DISPLAY_INIT;
 static AstraSurface content = ASTRA_SURFACE_INIT;
 static AstraZCanvas canvas;
 static uint8_t v6_active;
+static uint8_t more_visible;
+static uint32_t more_marker_start;
 static AstraSharedSurface surface;
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraControl controls[CONTROL_COUNT];
 static AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
+static AstraFlexLayout root_layout = ASTRA_FLEX_LAYOUT_INIT;
 static AstraTextModel transcript_model = ASTRA_TEXT_MODEL_INIT;
 static AstraTextModel status_model = ASTRA_TEXT_MODEL_INIT;
 static AstraTextModel prompt_model = ASTRA_TEXT_MODEL_INIT;
@@ -80,16 +84,68 @@ static uint16_t pending_key;
 static AstraHandle gui;
 static const char *story_path;
 static AstraZAudio *audio;
+static uint16_t client_width = WIDTH, client_height = HEIGHT;
+
+enum { ACTION_ABOUT = 100u, ACTION_MAXIMIZE, ACTION_DISTRACTION_FREE };
 
 #define CONTROL(id) (&controls[(id) - 1u])
 
 static const AstraMenuItem menu_items[] = {
-    {"Story", 5u, 0u}, {"Help", 4u, 0u},
+    {"Story", 5u, 0u}, {"View", 4u, 0u}, {"Help", 4u, 0u},
     {"Restart", 7u, 1u << ASTRA_MENU_PARENT_SHIFT},
     {"Undo", 4u, 1u << ASTRA_MENU_PARENT_SHIFT},
     {"Quit", 4u, 1u << ASTRA_MENU_PARENT_SHIFT},
-    {"About AstraZ", 12u, 2u << ASTRA_MENU_PARENT_SHIFT},
+    {"Maximize", 8u, 2u << ASTRA_MENU_PARENT_SHIFT},
+    {"Distraction Free", 16u, 2u << ASTRA_MENU_PARENT_SHIFT},
+    {"About AstraZ", 12u, 3u << ASTRA_MENU_PARENT_SHIFT},
 };
+
+static AstraResult canvas_fit_layout(void)
+{
+    AstraControlFrame body, clip;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    uint32_t width, height;
+    AstraResult result = astra_interface_ui_geometry(&ui, BODY - 1u,
+        &body, &clip);
+    if (result != ASTRA_OK) return result;
+    uint32_t available_width = body.width > 24u ? body.width - 24u : 1u;
+    uint32_t available_height = body.height > 24u ? body.height - 24u : 1u;
+    if (!astraz_canvas_view_fit(available_width, available_height,
+            &width, &height)) return ASTRA_ERROR_INVALID_ARGUMENT;
+    item.parent_id = BODY;
+    item.basis = height;
+    item.minimum_width = item.maximum_width = width;
+    item.minimum_height = item.maximum_height = height;
+    item.align_self = ASTRA_FLEX_ALIGN_CENTER;
+    result = astra_interface_control_set_flex(CONTROL(CANVAS), &item);
+    return result == ASTRA_OK ?
+        astra_interface_ui_layout(&ui, &root_layout) : result;
+}
+
+static AstraResult canvas_relax_layout(void)
+{
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = BODY;
+    item.align_self = ASTRA_FLEX_ALIGN_CENTER;
+    return astra_interface_control_set_flex(CONTROL(CANVAS), &item);
+}
+
+static AstraResult transcript_wrap_layout(void)
+{
+    AstraControlFrame frame, clip;
+    AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
+    AstraResult result = astra_interface_ui_geometry(&ui, SCROLL - 1u,
+        &frame, &clip);
+    if (result != ASTRA_OK) return result;
+    result = astra_interface_text_view_set_wrap_width(&ui,
+        CONTROL(TRANSCRIPT), frame.width ? frame.width : 1u);
+    if (result != ASTRA_OK) return result;
+    result = astra_scroll_get_state(&scroll, &state);
+    if (result != ASTRA_OK) return result;
+    result = astra_scroll_set_offset(&scroll, 0u, state.maximum_y);
+    return result == ASTRA_OK ?
+        astra_interface_ui_layout(&ui, &root_layout) : result;
+}
 
 static AstraResult refresh_status(void)
 {
@@ -144,7 +200,7 @@ static void transcript_append(const char *bytes, uint32_t length)
 static AstraResult present(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
-    const AstraRectI32 full = {0, 0, WIDTH, HEIGHT};
+    const AstraRectI32 full = {0, 0, client_width, client_height};
     AstraDrawList list = ASTRA_DRAW_LIST_INIT;
     if (upper_dirty && ui_ready) {
         upper_model.rows = screen_grid.rows;
@@ -156,7 +212,8 @@ static AstraResult present(void)
     }
     if (refresh_status() != ASTRA_OK ||
         !astra_draw_list_view_init(&surface.view, surface.view.pixels,
-            surface.view.byte_size, WIDTH, HEIGHT)) return ASTRA_ERROR_IO;
+            surface.view.byte_size, client_width, client_height))
+        return ASTRA_ERROR_IO;
     astra_surface_clear(&surface.view, astra_surface_rgb565(
         theme.client.red, theme.client.green, theme.client.blue));
     const char *step = "UI render";
@@ -189,6 +246,15 @@ static AstraResult present(void)
             image.image = &canvas.surface;
             step = "append canvas";
             result = astra_interface_image_view_render(&list, &image);
+        }
+        if (result == ASTRA_OK && more_visible) {
+            step = "append More prompt";
+            AstraRectI32 canvas_frame = {frame.x, frame.y,
+                frame.width, frame.height};
+            AstraRectI32 canvas_clip = {clip.x, clip.y,
+                clip.width, clip.height};
+            result = astraz_canvas_more_overlay(&list, &canvas_frame,
+                                                &canvas_clip);
         }
     }
     if (result == ASTRA_OK) {
@@ -228,7 +294,9 @@ static AstraResult flush_transcript(void)
             transcript_rebuild) != ASTRA_OK ||
         astra_interface_text_view_refresh(&ui, CONTROL(TRANSCRIPT)) != ASTRA_OK ||
         astra_scroll_get_state(&scroll, &state) != ASTRA_OK ||
-        astra_scroll_set_offset(&scroll, 0u, state.maximum_y) != ASTRA_OK)
+        astra_scroll_set_offset(&scroll, 0u, state.maximum_y) != ASTRA_OK ||
+        /* Offset changes reposition the content child during layout. */
+        astra_interface_ui_layout(&ui, &root_layout) != ASTRA_OK)
         return ASTRA_ERROR_IO;
     transcript_dirty = 0u;
     transcript_rebuild = 0u;
@@ -257,7 +325,6 @@ static AstraResult build_ui(void)
     AstraGridViewInfo upper = ASTRA_GRID_VIEW_INFO_INIT;
     AstraFieldInfo field = ASTRA_FIELD_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
-    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
     AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
     AstraTextModelInfo transcript_info = ASTRA_TEXT_MODEL_INFO_INIT;
     AstraTextModelInfo status_info = ASTRA_TEXT_MODEL_INFO_INIT;
@@ -359,7 +426,7 @@ static AstraResult build_ui(void)
         return ASTRA_ERROR_IO;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     item.parent_id = SCROLL;
-    item.minimum_width = WIDTH - 24u;
+    item.minimum_width = 1u;
     if (astra_interface_control_set_flex(CONTROL(CONTENT), &item) != ASTRA_OK)
         return ASTRA_ERROR_IO;
     text.id = TRANSCRIPT;
@@ -369,7 +436,7 @@ static AstraResult build_ui(void)
         return ASTRA_ERROR_IO;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     item.parent_id = CONTENT;
-    item.minimum_width = WIDTH - 24u;
+    item.minimum_width = 1u;
     if (astra_interface_control_set_flex(CONTROL(TRANSCRIPT), &item) != ASTRA_OK)
         return ASTRA_ERROR_IO;
     prompt.id = PROMPT;
@@ -402,19 +469,21 @@ static AstraResult build_ui(void)
     item.grow = 1u;
     if (astra_interface_control_set_flex(CONTROL(INPUT), &item) != ASTRA_OK)
         return ASTRA_ERROR_IO;
-    layout.direction = ASTRA_FLEX_COLUMN;
-    layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
+    root_layout.direction = ASTRA_FLEX_COLUMN;
+    root_layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
     AstraResult result = astra_interface_ui_init(&ui, controls,
         CONTROL_COUNT, WIDTH, HEIGHT);
     if (result != ASTRA_OK) {
         (void)astra_log_failure("AstraZ UI init", (uint32_t)result);
         return result;
     }
-    result = astra_interface_ui_layout(&ui, &layout);
+    result = astra_interface_ui_layout(&ui, &root_layout);
     if (result != ASTRA_OK) {
         (void)astra_log_failure("AstraZ UI layout", (uint32_t)result);
         return result;
     }
+    result = transcript_wrap_layout();
+    if (result != ASTRA_OK) return result;
     result = astra_interface_text_view_set_inverted(
         &ui, CONTROL(STATUS), 1u);
     if (result != ASTRA_OK) return result;
@@ -430,7 +499,23 @@ static void action(uint32_t id)
     }
     else if (id == UNDO && playing) pending_key = ASTRAZ_HOTKEY_UNDO;
     else if (id == QUIT) running = 0u;
-    else if (id == 6u) {
+    else if (id == ACTION_MAXIMIZE || id == ACTION_DISTRACTION_FREE) {
+        AstraWindowInfo info = ASTRA_WINDOW_INFO_INIT;
+        AstraResult result = astra_window_get_info(&window, &info);
+        if (result == ASTRA_OK) {
+            if (id == ACTION_MAXIMIZE)
+                result = info.state == ASTRA_WINDOW_STATE_MAXIMIZED ?
+                    astra_window_restore(&window) :
+                    astra_window_maximize(&window);
+            else
+                result = info.state == ASTRA_WINDOW_STATE_FULLSCREEN ?
+                    astra_window_restore(&window) :
+                    astra_window_fullscreen(&window);
+        }
+        if (result != ASTRA_OK)
+            (void)astra_log_failure("AstraZ window mode", (uint32_t)(-result));
+    }
+    else if (id == ACTION_ABOUT) {
         AstraAlertInfo alert = ASTRA_ALERT_INFO_INIT;
         alert.kind = ASTRA_ALERT_INFORMATION;
         alert.title = "About AstraZ";
@@ -470,17 +555,71 @@ static int next_event(AstraWindowEvent *event, AstraUIAction *ui_action,
         break;
     }
     if (event->type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) running = 0u;
+    if (event->type == ASTRA_WINDOW_EVENT_STATE &&
+        astra_interface_ui_set_state(&ui, CONTROL(TOOLBAR),
+            event->data.state.state == ASTRA_WINDOW_STATE_FULLSCREEN ?
+                ASTRA_CONTROL_COLLAPSED : 0u) != ASTRA_OK) return -1;
     if (event->type == ASTRA_WINDOW_EVENT_FONT_CHANGED &&
         astra_fonts_use_system(gui, event) != ASTRA_OK) return -1;
     if (event->type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
-        event->data.menu_result.request == ASTRA_WINDOW_MENU_BAR_REQUEST &&
-        event->data.menu_result.selection >= 3u &&
-        event->data.menu_result.selection <= 6u)
-        action(event->data.menu_result.selection == 6u ? 6u :
-               event->data.menu_result.selection - 1u);
+        event->data.menu_result.request == ASTRA_WINDOW_MENU_BAR_REQUEST) {
+        switch (event->data.menu_result.selection) {
+        case 3u: action(RESTART); break;
+        case 4u: action(UNDO); break;
+        case 5u: action(QUIT); break;
+        case 6u: action(ACTION_MAXIMIZE); break;
+        case 7u: action(ACTION_DISTRACTION_FREE); break;
+        case 8u: action(ACTION_ABOUT); break;
+        default: break;
+        }
+    }
+    if (event->type == ASTRA_WINDOW_EVENT_KEY &&
+        (event->flags & ASTRA_WINDOW_EVENT_DOWN) != 0u &&
+        event->data.key.usage == 0x44u) {
+        action(ACTION_DISTRACTION_FREE); /* F11 restores even without menu chrome. */
+    }
+    if (event->type == ASTRA_WINDOW_EVENT_RESIZE &&
+        event->data.resize.width != 0u &&
+        event->data.resize.height != 0u) {
+        (void)astra_log("AstraZ resize event");
+        AstraSurfaceInfo target = ASTRA_SURFACE_INFO_INIT;
+        AstraResult result = astra_surface_close(&content);
+        if (result == ASTRA_OK)
+            result = astra_window_surface(&window, &content);
+        if (result == ASTRA_OK)
+            result = astra_surface_get_info(&content, &target);
+        if (result != ASTRA_OK || target.width == 0u ||
+            target.height == 0u) {
+            (void)astra_log_failure("AstraZ resize surface",
+                (uint32_t)(-result));
+            return -1;
+        }
+        client_width = (uint16_t)target.width;
+        client_height = (uint16_t)target.height;
+        event->data.resize.width = client_width;
+        event->data.resize.height = client_height;
+        if (v6_active && canvas_relax_layout() != ASTRA_OK) {
+            (void)astra_log("AstraZ resize relax failed");
+            return -1;
+        }
+    }
     *ui_action = (AstraUIAction)ASTRA_UI_ACTION_INIT;
-    if (astra_interface_ui_handle_event(&ui, event, ui_action) != ASTRA_OK)
+    if (astra_interface_ui_handle_event(&ui, event, ui_action) != ASTRA_OK) {
+        if (event->type == ASTRA_WINDOW_EVENT_RESIZE)
+            (void)astra_log("AstraZ resize UI event failed");
         return -1;
+    }
+    if (event->type == ASTRA_WINDOW_EVENT_RESIZE) {
+        if (v6_active ? canvas_fit_layout() != ASTRA_OK :
+            transcript_wrap_layout() != ASTRA_OK) {
+            (void)astra_log("AstraZ resize layout failed");
+            return -1;
+        }
+    } else if (event->type == ASTRA_WINDOW_EVENT_FONT_CHANGED &&
+               !v6_active &&
+               (astra_interface_text_view_refresh(&ui,
+                   CONTROL(TRANSCRIPT)) != ASTRA_OK ||
+                transcript_wrap_layout() != ASTRA_OK)) return -1;
     if (prompt_visible &&
         ((event->flags & ASTRA_WINDOW_EVENT_LOSS) != 0u ||
          event->type == ASTRA_WINDOW_EVENT_STATE_RESET ||
@@ -492,8 +631,11 @@ static int next_event(AstraWindowEvent *event, AstraUIAction *ui_action,
         ui_action->control_id >= RESTART && ui_action->control_id <= QUIT)
         action(ui_action->control_id);
     AstraControlFrame damage;
-    if (astra_interface_ui_damage(&ui, &damage) == ASTRA_OK &&
+    if ((event->type == ASTRA_WINDOW_EVENT_RESIZE ||
+         astra_interface_ui_damage(&ui, &damage) == ASTRA_OK) &&
         present() != ASTRA_OK) return -1;
+    if (event->type == ASTRA_WINDOW_EVENT_RESIZE)
+        (void)astra_log("AstraZ resize presented");
     return 1;
 }
 
@@ -514,6 +656,19 @@ static int host_event(void *unused, const AstraZEvent *event)
         transcript_append("]\n", 2u);
         return -1;
     }
+    if (event->kind == ASTRAZ_EVENT_MORE) {
+        if (!more_visible) {
+            more_visible = 1u;
+            if (!v6_active) {
+                static const char marker[] = "\n[More — press a key]\n";
+                transcript_append(marker, sizeof(marker) - 1u);
+                more_marker_start = transcript_length -
+                    (sizeof(marker) - 1u);
+            }
+        }
+        return v6_active ? (present() == ASTRA_OK ? 0 : -1) :
+            (flush_transcript() == ASTRA_OK ? 0 : -1);
+    }
     if (v6_active && !astraz_canvas_event(&canvas, event)) {
         const char *reason = SDL_GetError();
         if (event->kind == ASTRAZ_EVENT_PICTURE) {
@@ -532,6 +687,7 @@ static int host_event(void *unused, const AstraZEvent *event)
         if (event->kind == ASTRAZ_EVENT_SCROLL) return 0;
     }
     if (event->kind == ASTRAZ_EVENT_SCREEN_BEGIN) {
+        astraz_transcript_flow_reset(&transcript_flow);
         if (astra_interface_ui_set_state(&ui, CONTROL(CANVAS),
             v6_active ? 0u : ASTRA_CONTROL_COLLAPSED) != ASTRA_OK)
             return -1;
@@ -543,6 +699,9 @@ static int host_event(void *unused, const AstraZEvent *event)
             ASTRA_CONTROL_COLLAPSED) != ASTRA_OK) return -1;
     }
     if (v6_active) {
+        if (event->kind == ASTRAZ_EVENT_TRANSCRIPT_TEXT ||
+            event->kind == ASTRAZ_EVENT_TRANSCRIPT_NEWLINE)
+            return 0;
         if (event->kind == ASTRAZ_EVENT_SCREEN_END)
             return present() == ASTRA_OK ? 0 : -1;
         if (event->kind == ASTRAZ_EVENT_REPAINT)
@@ -553,6 +712,7 @@ static int host_event(void *unused, const AstraZEvent *event)
             event->kind == ASTRAZ_EVENT_SCROLL ||
             event->kind == ASTRAZ_EVENT_PICTURE ||
             event->kind == ASTRAZ_EVENT_STYLE ||
+            event->kind == ASTRAZ_EVENT_FONT ||
             event->kind == ASTRAZ_EVENT_COLOUR)
             return 0;
     }
@@ -592,24 +752,24 @@ static int host_event(void *unused, const AstraZEvent *event)
         transcript_length = 0u;
         transcript_dirty = 1u;
         transcript_rebuild = 1u;
+        astraz_transcript_flow_reset(&transcript_flow);
     }
-    int line_break = astraz_transcript_flow_event(&transcript_flow, event);
-    if (event->kind == ASTRAZ_EVENT_CHARACTER) {
-        char bytes[4];
-        uint32_t scalar = event->data.text.character;
-        if (scalar == 0u || (scalar < 32u && scalar != '\n' &&
-            scalar != '\r' && scalar != '\t')) return 0;
-        uint32_t length = astra_utf8_encode(
-            scalar == '\r' ? '\n' : scalar, bytes);
-        if (line_break) transcript_append("\n", 1u);
+    if (event->kind == ASTRAZ_EVENT_TRANSCRIPT_TEXT) {
+        char bytes[4096];
+        uint32_t length = 0u;
+        if (astraz_transcript_flow_text(&transcript_flow,
+            event->data.transcript.characters,
+            event->data.transcript.length, bytes, sizeof(bytes),
+            &length) != ASTRA_OK) return -1;
         if (length != 0u) transcript_append(bytes, length);
-        if ((scalar == '\n' || scalar == '\r') &&
-            astraz_transcript_flow_flush_due(&transcript_flow,
-                astra_clock_monotonic()))
+    } else if (event->kind == ASTRAZ_EVENT_TRANSCRIPT_NEWLINE) {
+        transcript_append("\n", 1u);
+        astraz_transcript_flow_new_line(&transcript_flow);
+        if (astraz_transcript_flow_flush_due(&transcript_flow,
+            astra_clock_monotonic()))
             return flush_transcript() == ASTRA_OK ? 0 : -1;
-    } else if (event->kind == ASTRAZ_EVENT_MORE) {
-        transcript_append("\n[More — press a key]\n", 24u);
-        return flush_transcript() == ASTRA_OK ? 0 : -1;
+    } else if (event->kind == ASTRAZ_EVENT_CHARACTER) {
+        return 0;
     } else if (event->kind == ASTRAZ_EVENT_WARNING) {
         transcript_append("\n[Warning] ", 11u);
         transcript_append(event->data.warning.text,
@@ -641,6 +801,35 @@ static int host_picture_info(void *unused, int number,
     return astraz_picture_size(resource, height, width);
 }
 
+static int host_font_metrics(void *unused, int font,
+    int *height, int *width)
+{
+    (void)unused;
+    if (!v6_active || height == NULL || width == NULL ||
+        (font != 0 && font != ASTRAZ_FONT_TEXT &&
+         font != ASTRAZ_FONT_FIXED && font != ASTRAZ_FONT_GRAPHICS))
+        return 0;
+    *height = *width = 8;
+    return 1;
+}
+
+static uint16_t finish_key(uint16_t key)
+{
+    if (more_visible) {
+        more_visible = 0u;
+        if (!v6_active) {
+            transcript_length = more_marker_start;
+            transcript_dirty = 1u;
+            transcript_rebuild = 1u;
+        }
+        if ((v6_active ? present() : flush_transcript()) != ASTRA_OK) {
+            running = 0u;
+            return 0u;
+        }
+    }
+    return key;
+}
+
 static uint16_t host_read_key(void *unused, uint32_t timeout, int cursor)
 {
     (void)unused; (void)cursor;
@@ -651,44 +840,173 @@ static uint16_t host_read_key(void *unused, uint32_t timeout, int cursor)
         AstraWindowEvent event = {0};
         AstraUIAction ui_action = ASTRA_UI_ACTION_INIT;
         int received = next_event(&event, &ui_action, deadline);
-        if (received == 0) return ASTRAZ_KEY_TIMEOUT;
+        if (received == 0) return finish_key(ASTRAZ_KEY_TIMEOUT);
         if (received < 0) { running = 0u; break; }
         if (pending_key != 0u) {
             uint16_t key = pending_key;
             pending_key = 0u;
-            return key;
+            return finish_key(key);
         }
         if (event.type == ASTRA_WINDOW_EVENT_TEXT &&
             event.data.text.codepoint >= 32u &&
             event.data.text.codepoint <= 0xffffu)
-            return (uint16_t)event.data.text.codepoint;
+            return finish_key((uint16_t)event.data.text.codepoint);
         if (event.type == ASTRA_WINDOW_EVENT_KEY &&
             (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u) {
             switch (event.data.key.usage) {
-            case 0x28u: return ASTRAZ_KEY_RETURN;
-            case 0x29u: return ASTRAZ_KEY_ESCAPE;
-            case 0x2au: return ASTRAZ_KEY_BACKSPACE;
-            case 0x4fu: return ASTRAZ_KEY_RIGHT;
-            case 0x50u: return ASTRAZ_KEY_LEFT;
-            case 0x51u: return ASTRAZ_KEY_DOWN;
-            case 0x52u: return ASTRAZ_KEY_UP;
+            case 0x28u: return finish_key(ASTRAZ_KEY_RETURN);
+            case 0x29u: return finish_key(ASTRAZ_KEY_ESCAPE);
+            case 0x2au: return finish_key(ASTRAZ_KEY_BACKSPACE);
+            case 0x4fu: return finish_key(ASTRAZ_KEY_RIGHT);
+            case 0x50u: return finish_key(ASTRAZ_KEY_LEFT);
+            case 0x51u: return finish_key(ASTRAZ_KEY_DOWN);
+            case 0x52u: return finish_key(ASTRAZ_KEY_UP);
             default: break;
             }
         }
     }
+    more_visible = 0u;
+    return 0u;
+}
+
+static int reset_input_model(const uint16_t *initial, uint32_t maximum)
+{
+    char text[1024];
+    uint32_t bytes = 0u;
+    if (initial != NULL) {
+        for (uint32_t at = 0u; at + 1u < maximum && initial[at]; ++at) {
+            if (bytes + 4u >= sizeof(text)) return 0;
+            bytes += astra_utf8_encode(initial[at], text + bytes);
+        }
+    }
+    astra_text_model_dispose(&input_model);
+    input_model = (AstraTextModel)ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo info = ASTRA_TEXT_MODEL_INFO_INIT;
+    info.text = bytes ? text : NULL;
+    info.text_bytes = bytes;
+    info.content_arena = input_content;
+    info.content_arena_bytes = sizeof(input_content);
+    info.metadata_arena = input_metadata;
+    info.metadata_arena_bytes = sizeof(input_metadata);
+    info.selection.anchor = info.selection.focus = bytes;
+    return astra_text_model_init(&input_model, &info) == ASTRA_OK &&
+        astra_interface_field_refresh(&ui, CONTROL(INPUT)) == ASTRA_OK;
+}
+
+static int input_snapshot(char *text, uint32_t capacity,
+    uint32_t *length, uint32_t *focus)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    if (astra_text_model_get_state(&input_model, &state) != ASTRA_OK ||
+        state.text_bytes >= capacity ||
+        astra_text_model_copy(&input_model, 0u, state.text_bytes, text,
+            capacity, length) != ASTRA_OK) return 0;
+    *focus = state.selection.focus;
+    return 1;
+}
+
+static uint16_t v6_read_line(uint16_t *buffer, uint32_t maximum,
+    uint32_t timeout, uint32_t width, int continued)
+{
+    char text[4096];
+    uint32_t length = 0u, focus = 0u;
+    uint64_t deadline = timeout == 0u ? ASTRA_DEADLINE_FOREVER :
+        astra_clock_monotonic() + (uint64_t)timeout * UINT64_C(100000000);
+    if ((!continued && !reset_input_model(buffer, maximum)) ||
+        !astraz_canvas_input_begin(&canvas, width) ||
+        !input_snapshot(text, sizeof(text), &length, &focus) ||
+        !astraz_canvas_input_render(&canvas, text, length, focus, 1) ||
+        present() != ASTRA_OK) {
+        running = 0u;
+        return 0u;
+    }
+    while (running) {
+        AstraWindowEvent event = {0};
+        AstraUIAction ui_action = ASTRA_UI_ACTION_INIT;
+        int received = next_event(&event, &ui_action, deadline);
+        if (received == 0) {
+            if (!input_snapshot(text, sizeof(text), &length, &focus) ||
+                !astraz_input_copy(text, length, buffer, maximum)) {
+                running = 0u;
+                break;
+            }
+            return ASTRAZ_KEY_TIMEOUT;
+        }
+        if (received < 0) { running = 0u; break; }
+        if (pending_key != 0u) {
+            uint16_t key = pending_key;
+            pending_key = 0u;
+            astraz_canvas_input_end(&canvas);
+            return key;
+        }
+        uint32_t edit = 0u, scalar = 0u;
+        if (event.type == ASTRA_WINDOW_EVENT_TEXT &&
+            event.data.text.codepoint >= 32u) {
+            edit = ASTRAZ_EDIT_INSERT;
+            scalar = event.data.text.codepoint;
+        } else if (event.type == ASTRA_WINDOW_EVENT_KEY &&
+                   (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u) {
+            switch (event.data.key.usage) {
+            case 0x28u: /* Return */
+                if (!input_snapshot(text, sizeof(text), &length, &focus) ||
+                    !astraz_input_copy(text, length, buffer, maximum)) {
+                    AstraAlertInfo alert = ASTRA_ALERT_INFO_INIT;
+                    alert.kind = ASTRA_ALERT_WARNING;
+                    alert.title = "Input too long";
+                    alert.title_length = 14u;
+                    alert.message = "This story accepts a shorter command.";
+                    alert.message_length = 37u;
+                    alert.button = "Edit command";
+                    alert.button_length = 12u;
+                    (void)astra_interface_show_alert(gui, &alert);
+                    continue;
+                }
+                if (!astraz_canvas_input_render(&canvas, text, length,
+                        focus, 0) || present() != ASTRA_OK) {
+                    running = 0u;
+                    break;
+                }
+                astraz_canvas_input_end(&canvas);
+                return ASTRAZ_KEY_RETURN;
+            case 0x2au: edit = ASTRAZ_EDIT_BACKSPACE; break;
+            case 0x4cu: edit = ASTRAZ_EDIT_DELETE; break;
+            case 0x50u: edit = ASTRAZ_EDIT_LEFT; break;
+            case 0x4fu: edit = ASTRAZ_EDIT_RIGHT; break;
+            case 0x4au: edit = ASTRAZ_EDIT_HOME; break;
+            case 0x4du: edit = ASTRAZ_EDIT_END; break;
+            default: break;
+            }
+        }
+        if (edit == 0u) continue;
+        AstraResult result = astraz_line_input_edit(&input_model, edit,
+            scalar, maximum);
+        if (result == ASTRA_ERROR_BUFFER_TOO_SMALL) continue;
+        if (result != ASTRA_OK ||
+            !input_snapshot(text, sizeof(text), &length, &focus) ||
+            !astraz_canvas_input_render(&canvas, text, length, focus, 1) ||
+            present() != ASTRA_OK) {
+            running = 0u;
+            break;
+        }
+    }
+    astraz_canvas_input_end(&canvas);
     return 0u;
 }
 
 static uint16_t host_read_line(void *unused, uint16_t *buffer, uint32_t max,
                                uint32_t timeout, uint32_t width, int continued)
 {
-    (void)unused; (void)width; (void)continued;
+    (void)unused;
+    if (v6_active)
+        return v6_read_line(buffer, max, timeout, width, continued);
+    (void)width; (void)continued;
     uint64_t deadline = timeout == 0u ? ASTRA_DEADLINE_FOREVER :
         astra_clock_monotonic() + (uint64_t)timeout * UINT64_C(100000000);
     if (!prompt_visible) {
-        if (transcript_length != 0u &&
-            transcript[transcript_length - 1u] == '>') {
-            --transcript_length;
+        uint32_t without_prompt = astraz_transcript_without_prompt(
+            transcript, transcript_length);
+        if (without_prompt != transcript_length) {
+            transcript_length = without_prompt;
             transcript_dirty = 1u;
             transcript_rebuild = 1u;
         }
@@ -750,6 +1068,7 @@ static uint16_t host_read_line(void *unused, uint16_t *buffer, uint32_t max,
             transcript_append("> ", 2u);
             transcript_append(text, length);
             transcript_append("\n", 1u);
+            astraz_transcript_flow_new_line(&transcript_flow);
             astra_text_model_dispose(&input_model);
             input_model = (AstraTextModel)ASTRA_TEXT_MODEL_INIT;
             AstraTextModelInfo info = ASTRA_TEXT_MODEL_INFO_INIT;
@@ -815,6 +1134,25 @@ static int host_choose_file(void *unused, int purpose, const char *suggested,
 static int play_story(const AstraZStory *story)
 {
     (void)astra_log("AstraZ play story begin");
+    more_visible = 0u;
+    more_marker_start = 0u;
+    if (story->version == 6u) {
+        AstraFontTextMetrics metric = ASTRA_FONT_TEXT_METRICS_INIT;
+        const char *const faces[] = {ASTRAZ_PIXEL_FACE_REGULAR,
+            ASTRAZ_PIXEL_FACE_BOLD, ASTRAZ_PIXEL_FACE_ITALIC,
+            ASTRAZ_PIXEL_FACE_BOLD_ITALIC, ASTRAZ_GRAPHICS_FACE};
+        for (uint32_t at = 0u; at < sizeof(faces) / sizeof(faces[0]); ++at) {
+            const char *face = faces[at];
+            AstraResult font = astra_fonts_text_measure(gui, face,
+                (uint32_t)strlen(face), 8u, "M", 1u, 8u, &metric);
+            if (font == ASTRA_OK && metric.width == 8u &&
+                metric.height == 8u) continue;
+            (void)astra_log("AstraZ V6 8x8 system font unavailable");
+            const char *message = "\n[8x8 system font unavailable for this story]\n";
+            transcript_append(message, (uint32_t)strlen(message));
+            return ASTRAZ_IO;
+        }
+    }
     audio = astraz_audio_open();
     int canvas_open = story->version == 6u &&
         astraz_canvas_open(&canvas, &display);
@@ -832,13 +1170,14 @@ static int play_story(const AstraZStory *story)
         return ASTRAZ_IO;
     }
     AstraZHost host = {.width = story->version == 6u ?
-            ASTRAZ_CANVAS_WIDTH : 80u,
-        .height = story->version == 6u ? ASTRAZ_CANVAS_HEIGHT : 24u,
+            ASTRAZ_STORY_WIDTH : 80u,
+        .height = story->version == 6u ? ASTRAZ_STORY_HEIGHT : 24u,
         .cell_width = story->version == 6u ? 8u : 1u,
         .cell_height = story->version == 6u ? 8u : 1u,
         .event = host_event, .read_key = host_read_key,
         .read_line = host_read_line, .choose_file = host_choose_file,
         .tick = host_tick, .sound_finished = host_sound_finished,
+        .font_metrics = host_font_metrics,
         .picture_info = host_picture_info,
         .capabilities = (audio ? ASTRAZ_CAP_SOUND : 0u) |
             (v6_active ? ASTRAZ_CAP_PICTURES : 0u)};
@@ -848,8 +1187,13 @@ static int play_story(const AstraZStory *story)
     playing = 1u;
     if (astra_interface_ui_set_state(&ui, CONTROL(CANVAS),
             v6_active ? 0u : ASTRA_CONTROL_COLLAPSED) != ASTRA_OK ||
+        astra_interface_ui_set_state(&ui, CONTROL(SCROLL),
+            v6_active ? ASTRA_CONTROL_COLLAPSED : 0u) != ASTRA_OK ||
         astra_interface_ui_set_state(&ui, CONTROL(RESTART), 0u) != ASTRA_OK ||
         astra_interface_ui_set_state(&ui, CONTROL(UNDO), 0u) != ASTRA_OK ||
+        (v6_active && canvas_relax_layout() != ASTRA_OK) ||
+        astra_interface_ui_layout(&ui, &root_layout) != ASTRA_OK ||
+        (v6_active && canvas_fit_layout() != ASTRA_OK) ||
         present() != ASTRA_OK) {
         playing = 0u;
         (void)astra_log("AstraZ story UI activation failed");
@@ -857,18 +1201,27 @@ static int play_story(const AstraZStory *story)
         audio = NULL;
         if (v6_active) astraz_canvas_close(&canvas);
         v6_active = 0u;
+        (void)astra_interface_ui_set_state(&ui, CONTROL(CANVAS),
+            ASTRA_CONTROL_COLLAPSED);
+        (void)astra_interface_ui_set_state(&ui, CONTROL(SCROLL), 0u);
+        (void)astra_interface_ui_layout(&ui, &root_layout);
         IMG_Quit();
         return ASTRAZ_IO;
     }
     int result = astraz_engine_run(&run);
-    if (result != ASTRAZ_OK)
+    if (result != ASTRAZ_OK && result != ASTRAZ_CANCELLED)
         (void)astra_log_failure("AstraZ engine", (uint32_t)result);
     astraz_audio_close(audio);
     audio = NULL;
     if (v6_active) astraz_canvas_close(&canvas);
     v6_active = 0u;
+    (void)astra_interface_ui_set_state(&ui, CONTROL(CANVAS),
+        ASTRA_CONTROL_COLLAPSED);
     IMG_Quit();
     playing = 0u;
+    (void)astra_interface_ui_set_state(&ui, CONTROL(SCROLL), 0u);
+    if (astra_interface_ui_layout(&ui, &root_layout) != ASTRA_OK ||
+        transcript_wrap_layout() != ASTRA_OK) result = ASTRAZ_IO;
     (void)astra_interface_ui_set_state(&ui, CONTROL(UNDO), ASTRA_CONTROL_DISABLED);
     prompt_visible = 0u;
     (void)astra_interface_ui_set_state(&ui, CONTROL(PROMPT), ASTRA_CONTROL_COLLAPSED);
@@ -912,7 +1265,7 @@ int main(int argc, char **argv)
     }
     info.x = 240u; info.y = 100u;
     info.width = WIDTH; info.height = HEIGHT;
-    info.flags = 0u;
+    info.flags = ASTRA_WINDOW_RESIZABLE;
     info.content_format = ASTRA_WINDOW_CONTENT_SURFACE;
     info.type = ASTRA_WINDOW_STANDARD;
     info.title = "AstraZ"; info.title_length = 6u;

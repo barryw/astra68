@@ -40,11 +40,12 @@ target_include_directories(astraz_engine PRIVATE
 target_include_directories(astraz_engine PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(astraz_engine PRIVATE Astra::Native)
+target_compile_definitions(astraz_engine PRIVATE ASTRAZ_FROTZ_TRANSCRIPT=1)
 set_target_properties(astraz_engine PROPERTIES
   C_STANDARD 99 POSITION_INDEPENDENT_CODE ON)
 
 add_executable(astraz src/main.c src/audio.c src/picture.c src/canvas.c
-  src/transcript_flow.c src/screen_grid.c)
+  src/transcript_flow.c src/screen_grid.c src/line_input.c)
 target_compile_options(astraz PRIVATE -Wall -Wextra -Werror -Wpedantic)
 target_link_libraries(astraz PRIVATE astraz_engine Astra::interface
   Astra::graphics Astra::font Astra::system SDL2::SDL2

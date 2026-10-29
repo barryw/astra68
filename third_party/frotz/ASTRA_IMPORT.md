@@ -8,6 +8,8 @@ Imported: `src/common`, `src/blorb`, `src/dumb`, `src/sdl`, `COPYING`,
 
 License: GPL-2.0-or-later; retain upstream notices and `COPYING`. AstraZ must
 ship compliant source when linked with Frotz. Core and Blorb support are built
-into one app-private archive by `sw/userspace/ports/astraz/CMakeLists.txt`;
-source itself stays unchanged. The native Interface Kit adapter and executable
-are separate work.
+into one app-private archive by `sw/userspace/ports/astraz/CMakeLists.txt`.
+The scoped `stream.c` delta exposes lower-window words and explicit newlines
+before fixed-width screen wrapping when `ASTRAZ_FROTZ_TRANSCRIPT` is defined;
+standalone Frotz builds leave the hook disabled. The native Interface Kit
+adapter and executable are separate work.

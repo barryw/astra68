@@ -106,6 +106,10 @@ SYSTEM_FONTS = (
     os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-workbench.afnt"),
     os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-mono.afnt"),
     os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-pixel-mono.afnt"),
+    os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-pixel-mono-bold.afnt"),
+    os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-pixel-mono-italic.afnt"),
+    os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-pixel-mono-bold-italic.afnt"),
+    os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-zmachine-graphics.afnt"),
     os.path.join(REPOSITORY, "sw/userspace/graphics/fonts/astra-rescue-mono.afnt"),
 )
 DEFAULT_KITS = os.path.join(REPOSITORY, "sw/userspace/kits/build")

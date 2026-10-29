@@ -10,7 +10,7 @@ all: bundle
 
 $(PROGRAM): CMakeLists.txt src/main.c src/audio.c src/audio.h \
 	src/picture.c src/picture.h src/transcript_flow.c \
-	src/canvas.c src/canvas.h \
+	src/canvas.c src/canvas.h src/line_input.c src/line_input.h \
 	src/transcript_flow.h src/screen_grid.c src/screen_grid.h \
 	src/engine.c include/astraz/engine.h
 	test -f $(NDK)/cmake/m68k-astra-toolchain.cmake || \
@@ -43,17 +43,36 @@ build/test_transcript_flow: src/transcript_flow.c src/transcript_flow.h \
 		../../../common/utf8.c tests/test_transcript_flow.c \
 		-o $@
 
+build/test_frotz_stream_word: src/frotz_stream_word.h \
+		tests/test_frotz_stream_word.c
+	@mkdir -p $(@D)
+	cc -std=c99 -Wall -Wextra -Werror -Isrc \
+		tests/test_frotz_stream_word.c -o $@
+
 build/test_canvas: src/canvas.c src/canvas.h tests/test_canvas.c \
-        tests/fakes/SDL.h
+        tests/fakes/SDL.h ../../../common/utf8.c
 	@mkdir -p $(@D)
 	cc -std=c99 -Wall -Wextra -Werror -Itests/fakes -Iinclude -Isrc \
 		-I$(ROOT)/ndk/include -I$(ROOT)/sw/include \
-		src/canvas.c tests/test_canvas.c -o $@
+		src/canvas.c ../../../common/utf8.c tests/test_canvas.c -o $@
 
-test: build/test_transcript_flow build/test_screen_grid build/test_canvas
+build/test_line_input: src/line_input.c src/line_input.h \
+		tests/test_line_input.c ../../interface/src/text_model.c \
+		../../../common/utf8.c
+	@mkdir -p $(@D)
+	cc -std=c99 -Wall -Wextra -Werror -Iinclude -Isrc \
+		-I$(ROOT)/ndk/include -I$(ROOT)/sw/include \
+		src/line_input.c ../../interface/src/text_model.c \
+		../../../common/utf8.c tests/test_line_input.c -o $@
+
+test: build/test_transcript_flow build/test_frotz_stream_word \
+		build/test_screen_grid build/test_canvas \
+		build/test_line_input
 	build/test_transcript_flow
+	build/test_frotz_stream_word
 	build/test_screen_grid
 	build/test_canvas
+	build/test_line_input
 
 build/test_screen_grid: src/screen_grid.c src/screen_grid.h tests/test_screen_grid.c
 	@mkdir -p $(@D)

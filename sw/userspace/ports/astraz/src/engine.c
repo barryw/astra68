@@ -11,6 +11,7 @@
 #include <time.h>
 
 #include "frotz.h"
+#include "frotz_stream_word.h"
 #include "blorb.h"
 
 typedef char AstraZFileContract[(FILE_RESTORE == ASTRAZ_FILE_RESTORE &&
@@ -31,6 +32,10 @@ typedef char AstraZDisplayContract[(REVERSE_STYLE == ASTRAZ_STYLE_REVERSE &&
 typedef char AstraZHotkeyContract[(ZC_HKEY_UNDO == ASTRAZ_HOTKEY_UNDO &&
     ZC_HKEY_RESTART == ASTRAZ_HOTKEY_RESTART &&
     ZC_HKEY_QUIT == ASTRAZ_HOTKEY_QUIT) ? 1 : -1];
+typedef char AstraZCharContract[(sizeof(zchar) == sizeof(uint16_t)) ? 1 : -1];
+typedef char AstraZFrotzMarkerContract[
+    (ZC_NEW_STYLE == ASTRAZ_FROTZ_STYLE_MARKER &&
+     ZC_NEW_FONT == ASTRAZ_FROTZ_FONT_MARKER) ? 1 : -1];
 
 extern int astraz_frotz_main(int argc, char **argv);
 extern void reset_memory(void);
@@ -205,6 +210,34 @@ static int event(const AstraZEvent *item)
         finish(ASTRAZ_ENGINE_ERROR);
     }
     return result;
+}
+
+void os_transcript_word(const zchar *text)
+{
+    if (!active || cwin != 0 || !text) return;
+    uint32_t length = astraz_frotz_stream_word_length(
+        (const uint16_t *)text);
+    if (length == 0u) return;
+    AstraZEvent item = {.kind = ASTRAZ_EVENT_TRANSCRIPT_TEXT};
+    item.data.transcript.characters = (const uint16_t *)text;
+    item.data.transcript.length = length;
+    event(&item);
+}
+
+void os_transcript_char(zchar character)
+{
+    if (!active || cwin != 0) return;
+    AstraZEvent item = {.kind = ASTRAZ_EVENT_TRANSCRIPT_TEXT};
+    item.data.transcript.characters = (const uint16_t *)&character;
+    item.data.transcript.length = 1u;
+    event(&item);
+}
+
+void os_transcript_new_line(void)
+{
+    if (!active || cwin != 0) return;
+    AstraZEvent item = {.kind = ASTRAZ_EVENT_TRANSCRIPT_NEWLINE};
+    event(&item);
 }
 
 int astraz_engine_run(const AstraZRun *request)
@@ -573,6 +606,7 @@ void os_set_font(int font)
 {
     AstraZEvent item = {.kind = ASTRAZ_EVENT_FONT};
     item.data.font.font = font;
+    item.data.font.window = cwin;
     event(&item);
 }
 

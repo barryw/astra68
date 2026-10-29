@@ -5,6 +5,9 @@
 
 int main(void)
 {
+    assert(astraz_transcript_without_prompt("Room\n> \n", 8u) == 5u);
+    assert(astraz_transcript_without_prompt("Room\n  >\n", 9u) == 5u);
+    assert(astraz_transcript_without_prompt("A > B\n", 6u) == 6u);
     uint16_t input[4] = {0};
     assert(astraz_input_copy("abc", 3u, input, 4u));
     assert(input[0] == 'a' && input[1] == 'b' &&
@@ -17,45 +20,38 @@ int main(void)
     assert(astraz_transcript_flow_flush_due(&flow, UINT64_C(1000000000)));
     assert(!astraz_transcript_flow_flush_due(&flow, UINT64_C(1010000000)));
     assert(astraz_transcript_flow_flush_due(&flow, UINT64_C(1034000000)));
-    AstraZEvent event = {.kind = ASTRAZ_EVENT_SCREEN_BEGIN};
-    assert(!astraz_transcript_flow_event(&flow, &event));
-    event.kind = ASTRAZ_EVENT_CURSOR;
-    event.data.cursor.row = 1;
-    assert(!astraz_transcript_flow_event(&flow, &event));
-    event.kind = ASTRAZ_EVENT_CHARACTER;
-    event.data.text.character = 'Z';
-    assert(!astraz_transcript_flow_event(&flow, &event));
-    event.kind = ASTRAZ_EVENT_CURSOR;
-    event.data.cursor.window = 1;
-    event.data.cursor.row = 9;
-    assert(!astraz_transcript_flow_event(&flow, &event));
-    event.kind = ASTRAZ_EVENT_CHARACTER;
-    event.data.text.window = 1;
-    event.data.text.character = 'U';
-    assert(!astraz_transcript_flow_event(&flow, &event));
-    event.data.text.window = 0;
-    event.kind = ASTRAZ_EVENT_CURSOR;
-    event.data.cursor.window = 0;
-    event.data.cursor.row = 24;
-    assert(!astraz_transcript_flow_event(&flow, &event));
-    event.kind = ASTRAZ_EVENT_CHARACTER;
-    event.data.text.character = 'C';
-    assert(astraz_transcript_flow_event(&flow, &event));
-    event.kind = ASTRAZ_EVENT_SCROLL;
-    assert(!astraz_transcript_flow_event(&flow, &event));
-    event.kind = ASTRAZ_EVENT_CURSOR;
-    event.data.cursor.row = 24;
-    assert(!astraz_transcript_flow_event(&flow, &event));
-    event.kind = ASTRAZ_EVENT_CHARACTER;
-    event.data.text.character = 'W';
-    assert(astraz_transcript_flow_event(&flow, &event));
-    event.data.text.character = '\n';
-    assert(!astraz_transcript_flow_event(&flow, &event));
-    event.kind = ASTRAZ_EVENT_SCROLL;
-    assert(!astraz_transcript_flow_event(&flow, &event));
-    event.kind = ASTRAZ_EVENT_CHARACTER;
-    event.data.text.character = 'Y';
-    assert(!astraz_transcript_flow_event(&flow, &event));
+    astraz_transcript_flow_reset(&flow);
+    char decoded[64];
+    uint32_t decoded_bytes = 0u;
+    const uint16_t first_word[] = {'A', ' ', 'l', 'o', 'n', 'g'};
+    const uint16_t second_word[] = {' ', 'r', 'o', 'o', 'm'};
+    assert(astraz_transcript_flow_text(&flow, first_word, 6u, decoded,
+        sizeof(decoded), &decoded_bytes) == ASTRA_OK);
+    assert(decoded_bytes == 6u && memcmp(decoded, "A long", 6u) == 0);
+    assert(astraz_transcript_flow_text(&flow, second_word, 5u, decoded,
+        sizeof(decoded), &decoded_bytes) == ASTRA_OK);
+    assert(decoded_bytes == 5u && memcmp(decoded, " room", 5u) == 0);
+    astraz_transcript_flow_new_line(&flow);
+    const uint16_t paragraph[] = {9u, 'N', 'e', 'x', 't', 11u, 'x'};
+    assert(astraz_transcript_flow_text(&flow, paragraph, 7u, decoded,
+        sizeof(decoded), &decoded_bytes) == ASTRA_OK);
+    assert(decoded_bytes == 10u && memcmp(decoded, "   Next  x", 10u) == 0);
+    const uint16_t style_start[] = {1u};
+    const uint16_t style_end[] = {4u, '!', 2u, 5u, 0xe9u};
+    assert(astraz_transcript_flow_text(&flow, style_start, 1u, decoded,
+        sizeof(decoded), &decoded_bytes) == ASTRA_OK);
+    assert(decoded_bytes == 0u && flow.skip_marker_argument);
+    assert(astraz_transcript_flow_text(&flow, style_end, 5u, decoded,
+        sizeof(decoded), &decoded_bytes) == ASTRA_OK);
+    assert(decoded_bytes == 3u && memcmp(decoded, "!\xc3\xa9", 3u) == 0);
+    const uint16_t zero_style_argument[] = {1u, 0u, 'B', 'a', 't', 'h'};
+    assert(astraz_transcript_flow_text(&flow, zero_style_argument, 6u,
+        decoded, sizeof(decoded), &decoded_bytes) == ASTRA_OK);
+    assert(decoded_bytes == 4u && memcmp(decoded, "Bath", 4u) == 0);
+    AstraZTranscriptFlow previous = flow;
+    assert(astraz_transcript_flow_text(&flow, paragraph, 7u, decoded,
+        2u, &decoded_bytes) == ASTRA_ERROR_BUFFER_TOO_SMALL);
+    assert(memcmp(&flow, &previous, sizeof(flow)) == 0);
 
     char transcript[64] = "First\n";
     char content[64];

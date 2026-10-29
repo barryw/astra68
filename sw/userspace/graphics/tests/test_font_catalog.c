@@ -87,7 +87,11 @@ int main(void)
 
     const char *const shipped[] = {
         "fonts/astra-workbench.afnt", "fonts/astra-mono.afnt",
-        "fonts/astra-rescue-mono.afnt", "fonts/astra-pixel-mono.afnt"
+        "fonts/astra-rescue-mono.afnt", "fonts/astra-pixel-mono.afnt",
+        "fonts/astra-pixel-mono-bold.afnt",
+        "fonts/astra-pixel-mono-italic.afnt",
+        "fonts/astra-pixel-mono-bold-italic.afnt",
+        "fonts/astra-zmachine-graphics.afnt"
     };
     for (uint32_t at = 0u; at < sizeof(shipped) / sizeof(shipped[0]); ++at) {
         uint8_t *afnt = read_file(shipped[at], &length);

@@ -125,7 +125,9 @@ enum {
     ASTRAZ_EVENT_RESTART,
     ASTRAZ_EVENT_MORE,
     ASTRAZ_EVENT_REPAINT,
-    ASTRAZ_EVENT_WARNING
+    ASTRAZ_EVENT_WARNING,
+    ASTRAZ_EVENT_TRANSCRIPT_TEXT, /* Lower-window text before VM wrapping. */
+    ASTRAZ_EVENT_TRANSCRIPT_NEWLINE /* Explicit story paragraph/line break. */
 };
 
 typedef struct AstraZResource {
@@ -144,7 +146,7 @@ typedef struct AstraZEvent {
         struct { int32_t top, left, bottom, right, units; } scroll;
         struct { int32_t style, window; } style;
         struct { int32_t foreground, background, window; } colour;
-        struct { int32_t font; } font;
+        struct { int32_t font, window; } font;
         struct { int32_t number, row, column; AstraZResource resource; } picture;
         struct {
             int32_t number, volume, repeats;
@@ -157,6 +159,10 @@ typedef struct AstraZEvent {
             int32_t window, old_y, new_y, x, height, width;
         } repaint;
         struct { const char *text; } warning; /* Borrowed during callback. */
+        struct {
+            const uint16_t *characters; /* Borrowed during callback. */
+            uint32_t length;
+        } transcript;
     } data; /* Coordinates retain Frotz's 1-based units. */
 } AstraZEvent;
 

@@ -59,6 +59,15 @@ extern zchar console_read_input(int, zchar *, zword, bool);
 
 extern int direct_call(zword);
 
+/* AstraZ keeps semantic transcript text before screen_word wraps it to the
+ * Z-machine's fixed display width. These hooks are private to AstraZ's Frotz
+ * build and have no effect on the screen or the game's output streams. */
+#ifdef ASTRAZ_FROTZ_TRANSCRIPT
+extern void os_transcript_word(const zchar *);
+extern void os_transcript_char(zchar);
+extern void os_transcript_new_line(void);
+#endif
+
 
 /*
  * stream_mssg_on
@@ -155,8 +164,12 @@ void z_output_stream(void)
  */
 void stream_char(zchar c)
 {
-	if (ostream_screen)
+	if (ostream_screen) {
+		#ifdef ASTRAZ_FROTZ_TRANSCRIPT
+		os_transcript_char(c);
+		#endif
 		screen_char(c);
+	}
 	if (ostream_script && enable_scripting)
 		script_char(c);
 } /* stream_char */
@@ -173,8 +186,12 @@ void stream_word(const zchar * s)
 	if (ostream_memory && !message)
 		memory_word(s);
 	else {
-		if (ostream_screen)
+		if (ostream_screen) {
+			#ifdef ASTRAZ_FROTZ_TRANSCRIPT
+			os_transcript_word(s);
+			#endif
 			screen_word(s);
+		}
 		if (ostream_script && enable_scripting)
 			script_word(s);
 	}
@@ -192,8 +209,12 @@ void stream_new_line(void)
 	if (ostream_memory && !message)
 		memory_new_line();
 	else {
-		if (ostream_screen)
+		if (ostream_screen) {
+			#ifdef ASTRAZ_FROTZ_TRANSCRIPT
+			os_transcript_new_line();
+			#endif
 			screen_new_line();
+		}
 		if (ostream_script && enable_scripting)
 			script_new_line();
 	}
@@ -323,8 +344,16 @@ continue_input:
 	/* Copy input line to transcript file or to the screen */
 	if (ostream_script && enable_scripting && !no_scripting)
 		script_write_input(buf, key);
-	if (istream_replay)
+	if (istream_replay) {
+		#ifdef ASTRAZ_FROTZ_TRANSCRIPT
+		if (ostream_screen) {
+			os_transcript_word(buf);
+			if (key == ZC_RETURN)
+				os_transcript_new_line();
+		}
+		#endif
 		screen_write_input(buf, key);
+	}
 
 	/* Return terminating key */
 	return key;

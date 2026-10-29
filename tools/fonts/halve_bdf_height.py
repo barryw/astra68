@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 
 
-def halve(source: str) -> str:
+def halve(source: str, bold: bool = False, italic: bool = False) -> str:
     lines = source.splitlines()
     result = []
     cell_width = cell_height = None
@@ -31,6 +31,14 @@ def halve(source: str) -> str:
                                      line, count=1)
             if count != 1:
                 raise ValueError("FONT must use a sized XLFD name")
+            if bold:
+                if "-medium-" not in changed:
+                    raise ValueError("bold strike needs medium XLFD weight")
+                changed = changed.replace("-medium-", "-bold-", 1)
+            if italic:
+                if "-r-normal-" not in changed:
+                    raise ValueError("italic strike needs regular XLFD slant")
+                changed = changed.replace("-r-normal-", "-i-normal-", 1)
             result.append(changed)
         elif line.startswith("SIZE "):
             if len(fields) != 4 or int(fields[1]) % 2:
@@ -49,6 +57,10 @@ def halve(source: str) -> str:
             if len(fields) != 2 or int(fields[1]) % 2:
                 raise ValueError(f"{fields[0]} must be even")
             result.append(f"{fields[0]} {int(fields[1]) // 2}")
+        elif line.startswith("WEIGHT_NAME ") and bold:
+            result.append('WEIGHT_NAME "Bold"')
+        elif line.startswith("SLANT ") and italic:
+            result.append('SLANT "I"')
         elif line.startswith("SWIDTH "):
             if len(fields) != 3:
                 raise ValueError("invalid SWIDTH")
@@ -75,8 +87,14 @@ def halve(source: str) -> str:
                     lines[at + 1 + cell_height] != "ENDCHAR"):
                 raise ValueError("glyph bitmap does not end at ENDCHAR")
             result.append(line)
+            ink_mask = ((1 << cell_width) - 1) << (pitch * 8 - cell_width)
             for row in range(0, cell_height, 2):
                 merged = int(rows[row], 16) | int(rows[row + 1], 16)
+                if italic and row < cell_height // 2:
+                    merged >>= 1
+                if bold:
+                    merged |= merged >> 1
+                merged &= ink_mask
                 result.append(f"{merged:0{pitch * 2}X}")
             at += cell_height
             glyphs += 1
@@ -96,8 +114,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--bold", action="store_true")
+    parser.add_argument("--italic", action="store_true")
     args = parser.parse_args()
-    args.output.write_text(halve(args.input.read_text(encoding="ascii")),
+    args.output.write_text(halve(args.input.read_text(encoding="ascii"),
+                                 bold=args.bold, italic=args.italic),
                            encoding="ascii")
 
 

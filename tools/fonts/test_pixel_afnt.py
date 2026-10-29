@@ -23,6 +23,21 @@ afnt = module(ROOT / "tools/fonts/afnt.py", "afnt")
 source = (FONT_DIR / "spleen/8x16.bdf").read_text(encoding="ascii")
 derived = (FONT_DIR / "spleen/8x8.bdf").read_text(encoding="ascii")
 assert halve.halve(source) == derived
+for suffix, bold, italic, style in (
+        ("-bold", True, False, "Bold"),
+        ("-italic", False, True, "Italic"),
+        ("-bold-italic", True, True, "Bold Italic")):
+    alternate = (FONT_DIR / f"spleen/8x8{suffix}.bdf").read_text(
+        encoding="ascii")
+    assert halve.halve(source, bold=bold, italic=italic) == alternate
+    variant = (FONT_DIR / f"astra-pixel-mono{suffix}.afnt").read_bytes()
+    alternate_cmap, alternate_strikes, alternate_glyphs, _ = afnt.unpack_afnt(
+        variant)
+    assert len(alternate_cmap) == len(alternate_glyphs) == 1002
+    assert alternate_strikes[0][2:4] == (8, 8)
+    variant_metadata = json.loads(afnt.parse_afnt(variant)[b"NAME"])
+    assert variant_metadata["family"] == "Astra Pixel Mono"
+    assert variant_metadata["style"] == style
 assert "FONTBOUNDINGBOX 8 8 0 -2" in derived
 assert "FONT_ASCENT 6" in derived
 assert "FONT_DESCENT 2" in derived
