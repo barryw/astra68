@@ -11,21 +11,23 @@
 #include <astra/status.h>
 #include <astra/string.h>
 #include <astra/surface.h>
+#include <astra/system_panels.h>
 #include <astra/theme.h>
 #include <astra/utf8.h>
 #include <astra/vfs_process.h>
+#include <astra/volume.h>
 #include <astra/window.h>
+
+#include "../../common/directory_snapshot.h"
 
 #include <stdint.h>
 #include <string.h>
 
 #define FONTS_WIDTH 700u
-#define FONTS_HEIGHT 520u
+#define FONTS_HEIGHT 660u
 #define FONTS_FACE_MAX 64u
 #define FONTS_STRIKE_MAX 32u
 #define FONTS_DETAIL_MAX (FONTS_FACE_MAX * FONTS_STRIKE_MAX)
-/* shortcut: fixed browser page; add paging before folders exceed 128 entries. */
-#define FONTS_BROWSER_MAX 128u
 
 enum {
     FONTS_TITLE = 1u,
@@ -42,7 +44,9 @@ enum {
     FONTS_ENCODING,
     FONTS_INFORMATION,
     FONTS_UNINSTALL,
-    FONTS_CONTROL_COUNT = FONTS_UNINSTALL
+    FONTS_FILE_PANEL_FIRST,
+    FONTS_CONTROL_COUNT = FONTS_FILE_PANEL_FIRST +
+        ASTRA_FILE_PANEL_CONTROL_COUNT - 1u
 };
 
 _Static_assert(FONTS_HINT == FONTS_TITLE + ASTRA_SETTINGS_PANE_DESCRIPTION &&
@@ -81,11 +85,31 @@ static AstraHandle fonts_admin;
 static AstraHandle fonts_gui;
 static const char *message;
 static AstraProcessFilesystem files = ASTRA_PROCESS_FILESYSTEM_INIT;
-static AstraDirectoryEntry browser_nodes[FONTS_BROWSER_MAX];
-static AstraCollectionItem browser_items[FONTS_BROWSER_MAX];
 static AstraCollectionModel list_model = ASTRA_COLLECTION_MODEL_INIT;
-static uint32_t browser_count;
-static uint32_t browser_selection;
+typedef struct BrowserSnapshot {
+    AstraDirectorySnapshot directory;
+    AstraCollectionItem *items;
+    uint32_t capacity;
+} BrowserSnapshot;
+typedef struct BrowserPlaces {
+    AstraVolumeSnapshot volume;
+    AstraFilePanelPlace *places;
+    AstraCollectionItem *items;
+    uint32_t count;
+} BrowserPlaces;
+static BrowserSnapshot browser_active = {
+    .directory = ASTRA_DIRECTORY_SNAPSHOT_INIT};
+static BrowserSnapshot browser_spare = {
+    .directory = ASTRA_DIRECTORY_SNAPSHOT_INIT};
+static BrowserPlaces browser_places = {
+    .volume = ASTRA_VOLUME_SNAPSHOT_INIT};
+static AstraFilePanel file_panel = ASTRA_FILE_PANEL_INIT;
+static AstraCollectionModel browser_model = ASTRA_COLLECTION_MODEL_INIT;
+static AstraScrollModel browser_scroll = ASTRA_SCROLL_MODEL_INIT;
+static const AstraSurface **browser_grid_icons;
+static uint32_t browser_grid_capacity;
+static AstraHandle volumes_metadata;
+static AstraVolumeWatch volumes_watch = ASTRA_VOLUME_WATCH_INIT;
 static uint32_t browsing;
 static uint32_t amiga_encoding;
 static uint32_t confirm_uninstall;
@@ -94,7 +118,6 @@ static uint32_t showing_import;
 static AstraFontImport import_job = ASTRA_FONT_IMPORT_INIT;
 static AstraFontImportProgress import_progress = ASTRA_FONT_IMPORT_PROGRESS_INIT;
 static char import_message[160];
-static AstraScrollState import_source_scroll = ASTRA_SCROLL_STATE_INIT;
 static AstraHandle fonts_clipboard;
 typedef struct FontDocument {
     AstraTextModel model;
@@ -357,96 +380,160 @@ static uint32_t collect_details(uint32_t family_index)
     return ASTRA_STATUS_OK;
 }
 
-static uint32_t browser_load(void)
+static void browser_snapshot_dispose(BrowserSnapshot *snapshot)
 {
-    AstraDirectory directory = ASTRA_DIRECTORY_INIT;
-    uint32_t status = astra_filesystem_directory_open(
-        &files.filesystem, browser_path, &directory);
+    astra_directory_snapshot_dispose(&snapshot->directory);
+    astra_runtime_deallocate(snapshot->items);
+    *snapshot = (BrowserSnapshot){
+        .directory = ASTRA_DIRECTORY_SNAPSHOT_INIT};
+}
 
-    browser_count = 0u;
-    browser_selection = 0u;
+static uint32_t browser_snapshot_load(BrowserSnapshot *snapshot,
+                                      const char *path)
+{
+    uint32_t status = astra_directory_snapshot_load(&snapshot->directory,
+        &files.filesystem, path, NULL);
+    uint32_t capacity;
     if (status != ASTRA_VFS_OK) return status;
-    while (status == ASTRA_VFS_OK) {
-        AstraDirectoryEntry node;
-        uint32_t count = 0u;
-
-        status = astra_filesystem_directory_read(&directory, &node, 1u,
-                                                 &count);
-        if (status != ASTRA_VFS_OK || count == 0u) break;
-        const char *end = memchr(node.name, '\0', sizeof(node.name));
-        if (end == NULL || end == node.name ||
-            !astra_utf8_validate(node.name,
-                (uint32_t)(end - node.name), 0u) ||
-            memchr(node.name, '/', (size_t)(end - node.name)) != NULL ||
-            strcmp(node.name, ".") == 0 || strcmp(node.name, "..") == 0 ||
-            (node.kind != ASTRA_VFS_KIND_FILE &&
-             node.kind != ASTRA_VFS_KIND_DIRECTORY))
-            continue;
-        if (browser_count == FONTS_BROWSER_MAX) {
-            status = ASTRA_VFS_ERR_LIMIT;
-            break;
-        }
-        browser_nodes[browser_count] = node;
-        browser_items[browser_count] = (AstraCollectionItem){
-            (uint64_t)browser_count + 1u,
-            browser_nodes[browser_count].name,
-            (uint32_t)strlen(node.name), {0u, 0u}
-        };
-        ++browser_count;
+    capacity = snapshot->directory.count == 0u ? 1u :
+        snapshot->directory.count;
+    if (capacity > UINT32_MAX / sizeof(*snapshot->items))
+        status = ASTRA_VFS_ERR_LIMIT;
+    else {
+        snapshot->items = astra_runtime_allocate(
+            (size_t)capacity * sizeof(*snapshot->items));
+        if (snapshot->items == NULL) status = ASTRA_VFS_ERR_LIMIT;
     }
-    astra_filesystem_directory_close(&directory);
-    if (status != ASTRA_VFS_OK) browser_count = 0u;
+    if (status == ASTRA_VFS_OK) snapshot->capacity = capacity;
+    else browser_snapshot_dispose(snapshot);
     return status;
 }
 
-static uint32_t browser_enter(void)
+static void browser_places_dispose(BrowserPlaces *places)
 {
-    const AstraDirectoryEntry *node;
-    size_t length = strlen(browser_path);
-    size_t name_length;
-
-    if (browser_selection >= browser_count) return ASTRA_VFS_ERR_INVALID;
-    node = &browser_nodes[browser_selection];
-    if (node->kind != ASTRA_VFS_KIND_DIRECTORY)
-        return ASTRA_VFS_ERR_INVALID;
-    name_length = strlen(node->name);
-    if (length + name_length + 2u > sizeof(browser_path))
-        return ASTRA_VFS_ERR_LIMIT;
-    browser_path[length] = '/';
-    memcpy(browser_path + length + 1u, node->name, name_length + 1u);
-    uint32_t status = browser_load();
-    if (status != ASTRA_VFS_OK) {
-        browser_path[length] = '\0';
-        (void)browser_load();
-    }
-    return status;
+    astra_volume_snapshot_close(&places->volume);
+    astra_runtime_deallocate(places->places);
+    astra_runtime_deallocate(places->items);
+    *places = (BrowserPlaces){.volume = ASTRA_VOLUME_SNAPSHOT_INIT};
 }
 
-static AstraResult browser_import(void)
+static AstraResult browser_places_load(BrowserPlaces *places)
+{
+    AstraResult result = astra_volume_snapshot_open(volumes_metadata,
+                                                    &places->volume);
+    if (result != ASTRA_OK) return result;
+    uint32_t capacity = places->volume.count == 0u ? 1u :
+                        places->volume.count;
+    if (capacity > UINT32_MAX / sizeof(*places->places) ||
+        capacity > UINT32_MAX / sizeof(*places->items))
+        result = ASTRA_ERROR_NO_RESOURCES;
+    else {
+        places->places = astra_runtime_allocate(
+            (size_t)capacity * sizeof(*places->places));
+        places->items = astra_runtime_allocate(
+            (size_t)capacity * sizeof(*places->items));
+        if (places->places == NULL || places->items == NULL)
+            result = ASTRA_ERROR_OUT_OF_MEMORY;
+    }
+    if (result == ASTRA_OK) {
+        for (uint32_t at = 0u; at < places->volume.count; ++at) {
+            const AstraVolumeRecord *record = &places->volume.records[at];
+            if (record->kind != ASTRA_VOLUME_MOUNT ||
+                record->state != ASTRA_VOLUME_MOUNTED ||
+                record->name[0] != '/') continue;
+            const char *label = record->label[0] != '\0' ?
+                record->label : record->name + 1u;
+            if (label[0] == '\0') continue;
+            places->places[places->count++] = (AstraFilePanelPlace){
+                label, (uint32_t)strlen(label), record->name};
+        }
+    }
+    if (result != ASTRA_OK) browser_places_dispose(places);
+    return result;
+}
+
+static AstraResult browser_grid_reserve(uint32_t capacity)
+{
+    const AstraSurface **icons;
+    if (capacity <= browser_grid_capacity) return ASTRA_OK;
+    if (capacity > UINT32_MAX / sizeof(*icons)) return ASTRA_ERROR_NO_RESOURCES;
+    icons = astra_runtime_allocate((size_t)capacity * sizeof(*icons));
+    if (icons == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
+    astra_runtime_deallocate(browser_grid_icons);
+    browser_grid_icons = icons;
+    browser_grid_capacity = capacity;
+    return ASTRA_OK;
+}
+
+static AstraResult browser_prepare_spare(uint32_t capacity)
+{
+    AstraCollectionItem *items;
+    if (browser_spare.capacity >= capacity) return ASTRA_OK;
+    items = astra_runtime_allocate((size_t)capacity * sizeof(*items));
+    if (items == NULL) return ASTRA_ERROR_OUT_OF_MEMORY;
+    astra_runtime_deallocate(browser_spare.items);
+    browser_spare.items = items;
+    browser_spare.capacity = capacity;
+    return ASTRA_OK;
+}
+
+static uint32_t browser_open_directory(const char *path)
+{
+    BrowserSnapshot next = {.directory = ASTRA_DIRECTORY_SNAPSHOT_INIT};
+    const AstraSurface **next_grid = NULL;
+    AstraCollectionItem *next_spare = NULL;
+    uint32_t status = browser_snapshot_load(&next, path);
+    if (status != ASTRA_VFS_OK) return status;
+    if (strlen(path) >= sizeof(browser_path)) {
+        browser_snapshot_dispose(&next);
+        return ASTRA_VFS_ERR_LIMIT;
+    }
+    if (next.capacity > browser_grid_capacity) {
+        next_grid = astra_runtime_allocate((size_t)next.capacity *
+            sizeof(*next_grid));
+        if (next_grid == NULL) status = ASTRA_VFS_ERR_LIMIT;
+    }
+    if (status == ASTRA_VFS_OK && next.capacity > browser_spare.capacity) {
+        next_spare = astra_runtime_allocate((size_t)next.capacity *
+            sizeof(*next_spare));
+        if (next_spare == NULL) status = ASTRA_VFS_ERR_LIMIT;
+    }
+    if (status != ASTRA_VFS_OK) {
+        astra_runtime_deallocate(next_grid);
+        astra_runtime_deallocate(next_spare);
+        browser_snapshot_dispose(&next);
+        return status;
+    }
+    if (next_grid != NULL) {
+        astra_runtime_deallocate(browser_grid_icons);
+        browser_grid_icons = next_grid;
+        browser_grid_capacity = next.capacity;
+    }
+    if (next_spare != NULL) {
+        astra_runtime_deallocate(browser_spare.items);
+        browser_spare.items = next_spare;
+        browser_spare.capacity = next.capacity;
+    }
+    browser_snapshot_dispose(&browser_active);
+    browser_active = next;
+    memcpy(browser_path, path, strlen(path) + 1u);
+    return ASTRA_VFS_OK;
+}
+
+static AstraResult browser_import(const char *path, const char *name)
 {
     AstraFile file = ASTRA_FILE_INIT;
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
-    const AstraDirectoryEntry *node;
-    char path[ASTRA_VFS_PATH_MAX];
     void *bytes;
     uint32_t length = 0u;
     uint32_t status;
     uint32_t opened;
-    size_t prefix_length;
     AstraResult result;
 
-    if (browser_selection >= browser_count) return ASTRA_ERROR_INVALID_ARGUMENT;
-    node = &browser_nodes[browser_selection];
-    if (node->kind != ASTRA_VFS_KIND_FILE) return ASTRA_ERROR_INVALID_ARGUMENT;
-    length = (uint32_t)strlen(node->name);
+    if (path == NULL || name == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    length = (uint32_t)strlen(name);
     if (length == 0u || length >= ASTRA_FONT_IMPORT_NAME_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    prefix_length = strlen(browser_path);
-    if (prefix_length + length + 2u > sizeof(path))
-        return ASTRA_ERROR_INVALID_ARGUMENT;
-    memcpy(path, browser_path, prefix_length);
-    path[prefix_length] = '/';
-    memcpy(path + prefix_length + 1u, node->name, length + 1u);
     status = astra_filesystem_open(&files.filesystem, path,
                                    ASTRA_VFS_OPEN_READ, &file);
     opened = status == ASTRA_VFS_OK;
@@ -473,8 +560,8 @@ static AstraResult browser_import(void)
         uint32_t encoding = length >= 4u &&
             memcmp(bytes, "\0\0\3\363", 4u) == 0 ? amiga_encoding :
             ASTRA_FONT_ENCODING_AUTO;
-        result = astra_fonts_import_begin(fonts_admin, bytes, length, node->name,
-            (uint32_t)strlen(node->name), encoding, &import_job);
+        result = astra_fonts_import_begin(fonts_admin, bytes, length, name,
+            (uint32_t)strlen(name), encoding, &import_job);
     } else result = ASTRA_ERROR_IO;
     astra_runtime_deallocate(bytes);
     return result;
@@ -523,6 +610,7 @@ static uint32_t update_preview(void)
 static uint32_t build_controls(void)
 {
     AstraSettingsPaneInfo pane = ASTRA_SETTINGS_PANE_INFO_INIT;
+    AstraFilePanelInfo panel_info = ASTRA_FILE_PANEL_INFO_INIT;
     AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
     AstraListInfo list = ASTRA_LIST_INFO_INIT;
     AstraButtonInfo back = ASTRA_BUTTON_INFO_INIT;
@@ -579,21 +667,23 @@ static uint32_t build_controls(void)
     view.model = &scroll;
     view.preferred_width = client_width > 48u ? client_width - 48u : 1u;
     view.preferred_height = 120u;
-    view.state = showing_import || confirm_uninstall ? ASTRA_CONTROL_COLLAPSED : 0u;
+    view.state = showing_import || confirm_uninstall || browsing ?
+        ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_scroll_view_init(CONTROL(FONTS_SCROLL), &view) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     list.id = FONTS_LIST;
-    const AstraCollectionItem *list_items = browsing ? browser_items :
-        active_family == UINT32_MAX ? families : details;
-    uint32_t list_count = browsing ? browser_count :
-        active_family == UINT32_MAX ? family_count : detail_count;
-    uint32_t list_selected = browsing ? browser_selection :
-        active_family == UINT32_MAX ? main_selection : detail_selection;
+    const AstraCollectionItem *list_items = active_family == UINT32_MAX ?
+        families : details;
+    uint32_t list_count = active_family == UINT32_MAX ?
+        family_count : detail_count;
+    uint32_t list_selected = active_family == UINT32_MAX ?
+        main_selection : detail_selection;
     if (astra_interface_collection_init(&list_model, list_items, list_count,
         list_selected < list_count ? list_items[list_selected].id : 0u) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     list.model = &list_model;
-    list.state = showing_import || confirm_uninstall ? ASTRA_CONTROL_COLLAPSED : 0u;
+    list.state = showing_import || confirm_uninstall || browsing ?
+        ASTRA_CONTROL_COLLAPSED : 0u;
     if (showing_information) {
         AstraTextViewInfo text = ASTRA_TEXT_VIEW_INFO_INIT;
         text.id = FONTS_LIST;
@@ -610,21 +700,21 @@ static uint32_t build_controls(void)
         return FONTS_FAIL_CONTROL;
     back.id = FONTS_BACK;
     back.text = showing_import ? "Cancel import" : showing_information ? "Back to styles and sizes" : confirm_uninstall ? "Cancel" :
-                browsing ? "Up" : "Back to families";
+                "Back to families";
     back.text_length = (uint32_t)strlen(back.text);
     back.state = showing_import ?
         (import_progress.state == ASTRA_FONT_IMPORT_CANCELLING ? ASTRA_CONTROL_DISABLED : 0u) :
-        !browsing && active_family == UINT32_MAX ?
+        browsing || active_family == UINT32_MAX ?
                  ASTRA_CONTROL_COLLAPSED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_BACK), &back) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     use.id = FONTS_USE;
-    use.text = browsing ? "Import selected font" : "Use as system font";
+    use.text = "Use as system font";
     use.text_length = (uint32_t)strlen(use.text);
     use.state = showing_import || showing_information || confirm_uninstall ||
-                (!browsing && active_family == UINT32_MAX) ?
+                browsing || active_family == UINT32_MAX ?
                 ASTRA_CONTROL_COLLAPSED :
-                !browsing && !system_ready ? ASTRA_CONTROL_DISABLED : 0u;
+                !system_ready ? ASTRA_CONTROL_DISABLED : 0u;
     if (astra_interface_button_init(CONTROL(FONTS_USE), &use) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     import.id = FONTS_IMPORT;
@@ -664,6 +754,27 @@ static uint32_t build_controls(void)
     if (astra_interface_button_init(CONTROL(FONTS_INFORMATION), &information) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
 
+    panel_info.first_id = FONTS_FILE_PANEL_FIRST;
+    panel_info.mode = ASTRA_FILE_PANEL_OPEN;
+    panel_info.directory = browser_path;
+    panel_info.entries = browser_active.directory.entries;
+    panel_info.entry_count = browser_active.directory.count;
+    panel_info.item_storage = browser_active.items;
+    panel_info.item_capacity = browser_active.capacity;
+    panel_info.spare_item_storage = browser_spare.items;
+    panel_info.spare_item_capacity = browser_spare.capacity;
+    panel_info.grid_icons = browser_grid_icons;
+    panel_info.grid_icon_capacity = browser_grid_capacity;
+    panel_info.places = browser_places.places;
+    panel_info.place_count = browser_places.count;
+    panel_info.place_items = browser_places.items;
+    panel_info.place_capacity = browser_places.volume.count;
+    panel_info.collection = &browser_model;
+    panel_info.scroll = &browser_scroll;
+    if (astra_interface_file_panel_init(&file_panel,
+        CONTROL(FONTS_FILE_PANEL_FIRST), &panel_info) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
+
     item.parent_id = FONTS_BODY;
     if (astra_interface_control_set_flex(CONTROL(FONTS_PREVIEW), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
@@ -681,6 +792,10 @@ static uint32_t build_controls(void)
     item.minimum_width = view.preferred_width;
     if (astra_interface_control_set_flex(CONTROL(FONTS_PROGRESS), &item) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
+    item.grow = 1u;
+    item.minimum_height = view.preferred_height;
+    if (astra_interface_control_set_flex(CONTROL(FONTS_FILE_PANEL_FIRST),
+        &item) != ASTRA_OK) return FONTS_FAIL_CONTROL;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     item.parent_id = FONTS_ACTIONS;
     if (astra_interface_control_set_flex(CONTROL(FONTS_BACK), &item) != ASTRA_OK)
@@ -697,6 +812,10 @@ static uint32_t build_controls(void)
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     if (astra_interface_ui_init(&ui, controls, FONTS_CONTROL_COUNT,
                                 client_width, client_height) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
+    if (astra_interface_ui_set_state(&ui,
+        CONTROL(FONTS_FILE_PANEL_FIRST),
+        browsing && !showing_import ? 0u : ASTRA_CONTROL_COLLAPSED) != ASTRA_OK)
         return FONTS_FAIL_CONTROL;
     if (update_preview() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
     if (astra_scroll_set_offset(&scroll, 0u, 0u) != ASTRA_OK ||
@@ -808,20 +927,14 @@ static uint32_t update_import(void)
             "Font imported; could not confirm session release";
     } else message = import_error(result);
     if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-    if (browsing &&
-        (astra_scroll_set_offset(&scroll, import_source_scroll.offset_x,
-                                 import_source_scroll.offset_y) != ASTRA_OK ||
-         layout_controls() != ASTRA_STATUS_OK)) return FONTS_FAIL_CONTROL;
     return present(result == ASTRA_OK ? "fonts UI import complete" :
         result == ASTRA_ERROR_CANCELLED ? "fonts UI import cancelled" : "fonts UI import failed");
 }
 
 static uint32_t import_selected(void)
 {
-    if (astra_scroll_get_state(&scroll, &import_source_scroll) != ASTRA_OK)
-        return FONTS_FAIL_CONTROL;
     message = NULL;
-    AstraResult result = browser_import();
+    AstraResult result = browser_import(file_panel.target, file_panel.leaf);
 
     if (result == ASTRA_OK) {
         showing_import = 1u;
@@ -832,6 +945,22 @@ static uint32_t import_selected(void)
     }
     if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
     return present(result == ASTRA_OK ? "fonts UI import started" : NULL);
+}
+
+static uint32_t browser_refresh_places(void)
+{
+    BrowserPlaces next = {.volume = ASTRA_VOLUME_SNAPSHOT_INIT};
+    if (browser_places_load(&next) != ASTRA_OK) return FONTS_FAIL_FILESYSTEM;
+    if (browsing && !showing_import &&
+        astra_interface_file_panel_set_places(&file_panel, &ui,
+            CONTROL(FONTS_FILE_PANEL_FIRST), next.places, next.count,
+            next.items, next.volume.count) != ASTRA_OK) {
+        browser_places_dispose(&next);
+        return FONTS_FAIL_CONTROL;
+    }
+    browser_places_dispose(&browser_places);
+    browser_places = next;
+    return ASTRA_STATUS_OK;
 }
 
 static uint32_t action(const AstraUIAction *event)
@@ -928,50 +1057,42 @@ static uint32_t action(const AstraUIAction *event)
             if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
             return present(NULL);
         }
-        if (event->control_id == FONTS_LIST &&
-            (event->type == ASTRA_UI_ACTION_VALUE_CHANGED ||
-             event->type == ASTRA_UI_ACTION_ACTIVATE) &&
-            event->value >= 0 && (uint64_t)event->value < browser_count)
-            browser_selection = (uint32_t)event->value;
-        if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
-            event->control_id == FONTS_LIST &&
-            browser_selection < browser_count) {
-            if (event->value < 0 || (uint64_t)event->value >= browser_count)
-                return FONTS_FAIL_CONTROL;
-            if (browser_nodes[browser_selection].kind == ASTRA_VFS_KIND_FILE)
-                return import_selected();
-            message = browser_enter() == ASTRA_VFS_OK ? NULL :
-                      "Could not open folder";
-            if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-            return present(NULL);
-        }
-        if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
-            event->control_id == FONTS_USE)
-            return import_selected();
-        if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
-            event->control_id == FONTS_BACK) {
-            if (strcmp(browser_path, "/dh0") == 0) {
+        if (event->control_id >= FONTS_FILE_PANEL_FIRST &&
+            event->control_id <= FONTS_CONTROL_COUNT) {
+            uint32_t outcome = ASTRA_FILE_PANEL_NONE;
+            AstraResult result = astra_interface_file_panel_action(&file_panel,
+                &ui, CONTROL(FONTS_FILE_PANEL_FIRST), event, &outcome);
+            if (result != ASTRA_OK) {
+                message = "Could not select that file";
+                if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+                return present(NULL);
+            }
+            if (outcome == ASTRA_FILE_PANEL_PICKED) return import_selected();
+            if (outcome == ASTRA_FILE_PANEL_NAVIGATE) {
+                char target[ASTRA_VFS_PATH_MAX];
+                if (strlen(file_panel.target) >= sizeof(target)) return FONTS_FAIL_CONTROL;
+                memcpy(target, file_panel.target, strlen(file_panel.target) + 1u);
+                message = browser_open_directory(target) == ASTRA_VFS_OK ? NULL :
+                    "Could not open folder or volume";
+                if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+                return present(NULL);
+            }
+            if (outcome == ASTRA_FILE_PANEL_CANCELLED) {
                 browsing = 0u;
                 message = NULL;
-            } else {
-                size_t at = strlen(browser_path);
-                while (at > 4u && browser_path[at] != '/') --at;
-                if (browser_path[at] != '/')
-                    return FONTS_FAIL_CONTROL;
-                browser_path[at] = '\0';
-                message = browser_load() == ASTRA_VFS_OK ? NULL :
-                          "Could not open parent folder";
+                if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+                return present(NULL);
             }
-            if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-            return present(NULL);
         }
         return ASTRA_STATUS_OK;
     }
     if (event->type == ASTRA_UI_ACTION_ACTIVATE &&
         event->control_id == FONTS_IMPORT) {
-        browsing = 1u;
-        message = browser_load() == ASTRA_VFS_OK ? NULL :
-                  "Could not open DH0";
+        uint32_t status = browser_open_directory(browser_path);
+        if (status == ASTRA_VFS_OK) {
+            browsing = 1u;
+            message = NULL;
+        } else message = "Could not open font source volume";
         if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
         return present(NULL);
     }
@@ -1094,17 +1215,44 @@ static uint32_t run(AstraHandle gui)
     for (;;) {
         AstraWindowEvent event = {0};
         if (update_import() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
-        if (showing_import) {
-            uint32_t waits[2] = {astra_window_event_wait_handle(&window),
-                astra_fonts_import_wait_handle(&import_job)}, index = 0u;
-            uint32_t waited = astra_wait_multiple(waits, 2u, ASTRA_DEADLINE_FOREVER,
-                                                  &index, NULL);
-            if (waited == ASTRA_SYSCALL_PEER_DEAD && index == 1u) continue;
-            if (waited != ASTRA_SYSCALL_OK) return FONTS_FAIL_WINDOW;
-            if (index == 1u) continue;
+        uint32_t waits[3] = {astra_window_event_wait_handle(&window)};
+        uint32_t count = 1u, volume_slot = UINT32_MAX, import_slot = UINT32_MAX;
+        uint32_t selected = 0u;
+        if (volumes_watch.receive != ASTRA_INVALID_HANDLE) {
+            volume_slot = count;
+            waits[count++] = volumes_watch.receive;
         }
-        AstraResult result = showing_import ? astra_window_event_try(&window, &event) :
-            astra_window_event_wait(&window, &event, ASTRA_DEADLINE_INFINITE);
+        if (showing_import) {
+            import_slot = count;
+            waits[count++] = astra_fonts_import_wait_handle(&import_job);
+        }
+        uint32_t waited = astra_wait_multiple(waits, count,
+            ASTRA_DEADLINE_FOREVER, &selected, NULL);
+        if (selected == import_slot &&
+            (waited == ASTRA_SYSCALL_OK || waited == ASTRA_SYSCALL_PEER_DEAD))
+            continue;
+        if (selected == volume_slot &&
+            (waited == ASTRA_SYSCALL_OK || waited == ASTRA_SYSCALL_PEER_DEAD)) {
+            AstraVolumeChange change;
+            AstraResult received = astra_volume_watch_receive(&volumes_watch,
+                &change);
+            if (received == ASTRA_OK && change.status == ASTRA_STATUS_OK) {
+                if (browser_refresh_places() != ASTRA_STATUS_OK)
+                    message = "Could not refresh mounted volumes";
+                if (browsing) {
+                    if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+                    if (present(NULL) != ASTRA_STATUS_OK) return FONTS_FAIL_WINDOW;
+                }
+            } else {
+                AstraResult closed = astra_volume_watch_close(volumes_metadata,
+                    &volumes_watch);
+                (void)closed;
+                message = "Volume service unavailable; reopen Fonts after restart";
+            }
+            continue;
+        }
+        if (waited != ASTRA_SYSCALL_OK) return FONTS_FAIL_WINDOW;
+        AstraResult result = astra_window_event_try(&window, &event);
 
         if (result != ASTRA_OK) return FONTS_FAIL_WINDOW;
         do {
@@ -1143,6 +1291,7 @@ int astra_main(const AstraStartupInfo *startup)
     const AstraStartupCapability *admin;
     const AstraStartupCapability *bootstrap;
     const AstraStartupCapability *clipboard;
+    const AstraStartupCapability *volumes;
     AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
     AstraWindowCreateInfo window_info = ASTRA_WINDOW_CREATE_INFO_INIT;
     uint32_t status = ASTRA_STATUS_OK;
@@ -1153,17 +1302,24 @@ int astra_main(const AstraStartupInfo *startup)
     fonts = astra_startup_capability(startup, ASTRA_CAPABILITY_FONT_CATALOG);
     admin = astra_startup_capability(startup, ASTRA_CAPABILITY_FONTS_ADMIN);
     clipboard = astra_startup_capability(startup, ASTRA_CAPABILITY_CLIPBOARD);
+    volumes = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUMES);
     bootstrap = astra_startup_capability(startup,
                                          ASTRA_CAPABILITY_SERVICE_READY);
-    if (gui == NULL || fonts == NULL || admin == NULL || clipboard == NULL)
+    if (gui == NULL || fonts == NULL || admin == NULL || clipboard == NULL ||
+        volumes == NULL || astra_startup_capability(startup,
+            ASTRA_CAPABILITY_VOLUME_READ) == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     fonts_read = fonts->handle;
     fonts_admin = admin->handle;
     fonts_gui = gui->handle;
     fonts_clipboard = clipboard->handle;
+    volumes_metadata = volumes->handle;
     if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
         return FONTS_FAIL_CATALOG;
     if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
+        status = FONTS_FAIL_FILESYSTEM;
+    if (status == ASTRA_STATUS_OK &&
+        astra_volume_watch_open(volumes_metadata, &volumes_watch) != ASTRA_OK)
         status = FONTS_FAIL_FILESYSTEM;
     if (status == ASTRA_STATUS_OK &&
         (astra_fonts_catalog_open(fonts_read, &catalog) != ASTRA_OK ||
@@ -1172,6 +1328,16 @@ int astra_main(const AstraStartupInfo *startup)
     scroll_info.line_height = 32u;
     if (status == ASTRA_STATUS_OK &&
         astra_scroll_init(&scroll, &scroll_info) != ASTRA_OK)
+        status = FONTS_FAIL_CONTROL;
+    if (status == ASTRA_STATUS_OK &&
+        astra_scroll_init(&browser_scroll, &scroll_info) != ASTRA_OK)
+        status = FONTS_FAIL_CONTROL;
+    if (status == ASTRA_STATUS_OK &&
+        (browser_prepare_spare(1u) != ASTRA_OK ||
+         browser_grid_reserve(1u) != ASTRA_OK))
+        status = FONTS_FAIL_CONTROL;
+    if (status == ASTRA_STATUS_OK &&
+        browser_places_load(&browser_places) != ASTRA_OK)
         status = FONTS_FAIL_CONTROL;
     if (status == ASTRA_STATUS_OK) status = build_controls();
     if (status == ASTRA_STATUS_OK &&
@@ -1182,7 +1348,7 @@ int astra_main(const AstraStartupInfo *startup)
     if (status == ASTRA_STATUS_OK) {
         window_info.flags = ASTRA_WINDOW_RESIZABLE;
         window_info.x = 460u;
-        window_info.y = 210u;
+        window_info.y = 32u;
         window_info.width = client_width;
         window_info.height = client_height;
         window_info.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
@@ -1225,6 +1391,15 @@ int astra_main(const AstraStartupInfo *startup)
     astra_runtime_deallocate(detail_sources);
     astra_runtime_deallocate(details);
     document_dispose(&information_document);
+    if (volumes_watch.receive != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_volume_watch_close(volumes_metadata,
+            &volumes_watch);
+        (void)closed;
+    }
+    browser_snapshot_dispose(&browser_active);
+    browser_snapshot_dispose(&browser_spare);
+    browser_places_dispose(&browser_places);
+    astra_runtime_deallocate(browser_grid_icons);
     astra_process_filesystem_close(&files);
     if (status != ASTRA_STATUS_OK) (void)astra_log_failure("fonts UI exit", status);
     return (int)status;
