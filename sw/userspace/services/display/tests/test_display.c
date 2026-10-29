@@ -3280,12 +3280,12 @@ int main(void)
         assert(handle_pointer(&menu, &up, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
         assert(menu.overlay == DISPLAY_OVERLAY_MENU && menu.capture_window == 0u);
         assert(astra_interface_menu_get_state(&menu.menu, &info) == ASTRA_OK);
-        assert(info.frame.width == DISPLAY_MENU_WIDTH && info.frame.height == 136u);
+        assert(info.frame.width == DISPLAY_MENU_WIDTH && info.frame.height == 100u);
         assert(astra_render_builder_init(&builder, batch, sizeof(batch), 4u));
         assert(build_overlay_surface(&builder, &menu, &menu_theme));
         assert(astra_render_builder_finish(&builder) != 0u && builder.glyph_count == 32u);
         assert(batch_has_fill(0, 0, DISPLAY_MENU_WIDTH, menu_theme.window_radius, color(menu_theme.frame)));
-        assert(batch_has_fill(12, 52, DISPLAY_MENU_WIDTH - 24u, 1u, color(menu_theme.border_soft)));
+        assert(batch_has_fill(10, 36, DISPLAY_MENU_WIDTH - 20u, 1u, color(menu_theme.border_soft)));
         motion.value_x = DISPLAY_MENU_X + 24;
         motion.value_y = DISPLAY_MENU_Y + 24;
         assert(handle_pointer(&menu, &motion, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
@@ -3300,7 +3300,7 @@ int main(void)
                                        ASTRA_SYSTEM_ACTION_SHUTDOWN};
             if (menu.overlay == DISPLAY_OVERLAY_NONE) set_overlay(&menu, DISPLAY_OVERLAY_MENU);
             menu.pointer_x = DISPLAY_MENU_X + 24;
-            menu.pointer_y = DISPLAY_MENU_Y + (at == 0u ? 24 : at == 1u ? 72 : 116);
+            menu.pointer_y = DISPLAY_MENU_Y + (at == 0u ? 20 : at == 1u ? 52 : 80);
             delivered_count = 0u;
             assert(handle_pointer(&menu, &down, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
             assert(delivered_count == 0u && menu.overlay == DISPLAY_OVERLAY_MENU);

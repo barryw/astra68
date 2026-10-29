@@ -11,10 +11,11 @@
 
 #define NONE UINT32_MAX
 #define OPEN_PRESS (UINT32_MAX - 1u)
-#define PAD 8u
-#define ROW 32u
-#define PITCH 40u
+#define PAD 4u
+#define ROW 28u
+#define PITCH 28u
 #define SEPARATOR 8u
+#define MAX_VISIBLE_ROWS 24u
 
 static int valid(const AstraMenu *menu)
 {
@@ -102,6 +103,8 @@ AstraResult astra_interface_menu_init(AstraMenu *menu,
     candidate._private_content_height = (uint32_t)height;
     candidate._private_frame.width = (uint32_t)(width > work->width ? work->width : width);
     candidate._private_frame.height = (uint32_t)(height > work->height ? work->height : height);
+    if (candidate._private_frame.height > 2u * PAD + MAX_VISIBLE_ROWS * ROW)
+        candidate._private_frame.height = 2u * PAD + MAX_VISIBLE_ROWS * ROW;
     candidate._private_frame.x = fitted(x, candidate._private_frame.width, work->x, work->width);
     candidate._private_frame.y = fitted(y, candidate._private_frame.height, work->y, work->height);
     candidate._private_flags = flags;
@@ -337,7 +340,7 @@ AstraResult astra_interface_menu_render(const AstraMenu *menu, AstraSurfaceView 
         if (top < surface->height - PAD && top + pitch(item) > PAD) {
             int32_t y = (int32_t)top;
             if ((item->flags & ASTRA_MENU_SEPARATOR) != 0u)
-                astra_surface_fill(&target, 12, y + 4, target.width - 24u, 1, color(theme.border_soft));
+                astra_surface_fill(&target, 10, y + 4, target.width - 20u, 1, color(theme.border_soft));
             else {
                 int selected = at == menu->_private_selected && enabled(item);
                 uint16_t ink = color((item->flags & ASTRA_MENU_DISABLED) != 0u ?
@@ -347,19 +350,23 @@ AstraResult astra_interface_menu_render(const AstraMenu *menu, AstraSurfaceView 
                     ((item->flags & ASTRA_MENU_SUBMENU) != 0u ? 58u : 40u));
                 if (selected)
                     astra_surface_fill_round(&target, PAD, y, target.width - 2u * PAD,
-                                             ROW, theme.control_radius, color(theme.accent));
+                                             ROW, theme.control_radius - 2u, color(theme.accent));
                 if ((item->flags & ASTRA_MENU_CHECKED) != 0u) {
-                    if (!astra_surface_line(&target, 12, y + 16, 16, y + 20, ink) ||
-                        !astra_surface_line(&target, 16, y + 20, 22, y + 12, ink))
+                    uint16_t mark = color(selected ? theme.accent_text :
+                                                     theme.accent);
+                    if (!astra_surface_line(&target, target.width - 22u, y + 13,
+                        target.width - 18u, y + 17, mark) ||
+                        !astra_surface_line(&target, target.width - 18u, y + 17,
+                            target.width - 12u, y + 9, mark))
                         return ASTRA_ERROR_NO_RESOURCES;
                 }
-                astra_surface_ui_text(&target, 28, y + 9, item->label, bytes,
+                astra_surface_ui_text(&target, 14, y + 7, item->label, bytes,
                                       ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, ink);
                 if ((item->flags & ASTRA_MENU_SUBMENU) != 0u &&
-                    (!astra_surface_line(&target, target.width - 25u, y + 12,
-                        target.width - 19u, y + 16, ink) ||
-                     !astra_surface_line(&target, target.width - 19u, y + 16,
-                        target.width - 25u, y + 20, ink)))
+                    (!astra_surface_line(&target, target.width - 19u, y + 9,
+                        target.width - 13u, y + 13, ink) ||
+                     !astra_surface_line(&target, target.width - 13u, y + 13,
+                        target.width - 19u, y + 17, ink)))
                     return ASTRA_ERROR_NO_RESOURCES;
             }
         }

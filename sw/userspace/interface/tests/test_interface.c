@@ -103,6 +103,7 @@ static AstraSurfaceView render_view(uint16_t width, uint16_t height)
 
 static uint32_t fill_calls;
 static uint32_t line_calls;
+static int32_t line_x0[16], line_y0[16], line_x1[16], line_y1[16];
 
 static void test_toolbar_render(void)
 {
@@ -377,11 +378,13 @@ int astra_surface_line(AstraSurfaceView *surface, int32_t x0, int32_t y0,
                        int32_t x1, int32_t y1, uint16_t color)
 {
     (void)surface;
-    (void)x0;
-    (void)y0;
-    (void)x1;
-    (void)y1;
     (void)color;
+    if (line_calls < 16u) {
+        line_x0[line_calls] = x0;
+        line_y0[line_calls] = y0;
+        line_x1[line_calls] = x1;
+        line_y1[line_calls] = y1;
+    }
     ++line_calls;
     return 1;
 }
@@ -1141,8 +1144,6 @@ static void test_checkbox_mark_geometry(void)
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
     AstraSurfaceView surface = render_view(100u, 40u);
-    static const int32_t expected_x[5] = {3, 5, 7, 9, 11};
-    static const int32_t expected_y[5] = {7, 9, 7, 5, 3};
 
     info.id = 11u;
     info.text = "Checked";
@@ -1154,13 +1155,13 @@ static void test_checkbox_mark_geometry(void)
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
-    assert(fill_calls == 7u);
-    for (uint32_t at = 0u; at < 5u; ++at) {
-        assert(fill_x[at + 2u] == expected_x[at]);
-        assert(fill_y[at + 2u] == expected_y[at] + 6);
-        assert(fill_width[at + 2u] == 3u);
-        assert(fill_height[at + 2u] == 3u);
-    }
+    assert(fill_calls == 1u && line_calls == 2u);
+    assert(fill_colors[0] == theme_color(
+        ((AstraTheme)ASTRA_THEME_SYSTEM_INIT).accent));
+    assert(line_x0[0] == 3 && line_y0[0] == 14 &&
+           line_x1[0] == 6 && line_y1[0] == 17);
+    assert(line_x0[1] == 6 && line_y0[1] == 17 &&
+           line_x1[1] == 12 && line_y1[1] == 10);
 }
 
 static void test_switch_off_geometry(void)
@@ -1600,7 +1601,7 @@ static void test_segmented_control(void)
 
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
-    assert(text_calls == 3u && fill_calls == 6u);
+    assert(text_calls == 3u && fill_calls == 3u);
     assert(astra_interface_ui_set_state(
                &context, &control, ASTRA_CONTROL_DISABLED) == ASTRA_OK);
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
@@ -1958,7 +1959,7 @@ static void test_tab_control_and_collapsed_pages(void)
            action.value == 2);
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
-    assert(fill_calls == pointer_fill_calls + 2u);
+    assert(fill_calls == pointer_fill_calls + 3u);
 }
 
 static void test_stepper_control(void)
@@ -2166,12 +2167,12 @@ static void test_text_field(void)
     assert(astra_interface_ui_init(&context, &field, 1u, 160u, 40u) ==
            ASTRA_OK);
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
-    assert(field._private_frame.width == 92u &&
+    assert(field._private_frame.width == 84u &&
            field._private_frame.height == 28u);
 
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
                           ASTRA_WINDOW_EVENT_DOWN,
-                          field._private_frame.x + 14 + 8,
+                          field._private_frame.x + 10 + 8,
                           field._private_frame.y + 10);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK);
@@ -2181,7 +2182,7 @@ static void test_text_field(void)
     assert(model_state.selection.anchor == 1u &&
            model_state.selection.focus == 1u);
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_MOTION, 0u,
-                          field._private_frame.x + 14 + 24,
+                          field._private_frame.x + 10 + 24,
                           field._private_frame.y + 10);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK);
@@ -2190,7 +2191,7 @@ static void test_text_field(void)
     assert(model_state.selection.anchor == 1u &&
            model_state.selection.focus == 4u);
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON, 0u,
-                          field._private_frame.x + 14 + 24,
+                          field._private_frame.x + 10 + 24,
                           field._private_frame.y + 10);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK);

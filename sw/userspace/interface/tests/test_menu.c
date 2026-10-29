@@ -105,21 +105,21 @@ static void model(void)
 
     assert(astra_interface_menu_init(&menu, items, 4u, &work, 630, 430, 160u, 0u) == ASTRA_OK);
     info = state(&menu);
-    assert(info.frame.width == 160u && info.frame.height == 136u &&
-           info.frame.x == 470 && info.frame.y == 294);
+    assert(info.frame.width == 160u && info.frame.height == 100u &&
+           info.frame.x == 470 && info.frame.y == 330);
     AstraControlFrame first_row;
     assert(astra_interface_menu_row_frame(&menu, 1u, &first_row) == ASTRA_OK);
-    assert(first_row.x == 470 && first_row.y == 302 && first_row.height == 32u);
-    assert(astra_interface_menu_hit(&menu, 478, 302) == 1u);
-    assert(astra_interface_menu_hit(&menu, 477, 302) == 0u);
-    assert(astra_interface_menu_hit(&menu, 478, 346) == 0u); /* separator */
-    assert(astra_interface_menu_hit(&menu, 478, 360) == 0u); /* disabled */
-    assert(astra_interface_menu_hit(&menu, 478, 400) == 4u);
+    assert(first_row.x == 470 && first_row.y == 334 && first_row.height == 28u);
+    assert(astra_interface_menu_hit(&menu, 474, 334) == 1u);
+    assert(astra_interface_menu_hit(&menu, 473, 334) == 0u);
+    assert(astra_interface_menu_hit(&menu, 478, 364) == 0u); /* separator */
+    assert(astra_interface_menu_hit(&menu, 478, 376) == 0u); /* disabled */
+    assert(astra_interface_menu_hit(&menu, 478, 406) == 4u);
     assert(send_key(&menu, 0x51u).type == ASTRA_UI_ACTION_NONE && state(&menu).selection == 1u);
     assert(send_key(&menu, 0x51u).type == ASTRA_UI_ACTION_NONE && state(&menu).selection == 4u);
     assert(send_key(&menu, 0x51u).type == ASTRA_UI_ACTION_NONE && state(&menu).selection == 1u);
     assert(send_key(&menu, 0x52u).type == ASTRA_UI_ACTION_NONE && state(&menu).selection == 4u);
-    assert(astra_draw_list_view_init(&surface, draw, sizeof(draw), 160u, 136u));
+    assert(astra_draw_list_view_init(&surface, draw, sizeof(draw), 160u, 100u));
     assert(astra_interface_menu_render(&menu, &surface) == ASTRA_OK);
     surface.kind = ASTRA_SURFACE_VIEW_RGB565;
     assert(astra_interface_menu_render(&menu, &surface) ==
@@ -134,7 +134,7 @@ static void model(void)
         assert(header->command_count == ASTRA_DRAW_LIST_COMMAND_MAX);
         header->command_count = before;
     }
-    assert(astra_draw_list_view_init(&surface, draw, sizeof(draw), 160u, 136u));
+    assert(astra_draw_list_view_init(&surface, draw, sizeof(draw), 160u, 100u));
     assert(astra_interface_menu_render(&menu, &surface) == ASTRA_OK);
     surface.clip_right = 161u;
     assert(astra_interface_menu_render(&menu, &surface) == ASTRA_ERROR_INVALID_ARGUMENT);
@@ -180,7 +180,7 @@ static void model(void)
         assert(astra_interface_menu_init(&menu, many, 200u, &work, 0, 34, 160u, 0u) == ASTRA_OK);
         assert(state(&menu).frame.height == 400u);
         assert(send_key(&menu, 0x4du).type == ASTRA_UI_ACTION_NONE);
-        assert(state(&menu).selection == 200u && state(&menu).scroll == 7608u);
+        assert(state(&menu).selection == 200u && state(&menu).scroll == 5208u);
         assert(send_key(&menu, 0x4eu).type == ASTRA_UI_ACTION_NONE && state(&menu).selection == 200u);
         assert(astra_draw_list_view_init(&surface, draw, sizeof(draw), 160u, 400u));
         assert(astra_interface_menu_render(&menu, &surface) == ASTRA_OK);
@@ -193,7 +193,7 @@ static void model(void)
         assert(send_key(&menu, 0x4bu).type == ASTRA_UI_ACTION_NONE && state(&menu).selection == 1u);
         wheel.data.wheel.delta_y = INT32_MIN;
         assert(astra_interface_menu_handle_event(&menu, &wheel, &action) == ASTRA_OK);
-        assert(state(&menu).scroll == 7608u);
+        assert(state(&menu).scroll == 5208u);
     }
 }
 static void context(void)

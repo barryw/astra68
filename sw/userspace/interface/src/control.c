@@ -28,6 +28,7 @@
 #define CONTROL_DYNAMIC_STATES \
     (CONTROL_PREVIEW_STATES | CONTROL_FOCUS_VISIBLE | TEXT_VIEW_SOFT_END)
 #define FIELD_FLAGS (ASTRA_FIELD_READ_ONLY | ASTRA_FIELD_INLINE)
+#define FIELD_PADDING_X 10u
 #define TEXT_VIEW_INVERTED UINT32_C(4)
 #define TEXT_VIEW_WRAP UINT32_C(8)
 #define TEXT_MODEL_KINDS(kind) \
@@ -1204,7 +1205,7 @@ AstraResult astra_interface_field_init(AstraControl *control,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     width = (uint64_t)info->preferred_columns * theme.mono_cell_width +
             ((info->flags & ASTRA_FIELD_INLINE) != 0u ? 0u :
-             (uint32_t)theme.control_padding_x * 2u);
+             FIELD_PADDING_X * 2u);
     if (width > UINT32_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *control = (AstraControl)ASTRA_CONTROL_INIT;
@@ -1744,7 +1745,7 @@ static AstraResult measure_control(const AstraControl *control,
         uint64_t field_width =
             (uint64_t)control->_private_text_length * theme.mono_cell_width +
             ((control->_private_style & ASTRA_FIELD_INLINE) != 0u ? 0u :
-             (uint32_t)theme.control_padding_x * 2u);
+             FIELD_PADDING_X * 2u);
 
         if (field_width > UINT32_MAX)
             return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -3349,7 +3350,7 @@ static int field_view(const AstraControl *control, FieldView *view)
     if (astra_text_model_get_state(model, &view->state) != ASTRA_OK)
         return 0;
     uint32_t inset = (control->_private_style & ASTRA_FIELD_INLINE) != 0u ?
-        0u : theme.control_padding_x;
+        0u : FIELD_PADDING_X;
     inner_width = control->_private_frame.width > inset * 2u ?
         control->_private_frame.width - inset * 2u : 0u;
     view->columns = inner_width / theme.mono_cell_width;
@@ -3548,6 +3549,13 @@ static int render_requirements(const AstraUIContext *context,
                 *commands += 2u + control->_private_text_length;
                 if ((state & CONTROL_FOCUS_VISIBLE) != 0u)
                     *commands += 2u;
+                if (control->_private_control_kind == ASTRA_CONTROL_TAB &&
+                    (state & (ASTRA_CONTROL_DISABLED |
+                              ASTRA_CONTROL_HOVERED)) ==
+                        ASTRA_CONTROL_HOVERED &&
+                    control->_private_minimum_value >= 0 &&
+                    control->_private_minimum_value != control->_private_value)
+                    ++*commands;
             }
             for (uint32_t item = 0u;
                  item < control->_private_text_length; ++item)
@@ -3568,7 +3576,7 @@ static int render_requirements(const AstraUIContext *context,
             *commands += 3u +
                 (((state & ASTRA_CONTROL_SELECTED) != 0u) ? 1u : 0u);
         else if (control->_private_control_kind == ASTRA_CONTROL_SLIDER)
-            *commands += 2u +
+            *commands += 3u +
                 ((control->_private_value >
                   control->_private_minimum_value) ? 1u : 0u);
         else if (control->_private_control_kind == ASTRA_CONTROL_DIAL)
@@ -3839,31 +3847,30 @@ static void render_toggle(const AstraTheme *theme,
     } else {
         uint16_t radius = control->_private_control_kind ==
             ASTRA_CONTROL_RADIO ? 8u : 4u;
+        int selected = (state & ASTRA_CONTROL_SELECTED) != 0u;
+        int disabled = (state & ASTRA_CONTROL_DISABLED) != 0u;
 
-        if ((state & ASTRA_CONTROL_SELECTED) != 0u)
-            border = (state & ASTRA_CONTROL_DISABLED) != 0u ?
+        if (selected)
+            border = disabled ?
                 theme->text_tertiary : theme->accent;
         astra_surface_fill_round(surface, x, y, 16u, 16u, radius,
                                  color(border));
-        astra_surface_fill_round(surface, x + 2, y + 2, 12u, 12u,
-                                 radius > 2u ? (uint16_t)(radius - 2u) : 0u,
-                                 color((state & ASTRA_CONTROL_SELECTED) != 0u ?
-                                       border : fill));
-        if ((state & ASTRA_CONTROL_SELECTED) != 0u &&
-            control->_private_control_kind == ASTRA_CONTROL_RADIO)
-            astra_surface_fill_round(surface, x + 5, y + 5, 6u, 6u, 3u,
-                                     color(theme->accent_text));
-        if ((state & ASTRA_CONTROL_SELECTED) != 0u &&
-            control->_private_control_kind == ASTRA_CONTROL_CHECKBOX) {
-            AstraColorRGBA8 mark = (state & ASTRA_CONTROL_DISABLED) != 0u ?
-                theme->client : theme->accent_text;
-
-            astra_surface_fill(surface, x + 3, y + 7, 3u, 3u, color(mark));
-            astra_surface_fill(surface, x + 5, y + 9, 3u, 3u, color(mark));
-            astra_surface_fill(surface, x + 7, y + 7, 3u, 3u, color(mark));
-            astra_surface_fill(surface, x + 9, y + 5, 3u, 3u, color(mark));
-            astra_surface_fill(surface, x + 11, y + 3, 3u, 3u,
-                               color(mark));
+        if (control->_private_control_kind == ASTRA_CONTROL_RADIO) {
+            astra_surface_fill_round(surface, x + 1, y + 1, 14u, 14u, 7u,
+                                     color(fill));
+            if (selected)
+                astra_surface_fill_round(surface, x + 4, y + 4, 8u, 8u, 4u,
+                                         color(border));
+        } else if (selected) {
+            uint16_t mark = color(disabled ? theme->client :
+                                            theme->accent_text);
+            (void)astra_surface_line(surface, x + 3, y + 8,
+                                     x + 6, y + 11, mark);
+            (void)astra_surface_line(surface, x + 6, y + 11,
+                                     x + 12, y + 4, mark);
+        } else {
+            astra_surface_fill_round(surface, x + 1, y + 1, 14u, 14u, 3u,
+                                     color(fill));
         }
     }
     astra_surface_ui_text(
@@ -3896,14 +3903,13 @@ static AstraResult render_field(const AstraUIContext *context,
     const AstraControlFrame *frame = &control->_private_frame;
     uint32_t state = effective_state(control);
     int inline_field = (control->_private_style & ASTRA_FIELD_INLINE) != 0u;
-    uint32_t inset = inline_field ? 0u : theme->control_padding_x;
+    uint32_t inset = inline_field ? 0u : FIELD_PADDING_X;
     uint32_t border_width = inline_field ? 0u : theme->control_border_width;
     AstraColorRGBA8 background =
         inline_field ? theme->client :
         (state & ASTRA_CONTROL_DISABLED) != 0u ?
             theme->control_disabled :
-            ((state & ASTRA_CONTROL_FOCUSED) != 0u ?
-                 theme->client : theme->surface_inset);
+            theme->surface_raised;
     AstraColorRGBA8 border = (state & ASTRA_CONTROL_ERROR) != 0u ?
         theme->control_error :
         ((state & ASTRA_CONTROL_FOCUSED) != 0u ?
@@ -4011,51 +4017,53 @@ static void render_slider(const AstraTheme *theme,
     uint64_t offset = range_offset(control->_private_value,
                                    control->_private_minimum_value);
     AstraColorRGBA8 track = (state & ASTRA_CONTROL_ERROR) != 0u ?
-        theme->control_error : theme->surface_inset;
+        theme->control_error : theme->client_border;
     AstraColorRGBA8 active = (state & ASTRA_CONTROL_DISABLED) != 0u ?
         theme->text_tertiary : theme->accent;
     AstraColorRGBA8 thumb = (state & ASTRA_CONTROL_DISABLED) != 0u ?
-        theme->control_disabled : theme->client_border;
+        theme->control_disabled : theme->text_tertiary;
     int32_t thumb_x;
     int32_t thumb_y;
 
     if (control->_private_style == ASTRA_ORIENTATION_HORIZONTAL) {
-        uint32_t travel = frame->width - 14u;
+        uint32_t travel = frame->width - 16u;
         uint32_t position = range_position(offset, range, travel);
         int32_t center_y = frame->y + (int32_t)frame->height / 2;
 
-        astra_surface_fill_round(surface, frame->x + 7, center_y - 2,
+        astra_surface_fill_round(surface, frame->x + 8, center_y - 2,
                                  travel, 4u, 2u, color(track));
         if (offset != 0u)
-            astra_surface_fill_round(surface, frame->x + 7, center_y - 2,
+            astra_surface_fill_round(surface, frame->x + 8, center_y - 2,
                                      position, 4u, 2u, color(active));
         thumb_x = frame->x + (int32_t)position;
-        thumb_y = center_y - 9;
+        thumb_y = center_y - 8;
     } else {
-        uint32_t travel = frame->height - 14u;
+        uint32_t travel = frame->height - 16u;
         uint32_t position = range_position(offset, range, travel);
         int32_t center_x = frame->x + (int32_t)frame->width / 2;
 
-        astra_surface_fill_round(surface, center_x - 2, frame->y + 7,
+        astra_surface_fill_round(surface, center_x - 2, frame->y + 8,
                                  4u, travel, 2u, color(track));
         if (offset != 0u)
             astra_surface_fill_round(
                 surface, center_x - 2,
-                frame->y + 7 + (int32_t)(travel - position),
+                frame->y + 8 + (int32_t)(travel - position),
                 4u, position, 2u, color(active));
-        thumb_x = center_x - 7;
+        thumb_x = center_x - 8;
         thumb_y = frame->y + (int32_t)(travel - position);
     }
     if ((state & CONTROL_FOCUS_VISIBLE) != 0u)
         astra_surface_fill_round(
             surface, thumb_x - theme->focus_width,
             thumb_y - theme->focus_width,
-            14u + (uint32_t)theme->focus_width * 2u,
-            18u + (uint32_t)theme->focus_width * 2u,
-            (uint16_t)(7u + theme->focus_width),
+            16u + (uint32_t)theme->focus_width * 2u,
+            16u + (uint32_t)theme->focus_width * 2u,
+            (uint16_t)(8u + theme->focus_width),
             color(theme->control_focus));
-    astra_surface_fill_round(surface, thumb_x, thumb_y, 14u, 18u, 7u,
+    astra_surface_fill_round(surface, thumb_x, thumb_y, 16u, 16u, 8u,
                              color(thumb));
+    astra_surface_fill_round(surface, thumb_x + 1, thumb_y + 1,
+                             14u, 14u, 7u, color(theme->client));
 }
 
 static void render_dial(const AstraTheme *theme,
@@ -4380,7 +4388,7 @@ static void render_scrollbar(const AstraTheme *theme,
     }
     track = (control->_private_style & SCROLLBAR_STYLE_OVERLAY) != 0u ?
         blend(theme->frame, theme->surface_inset, alpha / 3u) :
-        theme->surface_inset;
+        theme->client_border;
     astra_surface_fill_round(surface, frame->x, frame->y,
                              frame->width, frame->height, 5u,
                              color(track));
@@ -4608,7 +4616,7 @@ static void render_progress(const AstraTheme *theme,
 
     astra_surface_fill_round(surface, frame->x, frame->y, frame->width,
                              frame->height, frame->height / 2u,
-                             color(theme->surface_inset));
+                             color(theme->client_border));
     if (control->_private_maximum_value == 0) {
         uint32_t phase = control->_private_animation_phase & 63u;
         uint32_t triangle = phase <= 32u ? phase : 64u - phase;
@@ -4702,9 +4710,9 @@ static void render_segmented(const AstraTheme *theme,
     const AstraControlFrame *frame = &control->_private_frame;
     const AstraChoiceItem *items = choice_items(control);
     uint32_t state = effective_state(control);
-    uint32_t border_width = theme->control_border_width;
-    uint32_t inner_width = frame->width - border_width * 2u;
-    uint32_t inner_height = frame->height - border_width * 2u;
+    uint32_t inset = 2u;
+    uint32_t inner_width = frame->width - inset * 2u;
+    uint32_t inner_height = frame->height - inset * 2u;
     uint32_t count = control->_private_text_length;
 
     if ((state & CONTROL_FOCUS_VISIBLE) != 0u)
@@ -4720,12 +4728,6 @@ static void render_segmented(const AstraTheme *theme,
         theme->control_radius,
         color((state & ASTRA_CONTROL_ERROR) != 0u ?
               theme->control_error : theme->client_border));
-    astra_surface_fill_round(
-        surface, frame->x + (int32_t)border_width,
-        frame->y + (int32_t)border_width, inner_width, inner_height,
-        theme->control_radius > border_width ?
-            (uint16_t)(theme->control_radius - border_width) : 0u,
-        color(theme->surface_inset));
     for (uint32_t at = 0u; at < count; ++at) {
         uint32_t left = (uint32_t)((uint64_t)inner_width * at / count);
         uint32_t right = (uint32_t)((uint64_t)inner_width * (at + 1u) /
@@ -4742,11 +4744,11 @@ static void render_segmented(const AstraTheme *theme,
 
         if ((state & ASTRA_CONTROL_PRESSED) != 0u && hot) {
             astra_surface_fill_round(
-                surface, frame->x + (int32_t)border_width + (int32_t)left,
-                frame->y + (int32_t)border_width, right - left,
+                surface, frame->x + (int32_t)inset + (int32_t)left,
+                frame->y + (int32_t)inset,
+                right - left > 2u ? right - left - 2u : right - left,
                 inner_height,
-                theme->control_radius > border_width ?
-                    (uint16_t)(theme->control_radius - border_width) : 0u,
+                theme->control_radius - inset,
                 color(theme->control_pressed));
             text_color = theme->text_primary;
         } else if (selected ||
@@ -4757,27 +4759,21 @@ static void render_segmented(const AstraTheme *theme,
             if ((state & ASTRA_CONTROL_DISABLED) != 0u)
                 fill = theme->control_disabled;
             astra_surface_fill_round(
-                surface, frame->x + (int32_t)border_width + (int32_t)left,
-                frame->y + (int32_t)border_width, right - left,
+                surface, frame->x + (int32_t)inset + (int32_t)left,
+                frame->y + (int32_t)inset,
+                right - left > 2u ? right - left - 2u : right - left,
                 inner_height,
-                theme->control_radius > border_width ?
-                    (uint16_t)(theme->control_radius - border_width) : 0u,
+                theme->control_radius - inset,
                 color(fill));
             if ((state & ASTRA_CONTROL_DISABLED) == 0u)
                 text_color = theme->client_text;
         }
-        if (at != 0u)
-            astra_surface_fill(
-                surface,
-                frame->x + (int32_t)border_width + (int32_t)left,
-                frame->y + (int32_t)border_width, 1u, inner_height,
-                color(theme->client_border));
         fitted = astra_surface_ui_text_fit(
             items[at].text, items[at].text_length,
             theme->control_font_height, right - left);
         text_width = astra_surface_ui_text_width(
             items[at].text, fitted, theme->control_font_height);
-        text_x = frame->x + (int32_t)border_width + (int32_t)left +
+        text_x = frame->x + (int32_t)inset + (int32_t)left +
                  (int32_t)(right - left - text_width) / 2;
         text_y = frame->y +
                  (int32_t)(frame->height - theme->control_font_height) / 2;
@@ -4860,6 +4856,14 @@ static void render_tab(const AstraTheme *theme,
         tab_item_bounds(frame->width, total, before, item_width,
                         &left, &right);
         before += item_width;
+        if ((state & (ASTRA_CONTROL_DISABLED | ASTRA_CONTROL_HOVERED)) ==
+                ASTRA_CONTROL_HOVERED &&
+            control->_private_minimum_value == (int32_t)at &&
+            control->_private_value != (int32_t)at &&
+            frame->height > 2u)
+            astra_surface_fill_round(surface, frame->x + (int32_t)left,
+                frame->y, right - left, frame->height - 2u,
+                theme->control_radius - 2u, color(theme->surface_inset));
         if ((state & ASTRA_CONTROL_DISABLED) != 0u)
             text_color = theme->text_tertiary;
         else if (control->_private_value == (int32_t)at ||
@@ -5046,11 +5050,11 @@ static void slider_pointer(AstraUIContext *context, uint32_t index,
     int64_t value;
 
     if (control->_private_style == ASTRA_ORIENTATION_HORIZONTAL) {
-        travel = frame->width - 14u;
-        position = (int64_t)x - frame->x - 7;
+        travel = frame->width - 16u;
+        position = (int64_t)x - frame->x - 8;
     } else {
-        travel = frame->height - 14u;
-        position = (int64_t)frame->y + 7 + travel - y;
+        travel = frame->height - 16u;
+        position = (int64_t)frame->y + 8 + travel - y;
     }
     if (position < 0) position = 0;
     if ((uint64_t)position > travel) position = travel;
@@ -5259,7 +5263,8 @@ static AstraResult text_position(const AstraControl *control, int32_t x, int32_t
         return ASTRA_OK;
     }
     relative = (int64_t)x - control->_private_frame.x -
-               theme.control_padding_x;
+               ((control->_private_style & ASTRA_FIELD_INLINE) != 0u ?
+                    0u : FIELD_PADDING_X);
     columns = relative <= 0 ? 0u :
         (uint32_t)((relative + theme.mono_cell_width / 2u) /
                    theme.mono_cell_width);

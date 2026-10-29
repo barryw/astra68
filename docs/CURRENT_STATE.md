@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-29
 
+Interface Kit design-alignment checkpoint, 2026-10-29: compared the standalone
+desktop design's Controls chapter with shared native controls and DE25
+Interface Gallery. Neutral client grays, field inset/fill, checkbox/radio
+marks, round slider thumb, progress and scrollbar tracks, segmented fill,
+tab hover, and compact menu rows now follow the design. Draw-list budgets were
+updated for added slider and tab commands. Beast Interface Kit and display
+tests, native library and Gallery bundle builds, and NDK `dist-check` pass.
+Focused DE25 install of
+Interface Kit ABI 8 and Gallery passes; final Progress-page frame SHA-256 is
+`438742065071097c55444fdebd4186462fe455cf35a896cba5688a192ae798fd`
+at `/mnt/Documents/astra68/ui-design-audit-20261029/` on Beast. Astra,
+audio-host, and remote-desktop services are active with zero restarts and
+8.2 GiB free after trial cleanup. Audit and remaining design-only control
+inventory: `docs/UI_DESIGN_ALIGNMENT.md`. Haiku references: `src/kits/interface/`
+`Button.cpp`, `CheckBox.cpp`, `RadioButton.cpp`, `Slider.cpp`, `ScrollBar.cpp`,
+`TextControl.cpp`, `TabView.cpp`, `StatusBar.cpp`, and `Menu.cpp` (shared look
+and state-driven drawing, adapted to Astra's retained hardware draw lists).
+
 AstraZ text-style checkpoint, 2026-10-29: Interface Kit 8.0 gives shared
 Text View a per-UTF-8-scalar appearance callback. AstraZ keeps Frotz's
 semantic lower-window style markers and colour changes alongside transcript
