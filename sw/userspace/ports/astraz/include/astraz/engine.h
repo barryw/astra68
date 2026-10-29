@@ -206,5 +206,7 @@ typedef struct AstraZRun {
 
 int astraz_engine_probe(const char *path, AstraZStory *story);
 int astraz_engine_run(const AstraZRun *request);
+/* Pump a completed sound while a GUI host is waiting for user input. */
+void astraz_engine_poll_sound(void);
 
 #endif

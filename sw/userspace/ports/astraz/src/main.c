@@ -1,10 +1,15 @@
 #include <astraz/engine.h>
+#include "audio.h"
+#include "canvas.h"
+#include "picture.h"
 #include "screen_grid.h"
 #include "transcript_flow.h"
 
 #include <astra/control.h>
+#include <astra/area.h>
 #include <astra/fonts.h>
 #include <astra/graphics_kit.h>
+#include <astra/image_view.h>
 #include <astra/interface_library.h>
 #include <astra/menu.h>
 #include <astra/posix.h>
@@ -15,20 +20,26 @@
 #include <astra/window.h>
 
 #include <errno.h>
+#include <SDL.h>
+#include <SDL_image.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
 #define WIDTH 800u
-#define HEIGHT 520u
+#define HEIGHT 560u
 #define TRANSCRIPT_BYTES 65536u
 
-enum { TOOLBAR = 1u, RESTART, UNDO, QUIT, BODY, STATUS, UPPER, SCROLL, CONTENT,
-       TRANSCRIPT, PROMPT, PROMPT_MARK, INPUT,
+enum { TOOLBAR = 1u, RESTART, UNDO, QUIT, BODY, STATUS, UPPER, CANVAS,
+       SCROLL, CONTENT, TRANSCRIPT, PROMPT, PROMPT_MARK, INPUT,
        CONTROL_COUNT = INPUT };
 
 static AstraWindow window = ASTRA_WINDOW_INIT;
+static AstraDisplay display = ASTRA_DISPLAY_INIT;
+static AstraSurface content = ASTRA_SURFACE_INIT;
+static AstraZCanvas canvas;
+static uint8_t v6_active;
 static AstraSharedSurface surface;
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraControl controls[CONTROL_COUNT];
@@ -68,6 +79,7 @@ static uint8_t story_ready;
 static uint16_t pending_key;
 static AstraHandle gui;
 static const char *story_path;
+static AstraZAudio *audio;
 
 #define CONTROL(id) (&controls[(id) - 1u])
 
@@ -132,7 +144,8 @@ static void transcript_append(const char *bytes, uint32_t length)
 static AstraResult present(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
-    const AstraWindowFrame full = {0u, 0u, WIDTH, HEIGHT};
+    const AstraRectI32 full = {0, 0, WIDTH, HEIGHT};
+    AstraDrawList list = ASTRA_DRAW_LIST_INIT;
     if (upper_dirty && ui_ready) {
         upper_model.rows = screen_grid.rows;
         if (astra_interface_ui_set_state(&ui, CONTROL(UPPER),
@@ -146,9 +159,52 @@ static AstraResult present(void)
             surface.view.byte_size, WIDTH, HEIGHT)) return ASTRA_ERROR_IO;
     astra_surface_clear(&surface.view, astra_surface_rgb565(
         theme.client.red, theme.client.green, theme.client.blue));
-    if (astra_interface_ui_render(&ui, &surface.view) != ASTRA_OK ||
-        astra_window_present_region(&window, &full) != ASTRA_OK)
-        return ASTRA_ERROR_IO;
+    const char *step = "UI render";
+    AstraResult result = astra_interface_ui_render(&ui, &surface.view);
+    if (result == ASTRA_OK) {
+        step = "draw list create";
+        result = astra_draw_list_create(&content, &full, &list);
+    }
+    if (result == ASTRA_OK) {
+        step = "append controls";
+        result = astra_draw_list_append_view(&list, &surface.view);
+    }
+    if (result == ASTRA_OK && v6_active) {
+        AstraControlFrame frame, clip;
+        step = "canvas flush";
+        result = astraz_canvas_flush(&canvas);
+        if (result == ASTRA_OK) {
+            step = "canvas geometry";
+            result = astra_interface_ui_geometry(&ui, CANVAS - 1u,
+                &frame, &clip);
+        }
+        if (result == ASTRA_OK) {
+            AstraImageViewInfo image = ASTRA_IMAGE_VIEW_INFO_INIT;
+            image.frame = (AstraRectI32){frame.x, frame.y,
+                frame.width, frame.height};
+            image.clip = (AstraRectI32){clip.x, clip.y,
+                clip.width, clip.height};
+            image.source_rect = (AstraRectI32){0, 0,
+                ASTRAZ_CANVAS_WIDTH, ASTRAZ_CANVAS_HEIGHT};
+            image.image = &canvas.surface;
+            step = "append canvas";
+            result = astra_interface_image_view_render(&list, &image);
+        }
+    }
+    if (result == ASTRA_OK) {
+        step = "post frame";
+        result = astra_draw_post(&list, ASTRA_DRAW_POST_PRESENT);
+    }
+    if (list._private_handle != ASTRA_INVALID_HANDLE) {
+        if (result == ASTRA_OK) step = "close draw list";
+        AstraResult closed = astra_draw_list_close(&list);
+        if (result == ASTRA_OK) result = closed;
+    }
+    if (result != ASTRA_OK) {
+        (void)astra_log(step);
+        (void)astra_log_failure("AstraZ present", (uint32_t)(-result));
+        return result;
+    }
     astra_interface_ui_damage_clear(&ui);
     return ASTRA_OK;
 }
@@ -157,7 +213,7 @@ static AstraResult flush_transcript(void)
 {
     if (!ui_ready) return ASTRA_OK;
     if (!transcript_dirty)
-        return upper_dirty || status_dirty ? present() : ASTRA_OK;
+        return upper_dirty || status_dirty || v6_active ? present() : ASTRA_OK;
     AstraTextModelInfo info = ASTRA_TEXT_MODEL_INFO_INIT;
     AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
     info.text = transcript;
@@ -193,6 +249,7 @@ static AstraResult build_ui(void)
     };
     AstraToolbarInfo toolbar = ASTRA_TOOLBAR_INFO_INIT;
     AstraContainerInfo body = ASTRA_CONTAINER_INFO_INIT;
+    AstraContainerInfo canvas_info = ASTRA_CONTAINER_INFO_INIT;
     AstraContainerInfo content = ASTRA_CONTAINER_INFO_INIT;
     AstraContainerInfo prompt = ASTRA_CONTAINER_INFO_INIT;
     AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
@@ -271,14 +328,27 @@ static AstraResult build_ui(void)
     item.parent_id = BODY;
     if (astra_interface_control_set_flex(CONTROL(UPPER), &item) != ASTRA_OK)
         return ASTRA_ERROR_IO;
+    canvas_info.id = CANVAS;
+    canvas_info.state = ASTRA_CONTROL_COLLAPSED;
+    if (astra_interface_container_init(CONTROL(CANVAS), &canvas_info) != ASTRA_OK)
+        return ASTRA_ERROR_IO;
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = BODY;
+    item.basis = ASTRAZ_CANVAS_VIEW_HEIGHT;
+    item.minimum_width = item.maximum_width = ASTRAZ_CANVAS_VIEW_WIDTH;
+    item.minimum_height = item.maximum_height = ASTRAZ_CANVAS_VIEW_HEIGHT;
+    item.align_self = ASTRA_FLEX_ALIGN_CENTER;
+    if (astra_interface_control_set_flex(CONTROL(CANVAS), &item) != ASTRA_OK)
+        return ASTRA_ERROR_IO;
     view.id = SCROLL;
     view.model = &scroll;
     view.preferred_width = WIDTH - 24u;
     view.preferred_height = HEIGHT - 110u;
     if (astra_interface_scroll_view_init(CONTROL(SCROLL), &view) != ASTRA_OK)
         return ASTRA_ERROR_IO;
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     item.grow = 1u;
-    item.minimum_height = 200u;
+    item.minimum_height = 32u;
     item.parent_id = BODY;
     if (astra_interface_control_set_flex(CONTROL(SCROLL), &item) != ASTRA_OK)
         return ASTRA_ERROR_IO;
@@ -379,9 +449,20 @@ static int next_event(AstraWindowEvent *event, AstraUIAction *ui_action,
     uint32_t handle = astra_window_event_wait_handle(&window);
     uint32_t selected = 0u;
     for (;;) {
-        uint32_t status = astra_wait_multiple(&handle, 1u, deadline,
+        uint64_t wait_deadline = deadline;
+        if (playing && audio) {
+            uint64_t sound_poll = astra_clock_monotonic() +
+                UINT64_C(50000000);
+            if (sound_poll < wait_deadline) wait_deadline = sound_poll;
+        }
+        uint32_t status = astra_wait_multiple(&handle, 1u, wait_deadline,
                                                &selected, NULL);
-        if (status == ASTRA_SYSCALL_TIMED_OUT) return 0;
+        if (status == ASTRA_SYSCALL_TIMED_OUT) {
+            if (playing && audio) astraz_engine_poll_sound();
+            if (deadline != ASTRA_DEADLINE_FOREVER &&
+                astra_clock_monotonic() >= deadline) return 0;
+            continue;
+        }
         if (status != ASTRA_SYSCALL_OK) return -1;
         AstraResult result = astra_window_event_try(&window, event);
         if (result == ASTRA_ERROR_WOULD_BLOCK) continue;
@@ -419,7 +500,31 @@ static int next_event(AstraWindowEvent *event, AstraUIAction *ui_action,
 static int host_event(void *unused, const AstraZEvent *event)
 {
     (void)unused;
-    if (astraz_screen_grid_event(&screen_grid, event)) {
+    if (event->kind == ASTRAZ_EVENT_SOUND_PREPARE ||
+        event->kind == ASTRAZ_EVENT_SOUND_PLAY ||
+        event->kind == ASTRAZ_EVENT_SOUND_STOP ||
+        event->kind == ASTRAZ_EVENT_SOUND_RELEASE ||
+        event->kind == ASTRAZ_EVENT_BEEP) {
+        if (!audio && event->kind == ASTRAZ_EVENT_BEEP) return 0;
+        if (astraz_audio_event(audio, event)) return 0;
+        const char *reason = SDL_GetError();
+        transcript_append("\n[Sound error: ", 15u);
+        transcript_append(reason && *reason ? reason : "playback failed",
+            (uint32_t)strlen(reason && *reason ? reason : "playback failed"));
+        transcript_append("]\n", 2u);
+        return -1;
+    }
+    if (v6_active && !astraz_canvas_event(&canvas, event)) {
+        const char *reason = SDL_GetError();
+        if (event->kind == ASTRAZ_EVENT_PICTURE) {
+            transcript_append("\n[Picture error: ", 17u);
+            transcript_append(reason && *reason ? reason : "display failed",
+                (uint32_t)strlen(reason && *reason ? reason : "display failed"));
+            transcript_append("]\n", 2u);
+        }
+        return -1;
+    }
+    if (!v6_active && astraz_screen_grid_event(&screen_grid, event)) {
         upper_dirty = 1u;
         if (event->kind == ASTRAZ_EVENT_CHARACTER &&
             event->data.text.window >= 1 && event->data.text.window <= 6)
@@ -427,12 +532,29 @@ static int host_event(void *unused, const AstraZEvent *event)
         if (event->kind == ASTRAZ_EVENT_SCROLL) return 0;
     }
     if (event->kind == ASTRAZ_EVENT_SCREEN_BEGIN) {
+        if (astra_interface_ui_set_state(&ui, CONTROL(CANVAS),
+            v6_active ? 0u : ASTRA_CONTROL_COLLAPSED) != ASTRA_OK)
+            return -1;
         for (uint32_t at = 0u; at < 80u; ++at) status_cells[at] = ' ';
         status_column = 1u;
         status_dirty = 1u;
         if (astra_interface_ui_set_state(&ui, CONTROL(STATUS),
             event->data.screen.version <= 3u ? 0u :
             ASTRA_CONTROL_COLLAPSED) != ASTRA_OK) return -1;
+    }
+    if (v6_active) {
+        if (event->kind == ASTRAZ_EVENT_SCREEN_END)
+            return present() == ASTRA_OK ? 0 : -1;
+        if (event->kind == ASTRAZ_EVENT_REPAINT)
+            return present() == ASTRA_OK ? 1 : -1;
+        if (event->kind == ASTRAZ_EVENT_CHARACTER ||
+            event->kind == ASTRAZ_EVENT_CURSOR ||
+            event->kind == ASTRAZ_EVENT_ERASE ||
+            event->kind == ASTRAZ_EVENT_SCROLL ||
+            event->kind == ASTRAZ_EVENT_PICTURE ||
+            event->kind == ASTRAZ_EVENT_STYLE ||
+            event->kind == ASTRAZ_EVENT_COLOUR)
+            return 0;
     }
     if (event->kind == ASTRAZ_EVENT_CURSOR &&
         event->data.cursor.window == 7) {
@@ -504,6 +626,19 @@ static int host_tick(void *unused)
 {
     (void)unused;
     return running != 0u;
+}
+
+static int host_sound_finished(void *unused)
+{
+    (void)unused;
+    return astraz_audio_finished(audio);
+}
+
+static int host_picture_info(void *unused, int number,
+    const AstraZResource *resource, int *height, int *width)
+{
+    (void)unused; (void)number;
+    return astraz_picture_size(resource, height, width);
 }
 
 static uint16_t host_read_key(void *unused, uint32_t timeout, int cursor)
@@ -679,24 +814,60 @@ static int host_choose_file(void *unused, int purpose, const char *suggested,
 
 static int play_story(const AstraZStory *story)
 {
-    AstraZHost host = {.width = story->version == 6u ? 800u : 80u,
-        .height = story->version == 6u ? 480u : 24u,
-        .cell_width = story->version == 6u ? 10u : 1u,
-        .cell_height = story->version == 6u ? 20u : 1u,
+    (void)astra_log("AstraZ play story begin");
+    audio = astraz_audio_open();
+    int canvas_open = story->version == 6u &&
+        astraz_canvas_open(&canvas, &display);
+    v6_active = canvas_open &&
+        (IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG) &
+            (IMG_INIT_PNG | IMG_INIT_JPG)) == (IMG_INIT_PNG | IMG_INIT_JPG);
+    if (canvas_open && !v6_active) astraz_canvas_close(&canvas);
+    if (story->version == 6u && !v6_active) {
+        (void)astra_log("AstraZ V6 canvas or image decoder unavailable");
+        const char *message = "\n[Graphics unavailable for this story]\n";
+        transcript_append(message, (uint32_t)strlen(message));
+        astraz_audio_close(audio);
+        audio = NULL;
+        IMG_Quit();
+        return ASTRAZ_IO;
+    }
+    AstraZHost host = {.width = story->version == 6u ?
+            ASTRAZ_CANVAS_WIDTH : 80u,
+        .height = story->version == 6u ? ASTRAZ_CANVAS_HEIGHT : 24u,
+        .cell_width = story->version == 6u ? 8u : 1u,
+        .cell_height = story->version == 6u ? 8u : 1u,
         .event = host_event, .read_key = host_read_key,
         .read_line = host_read_line, .choose_file = host_choose_file,
-        .tick = host_tick};
+        .tick = host_tick, .sound_finished = host_sound_finished,
+        .picture_info = host_picture_info,
+        .capabilities = (audio ? ASTRAZ_CAP_SOUND : 0u) |
+            (v6_active ? ASTRAZ_CAP_PICTURES : 0u)};
     char error[256] = {0};
     AstraZRun run = {.story_path = story_path, .host = &host,
         .error = error, .error_capacity = sizeof(error)};
     playing = 1u;
-    if (astra_interface_ui_set_state(&ui, CONTROL(RESTART), 0u) != ASTRA_OK ||
+    if (astra_interface_ui_set_state(&ui, CONTROL(CANVAS),
+            v6_active ? 0u : ASTRA_CONTROL_COLLAPSED) != ASTRA_OK ||
+        astra_interface_ui_set_state(&ui, CONTROL(RESTART), 0u) != ASTRA_OK ||
         astra_interface_ui_set_state(&ui, CONTROL(UNDO), 0u) != ASTRA_OK ||
         present() != ASTRA_OK) {
         playing = 0u;
+        (void)astra_log("AstraZ story UI activation failed");
+        astraz_audio_close(audio);
+        audio = NULL;
+        if (v6_active) astraz_canvas_close(&canvas);
+        v6_active = 0u;
+        IMG_Quit();
         return ASTRAZ_IO;
     }
     int result = astraz_engine_run(&run);
+    if (result != ASTRAZ_OK)
+        (void)astra_log_failure("AstraZ engine", (uint32_t)result);
+    astraz_audio_close(audio);
+    audio = NULL;
+    if (v6_active) astraz_canvas_close(&canvas);
+    v6_active = 0u;
+    IMG_Quit();
     playing = 0u;
     (void)astra_interface_ui_set_state(&ui, CONTROL(UNDO), ASTRA_CONTROL_DISABLED);
     prompt_visible = 0u;
@@ -716,6 +887,7 @@ int main(int argc, char **argv)
     const AstraStartupCapability *gui_cap;
     const AstraStartupCapability *ready;
     AstraWindowCreateInfo info = ASTRA_WINDOW_CREATE_INFO_INIT;
+    AstraArea placeholder = ASTRA_AREA_INIT;
     uint32_t status = ASTRA_STATUS_OK;
     if (!astra_startup_validate(startup) || argc > 2) return 2;
     gui_cap = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
@@ -741,14 +913,24 @@ int main(int argc, char **argv)
     info.x = 240u; info.y = 100u;
     info.width = WIDTH; info.height = HEIGHT;
     info.flags = 0u;
-    info.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
+    info.content_format = ASTRA_WINDOW_CONTENT_SURFACE;
     info.type = ASTRA_WINDOW_STANDARD;
     info.title = "AstraZ"; info.title_length = 6u;
     info.event_mask = ASTRA_WINDOW_SUBSCRIBE_DEFAULT |
         ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
         ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL |
         ASTRA_WINDOW_SUBSCRIBE_KEY | ASTRA_WINDOW_SUBSCRIBE_TEXT;
-    if (astra_window_create(gui, surface.area, &info, &window) != ASTRA_OK ||
+    setup = astra_area_create(4096u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
+        ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER, &placeholder);
+    if (setup == ASTRA_OK)
+        setup = astra_window_create(gui, placeholder.handle, &info, &window);
+    if (placeholder.handle != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_area_close(&placeholder);
+        if (setup == ASTRA_OK) setup = closed;
+    }
+    if (setup != ASTRA_OK ||
+        astra_window_display(&window, &display) != ASTRA_OK ||
+        astra_window_surface(&window, &content) != ASTRA_OK ||
         astra_window_set_application_name(&window, "AstraZ", 6u) != ASTRA_OK ||
         astra_window_menu_bar_set(&window, menu_items,
             sizeof(menu_items) / sizeof(menu_items[0])) != ASTRA_OK ||
@@ -758,6 +940,8 @@ int main(int argc, char **argv)
         (void)astra_service_ready(ready->handle, status, NULL, 0u);
         (void)astra_close(ready->handle);
     }
+    (void)astra_log(status == ASTRA_STATUS_OK ?
+        "AstraZ startup ready" : "AstraZ startup failed");
     AstraZStory story = {0};
     int playable = status == ASTRA_STATUS_OK && story_path != NULL &&
         story_path[0] == '/' &&
@@ -784,10 +968,23 @@ int main(int argc, char **argv)
             AstraWindowEvent event = {0};
             AstraUIAction ui_action = ASTRA_UI_ACTION_INIT;
             if (next_event(&event, &ui_action, ASTRA_DEADLINE_FOREVER) <= 0)
+            {
+                (void)astra_log("AstraZ window event wait failed");
                 status = ASTRA_STATUS_IO;
+            }
         }
         restart_requested = 0u;
     } while (status == ASTRA_STATUS_OK && running && playable);
+    if (content._private_handle != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_surface_close(&content);
+        if (closed != ASTRA_OK && status == ASTRA_STATUS_OK)
+            status = ASTRA_STATUS_IO;
+    }
+    if (display._private_handle != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_display_close(&display);
+        if (closed != ASTRA_OK && status == ASTRA_STATUS_OK)
+            status = ASTRA_STATUS_IO;
+    }
     if (window._private_control != ASTRA_INVALID_HANDLE &&
         astra_window_close(&window) != ASTRA_OK && status == ASTRA_STATUS_OK)
         status = ASTRA_STATUS_IO;

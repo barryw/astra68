@@ -6,6 +6,7 @@ version 0.1.1
 executable bin/m68k-68040/AstraZ
 icon resources/AstraZ.aicon
 capability GUI
+capability PCM
 capability VOLUMES
 capability VOLUME_READ
 capability STORE:rw
@@ -13,13 +14,16 @@ capability HOME:rw
 capability WORK:r
 capability DH0:r
 capability LIBS:r
-requires interface.library 7 7.9.0
+requires interface.library 7 7.10.0
 requires graphics.library 3 3.0.0
 requires font.library 5 5.0.0
 requires system.library 4 4.5.0
 requires libc.library 4 4.0.0
 requires runtime.library 1 1.6.0
 requires compiler.library 2 2.0.0
+requires SDL2.library 3 2.32.11
+requires SDL2_mixer.library 3 2.8.2
+requires SDL2_image.library 2 2.8.12
 handles application/x-zmachine-story .z1
 handles application/x-zmachine-story .z2
 handles application/x-zmachine-story .z3

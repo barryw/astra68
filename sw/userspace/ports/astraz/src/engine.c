@@ -2,6 +2,7 @@
 #include <astra/endian.h>
 
 #include <limits.h>
+#include <errno.h>
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -40,6 +41,7 @@ typedef struct Engine {
     AstraZStory story;
     FILE *resources;
     bb_map_t *map;
+    char *companion_path;
     jmp_buf escape;
     int status;
     int text_style;
@@ -156,8 +158,32 @@ static int open_resources(Engine *engine)
     const char *path = engine->request->resources_path;
     if (engine->story.container == ASTRAZ_CONTAINER_BLORB)
         path = engine->request->story_path;
-    if (!path) return ASTRAZ_OK;
-    engine->resources = fopen(path, "rb");
+    if (!path) {
+        const char *story = engine->request->story_path;
+        const char *last_slash = strrchr(story, '/');
+        const char *dot = strrchr(story, '.');
+        size_t stem = dot && (!last_slash || dot > last_slash) ?
+            (size_t)(dot - story) : strlen(story);
+        if (stem > SIZE_MAX - 8u) return ASTRAZ_INVALID;
+        engine->companion_path = malloc(stem + 8u);
+        if (!engine->companion_path) return ASTRAZ_IO;
+        memcpy(engine->companion_path, story, stem);
+        memcpy(engine->companion_path + stem, ".blb", 5u);
+        engine->resources = fopen(engine->companion_path, "rb");
+        if (!engine->resources) {
+            if (errno != ENOENT) return ASTRAZ_IO;
+            memcpy(engine->companion_path + stem, ".blorb", 7u);
+            engine->resources = fopen(engine->companion_path, "rb");
+        }
+        if (!engine->resources) {
+            if (errno != ENOENT) return ASTRAZ_IO;
+            free(engine->companion_path);
+            engine->companion_path = NULL;
+            return ASTRAZ_OK;
+        }
+    }
+    if (!path && !engine->resources) return ASTRAZ_OK;
+    if (!engine->resources) engine->resources = fopen(path, "rb");
     if (!engine->resources) return ASTRAZ_IO;
     if (bb_create_map(engine->resources, &engine->map) != bb_err_None)
         return ASTRAZ_INVALID;
@@ -218,6 +244,7 @@ int astraz_engine_run(const AstraZRun *request)
     if (status != ASTRAZ_OK) {
         if (engine.map) bb_destroy_map(engine.map);
         if (engine.resources) fclose(engine.resources);
+        free(engine.companion_path);
         return status;
     }
     active = &engine;
@@ -230,6 +257,7 @@ int astraz_engine_run(const AstraZRun *request)
     }
     if (engine.map) bb_destroy_map(engine.map);
     if (engine.resources) fclose(engine.resources);
+    free(engine.companion_path);
     free(f_setup.save_name);
     free(f_setup.script_name);
     free(f_setup.command_name);
@@ -247,7 +275,8 @@ void os_process_arguments(int argc, char *argv[])
     f_setup.story_file = (char *)active->request->story_path;
     f_setup.blorb_file = active->map ?
         (char *)(active->story.container == ASTRAZ_CONTAINER_BLORB ?
-                 active->request->story_path : active->request->resources_path) : NULL;
+                 active->request->story_path : active->companion_path ?
+                 active->companion_path : active->request->resources_path) : NULL;
     f_setup.save_name = strdup("story.qzl");
     f_setup.script_name = strdup("story.scr");
     f_setup.command_name = strdup("story.rec");
@@ -372,6 +401,11 @@ static void drain_sound(void)
     const AstraZHost *host = active->request->host;
     if (host->sound_finished && host->sound_finished(host->context))
         end_of_sound();
+}
+
+void astraz_engine_poll_sound(void)
+{
+    if (active) drain_sound();
 }
 
 zchar os_read_key(int timeout, bool show_cursor)
@@ -633,30 +667,48 @@ static int load_resource(uint32_t usage, int number, AstraZResource *resource,
     bb_result_t result;
     uint8_t tag[8];
     long file_size;
+    uint64_t start, payload_start;
+    uint32_t payload_length;
     *owned = NULL;
     memset(resource, 0, sizeof(*resource));
     if (!active->map || number < 0 ||
         bb_load_resource(active->map, bb_method_FilePos, &result,
                          usage, number) != bb_err_None ||
-        result.data.startpos < 8u || result.data.startpos > LONG_MAX ||
-        result.length > 32u * 1024u * 1024u ||
+        result.data.startpos > LONG_MAX ||
+        result.length > 32u * 1024u * 1024u + 8u ||
         fseek(active->resources, 0, SEEK_END) != 0 ||
         (file_size = ftell(active->resources)) < 0 ||
-        (uint64_t)result.data.startpos + result.length > (uint64_t)file_size ||
-        fseek(active->resources, (long)result.data.startpos - 8L,
-              SEEK_SET) != 0 ||
-        fread(tag, 1u, sizeof(tag), active->resources) != sizeof(tag) ||
-        astra_load_be32(tag + 4u) != result.length)
+        (uint64_t)result.data.startpos + result.length > (uint64_t)file_size)
         return 0;
-    uint8_t *bytes = malloc(result.length ? result.length : 1u);
+    start = (uint64_t)result.data.startpos;
+    if (start >= 8u &&
+        fseek(active->resources, (long)(start - 8u), SEEK_SET) == 0 &&
+        fread(tag, 1u, sizeof(tag), active->resources) == sizeof(tag) &&
+        astra_load_be32(tag + 4u) == result.length) {
+        payload_start = start;
+        payload_length = result.length;
+    } else if (result.length >= 8u &&
+        fseek(active->resources, (long)start, SEEK_SET) == 0 &&
+        fread(tag, 1u, sizeof(tag), active->resources) == sizeof(tag) &&
+        astra_load_be32(tag) == UINT32_C(0x464f524d) &&
+        (uint64_t)astra_load_be32(tag + 4u) + 8u == result.length) {
+        /* Blorblib reports FORM's chunk header as its FilePos and includes
+         * the header in length. All other chunks report payload FilePos. */
+        payload_start = start + 8u;
+        payload_length = result.length - 8u;
+    } else return 0;
+    if (payload_length > 32u * 1024u * 1024u ||
+        fseek(active->resources, (long)payload_start, SEEK_SET) != 0)
+        return 0;
+    uint8_t *bytes = malloc(payload_length ? payload_length : 1u);
     if (!bytes) return 0;
-    if (fread(bytes, 1u, result.length, active->resources) != result.length) {
+    if (fread(bytes, 1u, payload_length, active->resources) != payload_length) {
         free(bytes);
         return 0;
     }
     resource->format = astra_load_be32(tag);
     resource->bytes = bytes;
-    resource->length = result.length;
+    resource->length = payload_length;
     *owned = bytes;
     return 1;
 }
@@ -683,7 +735,7 @@ bool os_picture_data(int picture, int *height, int *width)
     int available = host->picture_info(host->context, picture, &resource,
                                        height, width);
     free(owned);
-    return available && *height > 0 && *width > 0;
+    return available != 0;
 }
 
 void os_draw_picture(int picture, int row, int column)

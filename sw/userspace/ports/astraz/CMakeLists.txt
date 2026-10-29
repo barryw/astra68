@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.21)
 project(AstraZ C)
 
 find_package(Astra CONFIG REQUIRED)
+find_package(SDL2 CONFIG REQUIRED)
+find_package(SDL2_mixer CONFIG REQUIRED)
+find_package(SDL2_image CONFIG REQUIRED)
 
 set(FROTZ_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/frotz/src)
 set_source_files_properties(${FROTZ_SOURCE}/common/main.c PROPERTIES
@@ -40,10 +43,12 @@ target_link_libraries(astraz_engine PRIVATE Astra::Native)
 set_target_properties(astraz_engine PROPERTIES
   C_STANDARD 99 POSITION_INDEPENDENT_CODE ON)
 
-add_executable(astraz src/main.c src/transcript_flow.c src/screen_grid.c)
+add_executable(astraz src/main.c src/audio.c src/picture.c src/canvas.c
+  src/transcript_flow.c src/screen_grid.c)
 target_compile_options(astraz PRIVATE -Wall -Wextra -Werror -Wpedantic)
 target_link_libraries(astraz PRIVATE astraz_engine Astra::interface
-  Astra::graphics Astra::font Astra::system)
+  Astra::graphics Astra::font Astra::system SDL2::SDL2
+  SDL2_mixer::SDL2_mixer SDL2_image::SDL2_image)
 astra_posix_program(astraz NAME "AstraZ" VERSION 0.1.0
   AUTHOR "Astra 68 Project" COPYRIGHT "Copyright 2026 Astra 68 Project")
 

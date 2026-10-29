@@ -8,7 +8,9 @@ PROGRAM := build/cmake/astraz
 .DEFAULT_GOAL := all
 all: bundle
 
-$(PROGRAM): CMakeLists.txt src/main.c src/transcript_flow.c \
+$(PROGRAM): CMakeLists.txt src/main.c src/audio.c src/audio.h \
+	src/picture.c src/picture.h src/transcript_flow.c \
+	src/canvas.c src/canvas.h \
 	src/transcript_flow.h src/screen_grid.c src/screen_grid.h \
 	src/engine.c include/astraz/engine.h
 	test -f $(NDK)/cmake/m68k-astra-toolchain.cmake || \
@@ -22,8 +24,10 @@ $(PROGRAM): CMakeLists.txt src/main.c src/transcript_flow.c \
 		--readelf m68k-astra-readelf \
 		--needed interface.library.7 --needed graphics.library.3 \
 		--needed font.library.5 --needed system.library.4 \
+		--needed SDL2_mixer.library.3 \
 		--needed runtime.library.1 --needed compiler.library.2 \
-		--needed libc.library.4 $@
+		--needed libc.library.4 --needed SDL2.library.3 \
+		--needed SDL2_image.library.2 $@
 
 $(eval $(call astra_app_bundle,build,AstraZ,$(PROGRAM),apps/AstraZ.app/manifest,document,))
 $(eval $(call astra_app_inventory,build,AstraZ))
@@ -39,9 +43,17 @@ build/test_transcript_flow: src/transcript_flow.c src/transcript_flow.h \
 		../../../common/utf8.c tests/test_transcript_flow.c \
 		-o $@
 
-test: build/test_transcript_flow build/test_screen_grid
+build/test_canvas: src/canvas.c src/canvas.h tests/test_canvas.c \
+        tests/fakes/SDL.h
+	@mkdir -p $(@D)
+	cc -std=c99 -Wall -Wextra -Werror -Itests/fakes -Iinclude -Isrc \
+		-I$(ROOT)/ndk/include -I$(ROOT)/sw/include \
+		src/canvas.c tests/test_canvas.c -o $@
+
+test: build/test_transcript_flow build/test_screen_grid build/test_canvas
 	build/test_transcript_flow
 	build/test_screen_grid
+	build/test_canvas
 
 build/test_screen_grid: src/screen_grid.c src/screen_grid.h tests/test_screen_grid.c
 	@mkdir -p $(@D)
