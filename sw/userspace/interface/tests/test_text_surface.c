@@ -308,6 +308,31 @@ int main(void)
     assert(astra_text_surface_init(&text, &info) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
     info.scratch_bytes = sizeof(scratch);
+    assert(astra_text_surface_init(&text, &info) == ASTRA_OK);
+    {
+        const AstraTextCell searchable[] = {
+            {'a', 0u, 0u, 0u, 1u, 0u},
+            {'b', 0u, 0u, 0u, 1u, 0u},
+            {'c', 0u, 0u, 0u, 1u, 0u},
+            {'d', 0u, 0u, 0u, 1u, 0u},
+            {'e', 0u, 0u, 0u, 1u, 0u},
+            {'f', 0u, 0u, 0u, 1u, 0u},
+        };
+        AstraTextGridSelection found = ASTRA_TEXT_GRID_SELECTION_INIT;
+        assert(astra_text_surface_find_grid(&text, searchable, 3u, 3u, 2u,
+            "c\nd", 3u, (AstraTextGridPosition){0u, 0u}, 0u,
+            &found) == ASTRA_OK);
+        assert(found.anchor.row == 0u && found.anchor.column == 2u &&
+               found.focus.row == 1u && found.focus.column == 1u);
+        assert(astra_text_surface_find_grid(&text, searchable, 3u, 3u, 2u,
+            "ab", 2u, (AstraTextGridPosition){1u, 2u}, 1u,
+            &found) == ASTRA_OK && found.anchor.row == 0u &&
+            found.anchor.column == 0u);
+        assert(astra_text_surface_find_grid(&text, searchable, 3u, 3u, 2u,
+            "zz", 2u, (AstraTextGridPosition){0u, 0u}, 0u,
+            &found) == ASTRA_ERROR_NOT_PRESENT && found.anchor.row == 0u &&
+            found.anchor.column == 0u);
+    }
     info.mode = ASTRA_TEXT_SURFACE_FLOW;
     assert(astra_text_surface_init(&text, &info) == ASTRA_OK);
     target.kind = ASTRA_SURFACE_VIEW_DRAW_LIST;

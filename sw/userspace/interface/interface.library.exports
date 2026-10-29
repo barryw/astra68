@@ -91,6 +91,7 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_text_view_set_wrap_width;
         astra_interface_text_view_set_mode;
         astra_interface_text_view_set_editable;
+        astra_interface_text_view_set_line_numbers;
         astra_interface_text_view_replace_selection;
         astra_interface_text_view_select;
         astra_interface_text_view_reveal;
@@ -145,6 +146,7 @@ ASTRA_INTERFACE_9.0 {
         astra_text_model_set_selection;
         astra_text_model_validate;
         astra_text_surface_copy_grid_selection;
+        astra_text_surface_find_grid;
         astra_text_surface_draw_caret;
         astra_text_surface_draw_caret_at;
         astra_text_surface_grid_hit_test;

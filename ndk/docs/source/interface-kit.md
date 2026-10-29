@@ -587,6 +587,9 @@ place when changing modes. Flow measures scalar advances with the adopted
 font, wraps by pixel width, and submits styled glyph runs to the hardware draw
 list. TextSurface accepts grid, code, and flow modes; grid-specific hit testing
 and copying remain available only in grid mode.
+`astra_interface_text_view_set_line_numbers` adds the shared code gutter;
+logical line numbers remain aligned as wrapped rows scroll. The gutter is
+suppressed in flow mode and returns when code mode is selected again.
 
 Text View starts read-only. `astra_interface_text_view_set_editable` enables
 multiline keyboard editing, including Enter, Backspace, Delete, and normal text
@@ -654,7 +657,9 @@ fixed-cell `ASTRA_CONTROL_GRID_VIEW` is a separate read-only text control.
 storage, not the document. Grid cells, selection, and scrollback remain in the
 application. Grid selections are normalized half-open ranges. The extraction
 call measures or copies UTF-8 atomically and preserves row boundaries while
-trimming selected trailing spaces.
+trimming selected trailing spaces. `astra_text_surface_find_grid` searches
+row-major cells with virtual newlines between rows and returns half-open cell
+boundaries without changing application-owned selection state.
 
 Scrollable text uses composition: ScrollView owns clipping, wheel and keyboard
 movement, offsets, and scrollbars; the text control owns its document, layout,
