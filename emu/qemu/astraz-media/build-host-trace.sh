@@ -17,7 +17,7 @@ cc -std=c99 -D_DEFAULT_SOURCE \
     -I"$root/sw/include" -Dmain=astraz_frotz_main \
     -c "$frotz/common/main.c" -o "$output/frotz-main.o"
 
-cc -std=c99 -D_DEFAULT_SOURCE \
+cc -std=c99 -D_DEFAULT_SOURCE -DASTRAZ_FROTZ_TRANSCRIPT=1 \
     -I"$frotz/common" -I"$frotz/blorb" -I"$astraz/include" \
     -I"$root/sw/include" \
     "$astraz/src/engine.c" "$root/emu/qemu/astraz-media/host_trace.c" \

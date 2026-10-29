@@ -21,6 +21,11 @@ typedef struct Trace {
     unsigned emphasis;
     unsigned reverse;
     unsigned fixed;
+    unsigned semantic_words;
+    unsigned semantic_newlines;
+    unsigned semantic_characters;
+    unsigned semantic_bytes;
+    char semantic[8192];
     unsigned stop_after;
     unsigned width;
     unsigned height;
@@ -37,6 +42,22 @@ static int event(void *context, const AstraZEvent *item)
     Trace *trace = context;
     unsigned at = ++trace->events;
     if (item->kind == ASTRAZ_EVENT_CHARACTER) trace->characters++;
+    if (item->kind == ASTRAZ_EVENT_TRANSCRIPT_TEXT) {
+        trace->semantic_words++;
+        trace->semantic_characters += item->data.transcript.length;
+        for (uint32_t index = 0; index < item->data.transcript.length;
+             ++index) {
+            uint16_t scalar = item->data.transcript.characters[index];
+            if (trace->semantic_bytes + 1u < sizeof(trace->semantic))
+                trace->semantic[trace->semantic_bytes++] =
+                    scalar >= 32u && scalar < 127u ? (char)scalar : '?';
+        }
+    }
+    if (item->kind == ASTRAZ_EVENT_TRANSCRIPT_NEWLINE) {
+        trace->semantic_newlines++;
+        if (trace->semantic_bytes + 1u < sizeof(trace->semantic))
+            trace->semantic[trace->semantic_bytes++] = '\n';
+    }
     if (item->kind == ASTRAZ_EVENT_PICTURE) {
         const AstraZResource *resource = &item->data.picture.resource;
         trace->pictures++;
@@ -68,7 +89,9 @@ static int event(void *context, const AstraZEvent *item)
     }
     if (at > 250 && item->kind == ASTRAZ_EVENT_CHARACTER)
         return 0;
-    if (at > 1000) return item->kind == ASTRAZ_EVENT_REPAINT ? 1 : 0;
+    if (at > 1000 && item->kind != ASTRAZ_EVENT_TRANSCRIPT_TEXT &&
+        item->kind != ASTRAZ_EVENT_TRANSCRIPT_NEWLINE)
+        return item->kind == ASTRAZ_EVENT_REPAINT ? 1 : 0;
     printf("%03u ", at);
     switch (item->kind) {
     case ASTRAZ_EVENT_SCREEN_BEGIN:
@@ -127,6 +150,20 @@ static int event(void *context, const AstraZEvent *item)
     case ASTRAZ_EVENT_WARNING:
         printf("warning %s", item->data.warning.text);
         break;
+    case ASTRAZ_EVENT_TRANSCRIPT_TEXT:
+        printf("semantic text=");
+        for (uint32_t index = 0; index < item->data.transcript.length;
+             ++index) {
+            uint16_t scalar = item->data.transcript.characters[index];
+            if (scalar >= 32u && scalar < 127u && scalar != '\\')
+                putchar((int)scalar);
+            else
+                printf("\\u%04X", scalar);
+        }
+        break;
+    case ASTRAZ_EVENT_TRANSCRIPT_NEWLINE:
+        printf("semantic newline");
+        break;
     default:
         printf("kind=%u", item->kind);
         break;
@@ -148,7 +185,16 @@ static uint16_t read_line(void *context, uint16_t *buffer, uint32_t max,
 {
     Trace *trace = context;
     trace->reads++;
-    if (max) buffer[0] = 0;
+    const char *input = getenv("ASTRAZ_TRACE_INPUT");
+    uint32_t at = 0u;
+    if (input != NULL) {
+        while (input[at] != '\0' && at < max &&
+               (unsigned char)input[at] < 128u) {
+            buffer[at] = (uint8_t)input[at];
+            ++at;
+        }
+    }
+    buffer[at] = 0u;
     printf("INPUT line max=%u timeout=%u width=%u continued=%d\n",
            max, timeout, width, continued);
     return ASTRAZ_KEY_RETURN;
@@ -235,14 +281,20 @@ int main(int argc, char **argv)
     };
     char error[256] = {0};
     AstraZRun run = {.story_path = argv[1],
-                     .resources_path = argc >= 3 ? argv[2] : NULL,
+                     .resources_path = argc >= 3 && strcmp(argv[2], "-") != 0 ?
+                         argv[2] : NULL,
                      .host = &host, .error = error,
                      .error_capacity = sizeof(error)};
     int result = astraz_engine_run(&run);
-    printf("RESULT status=%d events=%u pictures=%u characters=%u reads=%u picture_oob=%u cursor_oob=%u font3=%u bold=%u emphasis=%u reverse=%u fixed=%u error=%s\n",
+    puts("SEMANTIC_TRANSCRIPT_BEGIN");
+    fwrite(trace.semantic, 1u, trace.semantic_bytes, stdout);
+    puts("\nSEMANTIC_TRANSCRIPT_END");
+    printf("RESULT status=%d events=%u pictures=%u characters=%u reads=%u picture_oob=%u cursor_oob=%u font3=%u bold=%u emphasis=%u reverse=%u fixed=%u semantic_words=%u semantic_newlines=%u semantic_characters=%u error=%s\n",
            result, trace.events, trace.pictures, trace.characters,
            trace.reads, trace.picture_oob, trace.cursor_oob, trace.font3,
-           trace.bold, trace.emphasis, trace.reverse, trace.fixed, error);
+           trace.bold, trace.emphasis, trace.reverse, trace.fixed,
+           trace.semantic_words, trace.semantic_newlines,
+           trace.semantic_characters, error);
     return result == ASTRAZ_OK ||
         (result == ASTRAZ_CANCELLED && trace.reads == trace.stop_after) ? 0 : 1;
 }

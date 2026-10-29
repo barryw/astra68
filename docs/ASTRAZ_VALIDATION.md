@@ -277,3 +277,18 @@ desktop services were active with `Result=success NRestarts=0`, and the board
 had 8.1 GiB free. WORK stories and disposable probe bundles remain for the
 final window/resize gates; remove only those exact trial paths afterward.
 HDMI was disconnected, so audible playback certification remains open.
+
+## Semantic transcript reflow host gate
+
+The validator's private-engine trace now builds Frotz with the same
+`ASTRAZ_FROTZ_TRANSCRIPT` definition as AstraZ and records semantic text and
+newline events. On isolated Beast source, the AstraZ host tests and synthetic
+font 3 trace passed. A Trinity Z4 opening trace kept paragraphs longer than
+80 columns on single logical lines, with explicit paragraph breaks; the
+`look` input produced a second Palace Gate response. The semantic stream is
+therefore independent of Frotz's physical 80-column screen wrapping. The
+standalone Frotz `stream.c` also compiled without the AstraZ definition.
+
+Code review confirms live command echo is app-owned, while the new Frotz
+input echo path runs only for replay input. Replay echo still needs an
+executable fixture. DE25 resize/reflow remains a separate hardware gate.
