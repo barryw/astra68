@@ -2,6 +2,7 @@
 """Build only requested targets and install their guest files on running DE25."""
 
 import argparse
+import filecmp
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,16 @@ def kit_companions(source, target):
     expected = "/libs/%s/%s" % (components[4], relative)
     if target != expected:
         raise ValueError("Kit library target must be " + expected)
+    abi = components[7]
+    if not abi.startswith("abi-") or not abi[4:].isdigit():
+        raise ValueError("invalid Kit library ABI path: " + str(source))
+    candidates = list((REPOSITORY / "sw/userspace").glob(
+        "*/build/m68k/libraries/" + source.name + "." + abi[4:]))
+    if len(candidates) != 1 or not candidates[0].is_file():
+        raise ValueError("cannot verify built Kit library: " + str(source))
+    if not filecmp.cmp(source, candidates[0], shallow=False):
+        raise ValueError("stale Kit library; rebuild " + components[4] +
+                         " before deployment: " + str(source))
     bundle = REPOSITORY.joinpath(*components[:5])
     path = components[4] + "/" + relative
     for (name, abi), (version, abi_minor, build_id, provider_path) in \
