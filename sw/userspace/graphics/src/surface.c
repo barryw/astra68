@@ -1,4 +1,5 @@
 #include <astra/surface.h>
+#include <astra/graphics.h>
 
 #if !defined(ASTRA_SURFACE_CORE) && !defined(ASTRA_SURFACE_FONT)
 #define ASTRA_SURFACE_CORE 1
@@ -543,6 +544,67 @@ int astra_draw_list_copy(AstraSurfaceView *surface, uint32_t source_x,
     command->source_y = (int16_t)source_y;
     command->source_width = (uint16_t)width;
     command->source_height = (uint16_t)height;
+    return 1;
+}
+
+int astra_surface_draw_blit(AstraSurfaceView *view,
+    const AstraSurface *source, const AstraRectI32 *source_rect,
+    const AstraRectI32 *destination_rect, const AstraBlitOptions *options)
+{
+    AstraBlitOptions plain = ASTRA_BLIT_OPTIONS_INIT;
+    AstraDrawListCommand *command;
+
+    if (options == NULL) options = &plain;
+    if (!clip_valid(view) || view->kind != ASTRA_SURFACE_VIEW_DRAW_LIST ||
+        source == NULL || source_rect == NULL || destination_rect == NULL ||
+        source->_private_handle == ASTRA_INVALID_HANDLE ||
+        source->_private_id == 0u || source->_private_window == 0u ||
+        source_rect->x < 0 || source_rect->y < 0 ||
+        source_rect->x > INT16_MAX || source_rect->y > INT16_MAX ||
+        source_rect->width == 0u || source_rect->height == 0u ||
+        source_rect->width > UINT16_MAX ||
+        source_rect->height > UINT16_MAX ||
+        (uint64_t)source_rect->x + source_rect->width >
+            source->_private_width ||
+        (uint64_t)source_rect->y + source_rect->height >
+            source->_private_height ||
+        destination_rect->x < INT16_MIN ||
+        destination_rect->x > INT16_MAX ||
+        destination_rect->y < INT16_MIN ||
+        destination_rect->y > INT16_MAX ||
+        destination_rect->width == 0u ||
+        destination_rect->height == 0u ||
+        options->size < sizeof(*options) ||
+        (options->flags & ~(ASTRA_BLIT_FLIP_X | ASTRA_BLIT_FLIP_Y |
+                            ASTRA_BLIT_FILTER_LINEAR)) != 0u ||
+        options->blend > ASTRA_BLEND_MULTIPLY ||
+        options->reserved[0] != 0u || options->reserved[1] != 0u ||
+        options->reserved[2] != 0u)
+        return 0;
+    if (clip_empty(view)) return 1;
+    command = append_command(view, ASTRA_DRAW_LIST_BLIT);
+    if (command == NULL) return 0;
+    command->flags =
+        ((options->flags & ASTRA_BLIT_FLIP_X) != 0u ?
+            ASTRA_DRAW_LIST_FLIP_X : 0u) |
+        ((options->flags & ASTRA_BLIT_FLIP_Y) != 0u ?
+            ASTRA_DRAW_LIST_FLIP_Y : 0u) |
+        ((options->flags & ASTRA_BLIT_FILTER_LINEAR) != 0u ?
+            ASTRA_DRAW_LIST_FILTER_LINEAR : 0u) |
+        ASTRA_DRAW_LIST_BLEND_FLAGS(options->blend);
+    command->x = destination_rect->x;
+    command->y = destination_rect->y;
+    command->width = destination_rect->width;
+    command->height = destination_rect->height;
+    command->color = ((uint32_t)options->modulate.alpha << 24u) |
+                     ((uint32_t)options->modulate.red << 16u) |
+                     ((uint32_t)options->modulate.green << 8u) |
+                     options->modulate.blue;
+    command->source = source->_private_id;
+    command->source_x = (int16_t)source_rect->x;
+    command->source_y = (int16_t)source_rect->y;
+    command->source_width = (uint16_t)source_rect->width;
+    command->source_height = (uint16_t)source_rect->height;
     return 1;
 }
 

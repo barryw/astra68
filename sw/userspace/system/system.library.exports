@@ -51,6 +51,7 @@ ASTRA_SYSTEM_4.0 {
         astra_draw_lines;
         astra_draw_list_cleanup;
         astra_draw_list_append_view;
+        astra_draw_list_append_view_with_sources;
         astra_draw_list_close;
         astra_draw_list_create;
         astra_draw_list_reset;

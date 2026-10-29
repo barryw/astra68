@@ -808,8 +808,9 @@ AstraResult astra_draw_list_set_target(AstraDrawList *draw_list,
     return result;
 }
 
-AstraResult astra_draw_list_append_view(AstraDrawList *draw_list,
-                                        const AstraSurfaceView *view)
+AstraResult astra_draw_list_append_view_with_sources(AstraDrawList *draw_list,
+    const AstraSurfaceView *view, const AstraSurface *const *sources,
+    uint32_t source_count)
 {
     const AstraDrawListHeader *source;
     const AstraDrawListCommand *commands;
@@ -821,6 +822,7 @@ AstraResult astra_draw_list_append_view(AstraDrawList *draw_list,
     AstraResult result;
 
     if (!list_live(draw_list) || view == NULL || view->pixels == NULL ||
+        (source_count != 0u && sources == NULL) ||
         ((uintptr_t)view->pixels & 3u) != 0u ||
         view->kind != ASTRA_SURFACE_VIEW_DRAW_LIST ||
         view->byte_size < ASTRA_DRAW_LIST_AREA_BYTES ||
@@ -845,12 +847,26 @@ AstraResult astra_draw_list_append_view(AstraDrawList *draw_list,
         !astra_words_zero(source->reserved, 9u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     commands = (const AstraDrawListCommand *)(source + 1);
+    for (uint32_t at = 0u; at < source_count; ++at) {
+        const AstraSurface *candidate = sources[at];
+
+        if (!surface_live(candidate) ||
+            candidate->_private_window != draw_list->_private_window ||
+            candidate->_private_id == draw_list->_private_target)
+            return ASTRA_ERROR_INVALID_HANDLE;
+        for (uint32_t before = 0u; before < at; ++before)
+            if (sources[before]->_private_id == candidate->_private_id)
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
     for (uint32_t at = 0u; at < source->command_count; ++at) {
         const AstraDrawListCommand *command = &commands[at];
         int named_text = command->operation == ASTRA_DRAW_LIST_NAMED_TEXT;
         int text = command->operation == ASTRA_DRAW_LIST_TEXT ||
                    command->operation == ASTRA_DRAW_LIST_MONO_TEXT ||
                    named_text;
+        int borrowed_blit = command->operation == ASTRA_DRAW_LIST_BLIT &&
+                            command->source !=
+                                ASTRA_DRAW_LIST_SOURCE_DESTINATION;
 
         if (command->operation != ASTRA_DRAW_LIST_FILL &&
             command->operation != ASTRA_DRAW_LIST_FILL_ROUNDED &&
@@ -860,7 +876,7 @@ AstraResult astra_draw_list_append_view(AstraDrawList *draw_list,
         if ((named_text ? (command->source == 0u ||
                             command->source >= ASTRA_FONT_ID_MAX ||
                             command->payload_bytes <= command->source) :
-                           command->source !=
+                           !borrowed_blit && command->source !=
                                ASTRA_DRAW_LIST_SOURCE_DESTINATION) ||
             command->clip_left > command->clip_right ||
             command->clip_right > view->width ||
@@ -873,6 +889,20 @@ AstraResult astra_draw_list_append_view(AstraDrawList *draw_list,
                       command->payload_offset - source_offset >
                           source->payload_bytes - command->payload_bytes)))
             return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (borrowed_blit) {
+            uint32_t match = source_count;
+
+            for (uint32_t candidate = 0u; candidate < source_count; ++candidate)
+                if (sources[candidate]->_private_id == command->source) {
+                    match = candidate;
+                    break;
+                }
+            if (match == source_count ||
+                !surface_rect_valid(sources[match], &(AstraRectI32){
+                    command->source_x, command->source_y,
+                    command->source_width, command->source_height}))
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+        }
         if (named_text && memchr((const uint8_t *)source +
                 command->payload_offset, '\0', command->source) != NULL)
             return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -935,6 +965,13 @@ AstraResult astra_draw_list_append_view(AstraDrawList *draw_list,
     target->command_count = new_count;
     target->payload_bytes = new_payload;
     return ASTRA_OK;
+}
+
+AstraResult astra_draw_list_append_view(AstraDrawList *draw_list,
+                                        const AstraSurfaceView *view)
+{
+    return astra_draw_list_append_view_with_sources(draw_list, view,
+                                                    NULL, 0u);
 }
 
 AstraResult astra_draw_list_set_clip(AstraDrawList *draw_list,

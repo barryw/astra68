@@ -1,4 +1,5 @@
 #include <astra/draw_list.h>
+#include <astra/graphics.h>
 #include <astra/display.h>
 #include <astra/render_batch.h>
 #include <astra/window_scene.h>
@@ -1450,6 +1451,46 @@ static void test_draw_list_copy_is_a_hardware_self_blit(void)
     assert(be32(render + 4u) >> 16 == ASTRA_RENDER_OP_BLIT);
     assert(be32(render + 32u) == destination);
     assert(be32(render + 36u) == destination);
+}
+
+static void test_draw_list_borrowed_surface_blit(void)
+{
+    uint8_t storage[ASTRA_DRAW_LIST_AREA_BYTES];
+    AstraSurfaceView view;
+    AstraSurface icon = ASTRA_SURFACE_INIT;
+    AstraBlitOptions options = ASTRA_BLIT_OPTIONS_INIT;
+    const AstraDrawListHeader *header;
+    const AstraDrawListCommand *command;
+    AstraRectI32 source = {0, 0, 64u, 64u};
+    AstraRectI32 destination = {8, 12, 40u, 40u};
+
+    assert(astra_draw_list_view_init(&view, storage, sizeof(storage),
+                                     320u, 200u));
+    icon._private_handle = 42u;
+    icon._private_window = 1u;
+    icon._private_id = 7u;
+    icon._private_width = 64u;
+    icon._private_height = 64u;
+    options.blend = ASTRA_BLEND_ALPHA;
+    assert(astra_surface_draw_blit(&view, &icon, &source,
+                                   &destination, &options));
+    header = (const AstraDrawListHeader *)(const void *)storage;
+    command = (const AstraDrawListCommand *)(const void *)(header + 1);
+    assert(header->command_count == 1u &&
+           command->operation == ASTRA_DRAW_LIST_BLIT &&
+           command->source == 7u &&
+           command->source_width == 64u &&
+           command->source_height == 64u &&
+           command->width == 40u && command->height == 40u &&
+           command->color == ASTRA_DRAW_LIST_COLOR_IDENTITY);
+    source.width = 65u;
+    assert(!astra_surface_draw_blit(&view, &icon, &source,
+                                    &destination, &options));
+    assert(header->command_count == 1u);
+    source.width = 64u;
+    icon._private_handle = ASTRA_INVALID_HANDLE;
+    assert(!astra_surface_draw_blit(&view, &icon, &source,
+                                    &destination, &options));
 }
 
 static void test_text_box_scroll_uses_overlap_safe_copy(void)
@@ -3236,6 +3277,7 @@ int main(void)
     test_prepared_style_strikes();
     test_direct_styled_text();
     test_draw_list_copy_is_a_hardware_self_blit();
+    test_draw_list_borrowed_surface_blit();
     test_text_box_scroll_uses_overlap_safe_copy();
     test_rounded_fill_has_no_overlap();
     puts("surface drawing tests passed");
