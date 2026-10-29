@@ -1,4 +1,5 @@
 #include <astra/control.h>
+#include <astra/filesystem_kit.h>
 #include <astra/fonts.h>
 #include <astra/graphics_kit.h>
 #include <astra/interface_library.h>
@@ -15,8 +16,11 @@
 #include <stdint.h>
 #include <string.h>
 
-#define INSTALLER_WIDTH 560u
-#define INSTALLER_HEIGHT 260u
+#define INSTALLER_REVIEW_WIDTH 560u
+#define INSTALLER_REVIEW_HEIGHT 260u
+#define INSTALLER_PICKER_WIDTH 720u
+#define INSTALLER_PICKER_HEIGHT 560u
+#define INSTALLER_DIRECTORY_CAPACITY 512u
 
 enum {
     TITLE = 1u, DESCRIPTION, BODY, ACTIONS,
@@ -29,6 +33,9 @@ _Static_assert(DESCRIPTION == TITLE + ASTRA_SETTINGS_PANE_DESCRIPTION &&
     BODY == TITLE + ASTRA_SETTINGS_PANE_BODY &&
     ACTIONS == TITLE + ASTRA_SETTINGS_PANE_ACTIONS,
     "Installer uses the shared Settings pane composition");
+_Static_assert((uint32_t)CONTROL_COUNT <=
+    (uint32_t)ASTRA_FILE_PANEL_CONTROL_COUNT,
+    "Review pane must fit the shared panel control storage");
 
 ASTRA_PROGRAM("Installer", 0, 1, 0, "Astra68 contributors",
               "Copyright 2026 Astra68 contributors");
@@ -36,13 +43,164 @@ ASTRA_PROGRAM("Installer", 0, 1, 0, "Astra68 contributors",
 static AstraProcessFilesystem files = ASTRA_PROCESS_FILESYSTEM_INIT;
 static AstraSharedSurface surface;
 static AstraWindow window = ASTRA_WINDOW_INIT;
-static AstraControl controls[CONTROL_COUNT];
+static AstraControl controls[ASTRA_FILE_PANEL_CONTROL_COUNT];
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+static AstraFilePanel picker = ASTRA_FILE_PANEL_INIT;
+static AstraCollectionModel picker_collection = ASTRA_COLLECTION_MODEL_INIT;
+static AstraScrollModel picker_scroll = ASTRA_SCROLL_MODEL_INIT;
+static AstraDirectoryEntry picker_entries[2][INSTALLER_DIRECTORY_CAPACITY];
+static AstraCollectionItem picker_items[2][INSTALLER_DIRECTORY_CAPACITY];
+static const AstraSurface *picker_icons[INSTALLER_DIRECTORY_CAPACITY];
+static AstraCollectionItem picker_place_items[3];
+static char chosen_archive[ASTRA_VFS_PATH_MAX];
+static uint32_t picker_entry_bank;
+static uint32_t picker_active;
+static uint16_t content_width;
+static uint16_t content_height;
 static const char *archive;
 static const char *notice = "Review package before installing into Applications.";
 static uint32_t installed;
 
 #define CONTROL(id) (&controls[(id) - 1u])
+
+static const AstraFilePanelPlace picker_places[] = {
+    {"Volumes", sizeof("Volumes") - 1u, "/"},
+    {"Home", sizeof("Home") - 1u, "/home"},
+    {"DH0", sizeof("DH0") - 1u, "/dh0"}
+};
+
+static const AstraChoiceItem picker_filters[] = {
+    {"Astra packages", sizeof("Astra packages") - 1u, {0u, 0u}}
+};
+
+static uint32_t package_entry(void *context,
+    const AstraDirectoryEntry *entry, uint32_t filter_index)
+{
+    const AstraFilePanel *panel = context;
+    AstraFileTypeInfo type = ASTRA_FILE_TYPE_INFO_INIT;
+    AstraString path;
+    char storage[ASTRA_VFS_PATH_MAX];
+
+    if (filter_index != 0u || panel == NULL || panel->directory == NULL ||
+        entry == NULL) return 0u;
+    astra_string_init(&path, storage, sizeof(storage));
+    if (!astra_string_append(&path, panel->directory) ||
+        (path.length != 1u && !astra_string_append_char(&path, '/')) ||
+        !astra_string_append(&path, entry->name))
+        return 0u;
+    return astra_file_type_identify(&files.filesystem, storage, &type) ==
+               ASTRA_VFS_OK &&
+           strcmp(type.type, ASTRA_FILE_TYPE_PACKAGE) == 0;
+}
+
+static uint32_t read_directory(const char *path, uint32_t bank,
+    uint32_t *count)
+{
+    AstraDirectory directory = ASTRA_DIRECTORY_INIT;
+    uint32_t status;
+
+    if (path == NULL || bank > 1u || count == NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *count = 0u;
+    status = astra_filesystem_directory_open(&files.filesystem, path,
+                                              &directory);
+    if (status != ASTRA_VFS_OK) return status;
+    for (;;) {
+        AstraDirectoryEntry entry;
+        uint32_t moved = 0u;
+        status = astra_filesystem_directory_read(&directory, &entry, 1u,
+                                                 &moved);
+        if (status != ASTRA_VFS_OK || moved == 0u) break;
+        if (*count == INSTALLER_DIRECTORY_CAPACITY) {
+            status = ASTRA_VFS_ERR_LIMIT;
+            break;
+        }
+        picker_entries[bank][(*count)++] = entry;
+    }
+    astra_filesystem_directory_close(&directory);
+    if (status != ASTRA_VFS_OK) *count = 0u;
+    return status;
+}
+
+static AstraResult build_picker(void)
+{
+    AstraFilePanelInfo info = ASTRA_FILE_PANEL_INFO_INIT;
+    AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    const char *start = "/dh0";
+    uint32_t count = 0u;
+
+    if (read_directory(start, 0u, &count) != ASTRA_VFS_OK) {
+        start = "/";
+        if (read_directory(start, 0u, &count) != ASTRA_VFS_OK)
+            return ASTRA_ERROR_IO;
+    }
+    scroll_info.line_width = 8u;
+    scroll_info.line_height = 16u;
+    if (astra_scroll_init(&picker_scroll, &scroll_info) != ASTRA_OK)
+        return ASTRA_ERROR_IO;
+    info.first_id = 1u;
+    info.mode = ASTRA_FILE_PANEL_OPEN;
+    info.directory = start;
+    info.entries = picker_entries[0];
+    info.entry_count = count;
+    info.item_storage = picker_items[0];
+    info.item_capacity = INSTALLER_DIRECTORY_CAPACITY;
+    info.spare_item_storage = picker_items[1];
+    info.spare_item_capacity = INSTALLER_DIRECTORY_CAPACITY;
+    info.grid_icons = picker_icons;
+    info.grid_icon_capacity = INSTALLER_DIRECTORY_CAPACITY;
+    info.places = picker_places;
+    info.place_count = sizeof(picker_places) / sizeof(picker_places[0]);
+    info.place_items = picker_place_items;
+    info.place_capacity = sizeof(picker_place_items) /
+                          sizeof(picker_place_items[0]);
+    info.type_filters = picker_filters;
+    info.type_filter_count = 1u;
+    info.type_accept = package_entry;
+    info.type_context = &picker;
+    info.collection = &picker_collection;
+    info.scroll = &picker_scroll;
+    if (astra_interface_file_panel_init(&picker, controls, &info) != ASTRA_OK ||
+        astra_interface_ui_init(&ui, controls, ASTRA_FILE_PANEL_CONTROL_COUNT,
+            content_width, content_height) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    layout.direction = ASTRA_FLEX_COLUMN;
+    layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
+    layout.padding_left = layout.padding_right = 16u;
+    layout.padding_top = layout.padding_bottom = 16u;
+    layout.main_gap = 8u;
+    if (astra_interface_ui_layout(&ui, &layout) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    picker_entry_bank = 0u;
+    return ASTRA_OK;
+}
+
+static AstraResult navigate_picker(void)
+{
+    uint32_t next_bank = 1u - picker_entry_bank;
+    uint32_t count = 0u;
+    uint32_t status = read_directory(picker.target, next_bank, &count);
+    AstraResult result;
+
+    if (status != ASTRA_VFS_OK)
+        return astra_interface_control_set_text(&ui,
+            &controls[ASTRA_FILE_PANEL_TITLE],
+            status == ASTRA_VFS_ERR_LIMIT ? "Folder has too many items" :
+            "Cannot open folder",
+            status == ASTRA_VFS_ERR_LIMIT ?
+                sizeof("Folder has too many items") - 1u :
+                sizeof("Cannot open folder") - 1u);
+    result = astra_interface_file_panel_set_directory(&picker, &ui,
+        controls, picker.target, picker_entries[next_bank], count,
+        picker.items == picker_items[0] ? picker_items[1] : picker_items[0],
+        INSTALLER_DIRECTORY_CAPACITY);
+    if (result != ASTRA_OK) return result;
+    picker_entry_bank = next_bank;
+    return astra_interface_control_set_text(&ui,
+        &controls[ASTRA_FILE_PANEL_TITLE], "Open Astra package",
+        sizeof("Open Astra package") - 1u);
+}
 
 static AstraResult build_controls(void)
 {
@@ -94,7 +252,7 @@ static AstraResult build_controls(void)
     if (astra_interface_control_set_flex(CONTROL(CANCEL), &item) != ASTRA_OK ||
         astra_interface_control_set_flex(CONTROL(INSTALL), &item) != ASTRA_OK ||
         astra_interface_ui_init(&ui, controls, CONTROL_COUNT,
-            INSTALLER_WIDTH, INSTALLER_HEIGHT) != ASTRA_OK ||
+            content_width, content_height) != ASTRA_OK ||
         astra_interface_ui_layout(&ui, &layout) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return ASTRA_OK;
@@ -104,14 +262,14 @@ static AstraResult present(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     if (!astra_draw_list_view_init(&surface.view, surface.view.pixels,
-        surface.view.byte_size, INSTALLER_WIDTH, INSTALLER_HEIGHT))
+        surface.view.byte_size, content_width, content_height))
         return ASTRA_ERROR_IO;
     astra_surface_clear(&surface.view, astra_surface_rgb565(
         theme.client.red, theme.client.green, theme.client.blue));
     if (astra_interface_ui_render(&ui, &surface.view) != ASTRA_OK)
         return ASTRA_ERROR_IO;
-    const AstraWindowFrame frame = {0u, 0u, INSTALLER_WIDTH,
-        INSTALLER_HEIGHT};
+    const AstraWindowFrame frame = {0u, 0u, content_width,
+        content_height};
     if (astra_window_present_region(&window, &frame) != ASTRA_OK)
         return ASTRA_ERROR_IO;
     astra_interface_ui_damage_clear(&ui);
@@ -134,9 +292,44 @@ static AstraResult run(AstraHandle gui)
         if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED &&
             astra_fonts_use_system(gui, &event) != ASTRA_OK)
             return ASTRA_ERROR_IO;
+        if (event.type == ASTRA_WINDOW_EVENT_RESIZE) {
+            content_width = event.data.resize.width;
+            content_height = event.data.resize.height;
+        }
         AstraUIAction action = ASTRA_UI_ACTION_INIT;
         if (astra_interface_ui_handle_event(&ui, &event, &action) != ASTRA_OK)
             return ASTRA_ERROR_IO;
+        if (picker_active) {
+            uint32_t outcome = ASTRA_FILE_PANEL_NONE;
+            if (astra_interface_file_panel_action(&picker, &ui, controls,
+                    &action, &outcome) != ASTRA_OK)
+                return ASTRA_ERROR_IO;
+            if (outcome == ASTRA_FILE_PANEL_CANCELLED) return ASTRA_OK;
+            if (outcome == ASTRA_FILE_PANEL_NAVIGATE) {
+                if (navigate_picker() != ASTRA_OK) return ASTRA_ERROR_IO;
+            } else if (outcome == ASTRA_FILE_PANEL_PICKED) {
+                const AstraWindowFrame review = {440u, 260u,
+                    INSTALLER_REVIEW_WIDTH, INSTALLER_REVIEW_HEIGHT};
+                if (!astra_string_copy(chosen_archive,
+                        sizeof(chosen_archive), picker.target) ||
+                    !astra_string_has_suffix(chosen_archive, ".apkg"))
+                    return ASTRA_ERROR_INVALID_ARGUMENT;
+                archive = chosen_archive;
+                picker_active = 0u;
+                content_width = INSTALLER_REVIEW_WIDTH;
+                content_height = INSTALLER_REVIEW_HEIGHT;
+                if (build_controls() != ASTRA_OK ||
+                    astra_window_set_frame(&window, &review) != ASTRA_OK ||
+                    present() != ASTRA_OK)
+                    return ASTRA_ERROR_IO;
+                continue;
+            }
+            AstraControlFrame picker_damage;
+            if (astra_interface_ui_damage(&ui, &picker_damage) == ASTRA_OK &&
+                present() != ASTRA_OK)
+                return ASTRA_ERROR_IO;
+            continue;
+        }
         if (action.type == ASTRA_UI_ACTION_ACTIVATE &&
             action.control_id == CANCEL) return ASTRA_OK;
         if (!installed && action.type == ASTRA_UI_ACTION_ACTIVATE &&
@@ -166,13 +359,21 @@ static AstraResult run(AstraHandle gui)
 
 int astra_main(const AstraStartupInfo *startup)
 {
-    if (!astra_startup_validate(startup) || startup->argc != 2u)
+    if (!astra_startup_validate(startup) ||
+        (startup->argc != 1u && startup->argc != 2u))
         return ASTRA_STATUS_INVALID;
-    archive = astra_startup_argument(startup, 1u);
-    if (archive == NULL || archive[0] != '/' ||
-        !astra_string_has_suffix(archive, ".apkg") ||
-        strlen(archive) >= ASTRA_VFS_PATH_MAX)
-        return ASTRA_STATUS_INVALID;
+    picker_active = startup->argc == 1u;
+    if (!picker_active) {
+        archive = astra_startup_argument(startup, 1u);
+        if (archive == NULL || archive[0] != '/' ||
+            !astra_string_has_suffix(archive, ".apkg") ||
+            strlen(archive) >= ASTRA_VFS_PATH_MAX)
+            return ASTRA_STATUS_INVALID;
+    }
+    content_width = picker_active ?
+        INSTALLER_PICKER_WIDTH : INSTALLER_REVIEW_WIDTH;
+    content_height = picker_active ?
+        INSTALLER_PICKER_HEIGHT : INSTALLER_REVIEW_HEIGHT;
     const AstraStartupCapability *gui = astra_startup_capability(startup,
         ASTRA_CAPABILITY_GUI);
     const AstraStartupCapability *ready = astra_startup_capability(startup,
@@ -181,21 +382,24 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t status = ASTRA_STATUS_OK;
     if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK ||
         astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK ||
-        build_controls() != ASTRA_OK ||
-        astra_shared_draw_list_create(&surface, INSTALLER_WIDTH,
-            INSTALLER_HEIGHT) != ASTRA_SYSCALL_OK)
+        (picker_active ? build_picker() : build_controls()) != ASTRA_OK ||
+        astra_shared_draw_list_create(&surface,
+            INSTALLER_PICKER_WIDTH, INSTALLER_PICKER_HEIGHT) !=
+                ASTRA_SYSCALL_OK)
         status = ASTRA_STATUS_IO;
     if (status == ASTRA_STATUS_OK) {
         AstraWindowCreateInfo info = ASTRA_WINDOW_CREATE_INFO_INIT;
-        info.x = 440u; info.y = 260u;
-        info.width = INSTALLER_WIDTH; info.height = INSTALLER_HEIGHT;
+        info.x = 440u; info.y = picker_active ? 180u : 260u;
+        info.width = content_width; info.height = content_height;
         info.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
         info.type = ASTRA_WINDOW_STANDARD;
         info.title = "Installer";
         info.title_length = 9u;
         info.event_mask = ASTRA_WINDOW_SUBSCRIBE_DEFAULT |
+            ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION |
             ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
-            ASTRA_WINDOW_SUBSCRIBE_KEY;
+            ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL |
+            ASTRA_WINDOW_SUBSCRIBE_KEY | ASTRA_WINDOW_SUBSCRIBE_TEXT;
         if (astra_window_create(gui->handle, surface.area, &info, &window) !=
                 ASTRA_OK ||
             astra_window_set_application_name(&window, "Installer", 9u) !=

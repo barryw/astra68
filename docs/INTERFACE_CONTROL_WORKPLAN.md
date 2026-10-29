@@ -146,3 +146,12 @@ split panes. The image is painted into a window-owned Graphics Kit surface by
 Astraea, borrowed by ImageView, then released when the Gallery window closes.
 Window resize changes the custom View model and invalidates that View through
 Interface Kit; no application-owned pixel buffer or one-off control is added.
+
+Installer adoption: Haiku's `src/kits/tracker/FilePanel.cpp` keeps the file
+panel window and selection policy outside the application. Astra's Installer
+uses the shared Open panel for no-argument launch, while the application owns
+Filesystem Kit directory snapshots and asks File Type Kit for package type.
+On `NAVIGATE` it
+loads the requested directory; on `PICKED` it copies the chosen path into
+caller storage, then reuses its existing Settings pane for review. Direct
+`.apkg` launch still enters that review pane.
