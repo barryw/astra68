@@ -4865,6 +4865,52 @@ static void test_shared_colour_panel(void)
     assert(astra_interface_colour_panel_action(&panel, &context, controls,
         &action, &outcome) == ASTRA_OK);
     assert(panel.packed == 0x001122ffu);
+    action.control_id = 100u + ASTRA_COLOUR_PANEL_TABS;
+    action.value = 1;
+    assert(astra_interface_colour_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.active_tab == 1u);
+    assert(astra_text_model_replace(&panel.hex_model, 0u, 7u,
+        "#123456", 7u) == ASTRA_OK);
+    assert(astra_interface_field_refresh(&context,
+        &controls[ASTRA_COLOUR_PANEL_HEX_FIELD]) == ASTRA_OK);
+    action.type = ASTRA_UI_ACTION_TEXT_CHANGED;
+    action.control_id = 100u + ASTRA_COLOUR_PANEL_HEX_FIELD;
+    assert(astra_interface_colour_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.packed == 0x00123456u &&
+        outcome == ASTRA_COLOUR_PANEL_CHANGED);
+    assert(astra_text_model_replace(&panel.hex_model, 0u, 7u,
+        "#XYZXYZ", 7u) == ASTRA_OK);
+    assert(astra_interface_field_refresh(&context,
+        &controls[ASTRA_COLOUR_PANEL_HEX_FIELD]) == ASTRA_OK);
+    assert(astra_interface_colour_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.hex_valid == 0u &&
+        panel.packed == 0x00123456u);
+    action.type = ASTRA_UI_ACTION_ACTIVATE;
+    action.control_id = 100u + ASTRA_COLOUR_PANEL_USE;
+    assert(astra_interface_colour_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_COLOUR_PANEL_NONE);
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 100u + ASTRA_COLOUR_PANEL_TABS;
+    action.value = 2;
+    assert(astra_interface_colour_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.active_tab == 2u);
+    action.control_id = 100u + ASTRA_COLOUR_PANEL_THEME_LIST;
+    action.value = 0;
+    assert(astra_interface_colour_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.hex_valid == 1u &&
+        panel.packed == 0x002daeb8u);
+    {
+        AstraColorRGBA8 recent[2] = {
+            {12u, 34u, 56u, 255u}, {200u, 150u, 100u, 255u}
+        };
+        assert(astra_interface_colour_panel_set_recent(&panel, &context,
+            controls, recent, 2u) == ASTRA_OK);
+        action.control_id = 100u + ASTRA_COLOUR_PANEL_RECENT_LIST;
+        action.value = 1;
+        assert(astra_interface_colour_panel_action(&panel, &context, controls,
+            &action, &outcome) == ASTRA_OK && panel.packed == 0x00c89664u);
+    }
 
     context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
     assert(astra_interface_colour_panel_init(&panel, controls, 100u,
