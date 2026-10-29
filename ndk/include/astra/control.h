@@ -922,7 +922,9 @@ typedef struct AstraTextViewStyle {
 typedef AstraResult (*AstraTextViewStyleAt)(void *context,
     uint32_t byte_offset, AstraTextViewStyle *style);
 
-/** Read-only multiline model presented by TextSurface in a ScrollView. */
+/** Multiline model presented by TextSurface in a ScrollView.
+ * The control starts read-only in fixed-cell code mode; applications can
+ * enable editing or proportional flow with the Text View setters. */
 typedef struct AstraTextViewInfo {
     uint32_t size; /**< Structure size. */
     uint32_t id; /**< Nonzero control ID. */
