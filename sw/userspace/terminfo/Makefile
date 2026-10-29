@@ -95,6 +95,10 @@ dependencies-ready:
 	$(MAKE) -C $(POSIX) build/m68k/libastraposix.a
 	$(MAKE) -C $(POSIX) library
 
+$(POSIX_LIB) $(RUNTIME_LIB) $(STREAMS_LIB) $(VFS_LIB) $(SYSTEM_LIB) \
+$(NETWORK_LIB) $(RUNTIME_CRT0): | dependencies-ready
+	@test -f $@
+
 $(NCURSES_INPUT_STAMP): $(PICOLIBC)/include/sys/termios.h \
 		$(PICOLIBC)/include/sys/ioctl.h $(POSIX_LIB) $(RUNTIME_LIB) \
 		$(STREAMS_LIB) $(VFS_LIB) $(SYSTEM_LIB) $(NETWORK_LIB) $(RUNTIME_CRT0) \

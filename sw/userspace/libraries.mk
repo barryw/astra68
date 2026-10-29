@@ -98,10 +98,11 @@ ASTRA_SHARED_LIBRARY_SEARCH_FLAGS := \
 # Programs declare only direct library files; this graph identifies the
 # outermost owners that must be validated before linking.  Adding a library is
 # therefore a single registration here, not another private dependency walker
-# in every native or POSIX application Makefile.
-ASTRA_LIBRARY_KEYS := system compiler unwind runtime streams filesystem dos package libc \
-	terminfo cxx lua ntp graphics font interface \
-	network config pcm codec sdl2 sdl2net sdl2image sdl2mixer sdl2ttf
+# in every native or POSIX application Makefile. Keep dependency order for
+# pristine NDK contract builds.
+ASTRA_LIBRARY_KEYS := compiler runtime system streams network filesystem dos \
+	package libc unwind terminfo cxx lua ntp graphics font interface config \
+	pcm codec sdl2 sdl2net sdl2image sdl2mixer sdl2ttf
 
 ASTRA_LIBRARY_FILE_system := $(ASTRA_SYSTEM_LIBRARY)
 ASTRA_LIBRARY_FILE_compiler := $(ASTRA_COMPILER_LIBRARY)
@@ -221,5 +222,5 @@ astra_library_root_keys = $(filter-out $(sort $(foreach key,$(1),\
 	$(call astra_library_transitive_deps,$(key)))),$(1))
 astra_library_owner_targets = $(sort $(foreach key,\
 	$(call astra_library_root_keys,$(1)),$(ASTRA_LIBRARY_OWNER_$(key))))
-astra_library_contract_owner_targets = $(sort $(foreach key,$(1),\
-	$(ASTRA_LIBRARY_CONTRACT_OWNER_$(key))))
+astra_library_contract_owner_targets = $(foreach key,$(1),\
+	$(ASTRA_LIBRARY_CONTRACT_OWNER_$(key)))
