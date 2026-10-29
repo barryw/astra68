@@ -16,10 +16,10 @@
 #include <astra/undo.h>
 #include <astra/window.h>
 
-/** Breaking Interface Kit ABI generation carried by interface.library.7. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 7u
-/** Current backward-compatible Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 11u
+/** Breaking Interface Kit ABI generation carried by interface.library.8. */
+#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 8u
+/** Current Interface Kit revision. */
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 0u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -237,7 +237,7 @@ AstraResult astra_interface_text_view_set_inverted(AstraUIContext *context,
  * @param control Text View to update.
  * @param width Available text width in pixels, or zero to disable wrapping.
  * @return ASTRA_OK or a validation/resource error.
- * @since Interface Kit 7.11.
+ * @since Interface Kit 8.0.
  */
 AstraResult astra_interface_text_view_set_wrap_width(AstraUIContext *context,
     AstraControl *control, uint32_t width);

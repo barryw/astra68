@@ -1,4 +1,4 @@
-ASTRA_INTERFACE_7.0 {
+ASTRA_INTERFACE_8.0 {
     global:
         astra_interface_menu_init;
         astra_interface_menu_get_state;
@@ -49,6 +49,26 @@ ASTRA_INTERFACE_7.0 {
         astra_interface_ui_set_state;
         astra_interface_ui_update_pointer;
         astra_interface_ui_vblank;
+        astra_interface_text_view_init;
+        astra_interface_text_view_refresh;
+        astra_interface_text_view_set_inverted;
+        astra_interface_text_view_set_wrap_width;
+        astra_interface_settings_pane_init;
+        astra_interface_context_menu_open_tree;
+        astra_interface_menu_row_frame;
+        astra_interface_icon_tile_hit;
+        astra_interface_icon_tile_render;
+        astra_interface_inline_edit_event;
+        astra_interface_inline_edit_render;
+        astra_interface_inline_edit_start;
+        astra_interface_inline_edit_stop;
+        astra_interface_inline_edit_text;
+        astra_interface_toolbar_init;
+        astra_interface_ui_focus_control;
+        astra_interface_toolbar_set_icons;
+        astra_interface_grid_view_init;
+        astra_interface_grid_view_refresh;
+        astra_interface_image_view_render;
         astra_scroll_by;
         astra_scroll_get_state;
         astra_scroll_init;
@@ -89,63 +109,3 @@ ASTRA_INTERFACE_7.0 {
     local:
         *;
 };
-
-ASTRA_INTERFACE_7.1 {
-    global:
-        astra_interface_text_view_init;
-        astra_interface_text_view_refresh;
-} ASTRA_INTERFACE_7.0;
-
-ASTRA_INTERFACE_7.2 {
-    global:
-        astra_interface_settings_pane_init;
-} ASTRA_INTERFACE_7.1;
-
-ASTRA_INTERFACE_7.3 {
-    global:
-        astra_interface_context_menu_open_tree;
-        astra_interface_menu_row_frame;
-} ASTRA_INTERFACE_7.2;
-
-ASTRA_INTERFACE_7.4 {
-    global:
-        astra_interface_icon_tile_hit;
-        astra_interface_icon_tile_render;
-        astra_interface_inline_edit_event;
-        astra_interface_inline_edit_render;
-        astra_interface_inline_edit_start;
-        astra_interface_inline_edit_stop;
-        astra_interface_inline_edit_text;
-} ASTRA_INTERFACE_7.3;
-
-ASTRA_INTERFACE_7.5 {
-    global:
-        astra_interface_toolbar_init;
-        astra_interface_ui_focus_control;
-} ASTRA_INTERFACE_7.4;
-
-ASTRA_INTERFACE_7.6 {
-    global:
-        astra_interface_toolbar_set_icons;
-} ASTRA_INTERFACE_7.5;
-
-ASTRA_INTERFACE_7.8 {
-    global:
-        astra_interface_text_view_set_inverted;
-} ASTRA_INTERFACE_7.6;
-
-ASTRA_INTERFACE_7.9 {
-    global:
-        astra_interface_grid_view_init;
-        astra_interface_grid_view_refresh;
-} ASTRA_INTERFACE_7.8;
-
-ASTRA_INTERFACE_7.10 {
-    global:
-        astra_interface_image_view_render;
-} ASTRA_INTERFACE_7.9;
-
-ASTRA_INTERFACE_7.11 {
-    global:
-        astra_interface_text_view_set_wrap_width;
-} ASTRA_INTERFACE_7.10;

@@ -77,38 +77,43 @@ void astraz_transcript_flow_new_line(AstraZTranscriptFlow *flow)
 {
     if (!flow) return;
     flow->at_line_start = 1u;
-    flow->skip_marker_argument = 0u;
+    flow->marker = 0u;
 }
 
 AstraResult astraz_transcript_flow_text(AstraZTranscriptFlow *flow,
     const uint16_t *characters, uint32_t length, char *output,
-    uint32_t capacity, uint32_t *output_bytes)
+    uint8_t *styles, uint32_t capacity, uint32_t *output_bytes)
 {
-    if (!flow || (!characters && length) || !output || !output_bytes)
+    if (!flow || (!characters && length) || !output || !styles ||
+        !output_bytes)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     AstraZTranscriptFlow next = *flow;
     uint32_t used = 0u;
     for (uint32_t at = 0u; at < length; ++at) {
         uint32_t scalar = characters[at];
-        if (next.skip_marker_argument) {
-            next.skip_marker_argument = 0u;
+        if (next.marker) {
+            if (next.marker == 1u) next.style = (uint8_t)scalar;
+            next.marker = 0u;
             continue;
         }
         if (scalar == 1u || scalar == 2u) {
-            next.skip_marker_argument = 1u;
+            next.marker = (uint8_t)scalar;
             continue;
         }
         if (scalar == 9u || scalar == 11u) {
             uint32_t spaces = scalar == 9u && next.at_line_start ? 3u :
                               scalar == 11u ? 2u : 1u;
             if (spaces > capacity - used) return ASTRA_ERROR_BUFFER_TOO_SMALL;
-            for (uint32_t count = 0u; count < spaces; ++count)
+            for (uint32_t count = 0u; count < spaces; ++count) {
+                styles[used] = next.style;
                 output[used++] = ' ';
+            }
             next.at_line_start = 0u;
             continue;
         }
         if (scalar == '\n' || scalar == '\r') {
             if (used == capacity) return ASTRA_ERROR_BUFFER_TOO_SMALL;
+            styles[used] = next.style;
             output[used++] = '\n';
             next.at_line_start = 1u;
             continue;
@@ -121,8 +126,10 @@ AstraResult astraz_transcript_flow_text(AstraZTranscriptFlow *flow,
             count = 1u;
         }
         if (count > capacity - used) return ASTRA_ERROR_BUFFER_TOO_SMALL;
-        for (uint32_t byte = 0u; byte < count; ++byte)
+        for (uint32_t byte = 0u; byte < count; ++byte) {
+            styles[used] = next.style;
             output[used++] = bytes[byte];
+        }
         next.at_line_start = 0u;
     }
     *flow = next;

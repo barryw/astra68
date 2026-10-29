@@ -20,5 +20,8 @@ typedef struct AstraZScreenGrid {
 
 /* Return nonzero when upper-window presentation needs refresh. */
 int astraz_screen_grid_event(AstraZScreenGrid *grid, const AstraZEvent *event);
+/* Shared Z-machine palette and style mapping for grid and flowing text. */
+uint32_t astraz_screen_colour(int32_t index);
+uint16_t astraz_screen_style(uint32_t style);
 
 #endif

@@ -4,6 +4,11 @@
 
 int main(void)
 {
+    assert(astraz_screen_style(ASTRAZ_STYLE_BOLD |
+        ASTRAZ_STYLE_EMPHASIS | ASTRAZ_STYLE_REVERSE) ==
+        (ASTRA_TEXT_STYLE_BOLD | ASTRA_TEXT_STYLE_ITALIC |
+         ASTRA_TEXT_STYLE_INVERSE));
+    assert(astraz_screen_colour(ASTRAZ_COLOUR_RED) == 0xf800u);
     AstraZScreenGrid grid = {0};
     AstraZEvent event = {.kind = ASTRAZ_EVENT_SCREEN_BEGIN};
     event.data.screen.version = 5u;

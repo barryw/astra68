@@ -53,6 +53,12 @@ static AstraTextModel status_model = ASTRA_TEXT_MODEL_INIT;
 static AstraTextModel prompt_model = ASTRA_TEXT_MODEL_INIT;
 static AstraTextModel input_model = ASTRA_TEXT_MODEL_INIT;
 static char transcript[TRANSCRIPT_BYTES];
+typedef struct AstraZTranscriptAppearance {
+    uint8_t style, foreground, background;
+} AstraZTranscriptAppearance;
+static AstraZTranscriptAppearance transcript_appearance[TRANSCRIPT_BYTES];
+static uint8_t transcript_foreground = ASTRAZ_COLOUR_DEFAULT;
+static uint8_t transcript_background = ASTRAZ_COLOUR_DEFAULT;
 static char transcript_content[TRANSCRIPT_BYTES];
 /* MC68040 statics need explicit four-byte alignment for TextModel metadata. */
 static uint32_t transcript_metadata[TRANSCRIPT_BYTES / sizeof(uint32_t)]
@@ -176,7 +182,8 @@ static AstraResult refresh_status(void)
     return ASTRA_OK;
 }
 
-static void transcript_append(const char *bytes, uint32_t length)
+static void transcript_append_styled(const char *bytes,
+                                    const uint8_t *styles, uint32_t length)
 {
     if (length == 0u || length >= TRANSCRIPT_BYTES) return;
     if (transcript_length + length >= TRANSCRIPT_BYTES) {
@@ -189,12 +196,39 @@ static void transcript_append(const char *bytes, uint32_t length)
                    ((uint8_t)transcript[cut] & 0xc0u) == 0x80u) ++cut;
         }
         memmove(transcript, transcript + cut, transcript_length - cut);
+        memmove(transcript_appearance, transcript_appearance + cut,
+                (transcript_length - cut) * sizeof(transcript_appearance[0]));
         transcript_length -= cut;
         transcript_rebuild = 1u;
     }
     memcpy(transcript + transcript_length, bytes, length);
+    for (uint32_t at = 0u; at < length; ++at)
+        transcript_appearance[transcript_length + at] =
+            (AstraZTranscriptAppearance){styles ? styles[at] : 0u,
+                styles ? transcript_foreground : ASTRAZ_COLOUR_DEFAULT,
+                styles ? transcript_background : ASTRAZ_COLOUR_DEFAULT};
     transcript_length += length;
     transcript_dirty = 1u;
+}
+
+static void transcript_append(const char *bytes, uint32_t length)
+{
+    transcript_append_styled(bytes, NULL, length);
+}
+
+static AstraResult transcript_style_at(void *unused, uint32_t offset,
+                                      AstraTextViewStyle *style)
+{
+    (void)unused;
+    if (style == NULL || offset >= transcript_length)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    const AstraZTranscriptAppearance *appearance =
+        &transcript_appearance[offset];
+    style->foreground = astraz_screen_colour(appearance->foreground);
+    style->background = astraz_screen_colour(appearance->background);
+    style->attributes = astraz_screen_style(appearance->style);
+    style->reserved = 0u;
+    return ASTRA_OK;
 }
 
 static AstraResult present(void)
@@ -432,6 +466,7 @@ static AstraResult build_ui(void)
     text.id = TRANSCRIPT;
     text.model = &transcript_model;
     text.state = 0u;
+    text.style_at = transcript_style_at;
     if (astra_interface_text_view_init(CONTROL(TRANSCRIPT), &text) != ASTRA_OK)
         return ASTRA_ERROR_IO;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
@@ -451,6 +486,7 @@ static AstraResult build_ui(void)
         return ASTRA_ERROR_IO;
     text.id = PROMPT_MARK;
     text.model = &prompt_model;
+    text.style_at = NULL;
     if (astra_interface_text_view_init(CONTROL(PROMPT_MARK), &text) != ASTRA_OK)
         return ASTRA_ERROR_IO;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
@@ -688,6 +724,8 @@ static int host_event(void *unused, const AstraZEvent *event)
     }
     if (event->kind == ASTRAZ_EVENT_SCREEN_BEGIN) {
         astraz_transcript_flow_reset(&transcript_flow);
+        transcript_foreground = ASTRAZ_COLOUR_DEFAULT;
+        transcript_background = ASTRAZ_COLOUR_DEFAULT;
         if (astra_interface_ui_set_state(&ui, CONTROL(CANVAS),
             v6_active ? 0u : ASTRA_CONTROL_COLLAPSED) != ASTRA_OK)
             return -1;
@@ -754,14 +792,24 @@ static int host_event(void *unused, const AstraZEvent *event)
         transcript_rebuild = 1u;
         astraz_transcript_flow_reset(&transcript_flow);
     }
+    if (event->kind == ASTRAZ_EVENT_STYLE && event->data.style.window == 0) {
+        transcript_flow.style = (uint8_t)event->data.style.style;
+        return 0;
+    }
+    if (event->kind == ASTRAZ_EVENT_COLOUR && event->data.colour.window == 0) {
+        transcript_foreground = (uint8_t)event->data.colour.foreground;
+        transcript_background = (uint8_t)event->data.colour.background;
+        return 0;
+    }
     if (event->kind == ASTRAZ_EVENT_TRANSCRIPT_TEXT) {
         char bytes[4096];
+        uint8_t styles[4096];
         uint32_t length = 0u;
         if (astraz_transcript_flow_text(&transcript_flow,
             event->data.transcript.characters,
-            event->data.transcript.length, bytes, sizeof(bytes),
+            event->data.transcript.length, bytes, styles, sizeof(bytes),
             &length) != ASTRA_OK) return -1;
-        if (length != 0u) transcript_append(bytes, length);
+        if (length != 0u) transcript_append_styled(bytes, styles, length);
     } else if (event->kind == ASTRAZ_EVENT_TRANSCRIPT_NEWLINE) {
         transcript_append("\n", 1u);
         astraz_transcript_flow_new_line(&transcript_flow);

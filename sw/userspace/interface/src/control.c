@@ -1246,6 +1246,7 @@ AstraResult astra_interface_text_view_init(AstraControl *control,
     if (control == NULL || info == NULL || info->size != sizeof(*info) ||
         info->id == 0u || (info->state & ~CONTROL_VALUE_STATES) != 0u ||
         !astra_words_zero(info->reserved, 4u) ||
+        (info->style_at == NULL && info->style_context != NULL) ||
         astra_text_model_get_state(info->model, &state) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     next._private_control_kind = ASTRA_CONTROL_TEXT_VIEW;
@@ -1253,6 +1254,8 @@ AstraResult astra_interface_text_view_init(AstraControl *control,
     next._private_state = info->state;
     next._private_style = ASTRA_FIELD_READ_ONLY;
     next._private_text = (const char *)(const void *)info->model;
+    next._private_text_style_at = info->style_at;
+    next._private_text_style_context = info->style_context;
     private_u32_set(&next._private_maximum_value, state.generation);
     AstraResult result = text_view_measure(&next, &size);
     if (result == ASTRA_OK) *control = next;
@@ -3207,18 +3210,26 @@ static AstraResult text_view_render(const AstraControl *control,
         offset = visual.start;
         while (offset < visual.end && column < last_column) {
             uint32_t before = offset, scalar, width;
+            AstraTextViewStyle style = ASTRA_TEXT_VIEW_STYLE_INIT;
             if (!text_view_step(model, visual.end, &offset, column,
                                 &scalar, &width)) return ASTRA_ERROR_INVALID_ARGUMENT;
+            if (control->_private_text_style_at != NULL) {
+                AstraResult result = control->_private_text_style_at(
+                    control->_private_text_style_context, before, &style);
+                if (result != ASTRA_OK || style.reserved != 0u ||
+                    (style.attributes & ~ASTRA_TEXT_STYLE_ALLOWED_MASK) != 0u)
+                    return ASTRA_ERROR_INVALID_ARGUMENT;
+            }
             uint32_t end = column + width;
             int selected = before >= selection_start && before < selection_end;
             while (column < end && column < last_column) {
                 if (column++ < first_column) continue;
                 cells[count++] = (AstraTextCell){scalar,
                     selected && inverted ? color(theme.accent_text) :
-                                           info.default_foreground,
+                        style.foreground,
                     selected ? color(inverted ? theme.accent :
                                                theme.control_selected) :
-                               info.default_background, 0u, 1u, 0u};
+                        style.background, style.attributes, 1u, 0u};
                 if (count == TEXT_VIEW_CELL_BATCH || column == last_column ||
                     (column == end && offset == visual.end)) {
                     if (surface != NULL) {

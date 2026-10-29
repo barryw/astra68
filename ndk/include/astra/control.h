@@ -23,7 +23,7 @@ ASTRA_EXTERN_C_BEGIN
 /** Display refresh used to derive deterministic animation phases. */
 #define ASTRA_UI_VBLANK_HZ 60u
 
-/** Control kinds implemented by Interface Kit ABI 7.1. */
+/** Control kinds implemented by Interface Kit ABI 8.0. */
 enum {
     ASTRA_CONTROL_LABEL = 1u,
     ASTRA_CONTROL_BUTTON = 2u,
@@ -641,18 +641,36 @@ typedef struct AstraFieldInfo {
     { 0u, 0u, 0u, 0u }                                                   \
 }
 
+/** Appearance of one UTF-8 scalar in a Text View. */
+typedef struct AstraTextViewStyle {
+    uint32_t foreground; /**< Logical TextSurface color or DEFAULT. */
+    uint32_t background; /**< Logical TextSurface color or DEFAULT. */
+    uint16_t attributes; /**< ASTRA_TEXT_STYLE_* bits. */
+    uint16_t reserved; /**< Must be zero. */
+} AstraTextViewStyle;
+
+/** Default Text View appearance: theme colors and normal weight. */
+#define ASTRA_TEXT_VIEW_STYLE_INIT \
+    { ASTRA_TEXT_COLOR_DEFAULT, ASTRA_TEXT_COLOR_DEFAULT, 0u, 0u }
+
+/** Return appearance at a UTF-8 scalar's document byte offset. */
+typedef AstraResult (*AstraTextViewStyleAt)(void *context,
+    uint32_t byte_offset, AstraTextViewStyle *style);
+
 /** Read-only multiline model presented by TextSurface in a ScrollView. */
 typedef struct AstraTextViewInfo {
     uint32_t size; /**< Structure size. */
     uint32_t id; /**< Nonzero control ID. */
     AstraTextModel *model; /**< Borrowed model; caller retains its arenas. */
     uint32_t state; /**< Disabled, error, or collapsed semantic state. */
+    AstraTextViewStyleAt style_at; /**< Optional borrowed appearance provider. */
+    void *style_context; /**< Context retained for the control lifetime. */
     uint32_t reserved[4]; /**< Must be zero. */
 } AstraTextViewInfo;
 
 /** Empty Text View construction data. */
 #define ASTRA_TEXT_VIEW_INFO_INIT \
-    { sizeof(AstraTextViewInfo), 0u, 0, 0u, { 0u, 0u, 0u, 0u } }
+    { sizeof(AstraTextViewInfo), 0u, 0, 0u, 0, 0, { 0u, 0u, 0u, 0u } }
 
 /** Caller-owned row-major cells used by Grid View. */
 typedef struct AstraGridViewModel {
@@ -723,6 +741,8 @@ typedef struct AstraControl {
     uint32_t _private_animation_next;
     uint32_t _private_animation_phase;
     AstraLabelFont _private_label_font;
+    AstraTextViewStyleAt _private_text_style_at;
+    void *_private_text_style_context;
     /** @endcond */
 } AstraControl;
 
@@ -733,7 +753,7 @@ typedef struct AstraControl {
     UINT32_MAX, UINT32_MAX, ASTRA_FLEX_ALIGN_AUTO, 0, 0, \
     0, 0, 0, 0, 0, 0, 0, UINT32_MAX, UINT32_MAX, UINT32_MAX, \
     UINT32_MAX, { 0, 0, 0, 0 }, ASTRA_FLEX_LAYOUT_INIT, UINT32_MAX, 0, \
-    ASTRA_LABEL_FONT_INIT \
+    ASTRA_LABEL_FONT_INIT, 0, 0 \
 }
 
 /** Caller-owned retained interaction and damage state. */

@@ -22,34 +22,45 @@ int main(void)
     assert(astraz_transcript_flow_flush_due(&flow, UINT64_C(1034000000)));
     astraz_transcript_flow_reset(&flow);
     char decoded[64];
+    uint8_t decoded_styles[64];
     uint32_t decoded_bytes = 0u;
     const uint16_t first_word[] = {'A', ' ', 'l', 'o', 'n', 'g'};
     const uint16_t second_word[] = {' ', 'r', 'o', 'o', 'm'};
     assert(astraz_transcript_flow_text(&flow, first_word, 6u, decoded,
+        decoded_styles,
         sizeof(decoded), &decoded_bytes) == ASTRA_OK);
     assert(decoded_bytes == 6u && memcmp(decoded, "A long", 6u) == 0);
     assert(astraz_transcript_flow_text(&flow, second_word, 5u, decoded,
+        decoded_styles,
         sizeof(decoded), &decoded_bytes) == ASTRA_OK);
     assert(decoded_bytes == 5u && memcmp(decoded, " room", 5u) == 0);
     astraz_transcript_flow_new_line(&flow);
     const uint16_t paragraph[] = {9u, 'N', 'e', 'x', 't', 11u, 'x'};
     assert(astraz_transcript_flow_text(&flow, paragraph, 7u, decoded,
+        decoded_styles,
         sizeof(decoded), &decoded_bytes) == ASTRA_OK);
     assert(decoded_bytes == 10u && memcmp(decoded, "   Next  x", 10u) == 0);
     const uint16_t style_start[] = {1u};
     const uint16_t style_end[] = {4u, '!', 2u, 5u, 0xe9u};
     assert(astraz_transcript_flow_text(&flow, style_start, 1u, decoded,
+        decoded_styles,
         sizeof(decoded), &decoded_bytes) == ASTRA_OK);
-    assert(decoded_bytes == 0u && flow.skip_marker_argument);
+    assert(decoded_bytes == 0u && flow.marker == 1u);
     assert(astraz_transcript_flow_text(&flow, style_end, 5u, decoded,
+        decoded_styles,
         sizeof(decoded), &decoded_bytes) == ASTRA_OK);
     assert(decoded_bytes == 3u && memcmp(decoded, "!\xc3\xa9", 3u) == 0);
+    assert(decoded_styles[0] == ASTRAZ_STYLE_EMPHASIS &&
+           decoded_styles[1] == ASTRAZ_STYLE_EMPHASIS &&
+           decoded_styles[2] == ASTRAZ_STYLE_EMPHASIS);
     const uint16_t zero_style_argument[] = {1u, 0u, 'B', 'a', 't', 'h'};
     assert(astraz_transcript_flow_text(&flow, zero_style_argument, 6u,
-        decoded, sizeof(decoded), &decoded_bytes) == ASTRA_OK);
+        decoded, decoded_styles, sizeof(decoded), &decoded_bytes) == ASTRA_OK);
     assert(decoded_bytes == 4u && memcmp(decoded, "Bath", 4u) == 0);
+    assert(decoded_styles[0] == 0u && decoded_styles[3] == 0u);
     AstraZTranscriptFlow previous = flow;
     assert(astraz_transcript_flow_text(&flow, paragraph, 7u, decoded,
+        decoded_styles,
         2u, &decoded_bytes) == ASTRA_ERROR_BUFFER_TOO_SMALL);
     assert(memcmp(&flow, &previous, sizeof(flow)) == 0);
 

@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-static uint32_t colour(int32_t index)
+uint32_t astraz_screen_colour(int32_t index)
 {
     static const uint16_t palette[] = {
         0u, 0u, 0x0000u, 0xf800u, 0x07e0u, 0xffe0u,
@@ -10,6 +10,14 @@ static uint32_t colour(int32_t index)
     };
     return index >= ASTRAZ_COLOUR_BLACK && index <= ASTRAZ_COLOUR_GREY ?
         palette[index] : ASTRA_TEXT_COLOR_DEFAULT;
+}
+
+uint16_t astraz_screen_style(uint32_t style)
+{
+    return (uint16_t)(
+        ((style & ASTRAZ_STYLE_BOLD) ? ASTRA_TEXT_STYLE_BOLD : 0u) |
+        ((style & ASTRAZ_STYLE_EMPHASIS) ? ASTRA_TEXT_STYLE_ITALIC : 0u) |
+        ((style & ASTRAZ_STYLE_REVERSE) ? ASTRA_TEXT_STYLE_INVERSE : 0u));
 }
 
 static uint32_t cell_row(const AstraZScreenGrid *grid, int32_t coordinate)
@@ -73,17 +81,14 @@ int astraz_screen_grid_event(AstraZScreenGrid *grid, const AstraZEvent *event)
         upper(event->data.style.window)) {
         uint32_t window = (uint32_t)event->data.style.window;
         uint32_t style = (uint32_t)event->data.style.style;
-        grid->style[window] = (uint16_t)(
-            ((style & ASTRAZ_STYLE_BOLD) ? ASTRA_TEXT_STYLE_BOLD : 0u) |
-            ((style & ASTRAZ_STYLE_EMPHASIS) ? ASTRA_TEXT_STYLE_ITALIC : 0u) |
-            ((style & ASTRAZ_STYLE_REVERSE) ? ASTRA_TEXT_STYLE_INVERSE : 0u));
+        grid->style[window] = astraz_screen_style(style);
         return 1;
     }
     if (event->kind == ASTRAZ_EVENT_COLOUR &&
         upper(event->data.colour.window)) {
         uint32_t window = (uint32_t)event->data.colour.window;
-        grid->foreground[window] = colour(event->data.colour.foreground);
-        grid->background[window] = colour(event->data.colour.background);
+        grid->foreground[window] = astraz_screen_colour(event->data.colour.foreground);
+        grid->background[window] = astraz_screen_colour(event->data.colour.background);
         return 1;
     }
     if (event->kind == ASTRAZ_EVENT_CHARACTER &&

@@ -1,6 +1,6 @@
 # Interface Kit
 
-`interface.library.7` is the shared implementation for native window controls,
+`interface.library.8` is the shared implementation for native window controls,
 integer flex layout, shared transient menus, TextSurface presentation, the typed system clipboard, and
 per-document undo histories. Applications call its versioned ELF symbols
 directly; they do not compile private Interface Kit sources or speak directly
@@ -119,7 +119,7 @@ fixes behavior without breaking the ABI. A consumer links directly and records
 the oldest compatible version in its bundle manifest:
 
 ```c
-requires interface.library 7 7.0.0
+requires interface.library 8 8.0.0
 ```
 
 The linker records the ABI-major SONAME and required symbol versions. The
@@ -175,7 +175,7 @@ repeat after 400 ms; unavailable arrows remain visible but muted at a bound.
 All value changes return the same `ASTRA_UI_ACTION_VALUE_CHANGED` action.
 Numeric actions carry a signed 64-bit value; `decimal_places` is zero for
 integer controls and gives the Dial's fixed-point scale. The controls in the
-following example require `interface.library.7` version 7.0.0 or newer.
+following example require `interface.library.8` version 8.0.0 or newer.
 
 `astra_interface_list_init` (Interface Kit 6.0) creates a single-selection
 vertical list from borrowed `AstraChoiceItem` labels. An empty list is valid:
@@ -202,7 +202,7 @@ of its descendants leave layout, rendering, hit testing, focus traversal, and
 animation together; applications do not maintain separate hidden states in
 each subsystem. `astra_interface_ui_set_state` reflows after a collapse change
 and clears any interaction owned by a descendant that left the active page. Tabs and
-collapsed containers require `interface.library.7` version 7.0.0 or newer.
+collapsed containers require `interface.library.8` version 8.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_tabs.c
 :language: c
@@ -222,7 +222,7 @@ Use a disclosure for optional settings that should reflow in place. The target
 must be an ordinary sibling container, which keeps the header reachable while
 its body is closed and prevents ambiguous ownership. State remains
 application-owned and can be restored by setting the target container before
-or after UI initialization. Disclosures require `interface.library.7` version
+or after UI initialization. Disclosures require `interface.library.8` version
 6.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_disclosure.c
@@ -263,7 +263,7 @@ the same transaction also selects the normal path. These are correctness
 fallbacks, not different application APIs.
 
 Scroll models, their bound views, and scrollbars require
-`interface.library.7` version 7.0.0 or newer.
+`interface.library.8` version 8.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_scroll.c
 :language: c
@@ -280,7 +280,7 @@ moves one logical pixel; Home and End move to the permitted extremes. The same
 live change is reported as `ASTRA_UI_ACTION_VALUE_CHANGED`, and
 `astra_interface_control_set_value` restores a saved first-pane extent.
 
-Splitters require `interface.library.7` version 7.0.0 or newer.
+Splitters require `interface.library.8` version 8.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_splitter.c
 :language: c
@@ -305,7 +305,7 @@ MC68040. The indicator's angular position is normalized internally; 0 through
 100 is not part of the public value contract. `astra_interface_control_get_value` and every
 value-change action return both the exact integer and its scale.
 
-Dials require `interface.library.7` version 7.0.0 or newer. Their indicator
+Dials require `interface.library.8` version 8.0.0 or newer. Their indicator
 uses Graphics Kit's shared
 clipped line primitive, which replays as a hardware line on draw-list surfaces.
 
@@ -341,7 +341,7 @@ together at vertical blank; the MC68040 does not paint or composite the
 pointer.
 
 Pointer-image APIs and automatic Interface Kit selection require
-`interface.library.7` version 7.0.0 or newer.
+`interface.library.8` version 8.0.0 or newer.
 
 ## Text models and fields
 
@@ -397,7 +397,7 @@ applications copy that model's selected byte range through Clipboard Kit.
 After an external document change, call `astra_interface_text_view_refresh`
 to remeasure content, update scroll extents and repaint. Existing Field APIs
 remain single-line. Text View adds no fields to existing public control/context
-structures, so this is Interface Kit 7.1, with two new versioned symbols.
+structures in its original 7.1 release.
 
 Interface Kit 7.11 adds `astra_interface_text_view_set_wrap_width`. Pass the
 available viewport width in pixels to wrap visual lines at word boundaries;
@@ -409,6 +409,17 @@ Haiku reference: `src/kits/interface/TextView.cpp` recalculates line breaks on
 width changes (`FrameResized`, `SetWordWrap`) and chooses legal word boundaries
 (`CanEndLine`). Astra keeps its existing fixed-cell TextSurface and UTF-8
 TextModel contracts.
+
+Interface Kit 8.0 accepts an optional `AstraTextViewInfo.style_at` callback.
+It receives each visible UTF-8 scalar's document byte offset and returns
+logical foreground/background colors and `ASTRA_TEXT_STYLE_*` bits. Text View
+applies appearance while retaining wrapping, selection and copy behavior;
+TextSurface sends glyph work to graphics hardware. Application owns style
+data and refreshes control after changing it. Haiku reference:
+`src/kits/interface/TextView.cpp` stores style runs with text and applies them
+during draw. Astra asks document owner for style at offset, avoiding a second
+mutable style store inside read-only control. `AstraControl` and
+`AstraTextViewInfo` layouts changed; consumers require ABI 8 and rebuild.
 
 Interface Kit 7.9 adds read-only Grid View for applications with fixed cell
 layouts and per-cell styles or colors. Supply caller-owned `AstraTextCell`
@@ -494,7 +505,7 @@ render to its hardware surface, and use `astra_interface_inline_edit_text`
 on activation. Escape dismisses. The caller validates and saves the result;
 `astra_interface_inline_edit_stop` ends editing after commit or cancel.
 Desktop and Atlas use this same control for folder names. Both additions are
-exported by `interface.library.7` revision 7.4.0.
+exported by `interface.library.8`.
 
 ## Image View
 

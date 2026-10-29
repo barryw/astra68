@@ -19,11 +19,11 @@ void astra_interface_test_paint(AstraSurfaceView *surface,
                                 const AstraAlertInfo *info);
 void astra_interface_test_layout(void);
 
-_Static_assert(sizeof(AstraControl) == (sizeof(void *) == 4u ? 280u : 296u),
-               "AstraControl ABI 7 layout changed; bump the ABI major");
+_Static_assert(sizeof(AstraControl) == (sizeof(void *) == 4u ? 288u : 312u),
+               "AstraControl ABI 8 layout changed; bump the ABI major");
 _Static_assert(sizeof(AstraUIContext) ==
                    (sizeof(void *) == 4u ? 168u : 176u),
-               "AstraUIContext ABI 7 layout changed; bump the ABI major");
+               "AstraUIContext ABI 8 layout changed; bump the ABI major");
 
 static uint16_t first_text_color;
 static uint16_t last_text_color;
@@ -134,6 +134,8 @@ static uint32_t text_calls;
 static uint16_t text_clip_top;
 static uint16_t text_clip_bottom;
 static uint32_t mono_text_calls;
+static uint32_t mono_styles[32];
+static uint16_t mono_colors[32];
 static uint32_t copy_calls;
 static uint32_t copy_source_x;
 static uint32_t copy_source_y;
@@ -491,6 +493,10 @@ int astra_surface_mono_text_styled(AstraSurfaceView *surface, int32_t x,
     (void)surface;
     if (mono_text_calls < sizeof(fill_x) / sizeof(fill_x[0]))
         fill_x[mono_text_calls] = x;
+    if (mono_text_calls < sizeof(mono_styles) / sizeof(mono_styles[0])) {
+        mono_styles[mono_text_calls] = style_flags;
+        mono_colors[mono_text_calls] = color;
+    }
     (void)y;
     (void)utf8;
     (void)length;
@@ -592,6 +598,8 @@ static void reset_render_calls(void)
     text_clip_top = 0u;
     text_clip_bottom = 0u;
     mono_text_calls = 0u;
+    memset(mono_styles, 0, sizeof(mono_styles));
+    memset(mono_colors, 0, sizeof(mono_colors));
     copy_calls = 0u;
     line_calls = 0u;
 }
@@ -2497,6 +2505,68 @@ static void test_text_view(void)
     assert(astra_interface_text_view_init(&controls[1], &text_info) == ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static AstraResult styled_text_at(void *context, uint32_t offset,
+                                  AstraTextViewStyle *style)
+{
+    uint32_t *calls = context;
+    ++calls[0];
+    if (calls[1] != 0u && offset == 1u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (offset > 1u) return ASTRA_ERROR_INVALID_ARGUMENT;
+    *style = (AstraTextViewStyle)ASTRA_TEXT_VIEW_STYLE_INIT;
+    if (offset == 0u) {
+        style->attributes = ASTRA_TEXT_STYLE_BOLD;
+        style->foreground = 0xf800u;
+    } else {
+        style->attributes = ASTRA_TEXT_STYLE_ITALIC |
+                            ASTRA_TEXT_STYLE_INVERSE;
+        style->foreground = 0x001fu;
+        style->background = 0xffe0u;
+    }
+    return ASTRA_OK;
+}
+
+static void test_text_view_styles(void)
+{
+    uint8_t content[32];
+    _Alignas(4) uint8_t metadata[128];
+    AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo model_info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextViewInfo info = ASTRA_TEXT_VIEW_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraSurfaceView surface = render_view(64u, 40u);
+    uint32_t calls[2] = {0u, 0u};
+
+    model_info.text = "AB";
+    model_info.text_bytes = 2u;
+    model_info.content_arena = content;
+    model_info.content_arena_bytes = sizeof(content);
+    model_info.metadata_arena = metadata;
+    model_info.metadata_arena_bytes = sizeof(metadata);
+    assert(astra_text_model_init(&model, &model_info) == ASTRA_OK);
+    info.id = 1u;
+    info.model = &model;
+    info.style_at = styled_text_at;
+    info.style_context = calls;
+    assert(astra_interface_text_view_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 64u, 40u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(calls[0] >= 2u && mono_text_calls == 2u);
+    assert(mono_styles[0] == ASTRA_TEXT_STYLE_BOLD &&
+           mono_colors[0] == 0xf800u);
+    assert(mono_styles[1] == ASTRA_TEXT_STYLE_ITALIC &&
+           mono_colors[1] == 0xffe0u);
+    calls[1] = 1u;
+    surface = render_view(64u, 40u);
+    assert(astra_interface_ui_render(&context, &surface) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    astra_text_model_dispose(&model);
+}
+
 static void test_text_view_document_capacity(void)
 {
     char source[30u * 81u];
@@ -3580,6 +3650,7 @@ int main(void)
     test_text_field();
     test_text_field_rejections();
     test_text_view();
+    test_text_view_styles();
     test_text_view_document_capacity();
     test_text_view_wrap();
     test_grid_view();
