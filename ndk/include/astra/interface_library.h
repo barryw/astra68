@@ -281,17 +281,30 @@ AstraResult astra_interface_columns_init(AstraControl *controls,
 /** Compose Previous/Label/Next controls over one C1 collection page state.
  * Supply four caller-owned control slots. Button activation IDs are
  * first_id+1 and first_id+3; call set_page in response.
+ * @param controls Array of four caller-owned control slots.
+ * @param info Pagination composition description.
+ * @return ASTRA_OK or validation error.
  */
 AstraResult astra_interface_pagination_init(AstraControl *controls,
     const AstraPaginationInfo *info);
 /** Return the current half-open range and total page count. Empty collections
  * have one empty page. The range is recalculated from the C1 item count.
+ * @param model Caller-owned Pagination state.
+ * @param first Receives first included item index.
+ * @param end Receives first excluded item index.
+ * @param page_count Receives current total page count.
+ * @return ASTRA_OK or validation error.
  */
 AstraResult astra_interface_pagination_range(
     const AstraPaginationModel *model, uint32_t *first, uint32_t *end,
     uint32_t *page_count);
 /** Change the current page and update the composed Label and Button states.
  * The model and controls remain unchanged if layout rejects the label update.
+ * @param context Owning retained UI context.
+ * @param controls Four composed controls from pagination_init.
+ * @param model Caller-owned Pagination state.
+ * @param page_index New zero-based page index.
+ * @return ASTRA_OK or validation/layout error.
  */
 AstraResult astra_interface_pagination_set_page(AstraUIContext *context,
     AstraControl *controls, AstraPaginationModel *model, uint32_t page_index);
@@ -351,11 +364,22 @@ AstraResult astra_interface_tree_set_nodes(AstraUIContext *context,
     AstraTreeNode *nodes, uint32_t *visible_rows,
     uint32_t visible_capacity);
 /** Initialize a retained icon Grid over C1 selection and parallel borrowed
- * 64x64 icon surfaces. Compose with ScrollView for overflow. */
+ * 64x64 icon surfaces. Compose with ScrollView for overflow.
+ * @param control Caller-owned retained control.
+ * @param info Icon Grid description.
+ * @return ASTRA_OK or validation error.
+ */
 AstraResult astra_interface_icon_grid_init(AstraControl *control,
     const AstraIconGridInfo *info);
 /** Replace icon Grid items and icons together, preserving selected stable ID.
- * A failed validation or layout leaves the previous presentation intact. */
+ * A failed validation or layout leaves the previous presentation intact.
+ * @param context Owning retained UI context.
+ * @param control Icon Grid control to update.
+ * @param items Borrowed new C1 items.
+ * @param count Number of items and icons.
+ * @param icons Borrowed parallel icon surfaces; entries may be NULL.
+ * @return ASTRA_OK or validation/layout error.
+ */
 AstraResult astra_interface_icon_grid_set_items(AstraUIContext *context,
     AstraControl *control, const AstraCollectionItem *items, uint32_t count,
     const AstraSurface *const *icons);

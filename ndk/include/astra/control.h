@@ -734,6 +734,7 @@ typedef struct AstraPaginationModel {
     uint32_t reserved[2]; /**< Must be zero. */
 } AstraPaginationModel;
 
+/** Empty Pagination model; set collection and page_size before use. */
 #define ASTRA_PAGINATION_MODEL_INIT { \
     sizeof(AstraPaginationModel), 0, 0, 0, {{0}, {0}}, 0, 0, {0, 0} \
 }
@@ -748,6 +749,7 @@ typedef struct AstraPaginationInfo {
     uint32_t reserved[3]; /**< Must be zero. */
 } AstraPaginationInfo;
 
+/** Empty Pagination composition description. */
 #define ASTRA_PAGINATION_INFO_INIT { \
     sizeof(AstraPaginationInfo), 0, 0, 0, {0, 0, 0} \
 }
@@ -850,10 +852,12 @@ typedef struct AstraIconGridModel {
     uint32_t reserved[2]; /**< Must be zero. */
 } AstraIconGridModel;
 
+/** Empty icon Grid model with client tile metrics. */
 #define ASTRA_ICON_GRID_MODEL_INIT { \
     sizeof(AstraIconGridModel), 0, 0, 0, 0, ASTRA_ICON_TILE_CLIENT, {0, 0} \
 }
 
+/** Creation data for one retained icon Grid. */
 typedef struct AstraIconGridInfo {
     uint32_t size; /**< Structure size. */
     uint32_t id; /**< Nonzero control ID. */
@@ -862,6 +866,7 @@ typedef struct AstraIconGridInfo {
     uint32_t reserved[4]; /**< Must be zero. */
 } AstraIconGridInfo;
 
+/** Empty icon Grid creation data. */
 #define ASTRA_ICON_GRID_INFO_INIT { \
     sizeof(AstraIconGridInfo), 0, 0, 0, {0, 0, 0, 0} \
 }
