@@ -28,7 +28,18 @@ Reference review:
   implements those semantic modes and actions. Field, Theme, and Recent tabs
   and the two-swatch wanted/stored presentation remain for follow-up.
 
-Open, Save, and Fonts panels still need implementation. File panels should
-compose the same collection/navigation controls as Atlas and use Filesystem
-Kit for volume/path operations. Fonts panel should use Font Kit catalog and
-installed face/strike selection, with no app-specific font scanner.
+Fonts panel still needs implementation. File panels should grow toward the
+same navigation and display controls as Atlas. Fonts panel should use Font Kit
+catalog and installed face/strike selection, with no app-specific scanner.
+
+The shared Open/Save file panel now consumes `AstraDirectoryEntry` snapshots
+from Filesystem Kit, builds a List in a ScrollView, and returns a directory
+plus leaf name. Its actions distinguish entering a folder, opening a file,
+saving a new name, replacing an existing file, and cancelling. Save requires
+an editable `TextModel`; it rejects empty, dot, dot-dot, slash, and control
+names. The caller performs the actual open/save operation and handles the
+overwrite confirmation. Directory replacement uses a second item buffer so
+the old List data remains valid if validation or layout fails. Existing Atlas
+and Fonts browser code can adopt this panel without duplicating picker policy.
+The sidebar, breadcrumb, search, view modes, and filename filters from the
+standalone design remain to implement.

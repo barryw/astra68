@@ -4455,6 +4455,99 @@ static void test_split_button(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_shared_file_panel(void)
+{
+    AstraDirectoryEntry entries[2] = {
+        { .name = "Stories", .kind = ASTRA_VFS_KIND_DIRECTORY },
+        { .name = "zork1.z3", .kind = ASTRA_VFS_KIND_FILE }
+    };
+    AstraDirectoryEntry next_entries[1] = {
+        { .name = "planetfall.z3", .kind = ASTRA_VFS_KIND_FILE }
+    };
+    AstraCollectionItem items[2], next_items[2];
+    AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraTextModel name = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo text_info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraControl controls[ASTRA_FILE_PANEL_CONTROL_COUNT];
+    AstraFilePanel panel = ASTRA_FILE_PANEL_INIT;
+    AstraFilePanelInfo info = ASTRA_FILE_PANEL_INFO_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    uint8_t content[512] = {0};
+    _Alignas(4) uint8_t metadata[1024] = {0};
+    uint32_t outcome = 99u;
+
+    scroll_info.line_width = 8u;
+    scroll_info.line_height = 16u;
+    assert(astra_scroll_init(&scroll, &scroll_info) == ASTRA_OK);
+    info.first_id = 300u;
+    info.mode = ASTRA_FILE_PANEL_OPEN;
+    info.directory = "/dh0/Stories";
+    info.entries = entries;
+    info.entry_count = 2u;
+    info.item_storage = items;
+    info.item_capacity = 2u;
+    info.collection = &collection;
+    info.scroll = &scroll;
+    assert(astra_interface_file_panel_init(&panel, controls, &info) == ASTRA_OK);
+    assert(collection.item_count == 2u &&
+           controls[ASTRA_FILE_PANEL_NAME]._private_state &
+               ASTRA_CONTROL_COLLAPSED);
+    assert(astra_interface_ui_init(&context, controls,
+        ASTRA_FILE_PANEL_CONTROL_COUNT, 420u, 480u) == ASTRA_OK);
+    layout.direction = ASTRA_FLEX_COLUMN;
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    action.type = ASTRA_UI_ACTION_ACTIVATE;
+    action.control_id = 300u + ASTRA_FILE_PANEL_LIST;
+    action.value = 0;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FILE_PANEL_NAVIGATE &&
+        strcmp(panel.leaf, "Stories") == 0);
+    action.value = 1;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FILE_PANEL_PICKED &&
+        strcmp(panel.leaf, "zork1.z3") == 0);
+    assert(astra_interface_file_panel_set_directory(&panel, &context,
+        controls, "/dh0/Stories", next_entries, 1u, next_items, 2u) ==
+        ASTRA_OK);
+    assert(collection.item_count == 1u &&
+           strcmp(panel.directory, "/dh0/Stories") == 0);
+    action.control_id = 300u + ASTRA_FILE_PANEL_CANCEL;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FILE_PANEL_CANCELLED && panel.leaf[0] == '\0');
+
+    text_info.content_arena = content;
+    text_info.content_arena_bytes = sizeof(content);
+    text_info.metadata_arena = metadata;
+    text_info.metadata_arena_bytes = sizeof(metadata);
+    text_info.text = "zork1.z3";
+    text_info.text_bytes = 8u;
+    assert(astra_text_model_init(&name, &text_info) == ASTRA_OK);
+    context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
+    info.mode = ASTRA_FILE_PANEL_SAVE;
+    info.name_model = &name;
+    assert(astra_interface_file_panel_init(&panel, controls, &info) == ASTRA_OK);
+    assert(controls[ASTRA_FILE_PANEL_NAME]._private_control_kind ==
+           ASTRA_CONTROL_FIELD);
+    assert(astra_interface_ui_init(&context, controls,
+        ASTRA_FILE_PANEL_CONTROL_COUNT, 420u, 480u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    action.control_id = 300u + ASTRA_FILE_PANEL_PRIMARY;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FILE_PANEL_OVERWRITE &&
+        strcmp(panel.leaf, "zork1.z3") == 0);
+    assert(astra_text_model_replace(&name, 0u, 8u, "../oops", 7u) == ASTRA_OK);
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
 static void test_shared_colour_panel(void)
 {
     AstraControl controls[ASTRA_COLOUR_PANEL_CONTROL_COUNT];
@@ -4620,6 +4713,7 @@ int main(void)
     test_secure_and_search_fields();
     test_composed_fields_and_colour_well();
     test_shared_colour_panel();
+    test_shared_file_panel();
     test_text_field_rejections();
     test_text_view();
     test_text_view_styles();
