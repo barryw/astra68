@@ -124,6 +124,38 @@ def font3_display_story():
     return bytes(data)
 
 
+def style_display_story():
+    """Keep standard lower-window Z-machine styles visible for GUI checks."""
+    data = bytearray(512)
+    data[0] = 5
+    data[2:4] = be16(1)
+    data[4:6] = be16(0x100)   # high memory
+    data[6:8] = be16(0x100)   # initial PC in V5 is a byte address
+    data[8:10] = be16(0x40)
+    data[10:12] = be16(0x90)
+    data[12:14] = be16(0x60)
+    data[14:16] = be16(0x100) # static memory
+    data[18:24] = b"261029"
+    data[24:26] = be16(0x70)
+    data[26:28] = be16(len(data) // 4)
+    program = bytearray()
+    for style, label in ((0, b"NORMAL"), (2, b"BOLD"),
+                         (4, b"ITALIC"), (1, b"REVERSE"),
+                         (3, b"BOLD REVERSE")):
+        program += bytes((0xf1, 0x7f, 0)) # zero resets accumulated styles
+        program += bytes((0xf1, 0x7f, style)) # VAR:17 set_text_style
+        for character in label:
+            program += bytes((0xe5, 0x7f, character)) # VAR:5 print_char
+        program += b"\xbb"                 # 0OP:11 new_line
+    program += bytes.fromhex("f1 7f 00 1b 03 09") # normal, red on white
+    for character in b"RED ON WHITE":
+        program += bytes((0xe5, 0x7f, character))
+    program += bytes.fromhex("bb 1b 01 01 f6 7f 01 12 ba")
+    data[0x100:0x100 + len(program)] = program
+    data[28:30] = be16(sum(data[64:]) & 0xffff)
+    return bytes(data)
+
+
 def blorb(sound_tag, sound_payload):
     resources = ((b"Pict", 7, b"PNG ", png()),
                  (b"Snd ", 3, sound_tag, sound_payload))
@@ -149,6 +181,7 @@ def main():
     (args.directory / "media.z6").write_bytes(story())
     (args.directory / "font3.z6").write_bytes(font3_story())
     (args.directory / "font3-display.z6").write_bytes(font3_display_story())
+    (args.directory / "style-display.z5").write_bytes(style_display_story())
     (args.directory / "media.png").write_bytes(png())
     (args.directory / "media.aiff").write_bytes(b"FORM" +
                                                  be32(len(aiff_data)) + aiff_data)

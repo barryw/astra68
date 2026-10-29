@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-10-29
 
+AstraZ text-style checkpoint, 2026-10-29: Interface Kit 8.0 gives shared
+Text View a per-UTF-8-scalar appearance callback. AstraZ keeps Frotz's
+semantic lower-window style markers and colour changes alongside transcript
+bytes, then renders bold, emphasis as italic, and reverse through TextSurface
+and the hardware glyph path. Existing upper-grid and V6 canvas styles remain
+on their native paths. Every in-tree Interface Kit consumer and manifest now
+uses ABI 8; the superseded ABI 7 export contract is gone. Beast Interface Kit,
+AstraZ, NDK distribution, and MC68040 dynamic-link gates pass. A libre Z5
+fixture confirms distinct normal, bold, italic, reverse, bold/reverse, and
+red-on-white lines on DE25; Trinity Z4 shows its real bold Palace Gate
+heading, and Z8 One Room renders its bold headings, `look` response, and
+prompt. Selected release
+`23bc412a98a28cd13d74882eaae47a8f7a77ef7eab5b50b1d8ae9a9b06bfa3a9`
+passes installed verification; Astra, audio, and remote desktop services are
+active with zero restarts and 8.2 GiB free after trial cleanup. Evidence is
+at `/mnt/Documents/astra68/astraz-style-20261029/` on Beast; final style and
+colour fixture raw frame SHA-256 is
+`b29e329d26e7a1f7240d150196b049ca8f96a27b4e7133753142e67373844de4`.
+Haiku reference: `src/kits/interface/TextView.cpp` `SetRunArray` and
+`RunArray` associate character spans with style; Astra adapts that ownership
+to an optional callback over the caller-owned TextModel and transcript.
+
 AstraZ V6 checkpoint, 2026-10-29: focused DE25 install opens Zork Zero
 with its companion Blorb. An 8x8 protected AFNT face and corrected native
 canvas geometry place the Banquet Hall banner at the top, pillars on both
@@ -36,7 +58,7 @@ capture SHA-256 is
 and restored capture SHA-256 is
 `c10d321c7827653a1dc009729b5ad8928b45ccbf9bae87d13099341f464d3567`.
 No new board panic or spontaneous service restart occurred during these trials.
-Interface Kit 7.11 Text View word wrapping is implemented for responsive text
+Interface Kit 8.0 retains the 7.11 Text View word wrapping for responsive text
 story windows. It remeasures visual lines at the chosen viewport width and
 keeps selection, pointer hit testing and keyboard navigation aligned with
 wrapped rows. Isolated Beast host tests, sanitizers and MC68040 library

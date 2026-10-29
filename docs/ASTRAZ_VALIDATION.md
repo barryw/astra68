@@ -318,3 +318,33 @@ has corresponding raw-frame SHA-256
 `3b5bf4722d3bcc94cefd7685b11abf98eb9bad913f01e82401359d482c325b14`.
 Earlier focused DE25 captures in `docs/CURRENT_STATE.md` cover normal,
 maximized, response, and restored reflow plus Z6 artwork geometry.
+
+## Lower-window text styles
+
+Interface Kit 8.0 Text View accepts a caller-owned appearance callback at each
+UTF-8 scalar's document byte offset. AstraZ retains style and palette metadata
+with its semantic transcript, including when old paragraphs are trimmed. Frotz
+style bits map bold to the bold AFNT face, emphasis to italic, and reverse to
+swapped foreground/background through TextSurface. Fixed-width text already
+uses the monospaced AFNT face. The Z-machine does not define an underline or
+blink style; those remain general Astra TextSurface attributes.
+
+Run `sh emu/qemu/astraz-media/test-style-host.sh` for the libre Z5 style
+fixture and native-engine event gate. Beast Interface Kit host tests cover the
+Text View callback, bold/italic attributes, reverse colours, and
+rejected invalid callback output; AstraZ host tests cover split Frotz style
+markers and UTF-8 byte alignment. `make -C ndk dist-check` and the MC68040
+AstraZ build pass with `interface.library.8`.
+
+DE25 selected release
+`23bc412a98a28cd13d74882eaae47a8f7a77ef7eab5b50b1d8ae9a9b06bfa3a9`
+shows all six fixture lines distinctly, including combined bold and reverse
+and red text on a white background. Trinity Z4 shows the bold `Palace Gate`
+heading below its inverted status line. Z8 One Room opens, presents bold room
+headings, accepts `look`, and returns to a usable prompt. Raw RFB frames and
+PNGs are archived on Beast under `/mnt/Documents/astra68/astraz-style-20261029/`.
+The final style and colour fixture raw frame SHA-256 is
+`b29e329d26e7a1f7240d150196b049ca8f96a27b4e7133753142e67373844de4`.
+Private story and libre trial fixtures were removed from board WORK after the
+captures. Installed release verification passes; Astra, audio, and remote
+desktop services remain active with zero Astra restarts and 8.2 GiB free.
