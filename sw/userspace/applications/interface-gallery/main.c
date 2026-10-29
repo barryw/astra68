@@ -5,6 +5,7 @@
 #include <astra/graphics_library.h>
 #include <astra/interface_kit.h>
 #include <astra/interface_library.h>
+#include <astra/image_view.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
 #include <astra/service.h>
@@ -160,7 +161,9 @@ enum {
     GALLERY_COLOUR_PANEL_ACTIONS,
     GALLERY_COLOUR_PANEL_CANCEL,
     GALLERY_COLOUR_PANEL_USE,
-    GALLERY_CONTROL_COUNT = GALLERY_COLOUR_PANEL_USE
+    GALLERY_CUSTOM_VIEW,
+    GALLERY_IMAGE_VIEW,
+    GALLERY_CONTROL_COUNT = GALLERY_IMAGE_VIEW
 };
 
 enum {
@@ -187,6 +190,10 @@ static AstraComboBox gallery_combo = ASTRA_COMBO_BOX_INIT;
 static AstraMultiPopup gallery_multi = ASTRA_MULTI_POPUP_INIT;
 static AstraToolbarActions gallery_toolbar = ASTRA_TOOLBAR_ACTIONS_INIT;
 static AstraColourPanel gallery_colour_panel = ASTRA_COLOUR_PANEL_INIT;
+static AstraSurface gallery_image_source = ASTRA_SURFACE_INIT;
+static AstraImageViewModel gallery_image_model;
+static uint32_t gallery_view_phase;
+static AstraViewModel gallery_custom_model = ASTRA_VIEW_MODEL_INIT;
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
 static char slider_value_text[5] = "62%";
@@ -399,6 +406,47 @@ static const AstraContextMenuItem gallery_multi_items[3] = {
 static uint16_t rgb565(AstraColorRGBA8 value)
 {
     return astra_surface_rgb565(value.red, value.green, value.blue);
+}
+
+static AstraResult gallery_waiting_image(void *context,
+    const AstraControlFrame *frame, AstraSurfaceView *view,
+    uint64_t *commands, uint64_t *payload)
+{
+    (void)context;
+    (void)frame;
+    (void)view;
+    (void)commands;
+    (void)payload;
+    return ASTRA_OK;
+}
+
+static AstraResult gallery_custom_view_draw(void *context,
+    const AstraControlFrame *frame, AstraSurfaceView *view,
+    uint64_t *commands, uint64_t *payload)
+{
+    const uint32_t phase = *(const uint32_t *)context;
+    uint32_t bar_width;
+
+    if (view == NULL) {
+        if (commands == NULL || payload == NULL ||
+            *commands > UINT64_MAX - 4u)
+            return ASTRA_ERROR_NO_RESOURCES;
+        *commands += 4u;
+        return ASTRA_OK;
+    }
+    if (frame->width == 0u || frame->height == 0u) return ASTRA_OK;
+    bar_width = frame->width > 32u ? frame->width - 32u : frame->width;
+    astra_surface_fill(view, frame->x, frame->y, frame->width,
+                       frame->height, 0x1147u);
+    astra_surface_fill(view, frame->x, frame->y, frame->width,
+                       4u, 0x25b8u);
+    astra_surface_fill(view, frame->x + 16, frame->y + 28,
+                       bar_width * (phase == 0u ? 2u : 3u) / 4u,
+                       12u, 0x25b8u);
+    astra_surface_fill(view, frame->x + 16, frame->y + 50,
+                       bar_width * (phase == 0u ? 3u : 2u) / 4u,
+                       12u, 0xe46au);
+    return ASTRA_OK;
 }
 
 static void report_layout(uint32_t count, uint32_t iterations,
@@ -1456,6 +1504,29 @@ static uint32_t build_controls(void)
                 &pagination) != ASTRA_OK))
             status = GALLERY_FAIL_CONTROL;
     }
+    if (status == ASTRA_STATUS_OK) {
+        AstraViewInfo info = ASTRA_VIEW_INFO_INIT;
+
+        gallery_custom_model.intrinsic_width = 180u;
+        gallery_custom_model.intrinsic_height = 90u;
+        gallery_custom_model.draw = gallery_custom_view_draw;
+        gallery_custom_model.context = &gallery_view_phase;
+        info.id = GALLERY_CUSTOM_VIEW;
+        info.model = &gallery_custom_model;
+        if (astra_interface_view_init(
+                GALLERY_CONTROL(GALLERY_CUSTOM_VIEW), &info) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+        gallery_image_model.view = (AstraViewModel)ASTRA_VIEW_MODEL_INIT;
+        gallery_image_model.view.intrinsic_width = 160u;
+        gallery_image_model.view.intrinsic_height = 90u;
+        gallery_image_model.view.draw = gallery_waiting_image;
+        gallery_image_model.view.context = &gallery_image_model;
+        info.id = GALLERY_IMAGE_VIEW;
+        info.model = &gallery_image_model.view;
+        if (status == ASTRA_STATUS_OK && astra_interface_view_init(
+                GALLERY_CONTROL(GALLERY_IMAGE_VIEW), &info) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
     if (status == ASTRA_STATUS_OK)
         status = set_item(GALLERY_TABS, 0u, 0u, 0u);
     for (uint32_t page = GALLERY_PAGE_INPUT;
@@ -1575,9 +1646,13 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_SPLIT_LEFT, GALLERY_SPLIT_ROW, 0u);
     PAGE_ITEM(GALLERY_SPLIT_LEFT_LABEL, GALLERY_SPLIT_LEFT,
               ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_CUSTOM_VIEW, GALLERY_SPLIT_LEFT,
+              ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_SPLITTER, GALLERY_SPLIT_ROW, 0u);
     PAGE_ITEM(GALLERY_SPLIT_RIGHT, GALLERY_SPLIT_ROW, 0u);
     PAGE_ITEM(GALLERY_SPLIT_RIGHT_LABEL, GALLERY_SPLIT_RIGHT,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_IMAGE_VIEW, GALLERY_SPLIT_RIGHT,
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_FORM_ROW, GALLERY_PAGE_LAYOUT,
               ASTRA_FLEX_BREAK_BEFORE | ASTRA_FLEX_BREAK_AFTER);
@@ -1667,6 +1742,20 @@ static uint32_t build_controls(void)
         if (status == ASTRA_STATUS_OK)
             status = astra_interface_control_set_flex(
                 GALLERY_CONTROL(GALLERY_SPLIT_RIGHT), &item) == ASTRA_OK ?
+                ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+        item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+        item.parent_id = GALLERY_SPLIT_LEFT;
+        item.minimum_width = 160u;
+        item.minimum_height = 90u;
+        item.grow = 1u;
+        if (status == ASTRA_STATUS_OK)
+            status = astra_interface_control_set_flex(
+                GALLERY_CONTROL(GALLERY_CUSTOM_VIEW), &item) == ASTRA_OK ?
+                ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+        item.parent_id = GALLERY_SPLIT_RIGHT;
+        if (status == ASTRA_STATUS_OK)
+            status = astra_interface_control_set_flex(
+                GALLERY_CONTROL(GALLERY_IMAGE_VIEW), &item) == ASTRA_OK ?
                 ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
     }
     if (status != ASTRA_STATUS_OK)
@@ -2276,6 +2365,67 @@ static uint32_t paint(uint32_t clear)
         ASTRA_STATUS_OK : GALLERY_FAIL_RENDER;
 }
 
+static uint32_t create_image_fixture(void)
+{
+    static const struct {
+        AstraRectI32 rectangle;
+        AstraColorRGBA8 color;
+    } shapes[] = {
+        {{0, 0, 160u, 90u}, {21u, 35u, 45u, 255u}},
+        {{0, 0, 160u, 12u}, {45u, 174u, 184u, 255u}},
+        {{14, 24, 132u, 50u}, {38u, 57u, 68u, 255u}},
+        {{26, 34, 48u, 30u}, {236u, 163u, 83u, 255u}},
+        {{86, 37, 48u, 6u}, {220u, 231u, 234u, 255u}},
+        {{86, 51, 36u, 6u}, {45u, 174u, 184u, 255u}}
+    };
+    const AstraRectI32 whole = {0, 0, 160u, 90u};
+    AstraSurfaceCreateInfo info = ASTRA_SURFACE_CREATE_INFO_INIT;
+    AstraDisplay display = ASTRA_DISPLAY_INIT;
+    AstraDrawList draw = ASTRA_DRAW_LIST_INIT;
+    AstraDrawPaint paint = ASTRA_DRAW_PAINT_INIT;
+    AstraResult result = astra_window_display(&window, &display);
+
+    info.flags = ASTRA_SURFACE_DRAW_SOURCE | ASTRA_SURFACE_DRAW_TARGET;
+    info.width = 160u;
+    info.height = 90u;
+    info.format = ASTRA_PIXEL_FORMAT_RGB565;
+    if (result == ASTRA_OK)
+        result = astra_surface_create(&display, &info,
+                                      &gallery_image_source);
+    if (result == ASTRA_OK)
+        result = astra_draw_list_create(&gallery_image_source, &whole,
+                                        &draw);
+    for (uint32_t at = 0u;
+         result == ASTRA_OK && at < sizeof(shapes) / sizeof(shapes[0]); ++at) {
+        paint.foreground = shapes[at].color;
+        result = astra_draw_rectangle(&draw, &shapes[at].rectangle, 1,
+                                      &paint);
+    }
+    if (result == ASTRA_OK) result = astra_draw_post(&draw, 0u);
+    if (draw._private_handle != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_draw_list_close(&draw);
+        if (result == ASTRA_OK) result = closed;
+    }
+    if (result == ASTRA_OK)
+        result = astra_interface_image_view_model_init(
+            &gallery_image_model, &gallery_image_source, &whole,
+            ASTRA_IMAGE_VIEW_FIT);
+    if (display._private_handle != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_display_close(&display);
+        if (result == ASTRA_OK) result = closed;
+    }
+    if (result != ASTRA_OK) {
+        (void)astra_log_failure("gallery image fixture",
+                                (uint32_t)(-result));
+        if (gallery_image_source._private_handle != ASTRA_INVALID_HANDLE) {
+            AstraResult closed = astra_surface_close(&gallery_image_source);
+            (void)closed;
+        }
+        return GALLERY_FAIL_RENDER;
+    }
+    return ASTRA_STATUS_OK;
+}
+
 static uint32_t create_window(AstraHandle gui)
 {
     AstraWindowCreateInfo info = ASTRA_WINDOW_CREATE_INFO_INIT;
@@ -2307,6 +2457,8 @@ static uint32_t create_window(AstraHandle gui)
     if (result == ASTRA_OK)
         result = astra_window_set_application_name(
             &window, "Interface Gallery", 17u);
+    if (result == ASTRA_OK && create_image_fixture() != ASTRA_STATUS_OK)
+        result = ASTRA_ERROR_IO;
     if (result == ASTRA_OK)
         result = astra_window_activate(&window);
     if (result != ASTRA_OK) {
@@ -2519,6 +2671,12 @@ static uint32_t run(AstraHandle clipboard, AstraHandle gui)
             if (astra_interface_ui_handle_event(
                     &ui, &event, &action) != ASTRA_OK)
                 return GALLERY_FAIL_CONTROL;
+            if (event.type == ASTRA_WINDOW_EVENT_RESIZE) {
+                gallery_view_phase ^= 1u;
+                if (astra_interface_view_invalidate(&ui,
+                        GALLERY_CONTROL(GALLERY_CUSTOM_VIEW)) != ASTRA_OK)
+                    return GALLERY_FAIL_CONTROL;
+            }
             if (event.type == ASTRA_WINDOW_EVENT_RESIZE &&
                 event.data.resize.width > 32u) {
                 AstraToolbarFit fit = ASTRA_TOOLBAR_FIT_INIT;
@@ -2643,6 +2801,12 @@ int astra_main(const AstraStartupInfo *startup)
     }
     if (status == ASTRA_STATUS_OK)
         status = run(clipboard->handle, gui->handle);
+    if (gallery_image_source._private_handle != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_surface_close(&gallery_image_source);
+        if (closed != ASTRA_OK)
+            (void)astra_log_failure("gallery image close",
+                                    (uint32_t)(-closed));
+    }
     if (window._private_control != ASTRA_INVALID_HANDLE) {
         AstraResult close_result = astra_window_close(&window);
         (void)close_result;

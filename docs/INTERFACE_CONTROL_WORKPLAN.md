@@ -123,3 +123,11 @@ Theme generation 6 uses the resident 16 px AFNT strike for body, title, and
 control labels, with 40 px controls and 38 px title bars to match the standalone
 Controls design at native 1920x1080 resolution. Application-specific text roles
 remain separate; the fixed 16 px mono role is unchanged.
+
+Retained surface Gallery fixture: Haiku's `src/kits/interface/View.cpp`
+`DrawBitmap` and `Invalidate` separate borrowed image drawing from View damage.
+Astra's Layout page uses shared retained View and ImageView in its existing
+split panes. The image is painted into a window-owned Graphics Kit surface by
+Astraea, borrowed by ImageView, then released when the Gallery window closes.
+Window resize changes the custom View model and invalidates that View through
+Interface Kit; no application-owned pixel buffer or one-off control is added.

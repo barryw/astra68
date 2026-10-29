@@ -86,6 +86,16 @@ int main(void)
             NULL, NULL) == ASTRA_OK);
         assert(frame_seen.x == 30 && frame_seen.y == 20 &&
                frame_seen.width == 160u && frame_seen.height == 100u);
+        bounds = (AstraControlFrame){10, 20, 320u, 90u};
+        assert(retained.view.draw(retained.view.context, &bounds, &surface,
+            NULL, NULL) == ASTRA_OK);
+        assert(frame_seen.x == 98 && frame_seen.y == 20 &&
+               frame_seen.width == 144u && frame_seen.height == 90u);
+        image._private_handle = ASTRA_INVALID_HANDLE;
+        assert(retained.view.draw(retained.view.context, &bounds, NULL,
+            &commands, &payload) == ASTRA_ERROR_INVALID_ARGUMENT);
+        image._private_handle = 1u;
+        bounds = (AstraControlFrame){10, 20, 200u, 100u};
         retained.mode = ASTRA_IMAGE_VIEW_FILL;
         assert(retained.view.draw(retained.view.context, &bounds, &surface,
             NULL, NULL) == ASTRA_OK);
