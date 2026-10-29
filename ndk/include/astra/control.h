@@ -23,7 +23,7 @@ ASTRA_EXTERN_C_BEGIN
 /** Display refresh used to derive deterministic animation phases. */
 #define ASTRA_UI_VBLANK_HZ 60u
 
-/** Control kinds implemented by Interface Kit ABI 8.0. */
+/** Retained control kinds. */
 enum {
     ASTRA_CONTROL_LABEL = 1u,
     ASTRA_CONTROL_BUTTON = 2u,
@@ -47,7 +47,9 @@ enum {
     /** Selectable, read-only multiline text; compose with ScrollView. */
     ASTRA_CONTROL_TEXT_VIEW = 19u,
     /** Read-only fixed cell grid with caller-owned colors and styles. */
-    ASTRA_CONTROL_GRID_VIEW = 20u
+    ASTRA_CONTROL_GRID_VIEW = 20u,
+    /** Menu-backed, single-choice field. */
+    ASTRA_CONTROL_POPUP = 21u
 };
 
 /** Semantic state owned by an application. */
@@ -73,7 +75,9 @@ enum {
     ASTRA_BUTTON_WARNING = 2u,
     ASTRA_BUTTON_DESTRUCTIVE = 3u,
     /** Flat button on a 36 px window toolbar; hover reveals its surface. */
-    ASTRA_BUTTON_TOOLBAR = 4u
+    ASTRA_BUTTON_TOOLBAR = 4u,
+    /** Menu segment paired with a toolbar button by Split Button. */
+    ASTRA_BUTTON_SPLIT_MENU = 5u
 };
 
 /** Text hierarchy on a lunar client surface. */

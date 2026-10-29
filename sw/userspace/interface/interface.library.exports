@@ -25,6 +25,11 @@ ASTRA_INTERFACE_8.0 {
         astra_interface_label_init;
         astra_interface_label_set_font;
         astra_interface_list_init;
+        astra_interface_popup_init;
+        astra_interface_popup_open;
+        astra_interface_popup_handle_event;
+        astra_interface_popup_close;
+        astra_interface_split_button_init;
         astra_interface_progress_init;
         astra_interface_progress_set;
         astra_interface_radio_init;

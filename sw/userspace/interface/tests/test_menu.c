@@ -3,6 +3,7 @@
 #include <astra/input.h>
 #include <astra/input_modifiers.h>
 #include <astra/runtime.h>
+#include <astra/fonts.h>
 
 #include <assert.h>
 #include <stdlib.h>
@@ -15,6 +16,18 @@ static char scratch[8];
 static const char *labels[] = {"First", "Second"};
 static uint32_t queries;
 static uint8_t tree_menu;
+static uint8_t popup_mode;
+static AstraWindowEvent event(uint16_t type);
+
+AstraResult astra_fonts_text_measure(AstraHandle gui, const char *id,
+    uint32_t id_length, uint16_t height, const char *text, uint32_t length,
+    uint32_t maximum_width, AstraFontTextMetrics *metrics)
+{
+    (void)gui; (void)id; (void)id_length; (void)height;
+    (void)text; (void)length; (void)maximum_width; (void)metrics;
+    assert(0 && "Popup test does not use an installed Label face");
+    return ASTRA_ERROR_INVALID_ARGUMENT;
+}
 
 void *astra_runtime_allocate(size_t size)
 {
@@ -29,6 +42,17 @@ void astra_runtime_deallocate(void *pointer)
 AstraResult astra_window_menu_open(AstraWindow *window, const AstraMenuItem *rows,
     uint32_t count, int32_t x, int32_t y, uint32_t cookie)
 {
+    if (popup_mode) {
+        assert(window != NULL && count == 2u && cookie >= UINT32_C(0x80000001));
+        assert(x >= 0 && y >= -4);
+        assert(rows[0].label_length == 4u &&
+               memcmp(rows[0].label, "Name", 4u) == 0);
+        assert(rows[1].label_length == 13u &&
+               memcmp(rows[1].label, "Date modified", 13u) == 0);
+        assert(rows[0].flags == ASTRA_MENU_CHECKED && rows[1].flags == 0u);
+        request = cookie;
+        return open_result;
+    }
     assert(window != NULL && count == 2u && x == 12 && y == 24 && cookie != 0u);
     /* Both queries reuse scratch. Each label must have been copied at query time. */
     assert(rows[0].label_length == 5u && memcmp(rows[0].label, "First", 5u) == 0);
@@ -38,6 +62,50 @@ AstraResult astra_window_menu_open(AstraWindow *window, const AstraMenuItem *row
         (tree_menu ? ASTRA_MENU_PARENT(1u) : 0u)));
     request = cookie;
     return open_result;
+}
+static void popup_session(void)
+{
+    static const AstraChoiceItem items[] = {
+        {"Name", 4u, {0u, 0u}},
+        {"Date modified", 13u, {0u, 0u}}
+    };
+    AstraChoiceInfo info = ASTRA_CHOICE_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraWindow window = ASTRA_WINDOW_INIT;
+    AstraPopup popup = ASTRA_POPUP_INIT;
+    AstraWindowEvent result = event(ASTRA_WINDOW_EVENT_MENU_RESULT);
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    int handled = 0;
+    int64_t selected = -1;
+
+    info.id = 44u;
+    info.items = items;
+    info.item_count = 2u;
+    info.selected = 0u;
+    assert(astra_interface_popup_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 320u, 120u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    popup_mode = 1u;
+    assert(astra_interface_popup_open(&popup, &context, &control, &window) ==
+           ASTRA_OK && allocations == 0u);
+    assert(astra_interface_popup_open(&popup, &context, &control, &window) ==
+           ASTRA_ERROR_BUSY);
+    result.data.menu_result.request = request - 1u;
+    assert(astra_interface_popup_handle_event(&popup, &result, &action,
+           &handled) == ASTRA_OK && !handled);
+    result.data.menu_result.request = request;
+    result.data.menu_result.status = ASTRA_STATUS_OK;
+    result.data.menu_result.selection = 2u;
+    assert(astra_interface_popup_handle_event(&popup, &result, &action,
+           &handled) == ASTRA_OK && handled &&
+           action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+           action.control_id == 44u && action.value == 1);
+    assert(astra_interface_control_get_value(&control, &selected, NULL) ==
+           ASTRA_OK && selected == 1);
+    popup_mode = 0u;
 }
 AstraResult astra_window_menu_close(AstraWindow *window, uint32_t cookie)
 {
@@ -271,5 +339,6 @@ int main(void)
 {
     model();
     context();
+    popup_session();
     return 0;
 }
