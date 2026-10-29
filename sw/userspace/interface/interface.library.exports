@@ -29,6 +29,9 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_colour_panel_init;
         astra_interface_colour_panel_action;
         astra_interface_colour_panel_color;
+        astra_interface_file_panel_init;
+        astra_interface_file_panel_set_directory;
+        astra_interface_file_panel_action;
         astra_interface_field_refresh;
         astra_interface_field_replace_selection;
         astra_interface_label_init;
