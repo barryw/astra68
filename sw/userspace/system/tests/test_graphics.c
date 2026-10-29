@@ -679,6 +679,29 @@ static void test_append_view(const AstraSurface *content)
         CHECK(astra_draw_list_close(&list) == ASTRA_OK);
     }
 
+    /* A valid same-color line batch stays one command at append time. */
+    header->command_count = 1u;
+    header->payload_bytes = sizeof(AstraDrawListSegment);
+    commands[0] = (AstraDrawListCommand){
+        .operation = ASTRA_DRAW_LIST_LINES,
+        .color = ASTRA_DRAW_LIST_COLOR_IDENTITY,
+        .payload_offset = ASTRA_DRAW_LIST_PAYLOAD_OFFSET,
+        .payload_bytes = sizeof(AstraDrawListSegment),
+        .clip_right = 320u, .clip_bottom = 200u,
+    };
+    *(AstraDrawListSegment *)((uint8_t *)storage +
+        ASTRA_DRAW_LIST_PAYLOAD_OFFSET) =
+            (AstraDrawListSegment){1, 2, 3, 4};
+    list = (AstraDrawList)ASTRA_DRAW_LIST_INIT;
+    CHECK(astra_draw_list_create(content,
+          &(AstraRectI32){0, 0, 320, 200}, &list) == ASTRA_OK);
+    CHECK(astra_draw_list_append_view(&list, &view) == ASTRA_OK);
+    CHECK(((AstraDrawListHeader *)list._private_commands)->command_count == 1u);
+    commands[0].payload_bytes--;
+    CHECK(astra_draw_list_append_view(&list, &view) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    CHECK(astra_draw_list_close(&list) == ASTRA_OK);
+
     /* Selected system fonts turn ordinary UI text into named text. */
     const char named[] = "user:abcdefHi";
     header->command_count = 1u;

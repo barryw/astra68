@@ -1493,6 +1493,37 @@ static void test_draw_list_borrowed_surface_blit(void)
                                     &destination, &options));
 }
 
+static void test_draw_list_lines_batch(void)
+{
+    uint8_t storage[ASTRA_DRAW_LIST_AREA_BYTES];
+    AstraSurfaceView view;
+    const AstraDrawListHeader *header;
+    const AstraDrawListCommand *command;
+    const AstraDrawListSegment *payload;
+    AstraSurfaceLine lines[] = {
+        {1, 2, 3, 4}, {5, 6, 7, 8}, {-2, 9, 4, 10}
+    };
+
+    assert(astra_draw_list_view_init(&view, storage, sizeof(storage),
+                                     80u, 40u));
+    assert(astra_surface_lines(&view, lines, 3u, 0xffffu));
+    header = (const AstraDrawListHeader *)(const void *)storage;
+    command = (const AstraDrawListCommand *)(const void *)(header + 1);
+    payload = (const AstraDrawListSegment *)(const void *)
+        (storage + command->payload_offset);
+    assert(header->command_count == 1u &&
+           header->payload_bytes == 3u * sizeof(AstraDrawListSegment) &&
+           command->operation == ASTRA_DRAW_LIST_LINES &&
+           command->payload_bytes == header->payload_bytes &&
+           payload[0].x0 == 1 && payload[1].y1 == 8 &&
+           payload[2].x0 == -2);
+    lines[0].x0 = INT16_MAX + 1;
+    assert(!astra_surface_lines(&view, lines, 3u, 0xffffu));
+    assert(header->command_count == 1u &&
+           header->payload_bytes == 3u * sizeof(AstraDrawListSegment));
+    assert(astra_surface_lines(&view, NULL, 0u, 0xffffu));
+}
+
 static void test_text_box_scroll_uses_overlap_safe_copy(void)
 {
     uint8_t storage[ASTRA_DRAW_LIST_AREA_BYTES];
@@ -3278,6 +3309,7 @@ int main(void)
     test_direct_styled_text();
     test_draw_list_copy_is_a_hardware_self_blit();
     test_draw_list_borrowed_surface_blit();
+    test_draw_list_lines_batch();
     test_text_box_scroll_uses_overlap_safe_copy();
     test_rounded_fill_has_no_overlap();
     puts("surface drawing tests passed");

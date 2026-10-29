@@ -504,6 +504,56 @@ int astra_surface_line(AstraSurfaceView *surface, int32_t x0, int32_t y0,
     return 1;
 }
 
+int astra_surface_lines(AstraSurfaceView *surface,
+    const AstraSurfaceLine *lines, uint32_t count, uint16_t color)
+{
+    AstraDrawListHeader *header;
+    AstraDrawListCommand *command;
+    AstraDrawListSegment *payload;
+    uint32_t bytes;
+
+    if (!clip_valid(surface) ||
+        (count != 0u && lines == NULL) ||
+        (surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST &&
+         surface->kind != ASTRA_SURFACE_VIEW_RGB565))
+        return 0;
+    if (count == 0u || clip_empty(surface)) return 1;
+    if (surface->kind == ASTRA_SURFACE_VIEW_RGB565) {
+        for (uint32_t at = 0u; at < count; ++at)
+            if (!astra_surface_line(surface, lines[at].x0, lines[at].y0,
+                                    lines[at].x1, lines[at].y1, color))
+                return 0;
+        return 1;
+    }
+    if (count > ASTRA_DRAW_LIST_PAYLOAD_BYTES /
+                    sizeof(AstraDrawListSegment))
+        return 0;
+    for (uint32_t at = 0u; at < count; ++at)
+        if (lines[at].x0 < INT16_MIN || lines[at].x0 > INT16_MAX ||
+            lines[at].y0 < INT16_MIN || lines[at].y0 > INT16_MAX ||
+            lines[at].x1 < INT16_MIN || lines[at].x1 > INT16_MAX ||
+            lines[at].y1 < INT16_MIN || lines[at].y1 > INT16_MAX)
+            return 0;
+    header = draw_header(surface);
+    bytes = count * (uint32_t)sizeof(AstraDrawListSegment);
+    if (bytes > ASTRA_DRAW_LIST_PAYLOAD_BYTES - header->payload_bytes)
+        return 0;
+    command = append_command(surface, ASTRA_DRAW_LIST_LINES);
+    if (command == NULL) return 0;
+    command->color = draw_color(color);
+    command->payload_offset = ASTRA_DRAW_LIST_PAYLOAD_OFFSET +
+                              header->payload_bytes;
+    command->payload_bytes = bytes;
+    payload = (AstraDrawListSegment *)(void *)
+        ((uint8_t *)(void *)surface->pixels + command->payload_offset);
+    for (uint32_t at = 0u; at < count; ++at)
+        payload[at] = (AstraDrawListSegment){
+            (int16_t)lines[at].x0, (int16_t)lines[at].y0,
+            (int16_t)lines[at].x1, (int16_t)lines[at].y1};
+    header->payload_bytes += bytes;
+    return 1;
+}
+
 void astra_surface_clear(AstraSurfaceView *surface, uint16_t color)
 {
     if (surface != NULL)
