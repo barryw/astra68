@@ -57,7 +57,7 @@ int main(int argc, char **argv)
 {
     const char *defaults[] = {
         "fonts/astra-workbench.afnt", "fonts/astra-mono.afnt",
-        "fonts/astra-rescue-mono.afnt"
+        "fonts/astra-rescue-mono.afnt", "fonts/astra-pixel-mono.afnt"
     };
     uint32_t count = argc > 1 ? (uint32_t)(argc - 1) :
         (uint32_t)(sizeof(defaults) / sizeof(defaults[0]));

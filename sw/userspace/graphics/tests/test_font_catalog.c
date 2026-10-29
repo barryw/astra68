@@ -87,9 +87,9 @@ int main(void)
 
     const char *const shipped[] = {
         "fonts/astra-workbench.afnt", "fonts/astra-mono.afnt",
-        "fonts/astra-rescue-mono.afnt"
+        "fonts/astra-rescue-mono.afnt", "fonts/astra-pixel-mono.afnt"
     };
-    for (uint32_t at = 0u; at < 3u; ++at) {
+    for (uint32_t at = 0u; at < sizeof(shipped) / sizeof(shipped[0]); ++at) {
         uint8_t *afnt = read_file(shipped[at], &length);
         char family[256], style[256];
         AstraFontCatalogStrike strikes[64];

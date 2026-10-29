@@ -933,6 +933,71 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
     free(bytes);
 }
 
+static void test_pixel_afnt_reaches_hardware_glyph_run(void)
+{
+    static uint8_t batch[ASTRA_RENDER_BUILDER_BYTES];
+    static uint8_t list_area[ASTRA_DRAW_LIST_AREA_BYTES];
+    FILE *file = fopen("fonts/astra-pixel-mono.afnt", "rb");
+    AstraRenderFont font;
+    AstraRenderBuilder builder;
+    AstraAfntStrikeInfo strike;
+    AstraAfntGlyphInfo glyph;
+    uint8_t *bytes;
+    long length;
+    uint32_t destination;
+    AstraDrawListHeader *list = (AstraDrawListHeader *)(void *)list_area;
+    AstraDrawListCommand *named = (AstraDrawListCommand *)(void *)(list + 1);
+    AstraRenderSourceResolver resolver = {
+        .context = &font, .resolve_font = resolve_installed_font
+    };
+
+    assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+    length = ftell(file);
+    assert(length > 0 && length <= 32L * 1024L * 1024L);
+    assert(fseek(file, 0, SEEK_SET) == 0);
+    bytes = malloc((size_t)length);
+    assert(bytes != NULL && fread(bytes, 1u, (size_t)length, file) ==
+                            (size_t)length);
+    assert(fclose(file) == 0);
+    assert(astra_render_font_init(&font, bytes, (uint32_t)length));
+    assert(astra_afnt_strike_info(&font.view, 0u, &strike));
+    assert(strike.pixel_width == 8u && strike.pixel_height == 8u &&
+           strike.bitmap_format == ASTRA_FONT_BITMAP_MASK1);
+    assert(astra_afnt_glyph_info(&font.view, 0u, 'A', &glyph));
+    assert(glyph.advance_x == 8 * 64 && glyph.width == 8u &&
+           glyph.height == 8u);
+    *list = (AstraDrawListHeader){
+        .magic = ASTRA_DRAW_LIST_MAGIC,
+        .version = ASTRA_DRAW_LIST_VERSION_1_8,
+        .total_bytes = ASTRA_DRAW_LIST_AREA_BYTES,
+        .command_count = 1u,
+        .payload_bytes = sizeof("user:fixture") - 1u + 2u,
+        .width = 320u, .height = 200u,
+        .command_capacity = ASTRA_DRAW_LIST_COMMAND_MAX,
+    };
+    *named = (AstraDrawListCommand){
+        .operation = ASTRA_DRAW_LIST_NAMED_TEXT,
+        .x = 43, .y = 39, .color = 0xff000000u,
+        .source = sizeof("user:fixture") - 1u,
+        .font_height = 8u,
+        .payload_offset = ASTRA_DRAW_LIST_PAYLOAD_OFFSET,
+        .payload_bytes = sizeof("user:fixture") - 1u + 2u,
+        .clip_right = 320u, .clip_bottom = 200u,
+    };
+    memcpy(list_area + ASTRA_DRAW_LIST_PAYLOAD_OFFSET,
+           "user:fixtureAA", named->payload_bytes);
+    assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
+    destination = astra_render_builder_surface(&builder, 320u, 200u);
+    assert(destination != 0u && astra_render_builder_replay_resolved(
+        &builder, destination, list, &resolver));
+    assert(builder.glyph_count == 2u);
+    const uint8_t *command = batch_command(batch, 0u);
+    const uint8_t *records = batch_record(batch, be32(command + 40u));
+    assert(high_s16(be32(records + ASTRA_RENDER_GLYPH_DESCRIPTOR_BYTES + 8u)) -
+           high_s16(be32(records + 8u)) == 8);
+    free(bytes);
+}
+
 static void test_a8_software_oracle_blends_native_rgb565_channels(void)
 {
     uint16_t pixels[64u * 32u];
@@ -3160,6 +3225,7 @@ int main(void)
     test_missing_mono_glyph_uses_replacement();
     test_font_advance_and_baseline();
     test_installed_afnt_reaches_hardware_glyph_run();
+    test_pixel_afnt_reaches_hardware_glyph_run();
     test_a8_software_oracle_blends_native_rgb565_channels();
     test_builder_chunks_the_hardware_glyph_limit();
     test_hardware_draw_list_batch();
