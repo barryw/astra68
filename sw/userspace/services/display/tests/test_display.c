@@ -1180,6 +1180,19 @@ static void test_window_graphics(void)
     sprite = reply.object;
     assert(sprite > ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID &&
            reply.pitch == 64u && graphics_batch_count == 1u);
+    {
+        AstraRenderBuilder resolver_builder = {0};
+        DisplayWindowGraphics foreign = {0};
+
+        assert(astra_render_builder_init(&resolver_builder, batch,
+            ASTRA_RENDER_BUILDER_BYTES, 1u));
+        assert(display_window_graphics_resolve_source(window.graphics,
+            &resolver_builder, sprite) != 0u);
+        assert(display_window_graphics_resolve_source(window.graphics,
+            &resolver_builder, ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID) == 0u);
+        assert(display_window_graphics_resolve_source(&foreign,
+            &resolver_builder, sprite) == 0u);
+    }
     command = recorded_command(0u, 0u);
     record = recorded_record(0u, read_be32(command + 32u));
     sprite_offset = read_be32(record + 8u);
@@ -1839,6 +1852,15 @@ static void test_window_graphics(void)
     display_window_graphics_close(window.graphics);
     window.graphics = NULL;
     assert(test_area_creates - creates == test_area_closes - closes);
+    {
+        DisplayWindowGraphics *draw_graphics = NULL;
+
+        assert(display_window_graphics_open(&draw_graphics, 0u) ==
+               ASTRA_STATUS_OK);
+        assert(draw_graphics->staging == NULL &&
+               draw_graphics->staging_area == 0u);
+        display_window_graphics_close(draw_graphics);
+    }
 }
 
 static const uint8_t *batch_command(uint32_t index)
@@ -5076,6 +5098,28 @@ int main(void)
         rgb_window.content_damage.right = 101;
         assert(compose(batch, 2u, &rgb, &error, NULL) == 0u);
         assert(error == ASTRA_STATUS_PROTOCOL);
+    }
+    {
+        struct {
+            AstraDrawListHeader header;
+            AstraDrawListCommand command;
+        } pending = {0};
+        DisplayWindow window = {0};
+
+        pending.header.magic = ASTRA_DRAW_LIST_MAGIC;
+        pending.header.command_count = 1u;
+        pending.command.operation = ASTRA_DRAW_LIST_BLIT;
+        pending.command.source = 7u;
+        window.request.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
+        window.content_dirty = 1u;
+        window.surface.view.pixels = (uint16_t *)(void *)&pending;
+        assert(draw_list_source_pending(&window, 7u));
+        assert(!draw_list_source_pending(&window, 8u));
+        window.content_dirty = 0u;
+        assert(!draw_list_source_pending(&window, 7u));
+        window.content_dirty = 1u;
+        pending.header.magic = 0u;
+        assert(draw_list_source_pending(&window, 8u));
     }
     test_launch_panel();
     test_shrunk_window_copy_forward();

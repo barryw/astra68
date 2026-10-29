@@ -2,8 +2,8 @@
 #define DISPLAY_WINDOW_GRAPHICS_H
 
 /*
- * GPU objects owned by one CONTENT_SURFACE window: Media RAM surfaces, the
- * CPU staging area used to fill them, and attached ADLT draw lists. The
+ * GPU objects owned by one window: Media RAM surfaces, an optional CPU
+ * staging area used to fill them, and attached ADLT draw lists. The
  * window's control port is the session: when the owner dies the window
  * closes and display_window_graphics_close() releases everything.
  */
@@ -99,9 +99,12 @@ typedef struct DisplayGraphicsHost {
     uint16_t content_height;
 } DisplayGraphicsHost;
 
-/* Create the graphics state and adopt @p staging_area (consumed on success). */
+/* Create graphics state, optionally adopting @p staging_area. */
 uint32_t display_window_graphics_open(DisplayWindowGraphics **graphics,
                                       uint32_t staging_area);
+/* Resolve a source for a standard DRAW_LIST window from its own objects. */
+uint32_t display_window_graphics_resolve_source(void *context,
+    AstraRenderBuilder *builder, uint32_t id);
 void display_window_graphics_close(DisplayWindowGraphics *graphics);
 int display_window_graphics_command_valid(
     const AstraGuiGraphicsCommand *command, uint32_t size,

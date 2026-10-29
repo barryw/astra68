@@ -765,3 +765,29 @@ Haiku reference: `headers/os/interface/View.h` and
 reference and source/destination rectangles to the window server. Astra keeps
 that server-owned pixel work, using its existing surface and draw-list
 contracts instead of adding a second bitmap protocol.
+
+The retained `ASTRA_CONTROL_VIEW` now supplies that layout and damage contract
+to application drawing. Initialize an `AstraViewModel` with an intrinsic size,
+draw callback, and borrowed context; pass it to `astra_interface_view_init`.
+The callback first receives a null surface to count its maximum hardware
+commands and payload bytes, then a draw-list `AstraSurfaceView` clipped to the
+control and its ancestors. Call `astra_interface_view_invalidate` after
+changing the borrowed model or image. Compose View with Container and
+ScrollView; it adds no independent scrolling or event policy. The CPU records
+commands only and never renders pixels.
+
+`AstraImageViewModel` composes that View with the existing hardware BLIT. Call
+`astra_interface_image_view_model_init`, then initialize a View with its
+`model.view`. Fit, Fill, Actual (1:1), and Pixel4 (4:1) correspond to the
+standalone design's viewer toolbar; toolbar buttons remain ordinary shared
+controls. Bind a Graphics Kit display to the same standard draw-list window,
+create a draw-source surface, and upload it once. The display service resolves
+source IDs solely within that window's capability-owned surface set and
+rejects destruction while a pending draw-list present still needs the source.
+
+The retained custom draw hook follows Haiku's `BView::Draw` in
+`src/kits/interface/View.cpp`; damage follows `BView::Invalidate` in the same
+file. Astra adapts both to explicit ADLT command capacity and inherited
+`AstraSurfaceView` clipping. The bitmap source and destination geometry follows
+Haiku's `BView::DrawBitmap`, while Astra uses its existing Media RAM source
+surfaces and hardware BLIT rather than a new bitmap store.

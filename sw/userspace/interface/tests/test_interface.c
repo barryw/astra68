@@ -4308,6 +4308,69 @@ static void test_grid_view(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static uint32_t custom_view_dry_calls, custom_view_draw_calls;
+
+static AstraResult test_custom_view_draw(void *context,
+    const AstraControlFrame *frame, AstraSurfaceView *surface,
+    uint64_t *commands, uint64_t *payload)
+{
+    assert(context != NULL && frame != NULL);
+    if (surface == NULL) {
+        assert(commands != NULL && payload != NULL);
+        ++*commands;
+        ++custom_view_dry_calls;
+    } else {
+        assert(surface->kind == ASTRA_SURFACE_VIEW_DRAW_LIST);
+        assert(surface->clip_right <= surface->width);
+        ++custom_view_draw_calls;
+        astra_surface_fill(surface, frame->x, frame->y,
+                           frame->width, frame->height, 0xf800u);
+        if (*(const int *)context == 2)
+            ((AstraDrawListHeader *)surface->pixels)->command_count += 2u;
+    }
+    return ASTRA_OK;
+}
+
+static void test_custom_view(void)
+{
+    AstraViewModel model = ASTRA_VIEW_MODEL_INIT;
+    AstraViewInfo info = ASTRA_VIEW_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlSize size = {0};
+    AstraControlFrame damage = {0};
+    int token = 1;
+
+    model.intrinsic_width = 160u;
+    model.intrinsic_height = 90u;
+    model.draw = test_custom_view_draw;
+    model.context = &token;
+    info.id = 7u;
+    info.model = &model;
+    assert(astra_interface_view_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u,
+                                   320u, 180u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &control, &size) == ASTRA_OK);
+    assert(size.width == 160u && size.height == 90u);
+    AstraSurfaceView surface = render_view(320u, 180u);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(custom_view_dry_calls == 2u && custom_view_draw_calls == 1u);
+    astra_interface_ui_damage_clear(&context);
+    assert(astra_interface_view_invalidate(&context, &control) == ASTRA_OK);
+    assert(astra_interface_ui_damage(&context, &damage) == ASTRA_OK);
+    assert(damage.width != 0u && damage.height != 0u);
+    token = 2;
+    surface = render_view(320u, 180u);
+    assert(astra_interface_ui_render(&context, &surface) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    token = 1;
+    model.reserved[0] = 1u;
+    assert(astra_interface_view_invalidate(&context, &control) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
 static void test_popup_control(void)
 {
     static const AstraChoiceItem items[] = {
@@ -4490,6 +4553,7 @@ int main(void)
     test_text_view_wrap();
     test_text_view_flow_edit_find();
     test_grid_view();
+    test_custom_view();
     test_scroll_view_layout_and_wheel();
     test_scroll_view_keyboard_listener();
     test_nested_scroll_chaining();

@@ -125,6 +125,9 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_grid_view_init;
         astra_interface_grid_view_refresh;
         astra_interface_image_view_render;
+        astra_interface_image_view_model_init;
+        astra_interface_view_init;
+        astra_interface_view_invalidate;
         astra_scroll_by;
         astra_scroll_get_state;
         astra_scroll_init;

@@ -62,7 +62,9 @@ enum {
     /** Activatable swatch bound to literal, theme, or palette color. */
     ASTRA_CONTROL_COLOUR_WELL = 26u,
     /** Selectable two-dimensional icon tiles over C1 identity. */
-    ASTRA_CONTROL_ICON_GRID = 27u
+    ASTRA_CONTROL_ICON_GRID = 27u,
+    /** Retained hardware-command view; compose with existing layout controls. */
+    ASTRA_CONTROL_VIEW = 28u
 };
 
 /** Semantic state owned by an application. */
@@ -1117,6 +1119,42 @@ typedef struct AstraUIContext {
     uint32_t _private_capture_part;
     /** @endcond */
 } AstraUIContext;
+
+/** Custom drawing callback. With @p surface NULL, add the exact maximum
+ * command and payload requirements without changing application state.
+ * Otherwise append hardware draw commands into the already clipped view.
+ * Pixels are never exposed for CPU rendering. */
+typedef AstraResult (*AstraViewDraw)(void *context,
+    const AstraControlFrame *frame, AstraSurfaceView *surface,
+    uint64_t *commands, uint64_t *payload);
+
+/** Caller-owned retained drawing model. The model and context outlive the
+ * control; mutating either requires ::astra_interface_view_invalidate. */
+typedef struct AstraViewModel {
+    uint32_t size;
+    uint32_t intrinsic_width;
+    uint32_t intrinsic_height;
+    AstraViewDraw draw;
+    void *context;
+    uint32_t reserved[2];
+} AstraViewModel;
+#define ASTRA_VIEW_MODEL_INIT { sizeof(AstraViewModel), 0u, 0u, NULL, NULL, {0u, 0u} }
+
+/** Construction data for a retained View. */
+typedef struct AstraViewInfo {
+    uint32_t size;
+    uint32_t id;
+    uint32_t state;
+    const AstraViewModel *model;
+    uint32_t reserved[2];
+} AstraViewInfo;
+#define ASTRA_VIEW_INFO_INIT { sizeof(AstraViewInfo), 0u, 0u, NULL, {0u, 0u} }
+
+ASTRA_NODISCARD AstraResult astra_interface_view_init(
+    AstraControl *control, const AstraViewInfo *info);
+/** Damage a View after its borrowed model or source changes. */
+ASTRA_NODISCARD AstraResult astra_interface_view_invalidate(
+    AstraUIContext *context, AstraControl *control);
 
 /** Empty UI context state. */
 #define ASTRA_UI_CONTEXT_INIT { \

@@ -183,6 +183,20 @@ static const AstraIconGridModel *const_icon_grid_model(
     return (const AstraIconGridModel *)control->_private_display_model;
 }
 
+static const AstraViewModel *view_model(const AstraControl *control)
+{
+    return (const AstraViewModel *)control->_private_display_model;
+}
+
+static int view_model_valid(const AstraViewModel *model)
+{
+    return model != NULL && model->size == sizeof(*model) &&
+           model->draw != NULL &&
+           model->intrinsic_width <= INT32_MAX &&
+           model->intrinsic_height <= INT32_MAX &&
+           astra_words_zero(model->reserved, 2u);
+}
+
 static int table_cells_valid(const AstraTableCell *cells, uint32_t count)
 {
     if (count != 0u && cells == NULL) return 0;
@@ -677,6 +691,12 @@ static int control_valid(const AstraControl *control)
                (state & ~CONTROL_VALUE_STATES) == 0u &&
                control->_private_preview_state == 0u;
     }
+    if (control->_private_control_kind == ASTRA_CONTROL_VIEW)
+        return view_model_valid(view_model(control)) &&
+               control->_private_style == 0u &&
+               (state & ~(ASTRA_CONTROL_DISABLED |
+                          ASTRA_CONTROL_COLLAPSED)) == 0u &&
+               control->_private_preview_state == 0u;
     if (control->_private_control_kind == ASTRA_CONTROL_LIST ||
         control->_private_control_kind == ASTRA_CONTROL_TABLE)
         return control->_private_text != NULL &&
@@ -1816,6 +1836,36 @@ AstraResult astra_interface_tree_set_nodes(AstraUIContext *context,
     return result;
 }
 
+AstraResult astra_interface_view_init(AstraControl *control,
+    const AstraViewInfo *info)
+{
+    if (control == NULL || info == NULL || info->size != sizeof(*info) ||
+        info->id == 0u || !view_model_valid(info->model) ||
+        (info->state & ~(ASTRA_CONTROL_DISABLED |
+                         ASTRA_CONTROL_COLLAPSED)) != 0u ||
+        !astra_words_zero(info->reserved, 2u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *control = (AstraControl)ASTRA_CONTROL_INIT;
+    control->_private_control_kind = ASTRA_CONTROL_VIEW;
+    control->_private_id = info->id;
+    control->_private_state = info->state;
+    control->_private_display_model = info->model;
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_view_invalidate(AstraUIContext *context,
+    AstraControl *control)
+{
+    uint32_t index = control_index(context, control);
+
+    if (!context_valid(context) || index == CONTROL_NONE ||
+        control->_private_control_kind != ASTRA_CONTROL_VIEW ||
+        !view_model_valid(view_model(control)))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    control_damage(context, index);
+    return ASTRA_OK;
+}
+
 AstraResult astra_interface_icon_grid_init(AstraControl *control,
     const AstraIconGridInfo *info)
 {
@@ -2552,6 +2602,11 @@ static AstraResult measure_control(const AstraControl *control,
     if (control->_private_control_kind == ASTRA_CONTROL_PROGRESS) {
         size->width = theme.spacing_unit * 32u;
         size->height = theme.spacing_unit * 2u;
+        return ASTRA_OK;
+    }
+    if (control->_private_control_kind == ASTRA_CONTROL_VIEW) {
+        size->width = view_model(control)->intrinsic_width;
+        size->height = view_model(control)->intrinsic_height;
         return ASTRA_OK;
     }
     if (control->_private_control_kind == ASTRA_CONTROL_TABLE) {
@@ -4698,6 +4753,12 @@ static int render_requirements(const AstraUIContext *context,
         }
         if (control->_private_control_kind == ASTRA_CONTROL_GRID_VIEW) {
             if (grid_view_render(control, NULL, commands, payload) != ASTRA_OK)
+                return 0;
+            continue;
+        }
+        if (control->_private_control_kind == ASTRA_CONTROL_VIEW) {
+            if (view_model(control)->draw(view_model(control)->context,
+                &control->_private_frame, NULL, commands, payload) != ASTRA_OK)
                 return 0;
             continue;
         }
@@ -7577,6 +7638,25 @@ static AstraResult render_one_control(const AstraUIContext *context,
         return text_view_render(control, surface, NULL, NULL);
     if (control->_private_control_kind == ASTRA_CONTROL_GRID_VIEW)
         return grid_view_render(control, surface, NULL, NULL);
+    if (control->_private_control_kind == ASTRA_CONTROL_VIEW) {
+        const AstraViewModel *model = view_model(control);
+        AstraDrawListHeader *list = (AstraDrawListHeader *)surface->pixels;
+        uint32_t old_commands = list->command_count;
+        uint32_t old_payload = list->payload_bytes;
+        uint64_t commands = 0u, payload = 0u;
+        AstraResult result = model->draw(model->context,
+            &control->_private_frame, NULL, &commands, &payload);
+
+        if (result != ASTRA_OK) return result;
+        result = model->draw(model->context, &control->_private_frame,
+                             surface, NULL, NULL);
+        if (result != ASTRA_OK) return result;
+        return list->command_count < old_commands ||
+               list->payload_bytes < old_payload ||
+               list->command_count - old_commands > commands ||
+               list->payload_bytes - old_payload > payload ?
+            ASTRA_ERROR_INVALID_ARGUMENT : ASTRA_OK;
+    }
     if (control->_private_control_kind == ASTRA_CONTROL_LEVEL_METER ||
         control->_private_control_kind == ASTRA_CONTROL_SPARKLINE)
         return astra_interface_display_render(control, theme, surface, NULL);

@@ -52,6 +52,14 @@ list and staging area the window owned is released
 
 RGB565 and retained draw-list windows keep working unchanged.
 
+Retained draw-list windows also own Graphics Kit source surfaces. Their
+graphics state is created on the first graphics command, without staging; the
+first surface upload installs a
+staging area through the existing `ASTRA_GUI_GRAPHICS_STAGING_SET` command.
+ADLT BLIT source IDs resolve only against that window's protected surface
+set. A pending draw-list present leases each referenced source until replay,
+so a destroy cannot retire its Media RAM extent before the hardware reads it.
+
 ## 3. Surfaces
 
 A surface is a display-service allocation in Media RAM
