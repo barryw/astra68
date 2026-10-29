@@ -1,6 +1,7 @@
 # D2 overlay and container implementation notes
 
-Status: Form Row implemented; Sheet, Tooltip, and Notification remain open.
+Status: Form Row and parent-attached Sheet implemented. Tooltip and
+Notification remain open pending their shared passive-overlay lifecycle.
 
 ## Haiku read-only review
 
@@ -34,6 +35,18 @@ text, and narrow-window stacking are still design gaps; they should be solved
 in shared Label/flex behavior rather than an application-specific painter.
 
 ## Remaining lifecycle work
+
+GUI protocol 26 carries a Sheet's parent window ID and generation when it
+opens. The display validates same-session ownership, keeps the Sheet attached
+to its parent's content origin as the parent moves, hides it with a minimized
+parent, and tears it down when that parent closes. Sheet modality redirects
+input and activation only from its parent; unrelated windows in the session
+remain interactive. The new `astra_window_sheet_create` API leaves the
+ordinary creation structure and System Kit ABI intact. The same protocol
+generation adds `astra_window_menu_open_persistent`: the display owns a flat
+menu's checked state, reports each selection with
+`ASTRA_WINDOW_EVENT_CONTINUED`, and reports a terminal zero selection when
+dismissed. This shared menu lifecycle serves P1's Multi-select Popup.
 
 Tooltip and Notification should share display-owned placement, timeout,
 dismissal, and focus policy with the existing overlay machinery. The menu
