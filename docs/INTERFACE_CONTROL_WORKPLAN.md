@@ -1,15 +1,32 @@
 # Remaining Interface Kit controls
 
-Status: source audit, 2026-10-29. Design authority: Controls chapter of
+Status: initial source audit and work split, 2026-10-29. Design authority: Controls chapter of
 `~/Downloads/Astra Desktop (standalone).html`. Shipped-state authority:
 `ndk/include/astra/` and `sw/userspace/interface/src/`, not the HTML's old
 implementation notes or historical milestones in `INTERFACE_IMPLEMENTATION.md`.
 
-The design names 50 concepts. **20 are available, six have only part of the
-specified contract, and 24 are absent.** “Available” means a shared native
+The design names 50 concepts. At audit start, **20 were available, six had only part of the
+specified contract, and 24 were absent.** “Available” means a shared native
 facility exists; it does not claim every application uses it yet. A composed
 control does not need a new `AstraControlKind` when existing controls can own
 its layout, focus, paint, and state.
+
+## Integrated checkpoint
+
+All nine work packages below now have shared native implementations in
+Interface ABI 10 and the current Display/System contracts. Interface host
+tests, sanitizers, library contract, and shipped application cross-build pass
+on Beast. Text View and Field use one caller-owned undo manager; Gallery's
+editable Text View is bound to it. Fonts and Installer use the shared Open
+Panel, reusable directory snapshots, and caller-owned item storage. File
+Panel storage can grow through a validated rebind API without an application
+writing its internals. A targeted DE25 trial and final NDK distribution gate
+still qualify this checkpoint.
+
+Remaining product-level gaps: the shared installed-font chooser does not own
+Fonts management actions; font-strike rows lack a per-item disabled state; and
+Save-panel accessory choices depend on caller UI. Those are integration and
+policy work, not a reason to create one-off controls.
 
 | Group | Available | Partial | Remaining |
 | --- | --- | --- | --- |
@@ -134,8 +151,9 @@ Design-size checkpoint: Haiku's `src/kits/interface/Button.cpp` derives
 preferred size from font height and delegates insets to
 `src/kits/interface/HaikuControlLook.cpp`. Astra likewise keeps control metrics
 in the shared `AstraTheme` rather than scaling Gallery controls separately.
-Theme generation 6 uses the resident 16 px AFNT strike for body, title, and
-control labels, with 40 px controls and 38 px title bars to match the standalone
+Theme generation 7 uses the resident 16 px AFNT strike for body, title, and
+control labels, with 40 px controls, 32 px toolbar actions in a 52 px row,
+and 38 px title bars to match the standalone
 Controls design at native 1920x1080 resolution. Application-specific text roles
 remain separate; the fixed 16 px mono role is unchanged.
 
