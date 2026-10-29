@@ -76,6 +76,14 @@ endif()'''
                  'list(APPEND LIBS SDL2_mixer::SDL2_mixer)')
     shutil.copyfile(music_source, output / "src/sound/src/bgmusic_astra.c")
 
+    model = output / "src/model/src/model.c"
+    replace_once(model,
+                 "out->vecs[0][j] = LittleFloat(in->vecs[0][j]);",
+                 "out->vecs[j / 4][j % 4] = LittleFloat(in->vecs[j / 4][j % 4]);")
+    particles = output / "src/renderer/src/r_part.c"
+    replace_once(particles, "avelocities[0][i] = (rand() & 255) * 0.01;",
+                 "avelocities[i / 3][i % 3] = (rand() & 255) * 0.01;")
+
     dma = output / "src/sound/src/snd_dma.c"
     replace_once(dma,
                  'cvar_t snd_mixspeed = {"snd_mixspeed", "44100", true};',
