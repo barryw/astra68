@@ -138,7 +138,11 @@ enum {
     GALLERY_TOOLBAR_REMOVE,
     GALLERY_TOOLBAR_TRASH,
     GALLERY_TOOLBAR_MORE,
-    GALLERY_CONTROL_COUNT = GALLERY_TOOLBAR_MORE
+    GALLERY_COMBO_ROOT,
+    GALLERY_COMBO_FIELD,
+    GALLERY_COMBO_MENU,
+    GALLERY_MULTI_POPUP,
+    GALLERY_CONTROL_COUNT = GALLERY_MULTI_POPUP
 };
 
 enum {
@@ -161,6 +165,8 @@ static uint8_t text_benchmark_content[16384];
 static _Alignas(4) uint8_t text_benchmark_metadata[131072];
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraPopup gallery_popup = ASTRA_POPUP_INIT;
+static AstraComboBox gallery_combo = ASTRA_COMBO_BOX_INIT;
+static AstraMultiPopup gallery_multi = ASTRA_MULTI_POPUP_INIT;
 static AstraToolbarActions gallery_toolbar = ASTRA_TOOLBAR_ACTIONS_INIT;
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
@@ -169,6 +175,9 @@ static char dial_value_text[22] = "0";
 static uint8_t field_content[4096];
 static _Alignas(4) uint8_t field_metadata[8192];
 static AstraTextModel field_model = ASTRA_TEXT_MODEL_INIT;
+static uint8_t combo_content[1024];
+static _Alignas(4) uint8_t combo_metadata[2048];
+static AstraTextModel combo_model = ASTRA_TEXT_MODEL_INIT;
 static uint8_t error_field_content[4096];
 static _Alignas(4) uint8_t error_field_metadata[8192];
 static AstraTextModel error_field_model = ASTRA_TEXT_MODEL_INIT;
@@ -308,6 +317,45 @@ static const AstraCommand gallery_toolbar_commands[] = {
 };
 static const AstraCommandScope gallery_toolbar_scope = {
     NULL, gallery_toolbar_commands, 4u};
+static uint8_t gallery_multi_checked[3] = {1u, 0u, 1u};
+static const char *const gallery_multi_labels[3] = {
+    "Show toolbar", "Show labels", "Show status"
+};
+static const uint32_t gallery_multi_label_lengths[3] = {12u, 11u, 11u};
+
+static AstraResult gallery_multi_query(void *context, AstraCommandState *state)
+{
+    uint32_t at = (uint32_t)(uintptr_t)context;
+
+    *state = (AstraCommandState){gallery_multi_labels[at],
+        gallery_multi_label_lengths[at], 1u, gallery_multi_checked[at]};
+    return ASTRA_OK;
+}
+
+static AstraResult gallery_multi_invoke(void *context,
+    const AstraCommandArguments *arguments)
+{
+    uint32_t at = (uint32_t)(uintptr_t)context;
+    (void)arguments;
+    gallery_multi_checked[at] = !gallery_multi_checked[at];
+    return ASTRA_OK;
+}
+
+static const AstraCommand gallery_multi_commands[3] = {
+    {"view.toolbar", 12u, 0u, 0u, gallery_multi_query,
+        gallery_multi_invoke, (void *)(uintptr_t)0u},
+    {"view.labels", 11u, 0u, 0u, gallery_multi_query,
+        gallery_multi_invoke, (void *)(uintptr_t)1u},
+    {"view.status", 11u, 0u, 0u, gallery_multi_query,
+        gallery_multi_invoke, (void *)(uintptr_t)2u}
+};
+static const AstraCommandScope gallery_multi_scope = {
+    NULL, gallery_multi_commands, 3u};
+static const AstraContextMenuItem gallery_multi_items[3] = {
+    {"view.toolbar", 12u, NULL},
+    {"view.labels", 11u, NULL},
+    {"view.status", 11u, NULL}
+};
 
 #define GALLERY_CONTROL(id) (&controls[(id) - 1u])
 
@@ -1298,6 +1346,37 @@ static uint32_t build_controls(void)
             GALLERY_CONTROL(GALLERY_TOOLBAR_ROOT), &info) == ASTRA_OK ?
             ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
     }
+    if (status == ASTRA_STATUS_OK) {
+        static const AstraChoiceItem suggestions[3] = {
+            {"Windows", 7u, {0u, 0u}},
+            {"Scenes", 6u, {0u, 0u}},
+            {"Ports", 5u, {0u, 0u}}
+        };
+        AstraComboBoxInfo combo = ASTRA_COMBO_BOX_INFO_INIT;
+        AstraMultiPopupInfo multi = ASTRA_MULTI_POPUP_INFO_INIT;
+
+        status = init_field_model(&combo_model, "", 0u, combo_content,
+            sizeof(combo_content), combo_metadata, sizeof(combo_metadata));
+        combo.first_id = GALLERY_COMBO_ROOT;
+        combo.model = &combo_model;
+        combo.items = suggestions;
+        combo.item_count = 3u;
+        combo.preferred_columns = 16u;
+        if (status == ASTRA_STATUS_OK &&
+            astra_interface_combo_box_init(&gallery_combo,
+                GALLERY_CONTROL(GALLERY_COMBO_ROOT), &combo) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+        multi.id = GALLERY_MULTI_POPUP;
+        multi.label = "View options";
+        multi.label_length = 12u;
+        multi.items = gallery_multi_items;
+        multi.item_count = 3u;
+        multi.scope = &gallery_multi_scope;
+        if (status == ASTRA_STATUS_OK &&
+            astra_interface_multi_popup_init(&gallery_multi,
+                GALLERY_CONTROL(GALLERY_MULTI_POPUP), &multi) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
     if (status == ASTRA_STATUS_OK)
         status = set_item(GALLERY_TABS, 0u, 0u, 0u);
     for (uint32_t page = GALLERY_PAGE_INPUT;
@@ -1353,6 +1432,10 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_POPUP, GALLERY_PAGE_CHOICE,
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_TOOLBAR_ROOT, GALLERY_PAGE_CHOICE,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_COMBO_ROOT, GALLERY_PAGE_CHOICE,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_MULTI_POPUP, GALLERY_PAGE_CHOICE,
               ASTRA_FLEX_BREAK_AFTER);
 
     PAGE_ITEM(GALLERY_SLIDER_LABEL, GALLERY_PAGE_VALUE,
@@ -1509,6 +1592,9 @@ static uint32_t build_controls(void)
     if (layout_controls() != ASTRA_STATUS_OK ||
         astra_interface_toolbar_actions_refresh(&gallery_toolbar, &ui) !=
             ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    if (astra_interface_multi_popup_refresh(&gallery_multi, &ui, NULL) !=
+        ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     {
         AstraToolbarFit fit = ASTRA_TOOLBAR_FIT_INIT;
@@ -2143,6 +2229,22 @@ static uint32_t handle_action(AstraHandle clipboard,
 {
     int toolbar_handled = 0;
 
+    if (action->type == ASTRA_UI_ACTION_ACTIVATE &&
+        action->control_id == GALLERY_COMBO_MENU) {
+        AstraResult opened = astra_interface_combo_box_open(
+            &gallery_combo, &ui, &window);
+        if (opened != ASTRA_OK && opened != ASTRA_ERROR_NOT_PRESENT)
+            return GALLERY_FAIL_CONTROL;
+        return ASTRA_STATUS_OK;
+    }
+    if (action->type == ASTRA_UI_ACTION_ACTIVATE &&
+        action->control_id == GALLERY_MULTI_POPUP &&
+        astra_interface_multi_popup_open(&gallery_multi, &ui, &window) !=
+            ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    if (action->type == ASTRA_UI_ACTION_ACTIVATE &&
+        action->control_id == GALLERY_MULTI_POPUP)
+        return ASTRA_STATUS_OK;
     if (astra_interface_toolbar_actions_handle_action(&gallery_toolbar,
             &window, action, &toolbar_handled) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
@@ -2235,12 +2337,32 @@ static uint32_t run(AstraHandle clipboard, AstraHandle gui)
         while (result == ASTRA_OK) {
             int popup_handled = 0;
             int toolbar_handled = 0;
+            int combo_handled = 0;
+            int multi_handled = 0;
 
             action = (AstraUIAction)ASTRA_UI_ACTION_INIT;
             if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) {
                 (void)astra_interface_popup_close(&gallery_popup);
+                (void)astra_interface_combo_box_close(&gallery_combo);
+                (void)astra_interface_multi_popup_close(&gallery_multi);
                 (void)astra_interface_toolbar_actions_close(&gallery_toolbar);
                 return ASTRA_STATUS_OK;
+            }
+            if (astra_interface_combo_box_handle_event(&gallery_combo,
+                    &event, &action, &combo_handled) != ASTRA_OK)
+                return GALLERY_FAIL_CONTROL;
+            if (combo_handled) {
+                scroll_only = 0u;
+                result = astra_window_event_try(&window, &event);
+                continue;
+            }
+            if (astra_interface_multi_popup_handle_event(&gallery_multi,
+                    &event, &action, &multi_handled) != ASTRA_OK)
+                return GALLERY_FAIL_CONTROL;
+            if (multi_handled) {
+                scroll_only = 0u;
+                result = astra_window_event_try(&window, &event);
+                continue;
             }
             if (astra_interface_toolbar_actions_handle_event(&gallery_toolbar,
                     &event, &toolbar_handled) != ASTRA_OK)

@@ -246,6 +246,33 @@ UI handler. A correlated menu selection updates the retained choice and emits
 `astra_interface_popup_close` before destroying the owning window. Each window
 can have one transient menu open at a time.
 
+`AstraComboBox` composes a retained editable Field and a 28-pixel dropdown
+Button in one row Container. Keep its `AstraTextModel` and borrowed
+`AstraChoiceItem` array alive, and allocate three consecutive controls.
+`astra_interface_combo_box_open` presents labels matching the Field's current
+prefix (ASCII case-insensitive). A selection replaces the model text, refreshes
+the Field, and reports the source item index through `VALUE_CHANGED`. Freeform
+Field edits remain valid; opening with no matches returns `NOT_PRESENT`.
+Pass menu results to `astra_interface_combo_box_handle_event` before the
+ordinary UI handler and close a pending menu before destroying the window.
+
+`AstraMultiPopup` composes a regular Button with a persistent menu. Each
+borrowed menu item names a command in a responder scope. Query supplies its
+label, enabled state, and checked state; invocation toggles checked state.
+Call `astra_interface_multi_popup_refresh` after an external state change to
+update the Button's selected appearance. Each continued menu result invokes
+one command and reports the current checked count through `VALUE_CHANGED`.
+The overlay and keyboard capture stay active until dismissal. Close the
+session before destroying the window. The display owns the copied rows and
+their in-place checked marks, while the command scope owns selection state.
+
+Haiku references: `src/kits/interface/OptionPopUp.cpp` composes a menu field
+and popup, `MenuField.cpp` delegates keyboard and pointer opening to shared
+controls, and `PopUpMenu.cpp` owns transient tracking. Astra uses the same
+composition boundary with its retained Field/TextModel and display-owned
+menu overlay. Haiku has no shared Combo Box implementation in this checkout;
+the Astra Combo Box composes the existing Field and menu Button directly.
+
 `astra_interface_split_button_init` composes two ordinary toolbar Buttons: the
 primary action and a 28-pixel menu segment. Put them next to each other in a
 zero-gap row. Their separate control IDs let the primary action run directly

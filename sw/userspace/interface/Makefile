@@ -26,7 +26,8 @@ INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/toolbar_actions.o \
 	build/m68k/icon_tile.o build/m68k/image_view.o build/m68k/inline_edit.o \
 	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o \
-	build/m68k/scroll.o build/m68k/command.o build/m68k/menu.o build/m68k/menu_context.o
+	build/m68k/scroll.o build/m68k/command.o build/m68k/menu.o build/m68k/menu_context.o \
+	build/m68k/combo_box.o build/m68k/menu_multi.o
 INTERFACE_LIBRARY_MAP := interface.library.exports
 NDK_HOST_UTF8 := $(SYSTEM)/build/host/utf8.o
 GRAPHICS_LIBRARY := $(GRAPHICS)/build/m68k/libraries/graphics.library.3
@@ -133,6 +134,10 @@ build/m68k/menu.o build/m68k/menu_context.o: build/m68k/%.o: src/%.c $(NDK)/incl
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
+build/m68k/combo_box.o build/m68k/menu_multi.o: build/m68k/%.o: src/%.c $(NDK)/include/astra/choice_popups.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+
 $(INTERFACE_OBJECTS): Makefile
 
 shared-libraries-ready:
@@ -235,7 +240,7 @@ $(COMMAND_HOST_TEST): src/command.c tests/test_command.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/command.c src/control.c src/display_widgets.c src/field_family.c src/toolbar_actions.c src/icon_tile.c src/text_surface.c \
+MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/menu_multi.c src/combo_box.c src/command.c src/control.c src/display_widgets.c src/field_family.c src/toolbar_actions.c src/icon_tile.c src/text_surface.c \
 	src/text_model.c src/scroll.c \
 	tests/test_menu.c
 $(GRAPHICS_HOST_SURFACE) $(GRAPHICS_HOST_SURFACE_SANITIZE): FORCE
