@@ -14,7 +14,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 25u
+#define ASTRA_GUI_VERSION 26u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -28,7 +28,9 @@ enum {
     ASTRA_WINDOW_DIALOG = 3,
     ASTRA_WINDOW_POPOVER = 4,
     ASTRA_WINDOW_FULLSCREEN = 5,
-    ASTRA_WINDOW_DESKTOP = 6
+    ASTRA_WINDOW_DESKTOP = 6,
+    /** Parent-attached window that blocks only its parent. */
+    ASTRA_WINDOW_SHEET = 7
 };
 
 /** Server-owned window presentation state. */
@@ -174,7 +176,9 @@ enum {
     ASTRA_WINDOW_EVENT_CAPTURED = 1u << 1,
     ASTRA_WINDOW_EVENT_LOSS = 1u << 2,
     ASTRA_WINDOW_EVENT_REPEAT = 1u << 3,
-    ASTRA_WINDOW_EVENT_SYNTHETIC = 1u << 4
+    ASTRA_WINDOW_EVENT_SYNTHETIC = 1u << 4,
+    /** MENU_RESULT selected a row and the menu remains open. */
+    ASTRA_WINDOW_EVENT_CONTINUED = 1u << 5
 };
 
 /** Pointer motion or button event payload. */
@@ -504,6 +508,8 @@ enum {
     /* One attached AMNU document defines active-window menu headings and items. */
     ASTRA_GUI_WINDOW_MENU_BAR_SET = 24u,
     ASTRA_GUI_WINDOW_MENU_BAR_CLEAR = 25u,
+    /** Flat multi-selection menu; row results keep the overlay open. */
+    ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT = 26u,
 };
 
 /* AMNU v2: all fields big-endian. Header: magic, version, total bytes, row
@@ -535,6 +541,8 @@ typedef struct AstraGuiOpenWindow {
     char title[ASTRA_WINDOW_TITLE_MAX];
     uint32_t event_mask;
     uint32_t title_icon_length;
+    uint32_t parent_window;
+    uint32_t parent_generation;
 } AstraGuiOpenWindow;
 
 typedef struct AstraGuiWindowOpened {
@@ -624,7 +632,7 @@ typedef struct AstraGuiGraphicsReply {
     uint32_t reserved;
 } AstraGuiGraphicsReply;
 
-#define ASTRA_GUI_OPEN_WINDOW_SIZE   108u
+#define ASTRA_GUI_OPEN_WINDOW_SIZE   116u
 #define ASTRA_GUI_WINDOW_OPENED_SIZE 36u
 #define ASTRA_GUI_WINDOW_COMMAND_SIZE 104u
 #define ASTRA_GUI_WINDOW_STATE_SIZE   64u
