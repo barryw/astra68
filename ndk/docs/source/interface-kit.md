@@ -585,7 +585,8 @@ fixed-cell text or `ASTRA_TEXT_SURFACE_FLOW` for the adopted proportional UI
 face. The existing model, byte selection, wrapping, and ScrollView stay in
 place when changing modes. Flow measures scalar advances with the adopted
 font, wraps by pixel width, and submits styled glyph runs to the hardware draw
-list. TextSurface accepts grid, code, and flow modes; grid-specific hit testing
+list. Flow rows grow to the adopted face's line box when it exceeds the theme
+control row height. TextSurface accepts grid, code, and flow modes; grid-specific hit testing
 and copying remain available only in grid mode.
 `astra_interface_text_view_set_line_numbers` adds the shared code gutter;
 logical line numbers remain aligned as wrapped rows scroll. The gutter is
