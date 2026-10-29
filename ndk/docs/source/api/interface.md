@@ -36,6 +36,10 @@
 :project: astra-ndk
 ```
 
+```{doxygenfile} field_family.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} icon_tile.h
 :project: astra-ndk
 ```

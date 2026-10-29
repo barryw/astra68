@@ -6,6 +6,33 @@ system clipboard, and per-document undo histories. Applications call its
 versioned ELF symbols directly; they do not compile private Interface Kit
 sources or speak directly to display and clipboard services.
 
+## Field family
+
+`astra_interface_secure_field_init` keeps the ordinary Field/TextModel editing
+contract. The draw list contains only one mask glyph per visible Unicode
+scalar, and the control does not emit Copy or Cut actions. The caller owns the
+TextModel and must protect or clear its backing storage as appropriate; a
+credential service is not yet available. `astra_interface_search_field_init`
+uses the same model with search and clear affordances. Escape or the clear
+button empties the model and emits its normal text-change action.
+
+`astra_interface_segmented_field_init` composes one Container, one Field per
+segment, and separator Labels. Reserve exactly twice the number of segments
+in consecutive control slots. Each segment has its own borrowed TextModel;
+Tab follows ordinary Interface Kit focus order. `astra_interface_tag_input_init`
+composes a wrapped Container, one removable tag Button per tag, and an inline
+draft Field. Reserve `tag_count + 2` controls. Tag Button activation requests
+removal; draft Field activation requests a new tag. Rebuild the composition
+after changing the tag list. The caller owns validation and persistence.
+
+`astra_interface_colour_well_init` creates one activatable, themed swatch.
+The Colour Well draws a literal RGB color, current theme role, or resolved
+palette slot through Graphics Kit RGB565 conversion and hardware draw-list
+commands. Activation is an ordinary `ASTRA_UI_ACTION_ACTIVATE`; a shared
+Colour panel can respond when installed. Use `astra_interface_colour_well_set`
+to change binding or resolved color and `astra_interface_control_set_text` to
+change the displayed binding label.
+
 ## Display widgets
 
 Use `astra_interface_level_meter_init` with a borrowed

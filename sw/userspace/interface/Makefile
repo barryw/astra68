@@ -20,6 +20,7 @@ LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
 INTERFACE_TARGET := build/m68k/libraries/interface.library.9
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
+	build/m68k/field_family.o \
 	build/m68k/display_widgets.o \
 	build/m68k/settings_pane.o build/m68k/form_row.o build/m68k/columns.o build/m68k/toolbar.o \
 	build/m68k/icon_tile.o build/m68k/image_view.o build/m68k/inline_edit.o \
@@ -83,6 +84,10 @@ build/m68k/form_row.o: src/form_row.c
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 build/m68k/columns.o: src/columns.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/field_family.o: src/field_family.c src/control_internal.h $(NDK)/include/astra/field_family.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
@@ -192,7 +197,7 @@ library-contract: $(INTERFACE_TARGET)
 		awk '/NEEDED/{n++} END{print n+0}')" = 5
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET))
 
-$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/display_widgets.c src/settings_pane.c src/form_row.c src/columns.c src/toolbar.c src/menu.c src/text_surface.c \
+$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/form_row.c src/columns.c src/toolbar.c src/menu.c src/text_surface.c \
 		src/text_model.c src/scroll.c $(NDK_HOST_UTF8) tests/test_interface.c \
 		tests/test_layout.c src/text_surface_internal.h
 	@mkdir -p $(@D)
@@ -225,7 +230,7 @@ $(COMMAND_HOST_TEST): src/command.c tests/test_command.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/command.c src/control.c src/display_widgets.c src/text_surface.c \
+MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/command.c src/control.c src/display_widgets.c src/field_family.c src/text_surface.c \
 	src/text_model.c src/scroll.c \
 	tests/test_menu.c
 $(GRAPHICS_HOST_SURFACE) $(GRAPHICS_HOST_SURFACE_SANITIZE): FORCE
@@ -268,7 +273,7 @@ sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANI
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_SYSTEM_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
-		src/control.c src/display_widgets.c src/settings_pane.c src/form_row.c src/columns.c src/toolbar.c src/menu.c src/text_surface.c src/text_model.c src/scroll.c \
+		src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/form_row.c src/columns.c src/toolbar.c src/menu.c src/text_surface.c src/text_model.c src/scroll.c \
 		$(NDK_HOST_UTF8) \
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize

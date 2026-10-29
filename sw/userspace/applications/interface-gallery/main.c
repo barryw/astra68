@@ -37,6 +37,7 @@ enum {
     GALLERY_PAGE_PROGRESS,
     GALLERY_PAGE_TEXT,
     GALLERY_PAGE_LAYOUT,
+    GALLERY_PAGE_FIELDS,
     GALLERY_TEXT_LABEL,
     GALLERY_LAYOUT_LABEL,
     GALLERY_LABEL,
@@ -116,7 +117,19 @@ enum {
     GALLERY_COLUMN_RIGHT_SCROLL,
     GALLERY_COLUMN_RIGHT_LIST,
     GALLERY_TABLE,
-    GALLERY_CONTROL_COUNT = GALLERY_TABLE
+    GALLERY_FIELD_FAMILY_LABEL,
+    GALLERY_SECURE_FIELD,
+    GALLERY_SEARCH_FIELD,
+    GALLERY_SEGMENTED_FIELD,
+    GALLERY_SEGMENT_LEFT,
+    GALLERY_SEGMENT_SEPARATOR,
+    GALLERY_SEGMENT_RIGHT,
+    GALLERY_TAG_INPUT,
+    GALLERY_TAG_ONE,
+    GALLERY_TAG_TWO,
+    GALLERY_TAG_DRAFT,
+    GALLERY_COLOUR_WELL,
+    GALLERY_CONTROL_COUNT = GALLERY_COLOUR_WELL
 };
 
 enum {
@@ -189,6 +202,15 @@ static uint32_t gallery_spark_samples[] = {
 };
 static AstraSparklineModel gallery_spark = ASTRA_SPARKLINE_MODEL_INIT;
 static AstraTextModel text_view_model = ASTRA_TEXT_MODEL_INIT;
+static AstraTextModel family_models[5] = {
+    ASTRA_TEXT_MODEL_INIT, ASTRA_TEXT_MODEL_INIT, ASTRA_TEXT_MODEL_INIT,
+    ASTRA_TEXT_MODEL_INIT, ASTRA_TEXT_MODEL_INIT
+};
+static uint8_t family_content[5][256];
+static _Alignas(4) uint8_t family_metadata[5][512];
+static const AstraChoiceItem family_tags[] = {
+    {"vega", 4u, {0u, 0u}}, {"rtl", 3u, {0u, 0u}}
+};
 static AstraScrollModel text_view_scroll = ASTRA_SCROLL_MODEL_INIT;
 static uint8_t text_view_content[2048];
 static _Alignas(4) uint8_t text_view_metadata[2048];
@@ -219,7 +241,8 @@ static const AstraChoiceItem gallery_tabs[] = {
     {"Value", sizeof("Value") - 1u, {0u, 0u}},
     {"Progress", sizeof("Progress") - 1u, {0u, 0u}},
     {"Text", sizeof("Text") - 1u, {0u, 0u}},
-    {"Layout", sizeof("Layout") - 1u, {0u, 0u}}
+    {"Layout", sizeof("Layout") - 1u, {0u, 0u}},
+    {"Fields", sizeof("Fields") - 1u, {0u, 0u}}
 };
 static const AstraChoiceItem gallery_choices[] = {
     {"Windows", sizeof("Windows") - 1u, {0u, 0u}},
@@ -726,7 +749,7 @@ static uint32_t layout_controls(void)
 
 static uint32_t select_page(int32_t selected)
 {
-    uint32_t page_count = GALLERY_PAGE_LAYOUT - GALLERY_PAGE_INPUT + 1u;
+    uint32_t page_count = GALLERY_PAGE_FIELDS - GALLERY_PAGE_INPUT + 1u;
     uint32_t next;
 
     if (selected < 0 || (uint32_t)selected >= page_count)
@@ -761,7 +784,7 @@ static uint32_t build_controls(void)
         status = GALLERY_FAIL_CONTROL;
 
     for (uint32_t page = GALLERY_PAGE_INPUT;
-         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_LAYOUT; ++page)
+         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_FIELDS; ++page)
         status = add_page(page - 1u, page,
                           page == GALLERY_PAGE_INPUT ? 0u :
                           ASTRA_CONTROL_COLLAPSED);
@@ -774,6 +797,12 @@ static uint32_t build_controls(void)
         status = add_label(GALLERY_LAYOUT_LABEL - 1u, GALLERY_LAYOUT_LABEL,
                            "LAYOUT / STATES / RESIZE",
                            sizeof("LAYOUT / STATES / RESIZE") - 1u,
+                           ASTRA_TEXT_CLIENT_SECONDARY);
+    if (status == ASTRA_STATUS_OK)
+        status = add_label(GALLERY_FIELD_FAMILY_LABEL - 1u,
+                           GALLERY_FIELD_FAMILY_LABEL,
+                           "SECURE / SEARCH / SEGMENTS / TAGS / COLOUR",
+                           sizeof("SECURE / SEARCH / SEGMENTS / TAGS / COLOUR") - 1u,
                            ASTRA_TEXT_CLIENT_SECONDARY);
     if (status == ASTRA_STATUS_OK)
         status = add_label(GALLERY_LABEL - 1u, GALLERY_LABEL,
@@ -1132,10 +1161,78 @@ static uint32_t build_controls(void)
                 &table) != ASTRA_OK)
             status = GALLERY_FAIL_CONTROL;
     }
+    if (status == ASTRA_STATUS_OK) {
+        static const char *const examples[5] = {
+            "open-sesame", "projects", "192", "168", "new tag"
+        };
+        static const uint32_t lengths[5] = {11u, 8u, 3u, 3u, 7u};
+
+        for (uint32_t at = 0u; at < 5u; ++at) {
+            status = init_field_model(&family_models[at], examples[at],
+                lengths[at], family_content[at],
+                sizeof(family_content[at]), family_metadata[at],
+                sizeof(family_metadata[at]));
+            if (status != ASTRA_STATUS_OK) break;
+        }
+    }
+    if (status == ASTRA_STATUS_OK) {
+        AstraFieldInfo field = ASTRA_FIELD_INFO_INIT;
+
+        field.id = GALLERY_SECURE_FIELD;
+        field.model = &family_models[0];
+        field.preferred_columns = 20u;
+        if (astra_interface_secure_field_init(
+                GALLERY_CONTROL(GALLERY_SECURE_FIELD), &field) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+        field.id = GALLERY_SEARCH_FIELD;
+        field.model = &family_models[1];
+        if (status == ASTRA_STATUS_OK &&
+            astra_interface_search_field_init(
+                GALLERY_CONTROL(GALLERY_SEARCH_FIELD), &field) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
+    if (status == ASTRA_STATUS_OK) {
+        AstraTextModel *segments[2] = {&family_models[2], &family_models[3]};
+        uint32_t columns[2] = {3u, 3u};
+        AstraSegmentedFieldInfo info = ASTRA_SEGMENTED_FIELD_INFO_INIT;
+
+        info.first_id = GALLERY_SEGMENTED_FIELD;
+        info.models = segments;
+        info.preferred_columns = columns;
+        info.segment_count = 2u;
+        info.separator = ".";
+        info.separator_length = 1u;
+        if (astra_interface_segmented_field_init(
+                GALLERY_CONTROL(GALLERY_SEGMENTED_FIELD), 4u,
+                &info) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
+    if (status == ASTRA_STATUS_OK) {
+        AstraTagInputInfo info = ASTRA_TAG_INPUT_INFO_INIT;
+
+        info.first_id = GALLERY_TAG_INPUT;
+        info.tags = family_tags;
+        info.tag_count = 2u;
+        info.draft = &family_models[4];
+        if (astra_interface_tag_input_init(
+                GALLERY_CONTROL(GALLERY_TAG_INPUT), 4u, &info) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
+    if (status == ASTRA_STATUS_OK) {
+        AstraColourWellInfo well = ASTRA_COLOUR_WELL_INFO_INIT;
+
+        well.id = GALLERY_COLOUR_WELL;
+        well.label = "accent";
+        well.label_length = 6u;
+        well.binding = ASTRA_COLOUR_THEME_ACCENT;
+        if (astra_interface_colour_well_init(
+                GALLERY_CONTROL(GALLERY_COLOUR_WELL), &well) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
     if (status == ASTRA_STATUS_OK)
         status = set_item(GALLERY_TABS, 0u, 0u, 0u);
     for (uint32_t page = GALLERY_PAGE_INPUT;
-         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_LAYOUT; ++page)
+         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_FIELDS; ++page)
         status = set_item(page, 0u, 0u, 1u);
 
 #define PAGE_ITEM(id, page, flags)                                      \
@@ -1254,6 +1351,18 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_COLUMNS, GALLERY_PAGE_LAYOUT,
               ASTRA_FLEX_BREAK_BEFORE);
     PAGE_ITEM(GALLERY_TABLE, GALLERY_PAGE_LAYOUT,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_FIELD_FAMILY_LABEL, GALLERY_PAGE_FIELDS,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_SECURE_FIELD, GALLERY_PAGE_FIELDS,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_SEARCH_FIELD, GALLERY_PAGE_FIELDS,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_SEGMENTED_FIELD, GALLERY_PAGE_FIELDS,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_TAG_INPUT, GALLERY_PAGE_FIELDS,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_COLOUR_WELL, GALLERY_PAGE_FIELDS,
               ASTRA_FLEX_BREAK_AFTER);
 #undef PAGE_ITEM
     if (status == ASTRA_STATUS_OK) {

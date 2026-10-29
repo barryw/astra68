@@ -20,6 +20,12 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_dial_init;
         astra_interface_disclosure_init;
         astra_interface_field_init;
+        astra_interface_secure_field_init;
+        astra_interface_search_field_init;
+        astra_interface_segmented_field_init;
+        astra_interface_tag_input_init;
+        astra_interface_colour_well_init;
+        astra_interface_colour_well_set;
         astra_interface_field_refresh;
         astra_interface_field_replace_selection;
         astra_interface_label_init;

@@ -26,6 +26,8 @@ _Static_assert(sizeof(AstraUIContext) ==
                "AstraUIContext ABI 8 layout changed; bump the ABI major");
 
 static uint16_t first_text_color;
+static char first_mono_text[129];
+static uint32_t first_mono_length;
 static uint16_t last_text_color;
 static uint16_t fill_colors[32];
 static int32_t fill_x[32];
@@ -494,6 +496,12 @@ int astra_surface_mono_text_styled(AstraSurfaceView *surface, int32_t x,
                                    uint32_t style_flags)
 {
     (void)surface;
+    if (mono_text_calls == 0u) {
+        first_mono_length = length < sizeof(first_mono_text) - 1u ?
+            length : sizeof(first_mono_text) - 1u;
+        memcpy(first_mono_text, utf8, first_mono_length);
+        first_mono_text[first_mono_length] = '\0';
+    }
     if (mono_text_calls < sizeof(fill_x) / sizeof(fill_x[0]))
         fill_x[mono_text_calls] = x;
     if (mono_text_calls < sizeof(mono_styles) / sizeof(mono_styles[0])) {
@@ -601,6 +609,8 @@ static void reset_render_calls(void)
     text_clip_top = 0u;
     text_clip_bottom = 0u;
     mono_text_calls = 0u;
+    first_mono_length = 0u;
+    first_mono_text[0] = '\0';
     memset(mono_styles, 0, sizeof(mono_styles));
     memset(mono_colors, 0, sizeof(mono_colors));
     copy_calls = 0u;
@@ -2554,6 +2564,205 @@ static void test_text_field(void)
                ASTRA_CONTROL_DISABLED | ASTRA_CONTROL_ERROR) == ASTRA_OK);
 }
 
+static void test_secure_and_search_fields(void)
+{
+    uint8_t content[128] = {0};
+    _Alignas(4) uint8_t metadata[256] = {0};
+    AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo model_info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    AstraTextSelection selection = ASTRA_TEXT_SELECTION_INIT;
+    AstraControl field = ASTRA_CONTROL_INIT;
+    AstraFieldInfo info = ASTRA_FIELD_INFO_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraSurfaceView surface = render_view(160u, 40u);
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraWindowEvent event;
+
+    model_info.text = "secret";
+    model_info.text_bytes = 6u;
+    model_info.content_arena = content;
+    model_info.content_arena_bytes = sizeof(content);
+    model_info.metadata_arena = metadata;
+    model_info.metadata_arena_bytes = sizeof(metadata);
+    model_info.selection.anchor = 0u;
+    model_info.selection.focus = 6u;
+    assert(astra_text_model_init(&model, &model_info) == ASTRA_OK);
+    info.id = 90u;
+    info.model = &model;
+    info.preferred_columns = 8u;
+    assert(astra_interface_secure_field_init(&field, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &field, 1u, 160u, 40u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_focus_control(&context, 90u) == ASTRA_OK);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(first_mono_length == 6u);
+    assert(memcmp(first_mono_text, "******", 6u) == 0);
+    assert(astra_text_model_replace(&model, 0u, 6u,
+        "\xc3\xa9\xf0\x9f\x94\x92", 6u) == ASTRA_OK);
+    assert(astra_interface_field_refresh(&context, &field) == ASTRA_OK);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(first_mono_length == 2u &&
+           memcmp(first_mono_text, "**", 2u) == 0);
+    assert(astra_text_model_replace(&model, 0u, 6u, "secret", 6u) == ASTRA_OK);
+    selection.focus = 6u;
+    assert(astra_text_model_set_selection(&model, &selection) == ASTRA_OK);
+    assert(astra_interface_field_refresh(&context, &field) == ASTRA_OK);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x06u, ASTRA_INPUT_MOD_META);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_NONE);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x1bu, ASTRA_INPUT_MOD_META);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_NONE);
+    assert(astra_text_model_get_state(&model, &state) == ASTRA_OK &&
+           state.text_bytes == 6u);
+
+    info.id = 91u;
+    assert(astra_interface_search_field_init(&field, &info) == ASTRA_OK);
+    context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
+    assert(astra_interface_ui_init(&context, &field, 1u, 160u, 40u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_focus_control(&context, 91u) == ASTRA_OK);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(first_mono_length == 6u &&
+           memcmp(first_mono_text, "secret", 6u) == 0);
+    assert(line_calls == 7u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x29u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &state) == ASTRA_OK &&
+           state.text_bytes == 0u);
+}
+
+static void test_composed_fields_and_colour_well(void)
+{
+    uint8_t left_content[64] = {0}, right_content[64] = {0};
+    _Alignas(4) uint8_t left_metadata[256] = {0},
+        right_metadata[256] = {0};
+    AstraTextModel left = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModel right = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo model_info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextModel *models[2] = {&left, &right};
+    uint32_t columns[2] = {3u, 3u};
+    AstraControl segmented[4] = {
+        ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT,
+        ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT
+    };
+    AstraSegmentedFieldInfo segment = ASTRA_SEGMENTED_FIELD_INFO_INIT;
+    AstraChoiceItem tags[2] = {
+        {"vega", 4u, {0u, 0u}}, {"rtl", 3u, {0u, 0u}}
+    };
+    AstraControl token_controls[4] = {
+        ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT,
+        ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT
+    };
+    AstraTagInputInfo tag = ASTRA_TAG_INPUT_INFO_INIT;
+    AstraControl well = ASTRA_CONTROL_INIT;
+    AstraColourWellInfo color_info = ASTRA_COLOUR_WELL_INFO_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraSurfaceView surface = render_view(160u, 40u);
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraWindowEvent event;
+
+    model_info.text = "1";
+    model_info.text_bytes = 1u;
+    model_info.content_arena = left_content;
+    model_info.content_arena_bytes = sizeof(left_content);
+    model_info.metadata_arena = left_metadata;
+    model_info.metadata_arena_bytes = sizeof(left_metadata);
+    assert(astra_text_model_init(&left, &model_info) == ASTRA_OK);
+    model_info.text = "2";
+    model_info.content_arena = right_content;
+    model_info.content_arena_bytes = sizeof(right_content);
+    model_info.metadata_arena = right_metadata;
+    model_info.metadata_arena_bytes = sizeof(right_metadata);
+    assert(astra_text_model_init(&right, &model_info) == ASTRA_OK);
+    segment.first_id = 100u;
+    segment.models = models;
+    segment.preferred_columns = columns;
+    segment.segment_count = 2u;
+    segment.separator = ".";
+    segment.separator_length = 1u;
+    assert(astra_interface_segmented_field_init(segmented, 4u, &segment) ==
+           ASTRA_OK);
+    assert(segmented[1]._private_parent_id == 100u &&
+           segmented[3]._private_parent_id == 100u);
+    assert(segmented[2]._private_control_kind == ASTRA_CONTROL_LABEL);
+    assert(astra_interface_segmented_field_init(segmented, 3u, &segment) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_ui_init(&context, segmented, 4u, 160u, 100u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_focus_control(&context, 101u) == ASTRA_OK);
+    surface = render_view(160u, 100u);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+
+    tag.first_id = 110u;
+    tag.tags = tags;
+    tag.tag_count = 2u;
+    tag.draft = &left;
+    assert(astra_interface_tag_input_init(token_controls, 4u, &tag) ==
+           ASTRA_OK);
+    assert(token_controls[0]._private_style ==
+           ASTRA_CONTAINER_STYLE_TAG_INPUT);
+    assert(token_controls[1]._private_style == ASTRA_BUTTON_TAG);
+    assert(token_controls[3]._private_control_kind == ASTRA_CONTROL_FIELD);
+    context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
+    assert(astra_interface_ui_init(&context, token_controls, 4u,
+        160u, 100u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(astra_interface_ui_focus_control(&context, 111u) == ASTRA_OK);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x28u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK);
+    event = key_event(0u, 0x28u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_ACTIVATE &&
+           action.control_id == 111u);
+
+    color_info.id = 120u;
+    color_info.label = "#162D3A";
+    color_info.label_length = 7u;
+    color_info.color = (AstraColorRGBA8){22u, 45u, 58u, 255u};
+    assert(astra_interface_colour_well_init(&well, &color_info) == ASTRA_OK);
+    context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
+    surface = render_view(160u, 40u);
+    assert(astra_interface_ui_init(&context, &well, 1u, 160u, 40u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(fill_calls == 3u &&
+           fill_colors[2] == astra_surface_rgb565(22u, 45u, 58u));
+    assert(astra_interface_colour_well_set(&context, &well,
+        ASTRA_COLOUR_THEME_ACCENT, color_info.color, 0u) == ASTRA_OK);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(fill_colors[2] == astra_surface_rgb565(theme.accent.red,
+        theme.accent.green, theme.accent.blue));
+    assert(astra_interface_ui_focus_control(&context, 120u) == ASTRA_OK);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x28u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK);
+    event = key_event(0u, 0x28u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_ACTIVATE &&
+           action.control_id == 120u);
+}
+
 static void test_text_field_rejections(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -3993,6 +4202,8 @@ int main(void)
     test_stepper_control();
     test_animation_ownership();
     test_text_field();
+    test_secure_and_search_fields();
+    test_composed_fields_and_colour_well();
     test_text_field_rejections();
     test_text_view();
     test_text_view_styles();

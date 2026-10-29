@@ -5,6 +5,7 @@
 #include <astra/clipboard.h>
 #include <astra/command.h>
 #include <astra/control.h>
+#include <astra/field_family.h>
 #include <astra/icon_tile.h>
 #include <astra/image_view.h>
 #include <astra/interface.h>
@@ -338,6 +339,55 @@ AstraResult astra_interface_tree_set_nodes(AstraUIContext *context,
  */
 AstraResult astra_interface_field_init(AstraControl *control,
                                        const AstraFieldInfo *info);
+/** Use Field/TextModel editing with masked draw-list glyphs and no copy/cut.
+ * @param control Caller-owned control to initialize.
+ * @param info Field description with caller-owned model.
+ * @return ASTRA_OK or a validation error.
+ */
+AstraResult astra_interface_secure_field_init(AstraControl *control,
+    const AstraFieldInfo *info);
+/** Use Field/TextModel editing with search and clear affordances.
+ * Escape or clicking the clear affordance empties the model.
+ * @param control Caller-owned control to initialize.
+ * @param info Field description with caller-owned model.
+ * @return ASTRA_OK or a validation error.
+ */
+AstraResult astra_interface_search_field_init(AstraControl *control,
+    const AstraFieldInfo *info);
+/** Compose Fields and separator Labels over caller-owned segment models.
+ * @param controls Array of exactly @p control_count caller-owned controls.
+ * @param control_count Twice the number of segments.
+ * @param info Borrowed models and separator description.
+ * @return ASTRA_OK or a validation error; discard partial controls on failure.
+ */
+AstraResult astra_interface_segmented_field_init(AstraControl *controls,
+    uint32_t control_count, const AstraSegmentedFieldInfo *info);
+/** Compose removable tag Buttons and one editable draft Field.
+ * @param controls Array of exactly @p control_count caller-owned controls.
+ * @param control_count Tag count plus two.
+ * @param info Borrowed tags and draft model.
+ * @return ASTRA_OK or a validation error; discard partial controls on failure.
+ */
+AstraResult astra_interface_tag_input_init(AstraControl *controls,
+    uint32_t control_count, const AstraTagInputInfo *info);
+/** Initialize a retained activatable color swatch.
+ * @param control Caller-owned control to initialize.
+ * @param info Borrowed label and binding description.
+ * @return ASTRA_OK or a validation error.
+ */
+AstraResult astra_interface_colour_well_init(AstraControl *control,
+    const AstraColourWellInfo *info);
+/** Change a Colour Well's binding and resolved color, damaging its frame.
+ * @param context UI context owning @p control.
+ * @param control Colour Well to change.
+ * @param binding One ASTRA_COLOUR_* source.
+ * @param color Opaque literal or resolved palette RGB.
+ * @param palette_slot Slot 0..255 for palette binding; zero otherwise.
+ * @return ASTRA_OK or a validation error.
+ */
+AstraResult astra_interface_colour_well_set(AstraUIContext *context,
+    AstraControl *control, uint32_t binding, AstraColorRGBA8 color,
+    uint32_t palette_slot);
 /** Revalidate and damage a field after an external model mutation.
  * @param context UI context owning @p control.
  * @param control Field whose caller-owned model changed.
