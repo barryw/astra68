@@ -11,9 +11,9 @@
 
 #define NONE UINT32_MAX
 #define OPEN_PRESS (UINT32_MAX - 1u)
-#define PAD 4u
-#define ROW 28u
-#define PITCH 28u
+#define PAD ASTRA_MENU_PADDING
+#define ROW ASTRA_MENU_ROW_HEIGHT
+#define PITCH ASTRA_MENU_ROW_HEIGHT
 #define SEPARATOR 8u
 #define MAX_VISIBLE_ROWS 24u
 

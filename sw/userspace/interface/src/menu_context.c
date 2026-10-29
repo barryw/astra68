@@ -212,7 +212,8 @@ AstraResult astra_interface_popup_open(AstraPopup *popup,
     serial = popup->_private_serial + 1u;
     if (serial == 0u || serial >= UINT32_C(0x7fffffff)) serial = 1u;
     request = UINT32_C(0x80000000) | serial;
-    anchor_y = (int64_t)frame.y - selected * 28 - 4;
+    anchor_y = (int64_t)frame.y -
+               selected * ASTRA_MENU_ROW_HEIGHT - ASTRA_MENU_PADDING;
     if (anchor_y < INT32_MIN) anchor_y = INT32_MIN;
     result = astra_window_menu_open(window, rows, count, frame.x,
         (int32_t)anchor_y, request);

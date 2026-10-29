@@ -1,6 +1,11 @@
 #ifndef ASTRA_MENU_H
 #define ASTRA_MENU_H
 
+/** Standard menu row height in logical pixels. */
+#define ASTRA_MENU_ROW_HEIGHT 28u
+/** Menu surface inset around rows in logical pixels. */
+#define ASTRA_MENU_PADDING 4u
+
 /** @file menu.h @brief Shared transient menu control and command-backed context menus. */
 #include <astra/command.h>
 #include <astra/control.h>
@@ -163,6 +168,7 @@ AstraResult astra_interface_context_menu_close(AstraContextMenu *menu);
 
 /** A caller-owned session connecting a retained Popup to a copied menu. */
 typedef struct AstraPopup {
+    /** @cond ASTRA_INTERNAL */
     uint32_t _private_size;
     uint32_t _private_serial;
     uint32_t _private_request;
@@ -170,20 +176,35 @@ typedef struct AstraPopup {
     AstraUIContext *_private_context;
     AstraControl *_private_control;
     uint32_t _private_count;
+    /** @endcond */
 } AstraPopup;
+/** Empty Popup session. */
 #define ASTRA_POPUP_INIT { sizeof(AstraPopup), 0, 0, 0, 0, 0, 0 }
 
 /** Open a Popup after its retained control emits ACTIVATE. Selection is
  * aligned to the field when screen room permits. The display copies rows.
+ * @param popup Caller-owned Popup session.
+ * @param context UI context owning control.
+ * @param control Retained Popup control.
+ * @param window Window receiving the menu result.
+ * @return ASTRA_OK or a validation, capacity, or window error.
  */
 AstraResult astra_interface_popup_open(AstraPopup *popup,
     AstraUIContext *context, AstraControl *control, AstraWindow *window);
 /** Consume a correlated result and update the retained choice. On a changed
  * selection, action is VALUE_CHANGED. Other menu results are left untouched.
+ * @param popup Active Popup session.
+ * @param event Window event to inspect.
+ * @param action Receives value-change action on selection.
+ * @param handled Receives nonzero when the event belongs to this Popup.
+ * @return ASTRA_OK or a validation or window error.
  */
 AstraResult astra_interface_popup_handle_event(AstraPopup *popup,
     const AstraWindowEvent *event, AstraUIAction *action, int *handled);
-/** Close this Popup's pending menu. */
+/** Close this Popup's pending menu.
+ * @param popup Active Popup session.
+ * @return ASTRA_OK or a validation or window error.
+ */
 AstraResult astra_interface_popup_close(AstraPopup *popup);
 
 ASTRA_EXTERN_C_END

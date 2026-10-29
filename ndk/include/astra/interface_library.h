@@ -61,16 +61,32 @@ AstraResult astra_interface_disclosure_init(
  */
 AstraResult astra_interface_container_init(AstraControl *control,
                                            const AstraContainerInfo *info);
-/** Initialize a retained bottom-up channel meter; model storage stays caller-owned. */
+/** Initialize a retained bottom-up channel meter; model storage stays caller-owned.
+ * @param control Caller-owned control.
+ * @param info Borrowed model and control state.
+ * @return ASTRA_OK or a validation error.
+ */
 AstraResult astra_interface_level_meter_init(AstraControl *control,
     const AstraDisplayInfo *info);
-/** Initialize a retained per-sample bar sparkline. */
+/** Initialize a retained per-sample bar sparkline.
+ * @param control Caller-owned control.
+ * @param info Borrowed model and control state.
+ * @return ASTRA_OK or a validation error.
+ */
 AstraResult astra_interface_sparkline_init(AstraControl *control,
     const AstraDisplayInfo *info);
-/** Validate changed display model data and mark its frame damaged. */
+/** Validate changed display model data and mark its frame damaged.
+ * @param context Owning UI context.
+ * @param control Level Meter or Sparkline control.
+ * @return ASTRA_OK or a validation error.
+ */
 AstraResult astra_interface_display_refresh(AstraUIContext *context,
     AstraControl *control);
-/** Compose a themed status strip from one Container and two Labels. */
+/** Compose a themed status strip from one Container and two Labels.
+ * @param controls Three caller-owned consecutive control slots.
+ * @param info Status labels and first control ID.
+ * @return ASTRA_OK or a validation error.
+ */
 AstraResult astra_interface_status_bar_init(AstraControl *controls,
     const AstraStatusBarInfo *info);
 /** Compose a shared settings shell from four existing controls.
@@ -87,7 +103,12 @@ AstraResult astra_interface_settings_pane_init(AstraControl *controls,
 /** Compose a form row from five retained controls. Place an application
  * control under first_id + ASTRA_FORM_ROW_VALUE and the row root under the
  * desired settings BODY container. The message can be hidden or use the
- * shared fault text role. @since Interface Kit 8.1. */
+ * shared fault text role.
+ * @param controls Five caller-owned consecutive control slots.
+ * @param info Row labels, ID, and shared label width.
+ * @return ASTRA_OK or a validation error.
+ * @since Interface Kit 9.0.
+ */
 AstraResult astra_interface_form_row_init(AstraControl *controls,
                                           const AstraFormRowInfo *info);
 /** Compose a row toolbar from one Container and action_count Buttons.
@@ -202,6 +223,11 @@ AstraResult astra_interface_tab_init(AstraControl *control,
                                      const AstraChoiceInfo *info);
 /** Initialize a collection model with unique, stable item IDs.
  * Item array and labels remain caller-owned. ID zero means no selection.
+ * @param model Caller-owned model to initialize.
+ * @param items Borrowed item array, or NULL when count is zero.
+ * @param count Number of items.
+ * @param selected_id Initial selected ID, or zero for none.
+ * @return ASTRA_OK or a validation error.
  */
 AstraResult astra_interface_collection_init(AstraCollectionModel *model,
     const AstraCollectionItem *items, uint32_t count, uint64_t selected_id);
@@ -217,14 +243,29 @@ AstraResult astra_interface_list_init(AstraControl *control,
 /** Replace List items, preserving selection by stable item ID.
  * Selection clears when selected item disappears. Failed updates leave prior
  * model and layout intact.
+ * @param context Owning UI context.
+ * @param control List bound to one collection model.
+ * @param items Replacement borrowed item array, or NULL when count is zero.
+ * @param count Number of items.
+ * @return ASTRA_OK or a validation or layout error.
  */
 AstraResult astra_interface_list_set_items(AstraUIContext *context,
     AstraControl *control, const AstraCollectionItem *items, uint32_t count);
-/** Initialize a menu-backed single-choice field with caller-owned items. */
+/** Initialize a menu-backed single-choice field with caller-owned items.
+ * @param control Caller-owned control.
+ * @param info Borrowed choices and initial selection.
+ * @return ASTRA_OK or a validation error.
+ */
 AstraResult astra_interface_popup_init(AstraControl *control,
                                       const AstraChoiceInfo *info);
 /** Compose a toolbar primary action and menu segment. Place adjacent in a
- * zero-gap row; open a shared Context Menu when the menu ID activates. */
+ * zero-gap row; open a shared Context Menu when the menu ID activates.
+ * @param primary Caller-owned primary Button slot.
+ * @param menu Caller-owned menu Button slot.
+ * @param primary_info Primary Button description.
+ * @param menu_id Nonzero ID for the menu Button.
+ * @return ASTRA_OK or a validation error.
+ */
 AstraResult astra_interface_split_button_init(AstraControl *primary,
     AstraControl *menu, const AstraButtonInfo *primary_info, uint32_t menu_id);
 /** Initialize a single-line UTF-8 field.

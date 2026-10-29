@@ -1,5 +1,11 @@
 # Interface Kit
 
+`interface.library.9` is the shared implementation for native window controls,
+integer flex layout, shared transient menus, TextSurface presentation, the typed
+system clipboard, and per-document undo histories. Applications call its
+versioned ELF symbols directly; they do not compile private Interface Kit
+sources or speak directly to display and clipboard services.
+
 ## Display widgets
 
 Use `astra_interface_level_meter_init` with a borrowed
@@ -17,12 +23,6 @@ Container, left Label, and right Label. Attach its Container to the desired
 parent; the labels are already attached to it. Update either label with
 `astra_interface_control_set_text`. The bar's surface, text role, and layout
 come from the system theme and shared controls.
-
-`interface.library.9` is the shared implementation for native window controls,
-integer flex layout, shared transient menus, TextSurface presentation, the typed system clipboard, and
-per-document undo histories. Applications call its versioned ELF symbols
-directly; they do not compile private Interface Kit sources or speak directly
-to the display and clipboard services.
 
 ## Child context menus
 

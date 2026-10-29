@@ -266,17 +266,18 @@ enum {
  * A zero-length message hides the message slot. Use SECONDARY for help or
  * FAULT for validation errors. The value control is supplied by the caller. */
 typedef struct AstraFormRowInfo {
-    uint32_t size;
-    uint32_t first_id;
-    const char *label;
-    uint32_t label_length;
-    const char *message;
-    uint32_t message_length;
-    uint32_t message_role;
-    uint32_t label_width;
-    uint32_t reserved[4];
+    uint32_t size; /**< Structure size. */
+    uint32_t first_id; /**< First of five consecutive control IDs. */
+    const char *label; /**< Borrowed row label. */
+    uint32_t label_length; /**< Counted label bytes. */
+    const char *message; /**< Borrowed help or fault text. */
+    uint32_t message_length; /**< Counted message bytes; zero hides it. */
+    uint32_t message_role; /**< SECONDARY or FAULT text role. */
+    uint32_t label_width; /**< Shared label-column width. */
+    uint32_t reserved[4]; /**< Must be zero. */
 } AstraFormRowInfo;
 
+/** Empty form-row construction data. */
 #define ASTRA_FORM_ROW_INFO_INIT { \
     sizeof(AstraFormRowInfo), 0, 0, 0, 0, 0, \
     ASTRA_TEXT_CLIENT_SECONDARY, 110, { 0, 0, 0, 0 } \
@@ -650,32 +651,34 @@ typedef struct AstraChoiceInfo {
 
 /** Item identity and label shared by collection views. ID zero is reserved. */
 typedef struct AstraCollectionItem {
-    uint64_t id;
+    uint64_t id; /**< Stable, nonzero item identity. */
     const char *text; /**< Borrowed UTF-8 label. */
-    uint32_t text_length;
-    uint32_t reserved[2];
+    uint32_t text_length; /**< Counted label bytes. */
+    uint32_t reserved[2]; /**< Must be zero. */
 } AstraCollectionItem;
 
 /** Caller-owned collection state. Update a bound List through Interface Kit. */
 typedef struct AstraCollectionModel {
-    uint32_t size;
-    const AstraCollectionItem *items;
-    uint32_t item_count;
+    uint32_t size; /**< Structure size. */
+    const AstraCollectionItem *items; /**< Borrowed item array. */
+    uint32_t item_count; /**< Number of items. */
     uint64_t selected_id; /**< Zero means no selection. */
-    uint32_t reserved[2];
+    uint32_t reserved[2]; /**< Must be zero. */
 } AstraCollectionModel;
 
+/** Empty collection model. */
 #define ASTRA_COLLECTION_MODEL_INIT { sizeof(AstraCollectionModel), 0, 0, 0, {0, 0} }
 
 /** Bind one List to a caller-owned collection model. */
 typedef struct AstraListInfo {
-    uint32_t size;
-    uint32_t id;
-    AstraCollectionModel *model;
-    uint32_t state;
-    uint32_t reserved[4];
+    uint32_t size; /**< Structure size. */
+    uint32_t id; /**< Nonzero control ID. */
+    AstraCollectionModel *model; /**< Borrowed collection model. */
+    uint32_t state; /**< Disabled, error, or collapsed state. */
+    uint32_t reserved[4]; /**< Must be zero. */
 } AstraListInfo;
 
+/** Empty List construction data. */
 #define ASTRA_LIST_INFO_INIT { sizeof(AstraListInfo), 0, 0, 0, {0, 0, 0, 0} }
 
 enum {
@@ -765,39 +768,42 @@ typedef struct AstraGridViewInfo {
 
 /** Caller-owned channels; values and peaks use the same inclusive maximum. */
 typedef struct AstraLevelMeterModel {
-    uint32_t size;
-    const uint32_t *values;
-    const uint32_t *peaks;
-    uint32_t channels;
-    uint32_t maximum;
-    uint32_t reserved[2];
+    uint32_t size; /**< Structure size. */
+    const uint32_t *values; /**< Borrowed current values. */
+    const uint32_t *peaks; /**< Borrowed held peaks. */
+    uint32_t channels; /**< Channel count. */
+    uint32_t maximum; /**< Inclusive nonzero scale maximum. */
+    uint32_t reserved[2]; /**< Must be zero. */
 } AstraLevelMeterModel;
 
+/** Empty Level Meter model. */
 #define ASTRA_LEVEL_METER_MODEL_INIT \
     { sizeof(AstraLevelMeterModel), 0, 0, 0u, 0u, { 0u, 0u } }
 
 /** Caller-owned chronological samples; the final sample is the newest. */
 typedef struct AstraSparklineModel {
-    uint32_t size;
-    const uint32_t *samples;
-    uint32_t sample_count;
-    uint32_t maximum;
+    uint32_t size; /**< Structure size. */
+    const uint32_t *samples; /**< Borrowed chronological samples. */
+    uint32_t sample_count; /**< Number of samples. */
+    uint32_t maximum; /**< Inclusive nonzero scale maximum. */
     uint32_t warning_threshold; /**< Values at or above turn fault-colored. */
-    uint32_t reserved[2];
+    uint32_t reserved[2]; /**< Must be zero. */
 } AstraSparklineModel;
 
+/** Empty Sparkline model. */
 #define ASTRA_SPARKLINE_MODEL_INIT \
     { sizeof(AstraSparklineModel), 0, 0u, 0u, 0u, { 0u, 0u } }
 
 /** Shared construction data for noninteractive display models. */
 typedef struct AstraDisplayInfo {
-    uint32_t size;
-    uint32_t id;
+    uint32_t size; /**< Structure size. */
+    uint32_t id; /**< Nonzero control ID. */
     const void *model; /**< Borrowed Level Meter or Sparkline model. */
     uint32_t state; /**< Disabled, error, or collapsed. */
-    uint32_t reserved[4];
+    uint32_t reserved[4]; /**< Must be zero. */
 } AstraDisplayInfo;
 
+/** Empty display-control construction data. */
 #define ASTRA_DISPLAY_INFO_INIT \
     { sizeof(AstraDisplayInfo), 0u, 0, 0u, { 0u, 0u, 0u, 0u } }
 
@@ -810,15 +816,16 @@ enum {
 
 /** Compose one themed strip and two ordinary labels in consecutive slots. */
 typedef struct AstraStatusBarInfo {
-    uint32_t size;
-    uint32_t first_id;
-    const char *left;
-    uint32_t left_length;
-    const char *right;
-    uint32_t right_length;
-    uint32_t reserved[4];
+    uint32_t size; /**< Structure size. */
+    uint32_t first_id; /**< First of three consecutive control IDs. */
+    const char *left; /**< Borrowed left label. */
+    uint32_t left_length; /**< Counted left-label bytes. */
+    const char *right; /**< Borrowed right label. */
+    uint32_t right_length; /**< Counted right-label bytes. */
+    uint32_t reserved[4]; /**< Must be zero. */
 } AstraStatusBarInfo;
 
+/** Empty Status Bar construction data. */
 #define ASTRA_STATUS_BAR_INFO_INIT \
     { sizeof(AstraStatusBarInfo), 0u, 0, 0u, 0, 0u, { 0u, 0u, 0u, 0u } }
 
