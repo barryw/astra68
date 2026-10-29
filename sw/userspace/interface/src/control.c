@@ -57,7 +57,7 @@
      (kind) == ASTRA_CONTROL_SWITCH)
 #define COLLECTION_KINDS(kind) \
     ((kind) == ASTRA_CONTROL_LIST || (kind) == ASTRA_CONTROL_TABLE || \
-     (kind) == ASTRA_CONTROL_TREE)
+     (kind) == ASTRA_CONTROL_TREE || (kind) == ASTRA_CONTROL_ICON_GRID)
 #define CHOICE_KINDS(kind) \
     ((kind) == ASTRA_CONTROL_SEGMENTED || (kind) == ASTRA_CONTROL_TAB || \
      COLLECTION_KINDS(kind) || (kind) == ASTRA_CONTROL_POPUP)
@@ -169,6 +169,17 @@ static const AstraTreeModel *const_tree_model(const AstraControl *control)
     return (const AstraTreeModel *)control->_private_display_model;
 }
 
+static AstraIconGridModel *icon_grid_model(AstraControl *control)
+{
+    return (AstraIconGridModel *)(void *)control->_private_display_model;
+}
+
+static const AstraIconGridModel *const_icon_grid_model(
+    const AstraControl *control)
+{
+    return (const AstraIconGridModel *)control->_private_display_model;
+}
+
 static int table_cells_valid(const AstraTableCell *cells, uint32_t count)
 {
     if (count != 0u && cells == NULL) return 0;
@@ -230,6 +241,38 @@ static int32_t collection_index(const AstraCollectionItem *items,
     for (uint32_t at = 0u; at < count; ++at)
         if (items[at].id == id) return (int32_t)at;
     return -1;
+}
+
+static int icon_grid_model_valid(const AstraIconGridModel *grid,
+                                 int validate_items)
+{
+    if (grid == NULL || grid->size != sizeof(*grid) ||
+        grid->collection == NULL ||
+        grid->collection->size != sizeof(AstraCollectionModel) ||
+        !astra_words_zero(grid->collection->reserved, 2u) ||
+        (validate_items ?
+            !collection_items_valid(grid->collection->items,
+                                    grid->collection->item_count) :
+            (grid->collection->item_count != 0u &&
+             grid->collection->items == NULL)) ||
+        grid->icon_count != grid->collection->item_count ||
+        (grid->icon_count != 0u && grid->icons == NULL) ||
+        grid->columns == 0u || grid->columns > 256u ||
+        (grid->tile_style != ASTRA_ICON_TILE_CLIENT &&
+         grid->tile_style != ASTRA_ICON_TILE_DESKTOP) ||
+        !astra_words_zero(grid->reserved, 2u))
+        return 0;
+    for (uint32_t at = 0u; at < grid->icon_count; ++at) {
+        const AstraSurface *icon = grid->icons[at];
+
+        if (icon != NULL &&
+            (icon->_private_handle == ASTRA_INVALID_HANDLE ||
+             icon->_private_id == 0u || icon->_private_window == 0u ||
+             icon->_private_width < ASTRA_ICON_TILE_SOURCE_SIZE ||
+             icon->_private_height < ASTRA_ICON_TILE_SOURCE_SIZE))
+            return 0;
+    }
+    return 1;
 }
 
 static int32_t tree_visible_index(const AstraTreeModel *tree, uint64_t id)
@@ -609,6 +652,24 @@ static int control_valid(const AstraControl *control)
                control->_private_minimum_value >= -1 &&
                control->_private_maximum_value ==
                    (int64_t)tree->visible_count - 1 &&
+               control->_private_style == 0u &&
+               (state & ~CONTROL_VALUE_STATES) == 0u &&
+               control->_private_preview_state == 0u;
+    }
+    if (control->_private_control_kind == ASTRA_CONTROL_ICON_GRID) {
+        const AstraIconGridModel *grid = const_icon_grid_model(control);
+        const AstraCollectionModel *model = const_collection_model(control);
+
+        return grid != NULL && model != NULL &&
+               grid->collection == model && icon_grid_model_valid(grid, 0) &&
+               grid->icon_count == control->_private_text_length &&
+               (control->_private_value < 0 ? model->selected_id == 0u :
+                control->_private_value < (int64_t)grid->icon_count &&
+                model->items[control->_private_value].id ==
+                    model->selected_id) &&
+               control->_private_minimum_value >= -1 &&
+               control->_private_maximum_value ==
+                   (int64_t)grid->icon_count - 1 &&
                control->_private_style == 0u &&
                (state & ~CONTROL_VALUE_STATES) == 0u &&
                control->_private_preview_state == 0u;
@@ -1751,6 +1812,83 @@ AstraResult astra_interface_tree_set_nodes(AstraUIContext *context,
     return result;
 }
 
+AstraResult astra_interface_icon_grid_init(AstraControl *control,
+    const AstraIconGridInfo *info)
+{
+    const AstraIconGridModel *grid;
+    int32_t selected;
+
+    if (control == NULL || info == NULL || info->size != sizeof(*info) ||
+        info->id == 0u || !icon_grid_model_valid(info->model, 1) ||
+        (info->state & ~CONTROL_VALUE_STATES) != 0u ||
+        !astra_words_zero(info->reserved, 4u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    grid = info->model;
+    selected = collection_index(grid->collection->items, grid->icon_count,
+                                grid->collection->selected_id);
+    if (grid->collection->selected_id != 0u && selected < 0)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *control = (AstraControl)ASTRA_CONTROL_INIT;
+    control->_private_control_kind = ASTRA_CONTROL_ICON_GRID;
+    control->_private_id = info->id;
+    control->_private_state = info->state;
+    control->_private_text = (const char *)(const void *)grid->collection;
+    control->_private_text_length = grid->icon_count;
+    control->_private_display_model = grid;
+    control->_private_value = selected;
+    control->_private_minimum_value = -1;
+    control->_private_maximum_value = (int64_t)grid->icon_count - 1;
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_icon_grid_set_items(AstraUIContext *context,
+    AstraControl *control, const AstraCollectionItem *items, uint32_t count,
+    const AstraSurface *const *icons)
+{
+    AstraIconGridModel *grid;
+    AstraIconGridModel before;
+    AstraCollectionModel collection_before;
+    AstraControl next;
+    AstraResult result;
+    int32_t selected;
+    uint32_t index = control_index(context, control);
+
+    if (index == CONTROL_NONE ||
+        control->_private_control_kind != ASTRA_CONTROL_ICON_GRID ||
+        !collection_items_valid(items, count))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    grid = icon_grid_model(control);
+    before = *grid;
+    collection_before = *grid->collection;
+    grid->collection->items = items;
+    grid->collection->item_count = count;
+    grid->icons = icons;
+    grid->icon_count = count;
+    if (!icon_grid_model_valid(grid, 0)) {
+        *grid = before;
+        *grid->collection = collection_before;
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
+    selected = collection_index(items, count, collection_before.selected_id);
+    grid->collection->selected_id = selected < 0 ? 0u : items[selected].id;
+    next = *control;
+    next._private_text_length = count;
+    next._private_value = selected;
+    next._private_maximum_value = (int64_t)count - 1;
+    result = replace_measured_control(context, control, &next);
+    if (result != ASTRA_OK) {
+        *grid = before;
+        *grid->collection = collection_before;
+        if (context->_private_has_layout != 0u)
+            (void)astra_interface_ui_layout(context, &context->_private_layout);
+    } else {
+        if (context->_private_hover == index) set_hover(context, CONTROL_NONE);
+        if (context->_private_capture == index) clear_capture(context);
+        if (context->_private_keyboard == index) clear_keyboard(context);
+    }
+    return result;
+}
+
 AstraResult astra_interface_field_init(AstraControl *control,
                                        const AstraFieldInfo *info)
 {
@@ -2356,6 +2494,23 @@ static AstraResult measure_control(const AstraControl *control,
         for (uint32_t at = 0u; at < table->column_count; ++at)
             width += table->columns[at].width;
         if (width > INT32_MAX) return ASTRA_ERROR_NO_RESOURCES;
+        size->width = (uint32_t)width;
+        size->height = (uint32_t)height;
+        return ASTRA_OK;
+    }
+    if (control->_private_control_kind == ASTRA_CONTROL_ICON_GRID) {
+        const AstraIconGridModel *grid = const_icon_grid_model(control);
+        uint32_t tile_width = grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+            ASTRA_ICON_TILE_CLIENT_WIDTH : ASTRA_ICON_TILE_DESKTOP_WIDTH;
+        uint32_t tile_height = grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+            ASTRA_ICON_TILE_CLIENT_HEIGHT : ASTRA_ICON_TILE_DESKTOP_HEIGHT;
+        uint32_t rows = grid->icon_count == 0u ? 1u :
+            1u + (grid->icon_count - 1u) / grid->columns;
+        uint64_t width = (uint64_t)grid->columns * tile_width;
+        uint64_t height = (uint64_t)rows * tile_height;
+
+        if (width > INT32_MAX || height > INT32_MAX)
+            return ASTRA_ERROR_NO_RESOURCES;
         size->width = (uint32_t)width;
         size->height = (uint32_t)height;
         return ASTRA_OK;
@@ -4228,6 +4383,28 @@ static void list_visible_range(const AstraControl *control,
         control->_private_text_length : (uint32_t)after;
 }
 
+static void icon_grid_visible_rows(const AstraControl *control,
+    uint32_t tile_height, uint32_t columns, uint32_t *first,
+    uint32_t *end)
+{
+    const AstraControlFrame *frame = &control->_private_frame;
+    const AstraControlFrame *clip = &control->_private_clip;
+    int64_t top = frame->y > clip->y ? frame->y : clip->y;
+    int64_t bottom = (int64_t)frame->y + frame->height;
+    int64_t clip_bottom = (int64_t)clip->y + clip->height;
+    uint32_t rows = control->_private_text_length == 0u ? 0u :
+        1u + (control->_private_text_length - 1u) / columns;
+
+    *first = *end = 0u;
+    if (bottom > clip_bottom) bottom = clip_bottom;
+    if (bottom <= top) return;
+    *first = (uint32_t)((top - frame->y) / tile_height);
+    *end = (uint32_t)((bottom - frame->y + tile_height - 1u) /
+                      tile_height);
+    if (*first > rows) *first = rows;
+    if (*end > rows) *end = rows;
+}
+
 static int render_requirements(const AstraUIContext *context,
                                uint64_t *commands, uint64_t *payload)
 {
@@ -4325,6 +4502,34 @@ static int render_requirements(const AstraUIContext *context,
                         *payload += (uint64_t)cell->text_length + id_length;
                 }
             }
+            continue;
+        }
+        if (control->_private_control_kind == ASTRA_CONTROL_ICON_GRID) {
+            const AstraIconGridModel *grid = const_icon_grid_model(control);
+            const AstraCollectionItem *items = grid->collection->items;
+            uint32_t tile_width = grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+                ASTRA_ICON_TILE_CLIENT_WIDTH : ASTRA_ICON_TILE_DESKTOP_WIDTH;
+            uint32_t tile_height = grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+                ASTRA_ICON_TILE_CLIENT_HEIGHT : ASTRA_ICON_TILE_DESKTOP_HEIGHT;
+            uint32_t first, end;
+
+            icon_grid_visible_rows(control, tile_height, grid->columns,
+                                   &first, &end);
+            *commands += 5u;
+            for (uint32_t row = first; row < end; ++row)
+                for (uint32_t col = 0u; col < grid->columns; ++col) {
+                    uint64_t item = (uint64_t)row * grid->columns + col;
+                    int64_t x = (int64_t)control->_private_frame.x +
+                                (uint64_t)col * tile_width;
+
+                    if (item >= grid->icon_count ||
+                        x >= (int64_t)control->_private_clip.x +
+                                 control->_private_clip.width ||
+                        x + tile_width <= control->_private_clip.x)
+                        continue;
+                    *commands += 3u;
+                    *payload += (uint64_t)items[item].text_length + id_length;
+                }
             continue;
         }
         if (control->_private_control_kind == ASTRA_CONTROL_SCROLLBAR) {
@@ -5785,6 +5990,57 @@ static void render_tree(const AstraTheme *theme,
     }
 }
 
+static AstraResult render_icon_grid(const AstraTheme *theme,
+    const AstraControl *control, AstraSurfaceView *surface)
+{
+    const AstraIconGridModel *grid = const_icon_grid_model(control);
+    const AstraCollectionItem *items = grid->collection->items;
+    uint32_t tile_width = grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+        ASTRA_ICON_TILE_CLIENT_WIDTH : ASTRA_ICON_TILE_DESKTOP_WIDTH;
+    uint32_t tile_height = grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+        ASTRA_ICON_TILE_CLIENT_HEIGHT : ASTRA_ICON_TILE_DESKTOP_HEIGHT;
+    uint32_t first, end;
+
+    icon_grid_visible_rows(control, tile_height, grid->columns, &first, &end);
+    render_collection_frame(theme, control, surface);
+    for (uint32_t row = first; row < end; ++row)
+        for (uint32_t col = 0u; col < grid->columns; ++col) {
+            uint64_t item = (uint64_t)row * grid->columns + col;
+            int64_t x = (int64_t)control->_private_frame.x +
+                        (uint64_t)col * tile_width;
+            int64_t y = (int64_t)control->_private_frame.y +
+                        (uint64_t)row * tile_height;
+            AstraIconTileInfo tile = ASTRA_ICON_TILE_INFO_INIT;
+            AstraResult result;
+
+            if (item >= grid->icon_count ||
+                x >= (int64_t)control->_private_clip.x +
+                         control->_private_clip.width ||
+                x + tile_width <= control->_private_clip.x)
+                continue;
+            if ((int64_t)item == control->_private_value ||
+                ((int64_t)item == control->_private_minimum_value &&
+                 (effective_state(control) & ASTRA_CONTROL_HOVERED) != 0u))
+                astra_surface_fill_round(surface, (int32_t)x + 2,
+                    (int32_t)y + 2, tile_width - 4u, tile_height - 4u,
+                    theme->control_radius,
+                    color((int64_t)item == control->_private_value ?
+                        theme->control_selected : theme->client));
+            tile.style = grid->tile_style;
+            tile.frame = (AstraRectI32){(int32_t)x, (int32_t)y,
+                                        tile_width, tile_height};
+            tile.clip = (AstraRectI32){control->_private_clip.x,
+                control->_private_clip.y, control->_private_clip.width,
+                control->_private_clip.height};
+            tile.icon = grid->icons[item];
+            tile.label = items[item].text;
+            tile.label_bytes = items[item].text_length;
+            result = astra_interface_icon_tile_render_view(surface, &tile);
+            if (result != ASTRA_OK) return result;
+        }
+    return ASTRA_OK;
+}
+
 static void render_table(const AstraTheme *theme,
                          const AstraControl *control,
                          AstraSurfaceView *surface)
@@ -6045,6 +6301,23 @@ static int32_t choice_index_at(const AstraControl *control, int32_t x,
 {
     if (control->_private_control_kind == ASTRA_CONTROL_POPUP)
         return control->_private_value;
+    if (control->_private_control_kind == ASTRA_CONTROL_ICON_GRID) {
+        const AstraIconGridModel *grid = const_icon_grid_model(control);
+        uint32_t tile_width = grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+            ASTRA_ICON_TILE_CLIENT_WIDTH : ASTRA_ICON_TILE_DESKTOP_WIDTH;
+        uint32_t tile_height = grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+            ASTRA_ICON_TILE_CLIENT_HEIGHT : ASTRA_ICON_TILE_DESKTOP_HEIGHT;
+        int64_t relative_x = (int64_t)x - control->_private_frame.x;
+        int64_t relative_y = (int64_t)y - control->_private_frame.y;
+        uint64_t col, row, item;
+
+        if (relative_x < 0 || relative_y < 0) return -1;
+        col = (uint64_t)relative_x / tile_width;
+        row = (uint64_t)relative_y / tile_height;
+        if (col >= grid->columns) return -1;
+        item = row * grid->columns + col;
+        return item < grid->icon_count ? (int32_t)item : -1;
+    }
     if (COLLECTION_KINDS(control->_private_control_kind)) {
         AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
         int64_t relative = (int64_t)y - control->_private_frame.y -
@@ -6161,6 +6434,18 @@ static AstraResult list_reveal_row(AstraUIContext *context, uint32_t index,
                                    uint32_t row)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    const AstraControl *control = &context->_private_controls[index];
+    if (control->_private_control_kind == ASTRA_CONTROL_ICON_GRID) {
+        const AstraIconGridModel *grid = const_icon_grid_model(control);
+        uint32_t tile_width = grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+            ASTRA_ICON_TILE_CLIENT_WIDTH : ASTRA_ICON_TILE_DESKTOP_WIDTH;
+        uint32_t tile_height = grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+            ASTRA_ICON_TILE_CLIENT_HEIGHT : ASTRA_ICON_TILE_DESKTOP_HEIGHT;
+        return control_reveal(context, index,
+            (row % grid->columns) * tile_width,
+            (row / grid->columns) * tile_height,
+            tile_width, tile_height);
+    }
     uint32_t header = context->_private_controls[index]._private_control_kind ==
         ASTRA_CONTROL_TABLE ? theme.control_height : 0u;
     return control_reveal(context, index, 0u,
@@ -6967,6 +7252,8 @@ static AstraResult render_one_control(const AstraUIContext *context,
         render_popup(theme, control, surface);
     else if (control->_private_control_kind == ASTRA_CONTROL_TREE)
         render_tree(theme, control, surface);
+    else if (control->_private_control_kind == ASTRA_CONTROL_ICON_GRID)
+        return render_icon_grid(theme, control, surface);
     else if (control->_private_control_kind == ASTRA_CONTROL_TABLE)
         render_table(theme, control, surface);
     else
@@ -7673,6 +7960,39 @@ static AstraResult key_event(AstraUIContext *context,
 
         if (control->_private_text_length == 0u)
             return ASTRA_OK;
+        if (control->_private_control_kind == ASTRA_CONTROL_ICON_GRID) {
+            const AstraIconGridModel *grid = const_icon_grid_model(control);
+            if (usage == 0x52u && value >= 0) {
+                value = value >= (int32_t)grid->columns ?
+                    value - (int32_t)grid->columns : value;
+            } else if (usage == 0x51u && value >= 0) {
+                int64_t below = (int64_t)value + grid->columns;
+                if (below <= control->_private_maximum_value)
+                    value = (int32_t)below;
+            } else if (usage == 0x50u && value > 0) {
+                --value;
+            } else if (usage == 0x4fu &&
+                       value < control->_private_maximum_value) {
+                ++value;
+            } else if (usage == 0x4au) {
+                value = 0;
+            } else if (usage == 0x4du) {
+                value = (int32_t)control->_private_maximum_value;
+            } else if (value < 0 &&
+                       (usage == 0x50u || usage == 0x4fu ||
+                        usage == 0x52u || usage == 0x51u)) {
+                value = 0;
+            } else {
+                value = -1;
+            }
+            if (value >= 0) {
+                AstraResult result = list_reveal_row(context,
+                    context->_private_focus, (uint32_t)value);
+                if (result != ASTRA_OK) return result;
+                choice_action(context, context->_private_focus, value, action);
+            }
+            return ASTRA_OK;
+        }
         if (usage == 0x52u || usage == 0x51u) {
             if (value < 0)
                 value = 0;

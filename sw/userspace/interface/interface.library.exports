@@ -46,6 +46,8 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_tree_init;
         astra_interface_tree_set_expanded;
         astra_interface_tree_set_nodes;
+        astra_interface_icon_grid_init;
+        astra_interface_icon_grid_set_items;
         astra_interface_progress_init;
         astra_interface_progress_set;
         astra_interface_level_meter_init;
@@ -85,6 +87,7 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_menu_row_frame;
         astra_interface_icon_tile_hit;
         astra_interface_icon_tile_render;
+        astra_interface_icon_tile_render_view;
         astra_interface_inline_edit_event;
         astra_interface_inline_edit_render;
         astra_interface_inline_edit_start;

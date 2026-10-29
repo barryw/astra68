@@ -1,9 +1,52 @@
 #include <astra/icon_tile.h>
+
+int astra_surface_draw_blit(AstraSurfaceView *view,
+    const AstraSurface *source, const AstraRectI32 *source_rect,
+    const AstraRectI32 *destination_rect, const AstraBlitOptions *options)
+{
+    (void)view;
+    (void)source;
+    (void)source_rect;
+    (void)destination_rect;
+    (void)options;
+    return 1;
+}
 #include <astra/inline_edit.h>
 #include <astra/surface.h>
 
 #include <assert.h>
 #include <string.h>
+
+int astra_surface_clip(AstraSurfaceView *surface, int32_t x, int32_t y,
+    uint32_t width, uint32_t height)
+{
+    (void)surface;
+    (void)x;
+    (void)y;
+    (void)width;
+    (void)height;
+    return 1;
+}
+
+uint16_t astra_surface_rgb565(uint8_t red, uint8_t green, uint8_t blue)
+{
+    (void)red;
+    (void)green;
+    (void)blue;
+    return 0u;
+}
+
+void astra_surface_ui_text(AstraSurfaceView *surface, int32_t x, int32_t y,
+    const char *text, uint32_t bytes, uint16_t height, uint16_t color)
+{
+    (void)surface;
+    (void)x;
+    (void)y;
+    (void)text;
+    (void)bytes;
+    (void)height;
+    (void)color;
+}
 
 static AstraRectI32 clip_seen, source_seen, destination_seen;
 static AstraPointI32 text_seen;

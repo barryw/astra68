@@ -564,6 +564,18 @@ the adjacent page index. The helper updates the label and button availability;
 the collection's selected item ID remains unchanged. Empty collections expose
 one empty page.
 
+Icon Grid in Interface Kit 9.0 uses `AstraIconGridModel`: give it the same C1
+collection used by List and an equal-length array of borrowed 64x64 icon
+surfaces (NULL entries draw labels alone). `astra_interface_icon_grid_init`
+creates a retained tile grid with fixed columns. Place it in ScrollView for
+overflow and call `astra_interface_icon_grid_set_items` to replace items and
+icons together. The control uses C1 stable IDs for selection and supports
+pointer hit testing and two-dimensional keyboard navigation. Its icon tiles
+emit hardware BLITs. When appending the rendered draw-list view, pass those
+icon surfaces to `astra_draw_list_append_view_with_sources`; the plain append
+call accepts views that reference only their own destination. The existing
+fixed-cell `ASTRA_CONTROL_GRID_VIEW` is a separate read-only text control.
+
 {c:type}`AstraTextSurface` owns presentation policy and caller-provided scratch
 storage, not the document. Grid cells, selection, and scrollback remain in the
 application. Grid selections are normalized half-open ranges. The extraction

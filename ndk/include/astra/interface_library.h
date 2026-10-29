@@ -350,6 +350,15 @@ AstraResult astra_interface_tree_set_nodes(AstraUIContext *context,
     AstraControl *control, const AstraCollectionItem *items, uint32_t count,
     AstraTreeNode *nodes, uint32_t *visible_rows,
     uint32_t visible_capacity);
+/** Initialize a retained icon Grid over C1 selection and parallel borrowed
+ * 64x64 icon surfaces. Compose with ScrollView for overflow. */
+AstraResult astra_interface_icon_grid_init(AstraControl *control,
+    const AstraIconGridInfo *info);
+/** Replace icon Grid items and icons together, preserving selected stable ID.
+ * A failed validation or layout leaves the previous presentation intact. */
+AstraResult astra_interface_icon_grid_set_items(AstraUIContext *context,
+    AstraControl *control, const AstraCollectionItem *items, uint32_t count,
+    const AstraSurface *const *icons);
 /** Initialize a single-line UTF-8 field.
  * @param control Caller-owned control to initialize.
  * @param info Field description; its text model remains caller-owned.

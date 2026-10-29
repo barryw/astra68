@@ -122,3 +122,81 @@ AstraResult astra_interface_icon_tile_render(AstraDrawList *list,
         info->style == ASTRA_ICON_TILE_DESKTOP ?
             theme.text_primary : theme.client_text);
 }
+
+AstraResult astra_interface_icon_tile_render_view(AstraSurfaceView *view,
+    const AstraIconTileInfo *info)
+{
+    IconTileMetrics style;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraBlitOptions blend = ASTRA_BLIT_OPTIONS_INIT;
+    AstraSurfaceView clipped;
+    int64_t icon_x, icon_y, label_y, editor_x, editor_y;
+    uint32_t limit, length, width;
+    int64_t label_x;
+
+    if (view == NULL || view->kind != ASTRA_SURFACE_VIEW_DRAW_LIST ||
+        !metrics(info, &style))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    clipped = *view;
+    if (!astra_surface_clip(&clipped, info->clip.x, info->clip.y,
+                            info->clip.width, info->clip.height))
+        return ASTRA_OK;
+    icon_x = (int64_t)info->frame.x +
+        (info->frame.width - style.icon_size) / 2u;
+    icon_y = (int64_t)info->frame.y + style.icon_top;
+    label_y = (int64_t)info->frame.y + style.label_y;
+    editor_x = (int64_t)info->frame.x +
+        ((int64_t)info->frame.width - ASTRA_INLINE_EDIT_WIDTH) / 2;
+    editor_y = (int64_t)info->frame.y + style.editor_y;
+    if (icon_x < INT32_MIN || icon_x > INT32_MAX ||
+        icon_y < INT32_MIN || icon_y > INT32_MAX ||
+        label_y < INT32_MIN || label_y > INT32_MAX ||
+        editor_x < INT32_MIN || editor_x > INT32_MAX ||
+        editor_y < INT32_MIN || editor_y > INT32_MAX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    blend.blend = ASTRA_BLEND_ALPHA;
+    if (info->icon != NULL &&
+        info->icon->_private_handle != ASTRA_INVALID_HANDLE &&
+        !astra_surface_draw_blit(&clipped, info->icon,
+            &(AstraRectI32){0, 0, ASTRA_ICON_TILE_SOURCE_SIZE,
+                ASTRA_ICON_TILE_SOURCE_SIZE},
+            &(AstraRectI32){(int32_t)icon_x, (int32_t)icon_y,
+                style.icon_size, style.icon_size}, &blend))
+        return ASTRA_ERROR_NO_RESOURCES;
+    if (info->size >= sizeof(*info) && info->badge != NULL &&
+        info->badge->_private_handle != ASTRA_INVALID_HANDLE) {
+        uint32_t badge_size = style.icon_size / 2u;
+        if (!astra_surface_draw_blit(&clipped, info->badge,
+            &(AstraRectI32){0, 0, ASTRA_ICON_TILE_SOURCE_SIZE,
+                ASTRA_ICON_TILE_SOURCE_SIZE},
+            &(AstraRectI32){(int32_t)(icon_x + style.icon_size - badge_size),
+                (int32_t)(icon_y + style.icon_size - badge_size),
+                badge_size, badge_size}, &blend))
+            return ASTRA_ERROR_NO_RESOURCES;
+    }
+    if (info->editor != NULL) {
+        if (!astra_surface_draw_blit(&clipped, info->editor,
+            &(AstraRectI32){0, 0, ASTRA_INLINE_EDIT_WIDTH,
+                ASTRA_INLINE_EDIT_HEIGHT},
+            &(AstraRectI32){(int32_t)editor_x, (int32_t)editor_y,
+                ASTRA_INLINE_EDIT_WIDTH, ASTRA_INLINE_EDIT_HEIGHT}, &blend))
+            return ASTRA_ERROR_NO_RESOURCES;
+        return ASTRA_OK;
+    }
+    if (info->label_bytes == 0u) return ASTRA_OK;
+    limit = info->frame.width - style.label_inset;
+    length = astra_surface_ui_text_fit(info->label, info->label_bytes,
+        theme.title_font_height, limit);
+    if (length == 0u) return ASTRA_OK;
+    width = astra_surface_ui_text_width(info->label, length,
+        theme.title_font_height);
+    label_x = (int64_t)info->frame.x +
+        ((int64_t)info->frame.width - width) / 2;
+    if (label_x < INT32_MIN || label_x > INT32_MAX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    astra_surface_ui_text(&clipped, (int32_t)label_x, (int32_t)label_y,
+        info->label, length, theme.title_font_height,
+        astra_surface_rgb565(theme.client_text.red, theme.client_text.green,
+                             theme.client_text.blue));
+    return ASTRA_OK;
+}

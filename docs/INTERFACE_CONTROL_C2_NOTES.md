@@ -1,7 +1,6 @@
 # C2 collection view notes
 
-Status: Columns, Table, Tree, and Pagination implemented over C1; icon Grid
-remains open.
+Status: Columns, Table, Tree, icon Grid, and Pagination implemented over C1.
 
 ## Haiku read-only review
 
@@ -74,13 +73,26 @@ item ID. The label uses alternating caller-owned buffers so a length-changing
 update leaves the old text valid while layout runs. Beast host and MC68040
 library gates cover the composition and range behavior.
 
+## Icon Grid contract
+
+`AstraIconGridModel` borrows one C1 collection and an equal-length parallel
+array of optional 64x64 icon surfaces. Fixed column count and existing
+`AstraIconTileInfo` client/desktop metrics determine tile geometry. Pointer
+hit testing maps both axes to item indices; keyboard left/right moves one
+item, up/down moves one row, and Home/End jumps to the ends. The C1 selected
+ID remains the only selection store; `astra_interface_icon_grid_set_items`
+replaces items and icons together with ID preservation and layout rollback.
+The painter clips tile rows and columns to the viewport and reuses the shared
+IconTile rendering path. Icon surfaces become hardware BLIT commands in the
+retained view through `astra_surface_draw_blit`. Applications append a view
+containing icons with `astra_draw_list_append_view_with_sources`, passing the
+same borrowed surfaces as the approved source array. The plain append call
+intentionally rejects them. Graphics/System bridge details and handle checks
+are documented in `ndk/docs/source/graphics.md`.
+
 ## Remaining contracts
 
 - Table sorting remains an application command: callers reorder C1 items and
   matching cells in one `astra_interface_table_set_rows` call. Resizable
   columns, column-specific alignment, and secondary sort indicators remain
   design gaps.
-- Icon Grid needs `AstraIconTileInfo` in the retained control pipeline with
-  selected-item hit testing and two-dimensional keyboard navigation. Current
-  `ASTRA_CONTROL_GRID_VIEW` is a fixed-cell text surface and must remain
-  distinct.

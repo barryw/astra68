@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 #include <astra/surface.h>
+#include <astra/icon_tile.h>
 #include <astra/scroll.h>
 #include <astra/text_model.h>
 #include <astra/text_surface.h>
@@ -59,7 +60,9 @@ enum {
     /** Hierarchical rows with C1 stable item selection. */
     ASTRA_CONTROL_TREE = 25u,
     /** Activatable swatch bound to literal, theme, or palette color. */
-    ASTRA_CONTROL_COLOUR_WELL = 26u
+    ASTRA_CONTROL_COLOUR_WELL = 26u,
+    /** Selectable two-dimensional icon tiles over C1 identity. */
+    ASTRA_CONTROL_ICON_GRID = 27u
 };
 
 /** Semantic state owned by an application. */
@@ -834,6 +837,33 @@ typedef struct AstraTreeInfo {
 /** Empty Tree control creation data. */
 #define ASTRA_TREE_INFO_INIT { \
     sizeof(AstraTreeInfo), 0, 0, 0, {0, 0, 0, 0} \
+}
+
+/** Caller-owned icon presentation parallel to C1 collection items. */
+typedef struct AstraIconGridModel {
+    uint32_t size; /**< Structure size. */
+    AstraCollectionModel *collection; /**< Borrowed C1 identity/selection. */
+    const AstraSurface *const *icons; /**< Borrowed per-item icon surfaces; NULL entries allowed. */
+    uint32_t icon_count; /**< Equals collection item count. */
+    uint32_t columns; /**< Fixed tile columns, at least one. */
+    uint32_t tile_style; /**< ASTRA_ICON_TILE_CLIENT or DESKTOP. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraIconGridModel;
+
+#define ASTRA_ICON_GRID_MODEL_INIT { \
+    sizeof(AstraIconGridModel), 0, 0, 0, 0, ASTRA_ICON_TILE_CLIENT, {0, 0} \
+}
+
+typedef struct AstraIconGridInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t id; /**< Nonzero control ID. */
+    AstraIconGridModel *model; /**< Borrowed presentation and C1 model. */
+    uint32_t state; /**< Disabled, error, collapsed, or zero. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraIconGridInfo;
+
+#define ASTRA_ICON_GRID_INFO_INIT { \
+    sizeof(AstraIconGridInfo), 0, 0, 0, {0, 0, 0, 0} \
 }
 
 enum {

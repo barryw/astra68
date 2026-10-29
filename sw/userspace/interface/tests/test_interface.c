@@ -35,6 +35,17 @@ static int32_t fill_y[32];
 static uint32_t fill_width[32];
 static uint32_t fill_height[32];
 static _Alignas(4) uint16_t render_pixels[320u * 200u];
+static uint32_t icon_blit_calls;
+
+int astra_surface_draw_blit(AstraSurfaceView *view,
+    const AstraSurface *source, const AstraRectI32 *source_rect,
+    const AstraRectI32 *destination_rect, const AstraBlitOptions *options)
+{
+    assert(view != NULL && source != NULL && source_rect != NULL &&
+           destination_rect != NULL && options != NULL);
+    ++icon_blit_calls;
+    return 1;
+}
 
 static void test_toolbar_composition(void)
 {
@@ -2047,6 +2058,77 @@ static void test_pagination_control(void)
     assert(astra_interface_pagination_set_page(&context, controls, &model, 0u) == ASTRA_OK);
     assert(astra_interface_pagination_range(&model, &first, &end, &pages) == ASTRA_OK);
     assert(first == 0u && end == 0u && pages == 1u);
+}
+
+static void test_icon_grid_control(void)
+{
+    static const AstraCollectionItem items[] = {
+        {1u, "One", 3u, {0u, 0u}},
+        {2u, "Two", 3u, {0u, 0u}},
+        {3u, "Three", 5u, {0u, 0u}},
+        {4u, "Four", 4u, {0u, 0u}},
+        {5u, "Five", 4u, {0u, 0u}}
+    };
+    static const AstraCollectionItem reordered[] = {
+        {5u, "Five", 4u, {0u, 0u}},
+        {4u, "Four", 4u, {0u, 0u}},
+        {3u, "Three", 5u, {0u, 0u}},
+        {2u, "Two", 3u, {0u, 0u}},
+        {1u, "One", 3u, {0u, 0u}}
+    };
+    AstraSurface icon = ASTRA_SURFACE_INIT;
+    AstraSurface bad_icon = ASTRA_SURFACE_INIT;
+    const AstraSurface *icons[5] = {&icon, NULL, NULL, NULL, NULL};
+    const AstraSurface *bad_icons[5] = {&bad_icon, NULL, NULL, NULL, NULL};
+    AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    AstraIconGridModel grid = ASTRA_ICON_GRID_MODEL_INIT;
+    AstraIconGridInfo info = ASTRA_ICON_GRID_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraControlSize size = {0};
+    AstraSurfaceView surface = render_view(320u, 200u);
+    AstraWindowEvent event;
+
+    icon._private_handle = 42u;
+    icon._private_window = 1u;
+    icon._private_id = 7u;
+    icon._private_width = icon._private_height = 64u;
+    bad_icon = icon;
+    bad_icon._private_width = 32u;
+    assert(astra_interface_collection_init(&collection, items, 5u, 0u) == ASTRA_OK);
+    grid.collection = &collection;
+    grid.icons = icons;
+    grid.icon_count = 5u;
+    grid.columns = 2u;
+    info.id = 93u;
+    info.model = &grid;
+    assert(astra_interface_icon_grid_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 320u, 200u) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &control, &size) == ASTRA_OK);
+    assert(size.width == 208u && size.height == 264u);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    icon_blit_calls = 0u;
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(icon_blit_calls == 1u);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 110,
+        control._private_frame.y + 10);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+           action.value == 1 && collection.selected_id == 2u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x51u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(collection.selected_id == 4u && control._private_value == 3);
+    assert(astra_interface_icon_grid_set_items(&context, &control,
+        reordered, 5u, icons) == ASTRA_OK);
+    assert(collection.selected_id == 4u && control._private_value == 1);
+    assert(astra_interface_icon_grid_set_items(&context, &control,
+        items, 5u, bad_icons) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(collection.items == reordered && grid.icons == icons);
 }
 
 static void test_scrolled_list_control(void)
@@ -4248,6 +4330,7 @@ int main(void)
     test_table_control();
     test_tree_control();
     test_pagination_control();
+    test_icon_grid_control();
     test_scrolled_list_control();
     test_tab_control_and_collapsed_pages();
     test_stepper_control();
