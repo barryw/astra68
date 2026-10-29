@@ -1265,8 +1265,8 @@ static uint32_t build_controls(void)
         status = add_page(GALLERY_SPLIT_LEFT - 1u, GALLERY_SPLIT_LEFT, 0u);
     if (status == ASTRA_STATUS_OK)
         status = add_label(GALLERY_SPLIT_LEFT_LABEL - 1u,
-                           GALLERY_SPLIT_LEFT_LABEL, "NAVIGATION PANE",
-                           sizeof("NAVIGATION PANE") - 1u,
+                           GALLERY_SPLIT_LEFT_LABEL, "CUSTOM VIEW",
+                           sizeof("CUSTOM VIEW") - 1u,
                            ASTRA_TEXT_CLIENT_SECONDARY);
     if (status == ASTRA_STATUS_OK)
         status = add_splitter(GALLERY_SPLITTER - 1u, GALLERY_SPLITTER);
@@ -1274,8 +1274,8 @@ static uint32_t build_controls(void)
         status = add_page(GALLERY_SPLIT_RIGHT - 1u, GALLERY_SPLIT_RIGHT, 0u);
     if (status == ASTRA_STATUS_OK)
         status = add_label(GALLERY_SPLIT_RIGHT_LABEL - 1u,
-                           GALLERY_SPLIT_RIGHT_LABEL, "CONTENT PANE",
-                           sizeof("CONTENT PANE") - 1u,
+                           GALLERY_SPLIT_RIGHT_LABEL, "IMAGE VIEW / FIT",
+                           sizeof("IMAGE VIEW / FIT") - 1u,
                            ASTRA_TEXT_CLIENT_SECONDARY);
     if (status == ASTRA_STATUS_OK)
         status = add_disclosure(
