@@ -718,6 +718,36 @@ typedef struct AstraColumnsInfo {
     sizeof(AstraColumnsInfo), 0, 0, 0, 0, 0, {0, 0, 0} \
 }
 
+/** Caller-owned page state over the canonical C1 item collection. */
+typedef struct AstraPaginationModel {
+    uint32_t size; /**< Structure size. */
+    AstraCollectionModel *collection; /**< Borrowed C1 collection. */
+    uint32_t page_size; /**< Items per page, at least one. */
+    uint32_t page_index; /**< Zero-based current page. */
+    char label[2][24]; /**< Alternating library-owned Label text buffers. */
+    uint32_t label_length; /**< Counted label bytes. */
+    uint32_t active_label; /**< Buffer currently borrowed by the Label. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraPaginationModel;
+
+#define ASTRA_PAGINATION_MODEL_INIT { \
+    sizeof(AstraPaginationModel), 0, 0, 0, {{0}, {0}}, 0, 0, {0, 0} \
+}
+
+/** Pagination composes Container, Previous Button, Label, Next Button in
+ * slots 0..3 with IDs first_id..first_id+3. */
+typedef struct AstraPaginationInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t first_id; /**< Nonzero base ID. */
+    AstraPaginationModel *model; /**< Caller-owned page model. */
+    uint32_t state; /**< COLLAPSED or zero. */
+    uint32_t reserved[3]; /**< Must be zero. */
+} AstraPaginationInfo;
+
+#define ASTRA_PAGINATION_INFO_INIT { \
+    sizeof(AstraPaginationInfo), 0, 0, 0, {0, 0, 0} \
+}
+
 /** One fixed-width table column. Column zero displays CollectionItem.text;
  * subsequent columns use row-major AstraTableCell entries. */
 typedef struct AstraTableColumn {

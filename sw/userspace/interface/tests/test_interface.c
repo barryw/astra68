@@ -1999,6 +1999,56 @@ static void test_tree_control(void)
     assert(tree.visible_count == 2u && collection.selected_id == 11u);
 }
 
+static void test_pagination_control(void)
+{
+    static const AstraCollectionItem items[] = {
+        {1u, "One", 3u, {0u, 0u}},
+        {2u, "Two", 3u, {0u, 0u}},
+        {3u, "Three", 5u, {0u, 0u}},
+        {4u, "Four", 4u, {0u, 0u}},
+        {5u, "Five", 4u, {0u, 0u}}
+    };
+    AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    AstraPaginationModel model = ASTRA_PAGINATION_MODEL_INIT;
+    AstraPaginationInfo info = ASTRA_PAGINATION_INFO_INIT;
+    AstraControl controls[4] = {
+        ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT,
+        ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT
+    };
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    uint32_t first, end, pages;
+
+    assert(astra_interface_collection_init(&collection, items, 5u, 3u) == ASTRA_OK);
+    model.collection = &collection;
+    model.page_size = 2u;
+    info.first_id = 300u;
+    info.model = &model;
+    assert(astra_interface_pagination_init(controls, &info) == ASTRA_OK);
+    assert(astra_interface_pagination_range(&model, &first, &end, &pages) == ASTRA_OK);
+    assert(first == 0u && end == 2u && pages == 3u);
+    assert(controls[1]._private_id == 301u &&
+           controls[2]._private_id == 302u &&
+           controls[3]._private_id == 303u);
+    assert(astra_interface_ui_init(&context, controls, 4u, 400u, 100u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_pagination_set_page(&context, controls, &model, 2u) == ASTRA_OK);
+    assert(astra_interface_pagination_range(&model, &first, &end, &pages) == ASTRA_OK);
+    assert(first == 4u && end == 5u && pages == 3u);
+    assert(model.label_length == 5u &&
+           memcmp(model.label[model.active_label], "3 / 3", 5u) == 0);
+    assert((controls[3]._private_state & ASTRA_CONTROL_DISABLED) != 0u);
+    assert(collection.selected_id == 3u);
+    assert(astra_interface_pagination_set_page(&context, controls, &model, 3u) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(model.page_index == 2u);
+    collection.item_count = 0u;
+    collection.selected_id = 0u;
+    assert(astra_interface_pagination_set_page(&context, controls, &model, 0u) == ASTRA_OK);
+    assert(astra_interface_pagination_range(&model, &first, &end, &pages) == ASTRA_OK);
+    assert(first == 0u && end == 0u && pages == 1u);
+}
+
 static void test_scrolled_list_control(void)
 {
     static const char family[] = "A deliberately wide installed font family name";
@@ -4197,6 +4247,7 @@ int main(void)
     test_split_button();
     test_table_control();
     test_tree_control();
+    test_pagination_control();
     test_scrolled_list_control();
     test_tab_control_and_collapsed_pages();
     test_stepper_control();

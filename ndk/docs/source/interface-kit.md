@@ -517,6 +517,15 @@ ancestor. Control values and activation actions name visible row indices;
 `ASTRA_UI_ACTION_EXPANSION_CHANGED` names the full collection item index.
 Tree uses the same focus, selection, clipping, and ScrollView behavior as List.
 
+Pagination in Interface Kit 9.0 composes four controls through
+`astra_interface_pagination_init`: Container, Previous Button, Label, and Next
+Button. Give `AstraPaginationModel` a C1 collection and a nonzero page size.
+Use `astra_interface_pagination_range` for the current half-open item range.
+When either button activates, call `astra_interface_pagination_set_page` with
+the adjacent page index. The helper updates the label and button availability;
+the collection's selected item ID remains unchanged. Empty collections expose
+one empty page.
+
 {c:type}`AstraTextSurface` owns presentation policy and caller-provided scratch
 storage, not the document. Grid cells, selection, and scrollback remain in the
 application. Grid selections are normalized half-open ranges. The extraction

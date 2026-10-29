@@ -277,6 +277,23 @@ AstraResult astra_interface_split_button_init(AstraControl *primary,
  */
 AstraResult astra_interface_columns_init(AstraControl *controls,
     const AstraColumnsInfo *info);
+/** Compose Previous/Label/Next controls over one C1 collection page state.
+ * Supply four caller-owned control slots. Button activation IDs are
+ * first_id+1 and first_id+3; call set_page in response.
+ */
+AstraResult astra_interface_pagination_init(AstraControl *controls,
+    const AstraPaginationInfo *info);
+/** Return the current half-open range and total page count. Empty collections
+ * have one empty page. The range is recalculated from the C1 item count.
+ */
+AstraResult astra_interface_pagination_range(
+    const AstraPaginationModel *model, uint32_t *first, uint32_t *end,
+    uint32_t *page_count);
+/** Change the current page and update the composed Label and Button states.
+ * The model and controls remain unchanged if layout rejects the label update.
+ */
+AstraResult astra_interface_pagination_set_page(AstraUIContext *context,
+    AstraControl *controls, AstraPaginationModel *model, uint32_t page_index);
 /** Initialize a retained Table over C1 item IDs and caller-owned columns.
  * Column zero uses each CollectionItem label. The remaining cells are
  * row-major. Compose with ScrollView for large tables.
