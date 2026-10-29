@@ -19,6 +19,19 @@ Evidence: `/mnt/Documents/astra68/quake-bundle-20261028/` on Beast.
 Shareware contains no licensed CD music; optional user music stays under
 `STORE:id1/music/`. Built images with extracted shareware PAK are for local
 testing until distribution terms are reviewed.
+Clean DE25 release `072a2352ee14a0398170fb0a1fa3b7685c823891cfc74447d1ff601a9d4f4325`
+is selected. Its manifest verified before deployment and again installed on
+DE25. From that selected image, Atlas showed the copper Q icon in Applications,
+double-click launched Quake, and a live demo rendered. Kernel identity
+`cbb18f706daf0daeb4c74260a321a2cb9d63c3d758eb655b21bba77c7f4bbdb6`
+was confirmed; Astra, audio, and remote desktop services are active with zero
+restarts, no boot panic, and 8.2 GiB free. Selected-release RFB captures are
+under `/mnt/Documents/astra68/quake-bundle-20261028/selected/` on Beast.
+The full host Terminal gate currently misses the desktop `/apps` icon with
+both this package and the earlier boot-splash package. Both host boots reach
+stage 8 and desktop readiness; media and remote-desktop guest services fail
+with `PEER_DEAD` in the host fixture and retry. This gate remains open for
+fixture diagnosis; the selected DE25 UI and gameplay gates passed.
 
 Application data checkpoint, 2026-10-28: supervisor now grants application
 `STORE:` from `HOME:/Application Data/<stable bundle id>/`; SDL preference
