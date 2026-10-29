@@ -125,6 +125,41 @@ static const AstraChoiceItem *choice_items(const AstraControl *control)
     return (const AstraChoiceItem *)(const void *)control->_private_text;
 }
 
+static AstraCollectionModel *collection_model(AstraControl *control)
+{
+    return (AstraCollectionModel *)(void *)control->_private_text;
+}
+
+static const AstraCollectionModel *const_collection_model(
+    const AstraControl *control)
+{
+    return (const AstraCollectionModel *)(const void *)control->_private_text;
+}
+
+static int collection_items_valid(const AstraCollectionItem *items,
+                                  uint32_t count)
+{
+    if (count > INT32_MAX || (count != 0u && items == NULL)) return 0;
+    for (uint32_t at = 0u; at < count; ++at) {
+        if (items[at].id == 0u || items[at].text_length == 0u ||
+            !astra_utf8_validate(items[at].text, items[at].text_length, 0u) ||
+            !astra_words_zero(items[at].reserved, 2u))
+            return 0;
+        for (uint32_t other = 0u; other < at; ++other)
+            if (items[other].id == items[at].id) return 0;
+    }
+    return 1;
+}
+
+static int32_t collection_index(const AstraCollectionItem *items,
+                                uint32_t count, uint64_t id)
+{
+    if (id == 0u) return -1;
+    for (uint32_t at = 0u; at < count; ++at)
+        if (items[at].id == id) return (int32_t)at;
+    return -1;
+}
+
 static AstraScrollModel *scroll_model(AstraControl *control)
 {
     return (AstraScrollModel *)(void *)control->_private_text;
@@ -370,8 +405,21 @@ static int control_valid(const AstraControl *control)
                control->_private_value <= control->_private_maximum_value &&
                control->_private_value_step == 0;
     if (control->_private_control_kind == ASTRA_CONTROL_LIST)
-        return (control->_private_text_length == 0u ||
-                control->_private_text != NULL) &&
+        return control->_private_text != NULL &&
+               const_collection_model(control)->size ==
+                   sizeof(AstraCollectionModel) &&
+               const_collection_model(control)->item_count ==
+                   control->_private_text_length &&
+               (control->_private_text_length == 0u ||
+                const_collection_model(control)->items != NULL) &&
+               control->_private_value >= -1 &&
+               control->_private_value <
+                   (int64_t)control->_private_text_length &&
+               (control->_private_value < 0 ?
+                const_collection_model(control)->selected_id == 0u :
+                const_collection_model(control)->items[
+                    control->_private_value].id ==
+                    const_collection_model(control)->selected_id) &&
                control->_private_style == 0u &&
                (state & ~CONTROL_VALUE_STATES) == 0u &&
                control->_private_preview_state == 0u &&
@@ -1139,11 +1187,11 @@ static AstraResult choice_init(AstraControl *control,
     if (control == NULL || info == NULL || info->size < sizeof(*info) ||
         info->id == 0u ||
         (info->item_count != 0u && info->items == NULL) ||
-        (kind != ASTRA_CONTROL_LIST && info->item_count == 0u) ||
+        info->item_count == 0u ||
         info->item_count > (uint32_t)INT32_MAX ||
         (info->selected != UINT32_MAX &&
          info->selected >= info->item_count) ||
-        (kind != ASTRA_CONTROL_LIST && info->selected == UINT32_MAX) ||
+        info->selected == UINT32_MAX ||
         (info->state & ~CONTROL_VALUE_STATES) != 0u ||
         !astra_words_zero(info->reserved, 4u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -1161,9 +1209,8 @@ static AstraResult choice_init(AstraControl *control,
     control->_private_state = info->state;
     control->_private_text = (const char *)(const void *)info->items;
     control->_private_text_length = info->item_count;
-    control->_private_value = info->selected == UINT32_MAX ?
-                              -1 : (int32_t)info->selected;
-    control->_private_minimum_value = -1;
+    control->_private_value = (int32_t)info->selected;
+    control->_private_minimum_value = 0;
     control->_private_maximum_value = (int32_t)info->item_count - 1;
     return ASTRA_OK;
 }
@@ -1180,10 +1227,86 @@ AstraResult astra_interface_tab_init(AstraControl *control,
     return choice_init(control, info, ASTRA_CONTROL_TAB);
 }
 
-AstraResult astra_interface_list_init(AstraControl *control,
-                                      const AstraChoiceInfo *info)
+/** Initialize stable collection identity and single selection. */
+AstraResult astra_interface_collection_init(AstraCollectionModel *model,
+    const AstraCollectionItem *items, uint32_t count, uint64_t selected_id)
 {
-    return choice_init(control, info, ASTRA_CONTROL_LIST);
+    if (model == NULL || !collection_items_valid(items, count) ||
+        (selected_id != 0u &&
+         collection_index(items, count, selected_id) < 0))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *model = (AstraCollectionModel)ASTRA_COLLECTION_MODEL_INIT;
+    model->items = items;
+    model->item_count = count;
+    model->selected_id = selected_id;
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_list_init(AstraControl *control,
+                                      const AstraListInfo *info)
+{
+    int32_t selected;
+
+    if (control == NULL || info == NULL || info->size != sizeof(*info) ||
+        info->id == 0u || info->model == NULL ||
+        info->model->size != sizeof(AstraCollectionModel) ||
+        !astra_words_zero(info->model->reserved, 2u) ||
+        !collection_items_valid(info->model->items, info->model->item_count) ||
+        (info->state & ~CONTROL_VALUE_STATES) != 0u ||
+        !astra_words_zero(info->reserved, 4u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    selected = collection_index(info->model->items, info->model->item_count,
+                                info->model->selected_id);
+    if (info->model->selected_id != 0u && selected < 0)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *control = (AstraControl)ASTRA_CONTROL_INIT;
+    control->_private_control_kind = ASTRA_CONTROL_LIST;
+    control->_private_id = info->id;
+    control->_private_state = info->state;
+    control->_private_text = (const char *)(void *)info->model;
+    control->_private_text_length = info->model->item_count;
+    control->_private_value = selected;
+    control->_private_minimum_value = -1;
+    control->_private_maximum_value = (int64_t)info->model->item_count - 1;
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_list_set_items(AstraUIContext *context,
+    AstraControl *control, const AstraCollectionItem *items, uint32_t count)
+{
+    AstraCollectionModel before;
+    AstraCollectionModel *model;
+    AstraControl next;
+    AstraResult result;
+    int32_t selected;
+    uint32_t index = control_index(context, control);
+
+    if (index == CONTROL_NONE ||
+        control->_private_control_kind != ASTRA_CONTROL_LIST ||
+        !collection_items_valid(items, count))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    model = collection_model(control);
+    before = *model;
+    selected = collection_index(items, count, model->selected_id);
+    next = *control;
+    next._private_text_length = count;
+    next._private_value = selected;
+    next._private_minimum_value = -1;
+    next._private_maximum_value = (int64_t)count - 1;
+    model->items = items;
+    model->item_count = count;
+    model->selected_id = selected < 0 ? 0u : items[selected].id;
+    result = replace_measured_control(context, control, &next);
+    if (result != ASTRA_OK) {
+        *model = before;
+        if (context->_private_has_layout != 0u)
+            (void)astra_interface_ui_layout(context, &context->_private_layout);
+    } else {
+        if (context->_private_hover == index) set_hover(context, CONTROL_NONE);
+        if (context->_private_capture == index) clear_capture(context);
+        if (context->_private_keyboard == index) clear_keyboard(context);
+    }
+    return result;
 }
 
 AstraResult astra_interface_field_init(AstraControl *control,
@@ -1697,7 +1820,8 @@ static AstraResult measure_control(const AstraControl *control,
         return ASTRA_OK;
     }
     if (control->_private_control_kind == ASTRA_CONTROL_LIST) {
-        const AstraChoiceItem *items = choice_items(control);
+        const AstraCollectionItem *items =
+            const_collection_model(control)->items;
         uint32_t widest = 0u;
         uint64_t height = (uint64_t)(control->_private_text_length != 0u ?
             control->_private_text_length : 1u) * theme.control_height;
@@ -2724,6 +2848,10 @@ AstraResult astra_interface_control_set_value(AstraUIContext *context,
         return ASTRA_OK;
     control_damage(context, index);
     control->_private_value = snapped;
+    if (control->_private_control_kind == ASTRA_CONTROL_LIST) {
+        AstraCollectionModel *model = collection_model(control);
+        model->selected_id = snapped < 0 ? 0u : model->items[snapped].id;
+    }
     control_damage(context, index);
     return ASTRA_OK;
 }
@@ -3505,7 +3633,8 @@ static int render_requirements(const AstraUIContext *context,
             continue;
         }
         if (control->_private_control_kind == ASTRA_CONTROL_LIST) {
-            const AstraChoiceItem *items = choice_items(control);
+            const AstraCollectionItem *items =
+                const_collection_model(control)->items;
             uint32_t first;
             uint32_t end;
 
@@ -4647,7 +4776,7 @@ static void render_list(const AstraTheme *theme,
                         AstraSurfaceView *surface)
 {
     const AstraControlFrame *frame = &control->_private_frame;
-    const AstraChoiceItem *items = choice_items(control);
+    const AstraCollectionItem *items = const_collection_model(control)->items;
     uint32_t state = effective_state(control);
     uint32_t first;
     uint32_t end;

@@ -43,7 +43,8 @@ static AstraWindow window = ASTRA_WINDOW_INIT;
 static AstraControl controls[CONTROL_COUNT];
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
-static AstraChoiceItem *items;
+static AstraCollectionItem *items;
+static AstraCollectionModel list_model = ASTRA_COLLECTION_MODEL_INIT;
 static uint32_t *indices, item_count, chosen;
 static uint32_t always;
 static const char *document;
@@ -132,7 +133,9 @@ static uint32_t load_candidates(void)
     }
     for (uint32_t at = 0u; at < item_count; ++at) {
         const char *name = catalog.entries[indices[at]].name;
-        items[at] = (AstraChoiceItem){name, (uint32_t)strlen(name), {0u, 0u}};
+        items[at] = (AstraCollectionItem){
+            (uint64_t)indices[at] + 1u, name, (uint32_t)strlen(name),
+            {0u, 0u}};
     }
     chosen = UINT32_MAX;
     return ASTRA_VFS_OK;
@@ -142,7 +145,7 @@ static AstraResult build_controls(void)
 {
     AstraSettingsPaneInfo pane = ASTRA_SETTINGS_PANE_INFO_INIT;
     AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
-    AstraChoiceInfo list = ASTRA_CHOICE_INFO_INIT;
+    AstraListInfo list = ASTRA_LIST_INFO_INIT;
     AstraToggleInfo toggle = ASTRA_TOGGLE_INFO_INIT;
     AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
@@ -168,9 +171,10 @@ static AstraResult build_controls(void)
     if (astra_interface_control_set_flex(CONTROL(SCROLL), &item) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     list.id = APPLICATIONS;
-    list.items = items;
-    list.item_count = item_count;
-    list.selected = chosen;
+    if (astra_interface_collection_init(&list_model, items, item_count,
+        chosen < item_count ? items[chosen].id : 0u) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    list.model = &list_model;
     if (astra_interface_list_init(CONTROL(APPLICATIONS), &list) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;

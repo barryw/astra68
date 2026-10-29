@@ -18,7 +18,7 @@ HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
-INTERFACE_TARGET := build/m68k/libraries/interface.library.8
+INTERFACE_TARGET := build/m68k/libraries/interface.library.9
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/settings_pane.o build/m68k/toolbar.o \
 	build/m68k/icon_tile.o build/m68k/image_view.o build/m68k/inline_edit.o \
@@ -122,7 +122,7 @@ $(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(INTERFACE_LIBRARY_MAP) \
 		| shared-libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,interface.library.8 \
+		-Wl,-soname,interface.library.9 \
 		-Wl,--version-script=$(INTERFACE_LIBRARY_MAP) \
 		-o $@ $(INTERFACE_OBJECTS) \
 		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(SYSTEM_LIBRARY)) \
@@ -137,34 +137,34 @@ library-contract: $(INTERFACE_TARGET)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(INTERFACE_LIBRARY_MAP) $(INTERFACE_TARGET)
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_button_init@@ASTRA_INTERFACE_8\.0$$'
+		grep -Eq ' astra_interface_button_init@@ASTRA_INTERFACE_9\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_command_invoke@@ASTRA_INTERFACE_8\.0$$'
+		grep -Eq ' astra_interface_command_invoke@@ASTRA_INTERFACE_9\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_list_init@@ASTRA_INTERFACE_8\.0$$'
+		grep -Eq ' astra_interface_list_init@@ASTRA_INTERFACE_9\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_text_view_init@@ASTRA_INTERFACE_8\.0$$'
+		grep -Eq ' astra_interface_text_view_init@@ASTRA_INTERFACE_9\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_text_view_refresh@@ASTRA_INTERFACE_8\.0$$'
+		grep -Eq ' astra_interface_text_view_refresh@@ASTRA_INTERFACE_9\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_settings_pane_init@@ASTRA_INTERFACE_8\.0$$'
+		grep -Eq ' astra_interface_settings_pane_init@@ASTRA_INTERFACE_9\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_toolbar_init@@ASTRA_INTERFACE_8\.0$$'
+		grep -Eq ' astra_interface_toolbar_init@@ASTRA_INTERFACE_9\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_toolbar_set_icons@@ASTRA_INTERFACE_8\.0$$'
+		grep -Eq ' astra_interface_toolbar_set_icons@@ASTRA_INTERFACE_9\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_text_view_set_inverted@@ASTRA_INTERFACE_8\.0$$'
+		grep -Eq ' astra_interface_text_view_set_inverted@@ASTRA_INTERFACE_9\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_image_view_render@@ASTRA_INTERFACE_8\.0$$'
+		grep -Eq ' astra_interface_image_view_render@@ASTRA_INTERFACE_9\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_text_view_set_wrap_width@@ASTRA_INTERFACE_8\.0$$'
+		grep -Eq ' astra_interface_text_view_set_wrap_width@@ASTRA_INTERFACE_9\.0$$'
 	@! $(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -q 'ASTRA_INTERFACE_5\.1'
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.8 8.0.0 ABI 8.0$$'
+		grep -q '^interface.library.9 9.0.0 ABI 9.0$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \

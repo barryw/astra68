@@ -1,4 +1,4 @@
-ASTRA_INTERFACE_8.0 {
+ASTRA_INTERFACE_9.0 {
     global:
         astra_interface_menu_init;
         astra_interface_menu_get_state;
@@ -25,6 +25,8 @@ ASTRA_INTERFACE_8.0 {
         astra_interface_label_init;
         astra_interface_label_set_font;
         astra_interface_list_init;
+        astra_interface_list_set_items;
+        astra_interface_collection_init;
         astra_interface_progress_init;
         astra_interface_progress_set;
         astra_interface_radio_init;

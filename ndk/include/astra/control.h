@@ -23,7 +23,7 @@ ASTRA_EXTERN_C_BEGIN
 /** Display refresh used to derive deterministic animation phases. */
 #define ASTRA_UI_VBLANK_HZ 60u
 
-/** Control kinds implemented by Interface Kit ABI 8.0. */
+/** Control kinds implemented by Interface Kit. */
 enum {
     ASTRA_CONTROL_LABEL = 1u,
     ASTRA_CONTROL_BUTTON = 2u,
@@ -593,11 +593,11 @@ typedef struct AstraChoiceInfo {
     uint32_t size;
     /** Nonzero ID unique within the UI context. */
     uint32_t id;
-    /** Borrowed item array; NULL permitted for an empty List. */
+    /** Borrowed item array. */
     const AstraChoiceItem *items;
     /** Number of items; storage capacity is the only ceiling. */
     uint32_t item_count;
-    /** Initially selected zero-based item; UINT32_MAX means none for List. */
+    /** Initially selected zero-based item. */
     uint32_t selected;
     /** Application-owned disabled or error semantic state. */
     uint32_t state;
@@ -609,6 +609,36 @@ typedef struct AstraChoiceInfo {
 #define ASTRA_CHOICE_INFO_INIT {                                         \
     sizeof(AstraChoiceInfo), 0, 0, 0, 0, 0, { 0, 0, 0, 0 }              \
 }
+
+/** Item identity and label shared by collection views. ID zero is reserved. */
+typedef struct AstraCollectionItem {
+    uint64_t id;
+    const char *text; /**< Borrowed UTF-8 label. */
+    uint32_t text_length;
+    uint32_t reserved[2];
+} AstraCollectionItem;
+
+/** Caller-owned collection state. Update a bound List through Interface Kit. */
+typedef struct AstraCollectionModel {
+    uint32_t size;
+    const AstraCollectionItem *items;
+    uint32_t item_count;
+    uint64_t selected_id; /**< Zero means no selection. */
+    uint32_t reserved[2];
+} AstraCollectionModel;
+
+#define ASTRA_COLLECTION_MODEL_INIT { sizeof(AstraCollectionModel), 0, 0, 0, {0, 0} }
+
+/** Bind one List to a caller-owned collection model. */
+typedef struct AstraListInfo {
+    uint32_t size;
+    uint32_t id;
+    AstraCollectionModel *model;
+    uint32_t state;
+    uint32_t reserved[4];
+} AstraListInfo;
+
+#define ASTRA_LIST_INFO_INIT { sizeof(AstraListInfo), 0, 0, 0, {0, 0, 0, 0} }
 
 enum {
     /** Permit selection and copying but reject document mutations. */

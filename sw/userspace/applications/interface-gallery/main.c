@@ -170,10 +170,10 @@ static const AstraChoiceItem gallery_choices[] = {
     {"Scenes", sizeof("Scenes") - 1u, {0u, 0u}},
     {"Ports", sizeof("Ports") - 1u, {0u, 0u}}
 };
-static const AstraChoiceItem gallery_fonts[] = {
-    {"Astra Sans", sizeof("Astra Sans") - 1u, {0u, 0u}},
-    {"Astra Mono", sizeof("Astra Mono") - 1u, {0u, 0u}},
-    {"Rescue Mono", sizeof("Rescue Mono") - 1u, {0u, 0u}}
+static const AstraCollectionItem gallery_fonts[] = {
+    {1u, "Astra Sans", sizeof("Astra Sans") - 1u, {0u, 0u}},
+    {2u, "Astra Mono", sizeof("Astra Mono") - 1u, {0u, 0u}},
+    {3u, "Rescue Mono", sizeof("Rescue Mono") - 1u, {0u, 0u}}
 };
 
 #define GALLERY_CONTROL(id) (&controls[(id) - 1u])
@@ -386,12 +386,14 @@ static uint32_t add_segmented(uint32_t index, uint32_t id,
 
 static uint32_t add_list(uint32_t index, uint32_t id)
 {
-    AstraChoiceInfo info = ASTRA_CHOICE_INFO_INIT;
+    static AstraCollectionModel model = ASTRA_COLLECTION_MODEL_INIT;
+    AstraListInfo info = ASTRA_LIST_INFO_INIT;
 
+    if (astra_interface_collection_init(&model, gallery_fonts,
+        sizeof(gallery_fonts) / sizeof(gallery_fonts[0]), 1u) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
     info.id = id;
-    info.items = gallery_fonts;
-    info.item_count = sizeof(gallery_fonts) / sizeof(gallery_fonts[0]);
-    info.selected = 0u;
+    info.model = &model;
     return astra_interface_list_init(&controls[index], &info) == ASTRA_OK ?
         ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }

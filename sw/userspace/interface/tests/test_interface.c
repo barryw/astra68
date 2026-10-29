@@ -1633,13 +1633,14 @@ static void test_segmented_control(void)
 
 static void test_list_control(void)
 {
-    static const AstraChoiceItem items[] = {
-        {"Astra Sans", 10u, {0u, 0u}},
-        {"Astra Mono", 10u, {0u, 0u}},
-        {"Iosevka Fixed", 13u, {0u, 0u}}
+    static const AstraCollectionItem items[] = {
+        {1u, "Astra Sans", 10u, {0u, 0u}},
+        {2u, "Astra Mono", 10u, {0u, 0u}},
+        {3u, "Iosevka Fixed", 13u, {0u, 0u}}
     };
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
-    AstraChoiceInfo info = ASTRA_CHOICE_INFO_INIT;
+    AstraCollectionModel model = ASTRA_COLLECTION_MODEL_INIT;
+    AstraListInfo info = ASTRA_LIST_INFO_INIT;
     AstraControl control = ASTRA_CONTROL_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
@@ -1650,9 +1651,8 @@ static void test_list_control(void)
     int64_t value = 0;
 
     info.id = 73u;
-    info.items = items;
-    info.item_count = 3u;
-    info.selected = UINT32_MAX;
+    assert(astra_interface_collection_init(&model, items, 3u, 0u) == ASTRA_OK);
+    info.model = &model;
     assert(astra_interface_list_init(&control, &info) == ASTRA_OK);
     assert(astra_interface_ui_init(&context, &control, 1u, 240u, 160u) ==
            ASTRA_OK);
@@ -1721,8 +1721,31 @@ static void test_list_control(void)
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     assert(text_calls == 3u && fill_calls >= 5u);
 
-    info.items = NULL;
-    info.item_count = 0u;
+    {
+        static const AstraCollectionItem reordered[] = {
+            {2u, "Astra Mono", 10u, {0u, 0u}},
+            {1u, "Astra Sans", 10u, {0u, 0u}},
+            {3u, "Iosevka Fixed", 13u, {0u, 0u}}
+        };
+        static const AstraCollectionItem duplicate[] = {
+            {2u, "A", 1u, {0u, 0u}},
+            {2u, "B", 1u, {0u, 0u}}
+        };
+        assert(astra_interface_control_set_value(&context, &control, 1) ==
+               ASTRA_OK && model.selected_id == 2u);
+        assert(astra_interface_list_set_items(&context, &control, reordered,
+                                              3u) == ASTRA_OK);
+        assert(astra_interface_control_get_value(&control, &value, NULL) ==
+               ASTRA_OK && value == 0 && model.selected_id == 2u);
+        assert(astra_interface_list_set_items(&context, &control, duplicate,
+                                              2u) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(model.items == reordered && model.selected_id == 2u);
+        assert(astra_interface_list_set_items(&context, &control, NULL, 0u) ==
+               ASTRA_OK && model.selected_id == 0u);
+    }
+
+    assert(astra_interface_collection_init(&model, NULL, 0u, 0u) == ASTRA_OK);
     assert(astra_interface_list_init(&control, &info) == ASTRA_OK);
     assert(astra_interface_ui_init(&context, &control, 1u, 240u, 160u) ==
            ASTRA_OK);
@@ -1732,20 +1755,20 @@ static void test_list_control(void)
     assert(text_calls == 0u);
     assert(astra_interface_control_set_value(&context, &control, 0) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
-    info.selected = 0u;
-    assert(astra_interface_list_init(&control, &info) ==
+    assert(astra_interface_collection_init(&model, NULL, 0u, 1u) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
 static void test_scrolled_list_control(void)
 {
     static const char family[] = "A deliberately wide installed font family name";
-    AstraChoiceItem items[100];
+    AstraCollectionItem items[100];
     AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
     AstraScrollModel model = ASTRA_SCROLL_MODEL_INIT;
     AstraScrollModelInfo model_info = ASTRA_SCROLL_MODEL_INFO_INIT;
     AstraScrollViewInfo view_info = ASTRA_SCROLL_VIEW_INFO_INIT;
-    AstraChoiceInfo list_info = ASTRA_CHOICE_INFO_INIT;
+    AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    AstraListInfo list_info = ASTRA_LIST_INFO_INIT;
     AstraFlexItem flex = ASTRA_FLEX_ITEM_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
@@ -1766,7 +1789,8 @@ static void test_scrolled_list_control(void)
         240u, 80u, ASTRA_SURFACE_VIEW_DRAW_LIST, 0u, 0u, 240u, 80u};
 
     for (uint32_t at = 0u; at < 100u; ++at) {
-        items[at] = (AstraChoiceItem){family, sizeof(family) - 1u, {0u, 0u}};
+        items[at] = (AstraCollectionItem){
+            (uint64_t)at + 1u, family, sizeof(family) - 1u, {0u, 0u}};
     }
     model_info.line_height = theme.control_height;
     assert(astra_scroll_init(&model, &model_info) == ASTRA_OK);
@@ -1780,9 +1804,9 @@ static void test_scrolled_list_control(void)
     flex.minimum_height = flex.maximum_height = 80u;
     assert(astra_interface_control_set_flex(&controls[0], &flex) == ASTRA_OK);
     list_info.id = 75u;
-    list_info.items = items;
-    list_info.item_count = 100u;
-    list_info.selected = UINT32_MAX;
+    assert(astra_interface_collection_init(&collection, items, 100u, 0u) ==
+           ASTRA_OK);
+    list_info.model = &collection;
     assert(astra_interface_list_init(&controls[1], &list_info) == ASTRA_OK);
     flex = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     flex.parent_id = 74u;

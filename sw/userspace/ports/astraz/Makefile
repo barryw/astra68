@@ -22,7 +22,7 @@ $(PROGRAM): CMakeLists.txt src/main.c src/audio.c src/audio.h \
 	cmake --build build/cmake --target astraz --parallel 8
 	python3 $(NDK)/tools/check_dynamic_executable.py \
 		--readelf m68k-astra-readelf \
-		--needed interface.library.8 --needed graphics.library.3 \
+		--needed interface.library.9 --needed graphics.library.3 \
 		--needed font.library.5 --needed system.library.4 \
 		--needed SDL2_mixer.library.3 \
 		--needed runtime.library.1 --needed compiler.library.2 \

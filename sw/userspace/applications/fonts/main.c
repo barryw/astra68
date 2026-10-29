@@ -64,9 +64,9 @@ ASTRA_PROGRAM("fonts", 0, 1, 0, "Barry Walker",
 static AstraFontsCatalog catalog = ASTRA_FONTS_CATALOG_INIT;
 static const char system_font_requirements[] =
     "System fonts need all UI sizes and basic text characters";
-static AstraChoiceItem families[FONTS_FACE_MAX];
+static AstraCollectionItem families[FONTS_FACE_MAX];
 static uint32_t family_count;
-static AstraChoiceItem *details;
+static AstraCollectionItem *details;
 static char *detail_text;
 static uint32_t detail_text_stride;
 typedef struct FontDetail { uint32_t face; uint32_t strike; } FontDetail;
@@ -82,7 +82,8 @@ static AstraHandle fonts_gui;
 static const char *message;
 static AstraProcessFilesystem files = ASTRA_PROCESS_FILESYSTEM_INIT;
 static AstraDirectoryEntry browser_nodes[FONTS_BROWSER_MAX];
-static AstraChoiceItem browser_items[FONTS_BROWSER_MAX];
+static AstraCollectionItem browser_items[FONTS_BROWSER_MAX];
+static AstraCollectionModel list_model = ASTRA_COLLECTION_MODEL_INIT;
 static uint32_t browser_count;
 static uint32_t browser_selection;
 static uint32_t browsing;
@@ -259,7 +260,7 @@ static uint32_t layout_controls(void)
 }
 
 static int same_family(const AstraInstalledFont *face,
-                       const AstraChoiceItem *family)
+                       const AstraCollectionItem *family)
 {
     return face->family_length == family->text_length &&
            memcmp(face->family, family->text, face->family_length) == 0;
@@ -286,8 +287,8 @@ static uint32_t collect_families(void)
         for (; match < family_count; ++match)
             if (same_family(&face, &families[match])) break;
         if (match != family_count) continue;
-        families[family_count] = (AstraChoiceItem){
-            face.family, face.family_length, {0u, 0u}
+        families[family_count] = (AstraCollectionItem){
+            (uint64_t)at + 1u, face.family, face.family_length, {0u, 0u}
         };
         ++family_count;
     }
@@ -345,7 +346,8 @@ static uint32_t collect_details(uint32_t family_index)
                 !astra_string_append_bytes(&text, face.style,
                                            face.style_length))
                 return FONTS_FAIL_CATALOG;
-            details[detail_count] = (AstraChoiceItem){
+            details[detail_count] = (AstraCollectionItem){
+                (uint64_t)detail_count + 1u,
                 text.text, text.length, {0u, 0u}
             };
             detail_sources[detail_count] = (FontDetail){at, strike_at};
@@ -385,7 +387,8 @@ static uint32_t browser_load(void)
             break;
         }
         browser_nodes[browser_count] = node;
-        browser_items[browser_count] = (AstraChoiceItem){
+        browser_items[browser_count] = (AstraCollectionItem){
+            (uint64_t)browser_count + 1u,
             browser_nodes[browser_count].name,
             (uint32_t)strlen(node.name), {0u, 0u}
         };
@@ -521,7 +524,7 @@ static uint32_t build_controls(void)
 {
     AstraSettingsPaneInfo pane = ASTRA_SETTINGS_PANE_INFO_INIT;
     AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
-    AstraChoiceInfo list = ASTRA_CHOICE_INFO_INIT;
+    AstraListInfo list = ASTRA_LIST_INFO_INIT;
     AstraButtonInfo back = ASTRA_BUTTON_INFO_INIT;
     AstraButtonInfo use = ASTRA_BUTTON_INFO_INIT;
     AstraButtonInfo import = ASTRA_BUTTON_INFO_INIT;
@@ -530,7 +533,7 @@ static uint32_t build_controls(void)
     AstraButtonInfo information = ASTRA_BUTTON_INFO_INIT;
     AstraProgressInfo progress = ASTRA_PROGRESS_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
-    const AstraChoiceItem *title = active_family == UINT32_MAX ? NULL :
+    const AstraCollectionItem *title = active_family == UINT32_MAX ? NULL :
                                    &families[active_family];
     AstraInstalledFont selected_face = {0};
     uint32_t system_ready = 0u;
@@ -580,13 +583,16 @@ static uint32_t build_controls(void)
     if (astra_interface_scroll_view_init(CONTROL(FONTS_SCROLL), &view) !=
         ASTRA_OK) return FONTS_FAIL_CONTROL;
     list.id = FONTS_LIST;
-    list.items = browsing ? browser_items :
-                 active_family == UINT32_MAX ? families : details;
-    list.item_count = browsing ? browser_count :
-                      active_family == UINT32_MAX ? family_count : detail_count;
-    list.selected = list.item_count == 0u ? UINT32_MAX :
-                    browsing ? browser_selection :
-                    active_family == UINT32_MAX ? main_selection : detail_selection;
+    const AstraCollectionItem *list_items = browsing ? browser_items :
+        active_family == UINT32_MAX ? families : details;
+    uint32_t list_count = browsing ? browser_count :
+        active_family == UINT32_MAX ? family_count : detail_count;
+    uint32_t list_selected = browsing ? browser_selection :
+        active_family == UINT32_MAX ? main_selection : detail_selection;
+    if (astra_interface_collection_init(&list_model, list_items, list_count,
+        list_selected < list_count ? list_items[list_selected].id : 0u) != ASTRA_OK)
+        return FONTS_FAIL_CONTROL;
+    list.model = &list_model;
     list.state = showing_import || confirm_uninstall ? ASTRA_CONTROL_COLLAPSED : 0u;
     if (showing_information) {
         AstraTextViewInfo text = ASTRA_TEXT_VIEW_INFO_INIT;

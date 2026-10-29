@@ -16,8 +16,8 @@
 #include <astra/undo.h>
 #include <astra/window.h>
 
-/** Breaking Interface Kit ABI generation carried by interface.library.8. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 8u
+/** Breaking Interface Kit ABI generation carried by interface.library.9. */
+#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 9u
 /** Current Interface Kit revision. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 0u
 
@@ -182,14 +182,26 @@ AstraResult astra_interface_segmented_init(AstraControl *control,
  */
 AstraResult astra_interface_tab_init(AstraControl *control,
                                      const AstraChoiceInfo *info);
-/** Initialize a single-selection vertical list. Empty lists and no selection are valid.
- * Compose with ScrollView for overflow; item labels remain caller-owned.
+/** Initialize a collection model with unique, stable item IDs.
+ * Item array and labels remain caller-owned. ID zero means no selection.
+ */
+AstraResult astra_interface_collection_init(AstraCollectionModel *model,
+    const AstraCollectionItem *items, uint32_t count, uint64_t selected_id);
+/** Initialize a single-selection vertical List over a collection model.
+ * Compose with ScrollView for overflow. Model remains caller-owned and must
+ * be bound to only one active collection control.
  * @param control Caller-owned control to initialize.
- * @param info Choice description; UINT32_MAX selects no item.
+ * @param info List description.
  * @return ASTRA_OK or a validation error.
  */
 AstraResult astra_interface_list_init(AstraControl *control,
-                                      const AstraChoiceInfo *info);
+                                      const AstraListInfo *info);
+/** Replace List items, preserving selection by stable item ID.
+ * Selection clears when selected item disappears. Failed updates leave prior
+ * model and layout intact.
+ */
+AstraResult astra_interface_list_set_items(AstraUIContext *context,
+    AstraControl *control, const AstraCollectionItem *items, uint32_t count);
 /** Initialize a single-line UTF-8 field.
  * @param control Caller-owned control to initialize.
  * @param info Field description; its text model remains caller-owned.

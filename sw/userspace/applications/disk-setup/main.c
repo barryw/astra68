@@ -69,7 +69,8 @@ static AstraVolumeSnapshot snapshot = ASTRA_VOLUME_SNAPSHOT_INIT;
 static AstraVolumeUsageSnapshot usage = ASTRA_VOLUME_USAGE_SNAPSHOT_INIT;
 static AstraDosDiskJob active_job = {0};
 static AstraVolumeReference selected = {0};
-static AstraChoiceItem *items;
+static AstraCollectionItem *items;
+static AstraCollectionModel list_model = ASTRA_COLLECTION_MODEL_INIT;
 static uint32_t *indices;
 static char *row_text;
 static uint32_t row_count, selected_row = UINT32_MAX;
@@ -209,7 +210,8 @@ static void append_row(uint32_t at, AstraVolumeRecord *record)
             (void)astra_string_append(&label, record->label);
         }
     }
-    items[row_count] = (AstraChoiceItem){text, label.length, {0u, 0u}};
+    items[row_count] = (AstraCollectionItem){
+        (uint64_t)record->id + 1u, text, label.length, {0u, 0u}};
     indices[row_count] = at;
     const AstraVolumeReference reference = {snapshot.epoch, record->id,
         record->generation};
@@ -375,7 +377,7 @@ static uint32_t build_controls(void)
 {
     AstraSettingsPaneInfo pane = ASTRA_SETTINGS_PANE_INFO_INIT;
     AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
-    AstraChoiceInfo list = ASTRA_CHOICE_INFO_INIT;
+    AstraListInfo list = ASTRA_LIST_INFO_INIT;
     AstraChoiceInfo tabs = ASTRA_CHOICE_INFO_INIT;
     AstraLabelInfo detail = ASTRA_LABEL_INFO_INIT;
     AstraLabelInfo caption = ASTRA_LABEL_INFO_INIT;
@@ -398,9 +400,10 @@ static uint32_t build_controls(void)
     if (astra_interface_scroll_view_init(CONTROL(DISK_SCROLL), &view) != ASTRA_OK)
         return DISK_FAIL_CONTROL;
     list.id = DISK_LIST;
-    list.items = items;
-    list.item_count = row_count;
-    list.selected = selected_row;
+    if (astra_interface_collection_init(&list_model, items, row_count,
+        selected_row < row_count ? items[selected_row].id : 0u) != ASTRA_OK)
+        return DISK_FAIL_CONTROL;
+    list.model = &list_model;
     if (astra_interface_list_init(CONTROL(DISK_LIST), &list) != ASTRA_OK)
         return DISK_FAIL_CONTROL;
     describe_selection();
