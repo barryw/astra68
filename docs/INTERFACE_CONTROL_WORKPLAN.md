@@ -114,3 +114,12 @@ painter and submits icon segments through Graphics Kit's existing batched
 `LINES` command. This uses one draw-list command per icon and reserves payload
 for its segments before drawing, so a control-rich page stays within the
 retained list limit.
+
+Design-size checkpoint: Haiku's `src/kits/interface/Button.cpp` derives
+preferred size from font height and delegates insets to
+`src/kits/interface/HaikuControlLook.cpp`. Astra likewise keeps control metrics
+in the shared `AstraTheme` rather than scaling Gallery controls separately.
+Theme generation 6 uses the resident 16 px AFNT strike for body, title, and
+control labels, with 40 px controls and 38 px title bars to match the standalone
+Controls design at native 1920x1080 resolution. Application-specific text roles
+remain separate; the fixed 16 px mono role is unchanged.

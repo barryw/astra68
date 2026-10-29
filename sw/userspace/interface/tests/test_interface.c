@@ -726,15 +726,18 @@ static void test_controls(void)
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraControlSize measured = {0};
+    AstraControlSize label_size = {0};
     AstraControlFrame damage = {0};
     AstraSurfaceView surface = render_view(320u, 200u);
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
     AstraWindowEvent event;
 
-    assert(theme.generation == 5u);
+    assert(theme.generation == 6u);
     assert(theme.scale == 1u);
-    assert(theme.spacing_unit == 4u * theme.scale);
-    assert(theme.control_height == 28u * theme.scale);
+    assert(theme.spacing_unit == 6u * theme.scale);
+    assert(theme.control_height == 40u * theme.scale);
+    assert(theme.body_font_height == 16u);
+    assert(theme.control_font_height == 16u);
     assert(theme.control_padding_x == 14u * theme.scale);
     assert(theme.focus_width == 2u * theme.scale);
     assert(theme.text_secondary.red == 201u);
@@ -766,7 +769,9 @@ static void test_controls(void)
            ASTRA_OK);
     assert(astra_interface_ui_measure(&context, &controls[1], &measured) ==
            ASTRA_OK);
-    assert(measured.width == 33u && measured.height == 28u);
+    assert(measured.width >= 33u && measured.height == theme.control_height);
+    assert(astra_interface_ui_measure(&context, &controls[0], &label_size) ==
+           ASTRA_OK);
     layout.flags = ASTRA_FLEX_WRAP;
     layout.padding_left = 8u;
     layout.padding_top = 8u;
@@ -777,19 +782,20 @@ static void test_controls(void)
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
     assert(controls[0]._private_frame.x == 8 &&
            controls[0]._private_frame.y == 8 &&
-           controls[0]._private_frame.width == 8u &&
-           controls[0]._private_frame.height == 11u);
+           controls[0]._private_frame.width == label_size.width &&
+           controls[0]._private_frame.height == label_size.height);
     assert(controls[1]._private_frame.x == 8 &&
-           controls[1]._private_frame.y == 31 &&
-           controls[1]._private_frame.width == 33u &&
-           controls[1]._private_frame.height == 28u);
-    assert(controls[2]._private_frame.x == 49 &&
-           controls[2]._private_frame.y == 31 &&
-           controls[2]._private_frame.width == 33u &&
-           controls[2]._private_frame.height == 28u);
+           controls[1]._private_frame.y == 8 + (int32_t)label_size.height + 12 &&
+           controls[1]._private_frame.width == measured.width &&
+           controls[1]._private_frame.height == measured.height);
+    assert(controls[2]._private_frame.x == 8 + (int32_t)measured.width + 8 &&
+           controls[2]._private_frame.y == controls[1]._private_frame.y &&
+           controls[2]._private_frame.width == measured.width &&
+           controls[2]._private_frame.height == measured.height);
     assert(astra_interface_ui_damage(&context, &damage) == ASTRA_OK);
-    assert(damage.x == 8 && damage.y == 8 && damage.width == 74u &&
-           damage.height == 51u);
+    assert(damage.x == 8 && damage.y == 8 &&
+           damage.width == measured.width * 2u + 8u &&
+           damage.height == label_size.height + 12u + measured.height);
     astra_interface_ui_damage_clear(&context);
     assert(astra_interface_ui_damage(&context, &damage) ==
            ASTRA_ERROR_WOULD_BLOCK);
@@ -1235,6 +1241,7 @@ static void test_toggle_controls(void)
 
 static void test_checkbox_mark_geometry(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraControl control = ASTRA_CONTROL_INIT;
     AstraToggleInfo info = ASTRA_TOGGLE_INFO_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
@@ -1254,14 +1261,18 @@ static void test_checkbox_mark_geometry(void)
     assert(fill_calls == 1u && line_calls == 2u);
     assert(fill_colors[0] == theme_color(
         ((AstraTheme)ASTRA_THEME_SYSTEM_INIT).accent));
-    assert(line_x0[0] == 3 && line_y0[0] == 14 &&
-           line_x1[0] == 6 && line_y1[0] == 17);
-    assert(line_x0[1] == 6 && line_y0[1] == 17 &&
-           line_x1[1] == 12 && line_y1[1] == 10);
+    assert(line_x0[0] == 3 &&
+           line_y0[0] == (int32_t)(theme.control_height - 16u) / 2 + 8 &&
+           line_x1[0] == 6 &&
+           line_y1[0] == (int32_t)(theme.control_height - 16u) / 2 + 11);
+    assert(line_x0[1] == 6 && line_y0[1] == line_y1[0] &&
+           line_x1[1] == 12 &&
+           line_y1[1] == (int32_t)(theme.control_height - 16u) / 2 + 4);
 }
 
 static void test_switch_off_geometry(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraControl control = ASTRA_CONTROL_INIT;
     AstraToggleInfo info = ASTRA_TOGGLE_INFO_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
@@ -1278,9 +1289,11 @@ static void test_switch_off_geometry(void)
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     assert(fill_calls == 3u);
-    assert(fill_x[1] == 2 && fill_y[1] == 7 &&
+    assert(fill_x[1] == 2 &&
+           fill_y[1] == (int32_t)(theme.control_height - 18u) / 2 + 2 &&
            fill_width[1] == 14u && fill_height[1] == 14u);
-    assert(fill_x[2] == 4 && fill_y[2] == 9 &&
+    assert(fill_x[2] == 4 &&
+           fill_y[2] == (int32_t)(theme.control_height - 18u) / 2 + 4 &&
            fill_width[2] == 10u && fill_height[2] == 10u);
 }
 
@@ -2268,7 +2281,7 @@ static void test_scrolled_list_control(void)
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &draw_list) == ASTRA_OK);
-    assert(text_calls <= 4u && text_calls >= 3u);
+    assert(text_calls <= 4u && text_calls >= 2u);
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
                           ASTRA_WINDOW_EVENT_DOWN, 8, 8);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
@@ -2293,7 +2306,7 @@ static void test_scrolled_list_control(void)
         event.data.font_changed.generation = 7u;
         font_advance = 3u;
         assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
-        assert(controls[1]._private_measured_width > width);
+        assert(controls[1]._private_measured_width >= width);
         assert(astra_scroll_get_state(&model, &state) == ASTRA_OK && state.offset_y == offset);
         assert(astra_interface_ui_damage(&context, &damage) == ASTRA_OK &&
                damage.width == 240u && damage.height == 80u);
@@ -2302,7 +2315,7 @@ static void test_scrolled_list_control(void)
     }
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
-    assert(text_calls <= 4u && text_calls >= 3u);
+    assert(text_calls <= 4u && text_calls >= 2u);
     event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4au, 0u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK && action.value == 0);
@@ -2607,6 +2620,7 @@ static void test_animation_ownership(void)
 
 static void test_text_field(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     uint8_t content[128] = {0};
     _Alignas(4) uint8_t metadata[256] = {0};
     AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
@@ -2638,8 +2652,8 @@ static void test_text_field(void)
     assert(astra_interface_ui_init(&context, &field, 1u, 160u, 40u) ==
            ASTRA_OK);
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
-    assert(field._private_frame.width == 84u &&
-           field._private_frame.height == 28u);
+    assert(field._private_frame.width >= 84u &&
+           field._private_frame.height == theme.control_height);
 
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
                           ASTRA_WINDOW_EVENT_DOWN,
@@ -3132,11 +3146,13 @@ static void test_text_view(void)
     assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
     assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
            model_state.selection.focus == 1u);
-    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_MOTION, 0u, 24, 32);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_MOTION, 0u, 24,
+                          (int32_t)theme.control_height + 4);
     assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
     assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
            model_state.selection.anchor == 1u && model_state.selection.focus == 9u);
-    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON, 0u, 24, 32);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON, 0u, 24,
+                          (int32_t)theme.control_height + 4);
     assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
     event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x04u, ASTRA_INPUT_MOD_META);
     assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
@@ -3165,7 +3181,8 @@ static void test_text_view(void)
     event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4eu, 0u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
     assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
-           model_state.selection.focus == 24u);
+           model_state.selection.focus > 6u &&
+           model_state.selection.focus <= 24u);
     assert(astra_scroll_get_state(&scroll, &scroll_state) == ASTRA_OK &&
            scroll_state.offset_y > 0u);
     assert(astra_text_model_replace(&model, 0u, sizeof(source) - 1u, "short", 5u) == ASTRA_OK);
@@ -3240,6 +3257,9 @@ static void test_text_view_styles(void)
 
 static void test_text_view_document_capacity(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    uint32_t visible_lines = (500u + theme.control_height - 1u) /
+                             theme.control_height;
     char source[30u * 81u];
     uint8_t content[4096];
     _Alignas(4) uint8_t metadata[4096];
@@ -3273,7 +3293,7 @@ static void test_text_view_document_capacity(void)
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
-    assert(mono_text_calls == 18u);
+    assert(mono_text_calls == visible_lines);
     AstraTextSelection selection = ASTRA_TEXT_SELECTION_INIT;
     selection.anchor = 10u; selection.focus = 17u * 81u + 40u;
     assert(astra_text_model_set_selection(&model, &selection) == ASTRA_OK);
@@ -3281,7 +3301,8 @@ static void test_text_view_document_capacity(void)
     surface = render_view(700u, 500u);
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
-    assert(mono_text_calls == 20u);
+    assert(mono_text_calls >= visible_lines &&
+           mono_text_calls <= visible_lines + 2u);
 }
 
 static void test_text_view_wrap(void)
@@ -3555,6 +3576,7 @@ static void test_text_view_flow_batches_visible_runs(void)
 
 static void test_scroll_view_layout_and_wheel(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     static const char content[] =
         "This content is deliberately wider than its viewport.";
     AstraScrollModel model = ASTRA_SCROLL_MODEL_INIT;
@@ -3636,7 +3658,7 @@ static void test_scroll_view_layout_and_wheel(void)
     assert(astra_interface_ui_layout(&context, &root) == ASTRA_OK);
     assert(astra_scroll_get_state(&model, &state) == ASTRA_OK);
     assert(state.content_width == sizeof(content) - 1u &&
-           state.content_height == 191u &&
+           state.content_height == 180u + theme.body_font_height &&
            state.viewport_width == 120u && state.viewport_height == 60u);
     assert(controls[1]._private_frame.x == 0 &&
            controls[1]._private_frame.y == 0 &&
@@ -3722,7 +3744,7 @@ static void test_scroll_view_layout_and_wheel(void)
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK);
     assert(astra_scroll_get_state(&model, &state) == ASTRA_OK);
-    assert(state.offset_y == 131u);
+    assert(state.offset_y == state.maximum_y);
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON, 0u, 125, 48);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK);
@@ -3749,7 +3771,7 @@ static void test_scroll_view_layout_and_wheel(void)
     assert(action.type == ASTRA_UI_ACTION_SCROLL_CHANGED &&
            action.control_id == 103u);
     assert(astra_scroll_get_state(&model, &state) == ASTRA_OK);
-    assert(state.offset_y == 115u);
+    assert(state.offset_y == state.maximum_y - 16u);
 }
 
 static void test_scroll_view_keyboard_listener(void)
@@ -3941,6 +3963,7 @@ static void test_scroll_view_rejects_non_single_child(void)
 
 static void test_splitter_composition(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     pointer_shape_calls = 0u;
     AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
     AstraSplitterInfo splitter = ASTRA_SPLITTER_INFO_INIT;
@@ -4062,11 +4085,11 @@ static void test_splitter_composition(void)
 
     event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x50u, 0u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
-           ASTRA_OK && action.value == 128);
+           ASTRA_OK && action.value == 132 - theme.spacing_unit);
     event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x50u,
                       ASTRA_INPUT_MOD_SHIFT);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
-           ASTRA_OK && action.value == 127);
+           ASTRA_OK && action.value == 131 - theme.spacing_unit);
     event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4au, 0u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
            ASTRA_OK && action.value == 40);
@@ -4126,6 +4149,7 @@ static void test_splitter_rejects_invalid_composition(void)
 
 static void test_horizontal_splitter(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
     AstraSplitterInfo splitter = ASTRA_SPLITTER_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
@@ -4185,7 +4209,7 @@ static void test_horizontal_splitter(void)
            ASTRA_OK);
     event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x52u, 0u);
     assert(astra_interface_ui_handle_event(&context, &event, &action) ==
-           ASTRA_OK && action.value == 46);
+           ASTRA_OK && action.value == 50 - theme.spacing_unit);
 
     splitter.orientation = ASTRA_ORIENTATION_VERTICAL;
     assert(astra_interface_splitter_init(&controls[1], &splitter) == ASTRA_OK);

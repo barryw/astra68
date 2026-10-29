@@ -171,6 +171,7 @@ static void test_weighted_shrink(void)
 
 static void test_wrap_and_reflow(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraControl controls[3];
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
@@ -190,7 +191,8 @@ static void test_wrap_and_reflow(void)
     assert(controls[1]._private_frame.x == 34 &&
            controls[1]._private_frame.y == 0);
     assert(controls[2]._private_frame.x == 0 &&
-           controls[2]._private_frame.y == 33);
+           controls[2]._private_frame.y ==
+               (int32_t)theme.control_height + 5);
 
     astra_interface_ui_damage_clear(&context);
     event = resize_event(30u, 100u);
@@ -198,9 +200,11 @@ static void test_wrap_and_reflow(void)
            ASTRA_OK);
     assert(controls[0]._private_frame.y == 0);
     assert(controls[1]._private_frame.x == 0 &&
-           controls[1]._private_frame.y == 33);
+           controls[1]._private_frame.y ==
+               (int32_t)theme.control_height + 5);
     assert(controls[2]._private_frame.x == 0 &&
-           controls[2]._private_frame.y == 66);
+           controls[2]._private_frame.y ==
+               ((int32_t)theme.control_height + 5) * 2);
     assert(astra_interface_ui_damage(&context, &damage) == ASTRA_OK);
     assert(damage.x == 0 && damage.y == 0 && damage.width == 30u &&
            damage.height == 100u);
@@ -224,6 +228,7 @@ static void test_wrap_and_reflow(void)
 
 static void test_breaks(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraControl controls[4];
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
@@ -241,11 +246,14 @@ static void test_breaks(void)
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
     assert(controls[0]._private_frame.y == 0);
     assert(controls[1]._private_frame.x == 0 &&
-           controls[1]._private_frame.y == 33);
+           controls[1]._private_frame.y ==
+               (int32_t)theme.control_height + 5);
     assert(controls[2]._private_frame.x == 0 &&
-           controls[2]._private_frame.y == 66);
+           controls[2]._private_frame.y ==
+               ((int32_t)theme.control_height + 5) * 2);
     assert(controls[3]._private_frame.x == 34 &&
-           controls[3]._private_frame.y == 66);
+           controls[3]._private_frame.y ==
+               ((int32_t)theme.control_height + 5) * 2);
 }
 
 static void test_justification(void)
@@ -277,6 +285,7 @@ static void test_justification(void)
 
 static void test_column_and_alignment(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraControl controls[2];
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
@@ -298,9 +307,10 @@ static void test_column_and_alignment(void)
     assert(controls[0]._private_frame.x == 25 &&
            controls[0]._private_frame.y == 5 &&
            controls[0]._private_frame.width == 30u &&
-           controls[0]._private_frame.height == 28u);
+           controls[0]._private_frame.height == theme.control_height);
     assert(controls[1]._private_frame.x == 45 &&
-           controls[1]._private_frame.y == 37);
+           controls[1]._private_frame.y ==
+               5 + (int32_t)theme.control_height + 4);
 
     controls[0]._private_align_self = ASTRA_FLEX_ALIGN_AUTO;
     controls[1]._private_align_self = ASTRA_FLEX_ALIGN_AUTO;
@@ -316,6 +326,7 @@ static void test_column_and_alignment(void)
 
 static void test_tiny_parent_and_maximal_weights(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraControl controls[2];
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
@@ -340,7 +351,7 @@ static void test_tiny_parent_and_maximal_weights(void)
     assert(controls[0]._private_frame.x == 60 &&
            controls[0]._private_frame.y == 30 &&
            controls[0]._private_frame.width == 30u &&
-           controls[0]._private_frame.height == 28u);
+           controls[0]._private_frame.height == theme.control_height);
 }
 
 static void parent(AstraControl *control, uint32_t parent_id, uint32_t grow)
@@ -455,6 +466,7 @@ static void test_nested_layout_rejections(void)
 
 static void test_nested_clip_blocks_input(void)
 {
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
     AstraContainerInfo container = ASTRA_CONTAINER_INFO_INIT;
     AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
@@ -474,7 +486,7 @@ static void test_nested_clip_blocks_input(void)
     assert(astra_interface_ui_init(&context, controls, 2u, 100u, 20u) ==
            ASTRA_OK);
     assert(astra_interface_ui_layout(&context, &root) == ASTRA_OK);
-    assert(controls[1]._private_frame.height == 28u &&
+    assert(controls[1]._private_frame.height == theme.control_height &&
            controls[1]._private_clip.height == 20u);
 
     event = pointer_event(ASTRA_WINDOW_EVENT_DOWN, 5, 25);

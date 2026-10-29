@@ -13,12 +13,12 @@
 ASTRA_EXTERN_C_BEGIN
 
 /** Version of the immutable system theme snapshot. */
-#define ASTRA_THEME_GENERATION UINT32_C(5)
+#define ASTRA_THEME_GENERATION UINT32_C(6)
 
 /** Native strike sizes selected by the immutable Astra 0.1 theme. */
-#define ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT UINT16_C(11)
+#define ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT UINT16_C(16)
 /** Native system-title font height in pixels. */
-#define ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT UINT16_C(13)
+#define ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT UINT16_C(16)
 /** Native system-menu font height in pixels. */
 #define ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT UINT16_C(16)
 /** Native terminal/code font height in pixels. */
@@ -110,7 +110,7 @@ typedef struct AstraTheme {
     ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT, \
     ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH, \
     ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT, \
-    4, 12, 2, 26, 22, 2, 20, 10, 8, 8, 6, 28, 14, 1, 2, \
+    6, 12, 2, 38, 32, 2, 28, 12, 8, 8, 6, 40, 14, 1, 2, \
     { 0, 0, 0, 0 } \
 }
 
