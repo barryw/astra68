@@ -53,7 +53,7 @@ static AstraResult command(AstraWindow *window, uint32_t action,
     AstraResult result;
 
     if (!window_live(window) || action < ASTRA_GUI_WINDOW_QUERY ||
-        action > ASTRA_GUI_WINDOW_MENU_BAR_CLEAR ||
+        action > ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT ||
         (attachment != NULL && *attachment == ASTRA_INVALID_HANDLE) ||
         !astra_utf8_validate(title, title_length, 0u) ||
         title_length > ASTRA_WINDOW_TITLE_MAX)
@@ -107,9 +107,10 @@ static AstraResult command(AstraWindow *window, uint32_t action,
     return result;
 }
 
-AstraResult astra_window_create(uint32_t gui_endpoint,
+static AstraResult create_window(uint32_t gui_endpoint,
                                 uint32_t content_area,
                                 const AstraWindowCreateInfo *info,
+                                const AstraWindow *parent,
                                 AstraWindow *window)
 {
     AstraGuiOpenWindow request = {0};
@@ -145,7 +146,10 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
           info->content_format != ASTRA_WINDOW_CONTENT_DRAW_LIST &&
           info->content_format != ASTRA_WINDOW_CONTENT_SURFACE)) ||
         info->type < ASTRA_WINDOW_STANDARD ||
-        info->type > ASTRA_WINDOW_DESKTOP ||
+        info->type > ASTRA_WINDOW_SHEET ||
+        ((info->type == ASTRA_WINDOW_SHEET) != (parent != NULL)) ||
+        (parent != NULL && (!window_live(parent) ||
+         (info->flags & (ASTRA_WINDOW_MODAL | ASTRA_WINDOW_RESIZABLE)) != 0u)) ||
         (info->flags & ~known_flags) != 0 ||
         (info->gadgets & ~known_gadgets) != 0 ||
         ((info->gadgets & ASTRA_WINDOW_GADGET_AUTO) != 0u &&
@@ -201,6 +205,10 @@ AstraResult astra_window_create(uint32_t gui_endpoint,
     request.content_format = info->content_format;
     request.event_mask = info->event_mask;
     request.title_icon_length = info->title_icon_length;
+    if (parent != NULL) {
+        request.parent_window = parent->_private_id;
+        request.parent_generation = parent->_private_generation;
+    }
     for (uint32_t index = 0u; index < info->title_length; ++index)
         request.title[index] = info->title[index];
     if (info->title_icon_length != 0u) {
@@ -282,6 +290,21 @@ done:
             result = close_result;
     }
     return result;
+}
+
+AstraResult astra_window_create(uint32_t gui_endpoint,
+                                uint32_t content_area,
+                                const AstraWindowCreateInfo *info,
+                                AstraWindow *window)
+{
+    return create_window(gui_endpoint, content_area, info, NULL, window);
+}
+
+AstraResult astra_window_sheet_create(uint32_t gui_endpoint,
+    uint32_t content_area, const AstraWindowCreateInfo *info,
+    const AstraWindow *parent, AstraWindow *window)
+{
+    return create_window(gui_endpoint, content_area, info, parent, window);
 }
 
 AstraResult astra_window_get_info(AstraWindow *window, AstraWindowInfo *info)
@@ -426,13 +449,18 @@ static AstraResult send_menu_document(AstraWindow *window,
         (uint64_t)count * ASTRA_GUI_MENU_ROW_BYTES;
 
     if (!window_live(window) || items == NULL || count == 0u ||
-        (action == ASTRA_GUI_WINDOW_MENU_OPEN && request == 0u) ||
+        ((action == ASTRA_GUI_WINDOW_MENU_OPEN ||
+          action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT) &&
+         request == 0u) ||
         x < 0 || y < 0 || x > UINT16_MAX || y > UINT16_MAX ||
         length > ASTRA_GUI_MENU_BYTES_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = 0u; at < count; ++at) {
         uint32_t parent = (items[at].flags & ASTRA_MENU_PARENT_MASK) >>
             ASTRA_MENU_PARENT_SHIFT;
+        if (action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT &&
+            (parent != 0u || (items[at].flags & ASTRA_MENU_SUBMENU) != 0u))
+            return ASTRA_ERROR_INVALID_ARGUMENT;
         if ((items[at].flags & ~(ASTRA_MENU_DISABLED | ASTRA_MENU_CHECKED |
                                 ASTRA_MENU_SEPARATOR | ASTRA_MENU_SUBMENU |
                                 ASTRA_MENU_PARENT_MASK)) != 0u ||
@@ -497,6 +525,14 @@ AstraResult astra_window_menu_open(AstraWindow *window,
 {
     return send_menu_document(window, items, count, x, y, request,
                               ASTRA_GUI_WINDOW_MENU_OPEN);
+}
+
+AstraResult astra_window_menu_open_persistent(AstraWindow *window,
+    const AstraMenuItem *items, uint32_t count, int32_t x, int32_t y,
+    uint32_t request)
+{
+    return send_menu_document(window, items, count, x, y, request,
+                              ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT);
 }
 
 AstraResult astra_window_menu_bar_set(AstraWindow *window,

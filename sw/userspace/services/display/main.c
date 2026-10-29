@@ -96,6 +96,10 @@ typedef struct DisplayWindow {
     /* The GUI session the window was opened through, or zero for the
        shared GUI port: whose window it is (ASTRA_GUI_OPEN_SESSION). */
     uint32_t session;
+    /* A Sheet follows this parent's content origin; zero for other roles. */
+    int32_t sheet_offset_x;
+    int32_t sheet_offset_y;
+    uint8_t sheet_hidden_by_parent;
     uint32_t control_receive;
     uint32_t event_send;
     uint32_t vblank_signal;
@@ -253,6 +257,7 @@ typedef struct DisplayState {
     void *menu_document;
     uint32_t menu_owner;
     uint32_t menu_request;
+    uint8_t menu_persistent;
     uint32_t menu_selection_offset;
     uint32_t bar_heading_owner;
     uint32_t bar_heading_count;
@@ -997,7 +1002,7 @@ static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp
     uint32_t request = state->menu_request;
     uint32_t offset = state->menu_selection_offset;
 
-    if (state->overlay == DISPLAY_OVERLAY_NONE) return;
+    if (state->overlay != DISPLAY_OVERLAY_MENU) return;
     damage_both(state, overlay_bounds(state));
     damage_both(state, submenu_bounds(state));
     state->overlay = DISPLAY_OVERLAY_NONE;
@@ -1008,6 +1013,7 @@ static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp
     state->submenu_start = state->submenu_count = 0u;
     state->submenu_focus = 0u;
     state->menu_owner = state->menu_request = 0u;
+    state->menu_persistent = 0u;
     state->menu_selection_offset = 0u;
     astra_runtime_deallocate(state->menu_rows);
     astra_runtime_deallocate(state->menu_document);
@@ -1037,6 +1043,30 @@ static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp
                 break;
             }
     }
+}
+
+static void menu_continue(DisplayState *state, uint32_t selection,
+                          uint32_t timestamp_ms)
+{
+    uint32_t owner = find_id(state, state->menu_owner);
+    AstraWindowEvent event = {
+        .type = ASTRA_WINDOW_EVENT_MENU_RESULT,
+        .flags = ASTRA_WINDOW_EVENT_CONTINUED,
+        .timestamp_ms = timestamp_ms
+    };
+
+    if (state->overlay != DISPLAY_OVERLAY_MENU ||
+        state->menu_persistent == 0u ||
+        selection == 0u || selection > state->menu._private_count ||
+        owner == state->count)
+        return;
+    state->menu_rows[selection - 1u].flags ^= ASTRA_MENU_CHECKED;
+    state->overlay_drawn = DISPLAY_OVERLAY_NONE;
+    damage_both(state, overlay_bounds(state));
+    event.data.menu_result.request = state->menu_request;
+    event.data.menu_result.selection = selection;
+    event.data.menu_result.status = ASTRA_STATUS_OK;
+    (void)send_event(&state->windows[owner], &event);
 }
 
 static uint32_t menu_install(DisplayState *state, const AstraMenu *menu,
@@ -1075,6 +1105,7 @@ static uint32_t menu_install(DisplayState *state, const AstraMenu *menu,
     state->submenu_focus = 0u;
     state->menu_owner = owner;
     state->menu_request = request;
+    state->menu_persistent = 0u;
     state->menu_rows = rows;
     state->menu_document = document;
     state->overlay = DISPLAY_OVERLAY_MENU;
@@ -1228,6 +1259,10 @@ static uint32_t modal_window(const DisplayState *state, uint32_t index)
     for (uint32_t at = state->count; at != 0u; --at) {
         const DisplayWindow *window = &state->windows[at - 1u];
 
+        if (window->request.type == ASTRA_WINDOW_SHEET &&
+            window->request.parent_window == state->windows[index].id &&
+            window->state != ASTRA_WINDOW_STATE_MINIMIZED)
+            return at - 1u;
         if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u &&
             window->state != ASTRA_WINDOW_STATE_MINIMIZED &&
             window->session == state->windows[index].session)
@@ -1273,7 +1308,8 @@ static DisplayWindow *raise_revealed_modal(DisplayState *state,
 {
     DisplayWindow *window = &state->windows[index];
 
-    if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u) {
+    if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u ||
+        window->request.type == ASTRA_WINDOW_SHEET) {
         reorder(state, theme, index, state->count - 1u);
         window = &state->windows[state->count - 1u];
     }
@@ -2611,6 +2647,8 @@ static uint32_t menu_open(DisplayState *state, const AstraTheme *theme,
     int32_t x, y;
     uint32_t status;
     int bar = command->action == ASTRA_GUI_WINDOW_MENU_BAR_SET;
+    int persistent = command->action ==
+        ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT;
 
     if (!bar && (state->overlay != DISPLAY_OVERLAY_NONE || window->pending_menu.type != 0u ||
         state->capture_window != 0u || grab_target(state) != state->count)
@@ -2668,7 +2706,8 @@ static uint32_t menu_open(DisplayState *state, const AstraTheme *theme,
                                   length, flags & ~ASTRA_MENU_SUBMENU};
         offset += length;
     }
-    if (offset != size || roots == 0u) goto done;
+    if (offset != size || roots == 0u || (persistent && roots != count))
+        goto done;
     if (bar) {
         if (roots == count || roots > 16u) goto done;
         for (uint32_t at = 0u; at < roots; ++at) {
@@ -2695,7 +2734,8 @@ static uint32_t menu_open(DisplayState *state, const AstraTheme *theme,
     }
     content_origin(theme, window, &x, &y);
     if (astra_interface_menu_init(&menu, rows, roots, &menu_work,
-        x + command->x, y + command->y, 160u, 0u) != ASTRA_OK)
+        x + command->x, y + command->y, 160u,
+        persistent ? ASTRA_MENU_KEEP_OPEN : 0u) != ASTRA_OK)
         goto done;
     for (uint32_t at = roots; at < count; ) {
         uint32_t parent = (rows[at].flags & ASTRA_MENU_PARENT_MASK) >> ASTRA_MENU_PARENT_SHIFT;
@@ -2710,7 +2750,10 @@ static uint32_t menu_open(DisplayState *state, const AstraTheme *theme,
         at = end;
     }
     status = menu_install(state, &menu, window->id, command->flags, rows, document);
-    if (status == ASTRA_STATUS_OK) return status;
+    if (status == ASTRA_STATUS_OK) {
+        state->menu_persistent = persistent;
+        return status;
+    }
 done:
     astra_runtime_deallocate(rows);
     astra_runtime_deallocate(document);
@@ -3455,7 +3498,8 @@ static uint32_t window_gadgets(uint8_t type)
         return ASTRA_WINDOW_GADGET_CLOSE |
                ASTRA_WINDOW_GADGET_MINIMIZE |
                ASTRA_WINDOW_GADGET_MAXIMIZE;
-    if (type == ASTRA_WINDOW_DIALOG || type == ASTRA_WINDOW_UTILITY)
+    if (type == ASTRA_WINDOW_DIALOG || type == ASTRA_WINDOW_UTILITY ||
+        type == ASTRA_WINDOW_SHEET)
         return ASTRA_WINDOW_GADGET_CLOSE;
     return 0u;
 }
@@ -3484,7 +3528,14 @@ static int valid_open(const AstraGuiOpenWindow *request, uint32_t size,
             request->content_format == ASTRA_WINDOW_CONTENT_RGB565 ||
             request->content_format == ASTRA_WINDOW_CONTENT_SURFACE) &&
            request->type >= ASTRA_WINDOW_STANDARD &&
-           request->type <= ASTRA_WINDOW_DESKTOP &&
+           request->type <= ASTRA_WINDOW_SHEET &&
+           (request->type == ASTRA_WINDOW_SHEET ?
+                request->parent_window != 0u &&
+                request->parent_generation != 0u &&
+                (request->flags & (ASTRA_WINDOW_MODAL |
+                                   ASTRA_WINDOW_RESIZABLE)) == 0u :
+                request->parent_window == 0u &&
+                request->parent_generation == 0u) &&
            (request->flags & ~(ASTRA_WINDOW_RESIZABLE | ASTRA_WINDOW_MODAL |
                                ASTRA_WINDOW_ACTIVE)) == 0u &&
            (request->gadgets == ASTRA_WINDOW_GADGET_AUTO ||
@@ -3523,6 +3574,7 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
         handles != (request->action == ASTRA_GUI_WINDOW_CLOSE ? 0u :
                    request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ||
                    request->action == ASTRA_GUI_WINDOW_MENU_OPEN ||
+                   request->action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT ||
                    request->action == ASTRA_GUI_WINDOW_MENU_BAR_SET ? 2u : 1u) ||
         request->header.total_size != sizeof(*request) ||
         request->header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
@@ -3535,10 +3587,11 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
         request->generation == 0u ||
         request->reserved16 != 0u || request->reserved != 0u ||
         request->action < ASTRA_GUI_WINDOW_QUERY ||
-        request->action > ASTRA_GUI_WINDOW_MENU_BAR_CLEAR ||
+        request->action > ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT ||
         request->title_length > ASTRA_WINDOW_TITLE_MAX)
         return 0;
-    if (request->action == ASTRA_GUI_WINDOW_MENU_OPEN)
+    if (request->action == ASTRA_GUI_WINDOW_MENU_OPEN ||
+        request->action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT)
         return request->width == 0u && request->height == 0u &&
                request->title_length == 0u && request->flags != 0u &&
                request->x < content_width && request->y < content_height;
@@ -3642,12 +3695,14 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
         command->action != ASTRA_GUI_WINDOW_SET_POINTER_SHAPE &&
         command->action != ASTRA_GUI_WINDOW_SET_POINTER_IMAGE &&
         command->action != ASTRA_GUI_WINDOW_MENU_OPEN &&
+        command->action != ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT &&
         command->action != ASTRA_GUI_WINDOW_MENU_CLOSE &&
         command->action != ASTRA_GUI_WINDOW_CLOSE)
         return ASTRA_STATUS_UNSUPPORTED;
     switch (command->action) {
     case ASTRA_GUI_WINDOW_QUERY:
     case ASTRA_GUI_WINDOW_MENU_OPEN:
+    case ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT:
     case ASTRA_GUI_WINDOW_MENU_BAR_SET:
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_MENU_BAR_CLEAR:
@@ -4009,17 +4064,142 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
     }
 }
 
+static void close_window(DisplayWindow *window);
+
+static void sync_sheets(DisplayState *state, const AstraTheme *theme,
+                        uint32_t parent_id, int *changed)
+{
+    uint32_t parent_index = find_id(state, parent_id);
+    int hidden_active = 0;
+
+    if (parent_index == state->count) return;
+    for (uint32_t at = 0u; at < state->count; ++at) {
+        DisplayWindow *sheet = &state->windows[at];
+        int32_t x;
+        int32_t y;
+        uint32_t maximum_x;
+        uint32_t maximum_y;
+
+        if (sheet->request.type != ASTRA_WINDOW_SHEET ||
+            sheet->request.parent_window != parent_id)
+            continue;
+        if (state->windows[parent_index].state ==
+                ASTRA_WINDOW_STATE_MINIMIZED) {
+            if (sheet->state != ASTRA_WINDOW_STATE_MINIMIZED) {
+                damage_window(state, theme, sheet);
+                sheet->restore_state = sheet->state;
+                sheet->state = ASTRA_WINDOW_STATE_MINIMIZED;
+                sheet->sheet_hidden_by_parent = 1u;
+                hidden_active |= (sheet->request.flags &
+                                  ASTRA_WINDOW_ACTIVE) != 0u;
+                sheet->request.flags &= ~ASTRA_WINDOW_ACTIVE;
+                next_generation(sheet);
+                state_event(sheet, 0u, at);
+                *changed = 1;
+            }
+            continue;
+        }
+        if (sheet->sheet_hidden_by_parent != 0u) {
+            sheet->state = sheet->restore_state;
+            sheet->sheet_hidden_by_parent = 0u;
+            next_generation(sheet);
+            damage_window(state, theme, sheet);
+            state_event(sheet, 0u, at);
+            *changed = 1;
+        }
+        if (sheet->state == ASTRA_WINDOW_STATE_MINIMIZED) continue;
+        maximum_x = ASTRA_DISPLAY_WIDTH - outer_width(theme, sheet);
+        maximum_y = DISPLAY_WORK_BOTTOM - outer_height(theme, sheet);
+        x = (int32_t)state->windows[parent_index].request.x +
+            sheet->sheet_offset_x;
+        y = (int32_t)state->windows[parent_index].request.y +
+            sheet->sheet_offset_y;
+        if (x < 0) x = 0;
+        if (y < (int32_t)DISPLAY_WORK_TOP)
+            y = (int32_t)DISPLAY_WORK_TOP;
+        if (x > (int32_t)maximum_x) x = (int32_t)maximum_x;
+        if (y > (int32_t)maximum_y) y = (int32_t)maximum_y;
+        if (sheet->request.x == (uint16_t)x &&
+            sheet->request.y == (uint16_t)y)
+            continue;
+        damage_window(state, theme, sheet);
+        sheet->request.x = (uint16_t)x;
+        sheet->request.y = (uint16_t)y;
+        next_generation(sheet);
+        damage_window(state, theme, sheet);
+        state_event(sheet, 0u, at);
+        *changed = 1;
+    }
+    if (hidden_active)
+        *changed |= activate(state, theme, top_visible(state), 0, 0u);
+}
+
+static void close_sheets(DisplayState *state, const AstraTheme *theme,
+                         uint32_t parent_id, int *changed)
+{
+    for (uint32_t at = 0u; at < state->count;) {
+        DisplayWindow sheet;
+
+        if (state->windows[at].request.type != ASTRA_WINDOW_SHEET ||
+            state->windows[at].request.parent_window != parent_id) {
+            ++at;
+            continue;
+        }
+        sheet = state->windows[at];
+        if (state->menu_owner == sheet.id)
+            menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+        damage_window(state, theme, &sheet);
+        for (uint32_t move = at; move + 1u < state->count; ++move)
+            state->windows[move] = state->windows[move + 1u];
+        --state->count;
+        state->windows[state->count] = (DisplayWindow){0};
+        close_window(&sheet);
+        *changed = 1;
+    }
+}
+
 static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
                               const AstraGuiWindowCommand *command,
                               DisplayWindow *closed, int *changed)
 {
     uint32_t status = apply_window_command(state, theme, command, closed, changed);
 
+    if (status == ASTRA_STATUS_OK) {
+        uint32_t index = find_id(state, command->window);
+
+        if (closed->id != 0u) {
+            uint32_t previous_count = state->count;
+
+            close_sheets(state, theme, closed->id, changed);
+            if (state->count != previous_count && top_visible(state) != 0u)
+                *changed |= activate(state, theme, top_visible(state), 0, 0u);
+        } else if (index != state->count && *changed) {
+            DisplayWindow *window = &state->windows[index];
+
+            if (window->request.type == ASTRA_WINDOW_SHEET) {
+                uint32_t parent = find_id(state,
+                    window->request.parent_window);
+
+                if (parent != state->count) {
+                    window->sheet_offset_x =
+                        (int32_t)window->request.x -
+                        (int32_t)state->windows[parent].request.x;
+                    window->sheet_offset_y =
+                        (int32_t)window->request.y -
+                        (int32_t)state->windows[parent].request.y;
+                }
+            } else {
+                sync_sheets(state, theme, window->id, changed);
+            }
+        }
+    }
+
     if (status == ASTRA_STATUS_OK && *changed && state->menu_owner == command->window &&
         command->action != ASTRA_GUI_WINDOW_PRESENT &&
         command->action != ASTRA_GUI_WINDOW_SET_APPLICATION_NAME &&
         command->action != ASTRA_GUI_WINDOW_SET_TITLE &&
         command->action != ASTRA_GUI_WINDOW_MENU_OPEN &&
+        command->action != ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT &&
         command->action != ASTRA_GUI_WINDOW_MENU_CLOSE)
         menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
     return status;
@@ -4315,8 +4495,13 @@ static uint32_t menu_input(DisplayState *state, const AstraLogicalInputEvent *in
         astra_interface_menu_get_state(&state->menu, &after) != ASTRA_OK)
         return ASTRA_STATUS_INVALID;
     if (action.type == ASTRA_UI_ACTION_ACTIVATE || action.type == ASTRA_UI_ACTION_DISMISS) {
-        menu_end(state, action.type == ASTRA_UI_ACTION_ACTIVATE ? action.control_id : 0u,
-                 input->timestamp_ms, ASTRA_STATUS_OK);
+        if (action.type == ASTRA_UI_ACTION_ACTIVATE &&
+            state->menu_persistent != 0u)
+            menu_continue(state, action.control_id, input->timestamp_ms);
+        else
+            menu_end(state, action.type == ASTRA_UI_ACTION_ACTIVATE ?
+                action.control_id : 0u, input->timestamp_ms,
+                ASTRA_STATUS_OK);
         *effects |= DISPLAY_POINTER_RENDER | DISPLAY_POINTER_CURSOR;
     } else {
         int child_changed = submenu_set(state, after.selection);
@@ -4422,6 +4607,21 @@ static uint32_t handle_pointer(DisplayState *state,
                 changed = move_captured_window(
                     state, &theme, window,
                     state->pointer_x, state->pointer_y);
+                if (changed && window->request.type == ASTRA_WINDOW_SHEET) {
+                    uint32_t parent = find_id(state,
+                        window->request.parent_window);
+
+                    if (parent != state->count) {
+                        window->sheet_offset_x =
+                            (int32_t)window->request.x -
+                            (int32_t)state->windows[parent].request.x;
+                        window->sheet_offset_y =
+                            (int32_t)window->request.y -
+                            (int32_t)state->windows[parent].request.y;
+                    }
+                } else if (changed) {
+                    sync_sheets(state, &theme, window->id, &changed);
+                }
             } else if (resize_region(state->capture_region)) {
                 changed = resize_captured_window(
                     state, &theme, window,
@@ -5132,6 +5332,27 @@ static void activate_session(uint32_t device, uint32_t irq,
             state_event(&state->windows[index], 0u, index);
 }
 
+static int resolve_sheet_parent(const DisplayState *state,
+                                AstraGuiOpenWindow *request,
+                                uint32_t session)
+{
+    uint32_t parent_index = find_id(state, request->parent_window);
+    const DisplayWindow *parent;
+
+    if (parent_index == state->count) return 0;
+    parent = &state->windows[parent_index];
+    if (parent->session != session ||
+        parent->generation != request->parent_generation ||
+        parent->state == ASTRA_WINDOW_STATE_MINIMIZED ||
+        parent->request.type == ASTRA_WINDOW_SHEET ||
+        (uint32_t)parent->request.x + request->x > UINT16_MAX ||
+        (uint32_t)parent->request.y + request->y > UINT16_MAX)
+        return 0;
+    request->x += parent->request.x;
+    request->y += parent->request.y;
+    return 1;
+}
+
 static void receive_open(uint32_t device, uint32_t irq,
                          AstraDmaBufferInfo *framebuffer,
                          AstraDmaBufferInfo *pointer_buffer,
@@ -5155,6 +5376,8 @@ static void receive_open(uint32_t device, uint32_t irq,
     uint32_t status = astra_port_receive(
         gui_receive, &packet, sizeof(packet), handles,
         ASTRA_MESSAGE_HANDLES_MAX, &size, &handle_count);
+    uint16_t sheet_x = 0u;
+    uint16_t sheet_y = 0u;
     int added = 0;
 
     if (status == ASTRA_SYSCALL_PEER_DEAD && session != 0u) {
@@ -5231,7 +5454,13 @@ static void receive_open(uint32_t device, uint32_t irq,
                 (void)astra_close(handles[index]);
         return;
     }
-    status = valid_open(&request, size, handle_count) &&
+    if (request.type == ASTRA_WINDOW_SHEET) {
+        sheet_x = request.x;
+        sheet_y = request.y;
+        if (!resolve_sheet_parent(state, &request, session))
+            status = ASTRA_STATUS_INVALID;
+    }
+    if (status == ASTRA_STATUS_OK) status = valid_open(&request, size, handle_count) &&
              (request.type != ASTRA_WINDOW_DESKTOP || state->count == 0u) ?
         ASTRA_STATUS_OK : DISPLAY_FAIL_PROTOCOL;
     if (status == ASTRA_STATUS_OK &&
@@ -5313,6 +5542,10 @@ static void receive_open(uint32_t device, uint32_t irq,
         candidate.id = allocate_id(state);
         candidate.generation = 1u;
         candidate.session = session;
+        if (request.type == ASTRA_WINDOW_SHEET) {
+            candidate.sheet_offset_x = sheet_x;
+            candidate.sheet_offset_y = sheet_y;
+        }
         DisplayFontContext *context = session_font_context(state, session);
         if (context != NULL && context->active) {
             candidate.pending_font = state->font_generation;
@@ -5328,7 +5561,8 @@ static void receive_open(uint32_t device, uint32_t irq,
         added = 1;
         candidate = (DisplayWindow){0};
         damage_window(state, &theme, &state->windows[state->count - 1u]);
-        if ((request.flags & (ASTRA_WINDOW_ACTIVE | ASTRA_WINDOW_MODAL)) != 0u)
+        if ((request.flags & (ASTRA_WINDOW_ACTIVE | ASTRA_WINDOW_MODAL)) != 0u ||
+            request.type == ASTRA_WINDOW_SHEET)
             activate(state, &theme, state->windows[state->count - 1u].id,
                      1, 0u);
         status = render_window_change(device, irq, framebuffer,
@@ -5618,6 +5852,7 @@ static void receive_command(uint32_t device, uint32_t irq,
         status = apply_command(state, &theme, &command, &closed, &changed);
     if (status == ASTRA_STATUS_OK &&
         (command.action == ASTRA_GUI_WINDOW_MENU_OPEN ||
+         command.action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT ||
          command.action == ASTRA_GUI_WINDOW_MENU_BAR_SET)) {
         status = menu_open(state, &theme, window_index, &command, handles[1]);
         changed = status == ASTRA_STATUS_OK;
@@ -5693,6 +5928,7 @@ static void receive_command(uint32_t device, uint32_t irq,
     if (status == ASTRA_STATUS_OK && changed && closed.id == 0u &&
         command.action != ASTRA_GUI_WINDOW_SET_APPLICATION_NAME &&
         command.action != ASTRA_GUI_WINDOW_MENU_OPEN &&
+        command.action != ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT &&
         command.action != ASTRA_GUI_WINDOW_MENU_CLOSE) {
         uint32_t current = find_id(state, id);
 

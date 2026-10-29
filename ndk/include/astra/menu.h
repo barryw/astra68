@@ -30,6 +30,8 @@ enum {
 enum {
     ASTRA_MENU_ATTACHED_TOP = 1u << 0,
     ASTRA_MENU_TRACK_OPEN_PRESS = 1u << 1,
+    /** Deliver activations without ending the menu session. */
+    ASTRA_MENU_KEEP_OPEN = 1u << 2,
 };
 /** Immutable presentation row, borrowed for the control's lifetime. */
 typedef struct AstraMenuItem {
