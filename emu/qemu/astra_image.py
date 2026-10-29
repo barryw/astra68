@@ -114,6 +114,8 @@ DEFAULT_APPS = (os.path.join(REPOSITORY, "sw/userspace/apps/build"),
                 os.path.join(REPOSITORY, "sw/userspace/sdl2/build"),
                 os.path.join(REPOSITORY,
                              "sw/userspace/ports/chocolate-doom/build"),
+                os.path.join(REPOSITORY,
+                             "sw/userspace/ports/chocolate-quake/build"),
                 os.path.join(REPOSITORY, "sw/userspace/ports/astraz/build"))
 APPLICATION_POLICY = os.path.join(
     REPOSITORY, "sw/include/astra/application_policy.h")

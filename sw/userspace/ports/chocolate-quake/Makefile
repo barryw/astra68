@@ -7,9 +7,12 @@ VENDOR := build/vendor/chocolate-quake
 BUILD := build/cmake
 NDK := $(abspath $(ROOT)/ndk/build/dist/check/astra68-ndk-$(ASTRA_OS_VERSION))
 PROGRAM := $(BUILD)/src/chocolate-quake
+PAK_DIR := build/pak
+PAK := $(PAK_DIR)/id1/pak0.pak
+ICON := assets/quake.png
 
 .DEFAULT_GOAL := all
-all: $(PROGRAM)
+all: build/.apps
 
 $(PROGRAM): prepare_source.py Makefile FORCE_SOURCE_CHECK
 	python3 prepare_source.py $(SOURCE) $(VENDOR)
@@ -29,9 +32,15 @@ $(PROGRAM): prepare_source.py Makefile FORCE_SOURCE_CHECK
 
 test: all
 
-$(eval $(call astra_app_bundle,build,ChocolateQuake,$(PROGRAM),apps/ChocolateQuake.app/manifest,geometry,$(SOURCE)/LICENSE))
-bundle: build/.ChocolateQuake.app.stamp
-	mkdir -p build/ChocolateQuake.app/resources/id1
+$(PAK): fetch_pak.py
+	python3 fetch_pak.py $(PAK_DIR)
+
+$(PAK_DIR)/id1 $(PAK_DIR)/licinfo.txt $(PAK_DIR)/slicnse.txt: $(PAK) ;
+
+$(eval $(call astra_app_bundle,build,ChocolateQuake,$(PROGRAM),apps/ChocolateQuake.app/manifest,$(ICON),$(PAK_DIR)/id1 $(PAK_DIR)/licinfo.txt $(PAK_DIR)/slicnse.txt $(SOURCE)/LICENSE))
+build/.ChocolateQuake.app.stamp: $(PAK)
+$(eval $(call astra_app_inventory,build,ChocolateQuake))
+bundle: build/.apps
 
 clean:
 	rm -rf build

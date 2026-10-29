@@ -1,6 +1,9 @@
 # Chocolate Quake on Astra: port plan
 
-Status: asset-backed gameplay and effects ran on DE25; Ogg music uses Codec
+Status: ChocolateQuake.app now ships verified Quake 1.06 shareware data and
+an application-specific AICON, appears in Atlas Applications, and launches
+by double-click on DE25. Registered game data and music remain user supplied.
+Asset-backed gameplay and effects ran on DE25; Ogg music uses Codec
 Kit's isolated AArch64 Vorbis worker. Guest music underflow telemetry found
 startup gaps; post-seek preroll eliminated them. Exact staged release passed
 DE25 music and native Codec Kit gates. Same software tree was rebuilt from
@@ -74,8 +77,13 @@ Target: Chocolate Quake 2.1.0 (tag
   `SDLMixerProbe` tests decoding and playback of all three formats in QEMU.
 - Prepared source searches `/app/resources/id1` for bundled game data, then
   `/store/id1` for user files, saves, and overrides. It creates the writable
-  store directory. `pak0.pak` is user supplied; put it in bundle's
-  `resources/id1/` or application's `/store/id1/`. No game data is bundled.
+  store directory. Bundle builds fetch original Quake 1.06 shareware from
+  the idgames mirror, verify archive and `pak0.pak` SHA-256, and install the
+  PAK plus its license in `resources/`. Licensed registered game data belongs
+  in `/store/id1/`, and optional music in `/store/id1/music/`. No commercial
+  assets enter source control. The shareware license permits personal play;
+  review its distribution terms before publishing a built image containing
+  the extracted PAK.
 - First guarded DE25 trial reached `Host_Init` and reported missing `gfx.wad`
   without game data. User-supplied registered `pak0.pak` and `track02.ogg`
   later ran in private copied-image trial; original assets and production
@@ -88,8 +96,8 @@ Target: Chocolate Quake 2.1.0 (tag
 - SDL Kit 2.32.11 fixes zero-sized fullscreen restore geometry and exposes
   one physical audio output to multiple independent SDL streams. Quake requires
   2.32.11. That SDL Kit requires system.library 4.3.0 for gamepad symbols.
-  Production now has SDL Kit 2.32.11 and system.library 4.3.0. Normal Quake
-  launch still requires user-supplied commercial game assets.
+  Production now has SDL Kit 2.32.11 and system.library 4.3.0. The bundled
+  shareware episode launches without commercial assets.
 - Supervisor now completes boot services before startup applications, even
   if an application precedes Desktop in the manifest. Desktop signals ready
   after first frame and startup sound drain. DE25 deliberately used that

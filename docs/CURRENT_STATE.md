@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-28
 
+Chocolate Quake bundle checkpoint, 2026-10-28: `ChocolateQuake.app` now has
+its own copper Q AICON, verified Quake 1.06 shareware `pak0.pak`, bundled
+license, and `.apps` inventory entry. The default image and recursive
+userspace build select it alongside Doom. The shared bundle builder now copies
+resource directories, keeping nested `id1/pak0.pak` in the application.
+Haiku reference: `src/kits/storage/AppFileInfo.cpp` stores per-application
+icons; Astra keeps its manifest icon and AICON format. Beast MC68040 bundle
+build, exact dynamic dependency check, manifest check, SHA-256 data check,
+image-provider tests, and a fresh 256 MiB default system image pass (SHA-256
+`e025cba3373dfbe3f4a17dadc818b0374617ed49f57489d4f48771d3aaf9addb`).
+DE25 focused install showed the Q icon in
+Atlas Applications; double-click launched shareware Quake and reached live
+demo gameplay. Services restarted to idle with zero Astra restarts.
+Evidence: `/mnt/Documents/astra68/quake-bundle-20261028/` on Beast.
+Shareware contains no licensed CD music; optional user music stays under
+`STORE:id1/music/`. Built images with extracted shareware PAK are for local
+testing until distribution terms are reviewed.
+
 Application data checkpoint, 2026-10-28: supervisor now grants application
 `STORE:` from `HOME:/Application Data/<stable bundle id>/`; SDL preference
 paths remain `/store/`. First launch moves a legacy bundle-name directory

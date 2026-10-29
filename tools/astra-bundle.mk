@@ -41,7 +41,7 @@ $(1)/.$(2).app.stamp: $(3) $(4) $(ASTRA_ICON_TOOL) $(ASTRA_BUNDLE_TOOL) \
 	cp $(4) $(1)/$(2).app/manifest
 	cp $(3) $(1)/$(2).app/bin/m68k-68040/$(2)
 	python3 $(ASTRA_ICON_TOOL) $(5) $(1)/$(2).app/resources/$(2).aicon
-	$(if $(strip $(6)),cp $(6) $(1)/$(2).app/resources/)
+	$(if $(strip $(6)),cp -R $(6) $(1)/$(2).app/resources/)
 	$(if $(strip $(7)),mkdir -p $(1)/$(2).app/resources/defaults && \
 		cp $(7) $(1)/$(2).app/resources/defaults/)
 	$(ASTRA_BUNDLE_TOOL) check $(1)/$(2).app
