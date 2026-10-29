@@ -2,20 +2,45 @@
 
 Status: active continuation map, 2026-10-29
 
-AstraZ V6 checkpoint, 2026-10-29: focused DE25 install now opens Zork Zero
-with its companion Blorb. First visible frame shows the Banquet Hall artwork
-as a strip at the bottom of a mostly blank canvas; visual correctness is open.
-Screenshot SHA-256 `101e71501b4d7d11922ebae8f5db12610feaa3efe750fb50e737d0311e3a6fee`
-is at `/mnt/Documents/astra68/astraz-media-20261029/zork0-first.png` on
-Beast. GUI input is paused for user inspection. Shared Graphics Kit
-`astra_draw_list_append_view` now composes named-font text, after its initial
-rejection blocked every AstraZ frame; Beast system tests and library contract
-pass. Independent Z3/Z4/Z5/Z6/Z8 story, AIFF and MOD board gates remain open.
-AIFF first-pass probe exposed Blorblib's distinct FORM FilePos convention;
-AstraZ normalization is built for retest. MOD first-pass result is inconclusive
-because its installed SDL mixer was stale; corrected Kit build now matches
-the MOD-capable mixer and awaits board retest. No new board panic or
-spontaneous service restart occurred during these trials.
+AstraZ V6 checkpoint, 2026-10-29: focused DE25 install opens Zork Zero
+with its companion Blorb. An 8x8 protected AFNT face and corrected native
+canvas geometry place the Banquet Hall banner at the top, pillars on both
+sides, and readable story text below. Captured frame SHA-256
+`3b7c2f86e6fd35e095956e78377c450f14104fd605b7caf6f7546f860ef58731`
+is at `/mnt/Documents/astra68/astraz-media-20261029/zork0-pixel-8x8.png`
+on Beast. Shared Graphics Kit `astra_draw_list_append_view` composes
+named-font text; Beast system tests and library contract pass. Native Z3 GUI
+launch, input, and quit pass on DE25. Digital AIFF and MOD playback probes pass;
+audible HDMI certification remains open because HDMI is disconnected.
+Independent DE25 input matrix now passes for Z3 Zork I, Z4 Trinity, Z5
+Sherlock, Z6 Zork Zero, and Z8 One Room: each accepts `look`, renders its
+response, and returns to one usable prompt. Z4/Z8 transcript scrolling is
+correct. Z6's command, response, transient paging prompt and underline caret
+remain inside the 320x200 story canvas; no lower input field appears.
+Graphics font 3 passed its synthetic Z6 host and DE25 visual gates with a
+protected AFNT glyph face. DE25 screenshot SHA-256
+`de696218530a0e46bbb9270f5779fb85fde64c76858de36a3cc8e8d60e9121ff`
+is at `/mnt/Documents/astra68/astraz-validation-20261029/font3-display-settled.png`
+on Beast. Z6 inline Backspace editing also passed: `loox` edited to `look`
+and returned the expected Banquet Hall response; capture SHA-256
+`d3370d45d8536216412c3d618bd10c5d764ff038a05b973544e3ca9eaef9e1c3`
+is at `/mnt/Documents/astra68/astraz-validation-20261029/z6-edit-settled.png`.
+Window resize, maximize and distraction-free full-screen remain open; the
+native window protocol supports both modes. No new board panic or spontaneous
+service restart occurred during these trials.
+Interface Kit 7.11 Text View word wrapping is implemented for responsive text
+story windows. It remeasures visual lines at the chosen viewport width and
+keeps selection, pointer hit testing and keyboard navigation aligned with
+wrapped rows. Isolated Beast host tests, sanitizers and MC68040 library
+contract pass; AstraZ resize integration and DE25 retest remain open. Haiku
+reference: `src/kits/interface/TextView.cpp` `FrameResized`, `SetWordWrap`,
+`CanEndLine` (reflow on width change; break at word boundaries, then characters).
+The display-server maximize gadget now sends frame and resize events after
+changing window geometry, matching programmatic maximize. Isolated Beast
+host tests, sanitizers and MC68040 display build pass; DE25 retest remains
+open. Haiku reference: `src/servers/app/ServerWindow.cpp` `NotifyZoom` and
+`src/kits/interface/Window.cpp` `Zoom`/`FrameResized` (notify client when
+server-side window chrome changes its frame).
 
 Chocolate Quake bundle checkpoint, 2026-10-28: `ChocolateQuake.app` now has
 its own copper Q AICON, verified Quake 1.06 shareware `pak0.pak`, bundled
