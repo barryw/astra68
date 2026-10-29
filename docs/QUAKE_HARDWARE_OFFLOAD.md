@@ -4,6 +4,49 @@ Status: measured design checkpoint, 2026-10-29. No RTL or production runtime
 changed. Usability gate is sustained 30 FPS at default 320×200 on DE25, with
 no audio gaps or multi-second pauses.
 
+## Fixed-demo DE25 baseline, 2026-10-29
+
+The selected release ran Quake's built-in `+timedemo demo1` from Astra's native
+Terminal with `open /apps/ChocolateQuake.app -condebug +timedemo demo1`.
+The on-screen result was **969 frames in 62.7 seconds, 15.5 FPS**. A 30-second
+window during this run had zero audio underruns and software gaps. The timedemo
+exercises one fixed scene sequence; its average is the first same-workload
+baseline, not a sustained-playability pass. A second run was started but its
+result was not captured, so run-to-run variance is still unknown.
+
+An AArch64 `perf` capture of the selected QEMU during a later `demo1` run
+recorded 995 samples with none lost. Named QEMU helpers accounted for 3.17%
+`helper_fsmul`, 2.91% `helper_fsadd`, 1.78% `helper_ftst`, and 1.66%
+`helper_fsround`; translated code appears mostly as anonymous JIT addresses.
+These host shares do not replace guest function attribution. They show no
+single named QEMU helper can by itself close the roughly 1.94× throughput gap
+between this timedemo and 30 FPS. The earlier guest-PC captures still point
+to spans, visibility, depth, and surface-cache work together. Profiling the
+fixed demo and measuring a generic graphics operation against its software
+oracle remain next steps; speculative RTL has no route or timing evidence.
+
+Evidence: `/mnt/Documents/astra68/quake-timedemo-20261029/` on Beast contains
+the result screenshot, 30-second telemetry, host `perf.data`, and report.
+Quake's `-condebug` log lives in its app-private STORE. Terminal correctly
+cannot read that namespace, so automated result extraction remains open. The
+board returned to the selected release at stage 8, zero restarts, 8.1 GiB
+free; temporary trial files were removed after archival.
+
+An isolated `-O3 -DNDEBUG -fno-strict-aliasing` build passed the NDK dynamic
+dependency check and a focused DE25 install. The same 969-frame `demo1` took
+57.7 seconds, **16.8 FPS**, about 8% faster than the one captured `-O2` run.
+The candidate is still 44% below the 30 FPS gate, and the two runs do not
+establish variance. The compiler trial was not retained. Its debug log was
+read through a read-only loop while `astra.service` was stopped, then the loop
+was detached and the original Quake binary was focused-installed. Doom's
+startup window had one audio gap and 1,201 underruns, matching the earlier
+startup transient; its following 20-second window reached 35.06 presents/s
+with zero gaps and underruns. DE25 ended at stage 8, zero service restarts,
+8.2 GiB free. Candidate binary, log, Doom telemetry, and screenshots are in
+the same Beast evidence directory. A repeated A/B/A timedemo is required
+before adopting `-O3`; even a confirmed 8% gain leaves the main rendering
+bottleneck open.
+
 ## MC68040 software trials
 
 `D_DrawSpans8` spends about 18–21% of sampled Quake time in perspective-corrected

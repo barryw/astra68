@@ -38,9 +38,11 @@ without audio gaps or multi-second pauses. The selected release measured
 audio faults; the latter used 79.6% Quake CPU, 11.9% display CPU and left
 6.4% guest idle. Two live guest-PC captures now identify software world
 texture spans, visibility, depth, and surface-cache work as dominant Quake
-costs; indexed SDL conversion is about 4% of Quake samples. Exact cycle
-attribution and repeatable timedemos remain open. Hardware offload candidates,
-capacity, and qualification gates are in `docs/QUAKE_HARDWARE_OFFLOAD.md`;
+costs; indexed SDL conversion is about 4% of Quake samples. A fixed `demo1`
+timedemo now measures 969 frames in 62.7 seconds, 15.5 FPS on DE25. Exact
+cycle attribution and automated repeat runs remain open. Hardware offload
+candidates, capacity, and qualification gates are in
+`docs/QUAKE_HARDWARE_OFFLOAD.md`;
 port details remain in `docs/CHOCOLATE_QUAKE_PORT.md`.
 
 Quake SDL/Astraea trial, 2026-10-28: a shared INDEX8 SDL streaming-texture
@@ -57,8 +59,9 @@ No RTL or bitstream changed. Evidence and trial patch:
 mover lacks INDEX8 palette lookup; extending it may reuse hardware, but
 would only remove roughly 4% of Quake CPU cost. FPGA has 6,046 ALMs and 41
 RAM blocks free in the selected full route, with just +0.007 ns worst setup
-slack. Next work remains a repeatable timedemo and a measured, generic
-graphics operation targeting Quake's dominant span work before any RTL change.
+slack. Next work remains automated fixed-demo result capture and a measured,
+generic graphics operation targeting Quake's dominant span work before any
+RTL change.
 Existing SDLFrameBench on restored DE25 library reached 59–61 FPS with
 640×480 ARGB/RGB565 streaming textures; ordinary SDL upload/copy/present is
 not the measured 30 FPS blocker. Quake's world-rendering stages remain the
@@ -70,8 +73,7 @@ Grouping supported FPCR conversions and caching texture rows produced no
 repeatable DE25 speed gain, so both candidate source changes were discarded.
 Original Quake was rebuilt and focused-installed; a 30-second demo window ran
 at 20.90 presents/s with zero audio faults. Doom then ran at 34.62 presents/s
-with zero audio faults. The 30 FPS Quake gate remains open; next step is
-automated same-demo result capture. Evidence and trial detail:
+with zero audio faults. The 30 FPS Quake gate remains open. Evidence and trial detail:
 `docs/QUAKE_HARDWARE_OFFLOAD.md` and
 `/mnt/Documents/astra68/quake-fintrz-20261028/` on Beast. No FPGA change.
 The focused DE25 installer now waits through systemd `activating` before
@@ -85,6 +87,26 @@ NDK header tests also exposed implicit `void *` conversions in
 fallback compile as C and C++. Haiku reference:
 `headers/os/support/ByteOrder.h` keeps byte-order conversions explicit;
 Astra retains its existing endian functions and runtime behavior.
+
+Fixed-demo Quake checkpoint, 2026-10-29: native Terminal launched the selected
+Quake bundle with `+timedemo demo1`; DE25 displayed 969 frames / 62.7 seconds /
+15.5 FPS. A 30-second window had zero audio faults. A later 20-second AArch64
+`perf` run sampled selected QEMU: named floating-point helpers each accounted
+for at most 3.17% of host cycles, while most translated guest code remains
+anonymous. No single helper or previously tested indexed upload can bridge
+the roughly 1.94× gap to 30 FPS. Screenshot, telemetry and perf data are on
+Beast in `/mnt/Documents/astra68/quake-timedemo-20261029/`. Repeated same-demo
+result capture is still needed; Quake's debug log is isolated in its private
+STORE, correctly inaccessible to Terminal. Board returned to selected runtime
+at stage 8 with zero restarts and 8.1 GiB free; trial files were removed.
+An isolated `-O3` compiler build passed the NDK dependency check and took
+57.7 seconds for the same 969 frames, 16.8 FPS, about 8% above the one
+captured `-O2` run. This is still below the 30 FPS gate, and run variance is
+unmeasured, so the candidate was discarded. The original Quake binary was
+restored through the focused installer. Doom's next steady 20-second window
+reached 35.06 presents/s with zero audio faults; its startup window showed
+the previously observed transient gap. Final DE25 stage 8, zero restarts,
+8.2 GiB free. Trial log and telemetry are in the same Beast directory.
 
 Application data checkpoint, 2026-10-28: supervisor now grants application
 `STORE:` from `HOME:/Application Data/<stable bundle id>/`; SDL preference
