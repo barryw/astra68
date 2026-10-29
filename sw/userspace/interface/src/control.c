@@ -2918,6 +2918,9 @@ static AstraResult measure_container(const AstraUIContext *context,
 {
     const AstraControl *container = &context->_private_controls[index];
     const AstraFlexLayout *layout = &container->_private_child_layout;
+
+    if (size == NULL || !layout_valid(layout))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     if (layout->direction == ASTRA_FLEX_ROW &&
         (layout->flags & ASTRA_FLEX_WRAP) != 0u &&
         container->_private_minimum_width != 0u &&
@@ -2982,8 +2985,6 @@ static AstraResult measure_container(const AstraUIContext *context,
     uint32_t count = 0u;
     int row = layout->direction == ASTRA_FLEX_ROW;
 
-    if (size == NULL || !layout_valid(layout))
-        return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = next_layout_child(
              context, container->_private_first_child);
          at != CONTROL_NONE;
