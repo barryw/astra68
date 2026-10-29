@@ -1,6 +1,6 @@
 # C2 collection view notes
 
-Status: Columns and Table implemented over C1; Tree, icon Grid, and
+Status: Columns, Table, and Tree implemented over C1; icon Grid and
 Pagination remain open.
 
 ## Haiku read-only review
@@ -44,14 +44,28 @@ rows and cells is transactional and preserves the selected stable ID. Gallery
 shows a two-column table beside the Columns browser; Beast tests cover header
 hit, selection, rendering, reorder and invalid update rollback.
 
+## Tree contract
+
+`AstraTreeModel` borrows a C1 collection. Parallel preorder nodes carry stable
+parent IDs and mutable expansion flags; the library computes depth and fills
+the caller's visible-row workspace. Invalid parents, depth over 63, duplicate
+IDs, and insufficient workspace are rejected. Selection stays in the C1
+model. Collapsing an ancestor selects the nearest visible ancestor, and the
+control's value is always a visible-row index. Arrow up/down and Home/End
+move through visible rows; left/right collapse or expand branches and move to
+parent/first child when already collapsed/expanded. The disclosure glyph is
+pointer clickable, and changes emit `ASTRA_UI_ACTION_EXPANSION_CHANGED` with
+the full collection item index. `astra_interface_tree_set_nodes` replaces the
+hierarchy and items together, preserving selection by stable ID and restoring
+the old state if validation or layout fails. Draw-list estimates and painting
+iterate only clipped visible rows.
+
 ## Remaining contracts
 
 - Table sorting remains an application command: callers reorder C1 items and
   matching cells in one `astra_interface_table_set_rows` call. Resizable
   columns, column-specific alignment, and secondary sort indicators remain
   design gaps.
-- Tree needs parent identity, expansion state, visible-row mapping, and
-  collapse/reveal semantics without dropping C1 selected IDs.
 - Icon Grid needs `AstraIconTileInfo` in the retained control pipeline with
   selected-item hit testing and two-dimensional keyboard navigation. Current
   `ASTRA_CONTROL_GRID_VIEW` is a fixed-cell text surface and must remain

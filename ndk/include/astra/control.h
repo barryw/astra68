@@ -55,7 +55,9 @@ enum {
     /** Menu-backed, single-choice field. */
     ASTRA_CONTROL_POPUP = 23u,
     /** Fixed-width columns and C1 stable row selection. */
-    ASTRA_CONTROL_TABLE = 24u
+    ASTRA_CONTROL_TABLE = 24u,
+    /** Hierarchical rows with C1 stable item selection. */
+    ASTRA_CONTROL_TREE = 25u
 };
 
 /** Semantic state owned by an application. */
@@ -758,6 +760,47 @@ typedef struct AstraTableInfo {
     sizeof(AstraTableInfo), 0, 0, 0, {0, 0, 0, 0} \
 }
 
+#define ASTRA_TREE_MAX_DEPTH 64u /**< Maximum supported nesting depth. */
+/** Caller-owned hierarchy metadata parallel to CollectionItem entries.
+ * parent_id zero denotes a root. The library computes depth on initialization
+ * and node replacement. Expanded is mutable through the Tree API. */
+typedef struct AstraTreeNode {
+    uint64_t parent_id; /**< Parent collection ID or zero for root. */
+    uint32_t expanded; /**< Zero or one. */
+    uint32_t depth; /**< Library-computed nesting depth. */
+} AstraTreeNode;
+
+/** Caller-owned visible-row workspace and C1 collection binding. */
+typedef struct AstraTreeModel {
+    uint32_t size; /**< Structure size. */
+    AstraCollectionModel *collection; /**< Borrowed C1 identity/selection model. */
+    AstraTreeNode *nodes; /**< Mutable preorder hierarchy, one per item. */
+    uint32_t node_count; /**< Must equal collection item count. */
+    uint32_t *visible_rows; /**< Caller-owned array of item indices. */
+    uint32_t visible_capacity; /**< At least node_count entries. */
+    uint32_t visible_count; /**< Library-computed visible row count. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraTreeModel;
+
+/** Empty Tree model. */
+#define ASTRA_TREE_MODEL_INIT { \
+    sizeof(AstraTreeModel), 0, 0, 0, 0, 0, 0, {0, 0} \
+}
+
+/** Creation data for one retained Tree control. */
+typedef struct AstraTreeInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t id; /**< Nonzero control ID. */
+    AstraTreeModel *model; /**< Borrowed hierarchy and C1 model. */
+    uint32_t state; /**< Disabled, error, collapsed, or zero. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraTreeInfo;
+
+/** Empty Tree control creation data. */
+#define ASTRA_TREE_INFO_INIT { \
+    sizeof(AstraTreeInfo), 0, 0, 0, {0, 0, 0, 0} \
+}
+
 enum {
     /** Permit selection and copying but reject document mutations. */
     ASTRA_FIELD_READ_ONLY = UINT32_C(1) << 0,
@@ -1020,7 +1063,9 @@ enum {
     /** Secondary click or keyboard context gesture; control_id is its target. */
     ASTRA_UI_ACTION_CONTEXT_MENU = 9u,
     /** A transient control was dismissed without activation. */
-    ASTRA_UI_ACTION_DISMISS = 10u
+    ASTRA_UI_ACTION_DISMISS = 10u,
+    /** Tree branch changed; value is its index in the full C1 collection. */
+    ASTRA_UI_ACTION_EXPANSION_CHANGED = 11u
 };
 
 /** Semantic result emitted by a handled window event. */
@@ -1031,7 +1076,8 @@ typedef struct AstraUIAction {
     uint32_t type;
     /** ID of the control that emitted the action. */
     uint32_t control_id;
-    /** Current value for VALUE_CHANGED, or selected row for List ACTIVATE. */
+    /** Current value for VALUE_CHANGED, selected row for collection ACTIVATE,
+     * or full item index for EXPANSION_CHANGED. */
     int64_t value;
     /** Decimal places for @ref value; zero for nonnumeric actions. */
     uint32_t decimal_places;

@@ -34,6 +34,9 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_popup_handle_event;
         astra_interface_popup_close;
         astra_interface_split_button_init;
+        astra_interface_tree_init;
+        astra_interface_tree_set_expanded;
+        astra_interface_tree_set_nodes;
         astra_interface_progress_init;
         astra_interface_progress_set;
         astra_interface_level_meter_init;

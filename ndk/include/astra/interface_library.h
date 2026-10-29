@@ -298,6 +298,39 @@ AstraResult astra_interface_table_init(AstraControl *control,
 AstraResult astra_interface_table_set_rows(AstraUIContext *context,
     AstraControl *control, const AstraCollectionItem *items, uint32_t count,
     const AstraTableCell *cells, uint32_t cell_count);
+/** Initialize a retained Tree over one C1 collection and preorder hierarchy.
+ * Computes depth and visible rows in the caller-owned workspace.
+ * @param control Caller-owned retained control.
+ * @param info Tree description with borrowed model.
+ * @return ASTRA_OK or validation error.
+ */
+AstraResult astra_interface_tree_init(AstraControl *control,
+    const AstraTreeInfo *info);
+/** Expand or collapse a branch by stable item ID. A hidden selected descendant
+ * selects its newly visible ancestor. A leaf returns INVALID_ARGUMENT.
+ * @param context Owning UI context.
+ * @param control Tree to update.
+ * @param item_id Stable C1 item ID of branch.
+ * @param expanded Zero to collapse, one to expand.
+ * @return ASTRA_OK or validation/layout error.
+ */
+AstraResult astra_interface_tree_set_expanded(AstraUIContext *context,
+    AstraControl *control, uint64_t item_id, uint32_t expanded);
+/** Replace the full preorder hierarchy transactionally, preserving the C1
+ * selected ID when it remains visible.
+ * @param context Owning UI context.
+ * @param control Tree to update.
+ * @param items Borrowed new C1 items.
+ * @param count Item and node count.
+ * @param nodes Mutable parallel parent/expanded metadata.
+ * @param visible_rows Caller-owned workspace with at least count entries.
+ * @param visible_capacity Number of entries in visible_rows.
+ * @return ASTRA_OK or validation/layout error.
+ */
+AstraResult astra_interface_tree_set_nodes(AstraUIContext *context,
+    AstraControl *control, const AstraCollectionItem *items, uint32_t count,
+    AstraTreeNode *nodes, uint32_t *visible_rows,
+    uint32_t visible_capacity);
 /** Initialize a single-line UTF-8 field.
  * @param control Caller-owned control to initialize.
  * @param info Field description; its text model remains caller-owned.

@@ -478,6 +478,18 @@ the control remeasures, relayouts, and damages itself. Grid View does not
 handle editing or selection. Compose it with Container and ScrollView when
 those behaviors are needed.
 
+Interface Kit 9.0 adds a selectable Tree control over the shared
+`AstraCollectionModel`. The caller supplies parallel preorder `AstraTreeNode`
+entries and a visible-row workspace in `AstraTreeModel`. Parent IDs refer to
+the collection's stable item IDs; zero denotes a root. Initialize with
+`astra_interface_tree_init`, then use `astra_interface_tree_set_expanded` to
+change a branch or `astra_interface_tree_set_nodes` to replace items and the
+hierarchy together. The library maintains computed depth and visible rows.
+Collapsing a branch with a selected descendant selects the nearest visible
+ancestor. Control values and activation actions name visible row indices;
+`ASTRA_UI_ACTION_EXPANSION_CHANGED` names the full collection item index.
+Tree uses the same focus, selection, clipping, and ScrollView behavior as List.
+
 {c:type}`AstraTextSurface` owns presentation policy and caller-provided scratch
 storage, not the document. Grid cells, selection, and scrollback remain in the
 application. Grid selections are normalized half-open ranges. The extraction

@@ -52,7 +52,8 @@
     ((kind) == ASTRA_CONTROL_CHECKBOX || (kind) == ASTRA_CONTROL_RADIO || \
      (kind) == ASTRA_CONTROL_SWITCH)
 #define COLLECTION_KINDS(kind) \
-    ((kind) == ASTRA_CONTROL_LIST || (kind) == ASTRA_CONTROL_TABLE)
+    ((kind) == ASTRA_CONTROL_LIST || (kind) == ASTRA_CONTROL_TABLE || \
+     (kind) == ASTRA_CONTROL_TREE)
 #define CHOICE_KINDS(kind) \
     ((kind) == ASTRA_CONTROL_SEGMENTED || (kind) == ASTRA_CONTROL_TAB || \
      COLLECTION_KINDS(kind) || (kind) == ASTRA_CONTROL_POPUP)
@@ -144,6 +145,16 @@ static const AstraTableModel *table_model(const AstraControl *control)
     return (const AstraTableModel *)control->_private_display_model;
 }
 
+static AstraTreeModel *tree_model(AstraControl *control)
+{
+    return (AstraTreeModel *)(void *)control->_private_display_model;
+}
+
+static const AstraTreeModel *const_tree_model(const AstraControl *control)
+{
+    return (const AstraTreeModel *)control->_private_display_model;
+}
+
 static int table_cells_valid(const AstraTableCell *cells, uint32_t count)
 {
     if (count != 0u && cells == NULL) return 0;
@@ -205,6 +216,96 @@ static int32_t collection_index(const AstraCollectionItem *items,
     for (uint32_t at = 0u; at < count; ++at)
         if (items[at].id == id) return (int32_t)at;
     return -1;
+}
+
+static int32_t tree_visible_index(const AstraTreeModel *tree, uint64_t id)
+{
+    if (id == 0u) return -1;
+    for (uint32_t row = 0u; row < tree->visible_count; ++row)
+        if (tree->collection->items[tree->visible_rows[row]].id == id)
+            return (int32_t)row;
+    return -1;
+}
+
+static void tree_normalize_selection(AstraTreeModel *tree)
+{
+    uint64_t id = tree->collection->selected_id;
+
+    while (id != 0u && tree_visible_index(tree, id) < 0) {
+        int32_t index = collection_index(tree->collection->items,
+                                          tree->node_count, id);
+        id = index < 0 ? 0u : tree->nodes[index].parent_id;
+    }
+    tree->collection->selected_id = id;
+}
+
+static int tree_has_children(const AstraTreeModel *tree, uint32_t item)
+{
+    return item + 1u < tree->node_count &&
+        tree->nodes[item + 1u].depth > tree->nodes[item].depth;
+}
+
+static int tree_rebuild(AstraTreeModel *tree, int validate_items)
+{
+    uint64_t ancestors[ASTRA_TREE_MAX_DEPTH];
+    uint32_t indices[ASTRA_TREE_MAX_DEPTH];
+    uint8_t visible[ASTRA_TREE_MAX_DEPTH];
+    uint32_t previous_depth = 0u;
+
+    if (tree == NULL || tree->size != sizeof(*tree) ||
+        tree->collection == NULL ||
+        tree->collection->size != sizeof(AstraCollectionModel) ||
+        tree->node_count != tree->collection->item_count ||
+        tree->visible_capacity < tree->node_count ||
+        (tree->node_count != 0u &&
+         (tree->nodes == NULL || tree->visible_rows == NULL)) ||
+        !astra_words_zero(tree->reserved, 2u) ||
+        (validate_items &&
+         !collection_items_valid(tree->collection->items, tree->node_count)))
+        return 0;
+
+    /* Validate preorder and depth without modifying caller-owned state. */
+    for (uint32_t item = 0u; item < tree->node_count; ++item) {
+        uint32_t depth = 0u;
+
+        if (tree->nodes[item].expanded > 1u ||
+            (item == 0u && tree->nodes[item].parent_id != 0u))
+            return 0;
+        if (tree->nodes[item].parent_id != 0u) {
+            while (depth <= previous_depth &&
+                   ancestors[depth] != tree->nodes[item].parent_id)
+                ++depth;
+            if (depth > previous_depth ||
+                depth + 1u >= ASTRA_TREE_MAX_DEPTH)
+                return 0;
+            ++depth;
+        }
+        ancestors[depth] = tree->collection->items[item].id;
+        previous_depth = depth;
+    }
+
+    tree->visible_count = 0u;
+    previous_depth = 0u;
+    for (uint32_t item = 0u; item < tree->node_count; ++item) {
+        uint32_t depth = 0u;
+
+        if (tree->nodes[item].parent_id != 0u) {
+            while (depth <= previous_depth &&
+                   ancestors[depth] != tree->nodes[item].parent_id)
+                ++depth;
+            if (depth > previous_depth) return 0;
+            ++depth;
+        }
+        tree->nodes[item].depth = depth;
+        visible[depth] = depth == 0u ||
+            (visible[depth - 1u] && tree->nodes[indices[depth - 1u]].expanded);
+        if (visible[depth])
+            tree->visible_rows[tree->visible_count++] = item;
+        ancestors[depth] = tree->collection->items[item].id;
+        indices[depth] = item;
+        previous_depth = depth;
+    }
+    return 1;
 }
 
 static AstraScrollModel *scroll_model(AstraControl *control)
@@ -454,7 +555,30 @@ static int control_valid(const AstraControl *control)
     if (control->_private_control_kind == ASTRA_CONTROL_LEVEL_METER ||
         control->_private_control_kind == ASTRA_CONTROL_SPARKLINE)
         return astra_interface_display_model_valid(control);
-    if (COLLECTION_KINDS(control->_private_control_kind))
+    if (control->_private_control_kind == ASTRA_CONTROL_TREE) {
+        const AstraTreeModel *tree = const_tree_model(control);
+        const AstraCollectionModel *model = const_collection_model(control);
+
+        return tree != NULL && model != NULL &&
+               tree->size == sizeof(*tree) && tree->collection == model &&
+               tree->node_count == model->item_count &&
+               tree->visible_count == control->_private_text_length &&
+               tree->visible_capacity >= tree->node_count &&
+               (tree->visible_count == 0u || tree->visible_rows != NULL) &&
+               (tree->node_count == 0u || tree->nodes != NULL) &&
+               (control->_private_value < 0 ? model->selected_id == 0u :
+                control->_private_value < (int64_t)tree->visible_count &&
+                model->items[tree->visible_rows[control->_private_value]].id ==
+                    model->selected_id) &&
+               control->_private_minimum_value >= -1 &&
+               control->_private_maximum_value ==
+                   (int64_t)tree->visible_count - 1 &&
+               control->_private_style == 0u &&
+               (state & ~CONTROL_VALUE_STATES) == 0u &&
+               control->_private_preview_state == 0u;
+    }
+    if (control->_private_control_kind == ASTRA_CONTROL_LIST ||
+        control->_private_control_kind == ASTRA_CONTROL_TABLE)
         return control->_private_text != NULL &&
                (control->_private_control_kind == ASTRA_CONTROL_LIST ?
                     control->_private_display_model == NULL :
@@ -1373,7 +1497,8 @@ static AstraResult collection_set_items(AstraUIContext *context,
     uint32_t index = control_index(context, control);
 
     if (index == CONTROL_NONE ||
-        !COLLECTION_KINDS(control->_private_control_kind) ||
+        (control->_private_control_kind != ASTRA_CONTROL_LIST &&
+         control->_private_control_kind != ASTRA_CONTROL_TABLE) ||
         !collection_items_valid(items, count))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (control->_private_control_kind == ASTRA_CONTROL_TABLE) {
@@ -1471,6 +1596,122 @@ AstraResult astra_interface_popup_init(AstraControl *control,
                                        const AstraChoiceInfo *info)
 {
     return choice_init(control, info, ASTRA_CONTROL_POPUP);
+}
+
+AstraResult astra_interface_tree_init(AstraControl *control,
+    const AstraTreeInfo *info)
+{
+    AstraTreeModel *tree;
+
+    if (control == NULL || info == NULL || info->size != sizeof(*info) ||
+        info->id == 0u || info->model == NULL ||
+        (info->state & ~CONTROL_VALUE_STATES) != 0u ||
+        !astra_words_zero(info->reserved, 4u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    tree = info->model;
+    if (!tree_rebuild(tree, 1) ||
+        !astra_words_zero(tree->collection->reserved, 2u) ||
+        (tree->collection->selected_id != 0u &&
+         collection_index(tree->collection->items, tree->node_count,
+                          tree->collection->selected_id) < 0))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    tree_normalize_selection(tree);
+    *control = (AstraControl)ASTRA_CONTROL_INIT;
+    control->_private_control_kind = ASTRA_CONTROL_TREE;
+    control->_private_id = info->id;
+    control->_private_state = info->state;
+    control->_private_text = (const char *)(void *)tree->collection;
+    control->_private_text_length = tree->visible_count;
+    control->_private_display_model = tree;
+    control->_private_value = tree_visible_index(tree,
+        tree->collection->selected_id);
+    control->_private_minimum_value = -1;
+    control->_private_maximum_value = (int64_t)tree->visible_count - 1;
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_tree_set_expanded(AstraUIContext *context,
+    AstraControl *control, uint64_t item_id, uint32_t expanded)
+{
+    AstraTreeModel *tree;
+    AstraControl next;
+    AstraResult result;
+    uint64_t selected_before;
+    int32_t item;
+
+    if (control_index(context, control) == CONTROL_NONE ||
+        control->_private_control_kind != ASTRA_CONTROL_TREE ||
+        expanded > 1u || item_id == 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    tree = tree_model(control);
+    item = collection_index(tree->collection->items, tree->node_count, item_id);
+    if (item < 0 || !tree_has_children(tree, (uint32_t)item))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (tree->nodes[item].expanded == expanded) return ASTRA_OK;
+    selected_before = tree->collection->selected_id;
+    tree->nodes[item].expanded = expanded;
+    (void)tree_rebuild(tree, 0);
+    tree_normalize_selection(tree);
+    next = *control;
+    next._private_text_length = tree->visible_count;
+    next._private_value = tree_visible_index(tree, tree->collection->selected_id);
+    next._private_maximum_value = (int64_t)tree->visible_count - 1;
+    result = replace_measured_control(context, control, &next);
+    if (result != ASTRA_OK) {
+        tree->nodes[item].expanded = !expanded;
+        (void)tree_rebuild(tree, 0);
+        tree->collection->selected_id = selected_before;
+    }
+    return result;
+}
+
+AstraResult astra_interface_tree_set_nodes(AstraUIContext *context,
+    AstraControl *control, const AstraCollectionItem *items, uint32_t count,
+    AstraTreeNode *nodes, uint32_t *visible_rows, uint32_t visible_capacity)
+{
+    AstraTreeModel *tree;
+    AstraTreeModel before;
+    AstraCollectionModel collection_before;
+    AstraControl next;
+    AstraResult result;
+    uint32_t index = control_index(context, control);
+
+    if (index == CONTROL_NONE ||
+        control->_private_control_kind != ASTRA_CONTROL_TREE ||
+        !collection_items_valid(items, count))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    tree = tree_model(control);
+    before = *tree;
+    collection_before = *tree->collection;
+    tree->collection->items = items;
+    tree->collection->item_count = count;
+    tree->nodes = nodes;
+    tree->node_count = count;
+    tree->visible_rows = visible_rows;
+    tree->visible_capacity = visible_capacity;
+    if (!tree_rebuild(tree, 0)) {
+        *tree = before;
+        *tree->collection = collection_before;
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
+    tree_normalize_selection(tree);
+    next = *control;
+    next._private_text_length = tree->visible_count;
+    next._private_value = tree_visible_index(tree, tree->collection->selected_id);
+    next._private_maximum_value = (int64_t)tree->visible_count - 1;
+    result = replace_measured_control(context, control, &next);
+    if (result != ASTRA_OK) {
+        *tree = before;
+        *tree->collection = collection_before;
+        (void)tree_rebuild(tree, 0);
+        if (context->_private_has_layout != 0u)
+            (void)astra_interface_ui_layout(context, &context->_private_layout);
+    } else {
+        if (context->_private_hover == index) set_hover(context, CONTROL_NONE);
+        if (context->_private_capture == index) clear_capture(context);
+        if (context->_private_keyboard == index) clear_keyboard(context);
+    }
+    return result;
 }
 
 AstraResult astra_interface_field_init(AstraControl *control,
@@ -2000,18 +2241,30 @@ static AstraResult measure_control(const AstraControl *control,
         size->height = (uint32_t)height;
         return ASTRA_OK;
     }
-    if (control->_private_control_kind == ASTRA_CONTROL_LIST) {
+    if (control->_private_control_kind == ASTRA_CONTROL_LIST ||
+        control->_private_control_kind == ASTRA_CONTROL_TREE) {
         const AstraCollectionItem *items =
             const_collection_model(control)->items;
+        const AstraTreeModel *tree = control->_private_control_kind ==
+            ASTRA_CONTROL_TREE ? const_tree_model(control) : NULL;
         uint32_t widest = 0u;
         uint64_t height = (uint64_t)(control->_private_text_length != 0u ?
             control->_private_text_length : 1u) * theme.control_height;
 
         if (height > INT32_MAX) return ASTRA_ERROR_NO_RESOURCES;
         for (uint32_t at = 0u; at < control->_private_text_length; ++at) {
+            uint32_t item = tree == NULL ? at : tree->visible_rows[at];
             uint32_t item_width = astra_surface_ui_text_width(
-                items[at].text, items[at].text_length,
+                items[item].text, items[item].text_length,
                 theme.control_font_height);
+
+            if (tree != NULL) {
+                uint64_t indented = (uint64_t)item_width +
+                    (uint64_t)(tree->nodes[item].depth + 1u) *
+                        theme.control_height;
+                if (indented > UINT32_MAX) return ASTRA_ERROR_NO_RESOURCES;
+                item_width = (uint32_t)indented;
+            }
 
             if (item_width > widest) widest = item_width;
         }
@@ -3044,7 +3297,10 @@ AstraResult astra_interface_control_set_value(AstraUIContext *context,
     control->_private_value = snapped;
     if (COLLECTION_KINDS(control->_private_control_kind)) {
         AstraCollectionModel *model = collection_model(control);
-        model->selected_id = snapped < 0 ? 0u : model->items[snapped].id;
+        uint32_t item = control->_private_control_kind == ASTRA_CONTROL_TREE &&
+                        snapped >= 0 ?
+            tree_model(control)->visible_rows[snapped] : (uint32_t)snapped;
+        model->selected_id = snapped < 0 ? 0u : model->items[item].id;
     }
     control_damage(context, index);
     return ASTRA_OK;
@@ -3856,16 +4112,22 @@ static int render_requirements(const AstraUIContext *context,
                 return 0;
             continue;
         }
-        if (control->_private_control_kind == ASTRA_CONTROL_LIST) {
+        if (control->_private_control_kind == ASTRA_CONTROL_LIST ||
+            control->_private_control_kind == ASTRA_CONTROL_TREE) {
             const AstraCollectionItem *items =
                 const_collection_model(control)->items;
+            const AstraTreeModel *tree = control->_private_control_kind ==
+                ASTRA_CONTROL_TREE ? const_tree_model(control) : NULL;
             uint32_t first;
             uint32_t end;
 
             list_visible_range(control, theme.control_height, 0u, &first, &end);
-            *commands += 5u + (uint64_t)(end - first) * 2u;
-            for (uint32_t item = first; item < end; ++item)
+            *commands += 5u + (uint64_t)(end - first) *
+                (tree == NULL ? 2u : 5u);
+            for (uint32_t row = first; row < end; ++row) {
+                uint32_t item = tree == NULL ? row : tree->visible_rows[row];
                 *payload += (uint64_t)items[item].text_length + id_length;
+            }
             continue;
         }
         if (control->_private_control_kind == ASTRA_CONTROL_TABLE) {
@@ -5163,6 +5425,63 @@ static void render_popup(const AstraTheme *theme,
     astra_surface_fill(surface, arrow_x + 3, arrow_y, 3u, 1u, color(ink));
 }
 
+static void render_tree(const AstraTheme *theme,
+                        const AstraControl *control,
+                        AstraSurfaceView *surface)
+{
+    const AstraControlFrame *frame = &control->_private_frame;
+    const AstraTreeModel *tree = const_tree_model(control);
+    const AstraCollectionItem *items = tree->collection->items;
+    uint32_t first, end;
+
+    list_visible_range(control, theme->control_height, 0u, &first, &end);
+    render_collection_frame(theme, control, surface);
+    for (uint32_t row = first; row < end; ++row) {
+        uint32_t item = tree->visible_rows[row];
+        uint32_t indent = (tree->nodes[item].depth + 1u) *
+                          theme->control_height;
+        int32_t y = (int32_t)((int64_t)frame->y +
+                              (uint64_t)row * theme->control_height);
+        AstraColorRGBA8 text_color = render_collection_row(
+            theme, control, surface, row, y);
+        int32_t glyph_x = frame->x + (int32_t)indent -
+                          (int32_t)theme->control_height / 2;
+        int32_t glyph_y = y + (int32_t)theme->control_height / 2;
+        uint32_t available = frame->width > indent +
+            (uint32_t)theme->control_padding_x ?
+            frame->width - indent - theme->control_padding_x : 0u;
+        uint32_t fitted = astra_surface_ui_text_fit(
+            items[item].text, items[item].text_length,
+            theme->control_font_height, available);
+
+        if (tree_has_children(tree, item)) {
+            AstraColorRGBA8 mark =
+                (effective_state(control) & ASTRA_CONTROL_DISABLED) != 0u ?
+                theme->text_tertiary : text_color;
+            if (tree->nodes[item].expanded) {
+                astra_surface_fill(surface, glyph_x - 3, glyph_y - 1,
+                                   7u, 1u, color(mark));
+                astra_surface_fill(surface, glyph_x - 2, glyph_y,
+                                   5u, 1u, color(mark));
+                astra_surface_fill(surface, glyph_x - 1, glyph_y + 1,
+                                   3u, 1u, color(mark));
+            } else {
+                astra_surface_fill(surface, glyph_x - 1, glyph_y - 3,
+                                   1u, 7u, color(mark));
+                astra_surface_fill(surface, glyph_x, glyph_y - 2,
+                                   1u, 5u, color(mark));
+                astra_surface_fill(surface, glyph_x + 1, glyph_y - 1,
+                                   1u, 3u, color(mark));
+            }
+        }
+        astra_surface_ui_text(surface, frame->x + (int32_t)indent,
+            y + (int32_t)(theme->control_height -
+                          theme->control_font_height) / 2,
+            items[item].text, fitted, theme->control_font_height,
+            color(text_color));
+    }
+}
+
 static void render_table(const AstraTheme *theme,
                          const AstraControl *control,
                          AstraSurfaceView *surface)
@@ -6316,6 +6635,8 @@ static AstraResult render_one_control(const AstraUIContext *context,
         render_list(theme, control, surface);
     else if (control->_private_control_kind == ASTRA_CONTROL_POPUP)
         render_popup(theme, control, surface);
+    else if (control->_private_control_kind == ASTRA_CONTROL_TREE)
+        render_tree(theme, control, surface);
     else if (control->_private_control_kind == ASTRA_CONTROL_TABLE)
         render_table(theme, control, surface);
     else
@@ -6666,6 +6987,31 @@ static AstraResult pointer_event(AstraUIContext *context,
                 clear_capture(context);
                 return activate_control(context, captured, action);
             }
+            if (control->_private_control_kind == ASTRA_CONTROL_TREE &&
+                control->_private_minimum_value >= 0) {
+                AstraTreeModel *tree = tree_model(control);
+                uint32_t row = (uint32_t)control->_private_minimum_value;
+                uint32_t item = tree->visible_rows[row];
+                AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+                uint32_t indent = (tree->nodes[item].depth + 1u) *
+                                  theme.control_height;
+                int64_t relative_x = (int64_t)event->data.pointer.x -
+                                     control->_private_frame.x;
+
+                if (tree_has_children(tree, item) && relative_x >= 0 &&
+                    relative_x < indent) {
+                    uint32_t expanded = !tree->nodes[item].expanded;
+                    AstraResult result = astra_interface_tree_set_expanded(
+                        context, control, tree->collection->items[item].id,
+                        expanded);
+                    if (result != ASTRA_OK) return result;
+                    action->type = ASTRA_UI_ACTION_EXPANSION_CHANGED;
+                    action->control_id = control->_private_id;
+                    action->value = item;
+                    clear_capture(context);
+                    return ASTRA_OK;
+                }
+            }
             int invoke = COLLECTION_KINDS(control->_private_control_kind) &&
                          event->data.pointer.click_count >= 2u &&
                          control->_private_value >= 0 &&
@@ -6946,6 +7292,34 @@ static AstraResult key_event(AstraUIContext *context,
         AstraControl *control = &context->_private_controls[context->_private_focus];
         int32_t value = (int32_t)control->_private_value;
         uint32_t usage = event->data.key.usage;
+
+        if (control->_private_control_kind == ASTRA_CONTROL_TREE &&
+            value >= 0 && (usage == 0x50u || usage == 0x4fu)) {
+            AstraTreeModel *tree = tree_model(control);
+            uint32_t item = tree->visible_rows[value];
+            uint32_t expand = usage == 0x4fu;
+
+            if (tree_has_children(tree, item) &&
+                tree->nodes[item].expanded != expand) {
+                AstraResult result = astra_interface_tree_set_expanded(
+                    context, control, tree->collection->items[item].id, expand);
+                if (result != ASTRA_OK) return result;
+                action->type = ASTRA_UI_ACTION_EXPANSION_CHANGED;
+                action->control_id = control->_private_id;
+                action->value = item;
+            } else if (!expand && tree->nodes[item].parent_id != 0u) {
+                int32_t parent = tree_visible_index(tree,
+                    tree->nodes[item].parent_id);
+                if (parent >= 0) choice_action(context,
+                    context->_private_focus, parent, action);
+            } else if (expand && value + 1 < (int32_t)tree->visible_count &&
+                       tree->nodes[tree->visible_rows[value + 1]].depth >
+                           tree->nodes[item].depth) {
+                choice_action(context, context->_private_focus, value + 1,
+                              action);
+            }
+            return ASTRA_OK;
+        }
 
         if (control->_private_text_length == 0u)
             return ASTRA_OK;

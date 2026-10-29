@@ -1924,6 +1924,71 @@ static void test_table_control(void)
     assert(collection.items == reordered && model.cells == reordered_cells);
 }
 
+static void test_tree_control(void)
+{
+    static const AstraCollectionItem items[] = {
+        {11u, "Applications", 12u, {0u, 0u}},
+        {12u, "Games", 5u, {0u, 0u}},
+        {13u, "Doom", 4u, {0u, 0u}},
+        {14u, "Documents", 9u, {0u, 0u}}
+    };
+    AstraTreeNode nodes[] = {
+        {0u, 1u, 0u}, {11u, 1u, 0u},
+        {12u, 0u, 0u}, {0u, 0u, 0u}
+    };
+    AstraTreeNode invalid[] = {
+        {0u, 1u, 0u}, {11u, 1u, 0u},
+        {14u, 0u, 0u}, {0u, 0u, 0u}
+    };
+    uint32_t visible[4] = {0};
+    uint32_t replacement[4] = {0};
+    AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    AstraTreeModel tree = ASTRA_TREE_MODEL_INIT;
+    AstraTreeInfo info = ASTRA_TREE_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraControlSize size = {0};
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraSurfaceView surface = render_view(400u, 200u);
+    AstraWindowEvent event;
+
+    assert(astra_interface_collection_init(&collection, items, 4u, 13u) == ASTRA_OK);
+    tree.collection = &collection;
+    tree.nodes = nodes;
+    tree.node_count = 4u;
+    tree.visible_rows = visible;
+    tree.visible_capacity = 4u;
+    info.id = 92u;
+    info.model = &tree;
+    assert(astra_interface_tree_init(&control, &info) == ASTRA_OK);
+    assert(tree.visible_count == 4u && nodes[2].depth == 2u);
+    assert(astra_interface_ui_init(&context, &control, 1u, 400u, 200u) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &control, &size) == ASTRA_OK);
+    assert(size.height == 4u * theme.control_height);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(astra_interface_tree_set_expanded(&context, &control, 12u, 0u) == ASTRA_OK);
+    assert(tree.visible_count == 3u && collection.selected_id == 12u);
+    assert(control._private_value == 1);
+    assert(astra_interface_tree_set_expanded(&context, &control, 13u, 1u) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_tree_set_expanded(&context, &control, 12u, 1u) == ASTRA_OK);
+    assert(tree.visible_count == 4u);
+    assert(astra_interface_tree_set_nodes(&context, &control, items, 4u,
+        invalid, replacement, 4u) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(tree.nodes == nodes && collection.items == items);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 4,
+        control._private_frame.y + theme.control_height / 2);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_EXPANSION_CHANGED && action.value == 0);
+    assert(tree.visible_count == 2u && collection.selected_id == 11u);
+}
+
 static void test_scrolled_list_control(void)
 {
     static const char family[] = "A deliberately wide installed font family name";
@@ -3922,6 +3987,7 @@ int main(void)
     test_popup_control();
     test_split_button();
     test_table_control();
+    test_tree_control();
     test_scrolled_list_control();
     test_tab_control_and_collapsed_pages();
     test_stepper_control();
