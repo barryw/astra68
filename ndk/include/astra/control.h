@@ -51,7 +51,9 @@ enum {
     /** Hardware-drawn bottom-up channels with held peak markers. */
     ASTRA_CONTROL_LEVEL_METER = 21u,
     /** Hardware-drawn per-sample bars. */
-    ASTRA_CONTROL_SPARKLINE = 22u
+    ASTRA_CONTROL_SPARKLINE = 22u,
+    /** Fixed-width columns and C1 stable row selection. */
+    ASTRA_CONTROL_TABLE = 23u
 };
 
 /** Semantic state owned by an application. */
@@ -677,10 +679,10 @@ typedef struct AstraListInfo {
 /** One depth of a column browser. Collection and scroll models remain
  * caller-owned; each depth has independent selection and vertical position. */
 typedef struct AstraColumnView {
-    AstraCollectionModel *model;
-    AstraScrollModel *scroll;
-    uint32_t width;
-    uint32_t reserved[2];
+    AstraCollectionModel *model; /**< Borrowed C1 model for one depth. */
+    AstraScrollModel *scroll; /**< Borrowed vertical scroll state. */
+    uint32_t width; /**< Fixed column width in client pixels. */
+    uint32_t reserved[2]; /**< Must be zero. */
 } AstraColumnView;
 
 /** A column browser composes one horizontal Container and a ScrollView/List
@@ -689,17 +691,64 @@ typedef struct AstraColumnView {
  * Application code updates each depth through astra_interface_list_set_items.
  */
 typedef struct AstraColumnsInfo {
-    uint32_t size;
-    uint32_t first_id;
-    const AstraColumnView *columns;
-    uint32_t column_count;
-    uint32_t viewport_height;
-    uint32_t state;
-    uint32_t reserved[3];
+    uint32_t size; /**< Structure size. */
+    uint32_t first_id; /**< Nonzero first control ID. */
+    const AstraColumnView *columns; /**< Borrowed depth descriptions. */
+    uint32_t column_count; /**< Number of depths. */
+    uint32_t viewport_height; /**< Height of every column viewport. */
+    uint32_t state; /**< COLLAPSED or zero. */
+    uint32_t reserved[3]; /**< Must be zero. */
 } AstraColumnsInfo;
 
+/** Empty column browser description. */
 #define ASTRA_COLUMNS_INFO_INIT { \
     sizeof(AstraColumnsInfo), 0, 0, 0, 0, 0, {0, 0, 0} \
+}
+
+/** One fixed-width table column. Column zero displays CollectionItem.text;
+ * subsequent columns use row-major AstraTableCell entries. */
+typedef struct AstraTableColumn {
+    const char *heading; /**< Borrowed UTF-8 heading. */
+    uint32_t heading_length; /**< Heading byte count. */
+    uint32_t width; /**< Fixed width in client pixels. */
+    uint32_t reserved; /**< Must be zero. */
+} AstraTableColumn;
+
+/** One optional trailing cell; empty cells use zero length and null text. */
+typedef struct AstraTableCell {
+    const char *text; /**< Borrowed UTF-8 text. */
+    uint32_t text_length; /**< Text byte count; zero for blank. */
+    uint32_t reserved; /**< Must be zero. */
+} AstraTableCell;
+
+/** Caller-owned table presentation over one C1 collection model. */
+typedef struct AstraTableModel {
+    uint32_t size; /**< Structure size. */
+    AstraCollectionModel *collection; /**< Borrowed C1 identity/selection model. */
+    const AstraTableColumn *columns; /**< Borrowed column array. */
+    uint32_t column_count; /**< Number of columns, at least one. */
+    const AstraTableCell *cells; /**< Borrowed row-major trailing cells. */
+    uint32_t cell_count; /**< Item count times column count minus one. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraTableModel;
+
+/** Empty table presentation model. */
+#define ASTRA_TABLE_MODEL_INIT { \
+    sizeof(AstraTableModel), 0, 0, 0, 0, 0, {0, 0} \
+}
+
+/** Creation data for one retained Table control. */
+typedef struct AstraTableInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t id; /**< Nonzero control ID. */
+    AstraTableModel *model; /**< Borrowed table presentation model. */
+    uint32_t state; /**< Disabled, error, collapsed, or zero. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraTableInfo;
+
+/** Empty Table creation data. */
+#define ASTRA_TABLE_INFO_INIT { \
+    sizeof(AstraTableInfo), 0, 0, 0, {0, 0, 0, 0} \
 }
 
 enum {
