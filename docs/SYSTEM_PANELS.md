@@ -80,7 +80,13 @@ selection mode, faces without the catalog's SELECTABLE flag remain visible
 with a clear explanation while Use is disabled. It does not scan font files or
 change the system font itself; the caller owns that policy and capability.
 Two caller-owned strike buffers let a face change validate and replace the
-List without invalidating its previous borrowed rows.
+List without invalidating its previous borrowed rows. Family, Strike, and
+optional caller-defined Role columns use the same List/ScrollView composition;
+the selected Role ID is returned separately. The preview text can be supplied
+by the caller, while the detail label reports installed strike count and the
+selected cell's exact dimensions. A missing requested strike cannot yet be
+shown as a disabled row because the common List has no per-item disabled
+state; the panel shows only installed strikes and never silently scales one.
 
 Haiku `src/preferences/appearance/FontSelectionView.cpp` informed the
 face/size/preview composition. Astra uses exact installed strikes rather than

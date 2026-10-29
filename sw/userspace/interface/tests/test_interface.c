@@ -4602,8 +4602,14 @@ static void test_shared_font_panel(void)
     AstraFontPanelStrikeRow rows[2], rows_spare[2];
     AstraCollectionModel faces = ASTRA_COLLECTION_MODEL_INIT;
     AstraCollectionModel strikes = ASTRA_COLLECTION_MODEL_INIT;
+    AstraCollectionItem role_items[2] = {
+        {101u, "Terminal", 8u, {0u, 0u}},
+        {202u, "Code", 4u, {0u, 0u}}
+    };
+    AstraCollectionModel roles = ASTRA_COLLECTION_MODEL_INIT;
     AstraScrollModel face_scroll = ASTRA_SCROLL_MODEL_INIT;
     AstraScrollModel strike_scroll = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModel role_scroll = ASTRA_SCROLL_MODEL_INIT;
     AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
     AstraFontPanelInfo info = ASTRA_FONT_PANEL_INFO_INIT;
     AstraFontPanel panel = ASTRA_FONT_PANEL_INIT;
@@ -4614,6 +4620,7 @@ static void test_shared_font_panel(void)
     AstraInstalledFont face;
     AstraInstalledFontStrike strike;
     uint32_t outcome = 99u;
+    uint64_t role_id = 0u;
 
     panel_mock_catalog = &catalog;
     catalog.face_count = 2u;
@@ -4622,6 +4629,7 @@ static void test_shared_font_panel(void)
     scroll_info.line_height = 16u;
     assert(astra_scroll_init(&face_scroll, &scroll_info) == ASTRA_OK);
     assert(astra_scroll_init(&strike_scroll, &scroll_info) == ASTRA_OK);
+    assert(astra_scroll_init(&role_scroll, &scroll_info) == ASTRA_OK);
     info.first_id = 400u;
     info.gui = 1u;
     info.catalog = &catalog;
@@ -4637,12 +4645,21 @@ static void test_shared_font_panel(void)
     info.strike_collection = &strikes;
     info.face_scroll = &face_scroll;
     info.strike_scroll = &strike_scroll;
+    info.roles = role_items;
+    info.role_count = 2u;
+    info.role_collection = &roles;
+    info.role_scroll = &role_scroll;
+    info.preview_text = "Astra preview 0123456789";
+    info.preview_length = 24u;
     info.system_only = 1u;
     assert(astra_interface_font_panel_init(&panel, controls, &info) == ASTRA_OK);
     assert(panel.selected_face == 0u && panel.selected_strike == 0u &&
            faces.item_count == 2u && strikes.item_count == 2u &&
+           roles.item_count == 2u &&
            strcmp(face_rows[0].label, "Astra Sans · Regular") == 0 &&
            strcmp(rows[1].label, "8x16 px") == 0);
+    assert(astra_interface_font_panel_role(&panel, &role_id) == ASTRA_OK &&
+           role_id == 101u);
     assert(astra_interface_ui_init(&context, controls,
         ASTRA_FONT_PANEL_CONTROL_COUNT, 560u, 460u) == ASTRA_OK);
     layout.direction = ASTRA_FLEX_COLUMN;
@@ -4650,6 +4667,12 @@ static void test_shared_font_panel(void)
     assert(astra_interface_font_panel_choice(&panel, &face, &strike) == ASTRA_OK &&
            strike.pixel_height == 12u);
     action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 400u + ASTRA_FONT_PANEL_ROLE_LIST;
+    action.value = 1;
+    assert(astra_interface_font_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        astra_interface_font_panel_role(&panel, &role_id) == ASTRA_OK &&
+        role_id == 202u);
     action.control_id = 400u + ASTRA_FONT_PANEL_STRIKE_LIST;
     action.value = 1;
     assert(astra_interface_font_panel_action(&panel, &context, controls,

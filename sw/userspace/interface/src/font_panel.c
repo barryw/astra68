@@ -1,8 +1,49 @@
 #include <astra/interface_library.h>
 #include <astra/bytes.h>
 #include <astra/string.h>
+#include <astra/utf8.h>
 #include <string.h>
 #include "panel_internal.h"
+
+static const char font_default_preview[] =
+    "The quick brown fox jumps over the lazy dog. 0123456789";
+
+static AstraResult font_panel_detail(const AstraFontPanel *panel,
+    char output[96], uint32_t *length)
+{
+    AstraString text;
+    AstraInstalledFont face;
+    AstraInstalledFontStrike strike;
+    AstraResult result;
+    astra_string_init(&text, output, 96u);
+    if (panel->selected_face >= panel->catalog->face_count) {
+        if (!astra_string_append(&text, "No font selected"))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    } else {
+        result = astra_fonts_catalog_face(panel->catalog,
+            panel->selected_face, &face);
+        if (result != ASTRA_OK) return result;
+        if (!astra_string_append_u64(&text, face.strike_count) ||
+            !astra_string_append(&text,
+                face.strike_count == 1u ? " strike installed" :
+                    " strikes installed"))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+        if (panel->selected_strike < panel->strike_count) {
+            result = astra_fonts_catalog_strike(panel->catalog,
+                panel->selected_face, panel->selected_strike, &strike);
+            if (result != ASTRA_OK) return result;
+            if (!astra_string_append(&text, " · cell ") ||
+                (strike.pixel_width != 0u &&
+                 (!astra_string_append_u64(&text, strike.pixel_width) ||
+                  !astra_string_append_char(&text, 'x'))) ||
+                !astra_string_append_u64(&text, strike.pixel_height) ||
+                !astra_string_append(&text, " px"))
+                return ASTRA_ERROR_BUFFER_TOO_SMALL;
+        }
+    }
+    *length = text.length;
+    return ASTRA_OK;
+}
 
 static AstraResult font_panel_strikes(const AstraFontPanel *panel,
     uint32_t face_index, AstraFontPanelStrikeRow *rows,
@@ -67,12 +108,13 @@ static AstraResult font_panel_font(const AstraFontPanel *panel,
 static AstraResult font_panel_preview(AstraFontPanel *panel,
     AstraUIContext *context, AstraControl *controls)
 {
-    static const char sample[] =
-        "The quick brown fox jumps over the lazy dog. 0123456789";
     AstraLabelFont font = ASTRA_LABEL_FONT_INIT;
     uint32_t eligible = 0u;
     const char *status;
-    const char *preview = sample;
+    const char *preview = panel->preview_text;
+    uint32_t preview_length = panel->preview_length;
+    uint32_t next = panel->active_detail ^ 1u;
+    uint32_t detail_length;
     AstraResult result = font_panel_font(panel, &font, &eligible);
 
     if (result == ASTRA_ERROR_NOT_PRESENT) {
@@ -95,11 +137,20 @@ static AstraResult font_panel_preview(AstraFontPanel *panel,
             &controls[ASTRA_FONT_PANEL_PREVIEW], &font);
         if (result != ASTRA_OK) return result;
         preview = "Preview unavailable for this font";
+        preview_length = (uint32_t)strlen(preview);
     }
     result = astra_interface_control_set_text(context,
         &controls[ASTRA_FONT_PANEL_PREVIEW], preview,
-        (uint32_t)strlen(preview));
+        preview_length);
     if (result != ASTRA_OK) return result;
+    result = font_panel_detail(panel, panel->detail_text[next],
+        &detail_length);
+    if (result != ASTRA_OK) return result;
+    result = astra_interface_control_set_text(context,
+        &controls[ASTRA_FONT_PANEL_DETAIL], panel->detail_text[next],
+        detail_length);
+    if (result != ASTRA_OK) return result;
+    panel->active_detail = next;
     status = panel->selected_face >= panel->catalog->face_count ?
         (panel->catalog->face_count == 0u ?
          "No fonts installed" : "Select a font") : eligible ?
@@ -124,7 +175,10 @@ AstraResult astra_interface_font_panel_init(AstraFontPanel *panel,
     AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
     AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
     AstraLabelFont preview_font = ASTRA_LABEL_FONT_INIT;
+    AstraScrollModelInfo role_scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraScrollModel *role_scroll_model;
     uint32_t eligible = 0u;
+    uint32_t detail_length = 0u;
     AstraResult result;
 
     if (panel == NULL || controls == NULL || info == NULL ||
@@ -141,6 +195,14 @@ AstraResult astra_interface_font_panel_init(AstraFontPanel *panel,
         info->strike_capacity == 0u ||
         info->face_collection == NULL || info->strike_collection == NULL ||
         info->face_scroll == NULL || info->strike_scroll == NULL ||
+        (info->role_count != 0u &&
+         (info->roles == NULL || info->role_collection == NULL ||
+          info->role_scroll == NULL)) ||
+        (info->preview_text == NULL && info->preview_length != 0u) ||
+        (info->preview_text != NULL &&
+         (info->preview_length == 0u ||
+          !astra_utf8_validate(info->preview_text,
+              info->preview_length, 0u))) ||
         info->system_only > 1u || !astra_words_zero(info->reserved, 4u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *panel = (AstraFontPanel)ASTRA_FONT_PANEL_INIT;
@@ -160,6 +222,26 @@ AstraResult astra_interface_font_panel_init(AstraFontPanel *panel,
         UINT32_MAX : 0u;
     panel->selected_strike = UINT32_MAX;
     panel->system_only = info->system_only;
+    panel->roles = info->roles;
+    panel->role_count = info->role_count;
+    panel->role_collection = info->role_count != 0u ?
+        info->role_collection : &panel->role_fallback_collection;
+    panel->preview_text = info->preview_text != NULL ?
+        info->preview_text : font_default_preview;
+    panel->preview_length = info->preview_text != NULL ?
+        info->preview_length : sizeof(font_default_preview) - 1u;
+    role_scroll_model = info->role_count != 0u ?
+        info->role_scroll : &panel->role_fallback_scroll;
+    if (info->role_count == 0u) {
+        role_scroll_info.line_width = 8u;
+        role_scroll_info.line_height = 16u;
+        result = astra_scroll_init(role_scroll_model, &role_scroll_info);
+        if (result != ASTRA_OK) return result;
+    }
+    result = astra_interface_collection_init(panel->role_collection,
+        panel->roles, panel->role_count,
+        panel->role_count == 0u ? 0u : panel->roles[0].id);
+    if (result != ASTRA_OK) return result;
 
     for (uint32_t at = 0u; at < info->catalog->face_count; ++at) {
         AstraInstalledFont face;
@@ -205,6 +287,8 @@ AstraResult astra_interface_font_panel_init(AstraFontPanel *panel,
     if (result != ASTRA_OK) return result;
     result = font_panel_font(panel, &preview_font, &eligible);
     if (result != ASTRA_OK && result != ASTRA_ERROR_NOT_PRESENT) return result;
+    result = font_panel_detail(panel, panel->detail_text[0], &detail_length);
+    if (result != ASTRA_OK) return result;
 
     container.id = info->first_id + ASTRA_FONT_PANEL_ROOT;
     container.layout.direction = ASTRA_FLEX_COLUMN;
@@ -235,26 +319,61 @@ AstraResult astra_interface_font_panel_init(AstraFontPanel *panel,
                               info->first_id, 1u);
     if (result != ASTRA_OK) return result;
 
-    for (uint32_t at = 0u; at < 2u; ++at) {
-        uint32_t scroll_at = at == 0u ? ASTRA_FONT_PANEL_FACE_SCROLL :
-                                        ASTRA_FONT_PANEL_STRIKE_SCROLL;
+    for (uint32_t at = 0u; at < 3u; ++at) {
+        static const uint32_t groups[3] = {
+            ASTRA_FONT_PANEL_FAMILY_GROUP, ASTRA_FONT_PANEL_STRIKE_GROUP,
+            ASTRA_FONT_PANEL_ROLE_GROUP};
+        static const uint32_t headings[3] = {
+            ASTRA_FONT_PANEL_FAMILY_HEADING, ASTRA_FONT_PANEL_STRIKE_HEADING,
+            ASTRA_FONT_PANEL_ROLE_HEADING};
+        static const uint32_t scrolls[3] = {
+            ASTRA_FONT_PANEL_FACE_SCROLL, ASTRA_FONT_PANEL_STRIKE_SCROLL,
+            ASTRA_FONT_PANEL_ROLE_SCROLL};
+        static const char *const titles[3] = {"FAMILY", "STRIKE", "ROLE"};
+        uint32_t group_at = groups[at];
+        uint32_t heading_at = headings[at];
+        uint32_t scroll_at = scrolls[at];
         uint32_t list_at = scroll_at + 1u;
 
+        container = (AstraContainerInfo)ASTRA_CONTAINER_INFO_INIT;
+        container.id = info->first_id + group_at;
+        container.layout.direction = ASTRA_FLEX_COLUMN;
+        container.layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
+        container.state = at == 2u && panel->role_count == 0u ?
+            ASTRA_CONTROL_COLLAPSED : 0u;
+        result = astra_interface_container_init(&controls[group_at],
+            &container);
+        if (result != ASTRA_OK) return result;
+        result = astra_panel_child(&controls[group_at],
+            info->first_id + ASTRA_FONT_PANEL_BROWSERS, at == 0u ? 1u : 0u);
+        if (result != ASTRA_OK) return result;
+        label = (AstraLabelInfo)ASTRA_LABEL_INFO_INIT;
+        label.id = info->first_id + heading_at;
+        label.text = titles[at];
+        label.text_length = (uint32_t)strlen(titles[at]);
+        label.text_role = ASTRA_TEXT_CLIENT_SECONDARY;
+        result = astra_interface_label_init(&controls[heading_at], &label);
+        if (result != ASTRA_OK) return result;
+        result = astra_panel_child(&controls[heading_at],
+            info->first_id + group_at, 0u);
+        if (result != ASTRA_OK) return result;
         scroll = (AstraScrollViewInfo)ASTRA_SCROLL_VIEW_INFO_INIT;
         scroll.id = info->first_id + scroll_at;
-        scroll.model = at == 0u ? info->face_scroll : info->strike_scroll;
-        scroll.preferred_width = at == 0u ? 260u : 160u;
+        scroll.model = at == 0u ? info->face_scroll :
+            at == 1u ? info->strike_scroll : role_scroll_model;
+        scroll.preferred_width = at == 0u ? 240u :
+            at == 1u ? 100u : 140u;
         scroll.preferred_height = 220u;
         result = astra_interface_scroll_view_init(&controls[scroll_at],
                                                   &scroll);
         if (result != ASTRA_OK) return result;
         result = astra_panel_child(&controls[scroll_at],
-            info->first_id + ASTRA_FONT_PANEL_BROWSERS, 1u);
+            info->first_id + group_at, 1u);
         if (result != ASTRA_OK) return result;
         list = (AstraListInfo)ASTRA_LIST_INFO_INIT;
         list.id = info->first_id + list_at;
         list.model = at == 0u ? info->face_collection :
-                                info->strike_collection;
+            at == 1u ? info->strike_collection : panel->role_collection;
         result = astra_interface_list_init(&controls[list_at], &list);
         if (result != ASTRA_OK) return result;
         result = astra_panel_child(&controls[list_at],
@@ -264,13 +383,24 @@ AstraResult astra_interface_font_panel_init(AstraFontPanel *panel,
 
     label = (AstraLabelInfo)ASTRA_LABEL_INFO_INIT;
     label.id = info->first_id + ASTRA_FONT_PANEL_PREVIEW;
-    label.text = "The quick brown fox jumps over the lazy dog. 0123456789";
-    label.text_length = sizeof("The quick brown fox jumps over the lazy dog. 0123456789") - 1u;
+    label.text = panel->preview_text;
+    label.text_length = panel->preview_length;
     label.font = preview_font;
     result = astra_interface_label_init(&controls[ASTRA_FONT_PANEL_PREVIEW],
                                         &label);
     if (result != ASTRA_OK) return result;
     result = astra_panel_child(&controls[ASTRA_FONT_PANEL_PREVIEW],
+                              info->first_id, 0u);
+    if (result != ASTRA_OK) return result;
+    label = (AstraLabelInfo)ASTRA_LABEL_INFO_INIT;
+    label.id = info->first_id + ASTRA_FONT_PANEL_DETAIL;
+    label.text = panel->detail_text[0];
+    label.text_length = detail_length;
+    label.text_role = ASTRA_TEXT_CLIENT_SECONDARY;
+    result = astra_interface_label_init(&controls[ASTRA_FONT_PANEL_DETAIL],
+                                        &label);
+    if (result != ASTRA_OK) return result;
+    result = astra_panel_child(&controls[ASTRA_FONT_PANEL_DETAIL],
                               info->first_id, 0u);
     if (result != ASTRA_OK) return result;
     label = (AstraLabelInfo)ASTRA_LABEL_INFO_INIT;
@@ -332,6 +462,16 @@ AstraResult astra_interface_font_panel_choice(const AstraFontPanel *panel,
     if (result != ASTRA_OK) return result;
     return astra_fonts_catalog_strike(panel->catalog,
         panel->selected_face, panel->selected_strike, strike);
+}
+
+AstraResult astra_interface_font_panel_role(const AstraFontPanel *panel,
+    uint64_t *role_id)
+{
+    if (panel == NULL || panel->size < sizeof(*panel) || role_id == NULL ||
+        panel->roles == NULL || panel->selected_role >= panel->role_count)
+        return ASTRA_ERROR_NOT_PRESENT;
+    *role_id = panel->roles[panel->selected_role].id;
+    return ASTRA_OK;
 }
 
 AstraResult astra_interface_font_panel_action(AstraFontPanel *panel,
@@ -430,6 +570,11 @@ AstraResult astra_interface_font_panel_action(AstraFontPanel *panel,
             return ASTRA_ERROR_INVALID_ARGUMENT;
         panel->selected_strike = action->value < 0 ?
             UINT32_MAX : (uint32_t)action->value;
+    } else if (at == ASTRA_FONT_PANEL_ROLE_LIST) {
+        if (action->value < 0 ||
+            (uint64_t)action->value >= panel->role_count)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        panel->selected_role = (uint32_t)action->value;
     } else {
         return ASTRA_OK;
     }
