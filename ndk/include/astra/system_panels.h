@@ -347,11 +347,20 @@ enum {
     ASTRA_FONT_PANEL_ROOT = 0u,
     ASTRA_FONT_PANEL_TITLE,
     ASTRA_FONT_PANEL_BROWSERS,
+    ASTRA_FONT_PANEL_FAMILY_GROUP,
+    ASTRA_FONT_PANEL_FAMILY_HEADING,
     ASTRA_FONT_PANEL_FACE_SCROLL,
     ASTRA_FONT_PANEL_FACE_LIST,
+    ASTRA_FONT_PANEL_STRIKE_GROUP,
+    ASTRA_FONT_PANEL_STRIKE_HEADING,
     ASTRA_FONT_PANEL_STRIKE_SCROLL,
     ASTRA_FONT_PANEL_STRIKE_LIST,
+    ASTRA_FONT_PANEL_ROLE_GROUP,
+    ASTRA_FONT_PANEL_ROLE_HEADING,
+    ASTRA_FONT_PANEL_ROLE_SCROLL,
+    ASTRA_FONT_PANEL_ROLE_LIST,
     ASTRA_FONT_PANEL_PREVIEW,
+    ASTRA_FONT_PANEL_DETAIL,
     ASTRA_FONT_PANEL_ELIGIBILITY,
     ASTRA_FONT_PANEL_ACTIONS,
     ASTRA_FONT_PANEL_CANCEL,
@@ -379,7 +388,9 @@ typedef struct AstraFontPanelFaceRow {
 } AstraFontPanelFaceRow;
 
 /** A Font Kit catalog snapshot remains borrowed for the panel lifetime.
- * The two List models, scroll models, and row storage are caller-owned. */
+ * Face/strike List models, scroll models, and row storage are caller-owned.
+ * The optional role collection identifies uses defined by the consumer,
+ * such as Terminal or Code; preview_text is borrowed UTF-8. */
 typedef struct AstraFontPanelInfo {
     uint32_t size;
     uint32_t first_id;
@@ -398,13 +409,16 @@ typedef struct AstraFontPanelInfo {
     AstraScrollModel *face_scroll;
     AstraScrollModel *strike_scroll;
     uint32_t system_only;
+    const AstraCollectionItem *roles;
+    uint32_t role_count;
+    AstraCollectionModel *role_collection;
+    AstraScrollModel *role_scroll;
+    const char *preview_text;
+    uint32_t preview_length;
     uint32_t reserved[4];
 } AstraFontPanelInfo;
 
-#define ASTRA_FONT_PANEL_INFO_INIT { \
-    sizeof(AstraFontPanelInfo), 0u, 0, 0, 0, 0, 0u, 0, 0, 0, 0, 0u, 0, 0, 0, 0, \
-    0u, { 0u, 0u, 0u, 0u } \
-}
+#define ASTRA_FONT_PANEL_INFO_INIT { .size = sizeof(AstraFontPanelInfo) }
 
 /** Selected face/strike state; use `astra_interface_font_panel_choice` after
  * ACCEPTED. The chosen ID remains borrowed from the catalog snapshot. */
@@ -426,14 +440,26 @@ typedef struct AstraFontPanel {
     uint32_t selected_face;
     uint32_t selected_strike;
     uint32_t system_only;
+    const AstraCollectionItem *roles;
+    uint32_t role_count;
+    AstraCollectionModel *role_collection;
+    AstraCollectionModel role_fallback_collection;
+    AstraScrollModel role_fallback_scroll;
+    uint32_t selected_role;
+    const char *preview_text;
+    uint32_t preview_length;
+    char detail_text[2][96];
+    uint32_t active_detail;
     uint32_t reserved[4];
 } AstraFontPanel;
 
 #define ASTRA_FONT_PANEL_INIT { .size = sizeof(AstraFontPanel) }
 
 /** Compose a shared installed-font chooser from Font Kit and retained Lists,
- * ScrollViews, Labels, and Buttons. system_only disables selection of faces
- * without ASTRA_INSTALLED_FONT_SELECTABLE while keeping them visible. */
+ * ScrollViews, Labels, and Buttons. Three labeled columns show Family,
+ * installed Strike, and optional caller-defined Role. system_only disables
+ * selection of faces without ASTRA_INSTALLED_FONT_SELECTABLE while keeping
+ * them visible. */
 AstraResult astra_interface_font_panel_init(AstraFontPanel *panel,
     AstraControl *controls, const AstraFontPanelInfo *info);
 
@@ -445,6 +471,11 @@ AstraResult astra_interface_font_panel_action(AstraFontPanel *panel,
 /** Resolve the current installed face and exact strike for the caller. */
 AstraResult astra_interface_font_panel_choice(const AstraFontPanel *panel,
     AstraInstalledFont *face, AstraInstalledFontStrike *strike);
+
+/** Return the selected caller-defined use role, or NOT_PRESENT when no role
+ * column was supplied. */
+AstraResult astra_interface_font_panel_role(const AstraFontPanel *panel,
+    uint64_t *role_id);
 
 ASTRA_EXTERN_C_END
 
