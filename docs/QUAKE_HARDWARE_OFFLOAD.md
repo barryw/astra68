@@ -4,6 +4,63 @@ Status: measured design checkpoint, 2026-10-28. No RTL or production runtime
 changed. Usability gate is sustained 30 FPS at default 320×200 on DE25, with
 no audio gaps or multi-second pauses.
 
+## SDL/Astraea indexed-texture trial
+
+The first ranked experiment ran on DE25. A temporary SDL2 `INDEX8` streaming
+texture accepted palette updates and uploaded Quake's one-byte pixels directly.
+Astraea expanded it to an ARGB GPU surface at source size, then used its normal
+scaled blit. Shared renderer host tests, SDL Kit build, NDK distribution check,
+and an on-board palette-change/readback probe passed. Captured demo frames
+showed correct colors. Two 30-second live-demo windows measured 17.88 and
+16.96 presents/s, with zero audio gaps or underruns. Quake used 76.0% and
+79.6% guest CPU; guest idle was 12.7% and 9.9%.
+
+After restoring the original ARGB binaries, a third 30-second live-demo
+window reached 23.38 presents/s with zero audio faults. Earlier ARGB gameplay
+windows reached 21.78 and 24.1 presents/s. Scenes vary, but all three ARGB
+windows beat both indexed windows. Directly scaling INDEX8 through the palette was much
+slower: a separate live sample showed only 3.33 presents/s with the guest
+mostly idle. Expansion at source size fixed that severe hardware stall, but
+its extra GPU pass still cost more than the roughly 4% CPU conversion it
+removed. This candidate was rejected and the prior SDL/Quake binaries restored.
+The temporary probe was removed from the board. Restored SDL ran Doom at
+35.03 presents/s with zero steady-state audio faults over 20 seconds; its
+first 20-second window during startup had one software gap and 1,326
+underruns. That transient needs separate audio investigation if reproducible.
+Trial patch, probe image, gameplay frame, and telemetry are archived under
+`/mnt/Documents/astra68/quake-indexed-20261028/` on Beast. None of the trial
+API or renderer changes is retained in source.
+
+Haiku review for this experiment: `headers/os/add-ons/graphics/Accelerant.h`
+keeps palette and blit capabilities distinct, and
+`src/add-ons/accelerants/intel_extreme/engine.cpp` batches hardware drawing.
+Astra used its existing palette write, blit, and draw-list contracts; the
+measured cost argues against retaining an indexed present path for Quake.
+The existing `astra_render_copy_burst.sv` pixel mode converts direct color
+formats at one pixel per clock, but excludes INDEX8 palette lookup; the
+general blitter's palette path is much slower. A palette extension to that
+burst mover would reuse its AXI read-ahead and write machinery, yet would
+need a palette cache, validation, simulation, full route, and Doom regression
+gate. It would remove only the ~4% conversion cost, so it is not by itself a
+credible route from 23 to 30 FPS. The texture engine's six parallel attribute
+steppers are a possible area-sharing target, but serializing them could cut
+throughput; no synthesis evidence establishes reclaimable capacity. The
+selected route's fitter report attributes about 4,681 ALMs to texture and
+3,856 to blitter. Both serve existing operations, so neither is disposable
+RTL. Spare DSP count is high, but ALM packing and +0.007 ns worst-clock setup
+slack constrain any change. Existing hardware and software paths get measured
+before an RTL proposal.
+
+Existing SDL frame benchmark on restored DE25 library ran 59–61 FPS for
+640×480 ARGB/RGB565 streaming textures. ARGB upload averaged 13.8–15.1 ms,
+copy enqueue 0.14–0.18 ms, and present 1.3–2.3 ms; it omits Quake's software
+world rendering and full-screen clear, so it cannot predict Quake FPS directly.
+It does show ordinary SDL upload/copy/present can exceed 30 FPS without RTL
+changes. Log: `quake-indexed-20261028/framebench.log` in Beast evidence
+directory above. Next software experiment should measure Quake's frame stages
+with a repeatable demo and target its software span, depth, and surface-cache
+work. Shared SDL changes need a measured bottleneck and Doom regression gate.
+
 ## Measured bottlenecks
 
 Selected release `072a2352ee14a0398170fb0a1fa3b7685c823891cfc74447d1ff601a9d4f4325`

@@ -43,6 +43,27 @@ attribution and repeatable timedemos remain open. Hardware offload candidates,
 capacity, and qualification gates are in `docs/QUAKE_HARDWARE_OFFLOAD.md`;
 port details remain in `docs/CHOCOLATE_QUAKE_PORT.md`.
 
+Quake SDL/Astraea trial, 2026-10-28: a shared INDEX8 SDL streaming-texture
+candidate uploaded indices directly and let Astraea expand the palette at
+source size before its normal scaled blit. Shared tests and a DE25 palette
+probe passed, but two moving-demo windows fell to 17.88 and 16.96 presents/s.
+The restored ARGB path reached 23.38 presents/s in a 30-second moving-demo
+window. Candidate source was discarded; prior SDL and Quake binaries were
+restored to DE25 and the probe removed. Doom then reached 35.03 presents/s
+with zero steady-state audio faults in 20 seconds. Its earlier startup window
+showed one software gap and 1,326 underruns; investigate if repeated.
+No RTL or bitstream changed. Evidence and trial patch:
+`/mnt/Documents/astra68/quake-indexed-20261028/` on Beast. Existing burst
+mover lacks INDEX8 palette lookup; extending it may reuse hardware, but
+would only remove roughly 4% of Quake CPU cost. FPGA has 6,046 ALMs and 41
+RAM blocks free in the selected full route, with just +0.007 ns worst setup
+slack. Next work remains a repeatable timedemo and a measured, generic
+graphics operation targeting Quake's dominant span work before any RTL change.
+Existing SDLFrameBench on restored DE25 library reached 59–61 FPS with
+640×480 ARGB/RGB565 streaming textures; ordinary SDL upload/copy/present is
+not the measured 30 FPS blocker. Quake's world-rendering stages remain the
+next profiling target.
+
 Application data checkpoint, 2026-10-28: supervisor now grants application
 `STORE:` from `HOME:/Application Data/<stable bundle id>/`; SDL preference
 paths remain `/store/`. First launch moves a legacy bundle-name directory
