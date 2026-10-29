@@ -183,9 +183,11 @@ enum {
      ASTRA_WINDOW_SUBSCRIBE_VBLANK | ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION | \
      ASTRA_WINDOW_SUBSCRIBE_DRAG)
 
-/** Allowed/chosen operation bits for typed drag sessions. */
+/** Copy operation bit for typed drag sessions. */
 #define ASTRA_DRAG_COPY UINT32_C(1)
+/** Move operation bit for typed drag sessions. */
 #define ASTRA_DRAG_MOVE UINT32_C(2)
+/** Mask of all supported typed drag operations. */
 #define ASTRA_DRAG_OPERATIONS (ASTRA_DRAG_COPY | ASTRA_DRAG_MOVE)
 
 /** Flags that qualify one delivered window event. */

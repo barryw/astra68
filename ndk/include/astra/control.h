@@ -240,16 +240,17 @@ enum {
 
 /** Two controls: themed container plus ordinary borrowed-text Label. */
 typedef struct AstraDropTargetInfo {
-    uint32_t size;
-    uint32_t first_id;
-    const char *message;
-    uint32_t message_length;
+    uint32_t size; /**< Structure size. */
+    uint32_t first_id; /**< First of two reserved control IDs. */
+    const char *message; /**< Borrowed feedback text. */
+    uint32_t message_length; /**< Feedback text byte length. */
     uint32_t visual_state; /**< ASTRA_DROP_TARGET_*; refusal text explains why. */
-    uint32_t minimum_width;
-    uint32_t minimum_height;
-    uint32_t reserved[4];
+    uint32_t minimum_width; /**< Minimum target width in logical pixels. */
+    uint32_t minimum_height; /**< Minimum target height in logical pixels. */
+    uint32_t reserved[4]; /**< Must be zero. */
 } AstraDropTargetInfo;
 
+/** Empty caller-owned Drop Target creation data. */
 #define ASTRA_DROP_TARGET_INFO_INIT { \
     sizeof(AstraDropTargetInfo), 0u, NULL, 0u, ASTRA_DROP_TARGET_IDLE, \
     0u, 0u, { 0u, 0u, 0u, 0u } \

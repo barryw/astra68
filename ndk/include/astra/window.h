@@ -101,6 +101,14 @@ ASTRA_NODISCARD AstraResult astra_window_overlay_hide(AstraWindow *window);
  * for session lifetime; system clipboard content is unaffected. Source must
  * hold left-button content capture. @p label is a counted ghost caption,
  * typically first item name and count badge. Only one system drag is active.
+ * @param window Owning source window.
+ * @param representations Borrowed typed document representations to copy.
+ * @param representation_count Number of representations.
+ * @param item_count Number of dragged items represented by the document.
+ * @param allowed_operations Bitmask of ASTRA_DRAG_COPY and ASTRA_DRAG_MOVE.
+ * @param label Borrowed counted ghost caption.
+ * @param label_length Caption byte length, excluding any terminator.
+ * @return ASTRA_OK or a validation, permission, or service error.
  */
 ASTRA_NODISCARD AstraResult astra_window_drag_begin(AstraWindow *window,
     const struct AstraClipboardRepresentation *representations,
@@ -108,22 +116,36 @@ ASTRA_NODISCARD AstraResult astra_window_drag_begin(AstraWindow *window,
     uint32_t allowed_operations, const char *label, uint16_t label_length);
 /** Set target operation and precise acceptance/refusal caption for active
  * @p token. A zero operation refuses; nonzero must be COPY or MOVE.
+ * @param window Owning target window.
+ * @param token Drag session token received in ENTER or MOTION event.
+ * @param operation Chosen operation bit, or zero to refuse.
+ * @param caption Borrowed counted feedback text.
+ * @param caption_length Caption byte length, excluding any terminator.
+ * @return ASTRA_OK or a validation, permission, or service error.
  */
 ASTRA_NODISCARD AstraResult astra_window_drag_feedback(AstraWindow *window,
     uint32_t token, uint32_t operation, const char *caption,
     uint16_t caption_length);
-/** Source cancels its active drag; target receives LEAVE. */
+/** Source cancels its active drag; target receives LEAVE.
+ * @param window Owning source window.
+ * @return ASTRA_OK or a validation or service error. */
 ASTRA_NODISCARD AstraResult astra_window_drag_cancel(AstraWindow *window);
 /** Target acknowledges a DROP after applying it. Pass its chosen operation
  * for success, or zero if the operation failed. A MOVE source receives
  * FINISHED only after this acknowledgement. Long operations can repeat
  * ::astra_window_drag_feedback with the same token/operation to keep the
  * session alive.
+ * @param window Owning target window.
+ * @param token Drag session token received in DROP event.
+ * @param completed_operation Applied operation bit, or zero on failure.
+ * @return ASTRA_OK or a validation, permission, or service error.
  */
 ASTRA_NODISCARD AstraResult astra_window_drag_complete(AstraWindow *window,
     uint32_t token, uint32_t completed_operation);
 /** Close immutable drag area attached to ENTER or DROP event, if still owned.
  * Call after reading or rejecting document. Other events are unchanged.
+ * @param event Delivered window event with an attached drag document.
+ * @return ASTRA_OK or a validation or service error.
  */
 ASTRA_NODISCARD AstraResult astra_window_drag_document_close(
     AstraWindowEvent *event);

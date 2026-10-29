@@ -615,13 +615,25 @@ AstraResult astra_interface_field_replace_selection(
  */
 AstraResult astra_interface_control_set_flex(
     AstraControl *control, const AstraFlexItem *item);
-/** Mark one retained control's complete clipped frame for repaint. */
+/** Mark one retained control's complete clipped frame for repaint.
+ * @param context UI context that owns @p control.
+ * @param control Retained control whose frame needs repaint.
+ * @return ASTRA_OK or a validation error. */
 AstraResult astra_interface_control_invalidate(AstraUIContext *context,
     const AstraControl *control);
-/** Compose Drop Target from Container and Label; no new control state machine. */
+/** Compose Drop Target from Container and Label; no new control state machine.
+ * @param controls Storage for two consecutive retained controls.
+ * @param info Validated caller-owned creation data.
+ * @return ASTRA_OK or a validation error. */
 AstraResult astra_interface_drop_target_init(AstraControl controls[2],
     const AstraDropTargetInfo *info);
-/** Update feedback and precise refusal/operation text; borrowed text stays live. */
+/** Update feedback and precise refusal/operation text; borrowed text stays live.
+ * @param context UI context containing both controls.
+ * @param controls Drop Target controls created by astra_interface_drop_target_init.
+ * @param visual_state One ASTRA_DROP_TARGET_* visual state.
+ * @param message Borrowed UTF-8 feedback text.
+ * @param message_length Feedback text byte length.
+ * @return ASTRA_OK or a validation error. */
 AstraResult astra_interface_drop_target_set(AstraUIContext *context,
     AstraControl controls[2], uint32_t visual_state,
     const char *message, uint32_t message_length);
