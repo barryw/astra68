@@ -142,7 +142,12 @@ enum {
     GALLERY_COMBO_FIELD,
     GALLERY_COMBO_MENU,
     GALLERY_MULTI_POPUP,
-    GALLERY_CONTROL_COUNT = GALLERY_MULTI_POPUP
+    GALLERY_TREE,
+    GALLERY_PAGINATION,
+    GALLERY_PAGINATION_PREVIOUS,
+    GALLERY_PAGINATION_LABEL,
+    GALLERY_PAGINATION_NEXT,
+    GALLERY_CONTROL_COUNT = GALLERY_PAGINATION_NEXT
 };
 
 enum {
@@ -212,6 +217,23 @@ static const AstraTableCell gallery_table_cells[] = {
     {"Game", 4u, 0u},
     {"Story", 5u, 0u}
 };
+static const AstraCollectionItem gallery_tree_items[] = {
+    {101u, "Applications", 12u, {0u, 0u}},
+    {102u, "Games", 5u, {0u, 0u}},
+    {103u, "Doom", 4u, {0u, 0u}},
+    {104u, "Documents", 9u, {0u, 0u}}
+};
+static AstraTreeNode gallery_tree_nodes[] = {
+    {0u, 1u, 0u}, {101u, 1u, 0u},
+    {102u, 0u, 0u}, {0u, 0u, 0u}
+};
+static uint32_t gallery_tree_visible[4];
+static AstraCollectionModel gallery_tree_collection = ASTRA_COLLECTION_MODEL_INIT;
+static AstraTreeModel gallery_tree_model = ASTRA_TREE_MODEL_INIT;
+static AstraCollectionModel gallery_pagination_collection =
+    ASTRA_COLLECTION_MODEL_INIT;
+static AstraPaginationModel gallery_pagination_model =
+    ASTRA_PAGINATION_MODEL_INIT;
 static uint32_t gallery_meter_values[2] = {62u, 71u};
 static uint32_t gallery_meter_peaks[2] = {78u, 88u};
 static AstraLevelMeterModel gallery_meter = ASTRA_LEVEL_METER_MODEL_INIT;
@@ -1377,6 +1399,34 @@ static uint32_t build_controls(void)
                 GALLERY_CONTROL(GALLERY_MULTI_POPUP), &multi) != ASTRA_OK)
             status = GALLERY_FAIL_CONTROL;
     }
+    if (status == ASTRA_STATUS_OK) {
+        AstraTreeInfo tree = ASTRA_TREE_INFO_INIT;
+        AstraPaginationInfo pagination = ASTRA_PAGINATION_INFO_INIT;
+
+        if (astra_interface_collection_init(&gallery_tree_collection,
+            gallery_tree_items, 4u, 103u) != ASTRA_OK ||
+            astra_interface_collection_init(&gallery_pagination_collection,
+            column_apps, 3u, 0u) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+        gallery_tree_model.collection = &gallery_tree_collection;
+        gallery_tree_model.nodes = gallery_tree_nodes;
+        gallery_tree_model.node_count = 4u;
+        gallery_tree_model.visible_rows = gallery_tree_visible;
+        gallery_tree_model.visible_capacity = 4u;
+        tree.id = GALLERY_TREE;
+        tree.model = &gallery_tree_model;
+        gallery_pagination_model.collection = &gallery_pagination_collection;
+        gallery_pagination_model.page_size = 1u;
+        pagination.first_id = GALLERY_PAGINATION;
+        pagination.model = &gallery_pagination_model;
+        if (status == ASTRA_STATUS_OK &&
+            (astra_interface_tree_init(GALLERY_CONTROL(GALLERY_TREE),
+                &tree) != ASTRA_OK ||
+             astra_interface_pagination_init(
+                GALLERY_CONTROL(GALLERY_PAGINATION),
+                &pagination) != ASTRA_OK))
+            status = GALLERY_FAIL_CONTROL;
+    }
     if (status == ASTRA_STATUS_OK)
         status = set_item(GALLERY_TABS, 0u, 0u, 0u);
     for (uint32_t page = GALLERY_PAGE_INPUT;
@@ -1505,6 +1555,10 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_COLUMNS, GALLERY_PAGE_LAYOUT,
               ASTRA_FLEX_BREAK_BEFORE);
     PAGE_ITEM(GALLERY_TABLE, GALLERY_PAGE_LAYOUT,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_TREE, GALLERY_PAGE_LAYOUT,
+              ASTRA_FLEX_BREAK_BEFORE);
+    PAGE_ITEM(GALLERY_PAGINATION, GALLERY_PAGE_LAYOUT,
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_FIELD_FAMILY_LABEL, GALLERY_PAGE_FIELDS,
               ASTRA_FLEX_BREAK_AFTER);
@@ -2254,6 +2308,20 @@ static uint32_t handle_action(AstraHandle clipboard,
         astra_interface_popup_open(&gallery_popup, &ui,
             GALLERY_CONTROL(GALLERY_POPUP), &window) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
+    if (action->type == ASTRA_UI_ACTION_ACTIVATE &&
+        (action->control_id == GALLERY_PAGINATION_PREVIOUS ||
+         action->control_id == GALLERY_PAGINATION_NEXT)) {
+        uint32_t next = gallery_pagination_model.page_index;
+
+        if (action->control_id == GALLERY_PAGINATION_PREVIOUS && next != 0u)
+            --next;
+        else if (action->control_id == GALLERY_PAGINATION_NEXT)
+            ++next;
+        if (astra_interface_pagination_set_page(&ui,
+            GALLERY_CONTROL(GALLERY_PAGINATION),
+            &gallery_pagination_model, next) != ASTRA_OK)
+            return GALLERY_FAIL_CONTROL;
+    }
     if (action->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
         action->control_id == GALLERY_TABS &&
         select_page(action->value) != ASTRA_STATUS_OK)
