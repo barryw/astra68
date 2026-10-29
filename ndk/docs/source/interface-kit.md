@@ -259,6 +259,44 @@ that separation with a retained choice field and a caller-owned, correlated
 display-menu session. The display service copies menu rows on open, so a
 Popup's borrowed labels remain owned by the choice control.
 
+### Command-backed toolbar groups
+
+`AstraButtonGroup` is the smaller composition for a row of related actions.
+Allocate one Container and one Button per `AstraToolbarCommand`, then call
+`astra_interface_button_group_init`. The declarations and command scope remain
+caller-owned. After UI initialization, call
+`astra_interface_button_group_refresh` when command state changes and pass
+Button activations to `astra_interface_button_group_handle_action`. It uses
+the same command query and invocation contract as toolbar actions.
+
+`AstraToolbarActions` composes the existing toolbar Container, one row
+Container per group, ordinary Buttons, and one overflow Button. Declare
+contiguous `AstraToolbarGroup` and `AstraToolbarCommand` arrays, plus a
+borrowed `AstraCommandScope`. Allocate the number of controls returned by
+`astra_interface_toolbar_actions_control_count`, then initialize the
+controller and UI context. Call `astra_interface_toolbar_actions_refresh`
+when command enabled or checked state changes. Pass Button actions to
+`astra_interface_toolbar_actions_handle_action` and correlated menu events
+to `astra_interface_toolbar_actions_handle_event` before the ordinary UI
+handler. Close its menu before destroying the window.
+
+Call `astra_interface_toolbar_actions_fit` after layout and on window resize.
+It first tries icon and label buttons, switches *all* actions to icons if
+needed, then folds complete unpinned groups by descending priority. Equal
+priorities fold from the right. The returned `minimum_width` includes pinned
+groups and the overflow control; a window narrower than that receives
+`ASTRA_ERROR_NO_RESOURCES`. Labels remain on the control as stable names in
+icon mode. The overflow menu uses the same command query and invocation path
+as the main toolbar, with separators between folded groups. Search-field
+collapse, group headings and shortcuts in the overflow menu, and persistent
+toggle selection require later shared menu and search-field work.
+
+Haiku reference: `src/kits/shared/ToolBar.cpp` uses a group view, ordinary
+buttons, separators, and command targets. Astra adopts its composition and
+keeps one command responder chain for both visible and overflow actions.
+Width fitting is measured against the retained controls before the next
+layout pass; no new toolbar painter or application-owned hit testing is used.
+
 ```{literalinclude} ../../examples/interface_controls.c
 :language: c
 :linenos:

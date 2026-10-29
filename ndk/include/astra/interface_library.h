@@ -14,6 +14,7 @@
 #include <astra/scroll.h>
 #include <astra/text_model.h>
 #include <astra/text_surface.h>
+#include <astra/toolbar_actions.h>
 #include <astra/undo.h>
 #include <astra/window.h>
 

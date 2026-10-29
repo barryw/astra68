@@ -8,11 +8,16 @@
 #define ASTRA_CONTAINER_STYLE_TAG_INPUT 3u
 #define ASTRA_BUTTON_STYLE_MASK 0xffu
 #define ASTRA_BUTTON_ICON_SHIFT 8u
-#define ASTRA_BUTTON_ICON(style) ((style) >> ASTRA_BUTTON_ICON_SHIFT)
+#define ASTRA_BUTTON_ICON_MASK 0xff00u
+#define ASTRA_BUTTON_ICON(style) \
+    (((style) & ASTRA_BUTTON_ICON_MASK) >> ASTRA_BUTTON_ICON_SHIFT)
+#define ASTRA_BUTTON_ICON_ONLY 0x10000u
 
 int astra_interface_single_line_text_valid(const char *text, uint32_t bytes);
 int astra_interface_draw_list_has_room(const AstraSurfaceView *surface,
                                        uint64_t commands, uint64_t payload);
+AstraResult astra_interface_toolbar_button_measure(
+    const AstraControl *control, uint32_t icon_only, AstraControlSize *size);
 
 AstraResult astra_interface_label_init(AstraControl *control,
                                        const AstraLabelInfo *info);

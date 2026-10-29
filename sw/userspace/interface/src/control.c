@@ -481,11 +481,18 @@ static int control_valid(const AstraControl *control)
                control->_private_text_length != 0u &&
                (control->_private_style & ASTRA_BUTTON_STYLE_MASK) <=
                    ASTRA_BUTTON_TAG &&
+               (control->_private_style &
+                ~(ASTRA_BUTTON_STYLE_MASK | ASTRA_BUTTON_ICON_MASK |
+                  ASTRA_BUTTON_ICON_ONLY)) == 0u &&
                ASTRA_BUTTON_ICON(control->_private_style) <=
-                   ASTRA_TOOLBAR_ICON_SEARCH &&
+                   ASTRA_TOOLBAR_ICON_MORE &&
                (ASTRA_BUTTON_ICON(control->_private_style) == 0u ||
                 (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
                     ASTRA_BUTTON_TOOLBAR) &&
+               ((control->_private_style & ASTRA_BUTTON_ICON_ONLY) == 0u ||
+                ((control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+                    ASTRA_BUTTON_TOOLBAR &&
+                 ASTRA_BUTTON_ICON(control->_private_style) != 0u)) &&
                control->_private_value == 0 &&
                control->_private_minimum_value == 0 &&
                control->_private_maximum_value == 0 &&
@@ -2454,7 +2461,9 @@ static AstraResult measure_control(const AstraControl *control,
         if (width > UINT32_MAX - extra)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         size->width = (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
-            ASTRA_BUTTON_SPLIT_MENU ? 28u : width + extra;
+            ASTRA_BUTTON_SPLIT_MENU ? 28u :
+            (control->_private_style & ASTRA_BUTTON_ICON_ONLY) != 0u ?
+                26u : width + extra;
         size->height = 22u;
         return ASTRA_OK;
     }
@@ -2471,6 +2480,25 @@ static AstraResult measure_control(const AstraControl *control,
     size->width = width + (uint32_t)theme.control_padding_x * 2u;
     size->height = theme.control_height;
     return ASTRA_OK;
+}
+
+AstraResult astra_interface_toolbar_button_measure(
+    const AstraControl *control, uint32_t icon_only, AstraControlSize *size)
+{
+    AstraControl candidate;
+
+    if (!control_valid(control) || size == NULL || icon_only > 1u ||
+        control->_private_control_kind != ASTRA_CONTROL_BUTTON ||
+        (control->_private_style & ASTRA_BUTTON_STYLE_MASK) !=
+            ASTRA_BUTTON_TOOLBAR ||
+        ASTRA_BUTTON_ICON(control->_private_style) == 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    candidate = *control;
+    if (icon_only != 0u)
+        candidate._private_style |= ASTRA_BUTTON_ICON_ONLY;
+    else
+        candidate._private_style &= ~ASTRA_BUTTON_ICON_ONLY;
+    return measure_control(&candidate, size);
 }
 
 AstraResult astra_interface_ui_measure(const AstraUIContext *context,
@@ -4518,6 +4546,10 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
         {13, 9, 10, 12}, {10, 12, 6, 12}, {6, 12, 3, 9},
         {3, 9, 3, 5}, {3, 5, 6, 2}, {11, 11, 15, 15}
     };
+    static const ToolbarLine more[] = {
+        {2, 4, 6, 8}, {6, 8, 2, 12},
+        {8, 4, 12, 8}, {12, 8, 8, 12}
+    };
     const ToolbarLine *lines = NULL;
     uint32_t count = 0u;
 #define PICK(name) do { lines = name; count = sizeof(name) / sizeof(name[0]); } while (0)
@@ -4533,6 +4565,7 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
     case ASTRA_TOOLBAR_ICON_LIST: PICK(list); break;
     case ASTRA_TOOLBAR_ICON_COLUMNS: PICK(columns); break;
     case ASTRA_TOOLBAR_ICON_SEARCH: PICK(search); break;
+    case ASTRA_TOOLBAR_ICON_MORE: PICK(more); break;
     default: break;
     }
 #undef PICK
@@ -4611,7 +4644,9 @@ static void render_button(const AstraTheme *theme,
         control->_private_text, control->_private_text_length,
         theme->control_font_height);
     if (icon != 0u) {
-        render_toolbar_icon(surface, icon, x + 8,
+        render_toolbar_icon(surface, icon,
+                            x + ((control->_private_style &
+                                  ASTRA_BUTTON_ICON_ONLY) != 0u ? 5 : 8),
                             y + ((int32_t)height - 16) / 2,
                             color(button_text(theme, control)));
         text_x = x + 30;
@@ -4629,6 +4664,7 @@ static void render_button(const AstraTheme *theme,
         astra_surface_fill(surface, arrow_x + 3, arrow_y + 2, 3u, 1u, ink);
         return;
     }
+    if ((control->_private_style & ASTRA_BUTTON_ICON_ONLY) != 0u) return;
     astra_surface_ui_text(surface, text_x, text_y, control->_private_text,
                           control->_private_text_length,
                           theme->control_font_height,

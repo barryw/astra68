@@ -17,6 +17,8 @@ static const char *labels[] = {"First", "Second"};
 static uint32_t queries;
 static uint8_t tree_menu;
 static uint8_t popup_mode;
+static uint8_t toolbar_mode;
+static uint32_t toolbar_invocations, toolbar_last;
 static AstraWindowEvent event(uint16_t type);
 
 AstraResult astra_fonts_text_measure(AstraHandle gui, const char *id,
@@ -50,6 +52,16 @@ AstraResult astra_window_menu_open(AstraWindow *window, const AstraMenuItem *row
         assert(rows[1].label_length == 13u &&
                memcmp(rows[1].label, "Date modified", 13u) == 0);
         assert(rows[0].flags == ASTRA_MENU_CHECKED && rows[1].flags == 0u);
+        request = cookie;
+        return open_result;
+    }
+    if (toolbar_mode) {
+        assert(window != NULL && count == 3u && x >= 0 && y >= 0);
+        assert(rows[0].label_length == 4u &&
+               memcmp(rows[0].label, "Open", 4u) == 0);
+        assert(rows[1].flags == ASTRA_MENU_SEPARATOR);
+        assert(rows[2].label_length == 5u &&
+               memcmp(rows[2].label, "Trash", 5u) == 0);
         request = cookie;
         return open_result;
     }
@@ -335,10 +347,181 @@ static void context(void)
         tree_menu = 0u;
     }
 }
+
+static AstraResult toolbar_query(void *context, AstraCommandState *state)
+{
+    static const char *const names[] = {"Back", "Forward", "Open", "Trash"};
+    static const uint32_t lengths[] = {4u, 7u, 4u, 5u};
+    uint32_t at = (uint32_t)(uintptr_t)context;
+
+    *state = (AstraCommandState){
+        names[at], lengths[at], 1u, at == 1u};
+    return ASTRA_OK;
+}
+
+static AstraResult toolbar_invoke(void *context,
+    const AstraCommandArguments *arguments)
+{
+    assert(arguments == NULL);
+    toolbar_last = (uint32_t)(uintptr_t)context;
+    ++toolbar_invocations;
+    return ASTRA_OK;
+}
+
+static void toolbar_actions(void)
+{
+    static const AstraCommand commands[] = {
+        {"go.back", 7u, 0u, 0u, toolbar_query, toolbar_invoke, (void *)0},
+        {"go.forward", 10u, 0u, 0u, toolbar_query, toolbar_invoke,
+            (void *)(uintptr_t)1u},
+        {"file.open", 9u, 0u, 0u, toolbar_query, toolbar_invoke,
+            (void *)(uintptr_t)2u},
+        {"file.trash", 10u, 0u, 0u, toolbar_query, toolbar_invoke,
+            (void *)(uintptr_t)3u}
+    };
+    static const AstraCommandScope scope = {NULL, commands, 4u};
+    static const AstraToolbarCommand actions[] = {
+        {"go.back", 7u, "Back", 4u, ASTRA_TOOLBAR_ICON_BACK, {0u, 0u}},
+        {"go.forward", 10u, "Forward", 7u, ASTRA_TOOLBAR_ICON_FORWARD,
+            {0u, 0u}},
+        {"file.open", 9u, "Open", 4u, ASTRA_TOOLBAR_ICON_OPEN, {0u, 0u}},
+        {"file.trash", 10u, "Trash", 5u, ASTRA_TOOLBAR_ICON_TRASH,
+            {0u, 0u}}
+    };
+    static const AstraToolbarGroup groups[] = {
+        {"Navigate", 8u, 0u, 2u, 0u, ASTRA_TOOLBAR_GROUP_PINNED,
+            {0u, 0u}},
+        {"File", 4u, 2u, 1u, 1u, 0u, {0u, 0u}},
+        {"Remove", 6u, 3u, 1u, 2u, 0u, {0u, 0u}}
+    };
+    AstraToolbarActionsInfo info = ASTRA_TOOLBAR_ACTIONS_INFO_INIT;
+    AstraToolbarActions toolbar = ASTRA_TOOLBAR_ACTIONS_INIT;
+    AstraControl controls[10] = {0};
+    AstraControl *toolbar_controls = &controls[1];
+    AstraLabelInfo heading = ASTRA_LABEL_INFO_INIT;
+    AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraToolbarFit fit = ASTRA_TOOLBAR_FIT_INIT;
+    AstraWindow window = ASTRA_WINDOW_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraWindowEvent result = event(ASTRA_WINDOW_EVENT_MENU_RESULT);
+    int handled;
+
+    info.first_id = 100u;
+    info.groups = groups;
+    info.group_count = 3u;
+    info.actions = actions;
+    info.action_count = 4u;
+    info.scope = &scope;
+    assert(astra_interface_toolbar_actions_control_count(&info) == 9u);
+    heading.id = 99u;
+    heading.text = "Tools";
+    heading.text_length = 5u;
+    assert(astra_interface_label_init(&controls[0], &heading) == ASTRA_OK);
+    assert(astra_interface_toolbar_actions_init(&toolbar, toolbar_controls,
+        &info) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_init(&ui, controls, 10u, 400u, 60u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&ui, &layout) == ASTRA_OK);
+    assert(astra_interface_toolbar_actions_refresh(&toolbar, &ui) == ASTRA_OK);
+    assert((toolbar_controls[3]._private_state & ASTRA_CONTROL_SELECTED) != 0u);
+    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 400u,
+        ASTRA_TOOLBAR_LABELS, &fit) == ASTRA_OK &&
+        fit.mode == ASTRA_TOOLBAR_LABELS && fit.hidden_groups == 0u);
+    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 180u,
+        ASTRA_TOOLBAR_LABELS, &fit) == ASTRA_OK &&
+        fit.mode == ASTRA_TOOLBAR_ICONS_ONLY && fit.hidden_groups == 0u);
+    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 110u,
+        ASTRA_TOOLBAR_LABELS, &fit) == ASTRA_OK &&
+        fit.mode == ASTRA_TOOLBAR_ICONS_ONLY && fit.hidden_groups == 2u &&
+        fit.minimum_width == 104u && fit.required_width == 104u);
+    assert((toolbar_controls[4]._private_state & ASTRA_CONTROL_COLLAPSED) != 0u &&
+           (toolbar_controls[6]._private_state & ASTRA_CONTROL_COLLAPSED) != 0u &&
+           (toolbar_controls[8]._private_state & ASTRA_CONTROL_COLLAPSED) == 0u);
+    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 103u,
+        ASTRA_TOOLBAR_LABELS, &fit) == ASTRA_ERROR_NO_RESOURCES &&
+        fit.minimum_width == 104u);
+    action.type = ASTRA_UI_ACTION_ACTIVATE;
+    action.control_id = 102u;
+    assert(astra_interface_toolbar_actions_handle_action(
+        &toolbar, &window, &action, &handled) == ASTRA_OK && handled &&
+        toolbar_invocations == 1u && toolbar_last == 0u);
+    action.control_id = 108u;
+    toolbar_mode = 1u;
+    assert(astra_interface_toolbar_actions_handle_action(
+        &toolbar, &window, &action, &handled) == ASTRA_OK && handled &&
+        allocations == 1u);
+    result.data.menu_result.request = request;
+    result.data.menu_result.status = ASTRA_STATUS_OK;
+    result.data.menu_result.selection = 3u;
+    assert(astra_interface_toolbar_actions_handle_event(&toolbar,
+        &result, &handled) == ASTRA_OK && handled &&
+        toolbar_invocations == 2u && toolbar_last == 3u &&
+        allocations == 0u);
+    assert(astra_interface_toolbar_actions_close(&toolbar) == ASTRA_OK);
+    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 400u,
+        ASTRA_TOOLBAR_LABELS, &fit) == ASTRA_OK &&
+        fit.mode == ASTRA_TOOLBAR_LABELS && fit.hidden_groups == 0u);
+    assert((toolbar_controls[4]._private_state & ASTRA_CONTROL_COLLAPSED) == 0u &&
+           (toolbar_controls[6]._private_state & ASTRA_CONTROL_COLLAPSED) == 0u);
+    toolbar_mode = 0u;
+}
+
+static void button_group(void)
+{
+    static const AstraCommand commands[] = {
+        {"go.back", 7u, 0u, 0u, toolbar_query, toolbar_invoke, (void *)0},
+        {"go.forward", 10u, 0u, 0u, toolbar_query, toolbar_invoke,
+            (void *)(uintptr_t)1u}
+    };
+    static const AstraCommandScope scope = {NULL, commands, 2u};
+    static const AstraToolbarCommand actions[] = {
+        {"go.back", 7u, "Back", 4u, ASTRA_TOOLBAR_ICON_BACK, {0u, 0u}},
+        {"go.forward", 10u, "Forward", 7u, ASTRA_TOOLBAR_ICON_FORWARD,
+            {0u, 0u}}
+    };
+    AstraButtonGroupInfo info = ASTRA_BUTTON_GROUP_INFO_INIT;
+    AstraButtonGroup group = ASTRA_BUTTON_GROUP_INIT;
+    AstraControl controls[3] = {0};
+    AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    uint32_t previous = toolbar_invocations;
+    int handled;
+
+    info.first_id = 200u;
+    info.actions = actions;
+    info.action_count = 2u;
+    info.scope = &scope;
+    assert(astra_interface_button_group_init(&group, controls, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&ui, controls, 3u, 200u, 60u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&ui, &layout) == ASTRA_OK);
+    assert(astra_interface_button_group_refresh(&group, &ui) == ASTRA_OK);
+    assert((controls[2]._private_state & ASTRA_CONTROL_SELECTED) != 0u);
+    action.type = ASTRA_UI_ACTION_ACTIVATE;
+    action.control_id = 202u;
+    assert(astra_interface_button_group_handle_action(&group, &action,
+        &handled) == ASTRA_OK && handled &&
+        toolbar_invocations == previous + 1u && toolbar_last == 1u);
+    action.control_id = 203u;
+    assert(astra_interface_button_group_handle_action(&group, &action,
+        &handled) == ASTRA_OK && !handled);
+    assert(astra_interface_button_group_init(&group, controls, &info) ==
+        ASTRA_ERROR_INVALID_ARGUMENT);
+    {
+        AstraButtonGroup invalid = ASTRA_BUTTON_GROUP_INIT;
+        AstraButtonGroupInfo bad = info;
+        bad.first_id = UINT32_MAX;
+        assert(astra_interface_button_group_init(&invalid, controls, &bad) ==
+            ASTRA_ERROR_INVALID_ARGUMENT);
+    }
+}
 int main(void)
 {
     model();
     context();
     popup_session();
+    toolbar_actions();
+    button_group();
     return 0;
 }

@@ -63,7 +63,7 @@ static void test_toolbar_composition(void)
            ASTRA_TOOLBAR_ICON_OPEN);
     {
         const uint32_t invalid[2] = {
-            ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_SEARCH + 1u
+            ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_MORE + 1u
         };
         assert(astra_interface_toolbar_set_icons(controls, invalid, 2u) ==
                ASTRA_ERROR_INVALID_ARGUMENT);

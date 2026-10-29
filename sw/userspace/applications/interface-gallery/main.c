@@ -129,7 +129,16 @@ enum {
     GALLERY_TAG_TWO,
     GALLERY_TAG_DRAFT,
     GALLERY_COLOUR_WELL,
-    GALLERY_CONTROL_COUNT = GALLERY_COLOUR_WELL
+    GALLERY_TOOLBAR_ROOT,
+    GALLERY_TOOLBAR_NAV,
+    GALLERY_TOOLBAR_BACK,
+    GALLERY_TOOLBAR_FORWARD,
+    GALLERY_TOOLBAR_FILE,
+    GALLERY_TOOLBAR_OPEN,
+    GALLERY_TOOLBAR_REMOVE,
+    GALLERY_TOOLBAR_TRASH,
+    GALLERY_TOOLBAR_MORE,
+    GALLERY_CONTROL_COUNT = GALLERY_TOOLBAR_MORE
 };
 
 enum {
@@ -152,6 +161,7 @@ static uint8_t text_benchmark_content[16384];
 static _Alignas(4) uint8_t text_benchmark_metadata[131072];
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraPopup gallery_popup = ASTRA_POPUP_INIT;
+static AstraToolbarActions gallery_toolbar = ASTRA_TOOLBAR_ACTIONS_INIT;
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
 static char slider_value_text[5] = "62%";
@@ -254,6 +264,50 @@ static const AstraCollectionItem gallery_fonts[] = {
     {2u, "Astra Mono", sizeof("Astra Mono") - 1u, {0u, 0u}},
     {3u, "Rescue Mono", sizeof("Rescue Mono") - 1u, {0u, 0u}}
 };
+static const AstraToolbarCommand gallery_toolbar_actions[] = {
+    {"go.back", 7u, "Back", 4u, ASTRA_TOOLBAR_ICON_BACK, {0u, 0u}},
+    {"go.forward", 10u, "Forward", 7u, ASTRA_TOOLBAR_ICON_FORWARD,
+        {0u, 0u}},
+    {"file.open", 9u, "Open", 4u, ASTRA_TOOLBAR_ICON_OPEN, {0u, 0u}},
+    {"file.trash", 10u, "Trash", 5u, ASTRA_TOOLBAR_ICON_TRASH,
+        {0u, 0u}}
+};
+static const AstraToolbarGroup gallery_toolbar_groups[] = {
+    {"Navigate", 8u, 0u, 2u, 0u, ASTRA_TOOLBAR_GROUP_PINNED, {0u, 0u}},
+    {"File", 4u, 2u, 1u, 1u, 0u, {0u, 0u}},
+    {"Remove", 6u, 3u, 1u, 2u, 0u, {0u, 0u}}
+};
+
+static AstraResult gallery_toolbar_query(void *context,
+    AstraCommandState *state)
+{
+    const AstraToolbarCommand *action = context;
+    *state = (AstraCommandState){
+        action->label, action->label_length, 1u, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult gallery_toolbar_invoke(void *context,
+    const AstraCommandArguments *arguments)
+{
+    const AstraToolbarCommand *action = context;
+    (void)arguments;
+    (void)astra_log(action->label);
+    return ASTRA_OK;
+}
+
+static const AstraCommand gallery_toolbar_commands[] = {
+    {"go.back", 7u, 0u, 0u, gallery_toolbar_query,
+        gallery_toolbar_invoke, (void *)&gallery_toolbar_actions[0]},
+    {"go.forward", 10u, 0u, 0u, gallery_toolbar_query,
+        gallery_toolbar_invoke, (void *)&gallery_toolbar_actions[1]},
+    {"file.open", 9u, 0u, 0u, gallery_toolbar_query,
+        gallery_toolbar_invoke, (void *)&gallery_toolbar_actions[2]},
+    {"file.trash", 10u, 0u, 0u, gallery_toolbar_query,
+        gallery_toolbar_invoke, (void *)&gallery_toolbar_actions[3]}
+};
+static const AstraCommandScope gallery_toolbar_scope = {
+    NULL, gallery_toolbar_commands, 4u};
 
 #define GALLERY_CONTROL(id) (&controls[(id) - 1u])
 
@@ -1229,6 +1283,21 @@ static uint32_t build_controls(void)
                 GALLERY_CONTROL(GALLERY_COLOUR_WELL), &well) != ASTRA_OK)
             status = GALLERY_FAIL_CONTROL;
     }
+    if (status == ASTRA_STATUS_OK) {
+        AstraToolbarActionsInfo info = ASTRA_TOOLBAR_ACTIONS_INFO_INIT;
+
+        info.first_id = GALLERY_TOOLBAR_ROOT;
+        info.groups = gallery_toolbar_groups;
+        info.group_count = sizeof(gallery_toolbar_groups) /
+            sizeof(gallery_toolbar_groups[0]);
+        info.actions = gallery_toolbar_actions;
+        info.action_count = sizeof(gallery_toolbar_actions) /
+            sizeof(gallery_toolbar_actions[0]);
+        info.scope = &gallery_toolbar_scope;
+        status = astra_interface_toolbar_actions_init(&gallery_toolbar,
+            GALLERY_CONTROL(GALLERY_TOOLBAR_ROOT), &info) == ASTRA_OK ?
+            ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+    }
     if (status == ASTRA_STATUS_OK)
         status = set_item(GALLERY_TABS, 0u, 0u, 0u);
     for (uint32_t page = GALLERY_PAGE_INPUT;
@@ -1282,6 +1351,8 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_POPUP_LABEL, GALLERY_PAGE_CHOICE,
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_POPUP, GALLERY_PAGE_CHOICE,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_TOOLBAR_ROOT, GALLERY_PAGE_CHOICE,
               ASTRA_FLEX_BREAK_AFTER);
 
     PAGE_ITEM(GALLERY_SLIDER_LABEL, GALLERY_PAGE_VALUE,
@@ -1435,7 +1506,17 @@ static uint32_t build_controls(void)
     if (astra_interface_ui_init(&ui, controls, GALLERY_CONTROL_COUNT,
                                    GALLERY_WIDTH, GALLERY_HEIGHT) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
-    return layout_controls();
+    if (layout_controls() != ASTRA_STATUS_OK ||
+        astra_interface_toolbar_actions_refresh(&gallery_toolbar, &ui) !=
+            ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    {
+        AstraToolbarFit fit = ASTRA_TOOLBAR_FIT_INIT;
+
+        return astra_interface_toolbar_actions_fit(&gallery_toolbar, &ui,
+            GALLERY_WIDTH - 32u, ASTRA_TOOLBAR_LABELS, &fit) == ASTRA_OK ?
+            ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+    }
 }
 
 static uint32_t benchmark_layout(uint32_t count, uint32_t iterations)
@@ -2060,6 +2141,12 @@ static uint32_t create_window(AstraHandle gui)
 static uint32_t handle_action(AstraHandle clipboard,
                               const AstraUIAction *action)
 {
+    int toolbar_handled = 0;
+
+    if (astra_interface_toolbar_actions_handle_action(&gallery_toolbar,
+            &window, action, &toolbar_handled) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    if (toolbar_handled) return ASTRA_STATUS_OK;
     if (action->type == ASTRA_UI_ACTION_ACTIVATE &&
         action->control_id == GALLERY_POPUP &&
         astra_interface_popup_open(&gallery_popup, &ui,
@@ -2147,11 +2234,21 @@ static uint32_t run(AstraHandle clipboard, AstraHandle gui)
         }
         while (result == ASTRA_OK) {
             int popup_handled = 0;
+            int toolbar_handled = 0;
 
             action = (AstraUIAction)ASTRA_UI_ACTION_INIT;
             if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) {
                 (void)astra_interface_popup_close(&gallery_popup);
+                (void)astra_interface_toolbar_actions_close(&gallery_toolbar);
                 return ASTRA_STATUS_OK;
+            }
+            if (astra_interface_toolbar_actions_handle_event(&gallery_toolbar,
+                    &event, &toolbar_handled) != ASTRA_OK)
+                return GALLERY_FAIL_CONTROL;
+            if (toolbar_handled) {
+                scroll_only = 0u;
+                result = astra_window_event_try(&window, &event);
+                continue;
             }
             if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
                 AstraResult refreshed = astra_fonts_use_system(gui, &event);
@@ -2171,6 +2268,18 @@ static uint32_t run(AstraHandle clipboard, AstraHandle gui)
             if (astra_interface_ui_handle_event(
                     &ui, &event, &action) != ASTRA_OK)
                 return GALLERY_FAIL_CONTROL;
+            if (event.type == ASTRA_WINDOW_EVENT_RESIZE &&
+                event.data.resize.width > 32u) {
+                AstraToolbarFit fit = ASTRA_TOOLBAR_FIT_INIT;
+                AstraResult fitted = astra_interface_toolbar_actions_fit(
+                    &gallery_toolbar, &ui,
+                    event.data.resize.width - 32u,
+                    ASTRA_TOOLBAR_LABELS, &fit);
+
+                if (fitted != ASTRA_OK &&
+                    fitted != ASTRA_ERROR_NO_RESOURCES)
+                    return GALLERY_FAIL_CONTROL;
+            }
             if (astra_interface_ui_update_pointer(
                     &ui, &window, ASTRA_POINTER_SHAPE_AUTOMATIC,
                     &applied_pointer_shape) != ASTRA_OK)
