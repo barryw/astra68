@@ -25,20 +25,34 @@ on Beast. Z6 inline Backspace editing also passed: `loox` edited to `look`
 and returned the expected Banquet Hall response; capture SHA-256
 `d3370d45d8536216412c3d618bd10c5d764ff038a05b973544e3ca9eaef9e1c3`
 is at `/mnt/Documents/astra68/astraz-validation-20261029/z6-edit-settled.png`.
-Window resize, maximize and distraction-free full-screen remain open; the
-native window protocol supports both modes. No new board panic or spontaneous
-service restart occurred during these trials.
+Window resize, maximize and F11 distraction-free full-screen pass on DE25.
+Z6 artwork keeps its aspect ratio and centered canvas in both modes. Z8
+paragraphs reflow across the available width and rewrap on restore; `look`
+appears once, yields a complete `Bathroom` response and one active prompt.
+The settled normal/maximized/response/restored captures are under
+`/mnt/Documents/astra68/astraz-validation-20261029/` on Beast; maximized
+capture SHA-256 is
+`a3c7968760d72cf7ab36592bee1c0b118aa14c38ec2b4724154b223d318ed31e`
+and restored capture SHA-256 is
+`c10d321c7827653a1dc009729b5ad8928b45ccbf9bae87d13099341f464d3567`.
+No new board panic or spontaneous service restart occurred during these trials.
 Interface Kit 7.11 Text View word wrapping is implemented for responsive text
 story windows. It remeasures visual lines at the chosen viewport width and
 keeps selection, pointer hit testing and keyboard navigation aligned with
 wrapped rows. Isolated Beast host tests, sanitizers and MC68040 library
-contract pass; AstraZ resize integration and DE25 retest remain open. Haiku
+contract pass; AstraZ resize and DE25 visual retests pass. Frotz's private
+semantic transcript hook now preserves explicit paragraph breaks before its
+fixed virtual screen wraps lines, letting shared Text View reflow on resize.
+The hook is gated to AstraZ's build; standalone Frotz compiles unchanged.
+The independent real-story gate checks Z8 One Room and Z4 Trinity long
+paragraphs and complete room headings. Haiku
 reference: `src/kits/interface/TextView.cpp` `FrameResized`, `SetWordWrap`,
 `CanEndLine` (reflow on width change; break at word boundaries, then characters).
 The display-server maximize gadget now sends frame and resize events after
 changing window geometry, matching programmatic maximize. Isolated Beast
-host tests, sanitizers and MC68040 display build pass; DE25 retest remains
-open. Haiku reference: `src/servers/app/ServerWindow.cpp` `NotifyZoom` and
+host tests, sanitizers and MC68040 display build pass; DE25 gadget maximize,
+resize notification and redraw pass. Haiku reference:
+`src/servers/app/ServerWindow.cpp` `NotifyZoom` and
 `src/kits/interface/Window.cpp` `Zoom`/`FrameResized` (notify client when
 server-side window chrome changes its frame).
 
