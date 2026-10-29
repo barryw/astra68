@@ -15,7 +15,10 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_container_init;
         astra_interface_control_get_value;
         astra_interface_control_set_flex;
+        astra_interface_control_invalidate;
         astra_interface_control_set_text;
+        astra_interface_drop_target_init;
+        astra_interface_drop_target_set;
         astra_interface_control_set_value;
         astra_interface_dial_init;
         astra_interface_disclosure_init;

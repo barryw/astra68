@@ -544,6 +544,16 @@ AstraResult astra_interface_field_replace_selection(
  */
 AstraResult astra_interface_control_set_flex(
     AstraControl *control, const AstraFlexItem *item);
+/** Mark one retained control's complete clipped frame for repaint. */
+AstraResult astra_interface_control_invalidate(AstraUIContext *context,
+    const AstraControl *control);
+/** Compose Drop Target from Container and Label; no new control state machine. */
+AstraResult astra_interface_drop_target_init(AstraControl controls[2],
+    const AstraDropTargetInfo *info);
+/** Update feedback and precise refusal/operation text; borrowed text stays live. */
+AstraResult astra_interface_drop_target_set(AstraUIContext *context,
+    AstraControl controls[2], uint32_t visual_state,
+    const char *message, uint32_t message_length);
 /** Replace a control's borrowed UTF-8 text.
  * @param context UI context owning @p control.
  * @param control Text-bearing control to update.

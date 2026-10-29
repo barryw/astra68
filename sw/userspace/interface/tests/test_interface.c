@@ -36,6 +36,10 @@ static uint32_t fill_width[32];
 static uint32_t fill_height[32];
 static _Alignas(4) uint16_t render_pixels[320u * 200u];
 static uint32_t icon_blit_calls;
+static AstraSurfaceView render_view(uint16_t width, uint16_t height);
+static void reset_render_calls(void);
+static uint32_t fill_calls;
+static uint32_t line_calls;
 
 int astra_surface_draw_blit(AstraSurfaceView *view,
     const AstraSurface *source, const AstraRectI32 *source_rect,
@@ -98,6 +102,49 @@ static void test_toolbar_composition(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_drop_target_composition(void)
+{
+    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraDropTargetInfo info = ASTRA_DROP_TARGET_INFO_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlFrame damage;
+    AstraSurfaceView surface = render_view(320u, 100u);
+    const char *accept = "Copy 3 elements to WORK:/projects";
+    const char *refuse = "SYSTEM: is read-only - can't drop here";
+
+    info.first_id = 91u;
+    info.message = accept;
+    info.message_length = (uint32_t)strlen(accept);
+    info.visual_state = ASTRA_DROP_TARGET_ACCEPT;
+    info.minimum_width = 260u;
+    info.minimum_height = 64u;
+    assert(astra_interface_drop_target_init(controls, &info) == ASTRA_OK);
+    assert(controls[0]._private_control_kind == ASTRA_CONTROL_CONTAINER);
+    assert(controls[1]._private_control_kind == ASTRA_CONTROL_LABEL);
+    assert(controls[1]._private_parent_id == info.first_id);
+    assert(astra_interface_ui_init(&context, controls, 2u, 320u, 100u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(controls[0]._private_frame.width >= 260u);
+    assert(controls[0]._private_frame.height >= 64u);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(fill_calls > 0u && line_calls > 0u);
+    astra_interface_ui_damage_clear(&context);
+    assert(astra_interface_drop_target_set(&context, controls,
+        ASTRA_DROP_TARGET_REFUSE, refuse, (uint32_t)strlen(refuse)) == ASTRA_OK);
+    assert(astra_interface_ui_damage(&context, &damage) == ASTRA_OK);
+    assert(damage.width >= controls[0]._private_frame.width);
+    assert(controls[0]._private_value == ASTRA_DROP_TARGET_REFUSE);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(astra_interface_drop_target_set(&context, controls, 4u,
+        refuse, (uint32_t)strlen(refuse)) == ASTRA_ERROR_INVALID_ARGUMENT);
+    info.first_id = UINT32_MAX;
+    assert(astra_interface_drop_target_init(controls, &info) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
 static AstraSurfaceView render_view(uint16_t width, uint16_t height)
 {
     AstraDrawListHeader *header = (AstraDrawListHeader *)(void *)render_pixels;
@@ -114,8 +161,6 @@ static AstraSurfaceView render_view(uint16_t width, uint16_t height)
         width, height, ASTRA_SURFACE_VIEW_DRAW_LIST, 0u, 0u, width, height};
 }
 
-static uint32_t fill_calls;
-static uint32_t line_calls;
 static int32_t line_x0[16], line_y0[16], line_x1[16], line_y1[16];
 
 static void test_toolbar_render(void)
@@ -4951,6 +4996,7 @@ int main(void)
     test_horizontal_splitter();
     test_disclosure_control();
     test_toolbar_composition();
+    test_drop_target_composition();
     test_toolbar_render();
     astra_interface_test_layout();
     return 0;

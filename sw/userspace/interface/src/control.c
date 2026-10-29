@@ -33,6 +33,54 @@
     ASTRA_FIELD_SECURE | ASTRA_FIELD_SEARCH)
 #define FIELD_PADDING_X 10u
 #define FIELD_SEARCH_PADDING_X 28u
+
+/* One hardware LINES command paints the entire dashed target outline. */
+static uint32_t drop_target_border(const AstraControlFrame *frame,
+                                    AstraSurfaceLine *lines)
+{
+    uint32_t count = 0u;
+    uint32_t step = 16u;
+    uint32_t dash;
+
+    if (frame->width < 6u || frame->height < 6u) return 0u;
+    while (4u * ((frame->width + step - 1u) / step +
+                 (frame->height + step - 1u) / step) > 192u)
+        step *= 2u;
+    dash = step * 9u / 16u;
+    for (uint32_t x = 2u; x + 2u < frame->width; x += step) {
+        uint32_t end = x + dash < frame->width - 2u ?
+            x + dash : frame->width - 3u;
+        for (uint32_t edge = 0u; edge < 2u; ++edge)
+            for (uint32_t thick = 0u; thick < 2u; ++thick) {
+                if (lines != NULL)
+                    lines[count] = (AstraSurfaceLine){
+                        frame->x + (int32_t)x,
+                        frame->y + (int32_t)(edge == 0u ? 1u + thick :
+                                               frame->height - 2u - thick),
+                        frame->x + (int32_t)end,
+                        frame->y + (int32_t)(edge == 0u ? 1u + thick :
+                                               frame->height - 2u - thick)};
+                ++count;
+            }
+    }
+    for (uint32_t y = 2u; y + 2u < frame->height; y += step) {
+        uint32_t end = y + dash < frame->height - 2u ?
+            y + dash : frame->height - 3u;
+        for (uint32_t edge = 0u; edge < 2u; ++edge)
+            for (uint32_t thick = 0u; thick < 2u; ++thick) {
+                if (lines != NULL)
+                    lines[count] = (AstraSurfaceLine){
+                        frame->x + (int32_t)(edge == 0u ? 1u + thick :
+                                               frame->width - 2u - thick),
+                        frame->y + (int32_t)y,
+                        frame->x + (int32_t)(edge == 0u ? 1u + thick :
+                                               frame->width - 2u - thick),
+                        frame->y + (int32_t)end};
+                ++count;
+            }
+    }
+    return count;
+}
 #define FIELD_MASK_BATCH 128u
 #define TEXT_VIEW_INVERTED UINT32_C(4)
 #define TEXT_VIEW_WRAP UINT32_C(8)
@@ -92,6 +140,7 @@ static uint32_t field_inset(uint32_t style)
 }
 
 static int layout_valid(const AstraFlexLayout *layout);
+static void control_damage(AstraUIContext *context, uint32_t index);
 static AstraResult measure_control(const AstraControl *control,
                                    AstraControlSize *size);
 static AstraResult measure_container(const AstraUIContext *context,
@@ -467,8 +516,11 @@ static int control_valid(const AstraControl *control)
                 ~ASTRA_CONTROL_COLLAPSED) == 0u &&
                control->_private_preview_state == 0u &&
                control->_private_dynamic_state == 0u &&
-               control->_private_style <= ASTRA_CONTAINER_STYLE_TAG_INPUT &&
-               control->_private_value == 0 &&
+               control->_private_style <= ASTRA_CONTAINER_STYLE_DROP_TARGET &&
+               (control->_private_style == ASTRA_CONTAINER_STYLE_DROP_TARGET ?
+                    (control->_private_value >= ASTRA_DROP_TARGET_IDLE &&
+                     control->_private_value <= ASTRA_DROP_TARGET_REFUSE) :
+                    control->_private_value == 0) &&
                control->_private_minimum_value == 0 &&
                control->_private_maximum_value == 0 &&
                control->_private_value_step == 0 &&
@@ -824,6 +876,17 @@ static uint32_t control_index(const AstraUIContext *context,
         if (&context->_private_controls[at] == control)
             return at;
     return CONTROL_NONE;
+}
+
+AstraResult astra_interface_control_invalidate(AstraUIContext *context,
+    const AstraControl *control)
+{
+    uint32_t index = control_index(context, control);
+
+    if (index == CONTROL_NONE || !control_valid(control))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    control_damage(context, index);
+    return ASTRA_OK;
 }
 
 static uint32_t control_id_index(const AstraUIContext *context, uint32_t id)
@@ -4801,6 +4864,17 @@ static int render_requirements(const AstraUIContext *context,
             else if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
                      control->_private_style == ASTRA_CONTAINER_STYLE_TAG_INPUT)
                 *commands += 2u;
+            else if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
+                     control->_private_style == ASTRA_CONTAINER_STYLE_DROP_TARGET) {
+                *commands += 1u;
+                uint32_t lines = drop_target_border(&control->_private_frame,
+                                                     NULL);
+                if (lines != 0u) {
+                    ++*commands;
+                    *payload += 3u + (uint64_t)lines *
+                        sizeof(AstraDrawListSegment);
+                }
+            }
             continue;
         }
         if (control->_private_clip.width == 0u ||
@@ -7695,6 +7769,25 @@ static AstraResult render_one_control(const AstraUIContext *context,
                 theme->control_radius - 1u, color(theme->surface_raised));
         return ASTRA_OK;
     }
+    if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
+        control->_private_style == ASTRA_CONTAINER_STYLE_DROP_TARGET) {
+        const AstraControlFrame *frame = &control->_private_frame;
+        uint32_t visual = (uint32_t)control->_private_value;
+        AstraColorRGBA8 border = visual == ASTRA_DROP_TARGET_ACCEPT ?
+            theme->accent : theme->client_border;
+        AstraColorRGBA8 background = visual == ASTRA_DROP_TARGET_ACCEPT ?
+            theme->surface_inset : theme->surface_raised;
+        AstraSurfaceLine lines[192];
+        uint32_t count = drop_target_border(frame, lines);
+
+        astra_surface_fill_round(surface, frame->x, frame->y,
+            frame->width, frame->height, theme->control_radius,
+            color(background));
+        if (count != 0u && !astra_surface_lines(surface, lines, count,
+                                                color(border)))
+            return ASTRA_ERROR_NO_RESOURCES;
+        return ASTRA_OK;
+    }
     if (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW)
         return text_view_render(control, surface, NULL, NULL);
     if (control->_private_control_kind == ASTRA_CONTROL_GRID_VIEW)
@@ -7816,7 +7909,8 @@ AstraResult astra_interface_ui_render(AstraUIContext *context,
              !(control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
                (control->_private_style == ASTRA_CONTAINER_STYLE_TOOLBAR ||
                 control->_private_style == ASTRA_CONTAINER_STYLE_STATUS_BAR ||
-                control->_private_style == ASTRA_CONTAINER_STYLE_TAG_INPUT))) ||
+                control->_private_style == ASTRA_CONTAINER_STYLE_TAG_INPUT ||
+                control->_private_style == ASTRA_CONTAINER_STYLE_DROP_TARGET))) ||
             control->_private_clip.width == 0u ||
             control->_private_clip.height == 0u)
             continue;
