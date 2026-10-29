@@ -758,6 +758,16 @@ static AstraTextModel *field_model_for_id(uint32_t id)
     return NULL;
 }
 
+static AstraResult replace_gallery_text(AstraControl *control,
+                                        const char *text, uint32_t bytes)
+{
+    return control == GALLERY_CONTROL(GALLERY_TEXT_VIEW) ?
+        astra_interface_text_view_replace_selection(&ui, control,
+                                                     text, bytes) :
+        astra_interface_field_replace_selection(&ui, control,
+                                                text, bytes);
+}
+
 static uint32_t copy_field(AstraHandle clipboard, AstraControl *control,
                            AstraTextModel *model, int cut)
 {
@@ -798,8 +808,7 @@ static uint32_t copy_field(AstraHandle clipboard, AstraControl *control,
     result = astra_clipboard_write(
         clipboard, &representation, 1u, NULL);
     if (result != ASTRA_OK) return GALLERY_FAIL_CONTROL;
-    if (cut && astra_interface_field_replace_selection(
-                   &ui, control, NULL, 0u) != ASTRA_OK)
+    if (cut && replace_gallery_text(control, NULL, 0u) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     return ASTRA_STATUS_OK;
 }
@@ -817,8 +826,7 @@ static uint32_t paste_field(AstraHandle clipboard, AstraControl *control)
         &item, ASTRA_CLIPBOARD_TYPE_UTF8,
         sizeof(ASTRA_CLIPBOARD_TYPE_UTF8) - 1u, &text, &bytes);
     if (result == ASTRA_OK)
-        result = astra_interface_field_replace_selection(
-            &ui, control, text, bytes);
+        result = replace_gallery_text(control, text, bytes);
     close_result = astra_clipboard_item_close(&item);
     if (result == ASTRA_OK) result = close_result;
     return result == ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
