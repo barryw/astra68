@@ -19,7 +19,9 @@
 #define INSTALLER_HEIGHT 260u
 
 enum {
-    TITLE = 1u, DESCRIPTION, BODY, ACTIONS, PACKAGE_PATH,
+    TITLE = 1u, DESCRIPTION, BODY, ACTIONS,
+    PACKAGE_ROW, PACKAGE_LABEL, PACKAGE_CONTENT, PACKAGE_VALUE, PACKAGE_HELP,
+    PACKAGE_PATH,
     CANCEL, INSTALL, CONTROL_COUNT = INSTALL
 };
 
@@ -45,6 +47,7 @@ static uint32_t installed;
 static AstraResult build_controls(void)
 {
     AstraSettingsPaneInfo pane = ASTRA_SETTINGS_PANE_INFO_INIT;
+    AstraFormRowInfo row = ASTRA_FORM_ROW_INFO_INIT;
     AstraLabelInfo path = ASTRA_LABEL_INFO_INIT;
     AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
@@ -58,12 +61,22 @@ static AstraResult build_controls(void)
     pane.description_length = (uint32_t)strlen(notice);
     if (astra_interface_settings_pane_init(controls, &pane) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    row.first_id = PACKAGE_ROW;
+    row.label = "Package";
+    row.label_length = sizeof("Package") - 1u;
+    row.message = "Review the application source before installing.";
+    row.message_length = sizeof("Review the application source before installing.") - 1u;
+    if (astra_interface_form_row_init(CONTROL(PACKAGE_ROW), &row) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    item.parent_id = BODY;
+    if (astra_interface_control_set_flex(CONTROL(PACKAGE_ROW), &item) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     path.id = PACKAGE_PATH;
     path.text = archive;
     path.text_length = (uint32_t)strlen(archive);
     if (astra_interface_label_init(CONTROL(PACKAGE_PATH), &path) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    item.parent_id = BODY;
+    item.parent_id = PACKAGE_VALUE;
     if (astra_interface_control_set_flex(CONTROL(PACKAGE_PATH), &item) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     button.id = CANCEL;

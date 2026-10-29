@@ -664,6 +664,57 @@ static void test_settings_pane(void)
     assert(astra_interface_settings_pane_init(controls, &pane) == ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_form_row(void)
+{
+    AstraControl controls[6] = {0};
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFormRowInfo row = ASTRA_FORM_ROW_INFO_INIT;
+    AstraToggleInfo value = ASTRA_TOGGLE_INFO_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraFlexLayout root = ASTRA_SETTINGS_PANE_LAYOUT_INIT;
+    AstraControlFrame label_frame, value_frame, message_frame, clip;
+
+    row.first_id = 10u;
+    row.label = "Audio output";
+    row.label_length = 12u;
+    row.message = "Uses HDMI speakers";
+    row.message_length = 18u;
+    assert(astra_interface_form_row_init(NULL, &row) == ASTRA_ERROR_INVALID_ARGUMENT);
+    row.first_id = UINT32_MAX;
+    assert(astra_interface_form_row_init(controls, &row) == ASTRA_ERROR_INVALID_ARGUMENT);
+    row.first_id = 10u;
+    row.message_role = ASTRA_TEXT_CLIENT_PRIMARY;
+    assert(astra_interface_form_row_init(controls, &row) == ASTRA_ERROR_INVALID_ARGUMENT);
+    row.message_role = ASTRA_TEXT_CLIENT_SECONDARY;
+    row.reserved[0] = 1u;
+    assert(astra_interface_form_row_init(controls, &row) == ASTRA_ERROR_INVALID_ARGUMENT);
+    row.reserved[0] = 0u;
+    assert(astra_interface_form_row_init(controls, &row) == ASTRA_OK);
+    value.id = 20u;
+    value.text = "Enabled";
+    value.text_length = 7u;
+    item.parent_id = row.first_id + ASTRA_FORM_ROW_VALUE;
+    assert(astra_interface_checkbox_init(&controls[5], &value) == ASTRA_OK);
+    assert(astra_interface_control_set_flex(&controls[5], &item) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls, 6u, 640u, 180u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &root) == ASTRA_OK);
+    assert(astra_interface_ui_geometry(&context, ASTRA_FORM_ROW_LABEL,
+                                       &label_frame, &clip) == ASTRA_OK);
+    assert(astra_interface_ui_geometry(&context, ASTRA_FORM_ROW_VALUE,
+                                       &value_frame, &clip) == ASTRA_OK);
+    assert(astra_interface_ui_geometry(&context, ASTRA_FORM_ROW_MESSAGE,
+                                       &message_frame, &clip) == ASTRA_OK);
+    assert(label_frame.width == 110u);
+    assert(value_frame.x > label_frame.x);
+    assert(message_frame.x == value_frame.x);
+    assert(message_frame.y >= value_frame.y + (int32_t)value_frame.height);
+    row.message = NULL;
+    row.message_length = 0u;
+    assert(astra_interface_form_row_init(controls, &row) == ASTRA_OK);
+    assert((controls[ASTRA_FORM_ROW_MESSAGE]._private_state &
+            ASTRA_CONTROL_COLLAPSED) != 0u);
+}
+
 void astra_interface_test_layout(void)
 {
     test_empty_and_invalid();
@@ -681,4 +732,5 @@ void astra_interface_test_layout(void)
     test_public_geometry();
     test_scroll_content_respects_maximum();
     test_settings_pane();
+    test_form_row();
 }

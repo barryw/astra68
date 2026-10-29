@@ -20,7 +20,7 @@ LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
 INTERFACE_TARGET := build/m68k/libraries/interface.library.8
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
-	build/m68k/settings_pane.o build/m68k/toolbar.o \
+	build/m68k/settings_pane.o build/m68k/form_row.o build/m68k/toolbar.o \
 	build/m68k/icon_tile.o build/m68k/image_view.o build/m68k/inline_edit.o \
 	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o \
 	build/m68k/scroll.o build/m68k/command.o build/m68k/menu.o build/m68k/menu_context.o
@@ -70,6 +70,10 @@ build/m68k/control.o: src/control.c src/control_internal.h src/text_surface_inte
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 build/m68k/settings_pane.o: src/settings_pane.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/form_row.o: src/form_row.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
@@ -179,7 +183,7 @@ library-contract: $(INTERFACE_TARGET)
 		awk '/NEEDED/{n++} END{print n+0}')" = 5
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET))
 
-$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/settings_pane.c src/toolbar.c src/menu.c src/text_surface.c \
+$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/settings_pane.c src/form_row.c src/toolbar.c src/menu.c src/text_surface.c \
 		src/text_model.c src/scroll.c $(NDK_HOST_UTF8) tests/test_interface.c \
 		tests/test_layout.c src/text_surface_internal.h
 	@mkdir -p $(@D)
@@ -254,7 +258,7 @@ sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANI
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_SYSTEM_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
-		src/control.c src/settings_pane.c src/toolbar.c src/menu.c src/text_surface.c src/text_model.c src/scroll.c \
+		src/control.c src/settings_pane.c src/form_row.c src/toolbar.c src/menu.c src/text_surface.c src/text_model.c src/scroll.c \
 		$(NDK_HOST_UTF8) \
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize
@@ -302,6 +306,8 @@ analyze:
 		-c src/control.c -o build/analyzer/control.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/settings_pane.c -o build/analyzer/settings_pane.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) -fanalyzer \
+		-c src/form_row.c -o build/analyzer/form_row.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/icon_tile.c -o build/analyzer/icon_tile.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
