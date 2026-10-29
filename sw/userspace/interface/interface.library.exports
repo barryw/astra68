@@ -60,6 +60,7 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_text_view_set_inverted;
         astra_interface_text_view_set_wrap_width;
         astra_interface_settings_pane_init;
+        astra_interface_form_row_init;
         astra_interface_context_menu_open_tree;
         astra_interface_menu_row_frame;
         astra_interface_icon_tile_hit;

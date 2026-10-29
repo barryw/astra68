@@ -84,6 +84,12 @@ AstraResult astra_interface_status_bar_init(AstraControl *controls,
  */
 AstraResult astra_interface_settings_pane_init(AstraControl *controls,
                                                const AstraSettingsPaneInfo *info);
+/** Compose a form row from five retained controls. Place an application
+ * control under first_id + ASTRA_FORM_ROW_VALUE and the row root under the
+ * desired settings BODY container. The message can be hidden or use the
+ * shared fault text role. @since Interface Kit 8.1. */
+AstraResult astra_interface_form_row_init(AstraControl *controls,
+                                          const AstraFormRowInfo *info);
 /** Compose a row toolbar from one Container and action_count Buttons.
  * Controls occupy action_count + 1 consecutive slots and IDs. Caller owns
  * labels and handles ordinary button activation.

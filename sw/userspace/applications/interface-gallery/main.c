@@ -102,7 +102,13 @@ enum {
     GALLERY_STATUS_BAR,
     GALLERY_STATUS_LEFT,
     GALLERY_STATUS_RIGHT,
-    GALLERY_CONTROL_COUNT = GALLERY_STATUS_RIGHT
+    GALLERY_FORM_ROW,
+    GALLERY_FORM_LABEL,
+    GALLERY_FORM_CONTENT,
+    GALLERY_FORM_VALUE,
+    GALLERY_FORM_HELP,
+    GALLERY_FORM_OPTION,
+    GALLERY_CONTROL_COUNT = GALLERY_FORM_OPTION
 };
 
 enum {
@@ -1013,6 +1019,23 @@ static uint32_t build_controls(void)
             GALLERY_DISCLOSURE_OPTION_B, "Log active-surface hazards",
             sizeof("Log active-surface hazards") - 1u,
             ASTRA_CONTROL_CHECKBOX, 0u, ASTRA_CONTROL_SELECTED);
+    if (status == ASTRA_STATUS_OK) {
+        AstraFormRowInfo row = ASTRA_FORM_ROW_INFO_INIT;
+        row.first_id = GALLERY_FORM_ROW;
+        row.label = "Notifications";
+        row.label_length = sizeof("Notifications") - 1u;
+        row.message = "Shown in the shared system style";
+        row.message_length = sizeof("Shown in the shared system style") - 1u;
+        status = astra_interface_form_row_init(
+            GALLERY_CONTROL(GALLERY_FORM_ROW), &row) == ASTRA_OK ?
+            ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+    }
+    if (status == ASTRA_STATUS_OK)
+        status = add_toggle(GALLERY_FORM_OPTION - 1u, GALLERY_FORM_OPTION,
+            "Allow", sizeof("Allow") - 1u,
+            ASTRA_CONTROL_CHECKBOX, 0u, ASTRA_CONTROL_SELECTED);
+    if (status == ASTRA_STATUS_OK)
+        status = set_item(GALLERY_FORM_OPTION, GALLERY_FORM_VALUE, 0u, 0u);
     if (status == ASTRA_STATUS_OK)
         status = set_item(GALLERY_TABS, 0u, 0u, 0u);
     for (uint32_t page = GALLERY_PAGE_INPUT;
@@ -1126,6 +1149,8 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_SPLIT_RIGHT, GALLERY_SPLIT_ROW, 0u);
     PAGE_ITEM(GALLERY_SPLIT_RIGHT_LABEL, GALLERY_SPLIT_RIGHT,
               ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_FORM_ROW, GALLERY_PAGE_LAYOUT,
+              ASTRA_FLEX_BREAK_BEFORE | ASTRA_FLEX_BREAK_AFTER);
 #undef PAGE_ITEM
     if (status == ASTRA_STATUS_OK) {
         AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;

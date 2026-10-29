@@ -248,6 +248,36 @@ typedef struct AstraSettingsPaneInfo {
     24, 24, 24, 24, 12, 0, { 0, 0, 0, 0 } \
 }
 
+/** Slots in a composed form row. Attach an application control to VALUE. */
+enum {
+    ASTRA_FORM_ROW_ROOT = 0u,
+    ASTRA_FORM_ROW_LABEL,
+    ASTRA_FORM_ROW_CONTENT,
+    ASTRA_FORM_ROW_VALUE,
+    ASTRA_FORM_ROW_MESSAGE,
+    ASTRA_FORM_ROW_CONTROL_COUNT
+};
+
+/** One settings row, composed from Containers and Labels. The caller owns text.
+ * A zero-length message hides the message slot. Use SECONDARY for help or
+ * FAULT for validation errors. The value control is supplied by the caller. */
+typedef struct AstraFormRowInfo {
+    uint32_t size;
+    uint32_t first_id;
+    const char *label;
+    uint32_t label_length;
+    const char *message;
+    uint32_t message_length;
+    uint32_t message_role;
+    uint32_t label_width;
+    uint32_t reserved[4];
+} AstraFormRowInfo;
+
+#define ASTRA_FORM_ROW_INFO_INIT { \
+    sizeof(AstraFormRowInfo), 0, 0, 0, 0, 0, \
+    ASTRA_TEXT_CLIENT_SECONDARY, 110, { 0, 0, 0, 0 } \
+}
+
 /** One button in a composed toolbar. */
 typedef struct AstraToolbarAction {
     const char *label; /**< Borrowed single-line UTF-8. */
