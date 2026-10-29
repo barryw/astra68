@@ -613,4 +613,3 @@ AstraResult astra_interface_font_panel_role(const AstraFontPanel *panel,
 ASTRA_EXTERN_C_END
 
 #endif
-AstraResult astra_interface_breadcrumb_set_path(AstraBreadcrumb *breadcrumb,
