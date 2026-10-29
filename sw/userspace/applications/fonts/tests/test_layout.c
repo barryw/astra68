@@ -100,11 +100,21 @@ static void check_layout(void)
     for (uint32_t at = 0u; at < FONTS_CONTROL_COUNT; ++at) {
         const AstraControl *control = &controls[at];
         const AstraControlFrame *frame = &control->_private_frame;
+        if (frame->width == 0u || frame->height == 0u) continue;
         if (at == FONTS_LIST - 1u ||
+            (at >= FONTS_FILE_PANEL_FIRST - 1u &&
+             (CONTROL(FONTS_FILE_PANEL_FIRST)->_private_state &
+                ASTRA_CONTROL_COLLAPSED) != 0u) ||
             (control->_private_state & ASTRA_CONTROL_COLLAPSED) != 0u)
             continue;
+        if (frame->x < 24 || frame->y < 24)
+            fprintf(stderr, "underflow control %u: x=%d y=%d browsing=%u import=%u\n",
+                at + 1u, frame->x, frame->y, browsing, showing_import);
         assert(frame->x >= 24 && frame->y >= 24);
         assert((uint64_t)(uint32_t)frame->x + frame->width <= client_width - 24u);
+        if ((uint64_t)(uint32_t)frame->y + frame->height > client_height - 24u)
+            fprintf(stderr, "overflow control %u: y=%d h=%u viewport=%u\n",
+                at + 1u, frame->y, frame->height, client_height);
         assert((uint64_t)(uint32_t)frame->y + frame->height <= client_height - 24u);
     }
 }
@@ -133,14 +143,17 @@ static void check_render(void)
 int main(void)
 {
     AstraScrollModelInfo info = ASTRA_SCROLL_MODEL_INFO_INIT;
-    static AstraChoiceItem rows[] = {
-        {"Regular 11 px", 13u, {0u, 0u}},
-        {"Regular 20 px", 13u, {0u, 0u}}
+    static AstraCollectionItem rows[] = {
+        {1u, "Regular 11 px", 13u, {0u, 0u}},
+        {2u, "Regular 20 px", 13u, {0u, 0u}}
     };
     static FontDetail sources[] = {{0u, 0u}, {0u, 1u}};
     info.line_height = 32u;
     assert(astra_scroll_init(&scroll, &info) == ASTRA_OK);
-    families[0] = (AstraChoiceItem){"Test", 4u, {0u, 0u}};
+    assert(astra_scroll_init(&browser_scroll, &info) == ASTRA_OK);
+    assert(browser_prepare_spare(1u) == ASTRA_OK);
+    assert(browser_grid_reserve(1u) == ASTRA_OK);
+    families[0] = (AstraCollectionItem){1u, "Test", 4u, {0u, 0u}};
     family_count = 1u;
     details = rows;
     detail_sources = sources;
@@ -163,6 +176,16 @@ int main(void)
     confirm_uninstall = 0u;
     browsing = 1u;
     check_layout();
+    assert((CONTROL(FONTS_FILE_PANEL_FIRST)->_private_state &
+        ASTRA_CONTROL_COLLAPSED) == 0u);
+    assert(file_panel.first_id == FONTS_FILE_PANEL_FIRST);
+    AstraUIAction cancel = ASTRA_UI_ACTION_INIT;
+    uint32_t outcome = ASTRA_FILE_PANEL_NONE;
+    cancel.control_id = FONTS_FILE_PANEL_FIRST + ASTRA_FILE_PANEL_CANCEL;
+    cancel.type = ASTRA_UI_ACTION_ACTIVATE;
+    assert(astra_interface_file_panel_action(&file_panel, &ui,
+        CONTROL(FONTS_FILE_PANEL_FIRST), &cancel, &outcome) == ASTRA_OK);
+    assert(outcome == ASTRA_FILE_PANEL_CANCELLED);
     showing_import = 1u;
     import_progress.state = ASTRA_FONT_IMPORT_RUNNING;
     message = "Converting font; installed fonts remain unchanged";
@@ -215,6 +238,10 @@ int main(void)
     showing_information = 0u;
     check_layout();
     document_dispose(&information_document);
+    browser_snapshot_dispose(&browser_active);
+    browser_snapshot_dispose(&browser_spare);
+    astra_runtime_deallocate(browser_grid_icons);
+    browser_grid_icons = NULL;
     assert(allocations == 0u);
     for (uint32_t at = 1u; at <= calls; ++at) {
         fail_allocation = allocation_calls + at;

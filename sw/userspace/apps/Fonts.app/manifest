@@ -11,6 +11,8 @@ capability FONTS:r
 capability FONTS_ADMIN
 capability CLIPBOARD
 capability DH0:r
+capability VOLUMES
+capability VOLUME_READ
 capability LIBS:r
 requires compiler.library 2 2.0.0
 requires font.library 5 5.0.0

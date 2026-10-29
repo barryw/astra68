@@ -16,6 +16,7 @@ FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic \
 TARGET := build/m68k/fonts.elf
 IMAGE := build/m68k/fonts
 OBJECT := build/m68k/main.o
+OBJECTS := build/m68k/directory_snapshot.o
 LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_FONT_LIBRARY) \
 	$(ASTRA_FILESYSTEM_LIBRARY) \
 	$(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_SYSTEM_LIBRARY) \
@@ -23,6 +24,11 @@ LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_FONT_LIBRARY) \
 include ../../dynamic-program.mk
 
 $(OBJECT): main.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/directory_snapshot.o: ../../common/directory_snapshot.c \
+		../../common/directory_snapshot.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
 
@@ -131,9 +137,13 @@ amiga-probe: all build/FontAmigaProbe.app/manifest \
 
 UI_HOST_SOURCES := tests/test_layout.c ../../interface/src/control.c \
 	../../interface/src/settings_pane.c \
+	../../interface/src/file_panel.c ../../interface/src/system_panels.c \
+	../../interface/src/display_widgets.c ../../interface/src/icon_tile.c \
+	../../interface/src/columns.c \
 	../../interface/src/text_model.c ../../interface/src/text_surface.c ../../interface/src/scroll.c \
 	../../graphics/src/surface.c ../../graphics/src/font_data.c \
 	../../graphics/src/render_builder.c \
+	../../common/directory_snapshot.c \
 	../../../common/utf8.c ../../../common/afnt.c ../../../common/json.c ../../../common/crc32.c \
 	$(RUNTIME)/src/string.c \
 	$(RUNTIME)/tests/uncontended_mutex.c
@@ -154,7 +164,11 @@ UI_FONT_INPUTS := ../../graphics/fonts/astra-workbench.afnt \
 $(UI_FONT_HEADERS): $(UI_FONT_INPUTS)
 	$(MAKE) -C ../../graphics $(@:../../graphics/%=%)
 
-build/host/test_layout: main.c $(UI_HOST_SOURCES) $(UI_HOST_HEADERS) $(UI_FONT_HEADERS)
+../../../../fpga/arty/linux/astra_render_protocol.h:
+	$(MAKE) -C ../../../../fpga/arty/linux astra_render_protocol.h
+
+build/host/test_layout: main.c $(UI_HOST_SOURCES) $(UI_HOST_HEADERS) \
+		$(UI_FONT_HEADERS) ../../../../fpga/arty/linux/astra_render_protocol.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(UI_HOST_FLAGS) $(UI_HOST_SOURCES) -o $@
 
