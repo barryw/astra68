@@ -153,6 +153,25 @@ def send_keys(connection, text):
             connection.sendall(struct.pack(">BBHI", 4, down, 0, symbol))
 
 
+def send_shortcut(connection, shortcut):
+    modifiers = {"Shift": 0xffe1, "Ctrl": 0xffe3,
+                 "Alt": 0xffe9, "Super": 0xffeb}
+    parts = shortcut.split("+")
+    if len(parts) < 2 or any(part not in modifiers for part in parts[:-1]):
+        raise RuntimeError("shortcut must be Mod[+Mod]+ASCII-key")
+    key = parts[-1]
+    if len(key) != 1 or not 0x20 <= ord(key) <= 0x7e:
+        raise RuntimeError("shortcut key must be one printable ASCII character")
+    for modifier in parts[:-1]:
+        connection.sendall(struct.pack(">BBHI", 4, 1, 0,
+                                       modifiers[modifier]))
+    for down in (1, 0):
+        connection.sendall(struct.pack(">BBHI", 4, down, 0, ord(key)))
+    for modifier in reversed(parts[:-1]):
+        connection.sendall(struct.pack(">BBHI", 4, 0, 0,
+                                       modifiers[modifier]))
+
+
 def send_pointer(connection, x, y, buttons=0):
     connection.sendall(struct.pack(">BBHH", 5, buttons, x, y))
 
@@ -164,6 +183,14 @@ def double_click(connection, x, y):
         time.sleep(0.05)
         send_pointer(connection, x, y)
         time.sleep(0.05)
+
+
+def click(connection, x, y):
+    send_pointer(connection, x, y)
+    send_pointer(connection, x, y, 1)
+    time.sleep(0.05)
+    send_pointer(connection, x, y)
+    time.sleep(0.2)
 
 
 def drag(connection, x0, y0, x1, y1):
@@ -214,11 +241,14 @@ def main():
     parser.add_argument("--macos-format", action="store_true")
     parser.add_argument("--verify-rfb-pointer", action="store_true")
     parser.add_argument("--keys", help="type ASCII text after connecting")
+    parser.add_argument("--shortcut", help="send Mod[+Mod]+ASCII-key")
     parser.add_argument("--enter", action="store_true", help="press Enter after keys")
     pointer_action = parser.add_mutually_exclusive_group()
     pointer_action.add_argument("--pointer", nargs=2, metavar=("X", "Y"),
                                 type=int)
     pointer_action.add_argument("--double-click", nargs=2,
+                                metavar=("X", "Y"), type=int)
+    pointer_action.add_argument("--click", nargs=2,
                                 metavar=("X", "Y"), type=int)
     pointer_action.add_argument("--drag", nargs=4,
                                 metavar=("X0", "Y0", "X1", "Y1"),
@@ -236,7 +266,7 @@ def main():
         arguments.verify_rfb_pointer)
     mover = None
     try:
-        coordinates = arguments.double_click or arguments.pointer
+        coordinates = arguments.double_click or arguments.click or arguments.pointer
         if arguments.drag is not None:
             coordinates = arguments.drag
         frame = None
@@ -253,6 +283,8 @@ def main():
             elif arguments.double_click:
                 double_click(connection, x, y)
                 time.sleep(2)
+            elif arguments.click:
+                click(connection, x, y)
             elif arguments.drag:
                 drag(connection, *arguments.drag)
             else:
@@ -261,6 +293,10 @@ def main():
             send_keys(connection, arguments.keys)
         if arguments.enter:
             send_keys(connection, "\n")
+        if arguments.shortcut is not None:
+            send_shortcut(connection, arguments.shortcut)
+        if arguments.keys is not None or arguments.shortcut is not None:
+            time.sleep(0.25)
         frame, rfb_pointer = capture(
             connection, width, height, bytes_per_pixel, frame,
             frame is not None)
