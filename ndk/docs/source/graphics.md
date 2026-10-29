@@ -49,6 +49,14 @@ an owned palette-backed INDEX8 source surface, then alpha-blit it at the
 required display size. Astraea expands and blends indices; the helper uploads
 indices and palette metadata through the protected display API. Close the
 returned surface when it is no longer needed.
+
+Retained draw-list views can record a borrowed hardware surface with
+`astra_surface_draw_blit`. Pass each such source in the approved surface array
+to `astra_draw_list_append_view_with_sources` when appending the view to a
+window draw list. The append call validates each handle against the draw
+list's window and checks every source rectangle before changing the list.
+`astra_draw_list_append_view` remains the destination-only form. Keep borrowed
+surfaces alive through the submitted list's fence, as with direct blits.
 {c:func}`astra_display_layout_calculate` computes the exact crop and viewport
 the hardware scaler would use for a logical scene, without floating point.
 

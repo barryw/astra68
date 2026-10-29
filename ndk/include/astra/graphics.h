@@ -550,6 +550,21 @@ ASTRA_NODISCARD AstraResult astra_draw_list_set_target(
 /** Append checked Interface/Graphics draw-list view commands to current target. View dimensions must match target; source pixels are never copied. @param draw_list Mutable session list. @param view Caller-owned draw-list view. @return Astra status. */
 ASTRA_NODISCARD AstraResult astra_draw_list_append_view(
     AstraDrawList *draw_list, const AstraSurfaceView *view);
+/** Append a checked draw-list view containing borrowed-surface BLITs.
+ * Every non-destination BLIT source must match one live surface in sources,
+ * owned by the same window as draw_list. The source array is borrowed only
+ * for this call. Existing append_view accepts destination-only BLITs.
+ */
+ASTRA_NODISCARD AstraResult astra_draw_list_append_view_with_sources(
+    AstraDrawList *draw_list, const AstraSurfaceView *view,
+    const AstraSurface *const *sources, uint32_t source_count);
+/** Record a hardware BLIT from a borrowed surface in a draw-list view.
+ * Pass that surface to append_view_with_sources when submitting the view.
+ * No pixels are copied through the CPU.
+ */
+int astra_surface_draw_blit(AstraSurfaceView *view,
+    const AstraSurface *source, const AstraRectI32 *source_rect,
+    const AstraRectI32 *destination_rect, const AstraBlitOptions *options);
 /**
  * Append an upload: rows of the display's staging area, the first at
  * @p staging_offset and each @p pitch bytes after the one before, written

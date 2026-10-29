@@ -636,6 +636,42 @@ static void test_append_view(const AstraSurface *content)
     CHECK(astra_fence_close(&fence) == ASTRA_OK);
     CHECK(astra_draw_list_close(&list) == ASTRA_OK);
 
+    /* Borrowed icon BLITs require an explicit live source allowlist. */
+    {
+        AstraSurface icon = *content;
+        const AstraSurface *sources[1] = {&icon};
+
+        icon._private_id += 100u;
+        icon._private_width = 64u;
+        icon._private_height = 64u;
+        header->command_count = 1u;
+        header->payload_bytes = 0u;
+        commands[0] = (AstraDrawListCommand){
+            .operation = ASTRA_DRAW_LIST_BLIT,
+            .x = 8, .y = 12, .width = 40u, .height = 40u,
+            .color = ASTRA_DRAW_LIST_COLOR_IDENTITY,
+            .source = icon._private_id,
+            .source_width = 64u, .source_height = 64u,
+            .clip_right = 320u, .clip_bottom = 200u,
+        };
+        list = (AstraDrawList)ASTRA_DRAW_LIST_INIT;
+        CHECK(astra_draw_list_create(content,
+              &(AstraRectI32){0, 0, 320, 200}, &list) == ASTRA_OK);
+        CHECK(astra_draw_list_append_view(&list, &view) ==
+              ASTRA_ERROR_INVALID_ARGUMENT);
+        CHECK(astra_draw_list_append_view_with_sources(&list, &view,
+              sources, 1u) == ASTRA_OK);
+        CHECK(((AstraDrawListHeader *)list._private_commands)->command_count == 1u);
+        commands[0].source_width = 65u;
+        CHECK(astra_draw_list_append_view_with_sources(&list, &view,
+              sources, 1u) == ASTRA_ERROR_INVALID_ARGUMENT);
+        commands[0].source_width = 64u;
+        icon._private_window += 1u;
+        CHECK(astra_draw_list_append_view_with_sources(&list, &view,
+              sources, 1u) == ASTRA_ERROR_INVALID_HANDLE);
+        CHECK(astra_draw_list_close(&list) == ASTRA_OK);
+    }
+
     /* Selected system fonts turn ordinary UI text into named text. */
     const char named[] = "user:abcdefHi";
     header->command_count = 1u;
