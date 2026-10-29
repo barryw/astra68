@@ -150,3 +150,28 @@ archived on Beast under `/mnt/Documents/astra68/astraz-validation-20261029/`
 with SHA-256 values `287172952ff2126b940322905b0339a3ece9ee64b05eab1384edaed1d5e16bc3`
 and `3bbe653fcd6dfb38aad95eff926eecb99578ba60c39d22a683c678ad9ada6c93`.
 The remaining Z4/Z5/Z6/Z8 GUI gates follow the 8 × 8 V6 font visual trial.
+
+## Five-version GUI trial before scroll correction
+
+The focused 8 × 8 V6 font candidate rendered Zork Zero's top banner, side
+pillars, bitmap art, and tightly spaced prose on DE25. The matrix then found:
+
+| VM | DE25 observation | Result at this checkpoint |
+| --- | --- | --- |
+| Z3 Zork I | West of House/status/prompt, `look` response and new prompt | Pass on prior candidate; final candidate needs regression check |
+| Z4 Trinity | Palace Gate opening and prompt, `look` accepted but response clipped below window | Fail: scroll geometry |
+| Z5 Sherlock | 221-B Baker Street/status/prompt, `look` response and new prompt visible | Pass |
+| Z6 Zork Zero | Blorb art and prose visible, More advances, `look` accepted; stale duplicate More prompt appears below canvas | Partial: More presentation |
+| Z8 One Room | Bathroom opening and prompt, `look` accepted but response clipped; stale More marker remains in transcript | Fail: scroll and More presentation |
+
+Evidence is archived under `/mnt/Documents/astra68/astraz-validation-20261029/`
+on Beast. Key PNG SHA-256 values: Trinity `z4-look-after.png`
+`bb88635fd717908affbf1ac086f9aef59960c6dc6feac9b98449cfae3e03fe0f`,
+Sherlock `z5-look-after.png`
+`a9cae4592f4297c1ccfa3bf70a61bebf55a0add5b4ee10128c512ad60237a456`,
+Zork Zero `z6-look-after.png`
+`7eea8fcbd0b674725b7e1b1c19750cf021fd13ad270db91d301272779c9ef1c5`,
+and One Room `z8-look-after.png`
+`c21658622b1ee141161e6ba8198b2bd2a32e3d1f53a6fbe129633f5041e9b1e9`.
+The UI owner has prepared a relayout after setting the scroll offset and a
+transient More marker/overlay. Both require focused board retest.
