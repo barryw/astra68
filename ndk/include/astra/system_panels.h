@@ -18,13 +18,25 @@ enum {
 enum {
     ASTRA_COLOUR_PANEL_ROOT = 0u,
     ASTRA_COLOUR_PANEL_TITLE,
+    ASTRA_COLOUR_PANEL_TABS,
+    ASTRA_COLOUR_PANEL_SWATCHES,
+    ASTRA_COLOUR_PANEL_WANTED,
     ASTRA_COLOUR_PANEL_SWATCH,
+    ASTRA_COLOUR_PANEL_DIFFERENCE,
+    ASTRA_COLOUR_PANEL_SLIDERS,
     ASTRA_COLOUR_PANEL_RED_LABEL,
     ASTRA_COLOUR_PANEL_RED,
     ASTRA_COLOUR_PANEL_GREEN_LABEL,
     ASTRA_COLOUR_PANEL_GREEN,
     ASTRA_COLOUR_PANEL_BLUE_LABEL,
     ASTRA_COLOUR_PANEL_BLUE,
+    ASTRA_COLOUR_PANEL_FIELD_PAGE,
+    ASTRA_COLOUR_PANEL_HEX_FIELD,
+    ASTRA_COLOUR_PANEL_STORED_VALUE,
+    ASTRA_COLOUR_PANEL_THEME_PAGE,
+    ASTRA_COLOUR_PANEL_THEME_LIST,
+    ASTRA_COLOUR_PANEL_RECENT_PAGE,
+    ASTRA_COLOUR_PANEL_RECENT_LIST,
     ASTRA_COLOUR_PANEL_ACTIONS,
     ASTRA_COLOUR_PANEL_CANCEL,
     ASTRA_COLOUR_PANEL_USE,
@@ -47,15 +59,31 @@ typedef struct AstraColourPanel {
     uint32_t packed;
     const AstraColorRGBA8 *palette;
     uint32_t palette_count;
-    uint32_t reserved[4];
+    AstraColorRGBA8 wanted;
+    AstraTextModel hex_model;
+    uint8_t hex_content[4096];
+    _Alignas(4) uint8_t hex_metadata[4096];
+    char hex_text[8];
+    char difference_text[2][24];
+    char stored_text[2][32];
+    uint32_t active_text;
+    AstraCollectionModel theme_model;
+    AstraCollectionModel recent_model;
+    AstraCollectionItem recent_items[2][8];
+    AstraColorRGBA8 recent_colors[2][8];
+    char recent_labels[2][8][8];
+    uint32_t recent_count;
+    uint32_t active_recent;
+    uint32_t active_tab;
+    uint32_t hex_valid;
+    uint32_t reserved[3];
 } AstraColourPanel;
 
-#define ASTRA_COLOUR_PANEL_INIT { \
-    sizeof(AstraColourPanel), 0u, 0u, 0u, 0, 0u, { 0u, 0u, 0u, 0u } \
-}
+#define ASTRA_COLOUR_PANEL_INIT { .size = sizeof(AstraColourPanel) }
 
 /** Compose the Colour panel from ordinary Container, Label, Colour Well,
- * Slider, and Button controls. All 12 slots and IDs are caller-owned.
+ * Slider, Field, List, Segmented, and Button controls. Reserve
+ * ASTRA_COLOUR_PANEL_CONTROL_COUNT consecutive slots and IDs.
  * INDEX8 requires a borrowed palette of 1..256 opaque entries. */
 AstraResult astra_interface_colour_panel_init(AstraColourPanel *panel,
     AstraControl *controls, uint32_t first_id, uint32_t format,
@@ -71,6 +99,12 @@ AstraResult astra_interface_colour_panel_action(AstraColourPanel *panel,
 /** Resolve the selected encoded color to opaque RGB for preview/use. */
 AstraResult astra_interface_colour_panel_color(
     const AstraColourPanel *panel, AstraColorRGBA8 *color);
+
+/** Replace the panel's Recent palette, most recent first, up to eight opaque
+ * colors. The panel copies the values and keeps all UI data caller-owned. */
+AstraResult astra_interface_colour_panel_set_recent(AstraColourPanel *panel,
+    AstraUIContext *context, AstraControl *controls,
+    const AstraColorRGBA8 *colors, uint32_t count);
 
 enum {
     ASTRA_FILE_PANEL_OPEN = 1u,

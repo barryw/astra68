@@ -2,7 +2,8 @@
 
 Interface Kit owns system panel composition; callers own the window, event loop,
 control array, and the selected value. The first implemented panel is Colour.
-It uses existing Container, Label, Colour Well, Slider, and Button controls.
+It uses existing Container, Label, Colour Well, Slider, Field, Segmented,
+List, and Button controls.
 The Gallery's Fields-page Colour Well opens the shared Colour panel on a Panels
 page and applies the result back to that well. No pixel renderer or app-specific
 picker was added.
@@ -13,6 +14,13 @@ borrows an opaque palette and selects an actual slot. `packed` is the encoded
 result, so callers do not infer it from a rounded preview. Cancel does not
 apply it. The caller may render `AstraColourPanel` with its ordinary UI context
 and pass each `AstraUIAction` to `astra_interface_colour_panel_action`.
+The four tabs are Sliders, Field, Theme, and Recent. Field accepts `#RRGGBB`
+and displays an error while incomplete; Use requires a valid value. Theme
+offers system accent, warning, fault, and canvas roles. Recent is supplied by
+the caller through `astra_interface_colour_panel_set_recent`, rather than
+maintaining a second palette database. Wanted and Stored wells show quantization
+explicitly, with the largest channel difference in RGB units. An indexed
+choice uses the nearest palette color with the lowest slot winning ties.
 
 Reference review:
 
@@ -23,10 +31,12 @@ Reference review:
 - Haiku `src/kits/interface/ColorControl.cpp` composes palette and channel
   controls in a reusable kit component. Astra composes existing shared
   controls; exact source format and palette slot remain first-class data.
+- Haiku `src/apps/icon-o-matic/generic/gui/panel/color_picker/ColorPickerView.cpp`
+  separates color entry modes while keeping one selected color. Astra keeps
+  one encoded selection and composes each mode from existing Interface Kit
+  controls. The hardware format remains visible because conversion can round.
 - Astra design `~/Downloads/Astra Desktop (standalone).html`, Colour panel:
-  RGB565/XRGB8888/indexed modes, sliders, preview, Cancel and Use. This slice
-  implements those semantic modes and actions. Field, Theme, and Recent tabs
-  and the two-swatch wanted/stored presentation remain for follow-up.
+  exact RGB565 channels, Field, Theme, Recent, dual swatches, Cancel and Use.
 
 File panels should grow toward the same navigation and display controls as
 Atlas.
