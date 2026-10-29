@@ -136,6 +136,23 @@ with tempfile.TemporaryDirectory() as directory:
     module.time = SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None)
     module.wait_for_boot(timeout=0.5)
 
+    states = iter(("activating", "active"))
+    module.run = lambda *args: (next(states) if "ActiveState" in args
+                                else "active")
+    clock = iter((0, 0, 0))
+    module.time = SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None)
+    module.wait_for_boot(timeout=0.5)
+
+    module.run = lambda *args: "failed"
+    clock = iter((0, 0))
+    module.time = SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None)
+    try:
+        module.wait_for_boot(timeout=0.5)
+    except RuntimeError as error:
+        assert "Astra service exited" in str(error)
+    else:
+        raise AssertionError("failed service falsely certified")
+
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
     base = root / "releases/base"

@@ -324,7 +324,12 @@ def running_qemu():
 def wait_for_boot(timeout=120):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if run("systemctl", "is-active", "astra.service") != "active":
+        state = run("systemctl", "show", "-p", "ActiveState", "--value",
+                    "astra.service")
+        if state == "activating":
+            time.sleep(0.5)
+            continue
+        if state != "active":
             raise RuntimeError("Astra service exited after development install")
         try:
             if running_qemu() and QMP.is_socket():

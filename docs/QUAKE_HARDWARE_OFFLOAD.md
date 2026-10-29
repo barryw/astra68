@@ -1,8 +1,36 @@
 # Quake rendering offload assessment
 
-Status: measured design checkpoint, 2026-10-28. No RTL or production runtime
+Status: measured design checkpoint, 2026-10-29. No RTL or production runtime
 changed. Usability gate is sustained 30 FPS at default 320×200 on DE25, with
 no audio gaps or multi-second pauses.
+
+## MC68040 software trials
+
+`D_DrawSpans8` spends about 18–21% of sampled Quake time in perspective-corrected
+world spans. GCC emits an FPCR save, truncate-mode switch, and restore for each
+float-to-integer cast. A `FINTRZ` trial removed those switches but faulted at
+`D_DrawSpans8+0x136` on DE25: `FINTRZ` takes the F-line vector on MC68040 and
+Astra deliberately has no Motorola FPSP. The trial was removed. A second trial
+used supported FPCR instructions to convert both texture coordinates under one
+mode switch. It passed host conversion tests but produced 19.68 and 19.31
+presents/s in two 30-second DE25 live-demo windows, with zero audio faults.
+
+The compiled pixel loop also performs one signed multiply per pixel for
+`(t >> 16) * cachewidth`. A row-cache trial multiplied only when the integer
+texture row changed. Address-equivalence checks passed for six cache widths,
+six step sizes, and span lengths 1–8. DE25 windows measured 19.21 and 22.64
+presents/s with zero audio faults. The original path measured 24.35 before the
+trials and 20.90 after restoration; scenes changed between windows, so these
+numbers establish no repeatable gain. Quake's `demo1` timedemo ran, but its
+result scrolled out of the visible console before capture. Both software
+trials were discarded. Restored Quake launched and ran; Doom still rendered at
+34.62 presents/s with zero audio faults. No Quake, SDL, or RTL optimization
+from these trials remains in source or on DE25.
+
+Evidence: `/mnt/Documents/astra68/quake-fintrz-20261028/` on Beast. Next
+performance step needs an automated, fixed-demo result capture before more
+hot-loop changes. Existing Astraea/SDL paths remain preferred where measured
+cost warrants them; FPGA capacity remains too tight for speculative RTL.
 
 ## SDL/Astraea indexed-texture trial
 

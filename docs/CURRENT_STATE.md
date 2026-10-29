@@ -1,6 +1,6 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-28
+Status: active continuation map, 2026-10-29
 
 Chocolate Quake bundle checkpoint, 2026-10-28: `ChocolateQuake.app` now has
 its own copper Q AICON, verified Quake 1.06 shareware `pak0.pak`, bundled
@@ -63,6 +63,28 @@ Existing SDLFrameBench on restored DE25 library reached 59–61 FPS with
 640×480 ARGB/RGB565 streaming textures; ordinary SDL upload/copy/present is
 not the measured 30 FPS blocker. Quake's world-rendering stages remain the
 next profiling target.
+
+MC68040 Quake span checkpoint, 2026-10-29: `FINTRZ` is unavailable on actual
+MC68040 and correctly triggered an F-line user fault in a private trial.
+Grouping supported FPCR conversions and caching texture rows produced no
+repeatable DE25 speed gain, so both candidate source changes were discarded.
+Original Quake was rebuilt and focused-installed; a 30-second demo window ran
+at 20.90 presents/s with zero audio faults. Doom then ran at 34.62 presents/s
+with zero audio faults. The 30 FPS Quake gate remains open; next step is
+automated same-demo result capture. Evidence and trial detail:
+`docs/QUAKE_HARDWARE_OFFLOAD.md` and
+`/mnt/Documents/astra68/quake-fintrz-20261028/` on Beast. No FPGA change.
+The focused DE25 installer now waits through systemd `activating` before
+checking stage-8 readiness; its host test passes. During a temporary RFB
+probe, Python wrote an extra bytecode cache into the immutable release and
+release verification rejected it. The cache was removed, the selected release
+verified while Astra was stopped, and the final boot reached stage 8 with zero
+restarts. Temporary board trial files were removed after evidence archival.
+NDK header tests also exposed implicit `void *` conversions in
+`sw/include/astra/endian.h`; explicit byte-pointer casts now make the same
+fallback compile as C and C++. Haiku reference:
+`headers/os/support/ByteOrder.h` keeps byte-order conversions explicit;
+Astra retains its existing endian functions and runtime behavior.
 
 Application data checkpoint, 2026-10-28: supervisor now grants application
 `STORE:` from `HOME:/Application Data/<stable bundle id>/`; SDL preference
