@@ -590,6 +590,12 @@ and copying remain available only in grid mode.
 `astra_interface_text_view_set_line_numbers` adds the shared code gutter;
 logical line numbers remain aligned as wrapped rows scroll. The gutter is
 suppressed in flow mode and returns when code mode is selected again.
+Flow measures style-dependent builtin AFNT strikes with
+`astra_surface_ui_text_width_styled`; draw-list preflight includes the adopted
+face ID payload through `astra_surface_ui_text_requirements`. A separately
+installed single-face AFNT has no family variant mapping yet, so bold and
+italic emphasis are stripped for that face by Graphics Kit and measured at
+its actual normal-strike advance. Underline and strikethrough remain active.
 
 Text View starts read-only. `astra_interface_text_view_set_editable` enables
 multiline keyboard editing, including Enter, Backspace, Delete, and normal text

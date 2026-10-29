@@ -133,6 +133,16 @@ void astra_surface_text8x8(AstraSurfaceView *surface, int32_t x, int32_t y,
 /** Measure proportional UTF-8 text. @param utf8 UTF-8 bytes. @param length Byte count. @param pixel_height Font height. @return Advance width in pixels. */
 uint32_t astra_surface_ui_text_width(const char *utf8, uint32_t length,
                                      uint16_t pixel_height);
+/** Measure a proportional run using the same designed strike selected by
+ * ASTRA_TEXT_STYLE_* flags in hardware drawing. An adopted single-face AFNT
+ * uses its installed strike for every emphasis flag. */
+uint32_t astra_surface_ui_text_width_styled(const char *utf8,
+    uint32_t length, uint16_t pixel_height, uint32_t style_flags);
+/** Return draw-list command and payload requirements for a proportional UI
+ * text run in the currently adopted font context. The payload includes the
+ * installed face ID when the renderer emits NAMED_TEXT. */
+int astra_surface_ui_text_requirements(uint32_t length,
+    uint32_t *commands, uint32_t *payload_bytes);
 /** Return the adopted UI face's line-box height for one exact strike.
  * @param pixel_height Nominal UI strike height.
  * @return Logical pixels including ascent/descent/gap, or zero if unavailable. */
