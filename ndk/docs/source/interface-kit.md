@@ -548,7 +548,7 @@ visible lines and columns, expands tabs to eight-cell stops, and displays CRLF
 as one line break while preserving original bytes for copying. Long lines
 scroll horizontally. Pointer drag, arrows, Shift selection, Home/End,
 Ctrl+Home/End, Page Up/Down and Meta+A/C use the same TextModel selection as
-single-line fields. Editing, cut and paste are rejected. A keyboard focus
+single-line fields. By default editing, cut and paste are rejected. A keyboard focus
 border remains visible at the viewport. Copy actions carry the control ID;
 applications copy that model's selected byte range through Clipboard Kit.
 
@@ -578,6 +578,34 @@ data and refreshes control after changing it. Haiku reference:
 during draw. Astra asks document owner for style at offset, avoiding a second
 mutable style store inside read-only control. `AstraControl` and
 `AstraTextViewInfo` layouts changed; consumers require ABI 8 and rebuild.
+
+Interface Kit 9 extends the same Text View with code and flow presentation.
+`astra_interface_text_view_set_mode` selects `ASTRA_TEXT_SURFACE_CODE` for
+fixed-cell text or `ASTRA_TEXT_SURFACE_FLOW` for the adopted proportional UI
+face. The existing model, byte selection, wrapping, and ScrollView stay in
+place when changing modes. Flow measures scalar advances with the adopted
+font, wraps by pixel width, and submits styled glyph runs to the hardware draw
+list. TextSurface accepts grid, code, and flow modes; grid-specific hit testing
+and copying remain available only in grid mode.
+
+Text View starts read-only. `astra_interface_text_view_set_editable` enables
+multiline keyboard editing, including Enter, Backspace, Delete, and normal text
+input. `astra_interface_text_view_replace_selection` offers the same edit to
+applications. `astra_interface_text_view_select` and
+`astra_interface_text_view_reveal` use scalar-boundary UTF-8 byte positions;
+`astra_interface_text_view_find` uses TextModel's exact UTF-8 search and
+selects and reveals a match. A miss preserves the selection and output match.
+External model edits still require `astra_interface_text_view_refresh`.
+
+Haiku reference: `src/kits/interface/TextView.cpp` keeps selection as document
+offsets (`Select`), maps offsets to layout for scrolling
+(`ScrollToSelection`, `GetTextRegion`), and recomputes line breaks on wrap
+changes (`SetWordWrap`, `CanEndLine`). Astra adapts these to its caller-owned
+TextModel and hardware draw-list path. Unlike Haiku, Astra keeps application
+style data in the existing `style_at` provider. The shared UndoManager can
+record document edits today, but binding it to keyboard editing needs a
+retained manager pointer and therefore a coordinated Interface ABI update;
+this API does not claim implicit undo history.
 
 Interface Kit 7.9 adds read-only Grid View for applications with fixed cell
 layouts and per-cell styles or colors. Supply caller-owned `AstraTextCell`

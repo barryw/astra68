@@ -256,9 +256,9 @@ static AstraScrollModel text_view_scroll = ASTRA_SCROLL_MODEL_INIT;
 static uint8_t text_view_content[2048];
 static _Alignas(4) uint8_t text_view_metadata[2048];
 static const char text_view_example[] =
-    "Shared Text View\n"
+    "Shared Text View — Flow Mode\n"
     "\n"
-    "Read-only text remains selectable and copyable.\n"
+    "Click here to edit this document. Text remains selectable and copyable.\n"
     "TextModel owns UTF-8, lines and selection.\n"
     "TextSurface emits hardware glyph commands.\n"
     "ScrollView owns clipping and scrolling.\n"
@@ -1642,6 +1642,14 @@ static uint32_t build_controls(void)
         return status;
     if (astra_interface_ui_init(&ui, controls, GALLERY_CONTROL_COUNT,
                                    GALLERY_WIDTH, GALLERY_HEIGHT) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    if (astra_interface_text_view_set_mode(&ui,
+            GALLERY_CONTROL(GALLERY_TEXT_VIEW),
+            ASTRA_TEXT_SURFACE_FLOW) != ASTRA_OK ||
+        astra_interface_text_view_set_wrap_width(&ui,
+            GALLERY_CONTROL(GALLERY_TEXT_VIEW), 600u) != ASTRA_OK ||
+        astra_interface_text_view_set_editable(&ui,
+            GALLERY_CONTROL(GALLERY_TEXT_VIEW), 1u) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     if (layout_controls() != ASTRA_STATUS_OK ||
         astra_interface_toolbar_actions_refresh(&gallery_toolbar, &ui) !=

@@ -89,6 +89,12 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_text_view_refresh;
         astra_interface_text_view_set_inverted;
         astra_interface_text_view_set_wrap_width;
+        astra_interface_text_view_set_mode;
+        astra_interface_text_view_set_editable;
+        astra_interface_text_view_replace_selection;
+        astra_interface_text_view_select;
+        astra_interface_text_view_reveal;
+        astra_interface_text_view_find;
         astra_interface_settings_pane_init;
         astra_interface_form_row_init;
         astra_interface_columns_init;
@@ -140,9 +146,11 @@ ASTRA_INTERFACE_9.0 {
         astra_text_model_validate;
         astra_text_surface_copy_grid_selection;
         astra_text_surface_draw_caret;
+        astra_text_surface_draw_caret_at;
         astra_text_surface_grid_hit_test;
         astra_text_surface_init;
         astra_text_surface_render_cells;
+        astra_text_surface_render_flow_run;
         astra_text_surface_render_grid;
         astra_text_surface_scroll;
         astra_text_surface_set_blink;

@@ -16,7 +16,8 @@ static int valid(const AstraTextSurface *text)
 {
     return text != NULL &&
            text->_private_structure_size == sizeof(*text) &&
-           text->_private_mode == ASTRA_TEXT_SURFACE_GRID &&
+           text->_private_mode >= ASTRA_TEXT_SURFACE_GRID &&
+           text->_private_mode <= ASTRA_TEXT_SURFACE_FLOW &&
            text->_private_font_height != 0u &&
            text->_private_cell_width != 0u &&
            text->_private_line_height >= text->_private_font_height &&
@@ -52,13 +53,81 @@ static uint16_t dim(uint16_t foreground, uint16_t background)
     return (uint16_t)((red << 11u) | (green << 5u) | blue);
 }
 
+static AstraResult flow_run(const AstraTextSurface *text,
+    AstraSurfaceView *target, int32_t x, int32_t y,
+    const char *utf8, uint32_t bytes, uint32_t advance,
+    uint32_t foreground_value, uint32_t background_value,
+    uint16_t attributes, uint64_t *commands, uint64_t *payload)
+{
+    int colors_valid = 1;
+    uint16_t foreground, background;
+    if (!valid(text) || text->_private_mode != ASTRA_TEXT_SURFACE_FLOW ||
+        (target == NULL && (commands == NULL || payload == NULL)) ||
+        (target != NULL && (commands != NULL || payload != NULL ||
+                            target->kind != ASTRA_SURFACE_VIEW_DRAW_LIST)) ||
+        utf8 == NULL || bytes == 0u || advance == 0u ||
+        !astra_utf8_validate(utf8, bytes, 0u) ||
+        (attributes & ~ASTRA_TEXT_STYLE_ALLOWED_MASK) != 0u ||
+        (int64_t)x + advance > INT32_MAX ||
+        (int64_t)y + text->_private_line_height > INT32_MAX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    foreground = color(text, foreground_value,
+                       text->_private_default_foreground, &colors_valid);
+    background = color(text, background_value,
+                       text->_private_default_background, &colors_valid);
+    if (!colors_valid) return ASTRA_ERROR_INVALID_ARGUMENT;
+    if ((attributes & ASTRA_TEXT_STYLE_INVERSE) != 0u) {
+        uint16_t swap = foreground;
+        foreground = background;
+        background = swap;
+    }
+    if ((attributes & ASTRA_TEXT_STYLE_HIDDEN) != 0u ||
+        ((attributes & ASTRA_TEXT_STYLE_BLINK) != 0u &&
+         text->_private_blink_visible == 0u))
+        foreground = background;
+    else if ((attributes & ASTRA_TEXT_STYLE_FAINT) != 0u)
+        foreground = dim(foreground, background);
+    if (target == NULL) {
+        *commands += 2u;
+        *payload += bytes;
+        return ASTRA_OK;
+    }
+    astra_surface_fill(target, x, y, advance,
+                       text->_private_line_height, background);
+    return astra_surface_ui_text_styled(target, x,
+        y + (text->_private_line_height - text->_private_font_height) / 2u,
+        utf8, bytes, text->_private_font_height, foreground,
+        attributes & ASTRA_TEXT_RENDER_STYLE_MASK) ?
+        ASTRA_OK : ASTRA_ERROR_NO_RESOURCES;
+}
+
+AstraResult astra_text_surface_render_flow_run(
+    const AstraTextSurface *text, AstraSurfaceView *target,
+    int32_t x, int32_t y, const char *utf8, uint32_t bytes,
+    uint32_t advance, uint32_t foreground, uint32_t background,
+    uint16_t attributes)
+{
+    return flow_run(text, target, x, y, utf8, bytes, advance,
+                    foreground, background, attributes, NULL, NULL);
+}
+
+AstraResult astra_text_surface_flow_run_requirements(
+    const AstraTextSurface *text, const char *utf8, uint32_t bytes,
+    uint32_t advance, uint32_t foreground, uint32_t background,
+    uint16_t attributes, uint64_t *commands, uint64_t *payload)
+{
+    return flow_run(text, NULL, 0, 0, utf8, bytes, advance,
+                    foreground, background, attributes, commands, payload);
+}
+
 AstraResult astra_text_surface_init(AstraTextSurface *text,
                                     const AstraTextSurfaceInfo *info)
 {
     if (text == NULL || info == NULL ||
         text->_private_structure_size != sizeof(*text) ||
         info->size != sizeof(*info) ||
-        info->mode != ASTRA_TEXT_SURFACE_GRID ||
+        info->mode < ASTRA_TEXT_SURFACE_GRID ||
+        info->mode > ASTRA_TEXT_SURFACE_FLOW ||
         info->font_height == 0u || info->cell_width == 0u ||
         info->line_height < info->font_height || info->reserved16 != 0u ||
         info->scratch == NULL || info->scratch_bytes < 4u ||
@@ -197,7 +266,8 @@ static AstraResult render_cells(
     int selection_on_row;
     int selection_colors_valid = 1;
 
-    if (!valid(text) || (target == NULL && requirements == NULL) ||
+    if (!valid(text) || text->_private_mode == ASTRA_TEXT_SURFACE_FLOW ||
+        (target == NULL && requirements == NULL) ||
         (target != NULL && requirements != NULL) ||
         (count != 0u && cells == NULL) ||
         (selection != NULL &&
@@ -351,6 +421,8 @@ AstraResult astra_text_surface_render_grid(
     const AstraTextCell *cells, uint32_t count,
     const AstraTextGridSelection *selection)
 {
+    if (!valid(text) || text->_private_mode != ASTRA_TEXT_SURFACE_GRID)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     return render_cells(text, target, origin_x, origin_y, row, column,
                         cells, count, selection, NULL);
 }
@@ -365,7 +437,8 @@ AstraResult astra_text_surface_grid_hit_test(
     uint64_t width;
     uint64_t height;
 
-    if (!valid(text) || columns == 0u || rows == 0u || position == NULL)
+    if (!valid(text) || text->_private_mode != ASTRA_TEXT_SURFACE_GRID ||
+        columns == 0u || rows == 0u || position == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     relative_x = (int64_t)x - origin_x;
     relative_y = (int64_t)y - origin_y;
@@ -398,7 +471,8 @@ AstraResult astra_text_surface_copy_grid_selection(
     AstraTextGridPosition end;
     uint64_t required = 0u;
 
-    if (!valid(text) || cells == NULL || columns == 0u || rows == 0u ||
+    if (!valid(text) || text->_private_mode != ASTRA_TEXT_SURFACE_GRID ||
+        cells == NULL || columns == 0u || rows == 0u ||
         stride < columns ||
         selection == NULL || selection->size < sizeof(*selection) ||
         !astra_words_zero(selection->reserved, 4u) || bytes == NULL ||
@@ -458,40 +532,57 @@ AstraResult astra_text_surface_copy_grid_selection(
     return ASTRA_OK;
 }
 
+AstraResult astra_text_surface_draw_caret_at(
+    const AstraTextSurface *text, AstraSurfaceView *target,
+    int32_t x, int32_t y, uint32_t advance,
+    uint32_t kind, uint16_t color_value)
+{
+    uint32_t width;
+    uint32_t height;
+    int64_t caret_y = y;
+
+    if (!valid(text) || target == NULL || advance == 0u ||
+        (text->_private_mode == ASTRA_TEXT_SURFACE_FLOW &&
+         target->kind != ASTRA_SURFACE_VIEW_DRAW_LIST) ||
+        kind < ASTRA_TEXT_CARET_BLOCK || kind > ASTRA_TEXT_CARET_UNDERLINE)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (kind == ASTRA_TEXT_CARET_BLOCK) {
+        width = advance;
+        height = text->_private_line_height;
+    } else if (kind == ASTRA_TEXT_CARET_BAR) {
+        width = advance < 2u ? 1u : 2u;
+        height = text->_private_line_height;
+    } else {
+        width = advance;
+        height = text->_private_font_height < 2u ? 1u : 2u;
+        caret_y += (text->_private_line_height - text->_private_font_height) / 2u +
+                   text->_private_font_height - height;
+    }
+    if ((int64_t)x + width > INT32_MAX ||
+        caret_y < INT32_MIN || caret_y + height > INT32_MAX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    astra_surface_fill(target, x, (int32_t)caret_y,
+                       width, height, color_value);
+    return ASTRA_OK;
+}
+
 AstraResult astra_text_surface_draw_caret(
     const AstraTextSurface *text, AstraSurfaceView *target,
     int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,
     uint32_t kind, uint16_t color_value)
 {
-    uint64_t x;
-    uint64_t y;
-    uint32_t width;
-    uint32_t height;
-
-    if (!valid(text) || target == NULL || kind < ASTRA_TEXT_CARET_BLOCK ||
-        kind > ASTRA_TEXT_CARET_UNDERLINE)
+    uint64_t x, y;
+    if (!valid(text) || text->_private_mode == ASTRA_TEXT_SURFACE_FLOW)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     x = (uint64_t)column * text->_private_cell_width;
     y = (uint64_t)row * text->_private_line_height;
-    if (kind == ASTRA_TEXT_CARET_BLOCK) {
-        width = text->_private_cell_width;
-        height = text->_private_line_height;
-    } else if (kind == ASTRA_TEXT_CARET_BAR) {
-        width = text->_private_cell_width < 2u ? 1u : 2u;
-        height = text->_private_line_height;
-    } else {
-        width = text->_private_cell_width;
-        height = text->_private_font_height < 2u ? 1u : 2u;
-        y += (text->_private_line_height - text->_private_font_height) / 2u +
-             text->_private_font_height - height;
-    }
     if (x > INT32_MAX || y > INT32_MAX ||
-        origin_x > INT32_MAX - (int32_t)x ||
-        origin_y > INT32_MAX - (int32_t)y)
+        (int64_t)origin_x + (int64_t)x > INT32_MAX ||
+        (int64_t)origin_y + (int64_t)y > INT32_MAX)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    astra_surface_fill(target, origin_x + (int32_t)x,
-                       origin_y + (int32_t)y, width, height, color_value);
-    return ASTRA_OK;
+    return astra_text_surface_draw_caret_at(text, target,
+        origin_x + (int32_t)x, origin_y + (int32_t)y,
+        text->_private_cell_width, kind, color_value);
 }
 
 AstraResult astra_text_surface_scroll(

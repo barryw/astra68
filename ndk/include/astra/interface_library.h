@@ -484,6 +484,28 @@ AstraResult astra_interface_text_view_set_inverted(AstraUIContext *context,
  */
 AstraResult astra_interface_text_view_set_wrap_width(AstraUIContext *context,
     AstraControl *control, uint32_t width);
+/** Select fixed-cell code or proportional flow presentation. Grid cells use
+ * Grid View; both text modes share the retained TextModel and selection. */
+AstraResult astra_interface_text_view_set_mode(AstraUIContext *context,
+    AstraControl *control, uint32_t mode);
+/** Enable or disable in-place editing. Text View starts read-only. */
+AstraResult astra_interface_text_view_set_editable(AstraUIContext *context,
+    AstraControl *control, uint32_t editable);
+/** Replace a Text View selection with UTF-8 and refresh its ScrollView. */
+AstraResult astra_interface_text_view_replace_selection(
+    AstraUIContext *context, AstraControl *control,
+    const char *replacement, uint32_t replacement_bytes);
+/** Set the model's half-open byte selection and reveal its focus. */
+AstraResult astra_interface_text_view_select(AstraUIContext *context,
+    AstraControl *control, uint32_t anchor, uint32_t focus);
+/** Reveal an existing scalar-boundary byte position without selecting it. */
+AstraResult astra_interface_text_view_reveal(AstraUIContext *context,
+    AstraControl *control, uint32_t byte_offset);
+/** Find exact UTF-8 text, select the match and reveal it. A miss leaves both
+ * the model selection and @p match unchanged. */
+AstraResult astra_interface_text_view_find(AstraUIContext *context,
+    AstraControl *control, const char *needle, uint32_t needle_bytes,
+    uint32_t from, uint32_t wrap, AstraTextSelection *match);
 /** Initialize a read-only fixed cell grid from caller-owned storage.
  * @param control Caller-owned empty control.
  * @param info Validated grid model and control information.

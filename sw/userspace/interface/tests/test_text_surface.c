@@ -12,6 +12,8 @@ _Static_assert(sizeof(AstraTextGridSelection) == 44u,
 static uint32_t fill_count;
 static uint32_t text_count;
 static uint32_t scroll_count;
+static uint32_t flow_count;
+static uint32_t flow_style;
 static uint32_t last_style;
 static uint16_t last_foreground;
 static uint16_t last_fill_color;
@@ -55,6 +57,20 @@ int astra_surface_mono_text_styled(AstraSurfaceView *surface, int32_t x,
     last_foreground = color;
     if (text_count <= sizeof(text_colors) / sizeof(text_colors[0]))
         text_colors[text_count - 1u] = color;
+    last_text_length = length;
+    memcpy(last_text, utf8, length);
+    return 1;
+}
+
+int astra_surface_ui_text_styled(AstraSurfaceView *surface, int32_t x,
+    int32_t y, const char *utf8, uint32_t length,
+    uint16_t pixel_height, uint16_t color, uint32_t style_flags)
+{
+    (void)surface; (void)x; (void)pixel_height;
+    ++flow_count;
+    flow_style = style_flags;
+    last_text_y = y;
+    last_foreground = color;
     last_text_length = length;
     memcpy(last_text, utf8, length);
     return 1;
@@ -291,6 +307,26 @@ int main(void)
     info.scratch_bytes = 3u;
     assert(astra_text_surface_init(&text, &info) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
+    info.scratch_bytes = sizeof(scratch);
+    info.mode = ASTRA_TEXT_SURFACE_FLOW;
+    assert(astra_text_surface_init(&text, &info) == ASTRA_OK);
+    target.kind = ASTRA_SURFACE_VIEW_DRAW_LIST;
+    reset_calls();
+    flow_count = 0u;
+    assert(astra_text_surface_render_flow_run(&text, &target, 4, 6,
+        "A", 1u, 11u, 0x1111u, 0x2222u,
+        ASTRA_TEXT_STYLE_BOLD | ASTRA_TEXT_STYLE_INVERSE) == ASTRA_OK);
+    assert(flow_count == 1u && flow_style == ASTRA_TEXT_STYLE_BOLD &&
+           last_foreground == 0x2222u && last_fill_color == 0x1111u &&
+           last_fill_width == 11u && last_text_y == 8);
+    assert(astra_text_surface_render_flow_run(&text, &target, 4, 6,
+        "\xff", 1u, 11u, 0x1111u, 0x2222u, 0u) ==
+        ASTRA_ERROR_INVALID_ARGUMENT);
+    info.mode = ASTRA_TEXT_SURFACE_CODE;
+    assert(astra_text_surface_init(&text, &info) == ASTRA_OK);
+    assert(astra_text_surface_render_flow_run(&text, &target, 4, 6,
+        "A", 1u, 11u, 0x1111u, 0x2222u, 0u) ==
+        ASTRA_ERROR_INVALID_ARGUMENT);
     puts("text surface tests passed");
     return 0;
 }

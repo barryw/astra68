@@ -22,7 +22,7 @@ ASTRA_EXTERN_C_BEGIN
 #define ASTRA_TEXT_COLOR_IS_RGB(color)                                      \
     (((color) & UINT32_C(0xff000000)) == UINT32_C(0x01000000))
 
-/** Text layout mode. Grid is implemented by Interface Kit 2.5. */
+/** Text layout mode. The document model and selection remain byte based. */
 enum {
     ASTRA_TEXT_SURFACE_GRID = 1u,
     ASTRA_TEXT_SURFACE_CODE = 2u,
@@ -94,7 +94,8 @@ typedef struct AstraTextGridSelection {
 typedef uint16_t (*AstraTextColorResolver)(void *context, uint32_t color,
                                           uint16_t fallback);
 
-/** Construction data for the grid renderer; caller retains scratch storage. */
+/** Construction data for fixed-grid or proportional presentation; caller
+ * retains scratch storage. */
 typedef struct AstraTextSurfaceInfo {
     /** Structure size for source-compatible extension. */
     uint32_t size;
@@ -166,7 +167,7 @@ ASTRA_NODISCARD AstraResult astra_text_surface_init(
     AstraTextSurface *text_surface, const AstraTextSurfaceInfo *info);
 /**
  * Render a contiguous fixed-grid cell run.
- * @param text_surface Initialized grid TextSurface.
+ * @param text_surface Initialized grid or code TextSurface.
  * @param target Destination surface.
  * @param origin_x Grid origin x coordinate.
  * @param origin_y Grid origin y coordinate.
@@ -180,6 +181,14 @@ ASTRA_NODISCARD AstraResult astra_text_surface_render_cells(
     const AstraTextSurface *text_surface, AstraSurfaceView *target,
     int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,
     const AstraTextCell *cells, uint32_t count);
+/** Render one already laid-out proportional flow run through the hardware
+ * glyph path. Layout supplies the run's advance; colors and styles follow
+ * the same rules as fixed-grid cells. */
+ASTRA_NODISCARD AstraResult astra_text_surface_render_flow_run(
+    const AstraTextSurface *text_surface, AstraSurfaceView *target,
+    int32_t x, int32_t y, const char *utf8, uint32_t bytes,
+    uint32_t advance, uint32_t foreground, uint32_t background,
+    uint16_t attributes);
 /**
  * Render cells with an optional half-open selection overlay.
  * @param text_surface Initialized grid TextSurface.
@@ -251,6 +260,12 @@ ASTRA_NODISCARD AstraResult astra_text_surface_copy_grid_selection(
 ASTRA_NODISCARD AstraResult astra_text_surface_draw_caret(
     const AstraTextSurface *text_surface, AstraSurfaceView *target,
     int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,
+    uint32_t kind, uint16_t color);
+/** Draw the platform caret at a laid-out pixel position in any text mode.
+ * @p advance is the cell or glyph advance used for block and underline. */
+ASTRA_NODISCARD AstraResult astra_text_surface_draw_caret_at(
+    const AstraTextSurface *text_surface, AstraSurfaceView *target,
+    int32_t x, int32_t y, uint32_t advance,
     uint32_t kind, uint16_t color);
 /**
  * Scroll a rectangular grid using the shared hardware-blit path.
