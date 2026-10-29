@@ -4739,6 +4739,7 @@ static void test_shared_file_panel(void)
         { .name = "readme.txt", .kind = ASTRA_VFS_KIND_FILE }
     };
     AstraCollectionItem items[2], next_items[2];
+    AstraCollectionItem rebound_items[4], rebound_spare[4];
     AstraCollectionItem place_items[2], next_place_items[2];
     AstraFilePanelPlace places[2] = {
         {"Home", 4u, "/dh0/Home"},
@@ -4749,6 +4750,7 @@ static void test_shared_file_panel(void)
         {"Z-machine stories", 17u, {0u, 0u}}
     };
     const AstraSurface *icons[2] = {NULL, NULL};
+    const AstraSurface *rebound_icons[4] = {NULL, NULL, NULL, NULL};
     AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
     AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
     AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
@@ -4894,6 +4896,41 @@ static void test_shared_file_panel(void)
     assert(astra_interface_file_panel_set_directory(&panel, &context,
         controls, "/dh0/Stories", next_entries, 2u, next_items, 2u) == ASTRA_OK &&
         collection.item_count == 2u);
+    {
+        AstraScrollState before = ASTRA_SCROLL_STATE_INIT;
+        AstraScrollState after = ASTRA_SCROLL_STATE_INIT;
+        AstraControl saved_list = controls[ASTRA_FILE_PANEL_LIST];
+        uint64_t selected_id;
+
+        assert(astra_interface_control_set_value(&context,
+            &controls[ASTRA_FILE_PANEL_LIST], 1) == ASTRA_OK);
+        selected_id = collection.selected_id;
+        assert(astra_scroll_get_state(&scroll, &before) == ASTRA_OK);
+        assert(astra_interface_file_panel_rebind_storage(&panel, &context,
+            controls, rebound_items, 1u, rebound_spare, 4u,
+            rebound_icons, 4u) == ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(panel.items == next_items && panel.grid_icons == icons);
+        controls[ASTRA_FILE_PANEL_LIST]._private_control_kind =
+            ASTRA_CONTROL_LABEL;
+        assert(astra_interface_file_panel_rebind_storage(&panel, &context,
+            controls, rebound_items, 4u, rebound_spare, 4u,
+            rebound_icons, 4u) == ASTRA_ERROR_INVALID_ARGUMENT);
+        controls[ASTRA_FILE_PANEL_LIST] = saved_list;
+        assert(panel.items == next_items && panel.grid_model.icons == icons);
+        assert(astra_interface_file_panel_rebind_storage(&panel, &context,
+            controls, rebound_items, 4u, rebound_spare, 4u,
+            rebound_icons, 4u) == ASTRA_OK);
+        assert(panel.items == rebound_items &&
+            panel.spare_items == rebound_spare &&
+            panel.grid_icons == rebound_icons &&
+            panel.grid_model.icons == rebound_icons &&
+            panel.item_capacity == 4u && panel.grid_icon_capacity == 4u &&
+            collection.selected_id == selected_id &&
+            panel.items[1].id == next_items[1].id);
+        assert(astra_scroll_get_state(&scroll, &after) == ASTRA_OK &&
+            before.offset_x == after.offset_x &&
+            before.offset_y == after.offset_y);
+    }
     action.type = ASTRA_UI_ACTION_ACTIVATE;
     action.control_id = 300u + ASTRA_FILE_PANEL_CANCEL;
     assert(astra_interface_file_panel_action(&panel, &context, controls,
@@ -4982,6 +5019,12 @@ static void test_shared_file_panel(void)
             controls, 1u, "/dh0/Stories", child_entries, 1u,
             child_items, 1u) == ASTRA_OK &&
             snapshots[1].item_count == 1u);
+        assert(astra_interface_file_panel_rebind_storage(&panel, &context,
+            controls, rebound_items, 4u, rebound_spare, 4u,
+            rebound_icons, 4u) == ASTRA_OK &&
+            snapshots[0].items == rebound_items &&
+            snapshots[1].items == child_items &&
+            panel.view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS);
         action.type = ASTRA_UI_ACTION_ACTIVATE;
         action.control_id = 300u + ASTRA_FILE_PANEL_CONTROL_COUNT + 4u;
         action.value = 0;

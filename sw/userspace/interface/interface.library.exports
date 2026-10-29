@@ -38,6 +38,7 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_breadcrumb_set_path;
         astra_interface_breadcrumb_target;
         astra_interface_file_panel_set_directory;
+        astra_interface_file_panel_rebind_storage;
         astra_interface_file_panel_set_places;
         astra_interface_file_panel_set_icons;
         astra_interface_file_panel_set_column;
