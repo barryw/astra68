@@ -143,6 +143,8 @@ static void test_toolbar_render(void)
     fill_calls = line_calls = 0u;
     assert(astra_interface_ui_render(&ui, &view) == ASTRA_OK);
     assert(fill_calls >= 2u && line_calls >= 6u);
+    ((AstraDrawListHeader *)view.pixels)->command_count = 100u;
+    assert(astra_interface_ui_render(&ui, &view) == ASTRA_OK);
 }
 static uint32_t text_calls;
 static uint16_t text_clip_top;
@@ -399,6 +401,16 @@ int astra_surface_line(AstraSurfaceView *surface, int32_t x0, int32_t y0,
         line_y1[line_calls] = y1;
     }
     ++line_calls;
+    return 1;
+}
+
+int astra_surface_lines(AstraSurfaceView *surface,
+    const AstraSurfaceLine *lines, uint32_t count, uint16_t color)
+{
+    for (uint32_t at = 0u; at < count; ++at)
+        if (!astra_surface_line(surface, lines[at].x0, lines[at].y0,
+                                lines[at].x1, lines[at].y1, color))
+            return 0;
     return 1;
 }
 

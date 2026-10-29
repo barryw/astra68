@@ -4592,7 +4592,7 @@ static int render_requirements(const AstraUIContext *context,
             *commands += (control->_private_style == ASTRA_BUTTON_TAG ? 5u :
                 (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
                     ASTRA_BUTTON_SPLIT_MENU ? 4u : 2u) +
-                (ASTRA_BUTTON_ICON(control->_private_style) != 0u ? 16u : 0u);
+                (ASTRA_BUTTON_ICON(control->_private_style) != 0u ? 1u : 0u);
         else if (control->_private_control_kind == ASTRA_CONTROL_COLOUR_WELL)
             *commands += 6u +
                 ((state & CONTROL_FOCUS_VISIBLE) != 0u ? 1u : 0u);
@@ -4631,6 +4631,9 @@ static int render_requirements(const AstraUIContext *context,
         if (control->_private_control_kind == ASTRA_CONTROL_BUTTON &&
             (state & CONTROL_FOCUS_VISIBLE) != 0u)
             ++*commands;
+        if (control->_private_control_kind == ASTRA_CONTROL_BUTTON &&
+            ASTRA_BUTTON_ICON(control->_private_style) != 0u)
+            *payload += 16u * sizeof(AstraDrawListSegment);
         if (control->_private_control_kind == ASTRA_CONTROL_DISCLOSURE &&
             (state & CONTROL_FOCUS_VISIBLE) != 0u)
             ++*commands;
@@ -4756,8 +4759,13 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
         {8, 4, 12, 8}, {12, 8, 8, 12}
     };
     const ToolbarLine *lines = NULL;
+    AstraSurfaceLine segments[16];
     uint32_t count = 0u;
-#define PICK(name) do { lines = name; count = sizeof(name) / sizeof(name[0]); } while (0)
+#define PICK(name) do { \
+    _Static_assert(sizeof(name) / sizeof(name[0]) <= 16u, \
+                   "toolbar icon segment capacity"); \
+    lines = name; count = sizeof(name) / sizeof(name[0]); \
+} while (0)
     switch (icon) {
     case ASTRA_TOOLBAR_ICON_BACK: PICK(back); break;
     case ASTRA_TOOLBAR_ICON_FORWARD: PICK(forward); break;
@@ -4775,9 +4783,11 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
     }
 #undef PICK
     for (uint32_t at = 0u; at < count; ++at)
-        (void)astra_surface_line(surface, x + lines[at].x0,
-            y + lines[at].y0, x + lines[at].x1,
-            y + lines[at].y1, ink);
+        segments[at] = (AstraSurfaceLine){
+            x + lines[at].x0, y + lines[at].y0,
+            x + lines[at].x1, y + lines[at].y1};
+    if (count != 0u)
+        (void)astra_surface_lines(surface, segments, count, ink);
 }
 
 static void render_button(const AstraTheme *theme,

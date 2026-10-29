@@ -107,3 +107,10 @@ selects one card through `BCardLayout::SetVisibleItem`. Astra currently uses
 separate collapsed Container pages; Gallery collapses the old page before
 expanding the next, so layout never sees two pages at once. A shared card
 container remains preferable when multiple clients need this interaction.
+
+Toolbar icon drawing: `src/kits/interface/Button.cpp` delegates button
+appearance to the shared ControlLook; Astra keeps the same shared Button
+painter and submits icon segments through Graphics Kit's existing batched
+`LINES` command. This uses one draw-list command per icon and reserves payload
+for its segments before drawing, so a control-rich page stays within the
+retained list limit.

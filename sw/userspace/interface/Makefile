@@ -235,7 +235,7 @@ $(COMMAND_HOST_TEST): src/command.c tests/test_command.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
-MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/command.c src/control.c src/display_widgets.c src/field_family.c src/toolbar_actions.c src/text_surface.c \
+MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/command.c src/control.c src/display_widgets.c src/field_family.c src/toolbar_actions.c src/icon_tile.c src/text_surface.c \
 	src/text_model.c src/scroll.c \
 	tests/test_menu.c
 $(GRAPHICS_HOST_SURFACE) $(GRAPHICS_HOST_SURFACE_SANITIZE): FORCE
