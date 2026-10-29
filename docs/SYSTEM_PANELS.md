@@ -28,12 +28,12 @@ Reference review:
   implements those semantic modes and actions. Field, Theme, and Recent tabs
   and the two-swatch wanted/stored presentation remain for follow-up.
 
-Fonts panel still needs implementation. File panels should grow toward the
-same navigation and display controls as Atlas. Fonts panel should use Font Kit
-catalog and installed face/strike selection, with no app-specific scanner.
+File panels should grow toward the same navigation and display controls as
+Atlas.
 
 The shared Open/Save file panel now consumes `AstraDirectoryEntry` snapshots
-from Filesystem Kit, builds a List in a ScrollView, and returns a directory
+from Filesystem Kit, hides dot entries and invalid or unsupported nodes,
+builds a List in a ScrollView, and returns a directory
 plus leaf name. Its actions distinguish entering a folder, opening a file,
 saving a new name, replacing an existing file, and cancelling. Save requires
 an editable `TextModel`; it rejects empty, dot, dot-dot, slash, and control
@@ -41,5 +41,22 @@ names. The caller performs the actual open/save operation and handles the
 overwrite confirmation. Directory replacement uses a second item buffer so
 the old List data remains valid if validation or layout fails. Existing Atlas
 and Fonts browser code can adopt this panel without duplicating picker policy.
-The sidebar, breadcrumb, search, view modes, and filename filters from the
+The sidebar, breadcrumb, search, view modes, and file type filters from the
 standalone design remain to implement.
+
+The shared Font panel reads an open Font Kit catalog, lists installed
+family/style faces and exact AFNT bitmap strikes, previews through the common
+Label's installed-font path, and returns the chosen face/strike. In system
+selection mode, faces without the catalog's SELECTABLE flag remain visible
+with a clear explanation while Use is disabled. It does not scan font files or
+change the system font itself; the caller owns that policy and capability.
+Two caller-owned strike buffers let a face change validate and replace the
+List without invalidating its previous borrowed rows.
+
+Haiku `src/preferences/appearance/FontSelectionView.cpp` informed the
+face/size/preview composition. Astra uses exact installed strikes rather than
+Haiku's freely adjustable point-size spinner because its glyph hardware
+renders installed AFNT strike sizes. Haiku's Icon-O-Matic
+`src/apps/icon-o-matic/generic/gui/panel/color_picker/ColorPickerPanel.cpp`
+keeps Cancel/Use outcome delivery in a shared panel; Astra returns semantic
+actions to the caller's ordinary retained UI loop.

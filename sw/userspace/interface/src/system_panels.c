@@ -1,6 +1,7 @@
 #include <astra/interface_library.h>
 #include <astra/system_panels.h>
 #include <stddef.h>
+#include "panel_internal.h"
 
 static uint8_t expand5(uint32_t value)
 {
@@ -36,6 +37,10 @@ AstraResult astra_interface_colour_panel_color(
         (panel->format != ASTRA_COLOUR_PANEL_RGB565 &&
          panel->format != ASTRA_COLOUR_PANEL_XRGB8888 &&
          panel->format != ASTRA_COLOUR_PANEL_INDEX8) ||
+        (panel->format == ASTRA_COLOUR_PANEL_RGB565 &&
+         panel->packed > 65535u) ||
+        (panel->format == ASTRA_COLOUR_PANEL_XRGB8888 &&
+         panel->packed > 0x00ffffffu) ||
         (panel->format == ASTRA_COLOUR_PANEL_INDEX8 &&
          (panel->palette == NULL || panel->packed >= panel->palette_count)))
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -61,13 +66,6 @@ static uint32_t panel_max(const AstraColourPanel *panel, uint32_t index)
     if (panel->format == ASTRA_COLOUR_PANEL_RGB565)
         return index == 1u ? 63u : 31u;
     return 255u;
-}
-
-static AstraResult panel_child(AstraControl *control, uint32_t parent_id)
-{
-    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
-    item.parent_id = parent_id;
-    return astra_interface_control_set_flex(control, &item);
 }
 
 AstraResult astra_interface_colour_panel_init(AstraColourPanel *panel,
@@ -124,7 +122,7 @@ AstraResult astra_interface_colour_panel_init(AstraColourPanel *panel,
     result = astra_interface_label_init(&controls[ASTRA_COLOUR_PANEL_TITLE],
                                         &label);
     if (result != ASTRA_OK) return result;
-    result = panel_child(&controls[ASTRA_COLOUR_PANEL_TITLE], first_id);
+    result = astra_panel_child(&controls[ASTRA_COLOUR_PANEL_TITLE], first_id, 0u);
     if (result != ASTRA_OK) return result;
 
     well.id = first_id + ASTRA_COLOUR_PANEL_SWATCH;
@@ -138,7 +136,7 @@ AstraResult astra_interface_colour_panel_init(AstraColourPanel *panel,
     result = astra_interface_colour_well_init(
         &controls[ASTRA_COLOUR_PANEL_SWATCH], &well);
     if (result != ASTRA_OK) return result;
-    result = panel_child(&controls[ASTRA_COLOUR_PANEL_SWATCH], first_id);
+    result = astra_panel_child(&controls[ASTRA_COLOUR_PANEL_SWATCH], first_id, 0u);
     if (result != ASTRA_OK) return result;
 
     for (uint32_t i = 0u; i < 3u; ++i) {
@@ -155,7 +153,7 @@ AstraResult astra_interface_colour_panel_init(AstraColourPanel *panel,
             label.state = ASTRA_CONTROL_COLLAPSED;
         result = astra_interface_label_init(&controls[label_at], &label);
         if (result != ASTRA_OK) return result;
-        result = panel_child(&controls[label_at], first_id);
+        result = astra_panel_child(&controls[label_at], first_id, 0u);
         if (result != ASTRA_OK) return result;
 
         range = (AstraRangeInfo)ASTRA_RANGE_INFO_INIT;
@@ -170,7 +168,7 @@ AstraResult astra_interface_colour_panel_init(AstraColourPanel *panel,
             range.state = ASTRA_CONTROL_COLLAPSED;
         result = astra_interface_slider_init(&controls[slider_at], &range);
         if (result != ASTRA_OK) return result;
-        result = panel_child(&controls[slider_at], first_id);
+        result = astra_panel_child(&controls[slider_at], first_id, 0u);
         if (result != ASTRA_OK) return result;
     }
 
@@ -181,7 +179,7 @@ AstraResult astra_interface_colour_panel_init(AstraColourPanel *panel,
     result = astra_interface_container_init(
         &controls[ASTRA_COLOUR_PANEL_ACTIONS], &container);
     if (result != ASTRA_OK) return result;
-    result = panel_child(&controls[ASTRA_COLOUR_PANEL_ACTIONS], first_id);
+    result = astra_panel_child(&controls[ASTRA_COLOUR_PANEL_ACTIONS], first_id, 0u);
     if (result != ASTRA_OK) return result;
 
     for (uint32_t i = ASTRA_COLOUR_PANEL_CANCEL;
@@ -194,7 +192,8 @@ AstraResult astra_interface_colour_panel_init(AstraColourPanel *panel,
             ASTRA_BUTTON_PRIMARY : ASTRA_BUTTON_STANDARD;
         result = astra_interface_button_init(&controls[i], &button);
         if (result != ASTRA_OK) return result;
-        result = panel_child(&controls[i], first_id + ASTRA_COLOUR_PANEL_ACTIONS);
+        result = astra_panel_child(&controls[i],
+            first_id + ASTRA_COLOUR_PANEL_ACTIONS, 0u);
         if (result != ASTRA_OK) return result;
     }
     return ASTRA_OK;
@@ -208,6 +207,7 @@ AstraResult astra_interface_colour_panel_action(AstraColourPanel *panel,
     uint32_t channel;
     uint32_t mask;
     uint32_t shift;
+    uint32_t previous;
     AstraResult result;
 
     if (panel == NULL || panel->size < sizeof(*panel) ||
@@ -237,6 +237,7 @@ AstraResult astra_interface_colour_panel_action(AstraColourPanel *panel,
     if (action->decimal_places != 0u || action->value < 0 ||
         (uint64_t)action->value > panel_max(panel, channel))
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    previous = panel->packed;
     if (panel->format == ASTRA_COLOUR_PANEL_INDEX8) {
         panel->packed = (uint32_t)action->value;
     } else {
@@ -253,6 +254,7 @@ AstraResult astra_interface_colour_panel_action(AstraColourPanel *panel,
             ASTRA_COLOUR_PALETTE_SLOT : ASTRA_COLOUR_LITERAL,
         panel_color(panel), panel->format == ASTRA_COLOUR_PANEL_INDEX8 ?
             panel->packed : 0u);
+    if (result != ASTRA_OK) panel->packed = previous;
     if (result == ASTRA_OK) *outcome = ASTRA_COLOUR_PANEL_CHANGED;
     return result;
 }

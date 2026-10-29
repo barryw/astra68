@@ -3,37 +3,41 @@
 #include <astra/string.h>
 #include <astra/utf8.h>
 #include <string.h>
+#include "panel_internal.h"
 
 static AstraResult file_panel_items(const AstraDirectoryEntry *entries,
-    uint32_t count, AstraCollectionItem *items, uint32_t capacity)
+    uint32_t count, AstraCollectionItem *items, uint32_t capacity,
+    uint32_t *visible_count)
 {
-    if (count > capacity || (count != 0u && (entries == NULL || items == NULL)))
+    uint32_t visible = 0u;
+
+    if (visible_count == NULL ||
+        (count != 0u && entries == NULL) ||
+        (capacity != 0u && items == NULL))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = 0u; at < count; ++at) {
         const char *end = memchr(entries[at].name, '\0',
                                  sizeof(entries[at].name));
         uint32_t length;
 
-        if (end == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (end == NULL) continue;
         length = (uint32_t)(end - entries[at].name);
-        if (length == 0u || !astra_utf8_validate(entries[at].name,
-                                                 length, 0u))
-            return ASTRA_ERROR_INVALID_ARGUMENT;
-        items[at] = (AstraCollectionItem){
+        if (length == 0u ||
+            (length == 1u && entries[at].name[0] == '.') ||
+            (length == 2u && entries[at].name[0] == '.' &&
+             entries[at].name[1] == '.') ||
+            memchr(entries[at].name, '/', length) != NULL ||
+            !astra_utf8_validate(entries[at].name, length, 0u) ||
+            (entries[at].kind != ASTRA_VFS_KIND_FILE &&
+             entries[at].kind != ASTRA_VFS_KIND_DIRECTORY))
+            continue;
+        if (visible == capacity) return ASTRA_ERROR_BUFFER_TOO_SMALL;
+        items[visible++] = (AstraCollectionItem){
             (uint64_t)at + 1u, entries[at].name, length, { 0u, 0u }
         };
     }
+    *visible_count = visible;
     return ASTRA_OK;
-}
-
-static AstraResult file_panel_child(AstraControl *control, uint32_t parent,
-    uint32_t grow)
-{
-    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
-    item.parent_id = parent;
-    item.grow = grow;
-    if (grow != 0u) item.align_self = ASTRA_FLEX_ALIGN_STRETCH;
-    return astra_interface_control_set_flex(control, &item);
 }
 
 static AstraResult file_panel_label(AstraControl *control, uint32_t id,
@@ -48,7 +52,7 @@ static AstraResult file_panel_label(AstraControl *control, uint32_t id,
     info.text_role = ASTRA_TEXT_CLIENT_SECONDARY;
     info.state = state;
     result = astra_interface_label_init(control, &info);
-    return result == ASTRA_OK ? file_panel_child(control, parent, 0u) : result;
+    return result == ASTRA_OK ? astra_panel_child(control, parent, 0u) : result;
 }
 
 AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
@@ -60,6 +64,7 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     AstraFieldInfo field = ASTRA_FIELD_INFO_INIT;
     AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
     AstraResult result;
+    uint32_t visible_count = 0u;
 
     if (panel == NULL || controls == NULL || info == NULL ||
         info->size < sizeof(*info) || info->first_id == 0u ||
@@ -71,19 +76,23 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
         !astra_words_zero(info->reserved, 4u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *panel = (AstraFilePanel)ASTRA_FILE_PANEL_INIT;
-    if (!astra_string_copy(panel->directory, sizeof(panel->directory),
-                           info->directory) || panel->directory[0] == '\0')
+    if (!astra_string_copy(panel->directory_storage[0],
+                           sizeof(panel->directory_storage[0]),
+                           info->directory) ||
+        panel->directory_storage[0][0] == '\0')
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    panel->directory = panel->directory_storage[0];
     result = file_panel_items(info->entries, info->entry_count,
-                              info->item_storage, info->item_capacity);
+        info->item_storage, info->item_capacity, &visible_count);
     if (result != ASTRA_OK) return result;
     result = astra_interface_collection_init(info->collection,
-        info->item_storage, info->entry_count, 0u);
+        info->item_storage, visible_count, 0u);
     if (result != ASTRA_OK) return result;
     panel->first_id = info->first_id;
     panel->mode = info->mode;
     panel->entries = info->entries;
     panel->entry_count = info->entry_count;
+    panel->item_count = visible_count;
     panel->items = info->item_storage;
     panel->item_capacity = info->item_capacity;
     panel->collection = info->collection;
@@ -115,7 +124,7 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     result = astra_interface_scroll_view_init(
         &controls[ASTRA_FILE_PANEL_SCROLL], &scroll);
     if (result != ASTRA_OK) return result;
-    result = file_panel_child(&controls[ASTRA_FILE_PANEL_SCROLL],
+    result = astra_panel_child(&controls[ASTRA_FILE_PANEL_SCROLL],
                               info->first_id, 1u);
     if (result != ASTRA_OK) return result;
     list.id = info->first_id + ASTRA_FILE_PANEL_LIST;
@@ -123,7 +132,7 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     result = astra_interface_list_init(&controls[ASTRA_FILE_PANEL_LIST],
                                        &list);
     if (result != ASTRA_OK) return result;
-    result = file_panel_child(&controls[ASTRA_FILE_PANEL_LIST],
+    result = astra_panel_child(&controls[ASTRA_FILE_PANEL_LIST],
                               info->first_id + ASTRA_FILE_PANEL_SCROLL, 0u);
     if (result != ASTRA_OK) return result;
 
@@ -139,7 +148,7 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
         result = astra_interface_field_init(
             &controls[ASTRA_FILE_PANEL_NAME], &field);
         if (result != ASTRA_OK) return result;
-        result = file_panel_child(&controls[ASTRA_FILE_PANEL_NAME],
+        result = astra_panel_child(&controls[ASTRA_FILE_PANEL_NAME],
                                   info->first_id, 0u);
     } else {
         result = file_panel_label(&controls[ASTRA_FILE_PANEL_NAME],
@@ -155,7 +164,7 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     result = astra_interface_container_init(
         &controls[ASTRA_FILE_PANEL_ACTIONS], &container);
     if (result != ASTRA_OK) return result;
-    result = file_panel_child(&controls[ASTRA_FILE_PANEL_ACTIONS],
+    result = astra_panel_child(&controls[ASTRA_FILE_PANEL_ACTIONS],
                               info->first_id, 0u);
     if (result != ASTRA_OK) return result;
     for (uint32_t at = ASTRA_FILE_PANEL_CANCEL;
@@ -169,7 +178,7 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
             ASTRA_BUTTON_PRIMARY : ASTRA_BUTTON_STANDARD;
         result = astra_interface_button_init(&controls[at], &button);
         if (result != ASTRA_OK) return result;
-        result = file_panel_child(&controls[at],
+        result = astra_panel_child(&controls[at],
             info->first_id + ASTRA_FILE_PANEL_ACTIONS, 0u);
         if (result != ASTRA_OK) return result;
     }
@@ -181,30 +190,60 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
     const AstraDirectoryEntry *entries, uint32_t entry_count,
     AstraCollectionItem *item_storage, uint32_t item_capacity)
 {
-    char next[ASTRA_VFS_PATH_MAX];
+    char *next;
+    const char *previous;
+    uint64_t previous_id;
     AstraResult result;
+    uint32_t visible_count = 0u;
 
     if (panel == NULL || panel->size < sizeof(*panel) || context == NULL ||
-        controls == NULL || !astra_string_copy(next, sizeof(next), directory) ||
-        next[0] == '\0' || item_storage == panel->items)
+        panel->first_id == 0u || panel->active_directory > 1u ||
+        controls == NULL ||
+        (item_storage == panel->items && panel->item_count != 0u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    next = panel->directory_storage[1u - panel->active_directory];
+    if (!astra_string_copy(next, ASTRA_VFS_PATH_MAX, directory) ||
+        next[0] == '\0')
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = file_panel_items(entries, entry_count, item_storage,
-                              item_capacity);
+        item_capacity, &visible_count);
+    if (result != ASTRA_OK) return result;
+    previous = panel->directory;
+    previous_id = panel->collection->selected_id;
+    result = astra_interface_control_set_text(context,
+        &controls[ASTRA_FILE_PANEL_LOCATION], next,
+        (uint32_t)strlen(next));
     if (result != ASTRA_OK) return result;
     result = astra_interface_list_set_items(context,
-        &controls[ASTRA_FILE_PANEL_LIST], item_storage, entry_count);
-    if (result != ASTRA_OK) return result;
+        &controls[ASTRA_FILE_PANEL_LIST], item_storage, visible_count);
+    if (result != ASTRA_OK) {
+        (void)astra_interface_control_set_text(context,
+            &controls[ASTRA_FILE_PANEL_LOCATION], previous,
+            (uint32_t)strlen(previous));
+        return result;
+    }
     result = astra_interface_control_set_value(context,
         &controls[ASTRA_FILE_PANEL_LIST], -1);
-    if (result != ASTRA_OK) return result;
-    if (!astra_string_copy(panel->directory, sizeof(panel->directory), next))
-        return ASTRA_ERROR_INVALID_ARGUMENT;
-    result = astra_interface_control_set_text(context,
-        &controls[ASTRA_FILE_PANEL_LOCATION], panel->directory,
-        (uint32_t)strlen(panel->directory));
-    if (result != ASTRA_OK) return result;
+    if (result != ASTRA_OK) {
+        (void)astra_interface_list_set_items(context,
+            &controls[ASTRA_FILE_PANEL_LIST], panel->items,
+            panel->item_count);
+        for (uint32_t at = 0u; at < panel->item_count; ++at)
+            if (panel->items[at].id == previous_id) {
+                (void)astra_interface_control_set_value(context,
+                    &controls[ASTRA_FILE_PANEL_LIST], at);
+                break;
+            }
+        (void)astra_interface_control_set_text(context,
+            &controls[ASTRA_FILE_PANEL_LOCATION], previous,
+            (uint32_t)strlen(previous));
+        return result;
+    }
+    panel->active_directory = 1u - panel->active_directory;
+    panel->directory = next;
     panel->entries = entries;
     panel->entry_count = entry_count;
+    panel->item_count = visible_count;
     panel->items = item_storage;
     panel->item_capacity = item_capacity;
     panel->leaf[0] = '\0';
@@ -285,9 +324,11 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
     if (action->control_id == panel->first_id + ASTRA_FILE_PANEL_LIST) {
         AstraResult result;
 
-        if (action->value < 0 || (uint64_t)action->value >= panel->entry_count)
+        if (action->value < 0 || (uint64_t)action->value >= panel->item_count)
             return ASTRA_ERROR_INVALID_ARGUMENT;
-        result = file_panel_select(panel, (uint32_t)action->value, outcome);
+        result = file_panel_select(panel,
+            (uint32_t)panel->items[(uint32_t)action->value].id - 1u,
+            outcome);
         if (result != ASTRA_OK || panel->mode == ASTRA_FILE_PANEL_OPEN ||
             *outcome == ASTRA_FILE_PANEL_NAVIGATE)
             return result;
