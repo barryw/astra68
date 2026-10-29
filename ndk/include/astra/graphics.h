@@ -556,6 +556,11 @@ ASTRA_NODISCARD AstraResult astra_draw_list_append_view(
  * to the same surface are allowed, so a Grid's parallel icon array may be
  * passed directly. The source array is borrowed only for this call. Existing
  * append_view accepts destination-only BLITs.
+ * @param draw_list Mutable session draw list.
+ * @param view Caller-owned draw-list view to append.
+ * @param sources Approved borrowed surface array, or NULL for zero sources.
+ * @param source_count Number of source entries.
+ * @return ASTRA_OK or validation/resource error.
  */
 ASTRA_NODISCARD AstraResult astra_draw_list_append_view_with_sources(
     AstraDrawList *draw_list, const AstraSurfaceView *view,
@@ -563,6 +568,12 @@ ASTRA_NODISCARD AstraResult astra_draw_list_append_view_with_sources(
 /** Record a hardware BLIT from a borrowed surface in a draw-list view.
  * Pass that surface to append_view_with_sources when submitting the view.
  * No pixels are copied through the CPU.
+ * @param view Draw-list surface view destination.
+ * @param source Borrowed hardware source surface.
+ * @param source_rect Source rectangle within the surface.
+ * @param destination_rect Destination rectangle in view coordinates.
+ * @param options Blit options, or NULL for a plain copy.
+ * @return Nonzero on success, zero on invalid input or insufficient room.
  */
 int astra_surface_draw_blit(AstraSurfaceView *view,
     const AstraSurface *source, const AstraRectI32 *source_rect,
