@@ -552,8 +552,10 @@ ASTRA_NODISCARD AstraResult astra_draw_list_append_view(
     AstraDrawList *draw_list, const AstraSurfaceView *view);
 /** Append a checked draw-list view containing borrowed-surface BLITs.
  * Every non-destination BLIT source must match one live surface in sources,
- * owned by the same window as draw_list. The source array is borrowed only
- * for this call. Existing append_view accepts destination-only BLITs.
+ * owned by the same window as draw_list. NULL entries and repeated references
+ * to the same surface are allowed, so a Grid's parallel icon array may be
+ * passed directly. The source array is borrowed only for this call. Existing
+ * append_view accepts destination-only BLITs.
  */
 ASTRA_NODISCARD AstraResult astra_draw_list_append_view_with_sources(
     AstraDrawList *draw_list, const AstraSurfaceView *view,

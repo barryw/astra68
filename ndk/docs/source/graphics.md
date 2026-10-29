@@ -53,7 +53,8 @@ returned surface when it is no longer needed.
 Retained draw-list views can record a borrowed hardware surface with
 `astra_surface_draw_blit`. Pass each such source in the approved surface array
 to `astra_draw_list_append_view_with_sources` when appending the view to a
-window draw list. The append call validates each handle against the draw
+window draw list. Sparse arrays and repeated references to one surface are
+accepted. The append call validates each handle against the draw
 list's window and checks every source rectangle before changing the list.
 `astra_draw_list_append_view` remains the destination-only form. Keep borrowed
 surfaces alive through the submitted list's fence, as with direct blits.
