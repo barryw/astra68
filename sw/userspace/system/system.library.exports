@@ -119,6 +119,9 @@ ASTRA_SYSTEM_4.0 {
         astra_window_create;
         astra_window_sheet_create;
         astra_window_menu_open_persistent;
+        astra_window_tooltip_show;
+        astra_window_notification_show;
+        astra_window_overlay_hide;
         astra_window_deactivate;
         astra_window_display;
         astra_window_event_try;

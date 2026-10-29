@@ -53,7 +53,7 @@ static AstraResult command(AstraWindow *window, uint32_t action,
     AstraResult result;
 
     if (!window_live(window) || action < ASTRA_GUI_WINDOW_QUERY ||
-        action > ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT ||
+        action > ASTRA_GUI_WINDOW_OVERLAY_HIDE ||
         (attachment != NULL && *attachment == ASTRA_INVALID_HANDLE) ||
         !astra_utf8_validate(title, title_length, 0u) ||
         title_length > ASTRA_WINDOW_TITLE_MAX)
@@ -533,6 +533,35 @@ AstraResult astra_window_menu_open_persistent(AstraWindow *window,
 {
     return send_menu_document(window, items, count, x, y, request,
                               ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT);
+}
+
+AstraResult astra_window_tooltip_show(AstraWindow *window,
+    const char *text, uint16_t length, uint16_t x, uint16_t y,
+    uint32_t duration_ms)
+{
+    AstraWindowFrame anchor = {x, y, 0u, 0u};
+
+    if (length == 0u || duration_ms > 30000u ||
+        (duration_ms != 0u && duration_ms < 1000u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return command(window, ASTRA_GUI_WINDOW_TOOLTIP_SHOW, &anchor,
+                   text, length, duration_ms, NULL, NULL);
+}
+
+AstraResult astra_window_notification_show(AstraWindow *window,
+    const char *text, uint16_t length, uint32_t duration_ms)
+{
+    if (length == 0u || duration_ms > 30000u ||
+        (duration_ms != 0u && duration_ms < 1000u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return command(window, ASTRA_GUI_WINDOW_NOTIFICATION_SHOW, NULL,
+                   text, length, duration_ms, NULL, NULL);
+}
+
+AstraResult astra_window_overlay_hide(AstraWindow *window)
+{
+    return command(window, ASTRA_GUI_WINDOW_OVERLAY_HIDE, NULL, NULL,
+                   0u, 0u, NULL, NULL);
 }
 
 AstraResult astra_window_menu_bar_set(AstraWindow *window,

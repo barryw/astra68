@@ -510,6 +510,12 @@ enum {
     ASTRA_GUI_WINDOW_MENU_BAR_CLEAR = 25u,
     /** Flat multi-selection menu; row results keep the overlay open. */
     ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT = 26u,
+    /** Passive display-owned callout anchored to client coordinates. */
+    ASTRA_GUI_WINDOW_TOOLTIP_SHOW = 27u,
+    /** Passive display-owned message at the work-area edge. */
+    ASTRA_GUI_WINDOW_NOTIFICATION_SHOW = 28u,
+    /** Dismiss this window's Tooltip or Notification. */
+    ASTRA_GUI_WINDOW_OVERLAY_HIDE = 29u,
 };
 
 /* AMNU v2: all fields big-endian. Header: magic, version, total bytes, row

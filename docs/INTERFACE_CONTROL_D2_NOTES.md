@@ -1,7 +1,6 @@
 # D2 overlay and container implementation notes
 
-Status: Form Row and parent-attached Sheet implemented. Tooltip and
-Notification remain open pending their shared passive-overlay lifecycle.
+Status: Form Row, parent-attached Sheet, Tooltip, and Notification implemented.
 
 ## Haiku read-only review
 
@@ -34,7 +33,7 @@ Installer, and Gallery builds pass. Label click-to-focus, right-aligned label
 text, and narrow-window stacking are still design gaps; they should be solved
 in shared Label/flex behavior rather than an application-specific painter.
 
-## Remaining lifecycle work
+## Shared lifecycle
 
 GUI protocol 26 carries a Sheet's parent window ID and generation when it
 opens. The display validates same-session ownership, keeps the Sheet attached
@@ -48,14 +47,17 @@ menu's checked state, reports each selection with
 `ASTRA_WINDOW_EVENT_CONTINUED`, and reports a terminal zero selection when
 dismissed. This shared menu lifecycle serves P1's Multi-select Popup.
 
-Tooltip and Notification should share display-owned placement, timeout,
-dismissal, and focus policy with the existing overlay machinery. The menu
-overlay currently assumes every overlay is a menu, and its `menu_end` closes
-global state. A generic overlay owner/renderer must be introduced before either
-new surface is accepted. P1's persistent multi-selection menu work must use
-the same lifecycle.
+Tooltip and Notification use the display service's overlay resource and scene
+layer rather than application windows. Both copy a bounded single-line UTF-8
+message, place it within the work area, and expire on display vblank. Tooltip
+waits 500 ms, is placed at a client-local anchor, and closes on pointer motion,
+keyboard activity, focus loss, owner close, or timeout. Notification appears
+immediately at the work-area edge and closes on a pointer click, owner close,
+explicit hide, or timeout. Neither captures input. A menu replaces either
+notice; a notice cannot displace an active menu. This shared overlay slot
+keeps placement and focus policy in the display service.
 
-Sheet needs a parent window identity on the GUI open contract, validation of
-same-session ownership, parent-relative placement and movement, parent-only
-modality, and teardown when the parent closes. It must not reuse the current
-session-wide `ASTRA_WINDOW_MODAL` behavior.
+Sheet does not reuse the session-wide `ASTRA_WINDOW_MODAL` flag. Its parent
+identity has no reparent operation, so stale or cross-session parent identities
+are rejected when it opens. A Sheet may be moved while retaining a relative
+offset; parent movement, minimize/restore, and close propagate to it.

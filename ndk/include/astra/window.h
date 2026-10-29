@@ -63,6 +63,38 @@ ASTRA_NODISCARD AstraResult astra_window_menu_open(AstraWindow *window,
 ASTRA_NODISCARD AstraResult astra_window_menu_open_persistent(
     AstraWindow *window, const struct AstraMenuItem *items, uint32_t count,
     int32_t x, int32_t y, uint32_t request);
+
+/** Show a display-owned Tooltip after the shared hover delay. Its anchor is
+ * client-local. Pointer motion, focus loss, owner close, explicit hide, or
+ * timeout dismisses it without changing input ownership.
+ * @param window Owning live window.
+ * @param text Counted single-line UTF-8, at most ASTRA_WINDOW_TITLE_MAX bytes.
+ * @param length Text byte count, excluding NUL.
+ * @param x Client-local anchor x.
+ * @param y Client-local anchor y.
+ * @param duration_ms Visible duration, 1000 to 30000; zero selects 5000.
+ * @return ASTRA_OK or a validation, permission, or service error.
+ */
+ASTRA_NODISCARD AstraResult astra_window_tooltip_show(AstraWindow *window,
+    const char *text, uint16_t length, uint16_t x, uint16_t y,
+    uint32_t duration_ms);
+/** Show a display-owned Notification at the work-area edge. It does not
+ * capture input. A new Notice replaces the previous one, unless a menu is
+ * active. Pointer click, owner close, explicit hide, or timeout dismisses it.
+ * @param window Owning live window.
+ * @param text Counted single-line UTF-8, at most ASTRA_WINDOW_TITLE_MAX bytes.
+ * @param length Text byte count, excluding NUL.
+ * @param duration_ms Visible duration, 1000 to 30000; zero selects 7000.
+ * @return ASTRA_OK or a validation, permission, or service error.
+ */
+ASTRA_NODISCARD AstraResult astra_window_notification_show(
+    AstraWindow *window, const char *text, uint16_t length,
+    uint32_t duration_ms);
+/** Dismiss this window's Tooltip or Notification, if present.
+ * @param window Owning live window.
+ * @return ASTRA_OK or a validation or service error.
+ */
+ASTRA_NODISCARD AstraResult astra_window_overlay_hide(AstraWindow *window);
 /** Dismiss this window's correlated menu. @param window Owning window. @param request Menu correlation token. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_window_menu_close(AstraWindow *window, uint32_t request);
 
