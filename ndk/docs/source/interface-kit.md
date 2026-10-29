@@ -19,7 +19,7 @@ bytes, use the display's shared overlay renderer, and leave input with the
 underlying window. `astra_window_overlay_hide` dismisses the caller's notice.
 An active menu takes priority over notices.
 
-`interface.library.9` is the shared implementation for native window controls,
+`interface.library.10` is the shared implementation for native window controls,
 integer flex layout, shared transient menus, TextSurface presentation, the typed
 system clipboard, and per-document undo histories. Applications call its
 versioned ELF symbols directly; they do not compile private Interface Kit
@@ -183,7 +183,7 @@ fixes behavior without breaking the ABI. A consumer links directly and records
 the oldest compatible version in its bundle manifest:
 
 ```c
-requires interface.library 9 9.0.0
+requires interface.library 10 10.0.0
 ```
 
 The linker records the ABI-major SONAME and required symbol versions. The
@@ -239,7 +239,7 @@ repeat after 400 ms; unavailable arrows remain visible but muted at a bound.
 All value changes return the same `ASTRA_UI_ACTION_VALUE_CHANGED` action.
 Numeric actions carry a signed 64-bit value; `decimal_places` is zero for
 integer controls and gives the Dial's fixed-point scale. The controls in the
-following example require `interface.library.9` version 9.0.0 or newer.
+following example require `interface.library.10` version 10.0.0 or newer.
 
 `astra_interface_collection_init` validates caller-owned UTF-8 items and
 unique, nonzero 64-bit IDs. Selection uses an item ID; zero means none.
@@ -360,7 +360,7 @@ of its descendants leave layout, rendering, hit testing, focus traversal, and
 animation together; applications do not maintain separate hidden states in
 each subsystem. `astra_interface_ui_set_state` reflows after a collapse change
 and clears any interaction owned by a descendant that left the active page. Tabs and
-collapsed containers require `interface.library.9` version 9.0.0 or newer.
+collapsed containers require `interface.library.10` version 10.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_tabs.c
 :language: c
@@ -380,7 +380,7 @@ Use a disclosure for optional settings that should reflow in place. The target
 must be an ordinary sibling container, which keeps the header reachable while
 its body is closed and prevents ambiguous ownership. State remains
 application-owned and can be restored by setting the target container before
-or after UI initialization. Disclosures require `interface.library.9` version
+or after UI initialization. Disclosures require `interface.library.10` version
 6.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_disclosure.c
@@ -421,7 +421,7 @@ the same transaction also selects the normal path. These are correctness
 fallbacks, not different application APIs.
 
 Scroll models, their bound views, and scrollbars require
-`interface.library.9` version 9.0.0 or newer.
+`interface.library.10` version 10.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_scroll.c
 :language: c
@@ -438,7 +438,7 @@ moves one logical pixel; Home and End move to the permitted extremes. The same
 live change is reported as `ASTRA_UI_ACTION_VALUE_CHANGED`, and
 `astra_interface_control_set_value` restores a saved first-pane extent.
 
-Splitters require `interface.library.9` version 9.0.0 or newer.
+Splitters require `interface.library.10` version 10.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_splitter.c
 :language: c
@@ -463,7 +463,7 @@ MC68040. The indicator's angular position is normalized internally; 0 through
 100 is not part of the public value contract. `astra_interface_control_get_value` and every
 value-change action return both the exact integer and its scale.
 
-Dials require `interface.library.9` version 9.0.0 or newer. Their indicator
+Dials require `interface.library.10` version 10.0.0 or newer. Their indicator
 uses Graphics Kit's shared
 clipped line primitive, which replays as a hardware line on draw-list surfaces.
 
@@ -499,7 +499,7 @@ together at vertical blank; the MC68040 does not paint or composite the
 pointer.
 
 Pointer-image APIs and automatic Interface Kit selection require
-`interface.library.9` version 9.0.0 or newer.
+`interface.library.10` version 10.0.0 or newer.
 
 ## Text models and fields
 
@@ -588,6 +588,24 @@ font, wraps by pixel width, and submits styled glyph runs to the hardware draw
 list. Flow rows grow to the adopted face's line box when it exceeds the theme
 control row height. TextSurface accepts grid, code, and flow modes; grid-specific hit testing
 and copying remain available only in grid mode.
+
+Interface Kit 10 binds one caller-owned Undo Manager to an editable Field or
+Text View with `astra_interface_text_undo_bind`. Give it separate, bounded
+history and scratch arenas; the latter must fit the largest single edit's old
+and new UTF-8 bytes plus the edit record. Binding initializes the manager and
+records typing, deletion, and programmatic replacement through one transaction
+path. `astra_interface_text_undo_undo` and `_redo` refresh the retained control;
+Command+Z and Command+Shift+Z use the same functions. Adjacent typing and
+deletions coalesce within 750 ms until the selection moves. When either arena
+cannot hold a transaction, the edit fails without changing the document or
+history. Secure Fields reject history binding so their contents cannot enter
+the undo arena. Call `_unbind` before destroying the model, control, context,
+or arenas. Clear history before externally changing a bound TextModel, then
+refresh the control. `AstraControl` gains a binding pointer, so ABI 10 replaces
+ABI 9 without a dual-layout path. Haiku's `src/kits/interface/TextView.cpp`
+and `src/kits/interface/textview_support/UndoBuffer.cpp` keep text undo at the shared control
+boundary; Astra adapts that ownership to fixed caller arenas and its existing
+typed Undo Manager.
 Flow submits adjacent scalars with the same appearance as bounded hardware
 text runs, keeping ordinary multiline documents within a retained window's
 draw-list command budget. Tabs retain their measured advance as separate runs.
@@ -739,7 +757,7 @@ render to its hardware surface, and use `astra_interface_inline_edit_text`
 on activation. Escape dismisses. The caller validates and saves the result;
 `astra_interface_inline_edit_stop` ends editing after commit or cancel.
 Desktop and Atlas use this same control for folder names. Both additions are
-exported by `interface.library.9`.
+exported by `interface.library.10`.
 
 ## Image View
 

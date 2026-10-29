@@ -135,12 +135,21 @@ uint32_t astra_surface_ui_text_width(const char *utf8, uint32_t length,
                                      uint16_t pixel_height);
 /** Measure a proportional run using the same designed strike selected by
  * ASTRA_TEXT_STYLE_* flags in hardware drawing. An adopted single-face AFNT
- * uses its installed strike for every emphasis flag. */
+ * uses its installed strike for every emphasis flag.
+ * @param utf8 UTF-8 bytes.
+ * @param length Byte count.
+ * @param pixel_height Nominal font height.
+ * @param style_flags ASTRA_TEXT_STYLE_* emphasis flags.
+ * @return Advance width in pixels. */
 uint32_t astra_surface_ui_text_width_styled(const char *utf8,
     uint32_t length, uint16_t pixel_height, uint32_t style_flags);
 /** Return draw-list command and payload requirements for a proportional UI
  * text run in the currently adopted font context. The payload includes the
- * installed face ID when the renderer emits NAMED_TEXT. */
+ * installed face ID when the renderer emits NAMED_TEXT.
+ * @param length UTF-8 byte count.
+ * @param commands Receives required draw-list command count.
+ * @param payload_bytes Receives required payload bytes.
+ * @return Nonzero when requirements are available, zero otherwise. */
 int astra_surface_ui_text_requirements(uint32_t length,
     uint32_t *commands, uint32_t *payload_bytes);
 /** Return the adopted UI face's line-box height for one exact strike.

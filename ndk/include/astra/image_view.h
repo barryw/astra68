@@ -31,13 +31,19 @@ enum {
 /** An ImageView composes the shared retained View. The image is a borrowed
  * window-owned Graphics Kit surface; keep it live while visible. */
 typedef struct AstraImageViewModel {
-    AstraViewModel view;
-    const AstraSurface *image;
-    AstraRectI32 source_rect;
-    uint32_t mode;
-    uint32_t reserved[2];
+    AstraViewModel view; /**< Embedded shared View model. */
+    const AstraSurface *image; /**< Borrowed source surface. */
+    AstraRectI32 source_rect; /**< Source rectangle in image pixels. */
+    uint32_t mode; /**< One ASTRA_IMAGE_VIEW_* placement mode. */
+    uint32_t reserved[2]; /**< Must be zero. */
 } AstraImageViewModel;
 
+/** Initialize an Image View model for hardware drawing.
+ * @param model Empty caller-owned model.
+ * @param image Borrowed source surface, kept live through rendering.
+ * @param source_rect Optional source rectangle; null selects the full image.
+ * @param mode One ASTRA_IMAGE_VIEW_* placement mode.
+ * @return ASTRA_OK or a validation error. */
 ASTRA_NODISCARD AstraResult astra_interface_image_view_model_init(
     AstraImageViewModel *model, const AstraSurface *image,
     const AstraRectI32 *source_rect, uint32_t mode);
