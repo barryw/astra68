@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-10-29
 
+AstraZ V6 checkpoint, 2026-10-29: focused DE25 install now opens Zork Zero
+with its companion Blorb. First visible frame shows the Banquet Hall artwork
+as a strip at the bottom of a mostly blank canvas; visual correctness is open.
+Screenshot SHA-256 `101e71501b4d7d11922ebae8f5db12610feaa3efe750fb50e737d0311e3a6fee`
+is at `/mnt/Documents/astra68/astraz-media-20261029/zork0-first.png` on
+Beast. GUI input is paused for user inspection. Shared Graphics Kit
+`astra_draw_list_append_view` now composes named-font text, after its initial
+rejection blocked every AstraZ frame; Beast system tests and library contract
+pass. Independent Z3/Z4/Z5/Z6/Z8 story, AIFF and MOD board gates remain open.
+AIFF first-pass probe exposed Blorblib's distinct FORM FilePos convention;
+AstraZ normalization is built for retest. MOD first-pass result is inconclusive
+because its installed SDL mixer was stale; corrected Kit build now matches
+the MOD-capable mixer and awaits board retest. No new board panic or
+spontaneous service restart occurred during these trials.
+
 Chocolate Quake bundle checkpoint, 2026-10-28: `ChocolateQuake.app` now has
 its own copper Q AICON, verified Quake 1.06 shareware `pak0.pak`, bundled
 license, and `.apps` inventory entry. The default image and recursive
