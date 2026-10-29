@@ -1352,7 +1352,7 @@ int astra_main(const AstraStartupInfo *startup)
     if (status == ASTRA_STATUS_OK) {
         window_info.flags = ASTRA_WINDOW_RESIZABLE;
         window_info.x = 460u;
-        window_info.y = 32u;
+        window_info.y = 64u;
         window_info.width = client_width;
         window_info.height = client_height;
         window_info.content_format = ASTRA_WINDOW_CONTENT_DRAW_LIST;
@@ -1364,11 +1364,24 @@ int astra_main(const AstraStartupInfo *startup)
                                  ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
                                  ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL |
                                  ASTRA_WINDOW_SUBSCRIBE_KEY;
-        if (astra_window_create(gui->handle, surface.area,
-                                &window_info, &window) != ASTRA_OK ||
-            astra_window_set_application_name(&window, "Fonts", 5u) !=
-                ASTRA_OK || astra_window_activate(&window) != ASTRA_OK)
+        AstraResult window_result = astra_window_create(gui->handle,
+            surface.area, &window_info, &window);
+        if (window_result != ASTRA_OK)
+            (void)astra_log_failure("fonts window create", (uint32_t)-window_result);
+        if (window_result == ASTRA_OK) {
+            window_result = astra_window_set_application_name(&window,
+                "Fonts", 5u);
+            if (window_result != ASTRA_OK)
+                (void)astra_log_failure("fonts window name", (uint32_t)-window_result);
+        }
+        if (window_result == ASTRA_OK) {
+            window_result = astra_window_activate(&window);
+            if (window_result != ASTRA_OK)
+                (void)astra_log_failure("fonts window activate", (uint32_t)-window_result);
+        }
+        if (window_result != ASTRA_OK) {
             status = FONTS_FAIL_WINDOW;
+        }
     }
     if (bootstrap != NULL) {
         (void)astra_service_ready(bootstrap->handle, status, NULL, 0u);

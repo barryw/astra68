@@ -34,6 +34,15 @@
 
 enum {
     GALLERY_TABS = 1u,
+    GALLERY_PAGE_SCROLL_INPUT,
+    GALLERY_PAGE_SCROLL_CHOICE,
+    GALLERY_PAGE_SCROLL_VALUE,
+    GALLERY_PAGE_SCROLL_PROGRESS,
+    GALLERY_PAGE_SCROLL_TEXT,
+    GALLERY_PAGE_SCROLL_LAYOUT,
+    GALLERY_PAGE_SCROLL_FIELDS,
+    GALLERY_PAGE_SCROLL_PANELS,
+    GALLERY_PAGE_SCROLL_DRAG,
     GALLERY_PAGE_INPUT,
     GALLERY_PAGE_CHOICE,
     GALLERY_PAGE_VALUE,
@@ -233,6 +242,7 @@ static uint8_t read_only_field_content[4096];
 static _Alignas(4) uint8_t read_only_field_metadata[8192];
 static AstraTextModel read_only_field_model = ASTRA_TEXT_MODEL_INIT;
 static AstraScrollModel gallery_scroll_model = ASTRA_SCROLL_MODEL_INIT;
+static AstraScrollModel page_scroll_models[9];
 static AstraScrollModel column_scrolls[2] = {
     ASTRA_SCROLL_MODEL_INIT, ASTRA_SCROLL_MODEL_INIT
 };
@@ -743,6 +753,25 @@ static uint32_t add_page(uint32_t index, uint32_t id, uint32_t state)
             ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
+static uint32_t add_page_scroll(uint32_t index, uint32_t id,
+                                AstraScrollModel *model, uint32_t state)
+{
+    AstraScrollModelInfo scroll = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
+
+    scroll.line_width = 8u;
+    scroll.line_height = 24u;
+    if (astra_scroll_init(model, &scroll) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    view.id = id;
+    view.state = state;
+    view.model = model;
+    view.preferred_width = GALLERY_WIDTH - 32u;
+    view.preferred_height = GALLERY_HEIGHT - 88u;
+    return astra_interface_scroll_view_init(&controls[index], &view) ==
+        ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+}
+
 static uint32_t add_stepper(uint32_t index, uint32_t id, int32_t value,
                             int32_t minimum, int32_t maximum, int32_t step)
 {
@@ -990,13 +1019,16 @@ static uint32_t select_page(int32_t selected)
     next = GALLERY_PAGE_INPUT + (uint32_t)selected;
     if (next == active_page) return ASTRA_STATUS_OK;
     if (astra_interface_ui_set_state(
-            &ui, GALLERY_CONTROL(active_page),
+            &ui, GALLERY_CONTROL(GALLERY_PAGE_SCROLL_INPUT +
+                active_page - GALLERY_PAGE_INPUT),
             ASTRA_CONTROL_COLLAPSED) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     if (astra_interface_ui_set_state(
-            &ui, GALLERY_CONTROL(next), 0u) != ASTRA_OK) {
+            &ui, GALLERY_CONTROL(GALLERY_PAGE_SCROLL_INPUT +
+                next - GALLERY_PAGE_INPUT), 0u) != ASTRA_OK) {
         (void)astra_interface_ui_set_state(
-            &ui, GALLERY_CONTROL(active_page), 0u);
+            &ui, GALLERY_CONTROL(GALLERY_PAGE_SCROLL_INPUT +
+                active_page - GALLERY_PAGE_INPUT), 0u);
         return GALLERY_FAIL_CONTROL;
     }
     active_page = next;
@@ -1018,9 +1050,14 @@ static uint32_t build_controls(void)
 
     for (uint32_t page = GALLERY_PAGE_INPUT;
          status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_DRAG; ++page)
-        status = add_page(page - 1u, page,
-                          page == GALLERY_PAGE_INPUT ? 0u :
-                          ASTRA_CONTROL_COLLAPSED);
+        status = add_page_scroll(
+            GALLERY_PAGE_SCROLL_INPUT + page - GALLERY_PAGE_INPUT - 1u,
+            GALLERY_PAGE_SCROLL_INPUT + page - GALLERY_PAGE_INPUT,
+            &page_scroll_models[page - GALLERY_PAGE_INPUT],
+            page == GALLERY_PAGE_INPUT ? 0u : ASTRA_CONTROL_COLLAPSED);
+    for (uint32_t page = GALLERY_PAGE_INPUT;
+         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_DRAG; ++page)
+        status = add_page(page - 1u, page, 0u);
     if (status == ASTRA_STATUS_OK)
         status = add_label(GALLERY_TEXT_LABEL - 1u, GALLERY_TEXT_LABEL,
                            "TEXT / UTF-8 / FALLBACK",
@@ -1603,7 +1640,19 @@ static uint32_t build_controls(void)
         status = set_item(GALLERY_TABS, 0u, 0u, 0u);
     for (uint32_t page = GALLERY_PAGE_INPUT;
          status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_DRAG; ++page)
-        status = set_item(page, 0u, 0u, 1u);
+        status = set_item(GALLERY_PAGE_SCROLL_INPUT +
+            page - GALLERY_PAGE_INPUT, 0u, ASTRA_FLEX_BREAK_AFTER, 1u);
+    for (uint32_t page = GALLERY_PAGE_INPUT;
+         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_DRAG; ++page) {
+        AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+
+        item.parent_id = GALLERY_PAGE_SCROLL_INPUT +
+            page - GALLERY_PAGE_INPUT;
+        item.minimum_width = GALLERY_WIDTH - 32u;
+        item.maximum_width = item.minimum_width;
+        status = astra_interface_control_set_flex(GALLERY_CONTROL(page),
+            &item) == ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+    }
 
 #define PAGE_ITEM(id, page, flags)                                      \
     do {                                                                \

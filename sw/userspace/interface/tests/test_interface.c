@@ -3764,6 +3764,53 @@ static void test_text_view_flow_batches_visible_runs(void)
     assert(text_calls == 2u);
 }
 
+static void test_wrapped_container_scroll_extent(void)
+{
+    AstraScrollModel model = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo model_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
+    AstraContainerInfo content = ASTRA_CONTAINER_INFO_INIT;
+    AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraFlexLayout root = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControl controls[8] = {0};
+    AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+    AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
+
+    assert(astra_scroll_init(&model, &model_info) == ASTRA_OK);
+    view.id = 1u;
+    view.model = &model;
+    view.preferred_width = 100u;
+    view.preferred_height = 40u;
+    assert(astra_interface_scroll_view_init(&controls[0], &view) == ASTRA_OK);
+    content.id = 2u;
+    content.layout.flags = ASTRA_FLEX_WRAP;
+    assert(astra_interface_container_init(&controls[1], &content) == ASTRA_OK);
+    item.parent_id = 1u;
+    item.minimum_width = 100u;
+    item.maximum_width = 100u;
+    assert(astra_interface_control_set_flex(&controls[1], &item) == ASTRA_OK);
+    label.text = "Item";
+    label.text_length = 4u;
+    for (uint32_t at = 2u; at < 8u; ++at) {
+        label.id = at + 1u;
+        assert(astra_interface_label_init(&controls[at], &label) == ASTRA_OK);
+        item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+        item.parent_id = 2u;
+        item.minimum_width = 45u;
+        item.maximum_width = 45u;
+        item.minimum_height = 24u;
+        item.maximum_height = 24u;
+        assert(astra_interface_control_set_flex(&controls[at], &item) ==
+               ASTRA_OK);
+    }
+    assert(astra_interface_ui_init(&ui, controls, 8u, 100u, 40u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&ui, &root) == ASTRA_OK);
+    assert(astra_scroll_get_state(&model, &state) == ASTRA_OK);
+    assert(state.content_height == 72u);
+    assert(state.maximum_y == 32u);
+}
+
 static void test_scroll_view_layout_and_wheel(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -5406,6 +5453,7 @@ int main(void)
     test_text_view_flow_batches_visible_runs();
     test_grid_view();
     test_custom_view();
+    test_wrapped_container_scroll_extent();
     test_scroll_view_layout_and_wheel();
     test_scroll_view_keyboard_listener();
     test_nested_scroll_chaining();

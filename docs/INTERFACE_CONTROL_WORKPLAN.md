@@ -1,6 +1,6 @@
 # Remaining Interface Kit controls
 
-Status: initial source audit and work split, 2026-10-29. Design authority: Controls chapter of
+Status: integrated ABI 10 and targeted DE25 trial, 2026-10-29. Design authority: Controls chapter of
 `~/Downloads/Astra Desktop (standalone).html`. Shipped-state authority:
 `ndk/include/astra/` and `sw/userspace/interface/src/`, not the HTML's old
 implementation notes or historical milestones in `INTERFACE_IMPLEMENTATION.md`.
@@ -20,8 +20,21 @@ on Beast. Text View and Field use one caller-owned undo manager; Gallery's
 editable Text View is bound to it. Fonts and Installer use the shared Open
 Panel, reusable directory snapshots, and caller-owned item storage. File
 Panel storage can grow through a validated rebind API without an application
-writing its internals. A targeted DE25 trial and final NDK distribution gate
-still qualify this checkpoint.
+writing its internals. Beast Interface Kit host tests, sanitizers, library
+contract, shipped-app tests, and NDK `dist-check` pass. Targeted DE25 install
+opens Gallery, Atlas, Fonts, and Installer with Interface ABI 10; Fonts and
+Installer display the shared Open Panel. Gallery Text View edit/undo/redo
+restored exact earlier frame hashes. Gallery's wrapped Choice page scrolls to
+its bottom controls after Interface Kit learned to measure a width-constrained
+wrapping Container. Evidence is archived under
+`/mnt/Documents/astra68/interface-controls-20261029/` on Beast: Gallery
+scrolled Choice frame SHA-256 `95bb44cf5437033ccbe0b78529795f2ef15609618843a5df68bd26908e43af1c`,
+Fonts main frame `710d594a28c0a2c9fba2e1467d917db506afcdedef87a49b05e72b8354ce0338`,
+Fonts Open Panel `3581aa324abefbbb46a7e1b7edd893505a78f168960a1d09b94dbf37b52db863`,
+and Installer Open Panel `a1df0e12da2b667b71c56bb735adf940516de61740dc33672d9c2ff8f3960154`.
+DE25 Astra, audio host, and remote desktop remain active with zero restarts.
+The selected full release image still predates this ABI 10 checkpoint; current
+DE25 trial uses targeted, persistent bundle and Kit installation.
 
 Remaining product-level gaps: the shared installed-font chooser does not own
 Fonts management actions; font-strike rows lack a per-item disabled state; and
@@ -176,3 +189,10 @@ fails. On `NAVIGATE` Installer loads the requested directory; on `PICKED` it
 copies the chosen path into
 caller storage, then reuses its existing Settings pane for review. Direct
 `.apkg` launch still enters that review pane.
+
+Gallery scrolling: Haiku's `src/kits/interface/ScrollView.cpp` owns one target
+view and lets its scroll bars move that view. Astra's Gallery now composes each
+page as one wrapped Container inside a shared ScrollView. Interface Kit
+measures width-constrained wrapping rows before setting the scroll extent, so
+the viewport reaches controls below the normal window height without a
+Gallery-only scrollbar or guessed content height.

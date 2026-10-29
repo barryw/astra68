@@ -2,13 +2,31 @@
 
 Status: active continuation map, 2026-10-29
 
+Interface Kit control-set checkpoint, 2026-10-29: all nine packages from the
+standalone desktop design audit have shared native implementations at Interface
+ABI 10. Fonts and Installer use the shared Open Panel; Atlas uses shared
+toolbar actions. Gallery Text View uses shared undo/redo. Width-constrained
+wrapped Containers now report their full height to ScrollView, making long
+Gallery pages reachable by wheel. Beast Interface Kit host tests, sanitizers,
+library contract, shipped-app tests, and NDK `dist-check` pass. Targeted DE25
+install opens Gallery, Atlas, Fonts, and Installer; Fonts and Installer show
+the shared Open Panel. Gallery Choice scroll reaches bottom controls; Gallery
+Text View undo/redo passed exact framebuffer restoration. Captures and raw
+SHA-256 evidence are under
+`/mnt/Documents/astra68/interface-controls-20261029/` on Beast. Board Astra,
+audio host, and remote desktop services remain active with zero restarts.
+Fonts initially failed because its requested y=32 was above the display work
+area at y=34; y=64 fixes launch. Full selected release image has not yet been
+rebuilt from ABI 10 sources. Remaining product integration choices are listed
+in `docs/INTERFACE_CONTROL_WORKPLAN.md`.
+
 Control-set continuation, 2026-10-29: source-based audit of the standalone
 desktop design's 50 concepts finds 20 available, six partial, and 24 absent.
 The dependency-ordered packages, shared ownership boundaries, and Haiku
 references are in `docs/INTERFACE_CONTROL_WORKPLAN.md`. The older
 `docs/INTERFACE_IMPLEMENTATION.md` is historical; its milestone status table
-is not current ABI 8 coverage. No control implementation or board image
-changed during this inventory.
+is not current coverage. This paragraph records the inventory before the
+ABI 10 implementation above.
 
 Interface Kit design-alignment checkpoint, 2026-10-29: compared the standalone
 desktop design's Controls chapter with shared native controls and DE25

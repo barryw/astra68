@@ -2918,6 +2918,60 @@ static AstraResult measure_container(const AstraUIContext *context,
 {
     const AstraControl *container = &context->_private_controls[index];
     const AstraFlexLayout *layout = &container->_private_child_layout;
+    if (layout->direction == ASTRA_FLEX_ROW &&
+        (layout->flags & ASTRA_FLEX_WRAP) != 0u &&
+        container->_private_minimum_width != 0u &&
+        container->_private_minimum_width ==
+            container->_private_maximum_width) {
+        uint32_t width = container->_private_maximum_width;
+        uint64_t padding = (uint64_t)layout->padding_left +
+                           layout->padding_right;
+        uint64_t available = width > padding ? width - padding : 0u;
+        uint64_t height = (uint64_t)layout->padding_top +
+                          layout->padding_bottom;
+        uint64_t line_width = 0u;
+        uint32_t line_height = 0u;
+        uint32_t line_count = 0u;
+
+        for (uint32_t at = next_layout_child(context,
+                 container->_private_first_child);
+             at != CONTROL_NONE;
+             at = next_layout_child(context,
+                 context->_private_controls[at]._private_next_sibling)) {
+            const AstraControl *child = &context->_private_controls[at];
+            uint32_t child_width = axis_base(child, 1);
+            uint32_t child_height = cross_base(child, 1);
+            uint64_t addition = child_width +
+                (line_count != 0u ? layout->main_gap : 0u);
+
+            if (line_count != 0u &&
+                ((child->_private_flex_flags & ASTRA_FLEX_BREAK_BEFORE) != 0u ||
+                 line_width + addition > available)) {
+                height += line_height + layout->cross_gap;
+                line_width = 0u;
+                line_height = 0u;
+                line_count = 0u;
+                addition = child_width;
+            }
+            line_width += addition;
+            if (child_height > line_height) line_height = child_height;
+            ++line_count;
+            if ((child->_private_flex_flags & ASTRA_FLEX_BREAK_AFTER) != 0u) {
+                height += line_height + layout->cross_gap;
+                line_width = 0u;
+                line_height = 0u;
+                line_count = 0u;
+            }
+        }
+        if (line_count != 0u) height += line_height;
+        else if (height > (uint64_t)layout->padding_top +
+                           layout->padding_bottom)
+            height -= layout->cross_gap;
+        if (height > UINT32_MAX) return ASTRA_ERROR_NO_RESOURCES;
+        size->width = width;
+        size->height = (uint32_t)height;
+        return ASTRA_OK;
+    }
     uint64_t main = layout->direction == ASTRA_FLEX_ROW ?
         (uint64_t)layout->padding_left + layout->padding_right :
         (uint64_t)layout->padding_top + layout->padding_bottom;

@@ -205,6 +205,15 @@ def click(connection, x, y):
     time.sleep(0.2)
 
 
+def wheel(connection, x, y, ticks):
+    send_pointer(connection, x, y)
+    for _ in range(abs(ticks)):
+        send_pointer(connection, x, y, 16 if ticks > 0 else 8)
+        send_pointer(connection, x, y)
+        time.sleep(0.05)
+    time.sleep(0.2)
+
+
 def drag(connection, x0, y0, x1, y1):
     send_pointer(connection, x0, y0)
     send_pointer(connection, x0, y0, 1)
@@ -262,6 +271,8 @@ def main():
                                 metavar=("X", "Y"), type=int)
     pointer_action.add_argument("--click", nargs=2,
                                 metavar=("X", "Y"), type=int)
+    pointer_action.add_argument("--wheel", nargs=3,
+                                metavar=("X", "Y", "TICKS"), type=int)
     pointer_action.add_argument("--drag", nargs=4,
                                 metavar=("X0", "Y0", "X1", "Y1"),
                                 type=int)
@@ -278,7 +289,12 @@ def main():
         arguments.verify_rfb_pointer)
     mover = None
     try:
-        coordinates = arguments.double_click or arguments.click or arguments.pointer
+        coordinates = (arguments.double_click or arguments.click or
+                       arguments.pointer)
+        if arguments.wheel is not None:
+            coordinates = arguments.wheel[:2]
+            if arguments.wheel[2] == 0 or abs(arguments.wheel[2]) > 100:
+                parser.error("wheel ticks must be between -100 and 100, excluding zero")
         if arguments.drag is not None:
             coordinates = arguments.drag
         frame = None
@@ -297,6 +313,8 @@ def main():
                 time.sleep(2)
             elif arguments.click:
                 click(connection, x, y)
+            elif arguments.wheel:
+                wheel(connection, x, y, arguments.wheel[2])
             elif arguments.drag:
                 drag(connection, *arguments.drag)
             else:
