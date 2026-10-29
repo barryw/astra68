@@ -7225,6 +7225,8 @@ static AstraResult text_selection(AstraUIContext *context, uint32_t index,
         selection.focus = focus;
         result = astra_text_model_set_selection(control_text_model(control), &selection);
         if (result != ASTRA_OK) return result;
+        if (control->_private_text_undo != NULL)
+            ++control->_private_text_undo->_private_sequence;
     }
     if (soft_end != 0u)
         control->_private_dynamic_state |= TEXT_VIEW_SOFT_END;
@@ -7324,26 +7326,341 @@ AstraResult astra_interface_text_view_find(AstraUIContext *context,
     return result;
 }
 
-static AstraResult field_replace_selection_internal(
-    AstraUIContext *context, uint32_t index, const char *replacement,
-    uint32_t replacement_bytes, AstraUIAction *action)
+typedef struct TextUndoEdit {
+    uint32_t start;
+    uint32_t removed_bytes;
+    uint32_t inserted_bytes;
+    uint32_t before_anchor;
+    uint32_t before_focus;
+    uint32_t after_anchor;
+    uint32_t after_focus;
+} TextUndoEdit;
+
+#define TEXT_UNDO_REPLACE 1u
+#define TEXT_UNDO_COALESCE_TYPE 1u
+#define TEXT_UNDO_COALESCE_BACKSPACE 2u
+#define TEXT_UNDO_COALESCE_DELETE 3u
+
+static int text_undo_ranges_overlap(const void *left, uint32_t left_bytes,
+                                    const void *right, uint32_t right_bytes)
+{
+    uintptr_t a = (uintptr_t)left;
+    uintptr_t b = (uintptr_t)right;
+
+    if (left_bytes == 0u || right_bytes == 0u) return 0;
+    if (a > UINTPTR_MAX - left_bytes || b > UINTPTR_MAX - right_bytes)
+        return 1;
+    return a < b + right_bytes && b < a + left_bytes;
+}
+
+static int text_undo_binding_valid(const AstraTextUndoBinding *binding)
+{
+    AstraUndoState state = ASTRA_UNDO_STATE_INIT;
+    const AstraTextModel *model;
+
+    if (binding == NULL ||
+        binding->_private_structure_size != sizeof(*binding) ||
+        binding->_private_context == NULL ||
+        binding->_private_control == NULL ||
+        binding->_private_manager == NULL ||
+        binding->_private_scratch == NULL ||
+        binding->_private_scratch_bytes < sizeof(TextUndoEdit) ||
+        !astra_words_zero(binding->_private_reserved, 3u) ||
+        binding->_private_control->_private_text_undo != binding ||
+        control_index(binding->_private_context,
+                      binding->_private_control) == CONTROL_NONE ||
+        astra_undo_get_state(binding->_private_manager, &state) != ASTRA_OK)
+        return 0;
+    model = const_control_text_model(binding->_private_control);
+    return !text_undo_ranges_overlap(binding->_private_scratch,
+            binding->_private_scratch_bytes, model->_private_content,
+            model->_private_content_capacity) &&
+        !text_undo_ranges_overlap(binding->_private_scratch,
+            binding->_private_scratch_bytes, model->_private_metadata,
+            model->_private_metadata_capacity) &&
+        !text_undo_ranges_overlap(binding->_private_manager->_private_arena,
+            binding->_private_manager->_private_capacity,
+            model->_private_content, model->_private_content_capacity) &&
+        !text_undo_ranges_overlap(binding->_private_manager->_private_arena,
+            binding->_private_manager->_private_capacity,
+            model->_private_metadata, model->_private_metadata_capacity);
+}
+
+static int text_undo_span_equal(const AstraTextModel *model, uint32_t start,
+                                const char *expected, uint32_t bytes)
+{
+    uint32_t offset = start;
+    uint32_t compared = 0u;
+
+    while (compared != bytes) {
+        const char *text = NULL;
+        uint32_t available = 0u;
+        uint32_t count;
+
+        if (astra_text_model_read(model, offset, &text, &available) !=
+                ASTRA_OK || available == 0u || text == NULL)
+            return 0;
+        count = available < bytes - compared ? available : bytes - compared;
+        if (memcmp(text, expected + compared, count) != 0) return 0;
+        offset += count;
+        compared += count;
+    }
+    return 1;
+}
+
+static AstraResult text_undo_apply(void *opaque, uint32_t operation,
+                                   uint32_t direction, const void *payload,
+                                   uint32_t payload_bytes)
+{
+    AstraTextUndoBinding *binding = opaque;
+    TextUndoEdit edit;
+    AstraTextModel *model;
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    AstraTextSelection selection = ASTRA_TEXT_SELECTION_INIT;
+    const char *old_text;
+    const char *new_text;
+    const char *expected;
+    const char *replacement;
+    uint32_t expected_bytes;
+    uint32_t replacement_bytes;
+
+    if (!text_undo_binding_valid(binding) ||
+        operation != TEXT_UNDO_REPLACE ||
+        (direction != ASTRA_UNDO_DIRECTION_UNDO &&
+         direction != ASTRA_UNDO_DIRECTION_REDO) ||
+        payload == NULL || payload_bytes < sizeof(edit))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if ((binding->_private_control->_private_style & ASTRA_FIELD_READ_ONLY) != 0u)
+        return ASTRA_ERROR_PERMISSION;
+    memcpy(&edit, payload, sizeof(edit));
+    if ((uint64_t)sizeof(edit) + edit.removed_bytes + edit.inserted_bytes !=
+        payload_bytes) return ASTRA_ERROR_INVALID_ARGUMENT;
+    old_text = (const char *)payload + sizeof(edit);
+    new_text = old_text + edit.removed_bytes;
+    expected = direction == ASTRA_UNDO_DIRECTION_UNDO ? new_text : old_text;
+    expected_bytes = direction == ASTRA_UNDO_DIRECTION_UNDO ?
+        edit.inserted_bytes : edit.removed_bytes;
+    replacement = direction == ASTRA_UNDO_DIRECTION_UNDO ? old_text : new_text;
+    replacement_bytes = direction == ASTRA_UNDO_DIRECTION_UNDO ?
+        edit.removed_bytes : edit.inserted_bytes;
+    model = control_text_model(binding->_private_control);
+    if (astra_text_model_get_state(model, &state) != ASTRA_OK ||
+        edit.start > state.text_bytes ||
+        expected_bytes > state.text_bytes - edit.start ||
+        !text_undo_span_equal(model, edit.start, expected, expected_bytes))
+        return ASTRA_ERROR_BUSY;
+    selection.anchor = direction == ASTRA_UNDO_DIRECTION_UNDO ?
+        edit.before_anchor : edit.after_anchor;
+    selection.focus = direction == ASTRA_UNDO_DIRECTION_UNDO ?
+        edit.before_focus : edit.after_focus;
+    if ((uint64_t)state.text_bytes - expected_bytes + replacement_bytes >
+            UINT32_MAX ||
+        selection.anchor > (uint64_t)state.text_bytes - expected_bytes +
+                               replacement_bytes ||
+        selection.focus > (uint64_t)state.text_bytes - expected_bytes +
+                              replacement_bytes)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraResult result = astra_text_model_replace(model, edit.start,
+        edit.start + expected_bytes, replacement, replacement_bytes);
+    if (result != ASTRA_OK) return result;
+    return astra_text_model_set_selection(model, &selection);
+}
+
+AstraResult astra_interface_text_undo_bind(AstraTextUndoBinding *binding,
+    AstraUIContext *context, AstraControl *control, AstraUndoManager *manager,
+    void *history_arena, uint32_t history_bytes,
+    void *scratch, uint32_t scratch_bytes)
+{
+    AstraUndoManagerInfo info = ASTRA_UNDO_MANAGER_INFO_INIT;
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    AstraResult result;
+
+    if (binding == NULL || binding->_private_structure_size !=
+            sizeof(*binding) || binding->_private_context != NULL ||
+        !astra_words_zero(binding->_private_reserved, 3u) ||
+        control_index(context, control) == CONTROL_NONE ||
+        (control->_private_control_kind != ASTRA_CONTROL_FIELD &&
+         control->_private_control_kind != ASTRA_CONTROL_TEXT_VIEW) ||
+        (control->_private_style & (ASTRA_FIELD_READ_ONLY |
+                                    ASTRA_FIELD_SECURE)) != 0u ||
+        control->_private_text_undo != NULL || manager == NULL ||
+        history_arena == NULL || history_bytes == 0u ||
+        scratch == NULL || scratch_bytes < sizeof(TextUndoEdit) ||
+        text_undo_ranges_overlap(history_arena, history_bytes,
+                                 binding, sizeof(*binding)) ||
+        text_undo_ranges_overlap(history_arena, history_bytes,
+                                 manager, sizeof(*manager)) ||
+        text_undo_ranges_overlap(history_arena, history_bytes,
+                                 control, sizeof(*control)) ||
+        text_undo_ranges_overlap(scratch, scratch_bytes,
+                                 binding, sizeof(*binding)) ||
+        text_undo_ranges_overlap(scratch, scratch_bytes,
+                                 manager, sizeof(*manager)) ||
+        text_undo_ranges_overlap(scratch, scratch_bytes,
+                                 control, sizeof(*control)) ||
+        text_undo_ranges_overlap(history_arena, history_bytes,
+                                 scratch, scratch_bytes) ||
+        astra_text_model_get_state(control_text_model(control), &state) !=
+            ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (text_undo_ranges_overlap(history_arena, history_bytes,
+            control_text_model(control)->_private_content,
+            control_text_model(control)->_private_content_capacity) ||
+        text_undo_ranges_overlap(history_arena, history_bytes,
+            control_text_model(control)->_private_metadata,
+            control_text_model(control)->_private_metadata_capacity) ||
+        text_undo_ranges_overlap(scratch, scratch_bytes,
+            control_text_model(control)->_private_content,
+            control_text_model(control)->_private_content_capacity) ||
+        text_undo_ranges_overlap(scratch, scratch_bytes,
+            control_text_model(control)->_private_metadata,
+            control_text_model(control)->_private_metadata_capacity))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    binding->_private_context = context;
+    binding->_private_control = control;
+    binding->_private_manager = manager;
+    binding->_private_scratch = scratch;
+    binding->_private_scratch_bytes = scratch_bytes;
+    binding->_private_sequence = 1u;
+    info.arena = history_arena;
+    info.arena_bytes = history_bytes;
+    info.coalesce_interval_ns = UINT64_C(750000000);
+    info.apply = text_undo_apply;
+    info.context = binding;
+    result = astra_undo_init(manager, &info);
+    if (result != ASTRA_OK) {
+        *binding = (AstraTextUndoBinding)ASTRA_TEXT_UNDO_BINDING_INIT;
+        return result;
+    }
+    control->_private_text_undo = binding;
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_text_undo_unbind(AstraTextUndoBinding *binding)
+{
+    AstraResult result;
+
+    if (!text_undo_binding_valid(binding))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_undo_clear(binding->_private_manager);
+    if (result != ASTRA_OK) return result;
+    memset(binding->_private_scratch, 0, binding->_private_scratch_bytes);
+    binding->_private_control->_private_text_undo = NULL;
+    *binding->_private_manager = (AstraUndoManager)ASTRA_UNDO_MANAGER_INIT;
+    *binding = (AstraTextUndoBinding)ASTRA_TEXT_UNDO_BINDING_INIT;
+    return ASTRA_OK;
+}
+
+static AstraResult text_undo_refresh(AstraTextUndoBinding *binding)
+{
+    AstraControl *control = binding->_private_control;
+    if (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW)
+        return astra_interface_text_view_refresh(binding->_private_context,
+                                                 control);
+    return astra_interface_field_refresh(binding->_private_context, control);
+}
+
+AstraResult astra_interface_text_undo_undo(AstraTextUndoBinding *binding)
+{
+    AstraResult result;
+    if (!text_undo_binding_valid(binding))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_undo_undo(binding->_private_manager);
+    return result == ASTRA_OK ? text_undo_refresh(binding) : result;
+}
+
+AstraResult astra_interface_text_undo_redo(AstraTextUndoBinding *binding)
+{
+    AstraResult result;
+    if (!text_undo_binding_valid(binding))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_undo_redo(binding->_private_manager);
+    return result == ASTRA_OK ? text_undo_refresh(binding) : result;
+}
+
+static AstraResult text_undo_perform_edit(AstraTextUndoBinding *binding,
+    uint32_t start, uint32_t end, AstraTextSelection before,
+    const char *replacement, uint32_t replacement_bytes,
+    uint32_t timestamp_ms, uint32_t coalesce_kind)
+{
+    static const char typing_name[] = "Typing";
+    static const char delete_name[] = "Delete";
+    static const char replace_name[] = "Replace";
+    AstraUndoAction action = ASTRA_UNDO_ACTION_INIT;
+    AstraUndoGroupInfo group = ASTRA_UNDO_GROUP_INFO_INIT;
+    TextUndoEdit edit = {0};
+    uint32_t copied = 0u;
+    uint64_t payload_bytes;
+    uint8_t *scratch;
+
+    if (!text_undo_binding_valid(binding) || start > end ||
+        start > UINT32_MAX - replacement_bytes ||
+        (replacement_bytes != 0u && replacement == NULL))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    payload_bytes = (uint64_t)sizeof(edit) + (end - start) +
+                    replacement_bytes;
+    if (payload_bytes > binding->_private_scratch_bytes ||
+        payload_bytes > UINT32_MAX ||
+        text_undo_ranges_overlap(binding->_private_scratch,
+            binding->_private_scratch_bytes, replacement, replacement_bytes))
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    edit.start = start;
+    edit.removed_bytes = end - start;
+    edit.inserted_bytes = replacement_bytes;
+    edit.before_anchor = before.anchor;
+    edit.before_focus = before.focus;
+    edit.after_anchor = start + replacement_bytes;
+    edit.after_focus = edit.after_anchor;
+    scratch = binding->_private_scratch;
+    memcpy(scratch, &edit, sizeof(edit));
+    AstraResult result = astra_text_model_copy(
+        control_text_model(binding->_private_control), start, end,
+        (char *)scratch + sizeof(edit), end - start, &copied);
+    if (result != ASTRA_OK) return result;
+    if (copied != end - start) return ASTRA_ERROR_IO;
+    if (replacement_bytes != 0u)
+        memcpy(scratch + sizeof(edit) + copied, replacement,
+               replacement_bytes);
+    action.operation = TEXT_UNDO_REPLACE;
+    action.payload = scratch;
+    action.payload_bytes = (uint32_t)payload_bytes;
+    group.actions = &action;
+    group.action_count = 1u;
+    group.name = coalesce_kind == TEXT_UNDO_COALESCE_TYPE ? typing_name :
+        (coalesce_kind != 0u ? delete_name : replace_name);
+    group.name_length = (uint32_t)strlen(group.name);
+    group.timestamp_ns = (uint64_t)timestamp_ms * UINT64_C(1000000);
+    if (coalesce_kind != 0u && before.anchor == before.focus) {
+        group.coalesce_id = (binding->_private_sequence << 2) |
+                            coalesce_kind;
+        if (group.coalesce_id == 0u) group.coalesce_id = coalesce_kind;
+    }
+    return astra_undo_perform_group(binding->_private_manager, &group);
+}
+
+static AstraResult field_replace_range_internal(
+    AstraUIContext *context, uint32_t index, uint32_t start, uint32_t end,
+    AstraTextSelection before, const char *replacement,
+    uint32_t replacement_bytes, uint32_t timestamp_ms,
+    uint32_t coalesce_kind, AstraUIAction *action)
 {
     AstraControl *control = &context->_private_controls[index];
     AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
-    uint32_t start;
-    uint32_t end;
     AstraResult result;
 
     if ((control->_private_style & ASTRA_FIELD_READ_ONLY) != 0u)
         return ASTRA_OK;
     if (astra_text_model_get_state(control_text_model(control), &state) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    start = state.selection.anchor < state.selection.focus ?
-        state.selection.anchor : state.selection.focus;
-    end = state.selection.anchor > state.selection.focus ?
-        state.selection.anchor : state.selection.focus;
-    result = astra_text_model_replace(control_text_model(control), start, end,
-                                      replacement, replacement_bytes);
+    if (start > end || end > state.text_bytes)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (control->_private_text_undo != NULL)
+        result = text_undo_perform_edit(control->_private_text_undo,
+            start, end, before, replacement, replacement_bytes,
+            timestamp_ms, coalesce_kind);
+    else
+        result = astra_text_model_replace(control_text_model(control),
+            start, end, replacement, replacement_bytes);
     if (result != ASTRA_OK)
         return result;
     if (astra_text_model_get_state(control_text_model(control), &state) != ASTRA_OK)
@@ -7363,6 +7680,27 @@ static AstraResult field_replace_selection_internal(
     return ASTRA_OK;
 }
 
+static AstraResult field_replace_selection_internal(
+    AstraUIContext *context, uint32_t index, const char *replacement,
+    uint32_t replacement_bytes, uint32_t timestamp_ms,
+    uint32_t coalesce_kind, AstraUIAction *action)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    uint32_t start;
+    uint32_t end;
+
+    if (astra_text_model_get_state(control_text_model(
+            &context->_private_controls[index]), &state) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    start = state.selection.anchor < state.selection.focus ?
+        state.selection.anchor : state.selection.focus;
+    end = state.selection.anchor > state.selection.focus ?
+        state.selection.anchor : state.selection.focus;
+    return field_replace_range_internal(context, index, start, end,
+        state.selection, replacement, replacement_bytes, timestamp_ms,
+        coalesce_kind, action);
+}
+
 AstraResult astra_interface_field_replace_selection(
     AstraUIContext *context, AstraControl *control,
     const char *replacement, uint32_t replacement_bytes)
@@ -7377,7 +7715,7 @@ AstraResult astra_interface_field_replace_selection(
     if ((control->_private_style & ASTRA_FIELD_READ_ONLY) != 0u)
         return ASTRA_ERROR_PERMISSION;
     return field_replace_selection_internal(
-        context, index, replacement, replacement_bytes, &ignored);
+        context, index, replacement, replacement_bytes, 0u, 0u, &ignored);
 }
 
 AstraResult astra_interface_text_view_replace_selection(
@@ -7392,15 +7730,15 @@ AstraResult astra_interface_text_view_replace_selection(
     if ((control->_private_style & ASTRA_FIELD_READ_ONLY) != 0u)
         return ASTRA_ERROR_PERMISSION;
     return field_replace_selection_internal(context, index,
-        replacement, replacement_bytes, &ignored);
+        replacement, replacement_bytes, 0u, 0u, &ignored);
 }
 
 static AstraResult field_delete(AstraUIContext *context, uint32_t index,
-                                int backwards, AstraUIAction *action)
+                                int backwards, uint32_t timestamp_ms,
+                                AstraUIAction *action)
 {
     AstraControl *control = &context->_private_controls[index];
     AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
-    AstraTextSelection selection = ASTRA_TEXT_SELECTION_INIT;
     uint32_t start;
     uint32_t end;
     AstraResult result;
@@ -7425,15 +7763,11 @@ static AstraResult field_delete(AstraUIContext *context, uint32_t index,
             return ASTRA_OK;
         if (result != ASTRA_OK)
             return result;
-        selection.anchor = start;
-        selection.focus = end;
-        result = astra_text_model_set_selection(control_text_model(control),
-                                                &selection);
-        if (result != ASTRA_OK)
-            return result;
     }
-    return field_replace_selection_internal(
-        context, index, NULL, 0u, action);
+    return field_replace_range_internal(context, index, start, end,
+        state.selection, NULL, 0u, timestamp_ms,
+        backwards ? TEXT_UNDO_COALESCE_BACKSPACE :
+                    TEXT_UNDO_COALESCE_DELETE, action);
 }
 
 static AstraResult text_key(AstraUIContext *context, uint32_t index,
@@ -7461,10 +7795,22 @@ static AstraResult text_key(AstraUIContext *context, uint32_t index,
                                 0u, action);
         if (result != ASTRA_OK) return result;
         return field_replace_selection_internal(context, index, NULL, 0u,
+                                                event->timestamp_ms, 0u,
                                                 action);
     }
     if ((modifiers & ASTRA_INPUT_MOD_META) != 0u &&
         (modifiers & ASTRA_INPUT_MOD_CTRL) == 0u) {
+        if (usage == 0x1du && control->_private_text_undo != NULL &&
+            (control->_private_style & ASTRA_FIELD_READ_ONLY) == 0u) {
+            result = shift ? astra_interface_text_undo_redo(
+                control->_private_text_undo) : astra_interface_text_undo_undo(
+                control->_private_text_undo);
+            if (result == ASTRA_ERROR_NOT_PRESENT) return ASTRA_OK;
+            if (result != ASTRA_OK) return result;
+            action->type = ASTRA_UI_ACTION_TEXT_CHANGED;
+            action->control_id = control->_private_id;
+            return ASTRA_OK;
+        }
         if (usage == 0x04u)
             return text_selection(context, index, 0u, state.text_bytes,
                                    0u, action);
@@ -7490,7 +7836,7 @@ static AstraResult text_key(AstraUIContext *context, uint32_t index,
     if (usage == 0x28u || usage == 0x58u) {
         if (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW)
             return field_replace_selection_internal(context, index,
-                "\n", 1u, action);
+                "\n", 1u, event->timestamp_ms, 0u, action);
         if ((event->flags & ASTRA_WINDOW_EVENT_REPEAT) == 0u) {
             action->type = ASTRA_UI_ACTION_ACTIVATE;
             action->control_id = control->_private_id;
@@ -7498,9 +7844,9 @@ static AstraResult text_key(AstraUIContext *context, uint32_t index,
         return ASTRA_OK;
     }
     if (usage == 0x2au)
-        return field_delete(context, index, 1, action);
+        return field_delete(context, index, 1, event->timestamp_ms, action);
     if (usage == 0x4cu)
-        return field_delete(context, index, 0, action);
+        return field_delete(context, index, 0, event->timestamp_ms, action);
     anchor = state.selection.anchor;
     focus = state.selection.focus;
     if (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW &&
@@ -7614,7 +7960,8 @@ static AstraResult field_text(AstraUIContext *context, uint32_t index,
         return ASTRA_OK;
     bytes = astra_utf8_encode(scalar, encoded);
     return field_replace_selection_internal(
-        context, index, encoded, bytes, action);
+        context, index, encoded, bytes, event->timestamp_ms,
+        TEXT_UNDO_COALESCE_TYPE, action);
 }
 
 typedef struct ScrollCopy {
@@ -8179,7 +8526,8 @@ static AstraResult pointer_event(AstraUIContext *context,
                         field_state.text_bytes, 0u, action);
                     if (result != ASTRA_OK) return result;
                     return field_replace_selection_internal(
-                        context, hit, NULL, 0u, action);
+                        context, hit, NULL, 0u, event->timestamp_ms, 0u,
+                        action);
                 }
             }
             result = text_selection(context, hit, position, position,
@@ -8851,7 +9199,7 @@ AstraResult astra_interface_ui_handle_event(AstraUIContext *context,
         uint32_t kind = context->_private_controls[index]
                             ._private_control_kind;
 
-        if (kind == ASTRA_CONTROL_FIELD)
+        if (kind == ASTRA_CONTROL_FIELD || kind == ASTRA_CONTROL_TEXT_VIEW)
             return field_text(context, index, event, action);
         if (kind == ASTRA_CONTROL_STEPPER) {
             if (!astra_unicode_scalar_valid(event->data.text.codepoint))

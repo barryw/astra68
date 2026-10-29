@@ -1,4 +1,4 @@
-ASTRA_INTERFACE_9.0 {
+ASTRA_INTERFACE_10.0 {
     global:
         astra_interface_menu_init;
         astra_interface_menu_get_state;
@@ -112,6 +112,10 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_text_view_set_wrap_width;
         astra_interface_text_view_set_mode;
         astra_interface_text_view_set_editable;
+        astra_interface_text_undo_bind;
+        astra_interface_text_undo_unbind;
+        astra_interface_text_undo_undo;
+        astra_interface_text_undo_redo;
         astra_interface_text_view_set_line_numbers;
         astra_interface_text_view_replace_selection;
         astra_interface_text_view_select;

@@ -19,8 +19,8 @@ void astra_interface_test_paint(AstraSurfaceView *surface,
                                 const AstraAlertInfo *info);
 void astra_interface_test_layout(void);
 
-_Static_assert(sizeof(AstraControl) == (sizeof(void *) == 4u ? 292u : 320u),
-               "Display model slot must be included in Interface ABI 9");
+_Static_assert(sizeof(AstraControl) == (sizeof(void *) == 4u ? 296u : 328u),
+               "Text Undo binding slot must be included in Interface ABI 10");
 _Static_assert(sizeof(AstraUIContext) ==
                    (sizeof(void *) == 4u ? 168u : 176u),
                "AstraUIContext ABI 8 layout changed; bump the ABI major");
@@ -3587,6 +3587,150 @@ static void test_text_view_flow_edit_find(void)
     font_line_height = 0u;
 }
 
+static void assert_text_undo_document(const AstraTextModel *model,
+                                      const char *expected)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    char copied[64];
+    uint32_t bytes = 0u;
+    uint32_t length = (uint32_t)strlen(expected);
+
+    assert(astra_text_model_get_state(model, &state) == ASTRA_OK);
+    assert(state.text_bytes == length && length <= sizeof(copied));
+    assert(astra_text_model_copy(model, 0u, length, copied,
+        sizeof(copied), &bytes) == ASTRA_OK && bytes == length);
+    assert(memcmp(copied, expected, length) == 0);
+}
+
+static void test_text_undo_binding(void)
+{
+    static const char source[] = "abc";
+    uint8_t content[256];
+    _Alignas(4) uint8_t metadata[512];
+    _Alignas(4) uint8_t history[1024];
+    _Alignas(4) uint8_t tiny_history[32];
+    uint8_t scratch[64];
+    AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo model_info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextModelState model_state = ASTRA_TEXT_MODEL_STATE_INIT;
+    AstraTextViewInfo text_info = ASTRA_TEXT_VIEW_INFO_INIT;
+    AstraTextUndoBinding binding = ASTRA_TEXT_UNDO_BINDING_INIT;
+    AstraUndoManager manager = ASTRA_UNDO_MANAGER_INIT;
+    AstraUndoState history_state = ASTRA_UNDO_STATE_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraWindowEvent event;
+    char oversized[40];
+
+    model_info.text = source;
+    model_info.text_bytes = sizeof(source) - 1u;
+    model_info.content_arena = content;
+    model_info.content_arena_bytes = sizeof(content);
+    model_info.metadata_arena = metadata;
+    model_info.metadata_arena_bytes = sizeof(metadata);
+    assert(astra_text_model_init(&model, &model_info) == ASTRA_OK);
+    text_info.id = 1u;
+    text_info.model = &model;
+    assert(astra_interface_text_view_init(&control, &text_info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 320u, 100u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_text_view_set_editable(&context, &control, 1u) == ASTRA_OK);
+    assert(astra_interface_ui_focus_control(&context, 1u) == ASTRA_OK);
+    assert(astra_interface_text_view_select(&context, &control, 3u, 3u) == ASTRA_OK);
+    assert(astra_interface_text_undo_bind(&binding, &context, &control,
+        &manager, history, sizeof(history), history, sizeof(history)) ==
+        ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_text_undo_bind(&binding, &context, &control,
+        &manager, history, sizeof(history), scratch, sizeof(scratch)) == ASTRA_OK);
+    event = text_event('x');
+    event.timestamp_ms = 1000u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK &&
+        action.type == ASTRA_UI_ACTION_TEXT_CHANGED);
+    event = text_event('y');
+    event.timestamp_ms = 1100u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK &&
+        action.type == ASTRA_UI_ACTION_TEXT_CHANGED);
+    assert_text_undo_document(&model, "abcxy");
+    assert(astra_undo_get_state(&manager, &history_state) == ASTRA_OK &&
+        history_state.group_count == 1u &&
+        history_state.applied_group_count == 1u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x1du, ASTRA_INPUT_MOD_META);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK &&
+        action.type == ASTRA_UI_ACTION_TEXT_CHANGED);
+    assert_text_undo_document(&model, "abc");
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x1du,
+        ASTRA_INPUT_MOD_META | ASTRA_INPUT_MOD_SHIFT);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK &&
+        action.type == ASTRA_UI_ACTION_TEXT_CHANGED);
+    assert_text_undo_document(&model, "abcxy");
+    assert(astra_interface_text_view_select(&context, &control, 1u, 3u) == ASTRA_OK);
+    assert(astra_interface_text_view_replace_selection(&context, &control,
+        "BC", 2u) == ASTRA_OK);
+    assert_text_undo_document(&model, "aBCxy");
+    assert(astra_interface_text_undo_undo(&binding) == ASTRA_OK);
+    assert_text_undo_document(&model, "abcxy");
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+        model_state.selection.anchor == 1u &&
+        model_state.selection.focus == 3u);
+    assert(astra_interface_text_undo_redo(&binding) == ASTRA_OK);
+    assert_text_undo_document(&model, "aBCxy");
+    memset(oversized, 'q', sizeof(oversized));
+    assert(astra_interface_text_view_select(&context, &control, 0u, 5u) == ASTRA_OK);
+    assert(astra_interface_text_view_replace_selection(&context, &control,
+        oversized, sizeof(oversized)) == ASTRA_ERROR_BUFFER_TOO_SMALL);
+    assert_text_undo_document(&model, "aBCxy");
+    assert(astra_text_model_replace(&model, 1u, 2u, "Z", 1u) == ASTRA_OK);
+    assert(astra_interface_text_undo_undo(&binding) == ASTRA_ERROR_BUSY);
+    assert_text_undo_document(&model, "aZCxy");
+    assert(astra_interface_text_undo_unbind(&binding) == ASTRA_OK);
+    assert(control._private_text_undo == NULL);
+
+    AstraControl field = ASTRA_CONTROL_INIT;
+    AstraUIContext field_context = ASTRA_UI_CONTEXT_INIT;
+    AstraFieldInfo field_info = ASTRA_FIELD_INFO_INIT;
+    AstraTextUndoBinding field_binding = ASTRA_TEXT_UNDO_BINDING_INIT;
+    AstraUndoManager field_manager = ASTRA_UNDO_MANAGER_INIT;
+    field_info.id = 2u;
+    field_info.model = &model;
+    assert(astra_interface_field_init(&field, &field_info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&field_context, &field, 1u, 320u, 40u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&field_context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_focus_control(&field_context, 2u) == ASTRA_OK);
+    assert(astra_interface_text_undo_bind(&field_binding, &field_context,
+        &field, &field_manager, history, sizeof(history), scratch,
+        sizeof(scratch)) == ASTRA_OK);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x04u, ASTRA_INPUT_MOD_META);
+    assert(astra_interface_ui_handle_event(&field_context, &event, &action) == ASTRA_OK);
+    event = text_event('Q');
+    assert(astra_interface_ui_handle_event(&field_context, &event, &action) == ASTRA_OK &&
+        action.type == ASTRA_UI_ACTION_TEXT_CHANGED);
+    assert_text_undo_document(&model, "Q");
+    assert(astra_interface_text_undo_undo(&field_binding) == ASTRA_OK);
+    assert_text_undo_document(&model, "aZCxy");
+    assert(astra_interface_text_undo_unbind(&field_binding) == ASTRA_OK);
+    assert(astra_interface_text_undo_bind(&field_binding, &field_context,
+        &field, &field_manager, tiny_history, sizeof(tiny_history), scratch,
+        sizeof(scratch)) == ASTRA_OK);
+    assert(astra_interface_field_replace_selection(&field_context, &field,
+        "R", 1u) == ASTRA_ERROR_BUFFER_TOO_SMALL);
+    assert_text_undo_document(&model, "aZCxy");
+    assert(astra_interface_text_undo_unbind(&field_binding) == ASTRA_OK);
+
+    AstraControl secure = ASTRA_CONTROL_INIT;
+    AstraUIContext secure_context = ASTRA_UI_CONTEXT_INIT;
+    AstraTextUndoBinding secure_binding = ASTRA_TEXT_UNDO_BINDING_INIT;
+    AstraUndoManager secure_manager = ASTRA_UNDO_MANAGER_INIT;
+    field_info.id = 3u;
+    assert(astra_interface_secure_field_init(&secure, &field_info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&secure_context, &secure, 1u, 320u, 40u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&secure_context, &layout) == ASTRA_OK);
+    assert(astra_interface_text_undo_bind(&secure_binding, &secure_context,
+        &secure, &secure_manager, history, sizeof(history), scratch,
+        sizeof(scratch)) == ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
 static void test_text_view_flow_batches_visible_runs(void)
 {
     char source[1100];
@@ -5258,6 +5402,7 @@ int main(void)
     test_text_view_document_capacity();
     test_text_view_wrap();
     test_text_view_flow_edit_find();
+    test_text_undo_binding();
     test_text_view_flow_batches_visible_runs();
     test_grid_view();
     test_custom_view();

@@ -40,6 +40,10 @@
 :project: astra-ndk
 ```
 
+```{doxygenfile} system_panels.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} choice_popups.h
 :project: astra-ndk
 ```

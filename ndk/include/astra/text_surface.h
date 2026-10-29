@@ -183,7 +183,18 @@ ASTRA_NODISCARD AstraResult astra_text_surface_render_cells(
     const AstraTextCell *cells, uint32_t count);
 /** Render one already laid-out proportional flow run through the hardware
  * glyph path. Layout supplies the run's advance; colors and styles follow
- * the same rules as fixed-grid cells. */
+ * the same rules as fixed-grid cells.
+ * @param text_surface Initialized flow TextSurface.
+ * @param target Destination surface.
+ * @param x Run left edge in destination coordinates.
+ * @param y Run top edge in destination coordinates.
+ * @param utf8 Counted UTF-8 run bytes.
+ * @param bytes Byte count of @p utf8.
+ * @param advance Layout-computed run advance in pixels.
+ * @param foreground Opaque foreground color.
+ * @param background Opaque background color.
+ * @param attributes ASTRA_TEXT_ATTR_* style flags.
+ * @return ASTRA_OK or a validation/draw error. */
 ASTRA_NODISCARD AstraResult astra_text_surface_render_flow_run(
     const AstraTextSurface *text_surface, AstraSurfaceView *target,
     int32_t x, int32_t y, const char *utf8, uint32_t bytes,
@@ -247,7 +258,18 @@ ASTRA_NODISCARD AstraResult astra_text_surface_copy_grid_selection(
     uint32_t capacity, uint32_t *bytes);
 /** Find an exact UTF-8 sequence in row-major grid text. The virtual row
  * separator is U+000A; an empty cell matches a space. Positions are half-open
- * cell boundaries. A miss preserves @p match. */
+ * cell boundaries. A miss preserves @p match.
+ * @param text_surface Initialized grid TextSurface.
+ * @param cells Row-major cell storage.
+ * @param stride Stored cells between row starts.
+ * @param columns Visible column count.
+ * @param rows Visible row count.
+ * @param needle Counted UTF-8 search text.
+ * @param needle_bytes Byte count of @p needle.
+ * @param from Starting cell boundary.
+ * @param wrap One to search again from the beginning.
+ * @param match Receives selected cell span on success.
+ * @return ASTRA_OK, ASTRA_ERROR_NOT_PRESENT for a miss, or a validation error. */
 ASTRA_NODISCARD AstraResult astra_text_surface_find_grid(
     const AstraTextSurface *text_surface, const AstraTextCell *cells,
     uint32_t stride, uint32_t columns, uint32_t rows,
@@ -271,7 +293,15 @@ ASTRA_NODISCARD AstraResult astra_text_surface_draw_caret(
     int32_t origin_x, int32_t origin_y, uint32_t row, uint32_t column,
     uint32_t kind, uint16_t color);
 /** Draw the platform caret at a laid-out pixel position in any text mode.
- * @p advance is the cell or glyph advance used for block and underline. */
+ * @p advance is the cell or glyph advance used for block and underline.
+ * @param text_surface Initialized TextSurface.
+ * @param target Destination surface.
+ * @param x Caret left edge in destination coordinates.
+ * @param y Caret top edge in destination coordinates.
+ * @param advance Cell or glyph advance in pixels.
+ * @param kind ASTRA_TEXT_CARET_* presentation.
+ * @param color RGB565 caret color.
+ * @return ASTRA_OK or a validation/draw error. */
 ASTRA_NODISCARD AstraResult astra_text_surface_draw_caret_at(
     const AstraTextSurface *text_surface, AstraSurfaceView *target,
     int32_t x, int32_t y, uint32_t advance,

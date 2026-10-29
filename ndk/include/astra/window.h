@@ -346,7 +346,7 @@ ASTRA_NODISCARD AstraResult astra_window_present_region(
 ASTRA_NODISCARD AstraResult astra_window_close(AstraWindow *window);
 /**
  * Bind a graphics display to a ::ASTRA_WINDOW_CONTENT_SURFACE or
- * ::ASTRA_WINDOW_CONTENT_DRAW_LIST window. Draw-list windows can create and
+ * ASTRA_WINDOW_CONTENT_DRAW_LIST window. Draw-list windows can create and
  * upload source surfaces, then blit them from their retained commands.
  * The display borrows the window's control channel: close it first.
  * @param window Open window.

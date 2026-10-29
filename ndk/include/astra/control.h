@@ -17,9 +17,12 @@
 #include <astra/text_model.h>
 #include <astra/text_surface.h>
 #include <astra/types.h>
+#include <astra/undo.h>
 #include <astra/window.h>
 
 ASTRA_EXTERN_C_BEGIN
+
+struct AstraTextUndoBinding;
 
 /** Display refresh used to derive deterministic animation phases. */
 #define ASTRA_UI_VBLANK_HZ 60u
@@ -1100,6 +1103,7 @@ typedef struct AstraControl {
     AstraTextViewStyleAt _private_text_style_at;
     void *_private_text_style_context;
     const void *_private_display_model;
+    struct AstraTextUndoBinding *_private_text_undo;
     /** @endcond */
 } AstraControl;
 
@@ -1110,7 +1114,7 @@ typedef struct AstraControl {
     UINT32_MAX, UINT32_MAX, ASTRA_FLEX_ALIGN_AUTO, 0, 0, \
     0, 0, 0, 0, 0, 0, 0, UINT32_MAX, UINT32_MAX, UINT32_MAX, \
     UINT32_MAX, { 0, 0, 0, 0 }, ASTRA_FLEX_LAYOUT_INIT, UINT32_MAX, 0, \
-    ASTRA_LABEL_FONT_INIT, 0, 0, 0 \
+    ASTRA_LABEL_FONT_INIT, 0, 0, 0, 0 \
 }
 
 /** Caller-owned retained interaction and damage state. */
@@ -1144,6 +1148,30 @@ typedef struct AstraUIContext {
     /** @endcond */
 } AstraUIContext;
 
+/**
+ * Caller-owned history attachment for one editable Field or Text View.
+ * Manager history and edit scratch use separate caller-owned arenas. A bound
+ * control and both arenas must outlive this binding. Secure Fields cannot
+ * retain their text in undo history.
+ */
+typedef struct AstraTextUndoBinding {
+    /** @cond ASTRA_INTERNAL */
+    uint32_t _private_structure_size;
+    AstraUIContext *_private_context;
+    AstraControl *_private_control;
+    AstraUndoManager *_private_manager;
+    void *_private_scratch;
+    uint32_t _private_scratch_bytes;
+    uint32_t _private_sequence;
+    uint32_t _private_reserved[3];
+    /** @endcond */
+} AstraTextUndoBinding;
+
+/** Empty caller-owned text history attachment. */
+#define ASTRA_TEXT_UNDO_BINDING_INIT { \
+    sizeof(AstraTextUndoBinding), 0, 0, 0, 0, 0u, 0u, {0u, 0u, 0u} \
+}
+
 /** Custom drawing callback. With @p surface NULL, add the exact maximum
  * command and payload requirements without changing application state.
  * Otherwise append hardware draw commands into the already clipped view.
@@ -1155,28 +1183,37 @@ typedef AstraResult (*AstraViewDraw)(void *context,
 /** Caller-owned retained drawing model. The model and context outlive the
  * control; mutating either requires ::astra_interface_view_invalidate. */
 typedef struct AstraViewModel {
-    uint32_t size;
-    uint32_t intrinsic_width;
-    uint32_t intrinsic_height;
-    AstraViewDraw draw;
-    void *context;
-    uint32_t reserved[2];
+    uint32_t size; /**< Structure size in bytes. */
+    uint32_t intrinsic_width; /**< Preferred width in pixels. */
+    uint32_t intrinsic_height; /**< Preferred height in pixels. */
+    AstraViewDraw draw; /**< Draw-list callback. */
+    void *context; /**< Caller context passed to draw. */
+    uint32_t reserved[2]; /**< Must be zero. */
 } AstraViewModel;
+/** Empty caller-owned View model. */
 #define ASTRA_VIEW_MODEL_INIT { sizeof(AstraViewModel), 0u, 0u, NULL, NULL, {0u, 0u} }
 
 /** Construction data for a retained View. */
 typedef struct AstraViewInfo {
-    uint32_t size;
-    uint32_t id;
-    uint32_t state;
-    const AstraViewModel *model;
-    uint32_t reserved[2];
+    uint32_t size; /**< Structure size in bytes. */
+    uint32_t id; /**< Control ID within its UI context. */
+    uint32_t state; /**< Initial control state flags. */
+    const AstraViewModel *model; /**< Borrowed drawing model. */
+    uint32_t reserved[2]; /**< Must be zero. */
 } AstraViewInfo;
+/** Empty retained View construction data. */
 #define ASTRA_VIEW_INFO_INIT { sizeof(AstraViewInfo), 0u, 0u, NULL, {0u, 0u} }
 
+/** Initialize a retained View from caller-owned construction data.
+ * @param control Empty retained control.
+ * @param info View construction data with a live borrowed model.
+ * @return ASTRA_OK or a validation error. */
 ASTRA_NODISCARD AstraResult astra_interface_view_init(
     AstraControl *control, const AstraViewInfo *info);
-/** Damage a View after its borrowed model or source changes. */
+/** Damage a View after its borrowed model or source changes.
+ * @param context Owning UI context.
+ * @param control View whose source changed.
+ * @return ASTRA_OK or a validation error. */
 ASTRA_NODISCARD AstraResult astra_interface_view_invalidate(
     AstraUIContext *context, AstraControl *control);
 

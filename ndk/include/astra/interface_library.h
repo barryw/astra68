@@ -20,8 +20,8 @@
 #include <astra/undo.h>
 #include <astra/window.h>
 
-/** Breaking Interface Kit ABI generation carried by interface.library.9. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 9u
+/** Breaking Interface Kit ABI generation carried by interface.library.10. */
+#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 10u
 /** Current Interface Kit revision. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 0u
 
@@ -486,28 +486,99 @@ AstraResult astra_interface_text_view_set_inverted(AstraUIContext *context,
 AstraResult astra_interface_text_view_set_wrap_width(AstraUIContext *context,
     AstraControl *control, uint32_t width);
 /** Select fixed-cell code or proportional flow presentation. Grid cells use
- * Grid View; both text modes share the retained TextModel and selection. */
+ * Grid View; both text modes share the retained TextModel and selection.
+ * @param context Owning UI context.
+ * @param control Text View to update.
+ * @param mode One ASTRA_TEXT_SURFACE_* presentation mode.
+ * @return ASTRA_OK or a validation/layout error. */
 AstraResult astra_interface_text_view_set_mode(AstraUIContext *context,
     AstraControl *control, uint32_t mode);
-/** Enable or disable in-place editing. Text View starts read-only. */
+/** Enable or disable in-place editing. Text View starts read-only.
+ * @param context Owning UI context.
+ * @param control Text View to update.
+ * @param editable One to allow edits, zero to refuse them.
+ * @return ASTRA_OK or a validation error. */
 AstraResult astra_interface_text_view_set_editable(AstraUIContext *context,
     AstraControl *control, uint32_t editable);
+/** Attach bounded caller-owned Undo Manager history to one editable Field or
+ * Text View. This initializes @p manager with the shared text edit dispatcher;
+ * @p history_arena and @p scratch must not overlap. The scratch must hold one
+ * edit's old and new bytes plus metadata. A Secure Field is rejected because
+ * its contents must never enter history. Both arenas and all objects must
+ * outlive the binding. Editing fails without mutation when history or scratch
+ * cannot hold the transaction. Ordinary typing, deletion, and programmatic
+ * replacement then share one undo path; Command+Z and Command+Shift+Z work
+ * through normal UI event handling.
+ * @param binding Empty caller-owned attachment.
+ * @param context Initialized UI context owning @p control.
+ * @param control Editable Field or Text View to attach.
+ * @param manager Empty caller-owned Undo Manager.
+ * @param history_arena Four-byte-aligned caller-owned history storage.
+ * @param history_bytes Size of @p history_arena.
+ * @param scratch Separate caller-owned edit payload workspace.
+ * @param scratch_bytes Size of @p scratch.
+ * @return ASTRA_OK or a validation, capacity, or history error.
+ * @since Interface Kit 10.0. */
+AstraResult astra_interface_text_undo_bind(AstraTextUndoBinding *binding,
+    AstraUIContext *context, AstraControl *control, AstraUndoManager *manager,
+    void *history_arena, uint32_t history_bytes,
+    void *scratch, uint32_t scratch_bytes);
+/** Detach history, wipe history and scratch, reset manager to its empty
+ * initializer, and release binding ownership. Call before destroying control,
+ * UI context, or arenas.
+ * @param binding Active attachment to detach.
+ * @return ASTRA_OK or a validation/history error. */
+AstraResult astra_interface_text_undo_unbind(AstraTextUndoBinding *binding);
+/** Apply previous text transaction and refresh retained layout.
+ * @param binding Active attachment.
+ * @return ASTRA_OK, ASTRA_ERROR_NOT_PRESENT when empty, or an edit error. */
+AstraResult astra_interface_text_undo_undo(AstraTextUndoBinding *binding);
+/** Reapply next text transaction and refresh retained layout.
+ * @param binding Active attachment.
+ * @return ASTRA_OK, ASTRA_ERROR_NOT_PRESENT when empty, or an edit error. */
+AstraResult astra_interface_text_undo_redo(AstraTextUndoBinding *binding);
 /** Show or hide right-aligned logical line numbers in code mode's shared
- * gutter. Flow mode retains the setting but presents no gutter. */
+ * gutter. Flow mode retains the setting but presents no gutter.
+ * @param context Owning UI context.
+ * @param control Text View to update.
+ * @param visible One to show numbers, zero to hide them.
+ * @return ASTRA_OK or a validation/layout error. */
 AstraResult astra_interface_text_view_set_line_numbers(AstraUIContext *context,
     AstraControl *control, uint32_t visible);
-/** Replace a Text View selection with UTF-8 and refresh its ScrollView. */
+/** Replace a Text View selection with UTF-8 and refresh its ScrollView.
+ * @param context Owning UI context.
+ * @param control Editable Text View.
+ * @param replacement UTF-8 bytes, or NULL for deletion.
+ * @param replacement_bytes Counted replacement bytes.
+ * @return ASTRA_OK or a validation, capacity, or history error. */
 AstraResult astra_interface_text_view_replace_selection(
     AstraUIContext *context, AstraControl *control,
     const char *replacement, uint32_t replacement_bytes);
-/** Set the model's half-open byte selection and reveal its focus. */
+/** Set the model's half-open byte selection and reveal its focus.
+ * @param context Owning UI context.
+ * @param control Text View to select in.
+ * @param anchor First scalar-boundary byte offset.
+ * @param focus Second scalar-boundary byte offset.
+ * @return ASTRA_OK or a validation/layout error. */
 AstraResult astra_interface_text_view_select(AstraUIContext *context,
     AstraControl *control, uint32_t anchor, uint32_t focus);
-/** Reveal an existing scalar-boundary byte position without selecting it. */
+/** Reveal an existing scalar-boundary byte position without selecting it.
+ * @param context Owning UI context.
+ * @param control Text View to scroll.
+ * @param byte_offset Scalar-boundary byte offset in its model.
+ * @return ASTRA_OK or a validation/layout error. */
 AstraResult astra_interface_text_view_reveal(AstraUIContext *context,
     AstraControl *control, uint32_t byte_offset);
 /** Find exact UTF-8 text, select the match and reveal it. A miss leaves both
- * the model selection and @p match unchanged. */
+ * the model selection and @p match unchanged.
+ * @param context Owning UI context.
+ * @param control Text View to search.
+ * @param needle Counted UTF-8 search text.
+ * @param needle_bytes Byte count of @p needle.
+ * @param from Starting scalar-boundary byte offset.
+ * @param wrap One to search again from the beginning after reaching the end.
+ * @param match Receives match selection on success.
+ * @return ASTRA_OK, ASTRA_ERROR_NOT_PRESENT for a miss, or a validation error. */
 AstraResult astra_interface_text_view_find(AstraUIContext *context,
     AstraControl *control, const char *needle, uint32_t needle_bytes,
     uint32_t from, uint32_t wrap, AstraTextSelection *match);
