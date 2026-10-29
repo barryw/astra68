@@ -111,14 +111,57 @@ enum {
     ASTRA_FILE_PANEL_SAVE = 2u
 };
 
+/** Eight visible ancestors; deeper paths show their eight deepest segments.
+ * Older ancestors remain reachable through Up. The control uses Buttons and
+ * stores no independent navigation policy. */
+#define ASTRA_BREADCRUMB_VISIBLE 8u
+typedef struct AstraBreadcrumb {
+    uint32_t size;
+    uint32_t first_id;
+    uint32_t parent_id;
+    const char *path;
+    uint32_t visible_count;
+    uint32_t start[ASTRA_BREADCRUMB_VISIBLE];
+    uint32_t end[ASTRA_BREADCRUMB_VISIBLE];
+} AstraBreadcrumb;
+#define ASTRA_BREADCRUMB_INIT { .size = sizeof(AstraBreadcrumb) }
+
+AstraResult astra_interface_breadcrumb_init(AstraBreadcrumb *breadcrumb,
+    AstraControl *controls, uint32_t first_id, uint32_t parent_id,
+    const char *path);
+AstraResult astra_interface_breadcrumb_set_path(AstraBreadcrumb *breadcrumb,
+    AstraUIContext *context, AstraControl *controls, const char *path);
+AstraResult astra_interface_breadcrumb_target(
+    const AstraBreadcrumb *breadcrumb, uint32_t control_id,
+    char *target, uint32_t capacity);
+
 enum {
     ASTRA_FILE_PANEL_ROOT = 0u,
     ASTRA_FILE_PANEL_TITLE,
-    ASTRA_FILE_PANEL_LOCATION,
-    ASTRA_FILE_PANEL_SCROLL,
-    ASTRA_FILE_PANEL_LIST,
     ASTRA_FILE_PANEL_NAME_LABEL,
     ASTRA_FILE_PANEL_NAME,
+    ASTRA_FILE_PANEL_LOCATION_ROW,
+    ASTRA_FILE_PANEL_UP,
+    ASTRA_FILE_PANEL_CRUMB0,
+    ASTRA_FILE_PANEL_CRUMB1,
+    ASTRA_FILE_PANEL_CRUMB2,
+    ASTRA_FILE_PANEL_CRUMB3,
+    ASTRA_FILE_PANEL_CRUMB4,
+    ASTRA_FILE_PANEL_CRUMB5,
+    ASTRA_FILE_PANEL_CRUMB6,
+    ASTRA_FILE_PANEL_CRUMB7,
+    ASTRA_FILE_PANEL_LOCATION,
+    ASTRA_FILE_PANEL_TOOLS,
+    ASTRA_FILE_PANEL_VIEW,
+    ASTRA_FILE_PANEL_SEARCH,
+    ASTRA_FILE_PANEL_TYPE,
+    ASTRA_FILE_PANEL_CONTENT,
+    ASTRA_FILE_PANEL_PLACES_SCROLL,
+    ASTRA_FILE_PANEL_PLACES_LIST,
+    ASTRA_FILE_PANEL_SCROLL,
+    ASTRA_FILE_PANEL_LIST,
+    ASTRA_FILE_PANEL_GRID_SCROLL,
+    ASTRA_FILE_PANEL_GRID,
     ASTRA_FILE_PANEL_ACTIONS,
     ASTRA_FILE_PANEL_CANCEL,
     ASTRA_FILE_PANEL_PRIMARY,
@@ -133,8 +176,27 @@ enum {
     ASTRA_FILE_PANEL_CANCELLED
 };
 
+enum {
+    ASTRA_FILE_PANEL_VIEW_LIST = 0u,
+    ASTRA_FILE_PANEL_VIEW_GRID = 1u
+};
+
+/** One caller-owned Places/Volumes sidebar entry. */
+typedef struct AstraFilePanelPlace {
+    const char *label;
+    uint32_t label_length;
+    const char *path;
+} AstraFilePanelPlace;
+
+/** A type policy supplied by the caller's file-type service. Directories
+ * remain visible for navigation. The panel never infers types from suffixes. */
+typedef uint32_t (*AstraFilePanelTypeAccept)(void *context,
+    const AstraDirectoryEntry *entry, uint32_t filter_index);
+
 /** Borrowed directory snapshot and caller storage. The name model is required
- * for Save and unused for Open. The caller loads entries via Filesystem Kit. */
+ * for Save and unused for Open. item_storage and spare_item_storage must each
+ * hold a complete visible directory. grid_icons is parallel visible storage.
+ * The caller loads entries and resolves file types via the canonical Kits. */
 typedef struct AstraFilePanelInfo {
     uint32_t size;
     uint32_t first_id;
@@ -147,16 +209,26 @@ typedef struct AstraFilePanelInfo {
     AstraCollectionModel *collection;
     AstraScrollModel *scroll;
     AstraTextModel *name_model;
+    AstraCollectionItem *spare_item_storage;
+    uint32_t spare_item_capacity;
+    const AstraSurface **grid_icons;
+    uint32_t grid_icon_capacity;
+    const AstraFilePanelPlace *places;
+    uint32_t place_count;
+    AstraCollectionItem *place_items;
+    uint32_t place_capacity;
+    const AstraChoiceItem *type_filters;
+    uint32_t type_filter_count;
+    AstraFilePanelTypeAccept type_accept;
+    void *type_context;
     uint32_t reserved[4];
 } AstraFilePanelInfo;
 
-#define ASTRA_FILE_PANEL_INFO_INIT { \
-    sizeof(AstraFilePanelInfo), 0u, 0u, 0, 0, 0u, 0, 0u, 0, 0, 0, \
-    { 0u, 0u, 0u, 0u } \
-}
+#define ASTRA_FILE_PANEL_INFO_INIT { .size = sizeof(AstraFilePanelInfo) }
 
-/** Caller-owned panel state. After NAVIGATE, PICKED, or OVERWRITE, directory
- * and leaf identify the requested entry. Only the caller performs I/O. */
+/** Caller-owned panel state. After NAVIGATE, PICKED, or OVERWRITE, target is
+ * the full requested path; directory and leaf retain current-location context.
+ * Only the caller performs I/O. */
 typedef struct AstraFilePanel {
     uint32_t size;
     uint32_t first_id;
@@ -165,6 +237,8 @@ typedef struct AstraFilePanel {
     char directory_storage[2][ASTRA_VFS_PATH_MAX];
     uint32_t active_directory;
     char leaf[ASTRA_VFS_NAME_MAX];
+    char target[ASTRA_VFS_PATH_MAX];
+    AstraBreadcrumb breadcrumb;
     const AstraDirectoryEntry *entries;
     uint32_t entry_count;
     uint32_t item_count;
@@ -173,13 +247,38 @@ typedef struct AstraFilePanel {
     AstraCollectionModel *collection;
     AstraScrollModel *scroll;
     AstraTextModel *name_model;
+    AstraCollectionItem *spare_items;
+    uint32_t spare_capacity;
+    AstraCollectionModel grid_collection;
+    AstraIconGridModel grid_model;
+    const AstraSurface **grid_icons;
+    uint32_t grid_icon_capacity;
+    const AstraSurface *const *entry_icons;
+    AstraScrollModel grid_scroll;
+    AstraCollectionModel places_collection;
+    AstraScrollModel places_scroll;
+    const AstraFilePanelPlace *places;
+    uint32_t place_count;
+    AstraCollectionItem *place_items;
+    const AstraChoiceItem *type_filters;
+    uint32_t type_filter_count;
+    AstraFilePanelTypeAccept type_accept;
+    void *type_context;
+    uint32_t selected_filter;
+    uint32_t view_mode;
+    AstraTextModel search_model;
+    uint8_t search_content[4096];
+    _Alignas(4) uint8_t search_metadata[4096];
+    char search_query[ASTRA_VFS_NAME_MAX];
+    uint32_t search_length;
     uint32_t reserved[4];
 } AstraFilePanel;
 
 #define ASTRA_FILE_PANEL_INIT { .size = sizeof(AstraFilePanel) }
 
-/** Compose Open or Save from shared List, ScrollView, Field, Labels and
- * Buttons. Entries and item storage remain caller-owned until replacement. */
+/** Compose Open or Save from shared List, Icon Grid, ScrollView, Search Field,
+ * Segmented, Popup, Breadcrumb Buttons, Labels and Buttons. Entries and item
+ * storage remain caller-owned until replacement. */
 AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     AstraControl *controls, const AstraFilePanelInfo *info);
 
@@ -189,6 +288,19 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
     AstraUIContext *context, AstraControl *controls, const char *directory,
     const AstraDirectoryEntry *entries, uint32_t entry_count,
     AstraCollectionItem *item_storage, uint32_t item_capacity);
+
+/** Replace sidebar Places/Volumes after a volume lifecycle change. The
+ * caller supplies a new item array while the old List still borrows it. */
+AstraResult astra_interface_file_panel_set_places(AstraFilePanel *panel,
+    AstraUIContext *context, AstraControl *controls,
+    const AstraFilePanelPlace *places, uint32_t count,
+    AstraCollectionItem *item_storage, uint32_t item_capacity);
+
+/** Attach file-type or thumbnail icon surfaces parallel to the current
+ * directory snapshot. Search and type filters retain the correct mapping. */
+AstraResult astra_interface_file_panel_set_icons(AstraFilePanel *panel,
+    AstraUIContext *context, AstraControl *controls,
+    const AstraSurface *const *entry_icons, uint32_t count);
 
 /** Route one normal UI action. Save returns OVERWRITE for an existing regular
  * file, allowing the caller to present confirmation before creating it. */

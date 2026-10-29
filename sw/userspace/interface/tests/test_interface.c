@@ -4695,6 +4695,13 @@ static void test_shared_font_panel(void)
     panel_mock_catalog = NULL;
 }
 
+static uint32_t file_panel_test_type(void *context,
+    const AstraDirectoryEntry *entry, uint32_t filter_index)
+{
+    (void)context;
+    return filter_index == 0u || strcmp(entry->name, "readme.txt") != 0;
+}
+
 static void test_shared_file_panel(void)
 {
     AstraDirectoryEntry entries[3] = {
@@ -4702,10 +4709,21 @@ static void test_shared_file_panel(void)
         { .name = "Stories", .kind = ASTRA_VFS_KIND_DIRECTORY },
         { .name = "zork1.z3", .kind = ASTRA_VFS_KIND_FILE }
     };
-    AstraDirectoryEntry next_entries[1] = {
-        { .name = "planetfall.z3", .kind = ASTRA_VFS_KIND_FILE }
+    AstraDirectoryEntry next_entries[2] = {
+        { .name = "planetfall.z3", .kind = ASTRA_VFS_KIND_FILE },
+        { .name = "readme.txt", .kind = ASTRA_VFS_KIND_FILE }
     };
     AstraCollectionItem items[2], next_items[2];
+    AstraCollectionItem place_items[2], next_place_items[2];
+    AstraFilePanelPlace places[2] = {
+        {"Home", 4u, "/dh0/Home"},
+        {"Stories", 7u, "/dh0/Stories"}
+    };
+    AstraChoiceItem filters[2] = {
+        {"All files", 9u, {0u, 0u}},
+        {"Z-machine stories", 17u, {0u, 0u}}
+    };
+    const AstraSurface *icons[2] = {NULL, NULL};
     AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
     AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
     AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
@@ -4731,6 +4749,17 @@ static void test_shared_file_panel(void)
     info.entry_count = 3u;
     info.item_storage = items;
     info.item_capacity = 2u;
+    info.spare_item_storage = next_items;
+    info.spare_item_capacity = 2u;
+    info.grid_icons = icons;
+    info.grid_icon_capacity = 2u;
+    info.places = places;
+    info.place_count = 2u;
+    info.place_items = place_items;
+    info.place_capacity = 2u;
+    info.type_filters = filters;
+    info.type_filter_count = 2u;
+    info.type_accept = file_panel_test_type;
     info.collection = &collection;
     info.scroll = &scroll;
     assert(astra_interface_file_panel_init(&panel, controls, &info) == ASTRA_OK);
@@ -4753,6 +4782,66 @@ static void test_shared_file_panel(void)
         &action, &outcome) == ASTRA_OK &&
         outcome == ASTRA_FILE_PANEL_PICKED &&
         strcmp(panel.leaf, "zork1.z3") == 0);
+    assert(strcmp(panel.target, "/dh0/Stories/zork1.z3") == 0);
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 300u + ASTRA_FILE_PANEL_VIEW;
+    action.value = ASTRA_FILE_PANEL_VIEW_GRID;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        panel.view_mode == ASTRA_FILE_PANEL_VIEW_GRID);
+    action.type = ASTRA_UI_ACTION_ACTIVATE;
+    action.control_id = 300u + ASTRA_FILE_PANEL_GRID;
+    action.value = 1;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FILE_PANEL_PICKED);
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 300u + ASTRA_FILE_PANEL_VIEW;
+    action.value = ASTRA_FILE_PANEL_VIEW_LIST;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        panel.view_mode == ASTRA_FILE_PANEL_VIEW_LIST);
+    assert(astra_text_model_replace(&panel.search_model, 0u, 0u,
+        "zork", 4u) == ASTRA_OK);
+    assert(astra_interface_field_refresh(&context,
+        &controls[ASTRA_FILE_PANEL_SEARCH]) == ASTRA_OK);
+    action.type = ASTRA_UI_ACTION_TEXT_CHANGED;
+    action.control_id = 300u + ASTRA_FILE_PANEL_SEARCH;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.item_count == 1u &&
+        panel.items[0].id == 3u);
+    assert(astra_text_model_replace(&panel.search_model, 0u, 4u,
+        NULL, 0u) == ASTRA_OK);
+    assert(astra_interface_field_refresh(&context,
+        &controls[ASTRA_FILE_PANEL_SEARCH]) == ASTRA_OK);
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.item_count == 2u);
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 300u + ASTRA_FILE_PANEL_TYPE;
+    action.value = 1;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.item_count == 2u);
+    action.value = 0;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.item_count == 2u);
+    action.control_id = 300u + ASTRA_FILE_PANEL_PLACES_LIST;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FILE_PANEL_NAVIGATE &&
+        strcmp(panel.target, "/dh0/Home") == 0);
+    assert(astra_interface_file_panel_set_places(&panel, &context, controls,
+        places, 2u, next_place_items, 2u) == ASTRA_OK);
+    action.type = ASTRA_UI_ACTION_ACTIVATE;
+    action.control_id = 300u + ASTRA_FILE_PANEL_UP;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FILE_PANEL_NAVIGATE &&
+        strcmp(panel.target, "/dh0") == 0);
+    action.control_id = 300u + ASTRA_FILE_PANEL_CRUMB1;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FILE_PANEL_NAVIGATE &&
+        strcmp(panel.target, "/dh0") == 0);
     assert(astra_interface_control_set_value(&context,
         &controls[ASTRA_FILE_PANEL_LIST], 1) == ASTRA_OK);
     action.control_id = 300u + ASTRA_FILE_PANEL_PRIMARY;
@@ -4761,16 +4850,26 @@ static void test_shared_file_panel(void)
         outcome == ASTRA_FILE_PANEL_PICKED &&
         strcmp(panel.leaf, "zork1.z3") == 0);
     assert(astra_interface_file_panel_set_directory(&panel, &context,
-        controls, "/dh0/Stories", next_entries, 1u, next_items, 2u) ==
+        controls, "/dh0/Stories", next_entries, 2u, next_items, 2u) ==
         ASTRA_OK);
-    assert(collection.item_count == 1u &&
+    assert(collection.item_count == 2u &&
            strcmp(panel.directory, "/dh0/Stories") == 0);
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 300u + ASTRA_FILE_PANEL_TYPE;
+    action.value = 1;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.item_count == 1u &&
+        strcmp(panel.items[0].text, "planetfall.z3") == 0);
+    action.value = 0;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.item_count == 2u);
     assert(astra_interface_file_panel_set_directory(&panel, &context,
         controls, "/dh0/Empty", NULL, 0u, items, 2u) == ASTRA_OK &&
         collection.item_count == 0u);
     assert(astra_interface_file_panel_set_directory(&panel, &context,
-        controls, "/dh0/Stories", next_entries, 1u, items, 2u) == ASTRA_OK &&
-        collection.item_count == 1u);
+        controls, "/dh0/Stories", next_entries, 2u, next_items, 2u) == ASTRA_OK &&
+        collection.item_count == 2u);
+    action.type = ASTRA_UI_ACTION_ACTIVATE;
     action.control_id = 300u + ASTRA_FILE_PANEL_CANCEL;
     assert(astra_interface_file_panel_action(&panel, &context, controls,
         &action, &outcome) == ASTRA_OK &&
@@ -4789,6 +4888,12 @@ static void test_shared_file_panel(void)
     assert(astra_interface_file_panel_init(&panel, controls, &info) == ASTRA_OK);
     assert(controls[ASTRA_FILE_PANEL_NAME]._private_control_kind ==
            ASTRA_CONTROL_FIELD);
+    {
+        AstraTextModelState name_state = ASTRA_TEXT_MODEL_STATE_INIT;
+        assert(astra_text_model_get_state(&name, &name_state) == ASTRA_OK &&
+            name_state.selection.anchor == 0u &&
+            name_state.selection.focus == 5u);
+    }
     assert(astra_interface_ui_init(&context, controls,
         ASTRA_FILE_PANEL_CONTROL_COUNT, 420u, 480u) == ASTRA_OK);
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);

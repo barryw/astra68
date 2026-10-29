@@ -38,21 +38,34 @@ Reference review:
 - Astra design `~/Downloads/Astra Desktop (standalone).html`, Colour panel:
   exact RGB565 channels, Field, Theme, Recent, dual swatches, Cancel and Use.
 
-File panels should grow toward the same navigation and display controls as
-Atlas.
-
 The shared Open/Save file panel now consumes `AstraDirectoryEntry` snapshots
 from Filesystem Kit, hides dot entries and invalid or unsupported nodes,
-builds a List in a ScrollView, and returns a directory
-plus leaf name. Its actions distinguish entering a folder, opening a file,
+builds List and Icon Grid views in ScrollViews, and returns a directory,
+leaf name, and full target path. Its actions distinguish entering a folder, opening a file,
 saving a new name, replacing an existing file, and cancelling. Save requires
 an editable `TextModel`; it rejects empty, dot, dot-dot, slash, and control
-names. The caller performs the actual open/save operation and handles the
-overwrite confirmation. Directory replacement uses a second item buffer so
-the old List data remains valid if validation or layout fails. Existing Atlas
-and Fonts browser code can adopt this panel without duplicating picker policy.
-The sidebar, breadcrumb, search, view modes, and file type filters from the
-standalone design remain to implement.
+names and preselects the basename while preserving the extension. The caller
+performs the actual open/save operation and handles overwrite confirmation.
+Directory replacement and filtering use a second item buffer so the old List
+data remains valid during validation. Places/Volumes sidebar entries can be
+replaced after hotplug. The breadcrumb composes up to eight Button segments;
+deeper ancestors remain reachable with Up. Search matches ASCII
+case-insensitively and keeps non-ASCII bytes exact. Type filtering is supplied
+by the caller's file-type service through a predicate; the panel does not
+guess from extensions. Directory icon surfaces can be attached in a separate
+parallel snapshot and stay aligned with search/filter results. List and Grid
+use separate collection models and preserve selected identity across mode
+changes. Column browsing still needs a caller-owned hierarchy snapshot
+contract; the panel exposes no false single-column mode in the meantime.
+
+Haiku `src/kits/tracker/FilePanel.cpp` keeps directory, filter, save name,
+and panel outcome in the shared kit panel. Astra adopts that separation and
+uses Filesystem Kit snapshots in place of Tracker's `entry_ref` iterator.
+Haiku `src/kits/tracker/ContainerWindow.cpp` keeps navigation and view mode
+state together; Astra reuses Interface Kit List, Icon Grid, ScrollView,
+Segmented, Search Field, Popup, and Button composition for those behaviors.
+The standalone design's Open/Save layout guided name-first Save, Places,
+path segments, search, and a shared view switch.
 
 The shared Font panel reads an open Font Kit catalog, lists installed
 family/style faces and exact AFNT bitmap strikes, previews through the common
