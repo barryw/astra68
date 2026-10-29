@@ -26,6 +26,9 @@ typedef struct Trace {
     unsigned semantic_characters;
     unsigned semantic_bytes;
     char semantic[8192];
+    unsigned bathroom_headings;
+    unsigned bathroom_physical_B;
+    unsigned expect_bathroom_B;
     unsigned stop_after;
     unsigned width;
     unsigned height;
@@ -41,10 +44,28 @@ static int event(void *context, const AstraZEvent *item)
 {
     Trace *trace = context;
     unsigned at = ++trace->events;
-    if (item->kind == ASTRAZ_EVENT_CHARACTER) trace->characters++;
+    if (item->kind == ASTRAZ_EVENT_CHARACTER) {
+        trace->characters++;
+        if (trace->expect_bathroom_B && item->data.text.window == 0) {
+            trace->bathroom_physical_B +=
+                item->data.text.character == (uint32_t)'B';
+            trace->expect_bathroom_B = 0u;
+        }
+    }
     if (item->kind == ASTRAZ_EVENT_TRANSCRIPT_TEXT) {
         trace->semantic_words++;
         trace->semantic_characters += item->data.transcript.length;
+        if (item->data.transcript.length >= 8u) {
+            static const char heading[] = "Bathroom";
+            uint32_t match = 0u;
+            while (match < sizeof(heading) - 1u &&
+                   item->data.transcript.characters[match] ==
+                       (uint8_t)heading[match]) ++match;
+            if (match == sizeof(heading) - 1u) {
+                trace->bathroom_headings++;
+                trace->expect_bathroom_B = 1u;
+            }
+        }
         for (uint32_t index = 0; index < item->data.transcript.length;
              ++index) {
             uint16_t scalar = item->data.transcript.characters[index];
@@ -289,12 +310,13 @@ int main(int argc, char **argv)
     puts("SEMANTIC_TRANSCRIPT_BEGIN");
     fwrite(trace.semantic, 1u, trace.semantic_bytes, stdout);
     puts("\nSEMANTIC_TRANSCRIPT_END");
-    printf("RESULT status=%d events=%u pictures=%u characters=%u reads=%u picture_oob=%u cursor_oob=%u font3=%u bold=%u emphasis=%u reverse=%u fixed=%u semantic_words=%u semantic_newlines=%u semantic_characters=%u error=%s\n",
+    printf("RESULT status=%d events=%u pictures=%u characters=%u reads=%u picture_oob=%u cursor_oob=%u font3=%u bold=%u emphasis=%u reverse=%u fixed=%u semantic_words=%u semantic_newlines=%u semantic_characters=%u bathroom_headings=%u bathroom_physical_B=%u error=%s\n",
            result, trace.events, trace.pictures, trace.characters,
            trace.reads, trace.picture_oob, trace.cursor_oob, trace.font3,
            trace.bold, trace.emphasis, trace.reverse, trace.fixed,
            trace.semantic_words, trace.semantic_newlines,
-           trace.semantic_characters, error);
+           trace.semantic_characters, trace.bathroom_headings,
+           trace.bathroom_physical_B, error);
     return result == ASTRAZ_OK ||
         (result == ASTRAZ_CANCELLED && trace.reads == trace.stop_after) ? 0 : 1;
 }

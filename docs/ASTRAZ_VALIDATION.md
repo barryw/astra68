@@ -292,3 +292,14 @@ standalone Frotz `stream.c` also compiled without the AstraZ definition.
 Code review confirms live command echo is app-owned, while the new Frotz
 input echo path runs only for replay input. Replay echo still needs an
 executable fixture. DE25 resize/reflow remains a separate hardware gate.
+
+The first DE25 semantic candidate revealed a marker-boundary defect: a
+style/font argument of zero was mistaken for a word terminator and could
+drop the first letter of a room heading. After the engine's marker-aware
+scan fix, `test-semantic-real-stories.sh` passed on isolated Beast with Z8
+One Room and Z4 Trinity. One Room's opening and `look` response each contain
+the complete `Bathroom` heading; the corresponding physical character
+events also start with `B` (`bathroom_headings=2 bathroom_physical_B=2`).
+Both stories retain lines longer than 120 characters as single logical
+paragraph lines and preserve explicit blank lines. The host trace stops at
+the third input by design (`ASTRAZ_CANCELLED`, status 7), with no engine error.
