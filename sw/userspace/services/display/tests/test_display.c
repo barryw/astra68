@@ -1986,8 +1986,17 @@ static void test_drag_session_routing(void)
     drag_motion(&state, 0u, 12u);
     assert(state.drag.target == 0u && state.drag.accepted == 0u &&
            delivered.event.type == ASTRA_WINDOW_EVENT_DRAG_LEAVE);
+    send_would_block = 1u;
     drag_finish(&state, 0u, 0u, 0u, 13u);
+    assert(windows[0].pending_drag_finished.type ==
+           ASTRA_WINDOW_EVENT_DRAG_FINISHED);
+    {
+        AstraWindowEvent retry = windows[0].pending_drag_finished;
+
+        assert(send_event(&windows[0], &retry) == ASTRA_SYSCALL_OK);
+    }
     assert(state.drag.source == 0u && state.overlay == DISPLAY_OVERLAY_NONE &&
+           windows[0].pending_drag_finished.type == 0u &&
            delivered.event.type == ASTRA_WINDOW_EVENT_DRAG_FINISHED &&
            delivered.event.data.drag.operation == 0u);
 }

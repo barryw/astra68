@@ -151,6 +151,7 @@ typedef struct DisplayWindow {
     uint32_t pending_state_timestamp_ms;
     uint32_t pending_close_timestamp_ms;
     AstraWindowEvent pending_menu;
+    AstraWindowEvent pending_drag_finished;
     AstraMenuItem *bar_rows;
     void *bar_document;
     uint32_t bar_row_count;
@@ -977,6 +978,7 @@ static int prepare_event(DisplayWindow *window, AstraWindowEvent *event,
     uint32_t subscription = event_subscription(event->type);
 
     if (subscription != 0u &&
+        event->type != ASTRA_WINDOW_EVENT_DRAG_FINISHED &&
         (window->request.event_mask & subscription) == 0u)
         return 0;
     if (++window->event_sequence == 0u)
@@ -1008,6 +1010,8 @@ static uint32_t deliver_event(DisplayWindow *window,
             window->pending_close = 0u;
         if (message->event.type == ASTRA_WINDOW_EVENT_MENU_RESULT)
             window->pending_menu = (AstraWindowEvent){0};
+        if (message->event.type == ASTRA_WINDOW_EVENT_DRAG_FINISHED)
+            window->pending_drag_finished = (AstraWindowEvent){0};
     } else if (record_loss) {
         window->event_lost = 1u;
         if (message->event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) {
@@ -1019,6 +1023,10 @@ static uint32_t deliver_event(DisplayWindow *window,
             window->pending_menu = message->event;
             window->pending_menu.flags |= ASTRA_WINDOW_EVENT_LOSS;
             window->pending_menu.data.menu_result.selection = 0u;
+        }
+        if (message->event.type == ASTRA_WINDOW_EVENT_DRAG_FINISHED) {
+            window->pending_drag_finished = message->event;
+            window->pending_drag_finished.flags |= ASTRA_WINDOW_EVENT_LOSS;
         }
     }
     return status;
@@ -1041,6 +1049,8 @@ static uint32_t send_drag_event(DisplayWindow *window,
     uint32_t transfer = 0u;
     uint32_t status;
 
+    if (event->type == ASTRA_WINDOW_EVENT_DRAG_FINISHED && area == 0u)
+        return send_event(window, event);
     if (!prepare_event(window, event, &message))
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     if (area != 0u) {
@@ -1817,6 +1827,7 @@ static uint32_t drag_begin(DisplayState *state,
     uint32_t index = find_id(state, source);
 
     if (index == state->count || state->drag.source != 0u ||
+        state->windows[index].pending_drag_finished.type != 0u ||
         state->overlay == DISPLAY_OVERLAY_MENU ||
         state->capture_window != source ||
         state->capture_region != HIT_CONTENT ||
@@ -7012,6 +7023,11 @@ static uint32_t signal_vblank(DisplayState *state)
         }
         if (state->windows[index].pending_menu.type != 0u) {
             AstraWindowEvent event = state->windows[index].pending_menu;
+            (void)send_event(&state->windows[index], &event);
+        }
+        if (state->windows[index].pending_drag_finished.type != 0u) {
+            AstraWindowEvent event =
+                state->windows[index].pending_drag_finished;
             (void)send_event(&state->windows[index], &event);
         }
         if ((state->windows[index].request.event_mask &
