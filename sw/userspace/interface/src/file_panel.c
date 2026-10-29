@@ -748,6 +748,75 @@ static AstraResult file_panel_refresh(AstraFilePanel *panel,
     return ASTRA_OK;
 }
 
+AstraResult astra_interface_file_panel_rebind_storage(AstraFilePanel *panel,
+    AstraUIContext *context, AstraControl *controls,
+    AstraCollectionItem *item_storage, uint32_t item_capacity,
+    AstraCollectionItem *spare_item_storage, uint32_t spare_item_capacity,
+    const AstraSurface **grid_icons, uint32_t grid_icon_capacity)
+{
+    AstraResult result;
+
+    if (panel == NULL || panel->size < sizeof(*panel) ||
+        panel->first_id == 0u ||
+        panel->item_count > panel->item_capacity ||
+        panel->item_count > panel->grid_icon_capacity ||
+        (panel->item_count != 0u &&
+         (panel->items == NULL || panel->grid_icons == NULL)) ||
+        (panel->column_count != 0u && panel->column_snapshots == NULL) ||
+        context == NULL || controls == NULL || item_storage == NULL ||
+        spare_item_storage == NULL || grid_icons == NULL ||
+        item_storage == spare_item_storage ||
+        item_storage == panel->items || item_storage == panel->spare_items ||
+        spare_item_storage == panel->items ||
+        spare_item_storage == panel->spare_items ||
+        grid_icons == panel->grid_icons ||
+        item_capacity < panel->item_count ||
+        spare_item_capacity < panel->item_count ||
+        grid_icon_capacity < panel->item_count)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (panel->item_count != 0u) {
+        memmove(item_storage, panel->items,
+            (size_t)panel->item_count * sizeof(*item_storage));
+        memmove(grid_icons, panel->grid_icons,
+            (size_t)panel->item_count * sizeof(*grid_icons));
+    }
+    result = astra_interface_icon_grid_set_items(context,
+        &controls[ASTRA_FILE_PANEL_GRID], item_storage,
+        panel->item_count, grid_icons);
+    if (result != ASTRA_OK) return result;
+    result = astra_interface_list_set_items(context,
+        &controls[ASTRA_FILE_PANEL_LIST], item_storage, panel->item_count);
+    if (result != ASTRA_OK) {
+        (void)astra_interface_icon_grid_set_items(context,
+            &controls[ASTRA_FILE_PANEL_GRID], panel->items,
+            panel->item_count, panel->grid_icons);
+        return result;
+    }
+    if (panel->column_count != 0u) {
+        result = astra_interface_list_set_items(context,
+            &controls[file_panel_column_list_index(0u)], item_storage,
+            panel->item_count);
+        if (result != ASTRA_OK) {
+            (void)astra_interface_list_set_items(context,
+                &controls[ASTRA_FILE_PANEL_LIST], panel->items,
+                panel->item_count);
+            (void)astra_interface_icon_grid_set_items(context,
+                &controls[ASTRA_FILE_PANEL_GRID], panel->items,
+                panel->item_count, panel->grid_icons);
+            return result;
+        }
+        panel->column_snapshots[0].items = item_storage;
+        panel->column_snapshots[0].item_capacity = item_capacity;
+    }
+    panel->items = item_storage;
+    panel->item_capacity = item_capacity;
+    panel->spare_items = spare_item_storage;
+    panel->spare_capacity = spare_item_capacity;
+    panel->grid_icons = grid_icons;
+    panel->grid_icon_capacity = grid_icon_capacity;
+    return ASTRA_OK;
+}
+
 AstraResult astra_interface_file_panel_set_places(AstraFilePanel *panel,
     AstraUIContext *context, AstraControl *controls,
     const AstraFilePanelPlace *places, uint32_t count,

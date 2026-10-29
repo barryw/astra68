@@ -16,11 +16,12 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "../../common/directory_snapshot.h"
+
 #define INSTALLER_REVIEW_WIDTH 560u
 #define INSTALLER_REVIEW_HEIGHT 260u
 #define INSTALLER_PICKER_WIDTH 720u
 #define INSTALLER_PICKER_HEIGHT 560u
-#define INSTALLER_DIRECTORY_CAPACITY 512u
 
 enum {
     TITLE = 1u, DESCRIPTION, BODY, ACTIONS,
@@ -48,9 +49,12 @@ static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraFilePanel picker = ASTRA_FILE_PANEL_INIT;
 static AstraCollectionModel picker_collection = ASTRA_COLLECTION_MODEL_INIT;
 static AstraScrollModel picker_scroll = ASTRA_SCROLL_MODEL_INIT;
-static AstraDirectoryEntry picker_entries[2][INSTALLER_DIRECTORY_CAPACITY];
-static AstraCollectionItem picker_items[2][INSTALLER_DIRECTORY_CAPACITY];
-static const AstraSurface *picker_icons[INSTALLER_DIRECTORY_CAPACITY];
+static AstraDirectorySnapshot picker_snapshots[2] = {
+    ASTRA_DIRECTORY_SNAPSHOT_INIT, ASTRA_DIRECTORY_SNAPSHOT_INIT
+};
+static AstraCollectionItem *picker_items[2];
+static const AstraSurface **picker_icons;
+static uint32_t picker_capacity;
 static AstraCollectionItem picker_place_items[3];
 static char chosen_archive[ASTRA_VFS_PATH_MAX];
 static uint32_t picker_entry_bank;
@@ -93,33 +97,27 @@ static uint32_t package_entry(void *context,
            strcmp(type.type, ASTRA_FILE_TYPE_PACKAGE) == 0;
 }
 
-static uint32_t read_directory(const char *path, uint32_t bank,
-    uint32_t *count)
+static AstraResult allocate_picker_storage(uint32_t capacity,
+    AstraCollectionItem **first, AstraCollectionItem **second,
+    const AstraSurface ***icons)
 {
-    AstraDirectory directory = ASTRA_DIRECTORY_INIT;
-    uint32_t status;
-
-    if (path == NULL || bank > 1u || count == NULL)
-        return ASTRA_VFS_ERR_INVALID;
-    *count = 0u;
-    status = astra_filesystem_directory_open(&files.filesystem, path,
-                                              &directory);
-    if (status != ASTRA_VFS_OK) return status;
-    for (;;) {
-        AstraDirectoryEntry entry;
-        uint32_t moved = 0u;
-        status = astra_filesystem_directory_read(&directory, &entry, 1u,
-                                                 &moved);
-        if (status != ASTRA_VFS_OK || moved == 0u) break;
-        if (*count == INSTALLER_DIRECTORY_CAPACITY) {
-            status = ASTRA_VFS_ERR_LIMIT;
-            break;
-        }
-        picker_entries[bank][(*count)++] = entry;
+    if (capacity == 0u || capacity > SIZE_MAX / sizeof(**first) ||
+        capacity > SIZE_MAX / sizeof(**icons))
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    *first = astra_runtime_allocate((size_t)capacity * sizeof(**first));
+    *second = astra_runtime_allocate((size_t)capacity * sizeof(**second));
+    *icons = astra_runtime_allocate((size_t)capacity * sizeof(**icons));
+    if (*first == NULL || *second == NULL || *icons == NULL) {
+        astra_runtime_deallocate(*first);
+        astra_runtime_deallocate(*second);
+        astra_runtime_deallocate((void *)*icons);
+        *first = NULL;
+        *second = NULL;
+        *icons = NULL;
+        return ASTRA_ERROR_IO;
     }
-    astra_filesystem_directory_close(&directory);
-    if (status != ASTRA_VFS_OK) *count = 0u;
-    return status;
+    memset((void *)*icons, 0, (size_t)capacity * sizeof(**icons));
+    return ASTRA_OK;
 }
 
 static AstraResult build_picker(void)
@@ -128,13 +126,18 @@ static AstraResult build_picker(void)
     AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
     const char *start = "/dh0";
-    uint32_t count = 0u;
-
-    if (read_directory(start, 0u, &count) != ASTRA_VFS_OK) {
+    if (astra_directory_snapshot_load(&picker_snapshots[0],
+            &files.filesystem, start, NULL) != ASTRA_VFS_OK) {
         start = "/";
-        if (read_directory(start, 0u, &count) != ASTRA_VFS_OK)
+        if (astra_directory_snapshot_load(&picker_snapshots[0],
+                &files.filesystem, start, NULL) != ASTRA_VFS_OK)
             return ASTRA_ERROR_IO;
     }
+    picker_capacity = picker_snapshots[0].capacity == 0u ?
+        32u : picker_snapshots[0].capacity;
+    if (allocate_picker_storage(picker_capacity, &picker_items[0],
+            &picker_items[1], &picker_icons) != ASTRA_OK)
+        return ASTRA_ERROR_IO;
     scroll_info.line_width = 8u;
     scroll_info.line_height = 16u;
     if (astra_scroll_init(&picker_scroll, &scroll_info) != ASTRA_OK)
@@ -142,14 +145,14 @@ static AstraResult build_picker(void)
     info.first_id = 1u;
     info.mode = ASTRA_FILE_PANEL_OPEN;
     info.directory = start;
-    info.entries = picker_entries[0];
-    info.entry_count = count;
+    info.entries = picker_snapshots[0].entries;
+    info.entry_count = picker_snapshots[0].count;
     info.item_storage = picker_items[0];
-    info.item_capacity = INSTALLER_DIRECTORY_CAPACITY;
+    info.item_capacity = picker_capacity;
     info.spare_item_storage = picker_items[1];
-    info.spare_item_capacity = INSTALLER_DIRECTORY_CAPACITY;
+    info.spare_item_capacity = picker_capacity;
     info.grid_icons = picker_icons;
-    info.grid_icon_capacity = INSTALLER_DIRECTORY_CAPACITY;
+    info.grid_icon_capacity = picker_capacity;
     info.places = picker_places;
     info.place_count = sizeof(picker_places) / sizeof(picker_places[0]);
     info.place_items = picker_place_items;
@@ -179,23 +182,59 @@ static AstraResult build_picker(void)
 static AstraResult navigate_picker(void)
 {
     uint32_t next_bank = 1u - picker_entry_bank;
-    uint32_t count = 0u;
-    uint32_t status = read_directory(picker.target, next_bank, &count);
+    uint32_t status = astra_directory_snapshot_load(
+        &picker_snapshots[next_bank], &files.filesystem, picker.target, NULL);
     AstraResult result;
 
     if (status != ASTRA_VFS_OK)
         return astra_interface_control_set_text(&ui,
             &controls[ASTRA_FILE_PANEL_TITLE],
-            status == ASTRA_VFS_ERR_LIMIT ? "Folder has too many items" :
+            status == ASTRA_VFS_ERR_LIMIT ? "Not enough memory for folder" :
             "Cannot open folder",
             status == ASTRA_VFS_ERR_LIMIT ?
-                sizeof("Folder has too many items") - 1u :
+                sizeof("Not enough memory for folder") - 1u :
                 sizeof("Cannot open folder") - 1u);
-    result = astra_interface_file_panel_set_directory(&picker, &ui,
-        controls, picker.target, picker_entries[next_bank], count,
-        picker.items == picker_items[0] ? picker_items[1] : picker_items[0],
-        INSTALLER_DIRECTORY_CAPACITY);
-    if (result != ASTRA_OK) return result;
+    if (picker_snapshots[next_bank].count > picker_capacity) {
+        AstraCollectionItem *first = NULL;
+        AstraCollectionItem *second = NULL;
+        const AstraSurface **icons = NULL;
+        const AstraSurface **old_icons = picker_icons;
+        uint32_t capacity = picker_snapshots[next_bank].capacity;
+
+        result = allocate_picker_storage(capacity, &first, &second, &icons);
+        if (result != ASTRA_OK)
+            return astra_interface_control_set_text(&ui,
+                &controls[ASTRA_FILE_PANEL_TITLE],
+                "Not enough memory for folder",
+                sizeof("Not enough memory for folder") - 1u);
+        result = astra_interface_file_panel_rebind_storage(&picker, &ui,
+            controls, first, capacity, second, capacity, icons, capacity);
+        if (result != ASTRA_OK) {
+            astra_runtime_deallocate(first);
+            astra_runtime_deallocate(second);
+            astra_runtime_deallocate((void *)icons);
+            return result;
+        }
+        astra_runtime_deallocate(picker_items[0]);
+        astra_runtime_deallocate(picker_items[1]);
+        astra_runtime_deallocate((void *)old_icons);
+        picker_items[0] = first;
+        picker_items[1] = second;
+        picker_icons = icons;
+        picker_capacity = capacity;
+        result = astra_interface_file_panel_set_directory(&picker, &ui,
+            controls, picker.target, picker_snapshots[next_bank].entries,
+            picker_snapshots[next_bank].count, second, capacity);
+        if (result != ASTRA_OK) return result;
+    } else {
+        result = astra_interface_file_panel_set_directory(&picker, &ui,
+            controls, picker.target, picker_snapshots[next_bank].entries,
+            picker_snapshots[next_bank].count,
+            picker.items == picker_items[0] ? picker_items[1] :
+                picker_items[0], picker_capacity);
+        if (result != ASTRA_OK) return result;
+    }
+    astra_directory_snapshot_dispose(&picker_snapshots[picker_entry_bank]);
     picker_entry_bank = next_bank;
     return astra_interface_control_set_text(&ui,
         &controls[ASTRA_FILE_PANEL_TITLE], "Open Astra package",
@@ -421,6 +460,11 @@ int astra_main(const AstraStartupInfo *startup)
     }
     if (surface.area != ASTRA_INVALID_HANDLE)
         (void)astra_shared_surface_close(&surface);
+    astra_directory_snapshot_dispose(&picker_snapshots[0]);
+    astra_directory_snapshot_dispose(&picker_snapshots[1]);
+    astra_runtime_deallocate(picker_items[0]);
+    astra_runtime_deallocate(picker_items[1]);
+    astra_runtime_deallocate((void *)picker_icons);
     astra_process_filesystem_close(&files);
     return (int)status;
 }

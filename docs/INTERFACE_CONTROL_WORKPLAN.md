@@ -149,9 +149,12 @@ Interface Kit; no application-owned pixel buffer or one-off control is added.
 
 Installer adoption: Haiku's `src/kits/tracker/FilePanel.cpp` keeps the file
 panel window and selection policy outside the application. Astra's Installer
-uses the shared Open panel for no-argument launch, while the application owns
-Filesystem Kit directory snapshots and asks File Type Kit for package type.
-On `NAVIGATE` it
-loads the requested directory; on `PICKED` it copies the chosen path into
+uses the shared Open panel for no-argument launch, while the application loads
+directories through the shared `directory_snapshot` helper and asks File Type
+Kit for package type. Interface Kit's `file_panel_rebind_storage` copies the
+current view into larger caller-owned buffers before a large directory change;
+selection, search, view mode, and scroll offset remain intact if navigation
+fails. On `NAVIGATE` Installer loads the requested directory; on `PICKED` it
+copies the chosen path into
 caller storage, then reuses its existing Settings pane for review. Direct
 `.apkg` launch still enters that review pane.

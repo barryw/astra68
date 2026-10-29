@@ -15,6 +15,7 @@ FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic \
 TARGET := build/m68k/installer.elf
 IMAGE := build/m68k/installer
 OBJECT := build/m68k/main.o
+OBJECTS := build/m68k/directory_snapshot.o
 LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_PACKAGE_LIBRARY) \
 	$(ASTRA_FILESYSTEM_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) \
 	$(ASTRA_FONT_LIBRARY) $(ASTRA_SYSTEM_LIBRARY) \
@@ -22,6 +23,10 @@ LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_PACKAGE_LIBRARY) \
 include ../../dynamic-program.mk
 
 $(OBJECT): main.c
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/directory_snapshot.o: ../../common/directory_snapshot.c ../../common/directory_snapshot.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(FLAGS) -MMD -MP -c $< -o $@
 

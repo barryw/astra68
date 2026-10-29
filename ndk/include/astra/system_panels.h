@@ -316,6 +316,17 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
     const AstraDirectoryEntry *entries, uint32_t entry_count,
     AstraCollectionItem *item_storage, uint32_t item_capacity);
 
+/** Rebind caller-owned item and icon buffers without changing the viewed
+ * directory, selection, search, view mode, or scroll offset. The new buffers
+ * must be distinct and large enough for all current visible items. The old
+ * buffers remain borrowed if this operation fails. After success the caller
+ * may release them and use spare_item_storage for the next directory. */
+AstraResult astra_interface_file_panel_rebind_storage(AstraFilePanel *panel,
+    AstraUIContext *context, AstraControl *controls,
+    AstraCollectionItem *item_storage, uint32_t item_capacity,
+    AstraCollectionItem *spare_item_storage, uint32_t spare_item_capacity,
+    const AstraSurface **grid_icons, uint32_t grid_icon_capacity);
+
 /** Replace sidebar Places/Volumes after a volume lifecycle change. The
  * caller supplies a new item array while the old List still borrows it. */
 AstraResult astra_interface_file_panel_set_places(AstraFilePanel *panel,
