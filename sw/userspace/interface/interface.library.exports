@@ -40,6 +40,7 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_file_panel_set_directory;
         astra_interface_file_panel_set_places;
         astra_interface_file_panel_set_icons;
+        astra_interface_file_panel_set_column;
         astra_interface_file_panel_action;
         astra_interface_font_panel_init;
         astra_interface_font_panel_action;

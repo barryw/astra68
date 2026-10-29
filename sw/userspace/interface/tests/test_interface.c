@@ -4729,7 +4729,7 @@ static void test_shared_file_panel(void)
     AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
     AstraTextModel name = ASTRA_TEXT_MODEL_INIT;
     AstraTextModelInfo text_info = ASTRA_TEXT_MODEL_INFO_INIT;
-    AstraControl controls[ASTRA_FILE_PANEL_CONTROL_COUNT];
+    AstraControl controls[ASTRA_FILE_PANEL_CONTROLS_FOR_COLUMNS(2u)];
     AstraFilePanel panel = ASTRA_FILE_PANEL_INIT;
     AstraFilePanelInfo info = ASTRA_FILE_PANEL_INFO_INIT;
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
@@ -4910,6 +4910,61 @@ static void test_shared_file_panel(void)
         &action, &outcome) == ASTRA_OK &&
         outcome == ASTRA_FILE_PANEL_PICKED &&
         strcmp(panel.leaf, "new.z5") == 0);
+
+    {
+        AstraCollectionModel column_models[2] = {
+            ASTRA_COLLECTION_MODEL_INIT, ASTRA_COLLECTION_MODEL_INIT};
+        AstraScrollModel column_scrolls[2] = {
+            ASTRA_SCROLL_MODEL_INIT, ASTRA_SCROLL_MODEL_INIT};
+        AstraColumnView columns[2] = {
+            {&column_models[0], &column_scrolls[0], 160u, {0u, 0u}},
+            {&column_models[1], &column_scrolls[1], 160u, {0u, 0u}}
+        };
+        AstraFilePanelColumnSnapshot snapshots[2] = {{0}, {0}};
+        AstraDirectoryEntry child_entries[1] = {
+            {.name = "planetfall.z3", .kind = ASTRA_VFS_KIND_FILE}
+        };
+        AstraCollectionItem child_items[1];
+
+        assert(astra_scroll_init(&column_scrolls[0], &scroll_info) == ASTRA_OK);
+        assert(astra_scroll_init(&column_scrolls[1], &scroll_info) == ASTRA_OK);
+        info.mode = ASTRA_FILE_PANEL_OPEN;
+        info.directory = "/dh0";
+        info.columns = columns;
+        info.column_snapshots = snapshots;
+        info.column_count = 2u;
+        info.control_capacity = ASTRA_FILE_PANEL_CONTROLS_FOR_COLUMNS(2u);
+        context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
+        assert(astra_interface_file_panel_init(&panel, controls, &info) ==
+            ASTRA_OK);
+        assert(astra_interface_ui_init(&context, controls,
+            ASTRA_FILE_PANEL_CONTROLS_FOR_COLUMNS(2u), 620u, 480u) ==
+            ASTRA_OK);
+        assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+        action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+        action.control_id = 300u + ASTRA_FILE_PANEL_VIEW;
+        action.value = ASTRA_FILE_PANEL_VIEW_COLUMNS;
+        assert(astra_interface_file_panel_action(&panel, &context, controls,
+            &action, &outcome) == ASTRA_OK &&
+            panel.view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS);
+        action.control_id = 300u + ASTRA_FILE_PANEL_CONTROL_COUNT + 2u;
+        action.value = 0;
+        assert(astra_interface_file_panel_action(&panel, &context, controls,
+            &action, &outcome) == ASTRA_OK &&
+            outcome == ASTRA_FILE_PANEL_LOAD_CHILD &&
+            strcmp(panel.target, "/dh0/Stories") == 0);
+        assert(astra_interface_file_panel_set_column(&panel, &context,
+            controls, 1u, "/dh0/Stories", child_entries, 1u,
+            child_items, 1u) == ASTRA_OK &&
+            snapshots[1].item_count == 1u);
+        action.type = ASTRA_UI_ACTION_ACTIVATE;
+        action.control_id = 300u + ASTRA_FILE_PANEL_CONTROL_COUNT + 4u;
+        action.value = 0;
+        assert(astra_interface_file_panel_action(&panel, &context, controls,
+            &action, &outcome) == ASTRA_OK &&
+            outcome == ASTRA_FILE_PANEL_PICKED &&
+            strcmp(panel.target, "/dh0/Stories/planetfall.z3") == 0);
+    }
 }
 
 static void test_shared_colour_panel(void)

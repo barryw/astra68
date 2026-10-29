@@ -132,6 +132,11 @@ static void file_panel_fill_icons(AstraFilePanel *panel,
             entry_icons[(uint32_t)items[at].id - 1u];
 }
 
+static uint32_t file_panel_column_list_index(uint32_t depth)
+{
+    return ASTRA_FILE_PANEL_CONTROL_COUNT + 2u + depth * 2u;
+}
+
 static AstraResult file_panel_button(AstraControl *control, uint32_t id,
     uint32_t parent, const char *text, uint32_t primary)
 {
@@ -278,7 +283,8 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     AstraControl *controls, const AstraFilePanelInfo *info)
 {
     static const AstraChoiceItem view_items[] = {
-        {"List", 4u, {0u, 0u}}, {"Grid", 4u, {0u, 0u}}
+        {"List", 4u, {0u, 0u}}, {"Grid", 4u, {0u, 0u}},
+        {"Columns", 7u, {0u, 0u}}
     };
     static const AstraChoiceItem all_files[] = {
         {"All files", 9u, {0u, 0u}}
@@ -288,6 +294,7 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     AstraChoiceInfo choice = ASTRA_CHOICE_INFO_INIT;
     AstraFieldInfo field = ASTRA_FIELD_INFO_INIT;
     AstraIconGridInfo grid = ASTRA_ICON_GRID_INFO_INIT;
+    AstraColumnsInfo column_info = ASTRA_COLUMNS_INFO_INIT;
     AstraResult result;
     uint32_t visible_count = 0u;
 
@@ -308,6 +315,13 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
           info->place_capacity < info->place_count)) ||
         ((info->type_filter_count != 0u && info->type_filters == NULL) ||
          (info->type_filter_count > 1u && info->type_accept == NULL)) ||
+        (info->column_count != 0u &&
+         (info->column_count > 64u || info->columns == NULL ||
+          info->column_snapshots == NULL ||
+          info->control_capacity <
+              ASTRA_FILE_PANEL_CONTROLS_FOR_COLUMNS(info->column_count) ||
+          info->first_id > UINT32_MAX -
+              ASTRA_FILE_PANEL_CONTROLS_FOR_COLUMNS(info->column_count))) ||
         !astra_words_zero(info->reserved, 4u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *panel = (AstraFilePanel)ASTRA_FILE_PANEL_INIT;
@@ -324,6 +338,9 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     panel->places = info->places;
     panel->place_count = info->place_count;
     panel->place_items = info->place_items;
+    panel->columns = info->columns;
+    panel->column_snapshots = info->column_snapshots;
+    panel->column_count = info->column_count;
     if (!astra_string_copy(panel->directory_storage[0],
                            sizeof(panel->directory_storage[0]),
                            info->directory) ||
@@ -340,6 +357,21 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     result = astra_interface_collection_init(&panel->grid_collection,
         info->item_storage, visible_count, 0u);
     if (result != ASTRA_OK) return result;
+    for (uint32_t depth = 0u; depth < panel->column_count; ++depth) {
+        AstraCollectionModel *model = panel->columns[depth].model;
+        if (model == NULL || model == info->collection ||
+            model == &panel->grid_collection)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        result = astra_interface_collection_init(model,
+            depth == 0u ? info->item_storage : NULL,
+            depth == 0u ? visible_count : 0u, 0u);
+        if (result != ASTRA_OK) return result;
+        panel->column_snapshots[depth] = (AstraFilePanelColumnSnapshot){0};
+    }
+    if (panel->column_count != 0u)
+        panel->column_snapshots[0] = (AstraFilePanelColumnSnapshot){
+            panel->directory, info->entries, info->entry_count,
+            info->item_storage, visible_count, info->item_capacity};
     for (uint32_t at = 0u; at < info->place_count; ++at) {
         if (info->places[at].label == NULL ||
             info->places[at].label_length == 0u ||
@@ -451,7 +483,7 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     if (result != ASTRA_OK) return result;
     choice.id = info->first_id + ASTRA_FILE_PANEL_VIEW;
     choice.items = view_items;
-    choice.item_count = 2u;
+    choice.item_count = panel->column_count != 0u ? 3u : 2u;
     result = astra_interface_segmented_init(&controls[ASTRA_FILE_PANEL_VIEW],
         &choice);
     if (result != ASTRA_OK) return result;
@@ -533,6 +565,20 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
             at == ASTRA_FILE_PANEL_PRIMARY);
         if (result != ASTRA_OK) return result;
     }
+    if (panel->column_count != 0u) {
+        column_info.first_id = info->first_id + ASTRA_FILE_PANEL_CONTROL_COUNT;
+        column_info.columns = panel->columns;
+        column_info.column_count = panel->column_count;
+        column_info.viewport_height = 280u;
+        column_info.state = ASTRA_CONTROL_COLLAPSED;
+        result = astra_interface_columns_init(
+            &controls[ASTRA_FILE_PANEL_CONTROL_COUNT], &column_info);
+        if (result != ASTRA_OK) return result;
+        result = astra_panel_child(
+            &controls[ASTRA_FILE_PANEL_CONTROL_COUNT],
+            info->first_id + ASTRA_FILE_PANEL_CONTENT, 1u);
+        if (result != ASTRA_OK) return result;
+    }
     return ASTRA_OK;
 }
 
@@ -596,6 +642,31 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
             context, &controls[ASTRA_FILE_PANEL_CRUMB0], previous);
         return result;
     }
+    if (panel->column_count != 0u) {
+        result = astra_interface_list_set_items(context,
+            &controls[file_panel_column_list_index(0u)],
+            item_storage, visible_count);
+        if (result != ASTRA_OK) {
+            (void)astra_interface_list_set_items(context,
+                &controls[ASTRA_FILE_PANEL_LIST], panel->items,
+                panel->item_count);
+            (void)astra_interface_icon_grid_set_items(context,
+                &controls[ASTRA_FILE_PANEL_GRID], panel->items,
+                panel->item_count, panel->grid_icons);
+            (void)astra_interface_breadcrumb_set_path(&panel->breadcrumb,
+                context, &controls[ASTRA_FILE_PANEL_CRUMB0], previous);
+            return result;
+        }
+        (void)astra_interface_control_set_value(context,
+            &controls[file_panel_column_list_index(0u)], -1);
+        for (uint32_t depth = 1u; depth < panel->column_count; ++depth) {
+            result = astra_interface_list_set_items(context,
+                &controls[file_panel_column_list_index(depth)], NULL, 0u);
+            if (result != ASTRA_OK) return result;
+            panel->column_snapshots[depth] =
+                (AstraFilePanelColumnSnapshot){0};
+        }
+    }
     panel->active_directory = 1u - panel->active_directory;
     panel->directory = next;
     panel->entries = entries;
@@ -606,6 +677,11 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
     panel->spare_capacity = panel->item_capacity;
     panel->items = item_storage;
     panel->item_capacity = item_capacity;
+    panel->selected_depth = 0u;
+    if (panel->column_count != 0u)
+        panel->column_snapshots[0] = (AstraFilePanelColumnSnapshot){
+            next, entries, entry_count, item_storage, visible_count,
+            item_capacity};
     panel->leaf[0] = '\0';
     panel->target[0] = '\0';
     return ASTRA_OK;
@@ -638,11 +714,37 @@ static AstraResult file_panel_refresh(AstraFilePanel *panel,
             panel->item_count, panel->grid_icons);
         return result;
     }
+    if (panel->column_count != 0u) {
+        result = astra_interface_list_set_items(context,
+            &controls[file_panel_column_list_index(0u)], next, count);
+        if (result != ASTRA_OK) {
+            (void)astra_interface_list_set_items(context,
+                &controls[ASTRA_FILE_PANEL_LIST], panel->items,
+                panel->item_count);
+            (void)astra_interface_icon_grid_set_items(context,
+                &controls[ASTRA_FILE_PANEL_GRID], panel->items,
+                panel->item_count, panel->grid_icons);
+            return result;
+        }
+        for (uint32_t depth = 1u; depth < panel->column_count; ++depth) {
+            result = astra_interface_list_set_items(context,
+                &controls[file_panel_column_list_index(depth)], NULL, 0u);
+            if (result != ASTRA_OK) return result;
+            panel->column_snapshots[depth] =
+                (AstraFilePanelColumnSnapshot){0};
+        }
+    }
     panel->spare_items = panel->items;
     panel->spare_capacity = panel->item_capacity;
     panel->items = next;
     panel->item_capacity = next_capacity;
     panel->item_count = count;
+    panel->selected_depth = 0u;
+    if (panel->column_count != 0u) {
+        panel->column_snapshots[0].items = next;
+        panel->column_snapshots[0].item_count = count;
+        panel->column_snapshots[0].item_capacity = next_capacity;
+    }
     return ASTRA_OK;
 }
 
@@ -699,17 +801,85 @@ AstraResult astra_interface_file_panel_set_icons(AstraFilePanel *panel,
     return ASTRA_OK;
 }
 
-static AstraResult file_panel_target(AstraFilePanel *panel,
-    const char *name)
+AstraResult astra_interface_file_panel_set_column(AstraFilePanel *panel,
+    AstraUIContext *context, AstraControl *controls, uint32_t depth,
+    const char *directory, const AstraDirectoryEntry *entries,
+    uint32_t entry_count, AstraCollectionItem *items, uint32_t capacity)
+{
+    uint32_t count = 0u;
+    AstraResult result;
+    if (panel == NULL || panel->size < sizeof(*panel) || context == NULL ||
+        controls == NULL || depth == 0u || depth >= panel->column_count ||
+        (directory == NULL && (entries != NULL || entry_count != 0u)) ||
+        (directory == NULL && (items != NULL || capacity != 0u)) ||
+        (directory != NULL && directory[0] != '/') ||
+        directory == panel->target ||
+        (directory != NULL && depth > 1u &&
+         panel->column_snapshots[depth - 1u].directory == NULL) ||
+        (directory != NULL && (items == panel->items ||
+            items == panel->spare_items)) ||
+        (items == panel->column_snapshots[depth].items &&
+         panel->column_snapshots[depth].item_count != 0u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (directory != NULL)
+        for (uint32_t other = 1u; other < panel->column_count; ++other)
+            if (other != depth && items != NULL &&
+                items == panel->column_snapshots[other].items &&
+                panel->column_snapshots[other].item_count != 0u)
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (directory != NULL) {
+        result = file_panel_items(panel, entries, entry_count, items,
+            capacity, &count);
+        if (result != ASTRA_OK) return result;
+    }
+    result = astra_interface_list_set_items(context,
+        &controls[file_panel_column_list_index(depth)], items, count);
+    if (result != ASTRA_OK) return result;
+    panel->column_snapshots[depth] = (AstraFilePanelColumnSnapshot){
+        directory, entries, entry_count, items, count, capacity};
+    if (directory == NULL && panel->selected_depth >= depth)
+        panel->selected_depth = depth - 1u;
+    for (uint32_t deeper = depth + 1u;
+         deeper < panel->column_count; ++deeper) {
+        result = astra_interface_list_set_items(context,
+            &controls[file_panel_column_list_index(deeper)], NULL, 0u);
+        if (result != ASTRA_OK) return result;
+        panel->column_snapshots[deeper] =
+            (AstraFilePanelColumnSnapshot){0};
+    }
+    return ASTRA_OK;
+}
+
+static AstraResult file_panel_target_at(AstraFilePanel *panel,
+    const char *directory, const char *name)
 {
     AstraString target;
     astra_string_init(&target, panel->target, sizeof(panel->target));
-    if (!astra_string_append(&target, panel->directory) ||
+    if (!astra_string_append(&target, directory) ||
         (target.length != 0u && target.text[target.length - 1u] != '/' &&
          !astra_string_append_char(&target, '/')) ||
         !astra_string_append(&target, name))
         return ASTRA_ERROR_BUFFER_TOO_SMALL;
     return ASTRA_OK;
+}
+
+static AstraResult file_panel_target(AstraFilePanel *panel,
+    const char *name)
+{
+    return file_panel_target_at(panel, panel->directory, name);
+}
+
+static AstraResult file_panel_fill_name(AstraFilePanel *panel,
+    AstraUIContext *context, AstraControl *controls)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    AstraResult result = astra_text_model_get_state(panel->name_model, &state);
+    if (result != ASTRA_OK) return result;
+    result = astra_text_model_replace(panel->name_model, 0u,
+        state.text_bytes, panel->leaf, (uint32_t)strlen(panel->leaf));
+    if (result != ASTRA_OK) return result;
+    return astra_interface_field_refresh(context,
+        &controls[ASTRA_FILE_PANEL_NAME]);
 }
 
 static AstraResult file_panel_select(AstraFilePanel *panel, uint32_t index,
@@ -780,6 +950,52 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
         action == NULL || action->size < sizeof(*action) || outcome == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *outcome = ASTRA_FILE_PANEL_NONE;
+    if (panel->column_count != 0u &&
+        action->control_id >= panel->first_id + ASTRA_FILE_PANEL_CONTROL_COUNT &&
+        action->control_id - panel->first_id <
+            ASTRA_FILE_PANEL_CONTROLS_FOR_COLUMNS(panel->column_count)) {
+        uint32_t column_at = action->control_id - panel->first_id -
+            ASTRA_FILE_PANEL_CONTROL_COUNT;
+        uint32_t depth;
+        AstraFilePanelColumnSnapshot *snapshot;
+        const AstraDirectoryEntry *entry;
+        uint32_t row;
+        if (column_at < 2u || (column_at & 1u) != 0u ||
+            (action->type != ASTRA_UI_ACTION_VALUE_CHANGED &&
+             action->type != ASTRA_UI_ACTION_ACTIVATE))
+            return ASTRA_OK;
+        depth = (column_at - 2u) / 2u;
+        snapshot = &panel->column_snapshots[depth];
+        if (action->value < 0 ||
+            (uint64_t)action->value >= snapshot->item_count)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        row = (uint32_t)snapshot->items[action->value].id - 1u;
+        if (row >= snapshot->entry_count || snapshot->directory == NULL)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        entry = &snapshot->entries[row];
+        if (!astra_string_copy(panel->leaf, sizeof(panel->leaf), entry->name))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+        result = file_panel_target_at(panel, snapshot->directory, panel->leaf);
+        if (result != ASTRA_OK) return result;
+        panel->selected_depth = depth;
+        if (depth + 1u < panel->column_count) {
+            result = astra_interface_file_panel_set_column(panel, context,
+                controls, depth + 1u, NULL, NULL, 0u, NULL, 0u);
+            if (result != ASTRA_OK) return result;
+        }
+        if (entry->kind == ASTRA_VFS_KIND_DIRECTORY) {
+            *outcome = depth + 1u < panel->column_count ?
+                ASTRA_FILE_PANEL_LOAD_CHILD : ASTRA_FILE_PANEL_NAVIGATE;
+            return ASTRA_OK;
+        }
+        if (entry->kind != ASTRA_VFS_KIND_FILE)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (panel->mode == ASTRA_FILE_PANEL_SAVE)
+            return file_panel_fill_name(panel, context, controls);
+        if (action->type == ASTRA_UI_ACTION_ACTIVATE)
+            *outcome = ASTRA_FILE_PANEL_PICKED;
+        return ASTRA_OK;
+    }
     if (action->control_id < panel->first_id ||
         action->control_id - panel->first_id >= ASTRA_FILE_PANEL_CONTROL_COUNT)
         return ASTRA_OK;
@@ -823,9 +1039,13 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
         at == ASTRA_FILE_PANEL_VIEW) {
         AstraCollectionModel *old_collection = panel->view_mode ==
             ASTRA_FILE_PANEL_VIEW_LIST ? panel->collection :
-            &panel->grid_collection;
+            panel->view_mode == ASTRA_FILE_PANEL_VIEW_GRID ?
+                &panel->grid_collection : panel->columns[0].model;
+        uint32_t transfer = panel->view_mode !=
+            ASTRA_FILE_PANEL_VIEW_COLUMNS || panel->selected_depth == 0u;
         uint32_t next;
-        if (action->value < 0 || action->value > 1)
+        if (action->value < 0 || action->value >
+            (panel->column_count != 0u ? 2 : 1))
             return ASTRA_ERROR_INVALID_ARGUMENT;
         next = (uint32_t)action->value;
         result = astra_interface_ui_set_state(context,
@@ -838,13 +1058,23 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
             next == ASTRA_FILE_PANEL_VIEW_GRID ? 0u :
                 ASTRA_CONTROL_COLLAPSED);
         if (result != ASTRA_OK) return result;
+        if (panel->column_count != 0u) {
+            result = astra_interface_ui_set_state(context,
+                &controls[ASTRA_FILE_PANEL_CONTROL_COUNT],
+                next == ASTRA_FILE_PANEL_VIEW_COLUMNS ? 0u :
+                    ASTRA_CONTROL_COLLAPSED);
+            if (result != ASTRA_OK) return result;
+        }
         panel->view_mode = next;
-        if (old_collection->selected_id != 0u) {
+        if (old_collection->selected_id != 0u && transfer != 0u) {
             for (uint32_t row = 0u; row < panel->item_count; ++row)
                 if (panel->items[row].id == old_collection->selected_id)
                     return astra_interface_control_set_value(context,
                         &controls[next == ASTRA_FILE_PANEL_VIEW_LIST ?
-                            ASTRA_FILE_PANEL_LIST : ASTRA_FILE_PANEL_GRID],
+                            ASTRA_FILE_PANEL_LIST :
+                            next == ASTRA_FILE_PANEL_VIEW_GRID ?
+                                ASTRA_FILE_PANEL_GRID :
+                                file_panel_column_list_index(0u)],
                         row);
         }
         return ASTRA_OK;
@@ -921,23 +1151,30 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
         if (result != ASTRA_OK || panel->mode == ASTRA_FILE_PANEL_OPEN ||
             *outcome == ASTRA_FILE_PANEL_NAVIGATE)
             return result;
-        {
-            AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
-            uint32_t bytes = (uint32_t)strlen(panel->leaf);
-
-            result = astra_text_model_get_state(panel->name_model, &state);
-            if (result != ASTRA_OK) return result;
-            result = astra_text_model_replace(panel->name_model, 0u,
-                state.text_bytes, panel->leaf, bytes);
-            if (result != ASTRA_OK) return result;
-            return astra_interface_field_refresh(context,
-                &controls[ASTRA_FILE_PANEL_NAME]);
-        }
+        return file_panel_fill_name(panel, context, controls);
     }
     if (at != ASTRA_FILE_PANEL_PRIMARY)
         return ASTRA_OK;
     if (panel->mode == ASTRA_FILE_PANEL_SAVE)
         return file_panel_save_name(panel, outcome);
+    if (panel->view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS) {
+        AstraFilePanelColumnSnapshot *snapshot =
+            &panel->column_snapshots[panel->selected_depth];
+        AstraCollectionModel *model =
+            panel->columns[panel->selected_depth].model;
+        AstraUIAction selected = *action;
+        if (model->selected_id == 0u)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        for (uint32_t row = 0u; row < snapshot->item_count; ++row)
+            if (snapshot->items[row].id == model->selected_id) {
+                selected.control_id = panel->first_id +
+                    file_panel_column_list_index(panel->selected_depth);
+                selected.value = row;
+                return astra_interface_file_panel_action(panel, context,
+                    controls, &selected, outcome);
+            }
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
     {
     AstraCollectionModel *active = panel->view_mode == ASTRA_FILE_PANEL_VIEW_LIST ?
         panel->collection : &panel->grid_collection;
