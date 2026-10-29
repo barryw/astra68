@@ -48,6 +48,21 @@ typedef struct AstraWindow {
 ASTRA_NODISCARD AstraResult astra_window_menu_open(AstraWindow *window,
     const struct AstraMenuItem *items, uint32_t count, int32_t x, int32_t y,
     uint32_t request);
+/** Open a flat menu that reports each enabled row selection while it stays
+ * open. Each selected MENU_RESULT has ASTRA_WINDOW_EVENT_CONTINUED; dismissal
+ * sends a final selection-zero result without that flag. The display owns
+ * the copied rows and toggles their checked marks after each selection.
+ * @param window Owning active window.
+ * @param items Flat counted presentation rows copied before return.
+ * @param count Number of rows.
+ * @param x Client-local anchor x.
+ * @param y Client-local anchor y.
+ * @param request Nonzero correlation token.
+ * @return ASTRA_OK or a validation, permission, or capacity error.
+ */
+ASTRA_NODISCARD AstraResult astra_window_menu_open_persistent(
+    AstraWindow *window, const struct AstraMenuItem *items, uint32_t count,
+    int32_t x, int32_t y, uint32_t request);
 /** Dismiss this window's correlated menu. @param window Owning window. @param request Menu correlation token. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_window_menu_close(AstraWindow *window, uint32_t request);
 
@@ -133,6 +148,23 @@ ASTRA_NODISCARD AstraResult astra_window_create(
     uint32_t gui_endpoint,
     uint32_t content_area,
     const AstraWindowCreateInfo *create_info,
+    AstraWindow *window);
+
+/** Create a parent-attached Sheet using parent-local placement. The display
+ * validates that @p parent belongs to the same GUI session and keeps the
+ * Sheet attached as the parent moves. While visible it blocks input to that
+ * parent, leaving other windows in the session usable. Closing the parent
+ * also closes its Sheet. The parent must remain live through this call.
+ * @param gui_endpoint GUI session endpoint used to open the parent.
+ * @param content_area Shared Sheet content area transferred to the GUI.
+ * @param create_info Creation data with type ASTRA_WINDOW_SHEET and no MODAL flag.
+ * @param parent Live parent window.
+ * @param window Receives the Sheet window.
+ * @return ASTRA_OK or a validation, permission, or service error.
+ */
+ASTRA_NODISCARD AstraResult astra_window_sheet_create(
+    uint32_t gui_endpoint, uint32_t content_area,
+    const AstraWindowCreateInfo *create_info, const AstraWindow *parent,
     AstraWindow *window);
 
 /** Read current server-owned window state.

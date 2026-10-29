@@ -22,6 +22,7 @@ static uint32_t next_open_status;
 static uint32_t expected_icon_area;
 static uint32_t expected_icon_length;
 static uint8_t expected_type = ASTRA_WINDOW_STANDARD;
+static uint32_t expected_parent;
 /* Rights of the content-area duplicate; a content-surface window's area is
    its staging area, which the service writes readback into. */
 static uint32_t expected_content_rights =
@@ -107,8 +108,14 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             if (expected_icon_area != 0u)
                 assert(call->handles[2] == 0x102u);
             assert(request->type == expected_type);
+            assert(request->parent_window == expected_parent);
+            assert(request->parent_generation ==
+                   (expected_parent != 0u ? 9u : 0u));
             if (expected_type == ASTRA_WINDOW_STANDARD)
                 assert(request->title_length == 7u && request->title[0] == 'G');
+            else if (expected_type == ASTRA_WINDOW_SHEET)
+                assert(request->flags == 0u &&
+                       request->gadgets == ASTRA_WINDOW_GADGET_AUTO);
             else
                 assert(request->flags == 0u && request->gadgets == 0u &&
                        request->event_mask == 0u);
@@ -132,11 +139,12 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             assert(port == 0x303u && call->request_size == sizeof(*request));
             assert(request->window == 7u && request->generation != 0u);
             assert(request->action >= ASTRA_GUI_WINDOW_QUERY &&
-                   request->action <= ASTRA_GUI_WINDOW_MENU_BAR_CLEAR &&
+                   request->action <= ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT &&
                    request->action != ASTRA_GUI_WINDOW_CLOSE);
             assert(call->reply_index == 0u);
             if (request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ||
                 request->action == ASTRA_GUI_WINDOW_MENU_OPEN ||
+                request->action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT ||
                 request->action == ASTRA_GUI_WINDOW_MENU_BAR_SET)
                 assert(call->handle_count == 1u &&
                        call->handles[0] == 0x103u);
@@ -144,7 +152,8 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
                 assert(call->handle_count == 0u);
             assert(call->reply_capacity == sizeof(*reply) &&
                    call->reply_handle_capacity == 0u);
-            if (request->action == ASTRA_GUI_WINDOW_MENU_OPEN) {
+            if (request->action == ASTRA_GUI_WINDOW_MENU_OPEN ||
+                request->action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT) {
                 assert(astra_load_be32(pointer_area) == ASTRA_GUI_MENU_MAGIC);
                 assert(astra_load_be32(pointer_area + 4u) == ASTRA_GUI_MENU_VERSION);
                 assert(astra_load_be32(pointer_area + 8u) == 72u && astra_load_be32(pointer_area + 12u) == 3u);
@@ -395,9 +404,13 @@ int main(void)
         assert(call_count == before + 6u && menu_area_closes == 1u &&
             last_command.action == ASTRA_GUI_WINDOW_MENU_OPEN && last_command.flags == 42u &&
             last_command.x == 12u && last_command.y == 24u);
+        assert(astra_window_menu_open_persistent(&window, rows, 3u,
+            12, 24, 44u) == ASTRA_OK);
+        assert(last_command.action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT &&
+               last_command.flags == 44u);
         next_command_status = ASTRA_STATUS_BUSY;
         assert(astra_window_menu_open(&window, rows, 3u, 12, 24, 43u) == ASTRA_ERROR_BUSY);
-        assert(menu_area_closes == 2u);
+        assert(menu_area_closes == 3u);
         next_command_status = ASTRA_STATUS_OK;
         before = call_count;
         assert(astra_window_menu_open(&window, rows, 3u, 12, 24, 0u) == ASTRA_ERROR_INVALID_ARGUMENT);
@@ -558,6 +571,24 @@ int main(void)
     expected_type = ASTRA_WINDOW_DESKTOP;
     assert(astra_window_create(1, 2, &create, &window) == ASTRA_OK);
     assert(astra_window_close(&window) == ASTRA_OK);
+    {
+        AstraWindow parent = {0x303u, 0x202u, 42u, 9u, 0x404u};
+
+        window = (AstraWindow)ASTRA_WINDOW_INIT;
+        create.type = ASTRA_WINDOW_SHEET;
+        create.gadgets = ASTRA_WINDOW_GADGET_AUTO;
+        expected_type = ASTRA_WINDOW_SHEET;
+        expected_parent = 42u;
+        assert(astra_window_create(1, 2, &create, &window) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_window_sheet_create(1, 2, &create, &parent,
+                                         &window) == ASTRA_OK);
+        assert(astra_window_close(&window) == ASTRA_OK);
+        expected_parent = 0u;
+        expected_type = ASTRA_WINDOW_DESKTOP;
+        create.type = ASTRA_WINDOW_DESKTOP;
+        create.gadgets = 0u;
+    }
     window = (AstraWindow)ASTRA_WINDOW_INIT;
     create.content_format = ASTRA_WINDOW_CONTENT_SURFACE;
     expected_content_rights |= ASTRA_RIGHT_WRITE;

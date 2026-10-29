@@ -2593,6 +2593,22 @@ static void test_context_menu_transport(void)
     command.x = 120u; command.y = 120u;
     assert(apply_command(&state, &theme, &command, &closed, &changed) == ASTRA_STATUS_OK && changed);
     assert(state.overlay == DISPLAY_OVERLAY_NONE && menu_allocations == 0u);
+    command.action = ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT;
+    command.flags = 45u;
+    command.x = 12u; command.y = 24u;
+    assert(menu_open(&state, &theme, 0u, &command, area) == ASTRA_STATUS_OK);
+    assert(state.menu_persistent != 0u);
+    menu_continue(&state, 1u, 7u);
+    assert(state.overlay == DISPLAY_OVERLAY_MENU &&
+           (state.menu_rows[0].flags & ASTRA_MENU_CHECKED) != 0u &&
+           delivered.event.type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
+           (delivered.event.flags & ASTRA_WINDOW_EVENT_CONTINUED) != 0u &&
+           delivered.event.data.menu_result.request == 45u &&
+           delivered.event.data.menu_result.selection == 1u);
+    menu_end(&state, 0u, 8u, ASTRA_STATUS_OK);
+    assert(state.overlay == DISPLAY_OVERLAY_NONE &&
+           delivered.event.data.menu_result.selection == 0u &&
+           (delivered.event.flags & ASTRA_WINDOW_EVENT_CONTINUED) == 0u);
     command.action = ASTRA_GUI_WINDOW_MENU_OPEN;
     command.flags = 44u;
     command.x = 12u; command.y = 24u;
@@ -2622,8 +2638,6 @@ static void test_menu_bar_transport(void)
     int changed;
     astra_message_header_set(&command.header, sizeof(command), ASTRA_GUI_PROTOCOL,
         ASTRA_GUI_VERSION, ASTRA_GUI_WINDOW_COMMAND, 1u);
-    /* New action shares protocol with installed supervisor and GUI clients. */
-    command.header.protocol_version = 25u;
     assert(valid_command(&command, sizeof(command), 2u, 1u, 320u, 180u));
     assert(!valid_command(&command, sizeof(command), 1u, 1u, 320u, 180u));
     assert(astra_rt_area_create(4096u, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
@@ -2836,6 +2850,75 @@ static void test_modal_windows(void)
     assert(state.count == 1u && state.windows[0].session == 8u);
 }
 
+static void test_sheet_windows(void)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayWindow windows[TEST_WINDOW_COUNT] = {0};
+    DisplayState state = {.windows = windows, .capacity = TEST_WINDOW_COUNT};
+    AstraGuiWindowCommand command = {.window = 1u,
+        .action = ASTRA_GUI_WINDOW_MOVE, .x = 180u, .y = 140u};
+    DisplayWindow closed = {0};
+    int changed = 0;
+
+    add_window(&state, 0u, ASTRA_WINDOW_STANDARD, 100u, 100u,
+               300u, 190u, 0u, ASTRA_WINDOW_GADGET_CLOSE);
+    add_window(&state, 1u, ASTRA_WINDOW_STANDARD, 700u, 100u,
+               300u, 190u, 0u, ASTRA_WINDOW_GADGET_CLOSE);
+    add_window(&state, 2u, ASTRA_WINDOW_SHEET, 120u, 130u,
+               200u, 100u, 0u, ASTRA_WINDOW_GADGET_CLOSE);
+    for (uint32_t at = 0u; at < state.count; ++at)
+        state.windows[at].session = 7u;
+    {
+        AstraGuiOpenWindow open = {.type = ASTRA_WINDOW_SHEET,
+            .parent_window = 1u, .parent_generation = 1u,
+            .x = 20u, .y = 30u};
+        AstraGuiOpenWindow invalid = open;
+
+        assert(!resolve_sheet_parent(&state, &invalid, 8u));
+        invalid.parent_generation = 2u;
+        assert(!resolve_sheet_parent(&state, &invalid, 7u));
+        assert(resolve_sheet_parent(&state, &open, 7u));
+        assert(open.x == 120u && open.y == 130u);
+    }
+    state.windows[2].request.parent_window = 1u;
+    state.windows[2].sheet_offset_x = 20;
+    state.windows[2].sheet_offset_y = 30;
+    assert(modal_window(&state, find_id(&state, 1u)) ==
+           find_id(&state, 3u));
+    assert(modal_window(&state, find_id(&state, 2u)) ==
+           find_id(&state, 2u));
+    assert(activate(&state, &theme, 1u, 1, 0u));
+    assert(state.windows[active_window(&state)].id == 3u);
+    assert(activate(&state, &theme, 2u, 1, 0u));
+    assert(state.windows[active_window(&state)].id == 2u);
+    assert(apply_command(&state, &theme, &command, &closed, &changed) ==
+           ASTRA_STATUS_OK && changed);
+    assert(state.windows[find_id(&state, 3u)].request.x == 200u &&
+           state.windows[find_id(&state, 3u)].request.y == 170u);
+    command.action = ASTRA_GUI_WINDOW_MINIMIZE;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) ==
+           ASTRA_STATUS_OK);
+    assert(state.windows[find_id(&state, 3u)].state ==
+           ASTRA_WINDOW_STATE_MINIMIZED &&
+           state.windows[find_id(&state, 3u)].sheet_hidden_by_parent != 0u);
+    command.action = ASTRA_GUI_WINDOW_RESTORE;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) ==
+           ASTRA_STATUS_OK);
+    assert(state.windows[find_id(&state, 3u)].state ==
+           ASTRA_WINDOW_STATE_NORMAL &&
+           state.windows[find_id(&state, 3u)].sheet_hidden_by_parent == 0u);
+    state.windows[find_id(&state, 3u)].event_send = 0u;
+    state.windows[find_id(&state, 3u)].vblank_signal = 0u;
+    command.action = ASTRA_GUI_WINDOW_CLOSE;
+    changed = 0;
+    assert(apply_command(&state, &theme, &command, &closed, &changed) ==
+           ASTRA_STATUS_OK && changed);
+    assert(state.count == 1u && state.windows[0].id == 2u);
+    closed.event_send = 0u;
+    closed.vblank_signal = 0u;
+    close_window(&closed);
+}
+
 int main(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -2902,6 +2985,7 @@ int main(void)
     test_window_graphics();
     test_menu_key_ownership();
     test_modal_windows();
+    test_sheet_windows();
     test_dense_menu_render();
     test_context_menu_transport();
     test_menu_bar_transport();
@@ -3382,7 +3466,25 @@ int main(void)
                 ASTRA_WINDOW_GADGET_MAXIMIZE));
         assert(window_gadgets(ASTRA_WINDOW_DIALOG) ==
                ASTRA_WINDOW_GADGET_CLOSE);
+        assert(window_gadgets(ASTRA_WINDOW_SHEET) ==
+               ASTRA_WINDOW_GADGET_CLOSE);
         assert(window_gadgets(ASTRA_WINDOW_POPOVER) == 0u);
+        {
+            AstraGuiOpenWindow sheet_open = open;
+
+            sheet_open.type = ASTRA_WINDOW_SHEET;
+            sheet_open.x = 120u;
+            sheet_open.y = 130u;
+            sheet_open.width = 200u;
+            sheet_open.height = 100u;
+            sheet_open.gadgets = ASTRA_WINDOW_GADGET_AUTO;
+            assert(!valid_open(&sheet_open, sizeof(sheet_open), 3u));
+            sheet_open.parent_window = 1u;
+            sheet_open.parent_generation = 5u;
+            assert(valid_open(&sheet_open, sizeof(sheet_open), 3u));
+            sheet_open.flags = ASTRA_WINDOW_MODAL;
+            assert(!valid_open(&sheet_open, sizeof(sheet_open), 3u));
+        }
         {
             AstraGuiOpenWindow dialog_open = open;
 

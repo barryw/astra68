@@ -117,6 +117,8 @@ ASTRA_SYSTEM_4.0 {
         astra_window_activate;
         astra_window_close;
         astra_window_create;
+        astra_window_sheet_create;
+        astra_window_menu_open_persistent;
         astra_window_deactivate;
         astra_window_display;
         astra_window_event_try;
