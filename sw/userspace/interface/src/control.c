@@ -2109,11 +2109,17 @@ AstraResult astra_interface_text_view_set_mode(AstraUIContext *context,
     AstraControl *control, uint32_t mode)
 {
     AstraControl next;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     if (control_index(context, control) == CONTROL_NONE ||
         control->_private_control_kind != ASTRA_CONTROL_TEXT_VIEW ||
         (mode != ASTRA_TEXT_SURFACE_CODE &&
          mode != ASTRA_TEXT_SURFACE_FLOW))
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (mode == ASTRA_TEXT_SURFACE_FLOW) {
+        uint32_t height = astra_surface_ui_text_height(theme.body_font_height);
+        if (height == 0u || height > UINT16_MAX)
+            return ASTRA_ERROR_UNSUPPORTED;
+    }
     if (((control->_private_style & TEXT_VIEW_FLOW) != 0u) ==
         (mode == ASTRA_TEXT_SURFACE_FLOW))
         return ASTRA_OK;
@@ -3888,6 +3894,14 @@ static uint32_t text_view_unit_width(const AstraControl *control)
         1u : theme.mono_cell_width;
 }
 
+static uint32_t text_view_line_height(const AstraControl *control)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    uint32_t height = (control->_private_style & TEXT_VIEW_FLOW) != 0u ?
+        astra_surface_ui_text_height(theme.body_font_height) : 0u;
+    return height > theme.control_height ? height : theme.control_height;
+}
+
 static uint32_t text_view_gutter_width(const AstraControl *control)
 {
     AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
@@ -4149,10 +4163,11 @@ static AstraResult text_view_measure(const AstraControl *control,
 {
     const AstraTextModel *model = const_control_text_model(control);
     AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
-    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     uint32_t widest = 1u;
     if (astra_text_model_get_state(model, &state) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (text_view_line_height(control) > UINT16_MAX)
+        return ASTRA_ERROR_NO_RESOURCES;
     uint32_t columns = (control->_private_style & TEXT_VIEW_WRAP) != 0u ?
         text_view_wrap_columns(control) : UINT32_MAX;
     TextViewRows rows = {control, model, state.line_count, 0u, 0u, columns, 0u};
@@ -4168,7 +4183,7 @@ static AstraResult text_view_measure(const AstraControl *control,
         control->_private_measured_width :
         (uint64_t)widest * text_view_unit_width(control) +
         text_view_gutter_width(control);
-    uint64_t height = row_count * theme.control_height;
+    uint64_t height = row_count * text_view_line_height(control);
     if (width > INT32_MAX || height > INT32_MAX)
         return ASTRA_ERROR_NO_RESOURCES;
     *size = (AstraControlSize){(uint32_t)width, (uint32_t)height};
@@ -4209,6 +4224,7 @@ static AstraResult text_view_render(const AstraControl *control,
     int64_t content_x = (int64_t)frame->x + gutter;
     uint32_t first_row, last_row, first_column, last_column;
     uint32_t selection_start, selection_end;
+    uint32_t line_height = text_view_line_height(control);
     int64_t left = clip->x > frame->x ? clip->x : frame->x;
     int64_t top = clip->y > frame->y ? clip->y : frame->y;
     int64_t right = (int64_t)clip->x + clip->width;
@@ -4220,9 +4236,11 @@ static AstraResult text_view_render(const AstraControl *control,
     if (right <= left || bottom <= top) return ASTRA_OK;
     if (astra_text_model_get_state(model, &state) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    first_row = (uint32_t)((top - frame->y) / theme.control_height);
-    last_row = (uint32_t)((bottom - frame->y + theme.control_height - 1u) /
-                          theme.control_height);
+    if (line_height > UINT16_MAX)
+        return ASTRA_ERROR_NO_RESOURCES;
+    first_row = (uint32_t)((top - frame->y) / line_height);
+    last_row = (uint32_t)((bottom - frame->y + line_height - 1u) /
+                          line_height);
     uint32_t unit_width = text_view_unit_width(control);
     first_column = left <= content_x ? 0u :
         (uint32_t)((left - content_x) / unit_width);
@@ -4238,7 +4256,7 @@ static AstraResult text_view_render(const AstraControl *control,
     info.font_height = info.mode == ASTRA_TEXT_SURFACE_FLOW ?
         theme.body_font_height : theme.mono_font_height;
     info.cell_width = theme.mono_cell_width;
-    info.line_height = theme.control_height;
+    info.line_height = (uint16_t)line_height;
     info.default_foreground = color((effective_state(control) &
         ASTRA_CONTROL_DISABLED) != 0u ? theme.text_tertiary :
         inverted ? theme.client : theme.client_text);
@@ -4284,8 +4302,8 @@ static AstraResult text_view_render(const AstraControl *control,
                     if (!astra_surface_mono_text_styled(surface,
                         (int32_t)content_x -
                             (int32_t)((digits + 1u) * theme.mono_cell_width),
-                        frame->y + (int32_t)(row * theme.control_height) +
-                            (int32_t)(theme.control_height -
+                        frame->y + (int32_t)(row * line_height) +
+                            (int32_t)(line_height -
                                       theme.mono_font_height) / 2,
                         number, digits, theme.mono_font_height,
                         theme.mono_cell_width,
@@ -4325,7 +4343,7 @@ static AstraResult text_view_render(const AstraControl *control,
                     AstraResult result = surface != NULL ?
                         astra_text_surface_render_flow_run(&text, surface,
                             (int32_t)content_x + (int32_t)column,
-                            frame->y + (int32_t)(row * theme.control_height),
+                            frame->y + (int32_t)(row * line_height),
                             encoded, encoded_bytes, width, foreground,
                             background, style.attributes) :
                         astra_text_surface_flow_run_requirements(&text,
@@ -4390,7 +4408,7 @@ static AstraResult text_view_render(const AstraControl *control,
         int64_t caret_x = content_x +
             (int64_t)caret_column * unit_width;
         int64_t caret_y = (int64_t)frame->y +
-            (int64_t)caret_row * theme.control_height;
+            (int64_t)caret_row * line_height;
         if (caret_x < INT32_MIN || caret_x > INT32_MAX ||
             caret_y < INT32_MIN || caret_y > INT32_MAX)
             return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -6911,7 +6929,7 @@ static AstraResult text_position(const AstraControl *control, int32_t x, int32_t
                 const_control_text_model(control), &state) != ASTRA_OK)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         if (row < 0) row = 0;
-        row /= theme.control_height;
+        row /= text_view_line_height(control);
         relative = (int64_t)x - control->_private_frame.x -
             text_view_gutter_width(control);
         columns = relative <= 0 ? 0u :
@@ -7023,7 +7041,6 @@ static AstraResult text_selection(AstraUIContext *context, uint32_t index,
     action->type = ASTRA_UI_ACTION_SELECTION_CHANGED;
     action->control_id = control->_private_id;
     if (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW) {
-        AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
         AstraTextLine line = ASTRA_TEXT_LINE_INIT;
         uint32_t row, column;
         TextViewRow visual;
@@ -7039,7 +7056,8 @@ static AstraResult text_selection(AstraUIContext *context, uint32_t index,
         return control_reveal(context, index,
             text_view_gutter_width(control) +
             column * text_view_unit_width(control),
-            row * theme.control_height, 1u, theme.control_height);
+            row * text_view_line_height(control), 1u,
+            text_view_line_height(control));
     }
     return ASTRA_OK;
 }
@@ -7049,7 +7067,6 @@ AstraResult astra_interface_text_view_reveal(AstraUIContext *context,
 {
     uint32_t index = control_index(context, control);
     AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
-    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraTextLine line = ASTRA_TEXT_LINE_INIT;
     TextViewRow visual;
     uint32_t row, column, bytes;
@@ -7067,12 +7084,13 @@ AstraResult astra_interface_text_view_reveal(AstraUIContext *context,
         text_view_location(control, control_text_model(control), byte_offset,
             state.line_count, &row, &column, &line);
     if (!located || column > UINT32_MAX / text_view_unit_width(control) ||
-        row > UINT32_MAX / theme.control_height)
+        row > UINT32_MAX / text_view_line_height(control))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return control_reveal(context, index,
         text_view_gutter_width(control) +
         column * text_view_unit_width(control),
-        row * theme.control_height, 1u, theme.control_height);
+        row * text_view_line_height(control), 1u,
+        text_view_line_height(control));
 }
 
 AstraResult astra_interface_text_view_select(AstraUIContext *context,
@@ -7292,7 +7310,6 @@ static AstraResult text_key(AstraUIContext *context, uint32_t index,
         (usage == 0x4au || usage == 0x4du || usage == 0x52u || usage == 0x51u ||
          usage == 0x4bu || usage == 0x4eu)) {
         AstraTextLine line = ASTRA_TEXT_LINE_INIT;
-        AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
         uint32_t row, column, ignored;
         if ((control->_private_style & TEXT_VIEW_WRAP) != 0u) {
             TextViewRow visual;
@@ -7312,11 +7329,12 @@ static AstraResult text_key(AstraUIContext *context, uint32_t index,
                     usage == 0x4du && visual.end != visual.hard_end;
             } else {
                 uint32_t steps = usage == 0x4bu || usage == 0x4eu ?
-                    control->_private_clip.height / theme.control_height : 1u;
+                    control->_private_clip.height /
+                        text_view_line_height(control) : 1u;
                 if (steps == 0u) steps = 1u;
                 if (text_view_measure(control, &size) != ASTRA_OK)
                     return ASTRA_ERROR_INVALID_ARGUMENT;
-                uint32_t count = size.height / theme.control_height;
+                uint32_t count = size.height / text_view_line_height(control);
                 if (usage == 0x52u || usage == 0x4bu)
                     row = row < steps ? 0u : row - steps;
                 else row += steps < count - row ? steps : count - row - 1u;
@@ -7340,7 +7358,8 @@ static AstraResult text_key(AstraUIContext *context, uint32_t index,
                 return ASTRA_ERROR_INVALID_ARGUMENT;
         } else {
             uint32_t rows = usage == 0x4bu || usage == 0x4eu ?
-                control->_private_clip.height / theme.control_height : 1u;
+                control->_private_clip.height /
+                    text_view_line_height(control) : 1u;
             if (rows == 0u) rows = 1u;
             if (usage == 0x52u || usage == 0x4bu)
                 row = row < rows ? 0u : row - rows;

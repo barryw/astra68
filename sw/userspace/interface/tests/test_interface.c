@@ -435,6 +435,7 @@ void astra_surface_fill_round(AstraSurfaceView *surface, int32_t x, int32_t y,
 }
 
 static uint32_t font_advance = 1u;
+static uint32_t font_line_height;
 static const char *context_font_id = "";
 AstraResult astra_fonts_context_id(char id[ASTRA_FONT_ID_MAX])
 {
@@ -500,7 +501,7 @@ int astra_surface_ui_text_requirements(uint32_t length,
 
 uint32_t astra_surface_ui_text_height(uint16_t pixel_height)
 {
-    return pixel_height;
+    return font_line_height != 0u ? font_line_height : pixel_height;
 }
 
 uint32_t astra_surface_ui_text_fit(const char *text, uint32_t length,
@@ -3419,12 +3420,14 @@ static void test_text_view_flow_edit_find(void)
     assert(astra_interface_text_view_set_mode(&context, &controls[1],
         ASTRA_TEXT_SURFACE_GRID) == ASTRA_ERROR_INVALID_ARGUMENT);
     font_advance = 2u;
+    font_line_height = 30u;
     assert(astra_interface_text_view_set_mode(&context, &controls[1],
         ASTRA_TEXT_SURFACE_FLOW) == ASTRA_OK);
     assert(astra_interface_text_view_set_wrap_width(&context, &controls[1],
         10u) == ASTRA_OK);
     assert(astra_interface_ui_measure(&context, &controls[1], &measured) == ASTRA_OK &&
-        measured.width == 10u && measured.height > 40u);
+        measured.width == 10u && measured.height > 40u &&
+        measured.height % font_line_height == 0u);
     AstraSurfaceView surface = render_view(16u, 40u);
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK &&
@@ -3477,6 +3480,7 @@ static void test_text_view_flow_edit_find(void)
     assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
         model_state.selection.focus == 0u);
     font_advance = 1u;
+    font_line_height = 0u;
 }
 
 static void test_scroll_view_layout_and_wheel(void)
