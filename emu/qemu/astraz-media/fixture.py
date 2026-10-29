@@ -6,6 +6,7 @@ The companion uses standard Blorb resource indexing; no game assets are used.
 """
 
 import argparse
+import math
 from pathlib import Path
 import struct
 import zlib
@@ -40,11 +41,14 @@ def png():
 
 
 def aiff():
-    # 16 signed 8-bit mono samples at 8000 Hz, encoded as an IEEE extended
-    # 80-bit number. Silence is valid and keeps the audio gate unobtrusive.
-    comm = be16(1) + be32(16) + be16(8) + bytes.fromhex("400bfa00000000000000")
+    # One second of signed 8-bit mono 440 Hz at 8000 Hz. The sample rate is
+    # encoded as an IEEE extended 80-bit number.
+    frames = 8000
+    samples = bytes(int(64 * math.sin(2 * math.pi * 440 * i / 8000)) & 0xff
+                    for i in range(frames))
+    comm = be16(1) + be32(frames) + be16(8) + bytes.fromhex("400bfa00000000000000")
     return b"AIFF" + chunk(b"COMM", comm) + \
-        chunk(b"SSND", be32(0) + be32(0) + bytes(16))
+        chunk(b"SSND", be32(0) + be32(0) + samples)
 
 
 def mod():
@@ -108,9 +112,12 @@ def main():
     parser.add_argument("directory", type=Path)
     args = parser.parse_args()
     args.directory.mkdir(parents=True, exist_ok=True)
+    aiff_data = aiff()
     (args.directory / "media.z6").write_bytes(story())
     (args.directory / "media.png").write_bytes(png())
-    (args.directory / "media.blb").write_bytes(blorb(b"FORM", aiff()))
+    (args.directory / "media.aiff").write_bytes(b"FORM" +
+                                                 be32(len(aiff_data)) + aiff_data)
+    (args.directory / "media.blb").write_bytes(blorb(b"FORM", aiff_data))
     (args.directory / "media.mod").write_bytes(mod())
     (args.directory / "media-mod.blb").write_bytes(
         blorb(b"MOD ", mod()))

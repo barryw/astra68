@@ -4,6 +4,8 @@
 #include "audio.h"
 #include "picture.h"
 
+#include <SDL.h>
+#include <SDL_mixer.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -67,6 +69,22 @@ static int event(void *context, const AstraZEvent *item)
         }
         probe->sounds++;
         if (!astraz_audio_event(probe->audio, item)) {
+            const char *error = SDL_GetError();
+            if (error && *error) {
+                (void)astra_log(error);
+                fprintf(stderr, "AstraZ media SDL error: %s\n", error);
+            }
+            probe->invalid = 1;
+            return -1;
+        }
+        if (probe->expect_mod ? !Mix_PlayingMusic() : !Mix_Playing(0)) {
+            (void)astra_log("ASTRAZ_MEDIA_FAIL playback did not start");
+            probe->invalid = 1;
+            return -1;
+        }
+        SDL_Delay(probe->expect_mod ? 1200u : 200u);
+        if (probe->expect_mod ? !Mix_PlayingMusic() : !Mix_Playing(0)) {
+            (void)astra_log("ASTRAZ_MEDIA_FAIL playback stopped early");
             probe->invalid = 1;
             return -1;
         }
