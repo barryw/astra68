@@ -139,3 +139,8 @@ ASTRA_INTERFACE_7.9 {
         astra_interface_grid_view_init;
         astra_interface_grid_view_refresh;
 } ASTRA_INTERFACE_7.8;
+
+ASTRA_INTERFACE_7.10 {
+    global:
+        astra_interface_image_view_render;
+} ASTRA_INTERFACE_7.9;

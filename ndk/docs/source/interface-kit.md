@@ -484,3 +484,31 @@ on activation. Escape dismisses. The caller validates and saves the result;
 `astra_interface_inline_edit_stop` ends editing after commit or cancel.
 Desktop and Atlas use this same control for folder names. Both additions are
 exported by `interface.library.7` revision 7.4.0.
+
+## Image View
+
+Interface Kit 7.10 adds `AstraImageViewInfo` and
+`astra_interface_image_view_render` for clipped images in application windows.
+The caller supplies a frame from its existing layout, a viewport clip, and a
+borrowed Graphics Kit draw-source surface. The view appends an alpha-aware
+hardware blit; it never copies or rasterizes pixels on the CPU. Decode images
+outside Interface Kit, upload them with `astra_surface_write`, and keep the
+source surface live until the referencing draw list retires. This composes
+with existing Container and ScrollView controls without an image-specific
+layout state machine.
+
+For mixed graphics and text, the Graphics Kit draw list is the ordered canvas.
+Give a Container a fixed flex size, call `astra_interface_ui_geometry` to get
+its frame and inherited clip, and replay the content in order. Use Image View
+for picture commands, `astra_draw_ui_text` or `astra_draw_font_text` for text,
+and Graphics Kit rectangle and same-surface blit commands for erase and scroll.
+Set the viewport clip before each raw Graphics Kit command after an Image View
+call. Image View sets the clip for its own blit, so commands retain the order
+in which the application appends them. The Container owns layout; the draw
+list owns rendering order and hardware submission.
+
+Haiku reference: `headers/os/interface/View.h` and
+`src/kits/interface/View.cpp` use `BView::DrawBitmapAsync` to submit a bitmap
+reference and source/destination rectangles to the window server. Astra keeps
+that server-owned pixel work, using its existing surface and draw-list
+contracts instead of adding a second bitmap protocol.

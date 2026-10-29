@@ -40,6 +40,10 @@
 :project: astra-ndk
 ```
 
+```{doxygenfile} image_view.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} inline_edit.h
 :project: astra-ndk
 ```

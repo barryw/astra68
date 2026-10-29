@@ -21,7 +21,7 @@ LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 INTERFACE_TARGET := build/m68k/libraries/interface.library.7
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/settings_pane.o build/m68k/toolbar.o \
-	build/m68k/icon_tile.o build/m68k/inline_edit.o \
+	build/m68k/icon_tile.o build/m68k/image_view.o build/m68k/inline_edit.o \
 	build/m68k/text_surface.o build/m68k/undo.o build/m68k/text_model.o \
 	build/m68k/scroll.o build/m68k/command.o build/m68k/menu.o build/m68k/menu_context.o
 INTERFACE_LIBRARY_MAP := interface.library.exports
@@ -40,6 +40,7 @@ SCROLL_HOST_TEST := build/host/test_scroll
 COMMAND_HOST_TEST := build/host/test_command
 MENU_HOST_TEST := build/host/test_menu
 ICON_TILE_HOST_TEST := build/host/test_icon_tile
+IMAGE_VIEW_HOST_TEST := build/host/test_image_view
 GRAPHICS_HOST_SURFACE := $(GRAPHICS)/build/host/surface.o $(GRAPHICS)/build/host/font_data.o
 GRAPHICS_HOST_SURFACE_SANITIZE := $(GRAPHICS)/build/host/surface_sanitize.o $(GRAPHICS)/build/host/font_data_sanitize.o
 FONT_HOST_INPUTS := $(RUNTIME)/tests/uncontended_mutex.c \
@@ -76,7 +77,7 @@ build/m68k/toolbar.o: src/toolbar.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
-build/m68k/icon_tile.o build/m68k/inline_edit.o: build/m68k/%.o: src/%.c
+build/m68k/icon_tile.o build/m68k/image_view.o build/m68k/inline_edit.o: build/m68k/%.o: src/%.c
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
@@ -153,13 +154,15 @@ library-contract: $(INTERFACE_TARGET)
 		grep -Eq ' astra_interface_toolbar_set_icons@@ASTRA_INTERFACE_7\.6$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -Eq ' astra_interface_text_view_set_inverted@@ASTRA_INTERFACE_7\.8$$'
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_image_view_render@@ASTRA_INTERFACE_7\.10$$'
 	@! $(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -q 'ASTRA_INTERFACE_5\.1'
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.7 7.9.0 ABI 7.9$$'
+		grep -q '^interface.library.7 7.10.0 ABI 7.10$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
@@ -225,9 +228,15 @@ $(ICON_TILE_HOST_TEST): src/icon_tile.c tests/test_icon_tile.c $(NDK_HOST_UTF8)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$^ -o $@
 
+$(IMAGE_VIEW_HOST_TEST): src/image_view.c tests/test_image_view.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$^ -o $@
+
 test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 		$(UNDO_HOST_TEST) $(TEXT_MODEL_HOST_TEST) $(SCROLL_HOST_TEST) \
-		$(COMMAND_HOST_TEST) $(MENU_HOST_TEST) $(ICON_TILE_HOST_TEST)
+		$(COMMAND_HOST_TEST) $(MENU_HOST_TEST) $(ICON_TILE_HOST_TEST) \
+		$(IMAGE_VIEW_HOST_TEST)
 	./$(INTERFACE_HOST_TEST)
 	./$(TEXT_SURFACE_HOST_TEST)
 	./$(UNDO_HOST_TEST)
@@ -236,6 +245,7 @@ test: $(INTERFACE_HOST_TEST) $(TEXT_SURFACE_HOST_TEST) \
 	./$(COMMAND_HOST_TEST)
 	./$(MENU_HOST_TEST)
 	./$(ICON_TILE_HOST_TEST)
+	./$(IMAGE_VIEW_HOST_TEST)
 
 sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANITIZE)
 	@mkdir -p build/host
@@ -277,6 +287,10 @@ sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANI
 		$(SANITIZER_FLAGS) src/icon_tile.c tests/test_icon_tile.c \
 		$(NDK_HOST_UTF8) -o build/host/test_icon_tile_sanitize
 	./build/host/test_icon_tile_sanitize
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		$(SANITIZER_FLAGS) src/image_view.c tests/test_image_view.c \
+		-o build/host/test_image_view_sanitize
+	./build/host/test_image_view_sanitize
 
 analyze:
 	@mkdir -p build/analyzer
@@ -288,6 +302,8 @@ analyze:
 		-c src/settings_pane.c -o build/analyzer/settings_pane.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/icon_tile.c -o build/analyzer/icon_tile.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
+		-c src/image_view.c -o build/analyzer/image_view.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \
 		-c src/inline_edit.c -o build/analyzer/inline_edit.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -fanalyzer \

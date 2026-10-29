@@ -5,6 +5,7 @@
 
 #include <astra/control.h>
 #include <astra/interface.h>
+#include <astra/image_view.h>
 #include <astra/pointer.h>
 #include <astra/interface_library.h>
 #include <astra/scroll.h>
