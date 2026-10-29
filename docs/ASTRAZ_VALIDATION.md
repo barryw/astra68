@@ -36,9 +36,11 @@ then a font 1 event followed by the second. In the final GUI gate, the font 3
 character must use the standard adjacent 8 × 8 graphics glyph, rather than the
 ordinary letter A. This follows the [Z-machine Standard's font 3 bitmap and
 spacing contract](https://www.inform-fiction.org/zmachine/standards/z1point1/sect16.html).
-Current native-engine host trace exits successfully with two characters but
-reports `font3=0`, so graphics font 3 remains unsupported; this is a known
-acceptance gap, not a passing test.
+Run `sh emu/qemu/astraz-media/test-font3-host.sh` to generate, compile and
+assert the event order. The native-engine host trace now passes with two
+characters and `font3=1` when the host advertises 8 × 8 font metrics. This
+establishes engine selection only; the AFNT glyph drawing path still needs a
+DE25 screenshot gate.
 
 Each DE25 run must show the visible scene and prompt, accept input, exit
 cleanly, and leave `astra.service` active with zero restarts, no new kernel
@@ -219,10 +221,34 @@ probe bundles remain only for the next focused candidate and must be removed
 after its final gate. No HDMI listening conclusion is possible because the
 board is disconnected from HDMI.
 
-**Open UI defect:** Z6 shows a story-canvas `>` and a separate lower `>_`
+**UI defect at that checkpoint:** Z6 shows a story-canvas `>` and a separate lower `>_`
 input; Z8 can show a story `>` above that lower input. Typing while Z6 More is
 visible consumes the first character as the paging key, leaving the rest in
 the lower input. The lower prompt must be integrated into each story's text
 surface so the cursor appears after a single prompt. The scroll and media
 gates above do not close this UI defect. Z5 passed on the preceding 8 × 8
 candidate but was not rerun here; it needs a final regression check.
+
+## Inline-input candidate on DE25
+
+The focused AstraZ binary with the Z6 canvas input and text-version prompt
+deduplication passed an independent `look` gate for every requested version.
+Each screenshot shows one current prompt/cursor, and the response is visible:
+
+| VM | Result | Beast screenshot SHA-256 |
+| --- | --- | --- |
+| Z3 Zork I | West of House status; Moves 1; complete `look` response | `z3-inline-settled.png` `1b0eda45ca67b6d0226f772f9534c368b6a01055def7baaaf339d27167a18d2b` |
+| Z4 Trinity | Palace Gate status; complete `look` response after scroll | `z4-inline-settled.png` `b5979fdc6472d26eb2fae0b2952cf2e84d9a4a9e792bb80088335abb1666bfb9` |
+| Z5 Sherlock | 221-B Baker Street status; time 5:01; complete `look` response | `z5-inline-settled.png` `67f132e13bd8b8cb595b12fff98da9bf8da60fe1ff68b3c6f8984194e7c36874` |
+| Z6 Zork Zero | In-canvas `>look`, Banquet Hall graphics/text, transient More; one in-canvas `>` and adjacent underline after paging | `z6-inline-settled.png` `8faaa650e358ca2b9ade11761ce544610ee7b3d2d5232f529548b57c2dcaa77c`; `z6-inline-more-settled.png` `df86abee8d59b9ef71c6eb46485aff4deafe4c9b15d19fe375c294863fd7160a` |
+| Z8 One Room | Bathroom text; complete `look` response after scroll | `z8-inline-settled.png` `9ad53d08687c6d3865dff1f7d68e547c9e4b561da8b7de918b0160fabad95096` |
+
+Screenshots and `inline-matrix-journal.txt` are under the Beast archive path
+above; journal SHA-256 is
+`b5e3f88dbce1cd07932bb0ccd3151f0b86f321469c9ff078debd296ffa7df2f2`.
+The recent journal excerpt contains no panic, AstraZ failure, display dropped
+frame, or sound underflow line. Astra, audio-host and remote-desktop services
+were all active with `Result=success NRestarts=0`; root filesystem had 7.9 GiB
+free. The app was closed and board RFB scratch removed. WORK stories and
+disposable media probe bundles remain for the font 3 hardware gate and final
+cleanup.

@@ -184,6 +184,15 @@ static int picture_info(void *context, int number,
     return *width > 0 && *height > 0;
 }
 
+static int font_metrics(void *context, int font, int *height, int *width)
+{
+    Trace *trace = context;
+    if (trace->width != 320u || font != ASTRAZ_FONT_GRAPHICS ||
+        height == NULL || width == NULL) return 0;
+    *height = *width = 8;
+    return 1;
+}
+
 static int tick(void *context)
 {
     Trace *trace = context;
@@ -221,6 +230,7 @@ int main(int argc, char **argv)
         .cell_height = story.version == 6 ? 8u : 1u,
         .event = event, .read_key = read_key, .read_line = read_line,
         .choose_file = choose_file, .picture_info = picture_info,
+        .font_metrics = font_metrics,
         .tick = tick, .sound_finished = sound_finished
     };
     char error[256] = {0};
