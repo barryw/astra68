@@ -4633,7 +4633,7 @@ static int render_requirements(const AstraUIContext *context,
             ++*commands;
         if (control->_private_control_kind == ASTRA_CONTROL_BUTTON &&
             ASTRA_BUTTON_ICON(control->_private_style) != 0u)
-            *payload += 16u * sizeof(AstraDrawListSegment);
+            *payload += 3u + 16u * sizeof(AstraDrawListSegment);
         if (control->_private_control_kind == ASTRA_CONTROL_DISCLOSURE &&
             (state & CONTROL_FOCUS_VISIBLE) != 0u)
             ++*commands;
