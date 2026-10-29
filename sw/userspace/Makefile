@@ -1,5 +1,7 @@
-SUBDIRS := compiler runtime system metrics alloc storage vfs dos package events input terminal graphics interface network config audio loader \
-	streams posix terminfo ntp lua cxx codec sdl2 ports/chocolate-doom ports/chocolate-quake commands supervisor services applications kits apps
+SUBDIRS_BEFORE_NDK := compiler runtime system metrics alloc storage vfs dos package events input terminal graphics interface network config audio loader \
+	streams posix terminfo ntp lua cxx codec sdl2 ports/chocolate-doom
+SUBDIRS_AFTER_NDK := ports/chocolate-quake commands supervisor services applications kits apps
+SUBDIRS := $(SUBDIRS_BEFORE_NDK) $(SUBDIRS_AFTER_NDK)
 
 # `all` and `test` both walk the same recursive producers.  A caller may ask
 # for both goals with -j, but letting those recipes overlap makes two submakes
@@ -18,10 +20,11 @@ SHARED_LIBRARIES := $(ASTRA_SHARED_LIBRARIES)
 
 all:
 	$(MAKE) prune-shared-library-artifacts
-	@for dir in $(SUBDIRS); do $(MAKE) -C $$dir $@ || exit $$?; done
+	@for dir in $(SUBDIRS_BEFORE_NDK); do $(MAKE) -C $$dir $@ || exit $$?; done
+	$(MAKE) -C ../../ndk dist-check
+	@for dir in $(SUBDIRS_AFTER_NDK); do $(MAKE) -C $$dir $@ || exit $$?; done
 	$(MAKE) system-catalog
 	$(MAKE) shared-library-ownership
-	$(MAKE) -C ../../ndk dist-check
 	$(MAKE) -C ports/astraz bundle
 
 # The process interpreter is intentionally absent: it is the bootstrap that
