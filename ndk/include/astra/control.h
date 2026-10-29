@@ -51,7 +51,9 @@ enum {
     /** Hardware-drawn bottom-up channels with held peak markers. */
     ASTRA_CONTROL_LEVEL_METER = 21u,
     /** Hardware-drawn per-sample bars. */
-    ASTRA_CONTROL_SPARKLINE = 22u
+    ASTRA_CONTROL_SPARKLINE = 22u,
+    /** Activatable swatch bound to literal, theme, or palette color. */
+    ASTRA_CONTROL_COLOUR_WELL = 26u
 };
 
 /** Semantic state owned by an application. */
@@ -77,7 +79,9 @@ enum {
     ASTRA_BUTTON_WARNING = 2u,
     ASTRA_BUTTON_DESTRUCTIVE = 3u,
     /** Flat button on a 36 px window toolbar; hover reveals its surface. */
-    ASTRA_BUTTON_TOOLBAR = 4u
+    ASTRA_BUTTON_TOOLBAR = 4u,
+    /** Removable token in a Tag Input; activation requests removal. */
+    ASTRA_BUTTON_TAG = 5u
 };
 
 /** Text hierarchy on a lunar client surface. */
@@ -678,7 +682,11 @@ enum {
     /** Permit selection and copying but reject document mutations. */
     ASTRA_FIELD_READ_ONLY = UINT32_C(1) << 0,
     /** Draw text and caret without a field box or horizontal inset. */
-    ASTRA_FIELD_INLINE = UINT32_C(1) << 1
+    ASTRA_FIELD_INLINE = UINT32_C(1) << 1,
+    /** Mask displayed scalars and disable copy/cut actions. */
+    ASTRA_FIELD_SECURE = UINT32_C(1) << 2,
+    /** Reserve space for shared search and clear affordances. */
+    ASTRA_FIELD_SEARCH = UINT32_C(1) << 3
 };
 
 /** Creation data copied into a retained single-line UTF-8 field. */
