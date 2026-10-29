@@ -4378,10 +4378,14 @@ int main(void)
         assert(handle_pointer(&state, &button_down, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK);
         assert(window->request.maximize_state == ASTRA_GADGET_PRESSED);
+        effects = 0u;
         assert(handle_pointer(&state, &button_up, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK);
         assert(window->state == ASTRA_WINDOW_STATE_MAXIMIZED &&
                window->request.maximize_state == ASTRA_GADGET_NORMAL);
+        assert((effects & (DISPLAY_POINTER_FRAME | DISPLAY_POINTER_RESIZE)) ==
+               (DISPLAY_POINTER_FRAME | DISPLAY_POINTER_RESIZE) &&
+               frame_window == window->id && frame_timestamp == 107u);
 
         state.pointer_x = window->request.x + frame_width(&theme,
             window->request.type) + window->request.width -
@@ -4393,6 +4397,7 @@ int main(void)
              theme.gadget_extent) / 2u + theme.gadget_extent / 2u;
         assert(handle_pointer(&state, &button_down, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK);
+        effects = 0u;
         assert(handle_pointer(&state, &button_up, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK);
         assert(window->state == ASTRA_WINDOW_STATE_NORMAL &&
@@ -4400,6 +4405,9 @@ int main(void)
                window->request.y == restore_y &&
                window->request.width == restore_width &&
                window->request.height == restore_height);
+        assert((effects & (DISPLAY_POINTER_FRAME | DISPLAY_POINTER_RESIZE)) ==
+               (DISPLAY_POINTER_FRAME | DISPLAY_POINTER_RESIZE) &&
+               frame_window == window->id && frame_timestamp == 107u);
 
         state.pointer_x = window->request.x + frame_width(&theme,
             window->request.type) + window->request.width -
@@ -4411,9 +4419,13 @@ int main(void)
              theme.gadget_extent) / 2u + theme.gadget_extent / 2u;
         assert(handle_pointer(&state, &button_down, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK);
+        effects = 0u;
         assert(handle_pointer(&state, &button_up, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK);
         assert(window->state == ASTRA_WINDOW_STATE_MINIMIZED);
+        assert((effects & DISPLAY_POINTER_FRAME) != 0u &&
+               (effects & DISPLAY_POINTER_RESIZE) == 0u &&
+               frame_window == window->id);
         {
             AstraGuiWindowCommand activate = {
                 .window = window->id,

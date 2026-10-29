@@ -4620,6 +4620,8 @@ static uint32_t handle_pointer(DisplayState *state,
             };
             DisplayWindow closed = {0};
             int command_changed = 0;
+            uint16_t old_width = state->windows[index].request.width;
+            uint16_t old_height = state->windows[index].request.height;
 
             changed |= set_gadget_visual(state, &theme,
                                          &state->windows[index],
@@ -4643,6 +4645,14 @@ static uint32_t handle_pointer(DisplayState *state,
                 changed |= command_changed;
                 if (command_changed) {
                     index = find_id(state, captured_id);
+                    if (index != state->count) {
+                        *effects |= DISPLAY_POINTER_FRAME;
+                        if (state->windows[index].request.width != old_width ||
+                            state->windows[index].request.height != old_height)
+                            *effects |= DISPLAY_POINTER_RESIZE;
+                        *frame_window = captured_id;
+                        *frame_timestamp = input->timestamp_ms;
+                    }
                     under = index == state->count ? HIT_NONE :
                         hit_region(&theme, &state->windows[index],
                                    state->pointer_x, state->pointer_y);
