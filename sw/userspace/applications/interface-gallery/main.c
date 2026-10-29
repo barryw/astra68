@@ -325,6 +325,7 @@ static int32_t gallery_drag_start_y;
 static uint32_t gallery_drag_token;
 static uint32_t gallery_drag_visual_target;
 static uint32_t gallery_drag_visual_operation;
+static uint32_t gallery_drag_last_target;
 static const AstraChoiceItem gallery_tabs[] = {
     {"Input", sizeof("Input") - 1u, {0u, 0u}},
     {"Choice", sizeof("Choice") - 1u, {0u, 0u}},
@@ -2745,6 +2746,7 @@ static uint32_t gallery_drag_event(AstraWindowEvent *event)
         gallery_drag_token = event->data.drag.token;
         target = gallery_drag_target_at(event->data.drag.x,
                                          event->data.drag.y);
+        gallery_drag_last_target = target;
         if (target == GALLERY_DRAG_WORK) {
             operation = (event->data.drag.modifiers & ASTRA_INPUT_MOD_ALT) !=
                 0u ? ASTRA_DRAG_MOVE : ASTRA_DRAG_COPY;
@@ -2765,23 +2767,36 @@ static uint32_t gallery_drag_event(AstraWindowEvent *event)
         }
     } else if (event->type == ASTRA_WINDOW_EVENT_DRAG_LEAVE ||
                event->type == ASTRA_WINDOW_EVENT_DRAG_FINISHED) {
+        if (event->type == ASTRA_WINDOW_EVENT_DRAG_FINISHED &&
+            gallery_drag_last_target == GALLERY_DRAG_SYSTEM) {
+            const char *message = "SYSTEM: is read-only; drop refused";
+
+            if (astra_interface_control_set_text(&ui,
+                    GALLERY_CONTROL(GALLERY_DRAG_RESULT), message,
+                    (uint32_t)strlen(message)) != ASTRA_OK)
+                { status = GALLERY_FAIL_CONTROL; goto close_document; }
+        }
         gallery_drag_token = 0u;
         gallery_drag_armed = 0u;
+        if (event->type == ASTRA_WINDOW_EVENT_DRAG_FINISHED)
+            gallery_drag_last_target = 0u;
         if (gallery_drag_visual(0u, 0u) != ASTRA_STATUS_OK)
             { status = GALLERY_FAIL_CONTROL; goto close_document; }
     } else if (event->type == ASTRA_WINDOW_EVENT_DRAG_DROP) {
+        uint32_t drop_target = gallery_drag_target_at(event->data.drag.x,
+                                                      event->data.drag.y);
         const char *message = event->data.drag.operation == ASTRA_DRAG_MOVE ?
             "Moved 3 elements to WORK:/projects" :
             "Copied 3 elements to WORK:/projects";
 
-        if (gallery_drag_target_at(event->data.drag.x,
-                                   event->data.drag.y) == GALLERY_DRAG_WORK &&
+        if (drop_target == GALLERY_DRAG_SYSTEM)
+            message = "SYSTEM: is read-only; drop refused";
+        if (drop_target != 0u &&
             astra_interface_control_set_text(&ui,
                 GALLERY_CONTROL(GALLERY_DRAG_RESULT), message,
                 (uint32_t)strlen(message)) != ASTRA_OK)
             { status = GALLERY_FAIL_CONTROL; goto close_document; }
-        if (gallery_drag_target_at(event->data.drag.x,
-                                   event->data.drag.y) == GALLERY_DRAG_WORK)
+        if (drop_target == GALLERY_DRAG_WORK)
             completed = event->data.drag.operation;
         if (gallery_drag_visual(0u, 0u) != ASTRA_STATUS_OK)
             { status = GALLERY_FAIL_CONTROL; goto close_document; }
