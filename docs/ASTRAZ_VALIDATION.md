@@ -186,3 +186,43 @@ and One Room `z8-look-after.png`
 `c21658622b1ee141161e6ba8198b2bd2a32e3d1f53a6fbe129633f5041e9b1e9`.
 The UI owner has prepared a relayout after setting the scroll offset and a
 transient More marker/overlay. Both require focused board retest.
+
+## Scroll, More and prompt retest
+
+The focused candidate with the ScrollModel relayout, transient More display,
+and native 8 × 8 style faces ran on DE25. The independent follow-up verified:
+
+- Z3 Zork I: `look` returned West of House text, advanced Moves to one and
+  displayed the cursor. The frame also contains an invalid `open ...` command
+  accidentally sent by the RFB harness after an immediate stale capture; this
+  is trial input, not game behavior. Screenshot `z3-independent-settled.png`,
+  SHA-256 `3ec6b8895cf34e25b71627eaece82d50ea82cf50241a9916b5ffb118ba600193`.
+- Z4 Trinity: `look` returned the full Palace Gate description and a visible
+  next prompt at the bottom of the window. Screenshot
+  `z4-independent-settled.png`, SHA-256
+  `83bcf37c2374738a3d3a13ca4f196435c1ec851385ff8d24d8ccc24e88f17483`.
+- Z8 One Room: `look` returned the full Bathroom description after the scroll
+  and a visible input cursor. Screenshot `z8-independent-settled.png`, SHA-256
+  `7318fe40a7b657b93dc42e6d12fce74ec4c325facc75e9093f3f98f503188b43`.
+- Z6 Zork Zero: title art, pillars and text remained visible. `look` returned
+  Banquet Hall text; More appeared as a transient canvas overlay and cleared
+  on Enter. Screenshots `z6-independent-typed.png` (SHA-256
+  `f66cbe446850e16ed8e3303042fb09177a6649465f11143ec450391b860cd6b6`)
+  and `z6-independent-more-clear.png` (SHA-256
+  `8cd99258d18d9e1af2d9aa3ad815c592f31d433ca2cac77ce16474218e6b89be`).
+
+All files are archived under `/mnt/Documents/astra68/astraz-validation-20261029/`
+on Beast. The Astra, audio-host and remote-desktop services were active with
+`Result=success NRestarts=0`; `/var/lib/astra` had 8.0 GiB free. The AstraZ
+window was closed and board RFB scratch removed. Trial WORK stories and media
+probe bundles remain only for the next focused candidate and must be removed
+after its final gate. No HDMI listening conclusion is possible because the
+board is disconnected from HDMI.
+
+**Open UI defect:** Z6 shows a story-canvas `>` and a separate lower `>_`
+input; Z8 can show a story `>` above that lower input. Typing while Z6 More is
+visible consumes the first character as the paging key, leaving the rest in
+the lower input. The lower prompt must be integrated into each story's text
+surface so the cursor appears after a single prompt. The scroll and media
+gates above do not close this UI defect. Z5 passed on the preceding 8 × 8
+candidate but was not rerun here; it needs a final regression check.
