@@ -588,6 +588,9 @@ font, wraps by pixel width, and submits styled glyph runs to the hardware draw
 list. Flow rows grow to the adopted face's line box when it exceeds the theme
 control row height. TextSurface accepts grid, code, and flow modes; grid-specific hit testing
 and copying remain available only in grid mode.
+Flow submits adjacent scalars with the same appearance as bounded hardware
+text runs, keeping ordinary multiline documents within a retained window's
+draw-list command budget. Tabs retain their measured advance as separate runs.
 `astra_interface_text_view_set_line_numbers` adds the shared code gutter;
 logical line numbers remain aligned as wrapped rows scroll. The gutter is
 suppressed in flow mode and returns when code mode is selected again.
