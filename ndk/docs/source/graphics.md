@@ -71,6 +71,14 @@ one hardware rectangle list per 4,096 rectangles;
 and the hardware work of its own, so one call per rectangle is the slow way
 to draw points and spans.
 
+For a caller-owned `AstraSurfaceView`, `astra_surface_lines` records a set of
+same-color segments as one existing hardware `LINES` command. It validates
+every wire coordinate and the complete payload before appending, so a failed
+batch leaves the draw list unchanged. RGB565 views draw the same segments
+directly. Haiku's read-only reference at `src/kits/interface/View.cpp`
+(`BeginLineArray`, `AddLine`, `EndLineArray`) groups multiple lines into one
+request; Astra adapts that batching to its existing draw-list wire command.
+
 Draw lists are mutable until submission and sealed while in flight.
 Surfaces a list references stay alive until its fence signals, so closing
 them early cannot corrupt work in flight.

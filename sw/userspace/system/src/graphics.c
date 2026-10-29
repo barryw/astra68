@@ -868,6 +868,8 @@ AstraResult astra_draw_list_append_view_with_sources(AstraDrawList *draw_list,
         int text = command->operation == ASTRA_DRAW_LIST_TEXT ||
                    command->operation == ASTRA_DRAW_LIST_MONO_TEXT ||
                    named_text;
+        int line_array = command->operation == ASTRA_DRAW_LIST_LINES;
+        int has_payload = text || line_array;
         int borrowed_blit = command->operation == ASTRA_DRAW_LIST_BLIT &&
                             command->source !=
                                 ASTRA_DRAW_LIST_SOURCE_DESTINATION;
@@ -875,7 +877,7 @@ AstraResult astra_draw_list_append_view_with_sources(AstraDrawList *draw_list,
         if (command->operation != ASTRA_DRAW_LIST_FILL &&
             command->operation != ASTRA_DRAW_LIST_FILL_ROUNDED &&
             command->operation != ASTRA_DRAW_LIST_LINE &&
-            command->operation != ASTRA_DRAW_LIST_BLIT && !text)
+            command->operation != ASTRA_DRAW_LIST_BLIT && !has_payload)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         if ((named_text ? (command->source == 0u ||
                             command->source >= ASTRA_FONT_ID_MAX ||
@@ -887,8 +889,10 @@ AstraResult astra_draw_list_append_view_with_sources(AstraDrawList *draw_list,
             command->clip_top > command->clip_bottom ||
             command->clip_bottom > view->height ||
             command->payload_bytes > source->payload_bytes ||
-            (!text && command->payload_bytes != 0u) ||
-            (text && (command->payload_bytes == 0u ||
+            (!has_payload && command->payload_bytes != 0u) ||
+            (line_array && (command->payload_bytes == 0u ||
+                command->payload_bytes % sizeof(AstraDrawListSegment) != 0u)) ||
+            (has_payload && (command->payload_bytes == 0u ||
                       command->payload_offset < source_offset ||
                       command->payload_offset - source_offset >
                           source->payload_bytes - command->payload_bytes)))

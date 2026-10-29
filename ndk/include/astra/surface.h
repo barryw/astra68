@@ -31,6 +31,14 @@ typedef struct AstraSurfaceView {
     uint16_t clip_bottom;
 } AstraSurfaceView;
 
+/** One inclusive line segment for a shared-color batch. */
+typedef struct AstraSurfaceLine {
+    int32_t x0;
+    int32_t y0;
+    int32_t x1;
+    int32_t y1;
+} AstraSurfaceLine;
+
 /** Rectangular text viewport over an existing surface. */
 typedef struct AstraTextBox {
     /** Borrowed destination surface. */
@@ -86,6 +94,12 @@ void astra_surface_fill(AstraSurfaceView *surface, int32_t x, int32_t y,
 /** Draw one clipped line through both endpoints. @param surface Destination. @param x0 First x coordinate. @param y0 First y coordinate. @param x1 Last x coordinate. @param y1 Last y coordinate. @param color RGB565 color. @return Nonzero on success. */
 int astra_surface_line(AstraSurfaceView *surface, int32_t x0, int32_t y0,
                        int32_t x1, int32_t y1, uint16_t color);
+/** Draw a caller-owned array of same-color line segments. A draw-list view
+ * records one hardware LINES command; an RGB565 view draws the lines directly.
+ * Zero count is a no-op. Returns zero without changing a draw list if any
+ * segment is out of wire-coordinate range or there is insufficient room. */
+int astra_surface_lines(AstraSurfaceView *surface,
+    const AstraSurfaceLine *lines, uint32_t count, uint16_t color);
 /** Fill a clipped rounded rectangle. @param surface Initialized view. @param x Left edge. @param y Top edge. @param width Width. @param height Height. @param radius Corner radius. @param color RGB565 color. */
 void astra_surface_fill_round(AstraSurfaceView *surface, int32_t x, int32_t y,
                               uint32_t width, uint32_t height,

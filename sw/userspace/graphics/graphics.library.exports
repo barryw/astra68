@@ -18,6 +18,7 @@ ASTRA_GRAPHICS_2.2 {
         astra_surface_fill_round;
         astra_surface_from_aicon;
         astra_surface_line;
+        astra_surface_lines;
         astra_surface_rgb565;
         astra_surface_view_init;
         astra_text_box_scroll;
