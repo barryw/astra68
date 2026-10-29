@@ -222,6 +222,7 @@ $(COMMAND_HOST_TEST): src/command.c tests/test_command.c
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $^ -o $@
 
 MENU_TEST_SOURCES := src/menu.c src/menu_context.c src/command.c src/control.c src/display_widgets.c src/text_surface.c \
+	src/text_model.c src/scroll.c \
 	tests/test_menu.c
 $(GRAPHICS_HOST_SURFACE) $(GRAPHICS_HOST_SURFACE_SANITIZE): FORCE
 	$(MAKE) -C $(GRAPHICS) $(patsubst $(GRAPHICS)/%,%,$@)

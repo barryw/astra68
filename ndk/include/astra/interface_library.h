@@ -220,6 +220,13 @@ AstraResult astra_interface_list_init(AstraControl *control,
  */
 AstraResult astra_interface_list_set_items(AstraUIContext *context,
     AstraControl *control, const AstraCollectionItem *items, uint32_t count);
+/** Initialize a menu-backed single-choice field with caller-owned items. */
+AstraResult astra_interface_popup_init(AstraControl *control,
+                                      const AstraChoiceInfo *info);
+/** Compose a toolbar primary action and menu segment. Place adjacent in a
+ * zero-gap row; open a shared Context Menu when the menu ID activates. */
+AstraResult astra_interface_split_button_init(AstraControl *primary,
+    AstraControl *menu, const AstraButtonInfo *primary_info, uint32_t menu_id);
 /** Initialize a single-line UTF-8 field.
  * @param control Caller-owned control to initialize.
  * @param info Field description; its text model remains caller-owned.

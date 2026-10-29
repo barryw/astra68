@@ -207,6 +207,31 @@ across reorder/filter, clearing it when selected item disappears. It
 remeasures and redraws List; failed updates leave prior model intact. Caller
 must keep item storage alive until next successful replacement or UI teardown.
 
+### Popup and toolbar Split Button
+
+`astra_interface_popup_init` creates a single-choice field from borrowed
+`AstraChoiceItem` labels. Its retained control handles layout, drawing, focus,
+pointer activation, and Enter/Space activation. On `ASTRA_UI_ACTION_ACTIVATE`,
+call `astra_interface_popup_open` with a caller-owned `AstraPopup` session.
+Feed window events to `astra_interface_popup_handle_event` before the ordinary
+UI handler. A correlated menu selection updates the retained choice and emits
+`ASTRA_UI_ACTION_VALUE_CHANGED`; dismissal leaves the value intact. Call
+`astra_interface_popup_close` before destroying the owning window. Each window
+can have one transient menu open at a time.
+
+`astra_interface_split_button_init` composes two ordinary toolbar Buttons: the
+primary action and a 28-pixel menu segment. Put them next to each other in a
+zero-gap row. Their separate control IDs let the primary action run directly
+while the menu segment opens the existing command-backed Context Menu. The
+menu segment uses the shared button painter and a hardware-rendered chevron.
+
+Haiku reference: `src/kits/interface/OptionPopUp.cpp` composes `MenuField`
+with `PopUpMenu`; `MenuField.cpp` keeps keyboard and pointer opening in the
+shared control; `PopUpMenu.cpp` owns transient menu lifetime. Astra adopts
+that separation with a retained choice field and a caller-owned, correlated
+display-menu session. The display service copies menu rows on open, so a
+Popup's borrowed labels remain owned by the choice control.
+
 ```{literalinclude} ../../examples/interface_controls.c
 :language: c
 :linenos:

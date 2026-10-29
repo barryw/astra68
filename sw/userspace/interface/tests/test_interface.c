@@ -3683,6 +3683,90 @@ static void test_grid_view(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_popup_control(void)
+{
+    static const AstraChoiceItem items[] = {
+        {"Name", 4u, {0u, 0u}},
+        {"Date modified", 13u, {0u, 0u}}
+    };
+    AstraChoiceInfo info = ASTRA_CHOICE_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlSize size = {0};
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraWindowEvent event;
+    AstraSurfaceView surface = render_view(240u, 80u);
+    int64_t value = -1;
+
+    info.id = 91u;
+    info.items = items;
+    info.item_count = 2u;
+    info.selected = 1u;
+    assert(astra_interface_popup_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 240u, 80u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &control, &size) == ASTRA_OK);
+    assert(size.width >= 104u && size.height > 0u);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+                          ASTRA_WINDOW_EVENT_DOWN,
+                          control._private_frame.x + 8,
+                          control._private_frame.y + 8);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_NONE);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_ACTIVATE &&
+           action.control_id == 91u && action.value == 1);
+    assert(astra_interface_control_get_value(&control, &value, NULL) ==
+           ASTRA_OK && value == 1);
+    event = (AstraWindowEvent){0};
+    event.size = sizeof(event);
+    event.version = ASTRA_WINDOW_EVENT_VERSION;
+    event.type = ASTRA_WINDOW_EVENT_KEY;
+    event.flags = ASTRA_WINDOW_EVENT_DOWN;
+    event.data.key.usage = 0x28u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_NONE);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_ACTIVATE &&
+           action.control_id == 91u);
+    assert(astra_interface_control_set_value(&context, &control, 0) ==
+           ASTRA_OK);
+    assert(astra_interface_control_get_value(&control, &value, NULL) ==
+           ASTRA_OK && value == 0);
+    assert(astra_interface_control_set_value(&context, &control, 2) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
+static void test_split_button(void)
+{
+    AstraButtonInfo info = ASTRA_BUTTON_INFO_INIT;
+    AstraControl controls[2] = { ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT };
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraControlSize size = {0};
+
+    info.id = 92u;
+    info.text = "Open";
+    info.text_length = 4u;
+    info.variant = ASTRA_BUTTON_TOOLBAR;
+    assert(astra_interface_split_button_init(&controls[0], &controls[1],
+                                             &info, 93u) == ASTRA_OK);
+    assert(controls[0]._private_id == 92u &&
+           controls[1]._private_id == 93u &&
+           controls[1]._private_style == ASTRA_BUTTON_SPLIT_MENU);
+    assert(astra_interface_ui_init(&context, controls, 2u, 240u, 80u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &controls[1], &size) ==
+           ASTRA_OK && size.width == 28u && size.height == 22u);
+    assert(astra_interface_split_button_init(&controls[0], &controls[0],
+                                             &info, 93u) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
 int main(void)
 {
     static const char malformed_utf8[] = {(char)0xed, (char)0xa0, (char)0x80};
@@ -3761,6 +3845,8 @@ int main(void)
     test_status_bar();
     test_segmented_control();
     test_list_control();
+    test_popup_control();
+    test_split_button();
     test_scrolled_list_control();
     test_tab_control_and_collapsed_pages();
     test_stepper_control();

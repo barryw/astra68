@@ -53,7 +53,7 @@
      (kind) == ASTRA_CONTROL_SWITCH)
 #define CHOICE_KINDS(kind) \
     ((kind) == ASTRA_CONTROL_SEGMENTED || (kind) == ASTRA_CONTROL_TAB || \
-     (kind) == ASTRA_CONTROL_LIST)
+     (kind) == ASTRA_CONTROL_LIST || (kind) == ASTRA_CONTROL_POPUP)
 #define CONTAINER_KINDS(kind) \
     ((kind) == ASTRA_CONTROL_CONTAINER || \
      (kind) == ASTRA_CONTROL_SCROLL_VIEW)
@@ -304,7 +304,7 @@ static int control_valid(const AstraControl *control)
         return control->_private_text != NULL &&
                control->_private_text_length != 0u &&
                (control->_private_style & ASTRA_BUTTON_STYLE_MASK) <=
-                   ASTRA_BUTTON_TOOLBAR &&
+                   ASTRA_BUTTON_SPLIT_MENU &&
                ASTRA_BUTTON_ICON(control->_private_style) <=
                    ASTRA_TOOLBAR_ICON_SEARCH &&
                (ASTRA_BUTTON_ICON(control->_private_style) == 0u ||
@@ -913,7 +913,7 @@ AstraResult astra_interface_button_init(AstraControl *control,
     if (control == NULL || info == NULL || info->size < sizeof(*info) ||
         info->id == 0u || info->text_length == 0u ||
         !astra_utf8_validate(info->text, info->text_length, 0u) ||
-        info->variant > ASTRA_BUTTON_TOOLBAR ||
+        info->variant > ASTRA_BUTTON_SPLIT_MENU ||
         (info->state & ~CONTROL_SEMANTIC_STATES) != 0u ||
         (info->preview_state & ~CONTROL_PREVIEW_STATES) != 0u ||
         !astra_words_zero(info->reserved, 4u))
@@ -926,6 +926,33 @@ AstraResult astra_interface_button_init(AstraControl *control,
     control->_private_style = info->variant;
     control->_private_text = info->text;
     control->_private_text_length = info->text_length;
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_split_button_init(AstraControl *primary,
+    AstraControl *menu, const AstraButtonInfo *primary_info, uint32_t menu_id)
+{
+    static const char marker[] = "v";
+    AstraButtonInfo menu_info = ASTRA_BUTTON_INFO_INIT;
+    AstraControl first = ASTRA_CONTROL_INIT;
+    AstraControl second = ASTRA_CONTROL_INIT;
+    AstraResult result;
+
+    if (primary == NULL || menu == NULL || primary == menu ||
+        primary_info == NULL || primary_info->variant != ASTRA_BUTTON_TOOLBAR ||
+        menu_id == 0u || menu_id == primary_info->id)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_interface_button_init(&first, primary_info);
+    if (result != ASTRA_OK) return result;
+    menu_info.id = menu_id;
+    menu_info.text = marker;
+    menu_info.text_length = 1u;
+    menu_info.variant = ASTRA_BUTTON_SPLIT_MENU;
+    menu_info.state = primary_info->state;
+    result = astra_interface_button_init(&second, &menu_info);
+    if (result != ASTRA_OK) return result;
+    *primary = first;
+    *menu = second;
     return ASTRA_OK;
 }
 
@@ -1311,6 +1338,12 @@ AstraResult astra_interface_list_set_items(AstraUIContext *context,
         if (context->_private_keyboard == index) clear_keyboard(context);
     }
     return result;
+}
+
+AstraResult astra_interface_popup_init(AstraControl *control,
+                                       const AstraChoiceInfo *info)
+{
+    return choice_init(control, info, ASTRA_CONTROL_POPUP);
 }
 
 AstraResult astra_interface_field_init(AstraControl *control,
@@ -1868,7 +1901,15 @@ static AstraResult measure_control(const AstraControl *control,
                           control->_private_text_length;
         if (total_width > UINT32_MAX)
             return ASTRA_ERROR_NO_RESOURCES;
-        size->width = (uint32_t)total_width;
+        if (control->_private_control_kind == ASTRA_CONTROL_POPUP &&
+            widest > UINT32_MAX -
+                (uint32_t)theme.control_padding_x * 2u - 24u)
+            return ASTRA_ERROR_NO_RESOURCES;
+        size->width = control->_private_control_kind == ASTRA_CONTROL_POPUP ?
+            widest + (uint32_t)theme.control_padding_x * 2u + 24u :
+            (uint32_t)total_width;
+        if (control->_private_control_kind == ASTRA_CONTROL_POPUP &&
+            size->width < 104u) size->width = 104u;
         size->height = theme.control_height;
         return ASTRA_OK;
     }
@@ -1888,13 +1929,16 @@ static AstraResult measure_control(const AstraControl *control,
         control->_private_text, control->_private_text_length,
         theme.control_font_height);
     if (control->_private_control_kind == ASTRA_CONTROL_BUTTON &&
-        (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
-            ASTRA_BUTTON_TOOLBAR) {
+        ((control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+            ASTRA_BUTTON_TOOLBAR ||
+         (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+            ASTRA_BUTTON_SPLIT_MENU)) {
         uint32_t extra = 16u +
             (ASTRA_BUTTON_ICON(control->_private_style) != 0u ? 22u : 0u);
         if (width > UINT32_MAX - extra)
             return ASTRA_ERROR_INVALID_ARGUMENT;
-        size->width = width + extra;
+        size->width = (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+            ASTRA_BUTTON_SPLIT_MENU ? 28u : width + extra;
         size->height = 22u;
         return ASTRA_OK;
     }
@@ -2939,7 +2983,9 @@ static AstraColorRGBA8 button_fill(const AstraTheme *theme,
     uint32_t state = effective_state(control);
 
     if ((control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
-            ASTRA_BUTTON_TOOLBAR) {
+            ASTRA_BUTTON_TOOLBAR ||
+        (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+            ASTRA_BUTTON_SPLIT_MENU) {
         if ((state & ASTRA_CONTROL_SELECTED) != 0u)
             return theme->control_selected;
         if ((state & ASTRA_CONTROL_PRESSED) != 0u)
@@ -2974,7 +3020,9 @@ static AstraColorRGBA8 button_text(const AstraTheme *theme,
     if ((state & ASTRA_CONTROL_DISABLED) != 0u)
         return theme->text_tertiary;
     if ((control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
-            ASTRA_BUTTON_TOOLBAR)
+            ASTRA_BUTTON_TOOLBAR ||
+        (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+            ASTRA_BUTTON_SPLIT_MENU)
         return theme->client_text;
     if ((state & ASTRA_CONTROL_PRESSED) != 0u)
         return theme->text_secondary;
@@ -3699,6 +3747,13 @@ static int render_requirements(const AstraUIContext *context,
         if (CHOICE_KINDS(control->_private_control_kind)) {
             const AstraChoiceItem *items = choice_items(control);
 
+            if (control->_private_control_kind == ASTRA_CONTROL_POPUP) {
+                *commands += 7u;
+                *payload += items[control->_private_value].text_length +
+                            id_length;
+                continue;
+            }
+
             if (control->_private_control_kind == ASTRA_CONTROL_SEGMENTED) {
                 *commands += 2u +
                     (uint64_t)control->_private_text_length * 2u;
@@ -3727,7 +3782,8 @@ static int render_requirements(const AstraUIContext *context,
         if (control->_private_control_kind == ASTRA_CONTROL_LABEL)
             *commands += 1u;
         else if (control->_private_control_kind == ASTRA_CONTROL_BUTTON)
-            *commands += 2u +
+            *commands += (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+                ASTRA_BUTTON_SPLIT_MENU ? 4u : 2u +
                 (ASTRA_BUTTON_ICON(control->_private_style) != 0u ? 16u : 0u);
         else if (control->_private_control_kind == ASTRA_CONTROL_DISCLOSURE)
             *commands += 7u;
@@ -3954,6 +4010,17 @@ static void render_button(const AstraTheme *theme,
     } else
         text_x = x + (int32_t)(width - text_width) / 2;
     text_y = y + (int32_t)(height - theme->control_font_height) / 2;
+    if ((control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
+        ASTRA_BUTTON_SPLIT_MENU) {
+        int32_t arrow_x = x + (int32_t)width / 2 - 4;
+        int32_t arrow_y = y + (int32_t)height / 2 - 2;
+        uint16_t ink = color(button_text(theme, control));
+
+        astra_surface_fill(surface, arrow_x, arrow_y, 9u, 1u, ink);
+        astra_surface_fill(surface, arrow_x + 1, arrow_y + 1, 7u, 1u, ink);
+        astra_surface_fill(surface, arrow_x + 3, arrow_y + 2, 3u, 1u, ink);
+        return;
+    }
     astra_surface_ui_text(surface, text_x, text_y, control->_private_text,
                           control->_private_text_length,
                           theme->control_font_height,
@@ -4865,6 +4932,53 @@ static void render_list(const AstraTheme *theme,
     }
 }
 
+static void render_popup(const AstraTheme *theme,
+                         const AstraControl *control,
+                         AstraSurfaceView *surface)
+{
+    const AstraControlFrame *frame = &control->_private_frame;
+    if (frame->width < 32u || frame->height < 2u) return;
+    const AstraChoiceItem *item =
+        &choice_items(control)[control->_private_value];
+    uint32_t state = effective_state(control);
+    uint32_t text_space = frame->width > 32u ? frame->width - 32u : 0u;
+    uint32_t fitted = astra_surface_ui_text_fit(
+        item->text, item->text_length, theme->control_font_height,
+        text_space);
+    int32_t arrow_x = frame->x + (int32_t)frame->width - 18;
+    int32_t arrow_y = frame->y + (int32_t)frame->height / 2;
+    AstraColorRGBA8 ink = (state & ASTRA_CONTROL_DISABLED) != 0u ?
+        theme->text_tertiary : theme->client_text;
+
+    if ((state & CONTROL_FOCUS_VISIBLE) != 0u)
+        astra_surface_fill_round(surface,
+            frame->x - theme->focus_width,
+            frame->y - theme->focus_width,
+            frame->width + (uint32_t)theme->focus_width * 2u,
+            frame->height + (uint32_t)theme->focus_width * 2u,
+            (uint16_t)(theme->control_radius + theme->focus_width),
+            color(theme->control_focus));
+    astra_surface_fill_round(surface, frame->x, frame->y,
+        frame->width, frame->height, theme->control_radius,
+        color((state & ASTRA_CONTROL_ERROR) != 0u ?
+              theme->control_error : theme->client_border));
+    astra_surface_fill_round(surface, frame->x + 1, frame->y + 1,
+        frame->width - 2u, frame->height - 2u,
+        theme->control_radius > 1u ? theme->control_radius - 1u : 0u,
+        color((state & ASTRA_CONTROL_DISABLED) != 0u ?
+              theme->control_disabled :
+              (state & ASTRA_CONTROL_PRESSED) != 0u ?
+                  theme->control_pressed : theme->surface_raised));
+    astra_surface_ui_text(surface,
+        frame->x + theme->control_padding_x,
+        frame->y + (int32_t)(frame->height - theme->control_font_height) / 2,
+        item->text, fitted, theme->control_font_height, color(ink));
+    astra_surface_fill(surface, arrow_x, arrow_y - 2, 9u, 1u, color(ink));
+    astra_surface_fill(surface, arrow_x + 1, arrow_y - 1, 7u, 1u,
+                       color(ink));
+    astra_surface_fill(surface, arrow_x + 3, arrow_y, 3u, 1u, color(ink));
+}
+
 static void render_segmented(const AstraTheme *theme,
                              const AstraControl *control,
                              AstraSurfaceView *surface)
@@ -5056,6 +5170,8 @@ static void render_tab(const AstraTheme *theme,
 static int32_t choice_index_at(const AstraControl *control, int32_t x,
                                int32_t y)
 {
+    if (control->_private_control_kind == ASTRA_CONTROL_POPUP)
+        return control->_private_value;
     if (control->_private_control_kind == ASTRA_CONTROL_LIST) {
         AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
         uint32_t index = (uint32_t)((int64_t)y -
@@ -5940,6 +6056,8 @@ static AstraResult render_one_control(const AstraUIContext *context,
         render_tab(theme, control, surface);
     else if (control->_private_control_kind == ASTRA_CONTROL_LIST)
         render_list(theme, control, surface);
+    else if (control->_private_control_kind == ASTRA_CONTROL_POPUP)
+        render_popup(theme, control, surface);
     else
         render_toggle(theme, control, surface);
     return ASTRA_OK;
@@ -6284,6 +6402,10 @@ static AstraResult pointer_event(AstraUIContext *context,
                            event->data.pointer.y, action);
         else if (choice && hit == captured) {
             AstraControl *control = &context->_private_controls[captured];
+            if (control->_private_control_kind == ASTRA_CONTROL_POPUP) {
+                clear_capture(context);
+                return activate_control(context, captured, action);
+            }
             int invoke = control->_private_control_kind == ASTRA_CONTROL_LIST &&
                          event->data.pointer.click_count >= 2u &&
                          control->_private_value >= 0 &&
@@ -6473,6 +6595,13 @@ static AstraResult activate_control(AstraUIContext *context, uint32_t index,
 {
     AstraControl *control = &context->_private_controls[index];
 
+    if (control->_private_control_kind == ASTRA_CONTROL_POPUP) {
+        action->type = ASTRA_UI_ACTION_ACTIVATE;
+        action->control_id = control->_private_id;
+        action->value = control->_private_value;
+        return ASTRA_OK;
+    }
+
     if (control->_private_control_kind == ASTRA_CONTROL_LIST) {
         if (control->_private_value < 0) return ASTRA_OK;
         action->type = ASTRA_UI_ACTION_ACTIVATE;
@@ -6587,7 +6716,9 @@ static AstraResult key_event(AstraUIContext *context,
         CHOICE_KINDS(context->_private_controls[context->_private_focus]
                          ._private_control_kind) &&
         context->_private_controls[context->_private_focus]
-                ._private_control_kind != ASTRA_CONTROL_LIST) {
+                ._private_control_kind != ASTRA_CONTROL_LIST &&
+        context->_private_controls[context->_private_focus]
+                ._private_control_kind != ASTRA_CONTROL_POPUP) {
         AstraControl *control =
             &context->_private_controls[context->_private_focus];
         int32_t value = control->_private_value;

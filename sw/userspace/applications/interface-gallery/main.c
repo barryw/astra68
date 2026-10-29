@@ -108,7 +108,9 @@ enum {
     GALLERY_FORM_VALUE,
     GALLERY_FORM_HELP,
     GALLERY_FORM_OPTION,
-    GALLERY_CONTROL_COUNT = GALLERY_FORM_OPTION
+    GALLERY_POPUP_LABEL,
+    GALLERY_POPUP,
+    GALLERY_CONTROL_COUNT = GALLERY_POPUP
 };
 
 enum {
@@ -130,6 +132,7 @@ static _Alignas(4) uint8_t undo_benchmark_arena[GALLERY_UNDO_ARENA_BYTES];
 static uint8_t text_benchmark_content[16384];
 static _Alignas(4) uint8_t text_benchmark_metadata[131072];
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+static AstraPopup gallery_popup = ASTRA_POPUP_INIT;
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
 static char slider_value_text[5] = "62%";
@@ -415,6 +418,18 @@ static uint32_t add_list(uint32_t index, uint32_t id)
     info.id = id;
     info.model = &model;
     return astra_interface_list_init(&controls[index], &info) == ASTRA_OK ?
+        ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
+}
+
+static uint32_t add_popup(uint32_t index, uint32_t id)
+{
+    AstraChoiceInfo info = ASTRA_CHOICE_INFO_INIT;
+
+    info.id = id;
+    info.items = gallery_choices;
+    info.item_count = sizeof(gallery_choices) / sizeof(gallery_choices[0]);
+    info.selected = 0u;
+    return astra_interface_popup_init(&controls[index], &info) == ASTRA_OK ?
         ASTRA_STATUS_OK : GALLERY_FAIL_CONTROL;
 }
 
@@ -961,6 +976,12 @@ static uint32_t build_controls(void)
     if (status == ASTRA_STATUS_OK)
         status = add_list(GALLERY_LIST - 1u, GALLERY_LIST);
     if (status == ASTRA_STATUS_OK)
+        status = add_label(GALLERY_POPUP_LABEL - 1u, GALLERY_POPUP_LABEL,
+                           "POPUP", sizeof("POPUP") - 1u,
+                           ASTRA_TEXT_CLIENT_SECONDARY);
+    if (status == ASTRA_STATUS_OK)
+        status = add_popup(GALLERY_POPUP - 1u, GALLERY_POPUP);
+    if (status == ASTRA_STATUS_OK)
         status = add_label(GALLERY_STEPPER_LABEL - 1u,
                            GALLERY_STEPPER_LABEL, "STEPPER · KB",
                            sizeof("STEPPER · KB") - 1u,
@@ -1085,6 +1106,10 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_LIST_LABEL, GALLERY_PAGE_CHOICE,
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_LIST, GALLERY_PAGE_CHOICE,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_POPUP_LABEL, GALLERY_PAGE_CHOICE,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_POPUP, GALLERY_PAGE_CHOICE,
               ASTRA_FLEX_BREAK_AFTER);
 
     PAGE_ITEM(GALLERY_SLIDER_LABEL, GALLERY_PAGE_VALUE,
@@ -1847,6 +1872,11 @@ static uint32_t create_window(AstraHandle gui)
 static uint32_t handle_action(AstraHandle clipboard,
                               const AstraUIAction *action)
 {
+    if (action->type == ASTRA_UI_ACTION_ACTIVATE &&
+        action->control_id == GALLERY_POPUP &&
+        astra_interface_popup_open(&gallery_popup, &ui,
+            GALLERY_CONTROL(GALLERY_POPUP), &window) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
     if (action->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
         action->control_id == GALLERY_TABS &&
         select_page(action->value) != ASTRA_STATUS_OK)
@@ -1928,13 +1958,27 @@ static uint32_t run(AstraHandle clipboard, AstraHandle gui)
             result = astra_window_event_try(&window, &event);
         }
         while (result == ASTRA_OK) {
+            int popup_handled = 0;
+
             action = (AstraUIAction)ASTRA_UI_ACTION_INIT;
-            if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST)
+            if (event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST) {
+                (void)astra_interface_popup_close(&gallery_popup);
                 return ASTRA_STATUS_OK;
+            }
             if (event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED) {
                 AstraResult refreshed = astra_fonts_use_system(gui, &event);
                 if (refreshed != ASTRA_OK)
                     (void)astra_log_failure("gallery font refresh", (uint32_t)refreshed);
+            }
+            if (astra_interface_popup_handle_event(&gallery_popup, &event,
+                    &action, &popup_handled) != ASTRA_OK)
+                return GALLERY_FAIL_CONTROL;
+            if (popup_handled) {
+                if (handle_action(clipboard, &action) != ASTRA_STATUS_OK)
+                    return GALLERY_FAIL_CONTROL;
+                scroll_only = 0u;
+                result = astra_window_event_try(&window, &event);
+                continue;
             }
             if (astra_interface_ui_handle_event(
                     &ui, &event, &action) != ASTRA_OK)

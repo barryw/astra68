@@ -51,7 +51,9 @@ enum {
     /** Hardware-drawn bottom-up channels with held peak markers. */
     ASTRA_CONTROL_LEVEL_METER = 21u,
     /** Hardware-drawn per-sample bars. */
-    ASTRA_CONTROL_SPARKLINE = 22u
+    ASTRA_CONTROL_SPARKLINE = 22u,
+    /** Menu-backed, single-choice field. */
+    ASTRA_CONTROL_POPUP = 23u
 };
 
 /** Semantic state owned by an application. */
@@ -77,7 +79,9 @@ enum {
     ASTRA_BUTTON_WARNING = 2u,
     ASTRA_BUTTON_DESTRUCTIVE = 3u,
     /** Flat button on a 36 px window toolbar; hover reveals its surface. */
-    ASTRA_BUTTON_TOOLBAR = 4u
+    ASTRA_BUTTON_TOOLBAR = 4u,
+    /** Menu segment paired with a toolbar button by Split Button. */
+    ASTRA_BUTTON_SPLIT_MENU = 5u
 };
 
 /** Text hierarchy on a lunar client surface. */
