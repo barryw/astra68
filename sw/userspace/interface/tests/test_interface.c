@@ -2543,6 +2543,73 @@ static void test_text_view_document_capacity(void)
     assert(mono_text_calls == 20u);
 }
 
+static void test_text_view_wrap(void)
+{
+    static const char source[] = "alpha beta gamma\nZ";
+    uint8_t content[128];
+    _Alignas(4) uint8_t metadata[256];
+    AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo model_info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextModelState model_state = ASTRA_TEXT_MODEL_STATE_INIT;
+    AstraTextViewInfo text_info = ASTRA_TEXT_VIEW_INFO_INIT;
+    AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraScrollState scroll_state = ASTRA_SCROLL_STATE_INIT;
+    AstraScrollViewInfo view_info = ASTRA_SCROLL_VIEW_INFO_INIT;
+    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraControlSize measured;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    uint32_t width = 6u * theme.mono_cell_width;
+    uint32_t height = 2u * theme.control_height;
+
+    model_info.text = source;
+    model_info.text_bytes = sizeof(source) - 1u;
+    model_info.content_arena = content;
+    model_info.content_arena_bytes = sizeof(content);
+    model_info.metadata_arena = metadata;
+    model_info.metadata_arena_bytes = sizeof(metadata);
+    assert(astra_text_model_init(&model, &model_info) == ASTRA_OK);
+    assert(astra_scroll_init(&scroll, &scroll_info) == ASTRA_OK);
+    view_info.id = 1u; view_info.model = &scroll;
+    view_info.preferred_width = width; view_info.preferred_height = height;
+    assert(astra_interface_scroll_view_init(&controls[0], &view_info) == ASTRA_OK);
+    text_info.id = 2u; text_info.model = &model;
+    assert(astra_interface_text_view_init(&controls[1], &text_info) == ASTRA_OK);
+    item.parent_id = 1u;
+    assert(astra_interface_control_set_flex(&controls[1], &item) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls, 2u, width, height) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_text_view_set_wrap_width(&context, &controls[1], width) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &controls[1], &measured) == ASTRA_OK);
+    assert(measured.width == width && measured.height == 4u * theme.control_height);
+    assert(astra_scroll_get_state(&scroll, &scroll_state) == ASTRA_OK &&
+           scroll_state.maximum_x == 0u && scroll_state.maximum_y > 0u);
+    AstraWindowEvent event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, 1, (int32_t)theme.control_height + 2);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 6u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x51u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 11u);
+    assert(astra_interface_text_view_set_wrap_width(&context, &controls[1],
+        3u * theme.mono_cell_width) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &controls[1], &measured) == ASTRA_OK &&
+           measured.height == 7u * theme.control_height);
+    assert(astra_interface_text_view_set_wrap_width(&context, &controls[1],
+        12u * theme.mono_cell_width) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &controls[1], &measured) == ASTRA_OK &&
+           measured.height == 3u * theme.control_height);
+    assert(astra_interface_text_view_set_wrap_width(&context, &controls[1], 0u) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &controls[1], &measured) == ASTRA_OK &&
+           measured.height == 2u * theme.control_height && measured.width > width);
+}
+
 static void test_scroll_view_layout_and_wheel(void)
 {
     static const char content[] =
@@ -3452,6 +3519,7 @@ int main(void)
     test_text_field_rejections();
     test_text_view();
     test_text_view_document_capacity();
+    test_text_view_wrap();
     test_grid_view();
     test_scroll_view_layout_and_wheel();
     test_scroll_view_keyboard_listener();

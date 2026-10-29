@@ -28,6 +28,7 @@
     (CONTROL_PREVIEW_STATES | CONTROL_FOCUS_VISIBLE)
 #define FIELD_FLAGS (ASTRA_FIELD_READ_ONLY | ASTRA_FIELD_INLINE)
 #define TEXT_VIEW_INVERTED UINT32_C(4)
+#define TEXT_VIEW_WRAP UINT32_C(8)
 #define TEXT_MODEL_KINDS(kind) \
     ((kind) == ASTRA_CONTROL_FIELD || (kind) == ASTRA_CONTROL_TEXT_VIEW)
 #define FLEX_ITEM_FLAGS (ASTRA_FLEX_BREAK_BEFORE | ASTRA_FLEX_BREAK_AFTER)
@@ -412,7 +413,8 @@ static int control_valid(const AstraControl *control)
                     control->_private_text_length != 0u) &&
                (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW ?
                     (control->_private_style &
-                     ~(ASTRA_FIELD_READ_ONLY | TEXT_VIEW_INVERTED)) == 0u :
+                     ~(ASTRA_FIELD_READ_ONLY | TEXT_VIEW_INVERTED |
+                       TEXT_VIEW_WRAP)) == 0u :
                     (control->_private_style & ~FIELD_FLAGS) == 0u) &&
                (state & ~CONTROL_VALUE_STATES) == 0u &&
                control->_private_preview_state == 0u &&
@@ -1285,6 +1287,27 @@ AstraResult astra_interface_text_view_set_inverted(AstraUIContext *context,
         control->_private_style &= ~TEXT_VIEW_INVERTED;
     control_damage(context, index);
     return ASTRA_OK;
+}
+
+AstraResult astra_interface_text_view_set_wrap_width(AstraUIContext *context,
+    AstraControl *control, uint32_t width)
+{
+    AstraControl next;
+    if (control_index(context, control) == CONTROL_NONE ||
+        control->_private_control_kind != ASTRA_CONTROL_TEXT_VIEW ||
+        width > INT32_MAX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (((control->_private_style & TEXT_VIEW_WRAP) != 0u ?
+         control->_private_measured_width : 0u) == width)
+        return ASTRA_OK;
+    next = *control;
+    if (width != 0u) {
+        next._private_style |= TEXT_VIEW_WRAP;
+        next._private_measured_width = width;
+    } else {
+        next._private_style &= ~TEXT_VIEW_WRAP;
+    }
+    return replace_measured_control(context, control, &next);
 }
 
 AstraResult astra_interface_grid_view_init(AstraControl *control,
@@ -2912,6 +2935,133 @@ static int text_view_column(const AstraTextModel *model, const AstraTextLine *li
     return 1;
 }
 
+typedef struct TextViewRows {
+    const AstraTextModel *model;
+    uint32_t logical_count;
+    uint32_t logical_row;
+    uint32_t next_offset;
+    uint32_t columns;
+    uint8_t continuing;
+} TextViewRows;
+
+typedef struct TextViewRow {
+    uint32_t start;
+    uint32_t end;
+    uint32_t hard_end;
+    uint32_t columns;
+} TextViewRow;
+
+static uint32_t text_view_wrap_columns(const AstraControl *control)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    uint32_t cells = control->_private_measured_width / theme.mono_cell_width;
+    return cells != 0u ? cells : 1u;
+}
+
+/* Returns one for a visual row, zero at end, or minus one for invalid text. */
+static int text_view_next_row(TextViewRows *rows, TextViewRow *visual)
+{
+    AstraTextLine line = ASTRA_TEXT_LINE_INIT;
+    uint32_t offset, column = 0u, last_break = 0u, break_column = 0u;
+    if (rows->logical_row >= rows->logical_count) return 0;
+    if (astra_text_model_get_line(rows->model, rows->logical_row, &line) != ASTRA_OK)
+        return -1;
+    visual->start = rows->continuing ? rows->next_offset : line.start;
+    visual->hard_end = line.content_end;
+    if (visual->start > line.content_end) return -1;
+    offset = visual->start;
+    while (offset < line.content_end) {
+        uint32_t next = offset, scalar, width;
+        if (!text_view_step(rows->model, line.content_end, &next, column,
+                            &scalar, &width)) return -1;
+        if (width > rows->columns - column && offset != visual->start) {
+            if (last_break > visual->start) {
+                offset = last_break;
+                column = break_column;
+            }
+            break;
+        }
+        offset = next;
+        column += width;
+        if (scalar == ' ' || scalar == '\t') {
+            last_break = offset;
+            break_column = column;
+        }
+        if (column >= rows->columns && offset < line.content_end) {
+            if (rows->columns == UINT32_MAX) return -1;
+            if (last_break > visual->start && last_break < offset) {
+                offset = last_break;
+                column = break_column;
+            }
+            break;
+        }
+    }
+    visual->end = offset;
+    visual->columns = column;
+    if (offset == line.content_end) {
+        ++rows->logical_row;
+        rows->continuing = 0u;
+    } else {
+        rows->next_offset = offset;
+        rows->continuing = 1u;
+    }
+    return 1;
+}
+
+static int text_view_row_at(const AstraTextModel *model, uint32_t logical_count,
+    uint32_t columns, uint32_t index, TextViewRow *visual)
+{
+    TextViewRows rows = {model, logical_count, 0u, 0u, columns, 0u};
+    int result;
+    do {
+        result = text_view_next_row(&rows, visual);
+        if (result <= 0) return result;
+    } while (index-- != 0u);
+    return 1;
+}
+
+static int text_view_visual_location(const AstraTextModel *model,
+    uint32_t logical_count, uint32_t columns, uint32_t position,
+    uint32_t *row, uint32_t *column, TextViewRow *visual)
+{
+    TextViewRows rows = {model, logical_count, 0u, 0u, columns, 0u};
+    *row = 0u;
+    for (;;) {
+        int result = text_view_next_row(&rows, visual);
+        if (result <= 0) return 0;
+        if (position < visual->end ||
+            (position == visual->end && visual->end == visual->hard_end)) {
+            uint32_t offset = visual->start;
+            *column = 0u;
+            while (offset < position) {
+                uint32_t scalar, width;
+                if (!text_view_step(model, visual->end, &offset, *column,
+                                    &scalar, &width)) return 0;
+                *column += width;
+            }
+            return 1;
+        }
+        ++*row;
+    }
+}
+
+static int text_view_segment_column(const AstraTextModel *model,
+    const TextViewRow *visual, uint32_t limit, uint32_t *position)
+{
+    uint32_t offset = visual->start, column = 0u;
+    while (offset < visual->end) {
+        uint32_t next = offset, scalar, width;
+        if (!text_view_step(model, visual->end, &next, column,
+                            &scalar, &width)) return 0;
+        if (width != 0u && limit - column < (width + 1u) / 2u) break;
+        offset = next;
+        column += width;
+        if (column >= limit) break;
+    }
+    *position = offset;
+    return 1;
+}
+
 static AstraResult text_view_measure(const AstraControl *control,
                                      AstraControlSize *size)
 {
@@ -2921,16 +3071,21 @@ static AstraResult text_view_measure(const AstraControl *control,
     uint32_t widest = 1u;
     if (astra_text_model_get_state(model, &state) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    for (uint32_t row = 0u; row < state.line_count; ++row) {
-        AstraTextLine line = ASTRA_TEXT_LINE_INIT;
-        uint32_t offset, columns;
-        if (astra_text_model_get_line(model, row, &line) != ASTRA_OK ||
-            !text_view_column(model, &line, UINT32_MAX, &offset, &columns))
-            return ASTRA_ERROR_INVALID_ARGUMENT;
-        if (columns > widest) widest = columns;
+    uint32_t columns = (control->_private_style & TEXT_VIEW_WRAP) != 0u ?
+        text_view_wrap_columns(control) : UINT32_MAX;
+    TextViewRows rows = {model, state.line_count, 0u, 0u, columns, 0u};
+    TextViewRow visual;
+    uint64_t row_count = 0u;
+    int result;
+    while ((result = text_view_next_row(&rows, &visual)) > 0) {
+        if (visual.columns > widest) widest = visual.columns;
+        ++row_count;
     }
-    uint64_t width = (uint64_t)widest * theme.mono_cell_width;
-    uint64_t height = (uint64_t)state.line_count * theme.control_height;
+    if (result < 0) return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint64_t width = (control->_private_style & TEXT_VIEW_WRAP) != 0u ?
+        control->_private_measured_width :
+        (uint64_t)widest * theme.mono_cell_width;
+    uint64_t height = row_count * theme.control_height;
     if (width > INT32_MAX || height > INT32_MAX)
         return ASTRA_ERROR_NO_RESOURCES;
     *size = (AstraControlSize){(uint32_t)width, (uint32_t)height};
@@ -2983,7 +3138,6 @@ static AstraResult text_view_render(const AstraControl *control,
     first_row = (uint32_t)((top - frame->y) / theme.control_height);
     last_row = (uint32_t)((bottom - frame->y + theme.control_height - 1u) /
                           theme.control_height);
-    if (last_row > state.line_count) last_row = state.line_count;
     first_column = (uint32_t)((left - frame->x) / theme.mono_cell_width);
     last_column = (uint32_t)((right - frame->x + theme.mono_cell_width - 1u) /
                              theme.mono_cell_width);
@@ -3005,15 +3159,23 @@ static AstraResult text_view_render(const AstraControl *control,
         astra_surface_fill(surface, frame->x, frame->y, frame->width,
                             frame->height, info.default_background);
     else ++*commands;
-    for (uint32_t row = first_row; row < last_row; ++row) {
-        AstraTextLine line = ASTRA_TEXT_LINE_INIT;
+    int wrapped = (control->_private_style & TEXT_VIEW_WRAP) != 0u;
+    uint32_t wrap_columns = wrapped ?
+        text_view_wrap_columns(control) : UINT32_MAX;
+    TextViewRows rows = {model, state.line_count,
+        wrapped ? 0u : first_row, 0u, wrap_columns, 0u};
+    TextViewRow visual;
+    for (uint32_t row = wrapped ? 0u : first_row;
+         row < last_row; ++row) {
         uint32_t offset, column = 0u, count = 0u, run_column = first_column;
-        if (astra_text_model_get_line(model, row, &line) != ASTRA_OK)
-            return ASTRA_ERROR_INVALID_ARGUMENT;
-        offset = line.start;
-        while (offset < line.content_end && column < last_column) {
+        int next = text_view_next_row(&rows, &visual);
+        if (next < 0) return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (next == 0) break;
+        if (row < first_row) continue;
+        offset = visual.start;
+        while (offset < visual.end && column < last_column) {
             uint32_t before = offset, scalar, width;
-            if (!text_view_step(model, line.content_end, &offset, column,
+            if (!text_view_step(model, visual.end, &offset, column,
                                 &scalar, &width)) return ASTRA_ERROR_INVALID_ARGUMENT;
             uint32_t end = column + width;
             int selected = before >= selection_start && before < selection_end;
@@ -3026,7 +3188,7 @@ static AstraResult text_view_render(const AstraControl *control,
                                                theme.control_selected) :
                                info.default_background, 0u, 1u, 0u};
                 if (count == TEXT_VIEW_CELL_BATCH || column == last_column ||
-                    (column == end && offset == line.content_end)) {
+                    (column == end && offset == visual.end)) {
                     if (surface != NULL) {
                         AstraResult result = astra_text_surface_render_cells(
                             &text, surface, frame->x, frame->y, row, run_column,
@@ -5014,12 +5176,26 @@ static AstraResult text_position(const AstraControl *control, int32_t x, int32_t
             return ASTRA_ERROR_INVALID_ARGUMENT;
         if (row < 0) row = 0;
         row /= theme.control_height;
-        if ((uint64_t)row >= state.line_count) {
-            *position = state.text_bytes; return ASTRA_OK;
-        }
         relative = (int64_t)x - control->_private_frame.x;
         columns = relative <= 0 ? 0u : (uint32_t)(
             (relative + theme.mono_cell_width / 2u) / theme.mono_cell_width);
+        if ((control->_private_style & TEXT_VIEW_WRAP) != 0u) {
+            TextViewRow visual;
+            int found = row > UINT32_MAX ? 0 : text_view_row_at(
+                const_control_text_model(control), state.line_count,
+                text_view_wrap_columns(control), (uint32_t)row, &visual);
+            if (found < 0) return ASTRA_ERROR_INVALID_ARGUMENT;
+            if (found == 0) {
+                *position = state.text_bytes;
+                return ASTRA_OK;
+            }
+            return text_view_segment_column(const_control_text_model(control),
+                &visual, columns, position) ? ASTRA_OK :
+                ASTRA_ERROR_INVALID_ARGUMENT;
+        }
+        if ((uint64_t)row >= state.line_count) {
+            *position = state.text_bytes; return ASTRA_OK;
+        }
         return astra_text_model_get_line(const_control_text_model(control),
                     (uint32_t)row, &line) == ASTRA_OK &&
                text_view_column(const_control_text_model(control), &line, columns,
@@ -5098,8 +5274,14 @@ static AstraResult text_selection(AstraUIContext *context, uint32_t index,
         AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
         AstraTextLine line = ASTRA_TEXT_LINE_INIT;
         uint32_t row, column;
-        if (!text_view_location(control_text_model(control), focus, state.line_count,
-                                 &row, &column, &line))
+        TextViewRow visual;
+        int located = (control->_private_style & TEXT_VIEW_WRAP) != 0u ?
+            text_view_visual_location(control_text_model(control),
+                state.line_count, text_view_wrap_columns(control), focus,
+                &row, &column, &visual) :
+            text_view_location(control_text_model(control), focus,
+                state.line_count, &row, &column, &line);
+        if (!located)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         return control_reveal(context, index, column * theme.mono_cell_width,
             row * theme.control_height, 1u, theme.control_height);
@@ -5256,6 +5438,36 @@ static AstraResult text_key(AstraUIContext *context, uint32_t index,
         AstraTextLine line = ASTRA_TEXT_LINE_INIT;
         AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
         uint32_t row, column, ignored;
+        if ((control->_private_style & TEXT_VIEW_WRAP) != 0u) {
+            TextViewRow visual;
+            AstraControlSize size;
+            uint32_t wrap = text_view_wrap_columns(control);
+            if (!text_view_visual_location(control_text_model(control),
+                    state.line_count, wrap, focus, &row, &column, &visual))
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+            if (usage == 0x4au || usage == 0x4du) {
+                focus = (modifiers & ASTRA_INPUT_MOD_CTRL) != 0u ?
+                    (usage == 0x4au ? 0u : state.text_bytes) :
+                    (usage == 0x4au ? visual.start : visual.end);
+            } else {
+                uint32_t steps = usage == 0x4bu || usage == 0x4eu ?
+                    control->_private_clip.height / theme.control_height : 1u;
+                if (steps == 0u) steps = 1u;
+                if (text_view_measure(control, &size) != ASTRA_OK)
+                    return ASTRA_ERROR_INVALID_ARGUMENT;
+                uint32_t count = size.height / theme.control_height;
+                if (usage == 0x52u || usage == 0x4bu)
+                    row = row < steps ? 0u : row - steps;
+                else row += steps < count - row ? steps : count - row - 1u;
+                if (text_view_row_at(control_text_model(control),
+                        state.line_count, wrap, row, &visual) != 1 ||
+                    !text_view_segment_column(control_text_model(control),
+                        &visual, column, &focus))
+                    return ASTRA_ERROR_INVALID_ARGUMENT;
+            }
+            return text_selection(context, index, shift ? anchor : focus,
+                                  focus, action);
+        }
         if (!text_view_location(control_text_model(control), focus, state.line_count,
                                  &row, &column, &line))
             return ASTRA_ERROR_INVALID_ARGUMENT;

@@ -399,6 +399,17 @@ to remeasure content, update scroll extents and repaint. Existing Field APIs
 remain single-line. Text View adds no fields to existing public control/context
 structures, so this is Interface Kit 7.1, with two new versioned symbols.
 
+Interface Kit 7.11 adds `astra_interface_text_view_set_wrap_width`. Pass the
+available viewport width in pixels to wrap visual lines at word boundaries;
+zero restores horizontal scrolling. The caller keeps the same TextModel and
+selection. Call the setter after viewport resize, before presenting the next
+frame. It remeasures content and updates ScrollView extents. Long words split
+at character boundaries; tabs keep eight-cell stops within each visual line.
+Haiku reference: `src/kits/interface/TextView.cpp` recalculates line breaks on
+width changes (`FrameResized`, `SetWordWrap`) and chooses legal word boundaries
+(`CanEndLine`). Astra keeps its existing fixed-cell TextSurface and UTF-8
+TextModel contracts.
+
 Interface Kit 7.9 adds read-only Grid View for applications with fixed cell
 layouts and per-cell styles or colors. Supply caller-owned `AstraTextCell`
 storage through `AstraGridViewModel`, set its visible rows and columns, then

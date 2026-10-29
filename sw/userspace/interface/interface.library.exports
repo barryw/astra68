@@ -144,3 +144,8 @@ ASTRA_INTERFACE_7.10 {
     global:
         astra_interface_image_view_render;
 } ASTRA_INTERFACE_7.9;
+
+ASTRA_INTERFACE_7.11 {
+    global:
+        astra_interface_text_view_set_wrap_width;
+} ASTRA_INTERFACE_7.10;

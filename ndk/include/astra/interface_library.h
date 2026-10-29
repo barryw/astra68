@@ -19,7 +19,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.7. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 7u
 /** Current backward-compatible Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 10u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 11u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -231,6 +231,16 @@ AstraResult astra_interface_text_view_refresh(AstraUIContext *context,
  */
 AstraResult astra_interface_text_view_set_inverted(AstraUIContext *context,
     AstraControl *control, uint32_t inverted);
+/** Wrap Text View at a viewport width; zero restores unwrapped lines.
+ * Reflows only presentation and preserves model text and selections.
+ * @param context UI context owning the control.
+ * @param control Text View to update.
+ * @param width Available text width in pixels, or zero to disable wrapping.
+ * @return ASTRA_OK or a validation/resource error.
+ * @since Interface Kit 7.11.
+ */
+AstraResult astra_interface_text_view_set_wrap_width(AstraUIContext *context,
+    AstraControl *control, uint32_t width);
 /** Initialize a read-only fixed cell grid from caller-owned storage.
  * @param control Caller-owned empty control.
  * @param info Validated grid model and control information.

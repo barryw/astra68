@@ -156,13 +156,15 @@ library-contract: $(INTERFACE_TARGET)
 		grep -Eq ' astra_interface_text_view_set_inverted@@ASTRA_INTERFACE_7\.8$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -Eq ' astra_interface_image_view_render@@ASTRA_INTERFACE_7\.10$$'
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_text_view_set_wrap_width@@ASTRA_INTERFACE_7\.11$$'
 	@! $(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -q 'ASTRA_INTERFACE_5\.1'
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.7 7.10.0 ABI 7.10$$'
+		grep -q '^interface.library.7 7.11.0 ABI 7.11$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
