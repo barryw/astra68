@@ -55,6 +55,17 @@ resize notification and redraw pass. Haiku reference:
 `src/servers/app/ServerWindow.cpp` `NotifyZoom` and
 `src/kits/interface/Window.cpp` `Zoom`/`FrameResized` (notify client when
 server-side window chrome changes its frame).
+Selected DE25 release `68829a6ba2332b829409749d33deeef5086b2717e8ecb9b755c03195768e9187`
+was built from integrated source, verified before and after deployment, and
+passed system-image migration. Its selected image SHA-256 is
+`845d92f84c7eb073f9d7cf68fe761163be3bc1df3dae537605929cf57f5dc387`.
+After reboot, desktop volume and Applications icons appeared; Atlas opened
+Applications, and AstraZ launched from its icon. Terminal then opened Z8 One
+Room through selected AstraZ bundle; story text, complete `Bathroom` heading,
+and paging prompt rendered. Selected-release screenshots and raw frames are
+archived at `/mnt/Documents/astra68/astraz-validation-20261029/` on Beast;
+`astraz-selected-z8-settled.raw` SHA-256 is
+`3b5bf4722d3bcc94cefd7685b11abf98eb9bad913f01e82401359d482c325b14`.
 
 Chocolate Quake bundle checkpoint, 2026-10-28: `ChocolateQuake.app` now has
 its own copper Q AICON, verified Quake 1.06 shareware `pak0.pak`, bundled

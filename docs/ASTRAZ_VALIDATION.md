@@ -291,7 +291,8 @@ standalone Frotz `stream.c` also compiled without the AstraZ definition.
 
 Code review confirms live command echo is app-owned, while the new Frotz
 input echo path runs only for replay input. Replay echo still needs an
-executable fixture. DE25 resize/reflow remains a separate hardware gate.
+executable fixture. DE25 resize/reflow evidence is recorded in
+`docs/CURRENT_STATE.md`.
 
 The first DE25 semantic candidate revealed a marker-boundary defect: a
 style/font argument of zero was mistaken for a word terminator and could
@@ -303,3 +304,17 @@ events also start with `B` (`bathroom_headings=2 bathroom_physical_B=2`).
 Both stories retain lines longer than 120 characters as single logical
 paragraph lines and preserve explicit blank lines. The host trace stops at
 the third input by design (`ASTRAZ_CANCELLED`, status 7), with no engine error.
+
+## Selected release on DE25
+
+Integrated release `68829a6ba2332b829409749d33deeef5086b2717e8ecb9b755c03195768e9187`
+passed package verification and system-image migration, then was deployed and
+verified as selected on DE25. Desktop volume and Applications icons rendered.
+Atlas opened Applications; its AstraZ icon launched selected bundle. Terminal
+opened Z8 One Room from test WORK volume. Released AstraZ rendered wrapped
+story text, complete `Bathroom` heading, and paging prompt. Beast archive
+`/mnt/Documents/astra68/astraz-validation-20261029/astraz-selected-z8-settled.png`
+has corresponding raw-frame SHA-256
+`3b5bf4722d3bcc94cefd7685b11abf98eb9bad913f01e82401359d482c325b14`.
+Earlier focused DE25 captures in `docs/CURRENT_STATE.md` cover normal,
+maximized, response, and restored reflow plus Z6 artwork geometry.
