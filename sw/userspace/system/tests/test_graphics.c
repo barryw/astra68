@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 
 #include <astra/draw_list.h>
+#include <astra/fonts.h>
 #include <astra/graphics.h>
 #include <astra/graphics_library.h>
 #include <astra/gui.h>
@@ -561,6 +562,7 @@ static void test_named_text(const AstraSurface *content)
                  "user:abcdefHi", sizeof(id) - 1u + 2u) == 0);
     CHECK(astra_fence_close(&fence) == ASTRA_OK);
     CHECK(astra_draw_list_close(&list) == ASTRA_OK);
+
 }
 
 static void test_append_view(const AstraSurface *content)
@@ -631,6 +633,48 @@ static void test_append_view(const AstraSurface *content)
           fake_submitted[2].clip_right == 204u &&
           memcmp(fake_submitted_list + fake_submitted[2].payload_offset,
                  "abc", 3u) == 0);
+    CHECK(astra_fence_close(&fence) == ASTRA_OK);
+    CHECK(astra_draw_list_close(&list) == ASTRA_OK);
+
+    /* Selected system fonts turn ordinary UI text into named text. */
+    const char named[] = "user:abcdefHi";
+    header->command_count = 1u;
+    header->payload_bytes = sizeof(named) - 1u;
+    commands[0] = (AstraDrawListCommand){
+        .operation = ASTRA_DRAW_LIST_NAMED_TEXT,
+        .font_height = 13u,
+        .source = sizeof(named) - 3u,
+        .payload_offset = ASTRA_DRAW_LIST_PAYLOAD_OFFSET,
+        .payload_bytes = sizeof(named) - 1u,
+        .clip_right = 320u, .clip_bottom = 200u,
+    };
+    memcpy((uint8_t *)storage + ASTRA_DRAW_LIST_PAYLOAD_OFFSET,
+           named, sizeof(named) - 1u);
+    list = (AstraDrawList)ASTRA_DRAW_LIST_INIT;
+    fence = (AstraFence)ASTRA_FENCE_INIT;
+    CHECK(astra_draw_list_create(content,
+              &(AstraRectI32){0, 0, 320, 200}, &list) == ASTRA_OK);
+    commands[0].source = 0u;
+    CHECK(astra_draw_list_append_view(&list, &view) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    commands[0].source = ASTRA_FONT_ID_MAX;
+    CHECK(astra_draw_list_append_view(&list, &view) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    commands[0].source = commands[0].payload_bytes;
+    CHECK(astra_draw_list_append_view(&list, &view) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    commands[0].source = sizeof(named) - 3u;
+    ((char *)storage + ASTRA_DRAW_LIST_PAYLOAD_OFFSET)[0] = '\0';
+    CHECK(astra_draw_list_append_view(&list, &view) ==
+          ASTRA_ERROR_INVALID_ARGUMENT);
+    ((char *)storage + ASTRA_DRAW_LIST_PAYLOAD_OFFSET)[0] = 'u';
+    CHECK(astra_draw_list_append_view(&list, &view) == ASTRA_OK);
+    CHECK(astra_draw_submit(&list, &fence) == ASTRA_OK);
+    CHECK(fake_submitted_header.command_count == 1u &&
+          fake_submitted[0].operation == ASTRA_DRAW_LIST_NAMED_TEXT &&
+          fake_submitted[0].source == sizeof(named) - 3u &&
+          memcmp(fake_submitted_list + fake_submitted[0].payload_offset,
+                 named, sizeof(named) - 1u) == 0);
     CHECK(astra_fence_close(&fence) == ASTRA_OK);
     CHECK(astra_draw_list_close(&list) == ASTRA_OK);
 }

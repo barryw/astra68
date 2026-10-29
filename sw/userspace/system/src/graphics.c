@@ -847,15 +847,21 @@ AstraResult astra_draw_list_append_view(AstraDrawList *draw_list,
     commands = (const AstraDrawListCommand *)(source + 1);
     for (uint32_t at = 0u; at < source->command_count; ++at) {
         const AstraDrawListCommand *command = &commands[at];
+        int named_text = command->operation == ASTRA_DRAW_LIST_NAMED_TEXT;
         int text = command->operation == ASTRA_DRAW_LIST_TEXT ||
-                   command->operation == ASTRA_DRAW_LIST_MONO_TEXT;
+                   command->operation == ASTRA_DRAW_LIST_MONO_TEXT ||
+                   named_text;
 
         if (command->operation != ASTRA_DRAW_LIST_FILL &&
             command->operation != ASTRA_DRAW_LIST_FILL_ROUNDED &&
             command->operation != ASTRA_DRAW_LIST_LINE &&
             command->operation != ASTRA_DRAW_LIST_BLIT && !text)
             return ASTRA_ERROR_INVALID_ARGUMENT;
-        if (command->source != ASTRA_DRAW_LIST_SOURCE_DESTINATION ||
+        if ((named_text ? (command->source == 0u ||
+                            command->source >= ASTRA_FONT_ID_MAX ||
+                            command->payload_bytes <= command->source) :
+                           command->source !=
+                               ASTRA_DRAW_LIST_SOURCE_DESTINATION) ||
             command->clip_left > command->clip_right ||
             command->clip_right > view->width ||
             command->clip_top > command->clip_bottom ||
@@ -866,6 +872,9 @@ AstraResult astra_draw_list_append_view(AstraDrawList *draw_list,
                       command->payload_offset < source_offset ||
                       command->payload_offset - source_offset >
                           source->payload_bytes - command->payload_bytes)))
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (named_text && memchr((const uint8_t *)source +
+                command->payload_offset, '\0', command->source) != NULL)
             return ASTRA_ERROR_INVALID_ARGUMENT;
     }
     result = list_reclaim(draw_list);

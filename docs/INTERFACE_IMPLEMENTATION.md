@@ -444,6 +444,14 @@ serializes that clip on every command, and replay validates it before lowering
 it into Astraea's clip registers. Host tests cover resize reflow, invalid
 hierarchies, clipped input, malformed draw lists, and a 256-level tree.
 
+`astra_draw_list_append_view` also accepts validated `NAMED_TEXT` commands when
+composing an Interface Kit view into a hardware draw list. The font identifier
+and text stay in the command payload, and Graphics Kit bounds and checks the
+identifier before moving that payload. Haiku reference:
+`src/kits/interface/View.cpp` (`BView::SetFont`, `BView::DrawString`) keeps font
+selection in view state and sends text to the drawing server. Astra uses the
+same state-to-server pattern with an explicit face ID in its draw-list protocol.
+
 The fixed four-entry table and fixed 4 MiB-per-window media map are gone.
 Window metadata grows in committed kernel pages, while exact 64-byte-aligned
 content and chrome extents are allocated from the 16..512 MiB Media RAM arena
