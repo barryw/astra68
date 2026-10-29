@@ -211,5 +211,5 @@ static void y4m_close(AstraCodecSession *session)
 }
 
 const AstraCodecProvider astra_codec_y4m_provider = {
-    "YUV4MPEG2 4:2:0", y4m_probe, y4m_open, y4m_read, y4m_seek, y4m_close
+    "YUV4MPEG2 4:2:0", y4m_probe, y4m_open, y4m_read, y4m_seek, y4m_close, 0
 };

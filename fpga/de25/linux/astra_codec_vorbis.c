@@ -188,5 +188,5 @@ static void vorbis_close(AstraCodecSession *session)
 
 const AstraCodecProvider astra_codec_vorbis_provider = {
     "Ogg Vorbis", vorbis_probe, vorbis_open, vorbis_read, vorbis_seek,
-    vorbis_close
+    vorbis_close, 0
 };

@@ -34,6 +34,21 @@ production release `b46aaf2de9af55540162e42ac694cd04e96b48527f4d471201046c509bf9
 A preceding
 separate-PCM-voice design was rejected after 1,708 source gaps over its trial.
 
+Tracker candidate (not yet a selected DE25 release): the same isolated Codec
+Kit worker accepts signed ProTracker MOD, XM, S3M, and IT sources through a
+pinned libxmp 4.6.3 build from SDL_mixer's `external/libxmp` submodule
+(`1e4b00d677c217ba303ffaa4f5d4a0e6a0cbf22c`). The provider emits
+48 kHz stereo PCM. SDL_mixer's Ogg and MOD music interfaces share one
+Codec Kit stream, decode thread, bounded queue, and seek/close path. The
+provider recognizes signatures before handing bytes to libxmp; ProTracker's
+signature is at byte 1080, so that provider requests a longer bounded probe.
+The current libxmp API requires the source in memory during open; the worker
+limits this to 32 MiB and never receives a host path. The Codec Kit wire
+protocol and native client ABI do not change. Beast x86 host worker and
+QEMU AArch64 provider tests exercise a freely redistributable V6 Blorb MOD
+fixture, including PCM output, restart, sandboxed source reads, and cleanup.
+DE25 SDL_mixer and AstraZ audio playback remain release gates.
+
 Current provider selection is a compiled-in table inside the isolated worker.
 Installable provider registration, independent provider crash isolation, and
 conflict policy described below remain design work. Current video output is

@@ -81,8 +81,11 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 
 CODEC_VORBIS_HEADER := $(ROOT)/sw/userspace/sdl2/build/vendor/SDL2_mixer/src/codecs/stb_vorbis/stb_vorbis.h
 CODEC_VORBIS_INCLUDE := -I$(dir $(CODEC_VORBIS_HEADER))
+CODEC_XMP_ROOT ?= $(ROOT)/../SDL2_mixer/external/libxmp
+CODEC_XMP_REVISION := 1e4b00d677c217ba303ffaa4f5d4a0e6a0cbf22c
+CODEC_XMP_INCLUDE := -I$(CODEC_XMP_ROOT)/include
 CODEC_SOURCES := astra_codec_provider.c astra_codec_wav.c \
-	astra_codec_vorbis.c astra_codec_y4m.c
+	astra_codec_vorbis.c astra_codec_y4m.c astra_codec_tracker.c
 CODEC_TARGET_CFLAGS := $(CFLAGS) -I$(ROOT)/ndk/include \
 	--sysroot=$(DE25_SYSROOT) -nostdinc -I$(FONT_AARCH64_INCLUDE) \
 	-isystem $(DE25_SYSROOT)/usr/include/aarch64-linux-gnu \
@@ -99,54 +102,74 @@ $(OUT)/astra-codec-stb-vorbis-aarch64.o: astra_codec_stb_vorbis.c $(CODEC_VORBIS
 	mkdir -p $(OUT)
 	$(FONT_AARCH64_CC) $(CODEC_TARGET_CFLAGS) -w $(CODEC_VORBIS_INCLUDE) -c $< -o $@
 
+$(OUT)/libxmp-host/libxmp.a: $(CODEC_XMP_ROOT)/CMakeLists.txt Makefile
+	@test "$$(git -C $(CODEC_XMP_ROOT) rev-parse HEAD)" = "$(CODEC_XMP_REVISION)"
+	cmake -S $(CODEC_XMP_ROOT) -B $(OUT)/libxmp-host -G Ninja \
+		-DCMAKE_C_COMPILER=$(HOST_CC) -DBUILD_SHARED=OFF \
+		-DLIBXMP_DISABLE_DEPACKERS=ON -DLIBXMP_DISABLE_PROWIZARD=ON
+	cmake --build $(OUT)/libxmp-host --target xmp_static
+
+$(OUT)/libxmp-aarch64/libxmp.a: $(CODEC_XMP_ROOT)/CMakeLists.txt Makefile
+	@test "$$(git -C $(CODEC_XMP_ROOT) rev-parse HEAD)" = "$(CODEC_XMP_REVISION)"
+	cmake -S $(CODEC_XMP_ROOT) -B $(OUT)/libxmp-aarch64 -G Ninja \
+		-DCMAKE_C_COMPILER=$(FONT_AARCH64_CC) -DBUILD_SHARED=OFF \
+		-DLIBXMP_DISABLE_DEPACKERS=ON -DLIBXMP_DISABLE_PROWIZARD=ON
+	cmake --build $(OUT)/libxmp-aarch64 --target xmp_static
+
 $(OUT)/test-codec-provider: $(CODEC_SOURCES) test_codec_provider.c astra_codec_provider.h \
-		$(OUT)/astra-codec-stb-vorbis.o Makefile
+		$(OUT)/astra-codec-stb-vorbis.o $(OUT)/libxmp-host/libxmp.a Makefile
 	mkdir -p $(OUT)
-	$(HOST_CC) $(CFLAGS) $(CODEC_VORBIS_INCLUDE) $(CODEC_SOURCES) \
+	$(HOST_CC) $(CFLAGS) $(CODEC_VORBIS_INCLUDE) $(CODEC_XMP_INCLUDE) $(CODEC_SOURCES) \
 		test_codec_provider.c \
-		$(OUT)/astra-codec-stb-vorbis.o -lm -o $@
+		$(OUT)/astra-codec-stb-vorbis.o $(OUT)/libxmp-host/libxmp.a -lm -o $@
 
 $(OUT)/test-codec-provider-aarch64: $(CODEC_SOURCES) test_codec_provider.c astra_codec_provider.h \
-		$(OUT)/astra-codec-stb-vorbis-aarch64.o Makefile
+		$(OUT)/astra-codec-stb-vorbis-aarch64.o $(OUT)/libxmp-aarch64/libxmp.a Makefile
 	mkdir -p $(OUT)
-	$(FONT_AARCH64_CC) $(CODEC_TARGET_CFLAGS) $(CODEC_VORBIS_INCLUDE) $(CODEC_SOURCES) \
+	$(FONT_AARCH64_CC) $(CODEC_TARGET_CFLAGS) $(CODEC_VORBIS_INCLUDE) $(CODEC_XMP_INCLUDE) $(CODEC_SOURCES) \
 		test_codec_provider.c $(OUT)/astra-codec-stb-vorbis-aarch64.o \
-		-lm -o $@
+		$(OUT)/libxmp-aarch64/libxmp.a -lm -o $@
 
 $(OUT)/test-codec-tone.ogg: Makefile
 	mkdir -p $(OUT)
 	ffmpeg -hide_banner -loglevel error -f lavfi -i sine=frequency=440:duration=0.2 \
 		-ar 48000 -ac 2 -c:a libvorbis -y $@
 
-codec-provider-test: $(OUT)/test-codec-provider $(OUT)/test-codec-tone.ogg
-	$(OUT)/test-codec-provider $(OUT)/test-codec-tone.ogg
+$(OUT)/tracker-fixture/media.mod: $(ROOT)/emu/qemu/astraz-media/fixture.py
+	python3 $(ROOT)/emu/qemu/astraz-media/fixture.py $(OUT)/tracker-fixture
+
+codec-provider-test: $(OUT)/test-codec-provider $(OUT)/test-codec-tone.ogg \
+		$(OUT)/tracker-fixture/media.mod
+	$(OUT)/test-codec-provider $(OUT)/test-codec-tone.ogg \
+		$(OUT)/tracker-fixture/media.mod
 
 .PHONY: codec-provider-target-test
-codec-provider-target-test: $(OUT)/test-codec-provider-aarch64 $(OUT)/test-codec-tone.ogg
+codec-provider-target-test: $(OUT)/test-codec-provider-aarch64 $(OUT)/test-codec-tone.ogg \
+		$(OUT)/tracker-fixture/media.mod
 	$(QEMU_USER) -L $(DE25_SYSROOT) $(OUT)/test-codec-provider-aarch64 \
-		$(OUT)/test-codec-tone.ogg
+		$(OUT)/test-codec-tone.ogg $(OUT)/tracker-fixture/media.mod
 
 $(OUT)/astra-codec-worker: $(CODEC_SOURCES) astra_codec_wire.c \
 		astra_codec_worker.c astra_codec_worker_main.c astra_codec_sandbox.c \
 		astra_codec_provider.h astra_codec_wire.h \
 		$(ROOT)/sw/include/astra/codec_worker.h \
-		$(OUT)/astra-codec-stb-vorbis.o Makefile
+		$(OUT)/astra-codec-stb-vorbis.o $(OUT)/libxmp-host/libxmp.a Makefile
 	mkdir -p $(OUT)
-	$(HOST_CC) $(CFLAGS) $(CODEC_VORBIS_INCLUDE) $(CODEC_SOURCES) \
+	$(HOST_CC) $(CFLAGS) $(CODEC_VORBIS_INCLUDE) $(CODEC_XMP_INCLUDE) $(CODEC_SOURCES) \
 		astra_codec_wire.c astra_codec_worker.c astra_codec_sandbox.c \
 		astra_codec_worker_main.c $(OUT)/astra-codec-stb-vorbis.o \
-		-lm -o $@
+		$(OUT)/libxmp-host/libxmp.a -lm -o $@
 
 $(OUT)/astra-codec-worker-aarch64: $(CODEC_SOURCES) astra_codec_wire.c \
 		astra_codec_worker.c astra_codec_worker_main.c astra_codec_sandbox.c \
 		astra_codec_provider.h astra_codec_wire.h \
 		$(ROOT)/sw/include/astra/codec_worker.h \
-		$(OUT)/astra-codec-stb-vorbis-aarch64.o Makefile
+		$(OUT)/astra-codec-stb-vorbis-aarch64.o $(OUT)/libxmp-aarch64/libxmp.a Makefile
 	mkdir -p $(OUT)
-	$(FONT_AARCH64_CC) $(CODEC_TARGET_CFLAGS) $(CODEC_VORBIS_INCLUDE) \
+	$(FONT_AARCH64_CC) $(CODEC_TARGET_CFLAGS) $(CODEC_VORBIS_INCLUDE) $(CODEC_XMP_INCLUDE) \
 		$(CODEC_SOURCES) astra_codec_wire.c astra_codec_worker.c astra_codec_sandbox.c \
 		astra_codec_worker_main.c $(OUT)/astra-codec-stb-vorbis-aarch64.o \
-		-lm -o $@
+		$(OUT)/libxmp-aarch64/libxmp.a -lm -o $@
 
 .PHONY: codec-worker-target
 codec-worker-target: $(OUT)/astra-codec-worker-aarch64
@@ -159,9 +182,10 @@ $(OUT)/test-codec-host: astra_codec_host.c astra_codec_wire.c \
 		test_codec_host.c -o $@
 
 .PHONY: codec-worker-test
-codec-worker-test: $(OUT)/astra-codec-worker $(OUT)/test-codec-host $(OUT)/test-codec-tone.ogg
+codec-worker-test: $(OUT)/astra-codec-worker $(OUT)/test-codec-host \
+		$(OUT)/test-codec-tone.ogg $(OUT)/tracker-fixture/media.mod
 	$(OUT)/test-codec-host $(abspath $(OUT)/astra-codec-worker) \
-		$(OUT)/test-codec-tone.ogg
+		$(OUT)/test-codec-tone.ogg $(OUT)/tracker-fixture/media.mod
 
 $(OUT)/test-codec-sandbox: astra_codec_sandbox.c astra_codec_sandbox.h \
 		test_codec_sandbox.c Makefile

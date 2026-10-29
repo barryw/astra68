@@ -1,5 +1,6 @@
-/* SDL_mixer Ogg adapter: Codec Kit decodes ahead of the audio callback. */
+/* SDL_mixer music adapter: Codec Kit decodes ahead of the audio callback. */
 #include "music_ogg.h"
+#include "music_xmp.h"
 #include "SDL.h"
 
 #include <astra/codec.h>
@@ -15,7 +16,7 @@
 #define MUSIC_PREROLL_BYTES 131072
 #define MUSIC_PREROLL_TIMEOUT_MS 3000u
 
-typedef struct AstraOggMusic {
+typedef struct AstraCodecMusic {
     SDL_RWops *src;
     AstraCodecStream codec;
     AstraCodecFormat format;
@@ -45,7 +46,7 @@ typedef struct AstraOggMusic {
     _Atomic int volume;
     int eof;
     int stopping;
-} AstraOggMusic;
+} AstraCodecMusic;
 
 static AstraResult read_at(void *context, uint64_t offset, void *output,
                            uint32_t capacity, uint32_t *received)
@@ -59,7 +60,7 @@ static AstraResult read_at(void *context, uint64_t offset, void *output,
     return ASTRA_OK;
 }
 
-static void fail_music(AstraOggMusic *music, uint32_t generation,
+static void fail_music(AstraCodecMusic *music, uint32_t generation,
                        const char *reason)
 {
     SDL_LockMutex(music->queue_lock);
@@ -74,7 +75,7 @@ static void fail_music(AstraOggMusic *music, uint32_t generation,
 
 static int pump_music(void *opaque)
 {
-    AstraOggMusic *music = opaque;
+    AstraCodecMusic *music = opaque;
 
     (void)SDL_SetThreadPriority(SDL_THREAD_PRIORITY_HIGH);
     for (;;) {
@@ -148,7 +149,7 @@ static int pump_music(void *opaque)
 
 static void delete_music(void *opaque)
 {
-    AstraOggMusic *music = opaque;
+    AstraCodecMusic *music = opaque;
 
     if (music == NULL) return;
     if (music->thread != NULL) {
@@ -186,7 +187,7 @@ static void delete_music(void *opaque)
 static void *create_music(SDL_RWops *src, int freesrc)
 {
     const AstraStartupCapability *capability;
-    AstraOggMusic *music;
+    AstraCodecMusic *music;
     Sint64 length;
 
     capability = astra_startup_capability(astra_posix_startup(), "CODEC");
@@ -242,7 +243,7 @@ failed:
 
 static void set_volume(void *opaque, int volume)
 {
-    AstraOggMusic *music = opaque;
+    AstraCodecMusic *music = opaque;
 
     if (volume < 0) volume = 0;
     if (volume > MIX_MAX_VOLUME) volume = MIX_MAX_VOLUME;
@@ -251,21 +252,21 @@ static void set_volume(void *opaque, int volume)
 
 static int get_volume(void *opaque)
 {
-    AstraOggMusic *music = opaque;
+    AstraCodecMusic *music = opaque;
 
     return atomic_load_explicit(&music->volume, memory_order_relaxed);
 }
 
 static int seek_music(void *opaque, double seconds)
 {
-    AstraOggMusic *music = opaque;
+    AstraCodecMusic *music = opaque;
     uint64_t position;
     uint64_t start_ms, deadline_ms;
     AstraResult result;
     int ready;
 
     if (seconds < 0.0 || seconds > 18446744073.0) {
-        Mix_SetError("Ogg seek out of range");
+        Mix_SetError("Codec music seek out of range");
         return -1;
     }
     position = (uint64_t)(seconds * 1000000000.0);
@@ -310,7 +311,7 @@ static int seek_music(void *opaque, double seconds)
 
 static int play_music(void *opaque, int play_count)
 {
-    AstraOggMusic *music = opaque;
+    AstraCodecMusic *music = opaque;
 
     SDL_LockMutex(music->queue_lock);
     music->play_count = play_count;
@@ -325,7 +326,7 @@ static int play_music(void *opaque, int play_count)
 
 static SDL_bool is_playing(void *opaque)
 {
-    AstraOggMusic *music = opaque;
+    AstraCodecMusic *music = opaque;
 
     return atomic_load_explicit(&music->playing,
                                 memory_order_relaxed) ? SDL_TRUE : SDL_FALSE;
@@ -333,7 +334,7 @@ static SDL_bool is_playing(void *opaque)
 
 static int get_some(void *opaque, void *data, int bytes, SDL_bool *done)
 {
-    AstraOggMusic *music = opaque;
+    AstraCodecMusic *music = opaque;
     int got;
     int buffered;
 
@@ -369,14 +370,14 @@ static int get_some(void *opaque, void *data, int bytes, SDL_bool *done)
 
 static int get_audio(void *opaque, void *data, int bytes)
 {
-    AstraOggMusic *music = opaque;
+    AstraCodecMusic *music = opaque;
 
     return music_pcm_getaudio(opaque, data, bytes, get_volume(music), get_some);
 }
 
 static void stop_music(void *opaque)
 {
-    AstraOggMusic *music = opaque;
+    AstraCodecMusic *music = opaque;
 
     SDL_LockMutex(music->queue_lock);
     ++music->generation;
@@ -389,7 +390,7 @@ static void stop_music(void *opaque)
 
 static double tell_music(void *opaque)
 {
-    AstraOggMusic *music = opaque;
+    AstraCodecMusic *music = opaque;
     uint64_t position;
 
     SDL_LockMutex(music->queue_lock);
@@ -406,6 +407,17 @@ static double unknown_duration(void *opaque)
 
 Mix_MusicInterface Mix_MusicInterface_OGG = {
     "OGG", MIX_MUSIC_OGG, MUS_OGG, SDL_FALSE, SDL_FALSE,
+    NULL, NULL, create_music, NULL, set_volume, get_volume,
+    play_music, is_playing, get_audio, NULL, seek_music, tell_music,
+    unknown_duration, unknown_duration, unknown_duration, unknown_duration,
+    NULL, NULL, NULL, NULL, NULL, stop_music,
+    delete_music, NULL, NULL
+};
+
+/* Both formats use exactly the same Codec Kit stream and queue lifecycle.
+ * The host provider selects the decoder from the source bytes. */
+Mix_MusicInterface Mix_MusicInterface_XMP = {
+    "XMP", MIX_MUSIC_LIBXMP, MUS_MOD, SDL_FALSE, SDL_FALSE,
     NULL, NULL, create_music, NULL, set_volume, get_volume,
     play_music, is_playing, get_audio, NULL, seek_music, tell_music,
     unknown_duration, unknown_duration, unknown_duration, unknown_duration,

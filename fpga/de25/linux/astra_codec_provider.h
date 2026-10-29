@@ -65,6 +65,7 @@ typedef struct AstraCodecProvider {
                 AstraCodecChunk *chunk);
     int (*seek)(AstraCodecSession *session, uint64_t timestamp_ns);
     void (*close)(AstraCodecSession *session);
+    size_t probe_bytes; /* Zero uses the standard 32-byte prefix. */
 } AstraCodecProvider;
 
 struct AstraCodecSession {
@@ -75,6 +76,7 @@ struct AstraCodecSession {
 
 extern const AstraCodecProvider astra_codec_wav_provider;
 extern const AstraCodecProvider astra_codec_vorbis_provider;
+extern const AstraCodecProvider astra_codec_tracker_provider;
 extern const AstraCodecProvider astra_codec_y4m_provider;
 
 int astra_codec_read_exact(const AstraCodecSource *source, uint64_t offset,

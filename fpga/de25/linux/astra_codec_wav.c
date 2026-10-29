@@ -161,5 +161,5 @@ static void wav_close(AstraCodecSession *session)
 }
 
 const AstraCodecProvider astra_codec_wav_provider = {
-    "WAV PCM", wav_probe, wav_open, wav_read, wav_seek, wav_close
+    "WAV PCM", wav_probe, wav_open, wav_read, wav_seek, wav_close, 0
 };

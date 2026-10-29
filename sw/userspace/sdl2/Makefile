@@ -54,12 +54,12 @@ SDL_MIXER_SOURCES := src/codecs/load_aiff.c src/codecs/load_voc.c \
 	src/codecs/music_ogg.c \
 	src/codecs/music_opus.c src/codecs/music_timidity.c \
 	src/codecs/music_wav.c src/codecs/music_wavpack.c \
-	src/codecs/music_xmp.c src/codecs/remap_channels.c \
+	src/codecs/remap_channels.c \
 	src/effect_position.c src/effect_stereoreverse.c \
 	src/effects_internal.c src/mixer.c src/music.c src/utils.c
 SDL_MIXER_OBJECTS := $(patsubst %.c,build/m68k/mixer/%.o,$(SDL_MIXER_SOURCES)) \
 	build/m68k/mixer/astra/native_midi_astra.o \
-	build/m68k/mixer/astra/music_ogg_astra.o
+	build/m68k/mixer/astra/music_codec_astra.o
 SDL_MIXER_IDENTITY := build/m68k/library_identity_mixer.o
 SDL_MIXER_EXPORTS := build/m68k/SDL2_mixer.library.exports
 SDL_MIXER_UNDEFINED := build/m68k/SDL2_mixer.library.undefined
@@ -275,6 +275,7 @@ build/m68k/mixer/%.o: $(SDL_MIXER_STAMP) Makefile
 		-Ibuild/vendor/SDL2_mixer/src \
 		-Ibuild/vendor/SDL2_mixer/src/codecs \
 		-DBUILD_SDL=1 -DMUSIC_WAV=1 -DMUSIC_OGG=1 -DOGG_USE_STB=1 \
+		-DMUSIC_MOD_XMP=1 \
 		-DMUSIC_MP3_MINIMP3=1 -DMUSIC_FLAC_DRFLAC=1 -DMUSIC_MID_NATIVE=1 \
 		-std=c11 -Wall -Wextra $(ASTRA_POSIX_CFLAGS) \
 		-c build/vendor/SDL2_mixer/$*.c -o $@
@@ -289,7 +290,7 @@ build/m68k/mixer/astra/native_midi_astra.o: mixer/native_midi_astra.c \
 		-std=c11 -Wall -Wextra -Werror $(ASTRA_POSIX_CFLAGS) \
 		-c $< -o $@
 
-build/m68k/mixer/astra/music_ogg_astra.o: mixer/music_ogg_astra.c \
+build/m68k/mixer/astra/music_codec_astra.o: mixer/music_codec_astra.c \
 		$(SDL_MIXER_STAMP) Makefile
 	@mkdir -p $(@D)
 	$(TARGET_CC) $(ASTRA_POSIX_CPPFLAGS) \
@@ -474,7 +475,11 @@ build/mixer-fixtures/sample.flac:
 		-i 'sine=frequency=440:duration=0.25' -ac 2 -ar 48000 \
 		-c:a flac -y $@
 
-$(eval $(call astra_app_bundle,build,SDLMixerProbe,build/m68k/sdlmixerprobe,tests/SDLMixerProbe.app/manifest,terminal,build/mixer-fixtures/sample.mp3 build/mixer-fixtures/sample.ogg build/mixer-fixtures/sample.flac))
+build/mixer-fixtures/sample.mod: ../../../emu/qemu/astraz-media/fixture.py
+	python3 ../../../emu/qemu/astraz-media/fixture.py build/mixer-fixtures/tracker
+	cp build/mixer-fixtures/tracker/media.mod $@
+
+$(eval $(call astra_app_bundle,build,SDLMixerProbe,build/m68k/sdlmixerprobe,tests/SDLMixerProbe.app/manifest,terminal,build/mixer-fixtures/sample.mp3 build/mixer-fixtures/sample.ogg build/mixer-fixtures/sample.flac build/mixer-fixtures/sample.mod))
 mixer-probe-bundle: build/.SDLMixerProbe.app.stamp
 
 build/m68k/sdlimageprobe: tests/image_probe.c $(SDL_IMAGE_SHARED) \

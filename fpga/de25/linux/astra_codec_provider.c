@@ -6,7 +6,8 @@
 static const AstraCodecProvider *const providers[] = {
     &astra_codec_wav_provider,
     &astra_codec_vorbis_provider,
-    &astra_codec_y4m_provider
+    &astra_codec_y4m_provider,
+    &astra_codec_tracker_provider
 };
 
 int astra_codec_read_exact(const AstraCodecSource *source, uint64_t offset,
@@ -31,20 +32,20 @@ int astra_codec_read_exact(const AstraCodecSource *source, uint64_t offset,
 int astra_codec_open(const AstraCodecSource *source,
                      AstraCodecSession *session, AstraCodecFormat *format)
 {
-    uint8_t prefix[32];
+    uint8_t prefix[1084];
     size_t received = 0;
     int error;
 
     if (source == NULL || source->read_at == NULL || session == NULL ||
         format == NULL || session->provider != NULL || session->state != NULL)
         return ASTRA_CODEC_INVALID;
-    while (received < sizeof(prefix)) {
+    while (received < 32u) {
         size_t moved = 0;
 
         error = source->read_at(source->context, received,
-                                prefix + received, sizeof(prefix) - received,
+                                prefix + received, 32u - received,
                                 &moved);
-        if (error != 0 || moved > sizeof(prefix) - received)
+        if (error != 0 || moved > 32u - received)
             return ASTRA_CODEC_IO;
         if (moved == 0)
             break;
@@ -52,7 +53,25 @@ int astra_codec_open(const AstraCodecSource *source,
     }
     for (size_t at = 0; at < sizeof(providers) / sizeof(providers[0]); ++at) {
         const AstraCodecProvider *provider = providers[at];
+        size_t target = provider->probe_bytes > 32u ?
+                        provider->probe_bytes : 32u;
 
+        if (target > sizeof(prefix))
+            return ASTRA_CODEC_INVALID;
+        if (target > received) {
+            while (received < target) {
+                size_t moved = 0;
+
+                error = source->read_at(source->context, received,
+                                        prefix + received, target - received,
+                                        &moved);
+                if (error != 0 || moved > target - received)
+                    return ASTRA_CODEC_IO;
+                if (moved == 0)
+                    break;
+                received += moved;
+            }
+        }
         if (!provider->probe(prefix, received))
             continue;
         session->source = *source;

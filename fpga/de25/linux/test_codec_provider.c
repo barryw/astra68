@@ -150,7 +150,7 @@ int main(int argc, char **argv)
     assert(chunk.bytes == 6 && memcmp(output, "\x01\x02\x03\x04\x05\x06", 6) == 0);
     astra_codec_close(&session);
 
-    assert(argc == 2);
+    assert(argc == 3);
     FILE *file = fopen(argv[1], "rb");
     assert(file != NULL);
     assert(fseek(file, 0, SEEK_END) == 0);
@@ -172,6 +172,52 @@ int main(int argc, char **argv)
     assert(astra_codec_read(&session, output, sizeof(output), &chunk) ==
            ASTRA_CODEC_OK && chunk.bytes != 0 && chunk.timestamp_ns == 0);
     astra_codec_close(&session);
+    assert(fclose(file) == 0);
+
+    file = fopen(argv[2], "rb");
+    assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+    length = ftell(file);
+    assert(length > 1084);
+    AstraCodecSource tracker = {file, (uint64_t)length, file_read_at};
+    assert(astra_codec_open(&tracker, &session, &format) == ASTRA_CODEC_OK);
+    assert(format.kind == ASTRA_CODEC_AUDIO &&
+           format.encoding == ASTRA_CODEC_PCM_S16LE &&
+           format.sample_rate == 48000 && format.channels == 2);
+    uint8_t tracker_output[32768];
+    uint8_t first_output[64];
+    decoded = 0;
+    int signal = 0;
+    do {
+        assert(astra_codec_read(&session, tracker_output,
+                                sizeof(tracker_output), &chunk) == ASTRA_CODEC_OK);
+        assert(chunk.bytes <= sizeof(tracker_output) && chunk.bytes % 4 == 0);
+        if (decoded == 0) {
+            assert(chunk.bytes >= sizeof(first_output) && chunk.timestamp_ns == 0);
+            memcpy(first_output, tracker_output, sizeof(first_output));
+        }
+        for (size_t i = 0; i < chunk.bytes; ++i)
+            signal |= tracker_output[i];
+        decoded += chunk.bytes;
+        assert(decoded < 32u * 1024u * 1024u);
+    } while (!chunk.end);
+    assert(decoded > 0 && signal != 0);
+    assert(astra_codec_seek(&session, 0) == ASTRA_CODEC_OK);
+    assert(astra_codec_read(&session, tracker_output,
+                            sizeof(tracker_output), &chunk) == ASTRA_CODEC_OK);
+    assert(chunk.bytes >= sizeof(first_output) && chunk.timestamp_ns == 0 &&
+           memcmp(first_output, tracker_output, sizeof(first_output)) == 0);
+    assert(astra_codec_read(&session, tracker_output, 3, &chunk) ==
+           ASTRA_CODEC_INVALID);
+    assert(astra_codec_seek(&session, UINT64_MAX) == ASTRA_CODEC_INVALID);
+    astra_codec_close(&session);
+    tracker.length = 1084;
+    assert(astra_codec_open(&tracker, &session, &format) ==
+           ASTRA_CODEC_INVALID);
+    assert(session.provider == NULL && session.state == NULL);
+    tracker.length = UINT64_C(32) * 1024u * 1024u + 1u;
+    assert(astra_codec_open(&tracker, &session, &format) ==
+           ASTRA_CODEC_UNSUPPORTED);
+    assert(session.provider == NULL && session.state == NULL);
     assert(fclose(file) == 0);
     return 0;
 }

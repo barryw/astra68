@@ -38,7 +38,7 @@ int main(int argc, char **argv)
     FILE *file;
     long length;
 
-    assert(argc == 3);
+    assert(argc == 4);
     file = fopen(argv[2], "rb");
     assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
     length = ftell(file);
@@ -69,6 +69,36 @@ int main(int argc, char **argv)
     (void)advance_source(&session, &event, file, output, sizeof(output));
     assert(event.kind == ASTRA_CODEC_WORKER_CHUNK && event.length != 0 &&
            event.timestamp_hi == 0 && event.timestamp_lo == 0);
+    astra_codec_host_close(&session);
+    assert(session.child == 0 && fclose(file) == 0);
+
+    file = fopen(argv[3], "rb");
+    assert(file != NULL && fseek(file, 0, SEEK_END) == 0);
+    length = ftell(file);
+    assert(length > 1084);
+    assert(astra_codec_host_open(argv[1], (uint64_t)length,
+                                  &session, &event) == 0);
+    assert(advance_source(&session, &event, file, output,
+                          sizeof(output)) > 0);
+    assert(event.kind == ASTRA_CODEC_WORKER_FORMAT && event.status == 0);
+    assert(event.media_kind == 1 && event.sample_rate == 48000 &&
+           event.channels == 2);
+    assert(astra_codec_host_read(&session, sizeof(output),
+                                  &event, output) == 0);
+    (void)advance_source(&session, &event, file, output, sizeof(output));
+    assert(event.kind == ASTRA_CODEC_WORKER_CHUNK && event.status == 0 &&
+           event.length == sizeof(output) && event.timestamp_lo == 0);
+    uint8_t first_tracker[sizeof(output)];
+    memcpy(first_tracker, output, sizeof(output));
+    assert(astra_codec_host_seek(&session, 0, &event) == 0);
+    (void)advance_source(&session, &event, file, output, sizeof(output));
+    assert(event.kind == ASTRA_CODEC_WORKER_SEEKED && event.status == 0);
+    assert(astra_codec_host_read(&session, sizeof(output),
+                                  &event, output) == 0);
+    (void)advance_source(&session, &event, file, output, sizeof(output));
+    assert(event.kind == ASTRA_CODEC_WORKER_CHUNK && event.status == 0 &&
+           event.length == sizeof(output) && event.timestamp_lo == 0 &&
+           memcmp(first_tracker, output, sizeof(output)) == 0);
     astra_codec_host_close(&session);
     assert(session.child == 0 && fclose(file) == 0);
 

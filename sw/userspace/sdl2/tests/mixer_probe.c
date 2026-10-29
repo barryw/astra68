@@ -53,7 +53,7 @@ static int check_music(const char *path, Mix_MusicType type)
         failure = 1;
     if (failure == 0 && Mix_PlayMusic(music, 0) != 0)
         failure = 2;
-    if (failure == 0 && type == MUS_OGG) {
+    if (failure == 0 && (type == MUS_OGG || type == MUS_MOD)) {
         SDL_Delay(100);
         if (Mix_PlayingMusic() != 1) failure = 3;
         Mix_PauseMusic();
@@ -89,9 +89,10 @@ int main(void)
         (void)astra_log("SDL_MIXER_INIT_FAIL");
         return 1;
     }
-    if ((Mix_Init(MIX_INIT_MP3 | MIX_INIT_OGG | MIX_INIT_FLAC) &
-         (MIX_INIT_MP3 | MIX_INIT_OGG | MIX_INIT_FLAC)) !=
-        (MIX_INIT_MP3 | MIX_INIT_OGG | MIX_INIT_FLAC) ||
+    if ((Mix_Init(MIX_INIT_MP3 | MIX_INIT_OGG | MIX_INIT_FLAC |
+                  MIX_INIT_MOD) &
+         (MIX_INIT_MP3 | MIX_INIT_OGG | MIX_INIT_FLAC | MIX_INIT_MOD)) !=
+        (MIX_INIT_MP3 | MIX_INIT_OGG | MIX_INIT_FLAC | MIX_INIT_MOD) ||
         Mix_OpenAudio(48000, AUDIO_S16MSB, 2, 1024) != 0) {
         (void)astra_log(SDL_GetError());
         (void)astra_log("SDL_MIXER_OPEN_FAIL");
@@ -141,6 +142,13 @@ int main(void)
     if (result != 0) {
         (void)astra_log("SDL_MIXER_MUSIC_FAIL");
         result += 50;
+        goto done;
+    }
+    (void)astra_log("SDL_MIXER_MOD_START");
+    result = check_music("/apps/SDLMixerProbe.app/resources/sample.mod", MUS_MOD);
+    if (result != 0) {
+        (void)astra_log("SDL_MIXER_MUSIC_FAIL");
+        result += 55;
         goto done;
     }
     (void)astra_log("SDL_MIXER_MP3_START");
