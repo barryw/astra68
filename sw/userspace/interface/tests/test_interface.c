@@ -3520,6 +3520,39 @@ static void test_text_view_flow_edit_find(void)
     font_line_height = 0u;
 }
 
+static void test_text_view_flow_batches_visible_runs(void)
+{
+    char source[1100];
+    uint8_t content[1200];
+    _Alignas(4) uint8_t metadata[256];
+    AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo model_info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextViewInfo info = ASTRA_TEXT_VIEW_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraSurfaceView surface;
+
+    memset(source, 'a', sizeof(source));
+    model_info.text = source;
+    model_info.text_bytes = sizeof(source);
+    model_info.content_arena = content;
+    model_info.content_arena_bytes = sizeof(content);
+    model_info.metadata_arena = metadata;
+    model_info.metadata_arena_bytes = sizeof(metadata);
+    assert(astra_text_model_init(&model, &model_info) == ASTRA_OK);
+    info.id = 1u; info.model = &model;
+    assert(astra_interface_text_view_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 1600u, 40u) == ASTRA_OK);
+    assert(astra_interface_text_view_set_mode(&context, &control,
+        ASTRA_TEXT_SURFACE_FLOW) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    surface = render_view(1600u, 40u);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(text_calls == 2u);
+}
+
 static void test_scroll_view_layout_and_wheel(void)
 {
     static const char content[] =
@@ -4882,6 +4915,7 @@ int main(void)
     test_text_view_document_capacity();
     test_text_view_wrap();
     test_text_view_flow_edit_find();
+    test_text_view_flow_batches_visible_runs();
     test_grid_view();
     test_custom_view();
     test_scroll_view_layout_and_wheel();

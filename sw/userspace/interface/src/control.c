@@ -4262,6 +4262,36 @@ static AstraResult grid_view_measure(const AstraControl *control,
     return ASTRA_OK;
 }
 
+typedef struct TextViewFlowRun {
+    uint32_t bytes;
+    uint32_t advance;
+    uint32_t column;
+    uint32_t foreground;
+    uint32_t background;
+    uint16_t attributes;
+} TextViewFlowRun;
+
+static AstraResult text_view_flow_flush(const AstraTextSurface *text,
+    AstraSurfaceView *surface, int32_t x, int32_t y,
+    const char *buffer, TextViewFlowRun *run,
+    uint64_t *commands, uint64_t *payload)
+{
+    AstraResult result;
+    if (run->bytes == 0u) return ASTRA_OK;
+    result = surface != NULL ?
+        astra_text_surface_render_flow_run(text, surface,
+            x + (int32_t)run->column, y, buffer, run->bytes, run->advance,
+            run->foreground, run->background, run->attributes) :
+        astra_text_surface_flow_run_requirements(text, buffer, run->bytes,
+            run->advance, run->foreground, run->background,
+            run->attributes, commands, payload);
+    if (result == ASTRA_OK) {
+        run->bytes = 0u;
+        run->advance = 0u;
+    }
+    return result;
+}
+
 static AstraResult text_view_render(const AstraControl *control,
     AstraSurfaceView *surface, uint64_t *commands, uint64_t *payload)
 {
@@ -4340,6 +4370,7 @@ static AstraResult text_view_render(const AstraControl *control,
     for (uint32_t row = wrapped ? 0u : first_row;
          row < last_row; ++row) {
         uint32_t offset, column = 0u, count = 0u, run_column = first_column;
+        TextViewFlowRun flow = {0};
         int next = text_view_next_row(&rows, &visual);
         if (next < 0) return ASTRA_ERROR_INVALID_ARGUMENT;
         if (next == 0) break;
@@ -4395,16 +4426,39 @@ static AstraResult text_view_render(const AstraControl *control,
                     uint32_t background = selected ?
                         color(inverted ? theme.accent : theme.control_selected) :
                         style.background;
-                    AstraResult result = surface != NULL ?
-                        astra_text_surface_render_flow_run(&text, surface,
-                            (int32_t)content_x + (int32_t)column,
+                    const char *source;
+                    uint32_t source_bytes;
+                    int tab = scalar == ' ' &&
+                        astra_text_model_read(model, before, &source,
+                                              &source_bytes) == ASTRA_OK &&
+                        source_bytes != 0u && source[0] == '\t';
+                    if (flow.bytes != 0u &&
+                        (flow.foreground != foreground ||
+                         flow.background != background ||
+                         flow.attributes != style.attributes || tab ||
+                         flow.bytes + encoded_bytes > sizeof(scratch))) {
+                        AstraResult result = text_view_flow_flush(&text,
+                            surface, (int32_t)content_x,
                             frame->y + (int32_t)(row * line_height),
-                            encoded, encoded_bytes, width, foreground,
-                            background, style.attributes) :
-                        astra_text_surface_flow_run_requirements(&text,
-                            encoded, encoded_bytes, width, foreground,
-                            background, style.attributes, commands, payload);
-                    if (result != ASTRA_OK) return result;
+                            scratch, &flow, commands, payload);
+                        if (result != ASTRA_OK) return result;
+                    }
+                    if (flow.bytes == 0u) {
+                        flow.column = column;
+                        flow.foreground = foreground;
+                        flow.background = background;
+                        flow.attributes = style.attributes;
+                    }
+                    memcpy(scratch + flow.bytes, encoded, encoded_bytes);
+                    flow.bytes += encoded_bytes;
+                    flow.advance += width;
+                    if (tab) {
+                        AstraResult result = text_view_flow_flush(&text,
+                            surface, (int32_t)content_x,
+                            frame->y + (int32_t)(row * line_height),
+                            scratch, &flow, commands, payload);
+                        if (result != ASTRA_OK) return result;
+                    }
                 }
                 column = end;
                 continue;
@@ -4433,6 +4487,13 @@ static AstraResult text_view_render(const AstraControl *control,
                     run_column += count; count = 0u;
                 }
             }
+        }
+        if (info.mode == ASTRA_TEXT_SURFACE_FLOW) {
+            AstraResult result = text_view_flow_flush(&text, surface,
+                (int32_t)content_x,
+                frame->y + (int32_t)(row * line_height),
+                scratch, &flow, commands, payload);
+            if (result != ASTRA_OK) return result;
         }
         if (count != 0u) {
             if (surface != NULL) {
