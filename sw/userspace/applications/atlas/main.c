@@ -434,8 +434,10 @@ static AstraResult paint(void)
     }
     if (result == ASTRA_OK)
         result = astra_window_present(&window);
-    if (result == ASTRA_OK)
+    if (result == ASTRA_OK) {
         astra_interface_ui_damage_clear(&ui);
+        astra_interface_ui_damage_clear(&toolbar_ui);
+    }
     return result;
 }
 
@@ -1022,7 +1024,7 @@ static AstraResult run(AstraHandle gui)
             if (event.type == ASTRA_WINDOW_EVENT_RESIZE && layout() != ASTRA_OK)
                 return ASTRA_ERROR_IO;
             if (event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
-                event.data.pointer.y >= TOOLBAR_HEIGHT &&
+                event.data.pointer.y >= (int32_t)TOOLBAR_HEIGHT &&
                 (action.type == ASTRA_UI_ACTION_CONTEXT_MENU ||
                  (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u)) {
                 uint32_t index = hit_entry(event.data.pointer.x, event.data.pointer.y);
