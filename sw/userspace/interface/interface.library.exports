@@ -27,6 +27,8 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_list_init;
         astra_interface_list_set_items;
         astra_interface_collection_init;
+        astra_interface_table_init;
+        astra_interface_table_set_rows;
         astra_interface_popup_init;
         astra_interface_popup_open;
         astra_interface_popup_handle_event;
