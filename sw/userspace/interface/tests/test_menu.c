@@ -172,6 +172,26 @@ static AstraUIAction pointer(AstraMenu *menu, int32_t x, int32_t y, uint32_t but
     assert(astra_interface_menu_handle_event(menu, &value, &action) == ASTRA_OK);
     return action;
 }
+static void persistent_menu(void)
+{
+    const AstraControlFrame work = {0, 0, 320, 240};
+    const AstraMenuItem items[] = {{"One", 3u, 0u}, {"Two", 3u, 0u}};
+    AstraMenu menu = ASTRA_MENU_INIT;
+    AstraUIAction action;
+
+    assert(astra_interface_menu_init(&menu, items, 2u, &work, 20, 20,
+        120u, ASTRA_MENU_KEEP_OPEN) == ASTRA_OK);
+    assert(send_key(&menu, 0x51u).type == ASTRA_UI_ACTION_NONE);
+    action = send_key(&menu, 0x28u);
+    assert(action.type == ASTRA_UI_ACTION_ACTIVATE &&
+        action.control_id == 1u && state(&menu).active == 1u);
+    assert(send_key(&menu, 0x51u).type == ASTRA_UI_ACTION_NONE);
+    action = send_key(&menu, 0x2cu);
+    assert(action.type == ASTRA_UI_ACTION_ACTIVATE &&
+        action.control_id == 2u && state(&menu).active == 1u);
+    assert(send_key(&menu, 0x29u).type == ASTRA_UI_ACTION_DISMISS &&
+        state(&menu).active == 0u);
+}
 static void model(void)
 {
     const AstraControlFrame work = {0, 34, 640, 400};
@@ -519,6 +539,7 @@ static void button_group(void)
 int main(void)
 {
     model();
+    persistent_menu();
     context();
     popup_session();
     toolbar_actions();

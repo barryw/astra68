@@ -30,6 +30,7 @@ enum {
 enum {
     ASTRA_MENU_ATTACHED_TOP = 1u << 0,
     ASTRA_MENU_TRACK_OPEN_PRESS = 1u << 1,
+    ASTRA_MENU_KEEP_OPEN = 1u << 2, /**< Row activation keeps the menu active. */
 };
 /** Immutable presentation row, borrowed for the control's lifetime. */
 typedef struct AstraMenuItem {
@@ -95,7 +96,8 @@ AstraResult astra_interface_menu_row_frame(const AstraMenu *menu,
  * @param menu Initialized control, updated in place.
  * @param event Pointer, wheel, key or state-reset event.
  * @param action ACTIVATE with one-based row control_id, DISMISS, or NONE.
- * @return ASTRA_OK or a validation error. Selection closes the control.
+ * @return ASTRA_OK or a validation error. Selection closes the control unless
+ * ASTRA_MENU_KEEP_OPEN was set; dismissal always closes it.
  */
 AstraResult astra_interface_menu_handle_event(AstraMenu *menu,
     const AstraWindowEvent *event, AstraUIAction *action);
