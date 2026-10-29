@@ -69,7 +69,8 @@ AstraResult astra_interface_menu_init(AstraMenu *menu,
         work->height < ROW + 2u * PAD || work->height > UINT16_MAX ||
         (int64_t)work->x + work->width > INT32_MAX ||
         (int64_t)work->y + work->height > INT32_MAX ||
-        (flags & ~(ASTRA_MENU_ATTACHED_TOP | ASTRA_MENU_TRACK_OPEN_PRESS)) != 0u)
+        (flags & ~(ASTRA_MENU_ATTACHED_TOP | ASTRA_MENU_TRACK_OPEN_PRESS |
+                   ASTRA_MENU_KEEP_OPEN)) != 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = 0u; at < count; ++at) {
         const AstraMenuItem *item = &items[at];
@@ -200,7 +201,9 @@ static uint32_t next_row(const AstraMenu *menu, uint32_t start, int backwards, i
 
 static void finish(AstraMenu *menu, AstraUIAction *action, uint32_t selection)
 {
-    menu->_private_active = 0u;
+    if (selection == 0u ||
+        (menu->_private_flags & ASTRA_MENU_KEEP_OPEN) == 0u)
+        menu->_private_active = 0u;
     menu->_private_pressed = NONE;
     action->type = selection == 0u ? ASTRA_UI_ACTION_DISMISS : ASTRA_UI_ACTION_ACTIVATE;
     action->control_id = selection;
