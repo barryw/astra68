@@ -77,9 +77,12 @@ def main():
                         metavar="SOURCE=/GUEST/PATH")
     parser.add_argument("--host", action="append", default=[],
                         metavar="SOURCE=RELEASE/PATH")
+    parser.add_argument("--startup-manifest", action="store_true",
+                        help="install current startup policy from astra_image.py")
     parser.add_argument("--board", default=BOARD)
     args = parser.parse_args()
-    if not args.guest and not args.host and not args.remove_guest:
+    if not args.guest and not args.host and not args.remove_guest and \
+            not args.startup_manifest:
         parser.error("at least one artifact or removal is required")
     if any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.@-"
            for character in args.board):
@@ -129,6 +132,9 @@ def main():
                 for companion, companion_target in kit_companions(source, target):
                     if ("guest", companion_target) not in targets:
                         stage_mapping("guest", companion, companion_target)
+        if args.startup_manifest:
+            stage_mapping("guest", astra_image.STARTUP_MANIFEST.encode("ascii"),
+                          "/startup/system")
         shutil.copy2(REPOSITORY / "emu/qemu/dev-install-de25.py", stage)
         shutil.copy2(REPOSITORY / "emu/qemu/storage_image.py", stage)
         (stage / "manifest.json").write_text(json.dumps({

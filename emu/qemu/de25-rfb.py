@@ -141,16 +141,28 @@ def capture(connection, width, height, bytes_per_pixel, previous=None,
 
 def send_keys(connection, text):
     for character in text:
+        shifted = False
         if character == "\n":
             symbol = 0xff0d
         elif character == "\b":
             symbol = 0xff08
+        elif "A" <= character <= "Z":
+            symbol = ord(character.lower())
+            shifted = True
+        elif character == "_":
+            symbol = ord("-")
+            shifted = True
         elif ord(character) <= 0xff:
             symbol = ord(character)
         else:
             raise RuntimeError(f"unsupported RFB test character {character!r}")
+        if shifted:
+            connection.sendall(struct.pack(">BBHI", 4, 1, 0, 0xffe1))
         for down in (1, 0):
             connection.sendall(struct.pack(">BBHI", 4, down, 0, symbol))
+        if shifted:
+            connection.sendall(struct.pack(">BBHI", 4, 0, 0, 0xffe1))
+        time.sleep(0.05)
 
 
 def send_shortcut(connection, shortcut):
