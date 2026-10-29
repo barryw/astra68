@@ -37,7 +37,7 @@ All interface components consume semantic roles from one versioned
 colors, radii, spacing, or gadget geometry. The initial system has exactly one
 immutable theme and no theme editor. It is compiled into both the NDK and
 window server from `ASTRA_THEME_SYSTEM_INIT`; dynamic distribution is deferred
-until runtime theme selection exists. Theme generation 5 records an integer
+until runtime theme selection exists. Theme generation 6 records an integer
 UI scale and includes separate client/chrome text, surface, border, focus,
 selection, disabled, warning, and error roles. Every geometry value is in
 logical pixels at that scale; display scaling remains FPGA-owned.
