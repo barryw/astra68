@@ -286,6 +286,12 @@ static uint32_t gallery_spark_samples[] = {
 };
 static AstraSparklineModel gallery_spark = ASTRA_SPARKLINE_MODEL_INIT;
 static AstraTextModel text_view_model = ASTRA_TEXT_MODEL_INIT;
+static AstraUndoManager text_view_undo = ASTRA_UNDO_MANAGER_INIT;
+static AstraTextUndoBinding text_view_undo_binding =
+    ASTRA_TEXT_UNDO_BINDING_INIT;
+static _Alignas(4) uint8_t text_view_undo_history[16384];
+static uint8_t text_view_undo_scratch[4096];
+static uint32_t text_view_undo_bound;
 static AstraTextModel family_models[5] = {
     ASTRA_TEXT_MODEL_INIT, ASTRA_TEXT_MODEL_INIT, ASTRA_TEXT_MODEL_INIT,
     ASTRA_TEXT_MODEL_INIT, ASTRA_TEXT_MODEL_INIT
@@ -313,6 +319,8 @@ static const char text_view_example[] =
     "Ctrl+Home / End\tStart / end of document\n"
     "Page Up / Down\tMove through visible lines\n"
     "Meta+A / C\tSelect all / Copy\n"
+    "Meta+Z\tUndo edit\n"
+    "Meta+Shift+Z\tRedo edit\n"
     "\n"
     "Unicode: \xce\xa9 \xe4\xb8\x96\xe7\x95\x8c\n"
     "Long lines keep their original bytes; horizontal scrolling reveals text beyond the viewport.\n"
@@ -1844,6 +1852,12 @@ static uint32_t build_controls(void)
         astra_interface_text_view_set_editable(&ui,
             GALLERY_CONTROL(GALLERY_TEXT_VIEW), 1u) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
+    if (astra_interface_text_undo_bind(&text_view_undo_binding, &ui,
+            GALLERY_CONTROL(GALLERY_TEXT_VIEW), &text_view_undo,
+            text_view_undo_history, sizeof(text_view_undo_history),
+            text_view_undo_scratch, sizeof(text_view_undo_scratch)) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    text_view_undo_bound = 1u;
     if (layout_controls() != ASTRA_STATUS_OK ||
         astra_interface_toolbar_actions_refresh(&gallery_toolbar, &ui) !=
             ASTRA_OK)
@@ -3070,6 +3084,10 @@ int astra_main(const AstraStartupInfo *startup)
     }
     if (status == ASTRA_STATUS_OK)
         status = run(clipboard->handle, gui->handle);
+    if (text_view_undo_bound != 0u) {
+        (void)astra_interface_text_undo_unbind(&text_view_undo_binding);
+        text_view_undo_bound = 0u;
+    }
     if (gallery_image_source._private_handle != ASTRA_INVALID_HANDLE) {
         AstraResult closed = astra_surface_close(&gallery_image_source);
         if (closed != ASTRA_OK)
