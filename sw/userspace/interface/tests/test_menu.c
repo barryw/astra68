@@ -18,6 +18,10 @@ static uint32_t queries;
 static uint8_t tree_menu;
 static uint8_t popup_mode;
 static uint8_t toolbar_mode;
+static uint8_t combo_mode;
+static uint8_t multi_mode;
+static uint32_t combo_expected_count;
+static uint8_t multi_checked[2] = {1u, 0u};
 static uint32_t toolbar_invocations, toolbar_last;
 static AstraWindowEvent event(uint16_t type);
 
@@ -44,6 +48,25 @@ void astra_runtime_deallocate(void *pointer)
 AstraResult astra_window_menu_open(AstraWindow *window, const AstraMenuItem *rows,
     uint32_t count, int32_t x, int32_t y, uint32_t cookie)
 {
+    if (combo_mode) {
+        assert(window != NULL && count == combo_expected_count &&
+               x >= 0 && y >= 0);
+        assert((cookie & UINT32_C(0xf0000000)) == UINT32_C(0xa0000000));
+        if (count == 2u || count == 3u) {
+            assert(rows[0].label_length == 5u &&
+                   memcmp(rows[0].label, "Apple", 5u) == 0);
+            assert(rows[1].label_length == 7u &&
+                   memcmp(rows[1].label, "Apricot", 7u) == 0);
+            if (count == 3u)
+                assert(rows[2].label_length == 6u &&
+                       memcmp(rows[2].label, "Banana", 6u) == 0);
+        } else {
+            assert(rows[0].label_length == 7u &&
+                   memcmp(rows[0].label, "Apricot", 7u) == 0);
+        }
+        request = cookie;
+        return open_result;
+    }
     if (popup_mode) {
         assert(window != NULL && count == 2u && cookie >= UINT32_C(0x80000001));
         assert(x >= 0 && y >= -4);
@@ -72,6 +95,22 @@ AstraResult astra_window_menu_open(AstraWindow *window, const AstraMenuItem *row
     assert(rows[0].flags == (enabled ? 0u : ASTRA_MENU_DISABLED));
     assert(rows[1].flags == (ASTRA_MENU_CHECKED |
         (tree_menu ? ASTRA_MENU_PARENT(1u) : 0u)));
+    request = cookie;
+    return open_result;
+}
+AstraResult astra_window_menu_open_persistent(AstraWindow *window,
+    const AstraMenuItem *rows, uint32_t count, int32_t x, int32_t y,
+    uint32_t cookie)
+{
+    assert(multi_mode && window != NULL && count == 2u &&
+           x >= 0 && y >= 0);
+    assert((cookie & UINT32_C(0xf0000000)) == UINT32_C(0x90000000));
+    assert(rows[0].label_length == 5u &&
+           memcmp(rows[0].label, "First", 5u) == 0);
+    assert(rows[1].label_length == 6u &&
+           memcmp(rows[1].label, "Second", 6u) == 0);
+    assert(rows[0].flags == (multi_checked[0] ? ASTRA_MENU_CHECKED : 0u));
+    assert(rows[1].flags == (multi_checked[1] ? ASTRA_MENU_CHECKED : 0u));
     request = cookie;
     return open_result;
 }
@@ -536,6 +575,152 @@ static void button_group(void)
             ASTRA_ERROR_INVALID_ARGUMENT);
     }
 }
+
+static void combo_box(void)
+{
+    static const AstraChoiceItem choices[] = {
+        {"Apple", 5u, {0u, 0u}},
+        {"Apricot", 7u, {0u, 0u}},
+        {"Banana", 6u, {0u, 0u}}
+    };
+    uint8_t content[256] = {0};
+    uint32_t metadata[512] = {0};
+    AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo model_info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraComboBoxInfo info = ASTRA_COMBO_BOX_INFO_INIT;
+    AstraComboBox combo = ASTRA_COMBO_BOX_INIT;
+    AstraControl controls[3] = {0};
+    AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraWindow window = ASTRA_WINDOW_INIT;
+    AstraWindowEvent result = event(ASTRA_WINDOW_EVENT_MENU_RESULT);
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    char copied[16] = {0};
+    uint32_t bytes = 0u;
+    int handled;
+
+    model_info.text = "aP";
+    model_info.text_bytes = 2u;
+    model_info.content_arena = content;
+    model_info.content_arena_bytes = sizeof(content);
+    model_info.metadata_arena = metadata;
+    model_info.metadata_arena_bytes = sizeof(metadata);
+    assert(astra_text_model_init(&model, &model_info) == ASTRA_OK);
+    info.first_id = 300u;
+    info.model = &model;
+    info.items = choices;
+    info.item_count = 3u;
+    info.preferred_columns = 12u;
+    assert(astra_interface_combo_box_init(&combo, controls, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&ui, controls, 3u, 320u, 60u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&ui, &layout) == ASTRA_OK);
+    combo_mode = 1u;
+    combo_expected_count = 2u;
+    assert(astra_interface_combo_box_open(&combo, &ui, &window) == ASTRA_OK);
+    assert(astra_interface_combo_box_open(&combo, &ui, &window) ==
+        ASTRA_ERROR_BUSY);
+    result.data.menu_result.request = request - 1u;
+    assert(astra_interface_combo_box_handle_event(&combo, &result, &action,
+        &handled) == ASTRA_OK && !handled);
+    result.data.menu_result.request = request;
+    result.data.menu_result.status = ASTRA_STATUS_OK;
+    result.data.menu_result.selection = 2u;
+    assert(astra_interface_combo_box_handle_event(&combo, &result, &action,
+        &handled) == ASTRA_OK && handled &&
+        action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+        action.control_id == 301u && action.value == 1);
+    assert(astra_text_model_copy(&model, 0u, 7u, copied,
+        sizeof(copied), &bytes) == ASTRA_OK && bytes == 7u &&
+        memcmp(copied, "Apricot", 7u) == 0);
+    combo_expected_count = 1u;
+    assert(astra_interface_combo_box_open(&combo, &ui, &window) == ASTRA_OK);
+    assert(astra_interface_combo_box_close(&combo) == ASTRA_OK);
+    assert(astra_text_model_replace(&model, 0u, 7u, "zz", 2u) == ASTRA_OK);
+    assert(astra_interface_field_refresh(&ui, &controls[1]) == ASTRA_OK);
+    assert(astra_interface_combo_box_open(&combo, &ui, &window) ==
+        ASTRA_ERROR_NOT_PRESENT);
+    assert(astra_text_model_replace(&model, 0u, 2u, NULL, 0u) == ASTRA_OK);
+    assert(astra_interface_field_refresh(&ui, &controls[1]) == ASTRA_OK);
+    combo_expected_count = 3u;
+    assert(astra_interface_combo_box_open(&combo, &ui, &window) == ASTRA_OK);
+    assert(astra_interface_combo_box_close(&combo) == ASTRA_OK);
+    assert(allocations == 0u);
+    combo_mode = 0u;
+}
+
+static AstraResult multi_query(void *context, AstraCommandState *state)
+{
+    uint32_t at = (uint32_t)(uintptr_t)context;
+    strcpy(scratch, at == 0u ? "First" : "Second");
+    *state = (AstraCommandState){scratch, (uint32_t)strlen(scratch),
+        1u, multi_checked[at]};
+    return ASTRA_OK;
+}
+
+static AstraResult multi_invoke(void *context,
+    const AstraCommandArguments *arguments)
+{
+    uint32_t at = (uint32_t)(uintptr_t)context;
+    assert(arguments == NULL);
+    multi_checked[at] = !multi_checked[at];
+    return ASTRA_OK;
+}
+
+static void multi_popup(void)
+{
+    static const AstraCommand commands[] = {
+        {"choice.one", 10u, 0u, 0u, multi_query, multi_invoke, (void *)0},
+        {"choice.two", 10u, 0u, 0u, multi_query, multi_invoke,
+            (void *)(uintptr_t)1u}
+    };
+    static const AstraCommandScope scope = {NULL, commands, 2u};
+    static const AstraContextMenuItem items[] = {
+        {"choice.one", 10u, NULL}, {"choice.two", 10u, NULL}
+    };
+    AstraMultiPopupInfo info = ASTRA_MULTI_POPUP_INFO_INIT;
+    AstraMultiPopup popup = ASTRA_MULTI_POPUP_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraWindow window = ASTRA_WINDOW_INIT;
+    AstraWindowEvent result = event(ASTRA_WINDOW_EVENT_MENU_RESULT);
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    uint32_t count = 0u;
+    int handled;
+
+    info.id = 400u;
+    info.label = "Features";
+    info.label_length = 8u;
+    info.items = items;
+    info.item_count = 2u;
+    info.scope = &scope;
+    assert(astra_interface_multi_popup_init(&popup, &control, &info) ==
+        ASTRA_OK);
+    assert(astra_interface_ui_init(&ui, &control, 1u, 200u, 60u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&ui, &layout) == ASTRA_OK);
+    assert(astra_interface_multi_popup_refresh(&popup, &ui, &count) ==
+        ASTRA_OK && count == 1u &&
+        (control._private_state & ASTRA_CONTROL_SELECTED) != 0u);
+    multi_mode = 1u;
+    assert(astra_interface_multi_popup_open(&popup, &ui, &window) == ASTRA_OK);
+    assert(allocations == 0u);
+    result.flags = ASTRA_WINDOW_EVENT_CONTINUED;
+    result.data.menu_result.request = request;
+    result.data.menu_result.status = ASTRA_STATUS_OK;
+    result.data.menu_result.selection = 2u;
+    assert(astra_interface_multi_popup_handle_event(&popup, &result, &action,
+        &handled) == ASTRA_OK && handled &&
+        action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+        action.value == 2 && multi_checked[1]);
+    result.flags = 0u;
+    result.data.menu_result.selection = 0u;
+    assert(astra_interface_multi_popup_handle_event(&popup, &result, &action,
+        &handled) == ASTRA_OK && handled &&
+        action.type == ASTRA_UI_ACTION_NONE);
+    assert(astra_interface_multi_popup_open(&popup, &ui, &window) == ASTRA_OK);
+    assert(astra_interface_multi_popup_close(&popup) == ASTRA_OK);
+    multi_mode = 0u;
+}
 int main(void)
 {
     model();
@@ -544,5 +729,7 @@ int main(void)
     popup_session();
     toolbar_actions();
     button_group();
+    combo_box();
+    multi_popup();
     return 0;
 }

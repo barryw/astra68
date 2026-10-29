@@ -4,6 +4,7 @@
 
 #include <astra/clipboard.h>
 #include <astra/command.h>
+#include <astra/choice_popups.h>
 #include <astra/control.h>
 #include <astra/field_family.h>
 #include <astra/icon_tile.h>

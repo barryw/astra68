@@ -40,6 +40,10 @@
 :project: astra-ndk
 ```
 
+```{doxygenfile} choice_popups.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} icon_tile.h
 :project: astra-ndk
 ```
@@ -69,5 +73,9 @@
 ```
 
 ```{doxygenfile} menu.h
+:project: astra-ndk
+```
+
+```{doxygenfile} toolbar_actions.h
 :project: astra-ndk
 ```

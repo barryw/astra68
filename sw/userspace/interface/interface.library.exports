@@ -42,6 +42,15 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_popup_open;
         astra_interface_popup_handle_event;
         astra_interface_popup_close;
+        astra_interface_combo_box_init;
+        astra_interface_combo_box_open;
+        astra_interface_combo_box_handle_event;
+        astra_interface_combo_box_close;
+        astra_interface_multi_popup_init;
+        astra_interface_multi_popup_refresh;
+        astra_interface_multi_popup_open;
+        astra_interface_multi_popup_handle_event;
+        astra_interface_multi_popup_close;
         astra_interface_split_button_init;
         astra_interface_tree_init;
         astra_interface_tree_set_expanded;
