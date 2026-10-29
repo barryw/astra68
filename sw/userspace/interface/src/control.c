@@ -24,8 +24,9 @@
 #define CONTROL_PREVIEW_STATES \
     (ASTRA_CONTROL_HOVERED | ASTRA_CONTROL_PRESSED | ASTRA_CONTROL_FOCUSED)
 #define CONTROL_FOCUS_VISIBLE (UINT32_C(1) << 31)
+#define TEXT_VIEW_SOFT_END (UINT32_C(1) << 30)
 #define CONTROL_DYNAMIC_STATES \
-    (CONTROL_PREVIEW_STATES | CONTROL_FOCUS_VISIBLE)
+    (CONTROL_PREVIEW_STATES | CONTROL_FOCUS_VISIBLE | TEXT_VIEW_SOFT_END)
 #define FIELD_FLAGS (ASTRA_FIELD_READ_ONLY | ASTRA_FIELD_INLINE)
 #define TEXT_VIEW_INVERTED UINT32_C(4)
 #define TEXT_VIEW_WRAP UINT32_C(8)
@@ -1269,6 +1270,7 @@ AstraResult astra_interface_text_view_refresh(AstraUIContext *context,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     next = *control;
     private_u32_set(&next._private_maximum_value, state.generation);
+    next._private_dynamic_state &= ~TEXT_VIEW_SOFT_END;
     return replace_measured_control(context, control, &next);
 }
 
@@ -1301,6 +1303,7 @@ AstraResult astra_interface_text_view_set_wrap_width(AstraUIContext *context,
          control->_private_measured_width : 0u) == width)
         return ASTRA_OK;
     next = *control;
+    next._private_dynamic_state &= ~TEXT_VIEW_SOFT_END;
     if (width != 0u) {
         next._private_style |= TEXT_VIEW_WRAP;
         next._private_measured_width = width;
@@ -2963,10 +2966,26 @@ static int text_view_next_row(TextViewRows *rows, TextViewRow *visual)
 {
     AstraTextLine line = ASTRA_TEXT_LINE_INIT;
     uint32_t offset, column = 0u, last_break = 0u, break_column = 0u;
-    if (rows->logical_row >= rows->logical_count) return 0;
-    if (astra_text_model_get_line(rows->model, rows->logical_row, &line) != ASTRA_OK)
-        return -1;
-    visual->start = rows->continuing ? rows->next_offset : line.start;
+    for (;;) {
+        if (rows->logical_row >= rows->logical_count) return 0;
+        if (astra_text_model_get_line(rows->model, rows->logical_row,
+                                      &line) != ASTRA_OK) return -1;
+        visual->start = rows->continuing ? rows->next_offset : line.start;
+        if (!rows->continuing) break;
+        while (visual->start < line.content_end) {
+            uint32_t next = visual->start, scalar, width;
+            if (!text_view_step(rows->model, line.content_end, &next, 0u,
+                                &scalar, &width)) return -1;
+            if (scalar != ' ' && scalar != '\t') break;
+            visual->start = next;
+        }
+        if (visual->start < line.content_end) break;
+        visual->end = visual->hard_end = line.content_end;
+        visual->columns = 0u;
+        ++rows->logical_row;
+        rows->continuing = 0u;
+        return 1;
+    }
     visual->hard_end = line.content_end;
     if (visual->start > line.content_end) return -1;
     offset = visual->start;
@@ -3022,6 +3041,7 @@ static int text_view_row_at(const AstraTextModel *model, uint32_t logical_count,
 
 static int text_view_visual_location(const AstraTextModel *model,
     uint32_t logical_count, uint32_t columns, uint32_t position,
+    uint32_t soft_end,
     uint32_t *row, uint32_t *column, TextViewRow *visual)
 {
     TextViewRows rows = {model, logical_count, 0u, 0u, columns, 0u};
@@ -3029,8 +3049,18 @@ static int text_view_visual_location(const AstraTextModel *model,
     for (;;) {
         int result = text_view_next_row(&rows, visual);
         if (result <= 0) return 0;
+        int at_soft_end = position == visual->end &&
+            visual->end != visual->hard_end;
+        if (at_soft_end && !soft_end) {
+            TextViewRows following = rows;
+            TextViewRow next;
+            int found = text_view_next_row(&following, &next);
+            if (found < 0) return 0;
+            if (found == 0 || next.start > position) soft_end = 1u;
+        }
         if (position < visual->end ||
-            (position == visual->end && visual->end == visual->hard_end)) {
+            (position == visual->end &&
+             (visual->end == visual->hard_end || soft_end))) {
             uint32_t offset = visual->start;
             *column = 0u;
             while (offset < position) {
@@ -3046,7 +3076,8 @@ static int text_view_visual_location(const AstraTextModel *model,
 }
 
 static int text_view_segment_column(const AstraTextModel *model,
-    const TextViewRow *visual, uint32_t limit, uint32_t *position)
+    const TextViewRow *visual, uint32_t limit, uint32_t *position,
+    uint32_t *soft_end)
 {
     uint32_t offset = visual->start, column = 0u;
     while (offset < visual->end) {
@@ -3059,6 +3090,7 @@ static int text_view_segment_column(const AstraTextModel *model,
         if (column >= limit) break;
     }
     *position = offset;
+    *soft_end = offset == visual->end && visual->end != visual->hard_end;
     return 1;
 }
 
@@ -5157,7 +5189,7 @@ static void stepper_text(AstraUIContext *context, uint32_t index,
 }
 
 static AstraResult text_position(const AstraControl *control, int32_t x, int32_t y,
-                                  uint32_t *position)
+                                  uint32_t *position, uint32_t *soft_end)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     FieldView view;
@@ -5166,6 +5198,9 @@ static AstraResult text_position(const AstraControl *control, int32_t x, int32_t
     int64_t relative;
     uint32_t columns;
 
+    if (position == NULL || soft_end == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *soft_end = 0u;
     if (control->_private_control_kind == ASTRA_CONTROL_TEXT_VIEW) {
         AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
         AstraTextLine line = ASTRA_TEXT_LINE_INIT;
@@ -5190,7 +5225,7 @@ static AstraResult text_position(const AstraControl *control, int32_t x, int32_t
                 return ASTRA_OK;
             }
             return text_view_segment_column(const_control_text_model(control),
-                &visual, columns, position) ? ASTRA_OK :
+                &visual, columns, position, soft_end) ? ASTRA_OK :
                 ASTRA_ERROR_INVALID_ARGUMENT;
         }
         if ((uint64_t)row >= state.line_count) {
@@ -5247,6 +5282,7 @@ static int text_view_location(const AstraTextModel *model, uint32_t offset,
 
 static AstraResult text_selection(AstraUIContext *context, uint32_t index,
                                    uint32_t anchor, uint32_t focus,
+                                   uint32_t soft_end,
                                    AstraUIAction *action)
 {
     AstraControl *control = &context->_private_controls[index];
@@ -5256,13 +5292,23 @@ static AstraResult text_selection(AstraUIContext *context, uint32_t index,
 
     if (astra_text_model_get_state(control_text_model(control), &state) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    if (state.selection.anchor == anchor && state.selection.focus == focus)
+    if (control->_private_control_kind != ASTRA_CONTROL_TEXT_VIEW ||
+        (control->_private_style & TEXT_VIEW_WRAP) == 0u)
+        soft_end = 0u;
+    if (state.selection.anchor == anchor && state.selection.focus == focus &&
+        ((control->_private_dynamic_state & TEXT_VIEW_SOFT_END) != 0u) ==
+            (soft_end != 0u))
         return ASTRA_OK;
-    selection.anchor = anchor;
-    selection.focus = focus;
-    result = astra_text_model_set_selection(control_text_model(control), &selection);
-    if (result != ASTRA_OK)
-        return result;
+    if (state.selection.anchor != anchor || state.selection.focus != focus) {
+        selection.anchor = anchor;
+        selection.focus = focus;
+        result = astra_text_model_set_selection(control_text_model(control), &selection);
+        if (result != ASTRA_OK) return result;
+    }
+    if (soft_end != 0u)
+        control->_private_dynamic_state |= TEXT_VIEW_SOFT_END;
+    else
+        control->_private_dynamic_state &= ~TEXT_VIEW_SOFT_END;
     if (astra_text_model_get_state(control_text_model(control), &state) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     private_u32_set(&control->_private_maximum_value, state.generation);
@@ -5278,6 +5324,7 @@ static AstraResult text_selection(AstraUIContext *context, uint32_t index,
         int located = (control->_private_style & TEXT_VIEW_WRAP) != 0u ?
             text_view_visual_location(control_text_model(control),
                 state.line_count, text_view_wrap_columns(control), focus,
+                soft_end,
                 &row, &column, &visual) :
             text_view_location(control_text_model(control), focus,
                 state.line_count, &row, &column, &line);
@@ -5400,7 +5447,7 @@ static AstraResult text_key(AstraUIContext *context, uint32_t index,
         (modifiers & ASTRA_INPUT_MOD_CTRL) == 0u) {
         if (usage == 0x04u)
             return text_selection(context, index, 0u, state.text_bytes,
-                                   action);
+                                   0u, action);
         if (usage == 0x06u &&
             state.selection.anchor != state.selection.focus) {
             action->type = ASTRA_UI_ACTION_COPY;
@@ -5442,13 +5489,18 @@ static AstraResult text_key(AstraUIContext *context, uint32_t index,
             TextViewRow visual;
             AstraControlSize size;
             uint32_t wrap = text_view_wrap_columns(control);
+            uint32_t soft_end = 0u;
             if (!text_view_visual_location(control_text_model(control),
-                    state.line_count, wrap, focus, &row, &column, &visual))
+                    state.line_count, wrap, focus,
+                    (control->_private_dynamic_state & TEXT_VIEW_SOFT_END) != 0u,
+                    &row, &column, &visual))
                 return ASTRA_ERROR_INVALID_ARGUMENT;
             if (usage == 0x4au || usage == 0x4du) {
                 focus = (modifiers & ASTRA_INPUT_MOD_CTRL) != 0u ?
                     (usage == 0x4au ? 0u : state.text_bytes) :
                     (usage == 0x4au ? visual.start : visual.end);
+                soft_end = (modifiers & ASTRA_INPUT_MOD_CTRL) == 0u &&
+                    usage == 0x4du && visual.end != visual.hard_end;
             } else {
                 uint32_t steps = usage == 0x4bu || usage == 0x4eu ?
                     control->_private_clip.height / theme.control_height : 1u;
@@ -5462,11 +5514,11 @@ static AstraResult text_key(AstraUIContext *context, uint32_t index,
                 if (text_view_row_at(control_text_model(control),
                         state.line_count, wrap, row, &visual) != 1 ||
                     !text_view_segment_column(control_text_model(control),
-                        &visual, column, &focus))
+                        &visual, column, &focus, &soft_end))
                     return ASTRA_ERROR_INVALID_ARGUMENT;
             }
             return text_selection(context, index, shift ? anchor : focus,
-                                  focus, action);
+                                  focus, soft_end, action);
         }
         if (!text_view_location(control_text_model(control), focus, state.line_count,
                                  &row, &column, &line))
@@ -5516,7 +5568,7 @@ static AstraResult text_key(AstraUIContext *context, uint32_t index,
         return ASTRA_OK;
     }
     return text_selection(context, index, shift ? anchor : focus,
-                           focus, action);
+                           focus, 0u, action);
 }
 
 static AstraResult field_text(AstraUIContext *context, uint32_t index,
@@ -5914,10 +5966,11 @@ static AstraResult pointer_event(AstraUIContext *context,
             }
             else if (TEXT_MODEL_KINDS(captured_control->_private_control_kind)) {
                 AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
-                uint32_t position;
+                uint32_t position, soft_end;
                 AstraResult result = text_position(
                     &context->_private_controls[context->_private_capture],
-                    event->data.pointer.x, event->data.pointer.y, &position);
+                    event->data.pointer.x, event->data.pointer.y, &position,
+                    &soft_end);
 
                 if (result != ASTRA_OK)
                     return result;
@@ -5927,7 +5980,7 @@ static AstraResult pointer_event(AstraUIContext *context,
                     return ASTRA_ERROR_INVALID_ARGUMENT;
                 result = text_selection(
                     context, context->_private_capture,
-                    state.selection.anchor, position, action);
+                    state.selection.anchor, position, soft_end, action);
                 if (result != ASTRA_OK)
                     return result;
             }
@@ -5996,15 +6049,15 @@ static AstraResult pointer_event(AstraUIContext *context,
         }
         else if (hit != CONTROL_NONE &&
                  TEXT_MODEL_KINDS(context->_private_controls[hit]._private_control_kind)) {
-            uint32_t position;
+            uint32_t position, soft_end;
             AstraResult result = text_position(
                 &context->_private_controls[hit], event->data.pointer.x, event->data.pointer.y,
-                &position);
+                &position, &soft_end);
 
             if (result != ASTRA_OK)
                 return result;
             result = text_selection(context, hit, position, position,
-                                     action);
+                                     soft_end, action);
             if (result != ASTRA_OK)
                 return result;
         } else if (hit != CONTROL_NONE &&

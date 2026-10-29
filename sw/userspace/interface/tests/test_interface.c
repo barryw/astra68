@@ -2598,6 +2598,35 @@ static void test_text_view_wrap(void)
     assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
            model_state.selection.focus == 11u);
     assert(astra_interface_text_view_set_wrap_width(&context, &controls[1],
+        5u * theme.mono_cell_width) == ASTRA_OK);
+    assert(astra_scroll_set_offset(&scroll, 0u, 0u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, 1, (int32_t)theme.control_height + 2);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 6u);
+    assert(astra_interface_text_view_set_wrap_width(&context, &controls[1], width) == ASTRA_OK);
+    assert(astra_scroll_set_offset(&scroll, 0u, 0u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, (int32_t)width - 1, 2);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 6u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4du, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 6u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x51u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 11u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x52u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 5u);
+    assert(astra_interface_text_view_set_wrap_width(&context, &controls[1],
         3u * theme.mono_cell_width) == ASTRA_OK);
     assert(astra_interface_ui_measure(&context, &controls[1], &measured) == ASTRA_OK &&
            measured.height == 7u * theme.control_height);
@@ -2608,6 +2637,39 @@ static void test_text_view_wrap(void)
     assert(astra_interface_text_view_set_wrap_width(&context, &controls[1], 0u) == ASTRA_OK);
     assert(astra_interface_ui_measure(&context, &controls[1], &measured) == ASTRA_OK &&
            measured.height == 2u * theme.control_height && measured.width > width);
+    assert(astra_text_model_replace(&model, 0u, sizeof(source) - 1u,
+        "a longword", 10u) == ASTRA_OK);
+    assert(astra_interface_text_view_refresh(&context, &controls[1]) == ASTRA_OK);
+    assert(astra_interface_text_view_set_wrap_width(&context, &controls[1],
+        8u * theme.mono_cell_width) == ASTRA_OK);
+    AstraTextSelection selection = ASTRA_TEXT_SELECTION_INIT;
+    selection.anchor = selection.focus = 10u;
+    assert(astra_text_model_set_selection(&model, &selection) == ASTRA_OK);
+    assert(astra_interface_text_view_refresh(&context, &controls[1]) == ASTRA_OK);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x52u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 2u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x51u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 4u);
+    assert(astra_text_model_replace(&model, 0u, 10u, "alpha ", 6u) == ASTRA_OK);
+    assert(astra_interface_text_view_refresh(&context, &controls[1]) == ASTRA_OK);
+    assert(astra_interface_text_view_set_wrap_width(&context, &controls[1],
+        5u * theme.mono_cell_width) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &controls[1], &measured) == ASTRA_OK &&
+           measured.height == 2u * theme.control_height);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4du, ASTRA_INPUT_MOD_CTRL);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 6u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x52u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x51u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+           model_state.selection.focus == 6u);
 }
 
 static void test_scroll_view_layout_and_wheel(void)
