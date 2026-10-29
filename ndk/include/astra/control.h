@@ -681,6 +681,35 @@ typedef struct AstraListInfo {
 /** Empty List construction data. */
 #define ASTRA_LIST_INFO_INIT { sizeof(AstraListInfo), 0, 0, 0, {0, 0, 0, 0} }
 
+/** One depth of a column browser. Collection and scroll models remain
+ * caller-owned; each depth has independent selection and vertical position. */
+typedef struct AstraColumnView {
+    AstraCollectionModel *model; /**< Borrowed collection model. */
+    AstraScrollModel *scroll; /**< Borrowed vertical scroll model. */
+    uint32_t width; /**< Preferred column width. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraColumnView;
+
+/** A column browser composes one horizontal Container and a ScrollView/List
+ * pair for every depth. Slot and ID 0 is the Container; column n occupies
+ * slots 1+2n (ScrollView) and 2+2n (List). Supply 1+2*column_count slots.
+ * Application code updates each depth through astra_interface_list_set_items.
+ */
+typedef struct AstraColumnsInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t first_id; /**< First of 1 + 2 * column_count control IDs. */
+    const AstraColumnView *columns; /**< Borrowed depth descriptions. */
+    uint32_t column_count; /**< Number of column depths. */
+    uint32_t viewport_height; /**< Preferred visible height. */
+    uint32_t state; /**< Disabled or collapsed state. */
+    uint32_t reserved[3]; /**< Must be zero. */
+} AstraColumnsInfo;
+
+/** Empty Columns construction data. */
+#define ASTRA_COLUMNS_INFO_INIT { \
+    sizeof(AstraColumnsInfo), 0, 0, 0, 0, 0, {0, 0, 0} \
+}
+
 enum {
     /** Permit selection and copying but reject document mutations. */
     ASTRA_FIELD_READ_ONLY = UINT32_C(1) << 0,

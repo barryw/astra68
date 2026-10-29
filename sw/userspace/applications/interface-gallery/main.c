@@ -110,7 +110,12 @@ enum {
     GALLERY_FORM_OPTION,
     GALLERY_POPUP_LABEL,
     GALLERY_POPUP,
-    GALLERY_CONTROL_COUNT = GALLERY_POPUP
+    GALLERY_COLUMNS,
+    GALLERY_COLUMN_LEFT_SCROLL,
+    GALLERY_COLUMN_LEFT_LIST,
+    GALLERY_COLUMN_RIGHT_SCROLL,
+    GALLERY_COLUMN_RIGHT_LIST,
+    GALLERY_CONTROL_COUNT = GALLERY_COLUMN_RIGHT_LIST
 };
 
 enum {
@@ -147,6 +152,22 @@ static uint8_t read_only_field_content[4096];
 static _Alignas(4) uint8_t read_only_field_metadata[8192];
 static AstraTextModel read_only_field_model = ASTRA_TEXT_MODEL_INIT;
 static AstraScrollModel gallery_scroll_model = ASTRA_SCROLL_MODEL_INIT;
+static AstraScrollModel column_scrolls[2] = {
+    ASTRA_SCROLL_MODEL_INIT, ASTRA_SCROLL_MODEL_INIT
+};
+static AstraCollectionModel column_models[2] = {
+    ASTRA_COLLECTION_MODEL_INIT, ASTRA_COLLECTION_MODEL_INIT
+};
+static const AstraCollectionItem column_roots[] = {
+    {1u, "Applications", 12u, {0u, 0u}},
+    {2u, "Documents", 9u, {0u, 0u}},
+    {3u, "Pictures", 8u, {0u, 0u}}
+};
+static const AstraCollectionItem column_apps[] = {
+    {11u, "Doom", 4u, {0u, 0u}},
+    {12u, "Quake", 5u, {0u, 0u}},
+    {13u, "AstraZ", 6u, {0u, 0u}}
+};
 static uint32_t gallery_meter_values[2] = {62u, 71u};
 static uint32_t gallery_meter_peaks[2] = {78u, 88u};
 static AstraLevelMeterModel gallery_meter = ASTRA_LEVEL_METER_MODEL_INIT;
@@ -1057,6 +1078,30 @@ static uint32_t build_controls(void)
             ASTRA_CONTROL_CHECKBOX, 0u, ASTRA_CONTROL_SELECTED);
     if (status == ASTRA_STATUS_OK)
         status = set_item(GALLERY_FORM_OPTION, GALLERY_FORM_VALUE, 0u, 0u);
+    if (status == ASTRA_STATUS_OK) {
+        AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+        AstraColumnView columns[2] = {
+            {&column_models[0], &column_scrolls[0], 220u, {0u, 0u}},
+            {&column_models[1], &column_scrolls[1], 220u, {0u, 0u}}
+        };
+        AstraColumnsInfo browser = ASTRA_COLUMNS_INFO_INIT;
+
+        if (astra_scroll_init(&column_scrolls[0], &scroll_info) != ASTRA_OK ||
+            astra_scroll_init(&column_scrolls[1], &scroll_info) != ASTRA_OK ||
+            astra_interface_collection_init(&column_models[0], column_roots,
+                3u, 1u) != ASTRA_OK ||
+            astra_interface_collection_init(&column_models[1], column_apps,
+                3u, 11u) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+        browser.first_id = GALLERY_COLUMNS;
+        browser.columns = columns;
+        browser.column_count = 2u;
+        browser.viewport_height = 160u;
+        if (status == ASTRA_STATUS_OK &&
+            astra_interface_columns_init(GALLERY_CONTROL(GALLERY_COLUMNS),
+                &browser) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
     if (status == ASTRA_STATUS_OK)
         status = set_item(GALLERY_TABS, 0u, 0u, 0u);
     for (uint32_t page = GALLERY_PAGE_INPUT;
@@ -1175,6 +1220,8 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_SPLIT_RIGHT_LABEL, GALLERY_SPLIT_RIGHT,
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_FORM_ROW, GALLERY_PAGE_LAYOUT,
+              ASTRA_FLEX_BREAK_BEFORE | ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_COLUMNS, GALLERY_PAGE_LAYOUT,
               ASTRA_FLEX_BREAK_BEFORE | ASTRA_FLEX_BREAK_AFTER);
 #undef PAGE_ITEM
     if (status == ASTRA_STATUS_OK) {

@@ -268,6 +268,14 @@ AstraResult astra_interface_popup_init(AstraControl *control,
  */
 AstraResult astra_interface_split_button_init(AstraControl *primary,
     AstraControl *menu, const AstraButtonInfo *primary_info, uint32_t menu_id);
+/** Compose a column browser from C1 Lists and ScrollViews. Every column uses
+ * the canonical collection selection engine and caller-owned scroll model.
+ * @param controls Array of at least 1 + 2 * column_count caller-owned slots.
+ * @param info Borrowed column descriptions and viewport height.
+ * @return ASTRA_OK or validation error; discard controls on failure.
+ */
+AstraResult astra_interface_columns_init(AstraControl *controls,
+    const AstraColumnsInfo *info);
 /** Initialize a single-line UTF-8 field.
  * @param control Caller-owned control to initialize.
  * @param info Field description; its text model remains caller-owned.

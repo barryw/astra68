@@ -715,6 +715,65 @@ static void test_form_row(void)
             ASTRA_CONTROL_COLLAPSED) != 0u);
 }
 
+static void test_columns_browser(void)
+{
+    const AstraCollectionItem first[] = {
+        {11u, "Applications", 12u, {0u, 0u}},
+        {12u, "Documents", 9u, {0u, 0u}}
+    };
+    const AstraCollectionItem second[] = {
+        {21u, "Doom", 4u, {0u, 0u}},
+        {22u, "Quake", 5u, {0u, 0u}}
+    };
+    const AstraCollectionItem reordered[] = {
+        {22u, "Quake", 5u, {0u, 0u}},
+        {21u, "Doom", 4u, {0u, 0u}}
+    };
+    AstraCollectionModel models[2] = {
+        ASTRA_COLLECTION_MODEL_INIT, ASTRA_COLLECTION_MODEL_INIT
+    };
+    AstraScrollModel scrolls[2] = {
+        ASTRA_SCROLL_MODEL_INIT, ASTRA_SCROLL_MODEL_INIT
+    };
+    AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraColumnView columns[2] = {
+        {&models[0], &scrolls[0], 120u, {0u, 0u}},
+        {&models[1], &scrolls[1], 120u, {0u, 0u}}
+    };
+    AstraColumnsInfo info = ASTRA_COLUMNS_INFO_INIT;
+    AstraControl controls[5] = {0};
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout root = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlFrame left, right, clip;
+
+    assert(astra_scroll_init(&scrolls[0], &scroll_info) == ASTRA_OK);
+    assert(astra_scroll_init(&scrolls[1], &scroll_info) == ASTRA_OK);
+    assert(astra_interface_collection_init(&models[0], first, 2u, 11u) == ASTRA_OK);
+    assert(astra_interface_collection_init(&models[1], second, 2u, 22u) == ASTRA_OK);
+    info.first_id = 30u;
+    info.columns = columns;
+    info.column_count = 2u;
+    info.viewport_height = 80u;
+    assert(astra_interface_columns_init(NULL, &info) == ASTRA_ERROR_INVALID_ARGUMENT);
+    columns[1].scroll = &scrolls[0];
+    assert(astra_interface_columns_init(controls, &info) == ASTRA_ERROR_INVALID_ARGUMENT);
+    columns[1].scroll = &scrolls[1];
+    assert(astra_interface_columns_init(controls, &info) == ASTRA_OK);
+    assert(controls[2]._private_control_kind == ASTRA_CONTROL_LIST);
+    assert(controls[4]._private_control_kind == ASTRA_CONTROL_LIST);
+    assert(astra_interface_ui_init(&context, controls, 5u, 400u, 120u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &root) == ASTRA_OK);
+    assert(astra_interface_ui_geometry(&context, 1u, &left, &clip) == ASTRA_OK);
+    assert(astra_interface_ui_geometry(&context, 3u, &right, &clip) == ASTRA_OK);
+    assert(left.width == 120u && right.width == 120u);
+    assert(right.x == left.x + 121);
+    assert(astra_interface_list_set_items(&context, &controls[4],
+        reordered, 2u) == ASTRA_OK);
+    assert(models[1].selected_id == 22u);
+    assert(models[0].selected_id == 11u);
+    assert(controls[4]._private_value == 0);
+}
+
 void astra_interface_test_layout(void)
 {
     test_empty_and_invalid();
@@ -733,4 +792,5 @@ void astra_interface_test_layout(void)
     test_scroll_content_respects_maximum();
     test_settings_pane();
     test_form_row();
+    test_columns_browser();
 }
