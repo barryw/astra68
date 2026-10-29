@@ -262,6 +262,23 @@ ASTRA_NODISCARD AstraResult astra_text_model_read(
     const char **text, uint32_t *bytes);
 
 /**
+ * Find the next exact UTF-8 byte sequence, including across piece boundaries.
+ * Search starts at a scalar boundary. With wrap enabled, candidates before
+ * @p from are searched after the document tail. The model and its current
+ * selection are unchanged; a miss leaves @p match unchanged.
+ * @param model Initialized model.
+ * @param needle Nonempty, valid UTF-8 sequence.
+ * @param needle_bytes Byte count at @p needle.
+ * @param from Scalar-boundary document byte offset at which search begins.
+ * @param wrap Nonzero to search from document start after reaching its end.
+ * @param match Receives the half-open scalar-boundary match.
+ * @return ::ASTRA_OK, ::ASTRA_ERROR_NOT_PRESENT, or a validation error.
+ */
+ASTRA_NODISCARD AstraResult astra_text_model_find(
+    const AstraTextModel *model, const char *needle, uint32_t needle_bytes,
+    uint32_t from, uint32_t wrap, AstraTextSelection *match);
+
+/**
  * Advance an in/out document offset by one Unicode scalar.
  * Failure at end of document leaves the offset unchanged.
  * @param model Initialized model.

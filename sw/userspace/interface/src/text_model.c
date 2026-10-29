@@ -647,6 +647,56 @@ AstraResult astra_text_model_read(
     return ASTRA_OK;
 }
 
+static int find_range(const AstraTextModel *model, const char *needle,
+                      uint32_t needle_bytes, uint32_t first,
+                      uint32_t after, uint32_t *found)
+{
+    uint32_t limit = model->_private_text_bytes - needle_bytes;
+
+    for (uint32_t at = first; at < after && at <= limit; ++at) {
+        uint8_t byte;
+        uint32_t matched = 0u;
+
+        if (!document_byte(model, at, &byte) || (byte & 0xc0u) == 0x80u)
+            continue;
+        for (; matched < needle_bytes; ++matched)
+            if (!document_byte(model, at + matched, &byte) ||
+                byte != (uint8_t)needle[matched])
+                break;
+        if (matched == needle_bytes) {
+            *found = at;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+AstraResult astra_text_model_find(const AstraTextModel *model,
+    const char *needle, uint32_t needle_bytes, uint32_t from, uint32_t wrap,
+    AstraTextSelection *match)
+{
+    uint32_t found;
+
+    if (!model_valid(model) || needle == NULL || needle_bytes == 0u ||
+        match == NULL || match->size < sizeof(*match) ||
+        !astra_words_zero(match->reserved, 4u) ||
+        !astra_utf8_validate(needle, needle_bytes, 0u) ||
+        from > model->_private_text_bytes || !boundary(model, from) ||
+        wrap > 1u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (needle_bytes > model->_private_text_bytes)
+        return ASTRA_ERROR_NOT_PRESENT;
+    if (!find_range(model, needle, needle_bytes, from,
+                    model->_private_text_bytes, &found) &&
+        (wrap == 0u ||
+         !find_range(model, needle, needle_bytes, 0u, from, &found)))
+        return ASTRA_ERROR_NOT_PRESENT;
+    *match = (AstraTextSelection)ASTRA_TEXT_SELECTION_INIT;
+    match->anchor = found;
+    match->focus = found + needle_bytes;
+    return ASTRA_OK;
+}
+
 AstraResult astra_text_model_scalar_advance(const AstraTextModel *model,
                                             uint32_t *offset)
 {

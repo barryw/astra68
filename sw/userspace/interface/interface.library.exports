@@ -92,6 +92,7 @@ ASTRA_INTERFACE_9.0 {
         astra_scroll_set_offset;
         astra_text_model_copy;
         astra_text_model_dispose;
+        astra_text_model_find;
         astra_text_model_get_line;
         astra_text_model_get_state;
         astra_text_model_init;

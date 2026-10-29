@@ -223,12 +223,56 @@ static void test_invalid_initial_state(void)
            ASTRA_ERROR_BUFFER_TOO_SMALL);
 }
 
+static void test_find_across_pieces(void)
+{
+    uint8_t content[128] = {0};
+    _Alignas(4) uint8_t metadata[128] = {0};
+    AstraTextModel model = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo info = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraTextModelState before = ASTRA_TEXT_MODEL_STATE_INIT;
+    AstraTextModelState after = ASTRA_TEXT_MODEL_STATE_INIT;
+    AstraTextSelection match = ASTRA_TEXT_SELECTION_INIT;
+    static const char star[] = "\xf0\x9f\x8c\x9f";
+    static const char needle[] = "X\xf0\x9f\x8c\x9fY";
+
+    info.text = "abXYcd";
+    info.text_bytes = 6u;
+    info.content_arena = content;
+    info.content_arena_bytes = sizeof(content);
+    info.metadata_arena = metadata;
+    info.metadata_arena_bytes = sizeof(metadata);
+    assert(astra_text_model_init(&model, &info) == ASTRA_OK);
+    assert(astra_text_model_replace(&model, 3u, 3u, star, 4u) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &before) == ASTRA_OK);
+
+    assert(astra_text_model_find(&model, needle, sizeof(needle) - 1u,
+                                 0u, 0u, &match) == ASTRA_OK);
+    assert(match.anchor == 2u && match.focus == 8u);
+    match.anchor = 99u;
+    match.focus = 100u;
+    assert(astra_text_model_find(&model, needle, sizeof(needle) - 1u,
+                                 8u, 0u, &match) == ASTRA_ERROR_NOT_PRESENT);
+    assert(match.anchor == 99u && match.focus == 100u);
+    assert(astra_text_model_find(&model, needle, sizeof(needle) - 1u,
+                                 8u, 1u, &match) == ASTRA_OK);
+    assert(match.anchor == 2u && match.focus == 8u);
+    assert(astra_text_model_find(&model, star, 4u, 4u, 1u, &match) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_text_model_find(&model, "\xc0\x80", 2u, 0u, 0u, &match) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_text_model_find(&model, "missing", 7u, 0u, 1u, &match) ==
+           ASTRA_ERROR_NOT_PRESENT);
+    assert(astra_text_model_get_state(&model, &after) == ASTRA_OK);
+    assert(memcmp(&before, &after, sizeof(before)) == 0);
+}
+
 int main(void)
 {
     test_piece_table_and_lines();
     test_atomic_capacity_and_growth();
     test_utf8_and_many_pieces();
     test_invalid_initial_state();
+    test_find_across_pieces();
     puts("text model tests passed");
     return 0;
 }

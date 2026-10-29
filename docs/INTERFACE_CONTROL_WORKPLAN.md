@@ -95,3 +95,9 @@ layout, status, and colour roles. `src/kits/tracker/FilePanel.cpp` keeps file
 panel policy out of applications. Astra adapts these patterns to caller-owned
 native controls, capability-backed windows, and hardware draw lists; Haiku
 checkout stays read-only.
+
+S1 checkpoint: `src/kits/interface/TextView.cpp` keeps selection as text
+offsets, independent of drawing. Astra's shared `TextModel` now finds exact
+UTF-8 spans across piece boundaries without changing selection; caller
+chooses whether to select and reveal result. Search-bar presentation and
+grid history remain separate work.
