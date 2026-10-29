@@ -27,6 +27,11 @@ ASTRA_INTERFACE_9.0 {
         astra_interface_list_init;
         astra_interface_list_set_items;
         astra_interface_collection_init;
+        astra_interface_table_init;
+        astra_interface_table_set_rows;
+        astra_interface_tree_init;
+        astra_interface_tree_set_expanded;
+        astra_interface_tree_set_nodes;
         astra_interface_progress_init;
         astra_interface_progress_set;
         astra_interface_level_meter_init;
