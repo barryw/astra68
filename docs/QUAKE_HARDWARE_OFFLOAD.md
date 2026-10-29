@@ -47,6 +47,18 @@ the same Beast evidence directory. A repeated A/B/A timedemo is required
 before adopting `-O3`; even a confirmed 8% gain leaves the main rendering
 bottleneck open.
 
+An isolated `-O3 -flto` build passes the MC68040 dynamic dependency check.
+CMake must set `CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON` so static archives use
+the compiler's LTO-aware archiver; adding `-flto` only to C flags left
+unresolved symbols at final link. The corrected LTO binary is 693,452 bytes
+versus 565,080 bytes for the `-O2` control. The compiler exposed two upstream
+flat-index loops crossing C array subobject bounds in model texture vectors
+and entity particle velocities. Astra's vendor-copy preparation now uses
+equivalent bounded two-dimensional indexing. Both corrected `-O2` and
+`-O3 -flto` binaries build and pass the exact dynamic dependency check; LTO
+disassembly contains no unsupported `FINTRZ` or `FSGLDIV`. Neither binary has
+a DE25 timedemo result yet, so no LTO build flag is retained.
+
 ## MC68040 software trials
 
 `D_DrawSpans8` spends about 18–21% of sampled Quake time in perspective-corrected
