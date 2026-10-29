@@ -17,6 +17,10 @@ typedef struct Trace {
     unsigned picture_oob;
     unsigned cursor_oob;
     unsigned font3;
+    unsigned bold;
+    unsigned emphasis;
+    unsigned reverse;
+    unsigned fixed;
     unsigned stop_after;
     unsigned width;
     unsigned height;
@@ -55,6 +59,13 @@ static int event(void *context, const AstraZEvent *item)
         trace->cursor_oob++;
     if (item->kind == ASTRAZ_EVENT_FONT && item->data.font.font == 3)
         trace->font3++;
+    if (item->kind == ASTRAZ_EVENT_STYLE) {
+        unsigned style = (unsigned)item->data.style.style;
+        if (style & ASTRAZ_STYLE_BOLD) trace->bold++;
+        if (style & ASTRAZ_STYLE_EMPHASIS) trace->emphasis++;
+        if (style & ASTRAZ_STYLE_REVERSE) trace->reverse++;
+        if (style & ASTRAZ_STYLE_FIXED) trace->fixed++;
+    }
     if (at > 250 && item->kind == ASTRAZ_EVENT_CHARACTER)
         return 0;
     if (at > 1000) return item->kind == ASTRAZ_EVENT_REPAINT ? 1 : 0;
@@ -108,6 +119,10 @@ static int event(void *context, const AstraZEvent *item)
     case ASTRAZ_EVENT_COLOUR:
         printf("colour window=%d fg=%d bg=%d", item->data.colour.window,
                item->data.colour.foreground, item->data.colour.background);
+        break;
+    case ASTRAZ_EVENT_STYLE:
+        printf("style window=%d flags=%d", item->data.style.window,
+               item->data.style.style);
         break;
     case ASTRAZ_EVENT_WARNING:
         printf("warning %s", item->data.warning.text);
@@ -214,10 +229,10 @@ int main(int argc, char **argv)
                      .host = &host, .error = error,
                      .error_capacity = sizeof(error)};
     int result = astraz_engine_run(&run);
-    printf("RESULT status=%d events=%u pictures=%u characters=%u reads=%u picture_oob=%u cursor_oob=%u font3=%u error=%s\n",
+    printf("RESULT status=%d events=%u pictures=%u characters=%u reads=%u picture_oob=%u cursor_oob=%u font3=%u bold=%u emphasis=%u reverse=%u fixed=%u error=%s\n",
            result, trace.events, trace.pictures, trace.characters,
            trace.reads, trace.picture_oob, trace.cursor_oob, trace.font3,
-           error);
+           trace.bold, trace.emphasis, trace.reverse, trace.fixed, error);
     return result == ASTRAZ_OK ||
         (result == ASTRAZ_CANCELLED && trace.reads == trace.stop_after) ? 0 : 1;
 }

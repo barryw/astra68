@@ -118,7 +118,35 @@ Journey window-0 cursor moved to row 201, the position immediately after the
 last row; the host must clip it. Evidence is archived as
 `journey-host-trace-3input.txt` and `shogun-host-trace-3input.txt`.
 
+The first three input requests select bold once in Zork Zero and once in
+Shogun. Journey selects reverse style 40 times and Shogun once. No emphasis or
+graphics font 3 appears in these openings. A V6 bitmap text path must preserve
+those bold and reverse uses. Logs are `zork0-style-3input.txt`,
+`journey-style-3input.txt`, and `shogun-style-3input.txt` on Beast.
+
 The same private engine harness also reached first input on the representative
 Z3/Z4/Z5/Z8 stories without an engine error: Zork I (425 events), Trinity
 (187), Sherlock (233), and One Room (789). Those host traces establish engine
 progress only; the native GUI opening/input/exit gates still require DE25.
+
+## Corrected DE25 media and Z3 gates
+
+The focused installer rebuilt `build/.SDL.kit.stamp`, installed the matching
+MOD-capable mixer and codec worker together with disposable media probes, and
+restarted Astra once. The three production services remained active with
+`astra.service` `NRestarts=0` and 8.2 GiB free. The synthetic AIFF test logged
+`ASTRAZ_MEDIA_AIFF_PASS`; MOD logged `ASTRAZ_MEDIA_MOD_PASS` and Codec music
+`underflows=0`. The audio daemon's status after both tests was zero FIFO
+underruns, zero overflows and two software gaps since its last start. A
+pre-test counter was not taken, so the gaps cannot be attributed to these
+probes. HDMI was disconnected, so this is a digital playback gate only, not
+an audible-user confirmation.
+
+Zork I opened on DE25 with the `West of House` status line, complete opening
+text and inline prompt. `look` returned the room text, advanced the move count
+from zero to one, and showed another prompt. `quit` reached the score/end text,
+and the window was closed. Screenshots `z3-scene.png` and `z3-look.png` are
+archived on Beast under `/mnt/Documents/astra68/astraz-validation-20261029/`
+with SHA-256 values `287172952ff2126b940322905b0339a3ece9ee64b05eab1384edaed1d5e16bc3`
+and `3bbe653fcd6dfb38aad95eff926eecb99578ba60c39d22a683c678ad9ada6c93`.
+The remaining Z4/Z5/Z6/Z8 GUI gates follow the 8 × 8 V6 font visual trial.
