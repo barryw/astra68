@@ -114,3 +114,11 @@ painter and submits icon segments through Graphics Kit's existing batched
 `LINES` command. This uses one draw-list command per icon and reserves payload
 for its segments before drawing, so a control-rich page stays within the
 retained list limit.
+
+Retained surface Gallery fixture: Haiku's `src/kits/interface/View.cpp`
+`DrawBitmap` and `Invalidate` separate borrowed image drawing from View damage.
+Astra's Layout page uses shared retained View and ImageView in its existing
+split panes. The image is painted into a window-owned Graphics Kit surface by
+Astraea, borrowed by ImageView, then released when the Gallery window closes.
+Window resize changes the custom View model and invalidates that View through
+Interface Kit; no application-owned pixel buffer or one-off control is added.
