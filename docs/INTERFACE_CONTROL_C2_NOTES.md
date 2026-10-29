@@ -57,7 +57,8 @@ pointer clickable, and changes emit `ASTRA_UI_ACTION_EXPANSION_CHANGED` with
 the full collection item index. `astra_interface_tree_set_nodes` replaces the
 hierarchy and items together, preserving selection by stable ID and restoring
 the old state if validation or layout fails. Draw-list estimates and painting
-iterate only clipped visible rows.
+iterate only clipped visible rows. Interface Gallery's Layout page includes an
+expanded hierarchy with a selected nested item.
 
 ## Pagination contract
 
@@ -71,7 +72,8 @@ range and recalculates page count from the collection's current item count.
 An empty collection has one empty page. Page changes do not alter C1 selected
 item ID. The label uses alternating caller-owned buffers so a length-changing
 update leaves the old text valid while layout runs. Beast host and MC68040
-library gates cover the composition and range behavior.
+library gates cover the composition and range behavior. Interface Gallery's
+Layout page includes working Previous and Next controls.
 
 ## Icon Grid contract
 
