@@ -38,6 +38,7 @@ enum {
     GALLERY_PAGE_TEXT,
     GALLERY_PAGE_LAYOUT,
     GALLERY_PAGE_FIELDS,
+    GALLERY_PAGE_PANELS,
     GALLERY_TEXT_LABEL,
     GALLERY_LAYOUT_LABEL,
     GALLERY_LABEL,
@@ -147,7 +148,19 @@ enum {
     GALLERY_PAGINATION_PREVIOUS,
     GALLERY_PAGINATION_LABEL,
     GALLERY_PAGINATION_NEXT,
-    GALLERY_CONTROL_COUNT = GALLERY_PAGINATION_NEXT
+    GALLERY_COLOUR_PANEL_ROOT,
+    GALLERY_COLOUR_PANEL_TITLE,
+    GALLERY_COLOUR_PANEL_SWATCH,
+    GALLERY_COLOUR_PANEL_RED_LABEL,
+    GALLERY_COLOUR_PANEL_RED,
+    GALLERY_COLOUR_PANEL_GREEN_LABEL,
+    GALLERY_COLOUR_PANEL_GREEN,
+    GALLERY_COLOUR_PANEL_BLUE_LABEL,
+    GALLERY_COLOUR_PANEL_BLUE,
+    GALLERY_COLOUR_PANEL_ACTIONS,
+    GALLERY_COLOUR_PANEL_CANCEL,
+    GALLERY_COLOUR_PANEL_USE,
+    GALLERY_CONTROL_COUNT = GALLERY_COLOUR_PANEL_USE
 };
 
 enum {
@@ -173,6 +186,7 @@ static AstraPopup gallery_popup = ASTRA_POPUP_INIT;
 static AstraComboBox gallery_combo = ASTRA_COMBO_BOX_INIT;
 static AstraMultiPopup gallery_multi = ASTRA_MULTI_POPUP_INIT;
 static AstraToolbarActions gallery_toolbar = ASTRA_TOOLBAR_ACTIONS_INIT;
+static AstraColourPanel gallery_colour_panel = ASTRA_COLOUR_PANEL_INIT;
 static AstraProcessFilesystem process_filesystem =
     ASTRA_PROCESS_FILESYSTEM_INIT;
 static char slider_value_text[5] = "62%";
@@ -283,7 +297,8 @@ static const AstraChoiceItem gallery_tabs[] = {
     {"Progress", sizeof("Progress") - 1u, {0u, 0u}},
     {"Text", sizeof("Text") - 1u, {0u, 0u}},
     {"Layout", sizeof("Layout") - 1u, {0u, 0u}},
-    {"Fields", sizeof("Fields") - 1u, {0u, 0u}}
+    {"Fields", sizeof("Fields") - 1u, {0u, 0u}},
+    {"Panels", sizeof("Panels") - 1u, {0u, 0u}}
 };
 static const AstraChoiceItem gallery_choices[] = {
     {"Windows", sizeof("Windows") - 1u, {0u, 0u}},
@@ -881,7 +896,7 @@ static uint32_t layout_controls(void)
 
 static uint32_t select_page(int32_t selected)
 {
-    uint32_t page_count = GALLERY_PAGE_FIELDS - GALLERY_PAGE_INPUT + 1u;
+    uint32_t page_count = GALLERY_PAGE_PANELS - GALLERY_PAGE_INPUT + 1u;
     uint32_t next;
 
     if (selected < 0 || (uint32_t)selected >= page_count)
@@ -916,7 +931,7 @@ static uint32_t build_controls(void)
         status = GALLERY_FAIL_CONTROL;
 
     for (uint32_t page = GALLERY_PAGE_INPUT;
-         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_FIELDS; ++page)
+         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_PANELS; ++page)
         status = add_page(page - 1u, page,
                           page == GALLERY_PAGE_INPUT ? 0u :
                           ASTRA_CONTROL_COLLAPSED);
@@ -1361,6 +1376,12 @@ static uint32_t build_controls(void)
                 GALLERY_CONTROL(GALLERY_COLOUR_WELL), &well) != ASTRA_OK)
             status = GALLERY_FAIL_CONTROL;
     }
+    if (status == ASTRA_STATUS_OK &&
+        astra_interface_colour_panel_init(&gallery_colour_panel,
+            GALLERY_CONTROL(GALLERY_COLOUR_PANEL_ROOT),
+            GALLERY_COLOUR_PANEL_ROOT, ASTRA_COLOUR_PANEL_RGB565,
+            0x1a98u, NULL, 0u) != ASTRA_OK)
+        status = GALLERY_FAIL_CONTROL;
     if (status == ASTRA_STATUS_OK) {
         AstraToolbarActionsInfo info = ASTRA_TOOLBAR_ACTIONS_INFO_INIT;
 
@@ -1438,7 +1459,7 @@ static uint32_t build_controls(void)
     if (status == ASTRA_STATUS_OK)
         status = set_item(GALLERY_TABS, 0u, 0u, 0u);
     for (uint32_t page = GALLERY_PAGE_INPUT;
-         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_FIELDS; ++page)
+         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_PANELS; ++page)
         status = set_item(page, 0u, 0u, 1u);
 
 #define PAGE_ITEM(id, page, flags)                                      \
@@ -1579,6 +1600,8 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_TAG_INPUT, GALLERY_PAGE_FIELDS,
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_COLOUR_WELL, GALLERY_PAGE_FIELDS,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_COLOUR_PANEL_ROOT, GALLERY_PAGE_PANELS,
               ASTRA_FLEX_BREAK_AFTER);
 #undef PAGE_ITEM
     if (status == ASTRA_STATUS_OK) {
@@ -2298,6 +2321,28 @@ static uint32_t handle_action(AstraHandle clipboard,
                               const AstraUIAction *action)
 {
     int toolbar_handled = 0;
+    uint32_t panel_outcome = ASTRA_COLOUR_PANEL_NONE;
+
+    if (astra_interface_colour_panel_action(&gallery_colour_panel, &ui,
+            GALLERY_CONTROL(GALLERY_COLOUR_PANEL_ROOT), action,
+            &panel_outcome) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    if (panel_outcome == ASTRA_COLOUR_PANEL_ACCEPTED) {
+        AstraColorRGBA8 selected;
+
+        if (astra_interface_colour_panel_color(&gallery_colour_panel,
+                &selected) != ASTRA_OK ||
+            astra_interface_colour_well_set(&ui,
+                GALLERY_CONTROL(GALLERY_COLOUR_WELL),
+                ASTRA_COLOUR_LITERAL, selected, 0u) != ASTRA_OK)
+            return GALLERY_FAIL_CONTROL;
+        return select_page(GALLERY_PAGE_FIELDS - GALLERY_PAGE_INPUT);
+    }
+    if (panel_outcome == ASTRA_COLOUR_PANEL_CANCELLED)
+        return select_page(GALLERY_PAGE_FIELDS - GALLERY_PAGE_INPUT);
+    if (action->type == ASTRA_UI_ACTION_ACTIVATE &&
+        action->control_id == GALLERY_COLOUR_WELL)
+        return select_page(GALLERY_PAGE_PANELS - GALLERY_PAGE_INPUT);
 
     if (action->type == ASTRA_UI_ACTION_ACTIVATE &&
         action->control_id == GALLERY_COMBO_MENU) {

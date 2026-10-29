@@ -4455,6 +4455,79 @@ static void test_split_button(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_shared_colour_panel(void)
+{
+    AstraControl controls[ASTRA_COLOUR_PANEL_CONTROL_COUNT];
+    AstraColourPanel panel = ASTRA_COLOUR_PANEL_INIT;
+    AstraColorRGBA8 palette[2] = {
+        { 4u, 8u, 12u, 255u }, { 220u, 30u, 60u, 255u }
+    };
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    uint32_t outcome = 99u;
+
+    assert(astra_interface_colour_panel_init(&panel, controls, 100u,
+        ASTRA_COLOUR_PANEL_RGB565, 0xf800u, NULL, 0u) == ASTRA_OK);
+    assert(controls[ASTRA_COLOUR_PANEL_RED]._private_maximum_value == 31 &&
+           controls[ASTRA_COLOUR_PANEL_GREEN]._private_maximum_value == 63 &&
+           controls[ASTRA_COLOUR_PANEL_BLUE]._private_maximum_value == 31);
+    assert(astra_interface_ui_init(&context, controls,
+        ASTRA_COLOUR_PANEL_CONTROL_COUNT, 320u, 480u) == ASTRA_OK);
+    layout.direction = ASTRA_FLEX_COLUMN;
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 100u + ASTRA_COLOUR_PANEL_GREEN;
+    action.value = 63;
+    assert(astra_interface_control_set_value(&context,
+        &controls[ASTRA_COLOUR_PANEL_GREEN], 63) == ASTRA_OK);
+    assert(astra_interface_colour_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK);
+    assert(outcome == ASTRA_COLOUR_PANEL_CHANGED && panel.packed == 0xffe0u);
+    action.value = 64;
+    assert(astra_interface_colour_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(panel.packed == 0xffe0u);
+    action.type = ASTRA_UI_ACTION_ACTIVATE;
+    action.control_id = 100u + ASTRA_COLOUR_PANEL_USE;
+    assert(astra_interface_colour_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_COLOUR_PANEL_ACCEPTED);
+
+    context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
+    assert(astra_interface_colour_panel_init(&panel, controls, 100u,
+        ASTRA_COLOUR_PANEL_XRGB8888, 0x00112233u, NULL, 0u) == ASTRA_OK);
+    assert(controls[ASTRA_COLOUR_PANEL_RED]._private_value == 0x11 &&
+           controls[ASTRA_COLOUR_PANEL_GREEN]._private_value == 0x22 &&
+           controls[ASTRA_COLOUR_PANEL_BLUE]._private_value == 0x33);
+    assert(astra_interface_ui_init(&context, controls,
+        ASTRA_COLOUR_PANEL_CONTROL_COUNT, 320u, 480u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 100u + ASTRA_COLOUR_PANEL_BLUE;
+    action.value = 255;
+    assert(astra_interface_colour_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK);
+    assert(panel.packed == 0x001122ffu);
+
+    context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
+    assert(astra_interface_colour_panel_init(&panel, controls, 100u,
+        ASTRA_COLOUR_PANEL_INDEX8, 1u, palette, 2u) == ASTRA_OK);
+    assert(controls[ASTRA_COLOUR_PANEL_GREEN]._private_state &
+           ASTRA_CONTROL_COLLAPSED);
+    assert(astra_interface_ui_init(&context, controls,
+        ASTRA_COLOUR_PANEL_CONTROL_COUNT, 320u, 480u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    action.control_id = 100u + ASTRA_COLOUR_PANEL_RED;
+    action.value = 0;
+    assert(astra_interface_colour_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK && panel.packed == 0u);
+    palette[1].alpha = 0u;
+    assert(astra_interface_colour_panel_init(&panel, controls, 100u,
+        ASTRA_COLOUR_PANEL_INDEX8, 1u, palette, 2u) ==
+        ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
 int main(void)
 {
     static const char malformed_utf8[] = {(char)0xed, (char)0xa0, (char)0x80};
@@ -4546,6 +4619,7 @@ int main(void)
     test_text_field();
     test_secure_and_search_fields();
     test_composed_fields_and_colour_well();
+    test_shared_colour_panel();
     test_text_field_rejections();
     test_text_view();
     test_text_view_styles();
