@@ -91,6 +91,22 @@ def story():
     return bytes(data)
 
 
+def font3_story():
+    """Request graphics font 3, print one glyph, then restore normal font."""
+    data = bytearray(story())
+    program = bytes.fromhex(
+        "be 04 7f 03 10"  # EXT:4 set_font 3 -> global 0
+        "e5 7f 41"        # VAR:5 print_char 'A' in graphics font
+        "be 04 7f 01 11"  # EXT:4 set_font 1 -> global 1
+        "e5 7f 42"        # VAR:5 print_char 'B' in normal font
+        "ba"              # 0OP:10 quit
+    )
+    data[0x81:] = bytes(len(data) - 0x81)
+    data[0x81:0x81 + len(program)] = program
+    data[28:30] = be16(sum(data[64:]) & 0xffff)
+    return bytes(data)
+
+
 def blorb(sound_tag, sound_payload):
     resources = ((b"Pict", 7, b"PNG ", png()),
                  (b"Snd ", 3, sound_tag, sound_payload))
@@ -114,6 +130,7 @@ def main():
     args.directory.mkdir(parents=True, exist_ok=True)
     aiff_data = aiff()
     (args.directory / "media.z6").write_bytes(story())
+    (args.directory / "font3.z6").write_bytes(font3_story())
     (args.directory / "media.png").write_bytes(png())
     (args.directory / "media.aiff").write_bytes(b"FORM" +
                                                  be32(len(aiff_data)) + aiff_data)

@@ -29,6 +29,17 @@ Codec Kit tracker provider. The fixture follows the
 [Z-machine opcode table](https://www.inform-fiction.org/zmachine/standards/z1point1/sect14.html)
 and [V6 routine entry rule](https://www.inform-fiction.org/zmachine/standards/z1point1/sect05.html).
 
+The same generator creates `font3.z6`: it requests graphics font 3 with
+`set_font`, prints `A`, restores font 1, prints `B`, then quits. Run it through
+`astraz-host-trace` and require a font 3 event followed by the first character,
+then a font 1 event followed by the second. In the final GUI gate, the font 3
+character must use the standard adjacent 8 × 8 graphics glyph, rather than the
+ordinary letter A. This follows the [Z-machine Standard's font 3 bitmap and
+spacing contract](https://www.inform-fiction.org/zmachine/standards/z1point1/sect16.html).
+Current native-engine host trace exits successfully with two characters but
+reports `font3=0`, so graphics font 3 remains unsupported; this is a known
+acceptance gap, not a passing test.
+
 Each DE25 run must show the visible scene and prompt, accept input, exit
 cleanly, and leave `astra.service` active with zero restarts, no new kernel
 panic, and no audio fault during playback. The story and media probes are
