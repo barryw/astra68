@@ -20,6 +20,7 @@
 ASTRA_EXTERN_C_BEGIN
 
 struct AstraMenuItem;
+struct AstraClipboardRepresentation;
 
 /** Opaque identity returned by the window server. */
 typedef struct AstraWindow {
@@ -95,6 +96,37 @@ ASTRA_NODISCARD AstraResult astra_window_notification_show(
  * @return ASTRA_OK or a validation or service error.
  */
 ASTRA_NODISCARD AstraResult astra_window_overlay_hide(AstraWindow *window);
+
+/** Begin one pointer-captured drag. Display owns an immutable ACLP document
+ * for session lifetime; system clipboard content is unaffected. Source must
+ * hold left-button content capture. @p label is a counted ghost caption,
+ * typically first item name and count badge. Only one system drag is active.
+ */
+ASTRA_NODISCARD AstraResult astra_window_drag_begin(AstraWindow *window,
+    const struct AstraClipboardRepresentation *representations,
+    uint32_t representation_count, uint32_t item_count,
+    uint32_t allowed_operations, const char *label, uint16_t label_length);
+/** Set target operation and precise acceptance/refusal caption for active
+ * @p token. A zero operation refuses; nonzero must be COPY or MOVE.
+ */
+ASTRA_NODISCARD AstraResult astra_window_drag_feedback(AstraWindow *window,
+    uint32_t token, uint32_t operation, const char *caption,
+    uint16_t caption_length);
+/** Source cancels its active drag; target receives LEAVE. */
+ASTRA_NODISCARD AstraResult astra_window_drag_cancel(AstraWindow *window);
+/** Target acknowledges a DROP after applying it. Pass its chosen operation
+ * for success, or zero if the operation failed. A MOVE source receives
+ * FINISHED only after this acknowledgement. Long operations can repeat
+ * ::astra_window_drag_feedback with the same token/operation to keep the
+ * session alive.
+ */
+ASTRA_NODISCARD AstraResult astra_window_drag_complete(AstraWindow *window,
+    uint32_t token, uint32_t completed_operation);
+/** Close immutable drag area attached to ENTER or DROP event, if still owned.
+ * Call after reading or rejecting document. Other events are unchanged.
+ */
+ASTRA_NODISCARD AstraResult astra_window_drag_document_close(
+    AstraWindowEvent *event);
 /** Dismiss this window's correlated menu. @param window Owning window. @param request Menu correlation token. @return ASTRA_OK or an error. */
 ASTRA_NODISCARD AstraResult astra_window_menu_close(AstraWindow *window, uint32_t request);
 

@@ -1,6 +1,7 @@
 #include <astra/window.h>
 
 #include <astra/area.h>
+#include <astra/clipboard.h>
 #include <astra/bytes.h>
 #include <astra/gui.h>
 #include <astra/menu.h>
@@ -10,6 +11,7 @@
 #include <astra/utf8.h>
 
 #include "internal/status.h"
+#include "internal/clipboard_document.h"
 
 static int state_valid(uint8_t state)
 {
@@ -53,7 +55,7 @@ static AstraResult command(AstraWindow *window, uint32_t action,
     AstraResult result;
 
     if (!window_live(window) || action < ASTRA_GUI_WINDOW_QUERY ||
-        action > ASTRA_GUI_WINDOW_OVERLAY_HIDE ||
+        action > ASTRA_GUI_WINDOW_DRAG_COMPLETE ||
         (attachment != NULL && *attachment == ASTRA_INVALID_HANDLE) ||
         !astra_utf8_validate(title, title_length, 0u) ||
         title_length > ASTRA_WINDOW_TITLE_MAX)
@@ -564,6 +566,95 @@ AstraResult astra_window_overlay_hide(AstraWindow *window)
                    0u, 0u, NULL, NULL);
 }
 
+static int drag_caption_valid(const char *text, uint16_t length)
+{
+    if (length == 0u || length > ASTRA_WINDOW_TITLE_MAX ||
+        !astra_utf8_validate(text, length, 0u))
+        return 0;
+    for (uint32_t at = 0u; at < length; ++at)
+        if (text[at] == '\r' || text[at] == '\n') return 0;
+    return 1;
+}
+
+AstraResult astra_window_drag_begin(AstraWindow *window,
+    const AstraClipboardRepresentation *representations,
+    uint32_t representation_count, uint32_t item_count,
+    uint32_t allowed_operations, const char *label, uint16_t label_length)
+{
+    AstraArea area = ASTRA_AREA_INIT;
+    AstraHandle immutable = ASTRA_INVALID_HANDLE;
+    AstraWindowFrame count_frame;
+    uint32_t bytes = 0u;
+    AstraResult result;
+
+    if (!window_live(window) || item_count == 0u ||
+        item_count > UINT16_MAX || representation_count == 0u ||
+        (allowed_operations & ~ASTRA_DRAG_OPERATIONS) != 0u ||
+        allowed_operations == 0u || !drag_caption_valid(label, label_length))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_system_document_snapshot(representations,
+        representation_count, ASTRA_GUI_DRAG_BYTES_MAX,
+        &area, &immutable, &bytes);
+    count_frame = (AstraWindowFrame){(uint16_t)item_count, 0u, 0u, 0u};
+    if (result == ASTRA_OK)
+        result = command(window, ASTRA_GUI_WINDOW_DRAG_BEGIN, &count_frame,
+                         label, label_length, allowed_operations,
+                         NULL, &immutable);
+    if (immutable != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_handle_close(&immutable);
+        if (result == ASTRA_OK) result = closed;
+    }
+    if (area.handle != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_area_close(&area);
+        if (result == ASTRA_OK) result = closed;
+    }
+    return result;
+}
+
+AstraResult astra_window_drag_feedback(AstraWindow *window,
+    uint32_t token, uint32_t operation, const char *caption,
+    uint16_t caption_length)
+{
+    AstraWindowFrame selection;
+
+    if (token == 0u || operation > ASTRA_DRAG_MOVE ||
+        operation == ASTRA_DRAG_OPERATIONS ||
+        !drag_caption_valid(caption, caption_length))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    selection = (AstraWindowFrame){(uint16_t)operation, 0u, 0u, 0u};
+    return command(window, ASTRA_GUI_WINDOW_DRAG_FEEDBACK, &selection,
+                   caption, caption_length, token, NULL, NULL);
+}
+
+AstraResult astra_window_drag_cancel(AstraWindow *window)
+{
+    return command(window, ASTRA_GUI_WINDOW_DRAG_CANCEL, NULL, NULL,
+                   0u, 0u, NULL, NULL);
+}
+
+AstraResult astra_window_drag_complete(AstraWindow *window,
+    uint32_t token, uint32_t completed_operation)
+{
+    AstraWindowFrame completion;
+
+    if (token == 0u || (completed_operation != 0u &&
+        completed_operation != ASTRA_DRAG_COPY &&
+        completed_operation != ASTRA_DRAG_MOVE))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    completion = (AstraWindowFrame){(uint16_t)completed_operation,
+        0u, 0u, 0u};
+    return command(window, ASTRA_GUI_WINDOW_DRAG_COMPLETE,
+                   &completion, NULL, 0u, token, NULL, NULL);
+}
+
+AstraResult astra_window_drag_document_close(AstraWindowEvent *event)
+{
+    if (event == NULL || (event->type != ASTRA_WINDOW_EVENT_DRAG_ENTER &&
+                          event->type != ASTRA_WINDOW_EVENT_DRAG_DROP))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return astra_handle_close(&event->data.drag.document_handle);
+}
+
 AstraResult astra_window_menu_bar_set(AstraWindow *window,
     const AstraMenuItem *items, uint32_t count)
 {
@@ -706,16 +797,19 @@ static AstraResult receive_event(AstraWindow *window, AstraWindowEvent *event,
     AstraGuiWindowEvent message = {0};
     uint32_t size = 0u;
     uint32_t handles = 0u;
+    AstraHandle attachment = ASTRA_INVALID_HANDLE;
     AstraResult result;
 
     if (!window_live(window) || event == 0)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     result = astra_port_receive_until(
-        window->_private_events, &message, sizeof(message), 0, 0,
+        window->_private_events, &message, sizeof(message), &attachment, 1u,
         &size, &handles, deadline_ns);
     if (result != ASTRA_OK)
         return result;
-    if (size != sizeof(message) || handles != 0u ||
+    if (size != sizeof(message) ||
+        handles != ((message.event.type == ASTRA_WINDOW_EVENT_DRAG_ENTER ||
+                    message.event.type == ASTRA_WINDOW_EVENT_DRAG_DROP) ? 1u : 0u) ||
         message.header.total_size != sizeof(message) ||
         message.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
         message.header.flags != 0u ||
@@ -726,7 +820,12 @@ static AstraResult receive_event(AstraWindow *window, AstraWindowEvent *event,
         message.event.size != sizeof(message.event) ||
         message.event.version != ASTRA_WINDOW_EVENT_VERSION ||
         message.event.type < ASTRA_WINDOW_EVENT_POINTER_MOTION ||
-        message.event.type > ASTRA_WINDOW_EVENT_FONT_CHANGED ||
+        message.event.type > ASTRA_WINDOW_EVENT_DRAG_FINISHED ||
+        (message.event.type >= ASTRA_WINDOW_EVENT_DRAG_ENTER &&
+         (message.event.data.drag.token == 0u ||
+          message.event.data.drag.document_handle != 0u ||
+          (message.event.data.drag.operation & ~ASTRA_DRAG_OPERATIONS) != 0u ||
+          (message.event.data.drag.modifiers & ~ASTRA_INPUT_MOD_ALL) != 0u)) ||
         (message.event.type == ASTRA_WINDOW_EVENT_FONT_CHANGED &&
          (message.event.data.font_changed.generation == 0u ||
           message.event.data.font_changed.window != window->_private_id)) ||
@@ -769,8 +868,14 @@ static AstraResult receive_event(AstraWindow *window, AstraWindowEvent *event,
         (message.event.type == ASTRA_WINDOW_EVENT_TEXT &&
          (message.event.data.text.modifiers &
           ~ASTRA_INPUT_MOD_ALL) != 0u) ||
-        message.event.generation == 0u)
+        message.event.generation == 0u) {
+        if (attachment != ASTRA_INVALID_HANDLE)
+            { AstraResult ignored = astra_handle_close(&attachment);
+              (void)ignored; }
         return ASTRA_ERROR_IO;
+    }
+    if (handles == 1u)
+        message.event.data.drag.document_handle = attachment;
     if (message.event.generation > window->_private_generation)
         window->_private_generation = message.event.generation;
     *event = message.event;

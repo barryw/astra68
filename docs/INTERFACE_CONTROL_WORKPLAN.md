@@ -56,6 +56,21 @@ roles do not attach a sheet to one parent window.
    panels compose the collection and field controls over Filesystem, Font,
    and Graphics Kits; applications receive results, not panel internals.
 
+Drag/drop implementation reference: Haiku's `src/kits/interface/View.cpp`
+(`BView::DragMessage`) starts a drag from a view, while
+`src/servers/app/EventDispatcher.cpp` owns cross-window target routing and
+the drag image. Astra adopts that ownership split through the opt-in Window
+drag events and Display's single typed ACLP session. The Display owns the
+hardware-rendered ghost and keeps one read-only document handle; each target
+gets a narrowed transferred duplicate on Enter or Drop. The reusable Drop
+Target is a Container plus Label, with accepted and refused states following
+`Astra Desktop (standalone).html`'s aqua/gray dashed target and precise
+read-only refusal text. The Interface Gallery Drag page exercises the
+same-window path; other applications use the same Window API across windows.
+The source receives FINISHED only after the target acknowledges DROP with
+DRAG_COMPLETE; a target doing long work renews its five-minute deadline with
+same-token feedback. A dead target or expired deadline fails the session.
+
 Breaking changes during pre-alpha should bump Interface Kit or display
 protocol ABI major, update all in-tree clients and manifests together, and
 remove superseded paths. New control kinds require behavior that composition
