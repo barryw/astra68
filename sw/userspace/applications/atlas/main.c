@@ -34,6 +34,10 @@
 #define GRID_GAP_X 8u
 #define GRID_GAP_Y 14u
 #define ICON_SOURCE_SIZE ASTRA_ICON_TILE_SOURCE_SIZE
+#define TOOLBAR_HEIGHT (ASTRA_THEME_TOOLBAR_BUTTON_HEIGHT + \
+    2u * ASTRA_THEME_TOOLBAR_INSET)
+#define TOOLBAR_FIRST_ID 10000u
+#define TOOLBAR_CONTROL_COUNT 8u
 
 ASTRA_PROGRAM("Atlas", 0, 1, 0, "Barry Walker", "Copyright 2026 Barry Walker");
 
@@ -48,6 +52,10 @@ static AstraSurface installer_icon = ASTRA_SURFACE_INIT;
 static AstraSurface *entry_icons;
 static uint32_t entry_icon_count;
 static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+static AstraUIContext toolbar_ui = ASTRA_UI_CONTEXT_INIT;
+static AstraToolbarActions toolbar = ASTRA_TOOLBAR_ACTIONS_INIT;
+static AstraControl toolbar_controls[TOOLBAR_CONTROL_COUNT];
+static uint32_t toolbar_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
 static AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
 static AstraControl *controls;
 static uint32_t worker, cancelled, completed, visible_data;
@@ -67,6 +75,7 @@ static AstraInlineEdit name_edit = ASTRA_INLINE_EDIT_INIT;
 static uint32_t edit_index = UINT32_MAX;
 static char edit_path[ASTRA_VFS_PATH_MAX];
 static uint32_t edit_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
+static uint32_t selected_index = UINT32_MAX;
 
 static int desktop_folder_root(void)
 {
@@ -263,7 +272,8 @@ static AstraResult layout(void)
     outer.direction = ASTRA_FLEX_COLUMN;
     outer.align_items = ASTRA_FLEX_ALIGN_STRETCH;
     outer.padding_left = outer.padding_right = 12u;
-    outer.padding_top = outer.padding_bottom = 12u;
+    outer.padding_top = TOOLBAR_HEIGHT + 12u;
+    outer.padding_bottom = 12u;
     return astra_interface_ui_layout(&ui, &outer);
 }
 
@@ -369,9 +379,21 @@ static AstraResult paint(void)
     if (result == ASTRA_OK && (visible_data == 0u || directory.count == 0u ||
                                directory.status != ASTRA_VFS_OK)) {
         const char *text = message();
-        result = astra_draw_ui_text(&list, (AstraPointI32){28, 32}, text,
+        result = astra_draw_ui_text(&list,
+            (AstraPointI32){28, TOOLBAR_HEIGHT + 32u}, text,
             (uint32_t)strlen(text), theme.title_font_height, 0u,
             !volume_lost && (visible_data == 0u || directory.status == ASTRA_VFS_OK) ? theme.client_text_secondary : theme.fault);
+    }
+    if (result == ASTRA_OK) {
+        AstraSurfaceView toolbar_view;
+
+        if (!astra_draw_list_view_init(&toolbar_view, toolbar_commands,
+                sizeof(toolbar_commands), width, height))
+            result = ASTRA_ERROR_NO_RESOURCES;
+        if (result == ASTRA_OK)
+            result = astra_interface_ui_render(&toolbar_ui, &toolbar_view);
+        if (result == ASTRA_OK)
+            result = astra_draw_list_append_view(&list, &toolbar_view);
     }
     for (uint32_t at = 0u; result == ASTRA_OK && visible_data != 0u &&
                            directory.status == ASTRA_VFS_OK && at < directory.count; ++at) {
@@ -519,6 +541,7 @@ static void open_error(AstraHandle gui, AstraResult result)
 
 static AstraResult reload_directory(void)
 {
+    selected_index = UINT32_MAX;
     uint32_t status = astra_directory_snapshot_load(&directory,
         volume_connected ? &volume_filesystem : &filesystem.filesystem, root, NULL);
     if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
@@ -630,8 +653,7 @@ static AstraResult selected_query(void *opaque, AstraCommandState *state)
     *state = (AstraCommandState){"Open", 4u,
         index < directory.count &&
         (directory.entries[index].kind == ASTRA_VFS_KIND_DIRECTORY ||
-         (directory.entries[index].kind == ASTRA_VFS_KIND_FILE &&
-          astra_string_has_suffix(directory.entries[index].name, ".apkg"))), 0u};
+         directory.entries[index].kind == ASTRA_VFS_KIND_FILE), 0u};
     return ASTRA_OK;
 }
 
@@ -755,6 +777,90 @@ static AstraResult delete_selected(void *opaque, const AstraCommandArguments *ar
     return reload_directory();
 }
 
+static AstraResult refresh_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Refresh", 7u,
+        worker == 0u && !volume_lost, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult refresh_directory(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    if (worker != 0u || volume_lost) return ASTRA_ERROR_BUSY;
+    return reload_directory();
+}
+
+static AtlasCommands toolbar_command_context = {0, &selected_index};
+static const AstraCommand toolbar_command_table[] = {
+    {"atlas.folder", 12u, 0u, 0u, folder_query, create_folder,
+        &toolbar_command_context},
+    {"atlas.open", 10u, 0u, 0u, selected_query, open_selected,
+        &toolbar_command_context},
+    {"atlas.delete", 12u, 0u, 0u, delete_query, delete_selected,
+        &toolbar_command_context},
+    {"atlas.refresh", 13u, 0u, 0u, refresh_query, refresh_directory,
+        &toolbar_command_context}
+};
+static const AstraCommandScope toolbar_command_scope = {
+    NULL, toolbar_command_table, 4u};
+static const AstraToolbarCommand toolbar_actions[] = {
+    {"atlas.folder", 12u, "New drawer", 10u,
+        ASTRA_TOOLBAR_ICON_OPEN, {0u, 0u}},
+    {"atlas.open", 10u, "Open", 4u,
+        ASTRA_TOOLBAR_ICON_FORWARD, {0u, 0u}},
+    {"atlas.delete", 12u, "Delete", 6u,
+        ASTRA_TOOLBAR_ICON_TRASH, {0u, 0u}},
+    {"atlas.refresh", 13u, "Refresh", 7u,
+        ASTRA_TOOLBAR_ICON_RESTART, {0u, 0u}}
+};
+static const AstraToolbarGroup toolbar_groups[] = {
+    {"File", 4u, 0u, 3u, 0u, ASTRA_TOOLBAR_GROUP_PINNED, {0u, 0u}},
+    {"View", 4u, 3u, 1u, 1u, 0u, {0u, 0u}}
+};
+
+static AstraResult fit_toolbar(void)
+{
+    AstraToolbarFit fit = ASTRA_TOOLBAR_FIT_INIT;
+    AstraResult result = astra_interface_toolbar_actions_fit(&toolbar,
+        &toolbar_ui, width, ASTRA_TOOLBAR_LABELS, &fit);
+
+    return result == ASTRA_ERROR_NO_RESOURCES ? ASTRA_OK : result;
+}
+
+static AstraResult init_toolbar(AstraHandle gui)
+{
+    AstraToolbarActionsInfo info = ASTRA_TOOLBAR_ACTIONS_INFO_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+
+    toolbar_command_context.gui = gui;
+    for (uint32_t at = 0u; at < TOOLBAR_CONTROL_COUNT; ++at)
+        toolbar_controls[at] = (AstraControl)ASTRA_CONTROL_INIT;
+    info.first_id = TOOLBAR_FIRST_ID;
+    info.groups = toolbar_groups;
+    info.group_count = sizeof(toolbar_groups) / sizeof(toolbar_groups[0]);
+    info.actions = toolbar_actions;
+    info.action_count = sizeof(toolbar_actions) / sizeof(toolbar_actions[0]);
+    info.scope = &toolbar_command_scope;
+    if (astra_interface_toolbar_actions_control_count(&info) !=
+            TOOLBAR_CONTROL_COUNT ||
+        astra_interface_toolbar_actions_init(&toolbar, toolbar_controls,
+            &info) != ASTRA_OK ||
+        astra_interface_ui_init(&toolbar_ui, toolbar_controls,
+            TOOLBAR_CONTROL_COUNT, width, height) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    layout.direction = ASTRA_FLEX_COLUMN;
+    layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
+    if (astra_interface_ui_layout(&toolbar_ui, &layout) != ASTRA_OK ||
+        astra_interface_toolbar_actions_refresh(&toolbar, &toolbar_ui) !=
+            ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return fit_toolbar();
+}
+
 static AstraResult run(AstraHandle gui)
 {
     AstraContextMenu context_menu = ASTRA_CONTEXT_MENU_INIT;
@@ -836,12 +942,21 @@ static AstraResult run(AstraHandle gui)
         result = astra_window_event_try(&window, &event);
         while (result == ASTRA_OK) {
             AstraUIAction action = ASTRA_UI_ACTION_INIT;
+            AstraUIAction toolbar_action = ASTRA_UI_ACTION_INIT;
             int handled = 0;
             AstraResult menu_result = astra_interface_context_menu_handle_event(
                 &context_menu, &event, &handled);
             if (handled) {
                 if (menu_result != ASTRA_OK)
                     (void)astra_log_failure("atlas menu command", (uint32_t)(-menu_result));
+                result = astra_window_event_try(&window, &event);
+                continue;
+            }
+            if (astra_interface_toolbar_actions_handle_event(&toolbar,
+                    &event, &handled) != ASTRA_OK)
+                return ASTRA_ERROR_IO;
+            if (handled) {
+                repaint = 1u;
                 result = astra_window_event_try(&window, &event);
                 continue;
             }
@@ -882,16 +997,38 @@ static AstraResult run(AstraHandle gui)
                 result = astra_window_event_try(&window, &event);
                 continue;
             }
+            if (astra_interface_ui_handle_event(&toolbar_ui, &event,
+                    &toolbar_action) != ASTRA_OK)
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+            if (event.type == ASTRA_WINDOW_EVENT_RESIZE &&
+                fit_toolbar() != ASTRA_OK)
+                return ASTRA_ERROR_IO;
+            AstraResult toolbar_result =
+                astra_interface_toolbar_actions_handle_action(&toolbar,
+                    &window, &toolbar_action, &handled);
+            if (handled) {
+                if (toolbar_result != ASTRA_OK) {
+                    (void)astra_log_failure("atlas toolbar command",
+                        (uint32_t)(-toolbar_result));
+                    open_error(gui, toolbar_result);
+                }
+                repaint = 1u;
+                result = astra_window_event_try(&window, &event);
+                continue;
+            }
+            if (toolbar_result != ASTRA_OK) return toolbar_result;
             if (astra_interface_ui_handle_event(&ui, &event, &action) != ASTRA_OK)
                 return ASTRA_ERROR_INVALID_ARGUMENT;
             if (event.type == ASTRA_WINDOW_EVENT_RESIZE && layout() != ASTRA_OK)
                 return ASTRA_ERROR_IO;
             if (event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
+                event.data.pointer.y >= TOOLBAR_HEIGHT &&
                 (action.type == ASTRA_UI_ACTION_CONTEXT_MENU ||
                  (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u)) {
                 uint32_t index = hit_entry(event.data.pointer.x, event.data.pointer.y);
                 if (action.type == ASTRA_UI_ACTION_CONTEXT_MENU) {
                     menu_index = index;
+                    selected_index = index;
                     uint32_t count = 0u;
                     memset(menu_parents, 0, sizeof(menu_parents));
                     if (index == UINT32_MAX && desktop_folder_root()) {
@@ -928,13 +1065,22 @@ static AstraResult run(AstraHandle gui)
                             open_error(gui, opened);
                         }
                     } else clicked_index = index;
+                    selected_index = index;
                 }
+                if (astra_interface_toolbar_actions_refresh(&toolbar,
+                        &toolbar_ui) != ASTRA_OK)
+                    return ASTRA_ERROR_IO;
             }
             result = astra_window_event_try(&window, &event);
         }
         if (result != ASTRA_ERROR_WOULD_BLOCK)
             return result;
+        if (astra_interface_toolbar_actions_refresh(&toolbar,
+                &toolbar_ui) != ASTRA_OK)
+            return ASTRA_ERROR_IO;
         if (astra_interface_ui_damage(&ui, &damage) == ASTRA_OK)
+            repaint = 1u;
+        if (astra_interface_ui_damage(&toolbar_ui, &damage) == ASTRA_OK)
             repaint = 1u;
         if (repaint != 0u && paint() != ASTRA_OK)
             return ASTRA_ERROR_IO;
@@ -1036,6 +1182,10 @@ int astra_main(const AstraStartupInfo *startup)
         result = build_view();
     }
     if (result == ASTRA_OK) {
+        step = "toolbar";
+        result = init_toolbar(gui->handle);
+    }
+    if (result == ASTRA_OK) {
         step = "first paint";
         result = paint();
     }
@@ -1057,6 +1207,7 @@ int astra_main(const AstraStartupInfo *startup)
     (void)astra_close(ready->handle);
     if (result == ASTRA_OK)
         result = run(gui->handle);
+    (void)astra_interface_toolbar_actions_close(&toolbar);
     __atomic_store_n(&cancelled, 1u, __ATOMIC_RELEASE);
     if (astra_window_event_wait_handle(&window) != ASTRA_INVALID_HANDLE) {
         AstraResult ignored = astra_window_close(&window);
