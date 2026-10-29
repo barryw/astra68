@@ -107,6 +107,23 @@ def font3_story():
     return bytes(data)
 
 
+def font3_display_story():
+    """Keep the graphics and normal glyphs visible until a key is pressed."""
+    data = bytearray(font3_story())
+    program = bytes.fromhex(
+        "be 04 7f 03 10"  # select graphics font 3
+        "e5 7f 41"        # draw its 'A' glyph
+        "be 04 7f 01 11"  # restore normal font 1
+        "e5 7f 42"        # draw an ordinary 'B'
+        "f6 7f 01 12"     # VAR:22 read_char 1 -> global 2
+        "ba"              # quit after a key
+    )
+    data[0x81:] = bytes(len(data) - 0x81)
+    data[0x81:0x81 + len(program)] = program
+    data[28:30] = be16(sum(data[64:]) & 0xffff)
+    return bytes(data)
+
+
 def blorb(sound_tag, sound_payload):
     resources = ((b"Pict", 7, b"PNG ", png()),
                  (b"Snd ", 3, sound_tag, sound_payload))
@@ -131,6 +148,7 @@ def main():
     aiff_data = aiff()
     (args.directory / "media.z6").write_bytes(story())
     (args.directory / "font3.z6").write_bytes(font3_story())
+    (args.directory / "font3-display.z6").write_bytes(font3_display_story())
     (args.directory / "media.png").write_bytes(png())
     (args.directory / "media.aiff").write_bytes(b"FORM" +
                                                  be32(len(aiff_data)) + aiff_data)

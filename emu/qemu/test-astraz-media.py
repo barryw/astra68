@@ -45,7 +45,8 @@ def bundle(temporary, executable, mod):
     if mod:
         shutil.copyfile(destination / "media-mod.blb",
                         destination / "media.blb")
-    for extra in ("media-mod.blb", "media.mod", "media.png", "font3.z6"):
+    for extra in ("media-mod.blb", "media.mod", "media.png", "font3.z6",
+                  "font3-display.z6"):
         (destination / extra).unlink()
     manifest = (MIXER_PROBE / "manifest").read_text(encoding="ascii")
     manifest = manifest.replace("org.astra.sdl-mixer-probe",

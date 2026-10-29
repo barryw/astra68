@@ -36,6 +36,8 @@ then a font 1 event followed by the second. In the final GUI gate, the font 3
 character must use the standard adjacent 8 × 8 graphics glyph, rather than the
 ordinary letter A. This follows the [Z-machine Standard's font 3 bitmap and
 spacing contract](https://www.inform-fiction.org/zmachine/standards/z1point1/sect16.html).
+`font3-display.z6` uses the same sequence but waits at `read_char` so DE25 can
+capture both glyphs before the story exits.
 Run `sh emu/qemu/astraz-media/test-font3-host.sh` to generate, compile and
 assert the event order. The native-engine host trace now passes with two
 characters and `font3=1` when the host advertises 8 × 8 font metrics. This

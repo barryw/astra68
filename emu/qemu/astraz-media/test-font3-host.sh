@@ -18,4 +18,9 @@ awk '
     /char window=0 U\+0042/ { if (state == 3) state = 4 }
     END { exit state == 4 ? 0 : 1 }
 ' "$temporary/trace"
+"$temporary/build/astraz-host-trace" "$temporary/font3-display.z6" \
+    "$temporary/media.blb" 2 > "$temporary/display-trace"
+grep -q 'INPUT key timeout=0 cursor=1' "$temporary/display-trace"
+grep -q 'RESULT status=0 .*characters=2 reads=1 .*font3=1 ' \
+    "$temporary/display-trace"
 printf 'AstraZ Z6 graphics font 3 event order: PASS\n'
