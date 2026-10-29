@@ -511,6 +511,7 @@ int astra_surface_lines(AstraSurfaceView *surface,
     AstraDrawListCommand *command;
     AstraDrawListSegment *payload;
     uint32_t bytes;
+    uint32_t aligned;
 
     if (!clip_valid(surface) ||
         (count != 0u && lines == NULL) ||
@@ -536,13 +537,15 @@ int astra_surface_lines(AstraSurfaceView *surface,
             return 0;
     header = draw_header(surface);
     bytes = count * (uint32_t)sizeof(AstraDrawListSegment);
-    if (bytes > ASTRA_DRAW_LIST_PAYLOAD_BYTES - header->payload_bytes)
+    aligned = (header->payload_bytes + 3u) & ~3u;
+    if (aligned > ASTRA_DRAW_LIST_PAYLOAD_BYTES ||
+        bytes > ASTRA_DRAW_LIST_PAYLOAD_BYTES - aligned)
         return 0;
     command = append_command(surface, ASTRA_DRAW_LIST_LINES);
     if (command == NULL) return 0;
     command->color = draw_color(color);
     command->payload_offset = ASTRA_DRAW_LIST_PAYLOAD_OFFSET +
-                              header->payload_bytes;
+                              aligned;
     command->payload_bytes = bytes;
     payload = (AstraDrawListSegment *)(void *)
         ((uint8_t *)(void *)surface->pixels + command->payload_offset);
@@ -550,7 +553,7 @@ int astra_surface_lines(AstraSurfaceView *surface,
         payload[at] = (AstraDrawListSegment){
             (int16_t)lines[at].x0, (int16_t)lines[at].y0,
             (int16_t)lines[at].x1, (int16_t)lines[at].y1};
-    header->payload_bytes += bytes;
+    header->payload_bytes = aligned + bytes;
     return 1;
 }
 

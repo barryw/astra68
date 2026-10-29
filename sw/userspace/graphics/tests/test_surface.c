@@ -1497,7 +1497,7 @@ static void test_draw_list_lines_batch(void)
 {
     uint8_t storage[ASTRA_DRAW_LIST_AREA_BYTES];
     AstraSurfaceView view;
-    const AstraDrawListHeader *header;
+    AstraDrawListHeader *header;
     const AstraDrawListCommand *command;
     const AstraDrawListSegment *payload;
     AstraSurfaceLine lines[] = {
@@ -1506,21 +1506,25 @@ static void test_draw_list_lines_batch(void)
 
     assert(astra_draw_list_view_init(&view, storage, sizeof(storage),
                                      80u, 40u));
+    header = (AstraDrawListHeader *)(void *)storage;
+    header->payload_bytes = 1u; /* Prior text leaves an odd payload offset. */
     assert(astra_surface_lines(&view, lines, 3u, 0xffffu));
-    header = (const AstraDrawListHeader *)(const void *)storage;
     command = (const AstraDrawListCommand *)(const void *)(header + 1);
     payload = (const AstraDrawListSegment *)(const void *)
         (storage + command->payload_offset);
     assert(header->command_count == 1u &&
-           header->payload_bytes == 3u * sizeof(AstraDrawListSegment) &&
+           header->payload_bytes == 4u +
+               3u * sizeof(AstraDrawListSegment) &&
+           (command->payload_offset & 3u) == 0u &&
            command->operation == ASTRA_DRAW_LIST_LINES &&
-           command->payload_bytes == header->payload_bytes &&
+           command->payload_bytes == 3u * sizeof(AstraDrawListSegment) &&
            payload[0].x0 == 1 && payload[1].y1 == 8 &&
            payload[2].x0 == -2);
     lines[0].x0 = INT16_MAX + 1;
     assert(!astra_surface_lines(&view, lines, 3u, 0xffffu));
     assert(header->command_count == 1u &&
-           header->payload_bytes == 3u * sizeof(AstraDrawListSegment));
+           header->payload_bytes == 4u +
+               3u * sizeof(AstraDrawListSegment));
     assert(astra_surface_lines(&view, NULL, 0u, 0xffffu));
 }
 
