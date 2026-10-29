@@ -639,7 +639,8 @@ static void test_append_view(const AstraSurface *content)
     /* Borrowed icon BLITs require an explicit live source allowlist. */
     {
         AstraSurface icon = *content;
-        const AstraSurface *sources[1] = {&icon};
+        AstraSurface forged = *content;
+        const AstraSurface *sources[3] = {&icon, NULL, &icon};
 
         icon._private_id += 100u;
         icon._private_width = 64u;
@@ -660,15 +661,21 @@ static void test_append_view(const AstraSurface *content)
         CHECK(astra_draw_list_append_view(&list, &view) ==
               ASTRA_ERROR_INVALID_ARGUMENT);
         CHECK(astra_draw_list_append_view_with_sources(&list, &view,
-              sources, 1u) == ASTRA_OK);
+              sources, 3u) == ASTRA_OK);
         CHECK(((AstraDrawListHeader *)list._private_commands)->command_count == 1u);
         commands[0].source_width = 65u;
         CHECK(astra_draw_list_append_view_with_sources(&list, &view,
-              sources, 1u) == ASTRA_ERROR_INVALID_ARGUMENT);
+              sources, 3u) == ASTRA_ERROR_INVALID_ARGUMENT);
         commands[0].source_width = 64u;
+        forged._private_id = icon._private_id;
+        forged._private_handle += 1u;
+        sources[2] = &forged;
+        CHECK(astra_draw_list_append_view_with_sources(&list, &view,
+              sources, 3u) == ASTRA_ERROR_INVALID_ARGUMENT);
+        sources[2] = &icon;
         icon._private_window += 1u;
         CHECK(astra_draw_list_append_view_with_sources(&list, &view,
-              sources, 1u) == ASTRA_ERROR_INVALID_HANDLE);
+              sources, 3u) == ASTRA_ERROR_INVALID_HANDLE);
         CHECK(astra_draw_list_close(&list) == ASTRA_OK);
     }
 

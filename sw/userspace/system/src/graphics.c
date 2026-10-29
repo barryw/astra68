@@ -850,12 +850,16 @@ AstraResult astra_draw_list_append_view_with_sources(AstraDrawList *draw_list,
     for (uint32_t at = 0u; at < source_count; ++at) {
         const AstraSurface *candidate = sources[at];
 
+        if (candidate == NULL) continue;
         if (!surface_live(candidate) ||
             candidate->_private_window != draw_list->_private_window ||
             candidate->_private_id == draw_list->_private_target)
             return ASTRA_ERROR_INVALID_HANDLE;
         for (uint32_t before = 0u; before < at; ++before)
-            if (sources[before]->_private_id == candidate->_private_id)
+            if (sources[before] != NULL &&
+                sources[before]->_private_id == candidate->_private_id &&
+                sources[before]->_private_handle !=
+                    candidate->_private_handle)
                 return ASTRA_ERROR_INVALID_ARGUMENT;
     }
     for (uint32_t at = 0u; at < source->command_count; ++at) {
@@ -893,7 +897,8 @@ AstraResult astra_draw_list_append_view_with_sources(AstraDrawList *draw_list,
             uint32_t match = source_count;
 
             for (uint32_t candidate = 0u; candidate < source_count; ++candidate)
-                if (sources[candidate]->_private_id == command->source) {
+                if (sources[candidate] != NULL &&
+                    sources[candidate]->_private_id == command->source) {
                     match = candidate;
                     break;
                 }
