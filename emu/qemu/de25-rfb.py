@@ -166,6 +166,18 @@ def double_click(connection, x, y):
         time.sleep(0.05)
 
 
+def drag(connection, x0, y0, x1, y1):
+    send_pointer(connection, x0, y0)
+    send_pointer(connection, x0, y0, 1)
+    for step in range(1, 11):
+        x = x0 + (x1 - x0) * step // 10
+        y = y0 + (y1 - y0) * step // 10
+        send_pointer(connection, x, y, 1)
+        time.sleep(0.05)
+    send_pointer(connection, x1, y1)
+    time.sleep(0.25)
+
+
 def qmp_execute(stream, command, arguments=None):
     request = {"execute": command}
     if arguments is not None:
@@ -208,6 +220,9 @@ def main():
                                 type=int)
     pointer_action.add_argument("--double-click", nargs=2,
                                 metavar=("X", "Y"), type=int)
+    pointer_action.add_argument("--drag", nargs=4,
+                                metavar=("X0", "Y0", "X1", "Y1"),
+                                type=int)
     parser.add_argument("--qmp", default="/run/astra/qemu/qmp.sock")
     arguments = parser.parse_args()
     if arguments.verify_rfb_pointer and arguments.pointer is None:
@@ -222,11 +237,14 @@ def main():
     mover = None
     try:
         coordinates = arguments.double_click or arguments.pointer
+        if arguments.drag is not None:
+            coordinates = arguments.drag
         frame = None
         if coordinates is not None:
-            x, y = coordinates
-            if not 0 <= x < width or not 0 <= y < height:
+            if any(not 0 <= x < width or not 0 <= y < height
+                   for x, y in zip(coordinates[::2], coordinates[1::2])):
                 parser.error("pointer coordinates must be inside the display")
+            x, y = coordinates[:2]
             if arguments.verify_rfb_pointer:
                 frame, _ = capture(connection, width, height,
                                    bytes_per_pixel)
@@ -235,6 +253,8 @@ def main():
             elif arguments.double_click:
                 double_click(connection, x, y)
                 time.sleep(2)
+            elif arguments.drag:
+                drag(connection, *arguments.drag)
             else:
                 send_pointer(connection, x, y)
         if arguments.keys is not None:
