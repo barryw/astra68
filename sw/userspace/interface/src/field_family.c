@@ -5,6 +5,72 @@
 #include <limits.h>
 #include "control_internal.h"
 
+AstraResult astra_interface_drop_target_init(AstraControl controls[2],
+    const AstraDropTargetInfo *info)
+{
+    AstraContainerInfo container = ASTRA_CONTAINER_INFO_INIT;
+    AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraResult result;
+
+    if (controls == NULL || info == NULL || info->size < sizeof(*info) ||
+        info->first_id == 0u || info->first_id == UINT32_MAX ||
+        info->visual_state > ASTRA_DROP_TARGET_REFUSE ||
+        info->minimum_width > UINT16_MAX ||
+        info->minimum_height > UINT16_MAX ||
+        !astra_interface_single_line_text_valid(info->message,
+                                                 info->message_length) ||
+        !astra_words_zero(info->reserved, 4u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    container.id = info->first_id;
+    container.layout.padding_left = container.layout.padding_right = 12u;
+    container.layout.padding_top = container.layout.padding_bottom = 10u;
+    container.layout.align_items = ASTRA_FLEX_ALIGN_CENTER;
+    result = astra_interface_container_init(&controls[0], &container);
+    if (result != ASTRA_OK) return result;
+    controls[0]._private_style = ASTRA_CONTAINER_STYLE_DROP_TARGET;
+    controls[0]._private_value = (int64_t)info->visual_state;
+    item.minimum_width = info->minimum_width;
+    item.minimum_height = info->minimum_height;
+    result = astra_interface_control_set_flex(&controls[0], &item);
+    if (result != ASTRA_OK) return result;
+    label.id = info->first_id + 1u;
+    label.text = info->message;
+    label.text_length = info->message_length;
+    label.text_role = info->visual_state == ASTRA_DROP_TARGET_IDLE ?
+        ASTRA_TEXT_CLIENT_SECONDARY : ASTRA_TEXT_CLIENT_PRIMARY;
+    result = astra_interface_label_init(&controls[1], &label);
+    if (result != ASTRA_OK) return result;
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = info->first_id;
+    return astra_interface_control_set_flex(&controls[1], &item);
+}
+
+AstraResult astra_interface_drop_target_set(AstraUIContext *context,
+    AstraControl controls[2], uint32_t visual_state,
+    const char *message, uint32_t message_length)
+{
+    AstraResult result;
+
+    if (context == NULL || controls == NULL ||
+        visual_state > ASTRA_DROP_TARGET_REFUSE ||
+        controls[0]._private_control_kind != ASTRA_CONTROL_CONTAINER ||
+        controls[0]._private_style != ASTRA_CONTAINER_STYLE_DROP_TARGET ||
+        controls[1]._private_control_kind != ASTRA_CONTROL_LABEL ||
+        controls[1]._private_parent_id != controls[0]._private_id ||
+        !astra_interface_single_line_text_valid(message, message_length))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_interface_control_invalidate(context, &controls[0]);
+    if (result != ASTRA_OK) return result;
+    result = astra_interface_control_set_text(context, &controls[1],
+                                              message, message_length);
+    if (result != ASTRA_OK) return result;
+    controls[0]._private_value = (int64_t)visual_state;
+    controls[1]._private_style = visual_state == ASTRA_DROP_TARGET_IDLE ?
+        ASTRA_TEXT_CLIENT_SECONDARY : ASTRA_TEXT_CLIENT_PRIMARY;
+    return ASTRA_OK;
+}
+
 AstraResult astra_interface_segmented_field_init(AstraControl *controls,
     uint32_t control_count, const AstraSegmentedFieldInfo *info)
 {
