@@ -1053,8 +1053,12 @@ static uint32_t action(const AstraUIAction *event)
             amiga_encoding = amiga_encoding == ASTRA_FONT_ENCODING_ISO_8859_1 ?
                 ASTRA_FONT_ENCODING_ISO_8859_2 :
                 ASTRA_FONT_ENCODING_ISO_8859_1;
-            message = NULL;
-            if (build_controls() != ASTRA_STATUS_OK) return FONTS_FAIL_CONTROL;
+            const char *label = amiga_encoding == ASTRA_FONT_ENCODING_ISO_8859_1 ?
+                "Amiga encoding: ISO-8859-1" : "Amiga encoding: ISO-8859-2";
+            if (astra_interface_control_set_text(&ui,
+                CONTROL(FONTS_ENCODING), label,
+                (uint32_t)strlen(label)) != ASTRA_OK)
+                return FONTS_FAIL_CONTROL;
             return present(NULL);
         }
         if (event->control_id >= FONTS_FILE_PANEL_FIRST &&
