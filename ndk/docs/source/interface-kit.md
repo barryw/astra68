@@ -1,5 +1,24 @@
 # Interface Kit
 
+## Sheets and display-owned notices
+
+Create a Sheet with `astra_window_sheet_create`, a live parent window, and
+`AstraWindowCreateInfo.type = ASTRA_WINDOW_SHEET`. The creation `x` and `y` are
+offsets from the parent's content origin. The GUI service validates parent
+generation and session ownership, keeps the Sheet attached when the parent
+moves, hides it while the parent is minimized, and closes it with the parent.
+The Sheet blocks only its parent; sibling windows remain usable. Do not set
+`ASTRA_WINDOW_MODAL` or `ASTRA_WINDOW_RESIZABLE` on a Sheet.
+
+Use `astra_window_tooltip_show` for a short, parent-owned hint at a client-local
+anchor. The display applies a 500 ms delay and closes it on pointer motion,
+keyboard activity, focus loss, owner close, or timeout. Use
+`astra_window_notification_show` for an immediate work-area notice that
+expires or closes on a pointer click. Both accept up to 48 single-line UTF-8
+bytes, use the display's shared overlay renderer, and leave input with the
+underlying window. `astra_window_overlay_hide` dismisses the caller's notice.
+An active menu takes priority over notices.
+
 `interface.library.9` is the shared implementation for native window controls,
 integer flex layout, shared transient menus, TextSurface presentation, the typed
 system clipboard, and per-document undo histories. Applications call its

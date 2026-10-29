@@ -139,7 +139,7 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             assert(port == 0x303u && call->request_size == sizeof(*request));
             assert(request->window == 7u && request->generation != 0u);
             assert(request->action >= ASTRA_GUI_WINDOW_QUERY &&
-                   request->action <= ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT &&
+                   request->action <= ASTRA_GUI_WINDOW_OVERLAY_HIDE &&
                    request->action != ASTRA_GUI_WINDOW_CLOSE);
             assert(call->reply_index == 0u);
             if (request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ||
@@ -529,6 +529,23 @@ int main(void)
         assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
         next_event_type = ASTRA_WINDOW_EVENT_POINTER_MOTION;
     }
+    assert(astra_window_tooltip_show(&window, "Hint", 4u,
+        12u, 18u, 0u) == ASTRA_OK);
+    assert(last_command.action == ASTRA_GUI_WINDOW_TOOLTIP_SHOW &&
+           last_command.x == 12u && last_command.y == 18u &&
+           last_command.title_length == 4u);
+    assert(astra_window_notification_show(&window, "Saved", 5u,
+        3000u) == ASTRA_OK);
+    assert(last_command.action == ASTRA_GUI_WINDOW_NOTIFICATION_SHOW &&
+           last_command.flags == 3000u);
+    assert(astra_window_overlay_hide(&window) == ASTRA_OK);
+    assert(last_command.action == ASTRA_GUI_WINDOW_OVERLAY_HIDE);
+    before = call_count;
+    assert(astra_window_tooltip_show(&window, "", 0u,
+        0u, 0u, 0u) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_window_notification_show(&window, "long", 4u,
+        500u) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(call_count == before);
     before = call_count;
     {
         uint32_t before_ports = port_sequence;

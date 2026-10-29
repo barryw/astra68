@@ -2891,6 +2891,14 @@ static void test_sheet_windows(void)
     assert(state.windows[active_window(&state)].id == 3u);
     assert(activate(&state, &theme, 2u, 1, 0u));
     assert(state.windows[active_window(&state)].id == 2u);
+    {
+        AstraGuiWindowCommand lower = {.window = 3u,
+            .action = ASTRA_GUI_WINDOW_LOWER};
+        int lowered = 0;
+
+        assert(apply_command(&state, &theme, &lower, &closed, &lowered) ==
+               ASTRA_STATUS_BUSY && !lowered);
+    }
     assert(apply_command(&state, &theme, &command, &closed, &changed) ==
            ASTRA_STATUS_OK && changed);
     assert(state.windows[find_id(&state, 3u)].request.x == 200u &&
@@ -2917,6 +2925,73 @@ static void test_sheet_windows(void)
     closed.event_send = 0u;
     closed.vblank_signal = 0u;
     close_window(&closed);
+}
+
+static void test_notice_lifecycle(void)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayWindow windows[TEST_WINDOW_COUNT] = {0};
+    DisplayState state = {.windows = windows, .capacity = TEST_WINDOW_COUNT};
+    AstraGuiWindowCommand command = {.window = 1u, .generation = 1u,
+        .action = ASTRA_GUI_WINDOW_TOOLTIP_SHOW, .x = 12u, .y = 20u,
+        .title_length = 4u, .title = "Hint"};
+    AstraRenderBuilder builder;
+    AstraLogicalInputEvent pointer = {
+        .type = ASTRA_INPUT_EVENT_POINTER_BUTTON,
+        .flags = ASTRA_INPUT_LOGICAL_DOWN,
+        .code = ASTRA_INPUT_BUTTON_LEFT};
+    uint32_t effects = 0u, frame = 0u, timestamp = 0u;
+
+    add_window(&state, 0u, ASTRA_WINDOW_STANDARD, 100u, 100u,
+        300u, 190u, ASTRA_WINDOW_ACTIVE, ASTRA_WINDOW_GADGET_CLOSE);
+    astra_message_header_set(&command.header, sizeof(command),
+        ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+        ASTRA_GUI_WINDOW_COMMAND, 1u);
+    assert(valid_command(&command, sizeof(command), 1u, 1u, 300u, 190u));
+    assert(notice_open(&state, &theme, 0u, &command) == ASTRA_STATUS_OK);
+    assert(state.overlay == DISPLAY_OVERLAY_TOOLTIP &&
+           state.notice.visible == 0u &&
+           overlay_bounds(&state).valid == 0u);
+    assert(!notice_tick(&state, state.notice.show_at - 1u));
+    assert(notice_tick(&state, state.notice.show_at));
+    assert(overlay_bounds(&state).valid != 0u);
+    assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
+    assert(build_overlay_surface(&builder, &state, &theme));
+    assert(builder.command_count != 0u);
+    command.action = ASTRA_GUI_WINDOW_NOTIFICATION_SHOW;
+    command.x = command.y = 0u;
+    command.title_length = 5u;
+    memcpy(command.title, "Saved", 5u);
+    assert(valid_command(&command, sizeof(command), 1u, 1u, 300u, 190u));
+    assert(notice_open(&state, &theme, 0u, &command) == ASTRA_STATUS_OK);
+    assert(state.overlay == DISPLAY_OVERLAY_NOTIFICATION &&
+           state.notice.visible != 0u);
+    state.pointer_x = 120;
+    state.pointer_y = 160;
+    assert(handle_pointer(&state, &pointer, &effects, &frame, &timestamp) ==
+           ASTRA_STATUS_OK);
+    assert(state.overlay == DISPLAY_OVERLAY_NONE &&
+           (effects & DISPLAY_POINTER_RENDER) != 0u);
+    assert(notice_open(&state, &theme, 0u, &command) == ASTRA_STATUS_OK);
+    assert(notice_tick(&state, state.notice.hide_at));
+    assert(state.overlay == DISPLAY_OVERLAY_NONE);
+    command.title[0] = '\n';
+    assert(!valid_command(&command, sizeof(command), 1u, 1u, 300u, 190u));
+    command.title[0] = 'S';
+    assert(notice_open(&state, &theme, 0u, &command) == ASTRA_STATUS_OK);
+    {
+        AstraGuiWindowCommand close = {.window = 1u,
+            .action = ASTRA_GUI_WINDOW_CLOSE};
+        DisplayWindow closed = {0};
+        int changed = 0;
+
+        assert(apply_command(&state, &theme, &close, &closed, &changed) ==
+               ASTRA_STATUS_OK && changed);
+        assert(state.count == 0u && state.overlay == DISPLAY_OVERLAY_NONE);
+        closed.event_send = 0u;
+        closed.vblank_signal = 0u;
+        close_window(&closed);
+    }
 }
 
 int main(void)
@@ -2986,6 +3061,7 @@ int main(void)
     test_menu_key_ownership();
     test_modal_windows();
     test_sheet_windows();
+    test_notice_lifecycle();
     test_dense_menu_render();
     test_context_menu_transport();
     test_menu_bar_transport();

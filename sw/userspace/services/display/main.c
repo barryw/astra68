@@ -55,6 +55,8 @@
 enum {
     DISPLAY_OVERLAY_NONE = 0u,
     DISPLAY_OVERLAY_MENU,
+    DISPLAY_OVERLAY_TOOLTIP,
+    DISPLAY_OVERLAY_NOTIFICATION,
 };
 
 _Static_assert(ASTRA_RENDER_BATCH_SCANOUT1_OFFSET +
@@ -191,6 +193,17 @@ typedef struct DisplaySession {
     uint32_t icon_length;
 } DisplaySession;
 
+typedef struct DisplayNotice {
+    AstraControlFrame frame;
+    uint32_t owner;
+    uint32_t revision;
+    uint64_t show_at;
+    uint64_t hide_at;
+    uint16_t length;
+    uint8_t visible;
+    char text[ASTRA_WINDOW_TITLE_MAX];
+} DisplayNotice;
+
 typedef struct DisplayState {
     DisplayWindow *windows;
     DisplayFontFace *ui_font;
@@ -246,6 +259,7 @@ typedef struct DisplayState {
     uint8_t system_initialized;
     uint8_t system_pending;
     uint8_t overlay;
+    DisplayNotice notice;
     AstraMenu menu;
     AstraMenu submenu;
     AstraMenuItem *menu_rows;
@@ -741,12 +755,31 @@ static DamageRect overlay_bounds(const DisplayState *state)
 {
     AstraMenuState menu;
 
-    if (state->overlay != DISPLAY_OVERLAY_NONE &&
+    if ((state->overlay == DISPLAY_OVERLAY_TOOLTIP ||
+         state->overlay == DISPLAY_OVERLAY_NOTIFICATION) &&
+        state->notice.visible != 0u)
+        return (DamageRect){state->notice.frame.x,
+            state->notice.frame.y,
+            state->notice.frame.x + (int32_t)state->notice.frame.width,
+            state->notice.frame.y + (int32_t)state->notice.frame.height,
+            1u};
+    if (state->overlay == DISPLAY_OVERLAY_MENU &&
         astra_interface_menu_get_state(&state->menu, &menu) == ASTRA_OK)
         return (DamageRect){menu.frame.x, menu.frame.y,
             menu.frame.x + (int32_t)menu.frame.width,
             menu.frame.y + (int32_t)menu.frame.height, 1u};
     return (DamageRect){0};
+}
+
+static void notice_end(DisplayState *state)
+{
+    if (state->overlay != DISPLAY_OVERLAY_TOOLTIP &&
+        state->overlay != DISPLAY_OVERLAY_NOTIFICATION)
+        return;
+    damage_both(state, overlay_bounds(state));
+    state->overlay = DISPLAY_OVERLAY_NONE;
+    state->notice = (DisplayNotice){0};
+    state->overlay_drawn = DISPLAY_OVERLAY_NONE;
 }
 
 static DamageRect submenu_bounds(const DisplayState *state)
@@ -1077,6 +1110,9 @@ static uint32_t menu_install(DisplayState *state, const AstraMenu *menu,
     uint32_t bytes, offset;
     int cached;
 
+    if (state->overlay == DISPLAY_OVERLAY_TOOLTIP ||
+        state->overlay == DISPLAY_OVERLAY_NOTIFICATION)
+        notice_end(state);
     if (state->overlay != DISPLAY_OVERLAY_NONE)
         return ASTRA_STATUS_BUSY;
     if (astra_interface_menu_get_state(menu, &info) != ASTRA_OK ||
@@ -1123,7 +1159,10 @@ static void set_overlay(DisplayState *state, uint8_t overlay)
     AstraMenu menu = ASTRA_MENU_INIT;
 
     if (overlay == DISPLAY_OVERLAY_NONE) {
-        menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+        if (state->overlay == DISPLAY_OVERLAY_MENU)
+            menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
+        else
+            notice_end(state);
         return;
     }
     if (astra_interface_menu_init(&menu, system_menu_items,
@@ -1340,6 +1379,11 @@ static int activate(DisplayState *state, const AstraTheme *theme,
     if (id != 0u) {
         index = modal_window(state, index);
         id = state->windows[index].id;
+    }
+    if (state->overlay == DISPLAY_OVERLAY_TOOLTIP &&
+        id != state->notice.owner) {
+        notice_end(state);
+        changed = 1;
     }
     if (id != 0u &&
         state->windows[index].request.type == ASTRA_WINDOW_DESKTOP) {
@@ -2397,6 +2441,45 @@ static int build_overlay_surface(AstraRenderBuilder *builder,
     state->submenu_pending = 0u;
     if (state->overlay == DISPLAY_OVERLAY_NONE)
         return 1;
+    if (state->overlay == DISPLAY_OVERLAY_TOOLTIP ||
+        state->overlay == DISPLAY_OVERLAY_NOTIFICATION) {
+        const DisplayNotice *notice = &state->notice;
+        int rendered;
+
+        if (notice->visible == 0u) return 1;
+        state->overlay_resource = astra_render_builder_surface_at(
+            builder, state->overlay_offset, state->overlay_capacity,
+            (uint16_t)notice->frame.width,
+            (uint16_t)notice->frame.height);
+        if (state->overlay_resource == 0u) return 0;
+        if (state->overlay_drawn == state->overlay &&
+            state->overlay_drawn_revision == notice->revision)
+            return 1;
+        rendered = astra_draw_list_view_init(&surface, menu_draw_list,
+            sizeof(menu_draw_list), (uint16_t)notice->frame.width,
+            (uint16_t)notice->frame.height);
+        if (!rendered) return 0;
+        astra_surface_fill_round(&surface, 0, 0,
+            notice->frame.width, notice->frame.height,
+            theme->control_radius, color(theme->client_border));
+        astra_surface_fill_round(&surface, 1, 1,
+            notice->frame.width - 2u, notice->frame.height - 2u,
+            theme->control_radius - 1u, color(theme->surface_raised));
+        astra_surface_ui_text(&surface, 12,
+            ((int32_t)notice->frame.height -
+             (int32_t)theme->control_font_height) / 2,
+            notice->text, notice->length, theme->control_font_height,
+            color(theme->client_text));
+        state->overlay_fonts.registry = state->fonts;
+        display_font_set_begin(&state->overlay_fonts);
+        rendered = astra_render_builder_replay_resolved(builder,
+            state->overlay_resource,
+            (const AstraDrawListHeader *)menu_draw_list, &resolver);
+        display_font_set_end(&state->overlay_fonts, rendered);
+        if (!rendered) return 0;
+        state->overlay_pending = 1u;
+        return 1;
+    }
     if (astra_interface_menu_get_state(&state->menu, &menu) != ASTRA_OK)
         return 0;
     state->overlay_resource = astra_render_builder_surface_at(
@@ -2650,7 +2733,8 @@ static uint32_t menu_open(DisplayState *state, const AstraTheme *theme,
     int persistent = command->action ==
         ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT;
 
-    if (!bar && (state->overlay != DISPLAY_OVERLAY_NONE || window->pending_menu.type != 0u ||
+    if (!bar && (state->overlay == DISPLAY_OVERLAY_MENU ||
+        window->pending_menu.type != 0u ||
         state->capture_window != 0u || grab_target(state) != state->count)
         ) return ASTRA_STATUS_BUSY;
     if (!bar && (window->state == ASTRA_WINDOW_STATE_MINIMIZED || modal_window(state, index) != index ||
@@ -2758,6 +2842,92 @@ done:
     astra_runtime_deallocate(rows);
     astra_runtime_deallocate(document);
     return status;
+}
+
+static uint32_t notice_open(DisplayState *state, const AstraTheme *theme,
+                            uint32_t index,
+                            const AstraGuiWindowCommand *command)
+{
+    DisplayNotice next = {0};
+    uint32_t width;
+    uint32_t height = theme->control_height + 12u;
+    uint32_t bytes;
+    uint32_t offset = state->overlay_offset;
+    int32_t x, y;
+    uint64_t now = astra_clock_monotonic();
+    uint64_t duration = (uint64_t)(command->flags != 0u ?
+        command->flags : command->action ==
+            ASTRA_GUI_WINDOW_TOOLTIP_SHOW ? 5000u : 7000u) *
+        UINT64_C(1000000);
+
+    if (state->overlay == DISPLAY_OVERLAY_MENU)
+        return ASTRA_STATUS_BUSY;
+    if (state->windows[index].state == ASTRA_WINDOW_STATE_MINIMIZED ||
+        modal_window(state, index) != index ||
+        (command->action == ASTRA_GUI_WINDOW_TOOLTIP_SHOW &&
+         active_window(state) != index))
+        return ASTRA_STATUS_ACCESS;
+    width = astra_surface_ui_text_width(command->title,
+        command->title_length, theme->control_font_height) + 24u;
+    if (width < 80u) width = 80u;
+    if (width > ASTRA_DISPLAY_WIDTH - 32u ||
+        height > DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP - 32u)
+        return ASTRA_STATUS_LIMIT;
+    bytes = align_media_bytes(width * height * 2u);
+    if (state->overlay_capacity < bytes) {
+        offset = display_media_allocate(state, NULL, UINT32_MAX, bytes);
+        if (offset == 0u) return ASTRA_STATUS_LIMIT;
+    }
+    if (command->action == ASTRA_GUI_WINDOW_TOOLTIP_SHOW) {
+        content_origin(theme, &state->windows[index], &x, &y);
+        x += command->x + 12;
+        y += command->y + 20;
+    } else {
+        x = ASTRA_DISPLAY_WIDTH - (int32_t)width - 16;
+        y = DISPLAY_WORK_BOTTOM - (int32_t)height - 16;
+    }
+    if (x < 0) x = 0;
+    if (y < (int32_t)DISPLAY_WORK_TOP) y = DISPLAY_WORK_TOP;
+    if (x + (int32_t)width > (int32_t)ASTRA_DISPLAY_WIDTH)
+        x = ASTRA_DISPLAY_WIDTH - (int32_t)width;
+    if (y + (int32_t)height > (int32_t)DISPLAY_WORK_BOTTOM)
+        y = DISPLAY_WORK_BOTTOM - (int32_t)height;
+    next.owner = state->windows[index].id;
+    next.frame = (AstraControlFrame){x, y, width, height};
+    next.length = command->title_length;
+    memcpy(next.text, command->title, next.length);
+    next.show_at = now + (command->action ==
+        ASTRA_GUI_WINDOW_TOOLTIP_SHOW ? UINT64_C(500000000) : 0u);
+    next.hide_at = next.show_at + duration;
+    next.visible = command->action ==
+        ASTRA_GUI_WINDOW_NOTIFICATION_SHOW;
+    next.revision = 1u;
+    notice_end(state);
+    state->overlay_offset = offset;
+    if (state->overlay_capacity < bytes) state->overlay_capacity = bytes;
+    state->notice = next;
+    state->overlay = command->action == ASTRA_GUI_WINDOW_TOOLTIP_SHOW ?
+        DISPLAY_OVERLAY_TOOLTIP : DISPLAY_OVERLAY_NOTIFICATION;
+    state->overlay_drawn = DISPLAY_OVERLAY_NONE;
+    damage_both(state, overlay_bounds(state));
+    return ASTRA_STATUS_OK;
+}
+
+static int notice_tick(DisplayState *state, uint64_t now)
+{
+    if (state->overlay != DISPLAY_OVERLAY_TOOLTIP &&
+        state->overlay != DISPLAY_OVERLAY_NOTIFICATION)
+        return 0;
+    if (now >= state->notice.hide_at) {
+        notice_end(state);
+        return 1;
+    }
+    if (state->notice.visible == 0u && now >= state->notice.show_at) {
+        state->notice.visible = 1u;
+        damage_both(state, overlay_bounds(state));
+        return 1;
+    }
+    return 0;
 }
 
 static uint32_t display_pointer_shape(DisplayState *state,
@@ -2985,7 +3155,8 @@ static uint32_t compose(void *storage, uint32_t fence,
     if (state->overlay != DISPLAY_OVERLAY_NONE) {
         DamageRect bounds = overlay_bounds(state);
 
-        if (!astra_render_builder_window_scene_layer(
+        if (bounds.valid != 0u &&
+            !astra_render_builder_window_scene_layer(
                 &builder, state->overlay_resource,
                 bounds.left, bounds.top, theme.window_radius, 1))
             return compose_failed(&builder, error, failure,
@@ -3312,6 +3483,9 @@ static void commit_render_state(DisplayState *state)
         state->overlay_drawn = state->overlay;
         if (astra_interface_menu_get_state(&state->menu, &menu) == ASTRA_OK)
             state->overlay_drawn_revision = menu.revision;
+        else if (state->overlay == DISPLAY_OVERLAY_TOOLTIP ||
+                 state->overlay == DISPLAY_OVERLAY_NOTIFICATION)
+            state->overlay_drawn_revision = state->notice.revision;
         state->overlay_pending = 0u;
     }
     state->submenu_pending = 0u;
@@ -3405,7 +3579,7 @@ static uint32_t render(uint32_t device, uint32_t irq,
                     *next_fence, state, &compose_status,
                     &last_builder_failure);
     if (bytes == 0u && compose_status == ASTRA_STATUS_LIMIT && state->overlay != DISPLAY_OVERLAY_NONE) {
-        menu_end(state, 0u, 0u, ASTRA_STATUS_LIMIT);
+        set_overlay(state, DISPLAY_OVERLAY_NONE);
         bytes = compose((void *)(uintptr_t)framebuffer[buffer].virtual_base,
                         *next_fence, state, &compose_status, &last_builder_failure);
     }
@@ -3587,7 +3761,7 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
         request->generation == 0u ||
         request->reserved16 != 0u || request->reserved != 0u ||
         request->action < ASTRA_GUI_WINDOW_QUERY ||
-        request->action > ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT ||
+        request->action > ASTRA_GUI_WINDOW_OVERLAY_HIDE ||
         request->title_length > ASTRA_WINDOW_TITLE_MAX)
         return 0;
     if (request->action == ASTRA_GUI_WINDOW_MENU_OPEN ||
@@ -3597,6 +3771,24 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
                request->x < content_width && request->y < content_height;
     if (request->action == ASTRA_GUI_WINDOW_MENU_CLOSE)
         return frame_zero && request->title_length == 0u && request->flags != 0u;
+    if (request->action == ASTRA_GUI_WINDOW_TOOLTIP_SHOW ||
+        request->action == ASTRA_GUI_WINDOW_NOTIFICATION_SHOW) {
+        if (request->width != 0u || request->height != 0u ||
+            request->title_length == 0u ||
+            (request->flags != 0u &&
+             (request->flags < 1000u || request->flags > 30000u)) ||
+            !astra_utf8_validate(request->title,
+                                 request->title_length, 0u) ||
+            memchr(request->title, '\n', request->title_length) != NULL ||
+            memchr(request->title, '\r', request->title_length) != NULL)
+            return 0;
+        return request->action == ASTRA_GUI_WINDOW_NOTIFICATION_SHOW ?
+            request->x == 0u && request->y == 0u :
+            request->x < content_width && request->y < content_height;
+    }
+    if (request->action == ASTRA_GUI_WINDOW_OVERLAY_HIDE)
+        return frame_zero && request->title_length == 0u &&
+               request->flags == 0u;
     if (request->action == ASTRA_GUI_WINDOW_MENU_BAR_SET ||
         request->action == ASTRA_GUI_WINDOW_MENU_BAR_CLEAR)
         return frame_zero && request->title_length == 0u && request->flags == 0u;
@@ -3697,6 +3889,9 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
         command->action != ASTRA_GUI_WINDOW_MENU_OPEN &&
         command->action != ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT &&
         command->action != ASTRA_GUI_WINDOW_MENU_CLOSE &&
+        command->action != ASTRA_GUI_WINDOW_TOOLTIP_SHOW &&
+        command->action != ASTRA_GUI_WINDOW_NOTIFICATION_SHOW &&
+        command->action != ASTRA_GUI_WINDOW_OVERLAY_HIDE &&
         command->action != ASTRA_GUI_WINDOW_CLOSE)
         return ASTRA_STATUS_UNSUPPORTED;
     switch (command->action) {
@@ -3704,6 +3899,9 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
     case ASTRA_GUI_WINDOW_MENU_OPEN:
     case ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT:
     case ASTRA_GUI_WINDOW_MENU_BAR_SET:
+    case ASTRA_GUI_WINDOW_TOOLTIP_SHOW:
+    case ASTRA_GUI_WINDOW_NOTIFICATION_SHOW:
+    case ASTRA_GUI_WINDOW_OVERLAY_HIDE:
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_MENU_BAR_CLEAR:
         if (state->menu_owner == window->id &&
@@ -3787,6 +3985,9 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
         }
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_LOWER:
+        if (window->request.type == ASTRA_WINDOW_SHEET &&
+            find_id(state, window->request.parent_window) != state->count)
+            return ASTRA_STATUS_BUSY;
         if ((window->request.flags & ASTRA_WINDOW_MODAL) != 0u &&
             window->state != ASTRA_WINDOW_STATE_MINIMIZED)
             for (uint32_t at = 0u; at < state->count; ++at)
@@ -4146,6 +4347,8 @@ static void close_sheets(DisplayState *state, const AstraTheme *theme,
             continue;
         }
         sheet = state->windows[at];
+        if (state->notice.owner == sheet.id)
+            notice_end(state);
         if (state->menu_owner == sheet.id)
             menu_end(state, 0u, 0u, ASTRA_STATUS_OK);
         damage_window(state, theme, &sheet);
@@ -4170,6 +4373,8 @@ static uint32_t apply_command(DisplayState *state, const AstraTheme *theme,
         if (closed->id != 0u) {
             uint32_t previous_count = state->count;
 
+            if (state->notice.owner == closed->id)
+                notice_end(state);
             close_sheets(state, theme, closed->id, changed);
             if (state->count != previous_count && top_visible(state) != 0u)
                 *changed |= activate(state, theme, top_visible(state), 0, 0u);
@@ -4246,7 +4451,7 @@ static uint32_t display_pointer_shape(DisplayState *state,
     uint32_t region = HIT_NONE;
     uint32_t index;
 
-    if (state->overlay != DISPLAY_OVERLAY_NONE)
+    if (state->overlay == DISPLAY_OVERLAY_MENU)
         return ASTRA_POINTER_SHAPE_DEFAULT;
     index = pointer_target(state, theme, &region, NULL);
 
@@ -4528,18 +4733,25 @@ static uint32_t handle_pointer(DisplayState *state,
         if (input->type == ASTRA_INPUT_EVENT_TEXT &&
             !astra_unicode_scalar_valid(input->code))
             return ASTRA_STATUS_INVALID;
+        if (input->type == ASTRA_INPUT_EVENT_KEY &&
+            (input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u &&
+            state->overlay == DISPLAY_OVERLAY_TOOLTIP) {
+            notice_end(state);
+            *effects |= DISPLAY_POINTER_RENDER;
+        }
         if (input->type == ASTRA_INPUT_EVENT_KEY && input->code < 256u) {
             uint32_t word = input->code >> 5;
             uint32_t bit = UINT32_C(1) << (input->code & 31u);
             int owned = (state->menu_keys[word] & bit) != 0u;
             if ((input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u) {
-                state->menu_text_owned = owned || state->overlay != DISPLAY_OVERLAY_NONE;
+                state->menu_text_owned = owned ||
+                    state->overlay == DISPLAY_OVERLAY_MENU;
                 if (state->menu_text_owned) state->menu_keys[word] |= bit;
             } else {
                 state->menu_keys[word] &= ~bit;
                 state->menu_text_owned = 0u;
                 /* A modifier pressed before opening still releases in its owner. */
-                if (!owned && state->overlay != DISPLAY_OVERLAY_NONE) {
+                if (!owned && state->overlay == DISPLAY_OVERLAY_MENU) {
                     index = keyboard_window(state);
                     if (index != state->count) {
                         AstraWindowEvent release = logical_key_event(input);
@@ -4549,12 +4761,13 @@ static uint32_t handle_pointer(DisplayState *state,
                     return ASTRA_STATUS_OK;
                 }
             }
-            if (owned && state->overlay == DISPLAY_OVERLAY_NONE) return ASTRA_STATUS_OK;
+            if (owned && state->overlay != DISPLAY_OVERLAY_MENU)
+                return ASTRA_STATUS_OK;
         }
         /* The normalized emitter sends text immediately after its key down. */
         if (input->type == ASTRA_INPUT_EVENT_TEXT && state->menu_text_owned != 0u)
             return ASTRA_STATUS_OK;
-        if (state->overlay != DISPLAY_OVERLAY_NONE)
+        if (state->overlay == DISPLAY_OVERLAY_MENU)
             return menu_input(state, input, effects);
         if (fullscreen_chord(input)) {
             if ((input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u)
@@ -4597,7 +4810,11 @@ static uint32_t handle_pointer(DisplayState *state,
     if (input->type == ASTRA_INPUT_EVENT_POINTER_MOTION) {
         state->pointer_x = input->value_x;
         state->pointer_y = input->value_y;
-        if (state->overlay != DISPLAY_OVERLAY_NONE)
+        if (state->overlay == DISPLAY_OVERLAY_TOOLTIP) {
+            notice_end(state);
+            *effects |= DISPLAY_POINTER_RENDER;
+        }
+        if (state->overlay == DISPLAY_OVERLAY_MENU)
             return menu_input(state, input, effects);
         index = pointer_target(state, &theme, &region, NULL);
         if (index != state->count) {
@@ -4664,7 +4881,16 @@ static uint32_t handle_pointer(DisplayState *state,
     if (input->type != ASTRA_INPUT_EVENT_POINTER_BUTTON)
         return ASTRA_STATUS_OK;
 
-    if (state->overlay == DISPLAY_OVERLAY_NONE &&
+    if ((state->overlay == DISPLAY_OVERLAY_TOOLTIP ||
+         state->overlay == DISPLAY_OVERLAY_NOTIFICATION) &&
+        (input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u &&
+        input->code >= ASTRA_INPUT_BUTTON_LEFT &&
+        input->code <= ASTRA_INPUT_BUTTON_RIGHT) {
+        notice_end(state);
+        *effects |= DISPLAY_POINTER_RENDER;
+    }
+
+    if (state->overlay != DISPLAY_OVERLAY_MENU &&
         input->code >= ASTRA_INPUT_BUTTON_LEFT && input->code <= ASTRA_INPUT_BUTTON_RIGHT &&
         (input->flags & ASTRA_INPUT_LOGICAL_DOWN) == 0u &&
         (state->swallow_pointer_up & (1u << (input->code - 1u))) != 0u) {
@@ -4703,7 +4929,7 @@ static uint32_t handle_pointer(DisplayState *state,
                 return ASTRA_STATUS_OK;
             }
     }
-    if (state->overlay != DISPLAY_OVERLAY_NONE)
+    if (state->overlay == DISPLAY_OVERLAY_MENU)
         return menu_input(state, input, effects);
 
     uint32_t blocked = state->count;
@@ -5858,6 +6084,18 @@ static void receive_command(uint32_t device, uint32_t irq,
         changed = status == ASTRA_STATUS_OK;
     }
     if (status == ASTRA_STATUS_OK &&
+        (command.action == ASTRA_GUI_WINDOW_TOOLTIP_SHOW ||
+         command.action == ASTRA_GUI_WINDOW_NOTIFICATION_SHOW)) {
+        status = notice_open(state, &theme, window_index, &command);
+        changed = status == ASTRA_STATUS_OK;
+    }
+    if (status == ASTRA_STATUS_OK &&
+        command.action == ASTRA_GUI_WINDOW_OVERLAY_HIDE &&
+        state->notice.owner == id) {
+        notice_end(state);
+        changed = 1;
+    }
+    if (status == ASTRA_STATUS_OK &&
         command.action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE) {
         DisplayWindow *window = &state->windows[window_index];
 
@@ -5929,7 +6167,10 @@ static void receive_command(uint32_t device, uint32_t irq,
         command.action != ASTRA_GUI_WINDOW_SET_APPLICATION_NAME &&
         command.action != ASTRA_GUI_WINDOW_MENU_OPEN &&
         command.action != ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT &&
-        command.action != ASTRA_GUI_WINDOW_MENU_CLOSE) {
+        command.action != ASTRA_GUI_WINDOW_MENU_CLOSE &&
+        command.action != ASTRA_GUI_WINDOW_TOOLTIP_SHOW &&
+        command.action != ASTRA_GUI_WINDOW_NOTIFICATION_SHOW &&
+        command.action != ASTRA_GUI_WINDOW_OVERLAY_HIDE) {
         uint32_t current = find_id(state, id);
 
         if (current != state->count)
@@ -6428,6 +6669,9 @@ static void serve_windows(uint32_t device, uint32_t irq,
                                &frame_timestamp);
             if (status != ASTRA_STATUS_OK)
                 astra_process_exit(DISPLAY_FAIL_PROTOCOL);
+            if (selected == 2u &&
+                notice_tick(&state, astra_clock_monotonic()))
+                effects |= DISPLAY_POINTER_RENDER;
             if ((effects & DISPLAY_POINTER_CURSOR) != 0u) {
                 status = prepare_pointer_image(device, irq, pointer_buffer,
                                                &state, &theme, &cursor_fence,
