@@ -3,6 +3,15 @@
 Status: ChocolateQuake.app now ships verified Quake 1.06 shareware data and
 an application-specific AICON, appears in Atlas Applications, and launches
 by double-click on DE25. Registered game data and music remain user supplied.
+Usability gate: at least 30 FPS in sustained DE25 gameplay at the default
+320x200 mode, with no audio gaps or multi-second pauses. On selected release
+`072a2352ee14a0398170fb0a1fa3b7685c823891cfc74447d1ff601a9d4f4325`,
+`astra-top` measured 21.78 presents/s over 30 seconds with 65.7% Quake CPU,
+10.5% display CPU and 20.6% idle; a second 20-second window measured 24.1
+presents/s, 79.6% Quake CPU, 11.9% display CPU and 6.4% idle. Both had zero
+audio gaps and underruns. Host perf attributed 82.6% of vCPU samples to
+translated guest code. Quake remains below the usability gate; capture
+repeatable timedemos and guest function profiles before changing hot paths.
 Asset-backed gameplay and effects ran on DE25; Ogg music uses Codec
 Kit's isolated AArch64 Vorbis worker. Guest music underflow telemetry found
 startup gaps; post-seek preroll eliminated them. Exact staged release passed

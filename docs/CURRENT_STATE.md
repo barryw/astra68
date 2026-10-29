@@ -32,6 +32,12 @@ both this package and the earlier boot-splash package. Both host boots reach
 stage 8 and desktop readiness; media and remote-desktop guest services fail
 with `PEER_DEAD` in the host fixture and retry. This gate remains open for
 fixture diagnosis; the selected DE25 UI and gameplay gates passed.
+Quake usability gate is now 30 FPS sustained on DE25 at default 320x200,
+without audio gaps or multi-second pauses. The selected release measured
+21.78 and 24.1 presents/s in 30- and 20-second gameplay windows with zero
+audio faults; the latter used 79.6% Quake CPU, 11.9% display CPU and left
+6.4% guest idle. Guest render-path profiling and repeatable timedemos are
+next; details in `docs/CHOCOLATE_QUAKE_PORT.md`.
 
 Application data checkpoint, 2026-10-28: supervisor now grants application
 `STORE:` from `HOME:/Application Data/<stable bundle id>/`; SDL preference
