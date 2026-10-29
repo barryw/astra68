@@ -101,3 +101,9 @@ offsets, independent of drawing. Astra's shared `TextModel` now finds exact
 UTF-8 spans across piece boundaries without changing selection; caller
 chooses whether to select and reveal result. Search-bar presentation and
 grid history remain separate work.
+
+Gallery page switch: `src/kits/interface/TabView.cpp` `BTabView::Select`
+selects one card through `BCardLayout::SetVisibleItem`. Astra currently uses
+separate collapsed Container pages; Gallery collapses the old page before
+expanding the next, so layout never sees two pages at once. A shared card
+container remains preferable when multiple clients need this interaction.

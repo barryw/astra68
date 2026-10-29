@@ -811,13 +811,13 @@ static uint32_t select_page(int32_t selected)
     next = GALLERY_PAGE_INPUT + (uint32_t)selected;
     if (next == active_page) return ASTRA_STATUS_OK;
     if (astra_interface_ui_set_state(
-            &ui, GALLERY_CONTROL(next), 0u) != ASTRA_OK)
+            &ui, GALLERY_CONTROL(active_page),
+            ASTRA_CONTROL_COLLAPSED) != ASTRA_OK)
         return GALLERY_FAIL_CONTROL;
     if (astra_interface_ui_set_state(
-            &ui, GALLERY_CONTROL(active_page),
-            ASTRA_CONTROL_COLLAPSED) != ASTRA_OK) {
+            &ui, GALLERY_CONTROL(next), 0u) != ASTRA_OK) {
         (void)astra_interface_ui_set_state(
-            &ui, GALLERY_CONTROL(next), ASTRA_CONTROL_COLLAPSED);
+            &ui, GALLERY_CONTROL(active_page), 0u);
         return GALLERY_FAIL_CONTROL;
     }
     active_page = next;
