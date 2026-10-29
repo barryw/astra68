@@ -21,6 +21,7 @@ LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 INTERFACE_TARGET := build/m68k/libraries/interface.library.9
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/field_family.o \
+	build/m68k/system_panels.o \
 	build/m68k/display_widgets.o \
 	build/m68k/settings_pane.o build/m68k/form_row.o build/m68k/columns.o build/m68k/toolbar.o \
 	build/m68k/toolbar_actions.o \
@@ -105,6 +106,10 @@ build/m68k/text_surface.o: src/text_surface.c src/text_surface_internal.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) -I$(GRAPHICS)/build/generated $(COMMON_FLAGS) \
 		$(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
+
+build/m68k/system_panels.o: src/system_panels.c $(NDK)/include/astra/system_panels.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) $(DEPFLAGS) -c $< -o $@
 
 build/m68k/toolbar_actions.o: src/toolbar_actions.c $(NDK)/include/astra/toolbar_actions.h
 	@mkdir -p $(@D)
@@ -207,7 +212,7 @@ library-contract: $(INTERFACE_TARGET)
 		awk '/NEEDED/{n++} END{print n+0}')" = 5
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET))
 
-$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/text_surface.c \
+$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/system_panels.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/text_surface.c \
 		src/text_model.c src/scroll.c $(NDK_HOST_UTF8) tests/test_interface.c \
 		tests/test_layout.c src/text_surface_internal.h
 	@mkdir -p $(@D)
@@ -283,7 +288,7 @@ sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANI
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_SYSTEM_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
-		src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/text_surface.c src/text_model.c src/scroll.c \
+		src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/system_panels.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/text_surface.c src/text_model.c src/scroll.c \
 		$(NDK_HOST_UTF8) \
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize
