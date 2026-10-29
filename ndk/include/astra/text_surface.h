@@ -245,6 +245,15 @@ ASTRA_NODISCARD AstraResult astra_text_surface_copy_grid_selection(
     uint32_t stride, uint32_t columns, uint32_t rows,
     const AstraTextGridSelection *selection, char *output,
     uint32_t capacity, uint32_t *bytes);
+/** Find an exact UTF-8 sequence in row-major grid text. The virtual row
+ * separator is U+000A; an empty cell matches a space. Positions are half-open
+ * cell boundaries. A miss preserves @p match. */
+ASTRA_NODISCARD AstraResult astra_text_surface_find_grid(
+    const AstraTextSurface *text_surface, const AstraTextCell *cells,
+    uint32_t stride, uint32_t columns, uint32_t rows,
+    const char *needle, uint32_t needle_bytes,
+    AstraTextGridPosition from, uint32_t wrap,
+    AstraTextGridSelection *match);
 /**
  * Draw one caret in grid coordinates.
  * @param text_surface Initialized grid TextSurface.

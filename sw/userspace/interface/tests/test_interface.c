@@ -3376,6 +3376,7 @@ static void test_text_view_flow_edit_find(void)
     AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
     AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraControlSize measured;
     AstraTextSelection match = ASTRA_TEXT_SELECTION_INIT;
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
@@ -3444,6 +3445,21 @@ static void test_text_view_flow_edit_find(void)
         scroll_state.maximum_y > 0u);
     assert(astra_interface_text_view_set_mode(&context, &controls[1],
         ASTRA_TEXT_SURFACE_CODE) == ASTRA_OK);
+    assert(astra_interface_text_view_set_wrap_width(&context, &controls[1], 0u) ==
+        ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &controls[1], &measured) == ASTRA_OK);
+    uint32_t code_width = measured.width;
+    assert(astra_interface_text_view_set_line_numbers(&context, &controls[1], 1u) ==
+        ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &controls[1], &measured) == ASTRA_OK &&
+        measured.width == code_width + 3u * theme.mono_cell_width);
+    assert(astra_scroll_set_offset(&scroll, 0u, 0u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, 2, 2);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(astra_text_model_get_state(&model, &model_state) == ASTRA_OK &&
+        model_state.selection.focus == 0u);
     font_advance = 1u;
 }
 

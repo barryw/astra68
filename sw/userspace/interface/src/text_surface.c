@@ -532,6 +532,81 @@ AstraResult astra_text_surface_copy_grid_selection(
     return ASTRA_OK;
 }
 
+static AstraTextGridPosition grid_boundary(uint64_t index,
+                                           uint32_t columns, uint32_t rows)
+{
+    uint64_t stride = (uint64_t)columns + 1u;
+    uint64_t end = (uint64_t)rows * stride - 1u;
+    if (index == end)
+        return (AstraTextGridPosition){rows - 1u, columns};
+    return (AstraTextGridPosition){(uint32_t)(index / stride),
+                                   (uint32_t)(index % stride)};
+}
+
+static int grid_match_at(const AstraTextCell *cells, uint32_t stride,
+                         uint32_t columns, uint64_t total, uint64_t start,
+                         const char *needle, uint32_t needle_bytes,
+                         uint64_t *end)
+{
+    uint64_t index = start;
+    uint32_t byte = 0u;
+    while (byte < needle_bytes) {
+        uint32_t consumed, expected;
+        uint64_t row, column;
+        uint32_t actual;
+        if (index >= total) return 0;
+        expected = astra_utf8_decode((const uint8_t *)needle + byte,
+                                     needle_bytes - byte, &consumed);
+        row = index / ((uint64_t)columns + 1u);
+        column = index % ((uint64_t)columns + 1u);
+        actual = column == columns ? '\n' :
+            cells[row * stride + column].codepoint;
+        if (actual == 0u) actual = ' ';
+        if (!astra_unicode_scalar_valid(actual) ||
+            actual != expected)
+            return 0;
+        byte += consumed;
+        ++index;
+    }
+    *end = index;
+    return 1;
+}
+
+AstraResult astra_text_surface_find_grid(
+    const AstraTextSurface *text, const AstraTextCell *cells,
+    uint32_t stride, uint32_t columns, uint32_t rows,
+    const char *needle, uint32_t needle_bytes,
+    AstraTextGridPosition from, uint32_t wrap,
+    AstraTextGridSelection *match)
+{
+    uint64_t total, start;
+    if (!valid(text) || text->_private_mode != ASTRA_TEXT_SURFACE_GRID ||
+        cells == NULL || stride < columns || columns == 0u || rows == 0u ||
+        needle == NULL || needle_bytes == 0u ||
+        !astra_utf8_validate(needle, needle_bytes, 0u) ||
+        !grid_position_valid(from, columns, rows) || wrap > 1u ||
+        match == NULL || match->size != sizeof(*match) ||
+        !astra_words_zero(match->reserved, 4u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    total = (uint64_t)rows * ((uint64_t)columns + 1u) - 1u;
+    start = from.row == rows ? total :
+        (uint64_t)from.row * ((uint64_t)columns + 1u) + from.column;
+    for (uint32_t pass = 0u; pass < (wrap != 0u ? 2u : 1u); ++pass) {
+        uint64_t first = pass == 0u ? start : 0u;
+        uint64_t last = pass == 0u ? total : start;
+        for (uint64_t index = first; index < last; ++index) {
+            uint64_t end;
+            if (!grid_match_at(cells, stride, columns, total, index,
+                               needle, needle_bytes, &end))
+                continue;
+            match->anchor = grid_boundary(index, columns, rows);
+            match->focus = grid_boundary(end, columns, rows);
+            return ASTRA_OK;
+        }
+    }
+    return ASTRA_ERROR_NOT_PRESENT;
+}
+
 AstraResult astra_text_surface_draw_caret_at(
     const AstraTextSurface *text, AstraSurfaceView *target,
     int32_t x, int32_t y, uint32_t advance,

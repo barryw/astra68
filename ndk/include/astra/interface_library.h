@@ -491,6 +491,10 @@ AstraResult astra_interface_text_view_set_mode(AstraUIContext *context,
 /** Enable or disable in-place editing. Text View starts read-only. */
 AstraResult astra_interface_text_view_set_editable(AstraUIContext *context,
     AstraControl *control, uint32_t editable);
+/** Show or hide right-aligned logical line numbers in code mode's shared
+ * gutter. Flow mode retains the setting but presents no gutter. */
+AstraResult astra_interface_text_view_set_line_numbers(AstraUIContext *context,
+    AstraControl *control, uint32_t visible);
 /** Replace a Text View selection with UTF-8 and refresh its ScrollView. */
 AstraResult astra_interface_text_view_replace_selection(
     AstraUIContext *context, AstraControl *control,
