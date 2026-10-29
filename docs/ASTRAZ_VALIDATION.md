@@ -254,3 +254,26 @@ were all active with `Result=success NRestarts=0`; root filesystem had 7.9 GiB
 free. The app was closed and board RFB scratch removed. WORK stories and
 disposable media probe bundles remain for the font 3 hardware gate and final
 cleanup.
+
+## Font 3 and inline editing on DE25
+
+The synthetic waiting `font3-display.z6` story rendered a graphics-font `A`
+beside normal-font `B` through the protected AFNT face. The graphics glyph
+appeared as the expected solid horizontal block. Beast screenshot
+`font3-display-settled.png` has SHA-256
+`de696218530a0e46bbb9270f5779fb85fde64c76858de36a3cc8e8d60e9121ff`.
+
+In Zork Zero's visible canvas prompt, the RFB trial typed `loox`, pressed
+Backspace, typed `k`, then Return. The settled frame showed exactly `>look`
+inside the canvas, the Banquet Hall response and the transient More overlay;
+there was no lower input field. Beast screenshot `z6-edit-settled.png` has
+SHA-256 `d3370d45d8536216412c3d618bd10c5d764ff038a05b973544e3ca9eaef9e1c3`.
+The immediate Backspace capture was stale: RFB reported a frame before Astra
+presented the edited text. The settled response proves the edit reached the
+interpreter. The RFB harness now sends the X11 BackSpace keysym for `\b`.
+
+AstraZ was closed and board RFB scratch removed. Astra, audio host and remote
+desktop services were active with `Result=success NRestarts=0`, and the board
+had 8.1 GiB free. WORK stories and disposable probe bundles remain for the
+final window/resize gates; remove only those exact trial paths afterward.
+HDMI was disconnected, so audible playback certification remains open.

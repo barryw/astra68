@@ -143,6 +143,8 @@ def send_keys(connection, text):
     for character in text:
         if character == "\n":
             symbol = 0xff0d
+        elif character == "\b":
+            symbol = 0xff08
         elif ord(character) <= 0xff:
             symbol = ord(character)
         else:

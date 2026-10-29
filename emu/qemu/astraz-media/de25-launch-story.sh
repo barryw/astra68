@@ -8,7 +8,7 @@ if [ "$#" -ne 1 ]; then
 fi
 
 case "$1" in
-    Zork1.z3|Trinity.z4|Sherlock.z5|Zork0.z6|oneroom.z8) ;;
+    Zork1.z3|Trinity.z4|Sherlock.z5|Zork0.z6|oneroom.z8|font3-display.z6) ;;
     *) echo "unrecognized test story: $1" >&2; exit 2 ;;
 esac
 
