@@ -797,6 +797,14 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
         assert(astra_fonts_use_snapshot(&snapshot, (uint32_t)length, id) == ASTRA_OK);
         char adopted[ASTRA_FONT_ID_MAX];
         assert(astra_fonts_context_id(adopted) == ASTRA_OK && strcmp(adopted, id) == 0);
+        {
+            uint32_t commands, payload_bytes;
+            assert(astra_surface_ui_text_requirements(3u, &commands,
+                &payload_bytes) && commands == 1u &&
+                payload_bytes == 3u + strlen(id));
+            assert(astra_surface_ui_text_width_styled("IIW", 3u,
+                strike.pixel_height, ASTRA_TEXT_STYLE_BOLD) == expected_width);
+        }
         assert(snapshot.handle == ASTRA_INVALID_HANDLE);
         snapshot = (AstraArea){.handle = 77u, .address = bytes,
             .size = (uint32_t)length, .map_flags = ASTRA_AREA_MAP_READ};
@@ -853,6 +861,20 @@ static void test_installed_afnt_reaches_hardware_glyph_run(void)
         id[0] = '\0';
         assert(astra_fonts_use_snapshot(&snapshot, 0u, id) == ASTRA_OK);
         assert(astra_fonts_context_id(adopted) == ASTRA_OK && adopted[0] == '\0');
+        {
+            uint32_t commands, payload_bytes;
+            const AstraUiStrike *bold = astra_ui_font_strike_styled(
+                strike.pixel_height, ASTRA_TEXT_STYLE_BOLD);
+            assert(bold != NULL);
+            const AstraUiGlyph *i = astra_ui_font_glyph(bold, 'I');
+            const AstraUiGlyph *w = astra_ui_font_glyph(bold, 'W');
+            uint32_t bold_width = (uint32_t)(
+                ((uint64_t)i->advance_x * 2u + (uint32_t)w->advance_x + 63u) / 64u);
+            assert(astra_surface_ui_text_requirements(3u, &commands,
+                &payload_bytes) && commands == 1u && payload_bytes == 3u);
+            assert(astra_surface_ui_text_width_styled("IIW", 3u,
+                strike.pixel_height, ASTRA_TEXT_STYLE_BOLD) == bold_width);
+        }
         assert(closed_font_snapshots == 2u && unmapped_font_snapshots == 1u);
         assert(astra_surface_ui_text_width("IIW", 3u, strike.pixel_height) !=
                expected_width);

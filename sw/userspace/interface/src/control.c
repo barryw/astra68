@@ -3925,6 +3925,7 @@ static int text_view_step(const AstraControl *control,
 {
     const char *text;
     uint32_t bytes, consumed;
+    uint32_t before = *offset;
     if (astra_text_model_read(model, *offset, &text, &bytes) != ASTRA_OK ||
         bytes == 0u) return 0;
     *scalar = astra_utf8_decode((const uint8_t *)text, bytes, &consumed);
@@ -3934,14 +3935,23 @@ static int text_view_step(const AstraControl *control,
              *scalar == '\r' && *offset == end ? 0u : 1u;
     if ((control->_private_style & TEXT_VIEW_FLOW) != 0u && *width != 0u) {
         AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+        AstraTextViewStyle style = ASTRA_TEXT_VIEW_STYLE_INIT;
+        if (control->_private_text_style_at != NULL &&
+            (control->_private_text_style_at(
+                control->_private_text_style_context, before, &style) != ASTRA_OK ||
+             style.reserved != 0u ||
+             (style.attributes & ~ASTRA_TEXT_STYLE_ALLOWED_MASK) != 0u))
+            return 0;
         if (*scalar == '\t') {
-            uint32_t space = astra_surface_ui_text_width(" ", 1u,
-                theme.body_font_height);
+            uint32_t space = astra_surface_ui_text_width_styled(" ", 1u,
+                theme.body_font_height,
+                style.attributes & ASTRA_TEXT_RENDER_STYLE_MASK);
             uint32_t tab = space * 8u;
             *width = tab != 0u ? tab - column % tab : 0u;
         } else {
-            *width = astra_surface_ui_text_width(text, consumed,
-                theme.body_font_height);
+            *width = astra_surface_ui_text_width_styled(text, consumed,
+                theme.body_font_height,
+                style.attributes & ASTRA_TEXT_RENDER_STYLE_MASK);
         }
     }
     if (*scalar < 0x20u || *scalar == 0x7fu)

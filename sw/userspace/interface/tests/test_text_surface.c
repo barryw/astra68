@@ -76,6 +76,14 @@ int astra_surface_ui_text_styled(AstraSurfaceView *surface, int32_t x,
     return 1;
 }
 
+int astra_surface_ui_text_requirements(uint32_t length,
+    uint32_t *commands, uint32_t *payload_bytes)
+{
+    *commands = length != 0u;
+    *payload_bytes = length;
+    return 1;
+}
+
 int astra_text_box_scroll(AstraTextBox *text_box, int32_t pixels)
 {
     assert(text_box != NULL && pixels == 20);

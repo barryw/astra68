@@ -482,6 +482,22 @@ uint32_t astra_surface_ui_text_width(const char *text, uint32_t length,
     return length * font_advance;
 }
 
+uint32_t astra_surface_ui_text_width_styled(const char *text,
+    uint32_t length, uint16_t height, uint32_t style_flags)
+{
+    return astra_surface_ui_text_width(text, length, height) +
+        ((style_flags & ASTRA_TEXT_STYLE_BOLD) != 0u ? length : 0u);
+}
+
+int astra_surface_ui_text_requirements(uint32_t length,
+    uint32_t *commands, uint32_t *payload_bytes)
+{
+    *commands = length != 0u;
+    *payload_bytes = length != 0u ?
+        length + (uint32_t)strlen(context_font_id) : 0u;
+    return 1;
+}
+
 uint32_t astra_surface_ui_text_height(uint16_t pixel_height)
 {
     return pixel_height;

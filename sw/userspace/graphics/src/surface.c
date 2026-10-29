@@ -874,9 +874,11 @@ void astra_surface_text8x8(AstraSurfaceView *surface, int32_t x, int32_t y,
 
 static uint32_t ui_text_measure(const char *utf8, uint32_t length,
                                 uint16_t pixel_height, uint64_t maximum_26_6,
+                                uint32_t style_flags,
                                 uint32_t *width, uint32_t *height)
 {
-    const AstraUiStrike *strike = astra_ui_font_strike(pixel_height);
+    const AstraUiStrike *strike = astra_ui_font_strike_styled(pixel_height,
+        style_flags);
     uint64_t width_26_6 = 0u;
     uint32_t at = 0u;
     uint32_t selected = UINT32_MAX;
@@ -884,6 +886,7 @@ static uint32_t ui_text_measure(const char *utf8, uint32_t length,
     *width = 0u;
     *height = 0u;
     if (utf8 == NULL ||
+        (style_flags & ~ASTRA_TEXT_RENDER_STYLE_MASK) != 0u ||
         astra_mutex_lock(&system_font_lock) != ASTRA_SYSCALL_OK)
         return 0u;
     if (system_font_id[0] != '\0') {
@@ -935,8 +938,34 @@ uint32_t astra_surface_ui_text_width(const char *utf8, uint32_t length,
                                      uint16_t pixel_height)
 {
     uint32_t width, height;
-    (void)ui_text_measure(utf8, length, pixel_height, UINT64_MAX, &width, &height);
+    (void)ui_text_measure(utf8, length, pixel_height, UINT64_MAX,
+        0u, &width, &height);
     return width;
+}
+
+uint32_t astra_surface_ui_text_width_styled(const char *utf8,
+    uint32_t length, uint16_t pixel_height, uint32_t style_flags)
+{
+    uint32_t width, height;
+    (void)ui_text_measure(utf8, length, pixel_height, UINT64_MAX,
+        style_flags, &width, &height);
+    return width;
+}
+
+int astra_surface_ui_text_requirements(uint32_t length,
+    uint32_t *commands, uint32_t *payload_bytes)
+{
+    char id[ASTRA_FONT_ID_MAX];
+    uint32_t id_length;
+    if (commands == NULL || payload_bytes == NULL ||
+        astra_fonts_context_id(id) != ASTRA_OK)
+        return 0;
+    id_length = (uint32_t)strlen(id);
+    if (length > ASTRA_DRAW_LIST_PAYLOAD_BYTES - id_length)
+        return 0;
+    *commands = length != 0u ? 1u : 0u;
+    *payload_bytes = length != 0u ? length + id_length : 0u;
+    return 1;
 }
 
 uint32_t astra_surface_ui_text_fit(const char *utf8, uint32_t length,
@@ -945,13 +974,14 @@ uint32_t astra_surface_ui_text_fit(const char *utf8, uint32_t length,
 {
     uint32_t width, height;
     return ui_text_measure(utf8, length, pixel_height,
-        (uint64_t)maximum_width * 64u, &width, &height);
+        (uint64_t)maximum_width * 64u, 0u, &width, &height);
 }
 
 uint32_t astra_surface_ui_text_height(uint16_t pixel_height)
 {
     uint32_t width, height;
-    (void)ui_text_measure("", 0u, pixel_height, UINT64_MAX, &width, &height);
+    (void)ui_text_measure("", 0u, pixel_height, UINT64_MAX,
+        0u, &width, &height);
     return height;
 }
 

@@ -88,8 +88,14 @@ static AstraResult flow_run(const AstraTextSurface *text,
     else if ((attributes & ASTRA_TEXT_STYLE_FAINT) != 0u)
         foreground = dim(foreground, background);
     if (target == NULL) {
-        *commands += 2u;
-        *payload += bytes;
+        uint32_t text_commands, text_payload;
+        if (!astra_surface_ui_text_requirements(bytes, &text_commands,
+                                                 &text_payload) ||
+            *commands > UINT64_MAX - 1u - text_commands ||
+            *payload > UINT64_MAX - text_payload)
+            return ASTRA_ERROR_NO_RESOURCES;
+        *commands += 1u + text_commands;
+        *payload += text_payload;
         return ASTRA_OK;
     }
     astra_surface_fill(target, x, y, advance,

@@ -11,6 +11,8 @@ ASTRA_FONT_5.0 {
         astra_surface_ui_text_fit;
         astra_surface_ui_text_styled;
         astra_surface_ui_text_width;
+        astra_surface_ui_text_width_styled;
+        astra_surface_ui_text_requirements;
         astra_mono_font_bitmap;
         astra_mono_font_glyph;
         astra_mono_font_strike;
