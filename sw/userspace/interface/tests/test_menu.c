@@ -487,19 +487,19 @@ static void toolbar_actions(void)
     assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 400u,
         ASTRA_TOOLBAR_LABELS, &fit) == ASTRA_OK &&
         fit.mode == ASTRA_TOOLBAR_LABELS && fit.hidden_groups == 0u);
-    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 180u,
+    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 184u,
         ASTRA_TOOLBAR_LABELS, &fit) == ASTRA_OK &&
         fit.mode == ASTRA_TOOLBAR_ICONS_ONLY && fit.hidden_groups == 0u);
-    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 110u,
+    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 138u,
         ASTRA_TOOLBAR_LABELS, &fit) == ASTRA_OK &&
         fit.mode == ASTRA_TOOLBAR_ICONS_ONLY && fit.hidden_groups == 2u &&
-        fit.minimum_width == 104u && fit.required_width == 104u);
+        fit.minimum_width == 138u && fit.required_width == 138u);
     assert((toolbar_controls[4]._private_state & ASTRA_CONTROL_COLLAPSED) != 0u &&
            (toolbar_controls[6]._private_state & ASTRA_CONTROL_COLLAPSED) != 0u &&
            (toolbar_controls[8]._private_state & ASTRA_CONTROL_COLLAPSED) == 0u);
-    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 103u,
+    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 137u,
         ASTRA_TOOLBAR_LABELS, &fit) == ASTRA_ERROR_NO_RESOURCES &&
-        fit.minimum_width == 104u);
+        fit.minimum_width == 138u);
     action.type = ASTRA_UI_ACTION_ACTIVATE;
     action.control_id = 102u;
     assert(astra_interface_toolbar_actions_handle_action(

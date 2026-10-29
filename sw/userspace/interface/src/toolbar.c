@@ -1,4 +1,5 @@
 #include <astra/interface_library.h>
+#include <astra/theme.h>
 #include <astra/bytes.h>
 #include <astra/utf8.h>
 #include "control_internal.h"
@@ -22,8 +23,10 @@ AstraResult astra_interface_toolbar_init(AstraControl *controls,
     AstraContainerInfo row = ASTRA_CONTAINER_INFO_INIT;
     row.id = info->first_id;
     row.layout.align_items = ASTRA_FLEX_ALIGN_CENTER;
-    row.layout.padding_left = row.layout.padding_right = 8u;
-    row.layout.padding_top = row.layout.padding_bottom = 7u;
+    row.layout.padding_left = row.layout.padding_right =
+        ASTRA_THEME_TOOLBAR_INSET;
+    row.layout.padding_top = row.layout.padding_bottom =
+        ASTRA_THEME_TOOLBAR_INSET;
     row.layout.main_gap = 2u;
     AstraResult result = astra_interface_container_init(&controls[0], &row);
     if (result != ASTRA_OK) return result;
@@ -40,7 +43,7 @@ AstraResult astra_interface_toolbar_init(AstraControl *controls,
         if (result != ASTRA_OK) return result;
         item.parent_id = info->first_id;
         item.shrink = 0u;
-        item.maximum_height = 22u;
+        item.maximum_height = ASTRA_THEME_TOOLBAR_BUTTON_HEIGHT;
         result = astra_interface_control_set_flex(&controls[at + 1u], &item);
         if (result != ASTRA_OK) return result;
     }

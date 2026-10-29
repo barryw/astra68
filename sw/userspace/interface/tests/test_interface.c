@@ -88,10 +88,11 @@ static void test_toolbar_composition(void)
     {
         AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
         AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
-        assert(astra_interface_ui_init(&ui, controls, 3u, 240u, 48u) == ASTRA_OK);
+        assert(astra_interface_ui_init(&ui, controls, 3u, 240u, 60u) == ASTRA_OK);
         assert(astra_interface_ui_layout(&ui, &layout) == ASTRA_OK);
-        assert(controls[0]._private_frame.height == 36u);
-        assert(controls[1]._private_frame.height == 22u);
+        assert(controls[0]._private_frame.height == 52u);
+        assert(controls[1]._private_frame.height ==
+            ASTRA_THEME_TOOLBAR_BUTTON_HEIGHT);
         assert(astra_interface_ui_focus_control(&ui, 42u) == ASTRA_OK);
         assert(ui._private_focus == 1u);
         assert(astra_interface_ui_focus_control(&ui, 43u) ==
@@ -777,7 +778,7 @@ static void test_controls(void)
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
     AstraWindowEvent event;
 
-    assert(theme.generation == 6u);
+    assert(theme.generation == ASTRA_THEME_GENERATION);
     assert(theme.scale == 1u);
     assert(theme.spacing_unit == 6u * theme.scale);
     assert(theme.control_height == 40u * theme.scale);
@@ -4588,7 +4589,8 @@ static void test_split_button(void)
     assert(astra_interface_ui_init(&context, controls, 2u, 240u, 80u) ==
            ASTRA_OK);
     assert(astra_interface_ui_measure(&context, &controls[1], &size) ==
-           ASTRA_OK && size.width == 28u && size.height == 22u);
+           ASTRA_OK && size.width == ASTRA_THEME_TOOLBAR_BUTTON_HEIGHT &&
+           size.height == ASTRA_THEME_TOOLBAR_BUTTON_HEIGHT);
     assert(astra_interface_split_button_init(&controls[0], &controls[0],
                                              &info, 93u) ==
            ASTRA_ERROR_INVALID_ARGUMENT);

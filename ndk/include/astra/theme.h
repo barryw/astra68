@@ -13,7 +13,7 @@
 ASTRA_EXTERN_C_BEGIN
 
 /** Version of the immutable system theme snapshot. */
-#define ASTRA_THEME_GENERATION UINT32_C(6)
+#define ASTRA_THEME_GENERATION UINT32_C(7)
 
 /** Native strike sizes selected by the immutable Astra 0.1 theme. */
 #define ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT UINT16_C(16)
@@ -25,6 +25,12 @@ ASTRA_EXTERN_C_BEGIN
 #define ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT UINT16_C(16)
 /** Native terminal/code cell width in pixels. */
 #define ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH UINT16_C(8)
+/** Compact toolbar action size within the system toolbar row. */
+#define ASTRA_THEME_TOOLBAR_BUTTON_HEIGHT UINT16_C(32)
+/** Width of an icon-only toolbar action. */
+#define ASTRA_THEME_TOOLBAR_ICON_BUTTON_WIDTH UINT16_C(36)
+/** Horizontal/vertical inset around toolbar actions. */
+#define ASTRA_THEME_TOOLBAR_INSET UINT16_C(10)
 
 /**
  * Semantic colors and geometry shared by applications and the window server.

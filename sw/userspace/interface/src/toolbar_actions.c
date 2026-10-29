@@ -199,8 +199,10 @@ AstraResult astra_interface_toolbar_actions_init(AstraToolbarActions *toolbar,
         toolbar->_private_controls != NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
     root.id = info->first_id;
     root.layout.align_items = ASTRA_FLEX_ALIGN_CENTER;
-    root.layout.padding_left = root.layout.padding_right = 8u;
-    root.layout.padding_top = root.layout.padding_bottom = 7u;
+    root.layout.padding_left = root.layout.padding_right =
+        ASTRA_THEME_TOOLBAR_INSET;
+    root.layout.padding_top = root.layout.padding_bottom =
+        ASTRA_THEME_TOOLBAR_INSET;
     root.layout.main_gap = 8u;
     result = astra_interface_container_init(&controls[0], &root);
     if (result != ASTRA_OK) return result;
@@ -237,7 +239,7 @@ AstraResult astra_interface_toolbar_actions_init(AstraToolbarActions *toolbar,
                 info->actions[action].icon << ASTRA_BUTTON_ICON_SHIFT;
             item.parent_id = row.id;
             item.shrink = 0u;
-            item.maximum_height = 22u;
+            item.maximum_height = ASTRA_THEME_TOOLBAR_BUTTON_HEIGHT;
             result = astra_interface_control_set_flex(&controls[at], &item);
             if (result != ASTRA_OK) return result;
         }
@@ -258,7 +260,7 @@ AstraResult astra_interface_toolbar_actions_init(AstraToolbarActions *toolbar,
             (ASTRA_TOOLBAR_ICON_MORE << ASTRA_BUTTON_ICON_SHIFT);
         item.parent_id = root.id;
         item.shrink = 0u;
-        item.maximum_height = 22u;
+        item.maximum_height = ASTRA_THEME_TOOLBAR_BUTTON_HEIGHT;
         result = astra_interface_control_set_flex(&controls[at], &item);
         if (result != ASTRA_OK) return result;
     }
@@ -333,7 +335,7 @@ static AstraResult measure_groups(AstraToolbarActions *toolbar,
 static uint64_t fitted_width(const AstraToolbarActions *toolbar,
     const uint32_t *widths, const uint8_t *folded, uint32_t hidden)
 {
-    uint64_t width = 16u;
+    uint64_t width = 2u * ASTRA_THEME_TOOLBAR_INSET;
     uint32_t members = 0u;
 
     for (uint32_t at = 0u; at < toolbar->_private_group_count; ++at) {
@@ -341,7 +343,9 @@ static uint64_t fitted_width(const AstraToolbarActions *toolbar,
         width += widths[at] + (members != 0u ? 8u : 0u);
         ++members;
     }
-    if (hidden != 0u) width += 26u + (members != 0u ? 8u : 0u);
+    if (hidden != 0u)
+        width += ASTRA_THEME_TOOLBAR_ICON_BUTTON_WIDTH +
+            (members != 0u ? 8u : 0u);
     return width;
 }
 
@@ -351,7 +355,7 @@ AstraResult astra_interface_toolbar_actions_fit(AstraToolbarActions *toolbar,
 {
     uint32_t *widths;
     uint8_t *folded;
-    uint64_t minimum = 16u;
+    uint64_t minimum = 2u * ASTRA_THEME_TOOLBAR_INSET;
     uint32_t pinned = 0u, unpinned = 0u, hidden = 0u;
     uint32_t mode;
     uint64_t required;
@@ -378,13 +382,16 @@ AstraResult astra_interface_toolbar_actions_fit(AstraToolbarActions *toolbar,
         const AstraToolbarGroup *group = &toolbar->_private_groups[at];
 
         if ((group->flags & ASTRA_TOOLBAR_GROUP_PINNED) != 0u) {
-            minimum += (uint64_t)group->action_count * 26u +
+            minimum += (uint64_t)group->action_count *
+                    ASTRA_THEME_TOOLBAR_ICON_BUTTON_WIDTH +
                 (uint64_t)(group->action_count - 1u) * 2u +
                 (pinned != 0u ? 8u : 0u);
             ++pinned;
         } else ++unpinned;
     }
-    if (unpinned != 0u) minimum += 26u + (pinned != 0u ? 8u : 0u);
+    if (unpinned != 0u)
+        minimum += ASTRA_THEME_TOOLBAR_ICON_BUTTON_WIDTH +
+            (pinned != 0u ? 8u : 0u);
     if (minimum > UINT32_MAX) minimum = UINT32_MAX;
     fit->minimum_width = (uint32_t)minimum;
     if (available_width < minimum) {
