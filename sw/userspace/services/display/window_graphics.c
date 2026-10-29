@@ -69,7 +69,7 @@ uint32_t display_window_graphics_open(DisplayWindowGraphics **graphics,
     uint32_t bytes = 0u;
     uint32_t status;
 
-    if (graphics == NULL || *graphics != NULL || staging_area == 0u)
+    if (graphics == NULL || *graphics != NULL)
         return ASTRA_STATUS_INVALID;
     status = status_from_syscall(astra_rt_area_create(
         sizeof(*created),
@@ -82,10 +82,11 @@ uint32_t display_window_graphics_open(DisplayWindowGraphics **graphics,
         status = ASTRA_STATUS_LIMIT;
     if (status == ASTRA_STATUS_OK) {
         *created = (DisplayWindowGraphics){ .self_area = self_area };
-        status = area_map(staging_area,
-                          ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
-                          (void **)&created->staging,
-                          &created->staging_bytes);
+        if (staging_area != 0u)
+            status = area_map(staging_area,
+                              ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE,
+                              (void **)&created->staging,
+                              &created->staging_bytes);
     }
     if (status != ASTRA_STATUS_OK) {
         if (created != NULL)
@@ -653,7 +654,9 @@ static uint32_t resolve_source(void *context, AstraRenderBuilder *builder,
     ResolveContext *resolve = context;
     DisplayGraphicsSurface surface;
 
-    if (!lookup_surface(resolve->graphics, resolve->host, id, &surface) ||
+    if ((id == ASTRA_GUI_WINDOW_CONTENT_SURFACE_ID &&
+         resolve->host == NULL) ||
+        !lookup_surface(resolve->graphics, resolve->host, id, &surface) ||
         (surface.flags & ASTRA_SURFACE_DRAW_SOURCE) == 0u)
         return 0u;
     if (surface.palette_offset != 0u)
@@ -663,6 +666,16 @@ static uint32_t resolve_source(void *context, AstraRenderBuilder *builder,
             ASTRA_RENDER_SURFACE_READ);
     return descriptor(builder, &surface, surface.format,
                       ASTRA_RENDER_SURFACE_READ);
+}
+
+uint32_t display_window_graphics_resolve_source(void *context,
+    AstraRenderBuilder *builder, uint32_t id)
+{
+    ResolveContext resolve = {context, NULL, NULL};
+
+    /* Draw-list windows have no implicit content surface. Source identities
+       belong exclusively to this window's capability-owned graphics state. */
+    return context == NULL ? 0u : resolve_source(&resolve, builder, id);
 }
 
 static const AstraRenderFont *resolve_font(void *context, const char *id,

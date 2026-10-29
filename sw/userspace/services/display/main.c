@@ -2933,6 +2933,25 @@ static int notice_tick(DisplayState *state, uint64_t now)
 static uint32_t display_pointer_shape(DisplayState *state,
                                       const AstraTheme *theme);
 
+typedef struct DisplayDrawListSources {
+    DisplayWindowGraphics *graphics;
+    DisplayFontSet *fonts;
+} DisplayDrawListSources;
+
+static uint32_t display_draw_list_source(void *context,
+    AstraRenderBuilder *builder, uint32_t id)
+{
+    return display_window_graphics_resolve_source(
+        ((DisplayDrawListSources *)context)->graphics, builder, id);
+}
+
+static const AstraRenderFont *display_draw_list_font(void *context,
+    const char *id, uint32_t length)
+{
+    return display_font_set_resolve(
+        ((DisplayDrawListSources *)context)->fonts, id, length);
+}
+
 static uint32_t compose(void *storage, uint32_t fence,
                         DisplayState *state, uint32_t *error,
                         uint32_t *failure)
@@ -3033,9 +3052,13 @@ static uint32_t compose(void *storage, uint32_t fence,
                     (uint16_t)(region.bottom - region.top));
             }
         } else {
-            AstraRenderSourceResolver font_resolver = {
-                .context = &window->fonts,
-                .resolve_font = display_font_set_resolve
+            DisplayDrawListSources sources = {
+                window->graphics, &window->fonts
+            };
+            AstraRenderSourceResolver resolver = {
+                .context = &sources,
+                .resolve = display_draw_list_source,
+                .resolve_font = display_draw_list_font
             };
             window->fonts.registry = state->fonts;
             if (window->content_dirty != 0u)
@@ -3052,7 +3075,7 @@ static uint32_t compose(void *storage, uint32_t fence,
                 (window->content_dirty == 0u ||
                  astra_render_builder_replay_resolved(
                      &builder, window->content_resource, list,
-                     &font_resolver));
+                     &resolver));
             if (window->content_dirty != 0u)
                 display_font_set_end(&window->fonts, content_ok);
         }
@@ -5896,6 +5919,29 @@ static uint32_t graphics_storage(void *context, void **storage)
     return status;
 }
 
+/* A present draw-list may still need this source when compose runs. Keep its
+   Media RAM allocation leased until that pending replay has completed. */
+static int draw_list_source_pending(const DisplayWindow *window, uint32_t id)
+{
+    const AstraDrawListHeader *list;
+    const AstraDrawListCommand *commands;
+
+    if (window->request.content_format != ASTRA_WINDOW_CONTENT_DRAW_LIST ||
+        window->content_dirty == 0u)
+        return 0;
+    list = (const AstraDrawListHeader *)(const void *)
+        window->surface.view.pixels;
+    if (list == NULL || list->magic != ASTRA_DRAW_LIST_MAGIC ||
+        list->command_count > ASTRA_DRAW_LIST_COMMAND_MAX)
+        return 1;
+    commands = (const AstraDrawListCommand *)(list + 1);
+    for (uint32_t at = 0u; at < list->command_count; ++at)
+        if (commands[at].operation == ASTRA_DRAW_LIST_BLIT &&
+            commands[at].source == id)
+            return 1;
+    return 0;
+}
+
 /* Returns the ASTRA_GUI_FRAME_* flags of a posted frame that was drawn,
    or zero. */
 static uint32_t receive_graphics(uint32_t device, uint32_t irq,
@@ -5928,8 +5974,17 @@ static uint32_t receive_graphics(uint32_t device, uint32_t irq,
         command, size, handle_count, window->id) ?
         ASTRA_STATUS_OK : ASTRA_STATUS_PROTOCOL;
 
+    if (status == ASTRA_STATUS_OK && window->graphics == NULL &&
+        window->request.content_format == ASTRA_WINDOW_CONTENT_DRAW_LIST &&
+        (command->action == ASTRA_GUI_GRAPHICS_SURFACE_CREATE ||
+         command->action == ASTRA_GUI_GRAPHICS_STAGING_SET))
+        status = display_window_graphics_open(&window->graphics, 0u);
     if (status == ASTRA_STATUS_OK && window->graphics == NULL)
         status = ASTRA_STATUS_UNSUPPORTED;
+    if (status == ASTRA_STATUS_OK &&
+        command->action == ASTRA_GUI_GRAPHICS_SURFACE_DESTROY &&
+        draw_list_source_pending(window, command->object))
+        status = ASTRA_STATUS_ACCESS;
     if (status == ASTRA_STATUS_OK)
         status = display_window_graphics_command(
             window->graphics, &host, command, handles, &reply);

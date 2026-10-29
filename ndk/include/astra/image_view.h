@@ -6,6 +6,7 @@
 #include <stddef.h>
 
 #include <astra/graphics.h>
+#include <astra/control.h>
 
 ASTRA_EXTERN_C_BEGIN
 
@@ -18,6 +19,28 @@ typedef struct AstraImageViewInfo {
     const AstraSurface *image; /**< Borrowed draw-source surface. */
     uint32_t reserved[2]; /**< Must be zero. */
 } AstraImageViewInfo;
+
+/** Image placement inside a retained View's laid-out frame. */
+enum {
+    ASTRA_IMAGE_VIEW_FIT = 0u,
+    ASTRA_IMAGE_VIEW_FILL = 1u,
+    ASTRA_IMAGE_VIEW_ACTUAL = 2u,
+    ASTRA_IMAGE_VIEW_PIXEL4 = 3u
+};
+
+/** An ImageView composes the shared retained View. The image is a borrowed
+ * window-owned Graphics Kit surface; keep it live while visible. */
+typedef struct AstraImageViewModel {
+    AstraViewModel view;
+    const AstraSurface *image;
+    AstraRectI32 source_rect;
+    uint32_t mode;
+    uint32_t reserved[2];
+} AstraImageViewModel;
+
+ASTRA_NODISCARD AstraResult astra_interface_image_view_model_init(
+    AstraImageViewModel *model, const AstraSurface *image,
+    const AstraRectI32 *source_rect, uint32_t mode);
 
 /** Empty image view initializer; set the frame, clip, source and image. */
 #define ASTRA_IMAGE_VIEW_INFO_INIT { \
