@@ -134,7 +134,17 @@ enum {
     /** Terminal result for a window-owned transient menu. */
     ASTRA_WINDOW_EVENT_MENU_RESULT = 11,
     /** Refresh Font Kit's system context and reflow native controls. */
-    ASTRA_WINDOW_EVENT_FONT_CHANGED = 12
+    ASTRA_WINDOW_EVENT_FONT_CHANGED = 12,
+    /** Typed drag entered one client content region; includes document area. */
+    ASTRA_WINDOW_EVENT_DRAG_ENTER = 13,
+    /** Pointer moved over same drag target. */
+    ASTRA_WINDOW_EVENT_DRAG_MOTION = 14,
+    /** Pointer left target, or session was cancelled. */
+    ASTRA_WINDOW_EVENT_DRAG_LEAVE = 15,
+    /** Accepted drop; includes independent immutable document area. */
+    ASTRA_WINDOW_EVENT_DRAG_DROP = 16,
+    /** Source receives final target and chosen operation, zero on failure. */
+    ASTRA_WINDOW_EVENT_DRAG_FINISHED = 17
 };
 
 enum {
@@ -155,7 +165,9 @@ enum {
     ASTRA_WINDOW_SUBSCRIBE_TEXT = 1u << 7,
     /** Request a coalescing waitable pulse for each display vblank. */
     ASTRA_WINDOW_SUBSCRIBE_VBLANK = 1u << 8,
-    ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION = 1u << 9
+    ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION = 1u << 9,
+    /** Enter/motion/leave/drop from a display-owned typed drag session. */
+    ASTRA_WINDOW_SUBSCRIBE_DRAG = 1u << 10
 };
 
 /** Events delivered to every ordinary application window. */
@@ -168,7 +180,13 @@ enum {
      ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON | \
      ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL | ASTRA_WINDOW_SUBSCRIBE_DEFAULT | \
      ASTRA_WINDOW_SUBSCRIBE_KEY | ASTRA_WINDOW_SUBSCRIBE_TEXT | \
-     ASTRA_WINDOW_SUBSCRIBE_VBLANK | ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION)
+     ASTRA_WINDOW_SUBSCRIBE_VBLANK | ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION | \
+     ASTRA_WINDOW_SUBSCRIBE_DRAG)
+
+/** Allowed/chosen operation bits for typed drag sessions. */
+#define ASTRA_DRAG_COPY UINT32_C(1)
+#define ASTRA_DRAG_MOVE UINT32_C(2)
+#define ASTRA_DRAG_OPERATIONS (ASTRA_DRAG_COPY | ASTRA_DRAG_MOVE)
 
 /** Flags that qualify one delivered window event. */
 enum {
@@ -305,6 +323,17 @@ typedef struct AstraWindowFontChangedEvent {
     uint32_t window; /**< Receiving window's nonzero server ID. */
 } AstraWindowFontChangedEvent;
 
+/** Drag target/source event; document_handle owned only on ENTER/DROP. */
+typedef struct AstraWindowDragEvent {
+    uint32_t token; /**< Nonzero compositor session token. */
+    uint32_t peer_window; /**< Source for target; target for FINISHED. */
+    int32_t x; /**< Target client-local pointer x. */
+    int32_t y; /**< Target client-local pointer y. */
+    uint32_t modifiers; /**< Normalized input modifier mask. */
+    uint32_t operation; /**< Allowed mask or chosen COPY/MOVE; zero on failure. */
+    uint32_t document_handle; /**< Read-only area capability; caller closes it. */
+} AstraWindowDragEvent;
+
 /** Event-kind-specific payload preserving the public wire extent. */
 typedef union AstraWindowEventData {
     /** Selected system-font catalog revision; notification may be retried. */
@@ -327,6 +356,8 @@ typedef union AstraWindowEventData {
     AstraWindowSystemActionEvent system_action;
     /** Correlated menu result. */
     AstraWindowMenuResultEvent menu_result;
+    /** Typed drag lifecycle; only ENTER and DROP carry a document handle. */
+    AstraWindowDragEvent drag;
     /** Reserved wire storage. */
     uint32_t reserved[7];
 } AstraWindowEventData;
@@ -516,7 +547,18 @@ enum {
     ASTRA_GUI_WINDOW_NOTIFICATION_SHOW = 28u,
     /** Dismiss this window's Tooltip or Notification. */
     ASTRA_GUI_WINDOW_OVERLAY_HIDE = 29u,
+    /** Immutable ACLP area attached; flags=allowed operations, x=item count. */
+    ASTRA_GUI_WINDOW_DRAG_BEGIN = 30u,
+    /** flags=session token, x=chosen operation, title=feedback/reason. */
+    ASTRA_GUI_WINDOW_DRAG_FEEDBACK = 31u,
+    /** Source cancels its active session. */
+    ASTRA_GUI_WINDOW_DRAG_CANCEL = 32u,
+    /** Target acknowledges a dispatched drop after applying the operation. */
+    ASTRA_GUI_WINDOW_DRAG_COMPLETE = 33u,
 };
+
+/** Drag documents share Clipboard's validated ACLP representation format. */
+#define ASTRA_GUI_DRAG_BYTES_MAX UINT32_C(0x00100000)
 
 /* AMNU v2: all fields big-endian. Header: magic, version, total bytes, row
    count. Each row: flags (including one-based parent), label offset, label

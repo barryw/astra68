@@ -7,6 +7,7 @@
 #include <astra/utf8.h>
 
 #include "internal/status.h"
+#include "internal/clipboard_document.h"
 
 static int span_valid(uint32_t offset, uint32_t length, uint32_t bytes,
                       uint32_t minimum)
@@ -231,6 +232,51 @@ done:
     return result;
 }
 
+AstraResult astra_system_document_snapshot(
+    const AstraClipboardRepresentation *representations, uint32_t count,
+    uint32_t byte_limit, AstraArea *area, AstraHandle *immutable,
+    uint32_t *document_bytes)
+{
+    uint32_t bytes = 0u;
+    AstraResult result;
+
+    if (area == NULL || immutable == NULL || document_bytes == NULL ||
+        area->handle != ASTRA_INVALID_HANDLE || area->address != NULL ||
+        *immutable != ASTRA_INVALID_HANDLE || byte_limit == 0u ||
+        byte_limit > ASTRA_AREA_SIZE_MAX)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_clipboard_document_write(
+        NULL, 0u, representations, count, &bytes);
+    if (result != ASTRA_ERROR_BUFFER_TOO_SMALL)
+        return result;
+    if (bytes > byte_limit)
+        return ASTRA_ERROR_NO_RESOURCES;
+    result = astra_area_create(
+        bytes, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+                   ASTRA_RIGHT_TRANSFER, area);
+    if (result != ASTRA_OK)
+        return result;
+    result = astra_area_map(area,
+                            ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
+    if (result == ASTRA_OK)
+        result = astra_clipboard_document_write(
+            area->address, area->size, representations, count, &bytes);
+    if (area->address != NULL) {
+        AstraResult unmap_result = astra_area_unmap(area);
+
+        if (result == ASTRA_OK && unmap_result != ASTRA_OK)
+            result = unmap_result;
+    }
+    if (result == ASTRA_OK)
+        result = astra_handle_duplicate(
+            area->handle,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
+            immutable);
+    if (result == ASTRA_OK)
+        *document_bytes = bytes;
+    return result;
+}
+
 AstraResult astra_clipboard_write(
     AstraHandle service,
     const AstraClipboardRepresentation *representations, uint32_t count,
@@ -245,33 +291,8 @@ AstraResult astra_clipboard_write(
 
     if (service == ASTRA_INVALID_HANDLE)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    result = astra_clipboard_document_write(
-        NULL, 0u, representations, count, &bytes);
-    if (result != ASTRA_ERROR_BUFFER_TOO_SMALL)
-        return result;
-    if (bytes > ASTRA_AREA_SIZE_MAX)
-        return ASTRA_ERROR_NO_RESOURCES;
-    result = astra_area_create(
-        bytes, ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
-                   ASTRA_RIGHT_TRANSFER, &area);
-    if (result != ASTRA_OK)
-        return result;
-    result = astra_area_map(&area,
-                            ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE);
-    if (result == ASTRA_OK)
-        result = astra_clipboard_document_write(
-            area.address, area.size, representations, count, &bytes);
-    if (area.address != NULL) {
-        AstraResult unmap_result = astra_area_unmap(&area);
-
-        if (result == ASTRA_OK && unmap_result != ASTRA_OK)
-            result = unmap_result;
-    }
-    if (result == ASTRA_OK)
-        result = astra_handle_duplicate(
-            area.handle,
-            ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
-            &immutable);
+    result = astra_system_document_snapshot(representations, count,
+        ASTRA_AREA_SIZE_MAX, &area, &immutable, &bytes);
     if (result == ASTRA_OK)
         result = exchange(service, ASTRA_CLIPBOARD_OPERATION_SET, bytes,
                           immutable, &reply, &ignored);

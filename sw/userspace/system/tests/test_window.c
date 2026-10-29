@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 
 #include <astra/gui.h>
+#include <astra/clipboard.h>
 #include <astra/endian.h>
 #include <astra/menu.h>
 #include <astra/port.h>
@@ -70,7 +71,7 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         *out_d1 = d1 == 2u ? 0x101u :
                   (d1 == 0x505u ? 0x103u : 0x102u);
     } else if (number == ASTRA_SYSCALL_AREA_CREATE) {
-        assert(d1 == (menu_area_mode == 2u ? 57u : menu_area_mode ? 72u : ASTRA_HARDWARE_POINTER_WIDTH *
+        assert(d1 == (menu_area_mode == 3u ? 61u : menu_area_mode == 2u ? 57u : menu_area_mode ? 72u : ASTRA_HARDWARE_POINTER_WIDTH *
                      ASTRA_HARDWARE_POINTER_HEIGHT * sizeof(AstraColorRGBA8)));
         assert(d2 == (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
                       ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER));
@@ -139,13 +140,14 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             assert(port == 0x303u && call->request_size == sizeof(*request));
             assert(request->window == 7u && request->generation != 0u);
             assert(request->action >= ASTRA_GUI_WINDOW_QUERY &&
-                   request->action <= ASTRA_GUI_WINDOW_OVERLAY_HIDE &&
+                   request->action <= ASTRA_GUI_WINDOW_DRAG_COMPLETE &&
                    request->action != ASTRA_GUI_WINDOW_CLOSE);
             assert(call->reply_index == 0u);
             if (request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ||
                 request->action == ASTRA_GUI_WINDOW_MENU_OPEN ||
                 request->action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT ||
-                request->action == ASTRA_GUI_WINDOW_MENU_BAR_SET)
+                request->action == ASTRA_GUI_WINDOW_MENU_BAR_SET ||
+                request->action == ASTRA_GUI_WINDOW_DRAG_BEGIN)
                 assert(call->handle_count == 1u &&
                        call->handles[0] == 0x103u);
             else
@@ -161,6 +163,12 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
                 assert(astra_load_be32(pointer_area + 32u) == ASTRA_MENU_SEPARATOR && astra_load_be32(pointer_area + 36u) == 68u);
                 assert(astra_load_be32(pointer_area + 48u) == (ASTRA_MENU_DISABLED | ASTRA_MENU_CHECKED));
                 assert(memcmp(pointer_area + 64u, "OpenFlag", 8u) == 0);
+            }
+            if (request->action == ASTRA_GUI_WINDOW_DRAG_BEGIN) {
+                assert(astra_clipboard_document_validate(pointer_area, 61u) ==
+                    ASTRA_OK);
+                assert(request->flags == ASTRA_DRAG_OPERATIONS &&
+                    request->x == 3u && request->title_length == 12u);
             }
             last_command = *request;
             reply->status = next_command_status;
@@ -199,7 +207,7 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
     } else if (number == ASTRA_SYSCALL_PORT_RECEIVE_TRY) {
         AstraGuiWindowEvent *message = (AstraGuiWindowEvent *)d2;
 
-        assert(d1 == event_receive && d3 == sizeof(*message) && d5 == 0u);
+        assert(d1 == event_receive && d3 == sizeof(*message) && d5 == 1u);
         header(&message->header, sizeof(*message),
                ASTRA_GUI_WINDOW_EVENT, 9u);
         message->event.size = sizeof(message->event);
@@ -223,6 +231,13 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
             message->event.data.font_changed.window = next_font_window;
         } else if (next_event_type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION) {
             message->event.data.system_action.action = next_system_action;
+        } else if (next_event_type == ASTRA_WINDOW_EVENT_DRAG_ENTER ||
+                   next_event_type == ASTRA_WINDOW_EVENT_DRAG_DROP) {
+            message->event.data.drag.token = 7u;
+            message->event.data.drag.peer_window = 8u;
+            message->event.data.drag.operation = ASTRA_DRAG_COPY;
+            *(uint32_t *)d4 = 0x505u;
+            *out_d2 = 1u;
         } else {
             message->event.data.pointer.x = 12;
             message->event.data.pointer.y = 18;
@@ -436,6 +451,33 @@ int main(void)
         }
         menu_area_mode = 0u;
     }
+    {
+        AstraClipboardRepresentation source =
+            ASTRA_CLIPBOARD_REPRESENTATION_INIT;
+
+        source.type = "text/plain";
+        source.type_length = sizeof("text/plain") - 1u;
+        source.data = "abc";
+        source.data_length = 3u;
+        menu_area_mode = 3u;
+        before = call_count;
+        assert(astra_window_drag_begin(&window, &source, 1u, 3u,
+            ASTRA_DRAG_OPERATIONS, "notes.txt +2",
+            sizeof("notes.txt +2") - 1u) == ASTRA_OK);
+        assert(call_count == before + 6u &&
+               last_command.action == ASTRA_GUI_WINDOW_DRAG_BEGIN);
+        menu_area_mode = 0u;
+        assert(astra_window_drag_feedback(&window, 7u, ASTRA_DRAG_MOVE,
+            "Move to WORK:", sizeof("Move to WORK:") - 1u) == ASTRA_OK);
+        assert(last_command.action == ASTRA_GUI_WINDOW_DRAG_FEEDBACK &&
+               last_command.flags == 7u && last_command.x == ASTRA_DRAG_MOVE);
+        assert(astra_window_drag_complete(&window, 7u, ASTRA_DRAG_MOVE) ==
+            ASTRA_OK);
+        assert(last_command.action == ASTRA_GUI_WINDOW_DRAG_COMPLETE &&
+               last_command.flags == 7u && last_command.x == ASTRA_DRAG_MOVE);
+        assert(astra_window_drag_cancel(&window) == ASTRA_OK &&
+               last_command.action == ASTRA_GUI_WINDOW_DRAG_CANCEL);
+    }
     before = call_count;
     assert(astra_window_present(&window) == ASTRA_OK);
     expect_action(before, ASTRA_GUI_WINDOW_PRESENT);
@@ -527,6 +569,12 @@ int main(void)
         assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
         next_system_action = ASTRA_SYSTEM_ACTION_RESTART + 1u;
         assert(astra_window_event_try(&window, &event) == ASTRA_ERROR_IO);
+        next_event_type = ASTRA_WINDOW_EVENT_DRAG_ENTER;
+        assert(astra_window_event_try(&window, &event) == ASTRA_OK &&
+               event.data.drag.token == 7u &&
+               event.data.drag.document_handle == 0x505u);
+        assert(astra_window_drag_document_close(&event) == ASTRA_OK &&
+               event.data.drag.document_handle == ASTRA_INVALID_HANDLE);
         next_event_type = ASTRA_WINDOW_EVENT_POINTER_MOTION;
     }
     assert(astra_window_tooltip_show(&window, "Hint", 4u,

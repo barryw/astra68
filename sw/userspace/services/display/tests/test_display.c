@@ -89,6 +89,7 @@ uint32_t astra_shared_surface_close(AstraSharedSurface *surface)
 
 static AstraGuiWindowEvent delivered;
 static AstraGuiWindowEvent previous_delivered;
+static uint32_t delivered_drag_handle;
 
 /* Warp stamps its synthetic motion with the clock. */
 uint64_t astra_clock_monotonic(void)
@@ -257,15 +258,22 @@ uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
         delivered_font_handles = handle_count;
         return font_reply_status;
     }
-    (void)handles;
     assert(handle == 0x500u && size == sizeof(delivered) &&
-           handle_count == 0u);
+           handle_count <= 1u);
+    delivered_drag_handle = handle_count != 0u ? handles[0] : 0u;
     if (send_would_block != 0u) {
         --send_would_block;
         return ASTRA_SYSCALL_WOULD_BLOCK;
     }
     previous_delivered = delivered;
     memcpy(&delivered, message, sizeof(delivered));
+    if (handle_count != 0u) {
+        uint32_t index = handles[0] - 0x800u;
+
+        assert(index < TEST_AREA_COUNT && test_area_live[index] != 0u);
+        test_area_live[index] = 0u;
+        test_area_rights[index] = 0u;
+    }
     ++delivered_count;
     return ASTRA_SYSCALL_OK;
 }
@@ -1924,6 +1932,64 @@ static void compose_commit(DisplayState *state, uint32_t fence)
     assert(valid_batch(compose(batch, fence, state, &error, NULL)) != 0u);
     assert(error == ASTRA_STATUS_OK);
     commit_render_state(state);
+}
+
+static void test_drag_session_routing(void)
+{
+    DisplayWindow windows[2] = {0};
+    DisplayState state = {.windows = windows, .capacity = 2u, .count = 2u};
+    AstraGuiWindowCommand feedback = {0};
+    uint32_t area = 0u;
+
+    assert(astra_rt_area_create(4096u,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER, &area) == ASTRA_SYSCALL_OK);
+    for (uint32_t at = 0u; at < 2u; ++at) {
+        windows[at].id = at + 1u;
+        windows[at].generation = 1u;
+        windows[at].event_send = 0x500u;
+        windows[at].request.type = ASTRA_WINDOW_STANDARD;
+        windows[at].request.x = at == 0u ? 100u : 400u;
+        windows[at].request.y = 100u;
+        windows[at].request.width = 200u;
+        windows[at].request.height = 120u;
+        windows[at].request.event_mask = ASTRA_WINDOW_SUBSCRIBE_DRAG;
+    }
+    state.pointer_x = 450;
+    state.pointer_y = 160;
+    state.overlay = DISPLAY_OVERLAY_DRAG;
+    state.drag = (DisplayDrag){.token = 7u, .source = 1u,
+        .document_area = area, .allowed = ASTRA_DRAG_OPERATIONS,
+        .label_length = 9u, .revision = 1u};
+    memcpy(state.drag.label, "notes.txt", 9u);
+    send_would_block = 1u;
+    drag_motion(&state, ASTRA_INPUT_MOD_ALT, 10u);
+    assert(state.drag.target == 0u && test_area_live[area - 0x800u] != 0u);
+    drag_motion(&state, ASTRA_INPUT_MOD_ALT, 11u);
+    assert(state.drag.target == 2u && state.drag.accepted == 0u);
+    assert(delivered.event.type == ASTRA_WINDOW_EVENT_DRAG_ENTER &&
+           delivered.event.data.drag.token == 7u &&
+           delivered.event.data.drag.operation == ASTRA_DRAG_OPERATIONS &&
+           delivered.event.data.drag.modifiers == ASTRA_INPUT_MOD_ALT &&
+           delivered_drag_handle != area &&
+           delivered_drag_handle >= 0x800u);
+    feedback.window = 2u;
+    feedback.flags = 7u;
+    feedback.x = ASTRA_DRAG_MOVE;
+    feedback.title_length = 21u;
+    memcpy(feedback.title, "Move 3 files to WORK:", 21u);
+    assert(drag_feedback(&state, &feedback) == ASTRA_STATUS_OK);
+    assert(state.drag.accepted == ASTRA_DRAG_MOVE);
+    feedback.flags = 8u;
+    assert(drag_feedback(&state, &feedback) == ASTRA_STATUS_INVALID);
+    state.pointer_x = 700;
+    drag_motion(&state, 0u, 12u);
+    assert(state.drag.target == 0u && state.drag.accepted == 0u &&
+           delivered.event.type == ASTRA_WINDOW_EVENT_DRAG_LEAVE);
+    drag_finish(&state, 0u, 0u, 0u, 13u);
+    assert(state.drag.source == 0u && state.overlay == DISPLAY_OVERLAY_NONE &&
+           delivered.event.type == ASTRA_WINDOW_EVENT_DRAG_FINISHED &&
+           delivered.event.data.drag.operation == 0u);
 }
 
 static void test_malformed_retained_frame(void)
@@ -5122,6 +5188,7 @@ int main(void)
         assert(draw_list_source_pending(&window, 8u));
     }
     test_launch_panel();
+    test_drag_session_routing();
     test_shrunk_window_copy_forward();
     puts("display compositor tests passed");
     return 0;

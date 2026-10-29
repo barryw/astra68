@@ -1,5 +1,6 @@
 #include <astra/bundle.h>
 #include <astra/bytes.h>
+#include <astra/clipboard.h>
 #include <astra/display.h>
 #include <astra/endian.h>
 #include <astra/fonts.h>
@@ -57,6 +58,7 @@ enum {
     DISPLAY_OVERLAY_MENU,
     DISPLAY_OVERLAY_TOOLTIP,
     DISPLAY_OVERLAY_NOTIFICATION,
+    DISPLAY_OVERLAY_DRAG,
 };
 
 _Static_assert(ASTRA_RENDER_BATCH_SCANOUT1_OFFSET +
@@ -204,6 +206,23 @@ typedef struct DisplayNotice {
     char text[ASTRA_WINDOW_TITLE_MAX];
 } DisplayNotice;
 
+typedef struct DisplayDrag {
+    uint32_t token;
+    uint32_t source;
+    uint32_t target;
+    uint32_t document_area;
+    uint32_t allowed;
+    uint32_t accepted;
+    uint32_t item_count;
+    uint32_t revision;
+    uint64_t deadline_ns;
+    uint8_t drop_pending;
+    uint16_t label_length;
+    uint16_t feedback_length;
+    char label[ASTRA_WINDOW_TITLE_MAX];
+    char feedback[ASTRA_WINDOW_TITLE_MAX];
+} DisplayDrag;
+
 typedef struct DisplayState {
     DisplayWindow *windows;
     DisplayFontFace *ui_font;
@@ -260,6 +279,8 @@ typedef struct DisplayState {
     uint8_t system_pending;
     uint8_t overlay;
     DisplayNotice notice;
+    DisplayDrag drag;
+    uint32_t next_drag_token;
     AstraMenu menu;
     AstraMenu submenu;
     AstraMenuItem *menu_rows;
@@ -388,6 +409,22 @@ static uint32_t service_status(uint32_t status)
     case ASTRA_SYSCALL_BUFFER_TOO_SMALL: return ASTRA_STATUS_BUFFER_TOO_SMALL;
     default: return ASTRA_STATUS_IO;
     }
+}
+
+static uint32_t drag_caption_width(const DisplayState *state,
+                                   const AstraTheme *theme)
+{
+    const char *text = state->drag.feedback_length != 0u ?
+        state->drag.feedback : state->drag.label;
+    uint32_t length = state->drag.feedback_length != 0u ?
+        state->drag.feedback_length : state->drag.label_length;
+    uint32_t width = astra_surface_ui_text_width(
+        text, length, theme->control_font_height) + 24u;
+
+    if (width < 80u) width = 80u;
+    if (width > ASTRA_DISPLAY_WIDTH - 32u)
+        width = ASTRA_DISPLAY_WIDTH - 32u;
+    return width;
 }
 
 static uint32_t display_windows_reserve(DisplayState *state,
@@ -750,10 +787,32 @@ static uint32_t submenu_draw_list[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)]
 static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp_ms, uint32_t status);
 static void set_overlay(DisplayState *state, uint8_t overlay);
 static uint32_t send_event(DisplayWindow *window, AstraWindowEvent *event);
+static void content_origin(const AstraTheme *theme,
+                           const DisplayWindow *window,
+                           int32_t *x, int32_t *y);
+static void drag_finish(DisplayState *state, uint32_t target,
+                        uint32_t operation, uint32_t modifiers,
+                        uint32_t timestamp_ms);
 
 static DamageRect overlay_bounds(const DisplayState *state)
 {
     AstraMenuState menu;
+
+    if (state->overlay == DISPLAY_OVERLAY_DRAG && state->drag.source != 0u) {
+        AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+        int32_t width = (int32_t)drag_caption_width(state, &theme);
+        int32_t height = (int32_t)theme.control_height + 12;
+        int32_t x = state->pointer_x + 16;
+        int32_t y = state->pointer_y + 20;
+
+        if (x + width > (int32_t)ASTRA_DISPLAY_WIDTH)
+            x = ASTRA_DISPLAY_WIDTH - width;
+        if (y + height > (int32_t)DISPLAY_WORK_BOTTOM)
+            y = DISPLAY_WORK_BOTTOM - height;
+        if (x < 0) x = 0;
+        if (y < (int32_t)DISPLAY_WORK_TOP) y = DISPLAY_WORK_TOP;
+        return (DamageRect){x, y, x + width, y + height, 1u};
+    }
 
     if ((state->overlay == DISPLAY_OVERLAY_TOOLTIP ||
          state->overlay == DISPLAY_OVERLAY_NOTIFICATION) &&
@@ -906,7 +965,10 @@ static uint32_t event_subscription(uint16_t type)
            type == ASTRA_WINDOW_EVENT_KEY ? ASTRA_WINDOW_SUBSCRIBE_KEY :
            type == ASTRA_WINDOW_EVENT_TEXT ? ASTRA_WINDOW_SUBSCRIBE_TEXT :
            type == ASTRA_WINDOW_EVENT_SYSTEM_ACTION ?
-               ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION : 0u;
+               ASTRA_WINDOW_SUBSCRIBE_SYSTEM_ACTION :
+           type >= ASTRA_WINDOW_EVENT_DRAG_ENTER &&
+           type <= ASTRA_WINDOW_EVENT_DRAG_FINISHED ?
+               ASTRA_WINDOW_SUBSCRIBE_DRAG : 0u;
 }
 
 static int prepare_event(DisplayWindow *window, AstraWindowEvent *event,
@@ -968,6 +1030,32 @@ static uint32_t send_event(DisplayWindow *window, AstraWindowEvent *event)
 
     return prepare_event(window, event, &message) ?
         deliver_event(window, &message, 1) : ASTRA_SYSCALL_OK;
+}
+
+/* Drag documents are immutable ACLP areas. A port transfer grants each
+   receiver its own read/map handle; the display retains the session copy. */
+static uint32_t send_drag_event(DisplayWindow *window,
+                                AstraWindowEvent *event, uint32_t area)
+{
+    AstraGuiWindowEvent message;
+    uint32_t transfer = 0u;
+    uint32_t status;
+
+    if (!prepare_event(window, event, &message))
+        return ASTRA_SYSCALL_INVALID_ARGUMENT;
+    if (area != 0u) {
+        status = astra_rt_handle_duplicate(area,
+            ASTRA_RIGHT_READ | ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER,
+            &transfer);
+        if (status != ASTRA_SYSCALL_OK) return status;
+    }
+    status = astra_port_send(window->event_send, &message, sizeof(message),
+                             area != 0u ? &transfer : NULL,
+                             area != 0u ? 1u : 0u);
+    if (status != ASTRA_SYSCALL_OK && transfer != 0u)
+        (void)astra_close(transfer);
+    window->event_lost = status == ASTRA_SYSCALL_OK ? 0u : 1u;
+    return status;
 }
 
 static void state_event(DisplayWindow *window, uint32_t timestamp_ms,
@@ -1414,6 +1502,8 @@ static int activate(DisplayState *state, const AstraTheme *theme,
             (void)set_gadget_visual(state, theme, &state->windows[captured],
                                    state->capture_region, ASTRA_GADGET_NORMAL);
             (void)send_event(&state->windows[captured], &reset);
+            if (state->drag.source != 0u)
+                drag_finish(state, 0u, 0u, 0u, timestamp_ms);
             state->capture_window = 0u;
             state->capture_region = HIT_NONE;
             changed = 1;
@@ -1628,6 +1718,203 @@ static uint32_t hit_test(const DisplayState *state, const AstraTheme *theme,
     }
     *region = HIT_NONE;
     return state->count;
+}
+
+static uint32_t drag_event(DisplayState *state, uint32_t recipient,
+                           uint16_t kind, uint32_t peer, uint32_t operation,
+                           uint32_t modifiers, uint32_t timestamp_ms,
+                           uint32_t document_area)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    uint32_t index = find_id(state, recipient);
+    AstraWindowEvent event = {
+        .type = kind, .timestamp_ms = timestamp_ms,
+    };
+    int32_t x = 0, y = 0;
+
+    if (index == state->count) return ASTRA_SYSCALL_INVALID_HANDLE;
+    content_origin(&theme, &state->windows[index], &x, &y);
+    event.data.drag.token = state->drag.token;
+    event.data.drag.peer_window = peer;
+    event.data.drag.x = state->pointer_x - x;
+    event.data.drag.y = state->pointer_y - y;
+    event.data.drag.modifiers = modifiers;
+    event.data.drag.operation = operation;
+    return send_drag_event(&state->windows[index], &event, document_area);
+}
+
+static void drag_finish(DisplayState *state, uint32_t target,
+                        uint32_t operation, uint32_t modifiers,
+                        uint32_t timestamp_ms)
+{
+    if (state->drag.source == 0u) return;
+    damage_both(state, overlay_bounds(state));
+    if (state->drag.target != 0u)
+        (void)drag_event(state, state->drag.target,
+                         ASTRA_WINDOW_EVENT_DRAG_LEAVE,
+                         state->drag.source, 0u, modifiers,
+                         timestamp_ms, 0u);
+    (void)drag_event(state, state->drag.source,
+                     ASTRA_WINDOW_EVENT_DRAG_FINISHED,
+                     target, operation, modifiers, timestamp_ms, 0u);
+    if (state->drag.document_area != 0u)
+        (void)astra_close(state->drag.document_area);
+    state->drag = (DisplayDrag){0};
+    state->overlay = DISPLAY_OVERLAY_NONE;
+    state->overlay_drawn = DISPLAY_OVERLAY_NONE;
+}
+
+static void drag_motion(DisplayState *state, uint32_t modifiers,
+                        uint32_t timestamp_ms)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    uint32_t region = HIT_NONE;
+    uint32_t index = hit_test(state, &theme, state->pointer_x,
+                              state->pointer_y, &region);
+    uint32_t id = 0u;
+
+    if (state->drag.drop_pending != 0u) return;
+
+    if (index != state->count && region == HIT_CONTENT &&
+        modal_window(state, index) == index &&
+        (state->windows[index].request.event_mask &
+         ASTRA_WINDOW_SUBSCRIBE_DRAG) != 0u)
+        id = state->windows[index].id;
+    if (id != state->drag.target) {
+        if (state->drag.target != 0u)
+            (void)drag_event(state, state->drag.target,
+                             ASTRA_WINDOW_EVENT_DRAG_LEAVE,
+                             state->drag.source, 0u, modifiers,
+                             timestamp_ms, 0u);
+        state->drag.target = 0u;
+        state->drag.accepted = 0u;
+        state->drag.feedback_length = 0u;
+        ++state->drag.revision;
+        if (id != 0u &&
+            drag_event(state, id, ASTRA_WINDOW_EVENT_DRAG_ENTER,
+                       state->drag.source, state->drag.allowed,
+                       modifiers, timestamp_ms,
+                       state->drag.document_area) == ASTRA_SYSCALL_OK)
+            state->drag.target = id;
+    } else if (id != 0u) {
+        (void)drag_event(state, id, ASTRA_WINDOW_EVENT_DRAG_MOTION,
+                         state->drag.source, state->drag.allowed,
+                         modifiers, timestamp_ms, 0u);
+    }
+}
+
+static uint32_t drag_begin(DisplayState *state,
+                           const AstraGuiWindowCommand *command,
+                           uint32_t area)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    void *mapping = NULL;
+    uint32_t bytes = 0u;
+    uint32_t required;
+    uint32_t offset;
+    uint32_t status;
+    uint32_t source = command->window;
+    uint32_t index = find_id(state, source);
+
+    if (index == state->count || state->drag.source != 0u ||
+        state->overlay == DISPLAY_OVERLAY_MENU ||
+        state->capture_window != source ||
+        state->capture_region != HIT_CONTENT ||
+        (state->windows[index].request.event_mask &
+         ASTRA_WINDOW_SUBSCRIBE_DRAG) == 0u)
+        return ASTRA_STATUS_BUSY;
+    status = service_status(astra_rt_area_map(
+        area, ASTRA_AREA_MAP_READ, &mapping, &bytes));
+    if (status != ASTRA_STATUS_OK) return status;
+    if (bytes >= sizeof(AstraClipboardDocumentHeader) &&
+        bytes <= ASTRA_GUI_DRAG_BYTES_MAX) {
+        const AstraClipboardDocumentHeader *header = mapping;
+
+        status = header->total_size <= bytes &&
+            astra_clipboard_document_validate(mapping,
+                header->total_size) == ASTRA_OK ?
+            ASTRA_STATUS_OK : DISPLAY_FAIL_PROTOCOL;
+    } else {
+        status = DISPLAY_FAIL_PROTOCOL;
+    }
+    (void)astra_rt_area_unmap(mapping);
+    if (status != ASTRA_STATUS_OK) return status;
+    if (state->overlay == DISPLAY_OVERLAY_TOOLTIP ||
+        state->overlay == DISPLAY_OVERLAY_NOTIFICATION)
+        notice_end(state);
+    state->drag = (DisplayDrag){0};
+    state->drag.source = source;
+    state->drag.allowed = command->flags;
+    state->drag.item_count = command->x;
+    state->drag.label_length = command->title_length;
+    memcpy(state->drag.label, command->title, command->title_length);
+    required = align_media_bytes(drag_caption_width(state, &theme) *
+                                 (theme.control_height + 12u) * 2u);
+    offset = state->overlay_offset;
+    if (state->overlay_capacity < required) {
+        offset = display_media_allocate(state, NULL, UINT32_MAX, required);
+        if (offset == 0u) {
+            state->drag = (DisplayDrag){0};
+            return ASTRA_STATUS_LIMIT;
+        }
+        state->overlay_capacity = required;
+    }
+    state->overlay_offset = offset;
+    state->drag.document_area = area;
+    if (++state->next_drag_token == 0u) ++state->next_drag_token;
+    state->drag.token = state->next_drag_token;
+    state->drag.revision = 1u;
+    state->overlay_drawn = DISPLAY_OVERLAY_NONE;
+    state->overlay = DISPLAY_OVERLAY_DRAG;
+    damage_both(state, overlay_bounds(state));
+    drag_motion(state, 0u, 0u);
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t drag_feedback(DisplayState *state,
+                              const AstraGuiWindowCommand *command)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    DisplayDrag previous;
+    uint32_t choice = command->x;
+    uint32_t required;
+    uint32_t offset;
+
+    if (state->drag.source == 0u || state->drag.target != command->window ||
+        state->drag.token != command->flags ||
+        (choice != 0u && (state->drag.allowed & choice) == 0u))
+        return ASTRA_STATUS_INVALID;
+    if (state->drag.drop_pending != 0u) {
+        if (choice != state->drag.accepted)
+            return ASTRA_STATUS_INVALID;
+        state->drag.deadline_ns = astra_clock_monotonic() +
+            UINT64_C(300000000000);
+        return ASTRA_STATUS_OK;
+    }
+    previous = state->drag;
+    state->drag.accepted = choice;
+    state->drag.feedback_length = command->title_length;
+    memcpy(state->drag.feedback, command->title, command->title_length);
+    required = align_media_bytes(drag_caption_width(state, &theme) *
+                                 (theme.control_height + 12u) * 2u);
+    if (required > state->overlay_capacity) {
+        offset = display_media_allocate(state, NULL, UINT32_MAX, required);
+        if (offset == 0u) {
+            state->drag = previous;
+            return ASTRA_STATUS_LIMIT;
+        }
+        state->overlay_offset = offset;
+        state->overlay_capacity = required;
+        state->overlay_drawn = DISPLAY_OVERLAY_NONE;
+    }
+    state->drag = previous;
+    damage_both(state, overlay_bounds(state));
+    state->drag.accepted = choice;
+    state->drag.feedback_length = command->title_length;
+    memcpy(state->drag.feedback, command->title, command->title_length);
+    ++state->drag.revision;
+    damage_both(state, overlay_bounds(state));
+    return ASTRA_STATUS_OK;
 }
 
 static uint8_t *gadget_state(DisplayWindow *window, uint32_t region)
@@ -2441,6 +2728,45 @@ static int build_overlay_surface(AstraRenderBuilder *builder,
     state->submenu_pending = 0u;
     if (state->overlay == DISPLAY_OVERLAY_NONE)
         return 1;
+    if (state->overlay == DISPLAY_OVERLAY_DRAG) {
+        const DisplayDrag *drag = &state->drag;
+        const char *caption = drag->feedback_length != 0u ?
+            drag->feedback : drag->label;
+        uint32_t length = drag->feedback_length != 0u ?
+            drag->feedback_length : drag->label_length;
+        uint32_t width = drag_caption_width(state, theme);
+        uint32_t height = theme->control_height + 12u;
+        int rendered;
+
+        state->overlay_resource = astra_render_builder_surface_at(
+            builder, state->overlay_offset, state->overlay_capacity,
+            (uint16_t)width, (uint16_t)height);
+        if (state->overlay_resource == 0u) return 0;
+        if (state->overlay_drawn == DISPLAY_OVERLAY_DRAG &&
+            state->overlay_drawn_revision == drag->revision)
+            return 1;
+        if (!astra_draw_list_view_init(&surface, menu_draw_list,
+            sizeof(menu_draw_list), (uint16_t)width, (uint16_t)height))
+            return 0;
+        astra_surface_fill_round(&surface, 0, 0, width, height,
+            theme->control_radius, color(theme->client_border));
+        astra_surface_fill_round(&surface, 1, 1, width - 2u, height - 2u,
+            theme->control_radius - 1u, color(theme->system_bar));
+        astra_surface_ui_text(&surface, 12,
+            ((int32_t)height - (int32_t)theme->control_font_height) / 2,
+            caption, length, theme->control_font_height,
+            color(drag->accepted != 0u ? theme->accent :
+                  theme->text_primary));
+        state->overlay_fonts.registry = state->fonts;
+        display_font_set_begin(&state->overlay_fonts);
+        rendered = astra_render_builder_replay_resolved(builder,
+            state->overlay_resource,
+            (const AstraDrawListHeader *)menu_draw_list, &resolver);
+        display_font_set_end(&state->overlay_fonts, rendered);
+        if (!rendered) return 0;
+        state->overlay_pending = 1u;
+        return 1;
+    }
     if (state->overlay == DISPLAY_OVERLAY_TOOLTIP ||
         state->overlay == DISPLAY_OVERLAY_NOTIFICATION) {
         const DisplayNotice *notice = &state->notice;
@@ -3509,6 +3835,8 @@ static void commit_render_state(DisplayState *state)
         else if (state->overlay == DISPLAY_OVERLAY_TOOLTIP ||
                  state->overlay == DISPLAY_OVERLAY_NOTIFICATION)
             state->overlay_drawn_revision = state->notice.revision;
+        else if (state->overlay == DISPLAY_OVERLAY_DRAG)
+            state->overlay_drawn_revision = state->drag.revision;
         state->overlay_pending = 0u;
     }
     state->submenu_pending = 0u;
@@ -3772,7 +4100,8 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
                    request->action == ASTRA_GUI_WINDOW_SET_POINTER_IMAGE ||
                    request->action == ASTRA_GUI_WINDOW_MENU_OPEN ||
                    request->action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT ||
-                   request->action == ASTRA_GUI_WINDOW_MENU_BAR_SET ? 2u : 1u) ||
+                   request->action == ASTRA_GUI_WINDOW_MENU_BAR_SET ||
+                   request->action == ASTRA_GUI_WINDOW_DRAG_BEGIN ? 2u : 1u) ||
         request->header.total_size != sizeof(*request) ||
         request->header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
         request->header.flags != 0u ||
@@ -3784,9 +4113,33 @@ static int valid_command(const AstraGuiWindowCommand *request, uint32_t size,
         request->generation == 0u ||
         request->reserved16 != 0u || request->reserved != 0u ||
         request->action < ASTRA_GUI_WINDOW_QUERY ||
-        request->action > ASTRA_GUI_WINDOW_OVERLAY_HIDE ||
+        request->action > ASTRA_GUI_WINDOW_DRAG_COMPLETE ||
         request->title_length > ASTRA_WINDOW_TITLE_MAX)
         return 0;
+    if (request->action == ASTRA_GUI_WINDOW_DRAG_BEGIN ||
+        request->action == ASTRA_GUI_WINDOW_DRAG_FEEDBACK) {
+        if (request->y != 0u || request->width != 0u ||
+            request->height != 0u || request->title_length == 0u ||
+            !astra_utf8_validate(request->title, request->title_length, 0u) ||
+            memchr(request->title, '\n', request->title_length) != NULL ||
+            memchr(request->title, '\r', request->title_length) != NULL)
+            return 0;
+        return request->action == ASTRA_GUI_WINDOW_DRAG_BEGIN ?
+            request->x != 0u && request->flags != 0u &&
+            (request->flags & ~ASTRA_DRAG_OPERATIONS) == 0u :
+            request->flags != 0u &&
+            (request->x == 0u || request->x == ASTRA_DRAG_COPY ||
+             request->x == ASTRA_DRAG_MOVE);
+    }
+    if (request->action == ASTRA_GUI_WINDOW_DRAG_CANCEL)
+        return frame_zero && request->title_length == 0u &&
+               request->flags == 0u;
+    if (request->action == ASTRA_GUI_WINDOW_DRAG_COMPLETE)
+        return request->flags != 0u && request->y == 0u &&
+               request->width == 0u && request->height == 0u &&
+               request->title_length == 0u &&
+               (request->x == 0u || request->x == ASTRA_DRAG_COPY ||
+                request->x == ASTRA_DRAG_MOVE);
     if (request->action == ASTRA_GUI_WINDOW_MENU_OPEN ||
         request->action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT)
         return request->width == 0u && request->height == 0u &&
@@ -3915,6 +4268,10 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
         command->action != ASTRA_GUI_WINDOW_TOOLTIP_SHOW &&
         command->action != ASTRA_GUI_WINDOW_NOTIFICATION_SHOW &&
         command->action != ASTRA_GUI_WINDOW_OVERLAY_HIDE &&
+        command->action != ASTRA_GUI_WINDOW_DRAG_BEGIN &&
+        command->action != ASTRA_GUI_WINDOW_DRAG_FEEDBACK &&
+        command->action != ASTRA_GUI_WINDOW_DRAG_CANCEL &&
+        command->action != ASTRA_GUI_WINDOW_DRAG_COMPLETE &&
         command->action != ASTRA_GUI_WINDOW_CLOSE)
         return ASTRA_STATUS_UNSUPPORTED;
     switch (command->action) {
@@ -3925,6 +4282,10 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
     case ASTRA_GUI_WINDOW_TOOLTIP_SHOW:
     case ASTRA_GUI_WINDOW_NOTIFICATION_SHOW:
     case ASTRA_GUI_WINDOW_OVERLAY_HIDE:
+    case ASTRA_GUI_WINDOW_DRAG_BEGIN:
+    case ASTRA_GUI_WINDOW_DRAG_FEEDBACK:
+    case ASTRA_GUI_WINDOW_DRAG_CANCEL:
+    case ASTRA_GUI_WINDOW_DRAG_COMPLETE:
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_MENU_BAR_CLEAR:
         if (state->menu_owner == window->id &&
@@ -4219,6 +4580,9 @@ static uint32_t apply_window_command(DisplayState *state, const AstraTheme *them
         }
         return ASTRA_STATUS_OK;
     case ASTRA_GUI_WINDOW_CLOSE:
+        if (state->drag.source == window->id ||
+            state->drag.target == window->id)
+            drag_finish(state, 0u, 0u, 0u, 0u);
         damage_window(state, theme, window);
         next_generation(window);
         *closed = *window;
@@ -4806,6 +5170,12 @@ static uint32_t handle_pointer(DisplayState *state,
     if (input->type == ASTRA_INPUT_EVENT_STATE_RESET) {
         *effects |= DISPLAY_POINTER_CURSOR;
         index = keyboard_window(state);
+        if (state->drag.source != 0u &&
+            state->drag.drop_pending == 0u) {
+            drag_finish(state, 0u, 0u, input->modifiers,
+                        input->timestamp_ms);
+            *effects |= DISPLAY_POINTER_RENDER;
+        }
         if (state->overlay != DISPLAY_OVERLAY_NONE) {
             set_overlay(state, DISPLAY_OVERLAY_NONE);
             *effects |= DISPLAY_POINTER_RENDER;
@@ -4831,8 +5201,17 @@ static uint32_t handle_pointer(DisplayState *state,
     }
 
     if (input->type == ASTRA_INPUT_EVENT_POINTER_MOTION) {
+        if (state->drag.source != 0u &&
+            state->drag.drop_pending == 0u)
+            damage_both(state, overlay_bounds(state));
         state->pointer_x = input->value_x;
         state->pointer_y = input->value_y;
+        if (state->drag.source != 0u &&
+            state->drag.drop_pending == 0u) {
+            drag_motion(state, input->modifiers, input->timestamp_ms);
+            damage_both(state, overlay_bounds(state));
+            *effects |= DISPLAY_POINTER_RENDER;
+        }
         if (state->overlay == DISPLAY_OVERLAY_TOOLTIP) {
             notice_end(state);
             *effects |= DISPLAY_POINTER_RENDER;
@@ -4954,6 +5333,30 @@ static uint32_t handle_pointer(DisplayState *state,
     }
     if (state->overlay == DISPLAY_OVERLAY_MENU)
         return menu_input(state, input, effects);
+
+    if (state->drag.source != 0u &&
+        input->code == ASTRA_INPUT_BUTTON_LEFT &&
+        (input->flags & ASTRA_INPUT_LOGICAL_DOWN) == 0u) {
+        uint32_t target = state->drag.target;
+        uint32_t operation = state->drag.accepted;
+
+        if (target == 0u || operation == 0u ||
+            drag_event(state, target, ASTRA_WINDOW_EVENT_DRAG_DROP,
+                       state->drag.source, operation,
+                       input->modifiers, input->timestamp_ms,
+                       state->drag.document_area) != ASTRA_SYSCALL_OK) {
+            drag_finish(state, 0u, 0u, input->modifiers,
+                        input->timestamp_ms);
+        } else {
+            damage_both(state, overlay_bounds(state));
+            state->drag.drop_pending = 1u;
+            state->drag.deadline_ns = astra_clock_monotonic() +
+                UINT64_C(300000000000);
+            state->overlay = DISPLAY_OVERLAY_NONE;
+            state->overlay_drawn = DISPLAY_OVERLAY_NONE;
+        }
+        *effects |= DISPLAY_POINTER_RENDER;
+    }
 
     uint32_t blocked = state->count;
     index = pointer_target(state, &theme, &region, &blocked);
@@ -6132,6 +6535,46 @@ static void receive_command(uint32_t device, uint32_t irq,
     if (status == ASTRA_STATUS_OK)
         status = apply_command(state, &theme, &command, &closed, &changed);
     if (status == ASTRA_STATUS_OK &&
+        command.action == ASTRA_GUI_WINDOW_DRAG_BEGIN) {
+        status = drag_begin(state, &command, handles[1]);
+        if (status == ASTRA_STATUS_OK) {
+            handles[1] = 0u;
+            changed = 1;
+        }
+    }
+    if (status == ASTRA_STATUS_OK &&
+        command.action == ASTRA_GUI_WINDOW_DRAG_FEEDBACK) {
+        status = drag_feedback(state, &command);
+        changed = status == ASTRA_STATUS_OK &&
+                  state->drag.drop_pending == 0u;
+    }
+    if (status == ASTRA_STATUS_OK &&
+        command.action == ASTRA_GUI_WINDOW_DRAG_CANCEL) {
+        if (state->drag.source != id)
+            status = ASTRA_STATUS_NOT_FOUND;
+        else if (state->drag.drop_pending != 0u)
+            status = ASTRA_STATUS_BUSY;
+        else {
+            drag_finish(state, 0u, 0u, 0u, 0u);
+            changed = 1;
+        }
+    }
+    if (status == ASTRA_STATUS_OK &&
+        command.action == ASTRA_GUI_WINDOW_DRAG_COMPLETE) {
+        if (state->drag.drop_pending == 0u ||
+            state->drag.target != id ||
+            state->drag.token != command.flags ||
+            (command.x != 0u && command.x != state->drag.accepted))
+            status = ASTRA_STATUS_INVALID;
+        else {
+            uint32_t completed = command.x;
+
+            drag_finish(state, completed != 0u ? id : 0u,
+                        completed, 0u, 0u);
+            changed = 1;
+        }
+    }
+    if (status == ASTRA_STATUS_OK &&
         (command.action == ASTRA_GUI_WINDOW_MENU_OPEN ||
          command.action == ASTRA_GUI_WINDOW_MENU_OPEN_PERSISTENT ||
          command.action == ASTRA_GUI_WINDOW_MENU_BAR_SET)) {
@@ -6225,7 +6668,11 @@ static void receive_command(uint32_t device, uint32_t irq,
         command.action != ASTRA_GUI_WINDOW_MENU_CLOSE &&
         command.action != ASTRA_GUI_WINDOW_TOOLTIP_SHOW &&
         command.action != ASTRA_GUI_WINDOW_NOTIFICATION_SHOW &&
-        command.action != ASTRA_GUI_WINDOW_OVERLAY_HIDE) {
+        command.action != ASTRA_GUI_WINDOW_OVERLAY_HIDE &&
+        command.action != ASTRA_GUI_WINDOW_DRAG_BEGIN &&
+        command.action != ASTRA_GUI_WINDOW_DRAG_FEEDBACK &&
+        command.action != ASTRA_GUI_WINDOW_DRAG_CANCEL &&
+        command.action != ASTRA_GUI_WINDOW_DRAG_COMPLETE) {
         uint32_t current = find_id(state, id);
 
         if (current != state->count)
@@ -6727,6 +7174,9 @@ static void serve_windows(uint32_t device, uint32_t irq,
             if (selected == 2u &&
                 notice_tick(&state, astra_clock_monotonic()))
                 effects |= DISPLAY_POINTER_RENDER;
+            if (selected == 2u && state.drag.drop_pending != 0u &&
+                astra_clock_monotonic() >= state.drag.deadline_ns)
+                drag_finish(&state, 0u, 0u, 0u, 0u);
             if ((effects & DISPLAY_POINTER_CURSOR) != 0u) {
                 status = prepare_pointer_image(device, irq, pointer_buffer,
                                                &state, &theme, &cursor_fence,

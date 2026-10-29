@@ -71,7 +71,7 @@ TEST_SOURCES_clipboard := src/clipboard.c src/resource.c src/area.c \
 TEST_SOURCES_datetime := src/datetime.c $(ASTRA_COMMON)/civil.c \
 	$(ASTRA_COMMON)/divide.c
 TEST_SOURCES_graphics := src/graphics.c src/display_mode.c src/resource.c \
-	src/area.c src/port.c src/window.c $(TEST_UTF8)
+	src/area.c src/port.c src/window.c src/clipboard.c $(TEST_UTF8)
 TEST_SOURCES_pointer := src/resource.c src/port.c src/input_observer.c src/pointer.c
 TEST_SOURCES_gamepad := src/resource.c src/port.c src/input_observer.c src/gamepad.c
 TEST_SOURCES_port := src/resource.c src/port.c
@@ -79,6 +79,7 @@ TEST_SOURCES_service_manager := src/resource.c src/port.c \
 	src/service_definition.c src/service_manager.c src/service_payload.c $(TEST_UTF8)
 TEST_SOURCES_utf8 := $(TEST_UTF8)
 TEST_SOURCES_window := src/resource.c src/area.c src/port.c src/window.c \
+	src/clipboard.c \
 	$(TEST_UTF8)
 
 all: $(LIB) system-library-contract

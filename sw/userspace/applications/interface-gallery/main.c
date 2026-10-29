@@ -1,4 +1,5 @@
 #include <astra/control.h>
+#include <astra/clipboard.h>
 #include <astra/fonts.h>
 #include <astra/clipboard_service.h>
 #include <astra/graphics_kit.h>
@@ -15,6 +16,7 @@
 #include <astra/vfs_process.h>
 #include <astra/window.h>
 #include <astra/string.h>
+#include <string.h>
 
 #define GALLERY_WIDTH 1120u
 #define GALLERY_HEIGHT 800u
@@ -40,6 +42,7 @@ enum {
     GALLERY_PAGE_LAYOUT,
     GALLERY_PAGE_FIELDS,
     GALLERY_PAGE_PANELS,
+    GALLERY_PAGE_DRAG,
     GALLERY_TEXT_LABEL,
     GALLERY_LAYOUT_LABEL,
     GALLERY_LABEL,
@@ -163,7 +166,14 @@ enum {
     GALLERY_COLOUR_PANEL_USE,
     GALLERY_CUSTOM_VIEW,
     GALLERY_IMAGE_VIEW,
-    GALLERY_CONTROL_COUNT = GALLERY_IMAGE_VIEW
+    GALLERY_DRAG_HEADING,
+    GALLERY_DRAG_SOURCE,
+    GALLERY_DRAG_WORK,
+    GALLERY_DRAG_WORK_LABEL,
+    GALLERY_DRAG_SYSTEM,
+    GALLERY_DRAG_SYSTEM_LABEL,
+    GALLERY_DRAG_RESULT,
+    GALLERY_CONTROL_COUNT = GALLERY_DRAG_RESULT
 };
 
 enum {
@@ -297,6 +307,12 @@ static const char text_view_example[] =
     "End of shared control example.";
 static char clipboard_scratch[4096];
 static uint32_t active_page = GALLERY_PAGE_INPUT;
+static uint8_t gallery_drag_armed;
+static int32_t gallery_drag_start_x;
+static int32_t gallery_drag_start_y;
+static uint32_t gallery_drag_token;
+static uint32_t gallery_drag_visual_target;
+static uint32_t gallery_drag_visual_operation;
 static const AstraChoiceItem gallery_tabs[] = {
     {"Input", sizeof("Input") - 1u, {0u, 0u}},
     {"Choice", sizeof("Choice") - 1u, {0u, 0u}},
@@ -305,7 +321,8 @@ static const AstraChoiceItem gallery_tabs[] = {
     {"Text", sizeof("Text") - 1u, {0u, 0u}},
     {"Layout", sizeof("Layout") - 1u, {0u, 0u}},
     {"Fields", sizeof("Fields") - 1u, {0u, 0u}},
-    {"Panels", sizeof("Panels") - 1u, {0u, 0u}}
+    {"Panels", sizeof("Panels") - 1u, {0u, 0u}},
+    {"Drag", sizeof("Drag") - 1u, {0u, 0u}}
 };
 static const AstraChoiceItem gallery_choices[] = {
     {"Windows", sizeof("Windows") - 1u, {0u, 0u}},
@@ -944,7 +961,7 @@ static uint32_t layout_controls(void)
 
 static uint32_t select_page(int32_t selected)
 {
-    uint32_t page_count = GALLERY_PAGE_PANELS - GALLERY_PAGE_INPUT + 1u;
+    uint32_t page_count = GALLERY_PAGE_DRAG - GALLERY_PAGE_INPUT + 1u;
     uint32_t next;
 
     if (selected < 0 || (uint32_t)selected >= page_count)
@@ -979,7 +996,7 @@ static uint32_t build_controls(void)
         status = GALLERY_FAIL_CONTROL;
 
     for (uint32_t page = GALLERY_PAGE_INPUT;
-         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_PANELS; ++page)
+         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_DRAG; ++page)
         status = add_page(page - 1u, page,
                           page == GALLERY_PAGE_INPUT ? 0u :
                           ASTRA_CONTROL_COLLAPSED);
@@ -1528,9 +1545,43 @@ static uint32_t build_controls(void)
             status = GALLERY_FAIL_CONTROL;
     }
     if (status == ASTRA_STATUS_OK)
+        status = add_label(GALLERY_DRAG_HEADING - 1u,
+            GALLERY_DRAG_HEADING, "DRAG / DROP / CROSS-WINDOW TRANSFER",
+            sizeof("DRAG / DROP / CROSS-WINDOW TRANSFER") - 1u,
+            ASTRA_TEXT_CLIENT_SECONDARY);
+    if (status == ASTRA_STATUS_OK)
+        status = add_button(GALLERY_DRAG_SOURCE - 1u,
+            GALLERY_DRAG_SOURCE, "Drag notes.txt + 2",
+            sizeof("Drag notes.txt + 2") - 1u,
+            ASTRA_BUTTON_STANDARD, 0u, 0u);
+    if (status == ASTRA_STATUS_OK) {
+        AstraDropTargetInfo target = ASTRA_DROP_TARGET_INFO_INIT;
+
+        target.first_id = GALLERY_DRAG_WORK;
+        target.message = "WORK:/projects";
+        target.message_length = sizeof("WORK:/projects") - 1u;
+        target.minimum_width = 330u;
+        target.minimum_height = 140u;
+        if (astra_interface_drop_target_init(
+            GALLERY_CONTROL(GALLERY_DRAG_WORK), &target) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+        target.first_id = GALLERY_DRAG_SYSTEM;
+        target.message = "SYSTEM: read-only";
+        target.message_length = sizeof("SYSTEM: read-only") - 1u;
+        if (status == ASTRA_STATUS_OK &&
+            astra_interface_drop_target_init(
+                GALLERY_CONTROL(GALLERY_DRAG_SYSTEM), &target) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
+    if (status == ASTRA_STATUS_OK)
+        status = add_label(GALLERY_DRAG_RESULT - 1u, GALLERY_DRAG_RESULT,
+            "Drag three elements onto either volume; Option requests Move.",
+            sizeof("Drag three elements onto either volume; Option requests Move.") - 1u,
+            ASTRA_TEXT_CLIENT_SECONDARY);
+    if (status == ASTRA_STATUS_OK)
         status = set_item(GALLERY_TABS, 0u, 0u, 0u);
     for (uint32_t page = GALLERY_PAGE_INPUT;
-         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_PANELS; ++page)
+         status == ASTRA_STATUS_OK && page <= GALLERY_PAGE_DRAG; ++page)
         status = set_item(page, 0u, 0u, 1u);
 
 #define PAGE_ITEM(id, page, flags)                                      \
@@ -1677,6 +1728,15 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_COLOUR_WELL, GALLERY_PAGE_FIELDS,
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_COLOUR_PANEL_ROOT, GALLERY_PAGE_PANELS,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_DRAG_HEADING, GALLERY_PAGE_DRAG,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_DRAG_SOURCE, GALLERY_PAGE_DRAG,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_DRAG_WORK, GALLERY_PAGE_DRAG, 0u);
+    PAGE_ITEM(GALLERY_DRAG_SYSTEM, GALLERY_PAGE_DRAG,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_DRAG_RESULT, GALLERY_PAGE_DRAG,
               ASTRA_FLEX_BREAK_AFTER);
 #undef PAGE_ITEM
     if (status == ASTRA_STATUS_OK) {
@@ -2449,6 +2509,7 @@ static uint32_t create_window(AstraHandle gui)
                       ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION |
                       ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
                       ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL |
+                      ASTRA_WINDOW_SUBSCRIBE_DRAG |
                       ASTRA_WINDOW_SUBSCRIBE_KEY |
                       ASTRA_WINDOW_SUBSCRIBE_TEXT |
                       ASTRA_WINDOW_SUBSCRIBE_VBLANK;
@@ -2562,6 +2623,176 @@ static uint32_t handle_action(AstraHandle clipboard,
     return ASTRA_STATUS_OK;
 }
 
+static int gallery_frame_contains(uint32_t id, int32_t x, int32_t y)
+{
+    AstraControlFrame frame = {0};
+    AstraControlFrame clip = {0};
+
+    return astra_interface_ui_geometry(&ui, id - 1u, &frame, &clip) ==
+               ASTRA_OK && x >= frame.x && y >= frame.y &&
+           x < frame.x + (int32_t)frame.width &&
+           y < frame.y + (int32_t)frame.height;
+}
+
+static uint32_t gallery_drag_target_at(int32_t x, int32_t y)
+{
+    if (active_page != GALLERY_PAGE_DRAG) return 0u;
+    if (gallery_frame_contains(GALLERY_DRAG_WORK, x, y))
+        return GALLERY_DRAG_WORK;
+    if (gallery_frame_contains(GALLERY_DRAG_SYSTEM, x, y))
+        return GALLERY_DRAG_SYSTEM;
+    return 0u;
+}
+
+static uint32_t gallery_drag_visual(uint32_t target, uint32_t operation)
+{
+    const char *work = "WORK:/projects";
+    const char *system = "SYSTEM: read-only";
+    uint32_t work_state = ASTRA_DROP_TARGET_IDLE;
+    uint32_t system_state = ASTRA_DROP_TARGET_IDLE;
+
+    if (target == gallery_drag_visual_target &&
+        operation == gallery_drag_visual_operation)
+        return ASTRA_STATUS_OK;
+    if (target == GALLERY_DRAG_WORK) {
+        work_state = ASTRA_DROP_TARGET_ACCEPT;
+        work = operation == ASTRA_DRAG_MOVE ?
+            "Move 3 elements to WORK:/projects" :
+            "Copy 3 elements to WORK:/projects";
+    } else if (target == GALLERY_DRAG_SYSTEM) {
+        system_state = ASTRA_DROP_TARGET_REFUSE;
+        system = "SYSTEM: is read-only \xe2\x80\x94 can't drop here";
+    }
+    if (astra_interface_drop_target_set(&ui,
+            GALLERY_CONTROL(GALLERY_DRAG_WORK), work_state,
+            work, (uint32_t)strlen(work)) != ASTRA_OK ||
+        astra_interface_drop_target_set(&ui,
+            GALLERY_CONTROL(GALLERY_DRAG_SYSTEM), system_state,
+            system, (uint32_t)strlen(system)) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    gallery_drag_visual_target = target;
+    gallery_drag_visual_operation = operation;
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t gallery_drag_pointer(const AstraWindowEvent *event)
+{
+    int32_t x, y, dx, dy;
+
+    if (event->type == ASTRA_WINDOW_EVENT_STATE_RESET) {
+        gallery_drag_armed = 0u;
+        return ASTRA_STATUS_OK;
+    }
+    if (active_page != GALLERY_PAGE_DRAG) return ASTRA_STATUS_OK;
+    if (event->type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
+        event->data.pointer.button == ASTRA_INPUT_BUTTON_LEFT) {
+        gallery_drag_armed = (event->flags & ASTRA_WINDOW_EVENT_DOWN) != 0u &&
+            gallery_frame_contains(GALLERY_DRAG_SOURCE,
+                event->data.pointer.x, event->data.pointer.y);
+        gallery_drag_start_x = event->data.pointer.x;
+        gallery_drag_start_y = event->data.pointer.y;
+        return ASTRA_STATUS_OK;
+    }
+    if (event->type != ASTRA_WINDOW_EVENT_POINTER_MOTION ||
+        gallery_drag_armed == 0u) return ASTRA_STATUS_OK;
+    x = event->data.motion.x;
+    y = event->data.motion.y;
+    dx = x - gallery_drag_start_x;
+    dy = y - gallery_drag_start_y;
+    if (dx >= -5 && dx <= 5 && dy >= -5 && dy <= 5)
+        return ASTRA_STATUS_OK;
+    {
+        static const char files[] = "notes.txt\nsketch.afnt\nDoom.app";
+        AstraClipboardRepresentation representation =
+            ASTRA_CLIPBOARD_REPRESENTATION_INIT;
+
+        representation.type = "text/plain";
+        representation.type_length = sizeof("text/plain") - 1u;
+        representation.data = files;
+        representation.data_length = sizeof(files) - 1u;
+        gallery_drag_armed = 0u;
+        if (astra_window_drag_begin(&window, &representation, 1u, 3u,
+                ASTRA_DRAG_OPERATIONS, "notes.txt +2",
+                sizeof("notes.txt +2") - 1u) != ASTRA_OK)
+            return GALLERY_FAIL_WINDOW;
+    }
+    return ASTRA_STATUS_OK;
+}
+
+static uint32_t gallery_drag_event(AstraWindowEvent *event)
+{
+    uint32_t target = 0u;
+    uint32_t operation = 0u;
+    uint32_t status = ASTRA_STATUS_OK;
+    uint32_t completed = 0u;
+    const char *feedback = "Choose a writable target";
+    AstraResult result = ASTRA_OK;
+
+    if (event->type == ASTRA_WINDOW_EVENT_DRAG_ENTER ||
+        event->type == ASTRA_WINDOW_EVENT_DRAG_MOTION) {
+        gallery_drag_token = event->data.drag.token;
+        target = gallery_drag_target_at(event->data.drag.x,
+                                         event->data.drag.y);
+        if (target == GALLERY_DRAG_WORK) {
+            operation = (event->data.drag.modifiers & ASTRA_INPUT_MOD_ALT) !=
+                0u ? ASTRA_DRAG_MOVE : ASTRA_DRAG_COPY;
+            feedback = operation == ASTRA_DRAG_MOVE ?
+                "Move 3 elements to WORK:/projects" :
+                "Copy 3 elements to WORK:/projects";
+        } else if (target == GALLERY_DRAG_SYSTEM) {
+            feedback = "SYSTEM: is read-only \xe2\x80\x94 can't drop here";
+        }
+        if (target != gallery_drag_visual_target ||
+            operation != gallery_drag_visual_operation ||
+            event->type == ASTRA_WINDOW_EVENT_DRAG_ENTER) {
+            if (gallery_drag_visual(target, operation) != ASTRA_STATUS_OK)
+                { status = GALLERY_FAIL_CONTROL; goto close_document; }
+            result = astra_window_drag_feedback(&window,
+                gallery_drag_token, operation, feedback,
+                (uint16_t)strlen(feedback));
+        }
+    } else if (event->type == ASTRA_WINDOW_EVENT_DRAG_LEAVE ||
+               event->type == ASTRA_WINDOW_EVENT_DRAG_FINISHED) {
+        gallery_drag_token = 0u;
+        gallery_drag_armed = 0u;
+        if (gallery_drag_visual(0u, 0u) != ASTRA_STATUS_OK)
+            { status = GALLERY_FAIL_CONTROL; goto close_document; }
+    } else if (event->type == ASTRA_WINDOW_EVENT_DRAG_DROP) {
+        const char *message = event->data.drag.operation == ASTRA_DRAG_MOVE ?
+            "Moved 3 elements to WORK:/projects" :
+            "Copied 3 elements to WORK:/projects";
+
+        if (gallery_drag_target_at(event->data.drag.x,
+                                   event->data.drag.y) == GALLERY_DRAG_WORK &&
+            astra_interface_control_set_text(&ui,
+                GALLERY_CONTROL(GALLERY_DRAG_RESULT), message,
+                (uint32_t)strlen(message)) != ASTRA_OK)
+            { status = GALLERY_FAIL_CONTROL; goto close_document; }
+        if (gallery_drag_target_at(event->data.drag.x,
+                                   event->data.drag.y) == GALLERY_DRAG_WORK)
+            completed = event->data.drag.operation;
+        if (gallery_drag_visual(0u, 0u) != ASTRA_STATUS_OK)
+            { status = GALLERY_FAIL_CONTROL; goto close_document; }
+    }
+close_document:
+    if (event->type == ASTRA_WINDOW_EVENT_DRAG_ENTER ||
+        event->type == ASTRA_WINDOW_EVENT_DRAG_DROP) {
+        AstraResult closed = astra_window_drag_document_close(event);
+
+        if (result == ASTRA_OK) result = closed;
+    }
+    if (event->type == ASTRA_WINDOW_EVENT_DRAG_DROP) {
+        AstraResult acknowledged = astra_window_drag_complete(&window,
+            event->data.drag.token,
+            status == ASTRA_STATUS_OK && result == ASTRA_OK ?
+                completed : 0u);
+
+        if (result == ASTRA_OK) result = acknowledged;
+    }
+    return status != ASTRA_STATUS_OK ? status :
+           result == ASTRA_OK ? ASTRA_STATUS_OK : GALLERY_FAIL_WINDOW;
+}
+
 static uint32_t run(AstraHandle clipboard, AstraHandle gui)
 {
     uint32_t vblank_subscribed = 1u;
@@ -2583,6 +2814,7 @@ static uint32_t run(AstraHandle clipboard, AstraHandle gui)
                             ASTRA_WINDOW_SUBSCRIBE_POINTER_MOTION |
                             ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
                             ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL |
+                            ASTRA_WINDOW_SUBSCRIBE_DRAG |
                             ASTRA_WINDOW_SUBSCRIBE_KEY |
                             ASTRA_WINDOW_SUBSCRIBE_TEXT;
 
@@ -2629,6 +2861,16 @@ static uint32_t run(AstraHandle clipboard, AstraHandle gui)
                 (void)astra_interface_toolbar_actions_close(&gallery_toolbar);
                 return ASTRA_STATUS_OK;
             }
+            if (event.type >= ASTRA_WINDOW_EVENT_DRAG_ENTER &&
+                event.type <= ASTRA_WINDOW_EVENT_DRAG_FINISHED) {
+                if (gallery_drag_event(&event) != ASTRA_STATUS_OK)
+                    return GALLERY_FAIL_CONTROL;
+                scroll_only = 0u;
+                result = astra_window_event_try(&window, &event);
+                continue;
+            }
+            if (gallery_drag_pointer(&event) != ASTRA_STATUS_OK)
+                return GALLERY_FAIL_WINDOW;
             if (astra_interface_combo_box_handle_event(&gallery_combo,
                     &event, &action, &combo_handled) != ASTRA_OK)
                 return GALLERY_FAIL_CONTROL;
