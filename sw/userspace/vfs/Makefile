@@ -51,6 +51,7 @@ HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	$(NDK)/include/astra/vfs_assign.h $(NDK)/include/astra/vfs_path.h \
 	include/astra/vfs_port_transport.h $(NDK)/include/astra/vfs_union.h \
 	$(NDK)/include/astra/vfs_process.h $(NDK)/include/astra/vfs_reader.h \
+	$(NDK)/include/astra/vfs_clipboard.h \
 	include/astra/vfs_host_backend.h include/astra/vfs_host_transport.h \
 	include/astra/vfs_host_direct.h \
 	include/astra/vfs_ram_backend.h \
@@ -63,7 +64,8 @@ SERVICE_TARGET := build/m68k/libastravfs-service.a
 SYSTEM_STATIC_OBJECTS := $(SYSTEM)/build/m68k/manifest.o $(SYSTEM)/build/m68k/bundle.o \
 	$(SYSTEM)/build/m68k/utf8.o
 TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
-	build/m68k/filesystem_library.o build/m68k/filesystem_copy.o build/m68k/volume.o \
+	build/m68k/filesystem_library.o build/m68k/filesystem_copy.o \
+	build/m68k/vfs_clipboard.o build/m68k/volume.o \
 	build/m68k/volume_client.o build/m68k/volume_port.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
@@ -95,6 +97,7 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/filesystem_library_identity.o \
 	build/m68k/library/filesystem_library.o \
 	build/m68k/library/filesystem_copy.o \
+	build/m68k/library/vfs_clipboard.o \
 	build/m68k/library/file_type.o \
 	build/m68k/library/file_type_resolve.o \
 	build/m68k/library/volume.o build/m68k/library/volume_client.o \
@@ -119,6 +122,7 @@ KERNEL_ELF_TEST := ../../kernel/build/test_elf
 HOST_TEST := build/host/test_vfs_service_core
 VOLUME_TEST := build/host/test_volume_port
 VOLUME_CLIENT_TEST := build/host/test_volume_client
+VFS_CLIPBOARD_TEST := build/host/test_vfs_clipboard
 
 $(VOLUME_TEST): src/volume.c src/volume_port.c tests/test_volume_port.c $(HEADERS) $(UTF8_OBJECT)
 	@mkdir -p $(@D)
@@ -130,7 +134,12 @@ $(VOLUME_CLIENT_TEST): src/volume.c src/volume_client.c tests/test_volume_client
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/volume.c src/volume_client.c tests/test_volume_client.c $(UTF8_OBJECT) -o $@
 
-test: $(VOLUME_TEST) $(VOLUME_CLIENT_TEST)
+$(VFS_CLIPBOARD_TEST): src/vfs_clipboard.c src/vfs_path.c \
+		tests/test_vfs_clipboard.c $(HEADERS) $(UTF8_OBJECT)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/vfs_clipboard.c src/vfs_path.c tests/test_vfs_clipboard.c \
+		$(UTF8_OBJECT) -o $@
 
 sanitize-volume:
 	@mkdir -p build/host
@@ -279,6 +288,7 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(FILESYSTEM_LIBRARY_MAP) $(NDK)/include/astra/vfs_client.h \
 		$(NDK)/include/astra/vfs_assign.h \
 		$(NDK)/include/astra/vfs_path.h \
+		$(NDK)/include/astra/vfs_clipboard.h \
 		$(NDK)/include/astra/vfs_union.h \
 		$(NDK)/include/astra/filesystem_library.h \
 		$(NDK)/include/astra/file_type.h \
@@ -288,7 +298,7 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.15 15.5.0 ABI 15.5$$'
+		grep -q '^filesystem.library.15 15.6.0 ABI 15.6$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.15]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
@@ -467,7 +477,8 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 		$(PROCESS_TEST) $(READER_TEST) $(FILESYSTEM_LIBRARY_TEST) \
 		$(FILESYSTEM_COPY_TEST) \
 		$(CATALOG_TEST) $(FILE_TYPE_TEST) \
-		$(HOST_BACKEND_TEST) $(RAM_BACKEND_TEST) $(HOST_TRANSPORT_TEST)
+		$(HOST_BACKEND_TEST) $(RAM_BACKEND_TEST) $(HOST_TRANSPORT_TEST) \
+		$(VOLUME_TEST) $(VOLUME_CLIENT_TEST) $(VFS_CLIPBOARD_TEST)
 	./$(HOST_TEST)
 	./$(ASSIGN_TEST)
 	./$(UNION_TEST)
@@ -485,6 +496,7 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 	./$(HOST_TRANSPORT_TEST)
 	./$(VOLUME_TEST)
 	./$(VOLUME_CLIENT_TEST)
+	./$(VFS_CLIPBOARD_TEST)
 
 # The path parser is nothing but bounds arithmetic over caller buffers, so it
 # is the one piece here where a sanitizer earns its run.

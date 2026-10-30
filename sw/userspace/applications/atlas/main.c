@@ -125,6 +125,17 @@ static char edit_parent[ASTRA_VFS_PATH_MAX];
 static _Alignas(4) uint32_t edit_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
 static char selected_path[ASTRA_VFS_PATH_MAX];
 static uint32_t selected_kind, selected_depth, selected_row = UINT32_MAX;
+static AstraResult browser_update_status(void);
+static AstraResult paint(void);
+
+static AstraControl *root_selection_control(void)
+{
+    uint32_t index = browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST ?
+        ASTRA_FILE_PANEL_LIST :
+        browser.view_mode == ASTRA_FILE_PANEL_VIEW_GRID ?
+            ASTRA_FILE_PANEL_GRID : ASTRA_FILE_PANEL_CONTROL_COUNT + 2u;
+    return BROWSER_CONTROL(index);
+}
 
 static void selection_clear(void)
 {
@@ -151,6 +162,44 @@ static AstraResult selection_set(const char *parent,
     selected_depth = depth;
     selected_row = index;
     return ASTRA_OK;
+}
+
+static AstraResult focus_root_entry(uint32_t index)
+{
+    if (index >= directory.count) return ASTRA_ERROR_INVALID_ARGUMENT;
+    for (uint32_t row = 0u; row < browser.item_count; ++row) {
+        if (browser.items[row].id != (uint64_t)index + 1u) continue;
+        AstraResult result = astra_interface_control_set_value(&ui,
+            root_selection_control(), row);
+        if (result == ASTRA_OK)
+            result = selection_set(root, directory.entries, directory.count,
+                index, 0u);
+        if (result == ASTRA_OK) result = browser_update_status();
+        if (result == ASTRA_OK) result = paint();
+        return result;
+    }
+    return ASTRA_ERROR_INVALID_ARGUMENT;
+}
+
+/* Stable IDs belong to Interface Kit; directory entries remain the source of
+ * file identity and path construction for every view. */
+static uint32_t selection_count(void)
+{
+    if (selected_path[0] == '\0') return 0u;
+    return selected_depth == 0u ? browser_selection.count : 1u;
+}
+
+static uint32_t selection_path_at(uint32_t at, char *path, uint32_t capacity)
+{
+    if (at >= selection_count()) return ASTRA_VFS_ERR_INVALID;
+    if (selected_depth != 0u)
+        return astra_string_copy(path, capacity, selected_path) ?
+            ASTRA_VFS_OK : ASTRA_VFS_ERR_NAME_TOO_LONG;
+    uint64_t id = browser_selection.ids[at];
+    if (id == 0u || id > directory.count)
+        return ASTRA_VFS_ERR_INVALID;
+    return astra_folder_path(root, directory.entries[id - 1u].name,
+        path, capacity);
 }
 
 enum AtlasMenuRow {
@@ -792,7 +841,7 @@ static AstraResult browser_update_status(void)
         (void)astra_string_append(&line, " of ");
         (void)astra_string_append_u64(&line, directory.count);
         (void)astra_string_append(&line, " selected");
-    } else if (selected_path[0] != '\0') {
+    } else if (selection_count() != 0u) {
         if (selected_depth == 0u) {
             (void)astra_string_append(&line, "1 of ");
             (void)astra_string_append_u64(&line, directory.count);
@@ -1489,11 +1538,6 @@ static AstraResult start_edit(void)
 static AstraResult finish_edit(AstraHandle gui, int commit)
 {
     if (!name_edit.active) return ASTRA_OK;
-    char selected_name[ASTRA_VFS_NAME_MAX];
-    const char *old_name = astra_folder_leaf(edit_path);
-    if (!astra_string_copy(selected_name, sizeof(selected_name),
-            old_name != NULL ? old_name : ""))
-        return ASTRA_ERROR_INVALID_ARGUMENT;
     if (commit) {
         char name[ASTRA_VFS_NAME_MAX], moved[ASTRA_VFS_PATH_MAX];
         AstraResult result = astra_interface_inline_edit_text(&name_edit, name, sizeof(name));
@@ -1507,33 +1551,11 @@ static AstraResult finish_edit(AstraHandle gui, int commit)
             folder_error(gui, "Item could not be renamed", status);
             return astra_result_from_service(status);
         }
-        memcpy(selected_name, name, strlen(name) + 1u);
     }
     astra_interface_inline_edit_stop(&name_edit);
     edit_index = UINT32_MAX;
-    AstraResult result = strcmp(edit_parent, root) == 0 ?
+    return strcmp(edit_parent, root) == 0 ?
         reload_directory() : navigate_to(edit_parent, NAVIGATION_PUSH);
-    if (result != ASTRA_OK) return result;
-    for (uint32_t at = 0u; at < browser.item_count; ++at) {
-        uint32_t index = (uint32_t)browser.items[at].id - 1u;
-        if (index >= directory.count ||
-            strcmp(directory.entries[index].name, selected_name) != 0)
-            continue;
-        result = astra_interface_control_set_value(&ui,
-            BROWSER_CONTROL(ASTRA_FILE_PANEL_GRID), at);
-        if (result == ASTRA_OK)
-            result = astra_interface_control_set_value(&ui,
-                BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST), at);
-        if (result == ASTRA_OK && browser.column_count != 0u)
-            result = astra_interface_control_set_value(&ui,
-                BROWSER_CONTROL(ASTRA_FILE_PANEL_CONTROL_COUNT + 2u), at);
-        if (result != ASTRA_OK) return result;
-        result = selection_set(root, directory.entries, directory.count,
-            index, 0u);
-        if (result != ASTRA_OK) return result;
-        return browser_update_status();
-    }
-    return ASTRA_OK;
 }
 
 static AstraResult menu_query(void *opaque, AstraCommandState *state)
@@ -1556,10 +1578,17 @@ static AstraResult selected_query(void *opaque, AstraCommandState *state)
 {
     (void)opaque;
     *state = (AstraCommandState){"Open", 4u,
-        selected_path[0] != '\0' &&
+        selection_count() != 0u &&
         (selected_kind == ASTRA_VFS_KIND_DIRECTORY ||
          selected_kind == ASTRA_VFS_KIND_FILE), 0u};
     return ASTRA_OK;
+}
+
+static AstraResult open_query(void *opaque, AstraCommandState *state)
+{
+    AstraResult result = selected_query(opaque, state);
+    state->enabled = state->enabled && selection_count() == 1u;
+    return result;
 }
 
 static AstraResult copy_query(void *opaque, AstraCommandState *state)
@@ -1580,11 +1609,11 @@ static int clipboard_has_file(void)
     const void *data = NULL;
     uint32_t length = 0u;
     AstraResult found = astra_clipboard_item_find(&item,
-        ASTRA_CLIPBOARD_TYPE_VFS_REFERENCE,
-        sizeof(ASTRA_CLIPBOARD_TYPE_VFS_REFERENCE) - 1u,
+        ASTRA_CLIPBOARD_TYPE_VFS_SELECTION,
+        sizeof(ASTRA_CLIPBOARD_TYPE_VFS_SELECTION) - 1u,
         &data, &length);
     int available = found == ASTRA_OK &&
-        length == sizeof(AstraVfsClipboardReference);
+        astra_vfs_clipboard_selection_validate(data, length) == ASTRA_OK;
     AstraResult closed = astra_clipboard_item_close(&item);
     return available && closed == ASTRA_OK;
 }
@@ -1603,22 +1632,25 @@ static AstraResult rename_query(void *opaque, AstraCommandState *state)
     AstraResult result = selected_query(opaque, state);
     state->label = "Rename";
     state->label_length = 6u;
-    state->enabled = state->enabled && writable_folder_root();
+    state->enabled = state->enabled && writable_folder_root() &&
+        selection_count() == 1u;
     return result;
 }
 
 static AstraResult delete_query(void *opaque, AstraCommandState *state)
 {
-    AstraResult result = rename_query(opaque, state);
+    AstraResult result = selected_query(opaque, state);
     state->label = "Delete";
     state->label_length = 6u;
+    state->enabled = state->enabled && writable_folder_root();
     return result;
 }
 
 static int selected_bundle(const AtlasCommands *context)
 {
     (void)context;
-    return selected_kind == ASTRA_VFS_KIND_DIRECTORY &&
+    return selection_count() == 1u &&
+        selected_kind == ASTRA_VFS_KIND_DIRECTORY &&
         astra_string_has_suffix(selected_path, ".app") &&
         selected_path[0] != '\0';
 }
@@ -1677,8 +1709,7 @@ static AstraResult create_folder(void *opaque, const AstraCommandArguments *args
     const char *name = astra_folder_leaf(path);
     for (uint32_t at = 0u; at < directory.count; ++at)
         if (strcmp(directory.entries[at].name, name) == 0) {
-            result = selection_set(root, directory.entries, directory.count,
-                at, 0u);
+            result = focus_root_entry(at);
             return result == ASTRA_OK ? start_edit() : result;
         }
     return ASTRA_ERROR_IO;
@@ -1688,6 +1719,7 @@ static AstraResult open_selected(void *opaque, const AstraCommandArguments *args
 {
     (void)args;
     (void)opaque;
+    if (selection_count() != 1u) return ASTRA_ERROR_INVALID_ARGUMENT;
     return open_entry(selected_path, selected_kind);
 }
 
@@ -1703,7 +1735,7 @@ static int fixed_copy_path(const char *path)
 }
 
 static AstraResult copy_reference_for(const char *path,
-    AstraVfsClipboardReference *reference)
+    AstraVfsClipboardEntry *reference)
 {
     if (fixed_copy_path(path)) return ASTRA_OK;
     if (viewed_volume.id != 0u && volume_path[0] != '\0' &&
@@ -1739,24 +1771,44 @@ static AstraResult copy_selected(void *opaque, const AstraCommandArguments *args
 {
     (void)args;
     (void)opaque;
-    AstraVfsClipboardReference reference =
-        ASTRA_VFS_CLIPBOARD_REFERENCE_INIT;
     AstraClipboardRepresentation representation =
         ASTRA_CLIPBOARD_REPRESENTATION_INIT;
     if (clipboard_service == ASTRA_INVALID_HANDLE ||
-        selected_path[0] == '\0' ||
+        selection_count() == 0u ||
         (selected_kind != ASTRA_VFS_KIND_FILE &&
          selected_kind != ASTRA_VFS_KIND_DIRECTORY))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    if (!astra_string_copy(reference.path, sizeof(reference.path),
-            selected_path)) return ASTRA_ERROR_BUFFER_TOO_SMALL;
-    AstraResult result = copy_reference_for(reference.path, &reference);
-    if (result != ASTRA_OK) return result;
-    representation.type = ASTRA_CLIPBOARD_TYPE_VFS_REFERENCE;
-    representation.type_length = sizeof(ASTRA_CLIPBOARD_TYPE_VFS_REFERENCE) - 1u;
-    representation.data = &reference;
-    representation.data_length = sizeof(reference);
-    return astra_clipboard_write(clipboard_service, &representation, 1u, NULL);
+    uint32_t bytes = astra_vfs_clipboard_selection_size(selection_count());
+    if (bytes == 0u) return ASTRA_ERROR_NO_RESOURCES;
+    AstraVfsClipboardSelection *selection = astra_runtime_allocate(bytes);
+    if (selection == NULL) return ASTRA_ERROR_NO_RESOURCES;
+    memset(selection, 0, bytes);
+    selection->size = bytes;
+    selection->version = ASTRA_VFS_CLIPBOARD_SELECTION_VERSION;
+    selection->count = selection_count();
+    AstraResult result = ASTRA_OK;
+    for (uint32_t at = 0u; at < selection->count; ++at) {
+        uint32_t status = selection_path_at(at, selection->entries[at].path,
+            sizeof(selection->entries[at].path));
+        if (status != ASTRA_VFS_OK) {
+            result = astra_result_from_service(status);
+            break;
+        }
+        result = copy_reference_for(selection->entries[at].path,
+            &selection->entries[at]);
+        if (result != ASTRA_OK) break;
+    }
+    if (result == ASTRA_OK) {
+        representation.type = ASTRA_CLIPBOARD_TYPE_VFS_SELECTION;
+        representation.type_length =
+            sizeof(ASTRA_CLIPBOARD_TYPE_VFS_SELECTION) - 1u;
+        representation.data = selection;
+        representation.data_length = bytes;
+        result = astra_clipboard_write(clipboard_service, &representation, 1u,
+            NULL);
+    }
+    astra_runtime_deallocate(selection);
+    return result;
 }
 
 typedef struct AtlasCopyMount {
@@ -1810,80 +1862,98 @@ static AstraResult copy_mount_open(AtlasCopyMount *mount,
     return result;
 }
 
-static AstraResult paste_into_current(void *opaque,
-    const AstraCommandArguments *args)
+static AstraResult paste_entry(const AstraVfsClipboardEntry *reference)
 {
-    (void)args;
-    const AtlasCommands *context = opaque;
-    AstraClipboardItem item = ASTRA_CLIPBOARD_ITEM_INIT;
-    AstraVfsClipboardReference reference;
-    const void *data = NULL;
-    uint32_t bytes = 0u;
     char destination[ASTRA_VFS_PATH_MAX];
-    if (!writable_folder_root() || clipboard_service == ASTRA_INVALID_HANDLE)
-        return ASTRA_ERROR_PERMISSION;
-    AstraResult result = astra_clipboard_read(clipboard_service, &item);
-    if (result != ASTRA_OK) return result;
-    result = astra_clipboard_item_find(&item,
-        ASTRA_CLIPBOARD_TYPE_VFS_REFERENCE,
-        sizeof(ASTRA_CLIPBOARD_TYPE_VFS_REFERENCE) - 1u, &data, &bytes);
-    if (result == ASTRA_OK) {
-        if (bytes != sizeof(reference)) result = ASTRA_ERROR_INVALID_ARGUMENT;
-        else memcpy(&reference, data, sizeof(reference));
-    }
-    AstraResult closed = astra_clipboard_item_close(&item);
-    if (result == ASTRA_OK) result = closed;
-    if (result != ASTRA_OK) return result;
-    if (reference.size != sizeof(reference) ||
-        reference.version != ASTRA_VFS_CLIPBOARD_REFERENCE_VERSION ||
-        reference.path[0] != '/' ||
-        astra_path_requires_walk(reference.path) ||
-        memchr(reference.path, '\0', sizeof(reference.path)) == NULL)
-        return ASTRA_ERROR_INVALID_ARGUMENT;
-    const char *leaf = astra_folder_leaf(reference.path);
+    const char *leaf = astra_folder_leaf(reference->path);
     if (!astra_folder_name_valid(leaf)) return ASTRA_ERROR_INVALID_ARGUMENT;
     AtlasCopyMount source_mount = {
         .grant = ASTRA_INVALID_HANDLE,
         .assigns = ASTRA_ASSIGN_TABLE_INIT,
         .filesystem = ASTRA_FILESYSTEM_INIT};
     AstraFilesystem *source_filesystem = &filesystem.filesystem;
-    if (reference.volume.id != 0u) {
+    AstraResult result = ASTRA_OK;
+    if (reference->volume.id != 0u) {
         AstraVolumeSnapshot snapshot = ASTRA_VOLUME_SNAPSHOT_INIT;
         result = astra_volume_snapshot_open(volume_metadata, &snapshot);
         if (result != ASTRA_OK) return result;
         const AstraVolumeRecord *record = astra_volume_snapshot_find(&snapshot,
-            &reference.volume);
+            &reference->volume);
         size_t length = record != NULL ? strlen(record->name) : 0u;
         result = record != NULL && record->kind == ASTRA_VOLUME_MOUNT &&
             record->state == ASTRA_VOLUME_MOUNTED && length != 0u &&
-            strncmp(reference.path, record->name, length) == 0 &&
-            reference.path[length] == '/' ? ASTRA_OK : ASTRA_ERROR_INVALID_HANDLE;
+            strncmp(reference->path, record->name, length) == 0 &&
+            reference->path[length] == '/' ? ASTRA_OK : ASTRA_ERROR_INVALID_HANDLE;
         if (result == ASTRA_OK)
-            result = copy_mount_open(&source_mount, &reference.volume,
+            result = copy_mount_open(&source_mount, &reference->volume,
                 record->name, record->origin);
         astra_volume_snapshot_close(&snapshot);
         if (result != ASTRA_OK) return result;
         source_filesystem = &source_mount.filesystem;
-    } else if (!fixed_copy_path(reference.path)) {
+    } else if (!fixed_copy_path(reference->path)) {
         return ASTRA_ERROR_INVALID_ARGUMENT;
     }
     uint32_t status = astra_folder_path(root, leaf, destination,
         sizeof(destination));
     if (status == ASTRA_VFS_OK)
         status = astra_filesystem_copy_tree_between(source_filesystem,
-            reference.path, active_filesystem(), destination);
-    if (reference.volume.id != 0u) copy_mount_close(&source_mount);
-    if (status != ASTRA_VFS_OK) {
-        folder_error(context->gui, "Item could not be copied", status);
-        return astra_result_from_service(status);
+            reference->path, active_filesystem(), destination);
+    if (reference->volume.id != 0u) copy_mount_close(&source_mount);
+    return astra_result_from_service(status);
+}
+
+static AstraResult paste_into_current(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)args;
+    const AtlasCommands *context = opaque;
+    AstraClipboardItem item = ASTRA_CLIPBOARD_ITEM_INIT;
+    const void *data = NULL;
+    uint32_t bytes = 0u;
+    if (!writable_folder_root() || clipboard_service == ASTRA_INVALID_HANDLE)
+        return ASTRA_ERROR_PERMISSION;
+    AstraResult result = astra_clipboard_read(clipboard_service, &item);
+    if (result != ASTRA_OK) return result;
+    result = astra_clipboard_item_find(&item,
+        ASTRA_CLIPBOARD_TYPE_VFS_SELECTION,
+        sizeof(ASTRA_CLIPBOARD_TYPE_VFS_SELECTION) - 1u, &data, &bytes);
+    if (result == ASTRA_OK)
+        result = astra_vfs_clipboard_selection_validate(data, bytes);
+    AstraVfsClipboardSelection *selection = NULL;
+    if (result == ASTRA_OK) {
+        selection = astra_runtime_allocate(bytes);
+        if (selection == NULL) result = ASTRA_ERROR_NO_RESOURCES;
+        else memcpy(selection, data, bytes);
     }
-    return reload_directory();
+    AstraResult closed = astra_clipboard_item_close(&item);
+    if (result == ASTRA_OK) result = closed;
+    if (result != ASTRA_OK) {
+        astra_runtime_deallocate(selection);
+        return result;
+    }
+    uint32_t copied = 0u;
+    for (; copied < selection->count; ++copied) {
+        result = paste_entry(&selection->entries[copied]);
+        if (result != ASTRA_OK) break;
+    }
+    astra_runtime_deallocate(selection);
+    if (copied != 0u) {
+        AstraResult refreshed = reload_directory();
+        if (refreshed != ASTRA_OK) return refreshed;
+    }
+    if (result != ASTRA_OK)
+        folder_error(context->gui, copied == 0u ?
+            "Item could not be copied" :
+            "Some items were copied; remaining items were not",
+            astra_status_from_result(result));
+    return result;
 }
 
 static AstraResult rename_selected(void *opaque, const AstraCommandArguments *args)
 {
     (void)args;
     (void)opaque;
+    if (selection_count() != 1u) return ASTRA_ERROR_INVALID_ARGUMENT;
     return start_edit();
 }
 
@@ -1891,25 +1961,39 @@ static AstraResult delete_selected(void *opaque, const AstraCommandArguments *ar
 {
     (void)args;
     AtlasCommands *context = opaque;
-    if (!writable_folder_root() || selected_path[0] == '\0' ||
+    if (!writable_folder_root() || selection_count() == 0u ||
         (selected_kind != ASTRA_VFS_KIND_DIRECTORY &&
          selected_kind != ASTRA_VFS_KIND_FILE))
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    char source[ASTRA_VFS_PATH_MAX];
     char moved[ASTRA_VFS_PATH_MAX];
     char trash[ASTRA_VFS_PATH_MAX];
     const char *mount = writable_mount_root();
     if (mount == NULL || astra_folder_path(mount, ".Trash", trash,
             sizeof(trash)) != ASTRA_VFS_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    uint32_t status = astra_entry_move_to_trash(active_filesystem(),
-        selected_path, trash, moved, sizeof(moved));
-    if (status != ASTRA_VFS_OK) {
-        folder_error(context->gui, "Item could not be moved to Trash", status);
-        return astra_result_from_service(status);
+    uint32_t status = ASTRA_VFS_OK;
+    uint32_t moved_count = 0u;
+    uint32_t count = selection_count();
+    for (; moved_count < count; ++moved_count) {
+        status = selection_path_at(moved_count, source, sizeof(source));
+        if (status == ASTRA_VFS_OK)
+            status = astra_entry_move_to_trash(active_filesystem(), source,
+                trash, moved, sizeof(moved));
+        if (status != ASTRA_VFS_OK) break;
     }
     astra_interface_inline_edit_stop(&name_edit);
     edit_index = UINT32_MAX;
-    return reload_directory();
+    if (moved_count != 0u) {
+        AstraResult refreshed = reload_directory();
+        if (refreshed != ASTRA_OK) return refreshed;
+    }
+    if (status != ASTRA_VFS_OK)
+        folder_error(context->gui, moved_count == 0u ?
+            "Item could not be moved to Trash" :
+            "Some items were moved to Trash; remaining items were not",
+            status);
+    return astra_result_from_service(status);
 }
 
 static AstraResult refresh_query(void *opaque, AstraCommandState *state)
@@ -2020,7 +2104,7 @@ static void menu_state(uint32_t row, int enabled, int checked)
 
 static AstraResult menu_sync(void)
 {
-    uint32_t selected = selected_path[0] != '\0' &&
+    uint32_t selected = selection_count() != 0u &&
         (selected_kind == ASTRA_VFS_KIND_DIRECTORY ||
          selected_kind == ASTRA_VFS_KIND_FILE);
     uint32_t writable = writable_folder_root() && worker == 0u &&
@@ -2030,10 +2114,11 @@ static AstraResult menu_sync(void)
     uint32_t changed = atlas_menu_ready == 0u;
 
     menu_state(ATLAS_MENU_NEW, writable, 0);
-    menu_state(ATLAS_MENU_OPEN, selected, 0);
+    menu_state(ATLAS_MENU_OPEN, selected && selection_count() == 1u, 0);
     menu_state(ATLAS_MENU_COPY, selected && clipboard_service != ASTRA_INVALID_HANDLE, 0);
     menu_state(ATLAS_MENU_PASTE, writable && clipboard_has_file(), 0);
-    menu_state(ATLAS_MENU_RENAME, writable && selected, 0);
+    menu_state(ATLAS_MENU_RENAME, writable && selected &&
+        selection_count() == 1u, 0);
     menu_state(ATLAS_MENU_DELETE, writable && selected, 0);
     menu_state(ATLAS_MENU_REFRESH, worker == 0u && !volume_lost, 0);
     menu_state(ATLAS_MENU_LIST, 1, browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST);
@@ -2106,7 +2191,7 @@ static const AstraCommand toolbar_command_table[] = {
         &toolbar_command_context},
     {"atlas.folder", 12u, 0u, 0u, folder_query, create_folder,
         &toolbar_command_context},
-    {"atlas.open", 10u, 0u, 0u, selected_query, open_selected,
+    {"atlas.open", 10u, 0u, 0u, open_query, open_selected,
         &toolbar_command_context},
     {"atlas.delete", 12u, 0u, 0u, delete_query, delete_selected,
         &toolbar_command_context},
@@ -2219,7 +2304,7 @@ static AstraResult run(AstraHandle gui)
     const AstraCommand commands[] = {
         {"atlas.new", 9u, 0u, 0u, menu_query, create_folder, &command_context},
         {"atlas.folder", 12u, 0u, 0u, folder_query, create_folder, &command_context},
-        {"atlas.open", 10u, 0u, 0u, selected_query, open_selected, &command_context},
+        {"atlas.open", 10u, 0u, 0u, open_query, open_selected, &command_context},
         {"atlas.copy", 10u, 0u, 0u, copy_query, copy_selected, &command_context},
         {"atlas.paste", 11u, 0u, 0u, paste_query, paste_into_current, &command_context},
         {"atlas.rename", 12u, 0u, 0u, rename_query, rename_selected, &command_context},
@@ -2519,12 +2604,11 @@ static AstraResult run(AstraHandle gui)
                     action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
                     (action.control_id == 1u + ASTRA_FILE_PANEL_GRID ||
                      action.control_id == 1u + ASTRA_FILE_PANEL_LIST)) {
-                    if (action.value >= 0 &&
-                        (uint32_t)action.value < browser.item_count)
+                    uint64_t primary = browser_collection.selected_id;
+                    if (browser_selection.count != 0u && primary != 0u &&
+                        primary <= directory.count)
                         browser_result = selection_set(root, directory.entries,
-                            directory.count,
-                            (uint32_t)browser.items[action.value].id - 1u,
-                            0u);
+                            directory.count, (uint32_t)primary - 1u, 0u);
                     else selection_clear();
                 }
                 if (browser_result == ASTRA_OK &&
@@ -2537,14 +2621,12 @@ static AstraResult run(AstraHandle gui)
                         ASTRA_FILE_PANEL_CONTROL_COUNT - 2u;
                     uint32_t depth = offset / 2u;
                     if ((offset & 1u) == 0u && depth < browser.column_count &&
-                        action.value >= 0 &&
-                        (uint32_t)action.value <
-                            browser.column_snapshots[depth].item_count) {
+                        column_models[depth].selected_id != 0u) {
                         const AstraFilePanelColumnSnapshot *snapshot =
                             &browser.column_snapshots[depth];
                         browser_result = selection_set(snapshot->directory,
                             snapshot->entries, snapshot->entry_count,
-                            (uint32_t)snapshot->items[action.value].id - 1u,
+                            (uint32_t)column_models[depth].selected_id - 1u,
                             depth);
                     }
                 }
@@ -2598,13 +2680,28 @@ static AstraResult run(AstraHandle gui)
                                 snapshot->entry_count, index, depth) :
                             ASTRA_ERROR_INVALID_ARGUMENT;
                     if (picked != ASTRA_OK) return picked;
+                    if (index == UINT32_MAX) {
+                        AstraResult cleared = astra_interface_control_set_value(
+                            &ui, root_selection_control(), -1);
+                        if (cleared != ASTRA_OK) return cleared;
+                        cleared = browser_update_status();
+                        if (cleared != ASTRA_OK) return cleared;
+                        cleared = paint();
+                        if (cleared != ASTRA_OK) return cleared;
+                    }
+                    if (index != UINT32_MAX && depth == 0u &&
+                        !astra_interface_selection_contains(&browser_selection,
+                            (uint64_t)index + 1u)) {
+                        AstraResult focused = focus_root_entry(index);
+                        if (focused != ASTRA_OK) return focused;
+                    }
                     uint32_t count = 0u;
                     memset(menu_parents, 0, sizeof(menu_parents));
                     if (index == UINT32_MAX && writable_folder_root()) {
                         menu_items[count++] = (AstraContextMenuItem){"atlas.new", 9u, NULL};
-                        menu_items[count++] = (AstraContextMenuItem){"atlas.folder", 12u, NULL};
-                        menu_parents[1] = 1u;
                         menu_items[count++] = (AstraContextMenuItem){"atlas.paste", 11u, NULL};
+                        menu_items[count++] = (AstraContextMenuItem){"atlas.folder", 12u, NULL};
+                        menu_parents[2] = 1u;
                     } else if (selected_path[0] != '\0') {
                         menu_items[count++] = (AstraContextMenuItem){"atlas.open", 10u, NULL};
                         menu_items[count++] = (AstraContextMenuItem){"atlas.copy", 10u, NULL};

@@ -10,6 +10,10 @@ import subprocess
 import time
 
 
+RFB_MODIFIERS = {"Shift": 0xffe1, "Ctrl": 0xffe3,
+                 "Alt": 0xffe9, "Super": 0xffeb}
+
+
 def receive_exact(connection, size):
     result = bytearray()
     while len(result) != size:
@@ -166,22 +170,20 @@ def send_keys(connection, text):
 
 
 def send_shortcut(connection, shortcut):
-    modifiers = {"Shift": 0xffe1, "Ctrl": 0xffe3,
-                 "Alt": 0xffe9, "Super": 0xffeb}
     parts = shortcut.split("+")
-    if len(parts) < 2 or any(part not in modifiers for part in parts[:-1]):
+    if len(parts) < 2 or any(part not in RFB_MODIFIERS for part in parts[:-1]):
         raise RuntimeError("shortcut must be Mod[+Mod]+ASCII-key")
     key = parts[-1]
     if len(key) != 1 or not 0x20 <= ord(key) <= 0x7e:
         raise RuntimeError("shortcut key must be one printable ASCII character")
     for modifier in parts[:-1]:
         connection.sendall(struct.pack(">BBHI", 4, 1, 0,
-                                       modifiers[modifier]))
+                                       RFB_MODIFIERS[modifier]))
     for down in (1, 0):
         connection.sendall(struct.pack(">BBHI", 4, down, 0, ord(key)))
     for modifier in reversed(parts[:-1]):
         connection.sendall(struct.pack(">BBHI", 4, 0, 0,
-                                       modifiers[modifier]))
+                                       RFB_MODIFIERS[modifier]))
 
 
 def send_pointer(connection, x, y, buttons=0):
@@ -203,6 +205,28 @@ def click(connection, x, y):
     time.sleep(0.05)
     send_pointer(connection, x, y)
     time.sleep(0.2)
+
+
+def right_click(connection, x, y):
+    send_pointer(connection, x, y)
+    send_pointer(connection, x, y, 4)
+    time.sleep(0.05)
+    send_pointer(connection, x, y)
+    time.sleep(0.2)
+
+
+def modified_click(connection, modifiers, x, y):
+    names = modifiers.split("+")
+    if any(name not in RFB_MODIFIERS for name in names):
+        raise ValueError("modifiers must be Shift, Ctrl, Alt, or Super")
+    for name in names:
+        connection.sendall(struct.pack(">BBHI", 4, 1, 0, RFB_MODIFIERS[name]))
+    try:
+        click(connection, x, y)
+    finally:
+        for name in reversed(names):
+            connection.sendall(struct.pack(">BBHI", 4, 0, 0,
+                                           RFB_MODIFIERS[name]))
 
 
 def wheel(connection, x, y, ticks):
@@ -271,6 +295,10 @@ def main():
                                 metavar=("X", "Y"), type=int)
     pointer_action.add_argument("--click", nargs=2,
                                 metavar=("X", "Y"), type=int)
+    pointer_action.add_argument("--right-click", nargs=2,
+                                metavar=("X", "Y"), type=int)
+    pointer_action.add_argument("--modified-click", nargs=3,
+                                metavar=("MODIFIERS", "X", "Y"))
     pointer_action.add_argument("--wheel", nargs=3,
                                 metavar=("X", "Y", "TICKS"), type=int)
     pointer_action.add_argument("--drag", nargs=4,
@@ -290,7 +318,13 @@ def main():
     mover = None
     try:
         coordinates = (arguments.double_click or arguments.click or
+                       arguments.right_click or
                        arguments.pointer)
+        if arguments.modified_click is not None:
+            try:
+                coordinates = tuple(map(int, arguments.modified_click[1:]))
+            except ValueError:
+                parser.error("modified click coordinates must be integers")
         if arguments.wheel is not None:
             coordinates = arguments.wheel[:2]
             if arguments.wheel[2] == 0 or abs(arguments.wheel[2]) > 100:
@@ -313,6 +347,13 @@ def main():
                 time.sleep(2)
             elif arguments.click:
                 click(connection, x, y)
+            elif arguments.right_click:
+                right_click(connection, x, y)
+            elif arguments.modified_click:
+                try:
+                    modified_click(connection, arguments.modified_click[0], x, y)
+                except ValueError as error:
+                    parser.error(str(error))
             elif arguments.wheel:
                 wheel(connection, x, y, arguments.wheel[2])
             elif arguments.drag:

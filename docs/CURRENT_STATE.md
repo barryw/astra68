@@ -2,6 +2,34 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas batch-action checkpoint, 2026-10-30: File selection clipboard payload
+now carries one or many exact-volume references. Filesystem Kit ABI 15.6 owns
+payload size and validation; Atlas maps Interface Kit stable IDs to its
+directory snapshot and invokes existing cross-volume copy and shared Trash
+operations. Open/Rename require one selection. Shared-control focus is reused
+after new folder and context selection; completed Rename clears selection.
+Haiku read-only reference:
+`src/kits/tracker/PoseView.cpp` (`DoMoveToTrash`) and
+`src/kits/tracker/ContainerWindow.cpp` (Copy/Move selected entries). Beast
+Filesystem Kit contract, host tests, Atlas build/tests and NDK HTML/PDF docs
+pass. DE25 targeted install of Filesystem Kit and Atlas passed; Atlas copied
+`events` and `astra_events.cat` together from DH0 to RAM0, then moved both RAM0
+copies to Trash. New RAM0 folder entered rename mode with one selected row.
+Blank-space right-click now clears prior selection and opens the shared
+`New > Folder` submenu; DE25 hover opened Folder and click created an editable
+`Folder1`. Atlas previously supplied submenu child before later root `Paste`,
+violating Interface Kit's root-before-child menu contract; order is corrected.
+Completed Rename refreshes and clears selection, so tile, toolbar and status
+agree. Full NDK `dist-check` passes.
+Services stayed active, restart count zero, 8.2 GiB board space free. SHA
+checked RFB captures live on Beast at
+`/mnt/Documents/astra68/atlas-batch-20261030/`; board trial captures were
+removed. Old 15.5.0 library stays in guest image until release rebuild because
+guarded removal rejected a mismatched source digest. New 15.6.0 provider is
+selected. Remaining Atlas work: List row expansion, selection preview, Recent
+and saved queries, Cut/Move, drag and drop. Targeted update remains development
+state; immutable release image has not been rebuilt for this checkpoint.
+
 Atlas shared multi-selection checkpoint, 2026-10-30: Interface Kit ABI 12
 adds caller-owned, stable-ID selection shared by List, Icon Grid, Table, and
 Tree controls. Ctrl/Command toggles rows; Shift selects ranges. File Panel

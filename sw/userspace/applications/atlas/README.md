@@ -21,7 +21,7 @@ the same directory snapshot; columns load child directories as they are
 selected. Search filters the current directory. Sort by Name, Size, Kind, or
 Modified and Hidden files apply to all views. HOME, RAM0, and writable mounted
 volumes support New drawer, file or folder Rename, and per-volume Trash. Copy
-and Paste use a typed native clipboard file reference; removable sources carry
+and Paste use a typed native clipboard file selection; removable sources carry
 their exact volume identity, and copying keeps the source grant pinned. The
 shared Filesystem Kit copies between source and destination namespaces without
 overwriting an existing destination. App bundles launch as apps, files go to
@@ -54,12 +54,28 @@ including Table's header offset. File Panel maps that row to its source entry
 and Columns depth; Atlas uses that mapping for its context menu instead of
 maintaining separate geometry logic for each view.
 
+Copy and Paste serialize one or many selected paths through Filesystem Kit's
+versioned VFS selection clipboard payload. Filesystem Kit checks payload bounds
+and paths. Atlas resolves each selected stable ID through its directory
+snapshot, pins exact removable volume identity, then calls the existing
+cross-volume tree-copy operation. Move to Trash applies the existing shared
+folder operation to each selected entry. Partial failures show that earlier
+items succeeded; the directory refreshes afterward. Open and Rename require
+one selection. A shared-control focus helper updates the active Grid, List, or
+Columns view after folder creation and context selection. Completing Rename
+refreshes the directory and clears selection.
+Blank-space context menu uses shared menu hierarchy with root items before
+submenus, and clears selection through the active shared collection control.
+
+Haiku read-only references: `src/kits/tracker/PoseView.cpp` (`DoMoveToTrash`)
+iterates selected poses; `src/kits/tracker/ContainerWindow.cpp` dispatches
+Copy and Move over Tracker selection. Astra keeps selection gestures in
+Interface Kit and file operations in Filesystem Kit and common folder code.
+
 Remaining design work: List row expansion, selection preview,
-Recent and saved queries, Cut/Move, drag and drop, and multi-item file actions.
-Selection works across primary views; file operations remain single-item.
-The native clipboard has Copy
-and Paste only. These need shared controls or native volume grant transitions,
-not Atlas-only widgets.
+Recent and saved queries, Cut/Move, and drag and drop. The native clipboard has
+Copy and Paste only. These need shared controls or native volume grant
+transitions, not Atlas-only widgets.
 
 Keyboard bindings use Interface Kit's shared command shortcut dispatcher and
 existing responder chain. Atlas owns only its binding table and suppresses

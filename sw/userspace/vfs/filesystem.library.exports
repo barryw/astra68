@@ -203,3 +203,9 @@ ASTRA_FILESYSTEM_15.4 {
         astra_application_catalog_extension_type;
         astra_file_type_resolve;
 } ASTRA_FILESYSTEM_15.3;
+
+ASTRA_FILESYSTEM_15.6 {
+    global:
+        astra_vfs_clipboard_selection_size;
+        astra_vfs_clipboard_selection_validate;
+} ASTRA_FILESYSTEM_15.4;
