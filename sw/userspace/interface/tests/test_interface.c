@@ -2113,6 +2113,19 @@ static void test_table_control(void)
     assert(size.width == 280u && size.height == 4u * theme.control_height);
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(astra_interface_table_set_sort(&context, &control, 1u, 0u) ==
+        ASTRA_OK);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(astra_interface_table_set_sort(&context, &control, 1u, 1u) ==
+        ASTRA_OK);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(astra_interface_table_set_sort(&context, &control, 2u, 0u) ==
+        ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_table_set_sort(&context, &control, 1u, 2u) ==
+        ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_table_set_sort(&context, &control,
+        UINT32_MAX, 0u) == ASTRA_OK);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
         ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
         control._private_frame.y + 4);

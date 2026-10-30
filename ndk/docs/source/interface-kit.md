@@ -43,6 +43,12 @@ For pointer context menus, collection controls report hovered row in
 `astra_interface_file_panel_context_entry` maps that row to the original
 directory entry and Columns depth. Callers need no view-specific hit testing;
 the Table header never resolves to a file.
+Table header clicks emit `ASTRA_UI_ACTION_SORT_REQUESTED` with a zero-based
+column. Applications sort their data and call
+`astra_interface_table_set_sort` to mark the active column and direction;
+the Table draws its shared arrow and reserves heading space. Pass `UINT32_MAX`
+to clear the marker. The marker API requires interface.library.12 version
+12.1.0 or newer.
 
 ## Field family
 

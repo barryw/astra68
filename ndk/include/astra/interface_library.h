@@ -23,7 +23,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.12. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 12u
 /** Current Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 0u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 1u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -364,6 +364,17 @@ AstraResult astra_interface_table_init(AstraControl *control,
 AstraResult astra_interface_table_set_rows(AstraUIContext *context,
     AstraControl *control, const AstraCollectionItem *items, uint32_t count,
     const AstraTableCell *cells, uint32_t cell_count);
+/** Show the caller's active sort column and direction in a Table header.
+ * This changes presentation only; caller owns row ordering. Pass UINT32_MAX
+ * as column to clear the indicator. Available since Interface Kit 12.1.
+ * @param context Owning retained UI context.
+ * @param control Table to update.
+ * @param column Zero-based column or UINT32_MAX to clear.
+ * @param reverse Zero for ascending, one for descending.
+ * @return ASTRA_OK or validation error.
+ */
+AstraResult astra_interface_table_set_sort(AstraUIContext *context,
+    AstraControl *control, uint32_t column, uint32_t reverse);
 /** Initialize a retained Tree over one C1 collection and preorder hierarchy.
  * Computes depth and visible rows in the caller-owned workspace.
  * @param control Caller-owned retained control.

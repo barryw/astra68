@@ -2,6 +2,20 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared sort marker checkpoint, 2026-10-30: Interface Kit 12.1 adds
+`astra_interface_table_set_sort`, a presentation-only API for active Table
+column and direction. It reuses the shared stepper arrow renderer and leaves
+ordering with the caller. Atlas binds its existing sort state to the Table;
+there is no Atlas-specific header renderer. Beast Interface tests, library
+contract, and Atlas bundle build pass. DE25 targeted install of Interface Kit
+12.1 and Atlas passed; Name showed ascending arrow, Modified clicks changed
+the arrow and sorted newest then oldest. Atlas remained open with no logged
+errors; NDK `dist-check` passed. `astra.service` active, zero restarts,
+8.1 GiB free. SHA-verified RFB
+evidence on Beast: `/mnt/Documents/astra68/atlas-sort-marker-20261030/`.
+Board trial captures removed. Remaining Atlas work: List row expansion,
+selection preview, Recent/saved queries, and drag and drop.
+
 Atlas shared Table sort checkpoint, 2026-10-30: Interface Kit Table now emits
 the zero-based column in `ASTRA_UI_ACTION_SORT_REQUESTED` after a complete
 header click. The common directory snapshot sorter accepts direction and keeps
@@ -18,7 +32,7 @@ newest first; clicking again sorted oldest first. Atlas stayed open,
 RFB captures live on Beast at
 `/mnt/Documents/astra68/atlas-header-sort-20261030/`; disposable board trial
 files were removed. Remaining Atlas work: List row expansion, selection
-preview, Recent/saved queries, drag and drop, and visible sort direction.
+preview, Recent/saved queries, and drag and drop.
 
 Atlas Cut/Move checkpoint, 2026-10-30: Filesystem Kit ABI 15.7 owns generic
 same-volume rename and cross-volume staged copy followed by source removal.

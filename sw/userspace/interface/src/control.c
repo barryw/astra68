@@ -99,6 +99,11 @@ static uint32_t drop_target_border(const AstraControlFrame *frame,
 #define SCROLLBAR_PART_THUMB 1u
 #define SCROLLBAR_PART_BEFORE 2u
 #define SCROLLBAR_PART_AFTER 3u
+#define TABLE_SORT_COLUMN_MASK UINT32_C(0x3f)
+#define TABLE_SORT_REVERSE UINT32_C(0x40)
+#define TABLE_SORT_ACTIVE UINT32_C(0x80)
+#define TABLE_SORT_MASK (TABLE_SORT_COLUMN_MASK | TABLE_SORT_REVERSE | \
+    TABLE_SORT_ACTIVE)
 #define STEPPER_BUTTON_WIDTH 20u
 #define STEPPER_REPEAT_DELAY 24u
 #define STEPPER_REPEAT_INTERVAL 5u
@@ -1008,7 +1013,13 @@ static int control_valid(const AstraControl *control)
                 const_collection_model(control)->items[
                     control->_private_value].id ==
                     const_collection_model(control)->selected_id) &&
-               control->_private_style == 0u &&
+               (control->_private_control_kind == ASTRA_CONTROL_LIST ?
+                    control->_private_style == 0u :
+                    (control->_private_style == 0u ||
+                     ((control->_private_style & ~TABLE_SORT_MASK) == 0u &&
+                      (control->_private_style & TABLE_SORT_ACTIVE) != 0u &&
+                      (control->_private_style & TABLE_SORT_COLUMN_MASK) <
+                          table_model(control)->column_count))) &&
                (state & ~CONTROL_VALUE_STATES) == 0u &&
                control->_private_preview_state == 0u &&
                control->_private_value >= -1 &&
@@ -2024,6 +2035,27 @@ AstraResult astra_interface_table_set_rows(AstraUIContext *context,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return collection_set_items(context, control, items, count,
                                 cells, cell_count);
+}
+
+AstraResult astra_interface_table_set_sort(AstraUIContext *context,
+    AstraControl *control, uint32_t column, uint32_t reverse)
+{
+    uint32_t index = control_index(context, control);
+    uint32_t style;
+
+    if (index == CONTROL_NONE ||
+        control->_private_control_kind != ASTRA_CONTROL_TABLE ||
+        reverse > 1u ||
+        (column != UINT32_MAX && column >= table_model(control)->column_count) ||
+        (column == UINT32_MAX && reverse != 0u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    style = column == UINT32_MAX ? 0u :
+        TABLE_SORT_ACTIVE | column |
+        (reverse != 0u ? TABLE_SORT_REVERSE : 0u);
+    if (style == control->_private_style) return ASTRA_OK;
+    control_damage(context, index);
+    control->_private_style = style;
+    return ASTRA_OK;
 }
 
 AstraResult astra_interface_popup_init(AstraControl *control,
@@ -6868,9 +6900,12 @@ static void render_table(const AstraTheme *theme,
     column_x = frame->x;
     for (uint32_t col = 0u; col < table->column_count; ++col) {
         const AstraTableColumn *column = &table->columns[col];
+        uint32_t sorted = (control->_private_style & TABLE_SORT_ACTIVE) != 0u &&
+            (control->_private_style & TABLE_SORT_COLUMN_MASK) == col;
         uint32_t available = column->width >
             (uint32_t)theme->control_padding_x * 2u ?
             column->width - (uint32_t)theme->control_padding_x * 2u : 0u;
+        if (sorted && available > 14u) available -= 14u;
         uint32_t fitted = astra_surface_ui_text_fit(
             column->heading, column->heading_length,
             theme->control_font_height, available);
@@ -6881,6 +6916,12 @@ static void render_table(const AstraTheme *theme,
                 theme->control_font_height) / 2,
             column->heading, fitted, theme->control_font_height,
             color(theme->client_text_secondary));
+        if (sorted && column->width >= 20u)
+            render_stepper_arrow(surface,
+                column_x + (int32_t)column->width - 11,
+                frame->y + (int32_t)theme->control_height / 2,
+                (control->_private_style & TABLE_SORT_REVERSE) == 0u,
+                color(theme->client_text_secondary));
         column_x += (int32_t)column->width;
     }
     for (uint32_t row = first; row < end; ++row) {

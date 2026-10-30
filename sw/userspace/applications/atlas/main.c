@@ -740,6 +740,9 @@ static AstraResult build_view(AstraHandle gui)
         astra_interface_ui_set_state(&ui,
             BROWSER_CONTROL(ASTRA_FILE_PANEL_TOOLS),
             ASTRA_CONTROL_COLLAPSED) != ASTRA_OK ||
+        astra_interface_table_set_sort(&ui,
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST), sort_mode,
+            sort_reverse) != ASTRA_OK ||
         layout() != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     view_action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
@@ -2120,12 +2123,19 @@ static AstraResult sort_set(uint32_t key, uint32_t reverse)
     sort_reverse = reverse;
     AstraResult result = astra_interface_control_set_value(&ui,
         &controls[SORT_CONTROL_INDEX], sort_mode);
+    if (result == ASTRA_OK)
+        result = astra_interface_table_set_sort(&ui,
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST), sort_mode,
+            sort_reverse);
     if (result == ASTRA_OK) result = reload_directory();
     if (result != ASTRA_OK) {
         sort_mode = previous;
         sort_reverse = previous_reverse;
         (void)astra_interface_control_set_value(&ui,
             &controls[SORT_CONTROL_INDEX], previous);
+        (void)astra_interface_table_set_sort(&ui,
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST), previous,
+            previous_reverse);
     }
     return result;
 }

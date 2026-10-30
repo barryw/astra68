@@ -205,3 +205,8 @@ ASTRA_INTERFACE_12.0 {
     local:
         *;
 };
+
+ASTRA_INTERFACE_12.1 {
+    global:
+        astra_interface_table_set_sort;
+} ASTRA_INTERFACE_12.0;

@@ -16,7 +16,7 @@
 #define ALERT_WIDTH 420u
 #define ALERT_HEIGHT 150u
 
-ASTRA_DYNAMIC_LIBRARY("interface.library.12", 12, 0, 0,
+ASTRA_DYNAMIC_LIBRARY("interface.library.12", 12, 1, 0,
               ASTRA_INTERFACE_LIBRARY_ABI_MAJOR,
               ASTRA_INTERFACE_LIBRARY_ABI_MINOR,
               "Barry Walker", "Copyright 2026 Barry Walker");
