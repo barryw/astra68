@@ -4,6 +4,8 @@
 Applications on Astra. Each tab uses the same public control constructors and
 application bundle that other clients use. Sample data in Gallery is local to
 the app; Open and Save previews report selected paths but perform no file I/O.
+[DE25 screenshots of every tab](INTERFACE_GALLERY_PREVIEWS.md) show the current
+native appearance.
 
 | Tab | Shared controls shown |
 | --- | --- |
