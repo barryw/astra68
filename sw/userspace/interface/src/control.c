@@ -112,7 +112,11 @@ static uint32_t drop_target_border(const AstraControlFrame *frame,
      (kind) == ASTRA_CONTROL_SWITCH)
 #define COLLECTION_KINDS(kind) \
     ((kind) == ASTRA_CONTROL_LIST || (kind) == ASTRA_CONTROL_TABLE || \
+     (kind) == ASTRA_CONTROL_OUTLINE_TABLE || \
      (kind) == ASTRA_CONTROL_TREE || (kind) == ASTRA_CONTROL_ICON_GRID)
+#define TABLE_KINDS(kind) \
+    ((kind) == ASTRA_CONTROL_TABLE || \
+     (kind) == ASTRA_CONTROL_OUTLINE_TABLE)
 #define CHOICE_KINDS(kind) \
     ((kind) == ASTRA_CONTROL_SEGMENTED || (kind) == ASTRA_CONTROL_TAB || \
      COLLECTION_KINDS(kind) || (kind) == ASTRA_CONTROL_POPUP)
@@ -215,7 +219,21 @@ static const AstraCollectionModel *const_collection_model(
 
 static const AstraTableModel *table_model(const AstraControl *control)
 {
+    if (control->_private_control_kind == ASTRA_CONTROL_OUTLINE_TABLE)
+        return ((const AstraOutlineTableModel *)
+            control->_private_display_model)->table;
     return (const AstraTableModel *)control->_private_display_model;
+}
+
+static AstraOutlineTableModel *outline_table_model(AstraControl *control)
+{
+    return (AstraOutlineTableModel *)(void *)control->_private_display_model;
+}
+
+static const AstraOutlineTableModel *const_outline_table_model(
+    const AstraControl *control)
+{
+    return (const AstraOutlineTableModel *)control->_private_display_model;
 }
 
 static int32_t table_header_at(const AstraControl *control, int32_t x,
@@ -313,6 +331,33 @@ static int table_model_valid(const AstraTableModel *table)
         width += column->width;
     }
     return width <= INT32_MAX;
+}
+
+static int outline_rows_valid(const AstraOutlineTableRow *rows,
+    uint32_t count)
+{
+    if (count != 0u && rows == NULL) return 0;
+    for (uint32_t at = 0u; at < count; ++at) {
+        if (rows[at].depth >= ASTRA_TREE_MAX_DEPTH ||
+            rows[at].expandable > 1u || rows[at].expanded > 1u ||
+            rows[at].reserved != 0u ||
+            (rows[at].expanded != 0u && rows[at].expandable == 0u) ||
+            (at == 0u && rows[at].depth != 0u) ||
+            (at != 0u && rows[at].depth > rows[at - 1u].depth + 1u) ||
+            (at != 0u && rows[at].depth > rows[at - 1u].depth &&
+             rows[at - 1u].expanded == 0u))
+            return 0;
+    }
+    return 1;
+}
+
+static int outline_model_valid(const AstraOutlineTableModel *outline)
+{
+    return outline != NULL && outline->size == sizeof(*outline) &&
+        table_model_valid(outline->table) &&
+        outline->row_count == outline->table->collection->item_count &&
+        outline_rows_valid(outline->rows, outline->row_count) &&
+        astra_words_zero(outline->reserved, 2u);
 }
 
 static int collection_items_valid(const AstraCollectionItem *items,
@@ -985,10 +1030,19 @@ static int control_valid(const AstraControl *control)
                           ASTRA_CONTROL_COLLAPSED)) == 0u &&
                control->_private_preview_state == 0u;
     if (control->_private_control_kind == ASTRA_CONTROL_LIST ||
-        control->_private_control_kind == ASTRA_CONTROL_TABLE)
+        TABLE_KINDS(control->_private_control_kind))
         return control->_private_text != NULL &&
                (control->_private_control_kind == ASTRA_CONTROL_LIST ?
                     control->_private_display_model == NULL :
+                    (control->_private_control_kind !=
+                         ASTRA_CONTROL_OUTLINE_TABLE ||
+                     (const_outline_table_model(control) != NULL &&
+                      const_outline_table_model(control)->size ==
+                          sizeof(AstraOutlineTableModel) &&
+                      const_outline_table_model(control)->row_count ==
+                          control->_private_text_length &&
+                      (control->_private_text_length == 0u ||
+                       const_outline_table_model(control)->rows != NULL))) &&
                     table_model(control) != NULL &&
                     table_model(control)->collection ==
                         const_collection_model(control) &&
@@ -1109,8 +1163,8 @@ static int context_valid(const AstraUIContext *context)
            context->_private_hover_part <= SCROLLBAR_PART_AFTER &&
            (context->_private_capture_part <= SCROLLBAR_PART_AFTER ||
             (context->_private_capture < context->_private_control_count &&
-             context->_private_controls[context->_private_capture]
-                     ._private_control_kind == ASTRA_CONTROL_TABLE &&
+             TABLE_KINDS(context->_private_controls[
+                 context->_private_capture]._private_control_kind) &&
              table_model(&context->_private_controls[
                  context->_private_capture]) != NULL &&
              context->_private_capture_part <= table_model(
@@ -1921,13 +1975,17 @@ AstraResult astra_interface_list_init(AstraControl *control,
 
 static AstraResult collection_set_items(AstraUIContext *context,
     AstraControl *control, const AstraCollectionItem *items, uint32_t count,
-    const AstraTableCell *cells, uint32_t cell_count)
+    const AstraTableCell *cells, uint32_t cell_count,
+    const AstraOutlineTableRow *rows)
 {
     AstraCollectionModel before;
     AstraCollectionModel *model;
     AstraTableModel *table = NULL;
     const AstraTableCell *old_cells = NULL;
     uint32_t old_cell_count = 0u;
+    AstraOutlineTableModel *outline = NULL;
+    const AstraOutlineTableRow *old_rows = NULL;
+    uint32_t old_row_count = 0u;
     AstraControl next;
     AstraResult result;
     int32_t selected;
@@ -1935,16 +1993,25 @@ static AstraResult collection_set_items(AstraUIContext *context,
 
     if (index == CONTROL_NONE ||
         (control->_private_control_kind != ASTRA_CONTROL_LIST &&
-         control->_private_control_kind != ASTRA_CONTROL_TABLE) ||
+         !TABLE_KINDS(control->_private_control_kind)) ||
         !collection_items_valid(items, count) ||
         !selection_valid(collection_model(control)->selection, count))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    if (control->_private_control_kind == ASTRA_CONTROL_TABLE) {
-        table = (AstraTableModel *)(void *)control->_private_display_model;
+    if (TABLE_KINDS(control->_private_control_kind)) {
+        table = (AstraTableModel *)(void *)table_model(control);
         if (table == NULL || table->column_count == 0u ||
             cell_count != (uint64_t)count * (table->column_count - 1u) ||
             !table_cells_valid(cells, cell_count))
             return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (control->_private_control_kind == ASTRA_CONTROL_OUTLINE_TABLE) {
+            outline = outline_table_model(control);
+            if (!outline_rows_valid(rows, count))
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+            old_rows = outline->rows;
+            old_row_count = outline->row_count;
+            outline->rows = rows;
+            outline->row_count = count;
+        }
         old_cells = table->cells;
         old_cell_count = table->cell_count;
         table->cells = cells;
@@ -1974,6 +2041,10 @@ static AstraResult collection_set_items(AstraUIContext *context,
             table->cells = old_cells;
             table->cell_count = old_cell_count;
         }
+        if (outline != NULL) {
+            outline->rows = old_rows;
+            outline->row_count = old_row_count;
+        }
         if (context->_private_has_layout != 0u)
             (void)astra_interface_ui_layout(context, &context->_private_layout);
     } else {
@@ -1991,7 +2062,8 @@ AstraResult astra_interface_list_set_items(AstraUIContext *context,
     if (control == NULL ||
         control->_private_control_kind != ASTRA_CONTROL_LIST)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    return collection_set_items(context, control, items, count, NULL, 0u);
+    return collection_set_items(context, control, items, count, NULL, 0u,
+        NULL);
 }
 
 AstraResult astra_interface_table_init(AstraControl *control,
@@ -2034,7 +2106,39 @@ AstraResult astra_interface_table_set_rows(AstraUIContext *context,
         control->_private_control_kind != ASTRA_CONTROL_TABLE)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return collection_set_items(context, control, items, count,
-                                cells, cell_count);
+                                cells, cell_count, NULL);
+}
+
+AstraResult astra_interface_outline_table_init(AstraControl *control,
+    const AstraOutlineTableInfo *info)
+{
+    AstraTableInfo table = ASTRA_TABLE_INFO_INIT;
+    AstraResult result;
+    if (control == NULL || info == NULL || info->size != sizeof(*info) ||
+        info->id == 0u || !outline_model_valid(info->model) ||
+        (info->state & ~CONTROL_VALUE_STATES) != 0u ||
+        !astra_words_zero(info->reserved, 4u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    table.id = info->id;
+    table.model = info->model->table;
+    table.state = info->state;
+    result = astra_interface_table_init(control, &table);
+    if (result != ASTRA_OK) return result;
+    control->_private_control_kind = ASTRA_CONTROL_OUTLINE_TABLE;
+    control->_private_display_model = info->model;
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_outline_table_set_rows(AstraUIContext *context,
+    AstraControl *control, const AstraCollectionItem *items, uint32_t count,
+    const AstraTableCell *cells, uint32_t cell_count,
+    const AstraOutlineTableRow *rows)
+{
+    if (control == NULL || control->_private_control_kind !=
+            ASTRA_CONTROL_OUTLINE_TABLE)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return collection_set_items(context, control, items, count, cells,
+        cell_count, rows);
 }
 
 AstraResult astra_interface_table_set_sort(AstraUIContext *context,
@@ -2044,7 +2148,7 @@ AstraResult astra_interface_table_set_sort(AstraUIContext *context,
     uint32_t style;
 
     if (index == CONTROL_NONE ||
-        control->_private_control_kind != ASTRA_CONTROL_TABLE ||
+        !TABLE_KINDS(control->_private_control_kind) ||
         reverse > 1u ||
         (column != UINT32_MAX && column >= table_model(control)->column_count) ||
         (column == UINT32_MAX && reverse != 0u))
@@ -2978,7 +3082,7 @@ static AstraResult measure_control(const AstraControl *control,
         size->height = view_model(control)->intrinsic_height;
         return ASTRA_OK;
     }
-    if (control->_private_control_kind == ASTRA_CONTROL_TABLE) {
+    if (TABLE_KINDS(control->_private_control_kind)) {
         const AstraTableModel *table = table_model(control);
         uint64_t width = 0u;
         uint64_t height = ((uint64_t)control->_private_text_length + 1u) *
@@ -5304,8 +5408,11 @@ static int render_requirements(const AstraUIContext *context,
             }
             continue;
         }
-        if (control->_private_control_kind == ASTRA_CONTROL_TABLE) {
+        if (TABLE_KINDS(control->_private_control_kind)) {
             const AstraTableModel *table = table_model(control);
+            const AstraOutlineTableModel *outline =
+                control->_private_control_kind == ASTRA_CONTROL_OUTLINE_TABLE ?
+                    const_outline_table_model(control) : NULL;
             const AstraCollectionItem *items =
                 const_collection_model(control)->items;
             uint32_t first, end;
@@ -5314,6 +5421,10 @@ static int render_requirements(const AstraUIContext *context,
                                theme.control_height, &first, &end);
             *commands += 7u + table->column_count +
                 (uint64_t)(end - first) * (1u + table->column_count);
+            if (outline != NULL)
+                for (uint32_t row = first; row < end; ++row)
+                    if (outline->rows[row].expandable != 0u)
+                        *commands += 3u;
             for (uint32_t col = 0u; col < table->column_count; ++col)
                 *payload += table->columns[col].heading_length + id_length;
             for (uint32_t item = first; item < end; ++item) {
@@ -6771,6 +6882,20 @@ static void render_popup(const AstraTheme *theme,
     astra_surface_fill(surface, arrow_x + 3, arrow_y, 3u, 1u, color(ink));
 }
 
+static void render_disclosure_mark(AstraSurfaceView *surface,
+    int32_t x, int32_t y, uint32_t expanded, AstraColorRGBA8 ink)
+{
+    if (expanded != 0u) {
+        astra_surface_fill(surface, x - 3, y - 1, 7u, 1u, color(ink));
+        astra_surface_fill(surface, x - 2, y, 5u, 1u, color(ink));
+        astra_surface_fill(surface, x - 1, y + 1, 3u, 1u, color(ink));
+    } else {
+        astra_surface_fill(surface, x - 1, y - 3, 1u, 7u, color(ink));
+        astra_surface_fill(surface, x, y - 2, 1u, 5u, color(ink));
+        astra_surface_fill(surface, x + 1, y - 1, 1u, 3u, color(ink));
+    }
+}
+
 static void render_tree(const AstraTheme *theme,
                         const AstraControl *control,
                         AstraSurfaceView *surface)
@@ -6804,21 +6929,8 @@ static void render_tree(const AstraTheme *theme,
             AstraColorRGBA8 mark =
                 (effective_state(control) & ASTRA_CONTROL_DISABLED) != 0u ?
                 theme->text_tertiary : text_color;
-            if (tree->nodes[item].expanded) {
-                astra_surface_fill(surface, glyph_x - 3, glyph_y - 1,
-                                   7u, 1u, color(mark));
-                astra_surface_fill(surface, glyph_x - 2, glyph_y,
-                                   5u, 1u, color(mark));
-                astra_surface_fill(surface, glyph_x - 1, glyph_y + 1,
-                                   3u, 1u, color(mark));
-            } else {
-                astra_surface_fill(surface, glyph_x - 1, glyph_y - 3,
-                                   1u, 7u, color(mark));
-                astra_surface_fill(surface, glyph_x, glyph_y - 2,
-                                   1u, 5u, color(mark));
-                astra_surface_fill(surface, glyph_x + 1, glyph_y - 1,
-                                   1u, 3u, color(mark));
-            }
+            render_disclosure_mark(surface, glyph_x, glyph_y,
+                tree->nodes[item].expanded, mark);
         }
         astra_surface_ui_text(surface, frame->x + (int32_t)indent,
             y + (int32_t)(theme->control_height -
@@ -6889,6 +7001,9 @@ static void render_table(const AstraTheme *theme,
 {
     const AstraControlFrame *frame = &control->_private_frame;
     const AstraTableModel *table = table_model(control);
+    const AstraOutlineTableModel *outline =
+        control->_private_control_kind == ASTRA_CONTROL_OUTLINE_TABLE ?
+            const_outline_table_model(control) : NULL;
     const AstraCollectionItem *items = const_collection_model(control)->items;
     uint32_t first, end;
     int32_t column_x;
@@ -6943,12 +7058,29 @@ static void render_table(const AstraTheme *theme,
             uint32_t available = width >
                 (uint32_t)theme->control_padding_x * 2u ?
                 width - (uint32_t)theme->control_padding_x * 2u : 0u;
+            uint32_t indent = col == 0u && outline != NULL ?
+                outline->rows[row].depth * 16u + 20u : 0u;
 
-            if (length != 0u) {
+            if (indent > available) available = 0u;
+            else available -= indent;
+            if (col == 0u && outline != NULL &&
+                outline->rows[row].expandable != 0u &&
+                indent <= width) {
+                AstraColorRGBA8 mark =
+                    (effective_state(control) & ASTRA_CONTROL_DISABLED) != 0u ?
+                        theme->text_tertiary : text_color;
+                render_disclosure_mark(surface,
+                    column_x + theme->control_padding_x +
+                        (int32_t)indent - 12,
+                    y + (int32_t)theme->control_height / 2,
+                    outline->rows[row].expanded, mark);
+            }
+
+            if (length != 0u && available != 0u) {
                 uint32_t fitted = astra_surface_ui_text_fit(
                     text, length, theme->control_font_height, available);
                 astra_surface_ui_text(surface,
-                    column_x + theme->control_padding_x,
+                    column_x + theme->control_padding_x + (int32_t)indent,
                     y + (int32_t)(theme->control_height -
                         theme->control_font_height) / 2,
                     text, fitted, theme->control_font_height,
@@ -7172,7 +7304,7 @@ static int32_t choice_index_at(const AstraControl *control, int32_t x,
     if (COLLECTION_KINDS(control->_private_control_kind)) {
         AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
         int64_t relative = (int64_t)y - control->_private_frame.y -
-            (control->_private_control_kind == ASTRA_CONTROL_TABLE ?
+            (TABLE_KINDS(control->_private_control_kind) ?
                 theme.control_height : 0u);
         uint32_t index;
 
@@ -7315,7 +7447,9 @@ static AstraResult list_reveal_row(AstraUIContext *context, uint32_t index,
             tile_width, tile_height);
     }
     uint32_t header = context->_private_controls[index]._private_control_kind ==
-        ASTRA_CONTROL_TABLE ? theme.control_height : 0u;
+        ASTRA_CONTROL_TABLE ||
+        context->_private_controls[index]._private_control_kind ==
+            ASTRA_CONTROL_OUTLINE_TABLE ? theme.control_height : 0u;
     return control_reveal(context, index, 0u,
                            header + row * theme.control_height,
                            1u, theme.control_height);
@@ -8616,7 +8750,7 @@ static AstraResult render_one_control(const AstraUIContext *context,
         render_tree(theme, control, surface);
     else if (control->_private_control_kind == ASTRA_CONTROL_ICON_GRID)
         return render_icon_grid(theme, control, surface);
-    else if (control->_private_control_kind == ASTRA_CONTROL_TABLE)
+    else if (TABLE_KINDS(control->_private_control_kind))
         render_table(theme, control, surface);
     else
         render_toggle(theme, control, surface);
@@ -8949,8 +9083,8 @@ static AstraResult pointer_event(AstraUIContext *context,
                 &context->_private_controls[hit], event->data.pointer.x,
                 event->data.pointer.y);
         else if (hit != CONTROL_NONE &&
-                 context->_private_controls[hit]._private_control_kind ==
-                     ASTRA_CONTROL_TABLE) {
+                 TABLE_KINDS(context->_private_controls[hit]
+                     ._private_control_kind)) {
             int32_t column = table_header_at(
                 &context->_private_controls[hit], event->data.pointer.x,
                 event->data.pointer.y);
@@ -9059,7 +9193,7 @@ static AstraResult pointer_event(AstraUIContext *context,
                            event->data.pointer.y, action);
         else if (choice && hit == captured) {
             AstraControl *control = &context->_private_controls[captured];
-            if (control->_private_control_kind == ASTRA_CONTROL_TABLE &&
+            if (TABLE_KINDS(control->_private_control_kind) &&
                 context->_private_capture_part != 0u &&
                 table_header_at(control, event->data.pointer.x,
                     event->data.pointer.y) ==
@@ -9073,6 +9207,25 @@ static AstraResult pointer_event(AstraUIContext *context,
             if (control->_private_control_kind == ASTRA_CONTROL_POPUP) {
                 clear_capture(context);
                 return activate_control(context, captured, action);
+            }
+            if (control->_private_control_kind == ASTRA_CONTROL_OUTLINE_TABLE &&
+                control->_private_minimum_value >= 0) {
+                uint32_t row = (uint32_t)control->_private_minimum_value;
+                const AstraOutlineTableModel *outline =
+                    const_outline_table_model(control);
+                AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+                int64_t relative_x = (int64_t)event->data.pointer.x -
+                    control->_private_frame.x;
+                uint32_t left = (uint32_t)theme.control_padding_x +
+                    outline->rows[row].depth * 16u;
+                if (outline->rows[row].expandable != 0u &&
+                    relative_x >= left && relative_x < (int64_t)left + 20) {
+                    action->type = ASTRA_UI_ACTION_EXPANSION_REQUESTED;
+                    action->control_id = control->_private_id;
+                    action->value = row;
+                    clear_capture(context);
+                    return ASTRA_OK;
+                }
             }
             if (control->_private_control_kind == ASTRA_CONTROL_TREE &&
                 control->_private_minimum_value >= 0) {
@@ -9405,6 +9558,31 @@ static AstraResult key_event(AstraUIContext *context,
                            tree->nodes[item].depth) {
                 choice_action(context, context->_private_focus, value + 1,
                               event->data.key.modifiers, action);
+            }
+            return ASTRA_OK;
+        }
+        if (control->_private_control_kind == ASTRA_CONTROL_OUTLINE_TABLE &&
+            value >= 0 && (usage == 0x50u || usage == 0x4fu)) {
+            const AstraOutlineTableModel *outline =
+                const_outline_table_model(control);
+            const AstraOutlineTableRow *row = &outline->rows[value];
+            uint32_t expand = usage == 0x4fu;
+            if (row->expandable != 0u && row->expanded != expand) {
+                action->type = ASTRA_UI_ACTION_EXPANSION_REQUESTED;
+                action->control_id = control->_private_id;
+                action->value = value;
+            } else if (!expand && row->depth != 0u) {
+                int32_t parent = value - 1;
+                while (parent >= 0 &&
+                       outline->rows[parent].depth >= row->depth)
+                    --parent;
+                if (parent >= 0) choice_action(context,
+                    context->_private_focus, parent,
+                    event->data.key.modifiers, action);
+            } else if (expand && value + 1 < (int32_t)outline->row_count &&
+                       outline->rows[value + 1].depth > row->depth) {
+                choice_action(context, context->_private_focus, value + 1,
+                    event->data.key.modifiers, action);
             }
             return ASTRA_OK;
         }

@@ -2,6 +2,25 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas reuse checkpoint, 2026-10-30: Audit found Atlas already composes shared
+File Panel, Table, ScrollView, Columns, Icon Grid, collection selection, menus,
+toolbar, inspector, inline edit, drag gesture, and Filesystem Kit operations.
+The remaining expandable List design needs hierarchy behavior in shared
+controls. Interface Kit 12.6 now adds Outline Table by reusing Table columns,
+sorting, rendering and C1 selection plus Tree's disclosure mark. It emits a
+visible-row expansion request; caller owns lazy loading and publishes rows
+atomically. Interface Gallery showcases this generic control. Haiku read-only
+reference: `src/kits/interface/OutlineListView.cpp` separates full hierarchy
+from visible rows and routes parent navigation through shared control logic.
+Beast Interface tests, MC68040 library contract, Gallery build, and NDK
+`dist-check` pass. DE25 targeted Kit/Gallery install passed: Gallery expanded and collapsed
+Games on Collections, then Atlas's existing List opened normally. No new user
+fault, kernel panic, or service restart. SHA-verified captures and journal are
+on Beast at `/mnt/Documents/astra68/outline-table-20261030/`; board trial
+captures removed, services active with zero restarts and 8.2 GiB free. Atlas
+does not yet bind lazy nested directory rows to File Panel List; that shared
+directory-outline data model remains the active Atlas feature gap.
+
 Atlas Recent Items checkpoint, 2026-10-30: Filesystem Kit 15.9 owns a private
 HOME recent-item store with synced complete records, bounded retention,
 newest-first distinct paths, and exact removable volume references. It reuses

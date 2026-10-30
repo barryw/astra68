@@ -128,8 +128,15 @@ saved queries. Haiku read-only references: `src/servers/registrar/RecentEntries.
 for centralized recent-entry state and `src/kits/tracker/PoseView.cpp` for
 opening entries through the same file actions.
 
-Remaining design work: expandable folder rows in List. This needs a shared
-outline table with lazy directory loading, not an Atlas-only renderer.
+Interface Kit 12.6 now supplies a shared Outline Table. It composes Table
+columns, sorting, C1 selection, and Tree disclosure drawing; Interface Gallery
+exercises it. Expansion requests carry a visible row index, leaving directory
+loading and row publication to the caller. Atlas List still uses the shared
+File Panel's ordinary Table until a reusable directory-outline data model can
+bind nested rows, paths, and lazy snapshots to that panel. No Atlas-specific
+renderer or disclosure hit test is planned. Haiku's read-only
+`src/kits/interface/OutlineListView.cpp` informed the separate visible-row
+presentation and parent navigation; Astra retains its Table columns.
 
 Keyboard bindings use Interface Kit's shared command shortcut dispatcher and
 existing responder chain. Atlas owns only its binding table and suppresses

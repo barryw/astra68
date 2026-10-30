@@ -67,7 +67,9 @@ enum {
     /** Selectable two-dimensional icon tiles over C1 identity. */
     ASTRA_CONTROL_ICON_GRID = 27u,
     /** Retained hardware-command view; compose with existing layout controls. */
-    ASTRA_CONTROL_VIEW = 28u
+    ASTRA_CONTROL_VIEW = 28u,
+    /** Table columns with caller-owned visible outline rows. */
+    ASTRA_CONTROL_OUTLINE_TABLE = 29u
 };
 
 /** Semantic state owned by an application. */
@@ -845,6 +847,44 @@ typedef struct AstraTableInfo {
     sizeof(AstraTableInfo), 0, 0, 0, {0, 0, 0, 0} \
 }
 
+/** One visible outline row, parallel to the Table collection items.
+ * Depth zero is a root. The caller owns expansion and visible-row changes;
+ * Interface Kit owns disclosure drawing and interaction. */
+typedef struct AstraOutlineTableRow {
+    uint32_t depth; /**< Nesting level, less than ASTRA_TREE_MAX_DEPTH. */
+    uint32_t expandable; /**< Zero or one: show a disclosure. */
+    uint32_t expanded; /**< Zero or one: current disclosure state. */
+    uint32_t reserved; /**< Must be zero. */
+} AstraOutlineTableRow;
+
+/** Caller-owned outline presentation over an ordinary Table model. */
+typedef struct AstraOutlineTableModel {
+    uint32_t size; /**< Structure size. */
+    AstraTableModel *table; /**< Borrowed columns, cells and C1 selection. */
+    const AstraOutlineTableRow *rows; /**< Borrowed visible row metadata. */
+    uint32_t row_count; /**< Equals Table collection item count. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraOutlineTableModel;
+
+/** Empty Outline Table presentation model. */
+#define ASTRA_OUTLINE_TABLE_MODEL_INIT { \
+    sizeof(AstraOutlineTableModel), 0, 0, 0, {0, 0} \
+}
+
+/** Creation data for one retained Outline Table control. */
+typedef struct AstraOutlineTableInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t id; /**< Nonzero control ID. */
+    AstraOutlineTableModel *model; /**< Borrowed presentation model. */
+    uint32_t state; /**< Disabled, error, collapsed, or zero. */
+    uint32_t reserved[4]; /**< Must be zero. */
+} AstraOutlineTableInfo;
+
+/** Empty Outline Table creation data. */
+#define ASTRA_OUTLINE_TABLE_INFO_INIT { \
+    sizeof(AstraOutlineTableInfo), 0, 0, 0, {0, 0, 0, 0} \
+}
+
 #define ASTRA_TREE_MAX_DEPTH 64u /**< Maximum supported nesting depth. */
 /** Caller-owned hierarchy metadata parallel to CollectionItem entries.
  * parent_id zero denotes a root. The library computes depth on initialization
@@ -1258,7 +1298,10 @@ enum {
     /** Tree branch changed; value is its index in the full C1 collection. */
     ASTRA_UI_ACTION_EXPANSION_CHANGED = 11u,
     /** Table heading clicked; value is its zero-based column index. */
-    ASTRA_UI_ACTION_SORT_REQUESTED = 12u
+    ASTRA_UI_ACTION_SORT_REQUESTED = 12u,
+    /** Outline disclosure requested; value is visible row index. Caller
+     * publishes updated visible rows and expansion state atomically. */
+    ASTRA_UI_ACTION_EXPANSION_REQUESTED = 13u
 };
 
 /** Semantic result emitted by a handled window event. */
@@ -1271,7 +1314,8 @@ typedef struct AstraUIAction {
     uint32_t control_id;
     /** Current value for VALUE_CHANGED, selected row for collection ACTIVATE,
      * pointer row for collection CONTEXT_MENU (-1 for empty space), or full
-     * item index for EXPANSION_CHANGED, or column index for SORT_REQUESTED. */
+     * item index for EXPANSION_CHANGED, visible row for
+     * EXPANSION_REQUESTED, or column index for SORT_REQUESTED. */
     int64_t value;
     /** Decimal places for @ref value; zero for nonnumeric actions. */
     uint32_t decimal_places;

@@ -23,7 +23,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.12. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 12u
 /** Current Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 5u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 6u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -364,6 +364,30 @@ AstraResult astra_interface_table_init(AstraControl *control,
 AstraResult astra_interface_table_set_rows(AstraUIContext *context,
     AstraControl *control, const AstraCollectionItem *items, uint32_t count,
     const AstraTableCell *cells, uint32_t cell_count);
+/** Build a Table with nested, expandable visible rows. Uses the ordinary
+ * Table columns and C1 selection. Caller owns full hierarchy, lazy loading,
+ * and row replacement after EXPANSION_REQUESTED. Available since 12.6.
+ * @param control Caller-owned retained control.
+ * @param info Borrowed Table and row metadata.
+ * @return ASTRA_OK or validation error.
+ */
+AstraResult astra_interface_outline_table_init(AstraControl *control,
+    const AstraOutlineTableInfo *info);
+/** Atomically replace visible Outline Table rows, metadata, and cells.
+ * Selection follows stable C1 IDs. On failure, prior rows remain bound.
+ * @param context Owning UI context.
+ * @param control Outline Table to update.
+ * @param items Borrowed visible row identities and labels.
+ * @param count Number of visible rows.
+ * @param cells Borrowed trailing cells in row-major order.
+ * @param cell_count Number of trailing cells.
+ * @param rows Borrowed depth and disclosure metadata, one per visible row.
+ * @return ASTRA_OK or validation/layout error.
+ */
+AstraResult astra_interface_outline_table_set_rows(AstraUIContext *context,
+    AstraControl *control, const AstraCollectionItem *items, uint32_t count,
+    const AstraTableCell *cells, uint32_t cell_count,
+    const AstraOutlineTableRow *rows);
 /** Show the caller's active sort column and direction in a Table header.
  * This changes presentation only; caller owns row ordering. Pass UINT32_MAX
  * as column to clear the indicator. Available since Interface Kit 12.1.

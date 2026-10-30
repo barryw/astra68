@@ -228,3 +228,9 @@ ASTRA_INTERFACE_12.3 {
     global:
         astra_interface_file_panel_set_search;
 } ASTRA_INTERFACE_12.2;
+
+ASTRA_INTERFACE_12.6 {
+    global:
+        astra_interface_outline_table_init;
+        astra_interface_outline_table_set_rows;
+} ASTRA_INTERFACE_12.3;

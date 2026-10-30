@@ -59,6 +59,15 @@ the Table draws its shared arrow and reserves heading space. Pass `UINT32_MAX`
 to clear the marker. The marker API requires interface.library.12 version
 12.1.0 or newer.
 
+Interface Kit 12.6 adds Outline Table for expandable rows with metadata
+columns. It composes the existing Table model, C1 stable selection, header
+sorting, and shared disclosure mark. Each visible row supplies depth and
+expanded state. Clicking its disclosure, or pressing Left or Right, emits
+`ASTRA_UI_ACTION_EXPANSION_REQUESTED` with the visible row index; the caller
+loads children and atomically publishes a new visible row set with
+`astra_interface_outline_table_set_rows`. The control never reads a directory
+or owns a filesystem path. Interface Gallery shows the control on Collections.
+
 Interface Kit 12.2 adds `AstraFileInspector` for a selected directory entry.
 Initialize it with `astra_interface_file_inspector_init`, using a parent flex
 container and a live placeholder icon. Call `astra_interface_file_inspector_set`

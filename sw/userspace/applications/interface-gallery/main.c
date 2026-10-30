@@ -136,6 +136,7 @@ enum {
     GALLERY_COLUMN_RIGHT_SCROLL,
     GALLERY_COLUMN_RIGHT_LIST,
     GALLERY_TABLE,
+    GALLERY_OUTLINE_TABLE,
     GALLERY_FIELD_FAMILY_LABEL,
     GALLERY_SECURE_FIELD,
     GALLERY_SEARCH_FIELD,
@@ -340,6 +341,36 @@ static const AstraTableCell gallery_table_cells[] = {
     {"Game", 4u, 0u},
     {"Game", 4u, 0u},
     {"Story", 5u, 0u}
+};
+static AstraCollectionModel gallery_outline_collection =
+    ASTRA_COLLECTION_MODEL_INIT;
+static AstraTableModel gallery_outline_table = ASTRA_TABLE_MODEL_INIT;
+static AstraOutlineTableModel gallery_outline_model =
+    ASTRA_OUTLINE_TABLE_MODEL_INIT;
+static uint32_t gallery_outline_expanded;
+static const AstraCollectionItem gallery_outline_roots[] = {
+    {201u, "Games", 5u, {0u, 0u}},
+    {202u, "Documents", 9u, {0u, 0u}}
+};
+static const AstraTableCell gallery_outline_root_cells[] = {
+    {"Folder", 6u, 0u}, {"Folder", 6u, 0u}
+};
+static const AstraOutlineTableRow gallery_outline_root_rows[] = {
+    {0u, 1u, 0u, 0u}, {0u, 0u, 0u, 0u}
+};
+static const AstraCollectionItem gallery_outline_children[] = {
+    {201u, "Games", 5u, {0u, 0u}},
+    {203u, "Doom", 4u, {0u, 0u}},
+    {204u, "Quake", 5u, {0u, 0u}},
+    {202u, "Documents", 9u, {0u, 0u}}
+};
+static const AstraTableCell gallery_outline_child_cells[] = {
+    {"Folder", 6u, 0u}, {"Game", 4u, 0u},
+    {"Game", 4u, 0u}, {"Folder", 6u, 0u}
+};
+static const AstraOutlineTableRow gallery_outline_child_rows[] = {
+    {0u, 1u, 1u, 0u}, {1u, 0u, 0u, 0u},
+    {1u, 0u, 0u, 0u}, {0u, 0u, 0u, 0u}
 };
 static const AstraCollectionItem gallery_tree_items[] = {
     {101u, "Applications", 12u, {0u, 0u}},
@@ -1588,6 +1619,26 @@ static uint32_t build_controls(void)
             status = GALLERY_FAIL_CONTROL;
     }
     if (status == ASTRA_STATUS_OK) {
+        AstraOutlineTableInfo info = ASTRA_OUTLINE_TABLE_INFO_INIT;
+        if (astra_interface_collection_init(&gallery_outline_collection,
+                gallery_outline_roots, 2u, 0u) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+        gallery_outline_table.collection = &gallery_outline_collection;
+        gallery_outline_table.columns = gallery_table_columns;
+        gallery_outline_table.column_count = 2u;
+        gallery_outline_table.cells = gallery_outline_root_cells;
+        gallery_outline_table.cell_count = 2u;
+        gallery_outline_model.table = &gallery_outline_table;
+        gallery_outline_model.rows = gallery_outline_root_rows;
+        gallery_outline_model.row_count = 2u;
+        info.id = GALLERY_OUTLINE_TABLE;
+        info.model = &gallery_outline_model;
+        if (status == ASTRA_STATUS_OK &&
+            astra_interface_outline_table_init(
+                GALLERY_CONTROL(GALLERY_OUTLINE_TABLE), &info) != ASTRA_OK)
+            status = GALLERY_FAIL_CONTROL;
+    }
+    if (status == ASTRA_STATUS_OK) {
         AstraIconGridInfo info = ASTRA_ICON_GRID_INFO_INIT;
         AstraGridViewInfo grid = {0};
         static const char sample[33] =
@@ -2074,6 +2125,8 @@ static uint32_t build_controls(void)
     PAGE_ITEM(GALLERY_COLUMNS, GALLERY_PAGE_COLLECTIONS,
               ASTRA_FLEX_BREAK_BEFORE);
     PAGE_ITEM(GALLERY_TABLE, GALLERY_PAGE_COLLECTIONS,
+              ASTRA_FLEX_BREAK_AFTER);
+    PAGE_ITEM(GALLERY_OUTLINE_TABLE, GALLERY_PAGE_COLLECTIONS,
               ASTRA_FLEX_BREAK_AFTER);
     PAGE_ITEM(GALLERY_TREE, GALLERY_PAGE_COLLECTIONS,
               ASTRA_FLEX_BREAK_BEFORE);
@@ -3206,6 +3259,21 @@ static uint32_t handle_action(AstraHandle clipboard,
 {
     int toolbar_handled = 0;
     uint32_t panel_outcome = ASTRA_COLOUR_PANEL_NONE;
+
+    if (action->type == ASTRA_UI_ACTION_EXPANSION_REQUESTED &&
+        action->control_id == GALLERY_OUTLINE_TABLE && action->value == 0) {
+        uint32_t expand = gallery_outline_expanded == 0u;
+        AstraResult changed = astra_interface_outline_table_set_rows(&ui,
+            GALLERY_CONTROL(GALLERY_OUTLINE_TABLE),
+            expand ? gallery_outline_children : gallery_outline_roots,
+            expand ? 4u : 2u,
+            expand ? gallery_outline_child_cells : gallery_outline_root_cells,
+            expand ? 4u : 2u,
+            expand ? gallery_outline_child_rows : gallery_outline_root_rows);
+        if (changed != ASTRA_OK) return GALLERY_FAIL_CONTROL;
+        gallery_outline_expanded = expand;
+        return ASTRA_STATUS_OK;
+    }
 
     if (gallery_visible_panel == GALLERY_COLOUR_PANEL_ROOT &&
         astra_interface_colour_panel_action(&gallery_colour_panel, &ui,

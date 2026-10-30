@@ -2256,6 +2256,122 @@ static void test_table_control(void)
         action.control_id == 92u && action.value == 3);
 }
 
+static void test_outline_table_control(void)
+{
+    static const AstraTableColumn columns[] = {
+        {"Name", 4u, 240u, 0u}, {"Kind", 4u, 100u, 0u}
+    };
+    static const AstraCollectionItem roots[] = {
+        {11u, "Games", 5u, {0u, 0u}},
+        {12u, "Notes", 5u, {0u, 0u}}
+    };
+    static const AstraTableCell root_cells[] = {
+        {"Folder", 6u, 0u}, {"File", 4u, 0u}
+    };
+    static const AstraOutlineTableRow root_rows[] = {
+        {0u, 1u, 0u, 0u}, {0u, 0u, 0u, 0u}
+    };
+    static const AstraCollectionItem expanded[] = {
+        {11u, "Games", 5u, {0u, 0u}},
+        {13u, "Doom", 4u, {0u, 0u}},
+        {12u, "Notes", 5u, {0u, 0u}}
+    };
+    static const AstraTableCell expanded_cells[] = {
+        {"Folder", 6u, 0u}, {"Application", 11u, 0u},
+        {"File", 4u, 0u}
+    };
+    static const AstraOutlineTableRow expanded_rows[] = {
+        {0u, 1u, 1u, 0u}, {1u, 0u, 0u, 0u}, {0u, 0u, 0u, 0u}
+    };
+    static const AstraOutlineTableRow invalid_rows[] = {
+        {0u, 1u, 0u, 0u}, {1u, 0u, 0u, 0u}, {0u, 0u, 0u, 0u}
+    };
+    AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    AstraTableModel table = ASTRA_TABLE_MODEL_INIT;
+    AstraOutlineTableModel outline = ASTRA_OUTLINE_TABLE_MODEL_INIT;
+    AstraOutlineTableInfo info = ASTRA_OUTLINE_TABLE_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlSize size = {0};
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraSurfaceView surface = render_view(400u, 200u);
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraWindowEvent event;
+
+    assert(astra_interface_collection_init(&collection, roots, 2u, 0u) ==
+        ASTRA_OK);
+    table.collection = &collection;
+    table.columns = columns;
+    table.column_count = 2u;
+    table.cells = root_cells;
+    table.cell_count = 2u;
+    outline.table = &table;
+    outline.rows = root_rows;
+    outline.row_count = 2u;
+    info.id = 93u;
+    info.model = &outline;
+    assert(astra_interface_outline_table_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 400u, 200u) ==
+        ASTRA_OK);
+    assert(astra_interface_ui_measure(&context, &control, &size) == ASTRA_OK);
+    assert(size.width == 340u && size.height == 3u * theme.control_height);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x +
+            theme.control_padding_x + 8,
+        control._private_frame.y + theme.control_height + 8);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+        ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+        ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_EXPANSION_REQUESTED &&
+        action.control_id == 93u && action.value == 0u &&
+        collection.selected_id == 0u);
+    assert(astra_interface_outline_table_set_rows(&context, &control,
+        expanded, 3u, expanded_cells, 3u, invalid_rows) ==
+        ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(outline.rows == root_rows && collection.items == roots);
+    assert(astra_interface_outline_table_set_rows(&context, &control,
+        expanded, 3u, expanded_cells, 3u, expanded_rows) == ASTRA_OK);
+    assert(outline.rows == expanded_rows && collection.items == expanded);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(astra_interface_table_set_sort(&context, &control, 0u, 0u) ==
+        ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + 4);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+        ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+        ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_SORT_REQUESTED &&
+        action.value == 0u);
+    assert(astra_interface_control_set_value(&context, &control, 0) ==
+        ASTRA_OK);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4fu, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+        ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+        collection.selected_id == 13u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x50u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+        ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+        collection.selected_id == 11u);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x50u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+        ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_EXPANSION_REQUESTED &&
+        action.value == 0u);
+    assert(astra_interface_outline_table_set_rows(&context, &control,
+        roots, 2u, root_cells, 2u, root_rows) == ASTRA_OK);
+    assert(collection.selected_id == 11u);
+}
+
 static void test_tree_control(void)
 {
     static const AstraCollectionItem items[] = {
@@ -5909,6 +6025,7 @@ int main(void)
     test_popup_control();
     test_split_button();
     test_table_control();
+    test_outline_table_control();
     test_tree_control();
     test_pagination_control();
     test_icon_grid_control();
