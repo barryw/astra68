@@ -18,6 +18,15 @@ static Entry entries[16];
 static uint32_t entry_count;
 static int fail_write;
 static int fail_unlink;
+static AstraFilesystem *expected_source;
+static AstraFilesystem *expected_destination;
+
+static void check_namespace(AstraFilesystem *filesystem, const char *path)
+{
+    if (expected_source == NULL) return;
+    assert(filesystem == (strncmp(path, "/dh0/", 5u) == 0 ?
+        expected_source : expected_destination));
+}
 
 static Entry *find(const char *path)
 {
@@ -73,7 +82,7 @@ int astra_string_append_hex(AstraString *string, uint64_t value,
 uint32_t astra_filesystem_lstat(AstraFilesystem *filesystem, const char *path,
                                AstraFileInfo *info)
 {
-    (void)filesystem;
+    check_namespace(filesystem, path);
     Entry *entry = find(path);
     if (entry == NULL) return ASTRA_VFS_ERR_NOT_FOUND;
     info->kind = entry->kind;
@@ -85,7 +94,7 @@ uint32_t astra_filesystem_lstat(AstraFilesystem *filesystem, const char *path,
 uint32_t astra_filesystem_open(AstraFilesystem *filesystem, const char *path,
                                uint32_t flags, AstraFile *file)
 {
-    (void)filesystem; (void)flags;
+    check_namespace(filesystem, path); (void)flags;
     Entry *entry = find(path);
     if (entry == NULL || entry->kind != ASTRA_VFS_KIND_FILE)
         return ASTRA_VFS_ERR_NOT_FOUND;
@@ -97,11 +106,36 @@ uint32_t astra_filesystem_open(AstraFilesystem *filesystem, const char *path,
 uint32_t astra_filesystem_open_mode(AstraFilesystem *filesystem,
     const char *path, uint32_t flags, uint16_t mode, AstraFile *file)
 {
-    (void)filesystem; (void)flags; (void)mode;
+    check_namespace(filesystem, path); (void)flags; (void)mode;
     if (find(path) != NULL) return ASTRA_VFS_ERR_EXISTS;
     Entry *entry = add(path, ASTRA_VFS_KIND_FILE);
     file->_private_file = (AstraVfsFile)(entry - entries + 1u);
     file->_private_offset = 0u;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_filesystem_readlink(AstraFilesystem *filesystem,
+    const char *path, void *buffer, uint32_t capacity, uint32_t *length)
+{
+    check_namespace(filesystem, path);
+    Entry *entry = find(path);
+    if (entry == NULL || entry->kind != ASTRA_VFS_KIND_SYMLINK)
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    if (capacity < entry->length) return ASTRA_VFS_ERR_BUFFER_TOO_SMALL;
+    memcpy(buffer, entry->bytes, entry->length);
+    *length = entry->length;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_filesystem_symlink(const char *target,
+    AstraFilesystem *filesystem, const char *path)
+{
+    check_namespace(filesystem, path);
+    if (find(path) != NULL) return ASTRA_VFS_ERR_EXISTS;
+    Entry *entry = add(path, ASTRA_VFS_KIND_SYMLINK);
+    entry->length = (uint32_t)strlen(target);
+    assert(entry->length <= sizeof(entry->bytes));
+    memcpy(entry->bytes, target, entry->length);
     return ASTRA_VFS_OK;
 }
 
@@ -150,7 +184,7 @@ uint32_t astra_filesystem_write(AstraFile *file, uint64_t max_end,
 uint32_t astra_filesystem_mkdir_mode(AstraFilesystem *filesystem,
                                      const char *path, uint16_t mode)
 {
-    (void)filesystem; (void)mode;
+    check_namespace(filesystem, path); (void)mode;
     if (find(path) != NULL) return ASTRA_VFS_ERR_EXISTS;
     add(path, ASTRA_VFS_KIND_DIRECTORY);
     return ASTRA_VFS_OK;
@@ -159,7 +193,7 @@ uint32_t astra_filesystem_mkdir_mode(AstraFilesystem *filesystem,
 uint32_t astra_filesystem_unlink(AstraFilesystem *filesystem,
                                  const char *path, uint32_t flags)
 {
-    (void)filesystem;
+    check_namespace(filesystem, path);
     Entry *entry = find(path);
     if (entry == NULL) return ASTRA_VFS_ERR_NOT_FOUND;
     if (fail_unlink) {
@@ -182,7 +216,7 @@ uint32_t astra_filesystem_unlink(AstraFilesystem *filesystem,
 uint32_t astra_filesystem_directory_open(AstraFilesystem *filesystem,
                                          const char *path, AstraDirectory *directory)
 {
-    (void)filesystem;
+    check_namespace(filesystem, path);
     Entry *entry = find(path);
     if (entry == NULL || entry->kind != ASTRA_VFS_KIND_DIRECTORY)
         return ASTRA_VFS_ERR_NOT_FOUND;
@@ -230,7 +264,7 @@ void astra_filesystem_directory_close(AstraDirectory *directory)
 uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
                                   const char *from, const char *to)
 {
-    (void)filesystem;
+    check_namespace(filesystem, to);
     if (find(to) != NULL) return ASTRA_VFS_ERR_EXISTS;
     size_t length = strlen(from);
     for (uint32_t at = 0u; at < entry_count; ++at) {
@@ -253,6 +287,9 @@ int main(void)
     Entry *source = add("/dh0/Doom.app/Doom", ASTRA_VFS_KIND_FILE);
     memcpy(source->bytes, "DOOM", 4u);
     source->length = 4u;
+    Entry *source_link = add("/dh0/Doom.app/Data", ASTRA_VFS_KIND_SYMLINK);
+    memcpy(source_link->bytes, "Doom", 4u);
+    source_link->length = 4u;
     fail_write = 1;
     assert(astra_filesystem_copy_tree(&filesystem, "/dh0/Doom.app",
                                      "/usb0/Doom.app") == ASTRA_VFS_ERR_NO_SPACE);
@@ -260,6 +297,10 @@ int main(void)
         assert(strstr(entries[at].path, ".astra-copying") == NULL);
     assert(astra_filesystem_copy_tree(&filesystem, "/dh0/Doom.app",
                                      "/usb0/Doom.app") == ASTRA_VFS_OK);
+    Entry *copied_link = find("/usb0/Doom.app/Data");
+    assert(copied_link != NULL && copied_link->kind == ASTRA_VFS_KIND_SYMLINK &&
+        copied_link->length == 4u &&
+        memcmp(copied_link->bytes, "Doom", 4u) == 0);
     Entry *copied = find("/usb0/Doom.app/Doom");
     assert(copied != NULL && copied->length == 4u &&
            memcmp(copied->bytes, "DOOM", 4u) == 0);
@@ -278,5 +319,25 @@ int main(void)
     copied = find("/usb0/Doom.app/Doom");
     assert(copied != NULL && copied->length == 4u &&
            memcmp(copied->bytes, "DOOM", 4u) == 0);
+    entry_count = 0u;
+    add("/dh0/Doom.app", ASTRA_VFS_KIND_DIRECTORY);
+    source = add("/dh0/Doom.app/Doom", ASTRA_VFS_KIND_FILE);
+    memcpy(source->bytes, "DOOM", 4u);
+    source->length = 4u;
+    source_link = add("/dh0/Doom.app/Data", ASTRA_VFS_KIND_SYMLINK);
+    memcpy(source_link->bytes, "Doom", 4u);
+    source_link->length = 4u;
+    AstraFilesystem removable = ASTRA_FILESYSTEM_INIT;
+    expected_source = &filesystem;
+    expected_destination = &removable;
+    assert(astra_filesystem_copy_tree_between(&filesystem, "/dh0/Doom.app",
+        &removable, "/usb0/Doom.app") == ASTRA_VFS_OK);
+    copied = find("/usb0/Doom.app/Doom");
+    assert(copied != NULL && copied->length == 4u &&
+        memcmp(copied->bytes, "DOOM", 4u) == 0);
+    copied_link = find("/usb0/Doom.app/Data");
+    assert(copied_link != NULL && copied_link->kind == ASTRA_VFS_KIND_SYMLINK &&
+        copied_link->length == 4u &&
+        memcmp(copied_link->bytes, "Doom", 4u) == 0);
     return 0;
 }

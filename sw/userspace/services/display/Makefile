@@ -14,7 +14,8 @@ SYSTEM := ../../system
 INTERFACE := ../../interface
 INTERFACE_HOST_SOURCES := $(INTERFACE)/src/control.c \
 	$(INTERFACE)/src/display_widgets.c $(INTERFACE)/src/menu.c \
-	$(INTERFACE)/src/text_model.c $(INTERFACE)/src/text_surface.c $(INTERFACE)/src/scroll.c
+	$(INTERFACE)/src/text_model.c $(INTERFACE)/src/text_surface.c \
+	$(INTERFACE)/src/scroll.c $(INTERFACE)/src/undo.c
 ASTRA_COMMON := ../../../common
 CPPFLAGS := -I../../../../ndk/include -I../../../include -I$(RUNTIME)/include \
 	-I$(GRAPHICS)/include -I../../../../fpga/arty/linux

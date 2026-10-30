@@ -92,7 +92,7 @@ assert ceiling["GUI"] == "" and ceiling["APPS"] == "r" and \
 assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
         if line.startswith("trusted ")] == [
     "trusted /apps/Terminal.app grants " + astra_image.TERMINAL_CEILING,
-    "trusted /apps/Atlas.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:rw FONTS:r APPS:r LIBS:r LOG",
+    "trusted /apps/Atlas.app grants GUI CLIPBOARD APP_LAUNCH VOLUMES VOLUME_READ VOLUME_WRITE RAM_READ RAM_WRITE DH0:r HOME:rw FONTS:r APPS:r LIBS:r LOG",
     "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD VOLUMES VOLUME_READ DH0:r LIBS:r",
     "trusted /apps/InterfaceGallery.app grants GUI FONT_CATALOG CLIPBOARD LIBS:r",
     "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG",
@@ -134,7 +134,7 @@ with tempfile.TemporaryDirectory() as directory:
     ordinary = bundle("Game.app", ["GUI", "PCM", "STORE:rw"])
     greedy = bundle("Greedy.app", ["GUI", "DISPLAY"])
     shell = bundle("Terminal.app", ["GUI", "SERVICE_MANAGER", "SYSTEM:r"])
-    atlas = bundle("Atlas.app", ["GUI", "VOLUMES", "VOLUME_READ", "DH0:r", "HOME:rw", "FONTS:r", "APPS:r", "LIBS:r", "LOG"])
+    atlas = bundle("Atlas.app", ["GUI", "CLIPBOARD", "VOLUMES", "VOLUME_READ", "VOLUME_WRITE", "RAM_READ", "RAM_WRITE", "DH0:r", "HOME:rw", "FONTS:r", "APPS:r", "LIBS:r", "LOG"])
     fonts = bundle("Fonts.app", ["GUI", "FONT_CATALOG", "FONTS:r", "FONTS_ADMIN", "CLIPBOARD", "DH0:r", "LIBS:r"])
     disk_setup = bundle("DiskSetup.app", ["GUI", "VOLUMES", "VOLUME_USAGE", "LIBS:r", "LOG"])
     disk = bundle("Disk.app", ["GUI", "DH0:r"])

@@ -18,7 +18,9 @@ static uint32_t copy_path(char *out, const char *parent, const char *name)
     return ASTRA_VFS_OK;
 }
 
-static uint32_t copy_file(AstraFilesystem *filesystem, const char *source,
+static uint32_t copy_file(AstraFilesystem *source_filesystem,
+                          const char *source,
+                          AstraFilesystem *destination_filesystem,
                           const char *destination, uint16_t mode, int *created)
 {
     AstraFile input = ASTRA_FILE_INIT;
@@ -28,10 +30,10 @@ static uint32_t copy_file(AstraFilesystem *filesystem, const char *source,
     uint32_t close_status;
 
     if (buffer == NULL) return ASTRA_VFS_ERR_LIMIT;
-    status = astra_filesystem_open(filesystem, source, ASTRA_VFS_OPEN_READ,
+    status = astra_filesystem_open(source_filesystem, source, ASTRA_VFS_OPEN_READ,
                                    &input);
     if (status != ASTRA_VFS_OK) goto done;
-    status = astra_filesystem_open_mode(filesystem, destination,
+    status = astra_filesystem_open_mode(destination_filesystem, destination,
         ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
         ASTRA_VFS_OPEN_EXCLUSIVE, (uint16_t)(mode & 0777u), &output);
     if (status != ASTRA_VFS_OK) goto done;
@@ -67,7 +69,9 @@ done:
     return status;
 }
 
-static uint32_t copy_one(AstraFilesystem *filesystem, const char *source,
+static uint32_t copy_one(AstraFilesystem *source_filesystem,
+                         const char *source,
+                         AstraFilesystem *destination_filesystem,
                          const char *destination, uint32_t depth, int *created)
 {
     AstraFileInfo info = {.size = sizeof(info)};
@@ -76,16 +80,39 @@ static uint32_t copy_one(AstraFilesystem *filesystem, const char *source,
     uint32_t status;
 
     if (depth >= COPY_DEPTH_MAX) return ASTRA_VFS_ERR_LIMIT;
-    status = astra_filesystem_lstat(filesystem, source, &info);
+    status = astra_filesystem_lstat(source_filesystem, source, &info);
     if (status != ASTRA_VFS_OK) return status;
     if (info.kind == ASTRA_VFS_KIND_FILE)
-        return copy_file(filesystem, source, destination, info.mode, created);
+        return copy_file(source_filesystem, source, destination_filesystem,
+            destination, info.mode, created);
+    if (info.kind == ASTRA_VFS_KIND_SYMLINK) {
+        if (info.byte_size >= ASTRA_VFS_PATH_MAX)
+            return ASTRA_VFS_ERR_LIMIT;
+        char *target = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
+        if (target == NULL) return ASTRA_VFS_ERR_LIMIT;
+        uint32_t length = 0u;
+        status = astra_filesystem_readlink(source_filesystem, source,
+            target, ASTRA_VFS_PATH_MAX - 1u, &length);
+        if (status == ASTRA_VFS_OK) {
+            if (length >= ASTRA_VFS_PATH_MAX)
+                status = ASTRA_VFS_ERR_LIMIT;
+            else {
+                target[length] = '\0';
+                status = astra_filesystem_symlink(target,
+                    destination_filesystem, destination);
+                if (status == ASTRA_VFS_OK && created != NULL)
+                    *created = 1;
+            }
+        }
+        astra_runtime_deallocate(target);
+        return status;
+    }
     if (info.kind != ASTRA_VFS_KIND_DIRECTORY)
         return ASTRA_VFS_ERR_UNSUPPORTED;
 
-    status = astra_filesystem_directory_open(filesystem, source, &directory);
+    status = astra_filesystem_directory_open(source_filesystem, source, &directory);
     if (status != ASTRA_VFS_OK) return status;
-    status = astra_filesystem_mkdir_mode(filesystem, destination,
+    status = astra_filesystem_mkdir_mode(destination_filesystem, destination,
                                          (uint16_t)(info.mode & 0777u));
     if (status != ASTRA_VFS_OK) goto done;
     if (created != NULL) *created = 1;
@@ -110,7 +137,8 @@ static uint32_t copy_one(AstraFilesystem *filesystem, const char *source,
                 status = copy_path(paths + ASTRA_VFS_PATH_MAX,
                                    destination, entries[at].name);
             if (status == ASTRA_VFS_OK)
-                status = copy_one(filesystem, paths,
+                status = copy_one(source_filesystem, paths,
+                                  destination_filesystem,
                                   paths + ASTRA_VFS_PATH_MAX, depth + 1u, NULL);
             if (status != ASTRA_VFS_OK) break;
         }
@@ -166,9 +194,9 @@ static uint32_t remove_partial(AstraFilesystem *filesystem, const char *path,
         status;
 }
 
-uint32_t astra_filesystem_copy_tree(AstraFilesystem *filesystem,
-                                   const char *source,
-                                   const char *destination)
+uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
+    const char *source, AstraFilesystem *destination_filesystem,
+    const char *destination)
 {
     AstraFileInfo info = {.size = sizeof(info)};
     char *staging;
@@ -177,7 +205,8 @@ uint32_t astra_filesystem_copy_tree(AstraFilesystem *filesystem,
     int created = 0;
     uint64_t nonce;
 
-    if (filesystem == NULL || source == NULL || destination == NULL ||
+    if (source_filesystem == NULL || destination_filesystem == NULL ||
+        source == NULL || destination == NULL ||
         source[0] == '\0' || destination[0] == '\0')
         return ASTRA_VFS_ERR_INVALID;
     length = strlen(source);
@@ -185,7 +214,7 @@ uint32_t astra_filesystem_copy_tree(AstraFilesystem *filesystem,
         (strncmp(source, destination, length) == 0 &&
          destination[length] == '/'))
         return ASTRA_VFS_ERR_INVALID;
-    status = astra_filesystem_lstat(filesystem, destination, &info);
+    status = astra_filesystem_lstat(destination_filesystem, destination, &info);
     if (status == ASTRA_VFS_OK) return ASTRA_VFS_ERR_EXISTS;
     if (status != ASTRA_VFS_ERR_NOT_FOUND) return status;
     staging = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
@@ -201,13 +230,21 @@ uint32_t astra_filesystem_copy_tree(AstraFilesystem *filesystem,
             break;
         }
         created = 0;
-        status = copy_one(filesystem, source, staging, 0u, &created);
+        status = copy_one(source_filesystem, source, destination_filesystem,
+            staging, 0u, &created);
         if (status != ASTRA_VFS_ERR_EXISTS || created) break;
     }
     if (status == ASTRA_VFS_OK)
-        status = astra_filesystem_rename(filesystem, staging, destination);
+        status = astra_filesystem_rename(destination_filesystem, staging, destination);
     if (status != ASTRA_VFS_OK && created)
-        (void)remove_partial(filesystem, staging, 0u);
+        (void)remove_partial(destination_filesystem, staging, 0u);
     astra_runtime_deallocate(staging);
     return status;
+}
+
+uint32_t astra_filesystem_copy_tree(AstraFilesystem *filesystem,
+    const char *source, const char *destination)
+{
+    return astra_filesystem_copy_tree_between(filesystem, source,
+        filesystem, destination);
 }

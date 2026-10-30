@@ -5107,10 +5107,14 @@ static void test_shared_file_panel(void)
         &action, &outcome) == ASTRA_OK &&
         outcome == ASTRA_FILE_PANEL_PICKED &&
         strcmp(panel.leaf, "zork1.z3") == 0);
+    assert(astra_interface_control_set_value(&context,
+        &controls[ASTRA_FILE_PANEL_GRID], 0) == ASTRA_OK &&
+        panel.grid_collection.selected_id != 0u);
     assert(astra_interface_file_panel_set_directory(&panel, &context,
         controls, "/dh0/Stories", next_entries, 2u, next_items, 2u) ==
         ASTRA_OK);
     assert(collection.item_count == 2u &&
+           panel.grid_collection.selected_id == 0u &&
            strcmp(panel.directory, "/dh0/Stories") == 0);
     action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
     action.control_id = 300u + ASTRA_FILE_PANEL_TYPE;

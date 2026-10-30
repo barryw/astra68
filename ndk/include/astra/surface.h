@@ -76,11 +76,11 @@ int astra_surface_view_init(AstraSurfaceView *surface, void *pixels,
 /** Replace the clipping rectangle, intersected with the surface. @param surface Initialized view. @param x Left edge. @param y Top edge. @param width Width. @param height Height. @return Nonzero when the resulting clip is nonempty. */
 int astra_surface_clip(AstraSurfaceView *surface, int32_t x, int32_t y,
                        uint32_t width, uint32_t height);
-/** Initialize and clear a hardware draw-list view. @param surface View to initialize. @param storage Command storage. @param byte_size Storage bytes. @param width Logical width. @param height Logical height. @return Nonzero when valid. */
+/** Initialize and clear a hardware draw-list view. Storage must be 4-byte aligned. @param surface View to initialize. @param storage Command storage. @param byte_size Storage bytes. @param width Logical width. @param height Logical height. @return Nonzero when valid. */
 int astra_draw_list_view_init(AstraSurfaceView *surface, void *storage,
                               uint32_t byte_size, uint16_t width,
                               uint16_t height);
-/** Adopt an existing hardware draw list. @param surface View to initialize. @param storage Existing command storage. @param byte_size Storage bytes. @param width Logical width. @param height Logical height. @return Nonzero when valid. */
+/** Adopt an existing hardware draw list. Storage must be 4-byte aligned. @param surface View to initialize. @param storage Existing command storage. @param byte_size Storage bytes. @param width Logical width. @param height Logical height. @return Nonzero when valid. */
 int astra_draw_list_view_adopt(AstraSurfaceView *surface, void *storage,
                                uint32_t byte_size, uint16_t width,
                                uint16_t height);

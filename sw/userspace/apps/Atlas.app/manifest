@@ -6,9 +6,13 @@ version 0.1.0
 executable bin/m68k-68040/Atlas
 icon resources/Atlas.aicon
 capability GUI
+capability CLIPBOARD
 capability APP_LAUNCH
 capability VOLUMES
 capability VOLUME_READ
+capability VOLUME_WRITE
+capability RAM_READ
+capability RAM_WRITE
 capability DH0:r
 capability HOME:rw
 capability FONTS:r

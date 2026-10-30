@@ -9,6 +9,33 @@ static char renamed_from[ASTRA_VFS_PATH_MAX];
 static char renamed_to[ASTRA_VFS_PATH_MAX];
 static char unlinked[ASTRA_VFS_PATH_MAX];
 static uint32_t rename_status;
+static uint32_t source_kind = ASTRA_VFS_KIND_DIRECTORY;
+static uint32_t unlinked_flags;
+static char created_file[ASTRA_VFS_PATH_MAX];
+
+uint32_t astra_filesystem_lstat(AstraFilesystem *filesystem,
+    const char *path, AstraFileInfo *info)
+{
+    assert(filesystem != NULL && path != NULL && info != NULL);
+    info->kind = source_kind;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_filesystem_open_mode(AstraFilesystem *filesystem,
+    const char *path, uint32_t flags, uint16_t mode, AstraFile *file)
+{
+    assert(filesystem != NULL && file != NULL && mode == 0600u);
+    assert(flags == (ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+        ASTRA_VFS_OPEN_EXCLUSIVE));
+    strcpy(created_file, path);
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_filesystem_close(AstraFile *file)
+{
+    assert(file != NULL);
+    return ASTRA_VFS_OK;
+}
 
 uint32_t astra_filesystem_mkdir(AstraFilesystem *filesystem, const char *path)
 {
@@ -30,8 +57,9 @@ uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
 uint32_t astra_filesystem_unlink(AstraFilesystem *filesystem,
     const char *path, uint32_t flags)
 {
-    assert(filesystem != NULL && flags == ASTRA_VFS_UNLINK_DIRECTORY);
+    assert(filesystem != NULL);
     strcpy(unlinked, path);
+    unlinked_flags = flags;
     return ASTRA_VFS_OK;
 }
 
@@ -52,20 +80,37 @@ int main(void)
     assert(attempts == 3u && strcmp(path, "/home/Desktop/Folder3") == 0 &&
         strcmp(created, path) == 0);
     attempts = 2u;
-    assert(astra_folder_rename_safe(&filesystem, "/home/Desktop/Folder3",
+    assert(astra_entry_rename_safe(&filesystem, "/home/Desktop/Folder3",
         "/home/Desktop", "Pictures", path, sizeof(path)) == ASTRA_VFS_OK);
     assert(strcmp(renamed_from, "/home/Desktop/Folder3") == 0 &&
         strcmp(renamed_to, "/home/Desktop/Pictures") == 0);
     rename_status = ASTRA_VFS_ERR_IO;
     attempts = 2u;
-    assert(astra_folder_rename_safe(&filesystem, "/home/Desktop/Pictures",
+    assert(astra_entry_rename_safe(&filesystem, "/home/Desktop/Pictures",
         "/home/Desktop", "Photos", path, sizeof(path)) == ASTRA_VFS_ERR_IO);
-    assert(strcmp(unlinked, "/home/Desktop/Photos") == 0);
+    assert(strcmp(unlinked, "/home/Desktop/Photos") == 0 &&
+        unlinked_flags == ASTRA_VFS_UNLINK_DIRECTORY);
     rename_status = ASTRA_VFS_OK;
     attempts = 2u;
-    assert(astra_folder_move_to_trash(&filesystem, "/home/Desktop/Pictures",
+    assert(astra_entry_move_to_trash(&filesystem, "/home/Desktop/Pictures",
         "/home/.Trash", path, sizeof(path)) == ASTRA_VFS_OK);
     assert(strcmp(path, "/home/.Trash/Pictures-1") == 0 &&
         strcmp(renamed_to, path) == 0);
+    source_kind = ASTRA_VFS_KIND_FILE;
+    assert(astra_entry_rename_safe(&filesystem, "/home/Desktop/note.txt",
+        "/home/Desktop", "draft.txt", path, sizeof(path)) == ASTRA_VFS_OK);
+    assert(strcmp(created_file, "/home/Desktop/draft.txt") == 0 &&
+        strcmp(renamed_to, created_file) == 0);
+    rename_status = ASTRA_VFS_ERR_IO;
+    assert(astra_entry_rename_safe(&filesystem, "/home/Desktop/note.txt",
+        "/home/Desktop", "final.txt", path, sizeof(path)) == ASTRA_VFS_ERR_IO);
+    assert(strcmp(unlinked, "/home/Desktop/final.txt") == 0 &&
+        unlinked_flags == 0u);
+    rename_status = ASTRA_VFS_OK;
+    attempts = 2u;
+    assert(astra_entry_move_to_trash(&filesystem, "/home/Desktop/note.txt",
+        "/home/.Trash", path, sizeof(path)) == ASTRA_VFS_OK);
+    assert(strcmp(created_file, "/home/.Trash/note.txt-1") == 0 &&
+        strcmp(renamed_to, created_file) == 0);
     return 0;
 }

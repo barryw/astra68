@@ -199,7 +199,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/desktop grants GUI APP_LAUNCH SERVICE_MANAGER VOLUMES VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN PROC:r APPS:r "
     "LIBS:r SYSTEM:r DH0:r HOME:rw NETWORK NETWORK_LISTEN NTP PCM CODEC required priority=20\n"
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
-    "trusted /apps/Atlas.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:rw FONTS:r APPS:r LIBS:r LOG\n"
+    "trusted /apps/Atlas.app grants GUI CLIPBOARD APP_LAUNCH VOLUMES VOLUME_READ VOLUME_WRITE RAM_READ RAM_WRITE DH0:r HOME:rw FONTS:r APPS:r LIBS:r LOG\n"
     "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD VOLUMES VOLUME_READ DH0:r LIBS:r\n"
     "trusted /apps/InterfaceGallery.app grants GUI FONT_CATALOG CLIPBOARD LIBS:r\n"
     "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG\n"

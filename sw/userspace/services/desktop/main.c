@@ -73,7 +73,7 @@ static AstraProcessFilesystem process_filesystem = ASTRA_PROCESS_FILESYSTEM_INIT
 static AstraInlineEdit name_edit = ASTRA_INLINE_EDIT_INIT;
 static uint32_t name_edit_cell = UINT32_MAX;
 static char name_edit_path[ASTRA_VFS_PATH_MAX];
-static uint32_t name_edit_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
+static _Alignas(4) uint32_t name_edit_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
 
 static const AstraVolumeRecord *visible_volume(const DesktopApps *apps, uint32_t cell)
 {
@@ -116,7 +116,7 @@ static AstraUIContext icon_ui = ASTRA_UI_CONTEXT_INIT;
    remains in icon_ui; both views borrow the same canonical scroll model. */
 static AstraControl bar_control;
 static AstraUIContext bar_ui = ASTRA_UI_CONTEXT_INIT;
-static uint32_t bar_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
+static _Alignas(4) uint32_t bar_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
 static AstraSurface bar_surface = ASTRA_SURFACE_INIT;
 typedef struct DesktopRemoval {
     struct DesktopRemoval *next;
@@ -481,7 +481,7 @@ static AstraResult delete_folder(void *opaque, const AstraCommandArguments *args
     const AstraDirectoryEntry *folder = visible_folder(context->apps, cell);
     if (folder == NULL || astra_folder_path(DESKTOP_DIRECTORY, folder->name,
         source, sizeof(source)) != ASTRA_VFS_OK) return ASTRA_ERROR_INVALID_ARGUMENT;
-    uint32_t status = astra_folder_move_to_trash(&process_filesystem.filesystem,
+    uint32_t status = astra_entry_move_to_trash(&process_filesystem.filesystem,
         source, DESKTOP_TRASH_DIRECTORY, moved, sizeof(moved));
     if (status != ASTRA_VFS_OK) {
         folder_error(context->gui, "Folder could not be deleted", status);
@@ -502,7 +502,7 @@ static AstraResult finish_folder_edit(DesktopCommands *context, int commit)
             folder_error(context->gui, "Choose a valid folder name", ASTRA_VFS_ERR_INVALID);
             return ASTRA_ERROR_INVALID_ARGUMENT;
         }
-        uint32_t status = astra_folder_rename_safe(&process_filesystem.filesystem,
+        uint32_t status = astra_entry_rename_safe(&process_filesystem.filesystem,
             name_edit_path, DESKTOP_DIRECTORY, name, moved, sizeof(moved));
         if (status != ASTRA_VFS_OK) {
             folder_error(context->gui, "Folder could not be renamed", status);

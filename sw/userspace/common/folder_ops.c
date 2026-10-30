@@ -63,8 +63,34 @@ uint32_t astra_folder_create_numbered(AstraFilesystem *filesystem,
     return ASTRA_VFS_ERR_LIMIT;
 }
 
-/* Reserve an empty directory first: rename cannot replace existing contents. */
-uint32_t astra_folder_rename_safe(AstraFilesystem *filesystem,
+/* Reserve matching node kind so rename cannot replace an existing entry. */
+static uint32_t reserve_entry(AstraFilesystem *filesystem, const char *path,
+    uint32_t kind)
+{
+    if (kind == ASTRA_VFS_KIND_DIRECTORY)
+        return astra_filesystem_mkdir(filesystem, path);
+    if (kind == ASTRA_VFS_KIND_FILE) {
+        AstraFile file = ASTRA_FILE_INIT;
+        uint32_t status = astra_filesystem_open_mode(filesystem, path,
+            ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+            ASTRA_VFS_OPEN_EXCLUSIVE, 0600u, &file);
+        if (status != ASTRA_VFS_OK) return status;
+        status = astra_filesystem_close(&file);
+        if (status != ASTRA_VFS_OK)
+            (void)astra_filesystem_unlink(filesystem, path, 0u);
+        return status;
+    }
+    return ASTRA_VFS_ERR_UNSUPPORTED;
+}
+
+static void release_entry(AstraFilesystem *filesystem, const char *path,
+    uint32_t kind)
+{
+    (void)astra_filesystem_unlink(filesystem, path,
+        kind == ASTRA_VFS_KIND_DIRECTORY ? ASTRA_VFS_UNLINK_DIRECTORY : 0u);
+}
+
+uint32_t astra_entry_rename_safe(AstraFilesystem *filesystem,
     const char *source, const char *parent, const char *name,
     char *path, uint32_t capacity)
 {
@@ -72,20 +98,26 @@ uint32_t astra_folder_rename_safe(AstraFilesystem *filesystem,
         return ASTRA_VFS_ERR_INVALID;
     uint32_t status = astra_folder_path(parent, name, path, capacity);
     if (status != ASTRA_VFS_OK || strcmp(source, path) == 0) return status;
-    status = astra_filesystem_mkdir(filesystem, path);
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    status = astra_filesystem_lstat(filesystem, source, &info);
+    if (status != ASTRA_VFS_OK) return status;
+    status = reserve_entry(filesystem, path, info.kind);
     if (status != ASTRA_VFS_OK) return status;
     status = astra_filesystem_rename(filesystem, source, path);
     if (status != ASTRA_VFS_OK)
-        (void)astra_filesystem_unlink(filesystem, path, ASTRA_VFS_UNLINK_DIRECTORY);
+        release_entry(filesystem, path, info.kind);
     return status;
 }
 
-uint32_t astra_folder_move_to_trash(AstraFilesystem *filesystem,
+uint32_t astra_entry_move_to_trash(AstraFilesystem *filesystem,
     const char *source, const char *trash, char *path, uint32_t capacity)
 {
     if (filesystem == NULL || source == NULL || trash == NULL || path == NULL)
         return ASTRA_VFS_ERR_INVALID;
-    uint32_t status = astra_filesystem_mkdir(filesystem, trash);
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    uint32_t status = astra_filesystem_lstat(filesystem, source, &info);
+    if (status != ASTRA_VFS_OK) return status;
+    status = astra_filesystem_mkdir(filesystem, trash);
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS)
         return status;
     const char *leaf = astra_folder_leaf(source);
@@ -107,12 +139,12 @@ uint32_t astra_folder_move_to_trash(AstraFilesystem *filesystem,
             return ASTRA_VFS_ERR_LIMIT;
         status = astra_folder_path(trash, name, path, capacity);
         if (status != ASTRA_VFS_OK) return status;
-        status = astra_filesystem_mkdir(filesystem, path);
+        status = reserve_entry(filesystem, path, info.kind);
         if (status == ASTRA_VFS_ERR_EXISTS) continue;
         if (status != ASTRA_VFS_OK) return status;
         status = astra_filesystem_rename(filesystem, source, path);
         if (status != ASTRA_VFS_OK)
-            (void)astra_filesystem_unlink(filesystem, path, ASTRA_VFS_UNLINK_DIRECTORY);
+            release_entry(filesystem, path, info.kind);
         return status;
     }
     return ASTRA_VFS_ERR_LIMIT;

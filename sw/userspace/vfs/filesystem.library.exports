@@ -192,6 +192,7 @@ ASTRA_FILESYSTEM_15.2 {
 ASTRA_FILESYSTEM_15.3 {
     global:
         astra_filesystem_copy_tree;
+        astra_filesystem_copy_tree_between;
         astra_file_type_identify;
         astra_application_supports_type;
         astra_application_catalog_handlers;

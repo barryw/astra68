@@ -658,6 +658,19 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
             context, &controls[ASTRA_FILE_PANEL_CRUMB0], previous);
         return result;
     }
+    result = astra_interface_control_set_value(context,
+        &controls[ASTRA_FILE_PANEL_GRID], -1);
+    if (result != ASTRA_OK) {
+        (void)astra_interface_list_set_items(context,
+            &controls[ASTRA_FILE_PANEL_LIST], panel->items,
+            panel->item_count);
+        (void)astra_interface_icon_grid_set_items(context,
+            &controls[ASTRA_FILE_PANEL_GRID], panel->items,
+            panel->item_count, panel->grid_icons);
+        (void)astra_interface_breadcrumb_set_path(&panel->breadcrumb,
+            context, &controls[ASTRA_FILE_PANEL_CRUMB0], previous);
+        return result;
+    }
     if (panel->column_count != 0u) {
         result = astra_interface_list_set_items(context,
             &controls[file_panel_column_list_index(0u)],

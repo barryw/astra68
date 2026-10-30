@@ -45,8 +45,9 @@ int main(void)
     uint32_t dx;
     uint32_t dy;
 
-    assert(ASTRA_DESKTOP_LABEL_FONT_HEIGHT == 13u);
-    assert(ASTRA_DESKTOP_LABEL_FONT_HEIGHT >
+    assert(ASTRA_DESKTOP_LABEL_FONT_HEIGHT ==
+           ASTRA_THEME_SYSTEM_TITLE_FONT_HEIGHT);
+    assert(ASTRA_DESKTOP_LABEL_FONT_HEIGHT >=
            ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT);
     /* Cell 0 is where the single Terminal icon always was. */
     assert(ASTRA_DESKTOP_ICON_X == 40u && ASTRA_DESKTOP_ICON_Y == 34u &&

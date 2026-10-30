@@ -266,6 +266,7 @@ int astra_draw_list_view_init(AstraSurfaceView *surface, void *storage,
     AstraDrawListHeader *header;
 
     if (surface == NULL || storage == NULL ||
+        ((uintptr_t)storage & 3u) != 0u ||
         byte_size < ASTRA_DRAW_LIST_AREA_BYTES || width == 0u || height == 0u)
         return 0;
     surface->pixels = storage;
@@ -294,6 +295,7 @@ int astra_draw_list_view_adopt(AstraSurfaceView *surface, void *storage,
     const AstraDrawListHeader *header = storage;
 
     if (surface == NULL || storage == NULL ||
+        ((uintptr_t)storage & 3u) != 0u ||
         byte_size < ASTRA_DRAW_LIST_AREA_BYTES ||
         header->magic != ASTRA_DRAW_LIST_MAGIC ||
         header->version != ASTRA_DRAW_LIST_VERSION_1_8 ||

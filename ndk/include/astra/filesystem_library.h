@@ -352,9 +352,10 @@ uint32_t astra_filesystem_unlink_at(AstraFilesystem *filesystem, const AstraFile
 /** Atomically rename within one backing filesystem. @param filesystem Attached filesystem. @param from Existing path. @param to Destination path. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
                                  const char *from, const char *to);
-/** Copy a file or directory tree to a new name. Publish the destination only
- * after its contents are durable; reject an existing destination at entry.
- * Unsupported node types fail. An interrupted copy can leave a sibling with
+/** Copy a file, symbolic link, or directory tree to a new name. Stage under
+ * a sibling path, sync copied files, and rename into place after copying.
+ * Reject a destination that already exists when copying begins. Other node
+ * types fail. An interrupted copy can leave a sibling with
  * the suffix `.astra-copying` until removed by the caller.
  * @param filesystem Attached filesystem.
  * @param source Existing assign-qualified source path.
@@ -364,6 +365,19 @@ uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
 uint32_t astra_filesystem_copy_tree(AstraFilesystem *filesystem,
                                     const char *source,
                                     const char *destination);
+/** Copy between separate rooted filesystem views. Source and destination
+ * grants remain independent; useful when a removable source must stay bound
+ * to an exact mount incarnation during a cross-volume copy. Destination
+ * publication and interrupted-copy cleanup match copy_tree.
+ * @param source_filesystem Attached source namespace.
+ * @param source Existing source path.
+ * @param destination_filesystem Attached destination namespace.
+ * @param destination New destination path.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
+    const char *source, AstraFilesystem *destination_filesystem,
+    const char *destination);
 /** Create a hard link within one backing filesystem. @param filesystem Attached filesystem. @param from Existing path. @param to New path. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_link(AstraFilesystem *filesystem,
                                const char *from, const char *to);

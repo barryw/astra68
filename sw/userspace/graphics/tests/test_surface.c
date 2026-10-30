@@ -443,6 +443,21 @@ static void test_surface_clip_is_inherited(void)
         assert(pixels[index] != 0xffffu);
 }
 
+static void test_draw_list_requires_word_alignment(void)
+{
+    static _Alignas(4) uint8_t storage[ASTRA_DRAW_LIST_AREA_BYTES + 4u];
+    AstraSurfaceView view;
+
+    assert(!astra_draw_list_view_init(&view, storage + 2u,
+        ASTRA_DRAW_LIST_AREA_BYTES, 20u, 10u));
+    assert(astra_draw_list_view_init(&view, storage,
+        ASTRA_DRAW_LIST_AREA_BYTES, 20u, 10u));
+    assert(!astra_draw_list_view_adopt(&view, storage + 2u,
+        ASTRA_DRAW_LIST_AREA_BYTES, 20u, 10u));
+    assert(astra_draw_list_view_adopt(&view, storage,
+        ASTRA_DRAW_LIST_AREA_BYTES, 20u, 10u));
+}
+
 static void test_line_software_and_hardware(void)
 {
     uint16_t pixels[8u * 6u] = {0};
@@ -3289,6 +3304,7 @@ static void test_session_fill_rects_split(void)
 
 int main(void)
 {
+    test_draw_list_requires_word_alignment();
     test_rgb565_color_round_trip();
     test_session_blit_lowers_to_hardware();
     test_session_blended_fill();

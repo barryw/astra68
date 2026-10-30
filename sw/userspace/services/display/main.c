@@ -781,9 +781,9 @@ static void damage_active_title(DisplayState *state)
     });
 }
 
-static uint32_t menu_draw_list[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
+static _Alignas(4) uint32_t menu_draw_list[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
 static uint32_t menu_draw_list_committed[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
-static uint32_t submenu_draw_list[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
+static _Alignas(4) uint32_t submenu_draw_list[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
 
 static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp_ms, uint32_t status);
 static void set_overlay(DisplayState *state, uint8_t overlay);

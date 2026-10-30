@@ -1,6 +1,50 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-29
+Status: active continuation map, 2026-10-30
+
+Atlas cross-volume navigation and draw-buffer checkpoint, 2026-10-30: Atlas
+now uses its process VFS namespace for same-window DH0, HOME, Applications,
+RAM0, and public-volume navigation. History stores exact volume references;
+the active public mount has a pinned read grant, and history cannot silently
+rebind after media replacement. On DE25, DH0 -> RAM0 -> Back -> HOME passed,
+as did single-window DH0 Copy -> RAM0 Paste. Atlas initially failed to launch
+because its static `uint32_t` draw-list buffer landed at a 2-byte MC68040
+address; system.library correctly rejected the unaligned pointer. Atlas,
+Desktop, and Display now explicitly align static draw buffers to 4 bytes, and
+Graphics Kit rejects bad storage at initialization. Focused VFS, Graphics,
+Desktop, Display, Interface, Atlas, image-provider, and NDK distribution tests
+pass on Beast. Targeted DE25 installs
+of Atlas, graphics.library, system.library, Desktop, and Display pass; Atlas
+launches both DH0 and exact-reference RAM0 windows, displays live RAM0 in its
+sidebar, copies a DH0 file into RAM0, and
+services stay active with zero restarts. Evidence frames and syslog are at
+`/mnt/Documents/astra68/atlas-navigation-20261030/` on Beast. Board trial
+captures were removed; 8.2 GiB free. Haiku read-only references:
+`src/kits/tracker/PoseView.cpp`, `Navigator.cpp`, `ContainerWindow.cpp`, and
+`src/kits/interface/Bitmap.cpp`. Physical USB and optical media were not
+attached for this checkpoint. Rich List, preview, Recent/saved queries,
+Cut/Move, drag/drop, multiselection, and keyboard shortcuts remain.
+
+Atlas file-operations checkpoint, 2026-10-30: shared File Panel browse mode
+now clears stale Grid selection on directory reload. Atlas keeps selection by
+full path and node kind, so File menu and inline Rename work on Columns child
+rows as well as Grid/List. Live sidebar labels use volume names or uppercase
+device names. HOME and writable RAM/removable volumes support New Drawer,
+file/folder Rename, and per-volume Trash. Typed clipboard Copy/Paste carries
+exact removable-volume identity; Filesystem Kit copies between distinct source
+and destination namespaces, stages publication, and now preserves symbolic
+links. An empty or non-file clipboard disables Paste. Native VFS, Interface,
+Desktop, Atlas, image-provider, and NDK distribution tests passed on Beast.
+Targeted DE25 installs passed; DH0-to-RAM0 file copies, Columns child Copy and
+Rename, RAM0 Trash, exact RAM0 desktop launch, and Paste menu state were
+visually verified. Evidence PNGs and raw framebuffer hashes are under
+`/mnt/Documents/astra68/atlas-file-ops-20261030/` on Beast. This checkpoint
+uses targeted installs; it is not yet folded into a full release image.
+Atlas still needs rich List columns, selection preview, Recent/saved queries,
+Cut/Move,
+drag/drop, multiselection, and keyboard shortcuts before it can be called a
+complete file manager. Physical USB and optical media were not attached for
+this checkpoint.
 
 Interface Gallery showcase checkpoint, 2026-10-29: Gallery now exercises all
 28 native `ASTRA_CONTROL_*` kinds and the shared Open, Save, Font, Colour,

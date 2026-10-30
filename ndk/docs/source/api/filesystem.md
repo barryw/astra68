@@ -49,6 +49,10 @@ reference and poll status. Mounting, files, and provider transport remain in
 :project: astra-ndk
 ```
 
+```{doxygenfile} vfs_clipboard.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} vfs_union.h
 :project: astra-ndk
 ```
