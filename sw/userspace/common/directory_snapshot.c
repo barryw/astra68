@@ -68,30 +68,31 @@ static const char *extension(const char *name)
 }
 
 static int entry_compare(const AstraDirectoryEntry *left,
-    const AstraDirectoryEntry *right, uint32_t key)
+    const AstraDirectoryEntry *right, uint32_t key, uint32_t reverse)
 {
     int left_directory = left->kind == ASTRA_VFS_KIND_DIRECTORY;
     int right_directory = right->kind == ASTRA_VFS_KIND_DIRECTORY;
+    int compared = 0;
     if (left_directory != right_directory)
         return left_directory ? -1 : 1;
     if (key == ASTRA_DIRECTORY_SORT_SIZE && left->size != right->size)
-        return left->size < right->size ? -1 : 1;
-    if (key == ASTRA_DIRECTORY_SORT_MODIFIED && left->mtime != right->mtime)
-        return left->mtime > right->mtime ? -1 : 1;
-    if (key == ASTRA_DIRECTORY_SORT_KIND) {
-        int compared = name_compare(extension(left->name),
-                                    extension(right->name));
-        if (compared != 0) return compared;
-    }
-    return name_compare(left->name, right->name);
+        compared = left->size < right->size ? -1 : 1;
+    else if (key == ASTRA_DIRECTORY_SORT_MODIFIED &&
+             left->mtime != right->mtime)
+        compared = left->mtime > right->mtime ? -1 : 1;
+    else if (key == ASTRA_DIRECTORY_SORT_KIND)
+        compared = name_compare(extension(left->name),
+                                extension(right->name));
+    if (compared == 0) compared = name_compare(left->name, right->name);
+    return reverse != 0u ? -compared : compared;
 }
 
 uint32_t astra_directory_snapshot_sort(AstraDirectorySnapshot *model,
-    uint32_t key)
+    uint32_t key, uint32_t reverse)
 {
     AstraDirectoryEntry *scratch, *source, *target;
     if (model == NULL || model->status != ASTRA_VFS_OK ||
-        key > ASTRA_DIRECTORY_SORT_MODIFIED)
+        key > ASTRA_DIRECTORY_SORT_MODIFIED || reverse > 1u)
         return ASTRA_VFS_ERR_INVALID;
     if (model->count < 2u) return ASTRA_VFS_OK;
     size_t bytes = (size_t)model->count * sizeof(*scratch);
@@ -112,7 +113,8 @@ uint32_t astra_directory_snapshot_sort(AstraDirectorySnapshot *model,
                 if (left == middle)
                     target[out] = source[right++];
                 else if (right == end ||
-                         entry_compare(&source[left], &source[right], key) <= 0)
+                         entry_compare(&source[left], &source[right], key,
+                                       reverse) <= 0)
                     target[out] = source[left++];
                 else
                     target[out] = source[right++];

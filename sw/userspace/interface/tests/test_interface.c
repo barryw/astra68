@@ -2137,7 +2137,24 @@ static void test_table_control(void)
     assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
     event.flags = 0u;
     assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
-    assert(collection.selected_id == 0u);
+    assert(action.type == ASTRA_UI_ACTION_SORT_REQUESTED &&
+        action.control_id == 91u && action.value == 0 &&
+        collection.selected_id == 0u);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 190,
+        control._private_frame.y + 4);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_SORT_REQUESTED && action.value == 1);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + 4);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    event.data.pointer.x = control._private_frame.x + 190;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_NONE && collection.selected_id == 0u);
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
         ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
         control._private_frame.y + 2u * theme.control_height + 4u);
@@ -2183,6 +2200,46 @@ static void test_table_control(void)
         subset, 2u, cells, 2u) == ASTRA_OK);
     assert(selection.count == 2u && collection.selected_id == 11u &&
         !astra_interface_selection_contains(&selection, 13u));
+
+    /* Header state must remain valid beyond shared scrollbar part range. */
+    static const AstraCollectionItem one_row[] = {
+        {21u, "Entry", 5u, {0u, 0u}}
+    };
+    static const AstraTableColumn four_columns[] = {
+        {"Name", 4u, 50u, 0u}, {"Size", 4u, 50u, 0u},
+        {"Kind", 4u, 50u, 0u}, {"Modified", 8u, 80u, 0u}
+    };
+    static const AstraTableCell three_cells[] = {
+        {"1 B", 3u, 0u}, {"File", 4u, 0u}, {"Today", 5u, 0u}
+    };
+    AstraCollectionModel four_collection = ASTRA_COLLECTION_MODEL_INIT;
+    AstraTableModel four_model = ASTRA_TABLE_MODEL_INIT;
+    AstraTableInfo four_info = ASTRA_TABLE_INFO_INIT;
+    AstraControl four_control = ASTRA_CONTROL_INIT;
+    AstraUIContext four_context = ASTRA_UI_CONTEXT_INIT;
+    assert(astra_interface_collection_init(&four_collection, one_row, 1u,
+        0u) == ASTRA_OK);
+    four_model.collection = &four_collection;
+    four_model.columns = four_columns;
+    four_model.column_count = 4u;
+    four_model.cells = three_cells;
+    four_model.cell_count = 3u;
+    four_info.id = 92u;
+    four_info.model = &four_model;
+    assert(astra_interface_table_init(&four_control, &four_info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&four_context, &four_control, 1u,
+        400u, 200u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&four_context, &layout) == ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, four_control._private_frame.x + 160,
+        four_control._private_frame.y + 4);
+    assert(astra_interface_ui_handle_event(&four_context, &event, &action) ==
+        ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&four_context, &event, &action) ==
+        ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_SORT_REQUESTED &&
+        action.control_id == 92u && action.value == 3);
 }
 
 static void test_tree_control(void)

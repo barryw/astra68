@@ -1256,7 +1256,9 @@ enum {
     /** A transient control was dismissed without activation. */
     ASTRA_UI_ACTION_DISMISS = 10u,
     /** Tree branch changed; value is its index in the full C1 collection. */
-    ASTRA_UI_ACTION_EXPANSION_CHANGED = 11u
+    ASTRA_UI_ACTION_EXPANSION_CHANGED = 11u,
+    /** Table heading clicked; value is its zero-based column index. */
+    ASTRA_UI_ACTION_SORT_REQUESTED = 12u
 };
 
 /** Semantic result emitted by a handled window event. */
@@ -1269,7 +1271,7 @@ typedef struct AstraUIAction {
     uint32_t control_id;
     /** Current value for VALUE_CHANGED, selected row for collection ACTIVATE,
      * pointer row for collection CONTEXT_MENU (-1 for empty space), or full
-     * item index for EXPANSION_CHANGED. */
+     * item index for EXPANSION_CHANGED, or column index for SORT_REQUESTED. */
     int64_t value;
     /** Decimal places for @ref value; zero for nonnumeric actions. */
     uint32_t decimal_places;

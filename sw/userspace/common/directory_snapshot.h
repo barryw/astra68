@@ -27,6 +27,6 @@ uint32_t astra_directory_snapshot_load(AstraDirectorySnapshot *model,
 void astra_directory_snapshot_dispose(AstraDirectorySnapshot *model);
 void astra_directory_snapshot_filter_hidden(AstraDirectorySnapshot *model);
 uint32_t astra_directory_snapshot_sort(AstraDirectorySnapshot *model,
-    uint32_t key);
+    uint32_t key, uint32_t reverse);
 
 #endif

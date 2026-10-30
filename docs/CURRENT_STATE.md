@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared Table sort checkpoint, 2026-10-30: Interface Kit Table now emits
+the zero-based column in `ASTRA_UI_ACTION_SORT_REQUESTED` after a complete
+header click. The common directory snapshot sorter accepts direction and keeps
+folders before files; Atlas maps header columns to its existing sort command
+and toggles direction on repeated clicks. Haiku read-only reference:
+`src/kits/tracker/TitleView.cpp` for header click and reverse-sort behavior,
+and `src/kits/interface/OutlineListView.cpp` for future tree disclosure.
+The first DE25 trial exposed Interface Kit context validation rejecting the
+fourth Table header's capture part. Interface Kit now validates a captured
+Table part against its column count; host tests include four-column capture.
+Targeted Interface Kit reinstall passed. On DE25, clicking Modified sorted DH0
+newest first; clicking again sorted oldest first. Atlas stayed open,
+`astra.service` was active with zero restarts and 8.1 GiB free. SHA-verified
+RFB captures live on Beast at
+`/mnt/Documents/astra68/atlas-header-sort-20261030/`; disposable board trial
+files were removed. Remaining Atlas work: List row expansion, selection
+preview, Recent/saved queries, drag and drop, and visible sort direction.
+
 Atlas Cut/Move checkpoint, 2026-10-30: Filesystem Kit ABI 15.7 owns generic
 same-volume rename and cross-volume staged copy followed by source removal.
 Clipboard selection protocol version 3 carries Copy or Move intent. Atlas

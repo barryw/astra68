@@ -100,7 +100,7 @@ static char browser_status[64];
 static char browser_space[80];
 static uint32_t worker, cancelled, completed, visible_data;
 static uint16_t width = 1300u, height = 640u;
-static uint32_t sort_mode = ASTRA_DIRECTORY_SORT_NAME, show_hidden;
+static uint32_t sort_mode = ASTRA_DIRECTORY_SORT_NAME, sort_reverse, show_hidden;
 static const char *root;
 static char current_path[ASTRA_VFS_PATH_MAX];
 static char *navigation_history[NAVIGATION_HISTORY_MAX];
@@ -262,7 +262,7 @@ static int fixed_copy_path(const char *path);
 static uint32_t prepare_directory(AstraDirectorySnapshot *snapshot)
 {
     if (!show_hidden) astra_directory_snapshot_filter_hidden(snapshot);
-    return astra_directory_snapshot_sort(snapshot, sort_mode);
+    return astra_directory_snapshot_sort(snapshot, sort_mode, sort_reverse);
 }
 
 static void navigation_dispose(void)
@@ -2109,22 +2109,33 @@ static AstraResult sort_query(void *opaque, AstraCommandState *state)
     return ASTRA_OK;
 }
 
-static AstraResult sort_invoke(void *opaque,
-    const AstraCommandArguments *args)
+static AstraResult sort_set(uint32_t key, uint32_t reverse)
 {
-    (void)args;
-    const AtlasSortCommand *command = opaque;
-    uint32_t previous = sort_mode;
-    sort_mode = command->key;
+    uint32_t previous = sort_mode, previous_reverse = sort_reverse;
+    if (key > ASTRA_DIRECTORY_SORT_MODIFIED || reverse > 1u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (worker != 0u || !visible_data || directory.status != ASTRA_VFS_OK)
+        return ASTRA_ERROR_BUSY;
+    sort_mode = key;
+    sort_reverse = reverse;
     AstraResult result = astra_interface_control_set_value(&ui,
         &controls[SORT_CONTROL_INDEX], sort_mode);
     if (result == ASTRA_OK) result = reload_directory();
     if (result != ASTRA_OK) {
         sort_mode = previous;
+        sort_reverse = previous_reverse;
         (void)astra_interface_control_set_value(&ui,
             &controls[SORT_CONTROL_INDEX], previous);
     }
     return result;
+}
+
+static AstraResult sort_invoke(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)args;
+    const AtlasSortCommand *command = opaque;
+    return sort_set(command->key, 0u);
 }
 
 static AstraResult show_hidden_set(uint32_t value)
@@ -2665,6 +2676,21 @@ static AstraResult run(AstraHandle gui)
                         ASTRA_ERROR_INVALID_ARGUMENT;
                 if (changed != ASTRA_OK) {
                     (void)astra_log_failure("atlas sort/filter",
+                        (uint32_t)(-changed));
+                    open_error(gui, changed);
+                }
+                repaint = 1u;
+                result = astra_window_event_try(&window, &event);
+                continue;
+            }
+            if (action.type == ASTRA_UI_ACTION_SORT_REQUESTED &&
+                action.control_id == 1u + ASTRA_FILE_PANEL_LIST &&
+                browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST) {
+                uint32_t key = (uint32_t)action.value;
+                AstraResult changed = sort_set(key,
+                    key == sort_mode ? !sort_reverse : 0u);
+                if (changed != ASTRA_OK) {
+                    (void)astra_log_failure("atlas column sort",
                         (uint32_t)(-changed));
                     open_error(gui, changed);
                 }

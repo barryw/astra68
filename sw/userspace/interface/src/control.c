@@ -213,6 +213,25 @@ static const AstraTableModel *table_model(const AstraControl *control)
     return (const AstraTableModel *)control->_private_display_model;
 }
 
+static int32_t table_header_at(const AstraControl *control, int32_t x,
+    int32_t y)
+{
+    const AstraTableModel *table = table_model(control);
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    int64_t relative_x = (int64_t)x - control->_private_frame.x;
+    int64_t relative_y = (int64_t)y - control->_private_frame.y;
+    uint64_t left = 0u;
+
+    if (relative_x < 0 || relative_y < 0 ||
+        relative_y >= theme.control_height)
+        return -1;
+    for (uint32_t at = 0u; at < table->column_count; ++at) {
+        left += table->columns[at].width;
+        if ((uint64_t)relative_x < left) return (int32_t)at;
+    }
+    return -1;
+}
+
 static AstraTreeModel *tree_model(AstraControl *control)
 {
     return (AstraTreeModel *)(void *)control->_private_display_model;
@@ -1077,7 +1096,15 @@ static int context_valid(const AstraUIContext *context)
                      ._private_control_kind == ASTRA_CONTROL_DIAL)) &&
            (context->_private_value_input_flags & ~VALUE_INPUT_FLAGS) == 0u &&
            context->_private_hover_part <= SCROLLBAR_PART_AFTER &&
-           context->_private_capture_part <= SCROLLBAR_PART_AFTER;
+           (context->_private_capture_part <= SCROLLBAR_PART_AFTER ||
+            (context->_private_capture < context->_private_control_count &&
+             context->_private_controls[context->_private_capture]
+                     ._private_control_kind == ASTRA_CONTROL_TABLE &&
+             table_model(&context->_private_controls[
+                 context->_private_capture]) != NULL &&
+             context->_private_capture_part <= table_model(
+                 &context->_private_controls[
+                     context->_private_capture])->column_count));
 }
 
 static uint32_t control_index(const AstraUIContext *context,
@@ -8865,6 +8892,15 @@ static AstraResult pointer_event(AstraUIContext *context,
             context->_private_capture_part = scrollbar_part(
                 &context->_private_controls[hit], event->data.pointer.x,
                 event->data.pointer.y);
+        else if (hit != CONTROL_NONE &&
+                 context->_private_controls[hit]._private_control_kind ==
+                     ASTRA_CONTROL_TABLE) {
+            int32_t column = table_header_at(
+                &context->_private_controls[hit], event->data.pointer.x,
+                event->data.pointer.y);
+            context->_private_capture_part = column < 0 ? 0u :
+                (uint32_t)column + 1u;
+        }
         dynamic_state(context, hit, ASTRA_CONTROL_PRESSED,
                       hit == CONTROL_NONE ||
                       context->_private_controls[hit]._private_control_kind !=
@@ -8967,6 +9003,17 @@ static AstraResult pointer_event(AstraUIContext *context,
                            event->data.pointer.y, action);
         else if (choice && hit == captured) {
             AstraControl *control = &context->_private_controls[captured];
+            if (control->_private_control_kind == ASTRA_CONTROL_TABLE &&
+                context->_private_capture_part != 0u &&
+                table_header_at(control, event->data.pointer.x,
+                    event->data.pointer.y) ==
+                    (int32_t)context->_private_capture_part - 1) {
+                action->type = ASTRA_UI_ACTION_SORT_REQUESTED;
+                action->control_id = control->_private_id;
+                action->value = (int64_t)context->_private_capture_part - 1;
+                clear_capture(context);
+                return ASTRA_OK;
+            }
             if (control->_private_control_kind == ASTRA_CONTROL_POPUP) {
                 clear_capture(context);
                 return activate_control(context, captured, action);
