@@ -132,7 +132,9 @@ AstraResult astra_interface_colour_panel_set_recent(AstraColourPanel *panel,
 
 enum {
     ASTRA_FILE_PANEL_OPEN = 1u,
-    ASTRA_FILE_PANEL_SAVE = 2u
+    ASTRA_FILE_PANEL_SAVE = 2u,
+    /** Browser content without Open/Save footer; caller owns window chrome. */
+    ASTRA_FILE_PANEL_BROWSE = 3u
 };
 
 /** Eight visible ancestors; deeper paths show their eight deepest segments.

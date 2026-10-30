@@ -3170,7 +3170,10 @@ static AstraResult layout_scroll_view(AstraUIContext *context,
     clip = frame_intersection(&view->_private_frame, &view->_private_clip);
     child->_private_frame = (AstraControlFrame){
         (int32_t)x, (int32_t)y,
-        state.content_width, state.content_height};
+        state.content_width > view->_private_frame.width ?
+            state.content_width : view->_private_frame.width,
+        state.content_height > view->_private_frame.height ?
+            state.content_height : view->_private_frame.height};
     child->_private_clip = clip;
     child->_private_laid_out = 1u;
     control_damage(context, index);
@@ -4891,6 +4894,7 @@ static void icon_grid_visible_rows(const AstraControl *control,
 }
 
 static int render_requirements(const AstraUIContext *context,
+                               uint32_t first, uint32_t end,
                                uint64_t *commands, uint64_t *payload)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -4901,7 +4905,7 @@ static int render_requirements(const AstraUIContext *context,
     *payload = 0u;
     if (astra_fonts_context_id(font_id) != ASTRA_OK) return 0;
     id_length = (uint32_t)strlen(font_id);
-    for (uint32_t at = 0u; at < context->_private_control_count; ++at) {
+    for (uint32_t at = first; at < end; ++at) {
         const AstraControl *control = &context->_private_controls[at];
         uint32_t state;
 
@@ -8258,6 +8262,22 @@ static AstraResult render_one_control(const AstraUIContext *context,
     return ASTRA_OK;
 }
 
+static void render_finish(AstraUIContext *context)
+{
+    for (uint32_t at = 0u; at < context->_private_control_count; ++at) {
+        AstraControl *control = &context->_private_controls[at];
+        AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
+
+        if (control->_private_control_kind != ASTRA_CONTROL_SCROLL_VIEW ||
+            astra_scroll_get_state(scroll_model(control), &state) != ASTRA_OK)
+            continue;
+        private_u32_set(&control->_private_minimum_value, state.offset_x);
+        private_u32_set(&control->_private_maximum_value, state.offset_y);
+        control->_private_value_step = 1;
+    }
+    context->_private_reserved = 0u;
+}
+
 AstraResult astra_interface_ui_render(AstraUIContext *context,
                                       AstraSurfaceView *surface)
 {
@@ -8276,7 +8296,8 @@ AstraResult astra_interface_ui_render(AstraUIContext *context,
         surface->clip_top > surface->clip_bottom ||
         surface->clip_bottom > surface->height ||
         surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST ||
-        !render_requirements(context, &commands, &payload))
+        !render_requirements(context, 0u, context->_private_control_count,
+                             &commands, &payload))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (!astra_draw_list_view_adopt(&validated, surface->pixels,
                                     surface->byte_size, surface->width,
@@ -8360,18 +8381,60 @@ AstraResult astra_interface_ui_render(AstraUIContext *context,
         result = render_one_control(context, at, &theme, control, &clipped);
         if (result != ASTRA_OK) return result;
     }
-    for (uint32_t at = 0u; at < context->_private_control_count; ++at) {
-        AstraControl *control = &context->_private_controls[at];
-        AstraScrollState state = ASTRA_SCROLL_STATE_INIT;
+    render_finish(context);
+    return ASTRA_OK;
+}
 
-        if (control->_private_control_kind != ASTRA_CONTROL_SCROLL_VIEW ||
-            astra_scroll_get_state(scroll_model(control), &state) != ASTRA_OK)
+AstraResult astra_interface_ui_render_range(AstraUIContext *context,
+    AstraSurfaceView *surface, uint32_t first, uint32_t count)
+{
+    AstraSurfaceView validated;
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    uint64_t commands, payload;
+    uint32_t end;
+
+    if (!context_valid(context) || surface == NULL ||
+        surface->pixels == NULL || surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST ||
+        surface->width != context->_private_width ||
+        surface->height != context->_private_height ||
+        surface->clip_left > surface->clip_right ||
+        surface->clip_right > surface->width ||
+        surface->clip_top > surface->clip_bottom ||
+        surface->clip_bottom > surface->height || count == 0u ||
+        first >= context->_private_control_count ||
+        count > context->_private_control_count - first)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    end = first + count;
+    if (!render_requirements(context, first, end, &commands, &payload) ||
+        !astra_draw_list_view_adopt(&validated, surface->pixels,
+            surface->byte_size, surface->width, surface->height))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (!astra_interface_draw_list_has_room(surface, commands, payload))
+        return ASTRA_ERROR_NO_RESOURCES;
+    for (uint32_t at = first; at < end; ++at) {
+        const AstraControl *control = &context->_private_controls[at];
+        AstraSurfaceView clipped;
+        AstraResult result;
+
+        if (control->_private_laid_out == 0u ||
+            (CONTAINER_KINDS(control->_private_control_kind) &&
+             !(control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
+               (control->_private_style == ASTRA_CONTAINER_STYLE_TOOLBAR ||
+                control->_private_style == ASTRA_CONTAINER_STYLE_STATUS_BAR ||
+                control->_private_style == ASTRA_CONTAINER_STYLE_TAG_INPUT ||
+                control->_private_style == ASTRA_CONTAINER_STYLE_DROP_TARGET))) ||
+            control->_private_clip.width == 0u ||
+            control->_private_clip.height == 0u)
             continue;
-        private_u32_set(&control->_private_minimum_value, state.offset_x);
-        private_u32_set(&control->_private_maximum_value, state.offset_y);
-        control->_private_value_step = 1;
+        clipped = validated;
+        if (!astra_surface_clip(&clipped, control->_private_clip.x,
+                control->_private_clip.y, control->_private_clip.width,
+                control->_private_clip.height))
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        result = render_one_control(context, at, &theme, control, &clipped);
+        if (result != ASTRA_OK) return result;
     }
-    context->_private_reserved = 0u;
+    if (end == context->_private_control_count) render_finish(context);
     return ASTRA_OK;
 }
 

@@ -302,7 +302,8 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
         info->size < sizeof(*info) || info->first_id == 0u ||
         info->first_id > UINT32_MAX - (ASTRA_FILE_PANEL_CONTROL_COUNT - 1u) ||
         (info->mode != ASTRA_FILE_PANEL_OPEN &&
-         info->mode != ASTRA_FILE_PANEL_SAVE) ||
+         info->mode != ASTRA_FILE_PANEL_SAVE &&
+         info->mode != ASTRA_FILE_PANEL_BROWSE) ||
         info->collection == NULL || info->scroll == NULL ||
         (info->mode == ASTRA_FILE_PANEL_SAVE && info->name_model == NULL) ||
         info->spare_item_storage == NULL ||
@@ -435,12 +436,13 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     if (result != ASTRA_OK) return result;
     result = file_panel_label(&controls[ASTRA_FILE_PANEL_TITLE],
         info->first_id + ASTRA_FILE_PANEL_TITLE,
-        info->mode == ASTRA_FILE_PANEL_OPEN ? "Open file" : "Save file",
-        9u, 0u, info->first_id);
+        info->mode == ASTRA_FILE_PANEL_SAVE ? "Save file" : "Open file",
+        9u, info->mode == ASTRA_FILE_PANEL_BROWSE ?
+            ASTRA_CONTROL_COLLAPSED : 0u, info->first_id);
     if (result != ASTRA_OK) return result;
     result = file_panel_label(&controls[ASTRA_FILE_PANEL_NAME_LABEL],
         info->first_id + ASTRA_FILE_PANEL_NAME_LABEL, "Name", 4u,
-        info->mode == ASTRA_FILE_PANEL_OPEN ? ASTRA_CONTROL_COLLAPSED : 0u,
+        info->mode == ASTRA_FILE_PANEL_SAVE ? 0u : ASTRA_CONTROL_COLLAPSED,
         info->first_id);
     if (result != ASTRA_OK) return result;
     if (info->mode == ASTRA_FILE_PANEL_SAVE) {
@@ -511,10 +513,21 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     result = astra_panel_child(&controls[ASTRA_FILE_PANEL_TYPE],
         info->first_id + ASTRA_FILE_PANEL_TOOLS, 0u);
     if (result != ASTRA_OK) return result;
+    if (info->mode == ASTRA_FILE_PANEL_BROWSE)
+        controls[ASTRA_FILE_PANEL_TYPE]._private_state |=
+            ASTRA_CONTROL_COLLAPSED;
     result = file_panel_container(&controls[ASTRA_FILE_PANEL_CONTENT],
         info->first_id + ASTRA_FILE_PANEL_CONTENT, info->first_id,
         ASTRA_FLEX_ROW);
     if (result != ASTRA_OK) return result;
+    if (info->mode == ASTRA_FILE_PANEL_BROWSE) {
+        AstraFlexItem content = ASTRA_FLEX_ITEM_INIT;
+        content.parent_id = info->first_id;
+        content.grow = 1u;
+        result = astra_interface_control_set_flex(
+            &controls[ASTRA_FILE_PANEL_CONTENT], &content);
+        if (result != ASTRA_OK) return result;
+    }
     result = file_panel_scroll(&controls[ASTRA_FILE_PANEL_PLACES_SCROLL],
         info->first_id + ASTRA_FILE_PANEL_PLACES_SCROLL,
         info->first_id + ASTRA_FILE_PANEL_CONTENT,
@@ -556,6 +569,9 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
         info->first_id + ASTRA_FILE_PANEL_ACTIONS, info->first_id,
         ASTRA_FLEX_ROW);
     if (result != ASTRA_OK) return result;
+    if (info->mode == ASTRA_FILE_PANEL_BROWSE)
+        controls[ASTRA_FILE_PANEL_ACTIONS]._private_state |=
+            ASTRA_CONTROL_COLLAPSED;
     for (uint32_t at = ASTRA_FILE_PANEL_CANCEL;
          at <= ASTRA_FILE_PANEL_PRIMARY; ++at) {
         const char *text = at == ASTRA_FILE_PANEL_CANCEL ? "Cancel" :
@@ -968,7 +984,8 @@ static AstraResult file_panel_select(AstraFilePanel *panel, uint32_t index,
     }
     if (entry->kind != ASTRA_VFS_KIND_FILE)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    if (panel->mode == ASTRA_FILE_PANEL_OPEN)
+    if (panel->mode == ASTRA_FILE_PANEL_OPEN ||
+        panel->mode == ASTRA_FILE_PANEL_BROWSE)
         *outcome = ASTRA_FILE_PANEL_PICKED;
     return ASTRA_OK;
 }
@@ -1217,7 +1234,7 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
         result = file_panel_select(panel,
             (uint32_t)panel->items[(uint32_t)action->value].id - 1u,
             outcome);
-        if (result != ASTRA_OK || panel->mode == ASTRA_FILE_PANEL_OPEN ||
+        if (result != ASTRA_OK || panel->mode != ASTRA_FILE_PANEL_SAVE ||
             *outcome == ASTRA_FILE_PANEL_NAVIGATE)
             return result;
         return file_panel_fill_name(panel, context, controls);

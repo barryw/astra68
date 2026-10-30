@@ -57,8 +57,9 @@ AstraResult astra_interface_columns_init(AstraControl *controls,
         result = astra_interface_scroll_view_init(&controls[scroll_slot], &view);
         if (result != ASTRA_OK) return result;
         item.parent_id = info->first_id;
-        item.minimum_width = item.maximum_width = column->width;
-        item.minimum_height = item.maximum_height = info->viewport_height;
+        item.minimum_width = column->width;
+        item.minimum_height = info->viewport_height;
+        item.grow = 1u;
         result = astra_interface_control_set_flex(&controls[scroll_slot], &item);
         if (result != ASTRA_OK) return result;
 

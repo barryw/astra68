@@ -2005,6 +2005,46 @@ static void test_list_control(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_render_range_overflow(void)
+{
+    enum { ROWS = 40, COLUMNS = 3 };
+    AstraCollectionItem items[ROWS];
+    AstraCollectionModel models[COLUMNS];
+    AstraControl controls[COLUMNS];
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraSurfaceView surface;
+
+    for (uint32_t row = 0u; row < ROWS; ++row)
+        items[row] = (AstraCollectionItem){row + 1u, "Item", 4u, {0u, 0u}};
+    for (uint32_t col = 0u; col < COLUMNS; ++col) {
+        AstraListInfo info = ASTRA_LIST_INFO_INIT;
+        info.id = col + 1u;
+        models[col] = (AstraCollectionModel)ASTRA_COLLECTION_MODEL_INIT;
+        controls[col] = (AstraControl)ASTRA_CONTROL_INIT;
+        assert(astra_interface_collection_init(&models[col], items, ROWS,
+            0u) == ASTRA_OK);
+        info.model = &models[col];
+        assert(astra_interface_list_init(&controls[col], &info) == ASTRA_OK);
+    }
+    assert(astra_interface_ui_init(&context, controls, COLUMNS, 900u,
+        1200u) == ASTRA_OK);
+    layout.direction = ASTRA_FLEX_ROW;
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    surface = render_view(900u, 1200u);
+    assert(astra_interface_ui_render(&context, &surface) ==
+        ASTRA_ERROR_NO_RESOURCES);
+    reset_render_calls();
+    for (uint32_t col = 0u; col < COLUMNS; ++col) {
+        surface = render_view(900u, 1200u);
+        assert(astra_interface_ui_render_range(&context, &surface,
+            col, 1u) == ASTRA_OK);
+    }
+    assert(text_calls > 0u);
+    assert(astra_interface_ui_render_range(&context, &surface,
+        COLUMNS, 1u) == ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
 static void test_table_control(void)
 {
     static const AstraCollectionItem rows[] = {
@@ -3903,7 +3943,7 @@ static void test_scroll_view_layout_and_wheel(void)
            controls[1]._private_clip.y == 0 &&
            controls[1]._private_clip.width == 120u &&
            controls[1]._private_clip.height == 60u &&
-           controls[2]._private_clip.width == state.content_width &&
+           controls[2]._private_clip.width == state.viewport_width &&
            controls[2]._private_clip.height == 60u);
     reset_render_calls();
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
@@ -5224,6 +5264,61 @@ static void test_shared_file_panel(void)
             outcome == ASTRA_FILE_PANEL_PICKED &&
             strcmp(panel.target, "/dh0/Stories/planetfall.z3") == 0);
     }
+    {
+        AstraFilePanelInfo browse = ASTRA_FILE_PANEL_INFO_INIT;
+        browse.first_id = 300u;
+        browse.mode = ASTRA_FILE_PANEL_BROWSE;
+        browse.directory = "/dh0/Stories";
+        browse.entries = entries;
+        browse.entry_count = 3u;
+        browse.item_storage = items;
+        browse.item_capacity = 2u;
+        browse.spare_item_storage = next_items;
+        browse.spare_item_capacity = 2u;
+        browse.grid_icons = icons;
+        browse.grid_icon_capacity = 2u;
+        browse.collection = &collection;
+        browse.scroll = &scroll;
+        assert(astra_interface_file_panel_init(&panel, controls, &browse) ==
+            ASTRA_OK);
+        assert((controls[ASTRA_FILE_PANEL_TITLE]._private_state &
+            ASTRA_CONTROL_COLLAPSED) != 0u);
+        assert((controls[ASTRA_FILE_PANEL_ACTIONS]._private_state &
+            ASTRA_CONTROL_COLLAPSED) != 0u);
+        context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
+        AstraFlexItem browse_flex = ASTRA_FLEX_ITEM_INIT;
+        browse_flex.grow = 1u;
+        assert(astra_interface_control_set_flex(
+            &controls[ASTRA_FILE_PANEL_ROOT], &browse_flex) == ASTRA_OK);
+        assert(astra_interface_ui_init(&context, controls,
+            ASTRA_FILE_PANEL_CONTROL_COUNT, 420u, 480u) == ASTRA_OK);
+        assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+        AstraControlFrame content_frame, content_clip;
+        assert(astra_interface_ui_geometry(&context,
+            ASTRA_FILE_PANEL_CONTENT, &content_frame,
+            &content_clip) == ASTRA_OK);
+        assert(content_frame.height > 340u);
+        assert(astra_interface_ui_geometry(&context,
+            ASTRA_FILE_PANEL_SCROLL, &content_frame,
+            &content_clip) == ASTRA_OK);
+        assert(content_frame.height > 340u);
+        action.type = ASTRA_UI_ACTION_ACTIVATE;
+        action.control_id = 300u + ASTRA_FILE_PANEL_LIST;
+        action.value = 1;
+        assert(astra_interface_file_panel_action(&panel, &context, controls,
+            &action, &outcome) == ASTRA_OK &&
+            outcome == ASTRA_FILE_PANEL_PICKED &&
+            strcmp(panel.target, "/dh0/Stories/zork1.z3") == 0);
+        action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+        action.control_id = 300u + ASTRA_FILE_PANEL_VIEW;
+        action.value = ASTRA_FILE_PANEL_VIEW_GRID;
+        assert(astra_interface_file_panel_action(&panel, &context, controls,
+            &action, &outcome) == ASTRA_OK);
+        assert(astra_interface_ui_geometry(&context,
+            ASTRA_FILE_PANEL_GRID_SCROLL, &content_frame,
+            &content_clip) == ASTRA_OK);
+        assert(content_frame.height > 340u);
+    }
 }
 
 static void test_shared_colour_panel(void)
@@ -5427,6 +5522,7 @@ int main(void)
     test_status_bar();
     test_segmented_control();
     test_list_control();
+    test_render_range_overflow();
     test_popup_control();
     test_split_button();
     test_table_control();

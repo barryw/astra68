@@ -103,6 +103,7 @@ ASTRA_INTERFACE_10.0 {
         astra_interface_ui_layout;
         astra_interface_ui_measure;
         astra_interface_ui_render;
+        astra_interface_ui_render_range;
         astra_interface_ui_set_state;
         astra_interface_ui_update_pointer;
         astra_interface_ui_vblank;

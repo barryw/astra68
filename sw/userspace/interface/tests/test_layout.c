@@ -602,6 +602,36 @@ static void test_scroll_content_respects_maximum(void)
            state.content_height == 80u && state.maximum_y == 60u);
 }
 
+static void test_scroll_child_fills_viewport(void)
+{
+    AstraControl controls[2] = {ASTRA_CONTROL_INIT, ASTRA_CONTROL_INIT};
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraScrollModel model = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo scroll = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraScrollViewInfo view = ASTRA_SCROLL_VIEW_INFO_INIT;
+    AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraFlexLayout root = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlFrame frame, clip;
+
+    assert(astra_scroll_init(&model, &scroll) == ASTRA_OK);
+    view.id = 1u;
+    view.model = &model;
+    view.preferred_width = 200u;
+    view.preferred_height = 100u;
+    assert(astra_interface_scroll_view_init(&controls[0], &view) == ASTRA_OK);
+    label.id = 2u;
+    label.text = "Short";
+    label.text_length = 5u;
+    assert(astra_interface_label_init(&controls[1], &label) == ASTRA_OK);
+    item.parent_id = 1u;
+    assert(astra_interface_control_set_flex(&controls[1], &item) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls, 2u, 200u, 100u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &root) == ASTRA_OK);
+    assert(astra_interface_ui_geometry(&context, 1u, &frame, &clip) == ASTRA_OK);
+    assert(frame.width == 200u && frame.height == 100u);
+}
+
 static void test_settings_pane(void)
 {
     AstraControl controls[7];
@@ -771,14 +801,20 @@ static void test_columns_browser(void)
     assert(astra_interface_columns_init(controls, &info) == ASTRA_ERROR_INVALID_ARGUMENT);
     columns[1].scroll = &scrolls[1];
     assert(astra_interface_columns_init(controls, &info) == ASTRA_OK);
+    AstraFlexItem expanded = ASTRA_FLEX_ITEM_INIT;
+    expanded.grow = 1u;
+    assert(astra_interface_control_set_flex(&controls[0], &expanded) == ASTRA_OK);
     assert(controls[2]._private_control_kind == ASTRA_CONTROL_LIST);
     assert(controls[4]._private_control_kind == ASTRA_CONTROL_LIST);
+    root.align_items = ASTRA_FLEX_ALIGN_STRETCH;
     assert(astra_interface_ui_init(&context, controls, 5u, 400u, 120u) == ASTRA_OK);
     assert(astra_interface_ui_layout(&context, &root) == ASTRA_OK);
     assert(astra_interface_ui_geometry(&context, 1u, &left, &clip) == ASTRA_OK);
     assert(astra_interface_ui_geometry(&context, 3u, &right, &clip) == ASTRA_OK);
-    assert(left.width == 120u && right.width == 120u);
-    assert(right.x == left.x + 121);
+    assert(left.width >= 199u && right.width >= 199u);
+    assert(left.width + right.width + 1u == 400u);
+    assert(left.height == 120u && right.height == 120u);
+    assert(right.x == left.x + (int32_t)left.width + 1);
     assert(astra_interface_list_set_items(&context, &controls[4],
         reordered, 2u) == ASTRA_OK);
     assert(models[1].selected_id == 22u);
@@ -802,6 +838,7 @@ void astra_interface_test_layout(void)
     test_deep_layout_has_no_stack_or_depth_limit();
     test_public_geometry();
     test_scroll_content_respects_maximum();
+    test_scroll_child_fills_viewport();
     test_settings_pane();
     test_form_row();
     test_columns_browser();

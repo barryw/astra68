@@ -725,6 +725,18 @@ AstraResult astra_interface_ui_set_state(
  */
 AstraResult astra_interface_ui_render(AstraUIContext *context,
                                       AstraSurfaceView *surface);
+/** Render contiguous controls into one fixed-size draw-list view. Render
+ * ranges in ascending index order and append each view to one session list
+ * when a complete UI exceeds the view's command budget. Scroll-copy
+ * acceleration is reserved for the whole-UI renderer.
+ * @param context UI context with current layout and state.
+ * @param surface Fixed-size draw-list view for this range.
+ * @param first Index of first control to render.
+ * @param count Number of consecutive controls to render.
+ * @return ASTRA_OK or validation/resource error.
+ */
+AstraResult astra_interface_ui_render_range(AstraUIContext *context,
+    AstraSurfaceView *surface, uint32_t first, uint32_t count);
 /** Dispatch one window event.
  * @param context UI context receiving the event.
  * @param event Window event to dispatch.

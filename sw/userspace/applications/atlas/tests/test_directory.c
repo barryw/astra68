@@ -77,6 +77,24 @@ int main(void)
     assert(strcmp(model.entries[256].name, "file-256") == 0);
     assert(model.entries[256].byte_size == 256u &&
            model.entries[256].kind == ASTRA_VFS_KIND_DIRECTORY);
+    astra_directory_snapshot_filter_hidden(&model);
+    assert(model.count == 256u);
+    assert(strcmp(model.entries[0].name, "caf\xc3\xa9") == 0);
+    assert(astra_directory_snapshot_sort(&model, ASTRA_DIRECTORY_SORT_NAME) == ASTRA_VFS_OK);
+    assert(model.entries[0].kind == ASTRA_VFS_KIND_DIRECTORY);
+    assert(strcmp(model.entries[0].name, "file-10") == 0);
+    assert(model.entries[model.count - 1u].kind == ASTRA_VFS_KIND_FILE);
+    assert(astra_directory_snapshot_sort(&model, ASTRA_DIRECTORY_SORT_SIZE) == ASTRA_VFS_OK);
+    assert(model.entries[0].byte_size == 2u);
+    assert(model.entries[model.count - 1u].byte_size == 255u);
+    assert(astra_directory_snapshot_sort(&model, ASTRA_DIRECTORY_SORT_MODIFIED) == ASTRA_VFS_OK);
+    assert(model.entries[0].kind == ASTRA_VFS_KIND_DIRECTORY);
+    assert(astra_directory_snapshot_sort(&model, ASTRA_DIRECTORY_SORT_KIND) == ASTRA_VFS_OK);
+    assert(astra_directory_snapshot_sort(&model, 4u) == ASTRA_VFS_ERR_INVALID);
+    fail_after = allocations + 1u;
+    assert(astra_directory_snapshot_sort(&model, ASTRA_DIRECTORY_SORT_NAME) == ASTRA_VFS_ERR_LIMIT);
+    assert(model.count == 256u);
+    fail_after = 0u;
     astra_directory_snapshot_dispose(&model);
     reset(0u);
     assert(astra_directory_snapshot_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_OK);
