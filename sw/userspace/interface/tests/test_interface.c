@@ -2337,6 +2337,15 @@ static void test_outline_table_control(void)
     assert(astra_interface_outline_table_set_rows(&context, &control,
         expanded, 3u, expanded_cells, 3u, expanded_rows) == ASTRA_OK);
     assert(outline.rows == expanded_rows && collection.items == expanded);
+    {
+        AstraControlFrame text, clip;
+        assert(astra_interface_collection_text_rect(&context, &control,
+            1u, &text, &clip) == ASTRA_OK);
+        assert(text.x == control._private_frame.x +
+            theme.control_padding_x + 36 &&
+            text.y == control._private_frame.y +
+                2 * (int32_t)theme.control_height);
+    }
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     assert(astra_interface_table_set_sort(&context, &control, 0u, 0u) ==
         ASTRA_OK);
@@ -5393,8 +5402,19 @@ static void test_shared_file_panel(void)
         places, 3u, place_items, 3u) == ASTRA_OK);
     {
         char destination[ASTRA_VFS_PATH_MAX];
+        const AstraDirectoryEntry *resolved = NULL;
         uint32_t previous_view = panel.view_mode;
         panel.view_mode = ASTRA_FILE_PANEL_VIEW_LIST;
+        assert(astra_interface_file_panel_path_at(&panel,
+            300u + ASTRA_FILE_PANEL_LIST, 1,
+            destination, sizeof(destination), &resolved) == ASTRA_OK);
+        assert(strcmp(destination, "/dh0/Stories/zork1.z3") == 0 &&
+            resolved != NULL && resolved->kind == ASTRA_VFS_KIND_FILE);
+        assert(astra_interface_file_panel_path_at(&panel,
+            300u + ASTRA_FILE_PANEL_LIST, -1,
+            destination, sizeof(destination), &resolved) == ASTRA_OK);
+        assert(strcmp(destination, "/dh0/Stories") == 0 &&
+            resolved == NULL);
         assert(astra_interface_file_panel_directory_at(&panel,
             300u + ASTRA_FILE_PANEL_PLACES_LIST, 2,
             destination, sizeof(destination)) == ASTRA_OK);
@@ -5943,6 +5963,123 @@ static void test_shared_colour_panel(void)
         ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_file_panel_outline(void)
+{
+    AstraDirectoryEntry root[2] = {
+        {.name = "Stories", .kind = ASTRA_VFS_KIND_DIRECTORY},
+        {.name = "readme.txt", .kind = ASTRA_VFS_KIND_FILE}
+    };
+    AstraDirectoryEntry child[2] = {
+        {.name = "Zork", .kind = ASTRA_VFS_KIND_DIRECTORY},
+        {.name = "zork1.z3", .kind = ASTRA_VFS_KIND_FILE}
+    };
+    AstraDirectoryEntry grandchild[1] = {
+        {.name = "zork2.z3", .kind = ASTRA_VFS_KIND_FILE}
+    };
+    AstraCollectionItem items[8], spare[8];
+    const AstraSurface *icons[8] = {0};
+    AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    uint64_t selected_ids[8] = {0};
+    AstraSelectionSet selection = ASTRA_SELECTION_SET_INIT;
+    AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraFilePanelInfo info = ASTRA_FILE_PANEL_INFO_INIT;
+    AstraFilePanel panel = ASTRA_FILE_PANEL_INIT;
+    AstraFilePanelOutline *outline = NULL;
+    AstraControl controls[ASTRA_FILE_PANEL_CONTROL_COUNT];
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    const AstraDirectoryEntry *resolved = NULL;
+    char path[ASTRA_VFS_PATH_MAX];
+    uint32_t depth, expanded, loaded;
+
+    scroll_info.line_height = 16u;
+    assert(astra_scroll_init(&scroll, &scroll_info) == ASTRA_OK);
+    info.first_id = 800u;
+    info.mode = ASTRA_FILE_PANEL_BROWSE;
+    info.directory = "/dh0";
+    info.item_storage = items;
+    info.item_capacity = 8u;
+    info.spare_item_storage = spare;
+    info.spare_item_capacity = 8u;
+    info.grid_icons = icons;
+    info.grid_icon_capacity = 8u;
+    info.collection = &collection;
+    info.scroll = &scroll;
+    assert(astra_interface_file_panel_init(&panel, controls, &info) == ASTRA_OK);
+    assert(astra_interface_selection_init(&selection, selected_ids, 8u) == ASTRA_OK);
+    assert(astra_interface_collection_multi_bind(&collection,
+        &selection) == ASTRA_OK);
+    assert(astra_interface_file_panel_outline_bind(&panel,
+        &controls[ASTRA_FILE_PANEL_LIST], &outline) == ASTRA_OK);
+    assert(controls[ASTRA_FILE_PANEL_LIST]._private_control_kind ==
+        ASTRA_CONTROL_OUTLINE_TABLE);
+    assert(astra_interface_ui_init(&context, controls,
+        ASTRA_FILE_PANEL_CONTROL_COUNT, 640u, 480u) == ASTRA_OK);
+    assert(astra_interface_file_panel_set_directory(&panel, &context,
+        controls, "/dh0", root, 2u, spare, 8u) == ASTRA_OK);
+    assert(astra_interface_file_panel_outline_visible_count(outline) == 2u);
+    assert(astra_interface_file_panel_outline_row(outline, 0u,
+        path, sizeof(path), &resolved, &depth, &expanded, &loaded) == ASTRA_OK);
+    assert(strcmp(path, "/dh0/Stories") == 0 && depth == 0u &&
+        expanded == 0u && loaded == 0u &&
+        resolved->kind == ASTRA_VFS_KIND_DIRECTORY);
+    assert(astra_interface_file_panel_outline_set_children(outline, &context,
+        &controls[ASTRA_FILE_PANEL_LIST], 0u, child, 2u) == ASTRA_OK);
+    assert(astra_interface_file_panel_outline_visible_count(outline) == 4u);
+    assert(astra_interface_file_panel_outline_row(outline, 2u,
+        path, sizeof(path), &resolved, &depth, NULL, NULL) == ASTRA_OK);
+    assert(strcmp(path, "/dh0/Stories/zork1.z3") == 0 && depth == 1u &&
+        resolved->kind == ASTRA_VFS_KIND_FILE);
+    assert(astra_interface_file_panel_outline_directory_at(outline,
+        -1, path, sizeof(path)) == ASTRA_OK &&
+        strcmp(path, "/dh0") == 0);
+    assert(astra_interface_file_panel_outline_directory_at(outline,
+        2, path, sizeof(path)) == ASTRA_ERROR_NOT_PRESENT);
+    assert(astra_interface_file_panel_outline_directory_at(outline,
+        1, path, sizeof(path)) == ASTRA_OK &&
+        strcmp(path, "/dh0/Stories/Zork") == 0);
+    assert(astra_interface_file_panel_outline_set_children(outline, &context,
+        &controls[ASTRA_FILE_PANEL_LIST], 1u, grandchild, 1u) == ASTRA_OK);
+    assert(astra_interface_file_panel_outline_visible_count(outline) == 5u);
+    assert(astra_interface_file_panel_outline_row(outline, 2u,
+        path, sizeof(path), &resolved, &depth, NULL, NULL) == ASTRA_OK);
+    assert(strcmp(path, "/dh0/Stories/Zork/zork2.z3") == 0 && depth == 2u);
+    {
+        AstraUIAction action = ASTRA_UI_ACTION_INIT;
+        uint32_t outcome = ASTRA_FILE_PANEL_NONE;
+        panel.view_mode = ASTRA_FILE_PANEL_VIEW_LIST;
+        action.type = ASTRA_UI_ACTION_ACTIVATE;
+        action.control_id = 800u + ASTRA_FILE_PANEL_LIST;
+        action.value = 2;
+        assert(astra_interface_file_panel_action(&panel, &context,
+            controls, &action, &outcome) == ASTRA_OK);
+        assert(outcome == ASTRA_FILE_PANEL_PICKED &&
+            strcmp(panel.target, "/dh0/Stories/Zork/zork2.z3") == 0);
+        assert(astra_interface_control_set_value(&context,
+            &controls[ASTRA_FILE_PANEL_LIST], 2) == ASTRA_OK);
+        action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+        assert(astra_interface_file_panel_action(&panel, &context,
+            controls, &action, &outcome) == ASTRA_OK);
+        assert(collection.selected_id == collection.items[2].id);
+        action.control_id = 800u + ASTRA_FILE_PANEL_VIEW;
+        action.value = ASTRA_FILE_PANEL_VIEW_GRID;
+        assert(astra_interface_file_panel_action(&panel, &context,
+            controls, &action, &outcome) == ASTRA_OK);
+        assert(selection.count == 0u);
+    }
+    assert(astra_interface_file_panel_outline_set_expanded(outline, &context,
+        &controls[ASTRA_FILE_PANEL_LIST], 0u, 0u) == ASTRA_OK);
+    assert(astra_interface_file_panel_outline_visible_count(outline) == 2u);
+    assert(astra_interface_file_panel_outline_set_expanded(outline, &context,
+        &controls[ASTRA_FILE_PANEL_LIST], 0u, 1u) == ASTRA_OK);
+    assert(astra_interface_file_panel_outline_visible_count(outline) == 5u);
+    assert(astra_interface_file_panel_outline_id(outline,
+        collection.items[2].id, path, sizeof(path), &resolved) == ASTRA_OK);
+    assert(strcmp(path, "/dh0/Stories/Zork/zork2.z3") == 0);
+    astra_interface_file_panel_outline_dispose(outline);
+    astra_interface_file_panel_dispose(&panel);
+}
+
 int main(void)
 {
     static const char malformed_utf8[] = {(char)0xed, (char)0xa0, (char)0x80};
@@ -6039,6 +6176,7 @@ int main(void)
     test_shared_colour_panel();
     test_file_inspector();
     test_shared_file_panel();
+    test_file_panel_outline();
     test_shared_font_panel();
     test_text_field_rejections();
     test_text_view();

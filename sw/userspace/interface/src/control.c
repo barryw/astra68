@@ -9990,6 +9990,47 @@ AstraResult astra_interface_ui_geometry(const AstraUIContext *context,
     return ASTRA_OK;
 }
 
+AstraResult astra_interface_collection_text_rect(
+    const AstraUIContext *context, const AstraControl *control,
+    uint32_t row, AstraControlFrame *text, AstraControlFrame *clip)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraControlFrame frame;
+    uint32_t index = control_index(context, control);
+    const AstraCollectionModel *collection;
+    uint32_t indent = 0u;
+    uint64_t top;
+    AstraResult result;
+    if (index == CONTROL_NONE || text == NULL || clip == NULL ||
+        (control->_private_control_kind != ASTRA_CONTROL_LIST &&
+         !TABLE_KINDS(control->_private_control_kind)))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    collection = const_collection_model(control);
+    if (collection == NULL || row >= collection->item_count)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_interface_ui_geometry(context, index, &frame, clip);
+    if (result != ASTRA_OK) return result;
+    if (control->_private_control_kind == ASTRA_CONTROL_OUTLINE_TABLE) {
+        const AstraOutlineTableModel *outline =
+            const_outline_table_model(control);
+        indent = outline->rows[row].depth * 16u + 20u;
+    }
+    top = (uint64_t)row * theme.control_height +
+        (TABLE_KINDS(control->_private_control_kind) ?
+            theme.control_height : 0u);
+    if (top > INT32_MAX || frame.y > INT32_MAX - (int32_t)top ||
+        frame.x > INT32_MAX - theme.control_padding_x ||
+        frame.x + theme.control_padding_x > INT32_MAX - (int32_t)indent)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint32_t inset = (uint32_t)theme.control_padding_x + indent;
+    *text = (AstraControlFrame){frame.x + (int32_t)inset,
+        frame.y + (int32_t)top,
+        frame.width > inset + (uint32_t)theme.control_padding_x ?
+            frame.width - inset - (uint32_t)theme.control_padding_x : 0u,
+        theme.control_height};
+    return ASTRA_OK;
+}
+
 AstraResult astra_interface_ui_pointer_hit(const AstraUIContext *context,
     int32_t x, int32_t y, uint32_t *control_id, int32_t *row)
 {

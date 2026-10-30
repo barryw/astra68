@@ -234,3 +234,17 @@ ASTRA_INTERFACE_12.6 {
         astra_interface_outline_table_init;
         astra_interface_outline_table_set_rows;
 } ASTRA_INTERFACE_12.3;
+
+ASTRA_INTERFACE_12.7 {
+    global:
+        astra_interface_file_panel_path_at;
+        astra_interface_file_panel_outline_bind;
+        astra_interface_file_panel_outline_dispose;
+        astra_interface_file_panel_outline_visible_count;
+        astra_interface_file_panel_outline_row;
+        astra_interface_file_panel_outline_id;
+        astra_interface_file_panel_outline_directory_at;
+        astra_interface_file_panel_outline_set_children;
+        astra_interface_file_panel_outline_set_expanded;
+        astra_interface_collection_text_rect;
+} ASTRA_INTERFACE_12.6;

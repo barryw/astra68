@@ -68,6 +68,20 @@ loads children and atomically publishes a new visible row set with
 `astra_interface_outline_table_set_rows`. The control never reads a directory
 or owns a filesystem path. Interface Gallery shows the control on Collections.
 
+Interface Kit 12.7 adds `AstraFilePanelOutline`, an optional List presentation
+for shared File Panel. Bind it after `astra_interface_file_panel_init` and
+before `astra_interface_ui_init`, then dispose it after UI shutdown. File Panel
+still owns root filtering, metadata, and Grid/Columns. Outline keeps stable
+visible row identities and cached child entries; the caller loads a folder only
+when `ASTRA_UI_ACTION_EXPANSION_REQUESTED` arrives, then passes its snapshot to
+`astra_interface_file_panel_outline_set_children`. That call copies entries,
+so the snapshot can be released. `set_expanded` collapses or reopens cached
+children. `outline_row`, `outline_id`, and `outline_directory_at` resolve
+nested paths and drop destinations without duplicating row math in an app.
+`astra_interface_file_panel_path_at` resolves ordinary File Panel rows in any
+view, including files, and returns the borrowed entry when one exists. The
+caller remains responsible for I/O, capabilities, and open policy.
+
 Interface Kit 12.2 adds `AstraFileInspector` for a selected directory entry.
 Initialize it with `astra_interface_file_inspector_init`, using a parent flex
 container and a live placeholder icon. Call `astra_interface_file_inspector_set`

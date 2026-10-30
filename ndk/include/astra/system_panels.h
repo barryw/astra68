@@ -595,6 +595,100 @@ AstraResult astra_interface_file_panel_entry_at(
     const AstraFilePanel *panel, uint32_t control_id, int32_t row,
     uint32_t *entry_index, uint32_t *depth);
 
+/** Resolve any File Panel collection row to its absolute file or folder path.
+ * Blank space resolves to that view's directory; Places resolves to its path.
+ * Returns NOT_PRESENT for an action-only Place or an unrelated control.
+ * The optional entry receives the borrowed directory entry for a real row.
+ * @since Interface Kit 12.7.
+ * @param panel Initialized File Panel.
+ * @param control_id Hit collection control ID.
+ * @param row Visible row, or -1 for blank space.
+ * @param path Receives absolute path.
+ * @param capacity Path buffer bytes including terminator.
+ * @param entry Optional borrowed entry output, null for blank space/Places.
+ * @return ASTRA_OK, NOT_PRESENT, or validation/buffer error.
+ */
+AstraResult astra_interface_file_panel_path_at(
+    const AstraFilePanel *panel, uint32_t control_id, int32_t row,
+    char *path, uint32_t capacity, const AstraDirectoryEntry **entry);
+
+/** Optional expandable List presentation for a File Panel. Interface Kit owns
+ * row identity, metadata, disclosure, and path lookup. Caller loads children
+ * only after an expansion request and may release that snapshot after set.
+ * Bind after file_panel_init and before ui_init; dispose after UI shutdown.
+ * @since Interface Kit 12.7. */
+typedef struct AstraFilePanelOutline AstraFilePanelOutline;
+/** Bind optional outline List presentation.
+ * @param panel Initialized File Panel.
+ * @param list_control Panel's List control, before UI init.
+ * @param outline Receives owned outline handle.
+ * @return ASTRA_OK or validation/allocation error. */
+AstraResult astra_interface_file_panel_outline_bind(AstraFilePanel *panel,
+    AstraControl *list_control, AstraFilePanelOutline **outline);
+/** Release outline after UI shutdown.
+ * @param outline Outline handle, or null. */
+void astra_interface_file_panel_outline_dispose(AstraFilePanelOutline *outline);
+/** Count current visible outline rows.
+ * @param outline Bound outline handle.
+ * @return Visible row count, or zero for null. */
+uint32_t astra_interface_file_panel_outline_visible_count(
+    const AstraFilePanelOutline *outline);
+/** Resolve visible outline row and current expansion state.
+ * @param outline Bound outline handle.
+ * @param row Zero-based visible row.
+ * @param path Receives absolute path.
+ * @param capacity Path buffer bytes including terminator.
+ * @param entry Optional borrowed entry output.
+ * @param depth Optional nesting depth output.
+ * @param expanded Optional expanded flag output.
+ * @param loaded Optional cached-children flag output.
+ * @return ASTRA_OK, NOT_PRESENT, or validation/buffer error. */
+AstraResult astra_interface_file_panel_outline_row(
+    const AstraFilePanelOutline *outline, uint32_t row,
+    char *path, uint32_t capacity, const AstraDirectoryEntry **entry,
+    uint32_t *depth, uint32_t *expanded, uint32_t *loaded);
+/** Resolve visible stable row ID to path and entry.
+ * @param outline Bound outline handle.
+ * @param id Stable collection row ID.
+ * @param path Receives absolute path.
+ * @param capacity Path buffer bytes including terminator.
+ * @param entry Optional borrowed entry output.
+ * @return ASTRA_OK, NOT_PRESENT, or validation/buffer error. */
+AstraResult astra_interface_file_panel_outline_id(
+    const AstraFilePanelOutline *outline, uint64_t id,
+    char *path, uint32_t capacity, const AstraDirectoryEntry **entry);
+/** Folder drop destination for an outline row, or current directory for -1.
+ * @param outline Bound outline handle.
+ * @param row Visible row, or -1 for blank space.
+ * @param path Receives absolute directory path.
+ * @param capacity Path buffer bytes including terminator.
+ * @return ASTRA_OK, NOT_PRESENT for files, or validation/buffer error. */
+AstraResult astra_interface_file_panel_outline_directory_at(
+    const AstraFilePanelOutline *outline, int32_t row,
+    char *path, uint32_t capacity);
+/** Publish children after caller loads a directory. Entries are copied.
+ * @param outline Bound outline handle.
+ * @param context Owning UI context.
+ * @param list_control Bound outline List control.
+ * @param row Visible parent folder row.
+ * @param entries Child directory snapshot.
+ * @param count Child entry count.
+ * @return ASTRA_OK or validation/allocation/update error. */
+AstraResult astra_interface_file_panel_outline_set_children(
+    AstraFilePanelOutline *outline, AstraUIContext *context,
+    AstraControl *list_control, uint32_t row,
+    const AstraDirectoryEntry *entries, uint32_t count);
+/** Collapse or reopen cached children; never performs I/O.
+ * @param outline Bound outline handle.
+ * @param context Owning UI context.
+ * @param list_control Bound outline List control.
+ * @param row Visible folder row.
+ * @param expanded Zero to collapse, one to reopen.
+ * @return ASTRA_OK or validation/allocation/update error. */
+AstraResult astra_interface_file_panel_outline_set_expanded(
+    AstraFilePanelOutline *outline, AstraUIContext *context,
+    AstraControl *list_control, uint32_t row, uint32_t expanded);
+
 /** Map a Places context-menu action to its sidebar row. Blank space or an
  * action outside Places yields UINT32_MAX. Callers own the place's commands;
  * File Panel owns row hit testing and index validation.

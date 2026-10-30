@@ -23,7 +23,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.12. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 12u
 /** Current Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 6u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 7u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -777,6 +777,18 @@ AstraResult astra_interface_ui_layout(AstraUIContext *context,
  */
 AstraResult astra_interface_ui_geometry(const AstraUIContext *context,
     uint32_t index, AstraControlFrame *frame, AstraControlFrame *clip);
+/** Text region for one visible List, Table, or Outline Table row. Shared row
+ * metrics include Table header and outline indentation. Useful for inline
+ * editors and other overlays. @since Interface Kit 12.7.
+ * @param context Laid-out UI context.
+ * @param control Retained List or Table control in context.
+ * @param row Zero-based visible row.
+ * @param text Receives row text bounds.
+ * @param clip Receives inherited visible clip.
+ * @return ASTRA_OK, WOULD_BLOCK before layout, or validation error. */
+AstraResult astra_interface_collection_text_rect(
+    const AstraUIContext *context, const AstraControl *control,
+    uint32_t row, AstraControlFrame *text, AstraControlFrame *clip);
 /** Hit-test a client-local pointer against retained controls. The row is -1
  * for blank collection space or controls without rows. A miss returns ID 0.
  * Uses the same clipped geometry and row mapping as context-menu dispatch.

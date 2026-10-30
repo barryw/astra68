@@ -88,6 +88,8 @@ static AstraToolbarActions toolbar = ASTRA_TOOLBAR_ACTIONS_INIT;
 static AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
 static AstraControl *controls;
 static AstraFilePanel browser = ASTRA_FILE_PANEL_INIT;
+static AstraFilePanelOutline *browser_outline;
+static char outline_path[ASTRA_VFS_PATH_MAX];
 static AstraFileInspector inspector = ASTRA_FILE_INSPECTOR_INIT;
 static AstraCollectionModel browser_collection = ASTRA_COLLECTION_MODEL_INIT;
 static AstraSelectionSet browser_selection = ASTRA_SELECTION_SET_INIT;
@@ -196,6 +198,33 @@ static AstraResult selection_set(const char *parent,
     return ASTRA_OK;
 }
 
+static AstraResult selection_set_outline(uint64_t id)
+{
+    const AstraDirectoryEntry *entry = NULL;
+    selection_clear();
+    if (id == 0u) return ASTRA_OK;
+    uint32_t row = UINT32_MAX, depth = 0u;
+    for (uint32_t at = 0u; at < browser_collection.item_count; ++at)
+        if (browser_collection.items[at].id == id) {
+            row = at;
+            break;
+        }
+    if (row == UINT32_MAX) return ASTRA_ERROR_NOT_PRESENT;
+    AstraResult result = astra_interface_file_panel_outline_row(browser_outline,
+        row, outline_path, sizeof(outline_path), &entry, &depth, NULL, NULL);
+    if (result != ASTRA_OK) return result;
+    if (depth == 0u && id <= directory.count)
+        return selection_set(root, directory.entries, directory.count,
+            (uint32_t)id - 1u, 0u);
+    if (!astra_string_copy(selected_path, sizeof(selected_path),
+            outline_path))
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    selected_kind = entry->kind;
+    selected_depth = UINT32_MAX;
+    selected_row = row;
+    return ASTRA_OK;
+}
+
 static AstraResult focus_root_entry(uint32_t index)
 {
     if (index >= directory.count) return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -219,12 +248,18 @@ static uint32_t selection_count(void)
 {
     if (recent_mode != 0u) return 0u;
     if (selected_path[0] == '\0') return 0u;
-    return selected_depth == 0u ? browser_selection.count : 1u;
+    return browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST ?
+        browser_selection.count :
+        selected_depth == 0u ? browser_selection.count : 1u;
 }
 
 static uint32_t selection_path_at(uint32_t at, char *path, uint32_t capacity)
 {
     if (at >= selection_count()) return ASTRA_VFS_ERR_INVALID;
+    if (browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST)
+        return astra_interface_file_panel_outline_id(browser_outline,
+            browser_selection.ids[at], path, capacity, NULL) == ASTRA_OK ?
+            ASTRA_VFS_OK : ASTRA_VFS_ERR_INVALID;
     if (selected_depth != 0u)
         return astra_string_copy(path, capacity, selected_path) ?
             ASTRA_VFS_OK : ASTRA_VFS_ERR_NAME_TOO_LONG;
@@ -773,6 +808,10 @@ static AstraResult build_view(AstraHandle gui)
         astra_interface_collection_multi_bind(&column_models[0],
             &browser_selection) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (astra_interface_file_panel_outline_bind(&browser,
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST),
+            &browser_outline) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     status.first_id = 1u + BROWSER_PANEL_CONTROL_COUNT;
     status.left = "Reading volume...";
     status.left_length = sizeof("Reading volume...") - 1u;
@@ -985,7 +1024,13 @@ static AstraResult browser_update_inspector(void)
     const AstraDirectoryEntry *entry = NULL;
     const AstraSurface *icon = NULL;
 
-    if (selected_path[0] != '\0' && selected_depth < BROWSER_COLUMNS) {
+    if (selected_path[0] != '\0' && selected_depth == UINT32_MAX &&
+        browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST) {
+        (void)astra_interface_file_panel_outline_id(browser_outline,
+            browser_collection.selected_id, outline_path,
+            sizeof(outline_path), &entry);
+    } else if (selected_path[0] != '\0' &&
+        selected_depth < BROWSER_COLUMNS) {
         if (selected_depth != 0u) {
             snapshot = &child_directories[selected_depth - 1u];
             parent = child_paths[selected_depth - 1u];
@@ -1028,15 +1073,21 @@ static AstraResult browser_update_status(void)
         (void)astra_string_append(&line, " of ");
         (void)astra_string_append_u64(&line, directory.count);
         (void)astra_string_append(&line, " items");
-    } else if (browser_selection.count > 1u && selected_depth == 0u) {
+    } else if (browser_selection.count > 1u &&
+        (selected_depth == 0u ||
+         browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST)) {
         (void)astra_string_append_u64(&line, browser_selection.count);
         (void)astra_string_append(&line, " of ");
-        (void)astra_string_append_u64(&line, directory.count);
+        (void)astra_string_append_u64(&line,
+            browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST ?
+                browser_collection.item_count : directory.count);
         (void)astra_string_append(&line, " selected");
     } else if (selection_count() != 0u) {
         if (selected_depth == 0u) {
             (void)astra_string_append(&line, "1 of ");
-            (void)astra_string_append_u64(&line, directory.count);
+            (void)astra_string_append_u64(&line,
+                browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST ?
+                    browser_collection.item_count : directory.count);
         } else (void)astra_string_append(&line, "1");
         (void)astra_string_append(&line, " selected · ");
         const char *name = astra_folder_leaf(selected_path);
@@ -1241,10 +1292,14 @@ static AstraResult paint(void)
         (edit_saved_filename[0] != '\0' ||
          browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST ||
          browser.view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS)) {
-        const AstraCollectionItem *items = browser.items;
-        uint32_t item_count = browser.item_count;
+        const AstraCollectionItem *items = browser_collection.items;
+        uint32_t item_count = browser_collection.item_count;
         uint32_t control_index = ASTRA_FILE_PANEL_LIST;
         uint64_t edited_id = (uint64_t)edit_index + 1u;
+        if (edit_saved_filename[0] == '\0' &&
+            browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST &&
+            edit_depth == UINT32_MAX && edit_index < item_count)
+            edited_id = items[edit_index].id;
         if (edit_saved_filename[0] != '\0') {
             items = browser.place_items;
             item_count = browser.place_count;
@@ -1264,27 +1319,27 @@ static AstraResult paint(void)
             control_index = ASTRA_FILE_PANEL_CONTROL_COUNT + 2u +
                 2u * edit_depth;
         }
-        AstraControlFrame frame, clip;
-        if (astra_interface_ui_geometry(&ui,
-                TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT + control_index,
-                &frame, &clip) == ASTRA_OK) {
-            for (uint32_t row = 0u; row < item_count; ++row) {
-                if (items[row].id != edited_id) continue;
+        for (uint32_t row = 0u; row < item_count; ++row) {
+            if (items[row].id != edited_id) continue;
+            AstraControlFrame frame, clip;
+            if (astra_interface_collection_text_rect(&ui,
+                    BROWSER_CONTROL(control_index), row,
+                    &frame, &clip) == ASTRA_OK) {
+                uint32_t width = frame.width < ASTRA_INLINE_EDIT_WIDTH ?
+                    frame.width : ASTRA_INLINE_EDIT_WIDTH;
                 AstraBlitOptions options = ASTRA_BLIT_OPTIONS_INIT;
-                AstraRectI32 source = {0, 0, ASTRA_INLINE_EDIT_WIDTH,
+                AstraRectI32 source = {0, 0, width,
                     ASTRA_INLINE_EDIT_HEIGHT};
-                AstraRectI32 target = {
-                    frame.x + theme.control_padding_x,
-                    frame.y + (int32_t)(row * theme.control_height),
-                    ASTRA_INLINE_EDIT_WIDTH, ASTRA_INLINE_EDIT_HEIGHT};
+                AstraRectI32 target = {frame.x, frame.y,
+                    width, ASTRA_INLINE_EDIT_HEIGHT};
                 AstraRectI32 bounds = {clip.x, clip.y, clip.width,
                     clip.height};
                 result = astra_draw_list_set_clip(&list, &bounds);
-                if (result == ASTRA_OK)
+                if (result == ASTRA_OK && width != 0u)
                     result = astra_draw_blit(&list, &name_edit.surface,
                         &source, &target, &options);
-                break;
             }
+            break;
         }
     }
     if (result == ASTRA_OK)
@@ -1842,9 +1897,9 @@ static AstraResult saved_context_remove(void *opaque,
 {
     (void)opaque;
     (void)args;
+    char path[ASTRA_VFS_PATH_MAX];
     const AstraSavedQuery *query = saved_context_query();
     AstraSavedQuery current = ASTRA_SAVED_QUERY_INIT;
-    char path[ASTRA_VFS_PATH_MAX];
     if (query == NULL || astra_folder_path(saved_query_directory,
             query->filename, path, sizeof(path)) != ASTRA_VFS_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -1977,6 +2032,42 @@ static AstraResult browser_load_child(void)
         astra_runtime_deallocate(child_items[slot]);
         child_items[slot] = NULL;
     } else record_recent_open(child_paths[slot], ASTRA_VFS_KIND_DIRECTORY);
+    return result;
+}
+
+static AstraResult browser_expand_row(uint32_t row)
+{
+    AstraDirectorySnapshot children = ASTRA_DIRECTORY_SNAPSHOT_INIT;
+    const AstraDirectoryEntry *entry = NULL;
+    uint32_t expanded = 0u, loaded = 0u;
+    uint32_t status;
+    AstraResult result = astra_interface_file_panel_outline_row(
+        browser_outline, row, outline_path, sizeof(outline_path), &entry,
+        NULL, &expanded, &loaded);
+    if (result != ASTRA_OK || entry == NULL ||
+        entry->kind != ASTRA_VFS_KIND_DIRECTORY)
+        return result == ASTRA_OK ? ASTRA_ERROR_INVALID_ARGUMENT : result;
+    if (loaded != 0u)
+        return astra_interface_file_panel_outline_set_expanded(
+            browser_outline, &ui, BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST),
+            row, !expanded);
+    status = astra_directory_snapshot_load(&children,
+        &filesystem.filesystem, outline_path, NULL);
+    if (status == ASTRA_VFS_OK) status = prepare_directory(&children);
+    if (status != ASTRA_VFS_OK) {
+        astra_directory_snapshot_dispose(&children);
+        return astra_result_from_service(status);
+    }
+    uint32_t visible = astra_interface_file_panel_outline_visible_count(
+        browser_outline);
+    if (children.count > UINT32_MAX - visible)
+        result = ASTRA_ERROR_NO_RESOURCES;
+    else result = browser_reserve(visible + children.count);
+    if (result == ASTRA_OK)
+        result = astra_interface_file_panel_outline_set_children(
+            browser_outline, &ui, BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST),
+            row, children.entries, children.count);
+    astra_directory_snapshot_dispose(&children);
     return result;
 }
 
@@ -2618,8 +2709,12 @@ static AstraResult drag_destination_at(int32_t x, int32_t y,
     AstraResult result = astra_interface_ui_pointer_hit(&ui, x, y,
         &control_id, &row);
     if (result != ASTRA_OK) return result;
-    result = astra_interface_file_panel_directory_at(&browser,
-        control_id, row, path, capacity);
+    result = control_id == 1u + ASTRA_FILE_PANEL_LIST &&
+        browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST ?
+        astra_interface_file_panel_outline_directory_at(browser_outline,
+            row, path, capacity) :
+        astra_interface_file_panel_directory_at(&browser,
+            control_id, row, path, capacity);
     if (result != ASTRA_OK) return result;
     AstraVfsClipboardEntry target = {0};
     result = copy_reference_for(path, &target);
@@ -2736,6 +2831,19 @@ static AstraResult atlas_drag_pointer(const AstraWindowEvent *event)
         AstraResult result = astra_interface_ui_pointer_hit(&ui,
             event->data.pointer.x, event->data.pointer.y, &control_id, &row);
         if (result != ASTRA_OK) return result;
+        if (control_id == 1u + ASTRA_FILE_PANEL_LIST &&
+            browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST) {
+            const AstraDirectoryEntry *entry = NULL;
+            result = row < 0 ? ASTRA_ERROR_NOT_PRESENT :
+                astra_interface_file_panel_outline_row(browser_outline,
+                    (uint32_t)row, outline_path, sizeof(outline_path), &entry,
+                    NULL, NULL, NULL);
+            drag_source_depth = UINT32_MAX;
+            drag_source_index = result == ASTRA_OK ? (uint32_t)row : UINT32_MAX;
+            source_hit = result == ASTRA_OK && entry != NULL &&
+                (entry->kind == ASTRA_VFS_KIND_FILE ||
+                 entry->kind == ASTRA_VFS_KIND_DIRECTORY);
+        } else {
         result = astra_interface_file_panel_entry_at(&browser,
             control_id, row, &index, &depth);
         if (result != ASTRA_OK) return result;
@@ -2751,12 +2859,23 @@ static AstraResult atlas_drag_pointer(const AstraWindowEvent *event)
         source_hit = index < count && entries != NULL &&
             (entries[index].kind == ASTRA_VFS_KIND_FILE ||
              entries[index].kind == ASTRA_VFS_KIND_DIRECTORY);
+        }
     }
     AstraResult result = astra_interface_drag_gesture_event(&drag_gesture,
         event, source_hit, &triggered);
     if (result != ASTRA_OK || triggered == 0u) return result;
     if (drag_source_index == UINT32_MAX) return ASTRA_OK;
-    if (drag_source_depth == 0u) {
+    if (drag_source_depth == UINT32_MAX) {
+        uint32_t row = drag_source_index;
+        uint64_t id = browser_collection.items[row].id;
+        if (!astra_interface_selection_contains(&browser_selection, id)) {
+            result = astra_interface_control_set_value(&ui,
+                root_selection_control(), (int32_t)row);
+            if (result != ASTRA_OK) return result;
+        }
+        result = selection_set_outline(id);
+        if (result != ASTRA_OK) return result;
+    } else if (drag_source_depth == 0u) {
         if (!astra_interface_selection_contains(&browser_selection,
                 (uint64_t)drag_source_index + 1u)) {
             result = focus_root_entry(drag_source_index);
@@ -3579,6 +3698,33 @@ static AstraResult run(AstraHandle gui)
                 result = astra_window_event_try(&window, &event);
                 continue;
             }
+            if (action.type == ASTRA_UI_ACTION_EXPANSION_REQUESTED &&
+                action.control_id == 1u + ASTRA_FILE_PANEL_LIST &&
+                browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST) {
+                AstraResult changed = action.value < 0 ?
+                    ASTRA_ERROR_INVALID_ARGUMENT :
+                    browser_expand_row((uint32_t)action.value);
+                if (changed != ASTRA_OK) {
+                    (void)astra_log_failure("atlas expand folder",
+                        (uint32_t)(-changed));
+                    open_error(gui, changed);
+                } else {
+                    if (browser_collection.selected_id == 0u)
+                        selection_clear();
+                    else {
+                        changed = selection_set_outline(
+                            browser_collection.selected_id);
+                        if (changed != ASTRA_OK) return changed;
+                    }
+                    changed = layout();
+                    if (changed != ASTRA_OK) return changed;
+                    changed = browser_update_status();
+                    if (changed != ASTRA_OK) return changed;
+                }
+                repaint = 1u;
+                result = astra_window_event_try(&window, &event);
+                continue;
+            }
             if (action.control_id == RECENT_TABLE_ID &&
                 (action.type == ASTRA_UI_ACTION_VALUE_CHANGED ||
                  action.type == ASTRA_UI_ACTION_ACTIVATE)) {
@@ -3610,6 +3756,9 @@ static AstraResult run(AstraHandle gui)
                      action.control_id == 1u + ASTRA_FILE_PANEL_LIST)) {
                     uint64_t primary = browser_collection.selected_id;
                     if (browser_selection.count != 0u && primary != 0u &&
+                        action.control_id == 1u + ASTRA_FILE_PANEL_LIST)
+                        browser_result = selection_set_outline(primary);
+                    else if (browser_selection.count != 0u && primary != 0u &&
                         primary <= directory.count)
                         browser_result = selection_set(root, directory.entries,
                             directory.count, (uint32_t)primary - 1u, 0u);
@@ -3721,16 +3870,33 @@ static AstraResult run(AstraHandle gui)
                     continue;
                 }
                 uint32_t depth = 0u, index = UINT32_MAX;
+                uint32_t outline_hit = action.control_id ==
+                    1u + ASTRA_FILE_PANEL_LIST &&
+                    browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST;
                 if (visible_data && directory.status == ASTRA_VFS_OK) {
-                    AstraResult hit = astra_interface_file_panel_context_entry(
-                        &browser, &action, &index, &depth);
-                    if (hit != ASTRA_OK) return hit;
+                    if (outline_hit) {
+                        if (action.value >= 0 &&
+                            (uint64_t)action.value <
+                                browser_collection.item_count)
+                            index = 0u;
+                    } else {
+                        AstraResult hit = astra_interface_file_panel_context_entry(
+                            &browser, &action, &index, &depth);
+                        if (hit != ASTRA_OK) return hit;
+                    }
                 }
                 {
+                    if (outline_hit && index != UINT32_MAX) {
+                        AstraResult focused = astra_interface_control_set_value(
+                            &ui, root_selection_control(), action.value);
+                        if (focused != ASTRA_OK) return focused;
+                    }
                     const AstraFilePanelColumnSnapshot *snapshot =
                         depth < browser.column_count ?
                             &browser.column_snapshots[depth] : NULL;
-                    AstraResult picked = depth == 0u ?
+                    AstraResult picked = outline_hit && index != UINT32_MAX ?
+                        selection_set_outline(browser_collection.items[
+                            (uint32_t)action.value].id) : depth == 0u ?
                         selection_set(root, directory.entries,
                             directory.count, index, 0u) :
                         snapshot != NULL ?
@@ -3747,7 +3913,7 @@ static AstraResult run(AstraHandle gui)
                         cleared = paint();
                         if (cleared != ASTRA_OK) return cleared;
                     }
-                    if (index != UINT32_MAX && depth == 0u &&
+                    if (index != UINT32_MAX && depth == 0u && !outline_hit &&
                         !astra_interface_selection_contains(&browser_selection,
                             (uint64_t)index + 1u)) {
                         AstraResult focused = focus_root_entry(index);
@@ -3989,6 +4155,7 @@ int astra_main(const AstraStartupInfo *startup)
     }
     /* Native process teardown owns a worker still retiring; never free its state. */
     if (worker == 0u) {
+        astra_interface_file_panel_outline_dispose(browser_outline);
         astra_interface_file_panel_dispose(&browser);
         browser_clear_children();
         astra_runtime_deallocate(browser_entry_icons);

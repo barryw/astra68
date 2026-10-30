@@ -2,6 +2,36 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas nested List checkpoint, 2026-10-30: Interface Kit 12.7 adds a generic
+File Panel directory-outline model over existing Outline Table, Table columns,
+ScrollView, and C1 selection. It owns stable row IDs, lazy child publication,
+visible projection, collapse state, path resolution, and nested folder hits;
+Atlas supplies directory snapshots and file-action policy. Shared collection
+text geometry places Atlas's inline editor without a List-specific offset.
+Haiku read-only reference: `src/kits/interface/OutlineListView.cpp` separates
+hierarchy storage from visible rows; Astra keeps files in File Panel and
+filesystem I/O in Atlas. DE25 trial exposed a targeted-install defect:
+replacing the whole Kit removed old library versions while `/libs/.providers`
+still selected the removed provider, so Display failed during startup. A second
+trial retained old versions but did not update the index, so Atlas could not
+resolve Interface Kit 12.7. Targeted install now preserves earlier Kit
+versions and publishes the new provider index with the existing image-builder
+record format. The corrected provider record was installed into the offline
+board image; DE25 booted with zero restarts, Atlas opened DH0, expanded `apps`
+and nested `Atlas.app`, selected its `manifest` with inspector metadata, and
+opened `resources` through the correct nested path. Trial captures and panic
+evidence are archived on Beast under
+`/mnt/Documents/astra68/atlas-outline-20261030/`. Beast Interface host tests,
+library contract, Atlas tests, NDK `dist-check`, image provider tests, and
+offline ext4 consistency check pass. Switching nested List back to Grid also
+passed on DE25. SHA-matched captures and original-image backup are on Beast;
+board trial images and captures were removed. `astra.service` and remote
+desktop are active with zero restarts and 8.1 GiB free. Final shared-outline
+allocation overflow guards were rebuilt and retested on Beast, then the exact
+Interface Kit binary was installed offline on DE25. Final boot, Atlas launch,
+List switch, and folder expansion passed with zero restarts; SHA-matched final
+captures are in the same Beast archive.
+
 Atlas reuse checkpoint, 2026-10-30: Audit found Atlas already composes shared
 File Panel, Table, ScrollView, Columns, Icon Grid, collection selection, menus,
 toolbar, inspector, inline edit, drag gesture, and Filesystem Kit operations.
@@ -17,9 +47,8 @@ Beast Interface tests, MC68040 library contract, Gallery build, and NDK
 Games on Collections, then Atlas's existing List opened normally. No new user
 fault, kernel panic, or service restart. SHA-verified captures and journal are
 on Beast at `/mnt/Documents/astra68/outline-table-20261030/`; board trial
-captures removed, services active with zero restarts and 8.2 GiB free. Atlas
-does not yet bind lazy nested directory rows to File Panel List; that shared
-directory-outline data model remains the active Atlas feature gap.
+captures removed, services active with zero restarts and 8.2 GiB free. The
+directory-outline binding was completed in Interface Kit 12.7 above.
 
 Atlas Recent Items checkpoint, 2026-10-30: Filesystem Kit 15.9 owns a private
 HOME recent-item store with synced complete records, bounded retention,

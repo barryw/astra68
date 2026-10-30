@@ -886,6 +886,23 @@ def _provider_index_record(path, version, abi, abi_minor, build_id):
     return record
 
 
+def _write_provider_index(volume, bundles, temporary):
+    """Publish selected Kit providers without disturbing other index entries."""
+    provider_directory = "/%s/.providers" % LIBS_DIRECTORY
+    _mkdir(volume, provider_directory, "the provider index directory")
+    for (name, abi), (version, abi_minor, build_id, path) in sorted(
+            _providers(bundles).items()):
+        host = os.path.join(temporary, "%s.abi-%u" % (name, abi))
+        record = _provider_index_record(path, version, abi, abi_minor, build_id)
+        with open(host, "wb") as handle:
+            handle.write(record)
+        target = "%s/%s.abi-%u" % (provider_directory, name, abi)
+        _debugfs(volume, "rm %s" % _debugfs_quote(target),
+                 "the old provider index", optional=True)
+        _debugfs(volume, "write %s %s" % (
+            _debugfs_quote(host), _debugfs_quote(target)), "provider index")
+
+
 def _install_built(image, catalog=DEFAULT_CATALOG,
                    commands=DEFAULT_COMMANDS,
                    services=DEFAULT_SERVICES, kits=DEFAULT_KITS,
@@ -997,20 +1014,7 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
         # One tiny lookup replaces a directory sweep and every Kit manifest
         # read in each new process. The manifests remain authoritative; these
         # entries are overwritten from them on every image installation.
-        provider_directory = "/%s/.providers" % LIBS_DIRECTORY
-        _mkdir(volume, provider_directory, "the provider index directory")
-        for (name, abi), (version, abi_minor, build_id, path) in sorted(
-                _providers(kit_bundles).items()):
-            host = os.path.join(temporary, "%s.abi-%u" % (name, abi))
-            record = _provider_index_record(
-                path, version, abi, abi_minor, build_id)
-            with open(host, "wb") as handle:
-                handle.write(record)
-            target = "%s/%s.abi-%u" % (provider_directory, name, abi)
-            _debugfs(volume, "rm %s" % target, "the old provider index",
-                     optional=True)
-            _debugfs(volume, "write %s %s" % (host, target),
-                     "provider index")
+        _write_provider_index(volume, kit_bundles, temporary)
 
         _mkdir(volume, "/%s" % APPS_DIRECTORY,
                "the application directory")

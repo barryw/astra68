@@ -12,6 +12,35 @@
 #define FILE_PANEL_TABLE_TRAILING_COLUMNS 3u
 #define FILE_PANEL_TABLE_TEXT_BYTES 56u
 
+typedef struct FileOutlineNode {
+    AstraDirectoryEntry entry;
+    uint64_t id;
+    uint32_t parent;
+    uint32_t first_child;
+    uint32_t child_count;
+    uint32_t expanded;
+    uint32_t loaded;
+} FileOutlineNode;
+
+typedef struct FileOutlineRows {
+    AstraCollectionItem *items;
+    AstraTableCell *cells;
+    AstraOutlineTableRow *rows;
+    uint32_t *node_indexes;
+    char *texts;
+    uint32_t count;
+} FileOutlineRows;
+
+struct AstraFilePanelOutline {
+    AstraOutlineTableModel model; /* Control display model is first. */
+    FileOutlineNode *nodes;
+    uint32_t node_count;
+    uint32_t root_count;
+    uint64_t next_id;
+    char directory[ASTRA_VFS_PATH_MAX];
+    FileOutlineRows visible;
+};
+
 static const AstraTableColumn file_panel_table_columns[] = {
     {"Name", 4u, 240u, 0u},
     {"Size", 4u, 112u, 0u},
@@ -91,12 +120,441 @@ static AstraResult file_panel_table_rows(const AstraDirectoryEntry *entries,
     return ASTRA_OK;
 }
 
+static void file_outline_rows_dispose(FileOutlineRows *rows)
+{
+    astra_runtime_deallocate(rows->items);
+    astra_runtime_deallocate(rows->cells);
+    astra_runtime_deallocate(rows->rows);
+    astra_runtime_deallocate(rows->node_indexes);
+    astra_runtime_deallocate(rows->texts);
+    *rows = (FileOutlineRows){0};
+}
+
+static FileOutlineNode *file_outline_nodes_allocate(uint32_t count)
+{
+    if (count == 0u || count > UINT32_MAX / sizeof(FileOutlineNode))
+        return NULL;
+    return astra_runtime_allocate((size_t)count * sizeof(FileOutlineNode));
+}
+
+static AstraResult file_outline_fill(const FileOutlineNode *nodes,
+    uint32_t node_count, uint32_t root_count, FileOutlineRows *visible,
+    uint32_t *at)
+{
+    struct Frame { uint32_t next, end, depth; } stack[ASTRA_TREE_MAX_DEPTH];
+    uint32_t used = 1u;
+    stack[0] = (struct Frame){0u, root_count, 0u};
+    while (used != 0u) {
+        struct Frame *frame = &stack[used - 1u];
+        if (frame->next == frame->end) {
+            --used;
+            continue;
+        }
+        uint32_t index = frame->next++;
+        uint32_t depth = frame->depth;
+        if (index >= node_count) return ASTRA_ERROR_INVALID_ARGUMENT;
+        const FileOutlineNode *node = &nodes[index];
+        uint32_t row = (*at)++;
+        AstraTableCell *cells = &visible->cells[row *
+            FILE_PANEL_TABLE_TRAILING_COLUMNS];
+        char *size_text = &visible->texts[row * FILE_PANEL_TABLE_TEXT_BYTES];
+        char *date_text = size_text + 32u;
+        const char *kind;
+        AstraResult result = file_entry_text(&node->entry, size_text, 32u,
+            date_text, 24u, &kind);
+        if (result != ASTRA_OK) return result;
+        visible->items[row] = (AstraCollectionItem){node->id,
+            node->entry.name, (uint32_t)strlen(node->entry.name), {0u, 0u}};
+        visible->rows[row] = (AstraOutlineTableRow){depth,
+            node->entry.kind == ASTRA_VFS_KIND_DIRECTORY,
+            node->expanded, 0u};
+        visible->node_indexes[row] = index;
+        cells[0] = (AstraTableCell){size_text,
+            (uint32_t)strlen(size_text), 0u};
+        cells[1] = (AstraTableCell){kind, (uint32_t)strlen(kind), 0u};
+        cells[2] = (AstraTableCell){date_text,
+            (uint32_t)strlen(date_text), 0u};
+        if (node->expanded && node->loaded && node->child_count != 0u) {
+            if (used >= ASTRA_TREE_MAX_DEPTH ||
+                node->first_child > node_count ||
+                node->child_count > node_count - node->first_child)
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+            stack[used++] = (struct Frame){node->first_child,
+                node->first_child + node->child_count, depth + 1u};
+        }
+    }
+    return ASTRA_OK;
+}
+
+static AstraResult file_outline_build(const FileOutlineNode *nodes,
+    uint32_t node_count, uint32_t root_count, FileOutlineRows *visible)
+{
+    uint32_t at = 0u;
+    if (root_count > node_count) return ASTRA_ERROR_INVALID_ARGUMENT;
+    *visible = (FileOutlineRows){0};
+    if (root_count == 0u) return ASTRA_OK;
+    /* At most one row per node; oversizing avoids a second traversal. */
+    uint64_t cell_bytes = (uint64_t)node_count *
+        FILE_PANEL_TABLE_TRAILING_COLUMNS * sizeof(*visible->cells);
+    uint64_t text_bytes = (uint64_t)node_count *
+        FILE_PANEL_TABLE_TEXT_BYTES;
+    if (cell_bytes > SIZE_MAX || text_bytes > SIZE_MAX ||
+        node_count > UINT32_MAX / sizeof(*visible->items) ||
+        node_count > UINT32_MAX / sizeof(*visible->rows) ||
+        node_count > UINT32_MAX / sizeof(*visible->node_indexes) ||
+        node_count > UINT32_MAX / FILE_PANEL_TABLE_TRAILING_COLUMNS)
+        return ASTRA_ERROR_NO_RESOURCES;
+    visible->items = astra_runtime_allocate((size_t)node_count *
+        sizeof(*visible->items));
+    visible->cells = astra_runtime_allocate((size_t)node_count *
+        FILE_PANEL_TABLE_TRAILING_COLUMNS * sizeof(*visible->cells));
+    visible->rows = astra_runtime_allocate((size_t)node_count *
+        sizeof(*visible->rows));
+    visible->node_indexes = astra_runtime_allocate((size_t)node_count *
+        sizeof(*visible->node_indexes));
+    visible->texts = astra_runtime_allocate((size_t)node_count *
+        FILE_PANEL_TABLE_TEXT_BYTES);
+    if (visible->items == NULL || visible->cells == NULL ||
+        visible->rows == NULL || visible->node_indexes == NULL ||
+        visible->texts == NULL) {
+        file_outline_rows_dispose(visible);
+        return ASTRA_ERROR_NO_RESOURCES;
+    }
+    AstraResult result = file_outline_fill(nodes, node_count, root_count,
+        visible, &at);
+    if (result != ASTRA_OK) {
+        file_outline_rows_dispose(visible);
+        return result;
+    }
+    visible->count = at;
+    return ASTRA_OK;
+}
+
+static AstraResult file_outline_publish(AstraFilePanelOutline *outline,
+    AstraUIContext *context, AstraControl *control,
+    FileOutlineNode *nodes, uint32_t node_count, uint32_t root_count,
+    uint64_t next_id, const char *directory)
+{
+    FileOutlineRows next;
+    AstraResult result = file_outline_build(nodes, node_count,
+        root_count, &next);
+    if (result != ASTRA_OK) return result;
+    result = astra_interface_outline_table_set_rows(context, control,
+        next.items, next.count, next.cells,
+        next.count * FILE_PANEL_TABLE_TRAILING_COLUMNS, next.rows);
+    if (result != ASTRA_OK) {
+        file_outline_rows_dispose(&next);
+        return result;
+    }
+    FileOutlineNode *old_nodes = outline->nodes;
+    FileOutlineRows old_visible = outline->visible;
+    outline->nodes = nodes;
+    outline->node_count = node_count;
+    outline->root_count = root_count;
+    outline->next_id = next_id;
+    outline->visible = next;
+    if (directory != outline->directory)
+        (void)astra_string_copy(outline->directory,
+            sizeof(outline->directory), directory);
+    astra_runtime_deallocate(old_nodes);
+    file_outline_rows_dispose(&old_visible);
+    return ASTRA_OK;
+}
+
 static AstraResult file_panel_primary_rows(AstraUIContext *context,
     AstraControl *control, const AstraCollectionItem *items, uint32_t count,
-    const void *rows)
+    const void *rows, const AstraDirectoryEntry *entries,
+    const char *directory)
 {
+    if (control->_private_control_kind == ASTRA_CONTROL_OUTLINE_TABLE) {
+        AstraFilePanelOutline *outline =
+            (AstraFilePanelOutline *)control->_private_display_model;
+        FileOutlineNode *nodes = NULL;
+        if (outline == NULL || directory == NULL ||
+            (count != 0u && (entries == NULL || items == NULL)))
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (count != 0u) {
+            nodes = file_outline_nodes_allocate(count);
+            if (nodes == NULL) return ASTRA_ERROR_NO_RESOURCES;
+            for (uint32_t at = 0u; at < count; ++at) {
+                uint64_t id = items[at].id;
+                if (id == 0u || id > UINT32_MAX) {
+                    astra_runtime_deallocate(nodes);
+                    return ASTRA_ERROR_INVALID_ARGUMENT;
+                }
+                nodes[at] = (FileOutlineNode){0};
+                nodes[at].entry = entries[(uint32_t)id - 1u];
+                nodes[at].id = id;
+                nodes[at].parent = UINT32_MAX;
+            }
+        }
+        uint64_t next_id = 1u;
+        for (uint32_t at = 0u; at < count; ++at)
+            if (nodes[at].id >= next_id)
+                next_id = nodes[at].id + 1u;
+        AstraResult result = file_outline_publish(outline, context, control,
+            nodes, count, count, next_id, directory);
+        if (result != ASTRA_OK) astra_runtime_deallocate(nodes);
+        return result;
+    }
     return astra_interface_table_set_rows(context, control, items, count,
         rows, count * FILE_PANEL_TABLE_TRAILING_COLUMNS);
+}
+
+AstraResult astra_interface_file_panel_outline_bind(AstraFilePanel *panel,
+    AstraControl *list_control, AstraFilePanelOutline **out)
+{
+    AstraFilePanelOutline *outline;
+    AstraTableModel old_table;
+    AstraCollectionModel old_collection;
+    AstraControl old_control;
+    AstraOutlineTableInfo info = ASTRA_OUTLINE_TABLE_INFO_INIT;
+    AstraResult result;
+    if (panel == NULL || panel->size != sizeof(*panel) || out == NULL ||
+        list_control == NULL || panel->collection == NULL ||
+        list_control->_private_control_kind != ASTRA_CONTROL_TABLE ||
+        list_control->_private_id != panel->first_id + ASTRA_FILE_PANEL_LIST ||
+        panel->directory == NULL || panel->item_count > panel->entry_count)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *out = NULL;
+    outline = astra_runtime_allocate(sizeof(*outline));
+    if (outline == NULL) return ASTRA_ERROR_NO_RESOURCES;
+    memset(outline, 0, sizeof(*outline));
+    outline->model = (AstraOutlineTableModel)ASTRA_OUTLINE_TABLE_MODEL_INIT;
+    outline->model.table = &panel->list_table;
+    outline->root_count = panel->item_count;
+    outline->node_count = panel->item_count;
+    outline->next_id = (uint64_t)panel->entry_count + 1u;
+    if (!astra_string_copy(outline->directory, sizeof(outline->directory),
+            panel->directory)) {
+        astra_runtime_deallocate(outline);
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    }
+    if (outline->node_count != 0u) {
+        outline->nodes = file_outline_nodes_allocate(outline->node_count);
+        if (outline->nodes == NULL) {
+            astra_runtime_deallocate(outline);
+            return ASTRA_ERROR_NO_RESOURCES;
+        }
+        for (uint32_t at = 0u; at < outline->node_count; ++at) {
+            uint64_t id = panel->items[at].id;
+            if (id == 0u || id > panel->entry_count) {
+                astra_interface_file_panel_outline_dispose(outline);
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+            }
+            outline->nodes[at] = (FileOutlineNode){0};
+            outline->nodes[at].entry = panel->entries[(uint32_t)id - 1u];
+            outline->nodes[at].id = id;
+            outline->nodes[at].parent = UINT32_MAX;
+        }
+    }
+    result = file_outline_build(outline->nodes, outline->node_count,
+        outline->root_count, &outline->visible);
+    if (result != ASTRA_OK) {
+        astra_interface_file_panel_outline_dispose(outline);
+        return result;
+    }
+    outline->model.rows = outline->visible.rows;
+    outline->model.row_count = outline->visible.count;
+    old_table = panel->list_table;
+    old_collection = *panel->collection;
+    old_control = *list_control;
+    panel->list_table.cells = outline->visible.cells;
+    panel->list_table.cell_count = outline->visible.count *
+        FILE_PANEL_TABLE_TRAILING_COLUMNS;
+    panel->collection->items = outline->visible.items;
+    panel->collection->item_count = outline->visible.count;
+    info.id = list_control->_private_id;
+    info.model = &outline->model;
+    result = astra_interface_outline_table_init(list_control, &info);
+    if (result == ASTRA_OK)
+        result = astra_panel_child(list_control,
+            panel->first_id + ASTRA_FILE_PANEL_SCROLL, 0u);
+    if (result != ASTRA_OK) {
+        *list_control = old_control;
+        panel->list_table = old_table;
+        *panel->collection = old_collection;
+        astra_interface_file_panel_outline_dispose(outline);
+        return result;
+    }
+    astra_runtime_deallocate(panel->list_rows);
+    panel->list_rows = NULL;
+    *out = outline;
+    return ASTRA_OK;
+}
+
+void astra_interface_file_panel_outline_dispose(AstraFilePanelOutline *outline)
+{
+    if (outline == NULL) return;
+    astra_runtime_deallocate(outline->nodes);
+    file_outline_rows_dispose(&outline->visible);
+    astra_runtime_deallocate(outline);
+}
+
+uint32_t astra_interface_file_panel_outline_visible_count(
+    const AstraFilePanelOutline *outline)
+{
+    return outline != NULL ? outline->visible.count : 0u;
+}
+
+static AstraResult file_outline_node_path(const AstraFilePanelOutline *outline,
+    uint32_t index, char *path, uint32_t capacity)
+{
+    uint32_t ancestors[ASTRA_TREE_MAX_DEPTH];
+    uint32_t count = 0u;
+    AstraString target;
+    if (outline == NULL || index >= outline->node_count ||
+        path == NULL || capacity == 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    while (index != UINT32_MAX) {
+        if (count == ASTRA_TREE_MAX_DEPTH || index >= outline->node_count)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        ancestors[count++] = index;
+        index = outline->nodes[index].parent;
+    }
+    astra_string_init(&target, path, capacity);
+    if (!astra_string_append(&target, outline->directory))
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    while (count != 0u) {
+        const char *name = outline->nodes[ancestors[--count]].entry.name;
+        if ((target.length == 0u || target.text[target.length - 1u] != '/') &&
+            !astra_string_append_char(&target, '/'))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+        if (!astra_string_append(&target, name))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    }
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_file_panel_outline_row(
+    const AstraFilePanelOutline *outline, uint32_t row,
+    char *path, uint32_t capacity, const AstraDirectoryEntry **entry,
+    uint32_t *depth, uint32_t *expanded, uint32_t *loaded)
+{
+    if (entry != NULL) *entry = NULL;
+    if (outline == NULL || row >= outline->visible.count)
+        return ASTRA_ERROR_NOT_PRESENT;
+    uint32_t index = outline->visible.node_indexes[row];
+    AstraResult result = file_outline_node_path(outline, index,
+        path, capacity);
+    if (result != ASTRA_OK) return result;
+    if (entry != NULL) *entry = &outline->nodes[index].entry;
+    if (depth != NULL) *depth = outline->visible.rows[row].depth;
+    if (expanded != NULL) *expanded = outline->nodes[index].expanded;
+    if (loaded != NULL) *loaded = outline->nodes[index].loaded;
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_file_panel_outline_id(
+    const AstraFilePanelOutline *outline, uint64_t id,
+    char *path, uint32_t capacity, const AstraDirectoryEntry **entry)
+{
+    if (outline == NULL || id == 0u) return ASTRA_ERROR_INVALID_ARGUMENT;
+    for (uint32_t at = 0u; at < outline->visible.count; ++at)
+        if (outline->visible.items[at].id == id)
+            return astra_interface_file_panel_outline_row(outline, at,
+                path, capacity, entry, NULL, NULL, NULL);
+    return ASTRA_ERROR_NOT_PRESENT;
+}
+
+AstraResult astra_interface_file_panel_outline_directory_at(
+    const AstraFilePanelOutline *outline, int32_t row,
+    char *path, uint32_t capacity)
+{
+    const AstraDirectoryEntry *entry = NULL;
+    if (outline == NULL || path == NULL || capacity == 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (row < 0)
+        return astra_string_copy(path, capacity, outline->directory) ?
+            ASTRA_OK : ASTRA_ERROR_BUFFER_TOO_SMALL;
+    AstraResult result = astra_interface_file_panel_outline_row(outline,
+        (uint32_t)row, path, capacity, &entry, NULL, NULL, NULL);
+    if (result != ASTRA_OK) return result;
+    return entry != NULL && entry->kind == ASTRA_VFS_KIND_DIRECTORY ?
+        ASTRA_OK : ASTRA_ERROR_NOT_PRESENT;
+}
+
+AstraResult astra_interface_file_panel_outline_set_children(
+    AstraFilePanelOutline *outline, AstraUIContext *context,
+    AstraControl *control, uint32_t row,
+    const AstraDirectoryEntry *entries, uint32_t count)
+{
+    FileOutlineNode *nodes;
+    uint32_t parent;
+    AstraResult result;
+    if (outline == NULL || context == NULL || control == NULL ||
+        control->_private_control_kind != ASTRA_CONTROL_OUTLINE_TABLE ||
+        control->_private_display_model != &outline->model ||
+        row >= outline->visible.count ||
+        (count != 0u && entries == NULL) ||
+        count > UINT32_MAX - outline->node_count ||
+        outline->next_id > UINT64_MAX - count)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (outline->node_count + count >
+            UINT32_MAX / sizeof(FileOutlineNode))
+        return ASTRA_ERROR_NO_RESOURCES;
+    parent = outline->visible.node_indexes[row];
+    if (outline->nodes[parent].entry.kind != ASTRA_VFS_KIND_DIRECTORY ||
+        outline->nodes[parent].loaded ||
+        outline->visible.rows[row].depth + 1u >= ASTRA_TREE_MAX_DEPTH)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    for (uint32_t at = 0u; at < count; ++at)
+        if (entries[at].name[0] == '\0' ||
+            memchr(entries[at].name, '\0', ASTRA_VFS_NAME_MAX) == NULL ||
+            memchr(entries[at].name, '/',
+                strlen(entries[at].name)) != NULL ||
+            strcmp(entries[at].name, ".") == 0 ||
+            strcmp(entries[at].name, "..") == 0)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+    nodes = file_outline_nodes_allocate(outline->node_count + count);
+    if (nodes == NULL) return ASTRA_ERROR_NO_RESOURCES;
+    memcpy(nodes, outline->nodes,
+        (size_t)outline->node_count * sizeof(*nodes));
+    nodes[parent].first_child = outline->node_count;
+    nodes[parent].child_count = count;
+    nodes[parent].expanded = 1u;
+    nodes[parent].loaded = 1u;
+    for (uint32_t at = 0u; at < count; ++at) {
+        FileOutlineNode *node = &nodes[outline->node_count + at];
+        *node = (FileOutlineNode){0};
+        node->entry = entries[at];
+        node->id = outline->next_id + at;
+        node->parent = parent;
+    }
+    result = file_outline_publish(outline, context, control, nodes,
+        outline->node_count + count, outline->root_count,
+        outline->next_id + count, outline->directory);
+    if (result != ASTRA_OK) astra_runtime_deallocate(nodes);
+    return result;
+}
+
+AstraResult astra_interface_file_panel_outline_set_expanded(
+    AstraFilePanelOutline *outline, AstraUIContext *context,
+    AstraControl *control, uint32_t row, uint32_t expanded)
+{
+    FileOutlineNode *nodes;
+    uint32_t index;
+    AstraResult result;
+    if (outline == NULL || context == NULL || control == NULL ||
+        control->_private_control_kind != ASTRA_CONTROL_OUTLINE_TABLE ||
+        control->_private_display_model != &outline->model ||
+        row >= outline->visible.count || expanded > 1u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    index = outline->visible.node_indexes[row];
+    if (outline->nodes[index].entry.kind != ASTRA_VFS_KIND_DIRECTORY ||
+        !outline->nodes[index].loaded)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (outline->nodes[index].expanded == expanded) return ASTRA_OK;
+    nodes = file_outline_nodes_allocate(outline->node_count);
+    if (nodes == NULL) return ASTRA_ERROR_NO_RESOURCES;
+    memcpy(nodes, outline->nodes,
+        (size_t)outline->node_count * sizeof(*nodes));
+    nodes[index].expanded = expanded;
+    result = file_outline_publish(outline, context, control, nodes,
+        outline->node_count, outline->root_count, outline->next_id,
+        outline->directory);
+    if (result != ASTRA_OK) astra_runtime_deallocate(nodes);
+    return result;
 }
 
 void astra_interface_file_panel_dispose(AstraFilePanel *panel)
@@ -195,9 +653,9 @@ AstraResult astra_interface_file_panel_place_at(
     return ASTRA_OK;
 }
 
-AstraResult astra_interface_file_panel_directory_at(
+AstraResult astra_interface_file_panel_path_at(
     const AstraFilePanel *panel, uint32_t control_id, int32_t row,
-    char *path, uint32_t capacity)
+    char *path, uint32_t capacity, const AstraDirectoryEntry **entry)
 {
     uint32_t index = UINT32_MAX, depth = 0u;
     AstraResult result;
@@ -206,6 +664,7 @@ AstraResult astra_interface_file_panel_directory_at(
     uint32_t count;
     AstraString target;
 
+    if (entry != NULL) *entry = NULL;
     if (panel == NULL || panel->size != sizeof(*panel) ||
         path == NULL || capacity == 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -242,8 +701,7 @@ AstraResult astra_interface_file_panel_directory_at(
     if (index == UINT32_MAX)
         return astra_string_copy(path, capacity, parent) ?
             ASTRA_OK : ASTRA_ERROR_BUFFER_TOO_SMALL;
-    if (entries == NULL || index >= count ||
-        entries[index].kind != ASTRA_VFS_KIND_DIRECTORY)
+    if (entries == NULL || index >= count)
         return ASTRA_ERROR_NOT_PRESENT;
     astra_string_init(&target, path, capacity);
     if (!astra_string_append(&target, parent) ||
@@ -251,7 +709,20 @@ AstraResult astra_interface_file_panel_directory_at(
          !astra_string_append_char(&target, '/')) ||
         !astra_string_append(&target, entries[index].name))
         return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    if (entry != NULL) *entry = &entries[index];
     return ASTRA_OK;
+}
+
+AstraResult astra_interface_file_panel_directory_at(
+    const AstraFilePanel *panel, uint32_t control_id, int32_t row,
+    char *path, uint32_t capacity)
+{
+    const AstraDirectoryEntry *entry = NULL;
+    AstraResult result = astra_interface_file_panel_path_at(panel,
+        control_id, row, path, capacity, &entry);
+    if (result != ASTRA_OK) return result;
+    return entry == NULL || entry->kind == ASTRA_VFS_KIND_DIRECTORY ?
+        ASTRA_OK : ASTRA_ERROR_NOT_PRESENT;
 }
 
 static int contains_query(const char *name, uint32_t name_length,
@@ -916,8 +1387,10 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
     if (result != ASTRA_OK) return result;
     if (visible_count > panel->grid_icon_capacity)
         return ASTRA_ERROR_BUFFER_TOO_SMALL;
-    result = file_panel_table_rows(entries, item_storage, visible_count,
-        &next_rows);
+    result = controls[ASTRA_FILE_PANEL_LIST]._private_control_kind ==
+        ASTRA_CONTROL_OUTLINE_TABLE ? ASTRA_OK :
+        file_panel_table_rows(entries, item_storage, visible_count,
+            &next_rows);
     if (result != ASTRA_OK) return result;
     file_panel_fill_icons(panel, item_storage, visible_count, NULL);
     previous = panel->directory;
@@ -930,7 +1403,7 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
     if (result != ASTRA_OK) goto rollback;
     result = file_panel_primary_rows(context,
         &controls[ASTRA_FILE_PANEL_LIST], item_storage, visible_count,
-        next_rows);
+        next_rows, entries, next);
     if (result != ASTRA_OK) goto rollback;
     result = astra_interface_control_set_value(context,
         &controls[ASTRA_FILE_PANEL_LIST], -1);
@@ -983,7 +1456,8 @@ rollback:
     file_panel_fill_icons(panel, panel->items, panel->item_count,
         panel->entry_icons);
     (void)file_panel_primary_rows(context, &controls[ASTRA_FILE_PANEL_LIST],
-        panel->items, panel->item_count, panel->list_rows);
+        panel->items, panel->item_count, panel->list_rows,
+        panel->entries, previous);
     (void)astra_interface_icon_grid_set_items(context,
         &controls[ASTRA_FILE_PANEL_GRID], panel->items, panel->item_count,
         panel->grid_icons);
@@ -1013,7 +1487,9 @@ static AstraResult file_panel_refresh(AstraFilePanel *panel,
     if (result != ASTRA_OK) return result;
     if (count > panel->grid_icon_capacity)
         return ASTRA_ERROR_BUFFER_TOO_SMALL;
-    result = file_panel_table_rows(panel->entries, next, count, &next_rows);
+    result = controls[ASTRA_FILE_PANEL_LIST]._private_control_kind ==
+        ASTRA_CONTROL_OUTLINE_TABLE ? ASTRA_OK :
+        file_panel_table_rows(panel->entries, next, count, &next_rows);
     if (result != ASTRA_OK) return result;
     file_panel_fill_icons(panel, next, count, panel->entry_icons);
     result = astra_interface_icon_grid_set_items(context,
@@ -1021,7 +1497,8 @@ static AstraResult file_panel_refresh(AstraFilePanel *panel,
         panel->grid_icons);
     if (result != ASTRA_OK) goto rollback_refresh;
     result = file_panel_primary_rows(context,
-        &controls[ASTRA_FILE_PANEL_LIST], next, count, next_rows);
+        &controls[ASTRA_FILE_PANEL_LIST], next, count, next_rows,
+        panel->entries, panel->directory);
     if (result != ASTRA_OK) goto rollback_refresh;
     if (panel->column_count != 0u) {
         result = astra_interface_list_set_items(context,
@@ -1055,7 +1532,8 @@ rollback_refresh:
     file_panel_fill_icons(panel, panel->items, panel->item_count,
         panel->entry_icons);
     (void)file_panel_primary_rows(context, &controls[ASTRA_FILE_PANEL_LIST],
-        panel->items, panel->item_count, panel->list_rows);
+        panel->items, panel->item_count, panel->list_rows,
+        panel->entries, panel->directory);
     (void)astra_interface_icon_grid_set_items(context,
         &controls[ASTRA_FILE_PANEL_GRID], panel->items, panel->item_count,
         panel->grid_icons);
@@ -1104,9 +1582,12 @@ AstraResult astra_interface_file_panel_rebind_storage(AstraFilePanel *panel,
         &controls[ASTRA_FILE_PANEL_GRID], item_storage,
         panel->item_count, grid_icons);
     if (result != ASTRA_OK) return result;
-    result = file_panel_primary_rows(context,
-        &controls[ASTRA_FILE_PANEL_LIST], item_storage, panel->item_count,
-        panel->list_rows);
+    result = controls[ASTRA_FILE_PANEL_LIST]._private_control_kind ==
+        ASTRA_CONTROL_OUTLINE_TABLE ? ASTRA_OK :
+        file_panel_primary_rows(context,
+            &controls[ASTRA_FILE_PANEL_LIST], item_storage,
+            panel->item_count, panel->list_rows, panel->entries,
+            panel->directory);
     if (result != ASTRA_OK) {
         (void)astra_interface_icon_grid_set_items(context,
             &controls[ASTRA_FILE_PANEL_GRID], panel->items,
@@ -1118,9 +1599,12 @@ AstraResult astra_interface_file_panel_rebind_storage(AstraFilePanel *panel,
             &controls[file_panel_column_list_index(0u)], item_storage,
             panel->item_count);
         if (result != ASTRA_OK) {
-            (void)file_panel_primary_rows(context,
-                &controls[ASTRA_FILE_PANEL_LIST], panel->items,
-                panel->item_count, panel->list_rows);
+            if (controls[ASTRA_FILE_PANEL_LIST]._private_control_kind !=
+                    ASTRA_CONTROL_OUTLINE_TABLE)
+                (void)file_panel_primary_rows(context,
+                    &controls[ASTRA_FILE_PANEL_LIST], panel->items,
+                    panel->item_count, panel->list_rows,
+                    panel->entries, panel->directory);
             (void)astra_interface_icon_grid_set_items(context,
                 &controls[ASTRA_FILE_PANEL_GRID], panel->items,
                 panel->item_count, panel->grid_icons);
@@ -1333,6 +1817,34 @@ static AstraResult file_panel_select(AstraFilePanel *panel, uint32_t index,
     return ASTRA_OK;
 }
 
+static AstraResult file_panel_outline_select(AstraFilePanel *panel,
+    const AstraFilePanelOutline *outline, uint64_t id, uint32_t *outcome)
+{
+    const AstraDirectoryEntry *entry = NULL;
+    AstraResult result = astra_interface_file_panel_outline_id(outline, id,
+        panel->target, sizeof(panel->target), &entry);
+    if (result != ASTRA_OK) return result;
+    if (entry == NULL || !astra_string_copy(panel->leaf,
+            sizeof(panel->leaf), entry->name))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (entry->kind == ASTRA_VFS_KIND_DIRECTORY)
+        *outcome = ASTRA_FILE_PANEL_NAVIGATE;
+    else if (entry->kind == ASTRA_VFS_KIND_FILE &&
+        (panel->mode == ASTRA_FILE_PANEL_OPEN ||
+         panel->mode == ASTRA_FILE_PANEL_BROWSE))
+        *outcome = ASTRA_FILE_PANEL_PICKED;
+    else if (entry->kind != ASTRA_VFS_KIND_FILE)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return ASTRA_OK;
+}
+
+static int file_panel_root_id_visible(const AstraFilePanel *panel, uint64_t id)
+{
+    for (uint32_t at = 0u; at < panel->item_count; ++at)
+        if (panel->items[at].id == id) return 1;
+    return 0;
+}
+
 static AstraResult file_panel_save_name(AstraFilePanel *panel,
     uint32_t *outcome)
 {
@@ -1491,19 +2003,38 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
                 context, controls, 1u);
             return result;
         }
-        if (transfer != 0u)
-            return astra_interface_collection_mirror_primary(context,
-                &controls[next == ASTRA_FILE_PANEL_VIEW_LIST ?
+        if (transfer != 0u) {
+            AstraControl *target = &controls[
+                next == ASTRA_FILE_PANEL_VIEW_LIST ?
                     ASTRA_FILE_PANEL_LIST :
                     next == ASTRA_FILE_PANEL_VIEW_GRID ?
                         ASTRA_FILE_PANEL_GRID :
-                        file_panel_column_list_index(0u)], old_collection);
+                        file_panel_column_list_index(0u)];
+            if (previous_mode == ASTRA_FILE_PANEL_VIEW_LIST &&
+                next != ASTRA_FILE_PANEL_VIEW_LIST &&
+                old_collection->selected_id != 0u &&
+                !file_panel_root_id_visible(panel,
+                    old_collection->selected_id)) {
+                AstraResult cleared = astra_interface_control_set_value(
+                    context, &controls[ASTRA_FILE_PANEL_LIST], -1);
+                if (cleared != ASTRA_OK) return cleared;
+                return astra_interface_control_set_value(context, target, -1);
+            }
+            return astra_interface_collection_mirror_primary(context,
+                target, old_collection);
+        }
         return ASTRA_OK;
     }
     if (action->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
         (at == ASTRA_FILE_PANEL_LIST || at == ASTRA_FILE_PANEL_GRID)) {
         AstraCollectionModel *source = at == ASTRA_FILE_PANEL_LIST ?
             panel->collection : &panel->grid_collection;
+        if (at == ASTRA_FILE_PANEL_LIST &&
+            controls[ASTRA_FILE_PANEL_LIST]._private_control_kind ==
+                ASTRA_CONTROL_OUTLINE_TABLE &&
+            source->selected_id != 0u &&
+            !file_panel_root_id_visible(panel, source->selected_id))
+            return ASTRA_OK;
         return astra_interface_collection_mirror_primary(context,
             &controls[at == ASTRA_FILE_PANEL_LIST ?
                 ASTRA_FILE_PANEL_GRID : ASTRA_FILE_PANEL_LIST], source);
@@ -1566,6 +2097,22 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
         return ASTRA_OK;
     }
     if (at == ASTRA_FILE_PANEL_LIST || at == ASTRA_FILE_PANEL_GRID) {
+        if (at == ASTRA_FILE_PANEL_LIST &&
+            controls[ASTRA_FILE_PANEL_LIST]._private_control_kind ==
+                ASTRA_CONTROL_OUTLINE_TABLE) {
+            const AstraFilePanelOutline *outline =
+                (const AstraFilePanelOutline *)
+                    controls[ASTRA_FILE_PANEL_LIST]._private_display_model;
+            if (action->value < 0 ||
+                (uint64_t)action->value >= outline->visible.count)
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+            result = file_panel_outline_select(panel, outline,
+                outline->visible.items[(uint32_t)action->value].id, outcome);
+            if (result != ASTRA_OK || panel->mode != ASTRA_FILE_PANEL_SAVE ||
+                *outcome == ASTRA_FILE_PANEL_NAVIGATE)
+                return result;
+            return file_panel_fill_name(panel, context, controls);
+        }
         if (action->value < 0 || (uint64_t)action->value >= panel->item_count)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         result = file_panel_select(panel,
@@ -1601,6 +2148,13 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
     {
     AstraCollectionModel *active = panel->view_mode == ASTRA_FILE_PANEL_VIEW_LIST ?
         panel->collection : &panel->grid_collection;
+    if (panel->view_mode == ASTRA_FILE_PANEL_VIEW_LIST &&
+        controls[ASTRA_FILE_PANEL_LIST]._private_control_kind ==
+            ASTRA_CONTROL_OUTLINE_TABLE)
+        return file_panel_outline_select(panel,
+            (const AstraFilePanelOutline *)
+                controls[ASTRA_FILE_PANEL_LIST]._private_display_model,
+            active->selected_id, outcome);
     if (active->selected_id == 0u ||
         active->selected_id > panel->entry_count)
         return ASTRA_ERROR_INVALID_ARGUMENT;
