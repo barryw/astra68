@@ -4,6 +4,7 @@
 #include <astra/control.h>
 #include <astra/display.h>
 #include <astra/draw_list.h>
+#include <astra/input.h>
 #include <astra/input_modifiers.h>
 #include <astra/surface.h>
 #include <astra/theme.h>
@@ -4722,6 +4723,8 @@ static void test_context_request(void)
     AstraControlFrame frame, clip;
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
     AstraWindowEvent event;
+    AstraDragGesture gesture = ASTRA_DRAG_GESTURE_INIT;
+    uint32_t triggered = 0u;
 
     checkbox.id = 21u;
     checkbox.text = "Check";
@@ -4734,6 +4737,31 @@ static void test_context_request(void)
     assert(astra_interface_ui_init(&context, controls, 2u, 200u, 80u) == ASTRA_OK);
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
     assert(astra_interface_ui_geometry(&context, 0u, &frame, &clip) == ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, frame.x + 1, frame.y + 1);
+    event.data.pointer.button = ASTRA_INPUT_BUTTON_LEFT;
+    assert(astra_interface_drag_gesture_event(&gesture, &event, 1u,
+        &triggered) == ASTRA_OK && triggered == 0u);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_MOTION, 0u,
+        frame.x + 5, frame.y + 1);
+    assert(astra_interface_drag_gesture_event(&gesture, &event, 0u,
+        &triggered) == ASTRA_OK && triggered == 0u);
+    event.data.motion.x = frame.x + 7;
+    event.data.motion.y = frame.y + 1;
+    assert(astra_interface_drag_gesture_event(&gesture, &event, 0u,
+        &triggered) == ASTRA_OK && triggered == 1u);
+    assert(astra_interface_drag_gesture_event(&gesture, &event, 0u,
+        &triggered) == ASTRA_OK && triggered == 0u);
+    {
+        uint32_t hit_id = 0u;
+        int32_t row = 0;
+        assert(astra_interface_ui_pointer_hit(&context, frame.x + 1,
+            frame.y + 1, &hit_id, &row) == ASTRA_OK);
+        assert(hit_id == 21u && row == -1);
+        assert(astra_interface_ui_pointer_hit(&context, -1, -1,
+            &hit_id, &row) == ASTRA_OK);
+        assert(hit_id == 0u && row == -1);
+    }
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON, ASTRA_WINDOW_EVENT_DOWN,
         frame.x + 1, frame.y + 1);
     event.data.pointer.button = 3u;
@@ -5240,12 +5268,35 @@ static void test_shared_file_panel(void)
     assert(astra_interface_file_panel_set_places(&panel, &context, controls,
         places, 3u, place_items, 3u) == ASTRA_OK);
     {
+        char destination[ASTRA_VFS_PATH_MAX];
+        uint32_t previous_view = panel.view_mode;
+        panel.view_mode = ASTRA_FILE_PANEL_VIEW_LIST;
+        assert(astra_interface_file_panel_directory_at(&panel,
+            300u + ASTRA_FILE_PANEL_PLACES_LIST, 2,
+            destination, sizeof(destination)) == ASTRA_OK);
+        assert(strcmp(destination, "/dh0") == 0);
+        assert(astra_interface_file_panel_directory_at(&panel,
+            300u + ASTRA_FILE_PANEL_LIST, -1,
+            destination, sizeof(destination)) == ASTRA_OK);
+        assert(strcmp(destination, "/dh0/Stories") == 0);
+        assert(astra_interface_file_panel_directory_at(&panel,
+            300u + ASTRA_FILE_PANEL_LIST, 0,
+            destination, sizeof(destination)) == ASTRA_OK);
+        assert(strcmp(destination, "/dh0/Stories/Stories") == 0);
+        assert(astra_interface_file_panel_directory_at(&panel,
+            300u + ASTRA_FILE_PANEL_LIST, 1,
+            destination, sizeof(destination)) == ASTRA_ERROR_NOT_PRESENT);
+        panel.view_mode = previous_view;
+    }
+    {
         uint32_t place_index = 0u;
         action.type = ASTRA_UI_ACTION_CONTEXT_MENU;
         action.control_id = 300u + ASTRA_FILE_PANEL_PLACES_LIST;
         action.value = 2;
         assert(astra_interface_file_panel_context_place(&panel, &action,
             &place_index) == ASTRA_OK && place_index == 2u);
+        assert(astra_interface_file_panel_place_at(&panel, action.control_id,
+            action.value, &place_index) == ASTRA_OK && place_index == 2u);
         action.value = -1;
         assert(astra_interface_file_panel_context_place(&panel, &action,
             &place_index) == ASTRA_OK && place_index == UINT32_MAX);
@@ -5286,6 +5337,9 @@ static void test_shared_file_panel(void)
         assert(astra_interface_file_panel_context_entry(&panel, &action,
             &entry_index, &depth) == ASTRA_OK);
         assert(entry_index == 2u && depth == 0u);
+        assert(astra_interface_file_panel_entry_at(&panel, action.control_id,
+            action.value, &entry_index, &depth) == ASTRA_OK);
+        assert(entry_index == 2u && depth == 0u);
         action.value = -1;
         assert(astra_interface_file_panel_context_entry(&panel, &action,
             &entry_index, &depth) == ASTRA_OK);
@@ -5310,6 +5364,16 @@ static void test_shared_file_panel(void)
     assert(astra_interface_file_panel_action(&panel, &context, controls,
         &action, &outcome) == ASTRA_OK &&
         panel.view_mode == ASTRA_FILE_PANEL_VIEW_GRID);
+    {
+        char destination[ASTRA_VFS_PATH_MAX];
+        assert(astra_interface_file_panel_directory_at(&panel,
+            300u + ASTRA_FILE_PANEL_GRID, 0,
+            destination, sizeof(destination)) == ASTRA_OK);
+        assert(strcmp(destination, "/dh0/Stories/Stories") == 0);
+        assert(astra_interface_file_panel_directory_at(&panel,
+            300u + ASTRA_FILE_PANEL_GRID, 1,
+            destination, sizeof(destination)) == ASTRA_ERROR_NOT_PRESENT);
+    }
     {
         uint32_t entry_index, depth;
         action.type = ASTRA_UI_ACTION_CONTEXT_MENU;
@@ -5545,6 +5609,20 @@ static void test_shared_file_panel(void)
             controls, 1u, "/dh0/Stories", child_entries, 1u,
             child_items, 1u) == ASTRA_OK &&
             snapshots[1].item_count == 1u);
+        {
+            char destination[ASTRA_VFS_PATH_MAX];
+            assert(astra_interface_file_panel_directory_at(&panel,
+                300u + ASTRA_FILE_PANEL_CONTROL_COUNT + 2u, 0,
+                destination, sizeof(destination)) == ASTRA_OK);
+            assert(strcmp(destination, "/dh0/Stories") == 0);
+            assert(astra_interface_file_panel_directory_at(&panel,
+                300u + ASTRA_FILE_PANEL_CONTROL_COUNT + 4u, -1,
+                destination, sizeof(destination)) == ASTRA_OK);
+            assert(strcmp(destination, "/dh0/Stories") == 0);
+            assert(astra_interface_file_panel_directory_at(&panel,
+                300u + ASTRA_FILE_PANEL_CONTROL_COUNT + 4u, 0,
+                destination, sizeof(destination)) == ASTRA_ERROR_NOT_PRESENT);
+        }
         assert(astra_interface_file_panel_rebind_storage(&panel, &context,
             controls, rebound_items, 4u, rebound_spare, 4u,
             rebound_icons, 4u) == ASTRA_OK &&

@@ -29,6 +29,7 @@ ASTRA_SYSTEM_4.0 {
         astra_bundle_manifest_handles;
         astra_bundle_manifest_parse;
         astra_clipboard_clear;
+        astra_clipboard_document_find;
         astra_clipboard_document_validate;
         astra_clipboard_document_write;
         astra_clipboard_item_close;

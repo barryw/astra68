@@ -362,9 +362,6 @@ AstraResult astra_clipboard_item_find(
     const AstraClipboardItem *item, const char *type, uint32_t type_length,
     const void **data, uint32_t *data_length)
 {
-    const uint8_t *document;
-    const AstraClipboardDocumentHeader *header;
-
     if (item == NULL || item->_private_area.address == NULL ||
         item->_private_area.size < item->_private_document_size ||
         item->_private_document_size == 0u || item->generation == 0u ||
@@ -372,10 +369,22 @@ AstraResult astra_clipboard_item_find(
         !type_valid(type, type_length) || data == NULL ||
         data_length == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    document = item->_private_area.address;
-    if (astra_clipboard_document_validate(
-            document, item->_private_document_size) != ASTRA_OK)
-        return ASTRA_ERROR_IO;
+    return astra_clipboard_document_find(item->_private_area.address,
+        item->_private_document_size, type, type_length, data, data_length);
+}
+
+AstraResult astra_clipboard_document_find(
+    const void *bytes_in, uint32_t bytes, const char *type,
+    uint32_t type_length, const void **data, uint32_t *data_length)
+{
+    const uint8_t *document = bytes_in;
+    const AstraClipboardDocumentHeader *header;
+
+    if (document == NULL || !type_valid(type, type_length) ||
+        data == NULL || data_length == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (astra_clipboard_document_validate(document, bytes) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     header = (const AstraClipboardDocumentHeader *)(const void *)document;
     for (uint32_t index = 0u; index < header->representation_count; ++index) {
         const AstraClipboardDocumentRecord *record =

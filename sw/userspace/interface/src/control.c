@@ -9812,6 +9812,52 @@ AstraResult astra_interface_ui_geometry(const AstraUIContext *context,
     return ASTRA_OK;
 }
 
+AstraResult astra_interface_ui_pointer_hit(const AstraUIContext *context,
+    int32_t x, int32_t y, uint32_t *control_id, int32_t *row)
+{
+    if (!context_valid(context) || control_id == NULL || row == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *control_id = 0u;
+    *row = -1;
+    if (x < 0 || y < 0 || (uint32_t)x >= context->_private_width ||
+        (uint32_t)y >= context->_private_height)
+        return ASTRA_OK;
+    uint32_t hit = hit_test(context, x, y, 1);
+    if (hit != CONTROL_NONE) {
+        const AstraControl *control = &context->_private_controls[hit];
+        *control_id = control->_private_id;
+        if (COLLECTION_KINDS(control->_private_control_kind))
+            *row = choice_index_at(control, x, y);
+    }
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_drag_gesture_event(AstraDragGesture *gesture,
+    const AstraWindowEvent *event, uint32_t source_hit, uint32_t *triggered)
+{
+    if (gesture == NULL || event == NULL || triggered == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *triggered = 0u;
+    if (event->type == ASTRA_WINDOW_EVENT_STATE_RESET) {
+        gesture->armed = 0u;
+    } else if (event->type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
+        event->data.pointer.button == ASTRA_INPUT_BUTTON_LEFT) {
+        gesture->armed = (event->flags & ASTRA_WINDOW_EVENT_DOWN) != 0u &&
+            (event->flags & ASTRA_WINDOW_EVENT_LOSS) == 0u && source_hit != 0u;
+        gesture->start_x = event->data.pointer.x;
+        gesture->start_y = event->data.pointer.y;
+    } else if (event->type == ASTRA_WINDOW_EVENT_POINTER_MOTION &&
+        gesture->armed != 0u) {
+        int64_t dx = (int64_t)event->data.motion.x - gesture->start_x;
+        int64_t dy = (int64_t)event->data.motion.y - gesture->start_y;
+        if (dx < -5 || dx > 5 || dy < -5 || dy > 5) {
+            gesture->armed = 0u;
+            *triggered = 1u;
+        }
+    }
+    return ASTRA_OK;
+}
+
 AstraResult astra_interface_ui_damage(const AstraUIContext *context,
                                       AstraControlFrame *damage)
 {

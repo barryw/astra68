@@ -47,6 +47,10 @@ ASTRA_INTERFACE_12.0 {
         astra_interface_file_panel_action;
         astra_interface_file_panel_context_entry;
         astra_interface_file_panel_context_place;
+        astra_interface_file_panel_directory_at;
+        astra_interface_file_panel_entry_at;
+        astra_interface_file_panel_place_at;
+        astra_interface_drag_gesture_event;
         astra_interface_font_panel_init;
         astra_interface_font_panel_action;
         astra_interface_font_panel_choice;
@@ -106,6 +110,7 @@ ASTRA_INTERFACE_12.0 {
         astra_interface_ui_damage_clear;
         astra_interface_ui_handle_event;
         astra_interface_ui_geometry;
+        astra_interface_ui_pointer_hit;
         astra_interface_ui_init;
         astra_interface_ui_layout;
         astra_interface_ui_measure;

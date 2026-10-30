@@ -15,7 +15,7 @@ with tempfile.TemporaryDirectory() as directory:
     root = Path(directory).resolve()
     module.REPOSITORY = root
     source = root / ("sw/userspace/kits/build/Runtime.kit/libraries/"
-                     "system.library/abi-4/4.5.0/m68k-68040/system.library")
+                     "system.library/abi-4/4.6.0/m68k-68040/system.library")
     built = root / "sw/userspace/system/build/m68k/libraries/system.library.4"
     manifest = root / "sw/userspace/kits/build/Runtime.kit/manifest"
     source.parent.mkdir(parents=True)
@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory() as directory:
     source.write_bytes(b"new")
     provider = source.relative_to(root / "sw/userspace/kits/build").as_posix()
     module.astra_image._providers = lambda _: {
-        ("system.library", 4): ("4.5.0", 0, "test", provider)}
+        ("system.library", 4): ("4.6.0", 0, "test", provider)}
     module.astra_image._provider_index_record = lambda *args: b"provider"
     companions = module.kit_companions(source, target)
     assert len(companions) == 2

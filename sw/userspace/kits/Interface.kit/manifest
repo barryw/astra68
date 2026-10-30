@@ -3,7 +3,7 @@ kind kit
 id org.astra.interface
 name "Astra Interface Kit"
 version 10.0.0
-provides interface.library 12 12.3.0
+provides interface.library 12 12.4.0
 requires compiler.library 2 2.0.0
 requires font.library 5 5.0.0
 requires graphics.library 3 3.0.0

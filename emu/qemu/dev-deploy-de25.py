@@ -2,7 +2,7 @@
 """Build only requested targets and install their guest files on running DE25."""
 
 import argparse
-import filecmp
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -50,7 +50,10 @@ def kit_companions(source, target):
         "*/build/m68k/libraries/" + source.name + "." + abi[4:]))
     if len(candidates) != 1 or not candidates[0].is_file():
         raise ValueError("cannot verify built Kit library: " + str(source))
-    if not filecmp.cmp(source, candidates[0], shallow=False):
+    with source.open("rb") as staged, candidates[0].open("rb") as built:
+        matching = hashlib.file_digest(staged, "sha256").digest() == \
+            hashlib.file_digest(built, "sha256").digest()
+    if not matching:
         raise ValueError("stale Kit library; rebuild " + components[4] +
                          " before deployment: " + str(source))
     bundle = REPOSITORY.joinpath(*components[:5])

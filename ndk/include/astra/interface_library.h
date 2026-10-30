@@ -23,7 +23,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.12. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 12u
 /** Current Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 3u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 4u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -753,6 +753,21 @@ AstraResult astra_interface_ui_layout(AstraUIContext *context,
  */
 AstraResult astra_interface_ui_geometry(const AstraUIContext *context,
     uint32_t index, AstraControlFrame *frame, AstraControlFrame *clip);
+/** Hit-test a client-local pointer against retained controls. The row is -1
+ * for blank collection space or controls without rows. A miss returns ID 0.
+ * Uses the same clipped geometry and row mapping as context-menu dispatch.
+ * @since Interface Kit 12.4.
+ */
+AstraResult astra_interface_ui_pointer_hit(const AstraUIContext *context,
+    int32_t x, int32_t y, uint32_t *control_id, int32_t *row);
+
+/** Shared left-button drag threshold. Feed pointer and reset events before UI
+ * dispatch; source_hit matters on button down only. A trigger disarms until
+ * next down, leaving document creation to the application.
+ * @since Interface Kit 12.4.
+ */
+AstraResult astra_interface_drag_gesture_event(AstraDragGesture *gesture,
+    const AstraWindowEvent *event, uint32_t source_hit, uint32_t *triggered);
 /** Replace application-owned semantic control state.
  * @param context UI context owning @p control.
  * @param control Control whose application-owned state is replaced.

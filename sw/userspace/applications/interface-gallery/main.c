@@ -408,9 +408,7 @@ static const char text_view_example[] =
     "End of shared control example.";
 static char clipboard_scratch[4096];
 static uint32_t active_page = GALLERY_PAGE_INPUT;
-static uint8_t gallery_drag_armed;
-static int32_t gallery_drag_start_x;
-static int32_t gallery_drag_start_y;
+static AstraDragGesture gallery_drag_gesture = ASTRA_DRAG_GESTURE_INIT;
 static uint32_t gallery_drag_token;
 static uint32_t gallery_drag_visual_target;
 static uint32_t gallery_drag_visual_operation;
@@ -3422,29 +3420,15 @@ static uint32_t gallery_drag_visual(uint32_t target, uint32_t operation)
 
 static uint32_t gallery_drag_pointer(const AstraWindowEvent *event)
 {
-    int32_t x, y, dx, dy;
-
-    if (event->type == ASTRA_WINDOW_EVENT_STATE_RESET) {
-        gallery_drag_armed = 0u;
-        return ASTRA_STATUS_OK;
-    }
-    if (active_page != GALLERY_PAGE_DRAG) return ASTRA_STATUS_OK;
-    if (event->type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
-        event->data.pointer.button == ASTRA_INPUT_BUTTON_LEFT) {
-        gallery_drag_armed = (event->flags & ASTRA_WINDOW_EVENT_DOWN) != 0u &&
-            gallery_frame_contains(GALLERY_DRAG_SOURCE,
-                event->data.pointer.x, event->data.pointer.y);
-        gallery_drag_start_x = event->data.pointer.x;
-        gallery_drag_start_y = event->data.pointer.y;
-        return ASTRA_STATUS_OK;
-    }
-    if (event->type != ASTRA_WINDOW_EVENT_POINTER_MOTION ||
-        gallery_drag_armed == 0u) return ASTRA_STATUS_OK;
-    x = event->data.motion.x;
-    y = event->data.motion.y;
-    dx = x - gallery_drag_start_x;
-    dy = y - gallery_drag_start_y;
-    if (dx >= -5 && dx <= 5 && dy >= -5 && dy <= 5)
+    uint32_t triggered = 0u;
+    uint32_t source_hit = active_page == GALLERY_PAGE_DRAG &&
+        event->type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
+        gallery_frame_contains(GALLERY_DRAG_SOURCE,
+            event->data.pointer.x, event->data.pointer.y);
+    if (astra_interface_drag_gesture_event(&gallery_drag_gesture,
+            event, source_hit, &triggered) != ASTRA_OK)
+        return GALLERY_FAIL_CONTROL;
+    if (active_page != GALLERY_PAGE_DRAG || triggered == 0u)
         return ASTRA_STATUS_OK;
     {
         static const char files[] = "notes.txt\nsketch.afnt\nDoom.app";
@@ -3455,7 +3439,6 @@ static uint32_t gallery_drag_pointer(const AstraWindowEvent *event)
         representation.type_length = sizeof("text/plain") - 1u;
         representation.data = files;
         representation.data_length = sizeof(files) - 1u;
-        gallery_drag_armed = 0u;
         if (astra_window_drag_begin(&window, &representation, 1u, 3u,
                 ASTRA_DRAG_OPERATIONS, "notes.txt +2",
                 sizeof("notes.txt +2") - 1u) != ASTRA_OK)
@@ -3509,7 +3492,7 @@ static uint32_t gallery_drag_event(AstraWindowEvent *event)
                 { status = GALLERY_FAIL_CONTROL; goto close_document; }
         }
         gallery_drag_token = 0u;
-        gallery_drag_armed = 0u;
+        gallery_drag_gesture.armed = 0u;
         if (event->type == ASTRA_WINDOW_EVENT_DRAG_FINISHED)
             gallery_drag_last_target = 0u;
         if (gallery_drag_visual(0u, 0u) != ASTRA_STATUS_OK)

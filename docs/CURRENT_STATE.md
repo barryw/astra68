@@ -2,6 +2,29 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas drag/drop checkpoint, 2026-10-30: System Kit 4.6 adds exact MIME lookup
+for any validated ACLP document, so clipboard and display-owned drag documents
+share one parser. Interface Kit 12.4 owns pointer hit testing, collection row
+mapping, drag threshold, and File Panel folder/Places destination resolution.
+UI Gallery uses the shared drag threshold. Atlas only builds the existing
+Filesystem Kit VFS selection payload, chooses the requested destination and
+copy/move policy, pins exact removable volume grants, and calls its existing
+tree copy/move operations. Haiku read-only reference:
+`src/kits/tracker/PoseView.cpp` (`FindDragNDropAction` and
+`CanCopyOrMoveForeignDrag`) separates advertised actions and directory target
+acceptance; Astra adapts that split to typed ACLP and capability-backed VFS.
+Beast System/Interface host tests, shared-library contracts, Atlas and Gallery
+MC68040 builds passed. Focused DE25 install passed. RFB checks copied
+`astra_events.cat` from read-only DH0 to RAM0, moved it into a RAM0 folder,
+confirmed the source vanished and destination contained it, refused a RAM0 to
+read-only DH0 drop, and verified clipboard Copy/Paste still worked. After the
+File Panel reuse refactor, a second DE25 targeted install and DH0-to-RAM0 drag
+passed; disposable RAM0 file was deleted via Atlas. `astra.service` and remote
+desktop stayed active, zero restarts, with 8.2 GiB free. SHA-verified RFB
+evidence is on Beast at `/mnt/Documents/astra68/atlas-drag-20261030/`; board
+capture files removed. Remaining Atlas work: shared List row expansion and
+Recent items.
+
 Atlas saved-search rename checkpoint, 2026-10-30: Filesystem Kit 15.8 adds
 `astra_saved_query_set_label`, reusing saved-query serialization and staged
 file writes, then atomically renaming a synced replacement over the preset.

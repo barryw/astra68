@@ -104,9 +104,20 @@ recursive or indexed query. Haiku read-only references:
 `src/kits/tracker/QueryPoseView.cpp` binds query items to results. Astra uses
 its native Filesystem Kit and File Panel, with no Atlas-only search control.
 
-Remaining design work: List row expansion, Recent items, and drag and drop.
-These need shared controls or native volume
-grant transitions, not Atlas-only widgets.
+Drag/drop uses display-owned ACLP documents with the same Filesystem Kit VFS
+selection payload as Copy/Paste. System Kit finds typed representations in
+either document; Interface Kit supplies pointer and row hit testing, the drag
+threshold, and File Panel directory resolution for Places, Grid, List, and
+Columns. Atlas only chooses copy or move, acquires exact volume grants, and
+calls Filesystem Kit's existing tree operations. Same-volume drags move by
+default; cross-volume drags copy; Alt requests copy. Read-only destinations
+refuse the drop before transfer. Haiku's
+`src/kits/tracker/PoseView.cpp` (`FindDragNDropAction` and
+`CanCopyOrMoveForeignDrag`) informed the action/target split without adopting
+Tracker-specific messages or UI geometry.
+
+Remaining design work: shared List row expansion and Recent items. These
+need common controls or native recent-item storage, not Atlas-only widgets.
 
 Keyboard bindings use Interface Kit's shared command shortcut dispatcher and
 existing responder chain. Atlas owns only its binding table and suppresses

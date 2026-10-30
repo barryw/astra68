@@ -112,29 +112,38 @@ AstraResult astra_interface_file_panel_context_entry(
     const AstraFilePanel *panel, const AstraUIAction *action,
     uint32_t *entry_index, uint32_t *depth)
 {
+    if (action == NULL || action->size != sizeof(*action) ||
+        action->type != ASTRA_UI_ACTION_CONTEXT_MENU)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return astra_interface_file_panel_entry_at(panel, action->control_id,
+        action->value, entry_index, depth);
+}
+
+AstraResult astra_interface_file_panel_entry_at(
+    const AstraFilePanel *panel, uint32_t control_id, int32_t row,
+    uint32_t *entry_index, uint32_t *depth)
+{
     const AstraCollectionItem *items = NULL;
     uint32_t count = 0u, entry_count = 0u, at_depth = 0u;
 
     if (panel == NULL || panel->size != sizeof(*panel) ||
-        action == NULL || action->size != sizeof(*action) ||
-        action->type != ASTRA_UI_ACTION_CONTEXT_MENU ||
         entry_index == NULL || depth == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *entry_index = UINT32_MAX;
     *depth = 0u;
     if (panel->view_mode == ASTRA_FILE_PANEL_VIEW_LIST &&
-        action->control_id == panel->first_id + ASTRA_FILE_PANEL_LIST) {
+        control_id == panel->first_id + ASTRA_FILE_PANEL_LIST) {
         items = panel->items;
         count = panel->item_count;
         entry_count = panel->entry_count;
     } else if (panel->view_mode == ASTRA_FILE_PANEL_VIEW_GRID &&
-        action->control_id == panel->first_id + ASTRA_FILE_PANEL_GRID) {
+        control_id == panel->first_id + ASTRA_FILE_PANEL_GRID) {
         items = panel->items;
         count = panel->item_count;
         entry_count = panel->entry_count;
     } else if (panel->view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS) {
         for (uint32_t at = 0u; at < panel->column_count; ++at) {
-            if (action->control_id != panel->first_id +
+            if (control_id != panel->first_id +
                     ASTRA_FILE_PANEL_CONTROL_COUNT + 2u + 2u * at)
                 continue;
             const AstraFilePanelColumnSnapshot *snapshot =
@@ -146,13 +155,12 @@ AstraResult astra_interface_file_panel_context_entry(
             break;
         }
     }
-    if (items == NULL || action->value < 0 ||
-        (uint64_t)action->value >= count)
+    *depth = at_depth;
+    if (items == NULL || row < 0 || (uint64_t)row >= count)
         return ASTRA_OK;
-    uint64_t id = items[(uint32_t)action->value].id;
+    uint64_t id = items[(uint32_t)row].id;
     if (id == 0u || id > entry_count) return ASTRA_ERROR_INVALID_ARGUMENT;
     *entry_index = (uint32_t)id - 1u;
-    *depth = at_depth;
     return ASTRA_OK;
 }
 
@@ -160,21 +168,89 @@ AstraResult astra_interface_file_panel_context_place(
     const AstraFilePanel *panel, const AstraUIAction *action,
     uint32_t *place_index)
 {
+    if (action == NULL || action->size != sizeof(*action) ||
+        action->type != ASTRA_UI_ACTION_CONTEXT_MENU)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return astra_interface_file_panel_place_at(panel, action->control_id,
+        action->value, place_index);
+}
+
+AstraResult astra_interface_file_panel_place_at(
+    const AstraFilePanel *panel, uint32_t control_id, int32_t row,
+    uint32_t *place_index)
+{
     if (panel == NULL || panel->size != sizeof(*panel) ||
-        action == NULL || action->size != sizeof(*action) ||
-        action->type != ASTRA_UI_ACTION_CONTEXT_MENU ||
         place_index == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *place_index = UINT32_MAX;
-    if (action->control_id != panel->first_id + ASTRA_FILE_PANEL_PLACES_LIST ||
-        action->value < 0 || (uint64_t)action->value >= panel->place_count)
+    if (control_id != panel->first_id + ASTRA_FILE_PANEL_PLACES_LIST ||
+        row < 0 || (uint64_t)row >= panel->place_count)
         return ASTRA_OK;
     if (panel->places == NULL || panel->place_items == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    uint64_t id = panel->place_items[(uint32_t)action->value].id;
+    uint64_t id = panel->place_items[(uint32_t)row].id;
     if (id == 0u || id > panel->place_count)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *place_index = (uint32_t)id - 1u;
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_file_panel_directory_at(
+    const AstraFilePanel *panel, uint32_t control_id, int32_t row,
+    char *path, uint32_t capacity)
+{
+    uint32_t index = UINT32_MAX, depth = 0u;
+    AstraResult result;
+    const char *parent;
+    const AstraDirectoryEntry *entries;
+    uint32_t count;
+    AstraString target;
+
+    if (panel == NULL || panel->size != sizeof(*panel) ||
+        path == NULL || capacity == 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (control_id == panel->first_id + ASTRA_FILE_PANEL_PLACES_LIST) {
+        result = astra_interface_file_panel_place_at(panel, control_id,
+            row, &index);
+        if (result != ASTRA_OK) return result;
+        if (index >= panel->place_count || panel->places[index].path == NULL)
+            return ASTRA_ERROR_NOT_PRESENT;
+        return astra_string_copy(path, capacity, panel->places[index].path) ?
+            ASTRA_OK : ASTRA_ERROR_BUFFER_TOO_SMALL;
+    }
+    result = astra_interface_file_panel_entry_at(panel, control_id, row,
+        &index, &depth);
+    if (result != ASTRA_OK) return result;
+    uint32_t active =
+        (panel->view_mode == ASTRA_FILE_PANEL_VIEW_GRID &&
+         control_id == panel->first_id + ASTRA_FILE_PANEL_GRID) ||
+        (panel->view_mode == ASTRA_FILE_PANEL_VIEW_LIST &&
+         control_id == panel->first_id + ASTRA_FILE_PANEL_LIST) ||
+        (panel->view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS &&
+         depth < panel->column_count && control_id == panel->first_id +
+            ASTRA_FILE_PANEL_CONTROL_COUNT + 2u + 2u * depth);
+    if (!active) return ASTRA_ERROR_NOT_PRESENT;
+    const AstraFilePanelColumnSnapshot *snapshot =
+        depth < panel->column_count ? &panel->column_snapshots[depth] : NULL;
+    parent = depth == 0u ? panel->directory :
+        snapshot != NULL ? snapshot->directory : NULL;
+    entries = depth == 0u ? panel->entries :
+        snapshot != NULL ? snapshot->entries : NULL;
+    count = depth == 0u ? panel->entry_count :
+        snapshot != NULL ? snapshot->entry_count : 0u;
+    if (parent == NULL) return ASTRA_ERROR_NOT_PRESENT;
+    if (index == UINT32_MAX)
+        return astra_string_copy(path, capacity, parent) ?
+            ASTRA_OK : ASTRA_ERROR_BUFFER_TOO_SMALL;
+    if (entries == NULL || index >= count ||
+        entries[index].kind != ASTRA_VFS_KIND_DIRECTORY)
+        return ASTRA_ERROR_NOT_PRESENT;
+    astra_string_init(&target, path, capacity);
+    if (!astra_string_append(&target, parent) ||
+        (target.length != 0u && target.text[target.length - 1u] != '/' &&
+         !astra_string_append_char(&target, '/')) ||
+        !astra_string_append(&target, entries[index].name))
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
     return ASTRA_OK;
 }
 

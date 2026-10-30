@@ -1284,6 +1284,14 @@ typedef struct AstraUIAction {
     sizeof(AstraUIAction), ASTRA_UI_ACTION_NONE, 0, 0, 0, { 0, 0 } \
 }
 
+/** Shared pointer threshold state for starting a native drag. */
+typedef struct AstraDragGesture {
+    int32_t start_x;
+    int32_t start_y;
+    uint32_t armed;
+} AstraDragGesture;
+#define ASTRA_DRAG_GESTURE_INIT { 0, 0, 0u }
+
 ASTRA_EXTERN_C_END
 
 #endif

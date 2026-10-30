@@ -567,6 +567,14 @@ AstraResult astra_interface_file_panel_context_entry(
     const AstraFilePanel *panel, const AstraUIAction *action,
     uint32_t *entry_index, uint32_t *depth);
 
+/** Map any File Panel collection hit to its directory entry. Shared by
+ * context menus and drag/drop; row -1 means blank space.
+ * @since Interface Kit 12.4.
+ */
+AstraResult astra_interface_file_panel_entry_at(
+    const AstraFilePanel *panel, uint32_t control_id, int32_t row,
+    uint32_t *entry_index, uint32_t *depth);
+
 /** Map a Places context-menu action to its sidebar row. Blank space or an
  * action outside Places yields UINT32_MAX. Callers own the place's commands;
  * File Panel owns row hit testing and index validation.
@@ -579,6 +587,23 @@ AstraResult astra_interface_file_panel_context_entry(
 AstraResult astra_interface_file_panel_context_place(
     const AstraFilePanel *panel, const AstraUIAction *action,
     uint32_t *place_index);
+
+/** Map any Places collection hit to its original sidebar row.
+ * @since Interface Kit 12.4.
+ */
+AstraResult astra_interface_file_panel_place_at(
+    const AstraFilePanel *panel, uint32_t control_id, int32_t row,
+    uint32_t *place_index);
+
+/** Resolve a File Panel hit to a browsable directory destination. Folder
+ * rows resolve inside that folder; blank List/Grid/Column space resolves to
+ * that view's current directory; Places rows resolve to their path. Files and
+ * action-only Places return NOT_PRESENT. Caller owns write policy.
+ * @since Interface Kit 12.4.
+ */
+AstraResult astra_interface_file_panel_directory_at(
+    const AstraFilePanel *panel, uint32_t control_id, int32_t row,
+    char *path, uint32_t capacity);
 
 enum {
     ASTRA_FONT_PANEL_ROOT = 0u,

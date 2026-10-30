@@ -122,6 +122,21 @@ ASTRA_NODISCARD AstraResult astra_clipboard_document_write(
 ASTRA_NODISCARD AstraResult astra_clipboard_document_validate(
     const void *document, uint32_t bytes);
 
+/** Find an exact MIME representation in any validated ACLP document, including
+ * a mapped drag document. Returned data borrows the document's lifetime.
+ * @param document Complete serialized document bytes.
+ * @param bytes Available document bytes.
+ * @param type Counted MIME type to find.
+ * @param type_length Bytes at @p type.
+ * @param data Receives a document-backed immutable data pointer.
+ * @param data_length Receives its byte count.
+ * @return ::ASTRA_OK, ::ASTRA_ERROR_NOT_PRESENT, or a validation error.
+ * @since system.library 4.6.
+ */
+ASTRA_NODISCARD AstraResult astra_clipboard_document_find(
+    const void *document, uint32_t bytes, const char *type,
+    uint32_t type_length, const void **data, uint32_t *data_length);
+
 /**
  * Atomically replace the system clipboard with typed representations.
  * @param service Clipboard-service capability.

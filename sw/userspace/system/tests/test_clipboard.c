@@ -85,6 +85,20 @@ int main(void)
            ASTRA_OK);
     assert(astra_clipboard_document_validate(document, bytes) == ASTRA_OK);
     {
+        const void *found = NULL;
+        uint32_t found_length = 0u;
+
+        assert(astra_clipboard_document_find(document, bytes, rich_type,
+            sizeof(rich_type) - 1u, &found, &found_length) == ASTRA_OK);
+        assert(found_length == sizeof(rich) &&
+            memcmp(found, rich, found_length) == 0);
+        assert(astra_clipboard_document_find(document, bytes, "missing/type",
+            12u, &found, &found_length) == ASTRA_ERROR_NOT_PRESENT);
+        assert(astra_clipboard_document_find(document, bytes - 1u, rich_type,
+            sizeof(rich_type) - 1u, &found, &found_length) ==
+            ASTRA_ERROR_INVALID_ARGUMENT);
+    }
+    {
         AstraClipboardItem item = ASTRA_CLIPBOARD_ITEM_INIT;
         const void *found = NULL;
         uint32_t found_length = 0u;
