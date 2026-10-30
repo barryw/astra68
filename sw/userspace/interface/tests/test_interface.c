@@ -2152,8 +2152,8 @@ static void test_table_control(void)
     event.flags = 0u;
     assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
     assert(action.type == ASTRA_UI_ACTION_SORT_REQUESTED &&
-        action.control_id == 91u && action.value == 0 &&
-        collection.selected_id == 0u);
+           action.control_id == 91u && action.value == 0 &&
+           collection.selected_id == 12u);
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
         ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 190,
         control._private_frame.y + 4);
@@ -2168,7 +2168,8 @@ static void test_table_control(void)
     event.flags = 0u;
     event.data.pointer.x = control._private_frame.x + 190;
     assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
-    assert(action.type == ASTRA_UI_ACTION_NONE && collection.selected_id == 0u);
+    assert(action.type == ASTRA_UI_ACTION_NONE && collection.selected_id == 12u);
+    assert(astra_interface_control_set_value(&context, &control, -1) == ASTRA_OK);
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
         ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
         control._private_frame.y + 2u * theme.control_height + 4u);
@@ -2214,6 +2215,27 @@ static void test_table_control(void)
         subset, 2u, cells, 2u) == ASTRA_OK);
     assert(selection.count == 2u && collection.selected_id == 11u &&
         !astra_interface_selection_contains(&selection, 13u));
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + theme.control_height + 4u);
+    event.data.pointer.button = 3u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_CONTEXT_MENU && action.value == 0 &&
+        selection.count == 2u && collection.selected_id == 12u &&
+        astra_interface_selection_contains(&selection, 11u));
+    assert(astra_interface_table_set_rows(&context, &control,
+        rows, 3u, cells, 3u) == ASTRA_OK);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + 3u * theme.control_height + 4u);
+    event.data.pointer.button = 3u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_CONTEXT_MENU && action.value == 2 &&
+        selection.count == 1u && collection.selected_id == 13u);
 
     /* Header state must remain valid beyond shared scrollbar part range. */
     static const AstraCollectionItem one_row[] = {

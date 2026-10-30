@@ -2,6 +2,22 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared context selection checkpoint, 2026-10-30: Interface Kit now owns
+right-click selection for every collection control. A selected item keeps the
+multi-selection and becomes primary; an unselected item selects alone. Atlas
+removed its List and flat-view selection overrides and uses File Panel's hit
+mapping plus the shared collection state for commands and status. Haiku
+read-only reference: `src/kits/tracker/PoseView.cpp` preserves selection when
+context-clicking a selected pose. Beast Interface host tests, MC68040 library
+build, Atlas host test and bundle build pass. Targeted DE25 install reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=4`; RFB verified two selected List rows
+remained selected after right-click, menu opened, and Desktop volume context
+menu still opened. Astra, audio, and remote desktop services remained active
+with zero restarts and 8.1 GiB free. State backup, captures, and service log
+are archived on Beast at `/mnt/Documents/astra68/atlas-context-20261030/`;
+board trial captures were removed. This validates context selection, not every
+Atlas file operation or design state.
+
 Atlas presented-path checkpoint, 2026-10-30: Interface Kit's shared File
 Panel now resolves paths and directory drop targets from the presented List,
 including nested outline rows. Grid, Columns, and Places retain the same

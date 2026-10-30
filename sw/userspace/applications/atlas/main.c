@@ -3883,11 +3883,6 @@ static AstraResult run(AstraHandle gui)
                     }
                 }
                 {
-                    if (outline_hit && index != UINT32_MAX) {
-                        AstraResult focused = astra_interface_control_set_value(
-                            &ui, root_selection_control(), action.value);
-                        if (focused != ASTRA_OK) return focused;
-                    }
                     const AstraFilePanelColumnSnapshot *snapshot =
                         depth < browser.column_count ?
                             &browser.column_snapshots[depth] : NULL;
@@ -3910,11 +3905,9 @@ static AstraResult run(AstraHandle gui)
                         cleared = paint();
                         if (cleared != ASTRA_OK) return cleared;
                     }
-                    if (index != UINT32_MAX && depth == 0u && !outline_hit &&
-                        !astra_interface_selection_contains(&browser_selection,
-                            (uint64_t)index + 1u)) {
-                        AstraResult focused = focus_root_entry(index);
-                        if (focused != ASTRA_OK) return focused;
+                    if (index != UINT32_MAX) {
+                        AstraResult updated = browser_update_status();
+                        if (updated != ASTRA_OK) return updated;
                     }
                     uint32_t count = 0u;
                     memset(menu_parents, 0, sizeof(menu_parents));

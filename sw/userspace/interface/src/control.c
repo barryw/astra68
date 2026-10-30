@@ -557,6 +557,26 @@ static int selection_apply(AstraControl *control, uint32_t row,
     return 1;
 }
 
+static AstraResult collection_context_select(AstraUIContext *context,
+    uint32_t index, int32_t row)
+{
+    AstraControl *control = &context->_private_controls[index];
+    AstraCollectionModel *model = collection_model(control);
+    if (row < 0) return ASTRA_OK;
+    if ((uint32_t)row >= control->_private_text_length || model == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint64_t id = model->items[selection_item_at(control, (uint32_t)row)].id;
+    if (model->selection == NULL ||
+        !astra_interface_selection_contains(model->selection, id))
+        return astra_interface_control_set_value(context, control, row);
+    if (model->selected_id == id && control->_private_value == row)
+        return ASTRA_OK;
+    control_damage(context, index);
+    model->selected_id = id;
+    control->_private_value = row;
+    return ASTRA_OK;
+}
+
 AstraResult astra_interface_collection_mirror_primary(AstraUIContext *context,
     AstraControl *target, const AstraCollectionModel *source)
 {
@@ -8957,10 +8977,15 @@ static AstraResult pointer_event(AstraUIContext *context,
             if (focusable(control) && (control->_private_state & ASTRA_CONTROL_DISABLED) == 0u)
                 set_focus(context, target, 0);
             action->control_id = control->_private_id;
-            if (COLLECTION_KINDS(control->_private_control_kind))
+            if (COLLECTION_KINDS(control->_private_control_kind)) {
                 action->value = choice_index_at(control,
                     event->data.pointer.x, event->data.pointer.y);
-            else action->value = -1;
+                if ((control->_private_state & ASTRA_CONTROL_DISABLED) == 0u) {
+                    AstraResult result = collection_context_select(context,
+                        target, (int32_t)action->value);
+                    if (result != ASTRA_OK) return result;
+                }
+            } else action->value = -1;
         }
         action->type = ASTRA_UI_ACTION_CONTEXT_MENU;
         return ASTRA_OK;
