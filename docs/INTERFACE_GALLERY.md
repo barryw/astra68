@@ -23,7 +23,8 @@ example. Open, Save, and Font panels are Interface Kit compositions; the file
 panels also show shared breadcrumb navigation. Font panel reads the installed
 Font Kit catalog and displays actual faces and strikes. Gallery's Menu Bar is
 visible whenever its window has focus. Right-click the Panels tab for its
-Context Menu; buttons there open other system overlays.
+Context Menu; buttons there open other system overlays. Icon Grid uses three
+hardware-drawn fixture icons so its tile image path is visible too.
 
 Gallery's `--benchmark` argument exercises target-side layout and interaction
 paths and prints `INTERFACE` records. Ordinary desktop launch runs only the

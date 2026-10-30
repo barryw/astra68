@@ -4,6 +4,7 @@
 #include <astra/clipboard_service.h>
 #include <astra/graphics_kit.h>
 #include <astra/graphics_library.h>
+#include <astra/icon_tile.h>
 #include <astra/interface_kit.h>
 #include <astra/interface_library.h>
 #include <astra/image_view.h>
@@ -286,6 +287,9 @@ static AstraSurface gallery_image_source = ASTRA_SURFACE_INIT;
 static AstraImageViewModel gallery_image_model;
 static AstraCollectionModel gallery_icon_collection = ASTRA_COLLECTION_MODEL_INIT;
 static AstraIconGridModel gallery_icon_model = ASTRA_ICON_GRID_MODEL_INIT;
+static AstraSurface gallery_icon_sources[3] = {
+    ASTRA_SURFACE_INIT, ASTRA_SURFACE_INIT, ASTRA_SURFACE_INIT
+};
 static const AstraSurface *gallery_icon_surfaces[3];
 static AstraGridViewModel gallery_grid_model = ASTRA_GRID_VIEW_MODEL_INIT;
 static AstraTextCell gallery_grid_cells[32];
@@ -2894,6 +2898,74 @@ static uint32_t create_image_fixture(void)
     return ASTRA_STATUS_OK;
 }
 
+static uint32_t create_icon_fixtures(void)
+{
+    static const struct {
+        AstraRectI32 rectangle;
+        AstraColorRGBA8 color;
+    } shapes[3][4] = {
+        {
+            {{0, 0, 64u, 64u}, {21u, 35u, 45u, 255u}},
+            {{8, 12, 48u, 34u}, {45u, 174u, 184u, 255u}},
+            {{12, 16, 40u, 26u}, {38u, 57u, 68u, 255u}},
+            {{25, 24, 14u, 10u}, {236u, 163u, 83u, 255u}}
+        },
+        {
+            {{0, 0, 64u, 64u}, {38u, 57u, 68u, 255u}},
+            {{9, 10, 46u, 44u}, {235u, 242u, 240u, 255u}},
+            {{15, 17, 34u, 8u}, {45u, 174u, 184u, 255u}},
+            {{15, 31, 25u, 14u}, {21u, 35u, 45u, 255u}}
+        },
+        {
+            {{0, 0, 64u, 64u}, {45u, 174u, 184u, 255u}},
+            {{12, 7, 40u, 50u}, {235u, 242u, 240u, 255u}},
+            {{18, 20, 28u, 4u}, {38u, 57u, 68u, 255u}},
+            {{18, 32, 22u, 4u}, {38u, 57u, 68u, 255u}}
+        }
+    };
+    const AstraRectI32 whole = {0, 0, ASTRA_ICON_TILE_SOURCE_SIZE,
+                                ASTRA_ICON_TILE_SOURCE_SIZE};
+    AstraSurfaceCreateInfo info = ASTRA_SURFACE_CREATE_INFO_INIT;
+    AstraDisplay display = ASTRA_DISPLAY_INIT;
+    AstraResult result = astra_window_display(&window, &display);
+
+    info.flags = ASTRA_SURFACE_DRAW_SOURCE | ASTRA_SURFACE_DRAW_TARGET;
+    info.width = ASTRA_ICON_TILE_SOURCE_SIZE;
+    info.height = ASTRA_ICON_TILE_SOURCE_SIZE;
+    info.format = ASTRA_PIXEL_FORMAT_RGB565;
+    for (uint32_t icon = 0u; result == ASTRA_OK && icon < 3u; ++icon) {
+        AstraDrawList draw = ASTRA_DRAW_LIST_INIT;
+        AstraDrawPaint paint = ASTRA_DRAW_PAINT_INIT;
+
+        result = astra_surface_create(&display, &info,
+                                      &gallery_icon_sources[icon]);
+        if (result == ASTRA_OK)
+            result = astra_draw_list_create(&gallery_icon_sources[icon],
+                                            &whole, &draw);
+        for (uint32_t shape = 0u; result == ASTRA_OK && shape < 4u; ++shape) {
+            paint.foreground = shapes[icon][shape].color;
+            result = astra_draw_rectangle(&draw,
+                &shapes[icon][shape].rectangle, 1, &paint);
+        }
+        if (result == ASTRA_OK) result = astra_draw_post(&draw, 0u);
+        if (draw._private_handle != ASTRA_INVALID_HANDLE) {
+            AstraResult closed = astra_draw_list_close(&draw);
+            if (result == ASTRA_OK) result = closed;
+        }
+        if (result == ASTRA_OK)
+            gallery_icon_surfaces[icon] = &gallery_icon_sources[icon];
+    }
+    if (display._private_handle != ASTRA_INVALID_HANDLE) {
+        AstraResult closed = astra_display_close(&display);
+        if (result == ASTRA_OK) result = closed;
+    }
+    if (result != ASTRA_OK) {
+        (void)astra_log_failure("gallery icon fixtures", (uint32_t)(-result));
+        return GALLERY_FAIL_RENDER;
+    }
+    return ASTRA_STATUS_OK;
+}
+
 static uint32_t create_window(AstraHandle gui)
 {
     AstraWindowCreateInfo info = ASTRA_WINDOW_CREATE_INFO_INIT;
@@ -2930,6 +3002,8 @@ static uint32_t create_window(AstraHandle gui)
         result = astra_window_menu_bar_set(&window, gallery_menu_bar,
             sizeof(gallery_menu_bar) / sizeof(gallery_menu_bar[0]));
     if (result == ASTRA_OK && create_image_fixture() != ASTRA_STATUS_OK)
+        result = ASTRA_ERROR_IO;
+    if (result == ASTRA_OK && create_icon_fixtures() != ASTRA_STATUS_OK)
         result = ASTRA_ERROR_IO;
     if (result == ASTRA_OK)
         result = astra_window_activate(&window);
@@ -3810,6 +3884,13 @@ int astra_main(const AstraStartupInfo *startup)
             (void)astra_log_failure("gallery image close",
                                     (uint32_t)(-closed));
     }
+    for (uint32_t icon = 0u; icon < 3u; ++icon)
+        if (gallery_icon_sources[icon]._private_handle != ASTRA_INVALID_HANDLE) {
+            AstraResult closed = astra_surface_close(&gallery_icon_sources[icon]);
+            if (closed != ASTRA_OK)
+                (void)astra_log_failure("gallery icon close",
+                                        (uint32_t)(-closed));
+        }
     if (gallery_sheet_open != 0u)
         (void)gallery_sheet_close();
     if (window._private_control != ASTRA_INVALID_HANDLE) {
