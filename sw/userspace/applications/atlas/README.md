@@ -138,6 +138,9 @@ collection text-region API also positions the inline rename editor over any
 visible List, Table, or Outline Table row. Haiku's read-only
 `src/kits/interface/OutlineListView.cpp` informed the separate visible-row
 presentation and parent navigation; Astra retains its Table columns.
+File Panel's presented-path and presented-directory calls resolve nested List
+rows as well as flat Grid, Columns, and Places targets. Atlas uses them for
+drag source and destination hits, without its own row-to-directory mapping.
 
 Keyboard bindings use Interface Kit's shared command shortcut dispatcher and
 existing responder chain. Atlas owns only its binding table and suppresses

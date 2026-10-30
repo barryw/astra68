@@ -713,6 +713,44 @@ AstraResult astra_interface_file_panel_path_at(
     return ASTRA_OK;
 }
 
+AstraResult astra_interface_file_panel_presented_path_at(
+    const AstraFilePanel *panel, const AstraControl *list_control,
+    uint32_t control_id, int32_t row, char *path, uint32_t capacity,
+    const AstraDirectoryEntry **entry)
+{
+    if (panel == NULL || panel->size != sizeof(*panel) ||
+        list_control == NULL || path == NULL || capacity == 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (entry != NULL) *entry = NULL;
+    if (panel->view_mode == ASTRA_FILE_PANEL_VIEW_LIST &&
+        control_id == panel->first_id + ASTRA_FILE_PANEL_LIST &&
+        list_control->_private_control_kind == ASTRA_CONTROL_OUTLINE_TABLE) {
+        const AstraFilePanelOutline *outline =
+            (const AstraFilePanelOutline *)list_control->_private_display_model;
+        if (outline == NULL || outline->model.table != &panel->list_table)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (row < 0)
+            return astra_string_copy(path, capacity, outline->directory) ?
+                ASTRA_OK : ASTRA_ERROR_BUFFER_TOO_SMALL;
+        return astra_interface_file_panel_outline_row(outline,
+            (uint32_t)row, path, capacity, entry, NULL, NULL, NULL);
+    }
+    return astra_interface_file_panel_path_at(panel, control_id,
+        row, path, capacity, entry);
+}
+
+AstraResult astra_interface_file_panel_presented_directory_at(
+    const AstraFilePanel *panel, const AstraControl *list_control,
+    uint32_t control_id, int32_t row, char *path, uint32_t capacity)
+{
+    const AstraDirectoryEntry *entry = NULL;
+    AstraResult result = astra_interface_file_panel_presented_path_at(
+        panel, list_control, control_id, row, path, capacity, &entry);
+    if (result != ASTRA_OK) return result;
+    return entry == NULL || entry->kind == ASTRA_VFS_KIND_DIRECTORY ?
+        ASTRA_OK : ASTRA_ERROR_NOT_PRESENT;
+}
+
 AstraResult astra_interface_file_panel_directory_at(
     const AstraFilePanel *panel, uint32_t control_id, int32_t row,
     char *path, uint32_t capacity)

@@ -2709,12 +2709,9 @@ static AstraResult drag_destination_at(int32_t x, int32_t y,
     AstraResult result = astra_interface_ui_pointer_hit(&ui, x, y,
         &control_id, &row);
     if (result != ASTRA_OK) return result;
-    result = control_id == 1u + ASTRA_FILE_PANEL_LIST &&
-        browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST ?
-        astra_interface_file_panel_outline_directory_at(browser_outline,
-            row, path, capacity) :
-        astra_interface_file_panel_directory_at(&browser,
-            control_id, row, path, capacity);
+    result = astra_interface_file_panel_presented_directory_at(&browser,
+        BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST), control_id,
+        row, path, capacity);
     if (result != ASTRA_OK) return result;
     AstraVfsClipboardEntry target = {0};
     result = copy_reference_for(path, &target);
@@ -2835,9 +2832,9 @@ static AstraResult atlas_drag_pointer(const AstraWindowEvent *event)
             browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST) {
             const AstraDirectoryEntry *entry = NULL;
             result = row < 0 ? ASTRA_ERROR_NOT_PRESENT :
-                astra_interface_file_panel_outline_row(browser_outline,
-                    (uint32_t)row, outline_path, sizeof(outline_path), &entry,
-                    NULL, NULL, NULL);
+                astra_interface_file_panel_presented_path_at(&browser,
+                    BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST), control_id,
+                    row, outline_path, sizeof(outline_path), &entry);
             drag_source_depth = UINT32_MAX;
             drag_source_index = result == ASTRA_OK ? (uint32_t)row : UINT32_MAX;
             source_hit = result == ASTRA_OK && entry != NULL &&

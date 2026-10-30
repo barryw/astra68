@@ -6030,6 +6030,25 @@ static void test_file_panel_outline(void)
         path, sizeof(path), &resolved, &depth, NULL, NULL) == ASTRA_OK);
     assert(strcmp(path, "/dh0/Stories/zork1.z3") == 0 && depth == 1u &&
         resolved->kind == ASTRA_VFS_KIND_FILE);
+    panel.view_mode = ASTRA_FILE_PANEL_VIEW_LIST;
+    assert(astra_interface_file_panel_presented_path_at(&panel,
+        &controls[ASTRA_FILE_PANEL_LIST],
+        800u + ASTRA_FILE_PANEL_LIST, 2, path, sizeof(path),
+        &resolved) == ASTRA_OK);
+    assert(strcmp(path, "/dh0/Stories/zork1.z3") == 0 &&
+        resolved->kind == ASTRA_VFS_KIND_FILE);
+    assert(astra_interface_file_panel_presented_directory_at(&panel,
+        &controls[ASTRA_FILE_PANEL_LIST],
+        800u + ASTRA_FILE_PANEL_LIST, 2, path,
+        sizeof(path)) == ASTRA_ERROR_NOT_PRESENT);
+    assert(astra_interface_file_panel_presented_directory_at(&panel,
+        &controls[ASTRA_FILE_PANEL_LIST],
+        800u + ASTRA_FILE_PANEL_LIST, 1, path, sizeof(path)) == ASTRA_OK);
+    assert(strcmp(path, "/dh0/Stories/Zork") == 0);
+    assert(astra_interface_file_panel_presented_directory_at(&panel,
+        &controls[ASTRA_FILE_PANEL_LIST],
+        800u + ASTRA_FILE_PANEL_LIST, -1, path, sizeof(path)) == ASTRA_OK);
+    assert(strcmp(path, "/dh0") == 0);
     assert(astra_interface_file_panel_outline_directory_at(outline,
         -1, path, sizeof(path)) == ASTRA_OK &&
         strcmp(path, "/dh0") == 0);
@@ -6044,6 +6063,12 @@ static void test_file_panel_outline(void)
     assert(astra_interface_file_panel_outline_row(outline, 2u,
         path, sizeof(path), &resolved, &depth, NULL, NULL) == ASTRA_OK);
     assert(strcmp(path, "/dh0/Stories/Zork/zork2.z3") == 0 && depth == 2u);
+    assert(astra_interface_file_panel_presented_path_at(&panel,
+        &controls[ASTRA_FILE_PANEL_LIST],
+        800u + ASTRA_FILE_PANEL_LIST, 2, path, sizeof(path),
+        &resolved) == ASTRA_OK);
+    assert(strcmp(path, "/dh0/Stories/Zork/zork2.z3") == 0 &&
+        resolved->kind == ASTRA_VFS_KIND_FILE);
     {
         AstraUIAction action = ASTRA_UI_ACTION_INIT;
         uint32_t outcome = ASTRA_FILE_PANEL_NONE;

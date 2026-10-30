@@ -595,9 +595,10 @@ AstraResult astra_interface_file_panel_entry_at(
     const AstraFilePanel *panel, uint32_t control_id, int32_t row,
     uint32_t *entry_index, uint32_t *depth);
 
-/** Resolve any File Panel collection row to its absolute file or folder path.
+/** Resolve a flat File Panel collection row to its absolute file or folder path.
  * Blank space resolves to that view's directory; Places resolves to its path.
  * Returns NOT_PRESENT for an action-only Place or an unrelated control.
+ * For an outline List, use file_panel_presented_path_at.
  * The optional entry receives the borrowed directory entry for a real row.
  * @since Interface Kit 12.7.
  * @param panel Initialized File Panel.
@@ -611,6 +612,37 @@ AstraResult astra_interface_file_panel_entry_at(
 AstraResult astra_interface_file_panel_path_at(
     const AstraFilePanel *panel, uint32_t control_id, int32_t row,
     char *path, uint32_t capacity, const AstraDirectoryEntry **entry);
+
+/** Resolve a presented row, including nested rows in an optional outline List.
+ * Pass the panel's List control; other views retain file_panel_path_at behavior.
+ * @since Interface Kit 12.7.
+ * @param panel Initialized File Panel.
+ * @param list_control Panel's List control, with optional outline binding.
+ * @param control_id Hit collection control ID.
+ * @param row Visible row, or -1 for blank space.
+ * @param path Receives absolute path.
+ * @param capacity Path buffer bytes including terminator.
+ * @param entry Optional borrowed entry output, null for blank space/Places.
+ * @return ASTRA_OK, NOT_PRESENT, or validation/buffer error.
+ */
+AstraResult astra_interface_file_panel_presented_path_at(
+    const AstraFilePanel *panel, const AstraControl *list_control,
+    uint32_t control_id, int32_t row, char *path, uint32_t capacity,
+    const AstraDirectoryEntry **entry);
+
+/** Resolve a presented folder or blank view area as a drop destination.
+ * @since Interface Kit 12.7.
+ * @param panel Initialized File Panel.
+ * @param list_control Panel's List control, with optional outline binding.
+ * @param control_id Hit collection control ID.
+ * @param row Visible row, or -1 for blank space.
+ * @param path Receives absolute directory path.
+ * @param capacity Path buffer bytes including terminator.
+ * @return ASTRA_OK, NOT_PRESENT for a file, or validation/buffer error.
+ */
+AstraResult astra_interface_file_panel_presented_directory_at(
+    const AstraFilePanel *panel, const AstraControl *list_control,
+    uint32_t control_id, int32_t row, char *path, uint32_t capacity);
 
 /** Optional expandable List presentation for a File Panel. Interface Kit owns
  * row identity, metadata, disclosure, and path lookup. Caller loads children
