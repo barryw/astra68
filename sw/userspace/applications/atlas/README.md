@@ -33,15 +33,24 @@ Haiku read-only references: `src/kits/tracker/Navigator.cpp` for path history,
 `src/kits/tracker/PoseView.cpp` for shared directory presentation and selection
 state, and
 `src/kits/interface/ScrollView.cpp` for viewport and target sizing, and
-`src/kits/interface/Bitmap.cpp` for checked backing storage. Astra uses
+`src/kits/interface/Bitmap.cpp` for checked backing storage, and
+`src/kits/interface/View.cpp` and `MenuItem.cpp` for focus and shortcuts. Astra uses
 its native File Panel, command, volume, and graphics contracts rather than
 copying Tracker code.
 
 Remaining design work: rich List columns and row expansion, selection preview,
-Recent and saved queries, Cut/Move, drag and drop, multiselection, and keyboard
-shortcuts. File operations are single-item, and the native clipboard has Copy
+Recent and saved queries, Cut/Move, drag and drop, and multiselection.
+File operations are single-item, and the native clipboard has Copy
 and Paste only. These need shared controls or native volume grant transitions,
 not Atlas-only widgets.
+
+Keyboard bindings use Interface Kit's shared command shortcut dispatcher and
+existing responder chain. Atlas owns only its binding table and suppresses
+global commands while its shared File Panel Search field has focus. Ctrl or
+Command+C/V/N/O/R and Alt+Left/Right use the same actions as menus and toolbar.
+The exact-volume source setup for Paste remains local because it pins a
+clipboard reference to one removable incarnation; process namespace lookup
+could otherwise select a replacement mounted at the same spelling.
 
 Draw-list storage must be 4-byte aligned on MC68040. Atlas explicitly aligns
 its static view and inline-edit buffers; Graphics Kit rejects misaligned

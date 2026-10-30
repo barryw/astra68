@@ -2258,7 +2258,17 @@ static AstraResult run(AstraHandle gui)
             sort_query, sort_invoke, (void *)&sort_commands[2]},
         {"atlas.sort.modified", sizeof("atlas.sort.modified") - 1u, 0u, 0u,
             sort_query, sort_invoke, (void *)&sort_commands[3]}};
-    const AstraCommandScope command_scope = {NULL, commands, 12u};
+    const AstraCommandScope command_scope = {
+        &toolbar_command_scope, commands, 12u};
+    static const AstraCommandShortcut shortcuts[] = {
+        {0x06u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.copy", sizeof("atlas.copy") - 1u},
+        {0x19u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.paste", sizeof("atlas.paste") - 1u},
+        {0x11u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.folder", sizeof("atlas.folder") - 1u},
+        {0x12u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.open", sizeof("atlas.open") - 1u},
+        {0x15u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.refresh", sizeof("atlas.refresh") - 1u},
+        {0x50u, ASTRA_COMMAND_SHORTCUT_ALT, "atlas.back", sizeof("atlas.back") - 1u},
+        {0x4fu, ASTRA_COMMAND_SHORTCUT_ALT, "atlas.forward", sizeof("atlas.forward") - 1u}
+    };
     for (;;) {
         uint32_t waits[3] = {astra_window_event_wait_handle(&window)};
         uint32_t wait_count = 1u, worker_slot = UINT32_MAX, volume_slot = UINT32_MAX;
@@ -2435,6 +2445,31 @@ static AstraResult run(AstraHandle gui)
                     (void)astra_log_failure("atlas folder edit", (uint32_t)(-edit_result));
                 result = astra_window_event_try(&window, &event);
                 continue;
+            }
+            if (event.type == ASTRA_WINDOW_EVENT_KEY &&
+                (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u &&
+                (event.flags & ASTRA_WINDOW_EVENT_REPEAT) == 0u) {
+                uint32_t focused = 0u;
+                result = astra_interface_ui_focused_control(&ui, &focused);
+                if (result != ASTRA_OK) return result;
+                if (focused != 1u + ASTRA_FILE_PANEL_SEARCH) {
+                    uint8_t shortcut_handled = 0u;
+                    result = astra_interface_command_shortcut(&command_scope,
+                        event.data.key.usage, event.data.key.modifiers,
+                        shortcuts, sizeof(shortcuts) / sizeof(shortcuts[0]),
+                        &shortcut_handled);
+                    if (shortcut_handled) {
+                        if (result != ASTRA_OK) {
+                            (void)astra_log_failure("atlas shortcut",
+                                (uint32_t)(-result));
+                            open_error(gui, result);
+                        }
+                        repaint = 1u;
+                        result = astra_window_event_try(&window, &event);
+                        continue;
+                    }
+                    if (result != ASTRA_OK) return result;
+                }
             }
             if (astra_interface_ui_handle_event(&ui, &event, &action) != ASTRA_OK)
                 return ASTRA_ERROR_INVALID_ARGUMENT;

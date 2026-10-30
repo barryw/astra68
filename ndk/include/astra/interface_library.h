@@ -141,6 +141,14 @@ AstraResult astra_interface_toolbar_set_icons(AstraControl *controls,
  */
 AstraResult astra_interface_ui_focus_control(AstraUIContext *context,
                                              uint32_t control_id);
+/** Query focused control ID. Zero means no control owns keyboard focus.
+ * @param context Initialized UI context.
+ * @param control_id Receives focused control ID or zero.
+ * @return ASTRA_OK or ASTRA_ERROR_INVALID_ARGUMENT.
+ * @since Interface Kit 10.0.
+ */
+AstraResult astra_interface_ui_focused_control(const AstraUIContext *context,
+                                              uint32_t *control_id);
 /** Initialize a scroll viewport.
  * @param control Caller-owned control to initialize.
  * @param info View description; its scroll model remains caller-owned.

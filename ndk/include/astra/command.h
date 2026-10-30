@@ -4,6 +4,7 @@
 /** @file command.h @brief Caller-owned command responder chain. */
 
 #include <stdint.h>
+#include <astra/input_modifiers.h>
 #include <astra/types.h>
 
 ASTRA_EXTERN_C_BEGIN
@@ -54,6 +55,21 @@ typedef struct AstraCommandScope {
     uint32_t command_count; /**< Number of entries in @p commands. */
 } AstraCommandScope;
 
+/** Primary command modifier; accepts Control, GUI or Meta. */
+#define ASTRA_COMMAND_SHORTCUT_PRIMARY UINT32_C(1)
+/** Either Shift key. */
+#define ASTRA_COMMAND_SHORTCUT_SHIFT   UINT32_C(2)
+/** Either Alt key. */
+#define ASTRA_COMMAND_SHORTCUT_ALT     UINT32_C(4)
+
+/** Caller-owned key binding for a command in the responder chain. */
+typedef struct AstraCommandShortcut {
+    uint32_t usage; /**< USB HID key usage. */
+    uint32_t modifiers; /**< Exact normalized modifier combination. */
+    const char *id; /**< Command ID borrowed for dispatch. */
+    uint32_t id_length; /**< Byte length of @p id. */
+} AstraCommandShortcut;
+
 /** Resolve from focused scope toward the workspace. A declaration shadows
  * ancestors even when disabled, so a disabled local action cannot trigger a
  * different ancestor action with the same ID.
@@ -84,6 +100,23 @@ AstraResult astra_interface_command_query(const AstraCommandScope *scope,
 AstraResult astra_interface_command_invoke(
     const AstraCommandScope *scope, const char *id, uint32_t id_length,
     const AstraCommandArguments *args);
+
+/** Dispatch one non-repeating key-down to the same command used by menus.
+ * Caps Lock is ignored. Disabled commands consume their binding without
+ * invoking anything. Unknown keys do not consume an event.
+ * @param scope Innermost command responder scope.
+ * @param usage USB HID usage from a key-down event.
+ * @param input_modifiers Input event's ASTRA_INPUT_MOD_* bit mask.
+ * @param bindings Borrowed shortcut table.
+ * @param binding_count Number of shortcut bindings.
+ * @param handled Set to one for a matching binding, zero otherwise.
+ * @return ASTRA_OK for an unmatched, disabled, or successful binding;
+ * otherwise validation or command error.
+ */
+AstraResult astra_interface_command_shortcut(
+    const AstraCommandScope *scope, uint32_t usage, uint32_t input_modifiers,
+    const AstraCommandShortcut *bindings, uint32_t binding_count,
+    uint8_t *handled);
 
 ASTRA_EXTERN_C_END
 

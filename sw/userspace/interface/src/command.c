@@ -106,3 +106,41 @@ AstraResult astra_interface_command_invoke(
         return ASTRA_ERROR_PERMISSION;
     return command->invoke(command->context, args);
 }
+
+AstraResult astra_interface_command_shortcut(
+    const AstraCommandScope *scope, uint32_t usage, uint32_t input_modifiers,
+    const AstraCommandShortcut *bindings, uint32_t binding_count,
+    uint8_t *handled)
+{
+    uint32_t modifiers = 0u;
+
+    if (handled == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *handled = 0u;
+    if (scope == NULL || (binding_count != 0u && bindings == NULL) ||
+        (input_modifiers & ~ASTRA_INPUT_MOD_ALL) != 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (input_modifiers & (ASTRA_INPUT_MOD_CTRL | ASTRA_INPUT_MOD_GUI |
+                           ASTRA_INPUT_MOD_META))
+        modifiers |= ASTRA_COMMAND_SHORTCUT_PRIMARY;
+    if (input_modifiers & ASTRA_INPUT_MOD_SHIFT)
+        modifiers |= ASTRA_COMMAND_SHORTCUT_SHIFT;
+    if (input_modifiers & ASTRA_INPUT_MOD_ALT)
+        modifiers |= ASTRA_COMMAND_SHORTCUT_ALT;
+    for (uint32_t at = 0u; at < binding_count; ++at) {
+        const AstraCommandShortcut *binding = &bindings[at];
+        AstraCommandState state;
+        AstraResult result;
+
+        if (binding->usage != usage || binding->modifiers != modifiers)
+            continue;
+        *handled = 1u;
+        result = astra_interface_command_query(scope, binding->id,
+                                                binding->id_length, &state);
+        if (result != ASTRA_OK || state.enabled == 0u)
+            return result;
+        return astra_interface_command_invoke(scope, binding->id,
+                                               binding->id_length, NULL);
+    }
+    return ASTRA_OK;
+}

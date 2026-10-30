@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared-shortcut checkpoint, 2026-10-30: Interface Kit now exposes
+focused-control inspection and a reusable command shortcut dispatcher. Atlas
+supplies only bindings, reuses its menu/toolbar responder commands, and leaves
+Search field keystrokes with the shared File Panel. Haiku read-only references:
+`src/kits/interface/View.cpp` (`IsFocus`, `MakeFocus`) and `MenuItem.cpp`
+(`SetShortcut`). Beast Interface tests and Atlas/Interface Kit builds pass.
+Targeted DE25 install passed; Atlas launched on RAM0 with status zero, Ctrl+N
+created one folder, and Ctrl+N with Search focused did not create another.
+`astra.service` and remote-desktop service were active with zero restarts;
+board held 8.2 GiB free. RFB evidence archived at
+`/mnt/Documents/astra68/atlas-shared-shortcuts-20261030/` on Beast; disposable
+board captures removed. NDK distribution and documentation gates pass. Remaining
+Atlas features are rich List, preview,
+Recent/saved queries, Cut/Move, drag/drop, and multiselection.
+
 Atlas cross-volume navigation and draw-buffer checkpoint, 2026-10-30: Atlas
 now uses its process VFS namespace for same-window DH0, HOME, Applications,
 RAM0, and public-volume navigation. History stores exact volume references;
@@ -23,7 +38,7 @@ captures were removed; 8.2 GiB free. Haiku read-only references:
 `src/kits/tracker/PoseView.cpp`, `Navigator.cpp`, `ContainerWindow.cpp`, and
 `src/kits/interface/Bitmap.cpp`. Physical USB and optical media were not
 attached for this checkpoint. Rich List, preview, Recent/saved queries,
-Cut/Move, drag/drop, multiselection, and keyboard shortcuts remain.
+Cut/Move, drag/drop, and multiselection remain.
 
 Atlas file-operations checkpoint, 2026-10-30: shared File Panel browse mode
 now clears stale Grid selection on directory reload. Atlas keeps selection by
@@ -42,7 +57,7 @@ visually verified. Evidence PNGs and raw framebuffer hashes are under
 uses targeted installs; it is not yet folded into a full release image.
 Atlas still needs rich List columns, selection preview, Recent/saved queries,
 Cut/Move,
-drag/drop, multiselection, and keyboard shortcuts before it can be called a
+drag/drop, and multiselection before it can be called a
 complete file manager. Physical USB and optical media were not attached for
 this checkpoint.
 

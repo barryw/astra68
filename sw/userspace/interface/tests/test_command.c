@@ -39,8 +39,46 @@ static AstraResult broken_query(void *context, AstraCommandState *state)
     return ASTRA_OK;
 }
 
+static void test_shortcuts(void)
+{
+    Probe probe = {0u, 0u, 1u, NULL, 0u};
+    const AstraCommand command = {"file.copy", 9u, 0u, 0u, query, invoke,
+                                  &probe};
+    const AstraCommandScope scope = {NULL, &command, 1u};
+    const AstraCommandShortcut bindings[] = {
+        {0x06u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "file.copy", 9u},
+        {0x50u, ASTRA_COMMAND_SHORTCUT_ALT, "file.copy", 9u}
+    };
+    uint8_t handled = 9u;
+
+    assert(astra_interface_command_shortcut(&scope, 0x06u,
+        ASTRA_INPUT_MOD_LEFT_CTRL, bindings, 2u, &handled) == ASTRA_OK);
+    assert(handled == 1u && probe.calls == 1u);
+    assert(astra_interface_command_shortcut(&scope, 0x06u,
+        ASTRA_INPUT_MOD_RIGHT_GUI | ASTRA_INPUT_MOD_CAPS_LOCK,
+        bindings, 2u, &handled) == ASTRA_OK);
+    assert(handled == 1u && probe.calls == 2u);
+    assert(astra_interface_command_shortcut(&scope, 0x50u,
+        ASTRA_INPUT_MOD_LEFT_ALT, bindings, 2u, &handled) == ASTRA_OK);
+    assert(handled == 1u && probe.calls == 3u);
+    assert(astra_interface_command_shortcut(&scope, 0x06u,
+        ASTRA_INPUT_MOD_LEFT_CTRL | ASTRA_INPUT_MOD_LEFT_SHIFT,
+        bindings, 2u, &handled) == ASTRA_OK);
+    assert(handled == 0u && probe.calls == 3u);
+    probe.enabled = 0u;
+    assert(astra_interface_command_shortcut(&scope, 0x06u,
+        ASTRA_INPUT_MOD_META, bindings, 2u, &handled) == ASTRA_OK);
+    assert(handled == 1u && probe.calls == 3u);
+    assert(astra_interface_command_shortcut(&scope, 0x06u, 0u,
+        bindings, 2u, NULL) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_command_shortcut(&scope, 0x06u, 0u,
+        NULL, 2u, &handled) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(handled == 0u);
+}
+
 int main(void)
 {
+    test_shortcuts();
     Probe workspace_probe = {0u, 0u, 1u, NULL, 0u};
     Probe window_probe = {0u, 0u, 1u, NULL, 0u};
     AstraCommand workspace_commands[] = {

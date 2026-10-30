@@ -93,8 +93,14 @@ static void test_toolbar_composition(void)
         assert(controls[0]._private_frame.height == 52u);
         assert(controls[1]._private_frame.height ==
             ASTRA_THEME_TOOLBAR_BUTTON_HEIGHT);
+        uint32_t focused = UINT32_MAX;
+        assert(astra_interface_ui_focused_control(&ui, &focused) == ASTRA_OK);
+        assert(focused == 0u);
         assert(astra_interface_ui_focus_control(&ui, 42u) == ASTRA_OK);
-        assert(ui._private_focus == 1u);
+        assert(astra_interface_ui_focused_control(&ui, &focused) == ASTRA_OK);
+        assert(focused == 42u);
+        assert(astra_interface_ui_focused_control(&ui, NULL) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
         assert(astra_interface_ui_focus_control(&ui, 43u) ==
                ASTRA_ERROR_INVALID_ARGUMENT);
     }

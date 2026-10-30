@@ -12,6 +12,7 @@ ASTRA_INTERFACE_10.0 {
         astra_interface_checkbox_init;
         astra_interface_command_invoke;
         astra_interface_command_query;
+        astra_interface_command_shortcut;
         astra_interface_container_init;
         astra_interface_control_get_value;
         astra_interface_control_set_flex;
@@ -147,6 +148,7 @@ ASTRA_INTERFACE_10.0 {
         astra_interface_button_group_refresh;
         astra_interface_button_group_handle_action;
         astra_interface_ui_focus_control;
+        astra_interface_ui_focused_control;
         astra_interface_toolbar_set_icons;
         astra_interface_grid_view_init;
         astra_interface_grid_view_refresh;

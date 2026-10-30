@@ -2532,6 +2532,20 @@ AstraResult astra_interface_ui_focus_control(AstraUIContext *context,
     return ASTRA_OK;
 }
 
+AstraResult astra_interface_ui_focused_control(const AstraUIContext *context,
+                                              uint32_t *control_id)
+{
+    if (context == NULL || control_id == NULL ||
+        context->_private_controls == NULL ||
+        context->_private_structure_size != sizeof(*context) ||
+        (context->_private_focus != CONTROL_NONE &&
+         context->_private_focus >= context->_private_control_count))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *control_id = context->_private_focus == CONTROL_NONE ? 0u :
+        context->_private_controls[context->_private_focus]._private_id;
+    return ASTRA_OK;
+}
+
 static AstraResult measure_control(const AstraControl *control,
                                    AstraControlSize *size)
 {
