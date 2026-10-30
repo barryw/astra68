@@ -52,6 +52,7 @@ HEADERS := include/astra/vfs_service_core.h include/astra/vfs_backend.h \
 	include/astra/vfs_port_transport.h $(NDK)/include/astra/vfs_union.h \
 	$(NDK)/include/astra/vfs_process.h $(NDK)/include/astra/vfs_reader.h \
 	$(NDK)/include/astra/vfs_clipboard.h \
+	$(NDK)/include/astra/saved_query.h \
 	include/astra/vfs_host_backend.h include/astra/vfs_host_transport.h \
 	include/astra/vfs_host_direct.h \
 	include/astra/vfs_ram_backend.h \
@@ -65,7 +66,8 @@ SYSTEM_STATIC_OBJECTS := $(SYSTEM)/build/m68k/manifest.o $(SYSTEM)/build/m68k/bu
 	$(SYSTEM)/build/m68k/utf8.o
 TARGET_OBJECTS := build/m68k/vfs_service_core.o build/m68k/vfs_client.o \
 	build/m68k/filesystem_library.o build/m68k/filesystem_copy.o \
-	build/m68k/vfs_clipboard.o build/m68k/volume.o \
+	build/m68k/vfs_clipboard.o build/m68k/saved_query.o \
+	build/m68k/volume.o \
 	build/m68k/volume_client.o build/m68k/volume_port.o \
 	build/m68k/vfs_assign.o build/m68k/vfs_path.o \
 	build/m68k/vfs_local_transport.o build/m68k/vfs_port_transport.o \
@@ -98,6 +100,7 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/filesystem_library.o \
 	build/m68k/library/filesystem_copy.o \
 	build/m68k/library/vfs_clipboard.o \
+	build/m68k/library/saved_query.o \
 	build/m68k/library/file_type.o \
 	build/m68k/library/file_type_resolve.o \
 	build/m68k/library/volume.o build/m68k/library/volume_client.o \
@@ -289,6 +292,7 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/vfs_assign.h \
 		$(NDK)/include/astra/vfs_path.h \
 		$(NDK)/include/astra/vfs_clipboard.h \
+		$(NDK)/include/astra/saved_query.h \
 		$(NDK)/include/astra/vfs_union.h \
 		$(NDK)/include/astra/filesystem_library.h \
 		$(NDK)/include/astra/file_type.h \
@@ -298,7 +302,7 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST)
 		$(NDK)/include/astra/vfs_reader.h include/astra/vfs_port_transport.h \
 		../../include/astra/vfs_service.h
 	@python3 ../../../tools/library_info.py $(FILESYSTEM_LIBRARY) | \
-		grep -q '^filesystem.library.15 15.7.0 ABI 15.7$$'
+		grep -q '^filesystem.library.15 15.8.0 ABI 15.8$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
 	@$(READELF) -dW $< | grep -F 'Library soname: [filesystem.library.15]' >/dev/null
 	@test "$$($(READELF) -dW $< | \
@@ -383,6 +387,7 @@ PROCESS_SANITIZE_TEST := build/host/test_vfs_process_sanitize
 READER_TEST := build/host/test_vfs_reader
 FILESYSTEM_LIBRARY_TEST := build/host/test_filesystem_library
 FILESYSTEM_COPY_TEST := build/host/test_filesystem_copy
+SAVED_QUERY_TEST := build/host/test_saved_query
 CATALOG_TEST := build/host/test_application_catalog
 FILE_TYPE_TEST := build/host/test_file_type
 HOST_BACKEND_TEST := build/host/test_vfs_host_backend
@@ -453,6 +458,12 @@ $(FILESYSTEM_COPY_TEST): src/filesystem_copy.c tests/test_filesystem_copy.c \
 	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		src/filesystem_copy.c tests/test_filesystem_copy.c -o $@
 
+$(SAVED_QUERY_TEST): src/saved_query.c tests/test_saved_query.c \
+		$(NDK)/include/astra/saved_query.h $(UTF8_OBJECT)
+	@mkdir -p $(@D)
+	$(HOST_CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
+		src/saved_query.c tests/test_saved_query.c $(UTF8_OBJECT) -o $@
+
 $(HOST_BACKEND_TEST): src/backends/host.c src/volume.c $(UTF8_OBJECT) \
 		tests/test_vfs_host_backend.c $(HEADERS)
 	@mkdir -p $(@D)
@@ -475,7 +486,7 @@ $(HOST_TRANSPORT_TEST): src/vfs_host_transport.c \
 test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 		$(PORT_THREAD_TEST) \
 		$(PROCESS_TEST) $(READER_TEST) $(FILESYSTEM_LIBRARY_TEST) \
-		$(FILESYSTEM_COPY_TEST) \
+		$(FILESYSTEM_COPY_TEST) $(SAVED_QUERY_TEST) \
 		$(CATALOG_TEST) $(FILE_TYPE_TEST) \
 		$(HOST_BACKEND_TEST) $(RAM_BACKEND_TEST) $(HOST_TRANSPORT_TEST) \
 		$(VOLUME_TEST) $(VOLUME_CLIENT_TEST) $(VFS_CLIPBOARD_TEST)
@@ -489,6 +500,7 @@ test: $(HOST_TEST) $(ASSIGN_TEST) $(UNION_TEST) $(PATH_TEST) $(PORT_TEST) \
 	./$(READER_TEST)
 	./$(FILESYSTEM_LIBRARY_TEST)
 	./$(FILESYSTEM_COPY_TEST)
+	./$(SAVED_QUERY_TEST)
 	./$(CATALOG_TEST)
 	./$(FILE_TYPE_TEST)
 	./$(HOST_BACKEND_TEST)

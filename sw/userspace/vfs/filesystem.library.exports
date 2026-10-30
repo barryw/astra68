@@ -214,3 +214,11 @@ ASTRA_FILESYSTEM_15.7 {
     global:
         astra_filesystem_move_tree_between;
 } ASTRA_FILESYSTEM_15.6;
+
+ASTRA_FILESYSTEM_15.8 {
+    global:
+        astra_saved_query_save;
+        astra_saved_query_load;
+        astra_saved_query_snapshot_open;
+        astra_saved_query_snapshot_close;
+} ASTRA_FILESYSTEM_15.7;

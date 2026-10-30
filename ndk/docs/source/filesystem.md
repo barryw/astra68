@@ -12,6 +12,13 @@ the underlying VFS client operations for filesystem and compatibility tools.
 The ABI has no dependency on lwext4 or any other on-disk implementation; RAM
 drives and other filesystem services use the same protocol and API.
 
+ABI 15.8 adds path-scoped saved search presets. `astra_saved_query_save`
+creates a private store directory when needed, writes a versioned file, syncs
+it, and publishes it without replacing an existing preset. `load` validates
+the complete file; `snapshot_open` enumerates published presets and skips
+malformed entries. Presets carry label, directory, and case-insensitive name
+substring. Applications own presentation and may reuse the same store.
+
 The native ABI is not a libc ABI. `libc.library.4` provides the POSIX file
 API -- descriptors, the current directory, `errno`, and stdio -- over these
 same operations; a POSIX program uses it instead. See the repository's

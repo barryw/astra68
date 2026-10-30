@@ -2,6 +2,27 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas durable saved-search checkpoint, 2026-10-30: Filesystem Kit 15.8 adds
+versioned, path-scoped saved query files. It creates a private HOME store,
+syncs each independent file, publishes through a hard link without replacing
+another file, validates complete reads, and skips malformed files during
+enumeration. Atlas reuses File Panel action Places and `set_search` to bind
+presets into sidebar and restore directory plus name filter. Refresh now reloads
+both directory and sidebar. Haiku read-only references:
+`src/kits/tracker/FindPanel.cpp` and `QueryPoseView.cpp` for first-class saved
+query files; Astra adapts this to its current-directory substring search.
+Beast Filesystem Kit tests, library contract, Atlas bundle/tests and NDK
+`dist-check` pass. DE25 targeted Kit 15.8 and Atlas install passed: typed
+`fonts` filtered DH0 to 1/17, Save Search published files under HOME, sidebar
+opened saved DH0/filter, new Atlas process reloaded both presets, native `rm`
+removed the two test files, and Atlas showed empty store. Final source passed
+targeted install; Atlas opened DH0 with 17 entries, Refresh succeeded, service
+active with zero restarts and 8.2 GiB free. SHA-verified RFB captures and logs
+are archived on Beast at
+`/mnt/Documents/astra68/atlas-saved-query-20261030/`; board RFB trial files
+removed. No release image rebuild. Remaining Atlas work: shared List row
+expansion, Recent items, richer saved-search management, and drag/drop.
+
 Atlas saved-search substrate checkpoint, 2026-10-30: Interface Kit 12.3
 adds `astra_interface_file_panel_set_search`, which restores Search Field
 text through the same filter path as typing. Places now accept action rows

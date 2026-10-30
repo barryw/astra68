@@ -87,9 +87,21 @@ iterates selected poses; `src/kits/tracker/ContainerWindow.cpp` dispatches
 Copy and Move over Tracker selection. Astra keeps selection gestures in
 Interface Kit and file operations in Filesystem Kit and common folder code.
 
-Remaining design work: List row expansion, Recent and saved
-queries, and drag and drop. These need shared controls or native volume grant
-transitions, not Atlas-only widgets.
+Filesystem Kit 15.8 owns durable saved search presets. Atlas saves the current
+directory and Search Field's case-insensitive name substring as one user file
+under `HOME:/Saved Searches`; each file is synced, then published with a hard
+link without replacing another preset. File Panel's existing virtual Place
+action rows show saved labels and restore path plus filter. Refresh reloads the
+directory and sidebar. Presets survive Atlas restart and can be removed as
+ordinary user files. Search remains a filter of the current directory, not a
+recursive or indexed query. Haiku read-only references:
+`src/kits/tracker/FindPanel.cpp` stores saved queries as filesystem items and
+`src/kits/tracker/QueryPoseView.cpp` binds query items to results. Astra uses
+its native Filesystem Kit and File Panel, with no Atlas-only search control.
+
+Remaining design work: List row expansion, Recent items, richer saved-search
+management, and drag and drop. These need shared controls or native volume
+grant transitions, not Atlas-only widgets.
 
 Keyboard bindings use Interface Kit's shared command shortcut dispatcher and
 existing responder chain. Atlas owns only its binding table and suppresses
