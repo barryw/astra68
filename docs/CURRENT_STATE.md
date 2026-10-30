@@ -13,22 +13,32 @@ drop destinations. Haiku read-only reference:
 from full item storage; Astra adapts that pattern within File Panel instead
 of creating Atlas-specific hit testing. Beast Interface host tests, MC68040
 library contract, Atlas bundle/tests, and NDK dist-check pass. DE25 installed
-Interface Kit and Atlas into the offline image. First boot failed the release
-verifier because the changed image's checksum was absent from
+Interface Kit and Atlas into the offline release seed. First boot failed the
+release verifier because the changed image's checksum was absent from
 `artifacts.sha256`; the service was stopped after seven failed restarts. The
 manifest was corrected, installed files made read-only, release directory
 renamed to its new manifest identity
 `d975fffcb50505368b7f11ff5885c9230957136cd4579c5f4f3fb1d6bef557d9`,
-and `current` switched to it. Verifier and restart then passed. On hardware,
-Atlas opened DH0, copied `astra_events.cat` to RAM0, created Folder1, moved
-the file into it by dragging its List row onto the folder, and expanded the
-folder to show the moved file. No kernel panic or user fault after corrected
-boot. Final service and remote desktop are active with zero restarts, board
-has 8.1 GiB free, and RAM0 trial data was cleared by controlled restart.
-Captures, logs, and pre-change image/manifest are archived on Beast under
+and `current` switched to it. Verifier and restart then passed. This changed
+the release seed only: `run-arty.sh` keeps an existing persistent image at
+`/var/lib/astra/state/system/storage-terminal.img`, so the first UI trial
+still used old guest binaries and is not acceptance evidence. After stopping
+Astra and archiving that state image, the existing `dev-deploy-de25.py` /
+`dev-install-de25.py` path installed four guest files: Interface library,
+Kit manifest, provider record, and Atlas executable. The state image owner
+was corrected to root for the installer's existing ownership check. Installer
+reported `ASTRA_DE25_DEV_INSTALL PASS guest=4`, then booted the new binaries.
+On hardware, Atlas opened DH0, copied `astra_events.cat` to RAM0, created
+Folder1, moved the file into it by dragging its List row onto the folder,
+and expanded the folder to show the moved file. No kernel panic or user fault
+after this boot. Final Astra, audio, and remote desktop services are active
+with zero restarts, board has 8.1 GiB free, and RAM0 trial data was cleared
+by controlled restart. SHA-matched captures, logs, and pre-change release
+seed, manifest, and persistent state image are archived on Beast under
 `/mnt/Documents/astra68/atlas-outline-20261030/`; board capture files were
-removed. Targeted image installs must publish a matching release manifest and
-identity before starting `astra.service`.
+removed. Targeted seed installs require matching release manifest and
+identity; existing state must receive guest changes through the focused
+installer before hardware acceptance.
 
 Atlas nested List checkpoint, 2026-10-30: Interface Kit 12.7 adds a generic
 File Panel directory-outline model over existing Outline Table, Table columns,

@@ -3,6 +3,13 @@
 The DE25 is an active development machine. A selected release is a checkpoint,
 not a production deployment gate. Use the focused installer for source edits;
 build a complete release image only after the fix works on hardware.
+`run-arty.sh` keeps an existing image at
+`/var/lib/astra/state/system/storage-terminal.img`. Changing a release's
+`storage-terminal.img` seed does not update that running state, so a boot after
+editing only the seed is not a test of changed guest code. A changed release
+seed also requires a matching `artifacts.sha256` and release identity before
+the verifier will start Astra. Use the focused installer below for runtime
+guest tests; it updates the stopped persistent image and preserves user data.
 
 Run from the Mac repository root. The command mirrors source to Beast, runs only
 the requested `make` target there, transfers only named artifacts, updates the
