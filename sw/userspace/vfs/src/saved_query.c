@@ -48,6 +48,19 @@ static int query_valid(const AstraSavedQuery *query)
         astra_utf8_validate(query->text, text, 0u);
 }
 
+static int filename_valid(const char *filename)
+{
+    if (field_length(filename, ASTRA_VFS_NAME_MAX) != 26u ||
+        memcmp(filename, "query-", 6u) != 0 ||
+        memcmp(filename + 22u, ".asq", 4u) != 0)
+        return 0;
+    for (uint32_t at = 6u; at < 22u; ++at)
+        if (!((filename[at] >= '0' && filename[at] <= '9') ||
+              (filename[at] >= 'a' && filename[at] <= 'f')))
+            return 0;
+    return 1;
+}
+
 static uint32_t path_join(const char *directory, const char *name,
     char *out, uint32_t capacity)
 {
@@ -86,16 +99,52 @@ static uint32_t write_complete(AstraFile *file, const uint8_t *data,
     return astra_filesystem_sync(file);
 }
 
+static uint32_t encode_query(const AstraSavedQuery *query, uint8_t **out,
+    uint32_t *length)
+{
+    uint32_t label = (uint32_t)strlen(query->label);
+    uint32_t path = (uint32_t)strlen(query->directory);
+    uint32_t text = (uint32_t)strlen(query->text);
+    uint32_t bytes_length = QUERY_HEADER_BYTES + label + path + text;
+    uint8_t *bytes = astra_runtime_allocate(bytes_length);
+    if (bytes == NULL) return ASTRA_VFS_ERR_LIMIT;
+    memcpy(bytes, "ASQ1", 4u);
+    put32(bytes + 4u, label);
+    put32(bytes + 8u, path);
+    put32(bytes + 12u, text);
+    memcpy(bytes + QUERY_HEADER_BYTES, query->label, label);
+    memcpy(bytes + QUERY_HEADER_BYTES + label, query->directory, path);
+    memcpy(bytes + QUERY_HEADER_BYTES + label + path, query->text, text);
+    *out = bytes;
+    *length = bytes_length;
+    return ASTRA_VFS_OK;
+}
+
+static uint32_t stage_query(AstraFilesystem *filesystem, const char *path,
+    const uint8_t *bytes, uint32_t length)
+{
+    AstraFile file = ASTRA_FILE_INIT;
+    uint32_t status = astra_filesystem_open_mode(filesystem, path,
+        ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
+        ASTRA_VFS_OPEN_EXCLUSIVE, 0600u, &file);
+    if (status != ASTRA_VFS_OK) return status;
+    status = write_complete(&file, bytes, length);
+    uint32_t close_status = astra_filesystem_close(&file);
+    if (status == ASTRA_VFS_OK) status = close_status;
+    if (status != ASTRA_VFS_OK)
+        (void)astra_filesystem_unlink(filesystem, path, 0u);
+    return status;
+}
+
 uint32_t astra_saved_query_save(AstraFilesystem *filesystem,
     const char *store_directory, const AstraSavedQuery *query,
     char *filename, uint32_t filename_capacity)
 {
     AstraFileInfo directory_info = ASTRA_FILE_INFO_INIT;
-    AstraFile file = ASTRA_FILE_INIT;
     char temporary_name[32], final_name[32];
     char temporary_path[ASTRA_VFS_PATH_MAX], final_path[ASTRA_VFS_PATH_MAX];
-    uint8_t *bytes;
-    uint32_t label, path, text, length, status;
+    uint8_t *bytes = NULL;
+    uint32_t length = 0u, status;
     uint64_t nonce;
 
     if (filename != NULL && filename_capacity != 0u) filename[0] = '\0';
@@ -118,19 +167,8 @@ uint32_t astra_saved_query_save(AstraFilesystem *filesystem,
     if (directory_info.kind != ASTRA_VFS_KIND_DIRECTORY)
         return ASTRA_VFS_ERR_NOT_DIR;
 
-    label = (uint32_t)strlen(query->label);
-    path = (uint32_t)strlen(query->directory);
-    text = (uint32_t)strlen(query->text);
-    length = QUERY_HEADER_BYTES + label + path + text;
-    bytes = astra_runtime_allocate(length);
-    if (bytes == NULL) return ASTRA_VFS_ERR_LIMIT;
-    memcpy(bytes, "ASQ1", 4u);
-    put32(bytes + 4u, label);
-    put32(bytes + 8u, path);
-    put32(bytes + 12u, text);
-    memcpy(bytes + QUERY_HEADER_BYTES, query->label, label);
-    memcpy(bytes + QUERY_HEADER_BYTES + label, query->directory, path);
-    memcpy(bytes + QUERY_HEADER_BYTES + label + path, query->text, text);
+    status = encode_query(query, &bytes, &length);
+    if (status != ASTRA_VFS_OK) return status;
 
     nonce = astra_clock_monotonic();
     status = ASTRA_VFS_ERR_EXISTS;
@@ -144,22 +182,72 @@ uint32_t astra_saved_query_save(AstraFilesystem *filesystem,
             status = ASTRA_VFS_ERR_LIMIT;
             break;
         }
-        status = astra_filesystem_open_mode(filesystem, temporary_path,
-            ASTRA_VFS_OPEN_WRITE | ASTRA_VFS_OPEN_CREATE |
-            ASTRA_VFS_OPEN_EXCLUSIVE, 0600u, &file);
+        status = stage_query(filesystem, temporary_path, bytes, length);
         if (status != ASTRA_VFS_OK) {
             if (status == ASTRA_VFS_ERR_EXISTS) continue;
             break;
         }
-        status = write_complete(&file, bytes, length);
-        uint32_t close_status = astra_filesystem_close(&file);
-        if (status == ASTRA_VFS_OK) status = close_status;
         if (status == ASTRA_VFS_OK)
             status = astra_filesystem_link(filesystem, temporary_path, final_path);
         (void)astra_filesystem_unlink(filesystem, temporary_path, 0u);
         if (status == ASTRA_VFS_ERR_EXISTS) continue;
         if (status == ASTRA_VFS_OK)
             memcpy(filename, final_name, strlen(final_name) + 1u);
+        break;
+    }
+    astra_runtime_deallocate(bytes);
+    return status;
+}
+
+uint32_t astra_saved_query_set_label(AstraFilesystem *filesystem,
+    const char *store_directory, const AstraSavedQuery *query,
+    const char *label)
+{
+    AstraSavedQuery replacement, current = ASTRA_SAVED_QUERY_INIT;
+    char final_path[ASTRA_VFS_PATH_MAX], temporary_path[ASTRA_VFS_PATH_MAX];
+    char temporary_name[32];
+    uint8_t *bytes = NULL;
+    uint32_t length = 0u, status;
+    uint32_t label_length;
+
+    if (filesystem == NULL || store_directory == NULL || query == NULL ||
+        label == NULL || store_directory[0] != '/' ||
+        strlen(store_directory) > ASTRA_VFS_PATH_MAX - 32u ||
+        astra_path_requires_walk(store_directory) ||
+        !query_valid(query) || !filename_valid(query->filename))
+        return ASTRA_VFS_ERR_INVALID;
+    label_length = field_length(label, ASTRA_VFS_NAME_MAX);
+    if (label_length == 0u || label_length == UINT32_MAX ||
+        !astra_utf8_validate(label, label_length, 0u) ||
+        path_join(store_directory, query->filename, final_path,
+            sizeof(final_path)) != ASTRA_VFS_OK)
+        return ASTRA_VFS_ERR_INVALID;
+    status = astra_saved_query_load(filesystem, final_path, &current);
+    if (status != ASTRA_VFS_OK) return status;
+    if (strcmp(current.label, query->label) != 0 ||
+        strcmp(current.directory, query->directory) != 0 ||
+        strcmp(current.text, query->text) != 0)
+        return ASTRA_VFS_ERR_BUSY;
+    replacement = current;
+    memcpy(replacement.label, label, label_length + 1u);
+    status = encode_query(&replacement, &bytes, &length);
+    if (status != ASTRA_VFS_OK) return status;
+    uint64_t nonce = astra_clock_monotonic();
+    status = ASTRA_VFS_ERR_EXISTS;
+    for (uint32_t attempt = 0u; attempt < 32u; ++attempt) {
+        query_name(temporary_name, nonce + attempt, 1);
+        if (path_join(store_directory, temporary_name, temporary_path,
+                sizeof(temporary_path)) != ASTRA_VFS_OK) {
+            status = ASTRA_VFS_ERR_LIMIT;
+            break;
+        }
+        status = stage_query(filesystem, temporary_path, bytes, length);
+        if (status == ASTRA_VFS_ERR_EXISTS) continue;
+        if (status != ASTRA_VFS_OK) break;
+        status = astra_filesystem_rename(filesystem, temporary_path,
+            final_path);
+        if (status != ASTRA_VFS_OK)
+            (void)astra_filesystem_unlink(filesystem, temporary_path, 0u);
         break;
     }
     astra_runtime_deallocate(bytes);

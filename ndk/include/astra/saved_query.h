@@ -42,6 +42,20 @@ uint32_t astra_saved_query_save(AstraFilesystem *filesystem,
     const char *store_directory, const AstraSavedQuery *query,
     char *filename, uint32_t filename_capacity);
 
+/** Replace one saved query's label through a synced temporary file and an
+ * atomic rename. The original filename and search remain unchanged. The
+ * current record must still match the caller's snapshot; stale edits fail.
+ * @since Filesystem Kit 15.8.
+ * @param filesystem Attached native filesystem with write access to store.
+ * @param store_directory Absolute path to private preset directory.
+ * @param query Valid record returned by load or snapshot.
+ * @param label New nonempty UTF-8 label.
+ * @return ASTRA_VFS_* status.
+ */
+uint32_t astra_saved_query_set_label(AstraFilesystem *filesystem,
+    const char *store_directory, const AstraSavedQuery *query,
+    const char *label);
+
 /** Load and validate one saved query file. @since Filesystem Kit 15.8.
  * @param filesystem Attached native filesystem.
  * @param path Absolute path to published preset file.

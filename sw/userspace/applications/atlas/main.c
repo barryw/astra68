@@ -133,6 +133,7 @@ static AstraHandle clipboard_service;
 static AstraInlineEdit name_edit = ASTRA_INLINE_EDIT_INIT;
 static uint32_t edit_index = UINT32_MAX;
 static uint32_t edit_depth;
+static char edit_saved_filename[ASTRA_VFS_NAME_MAX];
 static char edit_path[ASTRA_VFS_PATH_MAX];
 static char edit_parent[ASTRA_VFS_PATH_MAX];
 static _Alignas(4) uint32_t edit_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
@@ -1134,6 +1135,7 @@ static AstraResult paint(void)
             !volume_lost && (visible_data == 0u || directory.status == ASTRA_VFS_OK) ? theme.client_text_secondary : theme.fault);
     }
     if (result == ASTRA_OK && name_edit.active &&
+        edit_saved_filename[0] == '\0' &&
         browser.view_mode == ASTRA_FILE_PANEL_VIEW_GRID) {
         AstraControlFrame frame, clip;
         if (astra_interface_ui_geometry(&ui,
@@ -1161,12 +1163,25 @@ static AstraResult paint(void)
                 }
     }
     if (result == ASTRA_OK && name_edit.active &&
-        (browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST ||
+        (edit_saved_filename[0] != '\0' ||
+         browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST ||
          browser.view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS)) {
         const AstraCollectionItem *items = browser.items;
         uint32_t item_count = browser.item_count;
         uint32_t control_index = ASTRA_FILE_PANEL_LIST;
-        if (browser.view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS) {
+        uint64_t edited_id = (uint64_t)edit_index + 1u;
+        if (edit_saved_filename[0] != '\0') {
+            items = browser.place_items;
+            item_count = browser.place_count;
+            control_index = ASTRA_FILE_PANEL_PLACES_LIST;
+            edited_id = 0u;
+            for (uint32_t at = 0u; at < sidebar_queries.count; ++at)
+                if (strcmp(edit_saved_filename,
+                        sidebar_queries.queries[at].filename) == 0) {
+                    edited_id = (uint64_t)saved_place_start + at + 1u;
+                    break;
+                }
+        } else if (browser.view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS) {
             const AstraFilePanelColumnSnapshot *snapshot =
                 &browser.column_snapshots[edit_depth];
             items = snapshot->items;
@@ -1179,7 +1194,7 @@ static AstraResult paint(void)
                 TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT + control_index,
                 &frame, &clip) == ASTRA_OK) {
             for (uint32_t row = 0u; row < item_count; ++row) {
-                if (items[row].id != (uint64_t)edit_index + 1u) continue;
+                if (items[row].id != edited_id) continue;
                 AstraBlitOptions options = ASTRA_BLIT_OPTIONS_INIT;
                 AstraRectI32 source = {0, 0, ASTRA_INLINE_EDIT_WIDTH,
                     ASTRA_INLINE_EDIT_HEIGHT};
@@ -1568,14 +1583,19 @@ static AstraResult open_saved_query(const AstraSavedQuery *query)
     return result;
 }
 
-static const AstraSavedQuery *saved_context_query(void)
+static const AstraSavedQuery *saved_query_named(const char *filename)
 {
-    if (saved_context_filename[0] == '\0') return NULL;
+    if (filename == NULL || filename[0] == '\0') return NULL;
     for (uint32_t at = 0u; at < sidebar_queries.count; ++at)
-        if (strcmp(saved_context_filename,
+        if (strcmp(filename,
                 sidebar_queries.queries[at].filename) == 0)
             return &sidebar_queries.queries[at];
     return NULL;
+}
+
+static const AstraSavedQuery *saved_context_query(void)
+{
+    return saved_query_named(saved_context_filename);
 }
 
 static AstraResult saved_context_open_query(void *opaque,
@@ -1596,12 +1616,41 @@ static AstraResult saved_context_remove_query(void *opaque,
     return ASTRA_OK;
 }
 
+static AstraResult saved_context_rename_query(void *opaque,
+    AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Rename Saved Search", 19u,
+        saved_context_query() != NULL && !name_edit.active, 0u};
+    return ASTRA_OK;
+}
+
 static AstraResult saved_context_open(void *opaque,
     const AstraCommandArguments *args)
 {
     (void)opaque;
     (void)args;
     return open_saved_query(saved_context_query());
+}
+
+static AstraResult saved_context_rename(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    const AstraSavedQuery *query = saved_context_query();
+    if (query == NULL || name_edit.active ||
+        !astra_string_copy(edit_saved_filename,
+            sizeof(edit_saved_filename), query->filename))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraResult result = astra_interface_inline_edit_start(&name_edit,
+        &display, query->label);
+    if (result != ASTRA_OK) {
+        edit_saved_filename[0] = '\0';
+        return result;
+    }
+    edit_index = UINT32_MAX;
+    return paint();
 }
 
 static AstraResult saved_context_remove(void *opaque,
@@ -1700,7 +1749,8 @@ static AstraResult browser_load_child(void)
 
 static AstraResult start_edit(void)
 {
-    if (!writable_folder_root() || selected_path[0] == '\0' ||
+    if (name_edit.active || !writable_folder_root() ||
+        selected_path[0] == '\0' ||
         selected_row == UINT32_MAX ||
         (selected_kind != ASTRA_VFS_KIND_DIRECTORY &&
          selected_kind != ASTRA_VFS_KIND_FILE) ||
@@ -1716,12 +1766,37 @@ static AstraResult start_edit(void)
     if (result != ASTRA_OK) return result;
     edit_index = selected_row;
     edit_depth = selected_depth;
+    edit_saved_filename[0] = '\0';
     return paint();
 }
 
 static AstraResult finish_edit(AstraHandle gui, int commit)
 {
     if (!name_edit.active) return ASTRA_OK;
+    if (edit_saved_filename[0] != '\0') {
+        if (commit) {
+            char label[ASTRA_VFS_NAME_MAX];
+            const AstraSavedQuery *query = saved_query_named(
+                edit_saved_filename);
+            AstraResult copied = astra_interface_inline_edit_text(&name_edit,
+                label, sizeof(label));
+            if (copied != ASTRA_OK || query == NULL) {
+                folder_error(gui, "Saved search could not be renamed",
+                    ASTRA_VFS_ERR_INVALID);
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+            }
+            uint32_t status = astra_saved_query_set_label(
+                &filesystem.filesystem, saved_query_directory, query, label);
+            if (status != ASTRA_VFS_OK) {
+                folder_error(gui, "Saved search could not be renamed", status);
+                return astra_result_from_service(status);
+            }
+        }
+        astra_interface_inline_edit_stop(&name_edit);
+        edit_saved_filename[0] = '\0';
+        edit_index = UINT32_MAX;
+        return browser_update_places();
+    }
     if (commit) {
         char name[ASTRA_VFS_NAME_MAX], moved[ASTRA_VFS_PATH_MAX];
         AstraResult result = astra_interface_inline_edit_text(&name_edit, name, sizeof(name));
@@ -2624,6 +2699,8 @@ static AstraResult run(AstraHandle gui)
         {"atlas.package", 13u, 0u, 0u, package_query, create_installer, &command_context},
         {"atlas.saved.open", sizeof("atlas.saved.open") - 1u, 0u, 0u,
             saved_context_open_query, saved_context_open, &command_context},
+        {"atlas.saved.rename", sizeof("atlas.saved.rename") - 1u, 0u, 0u,
+            saved_context_rename_query, saved_context_rename, &command_context},
         {"atlas.saved.remove", sizeof("atlas.saved.remove") - 1u, 0u, 0u,
             saved_context_remove_query, saved_context_remove, &command_context},
         {"atlas.sort.name", sizeof("atlas.sort.name") - 1u, 0u, 0u,
@@ -3035,14 +3112,18 @@ static AstraResult run(AstraHandle gui)
                             "atlas.saved.open", sizeof("atlas.saved.open") - 1u,
                             NULL};
                         menu_items[1] = (AstraContextMenuItem){
+                            "atlas.saved.rename",
+                            sizeof("atlas.saved.rename") - 1u, NULL};
+                        menu_items[2] = (AstraContextMenuItem){
                             "atlas.saved.remove",
                             sizeof("atlas.saved.remove") - 1u, NULL};
                         menu_parents[0] = 0u;
                         menu_parents[1] = 0u;
+                        menu_parents[2] = 0u;
                         AstraResult opened =
                             astra_interface_context_menu_open_tree(
                                 &context_menu, &window, &command_scope,
-                                menu_items, menu_parents, 2u,
+                                menu_items, menu_parents, 3u,
                                 event.data.pointer.x,
                                 event.data.pointer.y);
                         if (opened != ASTRA_OK)

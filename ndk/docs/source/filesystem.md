@@ -18,6 +18,9 @@ it, and publishes it without replacing an existing preset. `load` validates
 the complete file; `snapshot_open` enumerates published presets and skips
 malformed entries. Presets carry label, directory, and case-insensitive name
 substring. Applications own presentation and may reuse the same store.
+`astra_saved_query_set_label` changes a preset's display name through a synced
+temporary file and atomic rename, preserving its filename and search. It
+checks the caller's snapshot against the current record before updating.
 
 The native ABI is not a libc ABI. `libc.library.4` provides the POSIX file
 API -- descriptors, the current directory, `errno`, and stdio -- over these

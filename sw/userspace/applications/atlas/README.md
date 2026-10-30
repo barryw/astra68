@@ -93,17 +93,19 @@ under `HOME:/Saved Searches`; each file is synced, then published with a hard
 link without replacing another preset. File Panel's existing virtual Place
 action rows show saved labels and restore path plus filter. Refresh reloads the
 directory and sidebar. Presets survive Atlas restart and can be removed as
-ordinary user files. Right clicking a saved search offers Open and Remove Saved
-Search. Shared File Panel maps Places context hits; Atlas reuses its saved-query
-navigation and Filesystem Kit file operations. Other Places rows cannot open a
+ordinary user files. Right clicking a saved search offers Open, Rename Saved
+Search, and Remove Saved Search. Rename uses the shared inline editor and
+Filesystem Kit's synced, atomic label replacement. Shared File Panel maps
+Places context hits; Atlas reuses its saved-query navigation and Filesystem Kit
+file operations. Other Places rows cannot open a
 folder context menu. Search remains a filter of the current directory, not a
 recursive or indexed query. Haiku read-only references:
 `src/kits/tracker/FindPanel.cpp` stores saved queries as filesystem items and
 `src/kits/tracker/QueryPoseView.cpp` binds query items to results. Astra uses
 its native Filesystem Kit and File Panel, with no Atlas-only search control.
 
-Remaining design work: List row expansion, Recent items, saved-search rename,
-and drag and drop. These need shared controls or native volume
+Remaining design work: List row expansion, Recent items, and drag and drop.
+These need shared controls or native volume
 grant transitions, not Atlas-only widgets.
 
 Keyboard bindings use Interface Kit's shared command shortcut dispatcher and

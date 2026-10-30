@@ -2,6 +2,23 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas saved-search rename checkpoint, 2026-10-30: Filesystem Kit 15.8 adds
+`astra_saved_query_set_label`, reusing saved-query serialization and staged
+file writes, then atomically renaming a synced replacement over the preset.
+It rejects invalid filenames and stale snapshot contents; failed replacement
+removes the temporary file without changing the original. Atlas reuses the
+shared inline editor for sidebar label editing. Haiku read-only reference:
+`src/kits/tracker/FindPanel.cpp` stores saved queries as user files; Astra
+keeps the file update in Filesystem Kit. Beast saved-query tests, library
+contract, Atlas cross build, and NDK `dist-check` pass. DE25 targeted Kit and
+Atlas install passed: Rename Saved Search showed the inline editor; label
+`Typeface files` persisted across Atlas restart, opening it restored the
+`fonts` filter, and Remove cleared the disposable preset. `astra.service`
+remained active with zero restarts and 8.2 GiB free. SHA-verified RFB captures
+are archived on Beast at `/mnt/Documents/astra68/atlas-saved-label-20261030/`;
+board RFB trial files removed. Remaining Atlas work: shared List row expansion,
+Recent items, and drag/drop.
+
 Atlas Places context checkpoint, 2026-10-30: Interface Kit 12.3 adds
 `astra_interface_file_panel_context_place`, mapping shared List context hits
 to original Places rows. Atlas uses this for Open and Remove Saved Search;

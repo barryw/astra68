@@ -9,6 +9,7 @@
 static AstraFilesystem filesystem = ASTRA_FILESYSTEM_INIT;
 static uint8_t staged[8192], published[8192];
 static uint32_t staged_bytes, published_bytes, store_exists, has_stage, has_published;
+static uint32_t fail_rename;
 static uint32_t write_limit = 3u;
 static char staged_path[ASTRA_VFS_PATH_MAX], published_path[ASTRA_VFS_PATH_MAX];
 
@@ -85,6 +86,18 @@ uint32_t astra_filesystem_link(AstraFilesystem *fs, const char *from,
     memcpy(published, staged, staged_bytes);
     published_bytes = staged_bytes;
     has_published = 1u;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_filesystem_rename(AstraFilesystem *fs, const char *from,
+    const char *to)
+{
+    assert(fs == &filesystem && has_stage && has_published &&
+        strcmp(from, staged_path) == 0 && strcmp(to, published_path) == 0);
+    if (fail_rename) return ASTRA_VFS_ERR_IO;
+    memcpy(published, staged, staged_bytes);
+    published_bytes = staged_bytes;
+    has_stage = 0u;
     return ASTRA_VFS_OK;
 }
 
@@ -178,6 +191,28 @@ int main(void)
         "/home/Saved Searches", &snapshot) == ASTRA_VFS_OK &&
         snapshot.count == 1u);
     astra_saved_query_snapshot_close(&snapshot);
+    fail_rename = 1u;
+    assert(astra_saved_query_set_label(&filesystem, "/home/Saved Searches",
+        &loaded, "Failed name") == ASTRA_VFS_ERR_IO && !has_stage);
+    fail_rename = 0u;
+    assert(astra_saved_query_load(&filesystem, published_path, &loaded) ==
+        ASTRA_VFS_OK && strcmp(loaded.label, "Doom files") == 0);
+    assert(astra_saved_query_set_label(&filesystem, "/home/Saved Searches",
+        &loaded, "Doom archive") == ASTRA_VFS_OK && !has_stage);
+    assert(astra_saved_query_set_label(&filesystem, "/home/Saved Searches",
+        &loaded, "Stale update") == ASTRA_VFS_ERR_BUSY);
+    assert(astra_saved_query_load(&filesystem, published_path, &loaded) ==
+        ASTRA_VFS_OK && strcmp(loaded.label, "Doom archive") == 0 &&
+        strcmp(loaded.text, "doom") == 0);
+    assert(astra_saved_query_set_label(&filesystem, "/home/Saved Searches",
+        &loaded, "") == ASTRA_VFS_ERR_INVALID);
+    strcpy(loaded.filename, "../outside.asq");
+    assert(astra_saved_query_set_label(&filesystem, "/home/Saved Searches",
+        &loaded, "Bad path") == ASTRA_VFS_ERR_INVALID);
+    assert(astra_saved_query_load(&filesystem, published_path, &loaded) ==
+        ASTRA_VFS_OK);
+    assert(astra_saved_query_set_label(&filesystem, "/home/Saved Searches",
+        &loaded, "New name") == ASTRA_VFS_OK);
     published[0] = '?';
     assert(astra_saved_query_load(&filesystem, published_path, &loaded) ==
         ASTRA_VFS_ERR_INVALID);
