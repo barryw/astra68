@@ -1,6 +1,6 @@
 # Remaining Interface Kit controls
 
-Status: integrated ABI 10 and targeted DE25 trial, 2026-10-29. Design authority: Controls chapter of
+Status: integrated ABI 10 and selected DE25 release, 2026-10-29. Design authority: Controls chapter of
 `~/Downloads/Astra Desktop (standalone).html`. Shipped-state authority:
 `ndk/include/astra/` and `sw/userspace/interface/src/`, not the HTML's old
 implementation notes or historical milestones in `INTERFACE_IMPLEMENTATION.md`.
@@ -33,15 +33,22 @@ Fonts main frame `710d594a28c0a2c9fba2e1467d917db506afcdedef87a49b05e72b8354ce03
 Fonts Open Panel `3581aa324abefbbb46a7e1b7edd893505a78f168960a1d09b94dbf37b52db863`,
 and Installer Open Panel `a1df0e12da2b667b71c56bb735adf940516de61740dc33672d9c2ff8f3960154`.
 DE25 Astra, audio host, and remote desktop remain active with zero restarts.
-The selected full release image still predates this ABI 10 checkpoint; current
-DE25 trial uses targeted, persistent bundle and Kit installation.
+Coherent release `399486be438993261dba71c1c62e3031316d03d1711bf1e04778cab06476fe32`
+is selected on DE25. Its archived RFB captures under
+`/mnt/Documents/astra68/interface-controls-20261029/selected-release-399486be/`
+show Gallery, Atlas, Fonts, Installer, both shared Open Panels, and the bottom
+of Gallery's scrolled Choice page. All four app launches returned status 0;
+release deployment passed its kernel, state migration, and runtime gates.
 
 Remaining product-level gaps: the shared installed-font chooser does not own
 Fonts management actions; font-strike rows lack a per-item disabled state; and
 Save-panel accessory choices depend on caller UI. Those are integration and
 policy work, not a reason to create one-off controls.
 
-| Group | Available | Partial | Remaining |
+The table below records the **starting inventory**, before the nine packages.
+It is not the current ABI 10 coverage list.
+
+| Group | Available at audit start | Partial at audit start | Absent at audit start |
 | --- | --- | --- | --- |
 | Actions (6) | Button, Menu, Context Menu | Button Group (Container + Buttons, no group interaction), Toolbar (flat actions; no groups or overflow) | Split Button |
 | Choice (9) | Checkbox, Radio, Switch, Segmented, Tabs, Disclosure | — | Popup, Multi-select Popup, Combo Box |

@@ -16,9 +16,18 @@ SHA-256 evidence are under
 `/mnt/Documents/astra68/interface-controls-20261029/` on Beast. Board Astra,
 audio host, and remote desktop services remain active with zero restarts.
 Fonts initially failed because its requested y=32 was above the display work
-area at y=34; y=64 fixes launch. Full selected release image has not yet been
-rebuilt from ABI 10 sources. Remaining product integration choices are listed
-in `docs/INTERFACE_CONTROL_WORKPLAN.md`.
+area at y=34; y=64 fixes launch. Coherent release
+`399486be438993261dba71c1c62e3031316d03d1711bf1e04778cab06476fe32`
+was built from the ABI 10 source and selected on DE25. Kernel identity matched,
+state migration preserved the board's user data, and deployment's runtime gate
+passed. Selected-release RFB captures show Atlas, Gallery, Fonts, both shared
+Open Panels, and the bottom of Gallery's scrolled Choice page. Supervisor logs
+show status 0 for all four app launches. Evidence is under
+`/mnt/Documents/astra68/interface-controls-20261029/selected-release-399486be/`
+on Beast. Trial files were removed from the board after checksum verification;
+Astra, audio host, and remote desktop are active with zero restarts and 8.1 GiB
+free. Remaining product integration choices are listed in
+`docs/INTERFACE_CONTROL_WORKPLAN.md`.
 
 Control-set continuation, 2026-10-29: source-based audit of the standalone
 desktop design's 50 concepts finds 20 available, six partial, and 24 absent.
