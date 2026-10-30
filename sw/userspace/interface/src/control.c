@@ -8468,11 +8468,16 @@ static AstraResult pointer_event(AstraUIContext *context,
                                    event->data.pointer.y, 1);
         clear_capture(context);
         clear_keyboard(context);
+        action->value = -1;
         if (target != CONTROL_NONE) {
             const AstraControl *control = &context->_private_controls[target];
             if (focusable(control) && (control->_private_state & ASTRA_CONTROL_DISABLED) == 0u)
                 set_focus(context, target, 0);
             action->control_id = control->_private_id;
+            if (COLLECTION_KINDS(control->_private_control_kind))
+                action->value = choice_index_at(control,
+                    event->data.pointer.x, event->data.pointer.y);
+            else action->value = -1;
         }
         action->type = ASTRA_UI_ACTION_CONTEXT_MENU;
         return ASTRA_OK;

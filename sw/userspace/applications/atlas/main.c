@@ -1360,66 +1360,6 @@ static AstraResult reload_directory(void)
     return navigate_to(root, NAVIGATION_STAY);
 }
 
-static uint32_t hit_entry(int32_t x, int32_t y, uint32_t *depth_out)
-{
-    *depth_out = 0u;
-    if (!visible_data || directory.status != ASTRA_VFS_OK) return UINT32_MAX;
-    if (browser.view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS) {
-        AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
-        if (theme.control_height == 0u) return UINT32_MAX;
-        for (uint32_t depth = 0u; depth < browser.column_count; ++depth) {
-            const AstraFilePanelColumnSnapshot *snapshot =
-                &browser.column_snapshots[depth];
-            AstraControlFrame frame, clip;
-            if (snapshot->directory == NULL ||
-                astra_interface_ui_geometry(&ui,
-                    TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT +
-                    ASTRA_FILE_PANEL_CONTROL_COUNT + 2u + 2u * depth,
-                    &frame, &clip) != ASTRA_OK ||
-                x < clip.x || x >= clip.x + (int32_t)clip.width ||
-                y < clip.y || y >= clip.y + (int32_t)clip.height ||
-                y < frame.y) continue;
-            uint32_t row = (uint32_t)(y - frame.y) / theme.control_height;
-            if (row >= snapshot->item_count) return UINT32_MAX;
-            *depth_out = depth;
-            return (uint32_t)snapshot->items[row].id - 1u;
-        }
-        return UINT32_MAX;
-    }
-    if (browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST) {
-        AstraControlFrame frame, clip;
-        AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
-        if (astra_interface_ui_geometry(&ui,
-                TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT + ASTRA_FILE_PANEL_LIST,
-                &frame, &clip) != ASTRA_OK || theme.control_height == 0u ||
-            x < clip.x || x >= clip.x + (int32_t)clip.width ||
-            y < clip.y || y >= clip.y + (int32_t)clip.height ||
-            y < frame.y) return UINT32_MAX;
-        uint32_t row = (uint32_t)(y - frame.y) / theme.control_height;
-        return row < browser.item_count ?
-            (uint32_t)browser.items[row].id - 1u : UINT32_MAX;
-    }
-    if (browser.view_mode == ASTRA_FILE_PANEL_VIEW_GRID) {
-        AstraControlFrame frame, clip;
-        if (astra_interface_ui_geometry(&ui,
-                TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT + ASTRA_FILE_PANEL_GRID,
-                &frame, &clip) != ASTRA_OK || browser.grid_model.columns == 0u)
-            return UINT32_MAX;
-        for (uint32_t row = 0u; row < browser.item_count; ++row) {
-            AstraIconTileInfo tile = ASTRA_ICON_TILE_INFO_INIT;
-            tile.style = ASTRA_ICON_TILE_CLIENT;
-            tile.frame = (AstraRectI32){
-                frame.x + (int32_t)(row % browser.grid_model.columns) * CELL_WIDTH,
-                frame.y + (int32_t)(row / browser.grid_model.columns) * CELL_HEIGHT,
-                CELL_WIDTH, CELL_HEIGHT};
-            tile.clip = (AstraRectI32){clip.x, clip.y, clip.width, clip.height};
-            if (astra_interface_icon_tile_hit(&tile, x, y))
-                return (uint32_t)browser.items[row].id - 1u;
-        }
-    }
-    return UINT32_MAX;
-}
-
 static AstraResult open_entry(const char *path, uint32_t kind)
 {
     if (path == NULL || path[0] != '/')
@@ -2604,12 +2544,14 @@ static AstraResult run(AstraHandle gui)
             }
             if (event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
                 event.data.pointer.y >= (int32_t)TOOLBAR_HEIGHT &&
-                (action.type == ASTRA_UI_ACTION_CONTEXT_MENU ||
-                 (event.flags & ASTRA_WINDOW_EVENT_DOWN) != 0u)) {
-                uint32_t depth = 0u;
-                uint32_t index = hit_entry(event.data.pointer.x,
-                    event.data.pointer.y, &depth);
-                if (action.type == ASTRA_UI_ACTION_CONTEXT_MENU) {
+                action.type == ASTRA_UI_ACTION_CONTEXT_MENU) {
+                uint32_t depth = 0u, index = UINT32_MAX;
+                if (visible_data && directory.status == ASTRA_VFS_OK) {
+                    AstraResult hit = astra_interface_file_panel_context_entry(
+                        &browser, &action, &index, &depth);
+                    if (hit != ASTRA_OK) return hit;
+                }
+                {
                     const AstraFilePanelColumnSnapshot *snapshot =
                         depth < browser.column_count ?
                             &browser.column_snapshots[depth] : NULL;

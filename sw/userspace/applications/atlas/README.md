@@ -42,6 +42,10 @@ The shared File Panel composes List from Interface Kit's Table control. Rows
 show Name, Size, Kind, and UTC Modified columns without an Atlas-only widget;
 Grid and Columns still use the same directory snapshot and selection model.
 Interface Kit ABI 11 includes the table model and a File Panel dispose call.
+Interface Kit reports context-menu row hits for all collection controls,
+including Table's header offset. File Panel maps that row to its source entry
+and Columns depth; Atlas uses that mapping for its context menu instead of
+maintaining separate geometry logic for each view.
 
 Remaining design work: List row expansion, selection preview,
 Recent and saved queries, Cut/Move, drag and drop, and multiselection.

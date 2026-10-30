@@ -92,6 +92,54 @@ void astra_interface_file_panel_dispose(AstraFilePanel *panel)
     panel->list_table.cell_count = 0u;
 }
 
+AstraResult astra_interface_file_panel_context_entry(
+    const AstraFilePanel *panel, const AstraUIAction *action,
+    uint32_t *entry_index, uint32_t *depth)
+{
+    const AstraCollectionItem *items = NULL;
+    uint32_t count = 0u, entry_count = 0u, at_depth = 0u;
+
+    if (panel == NULL || panel->size != sizeof(*panel) ||
+        action == NULL || action->size != sizeof(*action) ||
+        action->type != ASTRA_UI_ACTION_CONTEXT_MENU ||
+        entry_index == NULL || depth == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *entry_index = UINT32_MAX;
+    *depth = 0u;
+    if (panel->view_mode == ASTRA_FILE_PANEL_VIEW_LIST &&
+        action->control_id == panel->first_id + ASTRA_FILE_PANEL_LIST) {
+        items = panel->items;
+        count = panel->item_count;
+        entry_count = panel->entry_count;
+    } else if (panel->view_mode == ASTRA_FILE_PANEL_VIEW_GRID &&
+        action->control_id == panel->first_id + ASTRA_FILE_PANEL_GRID) {
+        items = panel->items;
+        count = panel->item_count;
+        entry_count = panel->entry_count;
+    } else if (panel->view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS) {
+        for (uint32_t at = 0u; at < panel->column_count; ++at) {
+            if (action->control_id != panel->first_id +
+                    ASTRA_FILE_PANEL_CONTROL_COUNT + 2u + 2u * at)
+                continue;
+            const AstraFilePanelColumnSnapshot *snapshot =
+                &panel->column_snapshots[at];
+            items = snapshot->items;
+            count = snapshot->item_count;
+            entry_count = snapshot->entry_count;
+            at_depth = at;
+            break;
+        }
+    }
+    if (items == NULL || action->value < 0 ||
+        (uint64_t)action->value >= count)
+        return ASTRA_OK;
+    uint64_t id = items[(uint32_t)action->value].id;
+    if (id == 0u || id > entry_count) return ASTRA_ERROR_INVALID_ARGUMENT;
+    *entry_index = (uint32_t)id - 1u;
+    *depth = at_depth;
+    return ASTRA_OK;
+}
+
 static int contains_query(const char *name, uint32_t name_length,
     const char *query, uint32_t query_length)
 {

@@ -2,6 +2,19 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared context-hit checkpoint, 2026-10-30: Interface Kit now reports
+collection row beneath pointer context-menu events. Its existing hit logic
+excludes Table headers; blank space reports -1. File Panel resolves the
+visible row to a directory entry and Columns depth, so Atlas removed its
+separate Grid/List/Columns geometry hit tester. Haiku read-only reference:
+`src/kits/tracker/PoseView.cpp` owns item hit testing and selection in
+Tracker's shared view. Beast Interface sanitizer, library contract, Atlas
+tests, and Atlas bundle build pass. Targeted DE25 install passed; right-click
+on DH0 Table header selected no file, and right-click on
+`ChocolateDoomCopy.app` opened its file context menu including Create
+installer. RFB evidence lives at
+`/mnt/Documents/astra68/atlas-context-20261030/` on Beast.
+
 Atlas shared List checkpoint, 2026-10-30: Interface Kit File Panel now
 composes its List view from the existing Table control, with Name, Size,
 Kind, and UTC Modified columns. Grid, List, and Columns still share one

@@ -1253,7 +1253,8 @@ typedef struct AstraUIAction {
     /** ID of the control that emitted the action. */
     uint32_t control_id;
     /** Current value for VALUE_CHANGED, selected row for collection ACTIVATE,
-     * or full item index for EXPANSION_CHANGED. */
+     * pointer row for collection CONTEXT_MENU (-1 for empty space), or full
+     * item index for EXPANSION_CHANGED. */
     int64_t value;
     /** Decimal places for @ref value; zero for nonnumeric actions. */
     uint32_t decimal_places;

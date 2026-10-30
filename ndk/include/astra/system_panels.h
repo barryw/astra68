@@ -467,6 +467,15 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
     AstraUIContext *context, AstraControl *controls,
     const AstraUIAction *action, uint32_t *outcome);
 
+/** Map a collection context-menu action to its directory entry. Blank space
+ * yields UINT32_MAX for entry_index. Column mode also returns its depth.
+ * The action's row comes from Interface Kit's common pointer hit testing.
+ * @since Interface Kit 11.0.
+ */
+AstraResult astra_interface_file_panel_context_entry(
+    const AstraFilePanel *panel, const AstraUIAction *action,
+    uint32_t *entry_index, uint32_t *depth);
+
 enum {
     ASTRA_FONT_PANEL_ROOT = 0u,
     ASTRA_FONT_PANEL_TITLE,

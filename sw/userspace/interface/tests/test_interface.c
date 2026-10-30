@@ -2108,6 +2108,24 @@ static void test_table_control(void)
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
         ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
         control._private_frame.y + 4);
+    event.data.pointer.button = 3u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_CONTEXT_MENU &&
+           action.control_id == 91u && action.value == -1);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + 2u * theme.control_height + 4u);
+    event.data.pointer.button = 3u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(action.type == ASTRA_UI_ACTION_CONTEXT_MENU &&
+           action.control_id == 91u && action.value == 1);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + 4);
     assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
     event.flags = 0u;
     assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
@@ -5045,6 +5063,19 @@ static void test_shared_file_panel(void)
         ASTRA_FILE_PANEL_CONTROL_COUNT, 420u, 480u) == ASTRA_OK);
     layout.direction = ASTRA_FLEX_COLUMN;
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    {
+        uint32_t entry_index, depth;
+        action.type = ASTRA_UI_ACTION_CONTEXT_MENU;
+        action.control_id = 300u + ASTRA_FILE_PANEL_LIST;
+        action.value = 1;
+        assert(astra_interface_file_panel_context_entry(&panel, &action,
+            &entry_index, &depth) == ASTRA_OK);
+        assert(entry_index == 2u && depth == 0u);
+        action.value = -1;
+        assert(astra_interface_file_panel_context_entry(&panel, &action,
+            &entry_index, &depth) == ASTRA_OK);
+        assert(entry_index == UINT32_MAX);
+    }
     action.type = ASTRA_UI_ACTION_ACTIVATE;
     action.control_id = 300u + ASTRA_FILE_PANEL_LIST;
     action.value = 0;
@@ -5064,6 +5095,15 @@ static void test_shared_file_panel(void)
     assert(astra_interface_file_panel_action(&panel, &context, controls,
         &action, &outcome) == ASTRA_OK &&
         panel.view_mode == ASTRA_FILE_PANEL_VIEW_GRID);
+    {
+        uint32_t entry_index, depth;
+        action.type = ASTRA_UI_ACTION_CONTEXT_MENU;
+        action.control_id = 300u + ASTRA_FILE_PANEL_GRID;
+        action.value = 0;
+        assert(astra_interface_file_panel_context_entry(&panel, &action,
+            &entry_index, &depth) == ASTRA_OK);
+        assert(entry_index == 1u && depth == 0u);
+    }
     action.type = ASTRA_UI_ACTION_ACTIVATE;
     action.control_id = 300u + ASTRA_FILE_PANEL_GRID;
     action.value = 1;

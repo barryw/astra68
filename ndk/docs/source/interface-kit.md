@@ -35,6 +35,11 @@ renders UTC. Search and type filtering rebuild Table rows from the caller's
 directory snapshot. Call `astra_interface_file_panel_dispose` after the UI
 stops using the panel to release its metadata row storage. Interface ABI 11
 replaces ABI 10 because `AstraFilePanel` gained Table state.
+For pointer context menus, collection controls report hovered row in
+`AstraUIAction.value` and `-1` over empty space. File Panel's
+`astra_interface_file_panel_context_entry` maps that row to the original
+directory entry and Columns depth. Callers need no view-specific hit testing;
+the Table header never resolves to a file.
 
 ## Field family
 
