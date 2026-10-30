@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared Places checkpoint, 2026-10-30: Atlas no longer calculates sidebar
+selection. Interface Kit File Panel now selects the longest matching Place path
+on both directory changes and volume/sidebar refresh; paths match whole
+components. Haiku read-only reference: `src/kits/tracker/Navigator.cpp` for
+location state and `ContainerWindow.cpp` for coordinated window navigation;
+Astra keeps the rule in its composable native File Panel. Beast Interface Kit
+tests, library contract, Atlas tests and bundle build passed. Targeted DE25
+install of Interface Kit and Atlas passed. RFB showed DH0 selected at `/dh0`,
+Home selected at `/home`, and Home retained at `/home/Desktop`; services
+active, zero restarts, 8.2 GiB free. SHA-verified captures on Beast:
+`/mnt/Documents/astra68/atlas-shared-place-20261030/`. Trial captures removed
+from board. Remaining Atlas work: List row expansion, selection preview,
+Recent/saved queries, Cut/Move, drag and drop. Development install only; no
+full release image rebuilt for this checkpoint.
+
 Atlas batch-action checkpoint, 2026-10-30: File selection clipboard payload
 now carries one or many exact-volume references. Filesystem Kit ABI 15.6 owns
 payload size and validation; Atlas maps Interface Kit stable IDs to its

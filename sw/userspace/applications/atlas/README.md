@@ -53,6 +53,9 @@ Interface Kit reports context-menu row hits for all collection controls,
 including Table's header offset. File Panel maps that row to its source entry
 and Columns depth; Atlas uses that mapping for its context menu instead of
 maintaining separate geometry logic for each view.
+File Panel also owns Places selection: navigation and sidebar refresh choose
+the longest matching path component prefix. Atlas only supplies current volume
+rows and directory path.
 
 Copy and Paste serialize one or many selected paths through Filesystem Kit's
 versioned VFS selection clipboard payload. Filesystem Kit checks payload bounds

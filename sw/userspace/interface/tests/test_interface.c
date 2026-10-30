@@ -5038,10 +5038,11 @@ static void test_shared_file_panel(void)
     };
     AstraCollectionItem items[2], next_items[2];
     AstraCollectionItem rebound_items[4], rebound_spare[4];
-    AstraCollectionItem place_items[2], next_place_items[2];
-    AstraFilePanelPlace places[2] = {
+    AstraCollectionItem place_items[3], updated_place_items[3], next_place_items[2];
+    AstraFilePanelPlace places[3] = {
         {"Home", 4u, "/dh0/Home"},
-        {"Stories", 7u, "/dh0/Stories"}
+        {"Stories", 7u, "/dh0/Stories"},
+        {"DH0", 3u, "/dh0"}
     };
     AstraChoiceItem filters[2] = {
         {"All files", 9u, {0u, 0u}},
@@ -5081,9 +5082,9 @@ static void test_shared_file_panel(void)
     info.grid_icons = icons;
     info.grid_icon_capacity = 2u;
     info.places = places;
-    info.place_count = 2u;
+    info.place_count = 3u;
     info.place_items = place_items;
-    info.place_capacity = 2u;
+    info.place_capacity = 3u;
     info.type_filters = filters;
     info.type_filter_count = 2u;
     info.type_accept = file_panel_test_type;
@@ -5107,6 +5108,9 @@ static void test_shared_file_panel(void)
         ASTRA_FILE_PANEL_CONTROL_COUNT, 420u, 480u) == ASTRA_OK);
     layout.direction = ASTRA_FLEX_COLUMN;
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_file_panel_set_places(&panel, &context, controls,
+        places, 3u, updated_place_items, 3u) == ASTRA_OK);
+    assert(panel.places_collection.selected_id == 2u);
     assert(astra_interface_control_set_value(&context,
         &controls[ASTRA_FILE_PANEL_LIST], 1) == ASTRA_OK);
     selected_ids[0] = items[0].id;
@@ -5213,6 +5217,7 @@ static void test_shared_file_panel(void)
         strcmp(panel.target, "/dh0/Home") == 0);
     assert(astra_interface_file_panel_set_places(&panel, &context, controls,
         places, 2u, next_place_items, 2u) == ASTRA_OK);
+    assert(panel.places_collection.selected_id == 2u);
     action.type = ASTRA_UI_ACTION_ACTIVATE;
     action.control_id = 300u + ASTRA_FILE_PANEL_UP;
     assert(astra_interface_file_panel_action(&panel, &context, controls,
@@ -5239,7 +5244,8 @@ static void test_shared_file_panel(void)
         ASTRA_OK);
     assert(collection.item_count == 2u &&
            panel.grid_collection.selected_id == 0u &&
-           strcmp(panel.directory, "/dh0/Stories") == 0);
+           strcmp(panel.directory, "/dh0/Stories") == 0 &&
+           panel.places_collection.selected_id == 2u);
     action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
     action.control_id = 300u + ASTRA_FILE_PANEL_TYPE;
     action.value = 1;
@@ -5251,7 +5257,8 @@ static void test_shared_file_panel(void)
         &action, &outcome) == ASTRA_OK && panel.item_count == 2u);
     assert(astra_interface_file_panel_set_directory(&panel, &context,
         controls, "/dh0/Empty", NULL, 0u, items, 2u) == ASTRA_OK &&
-        collection.item_count == 0u);
+        collection.item_count == 0u &&
+        panel.places_collection.selected_id == 0u);
     assert(astra_interface_file_panel_set_directory(&panel, &context,
         controls, "/dh0/Stories", next_entries, 2u, next_items, 2u) == ASTRA_OK &&
         collection.item_count == 2u);

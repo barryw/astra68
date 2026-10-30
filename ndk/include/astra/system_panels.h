@@ -375,6 +375,7 @@ void astra_interface_file_panel_dispose(AstraFilePanel *panel);
 
 /** Replace the viewed directory after the caller loads a new snapshot. The
  * previous entries/items must remain alive until this function succeeds.
+ * Places selection follows the longest matching path component prefix.
  * @param panel Initialized Open/Save panel.
  * @param context Owning UI context.
  * @param controls Panel's retained control array.
@@ -412,6 +413,7 @@ AstraResult astra_interface_file_panel_rebind_storage(AstraFilePanel *panel,
 
 /** Replace sidebar Places/Volumes after a volume lifecycle change. The
  * caller supplies a new item array while the old List still borrows it.
+ * Selection follows the current directory's longest matching Place.
  * @param panel Initialized Open/Save panel.
  * @param context Owning UI context.
  * @param controls Panel's retained control array.

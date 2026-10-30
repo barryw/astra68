@@ -896,21 +896,6 @@ static AstraResult browser_set_directory(const AstraDirectorySnapshot *next,
         BROWSER_CONTROL(0), path, count != 0u ? next->entries : NULL, count,
         browser.spare_items, browser.spare_capacity);
     if (result != ASTRA_OK) return result;
-    int32_t selected_place = -1;
-    size_t selected_length = 0u;
-    for (uint32_t at = 0u; at < browser.place_count; ++at) {
-        const char *place = browser.places[at].path;
-        size_t length = strlen(place);
-        if (length >= selected_length &&
-            strncmp(path, place, length) == 0 &&
-            (path[length] == '\0' || path[length] == '/')) {
-            selected_place = (int32_t)at;
-            selected_length = length;
-        }
-    }
-    result = astra_interface_control_set_value(&ui,
-        BROWSER_CONTROL(ASTRA_FILE_PANEL_PLACES_LIST), selected_place);
-    if (result != ASTRA_OK) return result;
     browser_clear_children();
     astra_runtime_deallocate(browser_entry_icons);
     browser_entry_icons = NULL;

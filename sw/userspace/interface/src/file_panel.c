@@ -753,6 +753,30 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     return result;
 }
 
+static AstraResult file_panel_select_place(AstraUIContext *context,
+    AstraControl *controls, const char *directory,
+    const AstraFilePanelPlace *places, uint32_t count)
+{
+    int32_t selected = -1;
+    size_t longest = 0u;
+    if (directory != NULL && places != NULL) {
+        size_t directory_length = strlen(directory);
+        for (uint32_t at = 0u; at < count; ++at) {
+            const char *path = places[at].path;
+            size_t length = strlen(path);
+            if (length <= directory_length && length >= longest &&
+                strncmp(directory, path, length) == 0 &&
+                (path[length - 1u] == '/' || directory[length] == '\0' ||
+                    directory[length] == '/')) {
+                selected = (int32_t)at;
+                longest = length;
+            }
+        }
+    }
+    return astra_interface_control_set_value(context,
+        &controls[ASTRA_FILE_PANEL_PLACES_LIST], selected);
+}
+
 AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
     AstraUIContext *context, AstraControl *controls, const char *directory,
     const AstraDirectoryEntry *entries, uint32_t entry_count,
@@ -813,6 +837,9 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
             if (result != ASTRA_OK) goto rollback;
         }
     }
+    result = file_panel_select_place(context, controls, next,
+        panel->places, panel->place_count);
+    if (result != ASTRA_OK) goto rollback;
     astra_runtime_deallocate(panel->list_rows);
     panel->list_rows = next_rows;
     panel->active_directory = 1u - panel->active_directory;
@@ -1021,6 +1048,16 @@ AstraResult astra_interface_file_panel_set_places(AstraFilePanel *panel,
     result = astra_interface_list_set_items(context,
         &controls[ASTRA_FILE_PANEL_PLACES_LIST], item_storage, count);
     if (result != ASTRA_OK) return result;
+    result = file_panel_select_place(context, controls, panel->directory,
+        places, count);
+    if (result != ASTRA_OK) {
+        (void)astra_interface_list_set_items(context,
+            &controls[ASTRA_FILE_PANEL_PLACES_LIST], panel->place_items,
+            panel->place_count);
+        (void)file_panel_select_place(context, controls, panel->directory,
+            panel->places, panel->place_count);
+        return result;
+    }
     panel->places = places;
     panel->place_count = count;
     panel->place_items = item_storage;
