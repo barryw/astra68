@@ -41,6 +41,10 @@ copying Tracker code.
 The shared File Panel composes List from Interface Kit's Table control. Rows
 show Name, Size, Kind, and UTC Modified columns without an Atlas-only widget;
 Grid and Columns still use the same directory snapshot and selection model.
+Interface Kit 12.2 supplies the selection inspector, composed from its existing
+Container, Image View, and Label controls. Atlas binds the selected entry and
+icon, then toggles the shared inspector with Preview. It owns no inspector
+renderer or metadata formatter.
 Interface Kit ABI 12 includes shared collection multi-selection; ABI 11 added
 the table model and File Panel dispose call.
 List, Grid, and root Columns bind one caller-owned stable-ID selection set.
@@ -83,7 +87,7 @@ iterates selected poses; `src/kits/tracker/ContainerWindow.cpp` dispatches
 Copy and Move over Tracker selection. Astra keeps selection gestures in
 Interface Kit and file operations in Filesystem Kit and common folder code.
 
-Remaining design work: List row expansion, selection preview, Recent and saved
+Remaining design work: List row expansion, Recent and saved
 queries, and drag and drop. These need shared controls or native volume grant
 transitions, not Atlas-only widgets.
 
