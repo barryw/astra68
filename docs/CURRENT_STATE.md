@@ -2,6 +2,29 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas Cut/Move checkpoint, 2026-10-30: Filesystem Kit ABI 15.7 owns generic
+same-volume rename and cross-volume staged copy followed by source removal.
+Clipboard selection protocol version 3 carries Copy or Move intent. Atlas
+binds shared selection and commands to File menu, context menu, and Ctrl+X;
+its source-mount adapter acquires write authority for removable moves. Failed
+source cleanup leaves published destination intact and reports partial move.
+On batch failure, completed entries leave the clipboard while unprocessed Cut
+entries stay available for a later paste.
+Haiku read-only references: `src/kits/tracker/PoseView.cpp` for Cut/Copy/Paste
+commands and `src/kits/tracker/FSClipboard.cpp` for move intent. Astra keeps
+transfer and clipboard policy in Filesystem Kit, with Atlas limited to UI and
+mount authority. Beast Filesystem Kit tests, library contract, and Atlas
+bundle build pass. DE25 targeted development install passed: Ctrl+X/Ctrl+V
+moved a folder within RAM0, RAM0 to HOME, and HOME back to RAM0; shared
+Delete removed the disposable RAM0 folders. Final source was reinstalled on
+DE25; Atlas opened RAM0, same-folder Cut/Paste kept one folder without error,
+and Delete returned RAM0 root to empty. SHA-verified RFB evidence on Beast:
+`/mnt/Documents/astra68/atlas-move-20261030/`. Board trial captures removed;
+`astra.service` active with zero restarts and 8.2 GiB free. NDK distribution
+gate passes. Remaining Atlas work: List row expansion, selection preview,
+Recent/saved queries, and drag and drop. No full release image rebuilt for
+this checkpoint.
+
 Atlas shared Places checkpoint, 2026-10-30: Atlas no longer calculates sidebar
 selection. Interface Kit File Panel now selects the longest matching Place path
 on both directory changes and volume/sidebar refresh; paths match whole

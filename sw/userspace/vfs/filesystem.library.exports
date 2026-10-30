@@ -209,3 +209,8 @@ ASTRA_FILESYSTEM_15.6 {
         astra_vfs_clipboard_selection_size;
         astra_vfs_clipboard_selection_validate;
 } ASTRA_FILESYSTEM_15.4;
+
+ASTRA_FILESYSTEM_15.7 {
+    global:
+        astra_filesystem_move_tree_between;
+} ASTRA_FILESYSTEM_15.6;

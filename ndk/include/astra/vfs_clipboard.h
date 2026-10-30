@@ -12,7 +12,11 @@ ASTRA_EXTERN_C_BEGIN
 /** One or more file references in one immutable clipboard representation. */
 #define ASTRA_CLIPBOARD_TYPE_VFS_SELECTION "application/x-astra-vfs-selection"
 /** Current serialized file-selection payload version. */
-#define ASTRA_VFS_CLIPBOARD_SELECTION_VERSION 2u
+#define ASTRA_VFS_CLIPBOARD_SELECTION_VERSION 3u
+/** Copy source entries when pasted. */
+#define ASTRA_VFS_CLIPBOARD_COPY 0u
+/** Move source entries when pasted. Source must remain writable. */
+#define ASTRA_VFS_CLIPBOARD_MOVE 1u
 
 /** Exact mount identity prevents a stale removable path from selecting new
  * media. Fixed system assigns use an all-zero volume reference. Consumers
@@ -30,7 +34,7 @@ typedef struct AstraVfsClipboardSelection {
     uint32_t size;       /**< Complete payload byte count. */
     uint32_t version;    /**< ASTRA_VFS_CLIPBOARD_SELECTION_VERSION. */
     uint32_t count;      /**< Nonzero number of entries. */
-    uint32_t reserved;   /**< Must be zero. */
+    uint32_t operation;  /**< ASTRA_VFS_CLIPBOARD_COPY or MOVE. */
     AstraVfsClipboardEntry entries[]; /**< count serialized references. */
 } AstraVfsClipboardSelection;
 

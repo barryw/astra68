@@ -194,16 +194,13 @@ static uint32_t remove_partial(AstraFilesystem *filesystem, const char *path,
         status;
 }
 
-uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
+static uint32_t transfer_preflight(AstraFilesystem *source_filesystem,
     const char *source, AstraFilesystem *destination_filesystem,
     const char *destination)
 {
-    AstraFileInfo info = {.size = sizeof(info)};
-    char *staging;
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     uint32_t status;
     size_t length;
-    int created = 0;
-    uint64_t nonce;
 
     if (source_filesystem == NULL || destination_filesystem == NULL ||
         source == NULL || destination == NULL ||
@@ -214,9 +211,28 @@ uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
         (strncmp(source, destination, length) == 0 &&
          destination[length] == '/'))
         return ASTRA_VFS_ERR_INVALID;
+    status = astra_filesystem_lstat(source_filesystem, source, &info);
+    if (status != ASTRA_VFS_OK) return status;
+    if (info.kind != ASTRA_VFS_KIND_FILE &&
+        info.kind != ASTRA_VFS_KIND_DIRECTORY &&
+        info.kind != ASTRA_VFS_KIND_SYMLINK)
+        return ASTRA_VFS_ERR_UNSUPPORTED;
     status = astra_filesystem_lstat(destination_filesystem, destination, &info);
     if (status == ASTRA_VFS_OK) return ASTRA_VFS_ERR_EXISTS;
-    if (status != ASTRA_VFS_ERR_NOT_FOUND) return status;
+    return status == ASTRA_VFS_ERR_NOT_FOUND ? ASTRA_VFS_OK : status;
+}
+
+uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
+    const char *source, AstraFilesystem *destination_filesystem,
+    const char *destination)
+{
+    char *staging;
+    uint32_t status = transfer_preflight(source_filesystem, source,
+        destination_filesystem, destination);
+    int created = 0;
+    uint64_t nonce;
+
+    if (status != ASTRA_VFS_OK) return status;
     staging = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
     if (staging == NULL) return ASTRA_VFS_ERR_LIMIT;
     nonce = astra_clock_monotonic();
@@ -247,4 +263,34 @@ uint32_t astra_filesystem_copy_tree(AstraFilesystem *filesystem,
 {
     return astra_filesystem_copy_tree_between(filesystem, source,
         filesystem, destination);
+}
+
+uint32_t astra_filesystem_move_tree_between(AstraFilesystem *source_filesystem,
+    const char *source, AstraFilesystem *destination_filesystem,
+    const char *destination, uint32_t *published)
+{
+    uint32_t status;
+
+    if (published != NULL) *published = 0u;
+    if (published == NULL) return ASTRA_VFS_ERR_INVALID;
+    status = transfer_preflight(source_filesystem, source,
+        destination_filesystem, destination);
+    if (status != ASTRA_VFS_OK) return status;
+
+    /* Source view can name destination on same volume. It may intentionally
+     * expose only the exact removable source mount, in which case a different
+     * destination assign returns NOT_FOUND and copy handles that case. */
+    status = astra_filesystem_rename(source_filesystem, source, destination);
+    if (status == ASTRA_VFS_OK) {
+        *published = 1u;
+        return ASTRA_VFS_OK;
+    }
+    if (status != ASTRA_VFS_ERR_CROSS_DEVICE &&
+        status != ASTRA_VFS_ERR_NOT_FOUND)
+        return status;
+    status = astra_filesystem_copy_tree_between(source_filesystem, source,
+        destination_filesystem, destination);
+    if (status != ASTRA_VFS_OK) return status;
+    *published = 1u;
+    return remove_partial(source_filesystem, source, 0u);
 }

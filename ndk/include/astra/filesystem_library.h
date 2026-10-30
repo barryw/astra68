@@ -15,7 +15,7 @@
 /** Current Filesystem Kit ABI major. */
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
 /** Current backward-compatible Filesystem Kit ABI revision. */
-#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 6u
+#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 7u
 enum {
     ASTRA_FILE_SEEK_BEGIN = 0,
     ASTRA_FILE_SEEK_CURRENT = 1,
@@ -378,6 +378,23 @@ uint32_t astra_filesystem_copy_tree(AstraFilesystem *filesystem,
 uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
     const char *source, AstraFilesystem *destination_filesystem,
     const char *destination);
+/** Move a file, symbolic link, or directory tree without replacing an existing
+ * destination. Rename within one backing filesystem; otherwise publish a
+ * staged copy before removing the source. A removal failure leaves the
+ * published destination intact and may leave part of the source. Callers must
+ * report that state rather than retrying the copy into the occupied name.
+ * @param source_filesystem Attached source namespace with write authority.
+ * @param source Existing source path.
+ * @param destination_filesystem Attached destination namespace with write authority.
+ * @param destination New destination path.
+ * @param published Receives one if destination exists after this call, else zero.
+ * @return ASTRA_VFS_* status; a non-OK result with published one means source
+ * removal failed after destination publication.
+ * @since Filesystem Kit 15.7.
+ */
+uint32_t astra_filesystem_move_tree_between(AstraFilesystem *source_filesystem,
+    const char *source, AstraFilesystem *destination_filesystem,
+    const char *destination, uint32_t *published);
 /** Create a hard link within one backing filesystem. @param filesystem Attached filesystem. @param from Existing path. @param to New path. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_link(AstraFilesystem *filesystem,
                                const char *from, const char *to);

@@ -264,6 +264,10 @@ void astra_filesystem_directory_close(AstraDirectory *directory)
 uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
                                   const char *from, const char *to)
 {
+    if (expected_source != NULL && filesystem == expected_source &&
+        strncmp(from, "/dh0/", 5u) == 0 &&
+        strncmp(to, "/usb0/", 6u) == 0)
+        return ASTRA_VFS_ERR_CROSS_DEVICE;
     check_namespace(filesystem, to);
     if (find(to) != NULL) return ASTRA_VFS_ERR_EXISTS;
     size_t length = strlen(from);
@@ -339,5 +343,52 @@ int main(void)
     assert(copied_link != NULL && copied_link->kind == ASTRA_VFS_KIND_SYMLINK &&
         copied_link->length == 4u &&
         memcmp(copied_link->bytes, "Doom", 4u) == 0);
+
+    entry_count = 0u;
+    expected_source = NULL;
+    expected_destination = NULL;
+    add("/dh0/Old", ASTRA_VFS_KIND_DIRECTORY);
+    add("/dh0/Old/Child", ASTRA_VFS_KIND_FILE);
+    uint32_t published = 99u;
+    assert(astra_filesystem_move_tree_between(&filesystem, "/dh0/Old",
+        &filesystem, "/dh0/New", &published) == ASTRA_VFS_OK);
+    assert(published == 1u && find("/dh0/Old") == NULL &&
+        find("/dh0/New") != NULL && find("/dh0/New/Child") != NULL);
+    assert(astra_filesystem_move_tree_between(&filesystem, "/dh0/New",
+        &filesystem, "/dh0/New/Inside", &published) == ASTRA_VFS_ERR_INVALID);
+    assert(published == 0u && find("/dh0/New") != NULL);
+    add("/dh0/Occupied", ASTRA_VFS_KIND_FILE);
+    assert(astra_filesystem_move_tree_between(&filesystem, "/dh0/New",
+        &filesystem, "/dh0/Occupied", &published) == ASTRA_VFS_ERR_EXISTS);
+    assert(published == 0u && find("/dh0/New") != NULL);
+
+    entry_count = 0u;
+    add("/dh0/Move.app", ASTRA_VFS_KIND_DIRECTORY);
+    Entry *move_file = add("/dh0/Move.app/Run", ASTRA_VFS_KIND_FILE);
+    memcpy(move_file->bytes, "MOVE", 4u);
+    move_file->length = 4u;
+    Entry *move_link = add("/dh0/Move.app/Link", ASTRA_VFS_KIND_SYMLINK);
+    memcpy(move_link->bytes, "Run", 3u);
+    move_link->length = 3u;
+    expected_source = &filesystem;
+    expected_destination = &removable;
+    fail_write = 1;
+    assert(astra_filesystem_move_tree_between(&filesystem, "/dh0/Move.app",
+        &removable, "/usb0/Move.app", &published) == ASTRA_VFS_ERR_NO_SPACE);
+    assert(published == 0u && find("/dh0/Move.app/Run") != NULL &&
+        find("/usb0/Move.app") == NULL);
+    fail_unlink = 1;
+    assert(astra_filesystem_move_tree_between(&filesystem, "/dh0/Move.app",
+        &removable, "/usb0/Move.app", &published) == ASTRA_VFS_ERR_LOST);
+    assert(published == 1u && find("/dh0/Move.app/Run") != NULL &&
+        find("/usb0/Move.app/Run") != NULL);
+    fail_unlink = 0;
+    assert(astra_filesystem_move_tree_between(&filesystem, "/dh0/Move.app",
+        &removable, "/usb0/Another.app", &published) == ASTRA_VFS_OK);
+    assert(published == 1u && find("/dh0/Move.app") == NULL &&
+        find("/dh0/Move.app/Run") == NULL &&
+        find("/dh0/Move.app/Link") == NULL &&
+        find("/usb0/Another.app/Run") != NULL &&
+        find("/usb0/Another.app/Link") != NULL);
     return 0;
 }

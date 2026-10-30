@@ -22,7 +22,8 @@ AstraResult astra_vfs_clipboard_selection_validate(const void *data,
     if (data == NULL || bytes < offsetof(AstraVfsClipboardSelection, entries))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (selection->version != ASTRA_VFS_CLIPBOARD_SELECTION_VERSION ||
-        selection->reserved != 0u ||
+        (selection->operation != ASTRA_VFS_CLIPBOARD_COPY &&
+         selection->operation != ASTRA_VFS_CLIPBOARD_MOVE) ||
         selection->size != bytes ||
         astra_vfs_clipboard_selection_size(selection->count) != bytes)
         return ASTRA_ERROR_INVALID_ARGUMENT;

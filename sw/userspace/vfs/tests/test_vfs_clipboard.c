@@ -20,6 +20,14 @@ int main(void)
     strcpy(selection->entries[1].path, "/usb0/Quake.app");
     selection->entries[1].volume = (AstraVolumeReference){12u, 3u, 8u};
     assert(astra_vfs_clipboard_selection_validate(selection, bytes) == ASTRA_OK);
+    selection->operation = ASTRA_VFS_CLIPBOARD_MOVE;
+    assert(astra_vfs_clipboard_selection_validate(selection, bytes) == ASTRA_OK);
+    selection->operation = 2u;
+    assert(astra_vfs_clipboard_selection_validate(selection, bytes) != ASTRA_OK);
+    selection->operation = ASTRA_VFS_CLIPBOARD_COPY;
+    selection->version = 2u;
+    assert(astra_vfs_clipboard_selection_validate(selection, bytes) != ASTRA_OK);
+    selection->version = ASTRA_VFS_CLIPBOARD_SELECTION_VERSION;
     assert(astra_vfs_clipboard_selection_validate(selection, bytes - 1u) != ASTRA_OK);
     selection->entries[1].path[0] = 'u';
     assert(astra_vfs_clipboard_selection_validate(selection, bytes) != ASTRA_OK);

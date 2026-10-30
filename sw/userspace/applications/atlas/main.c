@@ -209,6 +209,7 @@ enum AtlasMenuRow {
     ATLAS_MENU_NEW,
     ATLAS_MENU_OPEN,
     ATLAS_MENU_COPY,
+    ATLAS_MENU_CUT,
     ATLAS_MENU_PASTE,
     ATLAS_MENU_RENAME,
     ATLAS_MENU_DELETE,
@@ -232,6 +233,7 @@ static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"New Drawer", 10u, ASTRA_MENU_PARENT(1u)},
     {"Open", 4u, ASTRA_MENU_PARENT(1u)},
     {"Copy", 4u, ASTRA_MENU_PARENT(1u)},
+    {"Cut", 3u, ASTRA_MENU_PARENT(1u)},
     {"Paste", 5u, ASTRA_MENU_PARENT(1u)},
     {"Rename", 6u, ASTRA_MENU_PARENT(1u)},
     {"Move to Trash", 13u, ASTRA_MENU_PARENT(1u)},
@@ -1585,6 +1587,15 @@ static AstraResult copy_query(void *opaque, AstraCommandState *state)
     return result;
 }
 
+static AstraResult cut_query(void *opaque, AstraCommandState *state)
+{
+    AstraResult result = copy_query(opaque, state);
+    state->label = "Cut";
+    state->label_length = 3u;
+    state->enabled = state->enabled && writable_folder_root();
+    return result;
+}
+
 static int clipboard_has_file(void)
 {
     if (clipboard_service == ASTRA_INVALID_HANDLE) return 0;
@@ -1752,16 +1763,15 @@ static AstraResult copy_reference_for(const char *path,
     return result;
 }
 
-static AstraResult copy_selected(void *opaque, const AstraCommandArguments *args)
+static AstraResult clipboard_selected(uint32_t operation)
 {
-    (void)args;
-    (void)opaque;
     AstraClipboardRepresentation representation =
         ASTRA_CLIPBOARD_REPRESENTATION_INIT;
     if (clipboard_service == ASTRA_INVALID_HANDLE ||
         selection_count() == 0u ||
         (selected_kind != ASTRA_VFS_KIND_FILE &&
-         selected_kind != ASTRA_VFS_KIND_DIRECTORY))
+         selected_kind != ASTRA_VFS_KIND_DIRECTORY) ||
+        (operation == ASTRA_VFS_CLIPBOARD_MOVE && !writable_folder_root()))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     uint32_t bytes = astra_vfs_clipboard_selection_size(selection_count());
     if (bytes == 0u) return ASTRA_ERROR_NO_RESOURCES;
@@ -1771,6 +1781,7 @@ static AstraResult copy_selected(void *opaque, const AstraCommandArguments *args
     selection->size = bytes;
     selection->version = ASTRA_VFS_CLIPBOARD_SELECTION_VERSION;
     selection->count = selection_count();
+    selection->operation = operation;
     AstraResult result = ASTRA_OK;
     for (uint32_t at = 0u; at < selection->count; ++at) {
         uint32_t status = selection_path_at(at, selection->entries[at].path,
@@ -1794,6 +1805,20 @@ static AstraResult copy_selected(void *opaque, const AstraCommandArguments *args
     }
     astra_runtime_deallocate(selection);
     return result;
+}
+
+static AstraResult copy_selected(void *opaque, const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    return clipboard_selected(ASTRA_VFS_CLIPBOARD_COPY);
+}
+
+static AstraResult cut_selected(void *opaque, const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    return clipboard_selected(ASTRA_VFS_CLIPBOARD_MOVE);
 }
 
 typedef struct AtlasCopyMount {
@@ -1824,17 +1849,21 @@ static void copy_mount_close(AtlasCopyMount *mount)
 }
 
 static AstraResult copy_mount_open(AtlasCopyMount *mount,
-    const AstraVolumeReference *reference, const char *name, uint32_t origin)
+    const AstraVolumeReference *reference, const char *name, uint32_t origin,
+    uint32_t rights)
 {
     if (name[0] != '/' || name[1] == '\0')
         return ASTRA_ERROR_INVALID_ARGUMENT;
     AstraHandle broker = origin == ASTRA_VOLUME_ORIGIN_RAM ?
-        volume_ram_read_broker : volume_read_broker;
+        (rights & ASTRA_RIGHT_WRITE ? volume_ram_write_broker :
+            volume_ram_read_broker) :
+        (rights & ASTRA_RIGHT_WRITE ? volume_write_broker :
+            volume_read_broker);
     AstraResult result = astra_volume_root(broker, reference,
-        ASTRA_RIGHT_READ, &mount->grant);
+        rights, &mount->grant);
     if (result == ASTRA_OK)
         result = astra_result_from_service(astra_assign_bind(&mount->assigns,
-            name + 1u, mount->grant, ASTRA_RIGHT_READ, ""));
+            name + 1u, mount->grant, rights, ""));
     if (result == ASTRA_OK) {
         result = astra_result_from_service(astra_vfs_client_connect_service(
             &mount->client, mount->grant));
@@ -1847,7 +1876,8 @@ static AstraResult copy_mount_open(AtlasCopyMount *mount,
     return result;
 }
 
-static AstraResult paste_entry(const AstraVfsClipboardEntry *reference)
+static AstraResult paste_entry(const AstraVfsClipboardEntry *reference,
+    uint32_t operation, uint32_t *published)
 {
     char destination[ASTRA_VFS_PATH_MAX];
     const char *leaf = astra_folder_leaf(reference->path);
@@ -1858,6 +1888,7 @@ static AstraResult paste_entry(const AstraVfsClipboardEntry *reference)
         .filesystem = ASTRA_FILESYSTEM_INIT};
     AstraFilesystem *source_filesystem = &filesystem.filesystem;
     AstraResult result = ASTRA_OK;
+    *published = 0u;
     if (reference->volume.id != 0u) {
         AstraVolumeSnapshot snapshot = ASTRA_VOLUME_SNAPSHOT_INIT;
         result = astra_volume_snapshot_open(volume_metadata, &snapshot);
@@ -1871,7 +1902,9 @@ static AstraResult paste_entry(const AstraVfsClipboardEntry *reference)
             reference->path[length] == '/' ? ASTRA_OK : ASTRA_ERROR_INVALID_HANDLE;
         if (result == ASTRA_OK)
             result = copy_mount_open(&source_mount, &reference->volume,
-                record->name, record->origin);
+                record->name, record->origin, ASTRA_RIGHT_READ |
+                    (operation == ASTRA_VFS_CLIPBOARD_MOVE ?
+                        ASTRA_RIGHT_WRITE : 0u));
         astra_volume_snapshot_close(&snapshot);
         if (result != ASTRA_OK) return result;
         source_filesystem = &source_mount.filesystem;
@@ -1880,9 +1913,23 @@ static AstraResult paste_entry(const AstraVfsClipboardEntry *reference)
     }
     uint32_t status = astra_folder_path(root, leaf, destination,
         sizeof(destination));
-    if (status == ASTRA_VFS_OK)
-        status = astra_filesystem_copy_tree_between(source_filesystem,
-            reference->path, active_filesystem(), destination);
+    if (status == ASTRA_VFS_OK) {
+        if (operation == ASTRA_VFS_CLIPBOARD_MOVE &&
+            strcmp(reference->path, destination) == 0 &&
+            (reference->volume.id == 0u ||
+             (reference->volume.epoch == viewed_volume.epoch &&
+              reference->volume.id == viewed_volume.id &&
+              reference->volume.generation == viewed_volume.generation)))
+            status = ASTRA_VFS_OK;
+        else if (operation == ASTRA_VFS_CLIPBOARD_MOVE)
+            status = astra_filesystem_move_tree_between(source_filesystem,
+                reference->path, active_filesystem(), destination, published);
+        else {
+            status = astra_filesystem_copy_tree_between(source_filesystem,
+                reference->path, active_filesystem(), destination);
+            *published = status == ASTRA_VFS_OK;
+        }
+    }
     if (reference->volume.id != 0u) copy_mount_close(&source_mount);
     return astra_result_from_service(status);
 }
@@ -1916,21 +1963,63 @@ static AstraResult paste_into_current(void *opaque,
         astra_runtime_deallocate(selection);
         return result;
     }
-    uint32_t copied = 0u;
+    uint32_t copied = 0u, published = 0u;
+    uint32_t clipboard_pending = 0u;
+    AstraResult clipboard_status = ASTRA_OK;
+    uint32_t operation = selection->operation;
     for (; copied < selection->count; ++copied) {
-        result = paste_entry(&selection->entries[copied]);
+        result = paste_entry(&selection->entries[copied], operation,
+            &published);
         if (result != ASTRA_OK) break;
     }
+    if (operation == ASTRA_VFS_CLIPBOARD_MOVE &&
+        (copied != 0u || published != 0u)) {
+        uint32_t next = copied +
+            (result != ASTRA_OK && published != 0u ? 1u : 0u);
+        clipboard_pending = next != selection->count;
+        if (next == selection->count)
+            clipboard_status = astra_clipboard_clear(clipboard_service, NULL);
+        else {
+            uint32_t remaining = selection->count - next;
+            uint32_t remaining_bytes =
+                astra_vfs_clipboard_selection_size(remaining);
+            AstraClipboardRepresentation representation =
+                ASTRA_CLIPBOARD_REPRESENTATION_INIT;
+            memmove(selection->entries, selection->entries + next,
+                remaining * sizeof(selection->entries[0]));
+            selection->count = remaining;
+            selection->size = remaining_bytes;
+            representation.type = ASTRA_CLIPBOARD_TYPE_VFS_SELECTION;
+            representation.type_length =
+                sizeof(ASTRA_CLIPBOARD_TYPE_VFS_SELECTION) - 1u;
+            representation.data = selection;
+            representation.data_length = remaining_bytes;
+            clipboard_status = astra_clipboard_write(clipboard_service,
+                &representation, 1u, NULL);
+        }
+    }
     astra_runtime_deallocate(selection);
-    if (copied != 0u) {
+    if (result == ASTRA_OK) result = clipboard_status;
+    if (copied != 0u || published != 0u) {
         AstraResult refreshed = reload_directory();
         if (refreshed != ASTRA_OK) return refreshed;
     }
     if (result != ASTRA_OK)
-        folder_error(context->gui, copied == 0u ?
-            "Item could not be copied" :
-            "Some items were copied; remaining items were not",
-            astra_status_from_result(result));
+        folder_error(context->gui,
+            clipboard_status != ASTRA_OK ?
+                (clipboard_pending ?
+                    "Items moved, but clipboard could not retain pending items" :
+                    "Items moved, but clipboard could not be cleared") :
+            operation == ASTRA_VFS_CLIPBOARD_MOVE && published != 0u ?
+                "Destination received item, but original could not be fully removed" :
+            copied == 0u ?
+                (operation == ASTRA_VFS_CLIPBOARD_MOVE ?
+                    "Item could not be moved" : "Item could not be copied") :
+                (operation == ASTRA_VFS_CLIPBOARD_MOVE ?
+                    "Some items were moved; remaining items were not" :
+                    "Some items were copied; remaining items were not"),
+            astra_status_from_result(clipboard_status != ASTRA_OK ?
+                clipboard_status : result));
     return result;
 }
 
@@ -2101,6 +2190,8 @@ static AstraResult menu_sync(void)
     menu_state(ATLAS_MENU_NEW, writable, 0);
     menu_state(ATLAS_MENU_OPEN, selected && selection_count() == 1u, 0);
     menu_state(ATLAS_MENU_COPY, selected && clipboard_service != ASTRA_INVALID_HANDLE, 0);
+    menu_state(ATLAS_MENU_CUT, writable && selected &&
+        clipboard_service != ASTRA_INVALID_HANDLE, 0);
     menu_state(ATLAS_MENU_PASTE, writable && clipboard_has_file(), 0);
     menu_state(ATLAS_MENU_RENAME, writable && selected &&
         selection_count() == 1u, 0);
@@ -2242,6 +2333,8 @@ static AstraResult menu_invoke(AstraHandle gui, uint32_t row)
         return open_selected(&toolbar_command_context, NULL);
     case ATLAS_MENU_COPY:
         return copy_selected(&toolbar_command_context, NULL);
+    case ATLAS_MENU_CUT:
+        return cut_selected(&toolbar_command_context, NULL);
     case ATLAS_MENU_PASTE:
         return paste_into_current(&toolbar_command_context, NULL);
     case ATLAS_MENU_RENAME:
@@ -2284,13 +2377,14 @@ static AstraResult run(AstraHandle gui)
 {
     AstraContextMenu context_menu = ASTRA_CONTEXT_MENU_INIT;
     AtlasCommands command_context = {gui};
-    AstraContextMenuItem menu_items[5];
-    uint16_t menu_parents[5] = {0u};
+    AstraContextMenuItem menu_items[6];
+    uint16_t menu_parents[6] = {0u};
     const AstraCommand commands[] = {
         {"atlas.new", 9u, 0u, 0u, menu_query, create_folder, &command_context},
         {"atlas.folder", 12u, 0u, 0u, folder_query, create_folder, &command_context},
         {"atlas.open", 10u, 0u, 0u, open_query, open_selected, &command_context},
         {"atlas.copy", 10u, 0u, 0u, copy_query, copy_selected, &command_context},
+        {"atlas.cut", 9u, 0u, 0u, cut_query, cut_selected, &command_context},
         {"atlas.paste", 11u, 0u, 0u, paste_query, paste_into_current, &command_context},
         {"atlas.rename", 12u, 0u, 0u, rename_query, rename_selected, &command_context},
         {"atlas.delete", 12u, 0u, 0u, delete_query, delete_selected, &command_context},
@@ -2304,9 +2398,10 @@ static AstraResult run(AstraHandle gui)
         {"atlas.sort.modified", sizeof("atlas.sort.modified") - 1u, 0u, 0u,
             sort_query, sort_invoke, (void *)&sort_commands[3]}};
     const AstraCommandScope command_scope = {
-        &toolbar_command_scope, commands, 12u};
+        &toolbar_command_scope, commands, 13u};
     static const AstraCommandShortcut shortcuts[] = {
         {0x06u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.copy", sizeof("atlas.copy") - 1u},
+        {0x1bu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.cut", sizeof("atlas.cut") - 1u},
         {0x19u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.paste", sizeof("atlas.paste") - 1u},
         {0x11u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.folder", sizeof("atlas.folder") - 1u},
         {0x12u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.open", sizeof("atlas.open") - 1u},
@@ -2693,6 +2788,7 @@ static AstraResult run(AstraHandle gui)
                         if (selected_bundle(&command_context))
                             menu_items[count++] = (AstraContextMenuItem){"atlas.package", 13u, NULL};
                         if (writable_folder_root()) {
+                            menu_items[count++] = (AstraContextMenuItem){"atlas.cut", 9u, NULL};
                             menu_items[count++] = (AstraContextMenuItem){"atlas.rename", 12u, NULL};
                             menu_items[count++] = (AstraContextMenuItem){"atlas.delete", 12u, NULL};
                         }

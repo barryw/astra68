@@ -67,6 +67,14 @@ items succeeded; the directory refreshes afterward. Open and Rename require
 one selection. A shared-control focus helper updates the active Grid, List, or
 Columns view after folder creation and context selection. Completing Rename
 refreshes the directory and clears selection.
+Cut marks the same shared clipboard selection as a Move. Paste uses Filesystem
+Kit's tree move: rename within one volume; staged copy and source removal across
+volumes. It never overwrites a destination. If removal fails after publication,
+Atlas tells the user the destination exists and original remains partly or
+wholly; successful moves clear completed entries from clipboard and keep
+pending entries available after batch failure. Pasting cut item into its own
+directory is a no-op. Ctrl+X and the File and context menus call the same
+native command. Exact volume references prevent stale media from being moved.
 Blank-space context menu uses shared menu hierarchy with root items before
 submenus, and clears selection through the active shared collection control.
 
@@ -75,9 +83,8 @@ iterates selected poses; `src/kits/tracker/ContainerWindow.cpp` dispatches
 Copy and Move over Tracker selection. Astra keeps selection gestures in
 Interface Kit and file operations in Filesystem Kit and common folder code.
 
-Remaining design work: List row expansion, selection preview,
-Recent and saved queries, Cut/Move, and drag and drop. The native clipboard has
-Copy and Paste only. These need shared controls or native volume grant
+Remaining design work: List row expansion, selection preview, Recent and saved
+queries, and drag and drop. These need shared controls or native volume grant
 transitions, not Atlas-only widgets.
 
 Keyboard bindings use Interface Kit's shared command shortcut dispatcher and
