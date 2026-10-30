@@ -8,6 +8,7 @@
 #include <astra/icon_tile.h>
 #include <astra/inline_edit.h>
 #include <astra/interface_library.h>
+#include <astra/menu.h>
 #include <astra/program.h>
 #include <astra/package_library.h>
 #include <astra/runtime.h>
@@ -111,6 +112,51 @@ static uint32_t edit_index = UINT32_MAX;
 static char edit_path[ASTRA_VFS_PATH_MAX];
 static uint32_t edit_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
 static uint32_t selected_index = UINT32_MAX;
+
+enum AtlasMenuRow {
+    ATLAS_MENU_FILE,
+    ATLAS_MENU_VIEW,
+    ATLAS_MENU_HELP,
+    ATLAS_MENU_NEW,
+    ATLAS_MENU_OPEN,
+    ATLAS_MENU_RENAME,
+    ATLAS_MENU_DELETE,
+    ATLAS_MENU_REFRESH,
+    ATLAS_MENU_CLOSE,
+    ATLAS_MENU_LIST,
+    ATLAS_MENU_GRID,
+    ATLAS_MENU_COLUMNS,
+    ATLAS_MENU_SEPARATOR,
+    ATLAS_MENU_SORT_NAME,
+    ATLAS_MENU_SORT_SIZE,
+    ATLAS_MENU_SORT_KIND,
+    ATLAS_MENU_SORT_MODIFIED,
+    ATLAS_MENU_HIDDEN,
+    ATLAS_MENU_ABOUT,
+    ATLAS_MENU_COUNT
+};
+
+static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
+    {"File", 4u, 0u}, {"View", 4u, 0u}, {"Help", 4u, 0u},
+    {"New Drawer", 10u, ASTRA_MENU_PARENT(1u)},
+    {"Open", 4u, ASTRA_MENU_PARENT(1u)},
+    {"Rename", 6u, ASTRA_MENU_PARENT(1u)},
+    {"Move to Trash", 13u, ASTRA_MENU_PARENT(1u)},
+    {"Refresh", 7u, ASTRA_MENU_PARENT(1u)},
+    {"Close Window", 12u, ASTRA_MENU_PARENT(1u)},
+    {"as List", 7u, ASTRA_MENU_PARENT(2u)},
+    {"as Grid", 7u, ASTRA_MENU_PARENT(2u)},
+    {"as Columns", 10u, ASTRA_MENU_PARENT(2u)},
+    {NULL, 0u, ASTRA_MENU_PARENT(2u) | ASTRA_MENU_SEPARATOR},
+    {"Sort by Name", 12u, ASTRA_MENU_PARENT(2u)},
+    {"Sort by Size", 12u, ASTRA_MENU_PARENT(2u)},
+    {"Sort by Kind", 12u, ASTRA_MENU_PARENT(2u)},
+    {"Sort by Modified", 16u, ASTRA_MENU_PARENT(2u)},
+    {"Show Hidden Files", 17u, ASTRA_MENU_PARENT(2u)},
+    {"About Atlas", 11u, ASTRA_MENU_PARENT(3u)}
+};
+static uint32_t atlas_menu_sent[ATLAS_MENU_COUNT];
+static uint32_t atlas_menu_ready;
 
 static const char *message(void);
 static AstraResult init_toolbar(AstraHandle gui);
@@ -1368,6 +1414,99 @@ static AstraResult sort_invoke(void *opaque,
     return result;
 }
 
+static AstraResult show_hidden_set(uint32_t value)
+{
+    uint32_t previous = show_hidden;
+    AstraResult result;
+
+    if (worker != 0u || !visible_data || directory.status != ASTRA_VFS_OK)
+        return ASTRA_ERROR_BUSY;
+    show_hidden = value != 0u;
+    result = astra_interface_ui_set_state(&ui,
+        &controls[HIDDEN_CONTROL_INDEX],
+        show_hidden ? ASTRA_CONTROL_SELECTED : 0u);
+    if (result == ASTRA_OK) result = reload_directory();
+    if (result != ASTRA_OK) {
+        show_hidden = previous;
+        (void)astra_interface_ui_set_state(&ui,
+            &controls[HIDDEN_CONTROL_INDEX],
+            previous ? ASTRA_CONTROL_SELECTED : 0u);
+    }
+    return result;
+}
+
+static AstraResult view_set(uint32_t value)
+{
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    uint32_t outcome = ASTRA_FILE_PANEL_NONE;
+    AstraResult result;
+
+    if (value > ASTRA_FILE_PANEL_VIEW_COLUMNS)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 1u + ASTRA_FILE_PANEL_VIEW;
+    action.value = value;
+    result = astra_interface_control_set_value(&ui,
+        BROWSER_CONTROL(ASTRA_FILE_PANEL_VIEW), value);
+    if (result == ASTRA_OK)
+        result = astra_interface_file_panel_action(&browser, &ui,
+            BROWSER_CONTROL(0), &action, &outcome);
+    if (result == ASTRA_OK) result = browser_update_status();
+    return result;
+}
+
+static void menu_state(uint32_t row, int enabled, int checked)
+{
+    atlas_menu[row].flags =
+        (atlas_menu[row].flags & ASTRA_MENU_PARENT_MASK) |
+        (enabled ? 0u : ASTRA_MENU_DISABLED) |
+        (checked ? ASTRA_MENU_CHECKED : 0u);
+}
+
+static AstraResult menu_sync(void)
+{
+    uint32_t selected = selected_index < directory.count &&
+        (directory.entries[selected_index].kind == ASTRA_VFS_KIND_DIRECTORY ||
+         directory.entries[selected_index].kind == ASTRA_VFS_KIND_FILE);
+    uint32_t writable = writable_folder_root() && worker == 0u &&
+        directory.status == ASTRA_VFS_OK;
+    uint32_t active = worker == 0u && visible_data &&
+        directory.status == ASTRA_VFS_OK;
+    uint32_t changed = atlas_menu_ready == 0u;
+
+    menu_state(ATLAS_MENU_NEW, writable, 0);
+    menu_state(ATLAS_MENU_OPEN, selected, 0);
+    menu_state(ATLAS_MENU_RENAME, writable && selected &&
+        directory.entries[selected_index].kind == ASTRA_VFS_KIND_DIRECTORY, 0);
+    menu_state(ATLAS_MENU_DELETE, writable && selected &&
+        directory.entries[selected_index].kind == ASTRA_VFS_KIND_DIRECTORY, 0);
+    menu_state(ATLAS_MENU_REFRESH, worker == 0u && !volume_lost, 0);
+    menu_state(ATLAS_MENU_LIST, 1, browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST);
+    menu_state(ATLAS_MENU_GRID, 1, browser.view_mode == ASTRA_FILE_PANEL_VIEW_GRID);
+    menu_state(ATLAS_MENU_COLUMNS, 1,
+        browser.view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS);
+    menu_state(ATLAS_MENU_SORT_NAME, active,
+        sort_mode == ASTRA_DIRECTORY_SORT_NAME);
+    menu_state(ATLAS_MENU_SORT_SIZE, active,
+        sort_mode == ASTRA_DIRECTORY_SORT_SIZE);
+    menu_state(ATLAS_MENU_SORT_KIND, active,
+        sort_mode == ASTRA_DIRECTORY_SORT_KIND);
+    menu_state(ATLAS_MENU_SORT_MODIFIED, active,
+        sort_mode == ASTRA_DIRECTORY_SORT_MODIFIED);
+    menu_state(ATLAS_MENU_HIDDEN, active, show_hidden != 0u);
+    for (uint32_t at = 0u; at < ATLAS_MENU_COUNT; ++at)
+        if (atlas_menu_sent[at] != atlas_menu[at].flags)
+            changed = 1u;
+    if (!changed) return ASTRA_OK;
+    AstraResult result = astra_window_menu_bar_set(&window, atlas_menu,
+        ATLAS_MENU_COUNT);
+    if (result != ASTRA_OK) return result;
+    for (uint32_t at = 0u; at < ATLAS_MENU_COUNT; ++at)
+        atlas_menu_sent[at] = atlas_menu[at].flags;
+    atlas_menu_ready = 1u;
+    return ASTRA_OK;
+}
+
 static AstraResult back_query(void *opaque, AstraCommandState *state)
 {
     (void)opaque;
@@ -1467,6 +1606,49 @@ static AstraResult init_toolbar(AstraHandle gui)
             &info) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return ASTRA_OK;
+}
+
+static AstraResult menu_invoke(AstraHandle gui, uint32_t row)
+{
+    switch (row) {
+    case ATLAS_MENU_NEW:
+        return create_folder(&toolbar_command_context, NULL);
+    case ATLAS_MENU_OPEN:
+        return open_selected(&toolbar_command_context, NULL);
+    case ATLAS_MENU_RENAME:
+        return rename_selected(&toolbar_command_context, NULL);
+    case ATLAS_MENU_DELETE:
+        return delete_selected(&toolbar_command_context, NULL);
+    case ATLAS_MENU_REFRESH:
+        return refresh_directory(NULL, NULL);
+    case ATLAS_MENU_LIST:
+        return view_set(ASTRA_FILE_PANEL_VIEW_LIST);
+    case ATLAS_MENU_GRID:
+        return view_set(ASTRA_FILE_PANEL_VIEW_GRID);
+    case ATLAS_MENU_COLUMNS:
+        return view_set(ASTRA_FILE_PANEL_VIEW_COLUMNS);
+    case ATLAS_MENU_SORT_NAME:
+    case ATLAS_MENU_SORT_SIZE:
+    case ATLAS_MENU_SORT_KIND:
+    case ATLAS_MENU_SORT_MODIFIED:
+        return sort_invoke((void *)&sort_commands[
+            row - ATLAS_MENU_SORT_NAME], NULL);
+    case ATLAS_MENU_HIDDEN:
+        return show_hidden_set(!show_hidden);
+    case ATLAS_MENU_ABOUT: {
+        AstraAlertInfo alert = ASTRA_ALERT_INFO_INIT;
+
+        alert.title = "About Atlas";
+        alert.title_length = 11u;
+        alert.message = "Browse volumes, drawers, and applications.";
+        alert.message_length = sizeof("Browse volumes, drawers, and applications.") - 1u;
+        alert.button = "OK";
+        alert.button_length = 2u;
+        return astra_interface_show_alert(gui, &alert);
+    }
+    default:
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
 }
 
 static AstraResult run(AstraHandle gui)
@@ -1586,6 +1768,26 @@ static AstraResult run(AstraHandle gui)
                 result = astra_window_event_try(&window, &event);
                 continue;
             }
+            if (event.type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
+                event.data.menu_result.request == ASTRA_WINDOW_MENU_BAR_REQUEST) {
+                uint32_t row = event.data.menu_result.selection == 0u ?
+                    ATLAS_MENU_COUNT : event.data.menu_result.selection - 1u;
+                if (row == ATLAS_MENU_CLOSE) return ASTRA_OK;
+                if (row < ATLAS_MENU_COUNT &&
+                    (atlas_menu[row].flags & ASTRA_MENU_PARENT_MASK) != 0u &&
+                    (atlas_menu[row].flags & ASTRA_MENU_DISABLED) == 0u &&
+                    row != ATLAS_MENU_SEPARATOR) {
+                    AstraResult invoked = menu_invoke(gui, row);
+                    if (invoked != ASTRA_OK) {
+                        (void)astra_log_failure("atlas menu action",
+                            (uint32_t)(-invoked));
+                        open_error(gui, invoked);
+                    }
+                    repaint = 1u;
+                }
+                result = astra_window_event_try(&window, &event);
+                continue;
+            }
             if (astra_interface_toolbar_actions_handle_event(&toolbar,
                     &event, &handled) != ASTRA_OK)
                 return ASTRA_ERROR_IO;
@@ -1676,27 +1878,17 @@ static AstraResult run(AstraHandle gui)
             if (action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
                 (action.control_id == SORT_CONTROL_ID ||
                  action.control_id == HIDDEN_CONTROL_ID)) {
-                uint32_t previous = action.control_id == SORT_CONTROL_ID ?
-                    sort_mode : show_hidden;
-                if (action.control_id == SORT_CONTROL_ID && action.value >= 0 &&
-                    action.value <= ASTRA_DIRECTORY_SORT_MODIFIED)
-                    sort_mode = (uint32_t)action.value;
-                else if (action.control_id == HIDDEN_CONTROL_ID)
-                    show_hidden = action.value != 0;
-                if (visible_data && directory.status == ASTRA_VFS_OK) {
-                    AstraResult refreshed = reload_directory();
-                    if (refreshed != ASTRA_OK) {
-                        if (action.control_id == SORT_CONTROL_ID)
-                            sort_mode = previous;
-                        else
-                            show_hidden = previous;
-                        (void)astra_interface_control_set_value(&ui,
-                            action.control_id == SORT_CONTROL_ID ?
-                                &controls[SORT_CONTROL_INDEX] :
-                                &controls[HIDDEN_CONTROL_INDEX], previous);
-                        (void)astra_log_failure("atlas sort/filter", (uint32_t)(-refreshed));
-                        open_error(gui, refreshed);
-                    }
+                AstraResult changed = action.control_id == SORT_CONTROL_ID &&
+                    action.value >= 0 &&
+                    action.value <= ASTRA_DIRECTORY_SORT_MODIFIED ?
+                    sort_invoke((void *)&sort_commands[action.value], NULL) :
+                    action.control_id == HIDDEN_CONTROL_ID ?
+                        show_hidden_set(action.value != 0) :
+                        ASTRA_ERROR_INVALID_ARGUMENT;
+                if (changed != ASTRA_OK) {
+                    (void)astra_log_failure("atlas sort/filter",
+                        (uint32_t)(-changed));
+                    open_error(gui, changed);
                 }
                 repaint = 1u;
                 result = astra_window_event_try(&window, &event);
@@ -1789,6 +1981,8 @@ static AstraResult run(AstraHandle gui)
         if (astra_interface_ui_damage(&ui, &damage) == ASTRA_OK)
             repaint = 1u;
         if (repaint != 0u) {
+            AstraResult menu_status = menu_sync();
+            if (menu_status != ASTRA_OK) return menu_status;
             AstraResult painted = paint();
             if (painted != ASTRA_OK) {
                 (void)astra_log_failure("atlas paint", (uint32_t)(-painted));
@@ -1904,6 +2098,10 @@ int astra_main(const AstraStartupInfo *startup)
     if (result == ASTRA_OK) {
         step = "control tree";
         result = build_view(gui->handle);
+    }
+    if (result == ASTRA_OK) {
+        step = "menu bar";
+        result = menu_sync();
     }
     if (result == ASTRA_OK) {
         step = "first paint";

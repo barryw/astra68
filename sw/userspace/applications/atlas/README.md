@@ -5,6 +5,8 @@ toolbar, Places sidebar, breadcrumb, search field, Grid/List/Columns switcher,
 context menus, and status bar. The shared File Panel has a `BROWSE` mode so
 Atlas and Open/Save panels share navigation controls. Atlas owns filesystem
 snapshots, path history, folder commands, and file launch policy.
+File and View menu-bar commands share those same actions. Menu state follows
+selection, writable path, current view, sort order, and hidden-file state.
 
 Atlas appends each shared control's draw-list range to one graphics session.
 The retained Interface view is limited to 128 commands; Columns with populated

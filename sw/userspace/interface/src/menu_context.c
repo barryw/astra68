@@ -118,9 +118,10 @@ AstraResult astra_interface_context_menu_handle_event(AstraContextMenu *menu,
     if (!valid(menu) || event == NULL || handled == NULL ||
         event->size < sizeof(*event) || event->version != ASTRA_WINDOW_EVENT_VERSION)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    *handled = event->type == ASTRA_WINDOW_EVENT_MENU_RESULT;
-    if (!*handled || menu->_private_request == 0u ||
-        event->data.menu_result.request != menu->_private_request) return ASTRA_OK;
+    *handled = event->type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
+        menu->_private_request != 0u &&
+        event->data.menu_result.request == menu->_private_request;
+    if (!*handled) return ASTRA_OK;
     if ((event->flags & ASTRA_WINDOW_EVENT_LOSS) != 0u) {
         clear(menu);
         return ASTRA_ERROR_IO;

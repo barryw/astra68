@@ -359,7 +359,10 @@ static void context(void)
     assert(astra_interface_context_menu_open(&menu, &window, &scope, items, 2u, 12, 24) == ASTRA_OK);
     assert(request != old);
     result.data.menu_result.request = old;
-    assert(astra_interface_context_menu_handle_event(&menu, &result, &handled) == ASTRA_OK && handled);
+    assert(astra_interface_context_menu_handle_event(&menu, &result, &handled) == ASTRA_OK && !handled);
+    assert(invocations == 0u);
+    result.data.menu_result.request = ASTRA_WINDOW_MENU_BAR_REQUEST;
+    assert(astra_interface_context_menu_handle_event(&menu, &result, &handled) == ASTRA_OK && !handled);
     assert(invocations == 0u);
     result.data.menu_result.request = request;
     assert(astra_interface_context_menu_handle_event(&menu, &result, &handled) == ASTRA_OK);
