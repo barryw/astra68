@@ -15,7 +15,9 @@ future hierarchical rows. Beast Interface tests, library contract, and NDK
 opened DH0 with 17 entries and no Atlas error, `astra.service` active with
 zero restarts and 8.2 GiB free. SHA-verified capture on Beast:
 `/mnt/Documents/astra68/atlas-query-seam-20261030/`; board trial files
-removed. Atlas does not yet persist or display saved searches. Remaining:
+removed. Separate boot observation: media service returned `PEER_DEAD` twice
+while checking host audio, then supervisor restarted it successfully. Atlas
+does not yet persist or display saved searches. Remaining:
 List row expansion, Recent/saved queries, and drag and drop.
 
 Atlas shared inspector checkpoint, 2026-10-30: Interface Kit 12.2 adds a
