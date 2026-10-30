@@ -43,6 +43,10 @@ For pointer context menus, collection controls report hovered row in
 `astra_interface_file_panel_context_entry` maps that row to the original
 directory entry and Columns depth. Callers need no view-specific hit testing;
 the Table header never resolves to a file.
+`astra_interface_file_panel_context_place` maps a Places List context hit to
+its original sidebar row. It returns `UINT32_MAX` for blank space or another
+control, so browser applications can attach place commands without
+reimplementing List hit testing.
 Table header clicks emit `ASTRA_UI_ACTION_SORT_REQUESTED` with a zero-based
 column. Applications sort their data and call
 `astra_interface_table_set_sort` to mark the active column and direction;

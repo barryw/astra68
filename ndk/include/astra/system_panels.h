@@ -567,6 +567,19 @@ AstraResult astra_interface_file_panel_context_entry(
     const AstraFilePanel *panel, const AstraUIAction *action,
     uint32_t *entry_index, uint32_t *depth);
 
+/** Map a Places context-menu action to its sidebar row. Blank space or an
+ * action outside Places yields UINT32_MAX. Callers own the place's commands;
+ * File Panel owns row hit testing and index validation.
+ * @since Interface Kit 12.3.
+ * @param panel Initialized File Panel.
+ * @param action Places List context-menu action.
+ * @param place_index Receives original Places row, or UINT32_MAX.
+ * @return ASTRA_OK or a validation error.
+ */
+AstraResult astra_interface_file_panel_context_place(
+    const AstraFilePanel *panel, const AstraUIAction *action,
+    uint32_t *place_index);
+
 enum {
     ASTRA_FONT_PANEL_ROOT = 0u,
     ASTRA_FONT_PANEL_TITLE,

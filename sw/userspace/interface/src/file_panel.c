@@ -156,6 +156,28 @@ AstraResult astra_interface_file_panel_context_entry(
     return ASTRA_OK;
 }
 
+AstraResult astra_interface_file_panel_context_place(
+    const AstraFilePanel *panel, const AstraUIAction *action,
+    uint32_t *place_index)
+{
+    if (panel == NULL || panel->size != sizeof(*panel) ||
+        action == NULL || action->size != sizeof(*action) ||
+        action->type != ASTRA_UI_ACTION_CONTEXT_MENU ||
+        place_index == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *place_index = UINT32_MAX;
+    if (action->control_id != panel->first_id + ASTRA_FILE_PANEL_PLACES_LIST ||
+        action->value < 0 || (uint64_t)action->value >= panel->place_count)
+        return ASTRA_OK;
+    if (panel->places == NULL || panel->place_items == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint64_t id = panel->place_items[(uint32_t)action->value].id;
+    if (id == 0u || id > panel->place_count)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *place_index = (uint32_t)id - 1u;
+    return ASTRA_OK;
+}
+
 static int contains_query(const char *name, uint32_t name_length,
     const char *query, uint32_t query_length)
 {

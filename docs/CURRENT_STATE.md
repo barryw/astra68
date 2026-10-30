@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas Places context checkpoint, 2026-10-30: Interface Kit 12.3 adds
+`astra_interface_file_panel_context_place`, mapping shared List context hits
+to original Places rows. Atlas uses this for Open and Remove Saved Search;
+ordinary Places rows no longer receive directory context menus. Open reuses
+saved-query navigation, and Remove uses validated Filesystem Kit records plus
+native unlink. Haiku read-only reference: `src/kits/tracker/FindPanel.cpp`
+keeps saved queries as user files with query menu actions; Astra keeps sidebar
+hit testing in File Panel and query storage in Filesystem Kit. Beast Interface
+tests, library contract, Atlas build/tests, and NDK `dist-check` pass. DE25
+targeted Interface Kit and Atlas install passed: DH0 opened with 17 entries,
+right clicking Home showed no folder menu, a disposable `fonts` saved search
+showed Open and Remove Saved Search, both actions succeeded, and Remove cleared
+the sidebar row. `astra.service` stayed active with zero restarts and 8.2 GiB
+free. SHA-verified RFB captures are archived on Beast at
+`/mnt/Documents/astra68/atlas-places-context-20261030/`; board RFB trial
+files removed. Remaining Atlas work: shared List row expansion, Recent items,
+saved-search rename, and drag/drop.
+
 Atlas durable saved-search checkpoint, 2026-10-30: Filesystem Kit 15.8 adds
 versioned, path-scoped saved query files. It creates a private HOME store,
 syncs each independent file, publishes through a hard link without replacing

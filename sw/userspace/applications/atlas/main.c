@@ -105,6 +105,7 @@ static AstraVolumeSnapshot sidebar_volumes = ASTRA_VOLUME_SNAPSHOT_INIT;
 static AstraSavedQuerySnapshot sidebar_queries = ASTRA_SAVED_QUERY_SNAPSHOT_INIT;
 static uint32_t saved_place_start;
 static const char saved_query_directory[] = "/home/Saved Searches";
+static char saved_context_filename[ASTRA_VFS_NAME_MAX];
 static _Alignas(4) uint32_t browser_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
 static char browser_home[ASTRA_VFS_PATH_MAX];
 static char browser_status[64];
@@ -1554,6 +1555,79 @@ static AstraResult reload_directory(void)
     return navigate_to(root, NAVIGATION_STAY);
 }
 
+static AstraResult open_saved_query(const AstraSavedQuery *query)
+{
+    if (query == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraSavedQuery selected = *query;
+    AstraResult result = navigate_to(selected.directory, NAVIGATION_PUSH);
+    if (result == ASTRA_OK)
+        result = astra_interface_file_panel_set_search(&browser, &ui,
+            BROWSER_CONTROL(0), selected.text,
+            (uint32_t)strlen(selected.text));
+    if (result == ASTRA_OK) result = browser_update_status();
+    return result;
+}
+
+static const AstraSavedQuery *saved_context_query(void)
+{
+    if (saved_context_filename[0] == '\0') return NULL;
+    for (uint32_t at = 0u; at < sidebar_queries.count; ++at)
+        if (strcmp(saved_context_filename,
+                sidebar_queries.queries[at].filename) == 0)
+            return &sidebar_queries.queries[at];
+    return NULL;
+}
+
+static AstraResult saved_context_open_query(void *opaque,
+    AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Open", 4u,
+        saved_context_query() != NULL, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult saved_context_remove_query(void *opaque,
+    AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Remove Saved Search", 19u,
+        saved_context_query() != NULL, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult saved_context_open(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    return open_saved_query(saved_context_query());
+}
+
+static AstraResult saved_context_remove(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    const AstraSavedQuery *query = saved_context_query();
+    AstraSavedQuery current = ASTRA_SAVED_QUERY_INIT;
+    char path[ASTRA_VFS_PATH_MAX];
+    if (query == NULL || astra_folder_path(saved_query_directory,
+            query->filename, path, sizeof(path)) != ASTRA_VFS_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint32_t status = astra_saved_query_load(&filesystem.filesystem,
+        path, &current);
+    if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
+    if (strcmp(current.label, query->label) != 0 ||
+        strcmp(current.directory, query->directory) != 0 ||
+        strcmp(current.text, query->text) != 0)
+        return ASTRA_ERROR_INVALID_HANDLE;
+    status = astra_filesystem_unlink(&filesystem.filesystem, path, 0u);
+    if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
+    saved_context_filename[0] = '\0';
+    return browser_update_places();
+}
+
 static AstraResult open_entry(const char *path, uint32_t kind)
 {
     if (path == NULL || path[0] != '/')
@@ -2548,6 +2622,10 @@ static AstraResult run(AstraHandle gui)
         {"atlas.rename", 12u, 0u, 0u, rename_query, rename_selected, &command_context},
         {"atlas.delete", 12u, 0u, 0u, delete_query, delete_selected, &command_context},
         {"atlas.package", 13u, 0u, 0u, package_query, create_installer, &command_context},
+        {"atlas.saved.open", sizeof("atlas.saved.open") - 1u, 0u, 0u,
+            saved_context_open_query, saved_context_open, &command_context},
+        {"atlas.saved.remove", sizeof("atlas.saved.remove") - 1u, 0u, 0u,
+            saved_context_remove_query, saved_context_remove, &command_context},
         {"atlas.sort.name", sizeof("atlas.sort.name") - 1u, 0u, 0u,
             sort_query, sort_invoke, (void *)&sort_commands[0]},
         {"atlas.sort.size", sizeof("atlas.sort.size") - 1u, 0u, 0u,
@@ -2557,7 +2635,8 @@ static AstraResult run(AstraHandle gui)
         {"atlas.sort.modified", sizeof("atlas.sort.modified") - 1u, 0u, 0u,
             sort_query, sort_invoke, (void *)&sort_commands[3]}};
     const AstraCommandScope command_scope = {
-        &toolbar_command_scope, commands, 13u};
+        &toolbar_command_scope, commands,
+        sizeof(commands) / sizeof(commands[0])};
     static const AstraCommandShortcut shortcuts[] = {
         {0x06u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.copy", sizeof("atlas.copy") - 1u},
         {0x1bu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.cut", sizeof("atlas.cut") - 1u},
@@ -2675,8 +2754,10 @@ static AstraResult run(AstraHandle gui)
             AstraResult menu_result = astra_interface_context_menu_handle_event(
                 &context_menu, &event, &handled);
             if (handled) {
-                if (menu_result != ASTRA_OK)
+                if (menu_result != ASTRA_OK) {
                     (void)astra_log_failure("atlas menu command", (uint32_t)(-menu_result));
+                    open_error(gui, menu_result);
+                }
                 result = astra_window_event_try(&window, &event);
                 continue;
             }
@@ -2908,16 +2989,8 @@ static AstraResult run(AstraHandle gui)
                         place - saved_place_start >= sidebar_queries.count)
                         browser_result = ASTRA_ERROR_INVALID_ARGUMENT;
                     else {
-                        AstraSavedQuery query = sidebar_queries.queries[
-                            place - saved_place_start];
-                        browser_result = navigate_to(query.directory,
-                            NAVIGATION_PUSH);
-                        if (browser_result == ASTRA_OK)
-                            browser_result = astra_interface_file_panel_set_search(
-                                &browser, &ui, BROWSER_CONTROL(0), query.text,
-                                (uint32_t)strlen(query.text));
-                        if (browser_result == ASTRA_OK)
-                            browser_result = browser_update_status();
+                        browser_result = open_saved_query(
+                            &sidebar_queries.queries[place - saved_place_start]);
                     }
                 }
                 if (browser_result == ASTRA_OK &&
@@ -2943,6 +3016,43 @@ static AstraResult run(AstraHandle gui)
             if (event.type == ASTRA_WINDOW_EVENT_POINTER_BUTTON &&
                 event.data.pointer.y >= (int32_t)TOOLBAR_HEIGHT &&
                 action.type == ASTRA_UI_ACTION_CONTEXT_MENU) {
+                if (action.control_id ==
+                    1u + ASTRA_FILE_PANEL_PLACES_LIST) {
+                    uint32_t place = UINT32_MAX;
+                    AstraResult hit = astra_interface_file_panel_context_place(
+                        &browser, &action, &place);
+                    if (hit != ASTRA_OK) return hit;
+                    saved_context_filename[0] = '\0';
+                    if (place >= saved_place_start &&
+                        place - saved_place_start < sidebar_queries.count) {
+                        const AstraSavedQuery *query =
+                            &sidebar_queries.queries[place - saved_place_start];
+                        if (!astra_string_copy(saved_context_filename,
+                                sizeof(saved_context_filename),
+                                query->filename))
+                            return ASTRA_ERROR_INVALID_ARGUMENT;
+                        menu_items[0] = (AstraContextMenuItem){
+                            "atlas.saved.open", sizeof("atlas.saved.open") - 1u,
+                            NULL};
+                        menu_items[1] = (AstraContextMenuItem){
+                            "atlas.saved.remove",
+                            sizeof("atlas.saved.remove") - 1u, NULL};
+                        menu_parents[0] = 0u;
+                        menu_parents[1] = 0u;
+                        AstraResult opened =
+                            astra_interface_context_menu_open_tree(
+                                &context_menu, &window, &command_scope,
+                                menu_items, menu_parents, 2u,
+                                event.data.pointer.x,
+                                event.data.pointer.y);
+                        if (opened != ASTRA_OK)
+                            (void)astra_log_failure("atlas saved search menu",
+                                (uint32_t)(-opened));
+                    }
+                    repaint = 1u;
+                    result = astra_window_event_try(&window, &event);
+                    continue;
+                }
                 uint32_t depth = 0u, index = UINT32_MAX;
                 if (visible_data && directory.status == ASTRA_VFS_OK) {
                     AstraResult hit = astra_interface_file_panel_context_entry(

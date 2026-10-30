@@ -5239,6 +5239,24 @@ static void test_shared_file_panel(void)
     places[2].path = "/dh0";
     assert(astra_interface_file_panel_set_places(&panel, &context, controls,
         places, 3u, place_items, 3u) == ASTRA_OK);
+    {
+        uint32_t place_index = 0u;
+        action.type = ASTRA_UI_ACTION_CONTEXT_MENU;
+        action.control_id = 300u + ASTRA_FILE_PANEL_PLACES_LIST;
+        action.value = 2;
+        assert(astra_interface_file_panel_context_place(&panel, &action,
+            &place_index) == ASTRA_OK && place_index == 2u);
+        action.value = -1;
+        assert(astra_interface_file_panel_context_place(&panel, &action,
+            &place_index) == ASTRA_OK && place_index == UINT32_MAX);
+        action.control_id = 300u + ASTRA_FILE_PANEL_LIST;
+        action.value = 0;
+        assert(astra_interface_file_panel_context_place(&panel, &action,
+            &place_index) == ASTRA_OK && place_index == UINT32_MAX);
+        action.type = ASTRA_UI_ACTION_ACTIVATE;
+        assert(astra_interface_file_panel_context_place(&panel, &action,
+            &place_index) == ASTRA_ERROR_INVALID_ARGUMENT);
+    }
     assert(astra_interface_control_set_value(&context,
         &controls[ASTRA_FILE_PANEL_LIST], 1) == ASTRA_OK);
     selected_ids[0] = items[0].id;
