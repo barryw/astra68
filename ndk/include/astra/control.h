@@ -699,17 +699,32 @@ typedef struct AstraCollectionItem {
     uint32_t reserved[2]; /**< Must be zero. */
 } AstraCollectionItem;
 
+/** Caller-owned stable-ID selection over one collection. IDs stay sorted for
+ * fast membership checks. Storage must hold at least the collection capacity. */
+typedef struct AstraSelectionSet {
+    uint32_t size; /**< Structure size. */
+    uint64_t *ids; /**< Caller-owned sorted selected IDs. */
+    uint32_t count; /**< Number of selected IDs. */
+    uint32_t capacity; /**< Number of ID slots in ids. */
+    uint64_t anchor_id; /**< Shift-range pivot, or zero. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraSelectionSet;
+
+/** Empty stable-ID selection set. Call astra_interface_selection_init before use. */
+#define ASTRA_SELECTION_SET_INIT { sizeof(AstraSelectionSet), 0, 0, 0, 0, {0, 0} }
+
 /** Caller-owned collection state. Update a bound List through Interface Kit. */
 typedef struct AstraCollectionModel {
     uint32_t size; /**< Structure size. */
     const AstraCollectionItem *items; /**< Borrowed item array. */
     uint32_t item_count; /**< Number of items. */
     uint64_t selected_id; /**< Zero means no selection. */
+    AstraSelectionSet *selection; /**< Optional multi-selection over item IDs. */
     uint32_t reserved[2]; /**< Must be zero. */
 } AstraCollectionModel;
 
 /** Empty collection model. */
-#define ASTRA_COLLECTION_MODEL_INIT { sizeof(AstraCollectionModel), 0, 0, 0, {0, 0} }
+#define ASTRA_COLLECTION_MODEL_INIT { sizeof(AstraCollectionModel), 0, 0, 0, 0, {0, 0} }
 
 /** Bind one List to a caller-owned collection model. */
 typedef struct AstraListInfo {

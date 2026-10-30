@@ -20,8 +20,8 @@
 #include <astra/undo.h>
 #include <astra/window.h>
 
-/** Breaking Interface Kit ABI generation carried by interface.library.11. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 11u
+/** Breaking Interface Kit ABI generation carried by interface.library.12. */
+#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 12u
 /** Current Interface Kit revision. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 0u
 
@@ -243,6 +243,30 @@ AstraResult astra_interface_tab_init(AstraControl *control,
  */
 AstraResult astra_interface_collection_init(AstraCollectionModel *model,
     const AstraCollectionItem *items, uint32_t count, uint64_t selected_id);
+/** Prepare caller-owned stable-ID multi-selection storage.
+ * @param selection Selection object to initialize.
+ * @param ids Caller-owned ID array, or NULL for zero capacity.
+ * @param capacity Number of ID slots.
+ * @return ASTRA_OK or a validation error.
+ */
+AstraResult astra_interface_selection_init(AstraSelectionSet *selection,
+    uint64_t *ids, uint32_t capacity);
+/** Enable Ctrl/Command toggle and Shift range selection on a collection.
+ * Storage capacity must cover every item in the collection. One set may be
+ * shared across views of the same items; a second model may start unselected.
+ * @param model Collection model to bind.
+ * @param selection Initialized caller-owned selection set.
+ * @return ASTRA_OK or a validation error.
+ */
+AstraResult astra_interface_collection_multi_bind(AstraCollectionModel *model,
+    AstraSelectionSet *selection);
+/** Test membership in the caller-owned, sorted stable-ID selection.
+ * @param selection Selection set to inspect.
+ * @param id Stable nonzero item ID.
+ * @return One if selected, zero otherwise.
+ */
+uint32_t astra_interface_selection_contains(const AstraSelectionSet *selection,
+    uint64_t id);
 /** Initialize a single-selection vertical List over a collection model.
  * Compose with ScrollView for overflow. Model remains caller-owned and must
  * be bound to only one active collection control.

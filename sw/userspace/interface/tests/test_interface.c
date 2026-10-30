@@ -24,7 +24,7 @@ void astra_interface_test_paint(AstraSurfaceView *surface,
 void astra_interface_test_layout(void);
 
 _Static_assert(sizeof(AstraControl) == (sizeof(void *) == 4u ? 296u : 328u),
-               "Text Undo binding slot must be included in Interface ABI 11");
+               "Text Undo binding slot must be included in Interface ABI 12");
 _Static_assert(sizeof(AstraUIContext) ==
                    (sizeof(void *) == 4u ? 168u : 176u),
                "AstraUIContext ABI 8 layout changed; bump the ABI major");
@@ -2079,7 +2079,13 @@ static void test_table_control(void)
         {"Story", 5u, 0u}, {"Game", 4u, 0u},
         {"Game", 4u, 0u}
     };
+    static const AstraCollectionItem subset[] = {
+        {12u, "Quake", 5u, {0u, 0u}},
+        {11u, "Doom", 4u, {0u, 0u}}
+    };
     AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    uint64_t selected_ids[3] = {0};
+    AstraSelectionSet selection = ASTRA_SELECTION_SET_INIT;
     AstraTableModel model = ASTRA_TABLE_MODEL_INIT;
     AstraTableInfo info = ASTRA_TABLE_INFO_INIT;
     AstraControl control = ASTRA_CONTROL_INIT;
@@ -2092,6 +2098,8 @@ static void test_table_control(void)
     AstraSurfaceView surface = render_view(400u, 200u);
 
     assert(astra_interface_collection_init(&collection, rows, 3u, 0u) == ASTRA_OK);
+    assert(astra_interface_selection_init(&selection, selected_ids, 3u) == ASTRA_OK);
+    assert(astra_interface_collection_multi_bind(&collection, &selection) == ASTRA_OK);
     model.collection = &collection;
     model.columns = columns;
     model.column_count = 2u;
@@ -2139,12 +2147,42 @@ static void test_table_control(void)
     assert(action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
            action.control_id == 91u && action.value == 1);
     assert(collection.selected_id == 12u);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + theme.control_height + 4u);
+    event.data.pointer.modifiers = ASTRA_INPUT_MOD_CTRL;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(selection.count == 2u && collection.selected_id == 11u &&
+        astra_interface_selection_contains(&selection, 11u) &&
+        astra_interface_selection_contains(&selection, 12u));
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + 3u * theme.control_height + 4u);
+    event.data.pointer.modifiers = ASTRA_INPUT_MOD_SHIFT;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) == ASTRA_OK);
+    assert(selection.count == 3u && collection.selected_id == 13u &&
+        astra_interface_selection_contains(&selection, 11u) &&
+        astra_interface_selection_contains(&selection, 12u) &&
+        astra_interface_selection_contains(&selection, 13u));
+    AstraCollectionModel sibling = ASTRA_COLLECTION_MODEL_INIT;
+    assert(astra_interface_collection_init(&sibling, rows, 3u, 0u) == ASTRA_OK);
+    assert(astra_interface_collection_multi_bind(&sibling, &selection) == ASTRA_OK &&
+        sibling.selection == &selection && selection.count == 3u);
     assert(astra_interface_table_set_rows(&context, &control,
         reordered, 3u, reordered_cells, 3u) == ASTRA_OK);
-    assert(collection.selected_id == 12u && control._private_value == 1);
+    assert(collection.selected_id == 13u && control._private_value == 0 &&
+        selection.count == 3u);
     assert(astra_interface_table_set_rows(&context, &control,
         rows, 3u, cells, 2u) == ASTRA_ERROR_INVALID_ARGUMENT);
     assert(collection.items == reordered && model.cells == reordered_cells);
+    assert(astra_interface_table_set_rows(&context, &control,
+        subset, 2u, cells, 2u) == ASTRA_OK);
+    assert(selection.count == 2u && collection.selected_id == 11u &&
+        !astra_interface_selection_contains(&selection, 13u));
 }
 
 static void test_tree_control(void)
@@ -5012,6 +5050,8 @@ static void test_shared_file_panel(void)
     const AstraSurface *icons[2] = {NULL, NULL};
     const AstraSurface *rebound_icons[4] = {NULL, NULL, NULL, NULL};
     AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    uint64_t selected_ids[2] = {0u, 0u};
+    AstraSelectionSet selection = ASTRA_SELECTION_SET_INIT;
     AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
     AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
     AstraTextModel name = ASTRA_TEXT_MODEL_INIT;
@@ -5050,6 +5090,10 @@ static void test_shared_file_panel(void)
     info.collection = &collection;
     info.scroll = &scroll;
     assert(astra_interface_file_panel_init(&panel, controls, &info) == ASTRA_OK);
+    assert(astra_interface_selection_init(&selection, selected_ids, 2u) == ASTRA_OK);
+    assert(astra_interface_collection_multi_bind(&collection, &selection) == ASTRA_OK);
+    assert(astra_interface_collection_multi_bind(&panel.grid_collection,
+        &selection) == ASTRA_OK);
     assert(controls[ASTRA_FILE_PANEL_LIST]._private_control_kind ==
         ASTRA_CONTROL_TABLE);
     assert(panel.list_table.column_count == 4u &&
@@ -5063,6 +5107,27 @@ static void test_shared_file_panel(void)
         ASTRA_FILE_PANEL_CONTROL_COUNT, 420u, 480u) == ASTRA_OK);
     layout.direction = ASTRA_FLEX_COLUMN;
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_control_set_value(&context,
+        &controls[ASTRA_FILE_PANEL_LIST], 1) == ASTRA_OK);
+    selected_ids[0] = items[0].id;
+    selected_ids[1] = items[1].id;
+    if (selected_ids[0] > selected_ids[1]) {
+        uint64_t first = selected_ids[0];
+        selected_ids[0] = selected_ids[1];
+        selected_ids[1] = first;
+    }
+    selection.count = 2u;
+    selection.anchor_id = items[0].id;
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 300u + ASTRA_FILE_PANEL_LIST;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK);
+    assert(panel.grid_collection.selected_id == collection.selected_id &&
+        selection.count == 2u);
+    assert(astra_interface_control_set_value(&context,
+        &controls[ASTRA_FILE_PANEL_GRID], -1) == ASTRA_OK);
+    assert(astra_interface_control_set_value(&context,
+        &controls[ASTRA_FILE_PANEL_LIST], -1) == ASTRA_OK);
     {
         uint32_t entry_index, depth;
         action.type = ASTRA_UI_ACTION_CONTEXT_MENU;

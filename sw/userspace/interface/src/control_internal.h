@@ -49,6 +49,8 @@ AstraResult astra_interface_disclosure_init(
 AstraResult astra_interface_control_set_value(AstraUIContext *context,
                                               AstraControl *control,
                                               int64_t value);
+AstraResult astra_interface_collection_mirror_primary(AstraUIContext *context,
+    AstraControl *target, const AstraCollectionModel *source);
 AstraResult astra_interface_control_get_value(const AstraControl *control,
                                               int64_t *value,
                                               uint32_t *decimal_places);

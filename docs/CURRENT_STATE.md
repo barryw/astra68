@@ -2,6 +2,34 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared multi-selection checkpoint, 2026-10-30: Interface Kit ABI 12
+adds caller-owned, stable-ID selection shared by List, Icon Grid, Table, and
+Tree controls. Ctrl/Command toggles rows; Shift selects ranges. File Panel
+mirrors the primary item between its views without collapsing their shared
+selection. Atlas binds the same set to Grid, Table/List, and root Columns;
+its code owns storage and status text, not gesture or painting policy. Haiku
+read-only reference: `src/kits/tracker/PoseView.cpp` (`SelectPoses`,
+`MoveOrChangePoseSelection`) maintains selected poses and a Shift pivot.
+Beast Interface tests, all shipped UI app builds/tests, Desktop, Display,
+AstraZ, Kit contract, and NDK `dist-check` pass. DE25 targeted install advanced
+21 guest files together: Interface Kit provider and manifest, UI clients, and
+Atlas. Atlas launched on DH0 with status zero; Ctrl-click highlighted two Grid
+items and status showed `2 of 17 selected`; switching to List kept both rows
+highlighted. Astra, audio, and remote desktop remain active, restart count zero,
+8.2 GiB board space free. SHA-verified RFB captures and build logs reside at
+`/mnt/Documents/astra68/atlas-multiselect-20261030/` on Beast; disposable
+board captures were removed. Multi-item file actions remain single-item and
+need a shared batch operation path before Atlas can claim full multiselection.
+One post-build install initially failed boot because a temporary RFB test
+imported `de25-rfb.py` directly from the immutable release and Python wrote
+`bin/__pycache__` there. Release verifier correctly refused the extra file.
+The generated cache was removed, release tree reverified exact, and a fresh
+Interface Kit development install passed. Test helpers now run from temporary
+copies with bytecode writing disabled; release files are untouched.
+Other remaining Atlas work: List row expansion, selection preview, Recent and
+saved queries, Cut/Move, and drag/drop. Targeted update remains development
+state; immutable release image has not been rebuilt for this checkpoint.
+
 Atlas shared context-hit checkpoint, 2026-10-30: Interface Kit now reports
 collection row beneath pointer context-menu events. Its existing hit logic
 excludes Table headers; blank space reports -1. File Panel resolves the

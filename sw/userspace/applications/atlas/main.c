@@ -76,6 +76,8 @@ static AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
 static AstraControl *controls;
 static AstraFilePanel browser = ASTRA_FILE_PANEL_INIT;
 static AstraCollectionModel browser_collection = ASTRA_COLLECTION_MODEL_INIT;
+static AstraSelectionSet browser_selection = ASTRA_SELECTION_SET_INIT;
+static uint64_t *browser_selected_ids;
 static AstraCollectionModel column_models[BROWSER_COLUMNS];
 static AstraScrollModel column_scrolls[BROWSER_COLUMNS];
 static AstraColumnView browser_columns[BROWSER_COLUMNS];
@@ -558,8 +560,11 @@ static AstraResult build_view(AstraHandle gui)
         sizeof(*browser_items[1]));
     browser_grid_icons = astra_runtime_allocate(BROWSER_INITIAL_CAPACITY *
         sizeof(*browser_grid_icons));
+    browser_selected_ids = astra_runtime_allocate(BROWSER_INITIAL_CAPACITY *
+        sizeof(*browser_selected_ids));
     if (controls == NULL || browser_items[0] == NULL ||
-        browser_items[1] == NULL || browser_grid_icons == NULL)
+        browser_items[1] == NULL || browser_grid_icons == NULL ||
+        browser_selected_ids == NULL)
         return ASTRA_ERROR_NO_RESOURCES;
     browser_capacity = BROWSER_INITIAL_CAPACITY;
     for (uint32_t at = 0u; at < UI_CONTROL_COUNT; ++at)
@@ -632,6 +637,15 @@ static AstraResult build_view(AstraHandle gui)
     if (astra_interface_file_panel_init(&browser,
             BROWSER_CONTROL(0), &info) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (astra_interface_selection_init(&browser_selection,
+            browser_selected_ids, browser_capacity) != ASTRA_OK ||
+        astra_interface_collection_multi_bind(&browser_collection,
+            &browser_selection) != ASTRA_OK ||
+        astra_interface_collection_multi_bind(&browser.grid_collection,
+            &browser_selection) != ASTRA_OK ||
+        astra_interface_collection_multi_bind(&column_models[0],
+            &browser_selection) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     status.first_id = 1u + BROWSER_PANEL_CONTROL_COUNT;
     status.left = "Reading volume...";
     status.left_length = sizeof("Reading volume...") - 1u;
@@ -696,6 +710,7 @@ static AstraResult browser_reserve(uint32_t count)
 {
     AstraCollectionItem *next_items[2];
     const AstraSurface **next_icons;
+    uint64_t *next_selected_ids;
     uint32_t capacity = browser_capacity;
     AstraResult result;
 
@@ -703,7 +718,8 @@ static AstraResult browser_reserve(uint32_t count)
     while (capacity < count && capacity <= UINT32_MAX / 2u)
         capacity *= 2u;
     if (capacity < count || capacity > SIZE_MAX / sizeof(*next_items[0]) ||
-        capacity > SIZE_MAX / sizeof(*next_icons))
+        capacity > SIZE_MAX / sizeof(*next_icons) ||
+        capacity > SIZE_MAX / sizeof(*next_selected_ids))
         return ASTRA_ERROR_NO_RESOURCES;
     next_items[0] = astra_runtime_allocate((size_t)capacity *
         sizeof(*next_items[0]));
@@ -711,28 +727,42 @@ static AstraResult browser_reserve(uint32_t count)
         sizeof(*next_items[1]));
     next_icons = astra_runtime_allocate((size_t)capacity *
         sizeof(*next_icons));
+    next_selected_ids = astra_runtime_allocate((size_t)capacity *
+        sizeof(*next_selected_ids));
     if (next_items[0] == NULL || next_items[1] == NULL ||
-        next_icons == NULL) {
+        next_icons == NULL || next_selected_ids == NULL) {
         astra_runtime_deallocate(next_items[0]);
         astra_runtime_deallocate(next_items[1]);
         astra_runtime_deallocate(next_icons);
+        astra_runtime_deallocate(next_selected_ids);
         return ASTRA_ERROR_NO_RESOURCES;
     }
+    memcpy(next_selected_ids, browser_selected_ids,
+        (size_t)browser_selection.count * sizeof(*next_selected_ids));
+    uint64_t *old_selected_ids = browser_selected_ids;
+    uint32_t old_selection_capacity = browser_selection.capacity;
+    browser_selection.ids = next_selected_ids;
+    browser_selection.capacity = capacity;
     result = astra_interface_file_panel_rebind_storage(&browser, &ui,
         BROWSER_CONTROL(0), next_items[0], capacity, next_items[1], capacity,
         next_icons, capacity);
     if (result != ASTRA_OK) {
+        browser_selection.ids = old_selected_ids;
+        browser_selection.capacity = old_selection_capacity;
         astra_runtime_deallocate(next_items[0]);
         astra_runtime_deallocate(next_items[1]);
         astra_runtime_deallocate(next_icons);
+        astra_runtime_deallocate(next_selected_ids);
         return result;
     }
     astra_runtime_deallocate(browser_items[0]);
     astra_runtime_deallocate(browser_items[1]);
     astra_runtime_deallocate(browser_grid_icons);
+    astra_runtime_deallocate(browser_selected_ids);
     browser_items[0] = next_items[0];
     browser_items[1] = next_items[1];
     browser_grid_icons = next_icons;
+    browser_selected_ids = next_selected_ids;
     browser_capacity = capacity;
     return ASTRA_OK;
 }
@@ -757,6 +787,11 @@ static AstraResult browser_update_status(void)
         (void)astra_string_append(&line, " of ");
         (void)astra_string_append_u64(&line, directory.count);
         (void)astra_string_append(&line, " items");
+    } else if (browser_selection.count > 1u && selected_depth == 0u) {
+        (void)astra_string_append_u64(&line, browser_selection.count);
+        (void)astra_string_append(&line, " of ");
+        (void)astra_string_append_u64(&line, directory.count);
+        (void)astra_string_append(&line, " selected");
     } else if (selected_path[0] != '\0') {
         if (selected_depth == 0u) {
             (void)astra_string_append(&line, "1 of ");
@@ -2801,6 +2836,7 @@ int astra_main(const AstraStartupInfo *startup)
         browser_clear_children();
         astra_runtime_deallocate(browser_entry_icons);
         astra_runtime_deallocate(browser_grid_icons);
+        astra_runtime_deallocate(browser_selected_ids);
         astra_runtime_deallocate(browser_items[0]);
         astra_runtime_deallocate(browser_items[1]);
         if (browser_places != initial_places)

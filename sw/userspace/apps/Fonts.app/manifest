@@ -18,6 +18,6 @@ requires compiler.library 2 2.0.0
 requires font.library 5 5.0.0
 requires filesystem.library 15 15.1.0
 requires graphics.library 3 3.0.0
-requires interface.library 11 11.0.0
+requires interface.library 12 12.0.0
 requires runtime.library 1 1.5.0
 requires system.library 4 4.0.0

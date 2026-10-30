@@ -471,6 +471,11 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
  * yields UINT32_MAX for entry_index. Column mode also returns its depth.
  * The action's row comes from Interface Kit's common pointer hit testing.
  * @since Interface Kit 11.0.
+ * @param panel Initialized File Panel.
+ * @param action Collection context-menu action.
+ * @param entry_index Receives directory entry index or UINT32_MAX.
+ * @param depth Receives Columns depth, or zero for List and Grid.
+ * @return ASTRA_OK or a validation error.
  */
 AstraResult astra_interface_file_panel_context_entry(
     const AstraFilePanel *panel, const AstraUIAction *action,

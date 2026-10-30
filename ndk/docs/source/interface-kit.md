@@ -19,7 +19,7 @@ bytes, use the display's shared overlay renderer, and leave input with the
 underlying window. `astra_window_overlay_hide` dismisses the caller's notice.
 An active menu takes priority over notices.
 
-`interface.library.11` is the shared implementation for native window controls,
+`interface.library.12` is the shared implementation for native window controls,
 integer flex layout, shared transient menus, TextSurface presentation, the typed
 system clipboard, and per-document undo histories. Applications call its
 versioned ELF symbols directly; they do not compile private Interface Kit
@@ -34,7 +34,10 @@ Columns. Modification times carry `Z` because the current system calendar
 renders UTC. Search and type filtering rebuild Table rows from the caller's
 directory snapshot. Call `astra_interface_file_panel_dispose` after the UI
 stops using the panel to release its metadata row storage. Interface ABI 11
-replaces ABI 10 because `AstraFilePanel` gained Table state.
+added Table state. ABI 12 adds optional caller-owned multi-selection to
+`AstraCollectionModel`. Ctrl/Command toggles items, Shift selects a range,
+and stable IDs preserve selection through sort and refresh. Applications can
+share one selection set across File Panel views.
 For pointer context menus, collection controls report hovered row in
 `AstraUIAction.value` and `-1` over empty space. File Panel's
 `astra_interface_file_panel_context_entry` maps that row to the original
@@ -199,7 +202,7 @@ fixes behavior without breaking the ABI. A consumer links directly and records
 the oldest compatible version in its bundle manifest:
 
 ```c
-requires interface.library 11 11.0.0
+requires interface.library 12 12.0.0
 ```
 
 The linker records the ABI-major SONAME and required symbol versions. The
@@ -255,7 +258,7 @@ repeat after 400 ms; unavailable arrows remain visible but muted at a bound.
 All value changes return the same `ASTRA_UI_ACTION_VALUE_CHANGED` action.
 Numeric actions carry a signed 64-bit value; `decimal_places` is zero for
 integer controls and gives the Dial's fixed-point scale. The controls in the
-following example require `interface.library.11` version 11.0.0 or newer.
+following example require `interface.library.12` version 12.0.0 or newer.
 
 `astra_interface_collection_init` validates caller-owned UTF-8 items and
 unique, nonzero 64-bit IDs. Selection uses an item ID; zero means none.
@@ -376,7 +379,7 @@ of its descendants leave layout, rendering, hit testing, focus traversal, and
 animation together; applications do not maintain separate hidden states in
 each subsystem. `astra_interface_ui_set_state` reflows after a collapse change
 and clears any interaction owned by a descendant that left the active page. Tabs and
-collapsed containers require `interface.library.11` version 11.0.0 or newer.
+collapsed containers require `interface.library.12` version 12.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_tabs.c
 :language: c
@@ -396,7 +399,7 @@ Use a disclosure for optional settings that should reflow in place. The target
 must be an ordinary sibling container, which keeps the header reachable while
 its body is closed and prevents ambiguous ownership. State remains
 application-owned and can be restored by setting the target container before
-or after UI initialization. Disclosures require `interface.library.11` version
+or after UI initialization. Disclosures require `interface.library.12` version
 6.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_disclosure.c
@@ -437,7 +440,7 @@ the same transaction also selects the normal path. These are correctness
 fallbacks, not different application APIs.
 
 Scroll models, their bound views, and scrollbars require
-`interface.library.11` version 11.0.0 or newer.
+`interface.library.12` version 12.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_scroll.c
 :language: c
@@ -454,7 +457,7 @@ moves one logical pixel; Home and End move to the permitted extremes. The same
 live change is reported as `ASTRA_UI_ACTION_VALUE_CHANGED`, and
 `astra_interface_control_set_value` restores a saved first-pane extent.
 
-Splitters require `interface.library.11` version 11.0.0 or newer.
+Splitters require `interface.library.12` version 12.0.0 or newer.
 
 ```{literalinclude} ../../examples/interface_splitter.c
 :language: c
@@ -479,7 +482,7 @@ MC68040. The indicator's angular position is normalized internally; 0 through
 100 is not part of the public value contract. `astra_interface_control_get_value` and every
 value-change action return both the exact integer and its scale.
 
-Dials require `interface.library.11` version 11.0.0 or newer. Their indicator
+Dials require `interface.library.12` version 12.0.0 or newer. Their indicator
 uses Graphics Kit's shared
 clipped line primitive, which replays as a hardware line on draw-list surfaces.
 
@@ -515,7 +518,7 @@ together at vertical blank; the MC68040 does not paint or composite the
 pointer.
 
 Pointer-image APIs and automatic Interface Kit selection require
-`interface.library.11` version 11.0.0 or newer.
+`interface.library.12` version 12.0.0 or newer.
 
 ## Text models and fields
 
@@ -773,7 +776,7 @@ render to its hardware surface, and use `astra_interface_inline_edit_text`
 on activation. Escape dismisses. The caller validates and saves the result;
 `astra_interface_inline_edit_stop` ends editing after commit or cancel.
 Desktop and Atlas use this same control for folder names. Both additions are
-exported by `interface.library.11`.
+exported by `interface.library.12`.
 
 ## Image View
 

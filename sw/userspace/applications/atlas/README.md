@@ -41,15 +41,23 @@ copying Tracker code.
 The shared File Panel composes List from Interface Kit's Table control. Rows
 show Name, Size, Kind, and UTC Modified columns without an Atlas-only widget;
 Grid and Columns still use the same directory snapshot and selection model.
-Interface Kit ABI 11 includes the table model and a File Panel dispose call.
+Interface Kit ABI 12 includes shared collection multi-selection; ABI 11 added
+the table model and File Panel dispose call.
+List, Grid, and root Columns bind one caller-owned stable-ID selection set.
+Interface Kit owns Ctrl/Command toggle, Shift range, painting, and primary
+selection mirroring across views. Atlas owns only storage growth and status
+text. Haiku's `src/kits/tracker/PoseView.cpp` (`SelectPoses` and
+`MoveOrChangePoseSelection`) supplied the selected-pose list and pivot pattern;
+Astra keeps it in its native collection model and stable IDs.
 Interface Kit reports context-menu row hits for all collection controls,
 including Table's header offset. File Panel maps that row to its source entry
 and Columns depth; Atlas uses that mapping for its context menu instead of
 maintaining separate geometry logic for each view.
 
 Remaining design work: List row expansion, selection preview,
-Recent and saved queries, Cut/Move, drag and drop, and multiselection.
-File operations are single-item, and the native clipboard has Copy
+Recent and saved queries, Cut/Move, drag and drop, and multi-item file actions.
+Selection works across primary views; file operations remain single-item.
+The native clipboard has Copy
 and Paste only. These need shared controls or native volume grant transitions,
 not Atlas-only widgets.
 

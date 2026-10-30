@@ -1,4 +1,4 @@
-ASTRA_INTERFACE_11.0 {
+ASTRA_INTERFACE_12.0 {
     global:
         astra_interface_menu_init;
         astra_interface_menu_get_state;
@@ -57,6 +57,9 @@ ASTRA_INTERFACE_11.0 {
         astra_interface_list_init;
         astra_interface_list_set_items;
         astra_interface_collection_init;
+        astra_interface_selection_init;
+        astra_interface_collection_multi_bind;
+        astra_interface_selection_contains;
         astra_interface_pagination_init;
         astra_interface_pagination_range;
         astra_interface_pagination_set_page;

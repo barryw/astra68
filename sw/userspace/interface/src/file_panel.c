@@ -7,6 +7,7 @@
 #include <astra/utf8.h>
 #include <string.h>
 #include "panel_internal.h"
+#include "control_internal.h"
 
 #define FILE_PANEL_TABLE_TRAILING_COLUMNS 3u
 #define FILE_PANEL_TABLE_TEXT_BYTES 56u
@@ -1315,30 +1316,22 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
             if (result != ASTRA_OK) return result;
         }
         panel->view_mode = next;
-        if (old_collection->selected_id != 0u && transfer != 0u) {
-            for (uint32_t row = 0u; row < panel->item_count; ++row)
-                if (panel->items[row].id == old_collection->selected_id)
-                    return astra_interface_control_set_value(context,
-                        &controls[next == ASTRA_FILE_PANEL_VIEW_LIST ?
-                            ASTRA_FILE_PANEL_LIST :
-                            next == ASTRA_FILE_PANEL_VIEW_GRID ?
-                                ASTRA_FILE_PANEL_GRID :
-                                file_panel_column_list_index(0u)],
-                        row);
-        }
+        if (transfer != 0u)
+            return astra_interface_collection_mirror_primary(context,
+                &controls[next == ASTRA_FILE_PANEL_VIEW_LIST ?
+                    ASTRA_FILE_PANEL_LIST :
+                    next == ASTRA_FILE_PANEL_VIEW_GRID ?
+                        ASTRA_FILE_PANEL_GRID :
+                        file_panel_column_list_index(0u)], old_collection);
         return ASTRA_OK;
     }
     if (action->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
         (at == ASTRA_FILE_PANEL_LIST || at == ASTRA_FILE_PANEL_GRID)) {
         AstraCollectionModel *source = at == ASTRA_FILE_PANEL_LIST ?
             panel->collection : &panel->grid_collection;
-        if (source->selected_id != 0u)
-            for (uint32_t row = 0u; row < panel->item_count; ++row)
-                if (panel->items[row].id == source->selected_id)
-                    return astra_interface_control_set_value(context,
-                        &controls[at == ASTRA_FILE_PANEL_LIST ?
-                            ASTRA_FILE_PANEL_GRID : ASTRA_FILE_PANEL_LIST], row);
-        return ASTRA_OK;
+        return astra_interface_collection_mirror_primary(context,
+            &controls[at == ASTRA_FILE_PANEL_LIST ?
+                ASTRA_FILE_PANEL_GRID : ASTRA_FILE_PANEL_LIST], source);
     }
     if ((action->type == ASTRA_UI_ACTION_VALUE_CHANGED ||
          action->type == ASTRA_UI_ACTION_ACTIVATE) &&
