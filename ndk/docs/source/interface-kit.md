@@ -60,6 +60,14 @@ caller appends a rendered control view to a draw list, include the current
 `inspector.image.image` in that view's approved borrowed-surface sources.
 The caller owns icon lifetime and selection; the inspector performs no file I/O.
 
+Interface Kit 12.3 lets a caller restore Search Field text through
+`astra_interface_file_panel_set_search`. It updates the shared text model and
+visible rows through the same filter path as typing. A Places entry with a
+null path is an action item; it does not match current-directory selection.
+Activation returns `ASTRA_FILE_PANEL_PLACE_ACTION`, with the selected row in
+`AstraUIAction.value`. Applications can use these entries for saved searches
+or other sidebar actions without inventing another list control.
+
 ## Field family
 
 `astra_interface_secure_field_init` keeps the ordinary Field/TextModel editing

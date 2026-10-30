@@ -526,8 +526,8 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     for (uint32_t at = 0u; at < info->place_count; ++at) {
         if (info->places[at].label == NULL ||
             info->places[at].label_length == 0u ||
-            info->places[at].path == NULL ||
-            info->places[at].path[0] != '/' ||
+            (info->places[at].path != NULL &&
+             info->places[at].path[0] != '/') ||
             !astra_utf8_validate(info->places[at].label,
                 info->places[at].label_length, 0u))
             return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -778,6 +778,7 @@ static AstraResult file_panel_select_place(AstraUIContext *context,
         size_t directory_length = strlen(directory);
         for (uint32_t at = 0u; at < count; ++at) {
             const char *path = places[at].path;
+            if (path == NULL) continue;
             size_t length = strlen(path);
             if (length <= directory_length && length >= longest &&
                 strncmp(directory, path, length) == 0 &&
@@ -1052,7 +1053,7 @@ AstraResult astra_interface_file_panel_set_places(AstraFilePanel *panel,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = 0u; at < count; ++at) {
         if (places[at].label == NULL || places[at].label_length == 0u ||
-            places[at].path == NULL || places[at].path[0] != '/' ||
+            (places[at].path != NULL && places[at].path[0] != '/') ||
             !astra_utf8_validate(places[at].label,
                 places[at].label_length, 0u))
             return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -1183,6 +1184,34 @@ static AstraResult file_panel_fill_name(AstraFilePanel *panel,
         &controls[ASTRA_FILE_PANEL_NAME]);
 }
 
+static AstraResult file_panel_search_changed(AstraFilePanel *panel,
+    AstraUIContext *context, AstraControl *controls)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    char previous[ASTRA_VFS_NAME_MAX];
+    uint32_t old_length = panel->search_length;
+    uint32_t bytes;
+    AstraResult result = astra_text_model_get_state(&panel->search_model,
+        &state);
+
+    if (result != ASTRA_OK) return result;
+    if (state.text_bytes >= sizeof(panel->search_query))
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    memcpy(previous, panel->search_query, old_length + 1u);
+    result = astra_text_model_copy(&panel->search_model, 0u,
+        state.text_bytes, panel->search_query,
+        sizeof(panel->search_query) - 1u, &bytes);
+    if (result != ASTRA_OK) return result;
+    panel->search_query[bytes] = '\0';
+    panel->search_length = bytes;
+    result = file_panel_refresh(panel, context, controls);
+    if (result != ASTRA_OK) {
+        memcpy(panel->search_query, previous, old_length + 1u);
+        panel->search_length = old_length;
+    }
+    return result;
+}
+
 static AstraResult file_panel_select(AstraFilePanel *panel, uint32_t index,
     uint32_t *outcome)
 {
@@ -1304,27 +1333,7 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
     at = action->control_id - panel->first_id;
     if (action->type == ASTRA_UI_ACTION_TEXT_CHANGED &&
         at == ASTRA_FILE_PANEL_SEARCH) {
-        AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
-        char previous[ASTRA_VFS_NAME_MAX];
-        uint32_t old_length = panel->search_length;
-        uint32_t bytes;
-        result = astra_text_model_get_state(&panel->search_model, &state);
-        if (result != ASTRA_OK) return result;
-        if (state.text_bytes >= sizeof(panel->search_query))
-            return ASTRA_ERROR_BUFFER_TOO_SMALL;
-        memcpy(previous, panel->search_query, old_length + 1u);
-        result = astra_text_model_copy(&panel->search_model, 0u,
-            state.text_bytes, panel->search_query,
-            sizeof(panel->search_query) - 1u, &bytes);
-        if (result != ASTRA_OK) return result;
-        panel->search_query[bytes] = '\0';
-        panel->search_length = bytes;
-        result = file_panel_refresh(panel, context, controls);
-        if (result != ASTRA_OK) {
-            memcpy(panel->search_query, previous, old_length + 1u);
-            panel->search_length = old_length;
-        }
-        return result;
+        return file_panel_search_changed(panel, context, controls);
     }
     if (action->type == ASTRA_UI_ACTION_VALUE_CHANGED &&
         at == ASTRA_FILE_PANEL_TYPE) {
@@ -1390,6 +1399,12 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
         at == ASTRA_FILE_PANEL_PLACES_LIST) {
         if (action->value < 0 || (uint64_t)action->value >= panel->place_count)
             return ASTRA_ERROR_INVALID_ARGUMENT;
+        if (panel->places[action->value].path == NULL) {
+            panel->leaf[0] = '\0';
+            panel->target[0] = '\0';
+            *outcome = ASTRA_FILE_PANEL_PLACE_ACTION;
+            return ASTRA_OK;
+        }
         if (!astra_string_copy(panel->target, sizeof(panel->target),
                 panel->places[action->value].path))
             return ASTRA_ERROR_BUFFER_TOO_SMALL;
@@ -1478,6 +1493,48 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
     return file_panel_select(panel,
         (uint32_t)active->selected_id - 1u, outcome);
     }
+}
+
+AstraResult astra_interface_file_panel_set_search(AstraFilePanel *panel,
+    AstraUIContext *context, AstraControl *controls,
+    const char *query, uint32_t query_bytes)
+{
+    AstraTextModelState state = ASTRA_TEXT_MODEL_STATE_INIT;
+    char previous[ASTRA_VFS_NAME_MAX];
+    uint32_t old_bytes;
+    AstraResult result;
+
+    if (panel == NULL || panel->size < sizeof(*panel) ||
+        context == NULL || controls == NULL ||
+        (query_bytes != 0u && query == NULL) ||
+        query_bytes >= sizeof(panel->search_query))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_text_model_get_state(&panel->search_model, &state);
+    if (result != ASTRA_OK) return result;
+    if (state.text_bytes >= sizeof(previous))
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    result = astra_text_model_copy(&panel->search_model, 0u,
+        state.text_bytes, previous, sizeof(previous) - 1u, &old_bytes);
+    if (result != ASTRA_OK) return result;
+    result = astra_text_model_replace(&panel->search_model, 0u,
+        state.text_bytes, query, query_bytes);
+    if (result != ASTRA_OK) return result;
+    result = file_panel_search_changed(panel, context, controls);
+    if (result == ASTRA_OK)
+        result = astra_interface_field_refresh(context,
+            &controls[ASTRA_FILE_PANEL_SEARCH]);
+    if (result != ASTRA_OK) {
+        AstraTextModelState changed = ASTRA_TEXT_MODEL_STATE_INIT;
+        if (astra_text_model_get_state(&panel->search_model, &changed) ==
+                ASTRA_OK &&
+            astra_text_model_replace(&panel->search_model, 0u,
+                changed.text_bytes, previous, old_bytes) == ASTRA_OK) {
+            (void)file_panel_search_changed(panel, context, controls);
+            (void)astra_interface_field_refresh(context,
+                &controls[ASTRA_FILE_PANEL_SEARCH]);
+        }
+    }
+    return result;
 }
 
 AstraResult astra_interface_file_inspector_init(AstraFileInspector *inspector,

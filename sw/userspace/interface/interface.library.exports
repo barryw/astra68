@@ -216,3 +216,8 @@ ASTRA_INTERFACE_12.2 {
         astra_interface_file_inspector_init;
         astra_interface_file_inspector_set;
 } ASTRA_INTERFACE_12.1;
+
+ASTRA_INTERFACE_12.3 {
+    global:
+        astra_interface_file_panel_set_search;
+} ASTRA_INTERFACE_12.2;

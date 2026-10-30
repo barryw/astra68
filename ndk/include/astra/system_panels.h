@@ -221,7 +221,8 @@ enum {
     ASTRA_FILE_PANEL_LOAD_CHILD,
     ASTRA_FILE_PANEL_PICKED,
     ASTRA_FILE_PANEL_OVERWRITE,
-    ASTRA_FILE_PANEL_CANCELLED
+    ASTRA_FILE_PANEL_CANCELLED,
+    ASTRA_FILE_PANEL_PLACE_ACTION
 };
 
 enum {
@@ -247,11 +248,13 @@ typedef struct AstraFilePanelColumnSnapshot {
     uint32_t item_capacity; /**< Capacity of caller-owned row storage. */
 } AstraFilePanelColumnSnapshot;
 
-/** One caller-owned Places/Volumes sidebar entry. */
+/** One caller-owned Places/Volumes sidebar entry. A NULL path is an action
+ * item: activating it yields ASTRA_FILE_PANEL_PLACE_ACTION with its row in
+ * AstraUIAction.value. Such items never match current-directory selection. */
 typedef struct AstraFilePanelPlace {
     const char *label; /**< Borrowed displayed place name. */
     uint32_t label_length; /**< Label length in bytes. */
-    const char *path; /**< Borrowed target path. */
+    const char *path; /**< Borrowed target path, or NULL for an action. */
 } AstraFilePanelPlace;
 
 /** A type policy supplied by the caller's file-type service. Directories
@@ -495,6 +498,18 @@ AstraResult astra_interface_file_panel_set_places(AstraFilePanel *panel,
     AstraUIContext *context, AstraControl *controls,
     const AstraFilePanelPlace *places, uint32_t count,
     AstraCollectionItem *item_storage, uint32_t item_capacity);
+
+/** Replace the visible Search Field text and filter through one shared path.
+ * This supports restoring a saved query without synthesizing input events.
+ * @param panel Initialized File Panel.
+ * @param context Owning UI context.
+ * @param controls Panel's retained control array.
+ * @param query UTF-8 single-line text, or NULL when query_bytes is zero.
+ * @param query_bytes Counted query bytes, below ASTRA_VFS_NAME_MAX.
+ * @return ASTRA_OK or a validation/resource error. */
+AstraResult astra_interface_file_panel_set_search(AstraFilePanel *panel,
+    AstraUIContext *context, AstraControl *controls,
+    const char *query, uint32_t query_bytes);
 
 /** Attach file-type or thumbnail icon surfaces parallel to the current
  * directory snapshot. Search and type filters retain the correct mapping.

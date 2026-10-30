@@ -5151,7 +5151,8 @@ static void test_shared_file_panel(void)
     };
     AstraCollectionItem items[2], next_items[2];
     AstraCollectionItem rebound_items[4], rebound_spare[4];
-    AstraCollectionItem place_items[3], updated_place_items[3], next_place_items[2];
+    AstraCollectionItem place_items[3], updated_place_items[3];
+    AstraCollectionItem action_place_items[3], next_place_items[2];
     AstraFilePanelPlace places[3] = {
         {"Home", 4u, "/dh0/Home"},
         {"Stories", 7u, "/dh0/Stories"},
@@ -5224,6 +5225,20 @@ static void test_shared_file_panel(void)
     assert(astra_interface_file_panel_set_places(&panel, &context, controls,
         places, 3u, updated_place_items, 3u) == ASTRA_OK);
     assert(panel.places_collection.selected_id == 2u);
+    places[2].path = NULL;
+    assert(astra_interface_file_panel_set_places(&panel, &context, controls,
+        places, 3u, action_place_items, 3u) == ASTRA_OK &&
+        panel.places_collection.selected_id == 2u);
+    action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+    action.control_id = 300u + ASTRA_FILE_PANEL_PLACES_LIST;
+    action.value = 2;
+    assert(astra_interface_file_panel_action(&panel, &context, controls,
+        &action, &outcome) == ASTRA_OK &&
+        outcome == ASTRA_FILE_PANEL_PLACE_ACTION &&
+        panel.target[0] == '\0');
+    places[2].path = "/dh0";
+    assert(astra_interface_file_panel_set_places(&panel, &context, controls,
+        places, 3u, place_items, 3u) == ASTRA_OK);
     assert(astra_interface_control_set_value(&context,
         &controls[ASTRA_FILE_PANEL_LIST], 1) == ASTRA_OK);
     selected_ids[0] = items[0].id;
@@ -5315,6 +5330,16 @@ static void test_shared_file_panel(void)
         &controls[ASTRA_FILE_PANEL_SEARCH]) == ASTRA_OK);
     assert(astra_interface_file_panel_action(&panel, &context, controls,
         &action, &outcome) == ASTRA_OK && panel.item_count == 2u);
+    assert(astra_interface_file_panel_set_search(&panel, &context, controls,
+        "Stories", 7u) == ASTRA_OK && panel.item_count == 1u &&
+        panel.items[0].id == 2u &&
+        strcmp(panel.search_query, "Stories") == 0);
+    assert(astra_interface_file_panel_set_search(&panel, &context, controls,
+        "\xff", 1u) != ASTRA_OK && panel.item_count == 1u &&
+        strcmp(panel.search_query, "Stories") == 0);
+    assert(astra_interface_file_panel_set_search(&panel, &context, controls,
+        NULL, 0u) == ASTRA_OK && panel.item_count == 2u &&
+        panel.search_query[0] == '\0');
     action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
     action.control_id = 300u + ASTRA_FILE_PANEL_TYPE;
     action.value = 1;

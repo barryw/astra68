@@ -2,6 +2,22 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas saved-search substrate checkpoint, 2026-10-30: Interface Kit 12.3
+adds `astra_interface_file_panel_set_search`, which restores Search Field
+text through the same filter path as typing. Places now accept action rows
+with a null path and return `ASTRA_FILE_PANEL_PLACE_ACTION`; these rows never
+claim current-directory selection. This reuses File Panel's existing List,
+TextModel, and directory filtering. Haiku read-only references:
+`src/kits/tracker/QueryContainerWindow.cpp` for treating saved queries as
+first-class user items and `src/kits/interface/OutlineListView.cpp` for
+future hierarchical rows. Beast Interface tests, library contract, and NDK
+`dist-check` pass. DE25 targeted Interface Kit 12.3 install passed; Atlas
+opened DH0 with 17 entries and no Atlas error, `astra.service` active with
+zero restarts and 8.2 GiB free. SHA-verified capture on Beast:
+`/mnt/Documents/astra68/atlas-query-seam-20261030/`; board trial files
+removed. Atlas does not yet persist or display saved searches. Remaining:
+List row expansion, Recent/saved queries, and drag and drop.
+
 Atlas shared inspector checkpoint, 2026-10-30: Interface Kit 12.2 adds a
 reusable file inspector composed from Container, Image View, and Labels.
 Atlas binds its selected directory entry and icon to that control and adds
