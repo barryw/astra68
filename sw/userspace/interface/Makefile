@@ -203,13 +203,17 @@ library-contract: $(INTERFACE_TARGET)
 		grep -Eq ' astra_interface_text_view_set_wrap_width@@ASTRA_INTERFACE_12\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -Eq ' astra_interface_table_set_sort@@ASTRA_INTERFACE_12\.1$$'
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_file_inspector_init@@ASTRA_INTERFACE_12\.2$$'
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_file_inspector_set@@ASTRA_INTERFACE_12\.2$$'
 	@! $(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -q 'ASTRA_INTERFACE_5\.1'
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.12 12.1.0 ABI 12.1$$'
+		grep -q '^interface.library.12 12.2.0 ABI 12.2$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
@@ -224,7 +228,7 @@ library-contract: $(INTERFACE_TARGET)
 		awk '/NEEDED/{n++} END{print n+0}')" = 5
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET))
 
-$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/system_panels.c src/file_panel.c src/font_panel.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/text_surface.c src/undo.c \
+$(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/system_panels.c src/file_panel.c src/font_panel.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/image_view.c src/text_surface.c src/undo.c \
 		src/text_model.c src/scroll.c $(RUNTIME)/src/string.c ../../common/civil.c ../../common/divide.c $(NDK_HOST_UTF8) tests/test_interface.c \
 		tests/test_layout.c src/text_surface_internal.h src/panel_internal.h
 	@mkdir -p $(@D)

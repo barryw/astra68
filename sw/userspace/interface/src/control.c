@@ -750,7 +750,7 @@ static int control_valid(const AstraControl *control)
                 ~ASTRA_CONTROL_COLLAPSED) == 0u &&
                control->_private_preview_state == 0u &&
                control->_private_dynamic_state == 0u &&
-               control->_private_style <= ASTRA_CONTAINER_STYLE_DROP_TARGET &&
+               control->_private_style <= ASTRA_CONTAINER_STYLE_INSPECTOR &&
                (control->_private_style == ASTRA_CONTAINER_STYLE_DROP_TARGET ?
                     (control->_private_value >= ASTRA_DROP_TARGET_IDLE &&
                      control->_private_value <= ASTRA_DROP_TARGET_REFUSE) :
@@ -5235,6 +5235,9 @@ static int render_requirements(const AstraUIContext *context,
                      control->_private_style == ASTRA_CONTAINER_STYLE_STATUS_BAR)
                 *commands += 2u;
             else if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
+                     control->_private_style == ASTRA_CONTAINER_STYLE_INSPECTOR)
+                *commands += 2u;
+            else if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
                      control->_private_style == ASTRA_CONTAINER_STYLE_TAG_INPUT)
                 *commands += 2u;
             else if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
@@ -8512,6 +8515,16 @@ static AstraResult render_one_control(const AstraUIContext *context,
         return ASTRA_OK;
     }
     if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
+        control->_private_style == ASTRA_CONTAINER_STYLE_INSPECTOR) {
+        const AstraControlFrame *frame = &control->_private_frame;
+        astra_surface_fill(surface, frame->x, frame->y,
+                           frame->width, frame->height,
+                           color(theme->surface_raised));
+        astra_surface_fill(surface, frame->x, frame->y,
+                           1u, frame->height, color(theme->client_border));
+        return ASTRA_OK;
+    }
+    if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER &&
         control->_private_style == ASTRA_CONTAINER_STYLE_TAG_INPUT) {
         const AstraControlFrame *frame = &control->_private_frame;
 
@@ -8682,7 +8695,8 @@ AstraResult astra_interface_ui_render(AstraUIContext *context,
                (control->_private_style == ASTRA_CONTAINER_STYLE_TOOLBAR ||
                 control->_private_style == ASTRA_CONTAINER_STYLE_STATUS_BAR ||
                 control->_private_style == ASTRA_CONTAINER_STYLE_TAG_INPUT ||
-                control->_private_style == ASTRA_CONTAINER_STYLE_DROP_TARGET))) ||
+                control->_private_style == ASTRA_CONTAINER_STYLE_DROP_TARGET ||
+                control->_private_style == ASTRA_CONTAINER_STYLE_INSPECTOR))) ||
             control->_private_clip.width == 0u ||
             control->_private_clip.height == 0u)
             continue;
@@ -8770,7 +8784,8 @@ AstraResult astra_interface_ui_render_range(AstraUIContext *context,
                (control->_private_style == ASTRA_CONTAINER_STYLE_TOOLBAR ||
                 control->_private_style == ASTRA_CONTAINER_STYLE_STATUS_BAR ||
                 control->_private_style == ASTRA_CONTAINER_STYLE_TAG_INPUT ||
-                control->_private_style == ASTRA_CONTAINER_STYLE_DROP_TARGET))) ||
+                control->_private_style == ASTRA_CONTAINER_STYLE_DROP_TARGET ||
+                control->_private_style == ASTRA_CONTAINER_STYLE_INSPECTOR))) ||
             control->_private_clip.width == 0u ||
             control->_private_clip.height == 0u)
             continue;

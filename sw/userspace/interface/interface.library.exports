@@ -210,3 +210,9 @@ ASTRA_INTERFACE_12.1 {
     global:
         astra_interface_table_set_sort;
 } ASTRA_INTERFACE_12.0;
+
+ASTRA_INTERFACE_12.2 {
+    global:
+        astra_interface_file_inspector_init;
+        astra_interface_file_inspector_set;
+} ASTRA_INTERFACE_12.1;

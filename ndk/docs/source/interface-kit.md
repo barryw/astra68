@@ -50,6 +50,16 @@ the Table draws its shared arrow and reserves heading space. Pass `UINT32_MAX`
 to clear the marker. The marker API requires interface.library.12 version
 12.1.0 or newer.
 
+Interface Kit 12.2 adds `AstraFileInspector` for a selected directory entry.
+Initialize it with `astra_interface_file_inspector_init`, using a parent flex
+container and a live placeholder icon. Call `astra_interface_file_inspector_set`
+with the selected entry and optional icon; pass a null entry to clear it. The
+inspector composes existing Container, Image View, and Label controls, so it
+shares their layout, text roles, damage, and hardware image rendering. If the
+caller appends a rendered control view to a draw list, include the current
+`inspector.image.image` in that view's approved borrowed-surface sources.
+The caller owns icon lifetime and selection; the inspector performs no file I/O.
+
 ## Field family
 
 `astra_interface_secure_field_init` keeps the ordinary Field/TextModel editing

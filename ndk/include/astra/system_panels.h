@@ -6,6 +6,7 @@
 #include <astra/control.h>
 #include <astra/filesystem_library.h>
 #include <astra/fonts.h>
+#include <astra/image_view.h>
 
 ASTRA_EXTERN_C_BEGIN
 
@@ -356,6 +357,74 @@ typedef struct AstraFilePanel {
 
 /** Empty caller-owned Open/Save panel state. */
 #define ASTRA_FILE_PANEL_INIT { .size = sizeof(AstraFilePanel) }
+
+/** Shared selection inspector. Compose beside a File Panel or another
+ * collection view. Image, labels, selection, and layout use existing controls;
+ * caller retains ownership of the selected entry and source icon. */
+enum {
+    ASTRA_FILE_INSPECTOR_ROOT = 0u,
+    ASTRA_FILE_INSPECTOR_TITLE,
+    ASTRA_FILE_INSPECTOR_ICON,
+    ASTRA_FILE_INSPECTOR_NAME,
+    ASTRA_FILE_INSPECTOR_KIND,
+    ASTRA_FILE_INSPECTOR_SIZE,
+    ASTRA_FILE_INSPECTOR_MODIFIED,
+    ASTRA_FILE_INSPECTOR_CONTROL_COUNT
+};
+
+/** Caller-owned state for shared selection inspector. */
+typedef struct AstraFileInspector {
+    uint32_t size; /**< Structure size. */
+    AstraImageViewModel image; /**< Shared hardware image model. */
+    const AstraSurface *placeholder_icon; /**< Borrowed fallback icon. */
+    char name[ASTRA_VFS_NAME_MAX]; /**< Selected entry name. */
+    char kind[24]; /**< Kind label. */
+    char size_text[40]; /**< Size label. */
+    char modified[40]; /**< UTC modification label. */
+    uint32_t reserved[2]; /**< Must be zero. */
+} AstraFileInspector;
+
+/** Empty caller-owned inspector state. */
+#define ASTRA_FILE_INSPECTOR_INIT { .size = sizeof(AstraFileInspector) }
+
+/** Inspector construction data. The parent must be an existing flex
+ * container and the placeholder icon must remain live. */
+typedef struct AstraFileInspectorInfo {
+    uint32_t size; /**< Structure size. */
+    uint32_t first_id; /**< First reserved control ID. */
+    uint32_t parent_id; /**< Parent container control ID. */
+    const AstraSurface *placeholder_icon; /**< Borrowed fallback icon. */
+    uint32_t state; /**< Zero or ASTRA_CONTROL_COLLAPSED. */
+    uint32_t reserved[3]; /**< Must be zero. */
+} AstraFileInspectorInfo;
+
+/** Empty inspector construction data. */
+#define ASTRA_FILE_INSPECTOR_INFO_INIT { \
+    sizeof(AstraFileInspectorInfo), 0u, 0u, NULL, 0u, {0u, 0u, 0u} \
+}
+
+/** Build a fixed-width inspector from Container, Image View, and Labels.
+ * Attach ROOT to a flex row; state accepts COLLAPSED or zero.
+ * @param inspector Empty caller-owned inspector state.
+ * @param controls Output array of ASTRA_FILE_INSPECTOR_CONTROL_COUNT controls.
+ * @param info Construction data with live placeholder icon.
+ * @return ASTRA_OK or a validation/resource error. */
+AstraResult astra_interface_file_inspector_init(AstraFileInspector *inspector,
+    AstraControl controls[ASTRA_FILE_INSPECTOR_CONTROL_COUNT],
+    const AstraFileInspectorInfo *info);
+
+/** Show selected entry, or clear it with NULL. Icon may be NULL to use the
+ * configured placeholder. No file I/O or content parsing occurs.
+ * @param inspector Initialized caller-owned state.
+ * @param context UI context containing the inspector controls.
+ * @param controls Inspector control array from initialization.
+ * @param entry Borrowed selected entry, or NULL to clear selection.
+ * @param icon Borrowed live icon, or NULL for placeholder.
+ * @return ASTRA_OK or a validation/resource error. */
+AstraResult astra_interface_file_inspector_set(AstraFileInspector *inspector,
+    AstraUIContext *context,
+    AstraControl controls[ASTRA_FILE_INSPECTOR_CONTROL_COUNT],
+    const AstraDirectoryEntry *entry, const AstraSurface *icon);
 
 /** Compose Open or Save from shared List, Icon Grid, ScrollView, Search Field,
  * Segmented, Popup, Breadcrumb Buttons, Labels and Buttons. Entries and item

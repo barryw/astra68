@@ -19,6 +19,37 @@ static const AstraTableColumn file_panel_table_columns[] = {
     {"Modified", 8u, 176u, 0u}
 };
 
+static AstraResult file_entry_text(const AstraDirectoryEntry *entry,
+    char *size_text, uint32_t size_capacity,
+    char *date_text, uint32_t date_capacity, const char **kind)
+{
+    AstraString size;
+
+    if (entry == NULL || size_text == NULL || date_text == NULL ||
+        kind == NULL || size_capacity == 0u || date_capacity < 24u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    *kind = entry->kind == ASTRA_VFS_KIND_DIRECTORY ? "Folder" : "File";
+    astra_string_init(&size, size_text, size_capacity);
+    if (entry->kind == ASTRA_VFS_KIND_DIRECTORY) {
+        if (!astra_string_append(&size, "-"))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    } else if (!astra_string_append_u64(&size, entry->byte_size) ||
+               !astra_string_append(&size, " B"))
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    if (entry->mtime <= 0 ||
+        (uint64_t)entry->mtime > UINT64_MAX / UINT64_C(1000000000) ||
+        astra_civil_iso8601((uint64_t)entry->mtime * UINT64_C(1000000000),
+            date_text, date_capacity) == 0u) {
+        if (!astra_string_copy(date_text, date_capacity, "-"))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    } else {
+        date_text[10] = ' ';
+        date_text[16] = 'Z';
+        date_text[17] = '\0';
+    }
+    return ASTRA_OK;
+}
+
 /* One allocation keeps row-major cells and their borrowed strings together. */
 static AstraResult file_panel_table_rows(const AstraDirectoryEntry *entries,
     const AstraCollectionItem *items, uint32_t count, void **block)
@@ -43,27 +74,11 @@ static AstraResult file_panel_table_rows(const AstraDirectoryEntry *entries,
         AstraTableCell *next = cells + row * FILE_PANEL_TABLE_TRAILING_COLUMNS;
         char *size_text = texts + row * FILE_PANEL_TABLE_TEXT_BYTES;
         char *date_text = size_text + 32u;
-        const char *kind = entry->kind == ASTRA_VFS_KIND_DIRECTORY ?
-            "Folder" : "File";
-        AstraString size;
-
-        astra_string_init(&size, size_text, 32u);
-        if (entry->kind == ASTRA_VFS_KIND_DIRECTORY)
-            (void)astra_string_append(&size, "-");
-        else if (!astra_string_append_u64(&size, entry->byte_size) ||
-                 !astra_string_append(&size, " B")) {
+        const char *kind;
+        if (file_entry_text(entry, size_text, 32u, date_text, 24u,
+                &kind) != ASTRA_OK) {
             astra_runtime_deallocate(cells);
             return ASTRA_ERROR_BUFFER_TOO_SMALL;
-        }
-        if (entry->mtime <= 0 ||
-            (uint64_t)entry->mtime > UINT64_MAX / UINT64_C(1000000000) ||
-            astra_civil_iso8601((uint64_t)entry->mtime * UINT64_C(1000000000),
-                date_text, 24u) == 0u)
-            (void)astra_string_copy(date_text, 24u, "-");
-        else {
-            date_text[10] = ' ';
-            date_text[16] = 'Z';
-            date_text[17] = '\0';
         }
         next[0] = (AstraTableCell){size_text,
             (uint32_t)strlen(size_text), 0u};
@@ -1463,4 +1478,162 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
     return file_panel_select(panel,
         (uint32_t)active->selected_id - 1u, outcome);
     }
+}
+
+AstraResult astra_interface_file_inspector_init(AstraFileInspector *inspector,
+    AstraControl controls[ASTRA_FILE_INSPECTOR_CONTROL_COUNT],
+    const AstraFileInspectorInfo *info)
+{
+    AstraContainerInfo container = ASTRA_CONTAINER_INFO_INIT;
+    AstraViewInfo view = ASTRA_VIEW_INFO_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraRectI32 source;
+    AstraResult result;
+
+    if (inspector == NULL || controls == NULL || info == NULL ||
+        inspector->size != sizeof(*inspector) ||
+        info->size < sizeof(*info) || info->first_id == 0u ||
+        info->first_id > UINT32_MAX - ASTRA_FILE_INSPECTOR_CONTROL_COUNT + 1u ||
+        info->parent_id == 0u || info->placeholder_icon == NULL ||
+        (info->state & ~ASTRA_CONTROL_COLLAPSED) != 0u ||
+        !astra_words_zero(info->reserved, 3u))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    source = (AstraRectI32){0, 0, info->placeholder_icon->_private_width,
+        info->placeholder_icon->_private_height};
+    result = astra_interface_image_view_model_init(&inspector->image,
+        info->placeholder_icon, &source, ASTRA_IMAGE_VIEW_FIT);
+    if (result != ASTRA_OK) return result;
+    inspector->placeholder_icon = info->placeholder_icon;
+    if (!astra_string_copy(inspector->name, sizeof(inspector->name),
+            "Select an item") ||
+        !astra_string_copy(inspector->kind, sizeof(inspector->kind), " ") ||
+        !astra_string_copy(inspector->size_text,
+            sizeof(inspector->size_text), " ") ||
+        !astra_string_copy(inspector->modified,
+            sizeof(inspector->modified), " "))
+        return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    container.id = info->first_id;
+    container.state = info->state;
+    container.layout.direction = ASTRA_FLEX_COLUMN;
+    container.layout.align_items = ASTRA_FLEX_ALIGN_STRETCH;
+    container.layout.main_gap = 12u;
+    container.layout.padding_left = 16u;
+    container.layout.padding_right = 16u;
+    container.layout.padding_top = 16u;
+    result = astra_interface_container_init(
+        &controls[ASTRA_FILE_INSPECTOR_ROOT], &container);
+    if (result != ASTRA_OK) return result;
+    controls[ASTRA_FILE_INSPECTOR_ROOT]._private_style =
+        ASTRA_CONTAINER_STYLE_INSPECTOR;
+    item.parent_id = info->parent_id;
+    item.basis = 228u;
+    result = astra_interface_control_set_flex(
+        &controls[ASTRA_FILE_INSPECTOR_ROOT], &item);
+    if (result != ASTRA_OK) return result;
+    result = file_panel_label(&controls[ASTRA_FILE_INSPECTOR_TITLE],
+        info->first_id + ASTRA_FILE_INSPECTOR_TITLE, "Preview", 7u, 0u,
+        info->first_id);
+    if (result != ASTRA_OK) return result;
+    view.id = info->first_id + ASTRA_FILE_INSPECTOR_ICON;
+    view.model = &inspector->image.view;
+    result = astra_interface_view_init(
+        &controls[ASTRA_FILE_INSPECTOR_ICON], &view);
+    if (result != ASTRA_OK) return result;
+    result = astra_panel_child(&controls[ASTRA_FILE_INSPECTOR_ICON],
+        info->first_id, 0u);
+    if (result != ASTRA_OK) return result;
+    item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
+    item.parent_id = info->first_id;
+    item.basis = 80u;
+    result = astra_interface_control_set_flex(
+        &controls[ASTRA_FILE_INSPECTOR_ICON], &item);
+    if (result != ASTRA_OK) return result;
+    static const uint32_t slots[] = {
+        ASTRA_FILE_INSPECTOR_NAME, ASTRA_FILE_INSPECTOR_KIND,
+        ASTRA_FILE_INSPECTOR_SIZE, ASTRA_FILE_INSPECTOR_MODIFIED
+    };
+    const char *texts[] = {inspector->name, inspector->kind,
+        inspector->size_text, inspector->modified};
+    for (uint32_t at = 0u; at < 4u; ++at) {
+        AstraLabelInfo label = ASTRA_LABEL_INFO_INIT;
+        label.id = info->first_id + slots[at];
+        label.text = texts[at];
+        label.text_length = (uint32_t)strlen(texts[at]);
+        label.text_role = at == 0u ? ASTRA_TEXT_CLIENT_PRIMARY :
+            ASTRA_TEXT_CLIENT_SECONDARY;
+        result = astra_interface_label_init(&controls[slots[at]], &label);
+        if (result != ASTRA_OK) return result;
+        result = astra_panel_child(&controls[slots[at]], info->first_id, 0u);
+        if (result != ASTRA_OK) return result;
+    }
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_file_inspector_set(AstraFileInspector *inspector,
+    AstraUIContext *context,
+    AstraControl controls[ASTRA_FILE_INSPECTOR_CONTROL_COUNT],
+    const AstraDirectoryEntry *entry, const AstraSurface *icon)
+{
+    char name[ASTRA_VFS_NAME_MAX], kind[24], size_text[40], modified[40];
+    char size_value[32], date_value[24];
+    const char *kind_value = NULL;
+    const AstraSurface *source;
+    AstraRectI32 rectangle;
+    AstraResult result;
+
+    if (inspector == NULL || inspector->size != sizeof(*inspector) ||
+        context == NULL || controls == NULL ||
+        inspector->placeholder_icon == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    source = icon != NULL ? icon : inspector->placeholder_icon;
+    rectangle = (AstraRectI32){0, 0, source->_private_width,
+        source->_private_height};
+    if (entry == NULL) {
+        if (!astra_string_copy(name, sizeof(name), "Select an item") ||
+            !astra_string_copy(kind, sizeof(kind), " ") ||
+            !astra_string_copy(size_text, sizeof(size_text), " ") ||
+            !astra_string_copy(modified, sizeof(modified), " "))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    } else {
+        AstraString output;
+        if (!astra_string_copy(name, sizeof(name), entry->name))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+        result = file_entry_text(entry, size_value, sizeof(size_value),
+            date_value, sizeof(date_value), &kind_value);
+        if (result != ASTRA_OK) return result;
+        astra_string_init(&output, kind, sizeof(kind));
+        if (!astra_string_append(&output, "Kind: ") ||
+            !astra_string_append(&output, kind_value))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+        astra_string_init(&output, size_text, sizeof(size_text));
+        if (!astra_string_append(&output, "Size: ") ||
+            !astra_string_append(&output, size_value))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+        astra_string_init(&output, modified, sizeof(modified));
+        if (!astra_string_append(&output, "Modified: ") ||
+            !astra_string_append(&output, date_value))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+    }
+    result = astra_interface_image_view_model_init(&inspector->image,
+        source, &rectangle, ASTRA_IMAGE_VIEW_FIT);
+    if (result != ASTRA_OK) return result;
+    (void)astra_string_copy(inspector->name, sizeof(inspector->name), name);
+    (void)astra_string_copy(inspector->kind, sizeof(inspector->kind), kind);
+    (void)astra_string_copy(inspector->size_text,
+        sizeof(inspector->size_text), size_text);
+    (void)astra_string_copy(inspector->modified,
+        sizeof(inspector->modified), modified);
+    static const uint32_t slots[] = {
+        ASTRA_FILE_INSPECTOR_NAME, ASTRA_FILE_INSPECTOR_KIND,
+        ASTRA_FILE_INSPECTOR_SIZE, ASTRA_FILE_INSPECTOR_MODIFIED
+    };
+    const char *texts[] = {inspector->name, inspector->kind,
+        inspector->size_text, inspector->modified};
+    for (uint32_t at = 0u; at < 4u; ++at) {
+        result = astra_interface_control_set_text(context,
+            &controls[slots[at]], texts[at], (uint32_t)strlen(texts[at]));
+        if (result != ASTRA_OK) return result;
+    }
+    return astra_interface_view_invalidate(context,
+        &controls[ASTRA_FILE_INSPECTOR_ICON]);
 }

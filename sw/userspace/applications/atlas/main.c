@@ -43,19 +43,25 @@
     2u * ASTRA_THEME_TOOLBAR_INSET)
 #define TOOLBAR_FIRST_ID 10000u
 #define TOOLBAR_CONTROL_COUNT 10u
-#define BROWSER_TOOL_COUNT 2u
+#define BROWSER_TOOL_COUNT 3u
 #define SORT_CONTROL_INDEX TOOLBAR_CONTROL_COUNT
-#define HIDDEN_CONTROL_INDEX (TOOLBAR_CONTROL_COUNT + 1u)
+#define PREVIEW_CONTROL_INDEX (TOOLBAR_CONTROL_COUNT + 1u)
+#define HIDDEN_CONTROL_INDEX (TOOLBAR_CONTROL_COUNT + 2u)
 #define SORT_CONTROL_ID (TOOLBAR_FIRST_ID + 100u)
-#define HIDDEN_CONTROL_ID (TOOLBAR_FIRST_ID + 101u)
+#define PREVIEW_CONTROL_ID (TOOLBAR_FIRST_ID + 101u)
+#define HIDDEN_CONTROL_ID (TOOLBAR_FIRST_ID + 102u)
 #define NAVIGATION_HISTORY_MAX 32u
 #define NAVIGATION_STAY (UINT32_MAX - 1u)
 #define NAVIGATION_PUSH UINT32_MAX
 #define BROWSER_COLUMNS 3u
 #define BROWSER_PANEL_CONTROL_COUNT ASTRA_FILE_PANEL_CONTROLS_FOR_COLUMNS(BROWSER_COLUMNS)
 #define BROWSER_CONTROL_COUNT (BROWSER_PANEL_CONTROL_COUNT + ASTRA_STATUS_BAR_CONTROL_COUNT)
-#define UI_CONTROL_COUNT (TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT + BROWSER_CONTROL_COUNT)
+#define UI_CONTROL_COUNT (TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT + \
+    BROWSER_CONTROL_COUNT + ASTRA_FILE_INSPECTOR_CONTROL_COUNT)
 #define BROWSER_CONTROL(index) (&controls[TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT + (index)])
+#define INSPECTOR_CONTROL(index) (&controls[TOOLBAR_CONTROL_COUNT + \
+    BROWSER_TOOL_COUNT + BROWSER_CONTROL_COUNT + (index)])
+#define INSPECTOR_FIRST_ID 20000u
 #define BROWSER_INITIAL_CAPACITY 32u
 
 ASTRA_PROGRAM("Atlas", 0, 1, 0, "Barry Walker", "Copyright 2026 Barry Walker");
@@ -75,6 +81,7 @@ static AstraToolbarActions toolbar = ASTRA_TOOLBAR_ACTIONS_INIT;
 static AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
 static AstraControl *controls;
 static AstraFilePanel browser = ASTRA_FILE_PANEL_INIT;
+static AstraFileInspector inspector = ASTRA_FILE_INSPECTOR_INIT;
 static AstraCollectionModel browser_collection = ASTRA_COLLECTION_MODEL_INIT;
 static AstraSelectionSet browser_selection = ASTRA_SELECTION_SET_INIT;
 static uint64_t *browser_selected_ids;
@@ -101,6 +108,7 @@ static char browser_space[80];
 static uint32_t worker, cancelled, completed, visible_data;
 static uint16_t width = 1300u, height = 640u;
 static uint32_t sort_mode = ASTRA_DIRECTORY_SORT_NAME, sort_reverse, show_hidden;
+static uint32_t preview_visible = 1u;
 static const char *root;
 static char current_path[ASTRA_VFS_PATH_MAX];
 static char *navigation_history[NAVIGATION_HISTORY_MAX];
@@ -584,10 +592,17 @@ static void load_entry_icons(void)
 static AstraResult layout(void)
 {
     AstraFlexLayout outer = ASTRA_FLEX_LAYOUT_INIT;
-    uint32_t grid_width = width > 166u ? width - 166u : CELL_WIDTH;
+    uint32_t inspector_width = preview_visible && width >= 850u ? 228u : 0u;
+    uint32_t occupied = 166u + inspector_width;
+    uint32_t grid_width = width > occupied ? width - occupied : CELL_WIDTH;
     uint32_t columns = grid_width / CELL_WIDTH;
+    AstraResult result;
     if (columns == 0u) columns = 1u;
     browser.grid_model.columns = columns;
+    result = astra_interface_ui_set_state(&ui,
+        INSPECTOR_CONTROL(ASTRA_FILE_INSPECTOR_ROOT),
+        inspector_width == 0u ? ASTRA_CONTROL_COLLAPSED : 0u);
+    if (result != ASTRA_OK) return result;
     outer.direction = ASTRA_FLEX_COLUMN;
     outer.align_items = ASTRA_FLEX_ALIGN_STRETCH;
     outer.padding_left = outer.padding_right = 0u;
@@ -598,6 +613,7 @@ static AstraResult layout(void)
 static AstraResult build_view(AstraHandle gui)
 {
     AstraFilePanelInfo info = ASTRA_FILE_PANEL_INFO_INIT;
+    AstraFileInspectorInfo inspector_info = ASTRA_FILE_INSPECTOR_INFO_INIT;
     AstraStatusBarInfo status = ASTRA_STATUS_BAR_INFO_INIT;
     AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
     AstraScrollModelInfo column_scroll = ASTRA_SCROLL_MODEL_INFO_INIT;
@@ -629,12 +645,17 @@ static AstraResult build_view(AstraHandle gui)
         {"Modified", 8u, {0u, 0u}}
     };
     AstraChoiceInfo sort = ASTRA_CHOICE_INFO_INIT;
+    AstraToggleInfo preview = ASTRA_TOGGLE_INFO_INIT;
     AstraToggleInfo hidden = ASTRA_TOGGLE_INFO_INIT;
     sort.id = SORT_CONTROL_ID;
     sort.items = sort_choices;
     sort.item_count = sizeof(sort_choices) / sizeof(sort_choices[0]);
     sort.selected = sort_mode;
     sort.state = ASTRA_CONTROL_DISABLED;
+    preview.id = PREVIEW_CONTROL_ID;
+    preview.text = "Preview";
+    preview.text_length = sizeof("Preview") - 1u;
+    preview.state = ASTRA_CONTROL_SELECTED;
     hidden.id = HIDDEN_CONTROL_ID;
     hidden.text = "Hidden files";
     hidden.text_length = sizeof("Hidden files") - 1u;
@@ -642,8 +663,10 @@ static AstraResult build_view(AstraHandle gui)
     item.parent_id = TOOLBAR_FIRST_ID;
     item.shrink = 0u;
     if (astra_interface_popup_init(&controls[SORT_CONTROL_INDEX], &sort) != ASTRA_OK ||
+        astra_interface_checkbox_init(&controls[PREVIEW_CONTROL_INDEX], &preview) != ASTRA_OK ||
         astra_interface_checkbox_init(&controls[HIDDEN_CONTROL_INDEX], &hidden) != ASTRA_OK ||
         astra_interface_control_set_flex(&controls[SORT_CONTROL_INDEX], &item) != ASTRA_OK ||
+        astra_interface_control_set_flex(&controls[PREVIEW_CONTROL_INDEX], &item) != ASTRA_OK ||
         astra_interface_control_set_flex(&controls[HIDDEN_CONTROL_INDEX], &item) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = 0u; at < BROWSER_COLUMNS; ++at) {
@@ -705,6 +728,18 @@ static AstraResult build_view(AstraHandle gui)
     if (astra_interface_status_bar_init(
             BROWSER_CONTROL(BROWSER_PANEL_CONTROL_COUNT), &status) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    inspector_info.first_id = INSPECTOR_FIRST_ID;
+    inspector_info.parent_id = 1u + ASTRA_FILE_PANEL_CONTENT;
+    inspector_info.placeholder_icon = &file_icon;
+    {
+        AstraResult inspector_result = astra_interface_file_inspector_init(
+            &inspector, INSPECTOR_CONTROL(0), &inspector_info);
+        if (inspector_result != ASTRA_OK) {
+            (void)astra_log_failure("atlas inspector init",
+                (uint32_t)(-inspector_result));
+            return inspector_result;
+        }
+    }
     item.parent_id = 1u;
     if (astra_interface_control_set_flex(
             BROWSER_CONTROL(BROWSER_PANEL_CONTROL_COUNT), &item) != ASTRA_OK)
@@ -731,20 +766,37 @@ static AstraResult build_view(AstraHandle gui)
     item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
     item.grow = 1u;
     if (astra_interface_control_set_flex(BROWSER_CONTROL(ASTRA_FILE_PANEL_ROOT),
-            &item) != ASTRA_OK ||
-        astra_interface_ui_init(&ui, controls, UI_CONTROL_COUNT,
-            width, height) != ASTRA_OK ||
-        astra_interface_ui_set_state(&ui,
-            BROWSER_CONTROL(ASTRA_FILE_PANEL_LOCATION_ROW),
-            ASTRA_CONTROL_COLLAPSED) != ASTRA_OK ||
-        astra_interface_ui_set_state(&ui,
-            BROWSER_CONTROL(ASTRA_FILE_PANEL_TOOLS),
-            ASTRA_CONTROL_COLLAPSED) != ASTRA_OK ||
-        astra_interface_table_set_sort(&ui,
-            BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST), sort_mode,
-            sort_reverse) != ASTRA_OK ||
-        layout() != ASTRA_OK)
+            &item) != ASTRA_OK) {
+        (void)astra_log_failure("atlas root flex", 1u);
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
+    if (astra_interface_ui_init(&ui, controls, UI_CONTROL_COUNT,
+            width, height) != ASTRA_OK) {
+        (void)astra_log_failure("atlas ui init", 2u);
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
+    if (astra_interface_ui_set_state(&ui,
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_LOCATION_ROW),
+            ASTRA_CONTROL_COLLAPSED) != ASTRA_OK) {
+        (void)astra_log_failure("atlas location state", 3u);
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
+    if (astra_interface_ui_set_state(&ui,
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_TOOLS),
+            ASTRA_CONTROL_COLLAPSED) != ASTRA_OK) {
+        (void)astra_log_failure("atlas tools state", 4u);
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
+    if (astra_interface_table_set_sort(&ui,
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST), sort_mode,
+            sort_reverse) != ASTRA_OK) {
+        (void)astra_log_failure("atlas table sort", 6u);
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
+    if (layout() != ASTRA_OK) {
+        (void)astra_log_failure("atlas initial layout", 7u);
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
     view_action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
     view_action.control_id = 1u + ASTRA_FILE_PANEL_VIEW;
     view_action.value = ASTRA_FILE_PANEL_VIEW_GRID;
@@ -830,9 +882,44 @@ static void browser_clear_children(void)
     }
 }
 
+static AstraResult browser_update_inspector(void)
+{
+    const AstraDirectorySnapshot *snapshot = &directory;
+    const char *parent = root;
+    const AstraDirectoryEntry *entry = NULL;
+    const AstraSurface *icon = NULL;
+
+    if (selected_path[0] != '\0' && selected_depth < BROWSER_COLUMNS) {
+        if (selected_depth != 0u) {
+            snapshot = &child_directories[selected_depth - 1u];
+            parent = child_paths[selected_depth - 1u];
+        }
+        if (snapshot->status == ASTRA_VFS_OK)
+            for (uint32_t at = 0u; at < snapshot->count; ++at) {
+                char path[ASTRA_VFS_PATH_MAX];
+                if (astra_folder_path(parent, snapshot->entries[at].name,
+                        path, sizeof(path)) != ASTRA_VFS_OK ||
+                    strcmp(path, selected_path) != 0)
+                    continue;
+                entry = &snapshot->entries[at];
+                if (selected_depth == 0u && browser_entry_icons != NULL &&
+                    at < directory.count)
+                    icon = browser_entry_icons[at];
+                break;
+            }
+    }
+    if (icon == NULL && entry != NULL)
+        icon = entry->kind == ASTRA_VFS_KIND_DIRECTORY ?
+            &folder_icon : &file_icon;
+    return astra_interface_file_inspector_set(&inspector, &ui,
+        INSPECTOR_CONTROL(0), entry, icon);
+}
+
 static AstraResult browser_update_status(void)
 {
     AstraString line;
+    AstraResult result = browser_update_inspector();
+    if (result != ASTRA_OK) return result;
     astra_string_init(&line, browser_status, sizeof(browser_status));
     if (directory.status != ASTRA_VFS_OK) {
         (void)astra_string_append(&line, message());
@@ -997,8 +1084,16 @@ static AstraResult paint(void)
                     (uint32_t)(-result));
                 break;
             }
+            const AstraSurface *inspector_source = inspector.image.image;
+            const AstraSurface *const *sources = browser_entry_icons;
+            uint32_t source_count = browser.entry_count;
+            if (at >= TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT +
+                      BROWSER_CONTROL_COUNT) {
+                sources = &inspector_source;
+                source_count = 1u;
+            }
             result = astra_draw_list_append_view_with_sources(&list,
-                &browser_view, browser_entry_icons, browser.entry_count);
+                &browser_view, sources, source_count);
             if (result != ASTRA_OK)
                 (void)astra_log_failure("atlas browser append",
                     (uint32_t)(-result));
@@ -2670,6 +2765,14 @@ static AstraResult run(AstraHandle gui)
                     if (opened != ASTRA_OK)
                         (void)astra_log_failure("atlas sort menu", (uint32_t)(-opened));
                 }
+                repaint = 1u;
+                result = astra_window_event_try(&window, &event);
+                continue;
+            }
+            if (action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+                action.control_id == PREVIEW_CONTROL_ID) {
+                preview_visible = action.value != 0;
+                if (layout() != ASTRA_OK) return ASTRA_ERROR_IO;
                 repaint = 1u;
                 result = astra_window_event_try(&window, &event);
                 continue;

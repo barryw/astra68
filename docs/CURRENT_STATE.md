@@ -2,6 +2,25 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared inspector checkpoint, 2026-10-30: Interface Kit 12.2 adds a
+reusable file inspector composed from Container, Image View, and Labels.
+Atlas binds its selected directory entry and icon to that control and adds
+a Preview checkbox; the pane collapses below 850 px. Shared Table row
+formatting supplies file kind, size, and UTC modified date. Haiku read-only
+reference: `src/kits/tracker/infowindow/InfoWindow.cpp` and
+`GeneralInfoView.cpp` separate metadata presentation from browsing. Beast
+Interface tests and Atlas bundle build pass. DE25 targeted install of
+Interface Kit 12.2 and Atlas passed. Atlas opened DH0, showed 17 entries,
+and selecting `astra_events.cat` updated inspector name, kind, size, and
+modified date. Preview checkbox hid the pane and expanded the grid. Initial
+trial found misuse of choice value API for checkbox;
+second found missing borrowed icon in draw source list. Both were fixed and
+verified on DE25. NDK `dist-check` passed. RFB captures were SHA-verified
+against board originals and archived on Beast at
+`/mnt/Documents/astra68/atlas-inspector-20261030/`; board trial files removed.
+`astra.service` active, zero restarts, 8.2 GiB free. Remaining Atlas work:
+List row expansion, Recent/saved queries, and drag and drop.
+
 Atlas shared sort marker checkpoint, 2026-10-30: Interface Kit 12.1 adds
 `astra_interface_table_set_sort`, a presentation-only API for active Table
 column and direction. It reuses the shared stepper arrow renderer and leaves

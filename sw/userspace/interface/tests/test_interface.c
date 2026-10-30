@@ -5094,6 +5094,49 @@ static uint32_t file_panel_test_type(void *context,
     return filter_index == 0u || strcmp(entry->name, "readme.txt") != 0;
 }
 
+static void test_file_inspector(void)
+{
+    AstraSurface icon = ASTRA_SURFACE_INIT;
+    AstraDirectoryEntry entry = {
+        .name = "zork1.z3", .kind = ASTRA_VFS_KIND_FILE,
+        .byte_size = 1234u, .mtime = 1735689600
+    };
+    AstraContainerInfo parent = ASTRA_CONTAINER_INFO_INIT;
+    AstraFileInspector inspector = ASTRA_FILE_INSPECTOR_INIT;
+    AstraFileInspectorInfo info = ASTRA_FILE_INSPECTOR_INFO_INIT;
+    AstraControl controls[1u + ASTRA_FILE_INSPECTOR_CONTROL_COUNT];
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraSurfaceView surface = render_view(500u, 300u);
+
+    icon._private_handle = 42u;
+    icon._private_window = 1u;
+    icon._private_id = 7u;
+    icon._private_width = icon._private_height = 64u;
+    icon._private_flags = ASTRA_SURFACE_DRAW_SOURCE;
+    parent.id = 99u;
+    parent.layout.direction = ASTRA_FLEX_ROW;
+    assert(astra_interface_container_init(&controls[0], &parent) == ASTRA_OK);
+    info.first_id = 100u;
+    info.parent_id = 99u;
+    info.placeholder_icon = &icon;
+    assert(astra_interface_file_inspector_init(&inspector, &controls[1],
+        &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls,
+        1u + ASTRA_FILE_INSPECTOR_CONTROL_COUNT, 500u, 300u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_file_inspector_set(&inspector, &context,
+        &controls[1], &entry, &icon) == ASTRA_OK);
+    assert(strcmp(inspector.name, "zork1.z3") == 0);
+    assert(strcmp(inspector.kind, "Kind: File") == 0);
+    assert(strcmp(inspector.size_text, "Size: 1234 B") == 0);
+    assert(strcmp(inspector.modified, "Modified: 2025-01-01 00:00Z") == 0);
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(astra_interface_file_inspector_set(&inspector, &context,
+        &controls[1], NULL, NULL) == ASTRA_OK);
+    assert(strcmp(inspector.name, "Select an item") == 0);
+}
+
 static void test_shared_file_panel(void)
 {
     AstraDirectoryEntry entries[3] = {
@@ -5748,6 +5791,7 @@ int main(void)
     test_secure_and_search_fields();
     test_composed_fields_and_colour_well();
     test_shared_colour_panel();
+    test_file_inspector();
     test_shared_file_panel();
     test_shared_font_panel();
     test_text_field_rejections();
