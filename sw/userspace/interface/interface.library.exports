@@ -44,6 +44,7 @@ ASTRA_INTERFACE_12.0 {
         astra_interface_file_panel_set_places;
         astra_interface_file_panel_set_icons;
         astra_interface_file_panel_set_column;
+        astra_interface_file_panel_set_content_active;
         astra_interface_file_panel_action;
         astra_interface_file_panel_context_entry;
         astra_interface_file_panel_context_place;

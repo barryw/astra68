@@ -2,6 +2,32 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas Recent Items checkpoint, 2026-10-30: Filesystem Kit 15.9 owns a private
+HOME recent-item store with synced complete records, bounded retention,
+newest-first distinct paths, and exact removable volume references. It reuses
+the same internal document I/O as saved searches. Interface Kit 12.5 adds a
+shared File Panel content switch; Atlas binds its recent snapshot into the
+existing Table and ScrollView. Haiku read-only references:
+`src/servers/registrar/RecentEntries.cpp`,
+`src/kits/tracker/PoseView.cpp`, and
+`src/kits/interface/OutlineListView.cpp`; Astra keeps storage in Filesystem Kit,
+presentation in shared controls, and file-open policy in Atlas. DE25 revealed
+an Atlas user fault in new storage code: MC68040 compiler reported a 9,024-byte
+snapshot frame on a 4 KiB user stack. Heap-backed scratch reduced that frame
+to 540 bytes; existing saved-search paths also measured up to 18,048 bytes and
+now measure at most 496 bytes. The Filesystem Kit library contract runs the
+existing target stack-usage checker with a 1,024-byte per-function budget for
+both features. Beast saved-query/recent-item tests and library contract pass.
+NDK `dist-check` passes, including documentation coverage and CMake consumers.
+DE25 targeted installs passed: opening `/dh0/events` and Terminal.app produced
+two Recent rows, with folder opening fixed to record the stable current path;
+saved search Save, Rename, restart/reload, and Remove passed with a disposable
+query. No kernel panic or service restart observed. Remaining Atlas design
+work: shared expandable List rows. SHA-verified RFB evidence and fault journal
+are on Beast at `/mnt/Documents/astra68/atlas-recent-20261030/`; board trial
+captures were removed, both production services remain active with zero
+restarts, and board free space is 8.2 GiB.
+
 Atlas drag/drop checkpoint, 2026-10-30: System Kit 4.6 adds exact MIME lookup
 for any validated ACLP document, so clipboard and display-owned drag documents
 share one parser. Interface Kit 12.4 owns pointer hit testing, collection row

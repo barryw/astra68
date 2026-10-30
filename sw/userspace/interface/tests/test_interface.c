@@ -5248,6 +5248,14 @@ static void test_shared_file_panel(void)
                ASTRA_CONTROL_COLLAPSED);
     assert(astra_interface_ui_init(&context, controls,
         ASTRA_FILE_PANEL_CONTROL_COUNT, 420u, 480u) == ASTRA_OK);
+    assert(astra_interface_file_panel_set_content_active(&panel, &context,
+        controls, 0u) == ASTRA_OK);
+    assert((controls[ASTRA_FILE_PANEL_SCROLL]._private_state &
+        ASTRA_CONTROL_COLLAPSED) != 0u);
+    assert(astra_interface_file_panel_set_content_active(&panel, &context,
+        controls, 1u) == ASTRA_OK);
+    assert((controls[ASTRA_FILE_PANEL_SCROLL]._private_state &
+        ASTRA_CONTROL_COLLAPSED) == 0u);
     layout.direction = ASTRA_FLEX_COLUMN;
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
     assert(astra_interface_file_panel_set_places(&panel, &context, controls,

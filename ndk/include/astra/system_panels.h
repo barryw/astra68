@@ -541,6 +541,20 @@ AstraResult astra_interface_file_panel_set_column(AstraFilePanel *panel,
     const char *directory, const AstraDirectoryEntry *entries,
     uint32_t entry_count, AstraCollectionItem *items, uint32_t capacity);
 
+/** Show or hide the File Panel's current directory view while a caller-owned
+ * sibling presents another collection, such as Recent Items. The active
+ * List/Grid/Columns view is restored without changing its selection or mode.
+ * @since Interface Kit 12.5.
+ * @param panel Initialized File Panel.
+ * @param context Owning UI context.
+ * @param controls Panel's retained control array.
+ * @param active Nonzero to show its current directory view, zero to hide it.
+ * @return ASTRA_OK or a validation/update error.
+ */
+AstraResult astra_interface_file_panel_set_content_active(
+    const AstraFilePanel *panel, AstraUIContext *context,
+    AstraControl *controls, uint32_t active);
+
 /** Route one normal UI action. Save returns OVERWRITE for an existing regular
  * file, allowing the caller to present confirmation before creating it.
  * @param panel Initialized Open/Save panel.
@@ -570,6 +584,12 @@ AstraResult astra_interface_file_panel_context_entry(
 /** Map any File Panel collection hit to its directory entry. Shared by
  * context menus and drag/drop; row -1 means blank space.
  * @since Interface Kit 12.4.
+ * @param panel Initialized File Panel.
+ * @param control_id Hit collection control ID.
+ * @param row Hit row, or -1 for blank space.
+ * @param entry_index Receives source entry index or UINT32_MAX.
+ * @param depth Receives Columns depth, or zero for List and Grid.
+ * @return ASTRA_OK or a validation error.
  */
 AstraResult astra_interface_file_panel_entry_at(
     const AstraFilePanel *panel, uint32_t control_id, int32_t row,
@@ -590,6 +610,11 @@ AstraResult astra_interface_file_panel_context_place(
 
 /** Map any Places collection hit to its original sidebar row.
  * @since Interface Kit 12.4.
+ * @param panel Initialized File Panel.
+ * @param control_id Hit collection control ID.
+ * @param row Hit row, or -1 for blank space.
+ * @param place_index Receives source Place index or UINT32_MAX.
+ * @return ASTRA_OK or a validation error.
  */
 AstraResult astra_interface_file_panel_place_at(
     const AstraFilePanel *panel, uint32_t control_id, int32_t row,
@@ -600,6 +625,12 @@ AstraResult astra_interface_file_panel_place_at(
  * that view's current directory; Places rows resolve to their path. Files and
  * action-only Places return NOT_PRESENT. Caller owns write policy.
  * @since Interface Kit 12.4.
+ * @param panel Initialized File Panel.
+ * @param control_id Hit collection control ID.
+ * @param row Hit row, or -1 for blank space.
+ * @param path Receives absolute directory path on success.
+ * @param capacity Bytes available in path, including terminating zero.
+ * @return ASTRA_OK, ASTRA_ERROR_NOT_PRESENT, or a validation error.
  */
 AstraResult astra_interface_file_panel_directory_at(
     const AstraFilePanel *panel, uint32_t control_id, int32_t row,

@@ -116,8 +116,20 @@ refuse the drop before transfer. Haiku's
 `CanCopyOrMoveForeignDrag`) informed the action/target split without adopting
 Tracker-specific messages or UI geometry.
 
-Remaining design work: shared List row expansion and Recent items. These
-need common controls or native recent-item storage, not Atlas-only widgets.
+Recent Items uses Filesystem Kit 15.9 for one private HOME store of validated,
+synced records. Atlas records successful opens and shows an owned snapshot in
+Interface Kit's Table and ScrollView, using File Panel's shared content switch
+to preserve List, Grid, or Columns state. Removable records retain exact volume
+identity and disappear when that incarnation is gone. Atlas owns only the
+opened-path policy and Table binding. Opening a folder records the stable
+current directory after File Panel navigation, since its action target is
+mutable. Filesystem Kit's document storage and stack budget gate also cover
+saved queries. Haiku read-only references: `src/servers/registrar/RecentEntries.cpp`
+for centralized recent-entry state and `src/kits/tracker/PoseView.cpp` for
+opening entries through the same file actions.
+
+Remaining design work: expandable folder rows in List. This needs a shared
+outline table with lazy directory loading, not an Atlas-only renderer.
 
 Keyboard bindings use Interface Kit's shared command shortcut dispatcher and
 existing responder chain. Atlas owns only its binding table and suppresses

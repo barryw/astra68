@@ -47,6 +47,11 @@ the Table header never resolves to a file.
 its original sidebar row. It returns `UINT32_MAX` for blank space or another
 control, so browser applications can attach place commands without
 reimplementing List hit testing.
+Interface Kit 12.5 adds `astra_interface_file_panel_set_content_active` for a
+caller-owned alternate collection under the same File Panel. It hides or
+restores List, Grid, and Columns content while retaining the active view mode
+and selection. Atlas uses it to show a shared Table of recent items in the
+ordinary browser frame.
 Table header clicks emit `ASTRA_UI_ACTION_SORT_REQUESTED` with a zero-based
 column. Applications sort their data and call
 `astra_interface_table_set_sort` to mark the active column and direction;

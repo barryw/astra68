@@ -22,6 +22,17 @@ substring. Applications own presentation and may reuse the same store.
 temporary file and atomic rename, preserving its filename and search. It
 checks the caller's snapshot against the current record before updating.
 
+ABI 15.9 adds `astra_recent_item_record` and owned recent-item snapshots.
+Applications record successfully opened files, folders, and bundles in one
+private HOME store; the library owns synced publication, newest-first ordering,
+duplicate path collapse, and the 64-event retention limit. Each record carries
+an exact volume reference for removable media. Applications check that reference
+against the current volume catalog before presenting or reopening a result.
+Missing stores return an empty snapshot; malformed records are skipped.
+`astra_recent_item_snapshot_close` releases snapshot storage. Saved searches and
+recent items share internal document I/O and a target stack-frame gate, so
+client code never implements their wire formats or write protocol.
+
 The native ABI is not a libc ABI. `libc.library.4` provides the POSIX file
 API -- descriptors, the current directory, `errno`, and stdio -- over these
 same operations; a POSIX program uses it instead. See the repository's

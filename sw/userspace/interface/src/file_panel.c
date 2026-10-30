@@ -1368,6 +1368,30 @@ static AstraResult file_panel_save_name(AstraFilePanel *panel,
     return ASTRA_OK;
 }
 
+AstraResult astra_interface_file_panel_set_content_active(
+    const AstraFilePanel *panel, AstraUIContext *context,
+    AstraControl *controls, uint32_t active)
+{
+    AstraResult result;
+    if (panel == NULL || panel->size != sizeof(*panel) ||
+        context == NULL || controls == NULL || active > 1u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_interface_ui_set_state(context,
+        &controls[ASTRA_FILE_PANEL_SCROLL],
+        active != 0u && panel->view_mode == ASTRA_FILE_PANEL_VIEW_LIST ?
+            0u : ASTRA_CONTROL_COLLAPSED);
+    if (result != ASTRA_OK) return result;
+    result = astra_interface_ui_set_state(context,
+        &controls[ASTRA_FILE_PANEL_GRID_SCROLL],
+        active != 0u && panel->view_mode == ASTRA_FILE_PANEL_VIEW_GRID ?
+            0u : ASTRA_CONTROL_COLLAPSED);
+    if (result != ASTRA_OK || panel->column_count == 0u) return result;
+    return astra_interface_ui_set_state(context,
+        &controls[ASTRA_FILE_PANEL_CONTROL_COUNT],
+        active != 0u && panel->view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS ?
+            0u : ASTRA_CONTROL_COLLAPSED);
+}
+
 AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
     AstraUIContext *context, AstraControl *controls,
     const AstraUIAction *action, uint32_t *outcome)
@@ -1457,24 +1481,16 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
             (panel->column_count != 0u ? 2 : 1))
             return ASTRA_ERROR_INVALID_ARGUMENT;
         next = (uint32_t)action->value;
-        result = astra_interface_ui_set_state(context,
-            &controls[ASTRA_FILE_PANEL_SCROLL],
-            next == ASTRA_FILE_PANEL_VIEW_LIST ? 0u :
-                ASTRA_CONTROL_COLLAPSED);
-        if (result != ASTRA_OK) return result;
-        result = astra_interface_ui_set_state(context,
-            &controls[ASTRA_FILE_PANEL_GRID_SCROLL],
-            next == ASTRA_FILE_PANEL_VIEW_GRID ? 0u :
-                ASTRA_CONTROL_COLLAPSED);
-        if (result != ASTRA_OK) return result;
-        if (panel->column_count != 0u) {
-            result = astra_interface_ui_set_state(context,
-                &controls[ASTRA_FILE_PANEL_CONTROL_COUNT],
-                next == ASTRA_FILE_PANEL_VIEW_COLUMNS ? 0u :
-                    ASTRA_CONTROL_COLLAPSED);
-            if (result != ASTRA_OK) return result;
-        }
+        uint32_t previous_mode = panel->view_mode;
         panel->view_mode = next;
+        result = astra_interface_file_panel_set_content_active(panel,
+            context, controls, 1u);
+        if (result != ASTRA_OK) {
+            panel->view_mode = previous_mode;
+            (void)astra_interface_file_panel_set_content_active(panel,
+                context, controls, 1u);
+            return result;
+        }
         if (transfer != 0u)
             return astra_interface_collection_mirror_primary(context,
                 &controls[next == ASTRA_FILE_PANEL_VIEW_LIST ?

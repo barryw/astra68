@@ -30,7 +30,7 @@ def main() -> int:
     arguments = parser.parse_args()
     failures = oversized(arguments.files, arguments.maximum)
     if failures:
-        print("kernel stack frame budget exceeded:")
+        print("stack frame budget exceeded:")
         for failure in failures:
             print(f"  {failure}")
         return 1

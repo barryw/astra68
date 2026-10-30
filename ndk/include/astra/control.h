@@ -1286,10 +1286,11 @@ typedef struct AstraUIAction {
 
 /** Shared pointer threshold state for starting a native drag. */
 typedef struct AstraDragGesture {
-    int32_t start_x;
-    int32_t start_y;
-    uint32_t armed;
+    int32_t start_x; /**< Pointer-down client x coordinate. */
+    int32_t start_y; /**< Pointer-down client y coordinate. */
+    uint32_t armed; /**< Nonzero while a drag source awaits threshold. */
 } AstraDragGesture;
+/** Empty drag-threshold state. */
 #define ASTRA_DRAG_GESTURE_INIT { 0, 0, 0u }
 
 ASTRA_EXTERN_C_END

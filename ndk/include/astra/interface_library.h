@@ -23,7 +23,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.12. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 12u
 /** Current Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 4u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 5u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -757,6 +757,12 @@ AstraResult astra_interface_ui_geometry(const AstraUIContext *context,
  * for blank collection space or controls without rows. A miss returns ID 0.
  * Uses the same clipped geometry and row mapping as context-menu dispatch.
  * @since Interface Kit 12.4.
+ * @param context Retained UI context with current layout.
+ * @param x Client-local pointer x coordinate.
+ * @param y Client-local pointer y coordinate.
+ * @param control_id Receives hit control ID, or zero on a miss.
+ * @param row Receives collection row, or -1 outside a row.
+ * @return ASTRA_OK or a validation error.
  */
 AstraResult astra_interface_ui_pointer_hit(const AstraUIContext *context,
     int32_t x, int32_t y, uint32_t *control_id, int32_t *row);
@@ -765,6 +771,11 @@ AstraResult astra_interface_ui_pointer_hit(const AstraUIContext *context,
  * dispatch; source_hit matters on button down only. A trigger disarms until
  * next down, leaving document creation to the application.
  * @since Interface Kit 12.4.
+ * @param gesture Caller-owned drag threshold state.
+ * @param event Pointer or reset event to observe.
+ * @param source_hit Nonzero when pointer down began over a drag source.
+ * @param triggered Receives one when threshold is crossed, otherwise zero.
+ * @return ASTRA_OK or a validation error.
  */
 AstraResult astra_interface_drag_gesture_event(AstraDragGesture *gesture,
     const AstraWindowEvent *event, uint32_t source_hit, uint32_t *triggered);

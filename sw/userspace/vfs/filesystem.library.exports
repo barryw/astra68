@@ -222,4 +222,7 @@ ASTRA_FILESYSTEM_15.8 {
         astra_saved_query_load;
         astra_saved_query_snapshot_open;
         astra_saved_query_snapshot_close;
+        astra_recent_item_record;
+        astra_recent_item_snapshot_open;
+        astra_recent_item_snapshot_close;
 } ASTRA_FILESYSTEM_15.7;
