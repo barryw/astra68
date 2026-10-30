@@ -349,6 +349,8 @@ typedef struct AstraFilePanel {
     _Alignas(4) uint8_t search_metadata[4096]; /**< Search metadata. */
     char search_query[ASTRA_VFS_NAME_MAX]; /**< Current search query. */
     uint32_t search_length; /**< Query length in bytes. */
+    AstraTableModel list_table; /**< Shared metadata table over List selection. */
+    void *list_rows; /**< Interface Kit-owned table cell and text block. */
     uint32_t reserved[4]; /**< Must be zero. */
 } AstraFilePanel;
 
@@ -364,6 +366,12 @@ typedef struct AstraFilePanel {
  * @return ASTRA_OK or a validation/capacity error. */
 AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     AstraControl *controls, const AstraFilePanelInfo *info);
+
+/** Release List metadata storage after controls stop using this panel.
+ * @param panel Initialized File Panel, or NULL.
+ * @since Interface Kit 11.0.
+ */
+void astra_interface_file_panel_dispose(AstraFilePanel *panel);
 
 /** Replace the viewed directory after the caller loads a new snapshot. The
  * previous entries/items must remain alive until this function succeeds.

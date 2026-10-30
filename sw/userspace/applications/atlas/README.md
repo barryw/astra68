@@ -31,14 +31,19 @@ reference so removal can invalidate the window safely.
 Haiku read-only references: `src/kits/tracker/Navigator.cpp` for path history,
 `src/kits/tracker/ContainerWindow.cpp` for window and Copy/Move commands, and
 `src/kits/tracker/PoseView.cpp` for shared directory presentation and selection
-state, and
+state, including its default Name, Size, and Modified columns, and
 `src/kits/interface/ScrollView.cpp` for viewport and target sizing, and
 `src/kits/interface/Bitmap.cpp` for checked backing storage, and
 `src/kits/interface/View.cpp` and `MenuItem.cpp` for focus and shortcuts. Astra uses
 its native File Panel, command, volume, and graphics contracts rather than
 copying Tracker code.
 
-Remaining design work: rich List columns and row expansion, selection preview,
+The shared File Panel composes List from Interface Kit's Table control. Rows
+show Name, Size, Kind, and UTC Modified columns without an Atlas-only widget;
+Grid and Columns still use the same directory snapshot and selection model.
+Interface Kit ABI 11 includes the table model and a File Panel dispose call.
+
+Remaining design work: List row expansion, selection preview,
 Recent and saved queries, Cut/Move, drag and drop, and multiselection.
 File operations are single-item, and the native clipboard has Copy
 and Paste only. These need shared controls or native volume grant transitions,

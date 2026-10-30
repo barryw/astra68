@@ -1,4 +1,4 @@
-ASTRA_INTERFACE_10.0 {
+ASTRA_INTERFACE_11.0 {
     global:
         astra_interface_menu_init;
         astra_interface_menu_get_state;
@@ -35,6 +35,7 @@ ASTRA_INTERFACE_10.0 {
         astra_interface_colour_panel_color;
         astra_interface_colour_panel_set_recent;
         astra_interface_file_panel_init;
+        astra_interface_file_panel_dispose;
         astra_interface_breadcrumb_init;
         astra_interface_breadcrumb_set_path;
         astra_interface_breadcrumb_target;

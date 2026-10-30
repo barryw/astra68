@@ -3899,6 +3899,8 @@ int astra_main(const AstraStartupInfo *startup)
     }
     if (surface.area != ASTRA_INVALID_HANDLE)
         (void)astra_shared_surface_close(&surface);
+    astra_interface_file_panel_dispose(&gallery_open_panel);
+    astra_interface_file_panel_dispose(&gallery_save_panel);
     if (gallery_font_catalog._private_area.handle != ASTRA_INVALID_HANDLE) {
         AstraResult closed = astra_fonts_catalog_close(&gallery_font_catalog);
         if (closed != ASTRA_OK)

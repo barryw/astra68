@@ -2855,6 +2855,7 @@ int astra_main(const AstraStartupInfo *startup)
     }
     /* Native process teardown owns a worker still retiring; never free its state. */
     if (worker == 0u) {
+        astra_interface_file_panel_dispose(&browser);
         browser_clear_children();
         astra_runtime_deallocate(browser_entry_icons);
         astra_runtime_deallocate(browser_grid_icons);

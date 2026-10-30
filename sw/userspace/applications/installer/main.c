@@ -460,6 +460,7 @@ int astra_main(const AstraStartupInfo *startup)
     }
     if (surface.area != ASTRA_INVALID_HANDLE)
         (void)astra_shared_surface_close(&surface);
+    astra_interface_file_panel_dispose(&picker);
     astra_directory_snapshot_dispose(&picker_snapshots[0]);
     astra_directory_snapshot_dispose(&picker_snapshots[1]);
     astra_runtime_deallocate(picker_items[0]);

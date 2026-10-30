@@ -18,7 +18,7 @@ HOST_FLAGS := -O2
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
-INTERFACE_TARGET := build/m68k/libraries/interface.library.10
+INTERFACE_TARGET := build/m68k/libraries/interface.library.11
 INTERFACE_OBJECTS := build/m68k/interface_library.o build/m68k/control.o \
 	build/m68k/field_family.o \
 	build/m68k/system_panels.o \
@@ -165,7 +165,7 @@ $(INTERFACE_TARGET): $(INTERFACE_OBJECTS) $(INTERFACE_LIBRARY_MAP) \
 		| shared-libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(LIBRARY_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,interface.library.10 \
+		-Wl,-soname,interface.library.11 \
 		-Wl,--version-script=$(INTERFACE_LIBRARY_MAP) \
 		-o $@ $(INTERFACE_OBJECTS) \
 		-L$(dir $(GRAPHICS_LIBRARY)) -L$(dir $(SYSTEM_LIBRARY)) \
@@ -180,34 +180,34 @@ library-contract: $(INTERFACE_TARGET)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(INTERFACE_LIBRARY_MAP) $(INTERFACE_TARGET)
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_button_init@@ASTRA_INTERFACE_10\.0$$'
+		grep -Eq ' astra_interface_button_init@@ASTRA_INTERFACE_11\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_command_invoke@@ASTRA_INTERFACE_10\.0$$'
+		grep -Eq ' astra_interface_command_invoke@@ASTRA_INTERFACE_11\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_list_init@@ASTRA_INTERFACE_10\.0$$'
+		grep -Eq ' astra_interface_list_init@@ASTRA_INTERFACE_11\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_text_view_init@@ASTRA_INTERFACE_10\.0$$'
+		grep -Eq ' astra_interface_text_view_init@@ASTRA_INTERFACE_11\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_text_view_refresh@@ASTRA_INTERFACE_10\.0$$'
+		grep -Eq ' astra_interface_text_view_refresh@@ASTRA_INTERFACE_11\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_settings_pane_init@@ASTRA_INTERFACE_10\.0$$'
+		grep -Eq ' astra_interface_settings_pane_init@@ASTRA_INTERFACE_11\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_toolbar_init@@ASTRA_INTERFACE_10\.0$$'
+		grep -Eq ' astra_interface_toolbar_init@@ASTRA_INTERFACE_11\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_toolbar_set_icons@@ASTRA_INTERFACE_10\.0$$'
+		grep -Eq ' astra_interface_toolbar_set_icons@@ASTRA_INTERFACE_11\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_text_view_set_inverted@@ASTRA_INTERFACE_10\.0$$'
+		grep -Eq ' astra_interface_text_view_set_inverted@@ASTRA_INTERFACE_11\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_image_view_render@@ASTRA_INTERFACE_10\.0$$'
+		grep -Eq ' astra_interface_image_view_render@@ASTRA_INTERFACE_11\.0$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
-		grep -Eq ' astra_interface_text_view_set_wrap_width@@ASTRA_INTERFACE_10\.0$$'
+		grep -Eq ' astra_interface_text_view_set_wrap_width@@ASTRA_INTERFACE_11\.0$$'
 	@! $(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -q 'ASTRA_INTERFACE_5\.1'
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.10 10.0.0 ABI 10.0$$'
+		grep -q '^interface.library.11 11.0.0 ABI 11.0$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
@@ -223,7 +223,7 @@ library-contract: $(INTERFACE_TARGET)
 	$(call ASTRA_CHECK_DSO,$(INTERFACE_TARGET))
 
 $(INTERFACE_HOST_TEST): src/interface_library.c src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/system_panels.c src/file_panel.c src/font_panel.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/text_surface.c src/undo.c \
-		src/text_model.c src/scroll.c $(RUNTIME)/src/string.c $(NDK_HOST_UTF8) tests/test_interface.c \
+		src/text_model.c src/scroll.c $(RUNTIME)/src/string.c ../../common/civil.c ../../common/divide.c $(NDK_HOST_UTF8) tests/test_interface.c \
 		tests/test_layout.c src/text_surface_internal.h src/panel_internal.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) -DASTRA_INTERFACE_TEST \
@@ -298,7 +298,7 @@ sanitize: $(NDK_HOST_UTF8) $(GRAPHICS_FONT_HEADERS) $(GRAPHICS_HOST_SURFACE_SANI
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
 		$(SANITIZER_FLAGS) -DASTRA_INTERFACE_TEST -DASTRA_SYSTEM_TEST \
 		-ffunction-sections -Wl,--gc-sections src/interface_library.c \
-		src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/system_panels.c src/file_panel.c src/font_panel.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/text_surface.c src/undo.c src/text_model.c src/scroll.c $(RUNTIME)/src/string.c \
+		src/control.c src/display_widgets.c src/field_family.c src/settings_pane.c src/system_panels.c src/file_panel.c src/font_panel.c src/form_row.c src/columns.c src/toolbar.c src/toolbar_actions.c src/menu.c src/icon_tile.c src/text_surface.c src/undo.c src/text_model.c src/scroll.c $(RUNTIME)/src/string.c ../../common/civil.c ../../common/divide.c \
 		$(NDK_HOST_UTF8) \
 		tests/test_interface.c tests/test_layout.c \
 		-o build/host/test_interface_sanitize

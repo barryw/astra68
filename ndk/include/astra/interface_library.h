@@ -20,8 +20,8 @@
 #include <astra/undo.h>
 #include <astra/window.h>
 
-/** Breaking Interface Kit ABI generation carried by interface.library.10. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 10u
+/** Breaking Interface Kit ABI generation carried by interface.library.11. */
+#define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 11u
 /** Current Interface Kit revision. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 0u
 

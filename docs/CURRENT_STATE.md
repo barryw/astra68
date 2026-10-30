@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared List checkpoint, 2026-10-30: Interface Kit File Panel now
+composes its List view from the existing Table control, with Name, Size,
+Kind, and UTC Modified columns. Grid, List, and Columns still share one
+directory snapshot, selection, search, sort, and navigation model. File Panel
+owns one allocation for table cells and releases it on refresh, navigation,
+or disposal. Interface Kit ABI is 11; all in-tree clients, manifests, and NDK
+examples use it. Haiku read-only reference:
+`src/kits/tracker/PoseView.cpp` uses Name, Size, and Modified as default
+Tracker columns; Astra adds Kind and keeps its native File Panel contract.
+Beast Interface tests, sanitizer, library contract, app tests, and NDK
+distribution check pass. DE25 targeted install passed; Atlas displayed DH0's
+17 entries with four columns, and its log reported status zero. Production
+services remained active with zero restarts and 8.1 GiB board space free.
+SHA-verified RFB evidence lives at
+`/mnt/Documents/astra68/atlas-list-20261030/` on Beast; disposable board
+captures were removed. Remaining Atlas work: row expansion, selection
+preview, Recent/saved queries, Cut/Move, drag/drop, and multiselection.
+
 Atlas shared-shortcut checkpoint, 2026-10-30: Interface Kit now exposes
 focused-control inspection and a reusable command shortcut dispatcher. Atlas
 supplies only bindings, reuses its menu/toolbar responder commands, and leaves

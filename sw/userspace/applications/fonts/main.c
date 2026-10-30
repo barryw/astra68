@@ -1415,6 +1415,7 @@ int astra_main(const AstraStartupInfo *startup)
     }
     browser_snapshot_dispose(&browser_active);
     browser_snapshot_dispose(&browser_spare);
+    astra_interface_file_panel_dispose(&file_panel);
     browser_places_dispose(&browser_places);
     astra_runtime_deallocate(browser_grid_icons);
     astra_process_filesystem_close(&files);

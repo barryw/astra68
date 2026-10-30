@@ -48,11 +48,11 @@ $(eval $(call astra_app_inventory,build,$(SHIPPED)))
 
 test: all
 	@for app in $(TERMINAL) $(GALLERY) $(ATLAS) $(FONTS) $(DISK_SETUP) $(INSTALLER) $(OPEN_WITH); do \
-		m68k-astra-readelf --version-info "$$app" | grep -q ASTRA_INTERFACE_10.0 || exit 1; \
+		m68k-astra-readelf --version-info "$$app" | grep -q ASTRA_INTERFACE_11.0 || exit 1; \
 		m68k-astra-readelf --version-info "$$app" | grep -q ASTRA_SYSTEM_4.0 || exit 1; \
 		if m68k-astra-readelf --version-info "$$app" | grep -q ASTRA_INTERFACE_5.; then exit 1; fi; \
 	done
-	@m68k-astra-readelf --version-info "$(GALLERY)" | grep -q ASTRA_INTERFACE_10.0
+	@m68k-astra-readelf --version-info "$(GALLERY)" | grep -q ASTRA_INTERFACE_11.0
 
 sanitize analyze:
 	@true

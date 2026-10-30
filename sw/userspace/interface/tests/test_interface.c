@@ -10,9 +10,13 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../src/control_internal.h"
+
+void *astra_runtime_allocate(size_t bytes) { return malloc(bytes); }
+void astra_runtime_deallocate(void *pointer) { free(pointer); }
 
 int astra_interface_test_valid(const AstraAlertInfo *info);
 void astra_interface_test_paint(AstraSurfaceView *surface,
@@ -20,7 +24,7 @@ void astra_interface_test_paint(AstraSurfaceView *surface,
 void astra_interface_test_layout(void);
 
 _Static_assert(sizeof(AstraControl) == (sizeof(void *) == 4u ? 296u : 328u),
-               "Text Undo binding slot must be included in Interface ABI 10");
+               "Text Undo binding slot must be included in Interface ABI 11");
 _Static_assert(sizeof(AstraUIContext) ==
                    (sizeof(void *) == 4u ? 168u : 176u),
                "AstraUIContext ABI 8 layout changed; bump the ABI major");
@@ -4969,7 +4973,8 @@ static void test_shared_file_panel(void)
     AstraDirectoryEntry entries[3] = {
         { .name = ".", .kind = ASTRA_VFS_KIND_DIRECTORY },
         { .name = "Stories", .kind = ASTRA_VFS_KIND_DIRECTORY },
-        { .name = "zork1.z3", .kind = ASTRA_VFS_KIND_FILE }
+        { .name = "zork1.z3", .kind = ASTRA_VFS_KIND_FILE,
+          .byte_size = 1234u, .mtime = 1735689600 }
     };
     AstraDirectoryEntry next_entries[2] = {
         { .name = "planetfall.z3", .kind = ASTRA_VFS_KIND_FILE },
@@ -5027,6 +5032,12 @@ static void test_shared_file_panel(void)
     info.collection = &collection;
     info.scroll = &scroll;
     assert(astra_interface_file_panel_init(&panel, controls, &info) == ASTRA_OK);
+    assert(controls[ASTRA_FILE_PANEL_LIST]._private_control_kind ==
+        ASTRA_CONTROL_TABLE);
+    assert(panel.list_table.column_count == 4u &&
+        panel.list_table.cell_count == 6u &&
+        strcmp(panel.list_table.cells[3].text, "1234 B") == 0 &&
+        strcmp(panel.list_table.cells[5].text, "2025-01-01 00:00Z") == 0);
     assert(collection.item_count == 2u && items[0].id == 2u &&
            controls[ASTRA_FILE_PANEL_NAME]._private_state &
                ASTRA_CONTROL_COLLAPSED);
@@ -5074,6 +5085,8 @@ static void test_shared_file_panel(void)
     assert(astra_interface_file_panel_action(&panel, &context, controls,
         &action, &outcome) == ASTRA_OK && panel.item_count == 1u &&
         panel.items[0].id == 3u);
+    assert(panel.list_table.cell_count == 3u &&
+        strcmp(panel.list_table.cells[0].text, "1234 B") == 0);
     assert(astra_text_model_replace(&panel.search_model, 0u, 4u,
         NULL, 0u) == ASTRA_OK);
     assert(astra_interface_field_refresh(&context,
@@ -5178,6 +5191,8 @@ static void test_shared_file_panel(void)
         &action, &outcome) == ASTRA_OK &&
         outcome == ASTRA_FILE_PANEL_CANCELLED && panel.leaf[0] == '\0');
 
+    astra_interface_file_panel_dispose(&panel);
+
     text_info.content_arena = content;
     text_info.content_arena_bytes = sizeof(content);
     text_info.metadata_arena = metadata;
@@ -5213,6 +5228,8 @@ static void test_shared_file_panel(void)
         &action, &outcome) == ASTRA_OK &&
         outcome == ASTRA_FILE_PANEL_PICKED &&
         strcmp(panel.leaf, "new.z5") == 0);
+
+    astra_interface_file_panel_dispose(&panel);
 
     {
         AstraCollectionModel column_models[2] = {
@@ -5273,6 +5290,7 @@ static void test_shared_file_panel(void)
             &action, &outcome) == ASTRA_OK &&
             outcome == ASTRA_FILE_PANEL_PICKED &&
             strcmp(panel.target, "/dh0/Stories/planetfall.z3") == 0);
+        astra_interface_file_panel_dispose(&panel);
     }
     {
         AstraFilePanelInfo browse = ASTRA_FILE_PANEL_INFO_INIT;
@@ -5328,6 +5346,7 @@ static void test_shared_file_panel(void)
             ASTRA_FILE_PANEL_GRID_SCROLL, &content_frame,
             &content_clip) == ASTRA_OK);
         assert(content_frame.height > 340u);
+        astra_interface_file_panel_dispose(&panel);
     }
 }
 
