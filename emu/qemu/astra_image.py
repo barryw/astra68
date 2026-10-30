@@ -201,6 +201,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "trusted /apps/Terminal.app grants " + TERMINAL_CEILING + "\n"
     "trusted /apps/Atlas.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:rw FONTS:r APPS:r LIBS:r LOG\n"
     "trusted /apps/Fonts.app grants GUI FONT_CATALOG FONTS:r FONTS_ADMIN CLIPBOARD VOLUMES VOLUME_READ DH0:r LIBS:r\n"
+    "trusted /apps/InterfaceGallery.app grants GUI FONT_CATALOG CLIPBOARD LIBS:r\n"
     "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG\n"
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG\n"
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r\n"
@@ -269,7 +270,7 @@ READY_FAIL_CONFIGURATION = dict(CONFIGURATION, **{
 REQUIRED_FAIL_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "service /services/required-absent grants required\n")
 INTERFACE_GALLERY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
-    "application /apps/InterfaceGallery.app grants GUI CLIPBOARD LIBS:r\n")
+    "application /apps/InterfaceGallery.app grants GUI FONT_CATALOG CLIPBOARD LIBS:r\n")
 
 
 def _build_current_userspace():

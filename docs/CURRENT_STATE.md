@@ -2,6 +2,20 @@
 
 Status: active continuation map, 2026-10-29
 
+Interface Gallery showcase checkpoint, 2026-10-29: Gallery now exercises all
+28 native `ASTRA_CONTROL_*` kinds and the shared Open, Save, Font, Colour,
+Alert, Sheet, Tooltip, Notification, Menu Bar, and Context Menu compositions.
+Its Collections tab separates Columns, Table, Tree, Pagination, and Icon Grid
+from Layout: combining both pages exhausted the 16 KiB draw list during scroll
+and exited the app with `ASTRA_ERROR_NO_RESOURCES`. Beast app build, shipped-app
+tests, and image-provider policy tests pass. Targeted DE25 install shows the
+Collections, fully scrolled Layout, fully scrolled Choice, and Panels pages
+without a new render error. Captures, raw framebuffer hashes, and syslog are
+archived at `/mnt/Documents/astra68/interface-gallery-20261029/` on Beast.
+Board trial captures were removed; Astra, audio host, and remote desktop are
+active with zero restarts and 8.1 GiB free. This targeted update has not been
+folded into a new full release image.
+
 Interface Kit control-set checkpoint, 2026-10-29: all nine packages from the
 standalone desktop design audit have shared native implementations at Interface
 ABI 10. Fonts and Installer use the shared Open Panel; Atlas uses shared

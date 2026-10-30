@@ -256,8 +256,9 @@ or primitives.
 
 `InterfaceGallery.app` is the native client-control acceptance application. It
 loads the Graphics and Interface Kits through their public ABIs and exercises
-Label, Button, Checkbox, Radio, Switch, and Slider through their interaction
-states and semantic variants. Its dedicated
+all current Interface Kit control kinds and shared compositions through their
+interaction states and semantic variants. The tab inventory and interaction
+instructions live in [INTERFACE_GALLERY.md](INTERFACE_GALLERY.md). Its dedicated
 image profile launches the same bundle and libraries installed for ordinary
 desktop use; it does not link a private control implementation. The gallery
 also executes target-side reflow workloads at 12, 64, and 256 controls and
