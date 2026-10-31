@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared File Panel decoration checkpoint, 2026-10-31: Atlas's content and
+Places backgrounds plus empty/error text now use Interface Kit 12.12 shared
+draw-list helpers; Atlas supplies only directory status/message. Render order
+keeps the message above Grid, and Recent Items no longer receives the previous
+directory's empty-state overlay. Haiku read-only reference:
+`src/kits/tracker/PoseView.cpp` owns folder presentation while
+`src/kits/tracker/ContainerWindow.cpp` owns window actions; Astra adapts that
+split by keeping reusable panel decoration in Interface Kit and directory
+policy in Atlas. Beast Interface Kit host suite, MC68040 Interface Kit and
+Atlas builds, and NDK dist-check passed. Targeted Kit/Atlas DE25 install passed.
+RFB verified empty
+RAM0 message, populated DH0 Grid, and Recent Items table; board/Beast raw-frame
+SHA-256 matched for selected captures archived at
+`/mnt/Documents/astra68/atlas-shared-file-panel-20261031/`. Trial board files
+were removed. Astra, HDMI audio host, and remote desktop active with zero
+restarts; 8.2 GiB free. Only USB root hub present, so physical USB and optical
+Atlas gates still await media.
+
 Atlas package-open correction, 2026-10-31: Double-clicking existing
 `HOME:/Desktop/ChocolateDoom.apkg` selected Installer through the shared
 File Type and Open With path, but Installer returned startup I/O status 11,

@@ -5,6 +5,10 @@ toolbar, Places sidebar, breadcrumb, search field, Grid/List/Columns switcher,
 context menus, and status bar. The shared File Panel has a `BROWSE` mode so
 Atlas and Open/Save panels share navigation controls. Atlas owns filesystem
 snapshots, path history, folder commands, and file launch policy.
+Interface Kit 12.12 paints the File Panel content and Places backgrounds and
+places empty/error text through shared Astraea draw-list helpers. Atlas supplies
+only its directory status and message. The Recent Items table does not inherit
+an empty-directory message from the last visited volume.
 Interface Kit 12.8 draws shared glyphs for the File Panel's Grid/List/Columns
 switcher. This keeps the design's compact icon switcher available in Atlas and
 Open/Save panels without an Atlas-only control.

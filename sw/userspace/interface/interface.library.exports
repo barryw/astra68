@@ -269,3 +269,9 @@ ASTRA_INTERFACE_12.10 {
     global:
         astra_interface_confirm;
 } ASTRA_INTERFACE_12.9;
+
+ASTRA_INTERFACE_12.12 {
+    global:
+        astra_interface_file_panel_append_backdrop;
+        astra_interface_file_panel_append_message;
+} ASTRA_INTERFACE_12.10;

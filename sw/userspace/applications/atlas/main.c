@@ -1352,6 +1352,8 @@ static AstraResult paint(void)
     AstraFence fence = ASTRA_FENCE_INIT;
     AstraDrawPaint background = ASTRA_DRAW_PAINT_INIT;
     AstraRectI32 whole = {0, 0, width, height};
+    const char *empty_message = NULL;
+    uint32_t empty_fault = 0u;
     AstraResult result;
 
     if (name_edit.active) {
@@ -1363,23 +1365,16 @@ static AstraResult paint(void)
     result = astra_draw_list_create(&content, &whole, &list);
     if (result == ASTRA_OK)
         result = astra_draw_rectangle(&list, &whole, 1, &background);
-    if (result == ASTRA_OK) {
-        AstraControlFrame frame, clip;
-        if (astra_interface_ui_geometry(&ui,
-                TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT + ASTRA_FILE_PANEL_CONTENT,
-                &frame, &clip) == ASTRA_OK) {
-            AstraRectI32 area = {frame.x, frame.y, frame.width, frame.height};
-            background.foreground = theme.surface_raised;
-            result = astra_draw_rectangle(&list, &area, 1, &background);
-        }
-        if (result == ASTRA_OK && astra_interface_ui_geometry(&ui,
-                TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT + ASTRA_FILE_PANEL_PLACES_SCROLL,
-                &frame, &clip) == ASTRA_OK) {
-            AstraRectI32 area = {frame.x, frame.y, frame.width, frame.height};
-            background.foreground = theme.surface_inset;
-            result = astra_draw_rectangle(&list, &area, 1, &background);
-        }
+    if (recent_mode == 0u &&
+        (visible_data == 0u || directory.count == 0u ||
+         directory.status != ASTRA_VFS_OK)) {
+        empty_message = message();
+        empty_fault = volume_lost ||
+            (visible_data != 0u && directory.status != ASTRA_VFS_OK);
     }
+    if (result == ASTRA_OK)
+        result = astra_interface_file_panel_append_backdrop(&browser, &ui,
+            TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT, &list);
     if (result == ASTRA_OK) {
         for (uint32_t at = 0u; at < UI_CONTROL_COUNT && result == ASTRA_OK;
              ++at) {
@@ -1399,14 +1394,10 @@ static AstraResult paint(void)
                     (uint32_t)(-result));
         }
     }
-    if (result == ASTRA_OK && (visible_data == 0u || directory.count == 0u ||
-                               directory.status != ASTRA_VFS_OK)) {
-        const char *text = message();
-        result = astra_draw_ui_text(&list,
-            (AstraPointI32){220, TOOLBAR_HEIGHT + 94u}, text,
-            (uint32_t)strlen(text), theme.title_font_height, 0u,
-            !volume_lost && (visible_data == 0u || directory.status == ASTRA_VFS_OK) ? theme.client_text_secondary : theme.fault);
-    }
+    if (result == ASTRA_OK && empty_message != NULL)
+        result = astra_interface_file_panel_append_message(&browser, &ui,
+            TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT, &list,
+            empty_message, (uint32_t)strlen(empty_message), empty_fault);
     if (result == ASTRA_OK && name_edit.active &&
         edit_saved_filename[0] == '\0' &&
         browser.view_mode == ASTRA_FILE_PANEL_VIEW_GRID) {

@@ -1410,6 +1410,88 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     return result;
 }
 
+static AstraResult file_panel_backdrop_geometry(
+    const AstraFilePanel *panel, const AstraUIContext *context,
+    uint32_t first_control_index, AstraControlFrame *content,
+    AstraControlFrame *places, uint32_t *places_visible)
+{
+    AstraControlFrame clip;
+    AstraResult result;
+
+    if (panel == NULL || panel->size < sizeof(*panel) || context == NULL ||
+        content == NULL || places == NULL || places_visible == NULL)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (context->_private_controls == NULL ||
+        context->_private_control_count < ASTRA_FILE_PANEL_CONTROL_COUNT ||
+        first_control_index > context->_private_control_count -
+            ASTRA_FILE_PANEL_CONTROL_COUNT ||
+        context->_private_controls[first_control_index]._private_id !=
+            panel->first_id)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_interface_ui_geometry(context,
+        first_control_index + ASTRA_FILE_PANEL_CONTENT, content, &clip);
+    if (result != ASTRA_OK) return result;
+    *places_visible = astra_interface_ui_geometry(context,
+        first_control_index + ASTRA_FILE_PANEL_PLACES_SCROLL,
+        places, &clip) == ASTRA_OK &&
+        places->width != 0u && places->height != 0u;
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_file_panel_append_backdrop(
+    const AstraFilePanel *panel, const AstraUIContext *context,
+    uint32_t first_control_index, AstraDrawList *list)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraDrawPaint paint = ASTRA_DRAW_PAINT_INIT;
+    AstraControlFrame content, places;
+    AstraRectI32 area;
+    AstraResult result;
+    uint32_t places_visible;
+
+    if (list == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = file_panel_backdrop_geometry(panel, context,
+        first_control_index, &content, &places, &places_visible);
+    if (result != ASTRA_OK) return result;
+    area = (AstraRectI32){content.x, content.y,
+        content.width, content.height};
+    paint.foreground = theme.surface_raised;
+    result = astra_draw_rectangle(list, &area, 1, &paint);
+    if (result != ASTRA_OK) return result;
+    if (places_visible != 0u) {
+        area = (AstraRectI32){places.x, places.y,
+            places.width, places.height};
+        paint.foreground = theme.surface_inset;
+        result = astra_draw_rectangle(list, &area, 1, &paint);
+        if (result != ASTRA_OK) return result;
+    }
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_file_panel_append_message(
+    const AstraFilePanel *panel, const AstraUIContext *context,
+    uint32_t first_control_index, AstraDrawList *list,
+    const char *message, uint32_t message_length, uint32_t fault)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraControlFrame content, places;
+    AstraResult result;
+    uint32_t places_visible;
+    int32_t message_x;
+
+    if (list == NULL || message == NULL || message_length == 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = file_panel_backdrop_geometry(panel, context,
+        first_control_index, &content, &places, &places_visible);
+    if (result != ASTRA_OK) return result;
+    message_x = places_visible != 0u ?
+        places.x + (int32_t)places.width + 48 : content.x + 48;
+    return astra_draw_ui_text(list,
+        (AstraPointI32){message_x, content.y + 56},
+        message, message_length, theme.title_font_height, 0u,
+        fault != 0u ? theme.fault : theme.client_text_secondary);
+}
+
 static AstraResult file_panel_select_place(AstraUIContext *context,
     AstraControl *controls, const char *directory,
     const AstraFilePanelPlace *places, uint32_t count)

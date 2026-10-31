@@ -38,6 +38,14 @@ added Table state. ABI 12 adds optional caller-owned multi-selection to
 `AstraCollectionModel`. Ctrl/Command toggles items, Shift selects a range,
 and stable IDs preserve selection through sort and refresh. Applications can
 share one selection set across File Panel views.
+Interface Kit 12.12 provides shared File Panel draw-list decoration. Call
+`astra_interface_file_panel_append_backdrop` before appending controls, then
+`astra_interface_file_panel_append_message` after controls when an empty or
+failed directory needs a message. Pass the panel's first control index in the
+owning UI context; the Kit measures the content and Places frames and uses
+theme colors. The caller chooses message text, visibility, and fault severity.
+Both calls emit Astraea commands; apps need no custom pane or empty-state
+pixel renderer.
 File Panel includes symbolic links in directory snapshots. Its Kind column and
 shared inspector label them `Link`; activation returns `PICKED` with the link
 path. The caller decides whether to follow that path when opening it. Save

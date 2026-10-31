@@ -441,6 +441,35 @@ AstraResult astra_interface_file_inspector_set(AstraFileInspector *inspector,
 AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     AstraControl *controls, const AstraFilePanelInfo *info);
 
+/** Append shared File Panel content and Places backgrounds before controls.
+ * Uses Astraea draw commands only.
+ * @param panel Initialized File Panel.
+ * @param context Owning UI context with completed layout.
+ * @param first_control_index Index of panel's first control in context.
+ * @param list Active hardware draw list.
+ * @return ASTRA_OK or a geometry/draw error.
+ * @since Interface Kit 12.12. */
+AstraResult astra_interface_file_panel_append_backdrop(
+    const AstraFilePanel *panel, const AstraUIContext *context,
+    uint32_t first_control_index, AstraDrawList *list);
+
+/** Append a File Panel empty or error message after controls. Message and
+ * visibility policy belong to the caller; Interface Kit owns placement and
+ * theme colors. fault selects the theme's error text color.
+ * @param panel Initialized File Panel.
+ * @param context Owning UI context with completed layout.
+ * @param first_control_index Index of panel's first control in context.
+ * @param list Active hardware draw list.
+ * @param message Borrowed nonempty single-line message.
+ * @param message_length Message length in bytes.
+ * @param fault Nonzero for theme error color.
+ * @return ASTRA_OK or a geometry/draw error.
+ * @since Interface Kit 12.12. */
+AstraResult astra_interface_file_panel_append_message(
+    const AstraFilePanel *panel, const AstraUIContext *context,
+    uint32_t first_control_index, AstraDrawList *list,
+    const char *message, uint32_t message_length, uint32_t fault);
+
 /** Release List metadata storage after controls stop using this panel.
  * @param panel Initialized File Panel, or NULL.
  * @since Interface Kit 11.0.
