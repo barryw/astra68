@@ -2,6 +2,19 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas current USB regression, 2026-10-31: The attached SanDisk Cruzer still
+exposes FAT32 `CLIFAT` `/usb2` and exFAT `CLIEXFAT` `/usb0` writable. Desktop
+and Atlas Places showed both labels. Atlas opened FAT32 and displayed its
+existing `ChocolateDoom.app`, then opened the empty exFAT root. Native
+`volumes` confirmed both mounts; `lsof` found no holders. Board/Beast raw-frame
+SHA-256 matched; verified RGB and PNG evidence is at
+`/mnt/Documents/astra68/atlas-usb-current-20261031/`. No media data changed.
+Astra, HDMI audio, and remote desktop stayed active, Astra restarts zero, and
+board free space 8.1 GiB. Current Atlas implementation covers the requested
+browser and file-action scope. Physical optical and cable-level USB gates were
+passed earlier, but were not repeated with this final Atlas build; only USB is
+attached now. Saved searches remain name-substring and directory-scoped.
+
 Atlas Changed today checkpoint, 2026-10-31: Atlas now shows the design's
 `Changed today` Query as a built-in recursive `/home` search. Opening or
 refreshing it recalculates current UTC calendar-day bounds, matching Astra's

@@ -1,7 +1,7 @@
 # Atlas acceptance status
 
-Status: in progress, 2026-10-31. This records observed behavior, not an
-assumption that every browser path is complete. Current implementation is on
+Status: Atlas implementation complete, 2026-10-31; physical optical regression
+pending media. This records observed behavior. Current implementation is on
 `main`; `docs/CURRENT_STATE.md` holds detailed source and hardware checkpoints.
 
 ## Shared implementation boundary
@@ -85,6 +85,13 @@ restored the icon and `/usb0`. Terminal opened from Atlas in both USB roots:
 removed; Astra, audio host, and remote desktop remained active with zero Astra
 restarts and 8.2 GiB free.
 
+Current-build read-only regression: with the same stick still attached, Atlas
+opened FAT32 `/usb2` and displayed `ChocolateDoom.app`, then opened empty exFAT
+`/usb0`. Desktop and Places showed both filesystem labels. Native `volumes`
+reported both mounted read/write, and `lsof /usb0` and `lsof /usb2` found no
+holders. Board/Beast raw-frame hashes matched; verified RGB/PNG evidence is at
+`/mnt/Documents/astra68/atlas-usb-current-20261031/`. No user data changed.
+
 ## DE25 Changed today gate
 
 Evidence: `/mnt/Documents/astra68/atlas-today-20261031/` on Beast. Selected
@@ -109,8 +116,10 @@ Astra, audio host, and remote desktop stayed active with zero restarts and
 ## Still unproven or incomplete
 
 - Physical optical browsing/ejection and cable-level USB hotplug were not
-  exercised in this gate. No readable optical drive was attached.
-- Saved user queries still persist only a case-insensitive name substring
-  scoped to one directory. Richer persisted predicates and time-zone rules
-  beyond Astra's current UTC clock have not been designed or qualified.
+  repeated with this Atlas build. Earlier DE25 gates passed both with a burned
+  ISO9660 DVD-R and literal USB cable replug on 2026-10-24; no optical drive is
+  attached now. Current Atlas also passed an image-backed ISO9660 `/cd0` gate
+  on 2026-10-31 before the final query change.
+- Saved user queries persist a case-insensitive name substring scoped to one
+  directory. Richer predicates and local time-zone policy remain future scope.
 
