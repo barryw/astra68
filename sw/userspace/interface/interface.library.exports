@@ -254,3 +254,8 @@ ASTRA_INTERFACE_12.7 {
         astra_interface_file_panel_outline_set_expanded;
         astra_interface_collection_text_rect;
 } ASTRA_INTERFACE_12.6;
+
+ASTRA_INTERFACE_12.8 {
+    global:
+        astra_interface_segmented_set_icons;
+} ASTRA_INTERFACE_12.7;

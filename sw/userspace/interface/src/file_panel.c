@@ -1069,6 +1069,10 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
         {"List", 4u, {0u, 0u}}, {"Grid", 4u, {0u, 0u}},
         {"Columns", 7u, {0u, 0u}}
     };
+    static const uint32_t view_icons[] = {
+        ASTRA_TOOLBAR_ICON_LIST, ASTRA_TOOLBAR_ICON_GRID,
+        ASTRA_TOOLBAR_ICON_COLUMNS
+    };
     static const AstraChoiceItem all_files[] = {
         {"All files", 9u, {0u, 0u}}
     };
@@ -1271,6 +1275,10 @@ AstraResult astra_interface_file_panel_init(AstraFilePanel *panel,
     choice.item_count = panel->column_count != 0u ? 3u : 2u;
     result = astra_interface_segmented_init(&controls[ASTRA_FILE_PANEL_VIEW],
         &choice);
+    if (result == ASTRA_OK)
+        result = astra_interface_segmented_set_icons(
+            &controls[ASTRA_FILE_PANEL_VIEW], view_icons,
+            choice.item_count);
     if (result != ASTRA_OK) return result;
     result = astra_panel_child(&controls[ASTRA_FILE_PANEL_VIEW],
         info->first_id + ASTRA_FILE_PANEL_TOOLS, 0u);

@@ -1897,6 +1897,38 @@ static void test_segmented_control(void)
         assert(astra_interface_segmented_init(&control, &info) ==
                ASTRA_ERROR_INVALID_ARGUMENT);
     }
+    {
+        static const uint32_t icons[] = {
+            ASTRA_TOOLBAR_ICON_LIST, ASTRA_TOOLBAR_ICON_GRID,
+            ASTRA_TOOLBAR_ICON_COLUMNS
+        };
+        static const uint32_t invalid[] = {
+            ASTRA_TOOLBAR_ICON_LIST, ASTRA_TOOLBAR_ICON_RAM + 1u,
+            ASTRA_TOOLBAR_ICON_COLUMNS
+        };
+        AstraControl icon_control = ASTRA_CONTROL_INIT;
+        AstraUIContext icon_context = ASTRA_UI_CONTEXT_INIT;
+        AstraControlSize measured = {0};
+        AstraSurfaceView icon_surface = render_view(180u, 40u);
+
+        info.items = items;
+        info.item_count = 3u;
+        assert(astra_interface_segmented_init(&icon_control, &info) == ASTRA_OK);
+        assert(astra_interface_segmented_set_icons(&icon_control, icons, 2u) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_interface_segmented_set_icons(&icon_control, invalid, 3u) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_interface_segmented_set_icons(&icon_control, icons, 3u) ==
+               ASTRA_OK);
+        assert(astra_interface_ui_init(&icon_context, &icon_control, 1u,
+                   180u, 40u) == ASTRA_OK);
+        assert(astra_interface_ui_measure(&icon_context, &icon_control,
+                   &measured) == ASTRA_OK && measured.width < 120u);
+        assert(astra_interface_ui_layout(&icon_context, &layout) == ASTRA_OK);
+        reset_render_calls();
+        assert(astra_interface_ui_render(&icon_context, &icon_surface) == ASTRA_OK);
+        assert(text_calls == 0u && line_calls > 0u);
+    }
 }
 
 static void test_list_control(void)

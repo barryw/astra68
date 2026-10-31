@@ -326,6 +326,13 @@ Numeric actions carry a signed 64-bit value; `decimal_places` is zero for
 integer controls and gives the Dial's fixed-point scale. The controls in the
 following example require `interface.library.12` version 12.0.0 or newer.
 
+Interface Kit 12.8 adds optional shared glyph presentation for Segmented:
+`astra_interface_segmented_set_icons` takes one borrowed
+`ASTRA_TOOLBAR_ICON_*` value per choice before UI attachment. Choice text stays
+the semantic label; pointer and keyboard selection behavior is unchanged.
+File Panel uses List, Grid, and Columns glyphs in its view switcher, so every
+Open, Save, or Browse client gets the same compact control.
+
 `astra_interface_collection_init` validates caller-owned UTF-8 items and
 unique, nonzero 64-bit IDs. Selection uses an item ID; zero means none.
 `astra_interface_list_init` binds one List to that model. Empty lists are

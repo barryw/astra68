@@ -1968,6 +1968,22 @@ AstraResult astra_interface_segmented_init(AstraControl *control,
     return choice_init(control, info, ASTRA_CONTROL_SEGMENTED);
 }
 
+AstraResult astra_interface_segmented_set_icons(AstraControl *control,
+    const uint32_t *icons, uint32_t count)
+{
+    if (control == NULL ||
+        control->_private_structure_size != sizeof(*control) ||
+        control->_private_control_kind != ASTRA_CONTROL_SEGMENTED ||
+        icons == NULL || count != control->_private_text_length)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    for (uint32_t at = 0u; at < count; ++at)
+        if (icons[at] <= ASTRA_TOOLBAR_ICON_NONE ||
+            icons[at] > ASTRA_TOOLBAR_ICON_RAM)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+    control->_private_display_model = icons;
+    return ASTRA_OK;
+}
+
 AstraResult astra_interface_tab_init(AstraControl *control,
                                      const AstraChoiceInfo *info)
 {
@@ -3210,8 +3226,10 @@ static AstraResult measure_control(const AstraControl *control,
                 total_width += item_width + theme.spacing_unit * 6u;
         }
         if (control->_private_control_kind == ASTRA_CONTROL_SEGMENTED)
-            total_width = ((uint64_t)widest + theme.spacing_unit * 4u) *
-                          control->_private_text_length;
+            total_width = (control->_private_display_model != NULL ?
+                (uint64_t)theme.spacing_unit * 6u :
+                (uint64_t)widest + theme.spacing_unit * 4u) *
+                control->_private_text_length;
         if (total_width > UINT32_MAX)
             return ASTRA_ERROR_NO_RESOURCES;
         if (control->_private_control_kind == ASTRA_CONTROL_POPUP &&
@@ -5587,9 +5605,11 @@ static int render_requirements(const AstraUIContext *context,
                     control->_private_minimum_value != control->_private_value)
                     ++*commands;
             }
-            for (uint32_t item = 0u;
-                 item < control->_private_text_length; ++item)
-                *payload += (uint64_t)items[item].text_length + id_length;
+            if (control->_private_control_kind != ASTRA_CONTROL_SEGMENTED ||
+                control->_private_display_model == NULL)
+                for (uint32_t item = 0u;
+                     item < control->_private_text_length; ++item)
+                    *payload += (uint64_t)items[item].text_length + id_length;
             continue;
         }
         if (control->_private_control_kind == ASTRA_CONTROL_LABEL)
@@ -7251,6 +7271,7 @@ static void render_segmented(const AstraTheme *theme,
 {
     const AstraControlFrame *frame = &control->_private_frame;
     const AstraChoiceItem *items = choice_items(control);
+    const uint32_t *icons = control->_private_display_model;
     uint32_t state = effective_state(control);
     uint32_t inset = 2u;
     uint32_t inner_width = frame->width - inset * 2u;
@@ -7310,18 +7331,26 @@ static void render_segmented(const AstraTheme *theme,
             if ((state & ASTRA_CONTROL_DISABLED) == 0u)
                 text_color = theme->client_text;
         }
-        fitted = astra_surface_ui_text_fit(
-            items[at].text, items[at].text_length,
-            theme->control_font_height, right - left);
-        text_width = astra_surface_ui_text_width(
-            items[at].text, fitted, theme->control_font_height);
-        text_x = frame->x + (int32_t)inset + (int32_t)left +
-                 (int32_t)(right - left - text_width) / 2;
-        text_y = frame->y +
-                 (int32_t)(frame->height - theme->control_font_height) / 2;
-        astra_surface_ui_text(surface, text_x, text_y, items[at].text,
-                              fitted, theme->control_font_height,
-                              color(text_color));
+        if (icons != NULL) {
+            render_toolbar_icon(surface, icons[at],
+                frame->x + (int32_t)inset + (int32_t)left +
+                    ((int32_t)(right - left) - 16) / 2,
+                frame->y + (int32_t)(frame->height - 16u) / 2,
+                color(text_color));
+        } else {
+            fitted = astra_surface_ui_text_fit(
+                items[at].text, items[at].text_length,
+                theme->control_font_height, right - left);
+            text_width = astra_surface_ui_text_width(
+                items[at].text, fitted, theme->control_font_height);
+            text_x = frame->x + (int32_t)inset + (int32_t)left +
+                     (int32_t)(right - left - text_width) / 2;
+            text_y = frame->y +
+                     (int32_t)(frame->height - theme->control_font_height) / 2;
+            astra_surface_ui_text(surface, text_x, text_y, items[at].text,
+                                  fitted, theme->control_font_height,
+                                  color(text_color));
+        }
     }
 }
 

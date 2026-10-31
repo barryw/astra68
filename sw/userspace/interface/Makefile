@@ -213,13 +213,15 @@ library-contract: $(INTERFACE_TARGET)
 		grep -Eq ' astra_interface_outline_table_init@@ASTRA_INTERFACE_12\.6$$'
 	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -Eq ' astra_interface_outline_table_set_rows@@ASTRA_INTERFACE_12\.6$$'
+	@$(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
+		grep -Eq ' astra_interface_segmented_set_icons@@ASTRA_INTERFACE_12\.8$$'
 	@! $(READELF) --dyn-syms -W $(INTERFACE_TARGET) | \
 		grep -q 'ASTRA_INTERFACE_5\.1'
 	@python3 $(SYMBOL_OWNERSHIP_CHECK) --readelf $(READELF) \
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.12 12.7.0 ABI 12.7$$'
+		grep -q '^interface.library.12 12.8.0 ABI 12.8$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \

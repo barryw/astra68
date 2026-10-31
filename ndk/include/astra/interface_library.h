@@ -23,7 +23,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.12. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 12u
 /** Current Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 7u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 8u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -226,6 +226,16 @@ AstraResult astra_interface_progress_init(AstraControl *control,
  */
 AstraResult astra_interface_segmented_init(AstraControl *control,
                                            const AstraChoiceInfo *info);
+/** Use shared 16 px glyphs in a segmented selector while retaining each
+ * choice's text label for its semantic identity. Call before UI attachment;
+ * the icon array must remain alive for the control's lifetime.
+ * @param control Initialized segmented selector.
+ * @param icons One nonzero ASTRA_TOOLBAR_ICON_* value per choice.
+ * @param count Number of icons; must match the choice count.
+ * @return ASTRA_OK or a validation error.
+ */
+AstraResult astra_interface_segmented_set_icons(AstraControl *control,
+    const uint32_t *icons, uint32_t count);
 /** Initialize a tab strip.
  * @param control Caller-owned control to initialize.
  * @param info Choice description whose item array remains caller-owned.

@@ -2,6 +2,29 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared view-switcher checkpoint, 2026-10-31: The standalone design uses
+icons for Grid/List/Columns, while File Panel's text Segmented consumed toolbar
+width and forced icon-only File actions on a 1300 px Atlas window. Interface Kit
+12.8 now offers optional borrowed shared glyphs on Segmented and File Panel
+uses them for every Open, Save, and Browse client. Choice labels, pointer and
+keyboard behavior remain unchanged. Atlas adds no control or renderer. Haiku
+read-only reference: `src/kits/interface/Control.cpp` keeps presentation inside
+the shared control; `src/kits/tracker/Navigator.cpp` composes browser controls.
+Beast Interface Kit host tests and MC68040 library contract, Atlas bundle,
+and NDK `dist-check` passed. Focused DE25 install reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=5 host=0 removed=0`. RFB showed Atlas
+opening DH0 with labeled File actions and the compact List/Grid/Columns
+switcher. Switching to List displayed the four-column directory table;
+switching to Columns displayed the three-pane directory view. Raw frames were
+SHA-verified against the board and archived with PNGs on Beast under
+`/mnt/Documents/astra68/atlas-segmented-20261031/`; Grid, List, Columns
+SHA-256 values are
+`c94870a2e4441aeea6de35e3b18f1b772890666d07611c8f1c0cc4037dda9294`,
+`992d9dd7f190948cf0db68954b74f495f8ece32a3ba50700c3f4b106fec61b5b`,
+and `d9803dfa9e148a6a3114980b901b7444a884d38379ee0ada6182d59f7389a7c3`.
+Board trial captures were removed. Astra, audio, and remote desktop services
+remain active with zero automatic restarts and 8.1 GiB free.
+
 Atlas shared transfer publication checkpoint, 2026-10-31: Filesystem Kit's
 staged tree copy could replace a destination created after its initial
 existence check; same-volume move had the same race. The native VFS protocol

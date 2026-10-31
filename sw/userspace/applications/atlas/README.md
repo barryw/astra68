@@ -5,6 +5,9 @@ toolbar, Places sidebar, breadcrumb, search field, Grid/List/Columns switcher,
 context menus, and status bar. The shared File Panel has a `BROWSE` mode so
 Atlas and Open/Save panels share navigation controls. Atlas owns filesystem
 snapshots, path history, folder commands, and file launch policy.
+Interface Kit 12.8 draws shared glyphs for the File Panel's Grid/List/Columns
+switcher. This keeps the design's compact icon switcher available in Atlas and
+Open/Save panels without an Atlas-only control.
 
 Interface Kit's Breadcrumb caps segment Buttons at 160 px; generic Button
 rendering elides long labels. Updating a path temporarily folds Breadcrumb
