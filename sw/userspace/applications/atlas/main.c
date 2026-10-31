@@ -1697,6 +1697,11 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
         !astra_string_copy(target, sizeof(target), path) ||
         astra_path_requires_walk(target))
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (history_target != NAVIGATION_STAY &&
+        history_target != NAVIGATION_PUSH &&
+        (history_target >= navigation_count ||
+         history_target >= NAVIGATION_HISTORY_MAX))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
     result = astra_volume_snapshot_open(volume_metadata, &catalog);
     if (result != ASTRA_OK) return result;
     const AstraVolumeRecord *mounted = volume_for_path(&catalog, target);
@@ -1706,7 +1711,7 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
             mounted->id, mounted->generation};
     }
     astra_volume_snapshot_close(&catalog);
-    if ((history_target < navigation_count &&
+    if ((history_target < NAVIGATION_HISTORY_MAX &&
          !same_volume_reference(&candidate,
              &navigation_history_volumes[history_target])) ||
         (history_target == NAVIGATION_STAY && strcmp(target, root) == 0 &&
@@ -1755,7 +1760,7 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
     }
     if (history_copy != NULL)
         navigation_commit(history_copy, &candidate);
-    else if (history_target < navigation_count)
+    else if (history_target < NAVIGATION_HISTORY_MAX)
         navigation_index = history_target;
     if (next_grant != ASTRA_INVALID_HANDLE) {
         volume_release();
@@ -4216,6 +4221,9 @@ int astra_main(const AstraStartupInfo *startup)
             astra_runtime_deallocate(browser_place_items);
         astra_volume_snapshot_close(&sidebar_volumes);
         astra_saved_query_snapshot_close(&sidebar_queries);
+        astra_recent_item_snapshot_close(&recent_snapshot);
+        astra_runtime_deallocate(recent_rows);
+        astra_runtime_deallocate(recent_cells);
         clear_entry_icons();
         astra_directory_snapshot_dispose(&directory);
         astra_runtime_deallocate(controls);

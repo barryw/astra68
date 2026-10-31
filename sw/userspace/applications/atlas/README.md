@@ -16,8 +16,11 @@ one hardware draw submission while allowing the session list to grow.
 Back and Forward retain up to 32 visited paths and exact public-volume
 references. Atlas switches among HOME, fixed volumes, and public mounts in one
 window, pins its active mount's read grant, and rejects history entries if
-media is replaced at the same path. Grid, List, and Columns use
-the same directory snapshot; columns load child directories as they are
+media is replaced at the same path. `navigate_to` validates every ordinary
+history index against both active count and the 32-slot bound before reading
+it; `NAVIGATION_STAY` and `NAVIGATION_PUSH` remain explicit sentinels. Grid,
+List, and Columns use the same directory snapshot; columns load child
+directories as they are
 selected. Search filters the current directory. Sort by Name, Size, Kind, or
 Modified and Hidden files apply to all views. HOME, RAM0, and writable mounted
 volumes support New drawer, file or folder Rename, and per-volume Trash. Copy
@@ -153,8 +156,9 @@ saved queries. Haiku read-only references: `src/servers/registrar/RecentEntries.
 for centralized recent-entry state and `src/kits/tracker/PoseView.cpp` for
 opening entries through the same file actions.
 The Table borrows Recent Items rows and strings until `recent_enter` replaces
-its binding or Atlas exits. Sidebar Places refresh owns only its own rows and
-snapshots; it must not release the Recent Items binding. When Recent is active,
+its binding or Atlas closes. Sidebar Places refresh owns only its own rows and
+snapshots; it must not release the Recent Items binding. Atlas releases the
+Recent Items binding during process cleanup. When Recent is active,
 Atlas restores that virtual Place through the shared List selection API after
 refresh. No separate Recent Items control or selection renderer is used.
 

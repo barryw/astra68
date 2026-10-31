@@ -5,18 +5,25 @@ Status: active continuation map, 2026-10-30
 Atlas Recent Items ownership checkpoint, 2026-10-30: Sidebar Places refresh
 incorrectly freed the live Recent Items snapshot, Table rows, and Table cells.
 The shared Table borrows those buffers, so Refresh in Recent Items left dangling
-pointers. Atlas now lets `recent_enter` alone replace that binding; Places
-refresh releases only Places data. Refresh also restores the active virtual
-Recent Place through Interface Kit's existing List selection API, with no new
-Atlas control or shared API. Haiku read-only reference:
+pointers. Atlas now lets `recent_enter` replace that binding and releases it
+during process cleanup; Places refresh releases only Places data. Refresh also
+restores the active virtual Recent Place through Interface Kit's existing List
+selection API, with no new Atlas control or shared API. Haiku read-only reference:
 `src/servers/registrar/RecentEntries.cpp` owns its recent-entry list until
 replaced or destroyed; Astra keeps its native Filesystem Kit snapshot and
-Interface Kit Table contracts. Beast Atlas host test and MC68040 bundle build
-passed. Focused DE25 install reported `ASTRA_DE25_DEV_INSTALL PASS guest=1` on
-each revision. Final bundle binary SHA-256 is
-`df19372be43e6bfd7b229cf402d6ac44e9d8964a578873850b35caa392723964`.
+Interface Kit Table contracts. GCC's MC68040 analyzer also found that
+`navigate_to` accepted a history index without an explicit 32-slot bound;
+Atlas now validates the index at entry and uses that checked range for lookup
+and commit. This reuses its existing history array and volume-reference check.
+Haiku read-only reference: `src/kits/tracker/Navigator.cpp` owns bounded
+back/forward history. Beast Atlas host test, MC68040 analyzer, and bundle
+build passed. Focused DE25 installs reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=1`. Final bundle binary SHA-256 is
+`e2f6dde7b01332b233cf6518e142c635066e64a9ab07ece8c0ef79497eb9d684`.
 On hardware, Atlas showed 12 Recent Items, Refresh kept all 12 and the Recent
 sidebar highlight, and activating the `apps` recent row opened `/dh0/apps`.
+Final build repeated that path, then Back returned to DH0, Forward reopened
+`/dh0/apps`, and closing/reopening Atlas restored a usable DH0 window.
 Pre-change persistent image was archived on Beast and verified against stopped
 board state SHA-256
 `6d9f539812098ca00526e387b27577b73438f840483483ef08cff3a7fbb1bc37`.
