@@ -104,6 +104,10 @@ shared Filesystem Kit copies between source and destination namespaces without
 overwriting an existing destination. App bundles launch as apps, files go to
 OpenWith, and mounted volumes opened from Desktop stay bound to their volume
 reference so removal can invalidate the window safely.
+Clipboard and drag source capture use the same eligible mounted-path lookup
+as navigation and Recent Items. That lookup excludes system, temporary, and
+private mounts and returns an exact catalog incarnation; Atlas does not retain
+a separate clipboard volume scanner or capture a retired viewed-volume grant.
 Filesystem Kit performs bounded, heap-backed tree traversal and staged cleanup,
 so deep copies use the same operation from Atlas, native `cp`, and other
 clients without consuming Atlas's application stack. Traversal follows valid

@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas mount-lookup reuse checkpoint, 2026-10-31: Clipboard and drag source
+capture now use Atlas's existing mounted-path resolver, also used by initial
+path binding, navigation, Recent Items, and launch. This removes a second
+catalog scan with looser system/temporary-volume rules and a viewed-volume
+shortcut that could capture a retired incarnation. No new Atlas control,
+filesystem operation, or library API was added. Read-only Haiku reference:
+`src/kits/storage/Volume.cpp` checks live volume identity before use; Astra
+retains its coherent catalog and exact epoch/ID/generation reference. Beast
+Atlas host test, MC68040 static analyzer, and target build passed. Targeted
+DE25 install passed; RFB opened RAM0, created `Source` and `Dest`, copied
+`Source` through the native clipboard, and showed it inside `Dest`. Both
+trial folders were moved to Trash, then Empty Trash left RAM0 empty. Selected
+raw-frame SHA-256 values matched board and Beast; raw and PNG evidence is at
+`/mnt/Documents/astra68/atlas-volume-reuse-20261031/`. Board trial captures
+and helper were removed. Astra, HDMI audio host, and remote desktop remain
+active, Astra has zero restarts, and board has 8.1 GiB free. Physical USB and
+optical qualification still require attached media; only root hub is present.
+
 Atlas nested Trash checkpoint, 2026-10-31: Filesystem Kit 15.11 now exports
 `astra_trash_path_kind`, one canonical classifier for top-level Trash root and
 descendants. Atlas removed local Trash path parsing and uses shared result to

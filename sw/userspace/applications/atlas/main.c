@@ -2940,31 +2940,15 @@ static AstraResult copy_reference_for(const char *path,
     AstraVfsClipboardEntry *reference)
 {
     if (fixed_copy_path(path)) return ASTRA_OK;
-    if (viewed_volume.id != 0u && volume_path[0] != '\0' &&
-        strncmp(path, volume_path, strlen(volume_path)) == 0 &&
-        (path[strlen(volume_path)] == '\0' ||
-         path[strlen(volume_path)] == '/')) {
-        reference->volume = viewed_volume;
-        return ASTRA_OK;
-    }
     AstraVolumeSnapshot snapshot = ASTRA_VOLUME_SNAPSHOT_INIT;
     AstraResult result = astra_volume_snapshot_open(volume_metadata, &snapshot);
     if (result != ASTRA_OK) return result;
-    result = ASTRA_ERROR_INVALID_HANDLE;
-    for (uint32_t at = 0u; at < snapshot.count; ++at) {
-        const AstraVolumeRecord *record = &snapshot.records[at];
-        size_t length = strlen(record->name);
-        if (record->kind == ASTRA_VOLUME_MOUNT &&
-            record->state == ASTRA_VOLUME_MOUNTED &&
-            (record->flags & ASTRA_VOLUME_SYSTEM) == 0u &&
-            length != 0u && strncmp(path, record->name, length) == 0 &&
-            (path[length] == '\0' || path[length] == '/')) {
-            reference->volume = (AstraVolumeReference){
-                snapshot.epoch, record->id, record->generation};
-            result = ASTRA_OK;
-            break;
-        }
-    }
+    const AstraVolumeRecord *record = volume_for_path(&snapshot, path);
+    if (record != NULL) {
+        reference->volume = (AstraVolumeReference){
+            snapshot.epoch, record->id, record->generation};
+        result = ASTRA_OK;
+    } else result = ASTRA_ERROR_INVALID_HANDLE;
     astra_volume_snapshot_close(&snapshot);
     return result;
 }
