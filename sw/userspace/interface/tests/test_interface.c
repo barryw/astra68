@@ -5519,6 +5519,8 @@ static void test_breadcrumb_long_path(void)
     assert(astra_interface_container_init(&controls[0], &row) == ASTRA_OK);
     assert(astra_interface_breadcrumb_init(&breadcrumb, &controls[1],
         2u, 1u, "/dh0") == ASTRA_OK);
+    for (uint32_t at = 1u; at <= ASTRA_BREADCRUMB_VISIBLE; ++at)
+        assert(controls[at]._private_style == ASTRA_BUTTON_TOOLBAR);
     assert(astra_interface_ui_init(&context, controls,
         1u + ASTRA_BREADCRUMB_VISIBLE, 330u, 100u) == ASTRA_OK);
     layout.direction = ASTRA_FLEX_ROW;

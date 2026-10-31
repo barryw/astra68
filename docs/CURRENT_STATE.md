@@ -2,6 +2,22 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared Breadcrumb appearance checkpoint, 2026-10-31: File Panel now
+composes its path segments from existing flat Toolbar Buttons instead of
+standard filled Buttons. Atlas and Open/Save panels inherit the same compact,
+lightweight toolbar path treatment from Interface Kit; no Atlas painter or new
+control variant was added. Haiku read-only reference:
+`src/kits/interface/Button.cpp` (`BButton::SetFlat`) keeps flat appearance in
+the shared Button control. Beast Interface Kit host suite and MC68040 Kit
+library contract/build passed. Targeted Interface Kit DE25 install passed.
+RFB reopened Atlas on RAM0, created and entered `CrumbCheck`, then activated
+the `ram0` breadcrumb to return to the parent. Atlas showed the correct
+folder, and Empty Trash cleared the disposable trial. Raw and PNG captures
+are archived at `/mnt/Documents/astra68/atlas-shared-breadcrumb-20261031/`;
+selected raw SHA-256 values matched board and Beast. Board trial captures
+and helper were removed. Astra, HDMI audio host, and remote desktop remain
+active, Astra has zero restarts, and board has 8.1 GiB free.
+
 Atlas mount-lookup reuse checkpoint, 2026-10-31: Clipboard and drag source
 capture now use Atlas's existing mounted-path resolver, also used by initial
 path binding, navigation, Recent Items, and launch. This removes a second

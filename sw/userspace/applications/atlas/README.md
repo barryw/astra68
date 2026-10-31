@@ -17,7 +17,10 @@ every directory change, folding older ancestors before their parent/current
 pair. The parent button remains reachable at narrow widths. Haiku's read-only
 `src/kits/tracker/Navigator.cpp` informed the location/Up composition; Astra
 keeps path targets in its existing shared Breadcrumb rather than adding an
-Atlas path widget.
+Atlas path widget. File Panel's Breadcrumb uses the existing flat Toolbar
+Button variant, giving Atlas and Open/Save panels the same lightweight path
+segments. Haiku's read-only `src/kits/interface/Button.cpp` (`SetFlat`)
+informed that shared appearance.
 File, Edit, and View menu-bar commands share those same actions. Menu state
 follows selection, writable path, current view, sort order, and hidden-file
 state. They publish through the common Menu control; Atlas owns only the

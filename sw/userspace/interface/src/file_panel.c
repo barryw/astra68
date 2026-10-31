@@ -973,6 +973,7 @@ AstraResult astra_interface_breadcrumb_init(AstraBreadcrumb *breadcrumb,
             path + breadcrumb->start[at] : "/";
         button.text_length = at < breadcrumb->visible_count ?
             breadcrumb->end[at] - breadcrumb->start[at] : 1u;
+        button.variant = ASTRA_BUTTON_TOOLBAR;
         button.state = at < breadcrumb->visible_count ? 0u :
             ASTRA_CONTROL_COLLAPSED;
         result = astra_interface_button_init(&controls[at], &button);
