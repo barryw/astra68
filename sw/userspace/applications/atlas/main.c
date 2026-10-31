@@ -30,7 +30,9 @@
 #include <astra/result.h>
 
 #include "../../common/directory_snapshot.h"
+#include "../../common/directory_query.h"
 #include "../../common/folder_ops.h"
+#include "../../common/path_result_table.h"
 #include <astra/trash.h>
 #include "../../common/volume_action.h"
 #include "../../common/volume_usage_dialog.h"
@@ -68,9 +70,11 @@
 #define INSPECTOR_CONTROL(index) (&controls[TOOLBAR_CONTROL_COUNT + \
     BROWSER_TOOL_COUNT + BROWSER_CONTROL_COUNT + (index)])
 #define INSPECTOR_FIRST_ID 20000u
-#define RECENT_SCROLL_ID 30000u
-#define RECENT_TABLE_ID 30001u
-#define RECENT_CONTROL(index) (&controls[TOOLBAR_CONTROL_COUNT + \
+#define RESULT_SCROLL_ID 30000u
+#define RESULT_TABLE_ID 30001u
+#define ATLAS_RESULT_RECENT 1u
+#define ATLAS_RESULT_QUERY 2u
+#define RESULT_CONTROL(index) (&controls[TOOLBAR_CONTROL_COUNT + \
     BROWSER_TOOL_COUNT + BROWSER_CONTROL_COUNT + \
     ASTRA_FILE_INSPECTOR_CONTROL_COUNT + (index)])
 #define BROWSER_INITIAL_CAPACITY 32u
@@ -120,12 +124,15 @@ static uint32_t saved_place_start;
 static const char saved_query_directory[] = "/home/Saved Searches";
 static const char recent_directory[] = "/home/.Recent Items";
 static AstraRecentItemSnapshot recent_snapshot = ASTRA_RECENT_ITEM_SNAPSHOT_INIT;
-static AstraCollectionModel recent_collection = ASTRA_COLLECTION_MODEL_INIT;
-static AstraScrollModel recent_scroll = ASTRA_SCROLL_MODEL_INIT;
-static AstraTableModel recent_table = ASTRA_TABLE_MODEL_INIT;
-static AstraCollectionItem *recent_rows;
-static AstraTableCell *recent_cells;
-static uint32_t recent_mode;
+static AstraDirectoryQuerySnapshot query_snapshot =
+    ASTRA_DIRECTORY_QUERY_SNAPSHOT_INIT;
+static AstraSavedQuery active_query = ASTRA_SAVED_QUERY_INIT;
+static AstraCollectionModel result_collection = ASTRA_COLLECTION_MODEL_INIT;
+static AstraScrollModel result_scroll = ASTRA_SCROLL_MODEL_INIT;
+static AstraTableModel result_table = ASTRA_TABLE_MODEL_INIT;
+static AstraPathResultRows result_rows = ASTRA_PATH_RESULT_ROWS_INIT;
+static uint32_t result_mode;
+static char active_query_label[ASTRA_VFS_NAME_MAX];
 static char saved_context_filename[ASTRA_VFS_NAME_MAX];
 static _Alignas(4) uint32_t browser_commands[ASTRA_DRAW_LIST_AREA_BYTES / sizeof(uint32_t)];
 static char browser_home[ASTRA_VFS_PATH_MAX];
@@ -174,6 +181,7 @@ static char selected_path[ASTRA_VFS_PATH_MAX];
 static uint32_t selected_kind, selected_depth, selected_row = UINT32_MAX;
 static AstraResult browser_update_status(void);
 static AstraResult paint(void);
+static AstraResult open_saved_query(const AstraSavedQuery *query);
 
 static AstraControl *root_selection_control(void)
 {
@@ -261,7 +269,7 @@ static AstraResult focus_root_entry(uint32_t index)
  * file identity and path construction for every view. */
 static uint32_t selection_count(void)
 {
-    if (recent_mode != 0u) return 0u;
+    if (result_mode != 0u) return 0u;
     if (selected_path[0] == '\0') return 0u;
     return browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST ?
         browser_selection.count :
@@ -463,7 +471,7 @@ static AstraResult navigation_append(const char *path,
 
 static const char *writable_mount_root(void)
 {
-    if (recent_mode != 0u || volume_lost) return NULL;
+    if (result_mode != 0u || volume_lost) return NULL;
     if (strncmp(root, "/home", 5u) == 0 &&
         (root[5] == '\0' || root[5] == '/')) return "/home";
     if (viewed_volume.id != 0u && volume_path[0] != '\0' &&
@@ -711,9 +719,25 @@ static AstraResult browser_update_places(void)
         saved_place_start = query_start;
         result = astra_interface_file_panel_set_place_presentation(
             &browser, &ui, BROWSER_CONTROL(0), presentation, count);
-        if (recent_mode != 0u && result == ASTRA_OK)
+        if (result_mode == ATLAS_RESULT_RECENT && result == ASTRA_OK)
             result = astra_interface_control_set_value(&ui,
                 BROWSER_CONTROL(ASTRA_FILE_PANEL_PLACES_LIST), 2);
+        if (result_mode == ATLAS_RESULT_QUERY && result == ASTRA_OK) {
+            for (uint32_t at = 0u; at < sidebar_queries.count; ++at)
+                if (strcmp(sidebar_queries.queries[at].filename,
+                        active_query.filename) == 0 ||
+                    (strcmp(sidebar_queries.queries[at].label,
+                        active_query.label) == 0 &&
+                     strcmp(sidebar_queries.queries[at].directory,
+                        active_query.directory) == 0 &&
+                     strcmp(sidebar_queries.queries[at].text,
+                        active_query.text) == 0)) {
+                    result = astra_interface_control_set_value(&ui,
+                        BROWSER_CONTROL(ASTRA_FILE_PANEL_PLACES_LIST),
+                        (int32_t)(query_start + at));
+                    break;
+                }
+        }
         if (result == ASTRA_OK) result = update_window_title();
     } else {
         astra_runtime_deallocate(places);
@@ -807,7 +831,7 @@ static void load_entry_icons(void)
 static AstraResult layout(void)
 {
     AstraFlexLayout outer = ASTRA_FLEX_LAYOUT_INIT;
-    uint32_t inspector_width = recent_mode == 0u && preview_visible &&
+    uint32_t inspector_width = result_mode == 0u && preview_visible &&
         width >= 850u ? 228u : 0u;
     uint32_t occupied = 166u + inspector_width;
     uint32_t grid_width = width > occupied ? width - occupied : CELL_WIDTH;
@@ -980,36 +1004,36 @@ static AstraResult build_view(AstraHandle gui)
         AstraTableInfo table_info = ASTRA_TABLE_INFO_INIT;
         scroll_info.line_width = 8u;
         scroll_info.line_height = 16u;
-        if (astra_scroll_init(&recent_scroll, &scroll_info) != ASTRA_OK ||
-            astra_interface_collection_init(&recent_collection,
+        if (astra_scroll_init(&result_scroll, &scroll_info) != ASTRA_OK ||
+            astra_interface_collection_init(&result_collection,
                 NULL, 0u, 0u) != ASTRA_OK)
             return ASTRA_ERROR_INVALID_ARGUMENT;
-        recent_table.collection = &recent_collection;
-        recent_table.columns = columns;
-        recent_table.column_count = 2u;
-        scroll_view.id = RECENT_SCROLL_ID;
-        scroll_view.model = &recent_scroll;
+        result_table.collection = &result_collection;
+        result_table.columns = columns;
+        result_table.column_count = 2u;
+        scroll_view.id = RESULT_SCROLL_ID;
+        scroll_view.model = &result_scroll;
         scroll_view.preferred_width = 320u;
         scroll_view.preferred_height = 280u;
         scroll_view.state = ASTRA_CONTROL_COLLAPSED;
-        if (astra_interface_scroll_view_init(RECENT_CONTROL(0),
+        if (astra_interface_scroll_view_init(RESULT_CONTROL(0),
                 &scroll_view) != ASTRA_OK)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
         item.parent_id = 1u + ASTRA_FILE_PANEL_CONTENT;
         item.grow = 1u;
-        if (astra_interface_control_set_flex(RECENT_CONTROL(0),
+        if (astra_interface_control_set_flex(RESULT_CONTROL(0),
                 &item) != ASTRA_OK)
             return ASTRA_ERROR_INVALID_ARGUMENT;
-        table_info.id = RECENT_TABLE_ID;
-        table_info.model = &recent_table;
-        if (astra_interface_table_init(RECENT_CONTROL(1),
+        table_info.id = RESULT_TABLE_ID;
+        table_info.model = &result_table;
+        if (astra_interface_table_init(RESULT_CONTROL(1),
                 &table_info) != ASTRA_OK)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
-        item.parent_id = RECENT_SCROLL_ID;
+        item.parent_id = RESULT_SCROLL_ID;
         item.minimum_width = 800u;
-        if (astra_interface_control_set_flex(RECENT_CONTROL(1),
+        if (astra_interface_control_set_flex(RESULT_CONTROL(1),
                 &item) != ASTRA_OK)
             return ASTRA_ERROR_INVALID_ARGUMENT;
     }
@@ -1204,10 +1228,14 @@ static AstraResult browser_update_status(void)
     AstraResult result = browser_update_inspector();
     if (result != ASTRA_OK) return result;
     astra_string_init(&line, browser_status, sizeof(browser_status));
-    if (recent_mode != 0u) {
+    if (result_mode == ATLAS_RESULT_RECENT) {
         (void)astra_string_append_u64(&line, recent_snapshot.count);
         (void)astra_string_append(&line,
             recent_snapshot.count == 1u ? " recent item" : " recent items");
+    } else if (result_mode == ATLAS_RESULT_QUERY) {
+        (void)astra_string_append_u64(&line, query_snapshot.count);
+        (void)astra_string_append(&line,
+            query_snapshot.count == 1u ? " match" : " matches");
     } else if (directory.status != ASTRA_VFS_OK) {
         (void)astra_string_append(&line, message());
     } else if (browser.search_length != 0u) {
@@ -1252,8 +1280,10 @@ static AstraResult browser_update_space(void)
     AstraFilesystemInfo capacity = { .size = sizeof(AstraFilesystemInfo) };
     AstraString line;
     astra_string_init(&line, browser_space, sizeof(browser_space));
-    if (recent_mode != 0u)
+    if (result_mode == ATLAS_RESULT_RECENT)
         (void)astra_string_append(&line, "Recent Items");
+    else if (result_mode == ATLAS_RESULT_QUERY)
+        (void)astra_string_append(&line, "Saved Search");
     else {
         uint64_t total_bytes, available_bytes;
         if (astra_filesystem_capacity_path(&filesystem.filesystem, root,
@@ -1365,7 +1395,7 @@ static AstraResult paint(void)
     result = astra_draw_list_create(&content, &whole, &list);
     if (result == ASTRA_OK)
         result = astra_draw_rectangle(&list, &whole, 1, &background);
-    if (recent_mode == 0u &&
+    if (result_mode == 0u &&
         (visible_data == 0u || directory.count == 0u ||
          directory.status != ASTRA_VFS_OK)) {
         empty_message = message();
@@ -1636,9 +1666,16 @@ static AstraResult update_window_title(void)
     AstraString text;
     const char *label = NULL;
     const char *suffix = root;
-    if (recent_mode != 0u)
+    if (result_mode == ATLAS_RESULT_RECENT)
         return astra_window_set_title(&window,
             "Atlas — Recent Items", sizeof("Atlas — Recent Items") - 1u);
+    if (result_mode == ATLAS_RESULT_QUERY) {
+        astra_string_init(&text, title, sizeof(title));
+        if (!astra_string_append(&text, "Atlas — ") ||
+            !astra_string_append(&text, active_query_label))
+            return ASTRA_ERROR_BUFFER_TOO_SMALL;
+        return astra_window_set_title(&window, title, (uint16_t)text.length);
+    }
     astra_string_init(&text, title, sizeof(title));
     if (!astra_string_append(&text, "Atlas — "))
         return ASTRA_ERROR_BUFFER_TOO_SMALL;
@@ -1747,9 +1784,9 @@ static AstraResult volume_bind_initial_path(const char *path)
 static AstraResult recent_leave(void)
 {
     AstraResult result;
-    if (recent_mode == 0u) return ASTRA_OK;
-    recent_mode = 0u;
-    result = astra_interface_ui_set_state(&ui, RECENT_CONTROL(0),
+    if (result_mode == 0u) return ASTRA_OK;
+    result_mode = 0u;
+    result = astra_interface_ui_set_state(&ui, RESULT_CONTROL(0),
         ASTRA_CONTROL_COLLAPSED);
     if (result == ASTRA_OK)
         result = astra_interface_file_panel_set_content_active(&browser,
@@ -1764,12 +1801,44 @@ static AstraResult recent_leave(void)
     return result;
 }
 
+static const char *recent_path_at(const void *source, uint32_t index)
+{
+    return ((const AstraRecentItemSnapshot *)source)->items[index].path;
+}
+
+static const char *query_path_at(const void *source, uint32_t index)
+{
+    return ((const AstraDirectoryQuerySnapshot *)source)->items[index].path;
+}
+
+static AstraResult result_view_show(uint32_t mode)
+{
+    AstraResult result;
+    result_mode = mode;
+    selection_clear();
+    result = astra_interface_file_panel_set_content_active(&browser,
+        &ui, BROWSER_CONTROL(0), 0u);
+    if (result == ASTRA_OK)
+        result = astra_interface_ui_set_state(&ui, RESULT_CONTROL(0), 0u);
+    if (result == ASTRA_OK)
+        result = astra_interface_ui_set_state(&ui,
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_VIEW),
+            ASTRA_CONTROL_DISABLED);
+    if (result == ASTRA_OK)
+        result = astra_interface_ui_set_state(&ui,
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_SEARCH),
+            ASTRA_CONTROL_DISABLED);
+    if (result == ASTRA_OK) result = layout();
+    if (result == ASTRA_OK) result = browser_update_status();
+    if (result == ASTRA_OK) result = browser_update_space();
+    if (result == ASTRA_OK) result = update_window_title();
+    return result;
+}
+
 static AstraResult recent_enter(void)
 {
     AstraRecentItemSnapshot next = ASTRA_RECENT_ITEM_SNAPSHOT_INIT;
     AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
-    AstraCollectionItem *rows = NULL;
-    AstraTableCell *cells = NULL;
     uint32_t status = astra_recent_item_snapshot_open(
         &filesystem.filesystem, recent_directory, &next);
     AstraResult result;
@@ -1795,56 +1864,17 @@ static AstraResult recent_enter(void)
     }
     astra_volume_snapshot_close(&catalog);
     next.count = kept;
-    if (kept != 0u) {
-        rows = astra_runtime_allocate((size_t)kept * sizeof(*rows));
-        cells = astra_runtime_allocate((size_t)kept * sizeof(*cells));
-        if (rows == NULL || cells == NULL) {
-            astra_runtime_deallocate(rows);
-            astra_runtime_deallocate(cells);
-            astra_recent_item_snapshot_close(&next);
-            return ASTRA_ERROR_NO_RESOURCES;
-        }
-        for (uint32_t at = 0u; at < kept; ++at) {
-            const char *leaf = astra_folder_leaf(next.items[at].path);
-            rows[at] = (AstraCollectionItem){
-                (uint64_t)at + 1u, leaf, (uint32_t)strlen(leaf), {0u, 0u}};
-            cells[at] = (AstraTableCell){next.items[at].path,
-                (uint32_t)strlen(next.items[at].path), 0u};
-        }
-    }
-    result = astra_interface_table_set_rows(&ui, RECENT_CONTROL(1),
-        rows, kept, cells, kept);
+    result = astra_path_result_table_set(&ui, RESULT_CONTROL(1),
+        &result_rows, &next, next.count, recent_path_at);
     if (result != ASTRA_OK) {
-        astra_runtime_deallocate(rows);
-        astra_runtime_deallocate(cells);
         astra_recent_item_snapshot_close(&next);
         return result;
     }
-    astra_runtime_deallocate(recent_rows);
-    astra_runtime_deallocate(recent_cells);
     astra_recent_item_snapshot_close(&recent_snapshot);
     recent_snapshot = next;
-    recent_rows = rows;
-    recent_cells = cells;
-    recent_mode = 1u;
-    selection_clear();
-    result = astra_interface_file_panel_set_content_active(&browser,
-        &ui, BROWSER_CONTROL(0), 0u);
-    if (result == ASTRA_OK)
-        result = astra_interface_ui_set_state(&ui, RECENT_CONTROL(0), 0u);
-    if (result == ASTRA_OK)
-        result = astra_interface_ui_set_state(&ui,
-            BROWSER_CONTROL(ASTRA_FILE_PANEL_VIEW),
-            ASTRA_CONTROL_DISABLED);
-    if (result == ASTRA_OK)
-        result = astra_interface_ui_set_state(&ui,
-            BROWSER_CONTROL(ASTRA_FILE_PANEL_SEARCH),
-            ASTRA_CONTROL_DISABLED);
-    if (result == ASTRA_OK) result = layout();
-    if (result == ASTRA_OK) result = browser_update_status();
-    if (result == ASTRA_OK) result = browser_update_space();
-    if (result == ASTRA_OK) result = update_window_title();
-    return result;
+    astra_directory_query_dispose(&query_snapshot);
+    active_query_label[0] = '\0';
+    return result_view_show(ATLAS_RESULT_RECENT);
 }
 
 static AstraResult navigate_to(const char *path, uint32_t history_target)
@@ -1974,7 +2004,9 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
 
 static AstraResult reload_directory(void)
 {
-    if (recent_mode != 0u) return recent_enter();
+    if (result_mode == ATLAS_RESULT_RECENT) return recent_enter();
+    if (result_mode == ATLAS_RESULT_QUERY)
+        return open_saved_query(&active_query);
     return navigate_to(root, NAVIGATION_STAY);
 }
 
@@ -1982,12 +2014,30 @@ static AstraResult open_saved_query(const AstraSavedQuery *query)
 {
     if (query == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
     AstraSavedQuery selected = *query;
-    AstraResult result = navigate_to(selected.directory, NAVIGATION_PUSH);
-    if (result == ASTRA_OK)
-        result = astra_interface_file_panel_set_search(&browser, &ui,
-            BROWSER_CONTROL(0), selected.text,
-            (uint32_t)strlen(selected.text));
-    if (result == ASTRA_OK) result = browser_update_status();
+    AstraResult result = navigate_to(selected.directory,
+        result_mode == ATLAS_RESULT_QUERY ? NAVIGATION_STAY : NAVIGATION_PUSH);
+    if (result != ASTRA_OK) return result;
+    AstraDirectoryQuerySnapshot next = ASTRA_DIRECTORY_QUERY_SNAPSHOT_INIT;
+    AstraDirectoryQuerySpec spec = {
+        .name_contains = selected.text,
+        .include_hidden = show_hidden
+    };
+    uint32_t status = astra_directory_query_load(&next,
+        &filesystem.filesystem, selected.directory, &spec, &cancelled);
+    if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
+    result = astra_path_result_table_set(&ui, RESULT_CONTROL(1),
+        &result_rows, &next, next.count, query_path_at);
+    if (result != ASTRA_OK) {
+        astra_directory_query_dispose(&next);
+        return result;
+    }
+    astra_directory_query_dispose(&query_snapshot);
+    query_snapshot = next;
+    active_query = selected;
+    (void)astra_string_copy(active_query_label,
+        sizeof(active_query_label), selected.label);
+    result = result_view_show(ATLAS_RESULT_QUERY);
+    if (result == ASTRA_OK) result = browser_update_places();
     return result;
 }
 
@@ -2152,12 +2202,23 @@ static AstraResult open_entry(const char *path)
     return result;
 }
 
-static AstraResult open_recent(uint32_t row)
+static AstraResult open_result_path(const char *path)
+{
+    AstraResult result = astra_interface_file_panel_set_search(&browser,
+        &ui, BROWSER_CONTROL(0), NULL, 0u);
+    return result == ASTRA_OK ? open_entry(path) : result;
+}
+
+static AstraResult open_result(uint32_t row)
 {
     AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
     AstraRecentItem *item;
     AstraResult result;
-    if (recent_mode == 0u || row >= recent_snapshot.count)
+    if (result_mode == ATLAS_RESULT_QUERY)
+        return row < query_snapshot.count ?
+            open_result_path(query_snapshot.items[row].path) :
+            ASTRA_ERROR_INVALID_ARGUMENT;
+    if (result_mode != ATLAS_RESULT_RECENT || row >= recent_snapshot.count)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     item = &recent_snapshot.items[row];
     result = astra_volume_snapshot_open(volume_metadata, &catalog);
@@ -2171,7 +2232,7 @@ static AstraResult open_recent(uint32_t row)
             ASTRA_OK : ASTRA_ERROR_INVALID_HANDLE;
     } else if (mounted != NULL) result = ASTRA_ERROR_INVALID_HANDLE;
     astra_volume_snapshot_close(&catalog);
-    return result == ASTRA_OK ? open_entry(item->path) : result;
+    return result == ASTRA_OK ? open_result_path(item->path) : result;
 }
 
 static AstraResult browser_open_target(void)
@@ -2556,7 +2617,7 @@ static AstraResult info_query(void *opaque, AstraCommandState *state)
 {
     (void)opaque;
     *state = (AstraCommandState){"Get Information", 15u,
-        launcher != ASTRA_INVALID_HANDLE && recent_mode == 0u &&
+        launcher != ASTRA_INVALID_HANDLE && result_mode == 0u &&
         selection_count() <= 1u && root[0] == '/' &&
         !volume_lost && worker == 0u && removal_active == 0u &&
         directory.status == ASTRA_VFS_OK, 0u};
@@ -2729,7 +2790,7 @@ static AstraResult terminal_query(void *opaque, AstraCommandState *state)
 {
     (void)opaque;
     *state = (AstraCommandState){"Open Terminal Here", 18u,
-        launcher != ASTRA_INVALID_HANDLE && recent_mode == 0u &&
+        launcher != ASTRA_INVALID_HANDLE && result_mode == 0u &&
         !volume_lost && directory.status == ASTRA_VFS_OK &&
         worker == 0u && removal_active == 0u, 0u};
     return ASTRA_OK;
@@ -3792,7 +3853,7 @@ static AstraResult sort_query(void *opaque, AstraCommandState *state)
 {
     const AtlasChoiceCommand *command = opaque;
     *state = (AstraCommandState){command->label, command->label_length,
-        recent_mode == 0u && worker == 0u && visible_data &&
+        result_mode == 0u && worker == 0u && visible_data &&
         directory.status == ASTRA_VFS_OK,
         sort_mode == command->key};
     return ASTRA_OK;
@@ -3859,7 +3920,7 @@ static AstraResult hidden_query(void *opaque, AstraCommandState *state)
 {
     (void)opaque;
     *state = (AstraCommandState){"Show Hidden Files", 17u,
-        recent_mode == 0u && worker == 0u && visible_data &&
+        result_mode == 0u && worker == 0u && visible_data &&
         directory.status == ASTRA_VFS_OK, show_hidden != 0u};
     return ASTRA_OK;
 }
@@ -3959,7 +4020,7 @@ static AstraResult view_query(void *opaque, AstraCommandState *state)
 {
     const AtlasChoiceCommand *command = opaque;
     *state = (AstraCommandState){command->label, command->label_length,
-        recent_mode == 0u, browser.view_mode == command->key};
+        result_mode == 0u, browser.view_mode == command->key};
     return ASTRA_OK;
 }
 
@@ -3975,7 +4036,7 @@ static AstraResult save_search_query(void *opaque, AstraCommandState *state)
 {
     (void)opaque;
     *state = (AstraCommandState){"Save Search", 11u,
-        recent_mode == 0u && worker == 0u && visible_data &&
+        result_mode == 0u && worker == 0u && visible_data &&
         directory.status == ASTRA_VFS_OK &&
         browser.search_length != 0u, 0u};
     return ASTRA_OK;
@@ -4042,7 +4103,7 @@ static AstraResult back_query(void *opaque, AstraCommandState *state)
 {
     (void)opaque;
     *state = (AstraCommandState){"Back", 4u,
-        recent_mode != 0u ||
+        result_mode != 0u ||
             (navigation_count != 0u && navigation_index != 0u), 0u};
     return ASTRA_OK;
 }
@@ -4051,7 +4112,7 @@ static AstraResult forward_query(void *opaque, AstraCommandState *state)
 {
     (void)opaque;
     *state = (AstraCommandState){"Forward", 7u,
-        recent_mode == 0u && navigation_index + 1u < navigation_count, 0u};
+        result_mode == 0u && navigation_index + 1u < navigation_count, 0u};
     return ASTRA_OK;
 }
 
@@ -4059,7 +4120,7 @@ static AstraResult go_back(void *opaque, const AstraCommandArguments *args)
 {
     (void)opaque;
     (void)args;
-    if (recent_mode != 0u) return navigate_to(root, NAVIGATION_STAY);
+    if (result_mode != 0u) return navigate_to(root, NAVIGATION_STAY);
     if (navigation_count == 0u || navigation_index == 0u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return navigate_to(navigation_history[navigation_index - 1u],
@@ -4674,15 +4735,15 @@ static AstraResult run(AstraHandle gui)
                 result = astra_window_event_try(&window, &event);
                 continue;
             }
-            if (action.control_id == RECENT_TABLE_ID &&
+            if (action.control_id == RESULT_TABLE_ID &&
                 (action.type == ASTRA_UI_ACTION_VALUE_CHANGED ||
                  action.type == ASTRA_UI_ACTION_ACTIVATE)) {
                 if (action.type == ASTRA_UI_ACTION_ACTIVATE &&
-                    recent_collection.selected_id != 0u) {
-                    AstraResult opened = open_recent(
-                        (uint32_t)recent_collection.selected_id - 1u);
+                    result_collection.selected_id != 0u) {
+                    AstraResult opened = open_result(
+                        (uint32_t)result_collection.selected_id - 1u);
                     if (opened != ASTRA_OK) {
-                        (void)astra_log_failure("atlas recent open",
+                        (void)astra_log_failure("atlas result open",
                             (uint32_t)(-opened));
                         open_error(gui, opened);
                     }
@@ -5175,8 +5236,8 @@ int astra_main(const AstraStartupInfo *startup)
         astra_volume_snapshot_close(&sidebar_volumes);
         astra_saved_query_snapshot_close(&sidebar_queries);
         astra_recent_item_snapshot_close(&recent_snapshot);
-        astra_runtime_deallocate(recent_rows);
-        astra_runtime_deallocate(recent_cells);
+        astra_directory_query_dispose(&query_snapshot);
+        astra_path_result_table_dispose(&result_rows);
         clear_entry_icons();
         astra_directory_snapshot_dispose(&directory);
         astra_runtime_deallocate(controls);

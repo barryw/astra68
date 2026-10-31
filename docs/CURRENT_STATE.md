@@ -2,6 +2,27 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared query/result checkpoint, 2026-10-31: Shared directory snapshot
+walking now visits nested entries without following symlinks and supports
+cancellation and cleanup after errors. Shared directory query code filters by
+case-insensitive name and valid modification-time bounds; shared path-result
+adapter composes Interface Kit Table and Collection for both saved queries and
+Recent Items. Atlas keeps navigation and launch policy. Opening a result now
+clears File Panel search through its shared API, so opening `/dh0/fonts` from
+the temporary `fonts` saved query showed `installed` and `system` instead of
+an empty filtered directory. The test query was removed through its context
+menu. Haiku read-only reference: `src/kits/storage/Query.cpp` supplies typed
+query iteration, `src/kits/tracker/FindPanel.cpp` owns saved-query UI, and
+`src/kits/tracker/QueryPoseView.cpp` presents query results; Astra adapts these
+to existing native directory snapshots and Interface Kit Table. Atlas host
+tests, address/undefined sanitizers, Beast MC68040 build, and targeted Atlas
+DE25 install passed. Query, Recent, opened-folder, and query-removal RFB raw
+captures matched board/Beast SHA-256 and are archived with PNGs and verified
+`SHA256SUMS` at `/mnt/Documents/astra68/atlas-shared-query-20261031/`.
+Board helper/trial captures removed. Astra, audio host, and remote desktop
+active; zero Astra restarts; 8.2 GiB free. Persisted query predicates and
+dynamic `Changed today` remain incomplete, as do physical USB/optical gates.
+
 Atlas core-action hardware sweep, 2026-10-31: On DE25, Atlas created and
 renamed `SweepProbe` on initially empty RAM0, opened it, created nested
 `Child`, copied that child to RAM0 root through Ctrl+C/Back/Ctrl+V, moved both
