@@ -5405,6 +5405,26 @@ static void test_shared_file_panel(void)
         ASTRA_CONTROL_COLLAPSED) == 0u);
     layout.direction = ASTRA_FLEX_COLUMN;
     assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    uint32_t directory_x = (uint32_t)
+        controls[ASTRA_FILE_PANEL_SCROLL]._private_frame.x;
+    uint32_t directory_width =
+        controls[ASTRA_FILE_PANEL_SCROLL]._private_frame.width;
+    assert(astra_interface_file_panel_set_places_visible(&panel, &context,
+        controls, 0u) == ASTRA_OK);
+    assert((controls[ASTRA_FILE_PANEL_PLACES_SCROLL]._private_state &
+        ASTRA_CONTROL_COLLAPSED) != 0u);
+    assert((uint32_t)controls[ASTRA_FILE_PANEL_SCROLL]._private_frame.x <
+        directory_x &&
+        controls[ASTRA_FILE_PANEL_SCROLL]._private_frame.width >
+        directory_width);
+    assert(astra_interface_file_panel_set_places_visible(&panel, &context,
+        controls, 2u) == ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_file_panel_set_places_visible(&panel, &context,
+        controls, 1u) == ASTRA_OK);
+    assert((controls[ASTRA_FILE_PANEL_PLACES_SCROLL]._private_state &
+        ASTRA_CONTROL_COLLAPSED) == 0u &&
+        (uint32_t)controls[ASTRA_FILE_PANEL_SCROLL]._private_frame.x ==
+            directory_x);
     assert(astra_interface_file_panel_set_places(&panel, &context, controls,
         places, 3u, updated_place_items, 3u) == ASTRA_OK);
     assert(panel.places_collection.selected_id == 2u);

@@ -130,6 +130,7 @@ static uint32_t worker, cancelled, completed, visible_data;
 static uint16_t width = 1300u, height = 640u;
 static uint32_t sort_mode = ASTRA_DIRECTORY_SORT_NAME, sort_reverse, show_hidden;
 static uint32_t preview_visible = 1u;
+static uint32_t sidebar_visible = 1u;
 static const char *root;
 static char current_path[ASTRA_VFS_PATH_MAX];
 static char *navigation_history[NAVIGATION_HISTORY_MAX];
@@ -293,6 +294,7 @@ enum AtlasMenuRow {
     ATLAS_MENU_SORT_KIND,
     ATLAS_MENU_SORT_MODIFIED,
     ATLAS_MENU_HIDDEN,
+    ATLAS_MENU_SIDEBAR,
     ATLAS_MENU_ABOUT,
     ATLAS_MENU_COUNT
 };
@@ -318,6 +320,7 @@ static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"Sort by Kind", 12u, ASTRA_MENU_PARENT(2u)},
     {"Sort by Modified", 16u, ASTRA_MENU_PARENT(2u)},
     {"Show Hidden Files", 17u, ASTRA_MENU_PARENT(2u)},
+    {"Show Sidebar", 12u, ASTRA_MENU_PARENT(2u)},
     {"About Atlas", 11u, ASTRA_MENU_PARENT(3u)}
 };
 static uint32_t atlas_menu_sent[ATLAS_MENU_COUNT];
@@ -3104,6 +3107,29 @@ static AstraResult show_hidden_set(uint32_t value)
     return result;
 }
 
+static AstraResult sidebar_set(uint32_t visible)
+{
+    AstraResult result = astra_interface_file_panel_set_places_visible(
+        &browser, &ui, BROWSER_CONTROL(0), visible);
+    if (result == ASTRA_OK) sidebar_visible = visible;
+    return result;
+}
+
+static AstraResult sidebar_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Show Sidebar", 12u, 1u, sidebar_visible};
+    return ASTRA_OK;
+}
+
+static AstraResult sidebar_toggle(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    return sidebar_set(!sidebar_visible);
+}
+
 static AstraResult view_set(uint32_t value)
 {
     AstraUIAction action = ASTRA_UI_ACTION_INIT;
@@ -3170,6 +3196,7 @@ static AstraResult menu_sync(void)
     menu_state(ATLAS_MENU_SORT_MODIFIED, active,
         sort_mode == ASTRA_DIRECTORY_SORT_MODIFIED);
     menu_state(ATLAS_MENU_HIDDEN, active, show_hidden != 0u);
+    menu_state(ATLAS_MENU_SIDEBAR, 1, sidebar_visible != 0u);
     for (uint32_t at = 0u; at < ATLAS_MENU_COUNT; ++at)
         if (atlas_menu_sent[at] != atlas_menu[at].flags)
             changed = 1u;
@@ -3334,6 +3361,8 @@ static AstraResult menu_invoke(AstraHandle gui, uint32_t row)
             row - ATLAS_MENU_SORT_NAME], NULL);
     case ATLAS_MENU_HIDDEN:
         return show_hidden_set(!show_hidden);
+    case ATLAS_MENU_SIDEBAR:
+        return sidebar_toggle(NULL, NULL);
     case ATLAS_MENU_ABOUT: {
         AstraAlertInfo alert = ASTRA_ALERT_INFO_INIT;
 
@@ -3379,7 +3408,9 @@ static AstraResult run(AstraHandle gui)
         {"atlas.sort.kind", sizeof("atlas.sort.kind") - 1u, 0u, 0u,
             sort_query, sort_invoke, (void *)&sort_commands[2]},
         {"atlas.sort.modified", sizeof("atlas.sort.modified") - 1u, 0u, 0u,
-            sort_query, sort_invoke, (void *)&sort_commands[3]}};
+            sort_query, sort_invoke, (void *)&sort_commands[3]},
+        {"atlas.sidebar", sizeof("atlas.sidebar") - 1u, 0u, 0u,
+            sidebar_query, sidebar_toggle, &command_context}};
     const AstraCommandScope command_scope = {
         &toolbar_command_scope, commands,
         sizeof(commands) / sizeof(commands[0])};
@@ -3390,6 +3421,8 @@ static AstraResult run(AstraHandle gui)
         {0x11u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.folder", sizeof("atlas.folder") - 1u},
         {0x12u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.open", sizeof("atlas.open") - 1u},
         {0x15u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.refresh", sizeof("atlas.refresh") - 1u},
+        {0x16u, ASTRA_COMMAND_SHORTCUT_PRIMARY | ASTRA_COMMAND_SHORTCUT_ALT,
+            "atlas.sidebar", sizeof("atlas.sidebar") - 1u},
         {0x50u, ASTRA_COMMAND_SHORTCUT_ALT, "atlas.back", sizeof("atlas.back") - 1u},
         {0x4fu, ASTRA_COMMAND_SHORTCUT_ALT, "atlas.forward", sizeof("atlas.forward") - 1u}
     };

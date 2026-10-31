@@ -1942,6 +1942,19 @@ AstraResult astra_interface_file_panel_set_content_active(
             0u : ASTRA_CONTROL_COLLAPSED);
 }
 
+AstraResult astra_interface_file_panel_set_places_visible(
+    const AstraFilePanel *panel, AstraUIContext *context,
+    AstraControl *controls, uint32_t visible)
+{
+    if (panel == NULL || panel->size != sizeof(*panel) ||
+        panel->first_id == 0u || context == NULL || controls == NULL ||
+        visible > 1u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return astra_interface_ui_set_state(context,
+        &controls[ASTRA_FILE_PANEL_PLACES_SCROLL],
+        visible != 0u ? 0u : ASTRA_CONTROL_COLLAPSED);
+}
+
 AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
     AstraUIContext *context, AstraControl *controls,
     const AstraUIAction *action, uint32_t *outcome)

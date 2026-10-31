@@ -66,6 +66,11 @@ selection rule.
 File Panel also owns Places selection: navigation and sidebar refresh choose
 the longest matching path component prefix. Atlas only supplies current volume
 rows and directory path.
+Atlas's View menu and Ctrl/Command+Alt+S call the shared File Panel Places
+visibility API. Hiding Places keeps its rows and selection while the directory
+view expands; showing it restores the same sidebar. Haiku's read-only
+`src/kits/tracker/ContainerWindow.cpp` (`ShowNavigator`) informed the
+show/hide plus relayout pattern.
 
 Copy and Paste serialize one or many selected paths through Filesystem Kit's
 versioned VFS selection clipboard payload. Filesystem Kit checks payload bounds

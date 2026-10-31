@@ -499,6 +499,17 @@ AstraResult astra_interface_file_panel_set_places(AstraFilePanel *panel,
     const AstraFilePanelPlace *places, uint32_t count,
     AstraCollectionItem *item_storage, uint32_t item_capacity);
 
+/** Show or hide the shared Places sidebar and relayout the directory view.
+ * Selection and Places contents remain available while hidden.
+ * @param panel Initialized File Panel.
+ * @param context Owning UI context.
+ * @param controls Panel's retained control array.
+ * @param visible One to show Places, zero to hide it.
+ * @return ASTRA_OK or a validation/layout error. */
+AstraResult astra_interface_file_panel_set_places_visible(
+    const AstraFilePanel *panel, AstraUIContext *context,
+    AstraControl *controls, uint32_t visible);
+
 /** Replace the visible Search Field text and filter through one shared path.
  * This supports restoring a saved query without synthesizing input events.
  * @param panel Initialized File Panel.

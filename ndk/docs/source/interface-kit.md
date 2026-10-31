@@ -82,6 +82,11 @@ nested paths and drop destinations without duplicating row math in an app.
 view, including files, and returns the borrowed entry when one exists. The
 caller remains responsible for I/O, capabilities, and open policy.
 
+`astra_interface_file_panel_set_places_visible` shows or hides the shared
+Places ScrollView. It retains Places rows and selection, and asks Interface Kit
+to relayout the directory view. Browser apps can expose this through their View
+menu without building a separate sidebar or changing File Panel navigation.
+
 Interface Kit 12.2 adds `AstraFileInspector` for a selected directory entry.
 Initialize it with `astra_interface_file_inspector_init`, using a parent flex
 container and a live placeholder icon. Call `astra_interface_file_inspector_set`

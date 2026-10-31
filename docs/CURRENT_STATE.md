@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas sidebar checkpoint, 2026-10-30: Design chapter 2b shows a persistent
+Places rail; menu chapter 2a includes Show Sidebar. Interface Kit now exposes
+`astra_interface_file_panel_set_places_visible`, composed from File Panel's
+existing Places ScrollView and shared collapse/relayout state. Atlas adds a
+View menu toggle and Ctrl/Command+Alt+S binding; it adds no sidebar widget or
+geometry rule. Haiku read-only reference:
+`src/kits/tracker/ContainerWindow.cpp` (`ShowNavigator`) hides/shows a shared
+navigation view and updates layout. Beast Interface tests, MC68040 library,
+Atlas bundle/test, and NDK `dist-check` pass. Offline DE25 state backup has
+SHA-256 `6125303f9e3437f4a8eaa68470eb12caf2586946d49377e7a8e743c6b65b3b6e`.
+Targeted install reported `ASTRA_DE25_DEV_INSTALL PASS guest=4`. RFB verified
+View menu hides Places and expands Grid, then Ctrl+Alt+S restores Places with
+DH0 still selected. Astra, audio, and remote desktop remained active with zero
+restarts; board has 8.1 GiB free. SHA-matched captures and service journal are
+on Beast at `/mnt/Documents/astra68/atlas-sidebar-20261030/`; board trial
+captures were removed. This is a focused Atlas interaction gate; full design
+and file-operation certification remains open.
+
 Atlas shared context selection checkpoint, 2026-10-30: Interface Kit now owns
 right-click selection for every collection control. A selected item keeps the
 multi-selection and becomes primary; an unselected item selects alone. Atlas
