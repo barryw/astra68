@@ -28,6 +28,14 @@ overwriting an existing destination. App bundles launch as apps, files go to
 OpenWith, and mounted volumes opened from Desktop stay bound to their volume
 reference so removal can invalidate the window safely.
 
+Symbolic links appear in the shared File Panel and inspector. Opening one
+follows its target through Filesystem Kit; a missing target reports an open
+error. Selection, copy, rename, and Trash keep the link itself as the object
+being changed. Shared folder operations reserve the link's destination before
+rename, as they already do for files and directories. Haiku's read-only
+`src/kits/tracker/ContainerWindow.cpp` follows links for activation, while
+`src/kits/tracker/PoseView.cpp` keeps link identity distinct from target kind.
+
 Haiku read-only references: `src/kits/tracker/Navigator.cpp` for path history,
 `src/kits/tracker/ContainerWindow.cpp` for window and Copy/Move commands, and
 `src/kits/tracker/PoseView.cpp` for shared directory presentation and selection

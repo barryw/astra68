@@ -12,6 +12,8 @@ static uint32_t rename_status;
 static uint32_t source_kind = ASTRA_VFS_KIND_DIRECTORY;
 static uint32_t unlinked_flags;
 static char created_file[ASTRA_VFS_PATH_MAX];
+static char created_link[ASTRA_VFS_PATH_MAX];
+static char link_target[ASTRA_VFS_PATH_MAX];
 
 uint32_t astra_filesystem_lstat(AstraFilesystem *filesystem,
     const char *path, AstraFileInfo *info)
@@ -34,6 +36,15 @@ uint32_t astra_filesystem_open_mode(AstraFilesystem *filesystem,
 uint32_t astra_filesystem_close(AstraFile *file)
 {
     assert(file != NULL);
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_filesystem_symlink(const char *target,
+    AstraFilesystem *filesystem, const char *path)
+{
+    assert(filesystem != NULL && target != NULL && path != NULL);
+    strcpy(created_link, path);
+    strcpy(link_target, target);
     return ASTRA_VFS_OK;
 }
 
@@ -112,5 +123,22 @@ int main(void)
         "/home/.Trash", path, sizeof(path)) == ASTRA_VFS_OK);
     assert(strcmp(created_file, "/home/.Trash/note.txt-1") == 0 &&
         strcmp(renamed_to, created_file) == 0);
+    source_kind = ASTRA_VFS_KIND_SYMLINK;
+    assert(astra_entry_rename_safe(&filesystem, "/home/Desktop/old-link",
+        "/home/Desktop", "new-link", path, sizeof(path)) == ASTRA_VFS_OK);
+    assert(strcmp(created_link, "/home/Desktop/new-link") == 0 &&
+        strcmp(link_target, created_link) == 0 &&
+        strcmp(renamed_to, created_link) == 0);
+    rename_status = ASTRA_VFS_ERR_IO;
+    assert(astra_entry_rename_safe(&filesystem, "/home/Desktop/old-link",
+        "/home/Desktop", "failed-link", path, sizeof(path)) == ASTRA_VFS_ERR_IO);
+    assert(strcmp(unlinked, "/home/Desktop/failed-link") == 0 &&
+        unlinked_flags == 0u);
+    rename_status = ASTRA_VFS_OK;
+    attempts = 2u;
+    assert(astra_entry_move_to_trash(&filesystem, "/home/Desktop/new-link",
+        "/home/.Trash", path, sizeof(path)) == ASTRA_VFS_OK);
+    assert(strcmp(created_link, "/home/.Trash/new-link-1") == 0 &&
+        strcmp(renamed_to, created_link) == 0);
     return 0;
 }

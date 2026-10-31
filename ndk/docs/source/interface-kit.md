@@ -38,6 +38,11 @@ added Table state. ABI 12 adds optional caller-owned multi-selection to
 `AstraCollectionModel`. Ctrl/Command toggles items, Shift selects a range,
 and stable IDs preserve selection through sort and refresh. Applications can
 share one selection set across File Panel views.
+File Panel includes symbolic links in directory snapshots. Its Kind column and
+shared inspector label them `Link`; activation returns `PICKED` with the link
+path. The caller decides whether to follow that path when opening it. Save
+mode reports an existing link as `OVERWRITE`, so the application can confirm
+before replacing or following it. File Panel does not resolve link targets.
 For pointer context menus, collection controls report hovered row in
 `AstraUIAction.value` and `-1` over empty space. File Panel's
 `astra_interface_file_panel_context_entry` maps that row to the original

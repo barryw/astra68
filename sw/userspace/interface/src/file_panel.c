@@ -57,7 +57,8 @@ static AstraResult file_entry_text(const AstraDirectoryEntry *entry,
     if (entry == NULL || size_text == NULL || date_text == NULL ||
         kind == NULL || size_capacity == 0u || date_capacity < 24u)
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    *kind = entry->kind == ASTRA_VFS_KIND_DIRECTORY ? "Folder" : "File";
+    *kind = entry->kind == ASTRA_VFS_KIND_DIRECTORY ? "Folder" :
+        entry->kind == ASTRA_VFS_KIND_SYMLINK ? "Link" : "File";
     astra_string_init(&size, size_text, size_capacity);
     if (entry->kind == ASTRA_VFS_KIND_DIRECTORY) {
         if (!astra_string_append(&size, "-"))
@@ -804,7 +805,8 @@ static AstraResult file_panel_items(const AstraFilePanel *panel,
             memchr(entries[at].name, '/', length) != NULL ||
             !astra_utf8_validate(entries[at].name, length, 0u) ||
             (entries[at].kind != ASTRA_VFS_KIND_FILE &&
-             entries[at].kind != ASTRA_VFS_KIND_DIRECTORY))
+             entries[at].kind != ASTRA_VFS_KIND_DIRECTORY &&
+             entries[at].kind != ASTRA_VFS_KIND_SYMLINK))
             continue;
         if (entries[at].kind != ASTRA_VFS_KIND_DIRECTORY &&
             (panel->type_accept != NULL &&
@@ -1847,7 +1849,8 @@ static AstraResult file_panel_select(AstraFilePanel *panel, uint32_t index,
         *outcome = ASTRA_FILE_PANEL_NAVIGATE;
         return ASTRA_OK;
     }
-    if (entry->kind != ASTRA_VFS_KIND_FILE)
+    if (entry->kind != ASTRA_VFS_KIND_FILE &&
+        entry->kind != ASTRA_VFS_KIND_SYMLINK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (panel->mode == ASTRA_FILE_PANEL_OPEN ||
         panel->mode == ASTRA_FILE_PANEL_BROWSE)
@@ -1867,11 +1870,13 @@ static AstraResult file_panel_outline_select(AstraFilePanel *panel,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (entry->kind == ASTRA_VFS_KIND_DIRECTORY)
         *outcome = ASTRA_FILE_PANEL_NAVIGATE;
-    else if (entry->kind == ASTRA_VFS_KIND_FILE &&
+    else if ((entry->kind == ASTRA_VFS_KIND_FILE ||
+              entry->kind == ASTRA_VFS_KIND_SYMLINK) &&
         (panel->mode == ASTRA_FILE_PANEL_OPEN ||
          panel->mode == ASTRA_FILE_PANEL_BROWSE))
         *outcome = ASTRA_FILE_PANEL_PICKED;
-    else if (entry->kind != ASTRA_VFS_KIND_FILE)
+    else if (entry->kind != ASTRA_VFS_KIND_FILE &&
+             entry->kind != ASTRA_VFS_KIND_SYMLINK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     return ASTRA_OK;
 }
@@ -1910,7 +1915,8 @@ static AstraResult file_panel_save_name(AstraFilePanel *panel,
     if (result != ASTRA_OK) return result;
     for (uint32_t at = 0u; at < panel->entry_count; ++at)
         if (strcmp(panel->leaf, panel->entries[at].name) == 0) {
-            if (panel->entries[at].kind != ASTRA_VFS_KIND_FILE)
+            if (panel->entries[at].kind != ASTRA_VFS_KIND_FILE &&
+                panel->entries[at].kind != ASTRA_VFS_KIND_SYMLINK)
                 return ASTRA_ERROR_INVALID_ARGUMENT;
             *outcome = ASTRA_FILE_PANEL_OVERWRITE;
             break;
@@ -2004,7 +2010,8 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
                 ASTRA_FILE_PANEL_LOAD_CHILD : ASTRA_FILE_PANEL_NAVIGATE;
             return ASTRA_OK;
         }
-        if (entry->kind != ASTRA_VFS_KIND_FILE)
+        if (entry->kind != ASTRA_VFS_KIND_FILE &&
+            entry->kind != ASTRA_VFS_KIND_SYMLINK)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         if (panel->mode == ASTRA_FILE_PANEL_SAVE)
             return file_panel_fill_name(panel, context, controls);

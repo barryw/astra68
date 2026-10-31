@@ -80,6 +80,8 @@ static uint32_t reserve_entry(AstraFilesystem *filesystem, const char *path,
             (void)astra_filesystem_unlink(filesystem, path, 0u);
         return status;
     }
+    if (kind == ASTRA_VFS_KIND_SYMLINK)
+        return astra_filesystem_symlink(path, filesystem, path);
     return ASTRA_VFS_ERR_UNSUPPORTED;
 }
 

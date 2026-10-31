@@ -5307,6 +5307,10 @@ static void test_file_inspector(void)
     assert(strcmp(inspector.size_text, "Size: 1234 B") == 0);
     assert(strcmp(inspector.modified, "Modified: 2025-01-01 00:00Z") == 0);
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    entry.kind = ASTRA_VFS_KIND_SYMLINK;
+    assert(astra_interface_file_inspector_set(&inspector, &context,
+        &controls[1], &entry, &icon) == ASTRA_OK);
+    assert(strcmp(inspector.kind, "Kind: Link") == 0);
     assert(astra_interface_file_inspector_set(&inspector, &context,
         &controls[1], NULL, NULL) == ASTRA_OK);
     assert(strcmp(inspector.name, "Select an item") == 0);
@@ -5719,6 +5723,7 @@ static void test_shared_file_panel(void)
     text_info.text_bytes = 8u;
     assert(astra_text_model_init(&name, &text_info) == ASTRA_OK);
     context = (AstraUIContext)ASTRA_UI_CONTEXT_INIT;
+    entries[2].kind = ASTRA_VFS_KIND_SYMLINK;
     info.mode = ASTRA_FILE_PANEL_SAVE;
     info.name_model = &name;
     assert(astra_interface_file_panel_init(&panel, controls, &info) == ASTRA_OK);
@@ -5748,6 +5753,7 @@ static void test_shared_file_panel(void)
         strcmp(panel.leaf, "new.z5") == 0);
 
     astra_interface_file_panel_dispose(&panel);
+    entries[2].kind = ASTRA_VFS_KIND_FILE;
 
     {
         AstraCollectionModel column_models[2] = {
@@ -5878,6 +5884,21 @@ static void test_shared_file_panel(void)
             ASTRA_FILE_PANEL_GRID_SCROLL, &content_frame,
             &content_clip) == ASTRA_OK);
         assert(content_frame.height > 340u);
+        AstraDirectoryEntry links[2] = {
+            {.name = "Folder link", .kind = ASTRA_VFS_KIND_SYMLINK},
+            {.name = "Broken link", .kind = ASTRA_VFS_KIND_SYMLINK}
+        };
+        assert(astra_interface_file_panel_set_directory(&panel, &context,
+            controls, "/dh0/Stories", links, 2u, next_items, 2u) == ASTRA_OK);
+        assert(panel.item_count == 2u &&
+            strcmp(panel.list_table.cells[1].text, "Link") == 0);
+        action.type = ASTRA_UI_ACTION_ACTIVATE;
+        action.control_id = 300u + ASTRA_FILE_PANEL_GRID;
+        action.value = 0;
+        assert(astra_interface_file_panel_action(&panel, &context, controls,
+            &action, &outcome) == ASTRA_OK &&
+            outcome == ASTRA_FILE_PANEL_PICKED &&
+            strcmp(panel.target, "/dh0/Stories/Folder link") == 0);
         astra_interface_file_panel_dispose(&panel);
     }
 }

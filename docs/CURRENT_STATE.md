@@ -2,6 +2,33 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas symbolic-link checkpoint, 2026-10-30: Interface Kit's shared File Panel
+now includes links in List, Grid, Columns, and Outline, labels them `Link` in
+Kind and Inspector, and presents their paths to callers. Atlas follows a link
+for Open using Filesystem Kit stat, while selection, copy, rename, and Trash
+operate on the link object. Common folder operations reserve link destinations
+for collision-safe rename and Trash. Haiku read-only references:
+`src/kits/tracker/ContainerWindow.cpp` (link activation) and
+`src/kits/tracker/PoseView.cpp` (link identity). Beast Interface, Desktop folder
+operations, Atlas, and MC68040 bundle builds pass. DE25 offline pre-change
+state was backed up with SHA-256
+`bf7f09b7d08b8dc61fd4151f6c509fffebbb270818e400b866413ff8516058a2`.
+Focused install changed Interface library, Atlas, Desktop, Kit manifest and
+provider record (`PASS guest=5`). Existing native `fssem link-edges` and `cp -R`
+created a disposable RAM0 link fixture; RFB confirmed Atlas displayed
+`Kind: Link`, opened the directory target, renamed the link, and moved only
+the link to Trash while target directory remained. SHA-matched captures and
+service log are on Beast at
+`/mnt/Documents/astra68/atlas-symlink-20261030/`. The temporary `fssem`
+command was removed by focused install (`PASS removed=1`), RAM0 cleared on
+reboot, board capture files removed, services active with zero restarts, and
+8.1 GiB free. This gate does not cover link drop destinations or broken-link
+activation. Opening a privileged shipped app from its physical `/dh0/apps`
+path fails the launch trust ceiling; opening the same app through Applications
+(`/apps`) works. That alias identity belongs in the native launcher trust
+policy, not an Atlas path special case, and remains a blocker for full Atlas
+file-operation certification.
+
 Atlas sidebar checkpoint, 2026-10-30: Design chapter 2b shows a persistent
 Places rail; menu chapter 2a includes Show Sidebar. Interface Kit now exposes
 `astra_interface_file_panel_set_places_visible`, composed from File Panel's

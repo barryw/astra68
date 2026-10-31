@@ -188,7 +188,9 @@ static AstraResult selection_set(const char *parent,
     if (index >= count || entries == NULL || parent == NULL)
         return ASTRA_OK;
     uint32_t kind = entries[index].kind;
-    if (kind != ASTRA_VFS_KIND_FILE && kind != ASTRA_VFS_KIND_DIRECTORY)
+    if (kind != ASTRA_VFS_KIND_FILE &&
+        kind != ASTRA_VFS_KIND_DIRECTORY &&
+        kind != ASTRA_VFS_KIND_SYMLINK)
         return ASTRA_OK;
     uint32_t status = astra_folder_path(parent, entries[index].name,
         selected_path, sizeof(selected_path));
@@ -1460,9 +1462,14 @@ static void open_error(AstraHandle gui, AstraResult result)
     char text[96];
     AstraString out;
     astra_string_init(&out, text, sizeof(text));
-    (void)astra_string_append(&out, "Could not open item. Astra status ");
-    (void)astra_string_append_i64(&out, result);
-    (void)astra_string_append_char(&out, '.');
+    if (result == ASTRA_ERROR_NOT_PRESENT)
+        (void)astra_string_append(&out,
+            "Item or symbolic link target was not found.");
+    else {
+        (void)astra_string_append(&out, "Could not open item. Astra status ");
+        (void)astra_string_append_i64(&out, result);
+        (void)astra_string_append_char(&out, '.');
+    }
     AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
     info.kind = ASTRA_ALERT_ERROR;
     info.title = "Open Error";
@@ -1937,10 +1944,21 @@ static void record_recent_open(const char *path, uint32_t kind)
         (void)astra_log_failure("atlas recent record", status);
 }
 
-static AstraResult open_entry(const char *path, uint32_t kind)
+static AstraResult open_entry(const char *path)
 {
     if (path == NULL || path[0] != '/')
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    uint32_t status = astra_filesystem_lstat(active_filesystem(), path,
+        &info);
+    if (status == ASTRA_VFS_ERR_NOT_FOUND) return ASTRA_ERROR_NOT_PRESENT;
+    if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
+    if (info.kind == ASTRA_VFS_KIND_SYMLINK) {
+        status = astra_filesystem_stat(active_filesystem(), path, &info);
+        if (status == ASTRA_VFS_ERR_NOT_FOUND) return ASTRA_ERROR_NOT_PRESENT;
+        if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
+    }
+    uint32_t kind = info.kind;
     uint32_t pid;
     size_t length = strlen(path);
     int is_app = length >= 4u && strcmp(path + length - 4u, ".app") == 0;
@@ -1984,15 +2002,14 @@ static AstraResult open_recent(uint32_t row)
             ASTRA_OK : ASTRA_ERROR_INVALID_HANDLE;
     } else if (mounted != NULL) result = ASTRA_ERROR_INVALID_HANDLE;
     astra_volume_snapshot_close(&catalog);
-    return result == ASTRA_OK ? open_entry(item->path, item->kind) : result;
+    return result == ASTRA_OK ? open_entry(item->path) : result;
 }
 
-static AstraResult browser_open_target(uint32_t outcome)
+static AstraResult browser_open_target(void)
 {
     size_t length = strlen(browser.target);
     if (length == 0u) return ASTRA_ERROR_INVALID_ARGUMENT;
-    return open_entry(browser.target, outcome == ASTRA_FILE_PANEL_PICKED ?
-        ASTRA_VFS_KIND_FILE : ASTRA_VFS_KIND_DIRECTORY);
+    return open_entry(browser.target);
 }
 
 static AstraResult browser_load_child(void)
@@ -2080,7 +2097,8 @@ static AstraResult start_edit(void)
         selected_path[0] == '\0' ||
         selected_row == UINT32_MAX ||
         (selected_kind != ASTRA_VFS_KIND_DIRECTORY &&
-         selected_kind != ASTRA_VFS_KIND_FILE) ||
+         selected_kind != ASTRA_VFS_KIND_FILE &&
+         selected_kind != ASTRA_VFS_KIND_SYMLINK) ||
         !astra_string_copy(edit_path, sizeof(edit_path), selected_path))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     const char *leaf = astra_folder_leaf(edit_path);
@@ -2166,7 +2184,8 @@ static AstraResult selected_query(void *opaque, AstraCommandState *state)
     *state = (AstraCommandState){"Open", 4u,
         selection_count() != 0u &&
         (selected_kind == ASTRA_VFS_KIND_DIRECTORY ||
-         selected_kind == ASTRA_VFS_KIND_FILE), 0u};
+         selected_kind == ASTRA_VFS_KIND_FILE ||
+         selected_kind == ASTRA_VFS_KIND_SYMLINK), 0u};
     return ASTRA_OK;
 }
 
@@ -2315,7 +2334,7 @@ static AstraResult open_selected(void *opaque, const AstraCommandArguments *args
     (void)args;
     (void)opaque;
     if (selection_count() != 1u) return ASTRA_ERROR_INVALID_ARGUMENT;
-    return open_entry(selected_path, selected_kind);
+    return open_entry(selected_path);
 }
 
 static int fixed_copy_path(const char *path)
@@ -2367,7 +2386,8 @@ static AstraResult selected_transfer(uint32_t operation,
 {
     if (out == NULL || selection_count() == 0u ||
         (selected_kind != ASTRA_VFS_KIND_FILE &&
-         selected_kind != ASTRA_VFS_KIND_DIRECTORY) ||
+         selected_kind != ASTRA_VFS_KIND_DIRECTORY &&
+         selected_kind != ASTRA_VFS_KIND_SYMLINK) ||
         (operation == ASTRA_VFS_CLIPBOARD_MOVE && !writable_folder_root()))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     uint32_t bytes = astra_vfs_clipboard_selection_size(selection_count());
@@ -2842,7 +2862,8 @@ static AstraResult atlas_drag_pointer(const AstraWindowEvent *event)
             drag_source_index = result == ASTRA_OK ? (uint32_t)row : UINT32_MAX;
             source_hit = result == ASTRA_OK && entry != NULL &&
                 (entry->kind == ASTRA_VFS_KIND_FILE ||
-                 entry->kind == ASTRA_VFS_KIND_DIRECTORY);
+                 entry->kind == ASTRA_VFS_KIND_DIRECTORY ||
+                 entry->kind == ASTRA_VFS_KIND_SYMLINK);
         } else {
         result = astra_interface_file_panel_entry_at(&browser,
             control_id, row, &index, &depth);
@@ -2858,7 +2879,8 @@ static AstraResult atlas_drag_pointer(const AstraWindowEvent *event)
         drag_source_depth = depth;
         source_hit = index < count && entries != NULL &&
             (entries[index].kind == ASTRA_VFS_KIND_FILE ||
-             entries[index].kind == ASTRA_VFS_KIND_DIRECTORY);
+             entries[index].kind == ASTRA_VFS_KIND_DIRECTORY ||
+             entries[index].kind == ASTRA_VFS_KIND_SYMLINK);
         }
     }
     AstraResult result = astra_interface_drag_gesture_event(&drag_gesture,
@@ -2977,7 +2999,8 @@ static AstraResult delete_selected(void *opaque, const AstraCommandArguments *ar
     AtlasCommands *context = opaque;
     if (!writable_folder_root() || selection_count() == 0u ||
         (selected_kind != ASTRA_VFS_KIND_DIRECTORY &&
-         selected_kind != ASTRA_VFS_KIND_FILE))
+         selected_kind != ASTRA_VFS_KIND_FILE &&
+         selected_kind != ASTRA_VFS_KIND_SYMLINK))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     char source[ASTRA_VFS_PATH_MAX];
     char moved[ASTRA_VFS_PATH_MAX];
@@ -3162,7 +3185,8 @@ static AstraResult menu_sync(void)
 {
     uint32_t selected = selection_count() != 0u &&
         (selected_kind == ASTRA_VFS_KIND_DIRECTORY ||
-         selected_kind == ASTRA_VFS_KIND_FILE);
+         selected_kind == ASTRA_VFS_KIND_FILE ||
+         selected_kind == ASTRA_VFS_KIND_SYMLINK);
     uint32_t writable = writable_folder_root() && worker == 0u &&
         directory.status == ASTRA_VFS_OK;
     uint32_t active = recent_mode == 0u && worker == 0u && visible_data &&
@@ -3839,12 +3863,12 @@ static AstraResult run(AstraHandle gui)
                     outcome == ASTRA_FILE_PANEL_LOAD_CHILD)
                     browser_result = action.type == ASTRA_UI_ACTION_ACTIVATE &&
                         astra_string_has_suffix(browser.target, ".app") ?
-                        browser_open_target(ASTRA_FILE_PANEL_NAVIGATE) :
+                        browser_open_target() :
                         browser_load_child();
                 else if (browser_result == ASTRA_OK &&
                     (outcome == ASTRA_FILE_PANEL_NAVIGATE ||
                      outcome == ASTRA_FILE_PANEL_PICKED))
-                    browser_result = browser_open_target(outcome);
+                    browser_result = browser_open_target();
                 if (browser_result != ASTRA_OK) {
                     (void)astra_log_failure("atlas browser action",
                         (uint32_t)(-browser_result));
