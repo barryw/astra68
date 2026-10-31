@@ -27,6 +27,12 @@ shared Filesystem Kit copies between source and destination namespaces without
 overwriting an existing destination. App bundles launch as apps, files go to
 OpenWith, and mounted volumes opened from Desktop stay bound to their volume
 reference so removal can invalidate the window safely.
+The supervisor resolves static assign aliases for app bundles: opening one
+through DH0's physical `apps` directory has the same identity and provider-
+rooted grants as opening it through Applications. Trusted bundles retain their
+startup policy identity; other static bundles use the shortest resolving
+assign path. Atlas passes the selected path unchanged to the native launcher
+and has no alias policy.
 
 Symbolic links appear in the shared File Panel and inspector. Opening one
 follows its target through Filesystem Kit; a missing target reports an open

@@ -2968,13 +2968,121 @@ static void launch_reply(uint32_t reply_send, uint32_t transaction,
 
 /* The `trusted` startup manifest line for a bundle, or NULL: that bundle
    then launches under the default application ceiling. */
-static const SupervisorManifestEntry *trusted_ceiling(const char *path)
+static const SupervisorManifestEntry *trusted_ceiling(const char *path,
+                                                      char *requested_wire,
+                                                      char *trusted_wire)
 {
     for (uint32_t index = 0u; index < startup_manifest.count; ++index)
         if (startup_manifest.entries[index].trusted != 0u &&
             strcmp(startup_manifest.entries[index].path, path) == 0)
             return &startup_manifest.entries[index];
+
+    /* Two static assigns can name one provider node (for example DH0 and
+     * APPS). Compare their rooted provider paths before applying the trusted
+     * ceiling. Never transfer trust through a lazy/public volume binding. */
+    const AstraAssign *requested = NULL;
+    if (astra_assign_resolve_raw(supervisor_assigns(), path,
+            ASTRA_RIGHT_READ, 0u, requested_wire, ASTRA_VFS_PATH_MAX,
+            &requested) != ASTRA_VFS_OK || requested == NULL ||
+        requested->volume.id != 0u || requested->broker != 0u)
+        return NULL;
+    for (uint32_t index = 0u; index < startup_manifest.count; ++index) {
+        const SupervisorManifestEntry *entry = &startup_manifest.entries[index];
+        const AstraAssign *trusted = NULL;
+        if (entry->trusted == 0u ||
+            astra_assign_resolve_raw(supervisor_assigns(), entry->path,
+                ASTRA_RIGHT_READ, 0u, trusted_wire, ASTRA_VFS_PATH_MAX,
+                &trusted) != ASTRA_VFS_OK || trusted == NULL ||
+            trusted->volume.id != 0u || trusted->broker != 0u)
+            continue;
+        if (requested->handle == trusted->handle &&
+            strcmp(requested_wire, trusted_wire) == 0)
+            return entry;
+    }
     return NULL;
+}
+
+/* One static provider node can have several public names. Choose the shortest
+ * resolving name as the process identity, so settings and singleton state do
+ * not split when an app is opened through a physical volume path. */
+static void static_bundle_identity(SupervisorManifestEntry *entry,
+                                   const AstraAssign *source, char *wire,
+                                   char *check_wire)
+{
+    const SupervisorManifestEntry *trusted = trusted_ceiling(
+        entry->path, wire, check_wire);
+    if (trusted != NULL) {
+        (void)astra_string_copy(entry->path, sizeof(entry->path), trusted->path);
+        return;
+    }
+
+    size_t best_length = sizeof(entry->path);
+    const AstraAssignTable *table = supervisor_assigns();
+    for (uint32_t at = 0u; at < table->count; ++at) {
+        const AstraAssign *alias = &table->entries[at];
+        if (alias->handle != source->handle || alias->volume.id != 0u ||
+            alias->broker != 0u || (alias->rights & ASTRA_RIGHT_READ) == 0u ||
+            alias->root == NULL)
+            continue;
+        size_t root_length = strlen(alias->root);
+        const char *tail = wire + 1u;
+        if (strncmp(tail, alias->root, root_length) != 0 ||
+            (root_length != 0u && tail[root_length] != '/' &&
+             tail[root_length] != '\0'))
+            continue;
+        tail += root_length;
+        if (*tail == '/') ++tail;
+        size_t name_length = strlen(alias->name);
+        size_t tail_length = strlen(tail);
+        size_t length = 1u + name_length + (tail_length != 0u ?
+                        1u + tail_length : 0u);
+        if (length >= sizeof(entry->path)) continue;
+        char candidate[SUPERVISOR_MANIFEST_PATH_MAX];
+        candidate[0] = '/';
+        for (size_t index = 0u; index < name_length; ++index) {
+            char letter = alias->name[index];
+            candidate[index + 1u] = letter >= 'A' && letter <= 'Z' ?
+                (char)(letter - 'A' + 'a') : letter;
+        }
+        size_t end = name_length + 1u;
+        if (tail_length != 0u) {
+            candidate[end++] = '/';
+            memcpy(candidate + end, tail, tail_length);
+            end += tail_length;
+        }
+        candidate[end] = '\0';
+        const AstraAssign *resolved = NULL;
+        if (astra_assign_resolve_raw(table, candidate, ASTRA_RIGHT_READ, 0u,
+                check_wire, ASTRA_VFS_PATH_MAX, &resolved) != ASTRA_VFS_OK ||
+            resolved == NULL || resolved->handle != source->handle ||
+            resolved->volume.id != 0u || resolved->broker != 0u ||
+            strcmp(check_wire, wire) != 0)
+            continue;
+        if (length < best_length || (length == best_length &&
+                strcmp(candidate, entry->path) < 0)) {
+            memcpy(entry->path, candidate, length + 1u);
+            best_length = length;
+        }
+    }
+}
+
+/* APP and CWD grants are provider-rooted, even when the launch path uses a
+ * different static assign spelling for the same bundle. */
+static uint32_t static_bundle_source(SupervisorManifestEntry *entry,
+                                     char *bundle_root, AstraAssign *source,
+                                     char *wire, char *trusted_wire)
+{
+    const AstraAssign *held = NULL;
+    uint32_t status = astra_assign_resolve_raw(supervisor_assigns(), entry->path,
+        ASTRA_RIGHT_READ, 0u, wire, ASTRA_VFS_PATH_MAX, &held);
+    if (status != ASTRA_VFS_OK) return launch_open_status(status);
+    if (held == NULL || held->handle == 0u || held->volume.id != 0u ||
+        held->broker != 0u) return ASTRA_STATUS_ACCESS;
+    if (!astra_string_copy(bundle_root, ASTRA_VFS_PATH_MAX, wire + 1u))
+        return ASTRA_STATUS_LIMIT;
+    *source = *held;
+    static_bundle_identity(entry, held, wire, trusted_wire);
+    return ASTRA_STATUS_OK;
 }
 
 /* Names the bundle and the refused grant; a refusal is a policy decision a
@@ -3038,6 +3146,7 @@ static void pump_launch(const AstraStartupInfo *startup)
     uint32_t handles = 0u;
     AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
     SupervisorLaunchVolume volume = {0};
+    AstraAssign static_source = {0};
     uint32_t process_id = 0u;
     uint32_t process_wait_handle = 0u;
     uint32_t open_us = 0u;
@@ -3065,7 +3174,7 @@ static void pump_launch(const AstraStartupInfo *startup)
     }
     entry = astra_runtime_allocate(sizeof(*entry));
     argument_bytes = astra_runtime_allocate(ASTRA_APPLICATION_ARGUMENT_BYTES);
-    paths = astra_vfs_path_storage_open(2u);
+    paths = astra_vfs_path_storage_open(4u);
     if (entry == NULL || argument_bytes == NULL || paths.bytes == NULL) {
         launch_reply(reply_send, request.header.transaction_id, ASTRA_STATUS_LIMIT, 0u, 0u);
         goto done;
@@ -3115,6 +3224,10 @@ static void pump_launch(const AstraStartupInfo *startup)
 
         memmove(bundle_root, bundle_root + prefix, strlen(bundle_root + prefix) + 1u);
     }
+    if (status == ASTRA_STATUS_OK && volume.lease.root == 0u)
+        status = static_bundle_source(entry, bundle_root, &static_source,
+            astra_vfs_path_storage_at(&paths, 2u),
+            astra_vfs_path_storage_at(&paths, 3u));
     if (status == ASTRA_STATUS_OK &&
         (bundle.flags & ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE) != 0u) {
         uint32_t running = bring_forward(entry->path);
@@ -3143,7 +3256,9 @@ static void pump_launch(const AstraStartupInfo *startup)
         ++entry->grant_count;
     }
     if (status == ASTRA_STATUS_OK) {
-        const SupervisorManifestEntry *ceiling = trusted_ceiling(entry->path);
+        const SupervisorManifestEntry *ceiling = trusted_ceiling(entry->path,
+            astra_vfs_path_storage_at(&paths, 2u),
+            astra_vfs_path_storage_at(&paths, 3u));
 
         for (uint32_t at = 0u; at < entry->grant_count; ++at)
             if (!supervisor_launch_admits(ceiling, &entry->grants[at])) {
@@ -3173,7 +3288,8 @@ static void pump_launch(const AstraStartupInfo *startup)
                 .handle = volume.lease.root, .rights = ASTRA_RIGHT_READ};
             status = launch_entry(startup, entry, NULL, bundle_root,
                                   bundle.id,
-                                  volume.lease.root != 0u ? &volume_source : NULL,
+                                  volume.lease.root != 0u ? &volume_source :
+                                      &static_source,
                                   &launch_arguments, source.length, open_us,
                                   astra_vfs_read_source_read_at,
                                   astra_vfs_read_source_close, &source,

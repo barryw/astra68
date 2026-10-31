@@ -161,10 +161,10 @@ $(LOADER_RECOVERY_TEST): $(LOADER_RECOVERY_SOURCES) src/loader.c ../../include/a
 		-ffunction-sections -fdata-sections $(LOADER_RECOVERY_SOURCES) \
 		-Wl,--gc-sections -o $@
 
-$(LAUNCH_VOLUME_TEST): tests/test_launch_volume.c src/loader.c include/loader.h
+$(LAUNCH_VOLUME_TEST): tests/test_launch_volume.c src/loader.c include/loader.h $(RUNTIME)/src/string.c
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) \
-		-ffunction-sections -fdata-sections $< \
+		-ffunction-sections -fdata-sections $< $(RUNTIME)/src/string.c \
 		-Wl,--gc-sections -o $@
 
 test: $(HOST_TEST) $(LOADER_TEST) $(PROC_TREE_ROOT_TEST) \
@@ -209,6 +209,7 @@ sanitize:
 	./build/host/test_loader_recovery_sanitize
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) $(HOST_FLAGS) $(SANITIZER_FLAGS) \
 		-ffunction-sections -fdata-sections tests/test_launch_volume.c \
+		$(RUNTIME)/src/string.c \
 		-Wl,--gc-sections -o build/host/test_launch_volume_sanitize
 	./build/host/test_launch_volume_sanitize
 

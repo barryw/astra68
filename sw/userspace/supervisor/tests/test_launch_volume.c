@@ -7,6 +7,10 @@
 
 static AstraAssignTable assigns;
 static AstraAssign bound_assign;
+static AstraAssign apps_assign = {.root = "apps", .handle = 300u,
+                                  .rights = ASTRA_RIGHT_READ};
+static AstraAssign dh0_assign = {.root = "", .handle = 300u,
+                                 .rights = ASTRA_RIGHT_READ};
 static uint32_t mount_state, connect_result, bind_result, register_result;
 static AstraResult root_result;
 static int fixed_present, bound, opens, snapshots_closed, roots, connects;
@@ -31,8 +35,32 @@ const AstraAssign *astra_assign_lookup(const AstraAssignTable *table,
                                        const char *name)
 {
     assert(table == &assigns);
-    if (fixed_present && strcmp(name, "apps") == 0) return &bound_assign;
+    if (fixed_present && strcmp(name, "apps") == 0) return &apps_assign;
+    if (fixed_present && strcmp(name, "dh0") == 0) return &dh0_assign;
     return bound && strcmp(name, "usb2") == 0 ? &bound_assign : NULL;
+}
+
+uint32_t astra_assign_resolve_raw(const AstraAssignTable *table,
+    const char *path, uint32_t rights, uint32_t member, char *wire,
+    uint32_t capacity, const AstraAssign **assign)
+{
+    assert(table == &assigns && path != NULL && path[0] == '/' &&
+           rights == ASTRA_RIGHT_READ && member == 0u && wire != NULL);
+    const char *slash = strchr(path + 1u, '/');
+    if (slash == NULL) return ASTRA_VFS_ERR_NOT_FOUND;
+    char name[ASTRA_ASSIGN_NAME_MAX];
+    size_t length = (size_t)(slash - path - 1u);
+    if (length >= sizeof(name)) return ASTRA_VFS_ERR_INVALID;
+    memcpy(name, path + 1u, length);
+    name[length] = '\0';
+    const AstraAssign *binding = astra_assign_lookup(table, name);
+    if (binding == NULL) return ASTRA_VFS_ERR_NOT_FOUND;
+    int written = snprintf(wire, capacity, "/%s%s%s", binding->root,
+        binding->root[0] == '\0' ? "" : "/", slash + 1u);
+    if (written < 0 || (uint32_t)written >= capacity)
+        return ASTRA_VFS_ERR_LIMIT;
+    *assign = binding;
+    return ASTRA_VFS_OK;
 }
 
 uint32_t astra_assign_bind(AstraAssignTable *table, const char *name,
@@ -194,6 +222,55 @@ int main(void)
     assert(launch_volume_open(&volume, "/usb2/Stale.app") == ASTRA_STATUS_NOT_FOUND);
     launch_volume_close(&volume);
     assert(roots == 0 && closes == 0 && snapshots_closed == 1);
+
+    SupervisorManifestEntry trusted_entry = {0};
+    strcpy(trusted_entry.path, "/apps/Terminal.app");
+    trusted_entry.trusted = 1u;
+    startup_manifest.entries = &trusted_entry;
+    startup_manifest.count = 1u;
+    char requested_wire[ASTRA_VFS_PATH_MAX];
+    char trusted_wire[ASTRA_VFS_PATH_MAX];
+    reset();
+    fixed_present = 1;
+    AstraAssign static_assigns[2] = {apps_assign, dh0_assign};
+    strcpy(static_assigns[0].name, "APPS");
+    strcpy(static_assigns[1].name, "DH0");
+    assigns.entries = static_assigns;
+    assigns.count = 2u;
+    assert(trusted_ceiling("/apps/Terminal.app", requested_wire,
+        trusted_wire) == &trusted_entry);
+    assert(trusted_ceiling("/dh0/apps/Terminal.app", requested_wire,
+        trusted_wire) == &trusted_entry);
+    assert(trusted_ceiling("/dh0/apps/Other.app", requested_wire,
+        trusted_wire) == NULL);
+    char bundle_root[ASTRA_VFS_PATH_MAX];
+    AstraAssign bundle_source = {0};
+    SupervisorManifestEntry launched = {0};
+    strcpy(launched.path, "/dh0/apps/Terminal.app");
+    assert(static_bundle_source(&launched, bundle_root, &bundle_source,
+        requested_wire, trusted_wire) == ASTRA_STATUS_OK);
+    assert(strcmp(bundle_root, "apps/Terminal.app") == 0 &&
+        bundle_source.handle == apps_assign.handle);
+    assert(strcmp(launched.path, "/apps/Terminal.app") == 0);
+    strcpy(launched.path, "/dh0/apps/Other.app");
+    assert(static_bundle_source(&launched, bundle_root, &bundle_source,
+        requested_wire, trusted_wire) == ASTRA_STATUS_OK);
+    assert(strcmp(launched.path, "/apps/Other.app") == 0);
+    assert(strcmp(bundle_root, "apps/Other.app") == 0);
+    strcpy(launched.path, "/apps/Other.app");
+    assert(static_bundle_source(&launched, bundle_root, &bundle_source,
+        requested_wire, trusted_wire) == ASTRA_STATUS_OK);
+    assert(strcmp(launched.path, "/apps/Other.app") == 0);
+    bound = 1;
+    bound_assign = (AstraAssign){.root = "apps", .handle = 300u,
+        .rights = ASTRA_RIGHT_READ, .volume = {.id = 11u}};
+    assert(trusted_ceiling("/usb2/Terminal.app", requested_wire,
+        trusted_wire) == NULL);
+    strcpy(launched.path, "/usb2/Terminal.app");
+    assert(static_bundle_source(&launched, bundle_root, &bundle_source,
+        requested_wire, trusted_wire) == ASTRA_STATUS_ACCESS);
+    startup_manifest.entries = NULL;
+    startup_manifest.count = 0u;
 
     puts("supervisor launch volume tests passed");
     return 0;
