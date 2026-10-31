@@ -343,6 +343,9 @@ static const AstraContextMenuItem atlas_menu_commands[ATLAS_MENU_COUNT] = {
     [ATLAS_MENU_PASTE] = {"atlas.paste", sizeof("atlas.paste") - 1u, NULL},
     [ATLAS_MENU_RENAME] = {"atlas.rename", sizeof("atlas.rename") - 1u, NULL},
     [ATLAS_MENU_DELETE] = {"atlas.delete", sizeof("atlas.delete") - 1u, NULL},
+    [ATLAS_MENU_LIST] = {"atlas.view.list", sizeof("atlas.view.list") - 1u, NULL},
+    [ATLAS_MENU_GRID] = {"atlas.view.grid", sizeof("atlas.view.grid") - 1u, NULL},
+    [ATLAS_MENU_COLUMNS] = {"atlas.view.columns", sizeof("atlas.view.columns") - 1u, NULL},
     [ATLAS_MENU_SORT_NAME] = {"atlas.sort.name", sizeof("atlas.sort.name") - 1u, NULL},
     [ATLAS_MENU_SORT_SIZE] = {"atlas.sort.size", sizeof("atlas.sort.size") - 1u, NULL},
     [ATLAS_MENU_SORT_KIND] = {"atlas.sort.kind", sizeof("atlas.sort.kind") - 1u, NULL},
@@ -3160,13 +3163,13 @@ static AstraResult refresh_directory(void *opaque,
     return result == ASTRA_OK ? browser_update_places() : result;
 }
 
-typedef struct AtlasSortCommand {
+typedef struct AtlasChoiceCommand {
     uint32_t key;
     const char *label;
     uint32_t label_length;
-} AtlasSortCommand;
+} AtlasChoiceCommand;
 
-static const AtlasSortCommand sort_commands[] = {
+static const AtlasChoiceCommand sort_commands[] = {
     {ASTRA_DIRECTORY_SORT_NAME, "Name", 4u},
     {ASTRA_DIRECTORY_SORT_SIZE, "Size", 4u},
     {ASTRA_DIRECTORY_SORT_KIND, "Kind", 4u},
@@ -3175,7 +3178,7 @@ static const AtlasSortCommand sort_commands[] = {
 
 static AstraResult sort_query(void *opaque, AstraCommandState *state)
 {
-    const AtlasSortCommand *command = opaque;
+    const AtlasChoiceCommand *command = opaque;
     *state = (AstraCommandState){command->label, command->label_length,
         recent_mode == 0u && worker == 0u && visible_data &&
         directory.status == ASTRA_VFS_OK,
@@ -3215,7 +3218,7 @@ static AstraResult sort_invoke(void *opaque,
     const AstraCommandArguments *args)
 {
     (void)args;
-    const AtlasSortCommand *command = opaque;
+    const AtlasChoiceCommand *command = opaque;
     return sort_set(command->key, 0u);
 }
 
@@ -3283,6 +3286,28 @@ static AstraResult view_set(uint32_t value)
     return result;
 }
 
+static const AtlasChoiceCommand view_commands[] = {
+    {ASTRA_FILE_PANEL_VIEW_LIST, "as List", 7u},
+    {ASTRA_FILE_PANEL_VIEW_GRID, "as Grid", 7u},
+    {ASTRA_FILE_PANEL_VIEW_COLUMNS, "as Columns", 10u}
+};
+
+static AstraResult view_query(void *opaque, AstraCommandState *state)
+{
+    const AtlasChoiceCommand *command = opaque;
+    *state = (AstraCommandState){command->label, command->label_length,
+        recent_mode == 0u, browser.view_mode == command->key};
+    return ASTRA_OK;
+}
+
+static AstraResult view_invoke(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)args;
+    const AtlasChoiceCommand *command = opaque;
+    return view_set(command->key);
+}
+
 static void menu_state(uint32_t row, int enabled, int checked)
 {
     atlas_menu[row].flags =
@@ -3301,12 +3326,6 @@ static AstraResult menu_sync(void)
 
     menu_state(ATLAS_MENU_SAVE_SEARCH, active &&
         browser.search_length != 0u, 0);
-    menu_state(ATLAS_MENU_LIST, recent_mode == 0u,
-        browser.view_mode == ASTRA_FILE_PANEL_VIEW_LIST);
-    menu_state(ATLAS_MENU_GRID, recent_mode == 0u,
-        browser.view_mode == ASTRA_FILE_PANEL_VIEW_GRID);
-    menu_state(ATLAS_MENU_COLUMNS, recent_mode == 0u,
-        browser.view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS);
     menu_state(ATLAS_MENU_HIDDEN, active, show_hidden != 0u);
     menu_state(ATLAS_MENU_PREVIEW, 1, preview_visible != 0u);
     for (uint32_t at = 0u; at < ATLAS_MENU_COUNT; ++at) {
@@ -3394,6 +3413,12 @@ static const AstraCommand atlas_command_table[] = {
         &atlas_command_context},
     {"atlas.delete", 12u, 0u, 0u, delete_query, delete_selected,
         &atlas_command_context},
+    {"atlas.view.list", sizeof("atlas.view.list") - 1u, 0u, 0u,
+        view_query, view_invoke, (void *)&view_commands[0]},
+    {"atlas.view.grid", sizeof("atlas.view.grid") - 1u, 0u, 0u,
+        view_query, view_invoke, (void *)&view_commands[1]},
+    {"atlas.view.columns", sizeof("atlas.view.columns") - 1u, 0u, 0u,
+        view_query, view_invoke, (void *)&view_commands[2]},
     {"atlas.package", 13u, 0u, 0u, package_query, create_installer,
         &atlas_command_context},
     {"atlas.saved.open", sizeof("atlas.saved.open") - 1u, 0u, 0u,
@@ -3511,12 +3536,6 @@ static AstraResult menu_invoke(AstraHandle gui,
         if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
         return browser_update_places();
     }
-    case ATLAS_MENU_LIST:
-        return view_set(ASTRA_FILE_PANEL_VIEW_LIST);
-    case ATLAS_MENU_GRID:
-        return view_set(ASTRA_FILE_PANEL_VIEW_GRID);
-    case ATLAS_MENU_COLUMNS:
-        return view_set(ASTRA_FILE_PANEL_VIEW_COLUMNS);
     case ATLAS_MENU_HIDDEN:
         return show_hidden_set(!show_hidden);
     case ATLAS_MENU_PREVIEW: {
@@ -3560,6 +3579,9 @@ static AstraResult run(AstraHandle gui)
         {0x06u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.copy", sizeof("atlas.copy") - 1u},
         {0x1bu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.cut", sizeof("atlas.cut") - 1u},
         {0x19u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.paste", sizeof("atlas.paste") - 1u},
+        {0x1eu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.view.list", sizeof("atlas.view.list") - 1u},
+        {0x1fu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.view.grid", sizeof("atlas.view.grid") - 1u},
+        {0x20u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.view.columns", sizeof("atlas.view.columns") - 1u},
         {0x11u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.window", sizeof("atlas.window") - 1u},
         {0x11u, ASTRA_COMMAND_SHORTCUT_PRIMARY | ASTRA_COMMAND_SHORTCUT_SHIFT,
             "atlas.folder", sizeof("atlas.folder") - 1u},

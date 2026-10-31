@@ -74,6 +74,50 @@ def kit_companions(source, target):
     raise ValueError("Kit manifest does not provide changed library: " + str(source))
 
 
+def validate_application_target(source, target):
+    """Install a built app only where its bundle manifest launches it."""
+    parts = source.relative_to(REPOSITORY).parts
+    if parts[:4] == ("sw", "userspace", "apps", "build") and \
+            len(parts) >= 6 and parts[4].endswith(".app"):
+        expected = "/apps/" + Path(*parts[4:]).as_posix()
+        if target != expected:
+            raise ValueError("staged application target must be " + expected)
+        return
+    direct = len(parts) == 7 and parts[:3] == (
+        "sw", "userspace", "applications") and parts[4:6] == (
+        "build", "m68k")
+    terminal = parts == ("sw", "userspace", "services", "terminal",
+                          "build", "m68k", "terminal")
+    if not direct and not terminal:
+        return
+    target_parts = Path(target).parts
+    if len(target_parts) < 4 or target_parts[1] != "apps" or \
+            not target_parts[2].endswith(".app"):
+        raise ValueError("application executable target must be inside /apps/NAME.app")
+    bundle = target_parts[2]
+    manifest = REPOSITORY / "sw/userspace/apps" / bundle / "manifest"
+    if not manifest.is_file():
+        raise ValueError("application bundle manifest missing: " + bundle)
+    executable = []
+    for line in manifest.read_text().splitlines():
+        fields = shlex.split(line, comments=True)
+        if fields and fields[0] == "executable":
+            if len(fields) != 2:
+                raise ValueError("invalid application executable in " + bundle)
+            executable.append(fields[1])
+    if len(executable) != 1 or Path(executable[0]).is_absolute() or \
+            ".." in Path(executable[0]).parts:
+        raise ValueError("invalid application executable in " + bundle)
+    expected = "/apps/" + bundle + "/" + executable[0]
+    if target != expected:
+        raise ValueError("application executable target must be " + expected)
+    normalized = lambda value: "".join(character.lower() for character in value
+                                        if character.isalnum())
+    if normalized(parts[3]) != normalized(bundle[:-4]) or \
+            normalized(source.name) != normalized(Path(executable[0]).name):
+        raise ValueError("built application does not match " + bundle)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--make", action="append", default=[], metavar="DIR[:TARGET]")
@@ -133,6 +177,8 @@ def main():
             if not separator:
                 parser.error("artifact mapping needs SOURCE=TARGET")
             source = checked_source(source_name)
+            if kind == "guest":
+                validate_application_target(source, target)
             stage_mapping(kind, source, target)
             if kind == "guest":
                 for companion, companion_target in kit_companions(source, target):

@@ -57,4 +57,41 @@ with tempfile.TemporaryDirectory() as directory:
     assert loader_companions[0] == (manifest, "/libs/Runtime.kit/manifest")
     assert loader_companions[1][0] == b"provider"
 
-print("dev-deploy Kit freshness PASS")
+    atlas = root / "sw/userspace/applications/atlas/build/m68k/atlas"
+    atlas.parent.mkdir(parents=True)
+    atlas.write_bytes(b"atlas")
+    manifest = root / "sw/userspace/apps/Atlas.app/manifest"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("astra-bundle 1\nexecutable bin/m68k-68040/Atlas\n")
+    module.validate_application_target(
+        atlas, "/apps/Atlas.app/bin/m68k-68040/Atlas")
+    try:
+        module.validate_application_target(atlas, "/apps/Atlas.app/Atlas")
+    except ValueError as error:
+        assert "bin/m68k-68040/Atlas" in str(error)
+    else:
+        raise AssertionError("executable outside bundle launch path was accepted")
+    manifest.write_text("astra-bundle 1\nexecutable custom/Atlas\n")
+    module.validate_application_target(atlas, "/apps/Atlas.app/custom/Atlas")
+    try:
+        module.validate_application_target(
+            atlas, "/apps/Atlas.app/bin/m68k-68040/Atlas")
+    except ValueError as error:
+        assert "custom/Atlas" in str(error)
+    else:
+        raise AssertionError("target no longer in manifest was accepted")
+    manifest.write_text("astra-bundle 1\nexecutable bin/m68k-68040/Atlas\n")
+
+    staged = root / "sw/userspace/apps/build/Atlas.app/bin/m68k-68040/Atlas"
+    staged.parent.mkdir(parents=True)
+    staged.write_bytes(b"atlas")
+    module.validate_application_target(
+        staged, "/apps/Atlas.app/bin/m68k-68040/Atlas")
+    try:
+        module.validate_application_target(staged, "/apps/Atlas.app/Atlas")
+    except ValueError as error:
+        assert "staged application target" in str(error)
+    else:
+        raise AssertionError("staged executable outside bundle was accepted")
+
+print("dev-deploy Kit and application target PASS")

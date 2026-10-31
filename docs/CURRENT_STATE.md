@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas view-command and deployment checkpoint, 2026-10-31: View as List,
+Grid, and Columns now use the same Interface Kit responder commands for menu
+state, menu selection, and Primary+1/2/3 shortcuts. Atlas supplies view
+policy and the shared File Panel draws all three presentations. Haiku read-only
+reference: `src/kits/tracker/ContainerWindow.cpp` binds view commands and
+shortcuts through its shared menu machinery. Beast Atlas tests, MC68040 build,
+and deployment-target test passed. A deployment audit found prior targeted
+Atlas installs wrote `/apps/Atlas.app/Atlas`, but its bundle manifest launches
+`/apps/Atlas.app/bin/m68k-68040/Atlas`. Those prior focused install reports
+prove only that staging succeeded, not that the new Atlas executable ran.
+The stray file was removed by exact digest while Astra's storage service was
+stopped. `dev-deploy-de25.py` now checks the bundle manifest and rejects the
+wrong app target before board
+mutation. Correct-path DE25 install passed. RFB opened DH0 and Primary+1/2/3
+changed List, Grid, and Columns respectively; final raw SHA-256 values are
+`ead162a732b1a812dd1e4529f8ecc522b90284150be4ce19a33c712133c27142`,
+`4df03f1f31b0d66d635744493c1ef10e3bac4bd28ff31df4cf1622523f06d3e3`,
+and `9a12dc7a92da966e2265ffdd35493b3113b23dcca3067bb482e69b34515c6531`.
+Verified captures and PNGs are archived on Beast under
+`/mnt/Documents/astra68/atlas-view-shortcuts-20261031/`. Board trial files
+were removed. Astra, audio, and remote desktop services remain active with
+zero restarts and 8.0 GiB free. Physical USB
+transfer and platform-owned Help/NDK menu skeleton remain open.
+
 Atlas command reuse checkpoint, 2026-10-31: Atlas now declares one responder
 table for toolbar, shortcuts, context menus, and system menu bar. Menu rows
 query and invoke the same Interface Kit commands, replacing duplicate action

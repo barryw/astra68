@@ -224,7 +224,9 @@ global commands while its shared File Panel Search field has focus. Primary+N
 opens a new Home window through the existing application launcher;
 Shift+Primary+N creates a drawer in the current writable directory. Copy,
 Cut, Paste, Open, Refresh, and Alt+Left/Right use the same actions as menus and
-toolbar.
+toolbar. Primary+1/2/3 choose List/Grid/Columns through the same responder
+commands as the View menu. Menu enable and checked state query those commands;
+Atlas has no second view-switch dispatcher.
 The toolbar uses Interface Kit's Toolbar Actions, shared New Folder and Open
 glyphs, command state, overflow, and peer fitting. Toolbar Actions measures
 the same Popup, Checkbox, Breadcrumb, Segmented, and Search Field controls
@@ -247,4 +249,7 @@ storage at view initialization. Desktop and Display use the same alignment.
 Build on beast with `make -C sw/userspace/apps build/.Atlas.app.stamp`.
 Focused checks: `make -C sw/userspace/applications/atlas test` and
 `make -C sw/userspace/interface test`. DE25 checks use targeted install of
-Atlas and Interface Kit; avoid whole-image rebuilds for app changes.
+Atlas and Interface Kit; avoid whole-image rebuilds for app changes. Atlas's
+bundle manifest launches `/apps/Atlas.app/bin/m68k-68040/Atlas`; targeted
+installs must use that exact guest path. `dev-deploy-de25.py` validates staged
+application targets before board mutation.
