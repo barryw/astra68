@@ -2,16 +2,17 @@
 
 #include <astra/string.h>
 #include <astra/utf8.h>
+#include <astra/vfs_path.h>
 
 #include <string.h>
 
 const char *astra_folder_leaf(const char *path)
 {
-    if (path == NULL) return NULL;
-    const char *leaf = NULL;
-    for (const char *at = path; *at != '\0'; ++at)
-        if (*at == '/') leaf = at + 1u;
-    return leaf != NULL && *leaf != '\0' ? leaf : NULL;
+    if (path == NULL || path[0] != '/') return NULL;
+    size_t length = strlen(path);
+    if (length == 0u || path[length - 1u] == '/') return NULL;
+    const char *leaf = astra_path_leaf(path);
+    return leaf != path ? leaf : NULL;
 }
 
 int astra_folder_name_valid(const char *name)

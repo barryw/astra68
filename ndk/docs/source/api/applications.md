@@ -21,6 +21,10 @@ encodes an exact volume reference as option, epoch, ID, and generation.
 Callers should obtain that reference from a current volume snapshot; the
 receiver must validate it against a fresh snapshot before acting. Desktop and
 Atlas share this helper when opening a volume in another application.
+`astra_application_launch_for_volume_path()` adds a path under that exact
+volume. Inspectors and other file-targeted receivers must validate both
+identity and path containment, then retain an appropriate read grant before
+accessing file data.
 
 Service manager wire version 7 keeps service identifiers at 63 bytes while
 accepting full filesystem executable paths. Definition and runtime-info

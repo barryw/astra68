@@ -47,6 +47,18 @@ context-menu renderer, or launch policy. Haiku's read-only
 `src/kits/tracker/ContainerWindow.cpp` and
 `src/kits/tracker/OpenWithWindow.cpp` informed the dynamic handler menu;
 Astra uses its shared Open With application for the chooser.
+File > Get Information, the item and background context menus, and Primary+I
+invoke one Atlas command that opens System Inspector for the selected item or
+current directory. Inspector is a separate native app composed from Interface
+Kit's Settings Pane, Tab, Label, and Button controls. It shows General, Open
+With, Bytes, and Blocks; directories and symbolic links skip file-type probing.
+Atlas sends the exact mounted-volume reference with a selected path through
+the shared NDK launch helper. Inspector checks path containment against a fresh
+catalog and retains a read grant for that volume incarnation. RAM paths use
+the RAM broker; fixed system paths retain their explicit startup authority.
+This follows Haiku's read-only `src/kits/tracker/infowindow/InfoWindow.cpp`
+model and tab composition, and `src/kits/storage/Path.cpp` leaf-name behavior.
+No Inspector control or metadata renderer lives in Atlas.
 The same Volume menu offers Unmount for a removable mounted volume and Eject
 for a mounted physical optical disc. Atlas and Desktop link one common volume
 action state machine and one common exact-holder dialog. The native Volume

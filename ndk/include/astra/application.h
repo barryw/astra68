@@ -58,13 +58,15 @@ ASTRA_NODISCARD AstraResult astra_application_launch_with_arguments(
  * @param source Origin of launch request.
  * @param option Receiver's volume-target option, for example `--target`.
  * @param volume Exact nonzero provider epoch, ID, and generation.
+ * @param path Optional absolute path inside that volume, or NULL for mount.
  * @param process_id Receives new process PID.
  * @return ASTRA_OK on startup, or validation/launch error.
  */
-static inline AstraResult astra_application_launch_for_volume(
+static inline AstraResult astra_application_launch_for_volume_target(
     AstraHandle launcher, const char *bundle_path, uint16_t path_length,
     AstraLaunchSource source, const char *option,
-    const AstraVolumeReference *volume, uint32_t *process_id)
+    const AstraVolumeReference *volume, const char *path,
+    uint32_t *process_id)
 {
     char epoch[21], id[21], generation[21];
     char *const text[] = {epoch, id, generation};
@@ -80,9 +82,54 @@ static inline AstraResult astra_application_launch_for_volume(
         if (!astra_string_append_u64(&number, values[at]))
             return ASTRA_ERROR_NO_RESOURCES;
     }
-    const char *const arguments[] = {option, epoch, id, generation};
+    if (path != NULL && path[0] != '/')
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    const char *const arguments[] = {option, epoch, id, generation, path};
     return astra_application_launch_with_arguments(launcher, bundle_path,
-        path_length, source, arguments, 4u, process_id);
+        path_length, source, arguments, path != NULL ? 5u : 4u,
+        process_id);
+}
+
+/** Launch one exact volume target without a nested path.
+ * @param launcher Launcher service handle.
+ * @param bundle_path Bundle path beneath APPS:.
+ * @param path_length Bytes in bundle_path.
+ * @param source Origin of launch request.
+ * @param option Receiver's volume-target option.
+ * @param volume Exact nonzero provider epoch, ID, and generation.
+ * @param process_id Receives new process PID.
+ * @return ASTRA_OK on startup, or validation/launch error.
+ */
+static inline AstraResult astra_application_launch_for_volume(
+    AstraHandle launcher, const char *bundle_path, uint16_t path_length,
+    AstraLaunchSource source, const char *option,
+    const AstraVolumeReference *volume, uint32_t *process_id)
+{
+    return astra_application_launch_for_volume_target(launcher, bundle_path,
+        path_length, source, option, volume, NULL, process_id);
+}
+
+/** Launch a bundle for one path within an exact mounted-volume incarnation.
+ * The receiving application validates the path against the catalog record and
+ * retains a rooted read grant before accessing it. This is the shared form of
+ * the volume launch contract for file browsers and inspectors.
+ * @param launcher Launcher service handle.
+ * @param bundle_path Bundle path beneath APPS:.
+ * @param path_length Bytes in bundle_path.
+ * @param source Origin of launch request.
+ * @param volume Exact nonzero provider epoch, ID, and generation.
+ * @param path Absolute path within that volume.
+ * @param process_id Receives new process PID.
+ * @return ASTRA_OK on startup, or validation/launch error.
+ */
+static inline AstraResult astra_application_launch_for_volume_path(
+    AstraHandle launcher, const char *bundle_path, uint16_t path_length,
+    AstraLaunchSource source, const AstraVolumeReference *volume,
+    const char *path, uint32_t *process_id)
+{
+    if (path == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    return astra_application_launch_for_volume_target(launcher, bundle_path,
+        path_length, source, "--volume", volume, path, process_id);
 }
 
 /**

@@ -11,6 +11,36 @@
  * independent of the smaller startup capability-name field. */
 #define ASTRA_ASSIGN_NAME_MAX 32u
 
+/** Borrow the final component of a canonical, nonempty native path.
+ * Root paths return the path itself; callers retain the input storage.
+ * Paths with trailing separators must be normalized before calling.
+ * @param path Canonical native path.
+ * @return Borrowed pointer to final component, or input for empty/NULL paths.
+ */
+static inline const char *astra_path_leaf(const char *path)
+{
+    if (path == 0 || path[0] == '\0') return path;
+    const char *leaf = path;
+    for (const char *at = path; *at != '\0'; ++at)
+        if (*at == '/' && at[1] != '\0') leaf = at + 1;
+    return leaf;
+}
+
+/** True when path names root itself or a descendant, on a component boundary.
+ * Callers validating authority must reject dot components before use.
+ * @param path Canonical candidate path.
+ * @param root Canonical absolute root path.
+ * @return Nonzero when path is at or beneath root.
+ */
+static inline int astra_path_beneath(const char *path, const char *root)
+{
+    if (path == 0 || root == 0 || root[0] != '/') return 0;
+    if (root[1] == '\0') return path[0] == '/';
+    uint32_t at = 0u;
+    while (root[at] != '\0' && path[at] == root[at]) ++at;
+    return root[at] == '\0' && (path[at] == '\0' || path[at] == '/');
+}
+
 /**
  * Split /name/rest into an assign name and its byte-exact remainder. The
  * name is canonicalised to uppercase; Makefile and makefile remain distinct.

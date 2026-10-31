@@ -98,6 +98,7 @@ assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
     "trusted /apps/DiskSetup.app grants GUI VOLUMES VOLUME_USAGE DISK_ADMIN LIBS:r LOG",
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG",
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
+    "trusted /apps/Inspector.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ RAM_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
     "trusted /apps/AstraZ.app grants GUI PCM VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r"]
 with open(os.path.join(os.path.dirname(__file__),
                        "../../sw/userspace/ports/astraz/apps/AstraZ.app/manifest"),
@@ -115,6 +116,14 @@ with open(os.path.join(os.path.dirname(__file__), "../../sw/userspace/apps/OpenW
     open_with_capabilities = [line.split(" ", 1)[1].strip() for line in handle
                               if line.startswith("capability ")]
 assert set(open_with_capabilities) <= set(open_with_ceiling)
+inspector_ceiling = next(line.split(" grants ", 1)[1].split()
+    for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
+    if line.startswith("trusted /apps/Inspector.app grants "))
+with open(os.path.join(os.path.dirname(__file__), "../../sw/userspace/apps/Inspector.app/manifest"),
+          encoding="ascii") as handle:
+    inspector_capabilities = [line.split(" ", 1)[1].strip() for line in handle
+                              if line.startswith("capability ")]
+assert set(inspector_capabilities) <= set(inspector_ceiling)
 for grant, admitted in (("GUI", True), ("FONTS:r", True),
                         ("FONTS:rw", False), ("FONT_CATALOG", True),
                         ("FONTS_ADMIN", False), ("APPS:r", True), ("APPS:rw", False),

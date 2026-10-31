@@ -2,6 +2,31 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas System Inspector checkpoint, 2026-10-31: File > Get Information,
+Primary+I, and item/background context menus now use one Atlas command to
+launch a native Inspector for selected file/folder or current directory.
+Inspector composes existing Interface Kit Settings Pane, Tab, Label, and Button
+controls; Atlas contains no Inspector renderer. General, Open With, Bytes, and
+Blocks show native Filesystem Kit metadata. Directories and links skip regular
+file type probing. Shared NDK path and launch helpers carry component-bounded
+paths and exact volume references; Inspector validates the current incarnation
+and pins a read grant before reading mounted media. Haiku read-only references:
+`src/kits/tracker/infowindow/InfoWindow.cpp` and
+`src/kits/storage/Path.cpp`. Beast MC68040 Inspector, Atlas, app-bundle and
+image-provider policy builds/tests passed; NDK `dist-check` passed, including
+API documentation and CMake smoke. DE25 targeted install opened file
+General and Bytes, folder General through context menu, and RAM0 General
+through Primary+I. Folder launch initially failed because file-type probing
+rejects directories; fixed and retested on DE25. Screenshots and raw frames
+are archived with matching SHA-256 on Beast at
+`/mnt/Documents/astra68/atlas-inspector-20261031/`. Final Atlas and Inspector
+binaries were retested on DE25 with Get Information on DH0; all production
+services stayed active, Astra had zero restarts, and board retained 8.1 GiB
+free after trial cleanup.
+Universal System Inspector targets beyond files/folders remain open design
+work. Physical removable-volume Inspector launch remains unqualified because
+DE25 currently sees only its USB root hub.
+
 Atlas direct Open With checkpoint, 2026-10-31: Selected-file context menu
 now builds a hover submenu from Filesystem Kit's installed-handler catalog and
 file-type resolver. It offers up to 12 direct handlers plus Choose another...

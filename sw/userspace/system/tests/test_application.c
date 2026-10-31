@@ -8,6 +8,7 @@
 #include <astra/area.h>
 #include <astra/application_payload.h>
 #include <astra/status.h>
+#include <astra/vfs_path.h>
 
 #include "syscall.h"
 
@@ -306,6 +307,28 @@ int main(void)
             sizeof(bundle) - 1u, ASTRA_LAUNCH_SOURCE_DESKTOP,
             "--target", &volume, &process_id) ==
             ASTRA_ERROR_INVALID_ARGUMENT);
+    }
+    {
+        static const char bundle[] = "/apps/Inspector.app";
+        static const char *const arguments[] = {
+            "--volume", "91", "42", "7", "/usb0/folder/file"};
+        AstraVolumeReference volume = {91u, 42u, 7u};
+        expected_count = 6u;
+        expected_source = ASTRA_LAUNCH_SOURCE_DESKTOP;
+        expected_path = bundle;
+        expected_arguments = arguments;
+        assert(astra_application_launch_for_volume_path(7u, bundle,
+            sizeof(bundle) - 1u, ASTRA_LAUNCH_SOURCE_DESKTOP,
+            &volume, arguments[4], &process_id) == ASTRA_OK);
+        assert(process_id == 42u);
+        assert(astra_application_launch_for_volume_path(7u, bundle,
+            sizeof(bundle) - 1u, ASTRA_LAUNCH_SOURCE_DESKTOP,
+            &volume, "usb0/folder", &process_id) ==
+            ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_path_beneath("/usb0/folder/file", "/usb0"));
+        assert(!astra_path_beneath("/usb01/folder", "/usb0"));
+        assert(!astra_path_beneath("/dh0/file", "/usb0"));
+        assert(strcmp(astra_path_leaf("/usb0/folder/file"), "file") == 0);
     }
     puts("application launch contract tests passed");
     return 0;
