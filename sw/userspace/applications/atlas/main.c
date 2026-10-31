@@ -3,6 +3,7 @@
 #include <astra/area.h>
 #include <astra/clipboard.h>
 #include <astra/draw_list.h>
+#include <astra/datetime.h>
 #include <astra/file_type.h>
 #include <astra/fonts.h>
 #include <astra/graphics_library.h>
@@ -74,6 +75,7 @@
 #define RESULT_TABLE_ID 30001u
 #define ATLAS_RESULT_RECENT 1u
 #define ATLAS_RESULT_QUERY 2u
+#define ATLAS_RESULT_TODAY 3u
 #define RESULT_CONTROL(index) (&controls[TOOLBAR_CONTROL_COUNT + \
     BROWSER_TOOL_COUNT + BROWSER_CONTROL_COUNT + \
     ASTRA_FILE_INSPECTOR_CONTROL_COUNT + (index)])
@@ -121,6 +123,7 @@ static AstraCollectionItem *browser_place_items = initial_place_items;
 static AstraVolumeSnapshot sidebar_volumes = ASTRA_VOLUME_SNAPSHOT_INIT;
 static AstraSavedQuerySnapshot sidebar_queries = ASTRA_SAVED_QUERY_SNAPSHOT_INIT;
 static uint32_t saved_place_start;
+static uint32_t today_place_index;
 static const char saved_query_directory[] = "/home/Saved Searches";
 static const char recent_directory[] = "/home/.Recent Items";
 static AstraRecentItemSnapshot recent_snapshot = ASTRA_RECENT_ITEM_SNAPSHOT_INIT;
@@ -182,6 +185,8 @@ static uint32_t selected_kind, selected_depth, selected_row = UINT32_MAX;
 static AstraResult browser_update_status(void);
 static AstraResult paint(void);
 static AstraResult open_saved_query(const AstraSavedQuery *query);
+static AstraResult today_enter(void);
+static AstraResult navigate_to(const char *path, uint32_t history_target);
 
 static AstraControl *root_selection_control(void)
 {
@@ -612,7 +617,7 @@ static AstraResult browser_update_places(void)
         astra_volume_snapshot_close(&next);
         return astra_result_from_service(query_status);
     }
-    uint64_t capacity_wide = (uint64_t)next.count + queries.count + 8u;
+    uint64_t capacity_wide = (uint64_t)next.count + queries.count + 10u;
     if (capacity_wide > UINT32_MAX ||
         capacity_wide > (SIZE_MAX - ASTRA_VFS_PATH_MAX) /
             (sizeof(AstraFilePanelPlace) +
@@ -691,11 +696,13 @@ static AstraResult browser_update_places(void)
             strcmp(record->name, "/ram0") == 0 ?
                 ASTRA_TOOLBAR_ICON_RAM : ASTRA_TOOLBAR_ICON_VOLUME};
     }
-    if (queries.count != 0u) {
-        places[count] = (AstraFilePanelPlace){"QUERIES", 7u, NULL};
-        presentation[count++] = (AstraCollectionPresentation){
-            ASTRA_COLLECTION_HEADING, 0u};
-    }
+    places[count] = (AstraFilePanelPlace){"QUERIES", 7u, NULL};
+    presentation[count++] = (AstraCollectionPresentation){
+        ASTRA_COLLECTION_HEADING, 0u};
+    uint32_t today_index = count;
+    places[count] = (AstraFilePanelPlace){"Changed today", 13u, NULL};
+    presentation[count++] = (AstraCollectionPresentation){0u,
+        ASTRA_TOOLBAR_ICON_SEARCH};
     uint32_t query_start = count;
     for (uint32_t at = 0u; at < queries.count; ++at) {
         places[count] = (AstraFilePanelPlace){queries.queries[at].label,
@@ -717,11 +724,16 @@ static AstraResult browser_update_places(void)
         sidebar_volumes = next;
         sidebar_queries = queries;
         saved_place_start = query_start;
+        today_place_index = today_index;
         result = astra_interface_file_panel_set_place_presentation(
             &browser, &ui, BROWSER_CONTROL(0), presentation, count);
         if (result_mode == ATLAS_RESULT_RECENT && result == ASTRA_OK)
             result = astra_interface_control_set_value(&ui,
                 BROWSER_CONTROL(ASTRA_FILE_PANEL_PLACES_LIST), 2);
+        if (result_mode == ATLAS_RESULT_TODAY && result == ASTRA_OK)
+            result = astra_interface_control_set_value(&ui,
+                BROWSER_CONTROL(ASTRA_FILE_PANEL_PLACES_LIST),
+                (int32_t)today_place_index);
         if (result_mode == ATLAS_RESULT_QUERY && result == ASTRA_OK) {
             for (uint32_t at = 0u; at < sidebar_queries.count; ++at)
                 if (strcmp(sidebar_queries.queries[at].filename,
@@ -1232,7 +1244,8 @@ static AstraResult browser_update_status(void)
         (void)astra_string_append_u64(&line, recent_snapshot.count);
         (void)astra_string_append(&line,
             recent_snapshot.count == 1u ? " recent item" : " recent items");
-    } else if (result_mode == ATLAS_RESULT_QUERY) {
+    } else if (result_mode == ATLAS_RESULT_QUERY ||
+               result_mode == ATLAS_RESULT_TODAY) {
         (void)astra_string_append_u64(&line, query_snapshot.count);
         (void)astra_string_append(&line,
             query_snapshot.count == 1u ? " match" : " matches");
@@ -1284,6 +1297,8 @@ static AstraResult browser_update_space(void)
         (void)astra_string_append(&line, "Recent Items");
     else if (result_mode == ATLAS_RESULT_QUERY)
         (void)astra_string_append(&line, "Saved Search");
+    else if (result_mode == ATLAS_RESULT_TODAY)
+        (void)astra_string_append(&line, "Home · Today");
     else {
         uint64_t total_bytes, available_bytes;
         if (astra_filesystem_capacity_path(&filesystem.filesystem, root,
@@ -1669,7 +1684,8 @@ static AstraResult update_window_title(void)
     if (result_mode == ATLAS_RESULT_RECENT)
         return astra_window_set_title(&window,
             "Atlas — Recent Items", sizeof("Atlas — Recent Items") - 1u);
-    if (result_mode == ATLAS_RESULT_QUERY) {
+    if (result_mode == ATLAS_RESULT_QUERY ||
+        result_mode == ATLAS_RESULT_TODAY) {
         astra_string_init(&text, title, sizeof(title));
         if (!astra_string_append(&text, "Atlas — ") ||
             !astra_string_append(&text, active_query_label))
@@ -1878,6 +1894,40 @@ static AstraResult recent_enter(void)
     return result_view_show(ATLAS_RESULT_RECENT);
 }
 
+static AstraResult today_enter(void)
+{
+    uint64_t seconds;
+    if (!astra_datetime_unix_seconds(&seconds)) return ASTRA_ERROR_IO;
+    /* Astra's current local clock is UTC; recalculate its day on every open. */
+    uint64_t midnight = seconds - seconds % UINT64_C(86400);
+    AstraResult result = navigate_to("/home",
+        result_mode == ATLAS_RESULT_TODAY ? NAVIGATION_STAY : NAVIGATION_PUSH);
+    if (result != ASTRA_OK) return result;
+    AstraDirectoryQuerySnapshot next = ASTRA_DIRECTORY_QUERY_SNAPSHOT_INIT;
+    AstraDirectoryQuerySpec spec = {
+        .modified_from = (int64_t)midnight,
+        .modified_before = (int64_t)(midnight + UINT64_C(86400)),
+        .use_modified_from = 1u,
+        .use_modified_before = 1u,
+        .recursive = 1u,
+        .include_hidden = show_hidden
+    };
+    uint32_t status = astra_directory_query_load(&next,
+        &filesystem.filesystem, "/home", &spec, &cancelled);
+    if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
+    result = astra_path_result_table_set(&ui, RESULT_CONTROL(1),
+        &result_rows, &next, next.count, query_path_at);
+    if (result != ASTRA_OK) {
+        astra_directory_query_dispose(&next);
+        return result;
+    }
+    astra_directory_query_dispose(&query_snapshot);
+    query_snapshot = next;
+    (void)astra_string_copy(active_query_label,
+        sizeof(active_query_label), "Changed today");
+    return result_view_show(ATLAS_RESULT_TODAY);
+}
+
 static AstraResult navigate_to(const char *path, uint32_t history_target)
 {
     AstraDirectorySnapshot next = ASTRA_DIRECTORY_SNAPSHOT_INIT;
@@ -2006,6 +2056,7 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
 static AstraResult reload_directory(void)
 {
     if (result_mode == ATLAS_RESULT_RECENT) return recent_enter();
+    if (result_mode == ATLAS_RESULT_TODAY) return today_enter();
     if (result_mode == ATLAS_RESULT_QUERY)
         return open_saved_query(&active_query);
     return navigate_to(root, NAVIGATION_STAY);
@@ -2213,7 +2264,8 @@ static AstraResult open_result(uint32_t row)
     AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
     AstraRecentItem *item;
     AstraResult result;
-    if (result_mode == ATLAS_RESULT_QUERY)
+    if (result_mode == ATLAS_RESULT_QUERY ||
+        result_mode == ATLAS_RESULT_TODAY)
         return row < query_snapshot.count ?
             open_result_path(query_snapshot.items[row].path) :
             ASTRA_ERROR_INVALID_ARGUMENT;
@@ -4806,6 +4858,8 @@ static AstraResult run(AstraHandle gui)
                     uint32_t place = (uint32_t)action.value;
                     if (place == 2u)
                         browser_result = recent_enter();
+                    else if (place == today_place_index)
+                        browser_result = today_enter();
                     else if (place < saved_place_start ||
                         place - saved_place_start >= sidebar_queries.count)
                         browser_result = ASTRA_ERROR_INVALID_ARGUMENT;

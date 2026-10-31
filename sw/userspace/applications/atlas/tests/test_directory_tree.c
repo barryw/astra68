@@ -83,7 +83,6 @@ uint32_t astra_filesystem_directory_read(AstraDirectory *directory,
         strcpy(entry->name, names[index]);
         entry->kind = kinds[index];
         entry->mtime = 100 + index;
-        entry->meta.valid = ASTRA_VFS_META_MTIME;
     }
     return ASTRA_VFS_OK;
 }
@@ -92,6 +91,18 @@ void astra_filesystem_directory_close(AstraDirectory *directory)
 {
     (void)directory;
     ++closes;
+}
+
+uint32_t astra_filesystem_lstat(AstraFilesystem *filesystem,
+    const char *path, AstraFileInfo *info)
+{
+    assert(filesystem != NULL && info != NULL);
+    info->mtime = strcmp(path, "/dh0/root.txt") == 0 ? 104 :
+        strcmp(path, "/dh0/link") == 0 ? 102 :
+        strcmp(path, "/dh0/sub") == 0 ||
+        strcmp(path, "/dh0/sub/nested") == 0 ? 101 : 100;
+    info->meta.valid = ASTRA_VFS_META_MTIME;
+    return ASTRA_VFS_OK;
 }
 
 static uint32_t visit(void *context, const char *path,
@@ -169,6 +180,18 @@ int main(void)
         &query, NULL) == ASTRA_VFS_OK);
     assert(matches.count == 1u);
     assert(strcmp(matches.items[0].path, "/dh0/root.txt") == 0);
+    astra_directory_query_dispose(&matches);
+    assert(opens == closes && allocations == frees);
+
+    reset();
+    query = (AstraDirectoryQuerySpec){
+        .use_modified_from = 1u, .modified_from = 100,
+        .use_modified_before = 1u, .modified_before = 104,
+        .recursive = 1u
+    };
+    assert(astra_directory_query_load(&matches, &filesystem, "/dh0",
+        &query, NULL) == ASTRA_VFS_OK);
+    assert(matches.count == 5u);
     astra_directory_query_dispose(&matches);
     assert(opens == closes && allocations == frees);
 

@@ -246,6 +246,12 @@ recursive or indexed query. Haiku read-only references:
 `src/kits/tracker/QueryPoseView.cpp` binds query items to results. Astra uses
 its native Filesystem Kit and File Panel, with no Atlas-only search control.
 
+The built-in `Changed today` Place uses shared directory query and result Table
+to search Home recursively. Each open or Refresh recalculates current Astra
+UTC-day bounds; time predicates use fresh native `lstat` metadata because the
+packed directory listing does not carry metadata-validity flags. This query
+is not a persisted user preset.
+
 Drag/drop uses display-owned ACLP documents with the same Filesystem Kit VFS
 selection payload as Copy/Paste. System Kit finds typed representations in
 either document; Interface Kit supplies pointer and row hit testing, the drag

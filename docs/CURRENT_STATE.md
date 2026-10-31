@@ -2,6 +2,29 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas Changed today checkpoint, 2026-10-31: Atlas now shows the design's
+`Changed today` Query as a built-in recursive `/home` search. Opening or
+refreshing it recalculates current UTC calendar-day bounds, matching Astra's
+current local clock. Shared `directory_query` and `path_result_table` own
+matching and Name/Location rows; Atlas adds only navigation. DE25 first exposed
+a correctness bug: packed directory entries include mtime but not metadata
+validity, so the query rejected every entry. Shared query now calls native
+`lstat` for a time predicate and skips a disappeared entry; ext4 metadata
+lookups now mark mtime valid. Haiku read-only `src/kits/storage/Query.cpp` and
+`src/kits/tracker/QueryPoseView.cpp` informed typed matching and result
+presentation through existing interfaces. Beast Atlas and VFS host suites,
+MC68040 HostFS and Atlas builds passed. Targeted DE25 install of both binaries
+passed. Atlas created `/home/AtlasTodayProbe`, query showed it in a three-row
+Name/Location table, then moved it to the previously empty Home Trash and
+emptied that single trial item. Reopening query showed two rows without probe;
+Trash was empty. Final exact-source Atlas install also opened the query's
+`Desktop` row into `/home/Desktop` through the shared result activation path.
+Board/Beast RFB raw hashes matched. Evidence with verified
+checksums and PNGs: `/mnt/Documents/astra68/atlas-today-20261031/`. Astra,
+audio host, and remote desktop active, zero Astra restarts, 8.1 GiB free.
+Saved user queries remain name-only and path-scoped; physical optical and
+literal USB cable hotplug gates remain unqualified.
+
 Atlas physical USB and Terminal CWD checkpoint, 2026-10-31: DE25 detected
 SanDisk Cruzer exFAT `CLIEXFAT` `/usb0` and FAT32 `CLIFAT` `/usb2`. Desktop and
 Atlas displayed both labels. Atlas browsed roots, created and renamed a folder

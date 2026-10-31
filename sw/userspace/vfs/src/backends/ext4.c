@@ -206,7 +206,7 @@ fill_metadata(const ext4_file *file, AstraVfsNodeInfo *info, int with_size)
     astra_vfs_node_info_mode_links(info, (uint16_t)mode, nlink);
     info->uid = uid;
     info->gid = gid;
-    info->meta.valid |= ASTRA_VFS_META_OWNER;
+    info->meta.valid |= ASTRA_VFS_META_OWNER | ASTRA_VFS_META_MTIME;
     info->mtime = (int64_t)(uint64_t)mtime;
     if (with_size)
         info->size = size;
@@ -527,7 +527,7 @@ ext4_backend_stat_from(AstraVfsExt4Backend *backend,
     if (rc != EOK)
         return status_of(rc);
     astra_vfs_node_info_mode_links(info, (uint16_t)mode, nlink);
-    info->meta.valid |= ASTRA_VFS_META_OWNER;
+    info->meta.valid |= ASTRA_VFS_META_OWNER | ASTRA_VFS_META_MTIME;
     info->mtime = (int64_t)(uint64_t)mtime;
     switch (mode & EXT4_INODE_MODE_TYPE_MASK) {
     case EXT4_INODE_MODE_DIRECTORY:
@@ -586,7 +586,7 @@ ext4_backend_stat_node(void *context, uintptr_t node,
     if (rc != EOK)
         return status_of(rc);
     astra_vfs_node_info_mode_links(info, (uint16_t)mode, nlink);
-    info->meta.valid |= ASTRA_VFS_META_OWNER;
+    info->meta.valid |= ASTRA_VFS_META_OWNER | ASTRA_VFS_META_MTIME;
     info->mtime = (int64_t)(uint64_t)mtime;
     info->kind = (mode & EXT4_INODE_MODE_TYPE_MASK) ==
                          EXT4_INODE_MODE_DIRECTORY ?
@@ -689,7 +689,7 @@ ext4_backend_readdir(void *context, uintptr_t directory, const char *path,
             astra_vfs_node_info_mode_links(info, (uint16_t)mode, nlink);
             info->uid = uid;
             info->gid = gid;
-            info->meta.valid |= ASTRA_VFS_META_OWNER;
+            info->meta.valid |= ASTRA_VFS_META_OWNER | ASTRA_VFS_META_MTIME;
             info->mtime = (int64_t)(uint64_t)mtime;
             info->size = size;
         }

@@ -7,6 +7,7 @@
 
 typedef struct QueryContext {
     AstraDirectoryQuerySnapshot *snapshot;
+    AstraFilesystem *filesystem;
     const AstraDirectoryQuerySpec *spec;
 } QueryContext;
 
@@ -72,11 +73,17 @@ static uint32_t visit(void *opaque, const char *path,
     if (entry->name[0] == '.' && !spec->include_hidden) return ASTRA_VFS_OK;
     if (!contains_name(entry->name, spec->name_contains)) return ASTRA_VFS_OK;
     if (spec->use_modified_from || spec->use_modified_before) {
-        if ((entry->meta.valid & ASTRA_VFS_META_MTIME) == 0u)
+        AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+        uint32_t status = astra_filesystem_lstat(context->filesystem,
+            path, &info);
+        if (status == ASTRA_VFS_ERR_NOT_FOUND)
             return ASTRA_VFS_OK;
-        if (spec->use_modified_from && entry->mtime < spec->modified_from)
+        if (status != ASTRA_VFS_OK) return status;
+        if ((info.meta.valid & ASTRA_VFS_META_MTIME) == 0u)
             return ASTRA_VFS_OK;
-        if (spec->use_modified_before && entry->mtime >= spec->modified_before)
+        if (spec->use_modified_from && info.mtime < spec->modified_from)
+            return ASTRA_VFS_OK;
+        if (spec->use_modified_before && info.mtime >= spec->modified_before)
             return ASTRA_VFS_OK;
     }
     return append(context->snapshot, path, entry);
@@ -95,7 +102,7 @@ uint32_t astra_directory_query_load(AstraDirectoryQuerySnapshot *snapshot,
          spec->modified_from >= spec->modified_before))
         return ASTRA_VFS_ERR_INVALID;
     astra_directory_query_dispose(snapshot);
-    QueryContext context = {snapshot, spec};
+    QueryContext context = {snapshot, filesystem, spec};
     uint32_t status = astra_directory_tree_walk(filesystem, directory,
         visit, &context, cancelled);
     if (status != ASTRA_VFS_OK) astra_directory_query_dispose(snapshot);

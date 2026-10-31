@@ -85,12 +85,32 @@ restored the icon and `/usb0`. Terminal opened from Atlas in both USB roots:
 removed; Astra, audio host, and remote desktop remained active with zero Astra
 restarts and 8.2 GiB free.
 
+## DE25 Changed today gate
+
+Evidence: `/mnt/Documents/astra68/atlas-today-20261031/` on Beast. Selected
+board/Beast raw-frame SHA-256 matched; archive contains PNG previews and a
+verified `SHA256SUMS`.
+
+The built-in Query searches Home recursively for entries whose native mtime is
+within the current Astra calendar day (UTC on the current DE25 provider).
+Atlas created `AtlasTodayProbe` in Home through New drawer and the shared inline
+editor. The query displayed its exact `/home/AtlasTodayProbe` path among three
+Name/Location rows. Atlas moved only that folder to an initially empty Home
+Trash, emptied it through the confirmation dialog, and reopened the query;
+the result fell to two rows and the probe was absent. Shared directory query
+now obtains time-predicate metadata with native `lstat`, since directory-entry
+wire records carry no metadata-validity flags. HostFS and Atlas target builds,
+Atlas and VFS host suites, and a targeted two-binary DE25 install passed.
+Final exact-source Atlas install opened the query's `Desktop` row into
+`/home/Desktop` by double-click.
+Astra, audio host, and remote desktop stayed active with zero restarts and
+8.1 GiB free. Trial board files were removed.
+
 ## Still unproven or incomplete
 
 - Physical optical browsing/ejection and cable-level USB hotplug were not
   exercised in this gate. No readable optical drive was attached.
-- Saved Searches still persist only a case-insensitive name substring scoped
-  to one directory. Shared metadata query code can filter by modification
-  time, but persisted predicates and dynamic local-day refresh do not yet
-  exist. Desktop design's `Changed today` example is not functional yet.
+- Saved user queries still persist only a case-insensitive name substring
+  scoped to one directory. Richer persisted predicates and time-zone rules
+  beyond Astra's current UTC clock have not been designed or qualified.
 
