@@ -12,6 +12,11 @@ the underlying VFS client operations for filesystem and compatibility tools.
 The ABI has no dependency on lwext4 or any other on-disk implementation; RAM
 drives and other filesystem services use the same protocol and API.
 
+`astra_volume_reference_equal` compares the full provider epoch, volume ID,
+and generation. Use it when matching a selected or retained volume against a
+new catalog snapshot: a reused path or ID does not identify the same mount
+after media change or provider restart. It rejects null references.
+
 ABI 15.8 adds path-scoped saved search presets. `astra_saved_query_save`
 creates a private store directory when needed, writes a versioned file, syncs
 it, and publishes it without replacing an existing preset. `load` validates

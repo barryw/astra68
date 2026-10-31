@@ -36,6 +36,20 @@ typedef struct AstraVolumeSnapshot {
 /** Empty complete-catalog initializer. */
 #define ASTRA_VOLUME_SNAPSHOT_INIT { 0u, 0u, NULL, 0u }
 
+/** Compare complete volume incarnations. A reused path or record ID alone is
+ * not the same mounted object after provider restart or media replacement.
+ * @param left First exact reference, or NULL.
+ * @param right Second exact reference, or NULL.
+ * @return Nonzero only when both references exist and all fields match.
+ */
+static inline int astra_volume_reference_equal(
+    const AstraVolumeReference *left, const AstraVolumeReference *right)
+{
+    return left != NULL && right != NULL &&
+        left->epoch == right->epoch && left->id == right->id &&
+        left->generation == right->generation;
+}
+
 /** Parse one exact catalog reference from launch arguments. Invalid input
  * leaves the caller's reference unchanged, including overflow and zero IDs.
  * @param epoch Decimal provider epoch.

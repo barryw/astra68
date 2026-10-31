@@ -520,10 +520,11 @@ static int can_unmount(const DesktopApps *apps, uint32_t cell)
     const AstraVolumeRecord *record = visible_volume(apps, cell);
     if (record->kind != ASTRA_VOLUME_MOUNT || record->state != ASTRA_VOLUME_MOUNTED ||
         (record->flags & (ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_TEMPORARY)) != 0u) return 0;
+    const AstraVolumeReference reference = {apps->volumes.epoch,
+        record->id, record->generation};
     for (DesktopRemoval *at = removals; at != NULL; at = at->next)
-        if (at->operation.mount.epoch == apps->volumes.epoch &&
-            at->operation.mount.id == record->id &&
-            at->operation.mount.generation == record->generation) return 0;
+        if (astra_volume_reference_equal(&at->operation.mount, &reference))
+            return 0;
     return 1;
 }
 

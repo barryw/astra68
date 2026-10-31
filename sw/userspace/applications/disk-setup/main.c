@@ -215,8 +215,7 @@ static void append_row(uint32_t at, AstraVolumeRecord *record)
     indices[row_count] = at;
     const AstraVolumeReference reference = {snapshot.epoch, record->id,
         record->generation};
-    if (selected.epoch == reference.epoch && selected.id == reference.id &&
-        selected.generation == reference.generation)
+    if (astra_volume_reference_equal(&selected, &reference))
         selected_row = row_count;
     ++row_count;
 }
@@ -310,9 +309,8 @@ static void describe_selection(void)
         if (ancestor != scope) continue;
         ++mounted_count;
         for (uint32_t held = 0u; held < usage.count; ++held)
-            if (usage.records[held].volume.epoch == reference.epoch &&
-                usage.records[held].volume.id == reference.id &&
-                usage.records[held].volume.generation == reference.generation) {
+            if (astra_volume_reference_equal(&usage.records[held].volume,
+                    &reference)) {
                 if (first_holder == NULL) first_holder = &usage.records[held];
                 ++holder_count;
             }
@@ -618,8 +616,8 @@ static uint32_t start_format(void)
     }
     uint32_t status = reload();
     if (status != ASTRA_STATUS_OK) return status;
-    if (selected_row == UINT32_MAX || selected.epoch != format_source.epoch ||
-        selected.id != format_source.id || selected.generation != format_source.generation ||
+    if (selected_row == UINT32_MAX ||
+        !astra_volume_reference_equal(&selected, &format_source) ||
         !allowed(&snapshot.records[indices[selected_row]], pending_format)) {
         pending_format = 0u;
         (void)astra_string_copy(notice, sizeof(notice),
@@ -668,8 +666,8 @@ static uint32_t start_partition(uint32_t action)
     AstraVolumeReference expected = selected;
     uint32_t status = reload();
     if (status != ASTRA_STATUS_OK) return status;
-    if (selected_row == UINT32_MAX || selected.epoch != expected.epoch ||
-        selected.id != expected.id || selected.generation != expected.generation) {
+    if (selected_row == UINT32_MAX ||
+        !astra_volume_reference_equal(&selected, &expected)) {
         (void)astra_string_copy(notice, sizeof(notice),
             "Selection changed; disk edit cancelled");
         return build_controls() == ASTRA_STATUS_OK ? present() : DISK_FAIL_CONTROL;

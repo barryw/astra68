@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared volume identity checkpoint, 2026-10-31: Atlas, Disk Setup, and
+Desktop now use one NDK `astra_volume_reference_equal` helper for exact
+provider epoch, volume ID, and generation matching. This removes duplicated
+incarnation checks without changing library ABI or Atlas control behavior.
+Haiku read-only reference: `src/kits/storage/Volume.cpp` (`BVolume` owns its
+device identity); Astra retains its stronger triple for removable-media and
+provider-restart safety. Beast Atlas, Disk Setup, Desktop, NDK tests, and
+native volume-client test passed. Focused DE25 install reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=3 host=0 removed=0`. RFB opened DH0 with
+17 entries, opened `/apps` with 20 app bundles, then launched Disk Setup from
+its bundle icon. Raw frames and PNGs were SHA-verified and archived on Beast
+under `/mnt/Documents/astra68/atlas-volume-ref-20261031/`; DH0, `/apps`, and
+Disk Setup raw SHA-256 values are
+`d20b28acddc1e7067c946e91b9b2c59ffe1bc8c9a0d441e93639dd89d58d59f1`,
+`addd278bfe66ceb2181d03580c17e421f22b8c6e7a595d2782b2b2b66dc6731f`,
+and `6bbdeb9d5f7bc4e32219aa8867ec36a3363f8597466280adb309207f670dfff6`.
+Board trial captures were removed. Physical USB transfer remains untested:
+DE25 currently sees only its root USB hub. Standalone Atlas design specifies
+shared global Edit and Window menus; current Atlas still supplies its own
+File, View, and Help menus. Any menu completion belongs in shared menu
+framework, not an Atlas-only duplicate.
+
 Atlas shared draw-list batching checkpoint, 2026-10-31: A 257-entry directory
 exposed a real `ASTRA_ERROR_NO_RESOURCES` in Interface Kit's fixed 128-command
 view. Atlas exited during Grid paint; a later test click then closed its older

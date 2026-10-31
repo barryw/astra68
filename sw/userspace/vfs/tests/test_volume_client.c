@@ -328,6 +328,12 @@ static void reference_parse_test(void)
     assert(astra_volume_reference_parse("18446744073709551615", "1", "2", &reference));
     assert(reference.epoch == UINT64_MAX && reference.id == 1u && reference.generation == 2u);
     const AstraVolumeReference saved = reference;
+    assert(astra_volume_reference_equal(&reference, &saved));
+    assert(!astra_volume_reference_equal(NULL, &saved));
+    assert(!astra_volume_reference_equal(&reference,
+        &(AstraVolumeReference){0u, saved.id, saved.generation}));
+    assert(!astra_volume_reference_equal(&reference,
+        &(AstraVolumeReference){saved.epoch, saved.id, saved.generation + 1u}));
     assert(!astra_volume_reference_parse("18446744073709551616", "1", "2", &reference));
     assert(!astra_volume_reference_parse("25", "0", "2", &reference));
     assert(!astra_volume_reference_parse("25", "+1", "2", &reference));

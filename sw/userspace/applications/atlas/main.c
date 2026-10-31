@@ -1592,13 +1592,6 @@ static AstraResult update_window_title(void)
     return astra_window_set_title(&window, title, (uint16_t)strlen(title));
 }
 
-static int same_volume_reference(const AstraVolumeReference *left,
-    const AstraVolumeReference *right)
-{
-    return left->epoch == right->epoch && left->id == right->id &&
-        left->generation == right->generation;
-}
-
 static const AstraVolumeRecord *volume_for_path(
     const AstraVolumeSnapshot *snapshot, const char *path)
 {
@@ -1694,7 +1687,7 @@ static AstraResult recent_enter(void)
             if (mounted == NULL) continue;
             current = (AstraVolumeReference){catalog.epoch,
                 mounted->id, mounted->generation};
-            if (!same_volume_reference(&current, &item->volume)) continue;
+            if (!astra_volume_reference_equal(&current, &item->volume)) continue;
         } else if (mounted != NULL) continue;
         next.items[kept++] = *item;
     }
@@ -1784,13 +1777,13 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
     }
     astra_volume_snapshot_close(&catalog);
     if ((history_target < NAVIGATION_HISTORY_MAX &&
-         !same_volume_reference(&candidate,
+         !astra_volume_reference_equal(&candidate,
              &navigation_history_volumes[history_target])) ||
         (history_target == NAVIGATION_STAY && strcmp(target, root) == 0 &&
-         !same_volume_reference(&candidate, &viewed_volume)))
+         !astra_volume_reference_equal(&candidate, &viewed_volume)))
         return ASTRA_ERROR_INVALID_HANDLE;
     if (candidate.id != 0u &&
-        (!same_volume_reference(&candidate, &viewed_volume) ||
+        (!astra_volume_reference_equal(&candidate, &viewed_volume) ||
          volume_grant == ASTRA_INVALID_HANDLE)) {
         AstraHandle broker = record.origin == ASTRA_VOLUME_ORIGIN_RAM ?
             volume_ram_read_broker : volume_read_broker;
@@ -1813,7 +1806,7 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
     }
     if (history_target == NAVIGATION_PUSH &&
         (navigation_count == 0u || strcmp(target, root) != 0 ||
-         !same_volume_reference(&candidate, &viewed_volume))) {
+         !astra_volume_reference_equal(&candidate, &viewed_volume))) {
         size_t length = strlen(target);
         history_copy = astra_runtime_allocate(length + 1u);
         if (history_copy == NULL) {
@@ -2061,7 +2054,7 @@ static AstraResult open_recent(uint32_t row)
         AstraVolumeReference current = mounted != NULL ?
             (AstraVolumeReference){catalog.epoch, mounted->id,
                 mounted->generation} : (AstraVolumeReference){0u, 0u, 0u};
-        result = same_volume_reference(&current, &item->volume) ?
+        result = astra_volume_reference_equal(&current, &item->volume) ?
             ASTRA_OK : ASTRA_ERROR_INVALID_HANDLE;
     } else if (mounted != NULL) result = ASTRA_ERROR_INVALID_HANDLE;
     astra_volume_snapshot_close(&catalog);
@@ -2635,9 +2628,8 @@ static AstraResult paste_entry(const AstraVfsClipboardEntry *reference,
         if (operation == ASTRA_VFS_CLIPBOARD_MOVE &&
             strcmp(reference->path, destination) == 0 &&
             (reference->volume.id == 0u ||
-             (reference->volume.epoch == destination_volume->epoch &&
-              reference->volume.id == destination_volume->id &&
-              reference->volume.generation == destination_volume->generation)))
+             astra_volume_reference_equal(&reference->volume,
+                 destination_volume)))
             status = ASTRA_VFS_OK;
         else if (operation == ASTRA_VFS_CLIPBOARD_MOVE)
             status = astra_filesystem_move_tree_between(source_filesystem,
