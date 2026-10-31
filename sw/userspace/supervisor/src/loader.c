@@ -906,9 +906,8 @@ static const AstraBundleManifest *launch_bundle;
    record, or closes it when the launch fails. One launch at a time. */
 static uint32_t launch_session;
 
-/* The launch panel's name and icon: the bundle's name, cut to a whole
-   UTF-8 character, and its AICON. An icon that cannot be read leaves the
-   panel without one; it never fails the launch. */
+/* The GUI session's identity, name, and icon come from the validated bundle.
+   An unreadable icon leaves the launch panel without one. */
 static void name_gui_session(const char *bundle_path,
                              AstraGuiOpenSession *request, uint32_t *icon)
 {
@@ -923,6 +922,11 @@ static void name_gui_session(const char *bundle_path,
     *icon = 0u;
     if (launch_bundle == NULL)
         return;
+    size_t id_length = strlen(launch_bundle->id);
+    if (id_length < ASTRA_GUI_APP_ID_MAX) {
+        (void)memcpy(request->app_id, launch_bundle->id, id_length);
+        request->app_id_length = (uint16_t)id_length;
+    }
     while (length < ASTRA_WINDOW_TITLE_MAX &&
            launch_bundle->name[length] != '\0')
         ++length;
@@ -961,8 +965,7 @@ static uint32_t open_gui_session(uint32_t gui, const char *bundle_path,
     status = astra_rt_port_create(1u, sizeof(reply), &receive, &send[0]);
     if (status != ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_LIMIT;
-    if (strncmp(bundle_path, "/apps/", 6u) == 0)
-        name_gui_session(bundle_path, &request, &send[1]);
+    name_gui_session(bundle_path, &request, &send[1]);
     astra_message_header_set(&request.header, sizeof(request),
                              ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
                              ASTRA_GUI_OPEN_SESSION, 1u);

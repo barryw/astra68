@@ -2417,6 +2417,15 @@ static void test_launch_panel(void)
     named.name_length = ASTRA_WINDOW_TITLE_MAX + 1u;
     assert(!valid_open_session(&named, sizeof(named), 1u));
     named.name_length = 4u;
+    named.app_id_length = 4u;
+    memcpy(named.app_id, "doom", 4u);
+    assert(valid_open_session(&named, sizeof(named), 1u));
+    named.app_id[0] = (char)0xff;
+    assert(!valid_open_session(&named, sizeof(named), 1u));
+    named.app_id[0] = 'd';
+    named.app_id_length = ASTRA_GUI_APP_ID_MAX;
+    assert(!valid_open_session(&named, sizeof(named), 1u));
+    named.app_id_length = 4u;
     named.icon_length = TEST_AICON_BYTES;
     assert(valid_open_session(&named, sizeof(named), 2u));
     assert(!valid_open_session(&named, sizeof(named), 1u));
@@ -2530,6 +2539,65 @@ static void test_launch_panel(void)
     close_session(&state, 0u);
     assert(state.session_count == 0u && state.launch.session == 0u);
     compose_commit(&state, 5u);
+}
+
+static void test_dock_sessions(void)
+{
+    DisplayWindow windows[2] = {
+        {.id = 10u, .session = 2u,
+         .request = {.type = ASTRA_WINDOW_STANDARD}},
+        {.id = 11u, .session = 1u,
+         .request = {.type = ASTRA_WINDOW_STANDARD}},
+    };
+    DisplayState state = {.windows = windows, .count = 2u,
+        .session_count = 4u};
+    DisplayDockApp apps[ASTRA_WAIT_MULTIPLE_MAX] = {0};
+    uint32_t count;
+
+    state.sessions[0] = (DisplaySession){.id = 1u, .name_length = 4u,
+        .app_id_length = 4u, .name = "Doom", .app_id = "doom"};
+    state.sessions[1] = (DisplaySession){.id = 2u, .name_length = 4u,
+        .app_id_length = 4u, .name = "Doom", .app_id = "doom"};
+    state.sessions[2] = (DisplaySession){.id = 3u, .name_length = 5u,
+        .app_id_length = 5u, .name = "Quake", .app_id = "quake"};
+    state.sessions[3] = (DisplaySession){.id = 4u};
+    count = dock_collect(&state, apps);
+    assert(count == 2u && apps[0].sessions == 2u &&
+        apps[0].top_window == 11u && apps[1].sessions == 1u &&
+        apps[1].top_window == 0u);
+    state.pointer_x = ASTRA_DISPLAY_WIDTH / 2 - DISPLAY_DOCK_SLOT / 2;
+    state.pointer_y = DISPLAY_WORK_BOTTOM + 20;
+    assert(dock_hit(&state, count, 0) == 0u);
+    assert(dock_hit(&state, count, 1) == count);
+    state.pointer_y = DISPLAY_WORK_BOTTOM + 44;
+    assert(dock_hit(&state, count, 1) == 0u);
+    windows[1].session = 3u;
+    count = dock_collect(&state, apps);
+    assert(count == 2u && apps[0].top_window == 10u &&
+        apps[1].top_window == 11u);
+    state.sessions[1].app_id[0] = 'x';
+    count = dock_collect(&state, apps);
+    assert(count == 3u && apps[0].sessions == 1u &&
+        apps[1].sessions == 1u);
+    {
+        DisplayState hold = {0};
+        hold.session_count = 1u;
+        hold.sessions[0] = (DisplaySession){.id = 1u,
+            .name_length = 4u, .name = "Doom"};
+        hold.pointer_x = ASTRA_DISPLAY_WIDTH / 2;
+        hold.pointer_y = DISPLAY_WORK_BOTTOM + 20;
+        hold.dock_press_session = 1u;
+        hold.dock_press_at = UINT64_C(1000000000);
+        assert(!dock_tick(&hold, hold.dock_press_at +
+            (uint64_t)(DISPLAY_DOCK_HOLD_MS - 1u) * UINT64_C(1000000)));
+        assert(dock_tick(&hold, hold.dock_press_at +
+            (uint64_t)DISPLAY_DOCK_HOLD_MS * UINT64_C(1000000)));
+        assert(hold.overlay == DISPLAY_OVERLAY_MENU &&
+            hold.menu_request == DISPLAY_DOCK_MENU_REQUEST &&
+            hold.swallow_pointer_up == 1u);
+        menu_end(&hold, 0u, 0u, ASTRA_STATUS_OK);
+        assert(menu_allocations == 0u);
+    }
 }
 
 /* A window that leaves full screen keeps no damage from its larger self:
@@ -3627,6 +3695,14 @@ int main(void)
             assert(build_system_surfaces(&builder, &bar, &bar_theme));
             assert(astra_render_builder_finish(&builder) != 0u);
         }
+        bar.session_count = 1u;
+        bar.sessions[0] = (DisplaySession){.id = 1u, .name_length = 4u,
+            .app_id_length = 4u, .name = "Doom", .app_id = "doom"};
+        bar.system_initialized = 0u;
+        assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
+        assert(build_system_surfaces(&builder, &bar, &bar_theme));
+        assert(astra_render_builder_finish(&builder) != 0u);
+        bar.session_count = 0u;
         bar.windows = NULL;
         bar.count = 0u;
         assert(!batch_has_colored_fill_at(16, 17, color(bar_theme.accent)));
@@ -5335,6 +5411,7 @@ int main(void)
         assert(draw_list_source_pending(&window, 8u));
     }
     test_launch_panel();
+    test_dock_sessions();
     test_drag_session_routing();
     test_drag_release_waits_for_target_feedback();
     test_shrunk_window_copy_forward();

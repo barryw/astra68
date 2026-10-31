@@ -152,7 +152,16 @@ pressed, and focus transitions; applications retain only semantic enablement.
   through its GUI session, or when the session ends. The supervisor names
   the session (`AstraGuiOpenSession`); a session it does not name shows no
   panel.
-- Minimize will place a window in the system shelf when shelf policy exists.
+- Display owns the 52-pixel Dock strip. Each named GUI launch session contributes
+  one running indicator; sessions with the same validated bundle ID share an
+  icon. One to three sessions use dots, and four or more show the count. A
+  quick click restores and raises that application's topmost window. Right
+  click, indicator click, or held click opens the shared Menu control above
+  the icon, listing its windows including minimized ones. Selecting a window
+  restores and raises that exact window. Minimized windows stay with their
+  application icon. Dock preferences and pinned application launch behavior
+  belong to the next Config Kit-backed Dock step; this first slice stores no
+  separate Dock state.
 - `astra_window_close` destroys the server object immediately. A separate
   application-veto close-request event may be added with pointer routing; it
   must not change the explicit destroy operation.

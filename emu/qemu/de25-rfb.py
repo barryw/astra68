@@ -301,6 +301,8 @@ def main():
                                 metavar=("X", "Y"), type=int)
     pointer_action.add_argument("--right-click", nargs=2,
                                 metavar=("X", "Y"), type=int)
+    pointer_action.add_argument("--hold-click", nargs=3,
+                                metavar=("X", "Y", "MS"), type=int)
     pointer_action.add_argument("--modified-click", nargs=3,
                                 metavar=("MODIFIERS", "X", "Y"))
     pointer_action.add_argument("--wheel", nargs=3,
@@ -323,6 +325,7 @@ def main():
     try:
         coordinates = (arguments.double_click or arguments.click or
                        arguments.right_click or
+                       arguments.hold_click or
                        arguments.pointer)
         if arguments.modified_click is not None:
             try:
@@ -353,6 +356,13 @@ def main():
                 click(connection, x, y)
             elif arguments.right_click:
                 right_click(connection, x, y)
+            elif arguments.hold_click:
+                if not 100 <= arguments.hold_click[2] <= 10000:
+                    parser.error("hold duration must be 100..10000 ms")
+                send_pointer(connection, x, y, 1)
+                time.sleep(arguments.hold_click[2] / 1000)
+                send_pointer(connection, x, y)
+                time.sleep(0.2)
             elif arguments.modified_click:
                 try:
                     modified_click(connection, arguments.modified_click[0], x, y)

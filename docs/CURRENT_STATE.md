@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-10-31
 
+Dock first pass, 2026-10-31: Display now owns a 52-pixel running-app Dock.
+The supervisor passes validated bundle IDs in GUI protocol 27, so windows
+from separate launches of one app share an icon while each launch contributes
+one indicator. One to three sessions show dots; larger counts show a number.
+Quick click raises the top window, and right click, indicator click, or a
+500 ms held click opens the shared Interface Kit Menu with exact windows,
+including minimized windows. Selection restores the chosen window. Desktop
+uses the same 52-pixel work-area boundary. Haiku read-only
+`src/apps/deskbar/ExpandoMenuBar.cpp`, `WindowMenu.cpp`, and `BarApp.cpp`
+informed app grouping and live window lists; Astra groups by native bundle ID
+and counts GUI launch sessions. Display and supervisor host tests, target
+builds, and runtime/graphics/system library staging passed on Beast. The
+first DE25 targeted install omitted `font.library.5`, exposing a GUI ABI
+mismatch at Desktop startup. Installing that library restored a clean boot;
+the final Display-only held-click update then passed. DE25 RFB verified quick
+activation, right-click and held-click menus, minimized-window restoration,
+icon removal on exit, two-session dots, and a four-session count. Verified
+raw RGB, PNG, trace, and SHA-256 evidence:
+`/mnt/Documents/astra68/dock-20261031/`. Board trial files were removed;
+Astra, HDMI audio host, and remote desktop are active, Astra restarts zero,
+8.2 GiB free. Pinned apps, order, and Dock preferences remain for a Config
+Kit-backed follow-up. At most 36 app groups fit at 1920 pixels; overflow
+navigation is still needed if that limit is reached.
+
 Atlas current USB regression, 2026-10-31: The attached SanDisk Cruzer still
 exposes FAT32 `CLIFAT` `/usb2` and exFAT `CLIEXFAT` `/usb0` writable. Desktop
 and Atlas Places showed both labels. Atlas opened FAT32 and displayed its
