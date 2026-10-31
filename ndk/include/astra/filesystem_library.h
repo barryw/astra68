@@ -114,6 +114,28 @@ typedef struct AstraFileInfo {
 /** Filesystem capacity and naming limits, independent of backend format. */
 typedef AstraVfsFilesystemInfo AstraFilesystemInfo;
 
+/** Convert one capacity result to exact byte counts without overflow.
+ * Invalid or inconsistent provider counts leave outputs unchanged.
+ * @param info Provider capacity result.
+ * @param total Receives total filesystem bytes.
+ * @param available Receives available filesystem bytes.
+ * @return One when counts are valid; zero otherwise.
+ */
+static inline int astra_filesystem_capacity_bytes(
+    const AstraFilesystemInfo *info, uint64_t *total, uint64_t *available)
+{
+    if (info == 0 || total == 0 || available == 0 ||
+        info->fragment_size == 0u || info->blocks_free > info->blocks ||
+        info->blocks_available > info->blocks_free ||
+        info->blocks > UINT64_MAX / info->fragment_size)
+        return 0;
+    uint64_t computed_total = info->blocks * info->fragment_size;
+    uint64_t computed_available = info->blocks_available * info->fragment_size;
+    *total = computed_total;
+    *available = computed_available;
+    return 1;
+}
+
 /*
  * A directory entry carries the same metadata as a stat, and it carries it
  * because the alternative is a stat per entry. A cross-process round trip is

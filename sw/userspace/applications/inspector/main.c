@@ -42,6 +42,7 @@ enum {
     INSPECTOR_HANDLERS,
     INSPECTOR_BYTES,
     INSPECTOR_BLOCKS,
+    INSPECTOR_VOLUME,
     INSPECTOR_PAGE_COUNT
 };
 
@@ -58,7 +59,8 @@ static const AstraChoiceItem pages[] = {
     {"General", 7u, {0u, 0u}},
     {"Open With", 9u, {0u, 0u}},
     {"Bytes", 5u, {0u, 0u}},
-    {"Blocks", 6u, {0u, 0u}}
+    {"Blocks", 6u, {0u, 0u}},
+    {"Volume", 6u, {0u, 0u}}
 };
 
 static AstraProcessFilesystem files = ASTRA_PROCESS_FILESYSTEM_INIT;
@@ -76,6 +78,10 @@ static uint32_t *handlers, handler_count, page;
 static AstraHandle launcher;
 static AstraHandle volume_grant;
 static AstraVolumeReference exact_volume;
+static AstraVolumeRecord volume_record, source_record;
+static int volume_root;
+static uint64_t volume_capacity_bytes, volume_available_bytes;
+static int volume_capacity_valid;
 
 #define CONTROL(id) (&controls[(id) - 1u])
 
@@ -107,12 +113,23 @@ static void page_general(void)
     line = line_start(1u, "Path: ");
     (void)astra_string_append(&line, target);
     line = line_start(2u, "Kind: ");
-    (void)astra_string_append(&line, kind_name(metadata.kind));
-    line = line_start(3u, "File type: ");
-    (void)astra_string_append(&line,
+    (void)astra_string_append(&line, volume_root ? "Volume" :
+        kind_name(metadata.kind));
+    line = line_start(3u, volume_root ? "Format: " : "File type: ");
+    if (volume_root) {
+        const AstraVolumeRecord *source = source_record.kind ==
+            ASTRA_VOLUME_SOURCE ? &source_record : &volume_record;
+        (void)astra_string_append(&line,
+            astra_volume_format_name(source->format));
+    } else (void)astra_string_append(&line,
         type.type[0] == '\0' ? "Unknown" : type.type);
-    line = line_start(4u, "Size: ");
-    if (metadata.kind == ASTRA_VFS_KIND_DIRECTORY)
+    line = line_start(4u, volume_root ? "Capacity: " : "Size: ");
+    if (volume_root && volume_capacity_valid) {
+        (void)astra_string_append_u64(&line, volume_capacity_bytes);
+        (void)astra_string_append(&line, " bytes");
+    } else if (volume_root)
+        (void)astra_string_append(&line, "Unknown");
+    else if (metadata.kind == ASTRA_VFS_KIND_DIRECTORY)
         (void)astra_string_append(&line, "Folder");
     else {
         (void)astra_string_append_u64(&line, metadata.byte_size);
@@ -181,14 +198,18 @@ static AstraResult bind_volume(const AstraStartupInfo *startup)
 {
     if (astra_path_requires_walk(target))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    if (fixed_path(target) && exact_volume.id == 0u) return ASTRA_OK;
+    const int system_root = strcmp(target, "/dh0") == 0 &&
+        exact_volume.id == 0u;
+    if (fixed_path(target) && !system_root && exact_volume.id == 0u)
+        return ASTRA_OK;
     const AstraStartupCapability *metadata = astra_startup_capability(
         startup, ASTRA_CAPABILITY_VOLUMES);
-    if (metadata == NULL) return ASTRA_ERROR_PERMISSION;
+    if (metadata == NULL)
+        return system_root ? ASTRA_OK : ASTRA_ERROR_PERMISSION;
     AstraVolumeSnapshot snapshot = ASTRA_VOLUME_SNAPSHOT_INIT;
     AstraResult result = astra_volume_snapshot_open(metadata->handle,
         &snapshot);
-    if (result != ASTRA_OK) return result;
+    if (result != ASTRA_OK) return system_root ? ASTRA_OK : result;
     const AstraVolumeRecord *record = NULL;
     if (exact_volume.id != 0u)
         record = astra_volume_snapshot_find(&snapshot, &exact_volume);
@@ -199,8 +220,9 @@ static AstraResult bind_volume(const AstraStartupInfo *startup)
             const AstraVolumeRecord *candidate = &snapshot.records[at];
             if (candidate->kind == ASTRA_VOLUME_MOUNT &&
                 candidate->state == ASTRA_VOLUME_MOUNTED &&
-                candidate->origin == ASTRA_VOLUME_ORIGIN_RAM &&
-                astra_path_beneath(target, candidate->name)) {
+                ((candidate->origin == ASTRA_VOLUME_ORIGIN_RAM &&
+                  astra_path_beneath(target, candidate->name)) ||
+                 (system_root && strcmp(candidate->name, "/dh0") == 0))) {
                 record = candidate;
                 exact_volume = (AstraVolumeReference){snapshot.epoch,
                     candidate->id, candidate->generation};
@@ -208,7 +230,17 @@ static AstraResult bind_volume(const AstraStartupInfo *startup)
             }
         }
     }
-    if (record == NULL || record->kind != ASTRA_VOLUME_MOUNT ||
+    if (record != NULL && record->kind == ASTRA_VOLUME_MOUNT &&
+        record->state == ASTRA_VOLUME_MOUNTED &&
+        strcmp(target, record->name) == 0) {
+        volume_record = *record;
+        const AstraVolumeRecord *source = astra_volume_snapshot_ancestor(
+            &snapshot, &exact_volume, ASTRA_VOLUME_SOURCE);
+        if (source != NULL) source_record = *source;
+        volume_root = 1;
+    }
+    if (system_root) result = ASTRA_OK;
+    else if (record == NULL || record->kind != ASTRA_VOLUME_MOUNT ||
         record->state != ASTRA_VOLUME_MOUNTED ||
         !astra_path_beneath(target, record->name) ||
         (fixed_path(target) && record->origin != ASTRA_VOLUME_ORIGIN_RAM))
@@ -224,6 +256,49 @@ static AstraResult bind_volume(const AstraStartupInfo *startup)
     }
     astra_volume_snapshot_close(&snapshot);
     return result;
+}
+
+static void page_volume(void)
+{
+    const AstraVolumeRecord *source = source_record.kind ==
+        ASTRA_VOLUME_SOURCE ? &source_record : &volume_record;
+    AstraString line = line_start(0u, "Mount: ");
+    (void)astra_string_append(&line, volume_record.name);
+    line = line_start(1u, "Label: ");
+    (void)astra_string_append(&line, source->label[0] != '\0' ?
+        source->label : "None");
+    line = line_start(2u, "Format: ");
+    (void)astra_string_append(&line,
+        astra_volume_format_name(source->format));
+    line = line_start(3u, "Capacity: ");
+    if (volume_capacity_valid) {
+        (void)astra_string_append_u64(&line, volume_capacity_bytes);
+        (void)astra_string_append(&line, " bytes");
+    } else (void)astra_string_append(&line, "Unknown");
+    line = line_start(4u, "Available: ");
+    if (volume_capacity_valid) {
+        (void)astra_string_append_u64(&line, volume_available_bytes);
+        (void)astra_string_append(&line, " bytes");
+    } else (void)astra_string_append(&line, "Unknown");
+    line = line_start(5u, "Access: ");
+    (void)astra_string_append(&line,
+        (volume_record.flags & ASTRA_VOLUME_READ_ONLY) != 0u ?
+        "Read-only" : "Read/write");
+    line = line_start(6u, "Source: ");
+    const char *origin = source->origin == ASTRA_VOLUME_ORIGIN_DEVICE ?
+        "Device" : source->origin == ASTRA_VOLUME_ORIGIN_IMAGE ?
+        "Disk image" : source->origin == ASTRA_VOLUME_ORIGIN_RAM ?
+        "RAM" : source->origin == ASTRA_VOLUME_ORIGIN_SYSTEM_IMAGE ?
+        "System image" : source->origin == ASTRA_VOLUME_ORIGIN_EXPORT ?
+        "Export" : "Unknown";
+    (void)astra_string_append(&line, origin);
+    if (source->partition_number != 0u) {
+        (void)astra_string_append(&line, " partition ");
+        (void)astra_string_append_u64(&line, source->partition_number);
+    }
+    line = line_start(7u, "UUID: ");
+    (void)astra_string_append(&line,
+        source->uuid[0] != '\0' ? source->uuid : "None");
 }
 
 static void page_bytes(void)
@@ -309,7 +384,8 @@ static AstraResult build_controls(void)
     if (page == INSPECTOR_GENERAL) page_general();
     else if (page == INSPECTOR_HANDLERS) page_handlers();
     else if (page == INSPECTOR_BYTES) page_bytes();
-    else page_blocks();
+    else if (page == INSPECTOR_BLOCKS) page_blocks();
+    else page_volume();
     pane.first_id = INSPECTOR_TITLE;
     pane.title = astra_path_leaf(target);
     pane.title_length = (uint32_t)strlen(pane.title);
@@ -319,7 +395,8 @@ static AstraResult build_controls(void)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     tabs.id = INSPECTOR_TABS;
     tabs.items = pages;
-    tabs.item_count = INSPECTOR_PAGE_COUNT;
+    tabs.item_count = volume_root ? INSPECTOR_PAGE_COUNT :
+        INSPECTOR_PAGE_COUNT - 1u;
     tabs.selected = page;
     if (astra_interface_tab_init(CONTROL(INSPECTOR_TABS), &tabs) != ASTRA_OK)
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -417,7 +494,9 @@ static AstraResult run(AstraHandle gui)
         }
         if (action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
             action.control_id == INSPECTOR_TABS &&
-            action.value >= 0 && action.value < INSPECTOR_PAGE_COUNT) {
+            action.value >= 0 &&
+            (uint32_t)action.value < (volume_root ? INSPECTOR_PAGE_COUNT :
+                INSPECTOR_PAGE_COUNT - 1u)) {
             page = (uint32_t)action.value;
             if (build_controls() != ASTRA_OK || present() != ASTRA_OK)
                 return ASTRA_ERROR_IO;
@@ -467,6 +546,16 @@ int astra_main(const AstraStartupInfo *startup)
          astra_file_type_resolve(&files, &catalog, target, &type) !=
             ASTRA_VFS_OK))
         status = ASTRA_STATUS_IO;
+    if (status == ASTRA_STATUS_OK && volume_root) {
+        AstraFilesystemInfo capacity = {
+            .size = sizeof(AstraFilesystemInfo)};
+        if (astra_filesystem_capacity_path(&files.filesystem, target,
+                &capacity) == ASTRA_VFS_OK &&
+            astra_filesystem_capacity_bytes(&capacity,
+                &volume_capacity_bytes, &volume_available_bytes)) {
+            volume_capacity_valid = 1;
+        }
+    }
     if (status == ASTRA_STATUS_OK && metadata.kind == ASTRA_VFS_KIND_FILE &&
         type.type[0] != '\0' && catalog.count != 0u) {
         handlers = astra_runtime_allocate(catalog.count * sizeof(*handlers));

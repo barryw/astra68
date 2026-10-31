@@ -1223,20 +1223,22 @@ static AstraResult browser_update_space(void)
     astra_string_init(&line, browser_space, sizeof(browser_space));
     if (recent_mode != 0u)
         (void)astra_string_append(&line, "Recent Items");
-    else if (astra_filesystem_capacity_path(&filesystem.filesystem, root, &capacity) ==
-            ASTRA_VFS_OK && capacity.fragment_size != 0u &&
-        capacity.blocks <= UINT64_MAX / capacity.fragment_size &&
-        capacity.blocks_available <= UINT64_MAX / capacity.fragment_size) {
-        uint64_t available = capacity.blocks_available *
-            capacity.fragment_size / UINT64_C(1048576);
-        uint64_t total = capacity.blocks * capacity.fragment_size /
-            UINT64_C(1048576);
-        (void)astra_string_append_u64(&line, available);
-        (void)astra_string_append(&line, " MiB free of ");
-        (void)astra_string_append_u64(&line, total);
-        (void)astra_string_append(&line, " MiB");
-    } else
-        (void)astra_string_append(&line, "Atlas");
+    else {
+        uint64_t total_bytes, available_bytes;
+        if (astra_filesystem_capacity_path(&filesystem.filesystem, root,
+                &capacity) != ASTRA_VFS_OK ||
+            !astra_filesystem_capacity_bytes(&capacity, &total_bytes,
+                &available_bytes)) {
+            (void)astra_string_append(&line, "Atlas");
+        } else {
+            (void)astra_string_append_u64(&line,
+                available_bytes / UINT64_C(1048576));
+            (void)astra_string_append(&line, " MiB free of ");
+            (void)astra_string_append_u64(&line,
+                total_bytes / UINT64_C(1048576));
+            (void)astra_string_append(&line, " MiB");
+        }
+    }
     return astra_interface_control_set_text(&ui,
         BROWSER_CONTROL(BROWSER_PANEL_CONTROL_COUNT + ASTRA_STATUS_BAR_RIGHT),
         browser_space, line.length);

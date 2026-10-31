@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas volume inspection checkpoint, 2026-10-31: Get Information now
+recognizes mounted volume roots in the native catalog. System DH0, RAM0, and
+exact public mount references use the same Inspector window and Interface Kit
+Settings Pane, Tab, and Label controls as files and folders; Atlas has no
+volume-specific information renderer. Inspector uses Volume Kit's coherent
+snapshot and exact ancestor lookup, Filesystem Kit's capacity query, and the
+shared format-name policy. Filesystem Kit now owns the checked conversion of
+provider block counts to total and available bytes; Atlas status bar and
+Inspector share it. Read-only Haiku reference:
+`src/kits/tracker/infowindow/InfoWindow.cpp` models a volume as an Inspector
+target, while `src/kits/storage/Volume.cpp` keeps volume metadata behind a
+storage API; Astra adapts that pattern to exact mount incarnations and
+capability-scoped reads. Beast MC68040 Atlas/Inspector builds, Atlas directory
+test, and NDK `dist-check` (including documentation and CMake smoke) passed.
+DE25 targeted install opened DH0 and RAM0 in Atlas,
+launched Inspector with Primary+I, and displayed each Volume tab with format,
+capacity, available bytes, access, source and UUID. Matching board/Beast
+SHA-256 evidence (raw frames and PNG) is archived at
+`/mnt/Documents/astra68/atlas-volume-inspector-20261031/`. Board trial frames
+were removed; production services remain active, Astra has zero restarts and
+board retains 8.1 GiB free. Physical removable mount Inspector launch still
+needs a device attached for qualification. Universal non-file Inspector
+targets remain open design work.
+
 Atlas System Inspector checkpoint, 2026-10-31: File > Get Information,
 Primary+I, and item/background context menus now use one Atlas command to
 launch a native Inspector for selected file/folder or current directory.
