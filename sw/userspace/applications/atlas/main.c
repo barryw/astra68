@@ -278,6 +278,7 @@ enum AtlasMenuRow {
     ATLAS_MENU_FILE,
     ATLAS_MENU_EDIT,
     ATLAS_MENU_VIEW,
+    ATLAS_MENU_VOLUME,
     ATLAS_MENU_HELP,
     ATLAS_MENU_NEW_WINDOW,
     ATLAS_MENU_NEW,
@@ -301,13 +302,14 @@ enum AtlasMenuRow {
     ATLAS_MENU_HIDDEN,
     ATLAS_MENU_PREVIEW,
     ATLAS_MENU_SIDEBAR,
+    ATLAS_MENU_DISK_SETUP,
     ATLAS_MENU_ABOUT,
     ATLAS_MENU_COUNT
 };
 
 static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"File", 4u, 0u}, {"Edit", 4u, 0u},
-    {"View", 4u, 0u}, {"Help", 4u, 0u},
+    {"View", 4u, 0u}, {"Volume", 6u, 0u}, {"Help", 4u, 0u},
     {"New Window", 10u, ASTRA_MENU_PARENT(1u)},
     {"New Drawer", 10u, ASTRA_MENU_PARENT(1u)},
     {"Open", 4u, ASTRA_MENU_PARENT(1u)},
@@ -330,7 +332,8 @@ static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"Show Hidden Files", 17u, ASTRA_MENU_PARENT(3u)},
     {"Show Preview", 12u, ASTRA_MENU_PARENT(3u)},
     {"Show Sidebar", 12u, ASTRA_MENU_PARENT(3u)},
-    {"About Atlas", 11u, ASTRA_MENU_PARENT(4u)}
+    {"Disk Setup...", 13u, ASTRA_MENU_PARENT(4u)},
+    {"About Atlas", 11u, ASTRA_MENU_PARENT(5u)}
 };
 /* Menu rows invoke the same responders as toolbar, shortcuts and popups. */
 static const AstraContextMenuItem atlas_menu_commands[ATLAS_MENU_COUNT] = {
@@ -353,7 +356,8 @@ static const AstraContextMenuItem atlas_menu_commands[ATLAS_MENU_COUNT] = {
     [ATLAS_MENU_SORT_SIZE] = {"atlas.sort.size", sizeof("atlas.sort.size") - 1u, NULL},
     [ATLAS_MENU_SORT_KIND] = {"atlas.sort.kind", sizeof("atlas.sort.kind") - 1u, NULL},
     [ATLAS_MENU_SORT_MODIFIED] = {"atlas.sort.modified", sizeof("atlas.sort.modified") - 1u, NULL},
-    [ATLAS_MENU_SIDEBAR] = {"atlas.sidebar", sizeof("atlas.sidebar") - 1u, NULL}
+    [ATLAS_MENU_SIDEBAR] = {"atlas.sidebar", sizeof("atlas.sidebar") - 1u, NULL},
+    [ATLAS_MENU_DISK_SETUP] = {"atlas.disk-setup", sizeof("atlas.disk-setup") - 1u, NULL}
 };
 static uint32_t atlas_menu_sent[ATLAS_MENU_COUNT];
 static uint32_t atlas_menu_ready;
@@ -2271,6 +2275,48 @@ static AstraResult new_window(void *opaque, const AstraCommandArguments *args)
         ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 1u, &process_id);
 }
 
+static AstraResult disk_setup_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Disk Setup...", 13u,
+        launcher != ASTRA_INVALID_HANDLE, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult launch_disk_setup(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    static const char bundle[] = "/apps/DiskSetup.app";
+    uint32_t process_id;
+    if (viewed_volume.id == 0u)
+        return astra_application_launch(launcher, bundle,
+            sizeof(bundle) - 1u, &process_id);
+
+    AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
+    AstraResult result = astra_volume_snapshot_open(volume_metadata, &catalog);
+    if (result != ASTRA_OK) return result;
+    const AstraVolumeRecord *mount = astra_volume_snapshot_find(&catalog,
+        &viewed_volume);
+    if (mount == NULL || mount->kind != ASTRA_VOLUME_MOUNT ||
+        mount->state != ASTRA_VOLUME_MOUNTED) {
+        astra_volume_snapshot_close(&catalog);
+        return ASTRA_ERROR_INVALID_HANDLE;
+    }
+    const AstraVolumeRecord *source = astra_volume_snapshot_ancestor(
+        &catalog, &viewed_volume, ASTRA_VOLUME_SOURCE);
+    int physical = source != NULL &&
+        source->origin == ASTRA_VOLUME_ORIGIN_DEVICE;
+    astra_volume_snapshot_close(&catalog);
+    if (!physical)
+        return astra_application_launch(launcher, bundle,
+            sizeof(bundle) - 1u, &process_id);
+    return astra_application_launch_for_volume(launcher, bundle,
+        sizeof(bundle) - 1u, ASTRA_LAUNCH_SOURCE_DESKTOP,
+        "--target", &viewed_volume, &process_id);
+}
+
 static AstraResult folder_query(void *opaque, AstraCommandState *state)
 {
     AstraResult result = menu_query(opaque, state);
@@ -3475,6 +3521,8 @@ static const AstraCommand atlas_command_table[] = {
         &atlas_command_context},
     {"atlas.window", sizeof("atlas.window") - 1u, 0u, 0u,
         new_window_query, new_window, &atlas_command_context},
+    {"atlas.disk-setup", sizeof("atlas.disk-setup") - 1u, 0u, 0u,
+        disk_setup_query, launch_disk_setup, &atlas_command_context},
     {"atlas.new", 9u, 0u, 0u, menu_query, create_folder,
         &atlas_command_context},
     {"atlas.folder", 12u, 0u, 0u, folder_query, create_folder,

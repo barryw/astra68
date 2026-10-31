@@ -3534,6 +3534,9 @@ int main(void)
             assert(astra_render_builder_finish(&builder) != 0u);
             assert(bar.bar_heading_owner == 42u);
             assert(bar.bar_heading_count == 3u);
+            assert(bar.bar_window_heading == 1u);
+            assert(bar.bar_heading_root[0] == 0u &&
+                bar.bar_heading_root[2] == 1u);
             assert(bar.bar_heading_left[0] < bar.bar_heading_right[0]);
             assert(bar.bar_heading_right[0] < bar.bar_heading_left[1]);
             assert(bar.bar_heading_right[1] < bar.bar_heading_left[2]);
@@ -3546,8 +3549,9 @@ int main(void)
                 assert(astra_render_builder_init(&builder,
                     batch, sizeof(batch), 1u));
                 assert(build_system_surfaces(&builder, &bar, &bar_theme));
-                assert(bar.bar_heading_count == 1u &&
+                assert(bar.bar_heading_count == 2u &&
                     bar.bar_window_heading == 0u);
+                assert(bar.bar_heading_root[1] == 1u);
             }
             headings[0].label = "Story";
             headings[0].label_length = 5u;

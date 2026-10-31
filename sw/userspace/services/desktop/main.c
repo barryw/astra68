@@ -758,19 +758,12 @@ static AstraResult launch_volume_application(const DesktopCommands *context,
     const AstraVolumeRecord *record, const char *bundle, const char *name,
     const char *option)
 {
-    char epoch[24], id[24], generation[24];
-    AstraString number;
     uint32_t process_id;
-    astra_string_init(&number, epoch, sizeof(epoch));
-    (void)astra_string_append_u64(&number, context->apps->volumes.epoch);
-    astra_string_init(&number, id, sizeof(id));
-    (void)astra_string_append_u64(&number, record->id);
-    astra_string_init(&number, generation, sizeof(generation));
-    (void)astra_string_append_u64(&number, record->generation);
-    const char *arguments[] = {option, epoch, id, generation};
-    AstraResult result = astra_application_launch_with_arguments(
+    const AstraVolumeReference reference = {context->apps->volumes.epoch,
+        record->id, record->generation};
+    AstraResult result = astra_application_launch_for_volume(
         context->launcher, bundle, (uint16_t)strlen(bundle),
-        ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 4u, &process_id);
+        ASTRA_LAUNCH_SOURCE_DESKTOP, option, &reference, &process_id);
     if (result != ASTRA_OK)
         launch_error(context->gui, name, bundle, result);
     return result;

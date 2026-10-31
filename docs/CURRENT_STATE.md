@@ -2,6 +2,31 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas volume menu and shared launch checkpoint, 2026-10-31: Atlas now exposes
+Volume > Disk Setup through its existing Interface Kit command scope and
+common Menu control. The System Kit header supplies
+`astra_application_launch_for_volume`, which serializes exact volume identity
+once for Desktop and Atlas; no library ABI or launch protocol changed. Atlas
+rechecks a physical mount against a fresh catalog before targeted launch,
+while fixed and RAM paths open Disk Setup without a target. Display's shared
+menu bar places Window before a trailing Help and maps visual headings to
+their original app menu rows. This fixes menu order for every app without an
+Atlas control or renderer. Haiku read-only references:
+`src/kits/interface/MenuBar.cpp`,
+`src/kits/tracker/ContainerWindow.cpp` (volume actions), and
+`src/kits/storage/Volume.cpp`; Astra retains exact volume references and its
+shared launcher contract. Beast NDK `dist-check`, System application launch
+contract test, Atlas host test, Display compositor test, and MC68040 Atlas,
+Desktop, Display builds passed. Targeted DE25 installs passed for Atlas and
+Desktop (`guest=2`) and Display (`guest=1`). RFB opened DH0, showed Volume >
+Disk Setup, launched Disk Setup, then confirmed `Volume, Window, Help` order,
+Window actions, and Help > About Atlas dialog. SHA-verified raw captures and
+PNGs are archived on Beast at
+`/mnt/Documents/astra68/atlas-volume-menu-20261031/`. Physical target launch
+remains unqualified because DE25 saw no external disk. Full unmount/eject from
+Atlas and platform-owned File/Edit/View/Help menu policy remain open; these
+need shared mechanisms rather than Atlas-specific copies.
+
 Atlas correct-path core UI qualification, 2026-10-31: The current bundle
 executable installed at its manifest path was retested on DE25 because older
 targeted installs had copied a binary to an unused path. RFB opened empty

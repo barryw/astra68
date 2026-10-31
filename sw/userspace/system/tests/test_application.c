@@ -288,6 +288,25 @@ int main(void)
         assert(payload == ASTRA_INVALID_HANDLE && payload_handle_closes == old_payload_closes + 1u);
         map_failure = ASTRA_OK;
     }
+    {
+        static const char bundle[] = "/apps/DiskSetup.app";
+        static const char *const volume_arguments[] = {
+            "--target", "18446744073709551615", "42", "7"};
+        AstraVolumeReference volume = {UINT64_MAX, 42u, 7u};
+        expected_count = 5u;
+        expected_source = ASTRA_LAUNCH_SOURCE_DESKTOP;
+        expected_path = bundle;
+        expected_arguments = volume_arguments;
+        assert(astra_application_launch_for_volume(7u, bundle,
+            sizeof(bundle) - 1u, ASTRA_LAUNCH_SOURCE_DESKTOP,
+            "--target", &volume, &process_id) == ASTRA_OK);
+        assert(process_id == 42u);
+        volume.generation = 0u;
+        assert(astra_application_launch_for_volume(7u, bundle,
+            sizeof(bundle) - 1u, ASTRA_LAUNCH_SOURCE_DESKTOP,
+            "--target", &volume, &process_id) ==
+            ASTRA_ERROR_INVALID_ARGUMENT);
+    }
     puts("application launch contract tests passed");
     return 0;
 }

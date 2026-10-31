@@ -16,6 +16,12 @@ in a separate owned read-only payload. Their combined packed-string budget is
 4,096 bytes including NULs. The payload and opaque exec handoff must fit before
 the executable's first segment; failures retain the old image and resources.
 
+`astra_application_launch_for_volume()` uses the same launch service and
+encodes an exact volume reference as option, epoch, ID, and generation.
+Callers should obtain that reference from a current volume snapshot; the
+receiver must validate it against a fresh snapshot before acting. Desktop and
+Atlas share this helper when opening a volume in another application.
+
 Service manager wire version 7 keeps service identifiers at 63 bytes while
 accepting full filesystem executable paths. Definition and runtime-info
 objects own their executable strings; initialize them with their `*_INIT`

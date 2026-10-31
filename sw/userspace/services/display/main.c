@@ -306,6 +306,7 @@ typedef struct DisplayState {
     uint32_t bar_heading_owner;
     uint32_t bar_heading_count;
     uint32_t bar_window_heading;
+    uint32_t bar_heading_root[16];
     int32_t bar_heading_left[16];
     int32_t bar_heading_right[16];
     /* What the overlay surface holds, and what this compose drew. */
@@ -1408,16 +1409,17 @@ static uint32_t menu_bar_open(DisplayState *state, uint32_t heading)
     DisplayWindow *window = &state->windows[index];
     if (heading == state->bar_window_heading)
         return window_menu_open(state, heading, window->id);
-    if (heading >= window->bar_root_count)
+    uint32_t root = state->bar_heading_root[heading];
+    if (root >= window->bar_root_count)
         return ASTRA_STATUS_NOT_FOUND;
     start = window->bar_root_count;
     while (start < window->bar_row_count &&
         ((window->bar_rows[start].flags & ASTRA_MENU_PARENT_MASK) >>
-         ASTRA_MENU_PARENT_SHIFT) < heading + 1u) ++start;
+         ASTRA_MENU_PARENT_SHIFT) < root + 1u) ++start;
     end = start;
     while (end < window->bar_row_count &&
         ((window->bar_rows[end].flags & ASTRA_MENU_PARENT_MASK) >>
-         ASTRA_MENU_PARENT_SHIFT) == heading + 1u) ++end;
+         ASTRA_MENU_PARENT_SHIFT) == root + 1u) ++end;
     count = end - start;
     if (count == 0u) return ASTRA_STATUS_PROTOCOL;
     items = astra_runtime_allocate(count * sizeof(*items));
@@ -2768,6 +2770,8 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
     uint32_t active_title_length;
     uint32_t active_title_width;
     uint32_t window_heading_width;
+    uint32_t help_heading_width = 0u;
+    uint32_t help_root = UINT32_MAX;
     uint32_t active = active_window(state);
     const DisplayWindow *bar_window = active < state->count ?
         &state->windows[active] : NULL;
@@ -2797,6 +2801,17 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
     window_heading_width = astra_render_builder_text_width(builder,
         window_heading, sizeof(window_heading) - 1u,
         ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, 0u);
+    if (bar_window != NULL && bar_window->bar_root_count != 0u) {
+        const AstraMenuItem *last =
+            &bar_window->bar_rows[bar_window->bar_root_count - 1u];
+        if (last->label_length == 4u &&
+            memcmp(last->label, "Help", 4u) == 0) {
+            help_root = bar_window->bar_root_count - 1u;
+            help_heading_width = astra_render_builder_text_width(builder,
+                last->label, last->label_length,
+                ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, 0u);
+        }
+    }
     if (!astra_render_builder_fill(
             builder, state->system_resource[0], 0, 0,
             ASTRA_DISPLAY_WIDTH, DISPLAY_WORK_TOP,
@@ -2833,9 +2848,13 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
                       theme->accent : theme->text_primary)))
             return 0;
     state->bar_heading_owner = bar_window != NULL ? bar_window->id : 0u;
-    state->bar_heading_count = bar_window != NULL ? bar_window->bar_root_count : 0u;
+    state->bar_heading_count = bar_window != NULL ?
+        bar_window->bar_root_count - (help_root != UINT32_MAX ? 1u : 0u) : 0u;
     state->bar_window_heading = UINT32_MAX;
-    if (state->bar_heading_count >= 16u) state->bar_heading_count = 15u;
+    if (state->bar_heading_count >= 16u -
+            (help_root != UINT32_MAX ? 1u : 0u))
+        state->bar_heading_count = 15u -
+            (help_root != UINT32_MAX ? 1u : 0u);
     heading_x = DISPLAY_APP_TITLE_X + (int32_t)active_title_width + 24;
     for (uint32_t index = 0u; index < state->bar_heading_count; ++index) {
         const AstraMenuItem *heading = &bar_window->bar_rows[index];
@@ -2844,10 +2863,13 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
             ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, 0u);
         if (heading_x + (int32_t)width + 12 >
                 (int32_t)ASTRA_DISPLAY_WIDTH - 160 -
-                    (int32_t)window_heading_width - 24) {
+                    (int32_t)window_heading_width - 24 -
+                    (help_root != UINT32_MAX ?
+                        (int32_t)help_heading_width + 24 : 0)) {
             state->bar_heading_count = index;
             break;
         }
+        state->bar_heading_root[index] = index;
         state->bar_heading_left[index] = heading_x - 8;
         state->bar_heading_right[index] = heading_x + (int32_t)width + 8;
         if (!astra_render_builder_text(
@@ -2863,12 +2885,31 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
                 (int32_t)ASTRA_DISPLAY_WIDTH - 160) {
             uint32_t index = state->bar_heading_count++;
             state->bar_window_heading = index;
+            state->bar_heading_root[index] = UINT32_MAX;
             state->bar_heading_left[index] = heading_x - 8;
             state->bar_heading_right[index] =
                 heading_x + (int32_t)window_heading_width + 8;
             if (!astra_render_builder_text(builder,
                     state->system_resource[0], heading_x, 8,
                     window_heading, sizeof(window_heading) - 1u,
+                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
+                    color(theme->text_primary)))
+                return 0;
+            heading_x += (int32_t)window_heading_width + 24;
+        }
+        if (help_root != UINT32_MAX &&
+            heading_x + (int32_t)help_heading_width + 12 <=
+                (int32_t)ASTRA_DISPLAY_WIDTH - 160 &&
+            state->bar_heading_count < 16u) {
+            const AstraMenuItem *help = &bar_window->bar_rows[help_root];
+            uint32_t index = state->bar_heading_count++;
+            state->bar_heading_root[index] = help_root;
+            state->bar_heading_left[index] = heading_x - 8;
+            state->bar_heading_right[index] =
+                heading_x + (int32_t)help_heading_width + 8;
+            if (!astra_render_builder_text(builder,
+                    state->system_resource[0], heading_x, 8,
+                    help->label, help->label_length,
                     ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
                     color(theme->text_primary)))
                 return 0;

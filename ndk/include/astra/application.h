@@ -8,7 +8,9 @@
 #include <astra/application_service.h>
 #include <astra/attributes.h>
 #include <astra/resource.h>
+#include <astra/string.h>
 #include <astra/types.h>
+#include <astra/volume_abi.h>
 
 ASTRA_EXTERN_C_BEGIN
 
@@ -45,6 +47,43 @@ ASTRA_NODISCARD AstraResult astra_application_launch_with_arguments(
     AstraHandle launcher, const char *bundle_path, uint16_t path_length,
     AstraLaunchSource source, const char *const *arguments,
     uint16_t argument_count, uint32_t *process_id);
+
+/** Launch a bundle with one exact volume target as option + decimal identity.
+ * The receiving application parses epoch, ID, and generation with
+ * astra_volume_reference_parse and checks them against a current catalog.
+ * This helper shares argument ordering across Desktop and file browsers.
+ * @param launcher Launcher service handle.
+ * @param bundle_path Bundle path beneath APPS:.
+ * @param path_length Bytes in bundle_path.
+ * @param source Origin of launch request.
+ * @param option Receiver's volume-target option, for example `--target`.
+ * @param volume Exact nonzero provider epoch, ID, and generation.
+ * @param process_id Receives new process PID.
+ * @return ASTRA_OK on startup, or validation/launch error.
+ */
+static inline AstraResult astra_application_launch_for_volume(
+    AstraHandle launcher, const char *bundle_path, uint16_t path_length,
+    AstraLaunchSource source, const char *option,
+    const AstraVolumeReference *volume, uint32_t *process_id)
+{
+    char epoch[21], id[21], generation[21];
+    char *const text[] = {epoch, id, generation};
+    const uint64_t values[] = {volume != NULL ? volume->epoch : 0u,
+        volume != NULL ? volume->id : 0u,
+        volume != NULL ? volume->generation : 0u};
+    if (option == NULL || *option == '\0' || volume == NULL ||
+        values[0] == 0u || values[1] == 0u || values[2] == 0u)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    for (uint32_t at = 0u; at < 3u; ++at) {
+        AstraString number;
+        astra_string_init(&number, text[at], 21u);
+        if (!astra_string_append_u64(&number, values[at]))
+            return ASTRA_ERROR_NO_RESOURCES;
+    }
+    const char *const arguments[] = {option, epoch, id, generation};
+    return astra_application_launch_with_arguments(launcher, bundle_path,
+        path_length, source, arguments, 4u, process_id);
+}
 
 /**
  * Launch a bundle and retain a wait-only capability for its process.

@@ -61,7 +61,7 @@ SANITIZER_TESTS := application area bulk_ring bundle clipboard graphics \
 	pointer gamepad port service_manager utf8 window
 
 TEST_SOURCES_application := src/resource.c src/port.c src/application.c src/application_payload.c src/service_payload.c \
-	$(TEST_UTF8) $(RUNTIME)/src/arguments.c
+	$(TEST_UTF8) $(RUNTIME)/src/arguments.c $(RUNTIME)/src/string.c
 TEST_SOURCES_area := src/resource.c src/area.c
 TEST_SOURCES_bulk_ring := src/resource.c src/bulk_ring.c
 TEST_SOURCES_bundle := src/manifest.c src/bundle.c $(TEST_UTF8) \

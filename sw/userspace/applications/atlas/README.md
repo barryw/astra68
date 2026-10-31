@@ -23,6 +23,11 @@ follows selection, writable path, current view, sort order, and hidden-file
 state. They publish through the common Menu control; Atlas owns only the
 command names, grouping, and invocation. Haiku's read-only
 `src/kits/interface/MenuBar.cpp` and `Menu.cpp` informed that split.
+The Volume menu opens the existing Disk Setup app. For a physical mounted
+volume, Atlas rechecks its exact catalog identity and uses the shared NDK
+volume launch helper to select that source in Disk Setup. Fixed and RAM paths
+open Disk Setup without a target. Display places its shared Window heading
+before a trailing app Help heading, while preserving the app's menu commands.
 
 Atlas appends shared controls through Interface Kit's generic
 `astra_interface_ui_append_control`. A control that exceeds one 128-command
