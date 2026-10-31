@@ -2,6 +2,19 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas layout hardware checkpoint, 2026-10-31: The current Atlas bundle on
+DE25 was maximized and showed DH0 through shared File Panel Columns, List,
+and Grid controls. Restoring and dragging its right edge to the measured
+minimum width kept the directory usable; shared Toolbar Actions folded
+commands into overflow, with disabled Folder/Open/Delete and enabled Refresh.
+The window was restored to its original width. No Atlas-only layout or control
+was added. Board/Beast raw-frame SHA-256 matched for six selected states;
+raw and PNG evidence is archived at
+`/mnt/Documents/astra68/atlas-layout-20261031/`. Board helper and captures
+were removed. Astra, HDMI audio, and remote desktop remain active, Astra has
+zero restarts, and board has 8.1 GiB free. Physical USB and optical gates
+remain pending attached media.
+
 Atlas write-policy reuse checkpoint, 2026-10-31: Atlas now resolves writable
 sidebar mounts through its existing exact mounted-path lookup instead of a
 second scan with slightly different filters. Write actions stop when the
