@@ -21,7 +21,12 @@ are archived on Beast under
 new HOME window SHA-256 values are
 `4d1cbf42cc00443a2a018835f959b38d07552799427a896d8dd97981e72c06e7`
 and `32ae9290e12bf40d90276510765a74f43512826718613245d6211d38748af2a6`.
-Board trial files were removed. Astra, audio, and remote desktop services
+An additional physical UI check selected DH0's `astra_events.cat`, used
+Edit > Copy, navigated to empty RAM0, observed Paste enabled, and used
+Edit > Paste. RAM0 showed one copied file; its raw capture SHA-256 is
+`9e87d38609e0822b8dac652324b0154744e2354daaf6d95ea2281643feca9167`.
+Guest restart cleared disposable RAM0 data. Board trial files were removed.
+Astra, audio, and remote desktop services
 remain active with zero restarts and 8.1 GiB free. Physical USB transfer gate
 still awaits attached media; platform-owned Help and NDK menu skeleton remain
 open design gaps.
