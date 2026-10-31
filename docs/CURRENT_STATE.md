@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas nested Trash checkpoint, 2026-10-31: Filesystem Kit 15.11 now exports
+`astra_trash_path_kind`, one canonical classifier for top-level Trash root and
+descendants. Atlas removed local Trash path parsing and uses shared result to
+keep trashed folders browsable/copyable while refusing ordinary mutations and
+drops inside them. Filesystem Kit's move source check uses the same classifier
+and rejects redundant separators. Read-only Haiku reference:
+`src/kits/tracker/PoseView.cpp` separates Trash-specific actions from folder
+operations. Beast host Trash and Atlas tests, Filesystem Kit library contract,
+MC68040 Kit and Atlas builds, and NDK `dist-check` passed. Targeted Kit and
+Atlas DE25 install passed; final Kit binary was redeployed after documentation
+and canonical-path validation changes, and Atlas reopened RAM0 afterward.
+RAM0 trial created `Outer/Inner`, moved `Outer` to Trash, browsed nested
+`Inner`, showed Copy enabled and New/Cut/Paste/Rename/Move to Trash disabled,
+then emptied Trash; root and Trash are empty. Selected raw-frame checksums
+matched board and Beast. Raw and PNG evidence is archived at
+`/mnt/Documents/astra68/atlas-nested-trash-20261031/`; board trial files were
+removed. Astra, HDMI audio host, and remote desktop remain active, Astra has
+zero restarts, and board has 8.1 GiB free. Physical removable gate still
+needs attached disposable media.
+
 Atlas shared drag-to-Trash checkpoint, 2026-10-31: Atlas routes drops on the
 current volume's Trash Place through Filesystem Kit's existing
 `astra_trash_move`, requiring the source's exact mount identity and a same

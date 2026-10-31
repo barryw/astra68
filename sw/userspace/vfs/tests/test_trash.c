@@ -246,6 +246,17 @@ int main(void)
 {
     char moved[ASTRA_VFS_PATH_MAX];
     char origin[ASTRA_VFS_PATH_MAX];
+    assert(astra_trash_path_kind("/usb0") == ASTRA_TRASH_OUTSIDE);
+    assert(astra_trash_path_kind("/usb0/Folder/.Trash") == ASTRA_TRASH_OUTSIDE);
+    assert(astra_trash_path_kind("/usb0/.Trash") == ASTRA_TRASH_ROOT);
+    assert(astra_trash_path_kind("/usb0/.Trash/File") == ASTRA_TRASH_INSIDE);
+    assert(astra_trash_path_kind("/usb0/.Trash/Folder/Child") == ASTRA_TRASH_INSIDE);
+    assert(astra_trash_path_kind("/usb0/.Trashy") == ASTRA_TRASH_OUTSIDE);
+    assert(astra_trash_path_kind("/usb0/.Trash/../File") == ASTRA_TRASH_OUTSIDE);
+    assert(astra_trash_path_kind("/usb0//.Trash/File") == ASTRA_TRASH_OUTSIDE);
+    assert(astra_trash_path_kind("/usb0/.Trash//File") == ASTRA_TRASH_OUTSIDE);
+    assert(astra_trash_move(&filesystem, "/usb0",
+        "/usb0//.Trash/File", moved, sizeof(moved)) == ASTRA_VFS_ERR_INVALID);
     add("/usb0/Test", ASTRA_VFS_KIND_FILE);
     assert(astra_trash_move(&filesystem, "/usb0", "/usb0/Test",
         moved, sizeof(moved)) == ASTRA_VFS_OK);

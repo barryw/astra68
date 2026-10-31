@@ -54,7 +54,11 @@ failed metadata cleanup. `astra_trash_empty` removes payload trees without
 following symbolic links and reports the exact failed path and completed
 payload count. All operations use the caller's existing filesystem view and
 permissions. Legacy Trash entries without origin records can be emptied but
-cannot be restored automatically.
+cannot be restored automatically. `astra_trash_path_kind` classifies a
+canonical path as outside, the top-level Trash root, or inside Trash. File
+managers can use it to offer Copy and navigation while withholding ordinary
+mutations inside trashed folders. Storage calls still enforce their own path
+and permission checks.
 
 The native ABI is not a libc ABI. `libc.library.4` provides the POSIX file
 API -- descriptors, the current directory, `errno`, and stdio -- over these

@@ -12,12 +12,34 @@
 #define TRASH_RECORD_HEADER 8u
 #define TRASH_RECORD_MAX (TRASH_RECORD_HEADER + ASTRA_VFS_PATH_MAX - 1u)
 
+static int canonical_trash_path(const char *path)
+{
+    if (path == NULL || path[0] != '/' || path[1] == '/' ||
+        strlen(path) >= ASTRA_VFS_PATH_MAX ||
+        astra_path_requires_walk(path))
+        return 0;
+    for (const char *at = path; at[0] != '\0'; ++at)
+        if (at[0] == '/' && at[1] == '/') return 0;
+    return 1;
+}
+
 static int valid_root(const char *root)
 {
-    return root != NULL && root[0] == '/' && root[1] != '\0' &&
-        root[1] != '/' && strlen(root) < ASTRA_VFS_PATH_MAX &&
-        astra_path_leaf(root) == root + 1u &&
-        !astra_path_requires_walk(root);
+    return canonical_trash_path(root) && root[1] != '\0' &&
+        astra_path_leaf(root) == root + 1u;
+}
+
+uint32_t astra_trash_path_kind(const char *path)
+{
+    if (!canonical_trash_path(path))
+        return ASTRA_TRASH_OUTSIDE;
+    const char *slash = memchr(path + 1u, '/', strlen(path + 1u));
+    if (slash == NULL || slash == path + 1u ||
+        strncmp(slash + 1u, ".Trash", 6u) != 0)
+        return ASTRA_TRASH_OUTSIDE;
+    if (slash[7] == '\0') return ASTRA_TRASH_ROOT;
+    return slash[7] == '/' && slash[8] != '\0' ?
+        ASTRA_TRASH_INSIDE : ASTRA_TRASH_OUTSIDE;
 }
 
 static uint32_t trash_paths(const char *root, char *trash, char *origins)
@@ -48,16 +70,13 @@ static uint32_t existing_store(AstraFilesystem *filesystem,
     return ASTRA_VFS_OK;
 }
 
-static int valid_source(const char *root, const char *trash,
-    const char *source)
+static int valid_source(const char *root, const char *source)
 {
-    if (source == NULL || source[0] != '/' ||
-        strlen(source) >= ASTRA_VFS_PATH_MAX ||
+    if (!canonical_trash_path(source) ||
         !astra_path_beneath(source, root) ||
         source[strlen(root)] != '/' ||
         source[strlen(root) + 1u] == '\0' ||
-        astra_path_beneath(source, trash) ||
-        astra_path_requires_walk(source))
+        astra_trash_path_kind(source) != ASTRA_TRASH_OUTSIDE)
         return 0;
     uint32_t length = (uint32_t)strlen(source);
     const char *leaf = astra_path_leaf(source);
@@ -90,7 +109,7 @@ uint32_t astra_trash_move(AstraFilesystem *filesystem,
     payload = metadata + ASTRA_VFS_PATH_MAX;
     status = trash_paths(volume_root, trash, origins);
     if (status != ASTRA_VFS_OK) goto done;
-    if (!valid_source(volume_root, trash, source)) {
+    if (!valid_source(volume_root, source)) {
         status = ASTRA_VFS_ERR_INVALID;
         goto done;
     }

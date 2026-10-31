@@ -402,33 +402,10 @@ static AstraResult fit_toolbar(void);
 static AstraResult update_window_title(void);
 static int fixed_copy_path(const char *path);
 
-static int trash_directory_path(const char *path)
-{
-    if (path == NULL || path[0] != '/') return 0;
-    const char *leaf = astra_path_leaf(path);
-    const char *slash = leaf > path ? leaf - 1u : path;
-    return slash > path &&
-        memchr(path + 1u, '/', (size_t)(slash - path - 1u)) == NULL &&
-        strcmp(leaf, ".Trash") == 0;
-}
-
-static int trash_payload_path(const char *path)
-{
-    if (path == NULL || path[0] != '/') return 0;
-    const char *leaf = astra_path_leaf(path);
-    size_t parent_length = (size_t)(leaf - path);
-    if (parent_length < 2u || parent_length >= ASTRA_VFS_PATH_MAX)
-        return 0;
-    char parent[ASTRA_VFS_PATH_MAX];
-    memcpy(parent, path, parent_length - 1u);
-    parent[parent_length - 1u] = '\0';
-    return trash_directory_path(parent);
-}
-
 static uint32_t prepare_directory(AstraDirectorySnapshot *snapshot,
     const char *path)
 {
-    if (trash_directory_path(path))
+    if (astra_trash_path_kind(path) == ASTRA_TRASH_ROOT)
         astra_directory_snapshot_filter_name(snapshot, ".origins");
     else if (!show_hidden)
         astra_directory_snapshot_filter_hidden(snapshot);
@@ -509,7 +486,8 @@ static const char *writable_mount_root(void)
 
 static int writable_folder_root(void)
 {
-    return writable_mount_root() != NULL;
+    return writable_mount_root() != NULL &&
+        astra_trash_path_kind(root) == ASTRA_TRASH_OUTSIDE;
 }
 
 static int trash_root(void)
@@ -3146,9 +3124,9 @@ static AstraResult paste_entry(const AstraVfsClipboardEntry *reference,
     const AstraVolumeReference *destination_volume, uint32_t *published)
 {
     char destination[ASTRA_VFS_PATH_MAX];
-    if (trash_directory_path(destination_root) ||
+    if (astra_trash_path_kind(destination_root) != ASTRA_TRASH_OUTSIDE ||
         (operation == ASTRA_VFS_CLIPBOARD_MOVE &&
-         trash_payload_path(reference->path)))
+         astra_trash_path_kind(reference->path) != ASTRA_TRASH_OUTSIDE))
         return ASTRA_ERROR_PERMISSION;
     const char *leaf = astra_folder_leaf(reference->path);
     if (!astra_folder_name_valid(leaf)) return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -3363,6 +3341,8 @@ static AstraResult drag_destination_at(int32_t x, int32_t y,
         if (info.kind != ASTRA_VFS_KIND_DIRECTORY)
             return ASTRA_ERROR_NOT_PRESENT;
     }
+    if (astra_trash_path_kind(path) == ASTRA_TRASH_INSIDE)
+        return ASTRA_ERROR_PERMISSION;
     AstraVfsClipboardEntry target = {0};
     result = copy_reference_for(path, &target);
     if (result != ASTRA_OK) return result;
@@ -3390,7 +3370,7 @@ static int trash_drop_allowed(const AstraVfsClipboardSelection *selection,
     const AstraVolumeReference *target, const char *destination)
 {
     if (selection == NULL || selection->count == 0u || target == NULL ||
-        !trash_directory_path(destination)) return 0;
+        astra_trash_path_kind(destination) != ASTRA_TRASH_ROOT) return 0;
     size_t root_length = (size_t)(astra_path_leaf(destination) - destination - 1u);
     for (uint32_t at = 0u; at < selection->count; ++at) {
         const AstraVfsClipboardEntry *entry = &selection->entries[at];
@@ -3409,7 +3389,7 @@ static uint32_t drag_operation_for(
     const AstraVolumeReference *target, const char *destination,
     uint32_t allowed, uint32_t modifiers)
 {
-    if (trash_directory_path(destination))
+    if (astra_trash_path_kind(destination) == ASTRA_TRASH_ROOT)
         return (allowed & ASTRA_DRAG_MOVE) != 0u &&
             trash_drop_allowed(selection, target, destination) ?
             ASTRA_DRAG_MOVE : 0u;
@@ -3444,7 +3424,10 @@ static AstraResult drag_transfer(AstraHandle gui,
     const char *destination, const AstraVolumeReference *target,
     uint32_t origin)
 {
-    int to_trash = trash_directory_path(destination);
+    uint32_t trash_kind = astra_trash_path_kind(destination);
+    int to_trash = trash_kind == ASTRA_TRASH_ROOT;
+    if (trash_kind == ASTRA_TRASH_INSIDE)
+        return ASTRA_ERROR_PERMISSION;
     if (to_trash && (operation != ASTRA_DRAG_MOVE ||
         !trash_drop_allowed(selection, target, destination)))
         return ASTRA_ERROR_PERMISSION;

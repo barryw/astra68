@@ -4,6 +4,24 @@
 
 #include <astra/filesystem_library.h>
 
+/** Location of a canonical assign-qualified path relative to its volume's
+ * top-level .Trash directory. */
+enum {
+    ASTRA_TRASH_OUTSIDE = 0u,
+    ASTRA_TRASH_ROOT = 1u,
+    ASTRA_TRASH_INSIDE = 2u
+};
+
+/** Classify a canonical path under a volume's top-level .Trash. Invalid or
+ * noncanonical paths classify as outside; callers must validate paths before
+ * granting authority. Useful for clients deciding which file commands to
+ * offer without duplicating Trash path parsing.
+ * @param path Canonical assign-qualified path to classify.
+ * @return ASTRA_TRASH_OUTSIDE, ASTRA_TRASH_ROOT, or ASTRA_TRASH_INSIDE.
+ * @since Filesystem Kit 15.11.
+ */
+uint32_t astra_trash_path_kind(const char *path);
+
 /** Move one file, folder, or link to a writable volume's Trash without
  * replacing an existing item. Store its original volume-relative path before
  * the move so a later mount slot change does not break Restore.

@@ -236,6 +236,7 @@ ASTRA_FILESYSTEM_15.10 {
 
 ASTRA_FILESYSTEM_15.11 {
     global:
+        astra_trash_path_kind;
         astra_trash_move;
         astra_trash_origin;
         astra_trash_restore;

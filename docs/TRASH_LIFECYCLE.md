@@ -70,6 +70,13 @@ exact matching volume. Dragging out copies the payload, leaving its origin
 record intact for Restore or Empty Trash. The shared display service waits for
 target feedback after a quick pointer release; no Atlas-specific drag timer or
 filesystem operation is needed.
+Filesystem Kit's `astra_trash_path_kind` classifies the top-level Trash root
+and all descendants. Atlas uses that shared classification to allow browsing
+and copying within a trashed directory while disabling New, Cut, Paste,
+Rename, Move to Trash, and drop targets there. Restore and Empty Trash remain
+available at the Trash root. Haiku's read-only `src/kits/tracker/PoseView.cpp`
+keeps Trash-specific actions separate from ordinary folder operations; Astra
+applies that split through Filesystem Kit and shared Interface Kit commands.
 
 ## Verification gates
 
@@ -81,3 +88,8 @@ Empty Trash confirmation and cancellation, hidden metadata, and existing
 folder actions. Physical removable removal/remount and exact provider
 replacement remain separate hardware gates. No production user file was used
 as trial data.
+The nested-directory RAM0 gate browsed `/ram0/.Trash/Outer-1/Inner`, showed
+Copy enabled and ordinary mutation commands disabled, and emptied Trash after
+confirmation. Board and Beast raw-frame SHA-256 matched; captures are archived
+at `/mnt/Documents/astra68/atlas-nested-trash-20261031/`. Final Kit redeploy
+reopened Atlas on RAM0; NDK `dist-check` passed.

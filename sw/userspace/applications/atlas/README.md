@@ -243,6 +243,10 @@ released drag until the target's pending feedback arrives, then delivers or
 rejects the drop. Quick releases therefore use the same validated target
 operation as slower drags. Haiku's `PoseView.cpp` routes a Trash target through
 its Trash operation rather than treating it as an ordinary directory move.
+Atlas uses Filesystem Kit's `astra_trash_path_kind` to classify Trash root and
+nested payload paths. Trashed folders remain browsable and copyable, while New,
+Cut, Paste, Rename, Delete, and drop targets are disabled within them. Atlas
+does not parse Trash path spelling or own a second Trash policy.
 
 Recent Items uses Filesystem Kit 15.9 for one private HOME store of validated,
 synced records. Atlas records successful opens and shows an owned snapshot in
