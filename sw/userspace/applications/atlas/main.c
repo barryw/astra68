@@ -2369,10 +2369,12 @@ static AstraResult eject_query(void *opaque, AstraCommandState *state)
 static AstraResult remove_volume(int eject)
 {
     AstraVolumeReference target = viewed_volume;
+    removal_action.failure_mount = (AstraVolumeReference){0};
     AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
     AstraResult result = astra_volume_snapshot_open(volume_metadata, &catalog);
     if (result == ASTRA_OK) {
         result = astra_volume_action_begin(volume_administrator,
+            volume_inspector,
             &catalog, &target, eject, &removal_action);
         astra_volume_snapshot_close(&catalog);
     }
@@ -2385,7 +2387,9 @@ static AstraResult remove_volume(int eject)
     }
     if (result == ASTRA_ERROR_BUSY)
         result = astra_volume_usage_dialog_open(busy_dialog,
-            volume_gui, volume_inspector, &filesystem, &target);
+            volume_gui, volume_inspector, &filesystem,
+            removal_action.failure_mount.id != 0u ?
+                &removal_action.failure_mount : &target);
     if (result != ASTRA_OK)
         astra_volume_usage_dialog_error(volume_gui,
             result == ASTRA_ERROR_BUSY ?
@@ -3891,7 +3895,9 @@ static AstraResult run(AstraHandle gui)
                     failure == ASTRA_ERROR_BUSY)
                     failure = astra_volume_usage_dialog_open(busy_dialog,
                         gui, volume_inspector, &filesystem,
-                        &removal_action.removal.mount);
+                        removal_action.failure_mount.id != 0u ?
+                            &removal_action.failure_mount :
+                            &removal_action.removal.mount);
                 if (failure != ASTRA_OK)
                     astra_volume_usage_dialog_error(gui,
                         removal_action.eject_failed ?

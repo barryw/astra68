@@ -3,10 +3,13 @@
 
 #include <astra/volume.h>
 
-/* One exact asynchronous removal, optionally followed by optical eject. */
+/* Exact asynchronous removal. Optical eject first removes every mounted
+ * partition of the same medium, then asks the provider to eject it. */
 typedef struct AstraVolumeAction {
     AstraVolumeRemoval removal;
     AstraVolumeReference eject_source;
+    AstraVolumeReference eject_medium;
+    AstraVolumeReference failure_mount;
     uint32_t eject_admitted;
     uint32_t eject_failed;
     uint32_t failure;
@@ -14,8 +17,10 @@ typedef struct AstraVolumeAction {
     uint32_t finished;
 } AstraVolumeAction;
 
-/* Admission owns no data grant. BUSY callers may inspect exact holders. */
+/* Admission owns no data grant. Eject checks all mounted partitions for known
+ * holders before starting. BUSY callers inspect failure_mount when present. */
 AstraResult astra_volume_action_begin(AstraHandle administrator,
+    AstraHandle inspector,
     const AstraVolumeSnapshot *catalog, const AstraVolumeReference *mount,
     int eject, AstraVolumeAction *action);
 

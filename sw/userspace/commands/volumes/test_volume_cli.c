@@ -17,6 +17,53 @@ static uint32_t frame_count, frame_at, waits;
 static uint64_t clock_now;
 static uint32_t removal_states[3], removal_status[3], removal_observations;
 
+const AstraVolumeRecord *astra_volume_snapshot_find(
+    const AstraVolumeSnapshot *snapshot, const AstraVolumeReference *reference)
+{
+    if (snapshot->epoch != reference->epoch) return NULL;
+    for (uint32_t at = 0u; at < snapshot->count; ++at)
+        if (snapshot->records[at].id == reference->id &&
+            snapshot->records[at].generation == reference->generation)
+            return &snapshot->records[at];
+    return NULL;
+}
+
+const AstraVolumeRecord *astra_volume_snapshot_ancestor(
+    const AstraVolumeSnapshot *snapshot, const AstraVolumeReference *reference,
+    uint32_t kind)
+{
+    const AstraVolumeRecord *row = astra_volume_snapshot_find(snapshot, reference);
+    for (uint32_t depth = 0u; row != NULL && depth < snapshot->count; ++depth) {
+        if (row->kind == kind) return row;
+        AstraVolumeReference parent = {snapshot->epoch, row->parent,
+            row->parent_generation};
+        row = astra_volume_snapshot_find(snapshot, &parent);
+    }
+    return NULL;
+}
+
+AstraResult astra_volume_usage_snapshot_open(AstraHandle inspector,
+    const AstraVolumeReference *reference, AstraVolumeUsageSnapshot *snapshot)
+{
+    (void)inspector;
+    (void)reference;
+    *snapshot = (AstraVolumeUsageSnapshot)ASTRA_VOLUME_USAGE_SNAPSHOT_INIT;
+    return ASTRA_OK;
+}
+
+void astra_volume_usage_snapshot_close(AstraVolumeUsageSnapshot *snapshot)
+{
+    *snapshot = (AstraVolumeUsageSnapshot)ASTRA_VOLUME_USAGE_SNAPSHOT_INIT;
+}
+
+AstraResult astra_volume_control(AstraHandle administrator,
+    const AstraVolumeControl *control, AstraVolumeReference *reference)
+{
+    (void)administrator;
+    *reference = control->reference;
+    return ASTRA_OK;
+}
+
 AstraResult astra_volume_snapshot_open(AstraHandle service, AstraVolumeSnapshot *snapshot)
 {
     assert(service == 1u && frame_at < frame_count);
@@ -67,6 +114,8 @@ uint32_t astra_wait_one(uint32_t handle, uint64_t deadline_ns, uint32_t *detail)
 static void reset(uint32_t count)
 {
     memset(frames, 0, sizeof(frames));
+    memset(removal_states, 0, sizeof(removal_states));
+    memset(removal_status, 0, sizeof(removal_status));
     frame_count = count;
     frame_at = waits = 0u;
     removal_observations = 0u;
@@ -143,18 +192,25 @@ static void lifecycle(void)
     assert(!volume_cli_wait(&cli, &reference, 0u, 1, &record));
     assert(clock_now == UINT64_C(60000000000) && waits == 600u);
     cli.administrator = 3u;
-    AstraVolumeRemoval removal = {.mount = reference};
+    AstraVolumeAction action = {.removal = {.mount = reference}};
     reset(2u);
     removal_states[0] = ASTRA_VOLUME_REMOVAL_PENDING;
     removal_states[1] = ASTRA_VOLUME_REMOVAL_COMPLETE;
-    assert(volume_cli_wait_removal(&cli, &removal) && waits == 1u && removal_observations == 2u);
+    assert(volume_cli_wait_action(&cli, &action) && waits == 1u &&
+        removal_observations == 2u && action.finished);
     reset(1u);
+    action = (AstraVolumeAction){.removal = {.mount = reference}};
     removal_states[0] = ASTRA_VOLUME_REMOVAL_REFUSED;
     removal_status[0] = ASTRA_STATUS_BUSY;
-    assert(!volume_cli_wait_removal(&cli, &removal) && waits == 0u);
+    assert(!volume_cli_wait_action(&cli, &action) && waits == 0u);
     reset(1u);
+    action = (AstraVolumeAction){.removal = {.mount = reference}};
     removal_states[0] = ASTRA_VOLUME_REMOVAL_PROVIDER_RETIRED;
-    assert(!volume_cli_wait_removal(&cli, &removal) && waits == 0u);
+    assert(!volume_cli_wait_action(&cli, &action) && waits == 0u);
+    reset(1u);
+    action = (AstraVolumeAction){.removal = {.mount = reference}};
+    removal_states[0] = ASTRA_VOLUME_REMOVAL_RETAINED;
+    assert(!volume_cli_wait_action(&cli, &action) && waits == 0u);
 }
 
 int main(void)

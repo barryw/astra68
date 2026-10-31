@@ -17,6 +17,9 @@ int volume_cli_open(VolumeCli *cli, const char *command)
     }
     cli->metadata = metadata->handle;
     cli->administrator = administrator->handle;
+    const AstraStartupCapability *inspector = astra_startup_capability(startup,
+        ASTRA_CAPABILITY_VOLUME_USAGE);
+    cli->inspector = inspector == NULL ? ASTRA_INVALID_HANDLE : inspector->handle;
     AstraResult result = astra_volume_watch_open(cli->metadata, &cli->watch);
     if (result != ASTRA_OK) {
         fprintf(stderr, "%s: cannot observe lifecycle (%ld)\n", command, (long)result);
@@ -111,7 +114,7 @@ int volume_cli_select(VolumeCli *cli, const char *selector, uint32_t kind,
 
 static int wait_lifecycle(VolumeCli *cli, const AstraVolumeReference *reference,
     uint32_t wanted, int disappearance_completes, AstraVolumeRecord *record,
-    AstraVolumeRemoval *removal)
+    AstraVolumeAction *action)
 {
     uint64_t deadline = astra_clock_monotonic() + UINT64_C(60000000000);
     for (;;) {
@@ -125,27 +128,34 @@ static int wait_lifecycle(VolumeCli *cli, const AstraVolumeReference *reference,
         AstraVolumeSnapshot snapshot = ASTRA_VOLUME_SNAPSHOT_INIT;
         result = astra_volume_snapshot_open(cli->metadata, &snapshot);
         if (result == ASTRA_OK) {
-            if (removal != NULL) {
-                result = astra_volume_removal_advance(cli->administrator, &snapshot, removal);
+            if (action != NULL) {
+                result = astra_volume_action_advance(cli->administrator, &snapshot, action);
                 astra_volume_snapshot_close(&snapshot);
                 if (result != ASTRA_OK) {
                     fprintf(stderr, "volume: removal observation failed (%ld)\n", (long)result);
                     return 0;
                 }
-                if (removal->state == ASTRA_VOLUME_REMOVAL_COMPLETE) return 1;
-                if (removal->state == ASTRA_VOLUME_REMOVAL_PROVIDER_RETIRED) {
+                if (action->removal.state == ASTRA_VOLUME_REMOVAL_PROVIDER_RETIRED) {
                     fputs("volume: provider incarnation retired during operation\n", stderr);
                     return 0;
                 }
-                if (removal->state == ASTRA_VOLUME_REMOVAL_REFUSED ||
-                    removal->state == ASTRA_VOLUME_REMOVAL_RETAINED) {
+                if (action->failure != 0u) {
+                    if (action->failure == ASTRA_STATUS_BUSY &&
+                        action->failure_mount.id != 0u)
+                        volume_cli_report_busy(cli, &action->failure_mount, 1);
                     fprintf(stderr, "volume: %s (status %u)\n",
-                        removal->state == ASTRA_VOLUME_REMOVAL_REFUSED ?
-                            "unmount refused; volume remains mounted" :
-                            "removal incomplete; storage resources remain retained",
-                        removal->status);
+                        action->eject_failed ? "eject refused" :
+                        action->removal.state == ASTRA_VOLUME_REMOVAL_RETAINED ?
+                            "removal incomplete; storage resources remain retained" :
+                            "unmount refused; volume remains mounted",
+                        action->failure);
                     return 0;
                 }
+                if (action->removal.state == ASTRA_VOLUME_REMOVAL_RETAINED) {
+                    fputs("volume: removal incomplete; storage resources remain retained\n", stderr);
+                    return 0;
+                }
+                if (action->finished) return 1;
             } else {
                 int found = 0;
                 if (snapshot.epoch == reference->epoch)
@@ -205,9 +215,60 @@ int volume_cli_wait(VolumeCli *cli, const AstraVolumeReference *reference,
     return wait_lifecycle(cli, reference, wanted, disappearance_completes, record, NULL);
 }
 
-int volume_cli_wait_removal(VolumeCli *cli, AstraVolumeRemoval *removal)
+int volume_cli_wait_action(VolumeCli *cli, AstraVolumeAction *action)
 {
-    return wait_lifecycle(cli, &removal->mount, 0u, 0, NULL, removal);
+    return wait_lifecycle(cli, &action->removal.mount, 0u, 0, NULL, action);
+}
+
+void volume_cli_report_busy(VolumeCli *cli,
+    const AstraVolumeReference *reference, int mount)
+{
+    AstraVolumeUsageSnapshot snapshot = ASTRA_VOLUME_USAGE_SNAPSHOT_INIT;
+    AstraResult inspected = cli->inspector == ASTRA_INVALID_HANDLE ? ASTRA_ERROR_PERMISSION :
+        astra_volume_usage_snapshot_open(cli->inspector, mount ? reference : NULL, &snapshot);
+    AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
+    if (inspected == ASTRA_OK && !mount) {
+        inspected = astra_volume_snapshot_open(cli->metadata, &catalog);
+        if (inspected == ASTRA_OK && (catalog.sequence != snapshot.catalog_sequence ||
+            catalog.epoch != reference->epoch)) inspected = ASTRA_ERROR_BUSY;
+    }
+    if (inspected == ASTRA_OK) {
+        fputs("volume: retained holders prevent removal:\n", stderr);
+        uint32_t shown = 0u;
+        for (uint32_t at = 0u; at < snapshot.count; ++at) {
+            const AstraVolumeUsageRecord *row = &snapshot.records[at];
+            int selected = mount || (row->kind == ASTRA_VOLUME_USAGE_IMAGE &&
+                row->handle == reference->id);
+            if (!selected)
+                for (uint32_t item = 0u; item < catalog.count; ++item)
+                    if (catalog.records[item].id == row->volume.id &&
+                        catalog.records[item].generation == row->volume.generation &&
+                        catalog.records[item].parent == reference->id &&
+                        catalog.records[item].parent_generation == reference->generation)
+                        selected = 1;
+            if (!selected) continue;
+            ++shown;
+            fprintf(stderr, "  PID %u type %u handle %llu inode %llu %s%s ",
+                row->process, row->kind, (unsigned long long)row->handle,
+                (unsigned long long)row->inode,
+                (row->rights & ASTRA_RIGHT_READ) != 0u ? "read" : "",
+                (row->rights & ASTRA_RIGHT_WRITE) != 0u ? "/write" : "");
+            for (uint32_t byte = 0u; byte < row->path_length; ++byte) {
+                unsigned char value = (unsigned char)row->path[byte];
+                if (value < 32u || value == 127u) fprintf(stderr, "\\x%02x", value);
+                else fputc(value, stderr);
+            }
+            if (row->flags & ASTRA_VOLUME_USAGE_UNNAMED) fputs("[unnamed retained object]", stderr);
+            if (row->flags & ASTRA_VOLUME_USAGE_LOST) fputs(" [lost]", stderr);
+            if (row->flags & ASTRA_VOLUME_USAGE_ACTIVE) fputs(" [operation active]", stderr);
+            if (row->flags & ASTRA_VOLUME_USAGE_CLEANUP_PENDING) fputs(" [cleanup pending]", stderr);
+            fputc('\n', stderr);
+        }
+        if (shown == 0u)
+            fputs("  Previous operation finished; no holders remain in this snapshot. Retry removal.\n", stderr);
+    } else fprintf(stderr, "volume: holder inspection failed (%ld)\n", (long)inspected);
+    astra_volume_usage_snapshot_close(&snapshot);
+    astra_volume_snapshot_close(&catalog);
 }
 
 int volume_cli_apply(VolumeCli *cli, const AstraVolumeControl *control,
@@ -216,55 +277,8 @@ int volume_cli_apply(VolumeCli *cli, const AstraVolumeControl *control,
     AstraResult result = astra_volume_control(cli->administrator, control, reference);
     if (result != ASTRA_OK) {
         if (result == ASTRA_ERROR_BUSY) {
-            const AstraStartupCapability *usage = astra_startup_capability(
-                astra_posix_startup(), ASTRA_CAPABILITY_VOLUME_USAGE);
-            AstraVolumeUsageSnapshot snapshot = ASTRA_VOLUME_USAGE_SNAPSHOT_INIT;
-            int mount = control->operation == ASTRA_VOLUME_UNMOUNT;
-            AstraResult inspected = usage == NULL ? ASTRA_ERROR_PERMISSION :
-                astra_volume_usage_snapshot_open(usage->handle, mount ? &control->reference : NULL, &snapshot);
-            AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
-            if (inspected == ASTRA_OK && !mount) {
-                inspected = astra_volume_snapshot_open(cli->metadata, &catalog);
-                if (inspected == ASTRA_OK && (catalog.sequence != snapshot.catalog_sequence ||
-                    catalog.epoch != control->reference.epoch)) inspected = ASTRA_ERROR_BUSY;
-            }
-            if (inspected == ASTRA_OK) {
-                fputs("volume: retained holders prevent removal:\n", stderr);
-                uint32_t shown = 0u;
-                for (uint32_t at = 0u; at < snapshot.count; ++at) {
-                    const AstraVolumeUsageRecord *row = &snapshot.records[at];
-                    int selected = mount || (row->kind == ASTRA_VOLUME_USAGE_IMAGE &&
-                        row->handle == control->reference.id);
-                    if (!selected)
-                        for (uint32_t item = 0u; item < catalog.count; ++item)
-                            if (catalog.records[item].id == row->volume.id &&
-                                catalog.records[item].generation == row->volume.generation &&
-                                catalog.records[item].parent == control->reference.id &&
-                                catalog.records[item].parent_generation == control->reference.generation)
-                                selected = 1;
-                    if (!selected) continue;
-                    ++shown;
-                    fprintf(stderr, "  PID %u type %u handle %llu inode %llu %s%s ",
-                        row->process, row->kind, (unsigned long long)row->handle,
-                        (unsigned long long)row->inode,
-                        (row->rights & ASTRA_RIGHT_READ) != 0u ? "read" : "",
-                        (row->rights & ASTRA_RIGHT_WRITE) != 0u ? "/write" : "");
-                    for (uint32_t byte = 0u; byte < row->path_length; ++byte) {
-                        unsigned char value = (unsigned char)row->path[byte];
-                        if (value < 32u || value == 127u) fprintf(stderr, "\\x%02x", value);
-                        else fputc(value, stderr);
-                    }
-                    if (row->flags & ASTRA_VOLUME_USAGE_UNNAMED) fputs("[unnamed retained object]", stderr);
-                    if (row->flags & ASTRA_VOLUME_USAGE_LOST) fputs(" [lost]", stderr);
-                    if (row->flags & ASTRA_VOLUME_USAGE_ACTIVE) fputs(" [operation active]", stderr);
-                    if (row->flags & ASTRA_VOLUME_USAGE_CLEANUP_PENDING) fputs(" [cleanup pending]", stderr);
-                    fputc('\n', stderr);
-                }
-                if (shown == 0u)
-                    fputs("  Previous operation finished; no holders remain in this snapshot. Retry removal.\n", stderr);
-            } else fprintf(stderr, "volume: holder inspection failed (%ld)\n", (long)inspected);
-            astra_volume_usage_snapshot_close(&snapshot);
-            astra_volume_snapshot_close(&catalog);
+            volume_cli_report_busy(cli, &control->reference,
+                control->operation == ASTRA_VOLUME_UNMOUNT);
             return 0;
         }
         fprintf(stderr, "volume: lifecycle admission failed (%ld)\n", (long)result);

@@ -39,6 +39,9 @@ view so the user can see why browsing stopped. System and RAM volumes cannot
 be removed from Atlas. Haiku's read-only
 `src/kits/tracker/ContainerWindow.cpp` informed the menu placement and action
 scope; Astra keeps native provider lifecycle and precise holder diagnostics.
+Optical Eject checks every mounted partition under one medium for holders,
+unmounts those partitions in sequence, then ejects the source. Atlas, Desktop,
+and native `unmount --eject` share this lifecycle; Atlas adds no device policy.
 
 Atlas appends shared controls through Interface Kit's generic
 `astra_interface_ui_append_control`. A control that exceeds one 128-command

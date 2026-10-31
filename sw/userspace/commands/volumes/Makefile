@@ -2,8 +2,8 @@ HOST_CC ?= cc
 ROOT := ../../../..
 CPPFLAGS := -I$(ROOT)/ndk/include -I$(ROOT)/sw/include -I../../runtime/include
 CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -pedantic -ffunction-sections -fdata-sections
-SOURCES := volume_cli.c test_volume_cli.c
-HEADERS := volume_cli.h $(ROOT)/ndk/include/astra/volume.h $(ROOT)/sw/include/astra/volume_abi.h
+SOURCES := volume_cli.c ../../common/volume_action.c test_volume_cli.c
+HEADERS := volume_cli.h ../../common/volume_action.h $(ROOT)/ndk/include/astra/volume.h $(ROOT)/sw/include/astra/volume_abi.h
 
 .PHONY: test sanitize
 test: build/test_volume_cli

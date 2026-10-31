@@ -17,32 +17,40 @@ int main(int argc, char **argv)
     VolumeCli cli;
     if (!volume_cli_open(&cli, "unmount")) return 1;
     AstraVolumeRecord record = {0};
-    AstraVolumeReference reference, parent, retired;
+    AstraVolumeReference reference, retired;
     int success = 0;
     if (!volume_cli_select(&cli, argv[eject || source_only ? 2 : 1],
-        source_only ? ASTRA_VOLUME_SOURCE : ASTRA_VOLUME_MOUNT, &record, &reference, &parent)) goto done;
-    uint32_t origin = record.origin;
+        source_only ? ASTRA_VOLUME_SOURCE : ASTRA_VOLUME_MOUNT, &record, &reference, NULL)) goto done;
     if (!source_only && (record.flags & (ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_TEMPORARY)) != 0u) {
         fprintf(stderr, "unmount: %s belongs to the running system and cannot be removed\n", record.name);
         goto done;
     }
-    if (eject && (record.class_id != ASTRA_VOLUME_OPTICAL || origin != ASTRA_VOLUME_ORIGIN_DEVICE)) {
-        fputs("unmount: eject requires a physical optical volume\n", stderr);
-        goto done;
-    }
-    AstraVolumeControl control = {.reference = reference,
-        .operation = source_only ? ASTRA_VOLUME_RELEASE_IMAGE_SOURCE : ASTRA_VOLUME_UNMOUNT};
-    AstraVolumeRemoval removal = {.mount = reference};
-    if (!source_only && origin == ASTRA_VOLUME_ORIGIN_IMAGE)
-        removal.image_source = parent;
-    if (!volume_cli_apply(&cli, &control, &retired)) goto done;
-    if (source_only ? !volume_cli_wait(&cli, &reference, 0u, 1, &record) :
-            !volume_cli_wait_removal(&cli, &removal)) goto done;
-    if (eject) {
-        control.reference = parent;
-        control.operation = ASTRA_VOLUME_EJECT;
+    if (source_only) {
+        AstraVolumeControl control = {.reference = reference,
+            .operation = ASTRA_VOLUME_RELEASE_IMAGE_SOURCE};
         if (!volume_cli_apply(&cli, &control, &retired) ||
-            !volume_cli_wait(&cli, &parent, 0u, 1, &record)) goto done;
+            !volume_cli_wait(&cli, &reference, 0u, 1, &record)) goto done;
+    } else {
+        AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
+        AstraResult result = astra_volume_snapshot_open(cli.metadata, &catalog);
+        if (result != ASTRA_OK) {
+            fprintf(stderr, "unmount: catalog unavailable (%ld)\n", (long)result);
+            goto done;
+        }
+        AstraVolumeAction action = {0};
+        result = astra_volume_action_begin(cli.administrator, cli.inspector,
+            &catalog, &reference, eject, &action);
+        astra_volume_snapshot_close(&catalog);
+        if (result != ASTRA_OK) {
+            if (result == ASTRA_ERROR_BUSY)
+                volume_cli_report_busy(&cli, action.failure_mount.id != 0u ?
+                    &action.failure_mount : &reference, 1);
+            else if (eject && result == ASTRA_ERROR_INVALID_ARGUMENT)
+                fputs("unmount: eject requires a physical optical volume\n", stderr);
+            else fprintf(stderr, "unmount: lifecycle admission failed (%ld)\n", (long)result);
+            goto done;
+        }
+        if (!volume_cli_wait_action(&cli, &action)) goto done;
     }
     success = printf("%s %llu:%llu:%llu\n", eject ? "ejected" : source_only ? "released image source" : "unmounted",
         (unsigned long long)reference.epoch, (unsigned long long)reference.id,

@@ -86,7 +86,7 @@ date_EXTRA_SOURCES := date/date_support.c
 ps_EXTRA_SOURCES := ps/ps_support.c
 mount_EXTRA_SOURCES := volumes/volume_cli.c
 disk_EXTRA_SOURCES := volumes/volume_cli.c
-unmount_EXTRA_SOURCES := volumes/volume_cli.c
+unmount_EXTRA_SOURCES := volumes/volume_cli.c ../common/volume_action.c
 lsof_EXTRA_SOURCES := volumes/volume_cli.c
 
 # A command names only the libraries whose symbols it calls.  The executable

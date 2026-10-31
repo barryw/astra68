@@ -2,6 +2,23 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared optical lifecycle checkpoint, 2026-10-31: The common
+`volume_action` now preflights exact holders across all mounted partitions of
+one optical medium, unmounts each partition in sequence, and requests eject
+only after the provider reports them removed. Atlas, Desktop, and native
+`unmount --eject` use that one state machine; CLI holder reporting names the
+specific busy sibling. Haiku read-only reference:
+`src/kits/tracker/ContainerWindow.cpp` provides volume menu and unmount action
+patterns; Astra retains its native medium ancestry and exact references.
+Beast shared-action and CLI host tests plus Atlas, Desktop, and MC68040 CLI
+builds passed. Targeted DE25 installs passed for Atlas, Desktop, and `unmount`.
+RFB opened the Applications drawer and Terminal; `unmount /dh0` refused the
+running system volume as intended. Captures are SHA-verified on Beast at
+`/mnt/Documents/astra68/atlas-multipart-20261031/`. A physical multi-partition
+optical eject remains unqualified because the board currently sees only its
+USB root hub; provider and client state-machine host tests cover the sibling
+contract. Board trial captures were removed after archiving.
+
 Atlas shared removal checkpoint, 2026-10-31: Desktop's exact volume-holder
 dialog and unmount/eject state machine now live in `sw/userspace/common` and
 are linked by both Desktop and Atlas. Atlas contributes Volume menu commands,

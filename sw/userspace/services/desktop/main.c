@@ -624,6 +624,7 @@ static AstraResult remove_icon(void *opaque, const AstraCommandArguments *args, 
     AstraVolumeReference reference = {context->apps->volumes.epoch,
         record->id, record->generation};
     AstraResult result = astra_volume_action_begin(volume_administrator,
+        volume_inspector,
         &context->apps->volumes, &reference, eject, &pending->action);
     if (result == ASTRA_OK) {
         pending->next = removals; removals = pending;
@@ -631,6 +632,8 @@ static AstraResult remove_icon(void *opaque, const AstraCommandArguments *args, 
         (void)astra_log(eject ? "desktop volume eject admitted" : "desktop volume unmount admitted");
         return ASTRA_OK;
     }
+    if (pending->action.failure_mount.id != 0u)
+        reference = pending->action.failure_mount;
     astra_runtime_deallocate(pending);
     if (result == ASTRA_ERROR_BUSY) {
         result = astra_volume_usage_dialog_open(context->usage, context->gui,
@@ -1236,12 +1239,17 @@ int astra_main(const AstraStartupInfo *startup)
                     link = &failed->next;
                     continue;
                 }
-                AstraVolumeReference reference = failed->action.removal.mount;
+                AstraVolumeReference reference =
+                    failed->action.failure_mount.id != 0u ?
+                        failed->action.failure_mount :
+                        failed->action.removal.mount;
                 uint32_t failure = failed->action.failure;
                 int refused = failed->action.removal.state ==
                     ASTRA_VOLUME_REMOVAL_REFUSED;
                 int eject_failed = failed->action.eject_failed;
-                if (refused || eject_failed) {
+                int optical_stopped = failed->action.finished &&
+                    failed->action.eject_source.id != 0u;
+                if (refused || eject_failed || failed->action.finished) {
                     *link = failed->next;
                     astra_runtime_deallocate(failed);
                 } else {
@@ -1254,6 +1262,7 @@ int astra_main(const AstraStartupInfo *startup)
                     astra_result_from_service(failure);
                 if (result != ASTRA_OK) astra_volume_usage_dialog_error(gui->handle,
                     eject_failed ? "Eject failed; the disc remains in the drive" :
+                    optical_stopped ? "Optical removal stopped; the disc remains in the drive" :
                     refused ? "The storage provider refused to unmount; the volume remains mounted" :
                         "The storage provider could not finish removal; storage resources remain retained", result);
                 break;
