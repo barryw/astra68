@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas package-open correction, 2026-10-31: Double-clicking existing
+`HOME:/Desktop/ChocolateDoom.apkg` selected Installer through the shared
+File Type and Open With path, but Installer returned startup I/O status 11,
+so Open With showed a default-handler failure. The Installer review window
+requested 560×260 while its shared hardware draw-list header advertised
+the 720×560 picker size; Display correctly rejected the mismatched area with
+invalid argument. Installer now creates that draw list with the selected
+window dimensions and logs named startup/window failure stages. Haiku
+read-only reference: `src/apps/packageinstaller/main.cpp` routes file refs
+and command-line paths into one package installer while `ReadyToRun` handles
+no-file startup; Astra retains its existing review/picker modes and File Panel.
+Beast Installer target build and Graphics Kit surface suite passed, including
+exact draw-list dimension rejection. Targeted Installer-only DE25 install
+passed. Atlas double-click opened package review showing the exact path;
+launching Installer.app directly still opened the shared picker. No install
+was requested. Raw board/Beast SHA-256 matched; before/after/picker PNGs and
+launch statuses are archived at
+`/mnt/Documents/astra68/atlas-installer-launch-20261031/`. Trial captures and
+helper were removed. Astra, HDMI audio, and remote desktop remain active,
+each with zero restarts; 8.2 GiB free. Only USB root hub is present, so
+physical USB and optical Atlas gates still await media.
+
 Atlas installer presentation checkpoint, 2026-10-31: Atlas created a real
 `Atlas.apkg` from `Atlas.app` on DE25 through Package Kit. Its icon was
 indistinguishable from the app icon, so Interface Kit 12.11 now draws shared

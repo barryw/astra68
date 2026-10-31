@@ -456,6 +456,10 @@ static void test_draw_list_requires_word_alignment(void)
         ASTRA_DRAW_LIST_AREA_BYTES, 20u, 10u));
     assert(astra_draw_list_view_adopt(&view, storage,
         ASTRA_DRAW_LIST_AREA_BYTES, 20u, 10u));
+    assert(!astra_draw_list_view_adopt(&view, storage,
+        ASTRA_DRAW_LIST_AREA_BYTES, 21u, 10u));
+    assert(!astra_draw_list_view_adopt(&view, storage,
+        ASTRA_DRAW_LIST_AREA_BYTES, 20u, 11u));
 }
 
 static void test_line_software_and_hardware(void)

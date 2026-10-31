@@ -419,13 +419,27 @@ int astra_main(const AstraStartupInfo *startup)
         ASTRA_CAPABILITY_SERVICE_READY);
     if (gui == NULL) return ASTRA_STATUS_BAD_HANDLE;
     uint32_t status = ASTRA_STATUS_OK;
-    if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK ||
-        astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK ||
-        (picker_active ? build_picker() : build_controls()) != ASTRA_OK ||
-        astra_shared_draw_list_create(&surface,
-            INSTALLER_PICKER_WIDTH, INSTALLER_PICKER_HEIGHT) !=
+    const char *failure = NULL;
+    uint32_t failure_code = 0u;
+    AstraResult setup_result = astra_fonts_use_system(gui->handle, NULL);
+    if (setup_result != ASTRA_OK) {
+        failure = "installer font setup";
+        failure_code = (uint32_t)(-setup_result);
+    } else if ((failure_code = astra_process_filesystem_open(&files,
+            startup)) != ASTRA_VFS_OK)
+        failure = "installer filesystem setup";
+    else if ((setup_result = picker_active ? build_picker() :
+            build_controls()) != ASTRA_OK) {
+        failure = "installer control setup";
+        failure_code = (uint32_t)(-setup_result);
+    } else if ((failure_code = astra_shared_draw_list_create(&surface,
+            content_width, content_height)) !=
                 ASTRA_SYSCALL_OK)
+        failure = "installer drawing setup";
+    if (failure != NULL) {
+        (void)astra_log_failure(failure, failure_code);
         status = ASTRA_STATUS_IO;
+    }
     if (status == ASTRA_STATUS_OK) {
         AstraWindowCreateInfo info = ASTRA_WINDOW_CREATE_INFO_INIT;
         info.x = 440u; info.y = picker_active ? 180u : 260u;
@@ -439,10 +453,19 @@ int astra_main(const AstraStartupInfo *startup)
             ASTRA_WINDOW_SUBSCRIBE_POINTER_BUTTON |
             ASTRA_WINDOW_SUBSCRIBE_POINTER_WHEEL |
             ASTRA_WINDOW_SUBSCRIBE_KEY | ASTRA_WINDOW_SUBSCRIBE_TEXT;
-        if (astra_window_create(gui->handle, surface.area, &info, &window) !=
-                ASTRA_OK ||
-            astra_window_set_application_name(&window, "Installer", 9u) !=
-                ASTRA_OK || astra_window_activate(&window) != ASTRA_OK)
+        AstraResult window_result = astra_window_create(gui->handle,
+            surface.area, &info, &window);
+        if (window_result != ASTRA_OK)
+            (void)astra_log_failure("installer window create",
+                (uint32_t)(-window_result));
+        else if ((window_result = astra_window_set_application_name(&window,
+                "Installer", 9u)) != ASTRA_OK)
+            (void)astra_log_failure("installer window name",
+                (uint32_t)(-window_result));
+        else if ((window_result = astra_window_activate(&window)) != ASTRA_OK)
+            (void)astra_log_failure("installer window activate",
+                (uint32_t)(-window_result));
+        if (window_result != ASTRA_OK)
             status = ASTRA_STATUS_IO;
     }
     if (ready != NULL) {
