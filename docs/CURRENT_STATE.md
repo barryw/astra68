@@ -2,11 +2,34 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared transfer path-depth gate, 2026-10-31: Filesystem Kit no longer
+rejects trees after 32 nested levels. Copy and partial cleanup now link their
+existing heap-backed frames by parent; valid path length governs traversal.
+This removes an arbitrary limit for Atlas, native `cp`, and every other client
+without adding Atlas copy code. Haiku read-only reference remains
+`src/kits/tracker/FSUtils.cpp` (`CopyFolder`, `FSDeleteFolder`): tree mechanics
+belong in the common file-operation layer. Beast's focused test covers a
+48-level tree, failed-write staging cleanup at that depth, and a subsequent
+cross-volume move with source removal. Host test, ASan/UBSan, Filesystem Kit
+library/stack contracts, and NDK `dist-check` passed. Focused DE25 install
+reported `ASTRA_DE25_DEV_INSTALL PASS guest=3`. DE25 native `cp -R` and Atlas
+GUI Copy/Paste each reproduced a 48-level RAM0 tree; native `cat` read
+`DEEPER` from both leaves. Selected RFB frames were SHA-verified on Beast at
+`/mnt/Documents/astra68/atlas-breadcrumb-20261031/`; final Atlas and Terminal
+SHA-256 values are
+`4771944ffe1fad8bfe0ce3392982ef3ce8dfe3b92ccb79c3992dcb1d68f82c52`
+and `c3e87000b1dcb18f51056314aeeab1367625878c66e958b45df6fb4efebf5479`.
+A guest restart cleared RAM0; Atlas showed zero entries afterward. Trial
+captures were removed from board. Astra, audio, and remote desktop services
+are active with zero automatic restarts and 8.1 GiB free. Physical USB copy
+remains untested because no USB media is attached.
+
 Atlas shared transfer depth gate, 2026-10-31: Filesystem Kit's recursive
 tree copy and cleanup could consume more than Astra's 4 KiB application stack
 for ordinary nested folders. The native tree operation now walks bounded,
 heap-backed frames; Atlas still calls the same Filesystem Kit API and owns no
-copy traversal. The 32-level path limit and staging/rename publication remain.
+copy traversal. At this checkpoint, the 32-level path limit and staging/rename
+publication remained; the later path-depth gate above removed that limit.
 Haiku read-only reference: `src/kits/tracker/FSUtils.cpp` (`CopyFolder` and
 `FSDeleteFolder`) keeps
 directory traversal and cleanup in its file-operation layer. Astra adapts that

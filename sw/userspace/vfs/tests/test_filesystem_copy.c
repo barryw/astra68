@@ -443,18 +443,30 @@ int main(void)
         find("/usb0/Deep/Side09") != NULL);
 
     entry_count = 0u;
-    strcpy(deep, "/dh0/TooDeep");
+    strcpy(deep, "/dh0/Deep48");
     add(deep, ASTRA_VFS_KIND_DIRECTORY);
-    for (uint32_t at = 0u; at < 31u; ++at) {
+    for (uint32_t at = 0u; at < 47u; ++at) {
         strcat(deep, "/d");
         add(deep, ASTRA_VFS_KIND_DIRECTORY);
     }
     strcat(deep, "/Data");
-    add(deep, ASTRA_VFS_KIND_FILE);
-    assert(astra_filesystem_copy_tree_between(&filesystem, "/dh0/TooDeep",
-        &removable, "/usb0/TooDeep") == ASTRA_VFS_ERR_LIMIT);
-    assert(find("/usb0/TooDeep") == NULL);
+    deep_file = add(deep, ASTRA_VFS_KIND_FILE);
+    memcpy(deep_file->bytes, "DEEPER", 6u);
+    deep_file->length = 6u;
+    fail_write = 1;
+    assert(astra_filesystem_copy_tree_between(&filesystem, "/dh0/Deep48",
+        &removable, "/usb0/Deep48") == ASTRA_VFS_ERR_NO_SPACE);
+    assert(find("/usb0/Deep48") == NULL);
     for (uint32_t at = 0u; at < entry_count; ++at)
         assert(strstr(entries[at].path, ".astra-copying") == NULL);
+    assert(astra_filesystem_move_tree_between(&filesystem, "/dh0/Deep48",
+        &removable, "/usb0/Deep48", &published) == ASTRA_VFS_OK);
+    assert(published == 1u && find("/dh0/Deep48") == NULL &&
+        find(deep) == NULL && find("/usb0/Deep48") != NULL);
+    strcpy(moved_deep, "/usb0");
+    strcat(moved_deep, deep + strlen("/dh0"));
+    deep_file = find(moved_deep);
+    assert(deep_file != NULL && deep_file->length == 6u &&
+        memcmp(deep_file->bytes, "DEEPER", 6u) == 0);
     return 0;
 }

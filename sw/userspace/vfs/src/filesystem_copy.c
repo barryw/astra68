@@ -4,7 +4,6 @@
 
 #include <string.h>
 
-#define COPY_DEPTH_MAX 32u
 #define COPY_BUFFER_SIZE 16384u
 
 static uint32_t copy_path(char *out, const char *parent, const char *name)
@@ -69,7 +68,8 @@ done:
     return status;
 }
 
-typedef struct CopyFrame {
+typedef struct TreeFrame {
+    struct TreeFrame *parent;
     AstraDirectory directory;
     AstraDirectoryEntry *entries;
     char *source;
@@ -78,31 +78,34 @@ typedef struct CopyFrame {
     uint32_t batch_at;
     uint8_t opened;
     char paths[];
-} CopyFrame;
+} TreeFrame;
 
-static CopyFrame *copy_frame_new(const char *source, const char *destination)
+static TreeFrame *tree_frame_new(const char *source, const char *destination,
+    TreeFrame *parent)
 {
     size_t source_bytes = strlen(source) + 1u;
-    size_t destination_bytes = strlen(destination) + 1u;
+    size_t destination_bytes = destination != NULL ? strlen(destination) + 1u : 0u;
     if (source_bytes > ASTRA_VFS_PATH_MAX ||
         destination_bytes > ASTRA_VFS_PATH_MAX)
         return NULL;
-    CopyFrame *frame = astra_runtime_allocate(
+    TreeFrame *frame = astra_runtime_allocate(
         sizeof(*frame) + source_bytes + destination_bytes);
     if (frame == NULL) return NULL;
+    frame->parent = parent;
     frame->directory = (AstraDirectory)ASTRA_DIRECTORY_INIT;
     frame->source = frame->paths;
-    frame->destination = frame->paths + source_bytes;
+    frame->destination = destination != NULL ? frame->paths + source_bytes : NULL;
     frame->entries = NULL;
     frame->batch_count = 0u;
     frame->batch_at = 0u;
     frame->opened = 0u;
     memcpy(frame->source, source, source_bytes);
-    memcpy(frame->destination, destination, destination_bytes);
+    if (destination != NULL)
+        memcpy(frame->destination, destination, destination_bytes);
     return frame;
 }
 
-static void copy_frame_free(CopyFrame *frame)
+static void tree_frame_free(TreeFrame *frame)
 {
     if (frame->opened)
         astra_filesystem_directory_close(&frame->directory);
@@ -115,20 +118,17 @@ static uint32_t copy_one(AstraFilesystem *source_filesystem,
                          AstraFilesystem *destination_filesystem,
                          const char *destination, int *created)
 {
-    CopyFrame *frames[COPY_DEPTH_MAX] = {0};
+    TreeFrame *frame = NULL;
     char *paths = astra_runtime_allocate(2u * ASTRA_VFS_PATH_MAX);
-    uint32_t active = 0u;
     uint32_t status = ASTRA_VFS_OK;
     AstraFileInfo info = {.size = sizeof(info)};
     if (paths == NULL) return ASTRA_VFS_ERR_LIMIT;
-    frames[active] = copy_frame_new(source, destination);
-    if (frames[active] == NULL) {
+    frame = tree_frame_new(source, destination, NULL);
+    if (frame == NULL) {
         astra_runtime_deallocate(paths);
         return ASTRA_VFS_ERR_LIMIT;
     }
-    ++active;
-    while (active != 0u && status == ASTRA_VFS_OK) {
-        CopyFrame *frame = frames[active - 1u];
+    while (frame != NULL && status == ASTRA_VFS_OK) {
         if (!frame->opened) {
             status = astra_filesystem_lstat(source_filesystem,
                 frame->source, &info);
@@ -136,7 +136,7 @@ static uint32_t copy_one(AstraFilesystem *source_filesystem,
             if (info.kind == ASTRA_VFS_KIND_FILE) {
                 status = copy_file(source_filesystem, frame->source,
                     destination_filesystem, frame->destination, info.mode,
-                    active == 1u ? created : NULL);
+                    frame->parent == NULL ? created : NULL);
             } else if (info.kind == ASTRA_VFS_KIND_SYMLINK) {
                 if (info.byte_size >= ASTRA_VFS_PATH_MAX) {
                     status = ASTRA_VFS_ERR_LIMIT;
@@ -150,7 +150,7 @@ static uint32_t copy_one(AstraFilesystem *source_filesystem,
                         paths[length] = '\0';
                         status = astra_filesystem_symlink(paths,
                             destination_filesystem, frame->destination);
-                        if (status == ASTRA_VFS_OK && active == 1u &&
+                        if (status == ASTRA_VFS_OK && frame->parent == NULL &&
                             created != NULL) *created = 1;
                     }
                 }
@@ -167,15 +167,16 @@ static uint32_t copy_one(AstraFilesystem *source_filesystem,
                 frame->opened = 1u;
                 status = astra_filesystem_mkdir_mode(destination_filesystem,
                     frame->destination, (uint16_t)(info.mode & 0777u));
-                if (status == ASTRA_VFS_OK && active == 1u && created != NULL)
+                if (status == ASTRA_VFS_OK && frame->parent == NULL && created != NULL)
                     *created = 1;
                 continue;
             } else {
                 status = ASTRA_VFS_ERR_UNSUPPORTED;
             }
             if (status != ASTRA_VFS_OK) break;
-            copy_frame_free(frame);
-            frames[--active] = NULL;
+            TreeFrame *parent = frame->parent;
+            tree_frame_free(frame);
+            frame = parent;
             continue;
         }
         if (frame->batch_at == frame->batch_count) {
@@ -185,8 +186,9 @@ static uint32_t copy_one(AstraFilesystem *source_filesystem,
                 frame->entries, 8u, &frame->batch_count);
             if (status != ASTRA_VFS_OK) break;
             if (frame->batch_count == 0u) {
-                copy_frame_free(frame);
-                frames[--active] = NULL;
+                TreeFrame *parent = frame->parent;
+                tree_frame_free(frame);
+                frame = parent;
                 continue;
             }
         }
@@ -194,10 +196,6 @@ static uint32_t copy_one(AstraFilesystem *source_filesystem,
             &frame->entries[frame->batch_at++];
         if (strcmp(entry->name, ".") == 0 ||
             strcmp(entry->name, "..") == 0) continue;
-        if (active == COPY_DEPTH_MAX) {
-            status = ASTRA_VFS_ERR_LIMIT;
-            break;
-        }
         paths[0] = '\0';
         paths[ASTRA_VFS_PATH_MAX] = '\0';
         status = copy_path(paths, frame->source, entry->name);
@@ -205,16 +203,18 @@ static uint32_t copy_one(AstraFilesystem *source_filesystem,
             status = copy_path(paths + ASTRA_VFS_PATH_MAX,
                 frame->destination, entry->name);
         if (status != ASTRA_VFS_OK) break;
-        frames[active] = copy_frame_new(paths,
-            paths + ASTRA_VFS_PATH_MAX);
-        if (frames[active] == NULL) {
+        TreeFrame *child = tree_frame_new(paths,
+            paths + ASTRA_VFS_PATH_MAX, frame);
+        if (child == NULL) {
             status = ASTRA_VFS_ERR_LIMIT;
             break;
         }
-        ++active;
+        frame = child;
     }
-    while (active != 0u) {
-        copy_frame_free(frames[--active]);
+    while (frame != NULL) {
+        TreeFrame *parent = frame->parent;
+        tree_frame_free(frame);
+        frame = parent;
     }
     astra_runtime_deallocate(paths);
     return status;
@@ -222,27 +222,25 @@ static uint32_t copy_one(AstraFilesystem *source_filesystem,
 
 static uint32_t remove_partial(AstraFilesystem *filesystem, const char *path)
 {
-    char *paths[COPY_DEPTH_MAX] = {0};
     char *child = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     uint32_t status = ASTRA_VFS_OK;
-    uint32_t active = 0u;
     if (child == NULL) return ASTRA_VFS_ERR_LIMIT;
-    size_t length = strlen(path) + 1u;
-    if (length > ASTRA_VFS_PATH_MAX ||
-        (paths[0] = astra_runtime_allocate(length)) == NULL) {
+    TreeFrame *frame = tree_frame_new(path, NULL, NULL);
+    if (frame == NULL) {
         astra_runtime_deallocate(child);
         return ASTRA_VFS_ERR_LIMIT;
     }
-    memcpy(paths[active++], path, length);
-    while (active != 0u && status == ASTRA_VFS_OK) {
-        const char *current = paths[active - 1u];
+    while (frame != NULL && status == ASTRA_VFS_OK) {
+        const char *current = frame->source;
         status = astra_filesystem_lstat(filesystem, current, &info);
         if (status != ASTRA_VFS_OK) break;
         if (info.kind != ASTRA_VFS_KIND_DIRECTORY) {
             status = astra_filesystem_unlink(filesystem, current, 0u);
             if (status != ASTRA_VFS_OK) break;
-            astra_runtime_deallocate(paths[--active]);
+            TreeFrame *parent = frame->parent;
+            tree_frame_free(frame);
+            frame = parent;
             continue;
         }
         AstraDirectory directory = ASTRA_DIRECTORY_INIT;
@@ -264,26 +262,26 @@ static uint32_t remove_partial(AstraFilesystem *filesystem, const char *path)
             status = astra_filesystem_unlink(filesystem, current,
                 ASTRA_VFS_UNLINK_DIRECTORY);
             if (status != ASTRA_VFS_OK) break;
-            astra_runtime_deallocate(paths[--active]);
+            TreeFrame *parent = frame->parent;
+            tree_frame_free(frame);
+            frame = parent;
             continue;
-        }
-        if (active == COPY_DEPTH_MAX) {
-            status = ASTRA_VFS_ERR_LIMIT;
-            break;
         }
         child[0] = '\0';
         status = copy_path(child, current, entry.name);
         if (status != ASTRA_VFS_OK) break;
-        length = strlen(child) + 1u;
-        paths[active] = astra_runtime_allocate(length);
-        if (paths[active] == NULL) {
+        TreeFrame *next = tree_frame_new(child, NULL, frame);
+        if (next == NULL) {
             status = ASTRA_VFS_ERR_LIMIT;
             break;
         }
-        memcpy(paths[active++], child, length);
+        frame = next;
     }
-    while (active != 0u)
-        astra_runtime_deallocate(paths[--active]);
+    while (frame != NULL) {
+        TreeFrame *parent = frame->parent;
+        tree_frame_free(frame);
+        frame = parent;
+    }
     astra_runtime_deallocate(child);
     return status;
 }
