@@ -176,6 +176,10 @@ def send_shortcut(connection, shortcut):
     key = parts[-1]
     if len(key) != 1 or not 0x20 <= ord(key) <= 0x7e:
         raise RuntimeError("shortcut key must be one printable ASCII character")
+    # X11 uppercase keysyms can synthesize Shift. Shortcut modifiers must be
+    # exactly those named by caller; spelling Ctrl+C and Ctrl+c means same key.
+    if "A" <= key <= "Z":
+        key = key.lower()
     for modifier in parts[:-1]:
         connection.sendall(struct.pack(">BBHI", 4, 1, 0,
                                        RFB_MODIFIERS[modifier]))

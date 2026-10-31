@@ -2,6 +2,39 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas correct-path core UI qualification, 2026-10-31: The current bundle
+executable installed at its manifest path was retested on DE25 because older
+targeted installs had copied a binary to an unused path. RFB opened empty
+RAM0, created Folder1 through the toolbar and renamed it AtlasGate in the
+shared inline editor, selected DH0's `astra_events.cat`, copied it through
+Edit > Copy, then pasted into RAM0 through Edit > Paste. Lowercase Primary+X
+and Primary+V moved the copy into AtlasGate; the folder showed the file and
+the RAM0 root no longer did. Toolbar Delete then removed AtlasGate from the
+root. No persistent volume was written. Menu Copy/Paste and native file
+operations passed. Initial uppercase `Ctrl+C` probe failed because the RFB
+client sent an uppercase X11 keysym, which implied Shift and failed Astra's
+exact modifier check; the same menu operation and lowercase shortcut worked.
+The checked-in generic `de25-rfb.py` now normalizes ASCII letter keysyms to
+lowercase, leaving Shift explicit, with a focused host test.
+SHA-verified captures and PNGs are on Beast under
+`/mnt/Documents/astra68/atlas-correct-path-core-20261031/`:
+empty RAM0 `22a6870f89d8f6e130a6d483bef8c034aca0a21bdbf9a22f935ef69bd57eb0f5`,
+renamed folder `48210d72fb7511ec936f46884ce99902e610e10ed42f9acb6ab188194a029bd6`,
+copied file `5c69f9ad8784f1386c5e98d4379b7883b9c94c3902fb702455a4870a9b0e0810`,
+moved file `feef05fffb8899fe72a5d6db7be40806b1edfb6d5a9f4cc791ec3a7e8cb802f4`,
+and empty root after Delete
+`c0e117cce7d190920b65953ba16a436214d9e0a88450bf1f1ce260e16c7d1541`.
+Board trial files were removed, disposable RAM0 reset by Astra service restart,
+and Astra, audio, remote desktop stayed active with zero restarts and 8.0 GiB
+free. Physical USB transfer remains unavailable: only root hub attached.
+Design review of `~/Downloads/Astra Desktop (standalone).html` confirms menu
+contract `Astra > app > File Edit View [app menus] Window Help`; File/Edit/View
+skeleton belongs to NDK, Window/Help to workspace. Haiku read-only references
+`src/kits/interface/MenuBar.cpp` and `src/kits/tracker/ContainerWindow.cpp`
+keep menu interaction shared and app file commands declarative. Current Atlas
+still authors Help and lacks its custom Volume menu, so design contract remains
+incomplete.
+
 Atlas remaining menu-state consolidation, 2026-10-31: Save Search, Show Hidden
 Files, and Show Preview now join the same Interface Kit command responder table
 as Atlas's other File/View actions. Menu state comes exclusively from command
