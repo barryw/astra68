@@ -935,6 +935,7 @@ static AstraResult build_view(AstraHandle gui)
         item = (AstraFlexItem)ASTRA_FLEX_ITEM_INIT;
         item.parent_id = TOOLBAR_FIRST_ID;
         item.shrink = 0u;
+        item.maximum_width = ASTRA_BREADCRUMB_SEGMENT_MAX_WIDTH;
         if (astra_interface_control_set_flex(BROWSER_CONTROL(at),
                 &item) != ASTRA_OK)
             return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -1198,6 +1199,12 @@ static AstraResult browser_set_directory(const AstraDirectorySnapshot *next,
     browser_clear_children();
     astra_runtime_deallocate(browser_entry_icons);
     browser_entry_icons = NULL;
+    result = fit_toolbar();
+    if (result == ASTRA_ERROR_NO_RESOURCES &&
+        toolbar_minimum_width <= UINT16_MAX)
+        return astra_window_resize(&window,
+            (uint16_t)toolbar_minimum_width, height);
+    if (result != ASTRA_OK) return result;
     return layout();
 }
 
@@ -3402,8 +3409,11 @@ static AstraResult fit_toolbar(void)
         &controls[HIDDEN_CONTROL_INDEX], 2u, ASTRA_TOOLBAR_PEER_FOLDABLE, 0u};
     for (uint32_t at = 0u; at < browser.breadcrumb.visible_count; ++at)
         peers[peer_count++] = (AstraToolbarPeer){
-            BROWSER_CONTROL(ASTRA_FILE_PANEL_CRUMB0 + at), 0u,
-            ASTRA_TOOLBAR_PEER_PINNED, 0u};
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_CRUMB0 + at),
+            ASTRA_BREADCRUMB_VISIBLE - at,
+            at + 2u < browser.breadcrumb.visible_count ?
+                ASTRA_TOOLBAR_PEER_FOLDABLE : ASTRA_TOOLBAR_PEER_PINNED,
+            0u};
     peers[peer_count++] = (AstraToolbarPeer){
         BROWSER_CONTROL(ASTRA_FILE_PANEL_VIEW), 4u,
         ASTRA_TOOLBAR_PEER_FOLDABLE, 0u};
@@ -3651,8 +3661,6 @@ static AstraResult run(AstraHandle gui)
                 (void)astra_log_failure("atlas browser directory", (uint32_t)(-result));
                 return result;
             }
-            result = fit_toolbar();
-            if (result != ASTRA_OK) return result;
             load_entry_icons();
             result = browser_set_icons();
             if (result != ASTRA_OK) {

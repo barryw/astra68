@@ -5400,6 +5400,47 @@ static void test_file_inspector(void)
     assert(strcmp(inspector.name, "Select an item") == 0);
 }
 
+static void test_breadcrumb_long_path(void)
+{
+    static const char deep[] =
+        "/dh0/abcdefghijklmnopqrstuvwx/abcdefghijklmnopqrstuvwx"
+        "/abcdefghijklmnopqrstuvwx/abcdefghijklmnopqrstuvwx"
+        "/abcdefghijklmnopqrstuvwx/abcdefghijklmnopqrstuvwx"
+        "/abcdefghijklmnopqrstuvwx";
+    AstraControl controls[1u + ASTRA_BREADCRUMB_VISIBLE];
+    AstraContainerInfo row = ASTRA_CONTAINER_INFO_INIT;
+    AstraBreadcrumb breadcrumb = ASTRA_BREADCRUMB_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraSurfaceView surface = render_view(330u, 100u);
+    char target[ASTRA_VFS_PATH_MAX];
+
+    font_advance = 8u;
+    row.id = 1u;
+    row.layout.direction = ASTRA_FLEX_ROW;
+    assert(astra_interface_container_init(&controls[0], &row) == ASTRA_OK);
+    assert(astra_interface_breadcrumb_init(&breadcrumb, &controls[1],
+        2u, 1u, "/dh0") == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, controls,
+        1u + ASTRA_BREADCRUMB_VISIBLE, 330u, 100u) == ASTRA_OK);
+    layout.direction = ASTRA_FLEX_ROW;
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_breadcrumb_set_path(&breadcrumb, &context,
+        &controls[1], deep) == ASTRA_OK);
+    assert(breadcrumb.visible_count == ASTRA_BREADCRUMB_VISIBLE);
+    assert((controls[ASTRA_BREADCRUMB_VISIBLE]._private_state &
+        ASTRA_CONTROL_COLLAPSED) == 0u);
+    assert(controls[ASTRA_BREADCRUMB_VISIBLE]._private_frame.width <=
+        ASTRA_BREADCRUMB_SEGMENT_MAX_WIDTH);
+    assert(astra_interface_breadcrumb_target(&breadcrumb,
+        1u + ASTRA_BREADCRUMB_VISIBLE, target, sizeof(target)) == ASTRA_OK);
+    assert(strcmp(target, deep) == 0);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(text_calls > breadcrumb.visible_count); /* Elided buttons. */
+    font_advance = 1u;
+}
+
 static void test_shared_file_panel(void)
 {
     AstraDirectoryEntry entries[3] = {
@@ -6385,6 +6426,7 @@ int main(void)
     test_composed_fields_and_colour_well();
     test_shared_colour_panel();
     test_file_inspector();
+    test_breadcrumb_long_path();
     test_shared_file_panel();
     test_file_panel_outline();
     test_shared_font_panel();

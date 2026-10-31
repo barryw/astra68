@@ -141,6 +141,8 @@ enum {
 /** Eight visible ancestors; deeper paths show their eight deepest segments.
  * Older ancestors remain reachable through Up. */
 #define ASTRA_BREADCRUMB_VISIBLE 8u
+/** Shared maximum width of one path segment button. Long labels elide. */
+#define ASTRA_BREADCRUMB_SEGMENT_MAX_WIDTH 160u
 /** Caller-owned navigation breadcrumb state composed from Buttons. */
 typedef struct AstraBreadcrumb {
     uint32_t size; /**< Structure size. */

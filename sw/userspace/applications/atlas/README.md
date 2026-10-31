@@ -5,6 +5,16 @@ toolbar, Places sidebar, breadcrumb, search field, Grid/List/Columns switcher,
 context menus, and status bar. The shared File Panel has a `BROWSE` mode so
 Atlas and Open/Save panels share navigation controls. Atlas owns filesystem
 snapshots, path history, folder commands, and file launch policy.
+
+Interface Kit's Breadcrumb caps segment Buttons at 160 px; generic Button
+rendering elides long labels. Updating a path temporarily folds Breadcrumb
+Buttons so replacement labels cannot fail before layout, then reveals from
+the current folder toward root. Atlas uses the shared toolbar fitter after
+every directory change, folding older ancestors before their parent/current
+pair. The parent button remains reachable at narrow widths. Haiku's read-only
+`src/kits/tracker/Navigator.cpp` informed the location/Up composition; Astra
+keeps path targets in its existing shared Breadcrumb rather than adding an
+Atlas path widget.
 File and View menu-bar commands share those same actions. Menu state follows
 selection, writable path, current view, sort order, and hidden-file state.
 

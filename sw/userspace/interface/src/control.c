@@ -5637,6 +5637,16 @@ static int render_requirements(const AstraUIContext *context,
         if (control->_private_control_kind == ASTRA_CONTROL_BUTTON &&
             (state & CONTROL_FOCUS_VISIBLE) != 0u)
             ++*commands;
+        /* A constrained button may draw its UTF-8 prefix and ellipsis as
+         * separate hardware text commands. Keep the plan an upper bound. */
+        if (control->_private_control_kind == ASTRA_CONTROL_BUTTON &&
+            control->_private_style != ASTRA_BUTTON_TAG &&
+            (control->_private_style & ASTRA_BUTTON_STYLE_MASK) !=
+                ASTRA_BUTTON_SPLIT_MENU &&
+            (control->_private_style & ASTRA_BUTTON_ICON_ONLY) == 0u) {
+            ++*commands;
+            *payload += 3u;
+        }
         if (control->_private_control_kind == ASTRA_CONTROL_BUTTON &&
             ASTRA_BUTTON_ICON(control->_private_style) != 0u)
             *payload += 3u + 16u * sizeof(AstraDrawListSegment);
@@ -5915,10 +5925,43 @@ static void render_button(const AstraTheme *theme,
         return;
     }
     if ((control->_private_style & ASTRA_BUTTON_ICON_ONLY) != 0u) return;
-    astra_surface_ui_text(surface, text_x, text_y, control->_private_text,
-                          control->_private_text_length,
-                          theme->control_font_height,
-                          color(button_text(theme, control)));
+    {
+        static const char ellipsis[] = "...";
+        uint32_t left_inset = icon != 0u ? 30u : 8u;
+        uint32_t room = width > left_inset + 8u ?
+            width - left_inset - 8u : 0u;
+        uint16_t ink = color(button_text(theme, control));
+        if (text_width <= room) {
+            astra_surface_ui_text(surface, text_x, text_y,
+                control->_private_text, control->_private_text_length,
+                theme->control_font_height, ink);
+            return;
+        }
+        uint32_t dots_width = astra_surface_ui_text_width(ellipsis, 3u,
+            theme->control_font_height);
+        uint32_t prefix = 0u;
+        uint32_t prefix_width = 0u;
+        if (dots_width > room) return;
+        while (prefix < control->_private_text_length) {
+            uint32_t consumed = 0u;
+            (void)astra_utf8_decode(control->_private_text + prefix,
+                control->_private_text_length - prefix, &consumed);
+            if (consumed == 0u) break;
+            uint32_t next_width = astra_surface_ui_text_width(
+                control->_private_text, prefix + consumed,
+                theme->control_font_height);
+            if (next_width > room - dots_width) break;
+            prefix += consumed;
+            prefix_width = next_width;
+        }
+        if (prefix != 0u)
+            astra_surface_ui_text(surface, x + (int32_t)left_inset, text_y,
+                control->_private_text, prefix,
+                theme->control_font_height, ink);
+        astra_surface_ui_text(surface,
+            x + (int32_t)left_inset + (int32_t)prefix_width, text_y,
+            ellipsis, 3u, theme->control_font_height, ink);
+    }
 }
 
 static void render_colour_well(const AstraTheme *theme,

@@ -1,6 +1,34 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-30
+Status: active continuation map, 2026-10-31
+
+Atlas shared Breadcrumb checkpoint, 2026-10-31: Long path segments now have
+one Interface Kit width limit and generic Button text elides with an ellipsis.
+Breadcrumb replaces labels while folded, then reveals from current folder
+toward root; target IDs still resolve against the full path. Atlas supplies
+only toolbar peer priorities: older ancestors fold first, current folder and
+parent stay pinned. Every directory change now runs the existing shared
+toolbar fitter. This last step fixed a DE25-discovered spill: navigation to a
+deep RAM0 path previously left Search beyond the window edge because only
+resize and worker completion refit the row. Haiku read-only reference:
+`src/kits/tracker/Navigator.cpp` places location in `BToolBar` and retains an
+explicit Up action; Astra keeps its existing Breadcrumb Buttons, exact path
+targets, and parent button at narrow widths. Beast Interface Kit tests,
+MC68040 Interface Kit and Atlas builds, and NDK `dist-check` passed. Focused
+DE25 installs reported `ASTRA_DE25_DEV_INSTALL PASS guest=4` then `guest=1`.
+RFB evidence shows pre-fix overflow, post-fix contained Search, a 592-pixel
+window with two path buttons, and parent navigation. Automated RFB typing had
+timing misses, so this gate certifies visible navigation and fitting, not
+seven exact folder renames. Selected captures were SHA-verified against board
+originals and archived on Beast under
+`/mnt/Documents/astra68/atlas-breadcrumb-20261031/`. Final Atlas SHA-256:
+`c95198b073635e1732223bfc8786ec57e91e4ff7b363ecff3342d834ca408175`;
+Interface Kit SHA-256:
+`22ea96d0ac01cd914c9565e5208e1822aeed4e82a321f0a21e65d387064ef23a`.
+Board trial captures were removed. A guest restart cleared RAM0: the opened
+RAM0 RFB frame matched its initial empty-state SHA-256. Astra, audio, and
+remote desktop services are active with zero automatic restarts and 8.1 GiB
+free. Cross-volume operation completeness remains a separate Atlas gate.
 
 Atlas shared toolbar fitting checkpoint, 2026-10-30: Interface Kit now fits
 command groups and existing peer controls in one measured row. Groups switch
@@ -30,8 +58,9 @@ Interface Kit SHA-256:
 Four final RFB captures and five earlier trial captures were SHA-verified and archived on Beast under
 `/mnt/Documents/astra68/atlas-toolbar-peers-20261030/`; disposable board
 captures were removed. Astra, audio, and remote desktop services remained
-active with zero restarts and 8.1 GiB free. Narrow path breadcrumbs and
-cross-volume operation completeness still need separate Atlas gates.
+active with zero restarts and 8.1 GiB free. The later Breadcrumb checkpoint
+above covers narrow paths; cross-volume operation completeness remains a
+separate Atlas gate.
 
 Atlas view and operation audit checkpoint, 2026-10-30: DE25 RFB exercised
 shared Grid, List, and Columns views on DH0, including Columns child loading

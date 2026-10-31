@@ -979,6 +979,11 @@ AstraResult astra_interface_breadcrumb_init(AstraBreadcrumb *breadcrumb,
         if (result != ASTRA_OK) return result;
         result = astra_panel_child(&controls[at], parent_id, 0u);
         if (result != ASTRA_OK) return result;
+        AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+        item.parent_id = parent_id;
+        item.maximum_width = ASTRA_BREADCRUMB_SEGMENT_MAX_WIDTH;
+        result = astra_interface_control_set_flex(&controls[at], &item);
+        if (result != ASTRA_OK) return result;
     }
     return ASTRA_OK;
 }
@@ -988,12 +993,23 @@ AstraResult astra_interface_breadcrumb_set_path(AstraBreadcrumb *breadcrumb,
 {
     AstraBreadcrumb next;
     AstraResult result;
+    uint32_t old_state[ASTRA_BREADCRUMB_VISIBLE];
     if (breadcrumb == NULL || breadcrumb->size < sizeof(*breadcrumb) ||
         context == NULL || controls == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     next = *breadcrumb;
     result = breadcrumb_parse(&next, path);
     if (result != ASTRA_OK) return result;
+    /* Measure replacement labels while every segment is hidden. A longer
+     * path must not make an otherwise valid panel fail before its owner can
+     * fit the toolbar or location row. */
+    for (uint32_t at = 0u; at < ASTRA_BREADCRUMB_VISIBLE; ++at)
+        old_state[at] = controls[at]._private_state;
+    for (uint32_t at = 0u; at < ASTRA_BREADCRUMB_VISIBLE; ++at) {
+        result = astra_interface_ui_set_state(context, &controls[at],
+            old_state[at] | ASTRA_CONTROL_COLLAPSED);
+        if (result != ASTRA_OK) goto rollback;
+    }
     for (uint32_t at = 0u; at < ASTRA_BREADCRUMB_VISIBLE; ++at) {
         const char *label = at < next.visible_count ?
             next.path + next.start[at] : "/";
@@ -1001,27 +1017,32 @@ AstraResult astra_interface_breadcrumb_set_path(AstraBreadcrumb *breadcrumb,
             next.end[at] - next.start[at] : 1u;
         result = astra_interface_control_set_text(context, &controls[at],
             label, length);
-        if (result != ASTRA_OK) break;
-        result = astra_interface_ui_set_state(context, &controls[at],
-            at < next.visible_count ? 0u : ASTRA_CONTROL_COLLAPSED);
-        if (result != ASTRA_OK) break;
+        if (result != ASTRA_OK) goto rollback;
     }
-    if (result != ASTRA_OK) {
-        for (uint32_t at = 0u; at < ASTRA_BREADCRUMB_VISIBLE; ++at) {
-            const char *label = at < breadcrumb->visible_count ?
-                breadcrumb->path + breadcrumb->start[at] : "/";
-            uint32_t length = at < breadcrumb->visible_count ?
-                breadcrumb->end[at] - breadcrumb->start[at] : 1u;
-            (void)astra_interface_control_set_text(context,
-                &controls[at], label, length);
-            (void)astra_interface_ui_set_state(context,
-                &controls[at], at < breadcrumb->visible_count ?
-                    0u : ASTRA_CONTROL_COLLAPSED);
-        }
-        return result;
+    /* Reveal from current folder toward root. If layout rejects an older
+     * ancestor, leave it folded; target IDs still resolve against full path. */
+    for (uint32_t count = next.visible_count; count != 0u; --count) {
+        result = astra_interface_ui_set_state(context,
+            &controls[count - 1u],
+            old_state[count - 1u] & ~ASTRA_CONTROL_COLLAPSED);
+        if (result == ASTRA_ERROR_NO_RESOURCES) break;
+        if (result != ASTRA_OK) goto rollback;
     }
     *breadcrumb = next;
     return ASTRA_OK;
+
+rollback:
+    for (uint32_t at = 0u; at < ASTRA_BREADCRUMB_VISIBLE; ++at) {
+        const char *label = at < breadcrumb->visible_count ?
+            breadcrumb->path + breadcrumb->start[at] : "/";
+        uint32_t length = at < breadcrumb->visible_count ?
+            breadcrumb->end[at] - breadcrumb->start[at] : 1u;
+        (void)astra_interface_control_set_text(context,
+            &controls[at], label, length);
+        (void)astra_interface_ui_set_state(context,
+            &controls[at], old_state[at]);
+    }
+    return result;
 }
 
 AstraResult astra_interface_breadcrumb_target(
