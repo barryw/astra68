@@ -97,7 +97,7 @@ def rendered(machine, predicate, after, timeout):
     while time.monotonic() < end:
         lines = machine.said_with_syslog(after)[0]
         seen = [tuple(map(int, match.groups())) for line in lines
-                if (match := re.search(r"desktop usage rendered (\d+) (\d+) (\d+) (\d+) (\d+) (\d+)$", line)) is not None]
+                if (match := re.search(r"volume usage rendered (\d+) (\d+) (\d+) (\d+) (\d+) (\d+)$", line)) is not None]
         if seen and predicate(seen[-1]):
             return seen[-1]
         time.sleep(.1)

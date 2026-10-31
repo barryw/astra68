@@ -9,6 +9,8 @@ capability GUI
 capability CLIPBOARD
 capability APP_LAUNCH
 capability VOLUMES
+capability VOLUME_ADMIN
+capability VOLUME_USAGE
 capability VOLUME_READ
 capability VOLUME_WRITE
 capability RAM_READ
@@ -19,6 +21,7 @@ capability FONTS:r
 capability APPS:r
 capability LIBS:r
 capability LOG
+capability PROC:r
 requires compiler.library 2 2.0.0
 requires filesystem.library 15 15.10.0
 requires font.library 5 5.0.0

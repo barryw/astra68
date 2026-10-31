@@ -17,7 +17,8 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 TARGET := build/m68k/atlas.elf
 IMAGE := build/m68k/atlas
 OBJECT := build/m68k/main.o
-OBJECTS := build/m68k/directory_snapshot.o build/m68k/folder_ops.o
+OBJECTS := build/m68k/crc32.o build/m68k/directory_snapshot.o build/m68k/folder_ops.o \
+	build/m68k/volume_action.o build/m68k/volume_usage_dialog.o
 LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) \
 	$(ASTRA_FONT_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) $(ASTRA_SYSTEM_LIBRARY) \
 	$(ASTRA_PACKAGE_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) $(ASTRA_COMPILER_LIBRARY)
@@ -32,6 +33,20 @@ build/m68k/directory_snapshot.o: ../../common/directory_snapshot.c ../../common/
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
 build/m68k/folder_ops.o: ../../common/folder_ops.c ../../common/folder_ops.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/crc32.o: ../../../common/crc32.c ../../../include/astra/crc32.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/volume_action.o: ../../common/volume_action.c \
+	../../common/volume_action.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/volume_usage_dialog.o: ../../common/volume_usage_dialog.c \
+	../../common/volume_usage_dialog.h ../../common/volume_usage_layout.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 

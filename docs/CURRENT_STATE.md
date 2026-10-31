@@ -2,6 +2,34 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared removal checkpoint, 2026-10-31: Desktop's exact volume-holder
+dialog and unmount/eject state machine now live in `sw/userspace/common` and
+are linked by both Desktop and Atlas. Atlas contributes Volume menu commands,
+current-volume selection, and event-loop integration; Interface Kit owns menu,
+alert, ScrollView, scrollbar, and button interaction. Exact mount identity is
+rechecked at admission, protected system/RAM mounts cannot be removed, image
+sources retire through the native Volume lifecycle, and optical eject follows
+completed unmount. Successful intentional removal closes its Atlas window;
+surprise loss still shows the unavailable state. The trusted Atlas launch
+ceiling and bundle manifest both grant Volume Admin, Volume Usage, and
+read-only PROC for exact-holder inspection. Missing ceiling grants initially
+made hardware launch fail; policy test now covers them, and DE25 launch
+passed after targeted startup-policy install. Haiku read-only reference:
+`src/kits/tracker/ContainerWindow.cpp` volume menu and unmount actions;
+Astra retains native exact references and provider admission.
+Beast Atlas and Desktop MC68040 builds, host tests, and image-provider policy
+test passed. DE25 mounted a disposable ISO as ATLAS_TEST at `/cd0`, opened its
+root in Atlas, and showed Unmount enabled while Eject stayed disabled. With
+zsh holding `/cd0/readme.txt`, Unmount opened the shared modal showing exact
+PID, command, handle, inode, and path. Releasing the handle made `lsof /cd0`
+empty; retry removed the desktop icon and closed the Atlas window. Evidence
+raw frames and SHA-256 sums are archived on Beast at
+`/mnt/Documents/astra68/atlas-volume-action-20261031/`. Disposable ISO was
+removed by digest, board captures cleared, and Astra, HDMI audio host, and
+remote desktop stayed active with zero Astra restarts and 8.0 GiB free.
+Physical optical eject and USB removal from Atlas remain unqualified because
+no external device is attached.
+
 Atlas volume menu and shared launch checkpoint, 2026-10-31: Atlas now exposes
 Volume > Disk Setup through its existing Interface Kit command scope and
 common Menu control. The System Kit header supplies
@@ -23,9 +51,8 @@ Disk Setup, launched Disk Setup, then confirmed `Volume, Window, Help` order,
 Window actions, and Help > About Atlas dialog. SHA-verified raw captures and
 PNGs are archived on Beast at
 `/mnt/Documents/astra68/atlas-volume-menu-20261031/`. Physical target launch
-remains unqualified because DE25 saw no external disk. Full unmount/eject from
-Atlas and platform-owned File/Edit/View/Help menu policy remain open; these
-need shared mechanisms rather than Atlas-specific copies.
+remains unqualified because DE25 saw no external disk. Platform-owned
+File/Edit/View/Help menu policy remains open.
 
 Atlas correct-path core UI qualification, 2026-10-31: The current bundle
 executable installed at its manifest path was retested on DE25 because older

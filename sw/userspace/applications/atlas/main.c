@@ -30,6 +30,8 @@
 
 #include "../../common/directory_snapshot.h"
 #include "../../common/folder_ops.h"
+#include "../../common/volume_action.h"
+#include "../../common/volume_usage_dialog.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -140,12 +142,18 @@ static uint32_t navigation_count, navigation_index;
 static AstraVolumeReference viewed_volume;
 static AstraVolumeWatch volume_watch = ASTRA_VOLUME_WATCH_INIT;
 static AstraHandle volume_metadata, volume_grant;
+static AstraHandle volume_administrator, volume_inspector;
+static AstraHandle volume_gui;
 static AstraHandle volume_read_broker, volume_write_broker;
 static AstraHandle volume_ram_read_broker, volume_ram_write_broker;
 static uint32_t volume_lost, volume_refresh;
 static uint32_t volume_write_available, volume_writable;
 static uint64_t volume_retry;
 static char volume_path[32], volume_title[ASTRA_WINDOW_TITLE_MAX + 1u];
+static AstraVolumeAction removal_action;
+static AstraVolumeUsageDialog *busy_dialog;
+static uint32_t removal_active;
+static uint64_t removal_retry;
 static AstraHandle launcher;
 static AstraHandle clipboard_service;
 static AstraDragGesture drag_gesture = ASTRA_DRAG_GESTURE_INIT;
@@ -302,6 +310,8 @@ enum AtlasMenuRow {
     ATLAS_MENU_HIDDEN,
     ATLAS_MENU_PREVIEW,
     ATLAS_MENU_SIDEBAR,
+    ATLAS_MENU_UNMOUNT,
+    ATLAS_MENU_EJECT,
     ATLAS_MENU_DISK_SETUP,
     ATLAS_MENU_ABOUT,
     ATLAS_MENU_COUNT
@@ -332,6 +342,8 @@ static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"Show Hidden Files", 17u, ASTRA_MENU_PARENT(3u)},
     {"Show Preview", 12u, ASTRA_MENU_PARENT(3u)},
     {"Show Sidebar", 12u, ASTRA_MENU_PARENT(3u)},
+    {"Unmount", 7u, ASTRA_MENU_PARENT(4u)},
+    {"Eject", 5u, ASTRA_MENU_PARENT(4u)},
     {"Disk Setup...", 13u, ASTRA_MENU_PARENT(4u)},
     {"About Atlas", 11u, ASTRA_MENU_PARENT(5u)}
 };
@@ -357,7 +369,9 @@ static const AstraContextMenuItem atlas_menu_commands[ATLAS_MENU_COUNT] = {
     [ATLAS_MENU_SORT_KIND] = {"atlas.sort.kind", sizeof("atlas.sort.kind") - 1u, NULL},
     [ATLAS_MENU_SORT_MODIFIED] = {"atlas.sort.modified", sizeof("atlas.sort.modified") - 1u, NULL},
     [ATLAS_MENU_SIDEBAR] = {"atlas.sidebar", sizeof("atlas.sidebar") - 1u, NULL},
-    [ATLAS_MENU_DISK_SETUP] = {"atlas.disk-setup", sizeof("atlas.disk-setup") - 1u, NULL}
+    [ATLAS_MENU_DISK_SETUP] = {"atlas.disk-setup", sizeof("atlas.disk-setup") - 1u, NULL},
+    [ATLAS_MENU_UNMOUNT] = {"atlas.unmount", sizeof("atlas.unmount") - 1u, NULL},
+    [ATLAS_MENU_EJECT] = {"atlas.eject", sizeof("atlas.eject") - 1u, NULL}
 };
 static uint32_t atlas_menu_sent[ATLAS_MENU_COUNT];
 static uint32_t atlas_menu_ready;
@@ -2317,6 +2331,85 @@ static AstraResult launch_disk_setup(void *opaque,
         "--target", &viewed_volume, &process_id);
 }
 
+static const AstraVolumeRecord *removable_volume(void)
+{
+    if (volume_administrator == ASTRA_INVALID_HANDLE ||
+        volume_inspector == ASTRA_INVALID_HANDLE ||
+        viewed_volume.id == 0u || volume_lost || removal_active || worker != 0u)
+        return NULL;
+    const AstraVolumeRecord *record = astra_volume_snapshot_find(
+        &sidebar_volumes, &viewed_volume);
+    return record != NULL && record->kind == ASTRA_VOLUME_MOUNT &&
+        record->state == ASTRA_VOLUME_MOUNTED &&
+        (record->flags & (ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_TEMPORARY)) == 0u ?
+        record : NULL;
+}
+
+static AstraResult unmount_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Unmount", 7u,
+        removable_volume() != NULL, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult eject_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    const AstraVolumeRecord *mount = removable_volume();
+    const AstraVolumeRecord *source = mount == NULL ? NULL :
+        astra_volume_snapshot_ancestor(&sidebar_volumes, &viewed_volume,
+            ASTRA_VOLUME_SOURCE);
+    *state = (AstraCommandState){"Eject", 5u,
+        source != NULL && source->origin == ASTRA_VOLUME_ORIGIN_DEVICE &&
+            source->class_id == ASTRA_VOLUME_OPTICAL, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult remove_volume(int eject)
+{
+    AstraVolumeReference target = viewed_volume;
+    AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
+    AstraResult result = astra_volume_snapshot_open(volume_metadata, &catalog);
+    if (result == ASTRA_OK) {
+        result = astra_volume_action_begin(volume_administrator,
+            &catalog, &target, eject, &removal_action);
+        astra_volume_snapshot_close(&catalog);
+    }
+    if (result == ASTRA_OK) {
+        removal_active = 1u;
+        removal_retry = 0u;
+        volume_refresh = 1u;
+        volume_retry = 0u;
+        return ASTRA_OK;
+    }
+    if (result == ASTRA_ERROR_BUSY)
+        result = astra_volume_usage_dialog_open(busy_dialog,
+            volume_gui, volume_inspector, &filesystem, &target);
+    if (result != ASTRA_OK)
+        astra_volume_usage_dialog_error(volume_gui,
+            result == ASTRA_ERROR_BUSY ?
+                "Resources changed during inspection; retry removal" :
+                "Volume removal was refused", result);
+    return ASTRA_OK;
+}
+
+static AstraResult unmount_volume(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    return remove_volume(0);
+}
+
+static AstraResult eject_volume(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    return remove_volume(1);
+}
+
 static AstraResult folder_query(void *opaque, AstraCommandState *state)
 {
     AstraResult result = menu_query(opaque, state);
@@ -3523,6 +3616,10 @@ static const AstraCommand atlas_command_table[] = {
         new_window_query, new_window, &atlas_command_context},
     {"atlas.disk-setup", sizeof("atlas.disk-setup") - 1u, 0u, 0u,
         disk_setup_query, launch_disk_setup, &atlas_command_context},
+    {"atlas.unmount", sizeof("atlas.unmount") - 1u, 0u, 0u,
+        unmount_query, unmount_volume, &atlas_command_context},
+    {"atlas.eject", sizeof("atlas.eject") - 1u, 0u, 0u,
+        eject_query, eject_volume, &atlas_command_context},
     {"atlas.new", 9u, 0u, 0u, menu_query, create_folder,
         &atlas_command_context},
     {"atlas.folder", 12u, 0u, 0u, folder_query, create_folder,
@@ -3692,11 +3789,18 @@ static AstraResult run(AstraHandle gui)
         {0x4fu, ASTRA_COMMAND_SHORTCUT_ALT, "atlas.forward", sizeof("atlas.forward") - 1u}
     };
     for (;;) {
-        uint32_t waits[3] = {astra_window_event_wait_handle(&window)};
-        uint32_t wait_count = 1u, worker_slot = UINT32_MAX, volume_slot = UINT32_MAX;
+        uint32_t waits[4] = {astra_window_event_wait_handle(&window)};
+        uint32_t wait_count = 1u, worker_slot = UINT32_MAX;
+        uint32_t volume_slot = UINT32_MAX, busy_slot = UINT32_MAX;
         if (worker != 0u) { worker_slot = wait_count; waits[wait_count++] = worker; }
         if (volume_watch.receive != ASTRA_INVALID_HANDLE && !volume_lost) {
             volume_slot = wait_count; waits[wait_count++] = volume_watch.receive;
+        }
+        AstraHandle busy_wait = astra_window_event_wait_handle(
+            &busy_dialog->window);
+        if (busy_wait != ASTRA_INVALID_HANDLE) {
+            busy_slot = wait_count;
+            waits[wait_count++] = busy_wait;
         }
         uint32_t selected = 0u;
         AstraWindowEvent event = {0};
@@ -3704,12 +3808,25 @@ static AstraResult run(AstraHandle gui)
         uint32_t repaint = 0u;
         AstraResult result;
 
+        uint64_t deadline = volume_refresh ? volume_retry :
+            ASTRA_DEADLINE_FOREVER;
+        if (removal_active && removal_retry < deadline)
+            deadline = removal_retry;
         uint32_t waited = astra_wait_multiple(waits, wait_count,
-            volume_refresh ? volume_retry : ASTRA_DEADLINE_FOREVER,
-            &selected, NULL);
+            deadline, &selected, NULL);
         if (waited != ASTRA_SYSCALL_OK && waited != ASTRA_SYSCALL_TIMED_OUT &&
-            !(selected == volume_slot && waited == ASTRA_SYSCALL_PEER_DEAD))
+            !(selected == volume_slot && waited == ASTRA_SYSCALL_PEER_DEAD) &&
+            !(selected == busy_slot && waited == ASTRA_SYSCALL_PEER_DEAD))
             return ASTRA_ERROR_IO;
+        if (selected == busy_slot && waited != ASTRA_SYSCALL_TIMED_OUT) {
+            if (waited == ASTRA_SYSCALL_PEER_DEAD)
+                astra_volume_usage_dialog_close(busy_dialog);
+            else {
+                result = astra_volume_usage_dialog_event(busy_dialog, gui);
+                if (result != ASTRA_OK) return result;
+            }
+            continue;
+        }
         if (waited != ASTRA_SYSCALL_TIMED_OUT && selected == volume_slot) {
             AstraVolumeChange change;
             result = astra_volume_watch_receive(&volume_watch, &change);
@@ -3757,6 +3874,44 @@ static AstraResult run(AstraHandle gui)
                 } else if (worker == 0u) visible_data = 1u;
                 repaint = 1u;
             }
+        }
+        if (removal_active && astra_clock_monotonic() >= removal_retry) {
+            AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
+            result = astra_volume_snapshot_open(volume_metadata, &catalog);
+            if (result == ASTRA_OK) {
+                result = astra_volume_action_advance(volume_administrator,
+                    &catalog, &removal_action);
+                astra_volume_snapshot_close(&catalog);
+            }
+            uint32_t removal_failed = removal_action.failure;
+            if (result == ASTRA_OK && removal_action.failure != 0u) {
+                AstraResult failure = astra_result_from_service(
+                    removal_action.failure);
+                if (!removal_action.eject_failed &&
+                    failure == ASTRA_ERROR_BUSY)
+                    failure = astra_volume_usage_dialog_open(busy_dialog,
+                        gui, volume_inspector, &filesystem,
+                        &removal_action.removal.mount);
+                if (failure != ASTRA_OK)
+                    astra_volume_usage_dialog_error(gui,
+                        removal_action.eject_failed ?
+                            "Eject failed; the disc remains in the drive" :
+                            "The storage provider refused removal", failure);
+                removal_action.failure = 0u;
+            }
+            if (result == ASTRA_OK && removal_action.finished) {
+                if (removal_failed == 0u) return ASTRA_OK;
+                removal_active = 0u;
+                volume_refresh = 1u;
+                volume_retry = 0u;
+                repaint = 1u;
+            } else if (result != ASTRA_OK && result != ASTRA_ERROR_BUSY) {
+                astra_volume_usage_dialog_error(gui,
+                    "Volume removal could not be observed", result);
+                removal_active = 0u;
+                repaint = 1u;
+            }
+            removal_retry = astra_clock_monotonic() + UINT64_C(50000000);
         }
         if (worker == 0u && (repaint || (waited == ASTRA_SYSCALL_OK && selected == worker_slot))) {
             if (volume_lost) {
@@ -4288,8 +4443,18 @@ int astra_main(const AstraStartupInfo *startup)
     gui = astra_startup_capability(startup, ASTRA_CAPABILITY_GUI);
     ready = astra_startup_capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
     launch_capability = astra_startup_capability(startup, ASTRA_CAPABILITY_APPLICATION_LAUNCH);
-    if (gui == NULL || ready == NULL || launch_capability == NULL)
+    const AstraStartupCapability *administrator = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_VOLUME_ADMIN);
+    const AstraStartupCapability *inspector = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_VOLUME_USAGE);
+    if (gui == NULL || ready == NULL || launch_capability == NULL ||
+        administrator == NULL || inspector == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
+    volume_gui = gui->handle;
+    volume_administrator = administrator->handle;
+    volume_inspector = inspector->handle;
+    busy_dialog = astra_runtime_callocate(1u, sizeof(*busy_dialog));
+    if (busy_dialog == NULL) return ASTRA_STATUS_LIMIT;
     launcher = launch_capability->handle;
     const AstraStartupCapability *volume_read = astra_startup_capability(startup,
         ASTRA_CAPABILITY_VOLUME_READ);
@@ -4443,6 +4608,9 @@ int astra_main(const AstraStartupInfo *startup)
     (void)astra_close(ready->handle);
     if (result == ASTRA_OK)
         result = run(gui->handle);
+    astra_volume_usage_dialog_close(busy_dialog);
+    astra_runtime_deallocate(busy_dialog);
+    busy_dialog = NULL;
     (void)astra_interface_toolbar_actions_close(&toolbar);
     __atomic_store_n(&cancelled, 1u, __ATOMIC_RELEASE);
     if (astra_window_event_wait_handle(&window) != ASTRA_INVALID_HANDLE) {

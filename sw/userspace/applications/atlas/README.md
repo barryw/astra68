@@ -28,6 +28,17 @@ volume, Atlas rechecks its exact catalog identity and uses the shared NDK
 volume launch helper to select that source in Disk Setup. Fixed and RAM paths
 open Disk Setup without a target. Display places its shared Window heading
 before a trailing app Help heading, while preserving the app's menu commands.
+The same Volume menu offers Unmount for a removable mounted volume and Eject
+for a mounted physical optical disc. Atlas and Desktop link one common volume
+action state machine and one common exact-holder dialog. The native Volume
+client owns admission, provider retirement, and exact references; Interface
+Kit owns menu and dialog controls. If a process retains a file, the dialog
+names its PID, command, handle, inode, and path. An intentional successful
+Unmount closes that Atlas window. Unexpected device loss keeps its unavailable
+view so the user can see why browsing stopped. System and RAM volumes cannot
+be removed from Atlas. Haiku's read-only
+`src/kits/tracker/ContainerWindow.cpp` informed the menu placement and action
+scope; Astra keeps native provider lifecycle and precise holder diagnostics.
 
 Atlas appends shared controls through Interface Kit's generic
 `astra_interface_ui_append_control`. A control that exceeds one 128-command

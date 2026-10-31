@@ -1,5 +1,5 @@
 #include "../desktop_layout.h"
-#include "../desktop_usage_layout.h"
+#include "../../../common/volume_usage_layout.h"
 #include <astra/ui_font.h>
 #include <astra/utf8.h>
 
@@ -11,9 +11,9 @@ static void test_usage_text_progress(void)
     uint32_t advance;
     static const char label[] = "PID 37 (zsh) — file #123 — read only — inode 456\n";
     assert(astra_ui_font_strike(ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT) != NULL);
-    assert(usage_line(label, sizeof(label) - 1u, &advance) == sizeof(label) - 2u);
+    assert(volume_usage_dialog_line(label, sizeof(label) - 1u, &advance) == sizeof(label) - 2u);
     assert(advance == sizeof(label) - 1u);
-    assert(usage_line("\n", 1u, &advance) == 0u && advance == 1u);
+    assert(volume_usage_dialog_line("\n", 1u, &advance) == 0u && advance == 1u);
 
     /* Real font metrics must make progress across a long UTF-8 path and keep
      * every fitted line on a scalar boundary. No font or fitting mock. */
@@ -27,11 +27,11 @@ static void test_usage_text_progress(void)
     memcpy(path + length, ".txt", 4u); length += 4u;
     uint32_t offset = 0u, lines = 0u;
     while (offset < length) {
-        uint32_t fit = usage_line(path + offset, length - offset, &advance);
+        uint32_t fit = volume_usage_dialog_line(path + offset, length - offset, &advance);
         assert(fit != 0u && fit == advance && advance <= length - offset);
         assert(astra_utf8_validate(path + offset, fit, 0u));
         assert(astra_surface_ui_text_width(path + offset, fit,
-            ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT) <= DESKTOP_USAGE_VIEW_WIDTH - 12u);
+            ASTRA_THEME_SYSTEM_BODY_FONT_HEIGHT) <= ASTRA_VOLUME_USAGE_VIEW_WIDTH - 12u);
         offset += advance; ++lines;
     }
     assert(offset == length && lines > 1u);
