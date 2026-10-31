@@ -27,8 +27,8 @@ common interaction and visual metrics in one library without moving folder
 state into a generic control.
 
 The helper validates a single UTF-8 path component before creating or
-renaming. Destination reservation prevents ordinary rename collisions; native
-VFS rename remains the sole state-changing operation. Home permissions come
+renaming. Native Filesystem Kit rename-without-replacement prevents collisions
+atomically for files, folders, and links. Home permissions come
 from the existing Startup assign and grant contract. Read-only volume browsing
 retains its separate exact Volume root grant.
 

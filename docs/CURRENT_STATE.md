@@ -2,6 +2,38 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared folder-operation checkpoint, 2026-10-31: Desktop and Atlas now
+use Filesystem Kit's existing atomic rename-without-replacement primitive for
+Rename and Move to Trash. The common folder helper no longer manufactures a
+temporary destination file, directory, or symlink, nor removes that reservation
+after failure. The native provider owns collision handling and publication.
+Read-only Haiku reference: `src/kits/tracker/PoseView.cpp` (`DoMoveToTrash`)
+keeps the file operation separate from view selection; Astra retains that split
+while delegating atomicity to its native Filesystem Kit. Beast shared
+folder-operation tests, Desktop and Atlas MC68040 builds, and Atlas directory
+test passed. DE25 targeted installs of both binaries passed. On RAM0, Atlas
+created two folders; renaming one to the other's name reported “already
+exists” and preserved both. Delete moved both into `/ram0/.Trash`, confirmed
+by native Terminal, and Atlas showed an empty root. RAM0 trial data was
+cleared by service restart. Board/Beast raw-frame SHA-256 matched; captures
+and PNGs are archived at
+`/mnt/Documents/astra68/atlas-atomic-folder-ops-20261031/`. Board captures
+were removed; Astra, audio, and remote desktop are active, Astra has zero
+restarts, and board has 8.1 GiB free. Trash still lacks durable original-path
+metadata, Restore, and Empty Trash actions; those need one shared lifecycle
+before Atlas or Desktop adds UI.
+
+Atlas ISO image volume checkpoint, 2026-10-31: A staged 366592-byte ISO image
+mounted at `/cd0` read-only and published Desktop icon `ATLAS_TEST`.
+Double-click opened Atlas and listed `readme.md`. Primary+I opened the shared
+Inspector; Volume tab showed ISO9660, exact label, capacity, read-only access,
+image source, and UUID. Atlas Volume > Unmount removed Desktop icon and
+sidebar entry and returned the window to DH0. The staged ISO was removed by
+targeted dev installer. Matching board/Beast SHA-256 raw captures and PNGs are
+archived at `/mnt/Documents/astra68/atlas-iso-inspector-20261031/`; board
+captures were removed. This qualifies image-backed removable behavior, not
+physical USB or optical media.
+
 Atlas volume inspection checkpoint, 2026-10-31: Get Information now
 recognizes mounted volume roots in the native catalog. System DH0, RAM0, and
 exact public mount references use the same Inspector window and Interface Kit

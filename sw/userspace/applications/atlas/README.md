@@ -119,8 +119,8 @@ and has no alias policy.
 Symbolic links appear in the shared File Panel and inspector. Opening one
 follows its target through Filesystem Kit; a missing target reports an open
 error. Selection, copy, rename, and Trash keep the link itself as the object
-being changed. Shared folder operations reserve the link's destination before
-rename, as they already do for files and directories. Haiku's read-only
+being changed. Shared folder operations use Filesystem Kit's atomic
+rename-without-replacement primitive for links, files, and directories. Haiku's read-only
 `src/kits/tracker/ContainerWindow.cpp` follows links for activation, while
 `src/kits/tracker/PoseView.cpp` keeps link identity distinct from target kind.
 Drag targets use the shared File Panel's presented path and Filesystem Kit's
