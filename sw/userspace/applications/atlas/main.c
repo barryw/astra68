@@ -346,6 +346,9 @@ static const AstraContextMenuItem atlas_menu_commands[ATLAS_MENU_COUNT] = {
     [ATLAS_MENU_LIST] = {"atlas.view.list", sizeof("atlas.view.list") - 1u, NULL},
     [ATLAS_MENU_GRID] = {"atlas.view.grid", sizeof("atlas.view.grid") - 1u, NULL},
     [ATLAS_MENU_COLUMNS] = {"atlas.view.columns", sizeof("atlas.view.columns") - 1u, NULL},
+    [ATLAS_MENU_SAVE_SEARCH] = {"atlas.search.save", sizeof("atlas.search.save") - 1u, NULL},
+    [ATLAS_MENU_HIDDEN] = {"atlas.hidden", sizeof("atlas.hidden") - 1u, NULL},
+    [ATLAS_MENU_PREVIEW] = {"atlas.preview", sizeof("atlas.preview") - 1u, NULL},
     [ATLAS_MENU_SORT_NAME] = {"atlas.sort.name", sizeof("atlas.sort.name") - 1u, NULL},
     [ATLAS_MENU_SORT_SIZE] = {"atlas.sort.size", sizeof("atlas.sort.size") - 1u, NULL},
     [ATLAS_MENU_SORT_KIND] = {"atlas.sort.kind", sizeof("atlas.sort.kind") - 1u, NULL},
@@ -3243,6 +3246,57 @@ static AstraResult show_hidden_set(uint32_t value)
     return result;
 }
 
+static AstraResult hidden_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Show Hidden Files", 17u,
+        recent_mode == 0u && worker == 0u && visible_data &&
+        directory.status == ASTRA_VFS_OK, show_hidden != 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult hidden_toggle(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    return show_hidden_set(!show_hidden);
+}
+
+static AstraResult preview_set(uint32_t visible)
+{
+    uint32_t previous = preview_visible;
+    AstraResult result = astra_interface_ui_set_semantic_state(&ui,
+        &controls[PREVIEW_CONTROL_INDEX],
+        visible ? ASTRA_CONTROL_SELECTED : 0u);
+    if (result != ASTRA_OK) return result;
+    preview_visible = visible;
+    result = layout();
+    if (result != ASTRA_OK) {
+        preview_visible = previous;
+        (void)astra_interface_ui_set_semantic_state(&ui,
+            &controls[PREVIEW_CONTROL_INDEX],
+            previous ? ASTRA_CONTROL_SELECTED : 0u);
+    }
+    return result;
+}
+
+static AstraResult preview_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Show Preview", 12u, 1u,
+        preview_visible != 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult preview_toggle(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    return preview_set(!preview_visible);
+}
+
 static AstraResult sidebar_set(uint32_t visible)
 {
     AstraResult result = astra_interface_file_panel_set_places_visible(
@@ -3308,6 +3362,36 @@ static AstraResult view_invoke(void *opaque,
     return view_set(command->key);
 }
 
+static AstraResult save_search_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Save Search", 11u,
+        recent_mode == 0u && worker == 0u && visible_data &&
+        directory.status == ASTRA_VFS_OK &&
+        browser.search_length != 0u, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult save_search(void *opaque,
+    const AstraCommandArguments *args)
+{
+    AstraSavedQuery query = ASTRA_SAVED_QUERY_INIT;
+    char filename[ASTRA_VFS_NAME_MAX];
+    (void)opaque;
+    (void)args;
+    if (browser.search_length == 0u ||
+        !astra_string_copy(query.label, sizeof(query.label),
+            browser.search_query) ||
+        !astra_string_copy(query.text, sizeof(query.text),
+            browser.search_query) ||
+        !astra_string_copy(query.directory, sizeof(query.directory), root))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    uint32_t status = astra_saved_query_save(&filesystem.filesystem,
+        saved_query_directory, &query, filename, sizeof(filename));
+    if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
+    return browser_update_places();
+}
+
 static void menu_state(uint32_t row, int enabled, int checked)
 {
     atlas_menu[row].flags =
@@ -3320,14 +3404,8 @@ static const AstraCommandScope atlas_command_scope;
 
 static AstraResult menu_sync(void)
 {
-    uint32_t active = recent_mode == 0u && worker == 0u && visible_data &&
-        directory.status == ASTRA_VFS_OK;
     uint32_t changed = atlas_menu_ready == 0u;
 
-    menu_state(ATLAS_MENU_SAVE_SEARCH, active &&
-        browser.search_length != 0u, 0);
-    menu_state(ATLAS_MENU_HIDDEN, active, show_hidden != 0u);
-    menu_state(ATLAS_MENU_PREVIEW, 1, preview_visible != 0u);
     for (uint32_t at = 0u; at < ATLAS_MENU_COUNT; ++at) {
         const AstraContextMenuItem *command = &atlas_menu_commands[at];
         if (command->command == NULL) continue;
@@ -3419,6 +3497,12 @@ static const AstraCommand atlas_command_table[] = {
         view_query, view_invoke, (void *)&view_commands[1]},
     {"atlas.view.columns", sizeof("atlas.view.columns") - 1u, 0u, 0u,
         view_query, view_invoke, (void *)&view_commands[2]},
+    {"atlas.search.save", sizeof("atlas.search.save") - 1u, 0u, 0u,
+        save_search_query, save_search, &atlas_command_context},
+    {"atlas.hidden", sizeof("atlas.hidden") - 1u, 0u, 0u,
+        hidden_query, hidden_toggle, &atlas_command_context},
+    {"atlas.preview", sizeof("atlas.preview") - 1u, 0u, 0u,
+        preview_query, preview_toggle, &atlas_command_context},
     {"atlas.package", 13u, 0u, 0u, package_query, create_installer,
         &atlas_command_context},
     {"atlas.saved.open", sizeof("atlas.saved.open") - 1u, 0u, 0u,
@@ -3521,39 +3605,6 @@ static AstraResult menu_invoke(AstraHandle gui,
         return astra_interface_command_invoke(scope, command->command,
             command->command_length, command->arguments);
     switch (row) {
-    case ATLAS_MENU_SAVE_SEARCH: {
-        AstraSavedQuery query = ASTRA_SAVED_QUERY_INIT;
-        char filename[ASTRA_VFS_NAME_MAX];
-        if (browser.search_length == 0u ||
-            !astra_string_copy(query.label, sizeof(query.label),
-                browser.search_query) ||
-            !astra_string_copy(query.text, sizeof(query.text),
-                browser.search_query) ||
-            !astra_string_copy(query.directory, sizeof(query.directory), root))
-            return ASTRA_ERROR_INVALID_ARGUMENT;
-        uint32_t status = astra_saved_query_save(&filesystem.filesystem,
-            saved_query_directory, &query, filename, sizeof(filename));
-        if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
-        return browser_update_places();
-    }
-    case ATLAS_MENU_HIDDEN:
-        return show_hidden_set(!show_hidden);
-    case ATLAS_MENU_PREVIEW: {
-        uint32_t next = !preview_visible;
-        AstraResult result = astra_interface_ui_set_semantic_state(&ui,
-            &controls[PREVIEW_CONTROL_INDEX],
-            next ? ASTRA_CONTROL_SELECTED : 0u);
-        if (result != ASTRA_OK) return result;
-        preview_visible = next;
-        result = layout();
-        if (result != ASTRA_OK) {
-            preview_visible = !next;
-            (void)astra_interface_ui_set_semantic_state(&ui,
-                &controls[PREVIEW_CONTROL_INDEX],
-                preview_visible ? ASTRA_CONTROL_SELECTED : 0u);
-        }
-        return result;
-    }
     case ATLAS_MENU_ABOUT: {
         AstraAlertInfo alert = ASTRA_ALERT_INFO_INIT;
 
@@ -3864,8 +3915,8 @@ static AstraResult run(AstraHandle gui)
             }
             if (action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
                 action.control_id == PREVIEW_CONTROL_ID) {
-                preview_visible = action.value != 0;
-                if (layout() != ASTRA_OK) return ASTRA_ERROR_IO;
+                if (preview_set(action.value != 0) != ASTRA_OK)
+                    return ASTRA_ERROR_IO;
                 repaint = 1u;
                 result = astra_window_event_try(&window, &event);
                 continue;

@@ -227,6 +227,8 @@ Cut, Paste, Open, Refresh, and Alt+Left/Right use the same actions as menus and
 toolbar. Primary+1/2/3 choose List/Grid/Columns through the same responder
 commands as the View menu. Menu enable and checked state query those commands;
 Atlas has no second view-switch dispatcher.
+Save Search, Hidden Files, and Preview also publish through that responder;
+toolbar and menu actions share each transition and menu state query.
 The toolbar uses Interface Kit's Toolbar Actions, shared New Folder and Open
 glyphs, command state, overflow, and peer fitting. Toolbar Actions measures
 the same Popup, Checkbox, Breadcrumb, Segmented, and Search Field controls

@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas remaining menu-state consolidation, 2026-10-31: Save Search, Show Hidden
+Files, and Show Preview now join the same Interface Kit command responder table
+as Atlas's other File/View actions. Menu state comes exclusively from command
+queries; menu activation and toolbar Preview use one state transition each.
+No new control, file operation, or rendering path was added. Beast Atlas host
+test and MC68040 build passed. Correct-path focused DE25 install reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=1 host=0 removed=0`. RFB opened DH0,
+toggled Preview off and Hidden Files on through View, observed both menu
+checkmarks and toolbar states, typed a Search filter and observed Save Search
+enabled in File, then restored defaults. Raw final-state SHA-256 is
+`c5bd360605750f4645937385531d5baf07c180971684e62d0b48c21f3b96161e`;
+File menu with Save Search enabled is
+`ebd21ac14ed8dbba93b893b51523ff1e4e77af678de88b20da1e929f975af48a`.
+Captures and PNGs are archived on Beast under
+`/mnt/Documents/astra68/atlas-view-shortcuts-20261031/`. Board trial files
+were removed. Astra, audio, and remote desktop remain active with zero
+restarts and 8.0 GiB free. Physical USB remains unattached.
+
 Atlas view-command and deployment checkpoint, 2026-10-31: View as List,
 Grid, and Columns now use the same Interface Kit responder commands for menu
 state, menu selection, and Primary+1/2/3 shortcuts. Atlas supplies view
