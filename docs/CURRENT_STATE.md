@@ -2,6 +2,35 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas directory-link drop and startup binding checkpoint, 2026-10-30:
+Atlas now asks the shared File Panel for a presented path and Filesystem Kit
+for the followed type of a symlink drop target. Links to directories accept
+drops; regular files, dangling links, and links to files do not. No new UI
+control, path parser, or filesystem operation was added. Atlas now pins the
+exact volume before recording startup history when launched with a mounted
+directory argument. RAM0 uses its existing read and write brokers, and volume
+display state is computed by one
+helper shared with navigation and exact-volume launch. Before the fix, a
+successful drag move from a path-launched RAM0 window left a stale directory
+view and showed `bad handle` when Refresh compared an empty initial reference
+with the mounted volume. Haiku read-only references:
+`src/kits/tracker/Model.cpp` (`IsDropTarget`) and `PoseView.cpp`
+(`CanHandleDragSelection`) for followed target checks; `Navigator.cpp` for
+history identity. Beast Atlas host test, MC68040 analyzer, and bundle build
+passed. DE25 focused install passed; final Atlas binary SHA-256 is
+`8918279bf6854526ae96eea95222a35f59c790bc0cfd2f4fc61d2c82e4f27cb4`.
+On the exact final binary, a file dragged onto a RAM0 directory link
+disappeared from its source and appeared inside the target; opening the link
+showed that file. The prior candidate also passed Back and an ordinary folder
+drop, then opened the target to show both moved files. The temporary `fssem`
+command was removed
+after testing. Evidence is archived on Beast under
+`/mnt/Documents/astra68/atlas-symlink-drop-20261030/`; board trial captures
+were removed. Astra, audio, and remote desktop services remained active with
+zero restarts and 8.1 GiB free. RAM0 fixture cleared on the final service
+restart. This focused gate does not certify all Atlas workflows or design
+states.
+
 Atlas Recent Items ownership checkpoint, 2026-10-30: Sidebar Places refresh
 incorrectly freed the live Recent Items snapshot, Table rows, and Table cells.
 The shared Table borrows those buffers, so Refresh in Recent Items left dangling

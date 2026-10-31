@@ -470,6 +470,25 @@ static void volume_close(void)
     volume_release();
 }
 
+static void volume_display(const AstraVolumeRecord *record)
+{
+    (void)astra_string_copy(volume_path, sizeof(volume_path), record->name);
+    const char *label = record->label[0] != '\0' ?
+        record->label : record->name + 1u;
+    uint32_t kept = astra_string_utf8_prefix(label,
+        (uint32_t)strlen(label), ASTRA_WINDOW_TITLE_MAX);
+    memcpy(volume_title, label, kept);
+    volume_title[kept] = '\0';
+    if (record->label[0] == '\0')
+        for (uint32_t at = 0u; at < kept; ++at)
+            volume_title[at] = astra_ascii_upper(volume_title[at]);
+    volume_writable = (record->flags &
+        (ASTRA_VOLUME_READ_ONLY | ASTRA_VOLUME_SYSTEM)) == 0u &&
+        (record->origin == ASTRA_VOLUME_ORIGIN_RAM ?
+            volume_ram_write_broker : volume_write_broker) !=
+                ASTRA_INVALID_HANDLE;
+}
+
 static AstraResult volume_open(const AstraStartupInfo *startup)
 {
     const AstraStartupCapability *metadata = astra_startup_capability(startup, ASTRA_CAPABILITY_VOLUMES);
@@ -481,15 +500,8 @@ static AstraResult volume_open(const AstraStartupInfo *startup)
     if (result == ASTRA_OK) result = volume_observe(&record);
     if (result == ASTRA_OK && record.name[0] != '/') result = ASTRA_ERROR_IO;
     if (result == ASTRA_OK) {
-        memcpy(volume_path, record.name, sizeof(volume_path));
+        volume_display(&record);
         root = volume_path;
-        const char *label = record.label[0] != '\0' ? record.label : record.name + 1u;
-        uint32_t length = (uint32_t)strlen(label);
-        uint32_t kept = astra_string_utf8_prefix(label, length, ASTRA_WINDOW_TITLE_MAX);
-        memcpy(volume_title, label, kept);
-        volume_title[kept] = '\0';
-        if (record.label[0] == '\0')
-            for (uint32_t at = 0u; at < kept; ++at) volume_title[at] = astra_ascii_upper(volume_title[at]);
         if ((record.flags & ASTRA_VOLUME_SYSTEM) != 0u) {
             /* System browsing retains its explicit startup authority. Public
              * root brokers cannot expand an application's system grants. */
@@ -498,10 +510,6 @@ static AstraResult volume_open(const AstraStartupInfo *startup)
         } else {
             AstraHandle read_broker = record.origin == ASTRA_VOLUME_ORIGIN_RAM ?
                 volume_ram_read_broker : volume_read_broker;
-            AstraHandle write_broker = record.origin == ASTRA_VOLUME_ORIGIN_RAM ?
-                volume_ram_write_broker : volume_write_broker;
-            volume_writable = write_broker != ASTRA_INVALID_HANDLE &&
-                (record.flags & ASTRA_VOLUME_READ_ONLY) == 0u;
             result = astra_volume_root(read_broker, &viewed_volume,
                 ASTRA_RIGHT_READ, &volume_grant);
         }
@@ -1577,6 +1585,32 @@ static const AstraVolumeRecord *volume_for_path(
     return match;
 }
 
+static AstraResult volume_bind_initial_path(const char *path)
+{
+    AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
+    AstraResult result = astra_volume_snapshot_open(volume_metadata, &catalog);
+    if (result != ASTRA_OK) return result;
+    const AstraVolumeRecord *mounted = volume_for_path(&catalog, path);
+    if (mounted == NULL) {
+        astra_volume_snapshot_close(&catalog);
+        return ASTRA_OK;
+    }
+    AstraVolumeRecord record = *mounted;
+    AstraVolumeReference reference = {catalog.epoch,
+        mounted->id, mounted->generation};
+    astra_volume_snapshot_close(&catalog);
+    AstraHandle broker = record.origin == ASTRA_VOLUME_ORIGIN_RAM ?
+        volume_ram_read_broker : volume_read_broker;
+    if (broker == ASTRA_INVALID_HANDLE) return ASTRA_ERROR_PERMISSION;
+    result = astra_volume_root(broker, &reference, ASTRA_RIGHT_READ,
+        &volume_grant);
+    if (result == ASTRA_OK) {
+        viewed_volume = reference;
+        volume_display(&record);
+    }
+    return result;
+}
+
 static AstraResult recent_leave(void)
 {
     AstraResult result;
@@ -1769,21 +1803,7 @@ static AstraResult navigate_to(const char *path, uint32_t history_target)
         volume_release();
     viewed_volume = candidate;
     if (candidate.id != 0u) {
-        (void)astra_string_copy(volume_path, sizeof(volume_path),
-            record.name);
-        const char *label = record.label[0] != '\0' ?
-            record.label : record.name + 1u;
-        uint32_t kept = astra_string_utf8_prefix(label,
-            (uint32_t)strlen(label), ASTRA_WINDOW_TITLE_MAX);
-        memcpy(volume_title, label, kept);
-        volume_title[kept] = '\0';
-        if (record.label[0] == '\0')
-            for (uint32_t at = 0u; at < kept; ++at)
-                volume_title[at] = astra_ascii_upper(volume_title[at]);
-        volume_writable = (record.flags & ASTRA_VOLUME_READ_ONLY) == 0u &&
-            (record.origin == ASTRA_VOLUME_ORIGIN_RAM ?
-                volume_ram_write_broker : volume_write_broker) !=
-                    ASTRA_INVALID_HANDLE;
+        volume_display(&record);
     } else {
         volume_path[0] = '\0';
         volume_title[0] = '\0';
@@ -2737,10 +2757,22 @@ static AstraResult drag_destination_at(int32_t x, int32_t y,
     AstraResult result = astra_interface_ui_pointer_hit(&ui, x, y,
         &control_id, &row);
     if (result != ASTRA_OK) return result;
-    result = astra_interface_file_panel_presented_directory_at(&browser,
+    const AstraDirectoryEntry *entry = NULL;
+    result = astra_interface_file_panel_presented_path_at(&browser,
         BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST), control_id,
-        row, path, capacity);
+        row, path, capacity, &entry);
     if (result != ASTRA_OK) return result;
+    if (entry != NULL && entry->kind != ASTRA_VFS_KIND_DIRECTORY) {
+        if (entry->kind != ASTRA_VFS_KIND_SYMLINK)
+            return ASTRA_ERROR_NOT_PRESENT;
+        AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+        uint32_t status = astra_filesystem_stat(active_filesystem(),
+            path, &info);
+        if (status != ASTRA_VFS_OK)
+            return astra_result_from_service(status);
+        if (info.kind != ASTRA_VFS_KIND_DIRECTORY)
+            return ASTRA_ERROR_NOT_PRESENT;
+    }
     AstraVfsClipboardEntry target = {0};
     result = copy_reference_for(path, &target);
     if (result != ASTRA_OK) return result;
@@ -4086,6 +4118,8 @@ int astra_main(const AstraStartupInfo *startup)
                 if (astra_volume_watch_open(volume_metadata, &volume_watch) == ASTRA_OK) {
                     volume_refresh = 1u;
                     volume_retry = 0u;
+                    if (volume_bind_initial_path(root) != ASTRA_OK)
+                        status = ASTRA_VFS_ERR_LOST;
                 }
             }
         }

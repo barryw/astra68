@@ -18,7 +18,12 @@ references. Atlas switches among HOME, fixed volumes, and public mounts in one
 window, pins its active mount's read grant, and rejects history entries if
 media is replaced at the same path. `navigate_to` validates every ordinary
 history index against both active count and the 32-slot bound before reading
-it; `NAVIGATION_STAY` and `NAVIGATION_PUSH` remain explicit sentinels. Grid,
+it; `NAVIGATION_STAY` and `NAVIGATION_PUSH` remain explicit sentinels.
+Atlas also binds a mounted volume when launched with a directory path argument,
+before recording its first history entry. RAM0 uses the existing RAM broker;
+refresh and move operations retain
+the same exact volume identity. Display name and writability come from one
+record-binding helper shared with navigation and volume launch. Grid,
 List, and Columns use the same directory snapshot; columns load child
 directories as they are
 selected. Search filters the current directory. Sort by Name, Size, Kind, or
@@ -44,6 +49,12 @@ being changed. Shared folder operations reserve the link's destination before
 rename, as they already do for files and directories. Haiku's read-only
 `src/kits/tracker/ContainerWindow.cpp` follows links for activation, while
 `src/kits/tracker/PoseView.cpp` keeps link identity distinct from target kind.
+Drag targets use the shared File Panel's presented path and Filesystem Kit's
+followed `stat`: a link to a directory accepts drops, while a link to a file
+or a missing target does not. Transfer still validates the destination before
+writing. Haiku's read-only `src/kits/tracker/Model.cpp` (`IsDropTarget`) and
+`PoseView.cpp` (`CanHandleDragSelection`) informed the target-kind check;
+Atlas uses no separate row geometry or link resolver.
 
 Haiku read-only references: `src/kits/tracker/Navigator.cpp` for path history,
 `src/kits/tracker/ContainerWindow.cpp` for window and Copy/Move commands, and
