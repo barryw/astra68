@@ -2,6 +2,33 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared transfer depth gate, 2026-10-31: Filesystem Kit's recursive
+tree copy and cleanup could consume more than Astra's 4 KiB application stack
+for ordinary nested folders. The native tree operation now walks bounded,
+heap-backed frames; Atlas still calls the same Filesystem Kit API and owns no
+copy traversal. The 32-level path limit and staging/rename publication remain.
+Haiku read-only reference: `src/kits/tracker/FSUtils.cpp` (`CopyFolder` and
+`FSDeleteFolder`) keeps
+directory traversal and cleanup in its file-operation layer. Astra adapts that
+ownership to Filesystem Kit and uses an explicit frame stack for its smaller
+MC68040 application stacks. Beast host tests cover 30 nested directories,
+entries across directory-read batches, allocator/write failures and staged
+cleanup, cross-volume move, and the depth limit. ASan/UBSan, Filesystem Kit
+`library-contract`, stack contract (largest affected frame: 732 bytes), and
+NDK `dist-check` passed. Focused DE25 install reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=3`. On DE25, native `cp -R` copied a
+30-level RAM0 tree and Atlas copied that tree into a new RAM0 folder using
+its GUI; `cat` read `NESTED` at both copied leaf paths. RFB and guest logs
+verified both copies. Selected frames were SHA-verified and archived on Beast
+under `/mnt/Documents/astra68/atlas-breadcrumb-20261031/`; final Atlas and
+Terminal frames have SHA-256
+`f8796da552ca931e46b103459fb61118a2dd38c5399bee7f48d27d4ffad61fc8`
+and `e0ec536b245f00cc3c23b9ddeed86f5764aa9a6dc012c8ed16969debe87d3e75`.
+A guest restart cleared RAM0; Atlas showed zero entries afterward. Trial
+captures were removed from board. Astra, audio, and remote desktop services
+are active with zero automatic restarts and 8.1 GiB free. Physical USB copy
+remains untested because no USB media is attached.
+
 Atlas cross-volume GUI gate, 2026-10-31: On DE25, Atlas copied a test folder
 from RAM0 into HOME through the native clipboard and Filesystem Kit tree-copy
 path. HOME changed from three to four folders, and the copied folder appeared

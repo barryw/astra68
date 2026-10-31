@@ -47,6 +47,10 @@ shared Filesystem Kit copies between source and destination namespaces without
 overwriting an existing destination. App bundles launch as apps, files go to
 OpenWith, and mounted volumes opened from Desktop stay bound to their volume
 reference so removal can invalidate the window safely.
+Filesystem Kit performs bounded, heap-backed tree traversal and staged cleanup,
+so deep copies use the same operation from Atlas, native `cp`, and other
+clients without consuming Atlas's application stack. Atlas adds no private
+directory-copy walker.
 The supervisor resolves static assign aliases for app bundles: opening one
 through DH0's physical `apps` directory has the same identity and provider-
 rooted grants as opening it through Applications. Trusted bundles retain their

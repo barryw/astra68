@@ -14,10 +14,12 @@ typedef struct Entry {
     uint16_t kind;
 } Entry;
 
-static Entry entries[16];
+static Entry entries[128];
 static uint32_t entry_count;
 static int fail_write;
 static int fail_unlink;
+static uint32_t allocations;
+static uint32_t fail_alloc_at;
 static AstraFilesystem *expected_source;
 static AstraFilesystem *expected_destination;
 
@@ -37,7 +39,7 @@ static Entry *find(const char *path)
 
 static Entry *add(const char *path, uint16_t kind)
 {
-    assert(entry_count < 16u && find(path) == NULL);
+    assert(entry_count < 128u && find(path) == NULL);
     Entry *entry = &entries[entry_count++];
     memset(entry, 0, sizeof(*entry));
     strcpy(entry->path, path);
@@ -45,7 +47,11 @@ static Entry *add(const char *path, uint16_t kind)
     return entry;
 }
 
-void *astra_runtime_allocate(size_t size) { return malloc(size); }
+void *astra_runtime_allocate(size_t size)
+{
+    if (++allocations == fail_alloc_at) return NULL;
+    return malloc(size);
+}
 void astra_runtime_deallocate(void *pointer) { free(pointer); }
 uint64_t astra_clock_monotonic(void) { static uint64_t tick = 1u; return tick++; }
 
@@ -233,16 +239,16 @@ uint32_t astra_filesystem_directory_read(AstraDirectory *directory,
     const char *parent = directory->_private_path;
     size_t length = strlen(parent);
     *count = 0u;
-    if (directory->_private_cursor == 0u) {
-        strcpy(batch[0].name, ".");
-        strcpy(batch[1].name, "..");
-        directory->_private_cursor = 1u;
-        *count = 2u;
+    if (directory->_private_cursor < 2u) {
+        strcpy(batch[0].name,
+            directory->_private_cursor == 0u ? "." : "..");
+        ++directory->_private_cursor;
+        *count = 1u;
         return ASTRA_VFS_OK;
     }
-    for (uint32_t at = (uint32_t)directory->_private_cursor - 1u;
+    for (uint32_t at = (uint32_t)directory->_private_cursor - 2u;
          at < entry_count && *count < capacity; ++at) {
-        directory->_private_cursor = at + 2u;
+        directory->_private_cursor = at + 3u;
         const char *path = entries[at].path;
         if (strncmp(path, parent, length) != 0 || path[length] != '/')
             continue;
@@ -390,5 +396,65 @@ int main(void)
         find("/dh0/Move.app/Link") == NULL &&
         find("/usb0/Another.app/Run") != NULL &&
         find("/usb0/Another.app/Link") != NULL);
+
+    entry_count = 0u;
+    expected_source = &filesystem;
+    expected_destination = &removable;
+    char deep[ASTRA_VFS_PATH_MAX];
+    strcpy(deep, "/dh0/Deep");
+    add(deep, ASTRA_VFS_KIND_DIRECTORY);
+    for (uint32_t at = 0u; at < 29u; ++at) {
+        strcat(deep, "/d");
+        add(deep, ASTRA_VFS_KIND_DIRECTORY);
+    }
+    strcat(deep, "/Data");
+    Entry *deep_file = add(deep, ASTRA_VFS_KIND_FILE);
+    memcpy(deep_file->bytes, "NESTED", 6u);
+    deep_file->length = 6u;
+    for (uint32_t at = 0u; at < 10u; ++at) {
+        char sibling[ASTRA_VFS_PATH_MAX];
+        snprintf(sibling, sizeof(sibling), "/dh0/Deep/Side%02u", at);
+        add(sibling, ASTRA_VFS_KIND_FILE);
+    }
+    fail_alloc_at = allocations + 5u;
+    assert(astra_filesystem_copy_tree_between(&filesystem, "/dh0/Deep",
+        &removable, "/usb0/Deep") == ASTRA_VFS_ERR_LIMIT);
+    fail_alloc_at = 0u;
+    assert(find("/usb0/Deep") == NULL);
+    for (uint32_t at = 0u; at < entry_count; ++at)
+        assert(strstr(entries[at].path, ".astra-copying") == NULL);
+    fail_write = 1;
+    assert(astra_filesystem_copy_tree_between(&filesystem, "/dh0/Deep",
+        &removable, "/usb0/Deep") == ASTRA_VFS_ERR_NO_SPACE);
+    assert(find(deep) != NULL && find("/usb0/Deep") == NULL);
+    for (uint32_t at = 0u; at < entry_count; ++at)
+        assert(strstr(entries[at].path, ".astra-copying") == NULL);
+    assert(astra_filesystem_move_tree_between(&filesystem, "/dh0/Deep",
+        &removable, "/usb0/Deep", &published) == ASTRA_VFS_OK);
+    assert(published == 1u && find("/dh0/Deep") == NULL &&
+        find(deep) == NULL && find("/usb0/Deep") != NULL);
+    char moved_deep[ASTRA_VFS_PATH_MAX];
+    strcpy(moved_deep, "/usb0");
+    strcat(moved_deep, deep + strlen("/dh0"));
+    deep_file = find(moved_deep);
+    assert(deep_file != NULL && deep_file->length == 6u &&
+        memcmp(deep_file->bytes, "NESTED", 6u) == 0);
+    assert(find("/usb0/Deep/Side00") != NULL &&
+        find("/usb0/Deep/Side09") != NULL);
+
+    entry_count = 0u;
+    strcpy(deep, "/dh0/TooDeep");
+    add(deep, ASTRA_VFS_KIND_DIRECTORY);
+    for (uint32_t at = 0u; at < 31u; ++at) {
+        strcat(deep, "/d");
+        add(deep, ASTRA_VFS_KIND_DIRECTORY);
+    }
+    strcat(deep, "/Data");
+    add(deep, ASTRA_VFS_KIND_FILE);
+    assert(astra_filesystem_copy_tree_between(&filesystem, "/dh0/TooDeep",
+        &removable, "/usb0/TooDeep") == ASTRA_VFS_ERR_LIMIT);
+    assert(find("/usb0/TooDeep") == NULL);
+    for (uint32_t at = 0u; at < entry_count; ++at)
+        assert(strstr(entries[at].path, ".astra-copying") == NULL);
     return 0;
 }

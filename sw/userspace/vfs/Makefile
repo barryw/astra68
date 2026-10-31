@@ -287,17 +287,18 @@ $(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) \
 		-Wl,--no-as-needed -Wl,-l:system.library.4 \
 		-Wl,-l:runtime.library.1 $(ASTRA_SHARED_LINK_END)
 
-DOCUMENT_STACK_OBJECTS := build/stack/document_store.o \
-	build/stack/saved_query.o build/stack/recent_items.o
+LIBRARY_STACK_OBJECTS := build/stack/document_store.o \
+	build/stack/saved_query.o build/stack/recent_items.o \
+	build/stack/filesystem_copy.o
 
 build/stack/%.o: src/%.c $(HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(PORT_CPPFLAGS) $(COMMON_FLAGS) $(LIBRARY_FLAGS) \
 		-fno-lto -fstack-usage -c $< -o $@
 
-stack-contract: $(DOCUMENT_STACK_OBJECTS)
+stack-contract: $(LIBRARY_STACK_OBJECTS)
 	@python3 ../../../tools/check_stack_usage.py --max 1024 \
-		$(DOCUMENT_STACK_OBJECTS:.o=.su)
+		$(LIBRARY_STACK_OBJECTS:.o=.su)
 
 library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST) stack-contract
 	@python3 ../../../tools/check_shared_library_layout.py \

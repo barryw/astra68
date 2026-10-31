@@ -69,129 +69,223 @@ done:
     return status;
 }
 
+typedef struct CopyFrame {
+    AstraDirectory directory;
+    AstraDirectoryEntry *entries;
+    char *source;
+    char *destination;
+    uint32_t batch_count;
+    uint32_t batch_at;
+    uint8_t opened;
+    char paths[];
+} CopyFrame;
+
+static CopyFrame *copy_frame_new(const char *source, const char *destination)
+{
+    size_t source_bytes = strlen(source) + 1u;
+    size_t destination_bytes = strlen(destination) + 1u;
+    if (source_bytes > ASTRA_VFS_PATH_MAX ||
+        destination_bytes > ASTRA_VFS_PATH_MAX)
+        return NULL;
+    CopyFrame *frame = astra_runtime_allocate(
+        sizeof(*frame) + source_bytes + destination_bytes);
+    if (frame == NULL) return NULL;
+    frame->directory = (AstraDirectory)ASTRA_DIRECTORY_INIT;
+    frame->source = frame->paths;
+    frame->destination = frame->paths + source_bytes;
+    frame->entries = NULL;
+    frame->batch_count = 0u;
+    frame->batch_at = 0u;
+    frame->opened = 0u;
+    memcpy(frame->source, source, source_bytes);
+    memcpy(frame->destination, destination, destination_bytes);
+    return frame;
+}
+
+static void copy_frame_free(CopyFrame *frame)
+{
+    if (frame->opened)
+        astra_filesystem_directory_close(&frame->directory);
+    astra_runtime_deallocate(frame->entries);
+    astra_runtime_deallocate(frame);
+}
+
 static uint32_t copy_one(AstraFilesystem *source_filesystem,
                          const char *source,
                          AstraFilesystem *destination_filesystem,
-                         const char *destination, uint32_t depth, int *created)
+                         const char *destination, int *created)
 {
+    CopyFrame *frames[COPY_DEPTH_MAX] = {0};
+    char *paths = astra_runtime_allocate(2u * ASTRA_VFS_PATH_MAX);
+    uint32_t active = 0u;
+    uint32_t status = ASTRA_VFS_OK;
     AstraFileInfo info = {.size = sizeof(info)};
-    AstraDirectory directory = ASTRA_DIRECTORY_INIT;
-    char *paths;
-    uint32_t status;
-
-    if (depth >= COPY_DEPTH_MAX) return ASTRA_VFS_ERR_LIMIT;
-    status = astra_filesystem_lstat(source_filesystem, source, &info);
-    if (status != ASTRA_VFS_OK) return status;
-    if (info.kind == ASTRA_VFS_KIND_FILE)
-        return copy_file(source_filesystem, source, destination_filesystem,
-            destination, info.mode, created);
-    if (info.kind == ASTRA_VFS_KIND_SYMLINK) {
-        if (info.byte_size >= ASTRA_VFS_PATH_MAX)
-            return ASTRA_VFS_ERR_LIMIT;
-        char *target = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
-        if (target == NULL) return ASTRA_VFS_ERR_LIMIT;
-        uint32_t length = 0u;
-        status = astra_filesystem_readlink(source_filesystem, source,
-            target, ASTRA_VFS_PATH_MAX - 1u, &length);
-        if (status == ASTRA_VFS_OK) {
-            if (length >= ASTRA_VFS_PATH_MAX)
-                status = ASTRA_VFS_ERR_LIMIT;
-            else {
-                target[length] = '\0';
-                status = astra_filesystem_symlink(target,
-                    destination_filesystem, destination);
-                if (status == ASTRA_VFS_OK && created != NULL)
+    if (paths == NULL) return ASTRA_VFS_ERR_LIMIT;
+    frames[active] = copy_frame_new(source, destination);
+    if (frames[active] == NULL) {
+        astra_runtime_deallocate(paths);
+        return ASTRA_VFS_ERR_LIMIT;
+    }
+    ++active;
+    while (active != 0u && status == ASTRA_VFS_OK) {
+        CopyFrame *frame = frames[active - 1u];
+        if (!frame->opened) {
+            status = astra_filesystem_lstat(source_filesystem,
+                frame->source, &info);
+            if (status != ASTRA_VFS_OK) break;
+            if (info.kind == ASTRA_VFS_KIND_FILE) {
+                status = copy_file(source_filesystem, frame->source,
+                    destination_filesystem, frame->destination, info.mode,
+                    active == 1u ? created : NULL);
+            } else if (info.kind == ASTRA_VFS_KIND_SYMLINK) {
+                if (info.byte_size >= ASTRA_VFS_PATH_MAX) {
+                    status = ASTRA_VFS_ERR_LIMIT;
+                } else {
+                    uint32_t length = 0u;
+                    status = astra_filesystem_readlink(source_filesystem,
+                        frame->source, paths, ASTRA_VFS_PATH_MAX - 1u, &length);
+                    if (status == ASTRA_VFS_OK && length >= ASTRA_VFS_PATH_MAX)
+                        status = ASTRA_VFS_ERR_LIMIT;
+                    if (status == ASTRA_VFS_OK) {
+                        paths[length] = '\0';
+                        status = astra_filesystem_symlink(paths,
+                            destination_filesystem, frame->destination);
+                        if (status == ASTRA_VFS_OK && active == 1u &&
+                            created != NULL) *created = 1;
+                    }
+                }
+            } else if (info.kind == ASTRA_VFS_KIND_DIRECTORY) {
+                frame->entries = astra_runtime_allocate(
+                    8u * sizeof(*frame->entries));
+                if (frame->entries == NULL) {
+                    status = ASTRA_VFS_ERR_LIMIT;
+                    break;
+                }
+                status = astra_filesystem_directory_open(source_filesystem,
+                    frame->source, &frame->directory);
+                if (status != ASTRA_VFS_OK) break;
+                frame->opened = 1u;
+                status = astra_filesystem_mkdir_mode(destination_filesystem,
+                    frame->destination, (uint16_t)(info.mode & 0777u));
+                if (status == ASTRA_VFS_OK && active == 1u && created != NULL)
                     *created = 1;
+                continue;
+            } else {
+                status = ASTRA_VFS_ERR_UNSUPPORTED;
+            }
+            if (status != ASTRA_VFS_OK) break;
+            copy_frame_free(frame);
+            frames[--active] = NULL;
+            continue;
+        }
+        if (frame->batch_at == frame->batch_count) {
+            frame->batch_at = 0u;
+            frame->batch_count = 0u;
+            status = astra_filesystem_directory_read(&frame->directory,
+                frame->entries, 8u, &frame->batch_count);
+            if (status != ASTRA_VFS_OK) break;
+            if (frame->batch_count == 0u) {
+                copy_frame_free(frame);
+                frames[--active] = NULL;
+                continue;
             }
         }
-        astra_runtime_deallocate(target);
-        return status;
-    }
-    if (info.kind != ASTRA_VFS_KIND_DIRECTORY)
-        return ASTRA_VFS_ERR_UNSUPPORTED;
-
-    status = astra_filesystem_directory_open(source_filesystem, source, &directory);
-    if (status != ASTRA_VFS_OK) return status;
-    status = astra_filesystem_mkdir_mode(destination_filesystem, destination,
-                                         (uint16_t)(info.mode & 0777u));
-    if (status != ASTRA_VFS_OK) goto done;
-    if (created != NULL) *created = 1;
-    paths = astra_runtime_allocate(2u * ASTRA_VFS_PATH_MAX);
-    if (paths == NULL) {
-        status = ASTRA_VFS_ERR_LIMIT;
-        goto done;
-    }
-    for (;;) {
-        AstraDirectoryEntry entries[8];
-        uint32_t count = 0u;
-        status = astra_filesystem_directory_read(&directory, entries, 8u,
-                                                  &count);
-        if (status != ASTRA_VFS_OK || count == 0u) break;
-        for (uint32_t at = 0u; at < count; ++at) {
-            if (strcmp(entries[at].name, ".") == 0 ||
-                strcmp(entries[at].name, "..") == 0) continue;
-            paths[0] = '\0';
-            paths[ASTRA_VFS_PATH_MAX] = '\0';
-            status = copy_path(paths, source, entries[at].name);
-            if (status == ASTRA_VFS_OK)
-                status = copy_path(paths + ASTRA_VFS_PATH_MAX,
-                                   destination, entries[at].name);
-            if (status == ASTRA_VFS_OK)
-                status = copy_one(source_filesystem, paths,
-                                  destination_filesystem,
-                                  paths + ASTRA_VFS_PATH_MAX, depth + 1u, NULL);
-            if (status != ASTRA_VFS_OK) break;
+        const AstraDirectoryEntry *entry =
+            &frame->entries[frame->batch_at++];
+        if (strcmp(entry->name, ".") == 0 ||
+            strcmp(entry->name, "..") == 0) continue;
+        if (active == COPY_DEPTH_MAX) {
+            status = ASTRA_VFS_ERR_LIMIT;
+            break;
         }
+        paths[0] = '\0';
+        paths[ASTRA_VFS_PATH_MAX] = '\0';
+        status = copy_path(paths, frame->source, entry->name);
+        if (status == ASTRA_VFS_OK)
+            status = copy_path(paths + ASTRA_VFS_PATH_MAX,
+                frame->destination, entry->name);
         if (status != ASTRA_VFS_OK) break;
+        frames[active] = copy_frame_new(paths,
+            paths + ASTRA_VFS_PATH_MAX);
+        if (frames[active] == NULL) {
+            status = ASTRA_VFS_ERR_LIMIT;
+            break;
+        }
+        ++active;
+    }
+    while (active != 0u) {
+        copy_frame_free(frames[--active]);
     }
     astra_runtime_deallocate(paths);
-done:
-    astra_filesystem_directory_close(&directory);
     return status;
 }
 
-static uint32_t remove_partial(AstraFilesystem *filesystem, const char *path,
-                               uint32_t depth)
+static uint32_t remove_partial(AstraFilesystem *filesystem, const char *path)
 {
-    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
-    uint32_t status = astra_filesystem_lstat(filesystem, path, &info);
-    if (status != ASTRA_VFS_OK || info.kind != ASTRA_VFS_KIND_DIRECTORY)
-        return status == ASTRA_VFS_OK ?
-            astra_filesystem_unlink(filesystem, path, 0u) : status;
-    if (depth >= COPY_DEPTH_MAX) return ASTRA_VFS_ERR_LIMIT;
+    char *paths[COPY_DEPTH_MAX] = {0};
     char *child = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    uint32_t status = ASTRA_VFS_OK;
+    uint32_t active = 0u;
     if (child == NULL) return ASTRA_VFS_ERR_LIMIT;
-    for (;;) {
+    size_t length = strlen(path) + 1u;
+    if (length > ASTRA_VFS_PATH_MAX ||
+        (paths[0] = astra_runtime_allocate(length)) == NULL) {
+        astra_runtime_deallocate(child);
+        return ASTRA_VFS_ERR_LIMIT;
+    }
+    memcpy(paths[active++], path, length);
+    while (active != 0u && status == ASTRA_VFS_OK) {
+        const char *current = paths[active - 1u];
+        status = astra_filesystem_lstat(filesystem, current, &info);
+        if (status != ASTRA_VFS_OK) break;
+        if (info.kind != ASTRA_VFS_KIND_DIRECTORY) {
+            status = astra_filesystem_unlink(filesystem, current, 0u);
+            if (status != ASTRA_VFS_OK) break;
+            astra_runtime_deallocate(paths[--active]);
+            continue;
+        }
         AstraDirectory directory = ASTRA_DIRECTORY_INIT;
-        AstraDirectoryEntry entries[8];
-        uint32_t count = 0u, child_at = 0u;
-        int found = 0;
-        status = astra_filesystem_directory_open(filesystem, path, &directory);
+        AstraDirectoryEntry entry;
+        uint32_t count = 0u;
+        status = astra_filesystem_directory_open(filesystem, current,
+            &directory);
         if (status != ASTRA_VFS_OK) break;
         do {
-            status = astra_filesystem_directory_read(&directory, entries, 8u,
-                                                      &count);
+            status = astra_filesystem_directory_read(&directory, &entry, 1u,
+                &count);
             if (status != ASTRA_VFS_OK) break;
-            for (child_at = 0u; child_at < count; ++child_at)
-                if (strcmp(entries[child_at].name, ".") != 0 &&
-                    strcmp(entries[child_at].name, "..") != 0) {
-                    found = 1;
-                    break;
-                }
-        } while (count != 0u && !found);
+        } while (count != 0u &&
+            (strcmp(entry.name, ".") == 0 ||
+             strcmp(entry.name, "..") == 0));
         astra_filesystem_directory_close(&directory);
         if (status != ASTRA_VFS_OK) break;
-        if (!found) break;
+        if (count == 0u) {
+            status = astra_filesystem_unlink(filesystem, current,
+                ASTRA_VFS_UNLINK_DIRECTORY);
+            if (status != ASTRA_VFS_OK) break;
+            astra_runtime_deallocate(paths[--active]);
+            continue;
+        }
+        if (active == COPY_DEPTH_MAX) {
+            status = ASTRA_VFS_ERR_LIMIT;
+            break;
+        }
         child[0] = '\0';
-        status = copy_path(child, path, entries[child_at].name);
-        if (status == ASTRA_VFS_OK)
-            status = remove_partial(filesystem, child, depth + 1u);
+        status = copy_path(child, current, entry.name);
         if (status != ASTRA_VFS_OK) break;
+        length = strlen(child) + 1u;
+        paths[active] = astra_runtime_allocate(length);
+        if (paths[active] == NULL) {
+            status = ASTRA_VFS_ERR_LIMIT;
+            break;
+        }
+        memcpy(paths[active++], child, length);
     }
+    while (active != 0u)
+        astra_runtime_deallocate(paths[--active]);
     astra_runtime_deallocate(child);
-    return status == ASTRA_VFS_OK ?
-        astra_filesystem_unlink(filesystem, path, ASTRA_VFS_UNLINK_DIRECTORY) :
-        status;
+    return status;
 }
 
 static uint32_t transfer_preflight(AstraFilesystem *source_filesystem,
@@ -247,13 +341,13 @@ uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
         }
         created = 0;
         status = copy_one(source_filesystem, source, destination_filesystem,
-            staging, 0u, &created);
+            staging, &created);
         if (status != ASTRA_VFS_ERR_EXISTS || created) break;
     }
     if (status == ASTRA_VFS_OK)
         status = astra_filesystem_rename(destination_filesystem, staging, destination);
     if (status != ASTRA_VFS_OK && created)
-        (void)remove_partial(destination_filesystem, staging, 0u);
+        (void)remove_partial(destination_filesystem, staging);
     astra_runtime_deallocate(staging);
     return status;
 }
@@ -292,5 +386,5 @@ uint32_t astra_filesystem_move_tree_between(AstraFilesystem *source_filesystem,
         destination_filesystem, destination);
     if (status != ASTRA_VFS_OK) return status;
     *published = 1u;
-    return remove_partial(source_filesystem, source, 0u);
+    return remove_partial(source_filesystem, source);
 }
