@@ -499,6 +499,20 @@ AstraResult astra_interface_file_panel_set_places(AstraFilePanel *panel,
     const AstraFilePanelPlace *places, uint32_t count,
     AstraCollectionItem *item_storage, uint32_t item_capacity);
 
+/** Copy optional headings and shared glyphs onto current Places rows. This
+ * changes presentation only; Place paths and action indices stay unchanged.
+ * Heading rows must have a NULL Place path and cannot be selected or invoked.
+ * Pass one presentation per current Place, including zero-valued rows.
+ * @param panel Initialized File Panel.
+ * @param context UI context owning the panel controls.
+ * @param controls File Panel control array.
+ * @param presentation Caller-owned presentation rows copied into Places items.
+ * @param count Number of presentation rows; must equal current Place count.
+ * @return ASTRA_OK or a validation error; invalid data changes nothing. */
+AstraResult astra_interface_file_panel_set_place_presentation(
+    AstraFilePanel *panel, AstraUIContext *context, AstraControl *controls,
+    const AstraCollectionPresentation *presentation, uint32_t count);
+
 /** Show or hide the shared Places sidebar and relayout the directory view.
  * Selection and Places contents remain available while hidden.
  * @param panel Initialized File Panel.

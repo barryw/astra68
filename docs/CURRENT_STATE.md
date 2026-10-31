@@ -2,6 +2,34 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared Places presentation checkpoint, 2026-10-30: Interface Kit's
+Collection item now carries optional heading and 16 px shared glyph
+presentation in its former zero-reserved words. Shared List draws the glyphs
+through Astraea, skips headings for pointer and keyboard selection, and keeps
+existing selection when a heading is clicked. Shared File Panel applies and
+validates Place presentation, ignores heading actions, and treats a cleared
+selection as no navigation. Atlas supplies only Place labels, paths, and
+presentation data; it has no private sidebar control or renderer. Haiku
+read-only references: `src/kits/tracker/FavoritesMenu.cpp` groups places with
+`TitledSeparatorItem`; `src/kits/tracker/FilePanelPriv.cpp` keeps file-panel
+navigation within the shared panel. Astra adapts these patterns to native
+Collection/List and File Panel contracts. Beast Interface Kit and Atlas host
+tests, MC68040 bundle builds, and `make -C ndk dist-check` passed. Focused
+DE25 installs reported `ASTRA_DE25_DEV_INSTALL PASS guest=4`. RFB showed
+PLACES and VOLUMES headings, shared row glyphs, DH0's 17 entries, RAM0
+navigation, and blank-space selection clearing. First hardware trial exposed a
+heading click opening an error dialog; shared event and File Panel fixes removed
+it. Final trial clicking VOLUMES preserved DH0 selection and showed no dialog.
+Final Interface Kit SHA-256 is
+`6afb47efc3c38e16764b14901e905355768f8696c4e88bb234d11156783b7759`;
+Atlas SHA-256 is
+`dc27710e9873bfe12d288a0bc0b0d3262df73dad048b7341b26be5372f43a5ed`.
+Board captures were SHA-verified and archived on Beast under
+`/mnt/Documents/astra68/atlas-sidebar-20261030/`; disposable board captures
+were removed. Astra, audio, and remote desktop services remained active with
+zero restarts and 8.1 GiB free. This focused gate does not certify every Atlas
+workflow or visual state.
+
 Atlas shared toolbar checkpoint, 2026-10-30: Atlas now requests icon mode
 from Interface Kit's existing Toolbar Actions composition. Shared toolbar
 glyphs gained New Folder, while Atlas's Open action uses the existing folder
@@ -25,9 +53,9 @@ Final Atlas binary SHA-256 is
 Kit library SHA-256 is
 `8bcfb7701a5741311fd90f9701a29557b7b0dd8741e60a416040e9dcae4bf765`.
 SHA-verified RFB captures live on Beast under
-`/mnt/Documents/astra68/atlas-toolbar-20261030/`. Places still renders as a
-flat text list; section headings and icons from the design need a shared
-List/File Panel contract before use.
+`/mnt/Documents/astra68/atlas-toolbar-20261030/`. At this checkpoint, Places
+still rendered as a flat text list; the shared Places presentation checkpoint
+above supersedes that gap.
 
 Atlas directory-link drop and startup binding checkpoint, 2026-10-30:
 Atlas now asks the shared File Panel for a presented path and Filesystem Kit

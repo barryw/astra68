@@ -94,7 +94,7 @@ static void test_toolbar_composition(void)
     }
     {
         const uint32_t invalid[2] = {
-            ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_NEW_FOLDER + 1u
+            ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_RAM + 1u
         };
         assert(astra_interface_toolbar_set_icons(controls, invalid, 2u) ==
                ASTRA_ERROR_INVALID_ARGUMENT);
@@ -2025,6 +2025,79 @@ static void test_list_control(void)
            ASTRA_ERROR_INVALID_ARGUMENT);
     assert(astra_interface_collection_init(&model, NULL, 0u, 1u) ==
            ASTRA_ERROR_INVALID_ARGUMENT);
+}
+
+static void test_list_headings_and_glyphs(void)
+{
+    static const AstraCollectionItem items[] = {
+        {1u, "PLACES", 6u, {ASTRA_COLLECTION_HEADING, 0u}},
+        {2u, "Home", 4u, {0u, ASTRA_TOOLBAR_ICON_HOME}},
+        {3u, "VOLUMES", 7u, {ASTRA_COLLECTION_HEADING, 0u}},
+        {4u, "DH0", 3u, {0u, ASTRA_TOOLBAR_ICON_VOLUME}}
+    };
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    AstraCollectionModel model = ASTRA_COLLECTION_MODEL_INIT;
+    AstraListInfo info = ASTRA_LIST_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    AstraWindowEvent event;
+    AstraSurfaceView surface = render_view(180u, 160u);
+    uint32_t hit = 0u;
+    int32_t row = 99;
+    int64_t value = -1;
+
+    assert(astra_interface_collection_init(&model, items, 4u, 1u) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    assert(astra_interface_collection_init(&model, items, 4u, 0u) == ASTRA_OK);
+    info.id = 73u;
+    info.model = &model;
+    assert(astra_interface_list_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 180u, 160u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_pointer_hit(&context,
+        control._private_frame.x + 8, control._private_frame.y + 4,
+        &hit, &row) == ASTRA_OK && hit == 73u && row == -1);
+    assert(astra_interface_control_set_value(&context, &control, 0) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + theme.control_height + 4);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+           action.value == 1);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x51u, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+           action.value == 3);
+    assert(astra_interface_control_get_value(&control, &value, NULL) ==
+           ASTRA_OK && value == 3);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4au, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+           action.value == 1);
+    event = key_event(ASTRA_WINDOW_EVENT_DOWN, 0x4du, 0u);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_VALUE_CHANGED &&
+           action.value == 3);
+    event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+        ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 8,
+        control._private_frame.y + 2u * theme.control_height + 4);
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK);
+    event.flags = 0u;
+    assert(astra_interface_ui_handle_event(&context, &event, &action) ==
+           ASTRA_OK && action.type == ASTRA_UI_ACTION_NONE);
+    assert(astra_interface_control_get_value(&control, &value, NULL) ==
+           ASTRA_OK && value == 3);
+    reset_render_calls();
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK &&
+           text_calls == 4u && line_calls > 0u);
 }
 
 static void test_render_range_overflow(void)
@@ -5447,6 +5520,43 @@ static void test_shared_file_panel(void)
     assert(astra_interface_file_panel_set_places(&panel, &context, controls,
         places, 3u, action_place_items, 3u) == ASTRA_OK &&
         panel.places_collection.selected_id == 2u);
+    {
+        static const AstraCollectionPresentation decorated[3] = {
+            {0u, ASTRA_TOOLBAR_ICON_HOME},
+            {0u, ASTRA_TOOLBAR_ICON_RECENT},
+            {ASTRA_COLLECTION_HEADING, 0u}
+        };
+        static const AstraCollectionPresentation plain[3] = {
+            {0u, 0u}, {0u, 0u}, {0u, 0u}
+        };
+        static const AstraCollectionPresentation invalid[3] = {
+            {0u, 0u}, {0u, 0u},
+            {ASTRA_COLLECTION_HEADING, ASTRA_TOOLBAR_ICON_SEARCH}
+        };
+        uint32_t place_index = 0u;
+        assert(astra_interface_file_panel_set_place_presentation(&panel,
+            &context, controls, decorated, 3u) == ASTRA_OK);
+        assert(astra_interface_file_panel_place_at(&panel,
+            300u + ASTRA_FILE_PANEL_PLACES_LIST, 2, &place_index) ==
+            ASTRA_OK && place_index == UINT32_MAX);
+        assert(astra_interface_file_panel_set_place_presentation(&panel,
+            &context, controls, invalid, 3u) ==
+            ASTRA_ERROR_INVALID_ARGUMENT &&
+            action_place_items[2].presentation.flags ==
+                ASTRA_COLLECTION_HEADING);
+        action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
+        action.control_id = 300u + ASTRA_FILE_PANEL_PLACES_LIST;
+        action.value = 2;
+        assert(astra_interface_file_panel_action(&panel, &context, controls,
+            &action, &outcome) == ASTRA_OK &&
+            outcome == ASTRA_FILE_PANEL_NONE);
+        action.value = -1;
+        assert(astra_interface_file_panel_action(&panel, &context, controls,
+            &action, &outcome) == ASTRA_OK &&
+            outcome == ASTRA_FILE_PANEL_NONE);
+        assert(astra_interface_file_panel_set_place_presentation(&panel,
+            &context, controls, plain, 3u) == ASTRA_OK);
+    }
     action.type = ASTRA_UI_ACTION_VALUE_CHANGED;
     action.control_id = 300u + ASTRA_FILE_PANEL_PLACES_LIST;
     action.value = 2;
@@ -6257,6 +6367,7 @@ int main(void)
     test_status_bar();
     test_segmented_control();
     test_list_control();
+    test_list_headings_and_glyphs();
     test_render_range_overflow();
     test_popup_control();
     test_split_button();

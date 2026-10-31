@@ -40,7 +40,7 @@ static int actions_valid(const AstraToolbarCommand *actions, uint32_t count)
                 action->label, action->label_length) ||
             action->icon == ASTRA_TOOLBAR_ICON_NONE ||
             action->icon == ASTRA_TOOLBAR_ICON_MORE ||
-            action->icon > ASTRA_TOOLBAR_ICON_NEW_FOLDER ||
+            action->icon > ASTRA_TOOLBAR_ICON_RAM ||
             !astra_words_zero(action->reserved, 2u)) return 0;
     }
     return 1;

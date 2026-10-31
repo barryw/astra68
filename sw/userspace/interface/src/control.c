@@ -367,7 +367,10 @@ static int collection_items_valid(const AstraCollectionItem *items,
     for (uint32_t at = 0u; at < count; ++at) {
         if (items[at].id == 0u || items[at].text_length == 0u ||
             !astra_utf8_validate(items[at].text, items[at].text_length, 0u) ||
-            !astra_words_zero(items[at].reserved, 2u))
+            (items[at].presentation.flags & ~ASTRA_COLLECTION_HEADING) != 0u ||
+            items[at].presentation.icon > ASTRA_TOOLBAR_ICON_RAM ||
+            ((items[at].presentation.flags & ASTRA_COLLECTION_HEADING) != 0u &&
+             items[at].presentation.icon != ASTRA_TOOLBAR_ICON_NONE))
             return 0;
         for (uint32_t other = 0u; other < at; ++other)
             if (items[other].id == items[at].id) return 0;
@@ -382,6 +385,15 @@ static int32_t collection_index(const AstraCollectionItem *items,
     for (uint32_t at = 0u; at < count; ++at)
         if (items[at].id == id) return (int32_t)at;
     return -1;
+}
+
+static int32_t collection_selectable_index(const AstraCollectionItem *items,
+    uint32_t count, uint64_t id)
+{
+    int32_t index = collection_index(items, count, id);
+    return index >= 0 &&
+        (items[index].presentation.flags & ASTRA_COLLECTION_HEADING) == 0u ?
+        index : -1;
 }
 
 static uint32_t selection_slot(const AstraSelectionSet *selection,
@@ -435,10 +447,12 @@ static void selection_prune(AstraSelectionSet *selection,
     if (selection == NULL) return;
     uint32_t kept = 0u;
     for (uint32_t at = 0u; at < selection->count; ++at)
-        if (collection_index(items, count, selection->ids[at]) >= 0)
+        if (collection_selectable_index(items, count,
+                selection->ids[at]) >= 0)
             selection->ids[kept++] = selection->ids[at];
     selection->count = kept;
-    if (collection_index(items, count, selection->anchor_id) < 0)
+    if (collection_selectable_index(items, count,
+            selection->anchor_id) < 0)
         selection->anchor_id = 0u;
 }
 
@@ -497,6 +511,15 @@ static uint32_t selection_item_at(const AstraControl *control, uint32_t row)
         const_tree_model(control)->visible_rows[row] : row;
 }
 
+static int collection_row_selectable(const AstraControl *control,
+    uint32_t row)
+{
+    const AstraCollectionModel *model = const_collection_model(control);
+    return row < control->_private_text_length &&
+        (model->items[selection_item_at(control, row)].presentation.flags &
+         ASTRA_COLLECTION_HEADING) == 0u;
+}
+
 static int32_t selection_visible_row(const AstraControl *control, uint64_t id)
 {
     const AstraCollectionModel *model = const_collection_model(control);
@@ -509,6 +532,7 @@ static int32_t selection_visible_row(const AstraControl *control, uint64_t id)
 static int selection_apply(AstraControl *control, uint32_t row,
     uint32_t modifiers)
 {
+    if (!collection_row_selectable(control, row)) return 0;
     AstraCollectionModel *model = collection_model(control);
     AstraSelectionSet *selection = model->selection;
     uint64_t id = model->items[selection_item_at(control, row)].id;
@@ -533,8 +557,9 @@ static int selection_apply(AstraControl *control, uint32_t row,
         uint32_t first = (uint32_t)anchor < row ? (uint32_t)anchor : row;
         uint32_t last = (uint32_t)anchor > row ? (uint32_t)anchor : row;
         for (uint32_t at = first; at <= last; ++at)
-            selection_insert(selection, model->items[
-                selection_item_at(control, at)].id);
+            if (collection_row_selectable(control, at))
+                selection_insert(selection, model->items[
+                    selection_item_at(control, at)].id);
         model->selected_id = id;
         return 1;
     }
@@ -565,6 +590,7 @@ static AstraResult collection_context_select(AstraUIContext *context,
     if (row < 0) return ASTRA_OK;
     if ((uint32_t)row >= control->_private_text_length || model == NULL)
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (!collection_row_selectable(control, (uint32_t)row)) return ASTRA_OK;
     uint64_t id = model->items[selection_item_at(control, (uint32_t)row)].id;
     if (model->selection == NULL ||
         !astra_interface_selection_contains(model->selection, id))
@@ -896,7 +922,7 @@ static int control_valid(const AstraControl *control)
                 ~(ASTRA_BUTTON_STYLE_MASK | ASTRA_BUTTON_ICON_MASK |
                   ASTRA_BUTTON_ICON_ONLY)) == 0u &&
                ASTRA_BUTTON_ICON(control->_private_style) <=
-                   ASTRA_TOOLBAR_ICON_NEW_FOLDER &&
+                   ASTRA_TOOLBAR_ICON_RAM &&
                (ASTRA_BUTTON_ICON(control->_private_style) == 0u ||
                 (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
                     ASTRA_BUTTON_TOOLBAR) &&
@@ -1954,7 +1980,7 @@ AstraResult astra_interface_collection_init(AstraCollectionModel *model,
 {
     if (model == NULL || !collection_items_valid(items, count) ||
         (selected_id != 0u &&
-         collection_index(items, count, selected_id) < 0))
+         collection_selectable_index(items, count, selected_id) < 0))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     *model = (AstraCollectionModel)ASTRA_COLLECTION_MODEL_INIT;
     model->items = items;
@@ -1977,7 +2003,7 @@ AstraResult astra_interface_list_init(AstraControl *control,
         (info->state & ~CONTROL_VALUE_STATES) != 0u ||
         !astra_words_zero(info->reserved, 4u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    selected = collection_index(info->model->items, info->model->item_count,
+    selected = collection_selectable_index(info->model->items, info->model->item_count,
                                 info->model->selected_id);
     if (info->model->selected_id != 0u && selected < 0)
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -2039,10 +2065,10 @@ static AstraResult collection_set_items(AstraUIContext *context,
     }
     model = collection_model(control);
     before = *model;
-    selected = collection_index(items, count, model->selected_id);
+    selected = collection_selectable_index(items, count, model->selected_id);
     if (selected < 0 && model->selection != NULL)
         for (uint32_t at = 0u; at < model->selection->count; ++at) {
-            selected = collection_index(items, count,
+            selected = collection_selectable_index(items, count,
                 model->selection->ids[at]);
             if (selected >= 0) break;
         }
@@ -2101,7 +2127,7 @@ AstraResult astra_interface_table_init(AstraControl *control,
     if (!astra_words_zero(collection->reserved, 2u) ||
         !collection_items_valid(collection->items, collection->item_count))
         return ASTRA_ERROR_INVALID_ARGUMENT;
-    selected = collection_index(collection->items, collection->item_count,
+    selected = collection_selectable_index(collection->items, collection->item_count,
                                 collection->selected_id);
     if (collection->selected_id != 0u && selected < 0)
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -2347,7 +2373,7 @@ AstraResult astra_interface_icon_grid_init(AstraControl *control,
         !astra_words_zero(info->reserved, 4u))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     grid = info->model;
-    selected = collection_index(grid->collection->items, grid->icon_count,
+    selected = collection_selectable_index(grid->collection->items, grid->icon_count,
                                 grid->collection->selected_id);
     if (grid->collection->selected_id != 0u && selected < 0)
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -2394,11 +2420,12 @@ AstraResult astra_interface_icon_grid_set_items(AstraUIContext *context,
         *grid->collection = collection_before;
         return ASTRA_ERROR_INVALID_ARGUMENT;
     }
-    selected = collection_index(items, count, collection_before.selected_id);
+    selected = collection_selectable_index(items, count,
+        collection_before.selected_id);
     if (selected < 0 && grid->collection->selection != NULL)
         for (uint32_t at = 0u;
              at < grid->collection->selection->count; ++at) {
-            selected = collection_index(items, count,
+            selected = collection_selectable_index(items, count,
                 grid->collection->selection->ids[at]);
             if (selected >= 0) break;
         }
@@ -4278,6 +4305,10 @@ AstraResult astra_interface_control_set_value(AstraUIContext *context,
                      -1 : 0) || value > control->_private_maximum_value)
             return ASTRA_ERROR_INVALID_ARGUMENT;
         snapped = value;
+        if (COLLECTION_KINDS(control->_private_control_kind) &&
+            snapped >= 0 &&
+            !collection_row_selectable(control, (uint32_t)snapped))
+            return ASTRA_ERROR_INVALID_ARGUMENT;
     } else {
         snapped = range_snap(control, value);
     }
@@ -5425,6 +5456,11 @@ static int render_requirements(const AstraUIContext *context,
             for (uint32_t row = first; row < end; ++row) {
                 uint32_t item = tree == NULL ? row : tree->visible_rows[row];
                 *payload += (uint64_t)items[item].text_length + id_length;
+                if (tree == NULL &&
+                    items[item].presentation.icon != ASTRA_TOOLBAR_ICON_NONE) {
+                    ++*commands;
+                    *payload += 16u * sizeof(AstraDrawListSegment);
+                }
             }
             continue;
         }
@@ -5688,6 +5724,24 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
         {14, 5, 7, 5}, {7, 5, 5, 3}, {5, 3, 1, 3},
         {8, 7, 8, 11}, {6, 9, 10, 9}
     };
+    static const ToolbarLine home[] = {
+        {8, 2, 3, 7}, {8, 2, 13, 7}, {3, 7, 3, 14},
+        {3, 14, 13, 14}, {13, 14, 13, 7}, {6, 14, 6, 9},
+        {6, 9, 10, 9}, {10, 9, 10, 14}
+    };
+    static const ToolbarLine recent[] = {
+        {2, 3, 14, 3}, {14, 3, 14, 13}, {14, 13, 2, 13},
+        {2, 13, 2, 3}, {5, 6, 11, 6}, {5, 8, 11, 8},
+        {5, 10, 9, 10}
+    };
+    static const ToolbarLine volume[] = {
+        {2, 4, 14, 4}, {14, 4, 14, 12}, {14, 12, 2, 12},
+        {2, 12, 2, 4}, {4, 7, 12, 7}, {4, 9, 12, 9}
+    };
+    static const ToolbarLine ram[] = {
+        {3, 4, 13, 4}, {13, 4, 13, 11}, {13, 11, 3, 11},
+        {3, 11, 3, 4}, {5, 11, 5, 14}, {11, 11, 11, 14}
+    };
     static const ToolbarLine trash[] = {
         {2, 4, 14, 4}, {5, 2, 11, 2}, {4, 5, 5, 14},
         {5, 14, 11, 14}, {11, 14, 12, 5}, {7, 7, 7, 12},
@@ -5738,6 +5792,10 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
     case ASTRA_TOOLBAR_ICON_COLUMNS: PICK(columns); break;
     case ASTRA_TOOLBAR_ICON_SEARCH: PICK(search); break;
     case ASTRA_TOOLBAR_ICON_NEW_FOLDER: PICK(new_folder); break;
+    case ASTRA_TOOLBAR_ICON_HOME: PICK(home); break;
+    case ASTRA_TOOLBAR_ICON_RECENT: PICK(recent); break;
+    case ASTRA_TOOLBAR_ICON_VOLUME: PICK(volume); break;
+    case ASTRA_TOOLBAR_ICON_RAM: PICK(ram); break;
     case ASTRA_TOOLBAR_ICON_MORE: PICK(more); break;
     default: break;
     }
@@ -6843,17 +6901,28 @@ static void render_list(const AstraTheme *theme,
     for (uint32_t at = first; at < end; ++at) {
         int32_t y = (int32_t)((int64_t)frame->y +
                               (uint64_t)at * theme->control_height);
+        uint32_t heading = (items[at].presentation.flags &
+            ASTRA_COLLECTION_HEADING) != 0u;
+        uint32_t icon = items[at].presentation.icon;
         AstraColorRGBA8 text_color = render_collection_row(
             theme, control, surface, at, y);
+        uint32_t inset = (uint32_t)theme->control_padding_x +
+            (icon != ASTRA_TOOLBAR_ICON_NONE ? 22u : 0u);
         uint32_t text_width = frame->width >
-            (uint32_t)theme->control_padding_x * 2u ?
-            frame->width - (uint32_t)theme->control_padding_x * 2u : 0u;
+            inset + (uint32_t)theme->control_padding_x ?
+            frame->width - inset - (uint32_t)theme->control_padding_x : 0u;
+        if (heading) text_color = theme->client_text_secondary;
+        if (icon != ASTRA_TOOLBAR_ICON_NONE)
+            render_toolbar_icon(surface, icon,
+                frame->x + theme->control_padding_x,
+                y + ((int32_t)theme->control_height - 16) / 2,
+                color(text_color));
         uint32_t fitted = astra_surface_ui_text_fit(
             items[at].text, items[at].text_length,
             theme->control_font_height, text_width);
 
         astra_surface_ui_text(
-            surface, frame->x + theme->control_padding_x,
+            surface, frame->x + (int32_t)inset,
             y + (int32_t)(theme->control_height -
                           theme->control_font_height) / 2,
             items[at].text, fitted, theme->control_font_height,
@@ -7305,6 +7374,17 @@ static void render_tab(const AstraTheme *theme,
     }
 }
 
+static int32_t collection_row_at(const AstraControl *control, int32_t y)
+{
+    AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
+    int64_t relative = (int64_t)y - control->_private_frame.y -
+        (TABLE_KINDS(control->_private_control_kind) ?
+            theme.control_height : 0u);
+    if (relative < 0) return -1;
+    uint32_t index = (uint32_t)relative / theme.control_height;
+    return index < control->_private_text_length ? (int32_t)index : -1;
+}
+
 static int32_t choice_index_at(const AstraControl *control, int32_t x,
                                int32_t y)
 {
@@ -7328,15 +7408,9 @@ static int32_t choice_index_at(const AstraControl *control, int32_t x,
         return item < grid->icon_count ? (int32_t)item : -1;
     }
     if (COLLECTION_KINDS(control->_private_control_kind)) {
-        AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
-        int64_t relative = (int64_t)y - control->_private_frame.y -
-            (TABLE_KINDS(control->_private_control_kind) ?
-                theme.control_height : 0u);
-        uint32_t index;
-
-        if (relative < 0) return -1;
-        index = (uint32_t)relative / theme.control_height;
-        return index < control->_private_text_length ? (int32_t)index : -1;
+        int32_t row = collection_row_at(control, y);
+        return row >= 0 && collection_row_selectable(control, (uint32_t)row) ?
+            row : -1;
     }
     if (control->_private_control_kind == ASTRA_CONTROL_TAB) {
         AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -9224,6 +9298,15 @@ static AstraResult pointer_event(AstraUIContext *context,
                            event->data.pointer.y, action);
         else if (choice && hit == captured) {
             AstraControl *control = &context->_private_controls[captured];
+            if (COLLECTION_KINDS(control->_private_control_kind)) {
+                int32_t row = collection_row_at(control,
+                    event->data.pointer.y);
+                if (row >= 0 &&
+                    !collection_row_selectable(control, (uint32_t)row)) {
+                    clear_capture(context);
+                    return ASTRA_OK;
+                }
+            }
             if (TABLE_KINDS(control->_private_control_kind) &&
                 context->_private_capture_part != 0u &&
                 table_header_at(control, event->data.pointer.x,
@@ -9668,7 +9751,15 @@ static AstraResult key_event(AstraUIContext *context,
         } else {
             value = -1;
         }
-        if (value >= 0) {
+        if (value >= 0 &&
+            !collection_row_selectable(control, (uint32_t)value)) {
+            int32_t step = usage == 0x52u || usage == 0x4du ? -1 : 1;
+            while (value >= 0 &&
+                   value <= control->_private_maximum_value &&
+                   !collection_row_selectable(control, (uint32_t)value))
+                value += step;
+        }
+        if (value >= 0 && value <= control->_private_maximum_value) {
             AstraResult result = list_reveal_row(
                 context, context->_private_focus, (uint32_t)value);
 

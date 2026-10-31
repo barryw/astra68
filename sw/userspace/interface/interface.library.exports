@@ -42,6 +42,7 @@ ASTRA_INTERFACE_12.0 {
         astra_interface_file_panel_set_directory;
         astra_interface_file_panel_rebind_storage;
         astra_interface_file_panel_set_places;
+        astra_interface_file_panel_set_place_presentation;
         astra_interface_file_panel_set_places_visible;
         astra_interface_file_panel_set_icons;
         astra_interface_file_panel_set_column;

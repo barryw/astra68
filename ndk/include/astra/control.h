@@ -359,7 +359,11 @@ enum {
     ASTRA_TOOLBAR_ICON_COLUMNS,
     ASTRA_TOOLBAR_ICON_SEARCH,
     ASTRA_TOOLBAR_ICON_MORE, /**< Overflow actions chevrons. */
-    ASTRA_TOOLBAR_ICON_NEW_FOLDER
+    ASTRA_TOOLBAR_ICON_NEW_FOLDER,
+    ASTRA_TOOLBAR_ICON_HOME,
+    ASTRA_TOOLBAR_ICON_RECENT,
+    ASTRA_TOOLBAR_ICON_VOLUME,
+    ASTRA_TOOLBAR_ICON_RAM
 };
 
 /** Creation data for a viewport that clips and translates one direct child. */
@@ -694,12 +698,27 @@ typedef struct AstraChoiceInfo {
     sizeof(AstraChoiceInfo), 0, 0, 0, 0, 0, { 0, 0, 0, 0 }              \
 }
 
-/** Item identity and label shared by collection views. ID zero is reserved. */
+/** Optional collection-row presentation. A heading is displayed but cannot be
+ * selected, activated, or used as a context-menu target. Icon values are
+ * shared ASTRA_TOOLBAR_ICON_* glyphs, or NONE. List draws the glyph; other
+ * collection views retain the same item identity and selection semantics.
+ * Both fields default to zero. */
+typedef struct AstraCollectionPresentation {
+    uint32_t flags; /**< ASTRA_COLLECTION_HEADING or zero. */
+    uint32_t icon; /**< Shared 16 px glyph, or NONE. */
+} AstraCollectionPresentation;
+
+/** Nonselectable section row in a collection. */
+#define ASTRA_COLLECTION_HEADING (UINT32_C(1) << 0)
+
+/** Item identity, label, and optional presentation shared by collection views.
+ * ID zero is reserved. The presentation occupies the former zero-reserved
+ * words, retaining the existing binary layout for zero-initialized clients. */
 typedef struct AstraCollectionItem {
     uint64_t id; /**< Stable, nonzero item identity. */
     const char *text; /**< Borrowed UTF-8 label. */
     uint32_t text_length; /**< Counted label bytes. */
-    uint32_t reserved[2]; /**< Must be zero. */
+    AstraCollectionPresentation presentation; /**< Optional row decoration. */
 } AstraCollectionItem;
 
 /** Caller-owned stable-ID selection over one collection. IDs stay sorted for

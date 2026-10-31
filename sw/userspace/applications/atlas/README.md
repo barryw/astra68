@@ -96,6 +96,13 @@ selection rule.
 File Panel also owns Places selection: navigation and sidebar refresh choose
 the longest matching path component prefix. Atlas only supplies current volume
 rows and directory path.
+Places section headings and row glyphs use the shared Collection presentation
+contract. Shared List skips headings for pointer, keyboard, range selection,
+activation, and context actions; File Panel validates presentation against
+Place paths. Atlas supplies labels, paths, and glyph choices without a private
+sidebar control or renderer. Haiku's read-only
+`src/kits/tracker/FavoritesMenu.cpp` uses titled separators for grouped places;
+Astra adapts that grouping to native List rows and Astraea draw commands.
 Atlas's View menu and Ctrl/Command+Alt+S call the shared File Panel Places
 visibility API. Hiding Places keeps its rows and selection while the directory
 view expands; showing it restores the same sidebar. Haiku's read-only

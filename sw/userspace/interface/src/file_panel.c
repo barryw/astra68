@@ -650,6 +650,9 @@ AstraResult astra_interface_file_panel_place_at(
     uint64_t id = panel->place_items[(uint32_t)row].id;
     if (id == 0u || id > panel->place_count)
         return ASTRA_ERROR_INVALID_ARGUMENT;
+    if ((panel->place_items[(uint32_t)row].presentation.flags &
+         ASTRA_COLLECTION_HEADING) != 0u)
+        return ASTRA_OK;
     *place_index = (uint32_t)id - 1u;
     return ASTRA_OK;
 }
@@ -1702,6 +1705,40 @@ AstraResult astra_interface_file_panel_set_places(AstraFilePanel *panel,
     return ASTRA_OK;
 }
 
+AstraResult astra_interface_file_panel_set_place_presentation(
+    AstraFilePanel *panel, AstraUIContext *context, AstraControl *controls,
+    const AstraCollectionPresentation *presentation, uint32_t count)
+{
+    if (panel == NULL || panel->size != sizeof(*panel) ||
+        panel->first_id == 0u || context == NULL || controls == NULL ||
+        count != panel->place_count ||
+        (count != 0u && (presentation == NULL || panel->places == NULL ||
+                        panel->place_items == NULL)))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    for (uint32_t at = 0u; at < count; ++at)
+        if ((presentation[at].flags & ~ASTRA_COLLECTION_HEADING) != 0u ||
+            presentation[at].icon > ASTRA_TOOLBAR_ICON_RAM ||
+            ((presentation[at].flags & ASTRA_COLLECTION_HEADING) != 0u &&
+             (panel->places[at].path != NULL ||
+              presentation[at].icon != ASTRA_TOOLBAR_ICON_NONE)))
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+    int64_t selected = -1;
+    if (astra_interface_control_get_value(
+            &controls[ASTRA_FILE_PANEL_PLACES_LIST],
+            &selected, NULL) != ASTRA_OK)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (selected >= 0 && (uint32_t)selected < count &&
+        (presentation[selected].flags & ASTRA_COLLECTION_HEADING) != 0u) {
+        AstraResult result = astra_interface_control_set_value(context,
+            &controls[ASTRA_FILE_PANEL_PLACES_LIST], -1);
+        if (result != ASTRA_OK) return result;
+    }
+    for (uint32_t at = 0u; at < count; ++at)
+        panel->place_items[at].presentation = presentation[at];
+    return astra_interface_control_invalidate(context,
+        &controls[ASTRA_FILE_PANEL_PLACES_LIST]);
+}
+
 AstraResult astra_interface_file_panel_set_icons(AstraFilePanel *panel,
     AstraUIContext *context, AstraControl *controls,
     const AstraSurface *const *entry_icons, uint32_t count)
@@ -2100,8 +2137,12 @@ AstraResult astra_interface_file_panel_action(AstraFilePanel *panel,
     if ((action->type == ASTRA_UI_ACTION_VALUE_CHANGED ||
          action->type == ASTRA_UI_ACTION_ACTIVATE) &&
         at == ASTRA_FILE_PANEL_PLACES_LIST) {
-        if (action->value < 0 || (uint64_t)action->value >= panel->place_count)
+        if (action->value < 0) return ASTRA_OK;
+        if ((uint64_t)action->value >= panel->place_count)
             return ASTRA_ERROR_INVALID_ARGUMENT;
+        if ((panel->place_items[action->value].presentation.flags &
+             ASTRA_COLLECTION_HEADING) != 0u)
+            return ASTRA_OK;
         if (panel->places[action->value].path == NULL) {
             panel->leaf[0] = '\0';
             panel->target[0] = '\0';
