@@ -291,6 +291,7 @@ enum AtlasMenuRow {
     ATLAS_MENU_NEW_WINDOW,
     ATLAS_MENU_NEW,
     ATLAS_MENU_OPEN,
+    ATLAS_MENU_OPEN_WITH,
     ATLAS_MENU_TERMINAL,
     ATLAS_MENU_REFRESH,
     ATLAS_MENU_SAVE_SEARCH,
@@ -324,6 +325,7 @@ static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"New Window", 10u, ASTRA_MENU_PARENT(1u)},
     {"New Drawer", 10u, ASTRA_MENU_PARENT(1u)},
     {"Open", 4u, ASTRA_MENU_PARENT(1u)},
+    {"Open With...", 12u, ASTRA_MENU_PARENT(1u)},
     {"Open Terminal Here", 18u, ASTRA_MENU_PARENT(1u)},
     {"Refresh", 7u, ASTRA_MENU_PARENT(1u)},
     {"Save Search", 11u, ASTRA_MENU_PARENT(1u)},
@@ -354,6 +356,7 @@ static const AstraContextMenuItem atlas_menu_commands[ATLAS_MENU_COUNT] = {
     [ATLAS_MENU_NEW_WINDOW] = {"atlas.window", sizeof("atlas.window") - 1u, NULL},
     [ATLAS_MENU_NEW] = {"atlas.new", sizeof("atlas.new") - 1u, NULL},
     [ATLAS_MENU_OPEN] = {"atlas.open", sizeof("atlas.open") - 1u, NULL},
+    [ATLAS_MENU_OPEN_WITH] = {"atlas.open-with", sizeof("atlas.open-with") - 1u, NULL},
     [ATLAS_MENU_TERMINAL] = {"atlas.terminal", sizeof("atlas.terminal") - 1u, NULL},
     [ATLAS_MENU_REFRESH] = {"atlas.refresh", sizeof("atlas.refresh") - 1u, NULL},
     [ATLAS_MENU_COPY] = {"atlas.copy", sizeof("atlas.copy") - 1u, NULL},
@@ -2048,6 +2051,21 @@ static void record_recent_open(const char *path, uint32_t kind)
         (void)astra_log_failure("atlas recent record", status);
 }
 
+static AstraResult launch_open_with(const char *path, uint32_t choose)
+{
+    const char *automatic[] = {path};
+    const char *explicit_choice[] = {"--choose", path};
+    uint32_t pid;
+    AstraResult result = astra_application_launch_with_arguments(launcher,
+        "/apps/OpenWith.app", sizeof("/apps/OpenWith.app") - 1u,
+        ASTRA_LAUNCH_SOURCE_DESKTOP,
+        choose != 0u ? explicit_choice : automatic,
+        choose != 0u ? 2u : 1u, &pid);
+    if (result == ASTRA_OK)
+        record_recent_open(path, ASTRA_VFS_KIND_FILE);
+    return result;
+}
+
 static AstraResult open_entry(const char *path)
 {
     if (path == NULL || path[0] != '/')
@@ -2068,12 +2086,7 @@ static AstraResult open_entry(const char *path)
     int is_app = length >= 4u && strcmp(path + length - 4u, ".app") == 0;
     AstraResult result;
     if (kind == ASTRA_VFS_KIND_FILE) {
-        const char *arguments[] = {path};
-        result = astra_application_launch_with_arguments(launcher,
-            "/apps/OpenWith.app", (uint16_t)strlen("/apps/OpenWith.app"),
-            ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 1u, &pid);
-        if (result == ASTRA_OK) record_recent_open(path, kind);
-        return result;
+        return launch_open_with(path, 0u);
     }
     if (kind != ASTRA_VFS_KIND_DIRECTORY)
         return ASTRA_ERROR_INVALID_ARGUMENT;
@@ -2441,6 +2454,40 @@ static AstraResult open_query(void *opaque, AstraCommandState *state)
     AstraResult result = selected_query(opaque, state);
     state->enabled = state->enabled && selection_count() == 1u;
     return result;
+}
+
+static AstraResult open_with_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    uint32_t enabled = launcher != ASTRA_INVALID_HANDLE &&
+        selection_count() == 1u && selected_path[0] == '/' &&
+        !volume_lost && worker == 0u && removal_active == 0u &&
+        selected_kind != ASTRA_VFS_KIND_DIRECTORY;
+    if (enabled && selected_kind == ASTRA_VFS_KIND_SYMLINK) {
+        AstraFileInfo target = ASTRA_FILE_INFO_INIT;
+        enabled = astra_filesystem_stat(active_filesystem(), selected_path,
+            &target) == ASTRA_VFS_OK && target.kind == ASTRA_VFS_KIND_FILE;
+    }
+    *state = (AstraCommandState){"Open With...", 12u, enabled, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult open_with_selected(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    if (viewed_volume.id != 0u) {
+        AstraResult observed = volume_observe(NULL);
+        if (observed != ASTRA_OK) return observed;
+    }
+    AstraFileInfo target = ASTRA_FILE_INFO_INIT;
+    uint32_t status = astra_filesystem_stat(active_filesystem(),
+        selected_path, &target);
+    if (status != ASTRA_VFS_OK) return astra_result_from_service(status);
+    if (target.kind != ASTRA_VFS_KIND_FILE)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return launch_open_with(selected_path, 1u);
 }
 
 static AstraResult terminal_query(void *opaque, AstraCommandState *state)
@@ -3661,6 +3708,8 @@ static const AstraCommand atlas_command_table[] = {
         &atlas_command_context},
     {"atlas.open", 10u, 0u, 0u, open_query, open_selected,
         &atlas_command_context},
+    {"atlas.open-with", sizeof("atlas.open-with") - 1u, 0u, 0u,
+        open_with_query, open_with_selected, &atlas_command_context},
     {"atlas.terminal", sizeof("atlas.terminal") - 1u, 0u, 0u,
         terminal_query, open_terminal_here, &atlas_command_context},
     {"atlas.copy", 10u, 0u, 0u, copy_query, copy_selected,
@@ -3806,8 +3855,8 @@ static AstraResult menu_invoke(AstraHandle gui,
 static AstraResult run(AstraHandle gui)
 {
     AstraContextMenu context_menu = ASTRA_CONTEXT_MENU_INIT;
-    AstraContextMenuItem menu_items[7];
-    uint16_t menu_parents[7] = {0u};
+    AstraContextMenuItem menu_items[8];
+    uint16_t menu_parents[8] = {0u};
     static const AstraCommandShortcut shortcuts[] = {
         {0x06u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.copy", sizeof("atlas.copy") - 1u},
         {0x1bu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.cut", sizeof("atlas.cut") - 1u},
@@ -4425,6 +4474,10 @@ static AstraResult run(AstraHandle gui)
                             "atlas.terminal", sizeof("atlas.terminal") - 1u, NULL};
                     } else if (selected_path[0] != '\0') {
                         menu_items[count++] = (AstraContextMenuItem){"atlas.open", 10u, NULL};
+                        if (selected_kind != ASTRA_VFS_KIND_DIRECTORY)
+                            menu_items[count++] = (AstraContextMenuItem){
+                                "atlas.open-with", sizeof("atlas.open-with") - 1u,
+                                NULL};
                         menu_items[count++] = (AstraContextMenuItem){
                             "atlas.terminal", sizeof("atlas.terminal") - 1u, NULL};
                         menu_items[count++] = (AstraContextMenuItem){"atlas.copy", 10u, NULL};

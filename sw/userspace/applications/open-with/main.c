@@ -294,10 +294,18 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t status = ASTRA_STATUS_OK;
     uint32_t automatic = UINT32_MAX;
     uint32_t ready_reported = 0u;
+    uint32_t force_choose = 0u;
     const char *failure = NULL;
-    if (!astra_startup_validate(startup) || startup->argc != 2u)
+    if (!astra_startup_validate(startup) ||
+        (startup->argc != 2u && startup->argc != 3u))
         return ASTRA_STATUS_INVALID;
-    document = astra_startup_argument(startup, 1u);
+    if (startup->argc == 3u) {
+        const char *option = astra_startup_argument(startup, 1u);
+        if (option == NULL || strcmp(option, "--choose") != 0)
+            return ASTRA_STATUS_INVALID;
+        force_choose = 1u;
+    }
+    document = astra_startup_argument(startup, force_choose != 0u ? 2u : 1u);
     const AstraStartupCapability *gui = astra_startup_capability(startup,
         ASTRA_CAPABILITY_GUI);
     const AstraStartupCapability *app = astra_startup_capability(startup,
@@ -327,7 +335,7 @@ int astra_main(const AstraStartupInfo *startup)
     else if (load_candidates() != ASTRA_VFS_OK)
         failure = "handler discovery";
     if (failure != NULL) status = ASTRA_STATUS_IO;
-    if (status == ASTRA_STATUS_OK && type.type[0] != '\0') {
+    if (status == ASTRA_STATUS_OK && !force_choose && type.type[0] != '\0') {
         char id[ASTRA_BUNDLE_ID_MAX];
         int has_preference = 0;
         if (preferred(id, sizeof(id), &has_preference) != ASTRA_CONFIG_OK) {

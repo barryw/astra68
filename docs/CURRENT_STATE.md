@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas explicit Open With checkpoint, 2026-10-31: File and selected-file
+context menus now invoke one Atlas responder that launches the existing Open
+With app in forced chooser mode. Ordinary Open still delegates automatic
+default selection to that app. File-type resolution, installed handlers, and
+"Always open with" remain in shared Filesystem/Config Kits and Open With;
+Atlas adds no type registry or chooser control. Haiku read-only reference:
+`src/kits/tracker/ContainerWindow.cpp` positions Open With next to Open.
+Beast Open With and Atlas MC68040 builds plus Atlas host test passed. DE25
+targeted install of both bundles passed. File menu opened chooser for unknown
+`/dh0/astra_events.cat`. A disposable `/ram0/atlas-open-with.z3` resolved to
+AstraZ alone; explicit Open With still showed chooser and its preference
+checkbox. Right-click showed the same action. Native `rm` removed the RAM0
+test file, and `ls /ram0` returned empty. SHA-verified captures and PNGs are
+on Beast at `/mnt/Documents/astra68/atlas-open-with-20261031/`; board trial
+files were removed. Astra, HDMI audio host, and remote desktop stayed active
+with zero Astra restarts and 8.2 GiB free. Design's direct installed-handler
+submenu remains open; the explicit chooser covers selecting any handler.
+
 Atlas Terminal directory checkpoint, 2026-10-31: File > Open Terminal Here,
 folder/blank-area context menus, and Primary+Enter now invoke one Atlas
 command responder and the existing application launcher. Terminal accepts a
