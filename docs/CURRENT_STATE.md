@@ -2,6 +2,25 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas cross-volume GUI gate, 2026-10-31: On DE25, Atlas copied a test folder
+from RAM0 into HOME through the native clipboard and Filesystem Kit tree-copy
+path. HOME changed from three to four folders, and the copied folder appeared
+in Grid. After renaming that copy, Atlas Cut/Paste moved it from HOME back to
+RAM0 through Filesystem Kit's cross-volume move path. RAM0 then showed two
+folders and HOME returned to its original three. DH0 is a protected system
+volume: its root correctly disables New Drawer and Paste. An initial RAM0 to
+DH0 trial was therefore not a valid writable-destination gate; the apparent
+blank view was a captured navigation-loading frame, not a failed copy.
+Haiku read-only reference: `src/kits/tracker/FSUtils.cpp` keeps copy/move
+mechanics behind Tracker's file-operation layer. Astra likewise keeps transfer
+mechanics in Filesystem Kit; Atlas owns selection, exact volume grants, and
+commands. Selected RFB evidence was archived and SHA-verified on Beast under
+`/mnt/Documents/astra68/atlas-breadcrumb-20261031/`. Final HOME and RAM0
+frames have SHA-256 `9a08ecc266e49bb35dee40e57c50af3942e7fa66c32c9b3001b00212918eaea6`
+and `90aa1c1e7a64046825f3df6dd4f035d552d2f4794604b0699fdf05c07047a4ed`.
+No Atlas or Filesystem Kit source change was needed for this gate. Physical USB
+cross-volume transfer remains untested because no USB media is attached.
+
 Atlas shared Breadcrumb checkpoint, 2026-10-31: Long path segments now have
 one Interface Kit width limit and generic Button text elides with an ellipsis.
 Breadcrumb replaces labels while folded, then reveals from current folder
@@ -28,7 +47,7 @@ Interface Kit SHA-256:
 Board trial captures were removed. A guest restart cleared RAM0: the opened
 RAM0 RFB frame matched its initial empty-state SHA-256. Astra, audio, and
 remote desktop services are active with zero automatic restarts and 8.1 GiB
-free. Cross-volume operation completeness remains a separate Atlas gate.
+free. Cross-volume operation qualification continues in the gate above.
 
 Atlas shared toolbar fitting checkpoint, 2026-10-30: Interface Kit now fits
 command groups and existing peer controls in one measured row. Groups switch
