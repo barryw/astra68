@@ -2,6 +2,22 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas write-policy reuse checkpoint, 2026-10-31: Atlas now resolves writable
+sidebar mounts through its existing exact mounted-path lookup instead of a
+second scan with slightly different filters. Write actions stop when the
+viewed volume is unavailable. Trash-root checks use Filesystem Kit's existing
+path classifier rather than reconstructing `.Trash` locally. Haiku read-only
+reference: `src/kits/storage/Volume.cpp` checks current volume information
+through its storage API; Astra uses exact mount references and its shared
+catalog lookup. Beast Atlas host test and MC68040 bundle build passed.
+Targeted Atlas-only DE25 install passed; RFB opened RAM0, created `ReuseCheck`,
+moved it to Trash, observed disabled New drawer in Trash, and emptied Trash.
+Selected raw captures matched board and Beast SHA-256; raw and PNG evidence is
+archived at `/mnt/Documents/astra68/atlas-reuse-20261031/`. Board trial
+captures and helper were removed. Astra, audio, and remote desktop remain
+active, Astra has zero restarts, and board has 8.1 GiB free. Physical USB and
+optical qualification still require attached media; only root hub is present.
+
 Atlas shared Breadcrumb appearance checkpoint, 2026-10-31: File Panel now
 composes its path segments from existing flat Toolbar Buttons instead of
 standard filled Buttons. Atlas and Open/Save panels inherit the same compact,

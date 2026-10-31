@@ -111,6 +111,11 @@ Clipboard and drag source capture use the same eligible mounted-path lookup
 as navigation and Recent Items. That lookup excludes system, temporary, and
 private mounts and returns an exact catalog incarnation; Atlas does not retain
 a separate clipboard volume scanner or capture a retired viewed-volume grant.
+Write-action eligibility also uses that mounted-path lookup for sidebar mounts,
+and the Filesystem Kit Trash path classifier for the Trash root. An unavailable
+viewed volume disables write actions immediately. Haiku's read-only
+`src/kits/storage/Volume.cpp` checks current volume information through its
+storage API; Astra uses its exact mount reference and shared catalog resolver.
 Filesystem Kit performs bounded, heap-backed tree traversal and staged cleanup,
 so deep copies use the same operation from Atlas, native `cp`, and other
 clients without consuming Atlas's application stack. Traversal follows valid

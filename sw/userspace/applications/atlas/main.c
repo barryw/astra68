@@ -401,6 +401,8 @@ static AstraResult init_toolbar(AstraHandle gui);
 static AstraResult fit_toolbar(void);
 static AstraResult update_window_title(void);
 static int fixed_copy_path(const char *path);
+static const AstraVolumeRecord *volume_for_path(
+    const AstraVolumeSnapshot *snapshot, const char *path);
 
 static uint32_t prepare_directory(AstraDirectorySnapshot *snapshot,
     const char *path)
@@ -461,7 +463,7 @@ static AstraResult navigation_append(const char *path,
 
 static const char *writable_mount_root(void)
 {
-    if (recent_mode != 0u) return NULL;
+    if (recent_mode != 0u || volume_lost) return NULL;
     if (strncmp(root, "/home", 5u) == 0 &&
         (root[5] == '\0' || root[5] == '/')) return "/home";
     if (viewed_volume.id != 0u && volume_path[0] != '\0' &&
@@ -470,18 +472,10 @@ static const char *writable_mount_root(void)
          root[strlen(volume_path)] == '/'))
         return volume_writable ? volume_path : NULL;
     if (!volume_write_available) return NULL;
-    for (uint32_t at = 0u; at < sidebar_volumes.count; ++at) {
-        const AstraVolumeRecord *record = &sidebar_volumes.records[at];
-        size_t length = strlen(record->name);
-        if (record->kind == ASTRA_VOLUME_MOUNT &&
-            record->state == ASTRA_VOLUME_MOUNTED &&
-            (record->flags & (ASTRA_VOLUME_READ_ONLY | ASTRA_VOLUME_SYSTEM |
-                ASTRA_VOLUME_TEMPORARY)) == 0u &&
-            length != 0u && strncmp(root, record->name, length) == 0 &&
-            (root[length] == '\0' || root[length] == '/'))
-            return record->name;
-    }
-    return NULL;
+    const AstraVolumeRecord *record = volume_for_path(&sidebar_volumes, root);
+    return record != NULL &&
+        (record->flags & ASTRA_VOLUME_READ_ONLY) == 0u ?
+            record->name : NULL;
 }
 
 static int writable_folder_root(void)
@@ -492,11 +486,8 @@ static int writable_folder_root(void)
 
 static int trash_root(void)
 {
-    const char *mount = writable_mount_root();
-    char path[ASTRA_VFS_PATH_MAX];
-    return mount != NULL &&
-        astra_folder_path(mount, ".Trash", path,
-            sizeof(path)) == ASTRA_VFS_OK && strcmp(root, path) == 0;
+    return writable_mount_root() != NULL &&
+        astra_trash_path_kind(root) == ASTRA_TRASH_ROOT;
 }
 
 static AstraFilesystem *active_filesystem(void)
