@@ -184,6 +184,12 @@ selection rule.
 File Panel also owns Places selection: navigation and sidebar refresh choose
 the longest matching path component prefix. Atlas only supplies current volume
 rows and directory path.
+Repeated same-directory File Panel updates preserve a selected virtual Place,
+so a Saved Search stays highlighted while Atlas repaints its result Table. The
+rule lives in Interface Kit and applies to other browser clients. Haiku's
+read-only `src/kits/tracker/PoseView.cpp` (`Refresh`) keeps query result refresh
+separate from navigation; Astra applies the equivalent distinction through its
+shared File Panel.
 Places section headings and row glyphs use the shared Collection presentation
 contract. Shared List skips headings for pointer, keyboard, range selection,
 activation, and context actions; File Panel validates presentation against

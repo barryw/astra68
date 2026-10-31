@@ -5712,6 +5712,16 @@ static void test_shared_file_panel(void)
         &action, &outcome) == ASTRA_OK &&
         outcome == ASTRA_FILE_PANEL_PLACE_ACTION &&
         panel.target[0] == '\0');
+    assert(astra_interface_control_set_value(&context,
+        &controls[ASTRA_FILE_PANEL_PLACES_LIST], 2) == ASTRA_OK);
+    assert(astra_interface_file_panel_set_directory(&panel, &context,
+        controls, "/dh0/Stories", entries, 3u, panel.spare_items,
+        panel.spare_capacity) == ASTRA_OK &&
+        panel.places_collection.selected_id == 3u);
+    assert(astra_interface_file_panel_set_directory(&panel, &context,
+        controls, "/dh0/Stories", entries, 3u, panel.spare_items,
+        panel.spare_capacity) == ASTRA_OK &&
+        panel.places_collection.selected_id == 3u);
     places[2].path = "/dh0";
     assert(astra_interface_file_panel_set_places(&panel, &context, controls,
         places, 3u, place_items, 3u) == ASTRA_OK);

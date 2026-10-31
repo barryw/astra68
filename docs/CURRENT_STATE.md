@@ -2,6 +2,20 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas virtual Place refresh checkpoint, 2026-10-31: Repeated Atlas repaint
+called shared File Panel `set_directory` with unchanged path, which reselected
+DH0 after a Saved Search opened. Interface Kit now preserves a selected virtual
+Place on same-directory refresh; path changes still reselect the matching
+Place. No Atlas-specific selection workaround or new ABI was added. Shared
+File Panel host regression test, Beast Interface Kit host suite, MC68040 Kit
+and Atlas builds passed. Targeted Interface Kit/Atlas DE25 install passed;
+saved `fonts` query stayed highlighted over two RFB frames and showed
+`/dh0/fonts`. Temporary query was removed through its context menu. Board and
+Beast captures matched SHA-256; verified raw/PNG evidence is at
+`/mnt/Documents/astra68/atlas-query-place-20261031/`. Haiku read-only
+`src/kits/tracker/PoseView.cpp` `Refresh` informed keeping query refresh
+independent from directory navigation.
+
 Atlas Recent selection checkpoint, 2026-10-31: Recent Items and Saved Searches
 now finish the same result-view transition through the existing Places refresh;
 the duplicate Saved Search refresh was removed. No new Atlas control or

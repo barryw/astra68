@@ -59,6 +59,12 @@ Recent Items now refreshes Places selection through the same result-view path
 as Saved Searches. DE25 RFB showed Recent highlighted and eight Name/Location
 rows after a targeted Atlas install. Board/Beast capture hashes matched;
 verified evidence: `/mnt/Documents/astra68/atlas-recent-selection-20261031/`.
+Saved Search also remains highlighted after repeated Atlas repaints: shared
+File Panel now preserves a virtual Place on a same-directory refresh. DE25
+showed the highlighted `fonts` query and `/dh0/fonts` result across two RFB
+frames; the temporary query was removed afterward. Beast host tests and
+MC68040 builds passed. Verified evidence:
+`/mnt/Documents/astra68/atlas-query-place-20261031/`.
 
 ## Still unproven or incomplete
 

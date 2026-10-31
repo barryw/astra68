@@ -1579,8 +1579,17 @@ AstraResult astra_interface_file_panel_set_directory(AstraFilePanel *panel,
             if (result != ASTRA_OK) goto rollback;
         }
     }
-    result = file_panel_select_place(context, controls, next,
-        panel->places, panel->place_count);
+    int64_t selected_place = -1;
+    if (strcmp(next, panel->directory) != 0 ||
+        astra_interface_control_get_value(
+            &controls[ASTRA_FILE_PANEL_PLACES_LIST],
+            &selected_place, NULL) != ASTRA_OK ||
+        selected_place < 0 ||
+        (uint64_t)selected_place >= panel->place_count ||
+        panel->places[selected_place].path != NULL)
+        result = file_panel_select_place(context, controls, next,
+            panel->places, panel->place_count);
+    else result = ASTRA_OK;
     if (result != ASTRA_OK) goto rollback;
     astra_runtime_deallocate(panel->list_rows);
     panel->list_rows = next_rows;

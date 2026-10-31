@@ -65,6 +65,10 @@ caller-owned alternate collection under the same File Panel. It hides or
 restores List, Grid, and Columns content while retaining the active view mode
 and selection. Atlas uses it to show a shared Table of recent items in the
 ordinary browser frame.
+Refreshing the same directory with `astra_interface_file_panel_set_directory`
+preserves a selected virtual Place (a row with no path). Changing directory
+still selects the longest matching path Place. This lets alternate collections
+keep their sidebar identity while a directory snapshot refreshes.
 Table header clicks emit `ASTRA_UI_ACTION_SORT_REQUESTED` with a zero-based
 column. Applications sort their data and call
 `astra_interface_table_set_sort` to mark the active column and direction;
