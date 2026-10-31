@@ -279,6 +279,7 @@ enum AtlasMenuRow {
     ATLAS_MENU_EDIT,
     ATLAS_MENU_VIEW,
     ATLAS_MENU_HELP,
+    ATLAS_MENU_NEW_WINDOW,
     ATLAS_MENU_NEW,
     ATLAS_MENU_OPEN,
     ATLAS_MENU_REFRESH,
@@ -307,6 +308,7 @@ enum AtlasMenuRow {
 static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"File", 4u, 0u}, {"Edit", 4u, 0u},
     {"View", 4u, 0u}, {"Help", 4u, 0u},
+    {"New Window", 10u, ASTRA_MENU_PARENT(1u)},
     {"New Drawer", 10u, ASTRA_MENU_PARENT(1u)},
     {"Open", 4u, ASTRA_MENU_PARENT(1u)},
     {"Refresh", 7u, ASTRA_MENU_PARENT(1u)},
@@ -2228,6 +2230,24 @@ static AstraResult menu_query(void *opaque, AstraCommandState *state)
     return ASTRA_OK;
 }
 
+static AstraResult new_window_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"New Window", 10u, 1u, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult new_window(void *opaque, const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    const char *arguments[] = {"/home"};
+    uint32_t process_id;
+    return astra_application_launch_with_arguments(launcher,
+        "/apps/Atlas.app", (uint16_t)(sizeof("/apps/Atlas.app") - 1u),
+        ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 1u, &process_id);
+}
+
 static AstraResult folder_query(void *opaque, AstraCommandState *state)
 {
     AstraResult result = menu_query(opaque, state);
@@ -3431,6 +3451,8 @@ static AstraResult init_toolbar(AstraHandle gui)
 static AstraResult menu_invoke(AstraHandle gui, uint32_t row)
 {
     switch (row) {
+    case ATLAS_MENU_NEW_WINDOW:
+        return new_window(NULL, NULL);
     case ATLAS_MENU_NEW:
         return create_folder(&toolbar_command_context, NULL);
     case ATLAS_MENU_OPEN:
@@ -3517,6 +3539,8 @@ static AstraResult run(AstraHandle gui)
     AstraContextMenuItem menu_items[6];
     uint16_t menu_parents[6] = {0u};
     const AstraCommand commands[] = {
+        {"atlas.window", sizeof("atlas.window") - 1u, 0u, 0u,
+            new_window_query, new_window, &command_context},
         {"atlas.new", 9u, 0u, 0u, menu_query, create_folder, &command_context},
         {"atlas.folder", 12u, 0u, 0u, folder_query, create_folder, &command_context},
         {"atlas.open", 10u, 0u, 0u, open_query, open_selected, &command_context},
@@ -3549,7 +3573,9 @@ static AstraResult run(AstraHandle gui)
         {0x06u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.copy", sizeof("atlas.copy") - 1u},
         {0x1bu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.cut", sizeof("atlas.cut") - 1u},
         {0x19u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.paste", sizeof("atlas.paste") - 1u},
-        {0x11u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.folder", sizeof("atlas.folder") - 1u},
+        {0x11u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.window", sizeof("atlas.window") - 1u},
+        {0x11u, ASTRA_COMMAND_SHORTCUT_PRIMARY | ASTRA_COMMAND_SHORTCUT_SHIFT,
+            "atlas.folder", sizeof("atlas.folder") - 1u},
         {0x12u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.open", sizeof("atlas.open") - 1u},
         {0x15u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.refresh", sizeof("atlas.refresh") - 1u},
         {0x16u, ASTRA_COMMAND_SHORTCUT_PRIMARY | ASTRA_COMMAND_SHORTCUT_ALT,

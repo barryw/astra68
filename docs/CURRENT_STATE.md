@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas New Window checkpoint, 2026-10-31: File > New Window and Primary+N
+launch another Atlas process at `/home` through the existing native
+application launcher. Shift+Primary+N retains New Drawer; both shortcuts use
+Interface Kit's shared command dispatcher with exact modifier matching.
+No new control, renderer, or launch protocol was added. Haiku read-only
+reference: `src/kits/tracker/ContainerWindow.cpp` keeps directory presentation
+in the window; Astra retains its native per-process Atlas window and launcher.
+Beast Atlas host test and MC68040 build passed. Focused DE25 install reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=1 host=0 removed=0`. RFB opened DH0,
+selected File > New Window, and showed a new Atlas window at HOME with its
+three root entries. SHA-verified captures and PNGs are archived on Beast at
+`/mnt/Documents/astra68/atlas-new-window-20261031/`; settled HOME frame raw
+SHA-256 is
+`38e8d761a9eaf4feddf8fc50e661aa8a631bc52cf036bf7872a472d3c294a0a8`.
+
 Atlas shared volume identity checkpoint, 2026-10-31: Atlas, Disk Setup, and
 Desktop now use one NDK `astra_volume_reference_equal` helper for exact
 provider epoch, volume ID, and generation matching. This removes duplicated

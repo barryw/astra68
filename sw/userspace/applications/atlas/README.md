@@ -220,8 +220,11 @@ drag source and destination hits, without its own row-to-directory mapping.
 
 Keyboard bindings use Interface Kit's shared command shortcut dispatcher and
 existing responder chain. Atlas owns only its binding table and suppresses
-global commands while its shared File Panel Search field has focus. Ctrl or
-Command+C/V/N/O/R and Alt+Left/Right use the same actions as menus and toolbar.
+global commands while its shared File Panel Search field has focus. Primary+N
+opens a new Home window through the existing application launcher;
+Shift+Primary+N creates a drawer in the current writable directory. Copy,
+Cut, Paste, Open, Refresh, and Alt+Left/Right use the same actions as menus and
+toolbar.
 The toolbar uses Interface Kit's Toolbar Actions, shared New Folder and Open
 glyphs, command state, overflow, and peer fitting. Toolbar Actions measures
 the same Popup, Checkbox, Breadcrumb, Segmented, and Search Field controls
