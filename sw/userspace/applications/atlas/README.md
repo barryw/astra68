@@ -18,8 +18,11 @@ pair. The parent button remains reachable at narrow widths. Haiku's read-only
 `src/kits/tracker/Navigator.cpp` informed the location/Up composition; Astra
 keeps path targets in its existing shared Breadcrumb rather than adding an
 Atlas path widget.
-File and View menu-bar commands share those same actions. Menu state follows
-selection, writable path, current view, sort order, and hidden-file state.
+File, Edit, and View menu-bar commands share those same actions. Menu state
+follows selection, writable path, current view, sort order, and hidden-file
+state. They publish through the common Menu control; Atlas owns only the
+command names, grouping, and invocation. Haiku's read-only
+`src/kits/interface/MenuBar.cpp` and `Menu.cpp` informed that split.
 
 Atlas appends shared controls through Interface Kit's generic
 `astra_interface_ui_append_control`. A control that exceeds one 128-command

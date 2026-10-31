@@ -20,9 +20,24 @@ Disk Setup raw SHA-256 values are
 and `6bbdeb9d5f7bc4e32219aa8867ec36a3363f8597466280adb309207f670dfff6`.
 Board trial captures were removed. Physical USB transfer remains untested:
 DE25 currently sees only its root USB hub. Standalone Atlas design specifies
-shared global Edit and Window menus; current Atlas still supplies its own
-File, View, and Help menus. Any menu completion belongs in shared menu
-framework, not an Atlas-only duplicate.
+a shared global Window menu; current menu bar publishes app-owned
+File/Edit/View/Help commands through the common Menu control. Window-menu
+completion belongs in the shared display/window framework.
+
+Atlas Edit menu checkpoint, 2026-10-31: Existing Atlas Copy, Cut, Paste,
+Rename, and Trash commands now occupy an Edit heading. This changes only the
+app's common Menu document; dispatch, enable state, rendering, and popups
+retain their shared implementations. Haiku read-only reference:
+`src/kits/interface/MenuBar.cpp` and `src/kits/interface/Menu.cpp` keep menu
+layout and interaction in shared controls. Beast Atlas test and MC68040 build
+passed; display compositor host test passed from its fixture directory.
+Focused DE25 install reported `ASTRA_DE25_DEV_INSTALL PASS guest=1 host=0
+removed=0`. RFB opened DH0 and displayed its Edit menu with all five actions.
+SHA-verified raw captures and PNGs are archived on Beast under
+`/mnt/Documents/astra68/atlas-edit-menu-20261031/`; Edit menu raw SHA-256 is
+`ad6e1deb3ec87ff85a3f1133bd3f31deed03abaa9ca3e98539e13bfa33182970`.
+Board trial captures were removed. Astra, audio, and remote desktop services
+remain active with zero restarts and 8.1 GiB free.
 
 Atlas shared draw-list batching checkpoint, 2026-10-31: A 257-entry directory
 exposed a real `ASTRA_ERROR_NO_RESOURCES` in Interface Kit's fixed 128-command
