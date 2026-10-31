@@ -2,6 +2,19 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas core-action hardware sweep, 2026-10-31: On DE25, Atlas created and
+renamed `SweepProbe` on initially empty RAM0, opened it, created nested
+`Child`, copied that child to RAM0 root through Ctrl+C/Back/Ctrl+V, moved both
+test folders to RAM0 Trash through context menu and toolbar Delete, then
+emptied exactly those two items through the shared confirmation dialog. Final
+Trash view showed zero items. Selected RFB raw frames matched board and Beast
+SHA-256; verified raw/PNG archive at
+`/mnt/Documents/astra68/atlas-core-actions-20261031/`. Trial captures and
+helper removed. Astra, HDMI audio host, and remote desktop active with zero
+restarts. Core-action matrix and remaining gates are in
+`docs/ATLAS_ACCEPTANCE.md`. Physical USB/optical gates still await media;
+only USB root hub is present.
+
 Atlas shared File Panel decoration checkpoint, 2026-10-31: Atlas's content and
 Places backgrounds plus empty/error text now use Interface Kit 12.12 shared
 draw-list helpers; Atlas supplies only directory status/message. Render order
