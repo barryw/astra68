@@ -58,7 +58,7 @@ AstraResult astra_interface_toolbar_set_icons(AstraControl *controls,
         controls[0]._private_style != ASTRA_CONTAINER_STYLE_TOOLBAR)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = 0u; at < count; ++at)
-        if (icons[at] > ASTRA_TOOLBAR_ICON_MORE ||
+        if (icons[at] > ASTRA_TOOLBAR_ICON_NEW_FOLDER ||
             controls[at + 1u]._private_control_kind != ASTRA_CONTROL_BUTTON ||
             (controls[at + 1u]._private_style & ASTRA_BUTTON_STYLE_MASK) !=
                 ASTRA_BUTTON_TOOLBAR)

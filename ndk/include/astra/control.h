@@ -358,7 +358,8 @@ enum {
     ASTRA_TOOLBAR_ICON_LIST,
     ASTRA_TOOLBAR_ICON_COLUMNS,
     ASTRA_TOOLBAR_ICON_SEARCH,
-    ASTRA_TOOLBAR_ICON_MORE /**< Overflow actions chevrons. */
+    ASTRA_TOOLBAR_ICON_MORE, /**< Overflow actions chevrons. */
+    ASTRA_TOOLBAR_ICON_NEW_FOLDER
 };
 
 /** Creation data for a viewport that clips and translates one direct child. */

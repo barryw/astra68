@@ -58,6 +58,8 @@ int astra_surface_draw_blit(AstraSurfaceView *view,
 
 static void test_toolbar_composition(void)
 {
+    _Static_assert(ASTRA_TOOLBAR_ICON_MORE == 12u,
+                   "existing toolbar icon IDs are ABI-stable");
     static const AstraToolbarAction actions[] = {
         {"Open", 4u, 0u}, {"Save", 4u, ASTRA_CONTROL_DISABLED}
     };
@@ -82,13 +84,22 @@ static void test_toolbar_composition(void)
     assert(ASTRA_BUTTON_ICON(controls[1]._private_style) ==
            ASTRA_TOOLBAR_ICON_OPEN);
     {
+        const uint32_t expanded[2] = {
+            ASTRA_TOOLBAR_ICON_NEW_FOLDER, ASTRA_TOOLBAR_ICON_TRASH
+        };
+        assert(astra_interface_toolbar_set_icons(controls, expanded, 2u) ==
+               ASTRA_OK);
+        assert(ASTRA_BUTTON_ICON(controls[1]._private_style) ==
+               ASTRA_TOOLBAR_ICON_NEW_FOLDER);
+    }
+    {
         const uint32_t invalid[2] = {
-            ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_MORE + 1u
+            ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_NEW_FOLDER + 1u
         };
         assert(astra_interface_toolbar_set_icons(controls, invalid, 2u) ==
                ASTRA_ERROR_INVALID_ARGUMENT);
         assert(ASTRA_BUTTON_ICON(controls[1]._private_style) ==
-               ASTRA_TOOLBAR_ICON_OPEN);
+               ASTRA_TOOLBAR_ICON_NEW_FOLDER);
     }
     {
         AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;

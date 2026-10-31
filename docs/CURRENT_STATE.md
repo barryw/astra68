@@ -2,6 +2,33 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared toolbar checkpoint, 2026-10-30: Atlas now requests icon mode
+from Interface Kit's existing Toolbar Actions composition. Shared toolbar
+glyphs gained New Folder, while Atlas's Open action uses the existing folder
+glyph. New glyph ID follows existing overflow ID, so preexisting numeric IDs
+remain stable across the library update. Action labels, command queries, overflow, and resize fitting remain
+owned by Toolbar Actions; Atlas has no private button renderer. Haiku read-only
+references: `src/kits/tracker/Navigator.cpp` composes Back, Forward, and Up
+through `BToolBar::AddAction`; `src/kits/tracker/ContainerWindow.cpp` keeps
+navigation and view commands in the window's shared command machinery. Astra
+adapts this through its native command scope and Astraea draw list. Beast
+Interface Kit and Atlas host tests and MC68040 Atlas/Interface Kit builds
+passed. Focused DE25 install reported `ASTRA_DE25_DEV_INSTALL PASS guest=4`.
+RFB showed Atlas opening DH0 with icon buttons. On RAM0, New drawer created
+`Folder1`; after Enter, selecting it and pressing Trash removed it, leaving
+RAM0 empty. After preserving preexisting icon IDs, the final focused DE25
+install again reported `ASTRA_DE25_DEV_INSTALL PASS guest=4`; its exact Atlas
+binary opened DH0 and showed all 17 entries through RFB. Astra, audio, and
+remote desktop services remained active with zero restarts and 8.1 GiB free.
+Final Atlas binary SHA-256 is
+`570061aef509dc0568d2a366c2069184806841beba060f8f0af7f6c0d63443fe` and Interface
+Kit library SHA-256 is
+`8bcfb7701a5741311fd90f9701a29557b7b0dd8741e60a416040e9dcae4bf765`.
+SHA-verified RFB captures live on Beast under
+`/mnt/Documents/astra68/atlas-toolbar-20261030/`. Places still renders as a
+flat text list; section headings and icons from the design need a shared
+List/File Panel contract before use.
+
 Atlas directory-link drop and startup binding checkpoint, 2026-10-30:
 Atlas now asks the shared File Panel for a presented path and Filesystem Kit
 for the followed type of a symlink drop target. Links to directories accept

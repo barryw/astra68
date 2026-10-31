@@ -896,7 +896,7 @@ static int control_valid(const AstraControl *control)
                 ~(ASTRA_BUTTON_STYLE_MASK | ASTRA_BUTTON_ICON_MASK |
                   ASTRA_BUTTON_ICON_ONLY)) == 0u &&
                ASTRA_BUTTON_ICON(control->_private_style) <=
-                   ASTRA_TOOLBAR_ICON_MORE &&
+                   ASTRA_TOOLBAR_ICON_NEW_FOLDER &&
                (ASTRA_BUTTON_ICON(control->_private_style) == 0u ||
                 (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
                     ASTRA_BUTTON_TOOLBAR) &&
@@ -5683,6 +5683,11 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
         {1, 5, 1, 13}, {1, 13, 14, 13}, {14, 13, 14, 5},
         {14, 5, 7, 5}, {7, 5, 5, 3}, {5, 3, 1, 3}
     };
+    static const ToolbarLine new_folder[] = {
+        {1, 5, 1, 13}, {1, 13, 14, 13}, {14, 13, 14, 5},
+        {14, 5, 7, 5}, {7, 5, 5, 3}, {5, 3, 1, 3},
+        {8, 7, 8, 11}, {6, 9, 10, 9}
+    };
     static const ToolbarLine trash[] = {
         {2, 4, 14, 4}, {5, 2, 11, 2}, {4, 5, 5, 14},
         {5, 14, 11, 14}, {11, 14, 12, 5}, {7, 7, 7, 12},
@@ -5732,6 +5737,7 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
     case ASTRA_TOOLBAR_ICON_LIST: PICK(list); break;
     case ASTRA_TOOLBAR_ICON_COLUMNS: PICK(columns); break;
     case ASTRA_TOOLBAR_ICON_SEARCH: PICK(search); break;
+    case ASTRA_TOOLBAR_ICON_NEW_FOLDER: PICK(new_folder); break;
     case ASTRA_TOOLBAR_ICON_MORE: PICK(more); break;
     default: break;
     }

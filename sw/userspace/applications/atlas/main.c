@@ -3333,9 +3333,9 @@ static const AstraToolbarCommand toolbar_actions[] = {
     {"atlas.forward", 13u, "Forward", 7u,
         ASTRA_TOOLBAR_ICON_FORWARD, {0u, 0u}},
     {"atlas.folder", 12u, "New drawer", 10u,
-        ASTRA_TOOLBAR_ICON_OPEN, {0u, 0u}},
+        ASTRA_TOOLBAR_ICON_NEW_FOLDER, {0u, 0u}},
     {"atlas.open", 10u, "Open", 4u,
-        ASTRA_TOOLBAR_ICON_FORWARD, {0u, 0u}},
+        ASTRA_TOOLBAR_ICON_OPEN, {0u, 0u}},
     {"atlas.delete", 12u, "Delete", 6u,
         ASTRA_TOOLBAR_ICON_TRASH, {0u, 0u}},
     {"atlas.refresh", 13u, "Refresh", 7u,
@@ -3351,7 +3351,7 @@ static AstraResult fit_toolbar(void)
     AstraToolbarFit fit = ASTRA_TOOLBAR_FIT_INIT;
     uint32_t room = width > 430u ? width - 430u : 180u;
     AstraResult result = astra_interface_toolbar_actions_fit(&toolbar,
-        &ui, room, ASTRA_TOOLBAR_LABELS, &fit);
+        &ui, room, ASTRA_TOOLBAR_ICONS_ONLY, &fit);
 
     return result == ASTRA_ERROR_NO_RESOURCES ? ASTRA_OK : result;
 }
