@@ -1,6 +1,7 @@
 #include <astra/filesystem_library.h>
 #include <astra/runtime.h>
 #include <astra/string.h>
+#include <astra/vfs_path.h>
 
 #include <string.h>
 
@@ -366,6 +367,12 @@ uint32_t astra_filesystem_move_tree_between(AstraFilesystem *source_filesystem,
 
     if (published != NULL) *published = 0u;
     if (published == NULL) return ASTRA_VFS_ERR_INVALID;
+    /* A copied assign root cannot be removed safely: the recursive cleanup
+     * would erase its children before the provider refuses the root unlink. */
+    if (source == NULL || source[0] != '/' || source[1] == '/' ||
+        astra_path_leaf(source) <= source + 1u ||
+        astra_path_requires_walk(source))
+        return ASTRA_VFS_ERR_INVALID;
     status = transfer_preflight(source_filesystem, source,
         destination_filesystem, destination);
     if (status != ASTRA_VFS_OK) return status;

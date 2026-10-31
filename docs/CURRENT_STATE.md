@@ -2,6 +2,22 @@
 
 Status: active continuation map, 2026-10-31
 
+Filesystem tree-move root guard, 2026-10-31: Shared Filesystem Kit now refuses
+an assign root, trailing separator, or dot-component source before a move can
+publish a cross-volume copy. Previously its post-copy recursive removal could
+delete root children before provider refused root unlink. The guard reuses
+native path parsing; no Atlas-only transfer policy was added. Beast copy/move
+host regression verifies an attempted root move leaves source children intact
+and publishes no destination. Filesystem Kit library contract and MC68040 Kit
+bundle passed. DE25 targeted Kit install passed; Atlas reopened RAM0 with the
+updated library. Matching board/Beast raw capture and PNG are archived at
+`/mnt/Documents/astra68/atlas-root-move-guard-20261031/`. Dangerous root
+move itself was covered by host regression, not attempted on production media.
+Full Beast VFS host suite passed. Native Trash recovery design and remaining
+gates are recorded in `docs/TRASH_LIFECYCLE.md`. Board captures were removed;
+Astra, audio, and remote desktop remain active, Astra has zero restarts, and
+board has 8.1 GiB free.
+
 Atlas shared folder-operation checkpoint, 2026-10-31: Desktop and Atlas now
 use Filesystem Kit's existing atomic rename-without-replacement primitive for
 Rename and Move to Trash. The common folder helper no longer manufactures a

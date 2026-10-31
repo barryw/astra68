@@ -24,6 +24,14 @@ static uint32_t inject_publish_collision;
 static AstraFilesystem *expected_source;
 static AstraFilesystem *expected_destination;
 
+/* Path normalization has its own tests; this seam verifies move calls it. */
+int astra_path_requires_walk(const char *path)
+{
+    size_t length = strlen(path);
+    return (length != 0u && path[length - 1u] == '/') ||
+        strcmp(path, "/dh0/..") == 0;
+}
+
 static void check_namespace(AstraFilesystem *filesystem, const char *path)
 {
     if (expected_source == NULL) return;
@@ -351,6 +359,7 @@ int main(void)
     memcpy(source_link->bytes, "Doom", 4u);
     source_link->length = 4u;
     AstraFilesystem removable = ASTRA_FILESYSTEM_INIT;
+    uint32_t published = 99u;
     expected_source = &filesystem;
     expected_destination = &removable;
     assert(astra_filesystem_copy_tree_between(&filesystem, "/dh0/Doom.app",
@@ -366,9 +375,25 @@ int main(void)
     entry_count = 0u;
     expected_source = NULL;
     expected_destination = NULL;
+    add("/dh0", ASTRA_VFS_KIND_DIRECTORY);
+    add("/dh0/keep", ASTRA_VFS_KIND_FILE);
+    published = 99u;
+    assert(astra_filesystem_move_tree_between(&filesystem, "/dh0",
+        &removable, "/usb0/root", &published) == ASTRA_VFS_ERR_INVALID);
+    assert(published == 0u && find("/dh0/keep") != NULL &&
+        find("/usb0/root") == NULL);
+    assert(astra_filesystem_move_tree_between(&filesystem, "/dh0/",
+        &removable, "/usb0/root", &published) == ASTRA_VFS_ERR_INVALID);
+    assert(astra_filesystem_move_tree_between(&filesystem, "/dh0/..",
+        &removable, "/usb0/root", &published) == ASTRA_VFS_ERR_INVALID);
+    assert(find("/dh0/keep") != NULL && find("/usb0/root") == NULL);
+
+    entry_count = 0u;
+    expected_source = NULL;
+    expected_destination = NULL;
     add("/dh0/Old", ASTRA_VFS_KIND_DIRECTORY);
     add("/dh0/Old/Child", ASTRA_VFS_KIND_FILE);
-    uint32_t published = 99u;
+    published = 99u;
     assert(astra_filesystem_move_tree_between(&filesystem, "/dh0/Old",
         &filesystem, "/dh0/New", &published) == ASTRA_VFS_OK);
     assert(published == 1u && find("/dh0/Old") == NULL &&
