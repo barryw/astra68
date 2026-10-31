@@ -2,6 +2,42 @@
 
 Status: active continuation map, 2026-10-31
 
+Shared Window menu checkpoint, 2026-10-31: Display now contributes a Window
+heading to every active app's system menu bar. Its common Menu control shows
+Send to Back, Bring All to Front, Minimize to Dock, Zoom, and a live list of
+top-level windows. Names are copied while the menu is open, so closing or
+renaming a window cannot leave dangling menu text. Selection resolves a
+stable window ID before changing state; minimized entries can be restored
+from the list. Bring All restores windows in the current GUI session and
+retains the source in front; session zero cannot collect unrelated windows.
+These commands call Display's existing window state machine and emit its
+ordinary state/resize events. Haiku read-only references:
+`src/apps/deskbar/WindowMenu.cpp` builds the live window list when opened;
+`src/kits/interface/MenuBar.cpp` and `src/kits/interface/Window.cpp` retain
+menu interaction and window commands in shared layers. Astra adapts those
+patterns to its display-owned global bar, without Atlas-specific code.
+Beast display compositor tests cover copied labels, activation, minimize,
+and Bring All restoration; MC68040 display build passed. Final focused DE25
+install reported `ASTRA_DE25_DEV_INSTALL PASS guest=1 host=0 removed=0`.
+RFB showed the menu with one and then two Atlas windows, switched from HOME
+back to DH0 via the live list, zoomed DH0 to the usable desktop, minimized
+it, then restored it from its marked `[minimized]` entry. SHA-verified raw
+captures and PNGs are archived on Beast under
+`/mnt/Documents/astra68/atlas-window-menu-20261031/`; two-window menu,
+zoomed DH0, minimized list, and revived DH0 raw SHA-256 values are
+`389a141b709498cb992a441f3802bafad1bd0b3461f7cd1bfa6ef2563c7c6cfb`,
+`7b0fc2ec80b0a38e443a942d7c719ed649dd26b173ecf3ae3159322a5088317f`,
+`ad27bdf73f4ed1cd3461bc08fbafc25e70eef4c3141568bab86d4e47f53e2732`,
+and `0012cc4ac1a71124750d0a9755aac36be9b67d5ae113ddaa4408e3f99c3198a8`.
+Final layout reserves Window heading even when app headings exhaust bar width;
+its overflow host test passed. Final installed binary reopened Window menu
+with matching raw SHA-256
+`74a7b69885420e1ae560ba41d31d9bff744e80f81225a388cc7515c21422a3ce`.
+Board trial captures were removed. Astra, audio, and remote desktop services
+remain active with zero restarts and 8.1 GiB free. Current app-authored Help
+heading precedes Display's Window heading; NDK menu skeleton and platform
+Help ownership still need completion to match design ordering.
+
 Atlas New Window checkpoint, 2026-10-31: File > New Window and Primary+N
 launch another Atlas process at `/home` through the existing native
 application launcher. Shift+Primary+N retains New Drawer; both shortcuts use
@@ -12,7 +48,8 @@ in the window; Astra retains its native per-process Atlas window and launcher.
 Beast Atlas host test and MC68040 build passed. Focused DE25 install reported
 `ASTRA_DE25_DEV_INSTALL PASS guest=1 host=0 removed=0`. RFB opened DH0,
 selected File > New Window, and showed a new Atlas window at HOME with its
-three root entries. SHA-verified captures and PNGs are archived on Beast at
+three root entries. DE25 `astra-top` confirmed two live Atlas processes
+(PIDs 17 and 18) after that action. SHA-verified captures and PNGs are archived on Beast at
 `/mnt/Documents/astra68/atlas-new-window-20261031/`; settled HOME frame raw
 SHA-256 is
 `38e8d761a9eaf4feddf8fc50e661aa8a631bc52cf036bf7872a472d3c294a0a8`.
@@ -34,10 +71,9 @@ Disk Setup raw SHA-256 values are
 `addd278bfe66ceb2181d03580c17e421f22b8c6e7a595d2782b2b2b66dc6731f`,
 and `6bbdeb9d5f7bc4e32219aa8867ec36a3363f8597466280adb309207f670dfff6`.
 Board trial captures were removed. Physical USB transfer remains untested:
-DE25 currently sees only its root USB hub. Standalone Atlas design specifies
-a shared global Window menu; current menu bar publishes app-owned
-File/Edit/View/Help commands through the common Menu control. Window-menu
-completion belongs in the shared display/window framework.
+DE25 currently sees only its root USB hub. At this checkpoint, Atlas still
+published app-owned File/Edit/View/Help commands through the common Menu
+control; the later shared Window-menu checkpoint above adds platform actions.
 
 Atlas Edit menu checkpoint, 2026-10-31: Existing Atlas Copy, Cut, Paste,
 Rename, and Trash commands now occupy an Edit heading. This changes only the

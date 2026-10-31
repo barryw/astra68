@@ -2760,6 +2760,7 @@ static void test_menu_bar_transport(void)
     assert(memcmp(window.bar_rows[0].label, "Story", 5u) == 0);
     state.bar_heading_owner = 1u;
     state.bar_heading_count = 1u;
+    state.bar_window_heading = UINT32_MAX;
     state.bar_heading_left[0] = 140;
     state.bar_heading_right[0] = 200;
     assert(menu_bar_open(&state, 0u) == ASTRA_STATUS_OK);
@@ -2775,6 +2776,52 @@ static void test_menu_bar_transport(void)
         ASTRA_STATUS_OK && changed);
     assert(window.bar_rows == NULL && window.bar_document == NULL);
     assert(astra_close(area) == ASTRA_SYSCALL_OK);
+}
+
+static void test_window_menu_actions(void)
+{
+    DisplayWindow windows[2] = {
+        {.id = 1u, .generation = 1u, .session = 7u,
+            .event_send = 0x500u,
+            .request = {.type = ASTRA_WINDOW_STANDARD, .x = 80u,
+                .y = 80u, .width = 320u, .height = 180u,
+                .title = "First", .title_length = 5u}},
+        {.id = 2u, .generation = 1u, .session = 7u,
+            .event_send = 0x501u,
+            .request = {.type = ASTRA_WINDOW_STANDARD,
+                .flags = ASTRA_WINDOW_ACTIVE | ASTRA_WINDOW_RESIZABLE,
+                .x = 120u, .y = 120u, .width = 320u, .height = 180u,
+                .title = "Second", .title_length = 6u}}
+    };
+    DisplayState state = {.windows = windows, .count = 2u,
+        .bar_heading_owner = 2u, .bar_heading_count = 1u};
+    state.bar_heading_left[0] = 250;
+    assert(menu_bar_open(&state, 0u) == ASTRA_STATUS_OK);
+    assert(state.menu_owner == 0u &&
+        state.menu_request == DISPLAY_WINDOW_MENU_REQUEST &&
+        state.menu._private_count == 8u);
+    assert(memcmp(state.menu_rows[6].label, "Second", 6u) == 0);
+    memcpy(windows[1].request.title, "Change", 6u);
+    assert(memcmp(state.menu_rows[6].label, "Second", 6u) == 0);
+    menu_end(&state, 8u, 0u, ASTRA_STATUS_OK);
+    assert(state.overlay == DISPLAY_OVERLAY_NONE &&
+        state.windows[1].id == 1u &&
+        (state.windows[1].request.flags & ASTRA_WINDOW_ACTIVE) != 0u &&
+        menu_allocations == 0u);
+    state.bar_heading_owner = 1u;
+    assert(menu_bar_open(&state, 0u) == ASTRA_STATUS_OK);
+    menu_end(&state, DISPLAY_WINDOW_MENU_MINIMIZE, 0u, ASTRA_STATUS_OK);
+    assert(state.windows[1].state == ASTRA_WINDOW_STATE_MINIMIZED &&
+        (state.windows[0].request.flags & ASTRA_WINDOW_ACTIVE) != 0u &&
+        menu_allocations == 0u);
+    state.bar_heading_owner = 2u;
+    assert(menu_bar_open(&state, 0u) == ASTRA_STATUS_OK);
+    menu_end(&state, DISPLAY_WINDOW_MENU_FRONT, 0u, ASTRA_STATUS_OK);
+    assert(state.windows[0].state != ASTRA_WINDOW_STATE_MINIMIZED &&
+        state.windows[1].state != ASTRA_WINDOW_STATE_MINIMIZED &&
+        state.windows[1].id == 2u &&
+        (state.windows[1].request.flags & ASTRA_WINDOW_ACTIVE) != 0u &&
+        menu_allocations == 0u);
 }
 
 static void test_context_submenu_hover(void)
@@ -3162,6 +3209,7 @@ int main(void)
     test_dense_menu_render();
     test_context_menu_transport();
     test_menu_bar_transport();
+    test_window_menu_actions();
     test_context_submenu_hover();
     test_content_banks();
     test_malformed_retained_frame();
@@ -3485,9 +3533,29 @@ int main(void)
             assert(build_system_surfaces(&builder, &bar, &bar_theme));
             assert(astra_render_builder_finish(&builder) != 0u);
             assert(bar.bar_heading_owner == 42u);
-            assert(bar.bar_heading_count == 2u);
+            assert(bar.bar_heading_count == 3u);
             assert(bar.bar_heading_left[0] < bar.bar_heading_right[0]);
             assert(bar.bar_heading_right[0] < bar.bar_heading_left[1]);
+            assert(bar.bar_heading_right[1] < bar.bar_heading_left[2]);
+            {
+                char wide_heading[256];
+                memset(wide_heading, 'W', sizeof(wide_heading));
+                headings[0].label = wide_heading;
+                headings[0].label_length = sizeof(wide_heading);
+                bar.system_initialized = 0u;
+                assert(astra_render_builder_init(&builder,
+                    batch, sizeof(batch), 1u));
+                assert(build_system_surfaces(&builder, &bar, &bar_theme));
+                assert(bar.bar_heading_count == 1u &&
+                    bar.bar_window_heading == 0u);
+            }
+            headings[0].label = "Story";
+            headings[0].label_length = 5u;
+            bar.system_initialized = 0u;
+            assert(astra_render_builder_init(&builder,
+                batch, sizeof(batch), 1u));
+            assert(build_system_surfaces(&builder, &bar, &bar_theme));
+            assert(astra_render_builder_finish(&builder) != 0u);
         }
         bar.windows = NULL;
         bar.count = 0u;
