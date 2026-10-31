@@ -107,6 +107,14 @@ int main(void)
     reset(0u);
     assert(astra_directory_snapshot_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_OK);
     assert(model.count == 0u && closes == 1u);
+    astra_directory_snapshot_dispose(&model);
+    reset(2u);
+    assert(astra_directory_snapshot_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_OK);
+    astra_directory_snapshot_filter_name(&model, ".origins");
+    assert(model.count == 2u && strcmp(model.entries[0].name, ".hidden") == 0);
+    astra_directory_snapshot_filter_name(&model, ".hidden");
+    assert(model.count == 1u && strcmp(model.entries[0].name, "caf\xc3\xa9") == 0);
+    astra_directory_snapshot_dispose(&model);
     reset(257u);
     fail_after = 1u;
     assert(astra_directory_snapshot_load(&model, &filesystem, "/dh0", NULL) == ASTRA_VFS_ERR_LIMIT);

@@ -221,7 +221,7 @@ library-contract: $(INTERFACE_TARGET)
 		$(INTERFACE_TARGET) $(GRAPHICS_LIBRARY) $(FONT_LIBRARY) \
 		$(SYSTEM_LIBRARY) $(RUNTIME_LIBRARY) $(COMPILER_LIBRARY)
 	@python3 ../../../tools/library_info.py $(INTERFACE_TARGET) | \
-		grep -q '^interface.library.12 12.9.0 ABI 12.9$$'
+		grep -q '^interface.library.12 12.10.0 ABI 12.10$$'
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \
 		grep -Fc 'Shared library: [graphics.library.3]')" = 1
 	@test "$$($(READELF) -dW $(INTERFACE_TARGET) | \

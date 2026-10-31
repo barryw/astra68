@@ -233,3 +233,11 @@ ASTRA_FILESYSTEM_15.10 {
         astra_vfs_rename_noreplace;
         astra_vfs_rename_noreplace_at;
 } ASTRA_FILESYSTEM_15.8;
+
+ASTRA_FILESYSTEM_15.11 {
+    global:
+        astra_trash_move;
+        astra_trash_origin;
+        astra_trash_restore;
+        astra_trash_empty;
+} ASTRA_FILESYSTEM_15.10;

@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas native Trash checkpoint, 2026-10-31: Filesystem Kit 15.11 owns per-volume
+Move to Trash, origin records, Restore, and Empty Trash; Desktop and Atlas use
+the same storage API. Metadata lives beside payloads under `.Trash/.origins`,
+stores a path relative to the volume root for remount-safe Restore, and is
+staged and synced before atomic rename. Recursive removal reuses Filesystem
+Kit's existing tree walker. Atlas binds existing File Panel Places, command
+menus, context menus, and Interface Kit confirmation; no Atlas filesystem
+implementation or new one-off control was added. Existing directory-snapshot
+filtering hides metadata while keeping trashed dotfiles visible. Haiku
+read-only references: `src/kits/tracker/FSUtils.cpp`, `PoseView.cpp`, and
+`ContainerWindow.cpp`; `src/kits/interface/Alert.cpp`. Beast VFS and Interface
+Kit host suites, library contracts, Atlas host test and MC68040 build, and NDK
+API docs passed. DE25 targeted Kit, Desktop, and Atlas installs passed. On
+RAM0, RFB created, trashed, restored, and permanently deleted folders; Cancel
+preserved payload, occupied Restore reported `already exists: /ram0/Collision`
+without overwriting either item, hidden metadata stayed hidden, and attempted
+drag from Trash retained its item. Matching board/Beast raw SHA-256 and PNG
+evidence are archived at
+`/mnt/Documents/astra68/atlas-trash-lifecycle-20261031/`. Trial RAM0 content
+and board captures were removed. Astra, HDMI audio host, and remote desktop
+are active; Astra has zero restarts and board has 8.1 GiB free. Physical USB
+removal/remount Trash qualification remains pending removable media; host
+remount-slot test passed. `docs/TRASH_LIFECYCLE.md` records contract and gates.
+
 Filesystem tree-move root guard, 2026-10-31: Shared Filesystem Kit now refuses
 an assign root, trailing separator, or dot-component source before a move can
 publish a cross-volume copy. Previously its post-copy recursive removal could
@@ -35,9 +59,9 @@ cleared by service restart. Board/Beast raw-frame SHA-256 matched; captures
 and PNGs are archived at
 `/mnt/Documents/astra68/atlas-atomic-folder-ops-20261031/`. Board captures
 were removed; Astra, audio, and remote desktop are active, Astra has zero
-restarts, and board has 8.1 GiB free. Trash still lacks durable original-path
-metadata, Restore, and Empty Trash actions; those need one shared lifecycle
-before Atlas or Desktop adds UI.
+restarts, and board has 8.1 GiB free. At this earlier checkpoint, Trash lacked
+durable original-path metadata, Restore, and Empty Trash; the native Trash
+checkpoint above closes that gap.
 
 Atlas ISO image volume checkpoint, 2026-10-31: A staged 366592-byte ISO image
 mounted at `/cd0` read-only and published Desktop icon `ATLAS_TEST`.

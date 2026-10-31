@@ -29,6 +29,10 @@ reference and poll status. Mounting, files, and provider transport remain in
 :project: astra-ndk
 ```
 
+```{doxygenfile} trash.h
+:project: astra-ndk
+```
+
 ```{doxygenfile} package_library.h
 :project: astra-ndk
 ```

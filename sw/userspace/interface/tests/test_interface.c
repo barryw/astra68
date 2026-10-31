@@ -20,6 +20,8 @@ void *astra_runtime_allocate(size_t bytes) { return malloc(bytes); }
 void astra_runtime_deallocate(void *pointer) { free(pointer); }
 
 int astra_interface_test_valid(const AstraAlertInfo *info);
+int astra_interface_test_confirm_layout(const AstraAlertInfo *info,
+    int32_t *button_x, int32_t *button_y);
 void astra_interface_test_paint(AstraSurfaceView *surface,
                                 const AstraAlertInfo *info);
 void astra_interface_test_layout(void);
@@ -238,6 +240,10 @@ static uint32_t alert_activate_calls;
 static uint32_t alert_close_calls;
 static uint32_t alert_font_events;
 static uint32_t alert_font_refreshes;
+static uint32_t alert_click_phase;
+static int32_t alert_click_x, alert_click_y;
+static AstraWindowEvent pointer_event(uint16_t type, uint32_t flags,
+    int32_t x, int32_t y);
 
 AstraResult astra_fonts_use_system(AstraHandle gui, const AstraWindowEvent *change)
 {
@@ -343,6 +349,13 @@ AstraResult astra_window_event_wait(AstraWindow *window,
             .version = ASTRA_WINDOW_EVENT_VERSION, .type = ASTRA_WINDOW_EVENT_FONT_CHANGED};
         event->data.font_changed.generation = 7u;
         event->data.font_changed.window = 7u;
+        return ASTRA_OK;
+    }
+    if (alert_click_phase != 0u) {
+        *event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
+            alert_click_phase == 1u ? ASTRA_WINDOW_EVENT_DOWN : 0u,
+            alert_click_x, alert_click_y);
+        alert_click_phase = alert_click_phase == 1u ? 2u : 0u;
         return ASTRA_OK;
     }
     event->type = ASTRA_WINDOW_EVENT_CLOSE_REQUEST;
@@ -6462,6 +6475,14 @@ int main(void)
     assert(alert_create_calls == 2u && alert_name_calls == 2u &&
            alert_activate_calls == 1u && alert_close_calls == 2u);
     alert_name_result = ASTRA_OK;
+    assert(astra_interface_test_confirm_layout(&info,
+        &alert_click_x, &alert_click_y));
+    uint32_t confirmed = 99u;
+    assert(astra_interface_confirm(1u, &info, "Cancel", 6u,
+        &confirmed) == ASTRA_OK && confirmed == 0u);
+    alert_click_phase = 1u;
+    assert(astra_interface_confirm(1u, &info, "Cancel", 6u,
+        &confirmed) == ASTRA_OK && confirmed == 1u);
     text_calls = 0u;
     {
         AstraSurfaceView surface = render_view(420u, 150u);

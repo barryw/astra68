@@ -23,10 +23,10 @@ capability LIBS:r
 capability LOG
 capability PROC:r
 requires compiler.library 2 2.0.0
-requires filesystem.library 15 15.10.0
+requires filesystem.library 15 15.11.0
 requires font.library 5 5.0.0
 requires graphics.library 3 3.0.0
-requires interface.library 12 12.9.0
+requires interface.library 12 12.10.0
 requires package.library 1 1.0.0
 requires runtime.library 1 1.5.0
 requires system.library 4 4.6.0

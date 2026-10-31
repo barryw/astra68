@@ -31,6 +31,7 @@
 #include <astra/window.h>
 #include <astra/volume.h>
 #include <astra/ascii.h>
+#include <astra/trash.h>
 
 #include "desktop_layout.h"
 #include "../../common/volume_usage_dialog.h"
@@ -45,7 +46,6 @@
 #define DESKTOP_SCROLLBAR_WIDTH 12u
 #define DESKTOP_GRID_WIDTH (DESKTOP_WIDTH - DESKTOP_SCROLLBAR_WIDTH)
 #define DESKTOP_DIRECTORY "/home/Desktop"
-#define DESKTOP_TRASH_DIRECTORY "/home/.Trash"
 
 enum {
     DESKTOP_FAIL_FILESYSTEM = ASTRA_STATUS_PROGRAM_FIRST,
@@ -477,8 +477,8 @@ static AstraResult delete_folder(void *opaque, const AstraCommandArguments *args
     const AstraDirectoryEntry *folder = visible_folder(context->apps, cell);
     if (folder == NULL || astra_folder_path(DESKTOP_DIRECTORY, folder->name,
         source, sizeof(source)) != ASTRA_VFS_OK) return ASTRA_ERROR_INVALID_ARGUMENT;
-    uint32_t status = astra_entry_move_to_trash(&process_filesystem.filesystem,
-        source, DESKTOP_TRASH_DIRECTORY, moved, sizeof(moved));
+    uint32_t status = astra_trash_move(&process_filesystem.filesystem,
+        "/home", source, moved, sizeof(moved));
     if (status != ASTRA_VFS_OK) {
         folder_error(context->gui, "Folder could not be deleted", status);
         return astra_result_from_service(status);

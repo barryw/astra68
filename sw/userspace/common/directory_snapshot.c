@@ -37,14 +37,37 @@ void astra_directory_snapshot_dispose(AstraDirectorySnapshot *model)
     *model = (AstraDirectorySnapshot)ASTRA_DIRECTORY_SNAPSHOT_INIT;
 }
 
-void astra_directory_snapshot_filter_hidden(AstraDirectorySnapshot *model)
+static void filter_entries(AstraDirectorySnapshot *model,
+    int (*exclude)(const char *, const void *), const void *context)
 {
     uint32_t visible = 0u;
     if (model == NULL || model->status != ASTRA_VFS_OK) return;
     for (uint32_t at = 0u; at < model->count; ++at)
-        if (model->entries[at].name[0] != '.')
+        if (!exclude(model->entries[at].name, context))
             model->entries[visible++] = model->entries[at];
     model->count = visible;
+}
+
+static int hidden_name(const char *name, const void *context)
+{
+    (void)context;
+    return name[0] == '.';
+}
+
+static int exact_name(const char *name, const void *context)
+{
+    return strcmp(name, context) == 0;
+}
+
+void astra_directory_snapshot_filter_hidden(AstraDirectorySnapshot *model)
+{
+    filter_entries(model, hidden_name, NULL);
+}
+
+void astra_directory_snapshot_filter_name(AstraDirectorySnapshot *model,
+    const char *name)
+{
+    if (name != NULL) filter_entries(model, exact_name, name);
 }
 
 static int name_compare(const char *left, const char *right)

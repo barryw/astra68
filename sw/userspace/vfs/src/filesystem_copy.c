@@ -2,6 +2,7 @@
 #include <astra/runtime.h>
 #include <astra/string.h>
 #include <astra/vfs_path.h>
+#include <astra/filesystem_tree_internal.h>
 
 #include <string.h>
 
@@ -221,8 +222,18 @@ static uint32_t copy_one(AstraFilesystem *source_filesystem,
     return status;
 }
 
-static uint32_t remove_partial(AstraFilesystem *filesystem, const char *path)
+static int removable_path(const char *path)
 {
+    return path != NULL && path[0] == '/' && path[1] != '/' &&
+        astra_path_leaf(path) > path + 1u &&
+        !astra_path_requires_walk(path);
+}
+
+uint32_t astra_filesystem_remove_tree_internal(AstraFilesystem *filesystem,
+    const char *path)
+{
+    if (filesystem == NULL || !removable_path(path))
+        return ASTRA_VFS_ERR_INVALID;
     char *child = astra_runtime_allocate(ASTRA_VFS_PATH_MAX);
     AstraFileInfo info = ASTRA_FILE_INFO_INIT;
     uint32_t status = ASTRA_VFS_OK;
@@ -347,7 +358,8 @@ uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
         status = astra_filesystem_rename_noreplace(destination_filesystem,
             staging, destination);
     if (status != ASTRA_VFS_OK && created)
-        (void)remove_partial(destination_filesystem, staging);
+        (void)astra_filesystem_remove_tree_internal(destination_filesystem,
+            staging);
     astra_runtime_deallocate(staging);
     return status;
 }
@@ -369,9 +381,7 @@ uint32_t astra_filesystem_move_tree_between(AstraFilesystem *source_filesystem,
     if (published == NULL) return ASTRA_VFS_ERR_INVALID;
     /* A copied assign root cannot be removed safely: the recursive cleanup
      * would erase its children before the provider refuses the root unlink. */
-    if (source == NULL || source[0] != '/' || source[1] == '/' ||
-        astra_path_leaf(source) <= source + 1u ||
-        astra_path_requires_walk(source))
+    if (!removable_path(source))
         return ASTRA_VFS_ERR_INVALID;
     status = transfer_preflight(source_filesystem, source,
         destination_filesystem, destination);
@@ -393,5 +403,5 @@ uint32_t astra_filesystem_move_tree_between(AstraFilesystem *source_filesystem,
         destination_filesystem, destination);
     if (status != ASTRA_VFS_OK) return status;
     *published = 1u;
-    return remove_partial(source_filesystem, source);
+    return astra_filesystem_remove_tree_internal(source_filesystem, source);
 }

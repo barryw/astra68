@@ -23,11 +23,26 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.12. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 12u
 /** Current Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 9u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 10u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
                                        const AstraAlertInfo *info);
+
+/** Show a two-button modal confirmation using shared Label, Container and
+ * Button controls. Closing the window or choosing cancel leaves confirmed
+ * zero. Only activation of info->button sets it to one.
+ * @param gui GUI capability.
+ * @param info Alert text and affirmative button label.
+ * @param cancel Counted UTF-8 cancellation button label.
+ * @param cancel_length Bytes in cancel.
+ * @param confirmed Receives one only after affirmative activation.
+ * @return ASTRA_OK or a specific error.
+ * @since Interface Kit 12.10.
+ */
+AstraResult astra_interface_confirm(AstraHandle gui,
+    const AstraAlertInfo *info, const char *cancel,
+    uint16_t cancel_length, uint32_t *confirmed);
 
 /** Initialize a retained label.
  * @param control Caller-owned control to initialize.

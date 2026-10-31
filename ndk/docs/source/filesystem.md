@@ -44,6 +44,18 @@ absent. Filesystem Kit tree copy and move use this atomic operation, so a
 concurrent creator cannot have its destination replaced after the copy's
 initial existence check.
 
+ABI 15.11 provides the per-volume recoverable Trash lifecycle. `astra_trash_move`
+writes and syncs a volume-relative origin record before atomically moving an
+item. `astra_trash_origin` reads that record through the current volume root,
+so a changed removable mount slot does not change the intended restore path.
+`astra_trash_restore` returns the original path and atomically renames without
+replacement; its `moved` output distinguishes a completed rename from a
+failed metadata cleanup. `astra_trash_empty` removes payload trees without
+following symbolic links and reports the exact failed path and completed
+payload count. All operations use the caller's existing filesystem view and
+permissions. Legacy Trash entries without origin records can be emptied but
+cannot be restored automatically.
+
 The native ABI is not a libc ABI. `libc.library.4` provides the POSIX file
 API -- descriptors, the current directory, `errno`, and stdio -- over these
 same operations; a POSIX program uses it instead. See the repository's
