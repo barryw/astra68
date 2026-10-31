@@ -65,6 +65,11 @@ which volume is affected. Missing original-path metadata is shown as
 unrestorable; users may copy that item to a chosen folder through existing
 Copy/Paste, then empty Trash. Desktop can expose the same commands without
 another Trash implementation.
+Dragging into Trash invokes the same Filesystem Kit move API and requires an
+exact matching volume. Dragging out copies the payload, leaving its origin
+record intact for Restore or Empty Trash. The shared display service waits for
+target feedback after a quick pointer release; no Atlas-specific drag timer or
+filesystem operation is needed.
 
 ## Verification gates
 

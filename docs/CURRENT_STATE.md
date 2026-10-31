@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared drag-to-Trash checkpoint, 2026-10-31: Atlas routes drops on the
+current volume's Trash Place through Filesystem Kit's existing
+`astra_trash_move`, requiring the source's exact mount identity and a same
+volume path. Dragging out offers Copy so the payload and origin record remain
+available for Restore or Empty Trash. The display service now retains a quick
+release while target feedback is pending, then delivers a validated drop or
+cancels it; this fixes a generic drag race for all clients without an Atlas
+timer. Read-only Haiku reference: `src/kits/tracker/PoseView.cpp`
+(`DoMoveToTrash` and foreign-drop handling) routes Trash as a distinct target
+operation. Beast Atlas and display host tests and MC68040 builds passed.
+Targeted DE25 Atlas and display installs passed. RAM0 trials moved `Two` into
+Trash by drag, copied `One-1` out with a quick drag, and restored the original
+`One` beside its copy. Trash retained both payloads after Copy; Empty Trash
+and root cleanup left RAM0 empty. Board/Beast raw SHA-256 matched; selected
+captures and PNGs are archived at
+`/mnt/Documents/astra68/atlas-drag-trash-20261031/`. Board trial captures and
+helper were removed. Astra, HDMI audio host, and remote desktop remain active,
+with zero Astra restarts and 8.1 GiB free. Physical removable-volume drag and
+remount still need a disposable device.
+
 Atlas native Trash checkpoint, 2026-10-31: Filesystem Kit 15.11 owns per-volume
 Move to Trash, origin records, Restore, and Empty Trash; Desktop and Atlas use
 the same storage API. Metadata lives beside payloads under `.Trash/.origins`,

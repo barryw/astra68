@@ -3048,7 +3048,6 @@ static AstraResult clipboard_selected(uint32_t operation)
 
 static AstraResult begin_selected_drag(void)
 {
-    if (trash_root()) return ASTRA_ERROR_PERMISSION;
     AstraVfsClipboardSelection *selection = NULL;
     AstraResult result = selected_transfer(ASTRA_VFS_CLIPBOARD_COPY,
         &selection);
@@ -3065,7 +3064,8 @@ static AstraResult begin_selected_drag(void)
     representation.data_length = selection->size;
     result = astra_window_drag_begin(&window, &representation, 1u,
         selection->count, ASTRA_DRAG_COPY |
-            (writable_folder_root() ? ASTRA_DRAG_MOVE : 0u), label,
+            (writable_folder_root() && !trash_root() ?
+                ASTRA_DRAG_MOVE : 0u), label,
         (uint16_t)length);
     astra_runtime_deallocate(selection);
     return result;
@@ -3352,7 +3352,6 @@ static AstraResult drag_destination_at(int32_t x, int32_t y,
         BROWSER_CONTROL(ASTRA_FILE_PANEL_LIST), control_id,
         row, path, capacity, &entry);
     if (result != ASTRA_OK) return result;
-    if (trash_directory_path(path)) return ASTRA_ERROR_PERMISSION;
     if (entry != NULL && entry->kind != ASTRA_VFS_KIND_DIRECTORY) {
         if (entry->kind != ASTRA_VFS_KIND_SYMLINK)
             return ASTRA_ERROR_NOT_PRESENT;
@@ -3387,11 +3386,33 @@ static AstraResult drag_destination_at(int32_t x, int32_t y,
     return ASTRA_ERROR_PERMISSION;
 }
 
+static int trash_drop_allowed(const AstraVfsClipboardSelection *selection,
+    const AstraVolumeReference *target, const char *destination)
+{
+    if (selection == NULL || selection->count == 0u || target == NULL ||
+        !trash_directory_path(destination)) return 0;
+    size_t root_length = (size_t)(astra_path_leaf(destination) - destination - 1u);
+    for (uint32_t at = 0u; at < selection->count; ++at) {
+        const AstraVfsClipboardEntry *entry = &selection->entries[at];
+        const char *source = entry->path;
+        if (!astra_volume_reference_equal(&entry->volume, target) ||
+            source == NULL || strncmp(source, destination, root_length) != 0 ||
+            source[root_length] != '/' || source[root_length + 1u] == '\0' ||
+            astra_path_beneath(source, destination) ||
+            astra_path_requires_walk(source)) return 0;
+    }
+    return 1;
+}
+
 static uint32_t drag_operation_for(
     const AstraVfsClipboardSelection *selection,
     const AstraVolumeReference *target, const char *destination,
     uint32_t allowed, uint32_t modifiers)
 {
+    if (trash_directory_path(destination))
+        return (allowed & ASTRA_DRAG_MOVE) != 0u &&
+            trash_drop_allowed(selection, target, destination) ?
+            ASTRA_DRAG_MOVE : 0u;
     uint32_t same_volume = selection != NULL && selection->count != 0u;
     for (uint32_t at = 0u; same_volume && at < selection->count; ++at) {
         const AstraVfsClipboardEntry *entry = &selection->entries[at];
@@ -3423,6 +3444,10 @@ static AstraResult drag_transfer(AstraHandle gui,
     const char *destination, const AstraVolumeReference *target,
     uint32_t origin)
 {
+    int to_trash = trash_directory_path(destination);
+    if (to_trash && (operation != ASTRA_DRAG_MOVE ||
+        !trash_drop_allowed(selection, target, destination)))
+        return ASTRA_ERROR_PERMISSION;
     AtlasCopyMount target_mount = {
         .grant = ASTRA_INVALID_HANDLE,
         .assigns = ASTRA_ASSIGN_TABLE_INIT,
@@ -3450,11 +3475,30 @@ static AstraResult drag_transfer(AstraHandle gui,
         result = status != ASTRA_VFS_OK ?
             astra_result_from_service(status) : ASTRA_ERROR_INVALID_ARGUMENT;
     uint32_t completed = 0u, published = 0u;
-    for (; result == ASTRA_OK && completed < selection->count; ++completed)
-        result = paste_entry(&selection->entries[completed], operation ==
-            ASTRA_DRAG_MOVE ? ASTRA_VFS_CLIPBOARD_MOVE :
-                ASTRA_VFS_CLIPBOARD_COPY, target_filesystem, destination,
-            target, &published);
+    char volume_root[ASTRA_VFS_PATH_MAX];
+    if (to_trash) {
+        size_t length = (size_t)(astra_path_leaf(destination) -
+            destination - 1u);
+        memcpy(volume_root, destination, length);
+        volume_root[length] = '\0';
+    }
+    for (; result == ASTRA_OK && completed < selection->count; ++completed) {
+        if (to_trash) {
+            char trashed[ASTRA_VFS_PATH_MAX];
+            uint32_t status = astra_trash_move(target_filesystem, volume_root,
+                selection->entries[completed].path, trashed,
+                sizeof(trashed));
+            result = astra_result_from_service(status);
+            if (result == ASTRA_OK) ++published;
+        } else {
+            uint32_t entry_published = 0u;
+            result = paste_entry(&selection->entries[completed], operation ==
+                ASTRA_DRAG_MOVE ? ASTRA_VFS_CLIPBOARD_MOVE :
+                    ASTRA_VFS_CLIPBOARD_COPY, target_filesystem,
+                destination, target, &entry_published);
+            published += entry_published;
+        }
+    }
     if (target->id != 0u) copy_mount_close(&target_mount);
     if (completed != 0u || published != 0u) {
         AstraResult refreshed = reload_directory();

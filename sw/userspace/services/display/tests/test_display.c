@@ -2001,6 +2001,72 @@ static void test_drag_session_routing(void)
            delivered.event.data.drag.operation == 0u);
 }
 
+static void test_drag_release_waits_for_target_feedback(void)
+{
+    DisplayWindow windows[2] = {0};
+    DisplayState state = {.windows = windows, .capacity = 2u, .count = 2u};
+    AstraGuiWindowCommand feedback = {0};
+    uint32_t area = 0u;
+    assert(astra_rt_area_create(4096u,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER, &area) == ASTRA_SYSCALL_OK);
+    for (uint32_t at = 0u; at < 2u; ++at) {
+        windows[at].id = at + 1u;
+        windows[at].event_send = 0x500u;
+        windows[at].request.type = ASTRA_WINDOW_STANDARD;
+        windows[at].request.event_mask = ASTRA_WINDOW_SUBSCRIBE_DRAG;
+    }
+    state.drag = (DisplayDrag){.token = 7u, .source = 1u, .target = 2u,
+        .document_area = area, .allowed = ASTRA_DRAG_COPY};
+    state.overlay = DISPLAY_OVERLAY_DRAG;
+    feedback.window = 2u;
+    feedback.flags = 7u;
+    feedback.x = ASTRA_DRAG_COPY;
+    feedback.title_length = 4u;
+    memcpy(feedback.title, "Copy", 4u);
+
+    drag_release(&state, ASTRA_INPUT_MOD_ALT, 123u);
+    assert(state.drag.source == 1u && state.drag.target == 2u &&
+        state.drag.drop_pending == DISPLAY_DRAG_WAIT_FEEDBACK &&
+        state.drag.deadline_ns > astra_clock_monotonic());
+    assert(drag_feedback(&state, &feedback) == ASTRA_STATUS_OK);
+    assert(state.drag.drop_pending == DISPLAY_DRAG_WAIT_COMPLETE &&
+        state.drag.accepted == ASTRA_DRAG_COPY &&
+        delivered.event.type == ASTRA_WINDOW_EVENT_DRAG_DROP &&
+        delivered.event.data.drag.operation == ASTRA_DRAG_COPY &&
+        delivered.event.data.drag.modifiers == ASTRA_INPUT_MOD_ALT &&
+        delivered.event.timestamp_ms == 123u);
+    drag_finish(&state, 2u, ASTRA_DRAG_COPY, 0u, 124u);
+    assert(state.drag.source == 0u);
+
+    assert(astra_rt_area_create(4096u,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER, &area) == ASTRA_SYSCALL_OK);
+    state.drag = (DisplayDrag){.token = 8u, .source = 1u, .target = 2u,
+        .document_area = area, .allowed = ASTRA_DRAG_COPY};
+    state.overlay = DISPLAY_OVERLAY_DRAG;
+    drag_release(&state, 0u, 125u);
+    feedback.flags = 8u;
+    feedback.x = 0u;
+    assert(drag_feedback(&state, &feedback) == ASTRA_STATUS_OK);
+    assert(state.drag.source == 0u &&
+        delivered.event.type == ASTRA_WINDOW_EVENT_DRAG_FINISHED &&
+        delivered.event.data.drag.operation == 0u);
+
+    assert(astra_rt_area_create(4096u,
+        ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE | ASTRA_RIGHT_MAP |
+        ASTRA_RIGHT_TRANSFER, &area) == ASTRA_SYSCALL_OK);
+    state.drag = (DisplayDrag){.token = 9u, .source = 1u, .target = 2u,
+        .document_area = area, .allowed = ASTRA_DRAG_COPY,
+        .accepted = ASTRA_DRAG_COPY, .feedback_seen = 1u};
+    state.overlay = DISPLAY_OVERLAY_DRAG;
+    drag_release(&state, 0u, 126u);
+    assert(state.drag.drop_pending == DISPLAY_DRAG_WAIT_COMPLETE &&
+        delivered.event.type == ASTRA_WINDOW_EVENT_DRAG_DROP &&
+        delivered.event.timestamp_ms == 126u);
+    drag_finish(&state, 2u, ASTRA_DRAG_COPY, 0u, 127u);
+}
+
 static void test_malformed_retained_frame(void)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -5270,6 +5336,7 @@ int main(void)
     }
     test_launch_panel();
     test_drag_session_routing();
+    test_drag_release_waits_for_target_feedback();
     test_shrunk_window_copy_forward();
     puts("display compositor tests passed");
     return 0;

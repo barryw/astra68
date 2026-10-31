@@ -216,13 +216,19 @@ typedef struct DisplayDrag {
     uint32_t accepted;
     uint32_t item_count;
     uint32_t revision;
+    uint32_t release_modifiers;
+    uint32_t release_timestamp_ms;
     uint64_t deadline_ns;
     uint8_t drop_pending;
+    uint8_t feedback_seen;
     uint16_t label_length;
     uint16_t feedback_length;
     char label[ASTRA_WINDOW_TITLE_MAX];
     char feedback[ASTRA_WINDOW_TITLE_MAX];
 } DisplayDrag;
+
+#define DISPLAY_DRAG_WAIT_FEEDBACK 1u
+#define DISPLAY_DRAG_WAIT_COMPLETE 2u
 
 typedef struct DisplayWindowMenuEntry {
     uint32_t id;
@@ -1904,6 +1910,44 @@ static void drag_finish(DisplayState *state, uint32_t target,
     state->overlay_drawn = DISPLAY_OVERLAY_NONE;
 }
 
+static void drag_send_drop(DisplayState *state, uint32_t operation,
+                           uint32_t modifiers, uint32_t timestamp_ms)
+{
+    if (drag_event(state, state->drag.target, ASTRA_WINDOW_EVENT_DRAG_DROP,
+            state->drag.source, operation, modifiers, timestamp_ms,
+            state->drag.document_area) != ASTRA_SYSCALL_OK) {
+        drag_finish(state, 0u, 0u, modifiers, timestamp_ms);
+        return;
+    }
+    damage_both(state, overlay_bounds(state));
+    state->drag.accepted = operation;
+    state->drag.drop_pending = DISPLAY_DRAG_WAIT_COMPLETE;
+    state->drag.deadline_ns = astra_clock_monotonic() +
+        UINT64_C(300000000000);
+    state->overlay = DISPLAY_OVERLAY_NONE;
+    state->overlay_drawn = DISPLAY_OVERLAY_NONE;
+}
+
+static void drag_release(DisplayState *state, uint32_t modifiers,
+                         uint32_t timestamp_ms)
+{
+    if (state->drag.target == 0u ||
+        (state->drag.accepted == 0u && state->drag.feedback_seen != 0u)) {
+        drag_finish(state, 0u, 0u, modifiers, timestamp_ms);
+    } else if (state->drag.accepted != 0u) {
+        drag_send_drop(state, state->drag.accepted, modifiers, timestamp_ms);
+    } else {
+        damage_both(state, overlay_bounds(state));
+        state->drag.drop_pending = DISPLAY_DRAG_WAIT_FEEDBACK;
+        state->drag.release_modifiers = modifiers;
+        state->drag.release_timestamp_ms = timestamp_ms;
+        state->drag.deadline_ns = astra_clock_monotonic() +
+            UINT64_C(5000000000);
+        state->overlay = DISPLAY_OVERLAY_NONE;
+        state->overlay_drawn = DISPLAY_OVERLAY_NONE;
+    }
+}
+
 static void drag_motion(DisplayState *state, uint32_t modifiers,
                         uint32_t timestamp_ms)
 {
@@ -1928,6 +1972,7 @@ static void drag_motion(DisplayState *state, uint32_t modifiers,
                              timestamp_ms, 0u);
         state->drag.target = 0u;
         state->drag.accepted = 0u;
+        state->drag.feedback_seen = 0u;
         state->drag.feedback_length = 0u;
         ++state->drag.revision;
         if (id != 0u &&
@@ -2025,7 +2070,17 @@ static uint32_t drag_feedback(DisplayState *state,
         state->drag.token != command->flags ||
         (choice != 0u && (state->drag.allowed & choice) == 0u))
         return ASTRA_STATUS_INVALID;
-    if (state->drag.drop_pending != 0u) {
+    if (state->drag.drop_pending == DISPLAY_DRAG_WAIT_FEEDBACK) {
+        if (choice == 0u) {
+            drag_finish(state, 0u, 0u, state->drag.release_modifiers,
+                state->drag.release_timestamp_ms);
+        } else {
+            drag_send_drop(state, choice, state->drag.release_modifiers,
+                state->drag.release_timestamp_ms);
+        }
+        return ASTRA_STATUS_OK;
+    }
+    if (state->drag.drop_pending == DISPLAY_DRAG_WAIT_COMPLETE) {
         if (choice != state->drag.accepted)
             return ASTRA_STATUS_INVALID;
         state->drag.deadline_ns = astra_clock_monotonic() +
@@ -2051,6 +2106,7 @@ static uint32_t drag_feedback(DisplayState *state,
     state->drag = previous;
     damage_both(state, overlay_bounds(state));
     state->drag.accepted = choice;
+    state->drag.feedback_seen = 1u;
     state->drag.feedback_length = command->title_length;
     memcpy(state->drag.feedback, command->title, command->title_length);
     ++state->drag.revision;
@@ -5615,24 +5671,7 @@ static uint32_t handle_pointer(DisplayState *state,
     if (state->drag.source != 0u &&
         input->code == ASTRA_INPUT_BUTTON_LEFT &&
         (input->flags & ASTRA_INPUT_LOGICAL_DOWN) == 0u) {
-        uint32_t target = state->drag.target;
-        uint32_t operation = state->drag.accepted;
-
-        if (target == 0u || operation == 0u ||
-            drag_event(state, target, ASTRA_WINDOW_EVENT_DRAG_DROP,
-                       state->drag.source, operation,
-                       input->modifiers, input->timestamp_ms,
-                       state->drag.document_area) != ASTRA_SYSCALL_OK) {
-            drag_finish(state, 0u, 0u, input->modifiers,
-                        input->timestamp_ms);
-        } else {
-            damage_both(state, overlay_bounds(state));
-            state->drag.drop_pending = 1u;
-            state->drag.deadline_ns = astra_clock_monotonic() +
-                UINT64_C(300000000000);
-            state->overlay = DISPLAY_OVERLAY_NONE;
-            state->overlay_drawn = DISPLAY_OVERLAY_NONE;
-        }
+        drag_release(state, input->modifiers, input->timestamp_ms);
         *effects |= DISPLAY_POINTER_RENDER;
     }
 
@@ -6823,8 +6862,7 @@ static void receive_command(uint32_t device, uint32_t irq,
     if (status == ASTRA_STATUS_OK &&
         command.action == ASTRA_GUI_WINDOW_DRAG_FEEDBACK) {
         status = drag_feedback(state, &command);
-        changed = status == ASTRA_STATUS_OK &&
-                  state->drag.drop_pending == 0u;
+        changed = status == ASTRA_STATUS_OK;
     }
     if (status == ASTRA_STATUS_OK &&
         command.action == ASTRA_GUI_WINDOW_DRAG_CANCEL) {
@@ -6839,7 +6877,7 @@ static void receive_command(uint32_t device, uint32_t irq,
     }
     if (status == ASTRA_STATUS_OK &&
         command.action == ASTRA_GUI_WINDOW_DRAG_COMPLETE) {
-        if (state->drag.drop_pending == 0u ||
+        if (state->drag.drop_pending != DISPLAY_DRAG_WAIT_COMPLETE ||
             state->drag.target != id ||
             state->drag.token != command.flags ||
             (command.x != 0u && command.x != state->drag.accepted))

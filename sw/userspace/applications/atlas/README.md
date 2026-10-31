@@ -235,6 +235,14 @@ refuse the drop before transfer. Haiku's
 `src/kits/tracker/PoseView.cpp` (`FindDragNDropAction` and
 `CanCopyOrMoveForeignDrag`) informed the action/target split without adopting
 Tracker-specific messages or UI geometry.
+Dropping onto the current volume's Trash Place uses Filesystem Kit's native
+`astra_trash_move` for each item after exact volume identity checks. Dragging
+an item out of Trash offers Copy; Restore remains the operation that removes
+the original payload and its origin record. The display service retains a
+released drag until the target's pending feedback arrives, then delivers or
+rejects the drop. Quick releases therefore use the same validated target
+operation as slower drags. Haiku's `PoseView.cpp` routes a Trash target through
+its Trash operation rather than treating it as an ordinary directory move.
 
 Recent Items uses Filesystem Kit 15.9 for one private HOME store of validated,
 synced records. Atlas records successful opens and shows an owned snapshot in
