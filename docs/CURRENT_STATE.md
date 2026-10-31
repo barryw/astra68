@@ -2,6 +2,27 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas installer presentation checkpoint, 2026-10-31: Atlas created a real
+`Atlas.apkg` from `Atlas.app` on DE25 through Package Kit. Its icon was
+indistinguishable from the app icon, so Interface Kit 12.11 now draws shared
+collection presentation glyphs as Icon Grid badges; List uses the same glyph
+field. Atlas marks `.apkg` entries with a new shared Install glyph and keeps
+using Package Kit for archived app icons. No Atlas-specific pixel renderer or
+new icon control was added. Haiku read-only reference:
+`src/kits/tracker/Pose.cpp` (`BPose::DrawIcon`) delegates icon drawing to
+`IconCache`, while `src/kits/tracker/PoseView.cpp` owns view presentation;
+Astra likewise keeps package identity in Atlas and badge painting in Interface
+Kit. Beast Interface Kit host suite and MC68040 Interface/Atlas builds passed.
+Targeted Kit and Atlas DE25 install passed; Grid showed install badges and List
+showed full `Atlas.apkg`/`ChocolateDoom.apkg` names. The home Trash was empty
+before trial cleanup; only newly created `Atlas.apkg` was moved there and
+emptied, leaving pre-existing `ChocolateDoom.apkg` intact. Selected raw-frame
+SHA-256 matched board and Beast, with raw/PNG evidence at
+`/mnt/Documents/astra68/atlas-package-badge-20261031/`. Trial helper and
+captures were removed from DE25. Astra, HDMI audio, and remote desktop remain
+active with zero Astra restarts and 8.2 GiB free. Only USB root hub is present;
+physical USB and optical Atlas gates remain pending attached media.
+
 Atlas layout hardware checkpoint, 2026-10-31: The current Atlas bundle on
 DE25 was maximized and showed DH0 through shared File Panel Columns, List,
 and Grid controls. Restoring and dragging its right edge to the measured

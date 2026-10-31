@@ -363,7 +363,8 @@ enum {
     ASTRA_TOOLBAR_ICON_HOME,
     ASTRA_TOOLBAR_ICON_RECENT,
     ASTRA_TOOLBAR_ICON_VOLUME,
-    ASTRA_TOOLBAR_ICON_RAM
+    ASTRA_TOOLBAR_ICON_RAM,
+    ASTRA_TOOLBAR_ICON_INSTALL
 };
 
 /** Creation data for a viewport that clips and translates one direct child. */
@@ -700,8 +701,8 @@ typedef struct AstraChoiceInfo {
 
 /** Optional collection-row presentation. A heading is displayed but cannot be
  * selected, activated, or used as a context-menu target. Icon values are
- * shared ASTRA_TOOLBAR_ICON_* glyphs, or NONE. List draws the glyph; other
- * collection views retain the same item identity and selection semantics.
+ * shared ASTRA_TOOLBAR_ICON_* glyphs, or NONE. List draws the glyph; Icon Grid
+ * draws it as a badge. Both views retain item identity and selection semantics.
  * Both fields default to zero. */
 typedef struct AstraCollectionPresentation {
     uint32_t flags; /**< ASTRA_COLLECTION_HEADING or zero. */

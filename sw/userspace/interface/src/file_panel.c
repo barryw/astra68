@@ -1747,7 +1747,7 @@ AstraResult astra_interface_file_panel_set_place_presentation(
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = 0u; at < count; ++at)
         if ((presentation[at].flags & ~ASTRA_COLLECTION_HEADING) != 0u ||
-            presentation[at].icon > ASTRA_TOOLBAR_ICON_RAM ||
+            presentation[at].icon > ASTRA_TOOLBAR_ICON_INSTALL ||
             ((presentation[at].flags & ASTRA_COLLECTION_HEADING) != 0u &&
              (panel->places[at].path != NULL ||
               presentation[at].icon != ASTRA_TOOLBAR_ICON_NONE)))

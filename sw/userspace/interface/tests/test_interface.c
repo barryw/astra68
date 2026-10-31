@@ -98,7 +98,7 @@ static void test_toolbar_composition(void)
     }
     {
         const uint32_t invalid[2] = {
-            ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_RAM + 1u
+            ASTRA_TOOLBAR_ICON_BACK, ASTRA_TOOLBAR_ICON_INSTALL + 1u
         };
         assert(astra_interface_toolbar_set_icons(controls, invalid, 2u) ==
                ASTRA_ERROR_INVALID_ARGUMENT);
@@ -1930,7 +1930,7 @@ static void test_segmented_control(void)
             ASTRA_TOOLBAR_ICON_COLUMNS
         };
         static const uint32_t invalid[] = {
-            ASTRA_TOOLBAR_ICON_LIST, ASTRA_TOOLBAR_ICON_RAM + 1u,
+            ASTRA_TOOLBAR_ICON_LIST, ASTRA_TOOLBAR_ICON_INSTALL + 1u,
             ASTRA_TOOLBAR_ICON_COLUMNS
         };
         AstraControl icon_control = ASTRA_CONTROL_INIT;
@@ -2663,7 +2663,7 @@ static void test_pagination_control(void)
 
 static void test_icon_grid_control(void)
 {
-    static const AstraCollectionItem items[] = {
+    static AstraCollectionItem items[] = {
         {1u, "One", 3u, {0u, 0u}},
         {2u, "Two", 3u, {0u, 0u}},
         {3u, "Three", 5u, {0u, 0u}},
@@ -2713,6 +2713,13 @@ static void test_icon_grid_control(void)
     icon_blit_calls = 0u;
     assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
     assert(icon_blit_calls == 1u);
+    uint32_t plain_lines = line_calls;
+    items[0].presentation.icon = ASTRA_TOOLBAR_ICON_INSTALL;
+    assert(astra_interface_control_invalidate(&context, &control) == ASTRA_OK);
+    line_calls = 0u;
+    assert(astra_interface_ui_render(&context, &surface) == ASTRA_OK);
+    assert(line_calls == plain_lines + 6u);
+    items[0].presentation.icon = ASTRA_TOOLBAR_ICON_NONE;
     event = pointer_event(ASTRA_WINDOW_EVENT_POINTER_BUTTON,
         ASTRA_WINDOW_EVENT_DOWN, control._private_frame.x + 110,
         control._private_frame.y + 10);

@@ -1306,6 +1306,15 @@ static AstraResult browser_set_icons(void)
             return ASTRA_ERROR_NO_RESOURCES;
         icons = astra_runtime_allocate(directory.count * sizeof(*icons));
         if (icons == NULL) return ASTRA_ERROR_NO_RESOURCES;
+        for (uint32_t at = 0u; at < browser.item_count; ++at) {
+            uint32_t source = (uint32_t)browser.items[at].id - 1u;
+            if (source < directory.count &&
+                directory.entries[source].kind == ASTRA_VFS_KIND_FILE &&
+                astra_string_has_suffix(directory.entries[source].name,
+                    ".apkg"))
+                browser.items[at].presentation.icon =
+                    ASTRA_TOOLBAR_ICON_INSTALL;
+        }
         for (uint32_t at = 0u; at < directory.count; ++at)
             icons[at] = at < entry_icon_count &&
                 entry_icons[at]._private_handle != ASTRA_INVALID_HANDLE ?

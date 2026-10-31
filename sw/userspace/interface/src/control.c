@@ -369,7 +369,7 @@ static int collection_items_valid(const AstraCollectionItem *items,
         if (items[at].id == 0u || items[at].text_length == 0u ||
             !astra_utf8_validate(items[at].text, items[at].text_length, 0u) ||
             (items[at].presentation.flags & ~ASTRA_COLLECTION_HEADING) != 0u ||
-            items[at].presentation.icon > ASTRA_TOOLBAR_ICON_RAM ||
+            items[at].presentation.icon > ASTRA_TOOLBAR_ICON_INSTALL ||
             ((items[at].presentation.flags & ASTRA_COLLECTION_HEADING) != 0u &&
              items[at].presentation.icon != ASTRA_TOOLBAR_ICON_NONE))
             return 0;
@@ -923,7 +923,7 @@ static int control_valid(const AstraControl *control)
                 ~(ASTRA_BUTTON_STYLE_MASK | ASTRA_BUTTON_ICON_MASK |
                   ASTRA_BUTTON_ICON_ONLY)) == 0u &&
                ASTRA_BUTTON_ICON(control->_private_style) <=
-                   ASTRA_TOOLBAR_ICON_RAM &&
+                   ASTRA_TOOLBAR_ICON_INSTALL &&
                (ASTRA_BUTTON_ICON(control->_private_style) == 0u ||
                 (control->_private_style & ASTRA_BUTTON_STYLE_MASK) ==
                     ASTRA_BUTTON_TOOLBAR) &&
@@ -1979,7 +1979,7 @@ AstraResult astra_interface_segmented_set_icons(AstraControl *control,
         return ASTRA_ERROR_INVALID_ARGUMENT;
     for (uint32_t at = 0u; at < count; ++at)
         if (icons[at] <= ASTRA_TOOLBAR_ICON_NONE ||
-            icons[at] > ASTRA_TOOLBAR_ICON_RAM)
+            icons[at] > ASTRA_TOOLBAR_ICON_INSTALL)
             return ASTRA_ERROR_INVALID_ARGUMENT;
     control->_private_display_model = icons;
     return ASTRA_OK;
@@ -5823,6 +5823,10 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
         {2, 4, 6, 8}, {6, 8, 2, 12},
         {8, 4, 12, 8}, {12, 8, 8, 12}
     };
+    static const ToolbarLine install[] = {
+        {8, 2, 8, 10}, {4, 7, 8, 11}, {8, 11, 12, 7},
+        {2, 11, 2, 14}, {2, 14, 14, 14}, {14, 14, 14, 11}
+    };
     const ToolbarLine *lines = NULL;
     AstraSurfaceLine segments[16];
     uint32_t count = 0u;
@@ -5849,6 +5853,7 @@ static void render_toolbar_icon(AstraSurfaceView *surface, uint32_t icon,
     case ASTRA_TOOLBAR_ICON_VOLUME: PICK(volume); break;
     case ASTRA_TOOLBAR_ICON_RAM: PICK(ram); break;
     case ASTRA_TOOLBAR_ICON_MORE: PICK(more); break;
+    case ASTRA_TOOLBAR_ICON_INSTALL: PICK(install); break;
     default: break;
     }
 #undef PICK
@@ -7171,6 +7176,28 @@ static AstraResult render_icon_grid(const AstraTheme *theme,
             tile.label_bytes = items[item].text_length;
             result = astra_interface_icon_tile_render_view(surface, &tile);
             if (result != ASTRA_OK) return result;
+            if (items[item].presentation.icon != ASTRA_TOOLBAR_ICON_NONE) {
+                AstraSurfaceView clipped = *surface;
+                int32_t icon_size = grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+                    ASTRA_ICON_TILE_CLIENT_ICON_SIZE :
+                    ASTRA_ICON_TILE_DESKTOP_ICON_SIZE;
+                int32_t icon_x = (int32_t)x +
+                    ((int32_t)tile_width - icon_size) / 2;
+                int32_t icon_y = (int32_t)y +
+                    (grid->tile_style == ASTRA_ICON_TILE_CLIENT ?
+                        ASTRA_ICON_TILE_CLIENT_ICON_TOP :
+                        ASTRA_ICON_TILE_DESKTOP_ICON_TOP);
+                int32_t badge_x = icon_x + icon_size - 16;
+                int32_t badge_y = icon_y + icon_size - 16;
+                if (!astra_surface_clip(&clipped, tile.clip.x, tile.clip.y,
+                        tile.clip.width, tile.clip.height))
+                    continue;
+                astra_surface_fill_round(&clipped, badge_x - 2,
+                    badge_y - 2, 20u, 20u, 5u,
+                    color(theme->surface_raised));
+                render_toolbar_icon(&clipped, items[item].presentation.icon,
+                    badge_x, badge_y, color(theme->accent));
+            }
         }
     return ASTRA_OK;
 }
