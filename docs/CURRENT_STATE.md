@@ -2,6 +2,26 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas direct Open With checkpoint, 2026-10-31: Selected-file context menu
+now builds a hover submenu from Filesystem Kit's installed-handler catalog and
+file-type resolver. It offers up to 12 direct handlers plus Choose another...
+for the complete chooser; File > Open With... still opens the explicit chooser.
+Each handler command rechecks current selection, exact viewed-volume reference,
+and current type declaration before shared application launch. Interface Kit
+owns command dispatch and nested-menu interaction; Atlas adds no type registry,
+chooser control, or menu renderer. Haiku read-only reference:
+`src/kits/tracker/ContainerWindow.cpp` and
+`src/kits/tracker/OpenWithWindow.cpp` use a dynamic Open With menu. Beast Atlas
+host test and MC68040 build passed. DE25 targeted install showed Choose
+another... for unknown `/dh0/astra_events.cat`, and AstraZ plus chooser for a
+disposable `/ram0/atlas-open-with.z3`. Clicking AstraZ launched it with the
+file path; it reported the synthetic file's invalid story contents as expected.
+Atlas Delete left RAM0 empty. SHA-verified raw captures and PNGs are archived
+on Beast at `/mnt/Documents/astra68/atlas-open-with-submenu-20261031/`; board
+trial captures and helper were removed. Astra, HDMI audio host, and remote
+desktop remained active with zero Astra restarts and 8.1 GiB free. A real
+story-file direct launch remains to test, as does a universal Inspector app.
+
 Atlas explicit Open With checkpoint, 2026-10-31: File and selected-file
 context menus now invoke one Atlas responder that launches the existing Open
 With app in forced chooser mode. Ordinary Open still delegates automatic
@@ -17,8 +37,7 @@ checkbox. Right-click showed the same action. Native `rm` removed the RAM0
 test file, and `ls /ram0` returned empty. SHA-verified captures and PNGs are
 on Beast at `/mnt/Documents/astra68/atlas-open-with-20261031/`; board trial
 files were removed. Astra, HDMI audio host, and remote desktop stayed active
-with zero Astra restarts and 8.2 GiB free. Design's direct installed-handler
-submenu remains open; the explicit chooser covers selecting any handler.
+with zero Astra restarts and 8.2 GiB free.
 
 Atlas Terminal directory checkpoint, 2026-10-31: File > Open Terminal Here,
 folder/blank-area context menus, and Primary+Enter now invoke one Atlas

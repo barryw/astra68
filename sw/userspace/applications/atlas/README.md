@@ -36,13 +36,17 @@ Filesystem Kit namespace, retaining the answering volume's read/write rights.
 Atlas does not create a shell, duplicate path resolution, or own a context
 menu renderer. Haiku's read-only `src/apps/terminal/TermApp.cpp` and
 `src/apps/terminal/Shell.cpp` informed applying the directory at shell launch.
-File > Open With... and selected-file context menus use one responder to open
-the existing Open With application in explicit chooser mode. Double-click and
-ordinary Open still use that application's automatic default handling. The
-chooser owns type resolution, installed-handler discovery, and preference
-updates; Atlas owns none of those policies. Haiku's read-only
-`src/kits/tracker/ContainerWindow.cpp` places Open With beside Open in file
-menus; Astra retains its shared Open With application for the chooser.
+File > Open With... opens the existing Open With application in explicit chooser
+mode. A selected file's Open With context submenu lists installed handlers from
+Filesystem Kit's application catalog and file-type resolver, with Choose
+another... for the full chooser. Direct-handler commands recheck the selected
+path, volume reference, and current type declaration before shared application
+launch. Double-click and ordinary Open still use automatic default handling.
+The chooser owns preference updates. Atlas adds no type registry, chooser,
+context-menu renderer, or launch policy. Haiku's read-only
+`src/kits/tracker/ContainerWindow.cpp` and
+`src/kits/tracker/OpenWithWindow.cpp` informed the dynamic handler menu;
+Astra uses its shared Open With application for the chooser.
 The same Volume menu offers Unmount for a removable mounted volume and Eject
 for a mounted physical optical disc. Atlas and Desktop link one common volume
 action state machine and one common exact-holder dialog. The native Volume
