@@ -2,6 +2,37 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas shared toolbar fitting checkpoint, 2026-10-30: Interface Kit now fits
+command groups and existing peer controls in one measured row. Groups switch
+from labels to icons, then fold whole into More; lower-priority Popup,
+Checkbox, and Segmented peers fold only when pinned Breadcrumb and Search
+Field cannot otherwise fit. Semantic changes preserve folded visibility.
+Atlas supplies peer priorities and offers folded view, sort, hidden-file, and
+preview actions through its existing View menu. It owns no replacement
+toolbar controls or renderer. When even pinned controls cannot fit, the
+shared fit result includes their true minimum width, and Atlas asks the
+window server to restore that width. Haiku read-only references:
+`src/kits/tracker/Navigator.cpp` composes navigation through `BToolBar`;
+`src/kits/shared/ToolBar.cpp` stores action icon, tooltip, and label separately.
+Astra adapts their composition to native command scope, retained controls,
+and one measured layout pass. Beast Interface Kit tests and MC68040
+Atlas/Interface Kit builds passed. Focused DE25 install reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=4`. RFB verified 900, 700, 600, and
+500-pixel widths; a 400-pixel drag restored the measured 456-pixel minimum
+instead of exiting. Search accepted text at that minimum. View menu exposed
+folded controls; More exposed Folder, Open, Delete, and Refresh. Widening
+restored controls and the inspector. Final gate toggled Preview from the folded
+View menu, widened to confirm both checkbox and inspector were off, then
+restored Preview through its checkbox. Final Atlas SHA-256:
+`8bb91106cbe54452ccb6e7abd17187034fd356a2cc109f5eee5b57c837ccb996`;
+Interface Kit SHA-256:
+`888700ed146bc5222ed7ca5b12fa389495968e638c7099a2075caaaaa277230d`.
+Four final RFB captures and five earlier trial captures were SHA-verified and archived on Beast under
+`/mnt/Documents/astra68/atlas-toolbar-peers-20261030/`; disposable board
+captures were removed. Astra, audio, and remote desktop services remained
+active with zero restarts and 8.1 GiB free. Narrow path breadcrumbs and
+cross-volume operation completeness still need separate Atlas gates.
+
 Atlas view and operation audit checkpoint, 2026-10-30: DE25 RFB exercised
 shared Grid, List, and Columns views on DH0, including Columns child loading
 of `/dh0/apps`; Search Field filtered Columns to one matching row. Dragging

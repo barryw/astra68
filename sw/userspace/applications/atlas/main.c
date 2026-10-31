@@ -128,6 +128,7 @@ static char browser_status[64];
 static char browser_space[80];
 static uint32_t worker, cancelled, completed, visible_data;
 static uint16_t width = 1300u, height = 640u;
+static uint32_t toolbar_minimum_width;
 static uint32_t sort_mode = ASTRA_DIRECTORY_SORT_NAME, sort_reverse, show_hidden;
 static uint32_t preview_visible = 1u;
 static uint32_t sidebar_visible = 1u;
@@ -296,6 +297,7 @@ enum AtlasMenuRow {
     ATLAS_MENU_SORT_KIND,
     ATLAS_MENU_SORT_MODIFIED,
     ATLAS_MENU_HIDDEN,
+    ATLAS_MENU_PREVIEW,
     ATLAS_MENU_SIDEBAR,
     ATLAS_MENU_ABOUT,
     ATLAS_MENU_COUNT
@@ -322,6 +324,7 @@ static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"Sort by Kind", 12u, ASTRA_MENU_PARENT(2u)},
     {"Sort by Modified", 16u, ASTRA_MENU_PARENT(2u)},
     {"Show Hidden Files", 17u, ASTRA_MENU_PARENT(2u)},
+    {"Show Preview", 12u, ASTRA_MENU_PARENT(2u)},
     {"Show Sidebar", 12u, ASTRA_MENU_PARENT(2u)},
     {"About Atlas", 11u, ASTRA_MENU_PARENT(3u)}
 };
@@ -3193,13 +3196,13 @@ static AstraResult show_hidden_set(uint32_t value)
     if (worker != 0u || !visible_data || directory.status != ASTRA_VFS_OK)
         return ASTRA_ERROR_BUSY;
     show_hidden = value != 0u;
-    result = astra_interface_ui_set_state(&ui,
+    result = astra_interface_ui_set_semantic_state(&ui,
         &controls[HIDDEN_CONTROL_INDEX],
         show_hidden ? ASTRA_CONTROL_SELECTED : 0u);
     if (result == ASTRA_OK) result = reload_directory();
     if (result != ASTRA_OK) {
         show_hidden = previous;
-        (void)astra_interface_ui_set_state(&ui,
+        (void)astra_interface_ui_set_semantic_state(&ui,
             &controls[HIDDEN_CONTROL_INDEX],
             previous ? ASTRA_CONTROL_SELECTED : 0u);
     }
@@ -3296,6 +3299,7 @@ static AstraResult menu_sync(void)
     menu_state(ATLAS_MENU_SORT_MODIFIED, active,
         sort_mode == ASTRA_DIRECTORY_SORT_MODIFIED);
     menu_state(ATLAS_MENU_HIDDEN, active, show_hidden != 0u);
+    menu_state(ATLAS_MENU_PREVIEW, 1, preview_visible != 0u);
     menu_state(ATLAS_MENU_SIDEBAR, 1, sidebar_visible != 0u);
     for (uint32_t at = 0u; at < ATLAS_MENU_COUNT; ++at)
         if (atlas_menu_sent[at] != atlas_menu[at].flags)
@@ -3386,12 +3390,30 @@ static const AstraToolbarGroup toolbar_groups[] = {
 
 static AstraResult fit_toolbar(void)
 {
+    AstraToolbarPeer peers[5u + ASTRA_BREADCRUMB_VISIBLE];
+    uint32_t peer_count = 0u;
     AstraToolbarFit fit = ASTRA_TOOLBAR_FIT_INIT;
-    uint32_t room = width > 430u ? width - 430u : 180u;
-    AstraResult result = astra_interface_toolbar_actions_fit(&toolbar,
-        &ui, room, ASTRA_TOOLBAR_ICONS_ONLY, &fit);
 
-    return result == ASTRA_ERROR_NO_RESOURCES ? ASTRA_OK : result;
+    peers[peer_count++] = (AstraToolbarPeer){
+        &controls[SORT_CONTROL_INDEX], 3u, ASTRA_TOOLBAR_PEER_FOLDABLE, 0u};
+    peers[peer_count++] = (AstraToolbarPeer){
+        &controls[PREVIEW_CONTROL_INDEX], 1u, ASTRA_TOOLBAR_PEER_FOLDABLE, 0u};
+    peers[peer_count++] = (AstraToolbarPeer){
+        &controls[HIDDEN_CONTROL_INDEX], 2u, ASTRA_TOOLBAR_PEER_FOLDABLE, 0u};
+    for (uint32_t at = 0u; at < browser.breadcrumb.visible_count; ++at)
+        peers[peer_count++] = (AstraToolbarPeer){
+            BROWSER_CONTROL(ASTRA_FILE_PANEL_CRUMB0 + at), 0u,
+            ASTRA_TOOLBAR_PEER_PINNED, 0u};
+    peers[peer_count++] = (AstraToolbarPeer){
+        BROWSER_CONTROL(ASTRA_FILE_PANEL_VIEW), 4u,
+        ASTRA_TOOLBAR_PEER_FOLDABLE, 0u};
+    peers[peer_count++] = (AstraToolbarPeer){
+        BROWSER_CONTROL(ASTRA_FILE_PANEL_SEARCH), 0u,
+        ASTRA_TOOLBAR_PEER_PINNED, 0u};
+    AstraResult result = astra_interface_toolbar_actions_fit_peers(&toolbar,
+        &ui, width, ASTRA_TOOLBAR_LABELS, peers, peer_count, &fit);
+    toolbar_minimum_width = fit.minimum_width;
+    return result;
 }
 
 static AstraResult init_toolbar(AstraHandle gui)
@@ -3461,6 +3483,22 @@ static AstraResult menu_invoke(AstraHandle gui, uint32_t row)
             row - ATLAS_MENU_SORT_NAME], NULL);
     case ATLAS_MENU_HIDDEN:
         return show_hidden_set(!show_hidden);
+    case ATLAS_MENU_PREVIEW: {
+        uint32_t next = !preview_visible;
+        AstraResult result = astra_interface_ui_set_semantic_state(&ui,
+            &controls[PREVIEW_CONTROL_INDEX],
+            next ? ASTRA_CONTROL_SELECTED : 0u);
+        if (result != ASTRA_OK) return result;
+        preview_visible = next;
+        result = layout();
+        if (result != ASTRA_OK) {
+            preview_visible = !next;
+            (void)astra_interface_ui_set_semantic_state(&ui,
+                &controls[PREVIEW_CONTROL_INDEX],
+                preview_visible ? ASTRA_CONTROL_SELECTED : 0u);
+        }
+        return result;
+    }
     case ATLAS_MENU_SIDEBAR:
         return sidebar_toggle(NULL, NULL);
     case ATLAS_MENU_ABOUT: {
@@ -3600,11 +3638,11 @@ static AstraResult run(AstraHandle gui)
                 visible_data = 1u;
             }
             log_root();
-            result = astra_interface_ui_set_state(&ui,
+            result = astra_interface_ui_set_semantic_state(&ui,
                 &controls[SORT_CONTROL_INDEX],
                 directory.status == ASTRA_VFS_OK ? 0u : ASTRA_CONTROL_DISABLED);
             if (result != ASTRA_OK) return result;
-            result = astra_interface_ui_set_state(&ui,
+            result = astra_interface_ui_set_semantic_state(&ui,
                 &controls[HIDDEN_CONTROL_INDEX],
                 directory.status == ASTRA_VFS_OK ? 0u : ASTRA_CONTROL_DISABLED);
             if (result != ASTRA_OK) return result;
@@ -3613,6 +3651,8 @@ static AstraResult run(AstraHandle gui)
                 (void)astra_log_failure("atlas browser directory", (uint32_t)(-result));
                 return result;
             }
+            result = fit_toolbar();
+            if (result != ASTRA_OK) return result;
             load_entry_icons();
             result = browser_set_icons();
             if (result != ASTRA_OK) {
@@ -3747,7 +3787,17 @@ static AstraResult run(AstraHandle gui)
             if (astra_interface_ui_handle_event(&ui, &event, &action) != ASTRA_OK)
                 return ASTRA_ERROR_INVALID_ARGUMENT;
             if (event.type == ASTRA_WINDOW_EVENT_RESIZE) {
-                if (fit_toolbar() != ASTRA_OK || layout() != ASTRA_OK)
+                AstraResult fitted = fit_toolbar();
+                if (fitted == ASTRA_ERROR_NO_RESOURCES &&
+                    toolbar_minimum_width <= UINT16_MAX) {
+                    if (astra_window_resize(&window,
+                            (uint16_t)toolbar_minimum_width,
+                            height) != ASTRA_OK)
+                        return ASTRA_ERROR_IO;
+                    result = astra_window_event_try(&window, &event);
+                    continue;
+                }
+                if (fitted != ASTRA_OK || layout() != ASTRA_OK)
                     return ASTRA_ERROR_IO;
             }
             AstraResult toolbar_result =

@@ -529,6 +529,85 @@ static void toolbar_actions(void)
     toolbar_mode = 0u;
 }
 
+static void toolbar_peer_fitting(void)
+{
+    static const AstraCommand commands[] = {
+        {"go.back", 7u, 0u, 0u, toolbar_query, toolbar_invoke, (void *)0},
+        {"file.open", 9u, 0u, 0u, toolbar_query, toolbar_invoke, (void *)1}
+    };
+    static const AstraCommandScope scope = {NULL, commands, 2u};
+    static const AstraToolbarCommand actions[] = {
+        {"go.back", 7u, "Back", 4u, ASTRA_TOOLBAR_ICON_BACK, {0u, 0u}},
+        {"file.open", 9u, "Open", 4u, ASTRA_TOOLBAR_ICON_OPEN, {0u, 0u}}
+    };
+    static const AstraToolbarGroup groups[] = {
+        {"Navigate", 8u, 0u, 1u, 0u, ASTRA_TOOLBAR_GROUP_PINNED,
+            {0u, 0u}},
+        {"File", 4u, 1u, 1u, 1u, 0u, {0u, 0u}}
+    };
+    AstraToolbarActionsInfo info = ASTRA_TOOLBAR_ACTIONS_INFO_INIT;
+    AstraToolbarActions toolbar = ASTRA_TOOLBAR_ACTIONS_INIT;
+    AstraControl controls[8] = {0};
+    AstraButtonInfo button = ASTRA_BUTTON_INFO_INIT;
+    AstraFlexItem item = ASTRA_FLEX_ITEM_INIT;
+    AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraToolbarFit fit = ASTRA_TOOLBAR_FIT_INIT;
+    AstraToolbarPeer peers[2];
+    AstraControlSize pinned = {0}, optional = {0};
+    uint32_t narrow;
+
+    info.first_id = 100u;
+    info.groups = groups;
+    info.group_count = 2u;
+    info.actions = actions;
+    info.action_count = 2u;
+    info.scope = &scope;
+    assert(astra_interface_toolbar_actions_init(&toolbar, controls,
+        &info) == ASTRA_OK);
+    item.parent_id = info.first_id;
+    for (uint32_t at = 0u; at < 2u; ++at) {
+        button.id = 200u + at;
+        button.text = at == 0u ? "Pinned" : "Optional";
+        button.text_length = at == 0u ? 6u : 8u;
+        button.variant = ASTRA_BUTTON_TOOLBAR;
+        item.minimum_width = at == 0u ? 0u : 160u;
+        assert(astra_interface_button_init(&controls[6u + at],
+            &button) == ASTRA_OK);
+        assert(astra_interface_control_set_flex(&controls[6u + at],
+            &item) == ASTRA_OK);
+    }
+    peers[0] = (AstraToolbarPeer){&controls[6], 0u,
+        ASTRA_TOOLBAR_PEER_PINNED, 0u};
+    peers[1] = (AstraToolbarPeer){&controls[7], 1u,
+        ASTRA_TOOLBAR_PEER_FOLDABLE, 0u};
+    assert(astra_interface_ui_init(&ui, controls, 8u, 600u, 60u) == ASTRA_OK);
+    assert(astra_interface_ui_layout(&ui, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&ui, &controls[6], &pinned) == ASTRA_OK);
+    assert(astra_interface_ui_measure(&ui, &controls[7], &optional) == ASTRA_OK);
+    assert(astra_interface_toolbar_actions_fit(&toolbar, &ui, 0u,
+        ASTRA_TOOLBAR_LABELS, &fit) == ASTRA_ERROR_NO_RESOURCES);
+    uint32_t minimum = fit.minimum_width + pinned.width + 8u;
+    assert(astra_interface_toolbar_actions_fit_peers(&toolbar, &ui,
+        minimum - 1u, ASTRA_TOOLBAR_LABELS, peers, 2u, &fit) ==
+        ASTRA_ERROR_NO_RESOURCES && fit.minimum_width == minimum);
+    narrow = minimum + (optional.width > 160u ?
+        optional.width : 160u) + 7u;
+    assert(astra_interface_toolbar_actions_fit_peers(&toolbar, &ui, narrow,
+        ASTRA_TOOLBAR_LABELS, peers, 2u, &fit) == ASTRA_OK);
+    assert((controls[6]._private_state & ASTRA_CONTROL_COLLAPSED) == 0u);
+    assert((controls[7]._private_state & ASTRA_CONTROL_COLLAPSED) != 0u);
+    assert(astra_interface_ui_set_semantic_state(&ui, &controls[7],
+        ASTRA_CONTROL_SELECTED) == ASTRA_OK);
+    assert((controls[7]._private_state & (ASTRA_CONTROL_SELECTED |
+        ASTRA_CONTROL_COLLAPSED)) ==
+        (ASTRA_CONTROL_SELECTED | ASTRA_CONTROL_COLLAPSED));
+    assert(astra_interface_toolbar_actions_fit_peers(&toolbar, &ui, 600u,
+        ASTRA_TOOLBAR_LABELS, peers, 2u, &fit) == ASTRA_OK);
+    assert((controls[7]._private_state & ASTRA_CONTROL_COLLAPSED) == 0u);
+    assert((controls[7]._private_state & ASTRA_CONTROL_SELECTED) != 0u);
+}
+
 static void button_group(void)
 {
     static const AstraCommand commands[] = {
@@ -731,6 +810,7 @@ int main(void)
     context();
     popup_session();
     toolbar_actions();
+    toolbar_peer_fitting();
     button_group();
     combo_box();
     multi_popup();

@@ -120,6 +120,7 @@ ASTRA_INTERFACE_12.0 {
         astra_interface_ui_render;
         astra_interface_ui_render_range;
         astra_interface_ui_set_state;
+        astra_interface_ui_set_semantic_state;
         astra_interface_ui_update_pointer;
         astra_interface_ui_vblank;
         astra_interface_text_view_init;
@@ -155,6 +156,7 @@ ASTRA_INTERFACE_12.0 {
         astra_interface_toolbar_actions_init;
         astra_interface_toolbar_actions_refresh;
         astra_interface_toolbar_actions_fit;
+        astra_interface_toolbar_actions_fit_peers;
         astra_interface_toolbar_actions_handle_action;
         astra_interface_toolbar_actions_handle_event;
         astra_interface_toolbar_actions_close;

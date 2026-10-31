@@ -473,6 +473,92 @@ done:
     return result;
 }
 
+AstraResult astra_interface_toolbar_actions_fit_peers(
+    AstraToolbarActions *toolbar, AstraUIContext *context,
+    uint32_t available_width, uint32_t preferred_mode,
+    const AstraToolbarPeer *peers, uint32_t peer_count,
+    AstraToolbarFit *fit)
+{
+    uint32_t *states;
+    uint8_t *folded;
+    AstraResult result = ASTRA_ERROR_NO_RESOURCES;
+
+    if (peer_count == 0u)
+        return astra_interface_toolbar_actions_fit(toolbar, context,
+            available_width, preferred_mode, fit);
+    if (!valid(toolbar) || toolbar->_private_controls == NULL ||
+        !context_contains(context, toolbar->_private_controls,
+                          overflow_index(toolbar) + 1u) ||
+        peers == NULL || fit == NULL || fit->size < sizeof(*fit) ||
+        preferred_mode > ASTRA_TOOLBAR_ICONS_ONLY ||
+        peer_count > UINT32_MAX / sizeof(*states))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    for (uint32_t at = 0u; at < peer_count; ++at) {
+        if (peers[at].control == NULL || peers[at].reserved != 0u ||
+            (peers[at].flags & ~ASTRA_TOOLBAR_PEER_FOLDABLE) != 0u ||
+            !context_contains(context, peers[at].control, 1u) ||
+            peers[at].control->_private_parent_id !=
+                toolbar->_private_first_id)
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        for (uint32_t before = 0u; before < at; ++before)
+            if (peers[before].control == peers[at].control)
+                return ASTRA_ERROR_INVALID_ARGUMENT;
+    }
+    states = astra_runtime_allocate((size_t)peer_count * sizeof(*states));
+    folded = astra_runtime_allocate(peer_count);
+    if (states == NULL || folded == NULL) {
+        astra_runtime_deallocate(states);
+        astra_runtime_deallocate(folded);
+        return ASTRA_ERROR_NO_RESOURCES;
+    }
+    for (uint32_t at = 0u; at < peer_count; ++at) {
+        states[at] = peers[at].control->_private_state;
+        folded[at] = 0u;
+    }
+    for (;;) {
+        uint64_t reserved = 0u;
+
+        for (uint32_t at = 0u; at < peer_count; ++at) {
+            peers[at].control->_private_state =
+                (states[at] & ~ASTRA_CONTROL_COLLAPSED) |
+                (folded[at] ? ASTRA_CONTROL_COLLAPSED : 0u);
+            if (folded[at]) continue;
+            reserved += astra_interface_control_flex_base_width(
+                peers[at].control) +
+                toolbar->_private_controls[0]._private_child_layout.main_gap;
+        }
+        result = astra_interface_toolbar_actions_fit(toolbar, context,
+            reserved < available_width ?
+                available_width - (uint32_t)reserved : 0u,
+            preferred_mode, fit);
+        if (result != ASTRA_ERROR_NO_RESOURCES) goto done;
+        uint32_t candidate = UINT32_MAX;
+        for (uint32_t at = 0u; at < peer_count; ++at) {
+            if (folded[at] ||
+                (peers[at].flags & ASTRA_TOOLBAR_PEER_FOLDABLE) == 0u)
+                continue;
+            if (candidate == UINT32_MAX ||
+                peers[at].priority > peers[candidate].priority ||
+                (peers[at].priority == peers[candidate].priority &&
+                 at > candidate)) candidate = at;
+        }
+        if (candidate == UINT32_MAX) {
+            uint64_t minimum = (uint64_t)fit->minimum_width + reserved;
+            fit->minimum_width = minimum > UINT32_MAX ?
+                UINT32_MAX : (uint32_t)minimum;
+            break;
+        }
+        folded[candidate] = 1u;
+    }
+done:
+    if (result != ASTRA_OK)
+        for (uint32_t at = 0u; at < peer_count; ++at)
+            peers[at].control->_private_state = states[at];
+    astra_runtime_deallocate(states);
+    astra_runtime_deallocate(folded);
+    return result;
+}
+
 static AstraResult open_overflow(AstraToolbarActions *toolbar,
     AstraWindow *window)
 {

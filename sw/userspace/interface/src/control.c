@@ -3348,6 +3348,11 @@ static uint32_t axis_base(const AstraControl *control, int row)
     return value;
 }
 
+uint32_t astra_interface_control_flex_base_width(const AstraControl *control)
+{
+    return axis_base(control, 1);
+}
+
 static uint32_t cross_base(const AstraControl *control, int row)
 {
     uint32_t value = axis_measured(control, !row);
@@ -4157,6 +4162,17 @@ AstraResult astra_interface_ui_set_state(AstraUIContext *context,
     if (control->_private_control_kind == ASTRA_CONTROL_CONTAINER)
         disclosure_target_damage(context, control->_private_id);
     return ASTRA_OK;
+}
+
+AstraResult astra_interface_ui_set_semantic_state(AstraUIContext *context,
+                                                  AstraControl *control,
+                                                  uint32_t state)
+{
+    if (control == NULL || (state & ASTRA_CONTROL_COLLAPSED) != 0u ||
+        control_index(context, control) == CONTROL_NONE)
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    return astra_interface_ui_set_state(context, control,
+        state | (control->_private_state & ASTRA_CONTROL_COLLAPSED));
 }
 
 static uint64_t range_offset_at(uint64_t span, uint32_t position,

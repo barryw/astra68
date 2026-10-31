@@ -135,6 +135,21 @@ typedef struct AstraToolbarFit {
 /** Empty width-fit result. */
 #define ASTRA_TOOLBAR_FIT_INIT { sizeof(AstraToolbarFit), 0, 0, 0, 0, {0,0,0} }
 
+enum {
+    /** Peer remains visible when the toolbar narrows. */
+    ASTRA_TOOLBAR_PEER_PINNED = 0u,
+    /** Peer may fold after command groups; caller supplies another way to use it. */
+    ASTRA_TOOLBAR_PEER_FOLDABLE = 1u
+};
+
+/** Existing control sharing the toolbar row with command-backed groups. */
+typedef struct AstraToolbarPeer {
+    AstraControl *control; /**< Retained direct child of toolbar root. */
+    uint32_t priority; /**< Higher values fold first; ties fold rightmost. */
+    uint32_t flags; /**< ASTRA_TOOLBAR_PEER_FOLDABLE or zero. */
+    uint32_t reserved; /**< Must be zero. */
+} AstraToolbarPeer;
+
 /** Count required controls: root, one Container per group, one Button per
  * action, and the overflow Button.
  * @param info Valid toolbar construction data.
@@ -168,6 +183,26 @@ AstraResult astra_interface_toolbar_actions_refresh(AstraToolbarActions *toolbar
  */
 AstraResult astra_interface_toolbar_actions_fit(AstraToolbarActions *toolbar,
     AstraUIContext *context, uint32_t available_width, uint32_t preferred_mode,
+    AstraToolbarFit *fit);
+/** Fit command groups with other controls in the same toolbar row. Foldable
+ * peers hide only after command groups cannot fit. Their semantic state is
+ * retained, and the caller must offer their action through a menu or another
+ * reachable control. All state changes share one final layout pass.
+ * @param toolbar Initialized command-backed toolbar.
+ * @param context UI context containing toolbar and peer controls.
+ * @param available_width Whole toolbar row width in logical pixels.
+ * @param preferred_mode ASTRA_TOOLBAR_LABELS or ASTRA_TOOLBAR_ICONS_ONLY.
+ * @param peers Ordered peer controls, including peers folded by earlier fits;
+ * omit controls collapsed for unrelated reasons.
+ * @param peer_count Number of peers; zero delegates to actions_fit.
+ * @param fit Receives resulting mode, hidden groups, and minimum width.
+ * @return ASTRA_OK, or NO_RESOURCES if even pinned peers cannot fit;
+ * fit.minimum_width then includes pinned peers and their row gaps.
+ */
+AstraResult astra_interface_toolbar_actions_fit_peers(
+    AstraToolbarActions *toolbar, AstraUIContext *context,
+    uint32_t available_width, uint32_t preferred_mode,
+    const AstraToolbarPeer *peers, uint32_t peer_count,
     AstraToolbarFit *fit);
 /** Invoke an action or open the overflow menu when its Button activates.
  * @param toolbar Initialized controller.

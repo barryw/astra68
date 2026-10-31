@@ -200,10 +200,17 @@ Keyboard bindings use Interface Kit's shared command shortcut dispatcher and
 existing responder chain. Atlas owns only its binding table and suppresses
 global commands while its shared File Panel Search field has focus. Ctrl or
 Command+C/V/N/O/R and Alt+Left/Right use the same actions as menus and toolbar.
-The toolbar uses Interface Kit's Toolbar Actions icon mode, shared New Folder
-and Open glyphs, command state, overflow, and fitting. Haiku's read-only
-`src/kits/tracker/Navigator.cpp` uses `BToolBar::AddAction` for navigation;
-Atlas keeps those actions in Interface Kit rather than drawing private buttons.
+The toolbar uses Interface Kit's Toolbar Actions, shared New Folder and Open
+glyphs, command state, overflow, and peer fitting. Toolbar Actions measures
+the same Popup, Checkbox, Breadcrumb, Segmented, and Search Field controls
+used elsewhere; whole command groups fold first, then lower-priority peers.
+Folded sort, hidden-file, preview, and view controls remain in the View menu.
+If pinned controls cannot fit, Atlas requests the measured minimum width from
+the window server. No Atlas-specific toolbar renderer or substitute control
+exists. Haiku's read-only `src/kits/tracker/Navigator.cpp` uses
+`BToolBar::AddAction` for navigation; `src/kits/shared/ToolBar.cpp` retains
+each action's icon, tooltip, and label separately. Astra adapts both patterns
+to its native command scope and retained Interface Kit controls.
 The exact-volume source setup for Paste remains local because it pins a
 clipboard reference to one removable incarnation; process namespace lookup
 could otherwise select a replacement mounted at the same spelling.

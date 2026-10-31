@@ -20,6 +20,8 @@ int astra_interface_draw_list_has_room(const AstraSurfaceView *surface,
                                        uint64_t commands, uint64_t payload);
 AstraResult astra_interface_toolbar_button_measure(
     const AstraControl *control, uint32_t icon_only, AstraControlSize *size);
+uint32_t astra_interface_control_flex_base_width(
+    const AstraControl *control);
 
 AstraResult astra_interface_label_init(AstraControl *control,
                                        const AstraLabelInfo *info);

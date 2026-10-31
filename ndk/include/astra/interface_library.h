@@ -823,6 +823,15 @@ AstraResult astra_interface_drag_gesture_event(AstraDragGesture *gesture,
  */
 AstraResult astra_interface_ui_set_state(
     AstraUIContext *context, AstraControl *control, uint32_t state);
+/** Replace semantic state while retaining layout visibility. Useful when a
+ * responsive toolbar temporarily folds a control. @since Interface Kit 12.7.
+ * @param context UI context owning the control.
+ * @param control Retained control whose semantic state changes.
+ * @param state Semantic bits only; ASTRA_CONTROL_COLLAPSED is invalid.
+ * @return ASTRA_OK or a validation/layout error.
+ */
+AstraResult astra_interface_ui_set_semantic_state(
+    AstraUIContext *context, AstraControl *control, uint32_t state);
 /** Render damaged controls.
  * @param context UI context containing layout, state, and damage.
  * @param surface Destination client surface.
