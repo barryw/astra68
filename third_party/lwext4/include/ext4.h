@@ -322,6 +322,8 @@ int ext4_flink(const char *path, const char *hardlink_path);
  * @param new_path Destination.
  * @return  Standard error code. */
 int ext4_frename(const char *path, const char *new_path);
+/** Atomically rename only when `new_path` is absent; EEXIST otherwise. */
+int ext4_frename_noreplace(const char *path, const char *new_path);
 
 /**@brief   File open function.
  *

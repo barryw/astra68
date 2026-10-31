@@ -43,7 +43,12 @@ NDK_SHARED_LIBRARY_ARTIFACTS := $(ASTRA_SHARED_LIBRARIES) \
 
 all: header-contract
 
-test: header-contract
+result-test:
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -pedantic \
+		-Iinclude -I../sw/include tests/test_result.c -o build/test-result
+	./build/test-result
+
+test: header-contract result-test
 	python3 tests/test_distribution_makefile.py
 	python3 tests/test_documentation.py
 
@@ -206,7 +211,7 @@ install-cmake:
 		fi; \
 	done
 
-dist-check: $(DIST_ARCHIVE)
+dist-check: $(DIST_ARCHIVE) result-test
 	python3 tests/test_distribution.py $(DIST_ARCHIVE) $(ASTRA_OS_VERSION) \
 		$(foreach library,$(NDK_SHARED_LIBRARY_ARTIFACTS),\
 			--library $(notdir $(library)))
@@ -285,7 +290,7 @@ install-headers:
 clean:
 	rm -rf build
 
-.PHONY: all test check docs docs-html docs-pdf \
+.PHONY: all test result-test check docs docs-html docs-pdf \
 	docs-check docs-clean loader-library-contract shared-library-contracts \
 	developer-components dist dist-check \
 	os-library-tests certify sdk header-contract install-headers install-cmake clean

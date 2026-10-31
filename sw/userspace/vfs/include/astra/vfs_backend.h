@@ -123,6 +123,9 @@ typedef struct AstraVfsBackendOps {
     uint32_t (*mkdir)(void *context, const char *path, uint16_t create_mode);
     uint32_t (*unlink)(void *context, const char *path, uint32_t flags);
     uint32_t (*rename)(void *context, const char *from, const char *to);
+    /** Atomically rename only when the destination is absent. */
+    uint32_t (*rename_noreplace)(void *context, const char *from,
+                                 const char *to);
     uint32_t (*chmod)(void *context, const char *path, uint16_t mode);
     uint32_t (*readlink)(void *context, const char *path, void *buffer,
                          uint32_t capacity, uint32_t *length);
@@ -174,6 +177,8 @@ typedef struct AstraVfsBackendOps {
     /** Optional anchored path operations; zero bases mean the grant root. */
     uint32_t (*mkdir_at)(void *, uintptr_t, const char *, uint16_t);
     uint32_t (*rename_at)(void *, uintptr_t, const char *, uintptr_t, const char *);
+    uint32_t (*rename_noreplace_at)(void *, uintptr_t, const char *,
+                                    uintptr_t, const char *);
     uint32_t (*link_at)(void *, uintptr_t, const char *, uintptr_t, const char *);
     uint32_t (*symlink_at)(void *, const char *, uintptr_t, const char *);
     uint32_t (*readlink_at)(void *, uintptr_t, const char *, void *, uint32_t, uint32_t *);

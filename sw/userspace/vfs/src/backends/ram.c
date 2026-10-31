@@ -746,7 +746,8 @@ static uint32_t ram_unlink_at(void *context, uintptr_t directory,
     return status;
 }
 
-static uint32_t ram_rename(void *context, const char *from, const char *to)
+static uint32_t ram_rename_common(void *context, const char *from,
+    const char *to, int no_replace)
 {
     AstraVfsRamBackend *fs = context;
     AstraVfsRamNode *source;
@@ -780,6 +781,10 @@ static uint32_t ram_rename(void *context, const char *from, const char *to)
             goto done;
         }
     target_entry = child(new_parent, name, strlen(name));
+    if (no_replace && target_entry != NULL) {
+        status = ASTRA_VFS_ERR_EXISTS;
+        goto done;
+    }
     if (to[strlen(to) - 1u] == '/' && target_entry != NULL &&
         target_entry->node->kind != ASTRA_VFS_KIND_DIRECTORY) {
         status = ASTRA_VFS_ERR_NOT_DIR;
@@ -828,6 +833,17 @@ static uint32_t ram_rename(void *context, const char *from, const char *to)
 done:
     unlocked(fs);
     return status;
+}
+
+static uint32_t ram_rename(void *context, const char *from, const char *to)
+{
+    return ram_rename_common(context, from, to, 0);
+}
+
+static uint32_t ram_rename_noreplace(void *context, const char *from,
+    const char *to)
+{
+    return ram_rename_common(context, from, to, 1);
 }
 
 static uint32_t ram_chmod(void *context, const char *path, uint16_t mode)
@@ -1013,6 +1029,7 @@ static const AstraVfsBackendOps ram_ops = {
     .mkdir = ram_mkdir,
     .unlink = ram_unlink,
     .rename = ram_rename,
+    .rename_noreplace = ram_rename_noreplace,
     .chmod = ram_chmod,
     .readlink = ram_readlink,
     .symlink = ram_symlink,

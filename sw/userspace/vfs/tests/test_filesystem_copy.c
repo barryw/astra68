@@ -20,6 +20,7 @@ static int fail_write;
 static int fail_unlink;
 static uint32_t allocations;
 static uint32_t fail_alloc_at;
+static uint32_t inject_publish_collision;
 static AstraFilesystem *expected_source;
 static AstraFilesystem *expected_destination;
 
@@ -290,6 +291,18 @@ uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
     return ASTRA_VFS_OK;
 }
 
+uint32_t astra_filesystem_rename_noreplace(AstraFilesystem *filesystem,
+    const char *from, const char *to)
+{
+    if (inject_publish_collision && strstr(from, ".astra-copying-") != NULL) {
+        Entry *racer = add(to, ASTRA_VFS_KIND_FILE);
+        memcpy(racer->bytes, "RACER", 5u);
+        racer->length = 5u;
+        inject_publish_collision = 0u;
+    }
+    return astra_filesystem_rename(filesystem, from, to);
+}
+
 int main(void)
 {
     AstraFilesystem filesystem = ASTRA_FILESYSTEM_INIT;
@@ -468,5 +481,19 @@ int main(void)
     deep_file = find(moved_deep);
     assert(deep_file != NULL && deep_file->length == 6u &&
         memcmp(deep_file->bytes, "DEEPER", 6u) == 0);
+
+    entry_count = 0u;
+    Entry *racing_source = add("/dh0/Race", ASTRA_VFS_KIND_FILE);
+    memcpy(racing_source->bytes, "SOURCE", 6u);
+    racing_source->length = 6u;
+    inject_publish_collision = 1u;
+    assert(astra_filesystem_copy_tree_between(&filesystem, "/dh0/Race",
+        &removable, "/usb0/Race") == ASTRA_VFS_ERR_EXISTS);
+    Entry *racer = find("/usb0/Race");
+    assert(racer != NULL && racer->length == 5u &&
+        memcmp(racer->bytes, "RACER", 5u) == 0);
+    assert(find("/dh0/Race") != NULL);
+    for (uint32_t at = 0u; at < entry_count; ++at)
+        assert(strstr(entries[at].path, ".astra-copying") == NULL);
     return 0;
 }

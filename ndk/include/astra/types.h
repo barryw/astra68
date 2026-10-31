@@ -80,7 +80,9 @@ enum {
     /** Committed memory is unavailable. */
     ASTRA_ERROR_OUT_OF_MEMORY = -16,
     /** A complete pathname or filename exceeds the native naming limit. */
-    ASTRA_ERROR_NAME_TOO_LONG = -17
+    ASTRA_ERROR_NAME_TOO_LONG = -17,
+    /** An object already occupies the requested destination. */
+    ASTRA_ERROR_EXISTS = -18
 };
 
 /** Absolute signed monotonic deadline in nanoseconds. @since 0.1.0 */

@@ -33,6 +33,12 @@ Missing stores return an empty snapshot; malformed records are skipped.
 recent items share internal document I/O and a target stack-frame gate, so
 client code never implements their wire formats or write protocol.
 
+ABI 15.10 adds `astra_filesystem_rename_noreplace` and the corresponding VFS
+client operations. They publish a rename only when the destination remains
+absent. Filesystem Kit tree copy and move use this atomic operation, so a
+concurrent creator cannot have its destination replaced after the copy's
+initial existence check.
+
 The native ABI is not a libc ABI. `libc.library.4` provides the POSIX file
 API -- descriptors, the current directory, `errno`, and stdio -- over these
 same operations; a POSIX program uses it instead. See the repository's

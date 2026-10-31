@@ -42,4 +42,19 @@ with tempfile.TemporaryDirectory() as directory:
     assert companions[0] == (manifest, "/libs/Runtime.kit/manifest")
     assert companions[1][0] == b"provider"
 
+    loader = root / ("sw/userspace/kits/build/Runtime.kit/libraries/"
+                     "loader.library/abi-1/1.0.0/m68k-68040/loader.library")
+    loader_built = root / "sw/userspace/loader/build/m68k/loader.library.1"
+    loader.parent.mkdir(parents=True)
+    loader_built.parent.mkdir(parents=True)
+    loader.write_bytes(b"loader")
+    loader_built.write_bytes(b"loader")
+    loader_provider = loader.relative_to(root / "sw/userspace/kits/build").as_posix()
+    module.astra_image._providers = lambda _: {
+        ("loader.library", 1): ("1.0.0", 0, "test", loader_provider)}
+    loader_target = "/libs/" + loader_provider
+    loader_companions = module.kit_companions(loader, loader_target)
+    assert loader_companions[0] == (manifest, "/libs/Runtime.kit/manifest")
+    assert loader_companions[1][0] == b"provider"
+
 print("dev-deploy Kit freshness PASS")

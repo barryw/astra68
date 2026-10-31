@@ -20,7 +20,7 @@ capability APPS:r
 capability LIBS:r
 capability LOG
 requires compiler.library 2 2.0.0
-requires filesystem.library 15 15.9.0
+requires filesystem.library 15 15.10.0
 requires font.library 5 5.0.0
 requires graphics.library 3 3.0.0
 requires interface.library 12 12.7.0

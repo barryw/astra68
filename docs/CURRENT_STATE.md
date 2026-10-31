@@ -2,6 +2,44 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared transfer publication checkpoint, 2026-10-31: Filesystem Kit's
+staged tree copy could replace a destination created after its initial
+existence check; same-volume move had the same race. The native VFS protocol
+now has an atomic no-replace rename operation (version 39), implemented by
+RAM, ext4, and HostFS/storage provider. Filesystem Kit uses it for staged
+publication and same-volume move; Atlas still owns no transfer traversal or
+publication policy. New Filesystem Kit 15.10 exports the reusable operation;
+Atlas declares that minimum version. Haiku read-only reference:
+`src/kits/tracker/FSUtils.cpp` (`CopyFolder`, `FSDeleteFolder`) keeps copy and
+cleanup in Tracker's shared file-operation layer; Astra keeps its own stronger
+atomic publication contract at the VFS layer. Beast focused tests cover an
+injected destination creator at publish time, occupied/free no-replace rename
+on RAM and ext4, HostFS flag transport, and Linux provider `EEXIST` with
+both files intact. Focused VFS tests, ext4 mount test, storage-path test,
+MC68040 Filesystem Kit library/stack contracts, DE25 QEMU build, DE25
+AArch64 storage provider build, and NDK `dist-check` passed. Shared NDK
+`AstraResult` now retains EXISTS in both directions instead of reporting I/O
+error; Haiku's read-only `headers/os/support/Errors.h` likewise keeps
+`B_FILE_EXISTS` distinct. Its focused mapping test passes. The generic DE25
+Kit verifier now recognizes libraries built at either supported output path;
+its freshness test passes. Coherent DE25 install reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=12 host=3`, followed by focused Atlas
+binary install `guest=1`. On DE25, Atlas opened RAM0, created Folder1 and
+Folder2, copied Folder1 into Folder2, then refused a repeat paste with
+`Item could not be copied: already exists`; destination remained visible.
+RFB captures were SHA-verified and archived on Beast under
+`/mnt/Documents/astra68/atlas-vfs39-20261031/`; final copied-folder and
+collision-dialog raw SHA-256 values are
+`46b7745cb398be9036c5604804e9f414251227c4e3840744fe82736681cde106`
+and `9a1d4a4ab5748ba61879daf8a702249acfd2e47e5849c03b3bb00b992b2c6682`.
+A guest restart cleared RAM0: its empty Atlas frame matched initial empty
+frame SHA-256 `3ab47a65061ed7ecf442024579103d507a77b4c4530b25bdd57151ea1fe5b679`.
+Trial captures were removed from board. Astra, audio, and remote desktop
+services are active, with zero automatic restarts and 8.1 GiB free. Physical
+USB copy remains untested because no USB media is attached. Separately,
+`make -C ndk test` exposes a pre-existing strict C++ header-contract failure
+for `vfs_clipboard.h`'s C flexible array; NDK `dist-check` passes.
+
 Atlas shared transfer path-depth gate, 2026-10-31: Filesystem Kit no longer
 rejects trees after 32 nested levels. Copy and partial cleanup now link their
 existing heap-backed frames by parent; valid path length governs traversal.

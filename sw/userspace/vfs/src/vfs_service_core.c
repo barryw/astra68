@@ -190,7 +190,8 @@ uint32_t astra_vfs_backend_path_operation(const AstraVfsBackend *backend,
     path = paths.first == NULL ? "" : paths.first;
     to = paths.second;
     status = ASTRA_VFS_ERR_UNSUPPORTED;
-    if ((operation != ASTRA_VFS_OP_LOOKUP && request->flags != 0u) ||
+    if ((operation != ASTRA_VFS_OP_LOOKUP &&
+         operation != ASTRA_VFS_OP_RENAME && request->flags != 0u) ||
         (operation != ASTRA_VFS_OP_DIRECTORY_PATH && base != 0u &&
          ((operation == ASTRA_VFS_OP_SYMLINK ? to : path)[0] == '\0' ||
           (operation == ASTRA_VFS_OP_SYMLINK ? to : path)[0] == '/')) ||
@@ -243,14 +244,31 @@ uint32_t astra_vfs_backend_path_operation(const AstraVfsBackend *backend,
         break;
     case ASTRA_VFS_OP_RENAME:
     case ASTRA_VFS_OP_LINK:
+        if (operation == ASTRA_VFS_OP_RENAME &&
+            (request->flags & ~ASTRA_VFS_RENAME_NOREPLACE) != 0u)
+            return ASTRA_VFS_ERR_INVALID;
+        if (operation == ASTRA_VFS_OP_LINK && request->flags != 0u)
+            return ASTRA_VFS_ERR_INVALID;
         if (base != 0u || second_base != 0u) {
-            if (operation == ASTRA_VFS_OP_RENAME && ops->rename_at != NULL)
-                status = ops->rename_at(backend->context, base, path, second_base, to);
+            if (operation == ASTRA_VFS_OP_RENAME) {
+                if ((request->flags & ASTRA_VFS_RENAME_NOREPLACE) != 0u) {
+                    if (ops->rename_noreplace_at != NULL)
+                        status = ops->rename_noreplace_at(backend->context,
+                            base, path, second_base, to);
+                } else if (ops->rename_at != NULL)
+                    status = ops->rename_at(backend->context, base, path,
+                        second_base, to);
+            }
             if (operation == ASTRA_VFS_OP_LINK && ops->link_at != NULL)
                 status = ops->link_at(backend->context, base, path, second_base, to);
-        } else
-            status = operation == ASTRA_VFS_OP_RENAME ?
-                ops->rename(backend->context, path, to) : ops->link(backend->context, path, to);
+        } else if (operation == ASTRA_VFS_OP_RENAME)
+            status = (request->flags & ASTRA_VFS_RENAME_NOREPLACE) != 0u ?
+                ops->rename_noreplace != NULL ?
+                    ops->rename_noreplace(backend->context, path, to) :
+                    ASTRA_VFS_ERR_UNSUPPORTED :
+                ops->rename(backend->context, path, to);
+        else
+            status = ops->link(backend->context, path, to);
         break;
     case ASTRA_VFS_OP_SYMLINK:
         if (path[0] == '\0')

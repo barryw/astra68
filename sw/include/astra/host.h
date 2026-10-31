@@ -240,6 +240,8 @@ enum {
 #define ASTRA_HOST_FS_ADOPT_DISCARD     (1u << 0)
 /** UNLINK flag: remove an empty directory; zero flags require a non-directory. */
 #define ASTRA_HOST_FS_UNLINK_DIRECTORY  (1u << 0)
+/** RENAME flag: refuse an occupied destination. */
+#define ASTRA_HOST_FS_RENAME_NOREPLACE (1u << 0)
 /** SESSION_OPEN flag: every mutation in the session is refused
  * (ASTRA_STATUS_READ_ONLY); a session derived from a read-only one must
  * carry it too. */

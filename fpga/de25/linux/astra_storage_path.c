@@ -285,6 +285,16 @@ void astra_storage_path_execute(int allowed_root, int readonly,
         }
         if (request->operation == ASTRA_STORAGE_PATH_RENAME ||
             request->operation == ASTRA_STORAGE_PATH_LINK) {
+            if (request->operation == ASTRA_STORAGE_PATH_RENAME &&
+                (request->flags & ~RENAME_NOREPLACE) != 0u) {
+                error = -EINVAL;
+                break;
+            }
+            if (request->operation == ASTRA_STORAGE_PATH_LINK &&
+                request->flags != 0u) {
+                error = -EINVAL;
+                break;
+            }
             last = &right;
             error = astra_resolve(root, second, request->path2, request->resolve,
                                   request->links, &right);
@@ -326,7 +336,10 @@ void astra_storage_path_execute(int allowed_root, int readonly,
                     AT_SYMLINK_NOFOLLOW) != 0 || !S_ISDIR(info.st_mode)))
                 error = -ENOTDIR;
             else
-                error = renameat(left.parent, left.leaf, right.parent, right.leaf);
+                error = request->flags == 0u ?
+                    renameat(left.parent, left.leaf, right.parent, right.leaf) :
+                    renameat2(left.parent, left.leaf, right.parent, right.leaf,
+                        RENAME_NOREPLACE);
         }
         if (error == -1)
             error = -errno;

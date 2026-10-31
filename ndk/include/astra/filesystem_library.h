@@ -15,7 +15,7 @@
 /** Current Filesystem Kit ABI major. */
 #define ASTRA_FILESYSTEM_LIBRARY_ABI_MAJOR ASTRA_FILESYSTEM_LIBRARY_VERSION
 /** Current backward-compatible Filesystem Kit ABI revision. */
-#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 9u
+#define ASTRA_FILESYSTEM_LIBRARY_ABI_MINOR 10u
 enum {
     ASTRA_FILE_SEEK_BEGIN = 0,
     ASTRA_FILE_SEEK_CURRENT = 1,
@@ -352,9 +352,17 @@ uint32_t astra_filesystem_unlink_at(AstraFilesystem *filesystem, const AstraFile
 /** Atomically rename within one backing filesystem. @param filesystem Attached filesystem. @param from Existing path. @param to Destination path. @return ASTRA_VFS_* status. */
 uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
                                  const char *from, const char *to);
+/** Atomically rename only when destination is absent.
+ * @param filesystem Attached filesystem.
+ * @param from Existing assign-qualified source path.
+ * @param to New assign-qualified destination path.
+ * @return ASTRA_VFS_ERR_EXISTS when destination exists; other ASTRA_VFS_* status.
+ */
+uint32_t astra_filesystem_rename_noreplace(AstraFilesystem *filesystem,
+    const char *from, const char *to);
 /** Copy a file, symbolic link, or directory tree to a new name. Stage under
  * a sibling path, sync copied files, and rename into place after copying.
- * Reject a destination that already exists when copying begins. Other node
+ * Reject a destination that exists at publication. Other node
  * types fail. An interrupted copy can leave a sibling with
  * the suffix `.astra-copying` until removed by the caller.
  * @param filesystem Attached filesystem.

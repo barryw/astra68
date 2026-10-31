@@ -21,6 +21,7 @@ typedef struct FakeHost {
     uint32_t begin_failure;
     uint32_t catalog_corrupt;
     uint32_t expected_parent;
+    uint32_t expected_rename_flags;
     uint32_t expected_requester;
     uint32_t payload_limit;
     uint32_t usage_cursor;
@@ -386,6 +387,7 @@ uint32_t astra_vfs_host_transport_submit(
         break;
     case ASTRA_HOST_FS_RENAME:
         assert(command->handle == 0u && command->value_lo == 0u);
+        assert(command->flags == host->expected_rename_flags);
         assert(operand(request->path, request->path_length, "/old") &&
                operand(request->path2, request->path2_length, "/new"));
         break;
@@ -608,6 +610,10 @@ int main(void)
     assert(ops->unlink(&backend, "/file", 0u) == ASTRA_VFS_OK);
     EXPECT(ASTRA_HOST_FS_RENAME);
     assert(ops->rename(&backend, "/old", "/new") == ASTRA_VFS_OK);
+    host.expected_rename_flags = ASTRA_HOST_FS_RENAME_NOREPLACE;
+    EXPECT(ASTRA_HOST_FS_RENAME);
+    assert(ops->rename_noreplace(&backend, "/old", "/new") == ASTRA_VFS_OK);
+    host.expected_rename_flags = 0u;
     EXPECT(ASTRA_HOST_FS_CHMOD);
     assert(ops->chmod(&backend, "/new", 0600u) == ASTRA_VFS_OK);
     EXPECT(ASTRA_HOST_FS_READLINK);
@@ -679,7 +685,7 @@ int main(void)
     assert(ops->close(&backend, node) == ASTRA_VFS_OK);
 #undef EXPECT
     /* Backend calls, including identity and generation boundary checks. */
-    assert(host.calls == 30u);
+    assert(host.calls == 31u);
     {
         uint8_t continuation[ASTRA_VFS_PATH_MAX];
         AstraVfsEscape escape = {.path = continuation, .capacity = ASTRA_VFS_ESCAPE_PATH_MAX};
@@ -697,7 +703,7 @@ int main(void)
         assert(ops->lookup(&backend, 0u, "/escape",
                            ASTRA_VFS_LOOKUP_ENTRY | ASTRA_VFS_LOOKUP_FOLLOW,
                            3u, &info, &escape) == ASTRA_VFS_ERR_INVALID);
-        assert(host.calls == 32u);
+        assert(host.calls == 33u);
     }
     {
         uint64_t token;

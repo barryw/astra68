@@ -1316,7 +1316,7 @@ static int ext4_generic_open(ext4_file *f, const char *path, const char *flags,
 }
 
 static int ext4_create_hardlink(const char *path,
-		struct ext4_inode_ref *child_ref, bool rename,
+		struct ext4_inode_ref *child_ref, bool rename, bool replace,
 		uint32_t *replaced_inode, bool *same_inode)
 {
 	bool is_goal = false;
@@ -1366,7 +1366,7 @@ static int ext4_create_hardlink(const char *path,
 			r = ext4_link(mp, &ref, child_ref, path, len, rename);
 			break;
 		} else if (r == EOK && is_goal) {
-			if (rename) {
+			if (rename && replace) {
 				r = ext4_replace_link(mp, &ref, &result, child_ref,
 						      replaced_inode, same_inode);
 			} else {
@@ -1509,7 +1509,8 @@ int ext4_flink(const char *path, const char *hardlink_path)
 		goto Finish;
 	}
 
-	r = ext4_create_hardlink(hardlink_path, &child_ref, false, NULL, NULL);
+	r = ext4_create_hardlink(hardlink_path, &child_ref, false, false,
+				 NULL, NULL);
 
 Finish:
 	if (child_loaded)
@@ -1560,7 +1561,8 @@ static int ext4_release_replaced_inode(struct ext4_mountpoint *mp,
 	return r;
 }
 
-int ext4_frename(const char *path, const char *new_path)
+static int ext4_rename_common(const char *path, const char *new_path,
+			     bool replace)
 {
 	int r;
 	ext4_file f;
@@ -1607,7 +1609,8 @@ int ext4_frename(const char *path, const char *new_path)
 
 	child_loaded = true;
 
-	r = ext4_create_hardlink(new_path, &child_ref, true, &replaced_inode,
+	r = ext4_create_hardlink(new_path, &child_ref, true, replace,
+				 &replaced_inode,
 				 &same_inode);
 	if (r != EOK)
 		goto Finish;
@@ -1638,6 +1641,16 @@ Finish:
 	EXT4_MP_UNLOCK(mp);
 	return r;
 
+}
+
+int ext4_frename(const char *path, const char *new_path)
+{
+	return ext4_rename_common(path, new_path, true);
+}
+
+int ext4_frename_noreplace(const char *path, const char *new_path)
+{
+	return ext4_rename_common(path, new_path, false);
 }
 
 /****************************************************************************/

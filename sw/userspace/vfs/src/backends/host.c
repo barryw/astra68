@@ -617,7 +617,8 @@ static uint32_t host_filesystem_info(void *context, uintptr_t node,
 /* Both operands absolute beneath the session root: handle 0, value_lo 0. */
 static uint32_t host_two_paths(void *context, uintptr_t left_base,
                                const char *left, uintptr_t right_base,
-                               const char *right, uint16_t operation)
+                               const char *right, uint16_t operation,
+                               uint32_t flags)
 {
     AstraVfsHostBackend *backend = context;
     AstraVfsHostRequest request;
@@ -631,12 +632,20 @@ static uint32_t host_two_paths(void *context, uintptr_t left_base,
         return status;
     request.command->handle = (uint32_t)left_base;
     request.command->value_lo = (uint32_t)right_base;
+    request.command->flags = flags;
     return submit(backend, &request, NULL, 0u, NULL, 0u);
 }
 
 static uint32_t host_rename(void *context, const char *from, const char *to)
 {
-    return host_two_paths(context, 0u, from, 0u, to, ASTRA_HOST_FS_RENAME);
+    return host_two_paths(context, 0u, from, 0u, to, ASTRA_HOST_FS_RENAME, 0u);
+}
+
+static uint32_t host_rename_noreplace(void *context, const char *from,
+    const char *to)
+{
+    return host_two_paths(context, 0u, from, 0u, to,
+        ASTRA_HOST_FS_RENAME, ASTRA_HOST_FS_RENAME_NOREPLACE);
 }
 
 static uint32_t host_text(void *context, uintptr_t directory, const char *path,
@@ -692,31 +701,42 @@ static uint32_t host_rename_at(void *context, uintptr_t from_base,
                                const char *from, uintptr_t to_base,
                                const char *to)
 {
-    return host_two_paths(context, from_base, from, to_base, to, ASTRA_HOST_FS_RENAME);
+    return host_two_paths(context, from_base, from, to_base, to,
+        ASTRA_HOST_FS_RENAME, 0u);
+}
+
+static uint32_t host_rename_noreplace_at(void *context, uintptr_t from_base,
+    const char *from, uintptr_t to_base, const char *to)
+{
+    return host_two_paths(context, from_base, from, to_base, to,
+        ASTRA_HOST_FS_RENAME, ASTRA_HOST_FS_RENAME_NOREPLACE);
 }
 
 static uint32_t host_link_at(void *context, uintptr_t from_base,
                              const char *from, uintptr_t to_base,
                              const char *to)
 {
-    return host_two_paths(context, from_base, from, to_base, to, ASTRA_HOST_FS_LINK);
+    return host_two_paths(context, from_base, from, to_base, to,
+        ASTRA_HOST_FS_LINK, 0u);
 }
 
 static uint32_t host_symlink_at(void *context, const char *target,
                                  uintptr_t directory, const char *path)
 {
-    return host_two_paths(context, directory, target, 0u, path, ASTRA_HOST_FS_SYMLINK);
+    return host_two_paths(context, directory, target, 0u, path,
+        ASTRA_HOST_FS_SYMLINK, 0u);
 }
 
 static uint32_t host_symlink(void *context, const char *target,
                              const char *path)
 {
-    return host_two_paths(context, 0u, target, 0u, path, ASTRA_HOST_FS_SYMLINK);
+    return host_two_paths(context, 0u, target, 0u, path,
+        ASTRA_HOST_FS_SYMLINK, 0u);
 }
 
 static uint32_t host_link(void *context, const char *from, const char *to)
 {
-    return host_two_paths(context, 0u, from, 0u, to, ASTRA_HOST_FS_LINK);
+    return host_two_paths(context, 0u, from, 0u, to, ASTRA_HOST_FS_LINK, 0u);
 }
 
 static uint32_t host_lookup(void *context, uintptr_t directory, const char *path, uint32_t flags,
@@ -872,14 +892,23 @@ static uint32_t host_file_flags(void *context, uintptr_t node, uint32_t mask,
 }
 
 static const AstraVfsBackendOps host_ops = {
-    host_open, host_close, host_read, host_write, host_sync, host_truncate,
-    host_stat, host_readdir, host_mkdir, host_unlink, host_rename, host_chmod,
-    host_readlink, host_symlink, host_link, host_open_at, host_unlink_at,
-    host_chmod_node, host_chmod_at, host_filesystem_info, host_stat_at,
-    host_stat_node, host_lookup, host_read_sequential, host_seek, host_share,
-    host_adopt, host_file_flags,
-    host_readdir_batch, host_mkdir_at, host_rename_at, host_link_at,
-    host_symlink_at, host_readlink_at, host_directory_path,
+    .open = host_open, .close = host_close, .read = host_read,
+    .write = host_write, .sync = host_sync, .truncate = host_truncate,
+    .stat = host_stat, .readdir = host_readdir, .mkdir = host_mkdir,
+    .unlink = host_unlink, .rename = host_rename,
+    .rename_noreplace = host_rename_noreplace, .chmod = host_chmod,
+    .readlink = host_readlink, .symlink = host_symlink, .link = host_link,
+    .open_at = host_open_at, .unlink_at = host_unlink_at,
+    .chmod_node = host_chmod_node, .chmod_at = host_chmod_at,
+    .filesystem_info = host_filesystem_info, .stat_at = host_stat_at,
+    .stat_node = host_stat_node, .lookup = host_lookup,
+    .read_sequential = host_read_sequential, .seek = host_seek,
+    .share = host_share, .adopt = host_adopt, .file_flags = host_file_flags,
+    .readdir_batch = host_readdir_batch, .mkdir_at = host_mkdir_at,
+    .rename_at = host_rename_at,
+    .rename_noreplace_at = host_rename_noreplace_at,
+    .link_at = host_link_at, .symlink_at = host_symlink_at,
+    .readlink_at = host_readlink_at, .directory_path = host_directory_path,
 };
 
 int astra_vfs_host_init(AstraVfsHostBackend *backend,

@@ -42,13 +42,13 @@
 /** Native-big-endian `STOR` storage-protocol signature. */
 #define ASTRA_VFS_PROTOCOL UINT32_C(0x53544f52) /* STOR */
 /** Current storage-protocol wire-format version. */
-#define ASTRA_VFS_VERSION  UINT16_C(38)
+#define ASTRA_VFS_VERSION  UINT16_C(39)
 
 /** Current version only: in-tree clients and providers change together.
  * Version 38 carries complete pathname operands in the bound transfer area.
  * Version 37 carried full-width native volume identity. A mismatch
  * fails closed; no rolling-upgrade or obsolete request format is supported. */
-#define ASTRA_VFS_VERSION_MIN UINT16_C(38)
+#define ASTRA_VFS_VERSION_MIN UINT16_C(39)
 
 /** Maximum byte length of a path, including its terminating NUL, on the wire. */
 #define ASTRA_VFS_PATH_MAX 4096u
@@ -146,6 +146,8 @@
  * the last pre-28 peer; the numbers are not reused. */
 /** Atomically rename or move a path, carrying both paths in one request. */
 #define ASTRA_VFS_OP_RENAME      UINT32_C(25)
+/** RENAME refuses an occupied destination when this flag is set. */
+#define ASTRA_VFS_RENAME_NOREPLACE UINT32_C(1)
 /** Atomically create a symbolic link, carrying target and path in one request. */
 #define ASTRA_VFS_OP_SYMLINK     UINT32_C(26)
 /** Bind one reply channel and transfer area to the calling thread. */

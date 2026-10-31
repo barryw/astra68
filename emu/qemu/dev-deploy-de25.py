@@ -46,8 +46,11 @@ def kit_companions(source, target):
     abi = components[7]
     if not abi.startswith("abi-") or not abi[4:].isdigit():
         raise ValueError("invalid Kit library ABI path: " + str(source))
-    candidates = list((REPOSITORY / "sw/userspace").glob(
+    userspace = REPOSITORY / "sw/userspace"
+    candidates = list(userspace.glob(
         "*/build/m68k/libraries/" + source.name + "." + abi[4:]))
+    candidates += list(userspace.glob(
+        "*/build/m68k/" + source.name + "." + abi[4:]))
     if len(candidates) != 1 or not candidates[0].is_file():
         raise ValueError("cannot verify built Kit library: " + str(source))
     with source.open("rb") as staged, candidates[0].open("rb") as built:

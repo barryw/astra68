@@ -55,6 +55,24 @@ static void semantics(int root)
     strcpy(value.path2, "/sub/renamed");
     execute(root, 0, &value, fds, &reply, &result);
     assert(reply.error == 0);
+    int racer = openat(root, "sub/racer", O_CREAT | O_EXCL | O_WRONLY, 0600);
+    assert(racer >= 0 && write(racer, "racer", 5) == 5);
+    close(racer);
+    value = request(ASTRA_STORAGE_PATH_RENAME, "/sub/renamed");
+    value.resolve = ASTRA_RESOLVE_ENTRY;
+    value.flags = RENAME_NOREPLACE;
+    strcpy(value.path2, "/sub/racer");
+    execute(root, 0, &value, fds, &reply, &result);
+    assert(reply.error == EEXIST);
+    int source = openat(root, "sub/renamed", O_RDONLY);
+    char preserved[6] = {0};
+    assert(source >= 0 && read(source, preserved, 3) == 3 &&
+        memcmp(preserved, "old", 3) == 0);
+    close(source);
+    racer = openat(root, "sub/racer", O_RDONLY);
+    assert(racer >= 0 && read(racer, preserved, 5) == 5 &&
+        memcmp(preserved, "racer", 5) == 0);
+    close(racer);
     value = request(ASTRA_STORAGE_PATH_SYMLINK, "../sub/renamed");
     value.resolve = ASTRA_RESOLVE_ENTRY;
     strcpy(value.path2, "/sub/link");
@@ -86,6 +104,7 @@ static void semantics(int root)
     close(outside);
     assert(unlinkat(root, "sub/link", 0) == 0);
     assert(unlinkat(root, "sub/renamed", 0) == 0);
+    assert(unlinkat(root, "sub/racer", 0) == 0);
     assert(unlinkat(root, "sub", AT_REMOVEDIR) == 0);
 }
 

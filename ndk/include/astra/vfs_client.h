@@ -591,6 +591,14 @@ uint32_t astra_vfs_unlink_at(AstraVfsClient *client,
  */
 uint32_t astra_vfs_rename(AstraVfsClient *client, const char *from,
                           const char *to);
+/** Atomically rename only if destination does not exist.
+ * @param client Connected client.
+ * @param from Existing mount-relative path.
+ * @param to New mount-relative path.
+ * @return ASTRA_VFS_ERR_EXISTS when destination exists; other ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_rename_noreplace(AstraVfsClient *client,
+                                    const char *from, const char *to);
 /**
  * Change a node's permission bits.
  * @param client Connected client.
@@ -696,6 +704,17 @@ uint32_t astra_vfs_mkdir_at(AstraVfsClient *client, AstraVfsFile directory, cons
  * @param from Source path. @param to_directory Destination anchor.
  * @param to Destination path. @return ASTRA_VFS_* status. */
 uint32_t astra_vfs_rename_at(AstraVfsClient *client, AstraVfsFile from_directory, const char *from, AstraVfsFile to_directory, const char *to);
+/** Handle-relative rename that refuses an occupied destination.
+ * @param client Connected client.
+ * @param from_directory Source directory anchor, or zero for grant root.
+ * @param from Source path relative to its anchor.
+ * @param to_directory Destination directory anchor, or zero for grant root.
+ * @param to Destination path relative to its anchor.
+ * @return ASTRA_VFS_ERR_EXISTS when destination exists; other ASTRA_VFS_* status.
+ */
+uint32_t astra_vfs_rename_noreplace_at(AstraVfsClient *client,
+    AstraVfsFile from_directory, const char *from,
+    AstraVfsFile to_directory, const char *to);
 /** Link with independent directory anchors; zero means grant root.
  * @param client Connected client. @param from_directory Source anchor.
  * @param from Source path. @param to_directory Destination anchor.

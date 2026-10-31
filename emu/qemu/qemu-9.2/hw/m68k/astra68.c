@@ -6969,6 +6969,13 @@ static void astra_host_execute_fs(Astra68State *s, uint32_t owner,
         case ASTRA_HOST_FS_RENAME:
         case ASTRA_HOST_FS_LINK: {
             uint32_t second_handle = ldl_be_p(command + HOST_FIELD(value_lo));
+            if (operation == ASTRA_HOST_FS_RENAME) {
+                if (flags & ~ASTRA_HOST_FS_RENAME_NOREPLACE)
+                    goto done;
+                broker_flags = flags & ASTRA_HOST_FS_RENAME_NOREPLACE ?
+                    RENAME_NOREPLACE : 0u;
+            } else if (flags != 0u)
+                goto done;
             broker_operation = operation == ASTRA_HOST_FS_RENAME ?
                 ASTRA_STORAGE_PATH_RENAME : ASTRA_STORAGE_PATH_LINK;
             if (second_handle == handle)

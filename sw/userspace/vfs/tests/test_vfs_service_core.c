@@ -439,6 +439,13 @@ fake_rename(void *context, const char *from, const char *to)
     return ASTRA_VFS_OK;
 }
 
+static uint32_t fake_rename_noreplace(void *context, const char *from,
+    const char *to)
+{
+    if (fake_find(to) != NULL) return ASTRA_VFS_ERR_EXISTS;
+    return fake_rename(context, from, to);
+}
+
 static uint32_t
 fake_chmod(void *context, const char *path, uint16_t mode)
 {
@@ -609,6 +616,16 @@ static uint32_t fake_rename_at(void *context, uintptr_t left, const char *from,
     return fake_rename(context, a, b);
 }
 
+static uint32_t fake_rename_noreplace_at(void *context, uintptr_t left,
+    const char *from, uintptr_t right, const char *to)
+{
+    char a[ASTRA_VFS_PATH_MAX], b[ASTRA_VFS_PATH_MAX];
+    if (!fake_relative_path(left, from, a, sizeof(a)) ||
+        !fake_relative_path(right, to, b, sizeof(b)))
+        return ASTRA_VFS_ERR_INVALID;
+    return fake_rename_noreplace(context, a, b);
+}
+
 static uint32_t fake_directory_path(void *context, uintptr_t directory,
                                      void *buffer, uint32_t capacity, uint32_t *length)
 {
@@ -622,15 +639,19 @@ static uint32_t fake_directory_path(void *context, uintptr_t directory,
 }
 
 static const AstraVfsBackendOps fake_ops = {
-    fake_open, fake_close, fake_read, fake_write, fake_sync, fake_truncate,
-    fake_stat, fake_readdir, fake_mkdir, fake_unlink, fake_rename,
-    fake_chmod, fake_readlink, fake_symlink, fake_link, fake_open_at,
-    fake_unlink_at, fake_chmod_node, fake_chmod_at, fake_filesystem_info,
-    fake_stat_at, fake_stat_node, NULL,
-    NULL, NULL, NULL, NULL, NULL, /* No shared descriptions. */
-    NULL,
-
-    fake_mkdir_at, fake_rename_at, NULL, NULL, NULL, fake_directory_path,
+    .open = fake_open, .close = fake_close, .read = fake_read,
+    .write = fake_write, .sync = fake_sync, .truncate = fake_truncate,
+    .stat = fake_stat, .readdir = fake_readdir, .mkdir = fake_mkdir,
+    .unlink = fake_unlink, .rename = fake_rename,
+    .rename_noreplace = fake_rename_noreplace, .chmod = fake_chmod,
+    .readlink = fake_readlink, .symlink = fake_symlink, .link = fake_link,
+    .open_at = fake_open_at, .unlink_at = fake_unlink_at,
+    .chmod_node = fake_chmod_node, .chmod_at = fake_chmod_at,
+    .filesystem_info = fake_filesystem_info, .stat_at = fake_stat_at,
+    .stat_node = fake_stat_node, .mkdir_at = fake_mkdir_at,
+    .rename_at = fake_rename_at,
+    .rename_noreplace_at = fake_rename_noreplace_at,
+    .directory_path = fake_directory_path,
 };
 
 static AstraVfsService service;
@@ -2185,6 +2206,14 @@ test_client_through_transport(void)
            ASTRA_VFS_OK);
     assert(size == 6u);
     assert(kind == ASTRA_VFS_KIND_FILE);
+    assert(fake_create("/dir/occupied.txt", ASTRA_VFS_KIND_FILE) != NULL);
+    assert(astra_vfs_rename_noreplace(&client, "/dir/note.txt",
+        "/dir/occupied.txt") == ASTRA_VFS_ERR_EXISTS);
+    assert(astra_vfs_stat(&client, "/dir/note.txt", &size, &kind) ==
+        ASTRA_VFS_OK);
+    assert(astra_vfs_stat(&client, "/dir/occupied.txt", &size, &kind) ==
+        ASTRA_VFS_OK);
+    fake_find("/dir/occupied.txt")->used = 0;
     {
         uint32_t requests = service.stats.requests;
 

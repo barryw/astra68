@@ -343,7 +343,8 @@ uint32_t astra_filesystem_copy_tree_between(AstraFilesystem *source_filesystem,
         if (status != ASTRA_VFS_ERR_EXISTS || created) break;
     }
     if (status == ASTRA_VFS_OK)
-        status = astra_filesystem_rename(destination_filesystem, staging, destination);
+        status = astra_filesystem_rename_noreplace(destination_filesystem,
+            staging, destination);
     if (status != ASTRA_VFS_OK && created)
         (void)remove_partial(destination_filesystem, staging);
     astra_runtime_deallocate(staging);
@@ -372,7 +373,8 @@ uint32_t astra_filesystem_move_tree_between(AstraFilesystem *source_filesystem,
     /* Source view can name destination on same volume. It may intentionally
      * expose only the exact removable source mount, in which case a different
      * destination assign returns NOT_FOUND and copy handles that case. */
-    status = astra_filesystem_rename(source_filesystem, source, destination);
+    status = astra_filesystem_rename_noreplace(source_filesystem, source,
+        destination);
     if (status == ASTRA_VFS_OK) {
         *published = 1u;
         return ASTRA_VFS_OK;

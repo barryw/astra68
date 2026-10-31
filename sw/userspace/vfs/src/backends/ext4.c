@@ -768,7 +768,8 @@ ext4_backend_unlink_at(void *context, uintptr_t directory,
 }
 
 static uint32_t
-ext4_backend_rename(void *context, const char *from, const char *to)
+ext4_backend_rename_common(void *context, const char *from, const char *to,
+                           int no_replace)
 {
     AstraVfsExt4Backend *backend = backend_of(context);
     AstraVfsPathStorage old_path_storage ASTRA_AUTO_VFS_PATH_STORAGE =
@@ -789,7 +790,21 @@ ext4_backend_rename(void *context, const char *from, const char *to)
         return ASTRA_VFS_ERR_IO;
     close_scan(backend);
     scan_unlock(backend);
-    return status_of(ext4_frename(old_path, new_path));
+    return status_of(no_replace ?
+        ext4_frename_noreplace(old_path, new_path) :
+        ext4_frename(old_path, new_path));
+}
+
+static uint32_t
+ext4_backend_rename(void *context, const char *from, const char *to)
+{
+    return ext4_backend_rename_common(context, from, to, 0);
+}
+
+static uint32_t
+ext4_backend_rename_noreplace(void *context, const char *from, const char *to)
+{
+    return ext4_backend_rename_common(context, from, to, 1);
 }
 
 static uint32_t
@@ -965,6 +980,7 @@ static const AstraVfsBackendOps ext4_ops = {
     .mkdir = ext4_backend_mkdir,
     .unlink = ext4_backend_unlink,
     .rename = ext4_backend_rename,
+    .rename_noreplace = ext4_backend_rename_noreplace,
     .chmod = ext4_backend_chmod,
     .readlink = ext4_backend_readlink,
     .symlink = ext4_backend_symlink,

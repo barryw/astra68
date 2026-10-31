@@ -1121,7 +1121,7 @@ astra_vfs_readdir_file_batch(AstraVfsClient *client,
 
 static uint32_t path_operation(AstraVfsClient *client, uint32_t operation,
     AstraVfsFile base, const char *path, AstraVfsFile second_base,
-    const char *second_path, uint64_t value, void *buffer,
+    const char *second_path, uint32_t flags, uint64_t value, void *buffer,
     uint32_t capacity, uint32_t *length)
 {
     if (second_path != NULL) {
@@ -1164,6 +1164,7 @@ static uint32_t path_operation(AstraVfsClient *client, uint32_t operation,
         return status;
     request->file = base;
     request->second_file = two && operation != ASTRA_VFS_OP_SYMLINK ? second_base : 0u;
+    request->flags = flags;
     request->offset = value;
     request->length = capacity;
     if (client->direct_backend_ops != NULL) {
@@ -1294,6 +1295,12 @@ uint32_t
 astra_vfs_rename(AstraVfsClient *client, const char *from, const char *to)
 {
     return astra_vfs_rename_at(client, 0u, from, 0u, to);
+}
+
+uint32_t astra_vfs_rename_noreplace(AstraVfsClient *client,
+    const char *from, const char *to)
+{
+    return astra_vfs_rename_noreplace_at(client, 0u, from, 0u, to);
 }
 
 uint32_t
@@ -1623,7 +1630,7 @@ uint32_t astra_vfs_mkdir_at(AstraVfsClient *client, AstraVfsFile directory,
     }
 
     return path_operation(client, ASTRA_VFS_OP_MKDIR, directory, path,
-                           0u, NULL, mode, NULL, 0u, NULL);
+                           0u, NULL, 0u, mode, NULL, 0u, NULL);
 }
 
 uint32_t astra_vfs_rename_at(AstraVfsClient *client, AstraVfsFile from_directory,
@@ -1631,7 +1638,15 @@ uint32_t astra_vfs_rename_at(AstraVfsClient *client, AstraVfsFile from_directory
                              const char *to)
 {
     return path_operation(client, ASTRA_VFS_OP_RENAME, from_directory, from,
-                           to_directory, to, 0u, NULL, 0u, NULL);
+                           to_directory, to, 0u, 0u, NULL, 0u, NULL);
+}
+
+uint32_t astra_vfs_rename_noreplace_at(AstraVfsClient *client,
+    AstraVfsFile from_directory, const char *from,
+    AstraVfsFile to_directory, const char *to)
+{
+    return path_operation(client, ASTRA_VFS_OP_RENAME, from_directory, from,
+        to_directory, to, ASTRA_VFS_RENAME_NOREPLACE, 0u, NULL, 0u, NULL);
 }
 
 uint32_t astra_vfs_link_at(AstraVfsClient *client, AstraVfsFile from_directory,
@@ -1639,7 +1654,7 @@ uint32_t astra_vfs_link_at(AstraVfsClient *client, AstraVfsFile from_directory,
                            const char *to)
 {
     return path_operation(client, ASTRA_VFS_OP_LINK, from_directory, from,
-                           to_directory, to, 0u, NULL, 0u, NULL);
+                           to_directory, to, 0u, 0u, NULL, 0u, NULL);
 }
 
 uint32_t astra_vfs_symlink_at(AstraVfsClient *client, const char *target,
@@ -1652,7 +1667,7 @@ uint32_t astra_vfs_symlink_at(AstraVfsClient *client, const char *target,
     }
 
     return path_operation(client, ASTRA_VFS_OP_SYMLINK, directory, target,
-                           0u, path, 0u, NULL, 0u, NULL);
+                           0u, path, 0u, 0u, NULL, 0u, NULL);
 }
 
 uint32_t astra_vfs_readlink_at(AstraVfsClient *client, AstraVfsFile directory,
@@ -1666,7 +1681,7 @@ uint32_t astra_vfs_readlink_at(AstraVfsClient *client, AstraVfsFile directory,
     }
 
     return path_operation(client, ASTRA_VFS_OP_READLINK, directory, path,
-                           0u, NULL, 0u, buffer, capacity, length);
+                           0u, NULL, 0u, 0u, buffer, capacity, length);
 }
 
 uint32_t astra_vfs_directory_path(AstraVfsClient *client, AstraVfsFile directory,
@@ -1676,5 +1691,5 @@ uint32_t astra_vfs_directory_path(AstraVfsClient *client, AstraVfsFile directory
     if (directory == ASTRA_VFS_FILE_INVALID)
         return ASTRA_VFS_ERR_BAD_HANDLE;
     return path_operation(client, ASTRA_VFS_OP_DIRECTORY_PATH, directory, NULL,
-                           0u, NULL, 0u, buffer, capacity, length);
+                           0u, NULL, 0u, 0u, buffer, capacity, length);
 }

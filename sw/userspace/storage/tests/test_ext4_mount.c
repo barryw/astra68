@@ -47,6 +47,10 @@
 #define TRUNCATE_EXTENDED_BYTES (4096u + 3u)
 #define TRUNCATE_APPEND_BYTES 2u
 
+/* Host test backing for the VFS backend's temporary path storage. */
+void *astra_runtime_allocate(size_t bytes) { return malloc(bytes); }
+void astra_runtime_deallocate(void *bytes) { free(bytes); }
+
 static uint8_t *storage;
 static uint8_t *durable_storage;
 static size_t storage_bytes;
@@ -1495,6 +1499,20 @@ populate(void)
     if (rc != EOK) {
         return fail("ext4_frename", rc);
     }
+    if (write_file(MOUNT_POINT "exclusive-rename-source.bin", 31u, 79u) ||
+        write_file(MOUNT_POINT "exclusive-rename-target.bin", 32u, 91u))
+        return 1;
+    rc = ext4_frename_noreplace(MOUNT_POINT "exclusive-rename-source.bin",
+        MOUNT_POINT "exclusive-rename-target.bin");
+    if (rc != EEXIST ||
+        read_verify(MOUNT_POINT "exclusive-rename-source.bin", 31u, 79u) ||
+        read_verify(MOUNT_POINT "exclusive-rename-target.bin", 32u, 91u))
+        return fail("ext4_frename_noreplace occupied", rc);
+    rc = ext4_frename_noreplace(MOUNT_POINT "exclusive-rename-source.bin",
+        MOUNT_POINT "exclusive-rename-published.bin");
+    if (rc != EOK ||
+        read_verify(MOUNT_POINT "exclusive-rename-published.bin", 31u, 79u))
+        return fail("ext4_frename_noreplace publish", rc);
     if (write_file(MOUNT_POINT "replace-source.bin", 6u, 83u) ||
         write_file(MOUNT_POINT "replace-target.bin", 7u, 121u))
         return 1;

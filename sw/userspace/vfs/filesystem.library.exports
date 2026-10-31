@@ -226,3 +226,10 @@ ASTRA_FILESYSTEM_15.8 {
         astra_recent_item_snapshot_open;
         astra_recent_item_snapshot_close;
 } ASTRA_FILESYSTEM_15.7;
+
+ASTRA_FILESYSTEM_15.10 {
+    global:
+        astra_filesystem_rename_noreplace;
+        astra_vfs_rename_noreplace;
+        astra_vfs_rename_noreplace_at;
+} ASTRA_FILESYSTEM_15.8;

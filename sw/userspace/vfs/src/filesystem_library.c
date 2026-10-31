@@ -1353,7 +1353,9 @@ static uint32_t filesystem_two_paths(AstraFilesystem *filesystem,
 }
 
 static uint32_t astra_filesystem_rename_bound(AstraFilesystem *filesystem,
-                                 const char *from, const char *to)
+    const char *from, const char *to,
+    uint32_t (*operation)(AstraVfsClient *, AstraVfsFile, const char *,
+        AstraVfsFile, const char *))
 {
     {
         uint32_t input_status = astra_vfs_path_measure(from, NULL);
@@ -1367,7 +1369,7 @@ static uint32_t astra_filesystem_rename_bound(AstraFilesystem *filesystem,
             return input_status;
     }
 
-    return filesystem_two_paths(filesystem, from, to, astra_vfs_rename_at);
+    return filesystem_two_paths(filesystem, from, to, operation);
 }
 
 static uint32_t astra_filesystem_link_bound(AstraFilesystem *filesystem,
@@ -2335,8 +2337,10 @@ uint32_t astra_filesystem_unlink_at(AstraFilesystem *filesystem, const AstraFile
     return status;
 }
 
-uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
-                                 const char *from, const char *to)
+static uint32_t filesystem_rename_with(AstraFilesystem *filesystem,
+    const char *from, const char *to,
+    uint32_t (*operation)(AstraVfsClient *, AstraVfsFile, const char *,
+        AstraVfsFile, const char *))
 {
     {
         uint32_t input_status = astra_vfs_path_measure(from, NULL);
@@ -2354,9 +2358,22 @@ uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
     void *owner = NULL;
     uint32_t status = namespace_view(filesystem, &view, &owner);
     if (status != ASTRA_VFS_OK) return status;
-    status = astra_filesystem_rename_bound(&view, from, to);
+    status = astra_filesystem_rename_bound(&view, from, to, operation);
     if (owner != NULL) filesystem->_private_namespace_release(owner);
     return status;
+}
+
+uint32_t astra_filesystem_rename(AstraFilesystem *filesystem,
+    const char *from, const char *to)
+{
+    return filesystem_rename_with(filesystem, from, to, astra_vfs_rename_at);
+}
+
+uint32_t astra_filesystem_rename_noreplace(AstraFilesystem *filesystem,
+    const char *from, const char *to)
+{
+    return filesystem_rename_with(filesystem, from, to,
+        astra_vfs_rename_noreplace_at);
 }
 
 uint32_t astra_filesystem_link(AstraFilesystem *filesystem,

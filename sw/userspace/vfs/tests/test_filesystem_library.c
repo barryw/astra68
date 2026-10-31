@@ -831,6 +831,8 @@ static void test_protected_root_links(void)
                ASTRA_VFS_ERR_READ_ONLY);
         assert(astra_filesystem_rename(&filesystem, path,
                                        "/dh0/new") == ASTRA_VFS_ERR_READ_ONLY);
+        assert(astra_filesystem_rename_noreplace(&filesystem, path,
+                                       "/dh0/new") == ASTRA_VFS_ERR_READ_ONLY);
         assert(astra_filesystem_rename(&filesystem, "/dh0/old",
                                        path) == ASTRA_VFS_ERR_READ_ONLY);
         assert(astra_filesystem_symlink("/dh0", &filesystem, path) ==
@@ -1487,6 +1489,8 @@ int main(void)
 uint32_t astra_vfs_mkdir_at(AstraVfsClient *value, AstraVfsFile dir, const char *path, uint16_t mode)
 { (void)dir; return astra_vfs_mkdir_mode(value, path, mode); }
 uint32_t astra_vfs_rename_at(AstraVfsClient *value, AstraVfsFile fromdir, const char *from, AstraVfsFile todir, const char *to)
+{ (void)fromdir; (void)todir; return astra_vfs_rename(value, from, to); }
+uint32_t astra_vfs_rename_noreplace_at(AstraVfsClient *value, AstraVfsFile fromdir, const char *from, AstraVfsFile todir, const char *to)
 { (void)fromdir; (void)todir; return astra_vfs_rename(value, from, to); }
 uint32_t astra_vfs_link_at(AstraVfsClient *value, AstraVfsFile fromdir, const char *from, AstraVfsFile todir, const char *to)
 { (void)fromdir; (void)todir; return astra_vfs_link(value, from, to); }

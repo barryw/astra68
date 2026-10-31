@@ -82,7 +82,11 @@ static void test_tree(void)
                         &info, &cookie) == ASTRA_VFS_OK && cookie == 2u);
     assert(ops->readdir(&fs, directory, NULL, cookie, name, sizeof(name),
                         &info, &cookie) == ASTRA_VFS_OK && cookie == 0u);
-    assert(ops->rename(&fs, "/docs/note", "/docs/renamed") == ASTRA_VFS_OK);
+    assert(ops->rename_noreplace(&fs, "/docs/note", "/docs/hard") ==
+           ASTRA_VFS_ERR_EXISTS);
+    assert(ops->stat(&fs, "/docs/note", &info) == ASTRA_VFS_OK);
+    assert(ops->rename_noreplace(&fs, "/docs/note", "/docs/renamed") ==
+           ASTRA_VFS_OK);
     assert(ops->stat(&fs, "/docs/note", &info) == ASTRA_VFS_ERR_NOT_FOUND);
     assert(ops->open(&fs, "/docs/hard", ASTRA_VFS_OPEN_READ, 0u,
                      &alias, &info) == ASTRA_VFS_OK);
