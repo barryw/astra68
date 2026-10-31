@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas Terminal directory checkpoint, 2026-10-31: File > Open Terminal Here,
+folder/blank-area context menus, and Primary+Enter now invoke one Atlas
+command responder and the existing application launcher. Terminal accepts a
+native working-directory path, validates its directory type, resolves it with
+the shared Filesystem Kit namespace, and derives the shell CWD grant from the
+answering provider. Atlas adds no control, renderer, or filesystem path policy.
+Haiku read-only reference: `src/apps/terminal/TermApp.cpp` accepts a working
+directory and `src/apps/terminal/Shell.cpp` applies it at shell launch.
+Beast Atlas and Terminal host tests and MC68040 builds passed. DE25 targeted
+Atlas install passed; File menu opened Terminal at `/dh0` and `ls` listed DH0
+entries. Folder context menu on `/dh0/apps` opened Terminal there and `ls`
+listed application bundles. Blank-area context menu appeared on DH0. Raw
+captures and PNGs are SHA-verified on Beast at
+`/mnt/Documents/astra68/atlas-terminal-here-20261031/`. Board trial files
+were removed; Astra, HDMI audio host, and remote desktop remained active with
+zero Astra restarts and 8.2 GiB free. Physical removable-volume CWD launch
+remains unqualified because board currently has no external disk.
+
 Atlas shared optical lifecycle checkpoint, 2026-10-31: The common
 `volume_action` now preflights exact holders across all mounted partitions of
 one optical medium, unmounts each partition in sequence, and requests eject

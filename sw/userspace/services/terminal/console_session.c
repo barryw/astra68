@@ -22,8 +22,10 @@
 
 #include <astra/event_emit.h>
 #include <astra/vfs_assign.h>
+#include <astra/vfs_path_storage.h>
 #include <astra/vfs_process.h>
 #include <astra/vfs_reader.h>
+#include <astra/vfs_union.h>
 
 #include <string.h>
 
@@ -102,6 +104,44 @@ static void write_hex32(uint32_t value)
     for (uint32_t shift = 32u; shift != 0u; shift -= 4u)
         astra_terminal_putc(&session.terminal,
                            digits[(value >> (shift - 4u)) & 0x0fu]);
+}
+
+/* Resolve through the same Filesystem Kit namespace as ordinary file access.
+ * The answering grant, including removable-volume identity, becomes CWD.
+ * Haiku Terminal's Shell.cpp likewise applies its selected directory at shell
+ * launch rather than translating it into a shell command. */
+static uint32_t derive_initial_directory(const char *path,
+    uint32_t *rights)
+{
+    AstraVfsPathStorage wire ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    const AstraAssignTable *assigns = NULL;
+    const AstraAssign *assign = NULL;
+    AstraVfsClient *client = NULL;
+    AstraVfsDirEntry entry = {0};
+    void *owner = NULL;
+    uint32_t status;
+
+    if (wire.bytes == NULL) return ASTRA_VFS_ERR_LIMIT;
+    status = astra_process_vfs_namespace_acquire(&assigns, &owner);
+    if (status != ASTRA_VFS_OK) return status;
+    status = astra_vfs_assign_stat(assigns, path, ASTRA_RIGHT_READ,
+        astra_process_vfs_assign_client, NULL, wire.bytes,
+        ASTRA_VFS_PATH_MAX, &entry, &client, &assign, NULL);
+    if (status == ASTRA_VFS_OK && entry.kind != ASTRA_VFS_KIND_DIRECTORY)
+        status = ASTRA_VFS_ERR_INVALID;
+    if (status == ASTRA_VFS_OK &&
+        (client == NULL || assign == NULL || wire.bytes[0] != '/'))
+        status = ASTRA_VFS_ERR_INVALID;
+    if (status == ASTRA_VFS_OK) {
+        *rights = assign->rights;
+        status = astra_vfs_grant_derive(client, wire.bytes + 1u,
+            ASTRA_VFS_GRANT_READ |
+                ((*rights & ASTRA_RIGHT_WRITE) != 0u ?
+                    ASTRA_VFS_GRANT_WRITE : 0u), &session.cwd_grant);
+    }
+    astra_process_vfs_namespace_release(owner);
+    return status;
 }
 
 static uint32_t launch_grants(AstraLaunchGrant *grants)
@@ -206,31 +246,35 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
         const AstraAssign *work = astra_assign_lookup(
             astra_process_vfs_assigns(), "WORK");
 
-        if (work != NULL) {
-            AstraVfsClient *client = astra_process_vfs_client_for(work);
+        if (work != NULL || session.backend.initial_directory != NULL) {
+            AstraVfsClient *client = work != NULL ?
+                astra_process_vfs_client_for(work) : NULL;
+            uint32_t cwd_rights = work != NULL ? work->rights : 0u;
 
             if (count >= ASTRA_LAUNCH_GRANT_MAX)
                 return UINT32_MAX;
             /* A provider-enforced WORK gives the shell a CWD grant of its
              * own (no DELEGATE, though the shell's WORK has it); any other
              * WORK is shared as it is. */
-            if (client == NULL)
+            if (session.backend.initial_directory == NULL && client == NULL)
                 return UINT32_MAX;
             if (session.cwd_grant == 0u &&
-                astra_vfs_grant_derive(
-                    client, work->root,
-                    ASTRA_VFS_GRANT_READ |
-                        ((work->rights & ASTRA_RIGHT_WRITE) != 0u ?
-                             ASTRA_VFS_GRANT_WRITE : 0u),
-                    &session.cwd_grant) != ASTRA_VFS_OK)
+                (session.backend.initial_directory != NULL ?
+                    derive_initial_directory(session.backend.initial_directory,
+                        &cwd_rights) :
+                    astra_vfs_grant_derive(client, work->root,
+                        ASTRA_VFS_GRANT_READ |
+                            ((work->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                                ASTRA_VFS_GRANT_WRITE : 0u),
+                        &session.cwd_grant)) != ASTRA_VFS_OK)
                 return UINT32_MAX;
             astra_capability_name_set(grants[count].name, "CWD");
             grants[count].handle = session.cwd_grant;
             grants[count].rights = ASTRA_RIGHT_SIGNAL;
             grants[count].flags = ASTRA_CAPABILITY_FLAG_NAMESPACE |
-                ((work->rights & ASTRA_RIGHT_READ) != 0u ?
+                ((cwd_rights & ASTRA_RIGHT_READ) != 0u ?
                      ASTRA_CAPABILITY_FLAG_READ : 0u) |
-                ((work->rights & ASTRA_RIGHT_WRITE) != 0u ?
+                ((cwd_rights & ASTRA_RIGHT_WRITE) != 0u ?
                      ASTRA_CAPABILITY_FLAG_WRITE : 0u);
             astra_capability_root_set(grants[count].root, "");
             ++count;

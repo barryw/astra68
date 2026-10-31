@@ -291,6 +291,7 @@ enum AtlasMenuRow {
     ATLAS_MENU_NEW_WINDOW,
     ATLAS_MENU_NEW,
     ATLAS_MENU_OPEN,
+    ATLAS_MENU_TERMINAL,
     ATLAS_MENU_REFRESH,
     ATLAS_MENU_SAVE_SEARCH,
     ATLAS_MENU_CLOSE,
@@ -323,6 +324,7 @@ static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"New Window", 10u, ASTRA_MENU_PARENT(1u)},
     {"New Drawer", 10u, ASTRA_MENU_PARENT(1u)},
     {"Open", 4u, ASTRA_MENU_PARENT(1u)},
+    {"Open Terminal Here", 18u, ASTRA_MENU_PARENT(1u)},
     {"Refresh", 7u, ASTRA_MENU_PARENT(1u)},
     {"Save Search", 11u, ASTRA_MENU_PARENT(1u)},
     {"Close Window", 12u, ASTRA_MENU_PARENT(1u)},
@@ -352,6 +354,7 @@ static const AstraContextMenuItem atlas_menu_commands[ATLAS_MENU_COUNT] = {
     [ATLAS_MENU_NEW_WINDOW] = {"atlas.window", sizeof("atlas.window") - 1u, NULL},
     [ATLAS_MENU_NEW] = {"atlas.new", sizeof("atlas.new") - 1u, NULL},
     [ATLAS_MENU_OPEN] = {"atlas.open", sizeof("atlas.open") - 1u, NULL},
+    [ATLAS_MENU_TERMINAL] = {"atlas.terminal", sizeof("atlas.terminal") - 1u, NULL},
     [ATLAS_MENU_REFRESH] = {"atlas.refresh", sizeof("atlas.refresh") - 1u, NULL},
     [ATLAS_MENU_COPY] = {"atlas.copy", sizeof("atlas.copy") - 1u, NULL},
     [ATLAS_MENU_CUT] = {"atlas.cut", sizeof("atlas.cut") - 1u, NULL},
@@ -2440,6 +2443,34 @@ static AstraResult open_query(void *opaque, AstraCommandState *state)
     return result;
 }
 
+static AstraResult terminal_query(void *opaque, AstraCommandState *state)
+{
+    (void)opaque;
+    *state = (AstraCommandState){"Open Terminal Here", 18u,
+        launcher != ASTRA_INVALID_HANDLE && recent_mode == 0u &&
+        !volume_lost && directory.status == ASTRA_VFS_OK &&
+        worker == 0u && removal_active == 0u, 0u};
+    return ASTRA_OK;
+}
+
+static AstraResult open_terminal_here(void *opaque,
+    const AstraCommandArguments *args)
+{
+    (void)opaque;
+    (void)args;
+    if (viewed_volume.id != 0u) {
+        AstraResult observed = volume_observe(NULL);
+        if (observed != ASTRA_OK) return observed;
+    }
+    const char *path = selection_count() == 1u &&
+        selected_kind == ASTRA_VFS_KIND_DIRECTORY ? selected_path : root;
+    const char *const arguments[] = {"--working-directory", path};
+    uint32_t process_id;
+    return astra_application_launch_with_arguments(launcher,
+        "/apps/Terminal.app", sizeof("/apps/Terminal.app") - 1u,
+        ASTRA_LAUNCH_SOURCE_DESKTOP, arguments, 2u, &process_id);
+}
+
 static AstraResult copy_query(void *opaque, AstraCommandState *state)
 {
     AstraResult result = selected_query(opaque, state);
@@ -3630,6 +3661,8 @@ static const AstraCommand atlas_command_table[] = {
         &atlas_command_context},
     {"atlas.open", 10u, 0u, 0u, open_query, open_selected,
         &atlas_command_context},
+    {"atlas.terminal", sizeof("atlas.terminal") - 1u, 0u, 0u,
+        terminal_query, open_terminal_here, &atlas_command_context},
     {"atlas.copy", 10u, 0u, 0u, copy_query, copy_selected,
         &atlas_command_context},
     {"atlas.cut", 9u, 0u, 0u, cut_query, cut_selected,
@@ -3773,8 +3806,8 @@ static AstraResult menu_invoke(AstraHandle gui,
 static AstraResult run(AstraHandle gui)
 {
     AstraContextMenu context_menu = ASTRA_CONTEXT_MENU_INIT;
-    AstraContextMenuItem menu_items[6];
-    uint16_t menu_parents[6] = {0u};
+    AstraContextMenuItem menu_items[7];
+    uint16_t menu_parents[7] = {0u};
     static const AstraCommandShortcut shortcuts[] = {
         {0x06u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.copy", sizeof("atlas.copy") - 1u},
         {0x1bu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.cut", sizeof("atlas.cut") - 1u},
@@ -3786,6 +3819,7 @@ static AstraResult run(AstraHandle gui)
         {0x11u, ASTRA_COMMAND_SHORTCUT_PRIMARY | ASTRA_COMMAND_SHORTCUT_SHIFT,
             "atlas.folder", sizeof("atlas.folder") - 1u},
         {0x12u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.open", sizeof("atlas.open") - 1u},
+        {0x28u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.terminal", sizeof("atlas.terminal") - 1u},
         {0x15u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.refresh", sizeof("atlas.refresh") - 1u},
         {0x16u, ASTRA_COMMAND_SHORTCUT_PRIMARY | ASTRA_COMMAND_SHORTCUT_ALT,
             "atlas.sidebar", sizeof("atlas.sidebar") - 1u},
@@ -4380,13 +4414,19 @@ static AstraResult run(AstraHandle gui)
                     }
                     uint32_t count = 0u;
                     memset(menu_parents, 0, sizeof(menu_parents));
-                    if (index == UINT32_MAX && writable_folder_root()) {
-                        menu_items[count++] = (AstraContextMenuItem){"atlas.new", 9u, NULL};
-                        menu_items[count++] = (AstraContextMenuItem){"atlas.paste", 11u, NULL};
-                        menu_items[count++] = (AstraContextMenuItem){"atlas.folder", 12u, NULL};
-                        menu_parents[2] = 1u;
+                    if (index == UINT32_MAX && directory.status == ASTRA_VFS_OK) {
+                        if (writable_folder_root()) {
+                            menu_items[count++] = (AstraContextMenuItem){"atlas.new", 9u, NULL};
+                            menu_items[count++] = (AstraContextMenuItem){"atlas.paste", 11u, NULL};
+                            menu_items[count++] = (AstraContextMenuItem){"atlas.folder", 12u, NULL};
+                            menu_parents[2] = 1u;
+                        }
+                        menu_items[count++] = (AstraContextMenuItem){
+                            "atlas.terminal", sizeof("atlas.terminal") - 1u, NULL};
                     } else if (selected_path[0] != '\0') {
                         menu_items[count++] = (AstraContextMenuItem){"atlas.open", 10u, NULL};
+                        menu_items[count++] = (AstraContextMenuItem){
+                            "atlas.terminal", sizeof("atlas.terminal") - 1u, NULL};
                         menu_items[count++] = (AstraContextMenuItem){"atlas.copy", 10u, NULL};
                         if (selected_bundle(&atlas_command_context))
                             menu_items[count++] = (AstraContextMenuItem){"atlas.package", 13u, NULL};

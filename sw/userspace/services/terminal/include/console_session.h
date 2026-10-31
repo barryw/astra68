@@ -26,6 +26,7 @@ typedef struct ConsoleSessionBackend {
     uint64_t idle_poll_ns;
     AstraProcessFilesystem *process_filesystem;
     const AstraStartupInfo *startup;
+    const char *initial_directory; /* Native directory path, borrowed from startup. */
 } ConsoleSessionBackend;
 
 enum {

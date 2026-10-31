@@ -28,6 +28,14 @@ volume, Atlas rechecks its exact catalog identity and uses the shared NDK
 volume launch helper to select that source in Disk Setup. Fixed and RAM paths
 open Disk Setup without a target. Display places its shared Window heading
 before a trailing app Help heading, while preserving the app's menu commands.
+File > Open Terminal Here, the folder context menu, and Primary+Enter use one
+command responder. With one folder selected, Terminal starts in that folder;
+otherwise it starts in Atlas's current directory. Terminal accepts a native
+`--working-directory` argument and derives its shell CWD grant through the
+Filesystem Kit namespace, retaining the answering volume's read/write rights.
+Atlas does not create a shell, duplicate path resolution, or own a context
+menu renderer. Haiku's read-only `src/apps/terminal/TermApp.cpp` and
+`src/apps/terminal/Shell.cpp` informed applying the directory at shell launch.
 The same Volume menu offers Unmount for a removable mounted volume and Eject
 for a mounted physical optical disc. Atlas and Desktop link one common volume
 action state machine and one common exact-holder dialog. The native Volume

@@ -835,9 +835,20 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t terminal_capacity_columns = 0u;
     uint32_t terminal_capacity_rows = 0u;
     size_t terminal_storage_bytes = 0u;
+    const char *initial_directory = NULL;
 
     if (!astra_startup_validate(startup) ||
         startup->capabilities_address == 0u)
+        return ASTRA_STATUS_INVALID;
+    if (startup->argc == 3u) {
+        const char *option = astra_startup_argument(startup, 1u);
+        if (option == NULL || strcmp(option, "--working-directory") != 0)
+            return ASTRA_STATUS_INVALID;
+        initial_directory = astra_startup_argument(startup, 2u);
+        if (initial_directory == NULL) return ASTRA_STATUS_INVALID;
+    } else if (startup->argc != 1u)
+        return ASTRA_STATUS_INVALID;
+    if (initial_directory != NULL && initial_directory[0] != '/')
         return ASTRA_STATUS_INVALID;
     bootstrap = astra_startup_capability(startup,
                                          ASTRA_CAPABILITY_SERVICE_READY);
@@ -853,6 +864,14 @@ int astra_main(const AstraStartupInfo *startup)
     if (astra_fonts_use_system(gui->handle, NULL) != ASTRA_OK)
         return TERMINAL_FAIL_FONT;
     status = astra_process_filesystem_open(&process_filesystem, startup);
+    if (status == ASTRA_VFS_OK && initial_directory != NULL) {
+        AstraFileInfo directory = ASTRA_FILE_INFO_INIT;
+        status = astra_filesystem_stat(&process_filesystem.filesystem,
+            initial_directory, &directory);
+        if (status == ASTRA_VFS_OK &&
+            directory.kind != ASTRA_VFS_KIND_DIRECTORY)
+            status = ASTRA_VFS_ERR_INVALID;
+    }
     if (status == ASTRA_STATUS_OK)
         status = load_title_icon(&title_icon, &title_icon_length);
 
@@ -1007,6 +1026,7 @@ int astra_main(const AstraStartupInfo *startup)
     backend.idle_poll_ns = TERMINAL_CURSOR_BLINK_NS;
     backend.process_filesystem = &process_filesystem;
     backend.startup = startup;
+    backend.initial_directory = initial_directory;
     status = console_session_run_backend(&backend);
     window_paste_close(&window_terminal);
     if (window_terminal.live) {
