@@ -259,3 +259,8 @@ ASTRA_INTERFACE_12.8 {
     global:
         astra_interface_segmented_set_icons;
 } ASTRA_INTERFACE_12.7;
+
+ASTRA_INTERFACE_12.9 {
+    global:
+        astra_interface_ui_append_control;
+} ASTRA_INTERFACE_12.8;

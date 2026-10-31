@@ -21,10 +21,11 @@ Atlas path widget.
 File and View menu-bar commands share those same actions. Menu state follows
 selection, writable path, current view, sort order, and hidden-file state.
 
-Atlas appends each shared control's draw-list range to one graphics session.
-The retained Interface view is limited to 128 commands; Columns with populated
-child panes can exceed that limit. Ordered ranges retain one UI context and
-one hardware draw submission while allowing the session list to grow.
+Atlas appends shared controls through Interface Kit's generic
+`astra_interface_ui_append_control`. A control that exceeds one 128-command
+view is clipped into ordered strips and appended to one graphics session.
+Grid, List, and Columns share this path; Atlas has no private collection
+renderer or batching policy.
 
 Back and Forward retain up to 32 visited paths and exact public-volume
 references. Atlas switches among HOME, fixed volumes, and public mounts in one

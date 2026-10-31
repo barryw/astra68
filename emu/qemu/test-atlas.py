@@ -2,6 +2,7 @@
 """Launch Atlas through DH0 and the normal launcher, with real native entries."""
 
 import argparse
+from contextlib import ExitStack
 import importlib.util
 import os
 import re
@@ -17,6 +18,10 @@ desktop = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(desktop)
 terminal = desktop.terminal_gate
 image_tools = terminal.astra_image
+spec = importlib.util.spec_from_file_location(
+    "atlas_audio_fixture", os.path.join(HERE, "test-sdl-audio.py"))
+audio = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(audio)
 
 
 def fixture(image, work, overflow=False):
@@ -52,7 +57,8 @@ def wait_root(machine, root, count, folders, status, after, timeout):
     while time.monotonic() < end:
         lines, _ = machine.said_with_syslog(after)
         if any(wanted in line for line in lines):
-            desktop.wait_quiet(machine, "Atlas root presentation")
+            # Terminal remains open underneath and blinks every 500 ms.
+            desktop.wait_quiet(machine, "Atlas root presentation", seconds=0.2)
             return
         if any("Atlas window" in line or "application launch refused" in line or
                "desktop launch" in line for line in lines):
@@ -81,7 +87,7 @@ def wait_desktop_offset(machine, expected, timeout):
     raise RuntimeError("desktop scroll did not reach expected offset: %s" % rows[-5:])
 
 
-def close_atlas(machine, width=760):
+def close_atlas(machine, width=1300):
     # Atlas's normal frame starts at (360,120); close gadget follows the theme.
     click(machine, 360 + width - desktop.CLOSE_INSET, 120 + desktop.TITLE_Y)
     # Terminal regains focus and blinks every 500 ms; still reject continuous drawing.
@@ -89,6 +95,9 @@ def close_atlas(machine, width=760):
 
 
 def command_output(machine, command, name, timeout):
+    if not machine.settle():
+        raise RuntimeError("terminal did not settle before native oracle: " +
+                           command)
     before = machine.sequence()
     machine.qmp.type_line("{ " + command + "; } > /work/" + name +
                           "; print ATLAS-OUTPUT-$?")
@@ -140,14 +149,33 @@ def main():
     parser.add_argument("rom")
     parser.add_argument("image")
     parser.add_argument("--deadline", type=float, default=60.0)
+    parser.add_argument("--preinstalled", action="store_true",
+                        help="skip full reinstall; caller supplies current products")
     parser.add_argument("--overflow", action="store_true",
                         help="qualify desktop scrolling with 160 extra application entries")
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="astra-atlas-") as work:
+    if os.geteuid() != 0:
+        parser.error("desktop gate needs the root observer with explicit "
+                     "ASTRA_TEST_QEMU_UID and ASTRA_TEST_QEMU_GID")
+    with tempfile.TemporaryDirectory(prefix="astra-atlas-") as work, \
+            ExitStack() as resources:
         image = os.path.join(work, "system.img")
         shutil.copyfile(args.image, image)
-        image_tools.install(image)
+        if not args.preinstalled:
+            image_tools.install(image)
         fixture(image, work, args.overflow)
+        audio_socket = os.path.join(work, "audio.sock")
+        host_audio = audio.AudioHost(audio_socket,
+                                     hostfs=os.path.join(work, "exports"),
+                                     synthesis=False)
+        resources.callback(host_audio.close)
+        previous_audio = os.environ.get("ASTRA_AUDIO_HOST_SOCKET")
+        if previous_audio is None:
+            resources.callback(os.environ.pop, "ASTRA_AUDIO_HOST_SOCKET", None)
+        else:
+            resources.callback(os.environ.__setitem__,
+                               "ASTRA_AUDIO_HOST_SOCKET", previous_audio)
+        os.environ["ASTRA_AUDIO_HOST_SOCKET"] = audio_socket
         machine = terminal.Machine(args.qemu, args.rom, image, work)
         try:
             if not terminal.open_terminal(machine, 120, args.deadline):
@@ -223,22 +251,23 @@ def main():
                     machine.qmp.key("tab")
                     for key in ("pgdn", "end", "home"):
                         machine.qmp.key(key)
-                        desktop.wait_quiet(machine, "Atlas keyboard " + key)
+                        desktop.wait_quiet(machine, "Atlas keyboard " + key,
+                                           seconds=0.2)
                     machine.qmp.point(700, 350)
                     machine.qmp.input_events([
                         {"type": "btn", "data": {
                             "button": "wheel-down", "down": True}},
                         {"type": "btn", "data": {
                             "button": "wheel-down", "down": False}}])
-                    desktop.wait_quiet(machine, "Atlas wheel")
+                    desktop.wait_quiet(machine, "Atlas wheel", seconds=0.2)
                     # Drag the right resize edge in and out; normal client reflows.
-                    start = 760
-                    for target in (480, 96, 760):
+                    start = 1300
+                    for target in (1100, 1300):
                         machine.qmp.point(360 + start, 400)
                         machine.qmp.button(True)
                         machine.qmp.point(360 + target, 400)
                         machine.qmp.button(False)
-                        desktop.wait_quiet(machine, "Atlas resize")
+                        desktop.wait_quiet(machine, "Atlas resize", seconds=0.2)
                         start = target
                 close_atlas(machine)
                 check_retired(machine, args.deadline, drawer)

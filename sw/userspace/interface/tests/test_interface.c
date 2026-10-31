@@ -41,6 +41,8 @@ static uint32_t fill_width[32];
 static uint32_t fill_height[32];
 static _Alignas(4) uint16_t render_pixels[320u * 200u];
 static uint32_t icon_blit_calls;
+static uint32_t appended_control_views;
+static uint32_t appended_control_clip_pixels;
 static AstraSurfaceView render_view(uint16_t width, uint16_t height);
 static void reset_render_calls(void);
 static uint32_t fill_calls;
@@ -268,6 +270,18 @@ int astra_draw_list_view_init(AstraSurfaceView *surface, void *storage,
         storage, byte_size, 0u, width, height,
         ASTRA_SURFACE_VIEW_DRAW_LIST, 0u, 0u, width, height};
     return 1;
+}
+
+AstraResult astra_draw_list_append_view_with_sources(AstraDrawList *list,
+    const AstraSurfaceView *view, const AstraSurface *const *sources,
+    uint32_t source_count)
+{
+    (void)list;
+    assert(view != NULL &&
+           (source_count == 0u || sources != NULL));
+    ++appended_control_views;
+    appended_control_clip_pixels += view->clip_bottom - view->clip_top;
+    return ASTRA_OK;
 }
 
 uint32_t astra_shared_draw_list_create(AstraSharedSurface *surface,
@@ -2703,6 +2717,45 @@ static void test_icon_grid_control(void)
     assert(astra_interface_icon_grid_set_items(&context, &control,
         items, 5u, bad_icons) == ASTRA_ERROR_INVALID_ARGUMENT);
     assert(collection.items == reordered && grid.icons == icons);
+}
+
+static void test_large_icon_grid_append(void)
+{
+    enum { ROWS = 257 };
+    AstraCollectionItem items[ROWS];
+    const AstraSurface *icons[ROWS] = {0};
+    AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    AstraIconGridModel grid = ASTRA_ICON_GRID_MODEL_INIT;
+    AstraIconGridInfo info = ASTRA_ICON_GRID_INFO_INIT;
+    AstraControl control = ASTRA_CONTROL_INIT;
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraFlexLayout layout = ASTRA_FLEX_LAYOUT_INIT;
+    AstraDrawList list = ASTRA_DRAW_LIST_INIT;
+    static _Alignas(4) uint8_t scratch[ASTRA_DRAW_LIST_AREA_BYTES];
+    AstraSurfaceView full = render_view(1300u, 640u);
+
+    for (uint32_t at = 0u; at < ROWS; ++at)
+        items[at] = (AstraCollectionItem){at + 1u, "File", 4u, {0u, 0u}};
+    assert(astra_interface_collection_init(&collection, items, ROWS, 0u) ==
+           ASTRA_OK);
+    grid.collection = &collection;
+    grid.icons = icons;
+    grid.icon_count = ROWS;
+    grid.columns = 8u;
+    info.id = 93u;
+    info.model = &grid;
+    assert(astra_interface_icon_grid_init(&control, &info) == ASTRA_OK);
+    assert(astra_interface_ui_init(&context, &control, 1u, 1300u, 640u) ==
+           ASTRA_OK);
+    assert(astra_interface_ui_layout(&context, &layout) == ASTRA_OK);
+    assert(astra_interface_ui_render_range(&context, &full, 0u, 1u) ==
+           ASTRA_ERROR_NO_RESOURCES);
+    appended_control_views = 0u;
+    appended_control_clip_pixels = 0u;
+    assert(astra_interface_ui_append_control(&context, &list, 0u, scratch,
+        sizeof(scratch), NULL, 0u) == ASTRA_OK);
+    assert(appended_control_views > 1u);
+    assert(appended_control_clip_pixels == 640u);
 }
 
 static void test_scrolled_list_control(void)
@@ -6449,6 +6502,7 @@ int main(void)
     test_tree_control();
     test_pagination_control();
     test_icon_grid_control();
+    test_large_icon_grid_append();
     test_scrolled_list_control();
     test_tab_control_and_collapsed_pages();
     test_stepper_control();

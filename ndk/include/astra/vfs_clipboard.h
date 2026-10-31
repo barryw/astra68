@@ -35,8 +35,34 @@ typedef struct AstraVfsClipboardSelection {
     uint32_t version;    /**< ASTRA_VFS_CLIPBOARD_SELECTION_VERSION. */
     uint32_t count;      /**< Nonzero number of entries. */
     uint32_t operation;  /**< ASTRA_VFS_CLIPBOARD_COPY or MOVE. */
+#ifndef __cplusplus
     AstraVfsClipboardEntry entries[]; /**< count serialized references. */
+#endif
 } AstraVfsClipboardSelection;
+
+/** Access serialized entries in C and ISO C++ after validating the complete
+ * payload. ISO C++ has no flexible array member.
+ * @param selection Complete validated selection payload.
+ * @return First serialized entry after the fixed header.
+ */
+static inline const AstraVfsClipboardEntry *
+astra_vfs_clipboard_selection_entries(const AstraVfsClipboardSelection *selection)
+{
+    return (const AstraVfsClipboardEntry *)
+        ((const unsigned char *)selection + sizeof(*selection));
+}
+
+/** Access writable serialized entries in C and ISO C++ after allocating the
+ * complete payload size.
+ * @param selection Complete writable selection payload.
+ * @return First serialized entry after the fixed header.
+ */
+static inline AstraVfsClipboardEntry *
+astra_vfs_clipboard_selection_entries_mutable(AstraVfsClipboardSelection *selection)
+{
+    return (AstraVfsClipboardEntry *)
+        ((unsigned char *)selection + sizeof(*selection));
+}
 
 /** Compute payload size.
  * @param count Number of selected files.

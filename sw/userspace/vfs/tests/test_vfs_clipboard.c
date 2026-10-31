@@ -12,6 +12,10 @@ int main(void)
     uint32_t bytes = astra_vfs_clipboard_selection_size(2u);
     AstraVfsClipboardSelection *selection = malloc(bytes);
     assert(selection != NULL);
+    assert(astra_vfs_clipboard_selection_entries_mutable(selection) ==
+           selection->entries);
+    assert(astra_vfs_clipboard_selection_entries(selection) ==
+           selection->entries);
     memset(selection, 0, bytes);
     selection->size = bytes;
     selection->version = ASTRA_VFS_CLIPBOARD_SELECTION_VERSION;

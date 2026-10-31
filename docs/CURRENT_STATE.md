@@ -2,6 +2,40 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas shared draw-list batching checkpoint, 2026-10-31: A 257-entry directory
+exposed a real `ASTRA_ERROR_NO_RESOURCES` in Interface Kit's fixed 128-command
+view. Atlas exited during Grid paint; a later test click then closed its older
+Applications drawer. Interface Kit 12.9 now clips each control to the supplied
+view when estimating and drawing, and `astra_interface_ui_append_control`
+splits oversized controls into ordered strips inside one graphics session.
+Atlas calls this shared operation for every control; it has no collection
+renderer or private batching path. Haiku read-only reference:
+`src/kits/interface/View.cpp` (`BView::ConstrainClippingRegion`) keeps
+clipping in the shared view contract. Astra adapts that pattern to its fixed
+draw-list view and larger session list. The Atlas icon diagnostic also uses
+the current shared File Panel control offset. Strict C++ NDK headers now
+access serialized VFS clipboard entries through shared typed accessors
+instead of exposing a C flexible array to C++.
+
+Beast Interface Kit host test exercises 257 Grid items, verifies one view
+fails cleanly, and verifies clipped appends cover the full viewport. Full
+userspace build and NDK checks passed. Current disposable QEMU image passed
+`test-atlas.py` with and without `--overflow`: DH0 and RAM0, 257 entries,
+UTF-8, empty and error paths, input/resize, stale volume reference, process
+retirement, and Desktop overflow scrolling. Gate uses the existing host audio
+fixture and explicit unprivileged QEMU UID/GID; no live DE25 image was read.
+Focused DE25 install reported `ASTRA_DE25_DEV_INSTALL PASS guest=5 host=0
+removed=0`. RFB verified Atlas opening DH0 with 17 entries and switching
+among Grid, List, and Columns. Raw captures were SHA-verified against board
+under `/mnt/Documents/astra68/atlas-batched-20261031/`; loaded DH0, List,
+and Columns SHA-256 values are
+`d20b28acddc1e7067c946e91b9b2c59ffe1bc8c9a0d441e93639dd89d58d59f1`,
+`7eed1a3e36624e476d3ab9900b3a86e48f18245592e630187e6c60d20e32f753`,
+and `726e20e1c61c43a2ac13f871471df483dd153b751bcfd55e7472b38e578f19ff`.
+Board trial captures were removed. Astra, audio, and remote desktop services
+remain active with zero restarts and 8.0 GiB free. Physical USB transfer is
+still untested because DE25 currently sees only its root USB hub.
+
 Atlas shared view-switcher checkpoint, 2026-10-31: The standalone design uses
 icons for Grid/List/Columns, while File Panel's text Segmented consumed toolbar
 width and forced icon-only File actions on a 1300 px Atlas window. Interface Kit

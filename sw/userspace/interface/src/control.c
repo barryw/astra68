@@ -6,6 +6,7 @@
 #include <astra/field_family.h>
 #include <astra/draw_list.h>
 #include <astra/fonts.h>
+#include <astra/graphics.h>
 #include <astra/input.h>
 #include <astra/input_modifiers.h>
 #include <astra/surface.h>
@@ -5398,6 +5399,7 @@ static void icon_grid_visible_rows(const AstraControl *control,
 
 static int render_requirements(const AstraUIContext *context,
                                uint32_t first, uint32_t end,
+                               const AstraControlFrame *visible_clip,
                                uint64_t *commands, uint64_t *payload)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
@@ -5409,11 +5411,15 @@ static int render_requirements(const AstraUIContext *context,
     if (astra_fonts_context_id(font_id) != ASTRA_OK) return 0;
     id_length = (uint32_t)strlen(font_id);
     for (uint32_t at = first; at < end; ++at) {
-        const AstraControl *control = &context->_private_controls[at];
+        AstraControl visible = context->_private_controls[at];
+        const AstraControl *control = &visible;
         uint32_t state;
 
         if (!control_valid(control))
             return 0;
+        if (visible_clip != NULL)
+            visible._private_clip = frame_intersection(
+                &visible._private_clip, visible_clip);
         if (control->_private_laid_out == 0u)
             continue;
         if (CONTAINER_KINDS(control->_private_control_kind)) {
@@ -8979,7 +8985,7 @@ AstraResult astra_interface_ui_render(AstraUIContext *context,
         surface->clip_top > surface->clip_bottom ||
         surface->clip_bottom > surface->height ||
         surface->kind != ASTRA_SURFACE_VIEW_DRAW_LIST ||
-        !render_requirements(context, 0u, context->_private_control_count,
+        !render_requirements(context, 0u, context->_private_control_count, NULL,
                              &commands, &payload))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (!astra_draw_list_view_adopt(&validated, surface->pixels,
@@ -9089,16 +9095,26 @@ AstraResult astra_interface_ui_render_range(AstraUIContext *context,
         count > context->_private_control_count - first)
         return ASTRA_ERROR_INVALID_ARGUMENT;
     end = first + count;
-    if (!render_requirements(context, first, end, &commands, &payload) ||
+    AstraControlFrame visible_clip = {
+        surface->clip_left, surface->clip_top,
+        surface->clip_right - surface->clip_left,
+        surface->clip_bottom - surface->clip_top};
+    if (!render_requirements(context, first, end, &visible_clip,
+            &commands, &payload) ||
         !astra_draw_list_view_adopt(&validated, surface->pixels,
             surface->byte_size, surface->width, surface->height))
         return ASTRA_ERROR_INVALID_ARGUMENT;
     if (!astra_interface_draw_list_has_room(surface, commands, payload))
         return ASTRA_ERROR_NO_RESOURCES;
+    validated = *surface;
     for (uint32_t at = first; at < end; ++at) {
-        const AstraControl *control = &context->_private_controls[at];
+        AstraControl visible = context->_private_controls[at];
+        const AstraControl *control = &visible;
         AstraSurfaceView clipped;
         AstraResult result;
+
+        visible._private_clip = frame_intersection(
+            &visible._private_clip, &visible_clip);
 
         if (control->_private_laid_out == 0u ||
             (CONTAINER_KINDS(control->_private_control_kind) &&
@@ -9120,6 +9136,53 @@ AstraResult astra_interface_ui_render_range(AstraUIContext *context,
         if (result != ASTRA_OK) return result;
     }
     if (end == context->_private_control_count) render_finish(context);
+    return ASTRA_OK;
+}
+
+AstraResult astra_interface_ui_append_control(AstraUIContext *context,
+    AstraDrawList *list, uint32_t index, void *scratch, uint32_t scratch_bytes,
+    const AstraSurface *const *sources, uint32_t source_count)
+{
+    AstraSurfaceView view;
+    AstraResult result;
+    uint32_t top = 0u;
+    uint32_t strip;
+
+    if (!context_valid(context) || list == NULL || scratch == NULL ||
+        index >= context->_private_control_count ||
+        (source_count != 0u && sources == NULL))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    if (!astra_draw_list_view_init(&view, scratch, scratch_bytes,
+            context->_private_width, context->_private_height))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_interface_ui_render_range(context, &view, index, 1u);
+    if (result == ASTRA_OK)
+        return astra_draw_list_append_view_with_sources(list, &view,
+            sources, source_count);
+    if (result != ASTRA_ERROR_NO_RESOURCES) return result;
+
+    strip = context->_private_height;
+    while (top < context->_private_height) {
+        uint32_t remaining = context->_private_height - top;
+        uint32_t height = strip < remaining ? strip : remaining;
+
+        if (!astra_draw_list_view_init(&view, scratch, scratch_bytes,
+                context->_private_width, context->_private_height) ||
+            !astra_surface_clip(&view, 0, (int32_t)top,
+                context->_private_width, height))
+            return ASTRA_ERROR_INVALID_ARGUMENT;
+        result = astra_interface_ui_render_range(context, &view, index, 1u);
+        if (result == ASTRA_ERROR_NO_RESOURCES) {
+            if (height == 1u) return result;
+            strip = height / 2u;
+            continue;
+        }
+        if (result != ASTRA_OK) return result;
+        result = astra_draw_list_append_view_with_sources(list, &view,
+            sources, source_count);
+        if (result != ASTRA_OK) return result;
+        top += height;
+    }
     return ASTRA_OK;
 }
 

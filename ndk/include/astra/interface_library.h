@@ -23,7 +23,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.12. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 12u
 /** Current Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 8u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 9u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -861,6 +861,22 @@ AstraResult astra_interface_ui_render(AstraUIContext *context,
  */
 AstraResult astra_interface_ui_render_range(AstraUIContext *context,
     AstraSurfaceView *surface, uint32_t first, uint32_t count);
+/** Append one control to a session draw list. When its commands exceed one
+ * fixed-size view, render clipped strips and append each in paint order.
+ * This keeps large visible collections within the fixed view command budget.
+ * @param context UI context with current layout and state.
+ * @param list Open session draw list targeting the same window.
+ * @param index Control index.
+ * @param scratch Caller-owned aligned draw-list storage, at least 16 KiB.
+ * @param scratch_bytes Available storage bytes.
+ * @param sources Borrowed image surfaces used by this control, or NULL.
+ * @param source_count Number of source entries.
+ * @return ASTRA_OK or a validation, rendering, or resource error.
+ * @since Interface Kit 12.9.
+ */
+AstraResult astra_interface_ui_append_control(AstraUIContext *context,
+    AstraDrawList *list, uint32_t index, void *scratch, uint32_t scratch_bytes,
+    const AstraSurface *const *sources, uint32_t source_count);
 /** Dispatch one window event.
  * @param context UI context receiving the event.
  * @param event Window event to dispatch.

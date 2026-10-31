@@ -1283,21 +1283,8 @@ static AstraResult paint(void)
         }
     }
     if (result == ASTRA_OK) {
-        AstraSurfaceView browser_view;
         for (uint32_t at = 0u; at < UI_CONTROL_COUNT && result == ASTRA_OK;
              ++at) {
-            if (!astra_draw_list_view_init(&browser_view, browser_commands,
-                    sizeof(browser_commands), width, height)) {
-                result = ASTRA_ERROR_NO_RESOURCES;
-                break;
-            }
-            result = astra_interface_ui_render_range(&ui, &browser_view,
-                at, 1u);
-            if (result != ASTRA_OK) {
-                (void)astra_log_failure("atlas browser render",
-                    (uint32_t)(-result));
-                break;
-            }
             const AstraSurface *inspector_source = inspector.image.image;
             const AstraSurface *const *sources = browser_entry_icons;
             uint32_t source_count = browser.entry_count;
@@ -1306,10 +1293,11 @@ static AstraResult paint(void)
                 sources = &inspector_source;
                 source_count = 1u;
             }
-            result = astra_draw_list_append_view_with_sources(&list,
-                &browser_view, sources, source_count);
+            result = astra_interface_ui_append_control(&ui, &list, at,
+                browser_commands, sizeof(browser_commands), sources,
+                source_count);
             if (result != ASTRA_OK)
-                (void)astra_log_failure("atlas browser append",
+                (void)astra_log_failure("atlas browser render",
                     (uint32_t)(-result));
         }
     }
@@ -1452,7 +1440,8 @@ static void log_icons(void)
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     AstraControlFrame frame, clip;
     if (browser.view_mode != ASTRA_FILE_PANEL_VIEW_GRID ||
-        astra_interface_ui_geometry(&ui, 1u + ASTRA_FILE_PANEL_GRID,
+        astra_interface_ui_geometry(&ui,
+            TOOLBAR_CONTROL_COUNT + BROWSER_TOOL_COUNT + ASTRA_FILE_PANEL_GRID,
             &frame, &clip) != ASTRA_OK || browser.grid_model.columns == 0u)
         return;
     if (astra_window_get_info(&window, &info) != ASTRA_OK) return;

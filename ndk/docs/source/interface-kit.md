@@ -773,6 +773,15 @@ icon surfaces to `astra_draw_list_append_view_with_sources`; the plain append
 call accepts views that reference only their own destination. The existing
 fixed-cell `ASTRA_CONTROL_GRID_VIEW` is a separate read-only text control.
 
+Interface Kit 12.9 adds `astra_interface_ui_append_control` for applications
+building a session draw list from shared controls. Pass one control index,
+aligned 16 KiB scratch storage, and its borrowed image sources. Interface Kit
+first tries one view, then clips oversized controls into ordered vertical
+strips and appends each to the same session list. This keeps large visible
+collections within the fixed view command budget while preserving hardware
+BLIT and text commands. The ordinary range renderer now applies its supplied
+view clip to both capacity estimation and drawing.
+
 {c:type}`AstraTextSurface` owns presentation policy and caller-provided scratch
 storage, not the document. Grid cells, selection, and scrollback remain in the
 application. Grid selections are normalized half-open ranges. The extraction
