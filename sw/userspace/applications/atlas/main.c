@@ -1587,6 +1587,7 @@ static const AstraVolumeRecord *volume_for_path(
 
 static AstraResult volume_bind_initial_path(const char *path)
 {
+    if (fixed_copy_path(path)) return ASTRA_OK;
     AstraVolumeSnapshot catalog = ASTRA_VOLUME_SNAPSHOT_INIT;
     AstraResult result = astra_volume_snapshot_open(volume_metadata, &catalog);
     if (result != ASTRA_OK) return result;
@@ -4118,9 +4119,13 @@ int astra_main(const AstraStartupInfo *startup)
                 if (astra_volume_watch_open(volume_metadata, &volume_watch) == ASTRA_OK) {
                     volume_refresh = 1u;
                     volume_retry = 0u;
-                    if (volume_bind_initial_path(root) != ASTRA_OK)
-                        status = ASTRA_VFS_ERR_LOST;
                 }
+                if ((!fixed_copy_path(root) &&
+                     volume_watch.receive == ASTRA_INVALID_HANDLE) ||
+                    volume_bind_initial_path(root) != ASTRA_OK)
+                    status = ASTRA_VFS_ERR_LOST;
+            } else if (!fixed_copy_path(root)) {
+                status = ASTRA_VFS_ERR_LOST;
             }
         }
     }

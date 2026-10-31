@@ -18,7 +18,10 @@ with the mounted volume. Haiku read-only references:
 (`CanHandleDragSelection`) for followed target checks; `Navigator.cpp` for
 history identity. Beast Atlas host test, MC68040 analyzer, and bundle build
 passed. DE25 focused install passed; final Atlas binary SHA-256 is
-`8918279bf6854526ae96eea95222a35f59c790bc0cfd2f4fc61d2c82e4f27cb4`.
+`83175b791d6b36deb74f48bc248ddfd0d1d5201b176c1206a021c96fae62f2aa`.
+Fixed paths do not depend on a volume snapshot during startup; mounted paths
+require an active volume watch before binding. This final build opened DH0,
+opened path-launched RAM0, and refreshed RAM0 without error on DE25.
 On the exact final binary, a file dragged onto a RAM0 directory link
 disappeared from its source and appeared inside the target; opening the link
 showed that file. The prior candidate also passed Back and an ordinary folder

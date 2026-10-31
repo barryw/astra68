@@ -20,9 +20,11 @@ media is replaced at the same path. `navigate_to` validates every ordinary
 history index against both active count and the 32-slot bound before reading
 it; `NAVIGATION_STAY` and `NAVIGATION_PUSH` remain explicit sentinels.
 Atlas also binds a mounted volume when launched with a directory path argument,
-before recording its first history entry. RAM0 uses the existing RAM broker;
-refresh and move operations retain
-the same exact volume identity. Display name and writability come from one
+before recording its first history entry. Fixed paths keep their startup
+authority without an extra volume query; mounted paths require the volume
+watch and exact read grant. RAM0 uses the existing RAM broker; refresh and
+move operations retain the same exact volume identity. Display name and
+writability come from one
 record-binding helper shared with navigation and volume launch. Grid,
 List, and Columns use the same directory snapshot; columns load child
 directories as they are
