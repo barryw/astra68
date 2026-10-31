@@ -2,6 +2,31 @@
 
 Status: active continuation map, 2026-10-30
 
+Atlas view and operation audit checkpoint, 2026-10-30: DE25 RFB exercised
+shared Grid, List, and Columns views on DH0, including Columns child loading
+of `/dh0/apps`; Search Field filtered Columns to one matching row. Dragging
+`astra_events.cat` from DH0 Grid to RAM0 Places copied the 1664-byte file;
+opening RAM0 showed one file and reduced its free-space count. Right-clicking
+`ChocolateDoom.app` in Columns showed Open, Copy, and Create installer through
+the existing menu and package commands. These tests used production services
+without reading the live provider image. Atlas open errors previously exposed
+numeric AstraResult codes; native NDK `astra_result_text()` now owns reusable
+human-readable result descriptions, and Atlas uses it in its existing Alert.
+Haiku read-only reference: `src/kits/support/Url.cpp` displays `strerror(status)`
+for a failed open; Astra keeps the corresponding text in its native result
+vocabulary without requiring POSIX. Beast Atlas host test, MC68040 app build,
+and NDK distribution check passed. Focused DE25 install reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=1`;
+the exact binary opened DH0 and showed 17 entries. Final Atlas SHA-256 is
+`7fe06830fd6c0e7cca7a578cfe8c40f6041b3d0a059393e3c5bf7999e14018b2`.
+Captures were SHA-verified and archived on Beast under
+`/mnt/Documents/astra68/atlas-audit-20261030/`. Disposable board captures
+were removed; RAM0 showed zero items after guest restart. Astra, audio, and
+remote desktop services remained active with
+zero restarts and 8.1 GiB free. This audit does not certify every Atlas
+workflow, and the new error text's nontrivial branches lack a physical
+fault-injection gate.
+
 Atlas shared Places presentation checkpoint, 2026-10-30: Interface Kit's
 Collection item now carries optional heading and 16 px shared glyph
 presentation in its former zero-reserved words. Shared List draws the glyphs

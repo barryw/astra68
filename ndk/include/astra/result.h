@@ -6,6 +6,35 @@
 #include <astra/syscall.h>
 #include <astra/types.h>
 
+/** Human-readable native result for alerts and diagnostics. The returned
+ * string is static and has no trailing punctuation.
+ * @param result AstraResult outcome.
+ * @return Stable English description, including an unknown-error fallback. */
+static inline const char *astra_result_text(AstraResult result)
+{
+    switch (result) {
+    case ASTRA_OK: return "Operation completed";
+    case ASTRA_ERROR_NOT_PRESENT: return "Item or service not found";
+    case ASTRA_ERROR_INVALID_ARGUMENT: return "Invalid request or object state";
+    case ASTRA_ERROR_UNSUPPORTED: return "Operation is not supported";
+    case ASTRA_ERROR_BUSY: return "Resource is busy";
+    case ASTRA_ERROR_TIMEOUT: return "Operation timed out";
+    case ASTRA_ERROR_PERMISSION: return "Permission denied";
+    case ASTRA_ERROR_NO_RESOURCES: return "Resource limit reached";
+    case ASTRA_ERROR_INVALID_HANDLE: return "Handle is no longer valid";
+    case ASTRA_ERROR_IO: return "Device or input/output error";
+    case ASTRA_ERROR_BUFFER_TOO_SMALL: return "Output buffer too small";
+    case ASTRA_ERROR_WOULD_BLOCK: return "Operation would block";
+    case ASTRA_ERROR_PEER_DEAD: return "Service is no longer available";
+    case ASTRA_ERROR_BAD_ADDRESS: return "Invalid memory address";
+    case ASTRA_ERROR_CANCELLED: return "Operation was cancelled";
+    case ASTRA_ERROR_CLOSED: return "Object is closed";
+    case ASTRA_ERROR_OUT_OF_MEMORY: return "Not enough memory";
+    case ASTRA_ERROR_NAME_TOO_LONG: return "Name or path is too long";
+    default: return "Unknown error";
+    }
+}
+
 /**
  * Translate a kernel syscall status into the stable NDK result vocabulary.
  * @param status ASTRA_SYSCALL_* status.

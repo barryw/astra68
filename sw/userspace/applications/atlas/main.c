@@ -1512,8 +1512,8 @@ static void open_error(AstraHandle gui, AstraResult result)
         (void)astra_string_append(&out,
             "Item or symbolic link target was not found.");
     else {
-        (void)astra_string_append(&out, "Could not open item. Astra status ");
-        (void)astra_string_append_i64(&out, result);
+        (void)astra_string_append(&out, "Could not open item: ");
+        (void)astra_string_append(&out, astra_result_text(result));
         (void)astra_string_append_char(&out, '.');
     }
     AstraAlertInfo info = ASTRA_ALERT_INFO_INIT;
