@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-10-31
 
+Dock instance-policy checkpoint, 2026-10-31: Bundle manifest `single-instance`
+remains authority; GUI protocol 28 carries its validated flag and an exact
+bundle path through a read-only area. The Dock uses the latest launch session
+for each app group. Its shared Menu shows disabled `Single instance` for
+restricted apps or `New Instance` for multi-instance apps; Alt-click starts
+another allowed copy. A 400 ms hover label states policy and running-session
+count. Launch runs on a detached native thread so Display can answer the
+supervisor's GUI-session handshake; completion reaches Display through its
+internal port, and failures use the existing notification surface. Haiku
+read-only `src/apps/deskbar/ExpandoMenuBar.cpp`, `WindowMenu.cpp`, and
+`BarApp.cpp` informed grouping and menu presentation; Astra's bundle manifest
+and supervisor stay policy authority. Beast Display, supervisor, System Kit,
+Graphics Kit, startup-manifest, and MC68040 builds passed. Targeted DE25
+install included supervisor ROM, Display, GUI-protocol libraries, and startup
+grant. Physical RFB showed Atlas `New Instance` producing a second session,
+Alt-click producing a third, AstraZ `Single instance` with Alt-click preserving
+one session, both hover labels, and quick-click raising Atlas. Board/Beast raw
+hashes matched; verified RGB/PNG evidence and `SHA256SUMS` are at
+`/mnt/Documents/astra68/dock-policy-20261031/`. The final Display-only install
+bounded concurrent launches at eight and showed two Atlas dots after a fresh
+`New Instance` click; its board/Beast frame hashes matched. Trial files were removed.
+Astra, HDMI audio host, and remote desktop active; Astra restarts zero,
+8.2 GiB free. Pinned apps and ordering remain for Config Kit follow-up.
+
 Dock first pass, 2026-10-31: Display now owns a 52-pixel running-app Dock.
 The supervisor passes validated bundle IDs in GUI protocol 27, so windows
 from separate launches of one app share an icon while each launch contributes

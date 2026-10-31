@@ -98,6 +98,24 @@ uint64_t astra_clock_monotonic(void)
 }
 static uint32_t delivered_count;
 static uint32_t send_would_block;
+static AstraThreadStart dock_started;
+static uint32_t dock_thread_status = ASTRA_SYSCALL_OK;
+
+uint32_t astra_rt_thread_start_detached(const AstraThreadStart *start,
+                                         uint32_t priority)
+{
+    assert(priority == ASTRA_PROCESS_PRIORITY_NORMAL);
+    dock_started = *start;
+    return dock_thread_status;
+}
+
+AstraResult astra_application_launch(AstraHandle launcher,
+    const char *path, uint16_t length, uint32_t *process_id)
+{
+    (void)launcher; (void)path; (void)length;
+    *process_id = 42u;
+    return ASTRA_OK;
+}
 static uint32_t wait_count;
 static uint32_t wait_poll_status = ASTRA_SYSCALL_OK;
 static AstraInputEventMessage input_messages[4];
@@ -2400,6 +2418,7 @@ static void test_launch_panel(void)
         },
         .name_length = 4u,
         .name = "Doom",
+        .bundle_path_length = 14u,
     };
     const uint32_t rights = ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE |
                             ASTRA_RIGHT_MAP | ASTRA_RIGHT_TRANSFER;
@@ -2408,27 +2427,46 @@ static void test_launch_panel(void)
     uint32_t none = 0u;
     DisplaySession remembered = {0};
 
-    assert(valid_open_session(&named, sizeof(named), 1u));
-    assert(!valid_open_session(&named, sizeof(named), 2u));
+    assert(valid_open_session(&named, sizeof(named), 2u));
+    assert(!valid_open_session(&named, sizeof(named), 1u));
     assert(!valid_open_session(&named, sizeof(AstraGuiSessionRequest), 1u));
     named.name[0] = (char)0xff;
-    assert(!valid_open_session(&named, sizeof(named), 1u));
+    assert(!valid_open_session(&named, sizeof(named), 2u));
     named.name[0] = 'D';
     named.name_length = ASTRA_WINDOW_TITLE_MAX + 1u;
-    assert(!valid_open_session(&named, sizeof(named), 1u));
+    assert(!valid_open_session(&named, sizeof(named), 2u));
     named.name_length = 4u;
     named.app_id_length = 4u;
     memcpy(named.app_id, "doom", 4u);
-    assert(valid_open_session(&named, sizeof(named), 1u));
+    assert(valid_open_session(&named, sizeof(named), 2u));
     named.app_id[0] = (char)0xff;
-    assert(!valid_open_session(&named, sizeof(named), 1u));
+    assert(!valid_open_session(&named, sizeof(named), 2u));
     named.app_id[0] = 'd';
     named.app_id_length = ASTRA_GUI_APP_ID_MAX;
-    assert(!valid_open_session(&named, sizeof(named), 1u));
+    assert(!valid_open_session(&named, sizeof(named), 2u));
     named.app_id_length = 4u;
     named.icon_length = TEST_AICON_BYTES;
-    assert(valid_open_session(&named, sizeof(named), 2u));
-    assert(!valid_open_session(&named, sizeof(named), 1u));
+    assert(valid_open_session(&named, sizeof(named), 3u));
+    assert(!valid_open_session(&named, sizeof(named), 2u));
+    named.bundle_flags = ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE;
+    assert(valid_open_session(&named, sizeof(named), 3u));
+    named.bundle_flags = 2u;
+    assert(!valid_open_session(&named, sizeof(named), 3u));
+    named.bundle_flags = 0u;
+    {
+        uint32_t path_area = 0u;
+        char *copied;
+
+        assert(astra_rt_area_create(15u, rights, &path_area) ==
+               ASTRA_SYSCALL_OK);
+        memcpy(test_areas[path_area - 0x800u], "/apps/Doom.app", 15u);
+        copied = copy_session_path(&named, path_area);
+        assert(copied != NULL && strcmp(copied, "/apps/Doom.app") == 0);
+        astra_runtime_deallocate(copied);
+        test_areas[path_area - 0x800u][5] = '\0';
+        assert(copy_session_path(&named, path_area) == NULL);
+        assert(astra_close(path_area) == ASTRA_SYSCALL_OK);
+    }
 
     assert(astra_rt_area_create(TEST_AICON_BYTES, rights, &icon) ==
            ASTRA_SYSCALL_OK);
@@ -2596,6 +2634,37 @@ static void test_dock_sessions(void)
             hold.menu_request == DISPLAY_DOCK_MENU_REQUEST &&
             hold.swallow_pointer_up == 1u);
         menu_end(&hold, 0u, 0u, ASTRA_STATUS_OK);
+        assert(menu_allocations == 0u);
+    }
+    {
+        DisplayState policy = {.session_count = 2u};
+        DisplayDockApp groups[ASTRA_WAIT_MULTIPLE_MAX] = {0};
+
+        policy.sessions[0] = (DisplaySession){.id = 5u,
+            .name_length = 4u, .name = "Doom",
+            .bundle_flags = ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE,
+            .bundle_path = "/apps/Doom.app", .bundle_path_length = 14u};
+        policy.sessions[1] = (DisplaySession){.id = 6u,
+            .name_length = 5u, .name = "Atlas",
+            .bundle_path = "/apps/Atlas.app", .bundle_path_length = 15u};
+        assert(dock_collect(&policy, groups) == 2u);
+        assert(dock_menu_open(&policy, groups, 0u, 2u) == ASTRA_STATUS_OK);
+        assert(strcmp(policy.menu_rows[0].label, "Single instance") == 0);
+        menu_end(&policy, 0u, 0u, ASTRA_STATUS_OK);
+        assert(dock_menu_open(&policy, groups, 1u, 2u) == ASTRA_STATUS_OK);
+        assert(strcmp(policy.menu_rows[0].label, "New Instance") == 0);
+        dock_thread_status = ASTRA_SYSCALL_OUT_OF_MEMORY;
+        menu_end(&policy, 1u, 0u, ASTRA_STATUS_OK);
+        assert(policy.dock_launch_error_session == 6u &&
+            dock_started.entry == dock_launch_worker);
+        policy.dock_launch_error_session = 0u;
+        assert(dock_launch_new(&policy, 5u) == ASTRA_STATUS_ACCESS);
+        policy.dock_launch_pending = DISPLAY_DOCK_PENDING_MAX;
+        assert(dock_launch_new(&policy, 6u) == ASTRA_STATUS_LIMIT);
+        policy.dock_launch_pending = 0u;
+        assert(dock_launch_new(&policy, 6u) == ASTRA_STATUS_LIMIT);
+        assert(dock_started.entry == dock_launch_worker);
+        dock_thread_status = ASTRA_SYSCALL_OK;
         assert(menu_allocations == 0u);
     }
 }

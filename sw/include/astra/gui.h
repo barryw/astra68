@@ -14,7 +14,7 @@
 /** GUI service wire protocol tag. */
 #define ASTRA_GUI_PROTOCOL UINT32_C(0x47554920) /* GUI  */
 /** Current GUI service wire protocol version. */
-#define ASTRA_GUI_VERSION 27u
+#define ASTRA_GUI_VERSION 28u
 
 /** Maximum counted UTF-8 bytes in a window title. */
 #define ASTRA_WINDOW_TITLE_MAX UINT32_C(48)
@@ -614,8 +614,10 @@ typedef struct AstraGuiOpenSession {
     char name[ASTRA_WINDOW_TITLE_MAX];
     uint32_t icon_length;
     uint16_t app_id_length;
-    uint16_t reserved_id;
+    uint16_t bundle_flags;
     char app_id[ASTRA_GUI_APP_ID_MAX];
+    uint16_t bundle_path_length;
+    uint16_t reserved_path;
 } AstraGuiOpenSession;
 
 typedef struct AstraGuiSessionOpened {
@@ -696,7 +698,7 @@ typedef struct AstraGuiGraphicsReply {
 #define ASTRA_GUI_SESSION_REQUEST_SIZE ASTRA_MESSAGE_HEADER_SIZE
 #define ASTRA_GUI_SESSION_OPENED_SIZE (ASTRA_MESSAGE_HEADER_SIZE + 8u)
 #define ASTRA_GUI_OPEN_SESSION_SIZE \
-    (ASTRA_MESSAGE_HEADER_SIZE + 12u + ASTRA_WINDOW_TITLE_MAX + \
+    (ASTRA_MESSAGE_HEADER_SIZE + 16u + ASTRA_WINDOW_TITLE_MAX + \
      ASTRA_GUI_APP_ID_MAX)
 
 _Static_assert(sizeof(AstraGuiSessionRequest) ==
@@ -704,7 +706,7 @@ _Static_assert(sizeof(AstraGuiSessionRequest) ==
                "GUI session request is an ABI");
 _Static_assert(sizeof(AstraGuiOpenSession) == ASTRA_GUI_OPEN_SESSION_SIZE &&
                    ASTRA_GUI_OPEN_SESSION_SIZE != ASTRA_GUI_OPEN_WINDOW_SIZE &&
-                   ASTRA_GUI_OPEN_SESSION_SIZE <= sizeof(AstraGuiFontMeasureRequest),
+                   ASTRA_GUI_OPEN_SESSION_SIZE <= ASTRA_MESSAGE_SIZE_MAX,
                "GUI open-session message is an ABI and fits the GUI port");
 _Static_assert(sizeof(AstraGuiSessionOpened) ==
                    ASTRA_GUI_SESSION_OPENED_SIZE,

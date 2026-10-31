@@ -911,17 +911,15 @@ static uint32_t launch_session;
 static void name_gui_session(const char *bundle_path,
                              AstraGuiOpenSession *request, uint32_t *icon)
 {
-    *icon = 0u;
-    AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(1u);
-    if (path_storage.bytes == NULL) { return; }
-
-    char *path = astra_vfs_path_storage_at(&path_storage, 0u);
     void *bytes = NULL;
     uint32_t length = 0u;
 
     *icon = 0u;
     if (launch_bundle == NULL)
         return;
+    request->bundle_flags = launch_bundle->flags &
+        ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE;
+    request->bundle_path_length = (uint16_t)strlen(bundle_path);
     size_t id_length = strlen(launch_bundle->id);
     if (id_length < ASTRA_GUI_APP_ID_MAX) {
         (void)memcpy(request->app_id, launch_bundle->id, id_length);
@@ -935,7 +933,12 @@ static void name_gui_session(const char *bundle_path,
         --length;
     (void)memcpy(request->name, launch_bundle->name, length);
     request->name_length = (uint16_t)length;
-    if (launch_bundle->icon[0] == '\0' ||
+    if (launch_bundle->icon[0] == '\0') return;
+    AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(1u);
+    if (path_storage.bytes == NULL) return;
+    char *path = astra_vfs_path_storage_at(&path_storage, 0u);
+    if (
         !astra_string_concat(path, ASTRA_VFS_PATH_MAX, bundle_path) ||
         !astra_string_concat(path, ASTRA_VFS_PATH_MAX, "/") ||
         !astra_string_concat(path, ASTRA_VFS_PATH_MAX, launch_bundle->icon) ||
@@ -955,7 +958,7 @@ static uint32_t open_gui_session(uint32_t gui, const char *bundle_path,
     AstraGuiOpenSession request = {0};
     AstraGuiSessionOpened reply = {0};
     uint32_t receive = 0u;
-    uint32_t send[2] = {0u, 0u};
+    uint32_t send[3] = {0u, 0u, 0u};
     uint32_t handle = 0u;
     uint32_t size = 0u;
     uint32_t handles = 0u;
@@ -965,14 +968,20 @@ static uint32_t open_gui_session(uint32_t gui, const char *bundle_path,
     status = astra_rt_port_create(1u, sizeof(reply), &receive, &send[0]);
     if (status != ASTRA_SYSCALL_OK)
         return ASTRA_STATUS_LIMIT;
-    name_gui_session(bundle_path, &request, &send[1]);
+    name_gui_session(bundle_path, &request, &send[2]);
+    if (request.bundle_path_length != 0u &&
+        bytes_area(bundle_path, request.bundle_path_length + 1u,
+                   &send[1]) != ASTRA_STATUS_OK) {
+        status = ASTRA_SYSCALL_IO_ERROR;
+        goto cleanup;
+    }
     astra_message_header_set(&request.header, sizeof(request),
                              ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
                              ASTRA_GUI_OPEN_SESSION, 1u);
     status = astra_port_send(gui, &request, sizeof(request), send,
-                             send[1] != 0u ? 2u : 1u);
+                             1u + (send[1] != 0u) + (send[2] != 0u));
     if (status == ASTRA_SYSCALL_OK)
-        send[0] = send[1] = 0u;
+        send[0] = send[1] = send[2] = 0u;
     if (status == ASTRA_SYSCALL_OK)
         status = astra_wait_one(receive,
                                 astra_clock_monotonic() +
@@ -989,9 +998,10 @@ static uint32_t open_gui_session(uint32_t gui, const char *bundle_path,
         *session = handle;
         handle = 0u;
     }
+cleanup:
     if (handle != 0u)
         (void)astra_close(handle);
-    for (uint32_t index = 0u; index < 2u; ++index)
+    for (uint32_t index = 0u; index < 3u; ++index)
         if (send[index] != 0u)
             (void)astra_close(send[index]);
     (void)astra_close(receive);

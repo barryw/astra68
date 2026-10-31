@@ -189,7 +189,7 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/clipboard grants serves CLIPBOARD required priority=20\n"
     "service /services/fonts grants HOST_DEVICE CONFIG_SYSTEM:rw FONTS:rw LIBS:r "
     "serves FONT_CATALOG FONTS_ADMIN FONTS_RENDER FONTS_CHANGED required priority=20\n"
-    "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ "
+    "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ APP_LAUNCH "
     "INPUT_SERVICE FONT_CATALOG FONTS_RENDER FONTS_CHANGED serves GUI critical priority=20\n"
     "service /services/media grants HOST_DEVICE serves PCM priority=16\n"
     "service /services/codec grants HOST_DEVICE serves CODEC required priority=16\n"

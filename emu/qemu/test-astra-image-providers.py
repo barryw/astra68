@@ -270,6 +270,9 @@ assert "$(</home/.motd)" in zshrc and "$(</config/motd)" in zshrc
 assert "HOME:/.motd" not in zshrc and "CONFIG:motd" not in zshrc
 assert "\\e]133;A" in zshrc and "\\e]133;B" in zshrc
 startup = astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
+display_startup = next(line for line in startup
+                       if line.startswith("service /services/display "))
+assert "grants DISPLAY DISPLAY_IRQ VBLANK_IRQ APP_LAUNCH INPUT_SERVICE" in display_startup
 desktop_startup = next(line for line in startup
                        if line.startswith("service /services/desktop "))
 assert " grants GUI APP_LAUNCH SERVICE_MANAGER VOLUMES VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN PROC:r APPS:r LIBS:r " in desktop_startup

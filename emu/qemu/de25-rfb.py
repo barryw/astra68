@@ -292,6 +292,8 @@ def main():
     parser.add_argument("--keys", help="type ASCII text after connecting")
     parser.add_argument("--shortcut", help="send Mod[+Mod]+ASCII-key")
     parser.add_argument("--enter", action="store_true", help="press Enter after keys")
+    parser.add_argument("--settle-ms", type=int, default=0,
+                        help="wait after input before frame capture")
     pointer_action = parser.add_mutually_exclusive_group()
     pointer_action.add_argument("--pointer", nargs=2, metavar=("X", "Y"),
                                 type=int)
@@ -312,6 +314,8 @@ def main():
                                 type=int)
     parser.add_argument("--qmp", default="/run/astra/qemu/qmp.sock")
     arguments = parser.parse_args()
+    if not 0 <= arguments.settle_ms <= 10000:
+        parser.error("settle duration must be 0..10000 ms")
     if arguments.verify_rfb_pointer and arguments.pointer is None:
         parser.error("--verify-rfb-pointer requires --pointer")
     password = None
@@ -382,6 +386,8 @@ def main():
             send_shortcut(connection, arguments.shortcut)
         if arguments.keys is not None or arguments.shortcut is not None:
             time.sleep(0.25)
+        if arguments.settle_ms:
+            time.sleep(arguments.settle_ms / 1000)
         frame, rfb_pointer = capture(
             connection, width, height, bytes_per_pixel, frame,
             frame is not None)
