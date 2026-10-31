@@ -11,7 +11,7 @@ that component validates its values and defines defaults.
 | --- | --- | --- |
 | System component | `/config/system/<service>/settings.conf` | Its resident service's `CONFIG_SYSTEM` grant |
 | Service implementation | `/config/services/<service>/settings.conf` | Its private `CONFIG` grant |
-| Application | `/config/applications/<app>/settings.conf` | Its private `CONFIG` grant |
+| Application | `/config/applications/<bundle id>/settings.conf` | Its private `CONFIG` grant |
 | Command | `/config/commands/<command>/settings.conf` | Its scoped command grant |
 
 Supervisor derives roots from verified service or bundle identity, creates owner
@@ -25,6 +25,11 @@ System components own system policy; apps own app preferences. A settings UI
 asks the owning service to change system policy through a typed, validated
 operation. It does not receive a raw writable `/config/system` path. Applications
 use their own Config Kit handle directly for private preferences.
+Application settings use the bundle manifest's stable `id`, like `STORE:` data,
+so moving a bundle into a subfolder or another volume keeps its preferences.
+On first launch, supervisor atomically moves an older leaf-name settings
+directory to the ID directory when the destination is absent. When both
+exist, it leaves both intact and uses the ID directory.
 
 ## Failure rules
 

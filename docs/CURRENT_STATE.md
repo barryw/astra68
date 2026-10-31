@@ -2,6 +2,32 @@
 
 Status: active continuation map, 2026-10-30
 
+Application settings identity checkpoint, 2026-10-30: Supervisor now scopes
+private Config Kit grants by the bundle manifest's stable ID, matching
+`STORE:` data. Moving or copying an app into a nested directory therefore
+keeps settings and no longer fails while creating a path-derived CONFIG root.
+Existing leaf-name settings directories move atomically to the ID directory
+only when that target is absent; a conflicting target is left intact and
+selected, and failed migration keeps the old data and reports I/O failure
+instead of a false memory limit. This uses existing Config Kit scope functions
+and VFS rename, with no Atlas-specific path code. Haiku
+read-only reference: `src/apps/terminal/PrefHandler.cpp` creates a named app
+directory under its user settings root; Astra centralizes that naming in the
+supervisor and uses stable bundle ID instead of application filename. Beast
+supervisor host and sanitizer tests and MC68040 ROM build passed. DE25 Atlas
+opened physical `/dh0/apps/Terminal.app`; a screenshot of
+`/dh0/config/applications` showed `org.astra.terminal` in place of prior
+`Terminal.app`. Terminal copied `SDLTestMouse.app` into disposable
+`/ram0/Games`; Atlas opened that nested bundle and supervisor logged a
+successful launch. Final focused ROM SHA-256 is
+`0608ef23c4ad246702a21b9b9407d108f7be9c954b805e018e3eb07008ec6541`;
+Atlas launched physical Terminal again on that exact ROM. Reboot cleared
+RAM0 (native `ls /ram0` showed no entries). Selected captures, guest syslog,
+and ROM are archived on Beast at
+`/mnt/Documents/astra68/atlas-symlink-20261030/`. Board trial captures and
+script were removed; Astra and remote desktop are active with zero restarts,
+8.1 GiB free. No production image read or hash occurred while live.
+
 Atlas native-launch alias checkpoint, 2026-10-30: Applications opened from
 their physical `/dh0/apps` path now launch through the shared supervisor with
 the same APP/CWD provider roots, singleton identity, and settings path as their

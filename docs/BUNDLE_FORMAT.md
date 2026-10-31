@@ -121,6 +121,8 @@ never overwrite them. Removing the store resets it to the defaults.
 
 `STORE:` is private persistent application data at
 `HOME:/Application Data/<bundle id>/`, keyed by the manifest's stable `id`.
+The private `CONFIG:` root uses the same ID under
+`/config/applications/<bundle id>/`.
 Moving, renaming, or uninstalling an application bundle does not move or
 delete its data. On first launch after this layout change, the supervisor
 moves an existing bundle-name store into that directory without rewriting

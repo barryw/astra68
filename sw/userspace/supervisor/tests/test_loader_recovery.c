@@ -18,6 +18,9 @@ static char created[2][ASTRA_VFS_PATH_MAX];
 static uint32_t creation_count;
 static uint32_t old_store_exists, new_store_exists, old_store_kind, new_store_kind;
 static char renamed_from[ASTRA_VFS_PATH_MAX], renamed_to[ASTRA_VFS_PATH_MAX];
+static int config_mode;
+static uint32_t old_config_exists, new_config_exists;
+static uint32_t config_rename_result;
 
 void *astra_runtime_allocate(size_t size)
 {
@@ -56,6 +59,13 @@ uint32_t astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
                              AstraVfsDirEntry *info)
 {
     assert(client == &managed_client);
+    if (config_mode && strncmp(path, "/config/applications/", 21u) == 0) {
+        uint32_t exists = strcmp(path, "/config/applications/Terminal.app") == 0 ?
+            old_config_exists : new_config_exists;
+        if (!exists) return ASTRA_VFS_ERR_NOT_FOUND;
+        info->kind = ASTRA_VFS_KIND_DIRECTORY;
+        return ASTRA_VFS_OK;
+    }
     if (strncmp(path, "/home/Application Data/", 23u) == 0) {
         if (!new_store_exists) return ASTRA_VFS_ERR_NOT_FOUND;
         info->kind = (uint16_t)new_store_kind;
@@ -70,6 +80,17 @@ uint32_t astra_vfs_stat_meta(AstraVfsClient *client, const char *path,
 uint32_t astra_vfs_rename(AstraVfsClient *client, const char *from,
                            const char *to)
 {
+    if (config_mode) {
+        assert(client == &managed_client && old_config_exists &&
+               !new_config_exists);
+        if (config_rename_result != ASTRA_VFS_OK)
+            return config_rename_result;
+        strcpy(renamed_from, from);
+        strcpy(renamed_to, to);
+        old_config_exists = 0u;
+        new_config_exists = 1u;
+        return ASTRA_VFS_OK;
+    }
     assert(client == &managed_client && old_store_exists && !new_store_exists);
     strcpy(renamed_from, from);
     strcpy(renamed_to, to);
@@ -127,10 +148,17 @@ static void reset(void)
     provider_opens = provider_reads = provider_closes = managed_reads = 0u;
     open_result = read_result = close_result = ASTRA_VFS_OK;
     policy_text = "astra-config 1\nschema 1\nstart manual\nrestart never\n";
+    config_mode = 0;
+    config_rename_result = ASTRA_VFS_OK;
 }
 
 int main(void)
 {
+    assert(config_launch_status(ASTRA_CONFIG_IO) == ASTRA_STATUS_IO);
+    assert(config_launch_status(ASTRA_CONFIG_ACCESS) == ASTRA_STATUS_ACCESS);
+    assert(config_launch_status(ASTRA_CONFIG_NO_MEMORY) == ASTRA_STATUS_LIMIT);
+    assert(config_launch_status(ASTRA_CONFIG_BUFFER_TOO_SMALL) ==
+           ASTRA_STATUS_NAME_TOO_LONG);
     AstraStartupInfo startup = {0};
     AstraServiceDefinition definition = ASTRA_SERVICE_DEFINITION_INIT;
     expected_startup = &startup;
@@ -197,6 +225,7 @@ int main(void)
         entry.resident = 1u;
         assert(private_config_root(&entry, "config",
                                    ASTRA_CONFIG_OWNER_SYSTEM,
+                                   NULL,
                                    root, sizeof(root)) == ASTRA_CONFIG_OK);
         assert(strcmp(root, "config/system/fonts") == 0);
         assert(creation_count == 2u);
@@ -205,12 +234,53 @@ int main(void)
         creation_count = 0u;
         strcpy(entry.path, "/apps/Terminal.app");
         entry.resident = 0u;
+        config_mode = 1;
+        old_config_exists = new_config_exists = 0u;
         assert(private_config_root(&entry, "config",
                                    ASTRA_CONFIG_OWNER_APPLICATION,
+                                   "org.astra.terminal",
                                    root, sizeof(root)) == ASTRA_CONFIG_OK);
-        assert(strcmp(root, "config/applications/Terminal.app") == 0);
+        assert(strcmp(root, "config/applications/org.astra.terminal") == 0);
         assert(strcmp(created[0], "/config/applications") == 0);
-        assert(strcmp(created[1], "/config/applications/Terminal.app") == 0);
+        assert(strcmp(created[1], "/config/applications/org.astra.terminal") == 0);
+        creation_count = 0u;
+        old_config_exists = 1u;
+        assert(private_config_root(&entry, "config",
+                                   ASTRA_CONFIG_OWNER_APPLICATION,
+                                   "org.astra.terminal",
+                                   root, sizeof(root)) == ASTRA_CONFIG_OK);
+        assert(strcmp(renamed_from, "/config/applications/Terminal.app") == 0);
+        assert(strcmp(renamed_to,
+                      "/config/applications/org.astra.terminal") == 0);
+        assert(!old_config_exists && new_config_exists);
+        creation_count = 0u;
+        old_config_exists = 1u;
+        new_config_exists = 0u;
+        config_rename_result = ASTRA_VFS_ERR_IO;
+        assert(private_config_root(&entry, "config",
+                                   ASTRA_CONFIG_OWNER_APPLICATION,
+                                   "org.astra.terminal",
+                                   root, sizeof(root)) == ASTRA_CONFIG_IO);
+        assert(old_config_exists && !new_config_exists);
+        config_rename_result = ASTRA_VFS_OK;
+        creation_count = 0u;
+        old_config_exists = 1u;
+        new_config_exists = 1u;
+        renamed_from[0] = '\0';
+        assert(private_config_root(&entry, "config",
+                                   ASTRA_CONFIG_OWNER_APPLICATION,
+                                   "org.astra.terminal",
+                                   root, sizeof(root)) == ASTRA_CONFIG_OK);
+        assert(renamed_from[0] == '\0' && old_config_exists &&
+               new_config_exists);
+        creation_count = 0u;
+        old_config_exists = new_config_exists = 0u;
+        strcpy(entry.path, "/usb0/Games/Foo.app");
+        assert(private_config_root(&entry, "config",
+                                   ASTRA_CONFIG_OWNER_APPLICATION,
+                                   "org.foo",
+                                   root, sizeof(root)) == ASTRA_CONFIG_OK);
+        assert(strcmp(root, "config/applications/org.foo") == 0);
         creation_count = 0u;
         managed = 0;
     }

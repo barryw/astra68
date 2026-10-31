@@ -296,12 +296,17 @@ static uint32_t prepare_private_store(const SupervisorManifestEntry *entry,
 
 static uint32_t private_config_root(const SupervisorManifestEntry *entry,
                                     const char *parent, uint32_t owner_kind,
+                                    const char *bundle_id,
                                     char *out, uint32_t capacity)
 {
-    AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(1u);
+    AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(3u);
     if (path_storage.bytes == NULL) { return ASTRA_CONFIG_NO_MEMORY; }
 
     char *path = astra_vfs_path_storage_at(&path_storage, 0u);
+    const char *legacy_owner = private_store_root(entry);
+    const char *owner = owner_kind == ASTRA_CONFIG_OWNER_APPLICATION &&
+                        bundle_id != NULL && bundle_id[0] != '\0' ?
+                        bundle_id : legacy_owner;
     (void)strcpy(path, "/");
     if (astra_config_scope_root(parent, owner_kind, out, capacity) !=
             ASTRA_CONFIG_OK ||
@@ -314,10 +319,43 @@ static uint32_t private_config_root(const SupervisorManifestEntry *entry,
     status = astra_config_capability_root(
         parent,
         owner_kind,
-        private_store_root(entry), out, capacity);
+        owner, out, capacity);
 
     if (status != ASTRA_CONFIG_OK)
         return status;
+    if (owner != legacy_owner && strcmp(owner, legacy_owner) != 0) {
+        char *old_path = astra_vfs_path_storage_at(&path_storage, 1u);
+        char *old_root = astra_vfs_path_storage_at(&path_storage, 2u);
+        /* Earlier settings used the bundle's leaf name. Move that directory
+         * once, only when the stable-ID target is absent. */
+        if (astra_config_capability_root(parent, owner_kind, legacy_owner,
+                old_root, ASTRA_VFS_PATH_MAX) == ASTRA_CONFIG_OK) {
+            AstraVfsDirEntry old_info = {0}, new_info = {0};
+            (void)strcpy(old_path, "/");
+            if (!astra_string_concat(old_path, ASTRA_VFS_PATH_MAX, old_root) ||
+                !astra_string_concat(path, ASTRA_VFS_PATH_MAX, out))
+                return ASTRA_CONFIG_BUFFER_TOO_SMALL;
+            uint32_t old_status = astra_vfs_stat_meta(
+                supervisor_vfs_client(), old_path, &old_info);
+            uint32_t new_status = astra_vfs_stat_meta(
+                supervisor_vfs_client(), path, &new_info);
+            if ((old_status != ASTRA_VFS_OK &&
+                 old_status != ASTRA_VFS_ERR_NOT_FOUND) ||
+                (new_status != ASTRA_VFS_OK &&
+                 new_status != ASTRA_VFS_ERR_NOT_FOUND))
+                return ASTRA_CONFIG_IO;
+            if (new_status == ASTRA_VFS_OK &&
+                new_info.kind != ASTRA_VFS_KIND_DIRECTORY)
+                return ASTRA_CONFIG_IO;
+            if (old_status == ASTRA_VFS_OK &&
+                old_info.kind == ASTRA_VFS_KIND_DIRECTORY &&
+                new_status == ASTRA_VFS_ERR_NOT_FOUND &&
+                astra_vfs_rename(supervisor_vfs_client(), old_path, path) !=
+                    ASTRA_VFS_OK)
+                return ASTRA_CONFIG_IO;
+            path[1] = '\0';
+        }
+    }
     /* A native rooted grant must anchor an actual directory. The launcher
      * owns provision of each process's private settings directory, before the
      * process receives any read or write authority over it. */
@@ -325,6 +363,20 @@ static uint32_t private_config_root(const SupervisorManifestEntry *entry,
         return ASTRA_CONFIG_BUFFER_TOO_SMALL;
     status = astra_vfs_mkdir_mode(supervisor_vfs_client(), path, 0700u);
     return status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS ? ASTRA_CONFIG_OK : ASTRA_CONFIG_IO;
+}
+
+static uint32_t config_launch_status(uint32_t status)
+{
+    switch (status) {
+    case ASTRA_CONFIG_OK: return ASTRA_STATUS_OK;
+    case ASTRA_CONFIG_INVALID: return ASTRA_STATUS_INVALID;
+    case ASTRA_CONFIG_NOT_FOUND: return ASTRA_STATUS_NOT_FOUND;
+    case ASTRA_CONFIG_ACCESS: return ASTRA_STATUS_ACCESS;
+    case ASTRA_CONFIG_IO: return ASTRA_STATUS_IO;
+    case ASTRA_CONFIG_NO_MEMORY: return ASTRA_STATUS_LIMIT;
+    case ASTRA_CONFIG_BUFFER_TOO_SMALL: return ASTRA_STATUS_NAME_TOO_LONG;
+    default: return ASTRA_STATUS_INVALID;
+    }
 }
 
 static uint32_t copy_default(const char *defaults, const char *store_path,
@@ -1362,10 +1414,10 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 continue;
             if ((held->rights & wanted->rights) != wanted->rights)
                 return ASTRA_STATUS_ACCESS;
-            if (private_config_root(entry, held->root,
-                                    ASTRA_CONFIG_OWNER_SYSTEM, root,
-                                    ASTRA_VFS_PATH_MAX) != ASTRA_CONFIG_OK)
-                return ASTRA_STATUS_LIMIT;
+            uint32_t config_status = private_config_root(entry, held->root,
+                ASTRA_CONFIG_OWNER_SYSTEM, NULL, root, ASTRA_VFS_PATH_MAX);
+            if (config_status != ASTRA_CONFIG_OK)
+                return config_launch_status(config_status);
             status = add_namespace_grant(out, count, wanted->name, held,
                                          root, wanted->rights, 0);
             if (status != ASTRA_STATUS_OK)
@@ -1382,17 +1434,20 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 continue;
             if ((held->rights & wanted->rights) != wanted->rights)
                 return ASTRA_STATUS_ACCESS;
-            if ((strcmp(wanted->name, ASTRA_CONFIG_CAPABILITY) == 0 ?
+            uint32_t config_status =
+                strcmp(wanted->name, ASTRA_CONFIG_CAPABILITY) == 0 ?
                     private_config_root(entry, held->root,
                                         entry->resident != 0u ?
                                             ASTRA_CONFIG_OWNER_SERVICE :
                                             ASTRA_CONFIG_OWNER_APPLICATION,
+                                        bundle_id,
                                         root,
                                         ASTRA_VFS_PATH_MAX) :
                     astra_config_scope_root(
                         held->root, ASTRA_CONFIG_OWNER_COMMAND, root,
-                        ASTRA_VFS_PATH_MAX)) != ASTRA_CONFIG_OK)
-                return ASTRA_STATUS_LIMIT;
+                        ASTRA_VFS_PATH_MAX);
+            if (config_status != ASTRA_CONFIG_OK)
+                return config_launch_status(config_status);
             status = add_namespace_grant(out, count, wanted->name, held, root,
                 wanted->rights, entry->delegates != 0u);
             if (status != ASTRA_STATUS_OK)
@@ -1511,10 +1566,11 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
             char *root = astra_vfs_path_storage_at(&path_storage, 1u);
 
             if (held != NULL) {
-                if (private_config_root(entry, held->root,
-                                        ASTRA_CONFIG_OWNER_APPLICATION, root,
-                                        ASTRA_VFS_PATH_MAX) != ASTRA_CONFIG_OK)
-                    return ASTRA_STATUS_LIMIT;
+                uint32_t config_status = private_config_root(entry,
+                    held->root, ASTRA_CONFIG_OWNER_APPLICATION, bundle_id,
+                    root, ASTRA_VFS_PATH_MAX);
+                if (config_status != ASTRA_CONFIG_OK)
+                    return config_launch_status(config_status);
                 status = add_namespace_grant(out, count, ASTRA_CONFIG_CAPABILITY, held,
                     root, held->rights, 0);
                 if (status != ASTRA_STATUS_OK)
