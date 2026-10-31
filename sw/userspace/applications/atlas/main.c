@@ -332,6 +332,23 @@ static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"Show Sidebar", 12u, ASTRA_MENU_PARENT(3u)},
     {"About Atlas", 11u, ASTRA_MENU_PARENT(4u)}
 };
+/* Menu rows invoke the same responders as toolbar, shortcuts and popups. */
+static const AstraContextMenuItem atlas_menu_commands[ATLAS_MENU_COUNT] = {
+    [ATLAS_MENU_NEW_WINDOW] = {"atlas.window", sizeof("atlas.window") - 1u, NULL},
+    [ATLAS_MENU_NEW] = {"atlas.new", sizeof("atlas.new") - 1u, NULL},
+    [ATLAS_MENU_OPEN] = {"atlas.open", sizeof("atlas.open") - 1u, NULL},
+    [ATLAS_MENU_REFRESH] = {"atlas.refresh", sizeof("atlas.refresh") - 1u, NULL},
+    [ATLAS_MENU_COPY] = {"atlas.copy", sizeof("atlas.copy") - 1u, NULL},
+    [ATLAS_MENU_CUT] = {"atlas.cut", sizeof("atlas.cut") - 1u, NULL},
+    [ATLAS_MENU_PASTE] = {"atlas.paste", sizeof("atlas.paste") - 1u, NULL},
+    [ATLAS_MENU_RENAME] = {"atlas.rename", sizeof("atlas.rename") - 1u, NULL},
+    [ATLAS_MENU_DELETE] = {"atlas.delete", sizeof("atlas.delete") - 1u, NULL},
+    [ATLAS_MENU_SORT_NAME] = {"atlas.sort.name", sizeof("atlas.sort.name") - 1u, NULL},
+    [ATLAS_MENU_SORT_SIZE] = {"atlas.sort.size", sizeof("atlas.sort.size") - 1u, NULL},
+    [ATLAS_MENU_SORT_KIND] = {"atlas.sort.kind", sizeof("atlas.sort.kind") - 1u, NULL},
+    [ATLAS_MENU_SORT_MODIFIED] = {"atlas.sort.modified", sizeof("atlas.sort.modified") - 1u, NULL},
+    [ATLAS_MENU_SIDEBAR] = {"atlas.sidebar", sizeof("atlas.sidebar") - 1u, NULL}
+};
 static uint32_t atlas_menu_sent[ATLAS_MENU_COUNT];
 static uint32_t atlas_menu_ready;
 
@@ -2288,7 +2305,8 @@ static AstraResult cut_query(void *opaque, AstraCommandState *state)
     AstraResult result = copy_query(opaque, state);
     state->label = "Cut";
     state->label_length = 3u;
-    state->enabled = state->enabled && writable_folder_root();
+    state->enabled = state->enabled && writable_folder_root() &&
+        worker == 0u && directory.status == ASTRA_VFS_OK;
     return result;
 }
 
@@ -2325,6 +2343,7 @@ static AstraResult rename_query(void *opaque, AstraCommandState *state)
     state->label = "Rename";
     state->label_length = 6u;
     state->enabled = state->enabled && writable_folder_root() &&
+        worker == 0u && directory.status == ASTRA_VFS_OK &&
         selection_count() == 1u;
     return result;
 }
@@ -2334,7 +2353,8 @@ static AstraResult delete_query(void *opaque, AstraCommandState *state)
     AstraResult result = selected_query(opaque, state);
     state->label = "Delete";
     state->label_length = 6u;
-    state->enabled = state->enabled && writable_folder_root();
+    state->enabled = state->enabled && writable_folder_root() &&
+        worker == 0u && directory.status == ASTRA_VFS_OK;
     return result;
 }
 
@@ -3157,7 +3177,8 @@ static AstraResult sort_query(void *opaque, AstraCommandState *state)
 {
     const AtlasSortCommand *command = opaque;
     *state = (AstraCommandState){command->label, command->label_length,
-        worker == 0u && visible_data && directory.status == ASTRA_VFS_OK,
+        recent_mode == 0u && worker == 0u && visible_data &&
+        directory.status == ASTRA_VFS_OK,
         sort_mode == command->key};
     return ASTRA_OK;
 }
@@ -3270,28 +3291,14 @@ static void menu_state(uint32_t row, int enabled, int checked)
         (checked ? ASTRA_MENU_CHECKED : 0u);
 }
 
+static const AstraCommandScope atlas_command_scope;
+
 static AstraResult menu_sync(void)
 {
-    uint32_t selected = selection_count() != 0u &&
-        (selected_kind == ASTRA_VFS_KIND_DIRECTORY ||
-         selected_kind == ASTRA_VFS_KIND_FILE ||
-         selected_kind == ASTRA_VFS_KIND_SYMLINK);
-    uint32_t writable = writable_folder_root() && worker == 0u &&
-        directory.status == ASTRA_VFS_OK;
     uint32_t active = recent_mode == 0u && worker == 0u && visible_data &&
         directory.status == ASTRA_VFS_OK;
     uint32_t changed = atlas_menu_ready == 0u;
 
-    menu_state(ATLAS_MENU_NEW, writable, 0);
-    menu_state(ATLAS_MENU_OPEN, selected && selection_count() == 1u, 0);
-    menu_state(ATLAS_MENU_COPY, selected && clipboard_service != ASTRA_INVALID_HANDLE, 0);
-    menu_state(ATLAS_MENU_CUT, writable && selected &&
-        clipboard_service != ASTRA_INVALID_HANDLE, 0);
-    menu_state(ATLAS_MENU_PASTE, writable && clipboard_has_file(), 0);
-    menu_state(ATLAS_MENU_RENAME, writable && selected &&
-        selection_count() == 1u, 0);
-    menu_state(ATLAS_MENU_DELETE, writable && selected, 0);
-    menu_state(ATLAS_MENU_REFRESH, worker == 0u && !volume_lost, 0);
     menu_state(ATLAS_MENU_SAVE_SEARCH, active &&
         browser.search_length != 0u, 0);
     menu_state(ATLAS_MENU_LIST, recent_mode == 0u,
@@ -3300,17 +3307,18 @@ static AstraResult menu_sync(void)
         browser.view_mode == ASTRA_FILE_PANEL_VIEW_GRID);
     menu_state(ATLAS_MENU_COLUMNS, recent_mode == 0u,
         browser.view_mode == ASTRA_FILE_PANEL_VIEW_COLUMNS);
-    menu_state(ATLAS_MENU_SORT_NAME, active,
-        sort_mode == ASTRA_DIRECTORY_SORT_NAME);
-    menu_state(ATLAS_MENU_SORT_SIZE, active,
-        sort_mode == ASTRA_DIRECTORY_SORT_SIZE);
-    menu_state(ATLAS_MENU_SORT_KIND, active,
-        sort_mode == ASTRA_DIRECTORY_SORT_KIND);
-    menu_state(ATLAS_MENU_SORT_MODIFIED, active,
-        sort_mode == ASTRA_DIRECTORY_SORT_MODIFIED);
     menu_state(ATLAS_MENU_HIDDEN, active, show_hidden != 0u);
     menu_state(ATLAS_MENU_PREVIEW, 1, preview_visible != 0u);
-    menu_state(ATLAS_MENU_SIDEBAR, 1, sidebar_visible != 0u);
+    for (uint32_t at = 0u; at < ATLAS_MENU_COUNT; ++at) {
+        const AstraContextMenuItem *command = &atlas_menu_commands[at];
+        if (command->command == NULL) continue;
+        AstraCommandState state;
+        AstraResult result = astra_interface_command_query(
+            &atlas_command_scope, command->command,
+            command->command_length, &state);
+        if (result != ASTRA_OK) return result;
+        menu_state(at, state.enabled, state.checked);
+    }
     for (uint32_t at = 0u; at < ATLAS_MENU_COUNT; ++at)
         if (atlas_menu_sent[at] != atlas_menu[at].flags)
             changed = 1u;
@@ -3362,23 +3370,54 @@ static AstraResult go_forward(void *opaque, const AstraCommandArguments *args)
                        navigation_index + 1u);
 }
 
-static AtlasCommands toolbar_command_context = {0};
-static const AstraCommand toolbar_command_table[] = {
+static AtlasCommands atlas_command_context = {0};
+static const AstraCommand atlas_command_table[] = {
     {"atlas.back", 10u, 0u, 0u, back_query, go_back,
-        &toolbar_command_context},
+        &atlas_command_context},
     {"atlas.forward", 13u, 0u, 0u, forward_query, go_forward,
-        &toolbar_command_context},
+        &atlas_command_context},
+    {"atlas.window", sizeof("atlas.window") - 1u, 0u, 0u,
+        new_window_query, new_window, &atlas_command_context},
+    {"atlas.new", 9u, 0u, 0u, menu_query, create_folder,
+        &atlas_command_context},
     {"atlas.folder", 12u, 0u, 0u, folder_query, create_folder,
-        &toolbar_command_context},
+        &atlas_command_context},
     {"atlas.open", 10u, 0u, 0u, open_query, open_selected,
-        &toolbar_command_context},
+        &atlas_command_context},
+    {"atlas.copy", 10u, 0u, 0u, copy_query, copy_selected,
+        &atlas_command_context},
+    {"atlas.cut", 9u, 0u, 0u, cut_query, cut_selected,
+        &atlas_command_context},
+    {"atlas.paste", 11u, 0u, 0u, paste_query, paste_into_current,
+        &atlas_command_context},
+    {"atlas.rename", 12u, 0u, 0u, rename_query, rename_selected,
+        &atlas_command_context},
     {"atlas.delete", 12u, 0u, 0u, delete_query, delete_selected,
-        &toolbar_command_context},
+        &atlas_command_context},
+    {"atlas.package", 13u, 0u, 0u, package_query, create_installer,
+        &atlas_command_context},
+    {"atlas.saved.open", sizeof("atlas.saved.open") - 1u, 0u, 0u,
+        saved_context_open_query, saved_context_open, &atlas_command_context},
+    {"atlas.saved.rename", sizeof("atlas.saved.rename") - 1u, 0u, 0u,
+        saved_context_rename_query, saved_context_rename, &atlas_command_context},
+    {"atlas.saved.remove", sizeof("atlas.saved.remove") - 1u, 0u, 0u,
+        saved_context_remove_query, saved_context_remove, &atlas_command_context},
+    {"atlas.sort.name", sizeof("atlas.sort.name") - 1u, 0u, 0u,
+        sort_query, sort_invoke, (void *)&sort_commands[0]},
+    {"atlas.sort.size", sizeof("atlas.sort.size") - 1u, 0u, 0u,
+        sort_query, sort_invoke, (void *)&sort_commands[1]},
+    {"atlas.sort.kind", sizeof("atlas.sort.kind") - 1u, 0u, 0u,
+        sort_query, sort_invoke, (void *)&sort_commands[2]},
+    {"atlas.sort.modified", sizeof("atlas.sort.modified") - 1u, 0u, 0u,
+        sort_query, sort_invoke, (void *)&sort_commands[3]},
+    {"atlas.sidebar", sizeof("atlas.sidebar") - 1u, 0u, 0u,
+        sidebar_query, sidebar_toggle, &atlas_command_context},
     {"atlas.refresh", 13u, 0u, 0u, refresh_query, refresh_directory,
-        &toolbar_command_context}
+        &atlas_command_context}
 };
-static const AstraCommandScope toolbar_command_scope = {
-    NULL, toolbar_command_table, 6u};
+static const AstraCommandScope atlas_command_scope = {
+    NULL, atlas_command_table,
+    sizeof(atlas_command_table) / sizeof(atlas_command_table[0])};
 static const AstraToolbarCommand toolbar_actions[] = {
     {"atlas.back", 10u, "Back", 4u,
         ASTRA_TOOLBAR_ICON_BACK, {0u, 0u}},
@@ -3433,13 +3472,13 @@ static AstraResult init_toolbar(AstraHandle gui)
 {
     AstraToolbarActionsInfo info = ASTRA_TOOLBAR_ACTIONS_INFO_INIT;
 
-    toolbar_command_context.gui = gui;
+    atlas_command_context.gui = gui;
     info.first_id = TOOLBAR_FIRST_ID;
     info.groups = toolbar_groups;
     info.group_count = sizeof(toolbar_groups) / sizeof(toolbar_groups[0]);
     info.actions = toolbar_actions;
     info.action_count = sizeof(toolbar_actions) / sizeof(toolbar_actions[0]);
-    info.scope = &toolbar_command_scope;
+    info.scope = &atlas_command_scope;
     if (astra_interface_toolbar_actions_control_count(&info) !=
             TOOLBAR_CONTROL_COUNT ||
         astra_interface_toolbar_actions_init(&toolbar, controls,
@@ -3448,27 +3487,15 @@ static AstraResult init_toolbar(AstraHandle gui)
     return ASTRA_OK;
 }
 
-static AstraResult menu_invoke(AstraHandle gui, uint32_t row)
+static AstraResult menu_invoke(AstraHandle gui,
+    const AstraCommandScope *scope, uint32_t row)
 {
+    if (row >= ATLAS_MENU_COUNT) return ASTRA_ERROR_INVALID_ARGUMENT;
+    const AstraContextMenuItem *command = &atlas_menu_commands[row];
+    if (command->command != NULL)
+        return astra_interface_command_invoke(scope, command->command,
+            command->command_length, command->arguments);
     switch (row) {
-    case ATLAS_MENU_NEW_WINDOW:
-        return new_window(NULL, NULL);
-    case ATLAS_MENU_NEW:
-        return create_folder(&toolbar_command_context, NULL);
-    case ATLAS_MENU_OPEN:
-        return open_selected(&toolbar_command_context, NULL);
-    case ATLAS_MENU_COPY:
-        return copy_selected(&toolbar_command_context, NULL);
-    case ATLAS_MENU_CUT:
-        return cut_selected(&toolbar_command_context, NULL);
-    case ATLAS_MENU_PASTE:
-        return paste_into_current(&toolbar_command_context, NULL);
-    case ATLAS_MENU_RENAME:
-        return rename_selected(&toolbar_command_context, NULL);
-    case ATLAS_MENU_DELETE:
-        return delete_selected(&toolbar_command_context, NULL);
-    case ATLAS_MENU_REFRESH:
-        return refresh_directory(NULL, NULL);
     case ATLAS_MENU_SAVE_SEARCH: {
         AstraSavedQuery query = ASTRA_SAVED_QUERY_INIT;
         char filename[ASTRA_VFS_NAME_MAX];
@@ -3490,12 +3517,6 @@ static AstraResult menu_invoke(AstraHandle gui, uint32_t row)
         return view_set(ASTRA_FILE_PANEL_VIEW_GRID);
     case ATLAS_MENU_COLUMNS:
         return view_set(ASTRA_FILE_PANEL_VIEW_COLUMNS);
-    case ATLAS_MENU_SORT_NAME:
-    case ATLAS_MENU_SORT_SIZE:
-    case ATLAS_MENU_SORT_KIND:
-    case ATLAS_MENU_SORT_MODIFIED:
-        return sort_invoke((void *)&sort_commands[
-            row - ATLAS_MENU_SORT_NAME], NULL);
     case ATLAS_MENU_HIDDEN:
         return show_hidden_set(!show_hidden);
     case ATLAS_MENU_PREVIEW: {
@@ -3514,8 +3535,6 @@ static AstraResult menu_invoke(AstraHandle gui, uint32_t row)
         }
         return result;
     }
-    case ATLAS_MENU_SIDEBAR:
-        return sidebar_toggle(NULL, NULL);
     case ATLAS_MENU_ABOUT: {
         AstraAlertInfo alert = ASTRA_ALERT_INFO_INIT;
 
@@ -3535,40 +3554,8 @@ static AstraResult menu_invoke(AstraHandle gui, uint32_t row)
 static AstraResult run(AstraHandle gui)
 {
     AstraContextMenu context_menu = ASTRA_CONTEXT_MENU_INIT;
-    AtlasCommands command_context = {gui};
     AstraContextMenuItem menu_items[6];
     uint16_t menu_parents[6] = {0u};
-    const AstraCommand commands[] = {
-        {"atlas.window", sizeof("atlas.window") - 1u, 0u, 0u,
-            new_window_query, new_window, &command_context},
-        {"atlas.new", 9u, 0u, 0u, menu_query, create_folder, &command_context},
-        {"atlas.folder", 12u, 0u, 0u, folder_query, create_folder, &command_context},
-        {"atlas.open", 10u, 0u, 0u, open_query, open_selected, &command_context},
-        {"atlas.copy", 10u, 0u, 0u, copy_query, copy_selected, &command_context},
-        {"atlas.cut", 9u, 0u, 0u, cut_query, cut_selected, &command_context},
-        {"atlas.paste", 11u, 0u, 0u, paste_query, paste_into_current, &command_context},
-        {"atlas.rename", 12u, 0u, 0u, rename_query, rename_selected, &command_context},
-        {"atlas.delete", 12u, 0u, 0u, delete_query, delete_selected, &command_context},
-        {"atlas.package", 13u, 0u, 0u, package_query, create_installer, &command_context},
-        {"atlas.saved.open", sizeof("atlas.saved.open") - 1u, 0u, 0u,
-            saved_context_open_query, saved_context_open, &command_context},
-        {"atlas.saved.rename", sizeof("atlas.saved.rename") - 1u, 0u, 0u,
-            saved_context_rename_query, saved_context_rename, &command_context},
-        {"atlas.saved.remove", sizeof("atlas.saved.remove") - 1u, 0u, 0u,
-            saved_context_remove_query, saved_context_remove, &command_context},
-        {"atlas.sort.name", sizeof("atlas.sort.name") - 1u, 0u, 0u,
-            sort_query, sort_invoke, (void *)&sort_commands[0]},
-        {"atlas.sort.size", sizeof("atlas.sort.size") - 1u, 0u, 0u,
-            sort_query, sort_invoke, (void *)&sort_commands[1]},
-        {"atlas.sort.kind", sizeof("atlas.sort.kind") - 1u, 0u, 0u,
-            sort_query, sort_invoke, (void *)&sort_commands[2]},
-        {"atlas.sort.modified", sizeof("atlas.sort.modified") - 1u, 0u, 0u,
-            sort_query, sort_invoke, (void *)&sort_commands[3]},
-        {"atlas.sidebar", sizeof("atlas.sidebar") - 1u, 0u, 0u,
-            sidebar_query, sidebar_toggle, &command_context}};
-    const AstraCommandScope command_scope = {
-        &toolbar_command_scope, commands,
-        sizeof(commands) / sizeof(commands[0])};
     static const AstraCommandShortcut shortcuts[] = {
         {0x06u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.copy", sizeof("atlas.copy") - 1u},
         {0x1bu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.cut", sizeof("atlas.cut") - 1u},
@@ -3716,7 +3703,7 @@ static AstraResult run(AstraHandle gui)
                     (atlas_menu[row].flags & ASTRA_MENU_PARENT_MASK) != 0u &&
                     (atlas_menu[row].flags & ASTRA_MENU_DISABLED) == 0u &&
                     row != ATLAS_MENU_SEPARATOR) {
-                    AstraResult invoked = menu_invoke(gui, row);
+                    AstraResult invoked = menu_invoke(gui, &atlas_command_scope, row);
                     if (invoked != ASTRA_OK) {
                         (void)astra_log_failure("atlas menu action",
                             (uint32_t)(-invoked));
@@ -3780,7 +3767,7 @@ static AstraResult run(AstraHandle gui)
                 if (result != ASTRA_OK) return result;
                 if (focused != 1u + ASTRA_FILE_PANEL_SEARCH) {
                     uint8_t shortcut_handled = 0u;
-                    result = astra_interface_command_shortcut(&command_scope,
+                    result = astra_interface_command_shortcut(&atlas_command_scope,
                         event.data.key.usage, event.data.key.modifiers,
                         shortcuts, sizeof(shortcuts) / sizeof(shortcuts[0]),
                         &shortcut_handled);
@@ -3844,7 +3831,7 @@ static AstraResult run(AstraHandle gui)
                         menu_parents[at] = 0u;
                     }
                     AstraResult opened = astra_interface_context_menu_open_tree(
-                        &context_menu, &window, &command_scope, menu_items,
+                        &context_menu, &window, &atlas_command_scope, menu_items,
                         menu_parents, 4u, frame.x, frame.y + frame.height);
                     if (opened != ASTRA_OK)
                         (void)astra_log_failure("atlas sort menu", (uint32_t)(-opened));
@@ -4054,7 +4041,7 @@ static AstraResult run(AstraHandle gui)
                         menu_parents[2] = 0u;
                         AstraResult opened =
                             astra_interface_context_menu_open_tree(
-                                &context_menu, &window, &command_scope,
+                                &context_menu, &window, &atlas_command_scope,
                                 menu_items, menu_parents, 3u,
                                 event.data.pointer.x,
                                 event.data.pointer.y);
@@ -4119,7 +4106,7 @@ static AstraResult run(AstraHandle gui)
                     } else if (selected_path[0] != '\0') {
                         menu_items[count++] = (AstraContextMenuItem){"atlas.open", 10u, NULL};
                         menu_items[count++] = (AstraContextMenuItem){"atlas.copy", 10u, NULL};
-                        if (selected_bundle(&command_context))
+                        if (selected_bundle(&atlas_command_context))
                             menu_items[count++] = (AstraContextMenuItem){"atlas.package", 13u, NULL};
                         if (writable_folder_root()) {
                             menu_items[count++] = (AstraContextMenuItem){"atlas.cut", 9u, NULL};
@@ -4129,7 +4116,7 @@ static AstraResult run(AstraHandle gui)
                     }
                     if (count != 0u) {
                         AstraResult opened = astra_interface_context_menu_open_tree(
-                            &context_menu, &window, &command_scope, menu_items,
+                            &context_menu, &window, &atlas_command_scope, menu_items,
                             menu_parents, count, event.data.pointer.x,
                             event.data.pointer.y);
                         if (opened != ASTRA_OK)

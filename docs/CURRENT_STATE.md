@@ -2,6 +2,30 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas command reuse checkpoint, 2026-10-31: Atlas now declares one responder
+table for toolbar, shortcuts, context menus, and system menu bar. Menu rows
+query and invoke the same Interface Kit commands, replacing duplicate action
+dispatch and enabled/checked policy. Cut, Rename, and Delete responders now
+disable during a file worker or failed directory load; sort responders remain
+disabled in Recent. No Atlas-specific control or rendering path was added.
+Haiku read-only references: `src/kits/interface/MenuBar.cpp` keeps interaction
+in the shared menu kit; `src/kits/tracker/ContainerWindow.cpp` contributes
+file commands through that kit. Astra keeps app command IDs but delegates
+resolution and invocation to its existing Interface Kit responder chain.
+Beast Atlas host test and MC68040 build passed. Focused DE25 install reported
+`ASTRA_DE25_DEV_INSTALL PASS guest=1 host=0 removed=0`; RFB opened DH0,
+invoked File > Refresh and View > Sort by Size, observed the Size checkmark,
+then opened a new HOME window via File > New Window. SHA-verified raw captures
+are archived on Beast under
+`/mnt/Documents/astra68/atlas-command-menu-20261031/`; final View menu and
+new HOME window SHA-256 values are
+`4d1cbf42cc00443a2a018835f959b38d07552799427a896d8dd97981e72c06e7`
+and `32ae9290e12bf40d90276510765a74f43512826718613245d6211d38748af2a6`.
+Board trial files were removed. Astra, audio, and remote desktop services
+remain active with zero restarts and 8.1 GiB free. Physical USB transfer gate
+still awaits attached media; platform-owned Help and NDK menu skeleton remain
+open design gaps.
+
 Shared Window menu checkpoint, 2026-10-31: Display now contributes a Window
 heading to every active app's system menu bar. Its common Menu control shows
 Send to Back, Bring All to Front, Minimize to Dock, Zoom, and a live list of
