@@ -584,15 +584,15 @@ static AstraResult browser_update_places(void)
             astra_runtime_deallocate(browser_place_items);
         astra_volume_snapshot_close(&sidebar_volumes);
         astra_saved_query_snapshot_close(&sidebar_queries);
-        astra_recent_item_snapshot_close(&recent_snapshot);
-        astra_runtime_deallocate(recent_rows);
-        astra_runtime_deallocate(recent_cells);
         browser_places = places;
         browser_place_items = items;
         sidebar_volumes = next;
         sidebar_queries = queries;
         saved_place_start = query_start;
-        result = update_window_title();
+        if (recent_mode != 0u)
+            result = astra_interface_control_set_value(&ui,
+                BROWSER_CONTROL(ASTRA_FILE_PANEL_PLACES_LIST), 1);
+        if (result == ASTRA_OK) result = update_window_title();
     } else {
         astra_runtime_deallocate(places);
         astra_runtime_deallocate(items);

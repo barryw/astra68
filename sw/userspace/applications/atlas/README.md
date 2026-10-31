@@ -152,6 +152,11 @@ mutable. Filesystem Kit's document storage and stack budget gate also cover
 saved queries. Haiku read-only references: `src/servers/registrar/RecentEntries.cpp`
 for centralized recent-entry state and `src/kits/tracker/PoseView.cpp` for
 opening entries through the same file actions.
+The Table borrows Recent Items rows and strings until `recent_enter` replaces
+its binding or Atlas exits. Sidebar Places refresh owns only its own rows and
+snapshots; it must not release the Recent Items binding. When Recent is active,
+Atlas restores that virtual Place through the shared List selection API after
+refresh. No separate Recent Items control or selection renderer is used.
 
 Interface Kit 12.7 binds the shared Outline Table to File Panel's directory
 outline model. It composes Table columns, sorting, C1 selection, and Tree
