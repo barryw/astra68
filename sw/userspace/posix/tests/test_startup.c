@@ -1,9 +1,12 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <assert.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <astra/posix.h>
 #include <astra/runtime.h>
@@ -19,11 +22,42 @@ void astra_posix_socket_prepare(void)
 }
 
 extern char **environ;
+
+/* Host libc keeps its own environment; this test must inspect Astra's copy. */
+char *
+getenv(const char *name)
+{
+    size_t length = strlen(name);
+
+    for (char **entry = environ; entry != NULL && *entry != NULL; ++entry)
+        if (strncmp(*entry, name, length) == 0 && (*entry)[length] == '=')
+            return *entry + length + 1u;
+    return NULL;
+}
+
+int
+unsetenv(const char *name)
+{
+    size_t length = strlen(name);
+
+    for (char **entry = environ; entry != NULL && *entry != NULL; ++entry) {
+        if (strncmp(*entry, name, length) != 0 || (*entry)[length] != '=')
+            continue;
+        do {
+            *entry = entry[1];
+        } while (*entry++ != NULL);
+        break;
+    }
+    return 0;
+}
+
 static int entered;
 static int signal_prepared;
 static int program_calls;
 static int ready_calls;
 static int closed_calls;
+static int directory_calls;
+static int reject_directory;
 static uint32_t ready_result;
 static const AstraStartupInfo *seen_startup;
 static const AstraStartupCapability bootstrap = { .handle = 37u };
@@ -34,7 +68,8 @@ static char *arguments[] = {
 static char *environment[] = {
     "HOME=/home", "PWD=/dh0/projects/astra", "SHELL=/commands/zsh",
     "TMPDIR=/ram0/tmp", "PATH=/local/commands:/commands",
-    "TERM=astra-256color", "OLDPWD=relative:literal", NULL
+    "TERM=astra-256color", "OLDPWD=relative:literal",
+    "ASTRA_INITIAL_DIRECTORY=/usb2", NULL
 };
 static _Alignas(ASTRA_STARTUP_BLOCK_SIZE) struct {
     AstraStartupInfo info;
@@ -44,7 +79,7 @@ static _Alignas(ASTRA_STARTUP_BLOCK_SIZE) struct {
 } startup_block;
 static _Alignas(ASTRA_STARTUP_BLOCK_SIZE) struct {
     uint32_t arguments[8];
-    uint32_t environment[8];
+    uint32_t environment[9];
     char text[512];
 } payload;
 
@@ -53,6 +88,18 @@ astra_posix_start(const AstraStartupInfo *startup)
 {
     seen_startup = startup;
     environ = environment;
+}
+
+int
+chdir(const char *path)
+{
+    assert(strcmp(path, "/usb2") == 0);
+    ++directory_calls;
+    if (reject_directory != 0) {
+        errno = ENOENT;
+        return -1;
+    }
+    return 0;
 }
 
 uint32_t
@@ -105,6 +152,7 @@ main(int argc, char **argv)
         assert(strcmp(environ[5], "TERM=astra-256color") == 0);
         assert(strcmp(environ[6], "OLDPWD=relative:literal") == 0);
         assert(environ[7] == NULL);
+        assert(getenv("ASTRA_INITIAL_DIRECTORY") == NULL);
         assert(argv != arguments);
         assert(environ != environment);
         argv[0][0] = 'V';
@@ -126,7 +174,7 @@ main(int argc, char **argv)
             memcpy(payload.text + used, arguments[index], length);
             used += (uint32_t)length;
         }
-        for (uint32_t index = 0u; index < 7u; ++index) {
+        for (uint32_t index = 0u; index < 8u; ++index) {
             size_t length = strlen(environment[index]) + 1u;
 
             payload.environment[index] = (uint32_t)(uintptr_t)(payload.text + used);
@@ -144,7 +192,7 @@ main(int argc, char **argv)
             .capabilities_address = (uint32_t)(uintptr_t)startup_block.capabilities,
             .argc = 7u,
             .argv_address = (uint32_t)(uintptr_t)payload.arguments,
-            .environment_count = 7u,
+            .environment_count = 8u,
             .environment_address = (uint32_t)(uintptr_t)payload.environment,
             .vector_data_address = (uint32_t)(uintptr_t)&payload,
             .vector_data_size = sizeof(payload.arguments) +
@@ -159,6 +207,7 @@ main(int argc, char **argv)
         assert(seen_startup == startup);
         assert(signal_prepared == 1);
         assert(program_calls == 1 && ready_calls == 1 && closed_calls == 1);
+        assert(directory_calls == 1);
 
         ready_result = ASTRA_SYSCALL_INVALID_ARGUMENT;
         assert(astra_posix_enter(startup, main) == 1);
@@ -169,6 +218,16 @@ main(int argc, char **argv)
         startup->total_size = ASTRA_STARTUP_INFO_SIZE;
         assert(astra_posix_enter(startup, main) == 73);
         assert(program_calls == 2 && ready_calls == 2 && closed_calls == 2);
+        assert(directory_calls == 3);
+        reject_directory = 1;
+        assert(astra_posix_enter(startup, main) == 1);
+        assert(directory_calls == 4 && program_calls == 2);
+        reject_directory = 0;
+        char *relative = strchr((char *)(uintptr_t)payload.environment[7], '=');
+        assert(relative != NULL);
+        relative[1] = 'x';
+        assert(astra_posix_enter(startup, main) == 1);
+        assert(directory_calls == 4 && program_calls == 2);
         assert(astra_posix_enter(NULL, main) == 1);
         assert(program_calls == 2);
         startup->vector_data_address = 1u;

@@ -66,10 +66,29 @@ frames; the temporary query was removed afterward. Beast host tests and
 MC68040 builds passed. Verified evidence:
 `/mnt/Documents/astra68/atlas-query-place-20261031/`.
 
+## DE25 physical USB gate
+
+Evidence: `/mnt/Documents/astra68/atlas-usb-physical-20261031/` and
+`/mnt/Documents/astra68/atlas-usb-terminal-20261031/` on Beast. Selected raw
+frames matched board SHA-256; both archives contain verified checksums and PNGs.
+
+The attached SanDisk Cruzer exposes exFAT `CLIEXFAT` at `/usb0` and FAT32
+`CLIFAT` at `/usb2`. Both appeared on Desktop and in Atlas Places with their
+volume labels. Atlas browsed each root, created and renamed a folder on
+exFAT, copied it to FAT32 through Edit > Copy/Paste, moved only trial folders
+to each volume's Trash, and emptied those trial items. FAT32's existing
+`ChocolateDoom.app` remained. Right-click Unmount removed the exFAT icon and
+made its open Atlas window report the unavailable volume; native `mount 11`
+restored the icon and `/usb0`. Terminal opened from Atlas in both USB roots:
+`pwd` returned the selected path and external `ls` completed. `cd /dh0`,
+`pwd`, and `ls` passed as a fixed-volume regression. Board trial captures were
+removed; Astra, audio host, and remote desktop remained active with zero Astra
+restarts and 8.2 GiB free.
+
 ## Still unproven or incomplete
 
-- Physical USB and optical browsing, hotplug, ejection, and removal behavior
-  need attached devices. DE25 currently sees only its USB root hub.
+- Physical optical browsing/ejection and cable-level USB hotplug were not
+  exercised in this gate. No readable optical drive was attached.
 - Saved Searches still persist only a case-insensitive name substring scoped
   to one directory. Shared metadata query code can filter by modification
   time, but persisted predicates and dynamic local-day refresh do not yet

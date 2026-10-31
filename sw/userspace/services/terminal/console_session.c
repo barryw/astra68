@@ -46,11 +46,8 @@ typedef struct ConsoleSession {
     uint32_t shutdown_reply;
     uint32_t shutdown_transaction;
     uint64_t present_deadline;
-    /* The shell's CWD: a grant derived from WORK's (storage protocol 29),
-     * so the shell and every command it forks hold their working directory
-     * as a host client of its own beside WORK. It narrows nothing: the
-     * shell is also handed WORK itself, the delegable base grant. It is
-     * owned by the terminal's WORK session and kept for the session. */
+    /* Transferable WORK seed for shell CWD. The shell enters an optional
+     * removable directory itself; volume grants cannot be delegated. */
     uint32_t cwd_grant;
     uint32_t config_grant;
     int running;
@@ -104,44 +101,6 @@ static void write_hex32(uint32_t value)
     for (uint32_t shift = 32u; shift != 0u; shift -= 4u)
         astra_terminal_putc(&session.terminal,
                            digits[(value >> (shift - 4u)) & 0x0fu]);
-}
-
-/* Resolve through the same Filesystem Kit namespace as ordinary file access.
- * The answering grant, including removable-volume identity, becomes CWD.
- * Haiku Terminal's Shell.cpp likewise applies its selected directory at shell
- * launch rather than translating it into a shell command. */
-static uint32_t derive_initial_directory(const char *path,
-    uint32_t *rights)
-{
-    AstraVfsPathStorage wire ASTRA_AUTO_VFS_PATH_STORAGE =
-        astra_vfs_path_storage_open(1u);
-    const AstraAssignTable *assigns = NULL;
-    const AstraAssign *assign = NULL;
-    AstraVfsClient *client = NULL;
-    AstraVfsDirEntry entry = {0};
-    void *owner = NULL;
-    uint32_t status;
-
-    if (wire.bytes == NULL) return ASTRA_VFS_ERR_LIMIT;
-    status = astra_process_vfs_namespace_acquire(&assigns, &owner);
-    if (status != ASTRA_VFS_OK) return status;
-    status = astra_vfs_assign_stat(assigns, path, ASTRA_RIGHT_READ,
-        astra_process_vfs_assign_client, NULL, wire.bytes,
-        ASTRA_VFS_PATH_MAX, &entry, &client, &assign, NULL);
-    if (status == ASTRA_VFS_OK && entry.kind != ASTRA_VFS_KIND_DIRECTORY)
-        status = ASTRA_VFS_ERR_INVALID;
-    if (status == ASTRA_VFS_OK &&
-        (client == NULL || assign == NULL || wire.bytes[0] != '/'))
-        status = ASTRA_VFS_ERR_INVALID;
-    if (status == ASTRA_VFS_OK) {
-        *rights = assign->rights;
-        status = astra_vfs_grant_derive(client, wire.bytes + 1u,
-            ASTRA_VFS_GRANT_READ |
-                ((*rights & ASTRA_RIGHT_WRITE) != 0u ?
-                    ASTRA_VFS_GRANT_WRITE : 0u), &session.cwd_grant);
-    }
-    astra_process_vfs_namespace_release(owner);
-    return status;
 }
 
 static uint32_t launch_grants(AstraLaunchGrant *grants)
@@ -246,27 +205,22 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
         const AstraAssign *work = astra_assign_lookup(
             astra_process_vfs_assigns(), "WORK");
 
-        if (work != NULL || session.backend.initial_directory != NULL) {
-            AstraVfsClient *client = work != NULL ?
-                astra_process_vfs_client_for(work) : NULL;
-            uint32_t cwd_rights = work != NULL ? work->rights : 0u;
+        if (work != NULL) {
+            AstraVfsClient *client = astra_process_vfs_client_for(work);
+            uint32_t cwd_rights = work->rights;
 
             if (count >= ASTRA_LAUNCH_GRANT_MAX)
                 return UINT32_MAX;
             /* A provider-enforced WORK gives the shell a CWD grant of its
              * own (no DELEGATE, though the shell's WORK has it); any other
              * WORK is shared as it is. */
-            if (session.backend.initial_directory == NULL && client == NULL)
-                return UINT32_MAX;
+            if (client == NULL) return UINT32_MAX;
             if (session.cwd_grant == 0u &&
-                (session.backend.initial_directory != NULL ?
-                    derive_initial_directory(session.backend.initial_directory,
-                        &cwd_rights) :
-                    astra_vfs_grant_derive(client, work->root,
+                astra_vfs_grant_derive(client, work->root,
                         ASTRA_VFS_GRANT_READ |
                             ((work->rights & ASTRA_RIGHT_WRITE) != 0u ?
                                 ASTRA_VFS_GRANT_WRITE : 0u),
-                        &session.cwd_grant)) != ASTRA_VFS_OK)
+                        &session.cwd_grant) != ASTRA_VFS_OK)
                 return UINT32_MAX;
             astra_capability_name_set(grants[count].name, "CWD");
             grants[count].handle = session.cwd_grant;
@@ -516,30 +470,39 @@ static uint32_t run_zsh(void)
 {
     static const char *const argv[] = {"zsh"};
     static const char *const environment_names[] = {
-        "HOME", "PATH", "SHELL", "TERM", "TMPDIR", "VIMRUNTIME"
+        "HOME", "PATH", "SHELL", "TERM", "TMPDIR", "VIMRUNTIME",
+        "ASTRA_INITIAL_DIRECTORY"
     };
-    static const char *const environment_values[] = {
+    const char *environment_values[] = {
         "/home", "/local/commands:/commands", "/commands/zsh", "astra-256color",
-        "/tmp", "/libs/vim/runtime"
+        "/tmp", "/libs/vim/runtime", session.backend.initial_directory
     };
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX] = {0};
     AstraLaunchArguments arguments;
     AstraVfsReadSource source = ASTRA_VFS_READ_SOURCE_INIT;
     AstraVfsReadSource interpreter_source = ASTRA_VFS_READ_SOURCE_INIT;
     char argument_storage[16];
-    char environment_storage[160];
+    char environment_storage[ASTRA_LAUNCH_ENVIRONMENT_BYTES];
     AstraProcessInfo crash = {0};
     uint32_t grant_count;
     uint32_t exit_status = SESSION_NOT_RUN;
     uint32_t status;
 
-    if (astra_launch_arguments_pack(
-            &arguments, argument_storage, sizeof(argument_storage),
-            ASTRA_LAUNCH_SOURCE_SHELL, 1u, argv) != ASTRA_SYSCALL_OK ||
-        astra_launch_environment_pack(
-            &arguments, environment_storage, sizeof(environment_storage),
-            6u, environment_names, environment_values) != ASTRA_SYSCALL_OK)
+    status = astra_launch_arguments_pack(
+        &arguments, argument_storage, sizeof(argument_storage),
+        ASTRA_LAUNCH_SOURCE_SHELL, 1u, argv);
+    if (status != ASTRA_SYSCALL_OK) {
+        write_line("zsh: arguments do not fit");
         return SESSION_NOT_RUN;
+    }
+    status = astra_launch_environment_pack(
+        &arguments, environment_storage, sizeof(environment_storage),
+        session.backend.initial_directory != NULL ? 7u : 6u,
+        environment_names, environment_values);
+    if (status != ASTRA_SYSCALL_OK) {
+        write_line("zsh: working directory does not fit launch environment");
+        return SESSION_NOT_RUN;
+    }
     status = astra_vfs_read_source_open(
         &source, astra_process_vfs_assigns(), "/commands/zsh",
         astra_process_vfs_assign_client, NULL);

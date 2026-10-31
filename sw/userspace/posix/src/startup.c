@@ -6,11 +6,14 @@
 #include <astra/service.h>
 #include <astra/status.h>
 
+#include <errno.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 /* POSIX process state is owned here: startup installs the copied environment
  * before user main runs, and exec replaces it atomically with the image. */
@@ -97,6 +100,23 @@ astra_posix_enter(const AstraStartupInfo *startup, AstraPosixMain program)
     if (argv == NULL)
         return 1;
     environ = environment;
+    const char *initial_directory = getenv("ASTRA_INITIAL_DIRECTORY");
+    if (initial_directory != NULL) {
+        int directory_status;
+
+        if (initial_directory[0] != '/') {
+            errno = EINVAL;
+            directory_status = -1;
+        } else
+            directory_status = chdir(initial_directory);
+        if (directory_status != 0) {
+            fprintf(stderr, "startup: cannot enter directory '%s': %s\n",
+                    initial_directory, strerror(errno));
+            return 1;
+        }
+        if (unsetenv("ASTRA_INITIAL_DIRECTORY") != 0)
+            return 1;
+    }
     bootstrap = astra_startup_capability(startup,
                                          ASTRA_CAPABILITY_SERVICE_READY);
     if (bootstrap != NULL) {

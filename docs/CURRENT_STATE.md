@@ -2,6 +2,35 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas physical USB and Terminal CWD checkpoint, 2026-10-31: DE25 detected
+SanDisk Cruzer exFAT `CLIEXFAT` `/usb0` and FAT32 `CLIFAT` `/usb2`. Desktop and
+Atlas displayed both labels. Atlas browsed roots, created and renamed a folder
+on exFAT, copied it to FAT32 through GUI Copy/Paste, moved only trial folders
+to Trash, and emptied them. Existing `ChocolateDoom.app` on FAT32 remained.
+Desktop Unmount removed exFAT icon and made its open Atlas window report the
+unavailable volume; native `mount 11` restored `/usb0` and icon. Terminal's
+Open Here initially failed on USB: public volume grants are nondelegable, so
+passing a derived removable CWD grant to zsh was refused. Terminal now passes
+transferable WORK CWD seed and selected absolute path in an internal launch
+environment entry; shared POSIX startup calls native `chdir` before program
+main and removes the entry. Haiku read-only `src/apps/terminal/Shell.cpp`
+`chdir(parameters.CurrentDirectory())` before `execve` informed child-side
+directory setup. Targeted `libc.library.4` and Terminal builds/install passed.
+The first hardware candidate exposed launch packer's 4096-byte environment
+capacity contract; Terminal now uses that exact capacity and reports an
+oversized path. POSIX startup host test covers directory entry, variable
+removal, unavailable path, and relative-path rejection. Final DE25 RFB showed
+Terminal `pwd` `/usb0`, external `ls` returning to prompt, `pwd` `/usb2` plus
+`ChocolateDoom.app`, and DH0 `pwd`/`ls` regression. The final exact-source Kit
+and Terminal install repeated the FAT32 `pwd`/`ls` gate. Board/Beast capture hashes
+matched; verified raw/PNG archives are
+`/mnt/Documents/astra68/atlas-usb-physical-20261031/` and
+`/mnt/Documents/astra68/atlas-usb-terminal-20261031/`. Trial board files and
+helper removed. Astra, audio host, and remote desktop active, zero Astra
+restarts, 8.2 GiB free. Physical optical and cable-level USB hotplug remain
+unqualified; persisted query predicates and dynamic `Changed today` remain
+incomplete.
+
 Atlas virtual Place refresh checkpoint, 2026-10-31: Repeated Atlas repaint
 called shared File Panel `set_directory` with unchanged path, which reselected
 DH0 after a Saved Search opened. Interface Kit now preserves a selected virtual
