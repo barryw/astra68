@@ -55,6 +55,11 @@ DE25 install passed. Astra, HDMI audio, and remote desktop remained active,
 with zero Astra restarts and 8.2 GiB free. Trial captures and helper were
 removed from the board.
 
+Recent Items now refreshes Places selection through the same result-view path
+as Saved Searches. DE25 RFB showed Recent highlighted and eight Name/Location
+rows after a targeted Atlas install. Board/Beast capture hashes matched;
+verified evidence: `/mnt/Documents/astra68/atlas-recent-selection-20261031/`.
+
 ## Still unproven or incomplete
 
 - Physical USB and optical browsing, hotplug, ejection, and removal behavior

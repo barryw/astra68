@@ -2,6 +2,17 @@
 
 Status: active continuation map, 2026-10-31
 
+Atlas Recent selection checkpoint, 2026-10-31: Recent Items and Saved Searches
+now finish the same result-view transition through the existing Places refresh;
+the duplicate Saved Search refresh was removed. No new Atlas control or
+filesystem mechanism was added. Beast MC68040 Atlas build and host tests passed.
+Targeted Atlas DE25 install passed. RFB showed Recent highlighted in Places and
+eight Name/Location rows. Board and Beast raw-frame SHA-256 matched; verified
+raw/PNG evidence is at
+`/mnt/Documents/astra68/atlas-recent-selection-20261031/`. Trial files were
+removed from the board. Astra, HDMI audio host, and remote desktop remained
+active with zero Astra restarts and 8.2 GiB free.
+
 Atlas shared query/result checkpoint, 2026-10-31: Shared directory snapshot
 walking now visits nested entries without following symlinks and supports
 cancellation and cleanup after errors. Shared directory query code filters by

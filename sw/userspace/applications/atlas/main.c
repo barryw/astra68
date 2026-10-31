@@ -1832,6 +1832,7 @@ static AstraResult result_view_show(uint32_t mode)
     if (result == ASTRA_OK) result = browser_update_status();
     if (result == ASTRA_OK) result = browser_update_space();
     if (result == ASTRA_OK) result = update_window_title();
+    if (result == ASTRA_OK) result = browser_update_places();
     return result;
 }
 
@@ -2036,9 +2037,7 @@ static AstraResult open_saved_query(const AstraSavedQuery *query)
     active_query = selected;
     (void)astra_string_copy(active_query_label,
         sizeof(active_query_label), selected.label);
-    result = result_view_show(ATLAS_RESULT_QUERY);
-    if (result == ASTRA_OK) result = browser_update_places();
-    return result;
+    return result_view_show(ATLAS_RESULT_QUERY);
 }
 
 static const AstraSavedQuery *saved_query_named(const char *filename)
