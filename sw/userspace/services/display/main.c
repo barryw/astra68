@@ -362,6 +362,7 @@ typedef struct DisplayState {
     uint8_t dock_error_pin_change;
     uint32_t dock_press_pin;
     DisplayDockPins dock_pins;
+    uint32_t dock_pins_generation;
     AstraConfig dock_config;
     AstraProcessFilesystem dock_files;
     uint8_t dock_config_ready;
@@ -1235,6 +1236,11 @@ static uint32_t dock_pins_save(DisplayState *state)
                 "pinned", 0u, encoded) == ASTRA_CONFIG_OK ?
             ASTRA_STATUS_OK : ASTRA_STATUS_IO;
     }
+    if (status == ASTRA_STATUS_OK) {
+        ++state->dock_pins_generation;
+        if (state->dock_pins_generation == 0u)
+            state->dock_pins_generation = 1u;
+    }
     astra_runtime_deallocate(encoded);
     return status;
 }
@@ -1278,6 +1284,7 @@ done:
 static void dock_pins_open(DisplayState *state, const AstraStartupInfo *startup)
 {
     uint32_t count = 0u, length = 0u;
+    state->dock_pins_generation = 1u;
     uint32_t status = astra_config_open_system(startup, 1u,
         ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
         &state->dock_config, NULL);
@@ -1358,6 +1365,54 @@ static uint32_t dock_pin_move(DisplayState *state, uint32_t from,
     if (status != ASTRA_STATUS_OK)
         (void)display_dock_pins_move(&state->dock_pins, to, from);
     return status;
+}
+
+static uint32_t dock_settings_reply(DisplayState *state,
+    const AstraGuiDockSettingsRequest *request, uint32_t reply_handle,
+    int *changed)
+{
+    AstraGuiDockSettingsReply reply = {0};
+    uint32_t status = ASTRA_STATUS_INVALID;
+    *changed = 0;
+    if (request->action == ASTRA_GUI_DOCK_QUERY &&
+        request->target == 0u && request->generation == 0u &&
+        request->index <= state->dock_pins.count) {
+        status = ASTRA_STATUS_OK;
+    } else if ((request->action == ASTRA_GUI_DOCK_MOVE ||
+                request->action == ASTRA_GUI_DOCK_REMOVE) &&
+               request->generation == state->dock_pins_generation &&
+               request->index < state->dock_pins.count &&
+               (request->action == ASTRA_GUI_DOCK_REMOVE ?
+                    request->target == 0u :
+                    request->target < state->dock_pins.count)) {
+        status = request->action == ASTRA_GUI_DOCK_MOVE ?
+            dock_pin_move(state, request->index, request->target) :
+            dock_pin_toggle(state,
+                state->dock_pins.entries[request->index].id,
+                state->dock_pins.entries[request->index].name,
+                state->dock_pins.entries[request->index].path);
+        *changed = status == ASTRA_STATUS_OK &&
+            (request->action == ASTRA_GUI_DOCK_REMOVE ||
+             request->index != request->target);
+    } else if (request->action != ASTRA_GUI_DOCK_QUERY &&
+               request->generation != state->dock_pins_generation)
+        status = ASTRA_STATUS_BUSY;
+    astra_message_header_set(&reply.header, sizeof(reply),
+        ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION,
+        ASTRA_GUI_DOCK_SETTINGS_REPLY, request->header.transaction_id);
+    reply.status = status;
+    reply.count = state->dock_pins.count;
+    reply.generation = state->dock_pins_generation != 0u ?
+        state->dock_pins_generation : 1u;
+    if (status == ASTRA_STATUS_OK &&
+        request->action == ASTRA_GUI_DOCK_QUERY &&
+        request->index < state->dock_pins.count) {
+        const DisplayDockPin *pin = &state->dock_pins.entries[request->index];
+        reply.online = pin->online;
+        (void)astra_string_copy(reply.id, sizeof(reply.id), pin->id);
+        (void)astra_string_copy(reply.name, sizeof(reply.name), pin->name);
+    }
+    return astra_port_send(reply_handle, &reply, sizeof(reply), NULL, 0u);
 }
 
 static int dock_same_app(const DisplaySession *first,
@@ -7326,6 +7381,7 @@ static void receive_open(uint32_t device, uint32_t irq,
         AstraGuiOpenWindow open;
         AstraGuiFontMeasureRequest measure;
         AstraGuiOpenSession session;
+        AstraGuiDockSettingsRequest dock_settings;
     } packet = {0};
     AstraGuiOpenWindow request = {0};
     DisplayWindow candidate = {0};
@@ -7362,6 +7418,27 @@ static void receive_open(uint32_t device, uint32_t irq,
     }
     if (status != ASTRA_SYSCALL_OK)
         return;
+    if (size == sizeof(AstraGuiDockSettingsRequest) &&
+        packet.dock_settings.header.operation == ASTRA_GUI_DOCK_SETTINGS) {
+        int changed = 0;
+        if (session != 0u && handle_count == 1u &&
+            valid_session_request(&packet.dock_settings.header, size,
+                sizeof(packet.dock_settings), ASTRA_GUI_DOCK_SETTINGS)) {
+            (void)dock_settings_reply(state, &packet.dock_settings,
+                                      handles[0], &changed);
+            if (changed) {
+                damage_both(state, (DamageRect){0, DISPLAY_WORK_BOTTOM,
+                    ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u});
+                status = render_window_change(device, irq, framebuffer,
+                    pointer_buffer, state, next_fence, cursor_fence, armed);
+                if (status != ASTRA_STATUS_OK)
+                    render_failure("display Dock settings render failed", status);
+            }
+        }
+        for (uint32_t index = 0u; index < handle_count; ++index)
+            if (handles[index] != 0u) (void)astra_close(handles[index]);
+        return;
+    }
     if (size == sizeof(AstraGuiFontMeasureRequest)) {
         if (handle_count == 1u && valid_session_request(&packet.measure.header,
                 size, sizeof(packet.measure), ASTRA_GUI_FONT_MEASURE))

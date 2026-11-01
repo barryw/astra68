@@ -1115,7 +1115,8 @@ static int control_valid(const AstraControl *control)
                     control->_private_value].id ==
                     const_collection_model(control)->selected_id) &&
                (control->_private_control_kind == ASTRA_CONTROL_LIST ?
-                    control->_private_style == 0u :
+                    control->_private_style <=
+                        ASTRA_LIST_STYLE_SETTINGS_SIDEBAR :
                     (control->_private_style == 0u ||
                      ((control->_private_style & ~TABLE_SORT_MASK) == 0u &&
                       (control->_private_style & TABLE_SORT_ACTIVE) != 0u &&
@@ -5492,7 +5493,9 @@ static int render_requirements(const AstraUIContext *context,
 
             list_visible_range(control, theme.control_height, 0u, &first, &end);
             *commands += 5u + (uint64_t)(end - first) *
-                (tree == NULL ? 2u : 5u);
+                (tree == NULL ?
+                    (control->_private_style ==
+                        ASTRA_LIST_STYLE_SETTINGS_SIDEBAR ? 3u : 2u) : 5u);
             for (uint32_t row = first; row < end; ++row) {
                 uint32_t item = tree == NULL ? row : tree->visible_rows[row];
                 *payload += (uint64_t)items[item].text_length + id_length;
@@ -6961,11 +6964,28 @@ static AstraColorRGBA8 render_collection_row(const AstraTheme *theme,
         control->_private_value == (int64_t)row;
     int hot = control->_private_minimum_value == (int64_t)row &&
               (state & ASTRA_CONTROL_HOVERED) != 0u;
+    int sidebar = control->_private_control_kind == ASTRA_CONTROL_LIST &&
+        control->_private_style == ASTRA_LIST_STYLE_SETTINGS_SIDEBAR;
     AstraColorRGBA8 text_color =
         (state & ASTRA_CONTROL_DISABLED) != 0u ? theme->text_tertiary :
-        selected ? theme->accent_text : theme->client_text;
+        selected && !sidebar ? theme->accent_text : theme->client_text;
 
     if (selected || hot) {
+        if (sidebar) {
+            if (frame->width > 4u) {
+                AstraColorRGBA8 fill = selected ?
+                    blend(theme->client, theme->accent, 40u) :
+                    blend(theme->client, theme->accent, 14u);
+                astra_surface_fill_round(surface, frame->x + 2, y + 2,
+                    frame->width - 4u, theme->control_height - 4u, 6u,
+                    color(fill));
+                if (selected)
+                    astra_surface_fill(surface, frame->x + 2, y + 4,
+                        2u, theme->control_height - 8u,
+                        color(theme->accent));
+            }
+            return text_color;
+        }
         AstraColorRGBA8 fill = selected ? theme->accent : theme->client;
 
         if ((state & ASTRA_CONTROL_DISABLED) != 0u)
@@ -6987,7 +7007,11 @@ static void render_list(const AstraTheme *theme,
     uint32_t first, end;
 
     list_visible_range(control, theme->control_height, 0u, &first, &end);
-    render_collection_frame(theme, control, surface);
+    if (control->_private_style == ASTRA_LIST_STYLE_SETTINGS_SIDEBAR)
+        astra_surface_fill(surface, frame->x, frame->y, frame->width,
+                           frame->height, color(theme->client));
+    else
+        render_collection_frame(theme, control, surface);
     for (uint32_t at = first; at < end; ++at) {
         int32_t y = (int32_t)((int64_t)frame->y +
                               (uint64_t)at * theme->control_height);

@@ -2,6 +2,24 @@
 
 Status: active continuation map, 2026-11-01
 
+Settings checkpoint, 2026-11-01: native `Settings.app` now uses a reusable
+Interface Kit 12.13 Settings Sidebar composed from existing controls. Search
+filters grouped navigation without losing keyboard focus. Its shared List
+style uses borderless rows, soft selection, and a slim accent marker. The app
+stores its selected pane only in its private Config Kit document. Its Dock pane
+queries, reorders, and removes Display-owned pins through System Kit 4.7's typed,
+generation-checked GUI request; Display remains sole Config Kit writer. Fonts
+opens the existing Fonts app. Beast Interface/System/Display host tests,
+MC68040 builds, Kit manifests, app bundle check, image-provider fixture, and
+NDK `dist-check` pass. DE25 targeted install booted Desktop with Astra restarts
+zero; RFB verified sidebar search, Fonts launch, pane persistence across
+reboot, Dock pinning, external refresh, reorder, removal, and restored original empty
+pin set. First trial staged mismatched GUI versions and failed Desktop startup;
+rebuilding Display and Settings against protocol 28 restored clean boot.
+Haiku read-only `src/preferences/appearance/AppearanceWindow.cpp` and
+`src/apps/deskbar/PreferencesWindow.cpp` informed grouped sidebar structure.
+The blank first Desktop frame remains a separate known issue.
+
 Dock pin checkpoint, 2026-11-01: Display uses one Config Kit system setting
 for ordered pinned app IDs and exact bundle paths. Shared Filesystem Kit
 catalog loading validates pinned bundles and supplies icons; a missing bundle

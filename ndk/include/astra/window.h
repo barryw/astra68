@@ -35,6 +35,49 @@ typedef struct AstraWindow {
 
 /** Empty window-handle initializer. */
 #define ASTRA_WINDOW_INIT { 0, 0, 0, 0, 0 }
+/** Maximum number of Display-owned Dock pins. */
+#define ASTRA_DOCK_PIN_LIMIT ASTRA_GUI_DOCK_PIN_LIMIT
+/** Capacity of each copied Dock pin ID or name, including NUL. */
+#define ASTRA_DOCK_PIN_TEXT_MAX ASTRA_GUI_APP_ID_MAX
+
+/** One Display-owned Dock pin. Names and identity are copied, not borrowed. */
+typedef struct AstraDockPinInfo {
+    uint32_t size;                  /**< sizeof(AstraDockPinInfo). */
+    uint32_t count;                 /**< Number of pinned applications. */
+    uint32_t generation;            /**< Display-owned snapshot generation. */
+    uint32_t online;                /**< Nonzero when bundle remains installed. */
+    char id[ASTRA_DOCK_PIN_TEXT_MAX];  /**< NUL-terminated application ID. */
+    char name[ASTRA_DOCK_PIN_TEXT_MAX]; /**< NUL-terminated display name. */
+} AstraDockPinInfo;
+
+/** Empty Dock pin query result. Set size before querying. */
+#define ASTRA_DOCK_PIN_INFO_INIT { sizeof(AstraDockPinInfo), 0, 0, 0, {0}, {0} }
+
+/** Query one pin by position; index == count returns count without a pin.
+ * @param gui Open GUI session handle.
+ * @param index Pin position, or count to query list size only.
+ * @param info Caller-owned initialized result.
+ * @return ASTRA_OK or a validation, transport, or service error.
+ */
+ASTRA_NODISCARD AstraResult astra_dock_pin_query(AstraHandle gui,
+    uint32_t index, AstraDockPinInfo *info);
+/** Move a pin only if list generation still matches caller's snapshot.
+ * @param gui Open GUI session handle.
+ * @param from Current pin position.
+ * @param to Destination pin position.
+ * @param generation Generation from a prior successful query.
+ * @return ASTRA_OK or a validation, stale-generation, or service error.
+ */
+ASTRA_NODISCARD AstraResult astra_dock_pin_move(AstraHandle gui,
+    uint32_t from, uint32_t to, uint32_t generation);
+/** Remove a pin only if list generation still matches caller's snapshot.
+ * @param gui Open GUI session handle.
+ * @param index Position to remove.
+ * @param generation Generation from a prior successful query.
+ * @return ASTRA_OK or a validation, stale-generation, or service error.
+ */
+ASTRA_NODISCARD AstraResult astra_dock_pin_remove(AstraHandle gui,
+    uint32_t index, uint32_t generation);
 
 /** Show an immutable presentation snapshot owned by this window.
  * Most callers use Interface Kit's command-backed context menu session.

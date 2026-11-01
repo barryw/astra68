@@ -2,13 +2,14 @@
 #define ASTRA_DISPLAY_DOCK_PINS_H
 
 #include <astra/bundle.h>
+#include <astra/gui.h>
 #include <astra/status.h>
 #include <astra/vfs_service.h>
 
 #include <stdint.h>
 
 /* One stable slot per app, bounded by the fixed-width 1920-pixel Dock. */
-#define DISPLAY_DOCK_PIN_LIMIT 36u
+#define DISPLAY_DOCK_PIN_LIMIT ASTRA_GUI_DOCK_PIN_LIMIT
 
 typedef struct DisplayDockPin {
     char *path;

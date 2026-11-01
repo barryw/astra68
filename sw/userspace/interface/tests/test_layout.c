@@ -706,6 +706,74 @@ static void test_settings_pane(void)
     assert(astra_interface_settings_pane_init(controls, &pane) == ASTRA_ERROR_INVALID_ARGUMENT);
 }
 
+static void test_settings_sidebar(void)
+{
+    AstraControl controls[ASTRA_SETTINGS_SIDEBAR_CONTROL_COUNT] = {0};
+    AstraUIContext context = ASTRA_UI_CONTEXT_INIT;
+    AstraTextModel search = ASTRA_TEXT_MODEL_INIT;
+    AstraTextModelInfo text = ASTRA_TEXT_MODEL_INFO_INIT;
+    AstraScrollModel scroll = ASTRA_SCROLL_MODEL_INIT;
+    AstraScrollModelInfo scroll_info = ASTRA_SCROLL_MODEL_INFO_INIT;
+    AstraCollectionItem items[] = {
+        {1u, "LOOK", 4u, {ASTRA_COLLECTION_HEADING, 0u}},
+        {2u, "Dock", 4u, {0u, ASTRA_TOOLBAR_ICON_GRID}},
+        {3u, "Fonts", 5u, {0u, ASTRA_TOOLBAR_ICON_LIST}}
+    };
+    AstraCollectionItem filtered[] = {
+        {1u, "LOOK", 4u, {ASTRA_COLLECTION_HEADING, 0u}},
+        {3u, "Fonts", 5u, {0u, ASTRA_TOOLBAR_ICON_LIST}}
+    };
+    AstraCollectionModel collection = ASTRA_COLLECTION_MODEL_INIT;
+    AstraSettingsSidebarInfo sidebar = ASTRA_SETTINGS_SIDEBAR_INFO_INIT;
+    AstraFlexLayout root = ASTRA_FLEX_LAYOUT_INIT;
+    AstraControlFrame frame, clip;
+    char content[64];
+    uint32_t metadata[128];
+
+    text.content_arena = content;
+    text.content_arena_bytes = sizeof(content);
+    text.metadata_arena = metadata;
+    text.metadata_arena_bytes = sizeof(metadata);
+    scroll_info.line_height = 28u;
+    assert(astra_text_model_init(&search, &text) == ASTRA_OK);
+    assert(astra_scroll_init(&scroll, &scroll_info) == ASTRA_OK);
+    collection.items = items;
+    collection.item_count = 3u;
+    collection.selected_id = 2u;
+    sidebar.first_id = 40u;
+    sidebar.search = &search;
+    sidebar.scroll = &scroll;
+    sidebar.collection = &collection;
+    sidebar.width = 236u;
+    sidebar.height = 250u;
+    assert(astra_interface_settings_sidebar_init(NULL, &sidebar) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    sidebar.reserved[0] = 1u;
+    assert(astra_interface_settings_sidebar_init(controls, &sidebar) ==
+           ASTRA_ERROR_INVALID_ARGUMENT);
+    sidebar.reserved[0] = 0u;
+    assert(astra_interface_settings_sidebar_init(controls, &sidebar) ==
+           ASTRA_OK);
+    assert(controls[ASTRA_SETTINGS_SIDEBAR_SEARCH]._private_parent_id == 40u);
+    assert(controls[ASTRA_SETTINGS_SIDEBAR_LIST]._private_parent_id == 42u);
+    assert(controls[ASTRA_SETTINGS_SIDEBAR_LIST]._private_style ==
+           ASTRA_LIST_STYLE_SETTINGS_SIDEBAR);
+    assert(astra_interface_ui_init(&context, controls,
+        ASTRA_SETTINGS_SIDEBAR_CONTROL_COUNT, 236u, 250u) == ASTRA_OK);
+    root.align_items = ASTRA_FLEX_ALIGN_STRETCH;
+    assert(astra_interface_ui_layout(&context, &root) == ASTRA_OK);
+    assert(astra_interface_ui_geometry(&context,
+        ASTRA_SETTINGS_SIDEBAR_LIST, &frame, &clip) == ASTRA_OK);
+    assert(frame.width >= 216u && clip.width <= 216u);
+    assert(astra_interface_list_set_items(&context,
+        &controls[ASTRA_SETTINGS_SIDEBAR_LIST], filtered, 2u) == ASTRA_OK);
+    assert(astra_interface_control_set_value(&context,
+        &controls[ASTRA_SETTINGS_SIDEBAR_LIST], 1) == ASTRA_OK);
+    assert(collection.selected_id == 3u);
+    assert(astra_interface_ui_layout(&context, &root) == ASTRA_OK);
+    astra_text_model_dispose(&search);
+}
+
 static void test_form_row(void)
 {
     AstraControl controls[6] = {0};
@@ -840,6 +908,7 @@ void astra_interface_test_layout(void)
     test_scroll_content_respects_maximum();
     test_scroll_child_fills_viewport();
     test_settings_pane();
+    test_settings_sidebar();
     test_form_row();
     test_columns_browser();
 }

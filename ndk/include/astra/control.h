@@ -761,6 +761,34 @@ typedef struct AstraListInfo {
 /** Empty List construction data. */
 #define ASTRA_LIST_INFO_INIT { sizeof(AstraListInfo), 0, 0, 0, {0, 0, 0, 0} }
 
+/** Searchable sidebar composed from existing Container, Search Field,
+ * Scroll View, and List controls. Caller filters List items on text edits.
+ * Heading rows use ASTRA_COLLECTION_HEADING and stay nonselectable. */
+enum {
+    ASTRA_SETTINGS_SIDEBAR_ROOT = 0u,
+    ASTRA_SETTINGS_SIDEBAR_SEARCH,
+    ASTRA_SETTINGS_SIDEBAR_SCROLL,
+    ASTRA_SETTINGS_SIDEBAR_LIST,
+    ASTRA_SETTINGS_SIDEBAR_CONTROL_COUNT
+};
+
+/** Borrowed models and dimensions for a composed Settings Sidebar. */
+typedef struct AstraSettingsSidebarInfo {
+    uint32_t size;                    /**< sizeof(AstraSettingsSidebarInfo). */
+    uint32_t first_id;                /**< First of four consecutive control IDs. */
+    AstraTextModel *search;           /**< Caller-owned Search Field model. */
+    AstraScrollModel *scroll;         /**< Caller-owned Scroll View model. */
+    AstraCollectionModel *collection; /**< Caller-owned sidebar List model. */
+    uint32_t width;                   /**< Sidebar width in pixels. */
+    uint32_t height;                  /**< Sidebar height in pixels. */
+    uint32_t reserved[3];             /**< Must be zero. */
+} AstraSettingsSidebarInfo;
+
+/** Empty Settings Sidebar construction data. */
+#define ASTRA_SETTINGS_SIDEBAR_INFO_INIT { \
+    sizeof(AstraSettingsSidebarInfo), 0, 0, 0, 0, 0, 0, {0, 0, 0} \
+}
+
 /** One depth of a column browser. Collection and scroll models remain
  * caller-owned; each depth has independent selection and vertical position. */
 typedef struct AstraColumnView {

@@ -99,6 +99,7 @@ assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG",
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
     "trusted /apps/Inspector.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ RAM_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
+    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw LIBS:r",
     "trusted /apps/AstraZ.app grants GUI PCM VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r"]
 with open(os.path.join(os.path.dirname(__file__),
                        "../../sw/userspace/ports/astraz/apps/AstraZ.app/manifest"),
@@ -190,7 +191,7 @@ with open(os.path.join(astra_image.REPOSITORY,
     runtime_manifest = manifest.read()
     assert "version 2.1.0\n" in runtime_manifest
     assert "provides runtime.library 1 1.17.0\n" in runtime_manifest
-    assert "provides system.library 4 4.6.0\n" in runtime_manifest
+    assert "provides system.library 4 4.7.0\n" in runtime_manifest
     assert "version 1.6.0\n" not in runtime_manifest
     assert "provides runtime.library 1 1.6.0\n" not in runtime_manifest
 with open(os.path.join(astra_image.REPOSITORY,

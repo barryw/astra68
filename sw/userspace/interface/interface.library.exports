@@ -275,3 +275,8 @@ ASTRA_INTERFACE_12.12 {
         astra_interface_file_panel_append_backdrop;
         astra_interface_file_panel_append_message;
 } ASTRA_INTERFACE_12.10;
+
+ASTRA_INTERFACE_12.13 {
+    global:
+        astra_interface_settings_sidebar_init;
+} ASTRA_INTERFACE_12.12;

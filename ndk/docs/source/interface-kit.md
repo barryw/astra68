@@ -198,6 +198,18 @@ See `examples/settings_pane.c` for another composition. Settings policy stays
 with its owner: system panes call a typed service API; applications use their
 private Config Kit grant. The shell owns no settings, converter or renderer.
 
+Interface Kit 12.13 adds `astra_interface_settings_sidebar_init`. It reserves
+four consecutive IDs for a Container, Search Field, Scroll View, and List.
+Supply caller-owned text, scroll, and collection models in
+`AstraSettingsSidebarInfo`. Put its root beside pane content in your own flex
+container; use `ASTRA_SETTINGS_SIDEBAR_*` offsets for child controls. Group
+headings use ordinary `ASTRA_COLLECTION_HEADING` List rows. When filtering a
+live sidebar, build entries in spare storage and call
+`astra_interface_list_set_items` instead of changing the collection count
+directly. This preserves focus, selection, measurement, and hit testing. The
+composed List draws borderless rows with a soft selected fill and accent marker;
+ordinary Lists keep their standard collection styling.
+
 ## Label font previews
 
 Ordinary Labels keep their theme font and fixed role size. To preview an

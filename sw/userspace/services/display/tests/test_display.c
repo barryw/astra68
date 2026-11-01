@@ -21,6 +21,7 @@
 static uint32_t menu_allocations;
 static AstraGuiFontContext delivered_font_context;
 static AstraGuiFontMeasureReply delivered_font_measure;
+static AstraGuiDockSettingsReply delivered_dock_settings;
 static uint32_t delivered_font_handles;
 static uint32_t font_open_calls;
 static uint32_t font_snapshot_closes;
@@ -264,6 +265,12 @@ uint32_t astra_port_receive(uint32_t handle, void *message, uint32_t capacity,
 uint32_t astra_port_send(uint32_t handle, const void *message, uint32_t size,
                          const uint32_t *handles, uint32_t handle_count)
 {
+    if (handle == 0x503u) {
+        assert(size == sizeof(delivered_dock_settings) &&
+               handle_count == 0u && handles == NULL);
+        memcpy(&delivered_dock_settings, message, size);
+        return ASTRA_SYSCALL_OK;
+    }
     if (handle == 0x502u) {
         assert(size == sizeof(delivered_font_measure) && handle_count == 0u);
         memcpy(&delivered_font_measure, message, size);
@@ -2857,6 +2864,47 @@ static void test_dock_sessions(void)
             "/apps/Atlas.app") == ASTRA_STATUS_OK);
         display_dock_pins_clear(&pinned.dock_pins);
         dock_catalog_online = 0;
+        assert(menu_allocations == 0u);
+    }
+    {
+        DisplayState state = {0};
+        AstraGuiDockSettingsRequest request = {0};
+        int changed = 0;
+        dock_catalog_online = 1;
+        state.dock_config_ready = state.dock_files_ready = 1u;
+        state.dock_pins_generation = 1u;
+        assert(dock_pin_toggle(&state, "org.astra.atlas", "Atlas",
+            "/apps/Atlas.app") == ASTRA_STATUS_OK);
+        assert(dock_pin_toggle(&state, "org.astra.doom", "Doom",
+            "/apps/Doom.app") == ASTRA_STATUS_OK);
+        request.action = ASTRA_GUI_DOCK_QUERY;
+        request.index = 0u;
+        request.header.transaction_id = 42u;
+        assert(dock_settings_reply(&state, &request, 0x503u, &changed) ==
+               ASTRA_SYSCALL_OK);
+        assert(!changed && delivered_dock_settings.count == 2u &&
+               strcmp(delivered_dock_settings.name, "Atlas") == 0 &&
+               delivered_dock_settings.header.transaction_id == 42u);
+        request.action = ASTRA_GUI_DOCK_MOVE;
+        request.target = 1u;
+        request.generation = delivered_dock_settings.generation - 1u;
+        assert(dock_settings_reply(&state, &request, 0x503u, &changed) ==
+               ASTRA_SYSCALL_OK);
+        assert(!changed && delivered_dock_settings.status == ASTRA_STATUS_BUSY &&
+               strcmp(state.dock_pins.entries[0].id, "org.astra.atlas") == 0);
+        request.generation = state.dock_pins_generation;
+        assert(dock_settings_reply(&state, &request, 0x503u, &changed) ==
+               ASTRA_SYSCALL_OK);
+        assert(changed && delivered_dock_settings.status == ASTRA_STATUS_OK &&
+               strcmp(state.dock_pins.entries[0].id, "org.astra.doom") == 0);
+        request.action = ASTRA_GUI_DOCK_REMOVE;
+        request.target = 0u;
+        request.generation = state.dock_pins_generation;
+        assert(dock_settings_reply(&state, &request, 0x503u, &changed) ==
+               ASTRA_SYSCALL_OK);
+        assert(changed && delivered_dock_settings.count == 1u &&
+               strcmp(state.dock_pins.entries[0].id, "org.astra.atlas") == 0);
+        display_dock_pins_clear(&state.dock_pins);
         assert(menu_allocations == 0u);
     }
 }

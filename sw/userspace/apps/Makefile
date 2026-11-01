@@ -8,8 +8,9 @@ DISK_SETUP := ../applications/disk-setup/build/m68k/disk-setup
 INSTALLER := ../applications/installer/build/m68k/installer
 OPEN_WITH := ../applications/open-with/build/m68k/open-with
 INSPECTOR := ../applications/inspector/build/m68k/inspector
+SETTINGS := ../applications/settings/build/m68k/settings
 ATLAS_RESOURCES := build/atlas-resources
-SHIPPED := Terminal InterfaceGallery Atlas Fonts DiskSetup Installer OpenWith Inspector
+SHIPPED := Terminal InterfaceGallery Atlas Fonts DiskSetup Installer OpenWith Inspector Settings
 
 all: build/.apps
 
@@ -37,6 +38,9 @@ $(OPEN_WITH): FORCE
 $(INSPECTOR): FORCE
 	$(MAKE) -C ../applications/inspector all
 
+$(SETTINGS): FORCE
+	$(MAKE) -C ../applications/settings all
+
 $(ATLAS_RESOURCES)/%.aicon: ../../../tools/aicon.py
 	@mkdir -p $(@D)
 	python3 $< $* $@
@@ -49,10 +53,11 @@ $(eval $(call astra_app_bundle,build,DiskSetup,$(DISK_SETUP),DiskSetup.app/manif
 $(eval $(call astra_app_bundle,build,Installer,$(INSTALLER),Installer.app/manifest,installer,))
 $(eval $(call astra_app_bundle,build,OpenWith,$(OPEN_WITH),OpenWith.app/manifest,document,))
 $(eval $(call astra_app_bundle,build,Inspector,$(INSPECTOR),Inspector.app/manifest,document,))
+$(eval $(call astra_app_bundle,build,Settings,$(SETTINGS),Settings.app/manifest,settings,))
 $(eval $(call astra_app_inventory,build,$(SHIPPED)))
 
 test: all
-	@for app in $(TERMINAL) $(GALLERY) $(ATLAS) $(FONTS) $(DISK_SETUP) $(INSTALLER) $(OPEN_WITH) $(INSPECTOR); do \
+	@for app in $(TERMINAL) $(GALLERY) $(ATLAS) $(FONTS) $(DISK_SETUP) $(INSTALLER) $(OPEN_WITH) $(INSPECTOR) $(SETTINGS); do \
 		m68k-astra-readelf --version-info "$$app" | grep -q ASTRA_INTERFACE_12.0 || exit 1; \
 		m68k-astra-readelf --version-info "$$app" | grep -q ASTRA_SYSTEM_4.0 || exit 1; \
 		if m68k-astra-readelf --version-info "$$app" | grep -q ASTRA_INTERFACE_5.; then exit 1; fi; \

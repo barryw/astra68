@@ -23,7 +23,7 @@
 /** Breaking Interface Kit ABI generation carried by interface.library.12. */
 #define ASTRA_INTERFACE_LIBRARY_ABI_MAJOR 12u
 /** Current Interface Kit revision. */
-#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 12u
+#define ASTRA_INTERFACE_LIBRARY_ABI_MINOR 13u
 
 /** Display a modal alert. @param gui GUI capability. @param info Alert description. @return ASTRA_OK or a specific error. */
 AstraResult astra_interface_show_alert(AstraHandle gui,
@@ -301,6 +301,14 @@ uint32_t astra_interface_selection_contains(const AstraSelectionSet *selection,
  */
 AstraResult astra_interface_list_init(AstraControl *control,
                                       const AstraListInfo *info);
+/** Compose a searchable navigation sidebar using shared controls. Search
+ * filtering and page selection stay with caller; headings cannot activate.
+ * @param controls Array of ASTRA_SETTINGS_SIDEBAR_CONTROL_COUNT controls.
+ * @param info Borrowed models, first ID, and dimensions.
+ * @return ASTRA_OK or a validation error.
+ */
+AstraResult astra_interface_settings_sidebar_init(AstraControl *controls,
+    const AstraSettingsSidebarInfo *info);
 /** Replace List items, preserving selection by stable item ID.
  * Selection clears when selected item disappears. Failed updates leave prior
  * model and layout intact.

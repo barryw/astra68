@@ -167,3 +167,10 @@ ASTRA_SYSTEM_4.5 {
         astra_window_menu_bar_set;
         astra_window_menu_bar_clear;
 } ASTRA_SYSTEM_4.0;
+
+ASTRA_SYSTEM_4.7 {
+    global:
+        astra_dock_pin_query;
+        astra_dock_pin_move;
+        astra_dock_pin_remove;
+} ASTRA_SYSTEM_4.5;

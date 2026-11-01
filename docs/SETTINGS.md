@@ -48,6 +48,23 @@ exist, it leaves both intact and uses the ID directory.
   and transactional multi-key updates are future work, not implied by Config
   Kit's current per-key atomic write.
 
+## Settings application
+
+`Settings.app` is a native Interface Kit client. Its own Config Kit document
+stores only the selected pane. The shared Settings Sidebar composes a Search
+Field, Scroll View, List, and Container; other applications can use the same
+component. Search updates the List through its live `set_items` API, keeping
+keyboard focus and collection metadata coherent.
+
+The Dock pane queries ordered pins from Display and asks Display to move or
+remove one pin with a generation check. Display remains the sole writer of
+`/config/system/display/settings.conf` through Config Kit. Settings never
+edits that document directly. The Fonts pane launches the existing Fonts app,
+which uses the font service for installation and system-face changes. About
+is read-only. No duplicate font or Dock setting is stored in Settings' private
+document. The Dock pane refreshes its list when selected or reactivated; an
+empty Dock shows the existing Keep in Dock path.
+
 ## Font preferences
 
 Font service owns `/config/system/fonts/settings.conf`. Its system-font
@@ -101,4 +118,8 @@ defaults and per-user settings, `src/preferences/appearance/FontView.cpp` for a
 font-selection UI that talks to shared system font policy, and
 `src/apps/terminal/PrefHandler.cpp` for Terminal-owned preferences. Astra adapts
 their ownership split to scoped Config Kit grants and native AFNT/graphics
-contracts. Haiku checkout remains read-only.
+contracts. The native Settings shell also reviewed
+`src/preferences/appearance/AppearanceWindow.cpp` and
+`src/apps/deskbar/PreferencesWindow.cpp`: grouped navigation and owner-specific
+panes informed the shared sidebar and typed Dock API. Haiku checkout remains
+read-only.

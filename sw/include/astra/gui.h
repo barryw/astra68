@@ -409,6 +409,7 @@ _Static_assert(sizeof(AstraWindowEvent) == 52u,
 #define ASTRA_GUI_SESSION_OPENED   9u
 #define ASTRA_GUI_SESSION_ACTIVATE 10u
 #define ASTRA_GUI_APP_ID_MAX 256u
+#define ASTRA_GUI_DOCK_PIN_LIMIT 36u
 /* One reply capability. Report the actually adopted context, including after
    a failed prior mapping. Display retains confirmed and pending snapshots
    separately; delivery alone does not retire the client's previous font. */
@@ -418,6 +419,35 @@ _Static_assert(sizeof(AstraWindowEvent) == 52u,
 #define ASTRA_GUI_FONT_MEASURE 13u
 #define ASTRA_GUI_FONT_MEASURE_REPLY 14u
 #define ASTRA_GUI_FONT_MEASURE_TEXT_MAX 256u
+/* Display owns Dock policy and Config Kit storage. GUI sessions may inspect or
+ * request validated changes; callers never receive the system config grant. */
+#define ASTRA_GUI_DOCK_SETTINGS 15u
+#define ASTRA_GUI_DOCK_SETTINGS_REPLY 16u
+#define ASTRA_GUI_DOCK_QUERY 0u
+#define ASTRA_GUI_DOCK_MOVE 1u
+#define ASTRA_GUI_DOCK_REMOVE 2u
+
+typedef struct AstraGuiDockSettingsRequest {
+    AstraMessageHeader header;
+    uint32_t action;
+    uint32_t index;
+    uint32_t target;
+    uint32_t generation;
+} AstraGuiDockSettingsRequest;
+
+typedef struct AstraGuiDockSettingsReply {
+    AstraMessageHeader header;
+    uint32_t status;
+    uint32_t count;
+    uint32_t generation;
+    uint32_t online;
+    char id[ASTRA_GUI_APP_ID_MAX];
+    char name[ASTRA_GUI_APP_ID_MAX];
+} AstraGuiDockSettingsReply;
+
+_Static_assert(sizeof(AstraGuiDockSettingsRequest) == 40u &&
+               sizeof(AstraGuiDockSettingsReply) == 552u,
+               "Dock settings wire ABI");
 
 typedef struct AstraGuiFontMeasureRequest {
     AstraMessageHeader header;

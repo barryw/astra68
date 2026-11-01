@@ -13,6 +13,8 @@
 #include "internal/status.h"
 #include "internal/clipboard_document.h"
 
+#include <string.h>
+
 static int state_valid(uint8_t state)
 {
     return state <= ASTRA_GADGET_DISABLED;
@@ -25,6 +27,78 @@ static int window_live(const AstraWindow *window)
            window->_private_events != ASTRA_INVALID_HANDLE &&
            window->_private_vblank != ASTRA_INVALID_HANDLE &&
            window->_private_id != 0u && window->_private_generation != 0u;
+}
+
+static AstraResult dock_settings_call(AstraHandle gui, uint32_t action,
+    uint32_t index, uint32_t target, uint32_t generation,
+    AstraDockPinInfo *info)
+{
+    AstraGuiDockSettingsRequest request = {0};
+    AstraGuiDockSettingsReply reply = {0};
+    AstraCall call = {0};
+    AstraResult result;
+
+    if (gui == ASTRA_INVALID_HANDLE ||
+        action > ASTRA_GUI_DOCK_REMOVE ||
+        (action == ASTRA_GUI_DOCK_QUERY && info == NULL) ||
+        (action != ASTRA_GUI_DOCK_QUERY && generation == 0u) ||
+        (info != NULL && info->size != sizeof(*info)))
+        return ASTRA_ERROR_INVALID_ARGUMENT;
+    result = astra_message_header_init(&request.header, sizeof(request),
+        ASTRA_GUI_PROTOCOL, ASTRA_GUI_VERSION, ASTRA_GUI_DOCK_SETTINGS, 1u);
+    if (result != ASTRA_OK) return result;
+    request.action = action;
+    request.index = index;
+    request.target = target;
+    request.generation = generation;
+    call.request = &request;
+    call.request_size = sizeof(request);
+    call.reply = &reply;
+    call.reply_capacity = sizeof(reply);
+    result = astra_port_call(gui, &call, ASTRA_DEADLINE_INFINITE);
+    if (result != ASTRA_OK) return result;
+    if (call.reply_size != sizeof(reply) || call.reply_handle_count != 0u ||
+        reply.header.total_size != sizeof(reply) ||
+        reply.header.header_size != ASTRA_MESSAGE_HEADER_SIZE ||
+        reply.header.flags != 0u || reply.header.reserved != 0u ||
+        reply.header.protocol != ASTRA_GUI_PROTOCOL ||
+        reply.header.protocol_version != ASTRA_GUI_VERSION ||
+        reply.header.operation != ASTRA_GUI_DOCK_SETTINGS_REPLY ||
+        reply.header.transaction_id != request.header.transaction_id ||
+        reply.generation == 0u ||
+        reply.id[sizeof(reply.id) - 1u] != '\0' ||
+        reply.name[sizeof(reply.name) - 1u] != '\0')
+        return ASTRA_ERROR_IO;
+    result = astra_internal_service_result(reply.status);
+    if (result == ASTRA_OK && info != NULL) {
+        info->count = reply.count;
+        info->generation = reply.generation;
+        info->online = reply.online;
+        memcpy(info->id, reply.id, sizeof(info->id));
+        memcpy(info->name, reply.name, sizeof(info->name));
+    }
+    return result;
+}
+
+AstraResult astra_dock_pin_query(AstraHandle gui, uint32_t index,
+    AstraDockPinInfo *info)
+{
+    return dock_settings_call(gui, ASTRA_GUI_DOCK_QUERY, index, 0u, 0u,
+                              info);
+}
+
+AstraResult astra_dock_pin_move(AstraHandle gui, uint32_t from, uint32_t to,
+    uint32_t generation)
+{
+    return dock_settings_call(gui, ASTRA_GUI_DOCK_MOVE, from, to,
+                              generation, NULL);
+}
+
+AstraResult astra_dock_pin_remove(AstraHandle gui, uint32_t index,
+    uint32_t generation)
+{
+    return dock_settings_call(gui, ASTRA_GUI_DOCK_REMOVE, index, 0u,
+                              generation, NULL);
 }
 
 static void copy_info(AstraWindowInfo *info,

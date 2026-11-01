@@ -93,7 +93,34 @@ uint32_t astra_system_test_syscall(uint32_t number, uintptr_t d1, uintptr_t d2,
         const AstraCall *call = astra_system_test_call;
         uint32_t port = ((const AstraPortCall *)d1)->port;
 
-        if (port == 1u) {
+        if (port == 1u && call->request_size ==
+                sizeof(AstraGuiDockSettingsRequest)) {
+            const AstraGuiDockSettingsRequest *request = call->request;
+            AstraGuiDockSettingsReply *reply = call->reply;
+            assert(call->handle_count == 0u && call->reply_index == 0u &&
+                   call->reply_capacity == sizeof(*reply) &&
+                   request->header.operation == ASTRA_GUI_DOCK_SETTINGS);
+            header(&reply->header, sizeof(*reply),
+                   ASTRA_GUI_DOCK_SETTINGS_REPLY,
+                   request->header.transaction_id);
+            reply->count = 2u;
+            reply->generation = 3u;
+            reply->status = request->generation != 0u &&
+                request->generation != 3u ? ASTRA_STATUS_BUSY :
+                ASTRA_STATUS_OK;
+            if (request->action == ASTRA_GUI_DOCK_QUERY) {
+                assert(request->index == 0u && request->target == 0u);
+                strcpy(reply->id, "org.astra.atlas");
+                strcpy(reply->name, "Atlas");
+                reply->online = 1u;
+            } else if (request->action == ASTRA_GUI_DOCK_MOVE)
+                assert(request->index == 0u && request->target == 1u);
+            else {
+                assert(request->action == ASTRA_GUI_DOCK_REMOVE &&
+                       request->index == 1u && request->target == 0u);
+            }
+            *out_d1 = sizeof(*reply);
+        } else if (port == 1u) {
             const AstraGuiOpenWindow *request = call->request;
             AstraGuiWindowOpened *reply = call->reply;
 
@@ -293,6 +320,23 @@ int main(void)
            theme.mono_font_height == ASTRA_THEME_SYSTEM_MONO_FONT_HEIGHT &&
            theme.mono_cell_width == ASTRA_THEME_SYSTEM_MONO_CELL_WIDTH);
     assert(theme.window_radius == 12 && theme.signal_height == 2);
+    {
+        AstraDockPinInfo pin = ASTRA_DOCK_PIN_INFO_INIT;
+        before = call_count;
+        assert(astra_dock_pin_query(0u, 0u, &pin) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(astra_dock_pin_move(1u, 0u, 1u, 0u) ==
+               ASTRA_ERROR_INVALID_ARGUMENT);
+        assert(call_count == before);
+        assert(astra_dock_pin_query(1u, 0u, &pin) == ASTRA_OK);
+        assert(pin.count == 2u && pin.generation == 3u && pin.online == 1u &&
+               strcmp(pin.id, "org.astra.atlas") == 0 &&
+               strcmp(pin.name, "Atlas") == 0);
+        assert(astra_dock_pin_move(1u, 0u, 1u, pin.generation) == ASTRA_OK);
+        assert(astra_dock_pin_remove(1u, 1u, pin.generation) == ASTRA_OK);
+        assert(astra_dock_pin_move(1u, 0u, 1u, 2u) == ASTRA_ERROR_BUSY);
+    }
+    call_count = 0u;
     assert(theme.title_active.red > theme.title_inactive.red);
     assert(create.gadgets == ASTRA_WINDOW_GADGET_AUTO);
     create.width = 320;
