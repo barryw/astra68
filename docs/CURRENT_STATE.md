@@ -1,6 +1,30 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-10-31
+Status: active continuation map, 2026-11-01
+
+Dock pin checkpoint, 2026-11-01: Display uses one Config Kit system setting
+for ordered pinned app IDs and exact bundle paths. Shared Filesystem Kit
+catalog loading validates pinned bundles and supplies icons; a missing bundle
+stays visible but cannot launch until available. Pinned groups precede running
+groups. Shared Dock Menu offers Keep/Remove, and pointer drag pins a running
+group, reorders pins, or removes a pin above the strip. Quick click launches an
+idle pin; the existing native launcher revalidates the bundle. Beast host and
+MC68040 Display tests pass, including persistence, reorder rollback, and drag
+edge cases. DE25 targeted install verified pinning, drag reorder, drag removal,
+and reboot persistence with no Astra service restarts. Final DE25 install also
+exposed a Display event-loop defect: with a posted frame pending, a zero-timeout
+wait could return no event and spin forever without composing, preventing
+Desktop readiness. Display now flushes on that result and after one coalesced
+event. Beast tests and a final DE25 boot/Atlas/Dock Keep/Remove gate pass.
+The blank first Desktop frame remains reproducible with committed Display as
+well as this change; opening a volume makes its icons visible. Haiku read-only
+`src/apps/deskbar/ExpandoMenuBar.cpp` and `WindowMenu.cpp` informed grouping
+and menu presentation; Astra uses Config Kit and native bundle identity for
+its own state. Haiku read-only `src/servers/app/ServerApp.cpp` and
+`Desktop.cpp` informed bounded message handling and dirty-region processing;
+Astra retains its own render-batch contract. Design reference: `~/Downloads/Astra68 Desktop Design/Astra
+Desktop.dc.html`. Separate minimized group, Dock preferences, application
+bundle drop from Atlas, and overflow navigation remain open.
 
 Dock instance-policy checkpoint, 2026-10-31: Bundle manifest `single-instance`
 remains authority; GUI protocol 28 carries its validated flag and an exact

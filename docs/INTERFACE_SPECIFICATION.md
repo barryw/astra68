@@ -163,9 +163,12 @@ pressed, and focus transitions; applications retain only semantic enablement.
   Hover text identifies the policy and running-session count. Selecting a
   window restores and raises that exact window. Minimized windows stay with
   their application icon. The bundle manifest is the policy authority; the
-  native launcher rechecks the bundle and volume for each new instance. Dock
-  preferences and pinned application launch behavior belong to a Config
-  Kit-backed step; this Dock stores no separate preferences.
+  native launcher rechecks the bundle and volume for each new instance.
+  `Keep in Dock` and `Remove from Dock` use the shared Menu. Pinned applications
+  remain visible when idle; clicking one launches its exact bundle. Dragging
+  a running icon into the pinned group pins it, dragging a pin reorders it,
+  and dragging a pin above the Dock removes it. Pin order is one atomic Config
+  Kit system setting; invalid or unavailable bundles cannot launch from it.
 - `astra_window_close` destroys the server object immediately. A separate
   application-veto close-request event may be added with pointer routing; it
   must not change the explicit destroy operation.

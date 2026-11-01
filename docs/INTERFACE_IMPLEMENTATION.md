@@ -50,7 +50,7 @@ order needed to finish the complete design without application-private UI.
 | Telescope | 2a, 3a | Cmd-Space search/launch surface, filesystem change index, ranked results, keyboard selection and open | pending |
 | System panels | 4b, 5a-5b | Open, Save, Fonts, and truthful pixel-format-aware Colour services | pending |
 | Atlas | 2b | shared sidebar and toolbar with grid, list, and columns views | native DH0 root icon viewer accepted on DE25 release `5bc3bbea`; guest enumeration, scrolling, resize and retirement pass; broader browsing/management deferred; see [Atlas continuation](HANDOVER_2026-10-12_ATLAS.md) and the [volumes design](superpowers/specs/2026-10-12-production-filesystem-volumes-design.md) |
-| Dock and window policy | 2c | pinned/running/minimized groups, instance state, hold menu, durable ordering | hardware overlap path started; policy UI pending |
+| Dock and window policy | 2c | pinned/running/minimized groups, instance state, hold menu, durable ordering | running-session grouping, shared instance menu, single-instance policy, Config Kit pin order, drag reorder and removal, and idle pinned launch pass on DE25; minimized windows remain in app groups, preferences and overflow navigation pending |
 | Workspace finish | 1a-1c | volume objects, titlebar treatment B, designed icon strikes, status surfaces | partial |
 | Scenes | 3a | discoverable scene ledger and menu switching over fixed 1080p60 timing | hardware contract complete; UI pending |
 

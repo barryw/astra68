@@ -242,3 +242,9 @@ ASTRA_FILESYSTEM_15.11 {
         astra_trash_restore;
         astra_trash_empty;
 } ASTRA_FILESYSTEM_15.10;
+
+ASTRA_FILESYSTEM_15.12 {
+    global:
+        astra_application_entry_load;
+        astra_application_entry_destroy;
+} ASTRA_FILESYSTEM_15.11;

@@ -1,7 +1,9 @@
 #include <astra/application.h>
+#include <astra/application_catalog.h>
 #include <astra/bundle.h>
 #include <astra/bytes.h>
 #include <astra/clipboard.h>
+#include <astra/config_library.h>
 #include <astra/display.h>
 #include <astra/endian.h>
 #include <astra/fonts.h>
@@ -24,6 +26,7 @@
 #include <astra/window.h>
 #include <astra/window_scene.h>
 
+#include "dock_pins.h"
 #include "window_graphics.h"
 
 #pragma GCC diagnostic push
@@ -59,6 +62,7 @@
 #define DISPLAY_DOCK_HOLD_MS 500u
 /* Launch workers can wait for supervisor startup; bound concurrent requests. */
 #define DISPLAY_DOCK_PENDING_MAX 8u
+#define DISPLAY_DOCK_APP_LIMIT (ASTRA_WAIT_MULTIPLE_MAX + DISPLAY_DOCK_PIN_LIMIT)
 
 enum {
     DISPLAY_OVERLAY_NONE = 0u,
@@ -251,6 +255,7 @@ typedef struct DisplayWindowMenuEntry {
 
 typedef struct DisplayDockApp {
     uint32_t session_index;
+    uint32_t pin_index;
     uint32_t sessions;
     uint32_t top_window;
 } DisplayDockApp;
@@ -344,12 +349,24 @@ typedef struct DisplayState {
     uint32_t window_menu_source;
     uint32_t dock_press_session;
     uint64_t dock_press_at;
+    int32_t dock_press_x;
+    uint8_t dock_dragging;
     uint32_t dock_launch_session;
     uint32_t dock_launcher;
     uint32_t dock_result_receive;
     uint32_t dock_result_send;
     uint32_t dock_launch_pending;
     uint32_t dock_launch_error_session;
+    uint32_t dock_launch_pin;
+    uint32_t dock_launch_error_pin;
+    uint8_t dock_error_pin_change;
+    uint32_t dock_press_pin;
+    DisplayDockPins dock_pins;
+    AstraConfig dock_config;
+    AstraProcessFilesystem dock_files;
+    uint8_t dock_config_ready;
+    uint8_t dock_files_ready;
+    uint8_t dock_config_corrupt;
     uint32_t bar_heading_owner;
     uint32_t bar_heading_count;
     uint32_t bar_window_heading;
@@ -1197,6 +1214,152 @@ static void window_menu_apply(DisplayState *state, uint32_t source,
 static uint32_t window_menu_command(DisplayState *state,
     const AstraTheme *theme, uint32_t id, uint32_t action);
 
+static uint32_t dock_pins_save(DisplayState *state)
+{
+    uint32_t required = 0u, status;
+    char *encoded;
+
+    if (!state->dock_config_ready || state->dock_config_corrupt)
+        return ASTRA_STATUS_ACCESS;
+    status = display_dock_pins_encode(&state->dock_pins,
+                                      NULL, 0u, &required);
+    if (status != ASTRA_STATUS_LIMIT) return status;
+    encoded = astra_runtime_allocate(required);
+    if (encoded == NULL) return ASTRA_STATUS_LIMIT;
+    status = display_dock_pins_encode(&state->dock_pins,
+                                      encoded, required, &required);
+    if (status == ASTRA_STATUS_OK) {
+        status = astra_config_reload(&state->dock_config, NULL) ==
+            ASTRA_CONFIG_OK &&
+            astra_config_set_string(&state->dock_config,
+                "pinned", 0u, encoded) == ASTRA_CONFIG_OK ?
+            ASTRA_STATUS_OK : ASTRA_STATUS_IO;
+    }
+    astra_runtime_deallocate(encoded);
+    return status;
+}
+
+static void dock_pin_refresh(DisplayState *state, uint32_t index)
+{
+    DisplayDockPin *pin = &state->dock_pins.entries[index];
+    AstraApplicationEntry entry = {0};
+    AstraFileInfo info = ASTRA_FILE_INFO_INIT;
+    AstraAicon icon;
+    void *bytes = NULL;
+    uint32_t length = 0u;
+
+    pin->online = 0u;
+    if (!state->dock_files_ready ||
+        astra_application_entry_load(&state->dock_files, pin->path,
+            &entry) != ASTRA_VFS_OK)
+        return;
+    if (strcmp(entry.id, pin->id) != 0) goto done;
+    pin->online = 1u;
+    (void)astra_string_copy(pin->name, sizeof(pin->name), entry.name);
+    if (astra_filesystem_stat(&state->dock_files.filesystem, entry.icon,
+            &info) != ASTRA_VFS_OK || info.byte_size == 0u ||
+        info.byte_size > 65536u) goto done;
+    bytes = astra_runtime_allocate((size_t)info.byte_size);
+    if (bytes == NULL ||
+        astra_process_read_file(&state->dock_files, entry.icon, bytes,
+            (uint32_t)info.byte_size, &length) != ASTRA_VFS_OK ||
+        length != info.byte_size ||
+        astra_aicon_open(bytes, length, &icon) != ASTRA_BUNDLE_OK)
+        goto done;
+    astra_runtime_deallocate(pin->icon_bytes);
+    pin->icon_bytes = bytes;
+    pin->icon_length = length;
+    bytes = NULL;
+done:
+    astra_runtime_deallocate(bytes);
+    astra_application_entry_destroy(&entry);
+}
+
+static void dock_pins_open(DisplayState *state, const AstraStartupInfo *startup)
+{
+    uint32_t count = 0u, length = 0u;
+    uint32_t status = astra_config_open_system(startup, 1u,
+        ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
+        &state->dock_config, NULL);
+
+    if (status == ASTRA_CONFIG_OK) {
+        state->dock_config_ready = 1u;
+        status = astra_config_count(&state->dock_config, "pinned", &count);
+        if (status == ASTRA_CONFIG_OK && count == 1u) {
+            status = astra_config_get_string(&state->dock_config, "pinned",
+                0u, NULL, 0u, &length);
+            if (status == ASTRA_CONFIG_BUFFER_TOO_SMALL) {
+                char *encoded = astra_runtime_allocate(length + 1u);
+                if (encoded != NULL &&
+                    astra_config_get_string(&state->dock_config, "pinned",
+                        0u, encoded, length + 1u, &length) ==
+                        ASTRA_CONFIG_OK &&
+                    display_dock_pins_decode(&state->dock_pins,
+                        encoded, length) == ASTRA_STATUS_OK)
+                    status = ASTRA_CONFIG_OK;
+                else status = ASTRA_CONFIG_MALFORMED;
+                astra_runtime_deallocate(encoded);
+            }
+        }
+        if (status != ASTRA_CONFIG_OK || count > 1u) {
+            state->dock_config_corrupt = 1u;
+            (void)astra_log_failure("dock pinned settings",
+                count > 1u ? ASTRA_CONFIG_MALFORMED : status);
+        }
+    } else (void)astra_log_failure("dock config open", status);
+    state->dock_files_ready = astra_process_filesystem_open(
+        &state->dock_files, startup) == ASTRA_VFS_OK;
+    if (!state->dock_files_ready)
+        (void)astra_log_failure("dock filesystem open", ASTRA_STATUS_IO);
+    for (uint32_t at = 0u; at < state->dock_pins.count; ++at)
+        dock_pin_refresh(state, at);
+}
+
+static uint32_t dock_pin_toggle(DisplayState *state, const char *id,
+                                 const char *name, const char *path)
+{
+    int32_t found = display_dock_pins_find(&state->dock_pins, id);
+    uint32_t status;
+
+    if (found >= 0) {
+        uint32_t at = (uint32_t)found;
+        uint32_t last = state->dock_pins.count - 1u;
+        (void)display_dock_pins_move(&state->dock_pins, at, last);
+        --state->dock_pins.count;
+        status = dock_pins_save(state);
+        if (status == ASTRA_STATUS_OK) {
+            astra_runtime_deallocate(state->dock_pins.entries[last].path);
+            astra_runtime_deallocate(state->dock_pins.entries[last].icon_bytes);
+            state->dock_pins.entries[last] = (DisplayDockPin){0};
+        } else {
+            ++state->dock_pins.count;
+            (void)display_dock_pins_move(&state->dock_pins, last, at);
+        }
+        return status;
+    }
+    status = display_dock_pins_set(&state->dock_pins, id, name, path);
+    if (status != ASTRA_STATUS_OK) return status;
+    status = dock_pins_save(state);
+    if (status != ASTRA_STATUS_OK)
+        (void)display_dock_pins_remove(&state->dock_pins,
+                                       state->dock_pins.count - 1u);
+    else dock_pin_refresh(state, state->dock_pins.count - 1u);
+    return status;
+}
+
+static uint32_t dock_pin_move(DisplayState *state, uint32_t from,
+                              uint32_t to)
+{
+    uint32_t status;
+    if (from == to) return ASTRA_STATUS_OK;
+    status = display_dock_pins_move(&state->dock_pins, from, to);
+    if (status != ASTRA_STATUS_OK) return status;
+    status = dock_pins_save(state);
+    if (status != ASTRA_STATUS_OK)
+        (void)display_dock_pins_move(&state->dock_pins, to, from);
+    return status;
+}
+
 static int dock_same_app(const DisplaySession *first,
                          const DisplaySession *other)
 {
@@ -1207,20 +1370,37 @@ static int dock_same_app(const DisplaySession *first,
                 first->app_id_length) == 0);
 }
 
+static int dock_app_matches(const DisplayState *state,
+                            const DisplayDockApp *app,
+                            const DisplaySession *session)
+{
+    if (app->pin_index != UINT32_MAX) {
+        const char *id = state->dock_pins.entries[app->pin_index].id;
+        size_t length = strlen(id);
+        return session->app_id_length == length &&
+            memcmp(session->app_id, id, length) == 0;
+    }
+    return app->session_index != UINT32_MAX &&
+        dock_same_app(&state->sessions[app->session_index], session);
+}
+
 static uint32_t dock_collect(const DisplayState *state, DisplayDockApp *apps)
 {
     uint32_t count = 0u;
 
+    for (uint32_t at = 0u; at < state->dock_pins.count; ++at)
+        apps[count++] = (DisplayDockApp){.session_index = UINT32_MAX,
+                                         .pin_index = at};
     for (uint32_t at = 0u; at < state->session_count; ++at) {
         const DisplaySession *session = &state->sessions[at];
         uint32_t group = 0u;
 
         if (session->name_length == 0u) continue;
         for (; group < count; ++group)
-            if (dock_same_app(&state->sessions[apps[group].session_index],
-                              session)) break;
+            if (dock_app_matches(state, &apps[group], session)) break;
         if (group == count)
-            apps[count++] = (DisplayDockApp){.session_index = at};
+            apps[count++] = (DisplayDockApp){.session_index = at,
+                                             .pin_index = UINT32_MAX};
         else apps[group].session_index = at;
         ++apps[group].sessions;
     }
@@ -1230,8 +1410,6 @@ static uint32_t dock_collect(const DisplayState *state, DisplayDockApp *apps)
         if (window->request.type == ASTRA_WINDOW_DESKTOP ||
             window->request.type == ASTRA_WINDOW_SHEET) continue;
         for (uint32_t group = 0u; group < count; ++group) {
-            const DisplaySession *first =
-                &state->sessions[apps[group].session_index];
             const DisplaySession *member = NULL;
 
             if (apps[group].top_window != 0u) continue;
@@ -1241,11 +1419,25 @@ static uint32_t dock_collect(const DisplayState *state, DisplayDockApp *apps)
                     member = &state->sessions[session];
                     break;
                 }
-            if (member != NULL && dock_same_app(first, member))
+            if (member != NULL && dock_app_matches(state, &apps[group], member))
                 apps[group].top_window = window->id;
         }
     }
     return count;
+}
+
+static const DisplaySession *dock_app_session(const DisplayState *state,
+                                              const DisplayDockApp *app)
+{
+    return app->session_index == UINT32_MAX ? NULL :
+        &state->sessions[app->session_index];
+}
+
+static const DisplayDockPin *dock_app_pin(const DisplayState *state,
+                                          const DisplayDockApp *app)
+{
+    return app->pin_index == UINT32_MAX ? NULL :
+        &state->dock_pins.entries[app->pin_index];
 }
 
 static void dock_launch_worker(uint32_t argument)
@@ -1263,36 +1455,52 @@ static void dock_launch_worker(uint32_t argument)
     astra_runtime_deallocate(job);
 }
 
+static uint32_t dock_launch_path(DisplayState *state, const char *path,
+                                 uint16_t length, uint32_t session)
+{
+    DockLaunchJob *job;
+    AstraThreadStart start;
+
+    if (path == NULL || length == 0u) return ASTRA_STATUS_ACCESS;
+    if (state->dock_launch_pending >= DISPLAY_DOCK_PENDING_MAX)
+        return ASTRA_STATUS_LIMIT;
+    job = astra_runtime_allocate(sizeof(*job) + length + 1u);
+    if (job == NULL) return ASTRA_STATUS_LIMIT;
+    *job = (DockLaunchJob){state->dock_launcher, state->dock_result_send,
+                            session, length};
+    memcpy(job->path, path, length + 1u);
+    start = (AstraThreadStart){dock_launch_worker,
+                                (uint32_t)(uintptr_t)job};
+    if (astra_rt_thread_start_detached(&start,
+            ASTRA_PROCESS_PRIORITY_NORMAL) != ASTRA_SYSCALL_OK) {
+        astra_runtime_deallocate(job);
+        return ASTRA_STATUS_LIMIT;
+    }
+    ++state->dock_launch_pending;
+    return ASTRA_STATUS_OK;
+}
+
 static uint32_t dock_launch_new(DisplayState *state, uint32_t session)
 {
     for (uint32_t at = 0u; at < state->session_count; ++at) {
         const DisplaySession *entry = &state->sessions[at];
-        DockLaunchJob *job;
-        AstraThreadStart start;
-
         if (entry->id != session) continue;
-        if (entry->bundle_path == NULL ||
-            (entry->bundle_flags & ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE) != 0u)
+        if ((entry->bundle_flags & ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE) != 0u)
             return ASTRA_STATUS_ACCESS;
-        if (state->dock_launch_pending >= DISPLAY_DOCK_PENDING_MAX)
-            return ASTRA_STATUS_LIMIT;
-        job = astra_runtime_allocate(sizeof(*job) + entry->bundle_path_length + 1u);
-        if (job == NULL) return ASTRA_STATUS_LIMIT;
-        *job = (DockLaunchJob){state->dock_launcher, state->dock_result_send,
-                                session, entry->bundle_path_length};
-        memcpy(job->path, entry->bundle_path,
-               entry->bundle_path_length + 1u);
-        start = (AstraThreadStart){dock_launch_worker,
-                                    (uint32_t)(uintptr_t)job};
-        if (astra_rt_thread_start_detached(&start,
-                ASTRA_PROCESS_PRIORITY_NORMAL) != ASTRA_SYSCALL_OK) {
-            astra_runtime_deallocate(job);
-            return ASTRA_STATUS_LIMIT;
-        }
-        ++state->dock_launch_pending;
-        return ASTRA_STATUS_OK;
+        return dock_launch_path(state, entry->bundle_path,
+                                entry->bundle_path_length, session);
     }
     return ASTRA_STATUS_NOT_FOUND;
+}
+
+static uint32_t dock_launch_pin(DisplayState *state, uint32_t index)
+{
+    if (index >= state->dock_pins.count) return ASTRA_STATUS_NOT_FOUND;
+    dock_pin_refresh(state, index);
+    const DisplayDockPin *pin = &state->dock_pins.entries[index];
+    if (!pin->online) return ASTRA_STATUS_NOT_FOUND;
+    return dock_launch_path(state, pin->path,
+                            (uint16_t)strlen(pin->path), 0u);
 }
 
 static uint32_t dock_hit(const DisplayState *state, uint32_t count, int dots)
@@ -1312,6 +1520,73 @@ static uint32_t dock_hit(const DisplayState *state, uint32_t count, int dots)
     return (uint32_t)local / DISPLAY_DOCK_SLOT;
 }
 
+static const DisplaySession *dock_app_session(const DisplayState *state,
+                                              const DisplayDockApp *app);
+
+static uint32_t dock_drop_index(const DisplayState *state, uint32_t count)
+{
+    uint32_t group = dock_hit(state, count, 0);
+    uint32_t visible = count > ASTRA_DISPLAY_WIDTH / DISPLAY_DOCK_SLOT ?
+        ASTRA_DISPLAY_WIDTH / DISPLAY_DOCK_SLOT : count;
+    int32_t left = ((int32_t)ASTRA_DISPLAY_WIDTH -
+        (int32_t)(visible * DISPLAY_DOCK_SLOT)) / 2;
+    if (state->pointer_y >= (int32_t)DISPLAY_WORK_BOTTOM &&
+        state->pointer_y < (int32_t)ASTRA_DISPLAY_HEIGHT &&
+        state->pointer_x >= left - 20 && state->pointer_x < left)
+        return 0u;
+    if (group >= count) return UINT32_MAX;
+    if (group >= state->dock_pins.count) return state->dock_pins.count;
+    return group + (state->pointer_x - left -
+        (int32_t)group * DISPLAY_DOCK_SLOT >=
+        (int32_t)DISPLAY_DOCK_SLOT / 2 ? 1u : 0u);
+}
+
+static uint32_t dock_drag_apply(DisplayState *state,
+    const DisplayDockApp *apps, uint32_t count, uint32_t pressed_session,
+    uint32_t pressed_pin)
+{
+    uint32_t insertion = dock_drop_index(state, count);
+    if (pressed_pin != 0u) {
+        uint32_t from = pressed_pin - 1u;
+        if (from >= state->dock_pins.count) return ASTRA_STATUS_NOT_FOUND;
+        if (state->pointer_y < (int32_t)DISPLAY_WORK_BOTTOM - 12)
+            return dock_pin_toggle(state, state->dock_pins.entries[from].id,
+                state->dock_pins.entries[from].name,
+                state->dock_pins.entries[from].path);
+        if (insertion == UINT32_MAX) return ASTRA_STATUS_OK;
+        return dock_pin_move(state, from,
+            insertion > from ? insertion - 1u : insertion);
+    }
+    if (insertion == UINT32_MAX || pressed_session == 0u)
+        return ASTRA_STATUS_OK;
+    {
+        uint32_t visible = count > ASTRA_DISPLAY_WIDTH / DISPLAY_DOCK_SLOT ?
+            ASTRA_DISPLAY_WIDTH / DISPLAY_DOCK_SLOT : count;
+        int32_t left = ((int32_t)ASTRA_DISPLAY_WIDTH -
+            (int32_t)(visible * DISPLAY_DOCK_SLOT)) / 2;
+        if (state->pointer_x > left +
+            (int32_t)(state->dock_pins.count * DISPLAY_DOCK_SLOT) + 8)
+            return ASTRA_STATUS_OK;
+    }
+    for (uint32_t group = state->dock_pins.count; group < count; ++group) {
+        const DisplaySession *session = dock_app_session(state, &apps[group]);
+        if (session == NULL || session->id != pressed_session ||
+            session->app_id_length == 0u || session->bundle_path == NULL)
+            continue;
+        uint32_t status = display_dock_pins_set(&state->dock_pins,
+            session->app_id, session->name, session->bundle_path);
+        if (status != ASTRA_STATUS_OK) return status;
+        uint32_t last = state->dock_pins.count - 1u;
+        (void)display_dock_pins_move(&state->dock_pins, last, insertion);
+        status = dock_pins_save(state);
+        if (status != ASTRA_STATUS_OK)
+            (void)display_dock_pins_remove(&state->dock_pins, insertion);
+        else dock_pin_refresh(state, insertion);
+        return status;
+    }
+    return ASTRA_STATUS_NOT_FOUND;
+}
+
 static const AstraControlFrame menu_work = {
     0, DISPLAY_WORK_TOP, ASTRA_DISPLAY_WIDTH, DISPLAY_WORK_BOTTOM - DISPLAY_WORK_TOP
 };
@@ -1327,13 +1602,13 @@ static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp
     if (state->overlay != DISPLAY_OVERLAY_MENU) return;
     if (owner == 0u && (request == DISPLAY_WINDOW_MENU_REQUEST ||
         request == DISPLAY_DOCK_MENU_REQUEST) &&
-        selection >= (request == DISPLAY_DOCK_MENU_REQUEST ? 3u :
+        selection >= (request == DISPLAY_DOCK_MENU_REQUEST ? 4u :
                      DISPLAY_WINDOW_MENU_FIRST_ENTRY) &&
-        selection - (request == DISPLAY_DOCK_MENU_REQUEST ? 3u :
+        selection - (request == DISPLAY_DOCK_MENU_REQUEST ? 4u :
                      DISPLAY_WINDOW_MENU_FIRST_ENTRY) <
             state->window_menu_entry_count)
         target = state->window_menu_entries[
-            selection - (request == DISPLAY_DOCK_MENU_REQUEST ? 3u :
+            selection - (request == DISPLAY_DOCK_MENU_REQUEST ? 4u :
                          DISPLAY_WINDOW_MENU_FIRST_ENTRY)].id;
 
     damage_both(state, overlay_bounds(state));
@@ -1373,17 +1648,42 @@ static void menu_end(DisplayState *state, uint32_t selection, uint32_t timestamp
             window_menu_apply(state, source, selection, target);
     } else if (request == DISPLAY_DOCK_MENU_REQUEST) {
         if (status == ASTRA_STATUS_OK && selection == 1u) {
-            uint32_t launch = dock_launch_new(state, state->dock_launch_session);
+            uint32_t launch = state->dock_launch_session != 0u ?
+                dock_launch_new(state, state->dock_launch_session) :
+                dock_launch_pin(state, state->dock_launch_pin - 1u);
             if (launch != ASTRA_STATUS_OK) {
                 (void)astra_log_failure("dock new instance", launch);
                 state->dock_launch_error_session = state->dock_launch_session;
+                state->dock_launch_error_pin = state->dock_launch_pin;
             }
+        } else if (status == ASTRA_STATUS_OK && selection == 2u) {
+            const DisplayDockPin *pin = state->dock_launch_pin != 0u ?
+                &state->dock_pins.entries[state->dock_launch_pin - 1u] : NULL;
+            const DisplaySession *session = NULL;
+            for (uint32_t at = 0u; at < state->session_count; ++at)
+                if (state->sessions[at].id == state->dock_launch_session) {
+                    session = &state->sessions[at];
+                    break;
+                }
+            uint32_t changed = pin != NULL ?
+                dock_pin_toggle(state, pin->id, pin->name, pin->path) :
+                session != NULL ? dock_pin_toggle(state, session->app_id,
+                    session->name, session->bundle_path) : ASTRA_STATUS_NOT_FOUND;
+            if (changed != ASTRA_STATUS_OK) {
+                (void)astra_log_failure("dock pin change", changed);
+                state->dock_launch_error_session = state->dock_launch_session;
+                state->dock_launch_error_pin = state->dock_launch_pin;
+                state->dock_error_pin_change = 1u;
+            }
+            damage_both(state, (DamageRect){0, DISPLAY_WORK_BOTTOM,
+                ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u});
         } else if (status == ASTRA_STATUS_OK && target != 0u) {
             AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
             (void)window_menu_command(state, &theme, target,
                 ASTRA_GUI_WINDOW_ACTIVATE);
         }
         state->dock_launch_session = 0u;
+        state->dock_launch_pin = 0u;
     } else if (selection == 1u || selection == 3u || selection == 4u) {
         for (uint32_t at = 0u; at < state->count; ++at)
             if (state->windows[at].request.type == ASTRA_WINDOW_DESKTOP) {
@@ -1453,6 +1753,8 @@ static uint32_t menu_install(DisplayState *state, const AstraMenu *menu,
     if (state->overlay_capacity < bytes) state->overlay_capacity = bytes;
     state->last_click_window = 0u;
     state->dock_press_session = 0u;
+    state->dock_press_pin = 0u;
+    state->dock_dragging = 0u;
     state->menu = *menu;
     state->submenu = (AstraMenu)ASTRA_MENU_INIT;
     state->menu_row_count = document != NULL ?
@@ -1580,21 +1882,22 @@ static uint32_t window_menu_open(DisplayState *state, uint32_t heading,
 }
 
 static int dock_window_in_app(const DisplayState *state,
-    const DisplaySession *first, const DisplayWindow *window)
+    const DisplayDockApp *app, const DisplayWindow *window)
 {
     if (window->request.type == ASTRA_WINDOW_DESKTOP ||
         window->request.type == ASTRA_WINDOW_SHEET)
         return 0;
     for (uint32_t at = 0u; at < state->session_count; ++at)
         if (state->sessions[at].id == window->session)
-            return dock_same_app(first, &state->sessions[at]);
+            return dock_app_matches(state, app, &state->sessions[at]);
     return 0;
 }
 
 static uint32_t dock_menu_open(DisplayState *state,
     const DisplayDockApp *apps, uint32_t group, uint32_t visible)
 {
-    const DisplaySession *first = &state->sessions[apps[group].session_index];
+    const DisplaySession *first = dock_app_session(state, &apps[group]);
+    const DisplayDockPin *pin = dock_app_pin(state, &apps[group]);
     static const char minimized[] = " [minimized]";
     uint32_t count = 0u, at = 0u, status;
     AstraMenu menu = ASTRA_MENU_INIT;
@@ -1604,9 +1907,9 @@ static uint32_t dock_menu_open(DisplayState *state,
         (int32_t)(visible * DISPLAY_DOCK_SLOT)) / 2;
 
     for (uint32_t index = 0u; index < state->count; ++index)
-        if (dock_window_in_app(state, first, &state->windows[index]))
+        if (dock_window_in_app(state, &apps[group], &state->windows[index]))
             ++count;
-    rows = astra_runtime_allocate((2u + (count != 0u ? count : 1u)) *
+    rows = astra_runtime_allocate((3u + (count != 0u ? count : 1u)) *
                                   sizeof(*rows));
     entries = count != 0u ?
         astra_runtime_allocate(count * sizeof(*entries)) : NULL;
@@ -1619,7 +1922,7 @@ static uint32_t dock_menu_open(DisplayState *state,
         const DisplayWindow *window = &state->windows[index - 1u];
         uint32_t length;
 
-        if (!dock_window_in_app(state, first, window)) continue;
+        if (!dock_window_in_app(state, &apps[group], window)) continue;
         entries[at].id = window->id;
         length = window->request.title_length;
         if (length == 0u) {
@@ -1631,18 +1934,28 @@ static uint32_t dock_menu_open(DisplayState *state,
                    sizeof(minimized) - 1u);
             length += sizeof(minimized) - 1u;
         }
-        rows[2u + at] = (AstraMenuItem){entries[at].label, length,
+        rows[3u + at] = (AstraMenuItem){entries[at].label, length,
             window->id == apps[group].top_window ? ASTRA_MENU_CHECKED : 0u};
         ++at;
     }
-    rows[0] = (first->bundle_flags & ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE) != 0u ?
+    rows[0] = first == NULL ?
+        (AstraMenuItem){"Open", 4u, 0u} :
+        (first->bundle_flags & ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE) != 0u ?
         (AstraMenuItem){"Single instance", 15u, ASTRA_MENU_DISABLED} :
         (AstraMenuItem){"New Instance", 12u, 0u};
-    rows[1] = (AstraMenuItem){NULL, 0u, ASTRA_MENU_SEPARATOR};
+    rows[1] = pin != NULL ?
+        (AstraMenuItem){"Remove from Dock", 16u,
+            state->dock_config_ready && !state->dock_config_corrupt ? 0u :
+            ASTRA_MENU_DISABLED} :
+        (AstraMenuItem){"Keep in Dock", 12u,
+            state->dock_config_ready && !state->dock_config_corrupt &&
+            first != NULL && first->bundle_path != NULL &&
+            first->app_id_length != 0u ? 0u : ASTRA_MENU_DISABLED};
+    rows[2] = (AstraMenuItem){NULL, 0u, ASTRA_MENU_SEPARATOR};
     if (count == 0u)
-        rows[2] = (AstraMenuItem){"Opening", 7u, ASTRA_MENU_DISABLED};
+        rows[3] = (AstraMenuItem){"No open windows", 15u, ASTRA_MENU_DISABLED};
     if (astra_interface_menu_init(&menu, rows,
-        2u + (count != 0u ? count : 1u),
+        3u + (count != 0u ? count : 1u),
         &menu_work, left + (int32_t)group * DISPLAY_DOCK_SLOT,
         DISPLAY_WORK_BOTTOM, 210u, 0u) != ASTRA_OK) {
         status = ASTRA_STATUS_LIMIT;
@@ -1651,7 +1964,8 @@ static uint32_t dock_menu_open(DisplayState *state,
     if (status == ASTRA_STATUS_OK) {
         state->window_menu_entries = entries;
         state->window_menu_entry_count = count;
-        state->dock_launch_session = first->id;
+        state->dock_launch_session = first != NULL ? first->id : 0u;
+        state->dock_launch_pin = pin != NULL ? apps[group].pin_index + 1u : 0u;
     } else {
         astra_runtime_deallocate(rows);
         astra_runtime_deallocate(entries);
@@ -1663,10 +1977,11 @@ static uint32_t active_window(const DisplayState *state);
 
 static int dock_tick(DisplayState *state, uint64_t now)
 {
-    DisplayDockApp apps[ASTRA_WAIT_MULTIPLE_MAX] = {0};
+    DisplayDockApp apps[DISPLAY_DOCK_APP_LIMIT] = {0};
     uint32_t active, count, group;
 
-    if (state->dock_press_session == 0u ||
+    if ((state->dock_press_session == 0u && state->dock_press_pin == 0u) ||
+        state->dock_dragging != 0u ||
         now - state->dock_press_at <
             (uint64_t)DISPLAY_DOCK_HOLD_MS * UINT64_C(1000000) ||
         state->overlay != DISPLAY_OVERLAY_NONE ||
@@ -1679,12 +1994,16 @@ static int dock_tick(DisplayState *state, uint64_t now)
     count = dock_collect(state, apps);
     group = dock_hit(state, count, 0);
     if (group >= count ||
-        state->sessions[apps[group].session_index].id !=
-            state->dock_press_session)
+        (state->dock_press_pin != 0u ?
+            apps[group].pin_index + 1u != state->dock_press_pin :
+            apps[group].session_index == UINT32_MAX ||
+            state->sessions[apps[group].session_index].id !=
+                state->dock_press_session))
         return 0;
     if (dock_menu_open(state, apps, group, count) != ASTRA_STATUS_OK)
         return 0;
     state->dock_press_session = 0u;
+    state->dock_press_pin = 0u;
     state->swallow_pointer_up |= 1u;
     return 1;
 }
@@ -3108,7 +3427,7 @@ static void system_bar_title(const DisplayState *state, const char **title,
 static int build_dock(AstraRenderBuilder *builder, DisplayState *state,
                       const AstraTheme *theme)
 {
-    DisplayDockApp apps[ASTRA_WAIT_MULTIPLE_MAX] = {0};
+    DisplayDockApp apps[DISPLAY_DOCK_APP_LIMIT] = {0};
     uint32_t count = dock_collect(state, apps);
     uint32_t visible = count > ASTRA_DISPLAY_WIDTH / DISPLAY_DOCK_SLOT ?
         ASTRA_DISPLAY_WIDTH / DISPLAY_DOCK_SLOT : count;
@@ -3119,12 +3438,18 @@ static int build_dock(AstraRenderBuilder *builder, DisplayState *state,
         0, 0, ASTRA_DISPLAY_WIDTH, 1u, color(theme->frame)))
         return 0;
     for (uint32_t at = 0u; at < visible; ++at) {
-        const DisplaySession *session = &state->sessions[apps[at].session_index];
+        const DisplaySession *session = dock_app_session(state, &apps[at]);
+        const DisplayDockPin *pin = dock_app_pin(state, &apps[at]);
+        const void *icon_bytes = session != NULL && session->icon_bytes != NULL ?
+            session->icon_bytes : pin != NULL ? pin->icon_bytes : NULL;
+        uint32_t icon_length = session != NULL && session->icon_bytes != NULL ?
+            session->icon_length : pin != NULL ? pin->icon_length : 0u;
+        const char *name = pin != NULL ? pin->name : session->name;
         AstraAicon icon;
         AstraAiconStrike strike;
         int32_t x = left + (int32_t)at * DISPLAY_DOCK_SLOT + 10;
-        int has_icon = session->icon_bytes != NULL &&
-            astra_aicon_open(session->icon_bytes, session->icon_length,
+        int has_icon = icon_bytes != NULL &&
+            astra_aicon_open(icon_bytes, icon_length,
                              &icon) == ASTRA_BUNDLE_OK &&
             astra_aicon_strike(&icon, DISPLAY_DOCK_ICON,
                                &strike) == ASTRA_BUNDLE_OK;
@@ -3139,8 +3464,8 @@ static int build_dock(AstraRenderBuilder *builder, DisplayState *state,
                 strike.width, strike.height))
                 return 0;
         } else {
-            const char *letter = session->name[0] > 0 &&
-                (uint8_t)session->name[0] < 128u ? session->name : "?";
+            const char *letter = name[0] > 0 &&
+                (uint8_t)name[0] < 128u ? name : "?";
             if (!astra_render_builder_text_styled(builder,
                 state->system_resource[1], x + 11, 13, letter, 1u,
                 ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
@@ -3166,6 +3491,20 @@ static int build_dock(AstraRenderBuilder *builder, DisplayState *state,
                 color(theme->accent)))
                 return 0;
         }
+    }
+    if (state->dock_pins.count != 0u &&
+        state->dock_pins.count < visible &&
+        !astra_render_builder_fill(builder, state->system_resource[1],
+            left + (int32_t)state->dock_pins.count * DISPLAY_DOCK_SLOT,
+            9, 1u, 32u, color(theme->frame)))
+        return 0;
+    if (state->dock_dragging != 0u) {
+        uint32_t insertion = dock_drop_index(state, count);
+        if (insertion != UINT32_MAX && insertion <= visible &&
+            !astra_render_builder_fill(builder, state->system_resource[1],
+                left + (int32_t)insertion * DISPLAY_DOCK_SLOT - 2,
+                6, 3u, 37u, color(theme->accent)))
+            return 0;
     }
     return 1;
 }
@@ -3860,14 +4199,14 @@ static uint32_t notice_open(DisplayState *state, const AstraTheme *theme,
     return notice_install(state, theme, next, kind);
 }
 
-static uint32_t dock_name_prefix(const DisplaySession *session, uint32_t limit)
+static uint32_t dock_name_prefix(const char *name, uint32_t size,
+                                 uint32_t limit)
 {
-    uint32_t length = session->name_length < limit ?
-        session->name_length : limit;
+    uint32_t length = size < limit ? size : limit;
 
-    if (length < session->name_length)
+    if (length < size)
         while (length != 0u &&
-            ((uint8_t)session->name[length] & 0xc0u) == 0x80u)
+            ((uint8_t)name[length] & 0xc0u) == 0x80u)
             --length;
     return length;
 }
@@ -3876,14 +4215,22 @@ static uint32_t dock_tooltip_open(DisplayState *state,
                                   const AstraTheme *theme,
                                   const DisplayDockApp *app)
 {
-    const DisplaySession *session = &state->sessions[app->session_index];
+    const DisplaySession *session = dock_app_session(state, app);
+    const DisplayDockPin *pin = dock_app_pin(state, app);
+    const char *name = pin != NULL ? pin->name : session->name;
+    uint32_t size = pin != NULL ? (uint32_t)strlen(pin->name) :
+        session->name_length;
     DisplayNotice next = {0};
     AstraString label;
-    uint32_t name_length = dock_name_prefix(session, 18u);
+    uint32_t name_length = dock_name_prefix(name, size, 18u);
     astra_string_init(&label, next.text, sizeof(next.text));
-    (void)astra_string_append_bytes(&label, session->name, name_length);
+    (void)astra_string_append_bytes(&label, name, name_length);
     (void)astra_string_append(&label, ": ");
-    if ((session->bundle_flags & ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE) != 0u)
+    if (pin != NULL && !pin->online && session == NULL)
+        (void)astra_string_append(&label, "volume unavailable");
+    else if (session == NULL)
+        (void)astra_string_append(&label, "not running");
+    else if ((session->bundle_flags & ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE) != 0u)
         (void)astra_string_append(&label, "Single instance");
     else {
         (void)astra_string_append_u64(&label, app->sessions);
@@ -3898,22 +4245,30 @@ static uint32_t dock_tooltip_open(DisplayState *state,
 }
 
 static int dock_failure_notice(DisplayState *state,
-                               const AstraTheme *theme, uint32_t session)
+                               const AstraTheme *theme, uint32_t session,
+                               uint32_t pin, int pin_change)
 {
     DisplayNotice next = {0};
     AstraString label;
 
     astra_string_init(&label, next.text, sizeof(next.text));
+    if (pin != 0u && pin <= state->dock_pins.count) {
+        const char *name = state->dock_pins.entries[pin - 1u].name;
+        (void)astra_string_append_bytes(&label, name,
+            dock_name_prefix(name, (uint32_t)strlen(name), 20u));
+    }
     for (uint32_t at = 0u; at < state->session_count; ++at)
-        if (state->sessions[at].id == session) {
+        if (label.length == 0u && state->sessions[at].id == session) {
             (void)astra_string_append_bytes(&label,
                 state->sessions[at].name,
-                dock_name_prefix(&state->sessions[at], 20u));
+                dock_name_prefix(state->sessions[at].name,
+                    state->sessions[at].name_length, 20u));
             break;
         }
     if (label.length == 0u)
         (void)astra_string_append(&label, "Application");
-    (void)astra_string_append(&label, " could not be started");
+    (void)astra_string_append(&label, pin_change ?
+        " Dock change failed" : " could not be started");
     next.length = (uint16_t)label.length;
     next.visible = 1u;
     next.hide_at = astra_clock_monotonic() + UINT64_C(7000000000);
@@ -3927,10 +4282,15 @@ static int dock_launch_poll(DisplayState *state, const AstraTheme *theme)
     uint32_t size, handles, status;
     int changed = 0;
 
-    if (state->dock_launch_error_session != 0u) {
+    if (state->dock_launch_error_session != 0u ||
+        state->dock_launch_error_pin != 0u) {
         changed = dock_failure_notice(state, theme,
-                                      state->dock_launch_error_session);
+                                      state->dock_launch_error_session,
+                                      state->dock_launch_error_pin,
+                                      state->dock_error_pin_change);
         state->dock_launch_error_session = 0u;
+        state->dock_launch_error_pin = 0u;
+        state->dock_error_pin_change = 0u;
     }
 
     for (;;) {
@@ -3944,7 +4304,7 @@ static int dock_launch_poll(DisplayState *state, const AstraTheme *theme)
         if (state->dock_launch_pending != 0u)
             --state->dock_launch_pending;
         if (done.result != ASTRA_OK)
-            changed |= dock_failure_notice(state, theme, done.session);
+            changed |= dock_failure_notice(state, theme, done.session, 0u, 0);
     }
     return changed;
 }
@@ -4057,6 +4417,7 @@ static uint32_t compose(void *storage, uint32_t fence,
             /* The client draws the content surface itself; the service
                only clears Media RAM before the client's first frame. */
             content_ok = window->content_initialized != 0u ||
+                         window->content_dirty != 0u ||
                          astra_render_builder_fill(
                              &builder, window->content_resource, 0, 0,
                              window->request.width, window->request.height,
@@ -5989,6 +6350,18 @@ static uint32_t handle_pointer(DisplayState *state,
             damage_both(state, overlay_bounds(state));
         state->pointer_x = input->value_x;
         state->pointer_y = input->value_y;
+        if (state->dock_press_session != 0u || state->dock_press_pin != 0u) {
+            int32_t distance = state->pointer_x - state->dock_press_x;
+            if (distance < 0) distance = -distance;
+            if (distance >= 10 ||
+                state->pointer_y < (int32_t)DISPLAY_WORK_BOTTOM - 12) {
+                state->dock_dragging = 1u;
+                state->system_initialized = 0u;
+                damage_both(state, (DamageRect){0, DISPLAY_WORK_BOTTOM,
+                    ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u});
+                *effects |= DISPLAY_POINTER_RENDER;
+            }
+        }
         if (state->drag.source != 0u &&
             state->drag.drop_pending == 0u) {
             drag_motion(state, input->modifiers, input->timestamp_ms);
@@ -6001,13 +6374,14 @@ static uint32_t handle_pointer(DisplayState *state,
         }
         if (state->overlay == DISPLAY_OVERLAY_MENU)
             return menu_input(state, input, effects);
-        if (state->overlay == DISPLAY_OVERLAY_NONE &&
+        if (state->dock_dragging == 0u &&
+            state->overlay == DISPLAY_OVERLAY_NONE &&
             state->capture_window == 0u && state->drag.source == 0u &&
             grab_target(state) == state->count) {
             uint32_t active = active_window(state);
             if (active == state->count ||
                 state->windows[active].state != ASTRA_WINDOW_STATE_FULLSCREEN) {
-                DisplayDockApp apps[ASTRA_WAIT_MULTIPLE_MAX] = {0};
+                DisplayDockApp apps[DISPLAY_DOCK_APP_LIMIT] = {0};
                 uint32_t count = dock_collect(state, apps);
                 uint32_t group = dock_hit(state, count, 0);
                 if (group < count)
@@ -6102,17 +6476,39 @@ static uint32_t handle_pointer(DisplayState *state,
         uint32_t active = active_window(state);
         if (active == state->count ||
             state->windows[active].state != ASTRA_WINDOW_STATE_FULLSCREEN) {
-            DisplayDockApp apps[ASTRA_WAIT_MULTIPLE_MAX] = {0};
+            DisplayDockApp apps[DISPLAY_DOCK_APP_LIMIT] = {0};
             uint32_t count = dock_collect(state, apps);
             uint32_t group = dock_hit(state, count, 0);
             int down = (input->flags & ASTRA_INPUT_LOGICAL_DOWN) != 0u;
 
             if (input->code == ASTRA_INPUT_BUTTON_LEFT && !down &&
-                state->dock_press_session != 0u) {
+                (state->dock_press_session != 0u ||
+                 state->dock_press_pin != 0u)) {
                 uint32_t pressed = state->dock_press_session;
+                uint32_t pressed_pin = state->dock_press_pin;
                 state->dock_press_session = 0u;
+                state->dock_press_pin = 0u;
+                if (state->dock_dragging != 0u) {
+                    uint32_t result = dock_drag_apply(state, apps, count,
+                                                       pressed, pressed_pin);
+                    state->dock_dragging = 0u;
+                    if (result != ASTRA_STATUS_OK) {
+                        (void)astra_log_failure("dock drag", result);
+                        state->dock_launch_error_session = pressed;
+                        state->dock_launch_error_pin = pressed_pin;
+                        state->dock_error_pin_change = 1u;
+                    }
+                    state->system_initialized = 0u;
+                    damage_both(state, (DamageRect){0, DISPLAY_WORK_BOTTOM,
+                        ASTRA_DISPLAY_WIDTH, ASTRA_DISPLAY_HEIGHT, 1u});
+                    *effects |= DISPLAY_POINTER_RENDER;
+                    return ASTRA_STATUS_OK;
+                }
                 if (group < count &&
-                    state->sessions[apps[group].session_index].id == pressed) {
+                    (pressed_pin != 0u ?
+                        apps[group].pin_index + 1u == pressed_pin :
+                        apps[group].session_index != UINT32_MAX &&
+                        state->sessions[apps[group].session_index].id == pressed)) {
                     if (astra_clock_monotonic() - state->dock_press_at >=
                             (uint64_t)DISPLAY_DOCK_HOLD_MS * UINT64_C(1000000)) {
                         if (dock_menu_open(state, apps, group, count) ==
@@ -6122,21 +6518,31 @@ static uint32_t handle_pointer(DisplayState *state,
                         (void)window_menu_command(state, &theme,
                             apps[group].top_window, ASTRA_GUI_WINDOW_ACTIVATE);
                         *effects |= DISPLAY_POINTER_RENDER;
+                    } else if (apps[group].pin_index != UINT32_MAX) {
+                        uint32_t launch = dock_launch_pin(state,
+                            apps[group].pin_index);
+                        if (launch != ASTRA_STATUS_OK) {
+                            (void)astra_log_failure("dock pinned launch", launch);
+                            state->dock_launch_error_pin =
+                                apps[group].pin_index + 1u;
+                        }
                     }
                 }
                 return ASTRA_STATUS_OK;
             }
             if (group < count && down) {
+                const DisplaySession *session = dock_app_session(state,
+                    &apps[group]);
                 if (input->code == ASTRA_INPUT_BUTTON_LEFT &&
                     (input->modifiers & ASTRA_INPUT_MOD_ALT) != 0u &&
-                    (state->sessions[apps[group].session_index].bundle_flags &
+                    session != NULL &&
+                    (session->bundle_flags &
                         ASTRA_BUNDLE_FLAG_SINGLE_INSTANCE) == 0u) {
                     uint32_t launch = dock_launch_new(state,
-                        state->sessions[apps[group].session_index].id);
+                        session->id);
                     if (launch != ASTRA_STATUS_OK) {
                         (void)astra_log_failure("dock alt-click launch", launch);
-                        state->dock_launch_error_session =
-                            state->sessions[apps[group].session_index].id;
+                        state->dock_launch_error_session = session->id;
                     }
                     state->swallow_pointer_up |= 1u;
                 } else if (input->code == ASTRA_INPUT_BUTTON_RIGHT ||
@@ -6148,9 +6554,13 @@ static uint32_t handle_pointer(DisplayState *state,
                         *effects |= DISPLAY_POINTER_RENDER;
                     }
                 } else {
-                    state->dock_press_session =
-                        state->sessions[apps[group].session_index].id;
+                    state->dock_press_session = session != NULL ?
+                        session->id : 0u;
+                    state->dock_press_pin = apps[group].pin_index != UINT32_MAX ?
+                        apps[group].pin_index + 1u : 0u;
                     state->dock_press_at = astra_clock_monotonic();
+                    state->dock_press_x = state->pointer_x;
+                    state->dock_dragging = 0u;
                 }
                 return ASTRA_STATUS_OK;
             }
@@ -7954,7 +8364,8 @@ static void serve_windows(uint32_t device, uint32_t irq,
                           DisplayFontFace *ui_font,
                           DisplayFontRegistry *fonts, AstraHandle font_catalog,
                           uint32_t font_generation, uint32_t font_changed,
-                          uint32_t dock_launcher)
+                          uint32_t dock_launcher,
+                          const AstraStartupInfo *startup)
 {
     AstraTheme theme = ASTRA_THEME_SYSTEM_INIT;
     DisplayState state = {
@@ -7978,10 +8389,13 @@ static void serve_windows(uint32_t device, uint32_t irq,
         .control = { .right = ASTRA_DISPLAY_WIDTH,
                      .bottom = ASTRA_DISPLAY_HEIGHT },
     };
+
+    dock_pins_open(&state, startup);
     uint32_t next_fence = 1u;
     uint32_t cursor_fence = UINT32_C(0x80000001);
     uint32_t armed = 0u;
     uint32_t first_wait = 0u;
+    uint8_t deferred_events = 0u;
 
     in_flight.state = &state;
     if (astra_rt_port_create(8u, 8u * sizeof(DockLaunchCompletion),
@@ -8012,6 +8426,16 @@ static void serve_windows(uint32_t device, uint32_t irq,
                 render_failure("display cursor update failed", status);
             pointer_shape_presented(&state, &theme);
         }
+        /* A continuously ready source must not starve a posted frame. */
+        if (state.compose_deferred != 0u && deferred_events != 0u) {
+            state.compose_deferred = 0u;
+            deferred_events = 0u;
+            uint32_t flush = render_window_change(device, irq, framebuffer,
+                pointer_buffer, &state, &next_fence, &cursor_fence, &armed);
+            if (flush != ASTRA_STATUS_OK)
+                render_failure("display posted present failed", flush);
+            continue;
+        }
         wait_count = display_wait_handles(
             &state, gui_receive, input_receive, vblank_irq, font_changed, first_wait,
             waits, sources);
@@ -8024,16 +8448,14 @@ static void serve_windows(uint32_t device, uint32_t irq,
                                      &selected, NULL);
         if (state.compose_deferred != 0u &&
             selected == ASTRA_WAIT_INDEX_NONE) {
-            /* Every posted present that arrived together, in one frame. */
             state.compose_deferred = 0u;
-            status = render_window_change(device, irq, framebuffer,
-                                          pointer_buffer, &state,
-                                          &next_fence, &cursor_fence,
-                                          &armed);
-            if (status != ASTRA_STATUS_OK)
-                render_failure("display posted present failed", status);
+            uint32_t flush = render_window_change(device, irq, framebuffer,
+                pointer_buffer, &state, &next_fence, &cursor_fence, &armed);
+            if (flush != ASTRA_STATUS_OK)
+                render_failure("display posted present failed", flush);
             continue;
         }
+        deferred_events = state.compose_deferred != 0u;
         if (selected >= wait_count ||
             (status != ASTRA_SYSCALL_OK &&
              !display_wait_client_ended(&state, sources[selected],
@@ -8253,6 +8675,6 @@ int astra_main(const AstraStartupInfo *startup)
                   shared_pointer, active_font, &font_registry,
                   fonts == NULL ? ASTRA_INVALID_HANDLE : fonts->handle,
                   font_generation, fonts_changed->handle,
-                  launcher->handle);
+                  launcher->handle, startup);
     return ASTRA_STATUS_OK;
 }

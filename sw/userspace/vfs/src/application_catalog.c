@@ -7,6 +7,7 @@
 #include <astra/filesystem_library.h>
 #include <astra/runtime.h>
 #include <astra/string.h>
+#include <astra/vfs_path.h>
 #include <astra/vfs_path_storage.h>
 
 #include <stddef.h>
@@ -14,6 +15,10 @@
 #include <string.h>
 
 enum { CATALOG_BATCH = 8u };
+
+static uint32_t bundle_manifest_text(AstraProcessFilesystem *filesystem,
+                                     const char *bundle, char **text,
+                                     uint32_t *length);
 
 static int bundle_name(const char *name)
 {
@@ -60,21 +65,68 @@ static int reserve(AstraApplicationCatalog *catalog)
     return 1;
 }
 
+void astra_application_entry_destroy(AstraApplicationEntry *entry)
+{
+    if (entry == NULL) return;
+    astra_runtime_deallocate(entry->bundle);
+    astra_runtime_deallocate(entry->icon);
+    *entry = (AstraApplicationEntry){0};
+}
+
+uint32_t astra_application_entry_load(AstraProcessFilesystem *filesystem,
+                                      const char *bundle,
+                                      AstraApplicationEntry *entry)
+{
+    AstraBundleManifest manifest = ASTRA_BUNDLE_MANIFEST_INIT;
+    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(1u);
+    char *icon = astra_vfs_path_storage_at(&paths, 0u);
+    char *text = NULL;
+    uint32_t length = 0u;
+    uint32_t line = 0u;
+    uint32_t status, parsed;
+    const char *leaf;
+
+    if (entry == NULL || filesystem == NULL || bundle == NULL ||
+        bundle[0] != '/' || entry->bundle != NULL || entry->icon != NULL)
+        return ASTRA_VFS_ERR_INVALID;
+    *entry = (AstraApplicationEntry){0};
+    if (paths.bytes == NULL) return ASTRA_VFS_ERR_LIMIT;
+    status = bundle_manifest_text(filesystem, bundle, &text, &length);
+    if (status != ASTRA_VFS_OK) return status;
+    parsed = astra_bundle_manifest_parse(text, length, &manifest, &line);
+    leaf = astra_path_leaf(bundle);
+    if (parsed == ASTRA_BUNDLE_OK &&
+        manifest.kind == ASTRA_BUNDLE_APPLICATION &&
+        astra_string_copy(entry->id, sizeof(entry->id), manifest.id) &&
+        astra_string_copy(entry->name, sizeof(entry->name),
+                          manifest.name[0] != '\0' ? manifest.name : leaf) &&
+        manifest.icon != NULL &&
+        join(icon, ASTRA_APPLICATION_PATH_MAX, bundle, "/", manifest.icon)) {
+        entry->version = manifest.version;
+        entry->bundle = astra_runtime_allocate(strlen(bundle) + 1u);
+        entry->icon = astra_runtime_allocate(strlen(icon) + 1u);
+        if (entry->bundle != NULL && entry->icon != NULL) {
+            strcpy(entry->bundle, bundle);
+            strcpy(entry->icon, icon);
+            status = ASTRA_VFS_OK;
+        } else status = ASTRA_VFS_ERR_LIMIT;
+    } else status = parsed == ASTRA_BUNDLE_LIMIT ?
+        ASTRA_VFS_ERR_LIMIT : ASTRA_VFS_ERR_INVALID;
+    astra_bundle_manifest_destroy(&manifest);
+    astra_runtime_deallocate(text);
+    if (status != ASTRA_VFS_OK) astra_application_entry_destroy(entry);
+    return status;
+}
+
 /* 1 added (or already present), 0 skipped, -1 out of memory. */
 static int add_bundle(AstraProcessFilesystem *filesystem,
                       const char *directory, const char *name,
                       AstraApplicationCatalog *catalog)
 {
-    AstraBundleManifest manifest = ASTRA_BUNDLE_MANIFEST_INIT;
     AstraApplicationEntry entry = {0};
-    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(3u);
+    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(1u);
     char *bundle = astra_vfs_path_storage_at(&paths, 0u);
-    char *path = astra_vfs_path_storage_at(&paths, 1u);
-    char *icon = astra_vfs_path_storage_at(&paths, 2u);
-    char *text = NULL;
-    uint32_t length = 0u;
-    uint32_t line = 0u;
-    int added = 0;
+    uint32_t status;
 
     if (paths.bytes == NULL) return -1;
     if (!join(bundle, ASTRA_APPLICATION_PATH_MAX, directory, "/", name))
@@ -84,35 +136,12 @@ static int add_bundle(AstraProcessFilesystem *filesystem,
     for (uint32_t at = 0u; at < catalog->count; ++at)
         if (strcmp(catalog->entries[at].bundle, bundle) == 0)
             return 1;
-    if (!join(path, ASTRA_APPLICATION_PATH_MAX, bundle, "/manifest", ""))
-        return 0;
-    uint32_t status = astra_process_read_file_alloc(filesystem, path, (void **)&text, &length);
-    if (status != ASTRA_VFS_OK) return status == ASTRA_VFS_ERR_LIMIT ? -1 : 0;
-    uint32_t parsed = astra_bundle_manifest_parse(text, length, &manifest, &line);
-    if (parsed == ASTRA_BUNDLE_OK &&
-        manifest.kind == ASTRA_BUNDLE_APPLICATION &&
-        astra_string_copy(entry.id, sizeof(entry.id), manifest.id) &&
-        astra_string_copy(entry.name, sizeof(entry.name),
-                          manifest.name[0] != '\0' ? manifest.name : name) &&
-        join(icon, ASTRA_APPLICATION_PATH_MAX, bundle, "/", manifest.icon)) {
-        entry.version = manifest.version;
-        added = 1;
-    }
-    astra_bundle_manifest_destroy(&manifest);
-    astra_runtime_deallocate(text);
-    if (!added) return parsed == ASTRA_BUNDLE_LIMIT ? -1 : 0;
-    entry.bundle = astra_runtime_allocate(strlen(bundle) + 1u);
-    entry.icon = astra_runtime_allocate(strlen(icon) + 1u);
-    if (entry.bundle == NULL || entry.icon == NULL) {
-        astra_runtime_deallocate(entry.bundle);
-        astra_runtime_deallocate(entry.icon);
-        return -1;
-    }
-    strcpy(entry.bundle, bundle); strcpy(entry.icon, icon);
+    status = astra_application_entry_load(filesystem, bundle, &entry);
+    if (status != ASTRA_VFS_OK)
+        return status == ASTRA_VFS_ERR_LIMIT ? -1 : 0;
     if (catalog->count == catalog->capacity && !reserve(catalog))
     {
-        astra_runtime_deallocate(entry.bundle);
-        astra_runtime_deallocate(entry.icon);
+        astra_application_entry_destroy(&entry);
         return -1;
     }
     {
@@ -132,10 +161,8 @@ void astra_application_catalog_destroy(AstraApplicationCatalog *catalog)
 {
     if (catalog == NULL)
         return;
-    for (uint32_t at = 0u; at < catalog->count; ++at) {
-        astra_runtime_deallocate(catalog->entries[at].bundle);
-        astra_runtime_deallocate(catalog->entries[at].icon);
-    }
+    for (uint32_t at = 0u; at < catalog->count; ++at)
+        astra_application_entry_destroy(&catalog->entries[at]);
     astra_runtime_deallocate(catalog->entries);
     *catalog = (AstraApplicationCatalog)ASTRA_APPLICATION_CATALOG_INIT;
 }

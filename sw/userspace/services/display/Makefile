@@ -25,7 +25,8 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 TARGET := build/m68k/display.elf
 IMAGE := build/m68k/display
 OBJECT := build/m68k/main.o
-OBJECTS := build/m68k/window_graphics.o build/m68k/font_face.o
+OBJECTS := build/m68k/window_graphics.o build/m68k/font_face.o \
+	build/m68k/dock_pins.o
 GRAPHICS_RENDERER_LIB := \
 	$(GRAPHICS)/build/m68k/libastragraphics-renderer.a
 AFNT_CODEC := $(ASTRA_COMMON)/build/m68k/libastraafnt.a
@@ -37,8 +38,10 @@ GRAPHICS_FONT_INPUTS := $(GRAPHICS)/fonts/astra-workbench.afnt \
 	$(GRAPHICS)/fonts/astra-mono.afnt ../../../../assets/fonts/astra_8x16.hex \
 	../../../../tools/fonts/afnt.py $(NDK)/include/astra/font_library.h
 HOST_TEST := build/host/test_display
+HOST_DOCK_PINS_TEST := build/host/test_dock_pins
 HOST_TEST_SANITIZE := build/host/test_display_sanitize
 LIBRARIES := $(ASTRA_INTERFACE_LIBRARY) $(ASTRA_GRAPHICS_LIBRARY) $(ASTRA_FONT_LIBRARY) \
+	$(ASTRA_CONFIG_LIBRARY) $(ASTRA_FILESYSTEM_LIBRARY) \
 	$(ASTRA_SYSTEM_LIBRARY) $(ASTRA_RUNTIME_LIBRARY) \
 	$(ASTRA_COMPILER_LIBRARY)
 ASTRA_PROGRAM_PRIVATE_INPUTS := $(GRAPHICS_RENDERER_LIB) $(AFNT_CODEC)
@@ -69,7 +72,7 @@ $(GRAPHICS_FONT_HEADERS): $(GRAPHICS_FONT_INPUTS)
 $(AFNT_CODEC) $(HOST_AFNT_CODEC):
 	$(MAKE) -C $(ASTRA_COMMON) $(@:$(ASTRA_COMMON)/%=%)
 
-$(HOST_TEST): main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
+$(HOST_TEST): main.c dock_pins.c dock_pins.h window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
 		../../../include/astra/gui.h \
 		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/include/astra/ui_font.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
@@ -83,12 +86,20 @@ $(HOST_TEST): main.c window_graphics.c window_graphics.h font_face.c font_face.h
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
 		$(ASTRA_COMMON)/utf8.c $(INTERFACE_HOST_SOURCES) \
-		window_graphics.c font_face.c tests/test_display.c $(RUNTIME)/tests/uncontended_mutex.c $(HOST_AFNT_CODEC) -o $@
+		window_graphics.c font_face.c dock_pins.c tests/test_display.c $(RUNTIME)/tests/uncontended_mutex.c $(HOST_AFNT_CODEC) -o $@
 
-test: $(HOST_TEST)
+test: $(HOST_TEST) $(HOST_DOCK_PINS_TEST)
 	./$(HOST_TEST)
+	./$(HOST_DOCK_PINS_TEST)
 
-$(HOST_TEST_SANITIZE): ../../../include/astra/json.h $(ASTRA_COMMON)/afnt.c $(ASTRA_COMMON)/json.c $(ASTRA_COMMON)/crc32.c main.c window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
+$(HOST_DOCK_PINS_TEST): dock_pins.c dock_pins.h tests/test_dock_pins.c \
+		$(RUNTIME)/src/string.c $(ASTRA_COMMON)/utf8.c
+	@mkdir -p $(@D)
+	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 \
+		dock_pins.c tests/test_dock_pins.c $(RUNTIME)/src/string.c \
+		$(ASTRA_COMMON)/utf8.c -o $@
+
+$(HOST_TEST_SANITIZE): ../../../include/astra/json.h $(ASTRA_COMMON)/afnt.c $(ASTRA_COMMON)/json.c $(ASTRA_COMMON)/crc32.c main.c dock_pins.c dock_pins.h window_graphics.c window_graphics.h font_face.c font_face.h $(RUNTIME)/tests/uncontended_mutex.c \
 		../../../include/astra/gui.h \
 		$(GRAPHICS)/src/font_data.h $(GRAPHICS)/include/astra/ui_font.h \
 		tests/test_display.c $(GRAPHICS_FONT_HEADERS) \
@@ -103,7 +114,7 @@ $(HOST_TEST_SANITIZE): ../../../include/astra/json.h $(ASTRA_COMMON)/afnt.c $(AS
 		$(GRAPHICS)/src/render_builder.c $(SYSTEM)/src/bundle.c \
 		$(RUNTIME)/src/string.c \
 		$(ASTRA_COMMON)/utf8.c $(INTERFACE_HOST_SOURCES) \
-		window_graphics.c font_face.c tests/test_display.c \
+		window_graphics.c font_face.c dock_pins.c tests/test_display.c \
 		$(ASTRA_COMMON)/afnt.c $(ASTRA_COMMON)/json.c $(ASTRA_COMMON)/crc32.c $(RUNTIME)/tests/uncontended_mutex.c -o $@
 
 sanitize: $(HOST_TEST_SANITIZE)

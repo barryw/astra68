@@ -157,6 +157,24 @@ static void catalog_orders_and_skips(void)
     assert(catalog.entries[2].version.major == 1u &&
            catalog.entries[2].version.minor == 2u &&
            catalog.entries[2].version.patch == 3u);
+    {
+        AstraApplicationEntry exact = {0};
+        assert(astra_application_entry_load(&filesystem,
+            "/apps/Terminal.app", &exact) == ASTRA_VFS_OK);
+        assert(strcmp(exact.id, "org.t") == 0 &&
+               strcmp(exact.name, "Terminal") == 0 &&
+               strcmp(exact.icon,
+                   "/apps/Terminal.app/resources/Terminal.aicon") == 0);
+        astra_application_entry_destroy(&exact);
+        assert(exact.bundle == NULL && exact.icon == NULL);
+        assert(astra_application_entry_load(&filesystem,
+            "/apps/Kit.app", &exact) == ASTRA_VFS_ERR_INVALID);
+        assert(astra_application_entry_load(&filesystem,
+            "/apps/Missing.app", &exact) == ASTRA_VFS_ERR_NOT_FOUND);
+        assert(astra_application_entry_load(&filesystem,
+            "relative.app", &exact) == ASTRA_VFS_ERR_INVALID);
+        astra_application_entry_destroy(NULL);
+    }
 
     /* Loading again replaces the previous snapshot. */
     assert(astra_application_catalog_load(&filesystem, "/apps", &catalog) ==

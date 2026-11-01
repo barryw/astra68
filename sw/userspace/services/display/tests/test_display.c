@@ -368,6 +368,104 @@ uint32_t astra_log_failure(const char *operation, uint32_t status)
 
 #define astra_main astra_display_service_main
 #include "../main.c"
+
+static char dock_config_text[4096];
+static int dock_catalog_online;
+static int dock_config_reject;
+
+uint32_t astra_config_open_system(const AstraStartupInfo *startup,
+    uint32_t schema_version, uint32_t flags, AstraConfig *config,
+    AstraConfigError *error)
+{
+    (void)startup; (void)error;
+    assert(schema_version == 1u && flags ==
+        (ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE));
+    config->_private_area = 1u;
+    config->_private_state = config;
+    return ASTRA_CONFIG_OK;
+}
+
+uint32_t astra_config_count(const AstraConfig *config, const char *key,
+    uint32_t *count)
+{
+    (void)config;
+    assert(strcmp(key, "pinned") == 0);
+    *count = dock_config_text[0] != '\0' ? 1u : 0u;
+    return ASTRA_CONFIG_OK;
+}
+
+uint32_t astra_config_get_string(const AstraConfig *config, const char *key,
+    uint32_t index, char *value, uint32_t capacity, uint32_t *length)
+{
+    (void)config;
+    assert(strcmp(key, "pinned") == 0 && index == 0u);
+    *length = (uint32_t)strlen(dock_config_text);
+    if (value == NULL || capacity <= *length)
+        return ASTRA_CONFIG_BUFFER_TOO_SMALL;
+    memcpy(value, dock_config_text, *length + 1u);
+    return ASTRA_CONFIG_OK;
+}
+
+uint32_t astra_config_reload(AstraConfig *config, AstraConfigError *error)
+{
+    (void)config; (void)error;
+    return ASTRA_CONFIG_OK;
+}
+
+uint32_t astra_config_set_string(AstraConfig *config, const char *key,
+    uint32_t index, const char *value)
+{
+    (void)config;
+    assert(strcmp(key, "pinned") == 0 && index == 0u);
+    if (dock_config_reject) return ASTRA_CONFIG_IO;
+    if (strlen(value) >= sizeof(dock_config_text))
+        return ASTRA_CONFIG_BUFFER_TOO_SMALL;
+    strcpy(dock_config_text, value);
+    return ASTRA_CONFIG_OK;
+}
+
+uint32_t astra_process_filesystem_open(AstraProcessFilesystem *filesystem,
+    const AstraStartupInfo *startup)
+{
+    (void)filesystem; (void)startup;
+    return ASTRA_VFS_OK;
+}
+
+uint32_t astra_application_entry_load(AstraProcessFilesystem *filesystem,
+    const char *bundle, AstraApplicationEntry *entry)
+{
+    (void)filesystem;
+    if (!dock_catalog_online || strcmp(bundle, "/apps/Atlas.app") != 0)
+        return ASTRA_VFS_ERR_NOT_FOUND;
+    *entry = (AstraApplicationEntry){0};
+    strcpy(entry->id, "org.astra.atlas");
+    strcpy(entry->name, "Atlas");
+    entry->icon = astra_runtime_allocate(30u);
+    if (entry->icon == NULL) return ASTRA_VFS_ERR_LIMIT;
+    strcpy(entry->icon, "/apps/Atlas.app/icon.aicon");
+    return ASTRA_VFS_OK;
+}
+
+void astra_application_entry_destroy(AstraApplicationEntry *entry)
+{
+    astra_runtime_deallocate(entry->bundle);
+    astra_runtime_deallocate(entry->icon);
+    *entry = (AstraApplicationEntry){0};
+}
+
+uint32_t astra_filesystem_stat(AstraFilesystem *filesystem,
+    const char *path, AstraFileInfo *info)
+{
+    (void)filesystem; (void)path; (void)info;
+    return ASTRA_VFS_ERR_NOT_FOUND;
+}
+
+uint32_t astra_process_read_file(AstraProcessFilesystem *filesystem,
+    const char *path, void *bytes, uint32_t capacity, uint32_t *length)
+{
+    (void)filesystem; (void)path; (void)bytes; (void)capacity; (void)length;
+    return ASTRA_VFS_ERR_NOT_FOUND;
+}
 #undef astra_main
 
 #define TEST_WINDOW_COUNT 16u
@@ -2665,6 +2763,100 @@ static void test_dock_sessions(void)
         assert(dock_launch_new(&policy, 6u) == ASTRA_STATUS_LIMIT);
         assert(dock_started.entry == dock_launch_worker);
         dock_thread_status = ASTRA_SYSCALL_OK;
+        assert(menu_allocations == 0u);
+    }
+    {
+        DisplayState pinned = {0};
+        DisplayDockApp groups[DISPLAY_DOCK_APP_LIMIT] = {0};
+        dock_catalog_online = 1;
+        pinned.dock_config_ready = pinned.dock_files_ready = 1u;
+        assert(dock_pin_toggle(&pinned, "org.astra.atlas", "Atlas",
+            "/apps/Atlas.app") == ASTRA_STATUS_OK);
+        assert(pinned.dock_pins.count == 1u &&
+            pinned.dock_pins.entries[0].online == 1u &&
+            dock_config_text[0] != '\0');
+        {
+            DisplayState reopened = {0};
+            dock_pins_open(&reopened, NULL);
+            assert(reopened.dock_config_ready && reopened.dock_files_ready &&
+                reopened.dock_pins.count == 1u &&
+                reopened.dock_pins.entries[0].online &&
+                strcmp(reopened.dock_pins.entries[0].path,
+                    "/apps/Atlas.app") == 0);
+            display_dock_pins_clear(&reopened.dock_pins);
+        }
+        assert(dock_pin_toggle(&pinned, "org.astra.doom", "Doom",
+            "/apps/Doom.app") == ASTRA_STATUS_OK);
+        assert(dock_pin_move(&pinned, 1u, 0u) == ASTRA_STATUS_OK &&
+            strcmp(pinned.dock_pins.entries[0].id, "org.astra.doom") == 0);
+        dock_config_reject = 1;
+        assert(dock_pin_move(&pinned, 0u, 1u) == ASTRA_STATUS_IO &&
+            strcmp(pinned.dock_pins.entries[0].id, "org.astra.doom") == 0);
+        dock_config_reject = 0;
+        assert(dock_pin_move(&pinned, 0u, 1u) == ASTRA_STATUS_OK);
+        {
+            uint32_t effects = 0u, frame = 0u, timestamp = 0u;
+            AstraLogicalInputEvent pointer = {.type = ASTRA_INPUT_EVENT_POINTER_BUTTON,
+                .code = ASTRA_INPUT_BUTTON_LEFT,
+                .flags = ASTRA_INPUT_LOGICAL_DOWN};
+            pinned.pointer_x = 934;
+            pinned.pointer_y = DISPLAY_WORK_BOTTOM + 22;
+            assert(handle_pointer(&pinned, &pointer, &effects, &frame,
+                &timestamp) == ASTRA_STATUS_OK && pinned.dock_press_pin == 1u);
+            pinned.system_initialized = 1u;
+            pointer = (AstraLogicalInputEvent){
+                .type = ASTRA_INPUT_EVENT_POINTER_MOTION,
+                .value_x = 1001, .value_y = DISPLAY_WORK_BOTTOM + 22};
+            assert(handle_pointer(&pinned, &pointer, &effects, &frame,
+                &timestamp) == ASTRA_STATUS_OK && pinned.dock_dragging &&
+                !pinned.system_initialized);
+            pinned.system_initialized = 1u;
+            pointer = (AstraLogicalInputEvent){
+                .type = ASTRA_INPUT_EVENT_POINTER_BUTTON,
+                .code = ASTRA_INPUT_BUTTON_LEFT};
+            assert(handle_pointer(&pinned, &pointer, &effects, &frame,
+                &timestamp) == ASTRA_STATUS_OK && !pinned.dock_dragging &&
+                !pinned.system_initialized &&
+                strcmp(pinned.dock_pins.entries[0].id, "org.astra.doom") == 0);
+            assert(dock_pin_move(&pinned, 1u, 0u) == ASTRA_STATUS_OK);
+        }
+        assert(dock_pin_toggle(&pinned, "org.astra.doom", "Doom",
+            "/apps/Doom.app") == ASTRA_STATUS_OK);
+        assert(dock_collect(&pinned, groups) == 1u &&
+            groups[0].sessions == 0u &&
+            groups[0].pin_index == 0u &&
+            groups[0].session_index == UINT32_MAX);
+        assert(dock_menu_open(&pinned, groups, 0u, 1u) ==
+            ASTRA_STATUS_OK);
+        assert(strcmp(pinned.menu_rows[0].label, "Open") == 0 &&
+            strcmp(pinned.menu_rows[1].label, "Remove from Dock") == 0);
+        dock_thread_status = ASTRA_SYSCALL_OUT_OF_MEMORY;
+        menu_end(&pinned, 1u, 0u, ASTRA_STATUS_OK);
+        assert(pinned.dock_launch_error_pin == 1u &&
+            dock_started.entry == dock_launch_worker);
+        pinned.dock_launch_error_pin = 0u;
+        dock_thread_status = ASTRA_SYSCALL_OK;
+        assert(dock_menu_open(&pinned, groups, 0u, 1u) ==
+            ASTRA_STATUS_OK);
+        menu_end(&pinned, 2u, 0u, ASTRA_STATUS_OK);
+        assert(pinned.dock_pins.count == 0u && dock_config_text[0] == '\0');
+        pinned.session_count = 1u;
+        pinned.sessions[0] = (DisplaySession){.id = 7u,
+            .name_length = 5u, .name = "Atlas",
+            .app_id_length = 15u, .app_id = "org.astra.atlas",
+            .bundle_path = "/apps/Atlas.app", .bundle_path_length = 15u};
+        assert(dock_collect(&pinned, groups) == 1u);
+        pinned.pointer_y = DISPLAY_WORK_BOTTOM + 22;
+        pinned.pointer_x = 960;
+        assert(dock_drag_apply(&pinned, groups, 1u, 7u, 0u) ==
+            ASTRA_STATUS_OK && pinned.dock_pins.count == 0u);
+        pinned.pointer_x = 930;
+        assert(dock_drag_apply(&pinned, groups, 1u, 7u, 0u) ==
+            ASTRA_STATUS_OK && pinned.dock_pins.count == 1u);
+        assert(dock_pin_toggle(&pinned, "org.astra.atlas", "Atlas",
+            "/apps/Atlas.app") == ASTRA_STATUS_OK);
+        display_dock_pins_clear(&pinned.dock_pins);
+        dock_catalog_online = 0;
         assert(menu_allocations == 0u);
     }
 }

@@ -28,6 +28,23 @@ typedef struct AstraApplicationEntry {
     AstraBundleVersion version; /**< Bundle version. */
 } AstraApplicationEntry;
 
+/** Read one exact bundle on any mounted volume into a zero-initialized entry.
+ * The caller owns the returned paths and releases them with
+ * astra_application_entry_destroy().
+ * @param filesystem Open process filesystem binding.
+ * @param bundle Absolute path to an application bundle.
+ * @param entry Zero-initialized destination for owned metadata and paths.
+ * @return ASTRA_VFS_OK or a VFS status.
+ * @since Filesystem Kit 15.12.
+ */
+uint32_t astra_application_entry_load(AstraProcessFilesystem *filesystem,
+                                      const char *bundle,
+                                      AstraApplicationEntry *entry);
+/** Release one entry loaded independently of a catalog.
+ * @param entry Entry to release; NULL is ignored.
+ */
+void astra_application_entry_destroy(AstraApplicationEntry *entry);
+
 /** A catalog snapshot. Initialize with ASTRA_APPLICATION_CATALOG_INIT and
  * release with astra_application_catalog_destroy(). */
 typedef struct AstraApplicationCatalog {
