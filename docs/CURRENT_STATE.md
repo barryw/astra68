@@ -43,7 +43,10 @@ service restarts and 8.1 GiB free. Pre-reboot evidence:
 `/mnt/Documents/astra68/audio-silence-20261102/`. This resembles the
 2026-10-25 transmitter/sink failure below. The candidate ADV7513 fixed-register
 initialization has not been routed or acoustically qualified; do not classify
-software frame delivery or reboot recovery as a permanent audio fix.
+software frame delivery or reboot recovery as a permanent audio fix. Beast's
+Longhorn `walker-cnpg-verify-1` volume is currently degraded: its second
+100 GiB replica cannot be scheduled because available disks are overcommitted.
+The storage-health gate below still blocks a new FPGA route.
 
 Network volume assessment, 2026-11-02: DE25 Linux HPS has active
 NetworkManager 1.36.6, systemd-resolved, DHCP IPv4 address, default route,
