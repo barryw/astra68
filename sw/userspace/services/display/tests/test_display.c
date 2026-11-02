@@ -3203,7 +3203,9 @@ static void test_menu_bar_transport(void)
     for (uint32_t at = 0u; at < 3u; ++at) {
         uint8_t *row = bytes + ASTRA_GUI_MENU_HEADER_BYTES +
             at * ASTRA_GUI_MENU_ROW_BYTES;
-        astra_store_be32(row, at == 0u ? 0u : 1u << ASTRA_MENU_PARENT_SHIFT);
+        astra_store_be32(row, at == 0u ? 0u :
+            ASTRA_MENU_PARENT(1u) | ASTRA_MENU_SHORTCUT_PRIMARY |
+                ASTRA_MENU_SHORTCUT_KEY(at == 1u ? 0x15u : 0x14u));
         astra_store_be32(row + 4u, at == 0u ? 64u : at == 1u ? 69u : 76u);
         astra_store_be32(row + 8u, at == 0u ? 5u : at == 1u ? 7u : 4u);
         astra_store_be32(row + 12u, 0u);
@@ -3216,6 +3218,7 @@ static void test_menu_bar_transport(void)
     state.bar_heading_owner = 1u;
     state.bar_heading_count = 1u;
     state.bar_window_heading = UINT32_MAX;
+    state.bar_heading_root[0] = 0u;
     state.bar_heading_left[0] = 140;
     state.bar_heading_right[0] = 200;
     assert(menu_bar_open(&state, 0u) == ASTRA_STATUS_OK);
@@ -3226,6 +3229,59 @@ static void test_menu_bar_transport(void)
     assert(delivered.event.type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
         delivered.event.data.menu_result.request == ASTRA_WINDOW_MENU_BAR_REQUEST &&
         delivered.event.data.menu_result.selection == 2u);
+    state.bar_heading_count = 2u;
+    state.bar_heading_root[1] = DISPLAY_BAR_APPLICATION;
+    state.bar_heading_left[1] = 220;
+    state.bar_heading_right[1] = 310;
+    assert(menu_bar_activate(&state, 0u) == ASTRA_STATUS_OK);
+    assert(state.bar_selected_heading == 0u);
+    {
+        AstraLogicalInputEvent motion = {
+            .type = ASTRA_INPUT_EVENT_POINTER_MOTION,
+            .value_x = 250, .value_y = 15};
+        uint32_t effects = 0u, frame_window = 0u, frame_timestamp = 0u;
+        assert(handle_pointer(&state, &motion, &effects,
+            &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(state.overlay == DISPLAY_OVERLAY_MENU &&
+            state.bar_selected_heading == 1u &&
+            state.menu_request == DISPLAY_APP_MENU_REQUEST &&
+            state.menu._private_count == 4u &&
+            (effects & DISPLAY_POINTER_RENDER) != 0u);
+        assert((state.menu._private_items[3].flags &
+            ASTRA_MENU_SHORTCUT_KEY_MASK) == ASTRA_MENU_SHORTCUT_KEY(0x14u));
+        menu_end(&state, 4u, 13u, ASTRA_STATUS_OK);
+        assert(state.bar_selected_heading == UINT32_MAX &&
+            delivered.event.data.menu_result.selection == 3u);
+        assert(menu_bar_activate(&state, 1u) == ASTRA_STATUS_OK);
+        motion.value_x = 400;
+        assert(handle_pointer(&state, &motion, &effects,
+            &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(state.overlay == DISPLAY_OVERLAY_NONE &&
+            state.bar_selected_heading == UINT32_MAX);
+        AstraLogicalInputEvent restart = {
+            .type = ASTRA_INPUT_EVENT_KEY,
+            .flags = ASTRA_INPUT_LOGICAL_DOWN,
+            .code = 0x15u, .modifiers = ASTRA_INPUT_MOD_ALT};
+        assert(handle_pointer(&state, &restart, &effects,
+            &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered.event.type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
+            delivered.event.data.menu_result.selection == 2u);
+        AstraLogicalInputEvent quit = {
+            .type = ASTRA_INPUT_EVENT_KEY,
+            .flags = ASTRA_INPUT_LOGICAL_DOWN,
+            .code = 0x14u, .modifiers = ASTRA_INPUT_MOD_META};
+        uint32_t before = delivered_count;
+        window.bar_rows[2].flags = ASTRA_MENU_PARENT(1u);
+        assert(handle_pointer(&state, &quit, &effects,
+            &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered_count == before);
+        window.bar_rows[2].flags |= ASTRA_MENU_SHORTCUT_PRIMARY |
+            ASTRA_MENU_SHORTCUT_KEY(0x14u);
+        assert(handle_pointer(&state, &quit, &effects,
+            &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(delivered.event.type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
+            delivered.event.data.menu_result.selection == 3u);
+    }
     command.action = ASTRA_GUI_WINDOW_MENU_BAR_CLEAR;
     assert(apply_command(&state, &theme, &command, &closed, &changed) ==
         ASTRA_STATUS_OK && changed);
@@ -3250,6 +3306,7 @@ static void test_window_menu_actions(void)
     };
     DisplayState state = {.windows = windows, .count = 2u,
         .bar_heading_owner = 2u, .bar_heading_count = 1u};
+    state.bar_heading_root[0] = DISPLAY_BAR_WINDOW;
     state.bar_heading_left[0] = 250;
     assert(menu_bar_open(&state, 0u) == ASTRA_STATUS_OK);
     assert(state.menu_owner == 0u &&
@@ -3277,6 +3334,33 @@ static void test_window_menu_actions(void)
         state.windows[1].id == 2u &&
         (state.windows[1].request.flags & ASTRA_WINDOW_ACTIVE) != 0u &&
         menu_allocations == 0u);
+}
+
+static void test_application_quit_scope(void)
+{
+    DisplayWindow windows[2] = {
+        {.id = 1u, .event_send = 0x500u,
+            .request = {.type = ASTRA_WINDOW_DESKTOP,
+                .event_mask = ASTRA_WINDOW_SUBSCRIBE_CLOSE_REQUEST}},
+        {.id = 2u, .event_send = 0x500u,
+            .request = {.type = ASTRA_WINDOW_STANDARD,
+                .event_mask = ASTRA_WINDOW_SUBSCRIBE_CLOSE_REQUEST}}
+    };
+    DisplayState state = {.windows = windows, .count = 2u};
+
+    delivered_count = 0u;
+    app_menu_action(&state, 1u, 3u, 0u, 10u);
+    assert(delivered_count == 1u &&
+        delivered.event.type == ASTRA_WINDOW_EVENT_CLOSE_REQUEST &&
+        windows[0].event_sequence == 0u &&
+        windows[1].event_sequence == 1u);
+    windows[0].session = 7u;
+    windows[1].session = 7u;
+    delivered_count = 0u;
+    app_menu_action(&state, 1u, 3u, 0u, 11u);
+    assert(delivered_count == 1u &&
+        windows[0].event_sequence == 0u &&
+        windows[1].event_sequence == 2u);
 }
 
 static void test_context_submenu_hover(void)
@@ -3665,6 +3749,7 @@ int main(void)
     test_context_menu_transport();
     test_menu_bar_transport();
     test_window_menu_actions();
+    test_application_quit_scope();
     test_context_submenu_hover();
     test_content_banks();
     test_malformed_retained_frame();
@@ -3969,7 +4054,17 @@ int main(void)
         assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
         assert(build_system_surfaces(&builder, &bar, &bar_theme));
         assert(astra_render_builder_finish(&builder) != 0u);
-        assert(builder.glyph_count == 14u); /* ASTRA, Workspace */
+        assert(builder.glyph_count >= 36u); /* ASTRA, Workspace, standard headings. */
+        {
+            DisplayWindow desktop = {.id = 41u,
+                .request = {.type = ASTRA_WINDOW_DESKTOP}};
+            bar.windows = &desktop;
+            bar.count = 1u;
+            bar.system_initialized = 0u;
+            assert(astra_render_builder_init(&builder, batch, sizeof(batch), 1u));
+            assert(build_system_surfaces(&builder, &bar, &bar_theme));
+            assert(bar.bar_heading_owner == 41u);
+        }
         {
             AstraMenuItem headings[] = {
                 {"Story", 5u, 0u}, {"Help", 4u, 0u}
@@ -3988,10 +4083,11 @@ int main(void)
             assert(build_system_surfaces(&builder, &bar, &bar_theme));
             assert(astra_render_builder_finish(&builder) != 0u);
             assert(bar.bar_heading_owner == 42u);
-            assert(bar.bar_heading_count == 3u);
-            assert(bar.bar_window_heading == 1u);
-            assert(bar.bar_heading_root[0] == 0u &&
-                bar.bar_heading_root[2] == 1u);
+            assert(bar.bar_heading_count == 7u);
+            assert(bar.bar_window_heading == 5u);
+            assert(bar.bar_heading_root[0] == DISPLAY_BAR_APPLICATION &&
+                bar.bar_heading_root[4] == 0u &&
+                bar.bar_heading_root[6] == 1u);
             assert(bar.bar_heading_left[0] < bar.bar_heading_right[0]);
             assert(bar.bar_heading_right[0] < bar.bar_heading_left[1]);
             assert(bar.bar_heading_right[1] < bar.bar_heading_left[2]);
@@ -4004,9 +4100,9 @@ int main(void)
                 assert(astra_render_builder_init(&builder,
                     batch, sizeof(batch), 1u));
                 assert(build_system_surfaces(&builder, &bar, &bar_theme));
-                assert(bar.bar_heading_count == 2u &&
-                    bar.bar_window_heading == 0u);
-                assert(bar.bar_heading_root[1] == 1u);
+                assert(bar.bar_heading_count == 6u &&
+                    bar.bar_window_heading == 4u);
+                assert(bar.bar_heading_root[5] == 1u);
             }
             headings[0].label = "Story";
             headings[0].label_length = 5u;
@@ -4085,8 +4181,8 @@ int main(void)
         motion.value_x = DISPLAY_MENU_X + DISPLAY_MENU_WIDTH + 10;
         delivered_count = 0u;
         assert(handle_pointer(&menu, &motion, &effects, &frame_window, &frame_timestamp) == ASTRA_STATUS_OK);
-        assert(astra_interface_menu_get_state(&menu.menu, &info) == ASTRA_OK && info.selection == 0u);
-        assert(delivered_count == 0u); /* Motion never falls through an open menu. */
+        assert(menu.overlay == DISPLAY_OVERLAY_NONE);
+        assert(delivered_count == 0u); /* Leaving bar and popup closes both. */
         for (uint32_t at = 0u; at < 3u; ++at) {
             const uint32_t actions[] = {ASTRA_SYSTEM_ACTION_ABOUT, ASTRA_SYSTEM_ACTION_RESTART,
                                        ASTRA_SYSTEM_ACTION_SHUTDOWN};

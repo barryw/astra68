@@ -9,6 +9,7 @@
 /** @file menu.h @brief Shared transient menu control and command-backed context menus. */
 #include <astra/command.h>
 #include <astra/control.h>
+#include <astra/input_modifiers.h>
 #include <astra/surface.h>
 
 ASTRA_EXTERN_C_BEGIN
@@ -26,6 +27,30 @@ enum {
 #define ASTRA_MENU_PARENT_MASK UINT32_C(0xffff0000)
 /** Encode a child item's one-based parent row; zero means top-level. */
 #define ASTRA_MENU_PARENT(row) ((uint32_t)(row) << ASTRA_MENU_PARENT_SHIFT)
+/** Shortcut metadata carried with a menu row. Key is a USB HID usage;
+ * PRIMARY accepts Command or Alt. Zero key means no shortcut.
+ */
+/** Require platform primary key: Command or Alt. */
+#define ASTRA_MENU_SHORTCUT_PRIMARY UINT32_C(0x00000010)
+/** Require Control. */
+#define ASTRA_MENU_SHORTCUT_CTRL UINT32_C(0x00000020)
+/** Require Shift. */
+#define ASTRA_MENU_SHORTCUT_SHIFT UINT32_C(0x00000040)
+/** Require Alt separately; with PRIMARY, requires Command plus Alt. */
+#define ASTRA_MENU_SHORTCUT_ALT UINT32_C(0x00000080)
+/** Position of USB HID usage in row flags. */
+#define ASTRA_MENU_SHORTCUT_KEY_SHIFT 8u
+/** Mask for USB HID usage in row flags. */
+#define ASTRA_MENU_SHORTCUT_KEY_MASK UINT32_C(0x0000ff00)
+/** Encode USB HID usage for a menu shortcut. @param usage HID usage, 1..255. */
+#define ASTRA_MENU_SHORTCUT_KEY(usage) \
+    (((uint32_t)(usage) << ASTRA_MENU_SHORTCUT_KEY_SHIFT) & \
+     ASTRA_MENU_SHORTCUT_KEY_MASK)
+/** Mask for all shortcut metadata in row flags. */
+#define ASTRA_MENU_SHORTCUT_MASK (ASTRA_MENU_SHORTCUT_PRIMARY | \
+    ASTRA_MENU_SHORTCUT_CTRL | ASTRA_MENU_SHORTCUT_SHIFT | \
+    ASTRA_MENU_SHORTCUT_ALT | \
+    ASTRA_MENU_SHORTCUT_KEY_MASK)
 /** Menu placement/interaction policy. */
 enum {
     ASTRA_MENU_ATTACHED_TOP = 1u << 0,
@@ -36,7 +61,7 @@ enum {
 typedef struct AstraMenuItem {
     const char *label; /**< Counted single-line UTF-8; NULL for a separator. */
     uint32_t label_length; /**< Label byte count, excluding any terminator. */
-    uint32_t flags; /**< ASTRA_MENU_* presentation and optional parent row. */
+    uint32_t flags; /**< ASTRA_MENU_* state, parent row, and optional shortcut. */
 } AstraMenuItem;
 
 /** Caller-owned menu control, independent of an ordinary client layout. */
@@ -101,6 +126,41 @@ AstraResult astra_interface_menu_row_frame(const AstraMenu *menu,
  */
 AstraResult astra_interface_menu_handle_event(AstraMenu *menu,
     const AstraWindowEvent *event, AstraUIAction *action);
+/** Check shortcut metadata. @param flags Menu row flags.
+ * @return Nonzero when every shortcut modifier has a key.
+ */
+static inline int astra_interface_menu_shortcut_valid(uint32_t flags)
+{
+    return (flags & (ASTRA_MENU_SHORTCUT_PRIMARY |
+        ASTRA_MENU_SHORTCUT_CTRL | ASTRA_MENU_SHORTCUT_SHIFT |
+        ASTRA_MENU_SHORTCUT_ALT)) == 0u ||
+        (flags & ASTRA_MENU_SHORTCUT_KEY_MASK) != 0u;
+}
+/** Match a key event against a menu row shortcut.
+ * @param flags Menu row flags.
+ * @param usage USB HID usage from key event.
+ * @param modifiers Input modifier bits from key event.
+ * @return Nonzero when key and modifiers match an assigned shortcut.
+ */
+static inline int astra_interface_menu_shortcut_matches(uint32_t flags,
+    uint32_t usage, uint32_t modifiers)
+{
+    uint32_t key = (flags & ASTRA_MENU_SHORTCUT_KEY_MASK) >>
+        ASTRA_MENU_SHORTCUT_KEY_SHIFT;
+    int meta = (modifiers & (ASTRA_INPUT_MOD_META |
+        ASTRA_INPUT_MOD_GUI)) != 0u;
+    int alt = (modifiers & ASTRA_INPUT_MOD_ALT) != 0u;
+    int primary = (flags & ASTRA_MENU_SHORTCUT_PRIMARY) != 0u;
+    int extra_alt = (flags & ASTRA_MENU_SHORTCUT_ALT) != 0u;
+    int control = (modifiers & ASTRA_INPUT_MOD_CTRL) != 0u;
+    int shift = (modifiers & ASTRA_INPUT_MOD_SHIFT) != 0u;
+
+    return key != 0u && key == usage &&
+        (primary ? (extra_alt ? meta && alt : meta != alt) :
+            !meta && alt == extra_alt) &&
+        control == ((flags & ASTRA_MENU_SHORTCUT_CTRL) != 0u) &&
+        shift == ((flags & ASTRA_MENU_SHORTCUT_SHIFT) != 0u);
+}
 /** Paint through the common raster/draw-list surface framework.
  * @param menu Initialized control.
  * @param surface Destination matching fitted menu width/height.

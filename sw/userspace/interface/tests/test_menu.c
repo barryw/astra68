@@ -335,6 +335,60 @@ static void model(void)
         assert(state(&menu).scroll == 5208u);
     }
 }
+
+static void shortcuts(void)
+{
+    const AstraControlFrame work = {0, 0, 640u, 240u};
+    AstraMenuItem items[] = {
+        {"Open", 4u, ASTRA_MENU_SHORTCUT_PRIMARY |
+            ASTRA_MENU_SHORTCUT_KEY(0x12u)},
+        {"Disabled", 8u, ASTRA_MENU_DISABLED |
+            ASTRA_MENU_SHORTCUT_CTRL | ASTRA_MENU_SHORTCUT_KEY(0x13u)}
+    };
+    AstraMenu menu = ASTRA_MENU_INIT;
+    AstraWindowEvent key = event(ASTRA_WINDOW_EVENT_KEY);
+    AstraUIAction action = ASTRA_UI_ACTION_INIT;
+    uint32_t draw[ASTRA_DRAW_LIST_AREA_BYTES / 4u];
+    AstraSurfaceView surface;
+    uint32_t width;
+
+    assert(astra_interface_menu_init(&menu, items, 2u, &work,
+        0, 0, 64u, 0u) == ASTRA_OK);
+    width = state(&menu).frame.width;
+    assert(width > 64u);
+    assert(astra_draw_list_view_init(&surface, draw, sizeof(draw), width,
+        state(&menu).frame.height));
+    assert(astra_interface_menu_render(&menu, &surface) == ASTRA_OK);
+    assert(astra_interface_menu_shortcut_matches(items[0].flags, 0x12u,
+        ASTRA_INPUT_MOD_META));
+    assert(astra_interface_menu_shortcut_matches(items[0].flags, 0x12u,
+        ASTRA_INPUT_MOD_ALT));
+    assert(!astra_interface_menu_shortcut_matches(items[0].flags, 0x12u, 0u));
+    items[0].flags |= ASTRA_MENU_SHORTCUT_ALT;
+    assert(astra_interface_menu_shortcut_matches(items[0].flags, 0x12u,
+        ASTRA_INPUT_MOD_META | ASTRA_INPUT_MOD_ALT));
+    assert(!astra_interface_menu_shortcut_matches(items[0].flags, 0x12u,
+        ASTRA_INPUT_MOD_ALT));
+    items[0].flags &= ~ASTRA_MENU_SHORTCUT_ALT;
+    key.flags = ASTRA_WINDOW_EVENT_DOWN;
+    key.data.key.usage = 0x13u;
+    key.data.key.modifiers = ASTRA_INPUT_MOD_CTRL;
+    assert(astra_interface_menu_handle_event(&menu, &key, &action) == ASTRA_OK &&
+        action.type == ASTRA_UI_ACTION_NONE);
+    key.data.key.usage = 0x12u;
+    key.data.key.modifiers = ASTRA_INPUT_MOD_META;
+    assert(astra_interface_menu_handle_event(&menu, &key, &action) == ASTRA_OK &&
+        action.type == ASTRA_UI_ACTION_ACTIVATE && action.control_id == 1u);
+    items[0].flags = 0u;
+    assert(astra_interface_menu_init(&menu, items, 2u, &work,
+        0, 0, 64u, 0u) == ASTRA_OK);
+    assert(state(&menu).frame.width < width);
+    assert(astra_interface_menu_handle_event(&menu, &key, &action) == ASTRA_OK &&
+        action.type == ASTRA_UI_ACTION_NONE);
+    items[0].flags = ASTRA_MENU_SHORTCUT_PRIMARY;
+    assert(astra_interface_menu_init(&menu, items, 2u, &work,
+        0, 0, 64u, 0u) == ASTRA_ERROR_INVALID_ARGUMENT);
+}
 static void context(void)
 {
     const AstraCommand commands[] = {{"first", 5u, 0u, 0u, query, invoke, NULL},
@@ -806,6 +860,7 @@ static void multi_popup(void)
 int main(void)
 {
     model();
+    shortcuts();
     persistent_menu();
     context();
     popup_session();

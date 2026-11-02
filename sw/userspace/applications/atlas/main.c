@@ -303,7 +303,7 @@ enum AtlasMenuRow {
     ATLAS_MENU_EDIT,
     ATLAS_MENU_VIEW,
     ATLAS_MENU_VOLUME,
-    ATLAS_MENU_HELP,
+    ATLAS_MENU_APP,
     ATLAS_MENU_NEW_WINDOW,
     ATLAS_MENU_NEW,
     ATLAS_MENU_OPEN,
@@ -340,26 +340,39 @@ enum AtlasMenuRow {
 
 static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"File", 4u, 0u}, {"Edit", 4u, 0u},
-    {"View", 4u, 0u}, {"Volume", 6u, 0u}, {"Help", 4u, 0u},
-    {"New Window", 10u, ASTRA_MENU_PARENT(1u)},
-    {"New Drawer", 10u, ASTRA_MENU_PARENT(1u)},
-    {"Open", 4u, ASTRA_MENU_PARENT(1u)},
+    {"View", 4u, 0u}, {"Volume", 6u, 0u}, {"Atlas", 5u, 0u},
+    {"New Window", 10u, ASTRA_MENU_PARENT(1u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x11u)},
+    {"New Drawer", 10u, ASTRA_MENU_PARENT(1u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_SHIFT |
+        ASTRA_MENU_SHORTCUT_KEY(0x11u)},
+    {"Open", 4u, ASTRA_MENU_PARENT(1u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x12u)},
     {"Open With...", 12u, ASTRA_MENU_PARENT(1u)},
-    {"Get Information", 15u, ASTRA_MENU_PARENT(1u)},
-    {"Open Terminal Here", 18u, ASTRA_MENU_PARENT(1u)},
-    {"Refresh", 7u, ASTRA_MENU_PARENT(1u)},
+    {"Get Information", 15u, ASTRA_MENU_PARENT(1u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x0cu)},
+    {"Open Terminal Here", 18u, ASTRA_MENU_PARENT(1u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x28u)},
+    {"Refresh", 7u, ASTRA_MENU_PARENT(1u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x15u)},
     {"Save Search", 11u, ASTRA_MENU_PARENT(1u)},
     {"Close Window", 12u, ASTRA_MENU_PARENT(1u)},
-    {"Copy", 4u, ASTRA_MENU_PARENT(2u)},
-    {"Cut", 3u, ASTRA_MENU_PARENT(2u)},
-    {"Paste", 5u, ASTRA_MENU_PARENT(2u)},
+    {"Copy", 4u, ASTRA_MENU_PARENT(2u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x06u)},
+    {"Cut", 3u, ASTRA_MENU_PARENT(2u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x1bu)},
+    {"Paste", 5u, ASTRA_MENU_PARENT(2u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x19u)},
     {"Rename", 6u, ASTRA_MENU_PARENT(2u)},
     {"Move to Trash", 13u, ASTRA_MENU_PARENT(2u)},
     {"Restore", 7u, ASTRA_MENU_PARENT(2u)},
     {"Empty Trash...", 14u, ASTRA_MENU_PARENT(2u)},
-    {"as List", 7u, ASTRA_MENU_PARENT(3u)},
-    {"as Grid", 7u, ASTRA_MENU_PARENT(3u)},
-    {"as Columns", 10u, ASTRA_MENU_PARENT(3u)},
+    {"as List", 7u, ASTRA_MENU_PARENT(3u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x1eu)},
+    {"as Grid", 7u, ASTRA_MENU_PARENT(3u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x1fu)},
+    {"as Columns", 10u, ASTRA_MENU_PARENT(3u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x20u)},
     {NULL, 0u, ASTRA_MENU_PARENT(3u) | ASTRA_MENU_SEPARATOR},
     {"Sort by Name", 12u, ASTRA_MENU_PARENT(3u)},
     {"Sort by Size", 12u, ASTRA_MENU_PARENT(3u)},
@@ -367,7 +380,9 @@ static AstraMenuItem atlas_menu[ATLAS_MENU_COUNT] = {
     {"Sort by Modified", 16u, ASTRA_MENU_PARENT(3u)},
     {"Show Hidden Files", 17u, ASTRA_MENU_PARENT(3u)},
     {"Show Preview", 12u, ASTRA_MENU_PARENT(3u)},
-    {"Show Sidebar", 12u, ASTRA_MENU_PARENT(3u)},
+    {"Show Sidebar", 12u, ASTRA_MENU_PARENT(3u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_ALT |
+        ASTRA_MENU_SHORTCUT_KEY(0x16u)},
     {"Unmount", 7u, ASTRA_MENU_PARENT(4u)},
     {"Eject", 5u, ASTRA_MENU_PARENT(4u)},
     {"Disk Setup...", 13u, ASTRA_MENU_PARENT(4u)},
@@ -4116,7 +4131,8 @@ static AstraResult save_search(void *opaque,
 static void menu_state(uint32_t row, int enabled, int checked)
 {
     atlas_menu[row].flags =
-        (atlas_menu[row].flags & ASTRA_MENU_PARENT_MASK) |
+        (atlas_menu[row].flags & (ASTRA_MENU_PARENT_MASK |
+                                  ASTRA_MENU_SHORTCUT_MASK)) |
         (enabled ? 0u : ASTRA_MENU_DISABLED) |
         (checked ? ASTRA_MENU_CHECKED : 0u);
 }
@@ -4366,21 +4382,6 @@ static AstraResult run(AstraHandle gui)
     AstraContextMenuItem menu_items[9u + OPEN_WITH_MENU_HANDLERS_MAX + 1u];
     uint16_t menu_parents[9u + OPEN_WITH_MENU_HANDLERS_MAX + 1u] = {0u};
     static const AstraCommandShortcut shortcuts[] = {
-        {0x06u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.copy", sizeof("atlas.copy") - 1u},
-        {0x1bu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.cut", sizeof("atlas.cut") - 1u},
-        {0x19u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.paste", sizeof("atlas.paste") - 1u},
-        {0x1eu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.view.list", sizeof("atlas.view.list") - 1u},
-        {0x1fu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.view.grid", sizeof("atlas.view.grid") - 1u},
-        {0x20u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.view.columns", sizeof("atlas.view.columns") - 1u},
-        {0x11u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.window", sizeof("atlas.window") - 1u},
-        {0x11u, ASTRA_COMMAND_SHORTCUT_PRIMARY | ASTRA_COMMAND_SHORTCUT_SHIFT,
-            "atlas.folder", sizeof("atlas.folder") - 1u},
-        {0x12u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.open", sizeof("atlas.open") - 1u},
-        {0x0cu, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.info", sizeof("atlas.info") - 1u},
-        {0x28u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.terminal", sizeof("atlas.terminal") - 1u},
-        {0x15u, ASTRA_COMMAND_SHORTCUT_PRIMARY, "atlas.refresh", sizeof("atlas.refresh") - 1u},
-        {0x16u, ASTRA_COMMAND_SHORTCUT_PRIMARY | ASTRA_COMMAND_SHORTCUT_ALT,
-            "atlas.sidebar", sizeof("atlas.sidebar") - 1u},
         {0x50u, ASTRA_COMMAND_SHORTCUT_ALT, "atlas.back", sizeof("atlas.back") - 1u},
         {0x4fu, ASTRA_COMMAND_SHORTCUT_ALT, "atlas.forward", sizeof("atlas.forward") - 1u}
     };

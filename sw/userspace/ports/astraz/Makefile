@@ -12,6 +12,8 @@ $(PROGRAM): CMakeLists.txt src/main.c src/audio.c src/audio.h \
 	src/picture.c src/picture.h src/transcript_flow.c \
 	src/canvas.c src/canvas.h src/line_input.c src/line_input.h \
 	src/transcript_flow.h src/screen_grid.c src/screen_grid.h \
+	src/story_picker.c src/story_picker.h ../../common/directory_snapshot.c \
+	../../common/directory_snapshot.h \
 	src/engine.c include/astraz/engine.h
 	test -f $(NDK)/cmake/m68k-astra-toolchain.cmake || \
 		{ echo 'Build NDK first: make -C ndk dist-check' >&2; exit 1; }
@@ -24,6 +26,7 @@ $(PROGRAM): CMakeLists.txt src/main.c src/audio.c src/audio.h \
 		--readelf m68k-astra-readelf \
 		--needed interface.library.12 --needed graphics.library.3 \
 		--needed font.library.5 --needed system.library.4 \
+		--needed filesystem.library.15 \
 		--needed SDL2_mixer.library.3 \
 		--needed runtime.library.1 --needed compiler.library.2 \
 		--needed libc.library.4 --needed SDL2.library.3 \

@@ -457,7 +457,7 @@ static const AstraChoiceItem gallery_tabs[] = {
     {"Drag", sizeof("Drag") - 1u, {0u, 0u}}
 };
 static const AstraMenuItem gallery_menu_bar[] = {
-    {"Gallery", 7u, 0u}, {"Help", 4u, 0u},
+    {"Gallery", 7u, 0u}, {"Interface Gallery", 17u, 0u},
     {"Show notification", 17u, ASTRA_MENU_PARENT(1u)},
     {"Show alert", 10u, ASTRA_MENU_PARENT(1u)},
     {"About controls", 14u, ASTRA_MENU_PARENT(2u)}

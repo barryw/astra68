@@ -4,10 +4,12 @@
 #include "line_input.h"
 #include "picture.h"
 #include "screen_grid.h"
+#include "story_picker.h"
 #include "transcript_flow.h"
 
 #include <astra/control.h>
 #include <astra/area.h>
+#include <astra/filesystem_library.h>
 #include <astra/fonts.h>
 #include <astra/graphics_kit.h>
 #include <astra/image_view.h>
@@ -32,7 +34,7 @@
 #define HEIGHT 560u
 #define TRANSCRIPT_BYTES 65536u
 
-enum { TOOLBAR = 1u, RESTART, UNDO, QUIT, BODY, STATUS, UPPER, CANVAS,
+enum { TOOLBAR = 1u, OPEN_STORY, RESTART, UNDO, QUIT, BODY, STATUS, UPPER, CANVAS,
        SCROLL, CONTENT, TRANSCRIPT, PROMPT, PROMPT_MARK, INPUT,
        CONTROL_COUNT = INPUT };
 
@@ -85,10 +87,15 @@ static uint8_t ui_ready;
 static uint8_t running = 1u;
 static uint8_t playing;
 static uint8_t restart_requested;
+static uint8_t story_change_requested;
 static uint8_t story_ready;
 static uint16_t pending_key;
 static AstraHandle gui;
 static const char *story_path;
+static AstraZStory story;
+static AstraZStory pending_story;
+static char opened_story_path[ASTRA_VFS_PATH_MAX];
+static char pending_story_path[ASTRA_VFS_PATH_MAX];
 static AstraZAudio *audio;
 static uint16_t client_width = WIDTH, client_height = HEIGHT;
 
@@ -97,13 +104,17 @@ enum { ACTION_ABOUT = 100u, ACTION_MAXIMIZE, ACTION_DISTRACTION_FREE };
 #define CONTROL(id) (&controls[(id) - 1u])
 
 static const AstraMenuItem menu_items[] = {
-    {"Story", 5u, 0u}, {"View", 4u, 0u}, {"Help", 4u, 0u},
-    {"Restart", 7u, 1u << ASTRA_MENU_PARENT_SHIFT},
-    {"Undo", 4u, 1u << ASTRA_MENU_PARENT_SHIFT},
-    {"Quit", 4u, 1u << ASTRA_MENU_PARENT_SHIFT},
-    {"Maximize", 8u, 2u << ASTRA_MENU_PARENT_SHIFT},
-    {"Distraction Free", 16u, 2u << ASTRA_MENU_PARENT_SHIFT},
-    {"About AstraZ", 12u, 3u << ASTRA_MENU_PARENT_SHIFT},
+    {"File", 4u, 0u}, {"Story", 5u, 0u},
+    {"View", 4u, 0u}, {"AstraZ", 6u, 0u},
+    {"Open Story...", 13u, ASTRA_MENU_PARENT(1u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x12u)},
+    {"Restart", 7u, ASTRA_MENU_PARENT(2u)},
+    {"Undo", 4u, ASTRA_MENU_PARENT(2u)},
+    {"Maximize", 8u, ASTRA_MENU_PARENT(3u)},
+    {"Distraction Free", 16u, ASTRA_MENU_PARENT(3u)},
+    {"Quit", 4u, ASTRA_MENU_PARENT(4u) |
+        ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x14u)},
+    {"About AstraZ", 12u, ASTRA_MENU_PARENT(4u)},
 };
 
 static AstraResult canvas_fit_layout(void)
@@ -340,11 +351,13 @@ static AstraResult flush_transcript(void)
 static AstraResult build_ui(void)
 {
     static const AstraToolbarAction actions[] = {
+        {"Open Story", 10u, 0u},
         {"Restart", 7u, ASTRA_CONTROL_DISABLED},
         {"Undo", 4u, ASTRA_CONTROL_DISABLED},
         {"Quit", 4u, 0u}
     };
     static const uint32_t icons[] = {
+        ASTRA_TOOLBAR_ICON_OPEN,
         ASTRA_TOOLBAR_ICON_RESTART,
         ASTRA_TOOLBAR_ICON_UNDO,
         ASTRA_TOOLBAR_ICON_CLOSE
@@ -393,9 +406,9 @@ static AstraResult build_ui(void)
         return ASTRA_ERROR_IO;
     toolbar.first_id = TOOLBAR;
     toolbar.actions = actions;
-    toolbar.action_count = 3u;
+    toolbar.action_count = 4u;
     if (astra_interface_toolbar_init(controls, &toolbar) != ASTRA_OK ||
-        astra_interface_toolbar_set_icons(controls, icons, 3u) != ASTRA_OK)
+        astra_interface_toolbar_set_icons(controls, icons, 4u) != ASTRA_OK)
         return ASTRA_ERROR_IO;
     body.id = BODY;
     body.layout.direction = ASTRA_FLEX_COLUMN;
@@ -527,9 +540,43 @@ static AstraResult build_ui(void)
     return ASTRA_OK;
 }
 
+static void open_story(void)
+{
+    AstraAlertInfo alert = ASTRA_ALERT_INFO_INIT;
+    AstraZStory candidate = {0};
+    int selected = 0;
+    AstraResult result = astraz_story_picker_open(astra_posix_startup(), gui,
+        &window, story_path, pending_story_path,
+        sizeof(pending_story_path), &selected);
+    if (result == ASTRA_OK && !selected) return;
+    if (result == ASTRA_OK &&
+        astraz_engine_probe(pending_story_path, &candidate) == ASTRAZ_OK &&
+        candidate.vm == ASTRAZ_VM_Z) {
+        pending_story = candidate;
+        story_change_requested = 1u;
+        restart_requested = 1u;
+        if (playing) pending_key = ASTRAZ_HOTKEY_QUIT;
+        return;
+    }
+    if (result != ASTRA_OK)
+        (void)astra_log_failure("AstraZ Open Story", (uint32_t)(-result));
+    alert.kind = ASTRA_ALERT_WARNING;
+    alert.title = "Cannot open story";
+    alert.title_length = sizeof("Cannot open story") - 1u;
+    alert.message = result != ASTRA_OK ? "File browser could not open." :
+        candidate.vm == ASTRAZ_VM_GLULX ?
+            "Glulx execution is not installed yet." :
+            "This file is not a supported Z-machine story.";
+    alert.message_length = (uint16_t)strlen(alert.message);
+    alert.button = "OK";
+    alert.button_length = 2u;
+    (void)astra_interface_show_alert(gui, &alert);
+}
+
 static void action(uint32_t id)
 {
-    if (id == RESTART) {
+    if (id == OPEN_STORY) open_story();
+    else if (id == RESTART) {
         if (playing) pending_key = ASTRAZ_HOTKEY_RESTART;
         else if (story_ready) restart_requested = 1u;
     }
@@ -600,12 +647,13 @@ static int next_event(AstraWindowEvent *event, AstraUIAction *ui_action,
     if (event->type == ASTRA_WINDOW_EVENT_MENU_RESULT &&
         event->data.menu_result.request == ASTRA_WINDOW_MENU_BAR_REQUEST) {
         switch (event->data.menu_result.selection) {
-        case 3u: action(RESTART); break;
-        case 4u: action(UNDO); break;
-        case 5u: action(QUIT); break;
-        case 6u: action(ACTION_MAXIMIZE); break;
-        case 7u: action(ACTION_DISTRACTION_FREE); break;
-        case 8u: action(ACTION_ABOUT); break;
+        case 5u: action(OPEN_STORY); break;
+        case 6u: action(RESTART); break;
+        case 7u: action(UNDO); break;
+        case 8u: action(ACTION_MAXIMIZE); break;
+        case 9u: action(ACTION_DISTRACTION_FREE); break;
+        case 10u: action(QUIT); break;
+        case 11u: action(ACTION_ABOUT); break;
         default: break;
         }
     }
@@ -664,7 +712,7 @@ static int next_event(AstraWindowEvent *event, AstraUIAction *ui_action,
         astra_interface_ui_focus_control(&ui, INPUT) != ASTRA_OK)
         return -1;
     if (ui_action->type == ASTRA_UI_ACTION_ACTIVATE &&
-        ui_action->control_id >= RESTART && ui_action->control_id <= QUIT)
+        ui_action->control_id >= OPEN_STORY && ui_action->control_id <= QUIT)
         action(ui_action->control_id);
     AstraControlFrame damage;
     if ((event->type == ASTRA_WINDOW_EVENT_RESIZE ||
@@ -833,7 +881,7 @@ static int host_event(void *unused, const AstraZEvent *event)
 static int host_tick(void *unused)
 {
     (void)unused;
-    return running != 0u;
+    return running != 0u && story_change_requested == 0u;
 }
 
 static int host_sound_finished(void *unused)
@@ -1343,7 +1391,6 @@ int main(int argc, char **argv)
     }
     (void)astra_log(status == ASTRA_STATUS_OK ?
         "AstraZ startup ready" : "AstraZ startup failed");
-    AstraZStory story = {0};
     int playable = status == ASTRA_STATUS_OK && story_path != NULL &&
         story_path[0] == '/' &&
         astraz_engine_probe(story_path, &story) == ASTRAZ_OK &&
@@ -1354,7 +1401,7 @@ int main(int argc, char **argv)
     if (status == ASTRA_STATUS_OK && !playable) {
         const char *message = story.vm == ASTRAZ_VM_GLULX ?
             "Glulx execution is not installed yet.\n" :
-            story_path == NULL ? "Open a Z-machine story in Atlas to play it.\n" :
+            story_path == NULL ? "Choose File > Open Story or use the toolbar to play a story.\n" :
             "This file is not a supported Z-machine story.\n";
         transcript_append(message, (uint32_t)strlen(message));
     }
@@ -1374,6 +1421,24 @@ int main(int argc, char **argv)
                 status = ASTRA_STATUS_IO;
             }
         }
+        if (story_change_requested) {
+            size_t length = strlen(pending_story_path);
+            memcpy(opened_story_path, pending_story_path, length + 1u);
+            story_path = opened_story_path;
+            story = pending_story;
+            story_ready = 1u;
+            transcript_length = 0u;
+            transcript_dirty = 1u;
+            transcript_rebuild = 1u;
+            prompt_visible = 0u;
+            status_text[0] = '\0';
+            status_dirty = 1u;
+            pending_key = 0u;
+            story_change_requested = 0u;
+            if (flush_transcript() != ASTRA_OK)
+                status = ASTRA_STATUS_IO;
+        }
+        playable = story_ready != 0u;
         restart_requested = 0u;
     } while (status == ASTRA_STATUS_OK && running && playable);
     if (content._private_handle != ASTRA_INVALID_HANDLE) {

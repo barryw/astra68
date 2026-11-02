@@ -1,6 +1,30 @@
 # Astra 68 current engineering state
 
-Status: active continuation map, 2026-11-01
+Status: active continuation map, 2026-11-02
+
+AstraZ Open Story and shared menu checkpoint, 2026-11-02: Apps publish
+File/Edit/View/Window/Help with an application menu for About, Settings, and
+Quit. Native menu items carry shortcut attributes; Display dispatches those
+shortcuts and Interface Kit draws their labels at row right. AstraZ now has
+File > Open Story (Cmd/Alt+O) and an Open Story toolbar action. Both use the
+shared File Panel and native Filesystem Kit directory snapshots; Places include
+Volumes, Home, Work, and DH0. Selecting a supported Z-machine story resets its
+transcript and launches it in the same window. File Panel now presents only
+on UI damage: unconditional presents had fed a frame-event loop and starved
+navigation. System Kit refreshes the parent's current generation before sheet
+creation, fixing a toolbar-click race with Display's generation check. Haiku
+read-only `src/kits/interface/MenuItem.cpp` (`SetShortcut`) informed menu
+shortcut ownership; `src/kits/interface/Window.cpp` (`SetFeel`) informed
+parent-bound sheet behavior, adapted to Astra's generation-checked GUI API.
+Beast Interface, System, Display, Atlas, and AstraZ host tests, NDK
+`dist-check`, target builds, and bundle check pass. DE25 targeted install
+verified toolbar and File menu pickers, Work navigation/search, Zork I opening
+scene, restart by reselecting story, and Cmd/Alt+Q restoring Atlas. Astra,
+HDMI audio host, and remote desktop active with zero service restarts; 8.1 GiB
+free after trial cleanup. Board/Beast RFB hashes match. Selected raw and PNG
+evidence: `/mnt/Documents/astra68/astraz-open-story-20261102/`. While a sheet
+is active, Display currently titles the top bar `Workspace`; preserving the
+owning application's menu context during sheets remains separate UI work.
 
 Display resize/menu checkpoint, 2026-11-01: Nonresizable windows now open
 with a disabled maximize gadget. A refused gadget command no longer exits the

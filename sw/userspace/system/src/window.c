@@ -380,7 +380,15 @@ AstraResult astra_window_sheet_create(uint32_t gui_endpoint,
     uint32_t content_area, const AstraWindowCreateInfo *info,
     const AstraWindow *parent, AstraWindow *window)
 {
-    return create_window(gui_endpoint, content_area, info, parent, window);
+    AstraWindow current;
+    AstraWindowInfo state = ASTRA_WINDOW_INFO_INIT;
+    AstraResult result;
+
+    if (parent == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
+    current = *parent;
+    result = astra_window_get_info(&current, &state);
+    if (result != ASTRA_OK) return result;
+    return create_window(gui_endpoint, content_area, info, &current, window);
 }
 
 AstraResult astra_window_get_info(AstraWindow *window, AstraWindowInfo *info)
@@ -539,7 +547,9 @@ static AstraResult send_menu_document(AstraWindow *window,
             return ASTRA_ERROR_INVALID_ARGUMENT;
         if ((items[at].flags & ~(ASTRA_MENU_DISABLED | ASTRA_MENU_CHECKED |
                                 ASTRA_MENU_SEPARATOR | ASTRA_MENU_SUBMENU |
-                                ASTRA_MENU_PARENT_MASK)) != 0u ||
+                                ASTRA_MENU_PARENT_MASK |
+                                ASTRA_MENU_SHORTCUT_MASK)) != 0u ||
+            !astra_interface_menu_shortcut_valid(items[at].flags) ||
             !astra_utf8_validate(items[at].label, items[at].label_length, 0u))
             return ASTRA_ERROR_INVALID_ARGUMENT;
         if (parent == 0u) {

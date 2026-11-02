@@ -42,6 +42,50 @@ static int enabled(const AstraMenuItem *item)
     return (item->flags & (ASTRA_MENU_DISABLED | ASTRA_MENU_SEPARATOR)) == 0u;
 }
 
+static uint32_t shortcut_label(uint32_t flags, char *text)
+{
+    static const char digits[] = "1234567890";
+    uint32_t length = 0u;
+    uint32_t usage = (flags & ASTRA_MENU_SHORTCUT_KEY_MASK) >>
+        ASTRA_MENU_SHORTCUT_KEY_SHIFT;
+    const char *prefix = (flags & ASTRA_MENU_SHORTCUT_PRIMARY) != 0u ?
+        ((flags & ASTRA_MENU_SHORTCUT_ALT) != 0u ? "Cmd+Alt+" :
+            "Cmd/Alt+") :
+        ((flags & ASTRA_MENU_SHORTCUT_ALT) != 0u ? "Alt+" : "");
+
+    if (usage == 0u) return 0u;
+    while (*prefix != '\0') text[length++] = *prefix++;
+    if ((flags & ASTRA_MENU_SHORTCUT_CTRL) != 0u) {
+        memcpy(text + length, "Ctrl+", 5u);
+        length += 5u;
+    }
+    if ((flags & ASTRA_MENU_SHORTCUT_SHIFT) != 0u) {
+        memcpy(text + length, "Shift+", 6u);
+        length += 6u;
+    }
+    if (usage >= 0x04u && usage <= 0x1du)
+        text[length++] = (char)('A' + usage - 0x04u);
+    else if (usage >= 0x1eu && usage <= 0x27u)
+        text[length++] = digits[usage - 0x1eu];
+    else if (usage == 0x36u) text[length++] = ',';
+    else if (usage == 0x37u) text[length++] = '.';
+    else if (usage == 0x38u) text[length++] = '/';
+    else if (usage >= 0x3au && usage <= 0x45u) {
+        text[length++] = 'F';
+        uint32_t number = usage - 0x3au + 1u;
+        if (number >= 10u) text[length++] = '1';
+        text[length++] = (char)('0' + number % 10u);
+    } else {
+        static const char hex[] = "0123456789ABCDEF";
+        memcpy(text + length, "Key", 3u);
+        length += 3u;
+        text[length++] = hex[usage >> 4];
+        text[length++] = hex[usage & 15u];
+    }
+    text[length] = '\0';
+    return length;
+}
+
 static int32_t fitted(int32_t point, uint32_t extent, int32_t start, uint32_t size)
 {
     int64_t position = point;
@@ -77,7 +121,9 @@ AstraResult astra_interface_menu_init(AstraMenu *menu,
 
         if ((item->flags & ~(ASTRA_MENU_DISABLED | ASTRA_MENU_CHECKED |
                              ASTRA_MENU_SEPARATOR | ASTRA_MENU_SUBMENU |
-                             ASTRA_MENU_PARENT_MASK)) != 0u)
+                             ASTRA_MENU_PARENT_MASK |
+                             ASTRA_MENU_SHORTCUT_MASK)) != 0u ||
+            !astra_interface_menu_shortcut_valid(item->flags))
             return ASTRA_ERROR_INVALID_ARGUMENT;
         if ((item->flags & ASTRA_MENU_SEPARATOR) != 0u) {
             if (item->flags != ASTRA_MENU_SEPARATOR || item->label != NULL ||
@@ -86,12 +132,17 @@ AstraResult astra_interface_menu_init(AstraMenu *menu,
                 return ASTRA_ERROR_INVALID_ARGUMENT;
         } else {
             uint64_t preferred;
+            char shortcut[32];
+            uint32_t shortcut_length = shortcut_label(item->flags, shortcut);
             if (item->label_length == 0u ||
                 !astra_interface_single_line_text_valid(item->label, item->label_length))
                 return ASTRA_ERROR_INVALID_ARGUMENT;
             preferred = (uint64_t)astra_surface_ui_text_width(item->label,
                 item->label_length, ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT) +
-                ((item->flags & ASTRA_MENU_SUBMENU) != 0u ? 58u : 44u);
+                ((item->flags & ASTRA_MENU_SUBMENU) != 0u ? 58u : 44u) +
+                (shortcut_length != 0u ?
+                    astra_surface_ui_text_width(shortcut, shortcut_length,
+                        ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT) + 16u : 0u);
             if (preferred > width) width = preferred;
             ++rows;
         }
@@ -229,6 +280,15 @@ AstraResult astra_interface_menu_handle_event(AstraMenu *menu,
     if (event->type == ASTRA_WINDOW_EVENT_KEY) {
         uint32_t usage = event->data.key.usage;
         if ((event->flags & ASTRA_WINDOW_EVENT_DOWN) == 0u) return ASTRA_OK;
+        if ((event->flags & ASTRA_WINDOW_EVENT_REPEAT) == 0u)
+            for (uint32_t at = 0u; at < menu->_private_count; ++at)
+                if (enabled(&menu->_private_items[at]) &&
+                    astra_interface_menu_shortcut_matches(
+                        menu->_private_items[at].flags, usage,
+                        event->data.key.modifiers)) {
+                    finish(menu, action, at + 1u);
+                    return ASTRA_OK;
+                }
         if (usage == 0x29u) finish(menu, action, 0u);
         else if (usage == 0x51u || usage == 0x52u)
             select_row(menu, next_row(menu, menu->_private_selected, usage == 0x52u, 1));
@@ -315,12 +375,25 @@ AstraResult astra_interface_menu_render(const AstraMenu *menu, AstraSurfaceView 
     for (uint32_t at = 0u; at < menu->_private_count; ++at) {
         const AstraMenuItem *item = &menu->_private_items[at];
         if (top < surface->height - PAD && top + pitch(item) > PAD) {
+            char shortcut[32];
+            uint32_t shortcut_length = shortcut_label(item->flags, shortcut);
+            uint32_t shortcut_width = shortcut_length == 0u ? 0u :
+                astra_surface_ui_text_width(shortcut, shortcut_length,
+                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT);
+            uint32_t reserve = ((item->flags & ASTRA_MENU_SUBMENU) != 0u ?
+                58u : 40u) + (shortcut_length != 0u ?
+                shortcut_width + 16u : 0u);
             commands += 4u;
             if ((item->flags & ASTRA_MENU_SUBMENU) != 0u) commands += 2u;
+            if (shortcut_length != 0u) {
+                ++commands;
+                payload += shortcut_length + id_length;
+            }
             if (item->label_length != 0u)
                 payload += (uint64_t)astra_surface_ui_text_fit(item->label, item->label_length,
-                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, surface->width -
-                    ((item->flags & ASTRA_MENU_SUBMENU) != 0u ? 58u : 40u)) + id_length;
+                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
+                    surface->width > reserve ? surface->width - reserve : 0u) +
+                    id_length;
         }
         top += pitch(item);
     }
@@ -346,30 +419,45 @@ AstraResult astra_interface_menu_render(const AstraMenu *menu, AstraSurfaceView 
                 astra_surface_fill(&target, 10, y + 4, target.width - 20u, 1, color(theme.border_soft));
             else {
                 int selected = at == menu->_private_selected && enabled(item);
+                char shortcut[32];
+                uint32_t shortcut_length = shortcut_label(item->flags, shortcut);
+                uint32_t shortcut_width = shortcut_length == 0u ? 0u :
+                    astra_surface_ui_text_width(shortcut, shortcut_length,
+                        ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT);
+                uint32_t reserve = ((item->flags & ASTRA_MENU_SUBMENU) != 0u ?
+                    58u : 40u) + (shortcut_length != 0u ?
+                    shortcut_width + 16u : 0u);
+                int32_t right = (int32_t)target.width -
+                    (shortcut_length != 0u ? (int32_t)shortcut_width + 16 : 0);
                 uint16_t ink = color((item->flags & ASTRA_MENU_DISABLED) != 0u ?
                     theme.text_muted : selected ? theme.accent_text : theme.text_primary);
                 uint32_t bytes = astra_surface_ui_text_fit(item->label, item->label_length,
-                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, target.width -
-                    ((item->flags & ASTRA_MENU_SUBMENU) != 0u ? 58u : 40u));
+                    ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT,
+                    target.width > reserve ? target.width - reserve : 0u);
                 if (selected)
                     astra_surface_fill_round(&target, PAD, y, target.width - 2u * PAD,
                                              ROW, theme.control_radius - 2u, color(theme.accent));
                 if ((item->flags & ASTRA_MENU_CHECKED) != 0u) {
                     uint16_t mark = color(selected ? theme.accent_text :
                                                      theme.accent);
-                    if (!astra_surface_line(&target, target.width - 22u, y + 13,
-                        target.width - 18u, y + 17, mark) ||
-                        !astra_surface_line(&target, target.width - 18u, y + 17,
-                            target.width - 12u, y + 9, mark))
+                    if (!astra_surface_line(&target, right - 22, y + 13,
+                        right - 18, y + 17, mark) ||
+                        !astra_surface_line(&target, right - 18, y + 17,
+                            right - 12, y + 9, mark))
                         return ASTRA_ERROR_NO_RESOURCES;
                 }
                 astra_surface_ui_text(&target, 14, y + 7, item->label, bytes,
                                       ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, ink);
+                if (shortcut_length != 0u)
+                    astra_surface_ui_text(&target,
+                        (int32_t)target.width - 14 - (int32_t)shortcut_width,
+                        y + 7, shortcut, shortcut_length,
+                        ASTRA_THEME_SYSTEM_MENU_FONT_HEIGHT, ink);
                 if ((item->flags & ASTRA_MENU_SUBMENU) != 0u &&
-                    (!astra_surface_line(&target, target.width - 19u, y + 9,
-                        target.width - 13u, y + 13, ink) ||
-                     !astra_surface_line(&target, target.width - 13u, y + 13,
-                        target.width - 19u, y + 17, ink)))
+                    (!astra_surface_line(&target, right - 19, y + 9,
+                        right - 13, y + 13, ink) ||
+                     !astra_surface_line(&target, right - 13, y + 13,
+                        right - 19, y + 17, ink)))
                     return ASTRA_ERROR_NO_RESOURCES;
             }
         }
