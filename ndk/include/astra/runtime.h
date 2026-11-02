@@ -973,11 +973,13 @@ uint32_t astra_host_lease_execute(
 uint32_t astra_host_channel_open(uint32_t device,
                                  AstraHostChannelOpen *channel);
 /**
- * Close the current process's shared host channel.
+ * Close a shared host channel owned by the calling thread.
  * @param device Host-service device capability.
+ * @param channel_address Address returned by astra_host_channel_open.
  * @return ASTRA_SYSCALL_* status.
  */
-uint32_t astra_host_channel_close(uint32_t device);
+uint32_t astra_host_channel_close(uint32_t device,
+                                  uint32_t channel_address);
 /**
  * Create a filesystem scope (::ASTRA_SYSCALL_HOST_SCOPE_CREATE): the
  * authority to drive host channels bound to one provider session.
@@ -1001,14 +1003,15 @@ uint32_t astra_host_scope_create(uint32_t device, uint32_t word,
  */
 uint32_t astra_host_scope_revoke(uint32_t scope);
 /**
- * Bind one more scope to the calling thread's host channel
+ * Bind one more scope to a host channel owned by the calling thread
  * (::ASTRA_SYSCALL_HOST_SCOPE_ATTACH), which must have been opened on a
  * scope; at most ::ASTRA_HOST_CHANNEL_SCOPE_MAX. A scope already bound there
  * is not bound twice.
  * @param scope The scope, with ::ASTRA_RIGHT_WRITE.
+ * @param channel_address Address returned by astra_host_channel_open.
  * @return ASTRA_SYSCALL_* status.
  */
-uint32_t astra_host_scope_attach(uint32_t scope);
+uint32_t astra_host_scope_attach(uint32_t scope, uint32_t channel_address);
 /** Set a scope's per-owner handles/share bound before binding it.
  * @param scope Scope carrying ADMINISTER. @param files Bound, zero for unlimited.
  * @return ASTRA_SYSCALL_* status; BUSY when bound to any channel. */
@@ -1023,11 +1026,13 @@ uint32_t astra_host_channel_kick(uint32_t channel_address,
                                  uint32_t producer_position);
 /**
  * Wait for host-channel consumer progress.
+ * @param channel_address Address returned by astra_host_channel_open.
  * @param consumer_position Previously observed consumer position.
  * @param deadline_ns Absolute monotonic deadline.
  * @return ASTRA_SYSCALL_* status.
  */
-uint32_t astra_host_channel_wait(uint32_t consumer_position,
+uint32_t astra_host_channel_wait(uint32_t channel_address,
+                                 uint32_t consumer_position,
                                  uint64_t deadline_ns);
 /**
  * Query the hardware text console dimensions.

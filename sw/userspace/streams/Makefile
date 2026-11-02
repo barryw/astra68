@@ -28,7 +28,7 @@ DYNAMIC_IDENTITY := build/m68k/dynamic/streams_library.o
 DYNAMIC_OBJECTS := build/m68k/dynamic/stream_sink.o \
 	build/m68k/dynamic/stream_client.o
 DYNAMIC_MAP := streams.library.exports
-RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
 KERNEL_ELF_TEST := ../../kernel/build/test_elf
 # The sink renders into the terminal model, so the test links it: "a write
 # renders" is only worth asserting against what will actually be on the screen.
@@ -72,7 +72,7 @@ $(DYNAMIC_LIBRARY): $(DYNAMIC_IDENTITY) $(DYNAMIC_OBJECTS) \
 		-Wl,--version-script=$(DYNAMIC_MAP) -o $@ \
 		$(DYNAMIC_IDENTITY) $(DYNAMIC_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:runtime.library.1 $(ASTRA_SHARED_LINK_END)
+		-Wl,-l:runtime.library.2 $(ASTRA_SHARED_LINK_END)
 
 streams-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@python3 ../../../tools/check_shared_library_layout.py $(DYNAMIC_LIBRARY)
@@ -82,7 +82,7 @@ streams-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 		grep -q '^streams.library.1 1.1.0 ABI 1.1$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [streams.library.1]'
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'
 	@$(READELF) -lW $< | grep -q ' GNU_RELRO '

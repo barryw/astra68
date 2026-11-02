@@ -57,7 +57,8 @@ show a shared selectable list of saved mappings, `+` to add and `-` to remove,
 and a detail form for the selected mapping. The detail form exposes label,
 server, export/share, read/write policy, mount status, and Mount/Unmount.
 SMB also exposes account/domain and a credential reference; the password
-entry writes to the protected secret owner, never Config Kit. Reuse one
+entry goes to the resident owner of Config Kit's protected secret API, never
+directly into Settings' document. Reuse one
 settings-page composition for both protocols rather than two separate UIs.
 Editing an active mapping saves the proposed definition without changing its
 current mounted identity; reconnecting applies it as a new mount generation.
@@ -125,7 +126,7 @@ describes stable client identity and DNS upcalls.
    policy through the existing native mount transaction. Refuse arbitrary
    Linux paths, option strings, shell commands and application-supplied mount
    targets. Validate lengths and Unicode without truncation.
-3. Store credentials through a native capability-controlled secret facility.
+3. Store credentials through Config Kit's resident `HOST_SECRETS` facility.
    Never put passwords in arguments, environment, public catalog, logs or
    persistent plaintext settings. Give only the selected mount worker access
    and destroy temporary material on every exit path. A volume's authenticated

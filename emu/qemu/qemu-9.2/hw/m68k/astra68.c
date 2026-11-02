@@ -52,6 +52,7 @@
 #include "astra_storage_transport.h"
 #include "astra_font_host.h"
 #include "astra_codec_host.h"
+#include "astra_secret_host.h"
 #include "astra_font_convert.h"
 #include "astra/block.h"
 #include "astra/boot.h"
@@ -69,6 +70,7 @@
 #include "astra/status.h"
 #include "astra/vfs_service.h"
 #include "block/thread-pool.h"
+#include "crypto/random.h"
 #include "sysemu/block-backend.h"
 #include "sysemu/block-backend-io.h"
 #include "sysemu/blockdev.h"
@@ -645,6 +647,7 @@ typedef struct AstraHostChannel {
     /* Opened unbound by the filesystem provider: the kernel saw HOST_SCOPE
      * on its device handle. The only channel CLAIM is honoured on. */
     bool provider;
+    bool config_secret;
     uint32_t scope_count;
     AstraHostChannelScope scopes[ASTRA_HOST_CHANNEL_SCOPE_MAX];
 } AstraHostChannel;
@@ -683,6 +686,8 @@ typedef struct AstraHostState {
     /* Private Linux provider authority. Native descriptions remain here. */
     int provider_control;
     int provider_path;
+    uint8_t secret_key[ASTRA_SECRET_KEY_BYTES];
+    bool secret_key_loaded;
     bool provider_broken;
     uint64_t provider_epoch;
     uint64_t provider_control_serial;
@@ -3962,6 +3967,24 @@ static void astra_host_provider_init(Astra68State *s)
     if (astra_storage_control_call(a, &request, -1, &reply, &fd) != 0 || reply.error != 0)
         goto failed;
     s->host.provider_epoch = reply.epoch;
+    const char *secret_text = g_getenv("ASTRA_CONFIG_SECRET_FD");
+    if (secret_text != NULL) {
+        char *end = NULL;
+        struct stat info;
+        errno = 0;
+        long secret = strtol(secret_text, &end, 10);
+        if (errno != 0 || end == secret_text || *end != '\0' ||
+            secret < 5 || secret > INT_MAX || fstat((int)secret, &info) != 0 ||
+            !S_ISREG(info.st_mode) || info.st_uid != 0 ||
+            (info.st_mode & 0777u) != 0600u || info.st_size != ASTRA_SECRET_KEY_BYTES ||
+            pread((int)secret, s->host.secret_key,
+                  ASTRA_SECRET_KEY_BYTES, 0) != ASTRA_SECRET_KEY_BYTES) {
+            error_report("Astra Config Kit host key is unavailable or invalid");
+            exit(EXIT_FAILURE);
+        }
+        close((int)secret);
+        s->host.secret_key_loaded = true;
+    }
     return;
 failed:
     error_report("cannot acquire coherent storage provider roots");
@@ -5646,6 +5669,77 @@ done:
     stl_be_p(command + HOST_FIELD(status), status);
 }
 
+static void astra_host_execute_config_secret(Astra68State *s,
+    uint8_t *command, uint32_t physical, uint32_t bytes,
+    uint32_t command_bytes, uint32_t expected_generation)
+{
+    uint32_t input = ldl_be_p(command + HOST_FIELD(data_length));
+    uint32_t capacity = ldl_be_p(command + HOST_FIELD(data_capacity));
+    uint32_t context = ldl_be_p(command + HOST_FIELD(offset_lo));
+    uint16_t operation = lduw_be_p(command + HOST_FIELD(operation));
+    uint32_t status = ASTRA_STATUS_INVALID;
+    uint8_t output[ASTRA_SECRET_OVERHEAD + ASTRA_SECRET_MAX_BYTES];
+    uint8_t nonce[ASTRA_SECRET_NONCE_BYTES];
+    uint8_t *data;
+    int length = -1;
+
+    stl_be_p(command + HOST_FIELD(status), 0u);
+    stl_be_p(command + HOST_FIELD(result_length), 0u);
+    if (!s->host.secret_key_loaded) {
+        status = ASTRA_STATUS_UNSUPPORTED;
+        goto done;
+    }
+    if (ldl_be_p(command + HOST_FIELD(size)) != ASTRA_HOST_COMMAND_SIZE ||
+        lduw_be_p(command + HOST_FIELD(version)) != ASTRA_HOST_COMMAND_VERSION ||
+        lduw_be_p(command + HOST_FIELD(service)) != ASTRA_HOST_SERVICE_CONFIG_SECRETS ||
+        (operation != ASTRA_HOST_CONFIG_SECRET_SEAL &&
+         operation != ASTRA_HOST_CONFIG_SECRET_OPEN) ||
+        lduw_be_p(command + HOST_FIELD(flags)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(generation)) != expected_generation ||
+        ldl_be_p(command + HOST_FIELD(handle)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(offset_hi)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(value_hi)) != 0u ||
+        ldl_be_p(command + HOST_FIELD(value_lo)) != 0u ||
+        context < 2u || context > 512u || input <= context ||
+        input > context + ASTRA_SECRET_OVERHEAD + ASTRA_SECRET_MAX_BYTES ||
+        capacity == 0u ||
+        capacity > sizeof(output))
+        goto done;
+    for (size_t at = HOST_FIELD(session); at < ASTRA_HOST_COMMAND_SIZE; ++at)
+        if (command[at] != 0u) goto done;
+    data = astra_host_command_data(s, physical, bytes, command_bytes,
+        command, MAX(input, capacity));
+    if (data == NULL) goto done;
+    if (operation == ASTRA_HOST_CONFIG_SECRET_SEAL) {
+        if (input - context > ASTRA_SECRET_MAX_BYTES ||
+            capacity < input - context + ASTRA_SECRET_OVERHEAD)
+            goto done;
+        if (qcrypto_random_bytes(nonce, sizeof(nonce), NULL) != 0) {
+            status = ASTRA_STATUS_IO;
+            goto done;
+        }
+        length = astra_secret_seal(s->host.secret_key, nonce, data, context,
+            data + context, input - context, output, sizeof(output));
+    } else {
+        if (input - context <= ASTRA_SECRET_OVERHEAD ||
+            capacity < input - context - ASTRA_SECRET_OVERHEAD)
+            goto done;
+        length = astra_secret_open(s->host.secret_key, data, context,
+            data + context, input - context, output, sizeof(output));
+    }
+    if (length < 0) {
+        status = ASTRA_STATUS_ACCESS;
+        goto done;
+    }
+    memcpy(data, output, length);
+    stl_be_p(command + HOST_FIELD(result_length), length);
+    status = ASTRA_STATUS_OK;
+done:
+    memset(output, 0, sizeof(output));
+    memset(nonce, 0, sizeof(nonce));
+    stl_be_p(command + HOST_FIELD(status), status);
+}
+
 static void astra_host_execute_command(Astra68State *s, uint32_t owner,
                                        AstraHostChannel *channel,
                                        uint8_t *command,
@@ -5659,11 +5753,17 @@ static void astra_host_execute_command(Astra68State *s, uint32_t owner,
         service == ASTRA_HOST_SERVICE_ENTROPY ||
         service == ASTRA_HOST_SERVICE_VOLUMES || service == ASTRA_HOST_SERVICE_AUDIO ||
         service == ASTRA_HOST_SERVICE_FONTS ||
-        service == ASTRA_HOST_SERVICE_CODEC;
+        service == ASTRA_HOST_SERVICE_CODEC ||
+        service == ASTRA_HOST_SERVICE_CONFIG_SECRETS;
     int64_t started = non_fs ? qemu_clock_get_ns(QEMU_CLOCK_REALTIME) : 0;
     if (channel != NULL && channel->bound &&
         lduw_be_p(command + HOST_FIELD(service)) !=
             ASTRA_HOST_SERVICE_FILESYSTEM) {
+        stl_be_p(command + HOST_FIELD(status), ASTRA_STATUS_ACCESS);
+        goto done;
+    }
+    if (service == ASTRA_HOST_SERVICE_CONFIG_SECRETS &&
+        (channel == NULL || !channel->config_secret)) {
         stl_be_p(command + HOST_FIELD(status), ASTRA_STATUS_ACCESS);
         goto done;
     }
@@ -5695,6 +5795,9 @@ static void astra_host_execute_command(Astra68State *s, uint32_t owner,
                  ASTRA_HOST_SERVICE_CODEC)
         astra_host_execute_codec(s, channel, command, physical, bytes,
                                  command_bytes, expected_generation);
+    else if (service == ASTRA_HOST_SERVICE_CONFIG_SECRETS)
+        astra_host_execute_config_secret(s, command, physical, bytes,
+                                         command_bytes, expected_generation);
     else
         astra_host_execute_fs(s, owner, channel, command, physical, bytes,
                               command_bytes, expected_generation, job);
@@ -7324,7 +7427,8 @@ static bool astra_host_config_scope(Astra68State *s, const uint8_t *config,
     case ASTRA_HOST_CHANNEL_CONFIG_DETACH:
         return flags == 0 && scope->owner == 0 && scope->files == 0;
     case ASTRA_HOST_CHANNEL_CONFIG_OPEN:
-        if (flags == 0 || flags == ASTRA_HOST_CHANNEL_PROVIDER)
+        if (flags == 0 || flags == ASTRA_HOST_CHANNEL_PROVIDER ||
+            flags == ASTRA_HOST_CHANNEL_CONFIG_SECRET)
             return scope->scope == 0 && scope->owner == 0 && scope->files == 0;
         /* fall through */
     case ASTRA_HOST_CHANNEL_CONFIG_ATTACH:
@@ -7522,6 +7626,9 @@ static void astra_host_channel_configure(Astra68State *s, uint32_t physical)
     channel->provider = !channel->bound &&
         ldl_be_p(config + HOST_CHANNEL_CONFIG_FIELD(scope_flags)) ==
             ASTRA_HOST_CHANNEL_PROVIDER;
+    channel->config_secret = !channel->bound &&
+        ldl_be_p(config + HOST_CHANNEL_CONFIG_FIELD(scope_flags)) ==
+            ASTRA_HOST_CHANNEL_CONFIG_SECRET;
     channel->scope_count = channel->bound ? 1 : 0;
     channel->scopes[0] = scope;
     qemu_mutex_unlock(&s->host.files_lock);
@@ -8675,6 +8782,8 @@ static uint32_t astra_vesta_read32(Astra68State *s, hwaddr offset)
                 (access(astra_host_codec_worker_path(), X_OK) == 0 ?
                     ASTRA_HOST_CAP_CODEC : 0u) |
 #endif
+                (s->host.secret_key_loaded ?
+                    ASTRA_HOST_CAP_CONFIG_SECRETS : 0u) |
                 (s->audio.enabled ? ASTRA_HOST_CAP_AUDIO_STREAM : 0u) : 0u;
     case 0x88c:
         return s->host.provider_control >= 0 ? ASTRA_HOST_STATE_READY : 0u;

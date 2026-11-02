@@ -291,7 +291,7 @@ static void default_application_ceiling(void)
         "RAM_READ", "RAM_WRITE",
     };
     static const char *refused[] = {
-        "DISPLAY", "INPUT", "HOST_DEVICE", "HOST_FILESYSTEM", "BLOCK_DEVICE",
+        "DISPLAY", "INPUT", "HOST_DEVICE", "HOST_FILESYSTEM", "HOST_SECRETS", "BLOCK_DEVICE",
         "CLOCK",
         "SERVICE_MANAGER", "EVENT_CONTROL", "PROCESS", "APPS:rw",
         "LIBS:rw", "SYSTEM:r", "PROC:r", "PROC:rw", "COMMANDS:r", "STORE",

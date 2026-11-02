@@ -288,7 +288,21 @@ call that native contract. Joined-assign opens use the member selected by
 lookup, including dangling-link shadowing. Rename/link retain namespace
 escapes instead of conflating them with a cross-device operation.
 
-## Syscall ABI 0x00010043: filesystem admission
+## Syscall ABI 0x00020000: independent host channels and protected credentials
+
+Runtime 2.0 selects a host channel by its returned page address for
+`HOST_CHANNEL_CLOSE`, `HOST_CHANNEL_WAIT`, and `HOST_SCOPE_ATTACH`. A thread
+may hold multiple channels; each address must name a live channel owned by
+that thread and process. Channel close and thread exit retire only their
+respective channels. The changed register arguments require a new syscall
+and Runtime library major; all in-tree clients use the new contract.
+
+The resident `HOST_SECRETS` device right permits a kernel-attested secret
+channel. Ordinary `HOST_DEVICE` clients cannot open one. Config Kit 1.2
+stores authenticated secret envelopes through that channel; see
+`docs/CONFIG_SECRETS.md`.
+
+## Syscall ABI 0x00010043: filesystem admission (historical)
 
 Runtime 1.16 exports `astra_host_scope_limit`. Host transport 0x00010015
 binds the per-owner handle/token quota to each scope with `scope_files` at
@@ -552,7 +566,7 @@ Current syscall numbers are provisional until the first NDK ABI release:
 
 | Number | Name | State | Contract |
 |---:|---|---|---|
-| 0 | `QUERY_ABI` | CURRENT | `D1=0x00010043`, `D2=process handle`, `D3=calling-thread handle` |
+| 0 | `QUERY_ABI` | CURRENT | `D1=0x00020000`, `D2=process handle`, `D3=calling-thread handle` |
 | 1 | `PROGRESS` | CURRENT | `D1` = monotonic progress value; or, from the initial image only, a boot command `0x4253xyyy` (`x`=1 SERVICES with N=`yyy`, `x`=2 SERVICE with result 0 ready / 1 failed / 2 skipped) that drives the boot progress record (`sw/include/astra/boot_progress.h`); a boot command from any other process answers `ACCESS_DENIED`, and one the record refuses answers `INVALID_ARGUMENT` |
 | 2 | `YIELD` | CURRENT | voluntary rotation behind equal-priority peers; higher priorities still win |
 | 3 | `PROCESS_EXIT` (`EXIT` compatibility alias) | CURRENT | terminates the calling process and all of its threads |
@@ -632,7 +646,7 @@ touched by the mapping as one transaction. VFS bulk transfers use this same
 bound instead of imposing a smaller protocol limit.
 
 Unknown syscalls return `BAD_SYSCALL`. Invalid values return an error; they do
-not panic. `QUERY_ABI` reports revision `0x00010043`; a later revision may add
+not panic. `QUERY_ABI` reports revision `0x00020000`; a later revision may add
 feature bits before additional calls freeze.
 
 Process and thread priorities are one number, 1 through 27, with 16 as

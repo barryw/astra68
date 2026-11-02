@@ -22,7 +22,7 @@ ASTRA_LDFLAGS ?= -nostdlib -pie -Wl,-Bdynamic -Wl,--no-as-needed \
 	-Wl,--build-id=none -Wl,--gc-sections \
 	-T $(ASTRA_LINKER_SCRIPT) $(ASTRA_LIBRARY_SEARCH_FLAGS)
 ASTRA_CRT0 ?= $(ASTRA_LIB_DIR)/crt0-dynamic.o
-ASTRA_NATIVE_LIBS ?= -Wl,-l:runtime.library.1 \
+ASTRA_NATIVE_LIBS ?= -Wl,-l:runtime.library.2 \
 	-Wl,-l:compiler.library.2
 ASTRA_DYNAMIC_EXECUTABLE_CHECK ?= \
 	$(ASTRA_NDK_ROOT)/tools/check_dynamic_executable.py

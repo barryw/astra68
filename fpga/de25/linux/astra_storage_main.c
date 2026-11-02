@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "astra_storage_provider.h"
 #include "astra_storage_discovery.h"
+#include "astra_storage_secret.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -203,13 +204,15 @@ static int provision(AstraStorageProvider *provider, const StorageConfig *settin
 }
 
 static void child(AstraStorageProvider *provider, const StorageConfig *settings,
-                    int control, int path, pid_t parent)
+                    int control, int path, int secret, pid_t parent)
 {
     /* Reserve copies above the two protocol slots before rearranging FDs. */
-    int a = fcntl(control, F_DUPFD_CLOEXEC, 5);
-    int b = fcntl(path, F_DUPFD_CLOEXEC, 5);
+    int a = fcntl(control, F_DUPFD_CLOEXEC, 6);
+    int b = fcntl(path, F_DUPFD_CLOEXEC, 6);
+    int c = secret >= 0 ? fcntl(secret, F_DUPFD_CLOEXEC, 6) : -1;
     if (a < 0 || b < 0 || dup2(a, 3) < 0 || dup2(b, 4) < 0 ||
-        syscall(SYS_close_range, 5u, UINT_MAX, 0u) != 0)
+        (secret >= 0 && (c < 0 || dup2(c, 5) < 0)) ||
+        syscall(SYS_close_range, secret >= 0 ? 6u : 5u, UINT_MAX, 0u) != 0)
         _exit(126);
     for (int cap = 0; ; ++cap) {
         int present = prctl(PR_CAPBSET_READ, cap, 0, 0, 0);
@@ -230,7 +233,8 @@ static void child(AstraStorageProvider *provider, const StorageConfig *settings,
         prctl(PR_SET_PDEATHSIG, SIGKILL, 0, 0, 0) != 0 || getppid() != parent ||
         sigprocmask(SIG_SETMASK, &provider->previous_signals, NULL) != 0 ||
         setenv("ASTRA_STORAGE_CONTROL_FD", "3", 1) != 0 ||
-        setenv("ASTRA_STORAGE_PATH_FD", "4", 1) != 0)
+        setenv("ASTRA_STORAGE_PATH_FD", "4", 1) != 0 ||
+        (secret >= 0 && setenv("ASTRA_CONFIG_SECRET_FD", "5", 1) != 0))
         _exit(126);
     execvp(settings->command[0], settings->command);
     _exit(errno == ENOENT ? 127 : 126);
@@ -242,8 +246,18 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
     AstraStorageProvider provider = ASTRA_STORAGE_PROVIDER_INIT;
     AstraStorageDiscovery discovery = ASTRA_STORAGE_DISCOVERY_INIT;
     int control[2] = {-1, -1}, path[2] = {-1, -1};
+    const char *secret_path = getenv("ASTRA_STORAGE_SECRET_KEY_PATH");
+    int secret = -1;
     int status = 0, opened = 0;
-    int error = astra_storage_provider_open(&provider, domain,
+    int error = 0;
+    if (secret_path != NULL) {
+        secret = astra_storage_secret_open(secret_path);
+        if (secret < 0) {
+            error = errno;
+            fprintf(stderr, "astra-storage config key: %s\n", strerror(error));
+        }
+    }
+    if (error == 0) error = astra_storage_provider_open(&provider, domain,
         settings.metadata, settings.resources, settings.probes, settings.timeout,
         settings.workers, settings.ram_bytes, settings.ram_inodes);
     if (error == 0) {
@@ -268,7 +282,7 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
         pid_t parent = getpid();
         pid_t pid = fork();
         if (pid == 0)
-            child(&provider, &settings, control[1], path[1], parent);
+            child(&provider, &settings, control[1], path[1], secret, parent);
         if (pid < 0)
             error = errno;
         else {
@@ -296,6 +310,7 @@ static int run_provider(const StorageConfig *configuration, AstraStorageDomain *
                 error = 0;
         }
     }
+    if (secret >= 0) close(secret);
     for (unsigned at = 0; at < 2u; ++at) {
         if (control[at] >= 0) close(control[at]);
         if (path[at] >= 0) close(path[at]);

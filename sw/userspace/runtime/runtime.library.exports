@@ -1,4 +1,4 @@
-ASTRA_RUNTIME_1.0 {
+ASTRA_RUNTIME_2.0 {
     global:
         __m68k_read_tp;
         astra_activity_adopt;
@@ -7,6 +7,8 @@ ASTRA_RUNTIME_1.0 {
         astra_activity_exchange;
         astra_assert_failed;
         astra_assert_message;
+        astra_audio_stream_open;
+        astra_audio_stream_wait;
         astra_block_lease_collect;
         astra_block_lease_collect_ex;
         astra_block_lease_query;
@@ -31,6 +33,7 @@ ASTRA_RUNTIME_1.0 {
         astra_device_query;
         astra_device_reset;
         astra_display_collect;
+        astra_display_cursor;
         astra_display_submit;
         astra_divide_u64;
         astra_divide_u64_u64;
@@ -46,16 +49,25 @@ ASTRA_RUNTIME_1.0 {
         astra_event_level_set;
         astra_event_levels;
         astra_event_pack;
-        astra_executable_interpreter;
+        astra_exec_executable_stream;
         astra_exec_request_pack;
+        astra_executable_interpreter;
         astra_futex_wait;
         astra_futex_wake;
         astra_host_channel_close;
         astra_host_channel_kick;
         astra_host_channel_open;
         astra_host_channel_wait;
+        astra_host_client_close;
+        astra_host_client_open;
+        astra_host_client_prepare;
+        astra_host_client_submit;
         astra_host_lease_execute;
         astra_host_lease_query;
+        astra_host_scope_attach;
+        astra_host_scope_create;
+        astra_host_scope_limit;
+        astra_host_scope_revoke;
         astra_input_read;
         astra_irq_ack;
         astra_irq_arm;
@@ -66,11 +78,17 @@ ASTRA_RUNTIME_1.0 {
         astra_launch_arguments_pack;
         astra_launch_dynamic_stream;
         astra_launch_environment_pack;
+        astra_launch_executable_stream;
         astra_launch_stream;
         astra_library_snapshot;
         astra_log;
+        astra_log_consumer_next;
         astra_log_debug;
         astra_log_failure;
+        astra_log_line;
+        astra_log_producer_init;
+        astra_log_producer_write;
+        astra_log_record_slots;
         astra_log_write;
         astra_multiply_divide_u64;
         astra_network_lease_execute;
@@ -78,10 +96,7 @@ ASTRA_RUNTIME_1.0 {
         astra_port_receive;
         astra_port_receive_from;
         astra_port_send;
-        astra_shutdown_request;
-        astra_shutdown_receive;
-        astra_shutdown_respond;
-        astra_shutdown_receive_reply;
+        astra_port_send_rights;
         astra_posix_process_query;
         astra_posix_process_register;
         astra_posix_process_setpgid;
@@ -95,9 +110,8 @@ ASTRA_RUNTIME_1.0 {
         astra_process_clone;
         astra_process_exit;
         astra_process_info;
-        astra_thread_info;
+        astra_process_open;
         astra_process_priority;
-        astra_thread_priority;
         astra_process_resume;
         astra_process_signal;
         astra_process_snapshot;
@@ -111,6 +125,7 @@ ASTRA_RUNTIME_1.0 {
         astra_rt_area_decommit;
         astra_rt_area_map;
         astra_rt_area_unmap;
+        astra_rt_cancel_wait;
         astra_rt_event_create;
         astra_rt_event_reset;
         astra_rt_handle_duplicate;
@@ -119,11 +134,11 @@ ASTRA_RUNTIME_1.0 {
         astra_rt_library_attach;
         astra_rt_library_attach_resident;
         astra_rt_port_create;
-        astra_rt_process_dynamic_commit;
         astra_rt_private_commit;
         astra_rt_private_decommit;
         astra_rt_private_reserve;
         astra_rt_private_reserve_largest;
+        astra_rt_process_dynamic_commit;
         astra_rt_ring_create;
         astra_rt_ring_read_try;
         astra_rt_ring_write_try;
@@ -131,83 +146,34 @@ ASTRA_RUNTIME_1.0 {
         astra_rt_signal;
         astra_rt_signal_configure;
         astra_rt_signal_return;
-astra_rt_thread_create;
-astra_rt_thread_start_detached;
+        astra_rt_thread_create;
         astra_rt_thread_sleep;
-        astra_runtime_finalize;
-        astra_runtime_initialize;
-        astra_service_ready;
-        astra_service_ready_managed;
-        astra_startup_argument;
-        astra_startup_capability;
-        astra_startup_launch_source;
-        astra_startup_validate;
-        astra_syscall5;
-        astra_thread_exit;
-        astra_trace_read;
-        astra_utf8_scalar_advance;
-        astra_utf8_scalar_retreat;
-        astra_utf8_validate;
-        astra_wait_multiple;
-        astra_wait_one;
-        astra_yield;
-        memcmp;
-        memcpy;
-        memmove;
-        memset;
-    local:
-        *;
-};
-
-ASTRA_RUNTIME_1.1 {
-} ASTRA_RUNTIME_1.0;
-
-ASTRA_RUNTIME_1.2 {
-    global:
+        astra_rt_thread_start_detached;
+        astra_rt_timer_cancel;
+        astra_rt_timer_create;
+        astra_rt_timer_set;
         astra_runtime_allocate;
+        astra_runtime_allocate_aligned;
         astra_runtime_allocation_size;
         astra_runtime_allocation_span;
         astra_runtime_callocate;
         astra_runtime_deallocate;
+        astra_runtime_finalize;
+        astra_runtime_initialize;
         astra_runtime_reallocate;
         astra_runtime_sbrk;
         astra_runtime_set_growth_policy;
-} ASTRA_RUNTIME_1.1;
-
-ASTRA_RUNTIME_1.3 {
-    global:
-        strcmp;
-        strcpy;
-        strlen;
-        strncmp;
-        strncpy;
-} ASTRA_RUNTIME_1.2;
-
-ASTRA_RUNTIME_1.4 {
-    global:
-        astra_runtime_allocate_aligned;
-} ASTRA_RUNTIME_1.3;
-
-ASTRA_RUNTIME_1.5 {
-    global:
-        astra_host_client_close;
-        astra_host_client_open;
-        astra_host_client_prepare;
-        astra_host_client_submit;
-} ASTRA_RUNTIME_1.4;
-
-ASTRA_RUNTIME_1.6 {
-    global:
-        astra_launch_executable_stream;
-} ASTRA_RUNTIME_1.5;
-
-ASTRA_RUNTIME_1.7 {
-    global:
-        astra_exec_executable_stream;
-} ASTRA_RUNTIME_1.6;
-
-ASTRA_RUNTIME_1.9 {
-    global:
+        astra_scheduler_stats;
+        astra_service_ready;
+        astra_service_ready_managed;
+        astra_shutdown_receive;
+        astra_shutdown_receive_reply;
+        astra_shutdown_request;
+        astra_shutdown_respond;
+        astra_startup_argument;
+        astra_startup_capability;
+        astra_startup_launch_source;
+        astra_startup_validate;
         astra_string_append;
         astra_string_append_bytes;
         astra_string_append_char;
@@ -221,58 +187,29 @@ ASTRA_RUNTIME_1.9 {
         astra_string_has_suffix;
         astra_string_init;
         astra_string_utf8_prefix;
-} ASTRA_RUNTIME_1.7;
-
-ASTRA_RUNTIME_1.10 {
-    global:
-        astra_display_cursor;
-        astra_rt_cancel_wait;
-        astra_rt_timer_cancel;
-        astra_rt_timer_create;
-        astra_rt_timer_set;
-} ASTRA_RUNTIME_1.9;
-
-ASTRA_RUNTIME_1.11 {
-    global:
-        astra_process_open;
-        astra_scheduler_stats;
-} ASTRA_RUNTIME_1.10;
-
-ASTRA_RUNTIME_1.12 {
-    global:
-        astra_audio_stream_open;
-        astra_audio_stream_wait;
-} ASTRA_RUNTIME_1.11;
-
-ASTRA_RUNTIME_1.13 {
-    global:
-        astra_log_consumer_next;
-        astra_log_line;
-        astra_log_producer_init;
-        astra_log_producer_write;
-        astra_log_record_slots;
+        astra_syscall5;
+        astra_thread_exit;
+        astra_thread_info;
+        astra_thread_priority;
         astra_time_now;
-} ASTRA_RUNTIME_1.12;
-
-ASTRA_RUNTIME_1.14 {
-    global:
-        astra_host_scope_attach;
-        astra_host_scope_create;
-        astra_host_scope_revoke;
-} ASTRA_RUNTIME_1.13;
-
-ASTRA_RUNTIME_1.15 {
-    global:
-        astra_port_send_rights;
-} ASTRA_RUNTIME_1.14;
-
-ASTRA_RUNTIME_1.16 {
-    global:
-        astra_host_scope_limit;
-} ASTRA_RUNTIME_1.15;
-
-ASTRA_RUNTIME_1.17 {
-    global:
+        astra_trace_read;
+        astra_utf8_scalar_advance;
+        astra_utf8_scalar_retreat;
+        astra_utf8_validate;
+        astra_wait_multiple;
+        astra_wait_one;
+        astra_yield;
         memchr;
+        memcmp;
+        memcpy;
+        memmove;
+        memset;
         qsort;
-} ASTRA_RUNTIME_1.16;
+        strcmp;
+        strcpy;
+        strlen;
+        strncmp;
+        strncpy;
+    local:
+        *;
+};

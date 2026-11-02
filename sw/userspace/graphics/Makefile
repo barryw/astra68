@@ -62,7 +62,7 @@ FONT_LIBRARY_OBJECTS := build/m68k/library/font_library.o \
 	build/m68k/library/fonts_client.o \
 	build/m68k/library/font_catalog.o
 SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
-RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 
@@ -219,7 +219,7 @@ $(GRAPHICS_LIBRARY): $(GRAPHICS_LIBRARY_OBJECTS) $(GRAPHICS_LIBRARY_MAP) \
 		$(GRAPHICS_LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:system.library.4 -Wl,-l:runtime.library.1 \
+		-Wl,-l:system.library.4 -Wl,-l:runtime.library.2 \
 		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) $(AFNT_LIBRARY) \
@@ -233,7 +233,7 @@ $(FONT_LIBRARY): $(FONT_LIBRARY_OBJECTS) $(FONT_LIBRARY_MAP) $(AFNT_LIBRARY) \
 		-L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -Wl,--no-as-needed \
 		-Wl,-l:graphics.library.3 -Wl,-l:system.library.4 \
-		-Wl,-l:runtime.library.1 \
+		-Wl,-l:runtime.library.2 \
 		-Wl,-l:compiler.library.2 $(AFNT_LIBRARY) $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
@@ -261,7 +261,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
-		grep -Fc 'Shared library: [runtime.library.1]')" = 1
+		grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
 		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $(GRAPHICS_LIBRARY) | \
@@ -271,7 +271,7 @@ library-contract: $(GRAPHICS_LIBRARY) $(FONT_LIBRARY)
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
 		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
-		grep -Fc 'Shared library: [runtime.library.1]')" = 1
+		grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \
 		grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $(FONT_LIBRARY) | \

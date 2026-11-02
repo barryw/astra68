@@ -102,7 +102,8 @@ astra_host_client_submit(AstraHostChannelClient *client)
     status = astra_host_channel_kick(client->channel_address, producer);
     if (status != ASTRA_SYSCALL_OK)
         return status;
-    status = astra_host_channel_wait(producer, ASTRA_DEADLINE_FOREVER);
+    status = astra_host_channel_wait(client->channel_address,
+                                     producer, ASTRA_DEADLINE_FOREVER);
     if (status != ASTRA_SYSCALL_OK)
         return status;
     astra_memory_acquire_fence();
@@ -122,7 +123,8 @@ astra_host_client_close(AstraHostChannelClient *client)
     if (client == NULL)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     if (client->channel_address != 0u) {
-        status = astra_host_channel_close(client->device);
+        status = astra_host_channel_close(client->device,
+                                          client->channel_address);
         if (status != ASTRA_SYSCALL_OK)
             first = status;
     }

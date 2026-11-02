@@ -214,7 +214,8 @@ static uint32_t run_adaptive(volatile AstraHostChannelHeader *header,
         if (completed == 0u) {
             ++*misses;
             if (astra_host_channel_wait(
-                    producer, UINT64_C(0x7fffffffffffffff)) !=
+                    channel_address, producer,
+                    UINT64_C(0x7fffffffffffffff)) !=
                 ASTRA_SYSCALL_OK)
                 return 0u;
         }
@@ -397,7 +398,8 @@ int astra_main(const AstraStartupInfo *startup)
             header->consumer_position != ASTRA_HOSTBENCH_ITERATIONS ||
             header->transport_status != ASTRA_SYSCALL_OK)
             return fail(bootstrap, 0x10u + result);
-        if (astra_host_channel_close(device->handle) != ASTRA_SYSCALL_OK)
+        if (astra_host_channel_close(device->handle,
+                                     channel.channel_address) != ASTRA_SYSCALL_OK)
             return fail(bootstrap, 6u);
         report(depth, elapsed);
         if (depth == maximum)
@@ -419,7 +421,8 @@ int astra_main(const AstraStartupInfo *startup)
                 ASTRA_SYSCALL_OK ||
             !run_adaptive(header, &commands[0], channel.channel_address,
                           polls, &misses, &elapsed) ||
-            astra_host_channel_close(device->handle) != ASTRA_SYSCALL_OK)
+            astra_host_channel_close(device->handle,
+                                     channel.channel_address) != ASTRA_SYSCALL_OK)
             return fail(bootstrap, 8u);
         report_adaptive(polls, misses, elapsed);
         if (polls == HOSTBENCH_MAX_POLLS)

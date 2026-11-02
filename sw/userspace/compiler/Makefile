@@ -32,7 +32,7 @@ SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 POSIX := ../posix
 RUNTIME := ../runtime
 LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.4
-RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
 COMMON_FLAGS := -std=c11 -Wall -Wextra -Werror -pedantic
 LIBRARY_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_DEBUG_FLAGS) \
@@ -121,7 +121,7 @@ $(UNWIND_LIBRARY): $(UNWIND_IDENTITY) $(UNWIND_EXPORTS) \
 		-L$(dir $(LIBC_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:libc.library.4 \
-		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
+		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2 \
 		$(UNWIND_ARCHIVE) $(ASTRA_SHARED_LINK_END)
 
 unwind-library-contract: $(UNWIND_LIBRARY)
@@ -134,7 +134,7 @@ unwind-library-contract: $(UNWIND_LIBRARY)
 		grep -q '^unwind.library.1 1.0.0 ABI 1.0$$'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [unwind.library.1]'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [libc.library.4]')" = 1
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 3
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'

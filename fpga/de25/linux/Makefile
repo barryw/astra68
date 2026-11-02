@@ -76,6 +76,7 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 .PHONY: storage-cleanup-test storage-cleanup-sanitize
 .PHONY: storage-provider storage-provider-target storage-partition-worker-target
 .PHONY: storage-launcher-test
+.PHONY: storage-secret-test config-secret-aead-test
 .PHONY: storage-names-test
 .PHONY: codec-provider-test
 
@@ -211,6 +212,28 @@ storage-launcher-test: $(OUT)/astra-storage $(OUT)/test-storage-client
 
 storage-provider: $(OUT)/astra-storage
 
+$(OUT)/test-storage-secret: astra_storage_secret.c astra_storage_secret.h test_storage_secret.c Makefile
+	mkdir -p $(OUT)
+	$(HOST_CC) $(CFLAGS) astra_storage_secret.c test_storage_secret.c -o $@
+
+storage-secret-test: $(OUT)/test-storage-secret
+	sudo -n $(OUT)/test-storage-secret
+
+$(OUT)/test-config-secret-aead: $(ROOT)/emu/qemu/qemu-9.2/test-astra-secret-host.c \
+		$(ROOT)/emu/qemu/qemu-9.2/hw/m68k/astra_secret_host.c \
+		$(ROOT)/emu/qemu/qemu-9.2/hw/m68k/astra_secret_host.h \
+		$(ROOT)/third_party/monocypher/monocypher.c \
+		$(ROOT)/third_party/monocypher/monocypher.h Makefile
+	mkdir -p $(OUT)
+	$(HOST_CC) $(CFLAGS) -I$(ROOT)/emu/qemu/qemu-9.2 \
+		-I$(ROOT)/third_party/monocypher \
+		$(ROOT)/emu/qemu/qemu-9.2/test-astra-secret-host.c \
+		$(ROOT)/emu/qemu/qemu-9.2/hw/m68k/astra_secret_host.c \
+		$(ROOT)/third_party/monocypher/monocypher.c -o $@
+
+config-secret-aead-test: $(OUT)/test-config-secret-aead
+	$(OUT)/test-config-secret-aead
+
 storage-provider-format-test: $(OUT)/test-storage-provider
 	bash $(ROOT)/third_party/storage-format/build.sh host
 	python3 test_storage_mount.py $(OUT)/test-storage-provider --provider \
@@ -230,15 +253,15 @@ $(OUT)/test-partition-worker-aarch64: $(STORAGE_PROVIDER_SOURCES) \
 		-Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu \
 		-lblkid -lmount -ludev
 
-$(OUT)/astra-storage: $(STORAGE_PROVIDER_SOURCES) astra_storage_main.c $(STORAGE_HEADERS) Makefile
+$(OUT)/astra-storage: $(STORAGE_PROVIDER_SOURCES) astra_storage_main.c astra_storage_secret.c $(STORAGE_HEADERS) astra_storage_secret.h Makefile
 	mkdir -p $(OUT)
 	$(HOST_CC) $(STORAGE_CATALOG_FLAGS) -I$(STORAGE_RESOLVER) \
-		$(STORAGE_PROVIDER_SOURCES) astra_storage_main.c -o $@ -lblkid -lmount -ludev
+		$(STORAGE_PROVIDER_SOURCES) astra_storage_main.c astra_storage_secret.c -o $@ -lblkid -lmount -ludev
 
-$(OUT)/astra-storage-aarch64: $(STORAGE_PROVIDER_SOURCES) astra_storage_main.c $(STORAGE_HEADERS) Makefile
+$(OUT)/astra-storage-aarch64: $(STORAGE_PROVIDER_SOURCES) astra_storage_main.c astra_storage_secret.c $(STORAGE_HEADERS) astra_storage_secret.h Makefile
 	mkdir -p $(OUT)
 	$(CC) $(REMOTE_CFLAGS) -std=gnu11 -I$(ROOT)/ndk/include -I$(STORAGE_RESOLVER) \
-		$(STORAGE_PROVIDER_SOURCES) astra_storage_main.c -o $@ \
+		$(STORAGE_PROVIDER_SOURCES) astra_storage_main.c astra_storage_secret.c -o $@ \
 		-Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu -lblkid -lmount -ludev
 
 all: $(CERTIFIER) $(BANDWIDTH)

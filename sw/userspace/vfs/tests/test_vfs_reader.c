@@ -220,7 +220,7 @@ int main(void)
         char path[ASTRA_VFS_PATH_MAX];
 
         assert(astra_vfs_library_resolve(
-                   &table, "LIBS", "runtime.library.1", client_for, NULL,
+                   &table, "LIBS", "runtime.library.2", client_for, NULL,
                    path, sizeof(path), &reference) == ASTRA_VFS_OK);
         assert(open_count == 1u);
         assert(strcmp(path, "/libs/Runtime.kit/runtime.library") == 0);
@@ -228,11 +228,11 @@ int main(void)
     }
     open_count = 0u;
     assert(astra_vfs_library_source_open(
-               &source, &table, "LIBS", "runtime.library.1", client_for,
+               &source, &table, "LIBS", "runtime.library.2", client_for,
                NULL, &reference) == ASTRA_VFS_OK);
     assert(open_count == 2u && source.file == 10u && source.length == 77u);
     assert(reference.size == ASTRA_LIBRARY_REFERENCE_SIZE);
-    assert(strcmp(reference.name, "runtime.library.1") == 0);
+    assert(strcmp(reference.name, "runtime.library.2") == 0);
     assert(reference.major == 1u && reference.minor == 2u &&
            reference.patch == 3u && reference.abi_major == 1u &&
            reference.abi_minor == 4u &&
@@ -245,14 +245,14 @@ int main(void)
         char path[ASTRA_VFS_PATH_MAX] = "stale";
 
         assert(astra_vfs_library_resolve(
-                   &table, "LIBS", "runtime.library.1", client_for, NULL,
+                   &table, "LIBS", "runtime.library.2", client_for, NULL,
                    path, sizeof(path), &reference) ==
                ASTRA_VFS_ERR_PROTOCOL);
         assert(open_count == 1u && path[0] == '\0' && reference.size == 0u);
     }
     open_count = 0u;
     assert(astra_vfs_library_source_open(
-               &source, &table, "LIBS", "runtime.library.1", client_for,
+               &source, &table, "LIBS", "runtime.library.2", client_for,
                NULL, &reference) == ASTRA_VFS_ERR_PROTOCOL);
     assert(open_count == 1u && source.file == ASTRA_VFS_FILE_INVALID &&
            reference.size == 0u);
@@ -269,7 +269,7 @@ int main(void)
         fail_allocation = failure;
         open_count = 0u;
         assert(astra_vfs_library_source_open(
-                   &source, &table, "LIBS", "runtime.library.1", client_for,
+                   &source, &table, "LIBS", "runtime.library.2", client_for,
                    NULL, &reference) == ASTRA_VFS_ERR_LIMIT);
         assert(source.file == ASTRA_VFS_FILE_INVALID && reference.size == 0u);
         assert(live_allocations == 0u);

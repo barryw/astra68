@@ -10,7 +10,7 @@
 /** Config Kit ELF ABI major version. */
 #define ASTRA_CONFIG_LIBRARY_ABI_MAJOR 1u
 /** Config Kit backward-compatible ABI revision. */
-#define ASTRA_CONFIG_LIBRARY_ABI_MINOR 1u
+#define ASTRA_CONFIG_LIBRARY_ABI_MINOR 2u
 /** Minimum compatible config.library major version. */
 #define ASTRA_CONFIG_LIBRARY_VERSION ASTRA_CONFIG_LIBRARY_ABI_MAJOR
 /** Launch capability carrying the caller's private configuration root. */
@@ -45,7 +45,8 @@ enum {
     ASTRA_CONFIG_MALFORMED = 6,
     ASTRA_CONFIG_UNSUPPORTED_VERSION = 7,
     ASTRA_CONFIG_BUFFER_TOO_SMALL = 8,
-    ASTRA_CONFIG_CLOSED = 9
+    ASTRA_CONFIG_CLOSED = 9,
+    ASTRA_CONFIG_AUTH_FAILED = 10
 };
 
 /** Open configuration document owned by one caller. */
@@ -167,5 +168,28 @@ uint32_t astra_config_append_bool(AstraConfig *config, const char *key,
 /** Remove one value. @param config Open writable configuration. @param key Key. @param index Value index. @return ASTRA_CONFIG_* status. */
 uint32_t astra_config_remove(AstraConfig *config, const char *key,
                              uint32_t index);
+
+/** Encrypt and store a bounded credential in this Config Kit document.
+ * Requires the resident HOST_SECRETS grant. Plaintext never enters
+ * settings.conf; ciphertext is bound to this root and key.
+ * @param config Open writable Config Kit handle.
+ * @param key Key within this owner's document.
+ * @param secret Plaintext bytes, 1–1024 bytes.
+ * @param length Plaintext byte count.
+ * @return ASTRA_CONFIG_* status.
+ */
+uint32_t astra_config_set_secret(AstraConfig *config, const char *key,
+                                 const void *secret, uint32_t length);
+/** Decrypt a credential.
+ * @param config Open Config Kit handle.
+ * @param key Key within this owner's document.
+ * @param secret Output buffer; NULL to query required size.
+ * @param capacity Bytes available in output buffer.
+ * @param length Receives required plaintext bytes.
+ * @return ASTRA_CONFIG_* status; AUTH_FAILED on tampering or wrong key.
+ */
+uint32_t astra_config_get_secret(AstraConfig *config, const char *key,
+                                 void *secret, uint32_t capacity,
+                                 uint32_t *length);
 
 #endif

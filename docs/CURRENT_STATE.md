@@ -2,6 +2,49 @@
 
 Status: active continuation map, 2026-11-02
 
+Config Kit protected credential checkpoint, 2026-11-02: the DE25 root
+storage launcher now generates one 32-byte root-owned 0600 key on first start
+and reuses it; a missing or invalid existing key fails closed. A kernel-attested
+resident `HOST_SECRETS` channel exposes only seal/open operations using
+XChaCha20-Poly1305 with Config Kit root and setting name as associated data.
+Config Kit 1.2 stores ciphertext in its existing atomic `settings.conf`; no
+plaintext secret or key is written to the guest configuration. The host
+channel syscall now selects a live channel by returned page address so the
+same thread can hold both filesystem and secret channels. This changes the
+syscall ABI to `0x00020000` and Runtime library to 2.0; all in-tree clients,
+Kit manifests, NDK exports, and fixtures were updated. Haiku keystore and
+MC68040 page mapping were reviewed; see `docs/CONFIG_SECRETS.md` and
+`docs/ABI.md`.
+Beast kernel, runtime, VFS, Config Kit, storage key, AEAD, launcher,
+image-provider and NDK distribution gates passed. DE25 isolated boots on a
+disposable image proved first write, reload roundtrip, restart read using the
+same key, ordinary-channel denial, and a final resident probe with no new
+supervisor exit error. The guest settings record begins with hex `ASC1`
+ciphertext; a whole-image plaintext search was invalid because the test
+string is embedded in the probe executable. Exact release source manifest
+SHA-256 `a580453c8a39b1a8a3fb9d5ba3717e553b200f6546ccdf6d7adec049127f1137`,
+release artifacts manifest SHA-256
+`1e81cf89e5d03952546db1830728c9daa482fc322be2d0f15acae1c8110213a3`,
+ROM SHA-256 `c7691ab272f1627cc013f2f0f92ebd50f483501f42f989db8ff2f80a683ead07`.
+Board/Beast evidence hashes match at
+`/mnt/Documents/astra68/config-secret-20261102/`; disposable board state was
+removed and 8.1 GiB freed. The selected production image remains unchanged,
+preserving user data. Both host key and guest image reside on the same SD, so
+offline theft of the whole device is outside this protection.
+
+HDMI audio regression, 2026-11-02 (open): after repeated private trial
+service restarts, Barry reported all HDMI speaker audio silent, including
+startup sound. Guest reports startup playback complete; audio host accepted
+274,560 frames with no FIFO underruns, overflows or gaps. Production services
+were active and the selected release was restored. After audio logs were
+archived, Barry authorized an orderly full DE25 reboot; he heard startup
+sound again. Astra, HDMI audio host and remote desktop are active with zero
+service restarts and 8.1 GiB free. Pre-reboot evidence:
+`/mnt/Documents/astra68/audio-silence-20261102/`. This resembles the
+2026-10-25 transmitter/sink failure below. The candidate ADV7513 fixed-register
+initialization has not been routed or acoustically qualified; do not classify
+software frame delivery or reboot recovery as a permanent audio fix.
+
 Network volume assessment, 2026-11-02: DE25 Linux HPS has active
 NetworkManager 1.36.6, systemd-resolved, DHCP IPv4 address, default route,
 and DNS; Astra's native Network Kit already exposes sockets, resolver, and

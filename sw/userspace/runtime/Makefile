@@ -57,7 +57,7 @@ LOADER_PIC_TARGET := build/m68k/libastrart-loader-pic.a
 LOADER_PIC_OBJECTS := $(DYNAMIC_PIC_OBJECTS) \
 	build/m68k/dynamic/dynamic_process.o
 DYNAMIC_IDENTITY := build/m68k/dynamic/runtime_library.o
-DYNAMIC_LIBRARY := build/m68k/libraries/runtime.library.1
+DYNAMIC_LIBRARY := build/m68k/libraries/runtime.library.2
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 DYNAMIC_LIBRARY_LD := $(ASTRA_SHARED_LINK_INPUTS)
 DYNAMIC_LIBRARY_MAP := runtime.library.exports
@@ -153,7 +153,7 @@ $(DYNAMIC_LIBRARY): $(DYNAMIC_IDENTITY) $(DYNAMIC_PIC_OBJECTS) \
 		| compiler-library-ready
 	@mkdir -p $(@D)
 	$(CC) $(ASTRA_TARGET_ABI_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,runtime.library.1 \
+		-Wl,-soname,runtime.library.2 \
 		-Wl,--version-script=$(DYNAMIC_LIBRARY_MAP) \
 		-o $@ \
 		$(DYNAMIC_IDENTITY) $(DYNAMIC_PIC_OBJECTS) \
@@ -174,9 +174,9 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 		--allow strcmp --allow strcpy --allow strlen \
 		--allow strncmp --allow strncpy
 	@python3 ../../../tools/library_info.py $< | \
-		grep -q '^runtime.library.1 1.17.0 ABI 1.17$$'
+		grep -q '^runtime.library.2 2.0.0 ABI 2.0$$'
 	@$(READELF) -hW $< | grep 'Type:.*DYN' >/dev/null
-	@$(READELF) -dW $< | grep -F 'Library soname: [runtime.library.1]' >/dev/null
+	@$(READELF) -dW $< | grep -F 'Library soname: [runtime.library.2]' >/dev/null
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null
 	@test "$$($(READELF) -dW $< | \
 		grep -Fc 'Shared library: [compiler.library.2]')" = 1
@@ -185,18 +185,7 @@ runtime-library-contract: $(DYNAMIC_LIBRARY) $(KERNEL_ELF_TEST)
 	@test "$$($(READELF) -SW $< | \
 		awk '/ \\.(tdata|tbss) /{n++} END{print n+0}')" = 0
 	@$(READELF) -lW $< | grep ' GNU_RELRO ' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.0' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.2' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.3' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.4' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.5' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.6' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.10' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.11' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.12' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.13' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.14' >/dev/null
-	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_1.17' >/dev/null
+	@$(READELF) -VW $< | grep 'ASTRA_RUNTIME_2.0' >/dev/null
 	@ASTRA_LIBRARY_FIXTURE=$(abspath $<) $(KERNEL_ELF_TEST) >/dev/null
 	@echo "astra runtime shared library: PASS"
 

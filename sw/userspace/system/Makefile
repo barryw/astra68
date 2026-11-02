@@ -29,7 +29,7 @@ SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
 LIB := build/m68k/libastra.a
 PIC_LIB := build/m68k/libastra-pic.a
-RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
 SYSTEM_LIBRARY := build/m68k/libraries/system.library.4
 SYSTEM_IDENTITY := build/m68k/dynamic/system_library.o
 SYSTEM_SOURCES := src/resource.c src/area.c src/port.c src/bulk_ring.c \
@@ -130,7 +130,7 @@ $(SYSTEM_LIBRARY): $(SYSTEM_IDENTITY) $(SYSTEM_OBJECTS) $(SYSTEM_MAP) \
 		-Wl,--version-script=$(SYSTEM_MAP) -o $@ \
 		$(SYSTEM_IDENTITY) $(SYSTEM_OBJECTS) \
 		-L$(dir $(RUNTIME_LIBRARY)) -Wl,--no-as-needed \
-		-Wl,-l:runtime.library.1 $(ASTRA_SHARED_LINK_END)
+		-Wl,-l:runtime.library.2 $(ASTRA_SHARED_LINK_END)
 
 system-library-contract: $(SYSTEM_LIBRARY)
 	@python3 ../../../tools/check_shared_library_layout.py $(SYSTEM_LIBRARY)
@@ -144,7 +144,7 @@ system-library-contract: $(SYSTEM_LIBRARY)
 		grep -q '^system.library.4 4.7.0 ABI 4.7$$'
 	@$(READELF) -hW $< | grep -q 'Type:.*DYN'
 	@$(READELF) -dW $< | grep -Fq 'Library soname: [system.library.4]'
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 1
 	@$(READELF) -dW $< | grep -q 'BIND_NOW'
 	@! $(READELF) -dW $< | grep -q 'TEXTREL'

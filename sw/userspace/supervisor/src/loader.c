@@ -1319,23 +1319,33 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                     return status;
                 continue;
             }
-            /* The host device reaches every host service; minting
-             * filesystem scopes is the filesystem service's alone, granted
-             * by name (decision 2026-10-08). */
+            /* Scope minting and credential access need separate resident
+             * grants; ordinary host clients receive neither right. */
             if (strcmp(wanted->name, ASTRA_CAPABILITY_HOST_FILESYSTEM) == 0 ||
-                strcmp(wanted->name, ASTRA_CAPABILITY_HOST_DEVICE) == 0) {
+                strcmp(wanted->name, ASTRA_CAPABILITY_HOST_DEVICE) == 0 ||
+                strcmp(wanted->name, ASTRA_CAPABILITY_HOST_CONFIG_SECRETS) == 0) {
                 const AstraStartupCapability *device =
                     astra_startup_capability(startup,
                                              ASTRA_CAPABILITY_HOST_DEVICE);
 
                 if (device == NULL)
                     continue;
+                if (strcmp(wanted->name,
+                           ASTRA_CAPABILITY_HOST_CONFIG_SECRETS) == 0 &&
+                    entry->resident == 0u)
+                    return ASTRA_STATUS_ACCESS;
                 status = add_grant(
                     out, count, wanted->name, device->handle,
                     strcmp(wanted->name,
                            ASTRA_CAPABILITY_HOST_FILESYSTEM) == 0 ?
-                        device->rights :
-                        device->rights & ~ASTRA_RIGHT_HOST_SCOPE,
+                        device->rights & ~ASTRA_RIGHT_CONFIG_SECRET :
+                    strcmp(wanted->name,
+                           ASTRA_CAPABILITY_HOST_CONFIG_SECRETS) == 0 ?
+                        (device->rights & (ASTRA_RIGHT_READ |
+                                           ASTRA_RIGHT_WRITE |
+                                           ASTRA_RIGHT_CONFIG_SECRET)) :
+                        device->rights & ~(ASTRA_RIGHT_HOST_SCOPE |
+                                           ASTRA_RIGHT_CONFIG_SECRET),
                     0u, NULL);
                 if (status != ASTRA_STATUS_OK)
                     return status;

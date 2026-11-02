@@ -22,7 +22,7 @@ LIBRARY := build/m68k/libraries/config.library.1
 LIBRARY_OBJECTS := build/m68k/config_library.o build/m68k/config_document.o
 LIBRARY_MAP := config.library.exports
 SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
-RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 FILESYSTEM_LIBRARY := $(VFS)/build/m68k/libraries/filesystem.library.15
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
@@ -56,7 +56,7 @@ $(LIBRARY): $(LIBRARY_OBJECTS) $(LIBRARY_MAP) $(ASTRA_SHARED_LINK_INPUTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -L$(dir $(FILESYSTEM_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:system.library.4 \
-		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
+		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2 \
 		-Wl,-l:filesystem.library.15 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(LIBRARY)
@@ -69,9 +69,9 @@ library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(LIBRARY_MAP) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $(LIBRARY) | \
-		grep -q '^config.library.1 1.1.0 ABI 1.1$$'
+		grep -q '^config.library.1 1.2.0 ABI 1.2$$'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [system.library.4]')" = 1
-	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.1]')" = 1
+	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [filesystem.library.15]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 4

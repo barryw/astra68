@@ -74,6 +74,8 @@ _Static_assert(KERNEL_VM_DMA_SLOT_COUNT *
 
 _Static_assert(KERNEL_DEVICE_RIGHT_HOST_SCOPE == ASTRA_RIGHT_HOST_SCOPE,
                "device scope right");
+_Static_assert(KERNEL_DEVICE_RIGHT_CONFIG_SECRET == ASTRA_RIGHT_CONFIG_SECRET,
+               "device config secret right");
 
 _Static_assert(((KERNEL_QUALIFICATION_COMMAND_PREFIX ^
                  ASTRA_PROGRESS_BOOT_COMMAND_PREFIX) &
@@ -479,8 +481,10 @@ _Static_assert(sizeof(KernelAreaExtent) ==
 
 static bool display_dma_abort_owner(uint32_t owner);
 static uint32_t host_channel_close(KernelProcess *process,
-                                   const KernelThread *thread);
-static uint32_t host_channels_close_process(KernelProcess *process);
+                                   const KernelThread *thread,
+                                   uint32_t channel_address);
+static uint32_t host_channels_close_owned(KernelProcess *process,
+                                          uint32_t thread_id);
 static uint32_t host_channels_close_buffer(KernelProcess *process,
                                            KernelProcessDmaBuffer *buffer);
 static void audio_streams_close_buffer(KernelProcessDmaBuffer *buffer);
@@ -488,7 +492,7 @@ static uint32_t host_channel_open(
     KernelProcess *process, const KernelThread *thread,
     AstraHostChannelOpen *channel,
     uint32_t device_generation, const KernelPlatformHostState *state,
-    uint32_t user_address, KernelHostScope *scope, bool provider);
+    uint32_t user_address, KernelHostScope *scope, bool provider, bool secret);
 static uint32_t host_scope_import_rights(KernelObjectType type, void *object,
                                          uint32_t rights);
 static void host_scopes_revoke_creator(uint32_t owner);
@@ -1740,7 +1744,7 @@ static KernelProcessStatus finish_reap(KernelProcess *process)
         uint32_t revoked_leases = 0u;
 
         host_scopes_revoke_creator(process->owner);
-        (void)host_channels_close_process(process);
+        (void)host_channels_close_owned(process, 0u);
         if (process->host_used != 0u) {
             kernel_platform_host_release_owner(process->owner);
             process->host_used = 0u;
@@ -1886,7 +1890,8 @@ static KernelProcessStatus finish_thread_reaps(void)
                                 __LINE__, thread->id);
         performance = kernel_performance_begin(
             KERNEL_PERFORMANCE_THREAD_REAP);
-        if (host_channel_close(process, thread) != ASTRA_SYSCALL_OK) {
+        if (host_channels_close_owned(process, thread->id) !=
+            ASTRA_SYSCALL_OK) {
             kernel_performance_end(performance);
             return reap_corrupt(KERNEL_PROCESS_MAINTENANCE_THREAD_REAP,
                                 __LINE__, thread->id);
@@ -2769,23 +2774,39 @@ static uint32_t host_channel_close_slot(KernelProcess *process,
     return result;
 }
 
-static uint32_t host_channel_close(KernelProcess *process,
-                                   const KernelThread *thread)
+static uint32_t host_channel_slot(const KernelProcess *process,
+                                  const KernelThread *thread,
+                                  uint32_t channel_address)
 {
     if (process == NULL || thread == NULL ||
-        thread->process_id != process->id)
-        return ASTRA_SYSCALL_INVALID_ARGUMENT;
-    for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
-         ++slot) {
-        if (host_channels[slot].active != 0u &&
-            host_channels[slot].process_id == process->id &&
-            host_channels[slot].thread_id == thread->id)
-            return host_channel_close_slot(process, slot);
-    }
-    return ASTRA_SYSCALL_OK;
+        thread->process_id != process->id ||
+        channel_address < KERNEL_VM_HOST_CHANNEL_BASE ||
+        channel_address >= ASTRA_HOST_CHANNEL_ADDRESS_END ||
+        ((channel_address - KERNEL_VM_HOST_CHANNEL_BASE) &
+         (KERNEL_PAGE_SIZE - 1u)) != 0u)
+        return KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+    uint32_t slot = (channel_address - KERNEL_VM_HOST_CHANNEL_BASE) /
+                    KERNEL_PAGE_SIZE;
+    const KernelHostChannel *channel = &host_channels[slot];
+    return channel->active != 0u &&
+           channel->process_id == process->id &&
+           channel->thread_id == thread->id &&
+           channel->channel_generation == thread->generation &&
+           channel->virtual_address == channel_address ?
+        slot : KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
 }
 
-static uint32_t host_channels_close_process(KernelProcess *process)
+static uint32_t host_channel_close(KernelProcess *process,
+                                   const KernelThread *thread,
+                                   uint32_t channel_address)
+{
+    uint32_t slot = host_channel_slot(process, thread, channel_address);
+    return slot == KERNEL_VM_HOST_CHANNEL_PAGE_COUNT ?
+        ASTRA_SYSCALL_INVALID_ARGUMENT : host_channel_close_slot(process, slot);
+}
+
+static uint32_t host_channels_close_owned(KernelProcess *process,
+                                          uint32_t thread_id)
 {
     uint32_t result = ASTRA_SYSCALL_OK;
 
@@ -2794,7 +2815,8 @@ static uint32_t host_channels_close_process(KernelProcess *process)
     for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
          ++slot) {
         if (host_channels[slot].active == 0u ||
-            host_channels[slot].process_id != process->id)
+            host_channels[slot].process_id != process->id ||
+            (thread_id != 0u && host_channels[slot].thread_id != thread_id))
             continue;
         if (host_channel_close_slot(process, slot) != ASTRA_SYSCALL_OK)
             result = ASTRA_SYSCALL_IO_ERROR;
@@ -2825,7 +2847,7 @@ static uint32_t host_channel_open(
     KernelProcess *process, const KernelThread *thread,
     AstraHostChannelOpen *channel,
     uint32_t device_generation, const KernelPlatformHostState *state,
-    uint32_t user_address, KernelHostScope *scope, bool provider)
+    uint32_t user_address, KernelHostScope *scope, bool provider, bool secret)
 {
     KernelProcessDmaBuffer *buffer = NULL;
     KernelHandleStatus handle_status;
@@ -2886,12 +2908,6 @@ static uint32_t host_channel_open(
     slot = KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
     for (uint32_t index = 0u; index < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
          ++index) {
-        if (host_channels[index].active != 0u &&
-            host_channels[index].process_id == process->id &&
-            host_channels[index].thread_id == thread->id) {
-            (void)kernel_dma_abort(&token);
-            return ASTRA_SYSCALL_INVALID_ARGUMENT;
-        }
         if (slot == KERNEL_VM_HOST_CHANNEL_PAGE_COUNT &&
             host_channels[index].active == 0u)
             slot = index;
@@ -2910,7 +2926,8 @@ static uint32_t host_channel_open(
             slot, token.physical_address, channel->byte_size,
             channel->command_capacity, scope != NULL ? scope->word : 0u,
             scope != NULL ? host_scope_wire_flags(scope) :
-            provider ? ASTRA_HOST_CHANNEL_PROVIDER : 0u,
+            provider ? ASTRA_HOST_CHANNEL_PROVIDER :
+            secret ? ASTRA_HOST_CHANNEL_CONFIG_SECRET : 0u,
             scope != NULL ? scope->creator_owner : 0u,
             scope != NULL ? scope->files : 0u) != ASTRA_SYSCALL_OK) {
         (void)kernel_dma_abort(&token);
@@ -2919,7 +2936,7 @@ static uint32_t host_channel_open(
     physical_doorbell = KERNEL_VM_HOST_CHANNEL_PHYSICAL_BASE +
                         slot * KERNEL_PAGE_SIZE;
     channel->channel_address = KERNEL_VM_HOST_CHANNEL_BASE +
-                               thread->stack_slot * KERNEL_PAGE_SIZE;
+                               slot * KERNEL_PAGE_SIZE;
     if (kernel_vm_map_host_channel_page(&process->address_space,
                                         channel->channel_address,
                                         physical_doorbell) != KERNEL_VM_OK) {
@@ -3001,27 +3018,20 @@ static bool wait_failure_to_syscall(KernelThreadStatus status, uint32_t *result)
 }
 
 static KernelProcessStatus host_channel_wait(
-    KernelProcess *process, KernelThread *thread, uint32_t consumer_position,
+    KernelProcess *process, KernelThread *thread, uint32_t channel_address,
+    uint32_t consumer_position,
     uint64_t now, uint64_t deadline, bool *blocked, uint32_t *result)
 {
     KernelHostChannel *channel;
     KernelThreadStatus wait_status;
     uint32_t sequence;
-    uint32_t channel_slot = KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+    uint32_t channel_slot;
 
     if (process == NULL || thread == NULL || blocked == NULL ||
         result == NULL)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
     *blocked = false;
-    for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
-         ++slot) {
-        if (host_channels[slot].active != 0u &&
-            host_channels[slot].process_id == process->id &&
-            host_channels[slot].thread_id == thread->id) {
-            channel_slot = slot;
-            break;
-        }
-    }
+    channel_slot = host_channel_slot(process, thread, channel_address);
     if (channel_slot == KERNEL_VM_HOST_CHANNEL_PAGE_COUNT) {
         *result = ASTRA_SYSCALL_INVALID_ARGUMENT;
         return KERNEL_PROCESS_OK;
@@ -3453,14 +3463,14 @@ static uint32_t network_syscall(KernelProcess *process, KernelThread *thread,
 
 static uint32_t host_syscall(KernelProcess *process, KernelThread *thread,
                              uint32_t syscall, uint32_t device_generation,
-                             KernelHostScope *scope, bool provider)
+                             KernelHostScope *scope, bool provider, bool secret)
 {
     uint32_t user_address = thread->context.data[2];
     KernelPlatformHostState state;
     int copy_status;
 
     if (syscall == ASTRA_SYSCALL_HOST_CHANNEL_CLOSE)
-        return host_channel_close(process, thread);
+        return host_channel_close(process, thread, user_address);
     if ((user_address & (ASTRA_ABI_ALIGNMENT - 1u)) != 0u)
         return ASTRA_SYSCALL_INVALID_ARGUMENT;
     if (!kernel_platform_host_state(&state) ||
@@ -3494,7 +3504,7 @@ static uint32_t host_syscall(KernelProcess *process, KernelThread *thread,
         if (copy_status != KERNEL_USER_COPY_OK)
             return ASTRA_SYSCALL_BAD_ADDRESS;
         return host_channel_open(process, thread, &channel, device_generation,
-                                 &state, user_address, scope, provider);
+                                 &state, user_address, scope, provider, secret);
     }
     {
         AstraHostTransportRequest request;
@@ -5393,7 +5403,7 @@ static KernelProcessStatus exec_replace(
         goto failed;
 
     /* Everything below is the no-allocation commit. */
-    if (host_channels_close_process(process) != ASTRA_SYSCALL_OK) {
+    if (host_channels_close_owned(process, 0u) != ASTRA_SYSCALL_OK) {
         status = trace_exec_corruption(process, 1u, 0u);
         goto failed;
     }
@@ -13407,9 +13417,18 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                                      KERNEL_DEVICE_RIGHT_HOST_SCOPE,
                                      (void **)&scoped_lease) ==
                     KERNEL_HANDLE_OK;
+            KernelDeviceLease *secret_lease = NULL;
+            bool secret =
+                syscall == ASTRA_SYSCALL_HOST_CHANNEL_OPEN && scope == NULL &&
+                kernel_handle_lookup(current->handles,
+                                     thread->context.data[1],
+                                     KERNEL_OBJECT_DEVICE,
+                                     KERNEL_DEVICE_RIGHT_CONFIG_SECRET,
+                                     (void **)&secret_lease) ==
+                    KERNEL_HANDLE_OK;
 
             result = host_syscall(current, thread, syscall,
-                                  snapshot.generation, scope, provider);
+                                  snapshot.generation, scope, provider, secret);
         }
         break;
     }
@@ -13539,14 +13558,7 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
                 break;
             }
         }
-        for (uint32_t index = 0u; index < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
-             ++index)
-            if (host_channels[index].active != 0u &&
-                host_channels[index].process_id == current->id &&
-                host_channels[index].thread_id == thread->id) {
-                slot = index;
-                break;
-            }
+        slot = host_channel_slot(current, thread, thread->context.data[2]);
         if (slot == KERNEL_VM_HOST_CHANNEL_PAGE_COUNT) {
             result = ASTRA_SYSCALL_INVALID_ARGUMENT;
             break;
@@ -13647,7 +13659,8 @@ KernelProcessStatus kernel_process_on_syscall(const uint32_t *registers,
             break;
         }
         status = host_channel_wait(
-            current, thread, thread->context.data[2], scheduler_cycles(),
+            current, thread, thread->context.data[1],
+            thread->context.data[2], scheduler_cycles(),
             deadline_cycles, &blocked, &result);
         if (status != KERNEL_PROCESS_OK) {
             trace_wait_failure(__LINE__, thread->context.data[2],

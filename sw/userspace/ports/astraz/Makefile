@@ -29,7 +29,7 @@ $(PROGRAM): CMakeLists.txt src/main.c src/audio.c src/audio.h \
 		--needed filesystem.library.15 \
 		--needed config.library.1 \
 		--needed SDL2_mixer.library.3 \
-		--needed runtime.library.1 --needed compiler.library.2 \
+		--needed runtime.library.2 --needed compiler.library.2 \
 		--needed libc.library.4 --needed SDL2.library.3 \
 		--needed SDL2_image.library.2 $@
 

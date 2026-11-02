@@ -33,7 +33,8 @@ def privileged(*arguments):
 
 
 def command(provider, image, work, uid, gid, uuid=UUID, consumer=()):
-    return privileged(str(provider), "--uid", str(uid), "--gid", str(gid),
+    return privileged("env", f"ASTRA_STORAGE_SECRET_KEY_PATH={work / 'host-state' / 'config-secret.key'}",
+            str(provider), "--uid", str(uid), "--gid", str(gid),
             "--system", str(image), str(OFFSET), str(LENGTH), uuid,
             "--work", str(work), "--sound", str(work), "--limits",
             "1048576", "1048576", "2", "5000", "2", "2097152", "64",
@@ -60,6 +61,8 @@ def main():
         # Private guest-file metadata remains unchanged inside the image.
         work.chmod(0o755)
         assert work.stat().st_mode & 0o777 == 0o755
+        subprocess.run(privileged("install", "-d", "-o", "root", "-g", "root",
+                                  "-m", "0700", str(work / "host-state")), check=True)
         seed = work / "seed"
         (seed / "home").mkdir(parents=True)
         (seed / "home" / "private").write_text("private-data")
@@ -235,6 +238,8 @@ def main():
             if owned.poll() is None:
                 owned.terminate(); owned.wait(timeout=30)
         subprocess.run(privileged("chown", "-R", f"{os.getuid()}:{os.getgid()}", str(seed)), check=True)
+        subprocess.run(privileged("chown", "-R", f"{os.getuid()}:{os.getgid()}",
+                                  str(work / "host-state")), check=True)
     assert set(Path("/var/tmp").glob("astra-storage.*")) == before
     print("storage launcher: exact selection, metadata/durability, normal/fatal peer descendants, bounded crash directories, retained external-loop cleanup PASS")
 

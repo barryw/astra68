@@ -15,7 +15,7 @@ OBJECTS := build/m68k/package.o build/m68k/sha256.o build/m68k/zstd.o
 MAP := package.library.exports
 SYSTEM := ../system/build/m68k/libraries/system.library.4
 FILESYSTEM := ../vfs/build/m68k/libraries/filesystem.library.15
-RUNTIME := ../runtime/build/m68k/libraries/runtime.library.1
+RUNTIME := ../runtime/build/m68k/libraries/runtime.library.2
 COMPILER := ../compiler/build/m68k/libraries/compiler.library.2
 
 all: $(LIBRARY) library-contract
@@ -48,7 +48,7 @@ $(LIBRARY): $(OBJECTS) $(MAP) $(ASTRA_SHARED_LINK_INPUTS) | shared-libraries-rea
 		-L$(dir $(SYSTEM)) -L$(dir $(FILESYSTEM)) \
 		-L$(dir $(RUNTIME)) -L$(dir $(COMPILER)) \
 		-Wl,--no-as-needed -Wl,-l:system.library.4 \
-		-Wl,-l:filesystem.library.15 -Wl,-l:runtime.library.1 \
+		-Wl,-l:filesystem.library.15 -Wl,-l:runtime.library.2 \
 		-Wl,-l:compiler.library.2 $(ASTRA_SHARED_LINK_END)
 
 library-contract: $(LIBRARY)

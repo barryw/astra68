@@ -28,6 +28,8 @@
 /** The host device with ::ASTRA_RIGHT_HOST_SCOPE: the filesystem
  * service's grant. Every other holder is granted HOST_DEVICE without it. */
 #define ASTRA_CAPABILITY_HOST_FILESYSTEM "HOST_FILESYSTEM"
+/** Host device lease carrying only the Config Kit secret right. */
+#define ASTRA_CAPABILITY_HOST_CONFIG_SECRETS "HOST_SECRETS"
 
 /** Current host transport protocol version, as reported by HOST_QUERY. */
 #define ASTRA_HOST_VERSION     UINT32_C(0x00030000)
@@ -74,6 +76,8 @@
 #define ASTRA_HOST_CAP_FONT_CONVERT (1u << 17)
 /** Host decodes bounded encoded media streams through isolated providers. */
 #define ASTRA_HOST_CAP_CODEC (1u << 18)
+/** Host-held authenticated encryption for resident Config Kit clients. */
+#define ASTRA_HOST_CAP_CONFIG_SECRETS (1u << 19)
 /** Channel configuration: the scope words name a scope. Kernel-written. */
 #define ASTRA_HOST_SCOPE_BOUND     (1u << 0)
 /** The scope refuses every mutation (ASTRA_STATUS_READ_ONLY). */
@@ -103,6 +107,14 @@
 #define ASTRA_HOST_SERVICE_FONTS UINT16_C(7)
 /** Generic encoded-media stream transport. */
 #define ASTRA_HOST_SERVICE_CODEC UINT16_C(8)
+/** Host-held Config Kit secret sealing. */
+#define ASTRA_HOST_SERVICE_CONFIG_SECRETS UINT16_C(9)
+/** Input: context bytes followed by plain/envelope; offset_lo is context length.
+ * Output replaces input with envelope/plain. A bounded command fits one channel. */
+/** Seal plaintext with host key. */
+#define ASTRA_HOST_CONFIG_SECRET_SEAL 1u
+/** Open authenticated envelope with host key. */
+#define ASTRA_HOST_CONFIG_SECRET_OPEN 2u
 /** Bytes in every CODEC result event before optional decoded output. */
 #define ASTRA_HOST_CODEC_RESULT_BYTES 100u
 /** CODEC uses one worker per stream. OPEN supplies source length in offset and
@@ -837,6 +849,8 @@ _Static_assert(sizeof(AstraHostChannelOpen) == ASTRA_HOST_CHANNEL_OPEN_SIZE,
  * channel may claim the filesystem (ASTRA_HOST_FS_CLAIM): the kernel, not
  * the command, says who the provider is. */
 #define ASTRA_HOST_CHANNEL_PROVIDER (1u << 3)
+/** Kernel-authenticated channel opened through the Config Kit secret grant. */
+#define ASTRA_HOST_CHANNEL_CONFIG_SECRET (1u << 4)
 typedef struct AstraHostChannelConfig {
     _Alignas(ASTRA_ABI_ALIGNMENT) uint32_t size;
     uint16_t version;

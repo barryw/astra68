@@ -127,7 +127,7 @@ FILESYSTEM_LIBRARY_OBJECTS := \
 	build/m68k/library/vfs_status.o
 FILESYSTEM_LIBRARY_MAP := filesystem.library.exports
 SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
-RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
 SYMBOL_OWNERSHIP_CHECK := ../../../tools/check_shared_symbol_ownership.py
 KERNEL_ELF_TEST := ../../kernel/build/test_elf
 HOST_TEST := build/host/test_vfs_service_core
@@ -288,7 +288,7 @@ $(FILESYSTEM_LIBRARY): $(FILESYSTEM_LIBRARY_OBJECTS) \
 		$(FILESYSTEM_LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-Wl,--no-as-needed -Wl,-l:system.library.4 \
-		-Wl,-l:runtime.library.1 $(ASTRA_SHARED_LINK_END)
+		-Wl,-l:runtime.library.2 $(ASTRA_SHARED_LINK_END)
 
 LIBRARY_STACK_OBJECTS := build/stack/document_store.o \
 	build/stack/trash.o \
@@ -332,7 +332,7 @@ library-contract: $(FILESYSTEM_LIBRARY) $(KERNEL_ELF_TEST) stack-contract
 	@test "$$($(READELF) -dW $< | \
 		grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $< | \
-		grep -Fc 'Shared library: [runtime.library.1]')" = 1
+		grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 2
 	@$(READELF) -dW $< | grep 'BIND_NOW' >/dev/null
 	@test "$$($(READELF) -dW $< | awk '/TEXTREL/{n++} END{print n+0}')" = 0

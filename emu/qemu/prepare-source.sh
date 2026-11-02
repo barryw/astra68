@@ -72,6 +72,10 @@ overlay_identity()
         find . -type f -print | LC_ALL=C sort | while IFS= read -r file; do
             printf '%s  %s\n' "$(sha256_file "$file")" "$file"
         done
+        printf '%s  %s\n' "$(sha256_file "$REPOSITORY/third_party/monocypher/monocypher.c")" \
+            "third_party/monocypher/monocypher.c"
+        printf '%s  %s\n' "$(sha256_file "$REPOSITORY/third_party/monocypher/monocypher.h")" \
+            "third_party/monocypher/monocypher.h"
         printf '%s  %s\n' "$(sha256_file "$SCRIPT_DIR/prepare-source.sh")" \
             "emu/qemu/prepare-source.sh"
         printf '%s  %s\n' "$(sha256_file "$SCRIPT_DIR/build.sh")" \
@@ -204,6 +208,11 @@ for required in configure meson.build hw/m68k/meson.build target/m68k/cpu.c; do
 done
 
 cp "$OVERLAY/hw/m68k/astra68.c" "$STAGED_SOURCE/hw/m68k/astra68.c"
+cp "$OVERLAY/hw/m68k/astra_secret_host.c" "$OVERLAY/hw/m68k/astra_secret_host.h" \
+    "$STAGED_SOURCE/hw/m68k/"
+cp "$SCRIPT_DIR/../../third_party/monocypher/monocypher.c" \
+    "$SCRIPT_DIR/../../third_party/monocypher/monocypher.h" \
+    "$STAGED_SOURCE/hw/m68k/"
 cp "$OVERLAY/hw/m68k/astra68-resolve.c" "$STAGED_SOURCE/hw/m68k/"
 cp "$OVERLAY/hw/m68k/astra68-resolve.h" "$STAGED_SOURCE/hw/m68k/"
 cp "$STORAGE_TRANSPORT.c" "$STORAGE_TRANSPORT.h" "$STAGED_SOURCE/hw/m68k/"

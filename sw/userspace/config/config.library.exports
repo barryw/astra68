@@ -9,6 +9,7 @@ ASTRA_CONFIG_1.0 {
         astra_config_get_bool;
         astra_config_get_i64;
         astra_config_get_string;
+astra_config_get_secret;
         astra_config_get_u64;
         astra_config_open;
         astra_config_open_system;
@@ -17,6 +18,7 @@ ASTRA_CONFIG_1.0 {
         astra_config_set_bool;
         astra_config_set_i64;
         astra_config_set_string;
+astra_config_set_secret;
         astra_config_set_u64;
     local:
         *;

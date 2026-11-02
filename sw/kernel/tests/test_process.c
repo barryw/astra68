@@ -949,6 +949,8 @@ static uint32_t host_channel_arm_consumer;
 static uint32_t host_channel_disarm_calls;
 static KernelPlatformHostChannelState
     host_channel_states[KERNEL_VM_HOST_CHANNEL_PAGE_COUNT];
+static uint32_t host_channel_buffers[KERNEL_VM_HOST_CHANNEL_PAGE_COUNT];
+static uint32_t host_channel_bytes[KERNEL_VM_HOST_CHANNEL_PAGE_COUNT];
 static uint32_t host_channel_ack_calls;
 /* Nonzero: the host publishes this consumer position just as the kernel
  * acknowledges the interrupt -- the race a scan-then-ack service loses. */
@@ -1014,6 +1016,8 @@ uint32_t kernel_platform_host_channel_open(
     host_channel_physical = physical_buffer;
     host_channel_byte_size = byte_size;
     host_channel_slot = slot;
+    host_channel_buffers[slot] = physical_buffer;
+    host_channel_bytes[slot] = byte_size;
     host_channel_states[slot].state_flags = ASTRA_HOST_STATE_READY;
     host_channel_states[slot].generation = channel_generation;
     host_channel_states[slot].status = ASTRA_SYSCALL_OK;
@@ -1030,6 +1034,8 @@ uint32_t kernel_platform_host_channel_close(
            slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT);
     memset(&host_channel_states[slot], 0,
            sizeof(host_channel_states[slot]));
+    host_channel_buffers[slot] = 0u;
+    host_channel_bytes[slot] = 0u;
     ++host_channel_close_calls;
     return host_channel_close_status;
 }
@@ -1091,22 +1097,24 @@ bool kernel_platform_host_channel_completion(
     uint32_t physical_buffer, uint32_t byte_size, uint32_t command_capacity,
     KernelPlatformHostChannelState *state)
 {
-    uint32_t slot = host_channel_slot;
-
-    if (state == NULL || slot >= KERNEL_VM_HOST_CHANNEL_PAGE_COUNT ||
-        physical_buffer != host_channel_physical ||
-        byte_size != host_channel_byte_size || command_capacity != 1u ||
-        host_channel_states[slot].generation == 0u)
+    if (state == NULL || command_capacity != 1u)
         return false;
-    *state = host_channel_states[slot];
-    return true;
+    for (uint32_t slot = 0u; slot < KERNEL_VM_HOST_CHANNEL_PAGE_COUNT;
+         ++slot)
+        if (host_channel_buffers[slot] == physical_buffer &&
+            host_channel_bytes[slot] == byte_size &&
+            host_channel_states[slot].generation != 0u) {
+            *state = host_channel_states[slot];
+            return true;
+        }
+    return false;
 }
 
 void kernel_platform_host_channel_ack(void)
 {
     ++host_channel_ack_calls;
     if (host_channel_publish_on_ack != 0u) {
-        host_channel_states[host_channel_slot].consumer_position =
+        host_channel_states[host_channel_kick_slot].consumer_position =
             host_channel_publish_on_ack;
         host_channel_publish_on_ack = 0u;
     }
@@ -1236,6 +1244,8 @@ static void reset_host_device(void)
     host_channel_arm_consumer = 0u;
     host_channel_disarm_calls = 0u;
     memset(host_channel_states, 0, sizeof(host_channel_states));
+    memset(host_channel_buffers, 0, sizeof(host_channel_buffers));
+    memset(host_channel_bytes, 0, sizeof(host_channel_bytes));
     host_channel_ack_calls = 0u;
 }
 
@@ -8704,6 +8714,43 @@ static void test_host_admission(void)
            channel.host_generation == host_state.host_generation);
     assert(host_channel_open_calls == 1u && host_channel_physical != 0u);
     {
+        AstraDmaBufferInfo second_buffer;
+        AstraHostChannelOpen second = {0};
+        registers[0] = ASTRA_SYSCALL_DMA_CREATE;
+        registers[1] = KERNEL_PAGE_SIZE;
+        registers[2] = user_info;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(kernel_user_copy_from_asm(&second_buffer, user_info,
+                                         sizeof(second_buffer)) == KERNEL_USER_COPY_OK);
+        second.size = sizeof(second);
+        second.buffer = second_buffer.handle;
+        second.byte_size = channel.byte_size;
+        second.command_capacity = 1u;
+        assert(kernel_user_copy_to_asm(user_request, &second,
+                                       sizeof(second)) == KERNEL_USER_COPY_OK);
+        registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_OPEN;
+        registers[1] = lease_handle;
+        registers[2] = user_request;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        assert(kernel_user_copy_from_asm(&second, user_request,
+                                         sizeof(second)) == KERNEL_USER_COPY_OK);
+        assert(second.channel_address != channel.channel_address &&
+               host_channel_open_calls == 2u);
+        registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_CLOSE;
+        registers[2] = second.channel_address;
+        assert(kernel_process_on_syscall(registers, user_stack, frame,
+                                         &next) == KERNEL_PROCESS_OK);
+        assert(next->data[0] == ASTRA_SYSCALL_OK);
+        uint32_t physical = 0u;
+        assert(kernel_vm_probe_current(channel.channel_address, false,
+                                       &physical) == KERNEL_VM_MAPPING_READ_WRITE);
+        assert(host_channel_close_calls == 1u);
+    }
+    {
         uint32_t physical = 0u;
         uint32_t slot;
 
@@ -8722,8 +8769,8 @@ static void test_host_admission(void)
          * from the same thread are in flight. */
         host_channel_states[slot].consumer_position = 19u;
         registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_WAIT;
-        /* Waiting is authorized by the thread-bound open channel itself. */
-        registers[1] = UINT32_MAX;
+        /* Waiting names the thread's exact open channel. */
+        registers[1] = channel.channel_address;
         registers[2] = 17u;
         registers[3] = 0x7fffffffu;
         registers[4] = 0xffffffffu;
@@ -8741,7 +8788,7 @@ static void test_host_admission(void)
         host_channel_states[slot].consumer_position = 19u;
         host_channel_complete_on_kick = 1u;
         registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_WAIT;
-        registers[1] = lease_handle;
+        registers[1] = channel.channel_address;
         registers[2] = 20u;
         registers[3] = 0x7fffffffu;
         registers[4] = 0xffffffffu;
@@ -8817,11 +8864,11 @@ static void test_host_admission(void)
     host_state.state_flags = 0u;
     registers[0] = ASTRA_SYSCALL_HOST_CHANNEL_CLOSE;
     registers[1] = lease_handle;
-    registers[2] = 0u;
+    registers[2] = channel.channel_address;
     assert(kernel_process_on_syscall(registers, user_stack, frame, &next) ==
            KERNEL_PROCESS_OK);
     assert(next->data[0] == ASTRA_SYSCALL_OK);
-    assert(host_channel_close_calls == 1u);
+    assert(host_channel_close_calls == 2u);
 }
 
 static uint32_t audio_stream_syscall(uint32_t number, uint32_t a1,
@@ -9409,7 +9456,8 @@ static void test_host_scope(void)
     /* Entropy, media and remote desktop hold the device without
      * HOST_SCOPE: they cannot mint a scope. */
     assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, device,
-                      KERNEL_DEVICE_RIGHTS & ~ASTRA_RIGHT_HOST_SCOPE, 0u, 0u,
+                      KERNEL_DEVICE_RIGHTS & ~(ASTRA_RIGHT_HOST_SCOPE |
+                                               ASTRA_RIGHT_CONFIG_SECRET), 0u, 0u,
                       0u, &next) == ASTRA_SYSCALL_OK);
     no_scope_right = next->data[1];
     assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_CREATE, no_scope_right,
@@ -9551,16 +9599,19 @@ static void test_host_scope(void)
            host_channel_process == process.id && host_channel_process != process.owner);
 
     /* A second scope rides the same channel, once. */
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, readonly, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, readonly,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u,
                       0u, &next) == ASTRA_SYSCALL_OK);
     assert(host_channel_attach_calls == 1u &&
            host_channel_attach_scope == 202u &&
            host_channel_attach_flags ==
                (ASTRA_HOST_SCOPE_BOUND | ASTRA_HOST_SCOPE_READ_ONLY));
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, readonly, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, readonly,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u,
                       0u, &next) == ASTRA_SYSCALL_OK);
     assert(host_channel_attach_calls == 1u);
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, device, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, device,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u,
                       0u, &next) == ASTRA_SYSCALL_INVALID_HANDLE);
 
     /* Revocation unbinds it from every channel and refuses it after. */
@@ -9568,7 +9619,8 @@ static void test_host_scope(void)
                       0u, &next) == ASTRA_SYSCALL_OK);
     assert(host_channel_detach_calls == 1u &&
            host_channel_detach_scope == 202u);
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, readonly, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, readonly,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u,
                       0u, &next) == ASTRA_SYSCALL_PEER_DEAD);
     assert(scope_call(ASTRA_SYSCALL_HOST_QUERY, readonly, user_lease, 0u,
                       0u, 0u, &next) == ASTRA_SYSCALL_PEER_DEAD);
@@ -9725,12 +9777,15 @@ static void test_host_scope_failed_detach(void)
                       &next) == ASTRA_SYSCALL_PEER_DEAD);
     host_channel_detach_status = ASTRA_SYSCALL_OK;
     assert(host_channel_detach_calls == 1u && host_channel_close_calls == 1u);
-    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_WAIT, 0u, 1u, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_WAIT,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 1u, 0u, 0u, 0u,
                       &next) == ASTRA_SYSCALL_PEER_DEAD);
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound, 0u, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u, 0u,
                       &next) == ASTRA_SYSCALL_PEER_DEAD);
     assert(host_channel_attach_calls == 0u);
-    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, sound, 0u, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, sound,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u, 0u,
                       &next) == ASTRA_SYSCALL_OK);
     assert(host_channel_close_calls == 1u);
 
@@ -9756,9 +9811,11 @@ static void test_host_scope_failed_detach(void)
     host_channel_detach_status = ASTRA_SYSCALL_OK;
     host_channel_close_status = ASTRA_SYSCALL_OK;
     assert(host_channel_detach_calls == 2u && host_channel_close_calls == 2u);
-    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_WAIT, 0u, 1u, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_WAIT,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 1u, 0u, 0u, 0u,
                       &next) == ASTRA_SYSCALL_PEER_DEAD);
-    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, sound, 0u, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, sound,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u, 0u,
                       &next) == ASTRA_SYSCALL_OK);
     assert(host_channel_close_calls == 2u);
 }
@@ -9781,6 +9838,7 @@ static void test_host_channel_provider(void)
     uint32_t process_id = 0u;
     uint32_t device = 0u;
     uint32_t no_scope_right;
+    uint32_t secret_right;
 
     loader_build_image();
     initialize_test();
@@ -9802,9 +9860,15 @@ static void test_host_channel_provider(void)
             device = table[index].handle;
     assert(device != 0u);
     assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, device,
-                      KERNEL_DEVICE_RIGHTS & ~ASTRA_RIGHT_HOST_SCOPE, 0u, 0u,
+                      KERNEL_DEVICE_RIGHTS & ~(ASTRA_RIGHT_HOST_SCOPE |
+                                               ASTRA_RIGHT_CONFIG_SECRET), 0u, 0u,
                       0u, &next) == ASTRA_SYSCALL_OK);
     no_scope_right = next->data[1];
+    assert(scope_call(ASTRA_SYSCALL_HANDLE_DUPLICATE, device,
+                      KERNEL_DEVICE_RIGHT_QUERY | KERNEL_DEVICE_RIGHT_EXECUTE |
+                          ASTRA_RIGHT_CONFIG_SECRET, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    secret_right = next->data[1];
     assert(scope_call(ASTRA_SYSCALL_DMA_CREATE, KERNEL_PAGE_SIZE, user_info,
                       0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
     assert(kernel_user_copy_from_asm(&buffer, user_info, sizeof(buffer)) ==
@@ -9822,7 +9886,8 @@ static void test_host_channel_provider(void)
                       0u, 0u, &next) == ASTRA_SYSCALL_OK);
     assert(host_channel_scope == 0u && host_channel_scope_owner == 0u &&
            host_channel_scope_flags == ASTRA_HOST_CHANNEL_PROVIDER);
-    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, device, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, device,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u,
                       0u, &next) == ASTRA_SYSCALL_OK);
     assert(kernel_user_copy_to_asm(user_open, &channel, sizeof(channel)) ==
            KERNEL_USER_COPY_OK);
@@ -9830,6 +9895,15 @@ static void test_host_channel_provider(void)
     assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_OPEN, no_scope_right,
                       user_open, 0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
     assert(host_channel_scope == 0u && host_channel_scope_flags == 0u);
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, device,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u,
+                      0u, &next) == ASTRA_SYSCALL_OK);
+    assert(kernel_user_copy_to_asm(user_open, &channel, sizeof(channel)) ==
+           KERNEL_USER_COPY_OK);
+    assert(scope_call(ASTRA_SYSCALL_HOST_CHANNEL_OPEN, secret_right,
+                      user_open, 0u, 0u, 0u, &next) == ASTRA_SYSCALL_OK);
+    assert(host_channel_scope == 0u &&
+           host_channel_scope_flags == ASTRA_HOST_CHANNEL_CONFIG_SECRET);
 }
 
 /*
@@ -9893,17 +9967,20 @@ static void test_host_scope_attach_checks(void)
 
     /* A host that is not ready. */
     host_state.state_flags &= ~ASTRA_HOST_STATE_READY;
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound, 0u, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u, 0u,
                       &next) == ASTRA_SYSCALL_PEER_DEAD);
     host_state.state_flags |= ASTRA_HOST_STATE_READY;
     /* A channel of an earlier host generation. */
     ++host_state.host_generation;
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound, 0u, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u, 0u,
                       &next) == ASTRA_SYSCALL_PEER_DEAD);
     --host_state.host_generation;
     assert(host_channel_attach_calls == 0u);
     /* The same channel and scope, all checks met. */
-    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound, 0u, 0u, 0u, 0u,
+    assert(scope_call(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, sound,
+                      KERNEL_VM_HOST_CHANNEL_BASE, 0u, 0u, 0u,
                       &next) == ASTRA_SYSCALL_OK);
     assert(host_channel_attach_calls == 1u &&
            host_channel_attach_scope == 12u);

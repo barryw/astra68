@@ -49,8 +49,16 @@ int main(int argc, char **argv)
     }
     int death;
     assert(prctl(PR_GET_PDEATHSIG, &death, 0, 0, 0) == 0 && death == SIGKILL);
-    /* Launcher closes every source, loop, mount and worker FD before exec. */
-    for (int fd = 5; fd < 1024; ++fd)
+    /* Root passes only the two provider sockets and one read-only key FD. */
+    assert(strcmp(getenv("ASTRA_CONFIG_SECRET_FD"), "5") == 0);
+    struct stat key_info;
+    unsigned char key[32];
+    assert(fstat(5, &key_info) == 0 && S_ISREG(key_info.st_mode) &&
+           key_info.st_uid == 0u && (key_info.st_mode & 0777u) == 0600u &&
+           key_info.st_size == sizeof(key));
+    assert(pread(5, key, sizeof(key), 0) == sizeof(key));
+    memset(key, 0, sizeof(key));
+    for (int fd = 6; fd < 1024; ++fd)
         assert(fcntl(fd, F_GETFD) < 0 && errno == EBADF);
     assert(strcmp(getenv("ASTRA_STORAGE_CONTROL_FD"), "3") == 0);
     assert(strcmp(getenv("ASTRA_STORAGE_PATH_FD"), "4") == 0);

@@ -59,7 +59,7 @@ static uint32_t channel_submit(AstraVfsHostLane *lane,
         return status;
     if (channel_poll(header, producer))
         return ASTRA_SYSCALL_OK;
-    status = astra_host_channel_wait(producer,
+    status = astra_host_channel_wait(lane->channel_address, producer,
                                      UINT64_C(0x7fffffffffffffff));
     if (status != ASTRA_SYSCALL_OK)
         (void)astra_log_failure("VFS host channel wait", status);
@@ -258,13 +258,13 @@ static uint32_t lane_attach(AstraVfsHostTransport *transport,
     if (lane_carries(lane, scope))
         return ASTRA_VFS_OK;
     if (lane->scope_count == ASTRA_HOST_CHANNEL_SCOPE_MAX) {
-        status = astra_host_channel_close(scope);
+        status = astra_host_channel_close(scope, lane->channel_address);
         if (status != ASTRA_SYSCALL_OK)
             return astra_vfs_host_status_from_syscall(status);
         lane->active = 0u;
         return lane_open(transport, lane, lane->thread, scope);
     }
-    status = astra_host_scope_attach(scope);
+    status = astra_host_scope_attach(scope, lane->channel_address);
     if (status != ASTRA_SYSCALL_OK)
         return astra_vfs_host_status_from_syscall(status);
     lane->scopes[lane->scope_count++] = scope;
@@ -356,7 +356,8 @@ static uint32_t lane_resize(AstraVfsHostTransport *transport,
         return ASTRA_VFS_OK;
     if (transport->channel_supported != 0u)
         (void)astra_host_channel_close(scope != 0u ? scope :
-                                                     transport->device);
+                                                     transport->device,
+                                      lane->channel_address);
     if (lane->dma != 0u)
         (void)astra_close(lane->dma);
     memset(lane, 0, sizeof(*lane));

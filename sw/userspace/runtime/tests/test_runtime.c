@@ -443,7 +443,9 @@ astra_syscall5(uint32_t number, uint32_t argument0, uint32_t argument1,
         number != ASTRA_SYSCALL_HOST_QUERY &&
         number != ASTRA_SYSCALL_HOST_EXECUTE &&
         number != ASTRA_SYSCALL_HOST_CHANNEL_OPEN &&
+        number != ASTRA_SYSCALL_HOST_CHANNEL_CLOSE &&
         number != ASTRA_SYSCALL_HOST_CHANNEL_WAIT &&
+        number != ASTRA_SYSCALL_HOST_SCOPE_ATTACH &&
         !(fake.active && (number == ASTRA_SYSCALL_AREA_CREATE ||
                           number == ASTRA_SYSCALL_AREA_MAP ||
                           number == ASTRA_SYSCALL_HANDLE_DUPLICATE ||
@@ -1225,12 +1227,14 @@ test_syscall_wrappers(void)
     assert(mock_number == ASTRA_SYSCALL_HOST_CHANNEL_OPEN);
     assert(mock_argument0 == 7u);
     assert(mock_argument1 == (uint32_t)(uintptr_t)&host_channel);
-    assert(astra_host_channel_close(7u) == ASTRA_SYSCALL_OK);
+    assert(astra_host_channel_close(7u, 0x4ff00000u) == ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_HOST_CHANNEL_CLOSE);
-    assert(astra_host_channel_wait(19u, UINT64_C(0x123456789abcdef0)) ==
+    assert(mock_argument1 == 0x4ff00000u);
+    assert(astra_host_channel_wait(0x4ff00000u, 19u,
+                                   UINT64_C(0x123456789abcdef0)) ==
            ASTRA_SYSCALL_OK);
     assert(mock_number == ASTRA_SYSCALL_HOST_CHANNEL_WAIT);
-    assert(mock_argument0 == 0u && mock_argument1 == 19u &&
+    assert(mock_argument0 == 0x4ff00000u && mock_argument1 == 19u &&
            mock_argument2 == 0x12345678u &&
            mock_argument3 == 0x9abcdef0u);
     calls = mock_calls;

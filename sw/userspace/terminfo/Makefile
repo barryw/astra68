@@ -41,7 +41,7 @@ PICOLIBC_LIB := $(PICOLIBC)/lib/libc.a
 PICOLIBC_MATH := $(PICOLIBC)/lib/libm.a
 RUNTIME_CRT0 := $(RUNTIME)/build/m68k/crt0-hosted.o
 LIBC_LIBRARY := $(POSIX)/build/m68k/libraries/libc.library.4
-RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.1
+RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
 COMPILER_LIBRARY := $(COMPILER)/build/m68k/libraries/compiler.library.2
 
 PROJECT_CPPFLAGS := -I../../include -I$(RUNTIME)/include \
@@ -167,7 +167,7 @@ $(LIBRARY): $(LIBRARY_IDENTITY) $(LIBRARY_MAP) $(LIBRARY_UNDEFINED) \
 		-Wl,-rpath-link,$(abspath $(VFS)/build/m68k/libraries) \
 		-Wl,-rpath-link,$(abspath $(SYSTEM)/build/m68k/libraries) \
 		-Wl,--no-as-needed -Wl,-l:libc.library.4 \
-		-Wl,-l:runtime.library.1 -Wl,-l:compiler.library.2 \
+		-Wl,-l:runtime.library.2 -Wl,-l:compiler.library.2 \
 		-Wl,--start-group $(ARCHIVE) -Wl,--end-group \
 		$(ASTRA_SHARED_LINK_END)
 
@@ -181,7 +181,7 @@ library-contract: $(LIBRARY)
 		grep -q '^terminfo.library.6 6.6.0 ABI 6.0$$'
 	@$(READELF) -dW $(LIBRARY) | grep -Fq 'Library soname: [terminfo.library.6]'
 	@test "$$($(READELF) -dW $(LIBRARY) | grep -Fc 'Shared library: [libc.library.4]')" = 1
-	@test "$$($(READELF) -dW $(LIBRARY) | grep -Fc 'Shared library: [runtime.library.1]')" = 1
+	@test "$$($(READELF) -dW $(LIBRARY) | grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@test "$$($(READELF) -dW $(LIBRARY) | grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@! $(READELF) -dW $(LIBRARY) | grep -q 'TEXTREL'
 	@$(READELF) -lW $(LIBRARY) | grep -q ' GNU_RELRO '

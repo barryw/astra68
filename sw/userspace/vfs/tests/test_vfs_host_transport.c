@@ -144,12 +144,13 @@ uint32_t astra_host_channel_open(uint32_t device,
     return ASTRA_SYSCALL_OK;
 }
 
-uint32_t astra_host_channel_close(uint32_t device)
+uint32_t astra_host_channel_close(uint32_t device, uint32_t address)
 {
     assert(device == 41u || (device >= 77u && device < 100u));
     for (uint32_t slot = 0u; slot < dma_slot_count; ++slot) {
         if (channel_opened[slot] == 0u ||
-            channel_thread[slot] != current_thread)
+            channel_thread[slot] != current_thread ||
+            address != 0x4ff00000u + slot * 0x1000u)
             continue;
         channel_opened[slot] = 0u;
         channel_thread[slot] = 0u;
@@ -268,7 +269,8 @@ uint32_t astra_host_channel_kick(uint32_t address, uint32_t producer)
     return ASTRA_SYSCALL_OK;
 }
 
-uint32_t astra_host_channel_wait(uint32_t producer, uint64_t deadline_ns)
+uint32_t astra_host_channel_wait(uint32_t address, uint32_t producer,
+                                 uint64_t deadline_ns)
 {
     struct timespec deadline;
     uint32_t slot = DMA_SLOT_COUNT;
@@ -276,6 +278,7 @@ uint32_t astra_host_channel_wait(uint32_t producer, uint64_t deadline_ns)
     assert(deadline_ns == UINT64_C(0x7fffffffffffffff));
     for (uint32_t index = 0u; index < dma_slot_count; ++index)
         if (channel_opened[index] != 0u &&
+            address == 0x4ff00000u + index * 0x1000u &&
             channel_thread[index] == current_thread)
             slot = index;
     assert(slot < dma_slot_count);
@@ -318,8 +321,9 @@ uint32_t astra_close(uint32_t handle)
     return ASTRA_SYSCALL_OK;
 }
 
-uint32_t astra_host_scope_attach(uint32_t scope)
+uint32_t astra_host_scope_attach(uint32_t scope, uint32_t address)
 {
+    assert(address >= 0x4ff00000u && address < 0x50000000u);
     ++scope_attaches;
     last_attached = scope;
     return ASTRA_SYSCALL_OK;

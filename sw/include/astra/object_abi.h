@@ -41,6 +41,8 @@
  * already allow. The supervisor grants it only as HOST_FILESYSTEM, to the
  * filesystem service. */
 #define ASTRA_RIGHT_HOST_SCOPE (1u << 9)
+/** Host-held Config Kit secret operations; kernel stamps this on channels. */
+#define ASTRA_RIGHT_CONFIG_SECRET (1u << 10)
 
 /** Maximum size of one shared or reserved area. */
 #define ASTRA_AREA_SIZE_MAX \

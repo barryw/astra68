@@ -44,7 +44,7 @@ $(BUILD_DIR)/%.elf: $(EXAMPLES_DIR)%.c
 		$(ASTRA_NATIVE_LIBS)
 	python3 $(ASTRA_DYNAMIC_EXECUTABLE_CHECK) --readelf $(ASTRA_READELF) \
 		$(patsubst -Wl$(comma)-l:%,--needed %,$($*_LIBS)) \
-		--needed runtime.library.1 --needed compiler.library.2 $@
+		--needed runtime.library.2 --needed compiler.library.2 $@
 
 clean:
 	rm -rf $(BUILD_DIR)

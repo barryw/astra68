@@ -226,6 +226,10 @@ PCM_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
 CODEC_CERTIFY_SERVICES = DISPLAY_SERVICES + ("codec-certify",)
 CODEC_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "application /services/codec-certify grants CODEC LIBS:r\n")
+CONFIG_SECRET_CERTIFY_SERVICES = DISPLAY_SERVICES + ("config-secret-certify",)
+CONFIG_SECRET_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
+    "service /services/config-secret-certify grants HOST_DEVICE HOST_SECRETS CONFIG_SYSTEM:rw LIBS:r "
+    "restart=never\n")
 # The fixture that dies: installed, not started, for a gate to add as a user
 # service; or started as a critical one, whose death must halt the machine.
 FAULT_PROBE_SERVICES = DISPLAY_SERVICES + ("fault-probe",)
@@ -1095,6 +1099,9 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3 and sys.argv[1] == "--codec-certify":
         install(sys.argv[2], service_names=CODEC_CERTIFY_SERVICES,
                 manifest_text=CODEC_CERTIFY_STARTUP_MANIFEST)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--config-secret-certify":
+        install(sys.argv[2], service_names=CONFIG_SECRET_CERTIFY_SERVICES,
+                manifest_text=CONFIG_SECRET_CERTIFY_STARTUP_MANIFEST)
     elif len(sys.argv) == 3 and sys.argv[1] == "--fault-probe":
         install(sys.argv[2], service_names=FAULT_PROBE_SERVICES,
                 manifest_text=DISPLAY_STARTUP_MANIFEST)
@@ -1124,7 +1131,7 @@ if __name__ == "__main__":
     else:
         raise SystemExit(
             "usage: astra_image.py "
-            "[--display|--hostbench|--audio-certify|--pcm-certify|--codec-certify|"
+            "[--display|--hostbench|--audio-certify|--pcm-certify|--codec-certify|--config-secret-certify|"
             "--fault-probe|--fault-critical|--ready-fail|--required-fail|"
             "--interface-gallery] IMAGE | "
             "--create IMAGE SIZE_MIB | --service NAME IMAGE | "

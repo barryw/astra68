@@ -2,13 +2,15 @@
 #include <astra/config_library.h>
 
 #include <astra/library.h>
+#include <astra/host.h>
 #include <astra/runtime.h>
+#include <astra/status.h>
 #include <astra/vfs_client.h>
 
 #include <stddef.h>
 #include <string.h>
 
-ASTRA_DYNAMIC_LIBRARY("config.library.1", 1, 1, 0,
+ASTRA_DYNAMIC_LIBRARY("config.library.1", 1, 2, 0,
               ASTRA_CONFIG_LIBRARY_ABI_MAJOR,
               ASTRA_CONFIG_LIBRARY_ABI_MINOR,
               "Astra68 contributors", "Copyright 2026 Astra68 contributors");
@@ -23,6 +25,7 @@ typedef struct ConfigState {
     AstraVfsClient client;
     uint32_t schema_version;
     uint32_t flags;
+    uint32_t secret_device;
     uint32_t text_area;
     char *text;
     uint32_t length;
@@ -266,6 +269,9 @@ static uint32_t open_capability(const AstraStartupInfo *startup,
     (void)memset(state, 0, sizeof(*state));
     state->schema_version = schema_version;
     state->flags = flags;
+    const AstraStartupCapability *host = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_HOST_CONFIG_SECRETS);
+    if (host != NULL) state->secret_device = host->handle;
     if (!root_copy(state->root, capability->root) ||
         !path(state->path, sizeof(state->path), state->root, "settings.conf") ||
         !path(state->temporary, sizeof(state->temporary), state->root, ".settings.tmp")) {
@@ -492,6 +498,160 @@ uint32_t astra_config_set_string(AstraConfig *config, const char *key,
 {
     return value != NULL ? change(config, key, index, value, 0) :
                            ASTRA_CONFIG_INVALID;
+}
+
+#define CONFIG_SECRET_MAX 1024u
+#define CONFIG_SECRET_OVERHEAD 44u
+#define CONFIG_SECRET_ENVELOPE (CONFIG_SECRET_MAX + CONFIG_SECRET_OVERHEAD)
+
+static void wipe(void *address, uint32_t length)
+{
+    volatile uint8_t *bytes = address;
+    while (length-- != 0u) *bytes++ = 0u;
+}
+
+static int secret_name(const char *key, char out[128])
+{
+    uint32_t at = 0u;
+    if (key == NULL || key[0] == '\0') return 0;
+    (void)memcpy(out, "secret.", 7u);
+    while (key[at] != '\0') {
+        char c = key[at];
+        if (at >= 120u || !((c >= 'a' && c <= 'z') ||
+            (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.')) return 0;
+        out[7u + at++] = c;
+    }
+    out[7u + at] = '\0';
+    return 1;
+}
+
+static uint32_t secret_crypt(ConfigState *state, const char *name,
+                             uint16_t operation, const uint8_t *input,
+                             uint32_t input_length, uint8_t *output,
+                             uint32_t output_capacity, uint32_t *output_length)
+{
+    AstraHostChannelClient host = {0};
+    AstraHostCommand *command;
+    uint32_t root_bytes = (uint32_t)strlen(state->root) + 1u;
+    uint32_t name_bytes = (uint32_t)strlen(name) + 1u;
+    uint32_t context = root_bytes + name_bytes;
+    uint32_t status;
+    if (state->secret_device == 0u) return ASTRA_CONFIG_ACCESS;
+    status = astra_host_client_open(state->secret_device,
+        ASTRA_HOST_CAP_CONFIG_SECRETS, 2048u, &host);
+    if (status != ASTRA_SYSCALL_OK) return ASTRA_CONFIG_ACCESS;
+    command = astra_host_client_prepare(&host,
+        ASTRA_HOST_SERVICE_CONFIG_SECRETS, operation);
+    if (command == NULL) {
+        status = ASTRA_CONFIG_IO;
+        goto done;
+    }
+    command->offset_lo = context;
+    command->data_length = context + input_length;
+    command->data_capacity = output_capacity;
+    (void)memcpy((void *)(uintptr_t)host.data, state->root, root_bytes);
+    (void)memcpy((void *)(uintptr_t)(host.data + root_bytes), name, name_bytes);
+    (void)memcpy((void *)(uintptr_t)(host.data + context), input, input_length);
+    status = astra_host_client_submit(&host);
+    if (status != ASTRA_SYSCALL_OK) {
+        status = ASTRA_CONFIG_IO;
+        goto done;
+    }
+    if (command->status == ASTRA_STATUS_ACCESS)
+        status = ASTRA_CONFIG_AUTH_FAILED;
+    else if (command->status != ASTRA_STATUS_OK ||
+             command->result_length == 0u ||
+             command->result_length > output_capacity)
+        status = ASTRA_CONFIG_IO;
+    else {
+        *output_length = command->result_length;
+        (void)memcpy(output, (const void *)(uintptr_t)host.data,
+                     *output_length);
+        status = ASTRA_CONFIG_OK;
+    }
+done:
+    wipe((void *)(uintptr_t)host.data, 2048u);
+    (void)astra_host_client_close(&host);
+    return status;
+}
+
+uint32_t astra_config_set_secret(AstraConfig *config, const char *key,
+                                 const void *secret, uint32_t length)
+{
+    static const char hex[] = "0123456789abcdef";
+    ConfigState *state = state_of(config);
+    char name[128], encoded[CONFIG_SECRET_ENVELOPE * 2u + 1u];
+    uint8_t sealed[CONFIG_SECRET_ENVELOPE];
+    uint32_t sealed_length = 0u, status;
+    if (state == NULL) return ASTRA_CONFIG_CLOSED;
+    if ((state->flags & ASTRA_CONFIG_OPEN_WRITE) == 0u)
+        return ASTRA_CONFIG_ACCESS;
+    if (!secret_name(key, name) || secret == NULL || length == 0u ||
+        length > CONFIG_SECRET_MAX) return ASTRA_CONFIG_INVALID;
+    status = secret_crypt(state, name, ASTRA_HOST_CONFIG_SECRET_SEAL,
+        secret, length, sealed, sizeof(sealed), &sealed_length);
+    if (status == ASTRA_CONFIG_OK) {
+        for (uint32_t at = 0u; at < sealed_length; ++at) {
+            encoded[at * 2u] = hex[sealed[at] >> 4];
+            encoded[at * 2u + 1u] = hex[sealed[at] & 15u];
+        }
+        encoded[sealed_length * 2u] = '\0';
+        status = astra_config_set_string(config, name, 0u, encoded);
+    }
+    wipe(sealed, sizeof(sealed));
+    wipe(encoded, sizeof(encoded));
+    return status;
+}
+
+static int hex_digit(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
+uint32_t astra_config_get_secret(AstraConfig *config, const char *key,
+                                 void *secret, uint32_t capacity,
+                                 uint32_t *length)
+{
+    ConfigState *state = state_of(config);
+    char name[128], encoded[CONFIG_SECRET_ENVELOPE * 2u + 1u];
+    uint8_t sealed[CONFIG_SECRET_ENVELOPE];
+    uint32_t encoded_length = 0u, plain_length = 0u, status;
+    if (state == NULL) return ASTRA_CONFIG_CLOSED;
+    if (!secret_name(key, name) || length == NULL) return ASTRA_CONFIG_INVALID;
+    *length = 0u;
+    status = astra_config_get_string(config, name, 0u, encoded,
+        sizeof(encoded), &encoded_length);
+    if (status != ASTRA_CONFIG_OK) return status;
+    if ((encoded_length & 1u) != 0u ||
+        encoded_length <= CONFIG_SECRET_OVERHEAD * 2u) return ASTRA_CONFIG_AUTH_FAILED;
+    uint32_t sealed_length = encoded_length / 2u;
+    for (uint32_t at = 0u; at < sealed_length; ++at) {
+        int high = hex_digit(encoded[at * 2u]);
+        int low = hex_digit(encoded[at * 2u + 1u]);
+        if (high < 0 || low < 0) {
+            status = ASTRA_CONFIG_AUTH_FAILED;
+            goto done;
+        }
+        sealed[at] = (uint8_t)((high << 4) | low);
+    }
+    *length = sealed_length - CONFIG_SECRET_OVERHEAD;
+    if (secret == NULL || capacity < *length) {
+        status = ASTRA_CONFIG_BUFFER_TOO_SMALL;
+        goto done;
+    }
+    status = secret_crypt(state, name, ASTRA_HOST_CONFIG_SECRET_OPEN,
+        sealed, sealed_length, secret, *length, &plain_length);
+    if (status == ASTRA_CONFIG_OK && plain_length != *length) {
+        wipe(secret, plain_length);
+        status = ASTRA_CONFIG_AUTH_FAILED;
+    }
+done:
+    wipe(sealed, sizeof(sealed));
+    wipe(encoded, sizeof(encoded));
+    return status;
 }
 
 static uint32_t signed_decimal(char *out, int64_t value)

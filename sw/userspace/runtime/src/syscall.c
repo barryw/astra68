@@ -689,12 +689,13 @@ uint32_t astra_host_channel_open(uint32_t device,
     return result.status;
 }
 
-uint32_t astra_host_channel_close(uint32_t device)
+uint32_t astra_host_channel_close(uint32_t device,
+                                  uint32_t channel_address)
 {
     AstraSyscallResult result;
 
     astra_syscall5(ASTRA_SYSCALL_HOST_CHANNEL_CLOSE, device,
-                   0u, 0u, 0u, 0u, &result);
+                   channel_address, 0u, 0u, 0u, &result);
     return result.status;
 }
 
@@ -714,12 +715,13 @@ uint32_t astra_host_channel_kick(uint32_t channel_address,
     return ASTRA_SYSCALL_OK;
 }
 
-uint32_t astra_host_channel_wait(uint32_t consumer_position,
+uint32_t astra_host_channel_wait(uint32_t channel_address,
+                                 uint32_t consumer_position,
                                  uint64_t deadline_ns)
 {
     AstraSyscallResult result;
 
-    astra_syscall5(ASTRA_SYSCALL_HOST_CHANNEL_WAIT, 0u,
+    astra_syscall5(ASTRA_SYSCALL_HOST_CHANNEL_WAIT, channel_address,
                    consumer_position, (uint32_t)(deadline_ns >> 32),
                    (uint32_t)deadline_ns, 0u, &result);
     return result.status;
@@ -1032,11 +1034,12 @@ astra_host_scope_revoke(uint32_t scope)
 }
 
 uint32_t
-astra_host_scope_attach(uint32_t scope)
+astra_host_scope_attach(uint32_t scope, uint32_t channel_address)
 {
     AstraSyscallResult result;
 
-    astra_syscall5(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, scope, 0u, 0u, 0u, 0u,
+    astra_syscall5(ASTRA_SYSCALL_HOST_SCOPE_ATTACH, scope,
+                   channel_address, 0u, 0u, 0u,
                    &result);
     return result.status;
 }

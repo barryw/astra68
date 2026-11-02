@@ -55,15 +55,18 @@ uint32_t astra_host_channel_kick(uint32_t address, uint32_t producer)
     return ASTRA_SYSCALL_OK;
 }
 
-uint32_t astra_host_channel_wait(uint32_t producer, uint64_t deadline)
+uint32_t astra_host_channel_wait(uint32_t address, uint32_t producer,
+                                 uint64_t deadline)
 {
+    assert(address == ASTRA_HOST_CHANNEL_PHYSICAL_BASE);
     assert(producer == 1u && deadline == ASTRA_DEADLINE_FOREVER);
     return ASTRA_SYSCALL_OK;
 }
 
-uint32_t astra_host_channel_close(uint32_t device)
+uint32_t astra_host_channel_close(uint32_t device, uint32_t address)
 {
     assert(device == 7u);
+    assert(address == ASTRA_HOST_CHANNEL_PHYSICAL_BASE);
     ++closed_channel;
     return ASTRA_SYSCALL_OK;
 }
