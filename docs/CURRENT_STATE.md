@@ -47,6 +47,22 @@ software frame delivery or reboot recovery as a permanent audio fix. Beast's
 Longhorn `walker-cnpg-verify-1` volume is currently degraded: its second
 100 GiB replica cannot be scheduled because available disks are overcommitted.
 The storage-health gate below still blocks a new FPGA route.
+The audio host now requests and logs the existing FPGA HDMI-link status on
+startup and every state change. A DE25 development-release install of that
+single host binary passed on 2026-11-02 (shadow
+`ada32cf43ae039470ff9474f8bc7e75cf40f5fcff7a5a83c8d257384b314d2c2`):
+`requested=1 ready=1` through desktop startup, 274,560 startup frames, zero
+FIFO faults. This readiness means the vendor I2C setup sequence completed;
+it does not confirm ADV7513 audio output or HDMI sink playback. Evidence is
+archived alongside the pre-reboot logs at
+`/mnt/Documents/astra68/audio-silence-20261102/`. The prior development
+release was replaced atomically; selected production release and user image
+were not modified. Haiku reference:
+`~/Git/haiku/src/add-ons/kernel/drivers/audio/hda/hda_codec.cpp`
+(`hda_audio_group_check_sense`, `hda_codec_switch_handler`) reads connector
+presence and updates output state when it changes. Astra adapts that pattern
+to its existing FPGA link-status register; its current status does not yet
+read ADV7513 registers or prove sound at the speakers.
 
 Network volume assessment, 2026-11-02: DE25 Linux HPS has active
 NetworkManager 1.36.6, systemd-resolved, DHCP IPv4 address, default route,

@@ -59,6 +59,8 @@ enum {
     REG_OVERFLOWS = 0x20u,
     REG_RATE = 0x24u,
     REG_FRAMES = 0x28u,
+    REG_LINK_REQUEST = 0x2cu,
+    REG_LINK_STATUS = 0x30u,
     CONTROL_ENABLE = 1u,
     CONTROL_DRAIN = 2u,
     STATUS_LEVEL_MASK = 0x3ffu,
@@ -169,6 +171,8 @@ typedef struct AudioHost {
     uint64_t mixed_frames;
     uint32_t maximum_active_voices;
     uint32_t minimum_level;
+    uint32_t link_status;
+    time_t link_checked_second;
     uint32_t tail_written;
     int playing;
     int tailing;
@@ -212,6 +216,16 @@ static uint32_t read_reg(const AudioHost *host, unsigned offset)
 static void write_reg(AudioHost *host, unsigned offset, uint32_t value)
 {
     host->registers[offset / 4u] = value;
+}
+
+static void report_link(AudioHost *host)
+{
+    uint32_t status = read_reg(host, REG_LINK_STATUS) & 3u;
+    if (status == host->link_status)
+        return;
+    host->link_status = status;
+    fprintf(stderr, "ASTRA AUDIO HOST HDMI link requested=%u ready=%u\n",
+            status & 1u, (status >> 1) & 1u);
 }
 
 static void free_voice(Voice *voice)
@@ -1728,6 +1742,10 @@ static int setup_hardware(AudioHost *host)
         return -1;
     }
     write_reg(host, REG_CONTROL, 0u);
+    /* FPGA reports HDMI configuration readiness only for a requested link. */
+    write_reg(host, REG_LINK_REQUEST, 1u);
+    host->link_status = UINT32_MAX;
+    host->link_checked_second = -1;
     host->underrun_start = read_reg(host, REG_UNDERRUNS);
     host->overflow_start = read_reg(host, REG_OVERFLOWS);
     host->minimum_level = AUDIO_FRAMES;
@@ -2938,6 +2956,13 @@ int main(int argc, char **argv)
     while (running) {
         int playing;
         int count;
+        struct timespec now;
+
+        if (clock_gettime(CLOCK_MONOTONIC, &now) == 0 &&
+            now.tv_sec != host.link_checked_second) {
+            host.link_checked_second = now.tv_sec;
+            report_link(&host);
+        }
 
         (void)pthread_mutex_lock(&host.lock);
         playing = host.playing || queued_any(&host);
@@ -2969,6 +2994,8 @@ done:
         host.threaded = 0;
     }
     if (host.registers != NULL) {
+        report_link(&host);
+        write_reg(&host, REG_LINK_REQUEST, 0u);
         write_reg(&host, REG_CONTROL, 0u);
         fprintf(stderr, "ASTRA AUDIO HOST frames=%llu voices_peak=%u "
                 "min_fifo=%u underruns=%u overflows=%u gaps=%u\n",
