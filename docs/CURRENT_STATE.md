@@ -32,10 +32,15 @@ Command settings isolation remains unresolved: this branch now marks private
 Config grants `CLOSE_ON_EXEC` and removes their live handles at exec commit,
 so child commands cannot inherit zsh's or an application's private settings.
 Failed exec preserves the grant; an already-closed grant does not block exec.
-Kernel process and supervisor host tests pass, but per-command grant issuance
-by verified command identity is still missing. Do not claim that commands can
-use private Config Kit settings or release this branch as complete until that
-mechanism and DE25 gate pass. Haiku read-only references:
+Kernel process, supervisor, Config Kit, and runtime host tests pass. Full
+MC68040 userspace and NDK builds, kernel/ROM builds, and the disposable Beast
+Config Kit two-boot QEMU gate pass. That gate proved protected write/restart
+read, public read/publish, and ordinary-channel denial. The unrelated
+userspace boundary test still reports existing Interface Kit and AstraZ
+ownership violations. Per-command grant issuance by verified command
+identity is still missing. Do not claim that commands can use private Config
+Kit settings or release this branch as complete until that mechanism and
+DE25 gate pass. Haiku read-only references:
 `src/system/kernel/fs/vfs.cpp` (server-enforced path authority) and
 `src/servers/keystore/KeyStoreServer.cpp`, `Keyring.cpp` (service-owned secrets
 and caller checks), plus `src/system/kernel/team.cpp` (`exec_team`) and
