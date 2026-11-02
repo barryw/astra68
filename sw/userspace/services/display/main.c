@@ -377,7 +377,11 @@ typedef struct DisplayState {
     /* What the overlay surface holds, and what this compose drew. */
     uint8_t overlay_drawn;
     uint32_t overlay_drawn_revision;
+    uint32_t overlay_drawn_selection;
+    uint32_t overlay_drawn_scroll;
+    uint8_t overlay_partial;
     uint8_t overlay_pending;
+    uint8_t overlay_pending_partial;
     uint8_t submenu_pending;
     /* ponytail: one panel, the newest launch's; a launch started while
        another loads takes the panel over. A stack of them if that matters. */
@@ -996,14 +1000,14 @@ static void init_content_banks(DisplayWindow *window)
     window->content_pending_shown = DISPLAY_CONTENT_NONE;
 }
 
-/* New content geometry: every bank is rewritten whole, so no bank keeps a
-   stale region of the old geometry. One that did would carry a rectangle
-   past a smaller window into the next copy-forward blit, which the DE25
-   blitter refuses (BAD_RANGE). */
+/* New geometry invalidates every bank. The first clear is not copied into
+   the bank the client draws next; old damage would also carry a rectangle
+   past a smaller window into a copy-forward blit (BAD_RANGE on DE25). */
 static void reset_content(DisplayWindow *window)
 {
     window->content_initialized = 0u;
     window->content_dirty = 1u;
+    window->content_discard = 1u;
     window->content_damage = (DamageRect){
         0, 0, window->request.width, window->request.height, 1u
     };
@@ -1802,6 +1806,7 @@ static uint32_t menu_install(DisplayState *state, const AstraMenu *menu,
     }
     /* Revisions restart for each popup; cached pixels need the complete paint snapshot. */
     cached = state->overlay_drawn == DISPLAY_OVERLAY_MENU &&
+        state->overlay_partial == 0u &&
         offset == state->overlay_offset &&
         memcmp(menu_draw_list, menu_draw_list_committed, sizeof(menu_draw_list)) == 0;
     state->overlay_offset = offset;
@@ -1824,6 +1829,8 @@ static uint32_t menu_install(DisplayState *state, const AstraMenu *menu,
     state->overlay = DISPLAY_OVERLAY_MENU;
     state->overlay_drawn = cached ? DISPLAY_OVERLAY_MENU : DISPLAY_OVERLAY_NONE;
     state->overlay_drawn_revision = info.revision;
+    state->overlay_drawn_selection = info.selection;
+    state->overlay_drawn_scroll = info.scroll;
     state->system_initialized = 0u;
     damage_both(state, overlay_bounds(state));
     damage_both(state, (DamageRect){DISPLAY_MENU_X, 0,
@@ -3721,6 +3728,28 @@ static int build_system_surfaces(AstraRenderBuilder *builder,
     return 1;
 }
 
+static int render_menu_row(AstraRenderBuilder *builder, DisplayState *state,
+                           const AstraMenuState *menu, uint32_t row,
+                           const AstraRenderSourceResolver *resolver)
+{
+    AstraControlFrame frame;
+    AstraSurfaceView surface;
+
+    if (row == 0u) return 1;
+    if (astra_interface_menu_row_frame(&state->menu, row, &frame) != ASTRA_OK ||
+        !astra_draw_list_view_init(&surface, menu_draw_list,
+            sizeof(menu_draw_list), (uint16_t)menu->frame.width,
+            (uint16_t)menu->frame.height))
+        return 0;
+    if (!astra_surface_clip(&surface, 0, frame.y - menu->frame.y,
+                            menu->frame.width, frame.height))
+        return 1;
+    return astra_interface_menu_render(&state->menu, &surface) == ASTRA_OK &&
+        astra_render_builder_replay_resolved(builder,
+            state->overlay_resource,
+            (const AstraDrawListHeader *)menu_draw_list, resolver);
+}
+
 static int build_overlay_surface(AstraRenderBuilder *builder,
                                  DisplayState *state,
                                  const AstraTheme *theme)
@@ -3733,6 +3762,7 @@ static int build_overlay_surface(AstraRenderBuilder *builder,
 
     (void)theme;
     state->overlay_pending = 0u;
+    state->overlay_pending_partial = 0u;
     state->submenu_pending = 0u;
     if (state->overlay == DISPLAY_OVERLAY_NONE)
         return 1;
@@ -3823,17 +3853,30 @@ static int build_overlay_surface(AstraRenderBuilder *builder,
         return 0;
     if (state->overlay_drawn != state->overlay ||
         state->overlay_drawn_revision != menu.revision) {
+        int selection_only = state->overlay_drawn == DISPLAY_OVERLAY_MENU &&
+            state->overlay_drawn_scroll == menu.scroll &&
+            state->overlay_drawn_selection != menu.selection;
+        int rendered;
+
         state->overlay_drawn = DISPLAY_OVERLAY_NONE;
         state->overlay_fonts.registry = state->fonts;
         display_font_set_begin(&state->overlay_fonts);
-        int rendered = astra_draw_list_view_init(&surface, menu_draw_list, sizeof(menu_draw_list),
+        if (selection_only) {
+            rendered = render_menu_row(builder, state, &menu,
+                state->overlay_drawn_selection, &resolver) &&
+                render_menu_row(builder, state, &menu, menu.selection,
+                    &resolver);
+        } else {
+            rendered = astra_draw_list_view_init(&surface, menu_draw_list, sizeof(menu_draw_list),
                 (uint16_t)menu.frame.width, (uint16_t)menu.frame.height) &&
-            astra_interface_menu_render(&state->menu, &surface) == ASTRA_OK &&
-            astra_render_builder_replay_resolved(builder, state->overlay_resource,
-                (const AstraDrawListHeader *)menu_draw_list, &resolver);
+                astra_interface_menu_render(&state->menu, &surface) == ASTRA_OK &&
+                astra_render_builder_replay_resolved(builder, state->overlay_resource,
+                    (const AstraDrawListHeader *)menu_draw_list, &resolver);
+        }
         display_font_set_end(&state->overlay_fonts, rendered);
         if (!rendered) return 0;
         state->overlay_pending = 1u;
+        state->overlay_pending_partial = selection_only;
     }
     if (state->submenu_count != 0u) {
         AstraMenuState child;
@@ -4469,10 +4512,9 @@ static uint32_t compose(void *storage, uint32_t fence,
             ASTRA_RENDER_SURFACE_READ | ASTRA_RENDER_SURFACE_WRITE);
         if (window->request.content_format ==
             ASTRA_WINDOW_CONTENT_SURFACE) {
-            /* The client draws the content surface itself; the service
-               only clears Media RAM before the client's first frame. */
+            /* Geometry installs fresh Media RAM before the client receives
+               its resize event. Clear that bank before it can be shown. */
             content_ok = window->content_initialized != 0u ||
-                         window->content_dirty != 0u ||
                          astra_render_builder_fill(
                              &builder, window->content_resource, 0, 0,
                              window->request.width, window->request.height,
@@ -4956,8 +4998,13 @@ static void commit_render_state(DisplayState *state)
         AstraMenuState menu;
         memcpy(menu_draw_list_committed, menu_draw_list, sizeof(menu_draw_list));
         state->overlay_drawn = state->overlay;
+        state->overlay_partial = state->overlay_pending_partial;
         if (astra_interface_menu_get_state(&state->menu, &menu) == ASTRA_OK)
             state->overlay_drawn_revision = menu.revision;
+        if (state->overlay == DISPLAY_OVERLAY_MENU) {
+            state->overlay_drawn_selection = menu.selection;
+            state->overlay_drawn_scroll = menu.scroll;
+        }
         else if (state->overlay == DISPLAY_OVERLAY_TOOLTIP ||
                  state->overlay == DISPLAY_OVERLAY_NOTIFICATION)
             state->overlay_drawn_revision = state->notice.revision;
@@ -6798,7 +6845,7 @@ static uint32_t handle_pointer(DisplayState *state,
                     state, &theme, &command, &closed, &command_changed);
 
                 if (status != ASTRA_STATUS_OK)
-                    return status;
+                    (void)astra_log_failure("display window gadget", status);
                 changed |= command_changed;
                 if (command_changed) {
                     index = find_id(state, captured_id);
@@ -7512,6 +7559,8 @@ static void receive_open(uint32_t device, uint32_t irq,
     if (status == ASTRA_STATUS_OK) {
         candidate.request = request;
         candidate.request.gadgets = window_gadgets(request.type);
+        if ((request.flags & ASTRA_WINDOW_RESIZABLE) == 0u)
+            candidate.request.maximize_state = ASTRA_GADGET_DISABLED;
         status = display_window_media_prepare(state, &candidate);
     }
     if (status == ASTRA_STATUS_OK &&

@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-11-01
 
+Display resize/menu checkpoint, 2026-11-01: Nonresizable windows now open
+with a disabled maximize gadget. A refused gadget command no longer exits the
+critical Display service; resource exhaustion leaves the window unchanged.
+Fresh content geometry clears its first visible bank but does not copy that
+clear into the client's next draw bank. Shared Display menu rendering replays
+only the previously selected and newly selected rows when selection alone
+changes; scrolling, content changes, and first open retain full paints. Beast
+Display host tests and MC68040 builds pass. Targeted DE25 install showed Atlas
+File menu row hover and a clean maximized Atlas frame, with zero Astra service
+restarts. Selected RFB raw/PNG evidence, verified against board SHA-256, is at
+`/mnt/Documents/astra68/display-ui-20261102/`. Haiku read-only
+`src/kits/interface/Menu.cpp` (`DrawItems(updateRect)`, `_SelectItem`) and
+`src/kits/interface/MenuBar.cpp` (`DrawItems(updateRect)`) informed row-local
+repainting; Astra reuses Interface Kit's clip and row-frame contracts.
+Atlas-with-SDLTestSprite2 RFB captures were not a valid UI gate: direct DE25
+display-capture ioctl returned `EAGAIN` under the 60 fps workload, and RFB
+served an old frame or black after restart. Atlas's back bank contained the
+expected toolbar and selected-tile pixels, and the compiled scene referenced
+that bank. Barry confirmed Atlas looked correct on physical HDMI under this
+workload; capture bandwidth/remote-desktop freshness remains a separate open
+issue.
+
 Settings checkpoint, 2026-11-01: native `Settings.app` now uses a reusable
 Interface Kit 12.13 Settings Sidebar composed from existing controls. Search
 filters grouped navigation without losing keyboard focus. Its shared List

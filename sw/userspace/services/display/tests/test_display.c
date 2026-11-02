@@ -2417,7 +2417,13 @@ static void test_content_banks(void)
     assert(valid_batch(compose(batch, 8u, &state, &(uint32_t){0}, NULL))
            != 0u);
     assert(read_be32(batch + 12u) != 0u && state.overlay_pending != 0u);
+    assert(state.overlay_pending_partial != 0u);
+    commit_render_state(&state);
+    assert(state.overlay_partial != 0u &&
+           state.overlay_drawn_selection == 1u);
     set_overlay(&state, DISPLAY_OVERLAY_NONE);
+    set_overlay(&state, DISPLAY_OVERLAY_MENU);
+    assert(state.overlay_drawn == DISPLAY_OVERLAY_NONE);
 }
 
 /* Every BLIT reads inside its source surface: the FPGA blitter refuses a
@@ -2938,7 +2944,10 @@ static void test_shrunk_window_copy_forward(void)
     compose_commit(&state, 1u);
     assert(apply_command(&state, &theme, &fullscreen, &closed, &changed) ==
            ASTRA_STATUS_OK && changed);
-    compose_commit(&state, 2u);
+    assert(valid_batch(compose(batch, 2u, &state, &(uint32_t){0}, NULL)) != 0u);
+    assert(batch_has_surface_fill(state.windows[0].request.width,
+           state.windows[0].request.height, color(theme.client)));
+    commit_render_state(&state);
     assert(present_content(&state, 0u, 0u, 0u, 0u, 0u, 0u) ==
            ASTRA_STATUS_OK);
     compose_commit(&state, 3u);
@@ -2946,9 +2955,12 @@ static void test_shrunk_window_copy_forward(void)
            ASTRA_STATUS_OK && changed);
     assert(state.windows[0].request.width == 800u &&
            state.windows[0].request.height == 600u);
-    compose_commit(&state, 4u);
-    assert(batch_blit_count() != 0u);
+    assert(valid_batch(compose(batch, 4u, &state, &(uint32_t){0}, NULL)) != 0u);
+    assert(batch_has_surface_fill(800u, 600u, color(theme.client)));
+    /* Fresh geometry has no frame to copy into the client's next bank. */
+    assert(batch_blit_count() == 0u);
     assert(batch_blits_within_sources());
+    commit_render_state(&state);
 }
 
 static void test_menu_key_ownership(void)
@@ -5173,6 +5185,20 @@ int main(void)
              theme.gadget_extent) / 2u + theme.gadget_extent / 2u;
         assert(hit_region(&theme, window, state.pointer_x,
                           state.pointer_y) == HIT_MAXIMIZE);
+        /* Exhausting Media RAM may refuse a resize; the user's click must
+           never turn that recoverable refusal into a critical-service exit. */
+        state.scene_offset[0] = DISPLAY_MEDIA_BASE;
+        state.scene_capacity[0] = DISPLAY_MEDIA_LIMIT - DISPLAY_MEDIA_BASE;
+        assert(handle_pointer(&state, &button_down, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        effects = 0u;
+        assert(handle_pointer(&state, &button_up, &effects, &frame_window,
+                              &frame_timestamp) == ASTRA_STATUS_OK);
+        assert(window->state == ASTRA_WINDOW_STATE_NORMAL &&
+               state.capture_window == 0u &&
+               (effects & DISPLAY_POINTER_RENDER) != 0u);
+        state.scene_offset[0] = 0u;
+        state.scene_capacity[0] = 0u;
         assert(handle_pointer(&state, &button_down, &effects, &frame_window,
                               &frame_timestamp) == ASTRA_STATUS_OK);
         assert(window->request.maximize_state == ASTRA_GADGET_PRESSED);
@@ -5641,8 +5667,8 @@ int main(void)
         assert(batch_scene_layer_source(3u) ==
                stack.windows[1].content_offset[
                    stack.windows[1].content_back]);
-        /* The only blits carry each first frame into the next back bank. */
-        assert(batch_blit_count() == 2u);
+        /* Fresh banks stay untouched until their clients draw. */
+        assert(batch_blit_count() == 0u);
     }
     {
         DisplayWindow many_windows[TEST_WINDOW_COUNT] = {0};
@@ -5668,7 +5694,7 @@ int main(void)
         for (uint32_t index = 0u; index < 5u; ++index)
             assert(batch_blit_from_surface(
                        many.windows[index].content_offset[
-                           many.windows[index].content_back]) != 0u);
+                           many.windows[index].content_back]) == 0u);
         assert(display_wait_handles(&many, 0x10u, 0x20u, 0x25u, 0x28u, 0u,
                                     waits, sources) == 9u);
     }
