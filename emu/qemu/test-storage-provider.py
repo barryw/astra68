@@ -43,7 +43,7 @@ def main(argv=None):
         control.mkdir()
         os.chown(control, uid, gid)
         root = work / "root"
-        for name in ("work", "sound"):
+        for name in ("work", "sound", "config"):
             (root / name).mkdir(parents=True)
         if args.scenario == "memory":
             cost = root / "work" / "cost"
@@ -81,6 +81,7 @@ def main(argv=None):
         command = [str(args.provider.resolve()), "--uid", str(uid), "--gid", str(gid),
                    "--system", str(image), "0", str(image.stat().st_size), uuid,
                    "--work", str(root / "work"), "--sound", str(root / "sound"),
+                   "--config-store", str(root / "config"),
                    "--limits", "1048576", "1048576", "2", "5000", "2",
                    "2097152", "64", "1048576", "32", "1048576", "32", "--discovery", "none", "--seed-sound", "none", "--",
                    str(args.qemu.resolve()), "-machine", "astra68,accel=qtest", "-m", "32M",

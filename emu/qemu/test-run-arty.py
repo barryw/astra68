@@ -98,6 +98,7 @@ assert args[args.index('--discovery') + 1] == 'udev'
 assert args[args.index('--system') + 4] == 'fixture-uuid'
 assert args[args.index('--work') + 1] == {str(observed / 'exports/work')!r}
 assert args[args.index('--sound') + 1] == {str(observed / 'exports/sound')!r}
+assert args[args.index('--config-store') + 1] == {str(observed / 'state/config')!r}
 assert args[args.index('--seed-sound') + 1] == {str(root / 'soundfonts')!r}
 assert os.environ['ASTRA_STORAGE_NAME_STATE'] == {str(observed / 'state')!r}
 if os.getenv('ASTRA_TEST_PROVIDER_CLEAN_STOP'):

@@ -161,6 +161,13 @@ done
 mkdir -p "$(dirname "$TEXT_PLANE")" "$(dirname "$QMP_SOCKET")" \
     "$(dirname "$REMOTE_DESKTOP_QMP_SOCKET")" \
     "$(dirname "$PANIC_LOG")" "$STATE_ROOT"
+[ ! -L "$STATE_ROOT/config" ] || {
+    echo "Astra config store must not be a symlink" >&2; exit 1;
+}
+install -d -o root -g root -m 0700 "$STATE_ROOT/config"
+[ "$(stat -c '%u %a' -- "$STATE_ROOT/config")" = "0 700" ] || {
+    echo "Astra config store must be root-owned and private" >&2; exit 1;
+}
 exec 9>"$RUN_ROOT/runtime.lock"
 if ! flock -n 9; then
     echo "Astra runtime is already active" >&2
@@ -234,6 +241,7 @@ exec env ASTRA_TEXT_PLANE_PATH="$TEXT_PLANE" \
     "$STORAGE_PROVIDER" --uid "$QEMU_UID" --gid "$QEMU_GID" \
     --system "$STORAGE" "$storage_offset" "$storage_length" "$storage_uuid" \
     --work "$EXPORTS_ROOT/work" --sound "$EXPORTS_ROOT/sound" \
+    --config-store "$STATE_ROOT/config" \
     --limits 8388608 8388608 4 10000 4 100663296 8192 67108864 4096 33554432 4096 \
     --discovery udev --seed-sound "$sound_seed" -- "$QEMU" \
     -object memory-backend-ram,id=astra-ram,size="$MEMORY",prealloc=on \

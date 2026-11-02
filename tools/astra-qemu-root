@@ -22,6 +22,7 @@
 #              free space under R, then fallocates the whole size before
 #              copying, so the space is reserved when it is checked.
 #   R/exports  disposable root-owned WORK/SOUND exports, observation only.
+#   R/config   private Config Kit store, never announced to observers.
 #   R/provider.pid the installed provider launcher/guardian PID, 0644. Its peer PID is
 #              announced by the provider after the credential-safe fork.
 #
@@ -133,7 +134,10 @@ R=$(mktemp -d "$BASE/astra-qemu-root.XXXXXX") || die "mktemp failed"
 # reach it through R/mnt.
 chown "0:$SUDO_GID" -- "$R"
 chmod 0710 -- "$R"
-mkdir -m 0700 -- "$R/exports" "$R/exports/work" "$R/exports/sound"
+mkdir -m 0750 -- "$R/exports" "$R/exports/work" "$R/exports/sound"
+chown "0:$SUDO_GID" -- "$R/exports" "$R/exports/work" "$R/exports/sound"
+chmod 2750 -- "$R/exports/work" "$R/exports/sound"
+mkdir -m 0700 -- "$R/config"
 PIDFILE=$R/provider.pid
 
 # mkdir never follows a symlink; stat (no -L) answers for the entry
@@ -209,11 +213,14 @@ ENV_ARGS=(env -i "PATH=/usr/sbin:/usr/bin:/sbin:/bin")
 [ -n "$TZ_OVERRIDE" ] && ENV_ARGS+=("TZ=$TZ_OVERRIDE")
 
 echo "ASTRA-QEMU-ROOT-EXPORTS $R/exports"
-"${ENV_ARGS[@]}" "$PROVIDER" --uid "$SUDO_UID" --gid "$SUDO_GID" \
-    --system "$R/img" "$offset" "$length" "$uuid" \
-    --work "$R/exports/work" --sound "$R/exports/sound" \
-    --limits 8388608 8388608 4 10000 4 100663296 8192 67108864 4096 33554432 4096 \
-    --discovery none --seed-sound none -- "$@" &
+(
+    umask 0027
+    exec "${ENV_ARGS[@]}" "$PROVIDER" --uid "$SUDO_UID" --gid "$SUDO_GID" \
+        --system "$R/img" "$offset" "$length" "$uuid" \
+        --work "$R/exports/work" --sound "$R/exports/sound" --config-store "$R/config" \
+        --limits 8388608 8388608 4 10000 4 100663296 8192 67108864 4096 33554432 4096 \
+        --discovery none --seed-sound none -- "$@"
+) &
 child=$!
 echo "$child" > "$PIDFILE"
 chmod 0644 -- "$PIDFILE"

@@ -38,6 +38,7 @@ STORAGE_PROVIDER_SOURCES := astra_storage_provider.c astra_storage_discovery.c a
 	astra_storage_names.c astra_storage_mount.c astra_storage_probe.c astra_storage_path.c astra_storage_work.c \
 	astra_storage_transport.c \
 	$(STORAGE_RESOLVER)/astra68-resolve.c $(ROOT)/sw/common/utf8.c $(ROOT)/sw/common/crc32.c
+STORAGE_MAIN_SOURCES := astra_storage_main.c astra_storage_secret.c astra_storage_config.c
 FONT_CONVERT_SOURCES := astra_font_convert.c astra_amiga_font.c test_font_convert.c \
 	$(ROOT)/sw/common/utf8.c
 FONT_WORKER_SOURCES := astra_font_convert.c astra_amiga_font.c astra_font_worker.c \
@@ -77,6 +78,7 @@ REMOTE_LDFLAGS := --sysroot=$(DE25_SYSROOT) \
 .PHONY: storage-provider storage-provider-target storage-partition-worker-target
 .PHONY: storage-launcher-test
 .PHONY: storage-secret-test config-secret-aead-test
+.PHONY: storage-config-test
 .PHONY: storage-names-test
 .PHONY: codec-provider-test
 
@@ -253,16 +255,24 @@ $(OUT)/test-partition-worker-aarch64: $(STORAGE_PROVIDER_SOURCES) \
 		-Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu \
 		-lblkid -lmount -ludev
 
-$(OUT)/astra-storage: $(STORAGE_PROVIDER_SOURCES) astra_storage_main.c astra_storage_secret.c $(STORAGE_HEADERS) astra_storage_secret.h Makefile
+$(OUT)/astra-storage: $(STORAGE_PROVIDER_SOURCES) $(STORAGE_MAIN_SOURCES) $(STORAGE_HEADERS) astra_storage_secret.h astra_storage_config.h Makefile
 	mkdir -p $(OUT)
 	$(HOST_CC) $(STORAGE_CATALOG_FLAGS) -I$(STORAGE_RESOLVER) \
-		$(STORAGE_PROVIDER_SOURCES) astra_storage_main.c astra_storage_secret.c -o $@ -lblkid -lmount -ludev
+		$(STORAGE_PROVIDER_SOURCES) $(STORAGE_MAIN_SOURCES) -o $@ -lblkid -lmount -ludev
 
-$(OUT)/astra-storage-aarch64: $(STORAGE_PROVIDER_SOURCES) astra_storage_main.c astra_storage_secret.c $(STORAGE_HEADERS) astra_storage_secret.h Makefile
+$(OUT)/astra-storage-aarch64: $(STORAGE_PROVIDER_SOURCES) $(STORAGE_MAIN_SOURCES) $(STORAGE_HEADERS) astra_storage_secret.h astra_storage_config.h Makefile
 	mkdir -p $(OUT)
 	$(CC) $(REMOTE_CFLAGS) -std=gnu11 -I$(ROOT)/ndk/include -I$(STORAGE_RESOLVER) \
-		$(STORAGE_PROVIDER_SOURCES) astra_storage_main.c astra_storage_secret.c -o $@ \
+		$(STORAGE_PROVIDER_SOURCES) $(STORAGE_MAIN_SOURCES) -o $@ \
 		-Wl,-rpath-link,$(DE25_SYSROOT)/usr/lib/aarch64-linux-gnu -lblkid -lmount -ludev
+
+$(OUT)/test-storage-config: astra_storage_config.c test_storage_config.c astra_storage_config.h Makefile
+	mkdir -p $(OUT)
+	$(HOST_CC) -std=gnu11 -O2 -Wall -Wextra -Werror \
+		astra_storage_config.c test_storage_config.c -o $@
+
+storage-config-test: $(OUT)/test-storage-config
+	$(OUT)/test-storage-config
 
 all: $(CERTIFIER) $(BANDWIDTH)
 

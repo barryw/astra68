@@ -17,6 +17,7 @@
 #include <astra/vfs_port_transport.h>
 
 static AstraVfsClient *vfs_client;
+static AstraVfsClient *config_client;
 static AstraAssignTable vfs_assigns = ASTRA_ASSIGN_TABLE_INIT;
 static uint32_t vfs_handle;
 
@@ -45,16 +46,6 @@ bind_standard_assigns(void)
                             ASTRA_RIGHT_READ, "services");
     (void)astra_assign_bind(&vfs_assigns, "STARTUP", vfs_handle,
                             ASTRA_RIGHT_READ, "startup");
-    status = astra_vfs_mkdir(vfs_client, "/config");
-    if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
-        (void)astra_assign_bind(&vfs_assigns, "CONFIG", vfs_handle,
-                                ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE,
-                                "config");
-    } else {
-        ASTRA_EVENT1(ASTRA_EVENT_SUBSYSTEM_SUPERVISOR,
-                     ASTRA_EVENT_LEVEL_WARNING,
-                     "/config/ unbound, mkdir refused with status %u", status);
-    }
     status = astra_vfs_mkdir(vfs_client, "/libs");
     if (status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS) {
         (void)astra_assign_bind(&vfs_assigns, "LIBS", vfs_handle,
@@ -144,6 +135,33 @@ supervisor_vfs_bind_system(AstraVfsClient *client, uint32_t port_handle)
     /* Binding uses the client, so the client has to be usable first. */
     bind_standard_assigns();
     return 1;
+}
+
+int supervisor_vfs_bind_config(AstraVfsClient *client, uint32_t port_handle)
+{
+    if (client == NULL || port_handle == 0u || config_client != NULL)
+        return 0;
+    config_client = client;
+    if (astra_assign_bind(&vfs_assigns, "CONFIG", port_handle,
+                          ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE,
+                          "config") != ASTRA_VFS_OK) {
+        config_client = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+void supervisor_vfs_unbind_config(AstraVfsClient *client)
+{
+    if (config_client == client) {
+        (void)astra_assign_unbind(&vfs_assigns, "CONFIG");
+        config_client = NULL;
+    }
+}
+
+AstraVfsClient *supervisor_vfs_config_client(void)
+{
+    return config_client;
 }
 
 void supervisor_vfs_unbind_system(AstraVfsClient *client)

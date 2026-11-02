@@ -5,6 +5,11 @@ includes this facility. Production host key was generated on first start;
 private certification covered seal/open, restart, and ordinary-channel denial.
 See `docs/CURRENT_STATE.md` for release evidence.
 
+The next private-storage candidate moves the owner documents from readable
+DH0 into root-owned host state. That host state and `config-secret.key` form
+one backup and restore set; an image alone no longer contains saved settings.
+This migration is not yet released on DE25.
+
 Config Kit 1.2 added `astra_config_set_secret` and
 `astra_config_get_secret`. A caller must already hold a scoped `CONFIG` or
 `CONFIG_SYSTEM` grant and the resident-only `HOST_SECRETS` grant. Each value is stored

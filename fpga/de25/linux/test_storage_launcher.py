@@ -36,7 +36,8 @@ def command(provider, image, work, uid, gid, uuid=UUID, consumer=()):
     return privileged("env", f"ASTRA_STORAGE_SECRET_KEY_PATH={work / 'host-state' / 'config-secret.key'}",
             str(provider), "--uid", str(uid), "--gid", str(gid),
             "--system", str(image), str(OFFSET), str(LENGTH), uuid,
-            "--work", str(work), "--sound", str(work), "--limits",
+            "--work", str(work), "--sound", str(work),
+            "--config-store", str(work / "host-state"), "--limits",
             "1048576", "1048576", "2", "5000", "2", "2097152", "64",
             "1048576", "32", "1048576", "32", "--discovery", "none", "--seed-sound", "none", "--", *map(str, consumer))
 
@@ -67,6 +68,8 @@ def main():
         (seed / "home").mkdir(parents=True)
         (seed / "home" / "private").write_text("private-data")
         (seed / "home" / "private").chmod(0o600)
+        (seed / "config" / "services" / "hostfs").mkdir(parents=True)
+        (seed / "config" / "services" / "hostfs" / "settings.conf").write_text("owner_files 1024\n")
         # Root ownership is data, not permission policy rewritten for the client.
         subprocess.run(privileged("chown", "-R", "0:0", str(seed)), check=True)
         filesystem = work / "filesystem.ext4"
@@ -93,6 +96,11 @@ def main():
             data = subprocess.run(["debugfs", "-R", "cat /home/private", str(filesystem)],
                                   check=True, capture_output=True, text=True).stdout
             assert data == "private-dataAstra", data
+            private = work / "host-state" / "config" / "services" / "hostfs" / "settings.conf"
+            assert subprocess.check_output(privileged("cat", str(private)), text=True) == "owner_files 1024\n"
+            public = subprocess.run(["debugfs", "-R", "cat /config/services/hostfs/settings.conf",
+                                     str(filesystem)], check=True, capture_output=True, text=True)
+            assert "File not found" in public.stderr, public
 
         reset()
         cmd = command(provider, image, work, uid, gid, consumer=(client, uid, gid))

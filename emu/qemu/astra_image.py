@@ -172,7 +172,7 @@ PROVIDER_INDEX_MAX = (PROVIDER_INDEX_HEADER.size + VFS_PATH_MAX -
 # application, and anything unmarked at 16 (sw/include/astra/process.h).
 DISPLAY_STARTUP_MANIFEST = (
     "service /services/hostfs grants HOST_FILESYSTEM "
-    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE VOLUME_DELEGATE critical priority=20\n"
+    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw CONFIG:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE VOLUME_DELEGATE critical priority=20\n"
     "service /services/posixd grants serves POSIX_PROCESS required priority=20\n"
     "service /services/entropy grants HOST_DEVICE "
     "serves ENTROPY required priority=20\n"

@@ -2,6 +2,7 @@
 #include "astra_storage_provider.h"
 #include "astra_storage_discovery.h"
 #include "astra_storage_secret.h"
+#include "astra_storage_config.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -30,6 +31,7 @@ typedef struct StorageConfig {
     const char *uuid;
     const char *work;
     const char *sound;
+    const char *config_store;
     const char *seed_sound;
     uint64_t offset, length;
     size_t metadata, resources;
@@ -69,24 +71,25 @@ static int config(int argc, char **argv, StorageConfig *out)
 {
     uint64_t values[13];
     /* One exact configuration, with no implicit resource or storage fallback. */
-    if (argc < 26 || strcmp(argv[1], "--uid") != 0 ||
+    if (argc < 28 || strcmp(argv[1], "--uid") != 0 ||
         strcmp(argv[3], "--gid") != 0 || strcmp(argv[5], "--system") != 0 ||
         strcmp(argv[10], "--work") != 0 || strcmp(argv[12], "--sound") != 0 ||
-        strcmp(argv[14], "--limits") != 0)
+        strcmp(argv[14], "--config-store") != 0 ||
+        strcmp(argv[16], "--limits") != 0)
         return EINVAL;
-    unsigned slots[] = {2, 4, 7, 8, 15, 16, 17, 18, 19, 20, 21, 22, 23};
+    unsigned slots[] = {2, 4, 7, 8, 17, 18, 19, 20, 21, 22, 23, 24, 25};
     /* Remaining tmp limits follow ram0 limits; command starts after '--'. */
-    if (argc < 32 || strcmp(argv[26], "--discovery") != 0 ||
-        strcmp(argv[28], "--seed-sound") != 0 || strcmp(argv[30], "--") != 0 ||
-        (strcmp(argv[29], "none") != 0 && argv[29][0] != '/') ||
-        (strcmp(argv[27], "none") != 0 && strcmp(argv[27], "udev") != 0))
+    if (argc < 34 || strcmp(argv[28], "--discovery") != 0 ||
+        strcmp(argv[30], "--seed-sound") != 0 || strcmp(argv[32], "--") != 0 ||
+        (strcmp(argv[31], "none") != 0 && argv[31][0] != '/') ||
+        (strcmp(argv[29], "none") != 0 && strcmp(argv[29], "udev") != 0))
         return EINVAL;
     for (unsigned at = 0; at < sizeof(slots) / sizeof(slots[0]); ++at)
         if (number(argv[slots[at]], UINT64_MAX, &values[at]) != 0)
             return EINVAL;
     uint64_t tmp_bytes, tmp_inodes;
-    if (number(argv[24], UINT64_MAX, &tmp_bytes) != 0 ||
-        number(argv[25], UINT64_MAX, &tmp_inodes) != 0 ||
+    if (number(argv[26], UINT64_MAX, &tmp_bytes) != 0 ||
+        number(argv[27], UINT64_MAX, &tmp_inodes) != 0 ||
         values[0] == 0u || values[0] >= UINT32_MAX ||
         values[1] == 0u || values[1] >= UINT32_MAX ||
         values[4] == 0u || values[4] > SIZE_MAX || values[5] == 0u || values[5] > SIZE_MAX ||
@@ -98,18 +101,20 @@ static int config(int argc, char **argv, StorageConfig *out)
         values[11] > values[9] || tmp_bytes > values[9] - values[11] ||
         values[12] > values[10] || tmp_inodes > values[10] - values[12] ||
         argv[6][0] != '/' || argv[11][0] != '/' || argv[13][0] != '/' ||
+        argv[15][0] != '/' ||
         argv[9][0] == '\0' || strlen(argv[9]) >= sizeof(((AstraStorageRecord *)0)->uuid))
         return EINVAL;
     *out = (StorageConfig){.uid = (uid_t)values[0], .gid = (gid_t)values[1],
         .system = argv[6], .offset = values[2], .length = values[3], .uuid = argv[9],
-        .work = argv[11], .sound = argv[13], .metadata = (size_t)values[4],
+        .work = argv[11], .sound = argv[13], .config_store = argv[15],
+        .metadata = (size_t)values[4],
         .resources = (size_t)values[5], .probes = (uint32_t)values[6],
         .timeout = (uint32_t)values[7], .workers = (uint32_t)values[8],
         .ram_bytes = values[9], .ram_inodes = values[10],
         .ram0_bytes = values[11], .ram0_inodes = values[12],
-        .tmp_bytes = tmp_bytes, .tmp_inodes = tmp_inodes, .command = &argv[31],
-        .seed_sound = strcmp(argv[29], "none") == 0 ? NULL : argv[29],
-        .discovery = strcmp(argv[27], "udev") == 0};
+        .tmp_bytes = tmp_bytes, .tmp_inodes = tmp_inodes, .command = &argv[33],
+        .seed_sound = strcmp(argv[31], "none") == 0 ? NULL : argv[31],
+        .discovery = strcmp(argv[29], "udev") == 0};
     return 0;
 }
 
@@ -141,7 +146,8 @@ static int await_state(AstraStorageProvider *provider, uint64_t id, uint32_t sta
 }
 
 static int mount_source(AstraStorageProvider *provider, uint64_t source,
-                         uint32_t flags, uint64_t bytes, uint64_t inodes)
+                         uint32_t flags, uint64_t bytes, uint64_t inodes,
+                         uint64_t *mount_id)
 {
     uint64_t mounted;
     const AstraStorageRecord *record = astra_storage_find(&provider->catalog, source);
@@ -149,13 +155,15 @@ static int mount_source(AstraStorageProvider *provider, uint64_t source,
         return ESTALE;
     int error = astra_storage_provider_mount(provider, source, record->generation,
         flags, bytes, inodes, &mounted);
-    return error != 0 ? error : await_state(provider, mounted, ASTRA_VOLUME_MOUNTED);
+    if (error == 0) error = await_state(provider, mounted, ASTRA_VOLUME_MOUNTED);
+    if (error == 0 && mount_id != NULL) *mount_id = mounted;
+    return error;
 }
 
 static int provision(AstraStorageProvider *provider, const StorageConfig *settings)
 {
     struct stat info;
-    uint64_t source, binding;
+    uint64_t source, binding, system_mount = 0u;
     int fd = trusted_open(settings->system, O_RDWR);
     if (fd < 0)
         return errno;
@@ -173,10 +181,22 @@ static int provision(AstraStorageProvider *provider, const StorageConfig *settin
     const AstraStorageRecord *record = astra_storage_find(&provider->catalog, source);
     if (record->format != ASTRA_VOLUME_EXT4 || strcmp(record->uuid, settings->uuid) != 0)
         return ENODEV;
-    error = mount_source(provider, source, ASTRA_VOLUME_SYSTEM, 0u, 0u);
-    const char *paths[] = {settings->work, settings->sound};
-    const char *names[] = {"/work", "/sound"};
-    for (unsigned at = 0u; error == 0 && at < 2u; ++at) {
+    error = mount_source(provider, source, ASTRA_VOLUME_SYSTEM, 0u, 0u,
+                         &system_mount);
+    if (error == 0) {
+        const AstraStorageRecord *mounted = astra_storage_find(&provider->catalog, system_mount);
+        int root = -1;
+        int target = trusted_open(settings->config_store, O_RDONLY | O_DIRECTORY);
+        error = target < 0 ? errno :
+            astra_storage_provider_root(provider, system_mount, mounted->generation, &root);
+        if (error == 0) error = astra_storage_config_migrate(root, target);
+        if (root >= 0) close(root);
+        if (target >= 0) close(target);
+    }
+    const char *paths[] = {settings->work, settings->sound,
+                           settings->config_store};
+    const char *names[] = {"/work", "/sound", "/config-store"};
+    for (unsigned at = 0u; error == 0 && at < 3u; ++at) {
         fd = trusted_open(paths[at], O_PATH | O_DIRECTORY);
         if (fd < 0)
             return errno;
@@ -198,7 +218,7 @@ static int provision(AstraStorageProvider *provider, const StorageConfig *settin
         if (error == 0)
             error = mount_source(provider, source, at == 0u ? 0u : ASTRA_VOLUME_TEMPORARY,
                 at == 0u ? settings->ram0_bytes : settings->tmp_bytes,
-                at == 0u ? settings->ram0_inodes : settings->tmp_inodes);
+                at == 0u ? settings->ram0_inodes : settings->tmp_inodes, NULL);
     }
     return error;
 }
@@ -348,7 +368,7 @@ int main(int argc, char **argv)
     StorageConfig settings;
     if (geteuid() != 0 || getuid() != 0 || config(argc, argv, &settings) != 0) {
         fputs("usage (root service only): astra-storage --uid UID --gid GID "
-            "--system IMAGE OFFSET LENGTH UUID --work DIR --sound DIR "
+            "--system IMAGE OFFSET LENGTH UUID --work DIR --sound DIR --config-store DIR "
             "--limits METADATA RESOURCES PROBES TIMEOUT_MS WORKERS RAM_BYTES RAM_INODES "
             "RAM0_BYTES RAM0_INODES TMP_BYTES TMP_INODES --discovery none|udev "
             "--seed-sound none|DIRECTORY -- COMMAND [ARGS...]\n", stderr);

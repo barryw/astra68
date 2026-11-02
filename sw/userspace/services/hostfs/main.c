@@ -1201,9 +1201,11 @@ int astra_main(const AstraStartupInfo *startup)
     uint32_t ram_write_receive = 0u, ram_write_send = 0u;
     AstraVolumeReference ram_source = {0};
     uint32_t status = ASTRA_STATUS_OK;
-    const char *const names[] = {"/dh0", "/work", "/sound", "/tmp"};
-    uint32_t published[14] = {0};
+    const char *const names[] = {"/dh0", "/work", "/sound", "/tmp",
+                                 "/config-store"};
+    uint32_t published[15] = {0};
     AstraVolumeReference system;
+    AstraVolumeReference config_store;
     AstraVfsHostBackend system_backend;
     uint32_t config_session = 0u;
 
@@ -1222,8 +1224,11 @@ int astra_main(const AstraStartupInfo *startup)
         status = astra_vfs_host_lookup_mount(&transport, transport.generation,
             "/dh0", ASTRA_VOLUME_SYSTEM, &initial_volumes, &system);
     if (status == ASTRA_VFS_OK)
+        status = astra_vfs_host_lookup_mount(&transport, transport.generation,
+            "/config-store", 0u, &initial_volumes, &config_store);
+    if (status == ASTRA_VFS_OK)
         status = astra_vfs_host_session_open(&transport, transport.generation,
-            0u, &system, "/", ASTRA_HOST_FS_SESSION_READ_ONLY, 0u, &config_session);
+            0u, &config_store, "/", ASTRA_HOST_FS_SESSION_READ_ONLY, 0u, &config_session);
     if (status == ASTRA_VFS_OK) {
         if (!astra_vfs_host_init(&system_backend, &transport, transport.generation, config_session))
             status = ASTRA_STATUS_INVALID;
@@ -1234,7 +1239,7 @@ int astra_main(const AstraStartupInfo *startup)
             status = closed;
     }
     if (status == ASTRA_STATUS_OK) status = configured_ram_source(&ram_source);
-    for (uint32_t index = 0u; index < 4u && status == ASTRA_STATUS_OK; ++index) {
+    for (uint32_t index = 0u; index < 5u && status == ASTRA_STATUS_OK; ++index) {
         AstraVolumeReference reference;
         status = astra_vfs_host_lookup_mount(&transport, transport.generation,
             names[index], 0u, &initial_volumes, &reference);
@@ -1290,17 +1295,17 @@ int astra_main(const AstraStartupInfo *startup)
     volume_port.format = hostfs_volume_format;
     volume_port.partition = hostfs_volume_partition;
     volume_port.usage = hostfs_volume_usage;
-    published[4] = metrics_send;
-    published[5] = volume_send;
-    published[6] = volume_read_send;
-    published[7] = volume_write_send;
-    published[8] = volume_admin_send;
-    published[9] = volume_usage_send;
-    published[10] = volume_disk_send;
-    published[11] = ram_read_send;
-    published[12] = ram_write_send;
-    published[13] = volume_delegate_send;
-    uint32_t ready = astra_service_ready_managed(bootstrap->handle, status, published, 14u, shutdown_send);
+    published[5] = metrics_send;
+    published[6] = volume_send;
+    published[7] = volume_read_send;
+    published[8] = volume_write_send;
+    published[9] = volume_admin_send;
+    published[10] = volume_usage_send;
+    published[11] = volume_disk_send;
+    published[12] = ram_read_send;
+    published[13] = ram_write_send;
+    published[14] = volume_delegate_send;
+    uint32_t ready = astra_service_ready_managed(bootstrap->handle, status, published, 15u, shutdown_send);
     if (ready != ASTRA_SYSCALL_OK && status == ASTRA_STATUS_OK)
         status = HOSTFS_FAIL_READY;
     if (shutdown_send != 0u)

@@ -69,9 +69,12 @@ def provider_command(provider, image, exports, uid, gid, discovery="none"):
     exports = Path(exports).resolve()
     for name in ("work", "sound"):
         (exports / name).mkdir(parents=True, exist_ok=True)
+    config_store = exports.parent / "config"
+    config_store.mkdir(mode=0o700, parents=True, exist_ok=True)
     return [str(Path(provider).resolve()), "--uid", str(uid), "--gid", str(gid),
             "--system", str(Path(image).resolve()), str(offset), str(length), uuid,
             "--work", str(exports / "work"), "--sound", str(exports / "sound"),
+            "--config-store", str(config_store),
             "--limits", "8388608", "8388608", "4", "10000", "4",
             "100663296", "8192", "67108864", "4096", "33554432", "4096",
             "--discovery", discovery, "--seed-sound", "none", "--"]

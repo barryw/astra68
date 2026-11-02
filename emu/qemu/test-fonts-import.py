@@ -3,6 +3,7 @@
 
 import argparse
 import importlib.util
+import os
 from pathlib import Path
 import re
 import shutil
@@ -33,6 +34,9 @@ def stored_objects(image, work):
 
 
 def selected_setting(image, work):
+    private = Path(work) / "config/config/system/fonts/settings.conf"
+    if private.is_file():
+        return private.read_text(encoding="utf-8")
     offset, length = astra_image.ext4_partition(image)
     volume = str(Path(work) / "inspect-volume.ext4")
     astra_image._slice(image, offset, length, volume)
@@ -72,6 +76,8 @@ def boot(qemu, rom, image, work, phase):
 
 
 def main():
+    if os.geteuid() != 0:
+        raise SystemExit("font persistence gate requires root observer with persistent private Config Kit state")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("qemu")
     parser.add_argument("rom")
@@ -113,12 +119,10 @@ def main():
         astra_image._replace_volume_file(
             image, str(removed), "/expect-font-uninstalled")
         boot(args.qemu, args.rom, image, work, "uninstall restart")
-        settings = Path(work) / "damaged-settings"
+        settings = Path(work) / "config/config/system/fonts/settings.conf"
         settings.write_text(
             "astra-config 1\nschema 1\ninstalled = invalid\n"
             "system_font = user:missing\n", encoding="ascii")
-        astra_image._replace_volume_file(
-            image, str(settings), "/config/system/fonts/settings.conf")
         marker = Path(work) / "expect-corrupt"
         marker.write_text("corrupt\n", encoding="ascii")
         astra_image._replace_volume_file(

@@ -301,6 +301,8 @@ static uint32_t private_config_root(const SupervisorManifestEntry *entry,
 {
     AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(3u);
     if (path_storage.bytes == NULL) { return ASTRA_CONFIG_NO_MEMORY; }
+    AstraVfsClient *client = supervisor_vfs_config_client();
+    if (client == NULL) return ASTRA_CONFIG_IO;
 
     char *path = astra_vfs_path_storage_at(&path_storage, 0u);
     const char *legacy_owner = private_store_root(entry);
@@ -312,7 +314,7 @@ static uint32_t private_config_root(const SupervisorManifestEntry *entry,
             ASTRA_CONFIG_OK ||
         !astra_string_concat(path, ASTRA_VFS_PATH_MAX, out))
         return ASTRA_CONFIG_BUFFER_TOO_SMALL;
-    uint32_t status = astra_vfs_mkdir_mode(supervisor_vfs_client(), path, 0700u);
+    uint32_t status = astra_vfs_mkdir_mode(client, path, 0700u);
     if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS)
         return ASTRA_CONFIG_IO;
     (void)strcpy(path, "/");
@@ -336,9 +338,9 @@ static uint32_t private_config_root(const SupervisorManifestEntry *entry,
                 !astra_string_concat(path, ASTRA_VFS_PATH_MAX, out))
                 return ASTRA_CONFIG_BUFFER_TOO_SMALL;
             uint32_t old_status = astra_vfs_stat_meta(
-                supervisor_vfs_client(), old_path, &old_info);
+                client, old_path, &old_info);
             uint32_t new_status = astra_vfs_stat_meta(
-                supervisor_vfs_client(), path, &new_info);
+                client, path, &new_info);
             if ((old_status != ASTRA_VFS_OK &&
                  old_status != ASTRA_VFS_ERR_NOT_FOUND) ||
                 (new_status != ASTRA_VFS_OK &&
@@ -350,7 +352,7 @@ static uint32_t private_config_root(const SupervisorManifestEntry *entry,
             if (old_status == ASTRA_VFS_OK &&
                 old_info.kind == ASTRA_VFS_KIND_DIRECTORY &&
                 new_status == ASTRA_VFS_ERR_NOT_FOUND &&
-                astra_vfs_rename(supervisor_vfs_client(), old_path, path) !=
+                astra_vfs_rename(client, old_path, path) !=
                     ASTRA_VFS_OK)
                 return ASTRA_CONFIG_IO;
             path[1] = '\0';
@@ -361,7 +363,7 @@ static uint32_t private_config_root(const SupervisorManifestEntry *entry,
      * process receives any read or write authority over it. */
     if (!astra_string_concat(path, ASTRA_VFS_PATH_MAX, out))
         return ASTRA_CONFIG_BUFFER_TOO_SMALL;
-    status = astra_vfs_mkdir_mode(supervisor_vfs_client(), path, 0700u);
+    status = astra_vfs_mkdir_mode(client, path, 0700u);
     return status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS ? ASTRA_CONFIG_OK : ASTRA_CONFIG_IO;
 }
 
@@ -548,7 +550,7 @@ static uint32_t service_file_write(const char *name, const char *leaf,
     AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(3u);
     if (path_storage.bytes == NULL) { return ASTRA_STATUS_LIMIT; }
 
-    AstraVfsClient *client = supervisor_vfs_client();
+    AstraVfsClient *client = supervisor_vfs_config_client();
     AstraVfsFile file = ASTRA_VFS_FILE_INVALID;
     char *directory = astra_vfs_path_storage_at(&path_storage, 0u);
     char *path = astra_vfs_path_storage_at(&path_storage, 1u);
@@ -1717,6 +1719,8 @@ static uint32_t publish(const SupervisorManifestPublication *publication,
         supervisor_vfs_register(client, handle) == 0u ||
         (strcmp(publication->name, "SYSTEM") == 0 ?
             !supervisor_vfs_bind_system(client, handle) :
+         strcmp(publication->name, ASTRA_CONFIG_CAPABILITY) == 0 ?
+            !supervisor_vfs_bind_config(client, handle) :
             astra_assign_bind(supervisor_assigns(), publication->name, handle,
                               publication->rights, "") != ASTRA_VFS_OK)) {
         supervisor_vfs_unregister(client);
@@ -2195,6 +2199,7 @@ static void unpublish_owner(const char *owner)
             (void)astra_assign_unbind(supervisor_assigns(),
                                       service_names[index]);
             supervisor_vfs_unbind_system(service_clients[index]);
+            supervisor_vfs_unbind_config(service_clients[index]);
             supervisor_vfs_unregister(service_clients[index]);
             (void)astra_vfs_disconnect(service_clients[index]);
             astra_runtime_deallocate(service_clients[index]);
@@ -2481,7 +2486,7 @@ static uint32_t dynamic_definition_remove(const char *name)
     AstraVfsPathStorage path_storage ASTRA_AUTO_VFS_PATH_STORAGE = astra_vfs_path_storage_open(2u);
     if (path_storage.bytes == NULL) { return ASTRA_STATUS_LIMIT; }
 
-    AstraVfsClient *client = supervisor_vfs_client();
+    AstraVfsClient *client = supervisor_vfs_config_client();
     char *path = astra_vfs_path_storage_at(&path_storage, 0u);
     char *directory = astra_vfs_path_storage_at(&path_storage, 1u);
     uint32_t status;
@@ -2654,7 +2659,7 @@ static uint32_t list_service(const AstraStartupInfo *startup,
             ASTRA_STATUS_NOT_FOUND : ASTRA_STATUS_INVALID;
     }
     {
-        AstraVfsClient *client = supervisor_vfs_client();
+        AstraVfsClient *client = supervisor_vfs_config_client();
         uint64_t position = cursor->source == ASTRA_SERVICE_LIST_SOURCE_DYNAMIC ?
             cursor->position : 0u;
 
@@ -3617,7 +3622,7 @@ uint32_t supervisor_loader_start(const AstraStartupInfo *startup)
     }
     {
         uint32_t create_status = astra_vfs_mkdir_mode(
-            supervisor_vfs_client(), SERVICE_DEFINITION_DIRECTORY, 0700u);
+            supervisor_vfs_config_client(), SERVICE_DEFINITION_DIRECTORY, 0700u);
 
         if (create_status != ASTRA_VFS_OK &&
             create_status != ASTRA_VFS_ERR_EXISTS)

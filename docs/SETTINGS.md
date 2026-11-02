@@ -1,7 +1,7 @@
 # Astra settings ownership
 
 Config Kit is Astra's settings substrate. It stores small, versioned, human-readable
-`astra-config` documents on the writable system volume. There is no central
+`astra-config` documents in the private host state behind the `CONFIG` export. There is no central
 registry database or global key namespace. A setting belongs to one component;
 that component validates its values and defines defaults.
 
@@ -19,7 +19,11 @@ directories, and grants only requested rights. Ordinary apps cannot request
 `CONFIG_SYSTEM`; system services cannot delegate that grant. Config Kit opens
 the selected grant, checks read/write rights, validates the document's format
 and schema version, and writes a temporary file, syncs it, then renames it over
-the old document. Installers preserve `/config` rather than replacing user data.
+the old document. The root storage provider migrates the former system-image
+`/config` tree into root-owned host state before publishing volumes or starting
+QEMU. It keeps owner paths and metadata, then removes the readable system-image
+copy. The host state must be backed up and restored with the system image and
+the host-held secret key. Installers must preserve that state across releases.
 
 System components own system policy; apps own app preferences. A settings UI
 asks the owning service to change system policy through a typed, validated
@@ -147,3 +151,8 @@ contracts. The native Settings shell also reviewed
 `src/apps/deskbar/PreferencesWindow.cpp`: grouped navigation and owner-specific
 panes informed the shared sidebar and typed Dock API. Haiku checkout remains
 read-only.
+The private-store change also reviewed
+`src/system/kernel/fs/vfs.cpp` for server-enforced path authority and
+`src/servers/keystore/KeyStoreServer.cpp` plus `Keyring.cpp` for service-owned
+secrets and caller checks. Astra keeps Config Kit's provider-rooted grants;
+the storage provider moves settings out of broadly readable DH0 before boot.

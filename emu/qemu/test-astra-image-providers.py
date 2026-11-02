@@ -318,7 +318,7 @@ assert startup[1] == \
     "service /services/posixd grants serves POSIX_PROCESS required priority=20"
 assert startup[0] == \
     "service /services/hostfs grants HOST_FILESYSTEM " \
-    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE VOLUME_DELEGATE critical priority=20"
+    "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw CONFIG:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE VOLUME_DELEGATE critical priority=20"
 assert startup[2] == \
     "service /services/entropy grants HOST_DEVICE serves ENTROPY required priority=20"
 

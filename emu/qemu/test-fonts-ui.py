@@ -130,18 +130,23 @@ def wait_live_font(machine, prefix, trace_before, syslog_before, glyphs_before):
 
 
 def state_on_disk(image, work):
-    offset, length = astra_image.ext4_partition(image)
-    volume = str(Path(work) / "inspect-volume.ext4")
-    astra_image._slice(image, offset, length, volume)
-    result = subprocess.run([
-        "debugfs", "-R", "cat /config/system/fonts/settings.conf", volume],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    if result.returncode != 0 or "while " in result.stdout:
-        raise RuntimeError("cannot inspect Fonts settings: " + result.stdout)
-    match = re.search(r"^system_font\s*=\s*(\S+)\s*$", result.stdout,
+    private = Path(work) / "config/config/system/fonts/settings.conf"
+    if private.is_file():
+        settings_text = private.read_text(encoding="utf-8")
+    else:
+        offset, length = astra_image.ext4_partition(image)
+        volume = str(Path(work) / "inspect-volume.ext4")
+        astra_image._slice(image, offset, length, volume)
+        result = subprocess.run([
+            "debugfs", "-R", "cat /config/system/fonts/settings.conf", volume],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if result.returncode != 0 or "while " in result.stdout:
+            raise RuntimeError("cannot inspect Fonts settings: " + result.stdout)
+        settings_text = result.stdout
+    match = re.search(r"^system_font\s*=\s*(\S+)\s*$", settings_text,
                       re.MULTILINE)
     choice = None if match is None else match.group(1).strip('"')
-    inventory = re.search(r"^installed\s*=\s*(\S+)\s*$", result.stdout,
+    inventory = re.search(r"^installed\s*=\s*(\S+)\s*$", settings_text,
                           re.MULTILINE)
     return choice, None if inventory is None else inventory.group(1).strip('"')
 
@@ -208,6 +213,8 @@ def main():
     fixture.add_argument("--long-notice", action="store_true",
                         help="read and copy a complete 32 KiB multilingual license")
     args = parser.parse_args()
+    if os.geteuid() != 0:
+        parser.error("font persistence gate requires root observer with persistent private Config Kit state")
     if args.cancel_first and (args.font is None or args.long_style or
                               args.unsupported_preview or args.long_notice):
         parser.error("--cancel-first requires an outline font")

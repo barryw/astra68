@@ -59,6 +59,9 @@ supervisor_vfs_client_table_reserve(SupervisorVfsClientTable *table,
  */
 int supervisor_vfs_bind_system(AstraVfsClient *client, uint32_t port_handle);
 void supervisor_vfs_unbind_system(AstraVfsClient *client);
+int supervisor_vfs_bind_config(AstraVfsClient *client, uint32_t port_handle);
+void supervisor_vfs_unbind_config(AstraVfsClient *client);
+AstraVfsClient *supervisor_vfs_config_client(void);
 
 /* NULL while SYSTEM is unpublished. */
 AstraVfsClient *supervisor_vfs_client(void);

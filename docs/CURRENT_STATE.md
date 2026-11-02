@@ -2,6 +2,25 @@
 
 Status: active continuation map, 2026-11-02
 
+Config Kit private storage candidate, 2026-11-02 (not released): the root
+storage provider now migrates the former system-image `/config` tree into a
+root-owned host state directory before QEMU starts, then removes the raw DH0
+copy. HostFS publishes that directory only through provider-rooted `CONFIG`
+grants. Supervisor provisions per-owner roots and routes service definitions
+through that private grant. Beast host migration and launcher tests, coherent
+userspace/ROM builds, root-observer QEMU boot, and unprivileged QEMU Terminal
+probe passed; the probe read `/config/motd` while `/dh0/config/commands/zsh/motd`
+was absent. The hostile-caller QEMU wrapper needed group-readable disposable
+WORK/SOUND exports and a provider umask of 027 for its advertised observation
+path; its private config directory stays root-only. This candidate has not
+been qualified or installed on DE25. Config Kit still lacks schema-driven
+transparent sensitive fields and curated public system settings, and its
+global credential API remains an intermediate interface. Do not use those
+pieces for network-share settings yet. Haiku read-only references:
+`src/system/kernel/fs/vfs.cpp` (server-enforced path authority) and
+`src/servers/keystore/KeyStoreServer.cpp`, `Keyring.cpp` (service-owned secrets
+and caller checks); Astra uses its existing provider-rooted grants.
+
 Credential service dependency, 2026-11-02: Config Kit 1.3 now exposes
 `astra_credential_set/get/remove` through one resident credential owner.
 Barry clarified the target contract after this gate: every app, service, and
