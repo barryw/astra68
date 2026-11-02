@@ -6,7 +6,7 @@ AstraZ Open Story and shared menu checkpoint, 2026-11-02: Apps publish
 File/Edit/View/Window/Help with an application menu for About, Settings, and
 Quit. Native menu items carry shortcut attributes; Display dispatches those
 shortcuts and Interface Kit draws their labels at row right. AstraZ now has
-File > Open Story (Cmd/Alt+O) and an Open Story toolbar action. Both use the
+File > Open (Cmd/Alt+O) and an Open Story toolbar action. Both use the
 shared File Panel and native Filesystem Kit directory snapshots; Places include
 Volumes, Home, Work, and DH0. Selecting a supported Z-machine story resets its
 transcript and launches it in the same window. File Panel now presents only

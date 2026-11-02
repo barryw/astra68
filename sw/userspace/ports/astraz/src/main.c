@@ -106,7 +106,7 @@ enum { ACTION_ABOUT = 100u, ACTION_MAXIMIZE, ACTION_DISTRACTION_FREE };
 static const AstraMenuItem menu_items[] = {
     {"File", 4u, 0u}, {"Story", 5u, 0u},
     {"View", 4u, 0u}, {"AstraZ", 6u, 0u},
-    {"Open Story...", 13u, ASTRA_MENU_PARENT(1u) |
+    {"Open...", 7u, ASTRA_MENU_PARENT(1u) |
         ASTRA_MENU_SHORTCUT_PRIMARY | ASTRA_MENU_SHORTCUT_KEY(0x12u)},
     {"Restart", 7u, ASTRA_MENU_PARENT(2u)},
     {"Undo", 4u, ASTRA_MENU_PARENT(2u)},
@@ -1401,7 +1401,7 @@ int main(int argc, char **argv)
     if (status == ASTRA_STATUS_OK && !playable) {
         const char *message = story.vm == ASTRAZ_VM_GLULX ?
             "Glulx execution is not installed yet.\n" :
-            story_path == NULL ? "Choose File > Open Story or use the toolbar to play a story.\n" :
+            story_path == NULL ? "Choose File > Open or use the toolbar to play a story.\n" :
             "This file is not a supported Z-machine story.\n";
         transcript_append(message, (uint32_t)strlen(message));
     }
