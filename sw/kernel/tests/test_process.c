@@ -13335,6 +13335,64 @@ static void test_exec_replaces_one_image_and_preserves_argv(void)
     assert(startup_be32(&vector[12]) == 0u);
 }
 
+static void test_exec_closes_marked_capability(void)
+{
+    for (uint32_t closed = 0u; closed != 2u; ++closed) {
+        KernelProcessBootstrapCapability private_grant = {0};
+        AstraExecRequest request = {.size = ASTRA_EXEC_REQUEST_SIZE};
+        AstraStartupInfo startup;
+        AstraStartupCapability capabilities[3];
+        KernelCpuContext *next;
+        uint8_t frame[KERNEL_EXCEPTION_FRAME_MAX_SIZE];
+        uint32_t process_id = 0u;
+        uint32_t user_page = KERNEL_PROCESS_STACK_TOP - KERNEL_PAGE_SIZE;
+        uint32_t user_request = user_page + LAUNCH_IMAGE_BYTES;
+        uint32_t private_handle;
+
+        launch_build_image();
+        initialize_test();
+        private_grant.name = "CONFIG";
+        private_grant.kind = KERNEL_PROCESS_BOOTSTRAP_DEVICE;
+        private_grant.device_id = ASTRA_DEVICE_ID_HOST0;
+        private_grant.rights = KERNEL_DEVICE_RIGHTS;
+        private_grant.flags = ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC;
+        assert(kernel_process_create_executable(launch_image,
+            sizeof(launch_image), &private_grant, 1u, &process_id) ==
+            KERNEL_PROCESS_OK);
+        assert(kernel_process_start(&next) == KERNEL_PROCESS_OK);
+        assert(kernel_user_copy_from_asm(capabilities,
+            KERNEL_VM_USER_MIN + ASTRA_STARTUP_INFO_SIZE,
+            sizeof(capabilities)) == KERNEL_USER_COPY_OK);
+        private_handle = capabilities[2].handle;
+        assert(private_handle != 0u);
+        assert(capabilities[2].flags == ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC);
+        assert(kernel_user_copy_to_asm(user_request, &request,
+            sizeof(request)) == KERNEL_USER_COPY_OK);
+        make_frame(frame, 0u, ASTRA_SYSCALL_VECTOR,
+            LAUNCH_VADDR + 0x100u, 0u);
+
+        if (closed == 0u) {
+            launch_image[0] = 0u;
+            assert(stream_exec(launch_image, sizeof(launch_image), NULL, 0u,
+                user_page, user_request, frame, &next) ==
+                ASTRA_SYSCALL_INVALID_ARGUMENT);
+            assert(exec_syscall(ASTRA_SYSCALL_DEVICE_QUERY, private_handle,
+                0u, 0u, 0u, frame, &next) != ASTRA_SYSCALL_INVALID_HANDLE);
+            launch_build_image();
+        } else {
+            assert(exec_syscall(ASTRA_SYSCALL_CLOSE, private_handle,
+                0u, 0u, 0u, frame, &next) == ASTRA_SYSCALL_OK);
+        }
+        assert(stream_exec(launch_image, sizeof(launch_image), NULL, 0u,
+            user_page, user_request, frame, &next) == ASTRA_SYSCALL_OK);
+        assert(kernel_user_copy_from_asm(&startup, KERNEL_VM_USER_MIN,
+            sizeof(startup)) == KERNEL_USER_COPY_OK);
+        assert(startup.capability_count == 2u);
+        assert(exec_syscall(ASTRA_SYSCALL_CLOSE, private_handle,
+            0u, 0u, 0u, frame, &next) == ASTRA_SYSCALL_INVALID_HANDLE);
+    }
+}
+
 static void test_exec_payload_placement_and_rollback(void)
 {
     static const uint32_t sizes[] = {0u, 1u, KERNEL_PAGE_SIZE,
@@ -16653,6 +16711,7 @@ int main(void)
     test_streamed_library_is_sparse_atomic_and_reclaimable();
     test_time_page_is_mapped_and_follows_the_clock();
     test_exec_replaces_one_image_and_preserves_argv();
+    test_exec_closes_marked_capability();
     test_exec_payload_placement_and_rollback();
     test_exec_dynamic_image_enters_interpreter_atomically();
     test_reading_the_stream_is_the_privileged_half();

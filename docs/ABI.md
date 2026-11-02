@@ -121,6 +121,11 @@ rounded opaque exec handoff, with their combined rounded span admitted before
 the executable's first PT_LOAD. Launch/exec allocation failures roll back the
 new space; clone retains the payload through ordinary VM lifetime. A handoff
 is either absent or a complete mapped range; its bytes are opaque to Axiom.
+`ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC` removes a marked grant from the new
+startup table and closes its live handle at the atomic exec commit. A failed
+exec leaves the old grant intact; a grant already closed by its owner is simply
+omitted. Launchers use this for private Config Kit authority. Public settings
+grants may persist across exec.
 There is no ABI 7 startup format or fallback.
 `docs/USERSPACE_RUNTIME.md` defines
 validation, ownership, and exit.

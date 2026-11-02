@@ -28,13 +28,19 @@ archived with matching checksums at
 state was removed; selected production services were active with 8.1 GiB free.
 Production DE25 still runs
 `01ee57e38814f4710ecb9af68c41af14a685f6593798b1666331e2d95521d985`.
-Command settings isolation remains unresolved: Terminal gives zsh a scoped
-`CONFIG` grant, which `execve` currently carries into commands. Do not claim
-per-command private settings until launch grants are rebound by command
-identity. Haiku read-only references:
+Command settings isolation remains unresolved: this branch now marks private
+Config grants `CLOSE_ON_EXEC` and removes their live handles at exec commit,
+so child commands cannot inherit zsh's or an application's private settings.
+Failed exec preserves the grant; an already-closed grant does not block exec.
+Kernel process and supervisor host tests pass, but per-command grant issuance
+by verified command identity is still missing. Do not claim that commands can
+use private Config Kit settings or release this branch as complete until that
+mechanism and DE25 gate pass. Haiku read-only references:
 `src/system/kernel/fs/vfs.cpp` (server-enforced path authority) and
 `src/servers/keystore/KeyStoreServer.cpp`, `Keyring.cpp` (service-owned secrets
-and caller checks); Astra uses its existing provider-rooted grants.
+and caller checks), plus `src/system/kernel/team.cpp` (`exec_team`) and
+`src/system/kernel/fs/vfs.cpp` (`vfs_exec_io_context`) for closing marked
+resources at exec; Astra adapts those to provider-rooted capability grants.
 
 Historical credential service checkpoint, 2026-11-02: Config Kit 1.3 exposed
 `astra_credential_set/get/remove` through one resident credential owner.

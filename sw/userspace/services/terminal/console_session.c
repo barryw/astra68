@@ -195,6 +195,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
                     return UINT32_MAX;
                 grants[count].handle = session.config_grant;
                 astra_capability_root_set(grants[count].root, "");
+                grants[count].flags |= ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC;
             } else {
                 astra_capability_root_set(grants[count].root, assign->root);
             }

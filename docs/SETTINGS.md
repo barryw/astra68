@@ -36,9 +36,13 @@ Each application and service owns a private Config Kit document. Ordinary
 owners cannot inspect another owner's document. A system management
 tool may receive an explicit, narrow grant for migration or administration;
 its role alone does not grant access to every owner's settings. Terminal must
-pass a command only that command's configuration grant. Current Terminal
-launch passes zsh's grant through `execve`; per-command isolation remains an
-open correctness gate.
+pass a command only that command's configuration grant. Private Config grants
+are marked `CLOSE_ON_EXEC`: native exec omits them from the new startup table
+and closes their live handles, so zsh and apps cannot leak their settings grant
+into a command. Granting each command its own private Config view still
+requires a trusted launch path bound to verified executable identity. Until
+then commands cannot use private Config Kit settings; per-command access
+remains a correctness gate.
 
 Applications receive a read-only `CONFIG_PUBLIC` grant rooted at
 `/config/public`. A resident service may explicitly request

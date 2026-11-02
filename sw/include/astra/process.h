@@ -243,10 +243,12 @@ typedef enum AstraLaunchSource {
 #define ASTRA_CAPABILITY_FLAG_READ      (1u << 1)
 /** Grant flag: the child may write through the named mount. */
 #define ASTRA_CAPABILITY_FLAG_WRITE     (1u << 2)
+/** Grant flag: omit this capability and close its handle when the process execs. */
+#define ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC (1u << 3)
 /** Every valid capability grant flag bit. */
 #define ASTRA_CAPABILITY_FLAG_MASK                                            \
     (ASTRA_CAPABILITY_FLAG_NAMESPACE | ASTRA_CAPABILITY_FLAG_READ |           \
-     ASTRA_CAPABILITY_FLAG_WRITE)
+     ASTRA_CAPABILITY_FLAG_WRITE | ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC)
 
 /**
  * One capability grant: one name in a launched child's capability table.
@@ -261,13 +263,12 @@ typedef struct AstraLaunchGrant {
     uint32_t handle;
     /** Rights granted on the handle; a subset of what the caller holds. */
     uint32_t rights;
-    /** Combination of ::ASTRA_CAPABILITY_FLAG_NAMESPACE, ::ASTRA_CAPABILITY_FLAG_READ and ::ASTRA_CAPABILITY_FLAG_WRITE. */
+    /** Combination of ::ASTRA_CAPABILITY_FLAG_MASK bits. */
     uint32_t flags;
     /**
      * Normalised, mount-relative, no leading separator: "commands", or "" for
-     * the mount's own root. Carried by the kernel and never read by it, the
-     * same contract `flags` has -- what a name means is the launcher's
-     * statement to the child.
+     * the mount's own root. Carried by the kernel and never read by it; what
+     * a name means is the launcher's statement to the child.
      */
     char     root[ASTRA_CAPABILITY_ROOT_MAX];
 } AstraLaunchGrant;
@@ -531,7 +532,7 @@ typedef struct AstraStartupCapability {
     uint32_t handle;
     /** Rights granted on the handle. */
     uint32_t rights;
-    /** Combination of ::ASTRA_CAPABILITY_FLAG_NAMESPACE, ::ASTRA_CAPABILITY_FLAG_READ and ::ASTRA_CAPABILITY_FLAG_WRITE. */
+    /** Combination of ::ASTRA_CAPABILITY_FLAG_MASK bits. */
     uint32_t flags;
     /** Where the name begins inside its mount, "" for the mount's own root. */
     char     root[ASTRA_CAPABILITY_ROOT_MAX];

@@ -5182,11 +5182,13 @@ static bool interpreter_placement(const KernelElfImage *program,
 
 static KernelProcessStatus read_exec_startup(
     const KernelProcess *process, AstraStartupInfo *info,
-    uint32_t *bootstrap_count)
+    uint32_t *bootstrap_count, KernelHandle *close_handles,
+    uint32_t *close_count)
 {
     uint32_t capability_bytes;
 
     if (process == NULL || info == NULL || bootstrap_count == NULL ||
+        close_handles == NULL || close_count == NULL ||
         kernel_copy_from_user(info, KERNEL_PROCESS_STARTUP_BASE,
                               sizeof(*info)) != KERNEL_USER_COPY_OK ||
         info->magic != ASTRA_STARTUP_MAGIC ||
@@ -5218,7 +5220,42 @@ static KernelProcessStatus read_exec_startup(
                               info->capabilities_address,
                               capability_bytes) != KERNEL_USER_COPY_OK)
         return KERNEL_PROCESS_INVALID_ARGUMENT;
-    *bootstrap_count = info->capability_count - 2u;
+    *bootstrap_count = 0u;
+    *close_count = 0u;
+    for (uint32_t index = 2u; index < info->capability_count; ++index) {
+        const AstraStartupCapability *capability = &exec_capabilities[index];
+
+        if ((capability->flags & ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC) != 0u) {
+            KernelObjectType type;
+            void *object;
+            KernelHandleStatus handle_status;
+            uint32_t prior;
+
+            handle_status = kernel_handle_lookup_any(process->handles,
+                capability->handle, 0u, &type, &object);
+            if (handle_status == KERNEL_HANDLE_INVALID_HANDLE)
+                continue;
+            if (handle_status != KERNEL_HANDLE_OK)
+                return KERNEL_PROCESS_CORRUPT;
+            for (prior = 2u; prior < info->capability_count; ++prior) {
+                if (prior != index &&
+                    exec_capabilities[prior].handle == capability->handle &&
+                    (exec_capabilities[prior].flags &
+                     ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC) == 0u)
+                    return KERNEL_PROCESS_INVALID_ARGUMENT;
+            }
+            for (prior = 0u; prior < *close_count; ++prior)
+                if (close_handles[prior] == capability->handle)
+                    break;
+            if (prior == *close_count)
+                close_handles[(*close_count)++] = capability->handle;
+        }
+    }
+    for (uint32_t index = 2u; index < info->capability_count; ++index)
+        if ((exec_capabilities[index].flags &
+             ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC) == 0u)
+            exec_capabilities[2u + (*bootstrap_count)++] =
+                exec_capabilities[index];
     return KERNEL_PROCESS_OK;
 }
 
@@ -5312,6 +5349,8 @@ static KernelProcessStatus exec_replace(
     AstraStartupInfo prior_startup;
     KernelProcessStatus status;
     uint32_t bootstrap_count = 0u;
+    KernelHandle close_handles[ASTRA_STARTUP_CAPABILITY_MAX];
+    uint32_t close_count = 0u;
     uint32_t entry_base;
     uint32_t entry_size;
     uint32_t new_tls_base = 0u;
@@ -5368,7 +5407,8 @@ static KernelProcessStatus exec_replace(
         replacement_tls = plan->tls;
     }
 
-    status = read_exec_startup(process, &prior_startup, &bootstrap_count);
+    status = read_exec_startup(process, &prior_startup, &bootstrap_count,
+                               close_handles, &close_count);
     if (status != KERNEL_PROCESS_OK)
         return status;
     request->arguments.source = (uint16_t)prior_startup.launch_source;
@@ -5429,6 +5469,13 @@ static KernelProcessStatus exec_replace(
     if (process->dma_pages != 0u) {
         status = trace_exec_corruption(process, 5u, process->dma_pages);
         goto failed;
+    }
+    for (uint32_t index = 0u; index < close_count; ++index) {
+        if (kernel_handle_close(process->handles, close_handles[index]) !=
+            KERNEL_HANDLE_OK) {
+            status = trace_exec_corruption(process, 14u, close_handles[index]);
+            goto failed;
+        }
     }
     {
         KernelAreaStatus area_status =
@@ -7486,12 +7533,8 @@ static KernelProcessStatus grant_bootstrap_capabilities(
         astra_capability_name_set(granted[index].name, entry->name);
         granted[index].handle = handle;
         granted[index].rights = entry->rights;
-        /*
-         * Carried across, never interpreted. What a grant is for -- a name in
-         * the child's namespace, a place to write -- is the launcher's
-         * statement to the child, and a kernel that read it would be deciding
-         * what a name means.
-         */
+        /* Namespace meaning belongs to the launcher; only exec lifetime is
+         * kernel policy. */
         granted[index].flags = entry->flags;
         astra_capability_root_set(granted[index].root, entry->root);
     }

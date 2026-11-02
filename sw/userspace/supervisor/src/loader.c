@@ -1487,6 +1487,7 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                                          root, wanted->rights, 0);
             if (status != ASTRA_STATUS_OK)
                 return status;
+            out[*count - 1u].flags |= ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC;
             continue;
         }
         if (strcmp(wanted->name, ASTRA_CONFIG_PUBLIC_CAPABILITY) == 0 ||
@@ -1512,6 +1513,8 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 root, wanted->rights, 0);
             if (status != ASTRA_STATUS_OK)
                 return status;
+            if (publish)
+                out[*count - 1u].flags |= ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC;
             continue;
         }
         if (strcmp(wanted->name, ASTRA_CONFIG_CAPABILITY) == 0 ||
@@ -1539,9 +1542,12 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
             if (config_status != ASTRA_CONFIG_OK)
                 return config_launch_status(config_status);
             status = add_namespace_grant(out, count, wanted->name, held, root,
-                wanted->rights, entry->delegates != 0u);
+                wanted->rights,
+                strcmp(wanted->name, ASTRA_CONFIG_COMMANDS_CAPABILITY) == 0 &&
+                    entry->delegates != 0u);
             if (status != ASTRA_STATUS_OK)
                 return status;
+            out[*count - 1u].flags |= ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC;
             continue;
         }
         if (strcmp(wanted->name, "PROC") == 0) {
