@@ -2,6 +2,20 @@
 
 Status: active continuation map, 2026-11-02
 
+AstraZ story location checkpoint, 2026-11-02: Open Story now creates and
+starts in `HOME:Stories` (`/home/Stories`). Its private Config Kit document
+remembers the last selected story directory across launches; an unavailable
+directory falls back to Stories, Home, then the volume root. The shared File
+Panel exposes Stories and Volumes. Beast MC68040 bundle build passed. A
+targeted DE25 install launched AstraZ from Atlas, showed the new default,
+opened `/work/astraz-ui-minizork.z3`, and reopened in `/work` after AstraZ
+exit and relaunch. Board and archived RGB hashes match; evidence is at
+`/mnt/Documents/astra68/astraz-story-default-20261102/`. Astra and remote
+desktop active, Astra restarts zero, 8.1 GiB free. Network shares are still
+unimplemented: see `docs/NETWORK_FILESYSTEM_REQUIREMENTS.md`. AstraZ saves
+still use `STORE:saves` rather than the requested Home Application Data path;
+preserve those existing saves when correcting that separate path.
+
 AstraZ Open Story and shared menu checkpoint, 2026-11-02: Apps publish
 File/Edit/View/Window/Help with an application menu for About, Settings, and
 Quit. Native menu items carry shortcut attributes; Display dispatches those

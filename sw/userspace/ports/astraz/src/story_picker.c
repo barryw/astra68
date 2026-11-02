@@ -1,6 +1,7 @@
 #include "story_picker.h"
 
 #include <astra/filesystem_kit.h>
+#include <astra/config_library.h>
 #include <astra/graphics_kit.h>
 #include <astra/interface_library.h>
 #include <astra/theme.h>
@@ -13,6 +14,8 @@
 
 #define PICKER_WIDTH 720u
 #define PICKER_HEIGHT 500u
+#define STORIES_DIRECTORY "/home/Stories"
+#define LAST_DIRECTORY_KEY "last_story_directory"
 
 typedef struct StoryPicker {
     AstraProcessFilesystem files;
@@ -28,17 +31,20 @@ typedef struct StoryPicker {
     const AstraSurface **icons;
     uint32_t capacity;
     uint32_t bank;
-    AstraCollectionItem place_items[4];
+    AstraCollectionItem place_items[5];
+    AstraConfig config;
     char initial_directory[ASTRA_VFS_PATH_MAX];
     AstraHandle gui;
     uint8_t files_open;
+    uint8_t config_open;
 } StoryPicker;
 
 static StoryPicker picker;
 
 static const AstraFilePanelPlace places[] = {
     {"Volumes", 7u, "/"}, {"Home", 4u, "/home"},
-    {"Work", 4u, "/work"}, {"DH0", 3u, "/dh0"}
+    {"Stories", 7u, STORIES_DIRECTORY}, {"Work", 4u, "/work"},
+    {"DH0", 3u, "/dh0"}
 };
 
 static AstraResult allocate_items(uint32_t capacity,
@@ -180,12 +186,13 @@ AstraResult astraz_story_picker_open(const AstraStartupInfo *startup,
     AstraWindowCreateInfo window_info = ASTRA_WINDOW_CREATE_INFO_INIT;
     AstraResult result = ASTRA_ERROR_IO;
     const char *step = "open filesystem";
-    const char *start = "/dh0";
+    const char *start = STORIES_DIRECTORY;
     if (startup == NULL || parent == NULL || path == NULL || capacity == 0u ||
         selected == NULL) return ASTRA_ERROR_INVALID_ARGUMENT;
     *selected = 0;
     memset(&picker, 0, sizeof(picker));
     picker.files = (AstraProcessFilesystem)ASTRA_PROCESS_FILESYSTEM_INIT;
+    picker.config = (AstraConfig)ASTRA_CONFIG_INIT;
     picker.gui = gui;
     picker.window = (AstraWindow)ASTRA_WINDOW_INIT;
     picker.panel = (AstraFilePanel)ASTRA_FILE_PANEL_INIT;
@@ -197,6 +204,10 @@ AstraResult astraz_story_picker_open(const AstraStartupInfo *startup,
     if (astra_process_filesystem_open(&picker.files, startup) != ASTRA_VFS_OK)
         goto done;
     picker.files_open = 1u;
+    (void)astra_filesystem_mkdir(&picker.files.filesystem, STORIES_DIRECTORY);
+    picker.config_open = astra_config_open(startup, 1u,
+        ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
+        &picker.config, NULL) == ASTRA_CONFIG_OK;
     if (current != NULL && current[0] == '/') {
         const char *slash = strrchr(current, '/');
         size_t length = slash == NULL ? 0u : (size_t)(slash - current);
@@ -206,17 +217,28 @@ AstraResult astraz_story_picker_open(const AstraStartupInfo *startup,
             picker.initial_directory[length] = '\0';
             start = picker.initial_directory;
         }
+    } else if (picker.config_open) {
+        uint32_t length = 0u;
+        if (astra_config_get_string(&picker.config, LAST_DIRECTORY_KEY, 0u,
+                picker.initial_directory, sizeof(picker.initial_directory),
+                &length) == ASTRA_CONFIG_OK &&
+            picker.initial_directory[0] == '/')
+            start = picker.initial_directory;
     }
     step = "load directory";
     if (astra_directory_snapshot_load(&picker.snapshots[0],
             &picker.files.filesystem, start, NULL) != ASTRA_VFS_OK) {
-        start = "/dh0";
+        start = STORIES_DIRECTORY;
         if (astra_directory_snapshot_load(&picker.snapshots[0],
                 &picker.files.filesystem, start, NULL) != ASTRA_VFS_OK) {
-            start = "/";
+            start = "/home";
             if (astra_directory_snapshot_load(&picker.snapshots[0],
-                    &picker.files.filesystem, start, NULL) != ASTRA_VFS_OK)
-                goto done;
+                    &picker.files.filesystem, start, NULL) != ASTRA_VFS_OK) {
+                start = "/";
+                if (astra_directory_snapshot_load(&picker.snapshots[0],
+                        &picker.files.filesystem, start, NULL) != ASTRA_VFS_OK)
+                    goto done;
+            }
         }
     }
     picker.capacity = picker.snapshots[0].capacity == 0u ?
@@ -292,6 +314,17 @@ AstraResult astraz_story_picker_open(const AstraStartupInfo *startup,
     if (result != ASTRA_OK) goto done;
     step = "run file panel";
     result = run(path, capacity, selected);
+    if (result == ASTRA_OK && *selected && picker.config_open) {
+        const char *slash = strrchr(path, '/');
+        size_t length = slash == NULL ? 0u :
+            slash == path ? 1u : (size_t)(slash - path);
+        if (length != 0u && length < sizeof(picker.initial_directory)) {
+            memcpy(picker.initial_directory, path, length);
+            picker.initial_directory[length] = '\0';
+            (void)astra_config_set_string(&picker.config,
+                LAST_DIRECTORY_KEY, 0u, picker.initial_directory);
+        }
+    }
 done:
     if (result != ASTRA_OK) (void)astra_log(step);
     if (picker.window._private_control != ASTRA_INVALID_HANDLE) {
@@ -306,6 +339,7 @@ done:
     astra_runtime_deallocate(picker.items[0]);
     astra_runtime_deallocate(picker.items[1]);
     astra_runtime_deallocate((void *)picker.icons);
+    if (picker.config_open) astra_config_close(&picker.config);
     if (picker.files_open) astra_process_filesystem_close(&picker.files);
     return result;
 }

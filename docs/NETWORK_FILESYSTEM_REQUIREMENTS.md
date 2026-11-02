@@ -1,8 +1,23 @@
 # Network volumes after the local filesystem cutover
 
-Status: requirements and source-backed feasibility assessment, 2026-10-13.
-Network mounting is not implemented or qualified. Finish the production volume
-lifecycle, native namespace, usage queries and desktop integration first.
+Status: requirements and source-backed feasibility assessment, updated
+2026-11-02. Network mounting is not implemented or qualified. The local volume
+lifecycle, native namespace, usage queries and desktop integration provide
+the application-facing path; network sources still need provider admission.
+
+## AstraZ story workflow
+
+User-owned local stories belong in `HOME:Stories` (`/home/Stories`). AstraZ's
+Open Story panel creates that directory on first use, remembers the last
+selected directory in its private Config Kit document, and returns there on
+next launch. If that directory is unavailable, it falls back to Stories, Home,
+then the volume root. Once network mounting exists, a share will appear in
+Volumes and may be selected
+without copying its story into the application bundle or local disk. Its path
+uses the same native VFS access and file-type association as local stories.
+Save files belong to the user's local Application Data area so unmounting a
+story share does not hide saved games. Current AstraZ save-path code still
+uses `STORE:saves`; align it with that policy while preserving existing saves.
 
 ## Reuse the native volume facility
 
@@ -18,6 +33,10 @@ Linux on the HPS owns the network filesystem client. No second guest filesystem
 engine, SMB implementation in Atlas, independent POSIX backend or additional
 FPGA feature is required. Extend the existing provider source/mount owner and
 its bounded worker mechanism rather than introducing another mount service.
+Haiku's read-only `src/add-ons/kernel/file_systems/nfs4/kernel_interface.cpp`
+(`nfs4_mount`, `nfs4_unmount`) informed treating a remote export as a normal
+published volume root. Astra adapts that boundary to its Linux provider and
+native volume identity rather than embedding a second NFS client in QEMU.
 
 ## Protocol choice and measured platform state
 

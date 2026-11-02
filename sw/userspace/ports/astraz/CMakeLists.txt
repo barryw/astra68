@@ -50,7 +50,7 @@ add_executable(astraz src/main.c src/audio.c src/picture.c src/canvas.c
 target_include_directories(astraz PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../include)
 target_compile_options(astraz PRIVATE -Wall -Wextra -Werror -Wpedantic)
 target_link_libraries(astraz PRIVATE astraz_engine Astra::interface
-  Astra::graphics Astra::font Astra::system Astra::filesystem SDL2::SDL2
+  Astra::graphics Astra::font Astra::system Astra::filesystem Astra::config SDL2::SDL2
   SDL2_mixer::SDL2_mixer SDL2_image::SDL2_image)
 astra_posix_program(astraz NAME "AstraZ" VERSION 0.1.0
   AUTHOR "Astra 68 Project" COPYRIGHT "Copyright 2026 Astra 68 Project")
