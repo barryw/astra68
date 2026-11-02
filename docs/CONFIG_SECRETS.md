@@ -1,5 +1,10 @@
 # Config Kit protected credentials
 
+DE25 selected release `01ee57e38814f4710ecb9af68c41af14a685f6593798b1666331e2d95521d985`
+includes this facility. Production host key was generated on first start;
+private certification covered seal/open, restart, and ordinary-channel denial.
+See `docs/CURRENT_STATE.md` for release evidence.
+
 Config Kit 1.2 adds `astra_config_set_secret` and
 `astra_config_get_secret`. A caller must already hold a scoped `CONFIG` or
 `CONFIG_SYSTEM` grant and the resident-only `HOST_SECRETS` grant. Each value is stored

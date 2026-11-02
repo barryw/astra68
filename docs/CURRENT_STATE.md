@@ -32,6 +32,20 @@ removed and 8.1 GiB freed. The selected production image remains unchanged,
 preserving user data. Both host key and guest image reside on the same SD, so
 offline theft of the whole device is outside this protection.
 
+Config Kit credential production cutover, 2026-11-02: coherent software release
+`01ee57e38814f4710ecb9af68c41af14a685f6593798b1666331e2d95521d985`
+is selected on DE25 with the exact running `storage2` kernel package. Its ROM,
+QEMU, image, storage provider, display, remote desktop and audio host matched
+the disposable-image private trial byte-for-byte. That trial booted to stage 8
+without panic or degradation and generated a root-owned 0600, 32-byte key.
+The release deployer migrated the existing production image with a rollback
+copy, confirmed the kernel package, booted the selected release to stage 8,
+then removed superseded release and disposable trial state. The production
+host key exists at `/var/lib/astra/state/system/config-secret.key` with mode
+0600; no key bytes were archived. Astra, audio host and remote desktop are
+active with zero restarts and 8.1 GiB free. Evidence:
+`/mnt/Documents/astra68/config-secret-production-20261102/` on Beast.
+
 HDMI audio regression, 2026-11-02 (open): after repeated private trial
 service restarts, Barry reported all HDMI speaker audio silent, including
 startup sound. Guest reports startup playback complete; audio host accepted
@@ -57,7 +71,8 @@ it does not confirm ADV7513 audio output or HDMI sink playback. Evidence is
 archived alongside the pre-reboot logs at
 `/mnt/Documents/astra68/audio-silence-20261102/`. The prior development
 release was replaced atomically; selected production release and user image
-were not modified. Haiku reference:
+were not modified by that diagnostic trial. Its audio host is now included in
+the selected software release above. Haiku reference:
 `~/Git/haiku/src/add-ons/kernel/drivers/audio/hda/hda_codec.cpp`
 (`hda_audio_group_check_sense`, `hda_codec_switch_handler`) reads connector
 presence and updates output state when it changes. Astra adapts that pattern
