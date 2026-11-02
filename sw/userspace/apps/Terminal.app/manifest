@@ -28,7 +28,6 @@ capability LIBS:r
 capability EVENTS:r
 capability PROC:rw
 capability METRICS:r
-capability CONFIG_COMMANDS:r
 capability EVENT_CONTROL
 capability NETWORK
 capability NETWORK_LISTEN

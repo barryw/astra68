@@ -103,10 +103,10 @@ returns status 1 in either mode. Launch origin is carried in the startup record,
 so applications do not need a terminal-specific argument.
 
 Terminal launches `COMMANDS:zsh` with `HOME=HOME:`, `PATH=/commands`,
-`SHELL=/commands/zsh`, and `TERM=astra-256color`. Its system zsh startup is
-scoped to `CONFIG:commands/zsh`; zsh therefore reads `/CONFIG/zshrc` without
-learning the host volume layout. The shared POSIX startup converts `HOME:`
-to `/HOME` before zsh runs, so normal user startup is `/HOME/.zshrc`.
+`SHELL=/commands/zsh`, and `TERM=astra-256color`. Zsh reads its default
+startup file `/HOME/zshrc` and then the user's `/HOME/.zshrc`. The shared
+POSIX startup converts `HOME:` to `/HOME` before zsh runs. Commands use
+ordinary config files and receive no private Config Kit grant.
 
 The shell launches an installed native GUI bundle with
 `open APPS:Name.app [argument ...]`. `open`, desktop icons, and the future
@@ -116,11 +116,10 @@ soon as startup succeeds unless `--wait` is requested. Window creation remains
 asynchronous, and launch origin is available to the application through
 `astra_startup_launch_source()` rather than a command-line switch.
 
-The startup file sources the first script found at `/HOME/.motd.zsh` or
-`/CONFIG/motd.zsh`. If neither exists, it prints the first plain file found at
-`/HOME/.motd` or `/CONFIG/motd`. Scripts can call `ps`, `metrics`, or other
-commands for dynamic content; plain files are deliberately literal and need no
-second placeholder language. User files override system files.
+The startup file sources `/HOME/.motd.zsh` when present; otherwise it prints
+`/HOME/.motd`. Both default files are seeded only when absent and remain
+editable. Scripts can call `ps`, `metrics`, or other commands for dynamic
+content; plain files are literal and need no placeholder language.
 
 Zsh emits the standard OSC 133 `A` prompt-start marker from `precmd` and `B`
 at the end of `PROMPT`. Terminal consumes both without drawing them and

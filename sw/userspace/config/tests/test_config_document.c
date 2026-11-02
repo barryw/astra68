@@ -190,6 +190,7 @@ static void scopes_owners_without_leaking_them_to_programs(void)
 {
     char root[96];
 
+    assert(ASTRA_CONFIG_OWNER_APPLICATION == 4u);
     assert(astra_config_capability_root(
                "config", ASTRA_CONFIG_OWNER_SERVICE, "ntpd", root,
                sizeof(root)) == ASTRA_CONFIG_OK);
@@ -203,18 +204,14 @@ static void scopes_owners_without_leaking_them_to_programs(void)
                sizeof(root)) == ASTRA_CONFIG_OK);
     assert(strcmp(root, "config/system/appearance") == 0);
     assert(astra_config_capability_root(
-               "config", ASTRA_CONFIG_OWNER_COMMAND, "../ping", root,
+               "config", 99u, "../ping", root,
                sizeof(root)) == ASTRA_CONFIG_INVALID);
     assert(astra_config_capability_root(
                "config", ASTRA_CONFIG_OWNER_SYSTEM, "network", root, 8u) ==
            ASTRA_CONFIG_BUFFER_TOO_SMALL);
     assert(astra_config_scope_root(
-               "config", ASTRA_CONFIG_OWNER_COMMAND, root, sizeof(root)) ==
-           ASTRA_CONFIG_OK);
-    assert(strcmp(root, "config/commands") == 0);
-    assert(astra_config_owner_root("config/commands", "ping", root,
-                                   sizeof(root)) == ASTRA_CONFIG_OK);
-    assert(strcmp(root, "config/commands/ping") == 0);
+               "config", 99u, root, sizeof(root)) ==
+           ASTRA_CONFIG_INVALID);
     assert(astra_config_owner_root("", "zsh", root, sizeof(root)) == ASTRA_CONFIG_OK);
     assert(strcmp(root, "zsh") == 0);
     assert(astra_config_owner_root("", NULL, root, sizeof(root)) == ASTRA_CONFIG_INVALID);

@@ -1517,8 +1517,7 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 out[*count - 1u].flags |= ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC;
             continue;
         }
-        if (strcmp(wanted->name, ASTRA_CONFIG_CAPABILITY) == 0 ||
-            strcmp(wanted->name, ASTRA_CONFIG_COMMANDS_CAPABILITY) == 0) {
+        if (strcmp(wanted->name, ASTRA_CONFIG_CAPABILITY) == 0) {
             const AstraAssign *held = astra_assign_lookup(
                 supervisor_assigns(), ASTRA_CONFIG_CAPABILITY);
             char *root = astra_vfs_path_storage_at(&path_storage, 1u);
@@ -1527,24 +1526,15 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 continue;
             if ((held->rights & wanted->rights) != wanted->rights)
                 return ASTRA_STATUS_ACCESS;
-            uint32_t config_status =
-                strcmp(wanted->name, ASTRA_CONFIG_CAPABILITY) == 0 ?
-                    private_config_root(entry, held->root,
-                                        entry->resident != 0u ?
-                                            ASTRA_CONFIG_OWNER_SERVICE :
-                                            ASTRA_CONFIG_OWNER_APPLICATION,
-                                        bundle_id,
-                                        root,
-                                        ASTRA_VFS_PATH_MAX) :
-                    astra_config_scope_root(
-                        held->root, ASTRA_CONFIG_OWNER_COMMAND, root,
-                        ASTRA_VFS_PATH_MAX);
+            uint32_t config_status = private_config_root(
+                entry, held->root,
+                entry->resident != 0u ? ASTRA_CONFIG_OWNER_SERVICE :
+                                        ASTRA_CONFIG_OWNER_APPLICATION,
+                bundle_id, root, ASTRA_VFS_PATH_MAX);
             if (config_status != ASTRA_CONFIG_OK)
                 return config_launch_status(config_status);
             status = add_namespace_grant(out, count, wanted->name, held, root,
-                wanted->rights,
-                strcmp(wanted->name, ASTRA_CONFIG_COMMANDS_CAPABILITY) == 0 &&
-                    entry->delegates != 0u);
+                                         wanted->rights, 0);
             if (status != ASTRA_STATUS_OK)
                 return status;
             out[*count - 1u].flags |= ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC;

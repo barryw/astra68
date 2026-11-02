@@ -1,6 +1,6 @@
 # Astra settings ownership
 
-Config Kit is Astra's settings substrate. It stores small, versioned, human-readable
+Config Kit stores application and service settings. It stores small, versioned, human-readable
 `astra-config` documents in the private host state behind the `CONFIG` export. There is no central
 registry database or global key namespace. A setting belongs to one component;
 that component validates its values and defines defaults.
@@ -12,7 +12,12 @@ that component validates its values and defines defaults.
 | System component | `/config/system/<service>/settings.conf` | Its resident service's `CONFIG_SYSTEM` grant |
 | Service implementation | `/config/services/<service>/settings.conf` | Its private `CONFIG` grant |
 | Application | `/config/applications/<bundle id>/settings.conf` | Its private `CONFIG` grant |
-| Command | `/config/commands/<command>/settings.conf` | Per-command grant required; launch rebinding pending |
+
+Command-line tools use ordinary configuration files in `HOME:` (and shipped
+read-only defaults where needed). They do not receive Config Kit grants. A
+command that changes system policy calls the owning service's validated API;
+that service persists the change through Config Kit. Config Kit does not
+materialize command files or watch them for edits.
 
 Supervisor derives roots from verified service or bundle identity, creates owner
 directories, and grants only requested rights. Ordinary apps cannot request
@@ -35,14 +40,10 @@ use their own Config Kit handle directly for private preferences.
 Each application and service owns a private Config Kit document. Ordinary
 owners cannot inspect another owner's document. A system management
 tool may receive an explicit, narrow grant for migration or administration;
-its role alone does not grant access to every owner's settings. Terminal must
-pass a command only that command's configuration grant. Private Config grants
-are marked `CLOSE_ON_EXEC`: native exec omits them from the new startup table
-and closes their live handles, so zsh and apps cannot leak their settings grant
-into a command. Granting each command its own private Config view still
-requires a trusted launch path bound to verified executable identity. Until
-then commands cannot use private Config Kit settings; per-command access
-remains a correctness gate.
+its role alone does not grant access to every owner's settings. Private Config
+grants are marked `CLOSE_ON_EXEC`: native exec omits them from the new startup
+table and closes their live handles, so a command cannot inherit an
+application's or service's private settings grant.
 
 Applications receive a read-only `CONFIG_PUBLIC` grant rooted at
 `/config/public`. A resident service may explicitly request

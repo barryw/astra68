@@ -187,6 +187,8 @@ def defaults():
         parts = ("/config/" + path).split("/")
         result.update(("/".join(parts[:count]), None) for count in range(2, len(parts)))
         result["/config/" + path] = contents.encode("ascii")
+    result.update(("/home/" + path, contents.encode("ascii"))
+                  for path, contents in astra_image.HOME_DEFAULTS.items())
     return result
 
 

@@ -62,7 +62,6 @@ static const char *scope_directory(uint32_t owner_kind)
     switch (owner_kind) {
     case ASTRA_CONFIG_OWNER_SYSTEM: return "system";
     case ASTRA_CONFIG_OWNER_SERVICE: return "services";
-    case ASTRA_CONFIG_OWNER_COMMAND: return "commands";
     case ASTRA_CONFIG_OWNER_APPLICATION: return "applications";
     default: return NULL;
     }

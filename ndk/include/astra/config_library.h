@@ -17,8 +17,6 @@
 #define ASTRA_CONFIG_CAPABILITY "CONFIG"
 /** Launch capability carrying a system component's settings root. */
 #define ASTRA_CONFIG_SYSTEM_CAPABILITY "CONFIG_SYSTEM"
-/** Launch capability carrying the configuration root for commands. */
-#define ASTRA_CONFIG_COMMANDS_CAPABILITY "CONFIG_COMMANDS"
 /** Read-only public system settings, rooted at the system publisher directory. */
 #define ASTRA_CONFIG_PUBLIC_CAPABILITY "CONFIG_PUBLIC"
 /** One resident service's writable public system settings. */
@@ -28,7 +26,6 @@
 enum {
     ASTRA_CONFIG_OWNER_SYSTEM = 1,
     ASTRA_CONFIG_OWNER_SERVICE = 2,
-    ASTRA_CONFIG_OWNER_COMMAND = 3,
     ASTRA_CONFIG_OWNER_APPLICATION = 4
 };
 

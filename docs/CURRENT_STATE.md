@@ -28,19 +28,26 @@ archived with matching checksums at
 state was removed; selected production services were active with 8.1 GiB free.
 Production DE25 still runs
 `01ee57e38814f4710ecb9af68c41af14a685f6593798b1666331e2d95521d985`.
-Command settings isolation remains unresolved: this branch now marks private
-Config grants `CLOSE_ON_EXEC` and removes their live handles at exec commit,
-so child commands cannot inherit zsh's or an application's private settings.
+Barry's current settings rule: command-line tools use ordinary config files;
+applications and services use Config Kit. Zsh's default startup and MOTD now
+live in `HOME:`; Terminal gives it no private Config grant. Private Config grants
+are marked `CLOSE_ON_EXEC` and their live handles removed at exec commit,
+so child commands cannot inherit an application's or service's private settings.
 Failed exec preserves the grant; an already-closed grant does not block exec.
 Kernel process, supervisor, Config Kit, and runtime host tests pass. Full
-MC68040 userspace and NDK builds, kernel/ROM builds, and the disposable Beast
-Config Kit two-boot QEMU gate pass. That gate proved protected write/restart
-read, public read/publish, and ordinary-channel denial. The unrelated
+MC68040 userspace and NDK builds, kernel/ROM builds, image preservation,
+and disposable Beast Config Kit two-boot and zsh QEMU gates pass. The Config
+Kit gate proved protected write/restart read, public read/publish, and
+ordinary-channel denial. The unrelated
 userspace boundary test still reports existing Interface Kit and AstraZ
-ownership violations. Per-command grant issuance by verified command
-identity is still missing. Do not claim that commands can use private Config
-Kit settings or release this branch as complete until that mechanism and
-DE25 gate pass. Haiku read-only references:
+ownership violations. Final clean Beast release `342b6507a48377fc719c983855a7eaba668725c38cbda0e207449092a471658c`
+passed a guarded 90-second DE25 private trial at stage 8; the selector and all
+three production services restored, with 8.1 GiB free. Beast evidence is at
+`/mnt/Documents/astra68/config-cli-rule-final-20261102/`; board trial state was
+removed. The trial shutdown emitted `astra-storage control request failed:
+Broken pipe` after QEMU received SIGTERM, with no guest panic or degradation.
+The clean publisher required `FLUIDSYNTH_ROOT=/home/barry/Git/fluidsynth` on
+Beast because the default checkout path was absent. Haiku read-only references:
 `src/system/kernel/fs/vfs.cpp` (server-enforced path authority) and
 `src/servers/keystore/KeyStoreServer.cpp`, `Keyring.cpp` (service-owned secrets
 and caller checks), plus `src/system/kernel/team.cpp` (`exec_team`) and
@@ -49,8 +56,8 @@ resources at exec; Astra adapts those to provider-rooted capability grants.
 
 Historical credential service checkpoint, 2026-11-02: Config Kit 1.3 exposed
 `astra_credential_set/get/remove` through one resident credential owner.
-Barry clarified the target contract after this gate: every app, service, and
-command owns private settings; public system settings are a read-only Config
+Barry then clarified the target contract: every app and service owns private
+settings; public system settings are a read-only Config
 Kit view; schemas mark sensitive fields, while callers use ordinary typed
 get/set operations. The current global credential document and separate
 credential calls do not meet that contract and must be refactored before

@@ -54,7 +54,7 @@ STARTUP_DIRECTORY = "startup"
 STARTUP_NAME = "system"
 CONFIG_DIRECTORY = "config"
 HOME_DIRECTORY = "home"
-CONFIG_SCOPES = ("system", "services", "commands", "applications")
+CONFIG_SCOPES = ("system", "services", "applications")
 CONFIGURATION = {
     "services/hostfs/settings.conf": (
         "astra-config 1\n"
@@ -81,21 +81,19 @@ CONFIGURATION = {
         "restart on-fault\n"
         "argument \"/services/remote-desktop\"\n"
         "grant HOST_DEVICE\n"),
-    "commands/zsh/zshrc": (
-        "# User startup remains zsh's normal $HOME/.zshrc.\n"
+}
+HOME_DEFAULTS = {
+    "zshrc": (
+        "# System defaults load before the user's $HOME/.zshrc.\n"
         "if [[ -r /home/.motd.zsh ]]; then\n"
         "  source /home/.motd.zsh\n"
         "elif [[ -r /home/.motd ]]; then\n"
         "  print -r -- \"$(</home/.motd)\"\n"
-        "elif [[ -r /config/motd.zsh ]]; then\n"
-        "  source /config/motd.zsh\n"
-        "elif [[ -r /config/motd ]]; then\n"
-        "  print -r -- \"$(</config/motd)\"\n"
         "fi\n"
         "_astra_prompt_start() { print -n -- $'\\e]133;A\\e\\\\' }\n"
         "precmd_functions+=(_astra_prompt_start)\n"
         "PROMPT+=$'%{\\e]133;B\\e\\\\%}'\n"),
-    "commands/zsh/motd": (
+    ".motd": (
         "Astra 68\n"
         "Run help for shell help, ps for processes, and metrics for system "
         "metrics.\n"),
@@ -131,7 +129,7 @@ DEFAULT_TERMINFO = os.path.join(
 # claim, so the startup manifest names its launch ceiling explicitly.
 TERMINAL_CEILING = (
     "GUI CLIPBOARD VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN WORK:rw HOME:rw TMP:rw RAM_READ RAM_WRITE DH0:r SYSTEM:r FONTS:r LOCAL:rw "
-    "COMMANDS:r APPS:r LIBS:r EVENTS:r PROC:rw METRICS:r CONFIG_COMMANDS:r CONFIG_PUBLIC:r "
+    "COMMANDS:r APPS:r LIBS:r EVENTS:r PROC:rw METRICS:r CONFIG_PUBLIC:r "
     "EVENT_CONTROL NETWORK NETWORK_LISTEN NTP PCM CODEC POSIX_PROCESS APP_LAUNCH "
     "SERVICE_MANAGER ENTROPY LOG")
 PROVIDER_INDEX_MAGIC = 0x41505256  # "APRV"
@@ -1074,6 +1072,17 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
 
         # User-owned state is not replaced by publishing system products.
         _mkdir(volume, "/%s" % HOME_DIRECTORY, "the home directory")
+        for path, contents in HOME_DEFAULTS.items():
+            target = "/%s/%s" % (HOME_DIRECTORY, path)
+            kind = _inode_type(volume, target)
+            if kind is not None:
+                continue
+            host = os.path.join(temporary, "home-" + path)
+            with open(host, "w", encoding="ascii", newline="\n") as handle:
+                handle.write(contents)
+            _debugfs(volume, "write %s %s" % (
+                _debugfs_quote(host), _debugfs_quote(target)),
+                     "command default " + path)
         _mkdir(volume, "/local", "the local directory")
         _mkdir(volume, "/%s" % LOCAL_COMMANDS_DIRECTORY,
                "the local commands directory")

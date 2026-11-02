@@ -6,7 +6,6 @@
 
 #include <astra/application_service.h>
 #include <astra/clipboard.h>
-#include <astra/config_library.h>
 #include <astra/entropy.h>
 #include <astra/gui.h>
 #include <astra/event_control.h>
@@ -49,7 +48,6 @@ typedef struct ConsoleSession {
     /* Transferable WORK seed for shell CWD. The shell enters an optional
      * removable directory itself; volume grants cannot be delegated. */
     uint32_t cwd_grant;
-    uint32_t config_grant;
     int running;
 } ConsoleSession;
 
@@ -108,8 +106,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
     static const char *const stream_names[] = {"STDOUT", "STDERR", "STDIN"};
     static const char *const mount_names[] = {
         "DH0", "SYSTEM", "WORK", "HOME", "TMP", "LOCAL", "COMMANDS", "APPS",
-        "LIBS", "EVENTS", "PROC", "METRICS",
-        ASTRA_CONFIG_COMMANDS_CAPABILITY
+        "LIBS", "EVENTS", "PROC", "METRICS"
     };
     static const char *const authority_names[] = {
         ASTRA_CAPABILITY_EVENT_CONTROL,
@@ -153,9 +150,6 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
     }
     for (uint32_t index = 0u;
          index < sizeof(mount_names) / sizeof(mount_names[0]); ++index) {
-        const int config = strcmp(mount_names[index],
-                                  ASTRA_CONFIG_COMMANDS_CAPABILITY) == 0;
-
         for (uint32_t member = 0u; ; ++member) {
             const AstraAssign *assign = astra_assign_member(
                 astra_process_vfs_assigns(), mount_names[index], member);
@@ -165,9 +159,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
                 break;
             if (count >= ASTRA_LAUNCH_GRANT_MAX)
                 return UINT32_MAX;
-            astra_capability_name_set(
-                grants[count].name, config ? ASTRA_CONFIG_CAPABILITY :
-                                             mount_names[index]);
+            astra_capability_name_set(grants[count].name, mount_names[index]);
             grants[count].handle = assign->handle;
             grants[count].rights = ASTRA_RIGHT_SIGNAL;
             namespace_rights = assign->rights;
@@ -178,27 +170,7 @@ static uint32_t launch_grants(AstraLaunchGrant *grants)
                      ASTRA_CAPABILITY_FLAG_READ : 0u) |
                 ((namespace_rights & ASTRA_RIGHT_WRITE) != 0u ?
                      ASTRA_CAPABILITY_FLAG_WRITE : 0u);
-            if (config) {
-                char root[ASTRA_CAPABILITY_ROOT_MAX];
-
-                if (astra_config_owner_root(assign->root, "zsh", root,
-                                            sizeof(root)) != ASTRA_CONFIG_OK)
-                    return UINT32_MAX;
-                AstraVfsClient *client = astra_process_vfs_client_for(assign);
-                if (client == NULL)
-                    return UINT32_MAX;
-                if (session.config_grant == 0u &&
-                    astra_vfs_grant_derive(client, root,
-                        ASTRA_VFS_GRANT_READ |
-                            ((namespace_rights & ASTRA_RIGHT_WRITE) != 0u ? ASTRA_VFS_GRANT_WRITE : 0u),
-                        &session.config_grant) != ASTRA_VFS_OK)
-                    return UINT32_MAX;
-                grants[count].handle = session.config_grant;
-                astra_capability_root_set(grants[count].root, "");
-                grants[count].flags |= ASTRA_CAPABILITY_FLAG_CLOSE_ON_EXEC;
-            } else {
-                astra_capability_root_set(grants[count].root, assign->root);
-            }
+            astra_capability_root_set(grants[count].root, assign->root);
             ++count;
         }
     }

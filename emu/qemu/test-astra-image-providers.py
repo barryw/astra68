@@ -217,8 +217,9 @@ with open(os.path.join(astra_image.REPOSITORY,
     app_rules = makefile.read()
     assert "$(TERMINAL): FORCE\n" in app_rules
     assert "$(GALLERY): FORCE\n" in app_rules
-assert "commands/zsh/zshrc" in astra_image.CONFIGURATION
-assert "commands/zsh/motd" in astra_image.CONFIGURATION
+assert "zshrc" in astra_image.HOME_DEFAULTS
+assert ".motd" in astra_image.HOME_DEFAULTS
+assert not any(path.startswith("commands/") for path in astra_image.CONFIGURATION)
 assert "remote-desktop" in astra_image.DISPLAY_SERVICES
 assert "storage" not in astra_image.DISPLAY_SERVICES
 assert "ramfs" not in astra_image.DISPLAY_SERVICES
@@ -246,7 +247,7 @@ for test_command in ("posix", "hello", "cxx"):
     assert " " + test_command + " " not in \
         " " + " ".join(shipped_commands.split()) + " "
 assert "TEST_COMMANDS := posix hello cxx" in commands_make
-assert "--enable-etcdir=/config" in commands_make
+assert "--enable-etcdir=/home" in commands_make
 assert "--enable-etcdir=CONFIG:" not in commands_make
 assert "$(ZSH_BUILD_CONFIG): Makefile $(ZSH_CONFIG_SITE)" in commands_make
 with open(os.path.join(astra_image.REPOSITORY,
@@ -279,13 +280,11 @@ try:
     raise AssertionError("provider path beyond the VFS ABI was accepted")
 except RuntimeError as error:
     assert "provider index path is too long" in str(error)
-zshrc = astra_image.CONFIGURATION["commands/zsh/zshrc"]
+zshrc = astra_image.HOME_DEFAULTS["zshrc"]
 assert "/home/.motd.zsh" in zshrc
-assert "/config/motd.zsh" in zshrc
 assert zshrc.index("/home/.motd.zsh") < zshrc.index("elif [[ -r /home/.motd ]]")
-assert zshrc.index("/config/motd.zsh") < zshrc.index("elif [[ -r /config/motd ]]")
-assert "$(</home/.motd)" in zshrc and "$(</config/motd)" in zshrc
-assert "HOME:/.motd" not in zshrc and "CONFIG:motd" not in zshrc
+assert "$(</home/.motd)" in zshrc
+assert "/config/" not in zshrc
 assert "\\e]133;A" in zshrc and "\\e]133;B" in zshrc
 startup = astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
 display_startup = next(line for line in startup
@@ -821,6 +820,7 @@ with tempfile.TemporaryDirectory(prefix="astra-config-preservation-") as directo
             astra_image.CONFIGURATION["services/remote-desktop/service.conf"].replace(
                 "enabled true\n", "enabled false\n").encode("ascii"),
         "/config/user/nested/custom.bin": b"custom\x00configuration\xff\n",
+        "/home/.motd": b"my own shell greeting\n",
         "/home/kept.txt": b"home retained\n",
         "/local/commands/kept.txt": b"local retained\n",
         "/fonts/installed/user.afnt": b"installed font retained\n",
@@ -884,6 +884,9 @@ with tempfile.TemporaryDirectory(prefix="astra-config-preservation-") as directo
         for path, data in astra_image.CONFIGURATION.items():
             target = "/config/" + path
             assert contents(target) == files.get(target, data.encode("ascii")), target
+        for path, data in astra_image.HOME_DEFAULTS.items():
+            target = "/home/" + path
+            assert contents(target) == files.get(target, data.encode("ascii")), target
         subprocess.run(["e2fsck", "-fn", volume], check=True,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         retained, added = state_preservation.verify(reference, image)
@@ -938,7 +941,7 @@ with tempfile.TemporaryDirectory(prefix="astra-config-preservation-") as directo
     reject_change('rm "/fonts/installed/user.afnt"', "disappeared")
     reject_change('write %s "/config/user/nested/unexpected.txt"' %
                   astra_image._debugfs_quote(attribute_seed), "unexpected state addition")
-    reject_change('punch "/config/commands/zsh/motd" 0 0', "incorrect installer default contents")
+    reject_change('punch "/home/.motd" 0 0', "preserved content changed")
     print("state observer actual ext4: full binary/empty xattrs, fast/long/broken/byte symlinks, hardlinks, metadata/content/default/addition rejection and immutable inputs PASS")
 
     for index, name in enumerate((b"name\nline", b"\xffname")):
