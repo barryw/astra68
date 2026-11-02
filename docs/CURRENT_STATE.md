@@ -2,6 +2,28 @@
 
 Status: active continuation map, 2026-11-02
 
+Credential service dependency, 2026-11-02: Config Kit 1.3 now exposes
+`astra_credential_set/get/remove` through one resident credential owner.
+Settings receives `CRED_WRITE` for set/remove; no production client receives
+`CRED_READ` yet. Service owns its encrypted Config Kit document and has no
+network-share, volume, or mount logic. It copies shared-area input before
+sealing and clears private plaintext. Haiku read-only
+`src/servers/keystore/KeyStoreServer.cpp` and `Keyring.cpp` informed the
+service-owned access boundary; Astra uses separate port capabilities because
+its messages do not identify the caller. Beast Config Kit, credential policy,
+image-provider, library-contract and NDK `dist-check` gates passed. The final
+DE25 disposable-image release
+`c33763428fbc30b201133d54786935978f6ebca503932e711092bb683a201749`
+booted to stage 8, completed a 1024-byte native set/query/read/remove probe,
+ran 90 seconds without guest syslog errors or panic, and restored selected
+release `01ee57e38814f4710ecb9af68c41af14a685f6593798b1666331e2d95521d985`.
+Evidence hashes match at `/mnt/Documents/astra68/credential-broker-20261102/`
+on Beast; disposable board releases were removed, leaving 8.1 GiB free and
+Astra, audio host, and remote desktop active. Earlier trials exposed an
+overlong capability name (startup manifest rejection) and a probe that exited
+after success (supervisor resident-exit error); both were corrected before
+the final gate. Selected production image and user data remain unchanged.
+
 Config Kit protected credential checkpoint, 2026-11-02: the DE25 root
 storage launcher now generates one 32-byte root-owned 0600 key on first start
 and reuses it; a missing or invalid existing key fails closed. A kernel-attested

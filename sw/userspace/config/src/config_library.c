@@ -4,13 +4,14 @@
 #include <astra/library.h>
 #include <astra/host.h>
 #include <astra/runtime.h>
+#include <astra/secret_memory.h>
 #include <astra/status.h>
 #include <astra/vfs_client.h>
 
 #include <stddef.h>
 #include <string.h>
 
-ASTRA_DYNAMIC_LIBRARY("config.library.1", 1, 2, 0,
+ASTRA_DYNAMIC_LIBRARY("config.library.1", 1, 3, 0,
               ASTRA_CONFIG_LIBRARY_ABI_MAJOR,
               ASTRA_CONFIG_LIBRARY_ABI_MINOR,
               "Astra68 contributors", "Copyright 2026 Astra68 contributors");
@@ -504,12 +505,6 @@ uint32_t astra_config_set_string(AstraConfig *config, const char *key,
 #define CONFIG_SECRET_OVERHEAD 44u
 #define CONFIG_SECRET_ENVELOPE (CONFIG_SECRET_MAX + CONFIG_SECRET_OVERHEAD)
 
-static void wipe(void *address, uint32_t length)
-{
-    volatile uint8_t *bytes = address;
-    while (length-- != 0u) *bytes++ = 0u;
-}
-
 static int secret_name(const char *key, char out[128])
 {
     uint32_t at = 0u;
@@ -571,7 +566,7 @@ static uint32_t secret_crypt(ConfigState *state, const char *name,
         status = ASTRA_CONFIG_OK;
     }
 done:
-    wipe((void *)(uintptr_t)host.data, 2048u);
+    astra_secret_wipe((void *)(uintptr_t)host.data, 2048u);
     (void)astra_host_client_close(&host);
     return status;
 }
@@ -599,8 +594,8 @@ uint32_t astra_config_set_secret(AstraConfig *config, const char *key,
         encoded[sealed_length * 2u] = '\0';
         status = astra_config_set_string(config, name, 0u, encoded);
     }
-    wipe(sealed, sizeof(sealed));
-    wipe(encoded, sizeof(encoded));
+    astra_secret_wipe(sealed, sizeof(sealed));
+    astra_secret_wipe(encoded, sizeof(encoded));
     return status;
 }
 
@@ -645,13 +640,20 @@ uint32_t astra_config_get_secret(AstraConfig *config, const char *key,
     status = secret_crypt(state, name, ASTRA_HOST_CONFIG_SECRET_OPEN,
         sealed, sealed_length, secret, *length, &plain_length);
     if (status == ASTRA_CONFIG_OK && plain_length != *length) {
-        wipe(secret, plain_length);
+        astra_secret_wipe(secret, plain_length);
         status = ASTRA_CONFIG_AUTH_FAILED;
     }
 done:
-    wipe(sealed, sizeof(sealed));
-    wipe(encoded, sizeof(encoded));
+    astra_secret_wipe(sealed, sizeof(sealed));
+    astra_secret_wipe(encoded, sizeof(encoded));
     return status;
+}
+
+uint32_t astra_config_remove_secret(AstraConfig *config, const char *key)
+{
+    char name[128];
+    if (!secret_name(key, name)) return ASTRA_CONFIG_INVALID;
+    return astra_config_remove(config, name, 0u);
 }
 
 static uint32_t signed_decimal(char *out, int64_t value)

@@ -8,6 +8,7 @@ icon resources/Settings.aicon
 capability GUI
 capability APP_LAUNCH
 capability CONFIG:rw
+capability CRED_WRITE
 capability LIBS:r
 requires compiler.library 2 2.0.0
 requires config.library 1 1.1.0

@@ -10,7 +10,7 @@
 /** Config Kit ELF ABI major version. */
 #define ASTRA_CONFIG_LIBRARY_ABI_MAJOR 1u
 /** Config Kit backward-compatible ABI revision. */
-#define ASTRA_CONFIG_LIBRARY_ABI_MINOR 2u
+#define ASTRA_CONFIG_LIBRARY_ABI_MINOR 3u
 /** Minimum compatible config.library major version. */
 #define ASTRA_CONFIG_LIBRARY_VERSION ASTRA_CONFIG_LIBRARY_ABI_MAJOR
 /** Launch capability carrying the caller's private configuration root. */
@@ -191,5 +191,43 @@ uint32_t astra_config_set_secret(AstraConfig *config, const char *key,
 uint32_t astra_config_get_secret(AstraConfig *config, const char *key,
                                  void *secret, uint32_t capacity,
                                  uint32_t *length);
+/** Remove one protected credential from this document.
+ * @param config Open writable Config Kit handle.
+ * @param key Key within this owner's document.
+ * @return ASTRA_CONFIG_* status.
+ */
+uint32_t astra_config_remove_secret(AstraConfig *config, const char *key);
+
+/** Store a credential through the resident Config Kit owner. Requires the
+ * CRED_WRITE startup capability; callers never receive HOST_SECRETS.
+ * The key is a stable, owner-chosen reference, not a filesystem path.
+ * @param startup Valid startup record with CRED_WRITE.
+ * @param key Reference name, 1–120 portable characters.
+ * @param secret Plaintext bytes.
+ * @param length Plaintext byte count, 1–1024.
+ * @return ASTRA_CONFIG_* status.
+ */
+uint32_t astra_credential_set(const AstraStartupInfo *startup,
+                              const char *key, const void *secret,
+                              uint32_t length);
+/** Read a credential through the resident owner. Requires CRED_READ.
+ * Query required size with secret=NULL.
+ * @param startup Valid startup record with CRED_READ.
+ * @param key Reference name.
+ * @param secret Output buffer or NULL for a size query.
+ * @param capacity Output buffer bytes; zero for a size query.
+ * @param length Receives required plaintext byte count.
+ * @return ASTRA_CONFIG_* status; BUFFER_TOO_SMALL reports required size.
+ */
+uint32_t astra_credential_get(const AstraStartupInfo *startup,
+                              const char *key, void *secret,
+                              uint32_t capacity, uint32_t *length);
+/** Remove a credential through the resident owner. Requires CRED_WRITE.
+ * @param startup Valid startup record with CRED_WRITE.
+ * @param key Reference name.
+ * @return ASTRA_CONFIG_* status.
+ */
+uint32_t astra_credential_remove(const AstraStartupInfo *startup,
+                                 const char *key);
 
 #endif

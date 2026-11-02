@@ -189,6 +189,8 @@ DISPLAY_STARTUP_MANIFEST = (
     "service /services/clipboard grants serves CLIPBOARD required priority=20\n"
     "service /services/fonts grants HOST_DEVICE CONFIG_SYSTEM:rw FONTS:rw LIBS:r "
     "serves FONT_CATALOG FONTS_ADMIN FONTS_RENDER FONTS_CHANGED required priority=20\n"
+    "service /services/credentials grants HOST_SECRETS CONFIG_SYSTEM:rw LIBS:r "
+    "serves CRED_WRITE CRED_READ required priority=20\n"
     "service /services/display grants DISPLAY DISPLAY_IRQ VBLANK_IRQ APP_LAUNCH "
     "CONFIG_SYSTEM:rw APPS:r VOLUMES VOLUME_READ "
     "INPUT_SERVICE FONT_CATALOG FONTS_RENDER FONTS_CHANGED serves GUI critical priority=20\n"
@@ -207,11 +209,11 @@ DISPLAY_STARTUP_MANIFEST = (
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG\n"
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r\n"
     "trusted /apps/Inspector.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ RAM_READ DH0:r HOME:r APPS:r LIBS:r WORK:r\n"
-    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw LIBS:r\n"
+    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw CRED_WRITE LIBS:r\n"
     "trusted /apps/AstraZ.app grants GUI PCM VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r\n")
 STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST
 DISPLAY_SERVICES = ("hostfs", "posixd", "entropy", "network", "ntpd", "events",
-                    "input", "clipboard", "fonts", "display", "media", "codec", "sampler",
+                    "input", "clipboard", "fonts", "credentials", "display", "media", "codec", "sampler",
                     "desktop",
                     "remote-desktop")
 HOSTBENCH_SERVICES = DISPLAY_SERVICES + ("hostbench",)
@@ -229,6 +231,10 @@ CODEC_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
 CONFIG_SECRET_CERTIFY_SERVICES = DISPLAY_SERVICES + ("config-secret-certify",)
 CONFIG_SECRET_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
     "service /services/config-secret-certify grants HOST_DEVICE HOST_SECRETS CONFIG_SYSTEM:rw LIBS:r "
+    "restart=never\n")
+CREDENTIAL_CERTIFY_SERVICES = DISPLAY_SERVICES + ("credential-certify",)
+CREDENTIAL_CERTIFY_STARTUP_MANIFEST = DISPLAY_STARTUP_MANIFEST + (
+    "service /services/credential-certify grants CRED_WRITE CRED_READ LIBS:r "
     "restart=never\n")
 # The fixture that dies: installed, not started, for a gate to add as a user
 # service; or started as a critical one, whose death must halt the machine.
@@ -1102,6 +1108,9 @@ if __name__ == "__main__":
     elif len(sys.argv) == 3 and sys.argv[1] == "--config-secret-certify":
         install(sys.argv[2], service_names=CONFIG_SECRET_CERTIFY_SERVICES,
                 manifest_text=CONFIG_SECRET_CERTIFY_STARTUP_MANIFEST)
+    elif len(sys.argv) == 3 and sys.argv[1] == "--credential-certify":
+        install(sys.argv[2], service_names=CREDENTIAL_CERTIFY_SERVICES,
+                manifest_text=CREDENTIAL_CERTIFY_STARTUP_MANIFEST)
     elif len(sys.argv) == 3 and sys.argv[1] == "--fault-probe":
         install(sys.argv[2], service_names=FAULT_PROBE_SERVICES,
                 manifest_text=DISPLAY_STARTUP_MANIFEST)
@@ -1131,7 +1140,7 @@ if __name__ == "__main__":
     else:
         raise SystemExit(
             "usage: astra_image.py "
-            "[--display|--hostbench|--audio-certify|--pcm-certify|--codec-certify|--config-secret-certify|"
+            "[--display|--hostbench|--audio-certify|--pcm-certify|--codec-certify|--config-secret-certify|--credential-certify|"
             "--fault-probe|--fault-critical|--ready-fail|--required-fail|"
             "--interface-gallery] IMAGE | "
             "--create IMAGE SIZE_MIB | --service NAME IMAGE | "

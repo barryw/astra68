@@ -19,7 +19,8 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
 LIBRARY := build/m68k/libraries/config.library.1
-LIBRARY_OBJECTS := build/m68k/config_library.o build/m68k/config_document.o
+LIBRARY_OBJECTS := build/m68k/config_library.o build/m68k/config_document.o \
+	build/m68k/credential_client.o
 LIBRARY_MAP := config.library.exports
 SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
@@ -39,6 +40,12 @@ build/m68k/config_library.o: src/config_library.c \
 
 build/m68k/config_document.o: src/config_document.c \
 		include/astra/config_document.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
+
+build/m68k/credential_client.o: src/credential_client.c \
+		$(NDK)/include/astra/config_library.h \
+		../../include/astra/credential_service.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
@@ -69,7 +76,7 @@ library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(LIBRARY_MAP) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $(LIBRARY) | \
-		grep -q '^config.library.1 1.2.0 ABI 1.2$$'
+		grep -q '^config.library.1 1.3.0 ABI 1.3$$'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
@@ -111,6 +118,8 @@ analyze:
 	@mkdir -p build/analyzer
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -fanalyzer \
 		-c src/config_library.c -o build/analyzer/config_library.o
+	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -fanalyzer \
+		-c src/credential_client.c -o build/analyzer/credential_client.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -fanalyzer \
 		-c src/config_document.c -o build/analyzer/config_document.o
 

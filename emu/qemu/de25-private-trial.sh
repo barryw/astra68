@@ -93,4 +93,12 @@ for ((elapsed = 0; elapsed < seconds; ++elapsed)); do
         exit 1
     }
 done
+console=$trial_root/log/qemu-console.log
+if [ ! -f "$console" ] ||
+   ! grep -aq 'Initial image ....... stage 8' "$console" ||
+   grep -aqE 'System degraded|Initial image .* EXITED|Kernel panic' "$console" ||
+   [ -s "$trial_root/log/panic-latest.log" ]; then
+    echo "candidate guest did not remain healthy at stage 8" >&2
+    exit 1
+fi
 echo "ASTRA_PRIVATE_TRIAL ran=${seconds}s root=$trial_root"

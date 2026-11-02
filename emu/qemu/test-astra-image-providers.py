@@ -99,8 +99,25 @@ assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG",
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
     "trusted /apps/Inspector.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ RAM_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
-    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw LIBS:r",
+    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw CRED_WRITE LIBS:r",
     "trusted /apps/AstraZ.app grants GUI PCM VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r"]
+assert not any("CRED_READ" in line for line in
+               astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
+               if line.startswith("trusted "))
+with open(os.path.join(astra_image.REPOSITORY,
+                       "sw/include/astra/process.h"), encoding="ascii") as header:
+    capability_limit = int(re.search(
+        r"#define ASTRA_CAPABILITY_NAME_MAX (\d+)u", header.read()).group(1))
+for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines():
+    words = line.split()
+    for section in ("grants", "serves"):
+        if section not in words:
+            continue
+        for word in words[words.index(section) + 1:]:
+            if word in ("serves", "delegates", "required", "critical") or \
+                    word.startswith(("priority=", "start=", "restart=")):
+                break
+            assert len(word.split(":", 1)[0]) < capability_limit, (line, word)
 with open(os.path.join(os.path.dirname(__file__),
                        "../../sw/userspace/ports/astraz/apps/AstraZ.app/manifest"),
           encoding="ascii") as handle:

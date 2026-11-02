@@ -5,7 +5,7 @@ includes this facility. Production host key was generated on first start;
 private certification covered seal/open, restart, and ordinary-channel denial.
 See `docs/CURRENT_STATE.md` for release evidence.
 
-Config Kit 1.2 adds `astra_config_set_secret` and
+Config Kit 1.2 added `astra_config_set_secret` and
 `astra_config_get_secret`. A caller must already hold a scoped `CONFIG` or
 `CONFIG_SYSTEM` grant and the resident-only `HOST_SECRETS` grant. Each value is stored
 as an authenticated `ASC1` envelope under `secret.<key>` in that owner's
@@ -14,9 +14,26 @@ handles persistence. The API accepts 1–1024 bytes. The envelope uses
 XChaCha20-Poly1305 with a fresh 24-byte host nonce and binds both the
 capability root and full setting name as associated data. A changed envelope,
 key, root, or setting name returns `ASTRA_CONFIG_AUTH_FAILED`.
-Ordinary apps, including Settings, cannot request that host right. A future
-network mount service will own saved share credentials and accept narrowly
-scoped requests from Settings over its native service port.
+Ordinary apps, including Settings, cannot request that host right. Config Kit
+1.3 adds a resident, generic `credentials` service as the only owner of its
+protected document. `CRED_WRITE` permits set/remove; `CRED_READ`
+permits get. Settings receives only the write capability. Production grants
+the read capability to no app or service yet; a future trusted consumer must
+receive it explicitly. The public `astra_credential_set/get/remove` functions
+in `config.library.1` hide the service protocol and shared-area transfer.
+References are bounded names, not paths, and values retain Config Kit's
+1–1024 byte limit. The service copies incoming bytes before sealing so a
+sender cannot mutate a shared area during encryption. Client and service
+clear their private plaintext buffers. A successful read transfers one area
+to its authorized caller, which copies and clears it. No credential value is
+logged or placed in startup arguments, environment, or the public volume
+catalog.
+
+This is a system credential store: only trusted Settings may write its key
+namespace. Granting `CRED_WRITE` to arbitrary applications would let one
+app replace another's reference. Add per-owner namespaces before making that
+grant available to untrusted applications. The current network settings work
+does not need such a grant.
 
 The root storage launcher generates 32 random key bytes on first use in
 `$ASTRA_STATE_ROOT/config-secret.key`. It creates a temporary root-owned
@@ -37,7 +54,10 @@ protection against offline host-media access is required.
 
 Haiku reference: `src/servers/keystore/Keyring.cpp` and
 `src/servers/keystore/KeyStoreServer.cpp` establish a service-owned keyring
-and access-control boundary. Their flat-buffer encrypt/decrypt functions are
+and access-control boundary. `_ResolveCallingApp` and `_ValidateAppAccess`
+enforce caller permissions there; Astra adapts this to separate native port
+capabilities because its port messages carry no caller identity. Haiku's
+flat-buffer encrypt/decrypt functions are
 unfinished placeholders; Astra uses the audited Monocypher 4.0.3 AEAD
 implementation instead. Config Kit retains Astra's scoped capability model
 and atomic document commit.
