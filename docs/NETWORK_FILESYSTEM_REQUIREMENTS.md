@@ -12,8 +12,8 @@ Open Story panel creates that directory on first use, remembers the last
 selected directory in its private Config Kit document, and returns there on
 next launch. If that directory is unavailable, it falls back to Stories, Home,
 then the volume root. Once network mounting exists, a share will appear in
-Volumes and may be selected
-without copying its story into the application bundle or local disk. Its path
+Volumes and may be selected without copying its story into the application
+bundle or local disk. Its path
 uses the same native VFS access and file-type association as local stories.
 Save files belong to the user's local Application Data area so unmounting a
 story share does not hide saved games. Current AstraZ save-path code still
@@ -29,6 +29,12 @@ desktop volume icon, Atlas root view, Unmount and `lsof` must serve it unchanged
 at the application boundary. Mount credentials and Linux paths remain private
 to the versioned provider protocol.
 
+Mounted network volumes support the same file operations as local volumes,
+subject to remote server permissions and the negotiated filesystem semantics.
+Disk formatting and partitioning remain physical-device operations. A saved
+connection is a definition, not a live mount; deleting one must not silently
+detach a mounted volume.
+
 Linux on the HPS owns the network filesystem client. No second guest filesystem
 engine, SMB implementation in Atlas, independent POSIX backend or additional
 FPGA feature is required. Extend the existing provider source/mount owner and
@@ -37,6 +43,47 @@ Haiku's read-only `src/add-ons/kernel/file_systems/nfs4/kernel_interface.cpp`
 (`nfs4_mount`, `nfs4_unmount`) informed treating a remote export as a normal
 published volume root. Astra adapts that boundary to its Linux provider and
 native volume identity rather than embedding a second NFS client in QEMU.
+Haiku's read-only `src/preferences/network/NetworkWindow.cpp` and
+`InterfaceView.cpp` informed the interface list plus details-pane layout;
+Astra uses its existing shared Settings Sidebar, List, Field, Button, and
+selection controls.
+
+## Settings and command surface
+
+Add a `NETWORK` section to Settings' sidebar with `Ethernet`, `NFS`, and `SMB`
+pages. Ethernet shows live link, address, route, and DNS status; offers DHCP
+or manual address, prefix, gateway, and DNS configuration. NFS and SMB each
+show a shared selectable list of saved mappings, `+` to add and `-` to remove,
+and a detail form for the selected mapping. The detail form exposes label,
+server, export/share, read/write policy, mount status, and Mount/Unmount.
+SMB also exposes account/domain and a credential reference; the password
+entry writes to the protected secret owner, never Config Kit. Reuse one
+settings-page composition for both protocols rather than two separate UIs.
+Editing an active mapping saves the proposed definition without changing its
+current mounted identity; reconnecting applies it as a new mount generation.
+
+Settings and CLI invoke the same typed native management operations. Store
+saved mapping definitions and optional auto-connect policy in system Config
+Kit; a mapping's ID remains stable while its mount gets a fresh provider
+generation on each attachment. Auto-connect failure must leave the desktop
+available and show a useful error. Removing a mapping with a live mount first
+uses normal safe unmount: if files are open, show the exact holders and keep
+both mapping and mount intact. Existing desktop and Atlas volume presentation
+then need no protocol-specific branches.
+
+DE25 currently runs NetworkManager and systemd-resolved on its Linux HPS.
+The native Network Kit exposes sockets, DNS resolution, and interface address
+enumeration, but no interface configuration or route/DNS control API. Add a
+typed privileged host control boundary; Settings must not invoke `nmcli`,
+edit Linux profiles, or edit `/etc/resolv.conf` directly. Config Kit is the
+user-visible desired configuration; any NetworkManager profile generated for
+early host boot is derived state, with one owner and clear reconciliation.
+Use NetworkManager's
+[checkpoint/rollback transaction](https://www.networkmanager.dev/docs/api/1.36/gdbus-org.freedesktop.NetworkManager.html)
+when changing the active management link. Apply and validate a candidate, require confirmation before
+the checkpoint expires, and restore the last known good configuration if
+connectivity or confirmation fails. Local Astra boot must not depend on a
+reachable network.
 
 ## Protocol choice and measured platform state
 
@@ -92,7 +139,11 @@ describes stable client identity and DNS upcalls.
    delayed reads, writes, sync and directory traversal. A disconnected share
    must not stop unrelated volumes, desktop control or shutdown. Timeout or
    cancellation must not report an uncertain write as committed or free a
-   still-running worker's resources.
+   still-running worker's resources. Do not use NFS `soft` retries as a
+   shortcut for responsive UI: the Linux
+   [NFS manual](https://man7.org/linux/man-pages/man5/nfs.5.html) warns that `soft` timeouts
+   can silently corrupt data. Isolate or account for stalled host workers
+   while retaining truthful write results.
 6. Preserve safe unmount semantics: quiesce new opens, expose exact retained
    users and pending I/O, drain accepted work, sync, then real unmount. Busy,
    server loss and uncertain durability remain distinct results. Reconnection

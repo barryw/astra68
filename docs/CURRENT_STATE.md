@@ -2,6 +2,21 @@
 
 Status: active continuation map, 2026-11-02
 
+Network volume assessment, 2026-11-02: DE25 Linux HPS has active
+NetworkManager 1.36.6, systemd-resolved, DHCP IPv4 address, default route,
+and DNS; Astra's native Network Kit already exposes sockets, resolver, and
+interface addresses. It does not expose DHCP/manual address, route, or DNS
+control. The running 6.12.11 storage kernel has NFSv4 client support, but
+`CONFIG_CIFS` is disabled and neither `mount.cifs` nor `mount.nfs` is installed.
+Network shares still lack a native source/mount transaction, protected SMB
+credential owner, saved mapping policy, remote-I/O fault handling, and CLI/UI.
+Settings already has a shared Sidebar, List, and pane composition; proposed
+NETWORK pages are Ethernet, NFS, and SMB, with Config Kit saved mappings and
+the existing exact-holder safe-unmount path. Active IP changes must go through
+a typed host control boundary and NetworkManager checkpoint rollback so remote
+access cannot be lost on an unconfirmed change. Scope and Haiku references:
+`docs/NETWORK_FILESYSTEM_REQUIREMENTS.md`. No production configuration changed.
+
 AstraZ story location checkpoint, 2026-11-02: Open Story now creates and
 starts in `HOME:Stories` (`/home/Stories`). Its private Config Kit document
 remembers the last selected story directory across launches; an unavailable
