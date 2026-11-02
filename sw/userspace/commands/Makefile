@@ -366,7 +366,7 @@ $(ZSH_BUILD_CONFIG): Makefile $(ZSH_CONFIG_SITE) $(ZSH_SOURCE)/configure \
 		$(ZSH_SOURCE)/configure --host=m68k-unknown-elf \
 		--cache-file=/dev/null --disable-dynamic --disable-pcre \
 		--enable-multibyte \
-		--enable-etcdir=/home
+		--enable-etcdir=/home/.config/zsh
 	@mkdir -p $(@D)
 	@rm -f build/.vendor-config/zsh-*
 	@touch $@

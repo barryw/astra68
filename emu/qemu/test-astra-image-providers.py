@@ -217,8 +217,9 @@ with open(os.path.join(astra_image.REPOSITORY,
     app_rules = makefile.read()
     assert "$(TERMINAL): FORCE\n" in app_rules
     assert "$(GALLERY): FORCE\n" in app_rules
-assert "zshrc" in astra_image.HOME_DEFAULTS
-assert ".motd" in astra_image.HOME_DEFAULTS
+assert ".config/zsh/zshrc" in astra_image.HOME_DEFAULTS
+assert ".config/zsh/motd" in astra_image.HOME_DEFAULTS
+assert all("/" in path for path in astra_image.HOME_DEFAULTS)
 assert not any(path.startswith("commands/") for path in astra_image.CONFIGURATION)
 assert "remote-desktop" in astra_image.DISPLAY_SERVICES
 assert "storage" not in astra_image.DISPLAY_SERVICES
@@ -247,7 +248,7 @@ for test_command in ("posix", "hello", "cxx"):
     assert " " + test_command + " " not in \
         " " + " ".join(shipped_commands.split()) + " "
 assert "TEST_COMMANDS := posix hello cxx" in commands_make
-assert "--enable-etcdir=/home" in commands_make
+assert "--enable-etcdir=/home/.config/zsh" in commands_make
 assert "--enable-etcdir=CONFIG:" not in commands_make
 assert "$(ZSH_BUILD_CONFIG): Makefile $(ZSH_CONFIG_SITE)" in commands_make
 with open(os.path.join(astra_image.REPOSITORY,
@@ -256,6 +257,8 @@ with open(os.path.join(astra_image.REPOSITORY,
     launcher = session.read()
     assert '"/libs/vim/runtime"' in launcher
     assert '"/local/commands:/commands"' in launcher
+    assert '"XDG_CONFIG_HOME"' in launcher
+    assert '"/home/.config"' in launcher
     assert '"LIBS:vim/runtime"' not in launcher
 
 with tempfile.TemporaryDirectory() as directory:
@@ -280,10 +283,11 @@ try:
     raise AssertionError("provider path beyond the VFS ABI was accepted")
 except RuntimeError as error:
     assert "provider index path is too long" in str(error)
-zshrc = astra_image.HOME_DEFAULTS["zshrc"]
+zshrc = astra_image.HOME_DEFAULTS[".config/zsh/zshrc"]
 assert "/home/.motd.zsh" in zshrc
 assert zshrc.index("/home/.motd.zsh") < zshrc.index("elif [[ -r /home/.motd ]]")
 assert "$(</home/.motd)" in zshrc
+assert "$(</home/.config/zsh/motd)" in zshrc
 assert "/config/" not in zshrc
 assert "\\e]133;A" in zshrc and "\\e]133;B" in zshrc
 startup = astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
@@ -807,7 +811,8 @@ with tempfile.TemporaryDirectory(prefix="astra-config-preservation-") as directo
     directories = (
         "/config", "/config/services", "/config/services/desktop",
         "/config/services/hostfs", "/config/services/remote-desktop",
-        "/config/user", "/config/user/nested", "/home", "/local",
+        "/config/user", "/config/user/nested", "/home",
+        "/home/.config", "/home/.config/zsh", "/local",
         "/local/commands", "/fonts/installed")
     for path in directories:
         astra_image._mkdir(volume, path, "preserved directory")
@@ -821,6 +826,7 @@ with tempfile.TemporaryDirectory(prefix="astra-config-preservation-") as directo
                 "enabled true\n", "enabled false\n").encode("ascii"),
         "/config/user/nested/custom.bin": b"custom\x00configuration\xff\n",
         "/home/.motd": b"my own shell greeting\n",
+        "/home/.config/zsh/motd": b"my organized shell greeting\n",
         "/home/kept.txt": b"home retained\n",
         "/local/commands/kept.txt": b"local retained\n",
         "/fonts/installed/user.afnt": b"installed font retained\n",
@@ -942,6 +948,8 @@ with tempfile.TemporaryDirectory(prefix="astra-config-preservation-") as directo
     reject_change('write %s "/config/user/nested/unexpected.txt"' %
                   astra_image._debugfs_quote(attribute_seed), "unexpected state addition")
     reject_change('punch "/home/.motd" 0 0', "preserved content changed")
+    reject_change('punch "/home/.config/zsh/zshrc" 0 0',
+                  "incorrect installer default contents")
     print("state observer actual ext4: full binary/empty xattrs, fast/long/broken/byte symlinks, hardlinks, metadata/content/default/addition rejection and immutable inputs PASS")
 
     for index, name in enumerate((b"name\nline", b"\xffname")):

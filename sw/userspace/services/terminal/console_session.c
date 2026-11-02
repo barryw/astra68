@@ -444,11 +444,13 @@ static uint32_t run_zsh(void)
     static const char *const argv[] = {"zsh"};
     static const char *const environment_names[] = {
         "HOME", "PATH", "SHELL", "TERM", "TMPDIR", "VIMRUNTIME",
+        "XDG_CONFIG_HOME",
         "ASTRA_INITIAL_DIRECTORY"
     };
     const char *environment_values[] = {
         "/home", "/local/commands:/commands", "/commands/zsh", "astra-256color",
-        "/tmp", "/libs/vim/runtime", session.backend.initial_directory
+        "/tmp", "/libs/vim/runtime", "/home/.config",
+        session.backend.initial_directory
     };
     AstraLaunchGrant grants[ASTRA_LAUNCH_GRANT_MAX] = {0};
     AstraLaunchArguments arguments;
@@ -470,7 +472,7 @@ static uint32_t run_zsh(void)
     }
     status = astra_launch_environment_pack(
         &arguments, environment_storage, sizeof(environment_storage),
-        session.backend.initial_directory != NULL ? 7u : 6u,
+        session.backend.initial_directory != NULL ? 8u : 7u,
         environment_names, environment_values);
     if (status != ASTRA_SYSCALL_OK) {
         write_line("zsh: working directory does not fit launch environment");

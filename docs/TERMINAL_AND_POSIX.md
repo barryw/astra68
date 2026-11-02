@@ -104,9 +104,10 @@ so applications do not need a terminal-specific argument.
 
 Terminal launches `COMMANDS:zsh` with `HOME=HOME:`, `PATH=/commands`,
 `SHELL=/commands/zsh`, and `TERM=astra-256color`. Zsh reads its default
-startup file `/HOME/zshrc` and then the user's `/HOME/.zshrc`. The shared
-POSIX startup converts `HOME:` to `/HOME` before zsh runs. Commands use
-ordinary config files and receive no private Config Kit grant.
+startup file `/HOME/.config/zsh/zshrc` and then the user's `/HOME/.zshrc`.
+Terminal sets `XDG_CONFIG_HOME=/home/.config` for commands that honor it. The
+shared POSIX startup converts `HOME:` to `/HOME` before zsh runs. Commands
+use ordinary config files and receive no private Config Kit grant.
 
 The shell launches an installed native GUI bundle with
 `open APPS:Name.app [argument ...]`. `open`, desktop icons, and the future
@@ -116,8 +117,9 @@ soon as startup succeeds unless `--wait` is requested. Window creation remains
 asynchronous, and launch origin is available to the application through
 `astra_startup_launch_source()` rather than a command-line switch.
 
-The startup file sources `/HOME/.motd.zsh` when present; otherwise it prints
-`/HOME/.motd`. Both default files are seeded only when absent and remain
+The startup file first honors existing `/HOME/.motd.zsh` or `/HOME/.motd`.
+Otherwise it uses `/HOME/.config/zsh/motd.zsh` or the seeded
+`/HOME/.config/zsh/motd`. Defaults are seeded only when absent and remain
 editable. Scripts can call `ps`, `metrics`, or other commands for dynamic
 content; plain files are literal and need no placeholder language.
 

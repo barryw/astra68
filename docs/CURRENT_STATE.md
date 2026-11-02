@@ -29,8 +29,12 @@ state was removed; selected production services were active with 8.1 GiB free.
 Production DE25 still runs
 `01ee57e38814f4710ecb9af68c41af14a685f6593798b1666331e2d95521d985`.
 Barry's current settings rule: command-line tools use ordinary config files;
-applications and services use Config Kit. Zsh's default startup and MOTD now
-live in `HOME:`; Terminal gives it no private Config grant. Private Config grants
+applications and services use Config Kit. Command files live under
+`HOME:/.config/<command>/`; Terminal sets `XDG_CONFIG_HOME=/home/.config`.
+Zsh defaults now live in `HOME:/.config/zsh/`, while existing `/home/.zshrc`
+and MOTD overrides keep working. Terminal gives zsh no private Config grant.
+Haiku `src/apps/workspaces/Workspaces.cpp` informed the dedicated user settings
+directory; Astra uses ordinary files there for CLI tools. Private Config grants
 are marked `CLOSE_ON_EXEC` and their live handles removed at exec commit,
 so child commands cannot inherit an application's or service's private settings.
 Failed exec preserves the grant; an already-closed grant does not block exec.
@@ -40,10 +44,10 @@ and disposable Beast Config Kit two-boot and zsh QEMU gates pass. The Config
 Kit gate proved protected write/restart read, public read/publish, and
 ordinary-channel denial. The unrelated
 userspace boundary test still reports existing Interface Kit and AstraZ
-ownership violations. Final clean Beast release `342b6507a48377fc719c983855a7eaba668725c38cbda0e207449092a471658c`
+ownership violations. Final clean Beast release `b885dbe84c027757b967cd1494a0b835d221c783e272d29c69bc36a8de8a3c0b`
 passed a guarded 90-second DE25 private trial at stage 8; the selector and all
 three production services restored, with 8.1 GiB free. Beast evidence is at
-`/mnt/Documents/astra68/config-cli-rule-final-20261102/`; board trial state was
+`/mnt/Documents/astra68/cli-config-layout-20261102/`; board trial state was
 removed. The trial shutdown emitted `astra-storage control request failed:
 Broken pipe` after QEMU received SIGTERM, with no guest panic or degradation.
 The clean publisher required `FLUIDSYNTH_ROOT=/home/barry/Git/fluidsynth` on

@@ -83,17 +83,21 @@ CONFIGURATION = {
         "grant HOST_DEVICE\n"),
 }
 HOME_DEFAULTS = {
-    "zshrc": (
+    ".config/zsh/zshrc": (
         "# System defaults load before the user's $HOME/.zshrc.\n"
         "if [[ -r /home/.motd.zsh ]]; then\n"
         "  source /home/.motd.zsh\n"
         "elif [[ -r /home/.motd ]]; then\n"
         "  print -r -- \"$(</home/.motd)\"\n"
+        "elif [[ -r /home/.config/zsh/motd.zsh ]]; then\n"
+        "  source /home/.config/zsh/motd.zsh\n"
+        "elif [[ -r /home/.config/zsh/motd ]]; then\n"
+        "  print -r -- \"$(</home/.config/zsh/motd)\"\n"
         "fi\n"
         "_astra_prompt_start() { print -n -- $'\\e]133;A\\e\\\\' }\n"
         "precmd_functions+=(_astra_prompt_start)\n"
         "PROMPT+=$'%{\\e]133;B\\e\\\\%}'\n"),
-    ".motd": (
+    ".config/zsh/motd": (
         "Astra 68\n"
         "Run help for shell help, ps for processes, and metrics for system "
         "metrics.\n"),
@@ -1073,11 +1077,16 @@ def _install_built(image, catalog=DEFAULT_CATALOG,
         # User-owned state is not replaced by publishing system products.
         _mkdir(volume, "/%s" % HOME_DIRECTORY, "the home directory")
         for path, contents in HOME_DEFAULTS.items():
+            components = path.split("/")
+            for count in range(1, len(components)):
+                directory = "/%s/%s" % (
+                    HOME_DIRECTORY, "/".join(components[:count]))
+                _mkdir(volume, directory, "command configuration directory")
             target = "/%s/%s" % (HOME_DIRECTORY, path)
             kind = _inode_type(volume, target)
             if kind is not None:
                 continue
-            host = os.path.join(temporary, "home-" + path)
+            host = os.path.join(temporary, "home-" + path.replace("/", "-"))
             with open(host, "w", encoding="ascii", newline="\n") as handle:
                 handle.write(contents)
             _debugfs(volume, "write %s %s" % (

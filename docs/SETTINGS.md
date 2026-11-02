@@ -13,11 +13,19 @@ that component validates its values and defines defaults.
 | Service implementation | `/config/services/<service>/settings.conf` | Its private `CONFIG` grant |
 | Application | `/config/applications/<bundle id>/settings.conf` | Its private `CONFIG` grant |
 
-Command-line tools use ordinary configuration files in `HOME:` (and shipped
-read-only defaults where needed). They do not receive Config Kit grants. A
-command that changes system policy calls the owning service's validated API;
+Command-line tools use ordinary configuration files under
+`HOME:/.config/<command>/`; Terminal sets `XDG_CONFIG_HOME=/home/.config`
+for compatible ports. Existing shell dotfiles in `HOME:` remain usable, but
+new command defaults belong in the command directory. Commands do not receive
+Config Kit grants. A command that changes system policy calls the owning
+service's validated API;
 that service persists the change through Config Kit. Config Kit does not
 materialize command files or watch them for edits.
+
+Haiku's `B_USER_SETTINGS_DIRECTORY` pattern informed the dedicated user
+settings location (`src/apps/workspaces/Workspaces.cpp`); Astra adapts it to
+ordinary CLI files under `HOME:/.config/`, while native apps and services keep
+private Config Kit roots.
 
 Supervisor derives roots from verified service or bundle identity, creates owner
 directories, and grants only requested rights. Ordinary apps cannot request
