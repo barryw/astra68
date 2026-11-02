@@ -35,6 +35,13 @@ app replace another's reference. Add per-owner namespaces before making that
 grant available to untrusted applications. The current network settings work
 does not need such a grant.
 
+This broker is an intermediate implementation, not the final Config Kit
+interface. The intended contract in `docs/SETTINGS.md` keeps sensitive values
+in their owner's configuration document and uses ordinary typed get/set calls.
+Schema metadata selects protection inside Config Kit. The global credential
+namespace and separate public credential calls must be replaced before network
+shares or general applications depend on them.
+
 The root storage launcher generates 32 random key bytes on first use in
 `$ASTRA_STATE_ROOT/config-secret.key`. It creates a temporary root-owned
 0600 file within a root-owned, non-writable state directory, syncs it, and

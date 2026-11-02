@@ -25,6 +25,30 @@ System components own system policy; apps own app preferences. A settings UI
 asks the owning service to change system policy through a typed, validated
 operation. It does not receive a raw writable `/config/system` path. Applications
 use their own Config Kit handle directly for private preferences.
+
+## Visibility contract
+
+Each application, service, and command owns a private Config Kit document.
+Ordinary owners cannot inspect another owner's document. A system management
+tool may receive an explicit, narrow grant for migration or administration;
+its role alone does not grant access to every owner's settings. Terminal must
+pass a command only that command's configuration grant.
+
+Applications may read public system settings through a read-only Config Kit
+view. The system owner selects which settings are published: appearance,
+locale, and accessibility choices are examples. A setting being unencrypted
+does not make it public. Credentials, network administration, and other private
+system policy stay behind the owning service's typed interface. Applications
+cannot write system settings by editing the public view.
+
+Setting schemas declare which fields are sensitive. Callers use the same typed
+Config Kit get/set operations for sensitive and ordinary fields; Config Kit
+alone seals and opens values and fails closed if protected data cannot be
+authenticated. Protection metadata is not inferred from a key name or a
+previous on-disk value. This is the target contract; the current separate
+credential API and global credential document must be refactored before they
+are used for network shares or general application settings.
+
 Application settings use the bundle manifest's stable `id`, like `STORE:` data,
 so moving a bundle into a subfolder or another volume keeps its preferences.
 On first launch, supervisor atomically moves an older leaf-name settings

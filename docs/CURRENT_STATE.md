@@ -4,6 +4,12 @@ Status: active continuation map, 2026-11-02
 
 Credential service dependency, 2026-11-02: Config Kit 1.3 now exposes
 `astra_credential_set/get/remove` through one resident credential owner.
+Barry clarified the target contract after this gate: every app, service, and
+command owns private settings; public system settings are a read-only Config
+Kit view; schemas mark sensitive fields, while callers use ordinary typed
+get/set operations. The current global credential document and separate
+credential calls do not meet that contract and must be refactored before
+network shares consume them. See `docs/SETTINGS.md`.
 Settings receives `CRED_WRITE` for set/remove; no production client receives
 `CRED_READ` yet. Service owns its encrypted Config Kit document and has no
 network-share, volume, or mount logic. It copies shared-area input before
