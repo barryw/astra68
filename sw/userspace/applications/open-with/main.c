@@ -22,6 +22,8 @@
 #define WIDTH 560u
 #define HEIGHT 340u
 #define PREFERENCE_KEY "preferred"
+static const AstraConfigField config_fields[] = {{PREFERENCE_KEY, 0u}};
+static const AstraConfigSchema config_schema = {1u, config_fields, 1u};
 
 enum { TITLE = 1u, DESCRIPTION, BODY, ACTIONS, SCROLL, APPLICATIONS,
        ALWAYS, CANCEL, OPEN, CONTROL_COUNT = OPEN };
@@ -325,7 +327,7 @@ int astra_main(const AstraStartupInfo *startup)
         failure = "font setup";
     else if (astra_process_filesystem_open(&files, startup) != ASTRA_VFS_OK)
         failure = "filesystem access";
-    else if (astra_config_open(startup, 1u, ASTRA_CONFIG_OPEN_READ |
+    else if (astra_config_open(startup, &config_schema, ASTRA_CONFIG_OPEN_READ |
             ASTRA_CONFIG_OPEN_WRITE, &config, NULL) != ASTRA_CONFIG_OK)
         failure = "settings access";
     else if (astra_application_catalog_load(&files, "/apps", &catalog) != ASTRA_VFS_OK)

@@ -46,6 +46,11 @@ AstraVfsClient *supervisor_vfs_client(void)
     return managed ? &managed_client : NULL;
 }
 
+AstraVfsClient *supervisor_vfs_config_client(void)
+{
+    return supervisor_vfs_client();
+}
+
 uint32_t astra_vfs_mkdir_mode(AstraVfsClient *client, const char *path,
                               uint16_t mode)
 {
@@ -281,6 +286,18 @@ int main(void)
                                    "org.foo",
                                    root, sizeof(root)) == ASTRA_CONFIG_OK);
         assert(strcmp(root, "config/applications/org.foo") == 0);
+        creation_count = 0u;
+        assert(public_config_root("config", "ntpd", root,
+                                  sizeof(root)) == ASTRA_CONFIG_OK);
+        assert(strcmp(root, "config/public/ntpd") == 0);
+        assert(creation_count == 2u);
+        assert(strcmp(created[0], "/config/public") == 0);
+        assert(strcmp(created[1], "/config/public/ntpd") == 0);
+        creation_count = 0u;
+        assert(public_config_root("config", NULL, root,
+                                  sizeof(root)) == ASTRA_CONFIG_OK);
+        assert(strcmp(root, "config/public") == 0);
+        assert(creation_count == 1u);
         creation_count = 0u;
         managed = 0;
     }

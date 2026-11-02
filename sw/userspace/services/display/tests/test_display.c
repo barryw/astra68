@@ -381,11 +381,11 @@ static int dock_catalog_online;
 static int dock_config_reject;
 
 uint32_t astra_config_open_system(const AstraStartupInfo *startup,
-    uint32_t schema_version, uint32_t flags, AstraConfig *config,
+    const AstraConfigSchema *schema, uint32_t flags, AstraConfig *config,
     AstraConfigError *error)
 {
     (void)startup; (void)error;
-    assert(schema_version == 1u && flags ==
+    assert(schema != NULL && schema->version == 1u && flags ==
         (ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE));
     config->_private_area = 1u;
     config->_private_state = config;

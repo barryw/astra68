@@ -1354,6 +1354,63 @@ test_host_accelerator_moves_data_plane_out_of_the_service(void)
     served = NULL;
 }
 
+static uint32_t test_config_crypt(void *context,
+    const AstraVfsPortGrant *grant, uint32_t operation, const char *key,
+    const uint8_t *input, uint32_t input_length, uint8_t *output,
+    uint32_t output_capacity, uint32_t *output_length)
+{
+    (void)context;
+    assert(grant->id == 7u);
+    assert(operation == ASTRA_VFS_CONFIG_SEAL);
+    assert(strcmp(key, "network.password") == 0);
+    assert(input_length == 4u && memcmp(input, "test", 4u) == 0);
+    assert(output_capacity == 8u);
+    memcpy(output, "sealed", 6u);
+    *output_length = 6u;
+    return ASTRA_VFS_OK;
+}
+
+static void test_config_crypt_is_bound_to_grant_even_with_accelerator(void)
+{
+    AstraVfsPortService host;
+    AstraVfsClient remote;
+    AstraVfsPortGrant grant;
+    AstraVfsRequest request = {0};
+    AstraVfsReply reply = {0};
+    const uint8_t input[] = "network.password\0test";
+    uint8_t output[8] = {0};
+    AstraVfsTransfer transfer = {.input = input, .input_size = sizeof(input) - 1u,
+                                 .output = output, .output_capacity = sizeof(output)};
+    uint32_t service_handle;
+
+    mock_reset();
+    service_start();
+    service_handle = mock_open(MOCK_QUEUE_MAX);
+    grant = full_grant(service_handle, 7u);
+    grant.features |= ASTRA_VFS_FEATURE_CONFIG_CRYPT;
+    assert(astra_vfs_port_service_init(&host, service_handle, &service));
+    assert(astra_vfs_port_service_set_config_crypt(&host, test_config_crypt, NULL));
+    served = &host;
+    served_grant = &grant;
+    assert(astra_vfs_port_connect_lazy_with_accelerator(
+        &remote, service_handle, &mock_accelerator_ops) == ASTRA_VFS_OK);
+    request.size = ASTRA_VFS_REQUEST_SIZE;
+    request.version = ASTRA_VFS_VERSION;
+    request.session = ASTRA_VFS_SESSION_INVALID;
+    request.file = ASTRA_VFS_FILE_INVALID;
+    request.flags = ASTRA_VFS_CONFIG_SEAL;
+    request.offset = sizeof("network.password");
+    request.length = 4u;
+    request.write_limit = sizeof(output);
+    assert(astra_vfs_port_transport(&remote, ASTRA_VFS_OP_CONFIG_CRYPT,
+        &request, &transfer, &reply) == ASTRA_VFS_OK);
+    assert(reply.status == ASTRA_VFS_OK && reply.count == 6u);
+    assert(memcmp(output, "sealed", 6u) == 0 && direct_operations == 0u);
+    astra_vfs_port_wipe_area(&remote, transfer.input_size);
+    assert(astra_vfs_disconnect(&remote) == ASTRA_VFS_OK);
+    served = NULL;
+}
+
 static void
 test_shared_accelerated_client_keeps_thread_requests_in_flight(int refresh)
 {
@@ -2994,6 +3051,7 @@ main(void)
     test_first_operation_binds_complete_operand_transport();
     test_signal_cancellation_does_not_abandon_an_inflight_reply();
     test_host_accelerator_moves_data_plane_out_of_the_service();
+    test_config_crypt_is_bound_to_grant_even_with_accelerator();
     test_grants_hand_out_their_scope_and_only_narrow();
     test_the_kit_derives_on_its_hello_lane();
     test_descriptions_require_a_connected_data_plane();

@@ -367,6 +367,46 @@ static uint32_t private_config_root(const SupervisorManifestEntry *entry,
     return status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS ? ASTRA_CONFIG_OK : ASTRA_CONFIG_IO;
 }
 
+static uint32_t public_config_root(const char *parent, const char *owner,
+                                   char *out, uint32_t capacity)
+{
+    AstraVfsPathStorage paths ASTRA_AUTO_VFS_PATH_STORAGE =
+        astra_vfs_path_storage_open(2u);
+    AstraVfsClient *client = supervisor_vfs_config_client();
+    uint32_t status;
+    if (paths.bytes == NULL)
+        return ASTRA_CONFIG_NO_MEMORY;
+    if (client == NULL)
+        return ASTRA_CONFIG_IO;
+    char *base = astra_vfs_path_storage_at(&paths, 0u);
+    char *wire = astra_vfs_path_storage_at(&paths, 1u);
+    status = astra_config_owner_root(parent, "public", base,
+                                     ASTRA_VFS_PATH_MAX);
+    if (status != ASTRA_CONFIG_OK)
+        return status;
+    strcpy(wire, "/");
+    if (!astra_string_concat(wire, ASTRA_VFS_PATH_MAX, base))
+        return ASTRA_CONFIG_BUFFER_TOO_SMALL;
+    status = astra_vfs_mkdir_mode(client, wire, 0700u);
+    if (status != ASTRA_VFS_OK && status != ASTRA_VFS_ERR_EXISTS)
+        return ASTRA_CONFIG_IO;
+    if (owner == NULL) {
+        if (strlen(base) >= capacity)
+            return ASTRA_CONFIG_BUFFER_TOO_SMALL;
+        strcpy(out, base);
+        return ASTRA_CONFIG_OK;
+    }
+    status = astra_config_owner_root(base, owner, out, capacity);
+    if (status != ASTRA_CONFIG_OK)
+        return status;
+    strcpy(wire, "/");
+    if (!astra_string_concat(wire, ASTRA_VFS_PATH_MAX, out))
+        return ASTRA_CONFIG_BUFFER_TOO_SMALL;
+    status = astra_vfs_mkdir_mode(client, wire, 0700u);
+    return status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS ?
+        ASTRA_CONFIG_OK : ASTRA_CONFIG_IO;
+}
+
 static uint32_t config_launch_status(uint32_t status)
 {
     switch (status) {
@@ -1449,6 +1489,31 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                 return status;
             continue;
         }
+        if (strcmp(wanted->name, ASTRA_CONFIG_PUBLIC_CAPABILITY) == 0 ||
+            strcmp(wanted->name, ASTRA_CONFIG_PUBLISH_CAPABILITY) == 0) {
+            const AstraAssign *held = astra_assign_lookup(
+                supervisor_assigns(), ASTRA_CONFIG_CAPABILITY);
+            char *root = astra_vfs_path_storage_at(&path_storage, 1u);
+            int publish = strcmp(wanted->name,
+                ASTRA_CONFIG_PUBLISH_CAPABILITY) == 0;
+            if ((publish && entry->resident == 0u) ||
+                (publish && wanted->rights !=
+                    (ASTRA_RIGHT_READ | ASTRA_RIGHT_WRITE)) ||
+                (!publish && wanted->rights != ASTRA_RIGHT_READ))
+                return ASTRA_STATUS_ACCESS;
+            if (held == NULL)
+                continue;
+            uint32_t config_status = public_config_root(held->root,
+                publish ? private_store_root(entry) : NULL,
+                root, ASTRA_VFS_PATH_MAX);
+            if (config_status != ASTRA_CONFIG_OK)
+                return config_launch_status(config_status);
+            status = add_namespace_grant(out, count, wanted->name, held,
+                root, wanted->rights, 0);
+            if (status != ASTRA_STATUS_OK)
+                return status;
+            continue;
+        }
         if (strcmp(wanted->name, ASTRA_CONFIG_CAPABILITY) == 0 ||
             strcmp(wanted->name, ASTRA_CONFIG_COMMANDS_CAPABILITY) == 0) {
             const AstraAssign *held = astra_assign_lookup(
@@ -1598,6 +1663,22 @@ static uint32_t build_grants(const AstraStartupInfo *startup,
                     return config_launch_status(config_status);
                 status = add_namespace_grant(out, count, ASTRA_CONFIG_CAPABILITY, held,
                     root, held->rights, 0);
+                if (status != ASTRA_STATUS_OK)
+                    return status;
+            }
+        }
+        if (!entry_grants(entry, ASTRA_CONFIG_PUBLIC_CAPABILITY)) {
+            const AstraAssign *held = astra_assign_lookup(
+                supervisor_assigns(), ASTRA_CONFIG_CAPABILITY);
+            char *root = astra_vfs_path_storage_at(&path_storage, 1u);
+            if (held != NULL) {
+                uint32_t config_status = public_config_root(held->root,
+                    NULL, root, ASTRA_VFS_PATH_MAX);
+                if (config_status != ASTRA_CONFIG_OK)
+                    return config_launch_status(config_status);
+                status = add_namespace_grant(out, count,
+                    ASTRA_CONFIG_PUBLIC_CAPABILITY, held, root,
+                    ASTRA_RIGHT_READ, 0);
                 if (status != ASTRA_STATUS_OK)
                     return status;
             }

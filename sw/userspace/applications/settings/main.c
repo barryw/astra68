@@ -62,6 +62,8 @@ static AstraUIContext ui = ASTRA_UI_CONTEXT_INIT;
 static AstraSharedSurface surface;
 static AstraWindow window = ASTRA_WINDOW_INIT;
 static AstraConfig config = ASTRA_CONFIG_INIT;
+static const AstraConfigField config_fields[] = {{"pane", 0u}};
+static const AstraConfigSchema config_schema = {1u, config_fields, 1u};
 static AstraHandle gui;
 static AstraHandle launcher;
 static uint32_t config_ready;
@@ -540,7 +542,7 @@ int astra_main(const AstraStartupInfo *startup)
         return ASTRA_STATUS_ACCESS;
     gui = gui_cap->handle;
     launcher = launch_cap->handle;
-    config_ready = astra_config_open(startup, 1u,
+    config_ready = astra_config_open(startup, &config_schema,
         ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
         &config, NULL) == ASTRA_CONFIG_OK;
     if (config_ready && astra_config_get_u64(&config, "pane", 0u,

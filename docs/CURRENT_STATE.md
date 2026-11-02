@@ -2,26 +2,41 @@
 
 Status: active continuation map, 2026-11-02
 
-Config Kit private storage candidate, 2026-11-02 (not released): the root
-storage provider now migrates the former system-image `/config` tree into a
-root-owned host state directory before QEMU starts, then removes the raw DH0
-copy. HostFS publishes that directory only through provider-rooted `CONFIG`
-grants. Supervisor provisions per-owner roots and routes service definitions
-through that private grant. Beast host migration and launcher tests, coherent
-userspace/ROM builds, root-observer QEMU boot, and unprivileged QEMU Terminal
-probe passed; the probe read `/config/motd` while `/dh0/config/commands/zsh/motd`
-was absent. The hostile-caller QEMU wrapper needed group-readable disposable
-WORK/SOUND exports and a provider umask of 027 for its advertised observation
-path; its private config directory stays root-only. This candidate has not
-been qualified or installed on DE25. Config Kit still lacks schema-driven
-transparent sensitive fields and curated public system settings, and its
-global credential API remains an intermediate interface. Do not use those
-pieces for network-share settings yet. Haiku read-only references:
+Config Kit 2.0 candidate, 2026-11-02 (not released): the root storage provider
+migrates the former system-image `/config` tree into root-owned host state;
+HostFS exposes it only through provider-rooted grants. Owner schemas now
+whitelist keys and mark protected values for transparent typed get/set using
+grant-bound seal/open. HostFS alone holds `HOST_SECRETS`, and the caller cannot
+choose a different authenticated owner root. A separate `/config/public` tree
+offers read-only public settings and per-service publishing; public schemas
+reject sensitive fields. The global credential service and API were removed,
+and config.library ABI rose to 2. Beast VFS, Config Kit, supervisor, image
+provider, NDK distribution, userspace, and ROM builds pass. A disposable
+root-observer QEMU gate reached stage 8 twice with the same host key and
+private state, proved first sealed write and restart read, public publish/read,
+ordinary-channel denial, and no plaintext in the private document. Staged
+DE25 release `1adb46e6cb419f51c2423c006cd9b8358f61150dae741c0a0ced8dff46a608ed`
+passed a 90-second normal-image private trial. A second disposable image on
+DE25 proved first sealed write, reload, public publish/read, ordinary-channel
+denial, and read after restart with the same root-owned 0600 host key. The
+private document held `ASC1` ciphertext, not plaintext; guest syslog had no
+panic, failure, error, or degradation entries. A 30-second restart attempt
+ended before stage 8 during NTP startup; the repeated 90-second attempt
+reached stage 8 and passed. Board logs and encrypted test documents were
+archived with matching checksums at
+`/mnt/Documents/astra68/config-kit-v2-20261102/` on Beast. Disposable board
+state was removed; selected production services were active with 8.1 GiB free.
+Production DE25 still runs
+`01ee57e38814f4710ecb9af68c41af14a685f6593798b1666331e2d95521d985`.
+Command settings isolation remains unresolved: Terminal gives zsh a scoped
+`CONFIG` grant, which `execve` currently carries into commands. Do not claim
+per-command private settings until launch grants are rebound by command
+identity. Haiku read-only references:
 `src/system/kernel/fs/vfs.cpp` (server-enforced path authority) and
 `src/servers/keystore/KeyStoreServer.cpp`, `Keyring.cpp` (service-owned secrets
 and caller checks); Astra uses its existing provider-rooted grants.
 
-Credential service dependency, 2026-11-02: Config Kit 1.3 now exposes
+Historical credential service checkpoint, 2026-11-02: Config Kit 1.3 exposed
 `astra_credential_set/get/remove` through one resident credential owner.
 Barry clarified the target contract after this gate: every app, service, and
 command owns private settings; public system settings are a read-only Config

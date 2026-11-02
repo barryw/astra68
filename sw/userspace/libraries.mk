@@ -42,7 +42,7 @@ ASTRA_INTERFACE_LIBRARY := \
 ASTRA_NETWORK_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/network/build/m68k/libraries/network.library.1
 ASTRA_CONFIG_LIBRARY := \
-	$(ASTRA_USERSPACE_ROOT)/config/build/m68k/libraries/config.library.1
+	$(ASTRA_USERSPACE_ROOT)/config/build/m68k/libraries/config.library.2
 ASTRA_PCM_LIBRARY := \
 	$(ASTRA_USERSPACE_ROOT)/audio/build/m68k/libraries/pcm.library.3
 ASTRA_CODEC_LIBRARY := \

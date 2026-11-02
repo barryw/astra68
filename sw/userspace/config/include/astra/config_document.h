@@ -3,6 +3,14 @@
 
 #include <stdint.h>
 
+int astra_config_document_key_valid(const char *key);
+uint32_t astra_config_value_u64(const char *text, uint32_t count,
+                                uint64_t *value);
+uint32_t astra_config_value_i64(const char *text, uint32_t count,
+                                int64_t *value);
+uint32_t astra_config_value_bool(const char *text, uint32_t count,
+                                 int *value);
+
 #include <astra/config_library.h>
 
 typedef struct AstraConfigDocumentError {

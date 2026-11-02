@@ -12,7 +12,7 @@ that component validates its values and defines defaults.
 | System component | `/config/system/<service>/settings.conf` | Its resident service's `CONFIG_SYSTEM` grant |
 | Service implementation | `/config/services/<service>/settings.conf` | Its private `CONFIG` grant |
 | Application | `/config/applications/<bundle id>/settings.conf` | Its private `CONFIG` grant |
-| Command | `/config/commands/<command>/settings.conf` | Its scoped command grant |
+| Command | `/config/commands/<command>/settings.conf` | Per-command grant required; launch rebinding pending |
 
 Supervisor derives roots from verified service or bundle identity, creates owner
 directories, and grants only requested rights. Ordinary apps cannot request
@@ -32,26 +32,30 @@ use their own Config Kit handle directly for private preferences.
 
 ## Visibility contract
 
-Each application, service, and command owns a private Config Kit document.
-Ordinary owners cannot inspect another owner's document. A system management
+Each application and service owns a private Config Kit document. Ordinary
+owners cannot inspect another owner's document. A system management
 tool may receive an explicit, narrow grant for migration or administration;
 its role alone does not grant access to every owner's settings. Terminal must
-pass a command only that command's configuration grant.
+pass a command only that command's configuration grant. Current Terminal
+launch passes zsh's grant through `execve`; per-command isolation remains an
+open correctness gate.
 
-Applications may read public system settings through a read-only Config Kit
-view. The system owner selects which settings are published: appearance,
-locale, and accessibility choices are examples. A setting being unencrypted
-does not make it public. Credentials, network administration, and other private
-system policy stay behind the owning service's typed interface. Applications
-cannot write system settings by editing the public view.
+Applications receive a read-only `CONFIG_PUBLIC` grant rooted at
+`/config/public`. A resident service may explicitly request
+`CONFIG_PUBLISH:rw`, rooted at `/config/public/<service>`, and write a public
+document with `astra_config_open_publish`. Applications read one named owner
+with `astra_config_open_public`. Public fields are canonical in that document;
+private fields stay in the owner's private document, so publishing never
+copies or exposes the private file. A setting being unencrypted does not make
+it public. Applications cannot write the public view.
 
-Setting schemas declare which fields are sensitive. Callers use the same typed
-Config Kit get/set operations for sensitive and ordinary fields; Config Kit
-alone seals and opens values and fails closed if protected data cannot be
-authenticated. Protection metadata is not inferred from a key name or a
-previous on-disk value. This is the target contract; the current separate
-credential API and global credential document must be refactored before they
-are used for network shares or general application settings.
+Config Kit 2.0 requires an owner schema listing every key. A field marked
+`ASTRA_CONFIG_FIELD_SENSITIVE` uses the same typed get/set calls; Config Kit
+seals and opens its value and fails closed on authentication failure. Unknown
+keys are refused. No global credential document or separate credential API
+remains. Public documents must contain only non-sensitive fields. Callers
+choose public/private ownership at document open, not by inspecting ciphertext
+or key names.
 
 Application settings use the bundle manifest's stable `id`, like `STORE:` data,
 so moving a bundle into a subfolder or another volume keeps its preferences.
@@ -151,8 +155,10 @@ contracts. The native Settings shell also reviewed
 `src/apps/deskbar/PreferencesWindow.cpp`: grouped navigation and owner-specific
 panes informed the shared sidebar and typed Dock API. Haiku checkout remains
 read-only.
-The private-store change also reviewed
+The private-store and grant-crypto changes also reviewed
 `src/system/kernel/fs/vfs.cpp` for server-enforced path authority and
 `src/servers/keystore/KeyStoreServer.cpp` plus `Keyring.cpp` for service-owned
-secrets and caller checks. Astra keeps Config Kit's provider-rooted grants;
-the storage provider moves settings out of broadly readable DH0 before boot.
+secrets and caller checks. Astra's HostFS crypt operation binds authenticated
+data to its own canonical grant root and setting key; the caller cannot
+substitute a root. The storage provider moves settings out of broadly
+readable DH0 before boot.

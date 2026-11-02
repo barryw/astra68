@@ -26,7 +26,7 @@ static int key_character(char value)
            value == '_' || value == '.';
 }
 
-static int key_valid(const char *key)
+int astra_config_document_key_valid(const char *key)
 {
     uint32_t at = 0u;
 
@@ -37,6 +37,8 @@ static int key_valid(const char *key)
             return 0;
     return 1;
 }
+
+#define key_valid astra_config_document_key_valid
 
 static uint32_t line_parse(const char *text, uint32_t length,
                            uint32_t *cursor, ConfigLine *line)
@@ -313,7 +315,6 @@ uint32_t astra_config_document_get_u64(const char *text, uint32_t length,
 {
     char number[21];
     uint32_t count;
-    uint64_t result = 0u;
 
     if (value == NULL)
         return ASTRA_CONFIG_INVALID;
@@ -323,6 +324,15 @@ uint32_t astra_config_document_get_u64(const char *text, uint32_t length,
         if (status != ASTRA_CONFIG_OK)
             return status;
     }
+    return astra_config_value_u64(number, count, value);
+}
+
+uint32_t astra_config_value_u64(const char *number, uint32_t count,
+                                uint64_t *value)
+{
+    uint64_t result = 0u;
+    if (number == NULL || value == NULL || count > 20u)
+        return ASTRA_CONFIG_INVALID;
     if (count == 0u)
         return ASTRA_CONFIG_MALFORMED;
     for (uint32_t at = 0u; at < count; ++at) {
@@ -344,9 +354,7 @@ uint32_t astra_config_document_get_i64(const char *text, uint32_t length,
                                        int64_t *value)
 {
     char number[21];
-    uint32_t count, at = 0u;
-    uint64_t magnitude = 0u, limit;
-    int negative = 0;
+    uint32_t count;
 
     if (value == NULL)
         return ASTRA_CONFIG_INVALID;
@@ -356,6 +364,17 @@ uint32_t astra_config_document_get_i64(const char *text, uint32_t length,
         if (status != ASTRA_CONFIG_OK)
             return status;
     }
+    return astra_config_value_i64(number, count, value);
+}
+
+uint32_t astra_config_value_i64(const char *number, uint32_t count,
+                                int64_t *value)
+{
+    uint32_t at = 0u;
+    uint64_t magnitude = 0u, limit;
+    int negative = 0;
+    if (number == NULL || value == NULL || count > 20u)
+        return ASTRA_CONFIG_INVALID;
     if (count != 0u && (number[0] == '-' || number[0] == '+')) {
         negative = number[0] == '-';
         ++at;
@@ -412,6 +431,14 @@ uint32_t astra_config_document_get_bool(const char *text, uint32_t length,
         if (status != ASTRA_CONFIG_OK)
             return status;
     }
+    return astra_config_value_bool(word, count, value);
+}
+
+uint32_t astra_config_value_bool(const char *word, uint32_t count,
+                                 int *value)
+{
+    if (word == NULL || value == NULL || count > 5u)
+        return ASTRA_CONFIG_INVALID;
     if (same_word(word, count, "true") || same_word(word, count, "yes") ||
         same_word(word, count, "on") || same_word(word, count, "1")) {
         *value = 1;

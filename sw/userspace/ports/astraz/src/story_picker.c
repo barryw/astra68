@@ -16,6 +16,8 @@
 #define PICKER_HEIGHT 500u
 #define STORIES_DIRECTORY "/home/Stories"
 #define LAST_DIRECTORY_KEY "last_story_directory"
+static const AstraConfigField config_fields[] = {{LAST_DIRECTORY_KEY, 0u}};
+static const AstraConfigSchema config_schema = {1u, config_fields, 1u};
 
 typedef struct StoryPicker {
     AstraProcessFilesystem files;
@@ -205,7 +207,7 @@ AstraResult astraz_story_picker_open(const AstraStartupInfo *startup,
         goto done;
     picker.files_open = 1u;
     (void)astra_filesystem_mkdir(&picker.files.filesystem, STORIES_DIRECTORY);
-    picker.config_open = astra_config_open(startup, 1u,
+    picker.config_open = astra_config_open(startup, &config_schema,
         ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
         &picker.config, NULL) == ASTRA_CONFIG_OK;
     if (current != NULL && current[0] == '/') {

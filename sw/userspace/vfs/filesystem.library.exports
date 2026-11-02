@@ -248,3 +248,9 @@ ASTRA_FILESYSTEM_15.12 {
         astra_application_entry_load;
         astra_application_entry_destroy;
 } ASTRA_FILESYSTEM_15.11;
+
+ASTRA_FILESYSTEM_15.13 {
+    global:
+        astra_vfs_port_transport;
+        astra_vfs_port_wipe_area;
+} ASTRA_FILESYSTEM_15.12;

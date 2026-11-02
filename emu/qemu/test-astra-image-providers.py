@@ -99,11 +99,11 @@ assert [line for line in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
     "trusted /apps/Installer.app grants GUI VOLUMES VOLUME_READ HOME:r DH0:r APPS:rw LIBS:r LOG",
     "trusted /apps/OpenWith.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
     "trusted /apps/Inspector.app grants GUI APP_LAUNCH VOLUMES VOLUME_READ RAM_READ DH0:r HOME:r APPS:r LIBS:r WORK:r",
-    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw CRED_WRITE LIBS:r",
+    "trusted /apps/Settings.app grants GUI APP_LAUNCH CONFIG:rw LIBS:r",
     "trusted /apps/AstraZ.app grants GUI PCM VOLUMES VOLUME_READ DH0:r HOME:rw STORE:rw WORK:r LIBS:r"]
-assert not any("CRED_READ" in line for line in
-               astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()
-               if line.startswith("trusted "))
+assert "CRED_READ" not in astra_image.DISPLAY_STARTUP_MANIFEST
+assert "CRED_WRITE" not in astra_image.DISPLAY_STARTUP_MANIFEST
+assert "HOST_SECRETS" in astra_image.DISPLAY_STARTUP_MANIFEST.splitlines()[0]
 with open(os.path.join(astra_image.REPOSITORY,
                        "sw/include/astra/process.h"), encoding="ascii") as header:
     capability_limit = int(re.search(
@@ -317,7 +317,7 @@ assert [line for line in startup
 assert startup[1] == \
     "service /services/posixd grants serves POSIX_PROCESS required priority=20"
 assert startup[0] == \
-    "service /services/hostfs grants HOST_FILESYSTEM " \
+    "service /services/hostfs grants HOST_FILESYSTEM HOST_SECRETS " \
     "serves SYSTEM:rw WORK:rw SOUND:rw TMP:rw CONFIG:rw METRICS:r VOLUMES VOLUME_READ VOLUME_WRITE VOLUME_ADMIN VOLUME_USAGE DISK_ADMIN RAM_READ RAM_WRITE VOLUME_DELEGATE critical priority=20"
 assert startup[2] == \
     "service /services/entropy grants HOST_DEVICE serves ENTROPY required priority=20"

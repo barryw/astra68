@@ -187,8 +187,15 @@
 #define ASTRA_VFS_OP_FILE_FLAGS   UINT32_C(41)
 /** Return the current path of an open directory within its grant root. */
 #define ASTRA_VFS_OP_DIRECTORY_PATH UINT32_C(42)
+/** Seal or open a Config Kit value under the receiving grant's provider root. */
+#define ASTRA_VFS_OP_CONFIG_CRYPT UINT32_C(43)
 /** Highest operation code this build defines. */
-#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_DIRECTORY_PATH
+#define ASTRA_VFS_OP_MAX          ASTRA_VFS_OP_CONFIG_CRYPT
+
+/** Encrypt a Config Kit value under the receiving grant's provider root. */
+#define ASTRA_VFS_CONFIG_SEAL UINT32_C(1)
+/** Decrypt a Config Kit value under the receiving grant's provider root. */
+#define ASTRA_VFS_CONFIG_OPEN UINT32_C(2)
 
 /** STAT_AT follows the final symbolic link when this flag is set. */
 #define ASTRA_VFS_STAT_FOLLOW UINT32_C(1)
@@ -215,6 +222,8 @@
 #define ASTRA_VFS_FEATURE_DESCRIPTIONS (UINT32_C(1) << 3)
 /** The provider supports anchored path operations and directory identity paths. */
 #define ASTRA_VFS_FEATURE_DIRECTORY_PATH (UINT32_C(1) << 4)
+/** Config values can be sealed/opened under this grant's server-owned root. */
+#define ASTRA_VFS_FEATURE_CONFIG_CRYPT (UINT32_C(1) << 5)
 /** Read at an open description's current directory cursor without seeking. */
 #define ASTRA_VFS_CURSOR_CURRENT UINT64_MAX
 

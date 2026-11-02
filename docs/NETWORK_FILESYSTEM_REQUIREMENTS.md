@@ -126,10 +126,11 @@ describes stable client identity and DNS upcalls.
    policy through the existing native mount transaction. Refuse arbitrary
    Linux paths, option strings, shell commands and application-supplied mount
    targets. Validate lengths and Unicode without truncation.
-3. Save credentials through Config Kit's resident `credentials` service.
-   Settings has only `CRED_WRITE`; grant `CRED_READ` solely to a
-   trusted mount consumer when one exists. The credential service has no
-   knowledge of volumes, SMB, NFS or mount paths.
+3. Save credentials in the network service's private Config Kit document,
+   with sensitive fields declared in its schema. Settings sends validated
+   changes through the owning service's typed control API; only that service
+   opens the protected values. Public network status belongs in its separate
+   read-only system view.
    Never put passwords in arguments, environment, public catalog, logs or
    persistent plaintext settings. Give only the selected mount worker access
    and destroy temporary material on every exit path. A volume's authenticated

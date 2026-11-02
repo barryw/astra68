@@ -14,6 +14,7 @@
  */
 
 #include <astra/vfs_port_transport.h>
+#include <astra/secret_memory.h>
 
 #include <astra/vfs_backend.h>
 #include <astra/vfs_path_payload.h>
@@ -925,6 +926,20 @@ astra_vfs_port_call_area(const AstraVfsClient *client, uint32_t *capacity)
     return lane->area_address;
 }
 
+void astra_vfs_port_wipe_area(AstraVfsClient *client, uint32_t bytes)
+{
+    AstraVfsPortLane *lane;
+
+    if (client == NULL)
+        return;
+    lane = port_lane(client);
+    if (lane->area_address != NULL) {
+        if (bytes > lane->area_size)
+            bytes = lane->area_size;
+        astra_secret_wipe(lane->area_address, bytes);
+    }
+}
+
 static uint32_t request_message_size(uint32_t operation,
     const AstraVfsRequest *request)
 {
@@ -1037,7 +1052,8 @@ astra_vfs_port_transport(void *context, uint32_t operation,
              operation == ASTRA_VFS_OP_READ_AREA ||
              operation == ASTRA_VFS_OP_WRITE_AREA ||
              operation == ASTRA_VFS_OP_READDIR_AREA ||
-             operation == ASTRA_VFS_OP_READ_PATH ?
+             operation == ASTRA_VFS_OP_READ_PATH ||
+             operation == ASTRA_VFS_OP_CONFIG_CRYPT ?
         astra_vfs_port_client_enter(client) : port_data_enter(client);
     if (status != ASTRA_VFS_OK)
         return status;
@@ -1150,7 +1166,8 @@ vfs_port_transport_call(void *context, uint32_t operation,
      * only lane the service knows for a client whose data is its own. */
     if (operation != ASTRA_VFS_OP_HELLO &&
         operation != ASTRA_VFS_OP_BIND_LANE &&
-        (client->port_direct_address == NULL || operation == ASTRA_VFS_OP_GRANT_DERIVE || operation == ASTRA_VFS_OP_BIND_AREA)) {
+        (client->port_direct_address == NULL || operation == ASTRA_VFS_OP_GRANT_DERIVE ||
+         operation == ASTRA_VFS_OP_BIND_AREA || operation == ASTRA_VFS_OP_CONFIG_CRYPT)) {
         if (lane == NULL)
             lane = port_lane(client);
         status = ensure_thread_lane(client, lane);
@@ -1163,7 +1180,8 @@ vfs_port_transport_call(void *context, uint32_t operation,
         operation != ASTRA_VFS_OP_HELLO &&
         operation != ASTRA_VFS_OP_GRANT_DERIVE &&
         operation != ASTRA_VFS_OP_BIND_LANE &&
-        operation != ASTRA_VFS_OP_BIND_AREA) {
+        operation != ASTRA_VFS_OP_BIND_AREA &&
+        operation != ASTRA_VFS_OP_CONFIG_CRYPT) {
         return client->port_accelerator_ops->transport(
             client, operation, request, transfer, reply);
     }
@@ -2228,6 +2246,8 @@ astra_vfs_port_service_init(AstraVfsPortService *host, uint32_t receive,
     host->stalled = 0u;
     host->derive = NULL;
     host->derive_context = NULL;
+    host->config_crypt = NULL;
+    host->config_crypt_context = NULL;
     host->state_acquire = NULL;
     host->state_release = NULL;
     host->state_lock_context = NULL;
@@ -2267,6 +2287,17 @@ astra_vfs_port_service_set_derive(AstraVfsPortService *host,
         return 0;
     host->derive = derive;
     host->derive_context = context;
+    return 1;
+}
+
+int
+astra_vfs_port_service_set_config_crypt(AstraVfsPortService *host,
+    AstraVfsPortConfigCrypt crypt, void *context)
+{
+    if (host == NULL || crypt == NULL || host->config_crypt != NULL)
+        return 0;
+    host->config_crypt = crypt;
+    host->config_crypt_context = context;
     return 1;
 }
 
@@ -2512,8 +2543,9 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
             if (outgoing->reply.status != ASTRA_VFS_OK)
                 goto answer_ready;
         }
-        outgoing->reply.status = astra_vfs_path_request(operation,
-            &incoming->request, &transfer, &paths);
+        outgoing->reply.status = operation == ASTRA_VFS_OP_CONFIG_CRYPT ?
+            ASTRA_VFS_OK : astra_vfs_path_request(operation,
+                &incoming->request, &transfer, &paths);
         if (outgoing->reply.status != ASTRA_VFS_OK)
             goto answer_ready;
         /*
@@ -2535,7 +2567,8 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
             wire_operation != ASTRA_VFS_OP_BYE &&
             wire_operation != ASTRA_VFS_OP_GRANT_DERIVE &&
             wire_operation != ASTRA_VFS_OP_BIND_LANE &&
-            wire_operation != ASTRA_VFS_OP_BIND_AREA) {
+            wire_operation != ASTRA_VFS_OP_BIND_AREA &&
+            wire_operation != ASTRA_VFS_OP_CONFIG_CRYPT) {
             /* A BIND_AREA's area is not the reply port: nothing keeps it. */
             if (handle_count != 0u && handles[0] != reply_handle)
                 (void)astra_close(handles[0]);
@@ -2704,6 +2737,37 @@ pump(AstraVfsPortService *host, AstraVfsPortWorker *worker, uint32_t receive,
                     outgoing->reply.status == ASTRA_VFS_OK ? total : 0u;
                 if (outgoing->reply.status == ASTRA_VFS_OK)
                     outgoing->reply.position = position;
+            }
+        } else if (operation == ASTRA_VFS_OP_CONFIG_CRYPT) {
+            uint32_t key_bytes = (uint32_t)incoming->request.offset;
+            uint32_t input_length = incoming->request.length;
+            uint32_t output_capacity = (uint32_t)incoming->request.write_limit;
+            uint32_t output_length = 0u;
+            const uint8_t *bytes = lease.area;
+            if (grant == NULL || host->config_crypt == NULL ||
+                (grant->features & ASTRA_VFS_FEATURE_CONFIG_CRYPT) == 0u)
+                outgoing->reply.status = ASTRA_VFS_ERR_UNSUPPORTED;
+            else if (slot < 0 || lease.area == NULL ||
+                     incoming->request.offset > UINT32_MAX ||
+                     incoming->request.write_limit > UINT32_MAX ||
+                     key_bytes < 2u ||
+                     key_bytes > 128u || input_length == 0u ||
+                     key_bytes > lease.area_size ||
+                     input_length > lease.area_size - key_bytes ||
+                     output_capacity == 0u ||
+                     output_capacity > lease.area_size ||
+                     bytes[key_bytes - 1u] != 0u ||
+                     memchr(bytes, 0, key_bytes - 1u) != NULL ||
+                     incoming->request.body.paths.first_length != 0u ||
+                     incoming->request.body.paths.second_length != 0u)
+                outgoing->reply.status = ASTRA_VFS_ERR_INVALID;
+            else {
+                outgoing->reply.status = host->config_crypt(
+                    host->config_crypt_context, grant, incoming->request.flags,
+                    (const char *)bytes, bytes + key_bytes, input_length,
+                    lease.area, output_capacity, &output_length);
+                if (outgoing->reply.status == ASTRA_VFS_OK)
+                    outgoing->reply.count = output_length;
             }
         } else if (operation == ASTRA_VFS_OP_GRANT_DERIVE) {
             const char *root = paths.first;

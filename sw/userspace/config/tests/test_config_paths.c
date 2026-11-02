@@ -28,19 +28,23 @@ int main(void)
     assert(path(output.document, sizeof(output.document), normalized, "settings.conf"));
     assert(strcmp(output.document, "/settings.conf") == 0);
     assert(root_copy(normalized, "/root///") && strcmp(normalized, "/root") == 0);
-    char secret_key[128];
-    char maximum[122];
-    memset(maximum, 'x', 120u);
-    maximum[120] = '\0';
-    assert(secret_name(maximum, secret_key));
-    assert(strlen(secret_key) == 127u);
-    maximum[120] = 'x'; maximum[121] = '\0';
-    assert(!secret_name(maximum, secret_key));
-    assert(!secret_name("../private", secret_key));
-    assert(!secret_name("", secret_key));
-    assert(secret_name("smb.password", secret_key));
-    assert(strcmp(secret_key, "secret.smb.password") == 0);
+    const AstraConfigField fields[] = {{"network.server", 0u},
+        {"network.password", ASTRA_CONFIG_FIELD_SENSITIVE}};
+    const AstraConfigSchema schema = {1u, fields, 2u};
+    assert(schema_valid(&schema));
+    assert(!public_schema_valid(&schema));
+    const AstraConfigSchema public_schema = {1u, fields, 1u};
+    assert(public_schema_valid(&public_schema));
+    const ConfigState state = {.schema = &schema};
+    assert(schema_field(&state, "network.server") == &fields[0]);
+    assert(schema_field(&state, "network.password") == &fields[1]);
+    assert(schema_field(&state, "other") == NULL);
+    const AstraConfigField duplicate[] = {{"network.server", 0u},
+        {"network.server", ASTRA_CONFIG_FIELD_SENSITIVE}};
+    const AstraConfigSchema bad = {1u, duplicate, 2u};
+    assert(!schema_valid(&bad));
+    assert(!astra_config_document_key_valid("../private"));
     assert(hex_digit('f') == 15 && hex_digit('F') < 0);
-    puts("configuration paths and bounded secret keys PASS");
+    puts("configuration paths and owner schema PASS");
     return 0;
 }

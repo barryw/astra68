@@ -19,7 +19,7 @@ static uint32_t read_count;
 static uint8_t read_bytes[4096];
 static uint8_t provider_record[] = {
     'A', 'P', 'R', 'V', 0, 2, 0, 24,
-    0, 1, 0, 2, 0, 3, 0, 1, 0, 4, 0, 0,
+    0, 1, 0, 2, 0, 3, 0, 2, 0, 4, 0, 0,
     0x12, 0x34, 0x56, 0x78,
     'R', 'u', 'n', 't', 'i', 'm', 'e', '.', 'k', 'i', 't', '/',
     'r', 'u', 'n', 't', 'i', 'm', 'e', '.', 'l', 'i', 'b', 'r',
@@ -70,7 +70,7 @@ uint32_t astra_vfs_assign_open(
     if (library_mode != 0u) {
         if (open_count == 0u) {
             assert(strcmp(path,
-                          "/libs/.providers/runtime.library.abi-1") == 0);
+                          "/libs/.providers/runtime.library.abi-2") == 0);
             *file = 9u;
             *size = sizeof(provider_record);
         } else {
@@ -234,7 +234,7 @@ int main(void)
     assert(reference.size == ASTRA_LIBRARY_REFERENCE_SIZE);
     assert(strcmp(reference.name, "runtime.library.2") == 0);
     assert(reference.major == 1u && reference.minor == 2u &&
-           reference.patch == 3u && reference.abi_major == 1u &&
+           reference.patch == 3u && reference.abi_major == 2u &&
            reference.abi_minor == 4u &&
            reference.build_id == UINT32_C(0x12345678));
     assert(astra_vfs_read_source_close(&source) == ASTRA_VFS_OK);

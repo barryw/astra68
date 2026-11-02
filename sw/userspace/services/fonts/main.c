@@ -40,6 +40,10 @@ typedef struct FontEntry {
 static FontEntry installed[FONT_FACE_MAX];
 static AstraProcessFilesystem files = ASTRA_PROCESS_FILESYSTEM_INIT;
 static AstraConfig config = ASTRA_CONFIG_INIT;
+static const AstraConfigField config_fields[] = {
+    {"installed", 0u}, {"system_font", 0u}
+};
+static const AstraConfigSchema config_schema = {1u, config_fields, 2u};
 static uint32_t installed_count;
 static uint32_t generation = 1u;
 typedef struct FontSelection {
@@ -990,7 +994,7 @@ int astra_main(const AstraStartupInfo *startup)
         (void)astra_log_failure("fonts installed directory", status);
     uint32_t config_status =
         status == ASTRA_VFS_OK || status == ASTRA_VFS_ERR_EXISTS ?
-        astra_config_open_system(startup, 1u,
+        astra_config_open_system(startup, &config_schema,
                                  ASTRA_CONFIG_OPEN_READ |
                                  ASTRA_CONFIG_OPEN_WRITE, &config,
                                  &error) : ASTRA_CONFIG_IO;

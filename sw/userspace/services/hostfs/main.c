@@ -4,6 +4,7 @@
 #include <astra/metrics_vfs.h>
 #include <astra/program.h>
 #include <astra/runtime.h>
+#include <astra/secret_memory.h>
 #include <astra/service.h>
 #include <astra/status.h>
 #include <astra/vfs_host_backend.h>
@@ -27,6 +28,7 @@ enum {
 };
 
 static uint32_t device_handle;
+static uint32_t secret_device_handle;
 static uint32_t provider_epoch;
 static uint32_t owner_files;
 static uint32_t owner_sessions;
@@ -87,6 +89,7 @@ typedef struct HostfsVolume {
     uint8_t dynamic;
     uint8_t metric_registered;
     uint8_t service_ready;
+    uint8_t config_store;
     uint32_t pending_session;
     char metric_group[ASTRA_METRIC_NAME_MAX];
     AstraVfsHostBackend backend;
@@ -547,6 +550,8 @@ static uint32_t grant_add(HostfsVolume *owner, uint32_t session,
     }
     grant->port.features = ASTRA_VFS_FEATURE_RESOLVES | ASTRA_VFS_FEATURE_NODE_META |
                            ASTRA_VFS_FEATURE_DESCRIPTIONS | ASTRA_VFS_FEATURE_DIRECTORY_PATH;
+    if (owner->config_store)
+        grant->port.features |= ASTRA_VFS_FEATURE_CONFIG_CRYPT;
     if (added != NULL)
         *added = grant;
     return ASTRA_VFS_OK;
@@ -615,6 +620,65 @@ static uint32_t hostfs_derive(void *context,
 static AstraVfsPortService *grant_host(const HostfsGrant *grant)
 {
     return &grant->owner->port;
+}
+
+static uint32_t hostfs_config_crypt(void *context,
+    const AstraVfsPortGrant *port, uint32_t operation, const char *key,
+    const uint8_t *input, uint32_t input_length, uint8_t *output,
+    uint32_t output_capacity, uint32_t *output_length)
+{
+    const HostfsGrant *grant = (const HostfsGrant *)(const void *)port;
+    AstraHostChannelClient host = {0};
+    AstraHostCommand *command;
+    uint32_t root_bytes = (uint32_t)strlen(grant->root) + 1u;
+    uint32_t key_bytes = (uint32_t)strlen(key) + 1u;
+    uint32_t context_bytes = root_bytes + key_bytes;
+    uint32_t status;
+
+    (void)context;
+    *output_length = 0u;
+    if (!grant->owner->config_store || secret_device_handle == 0u ||
+        (operation != ASTRA_VFS_CONFIG_SEAL &&
+         operation != ASTRA_VFS_CONFIG_OPEN) ||
+        context_bytes > 512u || input_length > 1068u ||
+        context_bytes + input_length > 2048u ||
+        output_capacity > 1068u)
+        return ASTRA_VFS_ERR_INVALID;
+    status = astra_host_client_open(secret_device_handle,
+        ASTRA_HOST_CAP_CONFIG_SECRETS, 2048u, &host);
+    if (status != ASTRA_SYSCALL_OK)
+        return ASTRA_VFS_ERR_IO;
+    command = astra_host_client_prepare(&host, ASTRA_HOST_SERVICE_CONFIG_SECRETS,
+        operation == ASTRA_VFS_CONFIG_SEAL ? ASTRA_HOST_CONFIG_SECRET_SEAL :
+                                          ASTRA_HOST_CONFIG_SECRET_OPEN);
+    if (command == NULL) {
+        status = ASTRA_VFS_ERR_IO;
+        goto done;
+    }
+    command->offset_lo = context_bytes;
+    command->data_length = context_bytes + input_length;
+    command->data_capacity = output_capacity;
+    memcpy((void *)(uintptr_t)host.data, grant->root, root_bytes);
+    memcpy((void *)(uintptr_t)(host.data + root_bytes), key, key_bytes);
+    memcpy((void *)(uintptr_t)(host.data + context_bytes), input, input_length);
+    status = astra_host_client_submit(&host);
+    if (status != ASTRA_SYSCALL_OK)
+        status = ASTRA_VFS_ERR_IO;
+    else if (command->status == ASTRA_STATUS_ACCESS)
+        status = ASTRA_VFS_ERR_ACCESS;
+    else if (command->status != ASTRA_STATUS_OK ||
+             command->result_length == 0u ||
+             command->result_length > output_capacity)
+        status = ASTRA_VFS_ERR_IO;
+    else {
+        *output_length = command->result_length;
+        memcpy(output, (const void *)(uintptr_t)host.data, *output_length);
+        status = ASTRA_VFS_OK;
+    }
+done:
+    astra_secret_wipe((void *)(uintptr_t)host.data, 2048u);
+    (void)astra_host_client_close(&host);
+    return status;
 }
 
 /* The grant's last holder closed its handle, or its deriver's session
@@ -883,6 +947,7 @@ static uint32_t volume_add(const AstraVolumeReference *reference, const char *na
     if (volume == NULL)
         return ASTRA_STATUS_LIMIT;
     volume->reference = *reference;
+    volume->config_store = strcmp(name, "/config-store") == 0;
     volume->dynamic = dynamic != 0;
     volume->root_flags = (rights & ASTRA_VFS_GRANT_WRITE) != 0u ? 0u : ASTRA_HOST_FS_SESSION_READ_ONLY;
     if (!volume_metric_group(volume, name)) {
@@ -921,7 +986,9 @@ static uint32_t volume_add(const AstraVolumeReference *reference, const char *na
         (!astra_vfs_port_service_init(&volume->port, grant->port.receive, &volume->service) ||
          !astra_vfs_port_service_set_state_lock(&volume->port, astra_vfs_state_lock_acquire,
              astra_vfs_state_lock_release, &state_lock) ||
-         !astra_vfs_port_service_set_derive(&volume->port, hostfs_derive, NULL)))
+         !astra_vfs_port_service_set_derive(&volume->port, hostfs_derive, NULL) ||
+         (volume->config_store && !astra_vfs_port_service_set_config_crypt(
+             &volume->port, hostfs_config_crypt, NULL))))
         status = HOSTFS_FAIL_PORT;
     if (status == ASTRA_VFS_OK && metrics_registered != 0u) {
         if (astra_metric_register(volume->metric_group, sample_vfs, volume) != ASTRA_METRIC_OK)
@@ -1212,10 +1279,13 @@ int astra_main(const AstraStartupInfo *startup)
     if (!astra_startup_validate(startup))
         return ASTRA_STATUS_INVALID;
     device = astra_startup_capability(startup, ASTRA_CAPABILITY_HOST_FILESYSTEM);
+    const AstraStartupCapability *secrets = astra_startup_capability(
+        startup, ASTRA_CAPABILITY_HOST_CONFIG_SECRETS);
     bootstrap = astra_startup_capability(startup, ASTRA_CAPABILITY_SERVICE_READY);
-    if (device == NULL || bootstrap == NULL)
+    if (device == NULL || secrets == NULL || bootstrap == NULL)
         return ASTRA_STATUS_BAD_HANDLE;
     device_handle = device->handle;
+    secret_device_handle = secrets->handle;
     if (!astra_vfs_host_transport_init(&transport, device_handle,
         astra_vfs_state_lock_acquire, astra_vfs_state_lock_release, &transport_lock))
         return HOSTFS_FAIL_DEVICE;

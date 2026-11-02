@@ -25,6 +25,8 @@ ASTRA_PROGRAM("ntpd", 0, 1, 0, "Astra68 contributors",
 static uint32_t control_receive;
 static uint32_t control_send;
 static AstraConfig config = ASTRA_CONFIG_INIT;
+static const AstraConfigField config_fields[] = {{"pool", 0u}, {"server", 0u}};
+static const AstraConfigSchema config_schema = {1u, config_fields, 2u};
 
 static AstraNtpStatus set_from(const char *server, AstraNtpSample *sample)
 {
@@ -133,7 +135,7 @@ int astra_main(const AstraStartupInfo *startup)
     astra_posix_start(startup);
     if (astra_process_vfs_init(startup) != ASTRA_VFS_OK)
         return ASTRA_STATUS_NOT_FOUND;
-    if (astra_config_open(startup, 1u, ASTRA_CONFIG_OPEN_READ,
+    if (astra_config_open(startup, &config_schema, ASTRA_CONFIG_OPEN_READ,
                           &config, &config_error) != ASTRA_CONFIG_OK)
         return ASTRA_STATUS_INVALID;
     if (astra_rt_port_create(4u, 4u * sizeof(AstraNtpControlRequest),

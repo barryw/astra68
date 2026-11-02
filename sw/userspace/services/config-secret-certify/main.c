@@ -9,6 +9,12 @@
 
 ASTRA_PROGRAM("config-secret-certify", 0, 1, 0,
               "Astra68 contributors", "Astra native");
+static const AstraConfigField config_fields[] = {
+    {"network.probe", ASTRA_CONFIG_FIELD_SENSITIVE}
+};
+static const AstraConfigSchema config_schema = {1u, config_fields, 1u};
+static const AstraConfigField public_fields[] = {{"probe.public", 0u}};
+static const AstraConfigSchema public_schema = {1u, public_fields, 1u};
 
 int astra_main(const AstraStartupInfo *startup)
 {
@@ -25,16 +31,15 @@ int astra_main(const AstraStartupInfo *startup)
     (void)astra_close(bootstrap->handle);
     AstraConfig config = ASTRA_CONFIG_INIT;
     const char *stage = "config-secret open-system";
-    uint32_t status = astra_config_open_system(startup, 1u,
+    uint32_t status = astra_config_open_system(startup, &config_schema,
         ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE, &config, NULL);
     if (status != ASTRA_CONFIG_OK) goto failed;
     stage = "config-secret first-read";
-    status = astra_config_get_secret(&config, "network.probe", output,
+    status = astra_config_get_string(&config, "network.probe", 0u, output,
         sizeof(output), &length);
     if (status == ASTRA_CONFIG_NOT_FOUND) {
         stage = "config-secret write";
-        status = astra_config_set_secret(&config, "network.probe",
-            value, sizeof(value));
+        status = astra_config_set_string(&config, "network.probe", 0u, value);
         if (status != ASTRA_CONFIG_OK) goto failed;
         (void)astra_log("config-secret first-write");
     } else if (status == ASTRA_CONFIG_OK) {
@@ -44,12 +49,28 @@ int astra_main(const AstraStartupInfo *startup)
     status = astra_config_reload(&config, NULL);
     if (status != ASTRA_CONFIG_OK) goto failed;
     stage = "config-secret second-read";
-    status = astra_config_get_secret(&config, "network.probe", output,
+    status = astra_config_get_string(&config, "network.probe", 0u, output,
         sizeof(output), &length);
-    if (status != ASTRA_CONFIG_OK || length != sizeof(value) ||
-        memcmp(output, value, sizeof(value)) != 0) goto failed;
+    if (status != ASTRA_CONFIG_OK || length != sizeof(value) - 1u ||
+        strcmp(output, value) != 0) goto failed;
     (void)astra_log("config-secret roundtrip PASS");
     astra_config_close(&config);
+    AstraConfig published = ASTRA_CONFIG_INIT;
+    status = astra_config_open_publish(startup, &public_schema,
+        &published, NULL);
+    if (status != ASTRA_CONFIG_OK) return ASTRA_STATUS_IO;
+    status = astra_config_set_string(&published, "probe.public", 0u, "visible");
+    astra_config_close(&published);
+    if (status != ASTRA_CONFIG_OK) return ASTRA_STATUS_IO;
+    status = astra_config_open_public(startup, "config-secret-certify",
+        &public_schema, &published, NULL);
+    if (status != ASTRA_CONFIG_OK) return ASTRA_STATUS_IO;
+    status = astra_config_get_string(&published, "probe.public", 0u,
+        output, sizeof(output), &length);
+    astra_config_close(&published);
+    if (status != ASTRA_CONFIG_OK || strcmp(output, "visible") != 0)
+        return ASTRA_STATUS_IO;
+    (void)astra_log("config-public roundtrip PASS");
     const AstraStartupCapability *ordinary = astra_startup_capability(
         startup, ASTRA_CAPABILITY_HOST_DEVICE);
     AstraHostChannelClient unprivileged = {0};

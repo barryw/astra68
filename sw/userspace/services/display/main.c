@@ -1397,7 +1397,9 @@ static void dock_pins_open(DisplayState *state, const AstraStartupInfo *startup)
 {
     uint32_t count = 0u, length = 0u;
     state->dock_pins_generation = 1u;
-    uint32_t status = astra_config_open_system(startup, 1u,
+    static const AstraConfigField fields[] = {{"pinned", 0u}};
+    static const AstraConfigSchema schema = {1u, fields, 1u};
+    uint32_t status = astra_config_open_system(startup, &schema,
         ASTRA_CONFIG_OPEN_READ | ASTRA_CONFIG_OPEN_WRITE,
         &state->dock_config, NULL);
 

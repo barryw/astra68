@@ -18,9 +18,8 @@ TARGET_FLAGS := $(ASTRA_TARGET_ABI_FLAGS) -Os -ffreestanding -fno-builtin \
 	-ffunction-sections -fdata-sections $(ASTRA_SHARED_PIC_FLAGS)
 SANITIZER_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer
 
-LIBRARY := build/m68k/libraries/config.library.1
-LIBRARY_OBJECTS := build/m68k/config_library.o build/m68k/config_document.o \
-	build/m68k/credential_client.o
+LIBRARY := build/m68k/libraries/config.library.2
+LIBRARY_OBJECTS := build/m68k/config_library.o build/m68k/config_document.o
 LIBRARY_MAP := config.library.exports
 SYSTEM_LIBRARY := $(SYSTEM)/build/m68k/libraries/system.library.4
 RUNTIME_LIBRARY := $(RUNTIME)/build/m68k/libraries/runtime.library.2
@@ -43,12 +42,6 @@ build/m68k/config_document.o: src/config_document.c \
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
 
-build/m68k/credential_client.o: src/credential_client.c \
-		$(NDK)/include/astra/config_library.h \
-		../../include/astra/credential_service.h
-	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(COMMON_FLAGS) $(TARGET_FLAGS) -MMD -MP -c $< -o $@
-
 shared-libraries-ready:
 	$(MAKE) -C $(SYSTEM) library
 	$(MAKE) -C $(VFS) library
@@ -58,7 +51,7 @@ $(LIBRARY): $(LIBRARY_OBJECTS) $(LIBRARY_MAP) $(ASTRA_SHARED_LINK_INPUTS) \
 		| shared-libraries-ready
 	@mkdir -p $(@D)
 	$(CC) $(TARGET_FLAGS) $(ASTRA_SHARED_LINK_FLAGS) \
-		-Wl,-soname,config.library.1 \
+		-Wl,-soname,config.library.2 \
 		-Wl,--version-script=$(LIBRARY_MAP) -o $@ $(LIBRARY_OBJECTS) \
 		-L$(dir $(SYSTEM_LIBRARY)) -L$(dir $(RUNTIME_LIBRARY)) \
 		-L$(dir $(COMPILER_LIBRARY)) -L$(dir $(FILESYSTEM_LIBRARY)) \
@@ -76,13 +69,13 @@ library-contract: $(LIBRARY)
 	@python3 ../../../tools/check_elf_exports.py --readelf $(READELF) \
 		$(LIBRARY_MAP) $(LIBRARY)
 	@python3 ../../../tools/library_info.py $(LIBRARY) | \
-		grep -q '^config.library.1 1.3.0 ABI 1.3$$'
+		grep -q '^config.library.2 2.0.0 ABI 2.0$$'
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [system.library.4]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [runtime.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [compiler.library.2]')" = 1
 	@test "$$($(READELF) -dW $< | grep -Fc 'Shared library: [filesystem.library.15]')" = 1
 	@test "$$($(READELF) -dW $< | awk '/NEEDED/{n++} END{print n+0}')" = 4
-	@$(READELF) -VW $< | grep -q 'ASTRA_CONFIG_1.0'
+	@$(READELF) -VW $< | grep -q 'ASTRA_CONFIG_2.0'
 	$(call ASTRA_CHECK_DSO,$(LIBRARY))
 
 $(HOST_TEST): src/config_document.c $(SYSTEM)/src/config_scope.c \
@@ -92,11 +85,12 @@ $(HOST_TEST): src/config_document.c $(SYSTEM)/src/config_scope.c \
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $^ -o $@
 
-build/host/test_config_paths: tests/test_config_paths.c src/config_library.c \
+build/host/test_config_paths: tests/test_config_paths.c src/config_library.c src/config_document.c $(ASTRA_COMMON)/utf8.c \
 		$(NDK)/include/astra/config_library.h
 	@mkdir -p $(@D)
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
-		tests/test_config_paths.c -Wl,--gc-sections -o $@
+		tests/test_config_paths.c src/config_document.c $(ASTRA_COMMON)/utf8.c \
+		-Wl,--gc-sections -o $@
 
 test: $(HOST_TEST) build/host/test_config_paths
 	./$(HOST_TEST)
@@ -105,7 +99,8 @@ test: $(HOST_TEST) build/host/test_config_paths
 sanitize:
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -ffunction-sections -fdata-sections \
-		$(SANITIZER_FLAGS) tests/test_config_paths.c -Wl,--gc-sections -o build/host/test_config_paths_sanitize
+		$(SANITIZER_FLAGS) tests/test_config_paths.c src/config_document.c \
+		$(ASTRA_COMMON)/utf8.c -Wl,--gc-sections -o build/host/test_config_paths_sanitize
 	./build/host/test_config_paths_sanitize
 	@mkdir -p build/host
 	$(HOST_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 $(SANITIZER_FLAGS) \
@@ -118,8 +113,6 @@ analyze:
 	@mkdir -p build/analyzer
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -fanalyzer \
 		-c src/config_library.c -o build/analyzer/config_library.o
-	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -fanalyzer \
-		-c src/credential_client.c -o build/analyzer/credential_client.o
 	$(ANALYZER_CC) $(CPPFLAGS) $(COMMON_FLAGS) -O2 -fanalyzer \
 		-c src/config_document.c -o build/analyzer/config_document.o
 

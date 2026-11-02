@@ -63,6 +63,8 @@ void astra_vfs_port_client_leave(AstraVfsClient *client);
 /* Mark failed and retire resources after in-flight callers leave. */
 void astra_vfs_port_fail(AstraVfsClient *client);
 int astra_vfs_port_client_closed(const AstraVfsClient *client);
+/* Clear a sensitive Config Kit exchange from this thread's bound port area. */
+void astra_vfs_port_wipe_area(AstraVfsClient *client, uint32_t bytes);
 /* Drain data calls, refresh the scope, retain the grant's control session. */
 uint32_t astra_vfs_port_refresh(AstraVfsClient *client);
 AstraVfsCallState *astra_vfs_port_call_acquire(AstraVfsClient *client);
@@ -205,6 +207,13 @@ typedef uint32_t (*AstraVfsPortDerive)(void *context,
                                        const AstraVfsPortDeriveRequest *request,
                                        uint32_t *send);
 
+/* Grant-specific crypto uses the same bound transfer area as VFS data.
+ * The provider, never the caller, supplies the authority-bound root. */
+typedef uint32_t (*AstraVfsPortConfigCrypt)(void *context,
+    const AstraVfsPortGrant *grant, uint32_t operation, const char *key,
+    const uint8_t *input, uint32_t input_length, uint8_t *output,
+    uint32_t output_capacity, uint32_t *output_length);
+
 typedef struct AstraVfsPortService {
     uint32_t receive;
     AstraVfsService *service;
@@ -220,6 +229,8 @@ typedef struct AstraVfsPortService {
     uint32_t stalled;
     AstraVfsPortDerive derive;   /* GRANT_DERIVE on a grant; NULL refuses */
     void *derive_context;
+    AstraVfsPortConfigCrypt config_crypt;
+    void *config_crypt_context;
     uint32_t reply_sessions[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_lanes[ASTRA_VFS_SESSION_MAX];
     uint32_t reply_handles[ASTRA_VFS_SESSION_MAX];
@@ -245,6 +256,8 @@ int astra_vfs_port_service_set_state_lock(AstraVfsPortService *host,
 int astra_vfs_port_service_set_derive(AstraVfsPortService *host,
                                       AstraVfsPortDerive derive,
                                       void *context);
+int astra_vfs_port_service_set_config_crypt(AstraVfsPortService *host,
+    AstraVfsPortConfigCrypt crypt, void *context);
 
 /* Handles at most `budget` requests and returns how many it answered. */
 uint32_t astra_vfs_port_service_pump(AstraVfsPortService *host,

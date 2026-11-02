@@ -8,9 +8,9 @@
 /** Logical name of config.library. */
 #define ASTRA_CONFIG_LIBRARY_NAME "config.library"
 /** Config Kit ELF ABI major version. */
-#define ASTRA_CONFIG_LIBRARY_ABI_MAJOR 1u
+#define ASTRA_CONFIG_LIBRARY_ABI_MAJOR 2u
 /** Config Kit backward-compatible ABI revision. */
-#define ASTRA_CONFIG_LIBRARY_ABI_MINOR 3u
+#define ASTRA_CONFIG_LIBRARY_ABI_MINOR 0u
 /** Minimum compatible config.library major version. */
 #define ASTRA_CONFIG_LIBRARY_VERSION ASTRA_CONFIG_LIBRARY_ABI_MAJOR
 /** Launch capability carrying the caller's private configuration root. */
@@ -19,6 +19,10 @@
 #define ASTRA_CONFIG_SYSTEM_CAPABILITY "CONFIG_SYSTEM"
 /** Launch capability carrying the configuration root for commands. */
 #define ASTRA_CONFIG_COMMANDS_CAPABILITY "CONFIG_COMMANDS"
+/** Read-only public system settings, rooted at the system publisher directory. */
+#define ASTRA_CONFIG_PUBLIC_CAPABILITY "CONFIG_PUBLIC"
+/** One resident service's writable public system settings. */
+#define ASTRA_CONFIG_PUBLISH_CAPABILITY "CONFIG_PUBLISH"
 
 /** Canonical configuration namespace owner classes. */
 enum {
@@ -56,6 +60,22 @@ typedef struct AstraConfig {
     void *_private_state;
     /** @endcond */
 } AstraConfig;
+
+/** One key this owner may use. Sensitive string values are sealed by Config Kit. */
+typedef struct AstraConfigField {
+    const char *key; /**< Key in this owner's document. */
+    uint32_t flags; /**< ASTRA_CONFIG_FIELD_* flags. */
+} AstraConfigField;
+
+/** Config Kit encrypts this field before saving it. */
+#define ASTRA_CONFIG_FIELD_SENSITIVE (1u << 0)
+
+/** Static owner schema; keep fields alive until configuration is closed. */
+typedef struct AstraConfigSchema {
+    uint32_t version; /**< Document schema version. */
+    const AstraConfigField *fields; /**< Allowed keys and storage policy. */
+    uint32_t count; /**< Number of fields. */
+} AstraConfigSchema;
 
 /** Empty configuration-handle initializer. */
 #define ASTRA_CONFIG_INIT { 0, 0 }
@@ -105,22 +125,50 @@ typedef struct AstraConfigError {
     uint32_t version; /**< Unsupported schema version, or zero. */
 } AstraConfigError;
 
-/** Open the caller's configuration through its private CONFIG capability. @param startup Valid startup record. @param schema_version Caller schema version. @param flags ASTRA_CONFIG_OPEN_* flags. @param config Receives the handle. @param error Optional parse error. @return ASTRA_CONFIG_* status. */
+/** Open caller's private CONFIG document under an explicit key schema.
+ * @param startup Valid startup record.
+ * @param schema Owner's static key schema.
+ * @param flags ASTRA_CONFIG_OPEN_* flags.
+ * @param config Receives the handle.
+ * @param error Optional parse error.
+ * @return ASTRA_CONFIG_* status.
+ */
 uint32_t astra_config_open(const AstraStartupInfo *startup,
-                           uint32_t schema_version, uint32_t flags,
+                           const AstraConfigSchema *schema, uint32_t flags,
                            AstraConfig *config, AstraConfigError *error);
 /** Open a system component's settings through its scoped CONFIG_SYSTEM grant.
  * Only resident system services may receive this grant.
  * @param startup Valid startup record with a CONFIG_SYSTEM capability.
- * @param schema_version Service schema version.
+ * @param schema Service key schema.
  * @param flags ASTRA_CONFIG_OPEN_* flags.
  * @param config Receives the handle.
  * @param error Optional parse error.
  * @return ASTRA_CONFIG_* status.
  */
 uint32_t astra_config_open_system(const AstraStartupInfo *startup,
-                                  uint32_t schema_version, uint32_t flags,
+                                  const AstraConfigSchema *schema, uint32_t flags,
                                   AstraConfig *config, AstraConfigError *error);
+/** Open one public system settings document through CONFIG_PUBLIC.
+ * @param startup Valid startup record.
+ * @param owner Resident service name, one portable path component.
+ * @param schema Static schema of fields the caller will read.
+ * @param config Receives the read-only handle.
+ * @param error Optional parse error.
+ * @return ASTRA_CONFIG_* status.
+ */
+uint32_t astra_config_open_public(const AstraStartupInfo *startup,
+    const char *owner, const AstraConfigSchema *schema,
+    AstraConfig *config, AstraConfigError *error);
+/** Open this resident service's public settings document for publication.
+ * @param startup Valid startup record with CONFIG_PUBLISH.
+ * @param schema Static schema of public fields.
+ * @param config Receives the writable handle.
+ * @param error Optional parse error.
+ * @return ASTRA_CONFIG_* status.
+ */
+uint32_t astra_config_open_publish(const AstraStartupInfo *startup,
+    const AstraConfigSchema *schema, AstraConfig *config,
+    AstraConfigError *error);
 /** Close an open configuration. @param config Configuration to close. */
 void astra_config_close(AstraConfig *config);
 /** Reload committed values. @param config Open configuration. @param error Optional parse error. @return ASTRA_CONFIG_* status. */
@@ -168,66 +216,5 @@ uint32_t astra_config_append_bool(AstraConfig *config, const char *key,
 /** Remove one value. @param config Open writable configuration. @param key Key. @param index Value index. @return ASTRA_CONFIG_* status. */
 uint32_t astra_config_remove(AstraConfig *config, const char *key,
                              uint32_t index);
-
-/** Encrypt and store a bounded credential in this Config Kit document.
- * Requires the resident HOST_SECRETS grant. Plaintext never enters
- * settings.conf; ciphertext is bound to this root and key.
- * @param config Open writable Config Kit handle.
- * @param key Key within this owner's document.
- * @param secret Plaintext bytes, 1–1024 bytes.
- * @param length Plaintext byte count.
- * @return ASTRA_CONFIG_* status.
- */
-uint32_t astra_config_set_secret(AstraConfig *config, const char *key,
-                                 const void *secret, uint32_t length);
-/** Decrypt a credential.
- * @param config Open Config Kit handle.
- * @param key Key within this owner's document.
- * @param secret Output buffer; NULL to query required size.
- * @param capacity Bytes available in output buffer.
- * @param length Receives required plaintext bytes.
- * @return ASTRA_CONFIG_* status; AUTH_FAILED on tampering or wrong key.
- */
-uint32_t astra_config_get_secret(AstraConfig *config, const char *key,
-                                 void *secret, uint32_t capacity,
-                                 uint32_t *length);
-/** Remove one protected credential from this document.
- * @param config Open writable Config Kit handle.
- * @param key Key within this owner's document.
- * @return ASTRA_CONFIG_* status.
- */
-uint32_t astra_config_remove_secret(AstraConfig *config, const char *key);
-
-/** Store a credential through the resident Config Kit owner. Requires the
- * CRED_WRITE startup capability; callers never receive HOST_SECRETS.
- * The key is a stable, owner-chosen reference, not a filesystem path.
- * @param startup Valid startup record with CRED_WRITE.
- * @param key Reference name, 1–120 portable characters.
- * @param secret Plaintext bytes.
- * @param length Plaintext byte count, 1–1024.
- * @return ASTRA_CONFIG_* status.
- */
-uint32_t astra_credential_set(const AstraStartupInfo *startup,
-                              const char *key, const void *secret,
-                              uint32_t length);
-/** Read a credential through the resident owner. Requires CRED_READ.
- * Query required size with secret=NULL.
- * @param startup Valid startup record with CRED_READ.
- * @param key Reference name.
- * @param secret Output buffer or NULL for a size query.
- * @param capacity Output buffer bytes; zero for a size query.
- * @param length Receives required plaintext byte count.
- * @return ASTRA_CONFIG_* status; BUFFER_TOO_SMALL reports required size.
- */
-uint32_t astra_credential_get(const AstraStartupInfo *startup,
-                              const char *key, void *secret,
-                              uint32_t capacity, uint32_t *length);
-/** Remove a credential through the resident owner. Requires CRED_WRITE.
- * @param startup Valid startup record with CRED_WRITE.
- * @param key Reference name.
- * @return ASTRA_CONFIG_* status.
- */
-uint32_t astra_credential_remove(const AstraStartupInfo *startup,
-                                 const char *key);
 
 #endif
