@@ -27,7 +27,8 @@ enum AstraVolumeOperation {
     ASTRA_VOLUME_UNMOUNT,
     ASTRA_VOLUME_IMAGE,
     ASTRA_VOLUME_EJECT,
-    ASTRA_VOLUME_RELEASE_IMAGE_SOURCE
+    ASTRA_VOLUME_RELEASE_IMAGE_SOURCE,
+    ASTRA_VOLUME_RELEASE_NETWORK_SOURCE
 };
 /** Native lifecycle parameters; no host pathname or descriptor is accepted. */
 typedef struct AstraVolumeControl {
@@ -97,6 +98,15 @@ enum AstraVolumeOrigin {
     ASTRA_VOLUME_ORIGIN_SYSTEM_IMAGE,
     ASTRA_VOLUME_ORIGIN_NETWORK
 };
+
+/** Remote source definition. Credentials stay with the network service. */
+typedef struct AstraVolumeNetworkSource {
+    uint32_t format; /**< ASTRA_VOLUME_NFS or ASTRA_VOLUME_SMB. */
+    uint32_t reserved; /**< Zero. */
+    char server[256]; /**< DNS name or numeric address. */
+    char share[1024]; /**< Absolute NFS export or SMB share name. */
+    char label[256]; /**< Display name, not authority. */
+} AstraVolumeNetworkSource;
 
 /** Partition map reported for a physical device or its partition source. */
 enum AstraVolumePartitionMap {

@@ -12,10 +12,10 @@ int astra_volume_control_valid(const AstraVolumeControl *control)
     if (control->operation == ASTRA_VOLUME_MOUNT_SOURCE)
         return (control->flags & ~ASTRA_VOLUME_READ_ONLY) == 0u;
     return (control->operation == ASTRA_VOLUME_UNMOUNT || control->operation == ASTRA_VOLUME_EJECT ||
-        control->operation == ASTRA_VOLUME_RELEASE_IMAGE_SOURCE) && control->flags == 0u &&
+        control->operation == ASTRA_VOLUME_RELEASE_IMAGE_SOURCE ||
+        control->operation == ASTRA_VOLUME_RELEASE_NETWORK_SOURCE) && control->flags == 0u &&
         control->byte_limit == 0u && control->inode_limit == 0u;
 }
-#include <astra/utf8.h>
 #include <string.h>
 
 int astra_volume_format_valid(const AstraVolumeFormatRequest *request)

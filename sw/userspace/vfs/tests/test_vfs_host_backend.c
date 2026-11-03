@@ -63,6 +63,25 @@ uint32_t astra_vfs_host_transport_submit(
     assert(command->size == ASTRA_HOST_COMMAND_SIZE);
     assert(command->version == ASTRA_HOST_COMMAND_VERSION);
     if (command->service == ASTRA_HOST_SERVICE_VOLUMES) {
+        if (command->operation == ASTRA_HOST_VOLUME_NETWORK_SOURCE) {
+            const uint8_t *wire = input;
+            assert(command->generation == 9u && command->session == 0u &&
+                input_size == sizeof(AstraHostVolumeNetworkSource) &&
+                output_capacity == sizeof(AstraVolumeReference) &&
+                astra_load_be32(wire) == ASTRA_VOLUME_NFS &&
+                astra_load_be32(wire + 4u) == 0u &&
+                strcmp((const char *)wire + 8u, "127.0.0.1") == 0 &&
+                strcmp((const char *)wire + 264u, "/export") == 0 &&
+                strcmp((const char *)wire + 1288u, "Test") == 0 &&
+                astra_load_be32(wire + 1544u) == 17u &&
+                astra_load_be32(wire + 1548u) == 0u);
+            if (host->failure != 0u) return host->failure;
+            astra_store_be64(output, 7u);
+            astra_store_be64((uint8_t *)output + 8u, 12u);
+            astra_store_be64((uint8_t *)output + 16u, 1u);
+            command->result_length = sizeof(AstraVolumeReference);
+            return ASTRA_VFS_OK;
+        }
         if (command->operation == ASTRA_HOST_VOLUME_PARTITION) {
             assert(command->generation == 9u && command->session == 0u &&
                 input_size == sizeof(AstraHostVolumePartition) &&
@@ -449,6 +468,12 @@ uint32_t astra_vfs_host_transport_submit(
 int main(void)
 {
     FakeHost catalog_host = {0};
+    AstraVolumeNetworkSource network = {.format = ASTRA_VOLUME_NFS,
+        .server = "127.0.0.1", .share = "/export", .label = "Test"};
+    AstraVolumeReference network_reference = {0};
+    assert(astra_vfs_host_volume_network_source((AstraVfsHostTransport *)&catalog_host,
+        9u, 17u, &network, &network_reference) == ASTRA_VFS_OK &&
+        network_reference.epoch == 7u && network_reference.id == 12u);
     AstraVolumeFormatRequest format = {0};
     format.source = (AstraVolumeReference){7u, 8u, 9u};
     format.header.operation = ASTRA_VOLUME_FORMAT;

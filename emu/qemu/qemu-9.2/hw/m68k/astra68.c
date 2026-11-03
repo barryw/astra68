@@ -5380,6 +5380,8 @@ static uint32_t astra_host_volume_partition(Astra68State *s, uint32_t owner,
 
 static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
     AstraHostChannel *channel, uint8_t *data);
+static uint32_t astra_host_volume_network_source(Astra68State *s, uint32_t owner,
+    AstraHostChannel *channel, uint8_t *data);
 
 static int astra_host_storage_control(Astra68State *s, AstraStorageControlRequest *request,
     int input, AstraStorageControlReply *reply, int *output)
@@ -5681,6 +5683,7 @@ static void astra_host_execute_volumes(Astra68State *s, uint32_t owner,
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_CONTROL &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_FORMAT &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_PARTITION &&
+         lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_NETWORK_SOURCE &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_USAGE &&
          lduw_be_p(command + HOST_FIELD(operation)) != ASTRA_HOST_VOLUME_HOLDERS_CHANGED) ||
         lduw_be_p(command + HOST_FIELD(flags)) != 0u ||
@@ -5724,6 +5727,17 @@ static void astra_host_execute_volumes(Astra68State *s, uint32_t owner,
             command, sizeof(AstraHostVolumeControl));
         if (data == NULL) goto done;
         status = astra_host_volume_control(s, owner, channel, data);
+        if (status == ASTRA_STATUS_OK)
+            stl_be_p(command + HOST_FIELD(result_length), sizeof(AstraVolumeReference));
+        goto done;
+    }
+    if (lduw_be_p(command + HOST_FIELD(operation)) == ASTRA_HOST_VOLUME_NETWORK_SOURCE) {
+        if (ldl_be_p(command + HOST_FIELD(data_length)) != sizeof(AstraHostVolumeNetworkSource) ||
+            ldl_be_p(command + HOST_FIELD(data_capacity)) < sizeof(AstraVolumeReference)) goto done;
+        uint8_t *data = astra_host_command_data(s, physical, bytes, command_bytes,
+            command, sizeof(AstraHostVolumeNetworkSource));
+        if (data == NULL) goto done;
+        status = astra_host_volume_network_source(s, owner, channel, data);
         if (status == ASTRA_STATUS_OK)
             stl_be_p(command + HOST_FIELD(result_length), sizeof(AstraVolumeReference));
         goto done;
@@ -6289,10 +6303,14 @@ static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
                 goto done;
             }
             request.operation = ASTRA_STORAGE_CONTROL_UNMOUNT;
-        } else if (operation == ASTRA_VOLUME_EJECT || operation == ASTRA_VOLUME_RELEASE_IMAGE_SOURCE) {
+        } else if (operation == ASTRA_VOLUME_EJECT ||
+                   operation == ASTRA_VOLUME_RELEASE_IMAGE_SOURCE ||
+                   operation == ASTRA_VOLUME_RELEASE_NETWORK_SOURCE) {
             if (request.flags || request.byte_limit || request.inode_limit) goto done;
             request.operation = operation == ASTRA_VOLUME_EJECT ? ASTRA_STORAGE_CONTROL_EJECT :
-                ASTRA_STORAGE_CONTROL_RELEASE_IMAGE_SOURCE;
+                operation == ASTRA_VOLUME_RELEASE_IMAGE_SOURCE ?
+                ASTRA_STORAGE_CONTROL_RELEASE_IMAGE_SOURCE :
+                ASTRA_STORAGE_CONTROL_RELEASE_NETWORK_SOURCE;
         } else goto done;
     }
     error = astra_host_storage_control(s, &request, input, &reply, &output);
@@ -6304,7 +6322,8 @@ static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
     }
     if (error == 0) {
         if (operation == ASTRA_VOLUME_UNMOUNT || operation == ASTRA_VOLUME_EJECT ||
-            operation == ASTRA_VOLUME_RELEASE_IMAGE_SOURCE)
+            operation == ASTRA_VOLUME_RELEASE_IMAGE_SOURCE ||
+            operation == ASTRA_VOLUME_RELEASE_NETWORK_SOURCE)
             reference = (AstraVolumeReference){request.epoch, request.target, request.generation};
         else if (reply.count != 1u || reply.records[0].id != reply.object ||
             reply.records[0].generation == 0u || reply.epoch != s->host.provider_epoch)
@@ -6318,6 +6337,37 @@ static uint32_t astra_host_volume_control(Astra68State *s, uint32_t owner,
 done:
     if (output >= 0) close(output);
     if (description != NULL) astra_host_description_release(description);
+    qemu_mutex_unlock(&s->host.namespace_lock);
+    return astra_host_status_from_errno(error);
+}
+
+static uint32_t astra_host_volume_network_source(Astra68State *s, uint32_t owner,
+    AstraHostChannel *channel, uint8_t *data)
+{
+    if (channel == NULL || !channel->provider || channel->bound || owner == 0u ||
+        owner != qatomic_read(&s->host.fs_owner)) return ASTRA_STATUS_ACCESS;
+    if (ldl_be_p(data + 1544u) == 0u || ldl_be_p(data + 1548u) != 0u ||
+        ldl_be_p(data + 4u) != 0u) return ASTRA_STATUS_INVALID;
+    AstraStorageControlRequest request = {.version = ASTRA_STORAGE_PROVIDER_VERSION,
+        .operation = ASTRA_STORAGE_CONTROL_NETWORK_SOURCE,
+        .epoch = s->host.provider_epoch,
+        .network = {.format = ldl_be_p(data)}};
+    memcpy(request.network.server, data + 8u, sizeof(request.network.server));
+    memcpy(request.network.share, data + 264u, sizeof(request.network.share));
+    memcpy(request.network.label, data + 1288u, sizeof(request.network.label));
+    AstraStorageControlReply reply;
+    int output = -1;
+    qemu_mutex_lock(&s->host.namespace_lock);
+    int error = astra_host_storage_control(s, &request, -1, &reply, &output);
+    if (error == 0 && (reply.count != 1u || reply.records[0].id != reply.object ||
+        reply.records[0].generation == 0u || reply.epoch != s->host.provider_epoch))
+        error = EPROTO;
+    if (error == 0) {
+        stq_be_p(data, reply.epoch);
+        stq_be_p(data + 8u, reply.object);
+        stq_be_p(data + 16u, reply.records[0].generation);
+    }
+    if (output >= 0) close(output);
     qemu_mutex_unlock(&s->host.namespace_lock);
     return astra_host_status_from_errno(error);
 }

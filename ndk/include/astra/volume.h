@@ -210,6 +210,15 @@ void astra_volume_usage_snapshot_close(AstraVolumeUsageSnapshot *snapshot);
  */
 ASTRA_NODISCARD AstraResult astra_volume_control(AstraHandle administrator,
     const AstraVolumeControl *control, AstraVolumeReference *reference);
+/** Register one configured NFS source. Mount it with astra_volume_control;
+ * release it with ASTRA_VOLUME_RELEASE_NETWORK_SOURCE after unmount.
+ * @param administrator VOLUME_ADMIN capability.
+ * @param source Validated NFS endpoint, export and display label.
+ * @param reference Receives exact source identity, cleared on failure.
+ * @return ASTRA_OK on source admission or a validation/provider error.
+ */
+ASTRA_NODISCARD AstraResult astra_volume_network_source(AstraHandle administrator,
+    const AstraVolumeNetworkSource *source, AstraVolumeReference *reference);
 /** Start FAT32 or exFAT format of one exact, unmounted physical source.
  * The request is asynchronous; poll with astra_volume_format_status until
  * the result is no longer ASTRA_ERROR_BUSY. Formatting invalidates the old

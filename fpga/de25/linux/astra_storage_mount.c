@@ -2,6 +2,8 @@
 #include "astra_storage_mount.h"
 
 #include <errno.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 #include <dirent.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -152,6 +154,8 @@ static const char *fstype(uint32_t format)
     case ASTRA_VOLUME_ISO9660: return "iso9660";
     case ASTRA_VOLUME_UDF: return "udf";
     case ASTRA_VOLUME_TMPFS: return "tmpfs";
+    case ASTRA_VOLUME_NFS: return "nfs4";
+    case ASTRA_VOLUME_SMB: return "cifs";
     default: return NULL;
     }
 }
@@ -418,7 +422,11 @@ int astra_storage_linux_prepare(AstraStorageDomain *domain,
     if (astra_storage_format_read_only(record->format))
         if (!readonly)
             return EROFS;
-    if (record->format == ASTRA_VOLUME_TMPFS) {
+    if (record->origin == ASTRA_VOLUME_ORIGIN_NETWORK) {
+        if (source != -1 || offset != 0u || length != 0u ||
+            (record->format != ASTRA_VOLUME_NFS && record->format != ASTRA_VOLUME_SMB))
+            return EINVAL;
+    } else if (record->format == ASTRA_VOLUME_TMPFS) {
         if (source != -1 || offset != 0u || length != 0u ||
             record->byte_limit == 0u || record->inode_limit == 0u)
             return EINVAL;
@@ -474,7 +482,8 @@ int astra_storage_linux_attach(AstraStorageDomain *domain,
                                AstraStorageMounted *mounted)
 {
     struct libmnt_context *ctx = NULL;
-    char source_name[64] = "tmpfs";
+    char source_name[sizeof(mounted->network.server) +
+                     sizeof(mounted->network.share) + 4u] = "tmpfs";
     char options[256] = "";
     const char *type;
     uint64_t domain_mount = 0u;
@@ -486,7 +495,33 @@ int astra_storage_linux_attach(AstraStorageDomain *domain,
         !mounted->directory || mounted->attached)
         return EINVAL;
     readonly = (record->flags & ASTRA_VOLUME_READ_ONLY) != 0u;
-    if (record->format == ASTRA_VOLUME_TMPFS)
+    if (record->origin == ASTRA_VOLUME_ORIGIN_NETWORK) {
+        if (record->format != ASTRA_VOLUME_NFS ||
+            mounted->network.format != ASTRA_VOLUME_NFS)
+            return ENOTSUP;
+        struct addrinfo hints = {.ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM};
+        struct addrinfo *addresses = NULL;
+        int resolved = getaddrinfo(mounted->network.server, NULL, &hints, &addresses);
+        if (resolved != 0) return resolved == EAI_MEMORY ? ENOMEM : EHOSTUNREACH;
+        char address[INET6_ADDRSTRLEN] = {0};
+        for (const struct addrinfo *at = addresses; at != NULL; at = at->ai_next) {
+            const void *bytes = at->ai_family == AF_INET ?
+                (const void *)&((const struct sockaddr_in *)at->ai_addr)->sin_addr :
+                at->ai_family == AF_INET6 ?
+                (const void *)&((const struct sockaddr_in6 *)at->ai_addr)->sin6_addr : NULL;
+            if (bytes != NULL && inet_ntop(at->ai_family, bytes, address,
+                                           sizeof(address)) != NULL) break;
+        }
+        freeaddrinfo(addresses);
+        if (address[0] == '\0') return EHOSTUNREACH;
+        int printed = snprintf(source_name, sizeof(source_name),
+            strchr(mounted->network.server, ':') != NULL ? "[%s]:%s" : "%s:%s",
+            mounted->network.server, mounted->network.share);
+        if (printed < 0 || (size_t)printed >= sizeof(source_name)) return ENAMETOOLONG;
+        printed = snprintf(options, sizeof(options),
+            "vers=4,proto=tcp,sec=sys,addr=%s", address);
+        if (printed < 0 || (size_t)printed >= sizeof(options)) return ENAMETOOLONG;
+    } else if (record->format == ASTRA_VOLUME_TMPFS)
         (void)snprintf(options, sizeof(options),
             "size=%" PRIu64 ",nr_inodes=%" PRIu64 ",noswap,uid=%u,gid=%u,mode=0770",
             record->byte_limit, record->inode_limit, (unsigned)domain->uid,

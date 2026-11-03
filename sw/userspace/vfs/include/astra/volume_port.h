@@ -2,6 +2,7 @@
 #define ASTRA_VOLUME_PORT_H
 
 #include <astra/volume_service.h>
+#include <astra/volume_network.h>
 
 /* One validation contract shared by the provider adapter and public client. */
 int astra_volume_query_valid(const AstraVolumeCatalogQuery *query);
@@ -19,6 +20,8 @@ typedef uint32_t (*AstraVolumeGrantRoot)(void *context, uint32_t owner,
     const AstraVolumeReference *source, int delegates, uint32_t *root);
 typedef uint32_t (*AstraVolumeApplyControl)(void *context, uint32_t owner,
     const AstraVolumeControl *control, AstraVolumeReference *reference);
+typedef uint32_t (*AstraVolumeApplyNetworkSource)(void *context, uint32_t owner,
+    const AstraVolumeNetworkSource *source, AstraVolumeReference *reference);
 typedef uint32_t (*AstraVolumeApplyFormat)(void *context, uint32_t owner,
     const AstraVolumeFormatRequest *request, uint32_t *outcome);
 typedef uint32_t (*AstraVolumeApplyPartition)(void *context, uint32_t owner,
@@ -33,6 +36,7 @@ typedef struct AstraVolumePort {
     AstraVolumeReadCatalog read;
     AstraVolumeGrantRoot root;
     AstraVolumeApplyControl control;
+    AstraVolumeApplyNetworkSource network_source;
     AstraVolumeApplyFormat format;
     AstraVolumeApplyPartition partition;
     AstraVolumeReadUsage usage;

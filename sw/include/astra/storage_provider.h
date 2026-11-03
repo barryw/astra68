@@ -34,7 +34,7 @@ typedef struct AstraStorageRecord {
 
 /* Private Linux protocol. Only the launched QEMU peer receives its socket;
  * application authority remains in the native rooted scopes. */
-#define ASTRA_STORAGE_PROVIDER_VERSION 6u
+#define ASTRA_STORAGE_PROVIDER_VERSION 7u
 #define ASTRA_STORAGE_PROVIDER_PATH_MAX 4096u
 #define ASTRA_STORAGE_PROVIDER_FDS 3u
 #define ASTRA_STORAGE_PROVIDER_PAGE 16u
@@ -53,7 +53,9 @@ enum AstraStorageControlOperation {
     ASTRA_STORAGE_CONTROL_FORMAT,
     ASTRA_STORAGE_CONTROL_FORMAT_STATUS,
     ASTRA_STORAGE_CONTROL_PARTITION,
-    ASTRA_STORAGE_CONTROL_PARTITION_STATUS
+    ASTRA_STORAGE_CONTROL_PARTITION_STATUS,
+    ASTRA_STORAGE_CONTROL_NETWORK_SOURCE,
+    ASTRA_STORAGE_CONTROL_RELEASE_NETWORK_SOURCE
 };
 
 typedef struct AstraStorageControlRequest {
@@ -73,6 +75,7 @@ typedef struct AstraStorageControlRequest {
     uint32_t format;
     char label[12];
     AstraVolumePartitionEdit edit;
+    AstraVolumeNetworkSource network;
 } AstraStorageControlRequest;
 
 typedef struct AstraStorageControlReply {

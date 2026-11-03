@@ -2,6 +2,23 @@
 
 Status: active continuation map, 2026-11-03
 
+Network filesystem work, 2026-11-03: branch `network-volumes` adds native
+network source class/origin, `/netN` catalog names, typed NFS source admission,
+provider mount worker and source retirement. Native control uses a bounded
+message plus shared Area for server/export/label; HostFS and QEMU forward it
+through the existing claimed provider. Beast catalog, provider, Volume client,
+port, host-backend tests and MC68040 HostFS build passed; DE25 QEMU cross build
+passed. Beast's disposable NFSv4 export passed provider mount, read, write,
+fsync, unmount and source retirement; `/var/tmp/astra-nfs-test-20261103/provider-rw`
+contains the persisted eight-byte proof. Native mount/unmount CLI now admits
+and retires NFS sources. Guest end-to-end mounting, remote-I/O isolation,
+SMB3, Settings, and hardware release gates remain open. Production image
+remains unchanged.
+Haiku reference: read-only
+`src/add-ons/kernel/file_systems/nfs4/kernel_interface.cpp` publishes root
+only after mount succeeds and retires server on unmount; Astra adapts that
+ordering to its native provider epoch and exact source generations.
+
 Ethernet configuration candidate, 2026-11-03: Network Kit ABI 1.4 adds
 `NETWORK_ADMIN`, device enumeration, and typed DHCP/manual IPv4 profile calls.
 Network service owns a separate admin port and scoped system Config Kit

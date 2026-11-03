@@ -1,9 +1,9 @@
 # Network volumes after the local filesystem cutover
 
 Status: requirements and source-backed feasibility assessment, updated
-2026-11-02. Network mounting is not implemented or qualified. The local volume
-lifecycle, native namespace, usage queries and desktop integration provide
-the application-facing path; network sources still need provider admission.
+2026-11-03. Network mounting is not qualified. Network source catalog,
+provider admission, NFS mount worker, and native control path are in progress;
+no end-to-end NFS or SMB mount has passed yet.
 
 ## AstraZ story workflow
 
@@ -88,8 +88,10 @@ reachable network.
 
 ## Protocol choice and measured platform state
 
-Recommend SMB3 first for interoperability with Macs, Windows, Samba and NAS
-devices. The Linux client supports signing, encryption and Unicode names;
+Implement NFSv4 first because the selected DE25 kernel already contains its
+client; add SMB3 after remote-I/O lifecycle is qualified. SMB3 remains the
+interoperability target for Macs, Windows, Samba and NAS devices. The Linux
+client supports signing, encryption and Unicode names;
 require a modern dialect rather than silently downgrading to SMB1. These
 capabilities and interoperability are described in the upstream
 [SMB client introduction](https://docs.kernel.org/admin-guide/cifs/introduction.html).
@@ -119,8 +121,9 @@ describes stable client identity and DNS upcalls.
 ## Required work
 
 1. Add a network source class/origin and supported format to the canonical
-   native volume contract. Bump affected public/private protocol majors and
-   update every producer, consumer, installed header, manifest and document.
+   native volume contract. Bump breaking private protocols and update every
+   producer, consumer, installed header, manifest and document; additive native
+   operations retain their ABI major.
    Keep server/share display metadata distinct from authority and secrets.
 2. Admit typed server, share, protocol, credential reference and read/write
    policy through the existing native mount transaction. Refuse arbitrary

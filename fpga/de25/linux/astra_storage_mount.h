@@ -22,6 +22,7 @@ typedef struct AstraStorageMounted {
     int attached; /* kernel acknowledged mount; retain rollback even before root open */
     int directory; /* only a target created by this operation may be removed */
     char target[128];
+    AstraVolumeNetworkSource network; /* no credentials; retained by source owner */
 } AstraStorageMounted;
 
 /* Root only; creates an owned mount directory without changing namespaces.

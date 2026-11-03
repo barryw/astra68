@@ -1,5 +1,6 @@
 #include <astra/volume_port.h>
 #include <astra/runtime.h>
+#include <astra/limits.h>
 #include <astra/status.h>
 #include <assert.h>
 #include <stdio.h>
@@ -9,6 +10,7 @@
 static AstraVolumePort port;
 static union { AstraVolumeRequest metadata; AstraVolumeRootRequest root;
     AstraVolumeControlRequest control; AstraVolumeFormatRequest format;
+    AstraVolumeNetworkRequest network;
     AstraVolumePartitionRequest partition;
     AstraVolumeUsageRequest usage; } incoming_request;
 #define request incoming_request.metadata
@@ -25,6 +27,7 @@ static union { AstraVolumeCatalogPage catalog; AstraVolumeUsagePage usage; } out
 static uint32_t area_bytes = sizeof(output), area_rights = 1u;
 static uint32_t root_calls, root_sent, root_send_failure;
 static uint32_t control_calls;
+static uint32_t network_calls;
 static uint32_t format_calls, partition_calls, format_outcome;
 static AstraVolumeReference admitted;
 static AstraVolumeBrokerInfo broker_info;
@@ -89,7 +92,8 @@ uint32_t astra_port_receive_from(uint32_t handle, void *message, uint32_t capaci
 }
 uint32_t astra_rt_area_map(uint32_t handle, uint32_t flags, void **mapping, uint32_t *size)
 {
-    assert(handle == 3u && flags == (ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE));
+    assert(handle == 3u && (flags == ASTRA_AREA_MAP_READ ||
+        flags == (ASTRA_AREA_MAP_READ | ASTRA_AREA_MAP_WRITE)));
     if (!area_rights) return ASTRA_SYSCALL_ACCESS_DENIED;
     *mapping = &output_storage; *size = area_bytes; return ASTRA_SYSCALL_OK;
 }
@@ -178,6 +182,26 @@ static uint32_t apply_control(void *context, uint32_t owner, const AstraVolumeCo
     if (control->reference.generation != 1u) return ASTRA_STATUS_LOST;
     *reference = control->reference;
     return ASTRA_STATUS_OK;
+}
+static uint32_t apply_network(void *context, uint32_t owner,
+    const AstraVolumeNetworkSource *source, AstraVolumeReference *reference)
+{
+    assert(context == &epoch && owner == sender &&
+        astra_volume_network_source_valid(source));
+    ++network_calls;
+    *reference = (AstraVolumeReference){epoch, 9u, 1u};
+    return ASTRA_STATUS_OK;
+}
+static void network_request(void)
+{
+    enqueue(ASTRA_VOLUME_NETWORK_SOURCE, 3u);
+    incoming_size = sizeof(AstraVolumeNetworkRequest);
+    request.header.total_size = incoming_size;
+    incoming_request.network.size = sizeof(AstraVolumeNetworkSource);
+    AstraVolumeNetworkSource *source = (void *)&output_storage;
+    *source = (AstraVolumeNetworkSource){.format = ASTRA_VOLUME_NFS,
+        .server = "127.0.0.1", .share = "/export", .label = "Test"};
+    area_bytes = ASTRA_MEMORY_PAGE_SIZE;
 }
 static void control_request(void)
 {
@@ -340,6 +364,7 @@ int main(void)
     assert(astra_volume_port_init(&port, 1u, 2u, catalog, &epoch));
     port.root = root_grant;
     port.control = apply_control;
+    port.network_source = apply_network;
     port.format = apply_format;
     port.partition = apply_partition;
     port.usage = usage;
@@ -366,6 +391,14 @@ int main(void)
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u && reply.status == ASTRA_STATUS_LOST && admitted.id == 0u);
     control_request(); incoming_request.control.control.flags = 1u;
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u && reply.status == ASTRA_STATUS_INVALID);
+    network_request(); pump(ASTRA_STATUS_ACCESS);
+    network_request();
+    assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_OK && admitted.id == 9u && network_calls == 1u);
+    network_request(); ((AstraVolumeNetworkSource *)&output_storage)->share[0] = 'x';
+    assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
+        reply.status == ASTRA_STATUS_INVALID && network_calls == 1u);
+    area_bytes = sizeof(output);
     format_request(ASTRA_VOLUME_FORMAT);
     assert(astra_volume_port_control_pump(&port, 5u, 1u) == 1u &&
         reply.status == ASTRA_STATUS_ACCESS && format_calls == 0u);

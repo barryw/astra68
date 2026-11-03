@@ -1110,6 +1110,40 @@ uint32_t astra_vfs_host_volume_control(AstraVfsHostTransport *transport,
     return ASTRA_VFS_OK;
 }
 
+uint32_t astra_vfs_host_volume_network_source(AstraVfsHostTransport *transport,
+    uint32_t generation, uint32_t requester, const AstraVolumeNetworkSource *source,
+    AstraVolumeReference *reference)
+{
+    uint8_t input[sizeof(AstraHostVolumeNetworkSource)] = {0};
+    uint8_t output[sizeof(AstraVolumeReference)] = {0};
+    AstraVfsHostRequest request;
+    if (transport == NULL || requester == 0u || reference == NULL ||
+        !astra_volume_network_source_valid(source)) return ASTRA_VFS_ERR_INVALID;
+    memset(reference, 0, sizeof(*reference));
+    astra_store_be32(input, source->format);
+    memcpy(input + 8u, source->server, sizeof(source->server));
+    memcpy(input + 264u, source->share, sizeof(source->share));
+    memcpy(input + 1288u, source->label, sizeof(source->label));
+    astra_store_be32(input + 1544u, requester);
+    uint32_t status = astra_vfs_host_transport_begin(transport, 0u, sizeof(input), &request);
+    if (status != ASTRA_VFS_OK) return status;
+    AstraHostCommand *command = request.command;
+    memset(command, 0, sizeof(*command));
+    command->size = sizeof(*command); command->version = ASTRA_HOST_COMMAND_VERSION;
+    command->service = ASTRA_HOST_SERVICE_VOLUMES;
+    command->operation = ASTRA_HOST_VOLUME_NETWORK_SOURCE;
+    command->generation = generation;
+    status = astra_vfs_host_transport_submit(transport, &request, input, sizeof(input),
+        output, sizeof(output));
+    if (status != ASTRA_VFS_OK) return status;
+    if (command->result_length != sizeof(output)) return ASTRA_VFS_ERR_PROTOCOL;
+    *reference = (AstraVolumeReference){astra_load_be64(output),
+        astra_load_be64(output + 8u), astra_load_be64(output + 16u)};
+    if (reference->epoch == 0u || reference->id == 0u ||
+        reference->generation == 0u) return ASTRA_VFS_ERR_PROTOCOL;
+    return ASTRA_VFS_OK;
+}
+
 uint32_t astra_vfs_host_volume_format(AstraVfsHostTransport *transport,
     uint32_t generation, uint32_t requester, const AstraVolumeFormatRequest *format,
     uint32_t *outcome)

@@ -14,12 +14,16 @@ int main(int argc, char **argv)
     int image = argc == 3 && strcmp(argv[1], "--image") == 0;
     int ram = argc == 5 && strcmp(argv[1], "--ram") == 0;
     int readonly = argc == 3 && strcmp(argv[1], "--read-only") == 0;
+    int nfs = argc >= 5 && strcmp(argv[1], "--nfs") == 0;
+    int nfs_readonly = nfs && argc == 6 && strcmp(argv[5], "--read-only") == 0;
     uint64_t bytes = 0u, inodes = 0u;
-    if ((!image && !ram && !readonly && argc != 2) ||
+    if ((!image && !ram && !readonly && !nfs && argc != 2) ||
+        (nfs && argc != 5 && !nfs_readonly) ||
         (ram && (!volume_cli_number(argv[3], &bytes) || !volume_cli_number(argv[4], &inodes)))) {
         fputs("usage: mount [--read-only] SOURCE_ID\n"
               "       mount --image NATIVE_FILE\n"
-              "       mount --ram SOURCE_ID BYTES INODES\n", stderr);
+              "       mount --ram SOURCE_ID BYTES INODES\n"
+              "       mount --nfs SERVER EXPORT LABEL [--read-only]\n", stderr);
         return 2;
     }
     VolumeCli cli;
@@ -27,7 +31,37 @@ int main(int argc, char **argv)
     AstraVolumeReference source = {0};
     AstraVolumeRecord record = {0};
     int success = 0;
-    if (image) {
+    if (nfs) {
+        AstraVolumeNetworkSource definition = {.format = ASTRA_VOLUME_NFS};
+        if (strlen(argv[2]) >= sizeof(definition.server) ||
+            strlen(argv[3]) >= sizeof(definition.share) ||
+            strlen(argv[4]) >= sizeof(definition.label)) {
+            fputs("mount: NFS source field too long\n", stderr);
+        } else {
+            strcpy(definition.server, argv[2]);
+            strcpy(definition.share, argv[3]);
+            strcpy(definition.label, argv[4]);
+            AstraResult result = astra_volume_network_source(cli.administrator,
+                &definition, &source);
+            if (result != ASTRA_OK)
+                fprintf(stderr, "mount: NFS source admission failed (%ld)\n", (long)result);
+            else if (volume_cli_wait(&cli, &source, ASTRA_VOLUME_UNMOUNTED, 0, &record))
+                success = volume_cli_mount(&cli, &source,
+                    nfs_readonly ? ASTRA_VOLUME_READ_ONLY : 0u, 0u, 0u);
+        }
+        if (!success && source.id != 0u) {
+            AstraVolumeControl release = {.reference = source,
+                .operation = ASTRA_VOLUME_RELEASE_NETWORK_SOURCE};
+            AstraVolumeReference retired;
+            AstraResult result = astra_volume_control(cli.administrator, &release, &retired);
+            if (result != ASTRA_OK)
+                fprintf(stderr, "mount: NFS source %llu cleanup admission failed (%ld); inspect volumes --all\n",
+                    (unsigned long long)source.id, (long)result);
+            else if (!volume_cli_wait(&cli, &source, 0u, 1, &record))
+                fprintf(stderr, "mount: NFS source %llu cleanup incomplete; inspect volumes --all\n",
+                    (unsigned long long)source.id);
+        }
+    } else if (image) {
         AstraProcessFilesystem native = ASTRA_PROCESS_FILESYSTEM_INIT;
         AstraFile file = ASTRA_FILE_INIT;
         uint32_t status = astra_process_filesystem_open(&native, astra_posix_startup());

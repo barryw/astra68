@@ -2,6 +2,7 @@
 #include "astra_storage_provider.h"
 #include "astra_storage_discovery.h"
 #include "astra68-resolve.h"
+#include <astra/volume_network.h>
 
 #include <errno.h>
 #include <fcntl.h>
@@ -45,6 +46,7 @@ struct AstraStorageResource {
     int path_socket;
     AstraStorageProbe probe;
     AstraStorageMounted mounted;
+    AstraVolumeNetworkSource network;
     AstraStorageWork work;
     struct AstraStorageResource *next;
 };
@@ -630,6 +632,39 @@ int astra_storage_provider_image(AstraStorageProvider *provider, uint64_t mount,
     return error;
 }
 
+int astra_storage_provider_network_source(AstraStorageProvider *provider,
+    const AstraVolumeNetworkSource *definition, uint64_t *source)
+{
+    int error;
+    if (provider == NULL || source == NULL || !astra_volume_network_source_valid(definition))
+        return EINVAL;
+    *source = 0u;
+    error = astra_storage_network_source(&provider->catalog, definition->format,
+        definition->label, source);
+    if (error != 0) return error;
+    AstraStorageResource *entry = reserve(provider, *source, 1u);
+    if (entry == NULL) {
+        (void)astra_storage_loss(&provider->catalog, *source, 1u);
+        (void)astra_storage_provider_release(provider, *source);
+        *source = 0u;
+        return ENOSPC;
+    }
+    entry->network = *definition;
+    return 0;
+}
+
+int astra_storage_provider_release_network_source(AstraStorageProvider *provider,
+    uint64_t source, uint64_t generation)
+{
+    if (provider == NULL) return EINVAL;
+    const AstraStorageRecord *record = astra_storage_find(&provider->catalog, source);
+    if (record == NULL || record->generation != generation) return ESTALE;
+    if (record->kind != ASTRA_VOLUME_SOURCE ||
+        record->origin != ASTRA_VOLUME_ORIGIN_NETWORK) return EINVAL;
+    int error = astra_storage_no_mounted_children(&provider->catalog, source);
+    return error == 0 ? astra_storage_provider_loss(provider, source, generation) : error;
+}
+
 int astra_storage_provider_system(AstraStorageProvider *provider, int file,
                                    uint64_t offset, uint64_t length, uint64_t *source)
 {
@@ -741,6 +776,8 @@ int astra_storage_provider_mount(AstraStorageProvider *provider, uint64_t source
         backing == NULL ? -1 : backing->source,
         backing == NULL ? 0u : backing->offset,
         backing == NULL ? 0u : backing->length, &entry->mounted);
+    if (error == 0 && backing != NULL && record->origin == ASTRA_VOLUME_ORIGIN_NETWORK)
+        entry->mounted.network = backing->network;
     if (error == 0)
         error = astra_storage_work_start(&entry->work, &provider->domain, record,
             backing == NULL ? -1 : backing->source, &entry->mounted, ASTRA_STORAGE_WORK_ATTACH);
@@ -883,6 +920,10 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
                  memcmp(&request.edit, (AstraVolumePartitionEdit[1]){{0}},
                         sizeof(request.edit)) != 0)
             error = EPROTO;
+        else if (request.operation != ASTRA_STORAGE_CONTROL_NETWORK_SOURCE &&
+                 memcmp(&request.network, (AstraVolumeNetworkSource[1]){{0}},
+                        sizeof(request.network)) != 0)
+            error = EPROTO;
     }
     if (error == 0) {
         const AstraStorageRecord *record;
@@ -1012,6 +1053,23 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
                 error = astra_storage_provider_partition_status(provider, request.target,
                     request.generation, &reply.operation_error);
             break;
+        case ASTRA_STORAGE_CONTROL_NETWORK_SOURCE:
+            if (request.target || request.generation || request.flags ||
+                request.byte_limit || request.inode_limit || request.backing_object ||
+                request.sequence || request.after)
+                error = EINVAL;
+            else
+                error = astra_storage_provider_network_source(provider,
+                    &request.network, &reply.object);
+            break;
+        case ASTRA_STORAGE_CONTROL_RELEASE_NETWORK_SOURCE:
+            if (request.flags || request.byte_limit || request.inode_limit ||
+                request.sequence || request.after || request.backing_object)
+                error = EINVAL;
+            else
+                error = astra_storage_provider_release_network_source(provider,
+                    request.target, request.generation);
+            break;
         default:
             error = ENOTSUP;
             break;
@@ -1021,7 +1079,8 @@ int astra_storage_provider_control(AstraStorageProvider *provider, int socket,
         if (fds[at] >= 0)
             close(fds[at]);
     if (error == 0 && (request.operation == ASTRA_STORAGE_CONTROL_MOUNT ||
-        request.operation == ASTRA_STORAGE_CONTROL_IMAGE)) {
+        request.operation == ASTRA_STORAGE_CONTROL_IMAGE ||
+        request.operation == ASTRA_STORAGE_CONTROL_NETWORK_SOURCE)) {
         const AstraStorageRecord *admitted = astra_storage_find(&provider->catalog, reply.object);
         if (admitted == NULL) error = EPROTO;
         else { reply.records[0] = *admitted; reply.count = 1u; }

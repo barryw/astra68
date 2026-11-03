@@ -52,6 +52,10 @@ int astra_storage_provider_source(AstraStorageProvider *provider, uint64_t sourc
 int astra_storage_provider_image(AstraStorageProvider *provider, uint64_t mount,
                                   uint64_t generation, uint64_t backing_object,
                                   int file, uint64_t *source);
+int astra_storage_provider_network_source(AstraStorageProvider *provider,
+    const AstraVolumeNetworkSource *definition, uint64_t *source);
+int astra_storage_provider_release_network_source(AstraStorageProvider *provider,
+    uint64_t source, uint64_t generation);
 /* Opened exact trusted image/window; writable lease excludes every other
  * opener before probing through the prepared block window. */
 int astra_storage_provider_system(AstraStorageProvider *provider, int file,

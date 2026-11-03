@@ -9,9 +9,11 @@ int main(int argc, char **argv)
 {
     int eject = argc == 3 && strcmp(argv[1], "--eject") == 0;
     int source_only = argc == 3 && strcmp(argv[1], "--image-source") == 0;
-    if (argc != 2 && !eject && !source_only) {
+    int network_source = argc == 3 && strcmp(argv[1], "--network-source") == 0;
+    if (argc != 2 && !eject && !source_only && !network_source) {
         fputs("usage: unmount [--eject] /VOLUME_OR_MOUNT_ID\n"
-              "       unmount --image-source SOURCE_ID\n", stderr);
+              "       unmount --image-source SOURCE_ID\n"
+              "       unmount --network-source SOURCE_ID\n", stderr);
         return 2;
     }
     VolumeCli cli;
@@ -19,15 +21,18 @@ int main(int argc, char **argv)
     AstraVolumeRecord record = {0};
     AstraVolumeReference reference, retired;
     int success = 0;
-    if (!volume_cli_select(&cli, argv[eject || source_only ? 2 : 1],
-        source_only ? ASTRA_VOLUME_SOURCE : ASTRA_VOLUME_MOUNT, &record, &reference, NULL)) goto done;
-    if (!source_only && (record.flags & (ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_TEMPORARY)) != 0u) {
+    if (!volume_cli_select(&cli, argv[eject || source_only || network_source ? 2 : 1],
+        source_only || network_source ? ASTRA_VOLUME_SOURCE : ASTRA_VOLUME_MOUNT,
+        &record, &reference, NULL)) goto done;
+    if (!source_only && !network_source &&
+        (record.flags & (ASTRA_VOLUME_SYSTEM | ASTRA_VOLUME_TEMPORARY)) != 0u) {
         fprintf(stderr, "unmount: %s belongs to the running system and cannot be removed\n", record.name);
         goto done;
     }
-    if (source_only) {
+    if (source_only || network_source) {
         AstraVolumeControl control = {.reference = reference,
-            .operation = ASTRA_VOLUME_RELEASE_IMAGE_SOURCE};
+            .operation = source_only ? ASTRA_VOLUME_RELEASE_IMAGE_SOURCE :
+                ASTRA_VOLUME_RELEASE_NETWORK_SOURCE};
         if (!volume_cli_apply(&cli, &control, &retired) ||
             !volume_cli_wait(&cli, &reference, 0u, 1, &record)) goto done;
     } else {
@@ -52,7 +57,8 @@ int main(int argc, char **argv)
         }
         if (!volume_cli_wait_action(&cli, &action)) goto done;
     }
-    success = printf("%s %llu:%llu:%llu\n", eject ? "ejected" : source_only ? "released image source" : "unmounted",
+    success = printf("%s %llu:%llu:%llu\n", eject ? "ejected" : source_only ?
+        "released image source" : network_source ? "released network source" : "unmounted",
         (unsigned long long)reference.epoch, (unsigned long long)reference.id,
         (unsigned long long)reference.generation) >= 0;
 done:

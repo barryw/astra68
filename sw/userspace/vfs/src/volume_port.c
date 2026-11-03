@@ -1,5 +1,6 @@
 #include <astra/volume_port.h>
 #include <astra/runtime.h>
+#include <astra/limits.h>
 #include <astra/status.h>
 #include <string.h>
 
@@ -134,6 +135,7 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
     union { AstraMessageHeader header; AstraVolumeRequest request;
         AstraVolumeRootRequest root;
         AstraVolumeControlRequest control;
+        AstraVolumeNetworkRequest network;
         AstraVolumeFormatRequest format;
         AstraVolumePartitionRequest partition;
         AstraVolumeUsageRequest usage;
@@ -149,7 +151,8 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
         union { AstraVolumeControlReply control; AstraVolumeBrokerInfoReply broker;
             AstraVolumeFormatReply format; AstraVolumePartitionReply partition; } response = {0};
         AstraVolumeReply reply = {0};
-        uint32_t reply_size = incoming.header.operation == ASTRA_VOLUME_CONTROL ?
+        uint32_t reply_size = (incoming.header.operation == ASTRA_VOLUME_CONTROL ||
+            incoming.header.operation == ASTRA_VOLUME_NETWORK_SOURCE) ?
             sizeof(response.control) : incoming.header.operation == ASTRA_VOLUME_BROKER_INFO ?
             sizeof(response.broker) :
             (incoming.header.operation == ASTRA_VOLUME_FORMAT ||
@@ -174,6 +177,33 @@ static uint32_t pump(AstraVolumePort *port, uint32_t receive, uint32_t rights,
                 if (reply.status != ASTRA_STATUS_OK)
                     memset(&response.control.reference, 0, sizeof(response.control.reference));
                 else if (response.control.reference.epoch == 0u || response.control.reference.id == 0u ||
+                         response.control.reference.generation == 0u)
+                    reply.status = ASTRA_STATUS_PROTOCOL;
+            } else if (incoming.header.operation == ASTRA_VOLUME_NETWORK_SOURCE &&
+                       size == sizeof(incoming.network) && count == 2u) {
+                void *mapped = NULL;
+                uint32_t bytes = 0u;
+                if (incoming.network.reserved != 0u ||
+                    incoming.network.size != sizeof(AstraVolumeNetworkSource))
+                    reply.status = ASTRA_STATUS_INVALID;
+                else if (role != 1 || port->network_source == NULL)
+                    reply.status = ASTRA_STATUS_ACCESS;
+                else if (astra_rt_area_map(handles[1], ASTRA_AREA_MAP_READ,
+                    &mapped, &bytes) != ASTRA_SYSCALL_OK)
+                    reply.status = ASTRA_STATUS_ACCESS;
+                else if (bytes < sizeof(AstraVolumeNetworkSource) ||
+                    bytes > ASTRA_MEMORY_PAGE_SIZE ||
+                    !astra_volume_network_source_valid(mapped))
+                    reply.status = ASTRA_STATUS_INVALID;
+                else
+                    reply.status = port->network_source(port->context, owner,
+                        mapped, &response.control.reference);
+                if (mapped != NULL && astra_rt_area_unmap(mapped) != ASTRA_SYSCALL_OK &&
+                    reply.status == ASTRA_STATUS_OK) reply.status = ASTRA_STATUS_BAD_HANDLE;
+                if (reply.status != ASTRA_STATUS_OK)
+                    memset(&response.control.reference, 0, sizeof(response.control.reference));
+                else if (response.control.reference.epoch == 0u ||
+                         response.control.reference.id == 0u ||
                          response.control.reference.generation == 0u)
                     reply.status = ASTRA_STATUS_PROTOCOL;
             } else if ((incoming.header.operation == ASTRA_VOLUME_FORMAT ||

@@ -165,6 +165,8 @@ enum {
 #define ASTRA_HOST_VOLUME_PARTITION_START UINT32_C(1)
 /** Query provider disk-map edit status. */
 #define ASTRA_HOST_VOLUME_PARTITION_STATUS UINT32_C(2)
+/** Register a configured remote source through the claimed provider. */
+#define ASTRA_HOST_VOLUME_NETWORK_SOURCE UINT16_C(7)
 /** Provider-only lifecycle request. requester is kernel-stamped by HostFS's
  * receive endpoint, never accepted from an application payload. */
 typedef struct AstraHostVolumeControl {
@@ -174,6 +176,12 @@ typedef struct AstraHostVolumeControl {
 } AstraHostVolumeControl;
 /** @cond ASTRA_INTERNAL */
 _Static_assert(sizeof(AstraHostVolumeControl) == 64u, "host volume control ABI");
+typedef struct AstraHostVolumeNetworkSource {
+    AstraVolumeNetworkSource source;
+    uint32_t requester;
+    uint32_t reserved;
+} AstraHostVolumeNetworkSource;
+_Static_assert(sizeof(AstraHostVolumeNetworkSource) == 1552u, "host network source ABI");
 typedef struct AstraHostVolumeFormat {
     AstraVolumeReference source;
     uint32_t operation;
